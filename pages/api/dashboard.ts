@@ -1,5 +1,5 @@
-// pages/api/dashboard.ts
-// Split into two fast parallel batches - each well under 10s
+// pages/api/dashboard.ts — Fast core data only (invoices, P&L, stock summaries)
+// Trends loaded separately via /api/trends
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { requireAuth } from '../../lib/auth'
 import { cdataQuery, currentMonthRange } from '../../lib/cdata'
@@ -10,25 +10,16 @@ async function safe(fn: () => Promise<any>) {
   try { return await fn() } catch(e: any) { console.error(e.message?.substring(0,80)); return null }
 }
 
-function last6Months() {
-  const months = []
-  const now = new Date()
-  for (let i = 5; i >= 0; i--) {
-    const d = new Date(now.getFullYear(), now.getMonth() - i, 1)
-    months.push({ year: d.getFullYear(), month: d.getMonth() + 1, label: d.toLocaleDateString('en-AU', { month: 'short', year: '2-digit' }) })
-  }
-  return months
-}
-
 export default function handler(req: NextApiRequest, res: NextApiResponse) {
   return requireAuth(req, res, async () => {
     try {
       const { start, end } = currentMonthRange()
-      const months = last6Months()
 
-      // BATCH 1: Core invoice + financial data (run all in parallel)
-      const [jawsRecent, jawsOpen, jawsTopCust, jawsPnL, jawsStockSum, jawsBills,
-             vpsRecent,  vpsOpen,  vpsTopCust,  vpsPnL,  vpsBills] = await Promise.all([
+      // Run 6 JAWS + 5 VPS queries in parallel — no trend data here
+      const [
+        jawsRecent, jawsOpen, jawsTopCust, jawsPnL, jawsStockSum, jawsBills,
+        vpsRecent,  vpsOpen,  vpsTopCust,  vpsPnL,  vpsBills,
+      ] = await Promise.all([
         safe(() => cdataQuery('JAWS', `SELECT TOP 20 [Number],[Date],[CustomerName],[TotalAmount],[BalanceDueAmount],[Status],[InvoiceType] FROM [MYOB_POWERBI_JAWS].[MYOB].[SaleInvoices] ORDER BY [Date] DESC`)),
         safe(() => cdataQuery('JAWS', `SELECT [Number],[Date],[CustomerName],[TotalAmount],[BalanceDueAmount],[Status] FROM [MYOB_POWERBI_JAWS].[MYOB].[SaleInvoices] WHERE [Status] = 'Open' ORDER BY [BalanceDueAmount] DESC`)),
         safe(() => cdataQuery('JAWS', `SELECT [CustomerName], SUM([TotalAmount]) AS TotalRevenue, COUNT(*) AS InvoiceCount FROM [MYOB_POWERBI_JAWS].[MYOB].[SaleInvoices] WHERE [Date] >= '${start}' AND [Date] <= '${end}' AND [TotalAmount] > 0 GROUP BY [CustomerName] ORDER BY TotalRevenue DESC LIMIT 10`)),
@@ -42,36 +33,11 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
         safe(() => cdataQuery('VPS',  `SELECT TOP 10 [Number],[Date],[SupplierName],[TotalAmount],[BalanceDueAmount],[Status] FROM [MYOB_POWERBI_VPS].[MYOB].[PurchaseBills] WHERE [Status] = 'Open' ORDER BY [BalanceDueAmount] DESC`)),
       ])
 
-      // BATCH 2: Trend data — only current + prior 5 months income (12 queries total)
-      const trendResults = await Promise.all(months.flatMap(m => {
-        const s = `${m.year}-${String(m.month).padStart(2,'0')}-01`
-        const e = `${m.year}-${String(m.month).padStart(2,'0')}-${new Date(m.year, m.month, 0).getDate()}`
-        return [
-          safe(() => cdataQuery('JAWS', `SELECT SUM([AccountTotal]) AS Income FROM [MYOB_POWERBI_JAWS].[MYOB].[ProfitAndLossSummaryReport] WHERE [AccountDisplayID] LIKE '4-%' AND [StartDate] = '${s}' AND [EndDate] = '${e}'`)),
-          safe(() => cdataQuery('VPS',  `SELECT SUM([AccountTotal]) AS Income FROM [MYOB_POWERBI_VPS].[MYOB].[ProfitAndLossSummaryReport] WHERE [AccountDisplayID] LIKE '4-%' AND [StartDate] = '${s}' AND [EndDate] = '${e}'`)),
-        ]
-      }))
-
-      const extractVal = (r: any) => { try { return r?.results?.[0]?.rows?.[0]?.[0] ?? 0 } catch { return 0 } }
-      const jawsIncome6 = months.map((_, i) => extractVal(trendResults[i * 2]))
-      const vpsIncome6  = months.map((_, i) => extractVal(trendResults[i * 2 + 1]))
-
       res.status(200).json({
         fetchedAt: new Date().toISOString(),
         period: { start, end },
-        trendLabels: months.map(m => m.label),
-        jaws: {
-          recentInvoices: jawsRecent, openInvoices: jawsOpen,
-          topCustomers: jawsTopCust, pnl: jawsPnL,
-          stockItems: null, stockSummary: jawsStockSum, openBills: jawsBills,
-          income6: jawsIncome6, expense6: [380000,400000,510000,460000,580000,186111],
-        },
-        vps: {
-          recentInvoices: vpsRecent, openInvoices: vpsOpen,
-          topCustomers: vpsTopCust, pnl: vpsPnL,
-          openBills: vpsBills, stockSummary: null,
-          income6: vpsIncome6, expense6: [780000,520000,620000,680000,760000,99262],
-        },
+        jaws: { recentInvoices: jawsRecent, openInvoices: jawsOpen, topCustomers: jawsTopCust, pnl: jawsPnL, stockItems: null, stockSummary: jawsStockSum, openBills: jawsBills },
+        vps:  { recentInvoices: vpsRecent,  openInvoices: vpsOpen,  topCustomers: vpsTopCust,  pnl: vpsPnL,  openBills: vpsBills, stockSummary: null },
       })
     } catch(err: any) {
       console.error('Dashboard error:', err)

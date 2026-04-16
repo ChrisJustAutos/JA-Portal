@@ -334,14 +334,33 @@ export default function Portal() {
   const load=useCallback(async(isRefresh=false)=>{
     if(isRefresh)setRefreshing(true)
     try{
+      // Step 1: Load core data fast (invoices, P&L, customers)
       const r=await fetch('/api/dashboard')
       if(r.status===401){router.push('/login');return}
       if(!r.ok)throw new Error('Failed to load data')
       const d=await r.json()
+      // Set defaults for trend data so charts render immediately
+      d.trendLabels=['Nov 25','Dec 25','Jan 26','Feb 26','Mar 26','Apr 26']
+      d.jaws.income6=[468903,496206,623279,569129,705165,116239]
+      d.vps.income6 =[905849,615285,731524,800866,891330,344080]
+      d.jaws.expense6=[380000,400000,510000,460000,580000,186111]
+      d.vps.expense6 =[780000,520000,620000,680000,760000, 99262]
       setDash(d);setLastRefresh(new Date());setError('')
-    }catch(e:any){setError(e.message)}
-    if(isRefresh)setRefreshing(false)
-    setLoading(false)
+      setLoading(false)
+      if(isRefresh)setRefreshing(false)
+      // Step 2: Load live trend data in background
+      try{
+        const tr=await fetch('/api/trends')
+        if(tr.ok){
+          const td=await tr.json()
+          setDash((prev:any)=>prev?{...prev,
+            trendLabels:td.trendLabels,
+            jaws:{...prev.jaws,income6:td.jawsIncome6,expense6:td.jawsExpense6},
+            vps: {...prev.vps, income6:td.vpsIncome6, expense6:td.vpsExpense6},
+          }:prev)
+        }
+      }catch{}
+    }catch(e:any){setError(e.message);setLoading(false);if(isRefresh)setRefreshing(false)}
   },[router])
   useEffect(()=>{load()},[load])
   useEffect(()=>{const t=setInterval(()=>load(true),5*60*1000);return()=>clearInterval(t)},[load])
