@@ -112,25 +112,24 @@ export function currentMonthRange() {
   return { start, end }
 
       // AU Financial Year helper - FY ends 30 June
-      // e.g. FY2026 = 1 Jul 2025 to 30 Jun 2026
-  export function currentFYRange() {
-      const now = new Date()
-      const fyYear = now.getMonth() >= 6 ? now.getFullYear() + 1 : now.getFullYear()
-      const start = `${fyYear - 1}-07-01`
-      const end   = `${fyYear}-06-30`
-      return { start, end, fyYear }
-  }
+// e.g. FY2026 = 1 Jul 2025 to 30 Jun 2026
+export function currentFYRange() {
+    const now = new Date()
+    const fyYear = now.getMonth() >= 6 ? now.getFullYear() + 1 : now.getFullYear()
+    const start = `${fyYear - 1}-07-01`
+    const end   = `${fyYear}-06-30`
+    return { start, end, fyYear }
+}
 
-  export function getFYRange(fyYear: number) {
-      const start = `${fyYear - 1}-07-01`
-      const end   = `${fyYear}-06-30`
-      return { start, end, fyYear }
-  }
+export function getFYRange(fyYear: number) {
+    const start = `${fyYear - 1}-07-01`
+    const end   = `${fyYear}-06-30`
+    return { start, end, fyYear }
+}
 
-  export function parseDateRange(req: any) {
-   const s = req.query?.startDate
-   const e = req.query?.endDate
-      if (s && e) return { start: s, end: e }
-      return currentFYRange()
-  }
+export function parseDateRange(req: any) {
+    const s = req.query?.startDate
+    const e = req.query?.endDate
+    if (s && e) return { start: s, end: e }
+    return currentFYRange()
 }
