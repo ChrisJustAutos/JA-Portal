@@ -2,6 +2,7 @@
 // Full JAWS + VPS parity, trend charts, Power BI-style layout
 import { useEffect, useState, useRef, useCallback } from 'react'
 import Head from 'next/head'
+import Script from 'next/script'
 import { useRouter } from 'next/router'
 
 // ── Types ────────────────────────────────────────────────────
@@ -69,15 +70,19 @@ function BarRow({name,value,max,color=T.blue,extra}:{name:string;value:number;ma
     {extra&&<span style={{fontSize:10,color:T.text3,fontFamily:'monospace',flexShrink:0}}>{extra}</span>}
   </div>
 }
-function InvoiceTable({rows,accent}:{rows:Invoice[];accent:string}) {
+function InvoiceTable({rows,accent,onOpenInvoiceClick}:{rows:Invoice[];accent:string;onOpenInvoiceClick?:()=>void}) {
   return <div style={{overflowX:'auto'}}>
     <table style={{width:'100%',borderCollapse:'collapse'}}>
       <thead><tr>{['Invoice','Date','Customer','Total','Balance','Status'].map(h=>(
         <th key={h} style={{fontSize:10,color:T.text3,textTransform:'uppercase',letterSpacing:'0.07em',padding:'0 8px 10px',textAlign:['Total','Balance'].includes(h)?'right':'left',fontWeight:500,whiteSpace:'nowrap'}}>{h}</th>
       ))}</tr></thead>
       <tbody>{rows.map((r,i)=>(
-        <tr key={i} style={{borderTop:`1px solid ${T.border}`}}>
-          <td style={{fontSize:12,color:accent,fontFamily:'monospace',padding:'7px 8px'}}>{r.Number}</td>
+        <tr key={i} style={{borderTop:`1px solid ${T.border}`,cursor:r.Status==='Open'&&onOpenInvoiceClick?'pointer':'default',transition:'background 0.1s'}}
+          onClick={r.Status==='Open'&&onOpenInvoiceClick?onOpenInvoiceClick:undefined}
+          onMouseEnter={e=>{if(r.Status==='Open'&&onOpenInvoiceClick)(e.currentTarget as HTMLElement).style.background='rgba(255,255,255,0.03)'}}
+          onMouseLeave={e=>{(e.currentTarget as HTMLElement).style.background='transparent'}}
+        >
+          <td style={{fontSize:12,color:r.Status==='Open'?T.amber:accent,fontFamily:'monospace',padding:'7px 8px',fontWeight:r.Status==='Open'?500:400}}>{r.Number}</td>
           <td style={{fontSize:12,color:T.text2,padding:'7px 8px',whiteSpace:'nowrap'}}>{fmtDate(r.Date)}</td>
           <td style={{fontSize:12,color:T.text2,padding:'7px 8px',maxWidth:200,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{r.CustomerName?.substring(0,32)}</td>
           <td style={{fontSize:12,fontFamily:'monospace',color:T.text,padding:'7px 8px',textAlign:'right'}}>{fmtFull(r.TotalAmount)}</td>
@@ -111,30 +116,34 @@ function BillTable({rows,accent}:{rows:Bill[];accent:string}) {
 function TrendChart({labels,jawsData,vpsData,title,chartId}:{labels:string[];jawsData:number[];vpsData:number[];title:string;chartId:string}) {
   const canvasRef=useRef<HTMLCanvasElement>(null)
   const chartRef=useRef<any>(null)
+
   useEffect(()=>{
     if (!canvasRef.current||!jawsData.length) return
-    const win=window as any
-    if (!win.Chart) return
-    if (chartRef.current) chartRef.current.destroy()
-    chartRef.current=new win.Chart(canvasRef.current,{
-      type:'bar',
-      data:{
-        labels,
-        datasets:[
-          {label:'JAWS',data:jawsData.map(v=>Math.round(v/1000)),backgroundColor:'#4f8ef7',borderRadius:4,borderSkipped:false},
-          {label:'VPS', data:vpsData.map(v=>Math.round(v/1000)), backgroundColor:'#2dd4bf',borderRadius:4,borderSkipped:false},
-        ]
-      },
-      options:{
-        responsive:true,maintainAspectRatio:false,
-        plugins:{legend:{display:false},tooltip:{callbacks:{label:(ctx:any)=>`${ctx.dataset.label}: $${ctx.raw}k`}}},
-        scales:{
-          x:{grid:{color:'rgba(255,255,255,0.05)'},ticks:{color:T.text3,font:{size:11}}},
-          y:{grid:{color:'rgba(255,255,255,0.05)'},ticks:{color:T.text3,font:{size:11},callback:(v:any)=>'$'+v+'k'}},
+    const buildChart = () => {
+      const win=window as any
+      if (!win.Chart) { setTimeout(buildChart, 200); return }
+      if (chartRef.current) chartRef.current.destroy()
+      chartRef.current=new win.Chart(canvasRef.current,{
+        type:'bar',
+        data:{
+          labels,
+          datasets:[
+            {label:'JAWS',data:jawsData.map(v=>Math.round(v/1000)),backgroundColor:'#4f8ef7',borderRadius:4,borderSkipped:false},
+            {label:'VPS', data:vpsData.map(v=>Math.round(v/1000)), backgroundColor:'#2dd4bf',borderRadius:4,borderSkipped:false},
+          ]
+        },
+        options:{
+          responsive:true,maintainAspectRatio:false,
+          plugins:{legend:{display:false},tooltip:{callbacks:{label:(ctx:any)=>`${ctx.dataset.label}: $${ctx.raw}k`}}},
+          scales:{
+            x:{grid:{color:'rgba(255,255,255,0.05)'},ticks:{color:T.text3,font:{size:11},autoSkip:false,maxRotation:45}},
+            y:{grid:{color:'rgba(255,255,255,0.05)'},ticks:{color:T.text3,font:{size:11},callback:(v:any)=>'$'+v+'k'}},
+          }
         }
-      }
-    })
-    return()=>{if(chartRef.current)chartRef.current.destroy()}
+      })
+    }
+    buildChart()
+    return()=>{if(chartRef.current){chartRef.current.destroy();chartRef.current=null}}
   },[labels,jawsData,vpsData])
 
   return (
@@ -149,7 +158,7 @@ function TrendChart({labels,jawsData,vpsData,title,chartId}:{labels:string[];jaw
       </div>
       <div style={{position:'relative',height:200}}>
         <canvas ref={canvasRef} id={chartId} role="img" aria-label={`${title} bar chart comparing JAWS and VPS over 6 months`}>
-          {title}: {labels.map((l,i)=>`${l} JAWS $${Math.round(jawsData[i]/1000)}k VPS $${Math.round(vpsData[i]/1000)}k`).join(', ')}
+          {title}: {labels.map((l,i)=>`${l} JAWS $${Math.round((jawsData[i]||0)/1000)}k VPS $${Math.round((vpsData[i]||0)/1000)}k`).join(', ')}
         </canvas>
       </div>
     </div>
@@ -160,28 +169,31 @@ function LineChart({labels,jawsData,vpsData,chartId}:{labels:string[];jawsData:n
   const chartRef=useRef<any>(null)
   useEffect(()=>{
     if (!canvasRef.current||!jawsData.length) return
-    const win=window as any
-    if (!win.Chart) return
-    if (chartRef.current) chartRef.current.destroy()
-    chartRef.current=new win.Chart(canvasRef.current,{
-      type:'line',
-      data:{
-        labels,
-        datasets:[
-          {label:'JAWS',data:jawsData.map(v=>Math.round(v/1000)),borderColor:'#4f8ef7',backgroundColor:'rgba(79,142,247,0.1)',tension:0.3,fill:true,pointRadius:4,pointBackgroundColor:'#4f8ef7'},
-          {label:'VPS', data:vpsData.map(v=>Math.round(v/1000)), borderColor:'#2dd4bf',backgroundColor:'rgba(45,212,191,0.1)',tension:0.3,fill:true,pointRadius:4,pointBackgroundColor:'#2dd4bf'},
-        ]
-      },
-      options:{
-        responsive:true,maintainAspectRatio:false,
-        plugins:{legend:{display:false},tooltip:{callbacks:{label:(ctx:any)=>`${ctx.dataset.label}: $${ctx.raw}k`}}},
-        scales:{
-          x:{grid:{color:'rgba(255,255,255,0.05)'},ticks:{color:T.text3,font:{size:11}}},
-          y:{grid:{color:'rgba(255,255,255,0.05)'},ticks:{color:T.text3,font:{size:11},callback:(v:any)=>'$'+v+'k'}},
+    const buildChart = () => {
+      const win=window as any
+      if (!win.Chart) { setTimeout(buildChart,200); return }
+      if (chartRef.current) chartRef.current.destroy()
+      chartRef.current=new win.Chart(canvasRef.current,{
+        type:'line',
+        data:{
+          labels,
+          datasets:[
+            {label:'JAWS',data:jawsData.map(v=>Math.round(v/1000)),borderColor:'#4f8ef7',backgroundColor:'rgba(79,142,247,0.1)',tension:0.3,fill:true,pointRadius:4,pointBackgroundColor:'#4f8ef7'},
+            {label:'VPS', data:vpsData.map(v=>Math.round(v/1000)), borderColor:'#2dd4bf',backgroundColor:'rgba(45,212,191,0.1)',tension:0.3,fill:true,pointRadius:4,pointBackgroundColor:'#2dd4bf'},
+          ]
+        },
+        options:{
+          responsive:true,maintainAspectRatio:false,
+          plugins:{legend:{display:false},tooltip:{callbacks:{label:(ctx:any)=>`${ctx.dataset.label}: $${ctx.raw}k`}}},
+          scales:{
+            x:{grid:{color:'rgba(255,255,255,0.05)'},ticks:{color:T.text3,font:{size:11}}},
+            y:{grid:{color:'rgba(255,255,255,0.05)'},ticks:{color:T.text3,font:{size:11},callback:(v:any)=>'$'+v+'k'}},
+          }
         }
-      }
-    })
-    return()=>{if(chartRef.current)chartRef.current.destroy()}
+      })
+    }
+    buildChart()
+    return()=>{if(chartRef.current){chartRef.current.destroy();chartRef.current=null}}
   },[labels,jawsData,vpsData])
   return <div style={{position:'relative',height:200}}>
     <canvas ref={canvasRef} id={chartId} role="img" aria-label="Revenue trend line chart">Net result trend</canvas>
@@ -192,15 +204,18 @@ function DonutChart({jawsVal,vpsVal,chartId}:{jawsVal:number;vpsVal:number;chart
   const chartRef=useRef<any>(null)
   useEffect(()=>{
     if (!canvasRef.current) return
-    const win=window as any
-    if (!win.Chart) return
-    if (chartRef.current) chartRef.current.destroy()
-    chartRef.current=new win.Chart(canvasRef.current,{
-      type:'doughnut',
-      data:{labels:['JAWS','VPS'],datasets:[{data:[Math.round(jawsVal),Math.round(vpsVal)],backgroundColor:['#4f8ef7','#2dd4bf'],borderWidth:0,hoverOffset:4}]},
-      options:{responsive:true,maintainAspectRatio:false,cutout:'70%',plugins:{legend:{display:false},tooltip:{callbacks:{label:(ctx:any)=>`${ctx.label}: ${fmt(ctx.raw)}`}}}}
-    })
-    return()=>{if(chartRef.current)chartRef.current.destroy()}
+    const buildChart = () => {
+      const win=window as any
+      if (!win.Chart) { setTimeout(buildChart,200); return }
+      if (chartRef.current) chartRef.current.destroy()
+      chartRef.current=new win.Chart(canvasRef.current,{
+        type:'doughnut',
+        data:{labels:['JAWS','VPS'],datasets:[{data:[Math.round(jawsVal||0),Math.round(vpsVal||0)],backgroundColor:['#4f8ef7','#2dd4bf'],borderWidth:0,hoverOffset:4}]},
+        options:{responsive:true,maintainAspectRatio:false,cutout:'70%',plugins:{legend:{display:false},tooltip:{callbacks:{label:(ctx:any)=>`${ctx.label}: ${fmt(ctx.raw)}`}}}}
+      })
+    }
+    buildChart()
+    return()=>{if(chartRef.current){chartRef.current.destroy();chartRef.current=null}}
   },[jawsVal,vpsVal])
   return <div style={{position:'relative',height:120,width:120}}><canvas ref={canvasRef} id={chartId} role="img" aria-label="JAWS vs VPS split donut chart"/></div>
 }
@@ -442,8 +457,12 @@ export default function Portal() {
       <div style={{display:'grid',gridTemplateColumns:'repeat(4,minmax(0,1fr))',gap:12}}>
         <KPI label="JAWS Revenue (MTD)"    value={fmt(jInc)}        sub="Income this month"  accent={T.blue}/>
         <KPI label="VPS Revenue (MTD)"     value={fmt(vInc)}        sub="Income this month"  accent={T.teal}/>
-        <KPI label="Total Receivables"     value={fmt(jOut+vOut)}   sub={`${jOpen.length+vOpen.length} open invoices`} subColor={T.amber} accent={T.amber}/>
-        <KPI label="JAWS Stock on Hand"    value={fmt(stockVal)}    sub={`${dash?.jaws.stockSummary?.results?.[0]?.rows?.[0]?.[1]||0} SKUs`} accent={T.purple}/>
+        <div onClick={()=>setSection('invoices')} style={{cursor:'pointer'}}>
+          <KPI label="Total Receivables"   value={fmt(jOut+vOut)}   sub={`${jOpen.length+vOpen.length} open — click to view`} subColor={T.amber} accent={T.amber}/>
+        </div>
+        <div onClick={()=>setSection('stock')} style={{cursor:'pointer'}}>
+          <KPI label="JAWS Stock on Hand"  value={fmt(stockVal)}    sub={`${dash?.jaws.stockSummary?.results?.[0]?.rows?.[0]?.[1]||0} SKUs — click to view`} accent={T.purple}/>
+        </div>
       </div>
 
       <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}}>
@@ -487,24 +506,26 @@ export default function Portal() {
 
       <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}}>
         <Card>
-          <PTitle>Outstanding receivables</PTitle>
+          <PTitle>Outstanding receivables <span onClick={()=>setSection('invoices')} style={{color:T.blue,cursor:'pointer',fontWeight:400,fontSize:10,textTransform:'none',letterSpacing:0}}>View all →</span></PTitle>
           <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10,marginBottom:12}}>
-            <div style={{background:T.bg3,borderRadius:8,padding:'10px 12px'}}>
+            <div onClick={()=>setSection('invoices')} style={{background:T.bg3,borderRadius:8,padding:'10px 12px',cursor:'pointer'}}>
               <div style={{fontSize:10,color:T.text3,marginBottom:4}}>JAWS</div>
               <div style={{fontSize:18,fontWeight:500,fontFamily:'monospace',color:T.amber}}>{fmt(jOut)}</div>
-              <div style={{fontSize:11,color:T.text3,marginTop:2}}>{jOpen.length} open invoices</div>
+              <div style={{fontSize:11,color:T.blue,marginTop:2}}>{jOpen.length} open — click to view</div>
             </div>
-            <div style={{background:T.bg3,borderRadius:8,padding:'10px 12px'}}>
+            <div onClick={()=>setSection('invoices')} style={{background:T.bg3,borderRadius:8,padding:'10px 12px',cursor:'pointer'}}>
               <div style={{fontSize:10,color:T.text3,marginBottom:4}}>VPS</div>
               <div style={{fontSize:18,fontWeight:500,fontFamily:'monospace',color:T.amber}}>{fmt(vOut)}</div>
-              <div style={{fontSize:11,color:T.text3,marginTop:2}}>{vOpen.length} open invoices</div>
+              <div style={{fontSize:11,color:T.blue,marginTop:2}}>{vOpen.length} open — click to view</div>
             </div>
           </div>
           {[...jOpen.slice(0,2).map(i=>({...i,e:'JAWS'})),...vOpen.slice(0,2).map(i=>({...i,e:'VPS'}))].map((inv:any,i)=>(
-            <div key={i} style={{display:'flex',gap:8,padding:'6px 0',borderTop:`1px solid ${T.border}`}}>
+            <div key={i} onClick={()=>setSection('invoices')} style={{display:'flex',gap:8,padding:'6px 0',borderTop:`1px solid ${T.border}`,cursor:'pointer'}}
+              onMouseEnter={e=>{(e.currentTarget as HTMLElement).style.background='rgba(255,255,255,0.03)'}}
+              onMouseLeave={e=>{(e.currentTarget as HTMLElement).style.background='transparent'}}>
               <div style={{width:6,height:6,borderRadius:'50%',background:inv.e==='JAWS'?T.blue:T.teal,flexShrink:0,marginTop:5}}/>
               <div style={{flex:1,minWidth:0}}>
-                <div style={{fontSize:12,color:T.text2,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{inv.Number} — {inv.CustomerName?.substring(0,24)}</div>
+                <div style={{fontSize:12,color:T.amber,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',fontFamily:'monospace'}}>{inv.Number} — {inv.CustomerName?.substring(0,24)}</div>
                 <div style={{fontSize:10,color:T.text3,fontFamily:'monospace',marginTop:1}}>{fmtFull(inv.BalanceDueAmount)} · {inv.e} · {fmtDate(inv.Date)}</div>
               </div>
             </div>
@@ -538,7 +559,7 @@ export default function Portal() {
           {jCust.slice(0,8).map((c,i)=><BarRow key={i} name={c.CustomerName?.replace(' (Tuning)','').replace(' (Tuning 1)','').substring(0,26)} value={c.TotalRevenue} max={jCust[0]?.TotalRevenue||1} extra={`${c.InvoiceCount}inv`}/>)}
         </Card>
       </div>
-      <Card><PTitle>Recent invoices — JAWS</PTitle><InvoiceTable rows={jInv} accent={T.blue}/></Card>
+      <Card><PTitle>Recent invoices — JAWS</PTitle><InvoiceTable rows={jInv} accent={T.blue} onOpenInvoiceClick={()=>setSection('invoices')}/></Card>
     </div>
 
     // ── VPS ─────────────────────────────────────────────────
@@ -559,7 +580,7 @@ export default function Portal() {
           {vCust.filter(c=>!c.CustomerName?.includes('Just Autos Wholesale')).slice(0,8).map((c,i)=><BarRow key={i} name={c.CustomerName?.substring(0,26)} value={c.TotalRevenue} max={vCust[1]?.TotalRevenue||1} color={T.teal} extra={`${c.InvoiceCount}inv`}/>)}
         </Card>
       </div>
-      <Card><PTitle>Recent invoices — VPS</PTitle><InvoiceTable rows={vInv} accent={T.teal}/></Card>
+      <Card><PTitle>Recent invoices — VPS</PTitle><InvoiceTable rows={vInv} accent={T.teal} onOpenInvoiceClick={()=>setSection('invoices')}/></Card>
     </div>
 
     // ── INVOICES ─────────────────────────────────────────────
@@ -570,8 +591,8 @@ export default function Portal() {
         <KPI label="Combined"         value={fmt(jOut+vOut)} sub="Total receivable" subColor={T.red}/>
         <KPI label="Open Count"       value={String(jOpen.length+vOpen.length)} sub="Both entities"/>
       </div>
-      <Card><PTitle>JAWS — Recent invoices <Tag color={T.blue}>Live MYOB</Tag></PTitle><InvoiceTable rows={jInv} accent={T.blue}/></Card>
-      <Card><PTitle>VPS — Recent invoices <Tag color={T.teal}>Live MYOB</Tag></PTitle><InvoiceTable rows={vInv}  accent={T.teal}/></Card>
+      <Card><PTitle>JAWS — Recent invoices <Tag color={T.blue}>Live MYOB</Tag></PTitle><InvoiceTable rows={jInv} accent={T.blue} onOpenInvoiceClick={()=>setSection('invoices')}/></Card>
+      <Card><PTitle>VPS — Recent invoices <Tag color={T.teal}>Live MYOB</Tag></PTitle><InvoiceTable rows={vInv}  accent={T.teal} onOpenInvoiceClick={()=>setSection('invoices')}/></Card>
     </div>
 
     // ── P&L ──────────────────────────────────────────────────
@@ -681,7 +702,7 @@ export default function Portal() {
         <meta name="viewport" content="width=device-width,initial-scale=1"/>
         <meta name="robots" content="noindex,nofollow"/>
       </Head>
-      <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"/>
+      <Script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js" strategy="beforeInteractive"/>
 
       <div style={{display:'flex',height:'100vh',overflow:'hidden',fontFamily:"'DM Sans',system-ui,sans-serif"}}>
         {/* Sidebar */}
