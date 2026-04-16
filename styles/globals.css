@@ -1,0 +1,38 @@
+/* styles/globals.css */
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&family=DM+Mono:wght@400;500&display=swap');
+
+:root {
+  --bg:      #0d0f12;
+  --bg2:     #131519;
+  --bg3:     #1a1d23;
+  --bg4:     #21252d;
+  --border:  rgba(255,255,255,0.07);
+  --border2: rgba(255,255,255,0.12);
+  --text:    #e8eaf0;
+  --text2:   #8b90a0;
+  --text3:   #545968;
+  --accent:  #4f8ef7;
+  --accent2: #3a6fd4;
+  --green:   #34c77b;
+  --amber:   #f5a623;
+  --red:     #f04e4e;
+  --teal:    #2dd4bf;
+  --purple:  #a78bfa;
+  --font:    'DM Sans', sans-serif;
+  --mono:    'DM Mono', monospace;
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body, #__next { height: 100%; }
+
+body {
+  font-family: var(--font);
+  background: var(--bg);
+  color: var(--text);
+  -webkit-font-smoothing: antialiased;
+}
+
+::-webkit-scrollbar { width: 4px; height: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--bg4); border-radius: 2px; }
