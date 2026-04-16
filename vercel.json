@@ -1,7 +1,9 @@
 {
   "name": "ja-management-portal",
   "framework": "nextjs",
-  "buildCommand": "next build",
-  "devCommand": "next dev",
-  "installCommand": "npm install"
+  "functions": {
+    "pages/api/dashboard.ts": { "maxDuration": 30 },
+    "pages/api/distributors.ts": { "maxDuration": 30 },
+    "pages/api/chat.ts": { "maxDuration": 30 }
+  }
 }
