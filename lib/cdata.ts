@@ -110,4 +110,27 @@ export function currentMonthRange() {
   const start = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().split('T')[0]
   const end   = new Date(now.getFullYear(), now.getMonth() + 1, 0).toISOString().split('T')[0]
   return { start, end }
+
+  // AU Financial Year helper — FY ends 30 June
+  // e.g. FY2026 = 1 Jul 2025 → 30 Jun 2026
+  export function currentFYRange() {
+      const now = new Date()
+      const fyYear = now.getMonth() >= 6 ? now.getFullYear() + 1 : now.getFullYear()
+      const start = `${fyYear - 1}-07-01`
+      const end   = `${fyYear}-06-30`
+      return { start, end, fyYear }
+  }
+
+  export function getFYRange(fyYear: number) {
+      const start = `${fyYear - 1}-07-01`
+      const end   = `${fyYear}-06-30`
+      return { start, end, fyYear }
+  }
+
+  export function parseDateRange(req: { query: Record<string, string | string[]> }) {
+      const s = req.query.startDate as string | undefined
+      const e = req.query.endDate   as string | undefined
+      if (s && e) return { start: s, end: e }
+      return currentFYRange()
+  }
 }
