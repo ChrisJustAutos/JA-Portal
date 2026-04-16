@@ -2,9 +2,9 @@
   "name": "ja-management-portal",
   "framework": "nextjs",
   "functions": {
-    "pages/api/dashboard.ts": { "maxDuration": 60 },
+    "pages/api/dashboard.ts":    { "maxDuration": 60 },
     "pages/api/distributors.ts": { "maxDuration": 60 },
-    "pages/api/chat.ts": { "maxDuration": 60 },
-    "pages/api/test.ts": { "maxDuration": 60 }
+    "pages/api/chat.ts":         { "maxDuration": 60 },
+    "pages/api/test.ts":         { "maxDuration": 60 }
   }
 }
