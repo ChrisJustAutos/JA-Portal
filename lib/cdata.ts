@@ -127,7 +127,7 @@ export function currentMonthRange() {
       return { start, end, fyYear }
   }
 
-  export function parseDateRange(req: { query: Record<string, string | string[]> }) {
+  export function parseDateRange(req: any) {
       const s = req.query.startDate as string | undefined
       const e = req.query.endDate   as string | undefined
       if (s && e) return { start: s, end: e }
