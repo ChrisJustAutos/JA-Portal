@@ -1,34 +1,62 @@
-// lib/cdata.ts — Server-side only CData Connect Cloud queries
+// lib/cdata.ts — Server-side only
+// Queries MYOB via CData MCP server REST endpoint
 
-const CDATA_BASE = process.env.CDATA_BASE_URL || 'https://cloud.cdata.com/api/odata4'
 const CDATA_USER = process.env.CDATA_USERNAME || ''
 const CDATA_PAT  = process.env.CDATA_PAT || ''
+const MCP_URL    = 'https://mcp.cloud.cdata.com/mcp'
 
 function authHeader() {
   const creds = Buffer.from(`${CDATA_USER}:${CDATA_PAT}`).toString('base64')
   return {
     'Authorization': `Basic ${creds}`,
     'Content-Type': 'application/json',
-    'Accept': 'application/json',
+    'Accept': 'application/json, text/event-stream',
   }
 }
 
 export async function cdataQuery(catalog: string, sql: string) {
-  const url = `${CDATA_BASE}/${catalog}/query`
-  
-  const res = await fetch(url, {
+  const res = await fetch(MCP_URL, {
     method: 'POST',
     headers: authHeader(),
-    body: JSON.stringify({ query: sql }),
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'tools/call',
+      params: {
+        name: 'queryData',
+        arguments: { query: sql }
+      }
+    }),
     cache: 'no-store',
   })
 
   if (!res.ok) {
     const text = await res.text()
-    throw new Error(`CData ${res.status}: ${text.substring(0, 200)}`)
+    throw new Error(`CData MCP ${res.status}: ${text.substring(0, 300)}`)
   }
 
-  return res.json()
+  const text = await res.text()
+  
+  // MCP returns either JSON or SSE (text/event-stream)
+  // Parse out the result
+  let data: any
+  if (text.startsWith('data:')) {
+    // SSE format - extract JSON from each data line
+    const lines = text.split('\n').filter(l => l.startsWith('data:'))
+    const combined = lines.map(l => l.replace(/^data:\s*/, '')).join('')
+    data = JSON.parse(combined)
+  } else {
+    data = JSON.parse(text)
+  }
+
+  if (data.error) throw new Error(`CData error: ${JSON.stringify(data.error)}`)
+  
+  // Extract the actual query result from MCP response
+  const content = data.result?.content
+  if (content && content[0]?.text) {
+    return JSON.parse(content[0].text)
+  }
+  return data.result || data
 }
 
 // ── JAWS queries ────────────────────────────────────────────
@@ -175,7 +203,6 @@ export async function getMonthlyExpenseTrend(catalog: string, year: number, mont
   `)
 }
 
-// Helper
 export function currentMonthRange() {
   const now = new Date()
   const start = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().split('T')[0]
