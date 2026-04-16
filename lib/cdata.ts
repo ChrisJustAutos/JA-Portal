@@ -128,8 +128,8 @@ export function currentMonthRange() {
   }
 
   export function parseDateRange(req: any) {
-      const s = req.query.startDate as string | undefined
-      const e = req.query.endDate   as string | undefined
+   const s = req.query?.startDate
+   const e = req.query?.endDate
       if (s && e) return { start: s, end: e }
       return currentFYRange()
   }
