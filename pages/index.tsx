@@ -1,4 +1,4 @@
-// pages/index.tsx — Just Autos Management Portal v3
+h// pages/index.tsx — Just Autos Management Portal v3
 // Full JAWS + VPS parity, trend charts, Power BI-style layout
 import { useEffect, useState, useRef, useCallback } from 'react'
 import Head from 'next/head'
@@ -345,12 +345,20 @@ export default function Portal() {
   const [refreshing,setRefreshing]=useState(false)
   const [error,setError]=useState('')
   const [lastRefresh,setLastRefresh]=useState<Date|null>(null)
+    // FY date range — AU financial year (1 Jul → 30 Jun)
+    const currentFY = new Date().getMonth() >= 6 ? new Date().getFullYear()+1 : new Date().getFullYear()
+    const [fyYear, setFyYear] = useState(currentFY)
+    const [showFyDropdown, setShowFyDropdown] = useState(false)
+    const fyStart = `${fyYear-1}-07-01`
+    const fyEnd   = `${fyYear}-06-30`
+    const dateParams = `startDate=${fyStart}&endDate=${fyEnd}`
+    const fyLabel = `FY${fyYear}`
 
   const load=useCallback(async(isRefresh=false)=>{
     if(isRefresh)setRefreshing(true)
     try{
       // Step 1: Load core data fast (invoices, P&L, customers)
-      const r=await fetch('/api/dashboard')
+                const r=await fetch(`/api/dashboard?${dateParams}`)
       if(r.status===401){router.push('/login');return}
       if(!r.ok)throw new Error('Failed to load data')
       const d=await r.json()
@@ -365,7 +373,7 @@ export default function Portal() {
       if(isRefresh)setRefreshing(false)
       // Step 2: Load live trend data in background
       try{
-        const tr=await fetch('/api/trends')
+                  const tr=await fetch(`/api/trends?${dateParams}`)
         if(tr.ok){
           const td=await tr.json()
           setDash((prev:any)=>prev?{...prev,
@@ -376,7 +384,7 @@ export default function Portal() {
         }
       }catch{}
     }catch(e:any){setError(e.message);setLoading(false);if(isRefresh)setRefreshing(false)}
-  },[router])
+  },[router, fyYear])
   useEffect(()=>{load()},[load])
   useEffect(()=>{const t=setInterval(()=>load(true),5*60*1000);return()=>clearInterval(t)},[load])
 
@@ -455,8 +463,8 @@ export default function Portal() {
     // ── OVERVIEW ────────────────────────────────────────────
     if(section==='overview') return <div style={{display:'flex',flexDirection:'column',gap:14}}>
       <div style={{display:'grid',gridTemplateColumns:'repeat(4,minmax(0,1fr))',gap:12}}>
-        <KPI label="JAWS Revenue (MTD)"    value={fmt(jInc)}        sub="Income this month"  accent={T.blue}/>
-        <KPI label="VPS Revenue (MTD)"     value={fmt(vInc)}        sub="Income this month"  accent={T.teal}/>
+                    <KPI label={`JAWS Revenue (${fyLabel})`}    value={fmt(jInc)}   sub="Income this period" accent={T.blue}/>
+                    <KPI label={`VPS Revenue (${fyLabel})`}     value={fmt(vInc)}   sub="Income this period" accent={T.teal}/>
         <div onClick={()=>setSection('invoices')} style={{cursor:'pointer'}}>
           <KPI label="Total Receivables"   value={fmt(jOut+vOut)}   sub={`${jOpen.length+vOpen.length} open — click to view`} subColor={T.amber} accent={T.amber}/>
         </div>
@@ -754,7 +762,17 @@ export default function Portal() {
             <Tag color={T.green}>MYOB live</Tag>
             {!loading&&<Tag color={T.amber}>{fmt(jOut+vOut)} receivable</Tag>}
             {!loading&&<Tag color={T.purple}>{fmt(stockVal)} stock</Tag>}
-            <span style={{fontSize:12,color:T.text3,fontFamily:'monospace'}}>{new Date().toLocaleDateString('en-AU',{day:'2-digit',month:'short',year:'numeric'})}</span>
+                        <div style={{display:'flex',alignItems:'center',gap:6,position:'relative'}}>
+                          {[currentFY-2,currentFY-1,currentFY].map(y=>(
+                        <button key={y} onClick={()=>{setFyYear(y);setShowFyDropdown(false)}}
+                                              style={{padding:'3px 10px',borderRadius:4,border:'1px solid',fontSize:11,fontFamily:'monospace',fontWeight:600,cursor:'pointer',
+                                                                            background:fyYear===y?T.accent:'transparent',
+                                                                            color:fyYear===y?'#fff':T.text2,
+                                                                            borderColor:fyYear===y?T.accent:T.border}}>
+                          {`FY${y}`}{y===currentFY?<span style={{width:4,height:4,borderRadius:'50%',background:T.green,display:'inline-block',marginLeft:4,verticalAlign:'middle'}}/>:null}
+                        </button>button>
+                      ))}
+                        </div>div>
           </div>
           <div style={{flex:1,display:'flex',overflow:'hidden'}}>
             <div style={{flex:1,padding:20,overflowY:'auto'}}>{renderSection()}</div>
