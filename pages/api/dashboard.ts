@@ -1,7 +1,7 @@
 // pages/api/dashboard.ts — Sequential small batches to guarantee sub-10s
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { requireAuth } from '../../lib/auth'
-import { cdataQuery, currentMonthRange } from '../../lib/cdata'
+import { cdataQuery, parseDateRange } from '../../lib/cdata'
 
 export const config = { maxDuration: 60 }
 
@@ -11,7 +11,7 @@ async function safe(fn: () => Promise<any>) {
 
 export default function handler(req: NextApiRequest, res: NextApiResponse) {
   return requireAuth(req, res, async () => {
-    const { start, end } = currentMonthRange()
+          const { start, end } = parseDateRange(req)
 
     // Batch A: JAWS critical (3 queries)
     const [jawsRecent, jawsOpen, jawsTopCust] = await Promise.all([
