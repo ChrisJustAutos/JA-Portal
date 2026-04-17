@@ -5,41 +5,54 @@ import { cdataQuery, parseDateRange } from '../../lib/cdata'
 
 export const config = { maxDuration: 60 }
 
-// Parse CData response into array of objects
+// Parse CData response — handles both MCP format and REST API format
 function parseRows(result: any): Record<string, any>[] {
-  if (!result?.results?.[0]) return []
-  const { schema, rows } = result.results[0]
-  if (!schema || !rows) return []
-  return rows.map((row: any[]) => {
-    const o: any = {}
-    schema.forEach((c: any, i: number) => { o[c.columnName] = row[i] })
-    return o
-  })
+  if (!result) return []
+  // Format A: { results: [{ schema: [...], rows: [...] }] }
+  if (result?.results?.[0]?.schema && result?.results?.[0]?.rows) {
+    const { schema, rows } = result.results[0]
+    return rows.map((row: any[]) => {
+      const o: any = {}
+      schema.forEach((c: any, i: number) => { o[c.columnName || c.ColumnName || c.name] = row[i] })
+      return o
+    })
+  }
+  // Format B: { value: [...] } (OData style)
+  if (Array.isArray(result?.value)) return result.value
+  // Format C: already an array
+  if (Array.isArray(result)) return result
+  // Format D: { rows: [...], schema: [...] } (flat)
+  if (result?.schema && result?.rows) {
+    return result.rows.map((row: any[]) => {
+      const o: any = {}
+      result.schema.forEach((c: any, i: number) => { o[c.columnName || c.ColumnName || c.name] = row[i] })
+      return o
+    })
+  }
+  return []
 }
 
 async function safe(fn: () => Promise<any>) {
-  try { return await fn() } catch (e: any) { console.error('dist:', e.message?.substring(0, 80)); return null }
+  try { return await fn() } catch (e: any) { console.error('dist:', e.message?.substring(0, 120)); return null }
 }
 
 // Cache
 const CACHE_TTL = 3 * 60 * 1000
-const cache = new Map<string, { data: any; timestamp: number }>()
-function getCached(key: string) { const e = cache.get(key); if (!e) return null; if (Date.now() - e.timestamp > CACHE_TTL) { cache.delete(key); return null }; return e.data }
-function setCache(key: string, data: any) { cache.set(key, { data, timestamp: Date.now() }); if (cache.size > 10) { const k = cache.keys().next().value; if (k) cache.delete(k) } }
+const cache = new Map<string, { data: any; ts: number }>()
+function getC(k: string) { const e = cache.get(k); if (!e) return null; if (Date.now() - e.ts > CACHE_TTL) { cache.delete(k); return null }; return e.data }
+function setC(k: string, d: any) { cache.set(k, { data: d, ts: Date.now() }); if (cache.size > 10) { const k2 = cache.keys().next().value; if (k2) cache.delete(k2) } }
 
-// Generate month labels for FY range
-function getMonthLabels(start: string, end: string): { label: string; start: string; end: string }[] {
-  const months: { label: string; start: string; end: string }[] = []
-  const startDate = new Date(start + 'T00:00:00')
-  const endDate = new Date(end + 'T00:00:00')
-  const d = new Date(startDate.getFullYear(), startDate.getMonth(), 1)
-  while (d <= endDate) {
-    const y = d.getFullYear()
-    const m = d.getMonth()
-    const mStart = `${y}-${String(m + 1).padStart(2, '0')}-01`
-    const mEnd = `${y}-${String(m + 1).padStart(2, '0')}-${new Date(y, m + 1, 0).getDate()}`
-    const label = d.toLocaleDateString('en-AU', { month: 'short', year: '2-digit' })
-    months.push({ label, start: mStart, end: mEnd })
+function getMonthLabels(start: string, end: string) {
+  const months: { label: string; s: string; e: string }[] = []
+  const d = new Date(start + 'T00:00:00')
+  const endD = new Date(end + 'T00:00:00')
+  while (d <= endD) {
+    const y = d.getFullYear(), m = d.getMonth()
+    months.push({
+      label: d.toLocaleDateString('en-AU', { month: 'short', year: '2-digit' }),
+      s: `${y}-${String(m + 1).padStart(2, '0')}-01`,
+      e: `${y}-${String(m + 1).padStart(2, '0')}-${new Date(y, m + 1, 0).getDate()}`
+    })
     d.setMonth(d.getMonth() + 1)
   }
   return months
@@ -50,80 +63,80 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
     try {
       const { start, end } = parseDateRange(new URLSearchParams(req.query as Record<string, string>))
       const forceRefresh = req.query.refresh === 'true'
-      const cacheKey = `dist:${start}:${end}`
+      const ck = `dist:${start}:${end}`
+      if (!forceRefresh) { const c = getC(ck); if (c) return res.status(200).json(c) }
 
-      if (!forceRefresh) {
-        const cached = getCached(cacheKey)
-        if (cached) return res.status(200).json(cached)
-      }
-
-      // Query 1: Get all distributor invoices with line-level detail
-      // Use a simpler query without JOIN in case CData doesn't support it
-      const invoiceResult = await safe(() => cdataQuery('JAWS', `
-        SELECT [CustomerName], [Date], [AccountName], [AccountDisplayID], [TotalAmount], [Number]
+      // Query 1: Get invoices in date range (CustomerName, Date, TotalAmount, Number, ID)
+      const invRaw = await safe(() => cdataQuery('JAWS', `
+        SELECT [ID], [CustomerName], [Date], [TotalAmount], [Number]
         FROM [MYOB_POWERBI_JAWS].[MYOB].[SaleInvoices]
         WHERE [Date] >= '${start}' AND [Date] <= '${end}' AND [TotalAmount] > 0
         ORDER BY [Date] DESC
       `))
 
-      // Query 2: Try to get line items (may fail if JOIN not supported)
-      const lineItemResult = await safe(() => cdataQuery('JAWS', `
-        SELECT [SaleInvoiceNumber], [Description], [Total], [AccountName], [AccountDisplayID], [ItemName]
+      // Query 2: Get ALL line items (no date filter — will match by SaleInvoiceId)
+      const liRaw = await safe(() => cdataQuery('JAWS', `
+        SELECT [SaleInvoiceId], [Description], [Total], [AccountName], [AccountDisplayID], [ItemName]
         FROM [MYOB_POWERBI_JAWS].[MYOB].[SaleInvoiceItems]
         WHERE [Total] > 0
       `))
 
-      // Parse results
-      const invoices = parseRows(invoiceResult)
-      const lineItemsRaw = parseRows(lineItemResult)
+      const invoices = parseRows(invRaw)
+      const allLineItems = parseRows(liRaw)
 
-      // Build line items by matching invoice data
-      // If we got line items, merge invoice CustomerName/Date onto them
-      // If not, use invoice-level data as line items
+      console.log(`dist: ${invoices.length} invoices, ${allLineItems.length} line items`)
+
+      // Build invoice lookup by ID
+      const invById: Record<string, any> = {}
+      invoices.forEach(inv => {
+        if (inv.ID) invById[inv.ID] = inv
+      })
+
+      // Match line items to invoices
       let lineItems: any[] = []
-
-      if (lineItemsRaw.length > 0) {
-        // Build invoice lookup by number
-        const invoiceLookup: Record<string, any> = {}
-        invoices.forEach(inv => { invoiceLookup[inv.Number] = inv })
-
-        lineItems = lineItemsRaw.map(li => {
-          const inv = invoiceLookup[li.SaleInvoiceNumber] || {}
-          return {
-            CustomerName: inv.CustomerName || '',
-            Date: inv.Date || '',
-            AccountName: li.AccountName || inv.AccountName || '',
-            AccountDisplayID: li.AccountDisplayID || inv.AccountDisplayID || '',
-            Description: li.Description || '',
-            Total: li.Total || 0,
-            ItemName: li.ItemName || null,
-          }
-        }).filter(li => li.CustomerName) // Only keep items we could match
+      if (allLineItems.length > 0 && invoices.length > 0) {
+        lineItems = allLineItems
+          .filter(li => li.SaleInvoiceId && invById[li.SaleInvoiceId])
+          .map(li => {
+            const inv = invById[li.SaleInvoiceId]
+            return {
+              CustomerName: inv.CustomerName || '',
+              Date: inv.Date || '',
+              AccountName: li.AccountName || '',
+              AccountDisplayID: li.AccountDisplayID || '',
+              Description: li.Description || '',
+              Total: typeof li.Total === 'number' ? li.Total : parseFloat(li.Total) || 0,
+              ItemName: li.ItemName || null,
+            }
+          })
       }
 
-      // Fallback: if no line items, use invoices directly
-      if (lineItems.length === 0) {
+      // Fallback: if no matched line items, use invoice-level data
+      if (lineItems.length === 0 && invoices.length > 0) {
+        console.log('dist: falling back to invoice-level data')
         lineItems = invoices.map(inv => ({
           CustomerName: inv.CustomerName || '',
           Date: inv.Date || '',
-          AccountName: inv.AccountName || '',
-          AccountDisplayID: inv.AccountDisplayID || '',
-          Description: inv.AccountName || '',
-          Total: inv.TotalAmount || 0,
+          AccountName: '',
+          AccountDisplayID: '',
+          Description: inv.CustomerName || '',
+          Total: typeof inv.TotalAmount === 'number' ? inv.TotalAmount : parseFloat(inv.TotalAmount) || 0,
           ItemName: null,
         }))
       }
 
-      // Generate monthly totals
+      // Monthly totals from invoices
       const months = getMonthLabels(start, end)
-      const monthlyTotals: Record<string, number> = {}
       const trendLabels: string[] = []
-
+      const monthlyTotals: Record<string, number> = {}
       months.forEach(m => {
         trendLabels.push(m.label)
         const total = invoices
-          .filter(inv => inv.Date >= m.start && inv.Date <= m.end)
-          .reduce((s, inv) => s + (inv.TotalAmount || 0), 0)
+          .filter(inv => {
+            const d = (inv.Date || '').substring(0, 10)
+            return d >= m.s && d <= m.e
+          })
+          .reduce((s, inv) => s + (typeof inv.TotalAmount === 'number' ? inv.TotalAmount : parseFloat(inv.TotalAmount) || 0), 0)
         monthlyTotals[m.label] = total
       })
 
@@ -133,9 +146,10 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
         trendLabels,
         monthlyTotals,
         period: { start, end },
+        debug: { invoiceCount: invoices.length, lineItemCount: allLineItems.length, matchedCount: lineItems.length }
       }
 
-      setCache(cacheKey, result)
+      setC(ck, result)
       res.status(200).json(result)
     } catch (err: any) {
       console.error('distributors handler error:', err.message)
