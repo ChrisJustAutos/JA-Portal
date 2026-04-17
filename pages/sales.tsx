@@ -359,7 +359,7 @@ export default function SalesDashboard(){
                     {/* Rep breakdown for dist bookings */}
                     {dist?.byPerson&&<Card>
                       <SH>Bookings by Sales Rep</SH>
-                      {Object.entries(dist.byPerson).filter(([p])=>p!=='Unassigned').sort(([,a],[,b])=>b.value-a.value).map(([person,d])=><div key={person} style={{display:'flex',justifyContent:'space-between',padding:'5px 0',borderBottom:`1px solid ${T.border}`,background:distPersonFilter===person?'rgba(79,142,247,0.08)':'transparent',cursor:'pointer',padding:'5px 4px',borderRadius:4}} onClick={()=>setDistPersonFilter(distPersonFilter===person?'All':person)}>
+                      {Object.entries(dist.byPerson).filter(([p])=>p!=='Unassigned').sort(([,a],[,b])=>b.value-a.value).map(([person,d])=><div key={person} style={{display:'flex',justifyContent:'space-between',padding:'5px 4px',borderBottom:`1px solid ${T.border}`,background:distPersonFilter===person?'rgba(79,142,247,0.08)':'transparent',cursor:'pointer',borderRadius:4}} onClick={()=>setDistPersonFilter(distPersonFilter===person?'All':person)}>
                         <span style={{fontSize:13,color:distPersonFilter===person?T.accent:T.text2,fontWeight:distPersonFilter===person?600:400}}>{person}</span>
                         <span style={{fontSize:12,fontFamily:'monospace',color:T.text2}}>{d.count} · {fmt(d.value)}</span>
                       </div>)}
