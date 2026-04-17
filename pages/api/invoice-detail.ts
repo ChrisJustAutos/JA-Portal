@@ -19,25 +19,33 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
     }
 
     const catalog = entity === 'JAWS' ? 'MYOB_POWERBI_JAWS' : 'MYOB_POWERBI_VPS'
+    const safeNumber = invoiceNumber.replace(/'/g, "''")
 
-    // Fetch line items and invoice header in parallel
-    const [lineItems, invoiceHeader] = await Promise.all([
-      // Line items for this invoice
-      safe(() => cdataQuery(entity, `
-        SELECT [Description],[Total],[Quantity],[UnitPrice],[TaxCode],[AccountName],[ItemName]
+    // Step 1: fetch the invoice header to get its UUID
+    const invoiceHeader: any = await safe(() => cdataQuery(entity, `
+      SELECT [ID],[Number],[Date],[CustomerName],[TotalAmount],[BalanceDueAmount],[Status],
+             [Subtotal],[TotalTax],[InvoiceType],[Comment],[ShipToAddress],
+             [CustomerPurchaseOrderNumber],[Terms]
+      FROM [${catalog}].[MYOB].[SaleInvoices]
+      WHERE [Number] = '${safeNumber}'
+    `))
+
+    // Extract the invoice UUID from the result so we can query line items
+    const hdrCols: string[] = invoiceHeader?.results?.[0]?.schema?.map((c: any) => c.columnName) || []
+    const hdrRows: any[][] = invoiceHeader?.results?.[0]?.rows || []
+    const idIdx = hdrCols.indexOf('ID')
+    const invoiceId = (hdrRows[0] && idIdx >= 0) ? hdrRows[0][idIdx] : null
+
+    // Step 2: fetch line items by SaleInvoiceId (UUID) — only if we found the invoice
+    let lineItems: any = null
+    if (invoiceId) {
+      lineItems = await safe(() => cdataQuery(entity, `
+        SELECT [Description],[Total],[ShipQuantity],[UnitPrice],[TaxCodeCode],[AccountName],[AccountDisplayID],[ItemName],[RowID]
         FROM [${catalog}].[MYOB].[SaleInvoiceItems]
-        WHERE [SaleInvoiceNumber] = '${invoiceNumber.replace(/'/g, "''")}'
-        ORDER BY [RowOrder]
-      `)),
-      // Invoice header with payment details
-      safe(() => cdataQuery(entity, `
-        SELECT [Number],[Date],[CustomerName],[TotalAmount],[BalanceDueAmount],[Status],
-               [Subtotal],[TotalTax],[InvoiceType],[Comment],[ShipToAddress],
-               [CustomerPurchaseOrderNumber],[Terms]
-        FROM [${catalog}].[MYOB].[SaleInvoices]
-        WHERE [Number] = '${invoiceNumber.replace(/'/g, "''")}'
-      `)),
-    ])
+        WHERE [SaleInvoiceId] = '${invoiceId}'
+        ORDER BY [RowID]
+      `))
+    }
 
     res.status(200).json({
       lineItems,
