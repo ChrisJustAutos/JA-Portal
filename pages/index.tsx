@@ -351,10 +351,14 @@ export default function Portal() {
     const currentFY = new Date().getMonth() >= 6 ? new Date().getFullYear()+1 : new Date().getFullYear()
     const [fyYear, setFyYear] = useState(currentFY)
     const [showFyDropdown, setShowFyDropdown] = useState(false)
+    // Default to current month for fast initial load
+    const nowD = new Date()
+    const defaultStart = `${nowD.getFullYear()}-${String(nowD.getMonth()+1).padStart(2,'0')}-01`
+    const defaultEnd = `${nowD.getFullYear()}-${String(nowD.getMonth()+1).padStart(2,'0')}-${new Date(nowD.getFullYear(), nowD.getMonth()+1, 0).getDate()}`
     // Custom date range
-    const [customStart, setCustomStart] = useState(`${currentFY-1}-07-01`)
-    const [customEnd, setCustomEnd] = useState(`${currentFY}-06-30`)
-    const [isCustomRange, setIsCustomRange] = useState(false)
+    const [customStart, setCustomStart] = useState(defaultStart)
+    const [customEnd, setCustomEnd] = useState(defaultEnd)
+    const [isCustomRange, setIsCustomRange] = useState(true) // start as custom (current month)
 
     // Active date range — either FY-derived or custom
     const activeStart = isCustomRange ? customStart : `${fyYear-1}-07-01`
