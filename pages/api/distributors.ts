@@ -36,8 +36,6 @@ const INTERNATIONAL_DISTRIBUTORS = new Set([
   'kanoo motors wll', 'karyokuae', 'us cruiserz',
 ])
 
-// Derive the customer base by stripping tuning-suffix variants so that
-// "Penrith 4x4" and "Penrith 4x4 (Tuning)" collapse to one distributor.
 function customerBase(name: string): string {
   if (!name) return ''
   return name
@@ -65,24 +63,15 @@ function bucketFor(acc: string): 'Tuning' | 'Parts' | 'Oil' | null {
   return null
 }
 
-// Ex-GST conversion — CData can't JOIN, so this runs server-side after fetch
 function exGst(total: number, taxCode: string | null): number {
   return taxCode === 'GST' ? total / 1.1 : total
-}
-
-async function safe<T>(fn: () => Promise<T>): Promise<T | null> {
-  try { return await fn() } catch (e: any) {
-    console.error('distributors query failed:', e?.message?.substring(0, 200))
-    return null
-  }
 }
 
 type CDataResult = {
   results?: Array<{ rows?: any[][]; schema?: Array<{ columnName: string }> }>
 }
 
-// Flatten a CData result into an array of row-objects keyed by columnName
-function rowsOf(r: CDataResult | null): Record<string, any>[] {
+function rowsOf(r: CDataResult | null | undefined): Record<string, any>[] {
   const set = r?.results?.[0]
   if (!set?.rows || !set?.schema) return []
   const cols = set.schema.map(c => c.columnName)
@@ -93,59 +82,92 @@ function rowsOf(r: CDataResult | null): Record<string, any>[] {
   })
 }
 
+function chunk<T>(arr: T[], n: number): T[][] {
+  const out: T[][] = []
+  for (let i = 0; i < arr.length; i += n) out.push(arr.slice(i, i + n))
+  return out
+}
+
 export default function handler(req: NextApiRequest, res: NextApiResponse) {
   return requireAuth(req, res, async () => {
+    const debug = req.query.debug === '1'
+    const trace: string[] = []
+
     try {
       const params = new URLSearchParams(req.query as Record<string, string>)
       const { start, end } = parseDateRange(params)
+      trace.push(`date range: ${start} -> ${end}`)
 
-      // CData can't JOIN across these tables — query separately, match client-side on SaleInvoiceId = ID
-      const [invRes, lineRes] = await Promise.all([
-        safe(() => cdataQuery('JAWS', `
+      // Step 1: Fetch invoices in date range
+      let invRes: CDataResult
+      try {
+        invRes = await cdataQuery('JAWS', `
           SELECT [ID], [Number], [Date], [CustomerName], [TotalAmount], [Status]
           FROM [MYOB_POWERBI_JAWS].[MYOB].[SaleInvoices]
           WHERE [Date] >= '${start}' AND [Date] <= '${end}'
           ORDER BY [Date] DESC
-        `)),
-        safe(() => cdataQuery('JAWS', `
-          SELECT [SaleInvoiceId], [AccountDisplayID], [TaxCodeCode], [Total], [Description]
-          FROM [MYOB_POWERBI_JAWS].[MYOB].[SaleInvoiceItems]
-          WHERE [Total] <> 0
-        `)),
-      ])
-
-      if (!invRes || !lineRes) {
-        return res.status(502).json({
-          error: 'MYOB query failed',
-          detail: 'One or both CData queries returned no result. Check CData MCP connection to MYOB_POWERBI_JAWS.',
-        })
+        `)
+      } catch (e: any) {
+        throw new Error(`SaleInvoices query failed: ${e?.message || e}`)
       }
 
       const invoices = rowsOf(invRes)
-      const lines = rowsOf(lineRes)
+      trace.push(`invoices fetched: ${invoices.length}`)
 
-      // Index invoices by ID for the join
+      if (!invoices.length) {
+        return res.status(200).json({
+          dateRange: { start, end },
+          totals: { tuning: 0, parts: 0, oil: 0, total: 0, invoiceCount: 0, distributorCount: 0 },
+          distributors: [],
+          monthlyNational: [],
+          ...(debug ? { trace } : {}),
+        })
+      }
+
       const invById = new Map<string, Record<string, any>>()
       invoices.forEach(i => invById.set(i.ID, i))
+      const invIds = Array.from(invById.keys())
 
-      // Per-distributor aggregation
+      // Step 2: Fetch line items in batches, filtered by the invoice IDs.
+      // CData-MYOB handles moderate IN lists fine; 200 UUIDs per batch is safe.
+      const batches = chunk(invIds, 200)
+      trace.push(`line item batches: ${batches.length} x up to 200`)
+
+      const lineRowsAll: Record<string, any>[] = []
+      for (let i = 0; i < batches.length; i++) {
+        const batch = batches[i]
+        const idList = batch.map(id => `'${id}'`).join(',')
+        try {
+          const r = await cdataQuery('JAWS', `
+            SELECT [SaleInvoiceId], [AccountDisplayID], [TaxCodeCode], [Total], [Description]
+            FROM [MYOB_POWERBI_JAWS].[MYOB].[SaleInvoiceItems]
+            WHERE [SaleInvoiceId] IN (${idList})
+          `)
+          const rows = rowsOf(r)
+          lineRowsAll.push(...rows)
+          trace.push(`batch ${i + 1}: ${rows.length} lines`)
+        } catch (e: any) {
+          throw new Error(`Line item batch ${i + 1}/${batches.length} failed: ${e?.message || e}`)
+        }
+      }
+      trace.push(`total line items: ${lineRowsAll.length}`)
+
+      // Step 3: Aggregate per distributor
       type DistAgg = {
         customerBase: string
         location: 'National' | 'International'
-        tuning: number
-        parts: number
-        oil: number
+        tuning: number; parts: number; oil: number
         invoiceCount: Set<string>
         lineItems: Array<{
-          date: string; invoiceNumber: string; description: string;
+          date: string; invoiceNumber: string; description: string
           amountExGst: number; bucket: string; accountCode: string
         }>
       }
       const byDist = new Map<string, DistAgg>()
 
-      for (const line of lines) {
+      for (const line of lineRowsAll) {
         const inv = invById.get(line.SaleInvoiceId)
-        if (!inv) continue // line belongs to an invoice outside date range
+        if (!inv) continue
 
         const rawCustomer: string = inv.CustomerName || ''
         if (EXCLUDED_CUSTOMERS.has(rawCustomer.toLowerCase())) continue
@@ -157,7 +179,7 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
         if (isExcludedAccount(acc)) continue
 
         const bucket = bucketFor(acc)
-        if (!bucket) continue // not a distributor revenue account
+        if (!bucket) continue
 
         const total = Number(line.Total) || 0
         const amountExGst = exGst(total, line.TaxCodeCode)
@@ -185,8 +207,9 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
           accountCode: acc,
         })
       }
+      trace.push(`distributors: ${byDist.size}`)
 
-      // Shape response
+      // Step 4: Shape response
       const distributors = Array.from(byDist.values()).map(d => {
         const total = d.tuning + d.parts + d.oil
         return {
@@ -198,18 +221,15 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
           total: Math.round(total * 100) / 100,
           invoiceCount: d.invoiceCount.size,
           avgJobValue: d.invoiceCount.size ? Math.round((total / d.invoiceCount.size) * 100) / 100 : 0,
-          // Power BI red flag — any revenue stream is zero
           hasZeroStream: d.tuning === 0 || d.parts === 0 || d.oil === 0,
-          lineItems: d.lineItems.sort((a, b) =>
-            (b.date || '').localeCompare(a.date || '')),
+          lineItems: d.lineItems.sort((a, b) => (b.date || '').localeCompare(a.date || '')),
         }
       }).sort((a, b) => b.total - a.total)
 
-      // Monthly totals (for page 4 chart) — National only
       const monthly = new Map<string, number>()
       for (const d of distributors.filter(d => d.location === 'National')) {
         for (const li of d.lineItems) {
-          const ym = (li.date || '').substring(0, 7) // YYYY-MM
+          const ym = (li.date || '').substring(0, 7)
           if (!ym) continue
           monthly.set(ym, (monthly.get(ym) || 0) + li.amountExGst)
         }
@@ -218,7 +238,6 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
         .map(([ym, amount]) => ({ ym, amount: Math.round(amount * 100) / 100 }))
         .sort((a, b) => a.ym.localeCompare(b.ym))
 
-      // Aggregated totals for KPI cards
       const totals = distributors.reduce((acc, d) => ({
         tuning: acc.tuning + d.tuning,
         parts: acc.parts + d.parts,
@@ -239,10 +258,16 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
         },
         distributors,
         monthlyNational,
+        ...(debug ? { trace } : {}),
       })
     } catch (e: any) {
-      console.error('distributors handler error:', e)
-      res.status(500).json({ error: 'Internal error', detail: e?.message })
+      console.error('distributors handler error:', e?.message, e?.stack)
+      // Surface the actual error to the client so we can diagnose
+      res.status(500).json({
+        error: 'Internal error',
+        message: e?.message || String(e),
+        trace,
+      })
     }
   })
 }
