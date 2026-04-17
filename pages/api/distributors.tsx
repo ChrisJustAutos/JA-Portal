@@ -1,320 +1,576 @@
-// pages/distributors.tsx — Just Autos Distributor Report
-import { useEffect, useState, useRef, useCallback } from 'react'
+// pages/distributors.tsx — Distributor Report matching Power BI exactly
+// 5 tabs: Distributor Sales | Detailed Line Items | Summary Matrix | Monthly National | Ranked
+import { useEffect, useMemo, useState, useCallback } from 'react'
 import Head from 'next/head'
-import Script from 'next/script'
-import { useRouter } from 'next/router'
 
-interface LineItem { CustomerName:string;Date:string;AccountName:string;AccountDisplayID:string;Description:string;Total:number;ItemName:string|null }
-interface DistData { fetchedAt:string;lineItems:LineItem[];trendLabels:string[];monthlyTotals:Record<string,number>;period:{start:string;end:string} }
-
-function getCategory(aid:string,aname:string):'Tuning'|'Oil'|'Parts'{
-  if(aid?.startsWith('4-19')||aid==='4-1905'||aname?.toLowerCase().includes('tuning')||aname?.toLowerCase().includes('remap')||aname?.toLowerCase().includes('multimap')||aname?.toLowerCase().includes('easy lock')||aname?.toLowerCase().includes('multi map'))return 'Tuning'
-  if(aid==='4-1060'||aname?.toLowerCase().includes('oil'))return 'Oil'
-  return 'Parts'
+// ── types ─────────────────────────────────────────────────────────────────
+type LineItem = {
+  date: string; invoiceNumber: string; description: string
+  amountExGst: number; bucket: 'Tuning' | 'Parts' | 'Oil'; accountCode: string
 }
-function normName(n:string){return n?.replace(' (Tuning)','').replace(' (Tuning 1)','').replace(' (Tuning2)','').trim()||''}
-
-const fmtD=(n:number)=>n==null?'$0':'$'+Math.round(n).toLocaleString('en-AU')
-const fmtFull=(n:number)=>n==null?'$0':'$'+Number(n).toLocaleString('en-AU',{minimumFractionDigits:0,maximumFractionDigits:0})
-const fmt=(n:number)=>n>=1e6?'$'+(n/1e6).toFixed(2)+'M':n>=1000?'$'+Math.round(n/1000)+'k':'$'+Math.round(n)
-
-const T={bg:'#0d0f12',bg2:'#131519',bg3:'#1a1d23',bg4:'#21252d',border:'rgba(255,255,255,0.07)',border2:'rgba(255,255,255,0.12)',text:'#e8eaf0',text2:'#8b90a0',text3:'#545968',blue:'#4f8ef7',teal:'#2dd4bf',green:'#34c77b',amber:'#f5a623',red:'#f04e4e',purple:'#a78bfa',accent:'#4f8ef7'}
-
-type Tab='distributor-sales'|'detailed-sales'|'summary'|'national-pm'|'national-total'
-
-export default function DistributorReport(){
-  const router=useRouter()
-  const [tab,setTab]=useState<Tab>('distributor-sales')
-  const [data,setData]=useState<DistData|null>(null)
-  const [loading,setLoading]=useState(true)
-  const [error,setError]=useState('')
-  const [selectedDist,setSelectedDist]=useState('ALL')
-  const [refreshing,setRefreshing]=useState(false)
-  const [lastRefresh,setLastRefresh]=useState<Date|null>(null)
-
-  // Date range
-  const currentFY=new Date().getMonth()>=6?new Date().getFullYear()+1:new Date().getFullYear()
-  const [fyYear,setFyYear]=useState(currentFY)
-  const [isCustomRange,setIsCustomRange]=useState(false)
-  const [customStart,setCustomStart]=useState(`${currentFY-1}-07-01`)
-  const [customEnd,setCustomEnd]=useState(`${currentFY}-06-30`)
-  const [activeDateParams,setActiveDateParams]=useState(`startDate=${currentFY-1}-07-01&endDate=${currentFY}-06-30`)
-  const [dateLoading,setDateLoading]=useState(false)
-  const fyLabel=isCustomRange?`${new Date(customStart+'T00:00').toLocaleDateString('en-AU',{day:'2-digit',month:'short',year:'2-digit'})} – ${new Date(customEnd+'T00:00').toLocaleDateString('en-AU',{day:'2-digit',month:'short',year:'2-digit'})}`:`FY${fyYear}`
-
-  function selectFY(y:number){setFyYear(y);setIsCustomRange(false);setCustomStart(`${y-1}-07-01`);setCustomEnd(`${y}-06-30`);setDateLoading(true);setActiveDateParams(`startDate=${y-1}-07-01&endDate=${y}-06-30`)}
-  function applyCustomRange(){if(customStart&&customEnd){setIsCustomRange(true);setDateLoading(true);setActiveDateParams(`startDate=${customStart}&endDate=${customEnd}`)}}
-
-  const load=useCallback(async(isRefresh=false)=>{
-    if(isRefresh)setRefreshing(true)
-    try{
-      const rp=isRefresh?'&refresh=true':''
-      const r=await fetch(`/api/distributors?${activeDateParams}${rp}`)
-      if(r.status===401){router.push('/login');return}
-      if(!r.ok)throw new Error('Failed to load distributor data')
-      const d=await r.json()
-      if(d.error)throw new Error(d.error)
-      setData(d);setError('');setLastRefresh(new Date());setDateLoading(false)
-    }catch(e:any){setError(e.message);setDateLoading(false)}
-    setLoading(false);if(isRefresh)setRefreshing(false)
-  },[router,activeDateParams])
-  useEffect(()=>{load()},[load])
-  useEffect(()=>{const t=setInterval(()=>load(true),5*60*1000);return()=>clearInterval(t)},[load])
-
-  // Derived
-  const lines=data?.lineItems||[]
-  const allDists=Array.from(new Set(lines.map(l=>normName(l.CustomerName)))).filter(Boolean).sort()
-  const filtered=selectedDist==='ALL'?lines:lines.filter(l=>normName(l.CustomerName)===selectedDist)
-
-  interface DS{name:string;tuning:number;oil:number;parts:number;total:number}
-  const distSummaries:DS[]=allDists.map(name=>{
-    const dl=lines.filter(l=>normName(l.CustomerName)===name)
-    const tuning=dl.filter(l=>getCategory(l.AccountDisplayID,l.AccountName)==='Tuning').reduce((s,l)=>s+l.Total,0)
-    const oil=dl.filter(l=>getCategory(l.AccountDisplayID,l.AccountName)==='Oil').reduce((s,l)=>s+l.Total,0)
-    const parts=dl.filter(l=>getCategory(l.AccountDisplayID,l.AccountName)==='Parts').reduce((s,l)=>s+l.Total,0)
-    return{name,tuning,oil,parts,total:tuning+oil+parts}
-  }).filter(d=>d.total>0).sort((a,b)=>b.total-a.total)
-
-  const ss=selectedDist==='ALL'
-    ?{tuning:distSummaries.reduce((s,d)=>s+d.tuning,0),oil:distSummaries.reduce((s,d)=>s+d.oil,0),parts:distSummaries.reduce((s,d)=>s+d.parts,0),total:distSummaries.reduce((s,d)=>s+d.total,0)}
-    :distSummaries.find(d=>d.name===selectedDist)||{tuning:0,oil:0,parts:0,total:0}
-
-  // Detailed line items
-  const detailedByDesc:Record<string,{qty:number;total:number}>={}
-  filtered.filter(l=>l.Total>0).forEach(l=>{const k=l.Description||l.AccountName;if(!detailedByDesc[k])detailedByDesc[k]={qty:0,total:0};detailedByDesc[k].qty+=1;detailedByDesc[k].total+=l.Total})
-  const detailedRows=Object.entries(detailedByDesc).sort((a,b)=>b[1].total-a[1].total)
-
-  const trendLabels=data?.trendLabels||[]
-  const monthlyTotals=data?.monthlyTotals||{}
-
-  // Charts
-  const barRef=useRef<HTMLCanvasElement>(null),barInst=useRef<any>(null)
-  const lineRef=useRef<HTMLCanvasElement>(null),lineInst=useRef<any>(null)
-  const hBarRef=useRef<HTMLCanvasElement>(null),hBarInst=useRef<any>(null)
-
-  useEffect(()=>{
-    if(!barRef.current||!(window as any).Chart||loading)return
-    if(barInst.current)barInst.current.destroy()
-    const tunLines=filtered.filter(l=>getCategory(l.AccountDisplayID,l.AccountName)==='Tuning')
-    const byDesc:Record<string,number>={};tunLines.forEach(l=>{const k=l.Description?.substring(0,30)||'Other';byDesc[k]=(byDesc[k]||0)+l.Total})
-    const sorted=Object.entries(byDesc).sort((a,b)=>b[1]-a[1]).slice(0,10)
-    barInst.current=new(window as any).Chart(barRef.current,{type:'bar',data:{labels:sorted.map(s=>s[0]),datasets:[{data:sorted.map(s=>Math.round(s[1])),backgroundColor:'#4f8ef7',borderRadius:4,borderSkipped:false}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false},tooltip:{callbacks:{label:(ctx:any)=>`$${ctx.raw.toLocaleString()}`}}},scales:{x:{grid:{color:'rgba(255,255,255,0.05)'},ticks:{color:T.text3,font:{size:10},maxRotation:45}},y:{grid:{color:'rgba(255,255,255,0.05)'},ticks:{color:T.text3,font:{size:11},callback:(v:any)=>'$'+v}}}}})
-    return()=>{if(barInst.current)barInst.current.destroy()}
-  },[filtered,tab,loading])
-
-  useEffect(()=>{
-    if(tab!=='national-pm'||!lineRef.current||!(window as any).Chart||!trendLabels.length)return
-    if(lineInst.current)lineInst.current.destroy()
-    const vals=trendLabels.map(l=>Math.round(monthlyTotals[l]||0))
-    lineInst.current=new(window as any).Chart(lineRef.current,{type:'bar',data:{labels:trendLabels,datasets:[{label:'Revenue ex GST',data:vals,backgroundColor:'#4f8ef7',borderRadius:4,borderSkipped:false}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false},tooltip:{callbacks:{label:(ctx:any)=>`$${ctx.raw.toLocaleString()}`}}},scales:{x:{grid:{color:'rgba(255,255,255,0.05)'},ticks:{color:T.text3}},y:{grid:{color:'rgba(255,255,255,0.05)'},ticks:{color:T.text3,callback:(v:any)=>'$'+Math.round(v/1000)+'k'}}}}})
-    return()=>{if(lineInst.current)lineInst.current.destroy()}
-  },[tab,trendLabels,monthlyTotals])
-
-  useEffect(()=>{
-    if(tab!=='national-total'||!hBarRef.current||!(window as any).Chart||!distSummaries.length)return
-    if(hBarInst.current)hBarInst.current.destroy()
-    const sorted=[...distSummaries].sort((a,b)=>b.total-a.total)
-    hBarInst.current=new(window as any).Chart(hBarRef.current,{type:'bar',data:{labels:sorted.map(d=>d.name),datasets:[{label:'Revenue ex GST',data:sorted.map(d=>Math.round(d.total)),backgroundColor:'#4f8ef7',borderRadius:3,borderSkipped:false}]},options:{indexAxis:'y' as const,responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false},tooltip:{callbacks:{label:(ctx:any)=>`$${ctx.raw.toLocaleString()}`}}},scales:{x:{grid:{color:'rgba(255,255,255,0.05)'},ticks:{color:T.text3,callback:(v:any)=>'$'+Math.round(v/1000)+'k'}},y:{grid:{display:false},ticks:{color:T.text2,font:{size:11}}}}}})
-    return()=>{if(hBarInst.current)hBarInst.current.destroy()}
-  },[tab,distSummaries])
-
-  const tabs:[Tab,string][]=[['distributor-sales','Distributor Sales'],['detailed-sales','Detailed Sales'],['summary','Summary'],['national-pm','National P/M'],['national-total','National Total']]
-  const sidebarNav=[{href:'/',label:'Overview',color:T.blue},{href:'/?s=jaws',label:'JAWS Wholesale',color:T.blue},{href:'/?s=vps',label:'VPS Workshop',color:T.teal},{href:'/?s=invoices',label:'Invoices',color:T.amber},{href:'/?s=pnl',label:'P&L',color:T.green},{href:'/?s=stock',label:'Stock & Inventory',color:T.purple},{href:'/?s=payables',label:'Payables',color:T.red},{href:'/?s=distributors',label:'Distributors',color:T.blue}]
-
-  function KPIBox({label,value,color}:{label:string;value:number;color?:string}){
-    return <div style={{textAlign:'right',padding:'16px 20px',borderBottom:`1px solid ${T.border}`}}>
-      <div style={{fontSize:32,fontWeight:400,fontFamily:'monospace',color:value===0?T.red:(color||T.text),letterSpacing:'-0.03em'}}>{fmtD(value)}</div>
-      <div style={{fontSize:12,color:T.text3,marginTop:4}}>{label}</div>
-    </div>
+type Distributor = {
+  customerBase: string
+  location: 'National' | 'International'
+  tuning: number; parts: number; oil: number; total: number
+  invoiceCount: number; avgJobValue: number
+  hasZeroStream: boolean
+  lineItems: LineItem[]
+}
+type ApiResp = {
+  dateRange: { start: string; end: string }
+  totals: {
+    tuning: number; parts: number; oil: number; total: number
+    invoiceCount: number; distributorCount: number
   }
+  distributors: Distributor[]
+  monthlyNational: Array<{ ym: string; amount: number }>
+}
 
-  function DistSelector(){
-    return <div style={{borderBottom:`1px solid ${T.border}`,padding:'10px 20px',background:T.bg2,display:'flex',alignItems:'center',gap:6,overflowX:'auto',flexShrink:0}}>
-      <span style={{fontSize:11,color:T.text3,flexShrink:0,marginRight:4}}>Distributor</span>
-      {['ALL',...allDists].map(d=><button key={d} onClick={()=>setSelectedDist(d)}
-        style={{fontSize:11,padding:'5px 10px',borderRadius:5,border:`1px solid ${selectedDist===d?T.blue:T.border}`,background:selectedDist===d?'rgba(79,142,247,0.2)':T.bg3,color:selectedDist===d?T.blue:T.text2,cursor:'pointer',fontFamily:'inherit',whiteSpace:'nowrap',flexShrink:0}}>
-        {d==='ALL'?'All':d}
-      </button>)}
-    </div>
-  }
+// ── formatting ────────────────────────────────────────────────────────────
+const fmt = (n: number) => '$' + Math.round(Math.abs(n)).toLocaleString('en-AU')
+const fmtSigned = (n: number) => {
+  const r = Math.round(n)
+  return (r < 0 ? '-$' : '$') + Math.abs(r).toLocaleString('en-AU')
+}
+const monthLabel = (ym: string) => {
+  const [y, m] = ym.split('-')
+  return new Date(Number(y), Number(m) - 1, 1)
+    .toLocaleDateString('en-AU', { month: 'short', year: '2-digit' })
+}
 
-  function renderContent(){
-    if(loading)return <div style={{display:'flex',alignItems:'center',justifyContent:'center',height:400,flexDirection:'column',gap:12}}>
-      <div style={{fontSize:28,animation:'spin 1s linear infinite',color:T.text3}}>⟳</div><div style={{color:T.text3}}>Loading distributor data…</div>
-      <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
-    </div>
+// ── FY helpers ────────────────────────────────────────────────────────────
+// AU FY runs Jul 1 → Jun 30. FY2026 = 2025-07-01 to 2026-06-30.
+function fyRange(fy: number): { start: string; end: string } {
+  return { start: `${fy - 1}-07-01`, end: `${fy}-06-30` }
+}
+function monthRange(fy: number, monthIdx: number): { start: string; end: string } {
+  // monthIdx 0=July … 11=June
+  const m = ((monthIdx + 6) % 12) + 1 // 0→7 (Jul), 6→1 (Jan), 11→6 (Jun)
+  const year = monthIdx < 6 ? fy - 1 : fy
+  const lastDay = new Date(year, m, 0).getDate()
+  const mm = String(m).padStart(2, '0')
+  return { start: `${year}-${mm}-01`, end: `${year}-${mm}-${lastDay}` }
+}
+const FY_MONTHS = [
+  'July', 'August', 'September', 'October', 'November', 'December',
+  'January', 'February', 'March', 'April', 'May', 'June',
+]
 
-    if(error)return <div style={{padding:24}}><div style={{background:'rgba(240,78,78,0.1)',border:'1px solid rgba(240,78,78,0.2)',borderRadius:10,padding:20,color:T.red}}>
-      <div style={{marginBottom:10}}>Error: {error}</div>
-      <button onClick={()=>{setError('');setLoading(true);load()}} style={{padding:'6px 16px',borderRadius:6,border:`1px solid ${T.blue}`,background:T.blue,color:'#fff',fontSize:12,cursor:'pointer',fontFamily:'inherit'}}>Retry</button>
-    </div></div>
+// Derive list of FYs to offer (current FY + 4 prior)
+function fyOptions(): number[] {
+  const now = new Date()
+  const currentFY = now.getMonth() >= 6 ? now.getFullYear() + 1 : now.getFullYear()
+  return [currentFY, currentFY - 1, currentFY - 2, currentFY - 3, currentFY - 4]
+}
 
-    if(tab==='distributor-sales')return <div style={{display:'flex',height:'100%'}}>
-      <div style={{flex:1,padding:24,display:'flex',flexDirection:'column',gap:16,overflowY:'auto'}}>
-        <div style={{fontSize:18,fontWeight:500,color:T.text}}>{selectedDist==='ALL'?'All Distributors':selectedDist}</div>
-        <div style={{fontSize:12,color:T.text3}}><span style={{display:'inline-flex',alignItems:'center',gap:5}}><span style={{width:10,height:10,borderRadius:2,background:T.blue,display:'inline-block'}}/> Tuning Revenue ex GST</span></div>
-        <div style={{position:'relative',height:340,background:T.bg2,border:`1px solid ${T.border}`,borderRadius:10,padding:16}}>
-          <canvas ref={barRef} id="bar-chart"/>
+// ── main component ────────────────────────────────────────────────────────
+export default function DistributorsPage() {
+  const [data, setData] = useState<ApiResp | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [fy, setFy] = useState<number>(fyOptions()[0])
+  const [month, setMonth] = useState<number>(-1) // -1 = full FY
+  const [selectedDist, setSelectedDist] = useState<string>('') // for page 1 detail
+  const [locationFilter, setLocationFilter] = useState<'All' | 'National' | 'International'>('All')
+  const [activeTab, setActiveTab] = useState(0)
+
+  const load = useCallback(async () => {
+    setLoading(true); setError(null)
+    try {
+      const range = month === -1 ? fyRange(fy) : monthRange(fy, month)
+      const qs = new URLSearchParams({ start: range.start, end: range.end })
+      const r = await fetch(`/api/distributors?${qs}`)
+      if (!r.ok) {
+        const body = await r.json().catch(() => ({}))
+        throw new Error(body.detail || body.error || `HTTP ${r.status}`)
+      }
+      const json: ApiResp = await r.json()
+      setData(json)
+      if (json.distributors.length && !selectedDist) {
+        setSelectedDist(json.distributors[0].customerBase)
+      }
+    } catch (e: any) {
+      setError(e.message || 'Failed to load')
+    } finally {
+      setLoading(false)
+    }
+  }, [fy, month, selectedDist])
+
+  useEffect(() => { load() }, [fy, month]) // reload when filters change
+
+  // ── derived views ────────────────────────────────────────────────────────
+  const filteredDists = useMemo(() => {
+    if (!data) return []
+    if (locationFilter === 'All') return data.distributors
+    return data.distributors.filter(d => d.location === locationFilter)
+  }, [data, locationFilter])
+
+  const selectedDistData = useMemo(
+    () => data?.distributors.find(d => d.customerBase === selectedDist) || null,
+    [data, selectedDist]
+  )
+
+  // Summary matrix: rows=distributor (grouped by Location), cols=month
+  const matrixData = useMemo(() => {
+    if (!data) return { months: [], rows: [] }
+    const months = new Set<string>()
+    data.distributors.forEach(d => d.lineItems.forEach(li => {
+      const ym = (li.date || '').substring(0, 7)
+      if (ym) months.add(ym)
+    }))
+    const monthList = Array.from(months).sort()
+    const rows = data.distributors.map(d => {
+      const byMonth: Record<string, { tuning: number; parts: number; oil: number; total: number }> = {}
+      monthList.forEach(m => { byMonth[m] = { tuning: 0, parts: 0, oil: 0, total: 0 } })
+      d.lineItems.forEach(li => {
+        const ym = (li.date || '').substring(0, 7)
+        if (!byMonth[ym]) return
+        const k = li.bucket.toLowerCase() as 'tuning' | 'parts' | 'oil'
+        byMonth[ym][k] += li.amountExGst
+        byMonth[ym].total += li.amountExGst
+      })
+      return { distributor: d.customerBase, location: d.location, byMonth, rowTotal: d.total }
+    })
+    return { months: monthList, rows }
+  }, [data])
+
+  // ── render ───────────────────────────────────────────────────────────────
+  return (
+    <>
+      <Head><title>Distributor Report — Just Autos</title></Head>
+      <div style={styles.page}>
+        <Header
+          fy={fy} setFy={setFy}
+          month={month} setMonth={setMonth}
+          onRefresh={load} loading={loading}
+          totals={data?.totals}
+        />
+
+        {error && <ErrorBanner message={error} onRetry={load} />}
+
+        <TabBar active={activeTab} onChange={setActiveTab} />
+
+        <div style={styles.content}>
+          {loading && !data && <LoadingState />}
+          {data && activeTab === 0 && (
+            <Page1DistributorSales
+              data={data}
+              selected={selectedDist}
+              onSelect={setSelectedDist}
+              selectedData={selectedDistData}
+            />
+          )}
+          {data && activeTab === 1 && (
+            <Page2LineItems
+              distributors={data.distributors}
+              selected={selectedDist}
+              onSelect={setSelectedDist}
+            />
+          )}
+          {data && activeTab === 2 && (
+            <Page3SummaryMatrix matrix={matrixData} />
+          )}
+          {data && activeTab === 3 && (
+            <Page4MonthlyNational monthly={data.monthlyNational} />
+          )}
+          {data && activeTab === 4 && (
+            <Page5Ranked
+              distributors={filteredDists}
+              locationFilter={locationFilter}
+              setLocationFilter={setLocationFilter}
+            />
+          )}
         </div>
       </div>
-      <div style={{width:220,borderLeft:`1px solid ${T.border}`,flexShrink:0}}>
-        <KPIBox label="Tuning Revenue ex GST" value={ss.tuning} color={T.green}/>
-        <KPIBox label="Oil Revenue ex GST" value={ss.oil}/>
-        <KPIBox label="Parts Revenue ex GST" value={ss.parts}/>
-        <KPIBox label="Total Revenue ex GST" value={ss.total} color={T.blue}/>
+    </>
+  )
+}
+
+// ── header ────────────────────────────────────────────────────────────────
+function Header({ fy, setFy, month, setMonth, onRefresh, loading, totals }: {
+  fy: number; setFy: (n: number) => void
+  month: number; setMonth: (n: number) => void
+  onRefresh: () => void; loading: boolean
+  totals?: ApiResp['totals']
+}) {
+  return (
+    <div style={styles.header}>
+      <div>
+        <h1 style={styles.h1}>Distributor Report</h1>
+        <div style={styles.sub}>JAWS · Live from MYOB via CData</div>
       </div>
-    </div>
-
-    if(tab==='detailed-sales')return <div style={{padding:24,overflowY:'auto'}}>
-      <div style={{fontSize:18,fontWeight:500,color:T.text,marginBottom:16}}>{selectedDist==='ALL'?'All':selectedDist}</div>
-      <div style={{background:T.bg2,border:`1px solid ${T.border}`,borderRadius:10,overflowX:'auto'}}>
-        <table style={{width:'100%',borderCollapse:'collapse'}}>
-          <thead><tr style={{borderBottom:`1px solid ${T.border}`}}>
-            <th style={{fontSize:12,color:T.text2,padding:'12px 16px',textAlign:'left',fontWeight:500}}>Description</th>
-            <th style={{fontSize:12,color:T.text2,padding:'12px 16px',textAlign:'right',fontWeight:500}}>Qty</th>
-            <th style={{fontSize:12,color:T.text2,padding:'12px 16px',textAlign:'right',fontWeight:500}}>Total $ ExGST</th>
-          </tr></thead>
-          <tbody>{detailedRows.map(([desc,vals],i)=><tr key={i} style={{borderTop:`1px solid ${T.border}`}}>
-            <td style={{fontSize:12,color:T.text2,padding:'9px 16px'}}>{desc?.substring(0,70)}</td>
-            <td style={{fontSize:12,fontFamily:'monospace',color:T.text3,padding:'9px 16px',textAlign:'right'}}>{vals.qty>1?vals.qty:''}</td>
-            <td style={{fontSize:12,fontFamily:'monospace',color:T.text,padding:'9px 16px',textAlign:'right'}}>{fmtFull(vals.total)}</td>
-          </tr>)}
-          <tr style={{borderTop:`2px solid ${T.border2}`,background:T.bg3}}>
-            <td style={{fontSize:13,fontWeight:500,color:T.text,padding:'10px 16px'}}>Total</td>
-            <td style={{fontSize:13,fontFamily:'monospace',fontWeight:500,color:T.text3,padding:'10px 16px',textAlign:'right'}}>{detailedRows.reduce((s,[,v])=>s+v.qty,0)}</td>
-            <td style={{fontSize:13,fontFamily:'monospace',fontWeight:500,color:T.blue,padding:'10px 16px',textAlign:'right'}}>{fmtFull(detailedRows.reduce((s,[,v])=>s+v.total,0))}</td>
-          </tr></tbody>
-        </table>
-      </div>
-    </div>
-
-    if(tab==='summary')return <div style={{padding:24,overflowY:'auto'}}>
-      <div style={{background:T.bg2,border:`1px solid ${T.border}`,borderRadius:10,overflowX:'auto'}}>
-        <table style={{width:'100%',borderCollapse:'collapse'}}>
-          <thead><tr style={{borderBottom:`1px solid ${T.border2}`}}>
-            <th style={{fontSize:11,color:T.text3,padding:'10px 12px',textAlign:'left',fontWeight:500}}>Distributor</th>
-            {['Oil','Parts','Tuning','Total'].map(h=><th key={h} style={{fontSize:11,color:T.text3,padding:'10px 12px',textAlign:'right',fontWeight:500}}>{h}</th>)}
-          </tr></thead>
-          <tbody>{distSummaries.map((d,i)=><tr key={i} style={{borderTop:`1px solid ${T.border}`,cursor:'pointer',background:selectedDist===d.name?'rgba(79,142,247,0.08)':'transparent'}} onClick={()=>setSelectedDist(d.name===selectedDist?'ALL':d.name)}>
-            <td style={{fontSize:12,color:T.text2,padding:'8px 12px'}}>{d.name}</td>
-            <td style={{fontSize:12,fontFamily:'monospace',color:d.oil>0?T.text:T.text3,padding:'8px 12px',textAlign:'right'}}>{d.oil>0?fmtFull(d.oil):'$0'}</td>
-            <td style={{fontSize:12,fontFamily:'monospace',color:d.parts>0?T.text:T.text3,padding:'8px 12px',textAlign:'right'}}>{d.parts>0?fmtFull(d.parts):'$0'}</td>
-            <td style={{fontSize:12,fontFamily:'monospace',color:d.tuning>0?T.green:T.text3,padding:'8px 12px',textAlign:'right'}}>{d.tuning>0?fmtFull(d.tuning):'$0'}</td>
-            <td style={{fontSize:12,fontFamily:'monospace',fontWeight:500,color:T.blue,padding:'8px 12px',textAlign:'right'}}>{fmtFull(d.total)}</td>
-          </tr>)}
-          <tr style={{borderTop:`2px solid ${T.border2}`,background:T.bg3}}>
-            <td style={{fontSize:13,fontWeight:500,color:T.text,padding:'10px 12px'}}>Total</td>
-            <td style={{fontSize:13,fontFamily:'monospace',fontWeight:500,color:T.text,padding:'10px 12px',textAlign:'right'}}>{fmtFull(distSummaries.reduce((s,d)=>s+d.oil,0))}</td>
-            <td style={{fontSize:13,fontFamily:'monospace',fontWeight:500,color:T.text,padding:'10px 12px',textAlign:'right'}}>{fmtFull(distSummaries.reduce((s,d)=>s+d.parts,0))}</td>
-            <td style={{fontSize:13,fontFamily:'monospace',fontWeight:500,color:T.green,padding:'10px 12px',textAlign:'right'}}>{fmtFull(distSummaries.reduce((s,d)=>s+d.tuning,0))}</td>
-            <td style={{fontSize:13,fontFamily:'monospace',fontWeight:500,color:T.blue,padding:'10px 12px',textAlign:'right'}}>{fmtFull(distSummaries.reduce((s,d)=>s+d.total,0))}</td>
-          </tr></tbody>
-        </table>
-      </div>
-    </div>
-
-    if(tab==='national-pm')return <div style={{padding:24,overflowY:'auto'}}>
-      <div style={{fontSize:16,fontWeight:500,color:T.text,marginBottom:20}}>National Distributor Revenue ex GST by Month</div>
-      <div style={{background:T.bg2,border:`1px solid ${T.border}`,borderRadius:10,padding:20}}>
-        <div style={{position:'relative',height:380}}><canvas ref={lineRef} id="line-chart"/></div>
-      </div>
-      <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:10,marginTop:16}}>
-        {trendLabels.map(l=><div key={l} style={{background:T.bg2,border:`1px solid ${T.border}`,borderRadius:8,padding:'10px 14px'}}>
-          <div style={{fontSize:11,color:T.text3,marginBottom:4}}>{l}</div>
-          <div style={{fontSize:18,fontFamily:'monospace',fontWeight:500,color:T.blue}}>{fmtFull(monthlyTotals[l]||0)}</div>
-        </div>)}
-      </div>
-    </div>
-
-    if(tab==='national-total')return <div style={{padding:24,overflowY:'auto'}}>
-      <div style={{fontSize:16,fontWeight:500,color:T.text,marginBottom:20}}>National Distributor Revenue ex GST by Customer</div>
-      <div style={{background:T.bg2,border:`1px solid ${T.border}`,borderRadius:10,padding:20}}>
-        <div style={{position:'relative',height:Math.max(300,distSummaries.length*36+60)}}><canvas ref={hBarRef} id="hbar-chart"/></div>
-      </div>
-    </div>
-
-    return null
-  }
-
-  const showSelector=tab==='distributor-sales'||tab==='detailed-sales'
-
-  return (<>
-    <Head><title>Distributor Report — Just Autos</title><meta name="viewport" content="width=device-width,initial-scale=1"/><meta name="robots" content="noindex,nofollow"/></Head>
-    <Script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js" strategy="beforeInteractive"/>
-
-    <div style={{display:'flex',height:'100vh',overflow:'hidden',fontFamily:"'DM Sans',system-ui,sans-serif",color:T.text}}>
-      <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet"/>
-
-      {/* SIDEBAR */}
-      <div style={{width:220,minWidth:220,background:T.bg2,borderRight:`1px solid ${T.border}`,display:'flex',flexDirection:'column',height:'100vh',overflowY:'auto'}}>
-        <div style={{padding:'20px 18px 16px',borderBottom:`1px solid ${T.border}`}}>
-          <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:4}}>
-            <div style={{width:30,height:30,borderRadius:8,background:T.blue,display:'flex',alignItems:'center',justifyContent:'center',fontSize:13,fontWeight:600,color:'#fff'}}>JA</div>
-            <div style={{fontSize:14,fontWeight:600,color:T.text}}>Just Autos</div>
+      <div style={styles.headerControls}>
+        <label style={styles.label}>FY
+          <select value={fy} onChange={e => setFy(Number(e.target.value))} style={styles.select}>
+            {fyOptions().map(y => <option key={y} value={y}>FY{y}</option>)}
+          </select>
+        </label>
+        <label style={styles.label}>Month
+          <select value={month} onChange={e => setMonth(Number(e.target.value))} style={styles.select}>
+            <option value={-1}>Full FY</option>
+            {FY_MONTHS.map((m, i) => <option key={m} value={i}>{m}</option>)}
+          </select>
+        </label>
+        <button onClick={onRefresh} disabled={loading} style={styles.refreshBtn}>
+          {loading ? 'Loading…' : '↻ Refresh'}
+        </button>
+        {totals && (
+          <div style={styles.headerStats}>
+            <Stat label="Total ex-GST" value={fmt(totals.total)} />
+            <Stat label="Distributors" value={String(totals.distributorCount)} />
           </div>
-          <div style={{fontSize:11,color:T.text3,marginLeft:40}}>Management Portal</div>
-        </div>
-        <div style={{padding:'14px 10px 4px',flex:1}}>
-          <div style={{fontSize:9,fontWeight:600,color:T.text3,textTransform:'uppercase',letterSpacing:'0.1em',padding:'0 8px',marginBottom:6}}>Navigation</div>
-          <a href="/sales" style={{display:'flex',alignItems:'center',gap:9,padding:'8px 10px',borderRadius:7,fontSize:13,marginBottom:4,background:'rgba(167,139,250,0.1)',color:T.purple,textDecoration:'none',border:`1px solid rgba(167,139,250,0.2)`}}>
-            <div style={{width:7,height:7,borderRadius:'50%',background:T.purple,flexShrink:0}}/><span style={{flex:1}}>Sales Dashboard</span>
-          </a>
-          <a href="/distributors" style={{display:'flex',alignItems:'center',gap:9,padding:'8px 10px',borderRadius:7,fontSize:13,marginBottom:4,background:'rgba(79,142,247,0.15)',color:T.blue,textDecoration:'none',border:`1px solid rgba(79,142,247,0.3)`}}>
-            <div style={{width:7,height:7,borderRadius:'50%',background:T.blue,flexShrink:0}}/><span style={{flex:1}}>Distributor Report</span>
-            <span style={{fontSize:9,fontFamily:'monospace',background:T.blue,color:'#fff',padding:'1px 5px',borderRadius:3}}>PBI</span>
-          </a>
-          {sidebarNav.map(item=><a key={item.label} href={item.href} style={{display:'flex',alignItems:'center',gap:9,padding:'8px 10px',borderRadius:7,fontSize:13,marginBottom:1,background:'transparent',color:T.text2,textDecoration:'none'}}><div style={{width:7,height:7,borderRadius:'50%',background:item.color,flexShrink:0}}/><span style={{flex:1}}>{item.label}</span></a>)}
-        </div>
-        <div style={{padding:'12px 14px',borderTop:`1px solid ${T.border}`}}>
-          <div style={{fontSize:10,color:T.text3,marginBottom:5}}>{lastRefresh?`Updated ${lastRefresh.toLocaleTimeString('en-AU',{hour:'2-digit',minute:'2-digit'})}`:'Loading…'}</div>
-          <button onClick={()=>load(true)} disabled={refreshing} style={{fontSize:12,color:T.blue,background:'none',border:'none',cursor:'pointer',fontFamily:'inherit',padding:0,display:'block',marginBottom:4}}>{refreshing?'Refreshing…':'↻ Refresh data'}</button>
-          <button onClick={async()=>{await fetch('/api/auth/logout',{method:'POST'});router.push('/login')}} style={{fontSize:12,color:T.text3,background:'none',border:'none',cursor:'pointer',fontFamily:'inherit',padding:0}}>Sign out →</button>
-        </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function Stat({ label, value }: { label: string; value: string }) {
+  return (
+    <div style={{ textAlign: 'right' }}>
+      <div style={{ fontSize: 11, color: '#888', textTransform: 'uppercase', letterSpacing: 0.5 }}>{label}</div>
+      <div style={{ fontSize: 16, fontWeight: 600, color: '#fff' }}>{value}</div>
+    </div>
+  )
+}
+
+function TabBar({ active, onChange }: { active: number; onChange: (n: number) => void }) {
+  const tabs = [
+    'Distributor Sales',
+    'Detailed Line Items',
+    'Summary Matrix',
+    'Monthly National',
+    'Ranked',
+  ]
+  return (
+    <div style={styles.tabBar}>
+      {tabs.map((t, i) => (
+        <button
+          key={t}
+          onClick={() => onChange(i)}
+          style={{ ...styles.tab, ...(active === i ? styles.tabActive : {}) }}
+        >{t}</button>
+      ))}
+    </div>
+  )
+}
+
+function ErrorBanner({ message, onRetry }: { message: string; onRetry: () => void }) {
+  return (
+    <div style={styles.errorBanner}>
+      <strong>Error:</strong> {message}
+      <button onClick={onRetry} style={{ ...styles.refreshBtn, marginLeft: 12 }}>Retry</button>
+    </div>
+  )
+}
+
+function LoadingState() {
+  return <div style={{ padding: 40, textAlign: 'center', color: '#888' }}>Loading from MYOB…</div>
+}
+
+// ── Page 1: Distributor Sales (distributor picker + KPI cards) ────────────
+function Page1DistributorSales({ data, selected, onSelect, selectedData }: {
+  data: ApiResp
+  selected: string
+  onSelect: (s: string) => void
+  selectedData: Distributor | null
+}) {
+  return (
+    <div>
+      <div style={styles.distPicker}>
+        {data.distributors.map(d => (
+          <button
+            key={d.customerBase}
+            onClick={() => onSelect(d.customerBase)}
+            style={{
+              ...styles.distChip,
+              ...(selected === d.customerBase ? styles.distChipActive : {}),
+              ...(d.hasZeroStream ? styles.distChipWarn : {}),
+            }}
+            title={d.hasZeroStream ? 'One or more revenue streams is $0' : ''}
+          >
+            {d.customerBase}
+            <span style={styles.distChipAmt}>{fmt(d.total)}</span>
+          </button>
+        ))}
       </div>
 
-      {/* MAIN */}
-      <div style={{flex:1,display:'flex',flexDirection:'column',overflow:'hidden',background:T.bg}}>
-        {/* Top bar */}
-        <div style={{height:52,background:T.bg2,borderBottom:`1px solid ${T.border}`,display:'flex',alignItems:'center',padding:'0 20px',gap:10,flexShrink:0}}>
-          <div style={{width:26,height:26,borderRadius:6,background:T.blue,display:'flex',alignItems:'center',justifyContent:'center',fontSize:11,fontWeight:600,color:'#fff'}}>JA</div>
-          <span style={{fontSize:14,fontWeight:600}}>Distributor Report</span>
-          <div style={{flex:1}}/>
-          {!loading&&<><div style={{width:7,height:7,borderRadius:'50%',background:T.green,boxShadow:`0 0 6px ${T.green}`}}/>
-          <span style={{fontSize:10,fontFamily:'monospace',padding:'2px 8px',borderRadius:4,background:'rgba(52,199,123,0.12)',color:T.green,border:'1px solid rgba(52,199,123,0.2)'}}>MYOB live</span>
-          <span style={{fontSize:10,fontFamily:'monospace',padding:'2px 8px',borderRadius:4,background:'rgba(79,142,247,0.12)',color:T.blue,border:'1px solid rgba(79,142,247,0.2)'}}>{fyLabel} · {distSummaries.length} distributors</span></>}
-          <div style={{width:1,height:18,background:T.border}}/>
-          {[currentFY-1,currentFY].map(y=><button key={y} onClick={()=>selectFY(y)} style={{padding:'3px 10px',borderRadius:4,border:'1px solid',fontSize:11,fontFamily:'monospace',fontWeight:600,cursor:'pointer',background:fyYear===y&&!isCustomRange?T.accent:'transparent',color:fyYear===y&&!isCustomRange?'#fff':T.text2,borderColor:fyYear===y&&!isCustomRange?T.accent:T.border}}>FY{y}</button>)}
-          <input type="date" value={customStart} onChange={e=>setCustomStart(e.target.value)} style={{padding:'3px 6px',borderRadius:4,border:`1px solid ${isCustomRange?T.accent:T.border}`,fontSize:11,fontFamily:'monospace',background:'transparent',color:T.text2,outline:'none',colorScheme:'dark'}}/>
-          <span style={{fontSize:11,color:T.text3}}>→</span>
-          <input type="date" value={customEnd} onChange={e=>setCustomEnd(e.target.value)} style={{padding:'3px 6px',borderRadius:4,border:`1px solid ${isCustomRange?T.accent:T.border}`,fontSize:11,fontFamily:'monospace',background:'transparent',color:T.text2,outline:'none',colorScheme:'dark'}}/>
-          <button onClick={applyCustomRange} style={{padding:'3px 10px',borderRadius:4,border:`1px solid ${T.accent}`,fontSize:11,fontFamily:'monospace',fontWeight:600,cursor:'pointer',background:isCustomRange?T.accent:'transparent',color:isCustomRange?'#fff':T.accent}}>Apply</button>
-          {dateLoading&&<span style={{fontSize:14,animation:'spin 1s linear infinite',color:T.blue}}>⟳</span>}
+      {selectedData ? (
+        <>
+          <div style={styles.kpiGrid}>
+            <KpiCard label="Tuning Revenue ex-GST" value={selectedData.tuning} zero={selectedData.tuning === 0} />
+            <KpiCard label="Parts Revenue ex-GST" value={selectedData.parts} zero={selectedData.parts === 0} />
+            <KpiCard label="Oil Revenue ex-GST" value={selectedData.oil} zero={selectedData.oil === 0} />
+            <KpiCard label="Total Revenue ex-GST" value={selectedData.total} highlight />
+          </div>
+          <div style={styles.subKpiGrid}>
+            <SmallKpi label="Invoice Count" value={String(selectedData.invoiceCount)} />
+            <SmallKpi label="Avg Job Value" value={fmt(selectedData.avgJobValue)} />
+            <SmallKpi label="Location" value={selectedData.location} />
+          </div>
+        </>
+      ) : (
+        <div style={{ padding: 40, color: '#888' }}>Select a distributor above.</div>
+      )}
+    </div>
+  )
+}
+
+function KpiCard({ label, value, zero, highlight }: {
+  label: string; value: number; zero?: boolean; highlight?: boolean
+}) {
+  return (
+    <div style={{
+      ...styles.kpi,
+      ...(zero ? styles.kpiZero : {}),
+      ...(highlight ? styles.kpiHighlight : {}),
+    }}>
+      <div style={styles.kpiLabel}>{label}</div>
+      <div style={styles.kpiValue}>{fmtSigned(value)}</div>
+    </div>
+  )
+}
+function SmallKpi({ label, value }: { label: string; value: string }) {
+  return (
+    <div style={styles.smallKpi}>
+      <div style={styles.kpiLabel}>{label}</div>
+      <div style={{ ...styles.kpiValue, fontSize: 18 }}>{value}</div>
+    </div>
+  )
+}
+
+// ── Page 2: Detailed Line Items ───────────────────────────────────────────
+function Page2LineItems({ distributors, selected, onSelect }: {
+  distributors: Distributor[]
+  selected: string
+  onSelect: (s: string) => void
+}) {
+  const dist = distributors.find(d => d.customerBase === selected)
+  return (
+    <div>
+      <label style={{ ...styles.label, marginBottom: 16 }}>Distributor
+        <select value={selected} onChange={e => onSelect(e.target.value)} style={styles.select}>
+          {distributors.map(d => <option key={d.customerBase} value={d.customerBase}>{d.customerBase}</option>)}
+        </select>
+      </label>
+      {dist ? (
+        <div style={styles.tableWrap}>
+          <table style={styles.table}>
+            <thead>
+              <tr>
+                <th style={styles.th}>Date</th>
+                <th style={styles.th}>Invoice</th>
+                <th style={styles.th}>Description</th>
+                <th style={styles.th}>Bucket</th>
+                <th style={styles.th}>Account</th>
+                <th style={{ ...styles.th, textAlign: 'right' }}>Amount ex-GST</th>
+              </tr>
+            </thead>
+            <tbody>
+              {dist.lineItems.map((li, i) => (
+                <tr key={i} style={styles.tr}>
+                  <td style={styles.td}>{(li.date || '').substring(0, 10)}</td>
+                  <td style={styles.td}>{li.invoiceNumber}</td>
+                  <td style={styles.td}>{li.description}</td>
+                  <td style={styles.td}><BucketTag bucket={li.bucket} /></td>
+                  <td style={styles.td}>{li.accountCode}</td>
+                  <td style={{ ...styles.td, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
+                    {fmtSigned(li.amountExGst)}
+                  </td>
+                </tr>
+              ))}
+              <tr style={styles.totalRow}>
+                <td style={styles.td} colSpan={5}><strong>Total</strong></td>
+                <td style={{ ...styles.td, textAlign: 'right', fontWeight: 700 }}>{fmtSigned(dist.total)}</td>
+              </tr>
+            </tbody>
+          </table>
         </div>
+      ) : <div style={{ padding: 40, color: '#888' }}>No distributor selected.</div>}
+    </div>
+  )
+}
 
-        {/* Tabs */}
-        <div style={{background:T.bg2,borderBottom:`1px solid ${T.border}`,display:'flex',alignItems:'flex-end',padding:'0 20px',gap:2,flexShrink:0}}>
-          {tabs.map(([id,label])=><button key={id} onClick={()=>setTab(id)} style={{fontSize:12,padding:'10px 16px',border:'none',borderBottom:tab===id?`2px solid ${T.blue}`:'2px solid transparent',background:'transparent',color:tab===id?T.blue:T.text2,cursor:'pointer',fontFamily:'inherit',whiteSpace:'nowrap'}}>{label}</button>)}
-        </div>
+function BucketTag({ bucket }: { bucket: string }) {
+  const color = bucket === 'Tuning' ? '#7c3aed' : bucket === 'Parts' ? '#0ea5e9' : '#f59e0b'
+  return (
+    <span style={{
+      background: `${color}33`, color, padding: '2px 8px', borderRadius: 4,
+      fontSize: 11, fontWeight: 600,
+    }}>{bucket}</span>
+  )
+}
 
-        {showSelector&&!loading&&!error&&<DistSelector/>}
+// ── Page 3: Summary Matrix (distributor × month × bucket) ─────────────────
+function Page3SummaryMatrix({ matrix }: {
+  matrix: { months: string[]; rows: Array<{ distributor: string; location: string; byMonth: Record<string, any>; rowTotal: number }> }
+}) {
+  const grouped = useMemo(() => {
+    const intl = matrix.rows.filter(r => r.location === 'International')
+    const natl = matrix.rows.filter(r => r.location === 'National')
+    return { natl, intl }
+  }, [matrix])
 
-        {/* Content */}
-        <div style={{flex:1,overflow:'hidden',display:'flex',flexDirection:'column',position:'relative'}}>
-          <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
-          {dateLoading&&<div style={{position:'absolute',inset:0,background:'rgba(13,15,18,0.75)',zIndex:10,display:'flex',alignItems:'center',justifyContent:'center',flexDirection:'column',gap:12}}>
-            <div style={{fontSize:28,animation:'spin 1s linear infinite',color:T.blue}}>⟳</div><div style={{color:T.text2,fontSize:13}}>Updating distributor data for {fyLabel}…</div>
-          </div>}
-          {renderContent()}
+  return (
+    <div style={styles.tableWrap}>
+      <table style={styles.table}>
+        <thead>
+          <tr>
+            <th style={styles.th}>Distributor</th>
+            {matrix.months.map(m => <th key={m} style={{ ...styles.th, textAlign: 'right' }}>{monthLabel(m)}</th>)}
+            <th style={{ ...styles.th, textAlign: 'right' }}>Total</th>
+          </tr>
+        </thead>
+        <tbody>
+          {grouped.natl.length > 0 && <tr style={styles.groupRow}><td colSpan={matrix.months.length + 2}>National</td></tr>}
+          {grouped.natl.map(r => (
+            <tr key={r.distributor} style={styles.tr}>
+              <td style={styles.td}>{r.distributor}</td>
+              {matrix.months.map(m => (
+                <td key={m} style={{ ...styles.td, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
+                  {r.byMonth[m]?.total ? fmt(r.byMonth[m].total) : '—'}
+                </td>
+              ))}
+              <td style={{ ...styles.td, textAlign: 'right', fontWeight: 600 }}>{fmt(r.rowTotal)}</td>
+            </tr>
+          ))}
+          {grouped.intl.length > 0 && <tr style={styles.groupRow}><td colSpan={matrix.months.length + 2}>International</td></tr>}
+          {grouped.intl.map(r => (
+            <tr key={r.distributor} style={styles.tr}>
+              <td style={styles.td}>{r.distributor}</td>
+              {matrix.months.map(m => (
+                <td key={m} style={{ ...styles.td, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
+                  {r.byMonth[m]?.total ? fmt(r.byMonth[m].total) : '—'}
+                </td>
+              ))}
+              <td style={{ ...styles.td, textAlign: 'right', fontWeight: 600 }}>{fmt(r.rowTotal)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
+// ── Page 4: Monthly National (bar chart, pure SVG) ────────────────────────
+function Page4MonthlyNational({ monthly }: { monthly: Array<{ ym: string; amount: number }> }) {
+  if (!monthly.length) return <div style={{ padding: 40, color: '#888' }}>No data in range.</div>
+  const max = Math.max(...monthly.map(m => m.amount)) || 1
+  const W = 900, H = 380, P = 48
+  const bw = (W - P * 2) / monthly.length
+  return (
+    <div style={styles.chartCard}>
+      <div style={styles.chartLabel}>National distributor revenue ex-GST by month</div>
+      <svg viewBox={`0 0 ${W} ${H}`} style={{ width: '100%', height: 400 }}>
+        {[0, 0.25, 0.5, 0.75, 1].map(t => (
+          <g key={t}>
+            <line x1={P} x2={W - P} y1={H - P - (H - P * 2) * t} y2={H - P - (H - P * 2) * t}
+              stroke="#2a2a2a" strokeWidth={1} />
+            <text x={P - 6} y={H - P - (H - P * 2) * t + 4} fill="#666" fontSize={10} textAnchor="end">
+              {fmt(max * t)}
+            </text>
+          </g>
+        ))}
+        {monthly.map((m, i) => {
+          const h = (H - P * 2) * (m.amount / max)
+          return (
+            <g key={m.ym}>
+              <rect x={P + i * bw + 4} y={H - P - h} width={bw - 8} height={h}
+                fill="#7c3aed" rx={2} />
+              <text x={P + i * bw + bw / 2} y={H - P + 16} fill="#888" fontSize={10} textAnchor="middle">
+                {monthLabel(m.ym)}
+              </text>
+              <text x={P + i * bw + bw / 2} y={H - P - h - 4} fill="#ccc" fontSize={10} textAnchor="middle">
+                {fmt(m.amount)}
+              </text>
+            </g>
+          )
+        })}
+      </svg>
+    </div>
+  )
+}
+
+// ── Page 5: Ranked (horizontal bar) ───────────────────────────────────────
+function Page5Ranked({ distributors, locationFilter, setLocationFilter }: {
+  distributors: Distributor[]
+  locationFilter: 'All' | 'National' | 'International'
+  setLocationFilter: (s: 'All' | 'National' | 'International') => void
+}) {
+  const sorted = [...distributors].sort((a, b) => b.total - a.total)
+  const max = sorted[0]?.total || 1
+  return (
+    <div>
+      <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
+        {(['All', 'National', 'International'] as const).map(f => (
+          <button key={f}
+            onClick={() => setLocationFilter(f)}
+            style={{ ...styles.tab, ...(locationFilter === f ? styles.tabActive : {}) }}>{f}</button>
+        ))}
+      </div>
+      <div style={styles.chartCard}>
+        <div style={styles.chartLabel}>Distributor revenue ex-GST, ranked</div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          {sorted.map(d => (
+            <div key={d.customerBase} style={{ display: 'grid', gridTemplateColumns: '220px 1fr 120px', alignItems: 'center', gap: 12 }}>
+              <div style={{ fontSize: 13, color: '#ddd', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {d.customerBase}
+                {d.hasZeroStream && <span style={{ color: '#ef4444', marginLeft: 4 }}>●</span>}
+              </div>
+              <div style={{ background: '#1a1a1a', height: 22, borderRadius: 3, position: 'relative' }}>
+                <div style={{
+                  width: `${(d.total / max) * 100}%`, height: '100%',
+                  background: d.location === 'International' ? '#0ea5e9' : '#7c3aed',
+                  borderRadius: 3,
+                }} />
+              </div>
+              <div style={{ textAlign: 'right', fontSize: 13, color: '#ddd', fontVariantNumeric: 'tabular-nums' }}>
+                {fmt(d.total)}
+              </div>
+            </div>
+          ))}
         </div>
       </div>
     </div>
-  </>)
+  )
 }
 
-export async function getServerSideProps(context:any){
-  const cookie=context.req.cookies['ja_portal_auth']
-  const pw=process.env.PORTAL_PASSWORD||'justautos2026'
-  if(!cookie)return{redirect:{destination:'/login',permanent:false}}
-  try{if(Buffer.from(cookie,'base64').toString('utf8')!==pw)return{redirect:{destination:'/login',permanent:false}}}catch{return{redirect:{destination:'/login',permanent:false}}}
-  return{props:{}}
+// ── styles ────────────────────────────────────────────────────────────────
+const styles: Record<string, React.CSSProperties> = {
+  page: { minHeight: '100vh', background: '#0a0a0a', color: '#e5e5e5', fontFamily: 'system-ui, -apple-system, sans-serif', padding: 24 },
+  header: { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 20, flexWrap: 'wrap', gap: 16 },
+  h1: { fontSize: 22, fontWeight: 600, margin: 0, color: '#fff' },
+  sub: { fontSize: 12, color: '#888', marginTop: 4 },
+  headerControls: { display: 'flex', gap: 12, alignItems: 'flex-end', flexWrap: 'wrap' },
+  headerStats: { display: 'flex', gap: 24, marginLeft: 8, paddingLeft: 16, borderLeft: '1px solid #2a2a2a' },
+  label: { display: 'flex', flexDirection: 'column', fontSize: 11, color: '#888', gap: 4 },
+  select: { background: '#1a1a1a', color: '#fff', border: '1px solid #2a2a2a', borderRadius: 4, padding: '6px 10px', fontSize: 13 },
+  refreshBtn: { background: '#7c3aed', color: '#fff', border: 'none', borderRadius: 4, padding: '8px 14px', cursor: 'pointer', fontSize: 13, fontWeight: 500 },
+  tabBar: { display: 'flex', gap: 4, borderBottom: '1px solid #2a2a2a', marginBottom: 20 },
+  tab: { background: 'transparent', color: '#888', border: 'none', padding: '10px 16px', cursor: 'pointer', fontSize: 13, borderBottom: '2px solid transparent' },
+  tabActive: { color: '#fff', borderBottom: '2px solid #7c3aed' },
+  content: { marginTop: 20 },
+  errorBanner: { background: '#7f1d1d', color: '#fecaca', padding: 12, borderRadius: 4, marginBottom: 16 },
+  distPicker: { display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 20 },
+  distChip: { background: '#1a1a1a', color: '#ccc', border: '1px solid #2a2a2a', borderRadius: 4, padding: '6px 10px', cursor: 'pointer', fontSize: 12, display: 'flex', alignItems: 'center', gap: 8 },
+  distChipActive: { background: '#7c3aed', color: '#fff', borderColor: '#7c3aed' },
+  distChipWarn: { borderColor: '#ef4444' },
+  distChipAmt: { fontSize: 11, opacity: 0.7, fontVariantNumeric: 'tabular-nums' },
+  kpiGrid: { display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 12 },
+  subKpiGrid: { display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12 },
+  kpi: { background: '#141414', border: '1px solid #2a2a2a', borderRadius: 6, padding: 16 },
+  kpiZero: { borderColor: '#ef4444', background: '#1a0a0a' },
+  kpiHighlight: { background: '#1a1030', borderColor: '#7c3aed' },
+  smallKpi: { background: '#141414', border: '1px solid #2a2a2a', borderRadius: 6, padding: 12 },
+  kpiLabel: { fontSize: 11, color: '#888', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 6 },
+  kpiValue: { fontSize: 22, fontWeight: 600, color: '#fff', fontVariantNumeric: 'tabular-nums' },
+  tableWrap: { overflow: 'auto', background: '#141414', border: '1px solid #2a2a2a', borderRadius: 6 },
+  table: { width: '100%', borderCollapse: 'collapse', fontSize: 13 },
+  th: { textAlign: 'left', padding: '10px 12px', borderBottom: '1px solid #2a2a2a', color: '#888', fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.5, fontWeight: 500 },
+  td: { padding: '8px 12px', borderBottom: '1px solid #1f1f1f', color: '#ddd' },
+  tr: {},
+  totalRow: { background: '#1a1030' },
+  groupRow: { background: '#1a1a1a', color: '#888', fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.5, padding: '8px 12px' },
+  chartCard: { background: '#141414', border: '1px solid #2a2a2a', borderRadius: 6, padding: 20 },
+  chartLabel: { fontSize: 12, color: '#888', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 12 },
 }
