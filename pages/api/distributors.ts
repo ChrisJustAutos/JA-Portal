@@ -13,7 +13,6 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
       const TUNING = ['4-1905','4-1910','4-1915','4-1920']
       const PARTS  = ['4-1000','4-1401','4-1602','4-1701','4-1802','4-1803','4-1805','4-1807','4-1811','4-1813','4-1814','4-1821','4-1861']
       const OIL    = ['4-1060']
-      const ALL_ACCS = [...TUNING, ...PARTS, ...OIL]
 
       const EXCLUDED = new Set([
         'vps','vehicle performance solutions t/a just autos',
@@ -23,19 +22,20 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
       ])
       const INTL = new Set(['kanoo motors wll','karyokuae','us cruiserz'])
 
-      // Fetch invoices
+      // Query 1: invoices in date range
       const invRes: any = await cdataQuery('JAWS',
         "SELECT [ID],[Number],[Date],[CustomerName] FROM [MYOB_POWERBI_JAWS].[MYOB].[SaleInvoices] WHERE [Date] >= '" + start + "' AND [Date] <= '" + end + "'"
       )
-      const invCols = invRes?.results?.[0]?.schema?.map((c: any) => c.columnName) || []
-      const invRows = invRes?.results?.[0]?.rows || []
-      const invoices = invRows.map((r: any[]) => {
+      const invCols: string[] = invRes?.results?.[0]?.schema?.map((c: any) => c.columnName) || []
+      const invRows: any[][] = invRes?.results?.[0]?.rows || []
+      const invById = new Map<string, any>()
+      for (const r of invRows) {
         const o: any = {}
-        invCols.forEach((c: string, i: number) => { o[c] = r[i] })
-        return o
-      })
+        invCols.forEach((c, i) => { o[c] = r[i] })
+        invById.set(o.ID, o)
+      }
 
-      if (!invoices.length) {
+      if (invById.size === 0) {
         return res.status(200).json({
           dateRange: { start, end },
           totals: { tuning: 0, parts: 0, oil: 0, total: 0, invoiceCount: 0, distributorCount: 0 },
@@ -43,34 +43,26 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
         })
       }
 
-      const invById = new Map<string, any>()
-      for (const i of invoices) invById.set(i.ID, i)
-      const invIds: string[] = Array.from(invById.keys())
-
-      // Fetch line items batched
-      const accList = ALL_ACCS.map(a => "'" + a + "'").join(',')
-      const allLines: any[] = []
-      for (let i = 0; i < invIds.length; i += 100) {
-        const batch = invIds.slice(i, i + 100)
-        const idList = batch.map(id => "'" + id + "'").join(',')
-        const r: any = await cdataQuery('JAWS',
-          "SELECT [SaleInvoiceId],[AccountDisplayID],[TaxCodeCode],[Total],[Description] FROM [MYOB_POWERBI_JAWS].[MYOB].[SaleInvoiceItems] WHERE [SaleInvoiceId] IN (" + idList + ") AND [AccountDisplayID] IN (" + accList + ")"
-        )
-        const lCols = r?.results?.[0]?.schema?.map((c: any) => c.columnName) || []
-        const lRows = r?.results?.[0]?.rows || []
-        for (const row of lRows) {
-          const o: any = {}
-          lCols.forEach((c: string, idx: number) => { o[c] = row[idx] })
-          allLines.push(o)
-        }
-      }
+      // Query 2: ALL line items for revenue accounts in ONE shot (no batching).
+      // SaleInvoiceItems has no Date column — we filter by AccountDisplayID server-side
+      // and discard lines whose SaleInvoiceId isn't in our date-filtered invoice map.
+      const accList = [...TUNING, ...PARTS, ...OIL].map(a => "'" + a + "'").join(',')
+      const lineRes: any = await cdataQuery('JAWS',
+        "SELECT [SaleInvoiceId],[AccountDisplayID],[TaxCodeCode],[Total],[Description] FROM [MYOB_POWERBI_JAWS].[MYOB].[SaleInvoiceItems] WHERE [AccountDisplayID] IN (" + accList + ")"
+      )
+      const lCols: string[] = lineRes?.results?.[0]?.schema?.map((c: any) => c.columnName) || []
+      const lRows: any[][] = lineRes?.results?.[0]?.rows || []
 
       // Aggregate
       const byDist = new Map<string, any>()
-      for (const line of allLines) {
+      for (const r of lRows) {
+        const line: any = {}
+        lCols.forEach((c, i) => { line[c] = r[i] })
+
         const inv = invById.get(line.SaleInvoiceId)
-        if (!inv) continue
-        const raw: string = (inv.CustomerName || '').toString()
+        if (!inv) continue // line belongs to an invoice outside the date range — skip
+
+        const raw: string = String(inv.CustomerName || '')
         if (EXCLUDED.has(raw.toLowerCase())) continue
         const base = raw.replace(/\s*\(Tuning 2\)\s*$/i,'').replace(/\s*\(Tuning 1\)\s*$/i,'').replace(/\s*\(Tuning\)\s*$/i,'').trim()
         if (!base || EXCLUDED.has(base.toLowerCase())) continue
@@ -100,8 +92,12 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
         else agg.oil += amt
         agg.invoiceIds.add(inv.ID)
         agg.lineItems.push({
-          date: inv.Date, invoiceNumber: inv.Number, description: line.Description || '',
-          amountExGst: amt, bucket: bucket, accountCode: acc,
+          date: inv.Date,
+          invoiceNumber: inv.Number,
+          description: line.Description || '',
+          amountExGst: amt,
+          bucket: bucket,
+          accountCode: acc,
         })
       }
 
@@ -151,11 +147,10 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
         monthlyNational: monthlyNational,
       })
     } catch (e: any) {
-      console.error('distributors error:', e && e.message)
+      console.error('distributors error:', e && e.message, e && e.stack)
       return res.status(500).json({
         error: 'Internal error',
         message: (e && e.message) || String(e),
-        stack: e && e.stack ? String(e.stack).split('\n').slice(0,5) : [],
       })
     }
   })
