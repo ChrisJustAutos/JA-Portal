@@ -11,6 +11,7 @@ interface LineItem {
   Description: string
   Total: number
   bucket: 'Tuning' | 'Parts' | 'Oil'
+  poNumber: string
 }
 interface DistData {
   fetchedAt: string
@@ -21,6 +22,35 @@ interface DistData {
 }
 
 function normName(n:string){return n?.replace(' (Tuning)','').replace(' (Tuning 1)','').replace(' (Tuning2)','').trim()||''}
+
+// Toyota VIN → model mapping (positions 4-8 encode chassis code).
+// Returns a friendly model name. Falls back to the raw chassis code so unseen
+// models are visible in the data rather than silently lumped into "Unknown".
+function vinToModel(vin: string): string {
+  if (!vin || vin.length < 8) return 'Unknown'
+  const v = vin.toUpperCase().trim()
+  if (v.length < 8) return 'Unknown'
+  const p4_7 = v.substring(3, 7)
+  const p4_6 = v.substring(3, 6)
+
+  // LC300 (FJA300 / F33A engine)
+  if (p4_7 === 'AA7B' || p4_7 === 'AABB' || p4_6 === 'HV05' || p4_6 === 'HV01' || p4_6 === 'HV09' || p4_6 === 'GV03') return 'LC300'
+  // Prado 250 (GDJ250 — latest gen)
+  if (p4_6 === 'BV71' || p4_6 === 'BV73' || p4_6 === 'BVL1' || p4_6 === 'BVL3' || p4_6 === 'EV73' || p4_6 === 'EVL3' || p4_6 === 'RVL3' || p4_6 === 'RVL1' || p4_6 === 'RV73' || p4_6 === 'EEV7') return 'Prado 250'
+  // Prado 150 (GDJ150 / KDJ150)
+  if (p4_6 === 'BR3F' || p4_6 === 'BRL3' || p4_6 === 'BR71' || p4_6 === 'BH3F' || p4_6 === 'ACEB' || p4_6 === 'ACDB' || p4_6 === 'RRL1') return 'Prado 150'
+  // LC70/79 (VDJ79 / GDJ79)
+  if (p4_6 === 'LV71' || p4_6 === 'LV73' || p4_6 === 'LVL1' || p4_6 === 'LVL3' || p4_6 === 'LRL3' || p4_6 === 'LR71') return 'LC70/79'
+  // LC200 (VDJ200)
+  if (p4_6 === 'HV00' || p4_6 === 'HV02') return 'LC200'
+  // Hilux N80 (GUN126 / GUN136)
+  if (p4_7 === 'BA3C' || p4_7 === 'KA3C' || p4_7 === 'HA3C' || p4_7 === 'BE3C' || p4_7 === 'KE3C' || p4_7 === 'DB3C') return 'Hilux N80'
+  // Older Hilux / Prado KUN / KDJ120
+  if (p4_6 === 'FZ29' || p4_6 === 'HZ22' || p4_6 === 'FZ22' || p4_6 === 'EZ39') return 'Hilux/Prado (older)'
+
+  // Unknown chassis — expose prefix so we can extend the map
+  return `Other (${v.substring(3, 8)})`
+}
 
 const fmtD=(n:number)=>n==null?'$0':'$'+Math.round(n).toLocaleString('en-AU')
 const fmtFull=(n:number)=>n==null?'$0':'$'+Number(n).toLocaleString('en-AU',{minimumFractionDigits:0,maximumFractionDigits:0})
@@ -40,13 +70,18 @@ export default function DistributorReport(){
   const [refreshing,setRefreshing]=useState(false)
   const [lastRefresh,setLastRefresh]=useState<Date|null>(null)
 
-  // Date range
-  const currentFY=new Date().getMonth()>=6?new Date().getFullYear()+1:new Date().getFullYear()
+  // Date range — default to current calendar month
+  const now=new Date()
+  const currentFY=now.getMonth()>=6?now.getFullYear()+1:now.getFullYear()
+  const pad=(n:number)=>String(n).padStart(2,'0')
+  const monthStart=`${now.getFullYear()}-${pad(now.getMonth()+1)}-01`
+  const monthEnd=`${now.getFullYear()}-${pad(now.getMonth()+1)}-${pad(new Date(now.getFullYear(),now.getMonth()+1,0).getDate())}`
+
   const [fyYear,setFyYear]=useState(currentFY)
-  const [isCustomRange,setIsCustomRange]=useState(false)
-  const [customStart,setCustomStart]=useState(`${currentFY-1}-07-01`)
-  const [customEnd,setCustomEnd]=useState(`${currentFY}-06-30`)
-  const [activeDateParams,setActiveDateParams]=useState(`startDate=${currentFY-1}-07-01&endDate=${currentFY}-06-30`)
+  const [isCustomRange,setIsCustomRange]=useState(true)
+  const [customStart,setCustomStart]=useState(monthStart)
+  const [customEnd,setCustomEnd]=useState(monthEnd)
+  const [activeDateParams,setActiveDateParams]=useState(`startDate=${monthStart}&endDate=${monthEnd}`)
   const [dateLoading,setDateLoading]=useState(false)
   const fyLabel=isCustomRange?`${new Date(customStart+'T00:00').toLocaleDateString('en-AU',{day:'2-digit',month:'short',year:'2-digit'})} – ${new Date(customEnd+'T00:00').toLocaleDateString('en-AU',{day:'2-digit',month:'short',year:'2-digit'})}`:`FY${fyYear}`
 
@@ -73,6 +108,7 @@ export default function DistributorReport(){
           Description: li.description,
           Total: li.amountExGst,
           bucket: li.bucket,
+          poNumber: li.poNumber || '',
         }))
       )
 
@@ -130,13 +166,54 @@ export default function DistributorReport(){
   const lineRef=useRef<HTMLCanvasElement>(null),lineInst=useRef<any>(null)
   const hBarRef=useRef<HTMLCanvasElement>(null),hBarInst=useRef<any>(null)
 
+  // Distributor Sales bar chart — tuning revenue grouped by vehicle model (VIN-derived)
   useEffect(()=>{
     if(!barRef.current||!(window as any).Chart||loading)return
     if(barInst.current)barInst.current.destroy()
-    const tunLines=filtered.filter(l=>l.bucket==='Tuning')
-    const byDesc:Record<string,number>={};tunLines.forEach(l=>{const k=l.Description?.substring(0,30)||'Other';byDesc[k]=(byDesc[k]||0)+l.Total})
-    const sorted=Object.entries(byDesc).sort((a,b)=>b[1]-a[1]).slice(0,10)
-    barInst.current=new(window as any).Chart(barRef.current,{type:'bar',data:{labels:sorted.map(s=>s[0]),datasets:[{data:sorted.map(s=>Math.round(s[1])),backgroundColor:'#4f8ef7',borderRadius:4,borderSkipped:false}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false},tooltip:{callbacks:{label:(ctx:any)=>`$${ctx.raw.toLocaleString()}`}}},scales:{x:{grid:{color:'rgba(255,255,255,0.05)'},ticks:{color:T.text3,font:{size:10},maxRotation:45}},y:{grid:{color:'rgba(255,255,255,0.05)'},ticks:{color:T.text3,font:{size:11},callback:(v:any)=>'$'+v}}}}})
+    const tunLines=filtered.filter(l=>l.bucket==='Tuning'&&l.poNumber&&l.poNumber.trim())
+    const byModel:Record<string,{total:number;vins:Set<string>;jobs:number}>={}
+    tunLines.forEach(l=>{
+      const model=vinToModel(l.poNumber.trim())
+      if(!byModel[model])byModel[model]={total:0,vins:new Set(),jobs:0}
+      byModel[model].total+=l.Total
+      byModel[model].vins.add(l.poNumber.trim())
+      byModel[model].jobs+=1
+    })
+    const sorted=Object.entries(byModel).sort((a,b)=>b[1].total-a[1].total)
+    barInst.current=new(window as any).Chart(barRef.current,{
+      type:'bar',
+      data:{
+        labels:sorted.map(s=>s[0]),
+        datasets:[{
+          data:sorted.map(s=>Math.round(s[1].total)),
+          backgroundColor:'#4f8ef7',
+          borderRadius:4,
+          borderSkipped:false,
+        }]
+      },
+      options:{
+        responsive:true,
+        maintainAspectRatio:false,
+        plugins:{
+          legend:{display:false},
+          tooltip:{
+            callbacks:{
+              label:(ctx:any)=>`$${ctx.raw.toLocaleString()}`,
+              afterLabel:(ctx:any)=>{
+                const m=sorted[ctx.dataIndex]
+                if(!m)return ''
+                const[,info]=m
+                return `${info.vins.size} unique VIN${info.vins.size===1?'':'s'} · ${info.jobs} job${info.jobs===1?'':'s'}`
+              }
+            }
+          }
+        },
+        scales:{
+          x:{grid:{color:'rgba(255,255,255,0.05)'},ticks:{color:T.text3,font:{size:11}}},
+          y:{grid:{color:'rgba(255,255,255,0.05)'},ticks:{color:T.text3,font:{size:11},callback:(v:any)=>'$'+(v>=1000?Math.round(v/1000)+'k':v)}}
+        }
+      }
+    })
     return()=>{if(barInst.current)barInst.current.destroy()}
   },[filtered,tab,loading])
 
@@ -176,6 +253,20 @@ export default function DistributorReport(){
     </div>
   }
 
+  // Model breakdown rows for the table on Distributor Sales
+  function modelRows(){
+    const tunLines=filtered.filter(l=>l.bucket==='Tuning'&&l.poNumber&&l.poNumber.trim())
+    const byModel:Record<string,{total:number;vins:Set<string>;jobs:number}>={}
+    tunLines.forEach(l=>{
+      const model=vinToModel(l.poNumber.trim())
+      if(!byModel[model])byModel[model]={total:0,vins:new Set(),jobs:0}
+      byModel[model].total+=l.Total
+      byModel[model].vins.add(l.poNumber.trim())
+      byModel[model].jobs+=1
+    })
+    return Object.entries(byModel).map(([model,v])=>({model,total:v.total,vins:v.vins.size,jobs:v.jobs})).sort((a,b)=>b.total-a.total)
+  }
+
   function renderContent(){
     if(loading)return <div style={{display:'flex',alignItems:'center',justifyContent:'center',height:400,flexDirection:'column',gap:12}}>
       <div style={{fontSize:28,animation:'spin 1s linear infinite',color:T.text3}}>⟳</div><div style={{color:T.text3}}>Loading distributor data…</div>
@@ -187,21 +278,63 @@ export default function DistributorReport(){
       <button onClick={()=>{setError('');setLoading(true);load()}} style={{padding:'6px 16px',borderRadius:6,border:`1px solid ${T.blue}`,background:T.blue,color:'#fff',fontSize:12,cursor:'pointer',fontFamily:'inherit'}}>Retry</button>
     </div></div>
 
-    if(tab==='distributor-sales')return <div style={{display:'flex',height:'100%'}}>
-      <div style={{flex:1,padding:24,display:'flex',flexDirection:'column',gap:16,overflowY:'auto'}}>
-        <div style={{fontSize:18,fontWeight:500,color:T.text}}>{selectedDist==='ALL'?'All Distributors':selectedDist}</div>
-        <div style={{fontSize:12,color:T.text3}}><span style={{display:'inline-flex',alignItems:'center',gap:5}}><span style={{width:10,height:10,borderRadius:2,background:T.blue,display:'inline-block'}}/> Tuning Revenue ex GST</span></div>
-        <div style={{position:'relative',height:340,background:T.bg2,border:`1px solid ${T.border}`,borderRadius:10,padding:16}}>
-          <canvas ref={barRef} id="bar-chart"/>
+    if(tab==='distributor-sales'){
+      const models=modelRows()
+      const modelsTotal=models.reduce((s,m)=>s+m.total,0)
+      const totalVins=new Set(filtered.filter(l=>l.bucket==='Tuning'&&l.poNumber&&l.poNumber.trim()).map(l=>l.poNumber.trim())).size
+      return <div style={{display:'flex',height:'100%'}}>
+        <div style={{flex:1,padding:24,display:'flex',flexDirection:'column',gap:16,overflowY:'auto'}}>
+          <div style={{display:'flex',alignItems:'center',gap:12}}>
+            <div style={{fontSize:18,fontWeight:500,color:T.text}}>{selectedDist==='ALL'?'All Distributors':selectedDist}</div>
+            <div style={{fontSize:11,fontFamily:'monospace',padding:'3px 8px',borderRadius:4,background:'rgba(79,142,247,0.12)',color:T.blue,border:'1px solid rgba(79,142,247,0.2)'}}>
+              {totalVins} unique VIN{totalVins===1?'':'s'}
+            </div>
+          </div>
+          <div style={{fontSize:12,color:T.text3}}>
+            <span style={{display:'inline-flex',alignItems:'center',gap:5}}>
+              <span style={{width:10,height:10,borderRadius:2,background:T.blue,display:'inline-block'}}/> Tuning Revenue ex GST · grouped by vehicle model (VIN-derived)
+            </span>
+          </div>
+          <div style={{position:'relative',height:340,background:T.bg2,border:`1px solid ${T.border}`,borderRadius:10,padding:16}}>
+            <canvas ref={barRef} id="bar-chart"/>
+          </div>
+          {models.length>0&&<div style={{background:T.bg2,border:`1px solid ${T.border}`,borderRadius:10,overflowX:'auto'}}>
+            <table style={{width:'100%',borderCollapse:'collapse'}}>
+              <thead><tr style={{borderBottom:`1px solid ${T.border2}`}}>
+                <th style={{fontSize:11,color:T.text3,padding:'10px 12px',textAlign:'left',fontWeight:500}}>Model</th>
+                <th style={{fontSize:11,color:T.text3,padding:'10px 12px',textAlign:'right',fontWeight:500}}>Unique VINs</th>
+                <th style={{fontSize:11,color:T.text3,padding:'10px 12px',textAlign:'right',fontWeight:500}}>Jobs</th>
+                <th style={{fontSize:11,color:T.text3,padding:'10px 12px',textAlign:'right',fontWeight:500}}>Tuning Revenue ex GST</th>
+                <th style={{fontSize:11,color:T.text3,padding:'10px 12px',textAlign:'right',fontWeight:500}}>%</th>
+              </tr></thead>
+              <tbody>{models.map((m,i)=><tr key={i} style={{borderTop:`1px solid ${T.border}`}}>
+                <td style={{fontSize:12,color:T.text2,padding:'8px 12px'}}>{m.model}</td>
+                <td style={{fontSize:12,fontFamily:'monospace',color:T.text3,padding:'8px 12px',textAlign:'right'}}>{m.vins}</td>
+                <td style={{fontSize:12,fontFamily:'monospace',color:m.jobs>m.vins?T.amber:T.text3,padding:'8px 12px',textAlign:'right'}}>{m.jobs}</td>
+                <td style={{fontSize:12,fontFamily:'monospace',color:T.green,padding:'8px 12px',textAlign:'right'}}>{fmtFull(m.total)}</td>
+                <td style={{fontSize:12,fontFamily:'monospace',color:T.text3,padding:'8px 12px',textAlign:'right'}}>{modelsTotal>0?((m.total/modelsTotal)*100).toFixed(1)+'%':'—'}</td>
+              </tr>)}
+              <tr style={{borderTop:`2px solid ${T.border2}`,background:T.bg3}}>
+                <td style={{fontSize:13,fontWeight:500,color:T.text,padding:'10px 12px'}}>Total</td>
+                <td style={{fontSize:13,fontFamily:'monospace',fontWeight:500,color:T.text,padding:'10px 12px',textAlign:'right'}}>{models.reduce((s,m)=>s+m.vins,0)}</td>
+                <td style={{fontSize:13,fontFamily:'monospace',fontWeight:500,color:T.text,padding:'10px 12px',textAlign:'right'}}>{models.reduce((s,m)=>s+m.jobs,0)}</td>
+                <td style={{fontSize:13,fontFamily:'monospace',fontWeight:500,color:T.green,padding:'10px 12px',textAlign:'right'}}>{fmtFull(modelsTotal)}</td>
+                <td style={{fontSize:13,fontFamily:'monospace',fontWeight:500,color:T.text3,padding:'10px 12px',textAlign:'right'}}>100%</td>
+              </tr></tbody>
+            </table>
+          </div>}
+          {models.length===0&&<div style={{fontSize:12,color:T.text3,fontStyle:'italic',padding:'12px 0'}}>
+            No tuning jobs with VIN data in this period. VINs are read from the Customer PO field on each sales invoice.
+          </div>}
+        </div>
+        <div style={{width:220,borderLeft:`1px solid ${T.border}`,flexShrink:0}}>
+          <KPIBox label="Tuning Revenue ex GST" value={ss.tuning} color={T.green}/>
+          <KPIBox label="Oil Revenue ex GST" value={ss.oil}/>
+          <KPIBox label="Parts Revenue ex GST" value={ss.parts}/>
+          <KPIBox label="Total Revenue ex GST" value={ss.total} color={T.blue}/>
         </div>
       </div>
-      <div style={{width:220,borderLeft:`1px solid ${T.border}`,flexShrink:0}}>
-        <KPIBox label="Tuning Revenue ex GST" value={ss.tuning} color={T.green}/>
-        <KPIBox label="Oil Revenue ex GST" value={ss.oil}/>
-        <KPIBox label="Parts Revenue ex GST" value={ss.parts}/>
-        <KPIBox label="Total Revenue ex GST" value={ss.total} color={T.blue}/>
-      </div>
-    </div>
+    }
 
     if(tab==='detailed-sales')return <div style={{padding:24,overflowY:'auto'}}>
       <div style={{fontSize:18,fontWeight:500,color:T.text,marginBottom:16}}>{selectedDist==='ALL'?'All':selectedDist}</div>
