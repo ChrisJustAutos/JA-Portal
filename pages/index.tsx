@@ -344,6 +344,7 @@ export default function Portal() {
   const [dash,setDash]=useState<DashData|null>(null)
   const [loading,setLoading]=useState(true)
   const [refreshing,setRefreshing]=useState(false)
+  const [dateLoading,setDateLoading]=useState(false)
   const [error,setError]=useState('')
   const [lastRefresh,setLastRefresh]=useState<Date|null>(null)
     // FY date range — AU financial year (1 Jul → 30 Jun)
@@ -372,12 +373,14 @@ export default function Portal() {
       setIsCustomRange(false)
       setCustomStart(`${y-1}-07-01`)
       setCustomEnd(`${y}-06-30`)
+      setDateLoading(true)
       setActiveDateParams(`startDate=${y-1}-07-01&endDate=${y}-06-30`)
     }
 
     function applyCustomRange() {
       if (customStart && customEnd) {
         setIsCustomRange(true)
+        setDateLoading(true)
         setActiveDateParams(`startDate=${customStart}&endDate=${customEnd}`)
       }
     }
@@ -385,8 +388,9 @@ export default function Portal() {
   const load=useCallback(async(isRefresh=false)=>{
     if(isRefresh)setRefreshing(true)
     try{
+      const refreshParam = isRefresh ? '&refresh=true' : ''
       // Step 1: Load core data fast (invoices, P&L, customers)
-      const r=await fetch(`/api/dashboard?${activeDateParams}`)
+      const r=await fetch(`/api/dashboard?${activeDateParams}${refreshParam}`)
       if(r.status===401){router.push('/login');return}
       if(!r.ok)throw new Error('Failed to load data')
       const d=await r.json()
@@ -396,12 +400,12 @@ export default function Portal() {
       d.vps.income6 =[905849,615285,731524,800866,891330,344080]
       d.jaws.expense6=[380000,400000,510000,460000,580000,186111]
       d.vps.expense6 =[780000,520000,620000,680000,760000, 99262]
-      setDash(d);setLastRefresh(new Date());setError('')
+      setDash(d);setLastRefresh(new Date());setError('');setDateLoading(false)
       setLoading(false)
       if(isRefresh)setRefreshing(false)
       // Step 2: Load live trend data in background
       try{
-        const tr=await fetch(`/api/trends?${activeDateParams}`)
+        const tr=await fetch(`/api/trends?${activeDateParams}${refreshParam}`)
         if(tr.ok){
           const td=await tr.json()
           setDash((prev:any)=>prev?{...prev,
@@ -411,7 +415,7 @@ export default function Portal() {
           }:prev)
         }
       }catch{}
-    }catch(e:any){setError(e.message);setLoading(false);if(isRefresh)setRefreshing(false)}
+    }catch(e:any){setError(e.message);setLoading(false);setDateLoading(false);if(isRefresh)setRefreshing(false)}
   },[router, activeDateParams])
   useEffect(()=>{load()},[load])
   useEffect(()=>{const t=setInterval(()=>load(true),5*60*1000);return()=>clearInterval(t)},[load])
@@ -813,10 +817,18 @@ export default function Portal() {
                               background:isCustomRange?T.accent:'transparent',color:isCustomRange?'#fff':T.accent}}>
                             Apply
                           </button>
+                          {dateLoading&&<span style={{fontSize:14,animation:'spin 1s linear infinite',color:T.blue}}>⟳</span>}
                         </div>
           </div>
           <div style={{flex:1,display:'flex',overflow:'hidden'}}>
-            <div style={{flex:1,padding:20,overflowY:'auto'}}>{renderSection()}</div>
+            <div style={{flex:1,padding:20,overflowY:'auto',position:'relative'}}>
+              {dateLoading&&<div style={{position:'absolute',inset:0,background:'rgba(13,15,18,0.75)',zIndex:10,display:'flex',alignItems:'center',justifyContent:'center',flexDirection:'column',gap:12,borderRadius:8}}>
+                <div style={{fontSize:28,animation:'spin 1s linear infinite',color:T.blue}}>⟳</div>
+                <div style={{color:T.text2,fontSize:13}}>Updating data for {fyLabel}…</div>
+                <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
+              </div>}
+              {renderSection()}
+            </div>
             <Chatbot dashData={dash}/>
           </div>
         </div>
