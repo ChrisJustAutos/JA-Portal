@@ -133,5 +133,3 @@ export function parseDateRange(req: any) {
     if (s && e) return { start: s, end: e }
     return currentFYRange()
 }
-    return currentFYRange()
-}
