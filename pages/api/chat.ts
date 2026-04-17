@@ -28,7 +28,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         'anthropic-version': '2023-06-01',
       },
       body: JSON.stringify({
-        model: 'claude-opus-4-5',  // Use a stable model name
+        model: 'claude-sonnet-4-20250514',
         max_tokens: 1024,
         system: context || 'You are the Just Autos management assistant with access to live MYOB data for both JAWS and VPS. Be concise and helpful.',
         messages: validMessages,
