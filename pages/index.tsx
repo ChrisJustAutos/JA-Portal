@@ -96,7 +96,18 @@ function InvoiceTable({rows,accent,entity,onInvoiceClick,onOpenInvoiceClick}:{ro
 }
 
 // ── Invoice Detail Modal ─────────────────────────────────────
-interface LineItem { Description:string;Total:number;Quantity:number;UnitPrice:number;TaxCode:string;AccountName:string;ItemName:string }
+interface LineItem {
+  Description: string
+  Total: number | null
+  ShipQuantity: number | null
+  UnitPrice: number | null
+  TaxCodeCode: string | null
+  AccountName: string | null
+  AccountDisplayID: string | null
+  ItemName: string | null
+  RowID: number
+}
+
 function InvoiceDetailModal({invoice,entity,onClose}:{invoice:Invoice;entity:string;onClose:()=>void}) {
   const [lineItems,setLineItems]=useState<LineItem[]>([])
   const [headerData,setHeaderData]=useState<any>(null)
@@ -109,9 +120,9 @@ function InvoiceDetailModal({invoice,entity,onClose}:{invoice:Invoice;entity:str
         const r=await fetch(`/api/invoice-detail?number=${encodeURIComponent(invoice.Number)}&entity=${entity}`)
         if(!r.ok) throw new Error('Failed to load invoice detail')
         const d=await r.json()
-        setLineItems(rowsToObjects(d.lineItems) as LineItem[])
-        const headers=rowsToObjects(d.invoice)
-        if(headers.length>0) setHeaderData(headers[0])
+        // API returns flat arrays/objects — consume directly, no rowsToObjects
+        setLineItems(Array.isArray(d.lineItems) ? d.lineItems : [])
+        setHeaderData(d.invoice || null)
       } catch(e:any) { setError(e.message) }
       setLoading(false)
     }
@@ -119,6 +130,10 @@ function InvoiceDetailModal({invoice,entity,onClose}:{invoice:Invoice;entity:str
   },[invoice.Number,entity])
 
   const paid = invoice.TotalAmount - (invoice.BalanceDueAmount||0)
+  const costedRows = lineItems.filter(li => li.Total != null)
+  const termsLabel = headerData?.TermsPaymentIsDue === 'CashOnDelivery' ? 'COD'
+    : headerData?.TermsPaymentIsDue === 'PrePaid' ? 'Prepaid'
+    : headerData?.TermsPaymentIsDue || null
 
   return (
     <div style={{position:'fixed',inset:0,zIndex:100,display:'flex',alignItems:'center',justifyContent:'center'}}
@@ -126,7 +141,7 @@ function InvoiceDetailModal({invoice,entity,onClose}:{invoice:Invoice;entity:str
       {/* Backdrop */}
       <div style={{position:'absolute',inset:0,background:'rgba(0,0,0,0.6)',backdropFilter:'blur(4px)'}}/>
       {/* Modal */}
-      <div style={{position:'relative',background:T.bg2,border:`1px solid ${T.border2}`,borderRadius:12,width:700,maxWidth:'90vw',maxHeight:'85vh',overflow:'hidden',display:'flex',flexDirection:'column',boxShadow:'0 20px 60px rgba(0,0,0,0.5)'}}
+      <div style={{position:'relative',background:T.bg2,border:`1px solid ${T.border2}`,borderRadius:12,width:760,maxWidth:'92vw',maxHeight:'88vh',overflow:'hidden',display:'flex',flexDirection:'column',boxShadow:'0 20px 60px rgba(0,0,0,0.5)'}}
         onClick={e=>e.stopPropagation()}>
         {/* Header */}
         <div style={{padding:'16px 20px',borderBottom:`1px solid ${T.border}`,display:'flex',alignItems:'center',gap:12}}>
@@ -157,10 +172,11 @@ function InvoiceDetailModal({invoice,entity,onClose}:{invoice:Invoice;entity:str
         </div>
 
         {/* Extra header info */}
-        {headerData&&(headerData.CustomerPurchaseOrderNumber||headerData.Comment||headerData.Terms)&&(
+        {headerData&&(headerData.CustomerPurchaseOrderNumber||headerData.Comment||termsLabel||headerData.SalespersonName)&&(
           <div style={{padding:'10px 20px',borderBottom:`1px solid ${T.border}`,display:'flex',gap:16,flexWrap:'wrap'}}>
             {headerData.CustomerPurchaseOrderNumber&&<div style={{fontSize:11,color:T.text3}}>PO: <span style={{color:T.text2,fontFamily:'monospace'}}>{headerData.CustomerPurchaseOrderNumber}</span></div>}
-            {headerData.Terms&&<div style={{fontSize:11,color:T.text3}}>Terms: <span style={{color:T.text2}}>{headerData.Terms}</span></div>}
+            {termsLabel&&<div style={{fontSize:11,color:T.text3}}>Terms: <span style={{color:T.text2}}>{termsLabel}</span></div>}
+            {headerData.SalespersonName&&<div style={{fontSize:11,color:T.text3}}>Salesperson: <span style={{color:T.text2}}>{headerData.SalespersonName}</span></div>}
             {headerData.Comment&&<div style={{fontSize:11,color:T.text3}}>Note: <span style={{color:T.text2}}>{headerData.Comment}</span></div>}
           </div>
         )}
@@ -179,24 +195,49 @@ function InvoiceDetailModal({invoice,entity,onClose}:{invoice:Invoice;entity:str
             <div style={{marginTop:14}}>
               <div style={{fontSize:11,fontWeight:600,color:T.text3,textTransform:'uppercase',letterSpacing:'0.08em',marginBottom:10}}>Line Items</div>
               <table style={{width:'100%',borderCollapse:'collapse'}}>
-                <thead><tr>{['Item/Description','Qty','Unit Price','Tax','Total'].map(h=>(
-                  <th key={h} style={{fontSize:10,color:T.text3,textTransform:'uppercase',letterSpacing:'0.07em',padding:'0 8px 8px',textAlign:['Qty','Unit Price','Tax','Total'].includes(h)?'right':'left',fontWeight:500}}>{h}</th>
-                ))}</tr></thead>
-                <tbody>{lineItems.map((li,i)=>(
-                  <tr key={i} style={{borderTop:`1px solid ${T.border}`}}>
-                    <td style={{fontSize:12,color:T.text,padding:'7px 8px',maxWidth:280}}>
-                      {li.ItemName&&<div style={{color:entity==='JAWS'?T.blue:T.teal,fontSize:11,fontFamily:'monospace',marginBottom:2}}>{li.ItemName}</div>}
-                      <div style={{color:T.text2,fontSize:12}}>{li.Description||'—'}</div>
-                      {li.AccountName&&<div style={{color:T.text3,fontSize:10,marginTop:1}}>{li.AccountName}</div>}
-                    </td>
-                    <td style={{fontSize:12,fontFamily:'monospace',color:T.text2,padding:'7px 8px',textAlign:'right'}}>{li.Quantity!=null?li.Quantity:'—'}</td>
-                    <td style={{fontSize:12,fontFamily:'monospace',color:T.text2,padding:'7px 8px',textAlign:'right'}}>{li.UnitPrice!=null?fmtFull(li.UnitPrice):'—'}</td>
-                    <td style={{fontSize:11,fontFamily:'monospace',color:T.text3,padding:'7px 8px',textAlign:'right'}}>{li.TaxCode||'—'}</td>
-                    <td style={{fontSize:12,fontFamily:'monospace',color:T.text,padding:'7px 8px',textAlign:'right',fontWeight:500}}>{fmtFull(li.Total)}</td>
-                  </tr>
-                ))}</tbody>
+                <thead>
+                  <tr>{['Item/Description','Qty','Unit Price','Tax','Total'].map(h=>(
+                    <th key={h} style={{fontSize:10,color:T.text3,textTransform:'uppercase',letterSpacing:'0.07em',padding:'0 8px 8px',textAlign:['Qty','Unit Price','Tax','Total'].includes(h)?'right':'left',fontWeight:500}}>{h}</th>
+                  ))}</tr>
+                </thead>
+                <tbody>{lineItems.map((li,i)=>{
+                  const isNarrative = li.Total == null
+                  if (isNarrative) {
+                    // Option 1 — bold full-width description row, MYOB-style
+                    return (
+                      <tr key={i} style={{borderTop:`1px solid ${T.border}`,background:'rgba(255,255,255,0.015)'}}>
+                        <td colSpan={5} style={{fontSize:12,color:T.text,padding:'9px 8px',fontWeight:500,whiteSpace:'pre-wrap',lineHeight:1.5}}>
+                          {li.Description||'—'}
+                        </td>
+                      </tr>
+                    )
+                  }
+                  return (
+                    <tr key={i} style={{borderTop:`1px solid ${T.border}`}}>
+                      <td style={{fontSize:12,color:T.text,padding:'7px 8px',maxWidth:320}}>
+                        {li.ItemName&&<div style={{color:entity==='JAWS'?T.blue:T.teal,fontSize:11,fontFamily:'monospace',marginBottom:2}}>{li.ItemName}</div>}
+                        <div style={{color:T.text2,fontSize:12,whiteSpace:'pre-wrap',lineHeight:1.4}}>{li.Description||'—'}</div>
+                        {li.AccountName&&<div style={{color:T.text3,fontSize:10,marginTop:2}}>{li.AccountDisplayID} · {li.AccountName}</div>}
+                      </td>
+                      <td style={{fontSize:12,fontFamily:'monospace',color:T.text2,padding:'7px 8px',textAlign:'right'}}>{li.ShipQuantity!=null?li.ShipQuantity:'—'}</td>
+                      <td style={{fontSize:12,fontFamily:'monospace',color:T.text2,padding:'7px 8px',textAlign:'right'}}>{li.UnitPrice!=null?fmtFull(li.UnitPrice):'—'}</td>
+                      <td style={{fontSize:11,fontFamily:'monospace',color:T.text3,padding:'7px 8px',textAlign:'right'}}>{li.TaxCodeCode||'—'}</td>
+                      <td style={{fontSize:12,fontFamily:'monospace',color:T.text,padding:'7px 8px',textAlign:'right',fontWeight:500}}>{fmtFull(li.Total as number)}</td>
+                    </tr>
+                  )
+                })}</tbody>
                 <tfoot>
                   <tr style={{borderTop:`2px solid ${T.border2}`}}>
+                    <td colSpan={4} style={{fontSize:11,fontWeight:600,color:T.text3,padding:'8px',textAlign:'right',textTransform:'uppercase'}}>Subtotal</td>
+                    <td style={{fontSize:12,fontFamily:'monospace',color:T.text2,padding:'8px',textAlign:'right'}}>{fmtFull(headerData?.Subtotal ?? costedRows.reduce((s,r)=>s+(r.Total||0),0))}</td>
+                  </tr>
+                  {headerData?.TotalTax!=null&&(
+                    <tr>
+                      <td colSpan={4} style={{fontSize:11,fontWeight:600,color:T.text3,padding:'4px 8px',textAlign:'right',textTransform:'uppercase'}}>GST</td>
+                      <td style={{fontSize:12,fontFamily:'monospace',color:T.text2,padding:'4px 8px',textAlign:'right'}}>{fmtFull(headerData.TotalTax)}</td>
+                    </tr>
+                  )}
+                  <tr style={{borderTop:`1px solid ${T.border}`}}>
                     <td colSpan={4} style={{fontSize:11,fontWeight:600,color:T.text3,padding:'8px',textAlign:'right',textTransform:'uppercase'}}>Total</td>
                     <td style={{fontSize:13,fontWeight:600,fontFamily:'monospace',color:T.text,padding:'8px',textAlign:'right'}}>{fmtFull(invoice.TotalAmount)}</td>
                   </tr>
@@ -226,6 +267,9 @@ function InvoiceDetailModal({invoice,entity,onClose}:{invoice:Invoice;entity:str
                 <span style={{fontSize:12,fontWeight:600,color:invoice.BalanceDueAmount>0?T.amber:T.green}}>Balance Due</span>
                 <span style={{fontSize:13,fontWeight:600,fontFamily:'monospace',color:invoice.BalanceDueAmount>0?T.amber:T.green}}>{invoice.BalanceDueAmount>0?fmtFull(invoice.BalanceDueAmount):'$0.00 — Paid'}</span>
               </div>
+              {headerData?.LastPaymentDate&&(
+                <div style={{fontSize:10,color:T.text3,marginTop:6,textAlign:'right'}}>Last payment: {fmtDate(headerData.LastPaymentDate)}</div>
+              )}
             </div>
           )}
         </div>
