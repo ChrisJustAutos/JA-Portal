@@ -9,6 +9,18 @@ async function safe(fn: () => Promise<any>) {
   try { return await fn() } catch(e: any) { console.error('invoice-detail:', e.message?.substring(0,80)); return null }
 }
 
+// Flatten CData result shape {results:[{schema:[{columnName}], rows:[[...]]}]} into array of objects
+function flatten(r: any): any[] {
+  if (!r?.results?.[0]) return []
+  const cols: string[] = r.results[0].schema.map((c: any) => c.columnName)
+  const rows: any[][] = r.results[0].rows || []
+  return rows.map((row) => {
+    const o: any = {}
+    cols.forEach((c, i) => { o[c] = row[i] })
+    return o
+  })
+}
+
 export default function handler(req: NextApiRequest, res: NextApiResponse) {
   return requireAuth(req, res, async () => {
     const invoiceNumber = req.query.number as string
@@ -22,7 +34,7 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
     const safeNumber = invoiceNumber.replace(/'/g, "''")
 
     // Step 1: fetch the invoice header to get its UUID
-    const invoiceHeader: any = await safe(() => cdataQuery(entity, `
+    const invoiceHeaderRaw: any = await safe(() => cdataQuery(entity, `
       SELECT [ID],[Number],[Date],[CustomerName],[TotalAmount],[BalanceDueAmount],[Status],
              [Subtotal],[TotalTax],[InvoiceType],[Comment],[ShipToAddress],
              [CustomerPurchaseOrderNumber],[Terms]
@@ -30,26 +42,25 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
       WHERE [Number] = '${safeNumber}'
     `))
 
-    // Extract the invoice UUID from the result so we can query line items
-    const hdrCols: string[] = invoiceHeader?.results?.[0]?.schema?.map((c: any) => c.columnName) || []
-    const hdrRows: any[][] = invoiceHeader?.results?.[0]?.rows || []
-    const idIdx = hdrCols.indexOf('ID')
-    const invoiceId = (hdrRows[0] && idIdx >= 0) ? hdrRows[0][idIdx] : null
+    const invoiceRows = flatten(invoiceHeaderRaw)
+    const invoice = invoiceRows[0] || null
+    const invoiceId = invoice?.ID || null
 
-    // Step 2: fetch line items by SaleInvoiceId (UUID) — only if we found the invoice
-    let lineItems: any = null
+    // Step 2: fetch line items by SaleInvoiceId (UUID)
+    let lineItemsArr: any[] = []
     if (invoiceId) {
-      lineItems = await safe(() => cdataQuery(entity, `
+      const lineItemsRaw: any = await safe(() => cdataQuery(entity, `
         SELECT [Description],[Total],[ShipQuantity],[UnitPrice],[TaxCodeCode],[AccountName],[AccountDisplayID],[ItemName],[RowID]
         FROM [${catalog}].[MYOB].[SaleInvoiceItems]
         WHERE [SaleInvoiceId] = '${invoiceId}'
         ORDER BY [RowID]
       `))
+      lineItemsArr = flatten(lineItemsRaw)
     }
 
     res.status(200).json({
-      lineItems,
-      invoice: invoiceHeader,
+      invoice,          // flat object (or null)
+      lineItems: lineItemsArr,   // flat array of line-item objects
     })
   })
 }
