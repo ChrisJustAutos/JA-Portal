@@ -915,6 +915,11 @@ export default function Portal() {
           </div>
           <div style={{padding:'14px 10px 4px',flex:1}}>
             <div style={{fontSize:9,fontWeight:600,color:T.text3,textTransform:'uppercase',letterSpacing:'0.1em',padding:'0 8px',marginBottom:6}}>Navigation</div>
+            <a href="/sales" style={{display:'flex',alignItems:'center',gap:9,padding:'8px 10px',borderRadius:7,fontSize:13,marginBottom:4,background:'rgba(167,139,250,0.1)',color:'#a78bfa',textDecoration:'none',border:'1px solid rgba(167,139,250,0.2)'}}>
+  <div style={{width:7,height:7,borderRadius:'50%',background:'#a78bfa',flexShrink:0}}/>
+  <span style={{flex:1}}>Sales Dashboard</span>
+  <span style={{fontSize:9,fontFamily:'monospace',background:'#a78bfa',color:'#fff',padding:'1px 5px',borderRadius:3}}>NEW</span>
+</a>
             <a href="/distributors" style={{display:'flex',alignItems:'center',gap:9,padding:'8px 10px',borderRadius:7,fontSize:13,marginBottom:4,background:'rgba(79,142,247,0.1)',color:T.blue,textDecoration:'none',border:`1px solid rgba(79,142,247,0.2)`}}>
               <div style={{width:7,height:7,borderRadius:'50%',background:T.blue,flexShrink:0}}/>
               <span style={{flex:1}}>Distributor Report</span>
