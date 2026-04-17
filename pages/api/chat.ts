@@ -1,22 +1,31 @@
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { isAuthenticated } from '../../lib/auth'
 
+export const config = { maxDuration: 30 }
+
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY || ''
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (!isAuthenticated(req)) { res.status(401).json({ error: 'Unauthorised' }); return }
   if (req.method !== 'POST') { res.status(405).end(); return }
 
+  if (!ANTHROPIC_API_KEY) {
+    console.error('ANTHROPIC_API_KEY is not set')
+    res.status(500).json({ reply: 'Chat is not configured — missing API key.' }); return
+  }
+
   const { messages, context } = req.body
 
   if (!messages || !Array.isArray(messages) || messages.length === 0) {
-    res.status(400).json({ error: 'messages array required and must not be empty' }); return
+    res.status(400).json({ reply: 'No messages provided.' }); return
   }
 
-  // Filter out any empty messages
-  const validMessages = messages.filter((m: any) => m.content && m.content.trim && m.content.trim().length > 0)
+  // Filter out any empty messages and the initial assistant greeting
+  const validMessages = messages.filter((m: any) =>
+    m.content && typeof m.content === 'string' && m.content.trim().length > 0
+  )
   if (validMessages.length === 0) {
-    res.status(400).json({ error: 'No valid messages' }); return
+    res.status(400).json({ reply: 'No valid messages.' }); return
   }
 
   try {
@@ -30,15 +39,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       body: JSON.stringify({
         model: 'claude-sonnet-4-20250514',
         max_tokens: 1024,
-        system: context || 'You are the Just Autos management assistant with access to live MYOB data for both JAWS and VPS. Be concise and helpful.',
+        system: context || 'You are the Just Autos management assistant with access to live MYOB data for both JAWS and VPS. Be concise and helpful. Use Australian dollar formatting.',
         messages: validMessages,
       }),
     })
 
     if (!response.ok) {
-      const err = await response.text()
-      console.error('Anthropic API error:', response.status, err.substring(0,200))
-      res.status(response.status).json({ error: `AI service error: ${response.status}` }); return
+      const errText = await response.text()
+      console.error('Anthropic API error:', response.status, errText.substring(0, 300))
+      // Return the error as a chat reply so the user can see what's wrong
+      res.status(200).json({ reply: `AI error (${response.status}): ${errText.substring(0, 100)}` }); return
     }
 
     const data = await response.json()
@@ -46,6 +56,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     res.status(200).json({ reply })
   } catch (err: any) {
     console.error('Chat error:', err.message)
-    res.status(500).json({ error: 'Chat failed — please try again' })
+    // Return error details as chat reply so we can debug
+    res.status(200).json({ reply: `Connection error: ${err.message}` })
   }
 }
