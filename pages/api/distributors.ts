@@ -96,7 +96,8 @@ function rowsOf(r: CDataResult | null): Record<string, any>[] {
 export default function handler(req: NextApiRequest, res: NextApiResponse) {
   return requireAuth(req, res, async () => {
     try {
-      const { start, end } = parseDateRange(req)
+      const params = new URLSearchParams(req.query as Record<string, string>)
+      const { start, end } = parseDateRange(params)
 
       // CData can't JOIN across these tables — query separately, match client-side on SaleInvoiceId = ID
       const [invRes, lineRes] = await Promise.all([
