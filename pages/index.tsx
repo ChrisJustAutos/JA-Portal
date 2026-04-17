@@ -349,36 +349,44 @@ export default function Portal() {
     // FY date range — AU financial year (1 Jul → 30 Jun)
     const currentFY = new Date().getMonth() >= 6 ? new Date().getFullYear()+1 : new Date().getFullYear()
     const [fyYear, setFyYear] = useState(currentFY)
-    const [selectedMonth, setSelectedMonth] = useState<number|null>(null) // null = full FY, 1-12 = specific month
     const [showFyDropdown, setShowFyDropdown] = useState(false)
+    // Custom date range
+    const [customStart, setCustomStart] = useState(`${currentFY-1}-07-01`)
+    const [customEnd, setCustomEnd] = useState(`${currentFY}-06-30`)
+    const [isCustomRange, setIsCustomRange] = useState(false)
 
-    // Compute date range from FY + optional month
-    const getDateRange = useCallback(() => {
-      if (selectedMonth !== null) {
-        // Specific month within the FY
-        // FY2026 = Jul 2025 (month 7) to Jun 2026 (month 6)
-        const year = selectedMonth >= 7 ? fyYear - 1 : fyYear
-        const s = `${year}-${String(selectedMonth).padStart(2,'0')}-01`
-        const e = `${year}-${String(selectedMonth).padStart(2,'0')}-${new Date(year, selectedMonth, 0).getDate()}`
-        return { start: s, end: e }
-      }
-      return { start: `${fyYear-1}-07-01`, end: `${fyYear}-06-30` }
-    }, [fyYear, selectedMonth])
+    // Active date range — either FY-derived or custom
+    const activeStart = isCustomRange ? customStart : `${fyYear-1}-07-01`
+    const activeEnd = isCustomRange ? customEnd : `${fyYear}-06-30`
+    const dateParams = `startDate=${activeStart}&endDate=${activeEnd}`
 
-    const fyLabel = selectedMonth !== null
-      ? new Date(2000, selectedMonth - 1).toLocaleDateString('en-AU', { month: 'short' }) + ` FY${fyYear}`
+    const fyLabel = isCustomRange
+      ? `${new Date(customStart+'T00:00').toLocaleDateString('en-AU',{day:'2-digit',month:'short',year:'2-digit'})} – ${new Date(customEnd+'T00:00').toLocaleDateString('en-AU',{day:'2-digit',month:'short',year:'2-digit'})}`
       : `FY${fyYear}`
 
-    // Month options for the selected FY (Jul → Jun)
-    const fyMonths = [7,8,9,10,11,12,1,2,3,4,5,6]
+    // Track the dateParams string so load re-fires when it changes
+    const [activeDateParams, setActiveDateParams] = useState(dateParams)
+
+    function selectFY(y: number) {
+      setFyYear(y)
+      setIsCustomRange(false)
+      setCustomStart(`${y-1}-07-01`)
+      setCustomEnd(`${y}-06-30`)
+      setActiveDateParams(`startDate=${y-1}-07-01&endDate=${y}-06-30`)
+    }
+
+    function applyCustomRange() {
+      if (customStart && customEnd) {
+        setIsCustomRange(true)
+        setActiveDateParams(`startDate=${customStart}&endDate=${customEnd}`)
+      }
+    }
 
   const load=useCallback(async(isRefresh=false)=>{
     if(isRefresh)setRefreshing(true)
     try{
-      const { start, end } = getDateRange()
-      const dateParams = `startDate=${start}&endDate=${end}`
       // Step 1: Load core data fast (invoices, P&L, customers)
-      const r=await fetch(`/api/dashboard?${dateParams}`)
+      const r=await fetch(`/api/dashboard?${activeDateParams}`)
       if(r.status===401){router.push('/login');return}
       if(!r.ok)throw new Error('Failed to load data')
       const d=await r.json()
@@ -393,7 +401,7 @@ export default function Portal() {
       if(isRefresh)setRefreshing(false)
       // Step 2: Load live trend data in background
       try{
-        const tr=await fetch(`/api/trends?${dateParams}`)
+        const tr=await fetch(`/api/trends?${activeDateParams}`)
         if(tr.ok){
           const td=await tr.json()
           setDash((prev:any)=>prev?{...prev,
@@ -404,7 +412,7 @@ export default function Portal() {
         }
       }catch{}
     }catch(e:any){setError(e.message);setLoading(false);if(isRefresh)setRefreshing(false)}
-  },[router, getDateRange])
+  },[router, activeDateParams])
   useEffect(()=>{load()},[load])
   useEffect(()=>{const t=setInterval(()=>load(true),5*60*1000);return()=>clearInterval(t)},[load])
 
@@ -784,24 +792,27 @@ export default function Portal() {
             {!loading&&<Tag color={T.purple}>{fmt(stockVal)} stock</Tag>}
                         <div style={{display:'flex',alignItems:'center',gap:6,position:'relative'}}>
                           {[currentFY-2,currentFY-1,currentFY].map(y=>(
-                        <button key={y} onClick={()=>{setFyYear(y);setSelectedMonth(null);setShowFyDropdown(false)}}
+                        <button key={y} onClick={()=>selectFY(y)}
                                               style={{padding:'3px 10px',borderRadius:4,border:'1px solid',fontSize:11,fontFamily:'monospace',fontWeight:600,cursor:'pointer',
-                                                                            background:fyYear===y&&selectedMonth===null?T.accent:'transparent',
-                                                                            color:fyYear===y&&selectedMonth===null?'#fff':T.text2,
-                                                                            borderColor:fyYear===y?T.accent:T.border}}>
+                                                                            background:fyYear===y&&!isCustomRange?T.accent:'transparent',
+                                                                            color:fyYear===y&&!isCustomRange?'#fff':T.text2,
+                                                                            borderColor:fyYear===y&&!isCustomRange?T.accent:T.border}}>
                           {`FY${y}`}{y===currentFY?<span style={{width:4,height:4,borderRadius:'50%',background:T.green,display:'inline-block',marginLeft:4,verticalAlign:'middle'}}/>:null}
                         </button>
                       ))}
-                          <select value={selectedMonth??''} onChange={e=>{const v=e.target.value;setSelectedMonth(v?Number(v):null)}}
-                            style={{padding:'3px 8px',borderRadius:4,border:`1px solid ${T.border}`,fontSize:11,fontFamily:'monospace',fontWeight:600,cursor:'pointer',
-                              background:selectedMonth!==null?T.accent:'transparent',color:selectedMonth!==null?'#fff':T.text2,outline:'none',appearance:'auto'}}>
-                            <option value="" style={{background:T.bg2,color:T.text}}>Full FY</option>
-                            {fyMonths.map(m=>{
-                              const yr=m>=7?fyYear-1:fyYear
-                              const label=new Date(yr,m-1).toLocaleDateString('en-AU',{month:'short',year:'2-digit'})
-                              return <option key={m} value={m} style={{background:T.bg2,color:T.text}}>{label}</option>
-                            })}
-                          </select>
+                          <div style={{width:1,height:18,background:T.border,margin:'0 2px'}}/>
+                          <input type="date" value={customStart} onChange={e=>setCustomStart(e.target.value)}
+                            style={{padding:'3px 6px',borderRadius:4,border:`1px solid ${isCustomRange?T.accent:T.border}`,fontSize:11,fontFamily:'monospace',
+                              background:'transparent',color:T.text2,outline:'none',cursor:'pointer',colorScheme:'dark'}}/>
+                          <span style={{fontSize:11,color:T.text3}}>→</span>
+                          <input type="date" value={customEnd} onChange={e=>setCustomEnd(e.target.value)}
+                            style={{padding:'3px 6px',borderRadius:4,border:`1px solid ${isCustomRange?T.accent:T.border}`,fontSize:11,fontFamily:'monospace',
+                              background:'transparent',color:T.text2,outline:'none',cursor:'pointer',colorScheme:'dark'}}/>
+                          <button onClick={applyCustomRange}
+                            style={{padding:'3px 10px',borderRadius:4,border:`1px solid ${T.accent}`,fontSize:11,fontFamily:'monospace',fontWeight:600,cursor:'pointer',
+                              background:isCustomRange?T.accent:'transparent',color:isCustomRange?'#fff':T.accent}}>
+                            Apply
+                          </button>
                         </div>
           </div>
           <div style={{flex:1,display:'flex',overflow:'hidden'}}>
