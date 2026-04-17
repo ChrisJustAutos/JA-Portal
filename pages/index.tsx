@@ -1,4 +1,4 @@
-h// pages/index.tsx — Just Autos Management Portal v3
+// pages/index.tsx — Just Autos Management Portal v3
 // Full JAWS + VPS parity, trend charts, Power BI-style layout
 import { useEffect, useState, useRef, useCallback } from 'react'
 import Head from 'next/head'
