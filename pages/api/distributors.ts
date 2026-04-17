@@ -5,31 +5,16 @@ import { cdataQuery, parseDateRange } from '../../lib/cdata'
 
 export const config = { maxDuration: 60 }
 
-// Parse CData response — handles both MCP format and REST API format
+// cdataQuery returns: { results: [{ schema: [{columnName}...], rows: [[val,val]...] }] }
 function parseRows(result: any): Record<string, any>[] {
   if (!result) return []
-  // Format A: { results: [{ schema: [...], rows: [...] }] }
-  if (result?.results?.[0]?.schema && result?.results?.[0]?.rows) {
-    const { schema, rows } = result.results[0]
-    return rows.map((row: any[]) => {
-      const o: any = {}
-      schema.forEach((c: any, i: number) => { o[c.columnName || c.ColumnName || c.name] = row[i] })
-      return o
-    })
-  }
-  // Format B: { value: [...] } (OData style)
-  if (Array.isArray(result?.value)) return result.value
-  // Format C: already an array
-  if (Array.isArray(result)) return result
-  // Format D: { rows: [...], schema: [...] } (flat)
-  if (result?.schema && result?.rows) {
-    return result.rows.map((row: any[]) => {
-      const o: any = {}
-      result.schema.forEach((c: any, i: number) => { o[c.columnName || c.ColumnName || c.name] = row[i] })
-      return o
-    })
-  }
-  return []
+  const r = result?.results?.[0]
+  if (!r?.schema || !r?.rows) return []
+  return r.rows.map((row: any[]) => {
+    const o: any = {}
+    r.schema.forEach((c: any, i: number) => { o[c.columnName] = row[i] })
+    return o
+  })
 }
 
 async function safe(fn: () => Promise<any>) {
@@ -66,7 +51,7 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
       const ck = `dist:${start}:${end}`
       if (!forceRefresh) { const c = getC(ck); if (c) return res.status(200).json(c) }
 
-      // Query 1: Get invoices in date range (CustomerName, Date, TotalAmount, Number, ID)
+      // Step 1: Get all distributor invoices in the date range
       const invRaw = await safe(() => cdataQuery('JAWS', `
         SELECT [ID], [CustomerName], [Date], [TotalAmount], [Number]
         FROM [MYOB_POWERBI_JAWS].[MYOB].[SaleInvoices]
@@ -74,46 +59,59 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
         ORDER BY [Date] DESC
       `))
 
-      // Query 2: Get ALL line items (no date filter — will match by SaleInvoiceId)
-      const liRaw = await safe(() => cdataQuery('JAWS', `
-        SELECT [SaleInvoiceId], [Description], [Total], [AccountName], [AccountDisplayID], [ItemName]
-        FROM [MYOB_POWERBI_JAWS].[MYOB].[SaleInvoiceItems]
-        WHERE [Total] > 0
-      `))
-
       const invoices = parseRows(invRaw)
-      const allLineItems = parseRows(liRaw)
+      console.log(`dist: ${invoices.length} invoices found`)
 
-      console.log(`dist: ${invoices.length} invoices, ${allLineItems.length} line items`)
-
-      // Build invoice lookup by ID
-      const invById: Record<string, any> = {}
-      invoices.forEach(inv => {
-        if (inv.ID) invById[inv.ID] = inv
-      })
-
-      // Match line items to invoices
-      let lineItems: any[] = []
-      if (allLineItems.length > 0 && invoices.length > 0) {
-        lineItems = allLineItems
-          .filter(li => li.SaleInvoiceId && invById[li.SaleInvoiceId])
-          .map(li => {
-            const inv = invById[li.SaleInvoiceId]
-            return {
-              CustomerName: inv.CustomerName || '',
-              Date: inv.Date || '',
-              AccountName: li.AccountName || '',
-              AccountDisplayID: li.AccountDisplayID || '',
-              Description: li.Description || '',
-              Total: typeof li.Total === 'number' ? li.Total : parseFloat(li.Total) || 0,
-              ItemName: li.ItemName || null,
-            }
-          })
+      if (invoices.length === 0) {
+        // Return empty but valid response
+        const empty = { fetchedAt: new Date().toISOString(), lineItems: [], trendLabels: [], monthlyTotals: {}, period: { start, end } }
+        setC(ck, empty)
+        return res.status(200).json(empty)
       }
 
-      // Fallback: if no matched line items, use invoice-level data
-      if (lineItems.length === 0 && invoices.length > 0) {
-        console.log('dist: falling back to invoice-level data')
+      // Step 2: For each invoice, try to get its line items
+      // Batch by invoice ID — but SaleInvoiceItems has no date filter,
+      // so we query with SaleInvoiceId IN (...) for batches of IDs
+      const invIds = invoices.map(i => i.ID).filter(Boolean)
+      const invLookup: Record<string, any> = {}
+      invoices.forEach(inv => { if (inv.ID) invLookup[inv.ID] = inv })
+
+      let lineItems: any[] = []
+
+      // Try line items in batches of 50 invoice IDs
+      const batchSize = 50
+      for (let i = 0; i < invIds.length && i < 200; i += batchSize) {
+        const batch = invIds.slice(i, i + batchSize)
+        const idList = batch.map((id: string) => `'${id}'`).join(',')
+        const liRaw = await safe(() => cdataQuery('JAWS', `
+          SELECT [SaleInvoiceId], [Description], [Total], [AccountName], [AccountDisplayID], [ItemName]
+          FROM [MYOB_POWERBI_JAWS].[MYOB].[SaleInvoiceItems]
+          WHERE [SaleInvoiceId] IN (${idList}) AND [Total] > 0
+        `))
+        const batchItems = parseRows(liRaw)
+        if (batchItems.length > 0) {
+          batchItems.forEach(li => {
+            const inv = invLookup[li.SaleInvoiceId]
+            if (inv) {
+              lineItems.push({
+                CustomerName: inv.CustomerName || '',
+                Date: inv.Date || '',
+                AccountName: li.AccountName || '',
+                AccountDisplayID: li.AccountDisplayID || '',
+                Description: li.Description || '',
+                Total: typeof li.Total === 'number' ? li.Total : parseFloat(li.Total) || 0,
+                ItemName: li.ItemName || null,
+              })
+            }
+          })
+        }
+      }
+
+      console.log(`dist: ${lineItems.length} matched line items`)
+
+      // Fallback: if no line items matched, use invoice-level data
+      if (lineItems.length === 0) {
+        console.log('dist: using invoice-level fallback')
         lineItems = invoices.map(inv => ({
           CustomerName: inv.CustomerName || '',
           Date: inv.Date || '',
@@ -125,17 +123,14 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
         }))
       }
 
-      // Monthly totals from invoices
+      // Monthly totals
       const months = getMonthLabels(start, end)
       const trendLabels: string[] = []
       const monthlyTotals: Record<string, number> = {}
       months.forEach(m => {
         trendLabels.push(m.label)
         const total = invoices
-          .filter(inv => {
-            const d = (inv.Date || '').substring(0, 10)
-            return d >= m.s && d <= m.e
-          })
+          .filter(inv => { const d = (inv.Date || '').substring(0, 10); return d >= m.s && d <= m.e })
           .reduce((s, inv) => s + (typeof inv.TotalAmount === 'number' ? inv.TotalAmount : parseFloat(inv.TotalAmount) || 0), 0)
         monthlyTotals[m.label] = total
       })
@@ -146,7 +141,6 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
         trendLabels,
         monthlyTotals,
         period: { start, end },
-        debug: { invoiceCount: invoices.length, lineItemCount: allLineItems.length, matchedCount: lineItems.length }
       }
 
       setC(ck, result)
