@@ -11,7 +11,7 @@ async function safe(fn: () => Promise<any>) {
 
 export default function handler(req: NextApiRequest, res: NextApiResponse) {
   return requireAuth(req, res, async () => {
-          const { start, end } = parseDateRange(req)
+          const { start, end } = parseDateRange(new URLSearchParams(req.query as Record<string, string>))
 
     // Batch A: JAWS critical (3 queries)
     const [jawsRecent, jawsOpen, jawsTopCust] = await Promise.all([
