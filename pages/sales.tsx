@@ -304,7 +304,7 @@ export default function SalesDashboard(){
                   </Card>
                   <Card><SH>Leads by Rep</SH>
                     {Object.entries(allLeads.reduce((acc:Record<string,{count:number;value:number}>,l)=>{if(!acc[l.rep])acc[l.rep]={count:0,value:0};acc[l.rep].count++;acc[l.rep].value+=parseFloat(l.quoteValue)||0;return acc},{})).sort(([,a],[,b])=>b.count-a.count).map(([rep,d])=>
-                      <div key={rep} style={{display:'flex',justifyContent:'space-between',padding:'6px 0',borderBottom:`1px solid ${T.border}`,cursor:'pointer',background:repFilter===rep?'rgba(79,142,247,0.08)':'transparent',borderRadius:4,padding:'6px 4px'}} onClick={()=>setRepFilter(repFilter===rep?'All':rep)}>
+                      <div key={rep} style={{display:'flex',justifyContent:'space-between',padding:'6px 4px',borderBottom:`1px solid ${T.border}`,cursor:'pointer',background:repFilter===rep?'rgba(79,142,247,0.08)':'transparent',borderRadius:4}} onClick={()=>setRepFilter(repFilter===rep?'All':rep)}>
                         <span style={{fontSize:13,color:RC[rep]||T.text2,fontWeight:repFilter===rep?600:400}}>{rep}</span>
                         <span style={{fontSize:12,fontFamily:'monospace',color:T.text2}}>{d.count} leads · {d.value>0?fmt(d.value):'—'}</span>
                       </div>
