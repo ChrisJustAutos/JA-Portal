@@ -1,12 +1,12 @@
-// pages/api/trends.ts — 6-month trend data with cache
+// pages/api/dashboard.ts — With in-memory cache (3 min TTL)
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { requireAuth } from '../../lib/auth'
-import { cdataQuery } from '../../lib/cdata'
+import { cdataQuery, parseDateRange } from '../../lib/cdata'
 
 export const config = { maxDuration: 60 }
 
 // ── In-memory cache ──────────────────────────────────────────
-const CACHE_TTL = 5 * 60 * 1000 // 5 minutes (trends change less often)
+const CACHE_TTL = 3 * 60 * 1000 // 3 minutes
 const cache = new Map<string, { data: any; timestamp: number }>()
 
 function getCached(key: string): any | null {
@@ -21,62 +21,66 @@ function getCached(key: string): any | null {
 
 function setCache(key: string, data: any) {
   cache.set(key, { data, timestamp: Date.now() })
-  if (cache.size > 10) {
+  // Prevent unbounded growth — keep last 20 entries
+  if (cache.size > 20) {
     const oldest = cache.keys().next().value
     if (oldest) cache.delete(oldest)
   }
 }
 
 async function safe(fn: () => Promise<any>) {
-  try { return await fn() } catch { return null }
-}
-
-function last6Months() {
-  const months = []
-  const now = new Date()
-  for (let i = 5; i >= 0; i--) {
-    const d = new Date(now.getFullYear(), now.getMonth() - i, 1)
-    months.push({ year: d.getFullYear(), month: d.getMonth() + 1, label: d.toLocaleDateString('en-AU', { month: 'short', year: '2-digit' }) })
-  }
-  return months
+  try { return await fn() } catch(e: any) { console.error(e.message?.substring(0,60)); return null }
 }
 
 export default function handler(req: NextApiRequest, res: NextApiResponse) {
   return requireAuth(req, res, async () => {
+    const { start, end } = parseDateRange(new URLSearchParams(req.query as Record<string, string>))
     const forceRefresh = req.query.refresh === 'true'
-    const cacheKey = 'trends:last6'
+    const cacheKey = `dash:${start}:${end}`
 
+    // Check cache first (unless force refresh)
     if (!forceRefresh) {
       const cached = getCached(cacheKey)
       if (cached) {
-        console.log('Trends cache hit')
+        console.log(`Cache hit: ${cacheKey}`)
         return res.status(200).json(cached)
       }
     }
 
-    console.log('Trends cache miss — fetching from MYOB')
-    const months = last6Months()
+    console.log(`Cache miss: ${cacheKey} — fetching from MYOB`)
 
-    // Run 6 months x 2 entities x 2 (income + expense) = 24 queries in parallel
-    const results = await Promise.all(months.flatMap(m => {
-      const s = `${m.year}-${String(m.month).padStart(2,'0')}-01`
-      const e = `${m.year}-${String(m.month).padStart(2,'0')}-${new Date(m.year, m.month, 0).getDate()}`
-      return [
-        safe(() => cdataQuery('JAWS', `SELECT SUM([AccountTotal]) AS Income FROM [MYOB_POWERBI_JAWS].[MYOB].[ProfitAndLossSummaryReport] WHERE [AccountDisplayID] LIKE '4-%' AND [StartDate] = '${s}' AND [EndDate] = '${e}'`)),
-        safe(() => cdataQuery('VPS',  `SELECT SUM([AccountTotal]) AS Income FROM [MYOB_POWERBI_VPS].[MYOB].[ProfitAndLossSummaryReport]  WHERE [AccountDisplayID] LIKE '4-%' AND [StartDate] = '${s}' AND [EndDate] = '${e}'`)),
-        safe(() => cdataQuery('JAWS', `SELECT SUM([AccountTotal]) AS Expenses FROM [MYOB_POWERBI_JAWS].[MYOB].[ProfitAndLossSummaryReport] WHERE ([AccountDisplayID] LIKE '5-%' OR [AccountDisplayID] LIKE '6-%') AND [StartDate] = '${s}' AND [EndDate] = '${e}'`)),
-        safe(() => cdataQuery('VPS',  `SELECT SUM([AccountTotal]) AS Expenses FROM [MYOB_POWERBI_VPS].[MYOB].[ProfitAndLossSummaryReport]  WHERE ([AccountDisplayID] LIKE '5-%' OR [AccountDisplayID] LIKE '6-%') AND [StartDate] = '${s}' AND [EndDate] = '${e}'`)),
-      ]
-    }))
+    // Batch A: JAWS critical (3 queries)
+    const [jawsRecent, jawsOpen, jawsTopCust] = await Promise.all([
+      safe(() => cdataQuery('JAWS', `SELECT TOP 20 [Number],[Date],[CustomerName],[TotalAmount],[BalanceDueAmount],[Status],[InvoiceType] FROM [MYOB_POWERBI_JAWS].[MYOB].[SaleInvoices] ORDER BY [Date] DESC`)),
+      safe(() => cdataQuery('JAWS', `SELECT [Number],[Date],[CustomerName],[TotalAmount],[BalanceDueAmount],[Status] FROM [MYOB_POWERBI_JAWS].[MYOB].[SaleInvoices] WHERE [Status] = 'Open' ORDER BY [BalanceDueAmount] DESC`)),
+      safe(() => cdataQuery('JAWS', `SELECT [CustomerName], SUM([TotalAmount]) AS TotalRevenue, COUNT(*) AS InvoiceCount FROM [MYOB_POWERBI_JAWS].[MYOB].[SaleInvoices] WHERE [Date] >= '${start}' AND [Date] <= '${end}' AND [TotalAmount] > 0 GROUP BY [CustomerName] ORDER BY TotalRevenue DESC LIMIT 10`)),
+    ])
 
-    const v = (r: any) => { try { return r?.results?.[0]?.rows?.[0]?.[0] ?? 0 } catch { return 0 } }
+    // Batch B: VPS critical (3 queries)
+    const [vpsRecent, vpsOpen, vpsTopCust] = await Promise.all([
+      safe(() => cdataQuery('VPS', `SELECT TOP 20 [Number],[Date],[CustomerName],[TotalAmount],[BalanceDueAmount],[Status],[InvoiceType] FROM [MYOB_POWERBI_VPS].[MYOB].[SaleInvoices] ORDER BY [Date] DESC`)),
+      safe(() => cdataQuery('VPS', `SELECT [Number],[Date],[CustomerName],[TotalAmount],[BalanceDueAmount],[Status] FROM [MYOB_POWERBI_VPS].[MYOB].[SaleInvoices] WHERE [Status] = 'Open' ORDER BY [BalanceDueAmount] DESC`)),
+      safe(() => cdataQuery('VPS', `SELECT [CustomerName], SUM([TotalAmount]) AS TotalRevenue, COUNT(*) AS InvoiceCount FROM [MYOB_POWERBI_VPS].[MYOB].[SaleInvoices] WHERE [Date] >= '${start}' AND [Date] <= '${end}' AND [TotalAmount] > 0 GROUP BY [CustomerName] ORDER BY TotalRevenue DESC LIMIT 10`)),
+    ])
+
+    // Batch C: P&L both entities (2 queries)
+    const [jawsPnL, vpsPnL] = await Promise.all([
+      safe(() => cdataQuery('JAWS', `SELECT [AccountName],[AccountDisplayID],[AccountTotal] FROM [MYOB_POWERBI_JAWS].[MYOB].[ProfitAndLossSummaryReport] WHERE [StartDate] = '${start}' AND [EndDate] = '${end}' ORDER BY [AccountDisplayID]`)),
+      safe(() => cdataQuery('VPS',  `SELECT [AccountName],[AccountDisplayID],[AccountTotal] FROM [MYOB_POWERBI_VPS].[MYOB].[ProfitAndLossSummaryReport]  WHERE [StartDate] = '${start}' AND [EndDate] = '${end}' ORDER BY [AccountDisplayID]`)),
+    ])
+
+    // Batch D: Bills + stock (3 queries)
+    const [jawsBills, vpsBills, jawsStockSum] = await Promise.all([
+      safe(() => cdataQuery('JAWS', `SELECT TOP 15 [Number],[Date],[SupplierName],[TotalAmount],[BalanceDueAmount],[Status] FROM [MYOB_POWERBI_JAWS].[MYOB].[PurchaseBills] WHERE [Status] = 'Open' ORDER BY [BalanceDueAmount] DESC`)),
+      safe(() => cdataQuery('VPS',  `SELECT TOP 10 [Number],[Date],[SupplierName],[TotalAmount],[BalanceDueAmount],[Status] FROM [MYOB_POWERBI_VPS].[MYOB].[PurchaseBills]  WHERE [Status] = 'Open' ORDER BY [BalanceDueAmount] DESC`)),
+      safe(() => cdataQuery('JAWS', `SELECT SUM([CurrentValue]) AS TotalStockValue, COUNT(*) AS ItemCount FROM [MYOB_POWERBI_JAWS].[MYOB].[Items]`)),
+    ])
 
     const result = {
-      trendLabels: months.map(m => m.label),
-      jawsIncome6:  months.map((_, i) => v(results[i * 4])),
-      vpsIncome6:   months.map((_, i) => v(results[i * 4 + 1])),
-      jawsExpense6: months.map((_, i) => v(results[i * 4 + 2])),
-      vpsExpense6:  months.map((_, i) => v(results[i * 4 + 3])),
+      fetchedAt: new Date().toISOString(),
+      period: { start, end },
+      jaws: { recentInvoices: jawsRecent, openInvoices: jawsOpen, topCustomers: jawsTopCust, pnl: jawsPnL, stockItems: null, stockSummary: jawsStockSum, openBills: jawsBills },
+      vps:  { recentInvoices: vpsRecent,  openInvoices: vpsOpen,  topCustomers: vpsTopCust,  pnl: vpsPnL,  openBills: vpsBills, stockSummary: null },
     }
 
     setCache(cacheKey, result)
