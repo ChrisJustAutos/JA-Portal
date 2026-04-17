@@ -389,14 +389,22 @@ export default function Portal() {
       }
     }
 
-  const load=useCallback(async(isRefresh=false)=>{
+  const load=useCallback(async(isRefresh=false,retryCount=0)=>{
     if(isRefresh)setRefreshing(true)
     try{
       const refreshParam = isRefresh ? '&refresh=true' : ''
-      // Step 1: Load core data fast (invoices, P&L, customers)
+      // Step 1: Load core data (invoices, P&L, customers)
       const r=await fetch(`/api/dashboard?${activeDateParams}${refreshParam}`)
       if(r.status===401){router.push('/login');return}
-      if(!r.ok)throw new Error('Failed to load data')
+      if(!r.ok){
+        // Auto-retry once on timeout/failure
+        if(retryCount<1){
+          console.log('Dashboard failed, retrying...')
+          return load(isRefresh,retryCount+1)
+        }
+        const errData = await r.json().catch(()=>null)
+        throw new Error(errData?.error||'Failed to load MYOB data — please click Refresh')
+      }
       const d=await r.json()
       // Set defaults for trend data so charts render immediately
       d.trendLabels=['Nov 25','Dec 25','Jan 26','Feb 26','Mar 26','Apr 26']
@@ -494,7 +502,12 @@ export default function Portal() {
       <div style={{color:T.text3}}>Loading live MYOB data…</div>
       <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
     </div>
-    if(error) return <div style={{background:'rgba(240,78,78,0.1)',border:'1px solid rgba(240,78,78,0.2)',borderRadius:10,padding:20,color:T.red}}>Error: {error}</div>
+    if(error) return <div style={{background:'rgba(240,78,78,0.1)',border:'1px solid rgba(240,78,78,0.2)',borderRadius:10,padding:20,color:T.red}}>
+      <div style={{marginBottom:10}}>Error: {error}</div>
+      <button onClick={()=>{setError('');setLoading(true);load()}} style={{padding:'6px 16px',borderRadius:6,border:`1px solid ${T.blue}`,background:T.blue,color:'#fff',fontSize:12,cursor:'pointer',fontFamily:'inherit'}}>
+        Retry now
+      </button>
+    </div>
 
     // ── OVERVIEW ────────────────────────────────────────────
     if(section==='overview') return <div style={{display:'flex',flexDirection:'column',gap:14}}>
