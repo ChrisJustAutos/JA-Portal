@@ -6,7 +6,7 @@ import { cdataQuery } from '../../lib/cdata'
 export const config = { maxDuration: 30 }
 
 async function safe(fn: () => Promise<any>) {
-  try { return await fn() } catch(e: any) { console.error('invoice-detail:', e.message?.substring(0,80)); return null }
+  try { return await fn() } catch(e: any) { console.error('invoice-detail:', e.message?.substring(0,160)); return null }
 }
 
 // Flatten CData result shape {results:[{schema:[{columnName}], rows:[[...]]}]} into array of objects
@@ -34,10 +34,12 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
     const safeNumber = invoiceNumber.replace(/'/g, "''")
 
     // Step 1: fetch the invoice header to get its UUID
+    // NOTE: [Terms] doesn't exist on SaleInvoices — use TermsDueDate/TermsPaymentIsDue instead
     const invoiceHeaderRaw: any = await safe(() => cdataQuery(entity, `
       SELECT [ID],[Number],[Date],[CustomerName],[TotalAmount],[BalanceDueAmount],[Status],
              [Subtotal],[TotalTax],[InvoiceType],[Comment],[ShipToAddress],
-             [CustomerPurchaseOrderNumber],[Terms]
+             [CustomerPurchaseOrderNumber],[TermsDueDate],[TermsPaymentIsDue],
+             [SalespersonName],[JournalMemo],[Freight],[LastPaymentDate]
       FROM [${catalog}].[MYOB].[SaleInvoices]
       WHERE [Number] = '${safeNumber}'
     `))
@@ -58,8 +60,9 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
       lineItemsArr = flatten(lineItemsRaw)
     }
 
+    res.setHeader('Cache-Control', 'no-store, max-age=0')
     res.status(200).json({
-      invoice,          // flat object (or null)
+      invoice,          // flat object (or null if not found)
       lineItems: lineItemsArr,   // flat array of line-item objects
     })
   })
