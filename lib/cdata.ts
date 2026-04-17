@@ -110,7 +110,7 @@ export function currentMonthRange() {
   const start = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().split('T')[0]
   const end   = new Date(now.getFullYear(), now.getMonth() + 1, 0).toISOString().split('T')[0]
   return { start, end }
-
+}
       // AU Financial Year helper - FY ends 30 June
 // e.g. FY2026 = 1 Jul 2025 to 30 Jun 2026
 export function currentFYRange() {
