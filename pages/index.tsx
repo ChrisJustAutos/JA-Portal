@@ -71,16 +71,16 @@ function BarRow({name,value,max,color=T.blue,extra}:{name:string;value:number;ma
     {extra&&<span style={{fontSize:10,color:T.text3,fontFamily:'monospace',flexShrink:0}}>{extra}</span>}
   </div>
 }
-function InvoiceTable({rows,accent,onOpenInvoiceClick}:{rows:Invoice[];accent:string;onOpenInvoiceClick?:()=>void}) {
+function InvoiceTable({rows,accent,entity,onInvoiceClick,onOpenInvoiceClick}:{rows:Invoice[];accent:string;entity?:string;onInvoiceClick?:(inv:Invoice,entity:string)=>void;onOpenInvoiceClick?:()=>void}) {
   return <div style={{overflowX:'auto'}}>
     <table style={{width:'100%',borderCollapse:'collapse'}}>
       <thead><tr>{['Invoice','Date','Customer','Total','Balance','Status'].map(h=>(
         <th key={h} style={{fontSize:10,color:T.text3,textTransform:'uppercase',letterSpacing:'0.07em',padding:'0 8px 10px',textAlign:['Total','Balance'].includes(h)?'right':'left',fontWeight:500,whiteSpace:'nowrap'}}>{h}</th>
       ))}</tr></thead>
       <tbody>{rows.map((r,i)=>(
-        <tr key={i} style={{borderTop:`1px solid ${T.border}`,cursor:r.Status==='Open'&&onOpenInvoiceClick?'pointer':'default',transition:'background 0.1s'}}
-          onClick={r.Status==='Open'&&onOpenInvoiceClick?onOpenInvoiceClick:undefined}
-          onMouseEnter={e=>{if(r.Status==='Open'&&onOpenInvoiceClick)(e.currentTarget as HTMLElement).style.background='rgba(255,255,255,0.03)'}}
+        <tr key={i} style={{borderTop:`1px solid ${T.border}`,cursor:'pointer',transition:'background 0.1s'}}
+          onClick={()=>onInvoiceClick?onInvoiceClick(r,entity||'JAWS'):onOpenInvoiceClick?.()}
+          onMouseEnter={e=>{(e.currentTarget as HTMLElement).style.background='rgba(255,255,255,0.03)'}}
           onMouseLeave={e=>{(e.currentTarget as HTMLElement).style.background='transparent'}}
         >
           <td style={{fontSize:12,color:r.Status==='Open'?T.amber:accent,fontFamily:'monospace',padding:'7px 8px',fontWeight:r.Status==='Open'?500:400}}>{r.Number}</td>
@@ -93,6 +93,145 @@ function InvoiceTable({rows,accent,onOpenInvoiceClick}:{rows:Invoice[];accent:st
       ))}</tbody>
     </table>
   </div>
+}
+
+// ── Invoice Detail Modal ─────────────────────────────────────
+interface LineItem { Description:string;Total:number;Quantity:number;UnitPrice:number;TaxCode:string;AccountName:string;ItemName:string }
+function InvoiceDetailModal({invoice,entity,onClose}:{invoice:Invoice;entity:string;onClose:()=>void}) {
+  const [lineItems,setLineItems]=useState<LineItem[]>([])
+  const [headerData,setHeaderData]=useState<any>(null)
+  const [loading,setLoading]=useState(true)
+  const [error,setError]=useState('')
+
+  useEffect(()=>{
+    async function fetchDetail() {
+      try {
+        const r=await fetch(`/api/invoice-detail?number=${encodeURIComponent(invoice.Number)}&entity=${entity}`)
+        if(!r.ok) throw new Error('Failed to load invoice detail')
+        const d=await r.json()
+        setLineItems(rowsToObjects(d.lineItems) as LineItem[])
+        const headers=rowsToObjects(d.invoice)
+        if(headers.length>0) setHeaderData(headers[0])
+      } catch(e:any) { setError(e.message) }
+      setLoading(false)
+    }
+    fetchDetail()
+  },[invoice.Number,entity])
+
+  const paid = invoice.TotalAmount - (invoice.BalanceDueAmount||0)
+
+  return (
+    <div style={{position:'fixed',inset:0,zIndex:100,display:'flex',alignItems:'center',justifyContent:'center'}}
+      onClick={onClose}>
+      {/* Backdrop */}
+      <div style={{position:'absolute',inset:0,background:'rgba(0,0,0,0.6)',backdropFilter:'blur(4px)'}}/>
+      {/* Modal */}
+      <div style={{position:'relative',background:T.bg2,border:`1px solid ${T.border2}`,borderRadius:12,width:700,maxWidth:'90vw',maxHeight:'85vh',overflow:'hidden',display:'flex',flexDirection:'column',boxShadow:'0 20px 60px rgba(0,0,0,0.5)'}}
+        onClick={e=>e.stopPropagation()}>
+        {/* Header */}
+        <div style={{padding:'16px 20px',borderBottom:`1px solid ${T.border}`,display:'flex',alignItems:'center',gap:12}}>
+          <div style={{flex:1}}>
+            <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:4}}>
+              <span style={{fontSize:16,fontWeight:600,fontFamily:'monospace',color:entity==='JAWS'?T.blue:T.teal}}>{invoice.Number}</span>
+              <Tag color={invoice.Status==='Open'?T.amber:T.green}>{invoice.Status}</Tag>
+              <Tag color={entity==='JAWS'?T.blue:T.teal}>{entity}</Tag>
+            </div>
+            <div style={{fontSize:13,color:T.text2}}>{invoice.CustomerName}</div>
+          </div>
+          <button onClick={onClose} style={{width:28,height:28,borderRadius:6,border:`1px solid ${T.border}`,background:T.bg3,color:T.text3,fontSize:14,cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center'}}>✕</button>
+        </div>
+
+        {/* Summary row */}
+        <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:1,background:T.border}}>
+          {[
+            {label:'Date',value:fmtDate(invoice.Date)},
+            {label:'Total',value:fmtFull(invoice.TotalAmount),color:T.text},
+            {label:'Paid',value:fmtFull(paid),color:T.green},
+            {label:'Balance Due',value:invoice.BalanceDueAmount>0?fmtFull(invoice.BalanceDueAmount):'$0.00',color:invoice.BalanceDueAmount>0?T.amber:T.green},
+          ].map((s,i)=>(
+            <div key={i} style={{background:T.bg3,padding:'10px 14px'}}>
+              <div style={{fontSize:10,color:T.text3,textTransform:'uppercase',letterSpacing:'0.07em',marginBottom:4}}>{s.label}</div>
+              <div style={{fontSize:15,fontWeight:500,fontFamily:'monospace',color:s.color||T.text2}}>{s.value}</div>
+            </div>
+          ))}
+        </div>
+
+        {/* Extra header info */}
+        {headerData&&(headerData.CustomerPurchaseOrderNumber||headerData.Comment||headerData.Terms)&&(
+          <div style={{padding:'10px 20px',borderBottom:`1px solid ${T.border}`,display:'flex',gap:16,flexWrap:'wrap'}}>
+            {headerData.CustomerPurchaseOrderNumber&&<div style={{fontSize:11,color:T.text3}}>PO: <span style={{color:T.text2,fontFamily:'monospace'}}>{headerData.CustomerPurchaseOrderNumber}</span></div>}
+            {headerData.Terms&&<div style={{fontSize:11,color:T.text3}}>Terms: <span style={{color:T.text2}}>{headerData.Terms}</span></div>}
+            {headerData.Comment&&<div style={{fontSize:11,color:T.text3}}>Note: <span style={{color:T.text2}}>{headerData.Comment}</span></div>}
+          </div>
+        )}
+
+        {/* Content */}
+        <div style={{flex:1,overflowY:'auto',padding:'0 20px 16px'}}>
+          {loading&&<div style={{display:'flex',alignItems:'center',justifyContent:'center',padding:40,gap:10}}>
+            <span style={{fontSize:20,animation:'spin 1s linear infinite',color:T.text3}}>⟳</span>
+            <span style={{color:T.text3,fontSize:13}}>Loading line items…</span>
+            <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
+          </div>}
+
+          {error&&<div style={{color:T.red,padding:20,fontSize:13}}>Error: {error}</div>}
+
+          {!loading&&!error&&lineItems.length>0&&(
+            <div style={{marginTop:14}}>
+              <div style={{fontSize:11,fontWeight:600,color:T.text3,textTransform:'uppercase',letterSpacing:'0.08em',marginBottom:10}}>Line Items</div>
+              <table style={{width:'100%',borderCollapse:'collapse'}}>
+                <thead><tr>{['Item/Description','Qty','Unit Price','Tax','Total'].map(h=>(
+                  <th key={h} style={{fontSize:10,color:T.text3,textTransform:'uppercase',letterSpacing:'0.07em',padding:'0 8px 8px',textAlign:['Qty','Unit Price','Tax','Total'].includes(h)?'right':'left',fontWeight:500}}>{h}</th>
+                ))}</tr></thead>
+                <tbody>{lineItems.map((li,i)=>(
+                  <tr key={i} style={{borderTop:`1px solid ${T.border}`}}>
+                    <td style={{fontSize:12,color:T.text,padding:'7px 8px',maxWidth:280}}>
+                      {li.ItemName&&<div style={{color:entity==='JAWS'?T.blue:T.teal,fontSize:11,fontFamily:'monospace',marginBottom:2}}>{li.ItemName}</div>}
+                      <div style={{color:T.text2,fontSize:12}}>{li.Description||'—'}</div>
+                      {li.AccountName&&<div style={{color:T.text3,fontSize:10,marginTop:1}}>{li.AccountName}</div>}
+                    </td>
+                    <td style={{fontSize:12,fontFamily:'monospace',color:T.text2,padding:'7px 8px',textAlign:'right'}}>{li.Quantity!=null?li.Quantity:'—'}</td>
+                    <td style={{fontSize:12,fontFamily:'monospace',color:T.text2,padding:'7px 8px',textAlign:'right'}}>{li.UnitPrice!=null?fmtFull(li.UnitPrice):'—'}</td>
+                    <td style={{fontSize:11,fontFamily:'monospace',color:T.text3,padding:'7px 8px',textAlign:'right'}}>{li.TaxCode||'—'}</td>
+                    <td style={{fontSize:12,fontFamily:'monospace',color:T.text,padding:'7px 8px',textAlign:'right',fontWeight:500}}>{fmtFull(li.Total)}</td>
+                  </tr>
+                ))}</tbody>
+                <tfoot>
+                  <tr style={{borderTop:`2px solid ${T.border2}`}}>
+                    <td colSpan={4} style={{fontSize:11,fontWeight:600,color:T.text3,padding:'8px',textAlign:'right',textTransform:'uppercase'}}>Total</td>
+                    <td style={{fontSize:13,fontWeight:600,fontFamily:'monospace',color:T.text,padding:'8px',textAlign:'right'}}>{fmtFull(invoice.TotalAmount)}</td>
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
+          )}
+
+          {!loading&&!error&&lineItems.length===0&&(
+            <div style={{color:T.text3,padding:30,textAlign:'center',fontSize:13}}>No line items found for this invoice.</div>
+          )}
+
+          {/* Payment summary */}
+          {!loading&&(
+            <div style={{marginTop:16,padding:'12px 14px',background:T.bg3,borderRadius:8}}>
+              <div style={{fontSize:11,fontWeight:600,color:T.text3,textTransform:'uppercase',letterSpacing:'0.08em',marginBottom:8}}>Payment Summary</div>
+              <div style={{display:'flex',justifyContent:'space-between',marginBottom:4}}>
+                <span style={{fontSize:12,color:T.text2}}>Invoice Total</span>
+                <span style={{fontSize:12,fontFamily:'monospace',color:T.text}}>{fmtFull(invoice.TotalAmount)}</span>
+              </div>
+              <div style={{display:'flex',justifyContent:'space-between',marginBottom:4}}>
+                <span style={{fontSize:12,color:T.green}}>Amount Paid</span>
+                <span style={{fontSize:12,fontFamily:'monospace',color:T.green}}>{fmtFull(paid)}</span>
+              </div>
+              <div style={{height:1,background:T.border,margin:'6px 0'}}/>
+              <div style={{display:'flex',justifyContent:'space-between'}}>
+                <span style={{fontSize:12,fontWeight:600,color:invoice.BalanceDueAmount>0?T.amber:T.green}}>Balance Due</span>
+                <span style={{fontSize:13,fontWeight:600,fontFamily:'monospace',color:invoice.BalanceDueAmount>0?T.amber:T.green}}>{invoice.BalanceDueAmount>0?fmtFull(invoice.BalanceDueAmount):'$0.00 — Paid'}</span>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  )
 }
 function BillTable({rows,accent}:{rows:Bill[];accent:string}) {
   return <div style={{overflowX:'auto'}}>
@@ -347,6 +486,9 @@ export default function Portal() {
   const [dateLoading,setDateLoading]=useState(false)
   const [error,setError]=useState('')
   const [lastRefresh,setLastRefresh]=useState<Date|null>(null)
+  // Invoice detail modal
+  const [selectedInvoice,setSelectedInvoice]=useState<{invoice:Invoice;entity:string}|null>(null)
+  const openInvoiceDetail=(inv:Invoice,entity:string)=>setSelectedInvoice({invoice:inv,entity})
     // FY date range — AU financial year (1 Jul → 30 Jun)
     const currentFY = new Date().getMonth() >= 6 ? new Date().getFullYear()+1 : new Date().getFullYear()
     const [fyYear, setFyYear] = useState(currentFY)
@@ -616,7 +758,7 @@ export default function Portal() {
           {jCust.slice(0,8).map((c,i)=><BarRow key={i} name={c.CustomerName?.replace(' (Tuning)','').replace(' (Tuning 1)','').substring(0,26)} value={c.TotalRevenue} max={jCust[0]?.TotalRevenue||1} extra={`${c.InvoiceCount}inv`}/>)}
         </Card>
       </div>
-      <Card><PTitle>Recent invoices — JAWS</PTitle><InvoiceTable rows={jInv} accent={T.blue} onOpenInvoiceClick={()=>setSection('invoices')}/></Card>
+      <Card><PTitle>Recent invoices — JAWS</PTitle><InvoiceTable rows={jInv} accent={T.blue} entity="JAWS" onInvoiceClick={openInvoiceDetail}/></Card>
     </div>
 
     // ── VPS ─────────────────────────────────────────────────
@@ -637,7 +779,7 @@ export default function Portal() {
           {vCust.filter(c=>!c.CustomerName?.includes('Just Autos Wholesale')).slice(0,8).map((c,i)=><BarRow key={i} name={c.CustomerName?.substring(0,26)} value={c.TotalRevenue} max={vCust[1]?.TotalRevenue||1} color={T.teal} extra={`${c.InvoiceCount}inv`}/>)}
         </Card>
       </div>
-      <Card><PTitle>Recent invoices — VPS</PTitle><InvoiceTable rows={vInv} accent={T.teal} onOpenInvoiceClick={()=>setSection('invoices')}/></Card>
+      <Card><PTitle>Recent invoices — VPS</PTitle><InvoiceTable rows={vInv} accent={T.teal} entity="VPS" onInvoiceClick={openInvoiceDetail}/></Card>
     </div>
 
     // ── INVOICES ─────────────────────────────────────────────
@@ -648,8 +790,8 @@ export default function Portal() {
         <KPI label="Combined"         value={fmt(jOut+vOut)} sub="Total receivable" subColor={T.red}/>
         <KPI label="Open Count"       value={String(jOpen.length+vOpen.length)} sub="Both entities"/>
       </div>
-      <Card><PTitle>JAWS — Recent invoices <Tag color={T.blue}>Live MYOB</Tag></PTitle><InvoiceTable rows={jInv} accent={T.blue} onOpenInvoiceClick={()=>setSection('invoices')}/></Card>
-      <Card><PTitle>VPS — Recent invoices <Tag color={T.teal}>Live MYOB</Tag></PTitle><InvoiceTable rows={vInv}  accent={T.teal} onOpenInvoiceClick={()=>setSection('invoices')}/></Card>
+      <Card><PTitle>JAWS — Recent invoices <Tag color={T.blue}>Live MYOB</Tag></PTitle><InvoiceTable rows={jInv} accent={T.blue} entity="JAWS" onInvoiceClick={openInvoiceDetail}/></Card>
+      <Card><PTitle>VPS — Recent invoices <Tag color={T.teal}>Live MYOB</Tag></PTitle><InvoiceTable rows={vInv}  accent={T.teal} entity="VPS" onInvoiceClick={openInvoiceDetail}/></Card>
     </div>
 
     // ── P&L ──────────────────────────────────────────────────
@@ -850,6 +992,7 @@ export default function Portal() {
           </div>
         </div>
       </div>
+      {selectedInvoice&&<InvoiceDetailModal invoice={selectedInvoice.invoice} entity={selectedInvoice.entity} onClose={()=>setSelectedInvoice(null)}/>}
     </>
   )
 }
