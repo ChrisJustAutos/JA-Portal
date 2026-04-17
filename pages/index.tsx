@@ -37,6 +37,7 @@ const T = {
   text:'#e8eaf0', text2:'#8b90a0', text3:'#545968',
   blue:'#4f8ef7', teal:'#2dd4bf', green:'#34c77b',
   amber:'#f5a623', red:'#f04e4e', purple:'#a78bfa',
+  accent:'#4f8ef7',
 }
 
 // ── Shared UI components ─────────────────────────────────────
@@ -770,9 +771,9 @@ export default function Portal() {
                                                                             color:fyYear===y?'#fff':T.text2,
                                                                             borderColor:fyYear===y?T.accent:T.border}}>
                           {`FY${y}`}{y===currentFY?<span style={{width:4,height:4,borderRadius:'50%',background:T.green,display:'inline-block',marginLeft:4,verticalAlign:'middle'}}/>:null}
-                        </button>button>
+                        </button>
                       ))}
-                        </div>div>
+                        </div>
           </div>
           <div style={{flex:1,display:'flex',overflow:'hidden'}}>
             <div style={{flex:1,padding:20,overflowY:'auto'}}>{renderSection()}</div>
