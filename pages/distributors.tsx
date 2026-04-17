@@ -4,14 +4,22 @@ import Head from 'next/head'
 import Script from 'next/script'
 import { useRouter } from 'next/router'
 
-interface LineItem { CustomerName:string;Date:string;AccountName:string;AccountDisplayID:string;Description:string;Total:number;ItemName:string|null }
-interface DistData { fetchedAt:string;lineItems:LineItem[];trendLabels:string[];monthlyTotals:Record<string,number>;period:{start:string;end:string} }
-
-function getCategory(aid:string,aname:string):'Tuning'|'Oil'|'Parts'{
-  if(aid?.startsWith('4-19')||aid==='4-1905'||aname?.toLowerCase().includes('tuning')||aname?.toLowerCase().includes('remap')||aname?.toLowerCase().includes('multimap')||aname?.toLowerCase().includes('easy lock')||aname?.toLowerCase().includes('multi map'))return 'Tuning'
-  if(aid==='4-1060'||aname?.toLowerCase().includes('oil'))return 'Oil'
-  return 'Parts'
+interface LineItem {
+  CustomerName: string
+  Date: string
+  AccountDisplayID: string
+  Description: string
+  Total: number
+  bucket: 'Tuning' | 'Parts' | 'Oil'
 }
+interface DistData {
+  fetchedAt: string
+  lineItems: LineItem[]
+  trendLabels: string[]
+  monthlyTotals: Record<string, number>
+  period: { start: string; end: string }
+}
+
 function normName(n:string){return n?.replace(' (Tuning)','').replace(' (Tuning 1)','').replace(' (Tuning2)','').trim()||''}
 
 const fmtD=(n:number)=>n==null?'$0':'$'+Math.round(n).toLocaleString('en-AU')
@@ -54,7 +62,37 @@ export default function DistributorReport(){
       if(!r.ok)throw new Error('Failed to load distributor data')
       const d=await r.json()
       if(d.error)throw new Error(d.error)
-      setData(d);setError('');setLastRefresh(new Date());setDateLoading(false)
+
+      // Flatten distributors[].lineItems[] into a single array,
+      // injecting the distributor name onto each line
+      const flatLineItems: LineItem[] = (d.distributors || []).flatMap((dist: any) =>
+        (dist.lineItems || []).map((li: any) => ({
+          CustomerName: dist.customerBase,
+          Date: li.date,
+          AccountDisplayID: li.accountCode,
+          Description: li.description,
+          Total: li.amountExGst,
+          bucket: li.bucket,
+        }))
+      )
+
+      const trendLabels: string[] = (d.monthlyNational || []).map((m: any) => m.ym)
+      const monthlyTotals: Record<string, number> = Object.fromEntries(
+        (d.monthlyNational || []).map((m: any) => [m.ym, m.amount])
+      )
+
+      const normalised: DistData = {
+        fetchedAt: new Date().toISOString(),
+        lineItems: flatLineItems,
+        trendLabels,
+        monthlyTotals,
+        period: {
+          start: activeDateParams.match(/startDate=([^&]+)/)?.[1] || '',
+          end: activeDateParams.match(/endDate=([^&]+)/)?.[1] || '',
+        },
+      }
+
+      setData(normalised);setError('');setLastRefresh(new Date());setDateLoading(false)
     }catch(e:any){setError(e.message);setDateLoading(false)}
     setLoading(false);if(isRefresh)setRefreshing(false)
   },[router,activeDateParams])
@@ -69,9 +107,9 @@ export default function DistributorReport(){
   interface DS{name:string;tuning:number;oil:number;parts:number;total:number}
   const distSummaries:DS[]=allDists.map(name=>{
     const dl=lines.filter(l=>normName(l.CustomerName)===name)
-    const tuning=dl.filter(l=>getCategory(l.AccountDisplayID,l.AccountName)==='Tuning').reduce((s,l)=>s+l.Total,0)
-    const oil=dl.filter(l=>getCategory(l.AccountDisplayID,l.AccountName)==='Oil').reduce((s,l)=>s+l.Total,0)
-    const parts=dl.filter(l=>getCategory(l.AccountDisplayID,l.AccountName)==='Parts').reduce((s,l)=>s+l.Total,0)
+    const tuning=dl.filter(l=>l.bucket==='Tuning').reduce((s,l)=>s+l.Total,0)
+    const oil=dl.filter(l=>l.bucket==='Oil').reduce((s,l)=>s+l.Total,0)
+    const parts=dl.filter(l=>l.bucket==='Parts').reduce((s,l)=>s+l.Total,0)
     return{name,tuning,oil,parts,total:tuning+oil+parts}
   }).filter(d=>d.total>0).sort((a,b)=>b.total-a.total)
 
@@ -81,7 +119,7 @@ export default function DistributorReport(){
 
   // Detailed line items
   const detailedByDesc:Record<string,{qty:number;total:number}>={}
-  filtered.filter(l=>l.Total>0).forEach(l=>{const k=l.Description||l.AccountName;if(!detailedByDesc[k])detailedByDesc[k]={qty:0,total:0};detailedByDesc[k].qty+=1;detailedByDesc[k].total+=l.Total})
+  filtered.filter(l=>l.Total>0).forEach(l=>{const k=l.Description||'';if(!detailedByDesc[k])detailedByDesc[k]={qty:0,total:0};detailedByDesc[k].qty+=1;detailedByDesc[k].total+=l.Total})
   const detailedRows=Object.entries(detailedByDesc).sort((a,b)=>b[1].total-a[1].total)
 
   const trendLabels=data?.trendLabels||[]
@@ -95,7 +133,7 @@ export default function DistributorReport(){
   useEffect(()=>{
     if(!barRef.current||!(window as any).Chart||loading)return
     if(barInst.current)barInst.current.destroy()
-    const tunLines=filtered.filter(l=>getCategory(l.AccountDisplayID,l.AccountName)==='Tuning')
+    const tunLines=filtered.filter(l=>l.bucket==='Tuning')
     const byDesc:Record<string,number>={};tunLines.forEach(l=>{const k=l.Description?.substring(0,30)||'Other';byDesc[k]=(byDesc[k]||0)+l.Total})
     const sorted=Object.entries(byDesc).sort((a,b)=>b[1]-a[1]).slice(0,10)
     barInst.current=new(window as any).Chart(barRef.current,{type:'bar',data:{labels:sorted.map(s=>s[0]),datasets:[{data:sorted.map(s=>Math.round(s[1])),backgroundColor:'#4f8ef7',borderRadius:4,borderSkipped:false}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false},tooltip:{callbacks:{label:(ctx:any)=>`$${ctx.raw.toLocaleString()}`}}},scales:{x:{grid:{color:'rgba(255,255,255,0.05)'},ticks:{color:T.text3,font:{size:10},maxRotation:45}},y:{grid:{color:'rgba(255,255,255,0.05)'},ticks:{color:T.text3,font:{size:11},callback:(v:any)=>'$'+v}}}}})
