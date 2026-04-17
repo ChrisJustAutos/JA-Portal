@@ -22,9 +22,9 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
       ])
       const INTL = new Set(['kanoo motors wll','karyokuae','us cruiserz'])
 
-      // Query 1: invoices in date range
+      // Query 1: invoices in date range — now includes CustomerPurchaseOrderNumber (holds VIN on tuning sales)
       const invRes: any = await cdataQuery('JAWS',
-        "SELECT [ID],[Number],[Date],[CustomerName] FROM [MYOB_POWERBI_JAWS].[MYOB].[SaleInvoices] WHERE [Date] >= '" + start + "' AND [Date] <= '" + end + "'"
+        "SELECT [ID],[Number],[Date],[CustomerName],[CustomerPurchaseOrderNumber] FROM [MYOB_POWERBI_JAWS].[MYOB].[SaleInvoices] WHERE [Date] >= '" + start + "' AND [Date] <= '" + end + "'"
       )
       const invCols: string[] = invRes?.results?.[0]?.schema?.map((c: any) => c.columnName) || []
       const invRows: any[][] = invRes?.results?.[0]?.rows || []
@@ -98,6 +98,7 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
           amountExGst: amt,
           bucket: bucket,
           accountCode: acc,
+          poNumber: inv.CustomerPurchaseOrderNumber || '',
         })
       }
 
