@@ -5,23 +5,27 @@ import { cdataQuery, parseDateRange } from '../../lib/cdata'
 
 export const config = { maxDuration: 60 }
 
-// cdataQuery returns: { results: [{ schema: [{columnName}...], rows: [[val,val]...] }] }
 function parseRows(result: any): Record<string, any>[] {
   if (!result) return []
-  const r = result?.results?.[0]
-  if (!r?.schema || !r?.rows) return []
-  return r.rows.map((row: any[]) => {
-    const o: any = {}
-    r.schema.forEach((c: any, i: number) => { o[c.columnName] = row[i] })
-    return o
-  })
+  try {
+    const r = result?.results?.[0]
+    if (r?.schema && r?.rows) {
+      return r.rows.map((row: any[]) => {
+        const o: any = {}
+        r.schema.forEach((c: any, i: number) => { o[c.columnName] = row[i] })
+        return o
+      })
+    }
+    if (Array.isArray(result?.value)) return result.value
+    if (Array.isArray(result)) return result
+  } catch (e) { console.error('parseRows error:', e) }
+  return []
 }
 
 async function safe(fn: () => Promise<any>) {
   try { return await fn() } catch (e: any) { console.error('dist:', e.message?.substring(0, 120)); return null }
 }
 
-// Cache
 const CACHE_TTL = 3 * 60 * 1000
 const cache = new Map<string, { data: any; ts: number }>()
 function getC(k: string) { const e = cache.get(k); if (!e) return null; if (Date.now() - e.ts > CACHE_TTL) { cache.delete(k); return null }; return e.data }
@@ -51,7 +55,7 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
       const ck = `dist:${start}:${end}`
       if (!forceRefresh) { const c = getC(ck); if (c) return res.status(200).json(c) }
 
-      // Step 1: Get all distributor invoices in the date range
+      // Get all distributor invoices in date range
       const invRaw = await safe(() => cdataQuery('JAWS', `
         SELECT [ID], [CustomerName], [Date], [TotalAmount], [Number]
         FROM [MYOB_POWERBI_JAWS].[MYOB].[SaleInvoices]
@@ -60,59 +64,74 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
       `))
 
       const invoices = parseRows(invRaw)
-      console.log(`dist: ${invoices.length} invoices found`)
 
-      if (invoices.length === 0) {
-        // Return empty but valid response
-        const empty = { fetchedAt: new Date().toISOString(), lineItems: [], trendLabels: [], monthlyTotals: {}, period: { start, end } }
-        setC(ck, empty)
-        return res.status(200).json(empty)
-      }
-
-      // Step 2: For each invoice, try to get its line items
-      // Batch by invoice ID — but SaleInvoiceItems has no date filter,
-      // so we query with SaleInvoiceId IN (...) for batches of IDs
-      const invIds = invoices.map(i => i.ID).filter(Boolean)
-      const invLookup: Record<string, any> = {}
-      invoices.forEach(inv => { if (inv.ID) invLookup[inv.ID] = inv })
-
+      // Try to get line items for first 50 invoices only (quick batch)
       let lineItems: any[] = []
+      if (invoices.length > 0) {
+        const firstBatch = invoices.slice(0, 50).map((i: any) => i.ID).filter(Boolean)
+        if (firstBatch.length > 0) {
+          const idList = firstBatch.map((id: string) => `'${id}'`).join(',')
+          const liRaw = await safe(() => cdataQuery('JAWS', `
+            SELECT [SaleInvoiceId], [Description], [Total], [AccountName], [AccountDisplayID], [ItemName]
+            FROM [MYOB_POWERBI_JAWS].[MYOB].[SaleInvoiceItems]
+            WHERE [SaleInvoiceId] IN (${idList}) AND [Total] > 0
+          `))
+          const liParsed = parseRows(liRaw)
+          if (liParsed.length > 0) {
+            const invById: Record<string, any> = {}
+            invoices.forEach((inv: any) => { if (inv.ID) invById[inv.ID] = inv })
+            liParsed.forEach((li: any) => {
+              const inv = invById[li.SaleInvoiceId]
+              if (inv) {
+                lineItems.push({
+                  CustomerName: inv.CustomerName || '',
+                  Date: inv.Date || '',
+                  AccountName: li.AccountName || '',
+                  AccountDisplayID: li.AccountDisplayID || '',
+                  Description: li.Description || '',
+                  Total: typeof li.Total === 'number' ? li.Total : parseFloat(li.Total) || 0,
+                  ItemName: li.ItemName || null,
+                })
+              }
+            })
+          }
+        }
 
-      // Try line items in batches of 50 invoice IDs
-      const batchSize = 50
-      for (let i = 0; i < invIds.length && i < 200; i += batchSize) {
-        const batch = invIds.slice(i, i + batchSize)
-        const idList = batch.map((id: string) => `'${id}'`).join(',')
-        const liRaw = await safe(() => cdataQuery('JAWS', `
-          SELECT [SaleInvoiceId], [Description], [Total], [AccountName], [AccountDisplayID], [ItemName]
-          FROM [MYOB_POWERBI_JAWS].[MYOB].[SaleInvoiceItems]
-          WHERE [SaleInvoiceId] IN (${idList}) AND [Total] > 0
-        `))
-        const batchItems = parseRows(liRaw)
-        if (batchItems.length > 0) {
-          batchItems.forEach(li => {
-            const inv = invLookup[li.SaleInvoiceId]
-            if (inv) {
-              lineItems.push({
-                CustomerName: inv.CustomerName || '',
-                Date: inv.Date || '',
-                AccountName: li.AccountName || '',
-                AccountDisplayID: li.AccountDisplayID || '',
-                Description: li.Description || '',
-                Total: typeof li.Total === 'number' ? li.Total : parseFloat(li.Total) || 0,
-                ItemName: li.ItemName || null,
-              })
-            }
-          })
+        // If we got line items for first batch, get remaining batches
+        if (lineItems.length > 0 && invoices.length > 50) {
+          for (let i = 50; i < invoices.length && i < 300; i += 50) {
+            const batch = invoices.slice(i, i + 50).map((inv: any) => inv.ID).filter(Boolean)
+            if (batch.length === 0) continue
+            const idList = batch.map((id: string) => `'${id}'`).join(',')
+            const bRaw = await safe(() => cdataQuery('JAWS', `
+              SELECT [SaleInvoiceId], [Description], [Total], [AccountName], [AccountDisplayID], [ItemName]
+              FROM [MYOB_POWERBI_JAWS].[MYOB].[SaleInvoiceItems]
+              WHERE [SaleInvoiceId] IN (${idList}) AND [Total] > 0
+            `))
+            const bParsed = parseRows(bRaw)
+            const invById: Record<string, any> = {}
+            invoices.forEach((inv: any) => { if (inv.ID) invById[inv.ID] = inv })
+            bParsed.forEach((li: any) => {
+              const inv = invById[li.SaleInvoiceId]
+              if (inv) {
+                lineItems.push({
+                  CustomerName: inv.CustomerName || '',
+                  Date: inv.Date || '',
+                  AccountName: li.AccountName || '',
+                  AccountDisplayID: li.AccountDisplayID || '',
+                  Description: li.Description || '',
+                  Total: typeof li.Total === 'number' ? li.Total : parseFloat(li.Total) || 0,
+                  ItemName: li.ItemName || null,
+                })
+              }
+            })
+          }
         }
       }
 
-      console.log(`dist: ${lineItems.length} matched line items`)
-
-      // Fallback: if no line items matched, use invoice-level data
+      // Fallback: if no line items, use invoice-level data
       if (lineItems.length === 0) {
-        console.log('dist: using invoice-level fallback')
-        lineItems = invoices.map(inv => ({
+        lineItems = invoices.map((inv: any) => ({
           CustomerName: inv.CustomerName || '',
           Date: inv.Date || '',
           AccountName: '',
@@ -129,25 +148,17 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
       const monthlyTotals: Record<string, number> = {}
       months.forEach(m => {
         trendLabels.push(m.label)
-        const total = invoices
-          .filter(inv => { const d = (inv.Date || '').substring(0, 10); return d >= m.s && d <= m.e })
-          .reduce((s, inv) => s + (typeof inv.TotalAmount === 'number' ? inv.TotalAmount : parseFloat(inv.TotalAmount) || 0), 0)
-        monthlyTotals[m.label] = total
+        monthlyTotals[m.label] = invoices
+          .filter((inv: any) => { const d = (inv.Date || '').substring(0, 10); return d >= m.s && d <= m.e })
+          .reduce((s: number, inv: any) => s + (typeof inv.TotalAmount === 'number' ? inv.TotalAmount : parseFloat(inv.TotalAmount) || 0), 0)
       })
 
-      const result = {
-        fetchedAt: new Date().toISOString(),
-        lineItems,
-        trendLabels,
-        monthlyTotals,
-        period: { start, end },
-      }
-
+      const result = { fetchedAt: new Date().toISOString(), lineItems, trendLabels, monthlyTotals, period: { start, end } }
       setC(ck, result)
-      res.status(200).json(result)
+      return res.status(200).json(result)
     } catch (err: any) {
-      console.error('distributors handler error:', err.message)
-      res.status(500).json({ error: err.message })
+      console.error('distributors error:', err.message)
+      return res.status(500).json({ error: err.message || 'Unknown error' })
     }
   })
 }
