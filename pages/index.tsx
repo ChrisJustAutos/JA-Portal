@@ -287,8 +287,8 @@ Be concise. Use AU currency. Reference specific numbers and invoice IDs.`
     try {
       const r=await fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({messages:newH,context:ctx()})})
       const d=await r.json()
-      setMsgs(prev=>[...prev,{role:'assistant',content:d.reply||'Something went wrong.'}])
-    } catch { setMsgs(prev=>[...prev,{role:'assistant',content:'Connection issue — try again.'}]) }
+      setMsgs(prev=>[...prev,{role:'assistant',content:d.reply||d.error||'Something went wrong.'}])
+    } catch(e:any) { setMsgs(prev=>[...prev,{role:'assistant',content:`Connection error: ${e.message}`}]) }
     setLoading(false)
   }
   const chips=['VPS P&L breakdown','JAWS vs VPS revenue','What do we owe suppliers?','Biggest open invoices','Top distributors this month']
