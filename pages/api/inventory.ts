@@ -120,7 +120,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const d365 = addDays(today, -365)
 
       // ── 1) Pull all active inventoried items ─────────────────────────
-      const itemsResult = await cdataQuery(`
+      const itemsResult = await cdataQuery('JAWS', `
         SELECT
           Number, Name,
           QuantityOnHand, QuantityAvailable, QuantityCommitted, QuantityOnOrder,
@@ -138,7 +138,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       // ── 2) Pull last 12 months of sale invoices (for date lookups) ───
       // NOTE: SaleInvoices has no TaxCodeCode at header level — tax lives on lines.
-      const invResult = await cdataQuery(`
+      const invResult = await cdataQuery('JAWS', `
         SELECT ID, Date, Status
         FROM [MYOB_POWERBI_JAWS].[MYOB].[SaleInvoices]
         WHERE Date >= '${d365.toISOString().slice(0, 10)}'
@@ -151,7 +151,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
 
       // ── 3) Pull all sale invoice items with a non-null ItemNumber ────
-      const siiResult = await cdataQuery(`
+      const siiResult = await cdataQuery('JAWS', `
         SELECT SaleInvoiceId, ItemNumber, ShipQuantity, Total, TaxCodeCode
         FROM [MYOB_POWERBI_JAWS].[MYOB].[SaleInvoiceItems]
         WHERE ItemNumber IS NOT NULL
