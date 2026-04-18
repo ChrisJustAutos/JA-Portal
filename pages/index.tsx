@@ -47,6 +47,22 @@ const INV_STATUS_LABEL:Record<InventoryItem['stockoutStatus'],string>={out:'OUT'
 const fmtDays=(n:number|null)=>n==null?'—':Math.round(n)+'d'
 const fmtPct =(n:number|null)=>n==null?'—':(n*100).toFixed(1)+'%'
 
+// ── Quotes & Orders types (from /api/quotes-orders) ──────────
+interface OpenOrder {
+  number:string; date:string|null; customerName:string; customerDisplayId:string|null
+  totalAmount:number; balanceDueAmount:number; status:string
+  subtotal:number; totalTax:number; freight:number
+  salespersonName:string|null; customerPurchaseOrderNumber:string|null
+  isPrepaid:boolean; ageDays:number|null
+}
+interface ConvertedOrder { number:string; date:string|null; customerName:string; totalAmount:number; salespersonName:string|null }
+interface Quote          { number:string; date:string|null; customerName:string; totalAmount:number; salespersonName:string|null }
+interface QuotesOrdersPayload {
+  openOrders:OpenOrder[]; convertedOrders:ConvertedOrder[]; quotes:Quote[]
+  totals:{openOrdersCount:number;openOrdersTotal:number;openOrdersOwing:number;openOrdersPrepaid:number;convertedCount30d:number;convertedTotal30d:number;quotesCount:number;quotesTotal:number;conversionRate:number|null}
+  meta:{company:string;generatedAt:string;convertedWindow:string}
+}
+
 // ── Helpers ──────────────────────────────────────────────────
 const fmt    = (n:number) => n>=1e6?'$'+(n/1e6).toFixed(2)+'M':n>=1000?'$'+Math.round(n/1000)+'k':'$'+Math.round(n)
 const fmtFull= (n:number) => n==null?'—':'$'+Number(n).toLocaleString('en-AU',{minimumFractionDigits:2,maximumFractionDigits:2})
@@ -149,7 +165,6 @@ function InvoiceDetailModal({invoice,entity,onClose}:{invoice:Invoice;entity:str
         const r=await fetch(`/api/invoice-detail?number=${encodeURIComponent(invoice.Number)}&entity=${entity}`)
         if(!r.ok) throw new Error('Failed to load invoice detail')
         const d=await r.json()
-        // API returns flat arrays/objects — consume directly, no rowsToObjects
         setLineItems(Array.isArray(d.lineItems) ? d.lineItems : [])
         setHeaderData(d.invoice || null)
       } catch(e:any) { setError(e.message) }
@@ -167,12 +182,9 @@ function InvoiceDetailModal({invoice,entity,onClose}:{invoice:Invoice;entity:str
   return (
     <div style={{position:'fixed',inset:0,zIndex:100,display:'flex',alignItems:'center',justifyContent:'center'}}
       onClick={onClose}>
-      {/* Backdrop */}
       <div style={{position:'absolute',inset:0,background:'rgba(0,0,0,0.6)',backdropFilter:'blur(4px)'}}/>
-      {/* Modal */}
       <div style={{position:'relative',background:T.bg2,border:`1px solid ${T.border2}`,borderRadius:12,width:760,maxWidth:'92vw',maxHeight:'88vh',overflow:'hidden',display:'flex',flexDirection:'column',boxShadow:'0 20px 60px rgba(0,0,0,0.5)'}}
         onClick={e=>e.stopPropagation()}>
-        {/* Header */}
         <div style={{padding:'16px 20px',borderBottom:`1px solid ${T.border}`,display:'flex',alignItems:'center',gap:12}}>
           <div style={{flex:1}}>
             <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:4}}>
@@ -185,7 +197,6 @@ function InvoiceDetailModal({invoice,entity,onClose}:{invoice:Invoice;entity:str
           <button onClick={onClose} style={{width:28,height:28,borderRadius:6,border:`1px solid ${T.border}`,background:T.bg3,color:T.text3,fontSize:14,cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center'}}>✕</button>
         </div>
 
-        {/* Summary row */}
         <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:1,background:T.border}}>
           {[
             {label:'Date',value:fmtDate(invoice.Date)},
@@ -200,7 +211,6 @@ function InvoiceDetailModal({invoice,entity,onClose}:{invoice:Invoice;entity:str
           ))}
         </div>
 
-        {/* Extra header info */}
         {headerData&&(headerData.CustomerPurchaseOrderNumber||headerData.Comment||termsLabel||headerData.SalespersonName)&&(
           <div style={{padding:'10px 20px',borderBottom:`1px solid ${T.border}`,display:'flex',gap:16,flexWrap:'wrap'}}>
             {headerData.CustomerPurchaseOrderNumber&&<div style={{fontSize:11,color:T.text3}}>PO: <span style={{color:T.text2,fontFamily:'monospace'}}>{headerData.CustomerPurchaseOrderNumber}</span></div>}
@@ -210,7 +220,6 @@ function InvoiceDetailModal({invoice,entity,onClose}:{invoice:Invoice;entity:str
           </div>
         )}
 
-        {/* Content */}
         <div style={{flex:1,overflowY:'auto',padding:'0 20px 16px'}}>
           {loading&&<div style={{display:'flex',alignItems:'center',justifyContent:'center',padding:40,gap:10}}>
             <span style={{fontSize:20,animation:'spin 1s linear infinite',color:T.text3}}>⟳</span>
@@ -232,7 +241,6 @@ function InvoiceDetailModal({invoice,entity,onClose}:{invoice:Invoice;entity:str
                 <tbody>{lineItems.map((li,i)=>{
                   const isNarrative = li.Total == null
                   if (isNarrative) {
-                    // Option 1 — bold full-width description row, MYOB-style
                     return (
                       <tr key={i} style={{borderTop:`1px solid ${T.border}`,background:'rgba(255,255,255,0.015)'}}>
                         <td colSpan={5} style={{fontSize:12,color:T.text,padding:'9px 8px',fontWeight:500,whiteSpace:'pre-wrap',lineHeight:1.5}}>
@@ -279,7 +287,6 @@ function InvoiceDetailModal({invoice,entity,onClose}:{invoice:Invoice;entity:str
             <div style={{color:T.text3,padding:30,textAlign:'center',fontSize:13}}>No line items found for this invoice.</div>
           )}
 
-          {/* Payment summary */}
           {!loading&&(
             <div style={{marginTop:16,padding:'12px 14px',background:T.bg3,borderRadius:8}}>
               <div style={{fontSize:11,fontWeight:600,color:T.text3,textTransform:'uppercase',letterSpacing:'0.08em',marginBottom:8}}>Payment Summary</div>
@@ -559,60 +566,56 @@ export default function Portal() {
   const [dateLoading,setDateLoading]=useState(false)
   const [error,setError]=useState('')
   const [lastRefresh,setLastRefresh]=useState<Date|null>(null)
-  // Invoice detail modal
   const [selectedInvoice,setSelectedInvoice]=useState<{invoice:Invoice;entity:string}|null>(null)
   const openInvoiceDetail=(inv:Invoice,entity:string)=>setSelectedInvoice({invoice:inv,entity})
-    // FY date range — AU financial year (1 Jul → 30 Jun)
-    const currentFY = new Date().getMonth() >= 6 ? new Date().getFullYear()+1 : new Date().getFullYear()
-    const [fyYear, setFyYear] = useState(currentFY)
-    const [showFyDropdown, setShowFyDropdown] = useState(false)
-    // Default to current month for fast initial load
-    const nowD = new Date()
-    const defaultStart = `${nowD.getFullYear()}-${String(nowD.getMonth()+1).padStart(2,'0')}-01`
-    const defaultEnd = `${nowD.getFullYear()}-${String(nowD.getMonth()+1).padStart(2,'0')}-${new Date(nowD.getFullYear(), nowD.getMonth()+1, 0).getDate()}`
-    // Custom date range
-    const [customStart, setCustomStart] = useState(defaultStart)
-    const [customEnd, setCustomEnd] = useState(defaultEnd)
-    const [isCustomRange, setIsCustomRange] = useState(true) // start as custom (current month)
 
-    // Active date range — either FY-derived or custom
-    const activeStart = isCustomRange ? customStart : `${fyYear-1}-07-01`
-    const activeEnd = isCustomRange ? customEnd : `${fyYear}-06-30`
-    const dateParams = `startDate=${activeStart}&endDate=${activeEnd}`
+  // Quotes & orders data (JAWS) — loaded once on mount, refreshed with dashboard
+  const [qo,setQo]=useState<QuotesOrdersPayload|null>(null)
 
-    const fyLabel = isCustomRange
-      ? `${new Date(customStart+'T00:00').toLocaleDateString('en-AU',{day:'2-digit',month:'short',year:'2-digit'})} – ${new Date(customEnd+'T00:00').toLocaleDateString('en-AU',{day:'2-digit',month:'short',year:'2-digit'})}`
-      : `FY${fyYear}`
+  const currentFY = new Date().getMonth() >= 6 ? new Date().getFullYear()+1 : new Date().getFullYear()
+  const [fyYear, setFyYear] = useState(currentFY)
+  const [showFyDropdown, setShowFyDropdown] = useState(false)
+  const nowD = new Date()
+  const defaultStart = `${nowD.getFullYear()}-${String(nowD.getMonth()+1).padStart(2,'0')}-01`
+  const defaultEnd = `${nowD.getFullYear()}-${String(nowD.getMonth()+1).padStart(2,'0')}-${new Date(nowD.getFullYear(), nowD.getMonth()+1, 0).getDate()}`
+  const [customStart, setCustomStart] = useState(defaultStart)
+  const [customEnd, setCustomEnd] = useState(defaultEnd)
+  const [isCustomRange, setIsCustomRange] = useState(true)
 
-    // Track the dateParams string so load re-fires when it changes
-    const [activeDateParams, setActiveDateParams] = useState(dateParams)
+  const activeStart = isCustomRange ? customStart : `${fyYear-1}-07-01`
+  const activeEnd = isCustomRange ? customEnd : `${fyYear}-06-30`
+  const dateParams = `startDate=${activeStart}&endDate=${activeEnd}`
 
-    function selectFY(y: number) {
-      setFyYear(y)
-      setIsCustomRange(false)
-      setCustomStart(`${y-1}-07-01`)
-      setCustomEnd(`${y}-06-30`)
+  const fyLabel = isCustomRange
+    ? `${new Date(customStart+'T00:00').toLocaleDateString('en-AU',{day:'2-digit',month:'short',year:'2-digit'})} – ${new Date(customEnd+'T00:00').toLocaleDateString('en-AU',{day:'2-digit',month:'short',year:'2-digit'})}`
+    : `FY${fyYear}`
+
+  const [activeDateParams, setActiveDateParams] = useState(dateParams)
+
+  function selectFY(y: number) {
+    setFyYear(y)
+    setIsCustomRange(false)
+    setCustomStart(`${y-1}-07-01`)
+    setCustomEnd(`${y}-06-30`)
+    setDateLoading(true)
+    setActiveDateParams(`startDate=${y-1}-07-01&endDate=${y}-06-30`)
+  }
+
+  function applyCustomRange() {
+    if (customStart && customEnd) {
+      setIsCustomRange(true)
       setDateLoading(true)
-      setActiveDateParams(`startDate=${y-1}-07-01&endDate=${y}-06-30`)
+      setActiveDateParams(`startDate=${customStart}&endDate=${customEnd}`)
     }
-
-    function applyCustomRange() {
-      if (customStart && customEnd) {
-        setIsCustomRange(true)
-        setDateLoading(true)
-        setActiveDateParams(`startDate=${customStart}&endDate=${customEnd}`)
-      }
-    }
+  }
 
   const load=useCallback(async(isRefresh=false,retryCount=0)=>{
     if(isRefresh)setRefreshing(true)
     try{
       const refreshParam = isRefresh ? '&refresh=true' : ''
-      // Step 1: Load core data (invoices, P&L, customers)
       const r=await fetch(`/api/dashboard?${activeDateParams}${refreshParam}`)
       if(r.status===401){router.push('/login');return}
       if(!r.ok){
-        // Auto-retry once on timeout/failure
         if(retryCount<1){
           console.log('Dashboard failed, retrying...')
           return load(isRefresh,retryCount+1)
@@ -621,7 +624,6 @@ export default function Portal() {
         throw new Error(errData?.error||'Failed to load MYOB data — please click Refresh')
       }
       const d=await r.json()
-      // Set defaults for trend data so charts render immediately
       d.trendLabels=['Nov 25','Dec 25','Jan 26','Feb 26','Mar 26','Apr 26']
       d.jaws.income6=[468903,496206,623279,569129,705165,116239]
       d.vps.income6 =[905849,615285,731524,800866,891330,344080]
@@ -630,7 +632,6 @@ export default function Portal() {
       setDash(d);setLastRefresh(new Date());setError('');setDateLoading(false)
       setLoading(false)
       if(isRefresh)setRefreshing(false)
-      // Step 2: Load live trend data in background
       try{
         const tr=await fetch(`/api/trends?${activeDateParams}${refreshParam}`)
         if(tr.ok){
@@ -642,6 +643,14 @@ export default function Portal() {
           }:prev)
         }
       }catch{}
+      // Load JAWS quotes & orders in background (doesn't block initial render)
+      try{
+        const qoRes=await fetch('/api/quotes-orders')
+        if(qoRes.ok){
+          const qoData:QuotesOrdersPayload=await qoRes.json()
+          setQo(qoData)
+        }
+      }catch(e){console.error('quotes-orders load failed',e)}
     }catch(e:any){setError(e.message);setLoading(false);setDateLoading(false);if(isRefresh)setRefreshing(false)}
   },[router, activeDateParams])
   useEffect(()=>{load()},[load])
@@ -727,8 +736,8 @@ export default function Portal() {
     // ── OVERVIEW ────────────────────────────────────────────
     if(section==='overview') return <div style={{display:'flex',flexDirection:'column',gap:14}}>
       <div style={{display:'grid',gridTemplateColumns:'repeat(4,minmax(0,1fr))',gap:12}}>
-                    <KPI label={`JAWS Revenue (${fyLabel})`}    value={fmt(jInc)}   sub="Income this period" accent={T.blue}/>
-                    <KPI label={`VPS Revenue (${fyLabel})`}     value={fmt(vInc)}   sub="Income this period" accent={T.teal}/>
+        <KPI label={`JAWS Revenue (${fyLabel})`}    value={fmt(jInc)}   sub="Income this period" accent={T.blue}/>
+        <KPI label={`VPS Revenue (${fyLabel})`}     value={fmt(vInc)}   sub="Income this period" accent={T.teal}/>
         <div onClick={()=>setSection('invoices')} style={{cursor:'pointer'}}>
           <KPI label="Total Receivables"   value={fmt(jOut+vOut)}   sub={`${jOpen.length+vOpen.length} open — click to view`} subColor={T.amber} accent={T.amber}/>
         </div>
@@ -815,12 +824,19 @@ export default function Portal() {
 
     // ── JAWS ────────────────────────────────────────────────
     if(section==='jaws') return <div style={{display:'flex',flexDirection:'column',gap:14}}>
-      <div style={{display:'grid',gridTemplateColumns:'repeat(4,minmax(0,1fr))',gap:12}}>
+      {/* KPI strip — 5 now, with Open Orders */}
+      <div style={{display:'grid',gridTemplateColumns:'repeat(5,minmax(0,1fr))',gap:12}}>
         <KPI label="Income (MTD)"      value={fmt(jInc)}   sub="This month"   accent={T.blue}/>
         <KPI label="Cost of Sales"     value={fmt(jCos)}   sub={`Margin: ${pct(jNet,jInc)}`} subColor={T.red} accent={T.red}/>
         <KPI label="Net (MTD)"         value={fmt(jNet)}   sub="Income − COS" subColor={jNet>=0?T.green:T.red} accent={jNet>=0?T.green:T.red}/>
         <KPI label="Receivables"       value={fmt(jOut)}   sub={`${jOpen.length} open`} subColor={T.amber} accent={T.amber}/>
+        <KPI label="Open Orders"
+             value={qo?fmt(qo.totals.openOrdersTotal):'—'}
+             sub={qo?`${qo.totals.openOrdersCount} orders · ${qo.totals.openOrdersPrepaid} prepaid`:'Loading…'}
+             subColor={qo&&qo.totals.openOrdersCount>0?T.purple:T.text3}
+             accent={T.purple}/>
       </div>
+
       <div style={{display:'grid',gridTemplateColumns:'1.4fr 1fr',gap:12}}>
         <Card>
           <PTitle>Revenue trend — JAWS (6 months)</PTitle>
@@ -831,6 +847,10 @@ export default function Portal() {
           {jCust.slice(0,8).map((c,i)=><BarRow key={i} name={c.CustomerName?.replace(' (Tuning)','').replace(' (Tuning 1)','').substring(0,26)} value={c.TotalRevenue} max={jCust[0]?.TotalRevenue||1} extra={`${c.InvoiceCount}inv`}/>)}
         </Card>
       </div>
+
+      {/* ── SALES PIPELINE: Open Orders + Quotes ──────────── */}
+      <JawsSalesPipeline qo={qo}/>
+
       <Card><PTitle>Recent invoices — JAWS</PTitle><InvoiceTable rows={jInv} accent={T.blue} entity="JAWS" onInvoiceClick={openInvoiceDetail}/></Card>
     </div>
 
@@ -880,7 +900,7 @@ export default function Portal() {
       <PnlSection entity="VPS"  pnl={vPnl} inc={vInc} cos={vCos} oh={vOh} accent={T.teal}/>
     </div>
 
-    // ── STOCK (new — six-view analytics) ─────────────────────
+    // ── STOCK (six-view analytics) ───────────────────────────
     if(section==='stock') return <StockSection/>
 
     // ── PAYABLES ─────────────────────────────────────────────
@@ -950,7 +970,6 @@ export default function Portal() {
       <Script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js" strategy="beforeInteractive"/>
 
       <div style={{display:'flex',height:'100vh',overflow:'hidden',fontFamily:"'DM Sans',system-ui,sans-serif"}}>
-        {/* Sidebar */}
         <div style={{width:220,minWidth:220,background:T.bg2,borderRight:`1px solid ${T.border}`,display:'flex',flexDirection:'column',height:'100vh',overflowY:'auto'}}>
           <div style={{padding:'20px 18px 16px',borderBottom:`1px solid ${T.border}`}}>
             <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:4}}>
@@ -962,10 +981,10 @@ export default function Portal() {
           <div style={{padding:'14px 10px 4px',flex:1}}>
             <div style={{fontSize:9,fontWeight:600,color:T.text3,textTransform:'uppercase',letterSpacing:'0.1em',padding:'0 8px',marginBottom:6}}>Navigation</div>
             <a href="/sales" style={{display:'flex',alignItems:'center',gap:9,padding:'8px 10px',borderRadius:7,fontSize:13,marginBottom:4,background:'rgba(167,139,250,0.1)',color:'#a78bfa',textDecoration:'none',border:'1px solid rgba(167,139,250,0.2)'}}>
-  <div style={{width:7,height:7,borderRadius:'50%',background:'#a78bfa',flexShrink:0}}/>
-  <span style={{flex:1}}>Sales Dashboard</span>
-  <span style={{fontSize:9,fontFamily:'monospace',background:'#a78bfa',color:'#fff',padding:'1px 5px',borderRadius:3}}>NEW</span>
-</a>
+              <div style={{width:7,height:7,borderRadius:'50%',background:'#a78bfa',flexShrink:0}}/>
+              <span style={{flex:1}}>Sales Dashboard</span>
+              <span style={{fontSize:9,fontFamily:'monospace',background:'#a78bfa',color:'#fff',padding:'1px 5px',borderRadius:3}}>NEW</span>
+            </a>
             <a href="/distributors" style={{display:'flex',alignItems:'center',gap:9,padding:'8px 10px',borderRadius:7,fontSize:13,marginBottom:4,background:'rgba(79,142,247,0.1)',color:T.blue,textDecoration:'none',border:`1px solid rgba(79,142,247,0.2)`}}>
               <div style={{width:7,height:7,borderRadius:'50%',background:T.blue,flexShrink:0}}/>
               <span style={{flex:1}}>Distributor Report</span>
@@ -996,7 +1015,6 @@ export default function Portal() {
           </div>
         </div>
 
-        {/* Main */}
         <div style={{flex:1,display:'flex',flexDirection:'column',overflow:'hidden'}}>
           <div style={{height:52,background:T.bg2,borderBottom:`1px solid ${T.border}`,display:'flex',alignItems:'center',padding:'0 20px',gap:12,flexShrink:0}}>
             <div style={{fontSize:14,fontWeight:500,flex:1,color:T.text}}>{titles[section]}</div>
@@ -1004,31 +1022,31 @@ export default function Portal() {
             <Tag color={T.green}>MYOB live</Tag>
             {!loading&&<Tag color={T.amber}>{fmt(jOut+vOut)} receivable</Tag>}
             {!loading&&<Tag color={T.purple}>{fmt(stockVal)} stock</Tag>}
-                        <div style={{display:'flex',alignItems:'center',gap:6,position:'relative'}}>
-                          {[currentFY-2,currentFY-1,currentFY].map(y=>(
-                        <button key={y} onClick={()=>selectFY(y)}
-                                              style={{padding:'3px 10px',borderRadius:4,border:'1px solid',fontSize:11,fontFamily:'monospace',fontWeight:600,cursor:'pointer',
-                                                                            background:fyYear===y&&!isCustomRange?T.accent:'transparent',
-                                                                            color:fyYear===y&&!isCustomRange?'#fff':T.text2,
-                                                                            borderColor:fyYear===y&&!isCustomRange?T.accent:T.border}}>
-                          {`FY${y}`}{y===currentFY?<span style={{width:4,height:4,borderRadius:'50%',background:T.green,display:'inline-block',marginLeft:4,verticalAlign:'middle'}}/>:null}
-                        </button>
-                      ))}
-                          <div style={{width:1,height:18,background:T.border,margin:'0 2px'}}/>
-                          <input type="date" value={customStart} onChange={e=>setCustomStart(e.target.value)}
-                            style={{padding:'3px 6px',borderRadius:4,border:`1px solid ${isCustomRange?T.accent:T.border}`,fontSize:11,fontFamily:'monospace',
-                              background:'transparent',color:T.text2,outline:'none',cursor:'pointer',colorScheme:'dark'}}/>
-                          <span style={{fontSize:11,color:T.text3}}>→</span>
-                          <input type="date" value={customEnd} onChange={e=>setCustomEnd(e.target.value)}
-                            style={{padding:'3px 6px',borderRadius:4,border:`1px solid ${isCustomRange?T.accent:T.border}`,fontSize:11,fontFamily:'monospace',
-                              background:'transparent',color:T.text2,outline:'none',cursor:'pointer',colorScheme:'dark'}}/>
-                          <button onClick={applyCustomRange}
-                            style={{padding:'3px 10px',borderRadius:4,border:`1px solid ${T.accent}`,fontSize:11,fontFamily:'monospace',fontWeight:600,cursor:'pointer',
-                              background:isCustomRange?T.accent:'transparent',color:isCustomRange?'#fff':T.accent}}>
-                            Apply
-                          </button>
-                          {dateLoading&&<span style={{fontSize:14,animation:'spin 1s linear infinite',color:T.blue}}>⟳</span>}
-                        </div>
+            <div style={{display:'flex',alignItems:'center',gap:6,position:'relative'}}>
+              {[currentFY-2,currentFY-1,currentFY].map(y=>(
+                <button key={y} onClick={()=>selectFY(y)}
+                  style={{padding:'3px 10px',borderRadius:4,border:'1px solid',fontSize:11,fontFamily:'monospace',fontWeight:600,cursor:'pointer',
+                    background:fyYear===y&&!isCustomRange?T.accent:'transparent',
+                    color:fyYear===y&&!isCustomRange?'#fff':T.text2,
+                    borderColor:fyYear===y&&!isCustomRange?T.accent:T.border}}>
+                  {`FY${y}`}{y===currentFY?<span style={{width:4,height:4,borderRadius:'50%',background:T.green,display:'inline-block',marginLeft:4,verticalAlign:'middle'}}/>:null}
+                </button>
+              ))}
+              <div style={{width:1,height:18,background:T.border,margin:'0 2px'}}/>
+              <input type="date" value={customStart} onChange={e=>setCustomStart(e.target.value)}
+                style={{padding:'3px 6px',borderRadius:4,border:`1px solid ${isCustomRange?T.accent:T.border}`,fontSize:11,fontFamily:'monospace',
+                  background:'transparent',color:T.text2,outline:'none',cursor:'pointer',colorScheme:'dark'}}/>
+              <span style={{fontSize:11,color:T.text3}}>→</span>
+              <input type="date" value={customEnd} onChange={e=>setCustomEnd(e.target.value)}
+                style={{padding:'3px 6px',borderRadius:4,border:`1px solid ${isCustomRange?T.accent:T.border}`,fontSize:11,fontFamily:'monospace',
+                  background:'transparent',color:T.text2,outline:'none',cursor:'pointer',colorScheme:'dark'}}/>
+              <button onClick={applyCustomRange}
+                style={{padding:'3px 10px',borderRadius:4,border:`1px solid ${T.accent}`,fontSize:11,fontFamily:'monospace',fontWeight:600,cursor:'pointer',
+                  background:isCustomRange?T.accent:'transparent',color:isCustomRange?'#fff':T.accent}}>
+                Apply
+              </button>
+              {dateLoading&&<span style={{fontSize:14,animation:'spin 1s linear infinite',color:T.blue}}>⟳</span>}
+            </div>
           </div>
           <div style={{flex:1,display:'flex',overflow:'hidden'}}>
             <div style={{flex:1,padding:20,overflowY:'auto',position:'relative'}}>
@@ -1046,6 +1064,85 @@ export default function Portal() {
       {selectedInvoice&&<InvoiceDetailModal invoice={selectedInvoice.invoice} entity={selectedInvoice.entity} onClose={()=>setSelectedInvoice(null)}/>}
     </>
   )
+}
+
+// ═══════════════════════════════════════════════════════════
+// JAWS Sales Pipeline — Open Orders + Quotes
+// Renders below "Revenue trend" card on JAWS Wholesale section
+// ═══════════════════════════════════════════════════════════
+function JawsSalesPipeline({qo}:{qo:QuotesOrdersPayload|null}) {
+  if (!qo) return <Card><div style={{padding:20,textAlign:'center',color:T.text3,fontSize:12}}>Loading sales pipeline…</div></Card>
+
+  const {openOrders, quotes, convertedOrders, totals} = qo
+
+  return <div style={{display:'grid',gridTemplateColumns:'1.4fr 1fr',gap:12}}>
+    {/* Open Orders table */}
+    <Card>
+      <PTitle right={
+        <span>
+          <Tag color={T.purple}>{fmt(totals.openOrdersTotal)}</Tag>
+          {totals.conversionRate!=null && <span style={{marginLeft:8}}>30d conv: {fmtPct(totals.conversionRate)}</span>}
+        </span>
+      }>Open orders — awaiting fulfilment or invoice</PTitle>
+      {openOrders.length===0 && <div style={{color:T.text3,fontSize:12,padding:10}}>No open orders.</div>}
+      {openOrders.length>0 && <div style={{overflowX:'auto'}}>
+        <table style={{width:'100%',borderCollapse:'collapse'}}>
+          <thead><tr>{['Order','Date','Customer','PO Ref','Total','Balance','Age','Status'].map((h,i)=>
+            <th key={h} style={{fontSize:10,color:T.text3,textTransform:'uppercase',letterSpacing:'0.07em',padding:'0 8px 10px',textAlign:i>=4&&i<=6?'right':'left',fontWeight:500,whiteSpace:'nowrap'}}>{h}</th>
+          )}</tr></thead>
+          <tbody>{openOrders.map(o=>{
+            const ageColor = o.ageDays==null?T.text3 : o.ageDays>=14?T.red : o.ageDays>=7?T.amber : T.text2
+            return <tr key={o.number} style={{borderTop:`1px solid ${T.border}`}}>
+              <td style={{fontSize:12,color:T.purple,fontFamily:'monospace',padding:'7px 8px',fontWeight:500}}>{o.number}</td>
+              <td style={{fontSize:12,color:T.text2,padding:'7px 8px',whiteSpace:'nowrap'}}>{o.date?fmtDate(o.date):'—'}</td>
+              <td style={{fontSize:12,color:T.text2,padding:'7px 8px',maxWidth:200,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{o.customerName.substring(0,30)}</td>
+              <td style={{fontSize:11,color:T.text3,fontFamily:'monospace',padding:'7px 8px'}}>{o.customerPurchaseOrderNumber||'—'}</td>
+              <td style={{fontSize:12,fontFamily:'monospace',color:T.text,padding:'7px 8px',textAlign:'right'}}>{fmtFull(o.totalAmount)}</td>
+              <td style={{fontSize:12,fontFamily:'monospace',color:o.balanceDueAmount>0?T.amber:T.green,padding:'7px 8px',textAlign:'right'}}>{o.balanceDueAmount>0?fmtFull(o.balanceDueAmount):'Paid'}</td>
+              <td style={{fontSize:11,fontFamily:'monospace',color:ageColor,padding:'7px 8px',textAlign:'right'}}>{o.ageDays==null?'—':o.ageDays+'d'}</td>
+              <td style={{padding:'7px 8px'}}>
+                {o.isPrepaid
+                  ? <Tag color={T.green}>PREPAID</Tag>
+                  : <Tag color={T.amber}>OPEN</Tag>}
+              </td>
+            </tr>
+          })}</tbody>
+        </table>
+      </div>}
+      {/* Converted footer */}
+      <div style={{marginTop:12,paddingTop:10,borderTop:`1px solid ${T.border}`,display:'flex',justifyContent:'space-between',fontSize:11,color:T.text3}}>
+        <span>Converted to invoice in last 30 days</span>
+        <span style={{fontFamily:'monospace'}}>{totals.convertedCount30d} orders · {fmt(totals.convertedTotal30d)}</span>
+      </div>
+    </Card>
+
+    {/* Quotes table (scaffolded — empty today) */}
+    <Card>
+      <PTitle right={<Tag color={quotes.length===0?T.text3:T.blue}>{quotes.length} active</Tag>}>Quotes</PTitle>
+      {quotes.length===0 && (
+        <div style={{color:T.text3,fontSize:12,padding:'20px 10px',textAlign:'center',lineHeight:1.6}}>
+          <div style={{fontSize:24,marginBottom:8,opacity:0.4}}>—</div>
+          <div>No active quotes in JAWS.</div>
+          <div style={{fontSize:10,marginTop:6}}>Quotes entered in MYOB will appear here.</div>
+        </div>
+      )}
+      {quotes.length>0 && <div style={{overflowX:'auto'}}>
+        <table style={{width:'100%',borderCollapse:'collapse'}}>
+          <thead><tr>{['Quote','Date','Customer','Total'].map((h,i)=>
+            <th key={h} style={{fontSize:10,color:T.text3,textTransform:'uppercase',letterSpacing:'0.07em',padding:'0 8px 10px',textAlign:i===3?'right':'left',fontWeight:500,whiteSpace:'nowrap'}}>{h}</th>
+          )}</tr></thead>
+          <tbody>{quotes.map(q=>(
+            <tr key={q.number} style={{borderTop:`1px solid ${T.border}`}}>
+              <td style={{fontSize:12,color:T.blue,fontFamily:'monospace',padding:'7px 8px'}}>{q.number}</td>
+              <td style={{fontSize:12,color:T.text2,padding:'7px 8px',whiteSpace:'nowrap'}}>{q.date?fmtDate(q.date):'—'}</td>
+              <td style={{fontSize:12,color:T.text2,padding:'7px 8px',maxWidth:200,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{q.customerName.substring(0,30)}</td>
+              <td style={{fontSize:12,fontFamily:'monospace',color:T.text,padding:'7px 8px',textAlign:'right'}}>{fmtFull(q.totalAmount)}</td>
+            </tr>
+          ))}</tbody>
+        </table>
+      </div>}
+    </Card>
+  </div>
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -1092,7 +1189,6 @@ function StockSection() {
   if(!data)   return null
 
   return <div style={{display:'flex',flexDirection:'column',gap:14}}>
-    {/* Search & filter row */}
     <div style={{display:'flex',gap:8,alignItems:'center'}}>
       <input placeholder="Search SKU or name…" value={search} onChange={e=>setSearch(e.target.value)}
         style={{flex:1,background:T.bg2,border:`1px solid ${T.border}`,color:T.text,borderRadius:6,padding:'7px 12px',fontSize:12,outline:'none',fontFamily:'inherit'}}/>
@@ -1105,7 +1201,6 @@ function StockSection() {
       <div style={{fontSize:11,color:T.text3,fontFamily:'monospace',whiteSpace:'nowrap'}}>{filtered.length} of {items.length} SKUs</div>
     </div>
 
-    {/* KPI strip */}
     <div style={{display:'grid',gridTemplateColumns:'repeat(6,1fr)',gap:12}}>
       <KPI label="Stock value" value={fmt(data.totals.stockValue)} sub={`${data.totals.totalItems} SKUs · ${data.totals.qtyOnHand} units`} accent={T.blue}/>
       <KPI label="Low stock" value={String(data.totals.lowStockCount)} sub="below reorder level" subColor={data.totals.lowStockCount>0?T.amber:T.text3} accent={T.amber}/>
@@ -1115,7 +1210,6 @@ function StockSection() {
       <KPI label="Reorder cost" value={fmt(data.totals.reorderSuggestValue)} sub={`${data.totals.reorderSuggestCount} items @ avg cost`} accent={T.green}/>
     </div>
 
-    {/* Tabs */}
     <div style={{display:'flex',gap:4,borderBottom:`1px solid ${T.border}`}}>
       {([
         ['overview','Overview'],
@@ -1134,7 +1228,6 @@ function StockSection() {
       ))}
     </div>
 
-    {/* Tab content */}
     {tab==='overview' && <StockOverview data={data} items={filtered}/>}
     {tab==='reorder'  && <StockReorder items={filtered}/>}
     {tab==='velocity' && <StockVelocity items={filtered}/>}
