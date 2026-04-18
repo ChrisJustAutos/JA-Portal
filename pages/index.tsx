@@ -18,6 +18,35 @@ interface DashData {
 }
 type Section = 'overview'|'jaws'|'vps'|'invoices'|'pnl'|'stock'|'payables'|'distributors'
 
+// ── Inventory types (from /api/inventory) ──────────────────
+interface InventoryItem {
+  number:string;name:string
+  qtyOnHand:number;qtyAvailable:number;qtyCommitted:number;qtyOnOrder:number
+  avgCost:number;stockValue:number
+  sellPriceIncGst:number;sellPriceExGst:number
+  marginPct:number|null;marginDollar:number|null
+  reorderLevel:number;reorderQty:number
+  supplier:string|null;supplierId:string|null
+  lastPurchasePrice:number|null
+  unitsSold30d:number;unitsSold90d:number;unitsSold365d:number
+  revenue90d:number
+  lastSoldDate:string|null;daysSinceLastSold:number|null
+  runRatePerDay:number;daysOfCover:number|null
+  stockoutDate:string|null
+  stockoutStatus:'out'|'critical'|'low'|'ok'|'dead'|'noSales'
+  isLowStock:boolean;isOutOfStock:boolean;isDead90d:boolean;isDead180d:boolean
+}
+interface InventoryPayload {
+  totals:{totalItems:number;totalSkus:number;stockValue:number;qtyOnHand:number;qtyOnOrder:number;qtyCommitted:number;lowStockCount:number;outOfStockCount:number;deadStock90dCount:number;deadStock90dValue:number;deadStock180dCount:number;deadStock180dValue:number;reorderSuggestCount:number;reorderSuggestValue:number}
+  items:InventoryItem[]
+  monthly:{month:string;label:string;units:number;revenue:number}[]
+  meta:{company:string;generatedAt:string;forecastWindowDays:number;invoiceCount:number;lineCount:number}
+}
+const INV_STATUS_COLOR:Record<InventoryItem['stockoutStatus'],string>={out:'#f04e4e',critical:'#f04e4e',low:'#f5a623',ok:'#34c77b',dead:'#a78bfa',noSales:'#545968'}
+const INV_STATUS_LABEL:Record<InventoryItem['stockoutStatus'],string>={out:'OUT',critical:'≤14d',low:'≤30d',ok:'OK',dead:'DEAD',noSales:'—'}
+const fmtDays=(n:number|null)=>n==null?'—':Math.round(n)+'d'
+const fmtPct =(n:number|null)=>n==null?'—':(n*100).toFixed(1)+'%'
+
 // ── Helpers ──────────────────────────────────────────────────
 const fmt    = (n:number) => n>=1e6?'$'+(n/1e6).toFixed(2)+'M':n>=1000?'$'+Math.round(n/1000)+'k':'$'+Math.round(n)
 const fmtFull= (n:number) => n==null?'—':'$'+Number(n).toLocaleString('en-AU',{minimumFractionDigits:2,maximumFractionDigits:2})
@@ -851,35 +880,8 @@ export default function Portal() {
       <PnlSection entity="VPS"  pnl={vPnl} inc={vInc} cos={vCos} oh={vOh} accent={T.teal}/>
     </div>
 
-    // ── STOCK ────────────────────────────────────────────────
-    if(section==='stock') return <div style={{display:'flex',flexDirection:'column',gap:14}}>
-      <div style={{display:'grid',gridTemplateColumns:'repeat(4,minmax(0,1fr))',gap:12}}>
-        <KPI label="JAWS Stock Value"  value={fmt(stockVal)} sub={`${dash?.jaws.stockSummary?.results?.[0]?.rows?.[0]?.[1]||0} SKUs`} accent={T.purple}/>
-        <KPI label="VPS Stock Value"   value="N/A" sub="Workshop — no held stock" accent={T.text3}/>
-        <KPI label="Top Item"          value={stock[0]?fmt(stock[0].CurrentValue):'—'} sub={stock[0]?.Name?.substring(0,20)} accent={T.blue}/>
-        <KPI label="Total Committed"   value={String(stock.reduce((s,i)=>s+(i.QuantityCommitted||0),0))} sub="Units on order"/>
-      </div>
-      <Card>
-        <PTitle>Stock on hand — JAWS (top 20 by value, live MYOB)</PTitle>
-        <div style={{overflowX:'auto'}}>
-          <table style={{width:'100%',borderCollapse:'collapse'}}>
-            <thead><tr>{['Item','Stock Value','Qty On Hand','Qty Committed','Avg Cost','Sell Price'].map(h=>(
-              <th key={h} style={{fontSize:10,color:T.text3,textTransform:'uppercase',letterSpacing:'0.07em',padding:'0 8px 10px',textAlign:h==='Item'?'left':'right',fontWeight:500,whiteSpace:'nowrap'}}>{h}</th>
-            ))}</tr></thead>
-            <tbody>{stock.map((s,i)=>(
-              <tr key={i} style={{borderTop:`1px solid ${T.border}`}}>
-                <td style={{fontSize:12,color:T.text2,padding:'7px 8px'}}>{s.Name}</td>
-                <td style={{fontSize:12,fontFamily:'monospace',color:T.purple,padding:'7px 8px',textAlign:'right'}}>{fmtFull(s.CurrentValue)}</td>
-                <td style={{fontSize:12,fontFamily:'monospace',color:T.text,padding:'7px 8px',textAlign:'right'}}>{s.QuantityOnHand}</td>
-                <td style={{fontSize:12,fontFamily:'monospace',color:s.QuantityCommitted>0?T.amber:T.text3,padding:'7px 8px',textAlign:'right'}}>{s.QuantityCommitted||0}</td>
-                <td style={{fontSize:12,fontFamily:'monospace',color:T.text3,padding:'7px 8px',textAlign:'right'}}>{fmtFull(s.AverageCost)}</td>
-                <td style={{fontSize:12,fontFamily:'monospace',color:T.green,padding:'7px 8px',textAlign:'right'}}>{fmtFull(s.BaseSellingPrice)}</td>
-              </tr>
-            ))}</tbody>
-          </table>
-        </div>
-      </Card>
-    </div>
+    // ── STOCK (new — six-view analytics) ─────────────────────
+    if(section==='stock') return <StockSection/>
 
     // ── PAYABLES ─────────────────────────────────────────────
     if(section==='payables') return <div style={{display:'flex',flexDirection:'column',gap:14}}>
@@ -1044,6 +1046,390 @@ export default function Portal() {
       {selectedInvoice&&<InvoiceDetailModal invoice={selectedInvoice.invoice} entity={selectedInvoice.entity} onClose={()=>setSelectedInvoice(null)}/>}
     </>
   )
+}
+
+// ═══════════════════════════════════════════════════════════
+// Stock & Inventory — six-view analytics (JAWS only for now)
+// Powered by /api/inventory
+// ═══════════════════════════════════════════════════════════
+function StockSection() {
+  const [data,setData]=useState<InventoryPayload|null>(null)
+  const [loading,setLoading]=useState(true)
+  const [err,setErr]=useState('')
+  const [tab,setTab]=useState<'overview'|'reorder'|'velocity'|'dead'|'margin'|'onorder'>('overview')
+  const [search,setSearch]=useState('')
+  const [supplierFilter,setSupplierFilter]=useState('__all__')
+
+  useEffect(()=>{
+    let cancelled=false
+    ;(async()=>{
+      setLoading(true);setErr('')
+      try{
+        const r=await fetch('/api/inventory')
+        if(!r.ok){const t=await r.text();throw new Error(`HTTP ${r.status}: ${t.slice(0,200)}`)}
+        const j:InventoryPayload=await r.json()
+        if(!cancelled)setData(j)
+      }catch(e:any){if(!cancelled)setErr(String(e?.message||e))}
+      finally{if(!cancelled)setLoading(false)}
+    })()
+    return()=>{cancelled=true}
+  },[])
+
+  const items=data?.items||[]
+  const suppliers=Array.from(new Set(items.filter(i=>i.supplier).map(i=>i.supplier as string))).sort()
+  const q=search.trim().toLowerCase()
+  const filtered=items.filter(i=>{
+    if(supplierFilter!=='__all__'){
+      if(supplierFilter==='__none__'){if(i.supplier!==null)return false}
+      else if(i.supplier!==supplierFilter)return false
+    }
+    if(!q)return true
+    return i.number.toLowerCase().includes(q)||i.name.toLowerCase().includes(q)
+  })
+
+  if(loading) return <Card><div style={{padding:20,textAlign:'center',color:T.text2}}>Loading inventory from MYOB…</div></Card>
+  if(err)     return <Card style={{borderColor:`${T.red}60`}}><div style={{color:T.red,fontWeight:600,marginBottom:6}}>Inventory failed to load</div><div style={{color:T.text2,fontSize:12,fontFamily:'monospace'}}>{err}</div></Card>
+  if(!data)   return null
+
+  return <div style={{display:'flex',flexDirection:'column',gap:14}}>
+    {/* Search & filter row */}
+    <div style={{display:'flex',gap:8,alignItems:'center'}}>
+      <input placeholder="Search SKU or name…" value={search} onChange={e=>setSearch(e.target.value)}
+        style={{flex:1,background:T.bg2,border:`1px solid ${T.border}`,color:T.text,borderRadius:6,padding:'7px 12px',fontSize:12,outline:'none',fontFamily:'inherit'}}/>
+      <select value={supplierFilter} onChange={e=>setSupplierFilter(e.target.value)}
+        style={{background:T.bg2,border:`1px solid ${T.border}`,color:T.text,borderRadius:6,padding:'7px 10px',fontSize:12,outline:'none',minWidth:200}}>
+        <option value="__all__">All suppliers</option>
+        <option value="__none__">— No supplier set —</option>
+        {suppliers.map(s=><option key={s} value={s}>{s}</option>)}
+      </select>
+      <div style={{fontSize:11,color:T.text3,fontFamily:'monospace',whiteSpace:'nowrap'}}>{filtered.length} of {items.length} SKUs</div>
+    </div>
+
+    {/* KPI strip */}
+    <div style={{display:'grid',gridTemplateColumns:'repeat(6,1fr)',gap:12}}>
+      <KPI label="Stock value" value={fmt(data.totals.stockValue)} sub={`${data.totals.totalItems} SKUs · ${data.totals.qtyOnHand} units`} accent={T.blue}/>
+      <KPI label="Low stock" value={String(data.totals.lowStockCount)} sub="below reorder level" subColor={data.totals.lowStockCount>0?T.amber:T.text3} accent={T.amber}/>
+      <KPI label="Out of stock" value={String(data.totals.outOfStockCount)} sub="zero on hand" subColor={data.totals.outOfStockCount>0?T.red:T.text3} accent={T.red}/>
+      <KPI label="Dead stock (90d)" value={fmt(data.totals.deadStock90dValue)} sub={`${data.totals.deadStock90dCount} items · no sales`} subColor={T.purple} accent={T.purple}/>
+      <KPI label="On order" value={String(data.totals.qtyOnOrder)} sub="units inbound" accent={T.teal}/>
+      <KPI label="Reorder cost" value={fmt(data.totals.reorderSuggestValue)} sub={`${data.totals.reorderSuggestCount} items @ avg cost`} accent={T.green}/>
+    </div>
+
+    {/* Tabs */}
+    <div style={{display:'flex',gap:4,borderBottom:`1px solid ${T.border}`}}>
+      {([
+        ['overview','Overview'],
+        ['reorder',`Reorder (${data.totals.lowStockCount+data.totals.outOfStockCount})`],
+        ['velocity','Velocity & top sellers'],
+        ['dead',`Dead stock (${data.totals.deadStock90dCount})`],
+        ['margin','Margin'],
+        ['onorder','On order'],
+      ] as ['overview'|'reorder'|'velocity'|'dead'|'margin'|'onorder',string][]).map(([id,label])=>(
+        <button key={id} onClick={()=>setTab(id)}
+          style={{background:'transparent',border:'none',padding:'10px 14px',fontSize:12,fontWeight:600,
+            color:tab===id?T.text:T.text2,borderBottom:tab===id?`2px solid ${T.accent}`:'2px solid transparent',
+            cursor:'pointer',fontFamily:'inherit',marginBottom:-1}}>
+          {label}
+        </button>
+      ))}
+    </div>
+
+    {/* Tab content */}
+    {tab==='overview' && <StockOverview data={data} items={filtered}/>}
+    {tab==='reorder'  && <StockReorder items={filtered}/>}
+    {tab==='velocity' && <StockVelocity items={filtered}/>}
+    {tab==='dead'     && <StockDead items={filtered}/>}
+    {tab==='margin'   && <StockMargin items={filtered}/>}
+    {tab==='onorder'  && <StockOnOrder items={filtered}/>}
+  </div>
+}
+
+function StockOverview({data,items}:{data:InventoryPayload;items:InventoryItem[]}) {
+  const topValue=[...items].sort((a,b)=>b.stockValue-a.stockValue).slice(0,10)
+  const maxValue=topValue[0]?.stockValue||1
+  const maxUnits=Math.max(1,...data.monthly.map(m=>m.units))
+  const statusCounts=items.reduce<Record<string,number>>((acc,i)=>{acc[i.stockoutStatus]=(acc[i.stockoutStatus]||0)+1;return acc},{})
+  return <div style={{display:'grid',gridTemplateColumns:'2fr 1fr',gap:14}}>
+    <Card>
+      <PTitle right="Stock value, live MYOB">Top 10 held items</PTitle>
+      {topValue.length===0 && <div style={{color:T.text3,fontSize:12}}>No items match the current filter.</div>}
+      {topValue.map(i=>(
+        <div key={i.number} style={{marginBottom:10}}>
+          <div style={{display:'flex',justifyContent:'space-between',marginBottom:4}}>
+            <div style={{fontSize:12}}>
+              <span style={{fontFamily:'monospace',color:T.text2}}>{i.number}</span>
+              <span style={{marginLeft:8,color:T.text}}>{i.name}</span>
+            </div>
+            <div style={{fontSize:12,fontFamily:'monospace',color:T.text}}>{fmtFull(i.stockValue)}</div>
+          </div>
+          <div style={{height:4,background:T.bg3,borderRadius:2,overflow:'hidden'}}>
+            <div style={{width:(i.stockValue/maxValue*100)+'%',height:'100%',background:T.blue}}/>
+          </div>
+          <div style={{display:'flex',gap:10,marginTop:4,fontSize:10,color:T.text3,fontFamily:'monospace'}}>
+            <span>OH {i.qtyOnHand}</span>
+            <span>90d sold {i.unitsSold90d}</span>
+            <span>Cover {fmtDays(i.daysOfCover)}</span>
+            <Tag color={INV_STATUS_COLOR[i.stockoutStatus]}>{INV_STATUS_LABEL[i.stockoutStatus]}</Tag>
+          </div>
+        </div>
+      ))}
+    </Card>
+    <div style={{display:'flex',flexDirection:'column',gap:14}}>
+      <Card>
+        <PTitle>Stockout risk breakdown</PTitle>
+        {(['out','critical','low','ok','dead','noSales'] as InventoryItem['stockoutStatus'][]).map(key=>{
+          const labels:Record<string,string>={out:'Out of stock',critical:'Critical — ≤14d',low:'Low — ≤30d',ok:'Healthy — >30d',dead:'Dead — held, no sales',noSales:'No sales / no stock'}
+          const count=statusCounts[key]||0
+          const p=items.length>0?count/items.length:0
+          return <div key={key} style={{marginBottom:10}}>
+            <div style={{display:'flex',justifyContent:'space-between',fontSize:11,marginBottom:4}}>
+              <span style={{color:T.text}}>{labels[key]}</span>
+              <span style={{color:T.text2,fontFamily:'monospace'}}>{count}</span>
+            </div>
+            <div style={{height:3,background:T.bg3,borderRadius:2}}>
+              <div style={{width:(p*100)+'%',height:'100%',background:INV_STATUS_COLOR[key],borderRadius:2}}/>
+            </div>
+          </div>
+        })}
+      </Card>
+      <Card>
+        <PTitle right="Portfolio, ex-GST">12-month units shipped</PTitle>
+        <div style={{display:'flex',alignItems:'flex-end',gap:4,height:100,padding:'8px 0'}}>
+          {data.monthly.map(m=>(
+            <div key={m.month} style={{flex:1,display:'flex',flexDirection:'column',alignItems:'center',gap:4}}>
+              <div style={{width:'100%',height:(m.units/maxUnits*84)+'px',background:T.blue,opacity:0.85,borderRadius:'2px 2px 0 0',minHeight:m.units>0?2:0}}
+                title={`${m.label}: ${m.units} units · ${fmt(m.revenue)}`}/>
+              <div style={{fontSize:9,color:T.text3,fontFamily:'monospace'}}>{m.label.split(' ')[0]}</div>
+            </div>
+          ))}
+        </div>
+      </Card>
+    </div>
+  </div>
+}
+
+function StockReorder({items}:{items:InventoryItem[]}) {
+  const needs=[...items].filter(i=>i.isOutOfStock||i.isLowStock).sort((a,b)=>{
+    if(a.isOutOfStock!==b.isOutOfStock)return a.isOutOfStock?-1:1
+    return (a.daysOfCover??9999)-(b.daysOfCover??9999)
+  })
+  const total=needs.reduce((s,i)=>{const q=i.reorderQty>0?i.reorderQty:Math.max(i.reorderLevel-i.qtyOnHand,0);return s+q*i.avgCost},0)
+  return <Card>
+    <PTitle right={`${needs.length} items · ${fmtFull(total)} at avg cost`}>Reorder suggestions</PTitle>
+    {needs.length===0 && <div style={{color:T.text3,fontSize:12,padding:10}}>Nothing needs reordering right now.</div>}
+    {needs.length>0 && <div style={{overflowX:'auto'}}>
+      <table style={{width:'100%',borderCollapse:'collapse'}}>
+        <thead><tr>{['Item','On hand','Reorder lvl','Cover','90d sold','Suggest qty','Est. cost','Supplier','Status'].map((h,i)=>
+          <th key={h} style={{fontSize:10,color:T.text3,textTransform:'uppercase',letterSpacing:'0.07em',padding:'0 8px 10px',textAlign:i>=1&&i<=6?'right':i===8?'center':'left',fontWeight:500,whiteSpace:'nowrap'}}>{h}</th>
+        )}</tr></thead>
+        <tbody>{needs.map(i=>{
+          const qty=i.reorderQty>0?i.reorderQty:Math.max(i.reorderLevel-i.qtyOnHand,1)
+          const coverColor=i.daysOfCover==null?T.text3:i.daysOfCover<=14?T.red:i.daysOfCover<=30?T.amber:T.text
+          return <tr key={i.number} style={{borderTop:`1px solid ${T.border}`}}>
+            <td style={{padding:'7px 8px'}}>
+              <div style={{fontFamily:'monospace',fontSize:11,color:T.text2}}>{i.number}</div>
+              <div style={{fontSize:12,color:T.text}}>{i.name}</div>
+            </td>
+            <td style={{fontSize:12,fontFamily:'monospace',color:i.isOutOfStock?T.red:T.text,padding:'7px 8px',textAlign:'right'}}>{i.qtyOnHand}</td>
+            <td style={{fontSize:12,fontFamily:'monospace',color:T.text2,padding:'7px 8px',textAlign:'right'}}>{i.reorderLevel}</td>
+            <td style={{fontSize:12,fontFamily:'monospace',color:coverColor,padding:'7px 8px',textAlign:'right'}}>{fmtDays(i.daysOfCover)}</td>
+            <td style={{fontSize:12,fontFamily:'monospace',color:T.text2,padding:'7px 8px',textAlign:'right'}}>{i.unitsSold90d}</td>
+            <td style={{fontSize:12,fontFamily:'monospace',color:T.green,padding:'7px 8px',textAlign:'right'}}>{qty}</td>
+            <td style={{fontSize:12,fontFamily:'monospace',color:T.text,padding:'7px 8px',textAlign:'right'}}>{fmtFull(qty*i.avgCost)}</td>
+            <td style={{fontSize:12,color:i.supplier?T.text:T.text3,padding:'7px 8px'}}>{i.supplier||'— not set —'}</td>
+            <td style={{padding:'7px 8px',textAlign:'center'}}><Tag color={INV_STATUS_COLOR[i.stockoutStatus]}>{INV_STATUS_LABEL[i.stockoutStatus]}</Tag></td>
+          </tr>
+        })}</tbody>
+      </table>
+    </div>}
+  </Card>
+}
+
+function StockVelocity({items}:{items:InventoryItem[]}) {
+  const [sort,setSort]=useState<'rev90'|'units90'|'units30'|'runrate'>('rev90')
+  const sorted=[...items].sort((a,b)=>{
+    switch(sort){case 'rev90':return b.revenue90d-a.revenue90d;case 'units90':return b.unitsSold90d-a.unitsSold90d;case 'units30':return b.unitsSold30d-a.unitsSold30d;case 'runrate':return b.runRatePerDay-a.runRatePerDay}
+  })
+  const top=sorted.slice(0,15)
+  const getVal=(i:InventoryItem)=>sort==='rev90'?i.revenue90d:sort==='units30'?i.unitsSold30d:sort==='runrate'?i.runRatePerDay:i.unitsSold90d
+  const maxBar=Math.max(1,...top.map(getVal))
+  const fmtVal=(v:number)=>sort==='rev90'?fmtFull(v):sort==='runrate'?v.toFixed(2)+'/d':String(Math.round(v))
+  return <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:14}}>
+    <Card>
+      <PTitle right={<select value={sort} onChange={e=>setSort(e.target.value as any)} style={{background:T.bg3,border:`1px solid ${T.border}`,color:T.text,borderRadius:4,padding:'3px 6px',fontSize:10,fontFamily:'monospace'}}>
+        <option value="rev90">Revenue 90d</option><option value="units90">Units 90d</option><option value="units30">Units 30d</option><option value="runrate">Run rate / day</option>
+      </select>}>Top 15 by selected metric</PTitle>
+      {top.map(i=>{
+        const val=getVal(i)
+        return <div key={i.number} style={{marginBottom:8}}>
+          <div style={{display:'flex',justifyContent:'space-between',fontSize:11,marginBottom:3}}>
+            <span style={{color:T.text}}><span style={{fontFamily:'monospace',color:T.text2}}>{i.number}</span> · {i.name.slice(0,30)}</span>
+            <span style={{color:T.text,fontFamily:'monospace'}}>{fmtVal(val)}</span>
+          </div>
+          <div style={{height:3,background:T.bg3,borderRadius:2}}>
+            <div style={{width:(val/maxBar*100)+'%',height:'100%',background:T.teal,borderRadius:2}}/>
+          </div>
+        </div>
+      })}
+    </Card>
+    <Card>
+      <PTitle right="Ranked list">Full velocity table</PTitle>
+      <div style={{overflowX:'auto',maxHeight:560,overflowY:'auto'}}>
+        <table style={{width:'100%',borderCollapse:'collapse'}}>
+          <thead style={{position:'sticky',top:0,background:T.bg2}}><tr>{['Item','30d','90d','365d','Run/day','Cover'].map((h,i)=>
+            <th key={h} style={{fontSize:10,color:T.text3,textTransform:'uppercase',letterSpacing:'0.07em',padding:'8px',textAlign:i===0?'left':'right',fontWeight:500,whiteSpace:'nowrap',borderBottom:`1px solid ${T.border}`}}>{h}</th>
+          )}</tr></thead>
+          <tbody>{sorted.map(i=>{
+            const cc=i.daysOfCover==null?T.text3:i.daysOfCover<=14?T.red:i.daysOfCover<=30?T.amber:T.text
+            return <tr key={i.number} style={{borderTop:`1px solid ${T.border}`}}>
+              <td style={{padding:'7px 8px'}}><div style={{fontFamily:'monospace',fontSize:10,color:T.text2}}>{i.number}</div><div style={{fontSize:11,color:T.text}}>{i.name.slice(0,34)}</div></td>
+              <td style={{fontSize:12,fontFamily:'monospace',color:T.text,padding:'7px 8px',textAlign:'right'}}>{i.unitsSold30d}</td>
+              <td style={{fontSize:12,fontFamily:'monospace',color:T.text,padding:'7px 8px',textAlign:'right'}}>{i.unitsSold90d}</td>
+              <td style={{fontSize:12,fontFamily:'monospace',color:T.text2,padding:'7px 8px',textAlign:'right'}}>{i.unitsSold365d}</td>
+              <td style={{fontSize:12,fontFamily:'monospace',color:T.teal,padding:'7px 8px',textAlign:'right'}}>{i.runRatePerDay.toFixed(2)}</td>
+              <td style={{fontSize:12,fontFamily:'monospace',color:cc,padding:'7px 8px',textAlign:'right'}}>{fmtDays(i.daysOfCover)}</td>
+            </tr>
+          })}</tbody>
+        </table>
+      </div>
+    </Card>
+  </div>
+}
+
+function StockDead({items}:{items:InventoryItem[]}) {
+  const dead=items.filter(i=>i.stockValue>0&&(i.daysSinceLastSold===null||i.daysSinceLastSold>=90)).sort((a,b)=>b.stockValue-a.stockValue)
+  const t1=dead.filter(i=>i.daysSinceLastSold!==null&&i.daysSinceLastSold>=90 &&i.daysSinceLastSold<180)
+  const t2=dead.filter(i=>i.daysSinceLastSold!==null&&i.daysSinceLastSold>=180&&i.daysSinceLastSold<365)
+  const t3=dead.filter(i=>i.daysSinceLastSold!==null&&i.daysSinceLastSold>=365)
+  const t4=dead.filter(i=>i.daysSinceLastSold===null)
+  const sumVal=(arr:InventoryItem[])=>arr.reduce((s,i)=>s+i.stockValue,0)
+  return <div style={{display:'flex',flexDirection:'column',gap:14}}>
+    <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:12}}>
+      <KPI label="90–180 days"    value={fmt(sumVal(t1))} sub={`${t1.length} items`} accent={T.amber}/>
+      <KPI label="180–365 days"   value={fmt(sumVal(t2))} sub={`${t2.length} items`} accent="#ff8c42"/>
+      <KPI label="Over 365 days"  value={fmt(sumVal(t3))} sub={`${t3.length} items`} accent={T.red}/>
+      <KPI label="Never sold (12m)" value={fmt(sumVal(t4))} sub={`${t4.length} items`} accent={T.purple}/>
+    </div>
+    <Card>
+      <PTitle right={`${dead.length} items holding ${fmtFull(sumVal(dead))}`}>Dead stock — ranked by held value</PTitle>
+      {dead.length===0 && <div style={{color:T.text3,fontSize:12,padding:10}}>No dead stock. Everything with held value has moved in the last 90 days.</div>}
+      {dead.length>0 && <div style={{overflowX:'auto'}}>
+        <table style={{width:'100%',borderCollapse:'collapse'}}>
+          <thead><tr>{['Item','On hand','Avg cost','Held value','Last sold','Days idle','Supplier'].map((h,i)=>
+            <th key={h} style={{fontSize:10,color:T.text3,textTransform:'uppercase',letterSpacing:'0.07em',padding:'0 8px 10px',textAlign:i>=1&&i<=5?'right':'left',fontWeight:500,whiteSpace:'nowrap'}}>{h}</th>
+          )}</tr></thead>
+          <tbody>{dead.map(i=>{
+            const c=i.daysSinceLastSold===null?T.purple:i.daysSinceLastSold>=365?T.red:i.daysSinceLastSold>=180?'#ff8c42':T.amber
+            return <tr key={i.number} style={{borderTop:`1px solid ${T.border}`}}>
+              <td style={{padding:'7px 8px'}}><div style={{fontFamily:'monospace',fontSize:10,color:T.text2}}>{i.number}</div><div style={{fontSize:12,color:T.text}}>{i.name}</div></td>
+              <td style={{fontSize:12,fontFamily:'monospace',color:T.text,padding:'7px 8px',textAlign:'right'}}>{i.qtyOnHand}</td>
+              <td style={{fontSize:12,fontFamily:'monospace',color:T.text2,padding:'7px 8px',textAlign:'right'}}>{fmtFull(i.avgCost)}</td>
+              <td style={{fontSize:12,fontFamily:'monospace',color:T.text,padding:'7px 8px',textAlign:'right'}}>{fmtFull(i.stockValue)}</td>
+              <td style={{fontSize:12,fontFamily:'monospace',color:T.text2,padding:'7px 8px',textAlign:'right'}}>{i.lastSoldDate?fmtDate(i.lastSoldDate):'—'}</td>
+              <td style={{fontSize:12,fontFamily:'monospace',color:c,padding:'7px 8px',textAlign:'right'}}>{i.daysSinceLastSold===null?'∞':i.daysSinceLastSold+'d'}</td>
+              <td style={{fontSize:12,color:i.supplier?T.text:T.text3,padding:'7px 8px'}}>{i.supplier||'—'}</td>
+            </tr>
+          })}</tbody>
+        </table>
+      </div>}
+    </Card>
+  </div>
+}
+
+function StockMargin({items}:{items:InventoryItem[]}) {
+  const wm=items.filter(i=>i.marginPct!==null).sort((a,b)=>(a.marginPct??0)-(b.marginPct??0))
+  const avg=wm.length>0?wm.reduce((s,i)=>s+(i.marginPct??0),0)/wm.length:0
+  const buckets=[
+    {label:'<0% (loss)',min:-Infinity,max:0,color:T.red},
+    {label:'0–20%',min:0,max:0.2,color:'#ff8c42'},
+    {label:'20–40%',min:0.2,max:0.4,color:T.amber},
+    {label:'40–60%',min:0.4,max:0.6,color:T.teal},
+    {label:'60%+',min:0.6,max:Infinity,color:T.green},
+  ]
+  const bc=buckets.map(b=>({...b,count:wm.filter(i=>(i.marginPct??0)>=b.min&&(i.marginPct??0)<b.max).length}))
+  const maxB=Math.max(1,...bc.map(b=>b.count))
+  return <div style={{display:'grid',gridTemplateColumns:'1fr 2fr',gap:14}}>
+    <div style={{display:'flex',flexDirection:'column',gap:14}}>
+      <Card>
+        <PTitle>Portfolio margin</PTitle>
+        <div style={{fontSize:28,fontFamily:'monospace',color:T.text,marginBottom:6}}>{fmtPct(avg)}</div>
+        <div style={{fontSize:11,color:T.text3}}>average across {wm.length} priced SKUs</div>
+      </Card>
+      <Card>
+        <PTitle>Margin distribution</PTitle>
+        {bc.map(b=>(
+          <div key={b.label} style={{marginBottom:8}}>
+            <div style={{display:'flex',justifyContent:'space-between',fontSize:11,marginBottom:3}}>
+              <span style={{color:T.text}}>{b.label}</span>
+              <span style={{color:T.text2,fontFamily:'monospace'}}>{b.count}</span>
+            </div>
+            <div style={{height:4,background:T.bg3,borderRadius:2}}>
+              <div style={{width:(b.count/maxB*100)+'%',height:'100%',background:b.color,borderRadius:2}}/>
+            </div>
+          </div>
+        ))}
+      </Card>
+    </div>
+    <Card>
+      <PTitle right="Lowest margin first — candidates for price review">Margin by item</PTitle>
+      <div style={{overflowX:'auto',maxHeight:560,overflowY:'auto'}}>
+        <table style={{width:'100%',borderCollapse:'collapse'}}>
+          <thead style={{position:'sticky',top:0,background:T.bg2}}><tr>{['Item','Avg cost','Sell ex-GST','$ margin','% margin','90d units'].map((h,i)=>
+            <th key={h} style={{fontSize:10,color:T.text3,textTransform:'uppercase',letterSpacing:'0.07em',padding:'8px',textAlign:i===0?'left':'right',fontWeight:500,whiteSpace:'nowrap',borderBottom:`1px solid ${T.border}`}}>{h}</th>
+          )}</tr></thead>
+          <tbody>{wm.map(i=>{
+            const mc=(i.marginPct??0)<0?T.red:(i.marginPct??0)<0.2?'#ff8c42':(i.marginPct??0)<0.4?T.amber:(i.marginPct??0)<0.6?T.teal:T.green
+            return <tr key={i.number} style={{borderTop:`1px solid ${T.border}`}}>
+              <td style={{padding:'7px 8px'}}><div style={{fontFamily:'monospace',fontSize:10,color:T.text2}}>{i.number}</div><div style={{fontSize:11,color:T.text}}>{i.name.slice(0,38)}</div></td>
+              <td style={{fontSize:12,fontFamily:'monospace',color:T.text2,padding:'7px 8px',textAlign:'right'}}>{fmtFull(i.avgCost)}</td>
+              <td style={{fontSize:12,fontFamily:'monospace',color:T.text2,padding:'7px 8px',textAlign:'right'}}>{fmtFull(i.sellPriceExGst)}</td>
+              <td style={{fontSize:12,fontFamily:'monospace',color:(i.marginDollar??0)<0?T.red:T.text,padding:'7px 8px',textAlign:'right'}}>{i.marginDollar==null?'—':fmtFull(i.marginDollar)}</td>
+              <td style={{fontSize:12,fontFamily:'monospace',color:mc,padding:'7px 8px',textAlign:'right'}}>{fmtPct(i.marginPct)}</td>
+              <td style={{fontSize:12,fontFamily:'monospace',color:T.text2,padding:'7px 8px',textAlign:'right'}}>{i.unitsSold90d}</td>
+            </tr>
+          })}</tbody>
+        </table>
+      </div>
+    </Card>
+  </div>
+}
+
+function StockOnOrder({items}:{items:InventoryItem[]}) {
+  const oo=items.filter(i=>i.qtyOnOrder>0).sort((a,b)=>b.qtyOnOrder*b.avgCost-a.qtyOnOrder*a.avgCost)
+  const totalCost=oo.reduce((s,i)=>s+i.qtyOnOrder*i.avgCost,0)
+  const totalUnits=oo.reduce((s,i)=>s+i.qtyOnOrder,0)
+  return <div style={{display:'flex',flexDirection:'column',gap:14}}>
+    <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:12}}>
+      <KPI label="Purchase orders open" value={String(oo.length)} sub="distinct SKUs on order" accent={T.teal}/>
+      <KPI label="Units inbound" value={String(totalUnits)} sub="across all open POs" accent={T.blue}/>
+      <KPI label="Inbound value" value={fmt(totalCost)} sub="at avg cost — excludes freight" accent={T.green}/>
+    </div>
+    <Card>
+      <PTitle right={`${oo.length} items on order`}>Purchase order pipeline</PTitle>
+      {oo.length===0 && <div style={{color:T.text3,fontSize:12,padding:10}}>No open purchase orders for items in the current filter.</div>}
+      {oo.length>0 && <div style={{overflowX:'auto'}}>
+        <table style={{width:'100%',borderCollapse:'collapse'}}>
+          <thead><tr>{['Item','On hand','On order','After arrival','90d sold','Cover after PO','Order value','Supplier'].map((h,i)=>
+            <th key={h} style={{fontSize:10,color:T.text3,textTransform:'uppercase',letterSpacing:'0.07em',padding:'0 8px 10px',textAlign:i>=1&&i<=6?'right':'left',fontWeight:500,whiteSpace:'nowrap'}}>{h}</th>
+          )}</tr></thead>
+          <tbody>{oo.map(i=>{
+            const after=i.qtyOnHand+i.qtyOnOrder
+            const ca=i.runRatePerDay>0?after/i.runRatePerDay:null
+            return <tr key={i.number} style={{borderTop:`1px solid ${T.border}`}}>
+              <td style={{padding:'7px 8px'}}><div style={{fontFamily:'monospace',fontSize:10,color:T.text2}}>{i.number}</div><div style={{fontSize:12,color:T.text}}>{i.name}</div></td>
+              <td style={{fontSize:12,fontFamily:'monospace',color:i.isOutOfStock?T.red:T.text,padding:'7px 8px',textAlign:'right'}}>{i.qtyOnHand}</td>
+              <td style={{fontSize:12,fontFamily:'monospace',color:T.teal,padding:'7px 8px',textAlign:'right'}}>{i.qtyOnOrder}</td>
+              <td style={{fontSize:12,fontFamily:'monospace',color:T.text,padding:'7px 8px',textAlign:'right'}}>{after}</td>
+              <td style={{fontSize:12,fontFamily:'monospace',color:T.text2,padding:'7px 8px',textAlign:'right'}}>{i.unitsSold90d}</td>
+              <td style={{fontSize:12,fontFamily:'monospace',color:T.text2,padding:'7px 8px',textAlign:'right'}}>{fmtDays(ca)}</td>
+              <td style={{fontSize:12,fontFamily:'monospace',color:T.text,padding:'7px 8px',textAlign:'right'}}>{fmtFull(i.qtyOnOrder*i.avgCost)}</td>
+              <td style={{fontSize:12,color:i.supplier?T.text:T.text3,padding:'7px 8px'}}>{i.supplier||'—'}</td>
+            </tr>
+          })}</tbody>
+        </table>
+      </div>}
+    </Card>
+  </div>
 }
 
 // Server-side auth check — redirects to /login if no cookie
