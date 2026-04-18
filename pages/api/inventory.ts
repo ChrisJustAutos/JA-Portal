@@ -73,6 +73,15 @@ interface TotalsBlock {
 
 interface MonthlyPoint { month: string; label: string; units: number; revenue: number }
 
+// Use plain objects instead of Map<> to avoid downlevelIteration issues
+interface Agg {
+  units30: number; units90: number; units365: number
+  revenue90Ex: number
+  lastSold: Date | null
+  monthlyUnits: Record<string, number>
+  monthlyRevEx: Record<string, number>
+}
+
 // ── helpers ──────────────────────────────────────────────────────────────
 function rowsToObjects(result: any): Row[] {
   if (!result?.results?.[0]) return []
@@ -144,10 +153,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         WHERE Date >= '${d365.toISOString().slice(0, 10)}'
       `)
       const invoices = rowsToObjects(invResult)
-      const invIndex = new Map<string, { date: Date }>()
-      for (const inv of invoices) {
+
+      // Invoice lookup: id -> date. Plain object, no Map.
+      const invDateById: Record<string, Date> = {}
+      for (let i = 0; i < invoices.length; i++) {
+        const inv = invoices[i]
         if (!inv.ID || !inv.Date) continue
-        invIndex.set(String(inv.ID), { date: new Date(inv.Date) })
+        invDateById[String(inv.ID)] = new Date(inv.Date)
       }
 
       // ── 3) Pull all sale invoice items with a non-null ItemNumber ────
@@ -159,47 +171,41 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const lines = rowsToObjects(siiResult)
 
       // ── 4) Aggregate per-item velocity from lines ────────────────────
-      interface Agg {
-        units30: number; units90: number; units365: number
-        revenue90Ex: number
-        lastSold: Date | null
-        monthlyUnits: Map<string, number>
-        monthlyRevEx: Map<string, number>
-      }
-      const perItem = new Map<string, Agg>()
+      const perItem: Record<string, Agg> = {}
 
-      for (const line of lines) {
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i]
         const itemNum = line.ItemNumber ? String(line.ItemNumber).trim() : ''
         if (!itemNum) continue
-        const inv = invIndex.get(String(line.SaleInvoiceId))
-        if (!inv) continue // invoice outside 12-month window
+        const invDate = invDateById[String(line.SaleInvoiceId)]
+        if (!invDate) continue // invoice outside 12-month window
 
         const qty = num(line.ShipQuantity)
         const totalInc = num(line.Total)
         const tax = String(line.TaxCodeCode || '')
         const totalEx = tax === 'GST' ? totalInc / 1.1 : totalInc
 
-        let a = perItem.get(itemNum)
+        let a = perItem[itemNum]
         if (!a) {
           a = {
             units30: 0, units90: 0, units365: 0,
             revenue90Ex: 0,
             lastSold: null,
-            monthlyUnits: new Map(),
-            monthlyRevEx: new Map(),
+            monthlyUnits: {},
+            monthlyRevEx: {},
           }
-          perItem.set(itemNum, a)
+          perItem[itemNum] = a
         }
 
-        if (inv.date >= d30)  a.units30  += qty
-        if (inv.date >= d90)  { a.units90 += qty; a.revenue90Ex += totalEx }
-        if (inv.date >= d365) a.units365 += qty
+        if (invDate >= d30)  a.units30  += qty
+        if (invDate >= d90)  { a.units90 += qty; a.revenue90Ex += totalEx }
+        if (invDate >= d365) a.units365 += qty
 
-        if (!a.lastSold || inv.date > a.lastSold) a.lastSold = inv.date
+        if (!a.lastSold || invDate > a.lastSold) a.lastSold = invDate
 
-        const mk = monthKey(inv.date)
-        a.monthlyUnits.set(mk, (a.monthlyUnits.get(mk) || 0) + qty)
-        a.monthlyRevEx.set(mk, (a.monthlyRevEx.get(mk) || 0) + totalEx)
+        const mk = monthKey(invDate)
+        a.monthlyUnits[mk] = (a.monthlyUnits[mk] || 0) + qty
+        a.monthlyRevEx[mk] = (a.monthlyRevEx[mk] || 0) + totalEx
       }
 
       // ── 5) Build enriched item records ───────────────────────────────
@@ -225,12 +231,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const supplierIdRaw = it.RestockingSupplierDisplayID ? String(it.RestockingSupplierDisplayID) : null
         const supplierId = supplierIdRaw && supplierIdRaw !== '*None' ? supplierIdRaw : null
 
-        const agg = perItem.get(number)
+        const agg = perItem[number]
         const units30  = agg ? agg.units30  : 0
         const units90  = agg ? agg.units90  : 0
         const units365 = agg ? agg.units365 : 0
         const revenue90 = agg ? agg.revenue90Ex : 0
-        const lastSold = agg?.lastSold || null
+        const lastSold = agg && agg.lastSold ? agg.lastSold : null
         const daysSinceLastSold = lastSold ? daysBetween(today, lastSold) : null
         const runRatePerDay = units90 / 90
         const daysOfCover = runRatePerDay > 0 ? qtyOnHand / runRatePerDay : null
@@ -303,13 +309,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       // ── 7) Whole-portfolio monthly trend (last 12 months) ────────────
       const monthly: MonthlyPoint[] = []
+      const perItemKeys = Object.keys(perItem)
       for (let i = 11; i >= 0; i--) {
         const d = new Date(today.getFullYear(), today.getMonth() - i, 1)
         const key = monthKey(d)
         let units = 0, revenue = 0
-        for (const agg of perItem.values()) {
-          units   += agg.monthlyUnits.get(key) || 0
-          revenue += agg.monthlyRevEx.get(key) || 0
+        for (let j = 0; j < perItemKeys.length; j++) {
+          const agg = perItem[perItemKeys[j]]
+          units   += agg.monthlyUnits[key] || 0
+          revenue += agg.monthlyRevEx[key] || 0
         }
         monthly.push({ month: key, label: monthLabel(key), units, revenue })
       }
