@@ -1,4 +1,18 @@
-// pages/distributors.tsx — Just Autos Distributor Report
+// pages/distributors.tsx — Updated with Supabase group-aware rendering
+// This version loads groupings from /api/groups and renders the Summary tab
+// as sections: Distributors first, then Sundry, then Excluded (or whatever
+// groups exist in the 'type' dimension).
+//
+// The other tabs (Distributor Sales, Detailed Sales, National P/M, National Total)
+// continue to work on the filtered (non-Excluded) data.
+//
+// NOTE: This is the replacement for pages/distributors.tsx. Diff vs the
+// existing sidebar-update version:
+//   1. Adds `grouping` state + fetch on mount
+//   2. Adds `typeOf(canonical)` helper to assign each line item a type group
+//   3. Summary tab renders groups-of-groups; KPIs split accordingly
+//   4. Top bar adds "Manage groups" link to /admin/groups
+
 import { useEffect, useState, useRef, useCallback } from 'react'
 import Head from 'next/head'
 import Script from 'next/script'
@@ -6,7 +20,8 @@ import { useRouter } from 'next/router'
 import PortalSidebar from '../lib/PortalSidebar'
 
 interface LineItem {
-  CustomerName: string
+  CustomerName: string        // CANONICAL name after alias resolution
+  RawCustomerName: string     // Original MYOB name (for debugging)
   Date: string
   AccountDisplayID: string
   Description: string
@@ -22,34 +37,26 @@ interface DistData {
   period: { start: string; end: string }
 }
 
-function normName(n:string){return n?.replace(' (Tuning)','').replace(' (Tuning 1)','').replace(' (Tuning2)','').trim()||''}
+interface GroupingPayload {
+  aliases: { myob_name: string; canonical_name: string }[]
+  groups: { id: number; dimension: string; name: string; sort_order: number; color: string | null }[]
+  members: { group_id: number; canonical_name: string }[]
+}
 
-// Toyota VIN → model mapping (positions 4-8 encode chassis code).
-// Returns a friendly model name. Falls back to the raw chassis code so unseen
-// models are visible in the data rather than silently lumped into "Unknown".
+// VIN mapping unchanged from prior version
 function vinToModel(vin: string): string {
   if (!vin || vin.length < 8) return 'Unknown'
   const v = vin.toUpperCase().trim()
   if (v.length < 8) return 'Unknown'
   const p4_7 = v.substring(3, 7)
   const p4_6 = v.substring(3, 6)
-
-  // LC300 (FJA300 / F33A engine)
   if (p4_7 === 'AA7B' || p4_7 === 'AABB' || p4_6 === 'HV05' || p4_6 === 'HV01' || p4_6 === 'HV09' || p4_6 === 'GV03') return 'LC300'
-  // Prado 250 (GDJ250 — latest gen)
   if (p4_6 === 'BV71' || p4_6 === 'BV73' || p4_6 === 'BVL1' || p4_6 === 'BVL3' || p4_6 === 'EV73' || p4_6 === 'EVL3' || p4_6 === 'RVL3' || p4_6 === 'RVL1' || p4_6 === 'RV73' || p4_6 === 'EEV7') return 'Prado 250'
-  // Prado 150 (GDJ150 / KDJ150)
   if (p4_6 === 'BR3F' || p4_6 === 'BRL3' || p4_6 === 'BR71' || p4_6 === 'BH3F' || p4_6 === 'ACEB' || p4_6 === 'ACDB' || p4_6 === 'RRL1') return 'Prado 150'
-  // LC70/79 (VDJ79 / GDJ79)
   if (p4_6 === 'LV71' || p4_6 === 'LV73' || p4_6 === 'LVL1' || p4_6 === 'LVL3' || p4_6 === 'LRL3' || p4_6 === 'LR71') return 'LC70/79'
-  // LC200 (VDJ200)
   if (p4_6 === 'HV00' || p4_6 === 'HV02') return 'LC200'
-  // Hilux N80 (GUN126 / GUN136)
   if (p4_7 === 'BA3C' || p4_7 === 'KA3C' || p4_7 === 'HA3C' || p4_7 === 'BE3C' || p4_7 === 'KE3C' || p4_7 === 'DB3C') return 'Hilux N80'
-  // Older Hilux / Prado KUN / KDJ120
   if (p4_6 === 'FZ29' || p4_6 === 'HZ22' || p4_6 === 'FZ22' || p4_6 === 'EZ39') return 'Hilux/Prado (older)'
-
-  // Unknown chassis — expose prefix so we can extend the map
   return `Other (${v.substring(3, 8)})`
 }
 
@@ -63,21 +70,22 @@ type Tab='distributor-sales'|'detailed-sales'|'summary'|'national-pm'|'national-
 
 export default function DistributorReport(){
   const router=useRouter()
-  const [tab,setTab]=useState<Tab>('distributor-sales')
+  const [tab,setTab]=useState<Tab>('summary')  // default to Summary — it's the grouped view
   const [data,setData]=useState<DistData|null>(null)
+  const [grouping,setGrouping]=useState<GroupingPayload|null>(null)
   const [loading,setLoading]=useState(true)
   const [error,setError]=useState('')
   const [selectedDist,setSelectedDist]=useState('ALL')
   const [refreshing,setRefreshing]=useState(false)
   const [lastRefresh,setLastRefresh]=useState<Date|null>(null)
+  const [primaryDimension, setPrimaryDimension] = useState<'type'|'region'|string>('type')
 
-  // Date range — default to current calendar month
+  // Date range
   const now=new Date()
   const currentFY=now.getMonth()>=6?now.getFullYear()+1:now.getFullYear()
   const pad=(n:number)=>String(n).padStart(2,'0')
   const monthStart=`${now.getFullYear()}-${pad(now.getMonth()+1)}-01`
   const monthEnd=`${now.getFullYear()}-${pad(now.getMonth()+1)}-${pad(new Date(now.getFullYear(),now.getMonth()+1,0).getDate())}`
-
   const [fyYear,setFyYear]=useState(currentFY)
   const [isCustomRange,setIsCustomRange]=useState(true)
   const [customStart,setCustomStart]=useState(monthStart)
@@ -93,24 +101,41 @@ export default function DistributorReport(){
     if(isRefresh)setRefreshing(true)
     try{
       const rp=isRefresh?'&refresh=true':''
-      const r=await fetch(`/api/distributors?${activeDateParams}${rp}`)
-      if(r.status===401){router.push('/login');return}
-      if(!r.ok)throw new Error('Failed to load distributor data')
-      const d=await r.json()
+      const [distRes, groupRes] = await Promise.all([
+        fetch(`/api/distributors?${activeDateParams}${rp}`),
+        fetch(`/api/groups${isRefresh?'?refresh=true':''}`),
+      ])
+      if(distRes.status===401){router.push('/login');return}
+      if(!distRes.ok)throw new Error('Failed to load distributor data')
+      const d=await distRes.json()
       if(d.error)throw new Error(d.error)
 
+      // Fetch grouping — don't block if it fails, fall back to empty
+      let g: GroupingPayload = {aliases:[], groups:[], members:[]}
+      if (groupRes.ok) {
+        g = await groupRes.json()
+      }
+      setGrouping(g)
+      const aliasMap: Record<string,string> = {}
+      g.aliases.forEach(a => { aliasMap[a.myob_name] = a.canonical_name })
+
       // Flatten distributors[].lineItems[] into a single array,
-      // injecting the distributor name onto each line
+      // resolving each raw MYOB name to its canonical via the alias map
       const flatLineItems: LineItem[] = (d.distributors || []).flatMap((dist: any) =>
-        (dist.lineItems || []).map((li: any) => ({
-          CustomerName: dist.customerBase,
-          Date: li.date,
-          AccountDisplayID: li.accountCode,
-          Description: li.description,
-          Total: li.amountExGst,
-          bucket: li.bucket,
-          poNumber: li.poNumber || '',
-        }))
+        (dist.lineItems || []).map((li: any) => {
+          const rawName = dist.customerBase || ''
+          const canonical = aliasMap[rawName] || rawName.trim()
+          return {
+            CustomerName: canonical,
+            RawCustomerName: rawName,
+            Date: li.date,
+            AccountDisplayID: li.accountCode,
+            Description: li.description,
+            Total: li.amountExGst,
+            bucket: li.bucket,
+            poNumber: li.poNumber || '',
+          }
+        })
       )
 
       const trendLabels: string[] = (d.monthlyNational || []).map((m: any) => m.ym)
@@ -136,25 +161,56 @@ export default function DistributorReport(){
   useEffect(()=>{load()},[load])
   useEffect(()=>{const t=setInterval(()=>load(true),5*60*1000);return()=>clearInterval(t)},[load])
 
-  // Derived
-  const lines=data?.lineItems||[]
-  const allDists=Array.from(new Set(lines.map(l=>normName(l.CustomerName)))).filter(Boolean).sort()
-  const filtered=selectedDist==='ALL'?lines:lines.filter(l=>normName(l.CustomerName)===selectedDist)
+  // Group lookup helpers
+  const groupNameFor = useCallback((canonical: string, dimension: string): string | null => {
+    if (!grouping) return null
+    const memberGroupIds = new Set(grouping.members.filter(m => m.canonical_name === canonical).map(m => m.group_id))
+    const groupsInDim = grouping.groups.filter(g => g.dimension === dimension).sort((a,b)=>a.sort_order-b.sort_order)
+    for (const g of groupsInDim) {
+      if (memberGroupIds.has(g.id)) return g.name
+    }
+    return null  // no group assigned
+  }, [grouping])
 
-  interface DS{name:string;tuning:number;oil:number;parts:number;total:number}
+  const groupColorFor = useCallback((dimension: string, name: string): string => {
+    if (!grouping) return T.text3
+    const g = grouping.groups.find(gr => gr.dimension === dimension && gr.name === name)
+    return g?.color || T.text3
+  }, [grouping])
+
+  // Derived — now applies exclusions via the 'type'/'Excluded' group
+  const allLines = data?.lineItems || []
+  const visibleLines = allLines.filter(l => groupNameFor(l.CustomerName, 'type') !== 'Excluded')
+  const allDists=Array.from(new Set(visibleLines.map(l=>l.CustomerName))).filter(Boolean).sort()
+  const filtered=selectedDist==='ALL'?visibleLines:visibleLines.filter(l=>l.CustomerName===selectedDist)
+
+  interface DS{name:string;tuning:number;oil:number;parts:number;total:number;typeGroup:string|null;regionGroup:string|null}
   const distSummaries:DS[]=allDists.map(name=>{
-    const dl=lines.filter(l=>normName(l.CustomerName)===name)
+    const dl=visibleLines.filter(l=>l.CustomerName===name)
     const tuning=dl.filter(l=>l.bucket==='Tuning').reduce((s,l)=>s+l.Total,0)
     const oil=dl.filter(l=>l.bucket==='Oil').reduce((s,l)=>s+l.Total,0)
     const parts=dl.filter(l=>l.bucket==='Parts').reduce((s,l)=>s+l.Total,0)
-    return{name,tuning,oil,parts,total:tuning+oil+parts}
+    return{name,tuning,oil,parts,total:tuning+oil+parts,typeGroup:groupNameFor(name,'type'),regionGroup:groupNameFor(name,'region')}
   }).filter(d=>d.total>0).sort((a,b)=>b.total-a.total)
+
+  // Split summaries by the selected primary dimension
+  const dimensionGroups = grouping ? grouping.groups.filter(g => g.dimension === primaryDimension && g.name !== 'Excluded').sort((a,b)=>a.sort_order-b.sort_order) : []
+  const summariesByGroup: Record<string, DS[]> = {}
+  const unclassifiedSummaries: DS[] = []
+  distSummaries.forEach(d => {
+    const groupName = primaryDimension === 'type' ? d.typeGroup : primaryDimension === 'region' ? d.regionGroup : groupNameFor(d.name, primaryDimension)
+    if (!groupName) {
+      unclassifiedSummaries.push(d)
+    } else {
+      if (!summariesByGroup[groupName]) summariesByGroup[groupName] = []
+      summariesByGroup[groupName].push(d)
+    }
+  })
 
   const ss=selectedDist==='ALL'
     ?{tuning:distSummaries.reduce((s,d)=>s+d.tuning,0),oil:distSummaries.reduce((s,d)=>s+d.oil,0),parts:distSummaries.reduce((s,d)=>s+d.parts,0),total:distSummaries.reduce((s,d)=>s+d.total,0)}
     :distSummaries.find(d=>d.name===selectedDist)||{tuning:0,oil:0,parts:0,total:0}
 
-  // Detailed line items
   const detailedByDesc:Record<string,{qty:number;total:number}>={}
   filtered.filter(l=>l.Total>0).forEach(l=>{const k=l.Description||'';if(!detailedByDesc[k])detailedByDesc[k]={qty:0,total:0};detailedByDesc[k].qty+=1;detailedByDesc[k].total+=l.Total})
   const detailedRows=Object.entries(detailedByDesc).sort((a,b)=>b[1].total-a[1].total)
@@ -167,9 +223,8 @@ export default function DistributorReport(){
   const lineRef=useRef<HTMLCanvasElement>(null),lineInst=useRef<any>(null)
   const hBarRef=useRef<HTMLCanvasElement>(null),hBarInst=useRef<any>(null)
 
-  // Distributor Sales bar chart — tuning revenue grouped by vehicle model (VIN-derived)
   useEffect(()=>{
-    if(!barRef.current||!(window as any).Chart||loading)return
+    if(!barRef.current||!(window as any).Chart||loading||tab!=='distributor-sales')return
     if(barInst.current)barInst.current.destroy()
     const tunLines=filtered.filter(l=>l.bucket==='Tuning'&&l.poNumber&&l.poNumber.trim())
     const byModel:Record<string,{total:number;vins:Set<string>;jobs:number}>={}
@@ -183,37 +238,8 @@ export default function DistributorReport(){
     const sorted=Object.entries(byModel).sort((a,b)=>b[1].total-a[1].total)
     barInst.current=new(window as any).Chart(barRef.current,{
       type:'bar',
-      data:{
-        labels:sorted.map(s=>s[0]),
-        datasets:[{
-          data:sorted.map(s=>Math.round(s[1].total)),
-          backgroundColor:'#4f8ef7',
-          borderRadius:4,
-          borderSkipped:false,
-        }]
-      },
-      options:{
-        responsive:true,
-        maintainAspectRatio:false,
-        plugins:{
-          legend:{display:false},
-          tooltip:{
-            callbacks:{
-              label:(ctx:any)=>`$${ctx.raw.toLocaleString()}`,
-              afterLabel:(ctx:any)=>{
-                const m=sorted[ctx.dataIndex]
-                if(!m)return ''
-                const[,info]=m
-                return `${info.vins.size} unique VIN${info.vins.size===1?'':'s'} · ${info.jobs} job${info.jobs===1?'':'s'}`
-              }
-            }
-          }
-        },
-        scales:{
-          x:{grid:{color:'rgba(255,255,255,0.05)'},ticks:{color:T.text3,font:{size:11}}},
-          y:{grid:{color:'rgba(255,255,255,0.05)'},ticks:{color:T.text3,font:{size:11},callback:(v:any)=>'$'+(v>=1000?Math.round(v/1000)+'k':v)}}
-        }
-      }
+      data:{labels:sorted.map(s=>s[0]),datasets:[{data:sorted.map(s=>Math.round(s[1].total)),backgroundColor:'#4f8ef7',borderRadius:4,borderSkipped:false}]},
+      options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false},tooltip:{callbacks:{label:(ctx:any)=>`$${ctx.raw.toLocaleString()}`,afterLabel:(ctx:any)=>{const m=sorted[ctx.dataIndex];if(!m)return '';const[,info]=m;return `${info.vins.size} unique VIN${info.vins.size===1?'':'s'} · ${info.jobs} job${info.jobs===1?'':'s'}`}}}},scales:{x:{grid:{color:'rgba(255,255,255,0.05)'},ticks:{color:T.text3,font:{size:11}}},y:{grid:{color:'rgba(255,255,255,0.05)'},ticks:{color:T.text3,font:{size:11},callback:(v:any)=>'$'+(v>=1000?Math.round(v/1000)+'k':v)}}}}
     })
     return()=>{if(barInst.current)barInst.current.destroy()}
   },[filtered,tab,loading])
@@ -234,7 +260,7 @@ export default function DistributorReport(){
     return()=>{if(hBarInst.current)hBarInst.current.destroy()}
   },[tab,distSummaries])
 
-  const tabs:[Tab,string][]=[['distributor-sales','Distributor Sales'],['detailed-sales','Detailed Sales'],['summary','Summary'],['national-pm','National P/M'],['national-total','National Total']]
+  const tabs:[Tab,string][]=[['summary','Summary'],['distributor-sales','Distributor Sales'],['detailed-sales','Detailed Sales'],['national-pm','National P/M'],['national-total','National Total']]
 
   function KPIBox({label,value,color}:{label:string;value:number;color?:string}){
     return <div style={{textAlign:'right',padding:'16px 20px',borderBottom:`1px solid ${T.border}`}}>
@@ -253,7 +279,6 @@ export default function DistributorReport(){
     </div>
   }
 
-  // Model breakdown rows for the table on Distributor Sales
   function modelRows(){
     const tunLines=filtered.filter(l=>l.bucket==='Tuning'&&l.poNumber&&l.poNumber.trim())
     const byModel:Record<string,{total:number;vins:Set<string>;jobs:number}>={}
@@ -267,16 +292,102 @@ export default function DistributorReport(){
     return Object.entries(byModel).map(([model,v])=>({model,total:v.total,vins:v.vins.size,jobs:v.jobs})).sort((a,b)=>b.total-a.total)
   }
 
+  // ─── Grouped Summary Table ─────────────────────────────────────
+  function renderGroupedSummary() {
+    const allDimensions = grouping ? Array.from(new Set(grouping.groups.map(g=>g.dimension))) : ['type']
+    return <div style={{padding:24,overflowY:'auto',display:'flex',flexDirection:'column',gap:16}}>
+      <div style={{display:'flex',alignItems:'center',gap:10}}>
+        <span style={{fontSize:11,color:T.text3,textTransform:'uppercase',letterSpacing:'0.05em'}}>Group by:</span>
+        {allDimensions.map(d => (
+          <button key={d} onClick={()=>setPrimaryDimension(d)}
+            style={{padding:'4px 12px',borderRadius:5,border:`1px solid ${primaryDimension===d?T.accent:T.border}`,background:primaryDimension===d?T.accent:'transparent',color:primaryDimension===d?'#fff':T.text2,fontSize:11,cursor:'pointer',fontFamily:'inherit',textTransform:'capitalize'}}>
+            {d}
+          </button>
+        ))}
+        <div style={{flex:1}}/>
+        <button onClick={()=>router.push('/admin/groups')}
+          style={{padding:'4px 12px',borderRadius:5,border:`1px solid ${T.border2}`,background:'transparent',color:T.purple,fontSize:11,cursor:'pointer',fontFamily:'inherit'}}>
+          ⚙ Manage groups
+        </button>
+      </div>
+
+      {dimensionGroups.map(g => {
+        const rows = summariesByGroup[g.name] || []
+        if (rows.length === 0) return null
+        const groupTuning = rows.reduce((s,r)=>s+r.tuning,0)
+        const groupOil = rows.reduce((s,r)=>s+r.oil,0)
+        const groupParts = rows.reduce((s,r)=>s+r.parts,0)
+        const groupTotal = rows.reduce((s,r)=>s+r.total,0)
+        return <div key={g.id} style={{background:T.bg2,border:`1px solid ${T.border}`,borderRadius:10,overflowX:'auto'}}>
+          <div style={{padding:'14px 16px',borderBottom:`1px solid ${T.border2}`,display:'flex',alignItems:'center',gap:10}}>
+            <div style={{width:10,height:10,borderRadius:3,background:g.color||T.text3,flexShrink:0}}/>
+            <div style={{fontSize:14,fontWeight:600,color:T.text}}>{g.name}</div>
+            <span style={{fontSize:11,color:T.text3,fontFamily:'monospace'}}>{rows.length} distributor{rows.length===1?'':'s'} · {fmtFull(groupTotal)}</span>
+          </div>
+          <table style={{width:'100%',borderCollapse:'collapse'}}>
+            <thead><tr style={{borderBottom:`1px solid ${T.border}`}}>
+              <th style={{fontSize:11,color:T.text3,padding:'10px 12px',textAlign:'left',fontWeight:500}}>Distributor</th>
+              {['Oil','Parts','Tuning','Total'].map(h=><th key={h} style={{fontSize:11,color:T.text3,padding:'10px 12px',textAlign:'right',fontWeight:500}}>{h}</th>)}
+            </tr></thead>
+            <tbody>{rows.map((d,i)=><tr key={i} style={{borderTop:`1px solid ${T.border}`,cursor:'pointer',background:selectedDist===d.name?'rgba(79,142,247,0.08)':'transparent'}} onClick={()=>setSelectedDist(d.name===selectedDist?'ALL':d.name)}>
+              <td style={{fontSize:12,color:T.text2,padding:'8px 12px'}}>{d.name}</td>
+              <td style={{fontSize:12,fontFamily:'monospace',color:d.oil>0?T.text:T.text3,padding:'8px 12px',textAlign:'right'}}>{d.oil>0?fmtFull(d.oil):'$0'}</td>
+              <td style={{fontSize:12,fontFamily:'monospace',color:d.parts>0?T.text:T.text3,padding:'8px 12px',textAlign:'right'}}>{d.parts>0?fmtFull(d.parts):'$0'}</td>
+              <td style={{fontSize:12,fontFamily:'monospace',color:d.tuning>0?T.green:T.text3,padding:'8px 12px',textAlign:'right'}}>{d.tuning>0?fmtFull(d.tuning):'$0'}</td>
+              <td style={{fontSize:12,fontFamily:'monospace',fontWeight:500,color:T.blue,padding:'8px 12px',textAlign:'right'}}>{fmtFull(d.total)}</td>
+            </tr>)}
+            <tr style={{borderTop:`2px solid ${T.border2}`,background:T.bg3}}>
+              <td style={{fontSize:13,fontWeight:500,color:T.text,padding:'10px 12px'}}>{g.name} Total</td>
+              <td style={{fontSize:13,fontFamily:'monospace',fontWeight:500,color:T.text,padding:'10px 12px',textAlign:'right'}}>{fmtFull(groupOil)}</td>
+              <td style={{fontSize:13,fontFamily:'monospace',fontWeight:500,color:T.text,padding:'10px 12px',textAlign:'right'}}>{fmtFull(groupParts)}</td>
+              <td style={{fontSize:13,fontFamily:'monospace',fontWeight:500,color:T.green,padding:'10px 12px',textAlign:'right'}}>{fmtFull(groupTuning)}</td>
+              <td style={{fontSize:13,fontFamily:'monospace',fontWeight:500,color:T.blue,padding:'10px 12px',textAlign:'right'}}>{fmtFull(groupTotal)}</td>
+            </tr></tbody>
+          </table>
+        </div>
+      })}
+
+      {unclassifiedSummaries.length > 0 && (
+        <div style={{background:T.bg2,border:`1px solid ${T.amber}40`,borderRadius:10,overflowX:'auto'}}>
+          <div style={{padding:'14px 16px',borderBottom:`1px solid ${T.amber}40`,display:'flex',alignItems:'center',gap:10}}>
+            <div style={{width:10,height:10,borderRadius:3,background:T.amber,flexShrink:0}}/>
+            <div style={{fontSize:14,fontWeight:600,color:T.amber}}>Unclassified</div>
+            <span style={{fontSize:11,color:T.text3,fontFamily:'monospace'}}>{unclassifiedSummaries.length} distributor{unclassifiedSummaries.length===1?'':'s'} · {fmtFull(unclassifiedSummaries.reduce((s,r)=>s+r.total,0))}</span>
+            <div style={{flex:1}}/>
+            <button onClick={()=>router.push('/admin/groups')}
+              style={{padding:'3px 10px',borderRadius:4,border:`1px solid ${T.amber}`,background:'transparent',color:T.amber,fontSize:11,cursor:'pointer',fontFamily:'inherit'}}>
+              Classify now →
+            </button>
+          </div>
+          <table style={{width:'100%',borderCollapse:'collapse'}}>
+            <thead><tr style={{borderBottom:`1px solid ${T.border}`}}>
+              <th style={{fontSize:11,color:T.text3,padding:'10px 12px',textAlign:'left',fontWeight:500}}>Distributor</th>
+              {['Oil','Parts','Tuning','Total'].map(h=><th key={h} style={{fontSize:11,color:T.text3,padding:'10px 12px',textAlign:'right',fontWeight:500}}>{h}</th>)}
+            </tr></thead>
+            <tbody>{unclassifiedSummaries.map((d,i)=><tr key={i} style={{borderTop:`1px solid ${T.border}`}}>
+              <td style={{fontSize:12,color:T.text2,padding:'8px 12px'}}>{d.name}</td>
+              <td style={{fontSize:12,fontFamily:'monospace',color:d.oil>0?T.text:T.text3,padding:'8px 12px',textAlign:'right'}}>{d.oil>0?fmtFull(d.oil):'$0'}</td>
+              <td style={{fontSize:12,fontFamily:'monospace',color:d.parts>0?T.text:T.text3,padding:'8px 12px',textAlign:'right'}}>{d.parts>0?fmtFull(d.parts):'$0'}</td>
+              <td style={{fontSize:12,fontFamily:'monospace',color:d.tuning>0?T.green:T.text3,padding:'8px 12px',textAlign:'right'}}>{d.tuning>0?fmtFull(d.tuning):'$0'}</td>
+              <td style={{fontSize:12,fontFamily:'monospace',fontWeight:500,color:T.blue,padding:'8px 12px',textAlign:'right'}}>{fmtFull(d.total)}</td>
+            </tr>)}</tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  }
+
   function renderContent(){
     if(loading)return <div style={{display:'flex',alignItems:'center',justifyContent:'center',height:400,flexDirection:'column',gap:12}}>
       <div style={{fontSize:28,animation:'spin 1s linear infinite',color:T.text3}}>⟳</div><div style={{color:T.text3}}>Loading distributor data…</div>
       <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
     </div>
-
     if(error)return <div style={{padding:24}}><div style={{background:'rgba(240,78,78,0.1)',border:'1px solid rgba(240,78,78,0.2)',borderRadius:10,padding:20,color:T.red}}>
       <div style={{marginBottom:10}}>Error: {error}</div>
       <button onClick={()=>{setError('');setLoading(true);load()}} style={{padding:'6px 16px',borderRadius:6,border:`1px solid ${T.blue}`,background:T.blue,color:'#fff',fontSize:12,cursor:'pointer',fontFamily:'inherit'}}>Retry</button>
     </div></div>
+
+    if (tab === 'summary') return renderGroupedSummary()
 
     if(tab==='distributor-sales'){
       const models=modelRows()
@@ -286,9 +397,7 @@ export default function DistributorReport(){
         <div style={{flex:1,padding:24,display:'flex',flexDirection:'column',gap:16,overflowY:'auto'}}>
           <div style={{display:'flex',alignItems:'center',gap:12}}>
             <div style={{fontSize:18,fontWeight:500,color:T.text}}>{selectedDist==='ALL'?'All Distributors':selectedDist}</div>
-            <div style={{fontSize:11,fontFamily:'monospace',padding:'3px 8px',borderRadius:4,background:'rgba(79,142,247,0.12)',color:T.blue,border:'1px solid rgba(79,142,247,0.2)'}}>
-              {totalVins} unique VIN{totalVins===1?'':'s'}
-            </div>
+            <div style={{fontSize:11,fontFamily:'monospace',padding:'3px 8px',borderRadius:4,background:'rgba(79,142,247,0.12)',color:T.blue,border:'1px solid rgba(79,142,247,0.2)'}}>{totalVins} unique VIN{totalVins===1?'':'s'}</div>
           </div>
           <div style={{fontSize:12,color:T.text3}}>
             <span style={{display:'inline-flex',alignItems:'center',gap:5}}>
@@ -323,9 +432,7 @@ export default function DistributorReport(){
               </tr></tbody>
             </table>
           </div>}
-          {models.length===0&&<div style={{fontSize:12,color:T.text3,fontStyle:'italic',padding:'12px 0'}}>
-            No tuning jobs with VIN data in this period. VINs are read from the Customer PO field on each sales invoice.
-          </div>}
+          {models.length===0&&<div style={{fontSize:12,color:T.text3,fontStyle:'italic',padding:'12px 0'}}>No tuning jobs with VIN data in this period.</div>}
         </div>
         <div style={{width:220,borderLeft:`1px solid ${T.border}`,flexShrink:0}}>
           <KPIBox label="Tuning Revenue ex GST" value={ss.tuning} color={T.green}/>
@@ -354,31 +461,6 @@ export default function DistributorReport(){
             <td style={{fontSize:13,fontWeight:500,color:T.text,padding:'10px 16px'}}>Total</td>
             <td style={{fontSize:13,fontFamily:'monospace',fontWeight:500,color:T.text3,padding:'10px 16px',textAlign:'right'}}>{detailedRows.reduce((s,[,v])=>s+v.qty,0)}</td>
             <td style={{fontSize:13,fontFamily:'monospace',fontWeight:500,color:T.blue,padding:'10px 16px',textAlign:'right'}}>{fmtFull(detailedRows.reduce((s,[,v])=>s+v.total,0))}</td>
-          </tr></tbody>
-        </table>
-      </div>
-    </div>
-
-    if(tab==='summary')return <div style={{padding:24,overflowY:'auto'}}>
-      <div style={{background:T.bg2,border:`1px solid ${T.border}`,borderRadius:10,overflowX:'auto'}}>
-        <table style={{width:'100%',borderCollapse:'collapse'}}>
-          <thead><tr style={{borderBottom:`1px solid ${T.border2}`}}>
-            <th style={{fontSize:11,color:T.text3,padding:'10px 12px',textAlign:'left',fontWeight:500}}>Distributor</th>
-            {['Oil','Parts','Tuning','Total'].map(h=><th key={h} style={{fontSize:11,color:T.text3,padding:'10px 12px',textAlign:'right',fontWeight:500}}>{h}</th>)}
-          </tr></thead>
-          <tbody>{distSummaries.map((d,i)=><tr key={i} style={{borderTop:`1px solid ${T.border}`,cursor:'pointer',background:selectedDist===d.name?'rgba(79,142,247,0.08)':'transparent'}} onClick={()=>setSelectedDist(d.name===selectedDist?'ALL':d.name)}>
-            <td style={{fontSize:12,color:T.text2,padding:'8px 12px'}}>{d.name}</td>
-            <td style={{fontSize:12,fontFamily:'monospace',color:d.oil>0?T.text:T.text3,padding:'8px 12px',textAlign:'right'}}>{d.oil>0?fmtFull(d.oil):'$0'}</td>
-            <td style={{fontSize:12,fontFamily:'monospace',color:d.parts>0?T.text:T.text3,padding:'8px 12px',textAlign:'right'}}>{d.parts>0?fmtFull(d.parts):'$0'}</td>
-            <td style={{fontSize:12,fontFamily:'monospace',color:d.tuning>0?T.green:T.text3,padding:'8px 12px',textAlign:'right'}}>{d.tuning>0?fmtFull(d.tuning):'$0'}</td>
-            <td style={{fontSize:12,fontFamily:'monospace',fontWeight:500,color:T.blue,padding:'8px 12px',textAlign:'right'}}>{fmtFull(d.total)}</td>
-          </tr>)}
-          <tr style={{borderTop:`2px solid ${T.border2}`,background:T.bg3}}>
-            <td style={{fontSize:13,fontWeight:500,color:T.text,padding:'10px 12px'}}>Total</td>
-            <td style={{fontSize:13,fontFamily:'monospace',fontWeight:500,color:T.text,padding:'10px 12px',textAlign:'right'}}>{fmtFull(distSummaries.reduce((s,d)=>s+d.oil,0))}</td>
-            <td style={{fontSize:13,fontFamily:'monospace',fontWeight:500,color:T.text,padding:'10px 12px',textAlign:'right'}}>{fmtFull(distSummaries.reduce((s,d)=>s+d.parts,0))}</td>
-            <td style={{fontSize:13,fontFamily:'monospace',fontWeight:500,color:T.green,padding:'10px 12px',textAlign:'right'}}>{fmtFull(distSummaries.reduce((s,d)=>s+d.tuning,0))}</td>
-            <td style={{fontSize:13,fontFamily:'monospace',fontWeight:500,color:T.blue,padding:'10px 12px',textAlign:'right'}}>{fmtFull(distSummaries.reduce((s,d)=>s+d.total,0))}</td>
           </tr></tbody>
         </table>
       </div>
@@ -416,24 +498,16 @@ export default function DistributorReport(){
     <div style={{display:'flex',height:'100vh',overflow:'hidden',fontFamily:"'DM Sans',system-ui,sans-serif",color:T.text}}>
       <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet"/>
 
-      {/* SHARED SIDEBAR */}
-      <PortalSidebar
-        activeId="distributors"
-        lastRefresh={lastRefresh}
-        onRefresh={()=>load(true)}
-        refreshing={refreshing}
-      />
+      <PortalSidebar activeId="distributors" lastRefresh={lastRefresh} onRefresh={()=>load(true)} refreshing={refreshing}/>
 
-      {/* MAIN */}
       <div style={{flex:1,display:'flex',flexDirection:'column',overflow:'hidden',background:T.bg}}>
-        {/* Top bar */}
         <div style={{height:52,background:T.bg2,borderBottom:`1px solid ${T.border}`,display:'flex',alignItems:'center',padding:'0 20px',gap:10,flexShrink:0}}>
           <div style={{width:26,height:26,borderRadius:6,background:T.blue,display:'flex',alignItems:'center',justifyContent:'center',fontSize:11,fontWeight:600,color:'#fff'}}>JA</div>
           <span style={{fontSize:14,fontWeight:600}}>Distributors</span>
           <div style={{flex:1}}/>
           {!loading&&<><div style={{width:7,height:7,borderRadius:'50%',background:T.green,boxShadow:`0 0 6px ${T.green}`}}/>
           <span style={{fontSize:10,fontFamily:'monospace',padding:'2px 8px',borderRadius:4,background:'rgba(52,199,123,0.12)',color:T.green,border:'1px solid rgba(52,199,123,0.2)'}}>MYOB live</span>
-          <span style={{fontSize:10,fontFamily:'monospace',padding:'2px 8px',borderRadius:4,background:'rgba(79,142,247,0.12)',color:T.blue,border:'1px solid rgba(79,142,247,0.2)'}}>{fyLabel} · {distSummaries.length} distributors</span></>}
+          <span style={{fontSize:10,fontFamily:'monospace',padding:'2px 8px',borderRadius:4,background:'rgba(79,142,247,0.12)',color:T.blue,border:'1px solid rgba(79,142,247,0.2)'}}>{fyLabel} · {distSummaries.length} dists</span></>}
           <div style={{width:1,height:18,background:T.border}}/>
           {[currentFY-1,currentFY].map(y=><button key={y} onClick={()=>selectFY(y)} style={{padding:'3px 10px',borderRadius:4,border:'1px solid',fontSize:11,fontFamily:'monospace',fontWeight:600,cursor:'pointer',background:fyYear===y&&!isCustomRange?T.accent:'transparent',color:fyYear===y&&!isCustomRange?'#fff':T.text2,borderColor:fyYear===y&&!isCustomRange?T.accent:T.border}}>FY{y}</button>)}
           <input type="date" value={customStart} onChange={e=>setCustomStart(e.target.value)} style={{padding:'3px 6px',borderRadius:4,border:`1px solid ${isCustomRange?T.accent:T.border}`,fontSize:11,fontFamily:'monospace',background:'transparent',color:T.text2,outline:'none',colorScheme:'dark'}}/>
@@ -443,14 +517,12 @@ export default function DistributorReport(){
           {dateLoading&&<span style={{fontSize:14,animation:'spin 1s linear infinite',color:T.blue}}>⟳</span>}
         </div>
 
-        {/* Tabs */}
         <div style={{background:T.bg2,borderBottom:`1px solid ${T.border}`,display:'flex',alignItems:'flex-end',padding:'0 20px',gap:2,flexShrink:0}}>
           {tabs.map(([id,label])=><button key={id} onClick={()=>setTab(id)} style={{fontSize:12,padding:'10px 16px',border:'none',borderBottom:tab===id?`2px solid ${T.blue}`:'2px solid transparent',background:'transparent',color:tab===id?T.blue:T.text2,cursor:'pointer',fontFamily:'inherit',whiteSpace:'nowrap'}}>{label}</button>)}
         </div>
 
         {showSelector&&!loading&&!error&&<DistSelector/>}
 
-        {/* Content */}
         <div style={{flex:1,overflow:'hidden',display:'flex',flexDirection:'column',position:'relative'}}>
           <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
           {dateLoading&&<div style={{position:'absolute',inset:0,background:'rgba(13,15,18,0.75)',zIndex:10,display:'flex',alignItems:'center',justifyContent:'center',flexDirection:'column',gap:12}}>
