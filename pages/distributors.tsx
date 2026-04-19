@@ -3,6 +3,7 @@ import { useEffect, useState, useRef, useCallback } from 'react'
 import Head from 'next/head'
 import Script from 'next/script'
 import { useRouter } from 'next/router'
+import PortalSidebar from '../lib/PortalSidebar'
 
 interface LineItem {
   CustomerName: string
@@ -234,7 +235,6 @@ export default function DistributorReport(){
   },[tab,distSummaries])
 
   const tabs:[Tab,string][]=[['distributor-sales','Distributor Sales'],['detailed-sales','Detailed Sales'],['summary','Summary'],['national-pm','National P/M'],['national-total','National Total']]
-  const sidebarNav=[{href:'/',label:'Overview',color:T.blue},{href:'/?s=jaws',label:'JAWS Wholesale',color:T.blue},{href:'/?s=vps',label:'VPS Workshop',color:T.teal},{href:'/?s=invoices',label:'Invoices',color:T.amber},{href:'/?s=pnl',label:'P&L',color:T.green},{href:'/?s=stock',label:'Stock & Inventory',color:T.purple},{href:'/?s=payables',label:'Payables',color:T.red},{href:'/?s=distributors',label:'Distributors',color:T.blue}]
 
   function KPIBox({label,value,color}:{label:string;value:number;color?:string}){
     return <div style={{textAlign:'right',padding:'16px 20px',borderBottom:`1px solid ${T.border}`}}>
@@ -410,45 +410,26 @@ export default function DistributorReport(){
   const showSelector=tab==='distributor-sales'||tab==='detailed-sales'
 
   return (<>
-    <Head><title>Distributor Report — Just Autos</title><meta name="viewport" content="width=device-width,initial-scale=1"/><meta name="robots" content="noindex,nofollow"/></Head>
+    <Head><title>Distributors — Just Autos</title><meta name="viewport" content="width=device-width,initial-scale=1"/><meta name="robots" content="noindex,nofollow"/></Head>
     <Script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js" strategy="beforeInteractive"/>
 
     <div style={{display:'flex',height:'100vh',overflow:'hidden',fontFamily:"'DM Sans',system-ui,sans-serif",color:T.text}}>
       <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet"/>
 
-      {/* SIDEBAR */}
-      <div style={{width:220,minWidth:220,background:T.bg2,borderRight:`1px solid ${T.border}`,display:'flex',flexDirection:'column',height:'100vh',overflowY:'auto'}}>
-        <div style={{padding:'20px 18px 16px',borderBottom:`1px solid ${T.border}`}}>
-          <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:4}}>
-            <div style={{width:30,height:30,borderRadius:8,background:T.blue,display:'flex',alignItems:'center',justifyContent:'center',fontSize:13,fontWeight:600,color:'#fff'}}>JA</div>
-            <div style={{fontSize:14,fontWeight:600,color:T.text}}>Just Autos</div>
-          </div>
-          <div style={{fontSize:11,color:T.text3,marginLeft:40}}>Management Portal</div>
-        </div>
-        <div style={{padding:'14px 10px 4px',flex:1}}>
-          <div style={{fontSize:9,fontWeight:600,color:T.text3,textTransform:'uppercase',letterSpacing:'0.1em',padding:'0 8px',marginBottom:6}}>Navigation</div>
-          <a href="/sales" style={{display:'flex',alignItems:'center',gap:9,padding:'8px 10px',borderRadius:7,fontSize:13,marginBottom:4,background:'rgba(167,139,250,0.1)',color:T.purple,textDecoration:'none',border:`1px solid rgba(167,139,250,0.2)`}}>
-            <div style={{width:7,height:7,borderRadius:'50%',background:T.purple,flexShrink:0}}/><span style={{flex:1}}>Sales Dashboard</span>
-          </a>
-          <a href="/distributors" style={{display:'flex',alignItems:'center',gap:9,padding:'8px 10px',borderRadius:7,fontSize:13,marginBottom:4,background:'rgba(79,142,247,0.15)',color:T.blue,textDecoration:'none',border:`1px solid rgba(79,142,247,0.3)`}}>
-            <div style={{width:7,height:7,borderRadius:'50%',background:T.blue,flexShrink:0}}/><span style={{flex:1}}>Distributor Report</span>
-            <span style={{fontSize:9,fontFamily:'monospace',background:T.blue,color:'#fff',padding:'1px 5px',borderRadius:3}}>PBI</span>
-          </a>
-          {sidebarNav.map(item=><a key={item.label} href={item.href} style={{display:'flex',alignItems:'center',gap:9,padding:'8px 10px',borderRadius:7,fontSize:13,marginBottom:1,background:'transparent',color:T.text2,textDecoration:'none'}}><div style={{width:7,height:7,borderRadius:'50%',background:item.color,flexShrink:0}}/><span style={{flex:1}}>{item.label}</span></a>)}
-        </div>
-        <div style={{padding:'12px 14px',borderTop:`1px solid ${T.border}`}}>
-          <div style={{fontSize:10,color:T.text3,marginBottom:5}}>{lastRefresh?`Updated ${lastRefresh.toLocaleTimeString('en-AU',{hour:'2-digit',minute:'2-digit'})}`:'Loading…'}</div>
-          <button onClick={()=>load(true)} disabled={refreshing} style={{fontSize:12,color:T.blue,background:'none',border:'none',cursor:'pointer',fontFamily:'inherit',padding:0,display:'block',marginBottom:4}}>{refreshing?'Refreshing…':'↻ Refresh data'}</button>
-          <button onClick={async()=>{await fetch('/api/auth/logout',{method:'POST'});router.push('/login')}} style={{fontSize:12,color:T.text3,background:'none',border:'none',cursor:'pointer',fontFamily:'inherit',padding:0}}>Sign out →</button>
-        </div>
-      </div>
+      {/* SHARED SIDEBAR */}
+      <PortalSidebar
+        activeId="distributors"
+        lastRefresh={lastRefresh}
+        onRefresh={()=>load(true)}
+        refreshing={refreshing}
+      />
 
       {/* MAIN */}
       <div style={{flex:1,display:'flex',flexDirection:'column',overflow:'hidden',background:T.bg}}>
         {/* Top bar */}
         <div style={{height:52,background:T.bg2,borderBottom:`1px solid ${T.border}`,display:'flex',alignItems:'center',padding:'0 20px',gap:10,flexShrink:0}}>
           <div style={{width:26,height:26,borderRadius:6,background:T.blue,display:'flex',alignItems:'center',justifyContent:'center',fontSize:11,fontWeight:600,color:'#fff'}}>JA</div>
-          <span style={{fontSize:14,fontWeight:600}}>Distributor Report</span>
+          <span style={{fontSize:14,fontWeight:600}}>Distributors</span>
           <div style={{flex:1}}/>
           {!loading&&<><div style={{width:7,height:7,borderRadius:'50%',background:T.green,boxShadow:`0 0 6px ${T.green}`}}/>
           <span style={{fontSize:10,fontFamily:'monospace',padding:'2px 8px',borderRadius:4,background:'rgba(52,199,123,0.12)',color:T.green,border:'1px solid rgba(52,199,123,0.2)'}}>MYOB live</span>
