@@ -2,6 +2,7 @@
 import { useEffect, useState, useCallback } from 'react'
 import Head from 'next/head'
 import { useRouter } from 'next/router'
+import PortalSidebar from '../lib/PortalSidebar'
 
 const T={bg:'#0d0f12',bg2:'#131519',bg3:'#1a1d23',bg4:'#21252d',border:'rgba(255,255,255,0.07)',border2:'rgba(255,255,255,0.12)',text:'#e8eaf0',text2:'#8b90a0',text3:'#545968',blue:'#4f8ef7',teal:'#2dd4bf',green:'#34c77b',amber:'#f5a623',red:'#f04e4e',purple:'#a78bfa',pink:'#ff5ac4',accent:'#4f8ef7'}
 const fmt=(n:number)=>n>=1e6?'$'+(n/1e6).toFixed(2)+'M':n>=1000?'$'+Math.round(n/1000)+'k':'$'+Math.round(n)
@@ -97,44 +98,24 @@ export default function SalesDashboard(){
   filteredLeads.forEach(l=>{leadsByStatus[l.status]=(leadsByStatus[l.status]||0)+1})
   const totalLeadValue=filteredLeads.reduce((s,l)=>s+(parseFloat(l.quoteValue)||0),0)
 
-  const sidebarNav=[{href:'/',label:'Overview',color:T.blue},{href:'/?s=jaws',label:'JAWS Wholesale',color:T.blue},{href:'/?s=vps',label:'VPS Workshop',color:T.teal},{href:'/?s=invoices',label:'Invoices',color:T.amber},{href:'/?s=pnl',label:'P&L',color:T.green},{href:'/?s=stock',label:'Stock & Inventory',color:T.purple},{href:'/?s=payables',label:'Payables',color:T.red},{href:'/?s=distributors',label:'Distributors',color:T.blue}]
-
   return (<>
-    <Head><title>Sales Dashboard — Just Autos</title><meta name="viewport" content="width=device-width,initial-scale=1"/><meta name="robots" content="noindex,nofollow"/></Head>
+    <Head><title>Leads/Orders — Just Autos</title><meta name="viewport" content="width=device-width,initial-scale=1"/><meta name="robots" content="noindex,nofollow"/></Head>
     <div style={{display:'flex',height:'100vh',overflow:'hidden',fontFamily:"'DM Sans',system-ui,sans-serif",color:T.text}}>
       <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet"/>
 
-      {/* SIDEBAR */}
-      <div style={{width:220,minWidth:220,background:T.bg2,borderRight:`1px solid ${T.border}`,display:'flex',flexDirection:'column',height:'100vh',overflowY:'auto'}}>
-        <div style={{padding:'20px 18px 16px',borderBottom:`1px solid ${T.border}`}}>
-          <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:4}}>
-            <div style={{width:30,height:30,borderRadius:8,background:T.blue,display:'flex',alignItems:'center',justifyContent:'center',fontSize:13,fontWeight:600,color:'#fff'}}>JA</div>
-            <div style={{fontSize:14,fontWeight:600,color:T.text}}>Just Autos</div>
-          </div>
-          <div style={{fontSize:11,color:T.text3,marginLeft:40}}>Management Portal</div>
-        </div>
-        <div style={{padding:'14px 10px 4px',flex:1}}>
-          <div style={{fontSize:9,fontWeight:600,color:T.text3,textTransform:'uppercase',letterSpacing:'0.1em',padding:'0 8px',marginBottom:6}}>Navigation</div>
-          <a href="/sales" style={{display:'flex',alignItems:'center',gap:9,padding:'8px 10px',borderRadius:7,fontSize:13,marginBottom:4,background:'rgba(167,139,250,0.15)',color:T.purple,textDecoration:'none',border:`1px solid rgba(167,139,250,0.3)`}}>
-            <div style={{width:7,height:7,borderRadius:'50%',background:T.purple,flexShrink:0}}/><span style={{flex:1}}>Sales Dashboard</span><span style={{fontSize:9,fontFamily:'monospace',background:T.purple,color:'#fff',padding:'1px 5px',borderRadius:3}}>LIVE</span>
-          </a>
-          <a href="/distributors" style={{display:'flex',alignItems:'center',gap:9,padding:'8px 10px',borderRadius:7,fontSize:13,marginBottom:4,background:'rgba(79,142,247,0.1)',color:T.blue,textDecoration:'none',border:`1px solid rgba(79,142,247,0.2)`}}>
-            <div style={{width:7,height:7,borderRadius:'50%',background:T.blue,flexShrink:0}}/><span style={{flex:1}}>Distributor Report</span><span style={{fontSize:9,fontFamily:'monospace',background:T.blue,color:'#fff',padding:'1px 5px',borderRadius:3}}>PBI</span>
-          </a>
-          {sidebarNav.map(item=><a key={item.label} href={item.href} style={{display:'flex',alignItems:'center',gap:9,padding:'8px 10px',borderRadius:7,fontSize:13,marginBottom:1,background:'transparent',color:T.text2,textDecoration:'none'}}><div style={{width:7,height:7,borderRadius:'50%',background:item.color,flexShrink:0}}/><span style={{flex:1}}>{item.label}</span></a>)}
-        </div>
-        <div style={{padding:'12px 14px',borderTop:`1px solid ${T.border}`}}>
-          <div style={{fontSize:10,color:T.text3,marginBottom:5}}>{lastRefresh?`Updated ${lastRefresh.toLocaleTimeString('en-AU',{hour:'2-digit',minute:'2-digit'})}`:'Loading…'}</div>
-          <button onClick={()=>load(true)} disabled={refreshing} style={{fontSize:12,color:T.blue,background:'none',border:'none',cursor:'pointer',fontFamily:'inherit',padding:0,display:'block',marginBottom:4}}>{refreshing?'Refreshing…':'↻ Refresh data'}</button>
-          <button onClick={async()=>{await fetch('/api/auth/logout',{method:'POST'});router.push('/login')}} style={{fontSize:12,color:T.text3,background:'none',border:'none',cursor:'pointer',fontFamily:'inherit',padding:0}}>Sign out →</button>
-        </div>
-      </div>
+      {/* SHARED SIDEBAR */}
+      <PortalSidebar
+        activeId="leads"
+        lastRefresh={lastRefresh}
+        onRefresh={()=>load(true)}
+        refreshing={refreshing}
+      />
 
       {/* MAIN */}
       <div style={{flex:1,display:'flex',flexDirection:'column',overflow:'hidden',background:T.bg}}>
         {/* Top bar */}
         <div style={{height:52,background:T.bg2,borderBottom:`1px solid ${T.border}`,display:'flex',alignItems:'center',padding:'0 20px',gap:10,flexShrink:0}}>
-          <div style={{fontSize:14,fontWeight:500,color:T.text,marginRight:8}}>Sales Dashboard</div>
+          <div style={{fontSize:14,fontWeight:500,color:T.text,marginRight:8}}>Leads/Orders</div>
           <div style={{display:'flex',gap:2,background:T.bg3,borderRadius:7,padding:2}}>
             {([['workshop','Workshop Sales'],['distributor','Dist. Bookings']] as [string,string][]).map(([k,l])=>
               <button key={k} onClick={()=>{setView(k as any);setSubTab('overview')}} style={{padding:'4px 14px',borderRadius:5,border:'none',fontSize:11,fontWeight:view===k?600:400,background:view===k?T.accent:'transparent',color:view===k?'#fff':T.text2,cursor:'pointer',fontFamily:'inherit'}}>{l}</button>
