@@ -1,0 +1,243 @@
+// lib/PortalSidebar.tsx
+// Shared sidebar component used by index, sales, and distributors pages.
+// Handles nav rendering, drag-reorder, sort dropdown, and refresh/signout footer.
+
+import { useState } from 'react'
+import { useRouter } from 'next/router'
+
+// ── Design tokens (kept in sync with portal) ─────────────────
+const T = {
+  bg2: '#131519', bg3: '#1a1d23',
+  border: 'rgba(255,255,255,0.07)',
+  text: '#e8eaf0', text2: '#8b90a0', text3: '#545968',
+  blue: '#4f8ef7', teal: '#2dd4bf', green: '#34c77b',
+  amber: '#f5a623', red: '#f04e4e', purple: '#a78bfa',
+  accent: '#4f8ef7',
+}
+
+export type PortalSection = 'overview'|'invoices'|'pnl'|'stock'|'payables'
+export type NavSort = 'default'|'az'|'za'|'custom'
+
+export interface PortalNavItem {
+  id: string
+  kind: 'link' | 'section'
+  label: string
+  href?: string              // for link type — e.g. '/sales'
+  section?: PortalSection    // for section type — internal portal tab
+  dot: string                // colour of the indicator dot
+  alertKey?: 'invoices'|'payables'
+}
+
+// Default nav order — same on every page
+export const DEFAULT_NAV: PortalNavItem[] = [
+  {id:'leads',        kind:'link',    label:'Leads/Orders', href:'/sales',         dot:'#a78bfa'},
+  {id:'distributors', kind:'link',    label:'Distributors', href:'/distributors',  dot:T.blue},
+  {id:'reports',      kind:'link',    label:'Reports',      href:'/reports',       dot:T.green},
+  {id:'overview',     kind:'section', label:'Overview',          section:'overview', dot:T.blue},
+  {id:'invoices',     kind:'section', label:'Invoices',          section:'invoices', dot:T.amber, alertKey:'invoices'},
+  {id:'pnl',          kind:'section', label:'P&L — This Month',  section:'pnl',      dot:T.green},
+  {id:'stock',        kind:'section', label:'Stock & Inventory', section:'stock',    dot:T.purple},
+  {id:'payables',     kind:'section', label:'Payables',          section:'payables', dot:T.red,   alertKey:'payables'},
+]
+
+export interface PortalSidebarProps {
+  // Which nav item is active. On index.tsx this tracks the current Section.
+  // On /sales, pass 'leads'. On /distributors, pass 'distributors'. On /reports, pass 'reports'.
+  activeId: string
+
+  // Called when an internal section nav item is clicked.
+  // On index.tsx: set local state. On other pages: defaults to navigating to `/?s={section}`.
+  onSectionClick?: (section: PortalSection) => void
+
+  // Optional — show refresh button with count + last refresh timestamp
+  lastRefresh?: Date | null
+  onRefresh?: () => void
+  refreshing?: boolean
+
+  // Optional — alert counts shown next to Invoices and Payables
+  alertCounts?: { invoices?: number; payables?: number }
+
+  // Loading state — hides alert count pills until data ready
+  loading?: boolean
+}
+
+export default function PortalSidebar({
+  activeId,
+  onSectionClick,
+  lastRefresh,
+  onRefresh,
+  refreshing,
+  alertCounts = {},
+  loading = false,
+}: PortalSidebarProps) {
+  const router = useRouter()
+  const [navSort, setNavSort] = useState<NavSort>('default')
+  const [customOrder, setCustomOrder] = useState<string[]>([])
+  const [draggedId, setDraggedId] = useState<string|null>(null)
+  const [dragOverId, setDragOverId] = useState<string|null>(null)
+
+  // Compute sorted order
+  const sortedItems: PortalNavItem[] = (() => {
+    if (navSort === 'az') return [...DEFAULT_NAV].sort((a,b) => a.label.localeCompare(b.label))
+    if (navSort === 'za') return [...DEFAULT_NAV].sort((a,b) => b.label.localeCompare(a.label))
+    if (navSort === 'custom' && customOrder.length === DEFAULT_NAV.length) {
+      const byId: Record<string, PortalNavItem> = {}
+      DEFAULT_NAV.forEach(it => { byId[it.id] = it })
+      return customOrder.map(id => byId[id]).filter(Boolean)
+    }
+    return DEFAULT_NAV
+  })()
+
+  function handleClick(item: PortalNavItem) {
+    if (item.kind === 'link') {
+      router.push(item.href!)
+      return
+    }
+    // Section click
+    if (onSectionClick) {
+      onSectionClick(item.section!)
+    } else {
+      // Default: navigate to root with section query param
+      router.push(`/?s=${item.section}`)
+    }
+  }
+
+  // Drag handlers
+  function handleDragStart(e: React.DragEvent, id: string) {
+    if (navSort !== 'custom') return
+    setDraggedId(id)
+    e.dataTransfer.effectAllowed = 'move'
+    e.dataTransfer.setData('text/plain', id)
+  }
+  function handleDragOver(e: React.DragEvent, id: string) {
+    if (navSort !== 'custom' || !draggedId) return
+    e.preventDefault()
+    e.dataTransfer.dropEffect = 'move'
+    if (id !== dragOverId) setDragOverId(id)
+  }
+  function handleDrop(e: React.DragEvent, targetId: string) {
+    if (navSort !== 'custom' || !draggedId) return
+    e.preventDefault()
+    if (draggedId === targetId) { setDraggedId(null); setDragOverId(null); return }
+    const order = sortedItems.map(it => it.id)
+    const fromIdx = order.indexOf(draggedId)
+    const toIdx = order.indexOf(targetId)
+    if (fromIdx < 0 || toIdx < 0) { setDraggedId(null); setDragOverId(null); return }
+    const [moved] = order.splice(fromIdx, 1)
+    order.splice(toIdx, 0, moved)
+    setCustomOrder(order)
+    setDraggedId(null); setDragOverId(null)
+  }
+  function handleDragEnd() {
+    setDraggedId(null); setDragOverId(null)
+  }
+
+  function handleSortChange(v: NavSort) {
+    if (v === 'custom') {
+      // Seed custom order with whatever's currently visible
+      setCustomOrder(sortedItems.map(it => it.id))
+    }
+    setNavSort(v)
+  }
+
+  const dragEnabled = navSort === 'custom'
+
+  return (
+    <div style={{
+      width: 220, minWidth: 220,
+      background: T.bg2, borderRight: `1px solid ${T.border}`,
+      display: 'flex', flexDirection: 'column', height: '100vh', overflowY: 'auto',
+      fontFamily: "'DM Sans', system-ui, sans-serif",
+    }}>
+      {/* Logo block */}
+      <div style={{padding:'20px 18px 16px', borderBottom:`1px solid ${T.border}`}}>
+        <div style={{display:'flex', alignItems:'center', gap:10, marginBottom:4}}>
+          <div style={{width:30, height:30, borderRadius:8, background:T.blue, display:'flex', alignItems:'center', justifyContent:'center', fontSize:13, fontWeight:600, color:'#fff'}}>JA</div>
+          <div style={{fontSize:14, fontWeight:600, color:T.text}}>Just Autos</div>
+        </div>
+        <div style={{fontSize:11, color:T.text3, marginLeft:40}}>Management Portal</div>
+      </div>
+
+      {/* Nav list */}
+      <div style={{padding:'14px 10px 4px', flex:1}}>
+        <div style={{display:'flex', alignItems:'center', justifyContent:'space-between', padding:'0 8px', marginBottom:6}}>
+          <div style={{fontSize:9, fontWeight:600, color:T.text3, textTransform:'uppercase', letterSpacing:'0.1em'}}>Navigation</div>
+          <select value={navSort} onChange={e => handleSortChange(e.target.value as NavSort)}
+            style={{background:'transparent', border:`1px solid ${T.border}`, color:T.text3, borderRadius:4, padding:'2px 5px', fontSize:9, fontFamily:'inherit', cursor:'pointer', outline:'none'}}>
+            <option value="default">Default</option>
+            <option value="az">A–Z</option>
+            <option value="za">Z–A</option>
+            <option value="custom">Custom (drag)</option>
+          </select>
+        </div>
+
+        {sortedItems.map(it => {
+          const isActive = activeId === it.id
+          const isDragging = draggedId === it.id
+          const isDragOver = dragOverId === it.id && draggedId !== it.id
+          const alertCount = it.alertKey ? (alertCounts[it.alertKey] || 0) : 0
+
+          const bg = isActive ? 'rgba(255,255,255,0.04)' : 'transparent'
+          const color = isActive ? T.text : T.text2
+
+          return (
+            <div
+              key={it.id}
+              draggable={dragEnabled}
+              onDragStart={(e) => handleDragStart(e, it.id)}
+              onDragOver={(e) => handleDragOver(e, it.id)}
+              onDrop={(e) => handleDrop(e, it.id)}
+              onDragEnd={handleDragEnd}
+              onClick={() => handleClick(it)}
+              style={{
+                display:'flex', alignItems:'center', gap:9,
+                padding:'8px 10px', borderRadius:7,
+                cursor: dragEnabled ? 'grab' : 'pointer',
+                fontSize:13, marginBottom:1,
+                background: bg,
+                color: color,
+                opacity: isDragging ? 0.4 : 1,
+                outline: isDragOver ? `2px dashed ${T.accent}` : 'none',
+                outlineOffset: -2,
+                transition: 'opacity 0.15s, outline 0.1s, background 0.1s',
+                userSelect: 'none',
+              }}>
+              {dragEnabled && (
+                <span style={{fontSize:10, color:T.text3, cursor:'grab', marginRight:-4}}>⋮⋮</span>
+              )}
+              <div style={{width:7, height:7, borderRadius:'50%', background:it.dot, flexShrink:0}}/>
+              <span style={{flex:1}}>{it.label}</span>
+              {it.alertKey && !loading && alertCount > 0 && (
+                <span style={{fontSize:10, fontFamily:'monospace', background:'rgba(240,78,78,0.2)', color:T.red, padding:'2px 6px', borderRadius:4}}>
+                  {alertCount}
+                </span>
+              )}
+            </div>
+          )
+        })}
+      </div>
+
+      {/* Footer */}
+      <div style={{padding:'12px 14px', borderTop:`1px solid ${T.border}`}}>
+        {onRefresh && (
+          <>
+            <div style={{fontSize:10, color:T.text3, marginBottom:5}}>
+              {lastRefresh ? `Updated ${lastRefresh.toLocaleTimeString('en-AU', {hour:'2-digit', minute:'2-digit'})}` : 'Loading…'}
+            </div>
+            <button onClick={onRefresh} disabled={refreshing}
+              style={{fontSize:12, color:T.blue, background:'none', border:'none', cursor:'pointer', fontFamily:'inherit', padding:0, display:'block', marginBottom:4}}>
+              {refreshing ? 'Refreshing…' : '↻ Refresh data'}
+            </button>
+          </>
+        )}
+        <button onClick={async() => {
+            await fetch('/api/auth/logout', {method:'POST'}).catch(()=>{})
+            router.push('/login')
+          }}
+          style={{fontSize:12, color:T.text3, background:'none', border:'none', cursor:'pointer', fontFamily:'inherit', padding:0}}>
+          Sign out →
+        </button>
+      </div>
+    </div>
+  )
+}
