@@ -28,9 +28,6 @@ interface NavItem {
   dot: string               // color for the left dot indicator
   badge?: string            // pill text shown on the right (e.g. "NEW", "PBI", "AI")
   badgeColor?: string
-  background?: string       // row tint for styled link items
-  borderColor?: string
-  labelColor?: string       // text color when not selected
   alertKey?: 'invoices'|'payables'  // which count to display
 }
 
@@ -893,9 +890,9 @@ export default function Portal() {
 
   // Unified nav model — all 8 items (3 external links + 5 internal sections)
   const navItems: NavItem[] = [
-    {id:'leads',        kind:'link',    label:'Leads/Orders', href:'/sales',         dot:'#a78bfa', badge:'NEW', badgeColor:'#a78bfa', background:'rgba(167,139,250,0.1)', borderColor:'rgba(167,139,250,0.2)', labelColor:'#a78bfa'},
-    {id:'distributors', kind:'link',    label:'Distributors', href:'/distributors',  dot:T.blue,    badge:'PBI', badgeColor:T.blue,    background:'rgba(79,142,247,0.1)',  borderColor:'rgba(79,142,247,0.2)', labelColor:T.blue},
-    {id:'reports',      kind:'link',    label:'Reports',      href:'/reports',       dot:T.green,   badge:'AI',  badgeColor:T.green,   background:'rgba(52,199,123,0.1)',  borderColor:'rgba(52,199,123,0.2)', labelColor:T.green},
+    {id:'leads',        kind:'link',    label:'Leads/Orders', href:'/sales',         dot:'#a78bfa', badge:'NEW', badgeColor:'#a78bfa'},
+    {id:'distributors', kind:'link',    label:'Distributors', href:'/distributors',  dot:T.blue,    badge:'PBI', badgeColor:T.blue},
+    {id:'reports',      kind:'link',    label:'Reports',      href:'/reports',       dot:T.green,   badge:'AI',  badgeColor:T.green},
     {id:'overview',     kind:'section', label:'Overview',          section:'overview', dot:T.blue},
     {id:'invoices',     kind:'section', label:'Invoices',          section:'invoices', dot:T.amber, alertKey:'invoices'},
     {id:'pnl',          kind:'section', label:'P&L — This Month',  section:'pnl',      dot:T.green},
@@ -1562,13 +1559,9 @@ function SortableSidebar({items, currentSection, onClick, onReorder, dragEnabled
         const isDragOver = dragOverId === it.id && draggedId !== it.id
         const alertCount = it.alertKey ? alertCounts[it.alertKey] : 0
 
-        const bg = isLink
-          ? it.background
-          : (isSelected ? 'rgba(79,142,247,0.15)' : 'transparent')
-        const color = isLink
-          ? (it.labelColor || T.text2)
-          : (isSelected ? T.blue : T.text2)
-        const border = isLink ? `1px solid ${it.borderColor}` : undefined
+        // Uniform styling for all items — only currently-active section gets a subtle highlight
+        const bg = isSelected ? 'rgba(255,255,255,0.04)' : 'transparent'
+        const color = isSelected ? T.text : T.text2
 
         return (
           <div
@@ -1583,14 +1576,13 @@ function SortableSidebar({items, currentSection, onClick, onReorder, dragEnabled
               display:'flex', alignItems:'center', gap:9,
               padding:'8px 10px', borderRadius:7,
               cursor: dragEnabled ? 'grab' : 'pointer',
-              fontSize:13, marginBottom:isLink?4:1,
+              fontSize:13, marginBottom:1,
               background: bg,
               color: color,
-              border: border,
               opacity: isDragging ? 0.4 : 1,
               outline: isDragOver ? `2px dashed ${T.accent}` : 'none',
               outlineOffset: -2,
-              transition: 'opacity 0.15s, outline 0.1s',
+              transition: 'opacity 0.15s, outline 0.1s, background 0.1s',
               userSelect: 'none',
             }}>
             {dragEnabled && (
