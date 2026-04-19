@@ -1,5 +1,5 @@
-// pages/index.tsx — Just Autos Management Portal v3
-// Full JAWS + VPS parity, trend charts, Power BI-style layout
+// pages/index.tsx — Just Autos Management Portal v4
+// Entity filter pills, merged JAWS+VPS into Overview, cleaner sidebar
 import { useEffect, useState, useRef, useCallback } from 'react'
 import Head from 'next/head'
 import Script from 'next/script'
@@ -16,9 +16,10 @@ interface DashData {
   jaws:{ recentInvoices:any;openInvoices:any;topCustomers:any;pnl:any;stockItems:any;stockSummary:any;openBills:any;income6:number[];expense6:number[] }
   vps: { recentInvoices:any;openInvoices:any;topCustomers:any;openBills:any;pnl:any;stockSummary:any;income6:number[];expense6:number[] }
 }
-type Section = 'overview'|'jaws'|'vps'|'invoices'|'pnl'|'stock'|'payables'|'distributors'
+type Section = 'overview'|'invoices'|'pnl'|'stock'|'payables'
+type EntityFilter = 'all'|'jaws'|'vps'
 
-// ── Inventory types (from /api/inventory) ──────────────────
+// ── Inventory types ───────────────────────────────────────────
 interface InventoryItem {
   number:string;name:string
   qtyOnHand:number;qtyAvailable:number;qtyCommitted:number;qtyOnOrder:number
@@ -47,7 +48,7 @@ const INV_STATUS_LABEL:Record<InventoryItem['stockoutStatus'],string>={out:'OUT'
 const fmtDays=(n:number|null)=>n==null?'—':Math.round(n)+'d'
 const fmtPct =(n:number|null)=>n==null?'—':(n*100).toFixed(1)+'%'
 
-// ── Quotes & Orders types (from /api/quotes-orders) ──────────
+// ── Quotes & Orders types ─────────────────────────────────────
 interface OpenOrder {
   number:string; date:string|null; customerName:string; customerDisplayId:string|null
   totalAmount:number; balanceDueAmount:number; status:string
@@ -75,7 +76,7 @@ function rowsToObjects(result:any):Record<string,any>[] {
   return rows.map((row:any[])=>{const o:any={};schema.forEach((c:any,i:number)=>{o[c.columnName]=row[i]});return o})
 }
 
-// ── Design tokens (dark theme) ───────────────────────────────
+// ── Design tokens ────────────────────────────────────────────
 const T = {
   bg:'#0d0f12', bg2:'#131519', bg3:'#1a1d23', bg4:'#21252d',
   border:'rgba(255,255,255,0.07)', border2:'rgba(255,255,255,0.12)',
@@ -83,6 +84,38 @@ const T = {
   blue:'#4f8ef7', teal:'#2dd4bf', green:'#34c77b',
   amber:'#f5a623', red:'#f04e4e', purple:'#a78bfa',
   accent:'#4f8ef7',
+}
+
+// ─────────────────────────────────────────────────────────────
+// ENTITY FILTER PILL — used across Overview, Invoices, P&L, Payables
+// ─────────────────────────────────────────────────────────────
+function EntityFilterPill({value,onChange,showAll=true}:{value:EntityFilter;onChange:(v:EntityFilter)=>void;showAll?:boolean}) {
+  const opts: {id:EntityFilter;label:string;color:string;subLabel?:string}[] = showAll
+    ? [
+        {id:'all',  label:'All',  color:T.text, subLabel:'Both entities'},
+        {id:'jaws', label:'JAWS', color:T.blue, subLabel:'Wholesale'},
+        {id:'vps',  label:'VPS',  color:T.teal, subLabel:'Workshop'},
+      ]
+    : [
+        {id:'jaws', label:'JAWS', color:T.blue, subLabel:'Wholesale'},
+        {id:'vps',  label:'VPS',  color:T.teal, subLabel:'Workshop'},
+      ]
+  return <div style={{display:'inline-flex',gap:4,padding:4,background:T.bg2,border:`1px solid ${T.border}`,borderRadius:8}}>
+    {opts.map(o=>{
+      const active=value===o.id
+      return <button key={o.id} onClick={()=>onChange(o.id)}
+        style={{padding:'6px 14px',borderRadius:6,border:'none',cursor:'pointer',fontFamily:'inherit',
+          background:active?`${o.color}20`:'transparent',
+          color:active?o.color:T.text2,
+          transition:'all 0.15s',
+          display:'flex',flexDirection:'column',alignItems:'flex-start',gap:1,
+          minWidth:70,
+        }}>
+        <span style={{fontSize:12,fontWeight:active?600:500}}>{o.label}</span>
+        {o.subLabel && <span style={{fontSize:9,color:active?o.color:T.text3,opacity:active?0.85:1,textTransform:'uppercase',letterSpacing:'0.05em'}}>{o.subLabel}</span>}
+      </button>
+    })}
+  </div>
 }
 
 // ── Shared UI components ─────────────────────────────────────
@@ -116,15 +149,15 @@ function BarRow({name,value,max,color=T.blue,extra}:{name:string;value:number;ma
     {extra&&<span style={{fontSize:10,color:T.text3,fontFamily:'monospace',flexShrink:0}}>{extra}</span>}
   </div>
 }
-function InvoiceTable({rows,accent,entity,onInvoiceClick,onOpenInvoiceClick}:{rows:Invoice[];accent:string;entity?:string;onInvoiceClick?:(inv:Invoice,entity:string)=>void;onOpenInvoiceClick?:()=>void}) {
+function InvoiceTable({rows,accent,entity,onInvoiceClick}:{rows:Invoice[];accent:string;entity?:string;onInvoiceClick?:(inv:Invoice,entity:string)=>void}) {
   return <div style={{overflowX:'auto'}}>
     <table style={{width:'100%',borderCollapse:'collapse'}}>
       <thead><tr>{['Invoice','Date','Customer','Total','Balance','Status'].map(h=>(
         <th key={h} style={{fontSize:10,color:T.text3,textTransform:'uppercase',letterSpacing:'0.07em',padding:'0 8px 10px',textAlign:['Total','Balance'].includes(h)?'right':'left',fontWeight:500,whiteSpace:'nowrap'}}>{h}</th>
       ))}</tr></thead>
       <tbody>{rows.map((r,i)=>(
-        <tr key={i} style={{borderTop:`1px solid ${T.border}`,cursor:'pointer',transition:'background 0.1s'}}
-          onClick={()=>onInvoiceClick?onInvoiceClick(r,entity||'JAWS'):onOpenInvoiceClick?.()}
+        <tr key={i} style={{borderTop:`1px solid ${T.border}`,cursor:onInvoiceClick?'pointer':'default',transition:'background 0.1s'}}
+          onClick={()=>onInvoiceClick?.(r,entity||'JAWS')}
           onMouseEnter={e=>{(e.currentTarget as HTMLElement).style.background='rgba(255,255,255,0.03)'}}
           onMouseLeave={e=>{(e.currentTarget as HTMLElement).style.background='transparent'}}
         >
@@ -140,7 +173,7 @@ function InvoiceTable({rows,accent,entity,onInvoiceClick,onOpenInvoiceClick}:{ro
   </div>
 }
 
-// ── Invoice Detail Modal ─────────────────────────────────────
+// ── Invoice Detail Modal (unchanged from previous) ──────────
 interface LineItem {
   Description: string
   Total: number | null
@@ -180,11 +213,9 @@ function InvoiceDetailModal({invoice,entity,onClose}:{invoice:Invoice;entity:str
     : headerData?.TermsPaymentIsDue || null
 
   return (
-    <div style={{position:'fixed',inset:0,zIndex:100,display:'flex',alignItems:'center',justifyContent:'center'}}
-      onClick={onClose}>
+    <div style={{position:'fixed',inset:0,zIndex:100,display:'flex',alignItems:'center',justifyContent:'center'}} onClick={onClose}>
       <div style={{position:'absolute',inset:0,background:'rgba(0,0,0,0.6)',backdropFilter:'blur(4px)'}}/>
-      <div style={{position:'relative',background:T.bg2,border:`1px solid ${T.border2}`,borderRadius:12,width:760,maxWidth:'92vw',maxHeight:'88vh',overflow:'hidden',display:'flex',flexDirection:'column',boxShadow:'0 20px 60px rgba(0,0,0,0.5)'}}
-        onClick={e=>e.stopPropagation()}>
+      <div style={{position:'relative',background:T.bg2,border:`1px solid ${T.border2}`,borderRadius:12,width:760,maxWidth:'92vw',maxHeight:'88vh',overflow:'hidden',display:'flex',flexDirection:'column',boxShadow:'0 20px 60px rgba(0,0,0,0.5)'}} onClick={e=>e.stopPropagation()}>
         <div style={{padding:'16px 20px',borderBottom:`1px solid ${T.border}`,display:'flex',alignItems:'center',gap:12}}>
           <div style={{flex:1}}>
             <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:4}}>
@@ -226,9 +257,7 @@ function InvoiceDetailModal({invoice,entity,onClose}:{invoice:Invoice;entity:str
             <span style={{color:T.text3,fontSize:13}}>Loading line items…</span>
             <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
           </div>}
-
           {error&&<div style={{color:T.red,padding:20,fontSize:13}}>Error: {error}</div>}
-
           {!loading&&!error&&lineItems.length>0&&(
             <div style={{marginTop:14}}>
               <div style={{fontSize:11,fontWeight:600,color:T.text3,textTransform:'uppercase',letterSpacing:'0.08em',marginBottom:10}}>Line Items</div>
@@ -282,11 +311,9 @@ function InvoiceDetailModal({invoice,entity,onClose}:{invoice:Invoice;entity:str
               </table>
             </div>
           )}
-
           {!loading&&!error&&lineItems.length===0&&(
             <div style={{color:T.text3,padding:30,textAlign:'center',fontSize:13}}>No line items found for this invoice.</div>
           )}
-
           {!loading&&(
             <div style={{marginTop:16,padding:'12px 14px',background:T.bg3,borderRadius:8}}>
               <div style={{fontSize:11,fontWeight:600,color:T.text3,textTransform:'uppercase',letterSpacing:'0.08em',marginBottom:8}}>Payment Summary</div>
@@ -313,6 +340,7 @@ function InvoiceDetailModal({invoice,entity,onClose}:{invoice:Invoice;entity:str
     </div>
   )
 }
+
 function BillTable({rows,accent}:{rows:Bill[];accent:string}) {
   return <div style={{overflowX:'auto'}}>
     <table style={{width:'100%',borderCollapse:'collapse'}}>
@@ -332,59 +360,46 @@ function BillTable({rows,accent}:{rows:Bill[];accent:string}) {
   </div>
 }
 
-// ── Trend chart using Chart.js ───────────────────────────────
-function TrendChart({labels,jawsData,vpsData,title,chartId}:{labels:string[];jawsData:number[];vpsData:number[];title:string;chartId:string}) {
+// ── Charts (Trend / Line / Donut) ────────────────────────────
+function TrendChart({labels,jawsData,vpsData,chartId,entity='all'}:{labels:string[];jawsData:number[];vpsData:number[];chartId:string;entity?:EntityFilter}) {
   const canvasRef=useRef<HTMLCanvasElement>(null)
   const chartRef=useRef<any>(null)
-
   useEffect(()=>{
     if (!canvasRef.current||!jawsData.length) return
     const buildChart = () => {
       const win=window as any
       if (!win.Chart) { setTimeout(buildChart, 200); return }
       if (chartRef.current) chartRef.current.destroy()
+      const datasets = []
+      if (entity==='all' || entity==='jaws') datasets.push({label:'JAWS',data:jawsData.map(v=>Math.round(v/1000)),backgroundColor:'#4f8ef7',borderRadius:4,borderSkipped:false})
+      if (entity==='all' || entity==='vps')  datasets.push({label:'VPS', data:vpsData.map(v=>Math.round(v/1000)), backgroundColor:'#2dd4bf',borderRadius:4,borderSkipped:false})
       chartRef.current=new win.Chart(canvasRef.current,{
         type:'bar',
-        data:{
-          labels,
-          datasets:[
-            {label:'JAWS',data:jawsData.map(v=>Math.round(v/1000)),backgroundColor:'#4f8ef7',borderRadius:4,borderSkipped:false},
-            {label:'VPS', data:vpsData.map(v=>Math.round(v/1000)), backgroundColor:'#2dd4bf',borderRadius:4,borderSkipped:false},
-          ]
-        },
-        options:{
-          responsive:true,maintainAspectRatio:false,
+        data:{labels,datasets},
+        options:{responsive:true,maintainAspectRatio:false,
           plugins:{legend:{display:false},tooltip:{callbacks:{label:(ctx:any)=>`${ctx.dataset.label}: $${ctx.raw}k`}}},
           scales:{
             x:{grid:{color:'rgba(255,255,255,0.05)'},ticks:{color:T.text3,font:{size:11},autoSkip:false,maxRotation:45}},
             y:{grid:{color:'rgba(255,255,255,0.05)'},ticks:{color:T.text3,font:{size:11},callback:(v:any)=>'$'+v+'k'}},
-          }
-        }
+          }}
       })
     }
     buildChart()
     return()=>{if(chartRef.current){chartRef.current.destroy();chartRef.current=null}}
-  },[labels,jawsData,vpsData])
-
+  },[labels,jawsData,vpsData,entity])
   return (
     <div>
       <div style={{display:'flex',gap:14,marginBottom:10}}>
-        {[{label:'JAWS',color:'#4f8ef7'},{label:'VPS',color:'#2dd4bf'}].map(s=>(
-          <div key={s.label} style={{display:'flex',alignItems:'center',gap:5,fontSize:12,color:T.text2}}>
-            <div style={{width:10,height:10,borderRadius:2,background:s.color}}/>
-            {s.label}
-          </div>
-        ))}
+        {entity!=='vps' && <div style={{display:'flex',alignItems:'center',gap:5,fontSize:12,color:T.text2}}><div style={{width:10,height:10,borderRadius:2,background:'#4f8ef7'}}/>JAWS</div>}
+        {entity!=='jaws' && <div style={{display:'flex',alignItems:'center',gap:5,fontSize:12,color:T.text2}}><div style={{width:10,height:10,borderRadius:2,background:'#2dd4bf'}}/>VPS</div>}
       </div>
       <div style={{position:'relative',height:200}}>
-        <canvas ref={canvasRef} id={chartId} role="img" aria-label={`${title} bar chart comparing JAWS and VPS over 6 months`}>
-          {title}: {labels.map((l,i)=>`${l} JAWS $${Math.round((jawsData[i]||0)/1000)}k VPS $${Math.round((vpsData[i]||0)/1000)}k`).join(', ')}
-        </canvas>
+        <canvas ref={canvasRef} id={chartId} role="img" aria-label="Revenue trend">Revenue trend</canvas>
       </div>
     </div>
   )
 }
-function LineChart({labels,jawsData,vpsData,chartId}:{labels:string[];jawsData:number[];vpsData:number[];chartId:string}) {
+function LineChart({labels,jawsData,vpsData,chartId,entity='all'}:{labels:string[];jawsData:number[];vpsData:number[];chartId:string;entity?:EntityFilter}) {
   const canvasRef=useRef<HTMLCanvasElement>(null)
   const chartRef=useRef<any>(null)
   useEffect(()=>{
@@ -393,31 +408,24 @@ function LineChart({labels,jawsData,vpsData,chartId}:{labels:string[];jawsData:n
       const win=window as any
       if (!win.Chart) { setTimeout(buildChart,200); return }
       if (chartRef.current) chartRef.current.destroy()
+      const datasets = []
+      if (entity==='all' || entity==='jaws') datasets.push({label:'JAWS',data:jawsData.map(v=>Math.round(v/1000)),borderColor:'#4f8ef7',backgroundColor:'rgba(79,142,247,0.1)',tension:0.3,fill:true,pointRadius:4,pointBackgroundColor:'#4f8ef7'})
+      if (entity==='all' || entity==='vps')  datasets.push({label:'VPS', data:vpsData.map(v=>Math.round(v/1000)), borderColor:'#2dd4bf',backgroundColor:'rgba(45,212,191,0.1)',tension:0.3,fill:true,pointRadius:4,pointBackgroundColor:'#2dd4bf'})
       chartRef.current=new win.Chart(canvasRef.current,{
         type:'line',
-        data:{
-          labels,
-          datasets:[
-            {label:'JAWS',data:jawsData.map(v=>Math.round(v/1000)),borderColor:'#4f8ef7',backgroundColor:'rgba(79,142,247,0.1)',tension:0.3,fill:true,pointRadius:4,pointBackgroundColor:'#4f8ef7'},
-            {label:'VPS', data:vpsData.map(v=>Math.round(v/1000)), borderColor:'#2dd4bf',backgroundColor:'rgba(45,212,191,0.1)',tension:0.3,fill:true,pointRadius:4,pointBackgroundColor:'#2dd4bf'},
-          ]
-        },
-        options:{
-          responsive:true,maintainAspectRatio:false,
+        data:{labels,datasets},
+        options:{responsive:true,maintainAspectRatio:false,
           plugins:{legend:{display:false},tooltip:{callbacks:{label:(ctx:any)=>`${ctx.dataset.label}: $${ctx.raw}k`}}},
           scales:{
             x:{grid:{color:'rgba(255,255,255,0.05)'},ticks:{color:T.text3,font:{size:11}}},
             y:{grid:{color:'rgba(255,255,255,0.05)'},ticks:{color:T.text3,font:{size:11},callback:(v:any)=>'$'+v+'k'}},
-          }
-        }
+          }}
       })
     }
     buildChart()
     return()=>{if(chartRef.current){chartRef.current.destroy();chartRef.current=null}}
-  },[labels,jawsData,vpsData])
-  return <div style={{position:'relative',height:200}}>
-    <canvas ref={canvasRef} id={chartId} role="img" aria-label="Revenue trend line chart">Net result trend</canvas>
-  </div>
+  },[labels,jawsData,vpsData,entity])
+  return <div style={{position:'relative',height:200}}><canvas ref={canvasRef} id={chartId} role="img" aria-label="Net trend">Net trend</canvas></div>
 }
 function DonutChart({jawsVal,vpsVal,chartId}:{jawsVal:number;vpsVal:number;chartId:string}) {
   const canvasRef=useRef<HTMLCanvasElement>(null)
@@ -437,10 +445,10 @@ function DonutChart({jawsVal,vpsVal,chartId}:{jawsVal:number;vpsVal:number;chart
     buildChart()
     return()=>{if(chartRef.current){chartRef.current.destroy();chartRef.current=null}}
   },[jawsVal,vpsVal])
-  return <div style={{position:'relative',height:120,width:120}}><canvas ref={canvasRef} id={chartId} role="img" aria-label="JAWS vs VPS split donut chart"/></div>
+  return <div style={{position:'relative',height:120,width:120}}><canvas ref={canvasRef} id={chartId} role="img" aria-label="Split"/></div>
 }
 
-// ── Chatbot ──────────────────────────────────────────────────
+// ── Chatbot (unchanged from previous) ────────────────────────
 interface ChatMsg{role:'user'|'assistant';content:string}
 function Chatbot({dashData}:{dashData:DashData|null}) {
   const [msgs,setMsgs]=useState<ChatMsg[]>([{role:'assistant',content:"G'day! Connected to both JAWS and VPS live. Ask me about revenue, P&L, invoices, stock, payables or distributors."}])
@@ -459,43 +467,18 @@ function Chatbot({dashData}:{dashData:DashData|null}) {
     const vPnl  =rowsToObjects(dashData.vps.pnl)           as PnLLine[]
     const jBills=rowsToObjects(dashData.jaws.openBills)    as Bill[]
     const vBills=rowsToObjects(dashData.vps.openBills)     as Bill[]
-    const stock =rowsToObjects(dashData.jaws.stockItems)   as StockItem[]
     const jOut  =jOpen.reduce((s,i)=>s+(i.BalanceDueAmount||0),0)
     const vOut  =vOpen.reduce((s,i)=>s+(i.BalanceDueAmount||0),0)
     const jInc  =jPnl.filter(r=>r.AccountDisplayID?.startsWith('4-')&&r.AccountTotal>0).reduce((s,r)=>s+r.AccountTotal,0)
     const jExp  =jPnl.filter(r=>r.AccountDisplayID?.startsWith('5-')&&r.AccountTotal>0).reduce((s,r)=>s+r.AccountTotal,0)
     const vInc  =vPnl.filter(r=>r.AccountDisplayID?.startsWith('4-')&&r.AccountTotal>0).reduce((s,r)=>s+r.AccountTotal,0)
     const vExp  =vPnl.filter(r=>r.AccountDisplayID?.startsWith('5-')&&r.AccountTotal>0).reduce((s,r)=>s+r.AccountTotal,0)
-    const vWages=vPnl.find(r=>r.AccountDisplayID==='6-5130')?.AccountTotal||0
-    const vAds  =vPnl.filter(r=>r.AccountDisplayID?.startsWith('6-12')&&r.AccountTotal>0).reduce((s,r)=>s+r.AccountTotal,0)
     const jBOut =jBills.reduce((s,b)=>s+(b.BalanceDueAmount||0),0)
     const stockVal=dashData.jaws.stockSummary?.results?.[0]?.rows?.[0]?.[0]||0
     return `Just Autos Management Assistant — LIVE MYOB data as of ${new Date(dashData.fetchedAt).toLocaleString('en-AU')}.
-
-JAWS WHOLESALE:
-- Open receivables: ${jOpen.length} invoices = $${Math.round(jOut).toLocaleString()}
-- Top open: ${jOpen.slice(0,3).map(i=>`${i.Number} ${i.CustomerName?.substring(0,18)} $${Math.round(i.BalanceDueAmount).toLocaleString()}`).join(' | ')}
-- Top customers: ${jCust.slice(0,5).map(c=>`${c.CustomerName?.substring(0,18)} $${Math.round(c.TotalRevenue).toLocaleString()}`).join(' | ')}
-- P&L income: $${Math.round(jInc).toLocaleString()} | COS: $${Math.round(jExp).toLocaleString()} | Net: ${jInc-jExp>=0?'+':''}$${Math.round(jInc-jExp).toLocaleString()}
-- Top income: Multimap $37.5k | Tuning Default $28.3k | Easy Lock $16.3k | Exhaust $9.4k | Airbox $4.8k
-- Stock on hand: $${Math.round(stockVal).toLocaleString()} across ${dashData.jaws.stockSummary?.results?.[0]?.rows?.[0]?.[1]||0} SKUs
-- Payables: $${Math.round(jBOut).toLocaleString()} — FFM Fabrication $49k, MPI Automotive $${Math.round(jBills.filter(b=>b.SupplierName?.includes('MPI')).reduce((s,b)=>s+(b.BalanceDueAmount||0),0)).toLocaleString()}
-- 6mo income trend: ${dashData.jaws.income6.map(v=>'$'+Math.round(v/1000)+'k').join(', ')}
-
-VPS WORKSHOP:
-- Open receivables: ${vOpen.length} invoices = $${Math.round(vOut).toLocaleString()}
-- Top open: ${vOpen.slice(0,3).map(i=>`${i.Number} ${i.CustomerName?.substring(0,18)} $${Math.round(i.BalanceDueAmount).toLocaleString()}`).join(' | ')}
-- Top customers: ${vCust.slice(0,5).map(c=>`${c.CustomerName?.substring(0,18)} $${Math.round(c.TotalRevenue).toLocaleString()}`).join(' | ')}
-- P&L income: $${Math.round(vInc).toLocaleString()} | COS: $${Math.round(vExp).toLocaleString()} | Net before overheads: ${vInc-vExp>=0?'+':''}$${Math.round(vInc-vExp).toLocaleString()}
-- Top income lines: Labour $79.5k | Multi Map $58.5k | Remap $29.1k | Exhausts $23.8k | Clutches $19.6k | Turbos $18.1k | JA Lock Up $16.3k
-- Key overheads: Wages $${Math.round(vWages).toLocaleString()} | Advertising $${Math.round(vAds).toLocaleString()} | Rent $14.3k | Superannuation $17.7k
-- Goodwill Licence Fee this month: $100,000
-- 6mo income trend: ${dashData.vps.income6.map(v=>'$'+Math.round(v/1000)+'k').join(', ')}
-- Payables: $${Math.round(vBills.reduce((s,b)=>s+(b.BalanceDueAmount||0),0)).toLocaleString()}
-
-DISTRIBUTORS: 14 active AU + international. Key: Morpowa, Penrith 4x4, Banana Coast Diesel, Cutlers Diesel, Weirys Diesel, HQ Builds, Torrisi Motorsport, CP Performance, US CruiserZ.
-
-Be concise. Use AU currency. Reference specific numbers and invoice IDs.`
+JAWS: Open receivables ${jOpen.length} = $${Math.round(jOut).toLocaleString()}. Income $${Math.round(jInc).toLocaleString()}, COS $${Math.round(jExp).toLocaleString()}, Net ${jInc-jExp>=0?'+':''}$${Math.round(jInc-jExp).toLocaleString()}. Stock $${Math.round(stockVal).toLocaleString()}. Payables $${Math.round(jBOut).toLocaleString()}. Top customers: ${jCust.slice(0,5).map(c=>`${c.CustomerName?.substring(0,18)} $${Math.round(c.TotalRevenue).toLocaleString()}`).join(' | ')}.
+VPS: Open receivables ${vOpen.length} = $${Math.round(vOut).toLocaleString()}. Income $${Math.round(vInc).toLocaleString()}, COS $${Math.round(vExp).toLocaleString()}. Payables $${Math.round(vBills.reduce((s,b)=>s+(b.BalanceDueAmount||0),0)).toLocaleString()}.
+Be concise. Use AU currency.`
   },[dashData])
 
   async function send() {
@@ -556,7 +539,10 @@ Be concise. Use AU currency. Reference specific numbers and invoice IDs.`
   )
 }
 
-// ── Main Portal ──────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────
+// MAIN PORTAL
+// ─────────────────────────────────────────────────────────────
+
 export default function Portal() {
   const router=useRouter()
   const [section,setSection]=useState<Section>('overview')
@@ -568,13 +554,16 @@ export default function Portal() {
   const [lastRefresh,setLastRefresh]=useState<Date|null>(null)
   const [selectedInvoice,setSelectedInvoice]=useState<{invoice:Invoice;entity:string}|null>(null)
   const openInvoiceDetail=(inv:Invoice,entity:string)=>setSelectedInvoice({invoice:inv,entity})
-
-  // Quotes & orders data (JAWS) — loaded once on mount, refreshed with dashboard
   const [qo,setQo]=useState<QuotesOrdersPayload|null>(null)
+
+  // Per-section entity filters
+  const [overviewFilter,setOverviewFilter] = useState<EntityFilter>('all')
+  const [invoicesFilter,setInvoicesFilter] = useState<EntityFilter>('all')
+  const [pnlFilter,setPnlFilter]           = useState<EntityFilter>('all')
+  const [payablesFilter,setPayablesFilter] = useState<EntityFilter>('all')
 
   const currentFY = new Date().getMonth() >= 6 ? new Date().getFullYear()+1 : new Date().getFullYear()
   const [fyYear, setFyYear] = useState(currentFY)
-  const [showFyDropdown, setShowFyDropdown] = useState(false)
   const nowD = new Date()
   const defaultStart = `${nowD.getFullYear()}-${String(nowD.getMonth()+1).padStart(2,'0')}-01`
   const defaultEnd = `${nowD.getFullYear()}-${String(nowD.getMonth()+1).padStart(2,'0')}-${new Date(nowD.getFullYear(), nowD.getMonth()+1, 0).getDate()}`
@@ -585,26 +574,20 @@ export default function Portal() {
   const activeStart = isCustomRange ? customStart : `${fyYear-1}-07-01`
   const activeEnd = isCustomRange ? customEnd : `${fyYear}-06-30`
   const dateParams = `startDate=${activeStart}&endDate=${activeEnd}`
-
   const fyLabel = isCustomRange
     ? `${new Date(customStart+'T00:00').toLocaleDateString('en-AU',{day:'2-digit',month:'short',year:'2-digit'})} – ${new Date(customEnd+'T00:00').toLocaleDateString('en-AU',{day:'2-digit',month:'short',year:'2-digit'})}`
     : `FY${fyYear}`
-
   const [activeDateParams, setActiveDateParams] = useState(dateParams)
 
   function selectFY(y: number) {
-    setFyYear(y)
-    setIsCustomRange(false)
-    setCustomStart(`${y-1}-07-01`)
-    setCustomEnd(`${y}-06-30`)
+    setFyYear(y); setIsCustomRange(false)
+    setCustomStart(`${y-1}-07-01`); setCustomEnd(`${y}-06-30`)
     setDateLoading(true)
     setActiveDateParams(`startDate=${y-1}-07-01&endDate=${y}-06-30`)
   }
-
   function applyCustomRange() {
     if (customStart && customEnd) {
-      setIsCustomRange(true)
-      setDateLoading(true)
+      setIsCustomRange(true); setDateLoading(true)
       setActiveDateParams(`startDate=${customStart}&endDate=${customEnd}`)
     }
   }
@@ -616,10 +599,7 @@ export default function Portal() {
       const r=await fetch(`/api/dashboard?${activeDateParams}${refreshParam}`)
       if(r.status===401){router.push('/login');return}
       if(!r.ok){
-        if(retryCount<1){
-          console.log('Dashboard failed, retrying...')
-          return load(isRefresh,retryCount+1)
-        }
+        if(retryCount<1){ return load(isRefresh,retryCount+1) }
         const errData = await r.json().catch(()=>null)
         throw new Error(errData?.error||'Failed to load MYOB data — please click Refresh')
       }
@@ -643,7 +623,6 @@ export default function Portal() {
           }:prev)
         }
       }catch{}
-      // Load JAWS quotes & orders in background (doesn't block initial render)
       try{
         const qoRes=await fetch('/api/quotes-orders')
         if(qoRes.ok){
@@ -665,7 +644,6 @@ export default function Portal() {
   const vCust  =dash?rowsToObjects(dash.vps.topCustomers)    as Customer[]:[]
   const jPnl   =dash?rowsToObjects(dash.jaws.pnl)            as PnLLine[]:[]
   const vPnl   =dash?rowsToObjects(dash.vps.pnl)             as PnLLine[]:[]
-  const stock  =dash?rowsToObjects(dash.jaws.stockItems)     as StockItem[]:[]
   const jBills =dash?rowsToObjects(dash.jaws.openBills)      as Bill[]:[]
   const vBills =dash?rowsToObjects(dash.vps.openBills)       as Bill[]:[]
 
@@ -689,36 +667,17 @@ export default function Portal() {
   const jNet6   =jInc6.map((v,i)=>v-(jExp6[i]||0))
   const vNet6   =vInc6.map((v,i)=>v-(vExp6[i]||0))
 
-  const PnlSection=({entity,pnl,inc,cos,oh,accent}:{entity:string;pnl:PnLLine[];inc:number;cos:number;oh:number;accent:string})=>{
-    const income =pnl.filter(r=>r.AccountDisplayID?.startsWith('4-')&&r.AccountTotal>0).sort((a,b)=>b.AccountTotal-a.AccountTotal)
-    const cosRows=pnl.filter(r=>r.AccountDisplayID?.startsWith('5-')&&r.AccountTotal>0).sort((a,b)=>b.AccountTotal-a.AccountTotal)
-    const ohRows =pnl.filter(r=>r.AccountDisplayID?.startsWith('6-')&&r.AccountTotal>0).sort((a,b)=>b.AccountTotal-a.AccountTotal)
-    const maxInc =income[0]?.AccountTotal||1
-    const maxCos =cosRows[0]?.AccountTotal||1
-    const maxOh  =ohRows[0]?.AccountTotal||1
-    return <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:12}}>
-      <Card>
-        <PTitle>Income — {entity} <span style={{color:T.green}}>({fmt(inc)})</span></PTitle>
-        {income.slice(0,8).map((r,i)=><BarRow key={i} name={r.AccountName} value={r.AccountTotal} max={maxInc} color={T.green}/>)}
-      </Card>
-      <Card>
-        <PTitle>Cost of sales — {entity} <span style={{color:T.red}}>({fmt(cos)})</span></PTitle>
-        {cosRows.slice(0,8).map((r,i)=><BarRow key={i} name={r.AccountName} value={r.AccountTotal} max={maxCos} color={T.red}/>)}
-      </Card>
-      {entity==='VPS'&&<Card>
-        <PTitle>Overheads — {entity} <span style={{color:T.amber}}>({fmt(oh)})</span></PTitle>
-        {ohRows.slice(0,8).map((r,i)=><BarRow key={i} name={r.AccountName} value={r.AccountTotal} max={maxOh} color={T.amber}/>)}
-      </Card>}
-      {entity==='JAWS'&&<Card>
-        <PTitle>Net margin — {entity}</PTitle>
-        <div style={{textAlign:'center',paddingTop:20}}>
-          <div style={{fontSize:32,fontWeight:500,fontFamily:'monospace',color:jNet>=0?T.green:T.red}}>{jNet>=0?'+':''}{fmt(jNet)}</div>
-          <div style={{fontSize:12,color:T.text3,marginTop:6}}>Income − Cost of sales</div>
-          <div style={{fontSize:12,color:T.text3,marginTop:3}}>Margin: {pct(jNet,jInc)}</div>
-        </div>
-      </Card>}
-    </div>
-  }
+  // Combined helpers (tagged with entity for display)
+  const combinedInv  = [...jInv.map(i=>({...i,__entity:'JAWS'})), ...vInv.map(i=>({...i,__entity:'VPS'}))]
+    .sort((a,b)=>new Date(b.Date).getTime()-new Date(a.Date).getTime())
+  const combinedOpen = [...jOpen.map(i=>({...i,__entity:'JAWS'})), ...vOpen.map(i=>({...i,__entity:'VPS'}))]
+    .sort((a,b)=>(b.BalanceDueAmount||0)-(a.BalanceDueAmount||0))
+  const combinedBills = [...jBills.map(b=>({...b,__entity:'JAWS'})), ...vBills.map(b=>({...b,__entity:'VPS'}))]
+    .sort((a,b)=>(b.BalanceDueAmount||0)-(a.BalanceDueAmount||0))
+
+  // ─────────────────────────────────────────────────────────
+  // RENDER SECTIONS
+  // ─────────────────────────────────────────────────────────
 
   function renderSection() {
     if(loading) return <div style={{display:'flex',alignItems:'center',justifyContent:'center',height:300,flexDirection:'column',gap:12}}>
@@ -728,233 +687,205 @@ export default function Portal() {
     </div>
     if(error) return <div style={{background:'rgba(240,78,78,0.1)',border:'1px solid rgba(240,78,78,0.2)',borderRadius:10,padding:20,color:T.red}}>
       <div style={{marginBottom:10}}>Error: {error}</div>
-      <button onClick={()=>{setError('');setLoading(true);load()}} style={{padding:'6px 16px',borderRadius:6,border:`1px solid ${T.blue}`,background:T.blue,color:'#fff',fontSize:12,cursor:'pointer',fontFamily:'inherit'}}>
-        Retry now
-      </button>
+      <button onClick={()=>{setError('');setLoading(true);load()}} style={{padding:'6px 16px',borderRadius:6,border:`1px solid ${T.blue}`,background:T.blue,color:'#fff',fontSize:12,cursor:'pointer',fontFamily:'inherit'}}>Retry now</button>
     </div>
 
-    // ── OVERVIEW ────────────────────────────────────────────
-    if(section==='overview') return <div style={{display:'flex',flexDirection:'column',gap:14}}>
-      <div style={{display:'grid',gridTemplateColumns:'repeat(4,minmax(0,1fr))',gap:12}}>
-        <KPI label={`JAWS Revenue (${fyLabel})`}    value={fmt(jInc)}   sub="Income this period" accent={T.blue}/>
-        <KPI label={`VPS Revenue (${fyLabel})`}     value={fmt(vInc)}   sub="Income this period" accent={T.teal}/>
-        <div onClick={()=>setSection('invoices')} style={{cursor:'pointer'}}>
-          <KPI label="Total Receivables"   value={fmt(jOut+vOut)}   sub={`${jOpen.length+vOpen.length} open — click to view`} subColor={T.amber} accent={T.amber}/>
-        </div>
-        <div onClick={()=>setSection('stock')} style={{cursor:'pointer'}}>
-          <KPI label="JAWS Stock on Hand"  value={fmt(stockVal)}    sub={`${dash?.jaws.stockSummary?.results?.[0]?.rows?.[0]?.[1]||0} SKUs — click to view`} accent={T.purple}/>
-        </div>
-      </div>
+    // ─── OVERVIEW (merged JAWS + VPS with filter) ────────────
+    if(section==='overview') {
+      const f = overviewFilter
+      const showJaws = f==='all' || f==='jaws'
+      const showVps  = f==='all' || f==='vps'
 
-      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}}>
-        <Card>
-          <PTitle>Revenue trend — JAWS vs VPS (6 months)</PTitle>
-          <div style={{display:'flex',gap:14,marginBottom:10}}>
-            {[{l:'JAWS',c:T.blue},{l:'VPS',c:T.teal}].map(s=><div key={s.l} style={{display:'flex',alignItems:'center',gap:5,fontSize:12,color:T.text2}}><div style={{width:10,height:10,borderRadius:2,background:s.c}}/>{s.l}</div>)}
-          </div>
-          <TrendChart labels={tLabels} jawsData={jInc6} vpsData={vInc6} title="Revenue trend" chartId="rev-trend"/>
-        </Card>
-        <Card>
-          <PTitle>Revenue split — this month</PTitle>
-          <div style={{display:'flex',alignItems:'center',gap:20,justifyContent:'center',paddingTop:10}}>
-            <DonutChart jawsVal={jInc} vpsVal={vInc} chartId="rev-split"/>
-            <div style={{display:'flex',flexDirection:'column',gap:10}}>
-              <div>
-                <div style={{display:'flex',alignItems:'center',gap:6,marginBottom:3}}><div style={{width:10,height:10,borderRadius:2,background:T.blue}}/><span style={{fontSize:12,color:T.text2}}>JAWS</span></div>
-                <div style={{fontSize:18,fontWeight:500,fontFamily:'monospace',color:T.text}}>{fmt(jInc)}</div>
-                <div style={{fontSize:11,color:T.text3}}>Gross: {pct(jNet,jInc)} margin</div>
-              </div>
-              <div>
-                <div style={{display:'flex',alignItems:'center',gap:6,marginBottom:3}}><div style={{width:10,height:10,borderRadius:2,background:T.teal}}/><span style={{fontSize:12,color:T.text2}}>VPS</span></div>
-                <div style={{fontSize:18,fontWeight:500,fontFamily:'monospace',color:T.text}}>{fmt(vInc)}</div>
-                <div style={{fontSize:11,color:T.text3}}>After COS: {pct(vInc-vCos,vInc)} margin</div>
-              </div>
-            </div>
-          </div>
-        </Card>
-      </div>
+      const displayIncome = f==='jaws'?jInc : f==='vps'?vInc : jInc+vInc
+      const displayNet    = f==='jaws'?jNet : f==='vps'?vNet : jNet+vNet
+      const displayRecv   = f==='jaws'?jOut : f==='vps'?vOut : jOut+vOut
+      const displayOpenCt = f==='jaws'?jOpen.length : f==='vps'?vOpen.length : jOpen.length+vOpen.length
+      const displayBills  = f==='jaws'?jBOut : f==='vps'?vBOut : jBOut+vBOut
 
-      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}}>
-        <Card>
-          <PTitle>Top customers — JAWS this month</PTitle>
-          {jCust.slice(0,6).map((c,i)=><BarRow key={i} name={c.CustomerName?.substring(0,26)} value={c.TotalRevenue} max={jCust[0]?.TotalRevenue||1} extra={`${c.InvoiceCount}inv`}/>)}
-        </Card>
-        <Card>
-          <PTitle>Top customers — VPS this month</PTitle>
-          {vCust.filter(c=>!c.CustomerName?.includes('Just Autos Wholesale')).slice(0,6).map((c,i)=><BarRow key={i} name={c.CustomerName?.substring(0,26)} value={c.TotalRevenue} max={vCust[1]?.TotalRevenue||1} color={T.teal} extra={`${c.InvoiceCount}inv`}/>)}
-        </Card>
-      </div>
+      // Customers for display (combined or entity-specific)
+      const displayCustomers: Customer[] =
+        f==='jaws' ? jCust :
+        f==='vps'  ? vCust.filter(c=>!c.CustomerName?.includes('Just Autos Wholesale')) :
+        // combined: merge by customer name, summing revenue + invoice count
+        Object.values(
+          [...jCust, ...vCust.filter(c=>!c.CustomerName?.includes('Just Autos Wholesale'))]
+            .reduce((acc:Record<string,Customer>, c) => {
+              const key = c.CustomerName
+              if (!acc[key]) acc[key] = {CustomerName:key, TotalRevenue:0, InvoiceCount:0}
+              acc[key].TotalRevenue += c.TotalRevenue
+              acc[key].InvoiceCount += c.InvoiceCount
+              return acc
+            }, {})
+        ).sort((a,b)=>b.TotalRevenue-a.TotalRevenue)
 
-      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}}>
-        <Card>
-          <PTitle>Outstanding receivables <span onClick={()=>setSection('invoices')} style={{color:T.blue,cursor:'pointer',fontWeight:400,fontSize:10,textTransform:'none',letterSpacing:0}}>View all →</span></PTitle>
-          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10,marginBottom:12}}>
-            <div onClick={()=>setSection('invoices')} style={{background:T.bg3,borderRadius:8,padding:'10px 12px',cursor:'pointer'}}>
-              <div style={{fontSize:10,color:T.text3,marginBottom:4}}>JAWS</div>
-              <div style={{fontSize:18,fontWeight:500,fontFamily:'monospace',color:T.amber}}>{fmt(jOut)}</div>
-              <div style={{fontSize:11,color:T.blue,marginTop:2}}>{jOpen.length} open — click to view</div>
-            </div>
-            <div onClick={()=>setSection('invoices')} style={{background:T.bg3,borderRadius:8,padding:'10px 12px',cursor:'pointer'}}>
-              <div style={{fontSize:10,color:T.text3,marginBottom:4}}>VPS</div>
-              <div style={{fontSize:18,fontWeight:500,fontFamily:'monospace',color:T.amber}}>{fmt(vOut)}</div>
-              <div style={{fontSize:11,color:T.blue,marginTop:2}}>{vOpen.length} open — click to view</div>
-            </div>
-          </div>
-          {[...jOpen.slice(0,2).map(i=>({...i,e:'JAWS'})),...vOpen.slice(0,2).map(i=>({...i,e:'VPS'}))].map((inv:any,i)=>(
-            <div key={i} onClick={()=>setSection('invoices')} style={{display:'flex',gap:8,padding:'6px 0',borderTop:`1px solid ${T.border}`,cursor:'pointer'}}
-              onMouseEnter={e=>{(e.currentTarget as HTMLElement).style.background='rgba(255,255,255,0.03)'}}
-              onMouseLeave={e=>{(e.currentTarget as HTMLElement).style.background='transparent'}}>
-              <div style={{width:6,height:6,borderRadius:'50%',background:inv.e==='JAWS'?T.blue:T.teal,flexShrink:0,marginTop:5}}/>
-              <div style={{flex:1,minWidth:0}}>
-                <div style={{fontSize:12,color:T.amber,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',fontFamily:'monospace'}}>{inv.Number} — {inv.CustomerName?.substring(0,24)}</div>
-                <div style={{fontSize:10,color:T.text3,fontFamily:'monospace',marginTop:1}}>{fmtFull(inv.BalanceDueAmount)} · {inv.e} · {fmtDate(inv.Date)}</div>
-              </div>
-            </div>
-          ))}
-        </Card>
-        <Card>
-          <PTitle>Net result trend (6 months)</PTitle>
-          <div style={{display:'flex',gap:14,marginBottom:10}}>
-            {[{l:'JAWS',c:T.blue},{l:'VPS gross',c:T.teal}].map(s=><div key={s.l} style={{display:'flex',alignItems:'center',gap:5,fontSize:12,color:T.text2}}><div style={{width:10,height:10,borderRadius:2,background:s.c}}/>{s.l}</div>)}
-          </div>
-          <LineChart labels={tLabels} jawsData={jNet6} vpsData={vNet6} chartId="net-trend"/>
-        </Card>
-      </div>
-    </div>
-
-    // ── JAWS ────────────────────────────────────────────────
-    if(section==='jaws') return <div style={{display:'flex',flexDirection:'column',gap:14}}>
-      {/* KPI strip — 5 now, with Open Orders */}
-      <div style={{display:'grid',gridTemplateColumns:'repeat(5,minmax(0,1fr))',gap:12}}>
-        <KPI label="Income (MTD)"      value={fmt(jInc)}   sub="This month"   accent={T.blue}/>
-        <KPI label="Cost of Sales"     value={fmt(jCos)}   sub={`Margin: ${pct(jNet,jInc)}`} subColor={T.red} accent={T.red}/>
-        <KPI label="Net (MTD)"         value={fmt(jNet)}   sub="Income − COS" subColor={jNet>=0?T.green:T.red} accent={jNet>=0?T.green:T.red}/>
-        <KPI label="Receivables"       value={fmt(jOut)}   sub={`${jOpen.length} open`} subColor={T.amber} accent={T.amber}/>
-        <KPI label="Open Orders"
-             value={qo?fmt(qo.totals.openOrdersTotal):'—'}
-             sub={qo?`${qo.totals.openOrdersCount} orders · ${qo.totals.openOrdersPrepaid} prepaid`:'Loading…'}
-             subColor={qo&&qo.totals.openOrdersCount>0?T.purple:T.text3}
-             accent={T.purple}/>
-      </div>
-
-      <div style={{display:'grid',gridTemplateColumns:'1.4fr 1fr',gap:12}}>
-        <Card>
-          <PTitle>Revenue trend — JAWS (6 months)</PTitle>
-          <TrendChart labels={tLabels} jawsData={jInc6} vpsData={jExp6} title="JAWS income vs expenses" chartId="jaws-trend"/>
-        </Card>
-        <Card>
-          <PTitle>Top customers this month</PTitle>
-          {jCust.slice(0,8).map((c,i)=><BarRow key={i} name={c.CustomerName?.replace(' (Tuning)','').replace(' (Tuning 1)','').substring(0,26)} value={c.TotalRevenue} max={jCust[0]?.TotalRevenue||1} extra={`${c.InvoiceCount}inv`}/>)}
-        </Card>
-      </div>
-
-      {/* ── SALES PIPELINE: Open Orders + Quotes ──────────── */}
-      <JawsSalesPipeline qo={qo}/>
-
-      <Card><PTitle>Recent invoices — JAWS</PTitle><InvoiceTable rows={jInv} accent={T.blue} entity="JAWS" onInvoiceClick={openInvoiceDetail}/></Card>
-    </div>
-
-    // ── VPS ─────────────────────────────────────────────────
-    if(section==='vps') return <div style={{display:'flex',flexDirection:'column',gap:14}}>
-      <div style={{display:'grid',gridTemplateColumns:'repeat(4,minmax(0,1fr))',gap:12}}>
-        <KPI label="Income (MTD)"      value={fmt(vInc)}    sub="This month"    accent={T.teal}/>
-        <KPI label="Cost of Sales"     value={fmt(vCos)}    sub={`Gross margin: ${pct(vInc-vCos,vInc)}`} subColor={T.red} accent={T.red}/>
-        <KPI label="Overheads"         value={fmt(vOh)}     sub="Wages, ads, rent etc" subColor={T.amber} accent={T.amber}/>
-        <KPI label="Receivables"       value={fmt(vOut)}    sub={`${vOpen.length} open`} subColor={T.amber} accent={T.amber}/>
-      </div>
-      <div style={{display:'grid',gridTemplateColumns:'1.4fr 1fr',gap:12}}>
-        <Card>
-          <PTitle>Revenue trend — VPS (6 months)</PTitle>
-          <TrendChart labels={tLabels} jawsData={vInc6} vpsData={vExp6} title="VPS income vs expenses" chartId="vps-trend"/>
-        </Card>
-        <Card>
-          <PTitle>Top customers this month</PTitle>
-          {vCust.filter(c=>!c.CustomerName?.includes('Just Autos Wholesale')).slice(0,8).map((c,i)=><BarRow key={i} name={c.CustomerName?.substring(0,26)} value={c.TotalRevenue} max={vCust[1]?.TotalRevenue||1} color={T.teal} extra={`${c.InvoiceCount}inv`}/>)}
-        </Card>
-      </div>
-      <Card><PTitle>Recent invoices — VPS</PTitle><InvoiceTable rows={vInv} accent={T.teal} entity="VPS" onInvoiceClick={openInvoiceDetail}/></Card>
-    </div>
-
-    // ── INVOICES ─────────────────────────────────────────────
-    if(section==='invoices') return <div style={{display:'flex',flexDirection:'column',gap:14}}>
-      <div style={{display:'grid',gridTemplateColumns:'repeat(4,minmax(0,1fr))',gap:12}}>
-        <KPI label="JAWS Outstanding" value={fmt(jOut)} sub={`${jOpen.length} open`} subColor={T.amber} accent={T.blue}/>
-        <KPI label="VPS Outstanding"  value={fmt(vOut)} sub={`${vOpen.length} open`} subColor={T.amber} accent={T.teal}/>
-        <KPI label="Combined"         value={fmt(jOut+vOut)} sub="Total receivable" subColor={T.red}/>
-        <KPI label="Open Count"       value={String(jOpen.length+vOpen.length)} sub="Both entities"/>
-      </div>
-      <Card><PTitle>JAWS — Recent invoices <Tag color={T.blue}>Live MYOB</Tag></PTitle><InvoiceTable rows={jInv} accent={T.blue} entity="JAWS" onInvoiceClick={openInvoiceDetail}/></Card>
-      <Card><PTitle>VPS — Recent invoices <Tag color={T.teal}>Live MYOB</Tag></PTitle><InvoiceTable rows={vInv}  accent={T.teal} entity="VPS" onInvoiceClick={openInvoiceDetail}/></Card>
-    </div>
-
-    // ── P&L ──────────────────────────────────────────────────
-    if(section==='pnl') return <div style={{display:'flex',flexDirection:'column',gap:14}}>
-      <div style={{display:'grid',gridTemplateColumns:'repeat(4,minmax(0,1fr))',gap:12}}>
-        <KPI label="JAWS Income"      value={fmt(jInc)} subColor={T.green}  sub="This month" accent={T.blue}/>
-        <KPI label="JAWS Net (COS)"   value={fmt(jNet)} subColor={jNet>=0?T.green:T.red} sub={`Margin: ${pct(jNet,jInc)}`} accent={jNet>=0?T.green:T.red}/>
-        <KPI label="VPS Income"       value={fmt(vInc)} subColor={T.green}  sub="This month" accent={T.teal}/>
-        <KPI label="VPS Gross (COS)"  value={fmt(vInc-vCos)} subColor={vInc-vCos>=0?T.green:T.red} sub={`Overheads: ${fmt(vOh)}`} accent={vInc-vCos>=0?T.green:T.red}/>
-      </div>
-      <PnlSection entity="JAWS" pnl={jPnl} inc={jInc} cos={jCos} oh={0} accent={T.blue}/>
-      <Divider/>
-      <PnlSection entity="VPS"  pnl={vPnl} inc={vInc} cos={vCos} oh={vOh} accent={T.teal}/>
-    </div>
-
-    // ── STOCK (six-view analytics) ───────────────────────────
-    if(section==='stock') return <StockSection/>
-
-    // ── PAYABLES ─────────────────────────────────────────────
-    if(section==='payables') return <div style={{display:'flex',flexDirection:'column',gap:14}}>
-      <div style={{display:'grid',gridTemplateColumns:'repeat(4,minmax(0,1fr))',gap:12}}>
-        <KPI label="JAWS Payables"  value={fmt(jBOut)} sub={`${jBills.length} open bills`} subColor={T.red} accent={T.blue}/>
-        <KPI label="VPS Payables"   value={fmt(vBOut)} sub={`${vBills.length} open bills`} subColor={T.red} accent={T.teal}/>
-        <KPI label="Total Owing"    value={fmt(jBOut+vBOut)} sub="Combined payables" subColor={T.red}/>
-        <KPI label="Largest Bill"   value={jBills[0]?fmt(jBills[0].BalanceDueAmount):'—'} sub={jBills[0]?.SupplierName?.substring(0,20)||'—'}/>
-      </div>
-      <Card><PTitle>JAWS — Open purchase bills <Tag color={T.blue}>Live MYOB</Tag></PTitle><BillTable rows={jBills} accent={T.blue}/></Card>
-      <Card><PTitle>VPS — Open purchase bills <Tag color={T.teal}>Live MYOB</Tag></PTitle><BillTable rows={vBills}  accent={T.teal}/></Card>
-    </div>
-
-    // ── DISTRIBUTORS ─────────────────────────────────────────
-    if(section==='distributors') {
-      const dCust=jCust.filter(c=>!c.CustomerName?.includes('Vehicle Performance')&&!c.CustomerName?.includes('Stripe'))
-      const maxD=dCust[0]?.TotalRevenue||1
       return <div style={{display:'flex',flexDirection:'column',gap:14}}>
-        <div style={{display:'grid',gridTemplateColumns:'repeat(4,minmax(0,1fr))',gap:12}}>
-          <KPI label="Active Distributors" value="14"  sub="Across Australia" accent={T.blue}/>
-          <KPI label="Dist Revenue (MTD)"  value={fmt(dCust.reduce((s,c)=>s+c.TotalRevenue,0))} sub="This month" accent={T.blue}/>
-          <KPI label="Avg Revenue"         value={fmt(dCust.reduce((s,c)=>s+c.TotalRevenue,0)/Math.max(dCust.length,1))} sub="Per distributor"/>
-          <KPI label="Total Invoices"      value={String(dCust.reduce((s,c)=>s+c.InvoiceCount,0))} sub="This month"/>
+        {/* Filter pill header */}
+        <div style={{display:'flex',alignItems:'center',gap:12}}>
+          <EntityFilterPill value={overviewFilter} onChange={setOverviewFilter}/>
+          <div style={{flex:1}}/>
+          <div style={{fontSize:11,color:T.text3}}>Showing {f==='all'?'combined':f.toUpperCase()} data</div>
         </div>
-        <div style={{display:'grid',gridTemplateColumns:'1.4fr 1fr',gap:12}}>
-          <Card>
-            <PTitle>Distributor revenue — this month (live MYOB)</PTitle>
-            {dCust.map((c,i)=><BarRow key={i} name={c.CustomerName?.replace(' (Tuning)','').replace(' (Tuning 1)','').substring(0,30)} value={c.TotalRevenue} max={maxD} extra={`${c.InvoiceCount}inv`}/>)}
-          </Card>
-          <Card>
-            <PTitle>Revenue trend — JAWS (6 months)</PTitle>
-            <TrendChart labels={tLabels} jawsData={jInc6} vpsData={jInc6.map(()=>0)} title="JAWS distributor revenue trend" chartId="dist-trend"/>
-          </Card>
+
+        {/* KPI strip */}
+        <div style={{display:'grid',gridTemplateColumns:'repeat(5,minmax(0,1fr))',gap:12}}>
+          <KPI label={`Revenue (${fyLabel})`} value={fmt(displayIncome)} sub={f==='all'?'JAWS + VPS combined':f.toUpperCase()+' only'} accent={f==='vps'?T.teal:T.blue}/>
+          <KPI label="Net (MTD)" value={fmt(displayNet)} sub={displayIncome>0?`Margin: ${pct(displayNet,displayIncome)}`:'—'} subColor={displayNet>=0?T.green:T.red} accent={displayNet>=0?T.green:T.red}/>
+          <div onClick={()=>setSection('invoices')} style={{cursor:'pointer'}}>
+            <KPI label="Receivables" value={fmt(displayRecv)} sub={`${displayOpenCt} open — click for detail`} subColor={T.amber} accent={T.amber}/>
+          </div>
+          <div onClick={()=>setSection('payables')} style={{cursor:'pointer'}}>
+            <KPI label="Payables" value={fmt(displayBills)} sub="click for detail" subColor={T.red} accent={T.red}/>
+          </div>
+          {showJaws && <KPI label="Open Orders (JAWS)" value={qo?fmt(qo.totals.openOrdersTotal):'—'} sub={qo?`${qo.totals.openOrdersCount} orders · ${qo.totals.openOrdersPrepaid} prepaid`:'Loading…'} subColor={qo&&qo.totals.openOrdersCount>0?T.purple:T.text3} accent={T.purple}/>}
+          {!showJaws && <div onClick={()=>setSection('stock')} style={{cursor:'pointer'}}><KPI label="JAWS Stock" value={fmt(stockVal)} sub="click for detail" accent={T.purple}/></div>}
         </div>
+
+        {/* Revenue trend + split */}
+        <div style={{display:'grid',gridTemplateColumns:f==='all'?'1fr 1fr':'1fr',gap:12}}>
+          <Card>
+            <PTitle>Revenue trend (6 months)</PTitle>
+            <TrendChart labels={tLabels} jawsData={jInc6} vpsData={vInc6} chartId="overview-trend" entity={f}/>
+          </Card>
+          {f==='all' && <Card>
+            <PTitle>Revenue split — this month</PTitle>
+            <div style={{display:'flex',alignItems:'center',gap:20,justifyContent:'center',paddingTop:10}}>
+              <DonutChart jawsVal={jInc} vpsVal={vInc} chartId="overview-split"/>
+              <div style={{display:'flex',flexDirection:'column',gap:10}}>
+                <div><div style={{display:'flex',alignItems:'center',gap:6,marginBottom:3}}><div style={{width:10,height:10,borderRadius:2,background:T.blue}}/><span style={{fontSize:12,color:T.text2}}>JAWS</span></div><div style={{fontSize:18,fontWeight:500,fontFamily:'monospace',color:T.text}}>{fmt(jInc)}</div><div style={{fontSize:11,color:T.text3}}>{pct(jNet,jInc)} margin</div></div>
+                <div><div style={{display:'flex',alignItems:'center',gap:6,marginBottom:3}}><div style={{width:10,height:10,borderRadius:2,background:T.teal}}/><span style={{fontSize:12,color:T.text2}}>VPS</span></div><div style={{fontSize:18,fontWeight:500,fontFamily:'monospace',color:T.text}}>{fmt(vInc)}</div><div style={{fontSize:11,color:T.text3}}>{pct(vInc-vCos,vInc)} gross margin</div></div>
+              </div>
+            </div>
+          </Card>}
+        </div>
+
+        {/* Top customers */}
+        <Card>
+          <PTitle right={f==='all'?'Combined across both entities':''}>Top customers — this month</PTitle>
+          <div style={{display:'grid',gridTemplateColumns:f==='all'?'1fr 1fr':'1fr',gap:16}}>
+            {showJaws && <div>
+              {f==='all' && <div style={{fontSize:11,color:T.blue,marginBottom:8,fontWeight:600}}>JAWS</div>}
+              {(f==='all'?jCust:displayCustomers).slice(0,8).map((c,i)=><BarRow key={'j'+i} name={c.CustomerName?.replace(' (Tuning)','').replace(' (Tuning 1)','').substring(0,26)} value={c.TotalRevenue} max={(f==='all'?jCust:displayCustomers)[0]?.TotalRevenue||1} color={T.blue} extra={`${c.InvoiceCount}inv`}/>)}
+            </div>}
+            {showVps && f==='all' && <div>
+              <div style={{fontSize:11,color:T.teal,marginBottom:8,fontWeight:600}}>VPS</div>
+              {vCust.filter(c=>!c.CustomerName?.includes('Just Autos Wholesale')).slice(0,8).map((c,i)=><BarRow key={'v'+i} name={c.CustomerName?.substring(0,26)} value={c.TotalRevenue} max={vCust[1]?.TotalRevenue||1} color={T.teal} extra={`${c.InvoiceCount}inv`}/>)}
+            </div>}
+            {showVps && f==='vps' && <div>
+              {displayCustomers.slice(0,8).map((c,i)=><BarRow key={'v'+i} name={c.CustomerName?.substring(0,26)} value={c.TotalRevenue} max={displayCustomers[0]?.TotalRevenue||1} color={T.teal} extra={`${c.InvoiceCount}inv`}/>)}
+            </div>}
+          </div>
+        </Card>
+
+        {/* JAWS Sales Pipeline — only when showing JAWS */}
+        {showJaws && <JawsSalesPipeline qo={qo}/>}
+
+        {/* Recent invoices */}
+        <Card>
+          <PTitle>Recent invoices {f!=='all' && <Tag color={f==='jaws'?T.blue:T.teal}>{f.toUpperCase()}</Tag>}</PTitle>
+          <InvoiceTable
+            rows={(f==='jaws'?jInv:f==='vps'?vInv:combinedInv).slice(0,12) as any}
+            accent={f==='vps'?T.teal:T.blue}
+            entity={f==='vps'?'VPS':'JAWS'}
+            onInvoiceClick={(inv:any)=>openInvoiceDetail(inv, inv.__entity || (f==='vps'?'VPS':'JAWS'))}/>
+        </Card>
       </div>
     }
+
+    // ─── INVOICES (with filter) ─────────────────────────────
+    if(section==='invoices') {
+      const f = invoicesFilter
+      const showJaws = f==='all' || f==='jaws'
+      const showVps  = f==='all' || f==='vps'
+      return <div style={{display:'flex',flexDirection:'column',gap:14}}>
+        <div style={{display:'flex',alignItems:'center',gap:12}}>
+          <EntityFilterPill value={invoicesFilter} onChange={setInvoicesFilter}/>
+          <div style={{flex:1}}/>
+          <div style={{fontSize:11,color:T.text3}}>Showing {f==='all'?'both entities':f.toUpperCase()}</div>
+        </div>
+        <div style={{display:'grid',gridTemplateColumns:'repeat(4,minmax(0,1fr))',gap:12}}>
+          {showJaws && <KPI label="JAWS Outstanding" value={fmt(jOut)} sub={`${jOpen.length} open`} subColor={T.amber} accent={T.blue}/>}
+          {showVps  && <KPI label="VPS Outstanding" value={fmt(vOut)} sub={`${vOpen.length} open`} subColor={T.amber} accent={T.teal}/>}
+          {f==='all' && <KPI label="Combined" value={fmt(jOut+vOut)} sub="Total receivable" subColor={T.red}/>}
+          {f==='all' && <KPI label="Open Count" value={String(jOpen.length+vOpen.length)} sub="Both entities"/>}
+          {f!=='all' && <KPI label="Invoice Count" value={String(combinedInv.filter(i=>(f==='jaws'?i.__entity==='JAWS':i.__entity==='VPS')).length)} sub="This period"/>}
+          {f!=='all' && <KPI label="Recent Invoice" value={(f==='jaws'?jInv:vInv)[0]?fmtFull((f==='jaws'?jInv:vInv)[0].TotalAmount):'—'} sub={(f==='jaws'?jInv:vInv)[0]?.Number||'—'}/>}
+        </div>
+        {showJaws && <Card><PTitle>JAWS — Recent invoices <Tag color={T.blue}>Live MYOB</Tag></PTitle><InvoiceTable rows={jInv} accent={T.blue} entity="JAWS" onInvoiceClick={openInvoiceDetail}/></Card>}
+        {showVps  && <Card><PTitle>VPS — Recent invoices <Tag color={T.teal}>Live MYOB</Tag></PTitle><InvoiceTable rows={vInv} accent={T.teal} entity="VPS" onInvoiceClick={openInvoiceDetail}/></Card>}
+      </div>
+    }
+
+    // ─── P&L (with filter) ──────────────────────────────────
+    if(section==='pnl') {
+      const f = pnlFilter
+      const showJaws = f==='all' || f==='jaws'
+      const showVps  = f==='all' || f==='vps'
+      return <div style={{display:'flex',flexDirection:'column',gap:14}}>
+        <div style={{display:'flex',alignItems:'center',gap:12}}>
+          <EntityFilterPill value={pnlFilter} onChange={setPnlFilter}/>
+          <div style={{flex:1}}/>
+          <div style={{fontSize:11,color:T.text3}}>Showing {f==='all'?'both entities':f.toUpperCase()}</div>
+        </div>
+        <div style={{display:'grid',gridTemplateColumns:'repeat(4,minmax(0,1fr))',gap:12}}>
+          {showJaws && <>
+            <KPI label="JAWS Income" value={fmt(jInc)} subColor={T.green} sub="This month" accent={T.blue}/>
+            <KPI label="JAWS Net (COS)" value={fmt(jNet)} subColor={jNet>=0?T.green:T.red} sub={`Margin: ${pct(jNet,jInc)}`} accent={jNet>=0?T.green:T.red}/>
+          </>}
+          {showVps && <>
+            <KPI label="VPS Income" value={fmt(vInc)} subColor={T.green} sub="This month" accent={T.teal}/>
+            <KPI label="VPS Gross (COS)" value={fmt(vInc-vCos)} subColor={vInc-vCos>=0?T.green:T.red} sub={`Overheads: ${fmt(vOh)}`} accent={vInc-vCos>=0?T.green:T.red}/>
+          </>}
+        </div>
+        {showJaws && <PnlSection entity="JAWS" pnl={jPnl} inc={jInc} cos={jCos} oh={0} jNet={jNet} jInc={jInc}/>}
+        {showJaws && showVps && <Divider/>}
+        {showVps && <PnlSection entity="VPS" pnl={vPnl} inc={vInc} cos={vCos} oh={vOh} jNet={jNet} jInc={jInc}/>}
+      </div>
+    }
+
+    // ─── STOCK (JAWS only — no filter needed) ───────────────
+    if(section==='stock') return <StockSection/>
+
+    // ─── PAYABLES (with filter) ─────────────────────────────
+    if(section==='payables') {
+      const f = payablesFilter
+      const showJaws = f==='all' || f==='jaws'
+      const showVps  = f==='all' || f==='vps'
+      return <div style={{display:'flex',flexDirection:'column',gap:14}}>
+        <div style={{display:'flex',alignItems:'center',gap:12}}>
+          <EntityFilterPill value={payablesFilter} onChange={setPayablesFilter}/>
+          <div style={{flex:1}}/>
+          <div style={{fontSize:11,color:T.text3}}>Showing {f==='all'?'both entities':f.toUpperCase()}</div>
+        </div>
+        <div style={{display:'grid',gridTemplateColumns:'repeat(4,minmax(0,1fr))',gap:12}}>
+          {showJaws && <KPI label="JAWS Payables" value={fmt(jBOut)} sub={`${jBills.length} open bills`} subColor={T.red} accent={T.blue}/>}
+          {showVps  && <KPI label="VPS Payables"  value={fmt(vBOut)} sub={`${vBills.length} open bills`} subColor={T.red} accent={T.teal}/>}
+          {f==='all' && <KPI label="Total Owing" value={fmt(jBOut+vBOut)} sub="Combined" subColor={T.red}/>}
+          {f==='all' && <KPI label="Largest Bill" value={combinedBills[0]?fmt(combinedBills[0].BalanceDueAmount):'—'} sub={combinedBills[0]?.SupplierName?.substring(0,20)||'—'}/>}
+          {f!=='all' && <KPI label="Largest Bill" value={(f==='jaws'?jBills:vBills)[0]?fmt((f==='jaws'?jBills:vBills)[0].BalanceDueAmount):'—'} sub={(f==='jaws'?jBills:vBills)[0]?.SupplierName?.substring(0,20)||'—'}/>}
+          {f!=='all' && <KPI label="Bill Count" value={String((f==='jaws'?jBills:vBills).length)} sub="Open bills"/>}
+        </div>
+        {showJaws && <Card><PTitle>JAWS — Open purchase bills <Tag color={T.blue}>Live MYOB</Tag></PTitle><BillTable rows={jBills} accent={T.blue}/></Card>}
+        {showVps  && <Card><PTitle>VPS — Open purchase bills <Tag color={T.teal}>Live MYOB</Tag></PTitle><BillTable rows={vBills} accent={T.teal}/></Card>}
+      </div>
+    }
+
     return null
   }
 
+  // Nav — simplified to 5 items
   const navItems:[Section,string,string,string?][]=[
-    ['overview',    'Overview',          T.blue],
-    ['jaws',        'JAWS Wholesale',    T.blue],
-    ['vps',         'VPS Workshop',      T.teal],
-    ['invoices',    'Invoices',          T.amber,'alert'],
-    ['pnl',         'P&L — This Month',  T.green],
-    ['stock',       'Stock & Inventory', T.purple],
-    ['payables',    'Payables',          T.red,'alert'],
-    ['distributors','Distributors',      T.blue],
+    ['overview', 'Overview',          T.blue],
+    ['invoices', 'Invoices',          T.amber,'alert'],
+    ['pnl',      'P&L — This Month',  T.green],
+    ['stock',    'Stock & Inventory', T.purple],
+    ['payables', 'Payables',          T.red,'alert'],
   ]
   const titles:Record<Section,string>={
-    overview:'Overview — Live Data',jaws:'JAWS Wholesale',vps:'VPS Workshop',
-    invoices:'Invoices',pnl:'P&L — This Month',stock:'Stock & Inventory',
-    payables:'Payables',distributors:'Distributors',
+    overview:'Overview — Live Data',
+    invoices:'Invoices',
+    pnl:'P&L — This Month',
+    stock:'Stock & Inventory',
+    payables:'Payables',
   }
 
   const openCount=jOpen.length+vOpen.length
@@ -970,6 +901,7 @@ export default function Portal() {
       <Script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js" strategy="beforeInteractive"/>
 
       <div style={{display:'flex',height:'100vh',overflow:'hidden',fontFamily:"'DM Sans',system-ui,sans-serif"}}>
+        {/* Sidebar */}
         <div style={{width:220,minWidth:220,background:T.bg2,borderRight:`1px solid ${T.border}`,display:'flex',flexDirection:'column',height:'100vh',overflowY:'auto'}}>
           <div style={{padding:'20px 18px 16px',borderBottom:`1px solid ${T.border}`}}>
             <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:4}}>
@@ -980,16 +912,25 @@ export default function Portal() {
           </div>
           <div style={{padding:'14px 10px 4px',flex:1}}>
             <div style={{fontSize:9,fontWeight:600,color:T.text3,textTransform:'uppercase',letterSpacing:'0.1em',padding:'0 8px',marginBottom:6}}>Navigation</div>
+
+            {/* External pages */}
             <a href="/sales" style={{display:'flex',alignItems:'center',gap:9,padding:'8px 10px',borderRadius:7,fontSize:13,marginBottom:4,background:'rgba(167,139,250,0.1)',color:'#a78bfa',textDecoration:'none',border:'1px solid rgba(167,139,250,0.2)'}}>
               <div style={{width:7,height:7,borderRadius:'50%',background:'#a78bfa',flexShrink:0}}/>
-              <span style={{flex:1}}>Sales Dashboard</span>
+              <span style={{flex:1}}>Sales / Quote</span>
               <span style={{fontSize:9,fontFamily:'monospace',background:'#a78bfa',color:'#fff',padding:'1px 5px',borderRadius:3}}>NEW</span>
             </a>
             <a href="/distributors" style={{display:'flex',alignItems:'center',gap:9,padding:'8px 10px',borderRadius:7,fontSize:13,marginBottom:4,background:'rgba(79,142,247,0.1)',color:T.blue,textDecoration:'none',border:`1px solid rgba(79,142,247,0.2)`}}>
               <div style={{width:7,height:7,borderRadius:'50%',background:T.blue,flexShrink:0}}/>
-              <span style={{flex:1}}>Distributor Report</span>
+              <span style={{flex:1}}>Distributors</span>
               <span style={{fontSize:9,fontFamily:'monospace',background:T.blue,color:'#fff',padding:'1px 5px',borderRadius:3}}>PBI</span>
             </a>
+            <a href="/reports" style={{display:'flex',alignItems:'center',gap:9,padding:'8px 10px',borderRadius:7,fontSize:13,marginBottom:12,background:'rgba(52,199,123,0.1)',color:T.green,textDecoration:'none',border:'1px solid rgba(52,199,123,0.2)'}}>
+              <div style={{width:7,height:7,borderRadius:'50%',background:T.green,flexShrink:0}}/>
+              <span style={{flex:1}}>Reports</span>
+              <span style={{fontSize:9,fontFamily:'monospace',background:T.green,color:'#fff',padding:'1px 5px',borderRadius:3}}>AI</span>
+            </a>
+
+            {/* Internal nav items */}
             {navItems.map(([id,label,dot,type])=>(
               <div key={id} onClick={()=>setSection(id)}
                 style={{display:'flex',alignItems:'center',gap:9,padding:'8px 10px',borderRadius:7,cursor:'pointer',fontSize:13,marginBottom:1,
@@ -1015,6 +956,7 @@ export default function Portal() {
           </div>
         </div>
 
+        {/* Main */}
         <div style={{flex:1,display:'flex',flexDirection:'column',overflow:'hidden'}}>
           <div style={{height:52,background:T.bg2,borderBottom:`1px solid ${T.border}`,display:'flex',alignItems:'center',padding:'0 20px',gap:12,flexShrink:0}}>
             <div style={{fontSize:14,fontWeight:500,flex:1,color:T.text}}>{titles[section]}</div>
@@ -1066,24 +1008,50 @@ export default function Portal() {
   )
 }
 
-// ═══════════════════════════════════════════════════════════
-// JAWS Sales Pipeline — Open Orders + Quotes
-// Renders below "Revenue trend" card on JAWS Wholesale section
-// ═══════════════════════════════════════════════════════════
+// ─── P&L helper component ─────────────────────────────────
+function PnlSection({entity,pnl,inc,cos,oh,jNet,jInc}:{entity:string;pnl:PnLLine[];inc:number;cos:number;oh:number;jNet:number;jInc:number}) {
+  const income =pnl.filter(r=>r.AccountDisplayID?.startsWith('4-')&&r.AccountTotal>0).sort((a,b)=>b.AccountTotal-a.AccountTotal)
+  const cosRows=pnl.filter(r=>r.AccountDisplayID?.startsWith('5-')&&r.AccountTotal>0).sort((a,b)=>b.AccountTotal-a.AccountTotal)
+  const ohRows =pnl.filter(r=>r.AccountDisplayID?.startsWith('6-')&&r.AccountTotal>0).sort((a,b)=>b.AccountTotal-a.AccountTotal)
+  const maxInc =income[0]?.AccountTotal||1
+  const maxCos =cosRows[0]?.AccountTotal||1
+  const maxOh  =ohRows[0]?.AccountTotal||1
+  return <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:12}}>
+    <Card>
+      <PTitle>Income — {entity} <span style={{color:T.green}}>({fmt(inc)})</span></PTitle>
+      {income.slice(0,8).map((r,i)=><BarRow key={i} name={r.AccountName} value={r.AccountTotal} max={maxInc} color={T.green}/>)}
+    </Card>
+    <Card>
+      <PTitle>Cost of sales — {entity} <span style={{color:T.red}}>({fmt(cos)})</span></PTitle>
+      {cosRows.slice(0,8).map((r,i)=><BarRow key={i} name={r.AccountName} value={r.AccountTotal} max={maxCos} color={T.red}/>)}
+    </Card>
+    {entity==='VPS'&&<Card>
+      <PTitle>Overheads — {entity} <span style={{color:T.amber}}>({fmt(oh)})</span></PTitle>
+      {ohRows.slice(0,8).map((r,i)=><BarRow key={i} name={r.AccountName} value={r.AccountTotal} max={maxOh} color={T.amber}/>)}
+    </Card>}
+    {entity==='JAWS'&&<Card>
+      <PTitle>Net margin — {entity}</PTitle>
+      <div style={{textAlign:'center',paddingTop:20}}>
+        <div style={{fontSize:32,fontWeight:500,fontFamily:'monospace',color:jNet>=0?T.green:T.red}}>{jNet>=0?'+':''}{fmt(jNet)}</div>
+        <div style={{fontSize:12,color:T.text3,marginTop:6}}>Income − Cost of sales</div>
+        <div style={{fontSize:12,color:T.text3,marginTop:3}}>Margin: {pct(jNet,jInc)}</div>
+      </div>
+    </Card>}
+  </div>
+}
+
+// ─── JAWS Sales Pipeline ──────────────────────────────────
 function JawsSalesPipeline({qo}:{qo:QuotesOrdersPayload|null}) {
   if (!qo) return <Card><div style={{padding:20,textAlign:'center',color:T.text3,fontSize:12}}>Loading sales pipeline…</div></Card>
-
-  const {openOrders, quotes, convertedOrders, totals} = qo
-
+  const {openOrders, quotes, totals} = qo
   return <div style={{display:'grid',gridTemplateColumns:'1.4fr 1fr',gap:12}}>
-    {/* Open Orders table */}
     <Card>
       <PTitle right={
         <span>
           <Tag color={T.purple}>{fmt(totals.openOrdersTotal)}</Tag>
           {totals.conversionRate!=null && <span style={{marginLeft:8}}>30d conv: {fmtPct(totals.conversionRate)}</span>}
         </span>
-      }>Open orders — awaiting fulfilment or invoice</PTitle>
+      }>JAWS open orders — awaiting fulfilment or invoice</PTitle>
       {openOrders.length===0 && <div style={{color:T.text3,fontSize:12,padding:10}}>No open orders.</div>}
       {openOrders.length>0 && <div style={{overflowX:'auto'}}>
         <table style={{width:'100%',borderCollapse:'collapse'}}>
@@ -1101,24 +1069,19 @@ function JawsSalesPipeline({qo}:{qo:QuotesOrdersPayload|null}) {
               <td style={{fontSize:12,fontFamily:'monospace',color:o.balanceDueAmount>0?T.amber:T.green,padding:'7px 8px',textAlign:'right'}}>{o.balanceDueAmount>0?fmtFull(o.balanceDueAmount):'Paid'}</td>
               <td style={{fontSize:11,fontFamily:'monospace',color:ageColor,padding:'7px 8px',textAlign:'right'}}>{o.ageDays==null?'—':o.ageDays+'d'}</td>
               <td style={{padding:'7px 8px'}}>
-                {o.isPrepaid
-                  ? <Tag color={T.green}>PREPAID</Tag>
-                  : <Tag color={T.amber}>OPEN</Tag>}
+                {o.isPrepaid ? <Tag color={T.green}>PREPAID</Tag> : <Tag color={T.amber}>OPEN</Tag>}
               </td>
             </tr>
           })}</tbody>
         </table>
       </div>}
-      {/* Converted footer */}
       <div style={{marginTop:12,paddingTop:10,borderTop:`1px solid ${T.border}`,display:'flex',justifyContent:'space-between',fontSize:11,color:T.text3}}>
         <span>Converted to invoice in last 30 days</span>
         <span style={{fontFamily:'monospace'}}>{totals.convertedCount30d} orders · {fmt(totals.convertedTotal30d)}</span>
       </div>
     </Card>
-
-    {/* Quotes table (scaffolded — empty today) */}
     <Card>
-      <PTitle right={<Tag color={quotes.length===0?T.text3:T.blue}>{quotes.length} active</Tag>}>Quotes</PTitle>
+      <PTitle right={<Tag color={quotes.length===0?T.text3:T.blue}>{quotes.length} active</Tag>}>JAWS Quotes</PTitle>
       {quotes.length===0 && (
         <div style={{color:T.text3,fontSize:12,padding:'20px 10px',textAlign:'center',lineHeight:1.6}}>
           <div style={{fontSize:24,marginBottom:8,opacity:0.4}}>—</div>
@@ -1145,10 +1108,7 @@ function JawsSalesPipeline({qo}:{qo:QuotesOrdersPayload|null}) {
   </div>
 }
 
-// ═══════════════════════════════════════════════════════════
-// Stock & Inventory — six-view analytics (JAWS only for now)
-// Powered by /api/inventory
-// ═══════════════════════════════════════════════════════════
+// ─── Stock & Inventory section (unchanged) ────────────────
 function StockSection() {
   const [data,setData]=useState<InventoryPayload|null>(null)
   const [loading,setLoading]=useState(true)
@@ -1200,7 +1160,6 @@ function StockSection() {
       </select>
       <div style={{fontSize:11,color:T.text3,fontFamily:'monospace',whiteSpace:'nowrap'}}>{filtered.length} of {items.length} SKUs</div>
     </div>
-
     <div style={{display:'grid',gridTemplateColumns:'repeat(6,1fr)',gap:12}}>
       <KPI label="Stock value" value={fmt(data.totals.stockValue)} sub={`${data.totals.totalItems} SKUs · ${data.totals.qtyOnHand} units`} accent={T.blue}/>
       <KPI label="Low stock" value={String(data.totals.lowStockCount)} sub="below reorder level" subColor={data.totals.lowStockCount>0?T.amber:T.text3} accent={T.amber}/>
@@ -1209,7 +1168,6 @@ function StockSection() {
       <KPI label="On order" value={String(data.totals.qtyOnOrder)} sub="units inbound" accent={T.teal}/>
       <KPI label="Reorder cost" value={fmt(data.totals.reorderSuggestValue)} sub={`${data.totals.reorderSuggestCount} items @ avg cost`} accent={T.green}/>
     </div>
-
     <div style={{display:'flex',gap:4,borderBottom:`1px solid ${T.border}`}}>
       {([
         ['overview','Overview'],
@@ -1222,12 +1180,9 @@ function StockSection() {
         <button key={id} onClick={()=>setTab(id)}
           style={{background:'transparent',border:'none',padding:'10px 14px',fontSize:12,fontWeight:600,
             color:tab===id?T.text:T.text2,borderBottom:tab===id?`2px solid ${T.accent}`:'2px solid transparent',
-            cursor:'pointer',fontFamily:'inherit',marginBottom:-1}}>
-          {label}
-        </button>
+            cursor:'pointer',fontFamily:'inherit',marginBottom:-1}}>{label}</button>
       ))}
     </div>
-
     {tab==='overview' && <StockOverview data={data} items={filtered}/>}
     {tab==='reorder'  && <StockReorder items={filtered}/>}
     {tab==='velocity' && <StockVelocity items={filtered}/>}
@@ -1259,9 +1214,7 @@ function StockOverview({data,items}:{data:InventoryPayload;items:InventoryItem[]
             <div style={{width:(i.stockValue/maxValue*100)+'%',height:'100%',background:T.blue}}/>
           </div>
           <div style={{display:'flex',gap:10,marginTop:4,fontSize:10,color:T.text3,fontFamily:'monospace'}}>
-            <span>OH {i.qtyOnHand}</span>
-            <span>90d sold {i.unitsSold90d}</span>
-            <span>Cover {fmtDays(i.daysOfCover)}</span>
+            <span>OH {i.qtyOnHand}</span><span>90d sold {i.unitsSold90d}</span><span>Cover {fmtDays(i.daysOfCover)}</span>
             <Tag color={INV_STATUS_COLOR[i.stockoutStatus]}>{INV_STATUS_LABEL[i.stockoutStatus]}</Tag>
           </div>
         </div>
@@ -1319,10 +1272,7 @@ function StockReorder({items}:{items:InventoryItem[]}) {
           const qty=i.reorderQty>0?i.reorderQty:Math.max(i.reorderLevel-i.qtyOnHand,1)
           const coverColor=i.daysOfCover==null?T.text3:i.daysOfCover<=14?T.red:i.daysOfCover<=30?T.amber:T.text
           return <tr key={i.number} style={{borderTop:`1px solid ${T.border}`}}>
-            <td style={{padding:'7px 8px'}}>
-              <div style={{fontFamily:'monospace',fontSize:11,color:T.text2}}>{i.number}</div>
-              <div style={{fontSize:12,color:T.text}}>{i.name}</div>
-            </td>
+            <td style={{padding:'7px 8px'}}><div style={{fontFamily:'monospace',fontSize:11,color:T.text2}}>{i.number}</div><div style={{fontSize:12,color:T.text}}>{i.name}</div></td>
             <td style={{fontSize:12,fontFamily:'monospace',color:i.isOutOfStock?T.red:T.text,padding:'7px 8px',textAlign:'right'}}>{i.qtyOnHand}</td>
             <td style={{fontSize:12,fontFamily:'monospace',color:T.text2,padding:'7px 8px',textAlign:'right'}}>{i.reorderLevel}</td>
             <td style={{fontSize:12,fontFamily:'monospace',color:coverColor,padding:'7px 8px',textAlign:'right'}}>{fmtDays(i.daysOfCover)}</td>
@@ -1398,9 +1348,9 @@ function StockDead({items}:{items:InventoryItem[]}) {
   const sumVal=(arr:InventoryItem[])=>arr.reduce((s,i)=>s+i.stockValue,0)
   return <div style={{display:'flex',flexDirection:'column',gap:14}}>
     <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:12}}>
-      <KPI label="90–180 days"    value={fmt(sumVal(t1))} sub={`${t1.length} items`} accent={T.amber}/>
-      <KPI label="180–365 days"   value={fmt(sumVal(t2))} sub={`${t2.length} items`} accent="#ff8c42"/>
-      <KPI label="Over 365 days"  value={fmt(sumVal(t3))} sub={`${t3.length} items`} accent={T.red}/>
+      <KPI label="90–180 days" value={fmt(sumVal(t1))} sub={`${t1.length} items`} accent={T.amber}/>
+      <KPI label="180–365 days" value={fmt(sumVal(t2))} sub={`${t2.length} items`} accent="#ff8c42"/>
+      <KPI label="Over 365 days" value={fmt(sumVal(t3))} sub={`${t3.length} items`} accent={T.red}/>
       <KPI label="Never sold (12m)" value={fmt(sumVal(t4))} sub={`${t4.length} items`} accent={T.purple}/>
     </div>
     <Card>
@@ -1525,23 +1475,16 @@ function StockOnOrder({items}:{items:InventoryItem[]}) {
   </div>
 }
 
-// Server-side auth check — redirects to /login if no cookie
+// Server-side auth check
 export async function getServerSideProps(context: any) {
   const cookie = context.req.cookies['ja_portal_auth']
   const PORTAL_PASSWORD = process.env.PORTAL_PASSWORD || 'justautos2026'
-  
-  if (!cookie) {
-    return { redirect: { destination: '/login', permanent: false } }
-  }
-  
+  if (!cookie) return { redirect: { destination: '/login', permanent: false } }
   try {
     const decoded = Buffer.from(cookie, 'base64').toString('utf8')
-    if (decoded !== PORTAL_PASSWORD) {
-      return { redirect: { destination: '/login', permanent: false } }
-    }
+    if (decoded !== PORTAL_PASSWORD) return { redirect: { destination: '/login', permanent: false } }
   } catch {
     return { redirect: { destination: '/login', permanent: false } }
   }
-  
   return { props: {} }
 }
