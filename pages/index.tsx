@@ -890,9 +890,9 @@ export default function Portal() {
 
   // Unified nav model — all 8 items (3 external links + 5 internal sections)
   const navItems: NavItem[] = [
-    {id:'leads',        kind:'link',    label:'Leads/Orders', href:'/sales',         dot:'#a78bfa', badge:'NEW', badgeColor:'#a78bfa'},
-    {id:'distributors', kind:'link',    label:'Distributors', href:'/distributors',  dot:T.blue,    badge:'PBI', badgeColor:T.blue},
-    {id:'reports',      kind:'link',    label:'Reports',      href:'/reports',       dot:T.green,   badge:'AI',  badgeColor:T.green},
+    {id:'leads',        kind:'link',    label:'Leads/Orders', href:'/sales',         dot:'#a78bfa'},
+    {id:'distributors', kind:'link',    label:'Distributors', href:'/distributors',  dot:T.blue},
+    {id:'reports',      kind:'link',    label:'Reports',      href:'/reports',       dot:T.green},
     {id:'overview',     kind:'section', label:'Overview',          section:'overview', dot:T.blue},
     {id:'invoices',     kind:'section', label:'Invoices',          section:'invoices', dot:T.amber, alertKey:'invoices'},
     {id:'pnl',          kind:'section', label:'P&L — This Month',  section:'pnl',      dot:T.green},
