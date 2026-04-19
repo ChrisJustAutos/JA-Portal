@@ -4,6 +4,7 @@ import { useEffect, useState, useRef, useCallback } from 'react'
 import Head from 'next/head'
 import Script from 'next/script'
 import { useRouter } from 'next/router'
+import PortalSidebar from '../lib/PortalSidebar'
 
 // ── Types ────────────────────────────────────────────────────
 interface Invoice  { Number:string;Date:string;CustomerName:string;TotalAmount:number;BalanceDueAmount:number;Status:string;InvoiceType?:string }
@@ -18,18 +19,6 @@ interface DashData {
 }
 type Section = 'overview'|'invoices'|'pnl'|'stock'|'payables'
 type EntityFilter = 'all'|'jaws'|'vps'
-type NavSort = 'default'|'az'|'za'|'custom'
-interface NavItem {
-  id: string                // stable key for reordering
-  kind: 'link' | 'section'  // link = external page, section = internal tab
-  label: string             // display text — what A-Z sorts on
-  href?: string             // for link
-  section?: Section         // for section
-  dot: string               // color for the left dot indicator
-  badge?: string            // pill text shown on the right (e.g. "NEW", "PBI", "AI")
-  badgeColor?: string
-  alertKey?: 'invoices'|'payables'  // which count to display
-}
 
 // ── Inventory types ───────────────────────────────────────────
 interface InventoryItem {
@@ -583,10 +572,6 @@ export default function Portal() {
   const [customEnd, setCustomEnd] = useState(defaultEnd)
   const [isCustomRange, setIsCustomRange] = useState(true)
 
-  // Sidebar sorting (session-only — resets on refresh)
-  const [navSort, setNavSort] = useState<NavSort>('default')
-  const [customOrder, setCustomOrder] = useState<string[]>([])
-
   const activeStart = isCustomRange ? customStart : `${fyYear-1}-07-01`
   const activeEnd = isCustomRange ? customEnd : `${fyYear}-06-30`
   const dateParams = `startDate=${activeStart}&endDate=${activeEnd}`
@@ -888,30 +873,6 @@ export default function Portal() {
     return null
   }
 
-  // Unified nav model — all 8 items (3 external links + 5 internal sections)
-  const navItems: NavItem[] = [
-    {id:'leads',        kind:'link',    label:'Leads/Orders', href:'/sales',         dot:'#a78bfa'},
-    {id:'distributors', kind:'link',    label:'Distributors', href:'/distributors',  dot:T.blue},
-    {id:'reports',      kind:'link',    label:'Reports',      href:'/reports',       dot:T.green},
-    {id:'overview',     kind:'section', label:'Overview',          section:'overview', dot:T.blue},
-    {id:'invoices',     kind:'section', label:'Invoices',          section:'invoices', dot:T.amber, alertKey:'invoices'},
-    {id:'pnl',          kind:'section', label:'P&L — This Month',  section:'pnl',      dot:T.green},
-    {id:'stock',        kind:'section', label:'Stock & Inventory', section:'stock',    dot:T.purple},
-    {id:'payables',     kind:'section', label:'Payables',          section:'payables', dot:T.red,   alertKey:'payables'},
-  ]
-
-  // Compute sorted order based on navSort state
-  const sortedNavItems: NavItem[] = (() => {
-    if (navSort === 'az') return [...navItems].sort((a,b) => a.label.localeCompare(b.label))
-    if (navSort === 'za') return [...navItems].sort((a,b) => b.label.localeCompare(a.label))
-    if (navSort === 'custom' && customOrder.length === navItems.length) {
-      const byId: Record<string, NavItem> = {}
-      navItems.forEach(it => { byId[it.id] = it })
-      return customOrder.map(id => byId[id]).filter(Boolean)
-    }
-    return navItems  // 'default' or custom not yet set
-  })()
-
   const titles:Record<Section,string>={
     overview:'Overview — Live Data',
     invoices:'Invoices',
@@ -933,59 +894,15 @@ export default function Portal() {
       <Script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js" strategy="beforeInteractive"/>
 
       <div style={{display:'flex',height:'100vh',overflow:'hidden',fontFamily:"'DM Sans',system-ui,sans-serif"}}>
-        {/* Sidebar */}
-        <div style={{width:220,minWidth:220,background:T.bg2,borderRight:`1px solid ${T.border}`,display:'flex',flexDirection:'column',height:'100vh',overflowY:'auto'}}>
-          <div style={{padding:'20px 18px 16px',borderBottom:`1px solid ${T.border}`}}>
-            <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:4}}>
-              <div style={{width:30,height:30,borderRadius:8,background:T.blue,display:'flex',alignItems:'center',justifyContent:'center',fontSize:13,fontWeight:600,color:'#fff'}}>JA</div>
-              <div style={{fontSize:14,fontWeight:600,color:T.text}}>Just Autos</div>
-            </div>
-            <div style={{fontSize:11,color:T.text3,marginLeft:40}}>Management Portal</div>
-          </div>
-          <div style={{padding:'14px 10px 4px',flex:1}}>
-            <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'0 8px',marginBottom:6}}>
-              <div style={{fontSize:9,fontWeight:600,color:T.text3,textTransform:'uppercase',letterSpacing:'0.1em'}}>Navigation</div>
-              <select value={navSort} onChange={e=>{
-                const v = e.target.value as NavSort
-                if (v === 'custom') {
-                  // Seed custom order with whatever is currently visible
-                  setCustomOrder(sortedNavItems.map(it => it.id))
-                }
-                setNavSort(v)
-              }}
-                style={{background:'transparent',border:`1px solid ${T.border}`,color:T.text3,borderRadius:4,padding:'2px 5px',fontSize:9,fontFamily:'inherit',cursor:'pointer',outline:'none'}}>
-                <option value="default">Default</option>
-                <option value="az">A–Z</option>
-                <option value="za">Z–A</option>
-                <option value="custom">Custom (drag)</option>
-              </select>
-            </div>
-
-            <SortableSidebar
-              items={sortedNavItems}
-              currentSection={section}
-              onClick={(it)=>{
-                if (it.kind==='link') router.push(it.href!)
-                else setSection(it.section!)
-              }}
-              onReorder={(newOrder)=>{
-                if (navSort === 'custom') setCustomOrder(newOrder)
-              }}
-              dragEnabled={navSort==='custom'}
-              alertCounts={{invoices:openCount, payables:billCount}}
-              loading={loading}
-            />
-          </div>
-          <div style={{padding:'12px 14px',borderTop:`1px solid ${T.border}`}}>
-            <div style={{fontSize:10,color:T.text3,marginBottom:5}}>{lastRefresh?`Updated ${lastRefresh.toLocaleTimeString('en-AU',{hour:'2-digit',minute:'2-digit'})}`:'Loading…'}</div>
-            <button onClick={()=>load(true)} disabled={refreshing}
-              style={{fontSize:12,color:T.blue,background:'none',border:'none',cursor:'pointer',fontFamily:'inherit',padding:0,display:'block',marginBottom:4}}>
-              {refreshing?'Refreshing…':'↻ Refresh data'}
-            </button>
-            <button onClick={async()=>{await fetch('/api/auth/logout',{method:'POST'});router.push('/login')}}
-              style={{fontSize:12,color:T.text3,background:'none',border:'none',cursor:'pointer',fontFamily:'inherit',padding:0}}>Sign out →</button>
-          </div>
-        </div>
+        <PortalSidebar
+          activeId={section}
+          onSectionClick={(s)=>setSection(s as Section)}
+          lastRefresh={lastRefresh}
+          onRefresh={()=>load(true)}
+          refreshing={refreshing}
+          alertCounts={{invoices:openCount, payables:billCount}}
+          loading={loading}
+        />
 
         {/* Main */}
         <div style={{flex:1,display:'flex',flexDirection:'column',overflow:'hidden'}}>
@@ -1506,106 +1423,6 @@ function StockOnOrder({items}:{items:InventoryItem[]}) {
   </div>
 }
 
-// ─── Sortable sidebar (HTML5 drag-drop, no external deps) ─────
-function SortableSidebar({items, currentSection, onClick, onReorder, dragEnabled, alertCounts, loading}:{
-  items: NavItem[]
-  currentSection: Section
-  onClick: (it: NavItem) => void
-  onReorder: (newOrderIds: string[]) => void
-  dragEnabled: boolean
-  alertCounts: {invoices:number; payables:number}
-  loading: boolean
-}) {
-  const [draggedId, setDraggedId] = useState<string|null>(null)
-  const [dragOverId, setDragOverId] = useState<string|null>(null)
-
-  function handleDragStart(e: React.DragEvent, id: string) {
-    if (!dragEnabled) return
-    setDraggedId(id)
-    e.dataTransfer.effectAllowed = 'move'
-    e.dataTransfer.setData('text/plain', id)
-  }
-  function handleDragOver(e: React.DragEvent, id: string) {
-    if (!dragEnabled || !draggedId) return
-    e.preventDefault()
-    e.dataTransfer.dropEffect = 'move'
-    if (id !== dragOverId) setDragOverId(id)
-  }
-  function handleDrop(e: React.DragEvent, targetId: string) {
-    if (!dragEnabled || !draggedId) return
-    e.preventDefault()
-    if (draggedId === targetId) { setDraggedId(null); setDragOverId(null); return }
-    const order = items.map(it => it.id)
-    const fromIdx = order.indexOf(draggedId)
-    const toIdx = order.indexOf(targetId)
-    if (fromIdx < 0 || toIdx < 0) { setDraggedId(null); setDragOverId(null); return }
-    const [moved] = order.splice(fromIdx, 1)
-    order.splice(toIdx, 0, moved)
-    onReorder(order)
-    setDraggedId(null)
-    setDragOverId(null)
-  }
-  function handleDragEnd() {
-    setDraggedId(null)
-    setDragOverId(null)
-  }
-
-  return (
-    <div>
-      {items.map(it => {
-        const isLink = it.kind === 'link'
-        const isSelected = !isLink && currentSection === it.section
-        const isDragging = draggedId === it.id
-        const isDragOver = dragOverId === it.id && draggedId !== it.id
-        const alertCount = it.alertKey ? alertCounts[it.alertKey] : 0
-
-        // Uniform styling for all items — only currently-active section gets a subtle highlight
-        const bg = isSelected ? 'rgba(255,255,255,0.04)' : 'transparent'
-        const color = isSelected ? T.text : T.text2
-
-        return (
-          <div
-            key={it.id}
-            draggable={dragEnabled}
-            onDragStart={(e)=>handleDragStart(e, it.id)}
-            onDragOver={(e)=>handleDragOver(e, it.id)}
-            onDrop={(e)=>handleDrop(e, it.id)}
-            onDragEnd={handleDragEnd}
-            onClick={()=>onClick(it)}
-            style={{
-              display:'flex', alignItems:'center', gap:9,
-              padding:'8px 10px', borderRadius:7,
-              cursor: dragEnabled ? 'grab' : 'pointer',
-              fontSize:13, marginBottom:1,
-              background: bg,
-              color: color,
-              opacity: isDragging ? 0.4 : 1,
-              outline: isDragOver ? `2px dashed ${T.accent}` : 'none',
-              outlineOffset: -2,
-              transition: 'opacity 0.15s, outline 0.1s, background 0.1s',
-              userSelect: 'none',
-            }}>
-            {dragEnabled && (
-              <span style={{fontSize:10,color:T.text3,cursor:'grab',marginRight:-4}}>⋮⋮</span>
-            )}
-            <div style={{width:7,height:7,borderRadius:'50%',background:it.dot,flexShrink:0}}/>
-            <span style={{flex:1}}>{it.label}</span>
-            {it.badge && (
-              <span style={{fontSize:9,fontFamily:'monospace',background:it.badgeColor,color:'#fff',padding:'1px 5px',borderRadius:3}}>
-                {it.badge}
-              </span>
-            )}
-            {it.alertKey && !loading && alertCount > 0 && (
-              <span style={{fontSize:10,fontFamily:'monospace',background:'rgba(240,78,78,0.2)',color:T.red,padding:'2px 6px',borderRadius:4}}>
-                {alertCount}
-              </span>
-            )}
-          </div>
-        )
-      })}
-    </div>
-  )
-}
 
 // Server-side auth check
 export async function getServerSideProps(context: any) {
