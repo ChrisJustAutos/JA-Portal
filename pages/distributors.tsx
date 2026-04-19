@@ -43,21 +43,23 @@ interface GroupingPayload {
   members: { group_id: number; canonical_name: string }[]
 }
 
-// VIN mapping unchanged from prior version
-function vinToModel(vin: string): string {
-  if (!vin || vin.length < 8) return 'Unknown'
-  const v = vin.toUpperCase().trim()
-  if (v.length < 8) return 'Unknown'
-  const p4_7 = v.substring(3, 7)
-  const p4_6 = v.substring(3, 6)
-  if (p4_7 === 'AA7B' || p4_7 === 'AABB' || p4_6 === 'HV05' || p4_6 === 'HV01' || p4_6 === 'HV09' || p4_6 === 'GV03') return 'LC300'
-  if (p4_6 === 'BV71' || p4_6 === 'BV73' || p4_6 === 'BVL1' || p4_6 === 'BVL3' || p4_6 === 'EV73' || p4_6 === 'EVL3' || p4_6 === 'RVL3' || p4_6 === 'RVL1' || p4_6 === 'RV73' || p4_6 === 'EEV7') return 'Prado 250'
-  if (p4_6 === 'BR3F' || p4_6 === 'BRL3' || p4_6 === 'BR71' || p4_6 === 'BH3F' || p4_6 === 'ACEB' || p4_6 === 'ACDB' || p4_6 === 'RRL1') return 'Prado 150'
-  if (p4_6 === 'LV71' || p4_6 === 'LV73' || p4_6 === 'LVL1' || p4_6 === 'LVL3' || p4_6 === 'LRL3' || p4_6 === 'LR71') return 'LC70/79'
-  if (p4_6 === 'HV00' || p4_6 === 'HV02') return 'LC200'
-  if (p4_7 === 'BA3C' || p4_7 === 'KA3C' || p4_7 === 'HA3C' || p4_7 === 'BE3C' || p4_7 === 'KE3C' || p4_7 === 'DB3C') return 'Hilux N80'
-  if (p4_6 === 'FZ29' || p4_6 === 'HZ22' || p4_6 === 'FZ22' || p4_6 === 'EZ39') return 'Hilux/Prado (older)'
-  return `Other (${v.substring(3, 8)})`
+// VIN mapping is now driven by the /api/vin-codes Supabase table.
+// Matches the Power BI behaviour: prefix = first N chars of the VIN (left-anchored).
+// Returns a friendly model name, or a placeholder if no rule matches.
+interface VinRule { id: number; vin_prefix: string; model_code: string; friendly_name: string | null }
+function vinToModel(vinOrPo: string, rules: VinRule[]): string {
+  if (!vinOrPo) return 'Unknown'
+  const v = vinOrPo.trim().toUpperCase()
+  if (v.length < 4) return 'Unknown'
+  // Longest-prefix-wins: sort rules by prefix length descending, first match returns
+  const sorted = [...rules].sort((a,b) => b.vin_prefix.length - a.vin_prefix.length)
+  for (const rule of sorted) {
+    if (v.startsWith(rule.vin_prefix.toUpperCase())) {
+      return rule.friendly_name || rule.model_code
+    }
+  }
+  // No rule matched — expose the prefix so it's visible for classification
+  return `Unmapped (${v.substring(0, 4)})`
 }
 
 const fmtD=(n:number)=>n==null?'$0':'$'+Math.round(n).toLocaleString('en-AU')
@@ -73,6 +75,7 @@ export default function DistributorReport(){
   const [tab,setTab]=useState<Tab>('summary')  // default to Summary — it's the grouped view
   const [data,setData]=useState<DistData|null>(null)
   const [grouping,setGrouping]=useState<GroupingPayload|null>(null)
+  const [vinRules,setVinRules]=useState<VinRule[]>([])
   const [loading,setLoading]=useState(true)
   const [error,setError]=useState('')
   const [selectedDist,setSelectedDist]=useState('ALL')
@@ -101,9 +104,10 @@ export default function DistributorReport(){
     if(isRefresh)setRefreshing(true)
     try{
       const rp=isRefresh?'&refresh=true':''
-      const [distRes, groupRes] = await Promise.all([
+      const [distRes, groupRes, vinRes] = await Promise.all([
         fetch(`/api/distributors?${activeDateParams}${rp}`),
         fetch(`/api/groups${isRefresh?'?refresh=true':''}`),
+        fetch(`/api/vin-codes${isRefresh?'?refresh=true':''}`),
       ])
       if(distRes.status===401){router.push('/login');return}
       if(!distRes.ok)throw new Error('Failed to load distributor data')
@@ -118,6 +122,14 @@ export default function DistributorReport(){
       setGrouping(g)
       const aliasMap: Record<string,string> = {}
       g.aliases.forEach(a => { aliasMap[a.myob_name] = a.canonical_name })
+
+      // Fetch VIN rules — don't block if it fails
+      let vRules: VinRule[] = []
+      if (vinRes.ok) {
+        const vData = await vinRes.json()
+        vRules = vData.rules || []
+      }
+      setVinRules(vRules)
 
       // Flatten distributors[].lineItems[] into a single array,
       // resolving each raw MYOB name to its canonical via the alias map
@@ -229,7 +241,7 @@ export default function DistributorReport(){
     const tunLines=filtered.filter(l=>l.bucket==='Tuning'&&l.poNumber&&l.poNumber.trim())
     const byModel:Record<string,{total:number;vins:Set<string>;jobs:number}>={}
     tunLines.forEach(l=>{
-      const model=vinToModel(l.poNumber.trim())
+      const model=vinToModel(l.poNumber.trim(), vinRules)
       if(!byModel[model])byModel[model]={total:0,vins:new Set(),jobs:0}
       byModel[model].total+=l.Total
       byModel[model].vins.add(l.poNumber.trim())
@@ -242,7 +254,7 @@ export default function DistributorReport(){
       options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false},tooltip:{callbacks:{label:(ctx:any)=>`$${ctx.raw.toLocaleString()}`,afterLabel:(ctx:any)=>{const m=sorted[ctx.dataIndex];if(!m)return '';const[,info]=m;return `${info.vins.size} unique VIN${info.vins.size===1?'':'s'} · ${info.jobs} job${info.jobs===1?'':'s'}`}}}},scales:{x:{grid:{color:'rgba(255,255,255,0.05)'},ticks:{color:T.text3,font:{size:11}}},y:{grid:{color:'rgba(255,255,255,0.05)'},ticks:{color:T.text3,font:{size:11},callback:(v:any)=>'$'+(v>=1000?Math.round(v/1000)+'k':v)}}}}
     })
     return()=>{if(barInst.current)barInst.current.destroy()}
-  },[filtered,tab,loading])
+  },[filtered,tab,loading,vinRules])
 
   useEffect(()=>{
     if(tab!=='national-pm'||!lineRef.current||!(window as any).Chart||!trendLabels.length)return
@@ -283,7 +295,7 @@ export default function DistributorReport(){
     const tunLines=filtered.filter(l=>l.bucket==='Tuning'&&l.poNumber&&l.poNumber.trim())
     const byModel:Record<string,{total:number;vins:Set<string>;jobs:number}>={}
     tunLines.forEach(l=>{
-      const model=vinToModel(l.poNumber.trim())
+      const model=vinToModel(l.poNumber.trim(), vinRules)
       if(!byModel[model])byModel[model]={total:0,vins:new Set(),jobs:0}
       byModel[model].total+=l.Total
       byModel[model].vins.add(l.poNumber.trim())
@@ -305,6 +317,10 @@ export default function DistributorReport(){
           </button>
         ))}
         <div style={{flex:1}}/>
+        <button onClick={()=>router.push('/admin/vin-codes')}
+          style={{padding:'4px 12px',borderRadius:5,border:`1px solid ${T.border2}`,background:'transparent',color:T.blue,fontSize:11,cursor:'pointer',fontFamily:'inherit',marginRight:6}}>
+          ⚙ VIN codes
+        </button>
         <button onClick={()=>router.push('/admin/groups')}
           style={{padding:'4px 12px',borderRadius:5,border:`1px solid ${T.border2}`,background:'transparent',color:T.purple,fontSize:11,cursor:'pointer',fontFamily:'inherit'}}>
           ⚙ Manage groups
