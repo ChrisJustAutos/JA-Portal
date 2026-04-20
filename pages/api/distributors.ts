@@ -2,6 +2,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { requireAuth } from '../../lib/auth'
 import { cdataQuery, parseDateRange } from '../../lib/cdata'
+import { lineExGst } from '../../lib/gst'
 
 export const config = { maxDuration: 60 }
 
@@ -22,9 +23,11 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
       ])
       const INTL = new Set(['kanoo motors wll','karyokuae','us cruiserz'])
 
-      // Query 1: invoices in date range — now includes CustomerPurchaseOrderNumber (holds VIN on tuning sales)
+      // Query 1: invoices in date range — now includes IsTaxInclusive for
+      // correct line-level GST normalisation, and CustomerPurchaseOrderNumber
+      // (which holds VIN on tuning sales).
       const invRes: any = await cdataQuery('JAWS',
-        "SELECT [ID],[Number],[Date],[CustomerName],[CustomerPurchaseOrderNumber] FROM [MYOB_POWERBI_JAWS].[MYOB].[SaleInvoices] WHERE [Date] >= '" + start + "' AND [Date] <= '" + end + "'"
+        "SELECT [ID],[Number],[Date],[CustomerName],[CustomerPurchaseOrderNumber],[IsTaxInclusive] FROM [MYOB_POWERBI_JAWS].[MYOB].[SaleInvoices] WHERE [Date] >= '" + start + "' AND [Date] <= '" + end + "'"
       )
       const invCols: string[] = invRes?.results?.[0]?.schema?.map((c: any) => c.columnName) || []
       const invRows: any[][] = invRes?.results?.[0]?.rows || []
@@ -75,7 +78,10 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
         else continue
 
         const total = Number(line.Total) || 0
-        const amt = line.TaxCodeCode === 'GST' ? total / 1.1 : total
+        // CORRECT ex-GST: check BOTH parent's IsTaxInclusive AND line's TaxCodeCode.
+        // Previous bug: applied /1.1 to ALL GST-coded lines, causing ex-GST invoices
+        // (IsTaxInclusive=false) to be understated by 9.1%.
+        const amt = lineExGst(total, inv.IsTaxInclusive, line.TaxCodeCode)
 
         if (!byDist.has(base)) {
           byDist.set(base, {

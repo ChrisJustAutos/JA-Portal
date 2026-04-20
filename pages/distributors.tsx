@@ -19,6 +19,7 @@ import Script from 'next/script'
 import { useRouter } from 'next/router'
 import PortalSidebar from '../lib/PortalSidebar'
 import { requirePageAuth } from '../lib/authServer'
+import { usePreferences, applyGstDisplay } from '../lib/preferences'
 
 interface PortalUserSSR { id: string; email: string; displayName: string | null; role: 'admin'|'manager'|'sales'|'accountant'|'viewer' }
 
@@ -75,6 +76,7 @@ type Tab='distributor-sales'|'detailed-sales'|'summary'|'national-pm'|'national-
 
 export default function DistributorReport({ user }: { user: PortalUserSSR }) {
   const router=useRouter()
+  const { prefs } = usePreferences()
   const [tab,setTab]=useState<Tab>('summary')  // default to Summary — it's the grouped view
   const [data,setData]=useState<DistData|null>(null)
   const [grouping,setGrouping]=useState<GroupingPayload|null>(null)
@@ -135,7 +137,10 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
       setVinRules(vRules)
 
       // Flatten distributors[].lineItems[] into a single array,
-      // resolving each raw MYOB name to its canonical via the alias map
+      // resolving each raw MYOB name to its canonical via the alias map.
+      // Backend returns amountExGst (ex-GST after FY26 GST audit fix).
+      // Apply user's gst_display preference: 'inc' → × 1.1, 'ex' → as-is.
+      const gstPref = prefs.gst_display
       const flatLineItems: LineItem[] = (d.distributors || []).flatMap((dist: any) =>
         (dist.lineItems || []).map((li: any) => {
           const rawName = dist.customerBase || ''
@@ -146,7 +151,7 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
             Date: li.date,
             AccountDisplayID: li.accountCode,
             Description: li.description,
-            Total: li.amountExGst,
+            Total: applyGstDisplay(Number(li.amountExGst) || 0, gstPref),
             bucket: li.bucket,
             poNumber: li.poNumber || '',
           }
@@ -155,7 +160,7 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
 
       const trendLabels: string[] = (d.monthlyNational || []).map((m: any) => m.ym)
       const monthlyTotals: Record<string, number> = Object.fromEntries(
-        (d.monthlyNational || []).map((m: any) => [m.ym, m.amount])
+        (d.monthlyNational || []).map((m: any) => [m.ym, applyGstDisplay(Number(m.amount) || 0, gstPref)])
       )
 
       const normalised: DistData = {
@@ -172,9 +177,14 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
       setData(normalised);setError('');setLastRefresh(new Date());setDateLoading(false)
     }catch(e:any){setError(e.message);setDateLoading(false)}
     setLoading(false);if(isRefresh)setRefreshing(false)
-  },[router,activeDateParams])
+  },[router,activeDateParams,prefs.gst_display])
   useEffect(()=>{load()},[load])
-  useEffect(()=>{const t=setInterval(()=>load(true),5*60*1000);return()=>clearInterval(t)},[load])
+  useEffect(()=>{
+    const intervalMs = (prefs.auto_refresh_seconds || 0) * 1000
+    if (intervalMs <= 0) return
+    const t=setInterval(()=>load(true),intervalMs)
+    return()=>clearInterval(t)
+  },[load, prefs.auto_refresh_seconds])
 
   // Group lookup helpers
   const groupNameFor = useCallback((canonical: string, dimension: string): string | null => {

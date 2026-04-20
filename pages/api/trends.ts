@@ -1,4 +1,8 @@
 // pages/api/trends.ts — 6-month trend data with cache
+//
+// GST NOTE: All amounts are from ProfitAndLossSummaryReport.AccountTotal, which
+// MYOB always stores ex-GST by convention. No normalisation needed.
+
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { requireAuth } from '../../lib/auth'
 import { cdataQuery } from '../../lib/cdata'
@@ -72,6 +76,7 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
     const v = (r: any) => { try { return r?.results?.[0]?.rows?.[0]?.[0] ?? 0 } catch { return 0 } }
 
     const result = {
+      amountsAreExGst: true,
       trendLabels: months.map(m => m.label),
       jawsIncome6:  months.map((_, i) => v(results[i * 4])),
       vpsIncome6:   months.map((_, i) => v(results[i * 4 + 1])),

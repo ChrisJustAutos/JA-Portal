@@ -5,6 +5,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { requireAuth } from '../../lib/auth'
 import { cdataQuery } from '../../lib/cdata'
+import { invoiceExGst } from '../../lib/gst'
 
 type Row = Record<string, any>
 
@@ -38,72 +39,88 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const openOrdersResult = await cdataQuery('JAWS', `
         SELECT Number, Date, CustomerName, CustomerDisplayID,
                TotalAmount, BalanceDueAmount, Status,
-               Subtotal, TotalTax, Freight, SalespersonName,
+               Subtotal, TotalTax, IsTaxInclusive, Freight, SalespersonName,
                CustomerPurchaseOrderNumber
         FROM [MYOB_POWERBI_JAWS].[MYOB].[SaleOrders]
         WHERE Status = 'Open'
         ORDER BY Date DESC
       `)
-      const openOrders = rowsToObjects(openOrdersResult).map(o => ({
-        number: String(o.Number || ''),
-        date: o.Date ? String(o.Date) : null,
-        customerName: String(o.CustomerName || ''),
-        customerDisplayId: o.CustomerDisplayID ? String(o.CustomerDisplayID) : null,
-        totalAmount: num(o.TotalAmount),
-        balanceDueAmount: num(o.BalanceDueAmount),
-        status: String(o.Status || ''),
-        subtotal: num(o.Subtotal),
-        totalTax: num(o.TotalTax),
-        freight: num(o.Freight),
-        salespersonName: o.SalespersonName ? String(o.SalespersonName) : null,
-        customerPurchaseOrderNumber: o.CustomerPurchaseOrderNumber ? String(o.CustomerPurchaseOrderNumber) : null,
-        // Derived: "prepaid" = order marked Open but balance is 0 (fully paid, awaiting fulfilment)
-        isPrepaid: num(o.BalanceDueAmount) === 0 && num(o.TotalAmount) > 0,
-        // Age in days since order date
-        ageDays: o.Date ? Math.floor((today.getTime() - new Date(o.Date).getTime()) / 86400000) : null,
-      }))
+      const openOrders = rowsToObjects(openOrdersResult).map(o => {
+        const total = num(o.TotalAmount)
+        const tax = num(o.TotalTax)
+        const balance = num(o.BalanceDueAmount)
+        const balanceTaxRatio = total > 0 ? (tax * balance) / total : 0
+        return {
+          number: String(o.Number || ''),
+          date: o.Date ? String(o.Date) : null,
+          customerName: String(o.CustomerName || ''),
+          customerDisplayId: o.CustomerDisplayID ? String(o.CustomerDisplayID) : null,
+          totalAmount: total,
+          totalAmountExGst: invoiceExGst(total, tax),
+          balanceDueAmount: balance,
+          balanceDueExGst: balance - balanceTaxRatio,
+          status: String(o.Status || ''),
+          subtotal: num(o.Subtotal),
+          totalTax: tax,
+          isTaxInclusive: o.IsTaxInclusive === true || o.IsTaxInclusive === 1,
+          freight: num(o.Freight),
+          salespersonName: o.SalespersonName ? String(o.SalespersonName) : null,
+          customerPurchaseOrderNumber: o.CustomerPurchaseOrderNumber ? String(o.CustomerPurchaseOrderNumber) : null,
+          isPrepaid: balance === 0 && total > 0,
+          ageDays: o.Date ? Math.floor((today.getTime() - new Date(o.Date).getTime()) / 86400000) : null,
+        }
+      })
 
       // ── Recently converted orders (last 30 days) ─────────────────────
       const convertedResult = await cdataQuery('JAWS', `
-        SELECT Number, Date, CustomerName, TotalAmount, SalespersonName
+        SELECT Number, Date, CustomerName, TotalAmount, TotalTax, SalespersonName
         FROM [MYOB_POWERBI_JAWS].[MYOB].[SaleOrders]
         WHERE Status = 'ConvertedToInvoice' AND Date >= '${d30Str}'
         ORDER BY Date DESC
       `)
-      const convertedOrders = rowsToObjects(convertedResult).map(o => ({
-        number: String(o.Number || ''),
-        date: o.Date ? String(o.Date) : null,
-        customerName: String(o.CustomerName || ''),
-        totalAmount: num(o.TotalAmount),
-        salespersonName: o.SalespersonName ? String(o.SalespersonName) : null,
-      }))
+      const convertedOrders = rowsToObjects(convertedResult).map(o => {
+        const total = num(o.TotalAmount)
+        const tax = num(o.TotalTax)
+        return {
+          number: String(o.Number || ''),
+          date: o.Date ? String(o.Date) : null,
+          customerName: String(o.CustomerName || ''),
+          totalAmount: total,
+          totalAmountExGst: invoiceExGst(total, tax),
+          salespersonName: o.SalespersonName ? String(o.SalespersonName) : null,
+        }
+      })
 
       // ── Quotes (currently empty in JAWS but kept for future use) ─────
       const quotesResult = await cdataQuery('JAWS', `
-        SELECT Number, Date, CustomerName, TotalAmount, SalespersonName
+        SELECT Number, Date, CustomerName, TotalAmount, TotalTax, SalespersonName
         FROM [MYOB_POWERBI_JAWS].[MYOB].[SaleQuotes]
         ORDER BY Date DESC
       `)
-      const quotes = rowsToObjects(quotesResult).map(q => ({
-        number: String(q.Number || ''),
-        date: q.Date ? String(q.Date) : null,
-        customerName: String(q.CustomerName || ''),
-        totalAmount: num(q.TotalAmount),
-        salespersonName: q.SalespersonName ? String(q.SalespersonName) : null,
-      }))
+      const quotes = rowsToObjects(quotesResult).map(q => {
+        const total = num(q.TotalAmount)
+        const tax = num(q.TotalTax)
+        return {
+          number: String(q.Number || ''),
+          date: q.Date ? String(q.Date) : null,
+          customerName: String(q.CustomerName || ''),
+          totalAmount: total,
+          totalAmountExGst: invoiceExGst(total, tax),
+          salespersonName: q.SalespersonName ? String(q.SalespersonName) : null,
+        }
+      })
 
       // ── Totals ────────────────────────────────────────────────────────
-      const openOrdersTotal = openOrders.reduce((s, o) => s + o.totalAmount, 0)
-      const openOrdersOwing = openOrders.reduce((s, o) => s + o.balanceDueAmount, 0)
+      const openOrdersTotal = openOrders.reduce((s, o) => s + o.totalAmountExGst, 0)
+      const openOrdersOwing = openOrders.reduce((s, o) => s + o.balanceDueExGst, 0)
       const openOrdersPrepaid = openOrders.filter(o => o.isPrepaid).length
-      const convertedTotal30d = convertedOrders.reduce((s, o) => s + o.totalAmount, 0)
-      // Naive conversion rate: last 30d converted / (last 30d converted + currently open)
-      // This is a rough indicator, not a true cohort analysis
+      const convertedTotal30d = convertedOrders.reduce((s, o) => s + o.totalAmountExGst, 0)
       const conversionRate = (convertedOrders.length + openOrders.length) > 0
         ? convertedOrders.length / (convertedOrders.length + openOrders.length)
         : null
 
       res.status(200).json({
+        amountsAreExGst: true,
         openOrders,
         convertedOrders,
         quotes,
@@ -115,7 +132,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           convertedCount30d: convertedOrders.length,
           convertedTotal30d,
           quotesCount: quotes.length,
-          quotesTotal: quotes.reduce((s, q) => s + q.totalAmount, 0),
+          quotesTotal: quotes.reduce((s, q) => s + q.totalAmountExGst, 0),
           conversionRate,
         },
         meta: {

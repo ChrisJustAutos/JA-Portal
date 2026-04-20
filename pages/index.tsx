@@ -6,6 +6,7 @@ import Script from 'next/script'
 import { useRouter } from 'next/router'
 import PortalSidebar from '../lib/PortalSidebar'
 import { requirePageAuth } from '../lib/authServer'
+import { usePreferences, applyGstPreferenceToDashboard, applyGstPreferenceToQuotesOrders } from '../lib/preferences'
 
 interface PortalUserSSR { id: string; email: string; displayName: string | null; role: 'admin'|'manager'|'sales'|'accountant'|'viewer' }
 
@@ -549,6 +550,7 @@ Be concise. Use AU currency.`
 
 export default function Portal({ user }: { user: PortalUserSSR }) {
   const router=useRouter()
+  const { prefs } = usePreferences()
   const [section,setSection]=useState<Section>('overview')
   const [dash,setDash]=useState<DashData|null>(null)
   const [loading,setLoading]=useState(true)
@@ -608,22 +610,29 @@ export default function Portal({ user }: { user: PortalUserSSR }) {
         throw new Error(errData?.error||'Failed to load MYOB data — please click Refresh')
       }
       const d=await r.json()
-      d.trendLabels=['Nov 25','Dec 25','Jan 26','Feb 26','Mar 26','Apr 26']
-      d.jaws.income6=[468903,496206,623279,569129,705165,116239]
-      d.vps.income6 =[905849,615285,731524,800866,891330,344080]
-      d.jaws.expense6=[380000,400000,510000,460000,580000,186111]
-      d.vps.expense6 =[780000,520000,620000,680000,760000, 99262]
-      setDash(d);setLastRefresh(new Date());setError('');setDateLoading(false)
+      // Apply user's GST preference to all $ amounts before storing.
+      // When pref='ex' (default), TotalAmount stays as ex-GST (TotalAmount=TotalAmountExGst).
+      // When pref='inc', TotalAmount becomes ex-GST × 1.1.
+      // This is done once here so every downstream render call site works unchanged.
+      const dGst = applyGstPreferenceToDashboard(d, prefs.gst_display)
+      dGst.trendLabels=['Nov 25','Dec 25','Jan 26','Feb 26','Mar 26','Apr 26']
+      dGst.jaws.income6=[468903,496206,623279,569129,705165,116239]
+      dGst.vps.income6 =[905849,615285,731524,800866,891330,344080]
+      dGst.jaws.expense6=[380000,400000,510000,460000,580000,186111]
+      dGst.vps.expense6 =[780000,520000,620000,680000,760000, 99262]
+      setDash(dGst);setLastRefresh(new Date());setError('');setDateLoading(false)
       setLoading(false)
       if(isRefresh)setRefreshing(false)
       try{
         const tr=await fetch(`/api/trends?${activeDateParams}${refreshParam}`)
         if(tr.ok){
           const td=await tr.json()
+          // trends is P&L data — already ex-GST. Apply display multiplier if pref='inc'.
+          const mult = prefs.gst_display === 'inc' ? 1.1 : 1
           setDash((prev:any)=>prev?{...prev,
             trendLabels:td.trendLabels,
-            jaws:{...prev.jaws,income6:td.jawsIncome6,expense6:td.jawsExpense6},
-            vps: {...prev.vps, income6:td.vpsIncome6, expense6:td.vpsExpense6},
+            jaws:{...prev.jaws,income6:(td.jawsIncome6||[]).map((n:number)=>n*mult),expense6:(td.jawsExpense6||[]).map((n:number)=>n*mult)},
+            vps: {...prev.vps, income6:(td.vpsIncome6||[]).map((n:number)=>n*mult), expense6:(td.vpsExpense6||[]).map((n:number)=>n*mult)},
           }:prev)
         }
       }catch{}
@@ -631,13 +640,20 @@ export default function Portal({ user }: { user: PortalUserSSR }) {
         const qoRes=await fetch('/api/quotes-orders')
         if(qoRes.ok){
           const qoData:QuotesOrdersPayload=await qoRes.json()
-          setQo(qoData)
+          const qoGst = applyGstPreferenceToQuotesOrders(qoData, prefs.gst_display)
+          setQo(qoGst)
         }
       }catch(e){console.error('quotes-orders load failed',e)}
     }catch(e:any){setError(e.message);setLoading(false);setDateLoading(false);if(isRefresh)setRefreshing(false)}
-  },[router, activeDateParams])
+  },[router, activeDateParams, prefs.gst_display])
   useEffect(()=>{load()},[load])
-  useEffect(()=>{const t=setInterval(()=>load(true),5*60*1000);return()=>clearInterval(t)},[load])
+  useEffect(()=>{
+    // Respect user's auto_refresh_seconds preference (0 = disabled)
+    const intervalMs = (prefs.auto_refresh_seconds || 0) * 1000
+    if (intervalMs <= 0) return
+    const t=setInterval(()=>load(true),intervalMs)
+    return()=>clearInterval(t)
+  },[load, prefs.auto_refresh_seconds])
 
   // Derived
   const jInv   =dash?rowsToObjects(dash.jaws.recentInvoices) as Invoice[]:[]

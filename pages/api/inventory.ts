@@ -14,6 +14,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { requireAuth } from '../../lib/auth'
 import { cdataQuery } from '../../lib/cdata'
+import { lineExGst } from '../../lib/gst'
 
 // ── types ────────────────────────────────────────────────────────────────
 type Row = Record<string, any>
@@ -145,21 +146,25 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       `)
       const items = rowsToObjects(itemsResult)
 
-      // ── 2) Pull last 12 months of sale invoices (for date lookups) ───
+      // ── 2) Pull last 12 months of sale invoices (for date lookups + GST flag) ───
       // NOTE: SaleInvoices has no TaxCodeCode at header level — tax lives on lines.
+      // But IsTaxInclusive lives at header — we need it to correctly normalise line totals.
       const invResult = await cdataQuery('JAWS', `
-        SELECT ID, Date, Status
+        SELECT ID, Date, Status, IsTaxInclusive
         FROM [MYOB_POWERBI_JAWS].[MYOB].[SaleInvoices]
         WHERE Date >= '${d365.toISOString().slice(0, 10)}'
       `)
       const invoices = rowsToObjects(invResult)
 
-      // Invoice lookup: id -> date. Plain object, no Map.
-      const invDateById: Record<string, Date> = {}
+      // Invoice lookup: id -> { date, isTaxInclusive }
+      const invById: Record<string, { date: Date; isTaxInclusive: boolean }> = {}
       for (let i = 0; i < invoices.length; i++) {
         const inv = invoices[i]
         if (!inv.ID || !inv.Date) continue
-        invDateById[String(inv.ID)] = new Date(inv.Date)
+        invById[String(inv.ID)] = {
+          date: new Date(inv.Date),
+          isTaxInclusive: inv.IsTaxInclusive === true || inv.IsTaxInclusive === 1,
+        }
       }
 
       // ── 3) Pull all sale invoice items with a non-null ItemNumber ────
@@ -177,13 +182,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const line = lines[i]
         const itemNum = line.ItemNumber ? String(line.ItemNumber).trim() : ''
         if (!itemNum) continue
-        const invDate = invDateById[String(line.SaleInvoiceId)]
-        if (!invDate) continue // invoice outside 12-month window
+        const invMeta = invById[String(line.SaleInvoiceId)]
+        if (!invMeta) continue // invoice outside 12-month window
+        const invDate = invMeta.date
 
         const qty = num(line.ShipQuantity)
-        const totalInc = num(line.Total)
-        const tax = String(line.TaxCodeCode || '')
-        const totalEx = tax === 'GST' ? totalInc / 1.1 : totalInc
+        const totalRaw = num(line.Total)
+        // CORRECT ex-GST: depends on BOTH parent's IsTaxInclusive AND line's TaxCodeCode.
+        // Previous bug: applied /1.1 to all GST-coded lines regardless of parent flag.
+        const totalEx = lineExGst(totalRaw, invMeta.isTaxInclusive, line.TaxCodeCode)
 
         let a = perItem[itemNum]
         if (!a) {

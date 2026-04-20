@@ -1,5 +1,6 @@
 // pages/settings.tsx
 // Unified Settings hub. Tabs:
+//   - General      (any user)   — display/behaviour preferences
 //   - Groups       (admin only) — distributor group/alias management
 //   - VIN Codes    (admin only) — VIN prefix → model code rules
 //   - Users        (admin only) — invite, edit role, deactivate, delete
@@ -13,6 +14,7 @@ import PortalSidebar from '../lib/PortalSidebar'
 import { getSupabase } from '../lib/supabaseClient'
 import { ROLE_LABELS, ROLE_DESCRIPTIONS, UserRole, roleHasPermission } from '../lib/permissions'
 import { requirePageAuth } from '../lib/authServer'
+import GeneralTab from '../components/settings/GeneralTab'
 
 const T = {
   bg:'#0d0f12', bg2:'#131519', bg3:'#1a1d23', bg4:'#21252d',
@@ -23,23 +25,26 @@ const T = {
 }
 
 interface PortalUserSSR { id: string; email: string; displayName: string | null; role: UserRole }
-type SettingsTab = 'groups'|'vin-codes'|'users'|'audit'|'profile'
+type SettingsTab = 'general'|'groups'|'vin-codes'|'users'|'audit'|'profile'
 
 export default function SettingsPage({ user }: { user: PortalUserSSR }) {
   const router = useRouter()
   const isAdmin = user.role === 'admin'
 
   // Read ?tab= from query string for direct linking to a tab
-  const qTab = (router.query.tab as string) || 'groups'
+  const qTab = (router.query.tab as string) || 'general'
   const initialTab: SettingsTab =
+    qTab === 'general' ? 'general' :
     qTab === 'vin-codes' ? 'vin-codes' :
     qTab === 'users' ? 'users' :
     qTab === 'audit' ? 'audit' :
     qTab === 'profile' ? 'profile' :
-    (isAdmin ? 'groups' : 'profile')
+    qTab === 'groups' ? 'groups' :
+    'general'
   const [tab, setTab] = useState<SettingsTab>(initialTab)
 
   const tabs: {id: SettingsTab; label: string; adminOnly: boolean}[] = [
+    { id: 'general',   label: 'General',            adminOnly: false },
     { id: 'groups',    label: 'Distributor Groups', adminOnly: true },
     { id: 'vin-codes', label: 'VIN Codes',          adminOnly: true },
     { id: 'users',     label: 'Users',              adminOnly: true },
@@ -78,6 +83,7 @@ export default function SettingsPage({ user }: { user: PortalUserSSR }) {
           </div>
 
           <div style={{flex:1,overflowY:'auto',padding:20}}>
+            {tab === 'general'                && <GeneralTab/>}
             {tab === 'groups'    && isAdmin && <GroupsTab/>}
             {tab === 'vin-codes' && isAdmin && <VinCodesTab/>}
             {tab === 'users'     && isAdmin && <UsersTab currentUser={user}/>}

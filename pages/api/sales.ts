@@ -1,4 +1,14 @@
 // pages/api/sales.ts — Monday.com data for Sales Dashboard
+//
+// GST NOTE: This route pulls $ values from Monday.com numeric fields (orders
+// totalValue, quote value, distributor booking amount). These are values that
+// reps entered manually in Monday.com — we have no metadata indicating whether
+// they're inc-GST or ex-GST. The portal surfaces them verbatim.
+// If your sales team enters quote values inc-GST in Monday.com, the numbers
+// here will be inc-GST regardless of the user's ex/inc GST preference.
+// Fixing this properly requires a convention agreement with the sales team
+// (or a column in Monday.com to flag GST treatment per line).
+
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { requireAuth } from '../../lib/auth'
 
