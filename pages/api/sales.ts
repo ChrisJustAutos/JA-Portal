@@ -91,20 +91,31 @@ function getCached(key: string) { const e = cache.get(key); if (!e) return null;
 function setCache(key: string, data: any) { cache.set(key, { data, timestamp: Date.now() }); if (cache.size > 20) { const k = cache.keys().next().value; if (k) cache.delete(k) } }
 
 // ── Quote board stats ────────────────────────────────────────
-async function getQuoteBoardStats(boardId: number) {
+// Filters items by `created_at` falling within the provided window.
+// `created_at` is the item's system timestamp (when the lead was logged in the
+// channel), not a column — so we fetch it via the GraphQL root field and filter
+// client-side. Monday's query_params doesn't have a reliable date filter on
+// __creation_log__ so this is the cleanest path.
+async function getQuoteBoardStats(boardId: number, startDate: string, endDate: string) {
   const items = await mondayPaginate(
-    (limit) => `{ boards(ids: [${boardId}]) { items_page(limit: ${limit}) { cursor items { column_values(ids: ["status", "numeric_mkzcbhz2"]) { id text } } } } }`,
-    (limit, cursor) => `{ next_items_page(limit: ${limit}, cursor: "${cursor}") { cursor items { column_values(ids: ["status", "numeric_mkzcbhz2"]) { id text } } } }`,
+    (limit) => `{ boards(ids: [${boardId}]) { items_page(limit: ${limit}) { cursor items { created_at column_values(ids: ["status", "numeric_mkzcbhz2"]) { id text } } } } }`,
+    (limit, cursor) => `{ next_items_page(limit: ${limit}, cursor: "${cursor}") { cursor items { created_at column_values(ids: ["status", "numeric_mkzcbhz2"]) { id text } } } }`,
   )
   const stats: Record<string, { count: number; value: number }> = {}
+  let totalInPeriod = 0
   for (const item of items) {
+    // created_at is an ISO8601 timestamp like "2026-04-14T06:01:45Z" — compare
+    // just the date portion against the window boundaries (inclusive).
+    const createdDate = (item.created_at || '').slice(0, 10)
+    if (!createdDate || createdDate < startDate || createdDate > endDate) continue
+    totalInPeriod++
     const status = item.column_values?.find((c: any) => c.id === 'status')?.text || 'Unknown'
     const valStr = item.column_values?.find((c: any) => c.id === 'numeric_mkzcbhz2')?.text
     const val = valStr ? parseFloat(valStr) : 0
     if (!stats[status]) stats[status] = { count: 0, value: 0 }
     stats[status].count++; stats[status].value += val
   }
-  return { stats, totalItems: items.length }
+  return { stats, totalItems: totalInPeriod }
 }
 
 // ── Active leads from "Quote - Lead" group ───────────────────
@@ -174,19 +185,26 @@ const WORKSHOP_ORDER_STATUSES = [1, 2, 3, 5, 6]
 
 async function getOrdersMonthly(startDate: string, endDate: string) {
   const statusList = WORKSHOP_ORDER_STATUSES.join(',')
+  // Server-side status filter only; date filter is applied client-side on
+  // `created_at` (the item's logged-in-channel timestamp) rather than the
+  // `date` column (which is the scheduled/booking date).
   const items = await mondayPaginate(
-    (limit) => `{ boards(ids: [${ORDERS_BOARD}]) { items_page(limit: ${limit}, query_params: { rules: [{ column_id: "date", compare_value: ["${startDate}", "${endDate}"], operator: between },{ column_id: "status", compare_value: [${statusList}], operator: any_of }], operator: and }) { cursor items { column_values(ids: ["date", "numbers", "color_mks9wfk9"]) { id text } } } } }`,
-    (limit, cursor) => `{ next_items_page(limit: ${limit}, cursor: "${cursor}") { cursor items { column_values(ids: ["date", "numbers", "color_mks9wfk9"]) { id text } } } }`,
+    (limit) => `{ boards(ids: [${ORDERS_BOARD}]) { items_page(limit: ${limit}, query_params: { rules: [{ column_id: "status", compare_value: [${statusList}], operator: any_of }] }) { cursor items { created_at column_values(ids: ["date", "numbers", "color_mks9wfk9"]) { id text } } } } }`,
+    (limit, cursor) => `{ next_items_page(limit: ${limit}, cursor: "${cursor}") { cursor items { created_at column_values(ids: ["date", "numbers", "color_mks9wfk9"]) { id text } } } }`,
   )
   const monthly: Record<string, { orders: number; value: number }> = {}
   const byType: Record<string, { count: number; value: number }> = {}
   let totalOrders = 0, totalValue = 0
   for (const item of items) {
-    const dateStr = item.column_values?.find((c: any) => c.id === 'date')?.text || ''
+    const createdDate = (item.created_at || '').slice(0, 10)
+    if (!createdDate || createdDate < startDate || createdDate > endDate) continue
     const valStr = item.column_values?.find((c: any) => c.id === 'numbers')?.text
     const typeStr = item.column_values?.find((c: any) => c.id === 'color_mks9wfk9')?.text || 'Uncategorised'
     const val = valStr ? parseFloat(valStr.replace(/[,$]/g, '')) : 0
-    if (dateStr) { const mk = dateStr.substring(0, 7); if (!monthly[mk]) monthly[mk] = { orders: 0, value: 0 }; monthly[mk].orders++; monthly[mk].value += val }
+    // Bucket by month of creation date
+    const mk = createdDate.substring(0, 7)
+    if (!monthly[mk]) monthly[mk] = { orders: 0, value: 0 }
+    monthly[mk].orders++; monthly[mk].value += val
     if (!byType[typeStr]) byType[typeStr] = { count: 0, value: 0 }; byType[typeStr].count++; byType[typeStr].value += val
     totalOrders++; totalValue += val
   }
@@ -204,9 +222,12 @@ const DISTRIBUTOR_ACTIVE_STATUSES = [0, 1, 3, 5]
 
 async function getDistributorBookings(startDate: string, endDate: string) {
   const statusList = DISTRIBUTOR_ACTIVE_STATUSES.join(',')
+  // The `total` totals show all active-status bookings regardless of date
+  // (it's a pipeline snapshot). The `mtd*` slice uses created_at for the
+  // period cut — "what was logged in this window".
   const items = await mondayPaginate(
-    (limit) => `{ boards(ids: [${DIST_BOOKING_BOARD}]) { items_page(limit: ${limit}, query_params: { rules: [{ column_id: "status", compare_value: [${statusList}], operator: any_of }] }) { cursor items { column_values(ids: ["status", "status_1", "date_1", "numbers", "person"]) { id text } } } } }`,
-    (limit, cursor) => `{ next_items_page(limit: ${limit}, cursor: "${cursor}") { cursor items { column_values(ids: ["status", "status_1", "date_1", "numbers", "person"]) { id text } } } }`,
+    (limit) => `{ boards(ids: [${DIST_BOOKING_BOARD}]) { items_page(limit: ${limit}, query_params: { rules: [{ column_id: "status", compare_value: [${statusList}], operator: any_of }] }) { cursor items { created_at column_values(ids: ["status", "status_1", "date_1", "numbers", "person"]) { id text } } } } }`,
+    (limit, cursor) => `{ next_items_page(limit: ${limit}, cursor: "${cursor}") { cursor items { created_at column_values(ids: ["status", "status_1", "date_1", "numbers", "person"]) { id text } } } }`,
   )
   const byDistributor: Record<string, { count: number; value: number }> = {}
   const byStatus: Record<string, { count: number; value: number }> = {}
@@ -217,7 +238,7 @@ async function getDistributorBookings(startDate: string, endDate: string) {
   for (const item of items) {
     const status = item.column_values?.find((c: any) => c.id === 'status')?.text || 'Unknown'
     const dist = item.column_values?.find((c: any) => c.id === 'status_1')?.text || 'Unknown'
-    const dateStr = item.column_values?.find((c: any) => c.id === 'date_1')?.text || ''
+    const createdDate = (item.created_at || '').slice(0, 10)
     const valStr = item.column_values?.find((c: any) => c.id === 'numbers')?.text
     const person = item.column_values?.find((c: any) => c.id === 'person')?.text || 'Unassigned'
     const val = valStr ? parseFloat(valStr.replace(/[,$]/g, '')) : 0
@@ -225,7 +246,7 @@ async function getDistributorBookings(startDate: string, endDate: string) {
     if (!byStatus[status]) byStatus[status] = { count: 0, value: 0 }; byStatus[status].count++; byStatus[status].value += val
     if (!byPerson[person]) byPerson[person] = { count: 0, value: 0 }; byPerson[person].count++; byPerson[person].value += val
     total.count++; total.value += val
-    if (dateStr >= startDate && dateStr <= endDate) {
+    if (createdDate >= startDate && createdDate <= endDate) {
       if (!mtdByDist[dist]) mtdByDist[dist] = { count: 0, value: 0 }; mtdByDist[dist].count++; mtdByDist[dist].value += val
       if (!mtdByPerson[person]) mtdByPerson[person] = { count: 0, value: 0 }; mtdByPerson[person].count++; mtdByPerson[person].value += val
       mtdTotal.count++; mtdTotal.value += val
@@ -240,13 +261,13 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
     const startDate = (req.query.startDate as string) || '2025-07-01'
     const endDate = (req.query.endDate as string) || '2026-06-30'
     const forceRefresh = req.query.refresh === 'true'
-    const cacheKey = `sales:${startDate}:${endDate}`
+    const cacheKey = `sales:v2:${startDate}:${endDate}`
     if (!forceRefresh) { const cached = getCached(cacheKey); if (cached) return res.status(200).json(cached) }
 
     const [ordersData, distData, ...rest] = await Promise.all([
       safe(() => getOrdersMonthly(startDate, endDate)),
       safe(() => getDistributorBookings(startDate, endDate)),
-      ...QUOTE_BOARDS.map(b => safe(() => getQuoteBoardStats(b.id).then(stats => ({ rep: b.rep, full: b.full, id: b.id, ...stats })))),
+      ...QUOTE_BOARDS.map(b => safe(() => getQuoteBoardStats(b.id, startDate, endDate).then(stats => ({ rep: b.rep, full: b.full, id: b.id, ...stats })))),
       ...QUOTE_BOARDS.map(b => safe(() => getActiveLeads(b))),
     ])
 

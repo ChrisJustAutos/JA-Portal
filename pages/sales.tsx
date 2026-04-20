@@ -130,6 +130,7 @@ export default function SalesDashboard({ user }: { user: PortalUserSSR }) {
           <div style={{flex:1}}/>
           {[currentFY-1,currentFY].map(y=><button key={y} onClick={()=>selectFY(y)} style={{padding:'3px 10px',borderRadius:4,border:'1px solid',fontSize:11,fontFamily:'monospace',fontWeight:600,cursor:'pointer',background:fyYear===y&&!isCustomRange?T.accent:'transparent',color:fyYear===y&&!isCustomRange?'#fff':T.text2,borderColor:fyYear===y&&!isCustomRange?T.accent:T.border}}>FY{y}</button>)}
           <div style={{width:1,height:18,background:T.border}}/>
+          <span title="Filters by the date each item was created in Monday (Creation Log), not by the scheduled/booking date." style={{fontSize:10,color:T.text3,textTransform:'uppercase',letterSpacing:'0.04em',fontWeight:500,cursor:'help'}}>Created</span>
           <input type="date" value={customStart} onChange={e=>setCustomStart(e.target.value)} style={{padding:'3px 6px',borderRadius:4,border:`1px solid ${isCustomRange?T.accent:T.border}`,fontSize:11,fontFamily:'monospace',background:'transparent',color:T.text2,outline:'none',colorScheme:'dark'}}/>
           <span style={{fontSize:11,color:T.text3}}>→</span>
           <input type="date" value={customEnd} onChange={e=>setCustomEnd(e.target.value)} style={{padding:'3px 6px',borderRadius:4,border:`1px solid ${isCustomRange?T.accent:T.border}`,fontSize:11,fontFamily:'monospace',background:'transparent',color:T.text2,outline:'none',colorScheme:'dark'}}/>
