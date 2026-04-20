@@ -53,17 +53,28 @@ export async function fetchKpiSummary(
   const results = await Promise.all(entities.map(async (entity) => {
     const cat = catalogFor(entity)
 
-    // Revenue for the period — computed in-memory from TotalAmount - TotalTax
-    const invRes = await cdataQuery(entity,
-      `SELECT [TotalAmount],[TotalTax] FROM [${cat}].[MYOB].[SaleInvoices] WHERE [Date] >= '${range.periodStart}' AND [Date] <= '${range.periodEnd}' AND [TotalAmount] > 0`
-    ).catch(() => null)
+    // All 5 queries in parallel — was sequential, saves 10-15s
+    const [invRes, openInvRes, openBillsRes, stockRes, pnlRes] = await Promise.all([
+      cdataQuery(entity,
+        `SELECT [TotalAmount],[TotalTax] FROM [${cat}].[MYOB].[SaleInvoices] WHERE [Date] >= '${range.periodStart}' AND [Date] <= '${range.periodEnd}' AND [TotalAmount] > 0`
+      ).catch(() => null),
+      cdataQuery(entity,
+        `SELECT [TotalAmount],[TotalTax],[BalanceDueAmount] FROM [${cat}].[MYOB].[SaleInvoices] WHERE [Status] = 'Open' AND [BalanceDueAmount] > 0`
+      ).catch(() => null),
+      cdataQuery(entity,
+        `SELECT [TotalAmount],[TotalTax],[BalanceDueAmount] FROM [${cat}].[MYOB].[PurchaseBills] WHERE [Status] = 'Open' AND [BalanceDueAmount] > 0`
+      ).catch(() => null),
+      entity === 'JAWS'
+        ? cdataQuery(entity, `SELECT SUM([CurrentValue]) AS v FROM [${cat}].[MYOB].[Items]`).catch(() => null)
+        : Promise.resolve(null),
+      cdataQuery(entity,
+        `SELECT [AccountDisplayID],[AccountTotal] FROM [${cat}].[MYOB].[ProfitAndLossSummaryReport] WHERE [StartDate] = '${range.periodStart}' AND [EndDate] = '${range.periodEnd}'`
+      ).catch(() => null),
+    ])
+
     const invRows = rowsToObjects(invRes)
     const revenueExGst = invRows.reduce((s, r) => s + invoiceExGst(toNum(r.TotalAmount), toNum(r.TotalTax)), 0)
 
-    // Open receivables (status = Open)
-    const openInvRes = await cdataQuery(entity,
-      `SELECT [TotalAmount],[TotalTax],[BalanceDueAmount] FROM [${cat}].[MYOB].[SaleInvoices] WHERE [Status] = 'Open' AND [BalanceDueAmount] > 0`
-    ).catch(() => null)
     const openInvRows = rowsToObjects(openInvRes)
     const receivablesExGst = openInvRows.reduce((s, r) => {
       const total = toNum(r.TotalAmount)
@@ -73,10 +84,6 @@ export async function fetchKpiSummary(
       return s + (bal - balTax)
     }, 0)
 
-    // Open bills
-    const openBillsRes = await cdataQuery(entity,
-      `SELECT [TotalAmount],[TotalTax],[BalanceDueAmount] FROM [${cat}].[MYOB].[PurchaseBills] WHERE [Status] = 'Open' AND [BalanceDueAmount] > 0`
-    ).catch(() => null)
     const openBillsRows = rowsToObjects(openBillsRes)
     const payablesExGst = openBillsRows.reduce((s, r) => {
       const total = toNum(r.TotalAmount)
@@ -87,18 +94,11 @@ export async function fetchKpiSummary(
     }, 0)
 
     // Stock value (JAWS only — CurrentValue is always ex-GST)
-    let stockValueExGst: number | null = null
-    if (entity === 'JAWS') {
-      const stockRes = await cdataQuery(entity,
-        `SELECT SUM([CurrentValue]) AS v FROM [${cat}].[MYOB].[Items]`
-      ).catch(() => null)
-      stockValueExGst = toNum(rowsToObjects(stockRes)[0]?.v)
-    }
+    const stockValueExGst: number | null = entity === 'JAWS'
+      ? toNum(rowsToObjects(stockRes)[0]?.v)
+      : null
 
     // P&L income, COS, overheads (always ex-GST)
-    const pnlRes = await cdataQuery(entity,
-      `SELECT [AccountDisplayID],[AccountTotal] FROM [${cat}].[MYOB].[ProfitAndLossSummaryReport] WHERE [StartDate] = '${range.periodStart}' AND [EndDate] = '${range.periodEnd}'`
-    ).catch(() => null)
     const pnl = rowsToObjects(pnlRes)
     const incomeFromPnlExGst = pnl.filter(r => String(r.AccountDisplayID || '').startsWith('4-') && toNum(r.AccountTotal) > 0).reduce((s, r) => s + toNum(r.AccountTotal), 0)
     const cosFromPnlExGst    = pnl.filter(r => String(r.AccountDisplayID || '').startsWith('5-') && toNum(r.AccountTotal) > 0).reduce((s, r) => s + toNum(r.AccountTotal), 0)
@@ -536,18 +536,24 @@ export async function fetchTrendCharts(entities: Entity[]): Promise<TrendChartsD
 
   const entityResults = await Promise.all(entities.map(async (entity) => {
     const cat = catalogFor(entity)
-    const income: number[] = []
-    const expenses: number[] = []
-    for (const m of months) {
-      const incRes = await cdataQuery(entity,
-        `SELECT SUM([AccountTotal]) AS v FROM [${cat}].[MYOB].[ProfitAndLossSummaryReport] WHERE [AccountDisplayID] LIKE '4-%' AND [StartDate] = '${m.start}' AND [EndDate] = '${m.end}'`
-      ).catch(() => null)
-      const expRes = await cdataQuery(entity,
-        `SELECT SUM([AccountTotal]) AS v FROM [${cat}].[MYOB].[ProfitAndLossSummaryReport] WHERE ([AccountDisplayID] LIKE '5-%' OR [AccountDisplayID] LIKE '6-%') AND [StartDate] = '${m.start}' AND [EndDate] = '${m.end}'`
-      ).catch(() => null)
-      income.push(toNum(rowsToObjects(incRes)[0]?.v))
-      expenses.push(toNum(rowsToObjects(expRes)[0]?.v))
-    }
+    // Fire ALL 12 queries (6 months × 2 metrics) in parallel — was sequential, now parallel.
+    // This turns a 30-60s wait into a single round-trip of ~3-5s.
+    const perMonthResults = await Promise.all(months.map(async (m) => {
+      const [incRes, expRes] = await Promise.all([
+        cdataQuery(entity,
+          `SELECT SUM([AccountTotal]) AS v FROM [${cat}].[MYOB].[ProfitAndLossSummaryReport] WHERE [AccountDisplayID] LIKE '4-%' AND [StartDate] = '${m.start}' AND [EndDate] = '${m.end}'`
+        ).catch(() => null),
+        cdataQuery(entity,
+          `SELECT SUM([AccountTotal]) AS v FROM [${cat}].[MYOB].[ProfitAndLossSummaryReport] WHERE ([AccountDisplayID] LIKE '5-%' OR [AccountDisplayID] LIKE '6-%') AND [StartDate] = '${m.start}' AND [EndDate] = '${m.end}'`
+        ).catch(() => null),
+      ])
+      return {
+        income: toNum(rowsToObjects(incRes)[0]?.v),
+        expenses: toNum(rowsToObjects(expRes)[0]?.v),
+      }
+    }))
+    const income = perMonthResults.map(r => r.income)
+    const expenses = perMonthResults.map(r => r.expenses)
     const net = income.map((v, i) => v - (expenses[i] || 0))
     return { entity, income, expenses, net }
   }))
