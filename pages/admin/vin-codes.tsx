@@ -3,6 +3,7 @@ import { useEffect, useState, useCallback } from 'react'
 import Head from 'next/head'
 import { useRouter } from 'next/router'
 import PortalSidebar from '../../lib/PortalSidebar'
+import { requirePageAuth } from '../../lib/authServer'
 
 const T = {
   bg:'#0d0f12', bg2:'#131519', bg3:'#1a1d23', bg4:'#21252d',
@@ -25,6 +26,7 @@ function looksLikeVinPrefix(p: string): boolean {
 
 export default function VinCodesAdmin() {
   const router = useRouter()
+  const isEmbed = router.query.embed === '1'
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
@@ -78,8 +80,9 @@ export default function VinCodesAdmin() {
     <>
       <Head><title>VIN Codes Admin — Just Autos</title><meta name="robots" content="noindex,nofollow"/></Head>
       <div style={{display:'flex',height:'100vh',overflow:'hidden',fontFamily:"'DM Sans',system-ui,sans-serif",color:T.text}}>
-        <PortalSidebar activeId="distributors"/>
+        {!isEmbed && <PortalSidebar activeId="distributors"/>}
         <div style={{flex:1,display:'flex',flexDirection:'column',overflow:'hidden',background:T.bg}}>
+          {!isEmbed && (
           <div style={{height:52,background:T.bg2,borderBottom:`1px solid ${T.border}`,display:'flex',alignItems:'center',padding:'0 20px',gap:12,flexShrink:0}}>
             <div style={{fontSize:14,fontWeight:600}}>VIN Codes Admin</div>
             <span style={{fontSize:10,fontFamily:'monospace',padding:'2px 8px',borderRadius:4,background:'rgba(167,139,250,0.12)',color:T.purple,border:'1px solid rgba(167,139,250,0.2)'}}>Supabase</span>
@@ -97,6 +100,7 @@ export default function VinCodesAdmin() {
               ← Back
             </button>
           </div>
+          )}
 
           <div style={{display:'flex',gap:2,padding:'0 20px',background:T.bg2,borderBottom:`1px solid ${T.border}`,flexShrink:0}}>
             {(['unmapped','mapped'] as const).map(k => (
@@ -321,11 +325,5 @@ function RuleRow({rule, uniqueModelCodes, onSave, onDelete}: {
 }
 
 export async function getServerSideProps(context: any) {
-  const cookie = context.req.cookies['ja_portal_auth']
-  const pw = process.env.PORTAL_PASSWORD || 'justautos2026'
-  if (!cookie) return { redirect: { destination: '/login', permanent: false } }
-  try {
-    if (Buffer.from(cookie, 'base64').toString('utf8') !== pw) return { redirect: { destination: '/login', permanent: false } }
-  } catch { return { redirect: { destination: '/login', permanent: false } } }
-  return { props: {} }
+  return requirePageAuth(context, 'admin:settings')
 }

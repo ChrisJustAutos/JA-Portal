@@ -5,6 +5,7 @@ import Head from 'next/head'
 import Script from 'next/script'
 import { useRouter } from 'next/router'
 import PortalSidebar from '../lib/PortalSidebar'
+import { requirePageAuth } from '../lib/authServer'
 
 // ── Types ────────────────────────────────────────────────────
 interface Invoice  { Number:string;Date:string;CustomerName:string;TotalAmount:number;BalanceDueAmount:number;Status:string;InvoiceType?:string }
@@ -1424,16 +1425,6 @@ function StockOnOrder({items}:{items:InventoryItem[]}) {
 }
 
 
-// Server-side auth check
 export async function getServerSideProps(context: any) {
-  const cookie = context.req.cookies['ja_portal_auth']
-  const PORTAL_PASSWORD = process.env.PORTAL_PASSWORD || 'justautos2026'
-  if (!cookie) return { redirect: { destination: '/login', permanent: false } }
-  try {
-    const decoded = Buffer.from(cookie, 'base64').toString('utf8')
-    if (decoded !== PORTAL_PASSWORD) return { redirect: { destination: '/login', permanent: false } }
-  } catch {
-    return { redirect: { destination: '/login', permanent: false } }
-  }
-  return { props: {} }
+  return requirePageAuth(context, null)
 }

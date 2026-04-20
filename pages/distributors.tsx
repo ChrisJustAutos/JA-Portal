@@ -18,6 +18,7 @@ import Head from 'next/head'
 import Script from 'next/script'
 import { useRouter } from 'next/router'
 import PortalSidebar from '../lib/PortalSidebar'
+import { requirePageAuth } from '../lib/authServer'
 
 interface LineItem {
   CustomerName: string        // CANONICAL name after alias resolution
@@ -551,10 +552,6 @@ export default function DistributorReport(){
   </>)
 }
 
-export async function getServerSideProps(context:any){
-  const cookie=context.req.cookies['ja_portal_auth']
-  const pw=process.env.PORTAL_PASSWORD||'justautos2026'
-  if(!cookie)return{redirect:{destination:'/login',permanent:false}}
-  try{if(Buffer.from(cookie,'base64').toString('utf8')!==pw)return{redirect:{destination:'/login',permanent:false}}}catch{return{redirect:{destination:'/login',permanent:false}}}
-  return{props:{}}
+export async function getServerSideProps(context: any) {
+  return requirePageAuth(context, 'view:distributors')
 }
