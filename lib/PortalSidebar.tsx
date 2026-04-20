@@ -37,11 +37,13 @@ export interface PortalNavItem {
 
 // Default nav order — same on every page. `settings` is appended for admins only (see rendering).
 export const DEFAULT_NAV: PortalNavItem[] = [
+  {id:'overview',     kind:'link',    label:'Overview',     href:'/overview',      dot:T.blue},
   {id:'leads',        kind:'link',    label:'Leads/Orders', href:'/sales',         dot:'#a78bfa'},
   {id:'distributors', kind:'link',    label:'Distributors', href:'/distributors',  dot:T.blue},
   {id:'reports',      kind:'link',    label:'Reports',      href:'/reports',       dot:T.green},
   {id:'todos',        kind:'link',    label:'To-Dos',       href:'/todos',         dot:T.amber},
-  {id:'overview',     kind:'section', label:'Overview',          section:'overview', dot:T.blue},
+  {id:'supplier-invoices', kind:'link', label:'Supplier Invoices', href:'/supplier-invoices', dot:T.amber},
+  {id:'job-reports',       kind:'link', label:'Job Reports',       href:'/job-reports',       dot:T.teal},
   {id:'invoices',     kind:'section', label:'Invoices',          section:'invoices', dot:T.amber, alertKey:'invoices'},
   {id:'pnl',          kind:'section', label:'P&L — This Month',  section:'pnl',      dot:T.green},
   {id:'stock',        kind:'section', label:'Stock & Inventory', section:'stock',    dot:T.purple},

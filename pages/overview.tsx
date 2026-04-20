@@ -1,0 +1,355 @@
+// pages/overview.tsx
+// Custom dashboard — per-user widget grid. Uses a 12-column grid with each
+// row ~60px tall. Widgets have x/y (column/row) and w/h (width in cols, height
+// in row units). Edit mode shows drag handles + resize corners + widget menu.
+//
+// Data fetched once for the full layout via /api/dashboard/data, so adding
+// many widgets doesn't explode request count.
+
+import { useState, useEffect, useCallback, useRef } from 'react'
+import Head from 'next/head'
+import PortalSidebar from '../lib/PortalSidebar'
+import { requirePageAuth } from '../lib/authServer'
+import { UserRole } from '../lib/permissions'
+import { WIDGETS, getWidgetDef, defaultConfigFor, DateRangeKey, DATE_RANGE_OPTIONS } from '../lib/dashboard/catalog'
+import { RENDERERS } from '../components/dashboard/WidgetRenderers'
+import WidgetConfigPanel from '../components/dashboard/WidgetConfigPanel'
+import WidgetCatalogPicker from '../components/dashboard/WidgetCatalogPicker'
+
+const T = {
+  bg:'#0d0f12', bg2:'#131519', bg3:'#1a1d23', bg4:'#21252d',
+  border:'rgba(255,255,255,0.07)', border2:'rgba(255,255,255,0.12)',
+  text:'#e8eaf0', text2:'#8b90a0', text3:'#545968',
+  blue:'#4f8ef7', teal:'#2dd4bf', green:'#34c77b',
+  amber:'#f5a623', red:'#f04e4e', purple:'#a78bfa',
+  accent:'#4f8ef7',
+}
+
+const GRID_COLS = 12
+const ROW_HEIGHT = 80           // px per row unit
+const GAP = 12                  // px gap between widgets
+
+export async function getServerSideProps(ctx: any) {
+  return requirePageAuth(ctx, 'view:overview')
+}
+
+interface WidgetInstance {
+  id: string
+  type: string
+  x: number
+  y: number
+  w: number
+  h: number
+  config: Record<string, any>
+  dateOverride?: { range: DateRangeKey, from?: string, to?: string }
+}
+
+function newId(): string {
+  return 'w_' + Math.random().toString(36).substring(2, 10)
+}
+
+// Find an empty spot on the grid for a new widget of given w/h.
+function findSpot(widgets: WidgetInstance[], w: number, h: number): { x: number, y: number } {
+  // Scan rows until we find a gap big enough
+  for (let y = 0; y < 100; y++) {
+    for (let x = 0; x <= GRID_COLS - w; x++) {
+      const overlaps = widgets.some(wi =>
+        !(x + w <= wi.x || x >= wi.x + wi.w || y + h <= wi.y || y >= wi.y + wi.h)
+      )
+      if (!overlaps) return { x, y }
+    }
+  }
+  return { x: 0, y: 0 }
+}
+
+export default function OverviewPage({ user }: { user: { id: string, email: string, role: UserRole, name: string } }) {
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+  const [info, setInfo] = useState('')
+  const [widgets, setWidgets] = useState<WidgetInstance[]>([])
+  const [globalDate, setGlobalDate] = useState<DateRangeKey>('today')
+  const [widgetData, setWidgetData] = useState<Record<string, any>>({})
+  const [dataLoading, setDataLoading] = useState(false)
+  const [isDefault, setIsDefault] = useState(false)
+  const [editMode, setEditMode] = useState(false)
+  const [dirty, setDirty] = useState(false)
+
+  // Modals
+  const [configFor, setConfigFor] = useState<string | null>(null)  // widget id being configured
+  const [catalogOpen, setCatalogOpen] = useState(false)
+
+  // Drag/resize state
+  const [dragging, setDragging] = useState<{ id: string, mode: 'move'|'resize', startX: number, startY: number, origW: WidgetInstance } | null>(null)
+  const gridRef = useRef<HTMLDivElement>(null)
+
+  // Load layout
+  const loadLayout = useCallback(async () => {
+    setLoading(true); setError('')
+    try {
+      const r = await fetch('/api/dashboard/layout?key=overview')
+      const d = await r.json()
+      if (!r.ok) throw new Error(d.error || 'Load failed')
+      setWidgets((d.widgets || []).map((w: any) => ({ ...w, config: w.config || {} })))
+      setGlobalDate((d.global_date_range || 'today') as DateRangeKey)
+      setIsDefault(d.is_default)
+    } catch (e: any) { setError(e.message) }
+    finally { setLoading(false) }
+  }, [])
+
+  // Load data for all widgets
+  const loadData = useCallback(async (ws: WidgetInstance[], gd: DateRangeKey) => {
+    if (ws.length === 0) { setWidgetData({}); return }
+    setDataLoading(true)
+    try {
+      const r = await fetch('/api/dashboard/data', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          widgets: ws.map(w => ({ id: w.id, type: w.type, config: w.config, dateOverride: w.dateOverride })),
+          globalDateRange: { key: gd },
+        }),
+      })
+      const d = await r.json()
+      if (!r.ok) throw new Error(d.error || 'Data load failed')
+      setWidgetData(d.results || {})
+    } catch (e: any) { setError('Data: ' + e.message) }
+    finally { setDataLoading(false) }
+  }, [])
+
+  useEffect(() => { loadLayout() }, [loadLayout])
+  useEffect(() => { if (!loading) loadData(widgets, globalDate) }, [widgets, globalDate, loading, loadData])
+
+  async function saveLayout() {
+    setError(''); setInfo('')
+    try {
+      const r = await fetch('/api/dashboard/layout?key=overview', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ widgets, global_date_range: globalDate }),
+      })
+      if (!r.ok) throw new Error((await r.json()).error || 'Save failed')
+      setInfo('Layout saved')
+      setDirty(false)
+      setIsDefault(false)
+      setTimeout(() => setInfo(''), 2500)
+    } catch (e: any) { setError(e.message) }
+  }
+
+  async function resetLayout() {
+    if (!confirm('Reset to default layout? Your customisations will be lost.')) return
+    try {
+      const r = await fetch('/api/dashboard/layout?key=overview', { method: 'DELETE' })
+      if (!r.ok) throw new Error((await r.json()).error || 'Reset failed')
+      await loadLayout()
+      setInfo('Reset to default')
+      setDirty(false)
+    } catch (e: any) { setError(e.message) }
+  }
+
+  function addWidget(type: string) {
+    const def = getWidgetDef(type)
+    if (!def) return
+    const size = def.defaultSize
+    const { x, y } = findSpot(widgets, size.w, size.h)
+    const w: WidgetInstance = {
+      id: newId(),
+      type,
+      x, y, w: size.w, h: size.h,
+      config: defaultConfigFor(type),
+    }
+    setWidgets(ws => [...ws, w])
+    setDirty(true)
+    setCatalogOpen(false)
+    setConfigFor(w.id)  // open config panel immediately
+  }
+
+  function updateConfig(id: string, config: Record<string, any>) {
+    setWidgets(ws => ws.map(w => w.id === id ? { ...w, config } : w))
+    setConfigFor(null)
+    setDirty(true)
+  }
+
+  function removeWidget(id: string) {
+    setWidgets(ws => ws.filter(w => w.id !== id))
+    setConfigFor(null)
+    setDirty(true)
+  }
+
+  // ── Drag / resize handlers ───────────────────────────────────────────────
+
+  function onMouseDown(e: React.MouseEvent, id: string, mode: 'move'|'resize') {
+    if (!editMode) return
+    e.preventDefault()
+    e.stopPropagation()
+    const w = widgets.find(x => x.id === id)
+    if (!w) return
+    setDragging({ id, mode, startX: e.clientX, startY: e.clientY, origW: { ...w } })
+  }
+
+  useEffect(() => {
+    if (!dragging) return
+    function onMove(e: MouseEvent) {
+      if (!dragging || !gridRef.current) return
+      const rect = gridRef.current.getBoundingClientRect()
+      const colW = (rect.width - GAP * (GRID_COLS - 1)) / GRID_COLS
+      const dx = e.clientX - dragging.startX
+      const dy = e.clientY - dragging.startY
+      const dCol = Math.round(dx / (colW + GAP))
+      const dRow = Math.round(dy / (ROW_HEIGHT + GAP))
+      setWidgets(ws => ws.map(w => {
+        if (w.id !== dragging.id) return w
+        if (dragging.mode === 'move') {
+          const newX = Math.max(0, Math.min(GRID_COLS - w.w, dragging.origW.x + dCol))
+          const newY = Math.max(0, dragging.origW.y + dRow)
+          return { ...w, x: newX, y: newY }
+        } else {
+          const newW = Math.max(2, Math.min(GRID_COLS - w.x, dragging.origW.w + dCol))
+          const newH = Math.max(2, dragging.origW.h + dRow)
+          return { ...w, w: newW, h: newH }
+        }
+      }))
+      setDirty(true)
+    }
+    function onUp() { setDragging(null) }
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+    return () => {
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+    }
+  }, [dragging])
+
+  // Compute grid height based on widget positions
+  const maxRow = widgets.reduce((m, w) => Math.max(m, w.y + w.h), 6)
+  const gridHeight = maxRow * ROW_HEIGHT + (maxRow - 1) * GAP + 40
+
+  const configWidget = configFor ? widgets.find(w => w.id === configFor) : null
+  const configDef = configWidget ? getWidgetDef(configWidget.type) : null
+
+  return (
+    <>
+      <Head><title>Overview — Just Autos</title></Head>
+      <div style={{display:'flex', minHeight:'100vh', background:T.bg, color:T.text, fontFamily:'system-ui, -apple-system, sans-serif'}}>
+        <PortalSidebar activeId="overview" currentUserRole={user.role}/>
+        <main style={{flex:1, padding:'20px 32px 40px', overflow:'auto'}}>
+          {/* Top bar */}
+          <div style={{display:'flex', alignItems:'center', gap:12, marginBottom:6}}>
+            <h1 style={{margin:0, fontSize:22, fontWeight:600}}>Overview</h1>
+            {isDefault && <span style={{fontSize:10, padding:'3px 8px', borderRadius:10, background:`${T.amber}22`, color:T.amber, border:`1px solid ${T.amber}55`, fontWeight:600, textTransform:'uppercase'}}>Default layout</span>}
+            <div style={{flex:1}}/>
+
+            {/* Global date picker */}
+            <select value={globalDate} onChange={e => { setGlobalDate(e.target.value as DateRangeKey); setDirty(true) }}
+              style={{padding:'7px 12px', background:T.bg3, border:`1px solid ${T.border2}`, color:T.text, borderRadius:6, fontSize:12, fontFamily:'inherit', outline:'none'}}>
+              {DATE_RANGE_OPTIONS.filter(o => o.value !== 'custom').map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+            </select>
+
+            {!editMode ? (
+              <button onClick={() => setEditMode(true)}
+                style={{padding:'7px 14px', borderRadius:6, border:`1px solid ${T.border2}`, background:'transparent', color:T.text2, fontSize:12, fontFamily:'inherit', cursor:'pointer'}}>
+                ✎ Edit dashboard
+              </button>
+            ) : (
+              <>
+                <button onClick={() => setCatalogOpen(true)}
+                  style={{padding:'7px 14px', borderRadius:6, border:'none', background:T.accent, color:'#fff', fontSize:12, fontWeight:600, fontFamily:'inherit', cursor:'pointer'}}>
+                  + Add widget
+                </button>
+                <button onClick={resetLayout}
+                  style={{padding:'7px 12px', borderRadius:6, border:`1px solid ${T.border2}`, background:'transparent', color:T.text2, fontSize:12, fontFamily:'inherit', cursor:'pointer'}}>
+                  Reset
+                </button>
+                <button onClick={saveLayout} disabled={!dirty}
+                  style={{padding:'7px 14px', borderRadius:6, border:'none', background: dirty ? T.green : T.bg4, color: dirty ? '#fff' : T.text3, fontSize:12, fontWeight:600, fontFamily:'inherit', cursor: dirty ? 'pointer' : 'not-allowed'}}>
+                  {dirty ? 'Save' : 'Saved'}
+                </button>
+                <button onClick={() => { if (dirty && !confirm('Discard unsaved changes?')) return; setEditMode(false); loadLayout() }}
+                  style={{padding:'7px 12px', borderRadius:6, border:`1px solid ${T.border2}`, background:'transparent', color:T.text2, fontSize:12, fontFamily:'inherit', cursor:'pointer'}}>
+                  Done
+                </button>
+              </>
+            )}
+          </div>
+
+          {dataLoading && <div style={{fontSize:11, color:T.text3, marginBottom:10}}>Refreshing widget data…</div>}
+          {error && <div style={{background:'rgba(240,78,78,0.1)', border:`1px solid ${T.red}40`, borderRadius:8, padding:'10px 14px', color:T.red, fontSize:13, marginBottom:12}}>{error}</div>}
+          {info  && <div style={{background:'rgba(52,199,123,0.1)', border:`1px solid ${T.green}40`, borderRadius:8, padding:'10px 14px', color:T.green, fontSize:13, marginBottom:12}}>{info}</div>}
+
+          {loading ? (
+            <div style={{padding:40, textAlign:'center', color:T.text3}}>Loading…</div>
+          ) : widgets.length === 0 ? (
+            <div style={{background:T.bg2, border:`1px dashed ${T.border2}`, borderRadius:12, padding:60, textAlign:'center'}}>
+              <div style={{fontSize:16, fontWeight:600, marginBottom:8}}>Your dashboard is empty</div>
+              <div style={{fontSize:13, color:T.text3, marginBottom:20}}>Add widgets to customise your Overview page.</div>
+              <button onClick={() => { setEditMode(true); setCatalogOpen(true) }}
+                style={{padding:'10px 20px', borderRadius:6, border:'none', background:T.accent, color:'#fff', fontSize:13, fontWeight:600, fontFamily:'inherit', cursor:'pointer'}}>
+                + Add your first widget
+              </button>
+            </div>
+          ) : (
+            <div ref={gridRef} style={{
+              position:'relative',
+              width:'100%',
+              minHeight: gridHeight,
+              background: editMode ? `repeating-linear-gradient(0deg, transparent, transparent ${ROW_HEIGHT + GAP - 1}px, ${T.border} ${ROW_HEIGHT + GAP - 1}px, ${T.border} ${ROW_HEIGHT + GAP}px)` : 'transparent',
+            }}>
+              {widgets.map(w => {
+                const r = widgetData[w.id]
+                const def = getWidgetDef(w.type)
+                const Renderer = RENDERERS[w.type]
+                const x = `calc((100% - ${GAP * (GRID_COLS - 1)}px) / ${GRID_COLS} * ${w.x} + ${GAP * w.x}px)`
+                const wid = `calc((100% - ${GAP * (GRID_COLS - 1)}px) / ${GRID_COLS} * ${w.w} + ${GAP * (w.w - 1)}px)`
+                const y = w.y * (ROW_HEIGHT + GAP)
+                const h = w.h * ROW_HEIGHT + (w.h - 1) * GAP
+                return (
+                  <div key={w.id} style={{
+                    position:'absolute',
+                    left: x, top: y, width: wid, height: h,
+                    background:T.bg2, border:`1px solid ${editMode ? T.border2 : T.border}`, borderRadius:10,
+                    padding:14, boxSizing:'border-box',
+                    transition: dragging?.id === w.id ? 'none' : 'left 0.15s, top 0.15s, width 0.15s, height 0.15s',
+                    userSelect: editMode ? 'none' : 'auto',
+                  }}>
+                    {editMode && (
+                      <div style={{position:'absolute', top:4, right:4, display:'flex', gap:4, zIndex:2}}>
+                        <button onMouseDown={e => onMouseDown(e, w.id, 'move')} title="Drag to move"
+                          style={{width:24, height:24, borderRadius:4, border:`1px solid ${T.border2}`, background:T.bg3, color:T.text2, fontSize:12, cursor:'move', padding:0, lineHeight:'22px'}}>⤧</button>
+                        <button onClick={() => setConfigFor(w.id)} title="Edit config"
+                          style={{width:24, height:24, borderRadius:4, border:`1px solid ${T.border2}`, background:T.bg3, color:T.text2, fontSize:10, cursor:'pointer', padding:0}}>⚙</button>
+                      </div>
+                    )}
+                    {editMode && (
+                      <div onMouseDown={e => onMouseDown(e, w.id, 'resize')} title="Drag to resize"
+                        style={{position:'absolute', bottom:0, right:0, width:16, height:16, cursor:'nwse-resize', background:`linear-gradient(135deg, transparent 50%, ${T.text3} 50%)`, opacity:0.6, zIndex:2}}/>
+                    )}
+                    {!Renderer ? (
+                      <div style={{color:T.red, fontSize:11}}>Unknown widget type: {w.type}</div>
+                    ) : !r ? (
+                      <div style={{color:T.text3, fontSize:11}}>Loading…</div>
+                    ) : !r.ok ? (
+                      <div style={{color:T.red, fontSize:11}}>
+                        <div style={{fontWeight:600, marginBottom:4}}>{def?.label || w.type} — error</div>
+                        <div style={{fontFamily:'monospace', fontSize:10}}>{r.error}</div>
+                      </div>
+                    ) : (
+                      <Renderer config={w.config} data={r.data}/>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+          )}
+        </main>
+      </div>
+
+      {catalogOpen && <WidgetCatalogPicker onPick={addWidget} onClose={() => setCatalogOpen(false)}/>}
+      {configWidget && configDef && (
+        <WidgetConfigPanel
+          widgetDef={configDef}
+          initialConfig={configWidget.config}
+          onSave={(cfg) => updateConfig(configWidget.id, cfg)}
+          onCancel={() => setConfigFor(null)}
+          onDelete={() => removeWidget(configWidget.id)}
+        />
+      )}
+    </>
+  )
+}
