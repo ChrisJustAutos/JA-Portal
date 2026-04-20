@@ -39,12 +39,21 @@ const AUTH_URL  = 'https://secure.myob.com/oauth2/account/authorize'
 const TOKEN_URL = 'https://secure.myob.com/oauth2/v1/authorize'
 const API_BASE  = 'https://api.myob.com'
 
-// Scope for AccountRight Live API. Historically MYOB docs referenced
-// 'CompanyFile' but current apps must use 'la.global' (Live Accounting global)
-// which grants access to all AccountRight Live operations. If a new app
-// in MYOB's portal doesn't have a scope assigned, some tenants need to
-// leave scope empty — fallback handled in buildAuthorizeUrl.
-const SCOPE = 'la.global'
+// Scope for MYOB OAuth. Behaviour:
+//   - If MYOB_SCOPE env var is set, use that (e.g. 'CompanyFile', 'la.global')
+//   - Otherwise omit the scope parameter entirely — MYOB will grant whatever
+//     the registered app is entitled to by default. This is the right move
+//     when a new app is rejected for specific scope names.
+// Your app's allowed scopes are determined at registration by MYOB; if both
+// 'CompanyFile' and 'la.global' fail with "not allowed to request scope",
+// MYOB hasn't granted your app those scopes — either use default (empty) or
+// contact MYOB developer support to expand your app's scope grants.
+function getScope(): string | null {
+  const v = process.env.MYOB_SCOPE
+  if (v === undefined) return null  // omit from URL
+  if (v === '') return null         // empty means omit
+  return v
+}
 
 // ── Types ───────────────────────────────────────────────────────────────
 export interface MyobConnection {
@@ -78,14 +87,17 @@ export interface CompanyFile {
 
 // Build the authorise URL the browser redirects to. `state` is a random
 // CSRF value we stash in a short-lived cookie and verify on callback.
+// Scope is included only if configured (see getScope()). MYOB treats a
+// missing scope param as "grant whatever this app is entitled to by default".
 export function buildAuthorizeUrl(state: string): string {
   const p = new URLSearchParams({
     client_id: clientId(),
     redirect_uri: redirectUri(),
     response_type: 'code',
-    scope: SCOPE,
     state,
   })
+  const scope = getScope()
+  if (scope) p.append('scope', scope)
   return `${AUTH_URL}?${p.toString()}`
 }
 
@@ -99,12 +111,13 @@ interface TokenResponse {
 }
 
 // Exchange the authorisation code from the callback for tokens.
-// MYOB requires x-www-form-urlencoded body, not JSON.
+// MYOB requires x-www-form-urlencoded body, not JSON. Scope is omitted here
+// — the authorise step already established what scopes the user granted, and
+// the token endpoint doesn't require scope to be re-sent.
 export async function exchangeCodeForTokens(code: string): Promise<TokenResponse> {
   const body = new URLSearchParams({
     client_id: clientId(),
     client_secret: clientSecret(),
-    scope: SCOPE,
     code,
     redirect_uri: redirectUri(),
     grant_type: 'authorization_code',
