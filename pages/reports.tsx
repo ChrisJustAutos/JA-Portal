@@ -5,7 +5,6 @@
 import { useState } from 'react'
 import Head from 'next/head'
 import { useRouter } from 'next/router'
-import { getSessionUser } from '../lib/auth'
 import { requirePageAuth } from '../lib/authServer'
 
 const T = {
