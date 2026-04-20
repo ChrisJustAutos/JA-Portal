@@ -28,7 +28,7 @@ function SH({children,right}:{children:React.ReactNode;right?:React.ReactNode}){
 interface Lead { id:string;name:string;url:string;rep:string;repFull:string;phone:string;status:string;quoteValue:string;date:string;qualifyingStage:string;contactAttempts:string }
 interface SalesData {
   fetchedAt:string;period:{startDate:string;endDate:string}
-  orders:{monthly:Record<string,{orders:number;value:number}>;byType:Record<string,{count:number;value:number}>;totalOrders:number;totalValue:number;tracedOrders?:number;tracedByBoardId?:Record<string,number>}|null
+  orders:{monthly:Record<string,{orders:number;value:number}>;byType:Record<string,{count:number;value:number}>;totalOrders:number;totalValue:number;tracedOrders?:number}|null
   distributors:{byDistributor:Record<string,{count:number;value:number}>;byStatus:Record<string,{count:number;value:number}>;byPerson:Record<string,{count:number;value:number}>;mtdByDist:Record<string,{count:number;value:number}>;mtdByPerson:Record<string,{count:number;value:number}>;total:{count:number;value:number};mtdTotal:{count:number;value:number}}|null
   quotes:{rep:string;full:string;id:number;stats:Record<string,{count:number;value:number}>;totalItems:number}[]
   activeLeads:Lead[]
@@ -92,13 +92,11 @@ export default function SalesDashboard({ user }: { user: PortalUserSSR }) {
   const PIPELINE_STATUSES=['3 Days','14 Days','On Hold','Quote On Hold','Quote Sent','Not Done','Follow Up Done','Quote Not Issued'] as const
   const tPipeCount=fq.reduce((s,q)=>s+PIPELINE_STATUSES.reduce((ss,k)=>ss+(q.stats[k]?.count||0),0),0)
   // Traceability — using the backfill-populated Connect column on Orders.
-  // `tracedByBoardId` gives per-rep-board counts; we map those back to rep names via `quotes[].id`.
-  const tracedByBoardId=orders?.tracedByBoardId||{}
+  // We only have a total count (per-rep attribution was dropped to keep the
+  // Monday GraphQL query under the complexity ceiling).
   const totalTraced=orders?.tracedOrders||0
   const totalOrdersCount=orders?.totalOrders||0
   const tracedPct=totalOrdersCount>0?Math.round((totalTraced/totalOrdersCount)*100):0
-  // Per-rep traced count: for each quote board row, look up tracedByBoardId[boardId]
-  function tracedForRep(boardId:number):number{return tracedByBoardId[String(boardId)]||0}
   const mArr=orders?Object.entries(orders.monthly).sort(([a],[b])=>a.localeCompare(b)).map(([k,v])=>{const [y,m]=k.split('-');return{key:k,label:new Date(parseInt(y),parseInt(m)-1).toLocaleDateString('en-AU',{month:'short',year:'2-digit'}),orders:v.orders,value:v.value}}):[]
   const maxM=Math.max(...mArr.map(m=>m.value),1)
   const distPeople=dist?Object.keys(dist.byPerson).filter(p=>p!=='Unassigned').sort():[]
@@ -212,8 +210,8 @@ export default function SalesDashboard({ user }: { user: PortalUserSSR }) {
                 </div>
                 <Card><SH>Rep Quote Performance</SH>
                   <div style={{overflowX:'auto'}}><table style={{width:'100%',borderCollapse:'collapse'}}>
-                    <thead><tr>{['Rep','Quotes','Won','Lost','Win%','Won $','Pipeline','Traced','Sent','3Day','14Day','Hold','RLMNA','Leads'].map(h=><th key={h} style={{fontSize:10,color:T.text3,textTransform:'uppercase',padding:'0 8px 10px',textAlign:h==='Rep'?'left':'right',fontWeight:500,whiteSpace:'nowrap'}} title={h==='Traced'?'Orders in period linked to one of this rep\'s quotes (via backfill)':undefined}>{h}</th>)}</tr></thead>
-                    <tbody>{fq.map(q=>{const w=q.stats['Quote Won']?.count||0,l=q.stats['Quote Lost']?.count||0,r=(w+l)>0?Math.round((w/(w+l))*100):0;const pp=['3 Days','14 Days','On Hold','Quote On Hold','Quote Sent'].reduce((s,k)=>s+(q.stats[k]?.value||0),0);const lc=allLeads.filter(ld=>ld.rep===q.rep).length;const tr=tracedForRep(q.id);return(
+                    <thead><tr>{['Rep','Quotes','Won','Lost','Win%','Won $','Pipeline','Sent','3Day','14Day','Hold','RLMNA','Leads'].map(h=><th key={h} style={{fontSize:10,color:T.text3,textTransform:'uppercase',padding:'0 8px 10px',textAlign:h==='Rep'?'left':'right',fontWeight:500,whiteSpace:'nowrap'}}>{h}</th>)}</tr></thead>
+                    <tbody>{fq.map(q=>{const w=q.stats['Quote Won']?.count||0,l=q.stats['Quote Lost']?.count||0,r=(w+l)>0?Math.round((w/(w+l))*100):0;const pp=['3 Days','14 Days','On Hold','Quote On Hold','Quote Sent'].reduce((s,k)=>s+(q.stats[k]?.value||0),0);const lc=allLeads.filter(ld=>ld.rep===q.rep).length;return(
                       <tr key={q.rep} style={{borderTop:`1px solid ${T.border}`}}>
                         <td style={{fontSize:13,color:RC[q.rep],padding:'10px 8px',fontWeight:500}}>{q.full}</td>
                         <td style={{fontSize:13,fontFamily:'monospace',color:T.text,padding:'10px 8px',textAlign:'right'}}>{q.totalItems}</td>
@@ -222,7 +220,6 @@ export default function SalesDashboard({ user }: { user: PortalUserSSR }) {
                         <td style={{fontSize:13,fontFamily:'monospace',color:r>=8?T.green:T.amber,padding:'10px 8px',textAlign:'right',fontWeight:600}}>{r}%</td>
                         <td style={{fontSize:13,fontFamily:'monospace',color:T.green,padding:'10px 8px',textAlign:'right'}}>{fmt(q.stats['Quote Won']?.value||0)}</td>
                         <td style={{fontSize:13,fontFamily:'monospace',color:T.amber,padding:'10px 8px',textAlign:'right'}}>{fmt(pp)}</td>
-                        <td style={{fontSize:12,fontFamily:'monospace',color:tr>0?T.teal:T.text3,padding:'10px 8px',textAlign:'right',fontWeight:tr>0?600:400}} title={`${tr} Orders linked to ${q.full}'s quotes`}>{tr}</td>
                         <td style={{fontSize:12,fontFamily:'monospace',color:T.text2,padding:'10px 8px',textAlign:'right'}}>{q.stats['Quote Sent']?.count||0}</td>
                         <td style={{fontSize:12,fontFamily:'monospace',color:T.blue,padding:'10px 8px',textAlign:'right'}}>{q.stats['3 Days']?.count||0}</td>
                         <td style={{fontSize:12,fontFamily:'monospace',color:T.amber,padding:'10px 8px',textAlign:'right'}}>{q.stats['14 Days']?.count||0}</td>

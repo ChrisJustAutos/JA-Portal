@@ -70,7 +70,7 @@ async function mondayPaginate(
 }
 
 async function safe(fn: () => Promise<any>) {
-  try { return await fn() } catch(e: any) { console.error('sales:', e.message?.substring(0, 80)); return null }
+  try { return await fn() } catch(e: any) { console.error('sales:', (e.message || String(e)).substring(0, 400)); return null }
 }
 
 const ORDERS_BOARD = 1838428097
@@ -191,17 +191,19 @@ async function getOrdersMonthly(startDate: string, endDate: string) {
   //
   // We also pull `board_relation_mm2k8n34` (Quote Selection Connect column,
   // populated by the backfill tool) so we can compute "Orders traced to a
-  // quote" for the traceability metric on /sales. linked_items[].board.id
-  // maps back to the rep who owns the quote.
+  // quote" for the traceability metric on /sales.
+  //
+  // IMPORTANT: We use `linked_item_ids` (a cheap list of IDs) rather than
+  // `linked_items { id board { id } }` because the latter cross-board join
+  // pushes the per-page GraphQL complexity over Monday's ceiling. As a
+  // trade-off, we lose per-rep attribution — but we keep a reliable total
+  // "Orders Traced %" which is the headline metric.
   const items = await mondayPaginate(
-    (limit) => `{ boards(ids: [${ORDERS_BOARD}]) { items_page(limit: ${limit}, query_params: { rules: [{ column_id: "status", compare_value: [${statusList}], operator: any_of }] }) { cursor items { created_at column_values(ids: ["date", "numbers", "color_mks9wfk9", "board_relation_mm2k8n34"]) { id text ... on BoardRelationValue { linked_items { id board { id } } } } } } } }`,
-    (limit, cursor) => `{ next_items_page(limit: ${limit}, cursor: "${cursor}") { cursor items { created_at column_values(ids: ["date", "numbers", "color_mks9wfk9", "board_relation_mm2k8n34"]) { id text ... on BoardRelationValue { linked_items { id board { id } } } } } } }`,
+    (limit) => `{ boards(ids: [${ORDERS_BOARD}]) { items_page(limit: ${limit}, query_params: { rules: [{ column_id: "status", compare_value: [${statusList}], operator: any_of }] }) { cursor items { created_at column_values(ids: ["date", "numbers", "color_mks9wfk9", "board_relation_mm2k8n34"]) { id text ... on BoardRelationValue { linked_item_ids } } } } } }`,
+    (limit, cursor) => `{ next_items_page(limit: ${limit}, cursor: "${cursor}") { cursor items { created_at column_values(ids: ["date", "numbers", "color_mks9wfk9", "board_relation_mm2k8n34"]) { id text ... on BoardRelationValue { linked_item_ids } } } } }`,
   )
   const monthly: Record<string, { orders: number; value: number }> = {}
   const byType: Record<string, { count: number; value: number }> = {}
-  // Traced count = orders whose Connect col points to at least one quote.
-  // Broken down per rep board ID so we can merge with quote stats later.
-  const tracedByBoardId: Record<string, number> = {}
   let totalOrders = 0, totalValue = 0, tracedOrders = 0
   for (const item of items) {
     const createdDate = (item.created_at || '').slice(0, 10)
@@ -218,18 +220,10 @@ async function getOrdersMonthly(startDate: string, endDate: string) {
 
     // Traceability — does this order have a linked quote?
     const relCv = item.column_values?.find((c: any) => c.id === 'board_relation_mm2k8n34')
-    const linked = Array.isArray(relCv?.linked_items) ? relCv.linked_items : []
-    if (linked.length > 0) {
-      tracedOrders++
-      // Attribute to the first linked quote's board. Multiple links are rare
-      // (should only happen if the backfill linked > 1 candidate) so first-wins.
-      const firstBoard = linked[0]?.board?.id
-      if (firstBoard) {
-        tracedByBoardId[String(firstBoard)] = (tracedByBoardId[String(firstBoard)] || 0) + 1
-      }
-    }
+    const linkedIds = Array.isArray(relCv?.linked_item_ids) ? relCv.linked_item_ids : []
+    if (linkedIds.length > 0) tracedOrders++
   }
-  return { monthly, byType, totalOrders, totalValue, tracedOrders, tracedByBoardId }
+  return { monthly, byType, totalOrders, totalValue, tracedOrders }
 }
 
 // ── Distributor bookings ─────────────────────────────────────
@@ -282,7 +276,7 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
     const startDate = (req.query.startDate as string) || '2025-07-01'
     const endDate = (req.query.endDate as string) || '2026-06-30'
     const forceRefresh = req.query.refresh === 'true'
-    const cacheKey = `sales:v3:${startDate}:${endDate}`
+    const cacheKey = `sales:v4:${startDate}:${endDate}`
     if (!forceRefresh) { const cached = getCached(cacheKey); if (cached) return res.status(200).json(cached) }
 
     const [ordersData, distData, ...rest] = await Promise.all([
