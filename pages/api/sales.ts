@@ -97,8 +97,14 @@ async function getActiveLeads(board: typeof QUOTE_BOARDS[0]) {
 }
 
 // ── Orders monthly ───────────────────────────────────────────
+// Status column "Parts Ordered" on the Orders board. Index mapping:
+//   0 Deleted  1 Done  2 Re Scheduled  3 Modified  4 Canceled  5 Not Done  6 Postponed
+// Workshop wants "current + processed" = everything except Deleted + Canceled.
+const WORKSHOP_ORDER_STATUSES = [1, 2, 3, 5, 6]
+
 async function getOrdersMonthly(startDate: string, endDate: string) {
-  const data = await mondayQuery(`{ boards(ids: [${ORDERS_BOARD}]) { items_page(limit: 500, query_params: { rules: [{ column_id: "date", compare_value: ["${startDate}", "${endDate}"], operator: between },{ column_id: "status", compare_value: [1], operator: any_of }], operator: and }) { items { column_values(ids: ["date", "numbers", "color_mks9wfk9"]) { id text } } } } }`)
+  const statusList = WORKSHOP_ORDER_STATUSES.join(',')
+  const data = await mondayQuery(`{ boards(ids: [${ORDERS_BOARD}]) { items_page(limit: 500, query_params: { rules: [{ column_id: "date", compare_value: ["${startDate}", "${endDate}"], operator: between },{ column_id: "status", compare_value: [${statusList}], operator: any_of }], operator: and }) { items { column_values(ids: ["date", "numbers", "color_mks9wfk9"]) { id text } } } } }`)
   const items = data?.boards?.[0]?.items_page?.items || []
   const monthly: Record<string, { orders: number; value: number }> = {}
   const byType: Record<string, { count: number; value: number }> = {}
@@ -116,8 +122,17 @@ async function getOrdersMonthly(startDate: string, endDate: string) {
 }
 
 // ── Distributor bookings ─────────────────────────────────────
+// Status column on Distributor-Booking board. Index mapping:
+//   0 Required  1 Confirmed  2 Cancelled  3 Follow Up RLMNA
+//   4 Follow Up Done/Completed  5 Pending  6 Postponed
+// Business rule: Include active work — Required + Confirmed + Follow Up RLMNA + Pending.
+// Excludes Cancelled, Follow Up Done/Completed, and Postponed.
+// Filter applied server-side via Monday query_params for efficiency.
+const DISTRIBUTOR_ACTIVE_STATUSES = [0, 1, 3, 5]
+
 async function getDistributorBookings(startDate: string, endDate: string) {
-  const data = await mondayQuery(`{ boards(ids: [${DIST_BOOKING_BOARD}]) { items_page(limit: 500) { items { column_values(ids: ["status", "status_1", "date_1", "numbers", "person"]) { id text } } } } }`)
+  const statusList = DISTRIBUTOR_ACTIVE_STATUSES.join(',')
+  const data = await mondayQuery(`{ boards(ids: [${DIST_BOOKING_BOARD}]) { items_page(limit: 500, query_params: { rules: [{ column_id: "status", compare_value: [${statusList}], operator: any_of }] }) { items { column_values(ids: ["status", "status_1", "date_1", "numbers", "person"]) { id text } } } } }`)
   const items = data?.boards?.[0]?.items_page?.items || []
   const byDistributor: Record<string, { count: number; value: number }> = {}
   const byStatus: Record<string, { count: number; value: number }> = {}
