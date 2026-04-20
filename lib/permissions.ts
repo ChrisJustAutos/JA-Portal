@@ -73,6 +73,54 @@ export function roleHasPermission(role: UserRole, permission: Permission): boole
   return ROLE_PERMISSIONS[role]?.includes(permission) ?? false
 }
 
+// ── Report type access ────────────────────────────────────────────────
+// Each report type has an allow-list of roles that can generate it.
+// Use this to filter which report types appear in the Reports picker for a given user.
+
+export type ReportType =
+  | 'monthly-management'
+  | 'executive-summary'
+  | 'distributor-performance'
+  | 'cash-flow'
+  | 'stock-health'
+  | 'sales-pipeline'
+
+export const REPORT_TYPE_LABELS: Record<ReportType, string> = {
+  'monthly-management':     'Monthly Management Report',
+  'executive-summary':      'Executive Summary',
+  'distributor-performance':'Distributor Performance Review',
+  'cash-flow':              'Cash Flow / Working Capital',
+  'stock-health':           'Stock Health',
+  'sales-pipeline':         'Sales Pipeline',
+}
+
+export const REPORT_TYPE_DESCRIPTIONS: Record<ReportType, string> = {
+  'monthly-management':     'Full P&L, KPIs, receivables, stock summary and AI narrative. For monthly management meetings.',
+  'executive-summary':      'One-page snapshot with top-line numbers and trend charts. For quick briefings.',
+  'distributor-performance':'Ranked distributor revenue with bucket breakdowns and trends. For commercial reviews.',
+  'cash-flow':              'Receivables aging, payables aging, cash position. For cash management.',
+  'stock-health':           'Reorder alerts, dead stock, velocity analysis. For inventory planning.',
+  'sales-pipeline':         'Open quotes, orders, conversion rates by rep. For sales reviews.',
+}
+
+const REPORT_TYPE_ROLES: Record<ReportType, UserRole[]> = {
+  'monthly-management':     ['admin', 'manager'],
+  'executive-summary':      ['admin', 'manager'],
+  'distributor-performance':['admin', 'manager', 'sales'],
+  'cash-flow':              ['admin', 'accountant'],
+  'stock-health':           ['admin', 'manager'],
+  'sales-pipeline':         ['admin', 'manager', 'sales'],
+}
+
+export function roleCanGenerateReportType(role: UserRole, type: ReportType): boolean {
+  return REPORT_TYPE_ROLES[type]?.includes(role) ?? false
+}
+
+export function reportTypesForRole(role: UserRole): ReportType[] {
+  return (Object.keys(REPORT_TYPE_ROLES) as ReportType[])
+    .filter(t => roleCanGenerateReportType(role, t))
+}
+
 // For client-side UI: which sidebar sections should be visible to this role?
 // Returns the nav item IDs to SHOW. Uses the same IDs as PortalSidebar.
 export function visibleNavSections(role: UserRole): string[] {
