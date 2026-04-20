@@ -188,13 +188,21 @@ async function getOrdersMonthly(startDate: string, endDate: string) {
   // Server-side status filter only; date filter is applied client-side on
   // `created_at` (the item's logged-in-channel timestamp) rather than the
   // `date` column (which is the scheduled/booking date).
+  //
+  // We also pull `board_relation_mm2k8n34` (Quote Selection Connect column,
+  // populated by the backfill tool) so we can compute "Orders traced to a
+  // quote" for the traceability metric on /sales. linked_items[].board.id
+  // maps back to the rep who owns the quote.
   const items = await mondayPaginate(
-    (limit) => `{ boards(ids: [${ORDERS_BOARD}]) { items_page(limit: ${limit}, query_params: { rules: [{ column_id: "status", compare_value: [${statusList}], operator: any_of }] }) { cursor items { created_at column_values(ids: ["date", "numbers", "color_mks9wfk9"]) { id text } } } } }`,
-    (limit, cursor) => `{ next_items_page(limit: ${limit}, cursor: "${cursor}") { cursor items { created_at column_values(ids: ["date", "numbers", "color_mks9wfk9"]) { id text } } } }`,
+    (limit) => `{ boards(ids: [${ORDERS_BOARD}]) { items_page(limit: ${limit}, query_params: { rules: [{ column_id: "status", compare_value: [${statusList}], operator: any_of }] }) { cursor items { created_at column_values(ids: ["date", "numbers", "color_mks9wfk9", "board_relation_mm2k8n34"]) { id text ... on BoardRelationValue { linked_items { id board { id } } } } } } } }`,
+    (limit, cursor) => `{ next_items_page(limit: ${limit}, cursor: "${cursor}") { cursor items { created_at column_values(ids: ["date", "numbers", "color_mks9wfk9", "board_relation_mm2k8n34"]) { id text ... on BoardRelationValue { linked_items { id board { id } } } } } } }`,
   )
   const monthly: Record<string, { orders: number; value: number }> = {}
   const byType: Record<string, { count: number; value: number }> = {}
-  let totalOrders = 0, totalValue = 0
+  // Traced count = orders whose Connect col points to at least one quote.
+  // Broken down per rep board ID so we can merge with quote stats later.
+  const tracedByBoardId: Record<string, number> = {}
+  let totalOrders = 0, totalValue = 0, tracedOrders = 0
   for (const item of items) {
     const createdDate = (item.created_at || '').slice(0, 10)
     if (!createdDate || createdDate < startDate || createdDate > endDate) continue
@@ -207,8 +215,21 @@ async function getOrdersMonthly(startDate: string, endDate: string) {
     monthly[mk].orders++; monthly[mk].value += val
     if (!byType[typeStr]) byType[typeStr] = { count: 0, value: 0 }; byType[typeStr].count++; byType[typeStr].value += val
     totalOrders++; totalValue += val
+
+    // Traceability — does this order have a linked quote?
+    const relCv = item.column_values?.find((c: any) => c.id === 'board_relation_mm2k8n34')
+    const linked = Array.isArray(relCv?.linked_items) ? relCv.linked_items : []
+    if (linked.length > 0) {
+      tracedOrders++
+      // Attribute to the first linked quote's board. Multiple links are rare
+      // (should only happen if the backfill linked > 1 candidate) so first-wins.
+      const firstBoard = linked[0]?.board?.id
+      if (firstBoard) {
+        tracedByBoardId[String(firstBoard)] = (tracedByBoardId[String(firstBoard)] || 0) + 1
+      }
+    }
   }
-  return { monthly, byType, totalOrders, totalValue }
+  return { monthly, byType, totalOrders, totalValue, tracedOrders, tracedByBoardId }
 }
 
 // ── Distributor bookings ─────────────────────────────────────
@@ -261,7 +282,7 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
     const startDate = (req.query.startDate as string) || '2025-07-01'
     const endDate = (req.query.endDate as string) || '2026-06-30'
     const forceRefresh = req.query.refresh === 'true'
-    const cacheKey = `sales:v2:${startDate}:${endDate}`
+    const cacheKey = `sales:v3:${startDate}:${endDate}`
     if (!forceRefresh) { const cached = getCached(cacheKey); if (cached) return res.status(200).json(cached) }
 
     const [ordersData, distData, ...rest] = await Promise.all([
