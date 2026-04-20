@@ -1,0 +1,206 @@
+// pages/api/chat-sessions/send.ts
+// POST — send a user message; creates a new session if sessionId not provided,
+// persists user + assistant messages, and returns the reply.
+//
+// Request body:
+//   { sessionId?: string, message: string, contextPage?: string, contextData?: object }
+//
+// Response:
+//   { session: {...}, userMessage: {...}, assistantMessage: {...} }
+//
+// The LLM sees full session history on every call — that's what gives it
+// continuity across messages within a conversation.
+
+import type { NextApiRequest, NextApiResponse } from 'next'
+import { createClient } from '@supabase/supabase-js'
+import { withAuth } from '../../../lib/authServer'
+
+export const config = { maxDuration: 45 }
+
+const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY || ''
+const ANTHROPIC_MODEL = 'claude-sonnet-4-6'
+
+function getAdmin() {
+  return createClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.SUPABASE_SERVICE_ROLE_KEY!,
+    { auth: { persistSession: false } },
+  )
+}
+
+// Build a system prompt that's aware of which portal page the user is on.
+// This gives the assistant just enough context to be helpful without flooding
+// the context window with every possible data set.
+function buildSystemPrompt(contextPage: string | undefined, contextData: any): string {
+  const base = `You are the Just Autos management assistant, embedded in the JA Portal. You help Chris and his team understand live business data across two entities:
+- JAWS (Just Autos Wholesale & Service) — wholesale/distribution
+- VPS (Vehicle Performance Solutions) — workshop
+
+GUIDELINES:
+- Be concise. Bullet points over prose where appropriate.
+- All $ amounts in the portal are EX-GST by default (users can toggle to inc-GST).
+- Use Australian dollar formatting (e.g. $51,233 or $51,233.45).
+- Financial year is Australian (July–June).
+- If asked about a specific number, cite which entity/period it's from.
+- If you don't have the answer in the context provided, say so rather than guessing.`
+
+  const pageHints: Record<string, string> = {
+    '/':             'User is on the Overview (Dashboard) page — combined JAWS+VPS revenue, invoices, P&L, stock summary.',
+    '/distributors': 'User is on the Distributors page — distributor-level revenue breakdowns, groups, line items, VIN tracking.',
+    '/sales':        'User is on the Sales/Leads page — Monday.com quotes, orders, lead pipeline by rep.',
+    '/stock':        'User is on the Stock & Inventory page — item-level stock levels, reorder alerts, velocity, dead stock, margins.',
+    '/settings':     'User is on the Settings page — user/group management, preferences, VIN codes.',
+  }
+
+  const pageContext = contextPage && pageHints[contextPage]
+    ? `\nCURRENT PAGE CONTEXT:\n${pageHints[contextPage]}`
+    : ''
+
+  const dataContext = contextData && typeof contextData === 'object'
+    ? `\nPAGE-SPECIFIC DATA (current view):\n${JSON.stringify(contextData, null, 2).slice(0, 8000)}`
+    : ''
+
+  return base + pageContext + dataContext
+}
+
+// Auto-generate a session title from the first user message (first 60 chars).
+function deriveTitle(firstMessage: string): string {
+  const cleaned = firstMessage.replace(/\s+/g, ' ').trim()
+  if (cleaned.length <= 60) return cleaned
+  return cleaned.slice(0, 57) + '...'
+}
+
+async function handler(req: NextApiRequest, res: NextApiResponse, user: any) {
+  if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' })
+  if (!ANTHROPIC_API_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' })
+
+  const { sessionId, message, contextPage, contextData } = req.body || {}
+  if (!message || typeof message !== 'string' || !message.trim()) {
+    return res.status(400).json({ error: 'message is required' })
+  }
+  const trimmedMsg = message.trim()
+
+  const sb = getAdmin()
+
+  // ── 1) Resolve the session — create if not provided ─────────────────
+  let activeSessionId: string = sessionId
+  let sessionCreated = false
+  if (!activeSessionId || typeof activeSessionId !== 'string') {
+    const { data: newSession, error: createErr } = await sb
+      .from('chat_sessions')
+      .insert({ user_id: user.id, title: deriveTitle(trimmedMsg) })
+      .select()
+      .single()
+    if (createErr) return res.status(500).json({ error: createErr.message })
+    activeSessionId = newSession.id
+    sessionCreated = true
+  } else {
+    // Verify session exists and belongs to user
+    const { data: existingSession, error: sErr } = await sb
+      .from('chat_sessions')
+      .select('id, user_id, title')
+      .eq('id', activeSessionId)
+      .maybeSingle()
+    if (sErr) return res.status(500).json({ error: sErr.message })
+    if (!existingSession) return res.status(404).json({ error: 'Session not found' })
+    if (existingSession.user_id !== user.id) return res.status(403).json({ error: 'Forbidden' })
+
+    // If session has default title and this is first real exchange, update title
+    if (existingSession.title === 'New conversation') {
+      await sb
+        .from('chat_sessions')
+        .update({ title: deriveTitle(trimmedMsg) })
+        .eq('id', activeSessionId)
+    }
+  }
+
+  // ── 2) Save the user message ────────────────────────────────────────
+  const { data: userMessage, error: umErr } = await sb
+    .from('chat_messages')
+    .insert({
+      session_id: activeSessionId,
+      role: 'user',
+      content: trimmedMsg,
+      context_page: contextPage || null,
+      context_data: contextData || null,
+    })
+    .select()
+    .single()
+  if (umErr) return res.status(500).json({ error: umErr.message })
+
+  // ── 3) Load full history (for the LLM to see continuity) ────────────
+  const { data: history, error: histErr } = await sb
+    .from('chat_messages')
+    .select('role, content')
+    .eq('session_id', activeSessionId)
+    .order('created_at', { ascending: true })
+    .limit(50)  // cap context window
+  if (histErr) return res.status(500).json({ error: histErr.message })
+
+  const llmMessages = (history || []).map(m => ({
+    role: m.role as 'user' | 'assistant',
+    content: m.content,
+  }))
+
+  // ── 4) Call Claude ──────────────────────────────────────────────────
+  const systemPrompt = buildSystemPrompt(contextPage, contextData)
+
+  let assistantReply: string
+  try {
+    const response = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': ANTHROPIC_API_KEY,
+        'anthropic-version': '2023-06-01',
+      },
+      body: JSON.stringify({
+        model: ANTHROPIC_MODEL,
+        max_tokens: 2048,
+        system: systemPrompt,
+        messages: llmMessages,
+      }),
+    })
+    if (!response.ok) {
+      const errText = await response.text()
+      console.error('Anthropic API error:', response.status, errText.substring(0, 300))
+      assistantReply = `AI error (${response.status}): ${errText.substring(0, 150)}`
+    } else {
+      const data = await response.json()
+      assistantReply = data.content?.find((b: any) => b.type === 'text')?.text
+        || 'Sorry, I could not generate a response.'
+    }
+  } catch (err: any) {
+    console.error('Claude call failed:', err.message)
+    assistantReply = `Connection error: ${err.message}`
+  }
+
+  // ── 5) Save the assistant response ──────────────────────────────────
+  const { data: assistantMessage, error: amErr } = await sb
+    .from('chat_messages')
+    .insert({
+      session_id: activeSessionId,
+      role: 'assistant',
+      content: assistantReply,
+      context_page: contextPage || null,
+    })
+    .select()
+    .single()
+  if (amErr) return res.status(500).json({ error: amErr.message })
+
+  // Refetch session to get latest title/updated_at
+  const { data: finalSession } = await sb
+    .from('chat_sessions')
+    .select('id, title, created_at, updated_at')
+    .eq('id', activeSessionId)
+    .single()
+
+  return res.status(200).json({
+    session: finalSession,
+    sessionCreated,
+    userMessage,
+    assistantMessage,
+  })
+}
+
+export default withAuth(null, handler)

@@ -7,6 +7,7 @@ import { useRouter } from 'next/router'
 import PortalSidebar from '../lib/PortalSidebar'
 import { requirePageAuth } from '../lib/authServer'
 import { usePreferences, applyGstPreferenceToDashboard, applyGstPreferenceToQuotesOrders } from '../lib/preferences'
+import { useChatContext } from '../components/GlobalChatbot'
 
 interface PortalUserSSR { id: string; email: string; displayName: string | null; role: 'admin'|'manager'|'sales'|'accountant'|'viewer' }
 
@@ -695,6 +696,49 @@ export default function Portal({ user }: { user: PortalUserSSR }) {
   const combinedBills = [...jBills.map(b=>({...b,__entity:'JAWS'})), ...vBills.map(b=>({...b,__entity:'VPS'}))]
     .sort((a,b)=>(b.BalanceDueAmount||0)-(a.BalanceDueAmount||0))
 
+  // ─── Feed a compact summary to the global AI chatbot ───────
+  // This lets the assistant answer questions about the user's current
+  // dashboard view without having to re-fetch MYOB data itself.
+  const { setPageContext: setChatContext } = useChatContext()
+  useEffect(() => {
+    if (!dash) { setChatContext(null); return }
+    setChatContext({
+      dateRange: dash.period,
+      gstDisplay: prefs.gst_display,
+      jaws: {
+        openInvoicesCount: jOpen.length,
+        receivablesTotal: Math.round(jOut),
+        income: Math.round(jInc),
+        cos: Math.round(jCos),
+        netBeforeOH: Math.round(jNet),
+        stockValue: Math.round(stockVal),
+        openBillsTotal: Math.round(jBOut),
+        topCustomers: jCust.slice(0, 5).map(c => ({
+          name: c.CustomerName,
+          revenue: Math.round(c.TotalRevenue),
+          invoices: c.InvoiceCount,
+        })),
+      },
+      vps: {
+        openInvoicesCount: vOpen.length,
+        receivablesTotal: Math.round(vOut),
+        income: Math.round(vInc),
+        cos: Math.round(vCos),
+        overheads: Math.round(vOh),
+        net: Math.round(vNet),
+        openBillsTotal: Math.round(vBOut),
+        topCustomers: vCust.slice(0, 5).map(c => ({
+          name: c.CustomerName,
+          revenue: Math.round(c.TotalRevenue),
+          invoices: c.InvoiceCount,
+        })),
+      },
+    })
+    // Cleanup when leaving the page
+    return () => { setChatContext(null) }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dash, prefs.gst_display])
+
   // ─────────────────────────────────────────────────────────
   // RENDER SECTIONS
   // ─────────────────────────────────────────────────────────
@@ -969,7 +1013,6 @@ export default function Portal({ user }: { user: PortalUserSSR }) {
               </div>}
               {renderSection()}
             </div>
-            <Chatbot dashData={dash}/>
           </div>
         </div>
       </div>
