@@ -12,7 +12,7 @@ import { roleCanGenerateReportType, REPORT_TYPE_LABELS } from '../../../lib/perm
 import type { GeneratedReport } from '../../../lib/reports/spec'
 import { renderReportPdf } from '../../../lib/reports/pdf'
 
-export const config = { maxDuration: 60, api: { bodyParser: { sizeLimit: '4mb' } } }
+export const config = { maxDuration: 300, api: { bodyParser: { sizeLimit: '4mb' } } }
 
 function filenameFor(report: GeneratedReport): string {
   const slug = (report.title || 'report').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
