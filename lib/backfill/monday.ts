@@ -59,13 +59,19 @@ export interface OrderRow {
 export async function fetchOrdersInWindow(startDate: string, endDate: string): Promise<OrderRow[]> {
   const rows: OrderRow[] = []
 
+  // Note: we interpolate the dates into the query string rather than using variables
+  // because Monday's compare_value expects a list literal, and its type system doesn't
+  // handle a list-valued variable for this particular field cleanly.
+  const safeStart = String(startDate).replace(/"/g, '')
+  const safeEnd = String(endDate).replace(/"/g, '')
+
   const firstPageQuery = `
-    query Orders($boardId: [ID!], $startDate: CompareValue, $endDate: CompareValue) {
-      boards(ids: $boardId) {
+    query Orders {
+      boards(ids: ["${ORDERS_BOARD_ID}"]) {
         items_page(
           limit: 500,
           query_params: {
-            rules: [{ column_id: "${ORDER_COL_DATE}", compare_value: [$startDate, $endDate], operator: between }]
+            rules: [{ column_id: "${ORDER_COL_DATE}", compare_value: ["${safeStart}", "${safeEnd}"], operator: between }]
           }
         ) {
           cursor
@@ -80,11 +86,7 @@ export async function fetchOrdersInWindow(startDate: string, endDate: string): P
       }
     }
   `
-  const first = await withRetry(() => mondayGraphql(firstPageQuery, {
-    boardId: [ORDERS_BOARD_ID],
-    startDate,
-    endDate,
-  }))
+  const first = await withRetry(() => mondayGraphql(firstPageQuery, {}))
   const firstPage = first.boards?.[0]?.items_page
   if (firstPage) {
     collectOrders(firstPage.items, rows)
@@ -93,9 +95,10 @@ export async function fetchOrdersInWindow(startDate: string, endDate: string): P
     let pages = 1
     const MAX_PAGES = 20
     while (cursor && pages < MAX_PAGES) {
+      const safeCursor = String(cursor).replace(/"/g, '')
       const nextPageQuery = `
-        query NextPage($cursor: String!) {
-          next_items_page(cursor: $cursor, limit: 500) {
+        query NextPage {
+          next_items_page(cursor: "${safeCursor}", limit: 500) {
             cursor
             items {
               id name
@@ -107,7 +110,7 @@ export async function fetchOrdersInWindow(startDate: string, endDate: string): P
           }
         }
       `
-      const next: any = await withRetry(() => mondayGraphql(nextPageQuery, { cursor }))
+      const next: any = await withRetry(() => mondayGraphql(nextPageQuery, {}))
       const page = next.next_items_page
       if (!page) break
       collectOrders(page.items, rows)
@@ -151,9 +154,10 @@ export async function fetchAllQuotes(): Promise<QuoteRow[]> {
   const rows: QuoteRow[] = []
 
   for (const board of QUOTE_BOARDS) {
+    const safeBoardId = String(board.boardId).replace(/"/g, '')
     const firstPageQuery = `
-      query BoardQuotes($boardId: [ID!]) {
-        boards(ids: $boardId) {
+      query BoardQuotes {
+        boards(ids: ["${safeBoardId}"]) {
           items_page(limit: 500) {
             cursor
             items {
@@ -166,7 +170,7 @@ export async function fetchAllQuotes(): Promise<QuoteRow[]> {
         }
       }
     `
-    const first: any = await withRetry(() => mondayGraphql(firstPageQuery, { boardId: [board.boardId] }))
+    const first: any = await withRetry(() => mondayGraphql(firstPageQuery, {}))
     const firstPage = first.boards?.[0]?.items_page
     if (!firstPage) continue
     collectQuotes(firstPage.items, board, rows)
@@ -175,9 +179,10 @@ export async function fetchAllQuotes(): Promise<QuoteRow[]> {
     let pages = 1
     const MAX_PAGES = 10
     while (cursor && pages < MAX_PAGES) {
+      const safeCursor = String(cursor).replace(/"/g, '')
       const nextPageQuery = `
-        query NextPage($cursor: String!) {
-          next_items_page(cursor: $cursor, limit: 500) {
+        query NextPage {
+          next_items_page(cursor: "${safeCursor}", limit: 500) {
             cursor
             items {
               id name
@@ -188,7 +193,7 @@ export async function fetchAllQuotes(): Promise<QuoteRow[]> {
           }
         }
       `
-      const next: any = await withRetry(() => mondayGraphql(nextPageQuery, { cursor }))
+      const next: any = await withRetry(() => mondayGraphql(nextPageQuery, {}))
       const page = next.next_items_page
       if (!page) break
       collectQuotes(page.items, board, rows)
