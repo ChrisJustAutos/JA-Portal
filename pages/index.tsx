@@ -912,7 +912,7 @@ export default function Portal({ user }: { user: PortalUserSSR }) {
       </Head>
       <Script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js" strategy="beforeInteractive"/>
 
-      <div style={{display:'flex',height:'100vh',overflow:'hidden',fontFamily:"'DM Sans',system-ui,sans-serif"}}>
+      <div style={{display:'flex',height:'100vh',overflow:'hidden',fontFamily:"'DM Sans',system-ui,sans-serif",background:T.bg,color:T.text}}>
         <PortalSidebar
           activeId={section}
           onSectionClick={(s)=>setSection(s as Section)}
@@ -927,7 +927,7 @@ export default function Portal({ user }: { user: PortalUserSSR }) {
         />
 
         {/* Main */}
-        <div style={{flex:1,display:'flex',flexDirection:'column',overflow:'hidden'}}>
+        <div style={{flex:1,display:'flex',flexDirection:'column',overflow:'hidden',background:T.bg}}>
           <div style={{height:52,background:T.bg2,borderBottom:`1px solid ${T.border}`,display:'flex',alignItems:'center',padding:'0 20px',gap:12,flexShrink:0}}>
             <div style={{fontSize:14,fontWeight:500,flex:1,color:T.text}}>{titles[section]}</div>
             {!loading&&<div style={{width:7,height:7,borderRadius:'50%',background:T.green,boxShadow:`0 0 8px ${T.green}`}}/>}
@@ -960,8 +960,8 @@ export default function Portal({ user }: { user: PortalUserSSR }) {
               {dateLoading&&<span style={{fontSize:14,animation:'spin 1s linear infinite',color:T.blue}}>⟳</span>}
             </div>
           </div>
-          <div style={{flex:1,display:'flex',overflow:'hidden'}}>
-            <div style={{flex:1,padding:20,overflowY:'auto',position:'relative'}}>
+          <div style={{flex:1,display:'flex',overflow:'hidden',background:T.bg}}>
+            <div style={{flex:1,padding:20,overflowY:'auto',position:'relative',background:T.bg}}>
               {dateLoading&&<div style={{position:'absolute',inset:0,background:'rgba(13,15,18,0.75)',zIndex:10,display:'flex',alignItems:'center',justifyContent:'center',flexDirection:'column',gap:12,borderRadius:8}}>
                 <div style={{fontSize:28,animation:'spin 1s linear infinite',color:T.blue}}>⟳</div>
                 <div style={{color:T.text2,fontSize:13}}>Updating data for {fyLabel}…</div>
