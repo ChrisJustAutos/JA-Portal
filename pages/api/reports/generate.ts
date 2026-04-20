@@ -18,7 +18,7 @@ import {
 } from '../../../lib/reports/fetchers'
 import { generateSectionInsights, generateOverallNarrative } from '../../../lib/reports/narrative'
 
-export const config = { maxDuration: 60 }
+export const config = { maxDuration: 300 }
 
 // Resolve the effective date range for a section — use sectionOverrides if set
 function resolveRange(cfg: ReportConfig, sid: SectionId) {
