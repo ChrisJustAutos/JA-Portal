@@ -65,6 +65,7 @@ interface TodosData {
   managers: ManagerStats[]
   totals: { openTotal: number; critical: number; completedInPeriod: number; teamTotal: number }
   criticalOpen: TodoItem[]
+  openFeed: TodoItem[]
   completedFeed: TodoItem[]
 }
 
@@ -100,6 +101,9 @@ export default function TodosDashboard({ user }: { user: PortalUserSSR }) {
   const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState('')
   const [managerFilter, setManagerFilter] = useState('All')
+  const [statusFilter, setStatusFilter] = useState<'all'|'working'|'stuck'|'onhold'|'other'>('all')
+  const [searchQ, setSearchQ] = useState('')
+  const [expandedManager, setExpandedManager] = useState<string | null>(null)
 
   // Date range — defaults to current month, FY buttons like /sales
   const currentFY = new Date().getMonth() >= 6 ? new Date().getFullYear() + 1 : new Date().getFullYear()
@@ -286,14 +290,20 @@ export default function TodosDashboard({ user }: { user: PortalUserSSR }) {
                   <div style={{display:'flex',flexDirection:'column',gap:5,maxHeight:440,overflowY:'auto'}}>
                     {completedList.length === 0 && <div style={{color:T.text3,fontSize:13,padding:24,textAlign:'center'}}>No completed tasks in {fyLabel}.</div>}
                     {completedList.map(it => (
-                      <div key={it.id} style={{display:'flex',alignItems:'flex-start',gap:8,padding:'8px 0',borderBottom:`1px solid ${T.border}`}}>
+                      <a
+                        key={it.id}
+                        href={`https://just-autos.monday.com/boards/${it.boardId}/pulses/${it.id}`}
+                        target="_blank" rel="noopener noreferrer"
+                        style={{display:'flex',alignItems:'flex-start',gap:8,padding:'8px 0',borderBottom:`1px solid ${T.border}`,textDecoration:'none',color:'inherit'}}
+                        title={it.name + '\nClick to open in Monday'}
+                      >
                         <div style={{fontSize:10,color:T.green,fontFamily:'monospace',flexShrink:0,marginTop:3,width:50}}>{fmtDate(it.createdAt)}</div>
                         <div style={{flex:1,minWidth:0}}>
-                          <div style={{fontSize:12,color:T.text,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}} title={it.name}>{it.name}</div>
+                          <div style={{fontSize:12,color:T.text,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{it.name}</div>
                           <div style={{fontSize:10,color:MC[it.manager]||T.text3,marginTop:1}}>{it.manager}</div>
                         </div>
                         <div style={{fontSize:10,color:T.green,padding:'2px 6px',borderRadius:3,background:'rgba(52,199,123,0.1)',border:`1px solid ${T.green}40`,flexShrink:0}}>✓</div>
-                      </div>
+                      </a>
                     ))}
                   </div>
                 </Card>
@@ -341,6 +351,116 @@ export default function TodosDashboard({ user }: { user: PortalUserSSR }) {
                   )}
                 </div>
               </Card>
+
+              {/* ─── All Open Tasks ─────────────────────────────────────────── */}
+              {(() => {
+                const openAll = data.openFeed || []
+                // Apply manager filter (top-level chips), then status filter, then search
+                const COMMON = new Set(['Working on it','Stuck','On Hold'])
+                const matchStatus = (s: string) => {
+                  switch (statusFilter) {
+                    case 'all':     return true
+                    case 'working': return s === 'Working on it'
+                    case 'stuck':   return s === 'Stuck'
+                    case 'onhold':  return s === 'On Hold'
+                    case 'other':   return !COMMON.has(s)
+                  }
+                }
+                const q = searchQ.trim().toLowerCase()
+                const filtered = openAll.filter(it =>
+                  (managerFilter === 'All' || it.manager === managerFilter) &&
+                  matchStatus(it.status) &&
+                  (!q || it.name.toLowerCase().includes(q))
+                )
+                // Group by manager
+                const byManager: Record<string, TodoItem[]> = {}
+                for (const it of filtered) {
+                  if (!byManager[it.manager]) byManager[it.manager] = []
+                  byManager[it.manager].push(it)
+                }
+                const groupOrder = ['Chris','Matt H','Amanda','Morgan','Ryan','Sam'].filter(m => byManager[m])
+
+                return <Card style={{marginTop:16}}>
+                  <SH right={<span style={{fontSize:11,color:T.text3}}>{filtered.length.toLocaleString()} of {openAll.length.toLocaleString()} open</span>}>All Open Tasks</SH>
+
+                  {/* Filter bar: status chips + search */}
+                  <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:14,flexWrap:'wrap'}}>
+                    {([
+                      {k:'all',     l:'All',        c:T.accent},
+                      {k:'working', l:'Working',    c:T.amber},
+                      {k:'stuck',   l:'Stuck',      c:T.red},
+                      {k:'onhold',  l:'On Hold',    c:T.pink},
+                      {k:'other',   l:'Other',      c:T.purple},
+                    ] as const).map(s => (
+                      <button key={s.k} onClick={() => setStatusFilter(s.k)}
+                        style={{padding:'4px 12px',borderRadius:5,border:`1px solid ${statusFilter===s.k?s.c:T.border}`,fontSize:11,background:statusFilter===s.k?s.c:'transparent',color:statusFilter===s.k?'#fff':T.text2,cursor:'pointer',fontFamily:'inherit'}}>
+                        {s.l}
+                      </button>
+                    ))}
+                    <input
+                      type="text" value={searchQ} onChange={e=>setSearchQ(e.target.value)}
+                      placeholder="Search task names…"
+                      style={{flex:1,minWidth:200,padding:'5px 10px',borderRadius:5,border:`1px solid ${T.border2}`,background:T.bg3,color:T.text,fontSize:12,fontFamily:'inherit',outline:'none'}}
+                    />
+                  </div>
+
+                  {/* Grouped task list */}
+                  {groupOrder.length === 0 && (
+                    <div style={{color:T.text3,fontSize:13,padding:30,textAlign:'center'}}>
+                      No open tasks match the current filter.
+                    </div>
+                  )}
+                  {groupOrder.map(mgr => {
+                    const tasks = byManager[mgr]
+                    // When "All" is the top-level manager filter, collapse groups by default
+                    // (click to expand one at a time). When filtered to a single manager,
+                    // always show their list.
+                    const showList = managerFilter !== 'All' || expandedManager === mgr || groupOrder.length === 1
+                    return <div key={mgr} style={{marginBottom:14}}>
+                      <div
+                        onClick={() => groupOrder.length > 1 && managerFilter === 'All' && setExpandedManager(expandedManager === mgr ? null : mgr)}
+                        style={{display:'flex',alignItems:'center',gap:10,padding:'6px 0',borderBottom:`1px solid ${T.border2}`,cursor:groupOrder.length>1&&managerFilter==='All'?'pointer':'default'}}
+                      >
+                        <div style={{width:4,height:16,background:MC[mgr]||T.accent,borderRadius:2}}/>
+                        <div style={{fontSize:13,fontWeight:600,color:MC[mgr]||T.text}}>{mgr}</div>
+                        <div style={{fontSize:11,color:T.text3}}>{tasks.length} open</div>
+                        {groupOrder.length > 1 && managerFilter === 'All' && (
+                          <div style={{marginLeft:'auto',fontSize:11,color:T.text3}}>
+                            {expandedManager === mgr ? '▼ click to collapse' : '▶ click to expand'}
+                          </div>
+                        )}
+                      </div>
+                      {showList && <div style={{display:'flex',flexDirection:'column',marginTop:2}}>
+                        {tasks.map(it => (
+                          <div key={it.id} style={{display:'flex',alignItems:'center',gap:10,padding:'7px 8px',borderBottom:`1px solid ${T.border}`,fontSize:12}}>
+                            <span style={{
+                              padding:'2px 7px',borderRadius:3,fontSize:10,fontWeight:500,flexShrink:0,minWidth:60,textAlign:'center',
+                              background:(STATUS_COLOURS[it.status]||T.text3)+'20',
+                              color:STATUS_COLOURS[it.status]||T.text3,
+                              border:`1px solid ${STATUS_COLOURS[it.status]||T.text3}40`,
+                            }}>{it.status || '—'}</span>
+                            {it.priority && it.priority.toLowerCase().startsWith('critical') &&
+                              <span style={{padding:'1px 5px',borderRadius:3,fontSize:9,background:T.red+'20',color:T.red,border:`1px solid ${T.red}40`,flexShrink:0}}>⚠ CRIT</span>
+                            }
+                            <a
+                              href={`https://just-autos.monday.com/boards/${it.boardId}/pulses/${it.id}`}
+                              target="_blank" rel="noopener noreferrer"
+                              style={{flex:1,color:T.text,textDecoration:'none',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',minWidth:0}}
+                              title={it.name + '\nClick to open in Monday'}
+                            >{it.name}</a>
+                            <span style={{fontSize:10,color:T.text3,fontFamily:'monospace',flexShrink:0,width:56,textAlign:'right'}}>
+                              {fmtDate(it.createdAt)}
+                            </span>
+                            <span style={{fontSize:10,color:it.ageDays!==null&&it.ageDays>60?T.red:it.ageDays!==null&&it.ageDays>30?T.amber:T.text3,fontFamily:'monospace',flexShrink:0,width:36,textAlign:'right'}}>
+                              {it.ageDays !== null ? `${it.ageDays}d` : ''}
+                            </span>
+                          </div>
+                        ))}
+                      </div>}
+                    </div>
+                  })}
+                </Card>
+              })()}
 
               <div style={{marginTop:20,fontSize:11,color:T.text3,textAlign:'center'}}>
                 Data fetched {fmtDate(data.fetchedAt)} · {data.totals.teamTotal} items across {data.managers.length} managers · cached 5 min

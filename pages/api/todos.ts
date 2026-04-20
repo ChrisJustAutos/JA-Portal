@@ -190,7 +190,7 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
     const startDate = (req.query.startDate as string) || '2025-07-01'
     const endDate = (req.query.endDate as string) || '2026-06-30'
     const forceRefresh = req.query.refresh === 'true'
-    const cacheKey = `todos:v1:${startDate}:${endDate}`
+    const cacheKey = `todos:v2:${startDate}:${endDate}`
     if (!forceRefresh) { const cached = getCached(cacheKey); if (cached) return res.status(200).json(cached) }
 
     const results = await Promise.all(
@@ -214,6 +214,14 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
       .slice(0, 200)
 
+    // Open tasks feed — everything not Done, oldest first so the stalest items
+    // float to the top. Capped at 500 to keep the payload reasonable (team has
+    // ~250 open today, so headroom is fine).
+    const openFeed = allItems
+      .filter(it => it.status !== STATUS_DONE)
+      .sort((a, b) => (b.ageDays || 0) - (a.ageDays || 0))
+      .slice(0, 500)
+
     // Totals across all managers
     const totals = {
       openTotal:          managers.reduce((s, m) => s + m.stats.openTotal, 0),
@@ -228,6 +236,7 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
       managers: managers.map(m => m.stats),
       totals,
       criticalOpen,
+      openFeed,
       completedFeed,
     }
     setCache(cacheKey, result)
