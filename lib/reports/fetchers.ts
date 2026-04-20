@@ -563,3 +563,221 @@ export async function fetchTrendCharts(entities: Entity[]): Promise<TrendChartsD
     entities: entityResults,
   }
 }
+
+// ══════════════════════════════════════════════════════════════════════
+// SALES SECTIONS — combine MYOB + Monday.com
+// ══════════════════════════════════════════════════════════════════════
+// These three sections expect a `MondaySalesData` payload that the
+// /api/reports/generate endpoint fetches upfront via monday-fetcher.ts.
+// We keep these fetchers separate because they don't go through cdataQuery.
+
+import type { MondaySalesData } from './monday-fetcher'
+
+// ── SALES FUNNEL ──────────────────────────────────────────────────────
+// Full-funnel view: Leads → Quotes Sent → Quotes Won → MYOB Orders
+// Gives conversion percentages at each stage.
+
+export interface SalesFunnelData {
+  stages: Array<{ label: string; count: number; value: number; source: 'Monday' | 'MYOB'; note?: string }>
+  conversions: Array<{ from: string; to: string; pct: number }>
+  periodLabel: string
+}
+
+export async function fetchSalesFunnel(
+  monday: MondaySalesData | null,
+  myobPipeline: PipelineData,
+  range: DateRange,
+): Promise<SalesFunnelData> {
+  // Monday.com: total active leads across all rep boards right now.
+  // "Period-aware" doesn't cleanly apply to leads (they're snapshot state),
+  // so we label them "currently open" but still include them in the funnel.
+  const totalLeads = monday?.activeLeads?.length || 0
+  const leadValue = monday?.activeLeads?.reduce((sum, l) => {
+    const n = parseFloat((l.quoteValue || '0').replace(/[^0-9.]/g, ''))
+    return sum + (isFinite(n) ? n : 0)
+  }, 0) || 0
+
+  // Monday.com quotes — aggregate across all rep boards.
+  // "Quote Sent" + "3 Days" + "14 Days" + "Follow Up Done" = quote-sent stages.
+  const QUOTE_SENT_STATUSES = ['Quote Sent', '3 Days', '14 Days', 'Follow Up Done', 'Quote On Hold', 'RLMNA']
+  const QUOTE_WON_STATUSES = ['Quote Won']
+  const QUOTE_LOST_STATUSES = ['Quote Lost']
+
+  let quotesSentCount = 0, quotesSentValue = 0
+  let quotesWonCount = 0, quotesWonValue = 0
+  let quotesLostCount = 0, quotesLostValue = 0
+  for (const repBoard of monday?.quotes || []) {
+    for (const [status, stat] of Object.entries(repBoard.stats || {})) {
+      if (QUOTE_SENT_STATUSES.includes(status)) {
+        quotesSentCount += stat.count
+        quotesSentValue += stat.value
+      }
+      if (QUOTE_WON_STATUSES.includes(status)) {
+        quotesWonCount += stat.count
+        quotesWonValue += stat.value
+      }
+      if (QUOTE_LOST_STATUSES.includes(status)) {
+        quotesLostCount += stat.count
+        quotesLostValue += stat.value
+      }
+    }
+  }
+
+  // MYOB converted orders in last 30d as the "Order placed" step.
+  const ordersCount = myobPipeline.convertedCount30d || 0
+  const ordersValue = myobPipeline.convertedValue30dExGst || 0
+
+  const stages = [
+    { label: 'Active Leads',   count: totalLeads,       value: leadValue,        source: 'Monday' as const, note: 'Current open leads (snapshot)' },
+    { label: 'Quotes Sent',    count: quotesSentCount,  value: quotesSentValue,  source: 'Monday' as const },
+    { label: 'Quotes Won',     count: quotesWonCount,   value: quotesWonValue,   source: 'Monday' as const },
+    { label: 'Orders Placed',  count: ordersCount,      value: ordersValue,      source: 'MYOB' as const, note: 'Last 30 days, ex-GST' },
+  ]
+
+  const conversions: Array<{ from: string; to: string; pct: number }> = []
+  for (let i = 1; i < stages.length; i++) {
+    const prev = stages[i - 1]
+    const curr = stages[i]
+    if (prev.count > 0) {
+      conversions.push({ from: prev.label, to: curr.label, pct: Math.round((curr.count / prev.count) * 100) })
+    }
+  }
+
+  return {
+    stages,
+    conversions,
+    periodLabel: `${range.periodStart} to ${range.periodEnd}`,
+  }
+}
+
+// ── SALES REP SCORECARD ───────────────────────────────────────────────
+// Per rep: active leads + quotes by status + won value + conversion.
+
+export interface SalesRepScorecardData {
+  reps: Array<{
+    rep: string
+    fullName: string
+    activeLeads: number
+    quotesSent: number
+    quotesSentValue: number
+    quotesWon: number
+    quotesWonValue: number
+    quotesLost: number
+    conversionPct: number | null    // won / (won + lost)
+  }>
+  totals: {
+    activeLeads: number
+    quotesSent: number
+    quotesWon: number
+    quotesWonValue: number
+  }
+}
+
+export function fetchSalesRepScorecard(monday: MondaySalesData | null): SalesRepScorecardData {
+  const QUOTE_SENT_STATUSES = ['Quote Sent', '3 Days', '14 Days', 'Follow Up Done', 'Quote On Hold', 'RLMNA']
+  const reps: SalesRepScorecardData['reps'] = []
+
+  for (const repBoard of monday?.quotes || []) {
+    const activeLeads = (monday?.activeLeads || []).filter(l => l.rep === repBoard.rep).length
+    let quotesSent = 0, quotesSentValue = 0
+    let quotesWon = 0, quotesWonValue = 0
+    let quotesLost = 0
+
+    for (const [status, stat] of Object.entries(repBoard.stats || {})) {
+      if (QUOTE_SENT_STATUSES.includes(status)) {
+        quotesSent += stat.count
+        quotesSentValue += stat.value
+      }
+      if (status === 'Quote Won') {
+        quotesWon += stat.count
+        quotesWonValue += stat.value
+      }
+      if (status === 'Quote Lost') {
+        quotesLost += stat.count
+      }
+    }
+
+    const decided = quotesWon + quotesLost
+    const conversionPct = decided > 0 ? Math.round((quotesWon / decided) * 100) : null
+
+    reps.push({
+      rep: repBoard.rep,
+      fullName: repBoard.full,
+      activeLeads,
+      quotesSent,
+      quotesSentValue,
+      quotesWon,
+      quotesWonValue,
+      quotesLost,
+      conversionPct,
+    })
+  }
+
+  reps.sort((a, b) => b.quotesWonValue - a.quotesWonValue)
+
+  return {
+    reps,
+    totals: {
+      activeLeads: reps.reduce((s, r) => s + r.activeLeads, 0),
+      quotesSent:  reps.reduce((s, r) => s + r.quotesSent, 0),
+      quotesWon:   reps.reduce((s, r) => s + r.quotesWon, 0),
+      quotesWonValue: reps.reduce((s, r) => s + r.quotesWonValue, 0),
+    },
+  }
+}
+
+// ── SALES PIPELINE COMBINED ───────────────────────────────────────────
+// Enhanced version of the existing `pipeline` section that ALSO includes
+// Monday.com context. We keep the MYOB pipeline data AND add Monday summary.
+
+export interface SalesPipelineCombinedData {
+  myob: PipelineData
+  monday: {
+    activeLeadsTotal: number
+    quotesSentTotal: number
+    quotesSentValue: number
+    ordersThisPeriodCount: number
+    ordersThisPeriodValue: number
+    activeLeadsByStatus: Array<{ status: string; count: number }>
+  } | null
+}
+
+export function fetchSalesPipelineCombined(
+  monday: MondaySalesData | null,
+  myobPipeline: PipelineData,
+): SalesPipelineCombinedData {
+  if (!monday) return { myob: myobPipeline, monday: null }
+
+  const QUOTE_SENT_STATUSES = ['Quote Sent', '3 Days', '14 Days', 'Follow Up Done', 'Quote On Hold', 'RLMNA']
+  let quotesSentTotal = 0, quotesSentValue = 0
+  for (const repBoard of monday.quotes || []) {
+    for (const [status, stat] of Object.entries(repBoard.stats || {})) {
+      if (QUOTE_SENT_STATUSES.includes(status)) {
+        quotesSentTotal += stat.count
+        quotesSentValue += stat.value
+      }
+    }
+  }
+
+  // Breakdown of active leads by their "Not Done" sub-status
+  const leadStatusCounts = new Map<string, number>()
+  for (const lead of monday.activeLeads || []) {
+    const s = lead.status || 'Unknown'
+    leadStatusCounts.set(s, (leadStatusCounts.get(s) || 0) + 1)
+  }
+  const activeLeadsByStatus = Array.from(leadStatusCounts.entries())
+    .map(([status, count]) => ({ status, count }))
+    .sort((a, b) => b.count - a.count)
+
+  return {
+    myob: myobPipeline,
+    monday: {
+      activeLeadsTotal: monday.activeLeads?.length || 0,
+      quotesSentTotal,
+      quotesSentValue,
+      ordersThisPeriodCount: monday.orders?.totalOrders || 0,
+      ordersThisPeriodValue: monday.orders?.totalValue || 0,
+      activeLeadsByStatus,
+    },
+  }
+}

@@ -1,9 +1,6 @@
 // pages/api/reports/generate.ts
 // POST — Given a ReportConfig, fetches data for each section in parallel
 // and returns a GeneratedReport (all data + AI narrative).
-//
-// This is the report "assembly" endpoint. The client calls this to preview
-// the report; once previewed, the client can call /api/reports/pdf to download.
 
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { withAuth } from '../../../lib/authServer'
@@ -15,10 +12,15 @@ import {
   fetchReceivablesAging, fetchPayablesAging,
   fetchStockSummary, fetchStockReorder, fetchStockDead,
   fetchDistributorRanking, fetchPipeline, fetchTrendCharts,
+  fetchSalesFunnel, fetchSalesRepScorecard, fetchSalesPipelineCombined,
 } from '../../../lib/reports/fetchers'
+import { fetchMondaySalesData, type MondaySalesData } from '../../../lib/reports/monday-fetcher'
 import { generateSectionInsights, generateOverallNarrative } from '../../../lib/reports/narrative'
 
 export const config = { maxDuration: 300 }
+
+// Which sections need Monday.com data
+const MONDAY_DEPENDENT: SectionId[] = ['sales-pipeline-combined', 'sales-funnel', 'sales-rep-scorecard']
 
 // Resolve the effective date range for a section — use sectionOverrides if set
 function resolveRange(cfg: ReportConfig, sid: SectionId) {
@@ -29,7 +31,16 @@ function resolveRange(cfg: ReportConfig, sid: SectionId) {
   return { periodStart: cfg.periodStart, periodEnd: cfg.periodEnd }
 }
 
-async function fetchSectionData(cfg: ReportConfig, sid: SectionId): Promise<any> {
+interface SharedContext {
+  monday: MondaySalesData | null
+  myobPipeline: any   // PipelineData from fetchers
+}
+
+async function fetchSectionData(
+  cfg: ReportConfig,
+  sid: SectionId,
+  shared: SharedContext,
+): Promise<any> {
   const meta = SECTION_META[sid]
   const entities = meta.entityScope === 'jaws'
     ? (['JAWS'] as const)
@@ -49,6 +60,9 @@ async function fetchSectionData(cfg: ReportConfig, sid: SectionId): Promise<any>
     case 'distributor-ranking':  return await fetchDistributorRanking(range)
     case 'pipeline':             return await fetchPipeline()
     case 'trend-charts':         return await fetchTrendCharts([...entities])
+    case 'sales-pipeline-combined': return fetchSalesPipelineCombined(shared.monday, shared.myobPipeline)
+    case 'sales-funnel':         return await fetchSalesFunnel(shared.monday, shared.myobPipeline, range)
+    case 'sales-rep-scorecard':  return fetchSalesRepScorecard(shared.monday)
     case 'ai-narrative':         return {} // narrative is injected at the report level
   }
 }
@@ -74,13 +88,32 @@ async function handler(req: NextApiRequest, res: NextApiResponse, user: any) {
     sections: requestedSections,
   }
 
+  // ── Shared context pre-fetch ─────────────────────────────────────
+  // If any section needs Monday data, fetch it once up-front and reuse.
+  // Same for MYOB pipeline — the combined sections reuse it.
+  const needsMonday = requestedSections.some(s => MONDAY_DEPENDENT.includes(s))
+  const needsMyobPipeline = requestedSections.some(s =>
+    s === 'pipeline' || s === 'sales-pipeline-combined' || s === 'sales-funnel'
+  )
+
+  const [shared_monday, shared_myobPipeline] = await Promise.all([
+    needsMonday ? fetchMondaySalesData(req, cfg.periodStart, cfg.periodEnd).catch(() => null) : Promise.resolve(null),
+    needsMyobPipeline ? fetchPipeline().catch(() => null) : Promise.resolve(null),
+  ])
+  const shared: SharedContext = { monday: shared_monday, myobPipeline: shared_myobPipeline }
+
   // Fetch all data sections in parallel. If one fails, others still succeed.
   const dataSections = requestedSections.filter(s => s !== 'ai-narrative')
   const sectionResults: GeneratedSection[] = await Promise.all(
     dataSections.map(async (sid): Promise<GeneratedSection> => {
       const meta = SECTION_META[sid]
       try {
-        const data = await fetchSectionData(effectiveConfig, sid)
+        // Reuse pre-fetched pipeline for the bare `pipeline` section too,
+        // to avoid double-fetching when both `pipeline` and a sales-* section are in the report.
+        if (sid === 'pipeline' && shared.myobPipeline) {
+          return { id: sid, label: meta.label, data: shared.myobPipeline }
+        }
+        const data = await fetchSectionData(effectiveConfig, sid, shared)
         return { id: sid, label: meta.label, data }
       } catch (err: any) {
         console.error(`Section ${sid} failed:`, err.message)

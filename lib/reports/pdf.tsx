@@ -546,6 +546,142 @@ function TrendCharts({ data }: { data: any }) {
   )
 }
 
+// ── Sales: Pipeline Combined (MYOB + Monday) ────────────────────────
+function SalesPipelineCombined({ data }: { data: any }) {
+  const myob = data?.myob || {}
+  const monday = data?.monday
+  return (
+    <View>
+      <Text style={{ fontSize: 10, fontWeight: 700, marginBottom: 4, color: COLORS.ink2 }}>MYOB</Text>
+      <View style={styles.kpiGrid} wrap={false}>
+        <KpiBox label="Open orders" value={String(myob.openOrdersCount || 0)} sub={fmt(myob.openOrdersValueExGst)}/>
+        <KpiBox label="Owing" value={fmt(myob.openOrdersOwingExGst)} sub="Balance on orders"/>
+        <KpiBox label="Converted 30d" value={String(myob.convertedCount30d || 0)} sub={fmt(myob.convertedValue30dExGst)}/>
+        <KpiBox label="Open quotes" value={String(myob.quotesCount || 0)} sub={fmt(myob.quotesValueExGst)}/>
+      </View>
+      {monday && (
+        <>
+          <Text style={{ fontSize: 10, fontWeight: 700, marginTop: 8, marginBottom: 4, color: COLORS.ink2 }}>Monday.com</Text>
+          <View style={styles.kpiGrid} wrap={false}>
+            <KpiBox label="Active leads" value={String(monday.activeLeadsTotal || 0)} sub="Current"/>
+            <KpiBox label="Quotes sent" value={String(monday.quotesSentTotal || 0)} sub={fmt(monday.quotesSentValue)}/>
+            <KpiBox label="Period orders" value={String(monday.ordersThisPeriodCount || 0)} sub={fmt(monday.ordersThisPeriodValue)}/>
+          </View>
+          {monday.activeLeadsByStatus?.length > 0 && (
+            <View wrap={false} style={{ marginTop: 8 }}>
+              <Text style={{ fontSize: 9, fontWeight: 700, marginBottom: 3, color: COLORS.ink2 }}>Active leads by status</Text>
+              <View style={styles.tableHeader}>
+                <Text style={[styles.col, { flex: 3 }]}>Status</Text>
+                <Text style={styles.colNum}>Count</Text>
+              </View>
+              {monday.activeLeadsByStatus.slice(0, 8).map((r: any, i: number) => (
+                <View key={i} style={[styles.tableRow, i % 2 === 1 ? styles.tableRowAlt : {}]}>
+                  <Text style={[styles.col, { flex: 3 }]}>{r.status}</Text>
+                  <Text style={styles.colNum}>{r.count}</Text>
+                </View>
+              ))}
+            </View>
+          )}
+        </>
+      )}
+      {!monday && (
+        <Text style={{ fontSize: 8.5, color: COLORS.amber, marginTop: 6, fontStyle: 'italic' }}>
+          Monday.com data unavailable — showing MYOB only.
+        </Text>
+      )}
+    </View>
+  )
+}
+
+// ── Sales: Funnel ─────────────────────────────────────────────────────
+function SalesFunnel({ data }: { data: any }) {
+  const stages = data?.stages || []
+  const conversions = data?.conversions || []
+  const maxCount = Math.max(1, ...stages.map((s: any) => s.count))
+  return (
+    <View>
+      <Text style={{ fontSize: 8.5, color: COLORS.ink3, marginBottom: 6 }}>
+        Leads, quotes and orders flowing through the sales pipeline. All $ ex-GST where sourced from MYOB; Monday.com values are as entered by reps.
+      </Text>
+      {stages.map((s: any, i: number) => {
+        const barW = maxCount > 0 ? (s.count / maxCount) * 100 : 0
+        const color = s.source === 'MYOB' ? COLORS.green : COLORS.accent
+        return (
+          <View key={i} style={{ marginBottom: 6 }} wrap={false}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 2 }}>
+              <Text style={{ fontSize: 9, fontWeight: 700, flex: 2.5, color: COLORS.ink }}>{s.label}</Text>
+              <Text style={{ fontSize: 8, color: COLORS.ink3, flex: 1.5 }}>{s.source}{s.note ? ` — ${s.note}` : ''}</Text>
+              <Text style={{ fontSize: 9, fontWeight: 700, flex: 1, textAlign: 'right', color: COLORS.ink }}>{s.count}</Text>
+              <Text style={{ fontSize: 9, flex: 1.2, textAlign: 'right', color: COLORS.ink2 }}>{fmt(s.value)}</Text>
+            </View>
+            <View style={{ height: 6, backgroundColor: COLORS.bg3, borderRadius: 2, overflow: 'hidden' }}>
+              <View style={{ width: `${barW}%`, height: 6, backgroundColor: color }}/>
+            </View>
+          </View>
+        )
+      })}
+      {conversions.length > 0 && (
+        <View wrap={false} style={{ marginTop: 8, paddingTop: 6, borderTop: `0.5pt solid ${COLORS.line}` }}>
+          <Text style={{ fontSize: 9, fontWeight: 700, marginBottom: 3, color: COLORS.ink2 }}>Conversion rates</Text>
+          {conversions.map((c: any, i: number) => (
+            <View key={i} style={{ flexDirection: 'row', marginBottom: 2 }}>
+              <Text style={{ fontSize: 8.5, flex: 3, color: COLORS.ink2 }}>{c.from} → {c.to}</Text>
+              <Text style={{ fontSize: 8.5, fontWeight: 700, color: c.pct >= 50 ? COLORS.green : c.pct >= 25 ? COLORS.amber : COLORS.red }}>{c.pct}%</Text>
+            </View>
+          ))}
+        </View>
+      )}
+    </View>
+  )
+}
+
+// ── Sales: Rep Scorecard ──────────────────────────────────────────────
+function SalesRepScorecard({ data }: { data: any }) {
+  const reps = data?.reps || []
+  const totals = data?.totals || {}
+  if (reps.length === 0) {
+    return <Text style={{ fontSize: 9, color: COLORS.ink3, fontStyle: 'italic' }}>No Monday.com data available.</Text>
+  }
+  return (
+    <View>
+      <View style={styles.tableHeader}>
+        <Text style={[styles.col, { flex: 2 }]}>Rep</Text>
+        <Text style={styles.colNum}>Active leads</Text>
+        <Text style={styles.colNum}>Quotes sent</Text>
+        <Text style={styles.colNum}>Sent value</Text>
+        <Text style={styles.colNum}>Won #</Text>
+        <Text style={styles.colNum}>Won value</Text>
+        <Text style={styles.colNum}>Lost #</Text>
+        <Text style={styles.colNum}>Conv %</Text>
+      </View>
+      {reps.map((r: any, i: number) => (
+        <View key={i} style={[styles.tableRow, i % 2 === 1 ? styles.tableRowAlt : {}]}>
+          <Text style={[styles.col, { flex: 2 }]}>{r.fullName || r.rep}</Text>
+          <Text style={styles.colNum}>{r.activeLeads}</Text>
+          <Text style={styles.colNum}>{r.quotesSent}</Text>
+          <Text style={styles.colNum}>{fmt(r.quotesSentValue)}</Text>
+          <Text style={styles.colNum}>{r.quotesWon}</Text>
+          <Text style={[styles.colNum, { fontWeight: 700 }]}>{fmt(r.quotesWonValue)}</Text>
+          <Text style={styles.colNum}>{r.quotesLost}</Text>
+          <Text style={[styles.colNum, { color: r.conversionPct == null ? COLORS.ink3 : r.conversionPct >= 50 ? COLORS.green : r.conversionPct >= 25 ? COLORS.amber : COLORS.red, fontWeight: 700 }]}>
+            {r.conversionPct == null ? '—' : `${r.conversionPct}%`}
+          </Text>
+        </View>
+      ))}
+      <View style={styles.tableTotal}>
+        <Text style={[styles.col, { flex: 2, fontWeight: 700 }]}>Team totals</Text>
+        <Text style={styles.colNum}>{totals.activeLeads || 0}</Text>
+        <Text style={styles.colNum}>{totals.quotesSent || 0}</Text>
+        <Text style={styles.colNum}></Text>
+        <Text style={styles.colNum}>{totals.quotesWon || 0}</Text>
+        <Text style={[styles.colNum, { fontWeight: 700 }]}>{fmt(totals.quotesWonValue)}</Text>
+        <Text style={styles.colNum}></Text>
+        <Text style={styles.colNum}></Text>
+      </View>
+    </View>
+  )
+}
+
 // ── Section router ─────────────────────────────────────────────────────
 function RenderSection({ section }: { section: GeneratedSection }) {
   if (!section || !section.data || section.data.error) {
@@ -571,6 +707,9 @@ function RenderSection({ section }: { section: GeneratedSection }) {
           case 'stock-dead':          return <StockDead data={section.data}/>
           case 'distributor-ranking': return <DistributorRanking data={section.data}/>
           case 'pipeline':            return <Pipeline data={section.data}/>
+          case 'sales-pipeline-combined': return <SalesPipelineCombined data={section.data}/>
+          case 'sales-funnel':        return <SalesFunnel data={section.data}/>
+          case 'sales-rep-scorecard': return <SalesRepScorecard data={section.data}/>
           case 'trend-charts':        return <TrendCharts data={section.data}/>
           default:                    return null
         }

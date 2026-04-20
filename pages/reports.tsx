@@ -400,6 +400,9 @@ function SectionBody({ section }: { section: any }) {
     case 'stock-dead': return <PvStockDead data={section.data}/>
     case 'distributor-ranking': return <PvDistributors data={section.data}/>
     case 'pipeline': return <PvPipeline data={section.data}/>
+    case 'sales-pipeline-combined': return <PvSalesPipelineCombined data={section.data}/>
+    case 'sales-funnel': return <PvSalesFunnel data={section.data}/>
+    case 'sales-rep-scorecard': return <PvSalesRepScorecard data={section.data}/>
     case 'trend-charts': return <PvTrends data={section.data}/>
     default: return null
   }
@@ -592,6 +595,136 @@ function PvDistributors({ data }: { data: any }) {
             <td style={{ ...tdS, textAlign: 'right', color: '#6b7280' }}>{d.invoiceCount}</td>
           </tr>
         ))}
+      </tbody>
+    </table>
+  )
+}
+
+function PvSalesPipelineCombined({ data }: { data: any }) {
+  const myob = data?.myob || {}
+  const monday = data?.monday
+  return (
+    <div>
+      <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 6, color: '#3a3f4a' }}>MYOB</div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 8, marginBottom: 10 }}>
+        <KpiCell label="Open orders" value={String(myob.openOrdersCount || 0)} sub={fmt(myob.openOrdersValueExGst)}/>
+        <KpiCell label="Owing" value={fmt(myob.openOrdersOwingExGst)} sub="Balance"/>
+        <KpiCell label="Converted 30d" value={String(myob.convertedCount30d || 0)} sub={fmt(myob.convertedValue30dExGst)}/>
+        <KpiCell label="Open quotes" value={String(myob.quotesCount || 0)} sub={fmt(myob.quotesValueExGst)}/>
+      </div>
+      {monday ? (
+        <>
+          <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 6, color: '#3a3f4a' }}>Monday.com</div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8, marginBottom: 10 }}>
+            <KpiCell label="Active leads" value={String(monday.activeLeadsTotal || 0)} sub="Current"/>
+            <KpiCell label="Quotes sent" value={String(monday.quotesSentTotal || 0)} sub={fmt(monday.quotesSentValue)}/>
+            <KpiCell label="Period orders" value={String(monday.ordersThisPeriodCount || 0)} sub={fmt(monday.ordersThisPeriodValue)}/>
+          </div>
+          {monday.activeLeadsByStatus?.length > 0 && (
+            <>
+              <div style={{ fontSize: 11, fontWeight: 700, color: '#3a3f4a', marginBottom: 4 }}>Active leads by status</div>
+              <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                <thead><tr><th style={thS}>Status</th><th style={{ ...thS, textAlign: 'right' }}>Count</th></tr></thead>
+                <tbody>
+                  {monday.activeLeadsByStatus.slice(0, 8).map((r: any, i: number) => (
+                    <tr key={i}><td style={tdS}>{r.status}</td><td style={{ ...tdS, textAlign: 'right' }}>{r.count}</td></tr>
+                  ))}
+                </tbody>
+              </table>
+            </>
+          )}
+        </>
+      ) : (
+        <div style={{ fontSize: 11, color: '#d97706', fontStyle: 'italic', marginTop: 6 }}>Monday.com data unavailable — showing MYOB only.</div>
+      )}
+    </div>
+  )
+}
+
+function PvSalesFunnel({ data }: { data: any }) {
+  const stages = data?.stages || []
+  const conversions = data?.conversions || []
+  const maxCount = Math.max(1, ...stages.map((s: any) => s.count))
+  return (
+    <div>
+      <div style={{ fontSize: 10.5, color: '#6b7280', marginBottom: 8 }}>
+        Leads, quotes and orders flowing through the sales pipeline.
+      </div>
+      {stages.map((s: any, i: number) => {
+        const barW = maxCount > 0 ? (s.count / maxCount) * 100 : 0
+        const color = s.source === 'MYOB' ? '#059669' : '#2563eb'
+        return (
+          <div key={i} style={{ marginBottom: 8 }}>
+            <div style={{ display: 'flex', alignItems: 'center', marginBottom: 3 }}>
+              <div style={{ fontSize: 11, fontWeight: 700, flex: 2.5 }}>{s.label}</div>
+              <div style={{ fontSize: 9.5, color: '#6b7280', flex: 1.5 }}>{s.source}{s.note ? ` — ${s.note}` : ''}</div>
+              <div style={{ fontSize: 11, fontWeight: 700, flex: 1, textAlign: 'right' }}>{s.count}</div>
+              <div style={{ fontSize: 11, flex: 1.2, textAlign: 'right', color: '#3a3f4a' }}>{fmt(s.value)}</div>
+            </div>
+            <div style={{ height: 8, background: '#f3f4f6', borderRadius: 2, overflow: 'hidden' }}>
+              <div style={{ width: `${barW}%`, height: 8, background: color }}/>
+            </div>
+          </div>
+        )
+      })}
+      {conversions.length > 0 && (
+        <div style={{ marginTop: 10, paddingTop: 8, borderTop: '1px solid #d1d5db' }}>
+          <div style={{ fontSize: 11, fontWeight: 700, marginBottom: 4, color: '#3a3f4a' }}>Conversion rates</div>
+          {conversions.map((c: any, i: number) => (
+            <div key={i} style={{ display: 'flex', marginBottom: 2 }}>
+              <div style={{ fontSize: 10.5, flex: 3, color: '#3a3f4a' }}>{c.from} → {c.to}</div>
+              <div style={{ fontSize: 10.5, fontWeight: 700, color: c.pct >= 50 ? '#059669' : c.pct >= 25 ? '#d97706' : '#dc2626' }}>{c.pct}%</div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function PvSalesRepScorecard({ data }: { data: any }) {
+  const reps = data?.reps || []
+  const totals = data?.totals || {}
+  if (reps.length === 0) {
+    return <div style={{ fontSize: 11, color: '#6b7280', fontStyle: 'italic' }}>No Monday.com data available.</div>
+  }
+  return (
+    <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+      <thead><tr>
+        <th style={thS}>Rep</th>
+        <th style={{ ...thS, textAlign: 'right' }}>Leads</th>
+        <th style={{ ...thS, textAlign: 'right' }}>Sent #</th>
+        <th style={{ ...thS, textAlign: 'right' }}>Sent $</th>
+        <th style={{ ...thS, textAlign: 'right' }}>Won #</th>
+        <th style={{ ...thS, textAlign: 'right' }}>Won $</th>
+        <th style={{ ...thS, textAlign: 'right' }}>Lost</th>
+        <th style={{ ...thS, textAlign: 'right' }}>Conv %</th>
+      </tr></thead>
+      <tbody>
+        {reps.map((r: any, i: number) => (
+          <tr key={i}>
+            <td style={tdS}>{r.fullName || r.rep}</td>
+            <td style={{ ...tdS, textAlign: 'right' }}>{r.activeLeads}</td>
+            <td style={{ ...tdS, textAlign: 'right' }}>{r.quotesSent}</td>
+            <td style={{ ...tdS, textAlign: 'right' }}>{fmt(r.quotesSentValue)}</td>
+            <td style={{ ...tdS, textAlign: 'right' }}>{r.quotesWon}</td>
+            <td style={{ ...tdS, textAlign: 'right', fontWeight: 700 }}>{fmt(r.quotesWonValue)}</td>
+            <td style={{ ...tdS, textAlign: 'right' }}>{r.quotesLost}</td>
+            <td style={{ ...tdS, textAlign: 'right', fontWeight: 700, color: r.conversionPct == null ? '#6b7280' : r.conversionPct >= 50 ? '#059669' : r.conversionPct >= 25 ? '#d97706' : '#dc2626' }}>
+              {r.conversionPct == null ? '—' : `${r.conversionPct}%`}
+            </td>
+          </tr>
+        ))}
+        <tr style={{ borderTop: '2px solid #1a1d23' }}>
+          <td style={{ ...tdS, fontWeight: 700 }}>Team totals</td>
+          <td style={{ ...tdS, textAlign: 'right', fontWeight: 700 }}>{totals.activeLeads || 0}</td>
+          <td style={{ ...tdS, textAlign: 'right', fontWeight: 700 }}>{totals.quotesSent || 0}</td>
+          <td style={tdS}></td>
+          <td style={{ ...tdS, textAlign: 'right', fontWeight: 700 }}>{totals.quotesWon || 0}</td>
+          <td style={{ ...tdS, textAlign: 'right', fontWeight: 700 }}>{fmt(totals.quotesWonValue)}</td>
+          <td style={tdS}></td>
+          <td style={tdS}></td>
+        </tr>
       </tbody>
     </table>
   )

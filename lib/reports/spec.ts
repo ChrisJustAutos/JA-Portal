@@ -14,6 +14,9 @@ export type SectionId =
   | 'stock-dead'
   | 'distributor-ranking'
   | 'pipeline'
+  | 'sales-pipeline-combined'
+  | 'sales-funnel'
+  | 'sales-rep-scorecard'
   | 'trend-charts'
   | 'ai-narrative'
 
@@ -35,7 +38,10 @@ export const SECTION_META: Record<SectionId, SectionMeta> = {
   'stock-reorder':       { id: 'stock-reorder',      label: 'Reorder Alerts',        description: 'Items below reorder level',                          entityScope: 'jaws' },
   'stock-dead':          { id: 'stock-dead',         label: 'Dead Stock',            description: 'Items with held value but no sales in 90+ days',    entityScope: 'jaws' },
   'distributor-ranking': { id: 'distributor-ranking',label: 'Distributor Ranking',   description: 'Top distributors by revenue with bucket breakdown', entityScope: 'jaws' },
-  'pipeline':            { id: 'pipeline',           label: 'Sales Pipeline',        description: 'Open orders, quotes, conversion rate',              entityScope: 'jaws' },
+  'pipeline':            { id: 'pipeline',           label: 'Sales Pipeline',        description: 'MYOB only — open orders, quotes, conversion rate',  entityScope: 'jaws' },
+  'sales-pipeline-combined': { id: 'sales-pipeline-combined', label: 'Pipeline (MYOB + Monday)', description: 'Combined MYOB orders + Monday.com leads & quotes', entityScope: 'jaws' },
+  'sales-funnel':        { id: 'sales-funnel',       label: 'Sales Funnel',          description: 'Leads → Quotes → Won → Orders with conversion %',     entityScope: 'all' },
+  'sales-rep-scorecard': { id: 'sales-rep-scorecard',label: 'Rep Scorecard',         description: 'Per-rep leads, quotes, wins, conversion (Monday.com)',entityScope: 'all' },
   'trend-charts':        { id: 'trend-charts',       label: '6-Month Trends',        description: 'Income and expense trend for last 6 months',        entityScope: 'all' },
   'ai-narrative':        { id: 'ai-narrative',       label: 'AI Commentary',         description: 'Claude writes narrative commentary on the data',    entityScope: 'all' },
 }
@@ -60,7 +66,7 @@ export const DEFAULT_SECTIONS: Record<ReportType, SectionId[]> = {
     'stock-summary', 'stock-reorder', 'stock-dead', 'ai-narrative',
   ],
   'sales-pipeline': [
-    'pipeline', 'top-customers', 'ai-narrative',
+    'sales-pipeline-combined', 'sales-funnel', 'sales-rep-scorecard', 'top-customers', 'ai-narrative',
   ],
 }
 
