@@ -29,6 +29,46 @@ async function mondayQuery(query: string) {
   return data.data
 }
 
+// Fetch all items from a board's items_page by following the cursor.
+// Use this when we need all items (or at least all items in the board up to MAX_PAGES).
+//
+// - initialQuery: GraphQL that returns { boards { items_page { cursor items {...} } } }
+//   Must include `cursor` in the selection set. limit: 500 is the Monday hard max per page.
+// - MAX_PAGES cap: a safety net — boards with 10,000+ items would otherwise exhaust
+//   the Vercel function duration. For quote boards (max ~800 currently), 6 pages is plenty.
+const PAGE_SIZE = 500
+const MAX_PAGES = 10  // 10 × 500 = 5,000 items ceiling per board — generous for current data volumes
+
+async function mondayPaginate(
+  buildInitialQuery: (limit: number) => string,
+  buildNextQuery: (limit: number, cursor: string) => string,
+): Promise<any[]> {
+  const allItems: any[] = []
+
+  // Page 1 — uses items_page with query_params/filters
+  const firstData = await mondayQuery(buildInitialQuery(PAGE_SIZE))
+  const firstPage = firstData?.boards?.[0]?.items_page
+  if (firstPage?.items) allItems.push(...firstPage.items)
+  let cursor: string | null = firstPage?.cursor || null
+
+  // Subsequent pages — use next_items_page with the cursor only
+  // (Monday limits: after the initial page, you can't re-filter; you just follow the cursor)
+  let pagesFetched = 1
+  while (cursor && pagesFetched < MAX_PAGES) {
+    const nextData = await mondayQuery(buildNextQuery(PAGE_SIZE, cursor))
+    const nextPage = nextData?.next_items_page
+    if (!nextPage) break
+    if (nextPage.items) allItems.push(...nextPage.items)
+    cursor = nextPage.cursor || null
+    pagesFetched++
+  }
+  if (cursor && pagesFetched >= MAX_PAGES) {
+    console.warn(`sales: Monday board hit MAX_PAGES (${MAX_PAGES * PAGE_SIZE} items); data may be truncated`)
+  }
+
+  return allItems
+}
+
 async function safe(fn: () => Promise<any>) {
   try { return await fn() } catch(e: any) { console.error('sales:', e.message?.substring(0, 80)); return null }
 }
@@ -52,8 +92,10 @@ function setCache(key: string, data: any) { cache.set(key, { data, timestamp: Da
 
 // ── Quote board stats ────────────────────────────────────────
 async function getQuoteBoardStats(boardId: number) {
-  const data = await mondayQuery(`{ boards(ids: [${boardId}]) { items_page(limit: 500) { items { column_values(ids: ["status", "numeric_mkzcbhz2"]) { id text } } } } }`)
-  const items = data?.boards?.[0]?.items_page?.items || []
+  const items = await mondayPaginate(
+    (limit) => `{ boards(ids: [${boardId}]) { items_page(limit: ${limit}) { cursor items { column_values(ids: ["status", "numeric_mkzcbhz2"]) { id text } } } } }`,
+    (limit, cursor) => `{ next_items_page(limit: ${limit}, cursor: "${cursor}") { cursor items { column_values(ids: ["status", "numeric_mkzcbhz2"]) { id text } } } }`,
+  )
   const stats: Record<string, { count: number; value: number }> = {}
   for (const item of items) {
     const status = item.column_values?.find((c: any) => c.id === 'status')?.text || 'Unknown'
@@ -66,12 +108,19 @@ async function getQuoteBoardStats(boardId: number) {
 }
 
 // ── Active leads from "Quote - Lead" group ───────────────────
+// Paginates within a specific group on the board. The first call targets
+// boards[].groups[].items_page; follow-up calls use next_items_page (the
+// cursor encodes the group filter, so we don't repeat it).
 async function getActiveLeads(board: typeof QUOTE_BOARDS[0]) {
   const cols = `"name", "text_mkzbenay", "status", "numeric_mkzcbhz2", "date4", "${board.qualCol}", "${board.contactCol}"`
-  const data = await mondayQuery(`{
+  const allItems: any[] = []
+
+  // Page 1 — filtered to the Quote-Lead group
+  const firstData = await mondayQuery(`{
     boards(ids: [${board.id}]) {
       groups(ids: ["${LEAD_GROUP_ID}"]) {
-        items_page(limit: 100) {
+        items_page(limit: ${PAGE_SIZE}) {
+          cursor
           items {
             id name url
             column_values(ids: [${cols}]) { id text }
@@ -80,8 +129,29 @@ async function getActiveLeads(board: typeof QUOTE_BOARDS[0]) {
       }
     }
   }`)
-  const items = data?.boards?.[0]?.groups?.[0]?.items_page?.items || []
-  return items.map((item: any) => ({
+  const firstPage = firstData?.boards?.[0]?.groups?.[0]?.items_page
+  if (firstPage?.items) allItems.push(...firstPage.items)
+  let cursor: string | null = firstPage?.cursor || null
+
+  let pagesFetched = 1
+  while (cursor && pagesFetched < MAX_PAGES) {
+    const nextData = await mondayQuery(`{
+      next_items_page(limit: ${PAGE_SIZE}, cursor: "${cursor}") {
+        cursor
+        items {
+          id name url
+          column_values(ids: [${cols}]) { id text }
+        }
+      }
+    }`)
+    const nextPage = nextData?.next_items_page
+    if (!nextPage) break
+    if (nextPage.items) allItems.push(...nextPage.items)
+    cursor = nextPage.cursor || null
+    pagesFetched++
+  }
+
+  return allItems.map((item: any) => ({
     id: item.id,
     name: item.name,
     url: item.url,
@@ -104,8 +174,10 @@ const WORKSHOP_ORDER_STATUSES = [1, 2, 3, 5, 6]
 
 async function getOrdersMonthly(startDate: string, endDate: string) {
   const statusList = WORKSHOP_ORDER_STATUSES.join(',')
-  const data = await mondayQuery(`{ boards(ids: [${ORDERS_BOARD}]) { items_page(limit: 500, query_params: { rules: [{ column_id: "date", compare_value: ["${startDate}", "${endDate}"], operator: between },{ column_id: "status", compare_value: [${statusList}], operator: any_of }], operator: and }) { items { column_values(ids: ["date", "numbers", "color_mks9wfk9"]) { id text } } } } }`)
-  const items = data?.boards?.[0]?.items_page?.items || []
+  const items = await mondayPaginate(
+    (limit) => `{ boards(ids: [${ORDERS_BOARD}]) { items_page(limit: ${limit}, query_params: { rules: [{ column_id: "date", compare_value: ["${startDate}", "${endDate}"], operator: between },{ column_id: "status", compare_value: [${statusList}], operator: any_of }], operator: and }) { cursor items { column_values(ids: ["date", "numbers", "color_mks9wfk9"]) { id text } } } } }`,
+    (limit, cursor) => `{ next_items_page(limit: ${limit}, cursor: "${cursor}") { cursor items { column_values(ids: ["date", "numbers", "color_mks9wfk9"]) { id text } } } }`,
+  )
   const monthly: Record<string, { orders: number; value: number }> = {}
   const byType: Record<string, { count: number; value: number }> = {}
   let totalOrders = 0, totalValue = 0
@@ -132,8 +204,10 @@ const DISTRIBUTOR_ACTIVE_STATUSES = [0, 1, 3, 5]
 
 async function getDistributorBookings(startDate: string, endDate: string) {
   const statusList = DISTRIBUTOR_ACTIVE_STATUSES.join(',')
-  const data = await mondayQuery(`{ boards(ids: [${DIST_BOOKING_BOARD}]) { items_page(limit: 500, query_params: { rules: [{ column_id: "status", compare_value: [${statusList}], operator: any_of }] }) { items { column_values(ids: ["status", "status_1", "date_1", "numbers", "person"]) { id text } } } } }`)
-  const items = data?.boards?.[0]?.items_page?.items || []
+  const items = await mondayPaginate(
+    (limit) => `{ boards(ids: [${DIST_BOOKING_BOARD}]) { items_page(limit: ${limit}, query_params: { rules: [{ column_id: "status", compare_value: [${statusList}], operator: any_of }] }) { cursor items { column_values(ids: ["status", "status_1", "date_1", "numbers", "person"]) { id text } } } } }`,
+    (limit, cursor) => `{ next_items_page(limit: ${limit}, cursor: "${cursor}") { cursor items { column_values(ids: ["status", "status_1", "date_1", "numbers", "person"]) { id text } } } }`,
+  )
   const byDistributor: Record<string, { count: number; value: number }> = {}
   const byStatus: Record<string, { count: number; value: number }> = {}
   const byPerson: Record<string, { count: number; value: number }> = {}
