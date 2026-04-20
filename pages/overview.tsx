@@ -97,8 +97,14 @@ export default function OverviewPage({ user }: { user: { id: string, email: stri
   }, [])
 
   // Load data for all widgets
+  const loadDataAbort = useRef<AbortController | null>(null)
+
   const loadData = useCallback(async (ws: WidgetInstance[], gd: DateRangeKey) => {
     if (ws.length === 0) { setWidgetData({}); return }
+    // Cancel any in-flight request from a previous call
+    loadDataAbort.current?.abort()
+    const ctrl = new AbortController()
+    loadDataAbort.current = ctrl
     setDataLoading(true)
     try {
       const r = await fetch('/api/dashboard/data', {
@@ -107,16 +113,39 @@ export default function OverviewPage({ user }: { user: { id: string, email: stri
           widgets: ws.map(w => ({ id: w.id, type: w.type, config: w.config, dateOverride: w.dateOverride })),
           globalDateRange: { key: gd },
         }),
+        signal: ctrl.signal,
       })
       const d = await r.json()
       if (!r.ok) throw new Error(d.error || 'Data load failed')
       setWidgetData(d.results || {})
-    } catch (e: any) { setError('Data: ' + e.message) }
+    } catch (e: any) {
+      if (e?.name === 'AbortError') return  // expected — a newer fetch superseded
+      setError('Data: ' + (e?.message || e))
+    }
     finally { setDataLoading(false) }
   }, [])
 
   useEffect(() => { loadLayout() }, [loadLayout])
-  useEffect(() => { if (!loading) loadData(widgets, globalDate) }, [widgets, globalDate, loading, loadData])
+
+  // Refetch widget data only when the *content* of widgets changes (types,
+  // configs, count) or global date changes — NOT when just position/size
+  // changes during drag/resize. Otherwise a drag would fire an API call
+  // every mouse-move event.
+  //
+  // We serialise only the fields that affect data output into a stable key.
+  const dataCacheKey = JSON.stringify({
+    gd: globalDate,
+    ws: widgets.map(w => ({
+      id: w.id, type: w.type, config: w.config, dateOverride: w.dateOverride,
+    })),
+  })
+
+  useEffect(() => {
+    if (loading) return
+    if (dragging) return  // skip while user is actively dragging
+    loadData(widgets, globalDate)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dataCacheKey, loading])
 
   async function saveLayout() {
     setError(''); setInfo('')
