@@ -65,8 +65,8 @@ export interface PortalSidebarProps {
   // SSR fallback) all items are shown — server-side route guards are the actual
   // source of truth, this is just UX polish.
   currentUserRole?: UserRole
-  currentUserName?: string
-  currentUserEmail?: string
+  currentUserName?: string | null
+  currentUserEmail?: string | null
 }
 
 export default function PortalSidebar({

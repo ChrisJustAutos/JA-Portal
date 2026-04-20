@@ -7,6 +7,8 @@ import { useRouter } from 'next/router'
 import PortalSidebar from '../lib/PortalSidebar'
 import { requirePageAuth } from '../lib/authServer'
 
+interface PortalUserSSR { id: string; email: string; displayName: string | null; role: 'admin'|'manager'|'sales'|'accountant'|'viewer' }
+
 // ── Types ────────────────────────────────────────────────────
 interface Invoice  { Number:string;Date:string;CustomerName:string;TotalAmount:number;BalanceDueAmount:number;Status:string;InvoiceType?:string }
 interface Customer { CustomerName:string;TotalRevenue:number;InvoiceCount:number }
@@ -545,7 +547,7 @@ Be concise. Use AU currency.`
 // MAIN PORTAL
 // ─────────────────────────────────────────────────────────────
 
-export default function Portal() {
+export default function Portal({ user }: { user: PortalUserSSR }) {
   const router=useRouter()
   const [section,setSection]=useState<Section>('overview')
   const [dash,setDash]=useState<DashData|null>(null)
@@ -903,6 +905,9 @@ export default function Portal() {
           refreshing={refreshing}
           alertCounts={{invoices:openCount, payables:billCount}}
           loading={loading}
+          currentUserRole={user.role}
+          currentUserName={user.displayName}
+          currentUserEmail={user.email}
         />
 
         {/* Main */}

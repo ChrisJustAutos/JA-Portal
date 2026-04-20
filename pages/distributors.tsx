@@ -20,6 +20,8 @@ import { useRouter } from 'next/router'
 import PortalSidebar from '../lib/PortalSidebar'
 import { requirePageAuth } from '../lib/authServer'
 
+interface PortalUserSSR { id: string; email: string; displayName: string | null; role: 'admin'|'manager'|'sales'|'accountant'|'viewer' }
+
 interface LineItem {
   CustomerName: string        // CANONICAL name after alias resolution
   RawCustomerName: string     // Original MYOB name (for debugging)
@@ -71,7 +73,7 @@ const T={bg:'#0d0f12',bg2:'#131519',bg3:'#1a1d23',bg4:'#21252d',border:'rgba(255
 
 type Tab='distributor-sales'|'detailed-sales'|'summary'|'national-pm'|'national-total'
 
-export default function DistributorReport(){
+export default function DistributorReport({ user }: { user: PortalUserSSR }) {
   const router=useRouter()
   const [tab,setTab]=useState<Tab>('summary')  // default to Summary — it's the grouped view
   const [data,setData]=useState<DistData|null>(null)
@@ -318,14 +320,6 @@ export default function DistributorReport(){
           </button>
         ))}
         <div style={{flex:1}}/>
-        <button onClick={()=>router.push('/admin/vin-codes')}
-          style={{padding:'4px 12px',borderRadius:5,border:`1px solid ${T.border2}`,background:'transparent',color:T.blue,fontSize:11,cursor:'pointer',fontFamily:'inherit',marginRight:6}}>
-          ⚙ VIN codes
-        </button>
-        <button onClick={()=>router.push('/admin/groups')}
-          style={{padding:'4px 12px',borderRadius:5,border:`1px solid ${T.border2}`,background:'transparent',color:T.purple,fontSize:11,cursor:'pointer',fontFamily:'inherit'}}>
-          ⚙ Manage groups
-        </button>
       </div>
 
       {dimensionGroups.map(g => {
@@ -371,7 +365,7 @@ export default function DistributorReport(){
             <div style={{fontSize:14,fontWeight:600,color:T.amber}}>Unclassified</div>
             <span style={{fontSize:11,color:T.text3,fontFamily:'monospace'}}>{unclassifiedSummaries.length} distributor{unclassifiedSummaries.length===1?'':'s'} · {fmtFull(unclassifiedSummaries.reduce((s,r)=>s+r.total,0))}</span>
             <div style={{flex:1}}/>
-            <button onClick={()=>router.push('/admin/groups')}
+            <button onClick={()=>router.push('/settings?tab=groups')}
               style={{padding:'3px 10px',borderRadius:4,border:`1px solid ${T.amber}`,background:'transparent',color:T.amber,fontSize:11,cursor:'pointer',fontFamily:'inherit'}}>
               Classify now →
             </button>
@@ -515,7 +509,15 @@ export default function DistributorReport(){
     <div style={{display:'flex',height:'100vh',overflow:'hidden',fontFamily:"'DM Sans',system-ui,sans-serif",color:T.text}}>
       <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet"/>
 
-      <PortalSidebar activeId="distributors" lastRefresh={lastRefresh} onRefresh={()=>load(true)} refreshing={refreshing}/>
+      <PortalSidebar
+        activeId="distributors"
+        lastRefresh={lastRefresh}
+        onRefresh={()=>load(true)}
+        refreshing={refreshing}
+        currentUserRole={user.role}
+        currentUserName={user.displayName}
+        currentUserEmail={user.email}
+      />
 
       <div style={{flex:1,display:'flex',flexDirection:'column',overflow:'hidden',background:T.bg}}>
         <div style={{height:52,background:T.bg2,borderBottom:`1px solid ${T.border}`,display:'flex',alignItems:'center',padding:'0 20px',gap:10,flexShrink:0}}>
