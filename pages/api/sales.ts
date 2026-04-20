@@ -90,6 +90,24 @@ const cache = new Map<string, { data: any; timestamp: number }>()
 function getCached(key: string) { const e = cache.get(key); if (!e) return null; if (Date.now() - e.timestamp > CACHE_TTL) { cache.delete(key); return null }; return e.data }
 function setCache(key: string, data: any) { cache.set(key, { data, timestamp: Date.now() }); if (cache.size > 20) { const k = cache.keys().next().value; if (k) cache.delete(k) } }
 
+// Convert a Monday `created_at` ISO8601 timestamp (always UTC) to its
+// Brisbane-local date (`YYYY-MM-DD`). Brisbane is UTC+10 year-round (QLD
+// does not observe daylight savings), so we shift by +10h before slicing.
+//
+// This matters because Monday's UI displays creation log in the user's
+// local timezone, so an item created at 2026-03-31 22:17 UTC shows as
+// "Apr 1" in the Brisbane-timezoned Monday UI. Comparing against the
+// user-entered date range without adjustment would exclude these
+// "boundary" items incorrectly.
+function createdAtToLocalDate(createdAt: string | null | undefined): string {
+  if (!createdAt) return ''
+  const t = Date.parse(createdAt)
+  if (isNaN(t)) return ''
+  // Shift forward by 10 hours, then take the UTC date of that shifted time
+  const shifted = new Date(t + 10 * 60 * 60 * 1000)
+  return shifted.toISOString().slice(0, 10)
+}
+
 // ── Quote board stats ────────────────────────────────────────
 // Filters items by `created_at` falling within the provided window.
 // `created_at` is the item's system timestamp (when the lead was logged in the
@@ -104,9 +122,9 @@ async function getQuoteBoardStats(boardId: number, startDate: string, endDate: s
   const stats: Record<string, { count: number; value: number }> = {}
   let totalInPeriod = 0
   for (const item of items) {
-    // created_at is an ISO8601 timestamp like "2026-04-14T06:01:45Z" — compare
-    // just the date portion against the window boundaries (inclusive).
-    const createdDate = (item.created_at || '').slice(0, 10)
+    // Filter by Brisbane-local date of the item's creation log (see
+    // `createdAtToLocalDate` helper at top of file).
+    const createdDate = createdAtToLocalDate(item.created_at)
     if (!createdDate || createdDate < startDate || createdDate > endDate) continue
     totalInPeriod++
     const status = item.column_values?.find((c: any) => c.id === 'status')?.text || 'Unknown'
@@ -206,7 +224,7 @@ async function getOrdersMonthly(startDate: string, endDate: string) {
   const byType: Record<string, { count: number; value: number }> = {}
   let totalOrders = 0, totalValue = 0, tracedOrders = 0
   for (const item of items) {
-    const createdDate = (item.created_at || '').slice(0, 10)
+    const createdDate = createdAtToLocalDate(item.created_at)
     if (!createdDate || createdDate < startDate || createdDate > endDate) continue
     const valStr = item.column_values?.find((c: any) => c.id === 'numbers')?.text
     const typeStr = item.column_values?.find((c: any) => c.id === 'color_mks9wfk9')?.text || 'Uncategorised'
@@ -253,7 +271,7 @@ async function getDistributorBookings(startDate: string, endDate: string) {
   for (const item of items) {
     const status = item.column_values?.find((c: any) => c.id === 'status')?.text || 'Unknown'
     const dist = item.column_values?.find((c: any) => c.id === 'status_1')?.text || 'Unknown'
-    const createdDate = (item.created_at || '').slice(0, 10)
+    const createdDate = createdAtToLocalDate(item.created_at)
     const valStr = item.column_values?.find((c: any) => c.id === 'numbers')?.text
     const person = item.column_values?.find((c: any) => c.id === 'person')?.text || 'Unassigned'
     const val = valStr ? parseFloat(valStr.replace(/[,$]/g, '')) : 0
@@ -276,7 +294,7 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
     const startDate = (req.query.startDate as string) || '2025-07-01'
     const endDate = (req.query.endDate as string) || '2026-06-30'
     const forceRefresh = req.query.refresh === 'true'
-    const cacheKey = `sales:v4:${startDate}:${endDate}`
+    const cacheKey = `sales:v5:${startDate}:${endDate}`
     if (!forceRefresh) { const cached = getCached(cacheKey); if (cached) return res.status(200).json(cached) }
 
     const [ordersData, distData, ...rest] = await Promise.all([
