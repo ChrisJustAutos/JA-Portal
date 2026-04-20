@@ -6,7 +6,7 @@
 // lib/permissions.visibleNavSections(). Also includes a Settings nav item
 // visible only to admins. Sign-out calls the new /api/auth/session DELETE.
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useRouter } from 'next/router'
 import { getSupabase } from './supabaseClient'
 import { UserRole, visibleNavSections } from './permissions'
@@ -90,6 +90,23 @@ export default function PortalSidebar({
   const [draggedId, setDraggedId] = useState<string|null>(null)
   const [dragOverId, setDragOverId] = useState<string|null>(null)
 
+  // Mobile-awareness: on narrow viewports (< 768px) render as a slide-over
+  // drawer with a hamburger toggle. Desktop keeps the classic fixed sidebar.
+  const [isMobile, setIsMobile] = useState(false)
+  const [drawerOpen, setDrawerOpen] = useState(false)
+  useEffect(() => {
+    const check = () => setIsMobile(window.innerWidth < 768)
+    check()
+    window.addEventListener('resize', check)
+    return () => window.removeEventListener('resize', check)
+  }, [])
+  // Close drawer when user navigates to a different page
+  useEffect(() => {
+    const close = () => setDrawerOpen(false)
+    router.events.on('routeChangeStart', close)
+    return () => router.events.off('routeChangeStart', close)
+  }, [router])
+
   // Build the base nav, filtering by role if provided
   const baseNav: PortalNavItem[] = (() => {
     if (!currentUserRole) return [...DEFAULT_NAV]
@@ -166,9 +183,10 @@ export default function PortalSidebar({
 
   const dragEnabled = navSort === 'custom'
 
-  return (
+  // The sidebar body (nav + footer) — shared by mobile drawer and desktop panel
+  const sidebarBody = (
     <div style={{
-      width: 220, minWidth: 220,
+      width: isMobile ? 280 : 220, minWidth: isMobile ? 280 : 220,
       background: T.bg2, borderRight: `1px solid ${T.border}`,
       display: 'flex', flexDirection: 'column', height: '100vh', overflowY: 'auto',
       fontFamily: "'DM Sans', system-ui, sans-serif",
@@ -288,4 +306,50 @@ export default function PortalSidebar({
       </div>
     </div>
   )
+
+  // ─── Mobile drawer layout ───
+  // Hamburger button is fixed top-left so it's always reachable, even after
+  // scrolling. Drawer slides in from the left with a dimmed overlay behind it.
+  // Also emits a thin inline spacer so the page header doesn't render under
+  // the hamburger button (since hamburger is position:fixed it contributes
+  // no inline width).
+  if (isMobile) {
+    return (
+      <>
+        {/* Inline spacer — part of the parent flex flow so page content shifts right */}
+        <div style={{width: 50, flexShrink: 0, height: '100vh'}} aria-hidden="true"/>
+        <button
+          aria-label="Open navigation menu"
+          onClick={() => setDrawerOpen(true)}
+          style={{
+            position: 'fixed', top: 10, left: 10, zIndex: 1001,
+            width: 40, height: 40, borderRadius: 8,
+            background: T.bg3, border: `1px solid ${T.border}`, color: T.text,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            cursor: 'pointer', fontSize: 18, padding: 0,
+          }}
+        >☰</button>
+        {drawerOpen && (
+          <>
+            <div
+              onClick={() => setDrawerOpen(false)}
+              style={{
+                position: 'fixed', inset: 0, zIndex: 1002,
+                background: 'rgba(0,0,0,0.55)',
+              }}
+            />
+            <div style={{
+              position: 'fixed', top: 0, left: 0, bottom: 0, zIndex: 1003,
+              boxShadow: '2px 0 24px rgba(0,0,0,0.4)',
+            }}>
+              {sidebarBody}
+            </div>
+          </>
+        )}
+      </>
+    )
+  }
+
+  // ─── Desktop layout ───
+  return sidebarBody
 }

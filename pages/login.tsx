@@ -133,7 +133,12 @@ export default function LoginPage() {
 
   return (
     <>
-      <Head><title>Sign in — Just Autos Portal</title><meta name="robots" content="noindex,nofollow"/></Head>
+      <Head>
+        <title>Sign in — Just Autos Portal</title>
+        <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1"/>
+        <meta name="robots" content="noindex,nofollow"/>
+        <meta name="theme-color" content="#0d0f12"/>
+      </Head>
       <div style={{minHeight:'100vh',background:T.bg,color:T.text,display:'flex',alignItems:'center',justifyContent:'center',fontFamily:"'DM Sans',system-ui,sans-serif",padding:20}}>
         <div style={{width:420,maxWidth:'100%'}}>
           <div style={{display:'flex',alignItems:'center',gap:12,marginBottom:28,justifyContent:'center'}}>
@@ -166,16 +171,16 @@ export default function LoginPage() {
 
                 <form onSubmit={handleBootstrap}>
                   <Field label="Email">
-                    <input type="email" required value={email} onChange={e=>setEmail(e.target.value)} style={inputStyle()} autoFocus/>
+                    <input type="email" required value={email} onChange={e=>setEmail(e.target.value)} style={inputStyle()} autoFocus autoComplete="username" inputMode="email" autoCapitalize="off" spellCheck={false}/>
                   </Field>
                   <Field label="Display name (optional)">
-                    <input type="text" value={displayName} onChange={e=>setDisplayName(e.target.value)} placeholder="e.g. Chris Russell" style={inputStyle()}/>
+                    <input type="text" value={displayName} onChange={e=>setDisplayName(e.target.value)} placeholder="e.g. Chris Russell" style={inputStyle()} autoComplete="name"/>
                   </Field>
                   <Field label="Password">
-                    <input type="password" required minLength={8} value={password} onChange={e=>setPassword(e.target.value)} style={inputStyle()}/>
+                    <input type="password" required minLength={8} value={password} onChange={e=>setPassword(e.target.value)} style={inputStyle()} autoComplete="new-password"/>
                   </Field>
                   <Field label="Confirm password">
-                    <input type="password" required value={password2} onChange={e=>setPassword2(e.target.value)} style={inputStyle()}/>
+                    <input type="password" required value={password2} onChange={e=>setPassword2(e.target.value)} style={inputStyle()} autoComplete="new-password"/>
                   </Field>
 
                   {error && <Alert color={T.red}>{error}</Alert>}
@@ -194,10 +199,10 @@ export default function LoginPage() {
               <form onSubmit={handleLogin}>
                 <div style={{fontSize:18,fontWeight:600,marginBottom:18}}>Sign in</div>
                 <Field label="Email">
-                  <input type="email" required value={email} onChange={e=>setEmail(e.target.value)} style={inputStyle()} autoFocus/>
+                  <input type="email" required value={email} onChange={e=>setEmail(e.target.value)} style={inputStyle()} autoFocus autoComplete="username" inputMode="email" autoCapitalize="off" spellCheck={false}/>
                 </Field>
                 <Field label="Password">
-                  <input type="password" required value={password} onChange={e=>setPassword(e.target.value)} style={inputStyle()}/>
+                  <input type="password" required value={password} onChange={e=>setPassword(e.target.value)} style={inputStyle()} autoComplete="current-password"/>
                 </Field>
 
                 {error && <Alert color={T.red}>{error}</Alert>}
@@ -237,10 +242,12 @@ function Field({label,children}:{label:string;children:React.ReactNode}) {
   </div>
 }
 function inputStyle():React.CSSProperties {
-  return { width:'100%', background:T.bg3, border:`1px solid ${T.border2}`, color:T.text, borderRadius:8, padding:'10px 12px', fontSize:13, outline:'none', fontFamily:'inherit', boxSizing:'border-box' }
+  // font-size must be >=16px to prevent iOS Safari / mobile Chrome from
+  // auto-zooming when the input gains focus.
+  return { width:'100%', background:T.bg3, border:`1px solid ${T.border2}`, color:T.text, borderRadius:8, padding:'12px 14px', fontSize:16, outline:'none', fontFamily:'inherit', boxSizing:'border-box' }
 }
 function btnPrimary(busy:boolean):React.CSSProperties {
-  return { width:'100%', background:busy?T.bg3:T.blue, color:busy?T.text3:'#fff', border:'none', borderRadius:8, padding:'11px 14px', fontSize:13, fontWeight:600, cursor:busy?'wait':'pointer', fontFamily:'inherit', marginTop:4 }
+  return { width:'100%', background:busy?T.bg3:T.blue, color:busy?T.text3:'#fff', border:'none', borderRadius:8, padding:'13px 14px', fontSize:15, fontWeight:600, cursor:busy?'wait':'pointer', fontFamily:'inherit', marginTop:6, WebkitAppearance:'none' as any }
 }
 function Alert({children,color}:{children:React.ReactNode;color:string}) {
   return <div style={{padding:'8px 12px',borderRadius:7,background:`${color}20`,border:`1px solid ${color}40`,color,fontSize:12,marginTop:8,marginBottom:8,lineHeight:1.4}}>{children}</div>
