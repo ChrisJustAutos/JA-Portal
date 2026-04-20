@@ -13,6 +13,7 @@ import {
   type GstDisplay,
   type Theme,
 } from '../../lib/preferences'
+import LogoUpload from './LogoUpload'
 
 const T = {
   bg:'#0d0f12', bg2:'#131519', bg3:'#1a1d23', bg4:'#21252d',
@@ -169,15 +170,14 @@ export default function GeneralTab() {
       {/* ── BRANDING ──────────────────────────────────────────────────── */}
       <SettingsCard title="Branding" description="Customise the look for exported reports and printouts.">
         <Field
-          label="Company logo URL"
-          help="Paste a public URL to a PNG or SVG. Upload support coming soon."
+          label="Company logo"
+          help="Upload a PNG, JPG or SVG. Max 5 MB. Your logo appears in the sidebar and on exported reports."
           saving={saving === 'company_logo_url'}
           saved={savedFlash === 'company_logo_url'}
         >
-          <TextInput
-            value={prefs.company_logo_url || ''}
-            placeholder="https://…"
-            onSave={v => save({ company_logo_url: v || null }, 'company_logo_url')}
+          <LogoUpload
+            onSaveStart={() => setSaving('company_logo_url')}
+            onSaveEnd={() => { setSaving(null); setSavedFlash('company_logo_url'); setTimeout(() => setSavedFlash(null), 1500) }}
           />
         </Field>
       </SettingsCard>

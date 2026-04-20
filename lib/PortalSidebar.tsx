@@ -10,6 +10,7 @@ import { useState } from 'react'
 import { useRouter } from 'next/router'
 import { getSupabase } from './supabaseClient'
 import { UserRole, visibleNavSections } from './permissions'
+import { usePreferences } from './preferences'
 
 // ── Design tokens (kept in sync with portal) ─────────────────
 const T = {
@@ -82,6 +83,7 @@ export default function PortalSidebar({
   currentUserEmail,
 }: PortalSidebarProps) {
   const router = useRouter()
+  const { prefs } = usePreferences()
   const [navSort, setNavSort] = useState<NavSort>('default')
   const [customOrder, setCustomOrder] = useState<string[]>([])
   const [draggedId, setDraggedId] = useState<string|null>(null)
@@ -173,8 +175,26 @@ export default function PortalSidebar({
       {/* Logo block */}
       <div style={{padding:'20px 18px 16px', borderBottom:`1px solid ${T.border}`}}>
         <div style={{display:'flex', alignItems:'center', gap:10, marginBottom:4}}>
-          <div style={{width:30, height:30, borderRadius:8, background:T.blue, display:'flex', alignItems:'center', justifyContent:'center', fontSize:13, fontWeight:600, color:'#fff'}}>JA</div>
+          <div style={{width:30, height:30, borderRadius:8, background:T.blue, display:'flex', alignItems:'center', justifyContent:'center', fontSize:13, fontWeight:600, color:'#fff', flexShrink:0}}>JA</div>
           <div style={{fontSize:14, fontWeight:600, color:T.text}}>Just Autos</div>
+          {prefs.company_logo_url && (
+            <div style={{
+              marginLeft:'auto',
+              width:28, height:28,
+              background:'#fff',
+              borderRadius:4,
+              display:'flex', alignItems:'center', justifyContent:'center',
+              overflow:'hidden',
+              flexShrink:0,
+            }}>
+              <img
+                src={prefs.company_logo_url}
+                alt="Company logo"
+                style={{maxWidth:'100%', maxHeight:'100%', objectFit:'contain'}}
+                onError={(e) => { (e.target as HTMLImageElement).style.display = 'none' }}
+              />
+            </div>
+          )}
         </div>
         <div style={{fontSize:11, color:T.text3, marginLeft:40}}>Management Portal</div>
       </div>
