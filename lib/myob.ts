@@ -39,8 +39,12 @@ const AUTH_URL  = 'https://secure.myob.com/oauth2/account/authorize'
 const TOKEN_URL = 'https://secure.myob.com/oauth2/v1/authorize'
 const API_BASE  = 'https://api.myob.com'
 
-// Scope for AccountRight API — `CompanyFile` is required for all CF-scoped ops
-const SCOPE = 'CompanyFile'
+// Scope for AccountRight Live API. Historically MYOB docs referenced
+// 'CompanyFile' but current apps must use 'la.global' (Live Accounting global)
+// which grants access to all AccountRight Live operations. If a new app
+// in MYOB's portal doesn't have a scope assigned, some tenants need to
+// leave scope empty — fallback handled in buildAuthorizeUrl.
+const SCOPE = 'la.global'
 
 // ── Types ───────────────────────────────────────────────────────────────
 export interface MyobConnection {
