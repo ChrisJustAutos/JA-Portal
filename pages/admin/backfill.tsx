@@ -66,6 +66,7 @@ interface Match {
 
 export default function BackfillPage() {
   const router = useRouter()
+  const isEmbed = router.query.embed === '1'
   const [run, setRun] = useState<Run | null>(null)
   const [matches, setMatches] = useState<Match[]>([])
   const [totalCount, setTotalCount] = useState(0)
@@ -223,8 +224,9 @@ export default function BackfillPage() {
     <>
       <Head><title>Backfill — Orders ↔ Quotes</title><meta name="robots" content="noindex,nofollow"/></Head>
       <div style={{display:'flex',height:'100vh',overflow:'hidden',fontFamily:"'DM Sans',system-ui,sans-serif",color:T.text}}>
-        <PortalSidebar activeId="reports"/>
+        {!isEmbed && <PortalSidebar activeId="reports"/>}
         <div style={{flex:1,display:'flex',flexDirection:'column',overflow:'hidden',background:T.bg}}>
+          {!isEmbed && (
           <div style={{height:52,background:T.bg2,borderBottom:`1px solid ${T.border}`,display:'flex',alignItems:'center',padding:'0 20px',gap:12,flexShrink:0}}>
             <div style={{fontSize:14,fontWeight:600}}>Backfill — Orders ↔ Quotes</div>
             <span style={{fontSize:10,fontFamily:'monospace',padding:'2px 8px',borderRadius:4,background:'rgba(167,139,250,0.12)',color:T.purple,border:'1px solid rgba(167,139,250,0.2)'}}>Admin</span>
@@ -235,6 +237,7 @@ export default function BackfillPage() {
               </span>
             )}
           </div>
+          )}
 
           <div style={{flex:1,overflowY:'auto',padding:20}}>
             {error && <div style={{background:'rgba(240,78,78,0.1)',border:`1px solid ${T.red}40`,borderRadius:8,padding:12,marginBottom:16,color:T.red,fontSize:12}}>{error}</div>}

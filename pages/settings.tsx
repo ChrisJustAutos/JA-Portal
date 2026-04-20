@@ -25,7 +25,7 @@ const T = {
 }
 
 interface PortalUserSSR { id: string; email: string; displayName: string | null; role: UserRole }
-type SettingsTab = 'general'|'groups'|'vin-codes'|'users'|'audit'|'profile'
+type SettingsTab = 'general'|'groups'|'vin-codes'|'backfill'|'users'|'audit'|'profile'
 
 export default function SettingsPage({ user }: { user: PortalUserSSR }) {
   const router = useRouter()
@@ -36,6 +36,7 @@ export default function SettingsPage({ user }: { user: PortalUserSSR }) {
   const initialTab: SettingsTab =
     qTab === 'general' ? 'general' :
     qTab === 'vin-codes' ? 'vin-codes' :
+    qTab === 'backfill' ? 'backfill' :
     qTab === 'users' ? 'users' :
     qTab === 'audit' ? 'audit' :
     qTab === 'profile' ? 'profile' :
@@ -47,6 +48,7 @@ export default function SettingsPage({ user }: { user: PortalUserSSR }) {
     { id: 'general',   label: 'General',            adminOnly: false },
     { id: 'groups',    label: 'Distributor Groups', adminOnly: true },
     { id: 'vin-codes', label: 'VIN Codes',          adminOnly: true },
+    { id: 'backfill',  label: 'Backfill',           adminOnly: true },
     { id: 'users',     label: 'Users',              adminOnly: true },
     { id: 'audit',     label: 'Audit Log',          adminOnly: true },
     { id: 'profile',   label: 'My Profile',         adminOnly: false },
@@ -86,6 +88,7 @@ export default function SettingsPage({ user }: { user: PortalUserSSR }) {
             {tab === 'general'                && <GeneralTab/>}
             {tab === 'groups'    && isAdmin && <GroupsTab/>}
             {tab === 'vin-codes' && isAdmin && <VinCodesTab/>}
+            {tab === 'backfill'  && isAdmin && <BackfillTab/>}
             {tab === 'users'     && isAdmin && <UsersTab currentUser={user}/>}
             {tab === 'audit'     && isAdmin && <AuditTab/>}
             {tab === 'profile'                && <ProfileTab user={user}/>}
@@ -395,6 +398,11 @@ function GroupsTab() {
 function VinCodesTab() {
   return <div style={{background:T.bg2,border:`1px solid ${T.border}`,borderRadius:10,overflow:'hidden',height:'calc(100vh - 200px)',minHeight:600}}>
     <iframe src="/admin/vin-codes?embed=1" style={{width:'100%',height:'100%',border:'none',display:'block'}} title="VIN codes admin"/>
+  </div>
+}
+function BackfillTab() {
+  return <div style={{background:T.bg2,border:`1px solid ${T.border}`,borderRadius:10,overflow:'hidden',height:'calc(100vh - 200px)',minHeight:600}}>
+    <iframe src="/admin/backfill?embed=1" style={{width:'100%',height:'100%',border:'none',display:'block'}} title="Orders ↔ Quotes backfill"/>
   </div>
 }
 
