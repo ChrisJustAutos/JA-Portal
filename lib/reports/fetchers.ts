@@ -781,3 +781,63 @@ export function fetchSalesPipelineCombined(
     },
   }
 }
+
+// ══════════════════════════════════════════════════════════════════════
+// ATTRIBUTION SECTIONS (Connect column aware)
+// ══════════════════════════════════════════════════════════════════════
+// These sections rely on the "Quote Selection" Connect column on Orders
+// (and eventually Dist Booking). They gracefully handle empty/partial
+// backfill by showing linkage completeness prominently.
+
+import type { SalesAttributionData } from './monday-fetcher'
+
+// ── SALES REP SCORECARD V2 ────────────────────────────────────────────
+// Dual-attribution: quote-month AND order-month, plus tracking completeness.
+
+export interface SalesRepScorecardV2Data {
+  attribution: SalesAttributionData | null
+  empty: boolean    // true if no data at all (e.g. API failure)
+}
+
+export function fetchSalesRepScorecardV2(
+  attribution: SalesAttributionData | null,
+): SalesRepScorecardV2Data {
+  return {
+    attribution,
+    empty: attribution == null,
+  }
+}
+
+// ── SALES QUOTE AGING ─────────────────────────────────────────────────
+// Shows how long quotes took to convert into orders.
+
+export interface SalesQuoteAgingData {
+  attribution: SalesAttributionData | null
+  empty: boolean
+}
+
+export function fetchSalesQuoteAging(
+  attribution: SalesAttributionData | null,
+): SalesQuoteAgingData {
+  return {
+    attribution,
+    empty: attribution == null,
+  }
+}
+
+// ── SALES MONTH TREND ─────────────────────────────────────────────────
+// Shows conversion trend across prior months (picks up backfill progress).
+
+export interface SalesMonthTrendData {
+  attribution: SalesAttributionData | null
+  empty: boolean
+}
+
+export function fetchSalesMonthTrend(
+  attribution: SalesAttributionData | null,
+): SalesMonthTrendData {
+  return {
+    attribution,
+    empty: attribution == null,
+  }
+}

@@ -13,14 +13,16 @@ import {
   fetchStockSummary, fetchStockReorder, fetchStockDead,
   fetchDistributorRanking, fetchPipeline, fetchTrendCharts,
   fetchSalesFunnel, fetchSalesRepScorecard, fetchSalesPipelineCombined,
+  fetchSalesRepScorecardV2, fetchSalesQuoteAging, fetchSalesMonthTrend,
 } from '../../../lib/reports/fetchers'
-import { fetchMondaySalesData, type MondaySalesData } from '../../../lib/reports/monday-fetcher'
+import { fetchMondaySalesData, fetchAttributionData, type MondaySalesData, type SalesAttributionData } from '../../../lib/reports/monday-fetcher'
 import { generateSectionInsights, generateOverallNarrative } from '../../../lib/reports/narrative'
 
 export const config = { maxDuration: 300 }
 
 // Which sections need Monday.com data
 const MONDAY_DEPENDENT: SectionId[] = ['sales-pipeline-combined', 'sales-funnel', 'sales-rep-scorecard']
+const ATTRIBUTION_DEPENDENT: SectionId[] = ['sales-rep-scorecard-v2', 'sales-quote-aging', 'sales-month-trend']
 
 // Resolve the effective date range for a section — use sectionOverrides if set
 function resolveRange(cfg: ReportConfig, sid: SectionId) {
@@ -33,7 +35,8 @@ function resolveRange(cfg: ReportConfig, sid: SectionId) {
 
 interface SharedContext {
   monday: MondaySalesData | null
-  myobPipeline: any   // PipelineData from fetchers
+  myobPipeline: any
+  attribution: SalesAttributionData | null
 }
 
 async function fetchSectionData(
@@ -63,6 +66,9 @@ async function fetchSectionData(
     case 'sales-pipeline-combined': return fetchSalesPipelineCombined(shared.monday, shared.myobPipeline)
     case 'sales-funnel':         return await fetchSalesFunnel(shared.monday, shared.myobPipeline, range)
     case 'sales-rep-scorecard':  return fetchSalesRepScorecard(shared.monday)
+    case 'sales-rep-scorecard-v2': return fetchSalesRepScorecardV2(shared.attribution)
+    case 'sales-quote-aging':    return fetchSalesQuoteAging(shared.attribution)
+    case 'sales-month-trend':    return fetchSalesMonthTrend(shared.attribution)
     case 'ai-narrative':         return {} // narrative is injected at the report level
   }
 }
@@ -95,12 +101,18 @@ async function handler(req: NextApiRequest, res: NextApiResponse, user: any) {
   const needsMyobPipeline = requestedSections.some(s =>
     s === 'pipeline' || s === 'sales-pipeline-combined' || s === 'sales-funnel'
   )
+  const needsAttribution = requestedSections.some(s => ATTRIBUTION_DEPENDENT.includes(s))
 
-  const [shared_monday, shared_myobPipeline] = await Promise.all([
+  const [shared_monday, shared_myobPipeline, shared_attribution] = await Promise.all([
     needsMonday ? fetchMondaySalesData(req, cfg.periodStart, cfg.periodEnd).catch(() => null) : Promise.resolve(null),
     needsMyobPipeline ? fetchPipeline().catch(() => null) : Promise.resolve(null),
+    needsAttribution ? fetchAttributionData(req, cfg.periodStart, cfg.periodEnd).catch(() => null) : Promise.resolve(null),
   ])
-  const shared: SharedContext = { monday: shared_monday, myobPipeline: shared_myobPipeline }
+  const shared: SharedContext = {
+    monday: shared_monday,
+    myobPipeline: shared_myobPipeline,
+    attribution: shared_attribution,
+  }
 
   // Fetch all data sections in parallel. If one fails, others still succeed.
   const dataSections = requestedSections.filter(s => s !== 'ai-narrative')

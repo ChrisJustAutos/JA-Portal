@@ -682,6 +682,145 @@ function SalesRepScorecard({ data }: { data: any }) {
   )
 }
 
+// ── Rep Scorecard V2 (Attribution) ─────────────────────────────────────
+function RepScorecardV2({ data }: { data: any }) {
+  const attr = data?.attribution
+  if (!attr) {
+    return <Text style={{ fontSize: 9, color: COLORS.ink3, fontStyle: 'italic' }}>Attribution data unavailable.</Text>
+  }
+  const { linkageCompleteness, repScorecard, teamTotals } = attr
+  const bannerColor = linkageCompleteness.pct >= 80 ? COLORS.green : linkageCompleteness.pct >= 50 ? COLORS.amber : COLORS.red
+  return (
+    <View>
+      <View wrap={false} style={{ padding: 6, backgroundColor: COLORS.bg3, border: `1pt solid ${bannerColor}`, borderRadius: 3, marginBottom: 8 }}>
+        <Text style={{ fontSize: 9, fontWeight: 700, color: COLORS.ink }}>
+          Tracking completeness: {linkageCompleteness.pct}%
+        </Text>
+        <Text style={{ fontSize: 8, color: COLORS.ink2, marginTop: 2 }}>
+          {linkageCompleteness.ordersWithLink} of {linkageCompleteness.ordersInPeriod} orders linked to a quote.
+          {!linkageCompleteness.distBookingConnectEnabled && ' Distributor Booking Connect column not yet added.'}
+        </Text>
+      </View>
+      <View wrap={false} style={styles.tableHeader}>
+        <Text style={[styles.col, { flex: 2 }]}>Rep</Text>
+        <Text style={styles.colNum}>Sent</Text>
+        <Text style={styles.colNum}>Conv</Text>
+        <Text style={styles.colNum}>QM %</Text>
+        <Text style={styles.colNum}>Orders</Text>
+        <Text style={styles.colNum}>Order $</Text>
+        <Text style={styles.colNum}>Prior</Text>
+      </View>
+      {repScorecard.map((r: any, i: number) => (
+        <View key={i} style={[styles.tableRow, i % 2 === 1 ? styles.tableRowAlt : {}]}>
+          <Text style={[styles.col, { flex: 2 }]}>{r.fullName || r.rep}</Text>
+          <Text style={styles.colNum}>{r.quotesSentInPeriod}</Text>
+          <Text style={styles.colNum}>{r.quotesSentConverted}</Text>
+          <Text style={[styles.colNum, { fontWeight: 700, color: r.quoteMonthConversionPct == null ? COLORS.ink3 : r.quoteMonthConversionPct >= 50 ? COLORS.green : r.quoteMonthConversionPct >= 25 ? COLORS.amber : COLORS.red }]}>
+            {r.quoteMonthConversionPct == null ? '—' : `${r.quoteMonthConversionPct}%`}
+          </Text>
+          <Text style={styles.colNum}>{r.ordersLinkedToRep}</Text>
+          <Text style={[styles.colNum, { fontWeight: 700 }]}>{fmt(r.ordersLinkedValue)}</Text>
+          <Text style={styles.colNum}>{r.ordersLinkedFromPriorQuotes}</Text>
+        </View>
+      ))}
+      <View style={styles.tableTotal}>
+        <Text style={[styles.col, { flex: 2, fontWeight: 700 }]}>Team</Text>
+        <Text style={styles.colNum}>{teamTotals.quotesSentInPeriod}</Text>
+        <Text style={styles.colNum}>{teamTotals.quotesSentConverted}</Text>
+        <Text style={[styles.colNum, { fontWeight: 700 }]}>{teamTotals.quoteMonthConversionPct == null ? '—' : `${teamTotals.quoteMonthConversionPct}%`}</Text>
+        <Text style={styles.colNum}>{teamTotals.ordersLinked}</Text>
+        <Text style={[styles.colNum, { fontWeight: 700 }]}>{fmt(teamTotals.ordersLinkedValue)}</Text>
+        <Text style={styles.colNum}></Text>
+      </View>
+      <Text style={{ fontSize: 7.5, color: COLORS.ink3, marginTop: 4 }}>
+        Sent = quotes created this period. Conv = linked to an order. QM % = quote-month conversion. Prior = orders linked to earlier-month quotes.
+      </Text>
+    </View>
+  )
+}
+
+// ── Quote Aging ─────────────────────────────────────────────────────────
+function QuoteAging({ data }: { data: any }) {
+  const attr = data?.attribution
+  if (!attr) {
+    return <Text style={{ fontSize: 9, color: COLORS.ink3, fontStyle: 'italic' }}>Attribution data unavailable.</Text>
+  }
+  const { quoteAging } = attr
+  const buckets = [
+    { label: 'Same month', count: quoteAging.sameMonth.count, value: quoteAging.sameMonth.value, color: COLORS.green },
+    { label: '≤ 30 days ago', count: quoteAging.last30d.count, value: quoteAging.last30d.value, color: COLORS.accent },
+    { label: '31-60 days ago', count: quoteAging.last60d.count, value: quoteAging.last60d.value, color: COLORS.amber },
+    { label: '60+ days ago', count: quoteAging.older.count, value: quoteAging.older.value, color: COLORS.red },
+    { label: 'Unlinked', count: quoteAging.unlinked.count, value: quoteAging.unlinked.value, color: COLORS.ink3 },
+  ]
+  const total = buckets.reduce((s, b) => s + b.count, 0)
+  const totalValue = buckets.reduce((s, b) => s + b.value, 0)
+  return (
+    <View>
+      <Text style={{ fontSize: 8.5, color: COLORS.ink3, marginBottom: 6 }}>
+        For orders placed in period, how old was the originating quote?
+      </Text>
+      <View wrap={false} style={styles.tableHeader}>
+        <Text style={[styles.col, { flex: 3 }]}>Quote age</Text>
+        <Text style={styles.colNum}>Count</Text>
+        <Text style={styles.colNum}>Value</Text>
+        <Text style={styles.colNum}>%</Text>
+      </View>
+      {buckets.map((b, i) => {
+        const pct = total > 0 ? Math.round((b.count / total) * 100) : 0
+        return (
+          <View key={i} style={[styles.tableRow, i % 2 === 1 ? styles.tableRowAlt : {}]}>
+            <Text style={[styles.col, { flex: 3 }]}>
+              <Text style={{ color: b.color }}>■ </Text>{b.label}
+            </Text>
+            <Text style={styles.colNum}>{b.count}</Text>
+            <Text style={styles.colNum}>{fmt(b.value)}</Text>
+            <Text style={[styles.colNum, { fontWeight: 700 }]}>{pct}%</Text>
+          </View>
+        )
+      })}
+      <View style={styles.tableTotal}>
+        <Text style={[styles.col, { flex: 3, fontWeight: 700 }]}>Total</Text>
+        <Text style={[styles.colNum, { fontWeight: 700 }]}>{total}</Text>
+        <Text style={[styles.colNum, { fontWeight: 700 }]}>{fmt(totalValue)}</Text>
+        <Text style={styles.colNum}></Text>
+      </View>
+    </View>
+  )
+}
+
+// ── Month Trend ─────────────────────────────────────────────────────────
+function MonthTrend({ data }: { data: any }) {
+  const attr = data?.attribution
+  if (!attr) {
+    return <Text style={{ fontSize: 9, color: COLORS.ink3, fontStyle: 'italic' }}>Attribution data unavailable.</Text>
+  }
+  const { priorMonths } = attr
+  return (
+    <View>
+      <Text style={{ fontSize: 8.5, color: COLORS.ink3, marginBottom: 6 }}>
+        Quote-month conversion trend across recent months.
+      </Text>
+      <View wrap={false} style={styles.tableHeader}>
+        <Text style={[styles.col, { flex: 2 }]}>Month</Text>
+        <Text style={styles.colNum}>Quotes</Text>
+        <Text style={styles.colNum}>Converted</Text>
+        <Text style={styles.colNum}>Conv %</Text>
+      </View>
+      {priorMonths.map((m: any, i: number) => (
+        <View key={i} style={[styles.tableRow, i % 2 === 1 ? styles.tableRowAlt : {}]}>
+          <Text style={[styles.col, { flex: 2 }]}>{m.label}</Text>
+          <Text style={styles.colNum}>{m.quotesSent}</Text>
+          <Text style={styles.colNum}>{m.quotesConvertedToDate}</Text>
+          <Text style={[styles.colNum, { fontWeight: 700, color: m.conversionPct == null ? COLORS.ink3 : m.conversionPct >= 50 ? COLORS.green : m.conversionPct >= 25 ? COLORS.amber : COLORS.red }]}>
+            {m.conversionPct == null ? '—' : `${m.conversionPct}%`}
+          </Text>
+        </View>
+      ))}
+    </View>
+  )
+}
+
 // ── Section router ─────────────────────────────────────────────────────
 function RenderSection({ section }: { section: GeneratedSection }) {
   if (!section || !section.data || section.data.error) {
@@ -710,6 +849,9 @@ function RenderSection({ section }: { section: GeneratedSection }) {
           case 'sales-pipeline-combined': return <SalesPipelineCombined data={section.data}/>
           case 'sales-funnel':        return <SalesFunnel data={section.data}/>
           case 'sales-rep-scorecard': return <SalesRepScorecard data={section.data}/>
+          case 'sales-rep-scorecard-v2': return <RepScorecardV2 data={section.data}/>
+          case 'sales-quote-aging':   return <QuoteAging data={section.data}/>
+          case 'sales-month-trend':   return <MonthTrend data={section.data}/>
           case 'trend-charts':        return <TrendCharts data={section.data}/>
           default:                    return null
         }

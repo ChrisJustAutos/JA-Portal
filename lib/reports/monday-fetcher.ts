@@ -77,3 +77,80 @@ export async function fetchMondaySalesData(
     return null
   }
 }
+
+// ── Attribution data (Connect-column aware) ─────────────────────────
+
+export interface SalesAttributionData {
+  period: { start: string; end: string }
+  generatedAt: string
+  linkageCompleteness: {
+    ordersInPeriod: number
+    ordersWithLink: number
+    pct: number
+    distBookingConnectEnabled: boolean
+  }
+  repScorecard: Array<{
+    rep: string
+    fullName: string
+    quotesSentInPeriod: number
+    quotesSentValue: number
+    quotesSentConverted: number
+    quoteMonthConversionPct: number | null
+    ordersLinkedToRep: number
+    ordersLinkedValue: number
+    ordersLinkedFromPriorQuotes: number
+    activeLeads: number
+    totalQuotesWonAllTime: number
+    totalQuotesLostAllTime: number
+  }>
+  teamTotals: {
+    quotesSentInPeriod: number
+    quotesSentValue: number
+    quotesSentConverted: number
+    quoteMonthConversionPct: number | null
+    ordersLinked: number
+    ordersLinkedValue: number
+    ordersUnlinked: number
+    ordersUnlinkedValue: number
+    orderMonthAttributionPct: number | null
+  }
+  quoteAging: {
+    sameMonth: { count: number; value: number }
+    last30d: { count: number; value: number }
+    last60d: { count: number; value: number }
+    older: { count: number; value: number }
+    unlinked: { count: number; value: number }
+  }
+  priorMonths: Array<{
+    monthKey: string
+    label: string
+    quotesSent: number
+    quotesConvertedToDate: number
+    conversionPct: number | null
+  }>
+}
+
+// Fetch attribution data via server-to-server call to /api/sales-attribution
+export async function fetchAttributionData(
+  req: IncomingMessage,
+  startDate: string,
+  endDate: string,
+): Promise<SalesAttributionData | null> {
+  const baseUrl = getInternalBaseUrl()
+  const cookie = req.headers.cookie || ''
+  const url = `${baseUrl}/api/sales-attribution?startDate=${startDate}&endDate=${endDate}`
+  try {
+    const res = await fetch(url, {
+      headers: { cookie },
+      cache: 'no-store',
+    })
+    if (!res.ok) {
+      console.error(`Attribution fetch failed: ${res.status}`)
+      return null
+    }
+    return await res.json()
+  } catch (err: any) {
+    console.error('Attribution fetch error:', err.message)
+    return null
+  }
+}

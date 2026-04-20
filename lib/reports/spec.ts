@@ -17,6 +17,9 @@ export type SectionId =
   | 'sales-pipeline-combined'
   | 'sales-funnel'
   | 'sales-rep-scorecard'
+  | 'sales-rep-scorecard-v2'
+  | 'sales-quote-aging'
+  | 'sales-month-trend'
   | 'trend-charts'
   | 'ai-narrative'
 
@@ -42,6 +45,9 @@ export const SECTION_META: Record<SectionId, SectionMeta> = {
   'sales-pipeline-combined': { id: 'sales-pipeline-combined', label: 'Pipeline (MYOB + Monday)', description: 'Combined MYOB orders + Monday.com leads & quotes', entityScope: 'jaws' },
   'sales-funnel':        { id: 'sales-funnel',       label: 'Sales Funnel',          description: 'Leads → Quotes → Won → Orders with conversion %',     entityScope: 'all' },
   'sales-rep-scorecard': { id: 'sales-rep-scorecard',label: 'Rep Scorecard',         description: 'Per-rep leads, quotes, wins, conversion (Monday.com)',entityScope: 'all' },
+  'sales-rep-scorecard-v2': { id: 'sales-rep-scorecard-v2', label: 'Rep Scorecard (Attribution)', description: 'Per-rep quote-month + order-month conversion via Connect column', entityScope: 'all' },
+  'sales-quote-aging':  { id: 'sales-quote-aging',  label: 'Quote Aging',          description: 'Of orders placed in period, how old was the originating quote?', entityScope: 'all' },
+  'sales-month-trend':  { id: 'sales-month-trend',  label: 'Monthly Conversion Trend', description: '6-month rolling view of quote-month conversion rates', entityScope: 'all' },
   'trend-charts':        { id: 'trend-charts',       label: '6-Month Trends',        description: 'Income and expense trend for last 6 months',        entityScope: 'all' },
   'ai-narrative':        { id: 'ai-narrative',       label: 'AI Commentary',         description: 'Claude writes narrative commentary on the data',    entityScope: 'all' },
 }
@@ -66,7 +72,13 @@ export const DEFAULT_SECTIONS: Record<ReportType, SectionId[]> = {
     'stock-summary', 'stock-reorder', 'stock-dead', 'ai-narrative',
   ],
   'sales-pipeline': [
-    'sales-pipeline-combined', 'sales-funnel', 'sales-rep-scorecard', 'top-customers', 'ai-narrative',
+    'sales-pipeline-combined',
+    'sales-funnel',
+    'sales-rep-scorecard-v2',
+    'sales-quote-aging',
+    'sales-month-trend',
+    'top-customers',
+    'ai-narrative',
   ],
 }
 

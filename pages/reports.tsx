@@ -403,6 +403,9 @@ function SectionBody({ section }: { section: any }) {
     case 'sales-pipeline-combined': return <PvSalesPipelineCombined data={section.data}/>
     case 'sales-funnel': return <PvSalesFunnel data={section.data}/>
     case 'sales-rep-scorecard': return <PvSalesRepScorecard data={section.data}/>
+    case 'sales-rep-scorecard-v2': return <PvRepScorecardV2 data={section.data}/>
+    case 'sales-quote-aging': return <PvQuoteAging data={section.data}/>
+    case 'sales-month-trend': return <PvMonthTrend data={section.data}/>
     case 'trend-charts': return <PvTrends data={section.data}/>
     default: return null
   }
@@ -597,6 +600,174 @@ function PvDistributors({ data }: { data: any }) {
         ))}
       </tbody>
     </table>
+  )
+}
+
+function PvRepScorecardV2({ data }: { data: any }) {
+  const attr = data?.attribution
+  if (!attr) {
+    return <div style={{ fontSize: 11, color: '#6b7280', fontStyle: 'italic' }}>
+      Attribution data unavailable — Connect column may not be populated yet, or Monday API was unreachable.
+    </div>
+  }
+  const { linkageCompleteness, repScorecard, teamTotals } = attr
+
+  return (
+    <div>
+      {/* Linkage completeness banner */}
+      <div style={{ padding: '8px 12px', background: linkageCompleteness.pct < 50 ? '#fff7ed' : linkageCompleteness.pct < 80 ? '#fefce8' : '#f0fdf4', border: `1px solid ${linkageCompleteness.pct < 50 ? '#fed7aa' : linkageCompleteness.pct < 80 ? '#fde047' : '#bbf7d0'}`, borderRadius: 4, marginBottom: 10, fontSize: 11 }}>
+        <strong>Tracking completeness: {linkageCompleteness.pct}%</strong>
+        {' '}— {linkageCompleteness.ordersWithLink} of {linkageCompleteness.ordersInPeriod} orders in period are linked to a quote.
+        {linkageCompleteness.pct < 80 && <span style={{ color: '#92400e' }}> Numbers will improve as backfill completes.</span>}
+        {!linkageCompleteness.distBookingConnectEnabled && <span style={{ color: '#6b7280', display: 'block', marginTop: 2, fontSize: 10 }}>Distributor Booking → Quote Connect column not yet added; dist bookings all show as unlinked.</span>}
+      </div>
+
+      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 10.5 }}>
+        <thead>
+          <tr style={{ background: '#f9fafb', borderBottom: '2px solid #1a1d23' }}>
+            <th style={{ ...thS, textAlign: 'left' }} colSpan={1}>Rep</th>
+            <th style={{ ...thS, textAlign: 'center', background: '#dbeafe' }} colSpan={3}>Quote-month view</th>
+            <th style={{ ...thS, textAlign: 'center', background: '#dcfce7' }} colSpan={3}>Order-month view</th>
+          </tr>
+          <tr>
+            <th style={thS}></th>
+            <th style={{ ...thS, textAlign: 'right', background: '#eff6ff' }}>Sent</th>
+            <th style={{ ...thS, textAlign: 'right', background: '#eff6ff' }}>Conv.</th>
+            <th style={{ ...thS, textAlign: 'right', background: '#eff6ff' }}>QM %</th>
+            <th style={{ ...thS, textAlign: 'right', background: '#f0fdf4' }}>Orders</th>
+            <th style={{ ...thS, textAlign: 'right', background: '#f0fdf4' }}>Value</th>
+            <th style={{ ...thS, textAlign: 'right', background: '#f0fdf4' }}>From prior</th>
+          </tr>
+        </thead>
+        <tbody>
+          {repScorecard.map((r: any, i: number) => (
+            <tr key={i}>
+              <td style={tdS}>{r.fullName || r.rep}</td>
+              <td style={{ ...tdS, textAlign: 'right' }}>{r.quotesSentInPeriod}</td>
+              <td style={{ ...tdS, textAlign: 'right' }}>{r.quotesSentConverted}</td>
+              <td style={{ ...tdS, textAlign: 'right', fontWeight: 700, color: r.quoteMonthConversionPct == null ? '#6b7280' : r.quoteMonthConversionPct >= 50 ? '#059669' : r.quoteMonthConversionPct >= 25 ? '#d97706' : '#dc2626' }}>
+                {r.quoteMonthConversionPct == null ? '—' : `${r.quoteMonthConversionPct}%`}
+              </td>
+              <td style={{ ...tdS, textAlign: 'right' }}>{r.ordersLinkedToRep}</td>
+              <td style={{ ...tdS, textAlign: 'right', fontWeight: 700 }}>{fmt(r.ordersLinkedValue)}</td>
+              <td style={{ ...tdS, textAlign: 'right', color: '#6b7280' }}>{r.ordersLinkedFromPriorQuotes}</td>
+            </tr>
+          ))}
+          <tr style={{ borderTop: '2px solid #1a1d23' }}>
+            <td style={{ ...tdS, fontWeight: 700 }}>Team</td>
+            <td style={{ ...tdS, textAlign: 'right', fontWeight: 700 }}>{teamTotals.quotesSentInPeriod}</td>
+            <td style={{ ...tdS, textAlign: 'right', fontWeight: 700 }}>{teamTotals.quotesSentConverted}</td>
+            <td style={{ ...tdS, textAlign: 'right', fontWeight: 700 }}>{teamTotals.quoteMonthConversionPct == null ? '—' : `${teamTotals.quoteMonthConversionPct}%`}</td>
+            <td style={{ ...tdS, textAlign: 'right', fontWeight: 700 }}>{teamTotals.ordersLinked}</td>
+            <td style={{ ...tdS, textAlign: 'right', fontWeight: 700 }}>{fmt(teamTotals.ordersLinkedValue)}</td>
+            <td style={tdS}></td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div style={{ fontSize: 9.5, color: '#6b7280', marginTop: 6, lineHeight: 1.4 }}>
+        <strong>Sent</strong> = quotes created this period · <strong>Conv.</strong> = of those, already linked to an order · <strong>QM %</strong> = quote-month conversion<br/>
+        <strong>Orders</strong> = orders this period linked to this rep's quotes · <strong>From prior</strong> = orders linked to quotes from earlier months
+      </div>
+    </div>
+  )
+}
+
+function PvQuoteAging({ data }: { data: any }) {
+  const attr = data?.attribution
+  if (!attr) {
+    return <div style={{ fontSize: 11, color: '#6b7280', fontStyle: 'italic' }}>Attribution data unavailable.</div>
+  }
+  const { quoteAging } = attr
+  const total = quoteAging.sameMonth.count + quoteAging.last30d.count + quoteAging.last60d.count + quoteAging.older.count + quoteAging.unlinked.count
+  const totalValue = quoteAging.sameMonth.value + quoteAging.last30d.value + quoteAging.last60d.value + quoteAging.older.value + quoteAging.unlinked.value
+
+  const buckets = [
+    { label: 'Same month', count: quoteAging.sameMonth.count, value: quoteAging.sameMonth.value, color: '#059669' },
+    { label: '≤ 30 days ago', count: quoteAging.last30d.count, value: quoteAging.last30d.value, color: '#0284c7' },
+    { label: '31-60 days ago', count: quoteAging.last60d.count, value: quoteAging.last60d.value, color: '#d97706' },
+    { label: '60+ days ago', count: quoteAging.older.count, value: quoteAging.older.value, color: '#dc2626' },
+    { label: 'Unlinked (walk-in or untracked)', count: quoteAging.unlinked.count, value: quoteAging.unlinked.value, color: '#6b7280' },
+  ]
+
+  return (
+    <div>
+      <div style={{ fontSize: 10.5, color: '#6b7280', marginBottom: 8 }}>
+        For each order placed in the period, how old was its originating quote? Answers lead-time questions.
+      </div>
+      <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+        <thead>
+          <tr>
+            <th style={thS}>Quote age at time of order</th>
+            <th style={{ ...thS, textAlign: 'right' }}>Count</th>
+            <th style={{ ...thS, textAlign: 'right' }}>Value</th>
+            <th style={{ ...thS, textAlign: 'right' }}>% of orders</th>
+          </tr>
+        </thead>
+        <tbody>
+          {buckets.map((b, i) => {
+            const pct = total > 0 ? Math.round((b.count / total) * 100) : 0
+            return (
+              <tr key={i}>
+                <td style={tdS}>
+                  <span style={{ display: 'inline-block', width: 8, height: 8, background: b.color, borderRadius: 2, marginRight: 6 }}/>
+                  {b.label}
+                </td>
+                <td style={{ ...tdS, textAlign: 'right' }}>{b.count}</td>
+                <td style={{ ...tdS, textAlign: 'right' }}>{fmt(b.value)}</td>
+                <td style={{ ...tdS, textAlign: 'right', fontWeight: 700 }}>{pct}%</td>
+              </tr>
+            )
+          })}
+          <tr style={{ borderTop: '2px solid #1a1d23' }}>
+            <td style={{ ...tdS, fontWeight: 700 }}>Total</td>
+            <td style={{ ...tdS, textAlign: 'right', fontWeight: 700 }}>{total}</td>
+            <td style={{ ...tdS, textAlign: 'right', fontWeight: 700 }}>{fmt(totalValue)}</td>
+            <td style={tdS}></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
+function PvMonthTrend({ data }: { data: any }) {
+  const attr = data?.attribution
+  if (!attr) {
+    return <div style={{ fontSize: 11, color: '#6b7280', fontStyle: 'italic' }}>Attribution data unavailable.</div>
+  }
+  const { priorMonths } = attr
+  return (
+    <div>
+      <div style={{ fontSize: 10.5, color: '#6b7280', marginBottom: 8 }}>
+        Quote-month conversion trend. Older months should have higher % as quotes had more time to close; recent months may still be maturing.
+      </div>
+      <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+        <thead>
+          <tr>
+            <th style={thS}>Month</th>
+            <th style={{ ...thS, textAlign: 'right' }}>Quotes sent</th>
+            <th style={{ ...thS, textAlign: 'right' }}>Converted (to date)</th>
+            <th style={{ ...thS, textAlign: 'right' }}>Conversion %</th>
+          </tr>
+        </thead>
+        <tbody>
+          {priorMonths.map((m: any, i: number) => (
+            <tr key={i}>
+              <td style={tdS}>{m.label}</td>
+              <td style={{ ...tdS, textAlign: 'right' }}>{m.quotesSent}</td>
+              <td style={{ ...tdS, textAlign: 'right' }}>{m.quotesConvertedToDate}</td>
+              <td style={{ ...tdS, textAlign: 'right', fontWeight: 700, color: m.conversionPct == null ? '#6b7280' : m.conversionPct >= 50 ? '#059669' : m.conversionPct >= 25 ? '#d97706' : '#dc2626' }}>
+                {m.conversionPct == null ? '—' : `${m.conversionPct}%`}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <div style={{ fontSize: 9.5, color: '#6b7280', marginTop: 4, fontStyle: 'italic' }}>
+        Note: This only counts conversions to orders placed within the report period. For a complete multi-month trend, we'd need to broaden the order fetch scope.
+      </div>
+    </div>
   )
 }
 
