@@ -16,6 +16,7 @@ import { ROLE_LABELS, ROLE_DESCRIPTIONS, UserRole, roleHasPermission } from '../
 import { requirePageAuth } from '../lib/authServer'
 import GeneralTab from '../components/settings/GeneralTab'
 import DistributorReportTab from '../components/settings/DistributorReportTab'
+import MyobTab from '../components/settings/MyobTab'
 
 const T = {
   bg:'#0d0f12', bg2:'#131519', bg3:'#1a1d23', bg4:'#21252d',
@@ -26,7 +27,7 @@ const T = {
 }
 
 interface PortalUserSSR { id: string; email: string; displayName: string | null; role: UserRole }
-type SettingsTab = 'general'|'groups'|'vin-codes'|'backfill'|'dist-report'|'users'|'audit'|'profile'
+type SettingsTab = 'general'|'groups'|'vin-codes'|'backfill'|'dist-report'|'myob'|'users'|'audit'|'profile'
 
 export default function SettingsPage({ user }: { user: PortalUserSSR }) {
   const router = useRouter()
@@ -39,6 +40,7 @@ export default function SettingsPage({ user }: { user: PortalUserSSR }) {
     qTab === 'vin-codes' ? 'vin-codes' :
     qTab === 'backfill' ? 'backfill' :
     qTab === 'dist-report' ? 'dist-report' :
+    qTab === 'myob' ? 'myob' :
     qTab === 'users' ? 'users' :
     qTab === 'audit' ? 'audit' :
     qTab === 'profile' ? 'profile' :
@@ -50,6 +52,7 @@ export default function SettingsPage({ user }: { user: PortalUserSSR }) {
     { id: 'general',     label: 'General',            adminOnly: false },
     { id: 'groups',      label: 'Distributor Groups', adminOnly: true },
     { id: 'dist-report', label: 'Distributor Report', adminOnly: true },
+    { id: 'myob',        label: 'MYOB Connection',    adminOnly: true },
     { id: 'vin-codes',   label: 'VIN Codes',          adminOnly: true },
     { id: 'backfill',    label: 'Backfill',           adminOnly: true },
     { id: 'users',       label: 'Users',              adminOnly: true },
@@ -91,6 +94,7 @@ export default function SettingsPage({ user }: { user: PortalUserSSR }) {
             {tab === 'general'                && <GeneralTab/>}
             {tab === 'groups'    && isAdmin && <GroupsTab/>}
             {tab === 'dist-report' && isAdmin && <DistributorReportTab/>}
+            {tab === 'myob'      && isAdmin && <MyobTab/>}
             {tab === 'vin-codes' && isAdmin && <VinCodesTab/>}
             {tab === 'backfill'  && isAdmin && <BackfillTab/>}
             {tab === 'users'     && isAdmin && <UsersTab currentUser={user}/>}
