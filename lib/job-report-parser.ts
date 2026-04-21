@@ -40,9 +40,10 @@ const HEADER_ALIASES: Record<string, string[]> = {
   closed_date:     ['finished date', 'closed', 'closed date', 'date closed', 'completed', 'completed date', 'end date', 'finished'],
   // "job types" (plural) is what Mechanics Desk uses — put it first so it wins.
   job_type:        ['job types', 'job type', 'service type', 'work type', 'service category', 'category', 'type'],
-  // "quoted total" wins over "total" so we get the pre-job estimate rather
-  // than the actual invoiced amount.
-  estimated_total: ['quoted total', 'estimated total', 'estimate total', 'estimated value', 'quote total', 'quote value', 'quoted amount', 'quoted', 'estimate', 'total estimated', 'total value', 'job total', 'invoice total', 'total'],
+  // "total" wins over "quoted total" so forecast picks up the actual dollar
+  // value already set on the job (Mechanics Desk populates Total more often
+  // than Quoted Total). If the export has only Quoted Total, that still works.
+  estimated_total: ['total', 'job total', 'invoice total', 'quoted total', 'estimated total', 'estimate total', 'estimated value', 'quote total', 'quote value', 'quoted amount', 'quoted', 'estimate', 'total estimated', 'total value'],
 }
 
 // Noise tags in Mechanics Desk "Job Types" that we strip when deriving the

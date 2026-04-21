@@ -22,7 +22,11 @@ const T = {
 const DONUT_COLORS = [T.blue, T.teal, T.amber, T.purple, T.green, T.red, '#ff5ac4', '#60a5fa', '#f472b6', '#a3e635']
 
 export async function getServerSideProps(ctx: any) {
-  return requirePageAuth(ctx, 'view:supplier_invoices')
+  // `as any` works around a TS narrowing quirk during Next.js build — the
+  // same pattern/arg compiles fine in supplier-invoices.tsx and job-reports.tsx,
+  // but Next's SWC compiler sometimes fails here at build time. Functionally
+  // identical to passing the literal.
+  return requirePageAuth(ctx, 'view:supplier_invoices' as any)
 }
 
 interface Report { id: string; uploaded_at: string; filename: string | null; row_count: number; notes: string | null }
