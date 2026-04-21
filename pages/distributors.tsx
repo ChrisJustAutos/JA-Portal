@@ -33,6 +33,10 @@ interface LineItem {
   bucket: 'Tuning' | 'Parts' | 'Oil'
   poNumber: string
   invoiceNumber: string
+  // When the "distributor" is the synthetic 'Sundry' roll-up, this holds
+  // the ACTUAL customer from MYOB (so drill-down shows "Vito Media" not
+  // just "Sundry"). null for real distributors.
+  sundryCustomer: string | null
 }
 interface DistData {
   fetchedAt: string
@@ -220,6 +224,7 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
             bucket: li.bucket,
             poNumber: li.poNumber || '',
             invoiceNumber: li.invoiceNumber || '',
+            sundryCustomer: li.sundryCustomer || null,
           }
         })
       )
@@ -288,7 +293,12 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
   const dimensionGroups = grouping ? grouping.groups.filter(g => g.dimension === primaryDimension && g.name !== 'Excluded').sort((a,b)=>a.sort_order-b.sort_order) : []
   const summariesByGroup: Record<string, DS[]> = {}
   const unclassifiedSummaries: DS[] = []
+  const sundrySummaries: DS[] = []
   distSummaries.forEach(d => {
+    // Synthetic 'Sundry' distributor from the backend — render in its own
+    // group regardless of the grouping dimension, so it's visible but
+    // clearly separated from real distributor categories.
+    if (d.name === 'Sundry') { sundrySummaries.push(d); return }
     const groupName = primaryDimension === 'type' ? d.typeGroup : primaryDimension === 'region' ? d.regionGroup : groupNameFor(d.name, primaryDimension)
     if (!groupName) {
       unclassifiedSummaries.push(d)
@@ -510,6 +520,44 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
           </table>
         </div>
       )}
+
+      {sundrySummaries.length > 0 && (() => {
+        // There's only ever one synthetic 'Sundry' row (the backend rolled
+        // every Sundry-tagged customer into it). Drill-down shows lines
+        // with their real customer names via sundryCustomer.
+        const d = sundrySummaries[0]
+        return (
+        <div style={{background:T.bg2,border:`1px solid ${T.amber}40`,borderRadius:10,overflowX:'auto'}}>
+          <div style={{padding:'14px 16px',borderBottom:`1px solid ${T.amber}40`,display:'flex',alignItems:'center',gap:10}}>
+            <div style={{width:10,height:10,borderRadius:3,background:T.amber,flexShrink:0}}/>
+            <div style={{fontSize:14,fontWeight:600,color:T.amber}}>Sundry</div>
+            <span style={{fontSize:11,color:T.text3,fontFamily:'monospace'}}>{fmtFull(d.total)} · retail, trade-in and other non-distributor sales</span>
+          </div>
+          <table style={{width:'100%',borderCollapse:'collapse'}}>
+            <thead><tr style={{borderBottom:`1px solid ${T.border}`}}>
+              <th style={{fontSize:11,color:T.text3,padding:'10px 12px',textAlign:'left',fontWeight:500}}>Category</th>
+              <th style={{fontSize:11,color:T.text3,padding:'10px 12px',textAlign:'right',fontWeight:500}}>Oil</th>
+              <th style={{fontSize:11,color:T.text3,padding:'10px 12px',textAlign:'right',fontWeight:500}}>Parts</th>
+              <th style={{fontSize:11,color:T.text3,padding:'10px 12px',textAlign:'right',fontWeight:500}}>Tuning</th>
+              <th style={{fontSize:11,color:T.text3,padding:'10px 12px',textAlign:'right',fontWeight:500}}>Total</th>
+            </tr></thead>
+            <tbody>
+              <tr className="dist-row" style={{borderTop:`1px solid ${T.border}`}}>
+                <td style={{fontSize:12,color:T.text2,padding:'8px 12px'}}>Sundry</td>
+                <td style={{fontSize:12,fontFamily:'monospace',color:d.oil>0?T.text:T.text3,padding:'8px 12px',textAlign:'right',cursor:d.oil>0?'pointer':'default',textDecoration:d.oil>0?'underline dotted rgba(255,255,255,0.15)':'none'}}
+                    onClick={d.oil>0?()=>setDrill({title:'Sundry — Oil',subtitle:`${fmtFull(d.oil)} ex-GST`,filter:l=>l.CustomerName==='Sundry' && l.bucket==='Oil'}):undefined}>{d.oil>0?fmtFull(d.oil):'$0'}</td>
+                <td style={{fontSize:12,fontFamily:'monospace',color:d.parts>0?T.text:T.text3,padding:'8px 12px',textAlign:'right',cursor:d.parts>0?'pointer':'default',textDecoration:d.parts>0?'underline dotted rgba(255,255,255,0.15)':'none'}}
+                    onClick={d.parts>0?()=>setDrill({title:'Sundry — Parts',subtitle:`${fmtFull(d.parts)} ex-GST`,filter:l=>l.CustomerName==='Sundry' && l.bucket==='Parts'}):undefined}>{d.parts>0?fmtFull(d.parts):'$0'}</td>
+                <td style={{fontSize:12,fontFamily:'monospace',color:d.tuning>0?T.green:T.text3,padding:'8px 12px',textAlign:'right',cursor:d.tuning>0?'pointer':'default',textDecoration:d.tuning>0?'underline dotted rgba(52,199,123,0.3)':'none'}}
+                    onClick={d.tuning>0?()=>setDrill({title:'Sundry — Tuning',subtitle:`${fmtFull(d.tuning)} ex-GST`,filter:l=>l.CustomerName==='Sundry' && l.bucket==='Tuning'}):undefined}>{d.tuning>0?fmtFull(d.tuning):'$0'}</td>
+                <td style={{fontSize:12,fontFamily:'monospace',fontWeight:500,color:T.blue,padding:'8px 12px',textAlign:'right',cursor:'pointer',textDecoration:'underline dotted rgba(79,142,247,0.3)'}}
+                    onClick={()=>setDrill({title:'Sundry — All revenue',subtitle:`${fmtFull(d.total)} ex-GST · ${new Set((data?.lineItems||[]).filter(l=>l.CustomerName==='Sundry').map(l=>l.sundryCustomer)).size} customers`,filter:l=>l.CustomerName==='Sundry'})}>{fmtFull(d.total)}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        )
+      })()}
     </div>
   }
 
@@ -731,13 +779,17 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
     {/* Drill-down modal — shows every line item matching the filter, grouped by invoice */}
     {drill && (() => {
       const matching = (data?.lineItems || []).filter(drill.filter)
-      // Group by invoice number
+      // Group by invoice number. When a line belongs to the synthetic
+      // 'Sundry' roll-up, show the REAL customer (from sundryCustomer) in
+      // the invoice header — otherwise every Sundry invoice would just say
+      // "Sundry" which is useless.
       const byInvoice = new Map<string, { invoiceNumber: string; customer: string; date: string; lines: LineItem[]; total: number }>()
       for (const l of matching) {
         const k = l.invoiceNumber || '(no invoice #)'
+        const displayCustomer = l.sundryCustomer || l.CustomerName
         let grp = byInvoice.get(k)
         if (!grp) {
-          grp = { invoiceNumber: k, customer: l.CustomerName, date: l.Date, lines: [], total: 0 }
+          grp = { invoiceNumber: k, customer: displayCustomer, date: l.Date, lines: [], total: 0 }
           byInvoice.set(k, grp)
         }
         grp.lines.push(l)

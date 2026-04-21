@@ -18,16 +18,24 @@ const LEGACY_CATEGORIES = [
   { name: 'Parts',  sort_order: 2, account_codes: ['4-1000','4-1401','4-1602','4-1701','4-1802','4-1803','4-1805','4-1807','4-1811','4-1813','4-1814','4-1821','4-1861'] },
   { name: 'Oil',    sort_order: 3, account_codes: ['4-1060'] },
 ]
-const LEGACY_EXCLUDED = [
-  'vps','vehicle performance solutions t/a just autos',
-  'duncan scott','kent dalton','wade kelly','mark cooper','sean poiani',
-  'allsorts mechanical','hd automotive','mccormacks 4wd','vito media',
-  'michael scalzo','macpherson witham','mark naidoo','anthony barraball',
+// Legacy fallback for when the DB config isn't reachable. Note field
+// mirrors what's stored in distributor_report_excluded_customers so the
+// Sundry-vs-hidden distinction still works offline.
+const LEGACY_EXCLUDED: Array<[string, string]> = [
+  ['vps', 'Internal'],
+  ['vehicle performance solutions t/a just autos', 'Internal'],
+  ['duncan scott', 'Staff'], ['kent dalton', 'Staff'], ['wade kelly', 'Staff'],
+  ['mark cooper', 'Staff'], ['sean poiani', 'Staff'], ['michael scalzo', 'Staff'],
+  ['mark naidoo', 'Staff'], ['anthony barraball', 'Staff'],
+  ['allsorts mechanical', 'Sundry'], ['hd automotive', 'Sundry'],
+  ['mccormacks 4wd', 'Sundry'], ['vito media', 'Sundry'],
+  ['macpherson witham', 'Sundry'],
 ]
+const LEGACY_EXCLUDED_MAP = new Map<string, string>(LEGACY_EXCLUDED)
 
 interface LoadedConfig {
   categories: Array<{ name: string; sort_order: number; account_codes: string[] }>
-  excluded: Set<string>
+  excluded: Map<string, string>   // name (lowercase) -> note (e.g. "Sundry", "Staff", "Internal")
   source: 'db' | 'fallback'
 }
 
@@ -39,7 +47,7 @@ async function loadConfig(): Promise<LoadedConfig> {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY
   if (!url || !key) {
-    const cfg: LoadedConfig = { categories: LEGACY_CATEGORIES, excluded: new Set(LEGACY_EXCLUDED), source: 'fallback' }
+    const cfg: LoadedConfig = { categories: LEGACY_CATEGORIES, excluded: LEGACY_EXCLUDED_MAP, source: 'fallback' }
     _cfgCache = { cfg, at: Date.now() }
     return cfg
   }
@@ -47,18 +55,26 @@ async function loadConfig(): Promise<LoadedConfig> {
     const sb = createClient(url, key, { auth: { persistSession: false } })
     const [catsRes, exRes] = await Promise.all([
       sb.from('distributor_report_categories').select('name, sort_order, account_codes').order('sort_order'),
-      sb.from('distributor_report_excluded_customers').select('customer_name'),
+      sb.from('distributor_report_excluded_customers').select('customer_name, note'),
     ])
     const cats = (catsRes.data || []).map((r: any) => ({
       name: String(r.name),
       sort_order: Number(r.sort_order) || 0,
       account_codes: Array.isArray(r.account_codes) ? r.account_codes.map(String) : [],
     }))
-    const excluded = new Set((exRes.data || []).map((r: any) => String(r.customer_name).toLowerCase()))
+    // Build Map of lowercased customer → note. Default note to 'Other' so we
+    // can still distinguish Sundry from everything else even if the DB note
+    // column is blank for older rows.
+    const excluded = new Map<string, string>()
+    for (const r of (exRes.data || []) as any[]) {
+      const name = String(r.customer_name || '').toLowerCase()
+      if (!name) continue
+      excluded.set(name, String(r.note || 'Other'))
+    }
     if (cats.length === 0) {
       const cfg: LoadedConfig = {
         categories: LEGACY_CATEGORIES,
-        excluded: excluded.size > 0 ? excluded : new Set(LEGACY_EXCLUDED),
+        excluded: excluded.size > 0 ? excluded : LEGACY_EXCLUDED_MAP,
         source: 'fallback',
       }
       _cfgCache = { cfg, at: Date.now() }
@@ -69,7 +85,7 @@ async function loadConfig(): Promise<LoadedConfig> {
     return cfg
   } catch (e: any) {
     console.error('distributors: config load failed, using fallback —', e?.message)
-    const cfg: LoadedConfig = { categories: LEGACY_CATEGORIES, excluded: new Set(LEGACY_EXCLUDED), source: 'fallback' }
+    const cfg: LoadedConfig = { categories: LEGACY_CATEGORIES, excluded: LEGACY_EXCLUDED_MAP, source: 'fallback' }
     _cfgCache = { cfg, at: Date.now() }
     return cfg
   }
@@ -133,30 +149,45 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
         const inv = invById.get(line.SaleInvoiceId)
         if (!inv) continue
         const raw: string = String(inv.CustomerName || '')
-        if (EXCLUDED.has(raw.toLowerCase())) continue
+        // Check exclusion status. Sundry customers PASS THROUGH and are
+        // rolled into a dedicated 'Sundry' bucket; everything else excluded
+        // (Staff, Internal) is dropped entirely.
+        const noteRaw  = EXCLUDED.get(raw.toLowerCase())
         const base = raw.replace(/\s*\(Tuning 2\)\s*$/i,'').replace(/\s*\(Tuning 1\)\s*$/i,'').replace(/\s*\(Tuning\)\s*$/i,'').trim()
-        if (!base || EXCLUDED.has(base.toLowerCase())) continue
+        const noteBase = EXCLUDED.get(base.toLowerCase())
+        const note = noteRaw || noteBase || null
+        if (note && note !== 'Sundry') continue   // drop Staff/Internal/Other
+        if (!base) continue
+
         const acc: string = line.AccountDisplayID || ''
         const cat = accToCat.get(acc)
         if (!cat) continue
         const total = Number(line.Total) || 0
         const amt = lineExGst(total, inv.IsTaxInclusive, line.TaxCodeCode)
-        if (!byDist.has(base)) {
-          byDist.set(base, {
-            customerBase: base,
-            location: INTL.has(base.toLowerCase()) ? 'International' : 'National',
+
+        // Sundry customers all aggregate under a single synthetic distributor
+        // so they render as one row in the Sundry group, but we preserve the
+        // real customer name on each line item for drill-down display.
+        const isSundry = note === 'Sundry'
+        const distKey = isSundry ? '__SUNDRY__' : base
+        if (!byDist.has(distKey)) {
+          byDist.set(distKey, {
+            customerBase: isSundry ? 'Sundry' : base,
+            location: isSundry ? 'Sundry' : (INTL.has(base.toLowerCase()) ? 'International' : 'National'),
+            isSundry,
             byCategory: {} as Record<string, number>,
             invoiceIds: new Set<string>(),
             lineItems: [] as any[],
           })
         }
-        const agg = byDist.get(base)
+        const agg = byDist.get(distKey)
         agg.byCategory[cat] = (agg.byCategory[cat] || 0) + amt
         agg.invoiceIds.add(inv.ID)
         agg.lineItems.push({
           date: inv.Date, invoiceNumber: inv.Number, description: line.Description || '',
           amountExGst: amt, bucket: cat, category: cat, accountCode: acc,
           poNumber: inv.CustomerPurchaseOrderNumber || '',
+          sundryCustomer: isSundry ? base : null,  // real customer when rolled into Sundry
         })
       }
 
@@ -170,6 +201,7 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
         const streamsWithValue = Object.values(rounded).filter(v => v > 0).length
         return {
           customerBase: d.customerBase, location: d.location,
+          isSundry: !!d.isSundry,
           tuning, parts, oil,
           byCategory: rounded,
           total: Math.round(total * 100) / 100,
