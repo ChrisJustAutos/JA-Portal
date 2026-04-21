@@ -136,7 +136,7 @@ export default function PortalSidebar({
       return
     }
     if (onSectionClick) onSectionClick(item.section!)
-    else router.push(`/?s=${item.section}`)
+    else router.push(`/dashboard?s=${item.section}`)
   }
 
   // Drag handlers

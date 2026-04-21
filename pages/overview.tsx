@@ -1,17 +1,13 @@
 // pages/overview.tsx
-// Custom dashboard — per-user widget grid. Uses a 12-column grid with each
-// row ~60px tall. Widgets have x/y (column/row) and w/h (width in cols, height
-// in row units). Edit mode shows drag handles + resize corners + widget menu.
-//
-// Data fetched once for the full layout via /api/dashboard/data, so adding
-// many widgets doesn't explode request count.
+// Custom dashboard with named layouts. 12-col grid, drag/resize in edit mode,
+// per-user persistence, multiple saved layouts with one marked active.
 
 import { useState, useEffect, useCallback, useRef } from 'react'
 import Head from 'next/head'
 import PortalSidebar from '../lib/PortalSidebar'
 import { requirePageAuth } from '../lib/authServer'
 import { UserRole } from '../lib/permissions'
-import { WIDGETS, getWidgetDef, defaultConfigFor, DateRangeKey, DATE_RANGE_OPTIONS } from '../lib/dashboard/catalog'
+import { getWidgetDef, defaultConfigFor, DateRangeKey, DATE_RANGE_OPTIONS } from '../lib/dashboard/catalog'
 import { RENDERERS } from '../components/dashboard/WidgetRenderers'
 import WidgetConfigPanel from '../components/dashboard/WidgetConfigPanel'
 import WidgetCatalogPicker from '../components/dashboard/WidgetCatalogPicker'
@@ -26,8 +22,8 @@ const T = {
 }
 
 const GRID_COLS = 12
-const ROW_HEIGHT = 80           // px per row unit
-const GAP = 12                  // px gap between widgets
+const ROW_HEIGHT = 80
+const GAP = 12
 
 export async function getServerSideProps(ctx: any) {
   return requirePageAuth(ctx, 'view:overview')
@@ -44,13 +40,16 @@ interface WidgetInstance {
   dateOverride?: { range: DateRangeKey, from?: string, to?: string }
 }
 
-function newId(): string {
-  return 'w_' + Math.random().toString(36).substring(2, 10)
+interface SavedLayoutMeta {
+  id: string
+  name: string
+  is_active: boolean
+  updated_at: string
 }
 
-// Find an empty spot on the grid for a new widget of given w/h.
+function newId(): string { return 'w_' + Math.random().toString(36).substring(2, 10) }
+
 function findSpot(widgets: WidgetInstance[], w: number, h: number): { x: number, y: number } {
-  // Scan rows until we find a gap big enough
   for (let y = 0; y < 100; y++) {
     for (let x = 0; x <= GRID_COLS - w; x++) {
       const overlaps = widgets.some(wi =>
@@ -71,37 +70,50 @@ export default function OverviewPage({ user }: { user: { id: string, email: stri
   const [widgetData, setWidgetData] = useState<Record<string, any>>({})
   const [dataLoading, setDataLoading] = useState(false)
   const [isDefault, setIsDefault] = useState(false)
+
+  // Named layout state
+  const [currentLayoutId, setCurrentLayoutId] = useState<string | null>(null)
+  const [currentLayoutName, setCurrentLayoutName] = useState<string>('Default')
+  const [savedLayouts, setSavedLayouts] = useState<SavedLayoutMeta[]>([])
+  const [layoutsMenuOpen, setLayoutsMenuOpen] = useState(false)
+  const [saveAsOpen, setSaveAsOpen] = useState(false)
+  const [saveAsName, setSaveAsName] = useState('')
+  const [renameForId, setRenameForId] = useState<string | null>(null)
+  const [renameValue, setRenameValue] = useState('')
+
   const [editMode, setEditMode] = useState(false)
   const [dirty, setDirty] = useState(false)
-
-  // Modals
-  const [configFor, setConfigFor] = useState<string | null>(null)  // widget id being configured
+  const [configFor, setConfigFor] = useState<string | null>(null)
   const [catalogOpen, setCatalogOpen] = useState(false)
 
-  // Drag/resize state
   const [dragging, setDragging] = useState<{ id: string, mode: 'move'|'resize', startX: number, startY: number, origW: WidgetInstance } | null>(null)
   const gridRef = useRef<HTMLDivElement>(null)
+  const loadDataAbort = useRef<AbortController | null>(null)
 
-  // Load layout
   const loadLayout = useCallback(async () => {
     setLoading(true); setError('')
     try {
-      const r = await fetch('/api/dashboard/layout?key=overview')
-      const d = await r.json()
-      if (!r.ok) throw new Error(d.error || 'Load failed')
-      setWidgets((d.widgets || []).map((w: any) => ({ ...w, config: w.config || {} })))
-      setGlobalDate((d.global_date_range || 'today') as DateRangeKey)
-      setIsDefault(d.is_default)
+      const [activeRes, listRes] = await Promise.all([
+        fetch('/api/dashboard/layout?key=overview'),
+        fetch('/api/dashboard/layout?key=overview&list=1'),
+      ])
+      const active = await activeRes.json()
+      const list = await listRes.json()
+      if (!activeRes.ok) throw new Error(active.error || 'Load failed')
+      if (!listRes.ok)   throw new Error(list.error   || 'List failed')
+
+      setWidgets((active.widgets || []).map((w: any) => ({ ...w, config: w.config || {} })))
+      setGlobalDate((active.global_date_range || 'today') as DateRangeKey)
+      setIsDefault(!!active.is_default)
+      setCurrentLayoutId(active.id || null)
+      setCurrentLayoutName(active.name || 'Default')
+      setSavedLayouts(list.layouts || [])
     } catch (e: any) { setError(e.message) }
     finally { setLoading(false) }
   }, [])
 
-  // Load data for all widgets
-  const loadDataAbort = useRef<AbortController | null>(null)
-
   const loadData = useCallback(async (ws: WidgetInstance[], gd: DateRangeKey) => {
     if (ws.length === 0) { setWidgetData({}); return }
-    // Cancel any in-flight request from a previous call
     loadDataAbort.current?.abort()
     const ctrl = new AbortController()
     loadDataAbort.current = ctrl
@@ -119,7 +131,7 @@ export default function OverviewPage({ user }: { user: { id: string, email: stri
       if (!r.ok) throw new Error(d.error || 'Data load failed')
       setWidgetData(d.results || {})
     } catch (e: any) {
-      if (e?.name === 'AbortError') return  // expected — a newer fetch superseded
+      if (e?.name === 'AbortError') return
       setError('Data: ' + (e?.message || e))
     }
     finally { setDataLoading(false) }
@@ -127,49 +139,119 @@ export default function OverviewPage({ user }: { user: { id: string, email: stri
 
   useEffect(() => { loadLayout() }, [loadLayout])
 
-  // Refetch widget data only when the *content* of widgets changes (types,
-  // configs, count) or global date changes — NOT when just position/size
-  // changes during drag/resize. Otherwise a drag would fire an API call
-  // every mouse-move event.
-  //
-  // We serialise only the fields that affect data output into a stable key.
   const dataCacheKey = JSON.stringify({
     gd: globalDate,
-    ws: widgets.map(w => ({
-      id: w.id, type: w.type, config: w.config, dateOverride: w.dateOverride,
-    })),
+    ws: widgets.map(w => ({ id: w.id, type: w.type, config: w.config, dateOverride: w.dateOverride })),
   })
-
   useEffect(() => {
     if (loading) return
-    if (dragging) return  // skip while user is actively dragging
+    if (dragging) return
     loadData(widgets, globalDate)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dataCacheKey, loading])
 
-  async function saveLayout() {
+  async function saveCurrent() {
     setError(''); setInfo('')
+    if (!currentLayoutId) {
+      // Viewing default — prompt for name via Save As flow
+      setSaveAsName(currentLayoutName === 'Default' ? 'My dashboard' : currentLayoutName)
+      setSaveAsOpen(true)
+      return
+    }
     try {
       const r = await fetch('/api/dashboard/layout?key=overview', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ widgets, global_date_range: globalDate }),
+        body: JSON.stringify({
+          id: currentLayoutId,
+          widgets,
+          global_date_range: globalDate,
+        }),
       })
       if (!r.ok) throw new Error((await r.json()).error || 'Save failed')
-      setInfo('Layout saved')
+      setInfo(`Saved "${currentLayoutName}"`)
       setDirty(false)
-      setIsDefault(false)
+      await loadLayout()
       setTimeout(() => setInfo(''), 2500)
     } catch (e: any) { setError(e.message) }
   }
 
-  async function resetLayout() {
-    if (!confirm('Reset to default layout? Your customisations will be lost.')) return
+  async function saveAs(name: string) {
+    setError(''); setInfo('')
+    const clean = name.trim()
+    if (!clean) { setError('Name required'); return }
+    try {
+      const r = await fetch('/api/dashboard/layout?key=overview', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: clean, widgets,
+          global_date_range: globalDate,
+          activate: true,
+        }),
+      })
+      const d = await r.json()
+      if (!r.ok) throw new Error(d.error || 'Save failed')
+      setInfo(`Saved as "${clean}"`)
+      setSaveAsOpen(false)
+      setSaveAsName('')
+      setDirty(false)
+      setIsDefault(false)
+      await loadLayout()
+      setTimeout(() => setInfo(''), 2500)
+    } catch (e: any) { setError(e.message) }
+  }
+
+  async function switchLayout(id: string) {
+    if (dirty && !confirm('Discard unsaved changes and switch layout?')) return
+    setLayoutsMenuOpen(false)
+    setError(''); setInfo('')
+    try {
+      const r = await fetch('/api/dashboard/layout?key=overview&action=activate', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id }),
+      })
+      if (!r.ok) throw new Error((await r.json()).error || 'Switch failed')
+      setDirty(false)
+      await loadLayout()
+    } catch (e: any) { setError(e.message) }
+  }
+
+  async function renameLayout(id: string, name: string) {
+    const clean = name.trim()
+    if (!clean) return
+    try {
+      const r = await fetch('/api/dashboard/layout?key=overview&action=rename', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id, name: clean }),
+      })
+      if (!r.ok) throw new Error((await r.json()).error || 'Rename failed')
+      setRenameForId(null)
+      setRenameValue('')
+      await loadLayout()
+    } catch (e: any) { setError(e.message) }
+  }
+
+  async function deleteLayout(id: string, name: string) {
+    if (!confirm(`Delete layout "${name}"? This cannot be undone.`)) return
+    try {
+      const r = await fetch(`/api/dashboard/layout?key=overview&id=${id}`, { method: 'DELETE' })
+      if (!r.ok) throw new Error((await r.json()).error || 'Delete failed')
+      setLayoutsMenuOpen(false)
+      setInfo(`Deleted "${name}"`)
+      await loadLayout()
+      setTimeout(() => setInfo(''), 2500)
+    } catch (e: any) { setError(e.message) }
+  }
+
+  async function resetToDefault() {
+    if (!confirm('Delete ALL your saved layouts and revert to the shared default? This cannot be undone.')) return
     try {
       const r = await fetch('/api/dashboard/layout?key=overview', { method: 'DELETE' })
       if (!r.ok) throw new Error((await r.json()).error || 'Reset failed')
-      await loadLayout()
+      setLayoutsMenuOpen(false)
       setInfo('Reset to default')
       setDirty(false)
+      await loadLayout()
+      setTimeout(() => setInfo(''), 2500)
     } catch (e: any) { setError(e.message) }
   }
 
@@ -178,16 +260,11 @@ export default function OverviewPage({ user }: { user: { id: string, email: stri
     if (!def) return
     const size = def.defaultSize
     const { x, y } = findSpot(widgets, size.w, size.h)
-    const w: WidgetInstance = {
-      id: newId(),
-      type,
-      x, y, w: size.w, h: size.h,
-      config: defaultConfigFor(type),
-    }
+    const w: WidgetInstance = { id: newId(), type, x, y, w: size.w, h: size.h, config: defaultConfigFor(type) }
     setWidgets(ws => [...ws, w])
     setDirty(true)
     setCatalogOpen(false)
-    setConfigFor(w.id)  // open config panel immediately
+    setConfigFor(w.id)
   }
 
   function updateConfig(id: string, config: Record<string, any>) {
@@ -202,12 +279,9 @@ export default function OverviewPage({ user }: { user: { id: string, email: stri
     setDirty(true)
   }
 
-  // ── Drag / resize handlers ───────────────────────────────────────────────
-
   function onMouseDown(e: React.MouseEvent, id: string, mode: 'move'|'resize') {
     if (!editMode) return
-    e.preventDefault()
-    e.stopPropagation()
+    e.preventDefault(); e.stopPropagation()
     const w = widgets.find(x => x.id === id)
     if (!w) return
     setDragging({ id, mode, startX: e.clientX, startY: e.clientY, origW: { ...w } })
@@ -246,7 +320,15 @@ export default function OverviewPage({ user }: { user: { id: string, email: stri
     }
   }, [dragging])
 
-  // Compute grid height based on widget positions
+  useEffect(() => {
+    function onDocClick(e: MouseEvent) {
+      const target = e.target as HTMLElement
+      if (!target.closest('[data-layouts-menu]')) setLayoutsMenuOpen(false)
+    }
+    if (layoutsMenuOpen) document.addEventListener('click', onDocClick)
+    return () => document.removeEventListener('click', onDocClick)
+  }, [layoutsMenuOpen])
+
   const maxRow = widgets.reduce((m, w) => Math.max(m, w.y + w.h), 6)
   const gridHeight = maxRow * ROW_HEIGHT + (maxRow - 1) * GAP + 40
 
@@ -259,13 +341,68 @@ export default function OverviewPage({ user }: { user: { id: string, email: stri
       <div style={{display:'flex', minHeight:'100vh', background:T.bg, color:T.text, fontFamily:'system-ui, -apple-system, sans-serif'}}>
         <PortalSidebar activeId="overview" currentUserRole={user.role}/>
         <main style={{flex:1, padding:'20px 32px 40px', overflow:'auto'}}>
-          {/* Top bar */}
-          <div style={{display:'flex', alignItems:'center', gap:12, marginBottom:6}}>
+
+          <div style={{display:'flex', alignItems:'center', gap:12, marginBottom:6, flexWrap:'wrap'}}>
             <h1 style={{margin:0, fontSize:22, fontWeight:600}}>Overview</h1>
-            {isDefault && <span style={{fontSize:10, padding:'3px 8px', borderRadius:10, background:`${T.amber}22`, color:T.amber, border:`1px solid ${T.amber}55`, fontWeight:600, textTransform:'uppercase'}}>Default layout</span>}
+
+            {/* Layouts dropdown */}
+            <div data-layouts-menu style={{position:'relative'}}>
+              <button onClick={() => setLayoutsMenuOpen(o => !o)}
+                style={{display:'inline-flex', alignItems:'center', gap:6, padding:'6px 12px', borderRadius:6, border:`1px solid ${T.border2}`, background:T.bg3, color:T.text, fontSize:12, fontFamily:'inherit', cursor:'pointer'}}>
+                <span style={{color:T.text3, fontSize:10, textTransform:'uppercase', letterSpacing:'0.05em', fontWeight:600}}>Layout:</span>
+                <span style={{fontWeight:500}}>{currentLayoutName}</span>
+                {dirty && <span style={{color:T.amber, fontSize:14, marginLeft:2}}>•</span>}
+                <span style={{color:T.text3, fontSize:10}}>▾</span>
+              </button>
+              {layoutsMenuOpen && (
+                <div style={{position:'absolute', top:'100%', left:0, marginTop:4, background:T.bg2, border:`1px solid ${T.border2}`, borderRadius:8, boxShadow:'0 8px 24px rgba(0,0,0,0.4)', minWidth:280, zIndex:50, padding:4}}>
+                  {savedLayouts.length === 0 ? (
+                    <div style={{padding:'10px 14px', fontSize:11, color:T.text3}}>No saved layouts yet. Make changes, then Save to create one.</div>
+                  ) : savedLayouts.map(l => {
+                    const isEditing = renameForId === l.id
+                    return (
+                      <div key={l.id} style={{display:'flex', alignItems:'center', gap:4, padding:'4px 6px', borderRadius:6, background: l.is_active ? T.bg3 : 'transparent'}}>
+                        {isEditing ? (
+                          <>
+                            <input autoFocus value={renameValue} onChange={e => setRenameValue(e.target.value)}
+                              onKeyDown={e => { if (e.key === 'Enter') renameLayout(l.id, renameValue); if (e.key === 'Escape') setRenameForId(null) }}
+                              style={{flex:1, padding:'6px 8px', background:T.bg3, border:`1px solid ${T.blue}`, color:T.text, borderRadius:4, fontSize:12, fontFamily:'inherit', outline:'none', minWidth:0}}/>
+                            <button onClick={() => renameLayout(l.id, renameValue)} style={{padding:'4px 8px', border:'none', background:T.blue, color:'#fff', borderRadius:4, fontSize:10, cursor:'pointer', fontFamily:'inherit'}}>✓</button>
+                            <button onClick={() => setRenameForId(null)} style={{padding:'4px 8px', border:`1px solid ${T.border2}`, background:'transparent', color:T.text3, borderRadius:4, fontSize:10, cursor:'pointer', fontFamily:'inherit'}}>✕</button>
+                          </>
+                        ) : (
+                          <>
+                            <button onClick={() => switchLayout(l.id)}
+                              style={{flex:1, textAlign:'left', padding:'6px 8px', background:'transparent', border:'none', color:T.text, fontSize:12, cursor:'pointer', fontFamily:'inherit', display:'flex', alignItems:'center', gap:6}}>
+                              <span style={{width:12, color: l.is_active ? T.green : 'transparent', fontSize:10}}>{l.is_active ? '●' : ''}</span>
+                              <span>{l.name}</span>
+                            </button>
+                            <button onClick={() => { setRenameForId(l.id); setRenameValue(l.name) }} title="Rename"
+                              style={{padding:'4px 6px', border:'none', background:'transparent', color:T.text3, borderRadius:4, fontSize:11, cursor:'pointer'}}>✎</button>
+                            <button onClick={() => deleteLayout(l.id, l.name)} title="Delete"
+                              style={{padding:'4px 6px', border:'none', background:'transparent', color:T.text3, borderRadius:4, fontSize:11, cursor:'pointer'}}>🗑</button>
+                          </>
+                        )}
+                      </div>
+                    )
+                  })}
+                  <div style={{height:1, background:T.border, margin:'4px 0'}}/>
+                  <button onClick={() => { setSaveAsName(''); setSaveAsOpen(true); setLayoutsMenuOpen(false) }}
+                    style={{display:'block', width:'100%', textAlign:'left', padding:'8px 14px', background:'transparent', border:'none', color:T.blue, fontSize:12, cursor:'pointer', fontFamily:'inherit'}}>
+                    + Save current as new layout…
+                  </button>
+                  <button onClick={resetToDefault}
+                    style={{display:'block', width:'100%', textAlign:'left', padding:'8px 14px', background:'transparent', border:'none', color:T.red, fontSize:12, cursor:'pointer', fontFamily:'inherit'}}>
+                    Reset all layouts to default
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {isDefault && <span style={{fontSize:10, padding:'3px 8px', borderRadius:10, background:`${T.amber}22`, color:T.amber, border:`1px solid ${T.amber}55`, fontWeight:600, textTransform:'uppercase'}}>Default</span>}
+
             <div style={{flex:1}}/>
 
-            {/* Global date picker */}
             <select value={globalDate} onChange={e => { setGlobalDate(e.target.value as DateRangeKey); setDirty(true) }}
               style={{padding:'7px 12px', background:T.bg3, border:`1px solid ${T.border2}`, color:T.text, borderRadius:6, fontSize:12, fontFamily:'inherit', outline:'none'}}>
               {DATE_RANGE_OPTIONS.filter(o => o.value !== 'custom').map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
@@ -282,13 +419,13 @@ export default function OverviewPage({ user }: { user: { id: string, email: stri
                   style={{padding:'7px 14px', borderRadius:6, border:'none', background:T.accent, color:'#fff', fontSize:12, fontWeight:600, fontFamily:'inherit', cursor:'pointer'}}>
                   + Add widget
                 </button>
-                <button onClick={resetLayout}
-                  style={{padding:'7px 12px', borderRadius:6, border:`1px solid ${T.border2}`, background:'transparent', color:T.text2, fontSize:12, fontFamily:'inherit', cursor:'pointer'}}>
-                  Reset
-                </button>
-                <button onClick={saveLayout} disabled={!dirty}
+                <button onClick={saveCurrent} disabled={!dirty}
                   style={{padding:'7px 14px', borderRadius:6, border:'none', background: dirty ? T.green : T.bg4, color: dirty ? '#fff' : T.text3, fontSize:12, fontWeight:600, fontFamily:'inherit', cursor: dirty ? 'pointer' : 'not-allowed'}}>
                   {dirty ? 'Save' : 'Saved'}
+                </button>
+                <button onClick={() => { setSaveAsName(''); setSaveAsOpen(true) }}
+                  style={{padding:'7px 12px', borderRadius:6, border:`1px solid ${T.border2}`, background:'transparent', color:T.text2, fontSize:12, fontFamily:'inherit', cursor:'pointer'}}>
+                  Save as…
                 </button>
                 <button onClick={() => { if (dirty && !confirm('Discard unsaved changes?')) return; setEditMode(false); loadLayout() }}
                   style={{padding:'7px 12px', borderRadius:6, border:`1px solid ${T.border2}`, background:'transparent', color:T.text2, fontSize:12, fontFamily:'inherit', cursor:'pointer'}}>
@@ -315,9 +452,7 @@ export default function OverviewPage({ user }: { user: { id: string, email: stri
             </div>
           ) : (
             <div ref={gridRef} style={{
-              position:'relative',
-              width:'100%',
-              minHeight: gridHeight,
+              position:'relative', width:'100%', minHeight: gridHeight,
               background: editMode ? `repeating-linear-gradient(0deg, transparent, transparent ${ROW_HEIGHT + GAP - 1}px, ${T.border} ${ROW_HEIGHT + GAP - 1}px, ${T.border} ${ROW_HEIGHT + GAP}px)` : 'transparent',
             }}>
               {widgets.map(w => {
@@ -330,8 +465,7 @@ export default function OverviewPage({ user }: { user: { id: string, email: stri
                 const h = w.h * ROW_HEIGHT + (w.h - 1) * GAP
                 return (
                   <div key={w.id} style={{
-                    position:'absolute',
-                    left: x, top: y, width: wid, height: h,
+                    position:'absolute', left: x, top: y, width: wid, height: h,
                     background:T.bg2, border:`1px solid ${editMode ? T.border2 : T.border}`, borderRadius:10,
                     padding:14, boxSizing:'border-box',
                     transition: dragging?.id === w.id ? 'none' : 'left 0.15s, top 0.15s, width 0.15s, height 0.15s',
@@ -378,6 +512,27 @@ export default function OverviewPage({ user }: { user: { id: string, email: stri
           onCancel={() => setConfigFor(null)}
           onDelete={() => removeWidget(configWidget.id)}
         />
+      )}
+
+      {saveAsOpen && (
+        <div style={{position:'fixed', inset:0, background:'rgba(0,0,0,0.6)', zIndex:100, display:'flex', alignItems:'center', justifyContent:'center', padding:20}}
+             onClick={() => setSaveAsOpen(false)}>
+          <div onClick={e => e.stopPropagation()}
+               style={{background:T.bg2, border:`1px solid ${T.border2}`, borderRadius:12, width:'100%', maxWidth:420, padding:20}}>
+            <div style={{fontSize:16, fontWeight:600, marginBottom:6}}>Save layout as…</div>
+            <div style={{fontSize:12, color:T.text3, marginBottom:14}}>Give this layout a name. It will be saved and set as active.</div>
+            <input autoFocus value={saveAsName} onChange={e => setSaveAsName(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter') saveAs(saveAsName) }}
+              placeholder="e.g. Sales view, Ops view"
+              style={{width:'100%', padding:'8px 10px', background:T.bg3, border:`1px solid ${T.border2}`, color:T.text, borderRadius:6, fontSize:13, fontFamily:'inherit', outline:'none', boxSizing:'border-box', marginBottom:14}}/>
+            <div style={{display:'flex', gap:8, justifyContent:'flex-end'}}>
+              <button onClick={() => setSaveAsOpen(false)}
+                style={{padding:'8px 14px', borderRadius:6, border:`1px solid ${T.border2}`, background:'transparent', color:T.text2, fontSize:12, fontFamily:'inherit', cursor:'pointer'}}>Cancel</button>
+              <button onClick={() => saveAs(saveAsName)} disabled={!saveAsName.trim()}
+                style={{padding:'8px 18px', borderRadius:6, border:'none', background: saveAsName.trim() ? T.accent : T.bg4, color: saveAsName.trim() ? '#fff' : T.text3, fontSize:12, fontWeight:600, fontFamily:'inherit', cursor: saveAsName.trim() ? 'pointer' : 'not-allowed'}}>Save</button>
+            </div>
+          </div>
+        </div>
       )}
     </>
   )
