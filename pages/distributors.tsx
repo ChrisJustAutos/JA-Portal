@@ -176,7 +176,7 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
 
       setData(normalised);setError('');setLastRefresh(new Date());setDateLoading(false)
     }catch(e:any){setError(e.message);setDateLoading(false)}
-    setLoading(false);if(isRefresh)setRefreshing(false)
+    setLoading(false);setDateLoading(false);if(isRefresh)setRefreshing(false)
   },[router,activeDateParams,prefs.gst_display])
   useEffect(()=>{load()},[load])
   useEffect(()=>{
