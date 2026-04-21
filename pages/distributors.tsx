@@ -72,6 +72,47 @@ const fmt=(n:number)=>n>=1e6?'$'+(n/1e6).toFixed(2)+'M':n>=1000?'$'+Math.round(n
 
 const T={bg:'#0d0f12',bg2:'#131519',bg3:'#1a1d23',bg4:'#21252d',border:'rgba(255,255,255,0.07)',border2:'rgba(255,255,255,0.12)',text:'#e8eaf0',text2:'#8b90a0',text3:'#545968',blue:'#4f8ef7',teal:'#2dd4bf',green:'#34c77b',amber:'#f5a623',red:'#f04e4e',purple:'#a78bfa',accent:'#4f8ef7'}
 
+// ── Sort helpers ─────────────────────────────────────────────────────
+// Shared across the three sortable tables on this page (Summary groups,
+// Distributor Sales models, Detailed Sales descriptions). Click a header
+// once → sort ascending; click again → descending; a third click → reset
+// to the table's default order.
+
+type SortDir = 'asc' | 'desc' | null
+interface SortState { col: string | null; dir: SortDir }
+
+function nextSortState(current: SortState, col: string): SortState {
+  if (current.col !== col) return { col, dir: 'desc' }  // new column → desc first (biggest numbers at top)
+  if (current.dir === 'desc') return { col, dir: 'asc' }
+  if (current.dir === 'asc')  return { col: null, dir: null }  // reset to natural order
+  return { col, dir: 'desc' }
+}
+
+function sortIndicator(state: SortState, col: string): string {
+  if (state.col !== col) return ''
+  if (state.dir === 'asc')  return ' ↑'
+  if (state.dir === 'desc') return ' ↓'
+  return ''
+}
+
+// Sortable <th>. Numeric cols use right-align, label cols use left-align.
+function SortableTh({
+  label, col, state, onSort, align = 'right', width,
+}: { label: string; col: string; state: SortState; onSort: (col: string) => void; align?: 'left'|'right'; width?: string|number }) {
+  const active = state.col === col
+  return (
+    <th onClick={() => onSort(col)}
+      style={{
+        fontSize:11, color: active ? T.text : T.text3,
+        padding:'10px 12px', textAlign: align, fontWeight: active ? 600 : 500,
+        cursor:'pointer', userSelect:'none',
+        width,
+      }}>
+      {label}<span style={{color:T.blue}}>{sortIndicator(state, col)}</span>
+    </th>
+  )
+}
+
 type Tab='distributor-sales'|'detailed-sales'|'summary'|'national-pm'|'national-total'
 
 export default function DistributorReport({ user }: { user: PortalUserSSR }) {
@@ -87,6 +128,15 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
   const [refreshing,setRefreshing]=useState(false)
   const [lastRefresh,setLastRefresh]=useState<Date|null>(null)
   const [primaryDimension, setPrimaryDimension] = useState<'type'|'region'|string>('type')
+
+  // Per-table sort state. Default = natural (backend) order.
+  const [summarySort, setSummarySort] = useState<SortState>({ col: null, dir: null })
+  const [modelSort, setModelSort]     = useState<SortState>({ col: null, dir: null })
+  const [detailedSort, setDetailedSort] = useState<SortState>({ col: null, dir: null })
+
+  function handleSummarySort(col: string)  { setSummarySort(prev => nextSortState(prev, col)) }
+  function handleModelSort(col: string)    { setModelSort(prev => nextSortState(prev, col)) }
+  function handleDetailedSort(col: string) { setDetailedSort(prev => nextSortState(prev, col)) }
 
   // Date range
   const now=new Date()
@@ -333,12 +383,23 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
       </div>
 
       {dimensionGroups.map(g => {
-        const rows = summariesByGroup[g.name] || []
-        if (rows.length === 0) return null
-        const groupTuning = rows.reduce((s,r)=>s+r.tuning,0)
-        const groupOil = rows.reduce((s,r)=>s+r.oil,0)
-        const groupParts = rows.reduce((s,r)=>s+r.parts,0)
-        const groupTotal = rows.reduce((s,r)=>s+r.total,0)
+        const rawRows = summariesByGroup[g.name] || []
+        if (rawRows.length === 0) return null
+        // Apply sort (copy so we don't mutate the original)
+        const rows = (() => {
+          if (!summarySort.col || !summarySort.dir) return rawRows
+          const dir = summarySort.dir === 'asc' ? 1 : -1
+          const col = summarySort.col
+          return [...rawRows].sort((a: any, b: any) => {
+            const av = a[col], bv = b[col]
+            if (typeof av === 'string' && typeof bv === 'string') return av.localeCompare(bv) * dir
+            return ((Number(av) || 0) - (Number(bv) || 0)) * dir
+          })
+        })()
+        const groupTuning = rawRows.reduce((s,r)=>s+r.tuning,0)
+        const groupOil = rawRows.reduce((s,r)=>s+r.oil,0)
+        const groupParts = rawRows.reduce((s,r)=>s+r.parts,0)
+        const groupTotal = rawRows.reduce((s,r)=>s+r.total,0)
         return <div key={g.id} style={{background:T.bg2,border:`1px solid ${T.border}`,borderRadius:10,overflowX:'auto'}}>
           <div style={{padding:'14px 16px',borderBottom:`1px solid ${T.border2}`,display:'flex',alignItems:'center',gap:10}}>
             <div style={{width:10,height:10,borderRadius:3,background:g.color||T.text3,flexShrink:0}}/>
@@ -347,8 +408,11 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
           </div>
           <table style={{width:'100%',borderCollapse:'collapse'}}>
             <thead><tr style={{borderBottom:`1px solid ${T.border}`}}>
-              <th style={{fontSize:11,color:T.text3,padding:'10px 12px',textAlign:'left',fontWeight:500}}>Distributor</th>
-              {['Oil','Parts','Tuning','Total'].map(h=><th key={h} style={{fontSize:11,color:T.text3,padding:'10px 12px',textAlign:'right',fontWeight:500}}>{h}</th>)}
+              <SortableTh label="Distributor" col="name"   state={summarySort} onSort={handleSummarySort} align="left"/>
+              <SortableTh label="Oil"         col="oil"    state={summarySort} onSort={handleSummarySort}/>
+              <SortableTh label="Parts"       col="parts"  state={summarySort} onSort={handleSummarySort}/>
+              <SortableTh label="Tuning"      col="tuning" state={summarySort} onSort={handleSummarySort}/>
+              <SortableTh label="Total"       col="total"  state={summarySort} onSort={handleSummarySort}/>
             </tr></thead>
             <tbody>{rows.map((d,i)=><tr key={i} style={{borderTop:`1px solid ${T.border}`,cursor:'pointer',background:selectedDist===d.name?'rgba(79,142,247,0.08)':'transparent'}} onClick={()=>setSelectedDist(d.name===selectedDist?'ALL':d.name)}>
               <td style={{fontSize:12,color:T.text2,padding:'8px 12px'}}>{d.name}</td>
@@ -382,10 +446,22 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
           </div>
           <table style={{width:'100%',borderCollapse:'collapse'}}>
             <thead><tr style={{borderBottom:`1px solid ${T.border}`}}>
-              <th style={{fontSize:11,color:T.text3,padding:'10px 12px',textAlign:'left',fontWeight:500}}>Distributor</th>
-              {['Oil','Parts','Tuning','Total'].map(h=><th key={h} style={{fontSize:11,color:T.text3,padding:'10px 12px',textAlign:'right',fontWeight:500}}>{h}</th>)}
+              <SortableTh label="Distributor" col="name"   state={summarySort} onSort={handleSummarySort} align="left"/>
+              <SortableTh label="Oil"         col="oil"    state={summarySort} onSort={handleSummarySort}/>
+              <SortableTh label="Parts"       col="parts"  state={summarySort} onSort={handleSummarySort}/>
+              <SortableTh label="Tuning"      col="tuning" state={summarySort} onSort={handleSummarySort}/>
+              <SortableTh label="Total"       col="total"  state={summarySort} onSort={handleSummarySort}/>
             </tr></thead>
-            <tbody>{unclassifiedSummaries.map((d,i)=><tr key={i} style={{borderTop:`1px solid ${T.border}`}}>
+            <tbody>{(() => {
+              if (!summarySort.col || !summarySort.dir) return unclassifiedSummaries
+              const dir = summarySort.dir === 'asc' ? 1 : -1
+              const col = summarySort.col
+              return [...unclassifiedSummaries].sort((a: any, b: any) => {
+                const av = a[col], bv = b[col]
+                if (typeof av === 'string' && typeof bv === 'string') return av.localeCompare(bv) * dir
+                return ((Number(av) || 0) - (Number(bv) || 0)) * dir
+              })
+            })().map((d,i)=><tr key={i} style={{borderTop:`1px solid ${T.border}`}}>
               <td style={{fontSize:12,color:T.text2,padding:'8px 12px'}}>{d.name}</td>
               <td style={{fontSize:12,fontFamily:'monospace',color:d.oil>0?T.text:T.text3,padding:'8px 12px',textAlign:'right'}}>{d.oil>0?fmtFull(d.oil):'$0'}</td>
               <td style={{fontSize:12,fontFamily:'monospace',color:d.parts>0?T.text:T.text3,padding:'8px 12px',textAlign:'right'}}>{d.parts>0?fmtFull(d.parts):'$0'}</td>
@@ -431,13 +507,22 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
           {models.length>0&&<div style={{background:T.bg2,border:`1px solid ${T.border}`,borderRadius:10,overflowX:'auto'}}>
             <table style={{width:'100%',borderCollapse:'collapse'}}>
               <thead><tr style={{borderBottom:`1px solid ${T.border2}`}}>
-                <th style={{fontSize:11,color:T.text3,padding:'10px 12px',textAlign:'left',fontWeight:500}}>Model</th>
-                <th style={{fontSize:11,color:T.text3,padding:'10px 12px',textAlign:'right',fontWeight:500}}>Unique VINs</th>
-                <th style={{fontSize:11,color:T.text3,padding:'10px 12px',textAlign:'right',fontWeight:500}}>Jobs</th>
-                <th style={{fontSize:11,color:T.text3,padding:'10px 12px',textAlign:'right',fontWeight:500}}>Tuning Revenue ex GST</th>
+                <SortableTh label="Model"                 col="model" state={modelSort} onSort={handleModelSort} align="left"/>
+                <SortableTh label="Unique VINs"           col="vins"  state={modelSort} onSort={handleModelSort}/>
+                <SortableTh label="Jobs"                  col="jobs"  state={modelSort} onSort={handleModelSort}/>
+                <SortableTh label="Tuning Revenue ex GST" col="total" state={modelSort} onSort={handleModelSort}/>
                 <th style={{fontSize:11,color:T.text3,padding:'10px 12px',textAlign:'right',fontWeight:500}}>%</th>
               </tr></thead>
-              <tbody>{models.map((m,i)=><tr key={i} style={{borderTop:`1px solid ${T.border}`}}>
+              <tbody>{(() => {
+                if (!modelSort.col || !modelSort.dir) return models
+                const dir = modelSort.dir === 'asc' ? 1 : -1
+                const col = modelSort.col
+                return [...models].sort((a: any, b: any) => {
+                  const av = a[col], bv = b[col]
+                  if (typeof av === 'string' && typeof bv === 'string') return av.localeCompare(bv) * dir
+                  return ((Number(av) || 0) - (Number(bv) || 0)) * dir
+                })
+              })().map((m,i)=><tr key={i} style={{borderTop:`1px solid ${T.border}`}}>
                 <td style={{fontSize:12,color:T.text2,padding:'8px 12px'}}>{m.model}</td>
                 <td style={{fontSize:12,fontFamily:'monospace',color:T.text3,padding:'8px 12px',textAlign:'right'}}>{m.vins}</td>
                 <td style={{fontSize:12,fontFamily:'monospace',color:m.jobs>m.vins?T.amber:T.text3,padding:'8px 12px',textAlign:'right'}}>{m.jobs}</td>
@@ -464,16 +549,28 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
       </div>
     }
 
-    if(tab==='detailed-sales')return <div style={{padding:24,overflowY:'auto'}}>
+    if(tab==='detailed-sales'){
+      // Apply user sort; default is already total desc (set where detailedRows is computed)
+      const sortedDetailed = (() => {
+        if (!detailedSort.col || !detailedSort.dir) return detailedRows
+        const dir = detailedSort.dir === 'asc' ? 1 : -1
+        return [...detailedRows].sort((a, b) => {
+          if (detailedSort.col === 'desc') return (a[0] || '').localeCompare(b[0] || '') * dir
+          if (detailedSort.col === 'qty')  return ((a[1].qty||0) - (b[1].qty||0)) * dir
+          if (detailedSort.col === 'total')return ((a[1].total||0) - (b[1].total||0)) * dir
+          return 0
+        })
+      })()
+      return <div style={{padding:24,overflowY:'auto'}}>
       <div style={{fontSize:18,fontWeight:500,color:T.text,marginBottom:16}}>{selectedDist==='ALL'?'All':selectedDist}</div>
       <div style={{background:T.bg2,border:`1px solid ${T.border}`,borderRadius:10,overflowX:'auto'}}>
         <table style={{width:'100%',borderCollapse:'collapse'}}>
           <thead><tr style={{borderBottom:`1px solid ${T.border}`}}>
-            <th style={{fontSize:12,color:T.text2,padding:'12px 16px',textAlign:'left',fontWeight:500}}>Description</th>
-            <th style={{fontSize:12,color:T.text2,padding:'12px 16px',textAlign:'right',fontWeight:500}}>Qty</th>
-            <th style={{fontSize:12,color:T.text2,padding:'12px 16px',textAlign:'right',fontWeight:500}}>Total $ ExGST</th>
+            <SortableTh label="Description"   col="desc"  state={detailedSort} onSort={handleDetailedSort} align="left"/>
+            <SortableTh label="Qty"           col="qty"   state={detailedSort} onSort={handleDetailedSort}/>
+            <SortableTh label="Total $ ExGST" col="total" state={detailedSort} onSort={handleDetailedSort}/>
           </tr></thead>
-          <tbody>{detailedRows.map(([desc,vals],i)=><tr key={i} style={{borderTop:`1px solid ${T.border}`}}>
+          <tbody>{sortedDetailed.map(([desc,vals],i)=><tr key={i} style={{borderTop:`1px solid ${T.border}`}}>
             <td style={{fontSize:12,color:T.text2,padding:'9px 16px'}}>{desc?.substring(0,70)}</td>
             <td style={{fontSize:12,fontFamily:'monospace',color:T.text3,padding:'9px 16px',textAlign:'right'}}>{vals.qty>1?vals.qty:''}</td>
             <td style={{fontSize:12,fontFamily:'monospace',color:T.text,padding:'9px 16px',textAlign:'right'}}>{fmtFull(vals.total)}</td>
@@ -486,6 +583,7 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
         </table>
       </div>
     </div>
+    }
 
     if(tab==='national-pm')return <div style={{padding:24,overflowY:'auto'}}>
       <div style={{fontSize:16,fontWeight:500,color:T.text,marginBottom:20}}>National Distributor Revenue ex GST by Month</div>
