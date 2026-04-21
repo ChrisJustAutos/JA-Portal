@@ -24,9 +24,9 @@ const LEGACY_CATEGORIES = [
 const LEGACY_EXCLUDED: Array<[string, string]> = [
   ['vps', 'Internal'],
   ['vehicle performance solutions t/a just autos', 'Internal'],
-  ['duncan scott', 'Staff'], ['kent dalton', 'Staff'], ['wade kelly', 'Staff'],
-  ['mark cooper', 'Staff'], ['sean poiani', 'Staff'], ['michael scalzo', 'Staff'],
-  ['mark naidoo', 'Staff'], ['anthony barraball', 'Staff'],
+  ['duncan scott', 'Excluded'], ['kent dalton', 'Excluded'], ['wade kelly', 'Excluded'],
+  ['mark cooper', 'Excluded'], ['sean poiani', 'Excluded'], ['michael scalzo', 'Excluded'],
+  ['mark naidoo', 'Excluded'], ['anthony barraball', 'Excluded'],
   ['allsorts mechanical', 'Sundry'], ['hd automotive', 'Sundry'],
   ['mccormacks 4wd', 'Sundry'], ['vito media', 'Sundry'],
   ['macpherson witham', 'Sundry'],
@@ -156,7 +156,7 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
         const base = raw.replace(/\s*\(Tuning 2\)\s*$/i,'').replace(/\s*\(Tuning 1\)\s*$/i,'').replace(/\s*\(Tuning\)\s*$/i,'').trim()
         const noteBase = EXCLUDED.get(base.toLowerCase())
         const note = noteRaw || noteBase || null
-        if (note && note !== 'Sundry') continue   // drop Staff/Internal/Other
+        if (note && note !== 'Sundry') continue   // drop Excluded/Internal
         if (!base) continue
 
         const acc: string = line.AccountDisplayID || ''

@@ -5,6 +5,7 @@ import Head from 'next/head'
 import { useRouter } from 'next/router'
 import PortalSidebar from '../../lib/PortalSidebar'
 import { requirePageAuth } from '../../lib/authServer'
+import ExclusionsTab from '../../components/admin/ExclusionsTab'
 
 const T = {
   bg:'#0d0f12', bg2:'#131519', bg3:'#1a1d23', bg4:'#21252d',
@@ -28,7 +29,7 @@ export default function GroupsAdmin() {
   const [groups, setGroups] = useState<Group[]>([])
   const [members, setMembers] = useState<Member[]>([])
   const [myobCustomers, setMyobCustomers] = useState<string[]>([])
-  const [tab, setTab] = useState<'aliases'|'groups'|'members'>('aliases')
+  const [tab, setTab] = useState<'aliases'|'groups'|'members'|'exclusions'>('aliases')
 
   const load = useCallback(async () => {
     try {
@@ -102,10 +103,13 @@ export default function GroupsAdmin() {
           )}
 
           <div style={{display:'flex',gap:2,padding:'0 20px',background:T.bg2,borderBottom:`1px solid ${T.border}`,flexShrink:0}}>
-            {(['aliases','groups','members'] as const).map(k => (
+            {(['aliases','groups','members','exclusions'] as const).map(k => (
               <button key={k} onClick={()=>setTab(k)}
                 style={{fontSize:12,padding:'10px 16px',border:'none',borderBottom:tab===k?`2px solid ${T.accent}`:'2px solid transparent',background:'transparent',color:tab===k?T.accent:T.text2,cursor:'pointer',fontFamily:'inherit',textTransform:'capitalize'}}>
-                {k === 'aliases' ? `Aliases & Merges (${aliases.length})` : k === 'groups' ? `Groups (${groups.length})` : `Membership (${members.length})`}
+                {k === 'aliases' ? `Aliases & Merges (${aliases.length})`
+                  : k === 'groups' ? `Groups (${groups.length})`
+                  : k === 'members' ? `Membership (${members.length})`
+                  : 'Exclusions'}
               </button>
             ))}
           </div>
@@ -135,6 +139,10 @@ export default function GroupsAdmin() {
                   mutate(currentlyMember?'removeMember':'addMember',{group_id:groupId,canonical_name:canonical})
                 }
               />
+            )}
+
+            {tab === 'exclusions' && (
+              <ExclusionsTab myobCustomers={myobCustomers} />
             )}
           </div>
         </div>

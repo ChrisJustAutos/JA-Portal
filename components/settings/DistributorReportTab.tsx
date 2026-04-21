@@ -247,44 +247,12 @@ export default function DistributorReportTab() {
         )}
       </div>
 
-      {/* Excluded customers */}
-      <div style={{background:T.bg2, border:`1px solid ${T.border}`, borderRadius:12, padding:20}}>
-        <div style={{fontSize:13, fontWeight:600, color:T.text3, textTransform:'uppercase', letterSpacing:'0.08em', marginBottom:14}}>
-          Excluded Customers
-        </div>
-        <p style={{margin:'0 0 12px', fontSize:12, color:T.text3, lineHeight:1.5}}>
-          Invoices from these customers will be excluded from the Distributor report.
-          Match is case-insensitive, exact-match on the MYOB CustomerName field (including
-          before we strip the "(Tuning)", "(Tuning 1)", "(Tuning 2)" suffixes).
-        </p>
-
-        {/* Add form */}
-        <div style={{display:'flex', gap:8, marginBottom:14, flexWrap:'wrap'}}>
-          <input type="text" value={newExName} onChange={e => setNewExName(e.target.value)}
-            onKeyDown={e => { if (e.key === 'Enter') addExcluded() }}
-            placeholder="Customer name (exact match)"
-            style={{flex:1, minWidth:200, background:T.bg3, border:`1px solid ${T.border2}`, color:T.text, borderRadius:6, padding:'7px 12px', fontSize:13, fontFamily:'inherit', outline:'none'}}/>
-          <input type="text" value={newExNote} onChange={e => setNewExNote(e.target.value)}
-            onKeyDown={e => { if (e.key === 'Enter') addExcluded() }}
-            placeholder="Note (optional)"
-            style={{flex:1, minWidth:180, background:T.bg3, border:`1px solid ${T.border2}`, color:T.text, borderRadius:6, padding:'7px 12px', fontSize:13, fontFamily:'inherit', outline:'none'}}/>
-          <button onClick={addExcluded} disabled={!newExName.trim()}
-            style={{padding:'7px 14px', borderRadius:6, border:`1px solid ${T.accent}`, background: newExName.trim() ? T.accent : 'transparent', color: newExName.trim() ? '#fff' : T.text3, fontSize:12, fontFamily:'inherit', cursor: newExName.trim() ? 'pointer' : 'not-allowed', fontWeight:600}}>
-            Add
-          </button>
-        </div>
-
-        {/* List */}
-        <div style={{display:'flex', flexDirection:'column', gap:4}}>
-          {excluded.length === 0 && <div style={{color:T.text3, fontSize:12, padding:16, textAlign:'center'}}>No exclusions.</div>}
-          {excluded.map((x, i) => (
-            <div key={i} style={{display:'flex', alignItems:'center', gap:10, padding:'6px 10px', background:T.bg3, borderRadius:5, border:`1px solid ${T.border}`}}>
-              <span style={{fontSize:12, color:T.text, flex:1}}>{x.customer_name}</span>
-              {x.note && <span style={{fontSize:11, color:T.text3, fontStyle:'italic'}}>{x.note}</span>}
-              <button onClick={() => removeExcluded(i)} title="Remove"
-                style={{background:'transparent', border:'none', color:T.text3, cursor:'pointer', fontSize:14, padding:'2px 6px', borderRadius:3}}>✕</button>
-            </div>
-          ))}
+      {/* Exclusions moved to Settings → Distributor Groups → Exclusions tab */}
+      <div style={{background:T.bg2, border:`1px solid ${T.border}`, borderRadius:12, padding:16, display:'flex', alignItems:'center', gap:12}}>
+        <div style={{fontSize:20}}>ℹ️</div>
+        <div style={{flex:1, fontSize:12, color:T.text2, lineHeight:1.5}}>
+          Customer exclusions (Excluded / Sundry / Internal) are now managed in the{' '}
+          <strong style={{color:T.text}}>Distributor Groups</strong> tab.
         </div>
       </div>
 
