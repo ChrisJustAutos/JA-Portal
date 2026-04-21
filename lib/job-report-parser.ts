@@ -12,10 +12,10 @@ export interface ParsedJob {
   customer_name: string | null
   vehicle: string | null
   status: string | null
-  opened_date: string | null        // YYYY-MM-DD
-  closed_date: string | null
+  opened_date: string | null        // YYYY-MM-DD — Job Date (when the work is scheduled)
+  closed_date: string | null        // YYYY-MM-DD — Finished Date (when the work was completed)
   job_type: string | null
-  estimated_total: number | null    // dollars, inc GST (stored as parsed)
+  estimated_total: number | null    // dollars — the "Total" on the job
   raw: Record<string, any>
 }
 
@@ -121,6 +121,14 @@ function normDate(v: any): string | null {
   return null
 }
 
+// Today in Brisbane (UTC+10, no DST) as YYYY-MM-DD.
+function todayBrisbaneISO(): string {
+  const nowUtc = new Date()
+  // Brisbane is UTC+10. Add 10 hours to get Brisbane wall time.
+  const bris = new Date(nowUtc.getTime() + 10 * 3600 * 1000)
+  return `${bris.getUTCFullYear()}-${String(bris.getUTCMonth() + 1).padStart(2, '0')}-${String(bris.getUTCDate()).padStart(2, '0')}`
+}
+
 export function parseJobReport(buf: Buffer, filename: string): ParsedJobReport {
   const lower = filename.toLowerCase()
   const isCSV = lower.endsWith('.csv') || lower.endsWith('.txt')
@@ -149,19 +157,29 @@ export function parseJobReport(buf: Buffer, filename: string): ParsedJobReport {
     throw new Error(`Could not find a "Job Number" column. Headers were: ${headers.join(', ')}`)
   }
 
+  const today = todayBrisbaneISO()
+
   const jobs: ParsedJob[] = []
   for (const row of rows) {
     const jobNumberRaw = row[headerMap.job_number]
     if (jobNumberRaw === null || jobNumberRaw === undefined || String(jobNumberRaw).trim() === '') continue
 
+    const openedDate = headerMap.opened_date ? normDate(row[headerMap.opened_date]) : null
     const closedDate = headerMap.closed_date ? normDate(row[headerMap.closed_date]) : null
+
+    // Status derivation priority:
+    //   1. Explicit Status column if the export has one (other Mechanics Desk
+    //      configurations may include it).
+    //   2. Job Date vs today — scheduled in the future (or today) = "Open",
+    //      already in the past = "Completed". This is what the workshop
+    //      actually cares about for forecasting upcoming revenue.
+    //   3. Fallback: Finished Date presence (if Job Date is missing).
     let status: string | null = null
-    if (headerMap.status) {
-      status = row[headerMap.status] ?? null
+    if (headerMap.status && row[headerMap.status]) {
+      status = String(row[headerMap.status]).trim()
+    } else if (openedDate) {
+      status = openedDate >= today ? 'Open' : 'Completed'
     } else {
-      // No explicit status column (Mechanics Desk export doesn't have one).
-      // Derive it from closed_date: if the job has a finished/closed date,
-      // it's "Completed", otherwise "Open".
       status = closedDate ? 'Completed' : 'Open'
     }
 
@@ -170,7 +188,7 @@ export function parseJobReport(buf: Buffer, filename: string): ParsedJobReport {
       customer_name:   headerMap.customer_name   ? (row[headerMap.customer_name] ?? null) : null,
       vehicle:         headerMap.vehicle         ? (row[headerMap.vehicle] ?? null) : null,
       status,
-      opened_date:     headerMap.opened_date     ? normDate(row[headerMap.opened_date]) : null,
+      opened_date:     openedDate,
       closed_date:     closedDate,
       job_type:        headerMap.job_type        ? primaryJobType(row[headerMap.job_type]) : null,
       estimated_total: headerMap.estimated_total ? parseMoney(row[headerMap.estimated_total]) : null,
@@ -179,8 +197,8 @@ export function parseJobReport(buf: Buffer, filename: string): ParsedJobReport {
   }
 
   if (jobs.length === 0) warnings.push('Header row matched but no data rows had valid job numbers')
-  if (!headerMap.status && headerMap.closed_date) {
-    warnings.push('No explicit Status column — deriving Open/Completed from Finished Date')
+  if (!headerMap.status && headerMap.opened_date) {
+    warnings.push('No explicit Status column — deriving Open/Completed from Job Date vs today')
   }
 
   return { jobs, warnings, detectedFormat: format, headerMap }
