@@ -33,6 +33,7 @@ export type Permission =
   | 'view:distributors'
   | 'view:reports'
   | 'view:todos'
+  | 'view:jobs'
   // Actions
   | 'edit:any'
   | 'edit:distributors_groups'
@@ -47,13 +48,13 @@ export type Permission =
 const ROLE_PERMISSIONS: Record<UserRole, Permission[]> = {
   admin: [
     'view:dashboards','view:overview','view:invoices','view:pnl','view:stock','view:payables',
-    'view:leads','view:distributors','view:reports','view:todos',
+    'view:leads','view:distributors','view:reports','view:todos','view:jobs',
     'edit:any','edit:distributors_groups','edit:vin_codes','edit:leads','generate:reports',
     'admin:users','admin:settings','admin:audit_log',
   ],
   manager: [
     'view:dashboards','view:overview','view:invoices','view:pnl','view:stock','view:payables',
-    'view:leads','view:distributors','view:reports','view:todos',
+    'view:leads','view:distributors','view:reports','view:todos','view:jobs',
     'edit:leads','generate:reports',
   ],
   sales: [
@@ -62,6 +63,7 @@ const ROLE_PERMISSIONS: Record<UserRole, Permission[]> = {
   ],
   accountant: [
     'view:dashboards','view:overview','view:invoices','view:pnl','view:payables','view:reports',
+    'view:jobs',
     'generate:reports',
   ],
   viewer: [
@@ -130,6 +132,7 @@ export function visibleNavSections(role: UserRole): string[] {
   if (roleHasPermission(role, 'view:distributors'))  visible.push('distributors')
   if (roleHasPermission(role, 'view:reports'))       visible.push('reports')
   if (roleHasPermission(role, 'view:todos'))         visible.push('todos')
+  if (roleHasPermission(role, 'view:jobs'))          visible.push('jobs')
   if (roleHasPermission(role, 'view:overview'))      visible.push('overview')
   if (roleHasPermission(role, 'view:invoices'))      visible.push('invoices')
   if (roleHasPermission(role, 'view:pnl'))           visible.push('pnl')
