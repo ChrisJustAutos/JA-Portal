@@ -32,6 +32,7 @@ interface LineItem {
   Total: number
   bucket: 'Tuning' | 'Parts' | 'Oil'
   poNumber: string
+  invoiceNumber: string
 }
 interface DistData {
   fetchedAt: string
@@ -89,10 +90,10 @@ function nextSortState(current: SortState, col: string): SortState {
 }
 
 function sortIndicator(state: SortState, col: string): string {
-  if (state.col !== col) return ''
+  if (state.col !== col) return ' ↕'           // faded default arrow to signal sortability
   if (state.dir === 'asc')  return ' ↑'
   if (state.dir === 'desc') return ' ↓'
-  return ''
+  return ' ↕'
 }
 
 // Sortable <th>. Numeric cols use right-align, label cols use left-align.
@@ -102,13 +103,17 @@ function SortableTh({
   const active = state.col === col
   return (
     <th onClick={() => onSort(col)}
+      title={`Sort by ${label}`}
       style={{
         fontSize:11, color: active ? T.text : T.text3,
         padding:'10px 12px', textAlign: align, fontWeight: active ? 600 : 500,
         cursor:'pointer', userSelect:'none',
         width,
-      }}>
-      {label}<span style={{color:T.blue}}>{sortIndicator(state, col)}</span>
+        transition:'color 0.15s',
+      }}
+      onMouseEnter={e => { (e.currentTarget as HTMLElement).style.color = T.text }}
+      onMouseLeave={e => { (e.currentTarget as HTMLElement).style.color = active ? T.text : T.text3 }}>
+      {label}<span style={{color: active ? T.blue : T.text3, fontSize:10, marginLeft:2}}>{sortIndicator(state, col)}</span>
     </th>
   )
 }
@@ -137,6 +142,16 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
   function handleSummarySort(col: string)  { setSummarySort(prev => nextSortState(prev, col)) }
   function handleModelSort(col: string)    { setModelSort(prev => nextSortState(prev, col)) }
   function handleDetailedSort(col: string) { setDetailedSort(prev => nextSortState(prev, col)) }
+
+  // ── Drill-down (invoice breakdown modal) ─────────────────────────
+  // When the user clicks a cell on Summary / Distributor Sales / Detailed Sales
+  // we show every line item that makes up that cell, grouped by source invoice.
+  interface DrillSpec {
+    title: string                 // modal title, e.g. "Cutlers Diesel — Tuning"
+    subtitle?: string             // smaller context line
+    filter: (l: LineItem) => boolean
+  }
+  const [drill, setDrill] = useState<DrillSpec | null>(null)
 
   // Date range
   const now=new Date()
@@ -204,6 +219,7 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
             Total: applyGstDisplay(Number(li.amountExGst) || 0, gstPref),
             bucket: li.bucket,
             poNumber: li.poNumber || '',
+            invoiceNumber: li.invoiceNumber || '',
           }
         })
       )
@@ -286,8 +302,14 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
     ?{tuning:distSummaries.reduce((s,d)=>s+d.tuning,0),oil:distSummaries.reduce((s,d)=>s+d.oil,0),parts:distSummaries.reduce((s,d)=>s+d.parts,0),total:distSummaries.reduce((s,d)=>s+d.total,0)}
     :distSummaries.find(d=>d.name===selectedDist)||{tuning:0,oil:0,parts:0,total:0}
 
-  const detailedByDesc:Record<string,{qty:number;total:number}>={}
-  filtered.filter(l=>l.Total>0).forEach(l=>{const k=l.Description||'';if(!detailedByDesc[k])detailedByDesc[k]={qty:0,total:0};detailedByDesc[k].qty+=1;detailedByDesc[k].total+=l.Total})
+  const detailedByDesc:Record<string,{qty:number;total:number;invoices:Set<string>}>={}
+  filtered.filter(l=>l.Total>0).forEach(l=>{
+    const k=l.Description||''
+    if(!detailedByDesc[k])detailedByDesc[k]={qty:0,total:0,invoices:new Set()}
+    detailedByDesc[k].qty+=1
+    detailedByDesc[k].total+=l.Total
+    if(l.invoiceNumber)detailedByDesc[k].invoices.add(l.invoiceNumber)
+  })
   const detailedRows=Object.entries(detailedByDesc).sort((a,b)=>b[1].total-a[1].total)
 
   const trendLabels=data?.trendLabels||[]
@@ -414,12 +436,20 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
               <SortableTh label="Tuning"      col="tuning" state={summarySort} onSort={handleSummarySort}/>
               <SortableTh label="Total"       col="total"  state={summarySort} onSort={handleSummarySort}/>
             </tr></thead>
-            <tbody>{rows.map((d,i)=><tr key={i} style={{borderTop:`1px solid ${T.border}`,cursor:'pointer',background:selectedDist===d.name?'rgba(79,142,247,0.08)':'transparent'}} onClick={()=>setSelectedDist(d.name===selectedDist?'ALL':d.name)}>
-              <td style={{fontSize:12,color:T.text2,padding:'8px 12px'}}>{d.name}</td>
-              <td style={{fontSize:12,fontFamily:'monospace',color:d.oil>0?T.text:T.text3,padding:'8px 12px',textAlign:'right'}}>{d.oil>0?fmtFull(d.oil):'$0'}</td>
-              <td style={{fontSize:12,fontFamily:'monospace',color:d.parts>0?T.text:T.text3,padding:'8px 12px',textAlign:'right'}}>{d.parts>0?fmtFull(d.parts):'$0'}</td>
-              <td style={{fontSize:12,fontFamily:'monospace',color:d.tuning>0?T.green:T.text3,padding:'8px 12px',textAlign:'right'}}>{d.tuning>0?fmtFull(d.tuning):'$0'}</td>
-              <td style={{fontSize:12,fontFamily:'monospace',fontWeight:500,color:T.blue,padding:'8px 12px',textAlign:'right'}}>{fmtFull(d.total)}</td>
+            <tbody>{rows.map((d,i)=><tr key={i} style={{borderTop:`1px solid ${T.border}`,background:selectedDist===d.name?'rgba(79,142,247,0.08)':'transparent'}}>
+              <td style={{fontSize:12,color:T.text2,padding:'8px 12px',cursor:'pointer'}} onClick={()=>setSelectedDist(d.name===selectedDist?'ALL':d.name)} title="Click to filter other tabs to this distributor">{d.name}</td>
+              <td style={{fontSize:12,fontFamily:'monospace',color:d.oil>0?T.text:T.text3,padding:'8px 12px',textAlign:'right',cursor:d.oil>0?'pointer':'default',textDecoration:d.oil>0?'underline dotted rgba(255,255,255,0.15)':'none'}}
+                  onClick={d.oil>0?()=>setDrill({title:`${d.name} — Oil`,subtitle:`${fmtFull(d.oil)} ex-GST`,filter:l=>l.CustomerName===d.name && l.bucket==='Oil'}):undefined}
+                  title={d.oil>0?'Click to see the invoices that make up this':''}>{d.oil>0?fmtFull(d.oil):'$0'}</td>
+              <td style={{fontSize:12,fontFamily:'monospace',color:d.parts>0?T.text:T.text3,padding:'8px 12px',textAlign:'right',cursor:d.parts>0?'pointer':'default',textDecoration:d.parts>0?'underline dotted rgba(255,255,255,0.15)':'none'}}
+                  onClick={d.parts>0?()=>setDrill({title:`${d.name} — Parts`,subtitle:`${fmtFull(d.parts)} ex-GST`,filter:l=>l.CustomerName===d.name && l.bucket==='Parts'}):undefined}
+                  title={d.parts>0?'Click to see the invoices that make up this':''}>{d.parts>0?fmtFull(d.parts):'$0'}</td>
+              <td style={{fontSize:12,fontFamily:'monospace',color:d.tuning>0?T.green:T.text3,padding:'8px 12px',textAlign:'right',cursor:d.tuning>0?'pointer':'default',textDecoration:d.tuning>0?'underline dotted rgba(52,199,123,0.3)':'none'}}
+                  onClick={d.tuning>0?()=>setDrill({title:`${d.name} — Tuning`,subtitle:`${fmtFull(d.tuning)} ex-GST`,filter:l=>l.CustomerName===d.name && l.bucket==='Tuning'}):undefined}
+                  title={d.tuning>0?'Click to see the invoices that make up this':''}>{d.tuning>0?fmtFull(d.tuning):'$0'}</td>
+              <td style={{fontSize:12,fontFamily:'monospace',fontWeight:500,color:T.blue,padding:'8px 12px',textAlign:'right',cursor:'pointer',textDecoration:'underline dotted rgba(79,142,247,0.3)'}}
+                  onClick={()=>setDrill({title:`${d.name} — All revenue`,subtitle:`${fmtFull(d.total)} ex-GST`,filter:l=>l.CustomerName===d.name})}
+                  title="Click to see the invoices that make up this">{fmtFull(d.total)}</td>
             </tr>)}
             <tr style={{borderTop:`2px solid ${T.border2}`,background:T.bg3}}>
               <td style={{fontSize:13,fontWeight:500,color:T.text,padding:'10px 12px'}}>{g.name} Total</td>
@@ -463,10 +493,14 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
               })
             })().map((d,i)=><tr key={i} style={{borderTop:`1px solid ${T.border}`}}>
               <td style={{fontSize:12,color:T.text2,padding:'8px 12px'}}>{d.name}</td>
-              <td style={{fontSize:12,fontFamily:'monospace',color:d.oil>0?T.text:T.text3,padding:'8px 12px',textAlign:'right'}}>{d.oil>0?fmtFull(d.oil):'$0'}</td>
-              <td style={{fontSize:12,fontFamily:'monospace',color:d.parts>0?T.text:T.text3,padding:'8px 12px',textAlign:'right'}}>{d.parts>0?fmtFull(d.parts):'$0'}</td>
-              <td style={{fontSize:12,fontFamily:'monospace',color:d.tuning>0?T.green:T.text3,padding:'8px 12px',textAlign:'right'}}>{d.tuning>0?fmtFull(d.tuning):'$0'}</td>
-              <td style={{fontSize:12,fontFamily:'monospace',fontWeight:500,color:T.blue,padding:'8px 12px',textAlign:'right'}}>{fmtFull(d.total)}</td>
+              <td style={{fontSize:12,fontFamily:'monospace',color:d.oil>0?T.text:T.text3,padding:'8px 12px',textAlign:'right',cursor:d.oil>0?'pointer':'default',textDecoration:d.oil>0?'underline dotted rgba(255,255,255,0.15)':'none'}}
+                  onClick={d.oil>0?()=>setDrill({title:`${d.name} — Oil`,subtitle:`${fmtFull(d.oil)} ex-GST`,filter:l=>l.CustomerName===d.name && l.bucket==='Oil'}):undefined}>{d.oil>0?fmtFull(d.oil):'$0'}</td>
+              <td style={{fontSize:12,fontFamily:'monospace',color:d.parts>0?T.text:T.text3,padding:'8px 12px',textAlign:'right',cursor:d.parts>0?'pointer':'default',textDecoration:d.parts>0?'underline dotted rgba(255,255,255,0.15)':'none'}}
+                  onClick={d.parts>0?()=>setDrill({title:`${d.name} — Parts`,subtitle:`${fmtFull(d.parts)} ex-GST`,filter:l=>l.CustomerName===d.name && l.bucket==='Parts'}):undefined}>{d.parts>0?fmtFull(d.parts):'$0'}</td>
+              <td style={{fontSize:12,fontFamily:'monospace',color:d.tuning>0?T.green:T.text3,padding:'8px 12px',textAlign:'right',cursor:d.tuning>0?'pointer':'default',textDecoration:d.tuning>0?'underline dotted rgba(52,199,123,0.3)':'none'}}
+                  onClick={d.tuning>0?()=>setDrill({title:`${d.name} — Tuning`,subtitle:`${fmtFull(d.tuning)} ex-GST`,filter:l=>l.CustomerName===d.name && l.bucket==='Tuning'}):undefined}>{d.tuning>0?fmtFull(d.tuning):'$0'}</td>
+              <td style={{fontSize:12,fontFamily:'monospace',fontWeight:500,color:T.blue,padding:'8px 12px',textAlign:'right',cursor:'pointer',textDecoration:'underline dotted rgba(79,142,247,0.3)'}}
+                  onClick={()=>setDrill({title:`${d.name} — All revenue`,subtitle:`${fmtFull(d.total)} ex-GST`,filter:l=>l.CustomerName===d.name})}>{fmtFull(d.total)}</td>
             </tr>)}</tbody>
           </table>
         </div>
@@ -522,13 +556,31 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
                   if (typeof av === 'string' && typeof bv === 'string') return av.localeCompare(bv) * dir
                   return ((Number(av) || 0) - (Number(bv) || 0)) * dir
                 })
-              })().map((m,i)=><tr key={i} style={{borderTop:`1px solid ${T.border}`}}>
-                <td style={{fontSize:12,color:T.text2,padding:'8px 12px'}}>{m.model}</td>
+              })().map((m,i)=>{
+                // vinRules is a closure dep here but we only need the classification function
+                const rowTitle = selectedDist==='ALL'
+                  ? `Tuning invoices — ${m.model}`
+                  : `${selectedDist} — Tuning — ${m.model}`
+                const openModel = () => setDrill({
+                  title: rowTitle,
+                  subtitle: `${fmtFull(m.total)} ex-GST · ${m.vins} VIN${m.vins===1?'':'s'} · ${m.jobs} job${m.jobs===1?'':'s'}`,
+                  filter: l => l.bucket==='Tuning'
+                    && !!(l.poNumber && l.poNumber.trim())
+                    && vinToModel(l.poNumber.trim(), vinRules) === m.model
+                    && (selectedDist==='ALL' || l.CustomerName===selectedDist),
+                })
+                return <tr key={i} style={{borderTop:`1px solid ${T.border}`,cursor:'pointer'}}
+                  onClick={openModel}
+                  onMouseEnter={e=>((e.currentTarget as HTMLElement).style.background='rgba(79,142,247,0.04)')}
+                  onMouseLeave={e=>((e.currentTarget as HTMLElement).style.background='transparent')}
+                  title="Click to see invoices for this model">
+                <td style={{fontSize:12,color:T.text2,padding:'8px 12px',textDecoration:'underline dotted rgba(255,255,255,0.15)'}}>{m.model}</td>
                 <td style={{fontSize:12,fontFamily:'monospace',color:T.text3,padding:'8px 12px',textAlign:'right'}}>{m.vins}</td>
                 <td style={{fontSize:12,fontFamily:'monospace',color:m.jobs>m.vins?T.amber:T.text3,padding:'8px 12px',textAlign:'right'}}>{m.jobs}</td>
                 <td style={{fontSize:12,fontFamily:'monospace',color:T.green,padding:'8px 12px',textAlign:'right'}}>{fmtFull(m.total)}</td>
                 <td style={{fontSize:12,fontFamily:'monospace',color:T.text3,padding:'8px 12px',textAlign:'right'}}>{modelsTotal>0?((m.total/modelsTotal)*100).toFixed(1)+'%':'—'}</td>
-              </tr>)}
+              </tr>
+              })}
               <tr style={{borderTop:`2px solid ${T.border2}`,background:T.bg3}}>
                 <td style={{fontSize:13,fontWeight:500,color:T.text,padding:'10px 12px'}}>Total</td>
                 <td style={{fontSize:13,fontFamily:'monospace',fontWeight:500,color:T.text,padding:'10px 12px',textAlign:'right'}}>{models.reduce((s,m)=>s+m.vins,0)}</td>
@@ -570,11 +622,22 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
             <SortableTh label="Qty"           col="qty"   state={detailedSort} onSort={handleDetailedSort}/>
             <SortableTh label="Total $ ExGST" col="total" state={detailedSort} onSort={handleDetailedSort}/>
           </tr></thead>
-          <tbody>{sortedDetailed.map(([desc,vals],i)=><tr key={i} style={{borderTop:`1px solid ${T.border}`}}>
-            <td style={{fontSize:12,color:T.text2,padding:'9px 16px'}}>{desc?.substring(0,70)}</td>
+          <tbody>{sortedDetailed.map(([desc,vals],i)=>{
+            const openDetail = () => setDrill({
+              title: selectedDist==='ALL' ? `Invoices: ${desc?.substring(0,60)}` : `${selectedDist} — ${desc?.substring(0,60)}`,
+              subtitle: `${fmtFull(vals.total)} ex-GST · ${vals.qty} occurrence${vals.qty===1?'':'s'}`,
+              filter: l => l.Description === desc && (selectedDist==='ALL' || l.CustomerName===selectedDist),
+            })
+            return <tr key={i} style={{borderTop:`1px solid ${T.border}`,cursor:'pointer'}}
+              onClick={openDetail}
+              onMouseEnter={e=>((e.currentTarget as HTMLElement).style.background='rgba(79,142,247,0.04)')}
+              onMouseLeave={e=>((e.currentTarget as HTMLElement).style.background='transparent')}
+              title="Click to see invoices for this line">
+            <td style={{fontSize:12,color:T.text2,padding:'9px 16px',textDecoration:'underline dotted rgba(255,255,255,0.15)'}}>{desc?.substring(0,70)}</td>
             <td style={{fontSize:12,fontFamily:'monospace',color:T.text3,padding:'9px 16px',textAlign:'right'}}>{vals.qty>1?vals.qty:''}</td>
             <td style={{fontSize:12,fontFamily:'monospace',color:T.text,padding:'9px 16px',textAlign:'right'}}>{fmtFull(vals.total)}</td>
-          </tr>)}
+          </tr>
+          })}
           <tr style={{borderTop:`2px solid ${T.border2}`,background:T.bg3}}>
             <td style={{fontSize:13,fontWeight:500,color:T.text,padding:'10px 16px'}}>Total</td>
             <td style={{fontSize:13,fontFamily:'monospace',fontWeight:500,color:T.text3,padding:'10px 16px',textAlign:'right'}}>{detailedRows.reduce((s,[,v])=>s+v.qty,0)}</td>
@@ -659,6 +722,92 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
         </div>
       </div>
     </div>
+
+    {/* Drill-down modal — shows every line item matching the filter, grouped by invoice */}
+    {drill && (() => {
+      const matching = (data?.lineItems || []).filter(drill.filter)
+      // Group by invoice number
+      const byInvoice = new Map<string, { invoiceNumber: string; customer: string; date: string; lines: LineItem[]; total: number }>()
+      for (const l of matching) {
+        const k = l.invoiceNumber || '(no invoice #)'
+        let grp = byInvoice.get(k)
+        if (!grp) {
+          grp = { invoiceNumber: k, customer: l.CustomerName, date: l.Date, lines: [], total: 0 }
+          byInvoice.set(k, grp)
+        }
+        grp.lines.push(l)
+        grp.total += l.Total
+      }
+      const invoices = Array.from(byInvoice.values()).sort((a,b) => (b.date||'').localeCompare(a.date||''))
+      const grandTotal = matching.reduce((s,l)=>s+l.Total, 0)
+      return (
+        <div onClick={()=>setDrill(null)} style={{
+          position:'fixed',inset:0,background:'rgba(0,0,0,0.7)',zIndex:9998,
+          display:'flex',alignItems:'center',justifyContent:'center',padding:16,
+        }}>
+          <div onClick={e=>e.stopPropagation()} style={{
+            background:T.bg2,border:`1px solid ${T.border2}`,borderRadius:10,
+            padding:0,width:'100%',maxWidth:900,maxHeight:'85vh',display:'flex',flexDirection:'column',
+          }}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',padding:'16px 20px',borderBottom:`1px solid ${T.border2}`}}>
+              <div>
+                <div style={{fontSize:14,fontWeight:600,color:T.text}}>{drill.title}</div>
+                {drill.subtitle && <div style={{fontSize:11,color:T.text3,marginTop:3}}>{drill.subtitle}</div>}
+                <div style={{fontSize:11,color:T.text3,marginTop:4,fontFamily:'monospace'}}>
+                  {invoices.length} invoice{invoices.length===1?'':'s'} · {matching.length} line{matching.length===1?'':'s'} · {fmtFull(grandTotal)} total
+                </div>
+              </div>
+              <button onClick={()=>setDrill(null)}
+                style={{background:'none',border:'none',color:T.text3,fontSize:20,cursor:'pointer',padding:0,lineHeight:1}}>×</button>
+            </div>
+
+            <div style={{overflowY:'auto',flex:1,padding:'12px 20px'}}>
+              {invoices.length === 0 && (
+                <div style={{padding:30,textAlign:'center',color:T.text3,fontSize:12,fontStyle:'italic'}}>
+                  No line items found matching this filter.
+                </div>
+              )}
+              {invoices.map((inv, i) => (
+                <div key={i} style={{marginBottom:14,background:T.bg3,border:`1px solid ${T.border}`,borderRadius:6,overflow:'hidden'}}>
+                  <div style={{display:'flex',alignItems:'center',gap:12,padding:'8px 12px',background:T.bg4,borderBottom:`1px solid ${T.border}`}}>
+                    <div style={{fontSize:12,fontWeight:600,color:T.text,fontFamily:'monospace'}}>#{inv.invoiceNumber}</div>
+                    <div style={{fontSize:11,color:T.text3}}>{inv.date ? new Date(inv.date).toLocaleDateString('en-AU',{day:'2-digit',month:'short',year:'numeric'}) : '—'}</div>
+                    <div style={{fontSize:11,color:T.text2,flex:1}}>{inv.customer}</div>
+                    <div style={{fontSize:12,fontFamily:'monospace',fontWeight:500,color:T.blue}}>{fmtFull(inv.total)}</div>
+                  </div>
+                  <table style={{width:'100%',borderCollapse:'collapse'}}>
+                    <tbody>{inv.lines.map((l, j) => (
+                      <tr key={j} style={{borderTop: j===0 ? 'none' : `1px solid ${T.border}`}}>
+                        <td style={{fontSize:11,color:T.text3,padding:'5px 12px',width:70,fontFamily:'monospace'}}>{l.AccountDisplayID}</td>
+                        <td style={{fontSize:11,color:T.text2,padding:'5px 12px'}}>
+                          {l.Description}
+                          {l.poNumber && <span style={{marginLeft:8,color:T.text3,fontSize:10}}>PO/VIN: {l.poNumber}</span>}
+                        </td>
+                        <td style={{fontSize:11,padding:'5px 12px',width:70,textAlign:'center'}}>
+                          <span style={{padding:'1px 6px',borderRadius:3,fontSize:10,
+                            background: l.bucket==='Tuning'?'rgba(52,199,123,0.15)':l.bucket==='Parts'?'rgba(79,142,247,0.15)':'rgba(245,166,35,0.15)',
+                            color: l.bucket==='Tuning'?T.green:l.bucket==='Parts'?T.blue:T.amber,
+                          }}>{l.bucket}</span>
+                        </td>
+                        <td style={{fontSize:11,fontFamily:'monospace',color:T.text,padding:'5px 12px',width:110,textAlign:'right'}}>{fmtFull(l.Total)}</td>
+                      </tr>
+                    ))}</tbody>
+                  </table>
+                </div>
+              ))}
+            </div>
+
+            <div style={{padding:'10px 20px',borderTop:`1px solid ${T.border2}`,fontSize:10,color:T.text3,display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+              <span>Amounts are ex-GST. Source: MYOB JAWS via CData.</span>
+              <button onClick={()=>setDrill(null)}
+                style={{padding:'5px 14px',borderRadius:4,border:`1px solid ${T.border2}`,background:'transparent',color:T.text2,fontSize:11,cursor:'pointer',fontFamily:'inherit'}}>
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )
+    })()}
   </>)
 }
 
