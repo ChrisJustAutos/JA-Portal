@@ -22,11 +22,7 @@ const T = {
 const DONUT_COLORS = [T.blue, T.teal, T.amber, T.purple, T.green, T.red, '#ff5ac4', '#60a5fa', '#f472b6', '#a3e635']
 
 export async function getServerSideProps(ctx: any) {
-  // `as any` works around a TS narrowing quirk during Next.js build — the
-  // same pattern/arg compiles fine in supplier-invoices.tsx and job-reports.tsx,
-  // but Next's SWC compiler sometimes fails here at build time. Functionally
-  // identical to passing the literal.
-  return requirePageAuth(ctx, 'view:supplier_invoices' as any)
+  return requirePageAuth(ctx, 'view:jobs')
 }
 
 interface Report { id: string; uploaded_at: string; filename: string | null; row_count: number; notes: string | null }
@@ -134,7 +130,7 @@ export default function JobsPage({ user }: { user: { id: string; email: string; 
                 Report from <strong style={{color:T.text2}}>{fmtDate(data.report.uploaded_at.substring(0,10))}</strong>
                 {data.report.filename && <> · {data.report.filename}</>}
                 {' · '}
-                <Link href="/job-reports" style={{color:T.blue, textDecoration:'none'}}>upload new report →</Link>
+                <Link href="/settings?tab=data-imports" style={{color:T.blue, textDecoration:'none'}}>upload new report →</Link>
               </span>
             )}
           </div>
@@ -147,8 +143,8 @@ export default function JobsPage({ user }: { user: { id: string; email: string; 
             <div style={{background:T.bg2, border:`1px dashed ${T.border2}`, borderRadius:12, padding:60, textAlign:'center'}}>
               <div style={{fontSize:16, fontWeight:600, marginBottom:8}}>No job report uploaded yet</div>
               <div style={{fontSize:13, color:T.text3, marginBottom:20}}>Upload a Mechanics Desk job export to see open jobs, type breakdowns, and forecast revenue.</div>
-              <Link href="/job-reports" style={{display:'inline-block', padding:'10px 20px', borderRadius:6, background:T.accent, color:'#fff', fontSize:13, fontWeight:600, textDecoration:'none'}}>
-                Go to Job Reports → upload
+              <Link href="/settings?tab=data-imports" style={{display:'inline-block', padding:'10px 20px', borderRadius:6, background:T.accent, color:'#fff', fontSize:13, fontWeight:600, textDecoration:'none'}}>
+                Go to Settings → Data Imports
               </Link>
             </div>
           ) : (
