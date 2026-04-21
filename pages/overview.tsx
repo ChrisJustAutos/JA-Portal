@@ -339,7 +339,7 @@ export default function OverviewPage({ user }: { user: { id: string, email: stri
     <>
       <Head><title>Overview — Just Autos</title></Head>
       <div style={{display:'flex', minHeight:'100vh', background:T.bg, color:T.text, fontFamily:'system-ui, -apple-system, sans-serif'}}>
-        <PortalSidebar activeId="overview" currentUserRole={user.role}/>
+        <PortalSidebar activeId="overview" currentUserRole={user.role} currentUserVisibleTabs={(user as any).visibleTabs}/>
         <main style={{flex:1, padding:'20px 32px 40px', overflow:'auto'}}>
 
           <div style={{display:'flex', alignItems:'center', gap:12, marginBottom:6, flexWrap:'wrap'}}>

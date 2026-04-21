@@ -121,7 +121,7 @@ export default function SalesDashboard({ user }: { user: PortalUserSSR }) {
         lastRefresh={lastRefresh}
         onRefresh={()=>load(true)}
         refreshing={refreshing}
-        currentUserRole={user.role}
+        currentUserRole={user.role} currentUserVisibleTabs={(user as any).visibleTabs}
         currentUserName={user.displayName}
         currentUserEmail={user.email}
       />

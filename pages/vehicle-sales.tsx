@@ -190,7 +190,7 @@ export default function VehicleSalesPage({ user }: { user: { id: string; email: 
     <>
       <Head><title>Vehicle Sales — Just Autos</title></Head>
       <div style={{display:'flex', minHeight:'100vh', background:T.bg, color:T.text, fontFamily:'system-ui, -apple-system, sans-serif'}}>
-        <PortalSidebar activeId="vehicle-sales" currentUserRole={user.role}/>
+        <PortalSidebar activeId="vehicle-sales" currentUserRole={user.role} currentUserVisibleTabs={(user as any).visibleTabs}/>
         <main style={{flex:1, padding:'20px 32px 40px', overflow:'auto'}}>
 
           <div style={{display:'flex', alignItems:'flex-start', justifyContent:'space-between', gap:12, marginBottom:16, flexWrap:'wrap'}}>

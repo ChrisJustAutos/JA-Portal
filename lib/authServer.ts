@@ -24,6 +24,7 @@ export interface PortalUser {
   displayName: string | null
   role: UserRole
   isActive: boolean
+  visibleTabs: string[] | null  // null = use role defaults
 }
 
 // Extract the JWT from either the Authorization header or our session cookie.
@@ -48,7 +49,7 @@ export async function getCurrentUser(req: NextApiRequest): Promise<PortalUser | 
 
   const { data: profile, error: profileErr } = await sb
     .from('user_profiles')
-    .select('id, email, display_name, role, is_active')
+    .select('id, email, display_name, role, is_active, visible_tabs')
     .eq('id', authData.user.id)
     .single()
 
@@ -61,6 +62,7 @@ export async function getCurrentUser(req: NextApiRequest): Promise<PortalUser | 
     displayName: profile.display_name,
     role: profile.role as UserRole,
     isActive: profile.is_active,
+    visibleTabs: (profile as any).visible_tabs || null,
   }
 }
 
@@ -127,6 +129,7 @@ export async function requirePageAuth(context: any, permission: Permission | nul
         email: user.email,
         displayName: user.displayName,
         role: user.role,
+        visibleTabs: user.visibleTabs,
       },
     },
   }

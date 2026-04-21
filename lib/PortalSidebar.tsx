@@ -69,6 +69,10 @@ export interface PortalSidebarProps {
   // SSR fallback) all items are shown — server-side route guards are the actual
   // source of truth, this is just UX polish.
   currentUserRole?: UserRole
+  // Per-user tab override. When provided (non-null), only these tab IDs show
+  // in the sidebar (intersected with role permissions). When null/undefined,
+  // the user sees every tab their role has permission for.
+  currentUserVisibleTabs?: string[] | null
   currentUserName?: string | null
   currentUserEmail?: string | null
 }
@@ -82,6 +86,7 @@ export default function PortalSidebar({
   alertCounts = {},
   loading = false,
   currentUserRole,
+  currentUserVisibleTabs,
   currentUserName,
   currentUserEmail,
 }: PortalSidebarProps) {
@@ -109,10 +114,10 @@ export default function PortalSidebar({
     return () => router.events.off('routeChangeStart', close)
   }, [router])
 
-  // Build the base nav, filtering by role if provided
+  // Build the base nav, filtering by role (and per-user tab list) if provided
   const baseNav: PortalNavItem[] = (() => {
     if (!currentUserRole) return [...DEFAULT_NAV]
-    const allowed = new Set(visibleNavSections(currentUserRole))
+    const allowed = new Set(visibleNavSections(currentUserRole, currentUserVisibleTabs))
     const filtered = DEFAULT_NAV.filter(it => allowed.has(it.id))
     if (allowed.has('settings')) filtered.push(SETTINGS_NAV_ITEM)
     return filtered

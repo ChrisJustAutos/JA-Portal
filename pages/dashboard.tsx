@@ -982,7 +982,7 @@ export default function Portal({ user }: { user: PortalUserSSR }) {
           refreshing={refreshing}
           alertCounts={{invoices:openCount, payables:billCount}}
           loading={loading}
-          currentUserRole={user.role}
+          currentUserRole={user.role} currentUserVisibleTabs={(user as any).visibleTabs}
           currentUserName={user.displayName}
           currentUserEmail={user.email}
         />

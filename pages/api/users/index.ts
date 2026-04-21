@@ -7,6 +7,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { createClient } from '@supabase/supabase-js'
 import { withAuth, audit } from '../../../lib/authServer'
+import { PORTAL_TABS } from '../../../lib/permissions'
 
 function getAdmin() {
   return createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!, { auth: { persistSession: false } })
@@ -16,17 +17,27 @@ async function list(req: NextApiRequest, res: NextApiResponse) {
   const sb = getAdmin()
   const { data, error } = await sb
     .from('user_profiles')
-    .select('id, email, display_name, role, is_active, created_at, last_sign_in_at')
+    .select('id, email, display_name, role, is_active, created_at, last_sign_in_at, visible_tabs')
     .order('created_at', { ascending: false })
   if (error) return res.status(500).json({ error: error.message })
   return res.status(200).json({ users: data || [] })
 }
 
 async function invite(req: NextApiRequest, res: NextApiResponse, actor: any) {
-  const { email, displayName, role } = req.body || {}
+  const { email, displayName, role, visible_tabs } = req.body || {}
   if (!email || !role) return res.status(400).json({ error: 'email and role required' })
   const validRoles = ['admin','manager','sales','accountant','viewer']
   if (!validRoles.includes(role)) return res.status(400).json({ error: 'Invalid role' })
+
+  // Validate visible_tabs: must be an array of strings from PORTAL_TABS ids,
+  // or null/undefined to use role defaults.
+  let tabsToStore: string[] | null = null
+  if (visible_tabs !== undefined && visible_tabs !== null) {
+    if (!Array.isArray(visible_tabs)) return res.status(400).json({ error: 'visible_tabs must be an array' })
+    const validIds = new Set(PORTAL_TABS.map(t => t.id))
+    const cleaned = visible_tabs.filter((x: any) => typeof x === 'string' && validIds.has(x))
+    tabsToStore = cleaned
+  }
 
   const sb = getAdmin()
 
@@ -52,6 +63,7 @@ async function invite(req: NextApiRequest, res: NextApiResponse, actor: any) {
     role,
     is_active: true,
     created_by: actor.id,
+    visible_tabs: tabsToStore,
   })
   if (profileErr) {
     await sb.auth.admin.deleteUser(created.user.id).catch(()=>{})

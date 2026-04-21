@@ -5,6 +5,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { createClient } from '@supabase/supabase-js'
 import { withAuth, audit } from '../../../lib/authServer'
+import { PORTAL_TABS } from '../../../lib/permissions'
 
 function getAdmin() {
   return createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!, { auth: { persistSession: false } })
@@ -13,7 +14,7 @@ function getAdmin() {
 async function patch(req: NextApiRequest, res: NextApiResponse, actor: any) {
   const id = req.query.id as string
   if (!id) return res.status(400).json({ error: 'id required' })
-  const { role, display_name, is_active } = req.body || {}
+  const { role, display_name, is_active, visible_tabs } = req.body || {}
   const validRoles = ['admin','manager','sales','accountant','viewer']
   if (role !== undefined && !validRoles.includes(role)) return res.status(400).json({ error: 'Invalid role' })
 
@@ -31,6 +32,18 @@ async function patch(req: NextApiRequest, res: NextApiResponse, actor: any) {
   if (role !== undefined) patch.role = role
   if (display_name !== undefined) patch.display_name = display_name
   if (is_active !== undefined) patch.is_active = is_active
+
+  // visible_tabs: null = reset to role defaults; array = explicit allowlist
+  if (visible_tabs !== undefined) {
+    if (visible_tabs === null) {
+      patch.visible_tabs = null
+    } else if (Array.isArray(visible_tabs)) {
+      const validIds = new Set(PORTAL_TABS.map(t => t.id))
+      patch.visible_tabs = visible_tabs.filter((x: any) => typeof x === 'string' && validIds.has(x))
+    } else {
+      return res.status(400).json({ error: 'visible_tabs must be an array or null' })
+    }
+  }
 
   const { data, error } = await sb.from('user_profiles').update(patch).eq('id', id).select().single()
   if (error) return res.status(500).json({ error: error.message })

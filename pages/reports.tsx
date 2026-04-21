@@ -161,7 +161,7 @@ export default function ReportsPage({ user }: { user: PortalUserSSR }) {
       <>
         <Head><title>Reports — Just Autos</title></Head>
         <div style={{ display: 'flex', minHeight: '100vh', fontFamily: "'DM Sans', system-ui, sans-serif", background: T.bg, color: T.text }}>
-          <PortalSidebar activeId="reports" currentUserRole={user.role} currentUserName={user.displayName} currentUserEmail={user.email}/>
+          <PortalSidebar activeId="reports" currentUserRole={user.role} currentUserVisibleTabs={(user as any).visibleTabs} currentUserName={user.displayName} currentUserEmail={user.email}/>
           <div style={{ flex: 1, padding: 40, overflowY: 'auto' }}>
             <h1 style={{ color: T.text, fontSize: 24 }}>Reports</h1>
             <p style={{ color: T.text2, maxWidth: 520 }}>Your role ({user.role}) doesn't have access to generate any report types. Contact an admin if you need access.</p>
@@ -175,7 +175,7 @@ export default function ReportsPage({ user }: { user: PortalUserSSR }) {
     <>
       <Head><title>Reports — Just Autos</title></Head>
       <div style={{ display: 'flex', minHeight: '100vh', fontFamily: "'DM Sans', system-ui, sans-serif", background: T.bg, color: T.text }}>
-        <PortalSidebar activeId="reports" currentUserRole={user.role} currentUserName={user.displayName} currentUserEmail={user.email}/>
+        <PortalSidebar activeId="reports" currentUserRole={user.role} currentUserVisibleTabs={(user as any).visibleTabs} currentUserName={user.displayName} currentUserEmail={user.email}/>
         <div style={{ flex: 1, padding: '32px 40px', overflowY: 'auto' }}>
 
           {/* Header */}

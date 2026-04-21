@@ -112,7 +112,7 @@ export default function JobsPage({ user }: { user: { id: string; email: string; 
     <>
       <Head><title>Jobs Forecast — Just Autos</title></Head>
       <div style={{display:'flex', minHeight:'100vh', background:T.bg, color:T.text, fontFamily:'system-ui, -apple-system, sans-serif'}}>
-        <PortalSidebar activeId="jobs" currentUserRole={user.role}/>
+        <PortalSidebar activeId="jobs" currentUserRole={user.role} currentUserVisibleTabs={(user as any).visibleTabs}/>
         <main style={{flex:1, padding:'20px 32px 40px', overflow:'auto'}}>
 
           <div style={{display:'flex', alignItems:'center', gap:12, marginBottom:16, flexWrap:'wrap'}}>

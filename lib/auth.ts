@@ -20,6 +20,7 @@ export interface SessionUser {
   role: Role
   displayName: string
   issuedAt: number
+  visibleTabs?: string[] | null  // null/undefined = use role defaults, array = per-user override
 }
 
 // Service-role Supabase client (lazy singleton)
@@ -57,7 +58,7 @@ async function loadUser(req: NextApiRequest): Promise<SessionUser | null> {
 
     const { data: profile } = await sb()
       .from('user_profiles')
-      .select('id, email, display_name, role, is_active')
+      .select('id, email, display_name, role, is_active, visible_tabs')
       .eq('id', authData.user.id)
       .single()
 
@@ -70,6 +71,7 @@ async function loadUser(req: NextApiRequest): Promise<SessionUser | null> {
       role: profile.role as Role,
       displayName: profile.display_name || profile.email,
       issuedAt: Date.now(),
+      visibleTabs: (profile as any).visible_tabs || null,
     }
     _cache.set(req, u)
     return u

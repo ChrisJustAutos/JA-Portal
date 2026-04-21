@@ -12,7 +12,7 @@ import Head from 'next/head'
 import { useRouter } from 'next/router'
 import PortalSidebar from '../lib/PortalSidebar'
 import { getSupabase } from '../lib/supabaseClient'
-import { ROLE_LABELS, ROLE_DESCRIPTIONS, UserRole, roleHasPermission } from '../lib/permissions'
+import { ROLE_LABELS, ROLE_DESCRIPTIONS, UserRole, roleHasPermission, PORTAL_TABS, defaultTabsForRole } from '../lib/permissions'
 import { requirePageAuth } from '../lib/authServer'
 import GeneralTab from '../components/settings/GeneralTab'
 import DistributorReportTab from '../components/settings/DistributorReportTab'
@@ -73,7 +73,7 @@ export default function SettingsPage({ user }: { user: PortalUserSSR }) {
     <>
       <Head><title>Settings — Just Autos</title><meta name="robots" content="noindex,nofollow"/></Head>
       <div style={{display:'flex',height:'100vh',overflow:'hidden',fontFamily:"'DM Sans',system-ui,sans-serif",color:T.text}}>
-        <PortalSidebar activeId="settings" currentUserRole={user.role}/>
+        <PortalSidebar activeId="settings" currentUserRole={user.role} currentUserVisibleTabs={(user as any).visibleTabs}/>
         <div style={{flex:1,display:'flex',flexDirection:'column',overflow:'hidden',background:T.bg}}>
           <div style={{height:52,background:T.bg2,borderBottom:`1px solid ${T.border}`,display:'flex',alignItems:'center',padding:'0 20px',gap:12,flexShrink:0}}>
             <div style={{fontSize:14,fontWeight:600}}>Settings</div>
@@ -117,6 +117,7 @@ export default function SettingsPage({ user }: { user: PortalUserSSR }) {
 interface UserRow {
   id: string; email: string; display_name: string | null; role: UserRole
   is_active: boolean; created_at: string; last_sign_in_at: string | null
+  visible_tabs: string[] | null
 }
 
 function UsersTab({ currentUser }: { currentUser: PortalUserSSR }) {
@@ -124,7 +125,51 @@ function UsersTab({ currentUser }: { currentUser: PortalUserSSR }) {
   const [loading, setLoading] = useState(true)
   const [err, setErr] = useState('')
   const [invite, setInvite] = useState({ email: '', displayName: '', role: 'viewer' as UserRole })
+  // Which tabs the new invitee will see. Starts from role defaults; admin can
+  // tick/untick individual tabs before submitting.
+  const [inviteTabs, setInviteTabs] = useState<string[]>(() => defaultTabsForRole('viewer'))
   const [inviting, setInviting] = useState(false)
+
+  // Edit-tabs modal state (null = closed; a user row = open for that user)
+  const [editingTabsFor, setEditingTabsFor] = useState<UserRow | null>(null)
+  const [editingTabs, setEditingTabs] = useState<string[]>([])
+  const [savingTabs, setSavingTabs] = useState(false)
+
+  // Whenever the role in the invite form changes, reset the tab selection to
+  // that role's defaults. Admin is still free to adjust after.
+  function changeInviteRole(role: UserRole) {
+    setInvite(v => ({ ...v, role }))
+    setInviteTabs(defaultTabsForRole(role))
+  }
+
+  function toggleInviteTab(tabId: string) {
+    setInviteTabs(prev => prev.includes(tabId) ? prev.filter(t => t !== tabId) : [...prev, tabId])
+  }
+
+  function openEditTabs(u: UserRow) {
+    setEditingTabsFor(u)
+    // If user has a custom list, use it; otherwise seed with their role defaults
+    setEditingTabs(u.visible_tabs ? [...u.visible_tabs] : defaultTabsForRole(u.role))
+  }
+
+  function toggleEditingTab(tabId: string) {
+    setEditingTabs(prev => prev.includes(tabId) ? prev.filter(t => t !== tabId) : [...prev, tabId])
+  }
+
+  async function saveEditingTabs(resetToDefault = false) {
+    if (!editingTabsFor) return
+    setSavingTabs(true); setErr('')
+    try {
+      const r = await fetch(`/api/users/${editingTabsFor.id}`, {
+        method:'PATCH', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ visible_tabs: resetToDefault ? null : editingTabs }),
+      })
+      if (!r.ok) throw new Error((await r.json()).error || 'Save failed')
+      await load()
+      setEditingTabsFor(null)
+    } catch (e: any) { setErr(e.message) }
+    finally { setSavingTabs(false) }
+  }
 
   const load = useCallback(async () => {
     try {
@@ -144,11 +189,12 @@ function UsersTab({ currentUser }: { currentUser: PortalUserSSR }) {
     try {
       const r = await fetch('/api/users', {
         method:'POST', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify(invite),
+        body: JSON.stringify({ ...invite, visible_tabs: inviteTabs }),
       })
       if (!r.ok) throw new Error((await r.json()).error || 'Invite failed')
       const d = await r.json()
       setInvite({ email:'', displayName:'', role:'viewer' })
+      setInviteTabs(defaultTabsForRole('viewer'))
       await load()
       alert(`Invited ${d.user.email}.\n${d.resetEmailSent ? 'Password setup email sent.' : 'Note: reset email failed to send — use "Resend invite" on the row.'}`)
     } catch (e: any) { setErr(e.message) }
@@ -202,8 +248,8 @@ function UsersTab({ currentUser }: { currentUser: PortalUserSSR }) {
               style={{width:'100%',background:T.bg3,border:`1px solid ${T.border}`,color:T.text,borderRadius:4,padding:'6px 10px',fontSize:12,outline:'none',boxSizing:'border-box'}}/>
           </div>
           <div style={{minWidth:140}}>
-            <div style={{fontSize:10,color:T.text3,marginBottom:4,textTransform:'uppercase',letterSpacing:'0.05em'}}>Role</div>
-            <select value={invite.role} onChange={e=>setInvite({...invite,role:e.target.value as UserRole})}
+            <div style={{fontSize:10,color:T.text3,marginBottom:4,textTransform:'uppercase',letterSpacing:'0.05em'}}>Role (template)</div>
+            <select value={invite.role} onChange={e=>changeInviteRole(e.target.value as UserRole)}
               style={{background:T.bg3,border:`1px solid ${T.border}`,color:T.text,borderRadius:4,padding:'6px 10px',fontSize:12,outline:'none',width:'100%',boxSizing:'border-box'}}>
               {Object.entries(ROLE_LABELS).map(([k,v])=><option key={k} value={k}>{v}</option>)}
             </select>
@@ -215,6 +261,53 @@ function UsersTab({ currentUser }: { currentUser: PortalUserSSR }) {
         </div>
         <div style={{fontSize:10,color:T.text3,marginTop:8,lineHeight:1.5}}>
           {ROLE_DESCRIPTIONS[invite.role]}
+        </div>
+
+        {/* Tab allowlist — starts from role defaults, admin can tick/untick individual tabs */}
+        <div style={{marginTop:14,paddingTop:14,borderTop:`1px solid ${T.border}`}}>
+          <div style={{display:'flex',alignItems:'baseline',justifyContent:'space-between',marginBottom:8}}>
+            <div style={{fontSize:10,color:T.text3,textTransform:'uppercase',letterSpacing:'0.05em',fontWeight:600}}>Sidebar tabs</div>
+            <div style={{display:'flex',gap:10,fontSize:10}}>
+              <button type="button" onClick={()=>setInviteTabs(PORTAL_TABS.map(t=>t.id))}
+                style={{background:'none',border:'none',color:T.text3,cursor:'pointer',fontFamily:'inherit',padding:0}}>
+                Select all
+              </button>
+              <button type="button" onClick={()=>setInviteTabs([])}
+                style={{background:'none',border:'none',color:T.text3,cursor:'pointer',fontFamily:'inherit',padding:0}}>
+                Clear
+              </button>
+              <button type="button" onClick={()=>setInviteTabs(defaultTabsForRole(invite.role))}
+                style={{background:'none',border:'none',color:T.blue,cursor:'pointer',fontFamily:'inherit',padding:0}}>
+                Reset to role defaults
+              </button>
+            </div>
+          </div>
+          <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(170px,1fr))',gap:6}}>
+            {PORTAL_TABS.map(t => {
+              const roleHas = roleHasPermission(invite.role, t.permission)
+              const checked = inviteTabs.includes(t.id)
+              return (
+                <label key={t.id} style={{
+                  display:'flex',alignItems:'center',gap:7,
+                  padding:'6px 10px',
+                  background: checked ? T.bg3 : 'transparent',
+                  border:`1px solid ${checked ? T.border2 : T.border}`,
+                  borderRadius:4,
+                  cursor: roleHas ? 'pointer' : 'not-allowed',
+                  opacity: roleHas ? 1 : 0.4,
+                  fontSize:12,
+                }} title={roleHas ? '' : `The ${ROLE_LABELS[invite.role]} role doesn't have permission for this tab.`}>
+                  <input type="checkbox" checked={checked} disabled={!roleHas}
+                    onChange={()=>toggleInviteTab(t.id)}
+                    style={{margin:0}}/>
+                  <span style={{color: checked ? T.text : T.text2}}>{t.label}</span>
+                </label>
+              )
+            })}
+          </div>
+          <div style={{fontSize:10,color:T.text3,marginTop:8}}>
+            {inviteTabs.length} of {PORTAL_TABS.length} tabs selected. Greyed-out tabs aren't permitted by the selected role.
+          </div>
         </div>
       </form>
     </div>
@@ -230,7 +323,7 @@ function UsersTab({ currentUser }: { currentUser: PortalUserSSR }) {
       {!loading && (
         <table style={{width:'100%',borderCollapse:'collapse'}}>
           <thead><tr style={{borderBottom:`1px solid ${T.border}`}}>
-            {['Email','Name','Role','Active','Last sign-in','Created',''].map(h =>
+            {['Email','Name','Role','Tabs','Active','Last sign-in','Created',''].map(h =>
               <th key={h} style={{fontSize:10,color:T.text3,padding:'10px 12px',textAlign:'left',fontWeight:500,textTransform:'uppercase',letterSpacing:'0.05em'}}>{h}</th>
             )}
           </tr></thead>
@@ -244,6 +337,15 @@ function UsersTab({ currentUser }: { currentUser: PortalUserSSR }) {
                   style={{background:T.bg3,border:`1px solid ${T.border}`,color:isSelf?T.text3:T.text,borderRadius:3,padding:'3px 6px',fontSize:11,outline:'none',cursor:isSelf?'not-allowed':'pointer'}}>
                   {Object.entries(ROLE_LABELS).map(([k,v])=><option key={k} value={k}>{v}</option>)}
                 </select>
+              </td>
+              <td style={{padding:'8px 12px',whiteSpace:'nowrap'}}>
+                <button onClick={()=>openEditTabs(u)}
+                  style={{padding:'3px 8px',borderRadius:3,border:`1px solid ${T.border2}`,background:'transparent',color:T.text2,fontSize:11,cursor:'pointer',fontFamily:'inherit'}}>
+                  {u.visible_tabs ? `${u.visible_tabs.length} custom` : 'Role default'}
+                </button>
+                {u.visible_tabs && (
+                  <span style={{marginLeft:6,fontSize:9,padding:'2px 5px',borderRadius:2,background:`${T.purple}22`,color:T.purple,fontWeight:500}}>CUSTOM</span>
+                )}
               </td>
               <td style={{padding:'8px 12px'}}>
                 <label style={{display:'inline-flex',alignItems:'center',gap:6,cursor:isSelf?'not-allowed':'pointer',opacity:isSelf?0.5:1}}>
@@ -275,6 +377,93 @@ function UsersTab({ currentUser }: { currentUser: PortalUserSSR }) {
         </table>
       )}
     </div>
+
+    {/* Edit Tabs modal */}
+    {editingTabsFor && (() => {
+      const target = editingTabsFor
+      const roleDefaults = defaultTabsForRole(target.role)
+      return (
+        <div onClick={()=>!savingTabs && setEditingTabsFor(null)} style={{
+          position:'fixed',inset:0,background:'rgba(0,0,0,0.6)',zIndex:9999,
+          display:'flex',alignItems:'center',justifyContent:'center',padding:16,
+        }}>
+          <div onClick={e=>e.stopPropagation()} style={{
+            background:T.bg2,border:`1px solid ${T.border2}`,borderRadius:10,
+            padding:20,width:'100%',maxWidth:560,maxHeight:'85vh',display:'flex',flexDirection:'column',
+          }}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:14}}>
+              <div>
+                <div style={{fontSize:14,fontWeight:600,color:T.text}}>Edit sidebar tabs</div>
+                <div style={{fontSize:11,color:T.text3,marginTop:3,fontFamily:'monospace'}}>{target.email}</div>
+                <div style={{fontSize:10,color:T.text3,marginTop:2}}>
+                  Role: <strong style={{color:T.text2}}>{ROLE_LABELS[target.role]}</strong> · {target.visible_tabs ? 'Currently: custom tab list' : 'Currently: using role defaults'}
+                </div>
+              </div>
+              <button onClick={()=>setEditingTabsFor(null)} disabled={savingTabs}
+                style={{background:'none',border:'none',color:T.text3,fontSize:18,cursor:'pointer',padding:0,lineHeight:1}}>×</button>
+            </div>
+
+            <div style={{display:'flex',gap:10,marginBottom:10,fontSize:10}}>
+              <button type="button" onClick={()=>setEditingTabs(PORTAL_TABS.map(t=>t.id))}
+                style={{background:'none',border:'none',color:T.text3,cursor:'pointer',fontFamily:'inherit',padding:0}}>
+                Select all
+              </button>
+              <button type="button" onClick={()=>setEditingTabs([])}
+                style={{background:'none',border:'none',color:T.text3,cursor:'pointer',fontFamily:'inherit',padding:0}}>
+                Clear
+              </button>
+              <button type="button" onClick={()=>setEditingTabs(roleDefaults)}
+                style={{background:'none',border:'none',color:T.blue,cursor:'pointer',fontFamily:'inherit',padding:0}}>
+                Select role defaults
+              </button>
+              <div style={{marginLeft:'auto',color:T.text3}}>{editingTabs.length} of {PORTAL_TABS.length} selected</div>
+            </div>
+
+            <div style={{overflowY:'auto',flex:1,minHeight:0}}>
+              <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(170px,1fr))',gap:6}}>
+                {PORTAL_TABS.map(t => {
+                  const roleHas = roleHasPermission(target.role, t.permission)
+                  const checked = editingTabs.includes(t.id)
+                  return (
+                    <label key={t.id} style={{
+                      display:'flex',alignItems:'center',gap:7,padding:'6px 10px',
+                      background: checked ? T.bg3 : 'transparent',
+                      border:`1px solid ${checked ? T.border2 : T.border}`,
+                      borderRadius:4,
+                      cursor: roleHas ? 'pointer' : 'not-allowed',
+                      opacity: roleHas ? 1 : 0.4,
+                      fontSize:12,
+                    }} title={roleHas ? '' : `The ${ROLE_LABELS[target.role]} role doesn't have permission for this tab.`}>
+                      <input type="checkbox" checked={checked} disabled={!roleHas || savingTabs}
+                        onChange={()=>toggleEditingTab(t.id)}
+                        style={{margin:0}}/>
+                      <span style={{color: checked ? T.text : T.text2}}>{t.label}</span>
+                    </label>
+                  )
+                })}
+              </div>
+            </div>
+
+            <div style={{display:'flex',gap:8,marginTop:16,paddingTop:14,borderTop:`1px solid ${T.border}`,justifyContent:'space-between'}}>
+              <button onClick={()=>saveEditingTabs(true)} disabled={savingTabs}
+                style={{padding:'7px 14px',borderRadius:4,border:`1px solid ${T.border2}`,background:'transparent',color:T.text3,fontSize:12,cursor:savingTabs?'wait':'pointer',fontFamily:'inherit'}}>
+                Reset to role defaults
+              </button>
+              <div style={{display:'flex',gap:8}}>
+                <button onClick={()=>setEditingTabsFor(null)} disabled={savingTabs}
+                  style={{padding:'7px 14px',borderRadius:4,border:`1px solid ${T.border2}`,background:'transparent',color:T.text2,fontSize:12,cursor:savingTabs?'wait':'pointer',fontFamily:'inherit'}}>
+                  Cancel
+                </button>
+                <button onClick={()=>saveEditingTabs(false)} disabled={savingTabs}
+                  style={{padding:'7px 16px',borderRadius:4,border:'none',background:savingTabs?T.bg4:T.blue,color:savingTabs?T.text3:'#fff',fontSize:12,cursor:savingTabs?'wait':'pointer',fontFamily:'inherit',fontWeight:600}}>
+                  {savingTabs ? 'Saving…' : 'Save tabs'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )
+    })()}
   </div>
 }
 
