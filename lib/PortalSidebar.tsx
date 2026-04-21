@@ -43,6 +43,7 @@ export const DEFAULT_NAV: PortalNavItem[] = [
   {id:'reports',      kind:'link',    label:'Reports',      href:'/reports',       dot:T.green},
   {id:'todos',        kind:'link',    label:'To-Dos',       href:'/todos',         dot:T.amber},
   {id:'jobs',         kind:'link',    label:'Jobs',         href:'/jobs',          dot:T.teal},
+  {id:'vehicle-sales',kind:'link',    label:'Vehicle Sales',href:'/vehicle-sales', dot:'#34c77b'},
   {id:'invoices',     kind:'section', label:'Invoices',          section:'invoices', dot:T.amber, alertKey:'invoices'},
   {id:'pnl',          kind:'section', label:'P&L — This Month',  section:'pnl',      dot:T.green},
   {id:'stock',        kind:'section', label:'Stock & Inventory', section:'stock',    dot:T.purple},

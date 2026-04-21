@@ -67,46 +67,10 @@ function primaryJobType(raw: any): string | null {
   return signal[0] || parts[0]
 }
 
-// Vehicle platform detection — matches model codes that appear in Mechanics
-// Desk job-type strings (e.g. "VDJ79 - NPC 1600Nm Clutch") or in the Vehicle
-// text field (e.g. "2024 Toyota Land Cruiser 79 BB"). Order matters — the
-// more specific patterns must come first so "VDJ200" isn't caught by the
-// generic "VDJ" fallback.
-const PLATFORM_FROM_TYPE: { re: RegExp; label: string }[] = [
-  { re: /\bVDJ200\b/i,   label: 'VDJ200' },
-  { re: /\bVDJ79\b/i,    label: 'VDJ79'  },
-  { re: /\bVDJ76\b/i,    label: 'VDJ76'  },
-  { re: /\bVDJ70\*?/i,   label: 'VDJ70*' },
-  { re: /\bFJA300\b/i,   label: 'FJA300' },
-  { re: /\bGDJ70\*?/i,   label: 'GDJ70*' },
-  { re: /\b1GD\b/i,      label: 'Hilux 1GD' },
-]
-
-// Used as a fallback when the job type string has no explicit code. Matches
-// numbers next to "Land Cruiser" / "LandCruiser" that identify the platform.
-const PLATFORM_FROM_VEHICLE: { re: RegExp; label: string }[] = [
-  { re: /Land\s*Cruiser\s*300\b/i,     label: 'FJA300' },
-  { re: /Land\s*Cruiser\s*250\b/i,     label: 'FJA250' },
-  { re: /Land\s*Cruiser\s*200\b/i,     label: 'VDJ200' },
-  { re: /Land\s*Cruiser\s*79\s+[A-Z]/i, label: 'VDJ79' },  // "LandCruiser 79 BB" etc
-  { re: /\bHilux\b/i,                  label: 'Hilux'  },
-]
-
-// Derive the vehicle platform code from the primary job type string, falling
-// back to the Vehicle text field when the type has no code embedded.
-function detectVehiclePlatform(primaryType: string | null, vehicleText: string | null): string | null {
-  if (primaryType) {
-    for (const p of PLATFORM_FROM_TYPE) {
-      if (p.re.test(primaryType)) return p.label
-    }
-  }
-  if (vehicleText) {
-    for (const p of PLATFORM_FROM_VEHICLE) {
-      if (p.re.test(vehicleText)) return p.label
-    }
-  }
-  return null
-}
+// Vehicle platform detection is in lib/vehiclePlatforms.ts. The MYOB vehicle
+// sales classifier uses the same logic so VDJ79/FJA300/etc. mean the same
+// thing everywhere in the portal.
+import { detectPlatformWithVehicleFallback } from './vehiclePlatforms'
 
 // Parse a value that might be "$1,234.56" / "1234.56" / 1234.56 / "" into a number or null.
 function parseMoney(v: any): number | null {
@@ -219,7 +183,7 @@ export function parseJobReport(buf: Buffer, filename: string): ParsedJobReport {
       closed_date:     closedDate,
       job_type:        jobTypeStr,
       estimated_total: headerMap.estimated_total ? parseMoney(row[headerMap.estimated_total]) : null,
-      vehicle_platform: detectVehiclePlatform(jobTypeStr, vehicleStr),
+      vehicle_platform: detectPlatformWithVehicleFallback(jobTypeStr, vehicleStr),
       raw: row,
     })
   }
