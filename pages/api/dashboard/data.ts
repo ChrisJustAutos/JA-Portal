@@ -210,6 +210,23 @@ async function jobsMetric(metric: string): Promise<number> {
       .or('status.ilike.%closed%,status.ilike.%invoiced%,status.ilike.%complete%')
     return count || 0
   }
+  if (metric === 'jobs.forecast_revenue') {
+    // Sum estimated_total across jobs that are NOT closed/invoiced/complete.
+    // Fetch only the two columns we need then sum in JS — simpler than trying
+    // to use a server-side SUM via PostgREST (which doesn't support aggregates
+    // via the standard select interface).
+    const { data } = await sb().from('job_report_jobs')
+      .select('status, estimated_total')
+      .eq('run_id', currentRun.id)
+    if (!data) return 0
+    let total = 0
+    for (const r of data as any[]) {
+      const s = String(r.status || '').toLowerCase()
+      const isClosed = s.includes('closed') || s.includes('invoiced') || s.includes('complete') || s === 'done' || s === 'finished'
+      if (!isClosed) total += Number(r.estimated_total || 0)
+    }
+    return Math.round(total * 100) / 100
+  }
   return 0
 }
 
@@ -377,6 +394,17 @@ async function resolveWidget(
         const counts: Record<string, number> = {}
         for (const r of (data as any[]) || []) { const k = r.status || '(no status)'; counts[k] = (counts[k] || 0) + 1 }
         return { segments: Object.entries(counts).map(([label, value]) => ({ label, value })) }
+      }
+      if (src === 'jobs_by_type') {
+        const { data: run } = await sb().from('job_report_runs').select('id').eq('is_current', true).maybeSingle()
+        if (!run?.id) return { segments: [] }
+        const { data } = await sb().from('job_report_jobs').select('job_type').eq('run_id', run.id)
+        const counts: Record<string, number> = {}
+        for (const r of (data as any[]) || []) {
+          const k = (r.job_type && String(r.job_type).trim()) || '(no type)'
+          counts[k] = (counts[k] || 0) + 1
+        }
+        return { segments: Object.entries(counts).map(([label, value]) => ({ label, value })).sort((a, b) => b.value - a.value) }
       }
       if (src === 'supplier_invoices_by_status') {
         const { data } = await sb().from('supplier_invoices').select('status')

@@ -59,6 +59,7 @@ export const METRICS: { id: string, label: string, group: string, returns: 'mone
   { id: 'jobs.total_count',       label: 'Job count (total)',        group: 'Jobs',       returns: 'count' },
   { id: 'jobs.open_count',        label: 'Jobs open',                group: 'Jobs',       returns: 'count' },
   { id: 'jobs.closed_count',      label: 'Jobs closed',              group: 'Jobs',       returns: 'count' },
+  { id: 'jobs.forecast_revenue',  label: 'Forecast revenue (open)',  group: 'Jobs',       returns: 'money' },
 
   // Supplier invoices
   { id: 'supplier_invoices.pending_count',    label: 'Supplier invoices pending',    group: 'Payables', returns: 'count' },
@@ -197,6 +198,7 @@ export const WIDGETS: WidgetDef[] = [
       { key: 'source', label: 'Source',
         type: { kind: 'select', options: [
           { value: 'jobs_by_status',               label: 'Jobs by status' },
+          { value: 'jobs_by_type',                 label: 'Jobs by type' },
           { value: 'supplier_invoices_by_status',  label: 'Supplier invoices by status' },
           { value: 'leads_by_rep',                 label: 'Leads by rep' },
         ]},
