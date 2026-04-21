@@ -27,8 +27,10 @@ interface Report { id: string; uploaded_at: string; filename: string | null; row
 interface ForecastJob {
   job_number: string; customer_name: string | null; vehicle: string | null;
   job_type: string | null; opened_date: string; estimated_total: number;
+  vehicle_platform: string | null;
 }
 interface MonthBucket { key: string; label: string; total: number; job_count: number; jobs: ForecastJob[] }
+interface PlatformBucket { key: string; label: string; total: number; job_count: number }
 interface Summary {
   hasReport: boolean
   report: Report | null
@@ -36,7 +38,8 @@ interface Summary {
     total: number
     job_count: number
     future_jobs_total: number
-    by_month: MonthBucket[]
+    by_month:    MonthBucket[]
+    by_platform: PlatformBucket[]
   }
 }
 
@@ -59,6 +62,7 @@ export default function JobsPage({ user }: { user: { id: string; email: string; 
   const [error, setError] = useState('')
   const [data, setData] = useState<Summary | null>(null)
   const [activeMonth, setActiveMonth] = useState<string | null>(null)
+  const [activePlatform, setActivePlatform] = useState<string>('all')
   const [search, setSearch] = useState('')
 
   useEffect(() => {
@@ -69,6 +73,7 @@ export default function JobsPage({ user }: { user: { id: string; email: string; 
         const d = await r.json()
         if (!r.ok) throw new Error(d.error || 'Load failed')
         setData(d)
+        // Default-select the first month so the table shows something right away
         if (d.forecast?.by_month?.length > 0) setActiveMonth(d.forecast.by_month[0].key)
       } catch (e: any) { setError(e.message) }
       finally { setLoading(false) }
@@ -82,15 +87,22 @@ export default function JobsPage({ user }: { user: { id: string; email: string; 
 
   const filteredJobs = useMemo(() => {
     if (!activeBucket) return []
+    let rows = activeBucket.jobs
+    if (activePlatform !== 'all') {
+      rows = rows.filter(j => (j.vehicle_platform || 'Other') === activePlatform)
+    }
     const q = search.trim().toLowerCase()
-    if (!q) return activeBucket.jobs
-    return activeBucket.jobs.filter(j =>
-      String(j.job_number || '').toLowerCase().includes(q) ||
-      String(j.customer_name || '').toLowerCase().includes(q) ||
-      String(j.vehicle || '').toLowerCase().includes(q) ||
-      String(j.job_type || '').toLowerCase().includes(q)
-    )
-  }, [activeBucket, search])
+    if (q) {
+      rows = rows.filter(j =>
+        String(j.job_number || '').toLowerCase().includes(q) ||
+        String(j.customer_name || '').toLowerCase().includes(q) ||
+        String(j.vehicle || '').toLowerCase().includes(q) ||
+        String(j.job_type || '').toLowerCase().includes(q) ||
+        String(j.vehicle_platform || '').toLowerCase().includes(q)
+      )
+    }
+    return rows
+  }, [activeBucket, search, activePlatform])
 
   const maxMonthValue = useMemo(() => {
     return Math.max(1, ...(data?.forecast?.by_month || []).map(m => m.total))
@@ -150,8 +162,11 @@ export default function JobsPage({ user }: { user: { id: string; email: string; 
                 }/>
               </div>
 
+              {/* Month chart + platform breakdown side by side */}
+              <div style={{display:'grid', gridTemplateColumns:'minmax(0, 2fr) minmax(0, 1fr)', gap:16, marginBottom:20}}>
+
               {/* Bar chart — one bar per month */}
-              <div style={{background:T.bg2, border:`1px solid ${T.border}`, borderRadius:10, padding:20, marginBottom:20}}>
+              <div style={{background:T.bg2, border:`1px solid ${T.border}`, borderRadius:10, padding:20}}>
                 <div style={{fontSize:10, color:T.text3, textTransform:'uppercase', letterSpacing:'0.05em', fontWeight:600, marginBottom:16}}>Forecast by month</div>
                 <div style={{display:'flex', alignItems:'flex-end', gap:12, height:200, paddingBottom:8, borderBottom:`1px solid ${T.border}`}}>
                   {data.forecast.by_month.map(m => {
@@ -201,6 +216,58 @@ export default function JobsPage({ user }: { user: { id: string; email: string; 
                 </div>
               </div>
 
+              {/* Platform breakdown */}
+              <div style={{background:T.bg2, border:`1px solid ${T.border}`, borderRadius:10, padding:20}}>
+                <div style={{fontSize:10, color:T.text3, textTransform:'uppercase', letterSpacing:'0.05em', fontWeight:600, marginBottom:16}}>
+                  By vehicle platform
+                </div>
+                {data.forecast.by_platform.length === 0 ? (
+                  <div style={{fontSize:11, color:T.text3}}>No platform data.</div>
+                ) : (() => {
+                  const grandTotal = data.forecast.total || 1
+                  const isFiltering = activePlatform !== 'all'
+                  return (
+                    <div style={{display:'flex', flexDirection:'column', gap:8}}>
+                      {data.forecast.by_platform.map((p, i) => {
+                        const pct = (p.total / grandTotal) * 100
+                        const isActive = activePlatform === p.key
+                        return (
+                          <div key={p.key}
+                            onClick={() => setActivePlatform(isActive ? 'all' : p.key)}
+                            style={{cursor:'pointer'}}>
+                            <div style={{display:'flex', justifyContent:'space-between', fontSize:12, marginBottom:3}}>
+                              <span style={{color: isActive ? T.blue : T.text, fontWeight: isActive ? 600 : 400}}>{p.label}</span>
+                              <span style={{color:T.text2, fontVariantNumeric:'tabular-nums'}}>
+                                {fmtMoney(p.total, true)} <span style={{color:T.text3, fontSize:10}}>({p.job_count})</span>
+                              </span>
+                            </div>
+                            <div style={{height:6, background:T.bg3, borderRadius:3, overflow:'hidden'}}>
+                              <div style={{
+                                height:'100%',
+                                width:`${pct}%`,
+                                background: isActive ? T.blue : T.teal,
+                                opacity: !isFiltering || isActive ? 1 : 0.35,
+                                transition:'opacity 0.15s',
+                              }}/>
+                            </div>
+                          </div>
+                        )
+                      })}
+                      {isFiltering && (
+                        <button onClick={() => setActivePlatform('all')}
+                          style={{
+                            marginTop:4, padding:'4px 0', border:'none', background:'transparent',
+                            color:T.text3, fontSize:10, textAlign:'left', cursor:'pointer', fontFamily:'inherit',
+                          }}>× clear platform filter</button>
+                      )}
+                    </div>
+                  )
+                })()}
+              </div>
+
+              </div>
+              {/* End month + platform grid */}
+
               {/* Month jobs table */}
               {activeBucket && (
                 <div>
@@ -217,25 +284,31 @@ export default function JobsPage({ user }: { user: { id: string; email: string; 
                   </div>
 
                   <div style={{background:T.bg2, border:`1px solid ${T.border}`, borderRadius:10, overflow:'hidden'}}>
-                    <div style={{display:'grid', gridTemplateColumns:'100px 90px 1fr 1fr 140px 110px', gap:12, padding:'10px 14px', borderBottom:`1px solid ${T.border}`, background:T.bg3, fontSize:10, color:T.text3, textTransform:'uppercase', letterSpacing:'0.05em', fontWeight:600}}>
+                    <div style={{display:'grid', gridTemplateColumns:'100px 90px 1fr 1fr 100px 130px 110px', gap:12, padding:'10px 14px', borderBottom:`1px solid ${T.border}`, background:T.bg3, fontSize:10, color:T.text3, textTransform:'uppercase', letterSpacing:'0.05em', fontWeight:600}}>
                       <div>Job #</div>
                       <div>Date</div>
                       <div>Customer</div>
                       <div>Vehicle</div>
+                      <div>Platform</div>
                       <div>Type</div>
                       <div style={{textAlign:'right'}}>Value</div>
                     </div>
                     {filteredJobs.length === 0 ? (
                       <div style={{padding:30, textAlign:'center', color:T.text3, fontSize:12}}>
-                        {search ? 'No jobs match your search.' : 'No jobs.'}
+                        {search || activePlatform !== 'all' ? 'No jobs match these filters.' : 'No jobs.'}
                       </div>
                     ) : filteredJobs.map((j, i) => (
                       <div key={j.job_number + i}
-                        style={{display:'grid', gridTemplateColumns:'100px 90px 1fr 1fr 140px 110px', gap:12, padding:'9px 14px', borderBottom:`1px solid ${T.border}`, fontSize:12, alignItems:'center'}}>
+                        style={{display:'grid', gridTemplateColumns:'100px 90px 1fr 1fr 100px 130px 110px', gap:12, padding:'9px 14px', borderBottom:`1px solid ${T.border}`, fontSize:12, alignItems:'center'}}>
                         <div style={{fontFamily:'monospace', color:T.text}}>{j.job_number}</div>
                         <div style={{color:T.text2, fontSize:11}}>{fmtDate(j.opened_date)}</div>
                         <div style={{color:T.text, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap'}}>{j.customer_name || '—'}</div>
                         <div style={{color:T.text2, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap'}}>{j.vehicle || '—'}</div>
+                        <div style={{fontSize:11}}>
+                          {j.vehicle_platform
+                            ? <span style={{padding:'2px 6px', borderRadius:3, background:T.bg3, color:T.teal, fontSize:10, fontWeight:500}}>{j.vehicle_platform}</span>
+                            : <span style={{color:T.text3}}>—</span>}
+                        </div>
                         <div style={{color:T.text3, fontSize:11, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap'}}>{j.job_type || '—'}</div>
                         <div style={{color:T.text, fontVariantNumeric:'tabular-nums', textAlign:'right', fontWeight:500}}>
                           {fmtMoney(j.estimated_total)}

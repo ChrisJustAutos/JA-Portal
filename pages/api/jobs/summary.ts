@@ -47,7 +47,7 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
 
       const { data: jobs, error } = await sb()
         .from('job_report_jobs')
-        .select('job_number, customer_name, vehicle, job_type, estimated_total, opened_date')
+        .select('job_number, customer_name, vehicle, job_type, estimated_total, opened_date, vehicle_platform')
         .eq('run_id', run.id)
         .order('opened_date', { ascending: true, nullsFirst: false })
       if (error) throw new Error(error.message)
@@ -55,6 +55,9 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
       const today = todayBrisbaneISO()
       const byMonth = new Map<string, {
         key: string; label: string; total: number; job_count: number; jobs: any[]
+      }>()
+      const byPlatform = new Map<string, {
+        key: string; label: string; total: number; job_count: number;
       }>()
 
       let grandTotal = 0
@@ -67,6 +70,8 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
 
         const est = Number(j.estimated_total || 0)
         if (est <= 0) continue  // only jobs with a dollar value contribute to the forecast
+
+        const platform = j.vehicle_platform || 'Other'
 
         const key = j.opened_date.substring(0, 7)  // YYYY-MM
         if (!byMonth.has(key)) {
@@ -82,7 +87,15 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
           job_type:        j.job_type,
           opened_date:     j.opened_date,
           estimated_total: est,
+          vehicle_platform: platform,
         })
+
+        if (!byPlatform.has(platform)) {
+          byPlatform.set(platform, { key: platform, label: platform, total: 0, job_count: 0 })
+        }
+        const pb = byPlatform.get(platform)!
+        pb.total += est
+        pb.job_count++
 
         grandTotal += est
         contribCount++
@@ -94,6 +107,10 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
         m.total = Math.round(m.total * 100) / 100
       }
 
+      const byPlatformSorted = Array.from(byPlatform.values())
+        .map(p => ({ ...p, total: Math.round(p.total * 100) / 100 }))
+        .sort((a, b) => b.total - a.total)  // largest first
+
       res.status(200).json({
         hasReport: true,
         report: run,
@@ -102,6 +119,7 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
           job_count:         contribCount,
           future_jobs_total: futureJobsTotal,
           by_month:          byMonthSorted,
+          by_platform:       byPlatformSorted,
         },
       })
     } catch (e: any) {

@@ -63,6 +63,7 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
           closed_date: j.closed_date,
           job_type: j.job_type,
           estimated_total: j.estimated_total,
+          vehicle_platform: j.vehicle_platform,
           raw: j.raw,
         }))
         const { error } = await sb().from('job_report_jobs').insert(chunk)
