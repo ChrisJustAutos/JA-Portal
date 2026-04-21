@@ -27,15 +27,42 @@ export interface ParsedJobReport {
 }
 
 // Header aliases — lowercased. Add more as we see exports.
+// The matcher tries aliases in order, so put MORE SPECIFIC ones first:
+// "quoted total" before "total" because Mechanics Desk has both columns.
 const HEADER_ALIASES: Record<string, string[]> = {
-  job_number:      ['job number', 'job no', 'job#', 'job #', 'jobno', 'jobnumber', 'job', 'job id'],
+  job_number:      ['job number', 'job no.', 'job no', 'job#', 'job #', 'jobno', 'jobnumber', 'job', 'job id'],
   customer_name:   ['customer', 'customer name', 'client', 'client name'],
   vehicle:         ['vehicle', 'rego', 'registration', 'make/model', 'make model', 'vehicle details'],
   status:          ['status', 'job status', 'state'],
-  opened_date:     ['opened', 'opened date', 'date opened', 'created', 'date created', 'booking date', 'start date'],
-  closed_date:     ['closed', 'closed date', 'date closed', 'completed', 'completed date', 'end date'],
-  job_type:        ['job type', 'type', 'service type', 'category', 'work type', 'service category'],
-  estimated_total: ['estimated total', 'estimate', 'estimated value', 'quoted', 'quoted amount', 'quote total', 'quote value', 'total', 'job total', 'total estimated', 'total value', 'invoice total'],
+  // "job date" must come before generic "date" aliases. In Mechanics Desk
+  // "Booking Created At" is often null — "Job Date" is populated for all rows.
+  opened_date:     ['job date', 'opened', 'opened date', 'date opened', 'booking created at', 'created', 'date created', 'booking date', 'start date'],
+  closed_date:     ['finished date', 'closed', 'closed date', 'date closed', 'completed', 'completed date', 'end date', 'finished'],
+  // "job types" (plural) is what Mechanics Desk uses — put it first so it wins.
+  job_type:        ['job types', 'job type', 'service type', 'work type', 'service category', 'category', 'type'],
+  // "quoted total" wins over "total" so we get the pre-job estimate rather
+  // than the actual invoiced amount.
+  estimated_total: ['quoted total', 'estimated total', 'estimate total', 'estimated value', 'quote total', 'quote value', 'quoted amount', 'quoted', 'estimate', 'total estimated', 'total value', 'job total', 'invoice total', 'total'],
+}
+
+// Noise tags in Mechanics Desk "Job Types" that we strip when deriving the
+// primary type. These appear on nearly every job and carry no reporting value.
+const JOB_TYPE_NOISE = [
+  'all vehicle check-in process',
+  'da - deposit applied',
+  'bd - booking deposit',
+  'sub job (internal booking/no invoice)',
+  'additional work approved',
+]
+
+// Given the raw "Job Types" string (e.g. "Remap, All Vehicle Check-In Process"),
+// return the primary (non-noise) type. If all are noise, return the first.
+function primaryJobType(raw: any): string | null {
+  if (raw === null || raw === undefined) return null
+  const parts = String(raw).split(',').map(s => s.trim()).filter(Boolean)
+  if (parts.length === 0) return null
+  const signal = parts.filter(p => !JOB_TYPE_NOISE.includes(p.toLowerCase()))
+  return signal[0] || parts[0]
 }
 
 // Parse a value that might be "$1,234.56" / "1234.56" / 1234.56 / "" into a number or null.
@@ -126,20 +153,34 @@ export function parseJobReport(buf: Buffer, filename: string): ParsedJobReport {
     const jobNumberRaw = row[headerMap.job_number]
     if (jobNumberRaw === null || jobNumberRaw === undefined || String(jobNumberRaw).trim() === '') continue
 
+    const closedDate = headerMap.closed_date ? normDate(row[headerMap.closed_date]) : null
+    let status: string | null = null
+    if (headerMap.status) {
+      status = row[headerMap.status] ?? null
+    } else {
+      // No explicit status column (Mechanics Desk export doesn't have one).
+      // Derive it from closed_date: if the job has a finished/closed date,
+      // it's "Completed", otherwise "Open".
+      status = closedDate ? 'Completed' : 'Open'
+    }
+
     jobs.push({
       job_number: String(jobNumberRaw).trim(),
       customer_name:   headerMap.customer_name   ? (row[headerMap.customer_name] ?? null) : null,
       vehicle:         headerMap.vehicle         ? (row[headerMap.vehicle] ?? null) : null,
-      status:          headerMap.status          ? (row[headerMap.status] ?? null) : null,
+      status,
       opened_date:     headerMap.opened_date     ? normDate(row[headerMap.opened_date]) : null,
-      closed_date:     headerMap.closed_date     ? normDate(row[headerMap.closed_date]) : null,
-      job_type:        headerMap.job_type        ? (row[headerMap.job_type] ? String(row[headerMap.job_type]).trim() : null) : null,
+      closed_date:     closedDate,
+      job_type:        headerMap.job_type        ? primaryJobType(row[headerMap.job_type]) : null,
       estimated_total: headerMap.estimated_total ? parseMoney(row[headerMap.estimated_total]) : null,
       raw: row,
     })
   }
 
   if (jobs.length === 0) warnings.push('Header row matched but no data rows had valid job numbers')
+  if (!headerMap.status && headerMap.closed_date) {
+    warnings.push('No explicit Status column — deriving Open/Completed from Finished Date')
+  }
 
   return { jobs, warnings, detectedFormat: format, headerMap }
 }
