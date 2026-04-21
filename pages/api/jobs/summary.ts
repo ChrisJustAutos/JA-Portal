@@ -1,18 +1,9 @@
 // pages/api/jobs/summary.ts
-// Unified summary of the current Mechanics Desk job report. Powers both
-// the /jobs page (full breakdown) and the overview dashboard widgets
-// (open count, forecast revenue, types donut, list).
+// Forecast-by-month summary of the current Mechanics Desk job report.
 //
-// Response shape:
-//   {
-//     hasReport: boolean,
-//     report: { id, uploaded_at, filename, row_count, notes } | null,
-//     counts: { total, open, closed },
-//     forecast: { open_estimated_total, has_any_estimated, open_without_estimates },
-//     byType:   [{ label, count, open_count, estimated_total }],
-//     byStatus: [{ label, count }],
-//     openJobs: [ { job_number, customer_name, vehicle, status, job_type, estimated_total, opened_date } ]
-//   }
+// Definition: a job contributes to the forecast if
+//   • opened_date (Job Date) is >= today (Brisbane), AND
+//   • estimated_total (Total) is > 0
 
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { createClient } from '@supabase/supabase-js'
@@ -22,12 +13,17 @@ function sb() {
   return createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!, { auth: { persistSession: false } })
 }
 
-// "Open" = anything that isn't closed/invoiced/complete (case-insensitive). We're
-// permissive because Mechanics Desk statuses vary between accounts.
-function isClosed(status: string | null | undefined): boolean {
-  if (!status) return false
-  const s = status.toLowerCase()
-  return s.includes('closed') || s.includes('invoiced') || s.includes('complete') || s === 'done' || s === 'finished'
+// Today's YYYY-MM-DD in Brisbane (UTC+10, no DST). Matches parser logic.
+function todayBrisbaneISO(): string {
+  const nowUtc = new Date()
+  const bris = new Date(nowUtc.getTime() + 10 * 3600 * 1000)
+  return `${bris.getUTCFullYear()}-${String(bris.getUTCMonth() + 1).padStart(2, '0')}-${String(bris.getUTCDate()).padStart(2, '0')}`
+}
+
+const MONTH_NAMES = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
+function monthLabel(key: string): string {
+  const [y, m] = key.split('-')
+  return `${MONTH_NAMES[parseInt(m, 10) - 1]} ${y}`
 }
 
 export default function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -44,89 +40,69 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
         res.status(200).json({
           hasReport: false,
           report: null,
-          counts:   { total: 0, open: 0, closed: 0 },
-          forecast: { open_estimated_total: 0, has_any_estimated: false, open_without_estimates: 0 },
-          byType:   [],
-          byStatus: [],
-          openJobs: [],
+          forecast: { total: 0, job_count: 0, future_jobs_total: 0, by_month: [] },
         })
         return
       }
 
-      // Pull all rows for this run. Even for large workshops a single MD export
-      // is ~hundreds of rows, so one query is fine.
       const { data: jobs, error } = await sb()
         .from('job_report_jobs')
-        .select('job_number, customer_name, vehicle, status, job_type, estimated_total, opened_date, closed_date')
+        .select('job_number, customer_name, vehicle, job_type, estimated_total, opened_date')
         .eq('run_id', run.id)
-        .order('opened_date', { ascending: false, nullsFirst: false })
+        .order('opened_date', { ascending: true, nullsFirst: false })
       if (error) throw new Error(error.message)
 
-      const all = (jobs || []) as any[]
+      const today = todayBrisbaneISO()
+      const byMonth = new Map<string, {
+        key: string; label: string; total: number; job_count: number; jobs: any[]
+      }>()
 
-      let open = 0
-      let closed = 0
-      let openEstimatedTotal = 0
-      let hasAnyEstimated = false
-      let openWithoutEstimates = 0
+      let grandTotal = 0
+      let contribCount = 0
+      let futureJobsTotal = 0
 
-      const byTypeMap = new Map<string, { label: string, count: number, open_count: number, estimated_total: number }>()
-      const byStatusMap = new Map<string, { label: string, count: number }>()
-      const openJobs: any[] = []
-
-      for (const j of all) {
-        const openFlag = !isClosed(j.status)
-        if (openFlag) open++; else closed++
-
-        const typeLabel = (j.job_type && String(j.job_type).trim()) || '(no type)'
-        if (!byTypeMap.has(typeLabel)) byTypeMap.set(typeLabel, { label: typeLabel, count: 0, open_count: 0, estimated_total: 0 })
-        const tRow = byTypeMap.get(typeLabel)!
-        tRow.count++
-        if (openFlag) tRow.open_count++
+      for (const j of (jobs || []) as any[]) {
+        if (!j.opened_date || j.opened_date < today) continue
+        futureJobsTotal++
 
         const est = Number(j.estimated_total || 0)
-        if (j.estimated_total !== null && j.estimated_total !== undefined && est > 0) hasAnyEstimated = true
-        if (openFlag) {
-          if (est > 0) {
-            openEstimatedTotal += est
-            tRow.estimated_total += est
-          } else {
-            openWithoutEstimates++
-          }
-        }
+        if (est <= 0) continue  // only jobs with a dollar value contribute to the forecast
 
-        const statusLabel = (j.status && String(j.status).trim()) || '(no status)'
-        if (!byStatusMap.has(statusLabel)) byStatusMap.set(statusLabel, { label: statusLabel, count: 0 })
-        byStatusMap.get(statusLabel)!.count++
-
-        if (openFlag) {
-          openJobs.push({
-            job_number:      j.job_number,
-            customer_name:   j.customer_name,
-            vehicle:         j.vehicle,
-            status:          j.status,
-            job_type:        j.job_type,
-            estimated_total: j.estimated_total,
-            opened_date:     j.opened_date,
-          })
+        const key = j.opened_date.substring(0, 7)  // YYYY-MM
+        if (!byMonth.has(key)) {
+          byMonth.set(key, { key, label: monthLabel(key), total: 0, job_count: 0, jobs: [] })
         }
+        const bucket = byMonth.get(key)!
+        bucket.total += est
+        bucket.job_count++
+        bucket.jobs.push({
+          job_number:      j.job_number,
+          customer_name:   j.customer_name,
+          vehicle:         j.vehicle,
+          job_type:        j.job_type,
+          opened_date:     j.opened_date,
+          estimated_total: est,
+        })
+
+        grandTotal += est
+        contribCount++
       }
 
-      const byType   = Array.from(byTypeMap.values()).sort((a, b) => b.count - a.count)
-      const byStatus = Array.from(byStatusMap.values()).sort((a, b) => b.count - a.count)
+      const byMonthSorted = Array.from(byMonth.values()).sort((a, b) => a.key.localeCompare(b.key))
+      for (const m of byMonthSorted) {
+        m.jobs.sort((a: any, b: any) => String(a.opened_date).localeCompare(String(b.opened_date)))
+        m.total = Math.round(m.total * 100) / 100
+      }
 
       res.status(200).json({
         hasReport: true,
         report: run,
-        counts:   { total: all.length, open, closed },
         forecast: {
-          open_estimated_total: Math.round(openEstimatedTotal * 100) / 100,
-          has_any_estimated:    hasAnyEstimated,
-          open_without_estimates: openWithoutEstimates,
+          total:             Math.round(grandTotal * 100) / 100,
+          job_count:         contribCount,
+          future_jobs_total: futureJobsTotal,
+          by_month:          byMonthSorted,
         },
-        byType,
-        byStatus,
-        openJobs,
       })
     } catch (e: any) {
       res.status(500).json({ error: e?.message || 'Unknown' })
