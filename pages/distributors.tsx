@@ -393,6 +393,11 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
   function renderGroupedSummary() {
     const allDimensions = grouping ? Array.from(new Set(grouping.groups.map(g=>g.dimension))) : ['type']
     return <div style={{padding:24,overflowY:'auto',display:'flex',flexDirection:'column',gap:16}}>
+      <style>{`
+        tr.dist-row { transition: background-color 0.1s; }
+        tr.dist-row:hover { background: rgba(79,142,247,0.08) !important; }
+        tr.dist-row:hover td { color: #e8eaf0; }
+      `}</style>
       <div style={{display:'flex',alignItems:'center',gap:10}}>
         <span style={{fontSize:11,color:T.text3,textTransform:'uppercase',letterSpacing:'0.05em'}}>Group by:</span>
         {allDimensions.map(d => (
@@ -436,7 +441,7 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
               <SortableTh label="Tuning"      col="tuning" state={summarySort} onSort={handleSummarySort}/>
               <SortableTh label="Total"       col="total"  state={summarySort} onSort={handleSummarySort}/>
             </tr></thead>
-            <tbody>{rows.map((d,i)=><tr key={i} style={{borderTop:`1px solid ${T.border}`,background:selectedDist===d.name?'rgba(79,142,247,0.08)':'transparent'}}>
+            <tbody>{rows.map((d,i)=><tr key={i} className="dist-row" style={{borderTop:`1px solid ${T.border}`,background:selectedDist===d.name?'rgba(79,142,247,0.08)':'transparent'}}>
               <td style={{fontSize:12,color:T.text2,padding:'8px 12px',cursor:'pointer'}} onClick={()=>setSelectedDist(d.name===selectedDist?'ALL':d.name)} title="Click to filter other tabs to this distributor">{d.name}</td>
               <td style={{fontSize:12,fontFamily:'monospace',color:d.oil>0?T.text:T.text3,padding:'8px 12px',textAlign:'right',cursor:d.oil>0?'pointer':'default',textDecoration:d.oil>0?'underline dotted rgba(255,255,255,0.15)':'none'}}
                   onClick={d.oil>0?()=>setDrill({title:`${d.name} — Oil`,subtitle:`${fmtFull(d.oil)} ex-GST`,filter:l=>l.CustomerName===d.name && l.bucket==='Oil'}):undefined}
@@ -491,7 +496,7 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
                 if (typeof av === 'string' && typeof bv === 'string') return av.localeCompare(bv) * dir
                 return ((Number(av) || 0) - (Number(bv) || 0)) * dir
               })
-            })().map((d,i)=><tr key={i} style={{borderTop:`1px solid ${T.border}`}}>
+            })().map((d,i)=><tr key={i} className="dist-row" style={{borderTop:`1px solid ${T.border}`}}>
               <td style={{fontSize:12,color:T.text2,padding:'8px 12px'}}>{d.name}</td>
               <td style={{fontSize:12,fontFamily:'monospace',color:d.oil>0?T.text:T.text3,padding:'8px 12px',textAlign:'right',cursor:d.oil>0?'pointer':'default',textDecoration:d.oil>0?'underline dotted rgba(255,255,255,0.15)':'none'}}
                   onClick={d.oil>0?()=>setDrill({title:`${d.name} — Oil`,subtitle:`${fmtFull(d.oil)} ex-GST`,filter:l=>l.CustomerName===d.name && l.bucket==='Oil'}):undefined}>{d.oil>0?fmtFull(d.oil):'$0'}</td>
