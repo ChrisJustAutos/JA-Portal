@@ -354,3 +354,4 @@ export default function PortalSidebar({
   // ─── Desktop layout ───
   return sidebarBody
 }
+
