@@ -133,7 +133,8 @@ export default function VehicleSalesPage({ user }: { user: { id: string; email: 
 
       for (let i = 0; i < 2000; i++) {  // safety cap: ~6 years of weekly windows
         const body: any = { mode, window_days: 14 }
-        if (mode === 'full') body.overall_from = '2020-01-01'
+        // For 'full' mode, leave overall_from unset and let the server default
+        // to start of last calendar year (~16 months of data).
         if (windowFrom) body.window_from = windowFrom
         if (windowTo)   body.window_to   = windowTo
 

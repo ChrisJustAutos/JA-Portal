@@ -71,7 +71,11 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
       let windowTo: string
 
       if (mode === 'full') {
-        overallFrom = typeof body.overall_from === 'string' ? body.overall_from : '2020-01-01'
+        // Default full sync starts from start of LAST calendar year so we get
+        // ~16 months of data without trawling through 5+ years of history.
+        // Override explicitly via overall_from if you want more/less.
+        const defaultFullFrom = `${new Date().getUTCFullYear() - 1}-01-01`
+        overallFrom = typeof body.overall_from === 'string' ? body.overall_from : defaultFullFrom
         overallTo   = typeof body.overall_to   === 'string' ? body.overall_to   : todayISOBrisbane()
       } else if (mode === 'window') {
         if (!body.window_from || !body.window_to) throw new Error('window mode requires window_from and window_to')
