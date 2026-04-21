@@ -123,14 +123,20 @@ export default function VehicleSalesPage({ user }: { user: { id: string; email: 
     if (!isAdmin) return
     setSyncing(true); setSyncError(''); setSyncProgress(null)
     try {
-      let offset = 0
-      let total = 0
-      let window: { from: string; to: string } = { from: '', to: '' }
-      // Loop until done
-      for (let i = 0; i < 500; i++) {  // safety cap
-        const body = mode === 'full'
-          ? { mode, offset, chunk_size: 30, from: '2020-01-01' }
-          : { mode, offset, chunk_size: 30 }
+      // Window-based pagination. The server returns next_window_from/to on each
+      // call. We pass those back on the next call until done=true.
+      let overallFrom = ''
+      let overallTo = ''
+      let windowFrom: string | null = null  // null means "let server decide" (first call)
+      let windowTo:   string | null = null
+      let totalProcessed = 0
+
+      for (let i = 0; i < 2000; i++) {  // safety cap: ~6 years of weekly windows
+        const body: any = { mode, window_days: 14 }
+        if (mode === 'full') body.overall_from = '2020-01-01'
+        if (windowFrom) body.window_from = windowFrom
+        if (windowTo)   body.window_to   = windowTo
+
         const r = await fetch('/api/vehicle-sales/sync', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -139,13 +145,21 @@ export default function VehicleSalesPage({ user }: { user: { id: string; email: 
         const d = await r.json()
         if (!r.ok) throw new Error(d.error || `Sync failed (HTTP ${r.status})`)
 
-        offset = d.next_offset
-        total  = d.total_invoices
-        window = d.window
-        setSyncProgress({ processed: offset, total, window })
+        totalProcessed += d.processed || 0
+        overallFrom = d.overall_from
+        overallTo   = d.overall_to
+        // Progress = how far through the overall range we are, by date
+        setSyncProgress({
+          processed: totalProcessed,
+          total: 0,  // we don't know upfront without a count query; show 0 as "unknown"
+          window: { from: d.window_from || overallFrom, to: d.window_to || overallTo },
+        })
+
         if (d.done) break
+        windowFrom = d.next_window_from
+        windowTo   = d.next_window_to
       }
-      // Reload
+      // Reload summary
       await load(from, to)
     } catch (e: any) {
       setSyncError(e.message)
@@ -212,9 +226,8 @@ export default function VehicleSalesPage({ user }: { user: { id: string; email: 
               {syncing && <span style={{color:T.blue}}>● Syncing </span>}
               {syncProgress && (
                 <span style={{color:T.text2}}>
-                  {syncProgress.processed} / {syncProgress.total} invoices
-                  {syncProgress.total > 0 && <> ({Math.round(100 * syncProgress.processed / syncProgress.total)}%)</>}
-                  {syncProgress.window.from && <> · range {syncProgress.window.from} → {syncProgress.window.to}</>}
+                  {syncProgress.processed} invoices classified
+                  {syncProgress.window.from && <> · currently on {syncProgress.window.from} → {syncProgress.window.to}</>}
                 </span>
               )}
               {syncError && <div style={{color:T.red, marginTop:4}}>{syncError}</div>}
