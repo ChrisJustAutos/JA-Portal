@@ -261,6 +261,236 @@ function RecordingPlayer({ callId, hasRecording }: { callId: string; hasRecordin
   )
 }
 
+// ── Transcript panel ──────────────────────────────────────────────────────
+// Shows "Transcribe" button → polls job status → displays transcript with
+// speaker segments once done. Speakers are Deepgram's integer IDs — we
+// map them to Agent/Customer based on call direction.
+
+type TranscriptSegment = { speaker: number; start: number; end: number; text: string; confidence: number }
+type TranscriptData = {
+  full_text: string
+  segments: TranscriptSegment[]
+  audio_duration_seconds: number | null
+  transcribed_at: string
+  language: string
+}
+type JobStatus = { status: 'pending'|'processing'|'done'|'failed'|'skipped'; error_message?: string; created_at?: string } | null
+
+function TranscriptPanel({ callId, hasRecording, direction }: { callId: string; hasRecording: boolean; direction: 'inbound'|'outbound' }) {
+  const [transcript, setTranscript] = useState<TranscriptData | null>(null)
+  const [job, setJob] = useState<JobStatus>(null)
+  const [loading, setLoading] = useState(true)
+  const [enqueueing, setEnqueueing] = useState(false)
+  const [errorMsg, setErrorMsg] = useState('')
+
+  async function loadStatus() {
+    try {
+      const [transcriptRes, jobRes] = await Promise.all([
+        fetch(`/api/calls/${callId}/transcript`),
+        fetch(`/api/calls/${callId}/transcribe`),
+      ])
+      if (transcriptRes.ok) {
+        const data = await transcriptRes.json()
+        setTranscript(data.transcript)
+      }
+      if (jobRes.ok) {
+        const data = await jobRes.json()
+        setJob(data.job || null)
+      }
+    } catch (e: any) {
+      setErrorMsg(e?.message || 'Failed to load')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => { loadStatus() }, [callId])  // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Poll job status every 10 seconds while pending/processing
+  useEffect(() => {
+    if (transcript) return  // nothing to poll for
+    if (!job || (job.status !== 'pending' && job.status !== 'processing')) return
+    const timer = setInterval(() => loadStatus(), 10_000)
+    return () => clearInterval(timer)
+  }, [job, transcript])  // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function handleTranscribe() {
+    setEnqueueing(true); setErrorMsg('')
+    try {
+      const res = await fetch(`/api/calls/${callId}/transcribe`, { method: 'POST' })
+      const data = await res.json()
+      if (!res.ok) {
+        setErrorMsg(data.message || data.error || `HTTP ${res.status}`)
+      } else {
+        setJob(data.job || { status: 'pending' })
+      }
+    } catch (e: any) {
+      setErrorMsg(e?.message || 'Failed to queue')
+    } finally {
+      setEnqueueing(false)
+    }
+  }
+
+  if (!hasRecording) return null
+
+  const speakerLabel = (n: number) => {
+    // Deepgram labels speakers 0, 1, 2. We don't know which is which for sure,
+    // but for outbound calls speaker 0 is typically the agent (they spoke first),
+    // and for inbound calls speaker 0 is typically the customer.
+    if (direction === 'outbound') return n === 0 ? 'Agent' : 'Customer'
+    return n === 0 ? 'Customer' : 'Agent'
+  }
+  const speakerColor = (n: number) => {
+    const label = speakerLabel(n)
+    return label === 'Agent' ? T.blue : T.teal
+  }
+
+  return (
+    <div style={{ border: `1px solid ${T.border2}`, borderRadius: 6, padding: 16, background: T.bg3 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 10, alignItems: 'center' }}>
+        <div style={{ fontSize: 10, color: T.text3, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.1em' }}>Transcript</div>
+        {transcript && (
+          <div style={{ fontSize: 9, color: T.green, textTransform: 'uppercase', letterSpacing: '0.1em' }}>
+            ● Transcribed {new Date(transcript.transcribed_at).toLocaleDateString('en-AU')}
+          </div>
+        )}
+      </div>
+
+      {loading && (
+        <div style={{ fontSize: 12, color: T.text3, fontStyle: 'italic' }}>Checking transcript status…</div>
+      )}
+
+      {!loading && !transcript && !job && (
+        <div>
+          <div style={{ fontSize: 12, color: T.text2, marginBottom: 10 }}>
+            This call hasn't been transcribed yet. Transcription uses Deepgram (~$0.004 per minute of audio).
+          </div>
+          <button onClick={handleTranscribe} disabled={enqueueing}
+            style={{ padding: '7px 14px', background: T.blue, color: '#fff', border: 'none', borderRadius: 5, fontSize: 12, cursor: enqueueing ? 'wait' : 'pointer', fontFamily: 'inherit', fontWeight: 500 }}>
+            {enqueueing ? 'Queueing…' : '▶ Transcribe this call'}
+          </button>
+          {errorMsg && <div style={{ marginTop: 8, fontSize: 11, color: T.red }}>{errorMsg}</div>}
+        </div>
+      )}
+
+      {!loading && !transcript && job && (job.status === 'pending' || job.status === 'processing') && (
+        <div style={{ fontSize: 12, color: T.amber }}>
+          <span style={{ display: 'inline-block', animation: 'spin 1.5s linear infinite', marginRight: 8 }}>⟳</span>
+          Job {job.status}. Worker runs every ~2 minutes. This panel will auto-refresh.
+        </div>
+      )}
+
+      {!loading && !transcript && job && job.status === 'failed' && (
+        <div>
+          <div style={{ fontSize: 12, color: T.red, marginBottom: 8 }}>Transcription failed: {job.error_message}</div>
+          <button onClick={handleTranscribe} disabled={enqueueing}
+            style={{ padding: '5px 12px', background: 'transparent', color: T.blue, border: `1px solid ${T.border2}`, borderRadius: 4, fontSize: 11, cursor: 'pointer', fontFamily: 'inherit' }}>
+            Retry
+          </button>
+        </div>
+      )}
+
+      {!loading && !transcript && job && job.status === 'skipped' && (
+        <div style={{ fontSize: 12, color: T.text3, fontStyle: 'italic' }}>
+          Skipped — {job.error_message || 'Recording had no transcribable audio.'}
+        </div>
+      )}
+
+      {transcript && (
+        <div>
+          <div style={{ maxHeight: 400, overflow: 'auto', fontSize: 12, lineHeight: 1.6, background: T.bg2, padding: 12, borderRadius: 4, border: `1px solid ${T.border}` }}>
+            {transcript.segments.length > 0 ? (
+              transcript.segments.map((seg, idx) => (
+                <div key={idx} style={{ marginBottom: 10, display: 'flex', gap: 10 }}>
+                  <div style={{ flexShrink: 0, width: 80, fontSize: 10, color: speakerColor(seg.speaker), fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', marginTop: 2 }}>
+                    {speakerLabel(seg.speaker)}
+                    <div style={{ fontSize: 9, color: T.text3, fontFamily: 'monospace', marginTop: 2 }}>
+                      {Math.floor(seg.start / 60)}:{String(Math.floor(seg.start % 60)).padStart(2, '0')}
+                    </div>
+                  </div>
+                  <div style={{ flex: 1, color: T.text }}>{seg.text}</div>
+                </div>
+              ))
+            ) : (
+              <div style={{ color: T.text2 }}>{transcript.full_text}</div>
+            )}
+          </div>
+          <div style={{ marginTop: 8, fontSize: 10, color: T.text3, fontFamily: 'monospace', display: 'flex', justifyContent: 'space-between' }}>
+            <span>{transcript.segments.length} segments · {transcript.full_text.length} chars · {transcript.audio_duration_seconds?.toFixed(0) || '?'}s audio</span>
+            <span>Speaker labels are approximate</span>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── Batch transcribe button (in call list footer) ──────────────────────────
+// Kicks off transcription of up to 50 calls matching the current filter set.
+
+function BatchTranscribeButton({ callCount, filters }: {
+  callCount: number;
+  filters: { startDate?: string; endDate?: string; extension?: string; direction?: string; disposition?: string }
+}) {
+  const [state, setState] = useState<'idle'|'confirming'|'queuing'|'done'|'error'>('idle')
+  const [message, setMessage] = useState('')
+
+  async function handleSubmit() {
+    setState('queuing'); setMessage('')
+    try {
+      const res = await fetch('/api/calls/transcribe-batch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...filters, maxJobs: 50 }),
+      })
+      const data = await res.json()
+      if (!res.ok) {
+        setState('error'); setMessage(data.message || data.error || `HTTP ${res.status}`)
+        return
+      }
+      setState('done')
+      setMessage(data.enqueued > 0
+        ? `Queued ${data.enqueued} calls.${data.skipped ? ` (${data.skipped} already done.)` : ''}`
+        : data.message || 'Nothing queued.')
+    } catch (e: any) {
+      setState('error'); setMessage(e?.message || 'Failed')
+    }
+  }
+
+  if (callCount === 0) return <span>No calls to transcribe</span>
+
+  if (state === 'done' || state === 'error') {
+    return <span style={{ color: state === 'done' ? T.green : T.red }}>{message}</span>
+  }
+
+  if (state === 'confirming') {
+    return (
+      <span style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+        <span>Transcribe up to 50 of these {callCount} calls?</span>
+        <button onClick={handleSubmit} disabled={state !== 'confirming'}
+          style={{ padding: '3px 10px', background: T.blue, color: '#fff', border: 'none', borderRadius: 4, fontSize: 10, cursor: 'pointer', fontFamily: 'inherit', fontWeight: 600 }}>
+          Confirm
+        </button>
+        <button onClick={() => setState('idle')}
+          style={{ padding: '3px 10px', background: 'transparent', color: T.text2, border: `1px solid ${T.border2}`, borderRadius: 4, fontSize: 10, cursor: 'pointer', fontFamily: 'inherit' }}>
+          Cancel
+        </button>
+      </span>
+    )
+  }
+
+  if (state === 'queuing') {
+    return <span style={{ color: T.amber }}>Queuing…</span>
+  }
+
+  return (
+    <button onClick={() => setState('confirming')}
+      style={{ padding: '3px 10px', background: 'transparent', color: T.blue, border: `1px solid ${T.border2}`, borderRadius: 4, fontSize: 10, cursor: 'pointer', fontFamily: 'inherit' }}>
+      ▶ Transcribe batch
+    </button>
+  )
+}
+
 // ── Main page component ────────────────────────────────────────────────────
 
 type Preset = 'today' | 'yesterday' | 'week' | 'month' | 'custom'
@@ -634,18 +864,21 @@ export default function CallsPage({ user }: { user: PortalUserSSR }) {
                       ))}
                     </div>
 
-                    <div style={{ padding: '8px 14px', borderTop: `1px solid ${T.border}`, background: T.bg3, display: 'flex', justifyContent: 'space-between', fontSize: 10, color: T.text3 }}>
+                    <div style={{ padding: '8px 14px', borderTop: `1px solid ${T.border}`, background: T.bg3, display: 'flex', justifyContent: 'space-between', fontSize: 10, color: T.text3, alignItems: 'center' }}>
                       <span style={{ fontFamily: 'monospace' }}>{calls.length} calls shown{truncated ? ' (row limit hit — narrow filters for more)' : ''}</span>
-                      <span>Click any row for details</span>
+                      <BatchTranscribeButton
+                        callCount={calls.length}
+                        filters={{ startDate, endDate, extension: filterExt !== 'all' ? filterExt : undefined, direction: filterDir !== 'all' ? filterDir : undefined, disposition: filterDisp !== 'all' ? filterDisp : undefined }}
+                      />
                     </div>
                   </div>
                 </div>
 
                 {/* Phase roadmap note */}
                 <div style={{ marginTop: 24, display: 'flex', justifyContent: 'center', gap: 12, fontSize: 9, color: T.text3, textTransform: 'uppercase', letterSpacing: '0.1em' }}>
-                  <span style={{ color: T.text2, fontWeight: 600 }}>Phase 1 · Call Logging</span>
+                  <span style={{ color: T.text2, fontWeight: 600 }}>✓ Phase 1 · Call Logging</span>
                   <span>·</span>
-                  <span>Phase 2 · Transcription</span>
+                  <span style={{ color: T.text2, fontWeight: 600 }}>✓ Phase 2 · Transcription</span>
                   <span>·</span>
                   <span>Phase 3 · AI Coaching</span>
                 </div>
@@ -704,8 +937,10 @@ export default function CallsPage({ user }: { user: PortalUserSSR }) {
               {/* Recording player — Phase 1 delivery */}
               <RecordingPlayer callId={selectedCall.id} hasRecording={selectedCall.has_recording} />
 
+              {/* Transcript panel — Phase 2 delivery */}
+              <TranscriptPanel callId={selectedCall.id} hasRecording={selectedCall.has_recording} direction={selectedCall.direction} />
+
               {[
-                ['Phase 2 — Transcript', 'Full conversation transcript with speaker labels will appear here once Deepgram integration is live.'],
                 ['Phase 3 — AI Coaching Analysis', 'Claude-generated sales score, objections raised, discovery quality, outcome classification, and specific coaching feedback for this call.'],
                 ['MYOB Customer Context', `If ${formatPhone(selectedCall.external_number)} matches a customer card in MYOB, their recent orders, outstanding quotes, and payment history will load here via CData.`],
               ].map(([title, body]) => (
