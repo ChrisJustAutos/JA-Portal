@@ -333,12 +333,14 @@ function TranscriptPanel({ callId, hasRecording, direction }: { callId: string; 
 
   if (!hasRecording) return null
 
-  const speakerLabel = (n: number) => {
-    // Deepgram labels speakers 0, 1, 2. We don't know which is which for sure,
-    // but for outbound calls speaker 0 is typically the agent (they spoke first),
-    // and for inbound calls speaker 0 is typically the customer.
-    if (direction === 'outbound') return n === 0 ? 'Agent' : 'Customer'
-    return n === 0 ? 'Customer' : 'Agent'
+const speakerLabel = (n: number) => {
+    // Deepgram labels speakers 0, 1, 2. Our agents answer inbound with a greeting
+    // ("You're through to Just Auto") and initiate outbound calls, so speaker 0 is
+    // almost always the agent regardless of direction. For 3-way calls speaker 2
+    // is treated as a second customer/third party.
+    if (n === 0) return 'Agent'
+    if (n === 1) return 'Customer'
+    return `Speaker ${n + 1}`
   }
   const speakerColor = (n: number) => {
     const label = speakerLabel(n)
