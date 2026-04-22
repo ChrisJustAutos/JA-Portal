@@ -175,6 +175,92 @@ function DirectionBadge({ direction, disposition }: { direction: string; disposi
   )
 }
 
+// ── Recording player ──────────────────────────────────────────────────────
+// Fetches a short-lived signed URL from /api/calls/:id/recording-url, then
+// renders a standard HTML5 <audio> control. Handles the "not yet uploaded"
+// state (202 response) with a soft retry.
+
+function RecordingPlayer({ callId, hasRecording }: { callId: string; hasRecording: boolean }) {
+  const [state, setState] = useState<'idle'|'loading'|'ready'|'pending'|'missing'|'error'>('idle')
+  const [audioUrl, setAudioUrl] = useState<string | null>(null)
+  const [errorMsg, setErrorMsg] = useState<string>('')
+
+  async function loadUrl() {
+    setState('loading'); setErrorMsg('')
+    try {
+      const res = await fetch(`/api/calls/${callId}/recording-url`)
+      const data = await res.json()
+      if (res.status === 202) {
+        setState('pending'); return
+      }
+      if (res.status === 404) {
+        if (data.reason === 'missing_on_disk') setState('missing')
+        else setState('error')
+        setErrorMsg(data.error || '')
+        return
+      }
+      if (!res.ok) {
+        setState('error'); setErrorMsg(data.message || data.error || `HTTP ${res.status}`); return
+      }
+      setAudioUrl(data.url); setState('ready')
+    } catch (e: any) {
+      setState('error'); setErrorMsg(e?.message || 'Failed to load')
+    }
+  }
+
+  useEffect(() => {
+    if (hasRecording) loadUrl()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [callId])
+
+  if (!hasRecording) return null
+
+  return (
+    <div style={{ border: `1px solid ${T.border2}`, borderRadius: 6, padding: 16, background: T.bg3 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 10 }}>
+        <div style={{ fontSize: 10, color: T.text3, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.1em' }}>Recording</div>
+        {state === 'ready' && (
+          <div style={{ fontSize: 9, color: T.green, textTransform: 'uppercase', letterSpacing: '0.1em' }}>● Playing from cloud</div>
+        )}
+      </div>
+
+      {state === 'loading' && (
+        <div style={{ fontSize: 12, color: T.text3, fontStyle: 'italic' }}>Loading…</div>
+      )}
+
+      {state === 'pending' && (
+        <div style={{ fontSize: 12, color: T.amber }}>
+          Recording not yet uploaded to cloud. The sync agent uploads recordings every 5 minutes.
+          <button onClick={loadUrl} style={{ marginLeft: 8, padding: '3px 10px', background: 'transparent', color: T.blue, border: `1px solid ${T.border2}`, borderRadius: 4, fontSize: 11, cursor: 'pointer', fontFamily: 'inherit' }}>
+            Retry
+          </button>
+        </div>
+      )}
+
+      {state === 'missing' && (
+        <div style={{ fontSize: 12, color: T.red }}>
+          Recording file not found on FreePBX disk. It may have been deleted by retention policy.
+        </div>
+      )}
+
+      {state === 'error' && (
+        <div style={{ fontSize: 12, color: T.red }}>
+          Could not load recording: {errorMsg}
+          <button onClick={loadUrl} style={{ marginLeft: 8, padding: '3px 10px', background: 'transparent', color: T.blue, border: `1px solid ${T.border2}`, borderRadius: 4, fontSize: 11, cursor: 'pointer', fontFamily: 'inherit' }}>
+            Retry
+          </button>
+        </div>
+      )}
+
+      {state === 'ready' && audioUrl && (
+        <audio controls preload="none" src={audioUrl} style={{ width: '100%', height: 40 }}>
+          Your browser does not support the audio element.
+        </audio>
+      )}
+    </div>
+  )
+}
+
 // ── Main page component ────────────────────────────────────────────────────
 
 type Preset = 'today' | 'yesterday' | 'week' | 'month' | 'custom'
@@ -606,7 +692,7 @@ export default function CallsPage({ user }: { user: PortalUserSSR }) {
                   ['Agent', selectedCall.agent_name ? `${selectedCall.agent_name} (Ext ${selectedCall.agent_ext})` : 'Nobody answered'],
                   ['Talk Time', formatDuration(selectedCall.billsec_seconds || selectedCall.duration_seconds)],
                   ['When', new Date(selectedCall.call_date).toLocaleString('en-AU')],
-                  ['Recording', selectedCall.has_recording ? 'Available on FreePBX' : 'None'],
+                  ['Recording', selectedCall.has_recording ? 'Available (see player below)' : 'None'],
                 ].map(([label, value]) => (
                   <div key={label as string} style={{ background: T.bg2, padding: '12px 14px' }}>
                     <div style={{ fontSize: 9, color: T.text3, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 4 }}>{label}</div>
@@ -614,6 +700,9 @@ export default function CallsPage({ user }: { user: PortalUserSSR }) {
                   </div>
                 ))}
               </div>
+
+              {/* Recording player — Phase 1 delivery */}
+              <RecordingPlayer callId={selectedCall.id} hasRecording={selectedCall.has_recording} />
 
               {[
                 ['Phase 2 — Transcript', 'Full conversation transcript with speaker labels will appear here once Deepgram integration is live.'],
