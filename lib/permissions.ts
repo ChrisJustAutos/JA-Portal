@@ -31,6 +31,7 @@ export type Permission =
   | 'view:payables'
   | 'view:leads'
   | 'view:distributors'
+  | 'view:calls'
   | 'view:reports'
   | 'view:todos'
   | 'view:supplier_invoices'
@@ -51,14 +52,14 @@ export type Permission =
 const ROLE_PERMISSIONS: Record<UserRole, Permission[]> = {
   admin: [
     'view:dashboards','view:overview','view:invoices','view:pnl','view:stock','view:payables',
-    'view:leads','view:distributors','view:reports','view:todos','view:supplier_invoices',
+    'view:leads','view:distributors','view:calls','view:reports','view:todos','view:supplier_invoices',
     'view:jobs','view:vehicle_sales',
     'edit:any','edit:distributors_groups','edit:vin_codes','edit:leads','edit:supplier_invoices','generate:reports',
     'admin:users','admin:settings','admin:audit_log',
   ],
   manager: [
     'view:dashboards','view:overview','view:invoices','view:pnl','view:stock','view:payables',
-    'view:leads','view:distributors','view:reports','view:todos','view:supplier_invoices',
+    'view:leads','view:distributors','view:calls','view:reports','view:todos','view:supplier_invoices',
     'view:jobs','view:vehicle_sales',
     'edit:leads','edit:supplier_invoices','generate:reports',
   ],
@@ -145,6 +146,7 @@ export const PORTAL_TABS: PortalTab[] = [
   { id: 'overview',      label: 'Overview',        permission: 'view:overview' },
   { id: 'leads',         label: 'Leads/Orders',    permission: 'view:leads' },
   { id: 'distributors',  label: 'Distributors',    permission: 'view:distributors' },
+  { id: 'calls',         label: 'Phone Calls',     permission: 'view:calls' },
   { id: 'reports',       label: 'Reports',         permission: 'view:reports' },
   { id: 'todos',         label: 'To-Dos',          permission: 'view:todos' },
   { id: 'jobs',          label: 'Jobs',            permission: 'view:jobs' },
