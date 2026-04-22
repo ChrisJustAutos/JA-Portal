@@ -1,6 +1,6 @@
 // pages/api/calls/stats.ts
 // Dashboard statistics: today's totals, per-agent breakdown, 7-day rollups.
-// Computed server-side so the page renders fast and reps can't see raw SQL.
+// Accepts optional ?startDate=&endDate= to scope "today" stats to a date range.
 
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { createClient } from '@supabase/supabase-js'
@@ -20,6 +20,7 @@ interface AgentStats {
 }
 
 interface StatsResponse {
+  periodLabel: string
   today: {
     total: number
     inbound: number
@@ -51,20 +52,56 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
 
       const sb = createClient(url, key, { auth: { persistSession: false } })
 
+      // Parse optional date range for the "today" bucket — when provided,
+      // the first stats card set reflects the selected range. Week stats
+      // are always a rolling 7-day window (used for per-agent activity
+      // bars that shouldn't whipsaw as the user changes the main range).
+      const q = req.query
+      const startDateParam = q.startDate ? String(q.startDate) : null
+      const endDateParam = q.endDate ? String(q.endDate) : null
+
       const now = new Date()
-      const todayStart = new Date(now); todayStart.setHours(0, 0, 0, 0)
+      let periodFromIso: string
+      let periodToIso: string | null = null
+      let periodLabel: string
+
+      if (startDateParam || endDateParam) {
+        const tzOffsetMs = 10 * 3600 * 1000
+        if (startDateParam) {
+          const d = new Date(startDateParam + 'T00:00:00Z')
+          periodFromIso = new Date(d.getTime() - tzOffsetMs).toISOString()
+        } else {
+          const d = new Date(now); d.setHours(0, 0, 0, 0)
+          periodFromIso = d.toISOString()
+        }
+        if (endDateParam) {
+          const d = new Date(endDateParam + 'T23:59:59.999Z')
+          periodToIso = new Date(d.getTime() - tzOffsetMs).toISOString()
+        }
+        periodLabel = startDateParam && endDateParam && startDateParam === endDateParam
+          ? startDateParam
+          : `${startDateParam || 'start'} → ${endDateParam || 'now'}`
+      } else {
+        const d = new Date(now); d.setHours(0, 0, 0, 0)
+        periodFromIso = d.toISOString()
+        periodLabel = 'Today'
+      }
+
       const weekStart = new Date(now); weekStart.setDate(weekStart.getDate() - 7); weekStart.setHours(0, 0, 0, 0)
 
-      // Fetch all necessary data in parallel
+      // Build the "period" query — with or without upper bound
+      let periodQuery = sb.from('calls')
+        .select('direction, disposition, billsec_seconds, agent_ext')
+        .gte('call_date', periodFromIso)
+      if (periodToIso) periodQuery = periodQuery.lte('call_date', periodToIso)
+
       const [
-        todayRes,
+        periodRes,
         weekRes,
         extensionsRes,
         syncRes,
       ] = await Promise.all([
-        sb.from('calls')
-          .select('direction, disposition, billsec_seconds, agent_ext')
-          .gte('call_date', todayStart.toISOString()),
+        periodQuery,
         sb.from('calls')
           .select('direction, disposition, billsec_seconds, agent_ext, call_date')
           .gte('call_date', weekStart.toISOString()),
@@ -77,27 +114,27 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
           .maybeSingle(),
       ])
 
-      if (todayRes.error) throw todayRes.error
+      if (periodRes.error) throw periodRes.error
       if (weekRes.error) throw weekRes.error
       if (extensionsRes.error) throw extensionsRes.error
 
-      const todayCalls = todayRes.data || []
+      const periodCalls = periodRes.data || []
       const weekCalls = weekRes.data || []
       const extensions = extensionsRes.data || []
       const sync = syncRes.data || { last_synced_at: null, last_error: null, records_synced_total: 0 }
 
-      // Today aggregate
-      const inbound = todayCalls.filter(c => c.direction === 'inbound')
-      const outbound = todayCalls.filter(c => c.direction === 'outbound')
-      const answered = todayCalls.filter(c => c.disposition === 'ANSWERED')
+      // Period aggregates
+      const inbound = periodCalls.filter(c => c.direction === 'inbound')
+      const outbound = periodCalls.filter(c => c.direction === 'outbound')
+      const answered = periodCalls.filter(c => c.disposition === 'ANSWERED')
       const missedInbound = inbound.filter(c => c.disposition !== 'ANSWERED')
-      const totalTalk = todayCalls.reduce((s, c) => s + (c.billsec_seconds || 0), 0)
+      const totalTalk = periodCalls.reduce((s, c) => s + (c.billsec_seconds || 0), 0)
       const avgCall = answered.length > 0 ? Math.round(totalTalk / answered.length) : 0
       const answerRate = inbound.length > 0
         ? Math.round((inbound.filter(c => c.disposition === 'ANSWERED').length / inbound.length) * 100)
         : 0
 
-      // Per-agent: today stats + week stats
+      // Per-agent stats — period totals + rolling week talk time
       const agentMap = new Map<string, AgentStats>()
       for (const ext of extensions) {
         agentMap.set(ext.extension, {
@@ -111,7 +148,7 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
           week_talk_seconds: 0,
         })
       }
-      for (const c of todayCalls) {
+      for (const c of periodCalls) {
         if (!c.agent_ext) continue
         const a = agentMap.get(c.agent_ext)
         if (!a) continue
@@ -127,7 +164,6 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
         a.week_talk_seconds += (c.billsec_seconds || 0)
       }
 
-      // Filter to agents with activity in the last week, sort by week talk time desc
       const agents = Array.from(agentMap.values())
         .filter(a => a.week_talk_seconds > 0 || a.today_total > 0)
         .sort((a, b) => b.week_talk_seconds - a.week_talk_seconds)
@@ -135,8 +171,9 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
       const weekTalk = weekCalls.reduce((s, c) => s + (c.billsec_seconds || 0), 0)
 
       const response: StatsResponse = {
+        periodLabel,
         today: {
-          total: todayCalls.length,
+          total: periodCalls.length,
           inbound: inbound.length,
           outbound: outbound.length,
           answered: answered.length,

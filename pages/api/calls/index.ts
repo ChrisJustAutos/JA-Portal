@@ -40,27 +40,49 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
 
       // ── Parse query params ─────────────────────────────────────────
       const q = req.query
-      const range = String(q.range || 'today')           // 'today' | 'week' | 'all'
       const extension = q.extension ? String(q.extension) : null
-      const direction = q.direction ? String(q.direction) : null  // 'inbound' | 'outbound'
-      const disposition = q.disposition ? String(q.disposition) : null // 'answered' | 'missed'
+      const direction = q.direction ? String(q.direction) : null
+      const disposition = q.disposition ? String(q.disposition) : null
       const search = q.search ? String(q.search).trim() : null
-      const limit = Math.min(parseInt(String(q.limit || '200'), 10) || 200, 500)
+      const limit = Math.min(parseInt(String(q.limit || '500'), 10) || 500, 2000)
 
-      // Determine date cutoff
-      const now = new Date()
-      let fromDate: string | null = null
-      if (range === 'today') {
-        const d = new Date(now); d.setHours(0, 0, 0, 0)
-        fromDate = d.toISOString()
-      } else if (range === 'week') {
-        const d = new Date(now); d.setDate(d.getDate() - 7); d.setHours(0, 0, 0, 0)
-        fromDate = d.toISOString()
-      } else if (range === 'month') {
-        const d = new Date(now); d.setDate(d.getDate() - 30)
-        fromDate = d.toISOString()
+      // Date range — two ways to specify, in priority order:
+      //   1. Explicit ?startDate=YYYY-MM-DD&endDate=YYYY-MM-DD (inclusive, Brisbane time)
+      //   2. Preset ?range=today|week|month|all (backwards compatible)
+      const startDateParam = q.startDate ? String(q.startDate) : null
+      const endDateParam = q.endDate ? String(q.endDate) : null
+      const rangePreset = String(q.range || (startDateParam || endDateParam ? 'custom' : 'today'))
+
+      let fromIso: string | null = null
+      let toIso: string | null = null
+      let effectiveRange = rangePreset
+
+      if (startDateParam || endDateParam) {
+        // Brisbane is UTC+10 (no DST). Convert Brisbane-local date bounds to UTC.
+        const tzOffsetMs = 10 * 3600 * 1000
+        if (startDateParam) {
+          const d = new Date(startDateParam + 'T00:00:00Z')
+          fromIso = new Date(d.getTime() - tzOffsetMs).toISOString()
+        }
+        if (endDateParam) {
+          const d = new Date(endDateParam + 'T23:59:59.999Z')
+          toIso = new Date(d.getTime() - tzOffsetMs).toISOString()
+        }
+        effectiveRange = 'custom'
+      } else {
+        const now = new Date()
+        if (rangePreset === 'today') {
+          const d = new Date(now); d.setHours(0, 0, 0, 0)
+          fromIso = d.toISOString()
+        } else if (rangePreset === 'week') {
+          const d = new Date(now); d.setDate(d.getDate() - 7); d.setHours(0, 0, 0, 0)
+          fromIso = d.toISOString()
+        } else if (rangePreset === 'month') {
+          const d = new Date(now); d.setDate(d.getDate() - 30)
+          fromIso = d.toISOString()
+        }
+        // 'all' → no date filter
       }
-      // 'all' → no date filter
 
       // ── Build query ────────────────────────────────────────────────
       let query = sb.from('calls')
@@ -68,16 +90,15 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
         .order('call_date', { ascending: false })
         .limit(limit)
 
-      if (fromDate) query = query.gte('call_date', fromDate)
+      if (fromIso) query = query.gte('call_date', fromIso)
+      if (toIso) query = query.lte('call_date', toIso)
       if (extension) query = query.eq('agent_ext', extension)
       if (direction === 'inbound' || direction === 'outbound') query = query.eq('direction', direction)
       if (disposition === 'answered') query = query.eq('disposition', 'ANSWERED')
       else if (disposition === 'missed') query = query.neq('disposition', 'ANSWERED')
 
       if (search) {
-        // Search across number, caller name, agent name
-        // Postgres ilike via or() filter
-        const s = search.replace(/[%_]/g, '\\$&')  // escape wildcards
+        const s = search.replace(/[%_]/g, '\\$&')
         query = query.or(
           `external_number.ilike.%${s}%,caller_name.ilike.%${s}%,agent_name.ilike.%${s}%,agent_ext.eq.${s}`
         )
@@ -89,7 +110,9 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
       const calls: CallRow[] = (data || []) as CallRow[]
 
       return res.status(200).json({
-        range,
+        range: effectiveRange,
+        startDate: startDateParam,
+        endDate: endDateParam,
         count: calls.length,
         truncated: calls.length === limit,
         calls,

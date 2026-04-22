@@ -41,6 +41,7 @@ interface AgentStats {
 }
 
 interface StatsPayload {
+  periodLabel: string
   today: {
     total: number; inbound: number; outbound: number; answered: number
     missed_inbound: number; talk_seconds: number; avg_call_seconds: number; answer_rate: number
@@ -57,6 +58,41 @@ const T = {
   blue: '#4f8ef7', teal: '#2dd4bf', green: '#34c77b',
   amber: '#f5a623', red: '#f04e4e', purple: '#a78bfa',
   accent: '#4f8ef7',
+}
+
+// ── Date helpers ───────────────────────────────────────────────────────────
+
+function toYmd(d: Date): string {
+  // Returns YYYY-MM-DD in Brisbane local time (UTC+10, no DST)
+  const brisbane = new Date(d.getTime() + 10 * 3600 * 1000)
+  return brisbane.toISOString().slice(0, 10)
+}
+
+function ymdToday(): string { return toYmd(new Date()) }
+
+function ymdDaysAgo(n: number): string {
+  const d = new Date(); d.setDate(d.getDate() - n)
+  return toYmd(d)
+}
+
+function ymdStartOfMonth(): string {
+  const d = new Date(); d.setDate(1)
+  return toYmd(d)
+}
+
+function ymdStartOfFY(year: number): string {
+  // Australian FY starts 1 July. FY2026 = 1 July 2025 → 30 June 2026.
+  return `${year - 1}-07-01`
+}
+
+function ymdEndOfFY(year: number): string {
+  return `${year}-06-30`
+}
+
+function currentFY(): number {
+  const now = new Date()
+  const m = now.getMonth() + 1  // 1-12
+  return m >= 7 ? now.getFullYear() + 1 : now.getFullYear()
 }
 
 // ── Formatting helpers ─────────────────────────────────────────────────────
@@ -141,6 +177,8 @@ function DirectionBadge({ direction, disposition }: { direction: string; disposi
 
 // ── Main page component ────────────────────────────────────────────────────
 
+type Preset = 'today' | 'yesterday' | 'week' | 'month' | 'custom'
+
 export default function CallsPage({ user }: { user: PortalUserSSR }) {
   const router = useRouter()
   const [loading, setLoading] = useState(true)
@@ -148,40 +186,75 @@ export default function CallsPage({ user }: { user: PortalUserSSR }) {
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null)
   const [calls, setCalls] = useState<CallRow[]>([])
   const [stats, setStats] = useState<StatsPayload | null>(null)
+  const [truncated, setTruncated] = useState(false)
   const [selectedCall, setSelectedCall] = useState<CallRow | null>(null)
 
-  // Filters
-  const [range, setRange] = useState<'today' | 'week' | 'all'>('today')
+  // Date range state — explicit YYYY-MM-DD strings (Brisbane time)
+  const [startDate, setStartDate] = useState<string>(ymdToday())
+  const [endDate, setEndDate] = useState<string>(ymdToday())
+  const [activePreset, setActivePreset] = useState<Preset>('today')
+
+  // Other filters
   const [filterExt, setFilterExt] = useState<string>('all')
   const [filterDir, setFilterDir] = useState<string>('all')
   const [filterDisp, setFilterDisp] = useState<string>('all')
   const [search, setSearch] = useState<string>('')
   const [searchDebounced, setSearchDebounced] = useState<string>('')
 
-  // Debounce search input
   useEffect(() => {
     const t = setTimeout(() => setSearchDebounced(search), 300)
     return () => clearTimeout(t)
   }, [search])
 
+  // Preset → date range
+  function applyPreset(preset: Preset) {
+    setActivePreset(preset)
+    if (preset === 'today') {
+      setStartDate(ymdToday()); setEndDate(ymdToday())
+    } else if (preset === 'yesterday') {
+      const y = ymdDaysAgo(1); setStartDate(y); setEndDate(y)
+    } else if (preset === 'week') {
+      setStartDate(ymdDaysAgo(6)); setEndDate(ymdToday())
+    } else if (preset === 'month') {
+      setStartDate(ymdStartOfMonth()); setEndDate(ymdToday())
+    }
+    // 'custom' — don't change dates, user is editing them manually
+  }
+
+  // When user types in a date field, switch preset label to "custom"
+  function handleStartChange(v: string) {
+    setStartDate(v); setActivePreset('custom')
+  }
+  function handleEndChange(v: string) {
+    setEndDate(v); setActivePreset('custom')
+  }
+
   const load = useCallback(async (isRefresh = false) => {
     if (isRefresh) setRefreshing(true); else setLoading(true)
     try {
       const params = new URLSearchParams()
-      params.set('range', range)
+      params.set('startDate', startDate)
+      params.set('endDate', endDate)
       if (filterExt !== 'all') params.set('extension', filterExt)
       if (filterDir !== 'all') params.set('direction', filterDir)
       if (filterDisp !== 'all') params.set('disposition', filterDisp)
       if (searchDebounced) params.set('search', searchDebounced)
 
+      const statsParams = new URLSearchParams()
+      statsParams.set('startDate', startDate)
+      statsParams.set('endDate', endDate)
+
       const [callsRes, statsRes] = await Promise.all([
         fetch(`/api/calls?${params.toString()}`),
-        fetch('/api/calls/stats'),
+        fetch(`/api/calls/stats?${statsParams.toString()}`),
       ])
       if (callsRes.status === 401 || statsRes.status === 401) { router.push('/login'); return }
       const callsData = await callsRes.json()
       const statsData = await statsRes.json()
-      if (callsRes.ok) setCalls(callsData.calls || [])
+      if (callsRes.ok) {
+        setCalls(callsData.calls || [])
+        setTruncated(!!callsData.truncated)
+      }
       if (statsRes.ok) setStats(statsData)
       setLastRefresh(new Date())
     } catch (e) {
@@ -189,15 +262,16 @@ export default function CallsPage({ user }: { user: PortalUserSSR }) {
     } finally {
       setLoading(false); setRefreshing(false)
     }
-  }, [router, range, filterExt, filterDir, filterDisp, searchDebounced])
+  }, [router, startDate, endDate, filterExt, filterDir, filterDisp, searchDebounced])
 
   useEffect(() => { load(false) }, [load])
 
-  // Auto-refresh every 60 seconds
+  // Auto-refresh every 60 seconds when viewing "today"
   useEffect(() => {
+    if (activePreset !== 'today') return
     const timer = setInterval(() => load(true), 60_000)
     return () => clearInterval(timer)
-  }, [load])
+  }, [load, activePreset])
 
   const maxWeekTalk = useMemo(() => {
     if (!stats?.agents) return 1
@@ -205,6 +279,7 @@ export default function CallsPage({ user }: { user: PortalUserSSR }) {
   }, [stats])
 
   const filterExtName = filterExt !== 'all' ? stats?.agents.find(a => a.extension === filterExt)?.display_name : null
+  const fy = currentFY()
 
   return (
     <>
@@ -225,7 +300,7 @@ export default function CallsPage({ user }: { user: PortalUserSSR }) {
         />
 
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', background: T.bg }}>
-          {/* Top bar */}
+          {/* Top bar with date controls (matches distributors.tsx style) */}
           <div style={{ height: 52, background: T.bg2, borderBottom: `1px solid ${T.border}`, display: 'flex', alignItems: 'center', padding: '0 20px', gap: 10, flexShrink: 0 }}>
             <div style={{ width: 26, height: 26, borderRadius: 6, background: T.blue, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, fontWeight: 600, color: '#fff' }}>JA</div>
             <span style={{ fontSize: 14, fontWeight: 600 }}>Phone Calls</span>
@@ -241,6 +316,28 @@ export default function CallsPage({ user }: { user: PortalUserSSR }) {
                 </span>
               </>
             )}
+            <div style={{ width: 1, height: 18, background: T.border }}/>
+            {/* Preset buttons */}
+            {([
+              { id: 'today', label: 'Today' },
+              { id: 'yesterday', label: 'Yesterday' },
+              { id: 'week', label: '7d' },
+              { id: 'month', label: 'MTD' },
+            ] as { id: Preset; label: string }[]).map(p => (
+              <button key={p.id} onClick={() => applyPreset(p.id)}
+                style={{
+                  padding: '3px 10px', borderRadius: 4, border: '1px solid',
+                  fontSize: 11, fontFamily: 'monospace', fontWeight: 600, cursor: 'pointer',
+                  background: activePreset === p.id ? T.accent : 'transparent',
+                  color: activePreset === p.id ? '#fff' : T.text2,
+                  borderColor: activePreset === p.id ? T.accent : T.border,
+                }}>{p.label}</button>
+            ))}
+            <input type="date" value={startDate} max={endDate} onChange={e => handleStartChange(e.target.value)}
+              style={{ padding: '3px 6px', borderRadius: 4, border: `1px solid ${activePreset === 'custom' ? T.accent : T.border}`, fontSize: 11, fontFamily: 'monospace', background: 'transparent', color: T.text2, outline: 'none', colorScheme: 'dark' }}/>
+            <span style={{ fontSize: 11, color: T.text3 }}>→</span>
+            <input type="date" value={endDate} min={startDate} max={ymdToday()} onChange={e => handleEndChange(e.target.value)}
+              style={{ padding: '3px 6px', borderRadius: 4, border: `1px solid ${activePreset === 'custom' ? T.accent : T.border}`, fontSize: 11, fontFamily: 'monospace', background: 'transparent', color: T.text2, outline: 'none', colorScheme: 'dark' }}/>
           </div>
 
           {/* Body */}
@@ -257,15 +354,17 @@ export default function CallsPage({ user }: { user: PortalUserSSR }) {
                 {stats && (
                   <div style={{ marginBottom: 20 }}>
                     <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 10 }}>
-                      <div style={{ fontSize: 10, color: T.text3, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.1em' }}>Today's Overview</div>
+                      <div style={{ fontSize: 10, color: T.text3, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.1em' }}>
+                        {stats.periodLabel} {activePreset !== 'custom' && <span style={{ color: T.text2, marginLeft: 6 }}>({startDate === endDate ? startDate : `${startDate} → ${endDate}`})</span>}
+                      </div>
                       <div style={{ fontSize: 11, color: T.text3, fontFamily: 'monospace' }}>
                         {new Date().toLocaleDateString('en-AU', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}
                       </div>
                     </div>
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: 10 }}>
                       <StatCard label="Total Calls" value={stats.today.total} />
-                      <StatCard label="Inbound" value={stats.today.inbound} sublabel={stats.today.total ? `${Math.round(stats.today.inbound / stats.today.total * 100)}% of today` : undefined} accent={T.green} />
-                      <StatCard label="Outbound" value={stats.today.outbound} sublabel={stats.today.total ? `${Math.round(stats.today.outbound / stats.today.total * 100)}% of today` : undefined} accent={T.blue} />
+                      <StatCard label="Inbound" value={stats.today.inbound} sublabel={stats.today.total ? `${Math.round(stats.today.inbound / stats.today.total * 100)}% of period` : undefined} accent={T.green} />
+                      <StatCard label="Outbound" value={stats.today.outbound} sublabel={stats.today.total ? `${Math.round(stats.today.outbound / stats.today.total * 100)}% of period` : undefined} accent={T.blue} />
                       <StatCard label="Answer Rate" value={`${stats.today.answer_rate}%`} sublabel={`${stats.today.missed_inbound} missed inbound`} />
                       <StatCard label="Total Talk Time" value={formatDurationLong(stats.today.talk_seconds)} sublabel="across all agents" />
                       <StatCard label="Avg Call Length" value={formatDuration(stats.today.avg_call_seconds)} sublabel="when answered" />
@@ -281,7 +380,7 @@ export default function CallsPage({ user }: { user: PortalUserSSR }) {
                       <div style={{ background: T.bg2, border: `1px solid ${T.border}`, borderRadius: 8, overflow: 'hidden' }}>
                         <div style={{ padding: '12px 16px', borderBottom: `1px solid ${T.border}`, display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
                           <div style={{ fontSize: 10, color: T.text3, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.1em' }}>Per Agent</div>
-                          <div style={{ fontSize: 9, color: T.text3, textTransform: 'uppercase', letterSpacing: '0.1em' }}>Last 7 days</div>
+                          <div style={{ fontSize: 9, color: T.text3, textTransform: 'uppercase', letterSpacing: '0.1em' }}>Bar = last 7 days</div>
                         </div>
                         <div>
                           {stats.agents.length === 0 ? (
@@ -305,7 +404,7 @@ export default function CallsPage({ user }: { user: PortalUserSSR }) {
                                   <div style={{ fontSize: 10, color: T.text3, fontFamily: 'monospace' }}>{a.extension}</div>
                                 </div>
                                 <div style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 11, color: T.text2, fontFamily: 'monospace', marginBottom: 6 }}>
-                                  <span>Today: {a.today_total}</span>
+                                  <span>Period: {a.today_total}</span>
                                   <span style={{ marginLeft: 'auto', color: T.text, fontWeight: 500 }}>{formatDurationLong(a.week_talk_seconds)}</span>
                                 </div>
                                 <div style={{ height: 3, background: T.bg4, borderRadius: 2, overflow: 'hidden' }}>
@@ -320,7 +419,7 @@ export default function CallsPage({ user }: { user: PortalUserSSR }) {
 
                     {stats && (
                       <div style={{ background: T.bg2, border: `1px solid ${T.border}`, borderRadius: 8, padding: 16 }}>
-                        <div style={{ fontSize: 10, color: T.text3, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 12 }}>Today's Split</div>
+                        <div style={{ fontSize: 10, color: T.text3, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 12 }}>Period Split</div>
                         {[
                           { label: 'Inbound', value: stats.today.inbound, color: T.green },
                           { label: 'Outbound', value: stats.today.outbound, color: T.blue },
@@ -355,12 +454,6 @@ export default function CallsPage({ user }: { user: PortalUserSSR }) {
                           color: T.text, fontSize: 12, fontFamily: 'inherit', outline: 'none',
                         }}
                       />
-                      <select value={range} onChange={e => setRange(e.target.value as any)}
-                        style={{ padding: '6px 8px', background: T.bg3, border: `1px solid ${T.border}`, borderRadius: 5, color: T.text, fontSize: 11, fontFamily: 'inherit', cursor: 'pointer' }}>
-                        <option value="today">Today</option>
-                        <option value="week">Last 7 days</option>
-                        <option value="all">All time</option>
-                      </select>
                       <select value={filterDir} onChange={e => setFilterDir(e.target.value)}
                         style={{ padding: '6px 8px', background: T.bg3, border: `1px solid ${T.border}`, borderRadius: 5, color: T.text, fontSize: 11, fontFamily: 'inherit', cursor: 'pointer' }}>
                         <option value="all">All directions</option>
@@ -456,7 +549,7 @@ export default function CallsPage({ user }: { user: PortalUserSSR }) {
                     </div>
 
                     <div style={{ padding: '8px 14px', borderTop: `1px solid ${T.border}`, background: T.bg3, display: 'flex', justifyContent: 'space-between', fontSize: 10, color: T.text3 }}>
-                      <span style={{ fontFamily: 'monospace' }}>{calls.length} calls shown{calls.length === 200 ? ' (limit reached)' : ''}</span>
+                      <span style={{ fontFamily: 'monospace' }}>{calls.length} calls shown{truncated ? ' (row limit hit — narrow filters for more)' : ''}</span>
                       <span>Click any row for details</span>
                     </div>
                   </div>
@@ -522,7 +615,6 @@ export default function CallsPage({ user }: { user: PortalUserSSR }) {
                 ))}
               </div>
 
-              {/* Phase 2/3 placeholders */}
               {[
                 ['Phase 2 — Transcript', 'Full conversation transcript with speaker labels will appear here once Deepgram integration is live.'],
                 ['Phase 3 — AI Coaching Analysis', 'Claude-generated sales score, objections raised, discovery quality, outcome classification, and specific coaching feedback for this call.'],
