@@ -26,10 +26,15 @@ interface Category {
   account_codes: string[]
 }
 
+// Must match the DB CHECK constraint on distributor_report_excluded_customers.note
+// and the validation in /api/exclusions.ts.
+const VALID_NOTES = ['Excluded', 'Sundry', 'Internal'] as const
+type ExclusionNote = typeof VALID_NOTES[number]
+
 interface ExcludedCustomer {
   id?: string
   customer_name: string
-  note?: string | null
+  note: ExclusionNote
 }
 
 // Simple in-memory cache for the MYOB account list (changes rarely)
@@ -113,11 +118,22 @@ async function handlePost(req: NextApiRequest, res: NextApiResponse) {
   if (delExErr) { res.status(500).json({ error: 'Failed to clear excluded customers: ' + delExErr.message }); return }
 
   if (excluded.length > 0) {
+    // Validate each row: note must be one of the allowed values.
+    for (const x of excluded) {
+      if (!x.customer_name?.trim()) continue   // skipped below
+      if (!VALID_NOTES.includes(x.note as ExclusionNote)) {
+        res.status(400).json({
+          error: `Invalid note for "${x.customer_name}". Must be one of: ${VALID_NOTES.join(', ')}. Got: ${JSON.stringify(x.note)}`,
+        })
+        return
+      }
+    }
+
     const exRows = excluded
       .filter(x => x.customer_name?.trim())
       .map(x => ({
         customer_name: x.customer_name.trim(),
-        note: x.note?.trim() || null,
+        note: x.note,   // validated above
         created_by: user.id,
       }))
     // Dedupe by lowercased name

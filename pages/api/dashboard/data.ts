@@ -44,16 +44,24 @@ function effectiveRange(widget: WidgetInstance, global: GlobalDate, widgetPeriod
 }
 
 // ── Distributor-config helpers ────────────────────────────────────────────
-let distConfigCache: { loadedAt: number, excluded: string[] } | null = null
-async function getExcludedCustomers(): Promise<string[]> {
+// Returns a Map of lowercased customer name → note ('Excluded' | 'Sundry' | 'Internal').
+// Matches the pattern used in pages/api/distributors.ts so the Sundry category
+// is handled consistently across dashboard widgets and the Distributors page.
+let distConfigCache: { loadedAt: number, excluded: Map<string, string> } | null = null
+async function getExcludedCustomers(): Promise<Map<string, string>> {
   if (distConfigCache && (Date.now() - distConfigCache.loadedAt) < 60_000) return distConfigCache.excluded
   try {
-    const { data } = await sb().from('distributor_report_excluded_customers').select('customer_name')
-    const excluded = (data || []).map((r: any) => String(r.customer_name || '').toLowerCase())
+    const { data } = await sb().from('distributor_report_excluded_customers').select('customer_name, note')
+    const excluded = new Map<string, string>()
+    for (const r of (data || []) as any[]) {
+      const name = String(r.customer_name || '').toLowerCase().trim()
+      if (!name) continue
+      excluded.set(name, String(r.note || 'Excluded'))
+    }
     distConfigCache = { loadedAt: Date.now(), excluded }
     return excluded
   } catch {
-    return []
+    return new Map()
   }
 }
 
@@ -156,10 +164,19 @@ async function topDistributors(range: DateRange, limit: number): Promise<{ name:
     for (const r of arr) {
       const raw2 = String(r.CustomerName || '').trim()
       if (!raw2) continue
-      if (excluded.includes(raw2.toLowerCase())) continue
+
+      // Check exclusion status — matches pages/api/distributors.ts logic.
+      // 'Excluded' and 'Internal' are dropped. 'Sundry' is kept but rolled
+      // up under a single synthetic distributor so it renders as one row.
       const clean = raw2.replace(/\s*\((Tuning\s*\d*|Tuning)\)\s*$/i, '').trim()
-      if (!byName[clean]) byName[clean] = { name: clean, value: 0 }
-      byName[clean].value += Number(r.revenue_ex || 0)
+      const rawKey = raw2.toLowerCase()
+      const cleanKey = clean.toLowerCase()
+      const note = excluded.get(rawKey) || excluded.get(cleanKey) || null
+      if (note && note !== 'Sundry') continue   // drop Excluded/Internal
+
+      const displayName = note === 'Sundry' ? 'Sundry' : clean
+      if (!byName[displayName]) byName[displayName] = { name: displayName, value: 0 }
+      byName[displayName].value += Number(r.revenue_ex || 0)
     }
     return Object.values(byName).sort((a, b) => b.value - a.value).slice(0, limit)
   } catch (e: any) {
