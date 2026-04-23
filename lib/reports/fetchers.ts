@@ -1029,3 +1029,266 @@ export async function fetchCallsActivity(range: DateRange): Promise<CallsActivit
     },
   }
 }
+
+// ── REP LEADERBOARD ───────────────────────────────────────────────────
+// Per-rep coaching metrics: scored-call count, avg score, flagged count,
+// top outcome. Sorted by avg score desc (high performers first).
+
+export interface CallsRepLeaderboardData {
+  reps: Array<{
+    agentExt: string
+    agentName: string | null
+    scoredCalls: number
+    avgScore: number | null
+    minScore: number | null
+    maxScore: number | null
+    flaggedCount: number     // calls with sales_score < 40
+    topOutcome: string | null // most common outcome_classification
+  }>
+}
+
+export async function fetchCallsRepLeaderboard(range: DateRange): Promise<CallsRepLeaderboardData> {
+  const sb = callsSupabase()
+  const startIso = `${range.periodStart}T00:00:00.000Z`
+  const endIso = `${range.periodEnd}T23:59:59.999Z`
+
+  const { data, error } = await sb
+    .from('calls')
+    .select('agent_ext, agent_name, sales_score, outcome_classification')
+    .gte('call_date', startIso)
+    .lte('call_date', endIso)
+    .not('sales_score', 'is', null)
+
+  if (error) return { reps: [] }
+  const rows = (data || []).filter((r: any) => r.agent_ext && SALES_REP_EXTENSIONS.has(String(r.agent_ext)))
+
+  const byRep = new Map<string, {
+    agentName: string | null
+    scores: number[]
+    flagged: number
+    outcomes: Map<string, number>
+  }>()
+  for (const r of rows) {
+    const ext = String(r.agent_ext)
+    const agg = byRep.get(ext) || {
+      agentName: r.agent_name || null,
+      scores: [], flagged: 0, outcomes: new Map<string, number>(),
+    }
+    if (!agg.agentName && r.agent_name) agg.agentName = r.agent_name
+    if (typeof r.sales_score === 'number') {
+      agg.scores.push(r.sales_score)
+      if (r.sales_score < 40) agg.flagged++
+    }
+    if (r.outcome_classification) {
+      agg.outcomes.set(r.outcome_classification, (agg.outcomes.get(r.outcome_classification) || 0) + 1)
+    }
+    byRep.set(ext, agg)
+  }
+
+  const reps = Array.from(byRep.entries())
+    .map(([agentExt, v]) => {
+      const n = v.scores.length
+      const sum = v.scores.reduce((s, x) => s + x, 0)
+      const avg = n > 0 ? Math.round((sum / n) * 10) / 10 : null
+      let topOutcome: string | null = null
+      let topCount = 0
+      for (const [oc, c] of v.outcomes) {
+        if (c > topCount) { topCount = c; topOutcome = oc }
+      }
+      return {
+        agentExt,
+        agentName: v.agentName,
+        scoredCalls: n,
+        avgScore: avg,
+        minScore: n > 0 ? Math.min(...v.scores) : null,
+        maxScore: n > 0 ? Math.max(...v.scores) : null,
+        flaggedCount: v.flagged,
+        topOutcome,
+      }
+    })
+    .sort((a, b) => {
+      // Nulls sort last. Then by avgScore desc.
+      if (a.avgScore == null && b.avgScore == null) return 0
+      if (a.avgScore == null) return 1
+      if (b.avgScore == null) return -1
+      return b.avgScore - a.avgScore
+    })
+
+  return { reps }
+}
+
+// ── OUTCOME BREAKDOWN ─────────────────────────────────────────────────
+// Distribution of outcome_classification values across scored calls in
+// the period. Shape is a simple list of {outcome, count, pct}.
+
+export interface CallsOutcomesData {
+  total: number
+  outcomes: Array<{ outcome: string; count: number; pct: number }>
+}
+
+export async function fetchCallsOutcomes(range: DateRange): Promise<CallsOutcomesData> {
+  const sb = callsSupabase()
+  const startIso = `${range.periodStart}T00:00:00.000Z`
+  const endIso = `${range.periodEnd}T23:59:59.999Z`
+
+  const { data, error } = await sb
+    .from('calls')
+    .select('agent_ext, outcome_classification')
+    .gte('call_date', startIso)
+    .lte('call_date', endIso)
+    .not('outcome_classification', 'is', null)
+
+  if (error) return { total: 0, outcomes: [] }
+  const rows = (data || []).filter((r: any) => r.agent_ext && SALES_REP_EXTENSIONS.has(String(r.agent_ext)))
+
+  const counts = new Map<string, number>()
+  for (const r of rows) {
+    const o = String(r.outcome_classification)
+    counts.set(o, (counts.get(o) || 0) + 1)
+  }
+  const total = rows.length
+  const outcomes = Array.from(counts.entries())
+    .map(([outcome, count]) => ({
+      outcome,
+      count,
+      pct: total > 0 ? Math.round((count / total) * 1000) / 10 : 0,
+    }))
+    .sort((a, b) => b.count - a.count)
+
+  return { total, outcomes }
+}
+
+// ── FLAGGED CALLS ─────────────────────────────────────────────────────
+// Individual calls with sales_score < FLAG_THRESHOLD. Used by managers
+// to spot-check calls that need coaching intervention. Ordered by score
+// ascending (worst first) then date desc.
+
+const FLAG_THRESHOLD = 40
+
+export interface CallsFlaggedData {
+  threshold: number
+  count: number
+  calls: Array<{
+    callId: string
+    callDate: string
+    agentExt: string
+    agentName: string | null
+    externalNumber: string | null
+    direction: string | null
+    billSec: number
+    score: number
+    outcome: string | null
+    summaryShort: string | null   // first ~180 chars of coaching_summary
+  }>
+}
+
+export async function fetchCallsFlagged(range: DateRange): Promise<CallsFlaggedData> {
+  const sb = callsSupabase()
+  const startIso = `${range.periodStart}T00:00:00.000Z`
+  const endIso = `${range.periodEnd}T23:59:59.999Z`
+
+  const { data, error } = await sb
+    .from('calls')
+    .select('id, call_date, agent_ext, agent_name, external_number, direction, billsec_seconds, sales_score, outcome_classification, coaching_summary')
+    .gte('call_date', startIso)
+    .lte('call_date', endIso)
+    .lt('sales_score', FLAG_THRESHOLD)
+    .not('sales_score', 'is', null)
+    .order('sales_score', { ascending: true })
+    .order('call_date', { ascending: false })
+    .limit(50)
+
+  if (error) return { threshold: FLAG_THRESHOLD, count: 0, calls: [] }
+  const rows = (data || []).filter((r: any) => r.agent_ext && SALES_REP_EXTENSIONS.has(String(r.agent_ext)))
+
+  const calls = rows.map((r: any) => {
+    const s = r.coaching_summary || ''
+    const short = s.length > 180 ? s.substring(0, 180).trim() + '…' : s || null
+    return {
+      callId: r.id,
+      callDate: r.call_date,
+      agentExt: String(r.agent_ext),
+      agentName: r.agent_name || null,
+      externalNumber: r.external_number || null,
+      direction: r.direction || null,
+      billSec: Number(r.billsec_seconds) || 0,
+      score: Number(r.sales_score),
+      outcome: r.outcome_classification || null,
+      summaryShort: short,
+    }
+  })
+
+  return { threshold: FLAG_THRESHOLD, count: calls.length, calls }
+}
+
+// ── TOP OBJECTIONS ────────────────────────────────────────────────────
+// Frequency-counted list of objections raised by callers across scored
+// calls in the period. Sources `objections_raised` (jsonb array of
+// {text,category}?) on the calls table — populated by analyse.js when
+// Claude's rubric response contains objection data. If the column is
+// empty or the shape varies, returns an empty outcomes list.
+//
+// NOTE: the exact shape of objections_raised hasn't been verified from
+// production yet. The guard below handles: null, string[], {text,count}[],
+// and {objection,count}[] so a mismatch degrades gracefully instead of
+// throwing. Once a sample row is inspected we'll tighten the types.
+
+export interface CallsObjectionsData {
+  total: number                  // total distinct objection mentions
+  callsWithObjections: number    // how many calls had at least one
+  objections: Array<{ text: string; count: number; pct: number }>
+}
+
+export async function fetchCallsObjections(range: DateRange): Promise<CallsObjectionsData> {
+  const sb = callsSupabase()
+  const startIso = `${range.periodStart}T00:00:00.000Z`
+  const endIso = `${range.periodEnd}T23:59:59.999Z`
+
+  const { data, error } = await sb
+    .from('calls')
+    .select('agent_ext, objections_raised')
+    .gte('call_date', startIso)
+    .lte('call_date', endIso)
+    .not('objections_raised', 'is', null)
+
+  if (error) return { total: 0, callsWithObjections: 0, objections: [] }
+  const rows = (data || []).filter((r: any) => r.agent_ext && SALES_REP_EXTENSIONS.has(String(r.agent_ext)))
+
+  const counts = new Map<string, number>()
+  let totalMentions = 0
+  let callsWithObjections = 0
+
+  for (const r of rows) {
+    const raw = r.objections_raised
+    let items: string[] = []
+    if (Array.isArray(raw)) {
+      items = raw
+        .map((o: any) => {
+          if (typeof o === 'string') return o
+          if (o && typeof o === 'object') return o.text || o.objection || o.label || null
+          return null
+        })
+        .filter((x: any): x is string => typeof x === 'string' && x.length > 0)
+    } else if (typeof raw === 'string') {
+      // If stored as a single string, split on newlines/commas as a best-effort.
+      items = raw.split(/[\n;]+/).map(s => s.trim()).filter(Boolean)
+    }
+    if (items.length > 0) callsWithObjections++
+    for (const it of items) {
+      const key = it.toLowerCase().trim()
+      counts.set(key, (counts.get(key) || 0) + 1)
+      totalMentions++
+    }
+  }
+
+  const objections = Array.from(counts.entries())
+    .map(([text, count]) => ({
+      text,
+      count,
+      pct: totalMentions > 0 ? Math.round((count / totalMentions) * 1000) / 10 : 0,
+    }))
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 15)
+
+  return { total: totalMentions, callsWithObjections, objections }
+}

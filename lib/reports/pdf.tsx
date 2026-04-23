@@ -924,6 +924,147 @@ function CallsActivity({ data }: { data: any }) {
   )
 }
 
+function CallsRepLeaderboard({ data }: { data: any }) {
+  const reps = data?.reps || []
+  if (reps.length === 0) {
+    return <Text style={{ fontSize: 9, color: COLORS.ink3 }}>No scored calls in this period.</Text>
+  }
+  const colourForScore = (s: number | null) =>
+    s == null ? COLORS.ink3 : s >= 70 ? COLORS.green : s >= 50 ? COLORS.amber : COLORS.red
+  return (
+    <View>
+      <View style={styles.tableHeader}>
+        <Text style={[styles.col, { flex: 0.4 }]}>#</Text>
+        <Text style={[styles.col, { flex: 2 }]}>Rep</Text>
+        <Text style={[styles.colNum, { flex: 0.7 }]}>Scored</Text>
+        <Text style={[styles.colNum, { flex: 0.7 }]}>Avg</Text>
+        <Text style={[styles.colNum, { flex: 0.6 }]}>Min</Text>
+        <Text style={[styles.colNum, { flex: 0.6 }]}>Max</Text>
+        <Text style={[styles.colNum, { flex: 0.7 }]}>Flagged</Text>
+        <Text style={[styles.col, { flex: 1.5 }]}>Top outcome</Text>
+      </View>
+      {reps.map((r: any, i: number) => (
+        <View key={r.agentExt} style={[styles.tableRow, i % 2 === 1 ? styles.tableRowAlt : {}]}>
+          <Text style={[styles.col, { flex: 0.4, color: COLORS.ink3 }]}>{i + 1}</Text>
+          <Text style={[styles.col, { flex: 2 }]}>{r.agentName || `Ext ${r.agentExt}`} ({r.agentExt})</Text>
+          <Text style={[styles.colNum, { flex: 0.7 }]}>{r.scoredCalls}</Text>
+          <Text style={[styles.colNum, { flex: 0.7, fontWeight: 700, color: colourForScore(r.avgScore) }]}>{r.avgScore != null ? r.avgScore.toFixed(1) : '—'}</Text>
+          <Text style={[styles.colNum, { flex: 0.6, color: colourForScore(r.minScore) }]}>{r.minScore ?? '—'}</Text>
+          <Text style={[styles.colNum, { flex: 0.6, color: colourForScore(r.maxScore) }]}>{r.maxScore ?? '—'}</Text>
+          <Text style={[styles.colNum, { flex: 0.7, color: r.flaggedCount > 0 ? COLORS.red : COLORS.ink3 }]}>{r.flaggedCount}</Text>
+          <Text style={[styles.col, { flex: 1.5 }]}>{r.topOutcome || '—'}</Text>
+        </View>
+      ))}
+    </View>
+  )
+}
+
+function CallsOutcomes({ data }: { data: any }) {
+  const outcomes = data?.outcomes || []
+  if (outcomes.length === 0) {
+    return <Text style={{ fontSize: 9, color: COLORS.ink3 }}>No classified outcomes in this period.</Text>
+  }
+  const PAL = [COLORS.accent, COLORS.green, COLORS.amber, COLORS.red, COLORS.teal, '#a78bfa', COLORS.ink3]
+  const total = data.total || outcomes.reduce((s: number, o: any) => s + o.count, 0)
+  return (
+    <View>
+      <Text style={{ fontSize: 8, color: COLORS.ink3, marginBottom: 4 }}>{total} classified calls in this period</Text>
+      {/* Stacked bar — react-pdf doesn't nest flex % widths well; use Svg Rects instead */}
+      <Svg width={520} height={14}>
+        {(() => {
+          let x = 0
+          const barW = 520
+          return outcomes.map((o: any, i: number) => {
+            const w = (o.pct / 100) * barW
+            const rect = <Rect key={o.outcome} x={x} y={0} width={w} height={14} fill={PAL[i % PAL.length]}/>
+            x += w
+            return rect
+          })
+        })()}
+      </Svg>
+      <View style={{ marginTop: 6 }}>
+        <View style={styles.tableHeader}>
+          <Text style={[styles.col, { flex: 3 }]}>Outcome</Text>
+          <Text style={[styles.colNum, { flex: 0.6 }]}>Calls</Text>
+          <Text style={[styles.colNum, { flex: 0.6 }]}>%</Text>
+        </View>
+        {outcomes.map((o: any, i: number) => (
+          <View key={o.outcome} style={[styles.tableRow, i % 2 === 1 ? styles.tableRowAlt : {}]}>
+            <View style={[styles.col, { flex: 3, flexDirection: 'row', alignItems: 'center' }]}>
+              <View style={{ width: 8, height: 8, backgroundColor: PAL[i % PAL.length], marginRight: 5 }}/>
+              <Text>{o.outcome}</Text>
+            </View>
+            <Text style={[styles.colNum, { flex: 0.6 }]}>{o.count}</Text>
+            <Text style={[styles.colNum, { flex: 0.6, color: COLORS.ink3 }]}>{o.pct.toFixed(1)}%</Text>
+          </View>
+        ))}
+      </View>
+    </View>
+  )
+}
+
+function CallsFlagged({ data }: { data: any }) {
+  const calls = data?.calls || []
+  if (calls.length === 0) {
+    return <Text style={{ fontSize: 9, color: COLORS.green }}>No flagged calls (score &lt; {data?.threshold ?? 40}) in this period. ✓</Text>
+  }
+  return (
+    <View>
+      <Text style={{ fontSize: 8, color: COLORS.ink3, marginBottom: 4 }}>
+        {calls.length} call{calls.length === 1 ? '' : 's'} scored below {data?.threshold ?? 40} — sorted worst first.
+      </Text>
+      <View style={styles.tableHeader}>
+        <Text style={[styles.colNum, { flex: 0.5 }]}>Score</Text>
+        <Text style={[styles.col, { flex: 0.8 }]}>Date</Text>
+        <Text style={[styles.col, { flex: 1.4 }]}>Rep</Text>
+        <Text style={[styles.col, { flex: 1.2 }]}>Number</Text>
+        <Text style={[styles.colNum, { flex: 0.6 }]}>Dur</Text>
+        <Text style={[styles.col, { flex: 1.2 }]}>Outcome</Text>
+      </View>
+      {calls.map((c: any, i: number) => (
+        <View key={c.callId} style={[styles.tableRow, i % 2 === 1 ? styles.tableRowAlt : {}]}>
+          <Text style={[styles.colNum, { flex: 0.5, fontWeight: 700, color: COLORS.red }]}>{c.score}</Text>
+          <Text style={[styles.col, { flex: 0.8 }]}>{new Date(c.callDate).toLocaleDateString('en-AU', { day: '2-digit', month: 'short' })}</Text>
+          <Text style={[styles.col, { flex: 1.4 }]}>{c.agentName || `Ext ${c.agentExt}`}</Text>
+          <Text style={[styles.col, { flex: 1.2 }]}>{c.externalNumber || '—'}</Text>
+          <Text style={[styles.colNum, { flex: 0.6 }]}>{fmtSecsPdf(c.billSec)}</Text>
+          <Text style={[styles.col, { flex: 1.2 }]}>{c.outcome || '—'}</Text>
+        </View>
+      ))}
+    </View>
+  )
+}
+
+function CallsObjections({ data }: { data: any }) {
+  const objections = data?.objections || []
+  if (objections.length === 0) {
+    return (
+      <Text style={{ fontSize: 9, color: COLORS.ink3 }}>
+        No objection data captured for this period.
+      </Text>
+    )
+  }
+  return (
+    <View>
+      <Text style={{ fontSize: 8, color: COLORS.ink3, marginBottom: 4 }}>
+        {data.callsWithObjections} call{data.callsWithObjections === 1 ? '' : 's'} raised {data.total} objection{data.total === 1 ? '' : 's'} total. Top {objections.length} shown.
+      </Text>
+      <View style={styles.tableHeader}>
+        <Text style={[styles.col, { flex: 3 }]}>Objection</Text>
+        <Text style={[styles.colNum, { flex: 0.6 }]}>Count</Text>
+        <Text style={[styles.colNum, { flex: 0.6 }]}>%</Text>
+      </View>
+      {objections.map((o: any, i: number) => (
+        <View key={o.text} style={[styles.tableRow, i % 2 === 1 ? styles.tableRowAlt : {}]}>
+          <Text style={[styles.col, { flex: 3 }]}>{o.text}</Text>
+          <Text style={[styles.colNum, { flex: 0.6 }]}>{o.count}</Text>
+          <Text style={[styles.colNum, { flex: 0.6, color: COLORS.ink3 }]}>{o.pct.toFixed(1)}%</Text>
+        </View>
+      ))}
+    </View>
+  )
+}
+
 // ── Section router ─────────────────────────────────────────────────────
 function RenderSection({ section }: { section: GeneratedSection }) {
   if (!section || !section.data || section.data.error) {
@@ -958,6 +1099,10 @@ function RenderSection({ section }: { section: GeneratedSection }) {
           case 'trend-charts':        return <TrendCharts data={section.data}/>
           case 'calls-team-trend':    return <CallsTeamTrend data={section.data}/>
           case 'calls-activity':      return <CallsActivity data={section.data}/>
+          case 'calls-rep-leaderboard': return <CallsRepLeaderboard data={section.data}/>
+          case 'calls-outcomes':      return <CallsOutcomes data={section.data}/>
+          case 'calls-flagged':       return <CallsFlagged data={section.data}/>
+          case 'calls-objections':    return <CallsObjections data={section.data}/>
           default:                    return null
         }
       })()}

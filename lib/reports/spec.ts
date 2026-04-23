@@ -96,12 +96,11 @@ export const DEFAULT_SECTIONS: Record<ReportType, SectionId[]> = {
     'ai-narrative',
   ],
   'call-analytics': [
-    // Only sections with implemented fetchers are in the default list.
-    // The other 4 Call Analytics sections (rep-leaderboard, outcomes,
-    // objections, flagged) exist in SECTION_META for future use but aren't
-    // wired yet — leaving them out of the default prevents empty sections
-    // rendering in generated reports.
     'calls-team-trend',
+    'calls-rep-leaderboard',
+    'calls-outcomes',
+    'calls-objections',
+    'calls-flagged',
     'calls-activity',
     'ai-narrative',
   ],

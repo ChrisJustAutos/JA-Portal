@@ -15,6 +15,7 @@ import {
   fetchSalesFunnel, fetchSalesRepScorecard, fetchSalesPipelineCombined,
   fetchSalesRepScorecardV2, fetchSalesQuoteAging, fetchSalesMonthTrend,
   fetchCallsTeamTrend, fetchCallsActivity,
+  fetchCallsRepLeaderboard, fetchCallsOutcomes, fetchCallsFlagged, fetchCallsObjections,
 } from '../../../lib/reports/fetchers'
 import { fetchMondaySalesData, fetchAttributionData, type MondaySalesData, type SalesAttributionData } from '../../../lib/reports/monday-fetcher'
 import { generateSectionInsights, generateOverallNarrative } from '../../../lib/reports/narrative'
@@ -72,6 +73,10 @@ async function fetchSectionData(
     case 'sales-month-trend':    return fetchSalesMonthTrend(shared.attribution)
     case 'calls-team-trend':     return await fetchCallsTeamTrend(range)
     case 'calls-activity':       return await fetchCallsActivity(range)
+    case 'calls-rep-leaderboard':return await fetchCallsRepLeaderboard(range)
+    case 'calls-outcomes':       return await fetchCallsOutcomes(range)
+    case 'calls-flagged':        return await fetchCallsFlagged(range)
+    case 'calls-objections':     return await fetchCallsObjections(range)
     case 'ai-narrative':         return {} // narrative is injected at the report level
   }
 }

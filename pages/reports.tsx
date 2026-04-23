@@ -409,6 +409,10 @@ function SectionBody({ section }: { section: any }) {
     case 'trend-charts': return <PvTrends data={section.data}/>
     case 'calls-team-trend': return <PvCallsTeamTrend data={section.data}/>
     case 'calls-activity': return <PvCallsActivity data={section.data}/>
+    case 'calls-rep-leaderboard': return <PvCallsRepLeaderboard data={section.data}/>
+    case 'calls-outcomes': return <PvCallsOutcomes data={section.data}/>
+    case 'calls-flagged': return <PvCallsFlagged data={section.data}/>
+    case 'calls-objections': return <PvCallsObjections data={section.data}/>
     default: return null
   }
 }
@@ -1089,6 +1093,149 @@ function PvCallsActivity({ data }: { data: any }) {
               <td style={{ ...tdS, textAlign: 'right' }}>{r.inboundCalls}</td>
               <td style={{ ...tdS, textAlign: 'right' }}>{fmtSecs(r.totalBillSec)}</td>
               <td style={{ ...tdS, textAlign: 'right' }}>{fmtSecs(r.avgBillSecAnswered)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
+function PvCallsRepLeaderboard({ data }: { data: any }) {
+  const reps = data?.reps || []
+  if (reps.length === 0) {
+    return <div style={{ fontSize: 11, color: '#6b7280' }}>No scored calls in this period.</div>
+  }
+  const scoreColour = (s: number | null) =>
+    s == null ? '#9ca3af' : s >= 70 ? '#059669' : s >= 50 ? '#d97706' : '#dc2626'
+  return (
+    <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+      <thead>
+        <tr>
+          <th style={thS}>#</th>
+          <th style={thS}>Rep</th>
+          <th style={{ ...thS, textAlign: 'right' }}>Scored</th>
+          <th style={{ ...thS, textAlign: 'right' }}>Avg</th>
+          <th style={{ ...thS, textAlign: 'right' }}>Min</th>
+          <th style={{ ...thS, textAlign: 'right' }}>Max</th>
+          <th style={{ ...thS, textAlign: 'right' }}>Flagged</th>
+          <th style={thS}>Top outcome</th>
+        </tr>
+      </thead>
+      <tbody>
+        {reps.map((r: any, i: number) => (
+          <tr key={r.agentExt}>
+            <td style={{ ...tdS, color: '#9ca3af', width: 20 }}>{i + 1}</td>
+            <td style={tdS}>{r.agentName || `Ext ${r.agentExt}`} <span style={{ color: '#9ca3af' }}>({r.agentExt})</span></td>
+            <td style={{ ...tdS, textAlign: 'right' }}>{r.scoredCalls}</td>
+            <td style={{ ...tdS, textAlign: 'right', fontWeight: 700, color: scoreColour(r.avgScore) }}>{r.avgScore != null ? r.avgScore.toFixed(1) : '—'}</td>
+            <td style={{ ...tdS, textAlign: 'right', color: scoreColour(r.minScore) }}>{r.minScore ?? '—'}</td>
+            <td style={{ ...tdS, textAlign: 'right', color: scoreColour(r.maxScore) }}>{r.maxScore ?? '—'}</td>
+            <td style={{ ...tdS, textAlign: 'right', color: r.flaggedCount > 0 ? '#dc2626' : '#6b7280' }}>{r.flaggedCount}</td>
+            <td style={{ ...tdS, color: '#3a3f4a' }}>{r.topOutcome || '—'}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  )
+}
+
+function PvCallsOutcomes({ data }: { data: any }) {
+  const outcomes = data?.outcomes || []
+  if (outcomes.length === 0) {
+    return <div style={{ fontSize: 11, color: '#6b7280' }}>No classified outcomes in this period.</div>
+  }
+  // Colour palette cycling — keep visually distinct
+  const COL = ['#2563eb', '#059669', '#d97706', '#dc2626', '#a78bfa', '#0d9488', '#6b7280']
+  const total = data.total || outcomes.reduce((s: number, o: any) => s + o.count, 0)
+  return (
+    <div>
+      <div style={{ fontSize: 10, color: '#6b7280', marginBottom: 8 }}>{total} classified calls in this period</div>
+      {/* Stacked bar */}
+      <div style={{ display: 'flex', height: 18, borderRadius: 3, overflow: 'hidden', marginBottom: 10, border: '1px solid #e5e7eb' }}>
+        {outcomes.map((o: any, i: number) => (
+          <div key={o.outcome} title={`${o.outcome}: ${o.count} (${o.pct}%)`} style={{ width: `${o.pct}%`, background: COL[i % COL.length] }}/>
+        ))}
+      </div>
+      <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+        <thead><tr><th style={thS}>Outcome</th><th style={{ ...thS, textAlign: 'right' }}>Calls</th><th style={{ ...thS, textAlign: 'right' }}>%</th></tr></thead>
+        <tbody>
+          {outcomes.map((o: any, i: number) => (
+            <tr key={o.outcome}>
+              <td style={tdS}>
+                <span style={{ display: 'inline-block', width: 8, height: 8, background: COL[i % COL.length], borderRadius: 2, marginRight: 6, verticalAlign: 'middle' }}/>
+                {o.outcome}
+              </td>
+              <td style={{ ...tdS, textAlign: 'right' }}>{o.count}</td>
+              <td style={{ ...tdS, textAlign: 'right', color: '#6b7280' }}>{o.pct.toFixed(1)}%</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
+function PvCallsFlagged({ data }: { data: any }) {
+  const calls = data?.calls || []
+  if (calls.length === 0) {
+    return <div style={{ fontSize: 11, color: '#059669' }}>No flagged calls (score &lt; {data?.threshold ?? 40}) in this period. ✓</div>
+  }
+  return (
+    <div>
+      <div style={{ fontSize: 10, color: '#6b7280', marginBottom: 6 }}>
+        {calls.length} call{calls.length === 1 ? '' : 's'} scored below {data?.threshold ?? 40} — sorted worst first.
+      </div>
+      <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+        <thead>
+          <tr>
+            <th style={{ ...thS, textAlign: 'right', width: 44 }}>Score</th>
+            <th style={thS}>Date</th>
+            <th style={thS}>Rep</th>
+            <th style={thS}>Number</th>
+            <th style={{ ...thS, textAlign: 'right' }}>Dur</th>
+            <th style={thS}>Outcome</th>
+          </tr>
+        </thead>
+        <tbody>
+          {calls.map((c: any) => (
+            <tr key={c.callId}>
+              <td style={{ ...tdS, textAlign: 'right', fontWeight: 700, color: '#dc2626' }}>{c.score}</td>
+              <td style={tdS}>{new Date(c.callDate).toLocaleDateString('en-AU', { day: '2-digit', month: 'short' })}</td>
+              <td style={tdS}>{c.agentName || `Ext ${c.agentExt}`}</td>
+              <td style={tdS}>{c.externalNumber || '—'}</td>
+              <td style={{ ...tdS, textAlign: 'right' }}>{fmtSecs(c.billSec)}</td>
+              <td style={{ ...tdS, color: '#3a3f4a' }}>{c.outcome || '—'}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
+function PvCallsObjections({ data }: { data: any }) {
+  const objections = data?.objections || []
+  if (objections.length === 0) {
+    return (
+      <div style={{ fontSize: 11, color: '#6b7280' }}>
+        No objection data captured for this period. (Analysis has to explicitly log objections — if this looks low, check the rubric.)
+      </div>
+    )
+  }
+  return (
+    <div>
+      <div style={{ fontSize: 10, color: '#6b7280', marginBottom: 8 }}>
+        {data.callsWithObjections} call{data.callsWithObjections === 1 ? '' : 's'} raised {data.total} objection{data.total === 1 ? '' : 's'} total. Top {objections.length} shown.
+      </div>
+      <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+        <thead><tr><th style={thS}>Objection</th><th style={{ ...thS, textAlign: 'right', width: 60 }}>Count</th><th style={{ ...thS, textAlign: 'right', width: 60 }}>%</th></tr></thead>
+        <tbody>
+          {objections.map((o: any) => (
+            <tr key={o.text}>
+              <td style={tdS}>{o.text}</td>
+              <td style={{ ...tdS, textAlign: 'right' }}>{o.count}</td>
+              <td style={{ ...tdS, textAlign: 'right', color: '#6b7280' }}>{o.pct.toFixed(1)}%</td>
             </tr>
           ))}
         </tbody>
