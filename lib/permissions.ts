@@ -126,6 +126,35 @@ const REPORT_TYPE_ROLES: Record<ReportType, UserRole[]> = {
   'call-analytics':         ['admin', 'manager', 'sales'],
 }
 
+// Which sidebar tabs each report type implicitly depends on. A user only
+// sees a report type in the picker if they have access to ALL required tabs.
+// This keeps the report picker honest: if admin hid the Stock tab from a
+// user, the Stock Health report shouldn't tempt them either.
+//
+// Reasoning per report:
+// - monthly-management: top-line P&L + receivables + stock → needs all of those tabs
+// - executive-summary: KPI summary → needs overview + P&L at minimum
+// - distributor-performance: needs Distributors
+// - cash-flow: needs Invoices (receivables) + Payables
+// - stock-health: needs Stock
+// - sales-pipeline: needs Leads/Orders
+// - call-analytics: needs Phone Calls
+//
+// Keep in sync with PORTAL_TABS ids below.
+const REPORT_TYPE_REQUIRED_TABS: Record<ReportType, string[]> = {
+  'monthly-management':     ['overview', 'invoices', 'pnl', 'stock'],
+  'executive-summary':      ['overview', 'pnl'],
+  'distributor-performance':['distributors'],
+  'cash-flow':              ['invoices', 'payables'],
+  'stock-health':           ['stock'],
+  'sales-pipeline':         ['leads'],
+  'call-analytics':         ['calls'],
+}
+
+export function requiredTabsForReportType(type: ReportType): string[] {
+  return REPORT_TYPE_REQUIRED_TABS[type] || []
+}
+
 export function roleCanGenerateReportType(role: UserRole, type: ReportType): boolean {
   return REPORT_TYPE_ROLES[type]?.includes(role) ?? false
 }
@@ -135,27 +164,40 @@ export function reportTypesForRole(role: UserRole): ReportType[] {
     .filter(t => roleCanGenerateReportType(role, t))
 }
 
-// Per-user override for which report types a specific user can generate.
-// If `visibleReports` is set (from user_profiles.visible_reports), it OVERRIDES
-// the role defaults — the user sees exactly those reports (intersected with
-// what their role is permitted to generate, as a safety net against stale
-// rows or privilege escalation).
+// Per-user filter for which report types a specific user can generate.
 //
-// If `visibleReports` is null/undefined, the user gets every report type their
-// role allows (original behaviour).
+// Filtering order (all must pass):
+//   1. Role permits the report type            — always enforced
+//   2. If `visibleReports` set, type is in it  — admin explicit override
+//   3. If `visibleTabs` set, user has ALL tabs the report needs — auto-hide
+//
+// If either override is null/undefined/empty, that layer is skipped
+// (original behaviour preserved).
 export function userCanGenerateReportType(
   role: UserRole,
   type: ReportType,
   visibleReports?: string[] | null,
+  visibleTabs?: string[] | null,
 ): boolean {
   if (!roleCanGenerateReportType(role, type)) return false
-  if (!visibleReports || visibleReports.length === 0) return true
-  return visibleReports.includes(type)
+  if (visibleReports && visibleReports.length > 0 && !visibleReports.includes(type)) return false
+  if (visibleTabs && visibleTabs.length > 0) {
+    const required = REPORT_TYPE_REQUIRED_TABS[type] || []
+    const tabSet = new Set(visibleTabs)
+    for (const tab of required) {
+      if (!tabSet.has(tab)) return false
+    }
+  }
+  return true
 }
 
-export function reportTypesForUser(role: UserRole, visibleReports?: string[] | null): ReportType[] {
+export function reportTypesForUser(
+  role: UserRole,
+  visibleReports?: string[] | null,
+  visibleTabs?: string[] | null,
+): ReportType[] {
   return reportTypesForRole(role).filter(t =>
-    !visibleReports || visibleReports.length === 0 || visibleReports.includes(t)
+    userCanGenerateReportType(role, t, visibleReports, visibleTabs)
   )
 }
 

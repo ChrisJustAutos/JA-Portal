@@ -4,7 +4,7 @@
 
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { withAuth } from '../../../lib/authServer'
-import { roleCanGenerateReportType, REPORT_TYPE_LABELS } from '../../../lib/permissions'
+import { userCanGenerateReportType, REPORT_TYPE_LABELS } from '../../../lib/permissions'
 import type { ReportConfig, GeneratedReport, GeneratedSection, SectionId } from '../../../lib/reports/spec'
 import { SECTION_META, DEFAULT_SECTIONS } from '../../../lib/reports/spec'
 import {
@@ -88,9 +88,12 @@ async function handler(req: NextApiRequest, res: NextApiResponse, user: any) {
   if (!cfg?.type) return res.status(400).json({ error: 'type is required' })
   if (!cfg?.periodStart || !cfg?.periodEnd) return res.status(400).json({ error: 'periodStart and periodEnd required' })
 
-  // ACL check — user's role must allow this report type
-  if (!roleCanGenerateReportType(user.role, cfg.type)) {
-    return res.status(403).json({ error: `Your role (${user.role}) cannot generate ${REPORT_TYPE_LABELS[cfg.type]}` })
+  // ACL check — enforces role + optional per-user override + required tabs.
+  // Crafted requests that the picker wouldn't show are also rejected here.
+  const visibleReports = (user as any).visibleReports ?? null
+  const visibleTabs = (user as any).visibleTabs ?? null
+  if (!userCanGenerateReportType(user.role, cfg.type, visibleReports, visibleTabs)) {
+    return res.status(403).json({ error: `You do not have access to ${REPORT_TYPE_LABELS[cfg.type]}` })
   }
 
   // Defaults

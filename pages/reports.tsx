@@ -8,7 +8,7 @@ import PortalSidebar from '../lib/PortalSidebar'
 import { requirePageAuth } from '../lib/authServer'
 import {
   REPORT_TYPE_LABELS, REPORT_TYPE_DESCRIPTIONS,
-  reportTypesForRole, type ReportType, type UserRole,
+  reportTypesForUser, type ReportType, type UserRole,
 } from '../lib/permissions'
 import {
   SECTION_META, DEFAULT_SECTIONS,
@@ -48,7 +48,11 @@ function defaultPeriod() {
 
 export default function ReportsPage({ user }: { user: PortalUserSSR }) {
   const router = useRouter()
-  const availableTypes = reportTypesForRole(user.role)
+  const availableTypes = reportTypesForUser(
+    user.role,
+    (user as any).visibleReports ?? null,
+    (user as any).visibleTabs ?? null,
+  )
   const [selectedType, setSelectedType] = useState<ReportType | null>(availableTypes[0] || null)
   const { start: defStart, end: defEnd } = defaultPeriod()
   const [periodStart, setPeriodStart] = useState(defStart)
