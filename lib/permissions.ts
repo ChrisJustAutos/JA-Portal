@@ -64,7 +64,7 @@ const ROLE_PERMISSIONS: Record<UserRole, Permission[]> = {
     'edit:leads','edit:supplier_invoices','generate:reports',
   ],
   sales: [
-    'view:dashboards','view:overview','view:leads','view:distributors','view:reports',
+    'view:dashboards','view:overview','view:leads','view:distributors','view:calls','view:reports',
     'edit:leads','generate:reports',
   ],
   accountant: [
@@ -75,7 +75,7 @@ const ROLE_PERMISSIONS: Record<UserRole, Permission[]> = {
   ],
   viewer: [
     'view:dashboards','view:overview','view:invoices','view:pnl','view:stock','view:payables',
-    'view:leads','view:distributors','view:reports',
+    'view:leads','view:distributors','view:calls','view:reports',
   ],
 }
 
