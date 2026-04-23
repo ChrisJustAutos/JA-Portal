@@ -1100,9 +1100,9 @@ export async function fetchCallsRepLeaderboard(range: DateRange): Promise<CallsR
       const avg = n > 0 ? Math.round((sum / n) * 10) / 10 : null
       let topOutcome: string | null = null
       let topCount = 0
-      for (const [oc, c] of v.outcomes) {
+      v.outcomes.forEach((c, oc) => {
         if (c > topCount) { topCount = c; topOutcome = oc }
-      }
+      })
       return {
         agentExt,
         agentName: v.agentName,
