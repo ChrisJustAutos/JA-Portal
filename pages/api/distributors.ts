@@ -303,12 +303,15 @@ async function writeCache(
     computed_at: new Date().toISOString(),
     computed_ms: computedMs,
   }
-  const { error } = await sb
+  const { error, data } = await sb
     .from('distributors_cache')
     .upsert(row, { onConflict: 'start_date,end_date' })
+    .select('id')
   if (error) {
-    console.warn('[distributors] cache write failed (non-fatal):', error.message)
+    console.error('[distributors] writeCache upsert error:', error.message, 'code:', error.code, 'details:', error.details)
+    throw new Error(`writeCache: ${error.message}`)
   }
+  console.log('[distributors] writeCache upsert returned:', data?.length, 'rows')
 }
 
 // ── HTTP handler ────────────────────────────────────────────────────────
@@ -340,10 +343,16 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
       const payload = await computeDistributorsPayload(start, end)
       const computedMs = Date.now() - t0
 
-      // 3. Store in cache for next time (fire-and-forget).
-      writeCache(sb, start, end, payload, computedMs).catch(e =>
-        console.warn('[distributors] async cache write threw:', e?.message)
-      )
+      // 3. Store in cache for next time. AWAIT this — Vercel serverless
+      // terminates the function once the response is sent, so fire-and-forget
+      // writes don't reliably persist. The extra ~200ms is worth the
+      // guarantee that the cache is actually populated.
+      try {
+        await writeCache(sb, start, end, payload, computedMs)
+        console.log('[distributors] cache WRITE ok for', start, '→', end, 'invoiceCount=', payload?.totals?.invoiceCount)
+      } catch (e: any) {
+        console.error('[distributors] cache write threw:', e?.message, e?.stack)
+      }
 
       return res.status(200).json({
         ...payload,
