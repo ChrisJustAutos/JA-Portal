@@ -22,6 +22,13 @@ export type SectionId =
   | 'sales-month-trend'
   | 'trend-charts'
   | 'ai-narrative'
+  // Call Analytics sections
+  | 'calls-team-trend'
+  | 'calls-rep-leaderboard'
+  | 'calls-outcomes'
+  | 'calls-objections'
+  | 'calls-flagged'
+  | 'calls-activity'
 
 export interface SectionMeta {
   id: SectionId
@@ -50,6 +57,14 @@ export const SECTION_META: Record<SectionId, SectionMeta> = {
   'sales-month-trend':  { id: 'sales-month-trend',  label: 'Monthly Conversion Trend', description: '6-month rolling view of quote-month conversion rates', entityScope: 'all' },
   'trend-charts':        { id: 'trend-charts',       label: '6-Month Trends',        description: 'Income and expense trend for last 6 months',        entityScope: 'all' },
   'ai-narrative':        { id: 'ai-narrative',       label: 'AI Commentary',         description: 'Claude writes narrative commentary on the data',    entityScope: 'all' },
+  // Call Analytics sections — all source from Supabase (calls + call_analysis).
+  // entityScope 'all' since phone-call data isn't split by JAWS/VPS.
+  'calls-team-trend':      { id: 'calls-team-trend',      label: 'Team Score Trend',      description: 'Daily avg sales_score over period (team-wide)',            entityScope: 'all' },
+  'calls-rep-leaderboard': { id: 'calls-rep-leaderboard', label: 'Rep Leaderboard',       description: 'Per-rep: calls, avg score, flagged count, top outcome',   entityScope: 'all' },
+  'calls-outcomes':        { id: 'calls-outcomes',        label: 'Outcome Breakdown',     description: 'Call outcomes: quote/close/no-sale/voicemail/discovery',   entityScope: 'all' },
+  'calls-objections':      { id: 'calls-objections',      label: 'Top Objections',        description: 'Most frequent objections & topics raised by callers',      entityScope: 'all' },
+  'calls-flagged':         { id: 'calls-flagged',         label: 'Flagged Calls',         description: 'Calls with sales_score < 40 — needs coaching attention',   entityScope: 'all' },
+  'calls-activity':        { id: 'calls-activity',        label: 'Call Activity',         description: 'Raw call counts and durations per rep',                    entityScope: 'all' },
 }
 
 // Default section selection for each report type.
@@ -78,6 +93,16 @@ export const DEFAULT_SECTIONS: Record<ReportType, SectionId[]> = {
     'sales-quote-aging',
     'sales-month-trend',
     'top-customers',
+    'ai-narrative',
+  ],
+  'call-analytics': [
+    // Only sections with implemented fetchers are in the default list.
+    // The other 4 Call Analytics sections (rep-leaderboard, outcomes,
+    // objections, flagged) exist in SECTION_META for future use but aren't
+    // wired yet — leaving them out of the default prevents empty sections
+    // rendering in generated reports.
+    'calls-team-trend',
+    'calls-activity',
     'ai-narrative',
   ],
 }

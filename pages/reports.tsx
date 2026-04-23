@@ -407,6 +407,8 @@ function SectionBody({ section }: { section: any }) {
     case 'sales-quote-aging': return <PvQuoteAging data={section.data}/>
     case 'sales-month-trend': return <PvMonthTrend data={section.data}/>
     case 'trend-charts': return <PvTrends data={section.data}/>
+    case 'calls-team-trend': return <PvCallsTeamTrend data={section.data}/>
+    case 'calls-activity': return <PvCallsActivity data={section.data}/>
     default: return null
   }
 }
@@ -975,6 +977,122 @@ function PvTrends({ data }: { data: any }) {
           </div>
         )
       })}
+    </div>
+  )
+}
+
+// ── Call Analytics preview components ─────────────────────────────────
+
+function fmtSecs(s: number): string {
+  if (s < 60) return `${s}s`
+  const m = Math.floor(s / 60)
+  const rs = s % 60
+  return rs > 0 ? `${m}m ${rs}s` : `${m}m`
+}
+
+function PvCallsTeamTrend({ data }: { data: any }) {
+  if (!data || !Array.isArray(data.days)) {
+    return <div style={{ fontSize: 11, color: '#6b7280' }}>No call data for this period.</div>
+  }
+  const days: Array<{ date: string; avgScore: number | null; callCount: number }> = data.days
+  const scored = days.filter(d => d.avgScore != null)
+  if (scored.length === 0) {
+    return <div style={{ fontSize: 11, color: '#6b7280' }}>No scored calls in this period yet.</div>
+  }
+  const maxScore = 100
+  const minScore = 0
+  const w = 560
+  const h = 160
+  const padL = 28, padR = 8, padT = 8, padB = 24
+  const innerW = w - padL - padR
+  const innerH = h - padT - padB
+  const xStep = scored.length > 1 ? innerW / (scored.length - 1) : 0
+  const y = (s: number) => padT + innerH - ((s - minScore) / (maxScore - minScore)) * innerH
+  const pts = scored.map((d, i) => `${padL + i * xStep},${y(d.avgScore as number)}`).join(' ')
+  const avg = data.totals.avgScore
+  return (
+    <div>
+      <div style={{ display: 'flex', gap: 12, marginBottom: 8 }}>
+        <div style={{ background: '#f9fafb', padding: 8, borderTop: '2px solid #2563eb', flex: 1 }}>
+          <div style={{ fontSize: 8.5, color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Team Avg</div>
+          <div style={{ fontSize: 16, fontWeight: 700, color: '#1a1d23', marginTop: 2 }}>{avg != null ? avg.toFixed(1) : '—'}</div>
+        </div>
+        <div style={{ background: '#f9fafb', padding: 8, borderTop: '2px solid #2563eb', flex: 1 }}>
+          <div style={{ fontSize: 8.5, color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Scored Calls</div>
+          <div style={{ fontSize: 16, fontWeight: 700, color: '#1a1d23', marginTop: 2 }}>{data.totals.scoredCalls}</div>
+        </div>
+        <div style={{ background: '#f9fafb', padding: 8, borderTop: '2px solid #2563eb', flex: 1 }}>
+          <div style={{ fontSize: 8.5, color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Total Calls</div>
+          <div style={{ fontSize: 16, fontWeight: 700, color: '#1a1d23', marginTop: 2 }}>{data.totals.calls}</div>
+        </div>
+      </div>
+      <svg width={w} height={h} style={{ background: '#f9fafb', border: '1px solid #e5e7eb' }}>
+        {[0, 25, 50, 75, 100].map(v => (
+          <g key={v}>
+            <line x1={padL} x2={w - padR} y1={y(v)} y2={y(v)} stroke="#e5e7eb" strokeWidth={0.5}/>
+            <text x={padL - 4} y={y(v) + 3} fontSize={9} fill="#9ca3af" textAnchor="end">{v}</text>
+          </g>
+        ))}
+        <polyline fill="none" stroke="#2563eb" strokeWidth={1.5} points={pts}/>
+        {scored.map((d, i) => (
+          <circle key={i} cx={padL + i * xStep} cy={y(d.avgScore as number)} r={2} fill="#2563eb"/>
+        ))}
+        <text x={padL} y={h - 6} fontSize={9} fill="#6b7280">{scored[0].date.substring(5)}</text>
+        <text x={w - padR} y={h - 6} fontSize={9} fill="#6b7280" textAnchor="end">{scored[scored.length - 1].date.substring(5)}</text>
+      </svg>
+      <div style={{ fontSize: 9, color: '#6b7280', marginTop: 4 }}>
+        Each dot = daily team average across sales reps (201, 203, 204, 999, 4001). Days with no scored calls are omitted from the line but counted in totals.
+      </div>
+    </div>
+  )
+}
+
+function PvCallsActivity({ data }: { data: any }) {
+  if (!data || !Array.isArray(data.reps) || data.reps.length === 0) {
+    return <div style={{ fontSize: 11, color: '#6b7280' }}>No call activity in this period.</div>
+  }
+  return (
+    <div>
+      <div style={{ display: 'flex', gap: 12, marginBottom: 8 }}>
+        <div style={{ background: '#f9fafb', padding: 8, borderTop: '2px solid #2563eb', flex: 1 }}>
+          <div style={{ fontSize: 8.5, color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Team Calls</div>
+          <div style={{ fontSize: 16, fontWeight: 700, color: '#1a1d23', marginTop: 2 }}>{data.team.totalCalls}</div>
+        </div>
+        <div style={{ background: '#f9fafb', padding: 8, borderTop: '2px solid #2563eb', flex: 1 }}>
+          <div style={{ fontSize: 8.5, color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Total Talk Time</div>
+          <div style={{ fontSize: 16, fontWeight: 700, color: '#1a1d23', marginTop: 2 }}>{fmtSecs(data.team.totalBillSec)}</div>
+        </div>
+        <div style={{ background: '#f9fafb', padding: 8, borderTop: '2px solid #2563eb', flex: 1 }}>
+          <div style={{ fontSize: 8.5, color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Avg Call</div>
+          <div style={{ fontSize: 16, fontWeight: 700, color: '#1a1d23', marginTop: 2 }}>{fmtSecs(data.team.avgBillSec)}</div>
+        </div>
+      </div>
+      <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+        <thead>
+          <tr>
+            <th style={thS}>Rep</th>
+            <th style={{ ...thS, textAlign: 'right' }}>Calls</th>
+            <th style={{ ...thS, textAlign: 'right' }}>Answered</th>
+            <th style={{ ...thS, textAlign: 'right' }}>Outbound</th>
+            <th style={{ ...thS, textAlign: 'right' }}>Inbound</th>
+            <th style={{ ...thS, textAlign: 'right' }}>Talk Time</th>
+            <th style={{ ...thS, textAlign: 'right' }}>Avg (answered)</th>
+          </tr>
+        </thead>
+        <tbody>
+          {data.reps.map((r: any) => (
+            <tr key={r.agentExt}>
+              <td style={tdS}>{r.agentName || `Ext ${r.agentExt}`} <span style={{ color: '#9ca3af' }}>({r.agentExt})</span></td>
+              <td style={{ ...tdS, textAlign: 'right' }}>{r.totalCalls}</td>
+              <td style={{ ...tdS, textAlign: 'right' }}>{r.answeredCalls}</td>
+              <td style={{ ...tdS, textAlign: 'right' }}>{r.outboundCalls}</td>
+              <td style={{ ...tdS, textAlign: 'right' }}>{r.inboundCalls}</td>
+              <td style={{ ...tdS, textAlign: 'right' }}>{fmtSecs(r.totalBillSec)}</td>
+              <td style={{ ...tdS, textAlign: 'right' }}>{fmtSecs(r.avgBillSecAnswered)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   )
 }

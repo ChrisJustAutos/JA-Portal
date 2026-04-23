@@ -821,6 +821,109 @@ function MonthTrend({ data }: { data: any }) {
   )
 }
 
+// ── Call Analytics PDF renderers ───────────────────────────────────────
+
+function fmtSecsPdf(s: number): string {
+  if (!s || s < 60) return `${Math.round(s || 0)}s`
+  const m = Math.floor(s / 60)
+  const rs = s % 60
+  return rs > 0 ? `${m}m ${rs}s` : `${m}m`
+}
+
+function CallsTeamTrend({ data }: { data: any }) {
+  const days: Array<{ date: string; avgScore: number | null; callCount: number }> = data?.days || []
+  const scored = days.filter(d => d.avgScore != null)
+  if (scored.length === 0) {
+    return <Text style={{ fontSize: 9, color: COLORS.ink3 }}>No scored calls in this period yet.</Text>
+  }
+  const chartW = 520
+  const chartH = 130
+  const pad = { left: 28, right: 10, top: 8, bottom: 22 }
+  const plotW = chartW - pad.left - pad.right
+  const plotH = chartH - pad.top - pad.bottom
+  const xStep = scored.length > 1 ? plotW / (scored.length - 1) : 0
+  const yFor = (v: number) => pad.top + plotH - (v / 100) * plotH
+  const pts = scored.map((d, i) => `${pad.left + xStep * i},${yFor(d.avgScore as number)}`).join(' ')
+  const avg = data?.totals?.avgScore
+  return (
+    <View wrap={false}>
+      <View style={{ flexDirection: 'row', gap: 8, marginBottom: 6 }}>
+        <View style={{ flex: 1, backgroundColor: COLORS.bg2, padding: 6, borderTopWidth: 2, borderTopColor: COLORS.accent, borderStyle: 'solid' }}>
+          <Text style={{ fontSize: 7, color: COLORS.ink3 }}>TEAM AVG</Text>
+          <Text style={{ fontSize: 13, fontWeight: 700, color: COLORS.ink, marginTop: 1 }}>{avg != null ? avg.toFixed(1) : '—'}</Text>
+        </View>
+        <View style={{ flex: 1, backgroundColor: COLORS.bg2, padding: 6, borderTopWidth: 2, borderTopColor: COLORS.accent, borderStyle: 'solid' }}>
+          <Text style={{ fontSize: 7, color: COLORS.ink3 }}>SCORED CALLS</Text>
+          <Text style={{ fontSize: 13, fontWeight: 700, color: COLORS.ink, marginTop: 1 }}>{data?.totals?.scoredCalls ?? 0}</Text>
+        </View>
+        <View style={{ flex: 1, backgroundColor: COLORS.bg2, padding: 6, borderTopWidth: 2, borderTopColor: COLORS.accent, borderStyle: 'solid' }}>
+          <Text style={{ fontSize: 7, color: COLORS.ink3 }}>TOTAL CALLS</Text>
+          <Text style={{ fontSize: 13, fontWeight: 700, color: COLORS.ink, marginTop: 1 }}>{data?.totals?.calls ?? 0}</Text>
+        </View>
+      </View>
+      <Svg width={chartW} height={chartH}>
+        {[0, 25, 50, 75, 100].map(v => (
+          <G key={v}>
+            <Line x1={pad.left} y1={yFor(v)} x2={pad.left + plotW} y2={yFor(v)} stroke={COLORS.line2} strokeWidth={0.4}/>
+            <Text x={pad.left - 4} y={yFor(v) + 2} style={{ fontSize: 6, fill: COLORS.ink3 }} {...({ textAnchor: 'end' } as any)}>{v}</Text>
+          </G>
+        ))}
+        <Polyline points={pts} fill="none" stroke={COLORS.accent} strokeWidth={1.2}/>
+        <Text x={pad.left} y={chartH - 6} style={{ fontSize: 6, fill: COLORS.ink3 }}>{scored[0].date.substring(5)}</Text>
+        <Text x={pad.left + plotW} y={chartH - 6} style={{ fontSize: 6, fill: COLORS.ink3 }} {...({ textAnchor: 'end' } as any)}>{scored[scored.length - 1].date.substring(5)}</Text>
+      </Svg>
+      <Text style={{ fontSize: 7, color: COLORS.ink3, marginTop: 2 }}>
+        Daily team avg across sales reps (201, 203, 204, 999, 4001). Days with no scored calls omitted from line.
+      </Text>
+    </View>
+  )
+}
+
+function CallsActivity({ data }: { data: any }) {
+  const reps = data?.reps || []
+  if (reps.length === 0) {
+    return <Text style={{ fontSize: 9, color: COLORS.ink3 }}>No call activity in this period.</Text>
+  }
+  return (
+    <View>
+      <View style={{ flexDirection: 'row', gap: 8, marginBottom: 6 }}>
+        <View style={{ flex: 1, backgroundColor: COLORS.bg2, padding: 6, borderTopWidth: 2, borderTopColor: COLORS.accent, borderStyle: 'solid' }}>
+          <Text style={{ fontSize: 7, color: COLORS.ink3 }}>TEAM CALLS</Text>
+          <Text style={{ fontSize: 13, fontWeight: 700, color: COLORS.ink, marginTop: 1 }}>{data?.team?.totalCalls ?? 0}</Text>
+        </View>
+        <View style={{ flex: 1, backgroundColor: COLORS.bg2, padding: 6, borderTopWidth: 2, borderTopColor: COLORS.accent, borderStyle: 'solid' }}>
+          <Text style={{ fontSize: 7, color: COLORS.ink3 }}>TALK TIME</Text>
+          <Text style={{ fontSize: 13, fontWeight: 700, color: COLORS.ink, marginTop: 1 }}>{fmtSecsPdf(data?.team?.totalBillSec ?? 0)}</Text>
+        </View>
+        <View style={{ flex: 1, backgroundColor: COLORS.bg2, padding: 6, borderTopWidth: 2, borderTopColor: COLORS.accent, borderStyle: 'solid' }}>
+          <Text style={{ fontSize: 7, color: COLORS.ink3 }}>AVG CALL</Text>
+          <Text style={{ fontSize: 13, fontWeight: 700, color: COLORS.ink, marginTop: 1 }}>{fmtSecsPdf(data?.team?.avgBillSec ?? 0)}</Text>
+        </View>
+      </View>
+      <View style={styles.tableHeader}>
+        <Text style={[styles.col, { flex: 2 }]}>Rep</Text>
+        <Text style={[styles.colNum, { flex: 0.8 }]}>Calls</Text>
+        <Text style={[styles.colNum, { flex: 0.8 }]}>Answered</Text>
+        <Text style={[styles.colNum, { flex: 0.8 }]}>Outbound</Text>
+        <Text style={[styles.colNum, { flex: 0.8 }]}>Inbound</Text>
+        <Text style={[styles.colNum, { flex: 1 }]}>Talk Time</Text>
+        <Text style={[styles.colNum, { flex: 1 }]}>Avg (ans)</Text>
+      </View>
+      {reps.map((r: any, i: number) => (
+        <View key={r.agentExt} style={[styles.tableRow, i % 2 === 1 ? styles.tableRowAlt : {}]}>
+          <Text style={[styles.col, { flex: 2 }]}>{r.agentName || `Ext ${r.agentExt}`} ({r.agentExt})</Text>
+          <Text style={[styles.colNum, { flex: 0.8 }]}>{r.totalCalls}</Text>
+          <Text style={[styles.colNum, { flex: 0.8 }]}>{r.answeredCalls}</Text>
+          <Text style={[styles.colNum, { flex: 0.8 }]}>{r.outboundCalls}</Text>
+          <Text style={[styles.colNum, { flex: 0.8 }]}>{r.inboundCalls}</Text>
+          <Text style={[styles.colNum, { flex: 1 }]}>{fmtSecsPdf(r.totalBillSec)}</Text>
+          <Text style={[styles.colNum, { flex: 1 }]}>{fmtSecsPdf(r.avgBillSecAnswered)}</Text>
+        </View>
+      ))}
+    </View>
+  )
+}
+
 // ── Section router ─────────────────────────────────────────────────────
 function RenderSection({ section }: { section: GeneratedSection }) {
   if (!section || !section.data || section.data.error) {
@@ -853,6 +956,8 @@ function RenderSection({ section }: { section: GeneratedSection }) {
           case 'sales-quote-aging':   return <QuoteAging data={section.data}/>
           case 'sales-month-trend':   return <MonthTrend data={section.data}/>
           case 'trend-charts':        return <TrendCharts data={section.data}/>
+          case 'calls-team-trend':    return <CallsTeamTrend data={section.data}/>
+          case 'calls-activity':      return <CallsActivity data={section.data}/>
           default:                    return null
         }
       })()}

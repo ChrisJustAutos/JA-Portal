@@ -841,3 +841,191 @@ export function fetchSalesMonthTrend(
     empty: attribution == null,
   }
 }
+
+// ──────────────────────────────────────────────────────────────────────
+// CALL ANALYTICS FETCHERS
+// ──────────────────────────────────────────────────────────────────────
+// Source: Supabase `calls` + `call_analysis` tables. No MYOB involvement.
+// All fetchers use a service-role Supabase client (same pattern as the
+// rest of the portal's server-side code).
+
+import { createClient, SupabaseClient } from '@supabase/supabase-js'
+
+let _callsSb: SupabaseClient | null = null
+function callsSupabase(): SupabaseClient {
+  if (_callsSb) return _callsSb
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY
+  if (!url || !key) throw new Error('Supabase env vars missing for call analytics fetchers')
+  _callsSb = createClient(url, key, { auth: { persistSession: false } })
+  return _callsSb
+}
+
+// Sales-rep extensions that we coach. Other extensions (manager 202, office
+// staff 300/211, etc.) are excluded from coaching metrics — they skew the
+// team average and don't receive Slack coaching posts either.
+// Keep this in sync with /opt/ja-cdr-sync/analyse.js + slack-poster.js.
+const SALES_REP_EXTENSIONS = new Set(['201', '203', '204', '999', '4001'])
+
+// ── TEAM SCORE TREND ──────────────────────────────────────────────────
+// Daily team avg sales_score over the period. One point per day.
+
+export interface CallsTeamTrendData {
+  days: Array<{ date: string; avgScore: number | null; callCount: number }>
+  totals: { calls: number; scoredCalls: number; avgScore: number | null }
+}
+
+export async function fetchCallsTeamTrend(range: DateRange): Promise<CallsTeamTrendData> {
+  const sb = callsSupabase()
+  const startIso = `${range.periodStart}T00:00:00.000Z`
+  const endIso = `${range.periodEnd}T23:59:59.999Z`
+
+  const { data, error } = await sb
+    .from('calls')
+    .select('call_date, sales_score, agent_ext')
+    .gte('call_date', startIso)
+    .lte('call_date', endIso)
+    .not('sales_score', 'is', null)
+
+  if (error) {
+    return { days: [], totals: { calls: 0, scoredCalls: 0, avgScore: null } }
+  }
+
+  // Filter to sales reps only
+  const rows = (data || []).filter((r: any) => r.agent_ext && SALES_REP_EXTENSIONS.has(String(r.agent_ext)))
+
+  // Group by day (YYYY-MM-DD)
+  const byDay = new Map<string, { sum: number; count: number }>()
+  let totalCalls = 0
+  let scoredCalls = 0
+  let scoreSum = 0
+  for (const r of rows) {
+    const day = String(r.call_date).substring(0, 10)
+    totalCalls++
+    if (typeof r.sales_score === 'number') {
+      scoredCalls++
+      scoreSum += r.sales_score
+      const e = byDay.get(day) || { sum: 0, count: 0 }
+      e.sum += r.sales_score
+      e.count += 1
+      byDay.set(day, e)
+    }
+  }
+
+  // Emit a row per day in the window so the chart has gaps rather than
+  // auto-interpolating — keeps the reader honest about days with no data.
+  const days: Array<{ date: string; avgScore: number | null; callCount: number }> = []
+  const start = new Date(range.periodStart + 'T00:00:00Z')
+  const end = new Date(range.periodEnd + 'T00:00:00Z')
+  for (let d = new Date(start); d <= end; d.setUTCDate(d.getUTCDate() + 1)) {
+    const key = d.toISOString().substring(0, 10)
+    const b = byDay.get(key)
+    days.push({
+      date: key,
+      avgScore: b ? Math.round((b.sum / b.count) * 10) / 10 : null,
+      callCount: b?.count ?? 0,
+    })
+  }
+
+  return {
+    days,
+    totals: {
+      calls: totalCalls,
+      scoredCalls,
+      avgScore: scoredCalls > 0 ? Math.round((scoreSum / scoredCalls) * 10) / 10 : null,
+    },
+  }
+}
+
+// ── CALL ACTIVITY ─────────────────────────────────────────────────────
+// Raw counts and durations per rep. NOT gated by whether the call was
+// coached — this is the unfiltered activity view. Lets a manager see that
+// a rep is making calls even if coaching data is sparse.
+
+export interface CallsActivityData {
+  reps: Array<{
+    agentExt: string
+    agentName: string | null
+    totalCalls: number
+    answeredCalls: number
+    outboundCalls: number
+    inboundCalls: number
+    totalBillSec: number
+    avgBillSec: number
+    avgBillSecAnswered: number
+  }>
+  team: {
+    totalCalls: number
+    totalBillSec: number
+    avgBillSec: number
+  }
+}
+
+export async function fetchCallsActivity(range: DateRange): Promise<CallsActivityData> {
+  const sb = callsSupabase()
+  const startIso = `${range.periodStart}T00:00:00.000Z`
+  const endIso = `${range.periodEnd}T23:59:59.999Z`
+
+  const { data, error } = await sb
+    .from('calls')
+    .select('agent_ext, agent_name, direction, disposition, billsec_seconds')
+    .gte('call_date', startIso)
+    .lte('call_date', endIso)
+
+  if (error) {
+    return { reps: [], team: { totalCalls: 0, totalBillSec: 0, avgBillSec: 0 } }
+  }
+
+  const rows = (data || []).filter((r: any) => r.agent_ext && SALES_REP_EXTENSIONS.has(String(r.agent_ext)))
+
+  const byRep = new Map<string, {
+    agentName: string | null
+    totalCalls: number; answeredCalls: number
+    outboundCalls: number; inboundCalls: number
+    totalBillSec: number; answeredBillSec: number
+  }>()
+  let teamCalls = 0
+  let teamBillSec = 0
+  for (const r of rows) {
+    const ext = String(r.agent_ext)
+    teamCalls++
+    const sec = Number(r.billsec_seconds) || 0
+    teamBillSec += sec
+    const agg = byRep.get(ext) || {
+      agentName: r.agent_name || null,
+      totalCalls: 0, answeredCalls: 0,
+      outboundCalls: 0, inboundCalls: 0,
+      totalBillSec: 0, answeredBillSec: 0,
+    }
+    if (!agg.agentName && r.agent_name) agg.agentName = r.agent_name
+    agg.totalCalls++
+    agg.totalBillSec += sec
+    if (r.disposition === 'ANSWERED') { agg.answeredCalls++; agg.answeredBillSec += sec }
+    if (r.direction === 'outbound') agg.outboundCalls++
+    if (r.direction === 'inbound')  agg.inboundCalls++
+    byRep.set(ext, agg)
+  }
+
+  const reps = Array.from(byRep.entries())
+    .map(([agentExt, v]) => ({
+      agentExt,
+      agentName: v.agentName,
+      totalCalls: v.totalCalls,
+      answeredCalls: v.answeredCalls,
+      outboundCalls: v.outboundCalls,
+      inboundCalls: v.inboundCalls,
+      totalBillSec: v.totalBillSec,
+      avgBillSec: v.totalCalls > 0 ? Math.round(v.totalBillSec / v.totalCalls) : 0,
+      avgBillSecAnswered: v.answeredCalls > 0 ? Math.round(v.answeredBillSec / v.answeredCalls) : 0,
+    }))
+    .sort((a, b) => b.totalCalls - a.totalCalls)
+
+  return {
+    reps,
+    team: {
+      totalCalls: teamCalls,
+      totalBillSec: teamBillSec,
+      avgBillSec: teamCalls > 0 ? Math.round(teamBillSec / teamCalls) : 0,
+    },
+  }
+}

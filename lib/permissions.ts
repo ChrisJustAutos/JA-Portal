@@ -94,6 +94,7 @@ export type ReportType =
   | 'cash-flow'
   | 'stock-health'
   | 'sales-pipeline'
+  | 'call-analytics'
 
 export const REPORT_TYPE_LABELS: Record<ReportType, string> = {
   'monthly-management':     'Monthly Management Report',
@@ -102,6 +103,7 @@ export const REPORT_TYPE_LABELS: Record<ReportType, string> = {
   'cash-flow':              'Cash Flow / Working Capital',
   'stock-health':           'Stock Health',
   'sales-pipeline':         'Sales Pipeline',
+  'call-analytics':         'Call Analytics',
 }
 
 export const REPORT_TYPE_DESCRIPTIONS: Record<ReportType, string> = {
@@ -111,6 +113,7 @@ export const REPORT_TYPE_DESCRIPTIONS: Record<ReportType, string> = {
   'cash-flow':              'Receivables aging, payables aging, cash position. For cash management.',
   'stock-health':           'Reorder alerts, dead stock, velocity analysis. For inventory planning.',
   'sales-pipeline':         'Open quotes, orders, conversion rates by rep. For sales reviews.',
+  'call-analytics':         'Phone call coaching scores, rep leaderboard, outcomes and flagged calls. For sales team performance review.',
 }
 
 const REPORT_TYPE_ROLES: Record<ReportType, UserRole[]> = {
@@ -120,6 +123,7 @@ const REPORT_TYPE_ROLES: Record<ReportType, UserRole[]> = {
   'cash-flow':              ['admin', 'accountant'],
   'stock-health':           ['admin', 'manager'],
   'sales-pipeline':         ['admin', 'manager', 'sales'],
+  'call-analytics':         ['admin', 'manager', 'sales'],
 }
 
 export function roleCanGenerateReportType(role: UserRole, type: ReportType): boolean {
@@ -129,6 +133,30 @@ export function roleCanGenerateReportType(role: UserRole, type: ReportType): boo
 export function reportTypesForRole(role: UserRole): ReportType[] {
   return (Object.keys(REPORT_TYPE_ROLES) as ReportType[])
     .filter(t => roleCanGenerateReportType(role, t))
+}
+
+// Per-user override for which report types a specific user can generate.
+// If `visibleReports` is set (from user_profiles.visible_reports), it OVERRIDES
+// the role defaults — the user sees exactly those reports (intersected with
+// what their role is permitted to generate, as a safety net against stale
+// rows or privilege escalation).
+//
+// If `visibleReports` is null/undefined, the user gets every report type their
+// role allows (original behaviour).
+export function userCanGenerateReportType(
+  role: UserRole,
+  type: ReportType,
+  visibleReports?: string[] | null,
+): boolean {
+  if (!roleCanGenerateReportType(role, type)) return false
+  if (!visibleReports || visibleReports.length === 0) return true
+  return visibleReports.includes(type)
+}
+
+export function reportTypesForUser(role: UserRole, visibleReports?: string[] | null): ReportType[] {
+  return reportTypesForRole(role).filter(t =>
+    !visibleReports || visibleReports.length === 0 || visibleReports.includes(t)
+  )
 }
 
 // ── Portal tabs catalog ──────────────────────────────────────────────
