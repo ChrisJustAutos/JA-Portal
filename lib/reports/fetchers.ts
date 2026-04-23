@@ -1070,9 +1070,17 @@ export async function fetchCallsRepLeaderboard(range: DateRange): Promise<CallsR
   }>()
   for (const r of rows) {
     const ext = String(r.agent_ext)
-    const agg = byRep.get(ext) || {
+    const existing = byRep.get(ext)
+    const agg: {
+      agentName: string | null
+      scores: number[]
+      flagged: number
+      outcomes: Map<string, number>
+    } = existing || {
       agentName: r.agent_name || null,
-      scores: [], flagged: 0, outcomes: new Map<string, number>(),
+      scores: [] as number[],
+      flagged: 0,
+      outcomes: new Map<string, number>(),
     }
     if (!agg.agentName && r.agent_name) agg.agentName = r.agent_name
     if (typeof r.sales_score === 'number') {
