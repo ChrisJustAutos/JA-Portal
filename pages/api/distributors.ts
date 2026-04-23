@@ -134,26 +134,32 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
 
       const accList = allAccounts.map(a => "'" + a + "'").join(',')
 
-      // Fetch line items in batches scoped to the invoice IDs from the first
-      // query. Previously this pulled ALL line items across the given accounts
-      // for all time, which blew the 60s Vercel function timeout on wider
-      // date ranges. Batch size kept well below SQL Server's 2100-param
-      // default cap; 800 also keeps generated SQL under typical buffer limits.
+      // Fetch line items in parallel batches scoped to the invoice IDs from
+      // the first query. Previously this pulled ALL line items across the
+      // given accounts for all time, which blew the 60s Vercel timeout on
+      // wider date ranges. Batch size stays well below SQL Server's 2100-
+      // param cap. Batches run in parallel via Promise.all so N batches
+      // complete in ~max(batch_time), not sum(batch_times).
       const invoiceIds = Array.from(invById.keys())
       const BATCH_SIZE = 800
-      const lCols: string[] = []
-      const lRows: any[][] = []
-
+      const batches: string[][] = []
       for (let i = 0; i < invoiceIds.length; i += BATCH_SIZE) {
-        const batch = invoiceIds.slice(i, i + BATCH_SIZE)
-        const idList = batch.map(id => "'" + String(id).replace(/'/g, "''") + "'").join(',')
-        const batchRes: any = await cdataQuery('JAWS',
+        batches.push(invoiceIds.slice(i, i + BATCH_SIZE).map(String))
+      }
+
+      const batchResults = await Promise.all(batches.map(batch => {
+        const idList = batch.map(id => "'" + id.replace(/'/g, "''") + "'").join(',')
+        return cdataQuery('JAWS',
           "SELECT [SaleInvoiceId],[AccountDisplayID],[TaxCodeCode],[Total],[Description] " +
           "FROM [MYOB_POWERBI_JAWS].[MYOB].[SaleInvoiceItems] " +
           "WHERE [AccountDisplayID] IN (" + accList + ") " +
           "AND [SaleInvoiceId] IN (" + idList + ")"
         )
-        // Capture columns from the first non-empty response
+      }))
+
+      const lCols: string[] = []
+      const lRows: any[][] = []
+      for (const batchRes of batchResults as any[]) {
         if (lCols.length === 0) {
           const cols = batchRes?.results?.[0]?.schema?.map((c: any) => c.columnName) || []
           if (cols.length) lCols.push(...cols)
