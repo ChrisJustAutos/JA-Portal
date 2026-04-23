@@ -115,13 +115,6 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
       const invRes: any = await cdataQuery('JAWS',
         "SELECT [ID],[Number],[Date],[CustomerName],[CustomerPurchaseOrderNumber],[IsTaxInclusive] FROM [MYOB_POWERBI_JAWS].[MYOB].[SaleInvoices] WHERE [Date] >= '" + start + "' AND [Date] <= '" + end + "'"
       )
-      // DEBUG: log shape so we can see exactly what CData returned in Vercel
-      console.log('[distributors] invRes keys:', invRes ? Object.keys(invRes) : 'null/undef')
-      console.log('[distributors] invRes.results length:', invRes?.results?.length)
-      console.log('[distributors] invRes.results[0] keys:', invRes?.results?.[0] ? Object.keys(invRes.results[0]) : 'n/a')
-      console.log('[distributors] rows count:', invRes?.results?.[0]?.rows?.length)
-      console.log('[distributors] first row:', invRes?.results?.[0]?.rows?.[0])
-      console.log('[distributors] dateRange sent:', { start, end })
       const invCols: string[] = invRes?.results?.[0]?.schema?.map((c: any) => c.columnName) || []
       const invRows: any[][] = invRes?.results?.[0]?.rows || []
       const invById = new Map<string, any>()
@@ -132,7 +125,6 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
       }
 
       if (invById.size === 0) {
-        console.log('[distributors] no invoices matched — returning empty response')
         return res.status(200).json({
           dateRange: { start, end }, configSource: cfg.source, categories: categoryNames,
           totals: { tuning: 0, parts: 0, oil: 0, total: 0, invoiceCount: 0, distributorCount: 0, byCategory: {} },
@@ -141,44 +133,11 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
       }
 
       const accList = allAccounts.map(a => "'" + a + "'").join(',')
-
-      // Fetch line items in parallel batches scoped to the invoice IDs from
-      // the first query. Previously this pulled ALL line items across the
-      // given accounts for all time, which blew the 60s Vercel timeout on
-      // wider date ranges. Batch size stays well below SQL Server's 2100-
-      // param cap. Batches run in parallel via Promise.all so N batches
-      // complete in ~max(batch_time), not sum(batch_times).
-      const invoiceIds = Array.from(invById.keys())
-      const BATCH_SIZE = 800
-      const batches: string[][] = []
-      for (let i = 0; i < invoiceIds.length; i += BATCH_SIZE) {
-        batches.push(invoiceIds.slice(i, i + BATCH_SIZE).map(String))
-      }
-
-      const batchResults = await Promise.all(batches.map(batch => {
-        const idList = batch.map(id => "'" + id.replace(/'/g, "''") + "'").join(',')
-        return cdataQuery('JAWS',
-          "SELECT [SaleInvoiceId],[AccountDisplayID],[TaxCodeCode],[Total],[Description] " +
-          "FROM [MYOB_POWERBI_JAWS].[MYOB].[SaleInvoiceItems] " +
-          "WHERE [AccountDisplayID] IN (" + accList + ") " +
-          "AND [SaleInvoiceId] IN (" + idList + ")"
-        )
-      }))
-
-      const lCols: string[] = []
-      const lRows: any[][] = []
-      for (const batchRes of batchResults as any[]) {
-        if (lCols.length === 0) {
-          const cols = batchRes?.results?.[0]?.schema?.map((c: any) => c.columnName) || []
-          if (cols.length) lCols.push(...cols)
-        }
-        const rows = batchRes?.results?.[0]?.rows || []
-        for (const row of rows) lRows.push(row)
-      }
-      // DEBUG
-      console.log('[distributors] batches:', batches.length, 'lRows total:', lRows.length, 'lCols:', lCols)
-      console.log('[distributors] first line item:', lRows[0])
-      console.log('[distributors] accToCat keys:', Array.from(accToCat.keys()).slice(0, 20))
+      const lineRes: any = await cdataQuery('JAWS',
+        "SELECT [SaleInvoiceId],[AccountDisplayID],[TaxCodeCode],[Total],[Description] FROM [MYOB_POWERBI_JAWS].[MYOB].[SaleInvoiceItems] WHERE [AccountDisplayID] IN (" + accList + ")"
+      )
+      const lCols: string[] = lineRes?.results?.[0]?.schema?.map((c: any) => c.columnName) || []
+      const lRows: any[][] = lineRes?.results?.[0]?.rows || []
 
       const INTL = new Set(['kanoo motors wll','karyokuae','us cruiserz'])
       const EXCLUDED = cfg.excluded
@@ -231,8 +190,6 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
           sundryCustomer: isSundry ? base : null,  // real customer when rolled into Sundry
         })
       }
-
-      console.log('[distributors] byDist size after aggregation:', byDist.size)
 
       const distributors = Array.from(byDist.values()).map((d: any) => {
         const rounded: Record<string, number> = {}
