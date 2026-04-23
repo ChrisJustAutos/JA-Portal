@@ -133,11 +133,34 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
       }
 
       const accList = allAccounts.map(a => "'" + a + "'").join(',')
-      const lineRes: any = await cdataQuery('JAWS',
-        "SELECT [SaleInvoiceId],[AccountDisplayID],[TaxCodeCode],[Total],[Description] FROM [MYOB_POWERBI_JAWS].[MYOB].[SaleInvoiceItems] WHERE [AccountDisplayID] IN (" + accList + ")"
-      )
-      const lCols: string[] = lineRes?.results?.[0]?.schema?.map((c: any) => c.columnName) || []
-      const lRows: any[][] = lineRes?.results?.[0]?.rows || []
+
+      // Fetch line items in batches scoped to the invoice IDs from the first
+      // query. Previously this pulled ALL line items across the given accounts
+      // for all time, which blew the 60s Vercel function timeout on wider
+      // date ranges. Batch size kept well below SQL Server's 2100-param
+      // default cap; 800 also keeps generated SQL under typical buffer limits.
+      const invoiceIds = Array.from(invById.keys())
+      const BATCH_SIZE = 800
+      const lCols: string[] = []
+      const lRows: any[][] = []
+
+      for (let i = 0; i < invoiceIds.length; i += BATCH_SIZE) {
+        const batch = invoiceIds.slice(i, i + BATCH_SIZE)
+        const idList = batch.map(id => "'" + String(id).replace(/'/g, "''") + "'").join(',')
+        const batchRes: any = await cdataQuery('JAWS',
+          "SELECT [SaleInvoiceId],[AccountDisplayID],[TaxCodeCode],[Total],[Description] " +
+          "FROM [MYOB_POWERBI_JAWS].[MYOB].[SaleInvoiceItems] " +
+          "WHERE [AccountDisplayID] IN (" + accList + ") " +
+          "AND [SaleInvoiceId] IN (" + idList + ")"
+        )
+        // Capture columns from the first non-empty response
+        if (lCols.length === 0) {
+          const cols = batchRes?.results?.[0]?.schema?.map((c: any) => c.columnName) || []
+          if (cols.length) lCols.push(...cols)
+        }
+        const rows = batchRes?.results?.[0]?.rows || []
+        for (const row of rows) lRows.push(row)
+      }
 
       const INTL = new Set(['kanoo motors wll','karyokuae','us cruiserz'])
       const EXCLUDED = cfg.excluded
