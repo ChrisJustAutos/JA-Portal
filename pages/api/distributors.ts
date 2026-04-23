@@ -115,6 +115,13 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
       const invRes: any = await cdataQuery('JAWS',
         "SELECT [ID],[Number],[Date],[CustomerName],[CustomerPurchaseOrderNumber],[IsTaxInclusive] FROM [MYOB_POWERBI_JAWS].[MYOB].[SaleInvoices] WHERE [Date] >= '" + start + "' AND [Date] <= '" + end + "'"
       )
+      // DEBUG: log shape so we can see exactly what CData returned in Vercel
+      console.log('[distributors] invRes keys:', invRes ? Object.keys(invRes) : 'null/undef')
+      console.log('[distributors] invRes.results length:', invRes?.results?.length)
+      console.log('[distributors] invRes.results[0] keys:', invRes?.results?.[0] ? Object.keys(invRes.results[0]) : 'n/a')
+      console.log('[distributors] rows count:', invRes?.results?.[0]?.rows?.length)
+      console.log('[distributors] first row:', invRes?.results?.[0]?.rows?.[0])
+      console.log('[distributors] dateRange sent:', { start, end })
       const invCols: string[] = invRes?.results?.[0]?.schema?.map((c: any) => c.columnName) || []
       const invRows: any[][] = invRes?.results?.[0]?.rows || []
       const invById = new Map<string, any>()
@@ -125,6 +132,7 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
       }
 
       if (invById.size === 0) {
+        console.log('[distributors] no invoices matched — returning empty response')
         return res.status(200).json({
           dateRange: { start, end }, configSource: cfg.source, categories: categoryNames,
           totals: { tuning: 0, parts: 0, oil: 0, total: 0, invoiceCount: 0, distributorCount: 0, byCategory: {} },
