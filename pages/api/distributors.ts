@@ -3,6 +3,14 @@
 // (`distributor_report_categories`, `distributor_report_excluded_customers`).
 // Falls back to hard-coded legacy defaults if the config table is empty or
 // the query fails — ensures the report keeps working even if config is broken.
+//
+// Caching:
+// - On each GET, check distributors_cache for the (start, end) range first.
+// - Cache hit → return payload immediately with fromCache/computedAt flags.
+// - Cache miss OR ?refresh=1 → compute live via MYOB, upsert into cache.
+// - The nightly Vercel cron (/api/distributors/refresh-cache) rewrites cache
+//   entries for known ranges (FY2025, FY2026, each month) at 02:00 AEST so
+//   morning loads are instant.
 
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { createClient } from '@supabase/supabase-js'
@@ -42,17 +50,17 @@ interface LoadedConfig {
 let _cfgCache: { cfg: LoadedConfig; at: number } | null = null
 const CFG_TTL = 60 * 1000
 
-async function loadConfig(): Promise<LoadedConfig> {
-  if (_cfgCache && Date.now() - _cfgCache.at < CFG_TTL) return _cfgCache.cfg
+function sbAdmin() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY
-  if (!url || !key) {
-    const cfg: LoadedConfig = { categories: LEGACY_CATEGORIES, excluded: LEGACY_EXCLUDED_MAP, source: 'fallback' }
-    _cfgCache = { cfg, at: Date.now() }
-    return cfg
-  }
+  if (!url || !key) throw new Error('Supabase env vars not configured')
+  return createClient(url, key, { auth: { persistSession: false } })
+}
+
+async function loadConfig(): Promise<LoadedConfig> {
+  if (_cfgCache && Date.now() - _cfgCache.at < CFG_TTL) return _cfgCache.cfg
   try {
-    const sb = createClient(url, key, { auth: { persistSession: false } })
+    const sb = sbAdmin()
     const [catsRes, exRes] = await Promise.all([
       sb.from('distributor_report_categories').select('name, sort_order, account_codes').order('sort_order'),
       sb.from('distributor_report_excluded_customers').select('customer_name, note'),
@@ -62,9 +70,6 @@ async function loadConfig(): Promise<LoadedConfig> {
       sort_order: Number(r.sort_order) || 0,
       account_codes: Array.isArray(r.account_codes) ? r.account_codes.map(String) : [],
     }))
-    // Build Map of lowercased customer → note. Default note to 'Other' so we
-    // can still distinguish Sundry from everything else even if the DB note
-    // column is blank for older rows.
     const excluded = new Map<string, string>()
     for (const r of (exRes.data || []) as any[]) {
       const name = String(r.customer_name || '').toLowerCase()
@@ -91,164 +96,261 @@ async function loadConfig(): Promise<LoadedConfig> {
   }
 }
 
+// ── Core compute function — extracted so both live API and cron can use ──
+// Returns the full payload that the frontend consumes.
+export async function computeDistributorsPayload(start: string, end: string) {
+  const cfg = await loadConfig()
+
+  const accToCat = new Map<string, string>()
+  for (const c of cfg.categories) {
+    for (const code of c.account_codes) accToCat.set(code, c.name)
+  }
+  const allAccounts = Array.from(accToCat.keys())
+  const categoryNames = cfg.categories.map(c => c.name)
+
+  if (allAccounts.length === 0) {
+    return {
+      dateRange: { start, end }, configSource: cfg.source, categories: categoryNames,
+      totals: { tuning: 0, parts: 0, oil: 0, total: 0, invoiceCount: 0, distributorCount: 0, byCategory: {} },
+      distributors: [], monthlyNational: [],
+    }
+  }
+
+  const invRes: any = await cdataQuery('JAWS',
+    "SELECT [ID],[Number],[Date],[CustomerName],[CustomerPurchaseOrderNumber],[IsTaxInclusive] FROM [MYOB_POWERBI_JAWS].[MYOB].[SaleInvoices] WHERE [Date] >= '" + start + "' AND [Date] <= '" + end + "'"
+  )
+  const invCols: string[] = invRes?.results?.[0]?.schema?.map((c: any) => c.columnName) || []
+  const invRows: any[][] = invRes?.results?.[0]?.rows || []
+  const invById = new Map<string, any>()
+  for (const r of invRows) {
+    const o: any = {}
+    invCols.forEach((c, i) => { o[c] = r[i] })
+    invById.set(o.ID, o)
+  }
+
+  if (invById.size === 0) {
+    return {
+      dateRange: { start, end }, configSource: cfg.source, categories: categoryNames,
+      totals: { tuning: 0, parts: 0, oil: 0, total: 0, invoiceCount: 0, distributorCount: 0, byCategory: {} },
+      distributors: [], monthlyNational: [],
+    }
+  }
+
+  const accList = allAccounts.map(a => "'" + a + "'").join(',')
+  const lineRes: any = await cdataQuery('JAWS',
+    "SELECT [SaleInvoiceId],[AccountDisplayID],[TaxCodeCode],[Total],[Description] FROM [MYOB_POWERBI_JAWS].[MYOB].[SaleInvoiceItems] WHERE [AccountDisplayID] IN (" + accList + ")"
+  )
+  const lCols: string[] = lineRes?.results?.[0]?.schema?.map((c: any) => c.columnName) || []
+  const lRows: any[][] = lineRes?.results?.[0]?.rows || []
+
+  const INTL = new Set(['kanoo motors wll','karyokuae','us cruiserz'])
+  const EXCLUDED = cfg.excluded
+
+  const byDist = new Map<string, any>()
+  for (const r of lRows) {
+    const line: any = {}
+    lCols.forEach((c, i) => { line[c] = r[i] })
+    const inv = invById.get(line.SaleInvoiceId)
+    if (!inv) continue
+    const raw: string = String(inv.CustomerName || '')
+    // Sundry customers PASS THROUGH and are rolled into a dedicated 'Sundry'
+    // bucket; everything else excluded (Staff, Internal) is dropped entirely.
+    const noteRaw  = EXCLUDED.get(raw.toLowerCase())
+    const base = raw.replace(/\s*\(Tuning 2\)\s*$/i,'').replace(/\s*\(Tuning 1\)\s*$/i,'').replace(/\s*\(Tuning\)\s*$/i,'').trim()
+    const noteBase = EXCLUDED.get(base.toLowerCase())
+    const note = noteRaw || noteBase || null
+    if (note && note !== 'Sundry') continue
+    if (!base) continue
+
+    const acc: string = line.AccountDisplayID || ''
+    const cat = accToCat.get(acc)
+    if (!cat) continue
+    const total = Number(line.Total) || 0
+    const amt = lineExGst(total, inv.IsTaxInclusive, line.TaxCodeCode)
+
+    const isSundry = note === 'Sundry'
+    const distKey = isSundry ? '__SUNDRY__' : base
+    if (!byDist.has(distKey)) {
+      byDist.set(distKey, {
+        customerBase: isSundry ? 'Sundry' : base,
+        location: isSundry ? 'Sundry' : (INTL.has(base.toLowerCase()) ? 'International' : 'National'),
+        isSundry,
+        byCategory: {} as Record<string, number>,
+        invoiceIds: new Set<string>(),
+        lineItems: [] as any[],
+      })
+    }
+    const agg = byDist.get(distKey)
+    agg.byCategory[cat] = (agg.byCategory[cat] || 0) + amt
+    agg.invoiceIds.add(inv.ID)
+    agg.lineItems.push({
+      date: inv.Date, invoiceNumber: inv.Number, description: line.Description || '',
+      amountExGst: amt, bucket: cat, category: cat, accountCode: acc,
+      poNumber: inv.CustomerPurchaseOrderNumber || '',
+      sundryCustomer: isSundry ? base : null,
+    })
+  }
+
+  const distributors = Array.from(byDist.values()).map((d: any) => {
+    const rounded: Record<string, number> = {}
+    for (const name of categoryNames) rounded[name] = Math.round((d.byCategory[name] || 0) * 100) / 100
+    const total = Object.values(rounded).reduce((s: number, v: number) => s + v, 0)
+    const tuning = rounded['Tuning'] || 0
+    const parts  = rounded['Parts']  || 0
+    const oil    = rounded['Oil']    || 0
+    const streamsWithValue = Object.values(rounded).filter(v => v > 0).length
+    return {
+      customerBase: d.customerBase, location: d.location,
+      isSundry: !!d.isSundry,
+      tuning, parts, oil,
+      byCategory: rounded,
+      total: Math.round(total * 100) / 100,
+      invoiceCount: d.invoiceIds.size,
+      avgJobValue: d.invoiceIds.size ? Math.round((total / d.invoiceIds.size) * 100) / 100 : 0,
+      hasZeroStream: streamsWithValue < categoryNames.length,
+      lineItems: d.lineItems.sort(function(a: any, b: any) { return (b.date || '').localeCompare(a.date || '') }),
+    }
+  }).sort(function(a: any, b: any) { return b.total - a.total })
+
+  const monthly = new Map<string, number>()
+  for (const d of distributors) {
+    if (d.location !== 'National') continue
+    for (const li of d.lineItems) {
+      const ym: string = (li.date || '').substring(0, 7)
+      if (!ym) continue
+      monthly.set(ym, (monthly.get(ym) || 0) + li.amountExGst)
+    }
+  }
+  const monthlyNational = Array.from(monthly.entries())
+    .map(function(e) { return { ym: e[0], amount: Math.round(e[1] * 100) / 100 } })
+    .sort(function(a, b) { return a.ym.localeCompare(b.ym) })
+
+  let tT = 0, tP = 0, tO = 0, tTot = 0, tIC = 0
+  const byCategoryTotal: Record<string, number> = {}
+  for (const name of categoryNames) byCategoryTotal[name] = 0
+  for (const d of distributors) {
+    tT += d.tuning; tP += d.parts; tO += d.oil; tTot += d.total; tIC += d.invoiceCount
+    for (const name of categoryNames) byCategoryTotal[name] += (d.byCategory[name] || 0)
+  }
+  for (const name of categoryNames) byCategoryTotal[name] = Math.round(byCategoryTotal[name] * 100) / 100
+
+  return {
+    dateRange: { start, end },
+    configSource: cfg.source,
+    categories: categoryNames,
+    totals: {
+      tuning: Math.round(tT * 100) / 100,
+      parts: Math.round(tP * 100) / 100,
+      oil: Math.round(tO * 100) / 100,
+      total: Math.round(tTot * 100) / 100,
+      invoiceCount: tIC,
+      distributorCount: distributors.length,
+      byCategory: byCategoryTotal,
+    },
+    distributors: distributors,
+    monthlyNational: monthlyNational,
+  }
+}
+
+// ── Range key classifier ────────────────────────────────────────────────
+// Turns a (start, end) pair into a stable key used in distributors_cache.range_key.
+// Standardised ranges get nice labels; custom windows get 'custom'.
+export function classifyRangeKey(start: string, end: string): string {
+  // FY = 1 July to 30 June the next year (AEST business convention).
+  if (start === '2024-07-01' && end === '2025-06-30') return 'FY2025'
+  if (start === '2025-07-01' && end === '2026-06-30') return 'FY2026'
+  // Whole-month: start is YYYY-MM-01 and end is the last day of that same month
+  const mStart = /^(\d{4})-(\d{2})-01$/.exec(start)
+  if (mStart) {
+    const year = Number(mStart[1])
+    const month = Number(mStart[2])
+    const lastDay = new Date(Date.UTC(year, month, 0)).getUTCDate()  // month is 1-indexed here; day 0 = last of prev month
+    const expectedEnd = `${mStart[1]}-${mStart[2]}-${String(lastDay).padStart(2, '0')}`
+    if (end === expectedEnd) return `${mStart[1]}-${mStart[2]}`
+  }
+  return 'custom'
+}
+
+// ── Cache helpers ───────────────────────────────────────────────────────
+async function readCache(sb: ReturnType<typeof sbAdmin>, start: string, end: string) {
+  const { data, error } = await sb
+    .from('distributors_cache')
+    .select('payload, computed_at, config_source, invoice_count, range_key')
+    .eq('start_date', start)
+    .eq('end_date', end)
+    .maybeSingle()
+  if (error) {
+    console.warn('[distributors] cache read failed (non-fatal):', error.message)
+    return null
+  }
+  return data
+}
+
+async function writeCache(
+  sb: ReturnType<typeof sbAdmin>,
+  start: string,
+  end: string,
+  payload: any,
+  computedMs: number,
+) {
+  const row = {
+    range_key: classifyRangeKey(start, end),
+    start_date: start,
+    end_date: end,
+    payload,
+    invoice_count: payload?.totals?.invoiceCount ?? 0,
+    config_source: payload?.configSource ?? 'fallback',
+    computed_at: new Date().toISOString(),
+    computed_ms: computedMs,
+  }
+  const { error } = await sb
+    .from('distributors_cache')
+    .upsert(row, { onConflict: 'start_date,end_date' })
+  if (error) {
+    console.warn('[distributors] cache write failed (non-fatal):', error.message)
+  }
+}
+
+// ── HTTP handler ────────────────────────────────────────────────────────
 export default function handler(req: NextApiRequest, res: NextApiResponse) {
   return requireAuth(req, res, async () => {
     try {
-      const { start, end } = parseDateRange(new URLSearchParams(req.query as Record<string,string>))
-      const cfg = await loadConfig()
+      const params = new URLSearchParams(req.query as Record<string,string>)
+      const { start, end } = parseDateRange(params)
+      const rp = params.get('refresh')
+      const forceRefresh = rp === '1' || rp === 'true'
 
-      const accToCat = new Map<string, string>()
-      for (const c of cfg.categories) {
-        for (const code of c.account_codes) accToCat.set(code, c.name)
-      }
-      const allAccounts = Array.from(accToCat.keys())
-      const categoryNames = cfg.categories.map(c => c.name)
+      const sb = sbAdmin()
 
-      if (allAccounts.length === 0) {
-        return res.status(200).json({
-          dateRange: { start, end }, configSource: cfg.source, categories: categoryNames,
-          totals: { tuning: 0, parts: 0, oil: 0, total: 0, invoiceCount: 0, distributorCount: 0, byCategory: {} },
-          distributors: [], monthlyNational: [],
-        })
-      }
-
-      const invRes: any = await cdataQuery('JAWS',
-        "SELECT [ID],[Number],[Date],[CustomerName],[CustomerPurchaseOrderNumber],[IsTaxInclusive] FROM [MYOB_POWERBI_JAWS].[MYOB].[SaleInvoices] WHERE [Date] >= '" + start + "' AND [Date] <= '" + end + "'"
-      )
-      const invCols: string[] = invRes?.results?.[0]?.schema?.map((c: any) => c.columnName) || []
-      const invRows: any[][] = invRes?.results?.[0]?.rows || []
-      const invById = new Map<string, any>()
-      for (const r of invRows) {
-        const o: any = {}
-        invCols.forEach((c, i) => { o[c] = r[i] })
-        invById.set(o.ID, o)
-      }
-
-      if (invById.size === 0) {
-        return res.status(200).json({
-          dateRange: { start, end }, configSource: cfg.source, categories: categoryNames,
-          totals: { tuning: 0, parts: 0, oil: 0, total: 0, invoiceCount: 0, distributorCount: 0, byCategory: {} },
-          distributors: [], monthlyNational: [],
-        })
-      }
-
-      const accList = allAccounts.map(a => "'" + a + "'").join(',')
-      const lineRes: any = await cdataQuery('JAWS',
-        "SELECT [SaleInvoiceId],[AccountDisplayID],[TaxCodeCode],[Total],[Description] FROM [MYOB_POWERBI_JAWS].[MYOB].[SaleInvoiceItems] WHERE [AccountDisplayID] IN (" + accList + ")"
-      )
-      const lCols: string[] = lineRes?.results?.[0]?.schema?.map((c: any) => c.columnName) || []
-      const lRows: any[][] = lineRes?.results?.[0]?.rows || []
-
-      const INTL = new Set(['kanoo motors wll','karyokuae','us cruiserz'])
-      const EXCLUDED = cfg.excluded
-
-      const byDist = new Map<string, any>()
-      for (const r of lRows) {
-        const line: any = {}
-        lCols.forEach((c, i) => { line[c] = r[i] })
-        const inv = invById.get(line.SaleInvoiceId)
-        if (!inv) continue
-        const raw: string = String(inv.CustomerName || '')
-        // Check exclusion status. Sundry customers PASS THROUGH and are
-        // rolled into a dedicated 'Sundry' bucket; everything else excluded
-        // (Staff, Internal) is dropped entirely.
-        const noteRaw  = EXCLUDED.get(raw.toLowerCase())
-        const base = raw.replace(/\s*\(Tuning 2\)\s*$/i,'').replace(/\s*\(Tuning 1\)\s*$/i,'').replace(/\s*\(Tuning\)\s*$/i,'').trim()
-        const noteBase = EXCLUDED.get(base.toLowerCase())
-        const note = noteRaw || noteBase || null
-        if (note && note !== 'Sundry') continue   // drop Excluded/Internal
-        if (!base) continue
-
-        const acc: string = line.AccountDisplayID || ''
-        const cat = accToCat.get(acc)
-        if (!cat) continue
-        const total = Number(line.Total) || 0
-        const amt = lineExGst(total, inv.IsTaxInclusive, line.TaxCodeCode)
-
-        // Sundry customers all aggregate under a single synthetic distributor
-        // so they render as one row in the Sundry group, but we preserve the
-        // real customer name on each line item for drill-down display.
-        const isSundry = note === 'Sundry'
-        const distKey = isSundry ? '__SUNDRY__' : base
-        if (!byDist.has(distKey)) {
-          byDist.set(distKey, {
-            customerBase: isSundry ? 'Sundry' : base,
-            location: isSundry ? 'Sundry' : (INTL.has(base.toLowerCase()) ? 'International' : 'National'),
-            isSundry,
-            byCategory: {} as Record<string, number>,
-            invoiceIds: new Set<string>(),
-            lineItems: [] as any[],
+      // 1. Try cache first unless forcing refresh.
+      if (!forceRefresh) {
+        const cached = await readCache(sb, start, end)
+        if (cached && cached.payload) {
+          return res.status(200).json({
+            ...cached.payload,
+            fromCache: true,
+            cachedAt: cached.computed_at,
+            rangeKey: cached.range_key,
           })
         }
-        const agg = byDist.get(distKey)
-        agg.byCategory[cat] = (agg.byCategory[cat] || 0) + amt
-        agg.invoiceIds.add(inv.ID)
-        agg.lineItems.push({
-          date: inv.Date, invoiceNumber: inv.Number, description: line.Description || '',
-          amountExGst: amt, bucket: cat, category: cat, accountCode: acc,
-          poNumber: inv.CustomerPurchaseOrderNumber || '',
-          sundryCustomer: isSundry ? base : null,  // real customer when rolled into Sundry
-        })
       }
 
-      const distributors = Array.from(byDist.values()).map((d: any) => {
-        const rounded: Record<string, number> = {}
-        for (const name of categoryNames) rounded[name] = Math.round((d.byCategory[name] || 0) * 100) / 100
-        const total = Object.values(rounded).reduce((s: number, v: number) => s + v, 0)
-        const tuning = rounded['Tuning'] || 0
-        const parts  = rounded['Parts']  || 0
-        const oil    = rounded['Oil']    || 0
-        const streamsWithValue = Object.values(rounded).filter(v => v > 0).length
-        return {
-          customerBase: d.customerBase, location: d.location,
-          isSundry: !!d.isSundry,
-          tuning, parts, oil,
-          byCategory: rounded,
-          total: Math.round(total * 100) / 100,
-          invoiceCount: d.invoiceIds.size,
-          avgJobValue: d.invoiceIds.size ? Math.round((total / d.invoiceIds.size) * 100) / 100 : 0,
-          hasZeroStream: streamsWithValue < categoryNames.length,
-          lineItems: d.lineItems.sort(function(a: any, b: any) { return (b.date || '').localeCompare(a.date || '') }),
-        }
-      }).sort(function(a: any, b: any) { return b.total - a.total })
+      // 2. Cache miss (or forced refresh) — compute live.
+      const t0 = Date.now()
+      const payload = await computeDistributorsPayload(start, end)
+      const computedMs = Date.now() - t0
 
-      const monthly = new Map<string, number>()
-      for (const d of distributors) {
-        if (d.location !== 'National') continue
-        for (const li of d.lineItems) {
-          const ym: string = (li.date || '').substring(0, 7)
-          if (!ym) continue
-          monthly.set(ym, (monthly.get(ym) || 0) + li.amountExGst)
-        }
-      }
-      const monthlyNational = Array.from(monthly.entries())
-        .map(function(e) { return { ym: e[0], amount: Math.round(e[1] * 100) / 100 } })
-        .sort(function(a, b) { return a.ym.localeCompare(b.ym) })
-
-      let tT = 0, tP = 0, tO = 0, tTot = 0, tIC = 0
-      const byCategoryTotal: Record<string, number> = {}
-      for (const name of categoryNames) byCategoryTotal[name] = 0
-      for (const d of distributors) {
-        tT += d.tuning; tP += d.parts; tO += d.oil; tTot += d.total; tIC += d.invoiceCount
-        for (const name of categoryNames) byCategoryTotal[name] += (d.byCategory[name] || 0)
-      }
-      for (const name of categoryNames) byCategoryTotal[name] = Math.round(byCategoryTotal[name] * 100) / 100
+      // 3. Store in cache for next time (fire-and-forget).
+      writeCache(sb, start, end, payload, computedMs).catch(e =>
+        console.warn('[distributors] async cache write threw:', e?.message)
+      )
 
       return res.status(200).json({
-        dateRange: { start, end },
-        configSource: cfg.source,
-        categories: categoryNames,
-        totals: {
-          tuning: Math.round(tT * 100) / 100,
-          parts: Math.round(tP * 100) / 100,
-          oil: Math.round(tO * 100) / 100,
-          total: Math.round(tTot * 100) / 100,
-          invoiceCount: tIC,
-          distributorCount: distributors.length,
-          byCategory: byCategoryTotal,
-        },
-        distributors: distributors,
-        monthlyNational: monthlyNational,
+        ...payload,
+        fromCache: false,
+        cachedAt: new Date().toISOString(),
+        rangeKey: classifyRangeKey(start, end),
+        computedMs,
       })
     } catch (e: any) {
       console.error('distributors error:', e && e.message, e && e.stack)
