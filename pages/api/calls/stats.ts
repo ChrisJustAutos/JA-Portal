@@ -1,6 +1,13 @@
 // pages/api/calls/stats.ts
-// Dashboard statistics: today's totals, per-agent breakdown, 7-day rollups.
-// Accepts optional ?startDate=&endDate= to scope "today" stats to a date range.
+// Dashboard statistics: totals for the selected period, per-agent breakdown.
+// Accepts optional ?startDate=&endDate= — when provided, BOTH the top-line
+// totals and the per-agent breakdown scope to that range. This means the
+// activity bar next to each agent respects the date filter instead of being
+// locked to a rolling 7-day window.
+//
+// The `week` block + `agents[].week_talk_seconds` field are preserved in
+// the response shape for frontend compatibility, but both are now sourced
+// from the same period query rather than a separate 7-day rollup.
 
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { createClient } from '@supabase/supabase-js'
@@ -16,7 +23,7 @@ interface AgentStats {
   today_answered_inbound: number
   today_outbound: number
   today_talk_seconds: number
-  week_talk_seconds: number
+  week_talk_seconds: number   // now = period talk seconds (kept for compat)
 }
 
 interface StatsResponse {
@@ -52,10 +59,9 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
 
       const sb = createClient(url, key, { auth: { persistSession: false } })
 
-      // Parse optional date range for the "today" bucket — when provided,
-      // the first stats card set reflects the selected range. Week stats
-      // are always a rolling 7-day window (used for per-agent activity
-      // bars that shouldn't whipsaw as the user changes the main range).
+      // Parse the optional date range. When provided, every aggregate in this
+      // response reflects that range (including the per-agent bar). Defaults
+      // to "today from midnight Brisbane".
       const q = req.query
       const startDateParam = q.startDate ? String(q.startDate) : null
       const endDateParam = q.endDate ? String(q.endDate) : null
@@ -66,6 +72,9 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
       let periodLabel: string
 
       if (startDateParam || endDateParam) {
+        // Brisbane is UTC+10 with no DST. Convert local date boundaries
+        // to UTC so our call_date range filter lines up with calls stored
+        // in UTC.
         const tzOffsetMs = 10 * 3600 * 1000
         if (startDateParam) {
           const d = new Date(startDateParam + 'T00:00:00Z')
@@ -87,24 +96,18 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
         periodLabel = 'Today'
       }
 
-      const weekStart = new Date(now); weekStart.setDate(weekStart.getDate() - 7); weekStart.setHours(0, 0, 0, 0)
-
-      // Build the "period" query — with or without upper bound
+      // Build the period query — single source of truth for all aggregates.
       let periodQuery = sb.from('calls')
-        .select('direction, disposition, billsec_seconds, agent_ext')
+        .select('direction, disposition, billsec_seconds, agent_ext, call_date')
         .gte('call_date', periodFromIso)
       if (periodToIso) periodQuery = periodQuery.lte('call_date', periodToIso)
 
       const [
         periodRes,
-        weekRes,
         extensionsRes,
         syncRes,
       ] = await Promise.all([
         periodQuery,
-        sb.from('calls')
-          .select('direction, disposition, billsec_seconds, agent_ext, call_date')
-          .gte('call_date', weekStart.toISOString()),
         sb.from('extensions')
           .select('extension, display_name, role')
           .eq('active', true),
@@ -115,11 +118,9 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
       ])
 
       if (periodRes.error) throw periodRes.error
-      if (weekRes.error) throw weekRes.error
       if (extensionsRes.error) throw extensionsRes.error
 
       const periodCalls = periodRes.data || []
-      const weekCalls = weekRes.data || []
       const extensions = extensionsRes.data || []
       const sync = syncRes.data || { last_synced_at: null, last_error: null, records_synced_total: 0 }
 
@@ -134,7 +135,7 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
         ? Math.round((inbound.filter(c => c.disposition === 'ANSWERED').length / inbound.length) * 100)
         : 0
 
-      // Per-agent stats — period totals + rolling week talk time
+      // Per-agent aggregates — scoped to the same period as everything else.
       const agentMap = new Map<string, AgentStats>()
       for (const ext of extensions) {
         agentMap.set(ext.extension, {
@@ -156,19 +157,13 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
         if (c.direction === 'inbound' && c.disposition === 'ANSWERED') a.today_answered_inbound += 1
         if (c.direction === 'outbound') a.today_outbound += 1
         a.today_talk_seconds += (c.billsec_seconds || 0)
-      }
-      for (const c of weekCalls) {
-        if (!c.agent_ext) continue
-        const a = agentMap.get(c.agent_ext)
-        if (!a) continue
+        // `week_talk_seconds` is kept for frontend compat. Now = period.
         a.week_talk_seconds += (c.billsec_seconds || 0)
       }
 
       const agents = Array.from(agentMap.values())
-        .filter(a => a.week_talk_seconds > 0 || a.today_total > 0)
+        .filter(a => a.today_total > 0)
         .sort((a, b) => b.week_talk_seconds - a.week_talk_seconds)
-
-      const weekTalk = weekCalls.reduce((s, c) => s + (c.billsec_seconds || 0), 0)
 
       const response: StatsResponse = {
         periodLabel,
@@ -182,9 +177,10 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
           avg_call_seconds: avgCall,
           answer_rate: answerRate,
         },
+        // `week` block reflects the same period as `today` — kept for compat.
         week: {
-          total: weekCalls.length,
-          talk_seconds: weekTalk,
+          total: periodCalls.length,
+          talk_seconds: totalTalk,
         },
         agents,
         sync: {

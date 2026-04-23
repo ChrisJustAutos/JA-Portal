@@ -979,7 +979,7 @@ export default function CallsPage({ user }: { user: PortalUserSSR }) {
                       <div style={{ background: T.bg2, border: `1px solid ${T.border}`, borderRadius: 8, overflow: 'hidden' }}>
                         <div style={{ padding: '12px 16px', borderBottom: `1px solid ${T.border}`, display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
                           <div style={{ fontSize: 10, color: T.text3, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.1em' }}>Per Agent</div>
-                          <div style={{ fontSize: 9, color: T.text3, textTransform: 'uppercase', letterSpacing: '0.1em' }}>Bar = last 7 days</div>
+                          <div style={{ fontSize: 9, color: T.text3, textTransform: 'uppercase', letterSpacing: '0.1em' }}>Bar = period</div>
                         </div>
                         <div>
                           {stats.agents.length === 0 ? (
