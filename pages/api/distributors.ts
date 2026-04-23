@@ -175,6 +175,10 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
         const rows = batchRes?.results?.[0]?.rows || []
         for (const row of rows) lRows.push(row)
       }
+      // DEBUG
+      console.log('[distributors] batches:', batches.length, 'lRows total:', lRows.length, 'lCols:', lCols)
+      console.log('[distributors] first line item:', lRows[0])
+      console.log('[distributors] accToCat keys:', Array.from(accToCat.keys()).slice(0, 20))
 
       const INTL = new Set(['kanoo motors wll','karyokuae','us cruiserz'])
       const EXCLUDED = cfg.excluded
@@ -227,6 +231,8 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
           sundryCustomer: isSundry ? base : null,  // real customer when rolled into Sundry
         })
       }
+
+      console.log('[distributors] byDist size after aggregation:', byDist.size)
 
       const distributors = Array.from(byDist.values()).map((d: any) => {
         const rounded: Record<string, number> = {}
