@@ -842,6 +842,7 @@ export default function CallsPage({ user }: { user: PortalUserSSR }) {
       const statsParams = new URLSearchParams()
       statsParams.set('startDate', startDate)
       statsParams.set('endDate', endDate)
+      if (filterExt !== 'all') statsParams.set('extension', filterExt)
 
       const [callsRes, statsRes] = await Promise.all([
         fetch(`/api/calls?${params.toString()}`),
@@ -1013,6 +1014,17 @@ export default function CallsPage({ user }: { user: PortalUserSSR }) {
                             )
                           })}
                         </div>
+                        {(() => {
+                          const agentSum = stats.agents.reduce((s, a) => s + a.today_total, 0)
+                          const total = stats.today.total
+                          if (agentSum >= total) return null
+                          const unassigned = total - agentSum
+                          return (
+                            <div style={{ padding: '8px 16px', fontSize: 10, color: T.text3, borderTop: `1px solid ${T.border}`, textAlign: 'center' }}>
+                              Shown: {agentSum} of {total} — {unassigned} unassigned or missed
+                            </div>
+                          )
+                        })()}
                       </div>
                     )}
 

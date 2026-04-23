@@ -65,6 +65,7 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
       const q = req.query
       const startDateParam = q.startDate ? String(q.startDate) : null
       const endDateParam = q.endDate ? String(q.endDate) : null
+      const extensionParam = q.extension ? String(q.extension) : null
 
       const now = new Date()
       let periodFromIso: string
@@ -96,18 +97,30 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
         periodLabel = 'Today'
       }
 
-      // Build the period query — single source of truth for all aggregates.
-      let periodQuery = sb.from('calls')
+      // Two separate queries so the top-line KPIs can narrow to one agent
+      // while the per-agent sidebar stays full (so the user can click
+      // another agent to switch). When no extension is selected, the two
+      // queries are identical — we still run both to keep the code simple,
+      // and Supabase will cache the second one.
+      let kpiQuery = sb.from('calls')
         .select('direction, disposition, billsec_seconds, agent_ext, call_date')
         .gte('call_date', periodFromIso)
-      if (periodToIso) periodQuery = periodQuery.lte('call_date', periodToIso)
+      if (periodToIso) kpiQuery = kpiQuery.lte('call_date', periodToIso)
+      if (extensionParam) kpiQuery = kpiQuery.eq('agent_ext', extensionParam)
+
+      let agentBreakdownQuery = sb.from('calls')
+        .select('direction, disposition, billsec_seconds, agent_ext')
+        .gte('call_date', periodFromIso)
+      if (periodToIso) agentBreakdownQuery = agentBreakdownQuery.lte('call_date', periodToIso)
 
       const [
-        periodRes,
+        kpiRes,
+        agentRes,
         extensionsRes,
         syncRes,
       ] = await Promise.all([
-        periodQuery,
+        kpiQuery,
+        agentBreakdownQuery,
         sb.from('extensions')
           .select('extension, display_name, role')
           .eq('active', true),
@@ -117,25 +130,27 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
           .maybeSingle(),
       ])
 
-      if (periodRes.error) throw periodRes.error
+      if (kpiRes.error) throw kpiRes.error
+      if (agentRes.error) throw agentRes.error
       if (extensionsRes.error) throw extensionsRes.error
 
-      const periodCalls = periodRes.data || []
+      const kpiCalls = kpiRes.data || []
+      const agentCalls = agentRes.data || []
       const extensions = extensionsRes.data || []
       const sync = syncRes.data || { last_synced_at: null, last_error: null, records_synced_total: 0 }
 
-      // Period aggregates
-      const inbound = periodCalls.filter(c => c.direction === 'inbound')
-      const outbound = periodCalls.filter(c => c.direction === 'outbound')
-      const answered = periodCalls.filter(c => c.disposition === 'ANSWERED')
+      // Top-line KPI aggregates — scoped to extension if one is selected.
+      const inbound = kpiCalls.filter(c => c.direction === 'inbound')
+      const outbound = kpiCalls.filter(c => c.direction === 'outbound')
+      const answered = kpiCalls.filter(c => c.disposition === 'ANSWERED')
       const missedInbound = inbound.filter(c => c.disposition !== 'ANSWERED')
-      const totalTalk = periodCalls.reduce((s, c) => s + (c.billsec_seconds || 0), 0)
+      const totalTalk = kpiCalls.reduce((s, c) => s + (c.billsec_seconds || 0), 0)
       const avgCall = answered.length > 0 ? Math.round(totalTalk / answered.length) : 0
       const answerRate = inbound.length > 0
         ? Math.round((inbound.filter(c => c.disposition === 'ANSWERED').length / inbound.length) * 100)
         : 0
 
-      // Per-agent aggregates — scoped to the same period as everything else.
+      // Per-agent aggregates — always full period, never narrowed by extension.
       const agentMap = new Map<string, AgentStats>()
       for (const ext of extensions) {
         agentMap.set(ext.extension, {
@@ -149,7 +164,7 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
           week_talk_seconds: 0,
         })
       }
-      for (const c of periodCalls) {
+      for (const c of agentCalls) {
         if (!c.agent_ext) continue
         const a = agentMap.get(c.agent_ext)
         if (!a) continue
@@ -168,7 +183,7 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
       const response: StatsResponse = {
         periodLabel,
         today: {
-          total: periodCalls.length,
+          total: kpiCalls.length,
           inbound: inbound.length,
           outbound: outbound.length,
           answered: answered.length,
@@ -179,7 +194,7 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
         },
         // `week` block reflects the same period as `today` — kept for compat.
         week: {
-          total: periodCalls.length,
+          total: kpiCalls.length,
           talk_seconds: totalTalk,
         },
         agents,
