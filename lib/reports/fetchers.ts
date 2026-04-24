@@ -968,7 +968,7 @@ export async function fetchCallsActivity(range: DateRange): Promise<CallsActivit
 
   const { data, error } = await sb
     .from('calls')
-    .select('agent_ext, agent_name, direction, disposition, billsec_seconds')
+    .select('agent_ext, agent_name, direction, disposition, billsec_seconds, effective_advisor_name, effective_advisor_slack_user_id')
     .gte('call_date', startIso)
     .lte('call_date', endIso)
 
@@ -978,8 +978,11 @@ export async function fetchCallsActivity(range: DateRange): Promise<CallsActivit
 
   const rows = (data || []).filter((r: any) => r.agent_ext && SALES_REP_EXTENSIONS.has(String(r.agent_ext)))
 
+  // Group by effective advisor slack user id when available, else fall back
+  // to ext (covers calls analysed pre-v2 rubric or not yet backfilled).
   const byRep = new Map<string, {
     agentName: string | null
+    agentExt: string
     totalCalls: number; answeredCalls: number
     outboundCalls: number; inboundCalls: number
     totalBillSec: number; answeredBillSec: number
@@ -987,28 +990,30 @@ export async function fetchCallsActivity(range: DateRange): Promise<CallsActivit
   let teamCalls = 0
   let teamBillSec = 0
   for (const r of rows) {
-    const ext = String(r.agent_ext)
+    const key = r.effective_advisor_slack_user_id || `ext:${r.agent_ext}`
+    const displayName = r.effective_advisor_name || r.agent_name || null
     teamCalls++
     const sec = Number(r.billsec_seconds) || 0
     teamBillSec += sec
-    const agg = byRep.get(ext) || {
-      agentName: r.agent_name || null,
+    const agg = byRep.get(key) || {
+      agentName: displayName,
+      agentExt: String(r.agent_ext),
       totalCalls: 0, answeredCalls: 0,
       outboundCalls: 0, inboundCalls: 0,
       totalBillSec: 0, answeredBillSec: 0,
     }
-    if (!agg.agentName && r.agent_name) agg.agentName = r.agent_name
+    if (!agg.agentName && displayName) agg.agentName = displayName
     agg.totalCalls++
     agg.totalBillSec += sec
     if (r.disposition === 'ANSWERED') { agg.answeredCalls++; agg.answeredBillSec += sec }
     if (r.direction === 'outbound') agg.outboundCalls++
     if (r.direction === 'inbound')  agg.inboundCalls++
-    byRep.set(ext, agg)
+    byRep.set(key, agg)
   }
 
   const reps = Array.from(byRep.entries())
-    .map(([agentExt, v]) => ({
-      agentExt,
+    .map(([, v]) => ({
+      agentExt: v.agentExt,
       agentName: v.agentName,
       totalCalls: v.totalCalls,
       answeredCalls: v.answeredCalls,
@@ -1054,7 +1059,7 @@ export async function fetchCallsRepLeaderboard(range: DateRange): Promise<CallsR
 
   const { data, error } = await sb
     .from('calls')
-    .select('agent_ext, agent_name, sales_score, outcome_classification')
+    .select('agent_ext, agent_name, sales_score, outcome_classification, effective_advisor_name, effective_advisor_slack_user_id')
     .gte('call_date', startIso)
     .lte('call_date', endIso)
     .not('sales_score', 'is', null)
@@ -1062,27 +1067,32 @@ export async function fetchCallsRepLeaderboard(range: DateRange): Promise<CallsR
   if (error) return { reps: [] }
   const rows = (data || []).filter((r: any) => r.agent_ext && SALES_REP_EXTENSIONS.has(String(r.agent_ext)))
 
+  // Group by effective advisor (slack user id) when available, else ext fallback
   const byRep = new Map<string, {
     agentName: string | null
+    agentExt: string
     scores: number[]
     flagged: number
     outcomes: Map<string, number>
   }>()
   for (const r of rows) {
-    const ext = String(r.agent_ext)
-    const existing = byRep.get(ext)
+    const key = r.effective_advisor_slack_user_id || `ext:${r.agent_ext}`
+    const displayName = r.effective_advisor_name || r.agent_name || null
+    const existing = byRep.get(key)
     const agg: {
       agentName: string | null
+      agentExt: string
       scores: number[]
       flagged: number
       outcomes: Map<string, number>
     } = existing || {
-      agentName: r.agent_name || null,
+      agentName: displayName,
+      agentExt: String(r.agent_ext),
       scores: [] as number[],
       flagged: 0,
       outcomes: new Map<string, number>(),
     }
-    if (!agg.agentName && r.agent_name) agg.agentName = r.agent_name
+    if (!agg.agentName && displayName) agg.agentName = displayName
     if (typeof r.sales_score === 'number') {
       agg.scores.push(r.sales_score)
       if (r.sales_score < 40) agg.flagged++
@@ -1090,11 +1100,11 @@ export async function fetchCallsRepLeaderboard(range: DateRange): Promise<CallsR
     if (r.outcome_classification) {
       agg.outcomes.set(r.outcome_classification, (agg.outcomes.get(r.outcome_classification) || 0) + 1)
     }
-    byRep.set(ext, agg)
+    byRep.set(key, agg)
   }
 
   const reps = Array.from(byRep.entries())
-    .map(([agentExt, v]) => {
+    .map(([, v]) => {
       const n = v.scores.length
       const sum = v.scores.reduce((s, x) => s + x, 0)
       const avg = n > 0 ? Math.round((sum / n) * 10) / 10 : null
@@ -1104,7 +1114,7 @@ export async function fetchCallsRepLeaderboard(range: DateRange): Promise<CallsR
         if (c > topCount) { topCount = c; topOutcome = oc }
       })
       return {
-        agentExt,
+        agentExt: v.agentExt,
         agentName: v.agentName,
         scoredCalls: n,
         avgScore: avg,
