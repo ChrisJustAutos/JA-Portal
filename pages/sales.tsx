@@ -4,6 +4,7 @@ import Head from 'next/head'
 import { useRouter } from 'next/router'
 import PortalSidebar from '../lib/PortalSidebar'
 import { requirePageAuth } from '../lib/authServer'
+import { useChatContext } from '../components/GlobalChatbot'
 
 interface PortalUserSSR { id: string; email: string; displayName: string | null; role: 'admin'|'manager'|'sales'|'accountant'|'viewer' }
 
@@ -109,6 +110,93 @@ export default function SalesDashboard({ user }: { user: PortalUserSSR }) {
   const leadsByStatus:Record<string,number>={}
   filteredLeads.forEach(l=>{leadsByStatus[l.status]=(leadsByStatus[l.status]||0)+1})
   const totalLeadValue=filteredLeads.reduce((s,l)=>s+(parseFloat(l.quoteValue)||0),0)
+
+  // ─── Feed sales/leads summary to the global AI chatbot ─────────────────
+  // Lets the assistant answer "what's our pipeline at" / "who's leading
+  // this month" / "which leads need follow-up" without re-pulling Monday data.
+  const { setPageContext: setChatContext } = useChatContext()
+  useEffect(() => {
+    if (loading || !data) { setChatContext(null); return }
+    setChatContext({
+      view, // 'workshop' | 'distributor'
+      subTab,
+      repFilter,
+      distPersonFilter,
+      dateRange: {
+        start: data.period?.startDate,
+        end:   data.period?.endDate,
+        isCustomRange,
+        fyYear: isCustomRange ? null : fyYear,
+      },
+      workshop: {
+        // Quote/pipeline KPIs (filtered to repFilter)
+        totalQuotes: tq,
+        wonCount: tWon,
+        wonValue: Math.round(tWonVal),
+        lostCount: tLost,
+        winRatePct: wr,
+        pipelineValue: Math.round(tPipe),
+        pipelineCount: tPipeCount,
+        activeLeadsCount: filteredLeads.length,
+        activeLeadsTotalValue: Math.round(totalLeadValue),
+        leadsByStatus,
+        // Per-rep quote breakdown
+        byRep: quotes.map(q => ({
+          rep: q.rep,
+          fullName: q.full,
+          totalItems: q.totalItems,
+          wonCount: q.stats['Quote Won']?.count || 0,
+          wonValue: Math.round(q.stats['Quote Won']?.value || 0),
+          lostCount: q.stats['Quote Lost']?.count || 0,
+        })),
+        // Top 10 active leads by quote value
+        topActiveLeads: filteredLeads
+          .slice()
+          .sort((a, b) => (parseFloat(b.quoteValue)||0) - (parseFloat(a.quoteValue)||0))
+          .slice(0, 10)
+          .map(l => ({
+            name: l.name,
+            rep: l.repFull || l.rep,
+            phone: l.phone,
+            status: l.status,
+            value: Math.round(parseFloat(l.quoteValue) || 0),
+            stage: l.qualifyingStage,
+            attempts: l.contactAttempts,
+            date: l.date,
+          })),
+        ordersTotalCount: orders?.totalOrders || 0,
+        ordersTotalValue: Math.round(orders?.totalValue || 0),
+        ordersTracedCount: totalTraced,
+        ordersTracedPct: tracedPct,
+      },
+      distributor: dist ? {
+        totalCount: dist.total.count,
+        totalValue: Math.round(dist.total.value),
+        mtdCount: dist.mtdTotal.count,
+        mtdValue: Math.round(dist.mtdTotal.value),
+        topDistributors: distArr.slice(0, 10).map(d => ({
+          name: d.name,
+          count: d.count,
+          value: Math.round(d.value),
+        })),
+        byStatus: distStatusArr.map(s => ({
+          status: s.status,
+          count: s.count,
+          value: Math.round(s.value),
+        })),
+        // Sales people working distributor leads (excludes Unassigned)
+        byPerson: distPeople.map(p => ({
+          name: p,
+          count: dist.byPerson[p]?.count || 0,
+          value: Math.round(dist.byPerson[p]?.value || 0),
+          mtdCount: dist.mtdByPerson[p]?.count || 0,
+          mtdValue: Math.round(dist.mtdByPerson[p]?.value || 0),
+        })),
+      } : null,
+    })
+    return () => { setChatContext(null) }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loading, data, view, subTab, repFilter, distPersonFilter, isCustomRange, fyYear])
 
   return (<>
     <Head><title>Leads/Orders — Just Autos</title><meta name="viewport" content="width=device-width,initial-scale=1"/><meta name="robots" content="noindex,nofollow"/></Head>

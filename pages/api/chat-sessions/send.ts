@@ -45,11 +45,20 @@ GUIDELINES:
 - If you don't have the answer in the context provided, say so rather than guessing.`
 
   const pageHints: Record<string, string> = {
-    '/':             'User is on the Overview (Dashboard) page — combined JAWS+VPS revenue, invoices, P&L, stock summary.',
-    '/distributors': 'User is on the Distributors page — distributor-level revenue breakdowns, groups, line items, VIN tracking.',
-    '/sales':        'User is on the Sales/Leads page — Monday.com quotes, orders, lead pipeline by rep.',
-    '/stock':        'User is on the Stock & Inventory page — item-level stock levels, reorder alerts, velocity, dead stock, margins.',
-    '/settings':     'User is on the Settings page — user/group management, preferences, VIN codes.',
+    '/':              'User is on the landing page (redirector to their first visible tab — they should not normally see this).',
+    '/overview':      'User is on the customisable Overview dashboard — a 12-col widget grid with named layouts. contextData includes the active layout name, list of widgets, and the data each widget is currently rendering. Use this to answer "what does my dashboard show" / "what is widget X telling me right now" — refer to widgets by their title.',
+    '/dashboard':     'User is on the legacy combined Overview/Dashboard page — sections for Overview, Invoices, P&L, Stock, Payables across both JAWS and VPS. contextData includes receivables, income, COS, net, top customers, open bills, stock value for each entity.',
+    '/distributors':  'User is on the Distributors page — distributor-level revenue (Tuning + Oil + Parts) for a date range. contextData includes the selected distributor, top 15 distributors by revenue, group totals (by type or region dimension), monthly trend, and any active drill-down. Note: Kenwick and Rockingham are separate distributors; JMACX and HQ Builds are the same company listed separately.',
+    '/sales':         'User is on the Sales/Leads page (Monday.com data) — workshop quotes pipeline + distributor orders. contextData has the active view (workshop or distributor), pipeline KPIs (won/lost/win-rate/pipeline value), per-rep breakdown, top active leads, and the distributor orders breakdown.',
+    '/calls':         'User is on the Phone Calls page (FreePBX CDR + Deepgram transcripts). contextData includes today/week call stats, top agents by talk time, the calls currently listed (up to 25), and the selected call if one is opened. Speaker 0 in transcripts = Agent. Coaching is post-call only.',
+    '/reports':       'User is on the Reports page — generated multi-section reports with optional AI narrative. contextData has the report title, type, period, and section list.',
+    '/todos':         'User is on the To-Dos dashboard — aggregates 6 manager Monday.com boards. contextData has per-manager scorecards (open/critical/completed/avg-age), critical open list (oldest first), and recently completed feed.',
+    '/stock':         'User is on the Stock & Inventory page (MYOB JAWS items). contextData has totals (stock value, low/out/dead counts, reorder suggestions), critical reorder list (items running out within 30 days), top dead stock, and top velocity items.',
+    '/jobs':          'User is on the Jobs page — workshop job tracking.',
+    '/vehicle-sales': 'User is on the Vehicle Sales page — vehicle inventory and sales tracking.',
+    '/job-reports':   'User is on the Job Reports page — generated reports for completed workshop jobs.',
+    '/supplier-invoices': 'User is on the Supplier Invoices page — accounts payable workflow.',
+    '/settings':      'User is on the Settings page — user/group management, preferences, VIN codes, distributor groups.',
   }
 
   const pageContext = contextPage && pageHints[contextPage]
@@ -57,7 +66,7 @@ GUIDELINES:
     : ''
 
   const dataContext = contextData && typeof contextData === 'object'
-    ? `\nPAGE-SPECIFIC DATA (current view):\n${JSON.stringify(contextData, null, 2).slice(0, 8000)}`
+    ? `\nPAGE-SPECIFIC DATA (current view):\n${JSON.stringify(contextData, null, 2).slice(0, 16000)}`
     : ''
 
   return base + pageContext + dataContext

@@ -20,6 +20,7 @@ import { useRouter } from 'next/router'
 import PortalSidebar from '../lib/PortalSidebar'
 import { requirePageAuth } from '../lib/authServer'
 import { usePreferences, applyGstDisplay } from '../lib/preferences'
+import { useChatContext } from '../components/GlobalChatbot'
 
 interface PortalUserSSR { id: string; email: string; displayName: string | null; role: 'admin'|'manager'|'sales'|'accountant'|'viewer' }
 
@@ -725,6 +726,67 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
   }
 
   const showSelector=tab==='distributor-sales'||tab==='detailed-sales'
+
+  // ─── Feed distributor revenue summary to the global AI chatbot ──────────
+  // Top distributors by revenue, group totals, the currently-selected
+  // distributor, and the date range — so the assistant can answer
+  // "which distributor is bottoming out" or "how does X compare to Y" without
+  // re-querying MYOB.
+  const { setPageContext: setChatContext } = useChatContext()
+  useEffect(() => {
+    if (loading || !data) { setChatContext(null); return }
+    setChatContext({
+      tab,
+      dateRange: {
+        start: data.period?.start,
+        end:   data.period?.end,
+        isCustomRange,
+        fyYear: isCustomRange ? null : fyYear,
+      },
+      gstDisplay: prefs.gst_display,
+      primaryDimension,
+      selectedDistributor: selectedDist,
+      selectedDistributorTotal: selectedDist === 'ALL' ? null : ss,
+      grandTotal: {
+        tuning: Math.round(distSummaries.reduce((s,d)=>s+d.tuning,0)),
+        oil:    Math.round(distSummaries.reduce((s,d)=>s+d.oil,0)),
+        parts:  Math.round(distSummaries.reduce((s,d)=>s+d.parts,0)),
+        total:  Math.round(distSummaries.reduce((s,d)=>s+d.total,0)),
+      },
+      distributorCount: distSummaries.length,
+      // Top 15 distributors by total revenue
+      topDistributors: distSummaries.slice(0, 15).map(d => ({
+        name: d.name,
+        total: Math.round(d.total),
+        tuning: Math.round(d.tuning),
+        oil: Math.round(d.oil),
+        parts: Math.round(d.parts),
+        typeGroup: d.typeGroup,
+        regionGroup: d.regionGroup,
+      })),
+      // Group-level rollups (whichever dimension is currently primary)
+      groupTotals: dimensionGroups.map(g => {
+        const rows = summariesByGroup[g.name] || []
+        return {
+          group: g.name,
+          distributorCount: rows.length,
+          tuning: Math.round(rows.reduce((s,r)=>s+r.tuning,0)),
+          oil:    Math.round(rows.reduce((s,r)=>s+r.oil,0)),
+          parts:  Math.round(rows.reduce((s,r)=>s+r.parts,0)),
+          total:  Math.round(rows.reduce((s,r)=>s+r.total,0)),
+        }
+      }),
+      unclassifiedCount: unclassifiedSummaries.length,
+      monthlyTrend: trendLabels.map(label => ({
+        period: label,
+        total: Math.round(monthlyTotals[label] || 0),
+      })),
+      // If a drill-down panel is open, surface what the user is looking at
+      drillDown: drill ? { title: drill.title, subtitle: drill.subtitle } : null,
+    })
+    return () => { setChatContext(null) }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loading, data, tab, selectedDist, primaryDimension, prefs.gst_display, drill, isCustomRange, fyYear])
 
   return (<>
     <Head><title>Distributors — Just Autos</title><meta name="viewport" content="width=device-width,initial-scale=1"/><meta name="robots" content="noindex,nofollow"/></Head>

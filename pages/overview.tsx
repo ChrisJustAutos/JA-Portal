@@ -11,6 +11,7 @@ import { getWidgetDef, defaultConfigFor, DateRangeKey, DATE_RANGE_OPTIONS } from
 import { RENDERERS } from '../components/dashboard/WidgetRenderers'
 import WidgetConfigPanel from '../components/dashboard/WidgetConfigPanel'
 import WidgetCatalogPicker from '../components/dashboard/WidgetCatalogPicker'
+import { useChatContext } from '../components/GlobalChatbot'
 
 const T = {
   bg:'#0d0f12', bg2:'#131519', bg3:'#1a1d23', bg4:'#21252d',
@@ -334,6 +335,62 @@ export default function OverviewPage({ user }: { user: { id: string, email: stri
 
   const configWidget = configFor ? widgets.find(w => w.id === configFor) : null
   const configDef = configWidget ? getWidgetDef(configWidget.type) : null
+
+  // ─── Feed dashboard layout + widget data to the global AI chatbot ──────
+  // Overview is fully customisable, so we tell the assistant which layout
+  // is active, what widgets are on it, and the current data each widget
+  // is rendering. That way it can answer "what's on my dashboard" or
+  // "what does the X widget show me right now" without any back-end fetch.
+  const { setPageContext: setChatContext } = useChatContext()
+  useEffect(() => {
+    if (loading) { setChatContext(null); return }
+    setChatContext({
+      layoutName: currentLayoutName,
+      layoutId: currentLayoutId,
+      isDefault,
+      editMode,
+      globalDateRange: globalDate,
+      savedLayouts: savedLayouts.map(l => ({
+        name: l.name,
+        isActive: l.is_active,
+      })),
+      widgetCount: widgets.length,
+      // For each widget on the current layout: what type, what config,
+      // and the data it is currently rendering (capped to keep payload small).
+      widgets: widgets.map(w => {
+        const def = getWidgetDef(w.type)
+        const data = widgetData[w.id]
+        // Cap each widget's data to avoid blowing the system prompt budget.
+        // The widget renderer holds the full data; the assistant only needs
+        // a representative slice to answer questions.
+        let dataPreview: any = data
+        if (data && typeof data === 'object') {
+          const json = JSON.stringify(data)
+          if (json.length > 1500) {
+            // Truncate large payloads — keep top-level keys + a short tail
+            if (Array.isArray(data)) {
+              dataPreview = { _truncated: true, count: data.length, sample: data.slice(0, 5) }
+            } else {
+              const keys = Object.keys(data)
+              dataPreview = { _truncated: true, keys, sample: Object.fromEntries(keys.slice(0, 8).map(k => [k, data[k]])) }
+            }
+          }
+        }
+        return {
+          id: w.id,
+          type: w.type,
+          title: def?.label || w.type,
+          size: { w: w.w, h: w.h },
+          position: { x: w.x, y: w.y },
+          config: w.config,
+          dateRange: w.dateOverride?.range || globalDate,
+          data: dataPreview,
+        }
+      }),
+    })
+    return () => { setChatContext(null) }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loading, widgets, widgetData, currentLayoutName, currentLayoutId, isDefault, editMode, globalDate, savedLayouts])
 
   return (
     <>

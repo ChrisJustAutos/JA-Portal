@@ -7,6 +7,7 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import Head from 'next/head'
+import { useChatContext } from '../components/GlobalChatbot'
 
 // ── theme (mirrors pages/distributors.tsx) ───────────────────────────────
 const T = {
@@ -217,6 +218,95 @@ export default function StockPage() {
     for (const i of items) if (i.supplier) s.add(i.supplier)
     return Array.from(s).sort()
   }, [items])
+
+  // ─── Feed inventory summary to the global AI chatbot ──────────────────
+  // Stock value, low/out/dead breakdown, and the user's current filter
+  // state — so the assistant can answer "what's about to stock out" or
+  // "show me my dead stock" questions without re-querying MYOB.
+  const { setPageContext: setChatContext } = useChatContext()
+  useEffect(() => {
+    if (loading || !data) { setChatContext(null); return }
+    const t = data.totals
+    setChatContext({
+      tab,
+      filters: {
+        search: search || null,
+        supplier: supplierFilter === '__all__' ? null
+                : supplierFilter === '__none__' ? '(no supplier)'
+                : supplierFilter,
+        filteredItemCount: filtered.length,
+        totalItemCount: items.length,
+      },
+      meta: {
+        company: data.meta.company,
+        generatedAt: data.meta.generatedAt,
+        forecastWindowDays: data.meta.forecastWindowDays,
+        invoicesScanned: data.meta.invoiceCount,
+      },
+      totals: {
+        totalSkus: t.totalSkus,
+        totalItems: t.totalItems,
+        stockValue: Math.round(t.stockValue),
+        qtyOnHand: t.qtyOnHand,
+        qtyOnOrder: t.qtyOnOrder,
+        qtyCommitted: t.qtyCommitted,
+        lowStockCount: t.lowStockCount,
+        outOfStockCount: t.outOfStockCount,
+        deadStock90dCount: t.deadStock90dCount,
+        deadStock90dValue: Math.round(t.deadStock90dValue),
+        deadStock180dCount: t.deadStock180dCount,
+        deadStock180dValue: Math.round(t.deadStock180dValue),
+        reorderSuggestCount: t.reorderSuggestCount,
+        reorderSuggestValue: Math.round(t.reorderSuggestValue),
+      },
+      // Items most likely to stock out — by days-of-cover ascending,
+      // skipping items with no forecast (null daysOfCover) and out-of-stock.
+      criticalReorder: items
+        .filter(i => i.daysOfCover !== null && i.daysOfCover < 30 && i.qtyOnHand > 0)
+        .sort((a, b) => (a.daysOfCover || 0) - (b.daysOfCover || 0))
+        .slice(0, 15)
+        .map(i => ({
+          sku: i.number,
+          name: i.name,
+          qtyOnHand: i.qtyOnHand,
+          qtyOnOrder: i.qtyOnOrder,
+          daysOfCover: i.daysOfCover,
+          stockoutDate: i.stockoutDate,
+          status: i.stockoutStatus,
+          supplier: i.supplier,
+          unitsSold30d: i.unitsSold30d,
+        })),
+      // Top stock value tied up in dead inventory (180d+)
+      deadStockTop: items
+        .filter(i => i.isDead180d && i.stockValue > 0)
+        .sort((a, b) => b.stockValue - a.stockValue)
+        .slice(0, 10)
+        .map(i => ({
+          sku: i.number,
+          name: i.name,
+          stockValue: Math.round(i.stockValue),
+          qtyOnHand: i.qtyOnHand,
+          daysSinceLastSold: i.daysSinceLastSold,
+          supplier: i.supplier,
+        })),
+      // Top revenue items in the last 90 days
+      topVelocity: items
+        .slice()
+        .sort((a, b) => b.revenue90d - a.revenue90d)
+        .slice(0, 10)
+        .map(i => ({
+          sku: i.number,
+          name: i.name,
+          revenue90d: Math.round(i.revenue90d),
+          unitsSold90d: i.unitsSold90d,
+          marginPct: i.marginPct,
+          qtyOnHand: i.qtyOnHand,
+          daysOfCover: i.daysOfCover,
+        })),
+    })
+    return () => { setChatContext(null) }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loading, data, tab, search, supplierFilter, filtered.length])
 
   return (
     <>

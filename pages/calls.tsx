@@ -8,6 +8,7 @@ import Head from 'next/head'
 import { useRouter } from 'next/router'
 import PortalSidebar from '../lib/PortalSidebar'
 import { requirePageAuth } from '../lib/authServer'
+import { useChatContext } from '../components/GlobalChatbot'
 
 interface PortalUserSSR { id: string; email: string; displayName: string | null; role: 'admin'|'manager'|'sales'|'accountant'|'viewer' }
 
@@ -880,6 +881,79 @@ export default function CallsPage({ user }: { user: PortalUserSSR }) {
 
   const filterExtName = filterExt !== 'all' ? stats?.agents.find(a => a.extension === filterExt)?.display_name : null
   const fy = currentFY()
+
+  // ─── Feed call analytics summary to the global AI chatbot ───────────────
+  // The assistant can answer questions about who's been on the phone, missed
+  // call counts, talk-time leaders, and the currently-selected call without
+  // re-querying FreePBX/Deepgram itself.
+  const { setPageContext: setChatContext } = useChatContext()
+  useEffect(() => {
+    if (loading) { setChatContext(null); return }
+    setChatContext({
+      dateRange: { startDate, endDate, preset: activePreset },
+      filters: {
+        extension: filterExt === 'all' ? null : filterExt,
+        extensionName: filterExtName || null,
+        direction: filterDir === 'all' ? null : filterDir,
+        disposition: filterDisp === 'all' ? null : filterDisp,
+        searchTerm: searchDebounced || null,
+      },
+      callsListed: calls.length,
+      truncated,
+      todayStats: stats?.today || null,
+      weekStats: stats?.week || null,
+      sync: stats?.sync || null,
+      // Agents ranked by talk time over the last 7 days
+      topAgentsByWeekTalk: (stats?.agents || [])
+        .slice()
+        .sort((a, b) => b.week_talk_seconds - a.week_talk_seconds)
+        .slice(0, 8)
+        .map(a => ({
+          name: a.display_name,
+          extension: a.extension,
+          role: a.role,
+          todayCalls: a.today_total,
+          todayAnsweredInbound: a.today_answered_inbound,
+          todayOutbound: a.today_outbound,
+          todayTalkSeconds: a.today_talk_seconds,
+          weekTalkSeconds: a.week_talk_seconds,
+        })),
+      // Compact summary of the rows currently in view (cap at 25 to keep
+      // the system prompt under control — full list lives in Supabase)
+      callsInView: calls.slice(0, 25).map(c => ({
+        id: c.id,
+        callDate: c.call_date,
+        direction: c.direction,
+        externalNumber: c.external_number,
+        callerName: c.caller_name,
+        agentName: c.agent_name,
+        agentExt: c.agent_ext,
+        durationSeconds: c.duration_seconds,
+        billsecSeconds: c.billsec_seconds,
+        disposition: c.disposition,
+        hasRecording: c.has_recording,
+        transcriptStatus: c.transcript_status,
+        salesScore: c.sales_score,
+      })),
+      selectedCall: selectedCall ? {
+        id: selectedCall.id,
+        callDate: selectedCall.call_date,
+        direction: selectedCall.direction,
+        externalNumber: selectedCall.external_number,
+        callerName: selectedCall.caller_name,
+        agentName: selectedCall.agent_name,
+        agentExt: selectedCall.agent_ext,
+        durationSeconds: selectedCall.duration_seconds,
+        billsecSeconds: selectedCall.billsec_seconds,
+        disposition: selectedCall.disposition,
+        hasRecording: selectedCall.has_recording,
+        transcriptStatus: selectedCall.transcript_status,
+        salesScore: selectedCall.sales_score,
+      } : null,
+    })
+    return () => { setChatContext(null) }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loading, calls, stats, selectedCall, startDate, endDate, activePreset, filterExt, filterDir, filterDisp, searchDebounced, truncated])
 
   return (
     <>

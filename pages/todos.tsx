@@ -8,6 +8,7 @@ import { useRouter } from 'next/router'
 import PortalSidebar from '../lib/PortalSidebar'
 import { UserRole } from '../lib/permissions'
 import { requirePageAuth } from '../lib/authServer'
+import { useChatContext } from '../components/GlobalChatbot'
 
 const T = {
   bg:'#0d0f12', bg2:'#131519', bg3:'#1a1d23', bg4:'#21252d',
@@ -172,6 +173,66 @@ export default function TodosDashboard({ user }: { user: PortalUserSSR }) {
     const sum = withAvg.reduce((s, m) => s + (m.avgAgeDays || 0), 0)
     return Math.round(sum / withAvg.length)
   })()
+
+  // ─── Feed to-do dashboard summary to the global AI chatbot ─────────────
+  // Per-manager scorecards, critical open list, recently completed — so the
+  // assistant can answer "who has the most stuck items" / "what's overdue"
+  // without re-pulling from Monday.
+  const { setPageContext: setChatContext } = useChatContext()
+  useEffect(() => {
+    if (loading || !data) { setChatContext(null); return }
+    setChatContext({
+      dateRange: {
+        start: data.period?.startDate,
+        end:   data.period?.endDate,
+        isCustomRange,
+        fyYear: isCustomRange ? null : fyYear,
+      },
+      filters: {
+        manager: managerFilter === 'All' ? null : managerFilter,
+        status: statusFilter,
+        search: searchQ || null,
+      },
+      visibleTotals: {
+        openTotal,
+        criticalTotal,
+        completedTotal,
+        teamTotal,
+        avgAgeDays: avgAgeAcross,
+      },
+      // Per-manager scorecard
+      managers: fm.map(m => ({
+        manager: m.manager,
+        boardId: m.boardId,
+        totalItems: m.totalItems,
+        openTotal: m.openTotal,
+        openByStatus: m.openByStatus,
+        critical: m.critical,
+        completedInPeriod: m.completedInPeriod,
+        avgAgeDays: m.avgAgeDays,
+      })),
+      // Top 20 oldest critical open items — the most overdue stuff
+      criticalOpen: criticalList.slice(0, 20).map(t => ({
+        id: t.id,
+        name: t.name,
+        manager: t.manager,
+        status: t.status,
+        priority: t.priority,
+        ageDays: t.ageDays,
+        createdDate: t.createdLocalDate,
+      })),
+      // Recently completed in this period (top 15)
+      recentlyCompleted: completedList.slice(0, 15).map(t => ({
+        id: t.id,
+        name: t.name,
+        manager: t.manager,
+        createdDate: t.createdLocalDate,
+        ageWhenDoneDays: t.ageDays,
+      })),
+    })
+    return () => { setChatContext(null) }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loading, data, managerFilter, statusFilter, searchQ, isCustomRange, fyYear])
 
   return (
     <>
