@@ -32,7 +32,7 @@ export interface WidgetField {
 export interface WidgetDef {
   type: string
   label: string
-  category: 'metric'|'sales'|'chart'|'distributor'|'ops'|'activity'|'misc'
+  category: 'metric'|'sales'|'chart'|'distributor'|'ops'|'activity'|'misc'|'calls'|'todos'|'inventory'|'vehicles'|'reports'
   description: string
   defaultSize: { w: number, h: number }    // in grid units (12-col grid)
   fields: WidgetField[]
@@ -301,6 +301,157 @@ export const WIDGETS: WidgetDef[] = [
     fields: [
       { key: 'title', label: 'Title', type: { kind: 'text' } },
       { key: 'content', label: 'Content', type: { kind: 'markdown' }, defaultValue: '' },
+    ],
+  },
+
+  // ── Calls (FreePBX CDR) ────────────────────────────────────────────────
+  {
+    type: 'calls_kpi',
+    label: 'Calls KPI',
+    category: 'calls',
+    description: 'Total / answered / missed / talk-time for a period. Optional extension filter.',
+    defaultSize: { w: 4, h: 2 },
+    fields: [
+      { key: 'title', label: 'Title', type: { kind: 'text' }, defaultValue: 'Calls' },
+      { key: 'period', label: 'Period', type: { kind: 'date_range' }, required: true, defaultValue: 'today' },
+      { key: 'extension', label: 'Extension (optional)', type: { kind: 'text', placeholder: 'e.g. 101 — leave blank for all' } },
+    ],
+  },
+  {
+    type: 'calls_agent_leaderboard',
+    label: 'Agent talk-time leaderboard',
+    category: 'calls',
+    description: 'Top agents ranked by talk time over a period.',
+    defaultSize: { w: 4, h: 4 },
+    fields: [
+      { key: 'title', label: 'Title', type: { kind: 'text' }, defaultValue: 'Top agents' },
+      { key: 'period', label: 'Period', type: { kind: 'date_range' }, required: true, defaultValue: 'this_week' },
+      { key: 'limit', label: 'Top N', type: { kind: 'number', min: 3, max: 15 }, defaultValue: 8 },
+    ],
+  },
+  {
+    type: 'calls_missed_recent',
+    label: 'Recent missed calls',
+    category: 'calls',
+    description: 'Latest missed inbound calls — caller, time, dialled extension.',
+    defaultSize: { w: 4, h: 4 },
+    fields: [
+      { key: 'title', label: 'Title', type: { kind: 'text' }, defaultValue: 'Missed calls' },
+      { key: 'limit', label: 'Items', type: { kind: 'number', min: 5, max: 30 }, defaultValue: 10 },
+    ],
+  },
+
+  // ── Todos (Monday.com aggregator) ──────────────────────────────────────
+  {
+    type: 'todos_kpi',
+    label: 'To-Dos KPI',
+    category: 'todos',
+    description: 'Open / Critical / Completed-in-period across all manager boards.',
+    defaultSize: { w: 4, h: 2 },
+    fields: [
+      { key: 'title', label: 'Title', type: { kind: 'text' }, defaultValue: 'To-Dos' },
+      { key: 'period', label: 'Period (for "completed")', type: { kind: 'date_range' }, required: true, defaultValue: 'this_month' },
+      { key: 'manager', label: 'Manager (optional)', type: { kind: 'text', placeholder: 'e.g. Matt — leave blank for all' } },
+    ],
+  },
+  {
+    type: 'todos_manager_scorecard',
+    label: 'Manager to-do scorecard',
+    category: 'todos',
+    description: 'Per-manager open / critical / completed counts. Sorted by open count.',
+    defaultSize: { w: 6, h: 4 },
+    fields: [
+      { key: 'title', label: 'Title', type: { kind: 'text' }, defaultValue: 'Manager scorecard' },
+      { key: 'period', label: 'Period (for "completed")', type: { kind: 'date_range' }, required: true, defaultValue: 'this_month' },
+    ],
+  },
+
+  // ── Inventory / stock (MYOB JAWS items) ────────────────────────────────
+  {
+    type: 'stock_health_kpi',
+    label: 'Stock health KPI',
+    category: 'inventory',
+    description: 'Stock value plus low / out-of-stock / dead-stock counts.',
+    defaultSize: { w: 4, h: 2 },
+    fields: [
+      { key: 'title', label: 'Title', type: { kind: 'text' }, defaultValue: 'Stock health' },
+    ],
+  },
+  {
+    type: 'stock_critical_reorder',
+    label: 'Critical reorder list',
+    category: 'inventory',
+    description: 'Items running out within N days, sorted by days-of-cover ascending.',
+    defaultSize: { w: 6, h: 4 },
+    fields: [
+      { key: 'title', label: 'Title', type: { kind: 'text' }, defaultValue: 'Critical reorder' },
+      { key: 'days', label: 'Within days', type: { kind: 'number', min: 7, max: 90 }, defaultValue: 30 },
+      { key: 'limit', label: 'Top N', type: { kind: 'number', min: 5, max: 30 }, defaultValue: 12 },
+    ],
+  },
+  {
+    type: 'stock_dead_top',
+    label: 'Dead stock — top by $',
+    category: 'inventory',
+    description: 'Items with no sales in 180+ days, ranked by stock value tied up.',
+    defaultSize: { w: 6, h: 4 },
+    fields: [
+      { key: 'title', label: 'Title', type: { kind: 'text' }, defaultValue: 'Dead stock' },
+      { key: 'limit', label: 'Top N', type: { kind: 'number', min: 5, max: 25 }, defaultValue: 10 },
+    ],
+  },
+
+  // ── Sales add-on ───────────────────────────────────────────────────────
+  {
+    type: 'top_active_leads',
+    label: 'Top active leads',
+    category: 'sales',
+    description: 'Highest-value open workshop quotes (still in pipeline). Click to open in Monday.',
+    defaultSize: { w: 6, h: 4 },
+    fields: [
+      { key: 'title', label: 'Title', type: { kind: 'text' }, defaultValue: 'Top active leads' },
+      { key: 'period', label: 'Period', type: { kind: 'date_range' }, required: true, defaultValue: 'this_month' },
+      { key: 'limit', label: 'Top N', type: { kind: 'number', min: 5, max: 25 }, defaultValue: 10 },
+    ],
+  },
+
+  // ── Distributor add-on ─────────────────────────────────────────────────
+  {
+    type: 'distributor_trend_mini',
+    label: 'Distributor trend (sparkline)',
+    category: 'distributor',
+    description: 'Compact monthly revenue sparkline for one distributor over the last 12 months.',
+    defaultSize: { w: 4, h: 2 },
+    fields: [
+      { key: 'title', label: 'Title', type: { kind: 'text' } },
+      { key: 'distributor', label: 'Distributor',
+        type: { kind: 'metric_source', sources: ['distributors'] },
+        required: true, helpText: 'Pick one distributor.' },
+    ],
+  },
+
+  // ── Reports — quick-launch ─────────────────────────────────────────────
+  {
+    type: 'reports_quick_launch',
+    label: 'Reports quick-launch',
+    category: 'reports',
+    description: 'Click-through tiles for report types you have access to.',
+    defaultSize: { w: 4, h: 4 },
+    fields: [
+      { key: 'title', label: 'Title', type: { kind: 'text' }, defaultValue: 'Generate a report' },
+    ],
+  },
+
+  // ── Vehicle sales (VPS classification) ─────────────────────────────────
+  {
+    type: 'vehicle_sales_kpi',
+    label: 'Vehicle sales KPI',
+    category: 'vehicles',
+    description: 'Total $ + classified vs unclassified breakdown for the period.',
+    defaultSize: { w: 4, h: 2 },
+    fields: [
+      { key: 'title', label: 'Title', type: { kind: 'text' }, defaultValue: 'Vehicle sales' },
+      { key: 'period', label: 'Period', type: { kind: 'date_range' }, required: true, defaultValue: 'this_month' },
     ],
   },
 ]

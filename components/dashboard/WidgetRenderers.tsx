@@ -463,22 +463,441 @@ export function MarkdownNote({ config, data }: any) {
   )
 }
 
+// ── New widgets (calls / todos / inventory / vehicles / reports) ──────────
+
+// Format seconds as "Hh Mm" or "Mm Ss" depending on size
+function fmtTalkTime(seconds: number | null | undefined): string {
+  if (seconds === null || seconds === undefined || isNaN(seconds as any)) return '—'
+  const s = Math.round(Number(seconds))
+  if (s < 60) return s + 's'
+  const m = Math.floor(s / 60)
+  const rs = s % 60
+  if (m < 60) return m + 'm' + (rs ? ' ' + rs + 's' : '')
+  const h = Math.floor(m / 60)
+  const rm = m % 60
+  return h + 'h' + (rm ? ' ' + rm + 'm' : '')
+}
+
+function fmtRelTime(iso: string): string {
+  if (!iso) return ''
+  const t = new Date(iso).getTime()
+  const diff = Date.now() - t
+  const m = Math.round(diff / 60000)
+  if (m < 1) return 'just now'
+  if (m < 60) return m + 'm ago'
+  const h = Math.round(m / 60)
+  if (h < 24) return h + 'h ago'
+  const d = Math.round(h / 24)
+  if (d < 7) return d + 'd ago'
+  return new Date(iso).toLocaleDateString('en-AU', { day: '2-digit', month: 'short' })
+}
+
+export function CallsKpi({ config, data }: any) {
+  const total    = Number(data?.total || 0)
+  const answered = Number(data?.answered || 0)
+  const missed   = Number(data?.missed_inbound || 0)
+  const talk     = Number(data?.talk_seconds || 0)
+  const tiles = [
+    { label: 'Total',    value: fmtCount(total),         color: T.text  },
+    { label: 'Answered', value: fmtCount(answered),      color: T.green },
+    { label: 'Missed',   value: fmtCount(missed),        color: missed > 0 ? T.red : T.text3 },
+    { label: 'Talk',     value: fmtTalkTime(talk),       color: T.blue  },
+  ]
+  return (
+    <div style={{display:'flex', flexDirection:'column', height:'100%'}}>
+      <div style={{display:'flex', alignItems:'baseline', gap:8, marginBottom:10}}>
+        <div style={{fontSize:10, color:T.text3, textTransform:'uppercase', letterSpacing:'0.05em', fontWeight:600}}>{config?.title || 'Calls'}</div>
+        {config?.extension && <div style={{fontSize:9, color:T.text3, fontFamily:'monospace'}}>ext {config.extension}</div>}
+      </div>
+      <div style={{display:'grid', gridTemplateColumns:'repeat(4, 1fr)', gap:8, flex:1}}>
+        {tiles.map(t => (
+          <div key={t.label} style={{background:T.bg3, borderRadius:6, padding:'8px 10px'}}>
+            <div style={{fontSize:9, color:T.text3, textTransform:'uppercase', letterSpacing:'0.04em'}}>{t.label}</div>
+            <div style={{fontSize:18, fontWeight:700, fontVariantNumeric:'tabular-nums', color:t.color, lineHeight:1.2}}>{t.value}</div>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+export function CallsAgentLeaderboard({ config, data }: any) {
+  const items: { name: string, extension: string, talk_seconds: number, total: number }[] = data?.agents || []
+  const max = Math.max(1, ...items.map(i => i.talk_seconds))
+  return (
+    <div style={{display:'flex', flexDirection:'column', height:'100%'}}>
+      <div style={{fontSize:10, color:T.text3, textTransform:'uppercase', letterSpacing:'0.05em', fontWeight:600, marginBottom:8}}>{config?.title || 'Top agents'}</div>
+      <div style={{flex:1, overflow:'auto'}}>
+        {items.length === 0 ? (
+          <div style={{color:T.text3, fontSize:11, textAlign:'center', padding:20}}>No call data for this period</div>
+        ) : items.map((a, i) => (
+          <div key={i} style={{marginBottom:7}}>
+            <div style={{display:'flex', justifyContent:'space-between', fontSize:11, marginBottom:2}}>
+              <span style={{color:T.text}}>
+                <span style={{color:T.text3, marginRight:6}}>{i+1}.</span>{a.name}
+                <span style={{color:T.text3, marginLeft:6, fontFamily:'monospace', fontSize:10}}>ext {a.extension}</span>
+              </span>
+              <span style={{color:T.text, fontVariantNumeric:'tabular-nums', fontWeight:500}}>
+                {fmtTalkTime(a.talk_seconds)}
+                <span style={{color:T.text3, marginLeft:6, fontSize:10}}>{a.total} calls</span>
+              </span>
+            </div>
+            <div style={{height:3, background:T.bg3, borderRadius:2, overflow:'hidden'}}>
+              <div style={{height:'100%', width:`${(a.talk_seconds/max)*100}%`, background:T.blue, opacity:0.7}}/>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+export function CallsMissedRecent({ config, data }: any) {
+  const items: { id: string, call_date: string, external_number: string, caller_name: string | null, agent_ext: string | null }[] = data?.calls || []
+  return (
+    <div style={{display:'flex', flexDirection:'column', height:'100%'}}>
+      <div style={{fontSize:10, color:T.text3, textTransform:'uppercase', letterSpacing:'0.05em', fontWeight:600, marginBottom:8}}>{config?.title || 'Missed calls'}</div>
+      <div style={{flex:1, overflow:'auto'}}>
+        {items.length === 0 ? (
+          <div style={{color:T.text3, fontSize:11, textAlign:'center', padding:20}}>No missed calls</div>
+        ) : items.map((c, i) => (
+          <a key={c.id || i} href={`/calls?id=${c.id}`} style={{display:'block', padding:'6px 0', borderBottom:`1px solid ${T.border}`, textDecoration:'none'}}>
+            <div style={{display:'flex', justifyContent:'space-between', alignItems:'baseline', gap:8}}>
+              <div style={{fontSize:11, color:T.text, flex:1, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis'}}>
+                <span style={{color:T.red, marginRight:6}}>●</span>
+                {c.caller_name || c.external_number || 'Unknown'}
+              </div>
+              <div style={{fontSize:10, color:T.text3, whiteSpace:'nowrap'}}>{fmtRelTime(c.call_date)}</div>
+            </div>
+            {(c.agent_ext || c.external_number) && (
+              <div style={{fontSize:9, color:T.text3, marginTop:2, fontFamily:'monospace'}}>
+                {c.external_number}{c.agent_ext ? ` → ext ${c.agent_ext}` : ''}
+              </div>
+            )}
+          </a>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+export function TodosKpi({ config, data }: any) {
+  const tiles = [
+    { label: 'Open',      value: fmtCount(data?.openTotal),       color: T.text  },
+    { label: 'Critical',  value: fmtCount(data?.critical),        color: Number(data?.critical || 0) > 0 ? T.red : T.text3 },
+    { label: 'Completed', value: fmtCount(data?.completedInPeriod), color: T.green },
+  ]
+  return (
+    <div style={{display:'flex', flexDirection:'column', height:'100%'}}>
+      <div style={{display:'flex', alignItems:'baseline', gap:8, marginBottom:10}}>
+        <div style={{fontSize:10, color:T.text3, textTransform:'uppercase', letterSpacing:'0.05em', fontWeight:600}}>{config?.title || 'To-Dos'}</div>
+        {config?.manager && <div style={{fontSize:9, color:T.text3}}>{config.manager}</div>}
+      </div>
+      <div style={{display:'grid', gridTemplateColumns:'repeat(3, 1fr)', gap:8, flex:1}}>
+        {tiles.map(t => (
+          <div key={t.label} style={{background:T.bg3, borderRadius:6, padding:'8px 10px'}}>
+            <div style={{fontSize:9, color:T.text3, textTransform:'uppercase', letterSpacing:'0.04em'}}>{t.label}</div>
+            <div style={{fontSize:22, fontWeight:700, fontVariantNumeric:'tabular-nums', color:t.color, lineHeight:1.2}}>{t.value}</div>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+export function TodosManagerScorecard({ config, data }: any) {
+  const items: { manager: string, openTotal: number, critical: number, completedInPeriod: number, avgAgeDays: number | null }[] = data?.managers || []
+  const max = Math.max(1, ...items.map(m => m.openTotal))
+  return (
+    <div style={{display:'flex', flexDirection:'column', height:'100%'}}>
+      <div style={{fontSize:10, color:T.text3, textTransform:'uppercase', letterSpacing:'0.05em', fontWeight:600, marginBottom:8}}>{config?.title || 'Manager scorecard'}</div>
+      <div style={{flex:1, overflow:'auto'}}>
+        {items.length === 0 ? (
+          <div style={{color:T.text3, fontSize:11, textAlign:'center', padding:20}}>No manager data</div>
+        ) : items.map((m, i) => (
+          <div key={i} style={{marginBottom:8, padding:'6px 0', borderBottom:`1px solid ${T.border}`}}>
+            <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', fontSize:11, marginBottom:3}}>
+              <span style={{color:T.text, fontWeight:500}}>{m.manager}</span>
+              <span style={{display:'flex', alignItems:'center', gap:8}}>
+                {m.critical > 0 && <span style={{fontSize:9, padding:'1px 6px', borderRadius:3, background:`${T.red}20`, color:T.red, border:`1px solid ${T.red}40`, fontFamily:'monospace'}}>{m.critical} critical</span>}
+                <span style={{color:T.text, fontVariantNumeric:'tabular-nums', fontWeight:600}}>{m.openTotal}</span>
+                <span style={{color:T.text3, fontSize:9}}>open</span>
+              </span>
+            </div>
+            <div style={{height:3, background:T.bg3, borderRadius:2, overflow:'hidden', marginBottom:3}}>
+              <div style={{height:'100%', width:`${(m.openTotal/max)*100}%`, background:m.critical > 0 ? T.amber : T.green, opacity:0.7}}/>
+            </div>
+            <div style={{display:'flex', justifyContent:'space-between', fontSize:9, color:T.text3, fontFamily:'monospace'}}>
+              <span>{m.completedInPeriod} done in period</span>
+              {m.avgAgeDays !== null && <span>avg age {Math.round(m.avgAgeDays)}d</span>}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+export function StockHealthKpi({ config, data }: any) {
+  const tiles = [
+    { label: 'Stock value', value: fmtMoney(data?.stockValue, true), color: T.blue,  hint: `${fmtCount(data?.totalSkus)} SKUs` },
+    { label: 'Low stock',   value: fmtCount(data?.lowStockCount),     color: Number(data?.lowStockCount || 0) > 0 ? T.amber : T.text3, hint: 'below reorder' },
+    { label: 'Out',         value: fmtCount(data?.outOfStockCount),   color: Number(data?.outOfStockCount || 0) > 0 ? T.red   : T.text3, hint: 'zero on hand' },
+    { label: 'Dead 180d',   value: fmtMoney(data?.deadStock180dValue, true), color: Number(data?.deadStock180dValue || 0) > 0 ? T.red : T.text3, hint: `${fmtCount(data?.deadStock180dCount)} items` },
+  ]
+  return (
+    <div style={{display:'flex', flexDirection:'column', height:'100%'}}>
+      <div style={{fontSize:10, color:T.text3, textTransform:'uppercase', letterSpacing:'0.05em', fontWeight:600, marginBottom:10}}>{config?.title || 'Stock health'}</div>
+      <div style={{display:'grid', gridTemplateColumns:'repeat(4, 1fr)', gap:8, flex:1}}>
+        {tiles.map(t => (
+          <div key={t.label} style={{background:T.bg3, borderRadius:6, padding:'8px 10px'}}>
+            <div style={{fontSize:9, color:T.text3, textTransform:'uppercase', letterSpacing:'0.04em'}}>{t.label}</div>
+            <div style={{fontSize:16, fontWeight:700, fontVariantNumeric:'tabular-nums', color:t.color, lineHeight:1.2, marginTop:2}}>{t.value}</div>
+            <div style={{fontSize:9, color:T.text3, marginTop:2}}>{t.hint}</div>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+export function StockCriticalReorder({ config, data }: any) {
+  const items: { sku: string, name: string, qtyOnHand: number, qtyOnOrder: number, daysOfCover: number | null, supplier: string | null }[] = data?.items || []
+  return (
+    <div style={{display:'flex', flexDirection:'column', height:'100%'}}>
+      <div style={{display:'flex', alignItems:'baseline', justifyContent:'space-between', marginBottom:8}}>
+        <div style={{fontSize:10, color:T.text3, textTransform:'uppercase', letterSpacing:'0.05em', fontWeight:600}}>{config?.title || 'Critical reorder'}</div>
+        <div style={{fontSize:9, color:T.text3, fontFamily:'monospace'}}>within {config?.days || 30}d</div>
+      </div>
+      <div style={{flex:1, overflow:'auto'}}>
+        {items.length === 0 ? (
+          <div style={{color:T.green, fontSize:11, textAlign:'center', padding:20}}>Nothing critical</div>
+        ) : (
+          <table style={{width:'100%', borderCollapse:'collapse'}}>
+            <thead>
+              <tr style={{borderBottom:`1px solid ${T.border}`}}>
+                <th style={{textAlign:'left',  fontSize:9, color:T.text3, padding:'4px 6px', fontWeight:600, textTransform:'uppercase', letterSpacing:'0.04em'}}>SKU</th>
+                <th style={{textAlign:'left',  fontSize:9, color:T.text3, padding:'4px 6px', fontWeight:600, textTransform:'uppercase', letterSpacing:'0.04em'}}>Name</th>
+                <th style={{textAlign:'right', fontSize:9, color:T.text3, padding:'4px 6px', fontWeight:600, textTransform:'uppercase', letterSpacing:'0.04em'}}>OH</th>
+                <th style={{textAlign:'right', fontSize:9, color:T.text3, padding:'4px 6px', fontWeight:600, textTransform:'uppercase', letterSpacing:'0.04em'}}>OO</th>
+                <th style={{textAlign:'right', fontSize:9, color:T.text3, padding:'4px 6px', fontWeight:600, textTransform:'uppercase', letterSpacing:'0.04em'}}>Cover</th>
+              </tr>
+            </thead>
+            <tbody>
+              {items.map((it, i) => {
+                const dc = it.daysOfCover
+                const dcColor = dc === null ? T.text3 : dc < 7 ? T.red : dc < 14 ? T.amber : T.text2
+                return (
+                  <tr key={i} style={{borderBottom:`1px solid ${T.border}`}}>
+                    <td style={{fontSize:10, padding:'4px 6px', color:T.text2, fontFamily:'monospace'}}>{it.sku}</td>
+                    <td style={{fontSize:10, padding:'4px 6px', color:T.text, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis', maxWidth:200}}>{it.name}</td>
+                    <td style={{fontSize:10, padding:'4px 6px', color:T.text, fontVariantNumeric:'tabular-nums', textAlign:'right'}}>{it.qtyOnHand}</td>
+                    <td style={{fontSize:10, padding:'4px 6px', color:T.text2, fontVariantNumeric:'tabular-nums', textAlign:'right'}}>{it.qtyOnOrder || ''}</td>
+                    <td style={{fontSize:10, padding:'4px 6px', color:dcColor, fontVariantNumeric:'tabular-nums', textAlign:'right', fontWeight:500}}>{dc === null ? '—' : Math.round(dc) + 'd'}</td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        )}
+      </div>
+    </div>
+  )
+}
+
+export function StockDeadTop({ config, data }: any) {
+  const items: { sku: string, name: string, stockValue: number, qtyOnHand: number, daysSinceLastSold: number | null }[] = data?.items || []
+  const max = Math.max(1, ...items.map(i => i.stockValue))
+  return (
+    <div style={{display:'flex', flexDirection:'column', height:'100%'}}>
+      <div style={{display:'flex', alignItems:'baseline', justifyContent:'space-between', marginBottom:8}}>
+        <div style={{fontSize:10, color:T.text3, textTransform:'uppercase', letterSpacing:'0.05em', fontWeight:600}}>{config?.title || 'Dead stock'}</div>
+        <div style={{fontSize:9, color:T.text3}}>180d+ no sales</div>
+      </div>
+      <div style={{flex:1, overflow:'auto'}}>
+        {items.length === 0 ? (
+          <div style={{color:T.green, fontSize:11, textAlign:'center', padding:20}}>No dead stock</div>
+        ) : items.map((it, i) => (
+          <div key={i} style={{marginBottom:7}}>
+            <div style={{display:'flex', justifyContent:'space-between', fontSize:11, marginBottom:2}}>
+              <span style={{color:T.text, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis', maxWidth:'70%'}}>
+                <span style={{color:T.text3, marginRight:6, fontFamily:'monospace', fontSize:10}}>{it.sku}</span>
+                {it.name}
+              </span>
+              <span style={{color:T.red, fontVariantNumeric:'tabular-nums', fontWeight:500}}>{fmtMoney(it.stockValue, true)}</span>
+            </div>
+            <div style={{height:3, background:T.bg3, borderRadius:2, overflow:'hidden', marginBottom:2}}>
+              <div style={{height:'100%', width:`${(it.stockValue/max)*100}%`, background:T.red, opacity:0.6}}/>
+            </div>
+            <div style={{fontSize:9, color:T.text3, fontFamily:'monospace'}}>
+              {it.qtyOnHand} on hand{it.daysSinceLastSold ? ` · last sold ${it.daysSinceLastSold}d ago` : ' · never sold'}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+export function TopActiveLeads({ config, data }: any) {
+  const items: { name: string, rep: string, value: number, status: string, url: string | null }[] = data?.leads || []
+  const STATUS_COLOURS: Record<string, string> = {
+    'Quote Sent': T.blue, '3 Days': T.blue, '14 Days': T.amber,
+    'Follow Up Done': T.pink, 'On Hold': T.amber, 'Quote On Hold': T.amber,
+    'Not Done': T.text3, 'Quote Not Issued': '#ff6d3b', 'RLMNA': '#007eb5',
+  }
+  return (
+    <div style={{display:'flex', flexDirection:'column', height:'100%'}}>
+      <div style={{fontSize:10, color:T.text3, textTransform:'uppercase', letterSpacing:'0.05em', fontWeight:600, marginBottom:8}}>{config?.title || 'Top active leads'}</div>
+      <div style={{flex:1, overflow:'auto'}}>
+        {items.length === 0 ? (
+          <div style={{color:T.text3, fontSize:11, textAlign:'center', padding:20}}>No open quotes in this period</div>
+        ) : items.map((l, i) => {
+          const Tag = (
+            <span style={{fontSize:9, padding:'1px 6px', borderRadius:3, background:`${STATUS_COLOURS[l.status] || T.text3}20`, color:STATUS_COLOURS[l.status] || T.text3, border:`1px solid ${STATUS_COLOURS[l.status] || T.text3}40`, fontFamily:'monospace', whiteSpace:'nowrap'}}>{l.status}</span>
+          )
+          const Row = (
+            <div style={{padding:'6px 0', borderBottom:`1px solid ${T.border}`}}>
+              <div style={{display:'flex', justifyContent:'space-between', alignItems:'baseline', gap:8, marginBottom:2}}>
+                <div style={{fontSize:11, color:T.text, flex:1, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis'}}>{l.name}</div>
+                <div style={{fontSize:11, color:T.text, fontVariantNumeric:'tabular-nums', fontWeight:500, whiteSpace:'nowrap'}}>{fmtMoney(l.value, true)}</div>
+              </div>
+              <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', gap:8}}>
+                <div style={{fontSize:10, color:T.text3}}>{l.rep}</div>
+                {Tag}
+              </div>
+            </div>
+          )
+          return l.url
+            ? <a key={i} href={l.url} target="_blank" rel="noopener noreferrer" style={{display:'block', textDecoration:'none', color:'inherit'}}>{Row}</a>
+            : <div key={i}>{Row}</div>
+        })}
+      </div>
+    </div>
+  )
+}
+
+export function DistributorTrendMini({ config, data }: any) {
+  const series: { label: string, value: number }[] = data?.series || []
+  const total = series.reduce((s, p) => s + p.value, 0)
+  const last  = series[series.length - 1]?.value || 0
+  const max   = Math.max(1, ...series.map(p => p.value))
+  // Build SVG sparkline polyline (84 wide × 28 tall — fits in tile)
+  const width = 240
+  const height = 36
+  const pad = 2
+  const points = series.length > 1
+    ? series.map((p, i) => {
+        const x = pad + (i / (series.length - 1)) * (width - 2 * pad)
+        const y = height - pad - (p.value / max) * (height - 2 * pad)
+        return `${x},${y}`
+      }).join(' ')
+    : ''
+  return (
+    <div style={{display:'flex', flexDirection:'column', height:'100%', justifyContent:'space-between'}}>
+      <div>
+        <div style={{fontSize:10, color:T.text3, textTransform:'uppercase', letterSpacing:'0.05em', fontWeight:600}}>{config?.title || data?.distributor || 'Distributor'}</div>
+        {config?.title && data?.distributor && <div style={{fontSize:10, color:T.text3, marginTop:2}}>{data.distributor}</div>}
+      </div>
+      <div>
+        <div style={{display:'flex', alignItems:'baseline', justifyContent:'space-between', gap:8, marginBottom:4}}>
+          <div style={{fontSize:22, fontWeight:700, fontVariantNumeric:'tabular-nums', color:T.text, lineHeight:1}}>{fmtMoney(last, true)}</div>
+          <div style={{fontSize:10, color:T.text3, fontFamily:'monospace'}}>{fmtMoney(total, true)} 12mo</div>
+        </div>
+        {points && (
+          <svg width="100%" height={height} viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none" style={{display:'block'}}>
+            <polyline points={points} fill="none" stroke={T.blue} strokeWidth="1.5" strokeLinejoin="round" strokeLinecap="round"/>
+            {series.map((p, i) => {
+              const x = pad + (i / Math.max(1, series.length - 1)) * (width - 2 * pad)
+              const y = height - pad - (p.value / max) * (height - 2 * pad)
+              return <circle key={i} cx={x} cy={y} r="1.5" fill={i === series.length - 1 ? T.blue : 'transparent'}/>
+            })}
+          </svg>
+        )}
+      </div>
+    </div>
+  )
+}
+
+export function ReportsQuickLaunch({ config, data }: any) {
+  const items: { type: string, label: string, description: string }[] = data?.items || []
+  return (
+    <div style={{display:'flex', flexDirection:'column', height:'100%'}}>
+      <div style={{fontSize:10, color:T.text3, textTransform:'uppercase', letterSpacing:'0.05em', fontWeight:600, marginBottom:8}}>{config?.title || 'Generate a report'}</div>
+      <div style={{flex:1, overflow:'auto'}}>
+        {items.length === 0 ? (
+          <div style={{color:T.text3, fontSize:11, textAlign:'center', padding:20}}>No reports available for your role</div>
+        ) : items.map((r, i) => (
+          <a key={i} href={`/reports?type=${encodeURIComponent(r.type)}`}
+             style={{display:'block', padding:'8px 10px', marginBottom:6, background:T.bg3, borderRadius:6, textDecoration:'none', border:`1px solid ${T.border}`}}>
+            <div style={{fontSize:12, color:T.text, fontWeight:500, marginBottom:2}}>{r.label}</div>
+            <div style={{fontSize:10, color:T.text3, lineHeight:1.4}}>{r.description}</div>
+          </a>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+export function VehicleSalesKpi({ config, data }: any) {
+  const total      = Number(data?.total_ex_gst || 0)
+  const classified = Number(data?.classified_total || 0)
+  const unclass    = Number(data?.unclassified_total || 0)
+  const invCount   = Number(data?.invoice_count || 0)
+  const classPct   = total > 0 ? classified / total : 0
+  const tiles = [
+    { label: 'Total ex GST',  value: fmtMoney(total, true),      color: T.text },
+    { label: 'Classified',    value: fmtMoney(classified, true), color: T.green },
+    { label: 'Unclassified',  value: fmtMoney(unclass, true),    color: unclass > 0 ? T.amber : T.text3 },
+    { label: 'Class. rate',   value: fmtPct(classPct),           color: classPct >= 0.95 ? T.green : classPct >= 0.8 ? T.amber : T.red },
+  ]
+  return (
+    <div style={{display:'flex', flexDirection:'column', height:'100%'}}>
+      <div style={{display:'flex', alignItems:'baseline', justifyContent:'space-between', marginBottom:10}}>
+        <div style={{fontSize:10, color:T.text3, textTransform:'uppercase', letterSpacing:'0.05em', fontWeight:600}}>{config?.title || 'Vehicle sales'}</div>
+        <div style={{fontSize:9, color:T.text3, fontFamily:'monospace'}}>{invCount} invoices</div>
+      </div>
+      <div style={{display:'grid', gridTemplateColumns:'repeat(4, 1fr)', gap:8, flex:1}}>
+        {tiles.map(t => (
+          <div key={t.label} style={{background:T.bg3, borderRadius:6, padding:'8px 10px'}}>
+            <div style={{fontSize:9, color:T.text3, textTransform:'uppercase', letterSpacing:'0.04em'}}>{t.label}</div>
+            <div style={{fontSize:16, fontWeight:700, fontVariantNumeric:'tabular-nums', color:t.color, lineHeight:1.2, marginTop:2}}>{t.value}</div>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 // Registry — dashboard uses this to pick the renderer for a widget type
 export const RENDERERS: Record<string, React.ComponentType<any>> = {
-  kpi_number:              KpiNumber,
-  kpi_comparison:          KpiComparison,
-  progress_target:         ProgressTarget,
-  quotes_received:         QuotesReceived,
-  sales_scorecard:         SalesScorecard,
-  pipeline_value:          PipelineValue,
-  line_chart:              LineChart,
-  bar_chart:               BarChart,
-  donut_chart:             DonutChart,
-  distributor_total:       DistributorTotal,
-  top_distributors:        TopDistributors,
-  job_status_breakdown:    JobStatusBreakdown,
-  supplier_invoice_queue:  SupplierInvoiceQueue,
-  recent_activity:         RecentActivity,
-  leaderboard:             Leaderboard,
-  markdown_note:           MarkdownNote,
+  kpi_number:                KpiNumber,
+  kpi_comparison:            KpiComparison,
+  progress_target:           ProgressTarget,
+  quotes_received:           QuotesReceived,
+  sales_scorecard:           SalesScorecard,
+  pipeline_value:            PipelineValue,
+  line_chart:                LineChart,
+  bar_chart:                 BarChart,
+  donut_chart:               DonutChart,
+  distributor_total:         DistributorTotal,
+  top_distributors:          TopDistributors,
+  job_status_breakdown:      JobStatusBreakdown,
+  supplier_invoice_queue:    SupplierInvoiceQueue,
+  recent_activity:           RecentActivity,
+  leaderboard:               Leaderboard,
+  markdown_note:             MarkdownNote,
+  // New widgets
+  calls_kpi:                 CallsKpi,
+  calls_agent_leaderboard:   CallsAgentLeaderboard,
+  calls_missed_recent:       CallsMissedRecent,
+  todos_kpi:                 TodosKpi,
+  todos_manager_scorecard:   TodosManagerScorecard,
+  stock_health_kpi:          StockHealthKpi,
+  stock_critical_reorder:    StockCriticalReorder,
+  stock_dead_top:            StockDeadTop,
+  top_active_leads:          TopActiveLeads,
+  distributor_trend_mini:    DistributorTrendMini,
+  reports_quick_launch:      ReportsQuickLaunch,
+  vehicle_sales_kpi:         VehicleSalesKpi,
 }

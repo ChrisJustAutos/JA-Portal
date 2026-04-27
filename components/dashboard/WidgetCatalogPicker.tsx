@@ -13,19 +13,25 @@ const T = {
   accent:'#4f8ef7',
 }
 
-const CATEGORY_ORDER = ['metric','sales','chart','distributor','ops','activity','misc']
+const CATEGORY_ORDER = ['metric','sales','calls','todos','inventory','distributor','chart','ops','vehicles','reports','activity','misc']
 const CATEGORY_LABELS: Record<string, string> = {
   metric:      'Metric tiles',
   sales:       'Sales',
-  chart:       'Charts',
+  calls:       'Phone calls',
+  todos:       'To-Dos',
+  inventory:   'Stock & inventory',
   distributor: 'Distributor',
+  chart:       'Charts',
   ops:         'Ops / jobs',
+  vehicles:    'Vehicle sales',
+  reports:     'Reports',
   activity:    'Activity',
   misc:        'Misc',
 }
 const CATEGORY_COLORS: Record<string, string> = {
   metric: T.blue, sales: T.teal, chart: T.purple, distributor: T.amber,
   ops: T.green, activity: T.pink, misc: T.text3,
+  calls: T.blue, todos: T.green, inventory: T.amber, vehicles: T.purple, reports: T.teal,
 }
 
 interface Props {
