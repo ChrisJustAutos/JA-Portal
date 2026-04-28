@@ -1,26 +1,39 @@
 // lib/activecampaign.ts
 // ActiveCampaign helper for the call follow-up sync worker.
 //
-// Three operations:
-//   1. findContactByPhone(phone) — searches AC by phone with strict
-//      verification that the matched contact's phone digits actually
-//      equal the query phone digits. Required because AC's filters[phone]
-//      is partial-match and returns false positives.
-//   2. createContact(input) — creates a new AC contact with the sales
-//      rep set as the owner, when no existing contact matches.
-//   3. postNoteAndTag(contactId, noteBody) — adds a contact note and
-//      applies the follow-up tag (so AC automations can trigger off it).
+// Operations exposed to the cron worker:
+//   1. resolveContactForCall(input) — find existing contact by phone, email,
+//      or name (in that order), or create a new one with rep as owner.
+//      Returns full profile (name, email, phone, postcode from custom field)
+//      so Monday can populate the lead with proper data.
+//   2. postNoteAndTag(contactId, noteBody) — adds a contact note and applies
+//      the follow-up tag (so AC automations can trigger off it).
 //
-// Why the tag matters: AC is the automation hub here, not the source of
-// truth. The tag 'call-summary-pushed' is the trigger signal for AC
-// automations like "send rep a Slack DM", "fire a follow-up email if
-// no human contact in 7 days", etc.
+// Key design points:
+//   - AC's filters[phone] is a PARTIAL match and matches everything for empty
+//     queries. We MUST verify any matched contact's phone digits actually
+//     equal the query phone digits. This bug caused contact 30121 to be
+//     mis-attributed to 26 different real customers in production.
+//   - Search order: phone → email → name. First verified match wins.
+//     Phone is most reliable; email next; name last (since reps share first
+//     names with customers occasionally and Claude can confuse them).
+//   - Postcode lives in an AC custom field. Field name(s) configurable via
+//     ACTIVECAMPAIGN_POSTCODE_FIELD_NAMES env var (comma-separated).
+//   - When found by email/name and phone is missing, BACKFILL the phone.
+//     Don't overwrite existing values — only fill empties. Same for email.
+//   - When no match and we create a new contact, set owner to the rep
+//     (via ACTIVECAMPAIGN_OWNER_MAP). Customer name extracted from Claude's
+//     who_what; email from Claude's email field if present.
 //
-// Env: ACTIVECAMPAIGN_API_URL (e.g. 'https://justautosmechanical.api-us1.com')
-//      ACTIVECAMPAIGN_API_KEY  (the v3 API key from Settings → Developer)
-//      ACTIVECAMPAIGN_FOLLOWUP_TAG (default 'call-summary-pushed')
-//      ACTIVECAMPAIGN_OWNER_MAP    (JSON map of agent name → AC user ID,
-//                                   e.g. '{"Kaleb":12,"Dom S":15}')
+// Env:
+//   ACTIVECAMPAIGN_API_URL              e.g. 'https://justautosmechanical.api-us1.com'
+//   ACTIVECAMPAIGN_API_KEY              v3 API key from Settings → Developer
+//   ACTIVECAMPAIGN_FOLLOWUP_TAG         default 'call-summary-pushed'
+//   ACTIVECAMPAIGN_OWNER_MAP            JSON object mapping agent_name → AC user_id
+//                                       e.g. '{"Kaleb": 12, "Dom S": 15}'
+//   ACTIVECAMPAIGN_POSTCODE_FIELD_NAMES comma-separated list of AC custom-field
+//                                       perstag/title names that hold postcode.
+//                                       Default 'POSTCODE,Postcode,Postal Code,Zip'.
 
 const TAG_NAME = process.env.ACTIVECAMPAIGN_FOLLOWUP_TAG || 'call-summary-pushed'
 
@@ -50,11 +63,8 @@ async function acJson<T = any>(path: string, opts: RequestInit = {}): Promise<T>
 }
 
 // ── Phone normalisation ──────────────────────────────────────────────────
-// AC stores phone numbers however the user typed them in. We normalise to
-// digits-only (after stripping +61 / leading 0) for SAFE comparison.
-// IMPORTANT: AC's filters[phone] is partial-match, not exact, and matches
-// EVERYTHING when the value is empty. We MUST verify any matched contact's
-// phone digits actually equal the query phone digits before accepting it.
+// AU mobiles are 9 digits after stripping leading 0 / +61. We compare on
+// digits-only (canonical form: no leading 0, no country code).
 
 function normalisePhone(raw: string | null | undefined): string {
   const d = (raw || '').replace(/\D/g, '')
@@ -63,15 +73,15 @@ function normalisePhone(raw: string | null | undefined): string {
   return d
 }
 
-// Returns the digits to use as the search query (8+ chars to avoid false
-// positives like searching "61" matching everything).
+// 8+ digits required to safely search — anything shorter risks matching every
+// contact in the database via AC's partial-match filter.
 function searchableDigits(raw: string | null | undefined): string | null {
   const d = normalisePhone(raw)
-  if (d.length < 8) return null   // Anything under 8 digits is unsafe to search
+  if (d.length < 8) return null
   return d
 }
 
-// ── Contact lookup ──
+// ── Public types ─────────────────────────────────────────────────────────
 
 export interface ACContact {
   id: number
@@ -79,62 +89,161 @@ export interface ACContact {
   firstName: string | null
   lastName: string | null
   phone: string | null
+  postcode: string | null      // From custom field, looked up separately
 }
 
-/**
- * Search AC for a contact whose phone matches `rawPhone`.
- *
- * Strategy:
- *   1. Search using digits-only with `search=` (broad query).
- *   2. For each returned contact, verify its phone field's digits match
- *      our query's digits. Any contact whose digits don't match is rejected.
- *   3. Returns the first verified match, or null.
- *
- * The verification step is non-negotiable. AC's search/filter parameters
- * are loose (partial match) and will happily return the same contact for
- * any number of unrelated queries — see issue with contact 30121 acting
- * as a catch-all match for 26 different real customer numbers.
- */
-export async function findContactByPhone(rawPhone: string): Promise<ACContact | null> {
+// ── Postcode custom field lookup ─────────────────────────────────────────
+// AC custom fields live separately from core contact fields. We fetch them
+// per-contact and find postcode by matching the field's title or perstag
+// against a configured list.
+
+interface ACFieldValue {
+  field: string                // numeric ID as string
+  value: string | null
+}
+
+let cachedPostcodeFieldIds: number[] | null = null
+
+async function getPostcodeFieldIds(): Promise<number[]> {
+  if (cachedPostcodeFieldIds !== null) return cachedPostcodeFieldIds
+
+  const namesEnv = process.env.ACTIVECAMPAIGN_POSTCODE_FIELD_NAMES
+    || 'POSTCODE,Postcode,Postal Code,Zip'
+  const names = namesEnv.split(',').map(s => s.trim().toLowerCase()).filter(Boolean)
+
+  // Pull all contact custom fields. AC's /fields endpoint returns these.
+  // Cap at 100 — a Just Autos AC tenant won't have more than that.
+  try {
+    const data = await acJson<{ fields: any[] }>(`/fields?limit=100`)
+    const fields = data.fields || []
+    const matches: number[] = []
+    for (const f of fields) {
+      const title = String(f.title || '').toLowerCase()
+      const perstag = String(f.perstag || '').toLowerCase()
+      if (names.some(n => title === n || perstag === n)) {
+        matches.push(Number(f.id))
+      }
+    }
+    cachedPostcodeFieldIds = matches
+    if (matches.length === 0) {
+      console.warn(`[ac] No postcode custom field found. Tried: ${names.join(', ')}. Set ACTIVECAMPAIGN_POSTCODE_FIELD_NAMES to override.`)
+    }
+    return matches
+  } catch (e: any) {
+    console.warn('[ac] failed to look up postcode field:', e?.message)
+    cachedPostcodeFieldIds = []
+    return []
+  }
+}
+
+async function fetchPostcodeForContact(contactId: number): Promise<string | null> {
+  const fieldIds = await getPostcodeFieldIds()
+  if (fieldIds.length === 0) return null
+
+  try {
+    const data = await acJson<{ fieldValues: ACFieldValue[] }>(`/contacts/${contactId}/fieldValues`)
+    const values = data.fieldValues || []
+    for (const v of values) {
+      if (fieldIds.includes(Number(v.field)) && v.value) {
+        const trimmed = String(v.value).trim()
+        if (trimmed) return trimmed
+      }
+    }
+  } catch (e: any) {
+    console.warn(`[ac] failed to fetch field values for contact ${contactId}:`, e?.message)
+  }
+  return null
+}
+
+// ── Search by phone ──────────────────────────────────────────────────────
+
+async function findByPhone(rawPhone: string): Promise<ACContact | null> {
   const queryDigits = searchableDigits(rawPhone)
   if (!queryDigits) return null
 
+  // Use the broad `search` parameter (matches across phone, name, email).
+  // We then VERIFY the matched contact's phone digits actually equal our
+  // query digits, rejecting any loose matches (which is how the 30121 bug
+  // happened).
   const data = await acJson<{ contacts: any[] }>(
     `/contacts?search=${encodeURIComponent(queryDigits)}&limit=20`,
   )
   const contacts = data.contacts || []
-  if (contacts.length === 0) return null
 
-  // VERIFY: only accept a contact whose phone digits actually match
-  // the query digits. AC may return loosely-matched results (e.g. matched
-  // on email, name, or another field), or return EVERY contact when the
-  // search is too short / loose.
   for (const c of contacts) {
-    const candidatePhone = normalisePhone(c.phone)
-    if (candidatePhone === queryDigits) {
-      return mapContact(c)
+    const candidate = normalisePhone(c.phone)
+    if (candidate === queryDigits) {
+      return mapContactWithoutPostcode(c)
     }
-    // AC sometimes stores the number in a custom field or in `phone` with
-    // formatting. Accept if the candidate's phone digits END with our
-    // query digits or vice versa, but ONLY if both are at least 8 digits.
+    // Accept end-anchored partial matches if both sides are full-length
+    // (handles minor formatting like extra digits or short variants).
     if (
-      candidatePhone.length >= 8 &&
-      (candidatePhone.endsWith(queryDigits) || queryDigits.endsWith(candidatePhone))
+      candidate.length >= 8 &&
+      (candidate.endsWith(queryDigits) || queryDigits.endsWith(candidate))
     ) {
-      return mapContact(c)
+      return mapContactWithoutPostcode(c)
     }
   }
-
   return null
 }
 
-function mapContact(raw: any): ACContact {
+// ── Search by email ──────────────────────────────────────────────────────
+
+async function findByEmail(rawEmail: string): Promise<ACContact | null> {
+  const email = rawEmail.trim().toLowerCase()
+  if (!email || !email.includes('@')) return null
+
+  // AC's /contacts has email_like for partial. We want exact, so use that
+  // and verify on the way out.
+  const data = await acJson<{ contacts: any[] }>(
+    `/contacts?email=${encodeURIComponent(email)}&limit=5`,
+  )
+  const contacts = data.contacts || []
+
+  for (const c of contacts) {
+    const candidate = String(c.email || '').trim().toLowerCase()
+    if (candidate === email) {
+      return mapContactWithoutPostcode(c)
+    }
+  }
+  return null
+}
+
+// ── Search by name ───────────────────────────────────────────────────────
+
+async function findByName(firstName: string | null, lastName: string | null): Promise<ACContact | null> {
+  // Require BOTH first and last name to avoid matching too broadly. Common
+  // first names alone (e.g. "Matt") can match dozens of contacts.
+  if (!firstName || !lastName) return null
+  const fn = firstName.trim().toLowerCase()
+  const ln = lastName.trim().toLowerCase()
+  if (fn.length < 2 || ln.length < 2) return null
+
+  // Use the search param with both names. AC matches partial, so we verify.
+  const query = `${firstName} ${lastName}`.trim()
+  const data = await acJson<{ contacts: any[] }>(
+    `/contacts?search=${encodeURIComponent(query)}&limit=10`,
+  )
+  const contacts = data.contacts || []
+
+  for (const c of contacts) {
+    const cfn = String(c.firstName || '').trim().toLowerCase()
+    const cln = String(c.lastName || '').trim().toLowerCase()
+    if (cfn === fn && cln === ln) {
+      return mapContactWithoutPostcode(c)
+    }
+  }
+  return null
+}
+
+function mapContactWithoutPostcode(raw: any): ACContact {
   return {
     id: Number(raw.id),
     email: raw.email || null,
     firstName: raw.firstName || null,
     lastName: raw.lastName || null,
     phone: raw.phone || null,
+    postcode: null,   // filled in later by enrichment
   }
 }
 
@@ -155,7 +264,6 @@ function getOwnerMap(): Record<string, number> {
   const raw = process.env.ACTIVECAMPAIGN_OWNER_MAP || '{}'
   try {
     const parsed = JSON.parse(raw)
-    // Lowercase keys for case-insensitive lookup
     const normalised: Record<string, number> = {}
     for (const [k, v] of Object.entries(parsed)) {
       normalised[String(k).trim().toLowerCase()] = Number(v)
@@ -175,22 +283,49 @@ function ownerIdForAgent(agentName: string | null): number | null {
   return map[agentName.trim().toLowerCase()] || null
 }
 
+// ── Backfill helper ──────────────────────────────────────────────────────
+// When an existing contact is missing fields we have data for, fill them
+// in. Never overwrite existing values — only fill empties.
+
+async function backfillContact(
+  contactId: number,
+  current: ACContact,
+  newData: { phone: string | null; email: string | null },
+): Promise<ACContact> {
+  const updates: Record<string, string> = {}
+  if (!current.phone && newData.phone) updates.phone = newData.phone
+  if (!current.email && newData.email) updates.email = newData.email
+
+  if (Object.keys(updates).length === 0) return current
+
+  try {
+    const data = await acJson<{ contact: any }>(`/contacts/${contactId}`, {
+      method: 'PUT',
+      body: JSON.stringify({ contact: updates }),
+    })
+    console.log(`[ac] backfilled contact ${contactId}:`, Object.keys(updates).join(', '))
+    return {
+      ...current,
+      phone: updates.phone || current.phone,
+      email: updates.email || current.email,
+    }
+  } catch (e: any) {
+    console.warn(`[ac] backfill failed for contact ${contactId}:`, e?.message)
+    return current
+  }
+}
+
 // ── Create contact ───────────────────────────────────────────────────────
 
 interface CreateContactInput {
-  phone: string                          // The customer's phone (raw)
+  phone: string
   firstName: string | null
   lastName: string | null
   email: string | null
-  agentName: string | null               // Used to resolve owner via the map
-  noteForCreation: string | null         // Optional note explaining who created it
+  agentName: string | null
+  noteForCreation: string | null
 }
 
-/**
- * Create a new AC contact. Used when findContactByPhone returns null.
- * Sets the owner to the sales rep (if mapping exists) so AC automations
- * routed by owner fire correctly.
- */
 async function createContact(input: CreateContactInput): Promise<ACContact> {
   const ownerId = ownerIdForAgent(input.agentName)
 
@@ -202,24 +337,17 @@ async function createContact(input: CreateContactInput): Promise<ACContact> {
   if (input.email) contactPayload.email = input.email
   if (ownerId) contactPayload.owner = ownerId
 
-  // AC requires AT LEAST one of email/phone. If we don't have email,
-  // phone alone is fine. If we have neither, we shouldn't have got here.
   if (!input.email && !input.phone) {
     throw new Error('Cannot create AC contact without email or phone')
   }
 
-  // Note: AC's email field is required by their UI but the API allows
-  // creating phone-only contacts. They'll appear in AC with no email
-  // address and a "Phone" tab in the contact view.
   const created = await acJson<{ contact: any }>(`/contacts`, {
     method: 'POST',
     body: JSON.stringify({ contact: contactPayload }),
   })
 
-  const contact = mapContact(created.contact)
+  const contact = mapContactWithoutPostcode(created.contact)
 
-  // Add a note explaining the auto-creation, so reps in AC understand
-  // where this contact came from.
   if (input.noteForCreation) {
     try {
       await acJson(`/notes`, {
@@ -233,7 +361,6 @@ async function createContact(input: CreateContactInput): Promise<ACContact> {
         }),
       })
     } catch (e: any) {
-      // Non-fatal — the main note will be posted by the orchestrator.
       console.warn(`[ac] failed to post creation note for new contact ${contact.id}:`, e?.message)
     }
   }
@@ -241,7 +368,7 @@ async function createContact(input: CreateContactInput): Promise<ACContact> {
   return contact
 }
 
-// ── Note + tag ──
+// ── Note + tag ───────────────────────────────────────────────────────────
 
 /**
  * Post a note on a contact and apply the follow-up tag.
@@ -283,12 +410,11 @@ export async function postNoteAndTag(
       })
       tagApplied = true
     } catch (e: any) {
-      // Tag attachment failure is non-fatal — note is already posted.
-      // AC returns 422 if the contact already has the tag, which is fine.
+      // 422 = already had the tag, fine.
       if (!String(e?.message || '').includes('422')) {
         console.error(`[ac] failed to attach tag to contact ${contactId}:`, e?.message)
       } else {
-        tagApplied = true   // already had the tag → still counts
+        tagApplied = true
       }
     }
   }
@@ -296,23 +422,15 @@ export async function postNoteAndTag(
   return { noteId, tagApplied }
 }
 
-/**
- * Look up a tag by name; create it if it doesn't exist. Cached for the
- * lifetime of the worker process — AC tag IDs don't change.
- */
 let cachedTagId: number | null = null
 async function ensureTagExists(name: string): Promise<number | null> {
   if (cachedTagId !== null) return cachedTagId
-
-  // Search for the tag
   const data = await acJson<{ tags: any[] }>(`/tags?search=${encodeURIComponent(name)}&limit=20`)
   const exact = (data.tags || []).find(t => t.tag === name)
   if (exact) {
     cachedTagId = Number(exact.id)
     return cachedTagId
   }
-
-  // Create
   try {
     const created = await acJson<{ tag: { id: string } }>(`/tags`, {
       method: 'POST',
@@ -327,15 +445,12 @@ async function ensureTagExists(name: string): Promise<number | null> {
 }
 
 // ── Caller name parsing ──────────────────────────────────────────────────
-// We don't get a clean first-name / last-name from FreePBX. Best signal
-// is the Claude follow-up summary's `who_what` field, which usually
-// starts with "Sam Zayla with a 2020 ..." or "Brady with a turbocharged ...".
-// Extract the leading name(s) up to the first non-name word.
+// Best signal for customer name is the Claude follow-up summary's `who_what`
+// field. Usually starts with "Sam Zayla with a 2020..." or "Brady with...".
 
 export function parseNameFromWhoWhat(whoWhat: string | null): { firstName: string | null; lastName: string | null } {
   if (!whoWhat) return { firstName: null, lastName: null }
-  // "Sam Zayla with a..." → take everything before " with " or " calling " or " regarding "
-  const stopWords = [' with ', ' calling ', ' regarding ', ' about ', ' looking ', ' for ', ' inquiring ', ' asking ']
+  const stopWords = [' with ', ' calling ', ' regarding ', ' about ', ' looking ', ' for ', ' inquiring ', ' asking ', ' was ', ' wants ', ' had ']
   let name = whoWhat
   for (const sw of stopWords) {
     const i = name.toLowerCase().indexOf(sw)
@@ -346,11 +461,9 @@ export function parseNameFromWhoWhat(whoWhat: string | null): { firstName: strin
   }
   name = name.trim().replace(/[.,;].*$/, '').trim()
 
-  // Reject if the result looks like a sentence rather than a name
-  // (longer than 4 words, or starts with capitalised generic terms).
   const parts = name.split(/\s+/).filter(Boolean)
   if (parts.length === 0 || parts.length > 4) return { firstName: null, lastName: null }
-  if (/^(unknown|caller|customer|client|the|no)$/i.test(parts[0])) {
+  if (/^(unknown|caller|customer|client|the|no|a)$/i.test(parts[0])) {
     return { firstName: null, lastName: null }
   }
 
@@ -361,74 +474,131 @@ export function parseNameFromWhoWhat(whoWhat: string | null): { firstName: strin
 
 // ── High-level orchestrator ──────────────────────────────────────────────
 
-export interface SyncToACInput {
+export interface ResolveContactInput {
   phone: string | null
-  noteBody: string
-  agentName: string | null               // Used as owner if creating a new contact
-  whoWhat: string | null                 // Claude's "who" field — used to extract name
+  email: string | null               // From Claude's email field
+  whoWhat: string | null             // From Claude's who_what field — used to extract name
+  agentName: string | null           // For owner lookup if creating
 }
 
-export interface SyncToACResult {
-  action: 'noted' | 'created_and_noted' | 'skipped'
-  contactId: number | null
-  noteId: number | null
-  ownerSet: boolean                      // Whether owner was set on creation
+export interface ResolveContactResult {
+  contact: ACContact | null          // Includes postcode (from custom field)
+  action: 'found_phone' | 'found_email' | 'found_name' | 'created' | 'skipped'
   reason?: string
+  ownerSet: boolean                  // Whether owner was set on creation
+  backfilled: boolean                // Whether we updated an existing contact
 }
 
 /**
- * Top-level entry point: find or create AC contact by phone, post note + tag.
+ * Resolve an AC contact for a call: phone → email → name search,
+ * fall back to creating a new contact with rep as owner.
  *
- * Behaviour change vs previous version: when no existing contact matches,
- * we now CREATE one with the sales rep set as owner. Previously we'd skip,
- * which meant new leads never got into AC for automation triggers.
+ * After resolution, we always fetch the postcode custom field so
+ * downstream callers (Monday) get the full profile. This costs an
+ * extra API call per call, but it's cheap (one /fieldValues request).
  */
-export async function syncFollowUpToActiveCampaign(input: SyncToACInput): Promise<SyncToACResult> {
-  if (!input.phone) {
-    return { action: 'skipped', contactId: null, noteId: null, ownerSet: false, reason: 'no phone number on call' }
-  }
-
-  // 1. Try to find an existing contact
-  const existing = await findContactByPhone(input.phone)
-  if (existing) {
-    const { noteId } = await postNoteAndTag(existing.id, input.noteBody)
-    return { action: 'noted', contactId: existing.id, noteId, ownerSet: false }
-  }
-
-  // 2. No match — create a new AC contact with the rep as owner
+export async function resolveContactForCall(input: ResolveContactInput): Promise<ResolveContactResult> {
   const { firstName, lastName } = parseNameFromWhoWhat(input.whoWhat)
-  const ownerId = ownerIdForAgent(input.agentName)
 
-  let creationNote: string | null = null
-  if (input.agentName) {
-    creationNote = `Auto-created from inbound call summary. Rep: ${input.agentName}.${ownerId ? ' Owner set automatically.' : ' (Owner not set — agent name not in ACTIVECAMPAIGN_OWNER_MAP env var.)'}`
-  }
-
-  let created: ACContact
-  try {
-    created = await createContact({
-      phone: input.phone,
-      firstName,
-      lastName,
-      email: null,
-      agentName: input.agentName,
-      noteForCreation: creationNote,
-    })
-  } catch (e: any) {
-    return {
-      action: 'skipped',
-      contactId: null,
-      noteId: null,
-      ownerSet: false,
-      reason: `failed to create AC contact: ${e?.message || String(e)}`,
+  // 1. Phone lookup
+  if (input.phone) {
+    const found = await findByPhone(input.phone)
+    if (found) {
+      const backfilled = await maybeBackfill(found, input)
+      const postcode = await fetchPostcodeForContact(found.id)
+      return {
+        contact: { ...backfilled, postcode },
+        action: 'found_phone',
+        ownerSet: false,
+        backfilled: backfilled !== found,
+      }
     }
   }
 
-  const { noteId } = await postNoteAndTag(created.id, input.noteBody)
-  return {
-    action: 'created_and_noted',
-    contactId: created.id,
-    noteId,
-    ownerSet: ownerId !== null,
+  // 2. Email lookup
+  if (input.email) {
+    const found = await findByEmail(input.email)
+    if (found) {
+      const backfilled = await maybeBackfill(found, input)
+      const postcode = await fetchPostcodeForContact(found.id)
+      return {
+        contact: { ...backfilled, postcode },
+        action: 'found_email',
+        ownerSet: false,
+        backfilled: backfilled !== found,
+      }
+    }
   }
+
+  // 3. Name lookup (requires both first AND last)
+  if (firstName && lastName) {
+    const found = await findByName(firstName, lastName)
+    if (found) {
+      const backfilled = await maybeBackfill(found, input)
+      const postcode = await fetchPostcodeForContact(found.id)
+      return {
+        contact: { ...backfilled, postcode },
+        action: 'found_name',
+        ownerSet: false,
+        backfilled: backfilled !== found,
+      }
+    }
+  }
+
+  // 4. Nothing matched — create a new contact (need at least phone OR email)
+  if (!input.phone && !input.email) {
+    return {
+      contact: null,
+      action: 'skipped',
+      reason: 'no phone or email to identify the contact',
+      ownerSet: false,
+      backfilled: false,
+    }
+  }
+
+  const ownerId = ownerIdForAgent(input.agentName)
+  const creationNote = input.agentName
+    ? `Auto-created from call summary. Rep: ${input.agentName}.${ownerId ? ' Owner set automatically.' : ' (Owner not set — agent name not in ACTIVECAMPAIGN_OWNER_MAP env var.)'}`
+    : null
+
+  try {
+    const created = await createContact({
+      phone: input.phone || '',
+      firstName,
+      lastName,
+      email: input.email,
+      agentName: input.agentName,
+      noteForCreation: creationNote,
+    })
+    return {
+      contact: { ...created, postcode: null },   // new contact has no postcode yet
+      action: 'created',
+      ownerSet: ownerId !== null,
+      backfilled: false,
+    }
+  } catch (e: any) {
+    return {
+      contact: null,
+      action: 'skipped',
+      reason: `failed to create AC contact: ${e?.message || String(e)}`,
+      ownerSet: false,
+      backfilled: false,
+    }
+  }
+}
+
+/**
+ * If the matched contact is missing fields we now have, fill them in.
+ * Returns the updated contact (or the original if no update happened).
+ */
+async function maybeBackfill(current: ACContact, input: ResolveContactInput): Promise<ACContact> {
+  const needsBackfill =
+    (!current.phone && input.phone) ||
+    (!current.email && input.email)
+  if (!needsBackfill) return current
+
+  return backfillContact(current.id, current, {
+    phone: input.phone,
+    email: input.email,
+  })
 }

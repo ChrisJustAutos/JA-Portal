@@ -5,19 +5,18 @@
 // existing FreePBX CDR sync cadence so summaries appear in Monday/AC within
 // ~10 min of a call ending.
 //
-// PIPELINE per call:
-//   1. Find call_analysis rows where follow_up_summary IS NULL and a
-//      transcript exists → ENQUEUE in follow_up_sync_jobs (idempotent
-//      via call_id unique-ish enforcement at insert time).
-//   2. Claim N pending jobs (skipping any already 'processing' for >15 min
-//      — those are stuck and we'll retry).
+// PIPELINE per call (REVISED — AC drives Monday):
+//   1. Find call_analysis rows where follow_up_summary IS NULL → ENQUEUE.
+//   2. Claim N pending jobs (FOR UPDATE SKIP LOCKED via RPC).
 //   3. For each job:
 //      a. Generate follow_up_summary via Claude → write to call_analysis
-//      b. Push to Monday via syncFollowUpToMonday → write monday_* fields
-//      c. Push to AC via syncFollowUpToActiveCampaign → write ac_* fields
-//      d. Mark job done.
-//      Any stage failure: mark job failed with error message; ops can
-//      requeue manually if needed.
+//         (now includes structured `email` field if mentioned in transcript)
+//      b. Resolve AC contact: search by phone → email → name. If found,
+//         pull full profile (name, email, phone, postcode from custom field)
+//         and backfill missing fields. If not found, create with rep as owner.
+//      c. Push to Monday using AC profile data (preferred over call data)
+//      d. Post note + apply tag to AC contact
+//      e. Mark job done.
 //
 // SAFETY:
 //   - Bearer token gate (CRON_SECRET) — same pattern as refresh-cache.ts
@@ -30,7 +29,7 @@ import type { NextApiRequest, NextApiResponse } from 'next'
 import { createClient } from '@supabase/supabase-js'
 import { generateFollowUpSummary, renderSummaryAsNote } from '../../../lib/anthropic-followup'
 import { syncFollowUpToMonday } from '../../../lib/monday-followup'
-import { syncFollowUpToActiveCampaign } from '../../../lib/activecampaign'
+import { resolveContactForCall, postNoteAndTag } from '../../../lib/activecampaign'
 
 export const config = { maxDuration: 300 }   // 5 min Vercel cron max
 
@@ -90,9 +89,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const sb = createClient(url, key, { auth: { persistSession: false } })
 
   // ── 1. Enqueue any newly-eligible call_analysis rows ──────────────────
-  // Eligible = analysed, has transcript, no follow_up_summary yet, and no
-  // existing job. We avoid creating duplicates by checking against the
-  // job table via NOT EXISTS.
   const enqueued = await enqueueNewJobs(sb)
 
   // ── 2. Reset stuck 'processing' jobs back to pending ──────────────────
@@ -110,9 +106,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   })
 
   if (claimErr) {
-    // RPC doesn't exist yet — fall back to a simpler claim. The migration
-    // file ships the RPC, but if a deploy happens before the migration
-    // runs we want graceful behaviour.
     console.warn('[cron-followups] claim_followup_jobs RPC missing, using fallback')
     const fallback = await fallbackClaim(sb, BATCH_SIZE, workerId)
     return processClaimed(sb, fallback, t0, enqueued, res)
@@ -124,10 +117,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 // ── Enqueue helpers ────────────────────────────────────────────────────
 
 async function enqueueNewJobs(sb: any): Promise<number> {
-  // SQL-level upsert: insert one job per analysed call lacking follow_up_summary,
-  // skipping any call that already has a queued/active/done job. The unique
-  // index on (call_id, status) is permissive (we allow many jobs per call
-  // for retries), so we use a NOT EXISTS subquery instead.
   const { data, error } = await sb.rpc('enqueue_pending_followup_jobs')
   if (error) {
     console.warn('[cron-followups] enqueue RPC failed, skipping enqueue this run:', error.message)
@@ -137,8 +126,6 @@ async function enqueueNewJobs(sb: any): Promise<number> {
 }
 
 async function fallbackClaim(sb: any, batchSize: number, workerId: string) {
-  // Best-effort claim without the RPC. Race-prone but acceptable as a
-  // temporary fallback during the deploy window.
   const { data: pending } = await sb
     .from('follow_up_sync_jobs')
     .select('id, call_id, analysis_id, stage, retry_count')
@@ -200,12 +187,14 @@ async function processClaimed(
       if (!transcript) throw new Error('Transcript not available')
       if (!analysis) throw new Error('call_analysis row missing')
 
-      // Stage A: generate summary if not already present
+      const repName = ctx.effective_advisor_name || ctx.agent_name
+
+      // ── Stage A: generate summary if not already present ──
       let summary = analysis.follow_up_summary
       if (!summary) {
         const gen = await generateFollowUpSummary(transcript, {
           direction: ctx.direction,
-          agent_name: ctx.effective_advisor_name || ctx.agent_name,
+          agent_name: repName,
           caller_name: ctx.caller_name,
           external_number: ctx.external_number,
           duration_seconds: ctx.duration_seconds,
@@ -222,20 +211,60 @@ async function processClaimed(
       }
 
       const noteBody = renderSummaryAsNote(summary, {
-        agentName: ctx.effective_advisor_name || ctx.agent_name || undefined,
+        agentName: repName || undefined,
         callDate: ctx.call_date,
         durationSec: ctx.duration_seconds,
       })
 
-      // Stage B: Monday push
+      // ── Stage B: Resolve AC contact (find or create, with profile) ──
+      // This MUST happen before Monday so we can populate Monday with
+      // proper customer name/email/postcode from AC.
+      let acContact: any = null
+      let acAction = 'unknown'
+      let acReason: string | undefined
+
+      try {
+        const resolved = await resolveContactForCall({
+          phone: ctx.external_number,
+          email: summary.email || null,
+          whoWhat: summary.who_what || null,
+          agentName: repName,
+        })
+
+        if (resolved.contact) {
+          acContact = resolved.contact
+          acAction = resolved.action
+        } else {
+          acAction = resolved.action
+          acReason = resolved.reason
+        }
+
+        await sb.from('call_analysis')
+          .update({
+            ac_contact_id: resolved.contact?.id || null,
+            ac_synced_at: new Date().toISOString(),
+            ac_sync_error: resolved.action === 'skipped' ? resolved.reason : null,
+          })
+          .eq('id', analysis.id)
+      } catch (e: any) {
+        acReason = e?.message || String(e)
+        await sb.from('call_analysis')
+          .update({ ac_sync_error: acReason, ac_synced_at: new Date().toISOString() })
+          .eq('id', analysis.id)
+      }
+
+      // ── Stage C: Monday push (with AC profile data preferred) ──
       let mondayOk = true
       let mondayErr: string | undefined
       try {
         const monday = await syncFollowUpToMonday({
-          agentName: ctx.effective_advisor_name || ctx.agent_name,
+          agentName: repName,
           callerName: ctx.caller_name,
-          phone: ctx.external_number,
-          email: null,                 // No email on calls; AC has it but we'd need to fetch
+          phone: acContact?.phone || ctx.external_number,
+          customerFirstName: acContact?.firstName || null,
+          customerLastName: acContact?.lastName || null,
+          email: acContact?.email || summary.email || null,
+          postcode: acContact?.postcode || null,
           sentiment: summary.sentiment,
           noteBody,
           callDate: ctx.call_date,
@@ -258,49 +287,42 @@ async function processClaimed(
           .eq('id', analysis.id)
       }
 
-      // Stage C: AC push (independent of Monday outcome — both should run)
-      let acOk = true
-      let acErr: string | undefined
-      try {
-        const ac = await syncFollowUpToActiveCampaign({
-          phone: ctx.external_number,
-          noteBody,
-          agentName: ctx.effective_advisor_name || ctx.agent_name,
-          whoWhat: summary.who_what || null,
-        })
-        await sb.from('call_analysis')
-          .update({
-            ac_contact_id: ac.contactId,
-            ac_synced_at: new Date().toISOString(),
-            ac_sync_error: ac.action === 'skipped' ? ac.reason : null,
-          })
-          .eq('id', analysis.id)
-        result.ac = { action: ac.action, contactId: ac.contactId }
-      } catch (e: any) {
-        acOk = false
-        acErr = e?.message || String(e)
-        await sb.from('call_analysis')
-          .update({ ac_sync_error: acErr, ac_synced_at: new Date().toISOString() })
-          .eq('id', analysis.id)
+      // ── Stage D: Post note + tag on AC contact (if we have one) ──
+      let acNoteOk = true
+      let acNoteErr: string | undefined
+      if (acContact) {
+        try {
+          await postNoteAndTag(acContact.id, noteBody)
+          result.ac = { action: acAction, contactId: acContact.id }
+        } catch (e: any) {
+          acNoteOk = false
+          acNoteErr = e?.message || String(e)
+          await sb.from('call_analysis')
+            .update({ ac_sync_error: `note+tag failed: ${acNoteErr}` })
+            .eq('id', analysis.id)
+        }
+      } else {
+        // No AC contact — already recorded skip reason in Stage B
+        result.ac = { action: acAction, contactId: null }
       }
 
-      // Mark job done — even if Monday or AC failed, we treat it as terminal.
-      // Errors are visible via call_analysis.{monday,ac}_sync_error and
-      // ops can manually requeue if needed. We don't auto-retry pushes
-      // because they're not idempotent (would create duplicate notes).
+      // ── Mark job done ──
+      // Even if Monday or AC failed, terminal — errors visible via
+      // call_analysis.{monday,ac}_sync_error. Don't auto-retry pushes
+      // because they're not idempotent (would create dupes).
       await sb.from('follow_up_sync_jobs')
         .update({
           status: 'done',
           completed_at: new Date().toISOString(),
           stage: 'done',
-          error_message: !mondayOk || !acOk
-            ? `Monday: ${mondayOk ? 'ok' : mondayErr || '?'} | AC: ${acOk ? 'ok' : acErr || '?'}`
+          error_message: !mondayOk || !acNoteOk
+            ? `Monday: ${mondayOk ? 'ok' : mondayErr || '?'} | AC note: ${acNoteOk ? 'ok' : acNoteErr || '?'}`
             : null,
         })
         .eq('id', job.id)
 
-      result.ok = mondayOk && acOk
-      result.error = result.ok ? undefined : `monday=${mondayOk ? 'ok' : 'FAIL'}, ac=${acOk ? 'ok' : 'FAIL'}`
+      result.ok = mondayOk && acNoteOk
+      result.error = result.ok ? undefined : `monday=${mondayOk ? 'ok' : 'FAIL'}, ac=${acNoteOk ? 'ok' : 'FAIL'}`
     } catch (e: any) {
       const errMsg = e?.message || String(e)
       console.error(`[cron-followups] job ${job.id} failed:`, errMsg)

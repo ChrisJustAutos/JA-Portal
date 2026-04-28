@@ -1,7 +1,11 @@
 // lib/anthropic-followup.ts
-// Generates a structured 6-field follow-up summary from a call transcript.
+// Generates a structured 7-field follow-up summary from a call transcript.
 // Designed for sales reps picking up a lead cold — answers "what was discussed,
 // what did we promise, what comes next" — NOT coaching feedback.
+//
+// Now also extracts email when the caller mentions one in the transcript
+// (e.g. "I'll email you at sam@example.com" or "send the quote to..."). This
+// is used downstream to search AC by email when phone match fails.
 //
 // Runs independently of the existing coaching pipeline. The coaching pipeline
 // produces call_analysis.summary (coaching-flavoured); this one populates
@@ -21,6 +25,7 @@ export interface FollowUpSummary {
   commitments: string    // what we promised, by when — or "none"
   next_step: string      // what should happen on the next contact
   sentiment: 'hot' | 'warm' | 'cold'  // urgency for the next person picking it up
+  email: string | null   // customer's email if mentioned in transcript, else null
 }
 
 export interface FollowUpResult {
@@ -45,7 +50,7 @@ interface CallContext {
  *
  * @param transcript Full plaintext transcript (from call_transcripts.full_text)
  * @param ctx        Metadata about the call (direction, agent, customer info)
- * @returns          Structured 6-field summary + token/cost telemetry
+ * @returns          Structured 7-field summary + token/cost telemetry
  */
 export async function generateFollowUpSummary(
   transcript: string,
@@ -113,12 +118,13 @@ Your output is a FOLLOW-UP NOTE for the next sales rep who picks up this lead. I
 Output ONLY a JSON object with these exact fields:
 
 {
-  "who_what":    "1 sentence: the caller's name, vehicle (model + year if mentioned), and the core reason for the call. If the caller's name isn't clear, use 'Unknown caller'. Example: 'Mark with a 2018 Ranger looking at a tune + DPF delete'.",
+  "who_what":    "1 sentence: the CUSTOMER's name (NOT the rep), vehicle (model + year if mentioned), and the core reason for the call. The Sales Rep field above tells you who the rep is — never identify them as the customer. If the customer's name isn't clear, use 'Unknown caller'. Example: 'Mark with a 2018 Ranger looking at a tune + DPF delete'.",
   "discussed":   "Key topics covered, in plain bullet-style prose (no bullet characters). Specific products, technical questions, pricing if discussed. 1-3 short sentences. Example: 'Asked about pricing on Stage 2 tune (~\\$2400 quoted), DPF delete legality in NSW, and turn-around time. Mentioned current setup is stock with 90,000km'.",
   "objections":  "Concerns or hesitations the customer raised. Just the objection itself, no analysis of how the rep handled it. If none, write exactly 'None'. Example: 'Worried about warranty implications and whether tune is reversible for resale'.",
   "commitments": "Specific things the rep promised — quotes to send, callbacks, info to email, parts to check stock on. Include any mentioned timeframe. If none, write exactly 'None'. Example: 'Rep to email written quote by Friday; confirm stock on RV-30 turbo Monday'.",
   "next_step":   "What the next contact should achieve. One sentence. Example: 'Follow up Friday afternoon to confirm quote received and book in for fitting'.",
-  "sentiment":   "Exactly one of: 'hot' / 'warm' / 'cold'. HOT = ready to buy, has timeline, low objections. WARM = interested, info-gathering, may need follow-up. COLD = price-shopping only, low engagement, or has dealbreakers."
+  "sentiment":   "Exactly one of: 'hot' / 'warm' / 'cold'. HOT = ready to buy, has timeline, low objections. WARM = interested, info-gathering, may need follow-up. COLD = price-shopping only, low engagement, or has dealbreakers.",
+  "email":       "The customer's email address if it appears in the transcript (e.g. when the customer or rep says 'I'll email you at sam@example.com', 'my email is...', 'send it to...'). Return the literal email string. If no email is mentioned, return null (the JSON null value, not the string 'null'). Do NOT make up an email."
 }
 
 Rules:
@@ -126,13 +132,15 @@ Rules:
 - Use plain text inside the JSON values — no bullet characters, no asterisks, no special formatting.
 - Be specific about products, vehicle details, and dollar amounts when mentioned.
 - Don't invent details. If the transcript doesn't mention something, don't speculate.
-- If the call was clearly wrong-number, voicemail, or under 30 seconds of substance, set sentiment to 'cold' and use 'No substantive conversation' for who_what.`
+- The "Sales Rep" field in the user prompt is the AGENT, never the customer. who_what must always describe the customer.
+- If the call was clearly wrong-number, voicemail, or under 30 seconds of substance, set sentiment to 'cold' and use 'No substantive conversation' for who_what.
+- For email: only return values that look like real email addresses (have @ and a domain). If unsure, return null.`
 }
 
 function buildUserPrompt(transcript: string, ctx: CallContext): string {
   const lines: string[] = []
   lines.push(`Call direction: ${ctx.direction}`)
-  if (ctx.agent_name) lines.push(`Sales rep: ${ctx.agent_name}`)
+  if (ctx.agent_name) lines.push(`Sales rep (NOT the customer): ${ctx.agent_name}`)
   if (ctx.caller_name) lines.push(`Caller name (from CDR): ${ctx.caller_name}`)
   if (ctx.external_number) lines.push(`Caller number: ${ctx.external_number}`)
   lines.push(`Duration: ${Math.round(ctx.duration_seconds)}s`)
@@ -142,7 +150,7 @@ function buildUserPrompt(transcript: string, ctx: CallContext): string {
   lines.push(transcript)
   lines.push('--- END TRANSCRIPT ---')
   lines.push('')
-  lines.push('Produce the JSON follow-up note.')
+  lines.push('Produce the JSON follow-up note. Remember: who_what must describe the CUSTOMER, not the rep.')
   return lines.join('\n')
 }
 
@@ -170,14 +178,30 @@ function extractJson(text: string): any {
 }
 
 function validateSummary(s: any): asserts s is FollowUpSummary {
-  const required = ['who_what', 'discussed', 'objections', 'commitments', 'next_step', 'sentiment']
-  for (const key of required) {
+  const requiredStrings = ['who_what', 'discussed', 'objections', 'commitments', 'next_step', 'sentiment']
+  for (const key of requiredStrings) {
     if (typeof s[key] !== 'string' || !s[key].trim()) {
       throw new Error(`Follow-up summary missing or empty field: ${key}`)
     }
   }
   if (!['hot', 'warm', 'cold'].includes(s.sentiment)) {
     throw new Error(`Invalid sentiment '${s.sentiment}' — must be hot/warm/cold`)
+  }
+  // Email is allowed to be null OR a string. Coerce empty strings → null.
+  if (s.email !== null && s.email !== undefined) {
+    if (typeof s.email !== 'string') {
+      s.email = null
+    } else {
+      const trimmed = s.email.trim()
+      // Basic sanity: contains @ and a dot. Rejects common Claude hallucinations.
+      if (!trimmed || !trimmed.includes('@') || !trimmed.includes('.')) {
+        s.email = null
+      } else {
+        s.email = trimmed.toLowerCase()
+      }
+    }
+  } else {
+    s.email = null
   }
 }
 
