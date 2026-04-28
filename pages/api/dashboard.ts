@@ -10,7 +10,7 @@
 
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { requireAuth } from '../../lib/auth'
-import { cdataQuery, parseDateRange } from '../../lib/cdata'
+import { cdataQuery, parseDateRange, endDateExclusive } from '../../lib/cdata'
 import { invoiceExGst, toNum } from '../../lib/gst'
 
 export const config = { maxDuration: 60 }
@@ -119,13 +119,13 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
       // 1: JAWS open invoices
       safe(() => cdataQuery('JAWS', `SELECT [Number],[Date],[CustomerName],[TotalAmount],[TotalTax],[IsTaxInclusive],[BalanceDueAmount],[Status] FROM [MYOB_POWERBI_JAWS].[MYOB].[SaleInvoices] WHERE [Status] = 'Open' ORDER BY [BalanceDueAmount] DESC`)),
       // 2: JAWS invoices for top-customers compute (in-memory aggregation)
-      safe(() => cdataQuery('JAWS', `SELECT [CustomerName],[TotalAmount],[TotalTax],[IsTaxInclusive] FROM [MYOB_POWERBI_JAWS].[MYOB].[SaleInvoices] WHERE [Date] >= '${start}' AND [Date] <= '${end}' AND [TotalAmount] > 0`)),
+      safe(() => cdataQuery('JAWS', `SELECT [CustomerName],[TotalAmount],[TotalTax],[IsTaxInclusive] FROM [MYOB_POWERBI_JAWS].[MYOB].[SaleInvoices] WHERE [Date] >= '${start}' AND [Date] < '${endDateExclusive(end)}' AND [TotalAmount] > 0`)),
       // 3: VPS recent invoices
       safe(() => cdataQuery('VPS', `SELECT TOP 20 [Number],[Date],[CustomerName],[TotalAmount],[TotalTax],[IsTaxInclusive],[BalanceDueAmount],[Status],[InvoiceType] FROM [MYOB_POWERBI_VPS].[MYOB].[SaleInvoices] ORDER BY [Date] DESC`)),
       // 4: VPS open invoices
       safe(() => cdataQuery('VPS', `SELECT [Number],[Date],[CustomerName],[TotalAmount],[TotalTax],[IsTaxInclusive],[BalanceDueAmount],[Status] FROM [MYOB_POWERBI_VPS].[MYOB].[SaleInvoices] WHERE [Status] = 'Open' ORDER BY [BalanceDueAmount] DESC`)),
       // 5: VPS invoices for top-customers compute
-      safe(() => cdataQuery('VPS', `SELECT [CustomerName],[TotalAmount],[TotalTax],[IsTaxInclusive] FROM [MYOB_POWERBI_VPS].[MYOB].[SaleInvoices] WHERE [Date] >= '${start}' AND [Date] <= '${end}' AND [TotalAmount] > 0`)),
+      safe(() => cdataQuery('VPS', `SELECT [CustomerName],[TotalAmount],[TotalTax],[IsTaxInclusive] FROM [MYOB_POWERBI_VPS].[MYOB].[SaleInvoices] WHERE [Date] >= '${start}' AND [Date] < '${endDateExclusive(end)}' AND [TotalAmount] > 0`)),
       // 6: JAWS P&L (always ex-GST by MYOB convention)
       safe(() => cdataQuery('JAWS', `SELECT [AccountName],[AccountDisplayID],[AccountTotal] FROM [MYOB_POWERBI_JAWS].[MYOB].[ProfitAndLossSummaryReport] WHERE [StartDate] = '${start}' AND [EndDate] = '${end}' ORDER BY [AccountDisplayID]`)),
       // 7: VPS P&L

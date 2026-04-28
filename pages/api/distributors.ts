@@ -15,7 +15,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { createClient } from '@supabase/supabase-js'
 import { requireAuth } from '../../lib/auth'
-import { cdataQuery, parseDateRange } from '../../lib/cdata'
+import { cdataQuery, parseDateRange, endDateExclusive } from '../../lib/cdata'
 import { lineExGst } from '../../lib/gst'
 
 export const config = { maxDuration: 60 }
@@ -117,7 +117,7 @@ export async function computeDistributorsPayload(start: string, end: string) {
   }
 
   const invRes: any = await cdataQuery('JAWS',
-    "SELECT [ID],[Number],[Date],[CustomerName],[CustomerPurchaseOrderNumber],[IsTaxInclusive] FROM [MYOB_POWERBI_JAWS].[MYOB].[SaleInvoices] WHERE [Date] >= '" + start + "' AND [Date] <= '" + end + "'"
+    "SELECT [ID],[Number],[Date],[CustomerName],[CustomerPurchaseOrderNumber],[IsTaxInclusive] FROM [MYOB_POWERBI_JAWS].[MYOB].[SaleInvoices] WHERE [Date] >= '" + start + "' AND [Date] < '" + endDateExclusive(end) + "'"
   )
   const invCols: string[] = invRes?.results?.[0]?.schema?.map((c: any) => c.columnName) || []
   const invRows: any[][] = invRes?.results?.[0]?.rows || []

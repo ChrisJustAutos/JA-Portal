@@ -4,7 +4,7 @@
 //
 // All $ values returned are EX-GST (the GST audit fix from phase 5 applies here too).
 
-import { cdataQuery } from '../cdata'
+import { cdataQuery, endDateExclusive } from '../cdata'
 import { invoiceExGst, lineExGst, toNum, asBool } from '../gst'
 
 // ── Helpers ──────────────────────────────────────────────────────────
@@ -56,7 +56,7 @@ export async function fetchKpiSummary(
     // All 5 queries in parallel — was sequential, saves 10-15s
     const [invRes, openInvRes, openBillsRes, stockRes, pnlRes] = await Promise.all([
       cdataQuery(entity,
-        `SELECT [TotalAmount],[TotalTax] FROM [${cat}].[MYOB].[SaleInvoices] WHERE [Date] >= '${range.periodStart}' AND [Date] <= '${range.periodEnd}' AND [TotalAmount] > 0`
+        `SELECT [TotalAmount],[TotalTax] FROM [${cat}].[MYOB].[SaleInvoices] WHERE [Date] >= '${range.periodStart}' AND [Date] < '${endDateExclusive(range.periodEnd)}' AND [TotalAmount] > 0`
       ).catch(() => null),
       cdataQuery(entity,
         `SELECT [TotalAmount],[TotalTax],[BalanceDueAmount] FROM [${cat}].[MYOB].[SaleInvoices] WHERE [Status] = 'Open' AND [BalanceDueAmount] > 0`
@@ -176,7 +176,7 @@ export async function fetchTopCustomers(entities: Entity[], range: DateRange, li
   const results = await Promise.all(entities.map(async (entity) => {
     const cat = catalogFor(entity)
     const invRes = await cdataQuery(entity,
-      `SELECT [CustomerName],[TotalAmount],[TotalTax] FROM [${cat}].[MYOB].[SaleInvoices] WHERE [Date] >= '${range.periodStart}' AND [Date] <= '${range.periodEnd}' AND [TotalAmount] > 0`
+      `SELECT [CustomerName],[TotalAmount],[TotalTax] FROM [${cat}].[MYOB].[SaleInvoices] WHERE [Date] >= '${range.periodStart}' AND [Date] < '${endDateExclusive(range.periodEnd)}' AND [TotalAmount] > 0`
     ).catch(() => null)
     const rows = rowsToObjects(invRes)
     const byCustomer = new Map<string, { revenueExGst: number; invoiceCount: number }>()
@@ -395,7 +395,7 @@ const DIST_EXCLUDED = new Set([
 
 export async function fetchDistributorRanking(range: DateRange): Promise<DistributorRankingData> {
   const invRes = await cdataQuery('JAWS',
-    `SELECT [ID],[CustomerName],[IsTaxInclusive] FROM [MYOB_POWERBI_JAWS].[MYOB].[SaleInvoices] WHERE [Date] >= '${range.periodStart}' AND [Date] <= '${range.periodEnd}'`
+    `SELECT [ID],[CustomerName],[IsTaxInclusive] FROM [MYOB_POWERBI_JAWS].[MYOB].[SaleInvoices] WHERE [Date] >= '${range.periodStart}' AND [Date] < '${endDateExclusive(range.periodEnd)}'`
   ).catch(() => null)
   const invRows = rowsToObjects(invRes)
   const invById = new Map<string, any>()

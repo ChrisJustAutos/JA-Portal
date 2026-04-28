@@ -26,7 +26,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { createClient } from '@supabase/supabase-js'
 import { requireAdmin } from '../../../lib/auth'
-import { cdataQuery } from '../../../lib/cdata'
+import { cdataQuery, endDateExclusive } from '../../../lib/cdata'
 import { detectAllPlatformsFromTexts } from '../../../lib/vehiclePlatforms'
 
 const VPS_CATALOG = 'MYOB_POWERBI_VPS'
@@ -122,7 +122,7 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
       const headersSql = `
         SELECT [ID], [Number], [Date], [CustomerName], [TotalAmount], [TotalTax], [Status]
         FROM [${VPS_CATALOG}].[MYOB].[SaleInvoices]
-        WHERE [Date] >= '${windowFrom}' AND [Date] <= '${windowTo}'
+        WHERE [Date] >= '${windowFrom}' AND [Date] < '${endDateExclusive(windowTo)}'
           AND [TotalAmount] > 0
       `.trim()
       const hRes = await cdataQuery(VPS_CATALOG, headersSql)

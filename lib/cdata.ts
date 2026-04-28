@@ -65,7 +65,7 @@ export async function getJawsOpenInvoices() {
 }
  
 export async function getJawsTopCustomers(startDate: string, endDate: string) {
-  return cdataQuery('JAWS', `SELECT [CustomerName], SUM([TotalAmount]) AS TotalRevenue, COUNT(*) AS InvoiceCount FROM [MYOB_POWERBI_JAWS].[MYOB].[SaleInvoices] WHERE [Date] >= '${startDate}' AND [Date] <= '${endDate}' AND [TotalAmount] > 0 GROUP BY [CustomerName] ORDER BY TotalRevenue DESC LIMIT 12`)
+  return cdataQuery('JAWS', `SELECT [CustomerName], SUM([TotalAmount]) AS TotalRevenue, COUNT(*) AS InvoiceCount FROM [MYOB_POWERBI_JAWS].[MYOB].[SaleInvoices] WHERE [Date] >= '${startDate}' AND [Date] < '${endDateExclusive(endDate)}' AND [TotalAmount] > 0 GROUP BY [CustomerName] ORDER BY TotalRevenue DESC LIMIT 12`)
 }
  
 export async function getJawsPnL(startDate: string, endDate: string) {
@@ -95,7 +95,7 @@ export async function getVpsOpenInvoices() {
 }
  
 export async function getVpsTopCustomers(startDate: string, endDate: string) {
-  return cdataQuery('VPS', `SELECT [CustomerName], SUM([TotalAmount]) AS TotalRevenue, COUNT(*) AS InvoiceCount FROM [MYOB_POWERBI_VPS].[MYOB].[SaleInvoices] WHERE [Date] >= '${startDate}' AND [Date] <= '${endDate}' AND [TotalAmount] > 0 GROUP BY [CustomerName] ORDER BY TotalRevenue DESC LIMIT 12`)
+  return cdataQuery('VPS', `SELECT [CustomerName], SUM([TotalAmount]) AS TotalRevenue, COUNT(*) AS InvoiceCount FROM [MYOB_POWERBI_VPS].[MYOB].[SaleInvoices] WHERE [Date] >= '${startDate}' AND [Date] < '${endDateExclusive(endDate)}' AND [TotalAmount] > 0 GROUP BY [CustomerName] ORDER BY TotalRevenue DESC LIMIT 12`)
 }
  
 export async function getVpsOpenBills() {
@@ -125,6 +125,25 @@ export async function getMonthlyExpenseTrend(catalog: string, year: number, mont
 }
  
 // ── Date helpers ─────────────────────────────────────────────
+
+/**
+ * Produces the exclusive upper bound for an inclusive date range.
+ *
+ * MYOB's [Date] column is a TIMESTAMP, but the portal passes 'YYYY-MM-DD'
+ * date strings everywhere. When you write `[Date] <= '2025-09-30'`, MYOB
+ * compares against `2025-09-30T00:00:00`, which silently excludes every
+ * invoice raised that same day after midnight.
+ *
+ * Always use this helper for the upper bound of an inclusive date range:
+ *   WHERE [Date] >= 'YYYY-MM-DD' AND [Date] < ${endDateExclusive(end)}
+ *
+ * Returns the next day in 'YYYY-MM-DD' form. e.g. '2025-09-30' → '2025-10-01'.
+ */
+export function endDateExclusive(endDate: string): string {
+  const d = new Date(endDate + 'T00:00:00Z')
+  d.setUTCDate(d.getUTCDate() + 1)
+  return d.toISOString().slice(0, 10)
+}
  
 export function currentMonthRange() {
   const now = new Date()
