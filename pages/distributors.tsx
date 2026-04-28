@@ -171,10 +171,16 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
   const [activeDateParams,setActiveDateParams]=useState(`startDate=${monthStart}&endDate=${monthEnd}`)
   const [dateLoading,setDateLoading]=useState(false)
   const [reloadCounter,setReloadCounter]=useState(0)
+  // When true, the next load() call (triggered by the effect below)
+  // will pass isRefresh=true — forcing /api/distributors to bypass
+  // its Supabase cache and recompute live from MYOB. Set by the date
+  // range Apply button and the FY year buttons so a deliberate user
+  // action always pulls fresh data.
+  const [nextLoadIsRefresh,setNextLoadIsRefresh]=useState(false)
   const fyLabel=isCustomRange?`${new Date(customStart+'T00:00').toLocaleDateString('en-AU',{day:'2-digit',month:'short',year:'2-digit'})} – ${new Date(customEnd+'T00:00').toLocaleDateString('en-AU',{day:'2-digit',month:'short',year:'2-digit'})}`:`FY${fyYear}`
 
-  function selectFY(y:number){setFyYear(y);setIsCustomRange(false);setCustomStart(`${y-1}-07-01`);setCustomEnd(`${y}-06-30`);setDateLoading(true);setActiveDateParams(`startDate=${y-1}-07-01&endDate=${y}-06-30`);setReloadCounter(c=>c+1)}
-  function applyCustomRange(){if(customStart&&customEnd){setIsCustomRange(true);setDateLoading(true);setActiveDateParams(`startDate=${customStart}&endDate=${customEnd}`);setReloadCounter(c=>c+1)}}
+  function selectFY(y:number){setFyYear(y);setIsCustomRange(false);setCustomStart(`${y-1}-07-01`);setCustomEnd(`${y}-06-30`);setDateLoading(true);setNextLoadIsRefresh(true);setActiveDateParams(`startDate=${y-1}-07-01&endDate=${y}-06-30`);setReloadCounter(c=>c+1)}
+  function applyCustomRange(){if(customStart&&customEnd){setIsCustomRange(true);setDateLoading(true);setNextLoadIsRefresh(true);setActiveDateParams(`startDate=${customStart}&endDate=${customEnd}`);setReloadCounter(c=>c+1)}}
 
   const load=useCallback(async(isRefresh=false)=>{
     if(isRefresh)setRefreshing(true)
@@ -251,7 +257,19 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
     }catch(e:any){setError(e.message);setDateLoading(false)}
     setLoading(false);setDateLoading(false);if(isRefresh)setRefreshing(false)
   },[router,activeDateParams,prefs.gst_display,reloadCounter])
-  useEffect(()=>{load()},[load])
+  useEffect(()=>{
+    // If a date-range button (Apply / FY) just set nextLoadIsRefresh=true,
+    // forward that to load() so the API call includes ?refresh=true and bypasses
+    // the distributors_cache. Then reset the flag so subsequent loads go through
+    // the cache as normal.
+    if (nextLoadIsRefresh) {
+      setNextLoadIsRefresh(false)
+      load(true)
+    } else {
+      load()
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[load])
   useEffect(()=>{
     const intervalMs = (prefs.auto_refresh_seconds || 0) * 1000
     if (intervalMs <= 0) return
