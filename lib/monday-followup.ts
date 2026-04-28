@@ -122,6 +122,15 @@ async function mondayQuery<T = any>(query: string, variables?: Record<string, an
   return data.data as T
 }
 
+// Escape a value for safe inline use inside a GraphQL query string.
+// Used because Monday's `compare_value` is a CompareValue scalar and
+// passing it as a typed variable (e.g. [String]!) results in:
+// "Variable $vals of type [String]! used in position expecting type CompareValue!"
+// Inlining as a JSON literal sidesteps that entirely.
+function escGqlString(s: string): string {
+  return JSON.stringify(s)
+}
+
 // ── Lookup: find an existing item across all 5 boards ────────────────────
 
 export interface FoundItem {
@@ -152,7 +161,13 @@ export async function findExistingItem(
       // Try multiple formats since the column is free-text and reps enter
       // numbers any way they like. Monday's column_values filter is an
       // exact match, so we provide several common variants.
-      const variants = [phone, np, `0${np}`, `+61${np}`, np.replace(/(\d{3})(\d{3})(\d{3})/, '$1 $2 $3')]
+      const variants = Array.from(new Set([
+        phone,
+        np,
+        `0${np}`,
+        `+61${np}`,
+        np.replace(/(\d{3})(\d{3})(\d{3})/, '$1 $2 $3'),
+      ]))
 
       for (const boardId of ALL_QUOTE_BOARD_IDS) {
         const found = await searchBoardByPhone(boardId, variants)
@@ -180,14 +195,20 @@ export async function findExistingItem(
 }
 
 async function searchBoardByPhone(boardId: string, phoneVariants: string[]): Promise<FoundItem | null> {
+  // Monday's `compare_value` is a CompareValue scalar — passing it as a
+  // typed array variable fails with a type-mismatch error. The fix is to
+  // inline the variants as a JSON literal in the query string. Each variant
+  // is JSON-escaped to safely handle quotes / control chars.
+  const inlinedVals = `[${phoneVariants.map(escGqlString).join(', ')}]`
+
   const data = await mondayQuery<{ boards: Array<{ name: string; items_page: { items: any[] } }> }>(
-    `query SearchPhone($boardId: [ID!], $col: ID!, $vals: [String]!) {
+    `query SearchPhone($boardId: [ID!]) {
       boards(ids: $boardId) {
         name
         items_page(
           limit: 50
           query_params: {
-            rules: [{ column_id: $col, compare_value: $vals, operator: any_of }]
+            rules: [{ column_id: "${COLUMNS.PHONE}", compare_value: ${inlinedVals}, operator: any_of }]
           }
         ) {
           items {
@@ -198,7 +219,7 @@ async function searchBoardByPhone(boardId: string, phoneVariants: string[]): Pro
         }
       }
     }`,
-    { boardId: [boardId], col: COLUMNS.PHONE, vals: phoneVariants },
+    { boardId: [boardId] },
   )
 
   const board = data.boards?.[0]
