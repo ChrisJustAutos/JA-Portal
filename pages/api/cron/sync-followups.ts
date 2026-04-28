@@ -53,6 +53,7 @@ interface CronResult {
     ac?: { action: string; contactId: number | null }
   }>
   durationMs: number
+  note?: string                              // optional human-readable note (e.g. "circuit breaker tripped")
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
