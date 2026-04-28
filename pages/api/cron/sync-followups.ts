@@ -265,6 +265,8 @@ async function processClaimed(
         const ac = await syncFollowUpToActiveCampaign({
           phone: ctx.external_number,
           noteBody,
+          agentName: ctx.effective_advisor_name || ctx.agent_name,
+          whoWhat: summary.who_what || null,
         })
         await sb.from('call_analysis')
           .update({

@@ -1,18 +1,26 @@
 // lib/activecampaign.ts
 // ActiveCampaign helper for the call follow-up sync worker.
 //
-// Two operations:
-//   1. findContactByPhone(phone) — searches AC by phone OR mobile field
-//   2. postNoteAndTag(contactId, noteBody, tagName) — adds a contact note
-//      and applies a tag (so AC automations can trigger off it).
+// Three operations:
+//   1. findContactByPhone(phone) — searches AC by phone with strict
+//      verification that the matched contact's phone digits actually
+//      equal the query phone digits. Required because AC's filters[phone]
+//      is partial-match and returns false positives.
+//   2. createContact(input) — creates a new AC contact with the sales
+//      rep set as the owner, when no existing contact matches.
+//   3. postNoteAndTag(contactId, noteBody) — adds a contact note and
+//      applies the follow-up tag (so AC automations can trigger off it).
 //
 // Why the tag matters: AC is the automation hub here, not the source of
-// truth. The tag 'call-summary-pushed' (or whatever) is the trigger
-// signal for AC automations like "send rep a Slack DM", "fire a follow-up
-// email if no human contact in 7 days", etc. Chris owns those automations.
+// truth. The tag 'call-summary-pushed' is the trigger signal for AC
+// automations like "send rep a Slack DM", "fire a follow-up email if
+// no human contact in 7 days", etc.
 //
 // Env: ACTIVECAMPAIGN_API_URL (e.g. 'https://justautosmechanical.api-us1.com')
 //      ACTIVECAMPAIGN_API_KEY  (the v3 API key from Settings → Developer)
+//      ACTIVECAMPAIGN_FOLLOWUP_TAG (default 'call-summary-pushed')
+//      ACTIVECAMPAIGN_OWNER_MAP    (JSON map of agent name → AC user ID,
+//                                   e.g. '{"Kaleb":12,"Dom S":15}')
 
 const TAG_NAME = process.env.ACTIVECAMPAIGN_FOLLOWUP_TAG || 'call-summary-pushed'
 
@@ -41,30 +49,26 @@ async function acJson<T = any>(path: string, opts: RequestInit = {}): Promise<T>
   return r.json()
 }
 
-// ── Phone normalisation ──
-// AC stores phone numbers however the user typed them in. We normalise on
-// digits-only and try multiple search variants to maximise hit rate.
-function normalisePhone(raw: string): string {
+// ── Phone normalisation ──────────────────────────────────────────────────
+// AC stores phone numbers however the user typed them in. We normalise to
+// digits-only (after stripping +61 / leading 0) for SAFE comparison.
+// IMPORTANT: AC's filters[phone] is partial-match, not exact, and matches
+// EVERYTHING when the value is empty. We MUST verify any matched contact's
+// phone digits actually equal the query phone digits before accepting it.
+
+function normalisePhone(raw: string | null | undefined): string {
   const d = (raw || '').replace(/\D/g, '')
   if (d.startsWith('61') && d.length >= 11) return d.substring(2)
   if (d.startsWith('0')) return d.substring(1)
   return d
 }
 
-function phoneVariants(raw: string): string[] {
+// Returns the digits to use as the search query (8+ chars to avoid false
+// positives like searching "61" matching everything).
+function searchableDigits(raw: string | null | undefined): string | null {
   const d = normalisePhone(raw)
-  if (!d) return []
-  // Common formats reps enter:
-  //   +61411234567, 0411234567, 0411 234 567, 411234567
-  const formatted = d.length === 9 ? d.replace(/(\d{3})(\d{3})(\d{3})/, '$1 $2 $3') : d
-  return [
-    raw.trim(),
-    d,
-    `0${d}`,
-    `+61${d}`,
-    formatted,
-    `0${formatted}`,
-  ]
+  if (d.length < 8) return null   // Anything under 8 digits is unsafe to search
+  return d
 }
 
 // ── Contact lookup ──
@@ -78,40 +82,46 @@ export interface ACContact {
 }
 
 /**
- * Search AC for a contact whose phone OR mobile matches `rawPhone`.
+ * Search AC for a contact whose phone matches `rawPhone`.
  *
- * AC's /contacts endpoint accepts a `search` param that matches across
- * email/first/last/phone — but it's loose. We narrow with `filters[phone]=`
- * which does an exact match on the phone field. If that misses, we try
- * `search` as a fallback (catches contacts where the number is in `mobile`
- * or another custom field).
+ * Strategy:
+ *   1. Search using digits-only with `search=` (broad query).
+ *   2. For each returned contact, verify its phone field's digits match
+ *      our query's digits. Any contact whose digits don't match is rejected.
+ *   3. Returns the first verified match, or null.
  *
- * Returns the FIRST match. If multiple AC contacts share a phone we accept
- * that ambiguity — better to attach the note to one wrong contact than to
- * silently drop it.
+ * The verification step is non-negotiable. AC's search/filter parameters
+ * are loose (partial match) and will happily return the same contact for
+ * any number of unrelated queries — see issue with contact 30121 acting
+ * as a catch-all match for 26 different real customer numbers.
  */
 export async function findContactByPhone(rawPhone: string): Promise<ACContact | null> {
-  const variants = phoneVariants(rawPhone)
-  if (variants.length === 0) return null
+  const queryDigits = searchableDigits(rawPhone)
+  if (!queryDigits) return null
 
-  // 1. Exact-match on the `phone` field for each variant
-  for (const v of variants) {
-    const data = await acJson<{ contacts: any[] }>(`/contacts?filters[phone]=${encodeURIComponent(v)}&limit=5`)
-    if (data.contacts && data.contacts.length > 0) {
-      return mapContact(data.contacts[0])
+  const data = await acJson<{ contacts: any[] }>(
+    `/contacts?search=${encodeURIComponent(queryDigits)}&limit=20`,
+  )
+  const contacts = data.contacts || []
+  if (contacts.length === 0) return null
+
+  // VERIFY: only accept a contact whose phone digits actually match
+  // the query digits. AC may return loosely-matched results (e.g. matched
+  // on email, name, or another field), or return EVERY contact when the
+  // search is too short / loose.
+  for (const c of contacts) {
+    const candidatePhone = normalisePhone(c.phone)
+    if (candidatePhone === queryDigits) {
+      return mapContact(c)
     }
-  }
-
-  // 2. Fall back to `search` param (loose match — could hit email, name etc).
-  // Only try with the digits-only form to minimise false positives.
-  const digits = normalisePhone(rawPhone)
-  if (digits.length >= 8) {
-    const data = await acJson<{ contacts: any[] }>(`/contacts?search=${digits}&limit=5`)
-    if (data.contacts && data.contacts.length > 0) {
-      // Re-verify the matched contact actually has this phone
-      const candidate = data.contacts[0]
-      const candDigits = normalisePhone(candidate.phone || '')
-      if (candDigits === digits) return mapContact(candidate)
+    // AC sometimes stores the number in a custom field or in `phone` with
+    // formatting. Accept if the candidate's phone digits END with our
+    // query digits or vice versa, but ONLY if both are at least 8 digits.
+    if (
+      candidatePhone.length >= 8 &&
+      (candidatePhone.endsWith(queryDigits) || queryDigits.endsWith(candidatePhone))
+    ) {
+      return mapContact(c)
     }
   }
 
@@ -126,6 +136,109 @@ function mapContact(raw: any): ACContact {
     lastName: raw.lastName || null,
     phone: raw.phone || null,
   }
+}
+
+// ── Owner mapping ────────────────────────────────────────────────────────
+// AC contacts have an `owner` field pointing to an AC user ID. When we
+// create a new contact for a call, we want the owner to be the rep who
+// took the call, so AC's "owned by" filters and rep-specific automations
+// fire correctly.
+//
+// The mapping lives in an env var so it's editable without a code deploy.
+// Format: '{"AgentName1": ACUserId1, "AgentName2": ACUserId2}'.
+// Match is case-insensitive and uses the agent_name as it appears on
+// the calls table (e.g. "Kaleb", "Dom S", "James Wilson").
+
+let cachedOwnerMap: Record<string, number> | null = null
+function getOwnerMap(): Record<string, number> {
+  if (cachedOwnerMap) return cachedOwnerMap
+  const raw = process.env.ACTIVECAMPAIGN_OWNER_MAP || '{}'
+  try {
+    const parsed = JSON.parse(raw)
+    // Lowercase keys for case-insensitive lookup
+    const normalised: Record<string, number> = {}
+    for (const [k, v] of Object.entries(parsed)) {
+      normalised[String(k).trim().toLowerCase()] = Number(v)
+    }
+    cachedOwnerMap = normalised
+    return normalised
+  } catch {
+    console.warn('[ac] ACTIVECAMPAIGN_OWNER_MAP is not valid JSON — ignoring')
+    cachedOwnerMap = {}
+    return cachedOwnerMap
+  }
+}
+
+function ownerIdForAgent(agentName: string | null): number | null {
+  if (!agentName) return null
+  const map = getOwnerMap()
+  return map[agentName.trim().toLowerCase()] || null
+}
+
+// ── Create contact ───────────────────────────────────────────────────────
+
+interface CreateContactInput {
+  phone: string                          // The customer's phone (raw)
+  firstName: string | null
+  lastName: string | null
+  email: string | null
+  agentName: string | null               // Used to resolve owner via the map
+  noteForCreation: string | null         // Optional note explaining who created it
+}
+
+/**
+ * Create a new AC contact. Used when findContactByPhone returns null.
+ * Sets the owner to the sales rep (if mapping exists) so AC automations
+ * routed by owner fire correctly.
+ */
+async function createContact(input: CreateContactInput): Promise<ACContact> {
+  const ownerId = ownerIdForAgent(input.agentName)
+
+  const contactPayload: any = {
+    phone: input.phone,
+    firstName: input.firstName || '',
+    lastName: input.lastName || '',
+  }
+  if (input.email) contactPayload.email = input.email
+  if (ownerId) contactPayload.owner = ownerId
+
+  // AC requires AT LEAST one of email/phone. If we don't have email,
+  // phone alone is fine. If we have neither, we shouldn't have got here.
+  if (!input.email && !input.phone) {
+    throw new Error('Cannot create AC contact without email or phone')
+  }
+
+  // Note: AC's email field is required by their UI but the API allows
+  // creating phone-only contacts. They'll appear in AC with no email
+  // address and a "Phone" tab in the contact view.
+  const created = await acJson<{ contact: any }>(`/contacts`, {
+    method: 'POST',
+    body: JSON.stringify({ contact: contactPayload }),
+  })
+
+  const contact = mapContact(created.contact)
+
+  // Add a note explaining the auto-creation, so reps in AC understand
+  // where this contact came from.
+  if (input.noteForCreation) {
+    try {
+      await acJson(`/notes`, {
+        method: 'POST',
+        body: JSON.stringify({
+          note: {
+            note: input.noteForCreation,
+            relid: contact.id,
+            reltype: 'Subscriber',
+          },
+        }),
+      })
+    } catch (e: any) {
+      // Non-fatal — the main note will be posted by the orchestrator.
+      console.warn(`[ac] failed to post creation note for new contact ${contact.id}:`, e?.message)
+    }
+  }
+
+  return contact
 }
 
 // ── Note + tag ──
@@ -213,34 +326,109 @@ async function ensureTagExists(name: string): Promise<number | null> {
   }
 }
 
-// ── High-level orchestrator ──
+// ── Caller name parsing ──────────────────────────────────────────────────
+// We don't get a clean first-name / last-name from FreePBX. Best signal
+// is the Claude follow-up summary's `who_what` field, which usually
+// starts with "Sam Zayla with a 2020 ..." or "Brady with a turbocharged ...".
+// Extract the leading name(s) up to the first non-name word.
+
+export function parseNameFromWhoWhat(whoWhat: string | null): { firstName: string | null; lastName: string | null } {
+  if (!whoWhat) return { firstName: null, lastName: null }
+  // "Sam Zayla with a..." → take everything before " with " or " calling " or " regarding "
+  const stopWords = [' with ', ' calling ', ' regarding ', ' about ', ' looking ', ' for ', ' inquiring ', ' asking ']
+  let name = whoWhat
+  for (const sw of stopWords) {
+    const i = name.toLowerCase().indexOf(sw)
+    if (i > 0) {
+      name = name.substring(0, i)
+      break
+    }
+  }
+  name = name.trim().replace(/[.,;].*$/, '').trim()
+
+  // Reject if the result looks like a sentence rather than a name
+  // (longer than 4 words, or starts with capitalised generic terms).
+  const parts = name.split(/\s+/).filter(Boolean)
+  if (parts.length === 0 || parts.length > 4) return { firstName: null, lastName: null }
+  if (/^(unknown|caller|customer|client|the|no)$/i.test(parts[0])) {
+    return { firstName: null, lastName: null }
+  }
+
+  const firstName = parts[0]
+  const lastName = parts.length > 1 ? parts.slice(1).join(' ') : null
+  return { firstName, lastName }
+}
+
+// ── High-level orchestrator ──────────────────────────────────────────────
+
+export interface SyncToACInput {
+  phone: string | null
+  noteBody: string
+  agentName: string | null               // Used as owner if creating a new contact
+  whoWhat: string | null                 // Claude's "who" field — used to extract name
+}
 
 export interface SyncToACResult {
-  action: 'noted' | 'skipped'
+  action: 'noted' | 'created_and_noted' | 'skipped'
   contactId: number | null
   noteId: number | null
+  ownerSet: boolean                      // Whether owner was set on creation
   reason?: string
 }
 
 /**
- * Top-level entry point: find contact by phone, post note + tag.
- * If contact not found in AC, return 'skipped' with reason — we don't
- * auto-create AC contacts (per Chris: AC contacts are managed via existing
- * intake flows, this worker only annotates existing ones).
+ * Top-level entry point: find or create AC contact by phone, post note + tag.
+ *
+ * Behaviour change vs previous version: when no existing contact matches,
+ * we now CREATE one with the sales rep set as owner. Previously we'd skip,
+ * which meant new leads never got into AC for automation triggers.
  */
-export async function syncFollowUpToActiveCampaign(input: {
-  phone: string | null
-  noteBody: string
-}): Promise<SyncToACResult> {
+export async function syncFollowUpToActiveCampaign(input: SyncToACInput): Promise<SyncToACResult> {
   if (!input.phone) {
-    return { action: 'skipped', contactId: null, noteId: null, reason: 'no phone number on call' }
+    return { action: 'skipped', contactId: null, noteId: null, ownerSet: false, reason: 'no phone number on call' }
   }
 
-  const contact = await findContactByPhone(input.phone)
-  if (!contact) {
-    return { action: 'skipped', contactId: null, noteId: null, reason: `no AC contact found for phone ${input.phone}` }
+  // 1. Try to find an existing contact
+  const existing = await findContactByPhone(input.phone)
+  if (existing) {
+    const { noteId } = await postNoteAndTag(existing.id, input.noteBody)
+    return { action: 'noted', contactId: existing.id, noteId, ownerSet: false }
   }
 
-  const { noteId } = await postNoteAndTag(contact.id, input.noteBody)
-  return { action: 'noted', contactId: contact.id, noteId }
+  // 2. No match — create a new AC contact with the rep as owner
+  const { firstName, lastName } = parseNameFromWhoWhat(input.whoWhat)
+  const ownerId = ownerIdForAgent(input.agentName)
+
+  let creationNote: string | null = null
+  if (input.agentName) {
+    creationNote = `Auto-created from inbound call summary. Rep: ${input.agentName}.${ownerId ? ' Owner set automatically.' : ' (Owner not set — agent name not in ACTIVECAMPAIGN_OWNER_MAP env var.)'}`
+  }
+
+  let created: ACContact
+  try {
+    created = await createContact({
+      phone: input.phone,
+      firstName,
+      lastName,
+      email: null,
+      agentName: input.agentName,
+      noteForCreation: creationNote,
+    })
+  } catch (e: any) {
+    return {
+      action: 'skipped',
+      contactId: null,
+      noteId: null,
+      ownerSet: false,
+      reason: `failed to create AC contact: ${e?.message || String(e)}`,
+    }
+  }
+
+  const { noteId } = await postNoteAndTag(created.id, input.noteBody)
+  return {
+    action: 'created_and_noted',
+    contactId: created.id,
+    noteId,
+    ownerSet: ownerId !== null,
+  }
 }
