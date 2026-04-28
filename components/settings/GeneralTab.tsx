@@ -10,7 +10,6 @@ import {
   TIMEZONE_OPTIONS,
   LOCALE_OPTIONS,
   type DateRangeKey,
-  type GstDisplay,
   type Theme,
 } from '../../lib/preferences'
 import LogoUpload from './LogoUpload'
@@ -59,22 +58,6 @@ export default function GeneralTab() {
 
       {/* ── DISPLAY ───────────────────────────────────────────────────── */}
       <SettingsCard title="Display" description="How numbers and dates are shown across the portal.">
-
-        <Field
-          label="GST display"
-          help="Portal data is stored ex-GST. Choose how amounts are shown on screen."
-          saving={saving === 'gst_display'}
-          saved={savedFlash === 'gst_display'}
-        >
-          <ButtonGroup
-            value={prefs.gst_display}
-            options={[
-              { value: 'ex', label: 'Ex-GST', hint: 'Recommended for management & accounting' },
-              { value: 'inc', label: 'Inc-GST', hint: 'Shows gross-to-customer amounts' },
-            ]}
-            onChange={v => save({ gst_display: v as GstDisplay }, 'gst_display')}
-          />
-        </Field>
 
         <Field
           label="Decimal precision"
