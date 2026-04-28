@@ -170,10 +170,11 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
   const [customEnd,setCustomEnd]=useState(monthEnd)
   const [activeDateParams,setActiveDateParams]=useState(`startDate=${monthStart}&endDate=${monthEnd}`)
   const [dateLoading,setDateLoading]=useState(false)
+  const [reloadCounter,setReloadCounter]=useState(0)
   const fyLabel=isCustomRange?`${new Date(customStart+'T00:00').toLocaleDateString('en-AU',{day:'2-digit',month:'short',year:'2-digit'})} – ${new Date(customEnd+'T00:00').toLocaleDateString('en-AU',{day:'2-digit',month:'short',year:'2-digit'})}`:`FY${fyYear}`
 
-  function selectFY(y:number){setFyYear(y);setIsCustomRange(false);setCustomStart(`${y-1}-07-01`);setCustomEnd(`${y}-06-30`);setDateLoading(true);setActiveDateParams(`startDate=${y-1}-07-01&endDate=${y}-06-30`)}
-  function applyCustomRange(){if(customStart&&customEnd){setIsCustomRange(true);setDateLoading(true);setActiveDateParams(`startDate=${customStart}&endDate=${customEnd}`)}}
+  function selectFY(y:number){setFyYear(y);setIsCustomRange(false);setCustomStart(`${y-1}-07-01`);setCustomEnd(`${y}-06-30`);setDateLoading(true);setActiveDateParams(`startDate=${y-1}-07-01&endDate=${y}-06-30`);setReloadCounter(c=>c+1)}
+  function applyCustomRange(){if(customStart&&customEnd){setIsCustomRange(true);setDateLoading(true);setActiveDateParams(`startDate=${customStart}&endDate=${customEnd}`);setReloadCounter(c=>c+1)}}
 
   const load=useCallback(async(isRefresh=false)=>{
     if(isRefresh)setRefreshing(true)
@@ -249,7 +250,7 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
       setData(normalised);setError('');setLastRefresh(new Date());setDateLoading(false)
     }catch(e:any){setError(e.message);setDateLoading(false)}
     setLoading(false);setDateLoading(false);if(isRefresh)setRefreshing(false)
-  },[router,activeDateParams,prefs.gst_display])
+  },[router,activeDateParams,prefs.gst_display,reloadCounter])
   useEffect(()=>{load()},[load])
   useEffect(()=>{
     const intervalMs = (prefs.auto_refresh_seconds || 0) * 1000
