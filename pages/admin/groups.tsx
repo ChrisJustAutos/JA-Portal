@@ -389,23 +389,51 @@ function MembersTab({groups, members, canonicalNames, onToggle}: {
     if (!membersByGroup[m.group_id]) membersByGroup[m.group_id] = new Set()
     membersByGroup[m.group_id].add(m.canonical_name)
   })
-  const filtered = canonicalNames.filter(cn => !search || cn.toLowerCase().includes(search.toLowerCase()))
+
+  // ── Eligibility filter ─────────────────────────────────────
+  // For non-type dimensions (e.g. region) only show customers that have
+  // been classified as the 'Distributors' group in the type dimension.
+  // Sundry / Excluded / Internal customers don't need a region, so showing
+  // them here is just visual noise. Type dimension itself shows everyone
+  // (you classify INTO a type from this view, so unclassified customers
+  // need to be visible).
+  const distributorsTypeGroup = groups.find(g => g.dimension === 'type' && g.name === 'Distributors')
+  const distributorMembers = distributorsTypeGroup ? (membersByGroup[distributorsTypeGroup.id] || new Set()) : new Set<string>()
+  const eligibleNames = dimension === 'type'
+    ? canonicalNames
+    : canonicalNames.filter(cn => distributorMembers.has(cn))
+  const filtered = eligibleNames.filter(cn => !search || cn.toLowerCase().includes(search.toLowerCase()))
+
+  // For yellow-outline highlighting: in any dimension, a distributor is
+  // 'unassigned' if it isn't a member of any group in the current dimension.
+  function isUnassigned(cn: string): boolean {
+    return !groupsInDim.some(g => membersByGroup[g.id]?.has(cn))
+  }
+  const unassignedCount = filtered.filter(isUnassigned).length
 
   return <div style={{display:'flex',flexDirection:'column',gap:14}}>
     <div style={{background:T.bg2,border:`1px solid ${T.border}`,borderRadius:10,padding:16}}>
       <div style={{fontSize:13,fontWeight:600,color:T.text,marginBottom:10}}>What this tab does</div>
       <div style={{fontSize:12,color:T.text2,lineHeight:1.6}}>
         Click checkboxes to add or remove a canonical distributor from a group. A distributor can belong to multiple groups (e.g. CP Performance is both a "Distributor" AND "National"). Switch dimension with the selector to edit region, type, or any custom dimension you've added.
+        {dimension !== 'type' && (
+          <> Only customers classified as <strong style={{color:T.text}}>Distributors</strong> (in the type dimension) appear here — Sundry, Excluded and Internal customers don't need a {dimension}.</>
+        )}
       </div>
     </div>
 
     <div style={{background:T.bg2,border:`1px solid ${T.border}`,borderRadius:10,padding:16}}>
-      <div style={{display:'flex',gap:10,alignItems:'center',marginBottom:12}}>
+      <div style={{display:'flex',gap:10,alignItems:'center',marginBottom:12,flexWrap:'wrap'}}>
         <span style={{fontSize:11,color:T.text3}}>Dimension:</span>
         <select value={dimension} onChange={e=>setDimension(e.target.value)}
           style={{background:T.bg3,border:`1px solid ${T.border}`,color:T.text,borderRadius:4,padding:'4px 8px',fontSize:12,outline:'none'}}>
           {dims.map(d => <option key={d} value={d}>{d}</option>)}
         </select>
+        {unassignedCount > 0 && (
+          <span style={{fontSize:11,color:T.amber,padding:'3px 8px',borderRadius:4,background:`${T.amber}15`,border:`1px solid ${T.amber}40`,fontFamily:'monospace'}}>
+            ⚠ {unassignedCount} unassigned
+          </span>
+        )}
         <div style={{flex:1}}/>
         <input placeholder="Search distributors…" value={search} onChange={e=>setSearch(e.target.value)}
           style={{background:T.bg3,border:`1px solid ${T.border}`,color:T.text,borderRadius:4,padding:'5px 10px',fontSize:12,width:240,outline:'none'}}/>
@@ -415,7 +443,7 @@ function MembersTab({groups, members, canonicalNames, onToggle}: {
         <table style={{width:'100%',borderCollapse:'collapse'}}>
           <thead><tr style={{borderBottom:`1px solid ${T.border2}`}}>
             <th style={{fontSize:10,color:T.text3,padding:'8px 10px',textAlign:'left',fontWeight:500,textTransform:'uppercase',letterSpacing:'0.05em',position:'sticky',left:0,background:T.bg2}}>
-              Distributor ({filtered.length})
+              Distributor ({filtered.length}{dimension !== 'type' && filtered.length !== canonicalNames.length ? ` of ${canonicalNames.length}` : ''})
             </th>
             {groupsInDim.map(g => (
               <th key={g.id} style={{fontSize:10,padding:'8px 10px',textAlign:'center',fontWeight:500,textTransform:'uppercase',letterSpacing:'0.05em',color:g.color||T.text3,whiteSpace:'nowrap'}}>
@@ -423,9 +451,24 @@ function MembersTab({groups, members, canonicalNames, onToggle}: {
               </th>
             ))}
           </tr></thead>
-          <tbody>{filtered.map(cn => (
-            <tr key={cn} style={{borderTop:`1px solid ${T.border}`}}>
-              <td style={{fontSize:12,color:T.text,padding:'6px 10px',position:'sticky',left:0,background:T.bg2}}>{cn}</td>
+          <tbody>{filtered.map(cn => {
+            const unassigned = isUnassigned(cn)
+            return (
+            <tr key={cn} style={{
+              borderTop:`1px solid ${T.border}`,
+              outline: unassigned ? `1px solid ${T.amber}` : 'none',
+              outlineOffset: unassigned ? '-1px' : 0,
+              background: unassigned ? `${T.amber}08` : 'transparent',
+            }}>
+              <td style={{
+                fontSize:12,padding:'6px 10px',position:'sticky',left:0,
+                background: unassigned ? `${T.amber}08` : T.bg2,
+                color: unassigned ? T.amber : T.text,
+                fontWeight: unassigned ? 500 : 400,
+              }}>
+                {cn}
+                {unassigned && <span style={{marginLeft:8,fontSize:10,color:T.amber,fontFamily:'monospace'}}>· not in any {dimension}</span>}
+              </td>
               {groupsInDim.map(g => {
                 const isMember = !!membersByGroup[g.id]?.has(cn)
                 return <td key={g.id} style={{textAlign:'center',padding:'6px 10px'}}>
@@ -435,7 +478,7 @@ function MembersTab({groups, members, canonicalNames, onToggle}: {
                 </td>
               })}
             </tr>
-          ))}</tbody>
+          )})}</tbody>
         </table>
       </div>
     </div>
