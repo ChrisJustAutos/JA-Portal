@@ -6,12 +6,18 @@
     "pages/api/distributors.ts":                    { "maxDuration": 60 },
     "pages/api/distributors/refresh-cache.ts":      { "maxDuration": 300 },
     "pages/api/chat.ts":                            { "maxDuration": 60 },
-    "pages/api/test.ts":                            { "maxDuration": 60 }
+    "pages/api/test.ts":                            { "maxDuration": 60 },
+    "pages/api/cron/sync-followups.ts":             { "maxDuration": 300 },
+    "pages/api/calls/backfill-followups.ts":        { "maxDuration": 300 }
   },
   "crons": [
     {
       "path": "/api/distributors/refresh-cache",
       "schedule": "0 16 * * *"
+    },
+    {
+      "path": "/api/cron/sync-followups",
+      "schedule": "*/5 * * * *"
     }
   ]
 }
