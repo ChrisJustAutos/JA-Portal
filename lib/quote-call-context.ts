@@ -1,65 +1,62 @@
 // lib/quote-call-context.ts
-// Shared call-summary lookup. Used by:
-//   - Pipeline A (quote ingestion): attach the most-recent call context to the
-//     AC deal note when a quote PDF arrives. Read-only.
-//   - Pipeline B (Monday "Fetch Call Notes" button): post the most-recent call
-//     summary as a Monday update on the clicked item. Generates on-demand
-//     if a transcript exists but no follow_up_summary has been produced yet
-//     (the proactive sync cron has a backlog).
+// Combined call-history lookup. Used by:
+//   - Pipeline B (Monday "Fetch Call Notes" button): post a combined narrative
+//     covering the customer's recent call history as a Monday update.
 //
 // LOGIC:
 //   1. Normalise input phone (multiple variants — see buildPhoneVariants).
-//   2. Find the most recent call within 30 days that matches a phone variant.
-//   3. Branch on what's available:
-//        a. follow_up_summary present → return it (LOOKUP HIT)
-//        b. follow_up_summary missing AND transcript exists AND
-//           generateOnDemand=true → call Claude, persist result, return it
-//        c. neither → return null
+//   2. Find ALL calls within the last 30 days that:
+//        - match a phone variant
+//        - have a transcript with substantive content (>= 50 chars)
+//      ordered by call_date DESC, capped at MAX_CALLS.
+//   3. If zero qualifying calls → return null.
+//   4. Otherwise → call generateCombinedFollowUp() to produce one cohesive
+//      narrative covering all the calls, plus a footer listing them.
 //
-// Best-effort. Pipelines A and B both proceed gracefully on null.
+// PERSISTENCE: this function does NOT persist anything. The combined view
+// doesn't fit neatly into call_analysis.follow_up_summary (which is per-call).
+// We re-generate every button-press; ~$0.005-0.02 per click and a few seconds.
+// If usage volumes ever justify caching, we'd add a customer_call_summaries
+// table keyed by (phone, call_id_set_hash). Not warranted yet.
 //
-// COST NOTE: generate-on-demand fires the same Anthropic API call the
-// proactive cron uses (~$0.01–0.03 per call with Haiku 4.5). Only Pipeline B
-// triggers it (rep-initiated, low volume). Pipeline A passes generateOnDemand=false.
+// PIPELINE A: a separate single-call function (kept for future use) lives
+// adjacent — currently this file exposes only the combined flow because
+// Pipeline A isn't built yet. When Pipeline A is built, it will use the
+// existing single-call generateFollowUpSummary directly rather than this
+// helper.
 
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
 import { normalisePhone } from './monday-followup'
 import {
-  renderSummaryAsNote,
-  generateFollowUpSummary,
-  FollowUpSummary,
+  generateCombinedFollowUp,
+  renderCombinedNote,
+  CombinedFollowUp,
+  CombinedCallInput,
 } from './anthropic-followup'
 
 const LOOKBACK_DAYS = 30
+const MAX_CALLS = 10                  // cap per design discussion
+const MIN_TRANSCRIPT_CHARS = 50       // skip calls with effectively no transcript
 
 export interface QuoteCallContext {
-  // The matched call
-  callId: string
-  calledAt: string                  // ISO timestamp (UTC, as stored)
-  durationSeconds: number
-  outcome: string | null            // sale / quote_given / wrong_number / etc
-  agentName: string | null
+  // The most recent call (used for header / matched_call_id logging)
+  latestCallId: string
+  latestCallDate: string
 
-  // The structured follow-up summary (validated shape)
-  summary: FollowUpSummary
+  // All call IDs included in the analysis (chronological-asc)
+  callIds: string[]
 
-  // Pre-rendered text — ready to post as a Monday update or AC deal note.
+  // The combined narrative
+  summary: CombinedFollowUp
+
+  // Pre-rendered text for the Monday Update body
   formatted: string
 
-  // True when this summary was just generated on-demand (vs. read from cache).
-  // Useful for telemetry — the endpoint can log generated_on_demand=true to
-  // quote_events so we can see how often the cron is missing things.
-  generatedOnDemand: boolean
+  // Telemetry
+  callCount: number                   // how many calls fed into the summary
+  generatedOnDemand: true             // always true — this flow always generates
 }
 
-export interface GetContextOptions {
-  // When true, missing follow_up_summary triggers a Claude API call to
-  // generate one, which is then persisted to call_analysis. Pipeline B
-  // sets this true. Pipeline A keeps it false.
-  generateOnDemand?: boolean
-}
-
-// ── Server-side Supabase client ─────────────────────────────────────────
 function getServiceClient(): SupabaseClient {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY
@@ -69,13 +66,7 @@ function getServiceClient(): SupabaseClient {
   return createClient(url, key, { auth: { persistSession: false } })
 }
 
-// ── Phone variant generation ────────────────────────────────────────────
-// The SQL normalised column produces (e.g.):
-//   "+61411222333"   → "0411222333"      (61 → 0)
-//   "0411 222 333"   → "0411222333"      (whitespace stripped)
-// The TS normalisePhone in monday-followup.ts strips leading 0 too:
-//   "0411 222 333"   → "411222333"
-// Cast a wide net to bridge the two normalisers.
+// Variants to bridge SQL-column normalisation vs TS normalisePhone.
 function buildPhoneVariants(rawPhone: string): string[] {
   const stripped = rawPhone.replace(/\s+/g, '').trim()
   const tsNorm = normalisePhone(stripped)
@@ -90,31 +81,15 @@ function buildPhoneVariants(rawPhone: string): string[] {
   return Array.from(variants).filter(Boolean)
 }
 
-// ── Validate summary shape (defensive) ──────────────────────────────────
-function isValidSummary(raw: any): raw is FollowUpSummary {
-  if (!raw || typeof raw !== 'object') return false
-  const fields = ['who_what', 'discussed', 'objections', 'commitments', 'next_step', 'sentiment']
-  for (const f of fields) {
-    if (typeof raw[f] !== 'string' || !raw[f].trim()) return false
-  }
-  if (!['hot', 'warm', 'cold'].includes(raw.sentiment)) return false
-  return true
-}
-
-// ── Public entry point ──────────────────────────────────────────────────
-
 /**
- * Look up (and optionally generate) the most recent call summary for a phone.
+ * Look up and combine recent calls for a phone into a single narrative.
  *
  * @param rawPhone Phone number in any common format.
- * @param options  generateOnDemand: true to fire Claude API when missing.
- * @returns        Structured + pre-formatted context, or null if no
- *                 matching call within the last 30 days, or no transcript
- *                 to generate from.
+ * @returns        The combined summary + rendered Monday-update text,
+ *                 or null if no qualifying calls exist.
  */
 export async function getQuoteCallContext(
   rawPhone: string | null | undefined,
-  options: GetContextOptions = {},
 ): Promise<QuoteCallContext | null> {
   if (!rawPhone || !rawPhone.trim()) return null
 
@@ -124,11 +99,9 @@ export async function getQuoteCallContext(
   const sb = getServiceClient()
   const since = new Date(Date.now() - LOOKBACK_DAYS * 24 * 60 * 60 * 1000).toISOString()
 
-  // We want the most recent call regardless of analysis state (so that
-  // generate-on-demand can fall back to a transcript). The previous version
-  // used !inner+filter on follow_up_summary, which excluded calls that
-  // could be summarised on demand. Now: pull the latest matching call,
-  // join analysis + transcript, and branch in code.
+  // Pull recent calls + their transcripts. We want as many as possible up to
+  // MAX_CALLS but Supabase's PostgREST returns the joined table as nested
+  // arrays so we filter/cap in code rather than via SQL window functions.
   const { data, error } = await sb
     .from('calls')
     .select(`
@@ -141,17 +114,12 @@ export async function getQuoteCallContext(
       external_number_normalised,
       effective_advisor_name,
       agent_name,
-      call_transcripts(full_text),
-      call_analysis(
-        id,
-        outcome,
-        follow_up_summary
-      )
+      call_transcripts(full_text)
     `)
     .in('external_number_normalised', variants)
     .gte('call_date', since)
     .order('call_date', { ascending: false })
-    .limit(1)
+    .limit(MAX_CALLS * 2)              // pull a margin in case some lack transcripts
 
   if (error) {
     console.warn('[quote-call-context] Supabase query failed:', error.message)
@@ -159,90 +127,68 @@ export async function getQuoteCallContext(
   }
   if (!data || data.length === 0) return null
 
-  const row: any = data[0]
-  const analysis = pickFirst(row.call_analysis)
-  const transcript = pickFirst(row.call_transcripts)
-  const agentName = row.effective_advisor_name || row.agent_name || null
-
-  // ── Branch A: existing valid follow_up_summary → return it ─────────
-  if (analysis && isValidSummary(analysis.follow_up_summary)) {
-    return buildContext(row, analysis, analysis.follow_up_summary, agentName, false)
-  }
-
-  // ── Branch B: generate on demand if allowed and possible ───────────
-  if (options.generateOnDemand && analysis && transcript?.full_text) {
-    try {
-      const gen = await generateFollowUpSummary(transcript.full_text, {
-        direction: row.direction,
-        agent_name: agentName,
-        caller_name: row.caller_name,
-        external_number: row.external_number,
-        duration_seconds: row.duration_seconds || 0,
-        call_date: row.call_date,
-      })
-
-      // Persist back so future lookups hit the cache. Match the columns
-      // sync-followups.ts writes for consistency.
-      const { error: updErr } = await sb
-        .from('call_analysis')
-        .update({
-          follow_up_summary: gen.summary,
-          follow_up_generated_at: new Date().toISOString(),
-          follow_up_model: gen.model,
-        })
-        .eq('id', analysis.id)
-
-      if (updErr) {
-        // Persist failed but we still have the summary in memory; surface
-        // it to the rep and log the persist failure — they don't care if
-        // it was saved, they just want the notes.
-        console.warn('[quote-call-context] follow_up_summary persist failed (returning anyway):', updErr.message)
-      }
-
-      return buildContext(row, analysis, gen.summary, agentName, true)
-    } catch (e: any) {
-      // Claude API call failed — fall through to null. Caller (the endpoint)
-      // will post the "no analysed call" message. Better than throwing.
-      console.warn('[quote-call-context] on-demand generation failed:', e?.message || e)
-      return null
+  // Filter to calls with substantive transcripts.
+  type Row = (typeof data)[number]
+  const eligible: Array<{ row: Row; transcript: string }> = []
+  for (const row of data) {
+    const transcriptObj = pickFirst((row as any).call_transcripts)
+    const transcript = transcriptObj?.full_text || ''
+    if (transcript.trim().length >= MIN_TRANSCRIPT_CHARS) {
+      eligible.push({ row, transcript })
     }
+    if (eligible.length >= MAX_CALLS) break
   }
 
-  // ── Branch C: nothing to surface ───────────────────────────────────
-  // Either no analysis row, no transcript, or generateOnDemand=false.
-  return null
-}
+  if (eligible.length === 0) return null
 
-// ── Helpers ─────────────────────────────────────────────────────────────
+  // Build the input shape generateCombinedFollowUp expects.
+  const callsForClaude: CombinedCallInput[] = eligible.map(({ row, transcript }) => ({
+    callId: (row as any).id,
+    callDate: (row as any).call_date,
+    direction: ((row as any).direction || 'inbound') as 'inbound' | 'outbound',
+    agentName: (row as any).effective_advisor_name || (row as any).agent_name || null,
+    durationSeconds: (row as any).duration_seconds || 0,
+    transcript,
+  }))
+
+  let combined: CombinedFollowUp
+  try {
+    const result = await generateCombinedFollowUp(callsForClaude)
+    combined = result.summary
+  } catch (e: any) {
+    console.warn('[quote-call-context] combined generation failed:', e?.message || e)
+    return null
+  }
+
+  // Render the Monday Update body.
+  const formatted = renderCombinedNote(combined, {
+    calls: callsForClaude.map(c => ({
+      callDate: c.callDate,
+      agentName: c.agentName,
+      direction: c.direction,
+      durationSeconds: c.durationSeconds,
+    })),
+  })
+
+  // Sort ASC for callIds (chronological) so logging is predictable;
+  // latest is last.
+  const callsAsc = [...callsForClaude].sort(
+    (a, b) => new Date(a.callDate).getTime() - new Date(b.callDate).getTime(),
+  )
+  const latest = callsAsc[callsAsc.length - 1]
+
+  return {
+    latestCallId: latest.callId,
+    latestCallDate: latest.callDate,
+    callIds: callsAsc.map(c => c.callId),
+    summary: combined,
+    formatted,
+    callCount: callsAsc.length,
+    generatedOnDemand: true,
+  }
+}
 
 function pickFirst<T>(value: T | T[] | null | undefined): T | null {
   if (!value) return null
   return Array.isArray(value) ? (value[0] || null) : value
 }
-
-function buildContext(
-  row: any,
-  analysis: any,
-  summary: FollowUpSummary,
-  agentName: string | null,
-  generatedOnDemand: boolean,
-): QuoteCallContext {
-  return {
-    callId: row.id,
-    calledAt: row.call_date,
-    durationSeconds: row.duration_seconds || 0,
-    outcome: analysis?.outcome || null,
-    agentName,
-    summary,
-    formatted: renderSummaryAsNote(summary, {
-      agentName: agentName || undefined,
-      callDate: row.call_date,
-      durationSec: row.duration_seconds || undefined,
-    }),
-    generatedOnDemand,
-  }
-}
-
-// ── TODO — phone normalisation cleanup (unchanged) ─────────────────────
-// Extract a single normalise() into lib/phone.ts whose TS output exactly
-// matches the SQL generated column. Variant-list approach is fine for now.

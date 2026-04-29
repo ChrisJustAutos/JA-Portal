@@ -1,31 +1,36 @@
 // lib/anthropic-followup.ts
-// Generates a structured 7-field follow-up summary from a call transcript.
-// Designed for sales reps picking up a lead cold — answers "what was discussed,
+// Generates structured follow-up summaries from call transcripts.
+//
+// TWO ENTRY POINTS:
+//   - generateFollowUpSummary(transcript, ctx)        — one transcript, one summary.
+//                                                       Used by the proactive sync cron
+//                                                       and (legacy) Pipeline A read path.
+//   - generateCombinedFollowUp(calls)                 — multiple calls for one customer,
+//                                                       returns one cohesive narrative.
+//                                                       Used by Pipeline B (Monday button).
+//
+// Designed for sales reps picking up a lead — answers "what was discussed,
 // what did we promise, what comes next" — NOT coaching feedback.
 //
-// Now also extracts email when the caller mentions one in the transcript
-// (e.g. "I'll email you at sam@example.com" or "send the quote to..."). This
-// is used downstream to search AC by email when phone match fails.
+// Now also extracts email when the caller mentions one in the transcript.
 //
-// Runs independently of the existing coaching pipeline. The coaching pipeline
-// produces call_analysis.summary (coaching-flavoured); this one populates
-// call_analysis.follow_up_summary (lead-context-flavoured).
-//
-// Model: matches what the existing coaching pipeline uses (claude-haiku-4-5),
-// since this is a simpler summarisation task that doesn't need Opus-level
-// reasoning. Keep the model env-overridable in case we want to swap later.
+// Model: claude-haiku-4-5 by default. Override with FOLLOWUP_MODEL env var.
 
 const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages'
-const DEFAULT_MODEL = 'claude-haiku-4-5-20251001'  // matches active coaching model
+const DEFAULT_MODEL = 'claude-haiku-4-5-20251001'
+
+// ──────────────────────────────────────────────────────────────────────
+// SINGLE-CALL TYPES + FUNCTIONS (existing — unchanged behaviour)
+// ──────────────────────────────────────────────────────────────────────
 
 export interface FollowUpSummary {
-  who_what: string       // caller, vehicle/product, brief context
-  discussed: string      // key topics, products, technical questions
-  objections: string     // concerns raised — or "none" if none
-  commitments: string    // what we promised, by when — or "none"
-  next_step: string      // what should happen on the next contact
-  sentiment: 'hot' | 'warm' | 'cold'  // urgency for the next person picking it up
-  email: string | null   // customer's email if mentioned in transcript, else null
+  who_what: string
+  discussed: string
+  objections: string
+  commitments: string
+  next_step: string
+  sentiment: 'hot' | 'warm' | 'cold'
+  email: string | null
 }
 
 export interface FollowUpResult {
@@ -45,13 +50,6 @@ interface CallContext {
   call_date: string
 }
 
-/**
- * Generate a follow-up summary from a transcript.
- *
- * @param transcript Full plaintext transcript (from call_transcripts.full_text)
- * @param ctx        Metadata about the call (direction, agent, customer info)
- * @returns          Structured 7-field summary + token/cost telemetry
- */
 export async function generateFollowUpSummary(
   transcript: string,
   ctx: CallContext,
@@ -61,8 +59,8 @@ export async function generateFollowUpSummary(
 
   const model = process.env.FOLLOWUP_MODEL || DEFAULT_MODEL
 
-  const systemPrompt = buildSystemPrompt()
-  const userPrompt = buildUserPrompt(transcript, ctx)
+  const systemPrompt = buildSingleSystemPrompt()
+  const userPrompt = buildSingleUserPrompt(transcript, ctx)
 
   const body = {
     model,
@@ -89,17 +87,11 @@ export async function generateFollowUpSummary(
   const data = await r.json()
   const text = data.content?.[0]?.text || ''
   const summary = extractJson(text)
+  validateSingleSummary(summary)
 
-  // Validate shape — Claude can occasionally return malformed JSON or miss fields.
-  // Fail loudly so the worker retries rather than persisting garbage.
-  validateSummary(summary)
-
-  // Cost calc — Haiku 4.5 pricing: $1/MTok input, $5/MTok output (as of Apr 2026).
-  // Override per-model with FOLLOWUP_COST_INPUT_MICRO / FOLLOWUP_COST_OUTPUT_MICRO
-  // env vars if pricing changes.
   const inputTokens = data.usage?.input_tokens ?? 0
   const outputTokens = data.usage?.output_tokens ?? 0
-  const inputCostPerMTok = Number(process.env.FOLLOWUP_COST_INPUT_MICRO || 1_000_000)   // micro USD per MTok
+  const inputCostPerMTok = Number(process.env.FOLLOWUP_COST_INPUT_MICRO || 1_000_000)
   const outputCostPerMTok = Number(process.env.FOLLOWUP_COST_OUTPUT_MICRO || 5_000_000)
   const costMicroUsd =
     Math.round((inputTokens / 1_000_000) * inputCostPerMTok) +
@@ -108,9 +100,7 @@ export async function generateFollowUpSummary(
   return { summary, model, inputTokens, outputTokens, costMicroUsd }
 }
 
-// ── Prompt construction ──────────────────────────────────────────────────
-
-function buildSystemPrompt(): string {
+function buildSingleSystemPrompt(): string {
   return `You are summarising a phone call between a Just Autos sales rep and a customer (or prospect). Just Autos is an Australian automotive performance and tuning workshop, distributing tuning hardware to a network across Australia and running a workshop in QLD.
 
 Your output is a FOLLOW-UP NOTE for the next sales rep who picks up this lead. It should answer: "What was discussed, what did we promise, what comes next?" It is NOT a coaching summary or rep performance review — coaching is handled separately.
@@ -137,7 +127,7 @@ Rules:
 - For email: only return values that look like real email addresses (have @ and a domain). If unsure, return null.`
 }
 
-function buildUserPrompt(transcript: string, ctx: CallContext): string {
+function buildSingleUserPrompt(transcript: string, ctx: CallContext): string {
   const lines: string[] = []
   lines.push(`Call direction: ${ctx.direction}`)
   if (ctx.agent_name) lines.push(`Sales rep (NOT the customer): ${ctx.agent_name}`)
@@ -154,30 +144,7 @@ function buildUserPrompt(transcript: string, ctx: CallContext): string {
   return lines.join('\n')
 }
 
-// ── Output parsing & validation ──────────────────────────────────────────
-
-function extractJson(text: string): any {
-  // Claude occasionally wraps JSON in ```json fences despite instructions.
-  // Strip them and any leading/trailing whitespace before parsing.
-  const cleaned = text
-    .replace(/^```(?:json)?\s*/i, '')
-    .replace(/\s*```\s*$/i, '')
-    .trim()
-
-  try {
-    return JSON.parse(cleaned)
-  } catch {
-    // Last-ditch: find the first { and last } and parse the slice.
-    const first = cleaned.indexOf('{')
-    const last = cleaned.lastIndexOf('}')
-    if (first >= 0 && last > first) {
-      return JSON.parse(cleaned.substring(first, last + 1))
-    }
-    throw new Error(`Could not parse JSON from model output: ${cleaned.substring(0, 200)}`)
-  }
-}
-
-function validateSummary(s: any): asserts s is FollowUpSummary {
+function validateSingleSummary(s: any): asserts s is FollowUpSummary {
   const requiredStrings = ['who_what', 'discussed', 'objections', 'commitments', 'next_step', 'sentiment']
   for (const key of requiredStrings) {
     if (typeof s[key] !== 'string' || !s[key].trim()) {
@@ -187,53 +154,295 @@ function validateSummary(s: any): asserts s is FollowUpSummary {
   if (!['hot', 'warm', 'cold'].includes(s.sentiment)) {
     throw new Error(`Invalid sentiment '${s.sentiment}' — must be hot/warm/cold`)
   }
-  // Email is allowed to be null OR a string. Coerce empty strings → null.
-  if (s.email !== null && s.email !== undefined) {
-    if (typeof s.email !== 'string') {
-      s.email = null
-    } else {
-      const trimmed = s.email.trim()
-      // Basic sanity: contains @ and a dot. Rejects common Claude hallucinations.
-      if (!trimmed || !trimmed.includes('@') || !trimmed.includes('.')) {
-        s.email = null
-      } else {
-        s.email = trimmed.toLowerCase()
-      }
-    }
-  } else {
-    s.email = null
-  }
+  s.email = sanitiseEmail(s.email)
 }
 
-// ── Render summary as plain-text note for AC / Monday ────────────────────
-
-/**
- * Render a follow-up summary as a human-readable note suitable for posting
- * to a Monday update or AC contact note. Designed to scan quickly on mobile.
- */
-export function renderSummaryAsNote(s: FollowUpSummary, ctx: { agentName?: string; callDate?: string; durationSec?: number }): string {
+export function renderSummaryAsNote(
+  s: FollowUpSummary,
+  ctx: { agentName?: string; callDate?: string; durationSec?: number },
+): string {
   const header = ctx.callDate
     ? `📞 Call ${new Date(ctx.callDate).toLocaleString('en-AU', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'Australia/Brisbane' })}${ctx.agentName ? ` · ${ctx.agentName}` : ''}${ctx.durationSec ? ` · ${Math.round(ctx.durationSec / 60)}m${ctx.durationSec % 60}s` : ''}`
     : '📞 Call follow-up'
 
-  const sentimentBadge = s.sentiment === 'hot' ? '🔥 HOT'
+  const sentimentBadge =
+    s.sentiment === 'hot' ? '🔥 HOT'
     : s.sentiment === 'warm' ? '☀️ WARM'
     : '🧊 COLD'
 
+  const lines: string[] = [header, sentimentBadge, '', `Who: ${s.who_what}`, '', `Discussed: ${s.discussed}`]
+  if (s.objections && s.objections.toLowerCase() !== 'none') lines.push('', `Objections: ${s.objections}`)
+  if (s.commitments && s.commitments.toLowerCase() !== 'none') lines.push('', `Promised: ${s.commitments}`)
+  lines.push('', `Next step: ${s.next_step}`)
+  return lines.join('\n')
+}
+
+
+// ──────────────────────────────────────────────────────────────────────
+// COMBINED MULTI-CALL TYPES + FUNCTIONS (new — for Pipeline B)
+// ──────────────────────────────────────────────────────────────────────
+
+export interface CombinedCallInput {
+  callId: string
+  callDate: string                  // ISO timestamp
+  direction: 'inbound' | 'outbound'
+  agentName: string | null
+  durationSeconds: number
+  transcript: string
+}
+
+export interface CombinedFollowUp {
+  who_what: string                  // who the customer is + what they're trying to do, OVERALL
+  what_happened: string             // narrative across all calls — what's been said, what's progressed
+  outstanding: string               // unresolved items, things still owed to the customer (or "None")
+  next_step: string                 // single recommended next action
+  sentiment: 'hot' | 'warm' | 'cold'  // OVERALL sentiment based on the customer's current state
+  email: string | null              // any email mentioned across the calls
+}
+
+export interface CombinedFollowUpResult {
+  summary: CombinedFollowUp
+  model: string
+  inputTokens: number
+  outputTokens: number
+  costMicroUsd: number
+  calls: CombinedCallInput[]        // echoed back for caller convenience
+}
+
+/**
+ * Generate ONE narrative summary across multiple calls for the same customer.
+ *
+ * @param calls Array of calls (most recent first or any order — we sort
+ *              chronologically inside the prompt for clarity).
+ *              Caller is responsible for filtering out empty transcripts
+ *              and capping count.
+ */
+export async function generateCombinedFollowUp(
+  calls: CombinedCallInput[],
+): Promise<CombinedFollowUpResult> {
+  if (calls.length === 0) throw new Error('generateCombinedFollowUp called with no calls')
+
+  const apiKey = process.env.ANTHROPIC_API_KEY
+  if (!apiKey) throw new Error('ANTHROPIC_API_KEY not configured')
+
+  const model = process.env.FOLLOWUP_MODEL || DEFAULT_MODEL
+
+  // Chronological order — Claude reasons better when the story flows forward.
+  const ordered = [...calls].sort(
+    (a, b) => new Date(a.callDate).getTime() - new Date(b.callDate).getTime(),
+  )
+
+  const systemPrompt = buildCombinedSystemPrompt()
+  const userPrompt = buildCombinedUserPrompt(ordered)
+
+  const body = {
+    model,
+    max_tokens: 1500,                // longer output budget; multi-call narratives run longer
+    system: systemPrompt,
+    messages: [{ role: 'user', content: userPrompt }],
+  }
+
+  const r = await fetch(ANTHROPIC_API_URL, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': apiKey,
+      'anthropic-version': '2023-06-01',
+    },
+    body: JSON.stringify(body),
+  })
+
+  if (!r.ok) {
+    const errText = await r.text()
+    throw new Error(`Anthropic API ${r.status}: ${errText.substring(0, 500)}`)
+  }
+
+  const data = await r.json()
+  const text = data.content?.[0]?.text || ''
+  const summary = extractJson(text)
+  validateCombinedSummary(summary)
+
+  const inputTokens = data.usage?.input_tokens ?? 0
+  const outputTokens = data.usage?.output_tokens ?? 0
+  const inputCostPerMTok = Number(process.env.FOLLOWUP_COST_INPUT_MICRO || 1_000_000)
+  const outputCostPerMTok = Number(process.env.FOLLOWUP_COST_OUTPUT_MICRO || 5_000_000)
+  const costMicroUsd =
+    Math.round((inputTokens / 1_000_000) * inputCostPerMTok) +
+    Math.round((outputTokens / 1_000_000) * outputCostPerMTok)
+
+  return { summary, model, inputTokens, outputTokens, costMicroUsd, calls: ordered }
+}
+
+function buildCombinedSystemPrompt(): string {
+  return `You are summarising the recent phone-call history for ONE customer of Just Autos. Just Autos is an Australian automotive performance and tuning workshop, distributing tuning hardware to a network across Australia and running a workshop in QLD.
+
+You will be given multiple call transcripts in chronological order (oldest first). They are all between this customer and Just Autos sales reps (the rep may differ between calls).
+
+Your output is a SINGLE COHESIVE FOLLOW-UP NOTE for the next rep picking up this lead. It should answer: "Where is this customer at right now, and what comes next?" It is NOT a coaching summary or rep performance review.
+
+Output ONLY a JSON object with these exact fields:
+
+{
+  "who_what":      "1-2 sentences: who the CUSTOMER is (NAME — never the rep), their vehicle if known, and what they're ultimately trying to achieve across these calls. Example: 'Jason — interested in a Land Cruiser 200 build. Multiple touchpoints, mostly missed connections.'",
+  "what_happened": "A narrative across the calls: what's actually been discussed, what's progressed, what hasn't. Reference specific calls when useful (e.g. 'On the first call...', 'On the most recent call...'). 2-4 sentences. Don't list every call mechanically — synthesise the story.",
+  "outstanding":   "What's STILL unresolved or owed to the customer right now. Quotes promised but not sent, callbacks owed, decisions pending. If everything has been actioned and nothing's outstanding, write exactly 'None'.",
+  "next_step":     "ONE concrete recommended next action for the rep. Example: 'Try Jason again, possibly by SMS — two voice attempts have failed.'",
+  "sentiment":     "Exactly one of: 'hot' / 'warm' / 'cold'. This is the OVERALL sentiment based on where the customer is RIGHT NOW, not any single call. HOT = engaged, has timeline, ready to commit. WARM = interested, ongoing dialogue, needs nurturing. COLD = price-shopping, unreachable, or has dealbreakers.",
+  "email":         "The customer's email address if it appears in any of the transcripts. Return the literal email string. If no email is mentioned, return null (the JSON null, not the string 'null'). Do NOT make up an email."
+}
+
+Rules:
+- Output ONLY the JSON. No preamble, no markdown fences, no commentary.
+- Plain text in JSON values — no bullets, no asterisks, no special formatting.
+- The "Rep" labelled in each call header is a Just Autos employee, NEVER the customer. who_what must describe the customer.
+- Don't invent details. If a transcript is short or missed (voicemail, hangup), reflect that honestly.
+- "what_happened" should give the rep enough context to walk into the next call confidently. Be specific about products, prices, dates, vehicles, and decisions.
+- "sentiment" is overall and present-tense — judge from how things stand NOW, not the average across history.
+- For email: only return strings that look like real emails (have @ and a domain). If unsure, return null.`
+}
+
+function buildCombinedUserPrompt(calls: CombinedCallInput[]): string {
+  const lines: string[] = []
+  lines.push(`Customer call history — ${calls.length} call(s) in chronological order (oldest first):`)
+  lines.push('')
+
+  calls.forEach((c, i) => {
+    const dateStr = new Date(c.callDate).toLocaleString('en-AU', {
+      dateStyle: 'medium',
+      timeStyle: 'short',
+      timeZone: 'Australia/Brisbane',
+    })
+    lines.push(`──────── Call ${i + 1} of ${calls.length} ────────`)
+    lines.push(`Date: ${dateStr}`)
+    lines.push(`Direction: ${c.direction}`)
+    lines.push(`Rep (NOT the customer): ${c.agentName || 'unknown'}`)
+    lines.push(`Duration: ${c.durationSeconds}s`)
+    lines.push('Transcript:')
+    lines.push(c.transcript)
+    lines.push('')
+  })
+
+  lines.push('────────')
+  lines.push('Produce the JSON combined follow-up note. Remember: who_what describes the CUSTOMER, sentiment is overall and present-tense.')
+  return lines.join('\n')
+}
+
+function validateCombinedSummary(s: any): asserts s is CombinedFollowUp {
+  const requiredStrings = ['who_what', 'what_happened', 'outstanding', 'next_step', 'sentiment']
+  for (const key of requiredStrings) {
+    if (typeof s[key] !== 'string' || !s[key].trim()) {
+      throw new Error(`Combined follow-up missing or empty field: ${key}`)
+    }
+  }
+  if (!['hot', 'warm', 'cold'].includes(s.sentiment)) {
+    throw new Error(`Invalid sentiment '${s.sentiment}' — must be hot/warm/cold`)
+  }
+  s.email = sanitiseEmail(s.email)
+}
+
+/**
+ * Render a combined follow-up as a Monday Update body.
+ *
+ * @param s     The combined summary
+ * @param ctx   Metadata for the header + footer
+ *              calls: the per-call list to show in the footer
+ */
+export function renderCombinedNote(
+  s: CombinedFollowUp,
+  ctx: {
+    calls: Array<{
+      callDate: string
+      agentName: string | null
+      direction: 'inbound' | 'outbound'
+      durationSeconds: number
+    }>
+  },
+): string {
+  const total = ctx.calls.length
+
+  // Header — derived from the most recent call (last after we sorted chronologically;
+  // but the caller may pass either order — find max date defensively).
+  const mostRecent = ctx.calls.reduce(
+    (max, c) => new Date(c.callDate) > new Date(max.callDate) ? c : max,
+    ctx.calls[0],
+  )
+  const latestStr = new Date(mostRecent.callDate).toLocaleString('en-AU', {
+    dateStyle: 'medium',
+    timeStyle: 'short',
+    timeZone: 'Australia/Brisbane',
+  })
+
+  const sentimentBadge =
+    s.sentiment === 'hot' ? '🔥 HOT'
+    : s.sentiment === 'warm' ? '☀️ WARM'
+    : '🧊 COLD'
+
+  const callWord = total === 1 ? 'call' : 'calls'
+  const header = `📞 Customer history — ${total} ${callWord} in last 30 days · Latest: ${latestStr}`
+
   const lines: string[] = [
     header,
-    `${sentimentBadge}`,
+    sentimentBadge,
     '',
     `Who: ${s.who_what}`,
     '',
-    `Discussed: ${s.discussed}`,
+    `What's happened: ${s.what_happened}`,
   ]
-  if (s.objections && s.objections.toLowerCase() !== 'none') {
-    lines.push('', `Objections: ${s.objections}`)
+
+  if (s.outstanding && s.outstanding.toLowerCase() !== 'none') {
+    lines.push('', `Outstanding: ${s.outstanding}`)
   }
-  if (s.commitments && s.commitments.toLowerCase() !== 'none') {
-    lines.push('', `Promised: ${s.commitments}`)
-  }
+
   lines.push('', `Next step: ${s.next_step}`)
+
+  // Footer — list the calls referenced, chronological order (oldest first).
+  const callsAsc = [...ctx.calls].sort(
+    (a, b) => new Date(a.callDate).getTime() - new Date(b.callDate).getTime(),
+  )
+  lines.push('', 'Calls referenced:')
+  for (const c of callsAsc) {
+    const d = new Date(c.callDate).toLocaleString('en-AU', {
+      dateStyle: 'medium',
+      timeStyle: 'short',
+      timeZone: 'Australia/Brisbane',
+    })
+    const mins = Math.floor(c.durationSeconds / 60)
+    const secs = c.durationSeconds % 60
+    const dur = `${mins}m${secs.toString().padStart(2, '0')}s`
+    const rep = c.agentName ? ` · ${c.agentName}` : ''
+    lines.push(`  • ${d}${rep} · ${dur} · ${c.direction}`)
+  }
+
   return lines.join('\n')
+}
+
+
+// ──────────────────────────────────────────────────────────────────────
+// SHARED HELPERS
+// ──────────────────────────────────────────────────────────────────────
+
+function extractJson(text: string): any {
+  const cleaned = text
+    .replace(/^```(?:json)?\s*/i, '')
+    .replace(/\s*```\s*$/i, '')
+    .trim()
+
+  try {
+    return JSON.parse(cleaned)
+  } catch {
+    const first = cleaned.indexOf('{')
+    const last = cleaned.lastIndexOf('}')
+    if (first >= 0 && last > first) {
+      return JSON.parse(cleaned.substring(first, last + 1))
+    }
+    throw new Error(`Could not parse JSON from model output: ${cleaned.substring(0, 200)}`)
+  }
+}
+
+function sanitiseEmail(raw: any): string | null {
+  if (raw === null || raw === undefined) return null
+  if (typeof raw !== 'string') return null
+  const trimmed = raw.trim()
+  if (!trimmed || !trimmed.includes('@') || !trimmed.includes('.')) return null
+  return trimmed.toLowerCase()
 }
