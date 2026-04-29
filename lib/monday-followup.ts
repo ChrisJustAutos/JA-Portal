@@ -19,6 +19,10 @@
 // All Monday API calls go through a single fetch helper that uses the
 // MONDAY_API_TOKEN env var. Don't import this from a request-scoped handler
 // without setting MONDAY_API_TOKEN — it'll throw on first call.
+//
+// EXPORTS for reuse: mondayQuery, escGqlString, and searchBoardByPhone are
+// exported so lib/monday-update.ts (quote-pipeline) can reuse the GraphQL
+// machinery without duplication. Promoted 2026-04-29 — no behaviour change.
 
 const MONDAY_API_URL = 'https://api.monday.com/v2'
 
@@ -99,8 +103,12 @@ function phonesMatch(a: string | null | undefined, b: string | null | undefined)
 }
 
 // ── Monday API helper ────────────────────────────────────────────────────
+//
+// Exported for reuse by lib/monday-update.ts. All Monday GraphQL calls in
+// this codebase should go through this function — it handles auth, error
+// shape, and response unwrapping in one place.
 
-async function mondayQuery<T = any>(query: string, variables?: Record<string, any>): Promise<T> {
+export async function mondayQuery<T = any>(query: string, variables?: Record<string, any>): Promise<T> {
   const token = process.env.MONDAY_API_TOKEN
   if (!token) throw new Error('MONDAY_API_TOKEN not configured')
 
@@ -130,7 +138,9 @@ async function mondayQuery<T = any>(query: string, variables?: Record<string, an
 // passing it as a typed variable (e.g. [String]!) results in:
 // "Variable $vals of type [String]! used in position expecting type CompareValue!"
 // Inlining as a JSON literal sidesteps that entirely.
-function escGqlString(s: string): string {
+//
+// Exported for reuse by lib/monday-update.ts (quote-pipeline phone search).
+export function escGqlString(s: string): string {
   return JSON.stringify(s)
 }
 
@@ -180,7 +190,10 @@ export async function findExistingItem(
   return null
 }
 
-async function searchBoardByPhone(boardId: string, phoneVariants: string[]): Promise<FoundItem | null> {
+// Exported for reuse by lib/monday-update.ts (Pipeline A phone-match flow).
+// Returns the first item on `boardId` whose PHONE column matches any of
+// `phoneVariants` (server-side filter), with client-side digit verification.
+export async function searchBoardByPhone(boardId: string, phoneVariants: string[]): Promise<FoundItem | null> {
   const inlinedVals = `[${phoneVariants.map(escGqlString).join(', ')}]`
 
   const data = await mondayQuery<{ boards: Array<{ name: string; items_page: { items: any[] } }> }>(
