@@ -108,7 +108,9 @@ async function handlePost(req: NextApiRequest, res: NextApiResponse) {
   const toUpdate: Array<{ id: string; customer_name: string; note: Note }> = []
   const toDeleteIds: string[] = []
 
-  for (const [key, inc] of incomingByLower) {
+  // Note: Array.from() on Map entries — for...of on a Map iterator requires
+  // downlevelIteration or es2015+ target, neither of which this project has.
+  Array.from(incomingByLower.entries()).forEach(([key, inc]) => {
     const cur = currentByLower.get(key)
     if (!cur) {
       toInsert.push(inc)
@@ -116,12 +118,12 @@ async function handlePost(req: NextApiRequest, res: NextApiResponse) {
       toUpdate.push({ id: cur.id, customer_name: inc.customer_name, note: inc.note })
     }
     // else: unchanged, skip
-  }
-  for (const [key, cur] of currentByLower) {
+  })
+  Array.from(currentByLower.entries()).forEach(([key, cur]) => {
     if (!incomingByLower.has(key)) {
       toDeleteIds.push(cur.id)
     }
-  }
+  })
 
   // ── Apply ────────────────────────────────────────────────────────
   const result = {
