@@ -1,10 +1,32 @@
 // lib/activecampaign-deals.ts
 // ActiveCampaign DEAL operations for Pipeline A (quote ingestion).
 //
-// PATCHED 29 Apr 2026: AC API returned 422 "stage is not part of pipeline"
-// when sending pipeline_id and stage_id as numbers. AC's API actually wants
-// these as STRINGS (e.g. "6", "35") and currency as LOWERCASE ("aud"),
-// matching the format AC returns in responses. Both fixes applied below.
+// REWRITTEN 29 Apr 2026 (round 3) — Zapier replacement architecture:
+//
+//   Pipeline A creates deals directly at the "Quote Sent" stage. The
+//   previous Zapier zap (Outlook → PDF.co → AC → Monday) is being retired;
+//   Pipeline A owns this entire flow now.
+//
+//   Make is unaffected: it still fires on stage 35 ("Quote Required") for
+//   genuine initial enquiries created by other paths (web forms, manual
+//   entry). Pipeline A skips stage 35 entirely so Make never sees these
+//   quote-driven deals.
+//
+//   The dual-stage 35→38 advance machinery from the previous patch round
+//   is removed — it was solving the wrong problem (firing Zapier).
+//
+// Recency rule unchanged:
+//   - Find any OPEN deal (status=0) for this contact created in the last
+//     30 days → UPDATE that deal.
+//   - Otherwise CREATE a new deal at stage 38 ("Quote Sent").
+//   - Won/Lost deals are excluded from the recency check, so a repeat
+//     customer who closed a deal 6 months ago gets a fresh deal.
+//
+// AC API quirks (round 1 patch):
+//   - pipeline_id, stage_id, contact_id, owner must be sent as STRINGS,
+//     not numbers. Numeric values trigger 422 "stage is not part of pipeline".
+//   - currency must be lowercase ('aud' not 'AUD') to match what the
+//     pipeline stores.
 
 const RECENCY_DAYS = 30
 
@@ -38,8 +60,6 @@ function isPreviewOnly(): boolean {
 }
 
 const DEAL_STATUS_OPEN = 0
-const DEAL_STATUS_WON  = 1
-const DEAL_STATUS_LOST = 2
 
 export interface ACDeal {
   id: number
@@ -130,9 +150,6 @@ export async function createDeal(input: CreateDealInput): Promise<CreateDealResu
     throw new Error('AC_QUOTE_PIPELINE_ID and AC_QUOTE_PIPELINE_STAGE_ID must be set (or passed explicitly)')
   }
 
-  // PATCH 29 Apr 2026: AC API rejects numeric pipeline/stage IDs with 422
-  // "stage is not part of pipeline". Send as strings. Currency must be
-  // lowercase to match the pipeline's stored currency.
   const payload: any = {
     deal: {
       title: input.title,
@@ -191,7 +208,7 @@ export async function updateDeal(input: UpdateDealInput): Promise<UpdateDealResu
   if (input.newTitle !== undefined) payload.deal.title = input.newTitle
   if (input.newValueDollarsIncGst !== undefined) {
     payload.deal.value = Math.round(input.newValueDollarsIncGst * 100)
-    payload.deal.currency = 'aud'                        // match pipeline currency
+    payload.deal.currency = 'aud'
   }
   if (input.customFields && input.customFields.length > 0) {
     payload.dealCustomFieldData = input.customFields.map(f => ({
@@ -265,12 +282,15 @@ export interface ApplyQuoteRecencyResult {
     existingDealsCount: number
     chosenDealId: number | null
     chosenDealCreatedAt: string | null
+    landedAtStageId: number | null    // The AC stage the deal ended up at after this run
   }
 }
 
 export async function applyQuoteRecencyRule(
   input: ApplyQuoteRecencyInput,
 ): Promise<ApplyQuoteRecencyResult> {
+  const targetStageId = Number(process.env.AC_QUOTE_PIPELINE_STAGE_ID || 0)
+
   const deals = await listDealsForContact(input.contactId)
   const decision = decideRecencyAction(deals)
 
@@ -295,6 +315,9 @@ export async function applyQuoteRecencyRule(
   const noteBody = noteLines.join('\n')
 
   if (decision.action === 'create') {
+    // CREATE branch: land directly at the configured stage (= 38 "Quote Sent").
+    // No Make involvement (Make listens at stage 35), no Zapier (we're
+    // replacing that). Single API call.
     const result = await createDeal({
       contactId: input.contactId,
       title: fullTitle,
@@ -302,6 +325,7 @@ export async function applyQuoteRecencyRule(
       ownerId: input.ownerId,
       initialNote: noteBody,
     })
+
     return {
       decision,
       dealId: result.dealId,
@@ -311,10 +335,15 @@ export async function applyQuoteRecencyRule(
         existingDealsCount: deals.length,
         chosenDealId: null,
         chosenDealCreatedAt: null,
+        landedAtStageId: targetStageId || null,
       },
     }
   }
 
+  // UPDATE branch: existing recent open deal exists. Update fields but
+  // DON'T touch the stage — the rep may have moved it elsewhere on
+  // purpose (e.g. follow-up tracking). The original Zapier flow also
+  // didn't change stage on update, so this matches existing behaviour.
   const existing = decision.deal
   const newValue = Math.max(existing.value, dealValue)
   const newTitle = existing.title.includes(`Q${input.quoteNumber}`)
@@ -327,6 +356,7 @@ export async function applyQuoteRecencyRule(
     newValueDollarsIncGst: newValue,
     appendNote: noteBody,
   })
+
   return {
     decision,
     dealId: result.dealId,
@@ -336,6 +366,7 @@ export async function applyQuoteRecencyRule(
       existingDealsCount: deals.length,
       chosenDealId: existing.id,
       chosenDealCreatedAt: existing.createdAt,
+      landedAtStageId: existing.stageId,
     },
   }
 }

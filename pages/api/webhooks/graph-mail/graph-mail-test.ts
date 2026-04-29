@@ -1,11 +1,12 @@
 // pages/api/webhooks/graph-mail/graph-mail-test.ts
 // Pipeline A — STUB-MODE endpoint for end-to-end testing without Microsoft Graph.
 //
-// TEMPORARILY ENHANCED with auth diagnostics (29 Apr 2026) to debug a 401
-// situation where the URL secret appears correct but auth keeps failing.
-// The auth-fail response now includes lengths + first/last chars of both
-// the expected secret and the received key. Once the issue is identified
-// and fixed, REMOVE the diagnostic block (search 'AUTH_DIAG' to find it).
+// REWRITTEN 29 Apr 2026 (round 4) — Monday sync wired in (step 6).
+// Architecture: Zapier replacement. AC deals land at Quote Sent stage 38.
+// Monday flow lives in lib/quote-pipeline-monday.ts.
+//
+// AUTH_DIAG block can be removed now that auth is reliable, but leaving it
+// since it's harmless and useful when Vercel env vars get tweaked.
 
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { createClient } from '@supabase/supabase-js'
@@ -14,6 +15,7 @@ import { resolveContactForCall } from '../../../../lib/activecampaign'
 import { applyQuoteRecencyRule } from '../../../../lib/activecampaign-deals'
 import { getQuoteCallContext } from '../../../../lib/quote-call-context'
 import { getAgentByMailbox, listConfiguredMailboxes } from '../../../../lib/agents'
+import { syncQuoteToMonday, type SyncQuoteToMondayResult } from '../../../../lib/quote-pipeline-monday'
 
 export const config = {
   api: {
@@ -41,34 +43,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const got = (req.query.key as string) || ''
 
   if (!expected) {
-    return res.status(500).json({
-      ok: false,
-      error: 'QUOTE_STUB_SECRET not configured',
-      diag: {
-        envVarPresent: false,
-        gotLength: got.length,
-      },
-    })
+    return res.status(500).json({ ok: false, error: 'QUOTE_STUB_SECRET not configured' })
   }
-
   if (got !== expected) {
-    // AUTH_DIAG — show LENGTHS and FIRST/LAST 4 CHARS of both sides so we
-    // can compare without exposing the full secret in the response.
     return res.status(401).json({
       ok: false,
       error: 'Unauthorized',
       diag: {
         envVarPresent: true,
         expectedLength: expected.length,
-        expectedFirst4: expected.substring(0, 4),
-        expectedLast4: expected.substring(expected.length - 4),
         gotLength: got.length,
-        gotFirst4: got.substring(0, 4),
-        gotLast4: got.substring(got.length - 4),
         match: got === expected,
-        // Invisible whitespace check on env var (known cause)
-        expectedFirstCharCode: expected.charCodeAt(0),
-        expectedLastCharCode: expected.charCodeAt(expected.length - 1),
       },
     })
   }
@@ -79,21 +64,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const pdfBase64 = (body.pdfBase64 || '').trim()
   const pdfFilename = body.pdfFilename || null
 
-  if (!agentEmail) {
-    return res.status(400).json({ ok: false, error: 'Missing agentEmail in body' })
-  }
-  if (!pdfBase64) {
-    return res.status(400).json({ ok: false, error: 'Missing pdfBase64 in body' })
-  }
+  if (!agentEmail) return res.status(400).json({ ok: false, error: 'Missing agentEmail in body' })
+  if (!pdfBase64) return res.status(400).json({ ok: false, error: 'Missing pdfBase64 in body' })
 
   // ── 1. Resolve agent ───────────────────────────────────────────────
   const agent = getAgentByMailbox(agentEmail)
   if (!agent) {
     await logEvent({
-      agentEmail,
-      pdfFilename,
-      action: 'failed',
-      status: 'failed',
+      agentEmail, pdfFilename,
+      action: 'failed', status: 'failed',
       detailsExtra: {
         where: 'agent lookup',
         error: `agent for mailbox ${agentEmail} not in AGENTS map`,
@@ -108,7 +87,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     })
   }
 
-  // ── 2. Parse the PDF via Claude ────────────────────────────────────
+  // ── 2. Parse the PDF ────────────────────────────────────────────────
   let extracted: ExtractedQuote
   let parseDurationMs = 0
   try {
@@ -118,18 +97,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     extracted = result.quote
   } catch (e: any) {
     await logEvent({
-      agentEmail,
-      pdfFilename,
-      action: 'failed',
-      status: 'failed',
+      agentEmail, pdfFilename,
+      action: 'failed', status: 'failed',
       detailsExtra: { where: 'extractQuoteFromPdf', error: e?.message || String(e) },
       durationMs: Date.now() - t0,
     })
-    return res.status(200).json({
-      ok: false,
-      stage: 'parse',
-      error: e?.message || String(e),
-    })
+    return res.status(200).json({ ok: false, stage: 'parse', error: e?.message || String(e) })
   }
 
   // ── 3. Resolve AC contact ──────────────────────────────────────────
@@ -144,10 +117,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     })
   } catch (e: any) {
     await logEvent({
-      agentEmail,
-      pdfFilename,
-      action: 'failed',
-      status: 'failed',
+      agentEmail, pdfFilename,
+      action: 'failed', status: 'failed',
       detailsExtra: {
         where: 'resolveContactForCall',
         error: e?.message || String(e),
@@ -156,8 +127,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       durationMs: Date.now() - t0,
     })
     return res.status(200).json({
-      ok: false,
-      stage: 'ac_contact_resolve',
+      ok: false, stage: 'ac_contact_resolve',
       error: e?.message || String(e),
       parsed: previewableQuote(extracted),
     })
@@ -165,12 +135,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   if (!acResolve.contact) {
     await logEvent({
-      agentEmail,
-      pdfFilename,
+      agentEmail, pdfFilename,
       customerEmail: extracted.customer.email,
       customerPhone: extracted.customer.phone,
-      action: 'skipped',
-      status: 'partial',
+      action: 'skipped', status: 'partial',
       detailsExtra: {
         where: 'ac_contact_resolve',
         reason: acResolve.reason,
@@ -179,8 +147,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       durationMs: Date.now() - t0,
     })
     return res.status(200).json({
-      ok: false,
-      stage: 'ac_contact_resolve',
+      ok: false, stage: 'ac_contact_resolve',
       reason: acResolve.reason,
       parsed: previewableQuote(extracted),
     })
@@ -213,13 +180,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     })
   } catch (e: any) {
     await logEvent({
-      agentEmail,
-      pdfFilename,
+      agentEmail, pdfFilename,
       customerEmail: extracted.customer.email,
       customerPhone: extracted.customer.phone,
       acContactId: acResolve.contact.id,
-      action: 'failed',
-      status: 'failed',
+      action: 'failed', status: 'failed',
       detailsExtra: {
         where: 'applyQuoteRecencyRule',
         error: e?.message || String(e),
@@ -228,23 +193,62 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       durationMs: Date.now() - t0,
     })
     return res.status(200).json({
-      ok: false,
-      stage: 'ac_deal_recency',
+      ok: false, stage: 'ac_deal_recency',
       error: e?.message || String(e),
       parsed: previewableQuote(extracted),
       acContact: { id: acResolve.contact.id, action: acResolve.action },
     })
   }
 
-  // ── 6. Log success ─────────────────────────────────────────────────
+  // ── 6. Sync to Monday (NEW) ────────────────────────────────────────
+  let mondaySync: SyncQuoteToMondayResult | null = null
+  let mondayError: string | null = null
+
+  // Skip Monday entirely in preview mode (we don't want to create real
+  // Monday items when the AC side is dry-running).
+  if (!recencyResult.preview) {
+    try {
+      const customerName = [extracted.customer.firstName, extracted.customer.lastName]
+        .filter(Boolean)
+        .join(' ')
+        .trim()
+        || extracted.customer.name
+        || 'Unknown customer'
+
+      const dealValue = extracted.quote.totalIncGst != null
+        ? extracted.quote.totalIncGst
+        : (extracted.quote.totalExGst != null ? extracted.quote.totalExGst * 1.1 : 0)
+
+      const mondayNote = buildMondayNoteBody(extracted, callContext, agent.name)
+
+      mondaySync = await syncQuoteToMonday({
+        agentName: agent.name,
+        acDecision: recencyResult.decision.action,
+        customerName,
+        phone: extracted.customer.phone,
+        email: extracted.customer.email,
+        postcode: extracted.customer.postcode,
+        quoteNumber: extracted.quote.number,
+        quoteValueIncGst: dealValue,
+        noteBody: mondayNote,
+        pdfBase64,
+        pdfFilename: pdfFilename || `quote-${extracted.quote.number}.pdf`,
+        callDate: callContext?.latestCallDate || null,
+      })
+    } catch (e: any) {
+      mondayError = e?.message || String(e)
+      console.error('[graph-mail/test] syncQuoteToMonday failed:', mondayError)
+    }
+  }
+
+  // ── 7. Log final outcome to quote_events ──────────────────────────
   const acActionForLog =
     recencyResult.preview ? 'skipped'
     : recencyResult.decision.action === 'create' ? 'deal_created'
     : 'deal_updated'
 
   await logEvent({
-    agentEmail,
-    pdfFilename,
+    agentEmail, pdfFilename,
     customerEmail: extracted.customer.email,
     customerPhone: extracted.customer.phone,
     quoteNumber: extracted.quote.number,
@@ -255,8 +259,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     acDealId: recencyResult.dealId,
     callId: callContext?.latestCallId || null,
     callSummaryFound: !!callContext,
-    action: 'summary_posted',
-    status: recencyResult.preview ? 'partial' : 'success',
+    mondayAction: mondaySync?.action || null,
+    mondayBoardId: mondaySync?.boardId || null,
+    mondayItemId: mondaySync?.itemId || null,
+    mondayError: mondayError,
+    action: mondayError ? 'failed' : 'summary_posted',
+    status: mondayError ? 'partial' : (recencyResult.preview ? 'partial' : 'success'),
     detailsExtra: {
       stub: true,
       previewMode: recencyResult.preview,
@@ -268,12 +276,22 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       callContextSource: callContext ? `${callContext.callCount} call(s)` : 'no calls / no phone',
       parsedSummary: previewableQuote(extracted),
       parseDurationMs,
+      mondaySync: mondaySync ? {
+        action: mondaySync.action,
+        matchSource: mondaySync.matchSource,
+        boardName: mondaySync.boardName,
+        prevQuoteValue: mondaySync.prevQuoteValue,
+        newQuoteValue: mondaySync.newQuoteValue,
+        pdfUploaded: mondaySync.pdfUpload?.uploaded ?? null,
+        pdfError: mondaySync.pdfUpload?.error ?? null,
+      } : null,
     },
     durationMs: Date.now() - t0,
   })
 
+  // ── 8. Final response ─────────────────────────────────────────────
   return res.status(200).json({
-    ok: true,
+    ok: !mondayError,
     durationMs: Date.now() - t0,
     agent: { mailbox: agentEmail, name: agent.name, mondayBoardId: agent.mondayBoardId },
     parsed: {
@@ -301,6 +319,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         dealId: recencyResult.dealId,
         previewMode: recencyResult.preview,
         existingDealsCount: recencyResult.details.existingDealsCount,
+        landedAtStageId: recencyResult.details.landedAtStageId,
       },
     },
     call: callContext
@@ -311,19 +330,27 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           sentiment: callContext.summary.sentiment,
         }
       : { found: false },
-    monday: {
-      note: 'Pipeline A Monday match-and-update is not wired in stub mode yet. Coming next session.',
-    },
+    monday: mondaySync ? {
+      action: mondaySync.action,
+      matchSource: mondaySync.matchSource,
+      boardId: mondaySync.boardId,
+      boardName: mondaySync.boardName,
+      itemId: mondaySync.itemId,
+      prevQuoteValue: mondaySync.prevQuoteValue,
+      newQuoteValue: mondaySync.newQuoteValue,
+      pdfUploaded: mondaySync.pdfUpload?.uploaded ?? null,
+      pdfError: mondaySync.pdfUpload?.error ?? null,
+    } : { skipped: recencyResult.preview ? 'preview_mode' : 'monday_sync_failed', error: mondayError },
   })
 }
+
+// ── helpers ────────────────────────────────────────────────────────────
 
 function buildWhoWhatFromQuote(q: ExtractedQuote): string {
   const name = [q.customer.firstName, q.customer.lastName].filter(Boolean).join(' ')
     || q.customer.name
     || 'Unknown caller'
-  const vehiclePart = q.vehicle.makeModel
-    ? ` with a ${q.vehicle.makeModel}`
-    : ''
+  const vehiclePart = q.vehicle.makeModel ? ` with a ${q.vehicle.makeModel}` : ''
   return `${name}${vehiclePart} regarding quote ${q.quote.number}`
 }
 
@@ -355,6 +382,40 @@ function previewableQuote(q: ExtractedQuote): any {
   }
 }
 
+/**
+ * Build the Update body for the Monday item — line items, totals, and call
+ * context if any. Plain-text Monday updates render markdown-ish (line breaks
+ * are preserved). Keep it scannable for the rep.
+ */
+function buildMondayNoteBody(
+  q: ExtractedQuote,
+  call: Awaited<ReturnType<typeof getQuoteCallContext>>,
+  repName: string,
+): string {
+  const lines: string[] = []
+  lines.push(`📄 Quote ${q.quote.number} — sent ${new Date().toLocaleDateString('en-AU', { timeZone: 'Australia/Brisbane' })}`)
+  lines.push(`Rep: ${repName}`)
+  if (q.vehicle.makeModel) {
+    lines.push(`Vehicle: ${q.vehicle.makeModel}${q.vehicle.rego ? ` (${q.vehicle.rego})` : ''}`)
+  }
+  if (q.quote.totalExGst != null) {
+    lines.push(`Total: $${q.quote.totalExGst.toFixed(2)} ex GST / $${(q.quote.totalIncGst ?? q.quote.totalExGst * 1.1).toFixed(2)} inc GST`)
+  }
+  lines.push('')
+  lines.push('── Line items ──')
+  for (const item of q.quote.lineItems) {
+    const qty = item.quantity ? `${item.quantity}× ` : ''
+    const price = item.totalExGst != null ? ` — $${item.totalExGst.toFixed(2)}` : ''
+    lines.push(`• ${qty}${item.description}${price}`)
+  }
+  if (call?.formatted) {
+    lines.push('')
+    lines.push('── Recent call context ──')
+    lines.push(call.formatted)
+  }
+  return lines.join('\n')
+}
+
 interface LogEventInput {
   agentEmail: string
   pdfFilename: string | null
@@ -368,6 +429,10 @@ interface LogEventInput {
   acDealId?: number | null
   callId?: string | null
   callSummaryFound?: boolean
+  mondayAction?: string | null
+  mondayBoardId?: string | null
+  mondayItemId?: string | null
+  mondayError?: string | null
   action: 'summary_posted' | 'no_summary_posted' | 'failed' | 'skipped'
   status: 'success' | 'partial' | 'failed'
   detailsExtra: Record<string, any>
@@ -396,6 +461,10 @@ async function logEvent(input: LogEventInput): Promise<void> {
     ac_deal_id: input.acDealId ?? null,
     call_summary_found: input.callSummaryFound ?? null,
     matched_call_id: input.callId || null,
+    monday_action: input.mondayAction || null,
+    monday_board_id: input.mondayBoardId || null,
+    monday_item_id: input.mondayItemId || null,
+    monday_error: input.mondayError || null,
     details: { ...input.detailsExtra, pdfFilename: input.pdfFilename },
     completed_at: new Date().toISOString(),
     duration_ms: input.durationMs,
