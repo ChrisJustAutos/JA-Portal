@@ -15,25 +15,19 @@
 //   2. Real status-change events:
 //        POST { event: { pulseId, boardId, columnId, value: { label: { text: "Fetch Call Notes" }}, ... } }
 //        a. Verify ?key= matches MONDAY_BUTTON_SECRET.
-//        b. If the new label is NOT "Fetch Call Notes", ignore (Monday fires
-//           on ALL status-column changes, including reverting back to blank).
+//        b. If the new label is NOT "Fetch Call Notes", ignore.
 //        c. Fetch the Phone column from the item via Monday API.
-//        d. Look up the call summary via lib/quote-call-context.ts.
-//        e. Post an Update on the item — either the formatted summary or
-//           a "no analysed calls" fallback.
+//        d. Look up OR generate the call summary via lib/quote-call-context.ts
+//           (generateOnDemand=true — if no summary exists but a transcript
+//           does, fire Claude to make one).
+//        e. Post an Update on the item — formatted summary or fallback.
 //        f. Reset the status column to blank so the rep can fire it again.
 //        g. Log to quote_events. Return 200.
-//
-// IDEMPOTENCY:
-//   We don't deduplicate — if Monday retries, the rep gets a duplicate
-//   Update. Acceptable: status-change webhooks rarely retry (Monday treats
-//   2xx as success), and a duplicate note is a soft failure mode.
 //
 // NEVER 500 ON ACTUAL EVENTS:
 //   Monday retries failed webhooks aggressively. Once we've parsed the event
 //   and confirmed the secret, we always return 200 — we record errors in
-//   quote_events and post error context as the Update body so the rep sees
-//   what went wrong on the item itself.
+//   quote_events and post error context as the Update body.
 
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { createClient } from '@supabase/supabase-js'
@@ -41,20 +35,17 @@ import { getQuoteCallContext } from '../../../lib/quote-call-context'
 import { createUpdate } from '../../../lib/monday-update'
 import { mondayQuery, COLUMNS } from '../../../lib/monday-followup'
 
+// On-demand generation can take 5-10s with Claude. Bump max duration so the
+// function isn't killed mid-call. Monday webhook timeout is ~30s.
 export const config = { maxDuration: 30 }
 
-// The status-column LABEL that triggers the lookup. Monday fires the webhook
-// on every change to the column (including clearing back to blank), so we
-// filter inside the handler.
 const TRIGGER_LABEL = 'Fetch Call Notes'
 
 const NO_SUMMARY_BODY =
   '📞 No analysed calls found for this number in the last 30 days.'
 
-// Monday's webhook event shape (the bits we care about). The payload also
-// contains pulseName, app, type, triggerTime, etc — we ignore those.
 interface MondayWebhookEvent {
-  type?: string                 // 'update_column_value', 'change_status_column_value' etc
+  type?: string
   pulseId?: number | string
   boardId?: number | string
   columnId?: string
@@ -67,9 +58,7 @@ interface MondayWebhookEvent {
 }
 
 interface MondayWebhookBody {
-  // Challenge handshake shape
   challenge?: string
-  // Real event shape
   event?: MondayWebhookEvent
 }
 
@@ -84,20 +73,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const body: MondayWebhookBody = req.body || {}
 
   // ── 1. Challenge handshake ──────────────────────────────────────────
-  // Monday POSTs { "challenge": "abc" } when you save the webhook. We MUST
-  // echo the challenge back as JSON, or Monday refuses to register the
-  // webhook with: "The provided URL has not returned the requested challenge."
-  //
-  // Importantly, this happens BEFORE auth — Monday doesn't include any
-  // custom params during the handshake. We can't gate this behind ?key=.
   if (typeof body.challenge === 'string') {
     return res.status(200).json({ challenge: body.challenge })
   }
 
   // ── 2. Auth (URL secret) ────────────────────────────────────────────
-  // Monday webhook URLs can include query strings; we check ?key= against
-  // MONDAY_BUTTON_SECRET. The webhook URL stored in Monday should look like:
-  //   https://ja-portal.vercel.app/api/monday/fetch-call-notes?key=<secret>
   const expected = process.env.MONDAY_BUTTON_SECRET
   if (!expected) {
     console.error('[fetch-call-notes] MONDAY_BUTTON_SECRET not configured')
@@ -111,9 +91,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   // ── 3. Extract event fields ─────────────────────────────────────────
   const ev = body.event
   if (!ev) {
-    // Could be a webhook-test ping or unknown shape. Return 200 so Monday
-    // doesn't retry; log for debugging.
-    console.warn('[fetch-call-notes] POST received without event payload:', JSON.stringify(body).slice(0, 500))
+    console.warn('[fetch-call-notes] POST without event payload:', JSON.stringify(body).slice(0, 500))
     return res.status(200).json({ ok: true, ignored: 'no event payload' })
   }
 
@@ -122,13 +100,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const newLabel = ev.value?.label?.text || ''
 
   if (!itemId || !boardId) {
-    console.warn('[fetch-call-notes] event missing pulseId/boardId:', JSON.stringify(ev).slice(0, 500))
+    console.warn('[fetch-call-notes] event missing ids:', JSON.stringify(ev).slice(0, 500))
     return res.status(200).json({ ok: true, ignored: 'event missing ids' })
   }
 
-  // ── 4. Filter: only act when status changes TO our trigger label ────
-  // Monday fires on every change including the post-action reset back to
-  // blank. Without this filter we'd loop or double-fire.
+  // ── 4. Filter: only act on the trigger label ────────────────────────
   if (newLabel !== TRIGGER_LABEL) {
     return res.status(200).json({
       ok: true,
@@ -137,8 +113,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   // ── 5. Fetch the phone from the item ───────────────────────────────
-  // Webhook payload doesn't include the phone — only the column that
-  // changed (status). Read the Phone column directly via Monday API.
   let phone: string | null = null
   try {
     phone = await fetchItemPhone(itemId)
@@ -159,10 +133,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(200).json({ ok: true, action: 'no_phone' })
   }
 
-  // ── 6. Look up the call summary ────────────────────────────────────
+  // ── 6. Look up OR generate the call summary ────────────────────────
+  // generateOnDemand=true: if a transcript exists but no follow_up_summary,
+  // fire Claude. Adds ~3-5s latency on misses. Result is persisted.
   let context: Awaited<ReturnType<typeof getQuoteCallContext>>
   try {
-    context = await getQuoteCallContext(phone)
+    context = await getQuoteCallContext(phone, { generateOnDemand: true })
   } catch (e: any) {
     console.error('[fetch-call-notes] context lookup threw:', e?.message || e)
     await postErrorAndLog(itemId, boardId, phone, 'failed', {
@@ -198,8 +174,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   // ── 8. Reset the status so the rep can fire it again ──────────────
-  // Best-effort: don't fail the request if reset fails; the Update is
-  // already posted. Reset uses the SAME columnId Monday told us about.
   await resetStatus(itemId, boardId, ev.columnId)
 
   // ── 9. Log success ─────────────────────────────────────────────────
@@ -211,8 +185,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     action,
     status: 'success',
     detailsExtra: context
-      ? { matchedCallAt: context.calledAt, outcome: context.outcome, agentName: context.agentName }
-      : { reason: 'no analysed call within 30 days' },
+      ? {
+          matchedCallAt: context.calledAt,
+          outcome: context.outcome,
+          agentName: context.agentName,
+          generatedOnDemand: context.generatedOnDemand,   // telemetry: how often we generate vs cache-hit
+        }
+      : { reason: 'no analysed call within 30 days, or generation failed' },
     durationMs: Date.now() - t0,
   })
 
@@ -220,14 +199,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     ok: true,
     action,
     callId: context?.callId,
+    generatedOnDemand: context?.generatedOnDemand,
     durationMs: Date.now() - t0,
   })
 }
 
 // ── Helper: read the phone from the item ────────────────────────────────
-// Reads the standard PHONE column ID (text_mkzbenay) defined in
-// lib/monday-followup.ts COLUMNS.PHONE. All 5 Quote Channel boards share
-// this column ID since they were forked from the same template.
 async function fetchItemPhone(itemId: string): Promise<string | null> {
   const data = await mondayQuery<{ items: Array<{ column_values: Array<{ text: string | null }> }> }>(
     `query GetItemPhone($itemId: [ID!]) {
@@ -242,14 +219,9 @@ async function fetchItemPhone(itemId: string): Promise<string | null> {
 }
 
 // ── Helper: reset the trigger status column back to blank ──────────────
-// Pass the columnId from the event (which is the trigger column itself,
-// not the standard `status` column). This makes the recipe re-usable —
-// the rep can change to "Fetch Call Notes" again to get fresh notes.
 async function resetStatus(itemId: string, boardId: string, columnId: string | undefined): Promise<void> {
   if (!columnId) return
   try {
-    // Monday's `change_simple_column_value` with an empty string clears
-    // a status column.
     await mondayQuery(
       `mutation ResetStatus($itemId: ID!, $boardId: ID!, $columnId: String!) {
         change_simple_column_value(
@@ -266,7 +238,6 @@ async function resetStatus(itemId: string, boardId: string, columnId: string | u
   }
 }
 
-// ── Helper: convenience wrapper to post an error message + log ─────────
 async function postErrorAndLog(
   itemId: string,
   boardId: string,
@@ -294,8 +265,6 @@ async function postErrorAndLog(
     durationMs: Date.now() - t0,
   })
 }
-
-// ── Audit logger ────────────────────────────────────────────────────────
 
 interface LogEventInput {
   itemId: string
