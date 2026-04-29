@@ -6,6 +6,14 @@
 // - Excluded: hidden from the distributor report (staff, unwanted)
 // - Sundry:   surfaced as a 'Sundry' group on the report (retail/trade-in)
 // - Internal: hidden (VPS intercompany transfers)
+//
+// SAFE-SAVE BEHAVIOUR (29 Apr 2026 fix):
+//   The server now diffs the incoming list against the DB and applies
+//   inserts/updates/deletes individually. The save flow here surfaces:
+//     - explicit confirmation if you're about to save an empty list
+//     - the diff summary on success (X added, Y updated, Z removed)
+//     - clear error messages if any rows fail
+//     - automatic notice that the distributor report cache was cleared
 
 import { useEffect, useState, useCallback } from 'react'
 
@@ -31,11 +39,23 @@ interface Props {
   myobCustomers: string[]   // from /api/groups/myob-customers
 }
 
+interface SaveResult {
+  inserted: number
+  updated: number
+  deleted: number
+  unchanged: number
+  cacheCleared: number
+  errors?: string[]
+  partial?: boolean
+}
+
 export default function ExclusionsTab({ myobCustomers }: Props) {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
+  const [success, setSuccess] = useState<SaveResult | null>(null)
   const [rows, setRows] = useState<ExcludedRow[]>([])
+  const [originalRows, setOriginalRows] = useState<ExcludedRow[]>([])
   const [dirty, setDirty] = useState(false)
   const [filterNote, setFilterNote] = useState<Note | 'All'>('All')
 
@@ -43,14 +63,16 @@ export default function ExclusionsTab({ myobCustomers }: Props) {
   const [newNote, setNewNote] = useState<Note>('Excluded')
 
   const load = useCallback(async () => {
-    setLoading(true); setError('')
+    setLoading(true); setError(''); setSuccess(null)
     try {
       const r = await fetch('/api/exclusions')
       if (!r.ok) throw new Error((await r.json()).error || 'Load failed')
       const d = await r.json()
-      setRows((d.excluded || []).sort((a: ExcludedRow, b: ExcludedRow) =>
+      const sorted = (d.excluded || []).sort((a: ExcludedRow, b: ExcludedRow) =>
         a.customer_name.localeCompare(b.customer_name)
-      ))
+      )
+      setRows(sorted)
+      setOriginalRows(JSON.parse(JSON.stringify(sorted)))   // deep clone for diff display
       setDirty(false)
     } catch (e: any) {
       setError(e.message || 'Load failed')
@@ -60,7 +82,7 @@ export default function ExclusionsTab({ myobCustomers }: Props) {
   }, [])
   useEffect(() => { load() }, [load])
 
-  function markDirty() { setDirty(true); setError('') }
+  function markDirty() { setDirty(true); setError(''); setSuccess(null) }
 
   function addRow() {
     const name = newName.trim()
@@ -87,16 +109,50 @@ export default function ExclusionsTab({ myobCustomers }: Props) {
     markDirty()
   }
 
+  // ── Save flow ─────────────────────────────────────────────────────
+  // Empty-list confirmation: if the user has somehow ended up with zero rows
+  // (unintentional clear, accidental delete-all), demand explicit confirmation
+  // before sending. Server enforces the same guard.
   async function save() {
-    setSaving(true); setError('')
+    if (rows.length === 0 && originalRows.length > 0) {
+      const ok = confirm(
+        `⚠️ You are about to save an EMPTY exclusion list.\n\n` +
+        `This will REMOVE all ${originalRows.length} existing exclusions, which means every customer ` +
+        `will appear on the distributor report (including staff, internal entities, and sundries).\n\n` +
+        `Are you SURE this is what you want?`
+      )
+      if (!ok) return
+    }
+
+    setSaving(true); setError(''); setSuccess(null)
     try {
-      const r = await fetch('/api/exclusions', {
+      const url = rows.length === 0
+        ? '/api/exclusions?confirmEmpty=1'
+        : '/api/exclusions'
+
+      const r = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ excluded: rows }),
       })
-      if (!r.ok) throw new Error((await r.json()).error || 'Save failed')
-      setDirty(false)
+      const d = await r.json()
+
+      if (!r.ok && r.status !== 207) {
+        throw new Error(d.error || `Save failed (HTTP ${r.status})`)
+      }
+
+      setSuccess({
+        inserted: d.inserted || 0,
+        updated: d.updated || 0,
+        deleted: d.deleted || 0,
+        unchanged: d.unchanged || 0,
+        cacheCleared: d.cacheCleared || 0,
+        errors: d.errors,
+        partial: d.partial,
+      })
+
+      // Reload to pick up the freshly-persisted IDs and confirm state
+      await load()
     } catch (e: any) {
       setError(e.message || 'Save failed')
     } finally {
@@ -164,7 +220,29 @@ export default function ExclusionsTab({ myobCustomers }: Props) {
         </div>
       </div>
 
-      {error && <div style={{background:`${T.red}15`, border:`1px solid ${T.red}40`, borderRadius:7, padding:10, color:T.red, fontSize:12}}>{error}</div>}
+      {/* Status banners */}
+      {error && (
+        <div style={{background:`${T.red}15`, border:`1px solid ${T.red}40`, borderRadius:7, padding:'10px 12px', color:T.red, fontSize:12, lineHeight:1.5}}>
+          <strong>Error:</strong> {error}
+        </div>
+      )}
+
+      {success && (
+        <div style={{background: success.partial ? `${T.amber}15` : `${T.green}15`,
+                     border: `1px solid ${success.partial ? T.amber+'40' : T.green+'40'}`,
+                     borderRadius:7, padding:'10px 12px',
+                     color: success.partial ? T.amber : T.green, fontSize:12, lineHeight:1.6}}>
+          <strong>{success.partial ? 'Partial save — review errors below' : 'Saved'}:</strong>{' '}
+          {success.inserted} added, {success.updated} updated, {success.deleted} removed
+          {success.unchanged > 0 && `, ${success.unchanged} unchanged`}
+          {success.cacheCleared > 0 && ` · cleared ${success.cacheCleared} cached report ranges (next page load will recompute live)`}
+          {success.errors && success.errors.length > 0 && (
+            <ul style={{marginTop:6, marginBottom:0, paddingLeft:18}}>
+              {success.errors.map((e, i) => <li key={i} style={{color:T.red, fontSize:11}}>{e}</li>)}
+            </ul>
+          )}
+        </div>
+      )}
 
       {/* List */}
       <div style={{background:T.bg2, border:`1px solid ${T.border}`, borderRadius:10, overflow:'hidden'}}>
