@@ -1,47 +1,10 @@
 // lib/activecampaign-deals.ts
 // ActiveCampaign DEAL operations for Pipeline A (quote ingestion).
 //
-// Separate file from lib/activecampaign.ts on purpose:
-//   - That file owns CONTACT operations (resolve, note, tag) and is in
-//     production via the follow-up sync cron. Keep it untouched.
-//   - This file owns DEAL operations — create, update, deal-note, plus
-//     the recency rule that decides between create-vs-update for an
-//     incoming quote.
-//
-// THE RECENCY RULE (per design doc §7):
-//
-//   Search AC for deals on this contact:
-//
-//     IF an OPEN deal exists (not Won, not Lost)
-//        AND deal_created_at within last 30 days:
-//          → UPDATE that deal
-//          → AC's automation does NOT fire (only deal-create fires it)
-//
-//     ELSE:
-//          → CREATE a new deal
-//          → AC automation fires → webhook → Make → Monday lead created
-//
-// The create-vs-update decision is the lever that controls whether Make
-// creates a new Monday lead. Pipeline A intentionally does NOT touch
-// Monday on the create branch — Make handles it.
-//
-// PREVIEW MODE:
-//   Set AC_DEAL_PREVIEW_ONLY=true in env to log what we WOULD do without
-//   actually creating/updating. The recency-rule decision is fully
-//   computed and visible in the result, but no AC writes happen. Use
-//   during stub-mode validation before going live.
-//
-// ENV VARS NEEDED:
-//   ACTIVECAMPAIGN_API_URL              shared with lib/activecampaign.ts
-//   ACTIVECAMPAIGN_API_KEY              shared with lib/activecampaign.ts
-//   AC_QUOTE_PIPELINE_ID                AC pipeline ID where new quote deals land
-//                                       (the pipeline whose automation fires
-//                                       the Make webhook). To be confirmed at
-//                                       build time per design §15.
-//   AC_QUOTE_PIPELINE_STAGE_ID          AC stage ID within that pipeline (the
-//                                       stage that triggers the automation).
-//                                       Also TBC at build time.
-//   AC_DEAL_PREVIEW_ONLY                'true' to dry-run all writes.
+// PATCHED 29 Apr 2026: AC API returned 422 "stage is not part of pipeline"
+// when sending pipeline_id and stage_id as numbers. AC's API actually wants
+// these as STRINGS (e.g. "6", "35") and currency as LOWERCASE ("aud"),
+// matching the format AC returns in responses. Both fixes applied below.
 
 const RECENCY_DAYS = 30
 
@@ -74,12 +37,6 @@ function isPreviewOnly(): boolean {
   return (process.env.AC_DEAL_PREVIEW_ONLY || '').toLowerCase() === 'true'
 }
 
-// ── Deal type ──────────────────────────────────────────────────────────
-// AC deal status values (numeric):
-//   0 = Open
-//   1 = Won
-//   2 = Lost
-// Reference: AC API v3 docs.
 const DEAL_STATUS_OPEN = 0
 const DEAL_STATUS_WON  = 1
 const DEAL_STATUS_LOST = 2
@@ -87,17 +44,16 @@ const DEAL_STATUS_LOST = 2
 export interface ACDeal {
   id: number
   title: string
-  value: number               // dollars (AC stores cents — we convert)
+  value: number
   status: 0 | 1 | 2
   stageId: number | null
   pipelineId: number | null
   ownerId: number | null
   contactId: number
-  createdAt: string           // ISO from AC's `cdate`
+  createdAt: string
 }
 
 function mapDeal(raw: any): ACDeal {
-  // AC's `value` is in cents as a string. Defensive parse.
   const valueCents = Number(raw.value || 0)
   return {
     id: Number(raw.id),
@@ -112,19 +68,12 @@ function mapDeal(raw: any): ACDeal {
   }
 }
 
-// ── Search: deals for a contact ────────────────────────────────────────
-//
-// AC's `/deals?filters[contact]=NN` returns deals for that contact.
-// We pull recent ones and let the recency rule filter further in code.
-
 export async function listDealsForContact(contactId: number, limit = 20): Promise<ACDeal[]> {
   const data = await acJson<{ deals: any[] }>(
     `/deals?filters[contact]=${contactId}&orders[cdate]=DESC&limit=${limit}`,
   )
   return (data.deals || []).map(mapDeal)
 }
-
-// ── Recency rule decision (no writes) ──────────────────────────────────
 
 export type RecencyDecision =
   | { action: 'update'; deal: ACDeal; reason: string }
@@ -133,8 +82,6 @@ export type RecencyDecision =
 export function decideRecencyAction(deals: ACDeal[]): RecencyDecision {
   const cutoff = Date.now() - RECENCY_DAYS * 24 * 60 * 60 * 1000
 
-  // Find the most recent OPEN deal within the window.
-  // Won/Lost deals never get reopened — repeat business is a new deal.
   const recentOpen = deals.find(d => {
     if (d.status !== DEAL_STATUS_OPEN) return false
     const created = new Date(d.createdAt).getTime()
@@ -158,26 +105,22 @@ export function decideRecencyAction(deals: ACDeal[]): RecencyDecision {
   }
 }
 
-// ── Create deal ────────────────────────────────────────────────────────
-
 export interface CreateDealInput {
   contactId: number
-  title: string                  // e.g. 'Q12345 · Toyota LandCruiser 300 · ABC123'
-  valueDollarsIncGst: number     // We convert to cents internally
-  ownerId: number | null         // From ACTIVECAMPAIGN_OWNER_MAP via agentName
-  pipelineId?: number            // Defaults to AC_QUOTE_PIPELINE_ID env
-  stageId?: number               // Defaults to AC_QUOTE_PIPELINE_STAGE_ID env
-  initialNote?: string | null    // Posted as the first deal note
-  // Custom fields TBD at build time per design §15. Accept arbitrary
-  // map for forward compatibility.
+  title: string
+  valueDollarsIncGst: number
+  ownerId: number | null
+  pipelineId?: number
+  stageId?: number
+  initialNote?: string | null
   customFields?: Array<{ fieldId: number; value: string }>
 }
 
 export interface CreateDealResult {
-  dealId: number | null          // null when in preview mode
+  dealId: number | null
   noteId: number | null
   preview: boolean
-  payload: any                   // What we sent (or would have sent)
+  payload: any
 }
 
 export async function createDeal(input: CreateDealInput): Promise<CreateDealResult> {
@@ -187,18 +130,21 @@ export async function createDeal(input: CreateDealInput): Promise<CreateDealResu
     throw new Error('AC_QUOTE_PIPELINE_ID and AC_QUOTE_PIPELINE_STAGE_ID must be set (or passed explicitly)')
   }
 
+  // PATCH 29 Apr 2026: AC API rejects numeric pipeline/stage IDs with 422
+  // "stage is not part of pipeline". Send as strings. Currency must be
+  // lowercase to match the pipeline's stored currency.
   const payload: any = {
     deal: {
       title: input.title,
-      value: Math.round(input.valueDollarsIncGst * 100),  // cents
-      currency: 'AUD',
-      contact: input.contactId,
-      group: pipelineId,           // AC calls pipelines "groups" in this endpoint
-      stage: stageId,
+      value: Math.round(input.valueDollarsIncGst * 100),
+      currency: 'aud',
+      contact: String(input.contactId),
+      group: String(pipelineId),
+      stage: String(stageId),
       status: DEAL_STATUS_OPEN,
     },
   }
-  if (input.ownerId) payload.deal.owner = input.ownerId
+  if (input.ownerId) payload.deal.owner = String(input.ownerId)
   if (input.customFields && input.customFields.length > 0) {
     payload.dealCustomFieldData = input.customFields.map(f => ({
       customFieldId: f.fieldId,
@@ -225,14 +171,8 @@ export async function createDeal(input: CreateDealInput): Promise<CreateDealResu
   return { dealId, noteId, preview: false, payload }
 }
 
-// ── Update deal ────────────────────────────────────────────────────────
-
 export interface UpdateDealInput {
   dealId: number
-  // Fields we update on a quote-update event:
-  //   - title:  append the new quote number to the title (caller decides format)
-  //   - value:  max(existing, new) — caller passes the new total; AC takes it
-  //   - note:   append a fresh deal note describing the new quote
   newTitle?: string
   newValueDollarsIncGst?: number
   appendNote?: string | null
@@ -251,7 +191,7 @@ export async function updateDeal(input: UpdateDealInput): Promise<UpdateDealResu
   if (input.newTitle !== undefined) payload.deal.title = input.newTitle
   if (input.newValueDollarsIncGst !== undefined) {
     payload.deal.value = Math.round(input.newValueDollarsIncGst * 100)
-    payload.deal.currency = 'AUD'
+    payload.deal.currency = 'aud'                        // match pipeline currency
   }
   if (input.customFields && input.customFields.length > 0) {
     payload.dealCustomFieldData = input.customFields.map(f => ({
@@ -265,8 +205,6 @@ export async function updateDeal(input: UpdateDealInput): Promise<UpdateDealResu
     return { dealId: input.dealId, noteId: null, preview: true, payload }
   }
 
-  // Only call PUT if we actually have something to update — otherwise just
-  // do the note (AC complains about empty PUT bodies).
   const hasFieldUpdates = Object.keys(payload.deal).length > 0 || (payload.dealCustomFieldData?.length || 0) > 0
   if (hasFieldUpdates) {
     await acJson(`/deals/${input.dealId}`, {
@@ -282,9 +220,6 @@ export async function updateDeal(input: UpdateDealInput): Promise<UpdateDealResu
 
   return { dealId: input.dealId, noteId, preview: false, payload }
 }
-
-// ── Deal note ──────────────────────────────────────────────────────────
-// Deal notes attach via reltype='Deal' (different from contact notes).
 
 async function addDealNote(dealId: number, body: string): Promise<number | null> {
   if (isPreviewOnly()) {
@@ -309,24 +244,16 @@ async function addDealNote(dealId: number, body: string): Promise<number | null>
   }
 }
 
-// ── High-level orchestrator: apply the recency rule for a parsed quote ──
-//
-// One call to do the full decide → write → return for Pipeline A's
-// AC-side work. Caller (the Pipeline A worker) provides the parsed quote
-// + the resolved contact + the rep's owner ID, and gets back a result
-// describing what happened.
-
 export interface ApplyQuoteRecencyInput {
   contactId: number
-  agentName: string                       // For deal title attribution / logging
-  ownerId: number | null                  // Resolved via ACTIVECAMPAIGN_OWNER_MAP
-  // Parsed quote shape (matches lib/quote-extraction.ts ExtractedQuote)
+  agentName: string
+  ownerId: number | null
   quoteNumber: string
-  totalIncGst: number | null              // Required for value field — fall back to ex+gst if needed
+  totalIncGst: number | null
   totalExGst: number | null
   vehicleMakeModel: string | null
   vehicleRego: string | null
-  callContextNote: string | null          // Optional: pre-rendered call summary text
+  callContextNote: string | null
 }
 
 export interface ApplyQuoteRecencyResult {
@@ -334,7 +261,6 @@ export interface ApplyQuoteRecencyResult {
   dealId: number | null
   noteId: number | null
   preview: boolean
-  // Telemetry for logging into quote_events
   details: {
     existingDealsCount: number
     chosenDealId: number | null
@@ -348,18 +274,15 @@ export async function applyQuoteRecencyRule(
   const deals = await listDealsForContact(input.contactId)
   const decision = decideRecencyAction(deals)
 
-  // Compute the deal value: prefer inc-GST, fall back to ex-GST.
   const dealValue = input.totalIncGst != null
     ? input.totalIncGst
     : (input.totalExGst != null ? input.totalExGst * 1.1 : 0)
 
-  // Title format: "Q{number} · {makeModel} · {rego}" with sensible fallbacks.
   const titleParts: string[] = [`Q${input.quoteNumber}`]
   if (input.vehicleMakeModel) titleParts.push(input.vehicleMakeModel)
   if (input.vehicleRego) titleParts.push(input.vehicleRego)
   const fullTitle = titleParts.join(' · ')
 
-  // Note body: quote details + optional call context.
   const noteLines: string[] = [
     `Quote ${input.quoteNumber} sent ${new Date().toLocaleDateString('en-AU', { timeZone: 'Australia/Brisbane' })}`,
     `Value: $${dealValue.toFixed(2)} inc GST`,
@@ -392,12 +315,8 @@ export async function applyQuoteRecencyRule(
     }
   }
 
-  // Update branch
   const existing = decision.deal
-  // value: keep the higher of existing vs new (don't accidentally lower
-  // a deal value if the latest quote is smaller — that would lose data).
   const newValue = Math.max(existing.value, dealValue)
-  // Title: append the new quote number if not already present.
   const newTitle = existing.title.includes(`Q${input.quoteNumber}`)
     ? existing.title
     : `${existing.title} | Q${input.quoteNumber}`
