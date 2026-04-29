@@ -1,147 +1,183 @@
 // pages/api/monday/fetch-call-notes.ts
-// Pipeline B — Monday "Fetch Call Notes" button endpoint.
+// Pipeline B — Monday "Fetch Call Notes" status-change webhook receiver.
 //
-// Flow when a rep clicks the button on a Quote Channel item:
-//   1. Monday's integration recipe POSTs { itemId, phone, boardId } here.
-//   2. We auth-check via shared bearer token (MONDAY_BUTTON_SECRET).
-//   3. Look up the most recent analysed call within 30 days for the phone
-//      via lib/quote-call-context.ts (same helper Pipeline A uses).
-//   4. Post an Update on the Monday item:
-//        - If summary found: the formatted call note (header + sentiment +
-//          who/discussed/objections/promised/next step).
-//        - If not found: a one-liner "No analysed calls found in last 30 days".
-//   5. Log a row to quote_events for audit/debugging.
-//   6. Return 200 quickly. The user-visible output is the Update on the item.
+// HOW THIS IS WIRED:
+//   - Each Quote Channel board has a Status column called "Call Notes" with
+//     a label "Fetch Call Notes".
+//   - A Monday Webhook (Settings → Integrations → Webhooks) is configured to
+//     POST here whenever the column changes. Webhooks accept ONLY a URL —
+//     no custom headers, no custom body — so we authenticate via a query
+//     string secret and accept Monday's native event payload shape.
 //
-// Why a shared-secret instead of signature verification: Monday's integration
-// recipes don't sign the same way webhook subscriptions do, and the recipe
-// authoring UI lets us add custom headers easily. Token in Vercel env, sent
-// in `x-monday-button-secret` header. Rotate if leaked.
+// FLOW:
+//   1. Monday's challenge handshake (one-off, on webhook setup):
+//        POST { "challenge": "abc..." }  →  respond 200 { "challenge": "abc..." }
+//   2. Real status-change events:
+//        POST { event: { pulseId, boardId, columnId, value: { label: { text: "Fetch Call Notes" }}, ... } }
+//        a. Verify ?key= matches MONDAY_BUTTON_SECRET.
+//        b. If the new label is NOT "Fetch Call Notes", ignore (Monday fires
+//           on ALL status-column changes, including reverting back to blank).
+//        c. Fetch the Phone column from the item via Monday API.
+//        d. Look up the call summary via lib/quote-call-context.ts.
+//        e. Post an Update on the item — either the formatted summary or
+//           a "no analysed calls" fallback.
+//        f. Reset the status column to blank so the rep can fire it again.
+//        g. Log to quote_events. Return 200.
 //
-// Why we ALWAYS post an Update (even on "no summary found"): the rep clicked
-// a button expecting a response. Silent failure is worse than "nothing yet".
+// IDEMPOTENCY:
+//   We don't deduplicate — if Monday retries, the rep gets a duplicate
+//   Update. Acceptable: status-change webhooks rarely retry (Monday treats
+//   2xx as success), and a duplicate note is a soft failure mode.
+//
+// NEVER 500 ON ACTUAL EVENTS:
+//   Monday retries failed webhooks aggressively. Once we've parsed the event
+//   and confirmed the secret, we always return 200 — we record errors in
+//   quote_events and post error context as the Update body so the rep sees
+//   what went wrong on the item itself.
 
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { createClient } from '@supabase/supabase-js'
 import { getQuoteCallContext } from '../../../lib/quote-call-context'
 import { createUpdate } from '../../../lib/monday-update'
+import { mondayQuery, COLUMNS } from '../../../lib/monday-followup'
 
-export const config = { maxDuration: 30 }   // 30s is plenty; lookup+post is sub-second
+export const config = { maxDuration: 30 }
 
-interface RequestBody {
-  itemId?: string | number
-  phone?: string
-  boardId?: string | number
-}
-
-interface OkResponse {
-  ok: true
-  action: 'summary_posted' | 'no_summary_posted'
-  callId?: string
-  durationMs: number
-}
-
-interface ErrorResponse {
-  ok: false
-  error: string
-  durationMs: number
-}
+// The status-column LABEL that triggers the lookup. Monday fires the webhook
+// on every change to the column (including clearing back to blank), so we
+// filter inside the handler.
+const TRIGGER_LABEL = 'Fetch Call Notes'
 
 const NO_SUMMARY_BODY =
   '📞 No analysed calls found for this number in the last 30 days.'
 
-export default async function handler(
-  req: NextApiRequest,
-  res: NextApiResponse<OkResponse | ErrorResponse>,
-) {
+// Monday's webhook event shape (the bits we care about). The payload also
+// contains pulseName, app, type, triggerTime, etc — we ignore those.
+interface MondayWebhookEvent {
+  type?: string                 // 'update_column_value', 'change_status_column_value' etc
+  pulseId?: number | string
+  boardId?: number | string
+  columnId?: string
+  groupId?: string
+  value?: {
+    label?: { text?: string; index?: number }
+    post_id?: any
+  }
+  previousValue?: any
+}
+
+interface MondayWebhookBody {
+  // Challenge handshake shape
+  challenge?: string
+  // Real event shape
+  event?: MondayWebhookEvent
+}
+
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   const t0 = Date.now()
 
-  // ── Method gate ─────────────────────────────────────────────────────
   if (req.method !== 'POST') {
     res.setHeader('Allow', 'POST')
-    return res.status(405).json({ ok: false, error: 'Method not allowed', durationMs: 0 })
+    return res.status(405).json({ ok: false, error: 'Method not allowed' })
   }
 
-  // ── Auth: shared bearer token ───────────────────────────────────────
-  // Set MONDAY_BUTTON_SECRET in Vercel env; configure the Monday integration
-  // recipe to send it as `x-monday-button-secret`. Anything else is rejected.
+  const body: MondayWebhookBody = req.body || {}
+
+  // ── 1. Challenge handshake ──────────────────────────────────────────
+  // Monday POSTs { "challenge": "abc" } when you save the webhook. We MUST
+  // echo the challenge back as JSON, or Monday refuses to register the
+  // webhook with: "The provided URL has not returned the requested challenge."
+  //
+  // Importantly, this happens BEFORE auth — Monday doesn't include any
+  // custom params during the handshake. We can't gate this behind ?key=.
+  if (typeof body.challenge === 'string') {
+    return res.status(200).json({ challenge: body.challenge })
+  }
+
+  // ── 2. Auth (URL secret) ────────────────────────────────────────────
+  // Monday webhook URLs can include query strings; we check ?key= against
+  // MONDAY_BUTTON_SECRET. The webhook URL stored in Monday should look like:
+  //   https://ja-portal.vercel.app/api/monday/fetch-call-notes?key=<secret>
   const expected = process.env.MONDAY_BUTTON_SECRET
   if (!expected) {
     console.error('[fetch-call-notes] MONDAY_BUTTON_SECRET not configured')
-    return res.status(500).json({ ok: false, error: 'Server not configured', durationMs: Date.now() - t0 })
+    return res.status(500).json({ ok: false, error: 'Server not configured' })
   }
-  const got = (req.headers['x-monday-button-secret'] || '') as string
+  const got = (req.query.key || '') as string
   if (got !== expected) {
-    return res.status(401).json({ ok: false, error: 'Unauthorized', durationMs: Date.now() - t0 })
+    return res.status(401).json({ ok: false, error: 'Unauthorized' })
   }
 
-  // ── Parse + validate body ───────────────────────────────────────────
-  // Monday integration recipes can send numbers OR strings depending on how
-  // the recipe was built. Coerce both into strings before anything else.
-  const body: RequestBody = req.body || {}
-  const itemId = body.itemId != null ? String(body.itemId).trim() : ''
-  const phone = body.phone ? String(body.phone).trim() : ''
-  const boardId = body.boardId != null ? String(body.boardId).trim() : ''
-
-  if (!itemId) {
-    return res.status(400).json({ ok: false, error: 'Missing itemId', durationMs: Date.now() - t0 })
+  // ── 3. Extract event fields ─────────────────────────────────────────
+  const ev = body.event
+  if (!ev) {
+    // Could be a webhook-test ping or unknown shape. Return 200 so Monday
+    // doesn't retry; log for debugging.
+    console.warn('[fetch-call-notes] POST received without event payload:', JSON.stringify(body).slice(0, 500))
+    return res.status(200).json({ ok: true, ignored: 'no event payload' })
   }
-  if (!phone) {
-    // Phone-less items can't be matched to a call. Tell Monday so the rep sees
-    // it on the item itself rather than digging through quote_events.
-    try {
-      await createUpdate(itemId, '📞 No phone number on this item — add one and try again.')
-    } catch (e) {
-      console.warn('[fetch-call-notes] failed to post no-phone update:', e)
-    }
-    await logEvent({
-      itemId,
-      boardId: boardId || null,
-      phone: null,
-      callId: null,
-      action: 'no_summary_posted',
-      status: 'partial',
-      detailsExtra: { reason: 'no phone on item' },
-      durationMs: Date.now() - t0,
-    })
+
+  const itemId = ev.pulseId != null ? String(ev.pulseId) : ''
+  const boardId = ev.boardId != null ? String(ev.boardId) : ''
+  const newLabel = ev.value?.label?.text || ''
+
+  if (!itemId || !boardId) {
+    console.warn('[fetch-call-notes] event missing pulseId/boardId:', JSON.stringify(ev).slice(0, 500))
+    return res.status(200).json({ ok: true, ignored: 'event missing ids' })
+  }
+
+  // ── 4. Filter: only act when status changes TO our trigger label ────
+  // Monday fires on every change including the post-action reset back to
+  // blank. Without this filter we'd loop or double-fire.
+  if (newLabel !== TRIGGER_LABEL) {
     return res.status(200).json({
       ok: true,
-      action: 'no_summary_posted',
-      durationMs: Date.now() - t0,
+      ignored: `status is "${newLabel}", trigger requires "${TRIGGER_LABEL}"`,
     })
   }
 
-  // ── Look up the call summary ────────────────────────────────────────
+  // ── 5. Fetch the phone from the item ───────────────────────────────
+  // Webhook payload doesn't include the phone — only the column that
+  // changed (status). Read the Phone column directly via Monday API.
+  let phone: string | null = null
+  try {
+    phone = await fetchItemPhone(itemId)
+  } catch (e: any) {
+    console.error('[fetch-call-notes] fetchItemPhone failed:', e?.message || e)
+    await postErrorAndLog(itemId, boardId, null, 'failed', {
+      error: e?.message || String(e),
+      where: 'fetchItemPhone',
+    }, t0)
+    return res.status(200).json({ ok: true, error: 'fetchItemPhone failed' })
+  }
+
+  if (!phone) {
+    await postErrorAndLog(itemId, boardId, null, 'no_summary_posted', {
+      reason: 'no phone on item',
+    }, t0, '📞 No phone number on this item — add one and try again.')
+    await resetStatus(itemId, boardId, ev.columnId)
+    return res.status(200).json({ ok: true, action: 'no_phone' })
+  }
+
+  // ── 6. Look up the call summary ────────────────────────────────────
   let context: Awaited<ReturnType<typeof getQuoteCallContext>>
   try {
     context = await getQuoteCallContext(phone)
   } catch (e: any) {
-    // The lookup helper is best-effort and shouldn't throw, but if Supabase
-    // is down or env is misconfigured, post a graceful message and log.
     console.error('[fetch-call-notes] context lookup threw:', e?.message || e)
-    try {
-      await createUpdate(itemId, NO_SUMMARY_BODY)
-    } catch {}
-    await logEvent({
-      itemId,
-      boardId: boardId || null,
-      phone,
-      callId: null,
-      action: 'failed',
-      status: 'failed',
-      detailsExtra: { error: e?.message || String(e), where: 'getQuoteCallContext' },
-      durationMs: Date.now() - t0,
-    })
-    return res.status(500).json({
-      ok: false,
-      error: 'Lookup failed',
-      durationMs: Date.now() - t0,
-    })
+    await postErrorAndLog(itemId, boardId, phone, 'failed', {
+      error: e?.message || String(e),
+      where: 'getQuoteCallContext',
+    }, t0, NO_SUMMARY_BODY)
+    await resetStatus(itemId, boardId, ev.columnId)
+    return res.status(200).json({ ok: true, error: 'lookup failed' })
   }
 
-  // ── Post the appropriate Update on the Monday item ──────────────────
+  // ── 7. Post the Update ─────────────────────────────────────────────
   const updateBody = context ? context.formatted : NO_SUMMARY_BODY
-  const action: OkResponse['action'] = context ? 'summary_posted' : 'no_summary_posted'
+  const action: 'summary_posted' | 'no_summary_posted' = context
+    ? 'summary_posted'
+    : 'no_summary_posted'
 
   try {
     await createUpdate(itemId, updateBody)
@@ -149,7 +185,7 @@ export default async function handler(
     console.error('[fetch-call-notes] createUpdate failed:', e?.message || e)
     await logEvent({
       itemId,
-      boardId: boardId || null,
+      boardId,
       phone,
       callId: context?.callId || null,
       action: 'failed',
@@ -157,17 +193,19 @@ export default async function handler(
       detailsExtra: { error: e?.message || String(e), where: 'createUpdate' },
       durationMs: Date.now() - t0,
     })
-    return res.status(502).json({
-      ok: false,
-      error: 'Failed to post update on Monday',
-      durationMs: Date.now() - t0,
-    })
+    await resetStatus(itemId, boardId, ev.columnId)
+    return res.status(200).json({ ok: true, error: 'createUpdate failed' })
   }
 
-  // ── Log success ─────────────────────────────────────────────────────
+  // ── 8. Reset the status so the rep can fire it again ──────────────
+  // Best-effort: don't fail the request if reset fails; the Update is
+  // already posted. Reset uses the SAME columnId Monday told us about.
+  await resetStatus(itemId, boardId, ev.columnId)
+
+  // ── 9. Log success ─────────────────────────────────────────────────
   await logEvent({
     itemId,
-    boardId: boardId || null,
+    boardId,
     phone,
     callId: context?.callId || null,
     action,
@@ -186,10 +224,78 @@ export default async function handler(
   })
 }
 
+// ── Helper: read the phone from the item ────────────────────────────────
+// Reads the standard PHONE column ID (text_mkzbenay) defined in
+// lib/monday-followup.ts COLUMNS.PHONE. All 5 Quote Channel boards share
+// this column ID since they were forked from the same template.
+async function fetchItemPhone(itemId: string): Promise<string | null> {
+  const data = await mondayQuery<{ items: Array<{ column_values: Array<{ text: string | null }> }> }>(
+    `query GetItemPhone($itemId: [ID!]) {
+      items(ids: $itemId) {
+        column_values(ids: ["${COLUMNS.PHONE}"]) { text }
+      }
+    }`,
+    { itemId: [itemId] },
+  )
+  const text = data.items?.[0]?.column_values?.[0]?.text || null
+  return text && text.trim() ? text.trim() : null
+}
+
+// ── Helper: reset the trigger status column back to blank ──────────────
+// Pass the columnId from the event (which is the trigger column itself,
+// not the standard `status` column). This makes the recipe re-usable —
+// the rep can change to "Fetch Call Notes" again to get fresh notes.
+async function resetStatus(itemId: string, boardId: string, columnId: string | undefined): Promise<void> {
+  if (!columnId) return
+  try {
+    // Monday's `change_simple_column_value` with an empty string clears
+    // a status column.
+    await mondayQuery(
+      `mutation ResetStatus($itemId: ID!, $boardId: ID!, $columnId: String!) {
+        change_simple_column_value(
+          item_id: $itemId
+          board_id: $boardId
+          column_id: $columnId
+          value: ""
+        ) { id }
+      }`,
+      { itemId, boardId, columnId },
+    )
+  } catch (e: any) {
+    console.warn('[fetch-call-notes] resetStatus failed (non-fatal):', e?.message || e)
+  }
+}
+
+// ── Helper: convenience wrapper to post an error message + log ─────────
+async function postErrorAndLog(
+  itemId: string,
+  boardId: string,
+  phone: string | null,
+  action: 'failed' | 'no_summary_posted',
+  detailsExtra: Record<string, any>,
+  t0: number,
+  visibleBody?: string,
+): Promise<void> {
+  if (visibleBody) {
+    try {
+      await createUpdate(itemId, visibleBody)
+    } catch (e) {
+      console.warn('[fetch-call-notes] failed to post error update:', e)
+    }
+  }
+  await logEvent({
+    itemId,
+    boardId,
+    phone,
+    callId: null,
+    action,
+    status: action === 'failed' ? 'failed' : 'partial',
+    detailsExtra,
+    durationMs: Date.now() - t0,
+  })
+}
+
 // ── Audit logger ────────────────────────────────────────────────────────
-// Writes one row per request to public.quote_events. Failures here are
-// logged but do NOT fail the response — the user's Update was already
-// posted, and quote_events being unavailable shouldn't break the UX.
 
 interface LogEventInput {
   itemId: string
@@ -211,10 +317,6 @@ async function logEvent(input: LogEventInput): Promise<void> {
   }
   const sb = createClient(url, key, { auth: { persistSession: false } })
 
-  // Map our action to the quote_events.monday_action enum:
-  //   'summary_posted'    → 'update_posted'
-  //   'no_summary_posted' → 'no_summary_posted'
-  //   'failed'            → 'failed'
   const mondayAction =
     input.action === 'summary_posted' ? 'update_posted'
     : input.action === 'no_summary_posted' ? 'no_summary_posted'
