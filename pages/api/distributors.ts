@@ -1,8 +1,21 @@
 // pages/api/distributors.ts
-// Reads revenue-account categories and excluded-customer list from Supabase
-// (`distributor_report_categories`, `distributor_report_excluded_customers`).
-// Falls back to hard-coded legacy defaults if the config table is empty or
-// the query fails — ensures the report keeps working even if config is broken.
+// Reads revenue-account categories from Supabase and reads customer
+// classification entirely from the dist_groups/dist_group_members system
+// (the Membership tab on /admin/groups).
+//
+// CUSTOMER CLASSIFICATION — single source of truth (30 Apr 2026):
+//   Each MYOB customer (after alias resolution to canonical name) belongs
+//   to exactly one group in the 'type' dimension:
+//
+//     • Distributors  → shown as a distributor
+//     • Sundry        → rolled up into a single 'Sundry' bucket
+//     • Excluded      → dropped entirely
+//     • (no membership) → shown as a distributor (default)
+//
+//   No legacy hardcoded list. No fallback table. Classification is purely
+//   what the user has set via the Membership tab. Unclassified customers
+//   appear on the report by default — fix that by classifying them in
+//   the Membership tab.
 //
 // Caching:
 // - On each GET, check distributors_cache for the (start, end) range first.
@@ -17,33 +30,23 @@ import { createClient } from '@supabase/supabase-js'
 import { requireAuth } from '../../lib/auth'
 import { cdataQuery, parseDateRange, endDateExclusive } from '../../lib/cdata'
 import { lineExGst } from '../../lib/gst'
+import { getGrouping, groupNameFor, GroupingSnapshot } from '../../lib/distGroups'
 
 export const config = { maxDuration: 60 }
 
-// ── Config loader with fallback ─────────────────────────────────────────
-const LEGACY_CATEGORIES = [
+// ── Categories config ───────────────────────────────────────────────────
+// Kept as a small fallback so a dropped DB connection doesn't take the
+// report offline entirely. This is INFRASTRUCTURE config (which MYOB
+// account codes belong to which revenue category), not customer
+// classification — it doesn't drift the way exclusion lists do.
+const FALLBACK_CATEGORIES = [
   { name: 'Tuning', sort_order: 1, account_codes: ['4-1905','4-1910','4-1915','4-1920'] },
   { name: 'Parts',  sort_order: 2, account_codes: ['4-1000','4-1401','4-1602','4-1701','4-1802','4-1803','4-1805','4-1807','4-1811','4-1813','4-1814','4-1821','4-1861'] },
   { name: 'Oil',    sort_order: 3, account_codes: ['4-1060'] },
 ]
-// Legacy fallback for when the DB config isn't reachable. Note field
-// mirrors what's stored in distributor_report_excluded_customers so the
-// Sundry-vs-hidden distinction still works offline.
-const LEGACY_EXCLUDED: Array<[string, string]> = [
-  ['vps', 'Internal'],
-  ['vehicle performance solutions t/a just autos', 'Internal'],
-  ['duncan scott', 'Excluded'], ['kent dalton', 'Excluded'], ['wade kelly', 'Excluded'],
-  ['mark cooper', 'Excluded'], ['sean poiani', 'Excluded'], ['michael scalzo', 'Excluded'],
-  ['mark naidoo', 'Excluded'], ['anthony barraball', 'Excluded'],
-  ['allsorts mechanical', 'Sundry'], ['hd automotive', 'Sundry'],
-  ['mccormacks 4wd', 'Sundry'], ['vito media', 'Sundry'],
-  ['macpherson witham', 'Sundry'],
-]
-const LEGACY_EXCLUDED_MAP = new Map<string, string>(LEGACY_EXCLUDED)
 
 interface LoadedConfig {
   categories: Array<{ name: string; sort_order: number; account_codes: string[] }>
-  excluded: Map<string, string>   // name (lowercase) -> note (e.g. "Sundry", "Staff", "Internal")
   source: 'db' | 'fallback'
 }
 
@@ -61,45 +64,65 @@ async function loadConfig(): Promise<LoadedConfig> {
   if (_cfgCache && Date.now() - _cfgCache.at < CFG_TTL) return _cfgCache.cfg
   try {
     const sb = sbAdmin()
-    const [catsRes, exRes] = await Promise.all([
-      sb.from('distributor_report_categories').select('name, sort_order, account_codes').order('sort_order'),
-      sb.from('distributor_report_excluded_customers').select('customer_name, note'),
-    ])
+    const catsRes = await sb
+      .from('distributor_report_categories')
+      .select('name, sort_order, account_codes')
+      .order('sort_order')
     const cats = (catsRes.data || []).map((r: any) => ({
       name: String(r.name),
       sort_order: Number(r.sort_order) || 0,
       account_codes: Array.isArray(r.account_codes) ? r.account_codes.map(String) : [],
     }))
-    const excluded = new Map<string, string>()
-    for (const r of (exRes.data || []) as any[]) {
-      const name = String(r.customer_name || '').toLowerCase()
-      if (!name) continue
-      excluded.set(name, String(r.note || 'Other'))
-    }
     if (cats.length === 0) {
-      const cfg: LoadedConfig = {
-        categories: LEGACY_CATEGORIES,
-        excluded: excluded.size > 0 ? excluded : LEGACY_EXCLUDED_MAP,
-        source: 'fallback',
-      }
+      const cfg: LoadedConfig = { categories: FALLBACK_CATEGORIES, source: 'fallback' }
       _cfgCache = { cfg, at: Date.now() }
       return cfg
     }
-    const cfg: LoadedConfig = { categories: cats, excluded, source: 'db' }
+    const cfg: LoadedConfig = { categories: cats, source: 'db' }
     _cfgCache = { cfg, at: Date.now() }
     return cfg
   } catch (e: any) {
     console.error('distributors: config load failed, using fallback —', e?.message)
-    const cfg: LoadedConfig = { categories: LEGACY_CATEGORIES, excluded: LEGACY_EXCLUDED_MAP, source: 'fallback' }
+    const cfg: LoadedConfig = { categories: FALLBACK_CATEGORIES, source: 'fallback' }
     _cfgCache = { cfg, at: Date.now() }
     return cfg
   }
 }
 
-// ── Core compute function — extracted so both live API and cron can use ──
-// Returns the full payload that the frontend consumes.
+// ── Customer classification helper ──────────────────────────────────────
+// Returns one of: 'Distributors' | 'Sundry' | 'Excluded' | null based on
+// which group (in the 'type' dimension) the canonical name belongs to.
+// null means no membership in any type group → treated as a distributor.
+function classifyCustomer(rawMyobName: string, snapshot: GroupingSnapshot): {
+  canonical: string
+  classification: string | null
+} {
+  const raw = String(rawMyobName || '').trim()
+  if (!raw) return { canonical: '', classification: null }
+
+  // Try the raw name first (covers most cases including aliases that map
+  // tuning-suffixed names directly).
+  let canonical = snapshot.aliasMap[raw]
+
+  // Fall back to suffix-stripped name (e.g. "Foo Pty Ltd (Tuning 2)" → "Foo Pty Ltd"),
+  // which gives us a chance against an alias defined on the bare name.
+  if (!canonical) {
+    const stripped = raw
+      .replace(/\s*\(Tuning 2\)\s*$/i, '')
+      .replace(/\s*\(Tuning 1\)\s*$/i, '')
+      .replace(/\s*\(Tuning\)\s*$/i, '')
+      .trim()
+    canonical = snapshot.aliasMap[stripped] || stripped
+  }
+
+  const classification = groupNameFor(canonical, 'type', snapshot)
+  return { canonical, classification }
+}
+
+// ── Core compute function ──────────────────────────────────────────────
 export async function computeDistributorsPayload(start: string, end: string) {
   const cfg = await loadConfig()
+  const grouping = await getGrouping()
 
   const accToCat = new Map<string, string>()
   for (const c of cfg.categories) {
@@ -143,8 +166,15 @@ export async function computeDistributorsPayload(start: string, end: string) {
   const lCols: string[] = lineRes?.results?.[0]?.schema?.map((c: any) => c.columnName) || []
   const lRows: any[][] = lineRes?.results?.[0]?.rows || []
 
-  const INTL = new Set(['kanoo motors wll','karyokuae','us cruiserz'])
-  const EXCLUDED = cfg.excluded
+  // Region detection: customers in the 'International' group in the region
+  // dimension are tagged as such. Default is National.
+  const intlSet = new Set<string>()
+  const intlGroup = (grouping.groupsByDimension['region'] || []).find(g => g.name === 'International')
+  if (intlGroup) {
+    for (const m of grouping.members) {
+      if (m.group_id === intlGroup.id) intlSet.add(m.canonical_name)
+    }
+  }
 
   const byDist = new Map<string, any>()
   for (const r of lRows) {
@@ -153,14 +183,13 @@ export async function computeDistributorsPayload(start: string, end: string) {
     const inv = invById.get(line.SaleInvoiceId)
     if (!inv) continue
     const raw: string = String(inv.CustomerName || '')
-    // Sundry customers PASS THROUGH and are rolled into a dedicated 'Sundry'
-    // bucket; everything else excluded (Staff, Internal) is dropped entirely.
-    const noteRaw  = EXCLUDED.get(raw.toLowerCase())
-    const base = raw.replace(/\s*\(Tuning 2\)\s*$/i,'').replace(/\s*\(Tuning 1\)\s*$/i,'').replace(/\s*\(Tuning\)\s*$/i,'').trim()
-    const noteBase = EXCLUDED.get(base.toLowerCase())
-    const note = noteRaw || noteBase || null
-    if (note && note !== 'Sundry') continue
-    if (!base) continue
+
+    // Classify via the dist_groups system. Drop Excluded entirely;
+    // roll Sundry into a single bucket; everyone else (Distributors group OR
+    // no group membership) is shown as a real distributor.
+    const { canonical, classification } = classifyCustomer(raw, grouping)
+    if (!canonical) continue
+    if (classification === 'Excluded') continue
 
     const acc: string = line.AccountDisplayID || ''
     const cat = accToCat.get(acc)
@@ -168,12 +197,12 @@ export async function computeDistributorsPayload(start: string, end: string) {
     const total = Number(line.Total) || 0
     const amt = lineExGst(total, inv.IsTaxInclusive, line.TaxCodeCode)
 
-    const isSundry = note === 'Sundry'
-    const distKey = isSundry ? '__SUNDRY__' : base
+    const isSundry = classification === 'Sundry'
+    const distKey = isSundry ? '__SUNDRY__' : canonical
     if (!byDist.has(distKey)) {
       byDist.set(distKey, {
-        customerBase: isSundry ? 'Sundry' : base,
-        location: isSundry ? 'Sundry' : (INTL.has(base.toLowerCase()) ? 'International' : 'National'),
+        customerBase: isSundry ? 'Sundry' : canonical,
+        location: isSundry ? 'Sundry' : (intlSet.has(canonical) ? 'International' : 'National'),
         isSundry,
         byCategory: {} as Record<string, number>,
         invoiceIds: new Set<string>(),
@@ -187,7 +216,7 @@ export async function computeDistributorsPayload(start: string, end: string) {
       date: inv.Date, invoiceNumber: inv.Number, description: line.Description || '',
       amountExGst: amt, bucket: cat, category: cat, accountCode: acc,
       poNumber: inv.CustomerPurchaseOrderNumber || '',
-      sundryCustomer: isSundry ? base : null,
+      sundryCustomer: isSundry ? canonical : null,
     })
   }
 
@@ -253,18 +282,14 @@ export async function computeDistributorsPayload(start: string, end: string) {
 }
 
 // ── Range key classifier ────────────────────────────────────────────────
-// Turns a (start, end) pair into a stable key used in distributors_cache.range_key.
-// Standardised ranges get nice labels; custom windows get 'custom'.
 export function classifyRangeKey(start: string, end: string): string {
-  // FY = 1 July to 30 June the next year (AEST business convention).
   if (start === '2024-07-01' && end === '2025-06-30') return 'FY2025'
   if (start === '2025-07-01' && end === '2026-06-30') return 'FY2026'
-  // Whole-month: start is YYYY-MM-01 and end is the last day of that same month
   const mStart = /^(\d{4})-(\d{2})-01$/.exec(start)
   if (mStart) {
     const year = Number(mStart[1])
     const month = Number(mStart[2])
-    const lastDay = new Date(Date.UTC(year, month, 0)).getUTCDate()  // month is 1-indexed here; day 0 = last of prev month
+    const lastDay = new Date(Date.UTC(year, month, 0)).getUTCDate()
     const expectedEnd = `${mStart[1]}-${mStart[2]}-${String(lastDay).padStart(2, '0')}`
     if (end === expectedEnd) return `${mStart[1]}-${mStart[2]}`
   }
@@ -343,10 +368,7 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
       const payload = await computeDistributorsPayload(start, end)
       const computedMs = Date.now() - t0
 
-      // 3. Store in cache for next time. AWAIT this — Vercel serverless
-      // terminates the function once the response is sent, so fire-and-forget
-      // writes don't reliably persist. The extra ~200ms is worth the
-      // guarantee that the cache is actually populated.
+      // 3. Store in cache for next time.
       try {
         await writeCache(sb, start, end, payload, computedMs)
         console.log('[distributors] cache WRITE ok for', start, '→', end, 'invoiceCount=', payload?.totals?.invoiceCount)

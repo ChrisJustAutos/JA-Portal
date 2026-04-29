@@ -1,11 +1,17 @@
 // pages/admin/groups.tsx — Distributor grouping admin UI
 // Reachable at /admin/groups
+//
+// 30 Apr 2026: Single source of truth for customer classification is now
+// the Membership tab (dist_groups + dist_group_members), type dimension
+// with three groups: Distributors, Sundry, Excluded. The legacy Exclusions
+// tab and its underlying distributor_report_excluded_customers table
+// are no longer used.
+
 import { useEffect, useState, useCallback } from 'react'
 import Head from 'next/head'
 import { useRouter } from 'next/router'
 import PortalSidebar from '../../lib/PortalSidebar'
 import { requirePageAuth } from '../../lib/authServer'
-import ExclusionsTab from '../../components/admin/ExclusionsTab'
 
 const T = {
   bg:'#0d0f12', bg2:'#131519', bg3:'#1a1d23', bg4:'#21252d',
@@ -29,7 +35,7 @@ export default function GroupsAdmin() {
   const [groups, setGroups] = useState<Group[]>([])
   const [members, setMembers] = useState<Member[]>([])
   const [myobCustomers, setMyobCustomers] = useState<string[]>([])
-  const [tab, setTab] = useState<'aliases'|'groups'|'members'|'exclusions'>('aliases')
+  const [tab, setTab] = useState<'aliases'|'groups'|'members'>('members')
 
   const load = useCallback(async () => {
     try {
@@ -103,13 +109,12 @@ export default function GroupsAdmin() {
           )}
 
           <div style={{display:'flex',gap:2,padding:'0 20px',background:T.bg2,borderBottom:`1px solid ${T.border}`,flexShrink:0}}>
-            {(['aliases','groups','members','exclusions'] as const).map(k => (
+            {(['members','aliases','groups'] as const).map(k => (
               <button key={k} onClick={()=>setTab(k)}
                 style={{fontSize:12,padding:'10px 16px',border:'none',borderBottom:tab===k?`2px solid ${T.accent}`:'2px solid transparent',background:'transparent',color:tab===k?T.accent:T.text2,cursor:'pointer',fontFamily:'inherit',textTransform:'capitalize'}}>
-                {k === 'aliases' ? `Aliases & Merges (${aliases.length})`
-                  : k === 'groups' ? `Groups (${groups.length})`
-                  : k === 'members' ? `Membership (${members.length})`
-                  : 'Exclusions'}
+                {k === 'members' ? `Membership (${members.length})`
+                  : k === 'aliases' ? `Aliases & Merges (${aliases.length})`
+                  : `Groups (${groups.length})`}
               </button>
             ))}
           </div>
@@ -117,6 +122,14 @@ export default function GroupsAdmin() {
           <div style={{flex:1,overflowY:'auto',padding:20}}>
             {error && <div style={{background:'rgba(240,78,78,0.1)',border:`1px solid ${T.red}40`,borderRadius:8,padding:12,marginBottom:16,color:T.red,fontSize:12}}>{error}</div>}
             {loading && <div style={{color:T.text3,textAlign:'center',padding:40}}>Loading…</div>}
+
+            {!loading && tab === 'members' && (
+              <MembersTab groups={groups} members={members} canonicalNames={canonicalNames}
+                onToggle={(groupId,canonical,currentlyMember)=>
+                  mutate(currentlyMember?'removeMember':'addMember',{group_id:groupId,canonical_name:canonical})
+                }
+              />
+            )}
 
             {!loading && tab === 'aliases' && (
               <AliasesTab aliases={aliases} unclassified={unclassified} canonicalNames={canonicalNames}
@@ -131,18 +144,6 @@ export default function GroupsAdmin() {
                 onUpdate={(id,patch)=>mutate('updateGroup',{id,...patch})}
                 onDelete={(id)=>mutate('deleteGroup',{id})}
               />
-            )}
-
-            {!loading && tab === 'members' && (
-              <MembersTab groups={groups} members={members} canonicalNames={canonicalNames}
-                onToggle={(groupId,canonical,currentlyMember)=>
-                  mutate(currentlyMember?'removeMember':'addMember',{group_id:groupId,canonical_name:canonical})
-                }
-              />
-            )}
-
-            {tab === 'exclusions' && (
-              <ExclusionsTab myobCustomers={myobCustomers} />
             )}
           </div>
         </div>
@@ -281,7 +282,7 @@ function GroupsTab({byDimension, onCreate, onUpdate, onDelete}: {
     <div style={{background:T.bg2,border:`1px solid ${T.border}`,borderRadius:10,padding:16}}>
       <div style={{fontSize:13,fontWeight:600,color:T.text,marginBottom:10}}>What this tab does</div>
       <div style={{fontSize:12,color:T.text2,lineHeight:1.6}}>
-        Groups are organised by dimension. Each dimension is a way of slicing your distributors (e.g. "type" has Distributors/Sundry/Excluded; "region" has National/International). You can add new dimensions to track things like state, tier, or account manager over time.
+        Groups are organised by dimension. The <strong style={{color:T.text}}>type</strong> dimension classifies customers on the distributor report — Distributors show as full distributors, Sundry rolls into a single bucket, Excluded are hidden entirely. The <strong style={{color:T.text}}>region</strong> dimension splits distributors into National / International. You can add new dimensions (e.g. state, tier, account_manager) for additional reporting cuts.
       </div>
     </div>
 
@@ -393,9 +394,9 @@ function MembersTab({groups, members, canonicalNames, onToggle}: {
   // ── Eligibility filter ─────────────────────────────────────
   // For non-type dimensions (e.g. region) only show customers that have
   // been classified as the 'Distributors' group in the type dimension.
-  // Sundry / Excluded / Internal customers don't need a region, so showing
-  // them here is just visual noise. Type dimension itself shows everyone
-  // (you classify INTO a type from this view, so unclassified customers
+  // Sundry / Excluded customers don't need a region, so showing them here
+  // is just visual noise. Type dimension itself shows everyone (you
+  // classify INTO a type from this view, so unclassified customers
   // need to be visible).
   const distributorsTypeGroup = groups.find(g => g.dimension === 'type' && g.name === 'Distributors')
   const distributorMembers = distributorsTypeGroup ? (membersByGroup[distributorsTypeGroup.id] || new Set()) : new Set<string>()
@@ -416,8 +417,11 @@ function MembersTab({groups, members, canonicalNames, onToggle}: {
       <div style={{fontSize:13,fontWeight:600,color:T.text,marginBottom:10}}>What this tab does</div>
       <div style={{fontSize:12,color:T.text2,lineHeight:1.6}}>
         Click checkboxes to add or remove a canonical distributor from a group. A distributor can belong to multiple groups (e.g. CP Performance is both a "Distributor" AND "National"). Switch dimension with the selector to edit region, type, or any custom dimension you've added.
+        {dimension === 'type' && (
+          <> The <strong style={{color:T.text}}>type</strong> dimension is what classifies customers on the distributor report: <strong style={{color:T.text}}>Distributors</strong> show as full distributors, <strong style={{color:T.text}}>Sundry</strong> rolls into a single bucket, and <strong style={{color:T.text}}>Excluded</strong> are hidden entirely. Customers with no type membership default to Distributors.</>
+        )}
         {dimension !== 'type' && (
-          <> Only customers classified as <strong style={{color:T.text}}>Distributors</strong> (in the type dimension) appear here — Sundry, Excluded and Internal customers don't need a {dimension}.</>
+          <> Only customers classified as <strong style={{color:T.text}}>Distributors</strong> (in the type dimension) appear here — Sundry and Excluded customers don't need a {dimension}.</>
         )}
       </div>
     </div>
