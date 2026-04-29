@@ -7,10 +7,11 @@
 //   Each MYOB customer (after alias resolution to canonical name) belongs
 //   to exactly one group in the 'type' dimension:
 //
-//     • Distributors  → shown as a distributor
-//     • Sundry        → rolled up into a single 'Sundry' bucket
+//     • Distributors  → shown as a distributor (location: National | International)
+//     • Sundry        → shown as a distributor with location: 'Sundry' (kept individually,
+//                        not rolled into a single bucket — frontend groups them visually)
 //     • Excluded      → dropped entirely
-//     • (no membership) → shown as a distributor (default)
+//     • (no membership) → shown as a distributor (default; treated as National)
 //
 //   No legacy hardcoded list. No fallback table. Classification is purely
 //   what the user has set via the Membership tab. Unclassified customers
@@ -167,7 +168,8 @@ export async function computeDistributorsPayload(start: string, end: string) {
   const lRows: any[][] = lineRes?.results?.[0]?.rows || []
 
   // Region detection: customers in the 'International' group in the region
-  // dimension are tagged as such. Default is National.
+  // dimension are tagged as such. Default for everyone else is National.
+  // Sundry-classified customers override location to 'Sundry' regardless.
   const intlSet = new Set<string>()
   const intlGroup = (grouping.groupsByDimension['region'] || []).find(g => g.name === 'International')
   if (intlGroup) {
@@ -185,8 +187,8 @@ export async function computeDistributorsPayload(start: string, end: string) {
     const raw: string = String(inv.CustomerName || '')
 
     // Classify via the dist_groups system. Drop Excluded entirely;
-    // roll Sundry into a single bucket; everyone else (Distributors group OR
-    // no group membership) is shown as a real distributor.
+    // Sundry stays as individual rows but tagged isSundry / location='Sundry'
+    // so the frontend can group them visually.
     const { canonical, classification } = classifyCustomer(raw, grouping)
     if (!canonical) continue
     if (classification === 'Excluded') continue
@@ -198,24 +200,32 @@ export async function computeDistributorsPayload(start: string, end: string) {
     const amt = lineExGst(total, inv.IsTaxInclusive, line.TaxCodeCode)
 
     const isSundry = classification === 'Sundry'
-    const distKey = isSundry ? '__SUNDRY__' : canonical
-    if (!byDist.has(distKey)) {
-      byDist.set(distKey, {
-        customerBase: isSundry ? 'Sundry' : canonical,
-        location: isSundry ? 'Sundry' : (intlSet.has(canonical) ? 'International' : 'National'),
+
+    // Each Sundry customer keeps their own row (no roll-up). Sundry rows
+    // share location='Sundry' so the frontend can group them in a Sundry
+    // section but they remain individually identifiable.
+    if (!byDist.has(canonical)) {
+      const location = isSundry
+        ? 'Sundry'
+        : (intlSet.has(canonical) ? 'International' : 'National')
+      byDist.set(canonical, {
+        customerBase: canonical,
+        location,
         isSundry,
         byCategory: {} as Record<string, number>,
         invoiceIds: new Set<string>(),
         lineItems: [] as any[],
       })
     }
-    const agg = byDist.get(distKey)
+    const agg = byDist.get(canonical)
     agg.byCategory[cat] = (agg.byCategory[cat] || 0) + amt
     agg.invoiceIds.add(inv.ID)
     agg.lineItems.push({
       date: inv.Date, invoiceNumber: inv.Number, description: line.Description || '',
       amountExGst: amt, bucket: cat, category: cat, accountCode: acc,
       poNumber: inv.CustomerPurchaseOrderNumber || '',
+      // sundryCustomer kept for legacy compatibility — equals customerBase
+      // when isSundry, null otherwise. Frontend drill-down still reads it.
       sundryCustomer: isSundry ? canonical : null,
     })
   }
@@ -241,6 +251,7 @@ export async function computeDistributorsPayload(start: string, end: string) {
     }
   }).sort(function(a: any, b: any) { return b.total - a.total })
 
+  // Monthly trend: National only (excludes International AND Sundry).
   const monthly = new Map<string, number>()
   for (const d of distributors) {
     if (d.location !== 'National') continue

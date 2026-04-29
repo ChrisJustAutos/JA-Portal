@@ -1,17 +1,15 @@
 // pages/distributors.tsx — Updated with Supabase group-aware rendering
 // This version loads groupings from /api/groups and renders the Summary tab
-// as sections: Distributors first, then Sundry, then Excluded (or whatever
-// groups exist in the 'type' dimension).
+// as sections: Distributors first, then Sundry, then any other groups in
+// the 'type' dimension (apart from Excluded which is filtered out).
 //
 // The other tabs (Distributor Sales, Detailed Sales, National P/M, National Total)
 // continue to work on the filtered (non-Excluded) data.
 //
-// NOTE: This is the replacement for pages/distributors.tsx. Diff vs the
-// existing sidebar-update version:
-//   1. Adds `grouping` state + fetch on mount
-//   2. Adds `typeOf(canonical)` helper to assign each line item a type group
-//   3. Summary tab renders groups-of-groups; KPIs split accordingly
-//   4. Top bar adds "Manage groups" link to /admin/groups
+// 30 Apr 2026: Sundry customers are now listed individually in their own
+// section (instead of being rolled up into a single "Sundry" row). The
+// backend tags each with isSundry / location='Sundry'; the frontend
+// partitions them into a dedicated section with a subtotal row.
 
 import { useEffect, useState, useRef, useCallback } from 'react'
 import Head from 'next/head'
@@ -34,10 +32,12 @@ interface LineItem {
   bucket: 'Tuning' | 'Parts' | 'Oil'
   poNumber: string
   invoiceNumber: string
-  // When the "distributor" is the synthetic 'Sundry' roll-up, this holds
-  // the ACTUAL customer from MYOB (so drill-down shows "Vito Media" not
-  // just "Sundry"). null for real distributors.
+  // Legacy field — equals CustomerName when isSundry, null otherwise.
+  // Kept for backwards compatibility with old cached payloads but not
+  // used for grouping now that Sundry customers are individual rows.
   sundryCustomer: string | null
+  // True when this customer is classified as Sundry in the type dimension.
+  isSundry: boolean
 }
 interface DistData {
   fetchedAt: string
@@ -79,29 +79,23 @@ const fmt=(n:number)=>n>=1e6?'$'+(n/1e6).toFixed(2)+'M':n>=1000?'$'+Math.round(n
 const T={bg:'#0d0f12',bg2:'#131519',bg3:'#1a1d23',bg4:'#21252d',border:'rgba(255,255,255,0.07)',border2:'rgba(255,255,255,0.12)',text:'#e8eaf0',text2:'#8b90a0',text3:'#545968',blue:'#4f8ef7',teal:'#2dd4bf',green:'#34c77b',amber:'#f5a623',red:'#f04e4e',purple:'#a78bfa',accent:'#4f8ef7'}
 
 // ── Sort helpers ─────────────────────────────────────────────────────
-// Shared across the three sortable tables on this page (Summary groups,
-// Distributor Sales models, Detailed Sales descriptions). Click a header
-// once → sort ascending; click again → descending; a third click → reset
-// to the table's default order.
-
 type SortDir = 'asc' | 'desc' | null
 interface SortState { col: string | null; dir: SortDir }
 
 function nextSortState(current: SortState, col: string): SortState {
-  if (current.col !== col) return { col, dir: 'desc' }  // new column → desc first (biggest numbers at top)
+  if (current.col !== col) return { col, dir: 'desc' }
   if (current.dir === 'desc') return { col, dir: 'asc' }
-  if (current.dir === 'asc')  return { col: null, dir: null }  // reset to natural order
+  if (current.dir === 'asc')  return { col: null, dir: null }
   return { col, dir: 'desc' }
 }
 
 function sortIndicator(state: SortState, col: string): string {
-  if (state.col !== col) return ' ↕'           // faded default arrow to signal sortability
+  if (state.col !== col) return ' ↕'
   if (state.dir === 'asc')  return ' ↑'
   if (state.dir === 'desc') return ' ↓'
   return ' ↕'
 }
 
-// Sortable <th>. Numeric cols use right-align, label cols use left-align.
 function SortableTh({
   label, col, state, onSort, align = 'right', width,
 }: { label: string; col: string; state: SortState; onSort: (col: string) => void; align?: 'left'|'right'; width?: string|number }) {
@@ -128,7 +122,7 @@ type Tab='distributor-sales'|'detailed-sales'|'summary'|'national-pm'|'national-
 export default function DistributorReport({ user }: { user: PortalUserSSR }) {
   const router=useRouter()
   const { prefs } = usePreferences()
-  const [tab,setTab]=useState<Tab>('summary')  // default to Summary — it's the grouped view
+  const [tab,setTab]=useState<Tab>('summary')
   const [data,setData]=useState<DistData|null>(null)
   const [grouping,setGrouping]=useState<GroupingPayload|null>(null)
   const [vinRules,setVinRules]=useState<VinRule[]>([])
@@ -139,7 +133,6 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
   const [lastRefresh,setLastRefresh]=useState<Date|null>(null)
   const [primaryDimension, setPrimaryDimension] = useState<'type'|'region'|string>('type')
 
-  // Per-table sort state. Default = natural (backend) order.
   const [summarySort, setSummarySort] = useState<SortState>({ col: null, dir: null })
   const [modelSort, setModelSort]     = useState<SortState>({ col: null, dir: null })
   const [detailedSort, setDetailedSort] = useState<SortState>({ col: null, dir: null })
@@ -148,12 +141,9 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
   function handleModelSort(col: string)    { setModelSort(prev => nextSortState(prev, col)) }
   function handleDetailedSort(col: string) { setDetailedSort(prev => nextSortState(prev, col)) }
 
-  // ── Drill-down (invoice breakdown modal) ─────────────────────────
-  // When the user clicks a cell on Summary / Distributor Sales / Detailed Sales
-  // we show every line item that makes up that cell, grouped by source invoice.
   interface DrillSpec {
-    title: string                 // modal title, e.g. "Cutlers Diesel — Tuning"
-    subtitle?: string             // smaller context line
+    title: string
+    subtitle?: string
     filter: (l: LineItem) => boolean
   }
   const [drill, setDrill] = useState<DrillSpec | null>(null)
@@ -171,11 +161,6 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
   const [activeDateParams,setActiveDateParams]=useState(`startDate=${monthStart}&endDate=${monthEnd}`)
   const [dateLoading,setDateLoading]=useState(false)
   const [reloadCounter,setReloadCounter]=useState(0)
-  // When true, the next load() call (triggered by the effect below)
-  // will pass isRefresh=true — forcing /api/distributors to bypass
-  // its Supabase cache and recompute live from MYOB. Set by the date
-  // range Apply button and the FY year buttons so a deliberate user
-  // action always pulls fresh data.
   const [nextLoadIsRefresh,setNextLoadIsRefresh]=useState(false)
   const fyLabel=isCustomRange?`${new Date(customStart+'T00:00').toLocaleDateString('en-AU',{day:'2-digit',month:'short',year:'2-digit'})} – ${new Date(customEnd+'T00:00').toLocaleDateString('en-AU',{day:'2-digit',month:'short',year:'2-digit'})}`:`FY${fyYear}`
 
@@ -196,7 +181,6 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
       const d=await distRes.json()
       if(d.error)throw new Error(d.error)
 
-      // Fetch grouping — don't block if it fails, fall back to empty
       let g: GroupingPayload = {aliases:[], groups:[], members:[]}
       if (groupRes.ok) {
         g = await groupRes.json()
@@ -205,7 +189,6 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
       const aliasMap: Record<string,string> = {}
       g.aliases.forEach(a => { aliasMap[a.myob_name] = a.canonical_name })
 
-      // Fetch VIN rules — don't block if it fails
       let vRules: VinRule[] = []
       if (vinRes.ok) {
         const vData = await vinRes.json()
@@ -213,10 +196,6 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
       }
       setVinRules(vRules)
 
-      // Flatten distributors[].lineItems[] into a single array,
-      // resolving each raw MYOB name to its canonical via the alias map.
-      // Backend returns amountExGst (ex-GST after FY26 GST audit fix).
-      // Apply user's gst_display preference: 'inc' → × 1.1, 'ex' → as-is.
       const gstPref = prefs.gst_display
       const flatLineItems: LineItem[] = (d.distributors || []).flatMap((dist: any) =>
         (dist.lineItems || []).map((li: any) => {
@@ -233,6 +212,7 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
             poNumber: li.poNumber || '',
             invoiceNumber: li.invoiceNumber || '',
             sundryCustomer: li.sundryCustomer || null,
+            isSundry: !!dist.isSundry,
           }
         })
       )
@@ -258,10 +238,6 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
     setLoading(false);setDateLoading(false);if(isRefresh)setRefreshing(false)
   },[router,activeDateParams,prefs.gst_display,reloadCounter])
   useEffect(()=>{
-    // If a date-range button (Apply / FY) just set nextLoadIsRefresh=true,
-    // forward that to load() so the API call includes ?refresh=true and bypasses
-    // the distributors_cache. Then reset the flag so subsequent loads go through
-    // the cache as normal.
     if (nextLoadIsRefresh) {
       setNextLoadIsRefresh(false)
       load(true)
@@ -277,7 +253,6 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
     return()=>clearInterval(t)
   },[load, prefs.auto_refresh_seconds])
 
-  // Group lookup helpers
   const groupNameFor = useCallback((canonical: string, dimension: string): string | null => {
     if (!grouping) return null
     const memberGroupIds = new Set(grouping.members.filter(m => m.canonical_name === canonical).map(m => m.group_id))
@@ -285,7 +260,7 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
     for (const g of groupsInDim) {
       if (memberGroupIds.has(g.id)) return g.name
     }
-    return null  // no group assigned
+    return null
   }, [grouping])
 
   const groupColorFor = useCallback((dimension: string, name: string): string => {
@@ -294,33 +269,43 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
     return g?.color || T.text3
   }, [grouping])
 
-  // Derived — now applies exclusions via the 'type'/'Excluded' group
+  // Apply 'type'/'Excluded' filtering even though backend already drops them
+  // (defence in depth — handles cached payloads from before the API change).
   const allLines = data?.lineItems || []
   const visibleLines = allLines.filter(l => groupNameFor(l.CustomerName, 'type') !== 'Excluded')
   const allDists=Array.from(new Set(visibleLines.map(l=>l.CustomerName))).filter(Boolean).sort()
   const filtered=selectedDist==='ALL'?visibleLines:visibleLines.filter(l=>l.CustomerName===selectedDist)
 
-  interface DS{name:string;tuning:number;oil:number;parts:number;total:number;typeGroup:string|null;regionGroup:string|null}
+  interface DS{name:string;tuning:number;oil:number;parts:number;total:number;typeGroup:string|null;regionGroup:string|null;isSundry:boolean}
   const distSummaries:DS[]=allDists.map(name=>{
     const dl=visibleLines.filter(l=>l.CustomerName===name)
     const tuning=dl.filter(l=>l.bucket==='Tuning').reduce((s,l)=>s+l.Total,0)
     const oil=dl.filter(l=>l.bucket==='Oil').reduce((s,l)=>s+l.Total,0)
     const parts=dl.filter(l=>l.bucket==='Parts').reduce((s,l)=>s+l.Total,0)
-    return{name,tuning,oil,parts,total:tuning+oil+parts,typeGroup:groupNameFor(name,'type'),regionGroup:groupNameFor(name,'region')}
+    return{name,tuning,oil,parts,total:tuning+oil+parts,typeGroup:groupNameFor(name,'type'),regionGroup:groupNameFor(name,'region'),isSundry:dl.some(l=>l.isSundry)}
   }).filter(d=>d.total>0).sort((a,b)=>b.total-a.total)
 
-  // Split summaries by the selected primary dimension
-  const dimensionGroups = grouping ? grouping.groups.filter(g => g.dimension === primaryDimension && g.name !== 'Excluded').sort((a,b)=>a.sort_order-b.sort_order) : []
+  // Partition summaries: Sundry customers go into their own section,
+  // everyone else groups by the selected primary dimension.
+  // (When primaryDimension==='type', 'Sundry' is already a group, so we
+  // explicitly separate it here so it always renders consistently
+  // regardless of which dimension the user selected.)
+  const dimensionGroups = grouping
+    ? grouping.groups.filter(g => g.dimension === primaryDimension && g.name !== 'Excluded' && g.name !== 'Sundry').sort((a,b)=>a.sort_order-b.sort_order)
+    : []
   const summariesByGroup: Record<string, DS[]> = {}
   const unclassifiedSummaries: DS[] = []
   const sundrySummaries: DS[] = []
   distSummaries.forEach(d => {
-    // Synthetic 'Sundry' distributor from the backend — render in its own
-    // group regardless of the grouping dimension, so it's visible but
-    // clearly separated from real distributor categories.
-    if (d.name === 'Sundry') { sundrySummaries.push(d); return }
+    if (d.isSundry) {
+      sundrySummaries.push(d)
+      return
+    }
     const groupName = primaryDimension === 'type' ? d.typeGroup : primaryDimension === 'region' ? d.regionGroup : groupNameFor(d.name, primaryDimension)
-    if (!groupName) {
+    if (!groupName || groupName === 'Sundry') {
+      // Defensive: if a customer is somehow tagged Sundry via groupName but
+      // not via isSundry, still send them to the Sundry section.
+      if (groupName === 'Sundry') { sundrySummaries.push(d); return }
       unclassifiedSummaries.push(d)
     } else {
       if (!summariesByGroup[groupName]) summariesByGroup[groupName] = []
@@ -419,9 +404,46 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
     return Object.entries(byModel).map(([model,v])=>({model,total:v.total,vins:v.vins.size,jobs:v.jobs})).sort((a,b)=>b.total-a.total)
   }
 
+  // ─── Distributor row (used by both Distributors and Sundry sections) ──
+  // Pulled out into its own helper so the Sundry section renders rows
+  // identically to the Distributors section (drill-down, sort, hover, etc.)
+  function renderDistRow(d: DS, sectionLabel?: string) {
+    const titlePrefix = sectionLabel ? `${sectionLabel} — ${d.name}` : d.name
+    return (
+      <tr key={d.name} className="dist-row" style={{borderTop:`1px solid ${T.border}`,background:selectedDist===d.name?'rgba(79,142,247,0.08)':'transparent'}}>
+        <td style={{fontSize:12,color:T.text2,padding:'8px 12px',cursor:'pointer'}} onClick={()=>setSelectedDist(d.name===selectedDist?'ALL':d.name)} title="Click to filter other tabs to this distributor">{d.name}</td>
+        <td style={{fontSize:12,fontFamily:'monospace',color:d.oil>0?T.text:T.text3,padding:'8px 12px',textAlign:'right',cursor:d.oil>0?'pointer':'default',textDecoration:d.oil>0?'underline dotted rgba(255,255,255,0.15)':'none'}}
+            onClick={d.oil>0?()=>setDrill({title:`${titlePrefix} — Oil`,subtitle:`${fmtFull(d.oil)} ex-GST`,filter:l=>l.CustomerName===d.name && l.bucket==='Oil'}):undefined}
+            title={d.oil>0?'Click to see the invoices that make up this':''}>{d.oil>0?fmtFull(d.oil):'$0'}</td>
+        <td style={{fontSize:12,fontFamily:'monospace',color:d.parts>0?T.text:T.text3,padding:'8px 12px',textAlign:'right',cursor:d.parts>0?'pointer':'default',textDecoration:d.parts>0?'underline dotted rgba(255,255,255,0.15)':'none'}}
+            onClick={d.parts>0?()=>setDrill({title:`${titlePrefix} — Parts`,subtitle:`${fmtFull(d.parts)} ex-GST`,filter:l=>l.CustomerName===d.name && l.bucket==='Parts'}):undefined}
+            title={d.parts>0?'Click to see the invoices that make up this':''}>{d.parts>0?fmtFull(d.parts):'$0'}</td>
+        <td style={{fontSize:12,fontFamily:'monospace',color:d.tuning>0?T.green:T.text3,padding:'8px 12px',textAlign:'right',cursor:d.tuning>0?'pointer':'default',textDecoration:d.tuning>0?'underline dotted rgba(52,199,123,0.3)':'none'}}
+            onClick={d.tuning>0?()=>setDrill({title:`${titlePrefix} — Tuning`,subtitle:`${fmtFull(d.tuning)} ex-GST`,filter:l=>l.CustomerName===d.name && l.bucket==='Tuning'}):undefined}
+            title={d.tuning>0?'Click to see the invoices that make up this':''}>{d.tuning>0?fmtFull(d.tuning):'$0'}</td>
+        <td style={{fontSize:12,fontFamily:'monospace',fontWeight:500,color:T.blue,padding:'8px 12px',textAlign:'right',cursor:'pointer',textDecoration:'underline dotted rgba(79,142,247,0.3)'}}
+            onClick={()=>setDrill({title:`${titlePrefix} — All revenue`,subtitle:`${fmtFull(d.total)} ex-GST`,filter:l=>l.CustomerName===d.name})}
+            title="Click to see the invoices that make up this">{fmtFull(d.total)}</td>
+      </tr>
+    )
+  }
+
+  // Apply current sort to a list of DS rows, preserving natural order if no sort.
+  function applySummarySort(rows: DS[]): DS[] {
+    if (!summarySort.col || !summarySort.dir) return rows
+    const dir = summarySort.dir === 'asc' ? 1 : -1
+    const col = summarySort.col
+    return [...rows].sort((a: any, b: any) => {
+      const av = a[col], bv = b[col]
+      if (typeof av === 'string' && typeof bv === 'string') return av.localeCompare(bv) * dir
+      return ((Number(av) || 0) - (Number(bv) || 0)) * dir
+    })
+  }
+
   // ─── Grouped Summary Table ─────────────────────────────────────
   function renderGroupedSummary() {
     const allDimensions = grouping ? Array.from(new Set(grouping.groups.map(g=>g.dimension))) : ['type']
+
     return <div style={{padding:24,overflowY:'auto',display:'flex',flexDirection:'column',gap:16}}>
       <style>{`
         tr.dist-row { transition: background-color 0.1s; }
@@ -442,17 +464,7 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
       {dimensionGroups.map(g => {
         const rawRows = summariesByGroup[g.name] || []
         if (rawRows.length === 0) return null
-        // Apply sort (copy so we don't mutate the original)
-        const rows = (() => {
-          if (!summarySort.col || !summarySort.dir) return rawRows
-          const dir = summarySort.dir === 'asc' ? 1 : -1
-          const col = summarySort.col
-          return [...rawRows].sort((a: any, b: any) => {
-            const av = a[col], bv = b[col]
-            if (typeof av === 'string' && typeof bv === 'string') return av.localeCompare(bv) * dir
-            return ((Number(av) || 0) - (Number(bv) || 0)) * dir
-          })
-        })()
+        const rows = applySummarySort(rawRows)
         const groupTuning = rawRows.reduce((s,r)=>s+r.tuning,0)
         const groupOil = rawRows.reduce((s,r)=>s+r.oil,0)
         const groupParts = rawRows.reduce((s,r)=>s+r.parts,0)
@@ -471,111 +483,83 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
               <SortableTh label="Tuning"      col="tuning" state={summarySort} onSort={handleSummarySort}/>
               <SortableTh label="Total"       col="total"  state={summarySort} onSort={handleSummarySort}/>
             </tr></thead>
-            <tbody>{rows.map((d,i)=><tr key={i} className="dist-row" style={{borderTop:`1px solid ${T.border}`,background:selectedDist===d.name?'rgba(79,142,247,0.08)':'transparent'}}>
-              <td style={{fontSize:12,color:T.text2,padding:'8px 12px',cursor:'pointer'}} onClick={()=>setSelectedDist(d.name===selectedDist?'ALL':d.name)} title="Click to filter other tabs to this distributor">{d.name}</td>
-              <td style={{fontSize:12,fontFamily:'monospace',color:d.oil>0?T.text:T.text3,padding:'8px 12px',textAlign:'right',cursor:d.oil>0?'pointer':'default',textDecoration:d.oil>0?'underline dotted rgba(255,255,255,0.15)':'none'}}
-                  onClick={d.oil>0?()=>setDrill({title:`${d.name} — Oil`,subtitle:`${fmtFull(d.oil)} ex-GST`,filter:l=>l.CustomerName===d.name && l.bucket==='Oil'}):undefined}
-                  title={d.oil>0?'Click to see the invoices that make up this':''}>{d.oil>0?fmtFull(d.oil):'$0'}</td>
-              <td style={{fontSize:12,fontFamily:'monospace',color:d.parts>0?T.text:T.text3,padding:'8px 12px',textAlign:'right',cursor:d.parts>0?'pointer':'default',textDecoration:d.parts>0?'underline dotted rgba(255,255,255,0.15)':'none'}}
-                  onClick={d.parts>0?()=>setDrill({title:`${d.name} — Parts`,subtitle:`${fmtFull(d.parts)} ex-GST`,filter:l=>l.CustomerName===d.name && l.bucket==='Parts'}):undefined}
-                  title={d.parts>0?'Click to see the invoices that make up this':''}>{d.parts>0?fmtFull(d.parts):'$0'}</td>
-              <td style={{fontSize:12,fontFamily:'monospace',color:d.tuning>0?T.green:T.text3,padding:'8px 12px',textAlign:'right',cursor:d.tuning>0?'pointer':'default',textDecoration:d.tuning>0?'underline dotted rgba(52,199,123,0.3)':'none'}}
-                  onClick={d.tuning>0?()=>setDrill({title:`${d.name} — Tuning`,subtitle:`${fmtFull(d.tuning)} ex-GST`,filter:l=>l.CustomerName===d.name && l.bucket==='Tuning'}):undefined}
-                  title={d.tuning>0?'Click to see the invoices that make up this':''}>{d.tuning>0?fmtFull(d.tuning):'$0'}</td>
-              <td style={{fontSize:12,fontFamily:'monospace',fontWeight:500,color:T.blue,padding:'8px 12px',textAlign:'right',cursor:'pointer',textDecoration:'underline dotted rgba(79,142,247,0.3)'}}
-                  onClick={()=>setDrill({title:`${d.name} — All revenue`,subtitle:`${fmtFull(d.total)} ex-GST`,filter:l=>l.CustomerName===d.name})}
-                  title="Click to see the invoices that make up this">{fmtFull(d.total)}</td>
-            </tr>)}
-            <tr style={{borderTop:`2px solid ${T.border2}`,background:T.bg3}}>
-              <td style={{fontSize:13,fontWeight:500,color:T.text,padding:'10px 12px'}}>{g.name} Total</td>
-              <td style={{fontSize:13,fontFamily:'monospace',fontWeight:500,color:T.text,padding:'10px 12px',textAlign:'right'}}>{fmtFull(groupOil)}</td>
-              <td style={{fontSize:13,fontFamily:'monospace',fontWeight:500,color:T.text,padding:'10px 12px',textAlign:'right'}}>{fmtFull(groupParts)}</td>
-              <td style={{fontSize:13,fontFamily:'monospace',fontWeight:500,color:T.green,padding:'10px 12px',textAlign:'right'}}>{fmtFull(groupTuning)}</td>
-              <td style={{fontSize:13,fontFamily:'monospace',fontWeight:500,color:T.blue,padding:'10px 12px',textAlign:'right'}}>{fmtFull(groupTotal)}</td>
-            </tr></tbody>
-          </table>
-        </div>
-      })}
-
-      {unclassifiedSummaries.length > 0 && (
-        <div style={{background:T.bg2,border:`1px solid ${T.amber}40`,borderRadius:10,overflowX:'auto'}}>
-          <div style={{padding:'14px 16px',borderBottom:`1px solid ${T.amber}40`,display:'flex',alignItems:'center',gap:10}}>
-            <div style={{width:10,height:10,borderRadius:3,background:T.amber,flexShrink:0}}/>
-            <div style={{fontSize:14,fontWeight:600,color:T.amber}}>Unclassified</div>
-            <span style={{fontSize:11,color:T.text3,fontFamily:'monospace'}}>{unclassifiedSummaries.length} distributor{unclassifiedSummaries.length===1?'':'s'} · {fmtFull(unclassifiedSummaries.reduce((s,r)=>s+r.total,0))}</span>
-            <div style={{flex:1}}/>
-            <button onClick={()=>router.push('/settings?tab=groups')}
-              style={{padding:'3px 10px',borderRadius:4,border:`1px solid ${T.amber}`,background:'transparent',color:T.amber,fontSize:11,cursor:'pointer',fontFamily:'inherit'}}>
-              Classify now →
-            </button>
-          </div>
-          <table style={{width:'100%',borderCollapse:'collapse'}}>
-            <thead><tr style={{borderBottom:`1px solid ${T.border}`}}>
-              <SortableTh label="Distributor" col="name"   state={summarySort} onSort={handleSummarySort} align="left"/>
-              <SortableTh label="Oil"         col="oil"    state={summarySort} onSort={handleSummarySort}/>
-              <SortableTh label="Parts"       col="parts"  state={summarySort} onSort={handleSummarySort}/>
-              <SortableTh label="Tuning"      col="tuning" state={summarySort} onSort={handleSummarySort}/>
-              <SortableTh label="Total"       col="total"  state={summarySort} onSort={handleSummarySort}/>
-            </tr></thead>
-            <tbody>{(() => {
-              if (!summarySort.col || !summarySort.dir) return unclassifiedSummaries
-              const dir = summarySort.dir === 'asc' ? 1 : -1
-              const col = summarySort.col
-              return [...unclassifiedSummaries].sort((a: any, b: any) => {
-                const av = a[col], bv = b[col]
-                if (typeof av === 'string' && typeof bv === 'string') return av.localeCompare(bv) * dir
-                return ((Number(av) || 0) - (Number(bv) || 0)) * dir
-              })
-            })().map((d,i)=><tr key={i} className="dist-row" style={{borderTop:`1px solid ${T.border}`}}>
-              <td style={{fontSize:12,color:T.text2,padding:'8px 12px'}}>{d.name}</td>
-              <td style={{fontSize:12,fontFamily:'monospace',color:d.oil>0?T.text:T.text3,padding:'8px 12px',textAlign:'right',cursor:d.oil>0?'pointer':'default',textDecoration:d.oil>0?'underline dotted rgba(255,255,255,0.15)':'none'}}
-                  onClick={d.oil>0?()=>setDrill({title:`${d.name} — Oil`,subtitle:`${fmtFull(d.oil)} ex-GST`,filter:l=>l.CustomerName===d.name && l.bucket==='Oil'}):undefined}>{d.oil>0?fmtFull(d.oil):'$0'}</td>
-              <td style={{fontSize:12,fontFamily:'monospace',color:d.parts>0?T.text:T.text3,padding:'8px 12px',textAlign:'right',cursor:d.parts>0?'pointer':'default',textDecoration:d.parts>0?'underline dotted rgba(255,255,255,0.15)':'none'}}
-                  onClick={d.parts>0?()=>setDrill({title:`${d.name} — Parts`,subtitle:`${fmtFull(d.parts)} ex-GST`,filter:l=>l.CustomerName===d.name && l.bucket==='Parts'}):undefined}>{d.parts>0?fmtFull(d.parts):'$0'}</td>
-              <td style={{fontSize:12,fontFamily:'monospace',color:d.tuning>0?T.green:T.text3,padding:'8px 12px',textAlign:'right',cursor:d.tuning>0?'pointer':'default',textDecoration:d.tuning>0?'underline dotted rgba(52,199,123,0.3)':'none'}}
-                  onClick={d.tuning>0?()=>setDrill({title:`${d.name} — Tuning`,subtitle:`${fmtFull(d.tuning)} ex-GST`,filter:l=>l.CustomerName===d.name && l.bucket==='Tuning'}):undefined}>{d.tuning>0?fmtFull(d.tuning):'$0'}</td>
-              <td style={{fontSize:12,fontFamily:'monospace',fontWeight:500,color:T.blue,padding:'8px 12px',textAlign:'right',cursor:'pointer',textDecoration:'underline dotted rgba(79,142,247,0.3)'}}
-                  onClick={()=>setDrill({title:`${d.name} — All revenue`,subtitle:`${fmtFull(d.total)} ex-GST`,filter:l=>l.CustomerName===d.name})}>{fmtFull(d.total)}</td>
-            </tr>)}</tbody>
-          </table>
-        </div>
-      )}
-
-      {sundrySummaries.length > 0 && (() => {
-        // There's only ever one synthetic 'Sundry' row (the backend rolled
-        // every Sundry-tagged customer into it). Drill-down shows lines
-        // with their real customer names via sundryCustomer.
-        const d = sundrySummaries[0]
-        return (
-        <div style={{background:T.bg2,border:`1px solid ${T.amber}40`,borderRadius:10,overflowX:'auto'}}>
-          <div style={{padding:'14px 16px',borderBottom:`1px solid ${T.amber}40`,display:'flex',alignItems:'center',gap:10}}>
-            <div style={{width:10,height:10,borderRadius:3,background:T.amber,flexShrink:0}}/>
-            <div style={{fontSize:14,fontWeight:600,color:T.amber}}>Sundry</div>
-            <span style={{fontSize:11,color:T.text3,fontFamily:'monospace'}}>{fmtFull(d.total)} · retail, trade-in and other non-distributor sales</span>
-          </div>
-          <table style={{width:'100%',borderCollapse:'collapse'}}>
-            <thead><tr style={{borderBottom:`1px solid ${T.border}`}}>
-              <th style={{fontSize:11,color:T.text3,padding:'10px 12px',textAlign:'left',fontWeight:500}}>Category</th>
-              <th style={{fontSize:11,color:T.text3,padding:'10px 12px',textAlign:'right',fontWeight:500}}>Oil</th>
-              <th style={{fontSize:11,color:T.text3,padding:'10px 12px',textAlign:'right',fontWeight:500}}>Parts</th>
-              <th style={{fontSize:11,color:T.text3,padding:'10px 12px',textAlign:'right',fontWeight:500}}>Tuning</th>
-              <th style={{fontSize:11,color:T.text3,padding:'10px 12px',textAlign:'right',fontWeight:500}}>Total</th>
-            </tr></thead>
             <tbody>
-              <tr className="dist-row" style={{borderTop:`1px solid ${T.border}`}}>
-                <td style={{fontSize:12,color:T.text2,padding:'8px 12px'}}>Sundry</td>
-                <td style={{fontSize:12,fontFamily:'monospace',color:d.oil>0?T.text:T.text3,padding:'8px 12px',textAlign:'right',cursor:d.oil>0?'pointer':'default',textDecoration:d.oil>0?'underline dotted rgba(255,255,255,0.15)':'none'}}
-                    onClick={d.oil>0?()=>setDrill({title:'Sundry — Oil',subtitle:`${fmtFull(d.oil)} ex-GST`,filter:l=>l.CustomerName==='Sundry' && l.bucket==='Oil'}):undefined}>{d.oil>0?fmtFull(d.oil):'$0'}</td>
-                <td style={{fontSize:12,fontFamily:'monospace',color:d.parts>0?T.text:T.text3,padding:'8px 12px',textAlign:'right',cursor:d.parts>0?'pointer':'default',textDecoration:d.parts>0?'underline dotted rgba(255,255,255,0.15)':'none'}}
-                    onClick={d.parts>0?()=>setDrill({title:'Sundry — Parts',subtitle:`${fmtFull(d.parts)} ex-GST`,filter:l=>l.CustomerName==='Sundry' && l.bucket==='Parts'}):undefined}>{d.parts>0?fmtFull(d.parts):'$0'}</td>
-                <td style={{fontSize:12,fontFamily:'monospace',color:d.tuning>0?T.green:T.text3,padding:'8px 12px',textAlign:'right',cursor:d.tuning>0?'pointer':'default',textDecoration:d.tuning>0?'underline dotted rgba(52,199,123,0.3)':'none'}}
-                    onClick={d.tuning>0?()=>setDrill({title:'Sundry — Tuning',subtitle:`${fmtFull(d.tuning)} ex-GST`,filter:l=>l.CustomerName==='Sundry' && l.bucket==='Tuning'}):undefined}>{d.tuning>0?fmtFull(d.tuning):'$0'}</td>
-                <td style={{fontSize:12,fontFamily:'monospace',fontWeight:500,color:T.blue,padding:'8px 12px',textAlign:'right',cursor:'pointer',textDecoration:'underline dotted rgba(79,142,247,0.3)'}}
-                    onClick={()=>setDrill({title:'Sundry — All revenue',subtitle:`${fmtFull(d.total)} ex-GST · ${new Set((data?.lineItems||[]).filter(l=>l.CustomerName==='Sundry').map(l=>l.sundryCustomer)).size} customers`,filter:l=>l.CustomerName==='Sundry'})}>{fmtFull(d.total)}</td>
+              {rows.map(d => renderDistRow(d, g.name))}
+              <tr style={{borderTop:`2px solid ${T.border2}`,background:T.bg3}}>
+                <td style={{fontSize:13,fontWeight:500,color:T.text,padding:'10px 12px'}}>{g.name} Total</td>
+                <td style={{fontSize:13,fontFamily:'monospace',fontWeight:500,color:T.text,padding:'10px 12px',textAlign:'right'}}>{fmtFull(groupOil)}</td>
+                <td style={{fontSize:13,fontFamily:'monospace',fontWeight:500,color:T.text,padding:'10px 12px',textAlign:'right'}}>{fmtFull(groupParts)}</td>
+                <td style={{fontSize:13,fontFamily:'monospace',fontWeight:500,color:T.green,padding:'10px 12px',textAlign:'right'}}>{fmtFull(groupTuning)}</td>
+                <td style={{fontSize:13,fontFamily:'monospace',fontWeight:500,color:T.blue,padding:'10px 12px',textAlign:'right'}}>{fmtFull(groupTotal)}</td>
               </tr>
             </tbody>
           </table>
         </div>
+      })}
+
+      {unclassifiedSummaries.length > 0 && (() => {
+        const rows = applySummarySort(unclassifiedSummaries)
+        return (
+          <div style={{background:T.bg2,border:`1px solid ${T.amber}40`,borderRadius:10,overflowX:'auto'}}>
+            <div style={{padding:'14px 16px',borderBottom:`1px solid ${T.amber}40`,display:'flex',alignItems:'center',gap:10}}>
+              <div style={{width:10,height:10,borderRadius:3,background:T.amber,flexShrink:0}}/>
+              <div style={{fontSize:14,fontWeight:600,color:T.amber}}>Unclassified</div>
+              <span style={{fontSize:11,color:T.text3,fontFamily:'monospace'}}>{unclassifiedSummaries.length} distributor{unclassifiedSummaries.length===1?'':'s'} · {fmtFull(unclassifiedSummaries.reduce((s,r)=>s+r.total,0))}</span>
+              <div style={{flex:1}}/>
+              <button onClick={()=>router.push('/settings?tab=groups')}
+                style={{padding:'3px 10px',borderRadius:4,border:`1px solid ${T.amber}`,background:'transparent',color:T.amber,fontSize:11,cursor:'pointer',fontFamily:'inherit'}}>
+                Classify now →
+              </button>
+            </div>
+            <table style={{width:'100%',borderCollapse:'collapse'}}>
+              <thead><tr style={{borderBottom:`1px solid ${T.border}`}}>
+                <SortableTh label="Distributor" col="name"   state={summarySort} onSort={handleSummarySort} align="left"/>
+                <SortableTh label="Oil"         col="oil"    state={summarySort} onSort={handleSummarySort}/>
+                <SortableTh label="Parts"       col="parts"  state={summarySort} onSort={handleSummarySort}/>
+                <SortableTh label="Tuning"      col="tuning" state={summarySort} onSort={handleSummarySort}/>
+                <SortableTh label="Total"       col="total"  state={summarySort} onSort={handleSummarySort}/>
+              </tr></thead>
+              <tbody>{rows.map(d => renderDistRow(d, 'Unclassified'))}</tbody>
+            </table>
+          </div>
+        )
+      })()}
+
+      {sundrySummaries.length > 0 && (() => {
+        const rows = applySummarySort(sundrySummaries)
+        const sundryColor = groupColorFor('type', 'Sundry') || T.amber
+        const sundryTuning = sundrySummaries.reduce((s,r)=>s+r.tuning,0)
+        const sundryOil    = sundrySummaries.reduce((s,r)=>s+r.oil,0)
+        const sundryParts  = sundrySummaries.reduce((s,r)=>s+r.parts,0)
+        const sundryTotal  = sundrySummaries.reduce((s,r)=>s+r.total,0)
+        return (
+          <div style={{background:T.bg2,border:`1px solid ${T.border}`,borderRadius:10,overflowX:'auto'}}>
+            <div style={{padding:'14px 16px',borderBottom:`1px solid ${T.border2}`,display:'flex',alignItems:'center',gap:10}}>
+              <div style={{width:10,height:10,borderRadius:3,background:sundryColor,flexShrink:0}}/>
+              <div style={{fontSize:14,fontWeight:600,color:T.text}}>Sundry</div>
+              <span style={{fontSize:11,color:T.text3,fontFamily:'monospace'}}>{rows.length} customer{rows.length===1?'':'s'} · {fmtFull(sundryTotal)}</span>
+              <span style={{fontSize:10,color:T.text3,fontStyle:'italic',marginLeft:8}}>retail, trade-in and other non-distributor sales</span>
+            </div>
+            <table style={{width:'100%',borderCollapse:'collapse'}}>
+              <thead><tr style={{borderBottom:`1px solid ${T.border}`}}>
+                <SortableTh label="Customer" col="name"   state={summarySort} onSort={handleSummarySort} align="left"/>
+                <SortableTh label="Oil"      col="oil"    state={summarySort} onSort={handleSummarySort}/>
+                <SortableTh label="Parts"    col="parts"  state={summarySort} onSort={handleSummarySort}/>
+                <SortableTh label="Tuning"   col="tuning" state={summarySort} onSort={handleSummarySort}/>
+                <SortableTh label="Total"    col="total"  state={summarySort} onSort={handleSummarySort}/>
+              </tr></thead>
+              <tbody>
+                {rows.map(d => renderDistRow(d, 'Sundry'))}
+                <tr style={{borderTop:`2px solid ${T.border2}`,background:T.bg3}}>
+                  <td style={{fontSize:13,fontWeight:500,color:T.text,padding:'10px 12px'}}>Sundry Total</td>
+                  <td style={{fontSize:13,fontFamily:'monospace',fontWeight:500,color:T.text,padding:'10px 12px',textAlign:'right'}}>{fmtFull(sundryOil)}</td>
+                  <td style={{fontSize:13,fontFamily:'monospace',fontWeight:500,color:T.text,padding:'10px 12px',textAlign:'right'}}>{fmtFull(sundryParts)}</td>
+                  <td style={{fontSize:13,fontFamily:'monospace',fontWeight:500,color:T.green,padding:'10px 12px',textAlign:'right'}}>{fmtFull(sundryTuning)}</td>
+                  <td style={{fontSize:13,fontFamily:'monospace',fontWeight:500,color:T.blue,padding:'10px 12px',textAlign:'right'}}>{fmtFull(sundryTotal)}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
         )
       })()}
     </div>
@@ -630,7 +614,6 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
                   return ((Number(av) || 0) - (Number(bv) || 0)) * dir
                 })
               })().map((m,i)=>{
-                // vinRules is a closure dep here but we only need the classification function
                 const rowTitle = selectedDist==='ALL'
                   ? `Tuning invoices — ${m.model}`
                   : `${selectedDist} — Tuning — ${m.model}`
@@ -675,7 +658,6 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
     }
 
     if(tab==='detailed-sales'){
-      // Apply user sort; default is already total desc (set where detailedRows is computed)
       const sortedDetailed = (() => {
         if (!detailedSort.col || !detailedSort.dir) return detailedRows
         const dir = detailedSort.dir === 'asc' ? 1 : -1
@@ -747,10 +729,6 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
   const showSelector=tab==='distributor-sales'||tab==='detailed-sales'
 
   // ─── Feed distributor revenue summary to the global AI chatbot ──────────
-  // Top distributors by revenue, group totals, the currently-selected
-  // distributor, and the date range — so the assistant can answer
-  // "which distributor is bottoming out" or "how does X compare to Y" without
-  // re-querying MYOB.
   const { setPageContext: setChatContext } = useChatContext()
   useEffect(() => {
     if (loading || !data) { setChatContext(null); return }
@@ -773,7 +751,8 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
         total:  Math.round(distSummaries.reduce((s,d)=>s+d.total,0)),
       },
       distributorCount: distSummaries.length,
-      // Top 15 distributors by total revenue
+      sundryCount: sundrySummaries.length,
+      sundryTotal: Math.round(sundrySummaries.reduce((s,d)=>s+d.total,0)),
       topDistributors: distSummaries.slice(0, 15).map(d => ({
         name: d.name,
         total: Math.round(d.total),
@@ -782,8 +761,8 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
         parts: Math.round(d.parts),
         typeGroup: d.typeGroup,
         regionGroup: d.regionGroup,
+        isSundry: d.isSundry,
       })),
-      // Group-level rollups (whichever dimension is currently primary)
       groupTotals: dimensionGroups.map(g => {
         const rows = summariesByGroup[g.name] || []
         return {
@@ -800,7 +779,6 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
         period: label,
         total: Math.round(monthlyTotals[label] || 0),
       })),
-      // If a drill-down panel is open, surface what the user is looking at
       drillDown: drill ? { title: drill.title, subtitle: drill.subtitle } : null,
     })
     return () => { setChatContext(null) }
@@ -857,16 +835,14 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
       </div>
     </div>
 
-    {/* Drill-down modal — shows every line item matching the filter, grouped by invoice */}
+    {/* Drill-down modal */}
     {drill && (() => {
       const matching = (data?.lineItems || []).filter(drill.filter)
-      // Group by invoice number. When a line belongs to the synthetic
-      // 'Sundry' roll-up, show the REAL customer (from sundryCustomer) in
-      // the invoice header — otherwise every Sundry invoice would just say
-      // "Sundry" which is useless.
       const byInvoice = new Map<string, { invoiceNumber: string; customer: string; date: string; lines: LineItem[]; total: number }>()
       for (const l of matching) {
         const k = l.invoiceNumber || '(no invoice #)'
+        // For Sundry rows, customerBase IS the real name now (post-30 Apr).
+        // For legacy cached payloads, sundryCustomer may be set instead.
         const displayCustomer = l.sundryCustomer || l.CustomerName
         let grp = byInvoice.get(k)
         if (!grp) {
