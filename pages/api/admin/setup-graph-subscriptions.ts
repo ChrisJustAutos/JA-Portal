@@ -1,22 +1,23 @@
 // pages/api/admin/setup-graph-subscriptions.ts
-// One-shot admin endpoint to create Microsoft Graph subscriptions for every
-// rep mailbox in lib/agents.ts.
+// One-shot admin endpoint to create all Microsoft Graph subscriptions
+// the portal needs.
 //
 // Auth: GRAPH_ADMIN_SETUP_SECRET in the URL (?key=...).
 //
-// Behaviour:
-//   - For each rep mailbox, check if an active subscription already exists
-//     in graph_subscriptions table. Skip if yes.
-//   - If no, create a fresh subscription via Graph API watching the rep's
-//     Inbox for new messages.
-//   - Generate a fresh clientState per subscription. Store in DB so the
-//     webhook can verify notifications.
-//   - Return a summary of what was created vs skipped vs failed.
+// Subscriptions created:
+//   • Pipeline A — every rep mailbox in lib/agents.ts → /api/webhooks/graph-mail
+//                  Watches Inbox/created for Mechanics Desk quote PDFs.
+//   • Pipeline C — Chris's mailbox only → /api/webhooks/graph-jobreport-mail
+//                  Watches Inbox/created for the nightly Job WIP report email.
 //
-// Idempotency: safe to call repeatedly. Won't create duplicates.
+// Idempotency: safe to call repeatedly. Skips if a subscription already
+// exists with the same (mailbox, notificationUrl) combination.
 //
-// To re-subscribe a mailbox (e.g. after a manual delete), first mark the
-// existing graph_subscriptions row as status='deleted' and delete via Graph.
+// Env vars required:
+//   GRAPH_TENANT_ID, GRAPH_CLIENT_ID, GRAPH_CLIENT_SECRET — Azure App
+//   GRAPH_WEBHOOK_URL                  — Pipeline A webhook URL
+//   GRAPH_JOBREPORT_WEBHOOK_URL        — Pipeline C webhook URL
+//   GRAPH_JOBREPORT_MAILBOX            — Mailbox to watch for WIP report (e.g. chris@justautos.com.au)
 
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { AGENTS_BY_MAILBOX } from '../../../lib/agents'
@@ -33,6 +34,7 @@ export const config = {
 }
 
 interface SetupResult {
+  pipeline: 'A' | 'C'
   mailbox: string
   status: 'created' | 'skipped' | 'failed'
   subscriptionId?: string
@@ -41,7 +43,7 @@ interface SetupResult {
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  // ── Auth ────────────────────────────────────────────────────────────
+  // Auth
   const expected = process.env.GRAPH_ADMIN_SETUP_SECRET
   const got = (req.query.key as string) || ''
   if (!expected) {
@@ -50,76 +52,61 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (got !== expected) {
     return res.status(401).json({ ok: false, error: 'Unauthorized' })
   }
-
   if (req.method !== 'POST') {
     res.setHeader('Allow', 'POST')
     return res.status(405).json({ ok: false, error: 'Method not allowed' })
   }
 
-  const notificationUrl = process.env.GRAPH_WEBHOOK_URL
-  if (!notificationUrl) {
+  const pipelineAUrl = process.env.GRAPH_WEBHOOK_URL
+  const pipelineCUrl = process.env.GRAPH_JOBREPORT_WEBHOOK_URL
+  const jobReportMailbox = process.env.GRAPH_JOBREPORT_MAILBOX
+
+  if (!pipelineAUrl) {
     return res.status(500).json({ ok: false, error: 'GRAPH_WEBHOOK_URL not configured' })
   }
 
-  // ── Find existing active subscriptions ──────────────────────────────
+  // Pipeline C config is optional — if missing, skip Pipeline C setup with a warning
+  // rather than failing the whole call. Pipeline A is the more critical subscription.
+  const pipelineCConfigured = !!(pipelineCUrl && jobReportMailbox)
+
+  // Find existing active subs once, index by (mailbox, notificationUrl)
   const existing = await listActiveSubscriptions()
-  const existingByMailbox = new Map<string, typeof existing[number]>()
+  const existingByKey = new Map<string, typeof existing[number]>()
   for (const sub of existing) {
-    existingByMailbox.set(sub.mailbox.toLowerCase(), sub)
+    const key = `${sub.mailbox.toLowerCase()}|${sub.notification_url}`
+    existingByKey.set(key, sub)
   }
 
   const results: SetupResult[] = []
 
-  // ── Iterate mailboxes from lib/agents.ts ────────────────────────────
-  const mailboxes = Object.keys(AGENTS_BY_MAILBOX)
-  for (const mailbox of mailboxes) {
-    const lowerMailbox = mailbox.toLowerCase()
+  // ── Pipeline A — rep mailboxes ──────────────────────────────────────
+  const repMailboxes = Object.keys(AGENTS_BY_MAILBOX)
+  for (const mailbox of repMailboxes) {
+    const result = await ensureSubscription({
+      mailbox,
+      notificationUrl: pipelineAUrl,
+      existingByKey,
+      pipeline: 'A',
+    })
+    results.push(result)
+  }
 
-    // Skip if already subscribed
-    if (existingByMailbox.has(lowerMailbox)) {
-      const sub = existingByMailbox.get(lowerMailbox)!
-      results.push({
-        mailbox,
-        status: 'skipped',
-        subscriptionId: sub.subscription_id,
-        expiresAt: sub.expiration_date_time,
-        reason: 'active subscription already exists',
-      })
-      continue
-    }
-
-    // Create new subscription
-    try {
-      const resource = `users/${encodeURIComponent(mailbox)}/mailFolders('Inbox')/messages`
-      const clientState = generateClientState()
-
-      const sub = await createSubscription({
-        resource,
-        notificationUrl,
-        clientState,
-        changeType: 'created',
-        expirationMinutes: 4200,   // ~70 hrs
-      })
-
-      await insertSubscriptionRow({
-        mailbox,
-        resource,
-        subscription: sub,
-      })
-
-      results.push({
-        mailbox,
-        status: 'created',
-        subscriptionId: sub.id,
-        expiresAt: sub.expirationDateTime,
-      })
-    } catch (e: any) {
-      results.push({
-        mailbox,
-        status: 'failed',
-        reason: e?.message || String(e),
-      })
-    }
+  // ── Pipeline C — Chris's mailbox for WIP report ─────────────────────
+  if (pipelineCConfigured) {
+    const result = await ensureSubscription({
+      mailbox: jobReportMailbox!,
+      notificationUrl: pipelineCUrl!,
+      existingByKey,
+      pipeline: 'C',
+    })
+    results.push(result)
+  } else {
+    results.push({
+      pipeline: 'C',
+      mailbox: jobReportMailbox || '(unset)',
+      status: 'failed',
+      reason: 'GRAPH_JOBREPORT_WEBHOOK_URL or GRAPH_JOBREPORT_MAILBOX not configured — skipping Pipeline C',
+    })
   }
 
   const created = results.filter(r => r.status === 'created').length
@@ -130,6 +117,64 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     ok: failed === 0,
     summary: { total: results.length, created, skipped, failed },
     results,
-    webhookUrl: notificationUrl,
+    webhookUrls: {
+      pipelineA: pipelineAUrl,
+      pipelineC: pipelineCUrl || null,
+    },
   })
+}
+
+async function ensureSubscription(input: {
+  mailbox: string
+  notificationUrl: string
+  existingByKey: Map<string, any>
+  pipeline: 'A' | 'C'
+}): Promise<SetupResult> {
+  const key = `${input.mailbox.toLowerCase()}|${input.notificationUrl}`
+  const existing = input.existingByKey.get(key)
+
+  if (existing) {
+    return {
+      pipeline: input.pipeline,
+      mailbox: input.mailbox,
+      status: 'skipped',
+      subscriptionId: existing.subscription_id,
+      expiresAt: existing.expiration_date_time,
+      reason: 'active subscription already exists',
+    }
+  }
+
+  try {
+    const resource = `users/${encodeURIComponent(input.mailbox)}/mailFolders('Inbox')/messages`
+    const clientState = generateClientState()
+
+    const sub = await createSubscription({
+      resource,
+      notificationUrl: input.notificationUrl,
+      clientState,
+      changeType: 'created',
+      expirationMinutes: 4200,
+    })
+
+    await insertSubscriptionRow({
+      mailbox: input.mailbox,
+      resource,
+      subscription: sub,
+    })
+
+    return {
+      pipeline: input.pipeline,
+      mailbox: input.mailbox,
+      status: 'created',
+      subscriptionId: sub.id,
+      expiresAt: sub.expirationDateTime,
+    }
+  } catch (e: any) {
+    return {
+      pipeline: input.pipeline,
+      mailbox: input.mailbox,
+      status: 'failed',
+      reason: e?.message || String(e),
+    }
+  }
 }
