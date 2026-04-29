@@ -317,7 +317,7 @@ export async function updateMatchedItem(input: UpdateMatchedItemInput): Promise<
   const prevAttempts = parseInt(prevAttemptsText, 10) || 0
 
   const newValue = Math.max(prevValue, input.newQuoteValueIncGst)
-  const alreadyPresent = prevQuoteNo.split('|').map(s => s.trim()).includes(input.newQuoteNumber)
+  const alreadyPresent = prevQuoteNo.split('|').map((s: string) => s.trim()).includes(input.newQuoteNumber)
   const newQuoteNo = alreadyPresent
     ? prevQuoteNo
     : (prevQuoteNo ? `${prevQuoteNo} | ${input.newQuoteNumber}` : input.newQuoteNumber)
