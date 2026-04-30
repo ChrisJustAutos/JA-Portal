@@ -3,10 +3,15 @@
 // (forecast lane only — wip_snapshot lane is excluded by the API).
 //
 // Renders:
-//   • Top tile row: total forecast / months covered / jobs without Total
-//   • Monthly bar chart with a static target reference line
+//   • Top tile row: total forecast / months covered / jobs without Total / target
+//   • Monthly bar chart with inline-editable target (admin only)
 //   • Two side-by-side breakdown panels: Vehicle Platform + Job Type
 //   • Drill-down table of jobs in the active month, cross-filterable
+//
+// Bar scale: based on max MONTH value only. The target line is overlaid
+// independently — if the target sits above the chart's natural max, the line
+// is rendered at the top edge with an "↑" indicator so months still show
+// their relative magnitudes properly.
 
 import { useState, useEffect, useMemo } from 'react'
 import Head from 'next/head'
@@ -70,7 +75,12 @@ function fmtDate(d: string | null | undefined): string {
   return d
 }
 
-export default function ForecastingPage({ user }: { user: { id: string; email: string; role: UserRole; name: string } }) {
+interface SessionUser {
+  id: string; email: string; role: UserRole; name: string;
+  visibleTabs?: string[] | null;
+}
+
+export default function ForecastingPage({ user }: { user: SessionUser }) {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [data, setData] = useState<Summary | null>(null)
@@ -79,19 +89,23 @@ export default function ForecastingPage({ user }: { user: { id: string; email: s
   const [activeJobType,  setActiveJobType]  = useState<string>('all')
   const [search, setSearch] = useState('')
 
-  useEffect(() => {
-    (async () => {
-      setLoading(true); setError('')
-      try {
-        const r = await fetch('/api/jobs/summary')
-        const d = await r.json()
-        if (!r.ok) throw new Error(d.error || 'Load failed')
-        setData(d)
-        if (d.forecast?.by_month?.length > 0) setActiveMonth(d.forecast.by_month[0].key)
-      } catch (e: any) { setError(e.message) }
-      finally { setLoading(false) }
-    })()
-  }, [])
+  const isAdmin = user.role === 'admin'
+
+  async function load() {
+    setLoading(true); setError('')
+    try {
+      const r = await fetch('/api/jobs/summary')
+      const d = await r.json()
+      if (!r.ok) throw new Error(d.error || 'Load failed')
+      setData(d)
+      if (d.forecast?.by_month?.length > 0 && !activeMonth) {
+        setActiveMonth(d.forecast.by_month[0].key)
+      }
+    } catch (e: any) { setError(e.message) }
+    finally { setLoading(false) }
+  }
+
+  useEffect(() => { load() /* eslint-disable-next-line */ }, [])
 
   const activeBucket = useMemo(() => {
     if (!data?.forecast?.by_month) return null
@@ -116,15 +130,17 @@ export default function ForecastingPage({ user }: { user: { id: string; email: s
     return rows
   }, [activeBucket, search, activePlatform, activeJobType])
 
-  // Bar scale: max(any month total, target line) so target is always visible
+  // Bar scale: based ONLY on the max month total. Target is rendered as an
+  // overlay on top — if it sits above the chart max, we render the line at
+  // the top edge with an "↑" indicator instead of squashing all bars.
   const maxMonthValue = useMemo(() => {
     const months = data?.forecast?.by_month || []
-    const target = data?.forecast?.target_monthly || 0
-    return Math.max(1, ...months.map(m => m.total), target)
+    return Math.max(1, ...months.map(m => m.total))
   }, [data])
 
   const targetMonthly = data?.forecast?.target_monthly || 0
   const showTargetLine = targetMonthly > 0 && (data?.forecast?.by_month?.length || 0) > 0
+  const targetAboveChart = showTargetLine && targetMonthly > maxMonthValue
 
   function clearFilters() { setActivePlatform('all'); setActiveJobType('all'); setSearch('') }
   const hasFilters = activePlatform !== 'all' || activeJobType !== 'all' || search.trim().length > 0
@@ -133,7 +149,7 @@ export default function ForecastingPage({ user }: { user: { id: string; email: s
     <>
       <Head><title>Forecasting — Just Autos</title></Head>
       <div style={{display:'flex', minHeight:'100vh', background:T.bg, color:T.text, fontFamily:'system-ui, -apple-system, sans-serif'}}>
-        <PortalSidebar activeId="jobs" currentUserRole={user.role} currentUserVisibleTabs={(user as any).visibleTabs}/>
+        <PortalSidebar activeId="jobs" currentUserRole={user.role} currentUserVisibleTabs={user.visibleTabs}/>
         <main style={{flex:1, padding:'20px 32px 40px', overflow:'auto'}}>
 
           <div style={{display:'flex', alignItems:'center', gap:12, marginBottom:16, flexWrap:'wrap'}}>
@@ -207,21 +223,40 @@ export default function ForecastingPage({ user }: { user: { id: string; email: s
 
               {/* ── Monthly chart ─────────────────────────────────────────── */}
               <div style={{background:T.bg2, border:`1px solid ${T.border}`, borderRadius:10, padding:20, marginBottom:20}}>
-                <div style={{display:'flex', justifyContent:'space-between', alignItems:'baseline', marginBottom:16}}>
+                <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:16, gap:12, flexWrap:'wrap'}}>
                   <div style={{fontSize:10, color:T.text3, textTransform:'uppercase', letterSpacing:'0.05em', fontWeight:600}}>
                     Forecast by month
                   </div>
-                  {showTargetLine && (
-                    <div style={{fontSize:10, color:T.text3, display:'flex', alignItems:'center', gap:6}}>
-                      <span style={{display:'inline-block', width:14, height:0, borderTop:`2px dashed ${T.purple}`}}/>
-                      Target {fmtMoney(targetMonthly, true)}/mo
-                    </div>
-                  )}
+                  <TargetEditor
+                    initial={targetMonthly}
+                    isAdmin={isAdmin}
+                    onSaved={async () => { await load() }}
+                  />
                 </div>
 
                 <div style={{position:'relative', height:200, paddingBottom:8, borderBottom:`1px solid ${T.border}`}}>
-                  {/* Target line */}
+                  {/* Target line — drawn at actual position if within chart range,
+                      pinned to top edge with ↑ if target is above max month. */}
                   {showTargetLine && (() => {
+                    if (targetAboveChart) {
+                      // Target is above the chart's natural max — pin to top edge with indicator
+                      return (
+                        <div style={{
+                          position:'absolute',
+                          left:0, right:0, top:0,
+                          borderTop:`1px dashed ${T.purple}`,
+                          zIndex:1, pointerEvents:'none',
+                        }}>
+                          <div style={{
+                            position:'absolute', right:0, top:-7,
+                            background:T.bg2, padding:'0 4px',
+                            fontSize:9, color:T.purple, fontWeight:600,
+                          }}>
+                            ↑ Target {fmtMoney(targetMonthly, true)}
+                          </div>
+                        </div>
+                      )
+                    }
                     const heightPct = (targetMonthly / maxMonthValue) * 100
                     return (
                       <div style={{
@@ -243,7 +278,7 @@ export default function ForecastingPage({ user }: { user: { id: string; email: s
                     )
                   })()}
 
-                  {/* Bars */}
+                  {/* Bars — scaled against maxMonthValue (NOT factoring target) */}
                   <div style={{display:'flex', alignItems:'flex-end', gap:12, height:'100%', position:'relative'}}>
                     {data.forecast.by_month.map(m => {
                       const heightPct = (m.total / maxMonthValue) * 100
@@ -369,6 +404,125 @@ export default function ForecastingPage({ user }: { user: { id: string; email: s
         </main>
       </div>
     </>
+  )
+}
+
+// ── Inline target editor ─────────────────────────────────────────────────
+// Read-only view for non-admins (just shows the legend). Click-to-edit for
+// admins. Press Enter to save, Esc to cancel. Clearing the field saves 0
+// (which hides the target line).
+
+function TargetEditor({ initial, isAdmin, onSaved }: {
+  initial: number
+  isAdmin: boolean
+  onSaved: () => Promise<void> | void
+}) {
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState(String(initial || 0))
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  // Re-sync when the prop changes (e.g. after a reload)
+  useEffect(() => {
+    if (!editing) setDraft(String(initial || 0))
+  }, [initial, editing])
+
+  const hasTarget = initial > 0
+
+  if (!isAdmin) {
+    if (!hasTarget) return null
+    return (
+      <div style={{fontSize:10, color:T.text3, display:'flex', alignItems:'center', gap:6}}>
+        <span style={{display:'inline-block', width:14, height:0, borderTop:`2px dashed ${T.purple}`}}/>
+        Target {fmtMoney(initial, true)}/mo
+      </div>
+    )
+  }
+
+  if (!editing) {
+    return (
+      <button
+        onClick={() => { setEditing(true); setError(null) }}
+        title={hasTarget ? 'Click to edit monthly target' : 'Click to set a monthly target'}
+        style={{
+          fontSize:10, color: hasTarget ? T.text2 : T.text3,
+          display:'flex', alignItems:'center', gap:6,
+          background:'transparent', border:`1px dashed ${T.border2}`,
+          padding:'4px 10px', borderRadius:4, cursor:'pointer', fontFamily:'inherit',
+        }}>
+        <span style={{display:'inline-block', width:14, height:0, borderTop:`2px dashed ${T.purple}`}}/>
+        {hasTarget ? `Target ${fmtMoney(initial, true)}/mo` : 'Set target'}
+        <span style={{color:T.text3, fontSize:9, marginLeft:2}}>· edit</span>
+      </button>
+    )
+  }
+
+  async function save() {
+    const num = Number(draft.replace(/[$,\s]/g, ''))
+    if (!isFinite(num) || num < 0) {
+      setError('Must be a non-negative number')
+      return
+    }
+    setSaving(true); setError(null)
+    try {
+      const r = await fetch('/api/admin/forecasting-target', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ target_monthly: Math.round(num) }),
+      })
+      const d = await r.json()
+      if (!r.ok) throw new Error(d.error || 'Save failed')
+      setEditing(false)
+      await onSaved()
+    } catch (e: any) {
+      setError(e.message || 'Save failed')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  function cancel() {
+    setEditing(false)
+    setDraft(String(initial || 0))
+    setError(null)
+  }
+
+  return (
+    <div style={{display:'flex', alignItems:'center', gap:6}}>
+      <span style={{fontSize:10, color:T.text3}}>Target $</span>
+      <input
+        autoFocus
+        type="text"
+        inputMode="numeric"
+        value={draft}
+        onChange={e => setDraft(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' && !saving) save()
+          else if (e.key === 'Escape') cancel()
+        }}
+        disabled={saving}
+        placeholder="0"
+        style={{
+          width: 100,
+          padding:'4px 8px',
+          background:T.bg3,
+          border:`1px solid ${T.border2}`,
+          color:T.text,
+          borderRadius:4, fontSize:11,
+          fontFamily:'inherit', outline:'none',
+          fontVariantNumeric:'tabular-nums',
+        }}/>
+      <span style={{fontSize:10, color:T.text3}}>/mo</span>
+      <button onClick={save} disabled={saving}
+        style={{padding:'4px 10px', borderRadius:4, border:'none', background: saving ? T.bg4 : T.blue, color:'#fff', fontSize:11, fontWeight:600, cursor: saving ? 'default' : 'pointer', fontFamily:'inherit'}}>
+        {saving ? '…' : 'Save'}
+      </button>
+      <button onClick={cancel} disabled={saving}
+        style={{padding:'4px 8px', borderRadius:4, border:`1px solid ${T.border2}`, background:'transparent', color:T.text3, fontSize:11, cursor:'pointer', fontFamily:'inherit'}}>
+        Cancel
+      </button>
+      {error && <span style={{fontSize:10, color:T.red, marginLeft:4}}>{error}</span>}
+    </div>
   )
 }
 
