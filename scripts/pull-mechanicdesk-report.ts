@@ -1,20 +1,22 @@
 // scripts/pull-mechanicdesk-report.ts
 // Headless Chromium task that:
-//   1. Logs into Mechanics Desk
+//   1. Logs into Mechanics Desk (Workshop ID + Username + Password)
 //   2. Downloads the Job Report XLSX (rolling date range)
 //   3. POSTs it to the JA Portal upload endpoint
 //
 // Run via GitHub Actions on a schedule. See .github/workflows/mechanicdesk-pull.yml.
 //
 // Required env vars:
-//   MECHANICDESK_USERNAME       — login email
+//   MECHANICDESK_WORKSHOP_ID    — workshop ID (e.g. "5108")
+//   MECHANICDESK_USERNAME       — login username (NOT email — short username like "chris")
 //   MECHANICDESK_PASSWORD       — login password
 //   JA_PORTAL_API_KEY           — service token with scope 'upload:job-report'
 //   JA_PORTAL_BASE_URL          — e.g. https://ja-portal.vercel.app
 //   SLACK_WEBHOOK_URL           — incoming webhook for failure notifications (optional)
+//   MECHANICDESK_LOGIN_URL      — override login URL (optional, default tries common URLs)
 //
 // Exit codes:
-//   0  — success (or already-up-to-date)
+//   0  — success
 //   1  — failure that was reported to Slack
 //   2  — failure that could NOT be reported (e.g. Slack webhook itself failed)
 
@@ -25,10 +27,16 @@ import { join } from 'path'
 // ── Config ─────────────────────────────────────────────────────────────
 
 const MD_BASE = 'https://www.mechanicdesk.com.au'
-const MD_LOGIN_URL = `${MD_BASE}/users/sign_in`
-// Date range: today minus 30 days through today plus 365 days.
-// Format the URL exactly as Mechanics Desk uses (matches what the
-// browser's natural download flow generates).
+// Most common landing pages — script tries them in order until it finds the
+// 3-field login form (Workshop ID, Username, Password).
+const MD_LOGIN_URL_CANDIDATES = [
+  process.env.MECHANICDESK_LOGIN_URL,
+  `${MD_BASE}/`,
+  `${MD_BASE}/users/sign_in`,
+  `${MD_BASE}/login`,
+  `${MD_BASE}/sign_in`,
+].filter(Boolean) as string[]
+
 const DAYS_BEHIND = 30
 const DAYS_AHEAD = 365
 
@@ -48,12 +56,7 @@ function buildReportUrl(): string {
   const now = new Date()
   const from = new Date(now.getTime() - DAYS_BEHIND * 86400_000)
   const to = new Date(now.getTime() + DAYS_AHEAD * 86400_000)
-  // Mechanics Desk expects a string formatted like JS Date.toString() with a
-  // specific timezone marker. The format that the UI generates is:
-  //   "Tue Mar 31 2026 00:00:00 GMT+1000 (Australian Eastern Standard Time)"
-  // We replicate that format.
   const fmt = (d: Date): string => {
-    // Force AEST (UTC+10, no DST in QLD). All MD reporting runs on this offset.
     const aest = new Date(d.getTime() + 10 * 3600_000)
     const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
     const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
@@ -108,31 +111,106 @@ async function saveDebugArtifacts(page: Page, label: string): Promise<void> {
   }
 }
 
-// ── Main flow ──────────────────────────────────────────────────────────
+// ── Login ──────────────────────────────────────────────────────────────
 
-async function login(page: Page, username: string, password: string): Promise<void> {
-  log(`Navigating to ${MD_LOGIN_URL}`)
-  await page.goto(MD_LOGIN_URL, { waitUntil: 'domcontentloaded', timeout: 30000 })
+async function findFormPage(page: Page): Promise<string> {
+  // Try each candidate URL until we find a page with all three fields.
+  // The Mechanics Desk login form has Workshop ID, Username, Password — quite
+  // distinctive among Devise-style apps which usually only have email + password.
+  for (const url of MD_LOGIN_URL_CANDIDATES) {
+    log(`Trying login URL: ${url}`)
+    try {
+      await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 })
+    } catch (e: any) {
+      log(`  navigation failed: ${e?.message || e}`)
+      continue
+    }
+    const hasPassword = await page.$('input[type="password"]')
+    if (hasPassword) {
+      log(`  found login form at ${page.url()}`)
+      return page.url()
+    }
+    log(`  no password field on this page, trying next…`)
+  }
+  throw new Error(`Could not find a Mechanics Desk login page. Tried: ${MD_LOGIN_URL_CANDIDATES.join(', ')}`)
+}
 
-  // Mechanics Desk uses Devise — typical field names are user[email] and user[password].
-  // We try the most common selectors first; if MD changes the UI, this is the
-  // first place to update.
-  const emailSelectors = ['input[name="user[email]"]', 'input[type="email"]', 'input#user_email']
-  const passwordSelectors = ['input[name="user[password]"]', 'input[type="password"]', 'input#user_password']
-  const submitSelectors = ['input[type="submit"]', 'button[type="submit"]', 'button:has-text("Sign in")', 'button:has-text("Log in")']
+async function login(page: Page, workshopId: string, username: string, password: string): Promise<void> {
+  await findFormPage(page)
+
+  // Mechanics Desk login has THREE fields. We don't know exact attribute names
+  // so we try several patterns. If named selectors all miss, fall back to
+  // positional (the screenshot shows Workshop ID is the first text input).
+  const workshopSelectors = [
+    'input[name="workshop_id"]',
+    'input[name="user[workshop_id]"]',
+    'input#workshop_id',
+    'input[placeholder*="Workshop" i]',
+    'input[name*="workshop" i]',
+  ]
+  const usernameSelectors = [
+    'input[name="user[username]"]',
+    'input[name="username"]',
+    'input#user_username',
+    'input#username',
+    'input[placeholder*="Username" i]',
+    'input[name="user[email]"]',
+    'input[type="email"]',
+    'input#user_email',
+  ]
+  const passwordSelectors = [
+    'input[name="user[password]"]',
+    'input[name="password"]',
+    'input[type="password"]',
+    'input#user_password',
+    'input#password',
+  ]
+  const submitSelectors = [
+    'input[type="submit"][value*="Login" i]',
+    'input[type="submit"]',
+    'button[type="submit"]',
+    'button:has-text("Login")',
+    'button:has-text("Log in")',
+    'button:has-text("Sign in")',
+  ]
 
   async function fillFirst(selectors: string[], value: string, label: string) {
     for (const sel of selectors) {
       const el = await page.$(sel)
-      if (el) { await el.fill(value); log(`Filled ${label} via "${sel}"`); return }
+      if (el) { await el.fill(value); log(`Filled ${label} via "${sel}"`); return sel }
     }
-    throw new Error(`Could not find ${label} field. Tried: ${selectors.join(', ')}`)
+    return null
   }
 
-  await fillFirst(emailSelectors, username, 'email')
-  await fillFirst(passwordSelectors, password, 'password')
+  // Workshop ID — try named, then positional fallback
+  let workshopFilled = await fillFirst(workshopSelectors, workshopId, 'workshop ID')
+  if (!workshopFilled) {
+    log(`Workshop ID selector miss, trying positional fallback (first text input)`)
+    const firstTextInput = await page.$('input[type="text"]:not([type="hidden"]):not([disabled])')
+    if (firstTextInput) {
+      await firstTextInput.fill(workshopId)
+      log('Filled workshop ID via positional fallback')
+    } else {
+      await saveDebugArtifacts(page, 'workshop-id-not-found')
+      throw new Error(`Could not find workshop ID field. Tried: ${workshopSelectors.join(', ')} + positional fallback`)
+    }
+  }
 
-  // Submit and wait for navigation
+  // Username — required
+  const usernameFilled = await fillFirst(usernameSelectors, username, 'username')
+  if (!usernameFilled) {
+    await saveDebugArtifacts(page, 'username-not-found')
+    throw new Error(`Could not find username field. Tried: ${usernameSelectors.join(', ')}`)
+  }
+
+  // Password — required
+  const passwordFilled = await fillFirst(passwordSelectors, password, 'password')
+  if (!passwordFilled) {
+    await saveDebugArtifacts(page, 'password-not-found')
+    throw new Error(`Could not find password field. Tried: ${passwordSelectors.join(', ')}`)
+  }
+
+  // Submit
   let submitted = false
   for (const sel of submitSelectors) {
     const el = await page.$(sel)
@@ -148,37 +226,30 @@ async function login(page: Page, username: string, password: string): Promise<vo
   }
   if (!submitted) throw new Error(`Could not find submit button. Tried: ${submitSelectors.join(', ')}`)
 
-  // Verify we're past login. Mechanics Desk redirects to /diary or /dashboard
-  // on success; on failure it stays on /users/sign_in with a flash message.
-  const url = page.url()
-  if (url.includes('/users/sign_in') || url.includes('/sign_in')) {
+  // Verify we're past login. If there's still a password field, we're stuck.
+  const passwordStillVisible = await page.$('input[type="password"]')
+  if (passwordStillVisible) {
     await saveDebugArtifacts(page, 'login-failed')
-    // Try to extract the error message
     const errorText = await page.locator('.alert, .flash, .error, [role="alert"]').first().textContent().catch(() => null)
-    throw new Error(`Login failed — still on sign-in page. Error: "${errorText || 'unknown'}"`)
+    throw new Error(`Login failed — still on a page with a password field. Error: "${errorText || 'unknown'}"`)
   }
 
-  log(`Login OK — landed on ${url}`)
+  log(`Login OK — landed on ${page.url()}`)
 }
+
+// ── Download ───────────────────────────────────────────────────────────
 
 async function downloadReport(context: BrowserContext): Promise<{ filename: string; buffer: Buffer }> {
   const reportUrl = buildReportUrl()
   log(`Triggering download: ${reportUrl}`)
 
-  // Use a fresh page so the download handler is clean. The session cookies
-  // from the login flow are shared via the context.
   const dlPage = await context.newPage()
 
-  // Mechanics Desk responds with the file directly (no HTML page). Playwright's
-  // download event will fire when the response is downloadable.
   let download: Download
   try {
     [download] = await Promise.all([
       dlPage.waitForEvent('download', { timeout: 60000 }),
       dlPage.goto(reportUrl, { waitUntil: 'commit', timeout: 60000 }).catch((e: Error) => {
-        // page.goto often throws "net::ERR_ABORTED" once the download starts,
-        // because the navigation aborts in favour of the file download.
-        // That's expected — swallow it and let the download event resolve.
         if (!/ERR_ABORTED|interrupted|net::/i.test(e.message)) throw e
         log(`(expected) goto aborted by download: ${e.message}`)
         return null
@@ -191,7 +262,6 @@ async function downloadReport(context: BrowserContext): Promise<{ filename: stri
 
   const filename = download.suggestedFilename() || `job_report_${Date.now()}.xls`
 
-  // Stream the download to memory rather than disk
   const tmpPath = join(ARTIFACT_DIR, `dl-${filename}`)
   if (!existsSync(ARTIFACT_DIR)) mkdirSync(ARTIFACT_DIR, { recursive: true })
   await download.saveAs(tmpPath)
@@ -205,6 +275,8 @@ async function downloadReport(context: BrowserContext): Promise<{ filename: stri
   await dlPage.close()
   return { filename, buffer }
 }
+
+// ── Upload ─────────────────────────────────────────────────────────────
 
 async function uploadToPortal(filename: string, buffer: Buffer): Promise<{ jobCount: number; runId: string; warnings: string[] }> {
   const baseUrl = process.env.JA_PORTAL_BASE_URL
@@ -243,11 +315,14 @@ async function uploadToPortal(filename: string, buffer: Buffer): Promise<{ jobCo
   return { jobCount: body.job_count, runId: body.run_id, warnings: body.warnings || [] }
 }
 
+// ── Main ───────────────────────────────────────────────────────────────
+
 async function main(): Promise<void> {
+  const workshopId = process.env.MECHANICDESK_WORKSHOP_ID
   const username = process.env.MECHANICDESK_USERNAME
   const password = process.env.MECHANICDESK_PASSWORD
-  if (!username || !password) {
-    throw new Error('MECHANICDESK_USERNAME and MECHANICDESK_PASSWORD env vars are required')
+  if (!workshopId || !username || !password) {
+    throw new Error('MECHANICDESK_WORKSHOP_ID, MECHANICDESK_USERNAME and MECHANICDESK_PASSWORD env vars are all required')
   }
 
   let browser: Browser | null = null
@@ -255,22 +330,19 @@ async function main(): Promise<void> {
     log('Launching headless Chromium')
     browser = await chromium.launch({ headless: true })
     const context = await browser.newContext({
-      // Modern desktop UA so MD doesn't serve us a mobile or "browser-too-old" page
       userAgent: 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
       acceptDownloads: true,
       viewport: { width: 1280, height: 900 },
     })
     const page = await context.newPage()
 
-    await login(page, username, password)
+    await login(page, workshopId, username, password)
     const { filename, buffer } = await downloadReport(context)
     const result = await uploadToPortal(filename, buffer)
 
     const summary = `Pulled "${filename}" — ${result.jobCount} jobs ingested${result.warnings.length ? ` (${result.warnings.length} warnings)` : ''}`
     log(summary)
 
-    // Only ping Slack on success if env says so, otherwise stay quiet.
-    // (Default: stay quiet on success, only alert on failure.)
     if (process.env.SLACK_NOTIFY_ON_SUCCESS === '1') {
       await notifySlack(summary, false)
     }
