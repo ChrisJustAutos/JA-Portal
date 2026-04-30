@@ -1,12 +1,11 @@
 // scripts/pull-mechanicdesk-report.ts
 // Headless Chromium task that:
 //   1. Logs into Mechanics Desk (Workshop ID + Username + Password)
-//   2. Downloads the Job Report XLSX (rolling date range)
+//   2. Downloads the Job Report XLSX via direct HTTP request (using the
+//      browser's session cookies)
 //   3. POSTs it to the JA Portal upload endpoint
-//
-// Run via GitHub Actions on a schedule. See .github/workflows/mechanicdesk-pull.yml.
 
-import { chromium, Browser, BrowserContext, Page, Download } from 'playwright'
+import { chromium, Browser, Page } from 'playwright'
 import { writeFileSync, readFileSync, existsSync, mkdirSync } from 'fs'
 import { join } from 'path'
 
@@ -161,7 +160,7 @@ async function login(page: Page, workshopId: string, username: string, password:
 
   let workshopFilled = await fillFirst(workshopSelectors, workshopId, 'workshop ID')
   if (!workshopFilled) {
-    log(`Workshop ID selector miss, trying positional fallback (first text input)`)
+    log(`Workshop ID selector miss, trying positional fallback`)
     const firstTextInput = await page.$('input[type="text"]:not([type="hidden"]):not([disabled])')
     if (firstTextInput) {
       await firstTextInput.fill(workshopId)
@@ -174,11 +173,11 @@ async function login(page: Page, workshopId: string, username: string, password:
 
   let usernameFilled = await fillFirst(usernameSelectors, username, 'username')
   if (!usernameFilled) {
-    log(`Username selector miss, trying positional fallback (second text input)`)
+    log(`Username selector miss, trying positional fallback`)
     const allTextInputs = await page.$$('input[type="text"]:not([type="hidden"]):not([disabled])')
     if (allTextInputs.length >= 2) {
       await allTextInputs[1].fill(username)
-      log('Filled username via positional fallback (second text input)')
+      log('Filled username via positional fallback')
     } else {
       await saveDebugArtifacts(page, 'username-not-found')
       throw new Error(`Could not find username field`)
@@ -209,7 +208,7 @@ async function login(page: Page, workshopId: string, username: string, password:
   } catch (e: any) {
     await saveDebugArtifacts(page, 'login-failed')
     const errorText = await page.locator('.alert, .flash, .error, [role="alert"], .help-block').first().textContent().catch(() => null)
-    throw new Error(`Login failed — password field still visible after 30s. Error message: "${errorText?.trim() || 'none'}"`)
+    throw new Error(`Login failed — password field still visible after 30s. Error: "${errorText?.trim() || 'none'}"`)
   }
 
   try {
@@ -222,59 +221,76 @@ async function login(page: Page, workshopId: string, username: string, password:
 
 // ── Download ───────────────────────────────────────────────────────────
 //
-// New approach (much simpler than the goto + Promise.all dance):
-// We register a download listener on the BrowserContext, then trigger
-// navigation by injecting a hidden anchor and clicking it. The browser
-// handles the download natively without us having to wrangle goto's
-// "download started" exceptions.
+// Approach: extract the session cookies from the logged-in browser context,
+// then use a plain HTTP request (Node's fetch) with those cookies to pull the
+// file directly. Bypasses Playwright's download/navigation event machinery
+// entirely. If MD returns HTML or an error page, we'll see it in the response
+// inspection.
 
-async function downloadReport(context: BrowserContext, page: Page): Promise<{ filename: string; buffer: Buffer }> {
+async function downloadReport(page: Page): Promise<{ filename: string; buffer: Buffer }> {
   const reportUrl = buildReportUrl()
-  log(`Triggering download by clicking injected anchor: ${reportUrl}`)
+  log(`Fetching report directly via HTTP: ${reportUrl}`)
 
-  // Set up the download listener BEFORE triggering. We listen on the context
-  // so we catch the download regardless of which page it fires on.
-  const downloadPromise = context.waitForEvent('download', { timeout: 60000 })
+  // Get the session cookies from Playwright
+  const cookies = await page.context().cookies(MD_BASE)
+  log(`Have ${cookies.length} cookie(s) for ${MD_BASE}: ${cookies.map(c => c.name).join(', ')}`)
 
-  // Inject an <a> tag pointing at the download URL and click it. This is
-  // exactly what a human user would do (clicking a download link), so the
-  // browser handles it cleanly without any abort exceptions on the page.
-  await page.evaluate((url) => {
-    const a = document.createElement('a')
-    a.href = url
-    a.download = ''  // force download attribute
-    a.style.display = 'none'
-    document.body.appendChild(a)
-    a.click()
-    // Don't remove immediately — give the browser a tick to register the click
-    setTimeout(() => a.remove(), 1000)
-  }, reportUrl)
-
-  let download: Download
-  try {
-    download = await downloadPromise
-  } catch (e: any) {
-    await saveDebugArtifacts(page, 'download-failed')
-    throw new Error(`Download did not arrive within 60s: ${e?.message || e}`)
+  if (cookies.length === 0) {
+    throw new Error(`No cookies found for ${MD_BASE} after login — session not established?`)
   }
 
-  const filename = download.suggestedFilename() || `job_report_${Date.now()}.xls`
-  const tmpPath = join(ARTIFACT_DIR, `dl-${filename}`)
-  if (!existsSync(ARTIFACT_DIR)) mkdirSync(ARTIFACT_DIR, { recursive: true })
+  const cookieHeader = cookies.map(c => `${c.name}=${c.value}`).join('; ')
 
-  // download.failure() returns null if successful, error string if failed
-  const failure = await download.failure()
-  if (failure) {
-    await saveDebugArtifacts(page, 'download-failure-after-arrival')
-    throw new Error(`Download failed mid-stream: ${failure}`)
+  // Make a plain HTTP request with the session cookies
+  const r = await fetch(reportUrl, {
+    method: 'GET',
+    headers: {
+      'Cookie': cookieHeader,
+      'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      'Accept': 'application/vnd.ms-excel, application/vnd.openxmlformats-officedocument.spreadsheetml.sheet, */*',
+      'Referer': `${MD_BASE}/auto_workshop/app`,
+    },
+    redirect: 'follow',
+  })
+
+  log(`Response: ${r.status} ${r.statusText}`)
+  log(`Content-Type: ${r.headers.get('content-type')}`)
+  log(`Content-Disposition: ${r.headers.get('content-disposition')}`)
+  log(`Content-Length: ${r.headers.get('content-length')}`)
+
+  const arrayBuf = await r.arrayBuffer()
+  const buffer = Buffer.from(arrayBuf)
+  log(`Received ${buffer.length} bytes`)
+
+  if (!r.ok) {
+    // Save response for debugging
+    if (!existsSync(ARTIFACT_DIR)) mkdirSync(ARTIFACT_DIR, { recursive: true })
+    writeFileSync(join(ARTIFACT_DIR, `download-error-response.bin`), buffer)
+    const preview = buffer.slice(0, 500).toString('utf8')
+    throw new Error(`Download HTTP ${r.status}: ${preview}`)
   }
-
-  await download.saveAs(tmpPath)
-  const buffer = readFileSync(tmpPath)
 
   if (buffer.length < 1024) {
-    log(`Suspiciously small download (${buffer.length} bytes). First 200 bytes: ${buffer.slice(0, 200).toString('utf8')}`)
-    throw new Error(`Downloaded file is suspiciously small (${buffer.length} bytes) — likely a login redirect or error page`)
+    if (!existsSync(ARTIFACT_DIR)) mkdirSync(ARTIFACT_DIR, { recursive: true })
+    writeFileSync(join(ARTIFACT_DIR, `download-too-small.bin`), buffer)
+    const preview = buffer.toString('utf8')
+    throw new Error(`Download too small (${buffer.length} bytes). Content: ${preview}`)
+  }
+
+  // Sanity: response should not be HTML (would indicate a login redirect)
+  const head = buffer.slice(0, 200).toString('utf8').toLowerCase()
+  if (head.includes('<!doctype html') || head.includes('<html')) {
+    if (!existsSync(ARTIFACT_DIR)) mkdirSync(ARTIFACT_DIR, { recursive: true })
+    writeFileSync(join(ARTIFACT_DIR, `download-got-html.html`), buffer)
+    throw new Error(`Expected XLSX but got HTML — session likely expired or report URL is wrong. First 500 chars: ${buffer.slice(0, 500).toString('utf8')}`)
+  }
+
+  // Try to extract filename from Content-Disposition header
+  let filename = `job_report_${Date.now()}.xls`
+  const cd = r.headers.get('content-disposition')
+  if (cd) {
+    const match = cd.match(/filename\*?=(?:UTF-8'')?["']?([^"';\s]+)/i)
+    if (match) filename = decodeURIComponent(match[1])
   }
 
   log(`Downloaded ${filename} (${(buffer.length / 1024).toFixed(1)} KB)`)
@@ -335,7 +351,7 @@ async function main(): Promise<void> {
     const page = await context.newPage()
 
     await login(page, workshopId, username, password)
-    const { filename, buffer } = await downloadReport(context, page)
+    const { filename, buffer } = await downloadReport(page)
     const result = await uploadToPortal(filename, buffer)
 
     const summary = `Pulled "${filename}" — ${result.jobCount} jobs ingested${result.warnings.length ? ` (${result.warnings.length} warnings)` : ''}`
