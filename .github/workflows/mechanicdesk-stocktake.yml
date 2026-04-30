@@ -1,0 +1,62 @@
+name: Stocktake — Mechanics Desk worker
+
+# Triggered by repository_dispatch from /api/stocktake/{id}/match
+# or /api/stocktake/{id}/push.
+#
+# Payload shape:
+#   { event_type: "stocktake-match" | "stocktake-push",
+#     client_payload: { upload_id: "<uuid>", mode: "match" | "push" } }
+
+on:
+  repository_dispatch:
+    types:
+      - stocktake-match
+      - stocktake-push
+  workflow_dispatch:
+    inputs:
+      upload_id:
+        description: 'Stocktake upload ID (uuid)'
+        required: true
+      mode:
+        description: 'Operation mode'
+        required: true
+        type: choice
+        options:
+          - match
+          - push
+
+jobs:
+  run:
+    name: ${{ github.event.client_payload.mode || github.event.inputs.mode }} · ${{ github.event.client_payload.upload_id || github.event.inputs.upload_id }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: |
+          npm ci || npm install
+          npm install --no-save playwright tsx
+
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Run worker
+        env:
+          UPLOAD_ID: ${{ github.event.client_payload.upload_id || github.event.inputs.upload_id }}
+          MODE:      ${{ github.event.client_payload.mode || github.event.inputs.mode }}
+          MECHANICDESK_WORKSHOP_ID: ${{ secrets.MECHANICDESK_WORKSHOP_ID }}
+          MECHANICDESK_USERNAME:    ${{ secrets.MECHANICDESK_USERNAME }}
+          MECHANICDESK_PASSWORD:    ${{ secrets.MECHANICDESK_PASSWORD }}
+          JA_PORTAL_BASE_URL:       ${{ secrets.JA_PORTAL_BASE_URL }}
+          JA_PORTAL_API_KEY:        ${{ secrets.JA_PORTAL_API_KEY }}
+          SLACK_WEBHOOK_URL:        ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: npx tsx scripts/run-mechanicdesk-stocktake.ts

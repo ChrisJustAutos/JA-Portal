@@ -1,10 +1,6 @@
 // lib/PortalSidebar.tsx
 // Shared sidebar component used by index, sales, distributors, calls, reports, settings pages.
 // Handles nav rendering, drag-reorder, sort dropdown, and refresh/signout footer.
-//
-// Updated: now accepts `currentUserRole` and filters visible nav items via
-// lib/permissions.visibleNavSections(). Also includes a Settings nav item
-// visible only to admins. Sign-out calls the new /api/auth/session DELETE.
 
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/router'
@@ -29,9 +25,9 @@ export interface PortalNavItem {
   id: string
   kind: 'link' | 'section'
   label: string
-  href?: string              // for link type — e.g. '/sales'
-  section?: PortalSection    // for section type — internal portal tab
-  dot: string                // colour of the indicator dot
+  href?: string
+  section?: PortalSection
+  dot: string
   alertKey?: 'invoices'|'payables'
 }
 
@@ -45,13 +41,13 @@ export const DEFAULT_NAV: PortalNavItem[] = [
   {id:'todos',        kind:'link',    label:'To-Dos',       href:'/todos',         dot:T.amber},
   {id:'jobs',         kind:'link',    label:'Jobs',         href:'/jobs',          dot:T.teal},
   {id:'vehicle-sales',kind:'link',    label:'Vehicle Sales',href:'/vehicle-sales', dot:'#34c77b'},
+  {id:'stocktake',    kind:'link',    label:'Stocktake',    href:'/stocktake',     dot:T.purple},
   {id:'invoices',     kind:'section', label:'Invoices',          section:'invoices', dot:T.amber, alertKey:'invoices'},
   {id:'pnl',          kind:'section', label:'P&L — This Month',  section:'pnl',      dot:T.green},
   {id:'stock',        kind:'section', label:'Stock & Inventory', section:'stock',    dot:T.purple},
   {id:'payables',     kind:'section', label:'Payables',          section:'payables', dot:T.red,   alertKey:'payables'},
 ]
 
-// Settings nav item (admins only) — added after filtering
 const SETTINGS_NAV_ITEM: PortalNavItem = {
   id:'settings', kind:'link', label:'⚙ Settings', href:'/settings', dot:T.text3,
 }
@@ -64,15 +60,7 @@ export interface PortalSidebarProps {
   refreshing?: boolean
   alertCounts?: { invoices?: number; payables?: number }
   loading?: boolean
-
-  // Role of the currently signed-in user. When provided, nav items are filtered
-  // to only those the role has permission to view. When omitted (e.g. during
-  // SSR fallback) all items are shown — server-side route guards are the actual
-  // source of truth, this is just UX polish.
   currentUserRole?: UserRole
-  // Per-user tab override. When provided (non-null), only these tab IDs show
-  // in the sidebar (intersected with role permissions). When null/undefined,
-  // the user sees every tab their role has permission for.
   currentUserVisibleTabs?: string[] | null
   currentUserName?: string | null
   currentUserEmail?: string | null
@@ -98,8 +86,6 @@ export default function PortalSidebar({
   const [draggedId, setDraggedId] = useState<string|null>(null)
   const [dragOverId, setDragOverId] = useState<string|null>(null)
 
-  // Mobile-awareness: on narrow viewports (< 768px) render as a slide-over
-  // drawer with a hamburger toggle. Desktop keeps the classic fixed sidebar.
   const [isMobile, setIsMobile] = useState(false)
   const [drawerOpen, setDrawerOpen] = useState(false)
   useEffect(() => {
@@ -108,14 +94,12 @@ export default function PortalSidebar({
     window.addEventListener('resize', check)
     return () => window.removeEventListener('resize', check)
   }, [])
-  // Close drawer when user navigates to a different page
   useEffect(() => {
     const close = () => setDrawerOpen(false)
     router.events.on('routeChangeStart', close)
     return () => router.events.off('routeChangeStart', close)
   }, [router])
 
-  // Build the base nav, filtering by role (and per-user tab list) if provided
   const baseNav: PortalNavItem[] = (() => {
     if (!currentUserRole) return [...DEFAULT_NAV]
     const allowed = new Set(visibleNavSections(currentUserRole, currentUserVisibleTabs))
@@ -124,7 +108,6 @@ export default function PortalSidebar({
     return filtered
   })()
 
-  // Compute sorted order
   const sortedItems: PortalNavItem[] = (() => {
     if (navSort === 'az') return [...baseNav].sort((a,b) => a.label.localeCompare(b.label))
     if (navSort === 'za') return [...baseNav].sort((a,b) => b.label.localeCompare(a.label))
@@ -145,7 +128,6 @@ export default function PortalSidebar({
     else router.push(`/dashboard?s=${item.section}`)
   }
 
-  // Drag handlers
   function handleDragStart(e: React.DragEvent, id: string) {
     if (navSort !== 'custom') return
     setDraggedId(id)
@@ -180,9 +162,7 @@ export default function PortalSidebar({
 
   async function handleSignOut() {
     try {
-      // Clear Supabase SDK session (client-side)
       try { await getSupabase().auth.signOut() } catch {}
-      // Clear our httpOnly session cookie
       await fetch('/api/auth/session', { method: 'DELETE' }).catch(()=>{})
     } finally {
       router.push('/login')
@@ -191,7 +171,6 @@ export default function PortalSidebar({
 
   const dragEnabled = navSort === 'custom'
 
-  // The sidebar body (nav + footer) — shared by mobile drawer and desktop panel
   const sidebarBody = (
     <div style={{
       width: isMobile ? 280 : 220, minWidth: isMobile ? 280 : 220,
@@ -199,7 +178,6 @@ export default function PortalSidebar({
       display: 'flex', flexDirection: 'column', height: '100vh', overflowY: 'auto',
       fontFamily: "'DM Sans', system-ui, sans-serif",
     }}>
-      {/* Logo block */}
       <div style={{padding:'20px 18px 16px', borderBottom:`1px solid ${T.border}`}}>
         <div style={{display:'flex', alignItems:'center', gap:10, marginBottom:4}}>
           <div style={{width:30, height:30, borderRadius:8, background:T.blue, display:'flex', alignItems:'center', justifyContent:'center', fontSize:13, fontWeight:600, color:'#fff', flexShrink:0}}>JA</div>
@@ -226,7 +204,6 @@ export default function PortalSidebar({
         <div style={{fontSize:11, color:T.text3, marginLeft:40}}>Management Portal</div>
       </div>
 
-      {/* Nav list */}
       <div style={{padding:'14px 10px 4px', flex:1}}>
         <div style={{display:'flex', alignItems:'center', justifyContent:'space-between', padding:'0 8px', marginBottom:6}}>
           <div style={{fontSize:9, fontWeight:600, color:T.text3, textTransform:'uppercase', letterSpacing:'0.1em'}}>Navigation</div>
@@ -282,9 +259,7 @@ export default function PortalSidebar({
         })}
       </div>
 
-      {/* Footer */}
       <div style={{padding:'12px 14px', borderTop:`1px solid ${T.border}`}}>
-        {/* User identity — shown when we know who's signed in */}
         {(currentUserName || currentUserEmail) && (
           <div style={{marginBottom:10, paddingBottom:10, borderBottom:`1px solid ${T.border}`}}>
             <div style={{fontSize:12, color:T.text, fontWeight:500, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap'}}>
@@ -315,16 +290,9 @@ export default function PortalSidebar({
     </div>
   )
 
-  // ─── Mobile drawer layout ───
-  // Hamburger button is fixed top-left so it's always reachable, even after
-  // scrolling. Drawer slides in from the left with a dimmed overlay behind it.
-  // Also emits a thin inline spacer so the page header doesn't render under
-  // the hamburger button (since hamburger is position:fixed it contributes
-  // no inline width).
   if (isMobile) {
     return (
       <>
-        {/* Inline spacer — part of the parent flex flow so page content shifts right */}
         <div style={{width: 50, flexShrink: 0, height: '100vh'}} aria-hidden="true"/>
         <button
           aria-label="Open navigation menu"
@@ -358,6 +326,5 @@ export default function PortalSidebar({
     )
   }
 
-  // ─── Desktop layout ───
   return sidebarBody
 }
