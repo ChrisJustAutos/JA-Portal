@@ -1,21 +1,22 @@
 // scripts/recon-mechanicdesk-stocktake.ts
-// Reconnaissance script v2 — walks through the FULL stocktake flow to
-// capture every network call MD makes when:
-//   1. Landing on /stocktakes (the list)
-//   2. Clicking into the first existing stocktake (if any)
-//   3. Otherwise: creating a NEW stocktake (fills name, clicks Continue)
-//   4. Landing on the item-entry page
-//   5. Typing into the product search to trigger autocomplete API
-//   6. Capturing every interactable element on each page
+// Reconnaissance script v3 — captures the POST that adds an item to a
+// stocktake sheet by actually performing the add-item flow against the
+// existing RECON_DELETE_ME stocktake (id 47270 from the previous run).
 //
-// SAFETY RAILS:
-//   • NEVER clicks Save / Submit / Complete / Finish / Delete
-//   • Adds NOTHING to any stocktake (we only inspect autocomplete)
-//   • If forced to create a stocktake to inspect the next page, the
-//     stocktake will be left empty — you can delete it manually after
+// Steps:
+//   1. Log in
+//   2. Navigate to the existing RECON stocktake at /stocktakes/{id}
+//      (configurable via RECON_STOCKTAKE_ID env var, defaults to 47270)
+//   3. Find the SKU search input (ng-model="item.description")
+//   4. Type a short query like "OIL" — wait for autocomplete
+//   5. Pick the first dropdown result via keyboard (ArrowDown + Enter)
+//   6. Set the count input (ng-model="new_stocktake_item.count") to 0
+//   7. Click Save → capture the POST that fires
+//   8. Done. NEVER click Finish, Delete, or anything else destructive.
 //
-// Output: artifacts/ directory with screenshots, HTML, JSON network
-// captures, interactable element dumps, and console logs.
+// The added item will have count=0 — no real impact on inventory if
+// the stocktake were ever finished. You can delete the whole recon
+// stocktake from MD afterwards.
 
 import { chromium, Browser, BrowserContext, Page, Request, Response } from 'playwright'
 import { writeFileSync, mkdirSync, existsSync } from 'fs'
@@ -23,7 +24,8 @@ import { join } from 'path'
 
 const MD_BASE = 'https://www.mechanicdesk.com.au'
 const LOGIN_URL = `${MD_BASE}/auto_workshop/login`
-const STOCKTAKES_URL = `${MD_BASE}/auto_workshop/app#/stocktakes`
+const RECON_STOCKTAKE_ID = process.env.RECON_STOCKTAKE_ID || '47270'
+const STOCKTAKE_URL = `${MD_BASE}/auto_workshop/app#/stocktakes/${RECON_STOCKTAKE_ID}`
 
 const ARTIFACT_DIR = process.env.GITHUB_WORKSPACE
   ? join(process.env.GITHUB_WORKSPACE, 'artifacts')
@@ -48,7 +50,6 @@ interface CapturedRequest {
   responseBody?: string
   responseError?: string
   durationMs?: number
-  // Phase tag — which step of the recon was this captured during?
   phase?: string
 }
 
@@ -117,80 +118,9 @@ async function snapshotPage(page: Page, label: string): Promise<void> {
   }
 }
 
-async function dumpInteractables(page: Page, label: string): Promise<void> {
-  try {
-    const items = await page.evaluate(() => {
-      const results: any[] = []
-
-      // All inputs (visible only)
-      document.querySelectorAll('input, textarea, select').forEach((el) => {
-        const e = el as HTMLInputElement
-        const rect = e.getBoundingClientRect()
-        const visible = rect.width > 0 && rect.height > 0
-        if (!visible && e.type === 'hidden') return  // skip hidden form scaffolding
-        const dataAttrs: Record<string, string> = {}
-        for (const a of e.attributes) {
-          if (a.name.startsWith('data-') || a.name.startsWith('ng-')) {
-            dataAttrs[a.name] = a.value.slice(0, 200)
-          }
-        }
-        results.push({
-          kind: 'input',
-          type: e.type || e.tagName.toLowerCase(),
-          name: e.name,
-          id: e.id,
-          placeholder: e.placeholder,
-          classes: (e.className || '').slice(0, 200),
-          value: e.value?.slice(0, 100),
-          visible,
-          dataAttrs,
-        })
-      })
-
-      // Tables (just metadata)
-      document.querySelectorAll('table, .table, [role="table"]').forEach((el) => {
-        const e = el as HTMLElement
-        results.push({
-          kind: 'table',
-          tag: e.tagName,
-          classes: (e.className || '').slice(0, 200),
-          rowCount: e.querySelectorAll('tr, [role="row"]').length,
-          id: e.id,
-        })
-      })
-
-      // Buttons + click handlers
-      document.querySelectorAll('button, input[type="submit"], a.btn, [ng-click]').forEach((el) => {
-        const e = el as HTMLElement
-        const text = (e.textContent || '').trim().slice(0, 100)
-        const ngClick = e.getAttribute('ng-click') || ''
-        if (!text && !ngClick) return
-        const rect = e.getBoundingClientRect()
-        results.push({
-          kind: 'click',
-          tag: e.tagName,
-          text,
-          classes: (e.className || '').slice(0, 200),
-          ngClick: ngClick.slice(0, 200),
-          href: (e as HTMLAnchorElement).href || undefined,
-          id: e.id,
-          visible: rect.width > 0 && rect.height > 0,
-        })
-      })
-
-      return results.slice(0, 500)
-    })
-    writeFileSync(join(ARTIFACT_DIR, `${label}.json`), JSON.stringify(items, null, 2))
-    log(`  → ${items.length} interactable elements dumped to ${label}.json`)
-  } catch (e: any) {
-    log(`dumpInteractables ${label} failed: ${e?.message}`)
-  }
-}
-
 async function login(page: Page, workshopId: string, username: string, password: string): Promise<void> {
   log(`Navigating to login: ${LOGIN_URL}`)
   await page.goto(LOGIN_URL, { waitUntil: 'domcontentloaded', timeout: 30000 })
-  await snapshotPage(page, '01-login-page')
 
   const workshopInput = await page.$('input[name*="workshop" i], input#workshop_id, input[placeholder*="Workshop" i]')
   if (!workshopInput) {
@@ -222,167 +152,100 @@ async function login(page: Page, workshopId: string, username: string, password:
   try {
     await page.waitForSelector('input[type="password"]', { state: 'detached', timeout: 30000 })
   } catch (e: any) {
-    await snapshotPage(page, '02-login-failed')
+    await snapshotPage(page, '01-login-failed')
     throw new Error(`Login failed: ${e?.message}`)
   }
   await page.waitForLoadState('domcontentloaded', { timeout: 10000 }).catch(() => undefined)
   log(`Login OK — landed on ${page.url()}`)
-  await snapshotPage(page, '02-after-login')
 }
 
-async function exploreStocktakes(page: Page): Promise<void> {
-  // ── Phase 1: List page ──────────────────────────────────────────────
-  currentPhase = 'list'
-  log(`PHASE: list — navigating to stocktakes`)
-  await page.goto(STOCKTAKES_URL, { waitUntil: 'domcontentloaded', timeout: 30000 }).catch(e => {
-    log(`(initial nav: ${e?.message})`)
-  })
-  await page.waitForTimeout(3500)
-  await snapshotPage(page, '03-stocktakes-list')
-  await dumpInteractables(page, '03-stocktakes-list-interactables')
-
-  // ── Phase 2: Try to open an EXISTING stocktake first ────────────────
-  // A real stocktake link looks like /stocktakes/{numeric_id} or
-  // /stocktakes/{id}/edit — NOT /stocktakes/new
-  log(`PHASE: trying to find an existing stocktake to open`)
-  const existingHref = await page.evaluate(() => {
-    const links = Array.from(document.querySelectorAll('a[href]'))
-    for (const link of links) {
-      const href = (link as HTMLAnchorElement).href
-      // Match /stocktakes/<digits> but NOT /stocktakes/new
-      if (/\/stocktakes\/\d+/.test(href)) return href
-    }
-    return null
-  })
-
-  let openedExisting = false
-  if (existingHref) {
-    log(`  Found existing stocktake: ${existingHref}`)
-    currentPhase = 'open-existing'
-    await page.goto(existingHref, { waitUntil: 'domcontentloaded', timeout: 30000 }).catch(() => undefined)
-    await page.waitForTimeout(3500)
-    await snapshotPage(page, '04a-existing-stocktake')
-    await dumpInteractables(page, '04a-existing-stocktake-interactables')
-    openedExisting = true
-  } else {
-    log('  No existing stocktake found on the list page')
-  }
-
-  // ── Phase 3: Create a new stocktake (only fill name + click Continue) ─
-  // We do this regardless — even if we opened an existing one, we still
-  // want to capture the "create" flow's network calls so we know how to
-  // create one programmatically later.
-  currentPhase = 'create-new'
-  log(`PHASE: create-new — visiting /stocktakes/new`)
-  await page.goto(`${MD_BASE}/auto_workshop/app#/stocktakes/new`, { waitUntil: 'domcontentloaded', timeout: 30000 }).catch(() => undefined)
-  await page.waitForTimeout(3000)
-  await snapshotPage(page, '05a-new-stocktake-form')
-  await dumpInteractables(page, '05a-new-stocktake-form-interactables')
-
-  // Fill the name field with a clearly-marked recon name so it's obvious
-  // in MD that this can be deleted
-  const reconName = `RECON_DELETE_ME_${new Date().toISOString().slice(0, 10)}`
-  log(`  Filling stocktake name: ${reconName}`)
-  const nameInput = await page.$('input[ng-model="stocktake.name"]')
-  if (!nameInput) {
-    log('  WARN: Could not find stocktake.name input — falling back to any visible text input')
-    const fallback = await page.$('form input[type="text"]:not([disabled]):not([readonly])')
-    if (fallback) await fallback.fill(reconName)
-  } else {
-    await nameInput.fill(reconName)
-  }
-
-  // Click Continue
-  log(`  Clicking Continue (save_new_stocktake)`)
-  const continueBtn = await page.$('button[ng-click="save_new_stocktake()"]')
-  if (continueBtn) {
-    await continueBtn.click()
-  } else {
-    // Fallback selector
-    const fallback = await page.$('button.btn-primary:has-text("Continue")')
-    if (fallback) await fallback.click()
-    else log('  WARN: No Continue button found')
-  }
-
-  // Wait for the navigation/render to settle. The POST and subsequent
-  // GET(s) for the new stocktake's data should fire here.
-  log('  Waiting for next page to render (5s)…')
-  await page.waitForTimeout(5000)
-  await snapshotPage(page, '06-stocktake-item-entry')
-  await dumpInteractables(page, '06-stocktake-item-entry-interactables')
+async function captureAddItemFlow(page: Page): Promise<void> {
+  // ── Phase 1: Open the existing recon stocktake ──────────────────────
+  currentPhase = 'open-stocktake'
+  log(`PHASE: open-stocktake — navigating to ${STOCKTAKE_URL}`)
+  await page.goto(STOCKTAKE_URL, { waitUntil: 'domcontentloaded', timeout: 30000 })
+  await page.waitForTimeout(4000)
+  await snapshotPage(page, '01-stocktake-open')
   log(`  Landed on: ${page.url()}`)
 
-  // ── Phase 4: Try typing into the product search ─────────────────────
-  currentPhase = 'search-product'
-  log(`PHASE: search-product — looking for SKU/product search input`)
+  // ── Phase 2: Type into the SKU search ───────────────────────────────
+  currentPhase = 'type-search'
+  log(`PHASE: type-search — finding ng-model="item.description" input`)
 
-  // Try several likely selectors for the search field on the item entry page
-  const searchSelectors = [
-    'input[ng-model*="search" i]',
-    'input[ng-model*="query" i]',
-    'input[placeholder*="search" i]',
-    'input[placeholder*="stock" i]',
-    'input[placeholder*="product" i]',
-    'input[placeholder*="SKU" i]',
-    'input[ng-model*="stock" i]',
-    // Anything with selectize/select2 styling — common for autocomplete
-    '.selectize-input input[type="text"]',
-    'input.select2-input',
-    // Last resort: first non-search-engine text input on the page
-    'main input[type="text"]:not([ng-model="global_query"]):not([id="global-search-input"])',
-    '.content-box input[type="text"]:not([readonly])',
-  ]
-
-  let searchInput = null
-  let usedSelector = ''
-  for (const sel of searchSelectors) {
-    const el = await page.$(sel).catch(() => null)
-    if (el) {
-      const isVisible = await el.isVisible().catch(() => false)
-      if (isVisible) {
-        searchInput = el
-        usedSelector = sel
-        break
-      }
-    }
+  const searchInput = await page.$('input[ng-model="item.description"]')
+  if (!searchInput) {
+    log('  ERROR: Could not find the item.description search input!')
+    await snapshotPage(page, '02-search-not-found')
+    throw new Error('SKU search input not found on stocktake page')
   }
 
-  if (searchInput) {
-    log(`  Found search input via selector: ${usedSelector}`)
-    try {
-      await searchInput.click()
-      await page.waitForTimeout(300)
-      // Type slowly, character by character, so each keystroke can fire
-      // its own autocomplete request. This gives us the clearest API trace.
-      const testQuery = 'OIL'  // generic, likely to match SOMETHING in inventory
-      log(`  Typing "${testQuery}" character-by-character`)
-      for (const ch of testQuery) {
-        await page.keyboard.type(ch, { delay: 200 })
-      }
-      // Wait for any autocomplete responses to come in
-      await page.waitForTimeout(2500)
-      await snapshotPage(page, '07-after-search-typed')
-      await dumpInteractables(page, '07-after-search-typed-interactables')
+  const searchQuery = 'OIL'
+  log(`  Typing "${searchQuery}" character-by-character to trigger autocomplete`)
+  await searchInput.click()
+  await page.waitForTimeout(300)
+  for (const ch of searchQuery) {
+    await page.keyboard.type(ch, { delay: 200 })
+  }
+  // Wait for autocomplete network call to complete and dropdown to render
+  await page.waitForTimeout(2500)
+  await snapshotPage(page, '02-after-typing-search')
 
-      // Clear the field (don't accidentally select an item)
-      log('  Clearing search field')
-      await searchInput.fill('').catch(() => undefined)
-      // Click somewhere safe to dismiss any dropdown
-      await page.keyboard.press('Escape').catch(() => undefined)
-      await page.waitForTimeout(500)
-    } catch (e: any) {
-      log(`  Could not interact with search input: ${e?.message}`)
+  // ── Phase 3: Pick the first autocomplete result ────────────────────
+  currentPhase = 'pick-result'
+  log(`PHASE: pick-result — pressing ArrowDown + Enter to select first result`)
+  await page.keyboard.press('ArrowDown')
+  await page.waitForTimeout(300)
+  await page.keyboard.press('Enter')
+  await page.waitForTimeout(2000)
+  await snapshotPage(page, '03-after-picking-result')
+
+  // ── Phase 4: Set count to 0 ─────────────────────────────────────────
+  currentPhase = 'set-count'
+  log(`PHASE: set-count — setting new_stocktake_item.count = 0`)
+  const countInput = await page.$('input[ng-model="new_stocktake_item.count"]')
+  if (!countInput) {
+    log('  WARN: Could not find count input — will try to capture click anyway')
+  } else {
+    // Triple-click to select existing value, then type 0
+    await countInput.click({ clickCount: 3 })
+    await page.waitForTimeout(200)
+    await page.keyboard.type('0', { delay: 100 })
+    await page.waitForTimeout(500)
+    // Tab out so AngularJS picks up the change
+    await page.keyboard.press('Tab')
+    await page.waitForTimeout(500)
+  }
+  await snapshotPage(page, '04-after-setting-count')
+
+  // ── Phase 5: Click Save → THIS is the magic POST ────────────────────
+  currentPhase = 'click-save'
+  log(`PHASE: click-save — clicking save_new_stocktake_item button`)
+  const saveBtn = await page.$('button[ng-click="save_new_stocktake_item()"]')
+  if (!saveBtn) {
+    log('  WARN: Could not find the Save button via ng-click selector')
+    // Fallback: find any visible Save button on the page
+    const fallback = await page.$('button.btn-success:has-text("Save"):visible, button:has-text("Save"):visible')
+    if (fallback) {
+      log('  Using fallback Save button')
+      await fallback.click()
+    } else {
+      throw new Error('Could not find Save button')
     }
   } else {
-    log('  WARN: Could not find a product search input on the item entry page')
+    await saveBtn.click()
   }
 
-  // ── Phase 5: Capture the page after waiting a moment ────────────────
-  currentPhase = 'final-snapshot'
-  await page.waitForTimeout(1500)
-  await snapshotPage(page, '08-final-state')
+  // Give it plenty of time for the POST + any follow-up GETs to complete
+  log('  Waiting 5s for POST + any follow-up requests…')
+  await page.waitForTimeout(5000)
+  await snapshotPage(page, '05-after-save')
+  log(`  Final URL: ${page.url()}`)
 
-  log('Reconnaissance complete')
+  // ── Phase 6: Final settle ───────────────────────────────────────────
+  currentPhase = 'final-settle'
+  await page.waitForTimeout(2000)
+  await snapshotPage(page, '06-final-state')
+  log('Add-item flow complete')
 }
 
 async function main(): Promise<void> {
@@ -393,13 +256,15 @@ async function main(): Promise<void> {
     throw new Error('MECHANICDESK_WORKSHOP_ID, MECHANICDESK_USERNAME and MECHANICDESK_PASSWORD env vars required')
   }
 
+  log(`Recon target stocktake: ${RECON_STOCKTAKE_ID}`)
+
   let browser: Browser | null = null
   try {
     log('Launching headless Chromium')
     browser = await chromium.launch({ headless: true })
     const context = await browser.newContext({
       userAgent: 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-      acceptDownloads: false,  // we don't download anything during recon
+      acceptDownloads: false,
       viewport: { width: 1400, height: 1000 },
     })
 
@@ -417,7 +282,7 @@ async function main(): Promise<void> {
 
     currentPhase = 'login'
     await login(page, workshopId, username, password)
-    await exploreStocktakes(page)
+    await captureAddItemFlow(page)
 
     log(`Captured ${captured.length} network requests`)
     writeFileSync(join(ARTIFACT_DIR, 'network.json'), JSON.stringify(captured, null, 2))
@@ -425,8 +290,9 @@ async function main(): Promise<void> {
     // Compact summary — easier to scan
     const summary = captured
       .filter(c =>
-        (c.url.includes('/auto_workshop/') || c.url.includes('/api/')) &&
-        !c.url.includes('/assets/')
+        (c.url.includes('/auto_workshop/') || c.url.includes('/api/') ||
+         c.url.includes('/stocktakes') || c.url.includes('/stocktake_'))
+        && !c.url.includes('/assets/')
       )
       .map(c => ({
         phase: c.phase,
@@ -441,7 +307,7 @@ async function main(): Promise<void> {
     writeFileSync(join(ARTIFACT_DIR, 'network-summary.json'), JSON.stringify(summary, null, 2))
     log(`Wrote ${summary.length} app/api requests to network-summary.json`)
 
-    // Per-phase breakdown — even more compact
+    // Per-phase breakdown
     const phases: Record<string, any[]> = {}
     summary.forEach(s => {
       const phase = s.phase || 'unknown'
