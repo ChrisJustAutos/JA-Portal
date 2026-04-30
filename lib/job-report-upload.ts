@@ -1,14 +1,19 @@
 // lib/job-report-upload.ts
-// Core ingestion logic for Mechanics Desk Job WIP reports. Used by:
-//   • Manual upload  → /api/job-reports/upload
-//   • Pipeline C webhook → /api/webhooks/graph-jobreport-mail (nightly auto-import)
+// Core ingestion logic for Mechanics Desk Job exports.
 //
-// Responsibilities:
-//   1. Parse the file (CSV or XLSX) via lib/job-report-parser
-//   2. Insert a new job_report_runs row (with the given source label)
-//   3. Insert all parsed jobs into job_report_jobs in chunks
-//   4. Flip is_current so downstream queries point at the new run
-//   5. Re-match any 'parsed' supplier invoices against the new job set
+// Two "lanes" via report_type:
+//   • forecast      — rich manual export (Job Date, Job Types, Total, Quoted Total,
+//                     Estimate Hours, Profit Margin, Source Of Business, ...).
+//                     Drives the Forecasting page.
+//                     Sources: manual upload, GitHub Actions auto-pull (Playwright).
+//   • wip_snapshot  — limited daily WIP report from Pipeline C webhook.
+//                     Reserved for a future Overview "Today's Workshop" widget;
+//                     deliberately ignored by Forecasting because it lacks Job Date,
+//                     real Job Types, and Total.
+//
+// Each lane has its own is_current pointer (DB-enforced via unique partial
+// index on report_type WHERE is_current = true) so they never overwrite
+// each other.
 
 import { createClient } from '@supabase/supabase-js'
 import { parseJobReport, ParsedJobReport } from './job-report-parser'
@@ -20,11 +25,14 @@ function sb() {
   return createClient(url, key, { auth: { persistSession: false } })
 }
 
+export type JobReportType = 'forecast' | 'wip_snapshot'
+
 export interface IngestJobReportInput {
   buffer: Buffer
   filename: string
   source: 'manual' | 'graph_mail' | 'cron' | 'api'
-  uploadedBy?: string | null   // user ID for manual, null for system
+  reportType: JobReportType
+  uploadedBy?: string | null
   notes?: string | null
 }
 
@@ -36,18 +44,12 @@ export interface IngestJobReportResult {
   headerMap: Record<string, string>
   rematchedInvoices: number
   durationMs: number
+  reportType: JobReportType
 }
 
-/**
- * Ingest a Mechanics Desk job WIP report. Replaces the current run.
- *
- * Throws on failure (parse error, DB error, etc). Caller is responsible
- * for catching and translating to HTTP responses or webhook event logs.
- */
 export async function ingestJobReport(input: IngestJobReportInput): Promise<IngestJobReportResult> {
   const tStart = Date.now()
 
-  // 1. Parse
   const parsed: ParsedJobReport = parseJobReport(input.buffer, input.filename)
   if (parsed.jobs.length === 0) {
     throw new Error(
@@ -55,10 +57,10 @@ export async function ingestJobReport(input: IngestJobReportInput): Promise<Inge
     )
   }
 
-  // 2. Create run row (is_current=false until jobs are in)
   const { data: run, error: runErr } = await sb().from('job_report_runs').insert({
     uploaded_by: input.uploadedBy || null,
     source: input.source,
+    report_type: input.reportType,
     filename: input.filename,
     row_count: parsed.jobs.length,
     notes: input.notes || null,
@@ -66,7 +68,6 @@ export async function ingestJobReport(input: IngestJobReportInput): Promise<Inge
   }).select().single()
   if (runErr || !run) throw new Error(`Failed to create run: ${runErr?.message || 'unknown'}`)
 
-  // 3. Insert jobs in chunks
   const chunkSize = 500
   for (let i = 0; i < parsed.jobs.length; i += chunkSize) {
     const chunk = parsed.jobs.slice(i, i + chunkSize).map(j => ({
@@ -86,37 +87,44 @@ export async function ingestJobReport(input: IngestJobReportInput): Promise<Inge
     if (error) throw new Error(`Failed to insert jobs chunk ${i}-${i + chunk.length}: ${error.message}`)
   }
 
-  // 4. Flip is_current — only this run has it
-  // Deliberate two-step: clear all others FIRST, then set new run, so we never
-  // have a window with two current runs.
-  await sb().from('job_report_runs').update({ is_current: false }).neq('id', run.id)
-  await sb().from('job_report_runs').update({ is_current: true }).eq('id', run.id)
+  // Flip is_current — within this lane only. Cross-lane: forecast and
+  // wip_snapshot each maintain their own current pointer, so a wip_snapshot
+  // import never knocks the forecast pointer off the current manual upload.
+  await sb().from('job_report_runs')
+    .update({ is_current: false })
+    .eq('report_type', input.reportType)
+    .neq('id', run.id)
+  await sb().from('job_report_runs')
+    .update({ is_current: true })
+    .eq('id', run.id)
 
-  // 5. Re-match 'parsed' supplier invoices against the new job set.
-  // (Some invoices may have been waiting for a job number that's now in the report.)
-  const { data: pendingInvoices } = await sb()
-    .from('supplier_invoices')
-    .select('id, po_number')
-    .in('status', ['parsed'])
-    .not('po_number', 'is', null)
-
+  // Re-match pending supplier invoices — only relevant for the forecast lane
+  // (the rich data has the proper job set). wip_snapshot is too thin.
   let rematched = 0
-  if (pendingInvoices && pendingInvoices.length > 0) {
-    for (const inv of pendingInvoices) {
-      if (!inv.po_number) continue
-      const { data: m } = await sb()
-        .from('job_report_jobs')
-        .select('id')
-        .eq('run_id', run.id)
-        .ilike('job_number', inv.po_number)
-        .maybeSingle()
-      if (m?.id) {
-        await sb().from('supplier_invoices').update({
-          po_matches_job: true,
-          matched_job_id: m.id,
-          matched_at: new Date().toISOString(),
-        }).eq('id', inv.id)
-        rematched++
+  if (input.reportType === 'forecast') {
+    const { data: pendingInvoices } = await sb()
+      .from('supplier_invoices')
+      .select('id, po_number')
+      .in('status', ['parsed'])
+      .not('po_number', 'is', null)
+
+    if (pendingInvoices && pendingInvoices.length > 0) {
+      for (const inv of pendingInvoices) {
+        if (!inv.po_number) continue
+        const { data: m } = await sb()
+          .from('job_report_jobs')
+          .select('id')
+          .eq('run_id', run.id)
+          .ilike('job_number', inv.po_number)
+          .maybeSingle()
+        if (m?.id) {
+          await sb().from('supplier_invoices').update({
+            po_matches_job: true,
+            matched_job_id: m.id,
+            matched_at: new Date().toISOString(),
+          }).eq('id', inv.id)
+          rematched++
+        }
       }
     }
   }
@@ -129,5 +137,6 @@ export async function ingestJobReport(input: IngestJobReportInput): Promise<Inge
     headerMap: parsed.headerMap,
     rematchedInvoices: rematched,
     durationMs: Date.now() - tStart,
+    reportType: input.reportType,
   }
 }

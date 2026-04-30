@@ -1,9 +1,10 @@
 // components/settings/DataImportsTab.tsx
 // Unified upload hub for admin-only data imports.
-// Two cards:
-//   1) Mechanics Desk Job Report (CSV / XLSX / XLS)  → POST /api/job-reports/upload
-//   2) Supplier Invoice PDF                          → POST /api/supplier-invoices/intake
-// Each card has drag-and-drop / file picker and shows recent upload history.
+// Sections:
+//   1. Forecasting target           — monthly $ target line (org-wide setting)
+//   2. Mechanics Desk Job Report    — manual upload + auto-pull status
+//   3. Supplier Invoice PDF         — Claude-parsed invoice intake
+//   4. Service tokens               — bearer tokens for external automation
 
 import { useState, useEffect, useRef, useCallback } from 'react'
 import Link from 'next/link'
@@ -12,7 +13,7 @@ const T = {
   bg2:'#131519', bg3:'#1a1d23', bg4:'#21252d',
   border:'rgba(255,255,255,0.07)', border2:'rgba(255,255,255,0.12)',
   text:'#e8eaf0', text2:'#8b90a0', text3:'#545968',
-  blue:'#4f8ef7', teal:'#2dd4bf', green:'#34c77b', amber:'#f5a623', red:'#f04e4e',
+  blue:'#4f8ef7', teal:'#2dd4bf', green:'#34c77b', amber:'#f5a623', red:'#f04e4e', purple:'#a78bfa',
 }
 
 function fmtDate(iso: string | null | undefined) {
@@ -28,15 +29,140 @@ async function fileToBase64(file: File): Promise<string> {
   const buf = await file.arrayBuffer()
   let binary = ''
   const bytes = new Uint8Array(buf)
-  const chunkSize = 0x8000  // avoid call-stack overflow on big files
+  const chunkSize = 0x8000
   for (let i = 0; i < bytes.length; i += chunkSize) {
     binary += String.fromCharCode.apply(null, Array.from(bytes.subarray(i, i + chunkSize)) as any)
   }
   return btoa(binary)
 }
 
-// ── Job Reports card ─────────────────────────────────────────────────────────
-interface JobRun { id: string; uploaded_at: string; filename: string | null; row_count: number; is_current: boolean; notes: string | null }
+// ═══════════════════════════════════════════════════════════════════
+// FORECASTING TARGET CARD
+// ═══════════════════════════════════════════════════════════════════
+
+function ForecastingTargetCard() {
+  const [target, setTarget] = useState<number | null>(null)
+  const [draft, setDraft] = useState<string>('')
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
+  const [updatedAt, setUpdatedAt] = useState<string | null>(null)
+  const [message, setMessage] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null)
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    try {
+      const r = await fetch('/api/admin/forecasting-target')
+      const d = await r.json()
+      setTarget(d.target_monthly || 0)
+      setDraft(String(d.target_monthly || 0))
+      setUpdatedAt(d.updated_at)
+    } catch (e: any) { /* swallow */ }
+    finally { setLoading(false) }
+  }, [])
+
+  useEffect(() => { load() }, [load])
+
+  async function save() {
+    const num = Number(draft.replace(/[$,\s]/g, ''))
+    if (!isFinite(num) || num < 0) {
+      setMessage({ kind: 'err', text: 'Must be a non-negative number' })
+      return
+    }
+    setSaving(true); setMessage(null)
+    try {
+      const r = await fetch('/api/admin/forecasting-target', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ target_monthly: num }),
+      })
+      const d = await r.json()
+      if (!r.ok) throw new Error(d.error || 'Save failed')
+      setTarget(d.target_monthly)
+      setMessage({ kind: 'ok', text: `Saved. New target: $${d.target_monthly.toLocaleString('en-AU')}/month` })
+      setTimeout(() => setMessage(null), 3000)
+      await load()
+    } catch (e: any) {
+      setMessage({ kind: 'err', text: e.message || 'Save failed' })
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const dirty = String(target || 0) !== draft.replace(/[$,\s]/g, '')
+
+  return (
+    <div style={{background:T.bg2, border:`1px solid ${T.border}`, borderRadius:10, padding:20}}>
+      <div style={{display:'flex', alignItems:'baseline', justifyContent:'space-between', gap:12, marginBottom:4}}>
+        <h3 style={{margin:0, fontSize:14, fontWeight:600, color:T.text}}>Forecasting target</h3>
+        <Link href="/forecasting" style={{fontSize:11, color:T.blue, textDecoration:'none'}}>View forecasting →</Link>
+      </div>
+      <div style={{fontSize:11, color:T.text3, marginBottom:14}}>
+        Monthly $ target. Renders as a horizontal reference line on the Forecasting bar chart. Set to 0 to hide the line.
+      </div>
+
+      {loading ? (
+        <div style={{fontSize:12, color:T.text3}}>Loading…</div>
+      ) : (
+        <>
+          <div style={{display:'flex', gap:8, alignItems:'center'}}>
+            <div style={{position:'relative', flex:1, maxWidth:280}}>
+              <span style={{position:'absolute', left:10, top:'50%', transform:'translateY(-50%)', color:T.text3, fontSize:13, pointerEvents:'none'}}>$</span>
+              <input
+                type="text"
+                inputMode="numeric"
+                value={draft}
+                onChange={(e) => setDraft(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter' && dirty && !saving) save() }}
+                placeholder="e.g. 250000"
+                style={{
+                  width:'100%', padding:'8px 12px 8px 22px',
+                  background:T.bg3, border:`1px solid ${T.border2}`,
+                  color:T.text, borderRadius:6, fontSize:13,
+                  fontFamily:'inherit', outline:'none',
+                  fontVariantNumeric:'tabular-nums',
+                  boxSizing:'border-box',
+                }}/>
+            </div>
+            <button
+              onClick={save}
+              disabled={!dirty || saving}
+              style={{
+                padding:'8px 16px', borderRadius:6, border:'none',
+                background: !dirty || saving ? T.bg4 : T.blue,
+                color: !dirty || saving ? T.text3 : '#fff',
+                fontSize:12, fontWeight:600, cursor: !dirty || saving ? 'default' : 'pointer',
+                fontFamily:'inherit',
+              }}>
+              {saving ? 'Saving…' : 'Save target'}
+            </button>
+          </div>
+          {updatedAt && (
+            <div style={{fontSize:10, color:T.text3, marginTop:8}}>
+              Last updated {fmtDate(updatedAt)}
+            </div>
+          )}
+          {message && (
+            <div style={{
+              marginTop:10, padding:'7px 10px', borderRadius:5, fontSize:11,
+              background: message.kind === 'ok' ? 'rgba(52,199,123,0.1)' : 'rgba(240,78,78,0.1)',
+              border:`1px solid ${message.kind === 'ok' ? T.green : T.red}40`,
+              color: message.kind === 'ok' ? T.green : T.red,
+            }}>{message.text}</div>
+          )}
+        </>
+      )}
+    </div>
+  )
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// JOB REPORTS CARD
+// ═══════════════════════════════════════════════════════════════════
+interface JobRun {
+  id: string; uploaded_at: string; filename: string | null;
+  row_count: number; is_current: boolean; notes: string | null;
+  source?: string; report_type?: string;
+}
 
 function JobReportCard() {
   const [runs, setRuns] = useState<JobRun[]>([])
@@ -52,7 +178,7 @@ function JobReportCard() {
       const r = await fetch('/api/job-reports/list')
       const d = await r.json()
       setRuns(d.runs || [])
-    } catch (e: any) { /* swallow — non-fatal */ }
+    } catch (e: any) { /* swallow */ }
     finally { setLoading(false) }
   }, [])
 
@@ -94,22 +220,32 @@ function JobReportCard() {
     if (file) upload(file)
   }
 
-  const current = runs.find(r => r.is_current) || null
+  // Filter to forecast-lane runs only — wip_snapshot lane is internal plumbing
+  const forecastRuns = runs.filter(r => r.report_type === 'forecast' || r.report_type === undefined || r.report_type === null)
+  const current = forecastRuns.find(r => r.is_current) || null
+
+  function srcBadge(r: JobRun) {
+    if (r.source === 'api') return <span style={{marginLeft:8, fontSize:9, padding:'1px 5px', borderRadius:3, background:`${T.teal}22`, color:T.teal, fontWeight:600}}>AUTO-PULL</span>
+    if (r.source === 'manual') return <span style={{marginLeft:8, fontSize:9, padding:'1px 5px', borderRadius:3, background:`${T.purple}22`, color:T.purple, fontWeight:600}}>MANUAL</span>
+    return null
+  }
 
   return (
     <div style={{background:T.bg2, border:`1px solid ${T.border}`, borderRadius:10, padding:20}}>
       <div style={{display:'flex', alignItems:'baseline', justifyContent:'space-between', gap:12, marginBottom:4}}>
         <h3 style={{margin:0, fontSize:14, fontWeight:600, color:T.text}}>Mechanics Desk job report</h3>
-        <Link href="/jobs" style={{fontSize:11, color:T.blue, textDecoration:'none'}}>View jobs →</Link>
+        <Link href="/forecasting" style={{fontSize:11, color:T.blue, textDecoration:'none'}}>View forecasting →</Link>
       </div>
       <div style={{fontSize:11, color:T.text3, marginBottom:14}}>
-        CSV, XLS, or XLSX export from Mechanics Desk. Uploading replaces the current data set.
+        Auto-pulled by GitHub Actions every 2 hours (8am, 10am, 12pm, 2pm, 4pm AEST). You can also drop a file here for an immediate refresh.
       </div>
 
       {current && (
-        <div style={{background:T.bg3, border:`1px solid ${T.border2}`, borderRadius:6, padding:'8px 12px', marginBottom:12, fontSize:11, display:'flex', justifyContent:'space-between', alignItems:'center'}}>
-          <span style={{color:T.text2}}>Current: <strong style={{color:T.text}}>{current.filename || 'unnamed'}</strong> — {current.row_count} jobs</span>
-          <span style={{color:T.text3, fontSize:10}}>{fmtDate(current.uploaded_at)}</span>
+        <div style={{background:T.bg3, border:`1px solid ${T.border2}`, borderRadius:6, padding:'8px 12px', marginBottom:12, fontSize:11, display:'flex', justifyContent:'space-between', alignItems:'center', gap:8}}>
+          <span style={{color:T.text2, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap'}}>
+            Current: <strong style={{color:T.text}}>{current.filename || 'unnamed'}</strong> — {current.row_count} jobs{srcBadge(current)}
+          </span>
+          <span style={{color:T.text3, fontSize:10, whiteSpace:'nowrap'}}>{fmtDate(current.uploaded_at)}</span>
         </div>
       )}
 
@@ -147,14 +283,15 @@ function JobReportCard() {
         </div>
         {loading ? (
           <div style={{fontSize:11, color:T.text3, padding:'8px 0'}}>Loading…</div>
-        ) : runs.length === 0 ? (
+        ) : forecastRuns.length === 0 ? (
           <div style={{fontSize:11, color:T.text3, padding:'8px 0'}}>No uploads yet.</div>
         ) : (
           <div style={{border:`1px solid ${T.border}`, borderRadius:6, maxHeight:200, overflowY:'auto'}}>
-            {runs.slice(0, 10).map(r => (
+            {forecastRuns.slice(0, 10).map(r => (
               <div key={r.id} style={{display:'grid', gridTemplateColumns:'1fr auto auto', gap:10, padding:'7px 10px', borderBottom:`1px solid ${T.border}`, fontSize:11, alignItems:'center'}}>
                 <div style={{color:T.text, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap'}}>
                   {r.filename || 'unnamed'}
+                  {srcBadge(r)}
                   {r.is_current && <span style={{marginLeft:8, fontSize:9, padding:'1px 6px', borderRadius:3, background:T.green, color:'#fff', fontWeight:600}}>CURRENT</span>}
                 </div>
                 <div style={{color:T.text2, fontVariantNumeric:'tabular-nums'}}>{r.row_count} jobs</div>
@@ -168,7 +305,170 @@ function JobReportCard() {
   )
 }
 
-// ── Supplier Invoices card ───────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════
+// SERVICE TOKENS CARD
+// ═══════════════════════════════════════════════════════════════════
+interface ServiceToken {
+  id: string; name: string; scopes: string[]; created_at: string;
+  last_used_at: string | null; last_used_ip: string | null; is_active: boolean;
+}
+
+function ServiceTokensCard() {
+  const [tokens, setTokens] = useState<ServiceToken[]>([])
+  const [loading, setLoading] = useState(true)
+  const [creating, setCreating] = useState(false)
+  const [createName, setCreateName] = useState('')
+  const [createScopes, setCreateScopes] = useState<string[]>(['upload:job-report'])
+  const [newToken, setNewToken] = useState<string | null>(null)
+  const [error, setError] = useState('')
+
+  const VALID_SCOPES = [
+    { id: 'upload:job-report', label: 'Upload job report (Forecasting)' },
+  ]
+
+  const load = useCallback(async () => {
+    setLoading(true); setError('')
+    try {
+      const r = await fetch('/api/admin/service-tokens')
+      const d = await r.json()
+      if (!r.ok) throw new Error(d.error || 'Load failed')
+      setTokens(d.tokens || [])
+    } catch (e: any) { setError(e.message) }
+    finally { setLoading(false) }
+  }, [])
+
+  useEffect(() => { load() }, [load])
+
+  async function createToken() {
+    if (createName.length < 3) { setError('Name must be at least 3 characters'); return }
+    if (createScopes.length === 0) { setError('Select at least one scope'); return }
+    setCreating(true); setError('')
+    try {
+      const r = await fetch('/api/admin/service-tokens', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: createName, scopes: createScopes }),
+      })
+      const d = await r.json()
+      if (!r.ok) throw new Error(d.error || 'Create failed')
+      setNewToken(d.token.plaintext)
+      setCreateName('')
+      await load()
+    } catch (e: any) { setError(e.message) }
+    finally { setCreating(false) }
+  }
+
+  async function revoke(id: string, name: string) {
+    if (!confirm(`Revoke token "${name}"? Any automation using this token will stop working immediately.`)) return
+    try {
+      const r = await fetch(`/api/admin/service-tokens?id=${id}`, { method: 'DELETE' })
+      if (!r.ok) {
+        const d = await r.json()
+        throw new Error(d.error || 'Revoke failed')
+      }
+      await load()
+    } catch (e: any) { setError(e.message) }
+  }
+
+  return (
+    <div style={{background:T.bg2, border:`1px solid ${T.border}`, borderRadius:10, padding:20}}>
+      <div style={{display:'flex', alignItems:'baseline', justifyContent:'space-between', gap:12, marginBottom:4}}>
+        <h3 style={{margin:0, fontSize:14, fontWeight:600, color:T.text}}>Service tokens</h3>
+        <span style={{fontSize:10, color:T.text3}}>For external automation</span>
+      </div>
+      <div style={{fontSize:11, color:T.text3, marginBottom:14}}>
+        Long-lived bearer tokens used by GitHub Actions / external integrations. The plaintext value is shown once at creation. Stored as SHA-256 hash.
+      </div>
+
+      {/* Newly-created token banner — show ONCE then disappear */}
+      {newToken && (
+        <div style={{background:`${T.amber}11`, border:`1px solid ${T.amber}66`, borderRadius:6, padding:12, marginBottom:14}}>
+          <div style={{fontSize:12, color:T.amber, fontWeight:600, marginBottom:6}}>Save this token — it will not be shown again</div>
+          <div style={{display:'flex', gap:6, alignItems:'center'}}>
+            <code style={{flex:1, fontSize:11, padding:'7px 10px', background:T.bg3, border:`1px solid ${T.border2}`, borderRadius:4, color:T.text, wordBreak:'break-all', userSelect:'all'}}>{newToken}</code>
+            <button onClick={() => { navigator.clipboard.writeText(newToken); setNewToken(null) }}
+              style={{padding:'7px 14px', borderRadius:4, border:'none', background:T.amber, color:'#000', fontSize:11, fontWeight:600, cursor:'pointer', fontFamily:'inherit'}}>
+              Copy & dismiss
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Create form */}
+      <div style={{background:T.bg3, border:`1px solid ${T.border}`, borderRadius:6, padding:14, marginBottom:14}}>
+        <div style={{fontSize:11, color:T.text3, textTransform:'uppercase', letterSpacing:'0.05em', fontWeight:600, marginBottom:8}}>Create token</div>
+        <div style={{display:'flex', gap:8, alignItems:'flex-end', flexWrap:'wrap', marginBottom:8}}>
+          <div style={{flex:1, minWidth:200}}>
+            <div style={{fontSize:10, color:T.text3, marginBottom:4}}>Name</div>
+            <input value={createName} onChange={e=>setCreateName(e.target.value)}
+              placeholder="e.g. github-actions-md-pull"
+              style={{width:'100%', padding:'7px 10px', background:T.bg2, border:`1px solid ${T.border2}`, color:T.text, borderRadius:4, fontSize:12, fontFamily:'inherit', outline:'none', boxSizing:'border-box'}}/>
+          </div>
+          <button onClick={createToken} disabled={creating || createName.length < 3}
+            style={{padding:'7px 14px', borderRadius:4, border:'none', background: creating || createName.length < 3 ? T.bg4 : T.blue, color: creating || createName.length < 3 ? T.text3 : '#fff', fontSize:12, fontWeight:600, cursor: creating || createName.length < 3 ? 'default' : 'pointer', fontFamily:'inherit'}}>
+            {creating ? 'Creating…' : 'Create token'}
+          </button>
+        </div>
+        <div style={{display:'flex', gap:10, flexWrap:'wrap'}}>
+          {VALID_SCOPES.map(s => {
+            const checked = createScopes.includes(s.id)
+            return (
+              <label key={s.id} style={{display:'inline-flex', gap:6, alignItems:'center', fontSize:11, cursor:'pointer'}}>
+                <input type="checkbox" checked={checked}
+                  onChange={() => setCreateScopes(prev => prev.includes(s.id) ? prev.filter(x => x !== s.id) : [...prev, s.id])}/>
+                <span style={{color: checked ? T.text : T.text3}}>{s.label}</span>
+              </label>
+            )
+          })}
+        </div>
+      </div>
+
+      {error && <div style={{marginBottom:12, padding:'8px 12px', background:`${T.red}15`, border:`1px solid ${T.red}40`, borderRadius:6, color:T.red, fontSize:11}}>{error}</div>}
+
+      {/* List */}
+      {loading ? (
+        <div style={{fontSize:12, color:T.text3, padding:'8px 0'}}>Loading…</div>
+      ) : tokens.length === 0 ? (
+        <div style={{fontSize:11, color:T.text3, padding:'8px 0'}}>No service tokens yet.</div>
+      ) : (
+        <div style={{border:`1px solid ${T.border}`, borderRadius:6, overflow:'hidden'}}>
+          {tokens.map(t => (
+            <div key={t.id} style={{display:'grid', gridTemplateColumns:'1fr auto auto auto', gap:10, padding:'9px 12px', borderBottom:`1px solid ${T.border}`, fontSize:11, alignItems:'center', opacity: t.is_active ? 1 : 0.5}}>
+              <div>
+                <div style={{color:T.text, fontWeight:500}}>
+                  {t.name}
+                  {!t.is_active && <span style={{marginLeft:8, fontSize:9, padding:'1px 5px', borderRadius:3, background:`${T.red}22`, color:T.red, fontWeight:600}}>REVOKED</span>}
+                </div>
+                <div style={{fontSize:10, color:T.text3, marginTop:2}}>
+                  {t.scopes.join(', ')}
+                </div>
+              </div>
+              <div style={{fontSize:10, color:T.text3, textAlign:'right', minWidth:120}}>
+                <div>Created {fmtDate(t.created_at)}</div>
+                <div>{t.last_used_at ? `Used ${fmtDate(t.last_used_at)}` : 'Never used'}</div>
+              </div>
+              <div style={{fontSize:10, color:T.text3, fontFamily:'monospace'}}>
+                {t.last_used_ip || '—'}
+              </div>
+              <div>
+                {t.is_active && (
+                  <button onClick={() => revoke(t.id, t.name)}
+                    style={{padding:'4px 8px', borderRadius:3, border:'none', background:'transparent', color:T.red, fontSize:11, cursor:'pointer', fontFamily:'inherit'}}>
+                    Revoke
+                  </button>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// SUPPLIER INVOICES CARD (unchanged)
+// ═══════════════════════════════════════════════════════════════════
 interface SupplierInvoice { id: string; received_at: string; filename: string | null; supplier_name: string | null; status: string; invoice_number: string | null }
 
 function SupplierInvoiceCard() {
@@ -308,21 +608,32 @@ function SupplierInvoiceCard() {
   )
 }
 
-// ── Tab container ────────────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════
+// TAB CONTAINER
+// ═══════════════════════════════════════════════════════════════════
 export default function DataImportsTab() {
   return (
     <div style={{maxWidth:1100}}>
       <div style={{marginBottom:16}}>
         <h2 style={{margin:0, fontSize:18, fontWeight:600, color:T.text}}>Data imports</h2>
         <div style={{fontSize:12, color:T.text3, marginTop:4}}>
-          Upload files from external systems. Admin-only.
+          Manage forecasting target, file uploads, and external automation tokens. Admin-only.
         </div>
       </div>
 
-      <div style={{display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(400px, 1fr))', gap:16}}>
+      {/* Forecasting target — full width on its own row */}
+      <div style={{marginBottom:16}}>
+        <ForecastingTargetCard/>
+      </div>
+
+      {/* Job report + Supplier invoice — side by side */}
+      <div style={{display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(400px, 1fr))', gap:16, marginBottom:16}}>
         <JobReportCard/>
         <SupplierInvoiceCard/>
       </div>
+
+      {/* Service tokens — full width */}
+      <ServiceTokensCard/>
     </div>
   )
 }

@@ -1,0 +1,67 @@
+name: Mechanics Desk auto-pull
+
+# Cron times in UTC. AEST = UTC + 10 (no DST in QLD).
+# Target schedule: 8 AM, 10 AM, 12 PM, 2 PM, 4 PM AEST
+#   → 22:00 (prev day), 00:00, 02:00, 04:00, 06:00 UTC
+#
+# Schedules in GitHub Actions are "best effort" — they may run a few minutes
+# late under heavy GitHub load. A few minutes of delay is harmless here.
+on:
+  schedule:
+    - cron: '0 22 * * *'   # 8  AM AEST
+    - cron: '0 0  * * *'   # 10 AM AEST
+    - cron: '0 2  * * *'   # 12 PM AEST
+    - cron: '0 4  * * *'   # 2  PM AEST
+    - cron: '0 6  * * *'   # 4  PM AEST
+  # Manual trigger from the GitHub Actions UI for ad-hoc runs.
+  workflow_dispatch:
+
+# Concurrency guard — if a previous run is still in flight (slow Mechanics
+# Desk?), skip the new one rather than running two scrapes in parallel.
+concurrency:
+  group: mechanicdesk-pull
+  cancel-in-progress: false
+
+jobs:
+  pull:
+    name: Pull and ingest
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies (Playwright + tsx)
+        run: |
+          npm ci || npm install
+          npm install --no-save playwright tsx
+
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Run scraper
+        env:
+          MECHANICDESK_USERNAME: ${{ secrets.MECHANICDESK_USERNAME }}
+          MECHANICDESK_PASSWORD: ${{ secrets.MECHANICDESK_PASSWORD }}
+          JA_PORTAL_API_KEY:     ${{ secrets.JA_PORTAL_API_KEY }}
+          JA_PORTAL_BASE_URL:    ${{ secrets.JA_PORTAL_BASE_URL }}
+          SLACK_WEBHOOK_URL:     ${{ secrets.SLACK_WEBHOOK_URL }}
+          # Set to '1' to also notify Slack on success. Default: only alert on failure.
+          SLACK_NOTIFY_ON_SUCCESS: '0'
+        run: npx tsx scripts/pull-mechanicdesk-report.ts
+
+      - name: Upload debug artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mechanicdesk-pull-debug-${{ github.run_id }}
+          path: artifacts/
+          retention-days: 14
+          if-no-files-found: ignore
