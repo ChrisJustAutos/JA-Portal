@@ -9,20 +9,17 @@
 //
 // Match mode:
 //   1. Login to MD
-//   2. Read parsed_rows from the upload
-//   3. For each row, call /auto_workshop/resource_search
-//   4. Find exact SKU match → record match_results entry
-//   5. PATCH the upload with match_results, matched_count, unmatched_count
-//   6. Set status='matched' or 'failed'
+//   2. For each parsed_rows entry, search MD via resource_search
+//   3. Record match status (matched / not_found / ambiguous / error)
+//   4. PATCH the upload with match_results
 //
 // Push mode:
 //   1. Login to MD
 //   2. Find an open in-progress stocktake (or create a new one)
-//   3. For each matched row in match_results, POST /stocktake_sheets/{id}/new_item
-//   4. Update upload with pushed_count, push_completed_at, status='completed'
+//   3. For each matched row, POST /stocktake_sheets/{id}/new_item
+//   4. Update upload with pushed_count / status='completed'
 //   5. NEVER finishes/submits the stocktake — that's manual
 
-import { chromium } from 'playwright'
 import {
   loginToMechanicDesk,
   findStockBySku,
@@ -116,8 +113,6 @@ async function runMatch(client: MdClient, parsedRows: ParsedRow[]): Promise<void
   let matched = 0
   let unmatched = 0
 
-  // Process sequentially with small delay — MD's API is unauthenticated-rate-
-  // limited and we don't want to hammer it
   for (let i = 0; i < parsedRows.length; i++) {
     const row = parsedRows[i]
     if (i > 0 && i % 10 === 0) log(`  ${i}/${parsedRows.length} processed (matched=${matched}, unmatched=${unmatched})`)
@@ -170,7 +165,6 @@ async function runMatch(client: MdClient, parsedRows: ParsedRow[]): Promise<void
       unmatched++
     }
 
-    // Tiny delay between requests
     await new Promise(r => setTimeout(r, 100))
   }
 
@@ -184,6 +178,11 @@ async function runMatch(client: MdClient, parsedRows: ParsedRow[]): Promise<void
     match_results: results,
     github_run_id: process.env.GITHUB_RUN_ID || null,
   })
+
+  await notifySlack(
+    `Match complete: ${matched} matched, ${unmatched} unmatched (out of ${parsedRows.length} rows)`,
+    false,
+  )
 }
 
 // ── Push mode ─────────────────────────────────────────────────────────
@@ -193,7 +192,6 @@ async function runPush(client: MdClient, matchResults: MatchResultEntry[]): Prom
   if (matched.length === 0) throw new Error('No matched items to push')
   log(`Push starting: ${matched.length} items to add`)
 
-  // Step 1: find or create the target stocktake
   let stocktakeId: number
   let sheetId: number
   let wasCreated = false
@@ -224,7 +222,6 @@ async function runPush(client: MdClient, matchResults: MatchResultEntry[]): Prom
     mechanicdesk_stocktake_was_created: wasCreated,
   })
 
-  // Step 2: add each item
   let pushed = 0
   const errors: any[] = []
 
@@ -232,7 +229,6 @@ async function runPush(client: MdClient, matchResults: MatchResultEntry[]): Prom
     const row = matched[i]
     if (i > 0 && i % 10 === 0) {
       log(`  ${i}/${matched.length} pushed (errors=${errors.length})`)
-      // Periodically update the count so the user sees live progress
       await patchUpload({ pushed_count: pushed }).catch(() => undefined)
     }
 
@@ -268,7 +264,7 @@ async function runPush(client: MdClient, matchResults: MatchResultEntry[]): Prom
   })
 
   await notifySlack(
-    `${MODE === 'match' ? 'Match' : 'Push'} complete: ${pushed}/${matched.length} items added` +
+    `Push complete: ${pushed}/${matched.length} items added` +
     (errors.length > 0 ? ` · ${errors.length} errors` : '') +
     (wasCreated ? ` · created new stocktake ${stocktakeId}` : ` · used existing stocktake ${stocktakeId}`),
     errors.length > 0,
@@ -289,6 +285,13 @@ async function main(): Promise<void> {
   if (!wsId || !username || !password) {
     throw new Error('MECHANICDESK_WORKSHOP_ID/USERNAME/PASSWORD env vars required')
   }
+
+  // Dynamic import — playwright is only installed at runtime in the GH
+  // Action via `npm install --no-save playwright`. Static import would
+  // make `next build` fail because playwright isn't a main dependency.
+  log('Loading Playwright (dynamic import)…')
+  const playwright = await import('playwright')
+  const { chromium } = playwright
 
   log('Launching headless Chromium for login')
   const browser = await chromium.launch({ headless: true })
@@ -312,7 +315,6 @@ async function main(): Promise<void> {
     log(`FATAL: ${e?.message || e}`)
     if (e?.stack) log(e.stack)
 
-    // Mark as failed so the UI doesn't poll forever
     try {
       await patchUpload({
         status: 'failed',

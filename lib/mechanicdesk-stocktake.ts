@@ -1,26 +1,20 @@
 // lib/mechanicdesk-stocktake.ts
 //
-// MechanicsDesk stocktake API client — used for both DRY-RUN MATCHING
-// (called from Vercel functions) and PUSH (called from GitHub Actions
-// Playwright worker).
+// MechanicsDesk stocktake API client. Used by the GH Actions worker
+// (scripts/run-mechanicdesk-stocktake.ts) — never called from Vercel
+// serverless functions.
 //
-// Flow:
-//   1. Login via Playwright → grab session cookies
-//   2. Use cookies with plain fetch() for everything else (much faster
-//      than driving the DOM, and avoids Playwright's "Download is starting"
-//      machinery that bit us with the job report flow)
+// IMPORTANT: We deliberately avoid statically importing 'playwright' so
+// that `next build` doesn't try to type-check or bundle it. Playwright
+// is only available inside the GH Action, where it's installed at run
+// time via `npm install --no-save playwright`.
 //
-// Endpoints discovered via reconnaissance (see scripts/recon-mechanicdesk-stocktake.ts):
+// Endpoints discovered via reconnaissance:
 //   GET    /auto_workshop/resource_search?query=X
 //   GET    /stocktakes
 //   GET    /stocktakes/{id}
 //   POST   /stocktakes                                    (create new)
 //   POST   /stocktake_sheets/{sheet_id}/new_item          (add item ⭐)
-//
-// Auth:
-//   POST /session  with body {auto_workshop_id, employee_username, password, remembered}
-
-import type { Browser } from 'playwright'
 
 const MD_BASE = 'https://www.mechanicdesk.com.au'
 const USER_AGENT =
@@ -61,15 +55,15 @@ export interface MdStocktakeSheet {
   name: string
   finished: boolean
   deleted: boolean
-  status: string  // 'in progress' | 'finished'
+  status: string
   stocktake_items: MdStocktakeItem[]
   notes: any[]
 }
 
 export interface MdStocktakeItem {
   id: number
-  count: number       // counted qty (from user)
-  quantity: number    // system qty at time of count
+  count: number
+  quantity: number
   total_value: number
   difference_amount: number
   counted: boolean
@@ -85,8 +79,8 @@ export interface MdStocktakeItem {
 export interface MdStocktake {
   id: number
   name: string
-  time: string                   // ISO timestamp
-  status: string                 // 'in progress' | 'finished'
+  time: string
+  status: string
   finished: boolean
   deleted: boolean
   remaining_stocks_decision: string
@@ -95,15 +89,12 @@ export interface MdStocktake {
   notes: any[]
 }
 
-// Caller passes in a context object containing the session cookies. This way
-// the same client can be used after a Playwright login (push worker) OR after
-// any other cookie-grabbing mechanism we might add.
 export interface MdClient {
   cookieHeader: string
-  csrfToken?: string  // set after first request that returns it
+  csrfToken?: string
 }
 
-// ── Login (via Playwright) ──────────────────────────────────────────────
+// ── Login (via dynamically-imported Playwright) ─────────────────────────
 
 export interface MdLoginResult {
   client: MdClient
@@ -114,9 +105,14 @@ export interface MdLoginResult {
  * Log into MD using Playwright (a real browser is needed to handle the
  * login form's CSRF token + redirects). Returns a client with cookies
  * baked in for subsequent fetch() calls.
+ *
+ * Caller passes in an already-launched Playwright Browser instance. We
+ * type it as `any` because we don't want to import playwright statically
+ * (it's not in the main app's dependencies — only installed at runtime
+ * inside the GH Actions worker).
  */
 export async function loginToMechanicDesk(
-  browser: Browser,
+  browser: any,
   workshopId: string,
   username: string,
   password: string,
@@ -129,12 +125,10 @@ export async function loginToMechanicDesk(
 
   await page.goto(`${MD_BASE}/auto_workshop/login`, { waitUntil: 'domcontentloaded', timeout: 30000 })
 
-  // Find + fill the login form (selectors learned from recon)
   const workshopInput = await page.$('input[name*="workshop" i], input#workshop_id, input[placeholder*="Workshop" i]')
   if (workshopInput) {
     await workshopInput.fill(workshopId)
   } else {
-    // Positional fallback: first text input
     const fallback = await page.$('input[type="text"]:not([disabled])')
     if (!fallback) throw new Error('Could not find workshop ID field')
     await fallback.fill(workshopId)
@@ -157,15 +151,12 @@ export async function loginToMechanicDesk(
   if (!submit) throw new Error('Could not find submit button')
   await submit.click()
 
-  // Wait for password field to detach (login success signal)
   await page.waitForSelector('input[type="password"]', { state: 'detached', timeout: 30000 })
   await page.waitForLoadState('domcontentloaded', { timeout: 10000 }).catch(() => undefined)
 
   const cookies = await context.cookies(MD_BASE)
   if (cookies.length === 0) throw new Error('No cookies after login — session not established')
 
-  // Try to grab the CSRF token from the page meta tag. POST requests need
-  // this in the X-CSRF-Token header.
   const csrfToken = await page.evaluate(() => {
     const meta = document.querySelector('meta[name="csrf-token"]')
     return meta?.getAttribute('content') || null
@@ -175,10 +166,10 @@ export async function loginToMechanicDesk(
 
   return {
     client: {
-      cookieHeader: cookies.map(c => `${c.name}=${c.value}`).join('; '),
+      cookieHeader: cookies.map((c: any) => `${c.name}=${c.value}`).join('; '),
       csrfToken: csrfToken || undefined,
     },
-    cookies: cookies.map(c => ({ name: c.name, value: c.value })),
+    cookies: cookies.map((c: any) => ({ name: c.name, value: c.value })),
   }
 }
 
@@ -230,13 +221,10 @@ export async function searchProducts(client: MdClient, query: string): Promise<M
 }
 
 /**
- * Find a stock by exact SKU (stock_number) match. Searches and then filters
- * down to entries whose stock_number matches (case-insensitive, trimmed).
- *
- * Returns:
+ * Find a stock by exact SKU match. Returns:
  *   { kind: 'matched', stock }   — exactly one match
- *   { kind: 'not_found' }         — search returned no exact match
- *   { kind: 'ambiguous', candidates } — multiple stocks share the SKU (rare but possible)
+ *   { kind: 'not_found' }         — no exact match
+ *   { kind: 'ambiguous', candidates } — multiple stocks share the SKU
  */
 export interface SkuMatchResult {
   kind: 'matched' | 'not_found' | 'ambiguous'
@@ -258,7 +246,7 @@ export async function findStockBySku(client: MdClient, sku: string): Promise<Sku
   return { kind: 'ambiguous', candidates: exactMatches }
 }
 
-/** List all stocktakes (filter by status='in progress' to find an active one). */
+/** List all stocktakes. */
 export async function listStocktakes(client: MdClient): Promise<MdStocktake[]> {
   return mdFetch<MdStocktake[]>(client, '/stocktakes')
 }
@@ -267,26 +255,16 @@ export async function listStocktakes(client: MdClient): Promise<MdStocktake[]> {
 export async function findOpenStocktake(client: MdClient): Promise<MdStocktake | null> {
   const all = await listStocktakes(client)
   const open = all.filter(s => s.status === 'in progress' && !s.deleted && !s.finished)
-  // Sort by time descending (most recent first) and return that one
   open.sort((a, b) => (b.time || '').localeCompare(a.time || ''))
   return open[0] || null
 }
 
-/** Read a single stocktake by ID, including its sheets and items. */
+/** Read a single stocktake by ID. */
 export async function getStocktake(client: MdClient, id: number | string): Promise<MdStocktake> {
   return mdFetch<MdStocktake>(client, `/stocktakes/${id}`)
 }
 
-/**
- * Create a new stocktake. Returns the newly-created one with its first sheet
- * already initialised (Sheet 1).
- *
- * Decision options match what the MD wizard offers:
- *   remaining_stocks_decision: 'keep_system_quantity' | 'set_to_zero'
- *
- * We default to 'keep_system_quantity' — safer (counted items get updated,
- * everything else stays as-is rather than zeroed).
- */
+/** Create a new stocktake. Returns the created stocktake with Sheet 1 initialised. */
 export async function createStocktake(
   client: MdClient,
   name: string,
@@ -321,8 +299,6 @@ export async function createStocktake(
  *
  * The server overrides quantity / allocated_quantity with the real
  * system-side values, so we send 0 for both.
- *
- * Returns the updated sheet including the new item.
  */
 export interface AddItemInput {
   stockId: number
