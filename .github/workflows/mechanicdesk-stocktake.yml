@@ -6,6 +6,16 @@ name: Stocktake — Mechanics Desk worker
 # Payload shape:
 #   { event_type: "stocktake-match" | "stocktake-push",
 #     client_payload: { upload_id: "<uuid>", mode: "match" | "push" } }
+#
+# Performance:
+#   We use the official Playwright Docker image which has Chromium
+#   and all required OS libs pre-installed. This eliminates the
+#   ~60-90s `npx playwright install --with-deps chromium` step that
+#   used to run on every dispatch. Total saving across a match+push
+#   cycle is ~3-4 minutes.
+#
+#   When upgrading Playwright: bump the image tag below to match the
+#   new version (e.g. v1.60.0-noble).
 
 on:
   repository_dispatch:
@@ -30,24 +40,15 @@ jobs:
     name: ${{ github.event.client_payload.mode || github.event.inputs.mode }} · ${{ github.event.client_payload.upload_id || github.event.inputs.upload_id }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    container:
+      image: mcr.microsoft.com/playwright:v1.59.1-noble
 
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
 
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-          cache: 'npm'
-
       - name: Install dependencies
-        run: |
-          npm ci || npm install
-          npm install --no-save playwright tsx
-
-      - name: Install Chromium
-        run: npx playwright install --with-deps chromium
+        run: npm ci || npm install
 
       - name: Run worker
         env:
