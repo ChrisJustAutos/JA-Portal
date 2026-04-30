@@ -1,7 +1,9 @@
 // pages/api/stocktake/[id].ts
 //
-// GET: read upload state (admin/manager users OR service token)
-// PATCH: update fields (service token only — used by GH Action worker)
+// GET:    read upload state (admin/manager users OR service token)
+// PATCH:  update fields (service token only — used by GH Action worker)
+// DELETE: delete the upload row (admin/manager users only) — DB only,
+//         does NOT touch Mechanics Desk
 
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { createClient } from '@supabase/supabase-js'
@@ -23,7 +25,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   if (req.method === 'GET') return handleGet(req, res, id)
   if (req.method === 'PATCH') return handlePatch(req, res, id)
-  res.setHeader('Allow', 'GET, PATCH')
+  if (req.method === 'DELETE') return handleDelete(req, res, id)
+  res.setHeader('Allow', 'GET, PATCH, DELETE')
   return res.status(405).json({ error: 'Method not allowed' })
 }
 
@@ -86,4 +89,42 @@ async function handlePatch(req: NextApiRequest, res: NextApiResponse, id: string
   if (error) return res.status(500).json({ error: error.message })
   if (!data) return res.status(404).json({ error: 'Not found' })
   return res.status(200).json({ ok: true, upload_id: data.id, status: data.status })
+}
+
+async function handleDelete(req: NextApiRequest, res: NextApiResponse, id: string) {
+  // User-only — never service token. Deletion is a human action.
+  const user = await getCurrentUser(req)
+  if (!user) return res.status(401).json({ error: 'Unauthorised' })
+  if (!roleHasPermission(user.role, 'edit:stocktakes')) {
+    return res.status(403).json({ error: 'Forbidden — manager or admin only' })
+  }
+
+  // Refuse to delete a row that's actively running. The GH Action worker
+  // would silently fail on its next PATCH and leave the user wondering.
+  const existing = await sb()
+    .from('stocktake_uploads')
+    .select('id, status, filename')
+    .eq('id', id)
+    .maybeSingle()
+  if (existing.error) return res.status(500).json({ error: existing.error.message })
+  if (!existing.data) return res.status(404).json({ error: 'Not found' })
+
+  if (existing.data.status === 'matching' || existing.data.status === 'pushing') {
+    return res.status(409).json({
+      error: `Cannot delete while ${existing.data.status} — wait for the GitHub Action to finish or fail first.`,
+    })
+  }
+
+  const { error } = await sb()
+    .from('stocktake_uploads')
+    .delete()
+    .eq('id', id)
+  if (error) return res.status(500).json({ error: error.message })
+
+  return res.status(200).json({
+    ok: true,
+    deleted_id: id,
+    deleted_filename: existing.data.filename,
+    note: 'Portal record removed. Mechanics Desk stocktake (if any) was NOT touched — delete it manually in MD if needed.',
+  })
 }

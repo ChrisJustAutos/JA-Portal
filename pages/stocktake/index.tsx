@@ -3,6 +3,7 @@
 // Stocktake landing page:
 //   • Drag-and-drop XLSX upload card at the top
 //   • List of past uploads with status, click into one to see preview/push
+//   • Per-row Delete button (admin/manager) — DB only, never touches MD
 //
 // Workflow:
 //   1. Drop XLSX → POST /api/stocktake/upload → redirect to /stocktake/{id}
@@ -10,7 +11,6 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react'
 import Head from 'next/head'
-import Link from 'next/link'
 import { useRouter } from 'next/router'
 import PortalSidebar from '../../lib/PortalSidebar'
 import { requirePageAuth } from '../../lib/authServer'
@@ -70,6 +70,7 @@ export default function StocktakeIndexPage({ user }: { user: SessionUser }) {
   const [uploads, setUploads] = useState<UploadRow[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  const [deletingId, setDeletingId] = useState<string | null>(null)
 
   const canEdit = roleHasPermission(user.role, 'edit:stocktakes')
 
@@ -84,7 +85,36 @@ export default function StocktakeIndexPage({ user }: { user: SessionUser }) {
     finally { setLoading(false) }
   }
 
+  async function deleteUpload(u: UploadRow) {
+    if (deletingId) return
+    if (u.status === 'matching' || u.status === 'pushing') {
+      setError(`Cannot delete "${u.filename}" while ${u.status} — wait for the GitHub Action to finish or fail first.`)
+      return
+    }
+    const mdNote = u.mechanicdesk_stocktake_id
+      ? `\n\nThe Mechanics Desk stocktake (${u.mechanicdesk_stocktake_id}) will NOT be deleted — only the portal record. Delete it manually in MD if needed.`
+      : ''
+    if (!confirm(`Delete portal record for "${u.filename}"?${mdNote}\n\nThis cannot be undone.`)) return
+    setDeletingId(u.id); setError('')
+    try {
+      const r = await fetch(`/api/stocktake/${u.id}`, { method: 'DELETE' })
+      const d = await r.json()
+      if (!r.ok) throw new Error(d.error || 'Delete failed')
+      // Optimistic local removal so the UI updates immediately
+      setUploads(prev => prev.filter(x => x.id !== u.id))
+    } catch (e: any) {
+      setError(e.message)
+    } finally {
+      setDeletingId(null)
+    }
+  }
+
   useEffect(() => { load() }, [])
+
+  // Grid template — adds a 70px column for the Delete button when the user can edit
+  const gridCols = canEdit
+    ? '1fr 110px 110px 110px 110px 130px 70px'
+    : '1fr 110px 110px 110px 110px 130px'
 
   return (
     <>
@@ -121,33 +151,55 @@ export default function StocktakeIndexPage({ user }: { user: SessionUser }) {
               </div>
             ) : (
               <div style={{background:T.bg2, border:`1px solid ${T.border}`, borderRadius:10, overflow:'hidden'}}>
-                <div style={{display:'grid', gridTemplateColumns:'1fr 110px 110px 110px 110px 130px', gap:12, padding:'10px 14px', borderBottom:`1px solid ${T.border}`, background:T.bg3, fontSize:10, color:T.text3, textTransform:'uppercase', letterSpacing:'0.05em', fontWeight:600}}>
+                <div style={{display:'grid', gridTemplateColumns:gridCols, gap:12, padding:'10px 14px', borderBottom:`1px solid ${T.border}`, background:T.bg3, fontSize:10, color:T.text3, textTransform:'uppercase', letterSpacing:'0.05em', fontWeight:600}}>
                   <div>File</div>
                   <div>Status</div>
                   <div style={{textAlign:'right'}}>Rows</div>
                   <div style={{textAlign:'right'}}>Matched</div>
                   <div style={{textAlign:'right'}}>Pushed</div>
                   <div>Uploaded</div>
+                  {canEdit && <div></div>}
                 </div>
-                {uploads.map(u => (
-                  <Link key={u.id} href={`/stocktake/${u.id}`} legacyBehavior>
-                    <a style={{display:'grid', gridTemplateColumns:'1fr 110px 110px 110px 110px 130px', gap:12, padding:'10px 14px', borderBottom:`1px solid ${T.border}`, fontSize:12, alignItems:'center', textDecoration:'none', color:'inherit', cursor:'pointer'}}>
-                      <div style={{overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap'}}>
+                {uploads.map(u => {
+                  const isDeleting = deletingId === u.id
+                  const cannotDelete = u.status === 'matching' || u.status === 'pushing'
+                  return (
+                    <div key={u.id} style={{display:'grid', gridTemplateColumns:gridCols, gap:12, padding:'10px 14px', borderBottom:`1px solid ${T.border}`, fontSize:12, alignItems:'center', opacity: isDeleting ? 0.4 : 1, transition:'opacity 0.15s'}}>
+                      <div
+                        onClick={() => router.push(`/stocktake/${u.id}`)}
+                        style={{overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', cursor:'pointer'}}>
                         <div style={{color:T.text}}>{u.filename}</div>
                         {u.uploaded_by_name && <div style={{fontSize:10, color:T.text3, marginTop:2}}>by {u.uploaded_by_name}</div>}
                       </div>
-                      <div><StatusBadge status={u.status}/></div>
-                      <div style={{textAlign:'right', color:T.text2, fontVariantNumeric:'tabular-nums'}}>{u.total_rows ?? '—'}</div>
-                      <div style={{textAlign:'right', color:u.matched_count != null ? T.text2 : T.text3, fontVariantNumeric:'tabular-nums'}}>
+                      <div onClick={() => router.push(`/stocktake/${u.id}`)} style={{cursor:'pointer'}}><StatusBadge status={u.status}/></div>
+                      <div onClick={() => router.push(`/stocktake/${u.id}`)} style={{textAlign:'right', color:T.text2, fontVariantNumeric:'tabular-nums', cursor:'pointer'}}>{u.total_rows ?? '—'}</div>
+                      <div onClick={() => router.push(`/stocktake/${u.id}`)} style={{textAlign:'right', color:u.matched_count != null ? T.text2 : T.text3, fontVariantNumeric:'tabular-nums', cursor:'pointer'}}>
                         {u.matched_count != null ? `${u.matched_count}/${(u.matched_count || 0) + (u.unmatched_count || 0)}` : '—'}
                       </div>
-                      <div style={{textAlign:'right', color:u.pushed_count != null ? T.text2 : T.text3, fontVariantNumeric:'tabular-nums'}}>
+                      <div onClick={() => router.push(`/stocktake/${u.id}`)} style={{textAlign:'right', color:u.pushed_count != null ? T.text2 : T.text3, fontVariantNumeric:'tabular-nums', cursor:'pointer'}}>
                         {u.pushed_count != null ? u.pushed_count : '—'}
                       </div>
-                      <div style={{color:T.text3, fontSize:11}}>{fmtRelative(u.uploaded_at)}</div>
-                    </a>
-                  </Link>
-                ))}
+                      <div onClick={() => router.push(`/stocktake/${u.id}`)} style={{color:T.text3, fontSize:11, cursor:'pointer'}}>{fmtRelative(u.uploaded_at)}</div>
+                      {canEdit && (
+                        <div style={{textAlign:'right'}}>
+                          <button
+                            onClick={(e) => { e.stopPropagation(); deleteUpload(u) }}
+                            disabled={isDeleting || cannotDelete}
+                            title={cannotDelete ? `Cannot delete while ${u.status}` : 'Delete portal record (does not delete MD stocktake)'}
+                            style={{
+                              padding:'4px 10px', borderRadius:4, fontSize:11, fontFamily:'inherit',
+                              background:'transparent',
+                              color: (isDeleting || cannotDelete) ? T.text3 : T.red,
+                              border: `1px solid ${(isDeleting || cannotDelete) ? T.border2 : T.red + '40'}`,
+                              cursor: (isDeleting || cannotDelete) ? 'default' : 'pointer',
+                            }}>
+                            {isDeleting ? '…' : 'Delete'}
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  )
+                })}
               </div>
             )}
           </div>

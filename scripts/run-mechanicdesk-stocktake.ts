@@ -12,10 +12,10 @@
 //
 // Push mode:
 //   1. Login to MD
-//   2. Find an open in-progress stocktake (or create a new one and
-//      re-fetch it to ensure stocktake_sheets is populated — POST
-//      response sometimes returns the new stocktake without its
-//      auto-created sheet)
+//   2. Find an open in-progress stocktake (or create a new one) — and
+//      ALWAYS re-fetch by ID before reading stocktake_sheets, because
+//      the GET /stocktakes listing endpoint returns stocktakes without
+//      sheets populated.
 //   3. For each matched row, POST /stocktake_sheets/{id}/new_item
 //   4. Update upload with pushed_count / status='completed'
 //   5. NEVER finishes/submits the stocktake — that's manual
@@ -28,6 +28,7 @@ import {
   getStocktake,
   addItemToSheet,
   type MdClient,
+  type MdStocktake,
 } from '../lib/mechanicdesk-stocktake'
 
 interface ParsedRow {
@@ -189,11 +190,64 @@ async function runMatch(client: MdClient, parsedRows: ParsedRow[]): Promise<void
 // ── Push mode ─────────────────────────────────────────────────────────
 
 /**
+ * Pick the best sheet from a stocktake's sheet list. Preference order:
+ *   1. Sheet with status === 'in progress' AND not deleted
+ *   2. Any sheet that's not finished AND not deleted
+ *   3. Any sheet that's not deleted
+ * Returns null if no usable sheet exists.
+ *
+ * Tolerant of stocktake_sheets being undefined / null (which the listing
+ * endpoint sometimes returns) — in that case returns null and the caller
+ * should re-fetch with retry.
+ */
+function pickUsableSheet(stocktake: MdStocktake): { id: number; status: string; finished: boolean } | null {
+  const sheets = stocktake.stocktake_sheets
+  if (!Array.isArray(sheets) || sheets.length === 0) return null
+
+  const inProgress = sheets.find(s => s && !s.deleted && s.status === 'in progress')
+  if (inProgress) return inProgress
+
+  const notFinished = sheets.find(s => s && !s.deleted && !s.finished)
+  if (notFinished) return notFinished
+
+  const anyNotDeleted = sheets.find(s => s && !s.deleted)
+  return anyNotDeleted || null
+}
+
+/**
+ * Re-fetch a stocktake by ID with retries, looking for at least one
+ * non-deleted sheet. The GET /stocktakes listing endpoint returns
+ * stocktakes without their sheets populated, AND the POST /stocktakes
+ * response sometimes returns the new stocktake with empty
+ * stocktake_sheets even though Sheet 1 was created server-side.
+ */
+async function fetchStocktakeWithSheet(
+  client: MdClient,
+  stocktakeId: number,
+  attempts = 5,
+): Promise<MdStocktake> {
+  let last: MdStocktake | null = null
+  for (let i = 1; i <= attempts; i++) {
+    last = await getStocktake(client, stocktakeId)
+    const sheetCount = Array.isArray(last.stocktake_sheets) ? last.stocktake_sheets.length : 'undefined'
+    log(`  Attempt ${i}: stocktake ${stocktakeId} returned ${sheetCount} sheet(s)`)
+    if (Array.isArray(last.stocktake_sheets) && last.stocktake_sheets.some(s => s && !s.deleted)) {
+      return last
+    }
+    if (i < attempts) {
+      log(`  No usable sheet yet — waiting 1s before retry`)
+      await new Promise(r => setTimeout(r, 1000))
+    }
+  }
+  // Return whatever we got last so the caller can produce a useful error message
+  if (last) return last
+  throw new Error(`Failed to fetch stocktake ${stocktakeId} after ${attempts} attempts`)
+}
+
+/**
  * Resolve the target sheet to write items to. Either uses an existing
- * in-progress stocktake or creates a new one. Always re-fetches the
- * stocktake by ID after creation so we can read the auto-generated
- * sheet — the POST response sometimes returns an empty stocktake_sheets
- * array even though the sheet was created server-side.
+ * in-progress stocktake or creates a new one. ALWAYS re-fetches by ID
+ * before reading stocktake_sheets — the listing endpoint omits them.
  */
 async function resolveTargetSheet(client: MdClient): Promise<{
   stocktakeId: number
@@ -201,31 +255,35 @@ async function resolveTargetSheet(client: MdClient): Promise<{
   wasCreated: boolean
 }> {
   log('Looking for an open in-progress stocktake…')
-  const openST = await findOpenStocktake(client)
+  const openSummary = await findOpenStocktake(client)
 
-  if (openST) {
-    log(`Using existing stocktake ${openST.id} ("${openST.name}")`)
-    let sheet = openST.stocktake_sheets.find(s => !s.deleted && (s.status === 'in progress' || !s.finished))
-    if (!sheet) {
-      log(`  No in-progress sheet in listing — re-fetching stocktake ${openST.id}`)
-      const fresh = await getStocktake(client, openST.id)
-      sheet = fresh.stocktake_sheets.find(s => !s.deleted && (s.status === 'in progress' || !s.finished))
-      if (!sheet) {
-        sheet = fresh.stocktake_sheets.find(s => !s.deleted)
-        if (!sheet) {
-          throw new Error(`Stocktake ${openST.id} has no usable sheet (sheets: ${JSON.stringify(fresh.stocktake_sheets.map(s => ({ id: s.id, status: s.status, deleted: s.deleted })))})`)
-        }
-        log(`  Using non-deleted sheet ${sheet.id} (status="${sheet.status}")`)
-      }
+  if (openSummary) {
+    log(`Found existing stocktake ${openSummary.id} ("${openSummary.name}") in listing — re-fetching for sheets`)
+    // Listing endpoint returns the stocktake without stocktake_sheets populated,
+    // so we must always re-fetch. Use the same retry helper as the create path.
+    let fresh: MdStocktake
+    try {
+      fresh = await fetchStocktakeWithSheet(client, openSummary.id)
+    } catch (e: any) {
+      throw new Error(`Could not load sheets for stocktake ${openSummary.id}: ${e?.message || e}`)
     }
-    return { stocktakeId: openST.id, sheetId: sheet.id, wasCreated: false }
+    const sheet = pickUsableSheet(fresh)
+    if (!sheet) {
+      const sheetDebug = Array.isArray(fresh.stocktake_sheets)
+        ? JSON.stringify(fresh.stocktake_sheets.map(s => ({ id: s?.id, status: s?.status, deleted: s?.deleted, finished: s?.finished })))
+        : 'undefined'
+      throw new Error(`Stocktake ${openSummary.id} has no usable sheet (sheets: ${sheetDebug})`)
+    }
+    log(`  Using sheet ${sheet.id} (status="${sheet.status}", finished=${sheet.finished})`)
+    return { stocktakeId: openSummary.id, sheetId: sheet.id, wasCreated: false }
   }
 
   // Create a new stocktake
   const name = `JA Portal Upload ${new Date().toISOString().slice(0, 10)}`
   log(`No open stocktake — creating new "${name}"`)
   const created = await createStocktake(client, name)
-  log(`  Created stocktake ${created.id} (sheets in POST response: ${created.stocktake_sheets?.length || 0})`)
+  const initialSheetCount = Array.isArray(created.stocktake_sheets) ? created.stocktake_sheets.length : 'undefined'
+  log(`  Created stocktake ${created.id} (sheets in POST response: ${initialSheetCount})`)
 
   // Persist immediately so we can recover if downstream fails
   await patchUpload({
@@ -235,25 +293,16 @@ async function resolveTargetSheet(client: MdClient): Promise<{
 
   // Re-fetch with retry until the auto-created sheet appears
   log(`  Re-fetching stocktake ${created.id} to read its sheet…`)
-  let sheetId: number | null = null
-  for (let attempt = 1; attempt <= 5; attempt++) {
-    const fresh = await getStocktake(client, created.id)
-    log(`  Attempt ${attempt}: ${fresh.stocktake_sheets?.length || 0} sheet(s) returned`)
-    const sheet = fresh.stocktake_sheets?.find(s => !s.deleted)
-    if (sheet) {
-      sheetId = sheet.id
-      break
-    }
-    if (attempt < 5) {
-      log(`  No sheet yet — waiting 1s before retry`)
-      await new Promise(r => setTimeout(r, 1000))
-    }
+  const fresh = await fetchStocktakeWithSheet(client, created.id)
+  const sheet = pickUsableSheet(fresh)
+  if (!sheet) {
+    const sheetDebug = Array.isArray(fresh.stocktake_sheets)
+      ? JSON.stringify(fresh.stocktake_sheets.map(s => ({ id: s?.id, status: s?.status, deleted: s?.deleted })))
+      : 'undefined'
+    throw new Error(`Stocktake ${created.id} was created but no usable sheet appeared (sheets: ${sheetDebug}). Check MD UI directly — the stocktake may need manual intervention.`)
   }
-  if (sheetId == null) {
-    throw new Error(`Stocktake ${created.id} was created but no sheet appeared after 5 retries. Check MD UI directly — the stocktake may need manual intervention.`)
-  }
-  log(`  Resolved sheet ${sheetId}`)
-  return { stocktakeId: created.id, sheetId, wasCreated: true }
+  log(`  Resolved sheet ${sheet.id}`)
+  return { stocktakeId: created.id, sheetId: sheet.id, wasCreated: true }
 }
 
 async function runPush(client: MdClient, matchResults: MatchResultEntry[]): Promise<void> {

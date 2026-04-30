@@ -78,6 +78,7 @@ export default function StocktakeDetailPage({ user }: { user: SessionUser }) {
   const [upload, setUpload] = useState<Upload | null>(null)
   const [error, setError] = useState('')
   const [actionInFlight, setActionInFlight] = useState(false)
+  const [deleting, setDeleting] = useState(false)
   const [filter, setFilter] = useState<'all' | 'matched' | 'unmatched'>('all')
   const [sheetFilter, setSheetFilter] = useState<string>('all')
 
@@ -128,6 +129,25 @@ export default function StocktakeDetailPage({ user }: { user: SessionUser }) {
       await load()
     } catch (e: any) { setError(e.message) }
     finally { setActionInFlight(false) }
+  }
+
+  async function runDelete() {
+    if (!id || deleting) return
+    if (!upload) return
+    const mdNote = upload.mechanicdesk_stocktake_id
+      ? `\n\nThe Mechanics Desk stocktake (${upload.mechanicdesk_stocktake_id}) will NOT be deleted — only the portal record. Delete it manually in MD if needed.`
+      : ''
+    if (!confirm(`Delete portal record for "${upload.filename}"?${mdNote}\n\nThis cannot be undone.`)) return
+    setDeleting(true); setError('')
+    try {
+      const r = await fetch(`/api/stocktake/${id}`, { method: 'DELETE' })
+      const d = await r.json()
+      if (!r.ok) throw new Error(d.error || 'Delete failed')
+      router.push('/stocktake')
+    } catch (e: any) {
+      setError(e.message)
+      setDeleting(false)
+    }
   }
 
   // Multi-tab support: detect when this upload spans multiple sheets
@@ -199,6 +219,21 @@ export default function StocktakeDetailPage({ user }: { user: SessionUser }) {
                      style={{fontSize:11, color:T.blue, textDecoration:'none', padding:'3px 8px', border:`1px solid ${T.blue}40`, borderRadius:4}}>
                     Open in MD ↗
                   </a>
+                )}
+                {canEdit && upload.status !== 'matching' && upload.status !== 'pushing' && (
+                  <button
+                    onClick={runDelete}
+                    disabled={deleting}
+                    title="Delete portal record (does not delete the Mechanics Desk stocktake)"
+                    style={{
+                      marginLeft:'auto',
+                      padding:'4px 10px', borderRadius:4, fontSize:11, fontFamily:'inherit',
+                      background:'transparent', color: deleting ? T.text3 : T.red,
+                      border:`1px solid ${deleting ? T.border2 : T.red}40`,
+                      cursor: deleting ? 'default' : 'pointer',
+                    }}>
+                    {deleting ? 'Deleting…' : 'Delete'}
+                  </button>
                 )}
               </div>
 
