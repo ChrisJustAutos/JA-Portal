@@ -17,6 +17,8 @@
 //      the GET /stocktakes listing endpoint returns stocktakes without
 //      sheets populated.
 //   3. For each matched row, POST /stocktake_sheets/{id}/new_item
+//      with both the counted quantity AND the system on-hand snapshot
+//      (md_current_qty) so MD's QTY column shows the right baseline.
 //   4. Update upload with pushed_count / status='completed'
 //   5. NEVER finishes/submits the stocktake — that's manual
 
@@ -310,6 +312,12 @@ async function runPush(client: MdClient, matchResults: MatchResultEntry[]): Prom
   if (matched.length === 0) throw new Error('No matched items to push')
   log(`Push starting: ${matched.length} items to add`)
 
+  // Diagnostic: how many rows have a known system QTY snapshot?
+  const withQty = matched.filter(r => typeof r.md_current_qty === 'number').length
+  if (withQty < matched.length) {
+    log(`  Note: ${matched.length - withQty}/${matched.length} matched rows have no md_current_qty — those will go in with QTY=0 (variance will appear large in MD)`)
+  }
+
   const { stocktakeId, sheetId, wasCreated } = await resolveTargetSheet(client)
   log(`Target: stocktake_id=${stocktakeId}, sheet_id=${sheetId}, created_new=${wasCreated}`)
 
@@ -335,6 +343,7 @@ async function runPush(client: MdClient, matchResults: MatchResultEntry[]): Prom
         stockNumber: row.md_stock_number || row.sku,
         stockName: row.md_stock_name || '',
         count: row.qty,
+        currentQty: row.md_current_qty,
       })
       pushed++
     } catch (e: any) {

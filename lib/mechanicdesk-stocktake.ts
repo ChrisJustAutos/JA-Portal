@@ -290,21 +290,30 @@ export async function createStocktake(
  *     "item": {
  *       "stock_id": 23213830,
  *       "description": "15472-52010 - Gasket Turbo Oil",
- *       "count": 4,
+ *       "count": 4,            // ← what was counted (TOTAL COUNT in MD UI)
  *       "counted": true,
- *       "quantity": 0,
+ *       "quantity": 12,        // ← system on-hand snapshot (QTY in MD UI)
  *       "allocated_quantity": 0
  *     }
  *   }
  *
- * The server overrides quantity / allocated_quantity with the real
- * system-side values, so we send 0 for both.
+ * NOTE on quantity: MD does NOT auto-populate this from the stock record.
+ * Whatever we send becomes the "system QTY" snapshot and is what MD uses
+ * to compute the variance (count - quantity). We send the value from
+ * `findStockBySku` (the `available` field) so variance reports correctly.
+ * If we don't have it, we fall back to 0 and MD will treat the count as
+ * pure addition (variance = full count).
  */
 export interface AddItemInput {
   stockId: number
   stockNumber: string
   stockName: string
   count: number
+  /** System on-hand qty at the time of the count, from MD's stock record.
+   *  Captured during the match step via findStockBySku → stock.available. */
+  currentQty?: number
+  /** Allocated/reserved qty. Defaults to 0. We don't currently capture this. */
+  allocatedQty?: number
 }
 
 export async function addItemToSheet(
@@ -313,6 +322,8 @@ export async function addItemToSheet(
   item: AddItemInput,
 ): Promise<MdStocktakeSheet> {
   const description = `${item.stockNumber} - ${item.stockName}`.trim()
+  const quantity = typeof item.currentQty === 'number' && isFinite(item.currentQty) ? item.currentQty : 0
+  const allocated_quantity = typeof item.allocatedQty === 'number' && isFinite(item.allocatedQty) ? item.allocatedQty : 0
   const body = {
     id: Number(sheetId),
     item: {
@@ -320,8 +331,8 @@ export async function addItemToSheet(
       description,
       count: item.count,
       counted: true,
-      quantity: 0,
-      allocated_quantity: 0,
+      quantity,
+      allocated_quantity,
     },
   }
   return mdFetch<MdStocktakeSheet>(
