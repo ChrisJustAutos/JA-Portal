@@ -7,6 +7,8 @@
 // Match mode:
 //   1. Login to MD
 //   2. For each parsed_rows entry, search MD via resource_search
+//      — runs a parallel pool (default 5 workers, configurable via
+//      STOCKTAKE_MATCH_CONCURRENCY env var). Auto-throttles on 429/5xx.
 //   3. Record match status (matched / not_found / ambiguous / error)
 //   4. PATCH the upload with match_results (preserving sheet_name)
 //
@@ -19,6 +21,9 @@
 //   3. For each matched row, POST /stocktake_sheets/{id}/new_item
 //      with both the counted quantity AND the system on-hand snapshot
 //      (md_current_qty) so MD's QTY column shows the right baseline.
+//      — runs a parallel pool (default 3 workers, configurable via
+//      STOCKTAKE_PUSH_CONCURRENCY env var). Each row gets ONE retry on
+//      transient failure (429/5xx/network) before being marked as error.
 //   4. Update upload with pushed_count / status='completed'
 //   5. NEVER finishes/submits the stocktake — that's manual
 
@@ -111,41 +116,62 @@ async function notifySlack(message: string, isError = false): Promise<void> {
   }
 }
 
+/**
+ * Detect throttle/transient error signals from mdFetch errors.
+ * mdFetch's error format is: "MD <METHOD> <path> → <status>: <body>"
+ * Returns true for 429 and 5xx. Used by both match and push to halve
+ * concurrency adaptively.
+ */
+function isThrottleError(msg: string): boolean {
+  return /→\s*(429|5\d\d)\b/.test(msg)
+}
+
+/**
+ * Detect any transient failure that's worth retrying once.
+ * Includes throttle signals plus connection-reset / abort / timeout style
+ * errors that fetch can throw without an HTTP status.
+ */
+function isTransientError(msg: string): boolean {
+  if (isThrottleError(msg)) return true
+  return /ECONNRESET|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|fetch failed|socket hang up|network/i.test(msg)
+}
+
 // ── Match mode ────────────────────────────────────────────────────────
 
-async function runMatch(client: MdClient, parsedRows: ParsedRow[]): Promise<void> {
-  log(`Running match for ${parsedRows.length} rows`)
-  const results: MatchResultEntry[] = []
-  let matched = 0
-  let unmatched = 0
+/**
+ * Match a single SKU against MD. Returns the result entry to push into
+ * the results array (in the original row's slot). Also returns whether
+ * the call hit a "throttle signal" (429 or 5xx) so the pool can react.
+ */
+async function matchSingleRow(
+  client: MdClient,
+  row: ParsedRow,
+): Promise<{ entry: MatchResultEntry; throttled: boolean }> {
+  const baseEntry: Pick<MatchResultEntry, 'row_number' | 'sku' | 'qty' | 'sheet_name'> = {
+    row_number: row.row_number,
+    sku: row.sku,
+    qty: row.qty,
+    sheet_name: row.sheet_name,
+  }
 
-  for (let i = 0; i < parsedRows.length; i++) {
-    const row = parsedRows[i]
-    if (i > 0 && i % 10 === 0) log(`  ${i}/${parsedRows.length} processed (matched=${matched}, unmatched=${unmatched})`)
-
-    // Common fields carried through from the parsed row, including sheet_name
-    // so we can show "Sheet: Exhausts · Row 5" in the UI later
-    const baseEntry: Pick<MatchResultEntry, 'row_number' | 'sku' | 'qty' | 'sheet_name'> = {
-      row_number: row.row_number,
-      sku: row.sku,
-      qty: row.qty,
-      sheet_name: row.sheet_name,
-    }
-
-    try {
-      const r = await findStockBySku(client, row.sku)
-      if (r.kind === 'matched' && r.stock) {
-        results.push({
+  try {
+    const r = await findStockBySku(client, row.sku)
+    if (r.kind === 'matched' && r.stock) {
+      return {
+        entry: {
           ...baseEntry,
           status: 'matched',
           md_stock_id: r.stock.id,
           md_stock_name: r.stock.name || '',
           md_stock_number: r.stock.stock_number || '',
           md_current_qty: typeof r.stock.available === 'number' ? r.stock.available : undefined,
-        })
-        matched++
-      } else if (r.kind === 'ambiguous' && r.candidates) {
-        results.push({
+        },
+        throttled: false,
+      }
+    }
+    if (r.kind === 'ambiguous' && r.candidates) {
+      return {
+        entry: {
           ...baseEntry,
           status: 'ambiguous',
           candidates: r.candidates.map(c => ({
@@ -153,26 +179,115 @@ async function runMatch(client: MdClient, parsedRows: ParsedRow[]): Promise<void
             stock_number: c.stock_number || '',
             name: c.name || '',
           })),
-        })
-        unmatched++
-      } else {
-        results.push({ ...baseEntry, status: 'not_found' })
-        unmatched++
+        },
+        throttled: false,
       }
-    } catch (e: any) {
-      log(`  Error matching SKU "${row.sku}": ${e?.message}`)
-      results.push({
-        ...baseEntry,
-        status: 'error',
-        error: e?.message || String(e),
-      })
-      unmatched++
     }
+    return { entry: { ...baseEntry, status: 'not_found' }, throttled: false }
+  } catch (e: any) {
+    const msg: string = e?.message || String(e)
+    return {
+      entry: { ...baseEntry, status: 'error', error: msg },
+      throttled: isThrottleError(msg),
+    }
+  }
+}
 
-    await new Promise(r => setTimeout(r, 100))
+/**
+ * Run the match pass with a parallel worker pool.
+ *
+ * Design:
+ *   - Worker pool of `concurrency` async loops, each pulling the next
+ *     row index from a shared counter
+ *   - Results land in `results[i]` so output order matches input order
+ *   - On 429/5xx, halve concurrency (down to min 1) by setting a
+ *     "throttle floor" — extra workers see it and exit
+ *   - 100ms gap between starts within a single worker (so 5 workers
+ *     ≈ 50 rows/sec ceiling, vs 10 rows/sec serial)
+ */
+async function runMatch(client: MdClient, parsedRows: ParsedRow[]): Promise<void> {
+  const total = parsedRows.length
+
+  const concurrencyEnv = parseInt(process.env.STOCKTAKE_MATCH_CONCURRENCY || '', 10)
+  const initialConcurrency = Number.isFinite(concurrencyEnv) && concurrencyEnv >= 1
+    ? Math.min(concurrencyEnv, 16)
+    : 5
+  const perWorkerGapMs = 100
+
+  log(`Running match for ${total} rows · concurrency=${initialConcurrency}`)
+
+  const results: MatchResultEntry[] = new Array(total)
+  let nextIndex = 0
+  let completed = 0
+  let matched = 0
+  let unmatched = 0
+  let throttleEvents = 0
+  let activeConcurrency = initialConcurrency
+  let lastLoggedTenth = 0
+
+  async function worker(workerNum: number): Promise<void> {
+    while (true) {
+      if (workerNum >= activeConcurrency) return
+
+      const i = nextIndex++
+      if (i >= total) return
+
+      const row = parsedRows[i]
+      const { entry, throttled } = await matchSingleRow(client, row)
+      results[i] = entry
+      completed++
+      if (entry.status === 'matched') matched++
+      else unmatched++
+
+      if (throttled) {
+        throttleEvents++
+        const before = activeConcurrency
+        activeConcurrency = Math.max(1, Math.floor(activeConcurrency / 2))
+        if (activeConcurrency < before) {
+          log(`  ⚠ Throttle signal on row ${row.row_number} (SKU "${row.sku}") — concurrency ${before} → ${activeConcurrency}`)
+        }
+      }
+
+      const tenth = Math.floor((completed / total) * 10)
+      if (tenth > lastLoggedTenth || (completed % 50 === 0 && completed > 0)) {
+        lastLoggedTenth = tenth
+        log(`  ${completed}/${total} processed (matched=${matched}, unmatched=${unmatched}, conc=${activeConcurrency})`)
+      }
+
+      await new Promise(r => setTimeout(r, perWorkerGapMs))
+    }
   }
 
-  log(`Match complete: ${matched} matched, ${unmatched} unmatched`)
+  const startedAt = Date.now()
+  const workerPromises: Promise<void>[] = []
+  for (let w = 0; w < initialConcurrency; w++) {
+    workerPromises.push(worker(w))
+  }
+  await Promise.all(workerPromises)
+  const elapsedSec = ((Date.now() - startedAt) / 1000).toFixed(1)
+
+  log(`Match complete in ${elapsedSec}s: ${matched} matched, ${unmatched} unmatched (throttle events: ${throttleEvents})`)
+
+  // Sanity check: every slot should be filled
+  const missing: number[] = []
+  for (let i = 0; i < total; i++) {
+    if (!results[i]) missing.push(i)
+  }
+  if (missing.length > 0) {
+    log(`  ⚠ ${missing.length} result slots missing — filling with error entries`)
+    for (const i of missing) {
+      const row = parsedRows[i]
+      results[i] = {
+        row_number: row.row_number,
+        sku: row.sku,
+        qty: row.qty,
+        sheet_name: row.sheet_name,
+        status: 'error',
+        error: 'Result slot was never populated (worker pool bug)',
+      }
+      unmatched++
+    }
+  }
 
   await patchUpload({
     status: 'matched',
@@ -184,24 +299,14 @@ async function runMatch(client: MdClient, parsedRows: ParsedRow[]): Promise<void
   })
 
   await notifySlack(
-    `Match complete: ${matched} matched, ${unmatched} unmatched (out of ${parsedRows.length} rows)`,
+    `Match complete in ${elapsedSec}s: ${matched} matched, ${unmatched} unmatched (out of ${total} rows)` +
+    (throttleEvents > 0 ? ` · ${throttleEvents} throttle events, final concurrency ${activeConcurrency}` : ''),
     false,
   )
 }
 
 // ── Push mode ─────────────────────────────────────────────────────────
 
-/**
- * Pick the best sheet from a stocktake's sheet list. Preference order:
- *   1. Sheet with status === 'in progress' AND not deleted
- *   2. Any sheet that's not finished AND not deleted
- *   3. Any sheet that's not deleted
- * Returns null if no usable sheet exists.
- *
- * Tolerant of stocktake_sheets being undefined / null (which the listing
- * endpoint sometimes returns) — in that case returns null and the caller
- * should re-fetch with retry.
- */
 function pickUsableSheet(stocktake: MdStocktake): { id: number; status: string; finished: boolean } | null {
   const sheets = stocktake.stocktake_sheets
   if (!Array.isArray(sheets) || sheets.length === 0) return null
@@ -216,13 +321,6 @@ function pickUsableSheet(stocktake: MdStocktake): { id: number; status: string; 
   return anyNotDeleted || null
 }
 
-/**
- * Re-fetch a stocktake by ID with retries, looking for at least one
- * non-deleted sheet. The GET /stocktakes listing endpoint returns
- * stocktakes without their sheets populated, AND the POST /stocktakes
- * response sometimes returns the new stocktake with empty
- * stocktake_sheets even though Sheet 1 was created server-side.
- */
 async function fetchStocktakeWithSheet(
   client: MdClient,
   stocktakeId: number,
@@ -241,16 +339,10 @@ async function fetchStocktakeWithSheet(
       await new Promise(r => setTimeout(r, 1000))
     }
   }
-  // Return whatever we got last so the caller can produce a useful error message
   if (last) return last
   throw new Error(`Failed to fetch stocktake ${stocktakeId} after ${attempts} attempts`)
 }
 
-/**
- * Resolve the target sheet to write items to. Either uses an existing
- * in-progress stocktake or creates a new one. ALWAYS re-fetches by ID
- * before reading stocktake_sheets — the listing endpoint omits them.
- */
 async function resolveTargetSheet(client: MdClient): Promise<{
   stocktakeId: number
   sheetId: number
@@ -261,8 +353,6 @@ async function resolveTargetSheet(client: MdClient): Promise<{
 
   if (openSummary) {
     log(`Found existing stocktake ${openSummary.id} ("${openSummary.name}") in listing — re-fetching for sheets`)
-    // Listing endpoint returns the stocktake without stocktake_sheets populated,
-    // so we must always re-fetch. Use the same retry helper as the create path.
     let fresh: MdStocktake
     try {
       fresh = await fetchStocktakeWithSheet(client, openSummary.id)
@@ -280,20 +370,17 @@ async function resolveTargetSheet(client: MdClient): Promise<{
     return { stocktakeId: openSummary.id, sheetId: sheet.id, wasCreated: false }
   }
 
-  // Create a new stocktake
   const name = `JA Portal Upload ${new Date().toISOString().slice(0, 10)}`
   log(`No open stocktake — creating new "${name}"`)
   const created = await createStocktake(client, name)
   const initialSheetCount = Array.isArray(created.stocktake_sheets) ? created.stocktake_sheets.length : 'undefined'
   log(`  Created stocktake ${created.id} (sheets in POST response: ${initialSheetCount})`)
 
-  // Persist immediately so we can recover if downstream fails
   await patchUpload({
     mechanicdesk_stocktake_id: String(created.id),
     mechanicdesk_stocktake_was_created: true,
   }).catch(e => log(`  Warn: could not persist stocktake_id early: ${e?.message}`))
 
-  // Re-fetch with retry until the auto-created sheet appears
   log(`  Re-fetching stocktake ${created.id} to read its sheet…`)
   const fresh = await fetchStocktakeWithSheet(client, created.id)
   const sheet = pickUsableSheet(fresh)
@@ -307,10 +394,61 @@ async function resolveTargetSheet(client: MdClient): Promise<{
   return { stocktakeId: created.id, sheetId: sheet.id, wasCreated: true }
 }
 
+interface PushAttemptResult {
+  ok: boolean
+  throttled: boolean
+  error?: string
+}
+
+/**
+ * Push a single matched row to MD. On a transient failure (429/5xx/network),
+ * waits 1s and retries ONCE. Returns success/failure plus whether a throttle
+ * signal was seen (so the pool can halve concurrency).
+ */
+async function pushSingleRow(
+  client: MdClient,
+  sheetId: number,
+  row: MatchResultEntry,
+): Promise<PushAttemptResult> {
+  let throttled = false
+
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      await addItemToSheet(client, sheetId, {
+        stockId: row.md_stock_id!,
+        stockNumber: row.md_stock_number || row.sku,
+        stockName: row.md_stock_name || '',
+        count: row.qty,
+        currentQty: row.md_current_qty,
+      })
+      return { ok: true, throttled }
+    } catch (e: any) {
+      const msg: string = e?.message || String(e)
+      if (isThrottleError(msg)) throttled = true
+
+      if (attempt === 1 && isTransientError(msg)) {
+        log(`  Retry SKU "${row.sku}" after transient error: ${msg.slice(0, 120)}`)
+        await new Promise(r => setTimeout(r, 1000))
+        continue
+      }
+
+      return { ok: false, throttled, error: msg }
+    }
+  }
+
+  return { ok: false, throttled, error: 'Exhausted retry attempts' }
+}
+
 async function runPush(client: MdClient, matchResults: MatchResultEntry[]): Promise<void> {
   const matched = matchResults.filter(r => r.status === 'matched' && r.md_stock_id != null)
   if (matched.length === 0) throw new Error('No matched items to push')
-  log(`Push starting: ${matched.length} items to add`)
+
+  const concurrencyEnv = parseInt(process.env.STOCKTAKE_PUSH_CONCURRENCY || '', 10)
+  const initialConcurrency = Number.isFinite(concurrencyEnv) && concurrencyEnv >= 1
+    ? Math.min(concurrencyEnv, 8)
+    : 3
+
+  log(`Push starting: ${matched.length} items to add · concurrency=${initialConcurrency}`)
 
   // Diagnostic: how many rows have a known system QTY snapshot?
   const withQty = matched.filter(r => typeof r.md_current_qty === 'number').length
@@ -327,40 +465,67 @@ async function runPush(client: MdClient, matchResults: MatchResultEntry[]): Prom
     mechanicdesk_stocktake_was_created: wasCreated,
   })
 
+  const total = matched.length
+  let nextIndex = 0
+  let completed = 0
   let pushed = 0
+  let throttleEvents = 0
+  let activeConcurrency = initialConcurrency
+  let lastLoggedTenth = 0
   const errors: any[] = []
 
-  for (let i = 0; i < matched.length; i++) {
-    const row = matched[i]
-    if (i > 0 && i % 10 === 0) {
-      log(`  ${i}/${matched.length} pushed (errors=${errors.length})`)
-      await patchUpload({ pushed_count: pushed }).catch(() => undefined)
-    }
+  async function worker(workerNum: number): Promise<void> {
+    while (true) {
+      if (workerNum >= activeConcurrency) return
 
-    try {
-      await addItemToSheet(client, sheetId, {
-        stockId: row.md_stock_id!,
-        stockNumber: row.md_stock_number || row.sku,
-        stockName: row.md_stock_name || '',
-        count: row.qty,
-        currentQty: row.md_current_qty,
-      })
-      pushed++
-    } catch (e: any) {
-      log(`  ERROR adding SKU "${row.sku}" (stock_id=${row.md_stock_id}): ${e?.message}`)
-      errors.push({
-        row_number: row.row_number,
-        sku: row.sku,
-        sheet_name: row.sheet_name,
-        md_stock_id: row.md_stock_id,
-        error: e?.message || String(e),
-      })
-    }
+      const i = nextIndex++
+      if (i >= total) return
 
-    await new Promise(r => setTimeout(r, 150))
+      const row = matched[i]
+      const { ok, throttled, error } = await pushSingleRow(client, sheetId, row)
+      completed++
+
+      if (ok) {
+        pushed++
+      } else {
+        log(`  ERROR adding SKU "${row.sku}" (stock_id=${row.md_stock_id}): ${error}`)
+        errors.push({
+          row_number: row.row_number,
+          sku: row.sku,
+          sheet_name: row.sheet_name,
+          md_stock_id: row.md_stock_id,
+          error: error || 'unknown',
+        })
+      }
+
+      if (throttled) {
+        throttleEvents++
+        const before = activeConcurrency
+        activeConcurrency = Math.max(1, Math.floor(activeConcurrency / 2))
+        if (activeConcurrency < before) {
+          log(`  ⚠ Throttle signal on row ${row.row_number} (SKU "${row.sku}") — concurrency ${before} → ${activeConcurrency}`)
+        }
+      }
+
+      // Periodic progress log + DB checkpoint of pushed_count
+      const tenth = Math.floor((completed / total) * 10)
+      if (tenth > lastLoggedTenth || (completed % 25 === 0 && completed > 0)) {
+        lastLoggedTenth = tenth
+        log(`  ${completed}/${total} done (pushed=${pushed}, errors=${errors.length}, conc=${activeConcurrency})`)
+        await patchUpload({ pushed_count: pushed }).catch(() => undefined)
+      }
+    }
   }
 
-  log(`Push complete: ${pushed} added, ${errors.length} errors`)
+  const startedAt = Date.now()
+  const workerPromises: Promise<void>[] = []
+  for (let w = 0; w < initialConcurrency; w++) {
+    workerPromises.push(worker(w))
+  }
+  await Promise.all(workerPromises)
+  const elapsedSec = ((Date.now() - startedAt) / 1000).toFixed(1)
+
+  log(`Push complete in ${elapsedSec}s: ${pushed} added, ${errors.length} errors (throttle events: ${throttleEvents})`)
 
   await patchUpload({
     status: errors.length === matched.length ? 'failed' : 'completed',
@@ -371,9 +536,10 @@ async function runPush(client: MdClient, matchResults: MatchResultEntry[]): Prom
   })
 
   await notifySlack(
-    `Push complete: ${pushed}/${matched.length} items added` +
+    `Push complete in ${elapsedSec}s: ${pushed}/${matched.length} items added` +
     (errors.length > 0 ? ` · ${errors.length} errors` : '') +
-    (wasCreated ? ` · created new stocktake ${stocktakeId}` : ` · used existing stocktake ${stocktakeId}`),
+    (wasCreated ? ` · created new stocktake ${stocktakeId}` : ` · used existing stocktake ${stocktakeId}`) +
+    (throttleEvents > 0 ? ` · ${throttleEvents} throttle events, final concurrency ${activeConcurrency}` : ''),
     errors.length > 0,
   )
 }
