@@ -1,22 +1,19 @@
 // scripts/recon-mechanicdesk-stocktake.ts
-// Reconnaissance script v3 — captures the POST that adds an item to a
-// stocktake sheet by actually performing the add-item flow against the
-// existing RECON_DELETE_ME stocktake (id 47270 from the previous run).
+// Reconnaissance script v4 — captures the POST that adds an item to a
+// stocktake. Fixes hash-routing navigation issue from v3.
 //
-// Steps:
-//   1. Log in
-//   2. Navigate to the existing RECON stocktake at /stocktakes/{id}
-//      (configurable via RECON_STOCKTAKE_ID env var, defaults to 47270)
-//   3. Find the SKU search input (ng-model="item.description")
-//   4. Type a short query like "OIL" — wait for autocomplete
-//   5. Pick the first dropdown result via keyboard (ArrowDown + Enter)
-//   6. Set the count input (ng-model="new_stocktake_item.count") to 0
-//   7. Click Save → capture the POST that fires
-//   8. Done. NEVER click Finish, Delete, or anything else destructive.
+// Strategy:
+//   1. Log in (lands on /auto_workshop/app#/)
+//   2. Already on the SPA — change window.location.hash to navigate to
+//      the target stocktake (this triggers SPA route change, unlike a
+//      cold goto() which loads the SPA default route)
+//   3. Wait for the stocktake page to render (look for the
+//      ng-model="item.description" search input as a readiness signal)
+//   4. Type SKU, pick first autocomplete result, set count=0, click Save
+//   5. Capture the POST that fires
 //
-// The added item will have count=0 — no real impact on inventory if
-// the stocktake were ever finished. You can delete the whole recon
-// stocktake from MD afterwards.
+// SAFETY: count is set to 0, so even if accidentally completed it
+// won't change inventory.
 
 import { chromium, Browser, BrowserContext, Page, Request, Response } from 'playwright'
 import { writeFileSync, mkdirSync, existsSync } from 'fs'
@@ -24,8 +21,7 @@ import { join } from 'path'
 
 const MD_BASE = 'https://www.mechanicdesk.com.au'
 const LOGIN_URL = `${MD_BASE}/auto_workshop/login`
-const RECON_STOCKTAKE_ID = process.env.RECON_STOCKTAKE_ID || '47270'
-const STOCKTAKE_URL = `${MD_BASE}/auto_workshop/app#/stocktakes/${RECON_STOCKTAKE_ID}`
+const RECON_STOCKTAKE_ID = process.env.RECON_STOCKTAKE_ID || '47271'
 
 const ARTIFACT_DIR = process.env.GITHUB_WORKSPACE
   ? join(process.env.GITHUB_WORKSPACE, 'artifacts')
@@ -159,24 +155,60 @@ async function login(page: Page, workshopId: string, username: string, password:
   log(`Login OK — landed on ${page.url()}`)
 }
 
+// Navigate within the SPA by changing window.location.hash. This works
+// because the SPA is already loaded and listens for hashchange events.
+// A direct page.goto() to a hash URL doesn't trigger SPA routing because
+// the SPA hasn't bootstrapped yet during the cold load.
+async function spaNavigate(page: Page, hashRoute: string): Promise<void> {
+  log(`  SPA navigation to ${hashRoute}`)
+  await page.evaluate((h) => {
+    window.location.hash = h
+  }, hashRoute)
+  // Give the SPA route handler time to fire and trigger the route's
+  // controller + template rendering
+  await page.waitForTimeout(2000)
+}
+
 async function captureAddItemFlow(page: Page): Promise<void> {
-  // ── Phase 1: Open the existing recon stocktake ──────────────────────
+  // ── Phase 1: Open the existing recon stocktake via SPA hash change ──
   currentPhase = 'open-stocktake'
-  log(`PHASE: open-stocktake — navigating to ${STOCKTAKE_URL}`)
-  await page.goto(STOCKTAKE_URL, { waitUntil: 'domcontentloaded', timeout: 30000 })
-  await page.waitForTimeout(4000)
+  log(`PHASE: open-stocktake — SPA-navigating to /stocktakes/${RECON_STOCKTAKE_ID}`)
+
+  // First make sure we're on the SPA root if not already
+  const currentUrl = page.url()
+  if (!currentUrl.includes('/auto_workshop/app')) {
+    log(`  Currently on ${currentUrl} — navigating to SPA root first`)
+    await page.goto(`${MD_BASE}/auto_workshop/app`, { waitUntil: 'domcontentloaded', timeout: 30000 })
+    await page.waitForTimeout(3000)
+  }
+
+  // SPA-navigate to the target stocktake
+  await spaNavigate(page, `/stocktakes/${RECON_STOCKTAKE_ID}`)
+
+  // Wait for the stocktake page's distinctive search input to appear.
+  // This is a much better readiness signal than waitForTimeout — we'll
+  // know the page is actually rendered when the form is in the DOM.
+  log(`  Waiting up to 15s for the stocktake search input to render…`)
+  try {
+    await page.waitForSelector('input[ng-model="item.description"]', { timeout: 15000, state: 'visible' })
+    log(`  ✓ Search input found — page is ready`)
+  } catch (e: any) {
+    log(`  ✗ Search input never appeared — the stocktake page may not have rendered`)
+    log(`  Current URL: ${page.url()}`)
+    await snapshotPage(page, '01-stocktake-render-failed')
+    throw new Error('Stocktake page did not render — check the URL and stocktake ID')
+  }
+
   await snapshotPage(page, '01-stocktake-open')
   log(`  Landed on: ${page.url()}`)
 
   // ── Phase 2: Type into the SKU search ───────────────────────────────
   currentPhase = 'type-search'
-  log(`PHASE: type-search — finding ng-model="item.description" input`)
+  log(`PHASE: type-search — typing into ng-model="item.description"`)
 
   const searchInput = await page.$('input[ng-model="item.description"]')
   if (!searchInput) {
-    log('  ERROR: Could not find the item.description search input!')
-    await snapshotPage(page, '02-search-not-found')
-    throw new Error('SKU search input not found on stocktake page')
+    throw new Error('SKU search input vanished after readiness check')
   }
 
   const searchQuery = 'OIL'
@@ -186,7 +218,6 @@ async function captureAddItemFlow(page: Page): Promise<void> {
   for (const ch of searchQuery) {
     await page.keyboard.type(ch, { delay: 200 })
   }
-  // Wait for autocomplete network call to complete and dropdown to render
   await page.waitForTimeout(2500)
   await snapshotPage(page, '02-after-typing-search')
 
@@ -206,12 +237,10 @@ async function captureAddItemFlow(page: Page): Promise<void> {
   if (!countInput) {
     log('  WARN: Could not find count input — will try to capture click anyway')
   } else {
-    // Triple-click to select existing value, then type 0
     await countInput.click({ clickCount: 3 })
     await page.waitForTimeout(200)
     await page.keyboard.type('0', { delay: 100 })
     await page.waitForTimeout(500)
-    // Tab out so AngularJS picks up the change
     await page.keyboard.press('Tab')
     await page.waitForTimeout(500)
   }
@@ -223,7 +252,6 @@ async function captureAddItemFlow(page: Page): Promise<void> {
   const saveBtn = await page.$('button[ng-click="save_new_stocktake_item()"]')
   if (!saveBtn) {
     log('  WARN: Could not find the Save button via ng-click selector')
-    // Fallback: find any visible Save button on the page
     const fallback = await page.$('button.btn-success:has-text("Save"):visible, button:has-text("Save"):visible')
     if (fallback) {
       log('  Using fallback Save button')
@@ -235,13 +263,11 @@ async function captureAddItemFlow(page: Page): Promise<void> {
     await saveBtn.click()
   }
 
-  // Give it plenty of time for the POST + any follow-up GETs to complete
   log('  Waiting 5s for POST + any follow-up requests…')
   await page.waitForTimeout(5000)
   await snapshotPage(page, '05-after-save')
   log(`  Final URL: ${page.url()}`)
 
-  // ── Phase 6: Final settle ───────────────────────────────────────────
   currentPhase = 'final-settle'
   await page.waitForTimeout(2000)
   await snapshotPage(page, '06-final-state')
@@ -287,7 +313,6 @@ async function main(): Promise<void> {
     log(`Captured ${captured.length} network requests`)
     writeFileSync(join(ARTIFACT_DIR, 'network.json'), JSON.stringify(captured, null, 2))
 
-    // Compact summary — easier to scan
     const summary = captured
       .filter(c =>
         (c.url.includes('/auto_workshop/') || c.url.includes('/api/') ||
@@ -307,7 +332,6 @@ async function main(): Promise<void> {
     writeFileSync(join(ARTIFACT_DIR, 'network-summary.json'), JSON.stringify(summary, null, 2))
     log(`Wrote ${summary.length} app/api requests to network-summary.json`)
 
-    // Per-phase breakdown
     const phases: Record<string, any[]> = {}
     summary.forEach(s => {
       const phase = s.phase || 'unknown'
