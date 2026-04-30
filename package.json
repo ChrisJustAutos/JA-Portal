@@ -22,6 +22,7 @@
     "@types/react": "18.3.3",
     "@types/cookie": "^0.6.0",
     "typescript": "5.5.3",
-    "tsx": "^4.19.2"
+    "tsx": "^4.19.2",
+    "playwright": "1.59.1"
   }
 }
