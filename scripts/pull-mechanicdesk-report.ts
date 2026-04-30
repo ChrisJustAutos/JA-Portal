@@ -5,15 +5,6 @@
 //   3. POSTs it to the JA Portal upload endpoint
 //
 // Run via GitHub Actions on a schedule. See .github/workflows/mechanicdesk-pull.yml.
-//
-// Required env vars:
-//   MECHANICDESK_WORKSHOP_ID    — workshop ID (e.g. "5108")
-//   MECHANICDESK_USERNAME       — login username (short username like "chris")
-//   MECHANICDESK_PASSWORD       — login password
-//   JA_PORTAL_API_KEY           — service token with scope 'upload:job-report'
-//   JA_PORTAL_BASE_URL          — e.g. https://ja-portal.vercel.app
-//   SLACK_WEBHOOK_URL           — incoming webhook for failure notifications (optional)
-//   MECHANICDESK_LOGIN_URL      — override login URL (optional)
 
 import { chromium, Browser, BrowserContext, Page, Download } from 'playwright'
 import { writeFileSync, readFileSync, existsSync, mkdirSync } from 'fs'
@@ -38,23 +29,6 @@ const PORTAL_UPLOAD_PATH = '/api/job-reports/upload'
 const ARTIFACT_DIR = process.env.GITHUB_WORKSPACE
   ? join(process.env.GITHUB_WORKSPACE, 'artifacts')
   : './artifacts'
-
-// Errors that page.goto throws when the navigation aborts because a download
-// started. We swallow these because the download will still resolve from
-// waitForEvent('download'). Across Playwright versions the error message
-// varies — match all the known wordings.
-const EXPECTED_GOTO_ABORT_PATTERNS = [
-  /ERR_ABORTED/i,
-  /interrupted/i,
-  /net::/i,
-  /Download is starting/i,
-  /page\.goto: Download/i,
-]
-
-function isExpectedGotoAbort(err: any): boolean {
-  const msg = String(err?.message || err || '')
-  return EXPECTED_GOTO_ABORT_PATTERNS.some(p => p.test(msg))
-}
 
 // ── Helpers ────────────────────────────────────────────────────────────
 
@@ -101,9 +75,7 @@ async function notifySlack(message: string, isError = false): Promise<void> {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ text: body }),
     })
-    if (!r.ok) {
-      log(`Slack webhook returned ${r.status}: ${await r.text().catch(() => '')}`)
-    }
+    if (!r.ok) log(`Slack webhook returned ${r.status}: ${await r.text().catch(() => '')}`)
   } catch (e: any) {
     log(`Slack webhook fetch failed: ${e?.message || e}`)
   }
@@ -242,56 +214,70 @@ async function login(page: Page, workshopId: string, username: string, password:
 
   try {
     await page.waitForLoadState('domcontentloaded', { timeout: 10000 })
-  } catch {
-    /* not critical */
-  }
+  } catch { /* not critical */ }
 
   log(`Login OK — landed on ${page.url()}`)
   await saveDebugArtifacts(page, 'login-success')
 }
 
 // ── Download ───────────────────────────────────────────────────────────
+//
+// New approach (much simpler than the goto + Promise.all dance):
+// We register a download listener on the BrowserContext, then trigger
+// navigation by injecting a hidden anchor and clicking it. The browser
+// handles the download natively without us having to wrangle goto's
+// "download started" exceptions.
 
-async function downloadReport(context: BrowserContext): Promise<{ filename: string; buffer: Buffer }> {
+async function downloadReport(context: BrowserContext, page: Page): Promise<{ filename: string; buffer: Buffer }> {
   const reportUrl = buildReportUrl()
-  log(`Triggering download: ${reportUrl}`)
+  log(`Triggering download by clicking injected anchor: ${reportUrl}`)
 
-  const dlPage = await context.newPage()
+  // Set up the download listener BEFORE triggering. We listen on the context
+  // so we catch the download regardless of which page it fires on.
+  const downloadPromise = context.waitForEvent('download', { timeout: 60000 })
+
+  // Inject an <a> tag pointing at the download URL and click it. This is
+  // exactly what a human user would do (clicking a download link), so the
+  // browser handles it cleanly without any abort exceptions on the page.
+  await page.evaluate((url) => {
+    const a = document.createElement('a')
+    a.href = url
+    a.download = ''  // force download attribute
+    a.style.display = 'none'
+    document.body.appendChild(a)
+    a.click()
+    // Don't remove immediately — give the browser a tick to register the click
+    setTimeout(() => a.remove(), 1000)
+  }, reportUrl)
 
   let download: Download
   try {
-    [download] = await Promise.all([
-      // The download event is the source of truth — that's what we ultimately
-      // care about. The goto promise will throw because the navigation aborts
-      // when the download starts; we just need to swallow that error.
-      dlPage.waitForEvent('download', { timeout: 60000 }),
-      dlPage.goto(reportUrl, { waitUntil: 'commit', timeout: 60000 }).catch((e: Error) => {
-        if (!isExpectedGotoAbort(e)) {
-          // Unexpected error — re-throw
-          throw e
-        }
-        log(`(expected) goto aborted by download: ${e.message}`)
-        return null
-      }),
-    ])
+    download = await downloadPromise
   } catch (e: any) {
-    await saveDebugArtifacts(dlPage, 'download-failed')
-    throw new Error(`Download did not start: ${e?.message || e}`)
+    await saveDebugArtifacts(page, 'download-failed')
+    throw new Error(`Download did not arrive within 60s: ${e?.message || e}`)
   }
 
   const filename = download.suggestedFilename() || `job_report_${Date.now()}.xls`
-
   const tmpPath = join(ARTIFACT_DIR, `dl-${filename}`)
   if (!existsSync(ARTIFACT_DIR)) mkdirSync(ARTIFACT_DIR, { recursive: true })
+
+  // download.failure() returns null if successful, error string if failed
+  const failure = await download.failure()
+  if (failure) {
+    await saveDebugArtifacts(page, 'download-failure-after-arrival')
+    throw new Error(`Download failed mid-stream: ${failure}`)
+  }
+
   await download.saveAs(tmpPath)
   const buffer = readFileSync(tmpPath)
 
   if (buffer.length < 1024) {
+    log(`Suspiciously small download (${buffer.length} bytes). First 200 bytes: ${buffer.slice(0, 200).toString('utf8')}`)
     throw new Error(`Downloaded file is suspiciously small (${buffer.length} bytes) — likely a login redirect or error page`)
   }
 
   log(`Downloaded ${filename} (${(buffer.length / 1024).toFixed(1)} KB)`)
-  await dlPage.close()
   return { filename, buffer }
 }
 
@@ -308,10 +294,7 @@ async function uploadToPortal(filename: string, buffer: Buffer): Promise<{ jobCo
 
   const r = await fetch(url, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'X-Service-Token': apiKey,
-    },
+    headers: { 'Content-Type': 'application/json', 'X-Service-Token': apiKey },
     body: JSON.stringify({
       filename,
       file_base64: buffer.toString('base64'),
@@ -323,12 +306,8 @@ async function uploadToPortal(filename: string, buffer: Buffer): Promise<{ jobCo
   let body: any
   try { body = JSON.parse(responseText) } catch { body = { raw: responseText } }
 
-  if (!r.ok) {
-    throw new Error(`Portal upload failed (${r.status}): ${body.error || responseText.slice(0, 500)}`)
-  }
-  if (!body.ok || !body.run_id) {
-    throw new Error(`Portal returned 200 but response is malformed: ${responseText.slice(0, 500)}`)
-  }
+  if (!r.ok) throw new Error(`Portal upload failed (${r.status}): ${body.error || responseText.slice(0, 500)}`)
+  if (!body.ok || !body.run_id) throw new Error(`Portal returned 200 but response is malformed: ${responseText.slice(0, 500)}`)
 
   log(`Portal accepted: ${body.job_count} jobs, run_id ${body.run_id}, warnings: ${body.warnings?.length || 0}`)
   return { jobCount: body.job_count, runId: body.run_id, warnings: body.warnings || [] }
@@ -356,7 +335,7 @@ async function main(): Promise<void> {
     const page = await context.newPage()
 
     await login(page, workshopId, username, password)
-    const { filename, buffer } = await downloadReport(context)
+    const { filename, buffer } = await downloadReport(context, page)
     const result = await uploadToPortal(filename, buffer)
 
     const summary = `Pulled "${filename}" — ${result.jobCount} jobs ingested${result.warnings.length ? ` (${result.warnings.length} warnings)` : ''}`
