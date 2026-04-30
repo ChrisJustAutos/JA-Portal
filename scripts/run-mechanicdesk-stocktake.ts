@@ -2,20 +2,20 @@
 //
 // GitHub Actions worker for stocktake operations. Triggered via
 // repository_dispatch with client_payload:
-//   {
-//     upload_id: "<uuid>",
-//     mode: "match" | "push"
-//   }
+//   { upload_id: "<uuid>", mode: "match" | "push" }
 //
 // Match mode:
 //   1. Login to MD
 //   2. For each parsed_rows entry, search MD via resource_search
 //   3. Record match status (matched / not_found / ambiguous / error)
-//   4. PATCH the upload with match_results
+//   4. PATCH the upload with match_results (preserving sheet_name)
 //
 // Push mode:
 //   1. Login to MD
-//   2. Find an open in-progress stocktake (or create a new one)
+//   2. Find an open in-progress stocktake (or create a new one and
+//      re-fetch it to ensure stocktake_sheets is populated — POST
+//      response sometimes returns the new stocktake without its
+//      auto-created sheet)
 //   3. For each matched row, POST /stocktake_sheets/{id}/new_item
 //   4. Update upload with pushed_count / status='completed'
 //   5. NEVER finishes/submits the stocktake — that's manual
@@ -25,6 +25,7 @@ import {
   findStockBySku,
   findOpenStocktake,
   createStocktake,
+  getStocktake,
   addItemToSheet,
   type MdClient,
 } from '../lib/mechanicdesk-stocktake'
@@ -34,12 +35,14 @@ interface ParsedRow {
   sku: string
   qty: number
   raw_name?: string
+  sheet_name?: string  // for multi-tab workbooks
 }
 
 interface MatchResultEntry {
   row_number: number
   sku: string
   qty: number
+  sheet_name?: string  // carried through from parsed_rows for traceability
   status: 'matched' | 'not_found' | 'ambiguous' | 'error'
   md_stock_id?: number
   md_stock_name?: string
@@ -117,13 +120,20 @@ async function runMatch(client: MdClient, parsedRows: ParsedRow[]): Promise<void
     const row = parsedRows[i]
     if (i > 0 && i % 10 === 0) log(`  ${i}/${parsedRows.length} processed (matched=${matched}, unmatched=${unmatched})`)
 
+    // Common fields carried through from the parsed row, including sheet_name
+    // so we can show "Sheet: Exhausts · Row 5" in the UI later
+    const baseEntry: Pick<MatchResultEntry, 'row_number' | 'sku' | 'qty' | 'sheet_name'> = {
+      row_number: row.row_number,
+      sku: row.sku,
+      qty: row.qty,
+      sheet_name: row.sheet_name,
+    }
+
     try {
       const r = await findStockBySku(client, row.sku)
       if (r.kind === 'matched' && r.stock) {
         results.push({
-          row_number: row.row_number,
-          sku: row.sku,
-          qty: row.qty,
+          ...baseEntry,
           status: 'matched',
           md_stock_id: r.stock.id,
           md_stock_name: r.stock.name || '',
@@ -133,9 +143,7 @@ async function runMatch(client: MdClient, parsedRows: ParsedRow[]): Promise<void
         matched++
       } else if (r.kind === 'ambiguous' && r.candidates) {
         results.push({
-          row_number: row.row_number,
-          sku: row.sku,
-          qty: row.qty,
+          ...baseEntry,
           status: 'ambiguous',
           candidates: r.candidates.map(c => ({
             id: c.id,
@@ -145,20 +153,13 @@ async function runMatch(client: MdClient, parsedRows: ParsedRow[]): Promise<void
         })
         unmatched++
       } else {
-        results.push({
-          row_number: row.row_number,
-          sku: row.sku,
-          qty: row.qty,
-          status: 'not_found',
-        })
+        results.push({ ...baseEntry, status: 'not_found' })
         unmatched++
       }
     } catch (e: any) {
       log(`  Error matching SKU "${row.sku}": ${e?.message}`)
       results.push({
-        row_number: row.row_number,
-        sku: row.sku,
-        qty: row.qty,
+        ...baseEntry,
         status: 'error',
         error: e?.message || String(e),
       })
@@ -187,33 +188,80 @@ async function runMatch(client: MdClient, parsedRows: ParsedRow[]): Promise<void
 
 // ── Push mode ─────────────────────────────────────────────────────────
 
+/**
+ * Resolve the target sheet to write items to. Either uses an existing
+ * in-progress stocktake or creates a new one. Always re-fetches the
+ * stocktake by ID after creation so we can read the auto-generated
+ * sheet — the POST response sometimes returns an empty stocktake_sheets
+ * array even though the sheet was created server-side.
+ */
+async function resolveTargetSheet(client: MdClient): Promise<{
+  stocktakeId: number
+  sheetId: number
+  wasCreated: boolean
+}> {
+  log('Looking for an open in-progress stocktake…')
+  const openST = await findOpenStocktake(client)
+
+  if (openST) {
+    log(`Using existing stocktake ${openST.id} ("${openST.name}")`)
+    let sheet = openST.stocktake_sheets.find(s => !s.deleted && (s.status === 'in progress' || !s.finished))
+    if (!sheet) {
+      log(`  No in-progress sheet in listing — re-fetching stocktake ${openST.id}`)
+      const fresh = await getStocktake(client, openST.id)
+      sheet = fresh.stocktake_sheets.find(s => !s.deleted && (s.status === 'in progress' || !s.finished))
+      if (!sheet) {
+        sheet = fresh.stocktake_sheets.find(s => !s.deleted)
+        if (!sheet) {
+          throw new Error(`Stocktake ${openST.id} has no usable sheet (sheets: ${JSON.stringify(fresh.stocktake_sheets.map(s => ({ id: s.id, status: s.status, deleted: s.deleted })))})`)
+        }
+        log(`  Using non-deleted sheet ${sheet.id} (status="${sheet.status}")`)
+      }
+    }
+    return { stocktakeId: openST.id, sheetId: sheet.id, wasCreated: false }
+  }
+
+  // Create a new stocktake
+  const name = `JA Portal Upload ${new Date().toISOString().slice(0, 10)}`
+  log(`No open stocktake — creating new "${name}"`)
+  const created = await createStocktake(client, name)
+  log(`  Created stocktake ${created.id} (sheets in POST response: ${created.stocktake_sheets?.length || 0})`)
+
+  // Persist immediately so we can recover if downstream fails
+  await patchUpload({
+    mechanicdesk_stocktake_id: String(created.id),
+    mechanicdesk_stocktake_was_created: true,
+  }).catch(e => log(`  Warn: could not persist stocktake_id early: ${e?.message}`))
+
+  // Re-fetch with retry until the auto-created sheet appears
+  log(`  Re-fetching stocktake ${created.id} to read its sheet…`)
+  let sheetId: number | null = null
+  for (let attempt = 1; attempt <= 5; attempt++) {
+    const fresh = await getStocktake(client, created.id)
+    log(`  Attempt ${attempt}: ${fresh.stocktake_sheets?.length || 0} sheet(s) returned`)
+    const sheet = fresh.stocktake_sheets?.find(s => !s.deleted)
+    if (sheet) {
+      sheetId = sheet.id
+      break
+    }
+    if (attempt < 5) {
+      log(`  No sheet yet — waiting 1s before retry`)
+      await new Promise(r => setTimeout(r, 1000))
+    }
+  }
+  if (sheetId == null) {
+    throw new Error(`Stocktake ${created.id} was created but no sheet appeared after 5 retries. Check MD UI directly — the stocktake may need manual intervention.`)
+  }
+  log(`  Resolved sheet ${sheetId}`)
+  return { stocktakeId: created.id, sheetId, wasCreated: true }
+}
+
 async function runPush(client: MdClient, matchResults: MatchResultEntry[]): Promise<void> {
   const matched = matchResults.filter(r => r.status === 'matched' && r.md_stock_id != null)
   if (matched.length === 0) throw new Error('No matched items to push')
   log(`Push starting: ${matched.length} items to add`)
 
-  let stocktakeId: number
-  let sheetId: number
-  let wasCreated = false
-
-  log('Looking for an open in-progress stocktake…')
-  const openST = await findOpenStocktake(client)
-  if (openST) {
-    log(`Using existing stocktake ${openST.id} ("${openST.name}")`)
-    stocktakeId = openST.id
-    const sheet = openST.stocktake_sheets.find(s => s.status === 'in progress' && !s.deleted)
-    if (!sheet) throw new Error(`Stocktake ${stocktakeId} has no in-progress sheet`)
-    sheetId = sheet.id
-  } else {
-    const name = `JA Portal Upload ${new Date().toISOString().slice(0, 10)}`
-    log(`No open stocktake — creating new "${name}"`)
-    const created = await createStocktake(client, name)
-    stocktakeId = created.id
-    const sheet = created.stocktake_sheets[0]
-    if (!sheet) throw new Error('Newly-created stocktake has no sheet')
-    sheetId = sheet.id
-    wasCreated = true
-  }
+  const { stocktakeId, sheetId, wasCreated } = await resolveTargetSheet(client)
   log(`Target: stocktake_id=${stocktakeId}, sheet_id=${sheetId}, created_new=${wasCreated}`)
 
   await patchUpload({
@@ -245,6 +293,7 @@ async function runPush(client: MdClient, matchResults: MatchResultEntry[]): Prom
       errors.push({
         row_number: row.row_number,
         sku: row.sku,
+        sheet_name: row.sheet_name,
         md_stock_id: row.md_stock_id,
         error: e?.message || String(e),
       })
@@ -286,9 +335,6 @@ async function main(): Promise<void> {
     throw new Error('MECHANICDESK_WORKSHOP_ID/USERNAME/PASSWORD env vars required')
   }
 
-  // Dynamic import — playwright is only installed at runtime in the GH
-  // Action via `npm install --no-save playwright`. Static import would
-  // make `next build` fail because playwright isn't a main dependency.
   log('Loading Playwright (dynamic import)…')
   const playwright = await import('playwright')
   const { chromium } = playwright

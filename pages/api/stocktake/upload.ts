@@ -1,7 +1,8 @@
 // pages/api/stocktake/upload.ts
 //
-// Accept an XLSX upload (base64), parse it, store the rows in a new
-// stocktake_uploads row, return the upload id + parse preview.
+// Accept an XLSX upload (base64), parse ALL sheets in the workbook,
+// store the rows in a new stocktake_uploads row, return the upload id
+// + parse preview.
 //
 // Auth: admin/manager only.
 
@@ -9,7 +10,7 @@ import type { NextApiRequest, NextApiResponse } from 'next'
 import { createClient } from '@supabase/supabase-js'
 import * as XLSX from 'xlsx'
 import { withAuth } from '../../../lib/authServer'
-import { parseStocktakeRows } from '../../../lib/stocktake-parser'
+import { parseStocktakeWorkbook } from '../../../lib/stocktake-parser'
 
 export const config = {
   api: {
@@ -61,23 +62,27 @@ export default withAuth('edit:stocktakes', async (req: NextApiRequest, res: Next
     return res.status(400).json({ error: 'File too large (>10MB)' })
   }
 
-  let rawRows: any[][]
+  // Read the workbook and extract every sheet as a 2D array
+  let sheetData: Array<{ name: string; rawRows: any[][] }>
   try {
     const wb = XLSX.read(buffer, { type: 'buffer' })
     if (!wb.SheetNames.length) throw new Error('No sheets in workbook')
-    const sheet = wb.Sheets[wb.SheetNames[0]]
-    rawRows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: null }) as any[][]
+    sheetData = wb.SheetNames.map(name => ({
+      name,
+      rawRows: XLSX.utils.sheet_to_json(wb.Sheets[name], { header: 1, defval: null }) as any[][],
+    }))
   } catch (e: any) {
     return res.status(400).json({ error: `Could not parse spreadsheet: ${e?.message || e}` })
   }
 
-  const parsed = parseStocktakeRows(rawRows)
+  const parsed = parseStocktakeWorkbook(sheetData)
 
   if (parsed.rows.length === 0) {
     return res.status(400).json({
       error: 'No usable rows found in spreadsheet',
       warnings: parsed.warnings,
       detected_columns: parsed.detected_columns,
+      sheets: parsed.sheets,
     })
   }
 
@@ -110,6 +115,7 @@ export default withAuth('edit:stocktakes', async (req: NextApiRequest, res: Next
       detected_columns: parsed.detected_columns,
       warnings: parsed.warnings,
       preview: parsed.rows.slice(0, 5),
+      sheets: parsed.sheets,
     },
   })
 })

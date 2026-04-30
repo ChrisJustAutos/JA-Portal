@@ -33,6 +33,7 @@ interface MatchEntry {
   row_number: number
   sku: string
   qty: number
+  sheet_name?: string
   status: 'matched' | 'not_found' | 'ambiguous' | 'error'
   md_stock_id?: number
   md_stock_name?: string
@@ -78,6 +79,7 @@ export default function StocktakeDetailPage({ user }: { user: SessionUser }) {
   const [error, setError] = useState('')
   const [actionInFlight, setActionInFlight] = useState(false)
   const [filter, setFilter] = useState<'all' | 'matched' | 'unmatched'>('all')
+  const [sheetFilter, setSheetFilter] = useState<string>('all')
 
   const canEdit = roleHasPermission(user.role, 'edit:stocktakes')
   const isPolling = upload && (upload.status === 'matching' || upload.status === 'pushing')
@@ -128,12 +130,46 @@ export default function StocktakeDetailPage({ user }: { user: SessionUser }) {
     finally { setActionInFlight(false) }
   }
 
+  // Multi-tab support: detect when this upload spans multiple sheets
+  const hasSheetNames = useMemo(() => {
+    if (!upload?.match_results) return false
+    return upload.match_results.some(r => r.sheet_name && r.sheet_name.length > 0)
+  }, [upload])
+
+  const sheetNames = useMemo(() => {
+    if (!upload?.match_results) return [] as string[]
+    const set = new Set<string>()
+    for (const r of upload.match_results) {
+      if (r.sheet_name) set.add(r.sheet_name)
+    }
+    return Array.from(set).sort()
+  }, [upload])
+
+  // Per-sheet roll-up: { sheet, total, matched, unmatched }
+  const sheetSummary = useMemo(() => {
+    if (!upload?.match_results || !hasSheetNames) return [] as Array<{ sheet: string; total: number; matched: number; unmatched: number }>
+    const map = new Map<string, { sheet: string; total: number; matched: number; unmatched: number }>()
+    for (const r of upload.match_results) {
+      const key = r.sheet_name || '(no sheet)'
+      const cur = map.get(key) || { sheet: key, total: 0, matched: 0, unmatched: 0 }
+      cur.total++
+      if (r.status === 'matched') cur.matched++
+      else cur.unmatched++
+      map.set(key, cur)
+    }
+    return Array.from(map.values()).sort((a, b) => a.sheet.localeCompare(b.sheet))
+  }, [upload, hasSheetNames])
+
   const filteredResults = useMemo(() => {
     if (!upload?.match_results) return []
-    if (filter === 'all') return upload.match_results
-    if (filter === 'matched') return upload.match_results.filter(r => r.status === 'matched')
-    return upload.match_results.filter(r => r.status !== 'matched')
-  }, [upload, filter])
+    let rows = upload.match_results
+    if (sheetFilter !== 'all') {
+      rows = rows.filter(r => r.sheet_name === sheetFilter)
+    }
+    if (filter === 'matched') return rows.filter(r => r.status === 'matched')
+    if (filter === 'unmatched') return rows.filter(r => r.status !== 'matched')
+    return rows
+  }, [upload, filter, sheetFilter])
 
   return (
     <>
@@ -153,6 +189,11 @@ export default function StocktakeDetailPage({ user }: { user: SessionUser }) {
               <div style={{display:'flex', alignItems:'center', gap:12, marginBottom:16, flexWrap:'wrap'}}>
                 <h1 style={{margin:0, fontSize:20, fontWeight:600, fontFamily:'monospace', color:T.text}}>{upload.filename}</h1>
                 <StatusBadge status={upload.status}/>
+                {hasSheetNames && sheetNames.length > 1 && (
+                  <span style={{padding:'3px 8px', borderRadius:3, background:`${T.purple}22`, color:T.purple, fontSize:11, fontWeight:600, letterSpacing:'0.05em'}}>
+                    {sheetNames.length} tabs
+                  </span>
+                )}
                 {upload.mechanicdesk_stocktake_id && (
                   <a href={`${MD_BASE}/auto_workshop/app#/stocktakes/${upload.mechanicdesk_stocktake_id}`} target="_blank" rel="noreferrer"
                      style={{fontSize:11, color:T.blue, textDecoration:'none', padding:'3px 8px', border:`1px solid ${T.blue}40`, borderRadius:4}}>
@@ -180,6 +221,28 @@ export default function StocktakeDetailPage({ user }: { user: SessionUser }) {
                 onPush={runPush}
               />
 
+              {/* ── Per-sheet breakdown (multi-tab uploads only) ── */}
+              {hasSheetNames && sheetSummary.length > 1 && (
+                <div style={{background:T.bg2, border:`1px solid ${T.border}`, borderRadius:8, padding:'12px 14px', marginBottom:14}}>
+                  <div style={{fontSize:10, color:T.text3, textTransform:'uppercase', letterSpacing:'0.05em', fontWeight:600, marginBottom:8}}>Per-sheet breakdown</div>
+                  <div style={{display:'flex', flexWrap:'wrap', gap:'4px 14px'}}>
+                    {sheetSummary.map(s => (
+                      <div key={s.sheet} style={{fontSize:12, color:T.text2, fontFamily:'monospace'}}>
+                        <span style={{color:T.text}}>{s.sheet}</span>
+                        <span style={{color:T.text3}}> · </span>
+                        <span style={{color:T.green}}>{s.matched} matched</span>
+                        {s.unmatched > 0 && (
+                          <>
+                            <span style={{color:T.text3}}> · </span>
+                            <span style={{color:T.amber}}>{s.unmatched} unmatched</span>
+                          </>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
               {/* ── Parse warnings ───────────────────────────────── */}
               {upload.parse_warnings && upload.parse_warnings.length > 0 && (
                 <div style={{background:T.bg2, border:`1px solid ${T.amber}40`, borderRadius:8, padding:'10px 14px', marginBottom:14}}>
@@ -200,7 +263,20 @@ export default function StocktakeDetailPage({ user }: { user: SessionUser }) {
                     <h2 style={{margin:0, fontSize:14, fontWeight:600, color:T.text2, textTransform:'uppercase', letterSpacing:'0.05em'}}>
                       Match results
                     </h2>
-                    <div style={{display:'flex', gap:6}}>
+                    <div style={{display:'flex', gap:6, alignItems:'center', flexWrap:'wrap'}}>
+                      {hasSheetNames && sheetNames.length > 1 && (
+                        <select
+                          value={sheetFilter}
+                          onChange={e => setSheetFilter(e.target.value)}
+                          style={{
+                            padding:'4px 10px', borderRadius:4, fontSize:11,
+                            background:T.bg3, color:T.text, border:`1px solid ${T.border2}`,
+                            fontFamily:'inherit', cursor:'pointer',
+                          }}>
+                          <option value="all">All sheets</option>
+                          {sheetNames.map(s => <option key={s} value={s}>{s}</option>)}
+                        </select>
+                      )}
                       {(['all', 'matched', 'unmatched'] as const).map(f => (
                         <button key={f}
                           onClick={() => setFilter(f)}
@@ -218,8 +294,9 @@ export default function StocktakeDetailPage({ user }: { user: SessionUser }) {
                   </div>
 
                   <div style={{background:T.bg2, border:`1px solid ${T.border}`, borderRadius:10, overflow:'hidden'}}>
-                    <div style={{display:'grid', gridTemplateColumns:'60px 130px 1fr 80px 90px 110px', gap:12, padding:'10px 14px', borderBottom:`1px solid ${T.border}`, background:T.bg3, fontSize:10, color:T.text3, textTransform:'uppercase', letterSpacing:'0.05em', fontWeight:600}}>
+                    <div style={{display:'grid', gridTemplateColumns: hasSheetNames ? '60px 110px 130px 1fr 80px 90px 110px' : '60px 130px 1fr 80px 90px 110px', gap:12, padding:'10px 14px', borderBottom:`1px solid ${T.border}`, background:T.bg3, fontSize:10, color:T.text3, textTransform:'uppercase', letterSpacing:'0.05em', fontWeight:600}}>
                       <div>Row</div>
+                      {hasSheetNames && <div>Sheet</div>}
                       <div>SKU</div>
                       <div>MD Match</div>
                       <div style={{textAlign:'right'}}>Counted</div>
@@ -229,8 +306,13 @@ export default function StocktakeDetailPage({ user }: { user: SessionUser }) {
                     {filteredResults.length === 0 ? (
                       <div style={{padding:20, textAlign:'center', fontSize:12, color:T.text3}}>No results in this filter.</div>
                     ) : filteredResults.map((r, i) => (
-                      <div key={i} style={{display:'grid', gridTemplateColumns:'60px 130px 1fr 80px 90px 110px', gap:12, padding:'9px 14px', borderBottom:`1px solid ${T.border}`, fontSize:12, alignItems:'center'}}>
+                      <div key={i} style={{display:'grid', gridTemplateColumns: hasSheetNames ? '60px 110px 130px 1fr 80px 90px 110px' : '60px 130px 1fr 80px 90px 110px', gap:12, padding:'9px 14px', borderBottom:`1px solid ${T.border}`, fontSize:12, alignItems:'center'}}>
                         <div style={{color:T.text3, fontFamily:'monospace'}}>{r.row_number}</div>
+                        {hasSheetNames && (
+                          <div style={{color:T.text2, fontFamily:'monospace', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', fontSize:11}}>
+                            {r.sheet_name || '—'}
+                          </div>
+                        )}
                         <div style={{color:T.text, fontFamily:'monospace', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap'}}>{r.sku}</div>
                         <div style={{color:T.text2, fontSize:11, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap'}}>
                           {r.status === 'matched' ? (
@@ -263,7 +345,7 @@ export default function StocktakeDetailPage({ user }: { user: SessionUser }) {
                   <div style={{fontSize:11, color:T.red, fontWeight:600, marginBottom:6}}>{upload.push_errors.length} push error(s)</div>
                   {upload.push_errors.slice(0, 10).map((e: any, i: number) => (
                     <div key={i} style={{fontSize:11, color:T.text3, marginTop:3, fontFamily:'monospace'}}>
-                      Row {e.row_number} · SKU {e.sku} · {e.error}
+                      {e.sheet_name ? `[${e.sheet_name}] ` : ''}Row {e.row_number} · SKU {e.sku} · {e.error}
                     </div>
                   ))}
                 </div>
