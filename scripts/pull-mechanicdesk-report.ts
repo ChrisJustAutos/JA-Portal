@@ -39,6 +39,23 @@ const ARTIFACT_DIR = process.env.GITHUB_WORKSPACE
   ? join(process.env.GITHUB_WORKSPACE, 'artifacts')
   : './artifacts'
 
+// Errors that page.goto throws when the navigation aborts because a download
+// started. We swallow these because the download will still resolve from
+// waitForEvent('download'). Across Playwright versions the error message
+// varies — match all the known wordings.
+const EXPECTED_GOTO_ABORT_PATTERNS = [
+  /ERR_ABORTED/i,
+  /interrupted/i,
+  /net::/i,
+  /Download is starting/i,
+  /page\.goto: Download/i,
+]
+
+function isExpectedGotoAbort(err: any): boolean {
+  const msg = String(err?.message || err || '')
+  return EXPECTED_GOTO_ABORT_PATTERNS.some(p => p.test(msg))
+}
+
 // ── Helpers ────────────────────────────────────────────────────────────
 
 function log(...args: any[]) {
@@ -170,7 +187,6 @@ async function login(page: Page, workshopId: string, username: string, password:
     return null
   }
 
-  // Workshop ID
   let workshopFilled = await fillFirst(workshopSelectors, workshopId, 'workshop ID')
   if (!workshopFilled) {
     log(`Workshop ID selector miss, trying positional fallback (first text input)`)
@@ -184,7 +200,6 @@ async function login(page: Page, workshopId: string, username: string, password:
     }
   }
 
-  // Username
   let usernameFilled = await fillFirst(usernameSelectors, username, 'username')
   if (!usernameFilled) {
     log(`Username selector miss, trying positional fallback (second text input)`)
@@ -198,17 +213,12 @@ async function login(page: Page, workshopId: string, username: string, password:
     }
   }
 
-  // Password
   const passwordFilled = await fillFirst(passwordSelectors, password, 'password')
   if (!passwordFilled) {
     await saveDebugArtifacts(page, 'password-not-found')
     throw new Error(`Could not find password field`)
   }
 
-  // Submit. We don't wait for 'networkidle' here — Mechanics Desk keeps
-  // background traffic going (long-polling, analytics pings) after login,
-  // so networkidle never resolves. Instead we wait for the login form to
-  // disappear, which is the actual signal that we're logged in.
   let clicked = false
   for (const sel of submitSelectors) {
     const el = await page.$(sel)
@@ -221,19 +231,15 @@ async function login(page: Page, workshopId: string, username: string, password:
   }
   if (!clicked) throw new Error(`Could not find submit button`)
 
-  // Wait for password field to disappear (the real success signal). Up to 30s.
   log('Waiting for login form to disappear (password field gone)…')
   try {
     await page.waitForSelector('input[type="password"]', { state: 'detached', timeout: 30000 })
   } catch (e: any) {
-    // Password field still there — login probably failed
     await saveDebugArtifacts(page, 'login-failed')
     const errorText = await page.locator('.alert, .flash, .error, [role="alert"], .help-block').first().textContent().catch(() => null)
     throw new Error(`Login failed — password field still visible after 30s. Error message: "${errorText?.trim() || 'none'}"`)
   }
 
-  // Belt-and-braces: also let the page settle a bit so that the next navigation
-  // (download URL) doesn't race ahead of any redirect chain.
   try {
     await page.waitForLoadState('domcontentloaded', { timeout: 10000 })
   } catch {
@@ -255,9 +261,15 @@ async function downloadReport(context: BrowserContext): Promise<{ filename: stri
   let download: Download
   try {
     [download] = await Promise.all([
+      // The download event is the source of truth — that's what we ultimately
+      // care about. The goto promise will throw because the navigation aborts
+      // when the download starts; we just need to swallow that error.
       dlPage.waitForEvent('download', { timeout: 60000 }),
       dlPage.goto(reportUrl, { waitUntil: 'commit', timeout: 60000 }).catch((e: Error) => {
-        if (!/ERR_ABORTED|interrupted|net::/i.test(e.message)) throw e
+        if (!isExpectedGotoAbort(e)) {
+          // Unexpected error — re-throw
+          throw e
+        }
         log(`(expected) goto aborted by download: ${e.message}`)
         return null
       }),
