@@ -4,6 +4,7 @@
 //   • Top-line counts + status
 //   • If parsed/failed: "Run Match" button to dispatch the GH Action
 //   • If matching/pushing: live progress (polls every 3s)
+//     — If stuck > 5 min, Delete button surfaces (worker likely crashed)
 //   • If matched: preview table with matched/unmatched + "Push to MD" button
 //   • If completed: link to the MD stocktake + summary
 
@@ -24,6 +25,11 @@ const T = {
 }
 
 const MD_BASE = 'https://www.mechanicdesk.com.au'
+
+// If a row stays in matching/pushing longer than this, we treat it as
+// stuck (the GH Action worker probably crashed before it could PATCH
+// status to 'failed') and allow deletion with a warning.
+const STUCK_THRESHOLD_MIN = 5
 
 export async function getServerSideProps(ctx: any) {
   return requirePageAuth(ctx, 'view:stocktakes')
@@ -71,6 +77,25 @@ interface SessionUser {
   visibleTabs?: string[] | null;
 }
 
+/**
+ * Returns minutes since the active phase started, or null if the row
+ * isn't in an active phase. For matching: uses uploaded_at (match dispatches
+ * within seconds of upload). For pushing: uses push_started_at.
+ */
+function getActiveMinutes(u: Upload): number | null {
+  if (u.status === 'matching') {
+    const t = new Date(u.uploaded_at).getTime()
+    if (!isFinite(t)) return null
+    return (Date.now() - t) / 60000
+  }
+  if (u.status === 'pushing' && u.push_started_at) {
+    const t = new Date(u.push_started_at).getTime()
+    if (!isFinite(t)) return null
+    return (Date.now() - t) / 60000
+  }
+  return null
+}
+
 export default function StocktakeDetailPage({ user }: { user: SessionUser }) {
   const router = useRouter()
   const id = router.query.id as string | undefined
@@ -98,7 +123,9 @@ export default function StocktakeDetailPage({ user }: { user: SessionUser }) {
 
   useEffect(() => { load() }, [load])
 
-  // Poll while matching or pushing
+  // Poll while matching or pushing. Polling itself updates getActiveMinutes
+  // each cycle (3s) since `upload` is replaced, so stuck-detection refreshes
+  // automatically without a separate timer.
   useEffect(() => {
     if (!isPolling) return
     const i = setInterval(load, 3000)
@@ -134,13 +161,22 @@ export default function StocktakeDetailPage({ user }: { user: SessionUser }) {
   async function runDelete() {
     if (!id || deleting) return
     if (!upload) return
-    const mdNote = upload.mechanicdesk_stocktake_id
-      ? `\n\nThe Mechanics Desk stocktake (${upload.mechanicdesk_stocktake_id}) will NOT be deleted — only the portal record. Delete it manually in MD if needed.`
-      : ''
-    if (!confirm(`Delete portal record for "${upload.filename}"?${mdNote}\n\nThis cannot be undone.`)) return
+
+    const activeMin = getActiveMinutes(upload)
+    const isActive = upload.status === 'matching' || upload.status === 'pushing'
+    const isStuck = isActive && activeMin !== null && activeMin > STUCK_THRESHOLD_MIN
+
+    let confirmMsg = `Delete portal record for "${upload.filename}"?\n\nThis cannot be undone.`
+    if (isStuck) {
+      confirmMsg = `"${upload.filename}" appears stuck in "${upload.status}" for ${Math.round(activeMin!)} minutes — the GitHub Action worker has likely crashed.\n\nDelete this orphan portal record?\n\nThis cannot be undone.`
+    } else if (upload.mechanicdesk_stocktake_id) {
+      confirmMsg += `\n\nNote: The Mechanics Desk stocktake (${upload.mechanicdesk_stocktake_id}) will NOT be deleted — only the portal record. Delete it manually in MD if needed.`
+    }
+    if (!confirm(confirmMsg)) return
+
     setDeleting(true); setError('')
     try {
-      const r = await fetch(`/api/stocktake/${id}`, { method: 'DELETE' })
+      const r = await fetch(`/api/stocktake/${id}?force=${isStuck ? '1' : '0'}`, { method: 'DELETE' })
       const d = await r.json()
       if (!r.ok) throw new Error(d.error || 'Delete failed')
       router.push('/stocktake')
@@ -191,6 +227,13 @@ export default function StocktakeDetailPage({ user }: { user: SessionUser }) {
     return rows
   }, [upload, filter, sheetFilter])
 
+  // Stuck detection — recomputed on every render via the polling cycle
+  const activeMin = upload ? getActiveMinutes(upload) : null
+  const isActive = !!upload && (upload.status === 'matching' || upload.status === 'pushing')
+  const isStuck = isActive && activeMin !== null && activeMin > STUCK_THRESHOLD_MIN
+  // Show delete in any non-active state OR when actively-running but stuck
+  const showDelete = !!upload && canEdit && (!isActive || isStuck)
+
   return (
     <>
       <Head><title>Stocktake — {upload?.filename || ''}</title></Head>
@@ -209,6 +252,11 @@ export default function StocktakeDetailPage({ user }: { user: SessionUser }) {
               <div style={{display:'flex', alignItems:'center', gap:12, marginBottom:16, flexWrap:'wrap'}}>
                 <h1 style={{margin:0, fontSize:20, fontWeight:600, fontFamily:'monospace', color:T.text}}>{upload.filename}</h1>
                 <StatusBadge status={upload.status}/>
+                {isStuck && (
+                  <span style={{padding:'3px 8px', borderRadius:3, background:`${T.amber}22`, color:T.amber, fontSize:11, fontWeight:600, letterSpacing:'0.05em'}}>
+                    ⚠ STUCK {Math.round(activeMin!)}m
+                  </span>
+                )}
                 {hasSheetNames && sheetNames.length > 1 && (
                   <span style={{padding:'3px 8px', borderRadius:3, background:`${T.purple}22`, color:T.purple, fontSize:11, fontWeight:600, letterSpacing:'0.05em'}}>
                     {sheetNames.length} tabs
@@ -220,19 +268,22 @@ export default function StocktakeDetailPage({ user }: { user: SessionUser }) {
                     Open in MD ↗
                   </a>
                 )}
-                {canEdit && upload.status !== 'matching' && upload.status !== 'pushing' && (
+                {showDelete && (
                   <button
                     onClick={runDelete}
                     disabled={deleting}
-                    title="Delete portal record (does not delete the Mechanics Desk stocktake)"
+                    title={isStuck
+                      ? `Stuck in "${upload.status}" for ${Math.round(activeMin!)} min — worker likely crashed. Click to delete orphan record.`
+                      : 'Delete portal record (does not delete the Mechanics Desk stocktake)'}
                     style={{
                       marginLeft:'auto',
                       padding:'4px 10px', borderRadius:4, fontSize:11, fontFamily:'inherit',
-                      background:'transparent', color: deleting ? T.text3 : T.red,
-                      border:`1px solid ${deleting ? T.border2 : T.red}40`,
+                      background:'transparent',
+                      color: deleting ? T.text3 : (isStuck ? T.amber : T.red),
+                      border:`1px solid ${deleting ? T.border2 : (isStuck ? T.amber : T.red)}40`,
                       cursor: deleting ? 'default' : 'pointer',
                     }}>
-                    {deleting ? 'Deleting…' : 'Delete'}
+                    {deleting ? 'Deleting…' : (isStuck ? 'Delete (stuck)' : 'Delete')}
                   </button>
                 )}
               </div>

@@ -4,6 +4,9 @@
 //   • Drag-and-drop XLSX upload card at the top
 //   • List of past uploads with status, click into one to see preview/push
 //   • Per-row Delete button (admin/manager) — DB only, never touches MD
+//   • If a row is stuck in 'matching'/'pushing' for >5 min (worker crashed
+//     before PATCHing status to 'failed'), Delete shows up with a warning
+//     so the user can clear the orphan record without waiting.
 //
 // Workflow:
 //   1. Drop XLSX → POST /api/stocktake/upload → redirect to /stocktake/{id}
@@ -24,6 +27,11 @@ const T = {
   amber:'#f5a623', red:'#f04e4e', purple:'#a78bfa',
 }
 
+// If a row stays in matching/pushing longer than this, we treat it as
+// stuck (the GH Action worker probably crashed before it could PATCH
+// status to 'failed') and allow deletion with a warning.
+const STUCK_THRESHOLD_MIN = 5
+
 export async function getServerSideProps(ctx: any) {
   return requirePageAuth(ctx, 'view:stocktakes')
 }
@@ -38,6 +46,8 @@ interface UploadRow {
   unmatched_count: number | null
   pushed_count: number | null
   mechanicdesk_stocktake_id: string | null
+  matched_at: string | null
+  push_started_at: string | null
   push_completed_at: string | null
   uploaded_by_name: string | null
 }
@@ -65,12 +75,34 @@ function arrayBufferToBase64(buf: ArrayBuffer): string {
   return btoa(binary)
 }
 
+/**
+ * Returns minutes since the active phase started, or null if the row
+ * isn't in an active phase. For matching: uses uploaded_at (match dispatches
+ * within seconds of upload). For pushing: uses push_started_at.
+ */
+function getActiveMinutes(u: UploadRow): number | null {
+  if (u.status === 'matching') {
+    const t = new Date(u.uploaded_at).getTime()
+    if (!isFinite(t)) return null
+    return (Date.now() - t) / 60000
+  }
+  if (u.status === 'pushing' && u.push_started_at) {
+    const t = new Date(u.push_started_at).getTime()
+    if (!isFinite(t)) return null
+    return (Date.now() - t) / 60000
+  }
+  return null
+}
+
 export default function StocktakeIndexPage({ user }: { user: SessionUser }) {
   const router = useRouter()
   const [uploads, setUploads] = useState<UploadRow[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [deletingId, setDeletingId] = useState<string | null>(null)
+  // Tick every 30s so stuck-detection updates without a page reload.
+  // Forces components to re-evaluate getActiveMinutes() against fresh Date.now().
+  const [, setNow] = useState(0)
 
   const canEdit = roleHasPermission(user.role, 'edit:stocktakes')
 
@@ -87,17 +119,28 @@ export default function StocktakeIndexPage({ user }: { user: SessionUser }) {
 
   async function deleteUpload(u: UploadRow) {
     if (deletingId) return
-    if (u.status === 'matching' || u.status === 'pushing') {
-      setError(`Cannot delete "${u.filename}" while ${u.status} — wait for the GitHub Action to finish or fail first.`)
+
+    const activeMin = getActiveMinutes(u)
+    const isActive = u.status === 'matching' || u.status === 'pushing'
+    const isStuck = isActive && activeMin !== null && activeMin > STUCK_THRESHOLD_MIN
+
+    if (isActive && !isStuck) {
+      const remaining = activeMin !== null ? Math.max(1, Math.ceil(STUCK_THRESHOLD_MIN - activeMin)) : STUCK_THRESHOLD_MIN
+      setError(`Cannot delete "${u.filename}" while ${u.status}. If the worker is genuinely stuck, the option will appear after ~${remaining} more minute(s).`)
       return
     }
-    const mdNote = u.mechanicdesk_stocktake_id
-      ? `\n\nThe Mechanics Desk stocktake (${u.mechanicdesk_stocktake_id}) will NOT be deleted — only the portal record. Delete it manually in MD if needed.`
-      : ''
-    if (!confirm(`Delete portal record for "${u.filename}"?${mdNote}\n\nThis cannot be undone.`)) return
+
+    let confirmMsg = `Delete portal record for "${u.filename}"?\n\nThis cannot be undone.`
+    if (isStuck) {
+      confirmMsg = `"${u.filename}" appears stuck in "${u.status}" for ${Math.round(activeMin!)} minutes — the GitHub Action worker has likely crashed.\n\nDelete this orphan portal record?\n\nThis cannot be undone.`
+    } else if (u.mechanicdesk_stocktake_id) {
+      confirmMsg += `\n\nNote: The Mechanics Desk stocktake (${u.mechanicdesk_stocktake_id}) will NOT be deleted — only the portal record. Delete it manually in MD if needed.`
+    }
+    if (!confirm(confirmMsg)) return
+
     setDeletingId(u.id); setError('')
     try {
-      const r = await fetch(`/api/stocktake/${u.id}`, { method: 'DELETE' })
+      const r = await fetch(`/api/stocktake/${u.id}?force=${isStuck ? '1' : '0'}`, { method: 'DELETE' })
       const d = await r.json()
       if (!r.ok) throw new Error(d.error || 'Delete failed')
       // Optimistic local removal so the UI updates immediately
@@ -110,6 +153,14 @@ export default function StocktakeIndexPage({ user }: { user: SessionUser }) {
   }
 
   useEffect(() => { load() }, [])
+
+  // Re-tick every 30s while the user is on this page so stuck-detection
+  // refreshes (the row goes from "can't delete" to "delete (stuck)" once
+  // the threshold is crossed without needing a manual reload).
+  useEffect(() => {
+    const i = setInterval(() => setNow(n => n + 1), 30_000)
+    return () => clearInterval(i)
+  }, [])
 
   // Grid template — adds a 70px column for the Delete button when the user can edit
   const gridCols = canEdit
@@ -162,7 +213,23 @@ export default function StocktakeIndexPage({ user }: { user: SessionUser }) {
                 </div>
                 {uploads.map(u => {
                   const isDeleting = deletingId === u.id
-                  const cannotDelete = u.status === 'matching' || u.status === 'pushing'
+                  const isActive = u.status === 'matching' || u.status === 'pushing'
+                  const activeMin = getActiveMinutes(u)
+                  const isStuck = isActive && activeMin !== null && activeMin > STUCK_THRESHOLD_MIN
+                  // Disabled: actively running and not yet stuck. Allowed: any non-active state, or stuck.
+                  const cannotDelete = isActive && !isStuck
+
+                  let deleteTitle = 'Delete portal record (does not delete MD stocktake)'
+                  if (isStuck) {
+                    deleteTitle = `Stuck in "${u.status}" for ${Math.round(activeMin!)} min — worker likely crashed. Click to delete.`
+                  } else if (cannotDelete) {
+                    const remaining = activeMin !== null ? Math.max(1, Math.ceil(STUCK_THRESHOLD_MIN - activeMin)) : STUCK_THRESHOLD_MIN
+                    deleteTitle = `Cannot delete while ${u.status}. If genuinely stuck, retry in ~${remaining} min.`
+                  }
+
+                  // Stuck rows render in amber to make the abnormal state visible
+                  const deleteColor = isStuck ? T.amber : T.red
+
                   return (
                     <div key={u.id} style={{display:'grid', gridTemplateColumns:gridCols, gap:12, padding:'10px 14px', borderBottom:`1px solid ${T.border}`, fontSize:12, alignItems:'center', opacity: isDeleting ? 0.4 : 1, transition:'opacity 0.15s'}}>
                       <div
@@ -171,7 +238,14 @@ export default function StocktakeIndexPage({ user }: { user: SessionUser }) {
                         <div style={{color:T.text}}>{u.filename}</div>
                         {u.uploaded_by_name && <div style={{fontSize:10, color:T.text3, marginTop:2}}>by {u.uploaded_by_name}</div>}
                       </div>
-                      <div onClick={() => router.push(`/stocktake/${u.id}`)} style={{cursor:'pointer'}}><StatusBadge status={u.status}/></div>
+                      <div onClick={() => router.push(`/stocktake/${u.id}`)} style={{cursor:'pointer'}}>
+                        <StatusBadge status={u.status}/>
+                        {isStuck && (
+                          <div style={{fontSize:9, color:T.amber, marginTop:3, fontWeight:600}}>
+                            ⚠ stuck {Math.round(activeMin!)}m
+                          </div>
+                        )}
+                      </div>
                       <div onClick={() => router.push(`/stocktake/${u.id}`)} style={{textAlign:'right', color:T.text2, fontVariantNumeric:'tabular-nums', cursor:'pointer'}}>{u.total_rows ?? '—'}</div>
                       <div onClick={() => router.push(`/stocktake/${u.id}`)} style={{textAlign:'right', color:u.matched_count != null ? T.text2 : T.text3, fontVariantNumeric:'tabular-nums', cursor:'pointer'}}>
                         {u.matched_count != null ? `${u.matched_count}/${(u.matched_count || 0) + (u.unmatched_count || 0)}` : '—'}
@@ -185,12 +259,12 @@ export default function StocktakeIndexPage({ user }: { user: SessionUser }) {
                           <button
                             onClick={(e) => { e.stopPropagation(); deleteUpload(u) }}
                             disabled={isDeleting || cannotDelete}
-                            title={cannotDelete ? `Cannot delete while ${u.status}` : 'Delete portal record (does not delete MD stocktake)'}
+                            title={deleteTitle}
                             style={{
                               padding:'4px 10px', borderRadius:4, fontSize:11, fontFamily:'inherit',
                               background:'transparent',
-                              color: (isDeleting || cannotDelete) ? T.text3 : T.red,
-                              border: `1px solid ${(isDeleting || cannotDelete) ? T.border2 : T.red + '40'}`,
+                              color: (isDeleting || cannotDelete) ? T.text3 : deleteColor,
+                              border: `1px solid ${(isDeleting || cannotDelete) ? T.border2 : deleteColor + '40'}`,
                               cursor: (isDeleting || cannotDelete) ? 'default' : 'pointer',
                             }}>
                             {isDeleting ? '…' : 'Delete'}

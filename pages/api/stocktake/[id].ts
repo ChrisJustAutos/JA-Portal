@@ -4,12 +4,19 @@
 // PATCH:  update fields (service token only — used by GH Action worker)
 // DELETE: delete the upload row (admin/manager users only) — DB only,
 //         does NOT touch Mechanics Desk
+//         Pass ?force=1 to delete rows stuck in 'matching'/'pushing' for
+//         > 5 minutes (worker likely crashed before PATCHing status).
 
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { createClient } from '@supabase/supabase-js'
 import { getCurrentUser } from '../../../lib/authServer'
 import { roleHasPermission } from '../../../lib/permissions'
 import { validateServiceToken } from '../../../lib/service-auth'
+
+// If a row stays in matching/pushing longer than this, it's considered
+// stuck and ?force=1 deletion is permitted. Mirrors the constant in
+// pages/stocktake/index.tsx and pages/stocktake/[id].tsx.
+const STUCK_THRESHOLD_MIN = 5
 
 function sb() {
   return createClient(
@@ -99,20 +106,40 @@ async function handleDelete(req: NextApiRequest, res: NextApiResponse, id: strin
     return res.status(403).json({ error: 'Forbidden — manager or admin only' })
   }
 
-  // Refuse to delete a row that's actively running. The GH Action worker
-  // would silently fail on its next PATCH and leave the user wondering.
   const existing = await sb()
     .from('stocktake_uploads')
-    .select('id, status, filename')
+    .select('id, status, filename, uploaded_at, push_started_at')
     .eq('id', id)
     .maybeSingle()
   if (existing.error) return res.status(500).json({ error: existing.error.message })
   if (!existing.data) return res.status(404).json({ error: 'Not found' })
 
-  if (existing.data.status === 'matching' || existing.data.status === 'pushing') {
-    return res.status(409).json({
-      error: `Cannot delete while ${existing.data.status} — wait for the GitHub Action to finish or fail first.`,
-    })
+  const row = existing.data
+  const force = req.query.force === '1' || req.query.force === 'true'
+
+  // Block deletion of actively-running rows UNLESS the caller explicitly
+  // requested ?force=1 AND the row is genuinely stuck (>5 min). Server-side
+  // age check protects against a client racing past the cooldown.
+  if (row.status === 'matching' || row.status === 'pushing') {
+    if (!force) {
+      return res.status(409).json({
+        error: `Cannot delete while ${row.status} — wait for the GitHub Action to finish or fail first. If genuinely stuck, retry after ${STUCK_THRESHOLD_MIN} minutes.`,
+      })
+    }
+    // Force=1 path: verify the row really has been stuck long enough.
+    const anchor = row.status === 'pushing' && row.push_started_at
+      ? new Date(row.push_started_at as string).getTime()
+      : new Date(row.uploaded_at as string).getTime()
+    if (!isFinite(anchor)) {
+      return res.status(500).json({ error: 'Could not determine when the active phase started' })
+    }
+    const ageMin = (Date.now() - anchor) / 60_000
+    if (ageMin < STUCK_THRESHOLD_MIN) {
+      return res.status(409).json({
+        error: `Row has only been ${row.status} for ${ageMin.toFixed(1)} min. Force-delete requires > ${STUCK_THRESHOLD_MIN} min.`,
+      })
+    }
+    // Falls through to delete
   }
 
   const { error } = await sb()
@@ -124,7 +151,8 @@ async function handleDelete(req: NextApiRequest, res: NextApiResponse, id: strin
   return res.status(200).json({
     ok: true,
     deleted_id: id,
-    deleted_filename: existing.data.filename,
+    deleted_filename: row.filename,
+    forced: force && (row.status === 'matching' || row.status === 'pushing'),
     note: 'Portal record removed. Mechanics Desk stocktake (if any) was NOT touched — delete it manually in MD if needed.',
   })
 }

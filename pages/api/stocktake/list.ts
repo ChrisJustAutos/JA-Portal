@@ -1,6 +1,11 @@
 // pages/api/stocktake/list.ts
 //
 // List recent stocktake uploads.
+//
+// Includes matched_at and push_started_at in the response so the UI can
+// detect "stuck" rows (status='matching' or 'pushing' for > 5 min, usually
+// caused by a GH Action worker crashing before it could PATCH status to
+// 'failed'). When stuck, the UI lets the user delete the row.
 
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { createClient } from '@supabase/supabase-js'
@@ -25,7 +30,8 @@ export default withAuth('view:stocktakes', async (req: NextApiRequest, res: Next
     .select(`
       id, uploaded_at, filename, status,
       total_rows, matched_count, unmatched_count, pushed_count,
-      mechanicdesk_stocktake_id, push_completed_at,
+      mechanicdesk_stocktake_id,
+      matched_at, push_started_at, push_completed_at,
       uploaded_by
     `)
     .order('uploaded_at', { ascending: false })
