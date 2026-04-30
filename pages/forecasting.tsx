@@ -9,9 +9,11 @@
 //   • Two side-by-side breakdown panels: Vehicle Platform + Job Type
 //   • Drill-down table of jobs in the active month, cross-filterable
 //
-// Bar scale: based on max MONTH value, with "nice" round-number axis ticks.
-// Target line is overlaid independently — if it's above the chart's natural
-// max, it's pinned to the top edge with an "↑" indicator.
+// Bar scale:
+//   • If a target is set: Y-axis goes 0 → target (so bars show progress
+//     toward goal, with target line at the top edge).
+//   • If no target: Y-axis scales to the largest month with nice round
+//     tick marks.
 
 import { useState, useEffect, useMemo } from 'react'
 import Head from 'next/head'
@@ -95,6 +97,16 @@ function niceAxis(rawMax: number, targetTicks = 5): { max: number; step: number;
   return { max, step, ticks }
 }
 
+// Build axis with the target as the upper bound. Generates ~5 evenly-spaced
+// tick marks from 0 to target. The target itself is always one of the ticks.
+function targetAnchoredAxis(target: number, targetTicks = 5): { max: number; step: number; ticks: number[] } {
+  if (target <= 0) return { max: 100, step: 25, ticks: [0, 25, 50, 75, 100] }
+  const step = target / targetTicks
+  const ticks: number[] = []
+  for (let i = 0; i <= targetTicks; i++) ticks.push(step * i)
+  return { max: target, step, ticks }
+}
+
 interface SessionUser {
   id: string; email: string; role: UserRole; name: string;
   visibleTabs?: string[] | null;
@@ -154,10 +166,15 @@ export default function ForecastingPage({ user }: { user: SessionUser }) {
   const months = data?.forecast?.by_month || []
   const maxMonthValue = useMemo(() => Math.max(1, ...months.map(m => m.total)), [months])
 
-  // Build axis based on max month only (NOT factoring target).
-  // The target line gets overlaid separately — pinned to top edge if it's
-  // above the chart's natural max.
-  const axis = useMemo(() => niceAxis(maxMonthValue), [maxMonthValue])
+  // Axis strategy:
+  //  - Target set → 0 → target (5 evenly-spaced ticks). Bars show progress
+  //    toward the goal. Bigger months that exceed target will visually overflow
+  //    (we cap at 100% bar height with a small "overflow" indicator).
+  //  - No target → "nice" axis based on max month.
+  const axis = useMemo(() => {
+    if (targetMonthly > 0) return targetAnchoredAxis(targetMonthly)
+    return niceAxis(maxMonthValue)
+  }, [targetMonthly, maxMonthValue])
 
   function clearFilters() { setActivePlatform('all'); setActiveJobType('all'); setSearch('') }
   const hasFilters = activePlatform !== 'all' || activeJobType !== 'all' || search.trim().length > 0
@@ -347,8 +364,6 @@ export default function ForecastingPage({ user }: { user: SessionUser }) {
 }
 
 // ── SVG-based forecast chart ─────────────────────────────────────────────
-// Uses a viewBox so it scales fluidly. Properly draws Y-axis with $ labels,
-// horizontal gridlines, vertical bars, month labels, and target line overlay.
 
 function ForecastChart({ months, activeMonth, setActiveMonth, axis, targetMonthly }: {
   months: MonthBucket[]
@@ -360,10 +375,10 @@ function ForecastChart({ months, activeMonth, setActiveMonth, axis, targetMonthl
   // Layout in SVG user-space coordinates (viewBox handles responsive scaling)
   const W = 1000
   const H = 280
-  const PAD_LEFT = 70    // room for $ labels
+  const PAD_LEFT = 70
   const PAD_RIGHT = 20
   const PAD_TOP = 20
-  const PAD_BOTTOM = 50  // room for month labels (two lines)
+  const PAD_BOTTOM = 50
 
   const plotW = W - PAD_LEFT - PAD_RIGHT
   const plotH = H - PAD_TOP - PAD_BOTTOM
@@ -373,13 +388,11 @@ function ForecastChart({ months, activeMonth, setActiveMonth, axis, targetMonthl
   const plotY1 = PAD_TOP + plotH
 
   const showTargetLine = targetMonthly > 0
-  // If target sits above the chart's clean max, pin it to top edge with indicator
-  const targetAboveAxis = showTargetLine && targetMonthly > axis.max
-  const targetY = targetAboveAxis
-    ? plotY0
-    : plotY1 - (targetMonthly / axis.max) * plotH
+  // When axis is target-anchored, the target is at the top edge of the plot
+  // (same as axis.max). When axis is auto-scaled with no target, no line.
+  const targetY = plotY1 - (Math.min(targetMonthly, axis.max) / axis.max) * plotH
 
-  // Bar geometry — equal-width slots, bars with horizontal padding
+  // Bar geometry
   const slotW = plotW / Math.max(1, months.length)
   const barW = Math.max(8, slotW * 0.7)
 
@@ -417,7 +430,11 @@ function ForecastChart({ months, activeMonth, setActiveMonth, axis, targetMonthl
       {months.map((m, i) => {
         const slotCenter = plotX0 + (i + 0.5) * slotW
         const barX = slotCenter - barW / 2
-        const barH = (m.total / axis.max) * plotH
+        // Cap bar at chart top — if a month exceeds target/axis-max, show full
+        // bar height plus a small "overflow" arrow on top
+        const exceeds = m.total > axis.max
+        const visualValue = Math.min(m.total, axis.max)
+        const barH = (visualValue / axis.max) * plotH
         const barY = plotY1 - barH
         const isActive = m.key === activeMonth
         const aboveTarget = showTargetLine && m.total >= targetMonthly
@@ -426,7 +443,7 @@ function ForecastChart({ months, activeMonth, setActiveMonth, axis, targetMonthl
           <g key={m.key}
             onClick={() => setActiveMonth(m.key)}
             style={{ cursor: 'pointer' }}>
-            {/* Invisible hit area covering the whole slot */}
+            {/* Hit area covers the whole slot */}
             <rect
               x={plotX0 + i * slotW}
               y={plotY0}
@@ -441,6 +458,19 @@ function ForecastChart({ months, activeMonth, setActiveMonth, axis, targetMonthl
               fill={fill}
               opacity={isActive ? 1 : 0.85}
               rx={3}/>
+            {/* Overflow indicator if month exceeds target */}
+            {exceeds && (
+              <text
+                x={slotCenter}
+                y={barY - 22}
+                fill={T.green}
+                fontSize={10}
+                fontWeight={700}
+                textAnchor="middle"
+                fontFamily="system-ui, -apple-system, sans-serif">
+                ▲
+              </text>
+            )}
             {/* Value label above bar */}
             <text
               x={slotCenter}
@@ -452,7 +482,7 @@ function ForecastChart({ months, activeMonth, setActiveMonth, axis, targetMonthl
               fontFamily="system-ui, -apple-system, sans-serif">
               {fmtMoney(m.total, true)}
             </text>
-            {/* Month label below baseline */}
+            {/* Month label */}
             <text
               x={slotCenter}
               y={plotY1 + 18}
@@ -493,7 +523,7 @@ function ForecastChart({ months, activeMonth, setActiveMonth, axis, targetMonthl
             fontWeight={600}
             textAnchor="end"
             fontFamily="system-ui, -apple-system, sans-serif">
-            {targetAboveAxis ? '↑ ' : ''}Target {fmtMoney(targetMonthly, true)}
+            Target {fmtMoney(targetMonthly, true)}
           </text>
         </g>
       )}
