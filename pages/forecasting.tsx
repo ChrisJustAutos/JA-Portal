@@ -4,14 +4,14 @@
 //
 // Renders:
 //   • Top tile row: total forecast / months covered / jobs without Total / target
-//   • Monthly bar chart with inline-editable target (admin only)
+//   • Monthly SVG chart with proper $ Y-axis, gridlines, target line overlay,
+//     and inline-editable target (admin only)
 //   • Two side-by-side breakdown panels: Vehicle Platform + Job Type
 //   • Drill-down table of jobs in the active month, cross-filterable
 //
-// Bar scale: based on max MONTH value only. The target line is overlaid
-// independently — if the target sits above the chart's natural max, the line
-// is rendered at the top edge with an "↑" indicator so months still show
-// their relative magnitudes properly.
+// Bar scale: based on max MONTH value, with "nice" round-number axis ticks.
+// Target line is overlaid independently — if it's above the chart's natural
+// max, it's pinned to the top edge with an "↑" indicator.
 
 import { useState, useEffect, useMemo } from 'react'
 import Head from 'next/head'
@@ -66,6 +66,7 @@ function fmtMoney(n: number | null | undefined, compact = false): string {
   const v = Number(n)
   if (compact && Math.abs(v) >= 1_000_000) return '$' + (v / 1_000_000).toFixed(1) + 'M'
   if (compact && Math.abs(v) >= 10_000)    return '$' + (v / 1_000).toFixed(1) + 'k'
+  if (compact && Math.abs(v) >= 1_000)     return '$' + (v / 1_000).toFixed(1) + 'k'
   return '$' + v.toLocaleString('en-AU', { minimumFractionDigits: 0, maximumFractionDigits: 0 })
 }
 function fmtDate(d: string | null | undefined): string {
@@ -73,6 +74,25 @@ function fmtDate(d: string | null | undefined): string {
   const parts = String(d).split('-')
   if (parts.length === 3) return `${parts[2]}/${parts[1]}/${parts[0].substring(2)}`
   return d
+}
+
+// "Nice" axis algorithm — picks a round-number tick interval that gives ~5
+// gridlines and rounds the chart max up to a clean number.
+function niceAxis(rawMax: number, targetTicks = 5): { max: number; step: number; ticks: number[] } {
+  if (rawMax <= 0) return { max: 100, step: 25, ticks: [0, 25, 50, 75, 100] }
+  const roughStep = rawMax / targetTicks
+  const magnitude = Math.pow(10, Math.floor(Math.log10(roughStep)))
+  const normalized = roughStep / magnitude
+  let niceNormalized: number
+  if (normalized < 1.5)      niceNormalized = 1
+  else if (normalized < 3)   niceNormalized = 2
+  else if (normalized < 7)   niceNormalized = 5
+  else                       niceNormalized = 10
+  const step = niceNormalized * magnitude
+  const max = Math.ceil(rawMax / step) * step
+  const ticks: number[] = []
+  for (let v = 0; v <= max; v += step) ticks.push(v)
+  return { max, step, ticks }
 }
 
 interface SessionUser {
@@ -130,17 +150,14 @@ export default function ForecastingPage({ user }: { user: SessionUser }) {
     return rows
   }, [activeBucket, search, activePlatform, activeJobType])
 
-  // Bar scale: based ONLY on the max month total. Target is rendered as an
-  // overlay on top — if it sits above the chart max, we render the line at
-  // the top edge with an "↑" indicator instead of squashing all bars.
-  const maxMonthValue = useMemo(() => {
-    const months = data?.forecast?.by_month || []
-    return Math.max(1, ...months.map(m => m.total))
-  }, [data])
-
   const targetMonthly = data?.forecast?.target_monthly || 0
-  const showTargetLine = targetMonthly > 0 && (data?.forecast?.by_month?.length || 0) > 0
-  const targetAboveChart = showTargetLine && targetMonthly > maxMonthValue
+  const months = data?.forecast?.by_month || []
+  const maxMonthValue = useMemo(() => Math.max(1, ...months.map(m => m.total)), [months])
+
+  // Build axis based on max month only (NOT factoring target).
+  // The target line gets overlaid separately — pinned to top edge if it's
+  // above the chart's natural max.
+  const axis = useMemo(() => niceAxis(maxMonthValue), [maxMonthValue])
 
   function clearFilters() { setActivePlatform('all'); setActiveJobType('all'); setSearch('') }
   const hasFilters = activePlatform !== 'all' || activeJobType !== 'all' || search.trim().length > 0
@@ -184,7 +201,7 @@ export default function ForecastingPage({ user }: { user: SessionUser }) {
                 Go to Settings → Data Imports
               </Link>
             </div>
-          ) : data.forecast.by_month.length === 0 ? (
+          ) : months.length === 0 ? (
             <div style={{background:T.bg2, border:`1px dashed ${T.border2}`, borderRadius:12, padding:60, textAlign:'center'}}>
               <div style={{fontSize:16, fontWeight:600, marginBottom:8}}>Nothing to forecast</div>
               <div style={{fontSize:13, color:T.text3}}>
@@ -199,7 +216,7 @@ export default function ForecastingPage({ user }: { user: SessionUser }) {
               {/* ── Top tiles ─────────────────────────────────────────────── */}
               <div style={{display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(200px, 1fr))', gap:12, marginBottom:20}}>
                 <Tile label="Total forecast" value={fmtMoney(data.forecast.total, true)} subtext={`${data.forecast.job_count} jobs with a Total`} highlight={T.green}/>
-                <Tile label="Months covered" value={String(data.forecast.by_month.length)} subtext={data.forecast.by_month.length > 0 ? `${data.forecast.by_month[0].label} — ${data.forecast.by_month[data.forecast.by_month.length-1].label}` : ''}/>
+                <Tile label="Months covered" value={String(months.length)} subtext={months.length > 0 ? `${months[0].label} — ${months[months.length-1].label}` : ''}/>
                 <Tile
                   label="Jobs without a Total"
                   value={String(data.forecast.jobs_without_total)}
@@ -213,8 +230,8 @@ export default function ForecastingPage({ user }: { user: SessionUser }) {
                     label="Monthly target"
                     value={fmtMoney(targetMonthly, true)}
                     subtext={(() => {
-                      const ahead = data.forecast.by_month.filter(m => m.total >= targetMonthly).length
-                      return `${ahead} of ${data.forecast.by_month.length} month${data.forecast.by_month.length === 1 ? '' : 's'} on or above target`
+                      const ahead = months.filter(m => m.total >= targetMonthly).length
+                      return `${ahead} of ${months.length} month${months.length === 1 ? '' : 's'} on or above target`
                     })()}
                     highlight={T.purple}
                   />
@@ -234,91 +251,13 @@ export default function ForecastingPage({ user }: { user: SessionUser }) {
                   />
                 </div>
 
-                <div style={{position:'relative', height:200, paddingBottom:8, borderBottom:`1px solid ${T.border}`}}>
-                  {/* Target line — drawn at actual position if within chart range,
-                      pinned to top edge with ↑ if target is above max month. */}
-                  {showTargetLine && (() => {
-                    if (targetAboveChart) {
-                      // Target is above the chart's natural max — pin to top edge with indicator
-                      return (
-                        <div style={{
-                          position:'absolute',
-                          left:0, right:0, top:0,
-                          borderTop:`1px dashed ${T.purple}`,
-                          zIndex:1, pointerEvents:'none',
-                        }}>
-                          <div style={{
-                            position:'absolute', right:0, top:-7,
-                            background:T.bg2, padding:'0 4px',
-                            fontSize:9, color:T.purple, fontWeight:600,
-                          }}>
-                            ↑ Target {fmtMoney(targetMonthly, true)}
-                          </div>
-                        </div>
-                      )
-                    }
-                    const heightPct = (targetMonthly / maxMonthValue) * 100
-                    return (
-                      <div style={{
-                        position:'absolute',
-                        left:0, right:0,
-                        bottom:`${heightPct}%`,
-                        borderTop:`1px dashed ${T.purple}`,
-                        zIndex:1,
-                        pointerEvents:'none',
-                      }}>
-                        <div style={{
-                          position:'absolute', right:0, top:-7,
-                          background:T.bg2, padding:'0 4px',
-                          fontSize:9, color:T.purple, fontWeight:600,
-                        }}>
-                          {fmtMoney(targetMonthly, true)}
-                        </div>
-                      </div>
-                    )
-                  })()}
-
-                  {/* Bars — scaled against maxMonthValue (NOT factoring target) */}
-                  <div style={{display:'flex', alignItems:'flex-end', gap:12, height:'100%', position:'relative'}}>
-                    {data.forecast.by_month.map(m => {
-                      const heightPct = (m.total / maxMonthValue) * 100
-                      const isActive = m.key === activeMonth
-                      const aboveTarget = showTargetLine && m.total >= targetMonthly
-                      return (
-                        <div key={m.key}
-                          onClick={() => setActiveMonth(m.key)}
-                          style={{flex:1, display:'flex', flexDirection:'column', alignItems:'center', gap:6, cursor:'pointer', minWidth:60, justifyContent:'flex-end'}}>
-                          <div style={{fontSize:11, color: isActive ? T.text : T.text2, fontVariantNumeric:'tabular-nums', fontWeight: isActive ? 600 : 400}}>
-                            {fmtMoney(m.total, true)}
-                          </div>
-                          <div style={{
-                            width:'100%',
-                            height:`${Math.max(2, heightPct)}%`,
-                            minHeight:4,
-                            background: isActive ? T.blue : (aboveTarget ? T.green : T.teal),
-                            borderRadius:'4px 4px 0 0',
-                            opacity: isActive ? 1 : 0.75,
-                            transition:'opacity 0.15s, background 0.15s',
-                          }}/>
-                        </div>
-                      )
-                    })}
-                  </div>
-                </div>
-
-                <div style={{display:'flex', gap:12, paddingTop:8}}>
-                  {data.forecast.by_month.map(m => {
-                    const isActive = m.key === activeMonth
-                    return (
-                      <div key={m.key}
-                        onClick={() => setActiveMonth(m.key)}
-                        style={{flex:1, minWidth:60, textAlign:'center', fontSize:11, color: isActive ? T.text : T.text3, fontWeight: isActive ? 600 : 400, cursor:'pointer'}}>
-                        <div>{m.label}</div>
-                        <div style={{fontSize:10, color:T.text3, marginTop:2}}>{m.job_count} job{m.job_count === 1 ? '' : 's'}</div>
-                      </div>
-                    )
-                  })}
-                </div>
+                <ForecastChart
+                  months={months}
+                  activeMonth={activeMonth}
+                  setActiveMonth={setActiveMonth}
+                  axis={axis}
+                  targetMonthly={targetMonthly}
+                />
               </div>
 
               {/* ── Two side-by-side breakdown panels ─────────────────────── */}
@@ -407,10 +346,162 @@ export default function ForecastingPage({ user }: { user: SessionUser }) {
   )
 }
 
+// ── SVG-based forecast chart ─────────────────────────────────────────────
+// Uses a viewBox so it scales fluidly. Properly draws Y-axis with $ labels,
+// horizontal gridlines, vertical bars, month labels, and target line overlay.
+
+function ForecastChart({ months, activeMonth, setActiveMonth, axis, targetMonthly }: {
+  months: MonthBucket[]
+  activeMonth: string | null
+  setActiveMonth: (k: string) => void
+  axis: { max: number; step: number; ticks: number[] }
+  targetMonthly: number
+}) {
+  // Layout in SVG user-space coordinates (viewBox handles responsive scaling)
+  const W = 1000
+  const H = 280
+  const PAD_LEFT = 70    // room for $ labels
+  const PAD_RIGHT = 20
+  const PAD_TOP = 20
+  const PAD_BOTTOM = 50  // room for month labels (two lines)
+
+  const plotW = W - PAD_LEFT - PAD_RIGHT
+  const plotH = H - PAD_TOP - PAD_BOTTOM
+  const plotX0 = PAD_LEFT
+  const plotY0 = PAD_TOP
+  const plotX1 = PAD_LEFT + plotW
+  const plotY1 = PAD_TOP + plotH
+
+  const showTargetLine = targetMonthly > 0
+  // If target sits above the chart's clean max, pin it to top edge with indicator
+  const targetAboveAxis = showTargetLine && targetMonthly > axis.max
+  const targetY = targetAboveAxis
+    ? plotY0
+    : plotY1 - (targetMonthly / axis.max) * plotH
+
+  // Bar geometry — equal-width slots, bars with horizontal padding
+  const slotW = plotW / Math.max(1, months.length)
+  const barW = Math.max(8, slotW * 0.7)
+
+  return (
+    <svg
+      viewBox={`0 0 ${W} ${H}`}
+      style={{ width: '100%', height: 'auto', display: 'block' }}
+      preserveAspectRatio="xMidYMid meet">
+
+      {/* ── Y-axis gridlines + labels ──────────────────────────────────── */}
+      {axis.ticks.map((tick, i) => {
+        const y = plotY1 - (tick / axis.max) * plotH
+        return (
+          <g key={`grid-${i}`}>
+            <line
+              x1={plotX0} x2={plotX1}
+              y1={y} y2={y}
+              stroke={T.border}
+              strokeWidth={1}
+              strokeDasharray={tick === 0 ? '0' : '2,3'}/>
+            <text
+              x={plotX0 - 8} y={y}
+              fill={T.text3}
+              fontSize={11}
+              textAnchor="end"
+              dominantBaseline="middle"
+              fontFamily="system-ui, -apple-system, sans-serif">
+              {fmtMoney(tick, true)}
+            </text>
+          </g>
+        )
+      })}
+
+      {/* ── Bars ───────────────────────────────────────────────────────── */}
+      {months.map((m, i) => {
+        const slotCenter = plotX0 + (i + 0.5) * slotW
+        const barX = slotCenter - barW / 2
+        const barH = (m.total / axis.max) * plotH
+        const barY = plotY1 - barH
+        const isActive = m.key === activeMonth
+        const aboveTarget = showTargetLine && m.total >= targetMonthly
+        const fill = isActive ? T.blue : (aboveTarget ? T.green : T.teal)
+        return (
+          <g key={m.key}
+            onClick={() => setActiveMonth(m.key)}
+            style={{ cursor: 'pointer' }}>
+            {/* Invisible hit area covering the whole slot */}
+            <rect
+              x={plotX0 + i * slotW}
+              y={plotY0}
+              width={slotW}
+              height={plotH + PAD_BOTTOM}
+              fill="transparent"/>
+            {/* Bar */}
+            <rect
+              x={barX} y={barY}
+              width={barW}
+              height={Math.max(2, barH)}
+              fill={fill}
+              opacity={isActive ? 1 : 0.85}
+              rx={3}/>
+            {/* Value label above bar */}
+            <text
+              x={slotCenter}
+              y={barY - 6}
+              fill={isActive ? T.text : T.text2}
+              fontSize={11}
+              fontWeight={isActive ? 600 : 400}
+              textAnchor="middle"
+              fontFamily="system-ui, -apple-system, sans-serif">
+              {fmtMoney(m.total, true)}
+            </text>
+            {/* Month label below baseline */}
+            <text
+              x={slotCenter}
+              y={plotY1 + 18}
+              fill={isActive ? T.text : T.text3}
+              fontSize={11}
+              fontWeight={isActive ? 600 : 400}
+              textAnchor="middle"
+              fontFamily="system-ui, -apple-system, sans-serif">
+              {m.label}
+            </text>
+            <text
+              x={slotCenter}
+              y={plotY1 + 33}
+              fill={T.text3}
+              fontSize={10}
+              textAnchor="middle"
+              fontFamily="system-ui, -apple-system, sans-serif">
+              {m.job_count} job{m.job_count === 1 ? '' : 's'}
+            </text>
+          </g>
+        )
+      })}
+
+      {/* ── Target line ────────────────────────────────────────────────── */}
+      {showTargetLine && (
+        <g>
+          <line
+            x1={plotX0} x2={plotX1}
+            y1={targetY} y2={targetY}
+            stroke={T.purple}
+            strokeWidth={1.5}
+            strokeDasharray="6,4"/>
+          <text
+            x={plotX1 - 4}
+            y={targetY - 4}
+            fill={T.purple}
+            fontSize={10}
+            fontWeight={600}
+            textAnchor="end"
+            fontFamily="system-ui, -apple-system, sans-serif">
+            {targetAboveAxis ? '↑ ' : ''}Target {fmtMoney(targetMonthly, true)}
+          </text>
+        </g>
+      )}
+    </svg>
+  )
+}
+
 // ── Inline target editor ─────────────────────────────────────────────────
-// Read-only view for non-admins (just shows the legend). Click-to-edit for
-// admins. Press Enter to save, Esc to cancel. Clearing the field saves 0
-// (which hides the target line).
 
 function TargetEditor({ initial, isAdmin, onSaved }: {
   initial: number
@@ -422,7 +513,6 @@ function TargetEditor({ initial, isAdmin, onSaved }: {
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  // Re-sync when the prop changes (e.g. after a reload)
   useEffect(() => {
     if (!editing) setDraft(String(initial || 0))
   }, [initial, editing])
@@ -503,12 +593,9 @@ function TargetEditor({ initial, isAdmin, onSaved }: {
         disabled={saving}
         placeholder="0"
         style={{
-          width: 100,
-          padding:'4px 8px',
-          background:T.bg3,
-          border:`1px solid ${T.border2}`,
-          color:T.text,
-          borderRadius:4, fontSize:11,
+          width: 100, padding:'4px 8px',
+          background:T.bg3, border:`1px solid ${T.border2}`,
+          color:T.text, borderRadius:4, fontSize:11,
           fontFamily:'inherit', outline:'none',
           fontVariantNumeric:'tabular-nums',
         }}/>
