@@ -1,20 +1,21 @@
 // scripts/recon-mechanicdesk-stocktake.ts
-// One-off reconnaissance script that captures everything about Mechanics
-// Desk's stocktake page so we can design the auto-fill flow correctly.
+// Reconnaissance script v2 — walks through the FULL stocktake flow to
+// capture every network call MD makes when:
+//   1. Landing on /stocktakes (the list)
+//   2. Clicking into the first existing stocktake (if any)
+//   3. Otherwise: creating a NEW stocktake (fills name, clicks Continue)
+//   4. Landing on the item-entry page
+//   5. Typing into the product search to trigger autocomplete API
+//   6. Capturing every interactable element on each page
 //
-// Captures:
-//   1. All XHR/fetch network requests (URL, method, status, request payload,
-//      response body) — we want to know if MD has internal JSON APIs we can
-//      call directly instead of driving the form.
-//   2. Page HTML snapshots at key states (list view, opened stocktake, scroll
-//      to load more items if it's a virtualised list).
-//   3. Console logs (in case the SPA logs anything useful about its API calls).
-//   4. Cookies (for understanding session shape).
+// SAFETY RAILS:
+//   • NEVER clicks Save / Submit / Complete / Finish / Delete
+//   • Adds NOTHING to any stocktake (we only inspect autocomplete)
+//   • If forced to create a stocktake to inspect the next page, the
+//     stocktake will be left empty — you can delete it manually after
 //
-// This script does NOT modify any data — it only observes.
-//
-// Run via .github/workflows/recon-mechanicdesk-stocktake.yml workflow_dispatch.
-// Output uploaded as a debug artifact for offline analysis.
+// Output: artifacts/ directory with screenshots, HTML, JSON network
+// captures, interactable element dumps, and console logs.
 
 import { chromium, Browser, BrowserContext, Page, Request, Response } from 'playwright'
 import { writeFileSync, mkdirSync, existsSync } from 'fs'
@@ -47,10 +48,13 @@ interface CapturedRequest {
   responseBody?: string
   responseError?: string
   durationMs?: number
+  // Phase tag — which step of the recon was this captured during?
+  phase?: string
 }
 
 const captured: CapturedRequest[] = []
 const requestStartTimes = new Map<Request, number>()
+let currentPhase = 'init'
 
 async function setupNetworkCapture(context: BrowserContext): Promise<void> {
   context.on('request', (request) => {
@@ -63,9 +67,8 @@ async function setupNetworkCapture(context: BrowserContext): Promise<void> {
     requestStartTimes.delete(request)
 
     const url = request.url()
-    // Filter out static asset noise — we only care about API-ish traffic.
     if (/\.(png|jpg|jpeg|gif|svg|webp|ico|css|woff2?|ttf|otf|eot|map)(\?|$)/i.test(url)) return
-    if (/google-analytics|googletagmanager|hotjar|fullstory|sentry/.test(url)) return
+    if (/google-analytics|googletagmanager|hotjar|fullstory|sentry|stripe/.test(url)) return
 
     const resourceType = request.resourceType()
     if (resourceType === 'image' || resourceType === 'font' || resourceType === 'stylesheet') return
@@ -81,18 +84,17 @@ async function setupNetworkCapture(context: BrowserContext): Promise<void> {
       statusText: response.statusText(),
       responseHeaders: response.headers(),
       durationMs: startMs ? Date.now() - startMs : undefined,
+      phase: currentPhase,
     }
 
-    // Capture response body for things that look like JSON APIs
     const ct = (response.headers()['content-type'] || '').toLowerCase()
     if (
       ct.includes('json') ||
-      ct.includes('javascript') ||
-      ct.includes('text/html') && url.includes('/auto_workshop/')
+      (ct.includes('javascript') && url.includes('/auto_workshop/')) ||
+      (ct.includes('text/html') && url.includes('/auto_workshop/'))
     ) {
       try {
         const body = await response.text()
-        // Cap at 200KB per response so we don't blow up the artifact
         entry.responseBody = body.length > 200_000 ? body.slice(0, 200_000) + '\n... [TRUNCATED]' : body
       } catch (e: any) {
         entry.responseError = e?.message || String(e)
@@ -109,10 +111,79 @@ async function snapshotPage(page: Page, label: string): Promise<void> {
     await page.screenshot({ path: join(ARTIFACT_DIR, `${label}.png`), fullPage: true })
     const html = await page.content()
     writeFileSync(join(ARTIFACT_DIR, `${label}.html`), html)
-    const url = page.url()
-    writeFileSync(join(ARTIFACT_DIR, `${label}.url.txt`), url)
+    writeFileSync(join(ARTIFACT_DIR, `${label}.url.txt`), page.url())
   } catch (e: any) {
     log(`Snapshot ${label} failed: ${e?.message || e}`)
+  }
+}
+
+async function dumpInteractables(page: Page, label: string): Promise<void> {
+  try {
+    const items = await page.evaluate(() => {
+      const results: any[] = []
+
+      // All inputs (visible only)
+      document.querySelectorAll('input, textarea, select').forEach((el) => {
+        const e = el as HTMLInputElement
+        const rect = e.getBoundingClientRect()
+        const visible = rect.width > 0 && rect.height > 0
+        if (!visible && e.type === 'hidden') return  // skip hidden form scaffolding
+        const dataAttrs: Record<string, string> = {}
+        for (const a of e.attributes) {
+          if (a.name.startsWith('data-') || a.name.startsWith('ng-')) {
+            dataAttrs[a.name] = a.value.slice(0, 200)
+          }
+        }
+        results.push({
+          kind: 'input',
+          type: e.type || e.tagName.toLowerCase(),
+          name: e.name,
+          id: e.id,
+          placeholder: e.placeholder,
+          classes: (e.className || '').slice(0, 200),
+          value: e.value?.slice(0, 100),
+          visible,
+          dataAttrs,
+        })
+      })
+
+      // Tables (just metadata)
+      document.querySelectorAll('table, .table, [role="table"]').forEach((el) => {
+        const e = el as HTMLElement
+        results.push({
+          kind: 'table',
+          tag: e.tagName,
+          classes: (e.className || '').slice(0, 200),
+          rowCount: e.querySelectorAll('tr, [role="row"]').length,
+          id: e.id,
+        })
+      })
+
+      // Buttons + click handlers
+      document.querySelectorAll('button, input[type="submit"], a.btn, [ng-click]').forEach((el) => {
+        const e = el as HTMLElement
+        const text = (e.textContent || '').trim().slice(0, 100)
+        const ngClick = e.getAttribute('ng-click') || ''
+        if (!text && !ngClick) return
+        const rect = e.getBoundingClientRect()
+        results.push({
+          kind: 'click',
+          tag: e.tagName,
+          text,
+          classes: (e.className || '').slice(0, 200),
+          ngClick: ngClick.slice(0, 200),
+          href: (e as HTMLAnchorElement).href || undefined,
+          id: e.id,
+          visible: rect.width > 0 && rect.height > 0,
+        })
+      })
+
+      return results.slice(0, 500)
+    })
+    writeFileSync(join(ARTIFACT_DIR, `${label}.json`), JSON.stringify(items, null, 2))
+    log(`  → ${items.length} interactable elements dumped to ${label}.json`)
+  } catch (e: any) {
+    log(`dumpInteractables ${label} failed: ${e?.message}`)
   }
 }
 
@@ -160,187 +231,156 @@ async function login(page: Page, workshopId: string, username: string, password:
 }
 
 async function exploreStocktakes(page: Page): Promise<void> {
-  log(`Navigating to stocktakes: ${STOCKTAKES_URL}`)
+  // ── Phase 1: List page ──────────────────────────────────────────────
+  currentPhase = 'list'
+  log(`PHASE: list — navigating to stocktakes`)
   await page.goto(STOCKTAKES_URL, { waitUntil: 'domcontentloaded', timeout: 30000 }).catch(e => {
     log(`(initial nav: ${e?.message})`)
   })
-
-  // SPA route — give it a moment to render
-  await page.waitForTimeout(3000)
+  await page.waitForTimeout(3500)
   await snapshotPage(page, '03-stocktakes-list')
+  await dumpInteractables(page, '03-stocktakes-list-interactables')
 
-  // Try to find any clickable stocktake row, button, or link
-  log('Looking for stocktake list entries / action buttons…')
-
-  // Capture the list page HTML so we can see what selectors are available
-  const listInteractables = await page.evaluate(() => {
-    const items: Array<{ tag: string; text: string; classes: string; href?: string; id?: string; dataAttrs: Record<string, string> }> = []
-    const candidates = document.querySelectorAll('a, button, tr[ng-click], tr[data-id], [ng-click]:not(input)')
-    candidates.forEach((el) => {
-      const e = el as HTMLElement
-      const text = (e.textContent || '').trim().slice(0, 120)
-      if (!text && !e.getAttribute('href')) return
-      const dataAttrs: Record<string, string> = {}
-      for (const a of e.attributes) {
-        if (a.name.startsWith('data-') || a.name.startsWith('ng-')) {
-          dataAttrs[a.name] = a.value.slice(0, 200)
-        }
-      }
-      items.push({
-        tag: e.tagName,
-        text,
-        classes: e.className,
-        href: (e as HTMLAnchorElement).href || undefined,
-        id: e.id || undefined,
-        dataAttrs,
-      })
-    })
-    return items.slice(0, 200)
+  // ── Phase 2: Try to open an EXISTING stocktake first ────────────────
+  // A real stocktake link looks like /stocktakes/{numeric_id} or
+  // /stocktakes/{id}/edit — NOT /stocktakes/new
+  log(`PHASE: trying to find an existing stocktake to open`)
+  const existingHref = await page.evaluate(() => {
+    const links = Array.from(document.querySelectorAll('a[href]'))
+    for (const link of links) {
+      const href = (link as HTMLAnchorElement).href
+      // Match /stocktakes/<digits> but NOT /stocktakes/new
+      if (/\/stocktakes\/\d+/.test(href)) return href
+    }
+    return null
   })
-  writeFileSync(join(ARTIFACT_DIR, '03-stocktakes-list-interactables.json'), JSON.stringify(listInteractables, null, 2))
-  log(`Captured ${listInteractables.length} interactable elements on list page`)
 
-  // Try to click into the first stocktake — multiple selector strategies
-  log('Attempting to open the first stocktake…')
-  let clicked = false
-  const clickStrategies = [
-    'a[href*="/stocktakes/"]:not([href$="/stocktakes"]):not([href$="/stocktakes/"])',
-    'a[href*="stocktakes/"][href*="/edit"]',
-    'tr.stocktake-row',
-    'tr[data-id]',
-    'button:has-text("Edit"):first-of-type',
-    'button:has-text("Open"):first-of-type',
-    'a:has-text("View"):first-of-type',
-    'a:has-text("Edit"):first-of-type',
-    'a.btn:not([href$="/stocktakes"]):first-of-type',
+  let openedExisting = false
+  if (existingHref) {
+    log(`  Found existing stocktake: ${existingHref}`)
+    currentPhase = 'open-existing'
+    await page.goto(existingHref, { waitUntil: 'domcontentloaded', timeout: 30000 }).catch(() => undefined)
+    await page.waitForTimeout(3500)
+    await snapshotPage(page, '04a-existing-stocktake')
+    await dumpInteractables(page, '04a-existing-stocktake-interactables')
+    openedExisting = true
+  } else {
+    log('  No existing stocktake found on the list page')
+  }
+
+  // ── Phase 3: Create a new stocktake (only fill name + click Continue) ─
+  // We do this regardless — even if we opened an existing one, we still
+  // want to capture the "create" flow's network calls so we know how to
+  // create one programmatically later.
+  currentPhase = 'create-new'
+  log(`PHASE: create-new — visiting /stocktakes/new`)
+  await page.goto(`${MD_BASE}/auto_workshop/app#/stocktakes/new`, { waitUntil: 'domcontentloaded', timeout: 30000 }).catch(() => undefined)
+  await page.waitForTimeout(3000)
+  await snapshotPage(page, '05a-new-stocktake-form')
+  await dumpInteractables(page, '05a-new-stocktake-form-interactables')
+
+  // Fill the name field with a clearly-marked recon name so it's obvious
+  // in MD that this can be deleted
+  const reconName = `RECON_DELETE_ME_${new Date().toISOString().slice(0, 10)}`
+  log(`  Filling stocktake name: ${reconName}`)
+  const nameInput = await page.$('input[ng-model="stocktake.name"]')
+  if (!nameInput) {
+    log('  WARN: Could not find stocktake.name input — falling back to any visible text input')
+    const fallback = await page.$('form input[type="text"]:not([disabled]):not([readonly])')
+    if (fallback) await fallback.fill(reconName)
+  } else {
+    await nameInput.fill(reconName)
+  }
+
+  // Click Continue
+  log(`  Clicking Continue (save_new_stocktake)`)
+  const continueBtn = await page.$('button[ng-click="save_new_stocktake()"]')
+  if (continueBtn) {
+    await continueBtn.click()
+  } else {
+    // Fallback selector
+    const fallback = await page.$('button.btn-primary:has-text("Continue")')
+    if (fallback) await fallback.click()
+    else log('  WARN: No Continue button found')
+  }
+
+  // Wait for the navigation/render to settle. The POST and subsequent
+  // GET(s) for the new stocktake's data should fire here.
+  log('  Waiting for next page to render (5s)…')
+  await page.waitForTimeout(5000)
+  await snapshotPage(page, '06-stocktake-item-entry')
+  await dumpInteractables(page, '06-stocktake-item-entry-interactables')
+  log(`  Landed on: ${page.url()}`)
+
+  // ── Phase 4: Try typing into the product search ─────────────────────
+  currentPhase = 'search-product'
+  log(`PHASE: search-product — looking for SKU/product search input`)
+
+  // Try several likely selectors for the search field on the item entry page
+  const searchSelectors = [
+    'input[ng-model*="search" i]',
+    'input[ng-model*="query" i]',
+    'input[placeholder*="search" i]',
+    'input[placeholder*="stock" i]',
+    'input[placeholder*="product" i]',
+    'input[placeholder*="SKU" i]',
+    'input[ng-model*="stock" i]',
+    // Anything with selectize/select2 styling — common for autocomplete
+    '.selectize-input input[type="text"]',
+    'input.select2-input',
+    // Last resort: first non-search-engine text input on the page
+    'main input[type="text"]:not([ng-model="global_query"]):not([id="global-search-input"])',
+    '.content-box input[type="text"]:not([readonly])',
   ]
 
-  for (const selector of clickStrategies) {
-    const el = await page.$(selector).catch(() => null)
+  let searchInput = null
+  let usedSelector = ''
+  for (const sel of searchSelectors) {
+    const el = await page.$(sel).catch(() => null)
     if (el) {
-      log(`Clicking via "${selector}"`)
-      try {
-        await el.click()
-        clicked = true
+      const isVisible = await el.isVisible().catch(() => false)
+      if (isVisible) {
+        searchInput = el
+        usedSelector = sel
         break
-      } catch (e: any) {
-        log(`  click failed: ${e?.message}`)
       }
     }
   }
 
-  if (!clicked) {
-    // Fallback: click whatever looks most like a row
-    log('No selectors matched — trying first stocktake-like element via JS')
-    clicked = await page.evaluate(() => {
-      // Look for elements that mention "stocktake" in their class or have a stocktake-ish href
-      const candidates = Array.from(document.querySelectorAll('a, [ng-click]'))
-      for (const el of candidates) {
-        const e = el as HTMLElement
-        const href = (e as HTMLAnchorElement).href || ''
-        const ngClick = e.getAttribute('ng-click') || ''
-        const klass = e.className || ''
-        if (
-          (href.match(/\/stocktakes\/\d+/) ||
-           ngClick.includes('stocktake') ||
-           klass.includes('stocktake'))
-          && !href.endsWith('/stocktakes')
-        ) {
-          (el as HTMLElement).click()
-          return true
-        }
-      }
-      return false
-    })
-  }
-
-  if (!clicked) {
-    log('WARN: could not find/click any stocktake row. The list may be empty or the script needs hand-tuning.')
-    await snapshotPage(page, '04-couldnt-open-stocktake')
-    return
-  }
-
-  // Wait for the stocktake detail to render
-  await page.waitForTimeout(4000)
-  await snapshotPage(page, '04-stocktake-detail')
-
-  // Capture interactables on the detail page too
-  const detailInteractables = await page.evaluate(() => {
-    const items: any[] = []
-
-    // Inputs (likely where counts are entered)
-    document.querySelectorAll('input').forEach((el) => {
-      const dataAttrs: Record<string, string> = {}
-      for (const a of el.attributes) {
-        if (a.name.startsWith('data-') || a.name.startsWith('ng-')) {
-          dataAttrs[a.name] = a.value.slice(0, 200)
-        }
-      }
-      items.push({
-        kind: 'input',
-        type: el.type,
-        name: el.name,
-        id: el.id,
-        placeholder: el.placeholder,
-        classes: el.className,
-        value: el.value?.slice(0, 100),
-        dataAttrs,
-      })
-    })
-
-    // Look for table-like structures and how many rows they have
-    document.querySelectorAll('table, .table, [role="table"]').forEach((el) => {
-      const rows = el.querySelectorAll('tr, [role="row"]').length
-      items.push({
-        kind: 'table',
-        tag: (el as HTMLElement).tagName,
-        classes: (el as HTMLElement).className,
-        rowCount: rows,
-      })
-    })
-
-    // Buttons (save, add, etc)
-    document.querySelectorAll('button, input[type="submit"], a.btn').forEach((el) => {
-      const e = el as HTMLElement
-      items.push({
-        kind: 'button',
-        text: (e.textContent || '').trim().slice(0, 80),
-        classes: e.className,
-        ngClick: e.getAttribute('ng-click') || undefined,
-      })
-    })
-    return items.slice(0, 300)
-  })
-  writeFileSync(join(ARTIFACT_DIR, '04-stocktake-detail-interactables.json'), JSON.stringify(detailInteractables, null, 2))
-  log(`Captured ${detailInteractables.length} elements on detail page`)
-
-  // Scroll to bottom in case it's a virtualised list — captures any
-  // pagination/infinite scroll API calls
-  log('Scrolling to bottom to trigger any lazy-loading…')
-  for (let i = 0; i < 5; i++) {
-    await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight))
-    await page.waitForTimeout(1500)
-  }
-  await snapshotPage(page, '05-stocktake-detail-after-scroll')
-
-  // Try typing into the first text input on the detail page (probably the
-  // "search by SKU" or "add product" field)
-  log('Attempting to type into the first text-like input on the detail page…')
-  const firstInput = await page.$('input[type="text"]:not([disabled]):not([readonly]), input:not([type]):not([disabled]):not([readonly])')
-  if (firstInput) {
+  if (searchInput) {
+    log(`  Found search input via selector: ${usedSelector}`)
     try {
-      await firstInput.click()
-      await firstInput.fill('TEST_SKU_DO_NOT_SAVE')
-      await page.waitForTimeout(2000)  // wait for any autocomplete API
-      await snapshotPage(page, '06-after-input-typed')
-      // Clear it
-      await firstInput.fill('')
+      await searchInput.click()
+      await page.waitForTimeout(300)
+      // Type slowly, character by character, so each keystroke can fire
+      // its own autocomplete request. This gives us the clearest API trace.
+      const testQuery = 'OIL'  // generic, likely to match SOMETHING in inventory
+      log(`  Typing "${testQuery}" character-by-character`)
+      for (const ch of testQuery) {
+        await page.keyboard.type(ch, { delay: 200 })
+      }
+      // Wait for any autocomplete responses to come in
+      await page.waitForTimeout(2500)
+      await snapshotPage(page, '07-after-search-typed')
+      await dumpInteractables(page, '07-after-search-typed-interactables')
+
+      // Clear the field (don't accidentally select an item)
+      log('  Clearing search field')
+      await searchInput.fill('').catch(() => undefined)
+      // Click somewhere safe to dismiss any dropdown
+      await page.keyboard.press('Escape').catch(() => undefined)
+      await page.waitForTimeout(500)
     } catch (e: any) {
-      log(`Couldn't interact with first input: ${e?.message}`)
+      log(`  Could not interact with search input: ${e?.message}`)
     }
   } else {
-    log('No input field found on detail page')
+    log('  WARN: Could not find a product search input on the item entry page')
   }
+
+  // ── Phase 5: Capture the page after waiting a moment ────────────────
+  currentPhase = 'final-snapshot'
+  await page.waitForTimeout(1500)
+  await snapshotPage(page, '08-final-state')
 
   log('Reconnaissance complete')
 }
@@ -359,57 +399,63 @@ async function main(): Promise<void> {
     browser = await chromium.launch({ headless: true })
     const context = await browser.newContext({
       userAgent: 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-      acceptDownloads: true,
+      acceptDownloads: false,  // we don't download anything during recon
       viewport: { width: 1400, height: 1000 },
     })
 
-    // Capture browser console messages too
-    const consoleMessages: Array<{ ts: string; type: string; text: string }> = []
+    const consoleMessages: Array<{ ts: string; phase: string; type: string; text: string }> = []
     context.on('weberror', (err) => {
-      consoleMessages.push({ ts: new Date().toISOString(), type: 'pageerror', text: err.error().message })
+      consoleMessages.push({ ts: new Date().toISOString(), phase: currentPhase, type: 'pageerror', text: err.error().message })
     })
 
     await setupNetworkCapture(context)
 
     const page = await context.newPage()
     page.on('console', (msg) => {
-      consoleMessages.push({ ts: new Date().toISOString(), type: msg.type(), text: msg.text().slice(0, 500) })
+      consoleMessages.push({ ts: new Date().toISOString(), phase: currentPhase, type: msg.type(), text: msg.text().slice(0, 500) })
     })
 
+    currentPhase = 'login'
     await login(page, workshopId, username, password)
     await exploreStocktakes(page)
 
-    // Dump network capture
-    log(`Captured ${captured.length} network requests — writing to disk`)
+    log(`Captured ${captured.length} network requests`)
     writeFileSync(join(ARTIFACT_DIR, 'network.json'), JSON.stringify(captured, null, 2))
 
-    // Compact summary table
+    // Compact summary — easier to scan
     const summary = captured
-      .filter(c => c.url.includes('/auto_workshop/') || c.url.includes('/api/'))
+      .filter(c =>
+        (c.url.includes('/auto_workshop/') || c.url.includes('/api/')) &&
+        !c.url.includes('/assets/')
+      )
       .map(c => ({
+        phase: c.phase,
         method: c.method,
         status: c.status,
         url: c.url.replace(MD_BASE, ''),
         ms: c.durationMs,
         ct: c.responseHeaders?.['content-type']?.split(';')[0],
-        size: c.responseBody?.length,
+        body_size: c.responseBody?.length,
+        post_size: c.postData?.length,
       }))
     writeFileSync(join(ARTIFACT_DIR, 'network-summary.json'), JSON.stringify(summary, null, 2))
     log(`Wrote ${summary.length} app/api requests to network-summary.json`)
 
-    // Console messages
+    // Per-phase breakdown — even more compact
+    const phases: Record<string, any[]> = {}
+    summary.forEach(s => {
+      const phase = s.phase || 'unknown'
+      if (!phases[phase]) phases[phase] = []
+      phases[phase].push(`${s.method} ${s.status} ${s.url}${s.post_size ? ` (POST body ${s.post_size}b)` : ''}`)
+    })
+    writeFileSync(join(ARTIFACT_DIR, 'network-by-phase.json'), JSON.stringify(phases, null, 2))
+
     writeFileSync(join(ARTIFACT_DIR, 'console.json'), JSON.stringify(consoleMessages, null, 2))
 
-    // Cookies
     const cookies = await context.cookies(MD_BASE)
     writeFileSync(join(ARTIFACT_DIR, 'cookies.json'), JSON.stringify(cookies.map(c => ({
-      name: c.name,
-      domain: c.domain,
-      path: c.path,
-      httpOnly: c.httpOnly,
-      secure: c.secure,
-      sameSite: c.sameSite,
-      // Don't dump the actual value — just indicate length
+      name: c.name, domain: c.domain, path: c.path,
+      httpOnly: c.httpOnly, secure: c.secure, sameSite: c.sameSite,
       valueLength: c.value?.length || 0,
     })), null, 2))
 
@@ -418,7 +464,6 @@ async function main(): Promise<void> {
   } catch (e: any) {
     log(`FATAL: ${e?.message || String(e)}`)
     if (e?.stack) log(e.stack)
-    // Still write what we captured even on failure
     if (captured.length > 0) {
       writeFileSync(join(ARTIFACT_DIR, 'network-partial.json'), JSON.stringify(captured, null, 2))
       log(`Wrote ${captured.length} partial network captures`)
