@@ -47,6 +47,24 @@ interface SessionUser {
   visibleTabs?: string[] | null;
 }
 
+// Convert an ArrayBuffer to a base64 string. We chunk-loop instead of using
+// String.fromCharCode(...new Uint8Array(buf)) because:
+//   1. tsconfig target=es5 forbids spreading typed arrays
+//   2. Spreading a 10MB file would stack-overflow even if it did compile
+//      (each byte becomes an argument to fromCharCode)
+function arrayBufferToBase64(buf: ArrayBuffer): string {
+  const bytes = new Uint8Array(buf)
+  const CHUNK = 0x8000  // 32KB — safely under most JS engines' arg-count limits
+  let binary = ''
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    const slice = bytes.subarray(i, i + CHUNK)
+    // Cast to any to satisfy es5 target (fromCharCode accepts a number[] but
+    // we're passing a Uint8Array slice which is iterable at runtime).
+    binary += String.fromCharCode.apply(null, slice as any)
+  }
+  return btoa(binary)
+}
+
 export default function StocktakeIndexPage({ user }: { user: SessionUser }) {
   const router = useRouter()
   const [uploads, setUploads] = useState<UploadRow[]>([])
@@ -174,7 +192,7 @@ function UploadCard({ onUploaded }: { onUploaded: (id: string) => void }) {
     setUploading(true); setError('')
     try {
       const arrBuf = await file.arrayBuffer()
-      const base64 = btoa(String.fromCharCode(...new Uint8Array(arrBuf)))
+      const base64 = arrayBufferToBase64(arrBuf)
       const r = await fetch('/api/stocktake/upload', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
