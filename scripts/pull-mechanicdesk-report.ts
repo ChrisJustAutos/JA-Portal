@@ -8,17 +8,12 @@
 //
 // Required env vars:
 //   MECHANICDESK_WORKSHOP_ID    — workshop ID (e.g. "5108")
-//   MECHANICDESK_USERNAME       — login username (NOT email — short username like "chris")
+//   MECHANICDESK_USERNAME       — login username (short username like "chris")
 //   MECHANICDESK_PASSWORD       — login password
 //   JA_PORTAL_API_KEY           — service token with scope 'upload:job-report'
 //   JA_PORTAL_BASE_URL          — e.g. https://ja-portal.vercel.app
 //   SLACK_WEBHOOK_URL           — incoming webhook for failure notifications (optional)
-//   MECHANICDESK_LOGIN_URL      — override login URL (optional, default tries common URLs)
-//
-// Exit codes:
-//   0  — success
-//   1  — failure that was reported to Slack
-//   2  — failure that could NOT be reported (e.g. Slack webhook itself failed)
+//   MECHANICDESK_LOGIN_URL      — override login URL (optional)
 
 import { chromium, Browser, BrowserContext, Page, Download } from 'playwright'
 import { writeFileSync, readFileSync, existsSync, mkdirSync } from 'fs'
@@ -27,14 +22,14 @@ import { join } from 'path'
 // ── Config ─────────────────────────────────────────────────────────────
 
 const MD_BASE = 'https://www.mechanicdesk.com.au'
-// Most common landing pages — script tries them in order until it finds the
-// 3-field login form (Workshop ID, Username, Password).
+// Mechanics Desk has a non-standard login URL: /auto_workshop/login.
+// We try the canonical URL first, then a few fallbacks in case it changes.
 const MD_LOGIN_URL_CANDIDATES = [
   process.env.MECHANICDESK_LOGIN_URL,
-  `${MD_BASE}/`,
+  `${MD_BASE}/auto_workshop/login`,
   `${MD_BASE}/users/sign_in`,
   `${MD_BASE}/login`,
-  `${MD_BASE}/sign_in`,
+  `${MD_BASE}/`,
 ].filter(Boolean) as string[]
 
 const DAYS_BEHIND = 30
@@ -114,9 +109,6 @@ async function saveDebugArtifacts(page: Page, label: string): Promise<void> {
 // ── Login ──────────────────────────────────────────────────────────────
 
 async function findFormPage(page: Page): Promise<string> {
-  // Try each candidate URL until we find a page with all three fields.
-  // The Mechanics Desk login form has Workshop ID, Username, Password — quite
-  // distinctive among Devise-style apps which usually only have email + password.
   for (const url of MD_LOGIN_URL_CANDIDATES) {
     log(`Trying login URL: ${url}`)
     try {
@@ -130,7 +122,7 @@ async function findFormPage(page: Page): Promise<string> {
       log(`  found login form at ${page.url()}`)
       return page.url()
     }
-    log(`  no password field on this page, trying next…`)
+    log(`  no password field on this page (status: ${page.url()}), trying next…`)
   }
   throw new Error(`Could not find a Mechanics Desk login page. Tried: ${MD_LOGIN_URL_CANDIDATES.join(', ')}`)
 }
@@ -138,9 +130,9 @@ async function findFormPage(page: Page): Promise<string> {
 async function login(page: Page, workshopId: string, username: string, password: string): Promise<void> {
   await findFormPage(page)
 
-  // Mechanics Desk login has THREE fields. We don't know exact attribute names
-  // so we try several patterns. If named selectors all miss, fall back to
-  // positional (the screenshot shows Workshop ID is the first text input).
+  // Save the login page so we can confirm field selectors after the run
+  await saveDebugArtifacts(page, 'login-page-loaded')
+
   const workshopSelectors = [
     'input[name="workshop_id"]',
     'input[name="user[workshop_id]"]',
@@ -174,7 +166,7 @@ async function login(page: Page, workshopId: string, username: string, password:
     'button:has-text("Sign in")',
   ]
 
-  async function fillFirst(selectors: string[], value: string, label: string) {
+  async function fillFirst(selectors: string[], value: string, label: string): Promise<string | null> {
     for (const sel of selectors) {
       const el = await page.$(sel)
       if (el) { await el.fill(value); log(`Filled ${label} via "${sel}"`); return sel }
@@ -196,11 +188,18 @@ async function login(page: Page, workshopId: string, username: string, password:
     }
   }
 
-  // Username — required
-  const usernameFilled = await fillFirst(usernameSelectors, username, 'username')
+  // Username — try named, then positional fallback (second text input on page)
+  let usernameFilled = await fillFirst(usernameSelectors, username, 'username')
   if (!usernameFilled) {
-    await saveDebugArtifacts(page, 'username-not-found')
-    throw new Error(`Could not find username field. Tried: ${usernameSelectors.join(', ')}`)
+    log(`Username selector miss, trying positional fallback (second text input)`)
+    const allTextInputs = await page.$$('input[type="text"]:not([type="hidden"]):not([disabled])')
+    if (allTextInputs.length >= 2) {
+      await allTextInputs[1].fill(username)
+      log('Filled username via positional fallback (second text input)')
+    } else {
+      await saveDebugArtifacts(page, 'username-not-found')
+      throw new Error(`Could not find username field. Tried: ${usernameSelectors.join(', ')}`)
+    }
   }
 
   // Password — required
@@ -235,6 +234,7 @@ async function login(page: Page, workshopId: string, username: string, password:
   }
 
   log(`Login OK — landed on ${page.url()}`)
+  await saveDebugArtifacts(page, 'login-success')
 }
 
 // ── Download ───────────────────────────────────────────────────────────
