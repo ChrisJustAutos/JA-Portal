@@ -22,8 +22,6 @@ import { join } from 'path'
 // ── Config ─────────────────────────────────────────────────────────────
 
 const MD_BASE = 'https://www.mechanicdesk.com.au'
-// Mechanics Desk has a non-standard login URL: /auto_workshop/login.
-// We try the canonical URL first, then a few fallbacks in case it changes.
 const MD_LOGIN_URL_CANDIDATES = [
   process.env.MECHANICDESK_LOGIN_URL,
   `${MD_BASE}/auto_workshop/login`,
@@ -129,8 +127,6 @@ async function findFormPage(page: Page): Promise<string> {
 
 async function login(page: Page, workshopId: string, username: string, password: string): Promise<void> {
   await findFormPage(page)
-
-  // Save the login page so we can confirm field selectors after the run
   await saveDebugArtifacts(page, 'login-page-loaded')
 
   const workshopSelectors = [
@@ -174,7 +170,7 @@ async function login(page: Page, workshopId: string, username: string, password:
     return null
   }
 
-  // Workshop ID — try named, then positional fallback
+  // Workshop ID
   let workshopFilled = await fillFirst(workshopSelectors, workshopId, 'workshop ID')
   if (!workshopFilled) {
     log(`Workshop ID selector miss, trying positional fallback (first text input)`)
@@ -184,11 +180,11 @@ async function login(page: Page, workshopId: string, username: string, password:
       log('Filled workshop ID via positional fallback')
     } else {
       await saveDebugArtifacts(page, 'workshop-id-not-found')
-      throw new Error(`Could not find workshop ID field. Tried: ${workshopSelectors.join(', ')} + positional fallback`)
+      throw new Error(`Could not find workshop ID field`)
     }
   }
 
-  // Username — try named, then positional fallback (second text input on page)
+  // Username
   let usernameFilled = await fillFirst(usernameSelectors, username, 'username')
   if (!usernameFilled) {
     log(`Username selector miss, trying positional fallback (second text input)`)
@@ -198,39 +194,50 @@ async function login(page: Page, workshopId: string, username: string, password:
       log('Filled username via positional fallback (second text input)')
     } else {
       await saveDebugArtifacts(page, 'username-not-found')
-      throw new Error(`Could not find username field. Tried: ${usernameSelectors.join(', ')}`)
+      throw new Error(`Could not find username field`)
     }
   }
 
-  // Password — required
+  // Password
   const passwordFilled = await fillFirst(passwordSelectors, password, 'password')
   if (!passwordFilled) {
     await saveDebugArtifacts(page, 'password-not-found')
-    throw new Error(`Could not find password field. Tried: ${passwordSelectors.join(', ')}`)
+    throw new Error(`Could not find password field`)
   }
 
-  // Submit
-  let submitted = false
+  // Submit. We don't wait for 'networkidle' here — Mechanics Desk keeps
+  // background traffic going (long-polling, analytics pings) after login,
+  // so networkidle never resolves. Instead we wait for the login form to
+  // disappear, which is the actual signal that we're logged in.
+  let clicked = false
   for (const sel of submitSelectors) {
     const el = await page.$(sel)
     if (el) {
       log(`Clicking submit "${sel}"`)
-      await Promise.all([
-        page.waitForLoadState('networkidle', { timeout: 30000 }),
-        el.click(),
-      ])
-      submitted = true
+      await el.click()
+      clicked = true
       break
     }
   }
-  if (!submitted) throw new Error(`Could not find submit button. Tried: ${submitSelectors.join(', ')}`)
+  if (!clicked) throw new Error(`Could not find submit button`)
 
-  // Verify we're past login. If there's still a password field, we're stuck.
-  const passwordStillVisible = await page.$('input[type="password"]')
-  if (passwordStillVisible) {
+  // Wait for password field to disappear (the real success signal). Up to 30s.
+  log('Waiting for login form to disappear (password field gone)…')
+  try {
+    await page.waitForSelector('input[type="password"]', { state: 'detached', timeout: 30000 })
+  } catch (e: any) {
+    // Password field still there — login probably failed
     await saveDebugArtifacts(page, 'login-failed')
-    const errorText = await page.locator('.alert, .flash, .error, [role="alert"]').first().textContent().catch(() => null)
-    throw new Error(`Login failed — still on a page with a password field. Error: "${errorText || 'unknown'}"`)
+    const errorText = await page.locator('.alert, .flash, .error, [role="alert"], .help-block').first().textContent().catch(() => null)
+    throw new Error(`Login failed — password field still visible after 30s. Error message: "${errorText?.trim() || 'none'}"`)
+  }
+
+  // Belt-and-braces: also let the page settle a bit so that the next navigation
+  // (download URL) doesn't race ahead of any redirect chain.
+  try {
+    await page.waitForLoadState('domcontentloaded', { timeout: 10000 })
+  } catch {
+    /* not critical */
   }
 
   log(`Login OK — landed on ${page.url()}`)
