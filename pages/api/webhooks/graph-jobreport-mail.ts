@@ -8,7 +8,9 @@
 //      with subject "ATTN: Just Autos, Your daily Job Wip Report" containing
 //      a CSV/XLSX attachment with all current jobs.
 //   3. Graph POSTs notification → this endpoint → we fetch attachment →
-//      ingest via lib/job-report-upload → forecasting page reads new data.
+//      ingest via lib/job-report-upload as report_type='wip_snapshot' (its
+//      own lane — does NOT pollute the forecast lane that drives the
+//      Forecasting page).
 //
 // Filtering (defensive — we have a dedicated subscription, but Chris's
 // Inbox gets plenty of unrelated mail):
@@ -273,14 +275,19 @@ async function runPipelineC(input: {
 
   const buffer = Buffer.from(fileBase64, 'base64')
 
-  // 2. Ingest
+  // 2. Ingest as wip_snapshot — its own lane, doesn't touch the forecast lane.
+  // The auto-WIP export from Mechanics Desk is a stripped-down version of the
+  // manual export (missing Job Date, real Job Types, Total/Quoted Total) so it
+  // is NOT used for forecasting. Reserved for a future "Today's Workshop"
+  // widget on Overview.
   try {
     const result = await ingestJobReport({
       buffer,
       filename: input.attachmentName,
       source: 'graph_mail',
+      reportType: 'wip_snapshot',
       uploadedBy: null,
-      notes: `Auto-ingested from email "${input.messageSubject}" (${new Date().toISOString()})`,
+      notes: `Auto-ingested as WIP snapshot from email "${input.messageSubject}" (${new Date().toISOString()})`,
     })
 
     await logIngestEvent({
@@ -288,6 +295,7 @@ async function runPipelineC(input: {
       status: 'success',
       detailsExtra: {
         runId: result.runId,
+        reportType: result.reportType,
         jobCount: result.jobCount,
         rematchedInvoices: result.rematchedInvoices,
         warnings: result.warnings,
