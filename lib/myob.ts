@@ -4,6 +4,7 @@
 // References:
 //   https://accountrightapi.myob.com/
 //   https://developer.myob.com/api/myob-business-api/api-overview/
+//   https://apisupport.myob.com/hc/en-us/articles/13065472856719 (post-March 2025 changes)
 //
 // Architecture:
 //   - OAuth tokens live in Supabase (myob_connections table), single row per
@@ -14,6 +15,17 @@
 //   - Requests need a Company File (CF) context: we send `x-myobapi-cftoken`
 //     (CF-level basic auth) plus the bearer token for the OAuth user.
 //   - Every API call is logged to `myob_api_log` for audit + debugging.
+//
+// Post-March 2025 OAuth changes:
+//   - The legacy `CompanyFile` scope is deprecated for keys created after
+//     12 March 2025. New keys must use SME scopes (e.g. `la.global`).
+//   - The legacy `GET /accountright/` endpoint no longer returns company
+//     file lists for new keys. Instead, the businessId of the chosen file
+//     is returned on the OAuth redirect — provided `prompt=consent` is set
+//     in the authorise URL.
+//   - `prompt=consent` also forces MYOB to show the file picker, so the
+//     user picks WHICH company file this OAuth flow is for. Each company
+//     file = one OAuth flow.
 
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
 import { createHash } from 'crypto'
@@ -40,14 +52,13 @@ const TOKEN_URL = 'https://secure.myob.com/oauth2/v1/authorize'
 const API_BASE  = 'https://api.myob.com'
 
 // Scope for MYOB OAuth. Behaviour:
-//   - If MYOB_SCOPE env var is set, use that (e.g. 'CompanyFile', 'la.global')
+//   - If MYOB_SCOPE env var is set, use that (e.g. 'la.global offline_access openid')
 //   - Otherwise omit the scope parameter entirely — MYOB will grant whatever
-//     the registered app is entitled to by default. This is the right move
-//     when a new app is rejected for specific scope names.
-// Your app's allowed scopes are determined at registration by MYOB; if both
-// 'CompanyFile' and 'la.global' fail with "not allowed to request scope",
-// MYOB hasn't granted your app those scopes — either use default (empty) or
-// contact MYOB developer support to expand your app's scope grants.
+//     the registered app is entitled to by default.
+//
+// Post-March 2025: keys registered after 12 March 2025 must use new SME
+// scopes (`la.global`, `sme-sales`, etc) — `CompanyFile` no longer works
+// for those keys. Pre-March 2025 keys must continue to use `CompanyFile`.
 function getScope(): string | null {
   const v = process.env.MYOB_SCOPE
   if (v === undefined) return null  // omit from URL
@@ -87,14 +98,25 @@ export interface CompanyFile {
 
 // Build the authorise URL the browser redirects to. `state` is a random
 // CSRF value we stash in a short-lived cookie and verify on callback.
-// Scope is included only if configured (see getScope()). MYOB treats a
-// missing scope param as "grant whatever this app is entitled to by default".
+//
+// `prompt=consent` is REQUIRED for keys created after 12 March 2025:
+//   1. Forces the company-file picker on the consent screen so the user
+//      explicitly picks which file this OAuth flow represents.
+//   2. Causes MYOB to return `businessId` (the company file GUID) on the
+//      callback URL, which we capture and persist alongside the tokens.
+//      Without `prompt=consent`, no businessId is returned.
+//
+// Scope is included only if configured (see getScope()). For pre-March 2025
+// keys, set MYOB_SCOPE=CompanyFile. For post-March 2025 keys, use
+// MYOB_SCOPE=la.global offline_access openid (or other SME scopes per
+// MYOB's DataScopes endpoint).
 export function buildAuthorizeUrl(state: string): string {
   const p = new URLSearchParams({
     client_id: clientId(),
     redirect_uri: redirectUri(),
     response_type: 'code',
     state,
+    prompt: 'consent',
   })
   const scope = getScope()
   if (scope) p.append('scope', scope)
@@ -156,23 +178,31 @@ async function refreshTokens(refreshToken: string): Promise<TokenResponse> {
 }
 
 // Save or update a connection's tokens (upsert by label).
+//
+// `businessId` is the company file GUID returned on the OAuth redirect for
+// post-March 2025 keys. When provided, we persist it as company_file_id so
+// subsequent API calls can scope to /accountright/{businessId}/... without
+// needing a separate "list company files + pick one" step.
 export async function saveConnection(
   label: string,
   tokens: TokenResponse,
   connectedBy: string | null,
+  businessId?: string | null,
 ): Promise<MyobConnection> {
   const expiresAt = new Date(Date.now() + tokens.expires_in * 1000).toISOString()
+  const update: Record<string, any> = {
+    label,
+    access_token: tokens.access_token,
+    refresh_token: tokens.refresh_token,
+    access_expires_at: expiresAt,
+    connected_by: connectedBy,
+    last_refreshed_at: new Date().toISOString(),
+    is_active: true,
+  }
+  if (businessId) update.company_file_id = businessId
   const { data, error } = await sb()
     .from('myob_connections')
-    .upsert({
-      label,
-      access_token: tokens.access_token,
-      refresh_token: tokens.refresh_token,
-      access_expires_at: expiresAt,
-      connected_by: connectedBy,
-      last_refreshed_at: new Date().toISOString(),
-      is_active: true,
-    }, { onConflict: 'label' })
+    .upsert(update, { onConflict: 'label' })
     .select()
     .single()
   if (error) throw new Error('Failed to save MYOB connection: ' + error.message)
@@ -370,6 +400,12 @@ export async function myobFetch(
 
 // List all company files the user has access to (called right after OAuth to
 // let the user pick which CF this connection represents).
+//
+// NOTE (post-March 2025): for keys created after 12 March 2025, the legacy
+// `GET /accountright/` endpoint is deprecated and returns 401. For those
+// keys, the businessId is captured directly from the OAuth redirect and
+// stored on the connection — there's no "list" step. This function remains
+// for legacy keys that still use the old flow.
 export async function listCompanyFiles(connId: string): Promise<CompanyFile[]> {
   const { data, status } = await myobFetch(connId, '/accountright', { requiresCfAuth: false })
   if (status !== 200) throw new Error(`listCompanyFiles failed: HTTP ${status}`)

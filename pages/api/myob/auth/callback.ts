@@ -5,6 +5,13 @@
 // key so only our own /connect endpoint could have issued it, and the admin
 // check was already enforced there. Any failure to validate the signed cookie
 // = abort.
+//
+// Post-March 2025 OAuth changes:
+//   When `prompt=consent` is set on the authorise URL (see lib/myob.ts
+//   buildAuthorizeUrl()), MYOB returns a `businessId` query parameter on
+//   this callback URL. That businessId IS the company file GUID — for new
+//   keys it replaces the old "list company files, pick one" flow. We
+//   capture it here and persist it onto the connection alongside the tokens.
 
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { createHmac, timingSafeEqual } from 'crypto'
@@ -51,6 +58,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   const code = String(req.query.code || '')
   const stateFromUrl = String(req.query.state || '')
+  // businessId is the company file GUID, returned only when prompt=consent
+  // is on the authorise URL. Empty for legacy/pre-March 2025 keys.
+  const businessId = req.query.businessId ? String(req.query.businessId) : null
   if (!code) return renderError(res, 'No authorisation code returned from MYOB.')
 
   // Verify signed state cookie (replaces session check — was flaky across cross-site redirect)
@@ -71,9 +81,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   try {
     const tokens = await exchangeCodeForTokens(code)
-    await saveConnection(unpacked.label || 'JAWS', tokens, unpacked.userId)
+    await saveConnection(unpacked.label || 'JAWS', tokens, unpacked.userId, businessId)
     res.setHeader('Set-Cookie', 'myob-oauth-state=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0')
-    res.writeHead(302, { Location: `/settings?tab=myob&connected=${encodeURIComponent(unpacked.label || 'JAWS')}` })
+    const qs = new URLSearchParams({
+      tab: 'myob',
+      connected: unpacked.label || 'JAWS',
+    })
+    if (businessId) qs.append('businessId', businessId)
+    res.writeHead(302, { Location: `/settings?${qs.toString()}` })
     res.end()
   } catch (e: any) {
     return renderError(res, e?.message || 'Token exchange failed')
