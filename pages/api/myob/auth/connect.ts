@@ -1,38 +1,61 @@
 // pages/api/myob/auth/connect.ts
-// Starts the MYOB OAuth flow. Generates a random CSRF state and stashes it —
-// along with the admin user's ID — in a short-lived signed cookie. The admin
-// check happens HERE, before we leave for MYOB. The callback trusts the
-// cookie's packed user ID instead of re-verifying the Supabase session (which
-// can be flaky across the MYOB cross-site redirect).
+// Starts the MYOB OAuth flow. Generates a random CSRF state and persists it
+// to Supabase (myob_oauth_state) along with the admin user's ID. The admin
+// check happens HERE, before we leave for MYOB, so the callback can trust
+// the row's user_id field.
+//
+// Why server-side state instead of a signed cookie:
+//   The post-March 2025 MYOB OAuth flow has multiple redirect hops
+//   (login → consent → file picker → allow). Browser cookies, even with
+//   SameSite=Lax, proved unreliable across this chain — particularly on
+//   Vercel preview URLs. Storing state server-side eliminates the cookie
+//   round-trip entirely; the only thing that has to make it back to us is
+//   the random `state` value in MYOB's redirect URL, which it always does.
 
 import type { NextApiRequest, NextApiResponse } from 'next'
-import { randomBytes, createHmac } from 'crypto'
+import { randomBytes } from 'crypto'
+import { createClient } from '@supabase/supabase-js'
 import { requireAdmin, getSessionUser } from '../../../../lib/auth'
 import { buildAuthorizeUrl } from '../../../../lib/myob'
 
-// Sign cookie payload with a secret so callback can trust its contents.
-// SUPABASE_SERVICE_ROLE_KEY is already an env-secret we can reuse here —
-// any long-lived server-only secret works.
-function signPayload(payload: string): string {
-  const secret = process.env.SUPABASE_SERVICE_ROLE_KEY || 'fallback-dev-secret'
-  const sig = createHmac('sha256', secret).update(payload).digest('hex').slice(0, 16)
-  return `${payload}.${sig}`
+function sb() {
+  return createClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.SUPABASE_SERVICE_ROLE_KEY!,
+    { auth: { persistSession: false } },
+  )
 }
 
 export default function handler(req: NextApiRequest, res: NextApiResponse) {
   return requireAdmin(req, res, async () => {
     const user = await getSessionUser(req)
-    if (!user) { res.status(401).json({ error: 'No session user' }); return }
+    if (!user) {
+      res.status(401).json({ error: 'No session user' })
+      return
+    }
 
     const state = randomBytes(24).toString('hex')
-    const label = String(req.query.label || 'JAWS').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 40) || 'JAWS'
+    const label = String(req.query.label || 'JAWS')
+      .replace(/[^a-zA-Z0-9_-]/g, '')
+      .slice(0, 40) || 'JAWS'
 
-    // Cookie payload: state:label:userId — signed so callback can trust it
-    // without re-hitting Supabase auth.
-    const payload = `${state}:${label}:${user.id}`
-    const signed = signPayload(payload)
-    res.setHeader('Set-Cookie',
-      `myob-oauth-state=${signed}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=600`)
+    const client = sb()
+
+    // Self-maintaining cleanup: drop any state rows older than 30 minutes
+    // before inserting the new one. Cheap and avoids needing a cron job.
+    const cutoff = new Date(Date.now() - 30 * 60 * 1000).toISOString()
+    await client.from('myob_oauth_state').delete().lt('created_at', cutoff)
+
+    const { error } = await client.from('myob_oauth_state').insert({
+      state,
+      label,
+      user_id: user.id,
+    })
+    if (error) {
+      res.status(500).json({ error: 'Failed to persist OAuth state: ' + error.message })
+      return
+    }
+
     res.writeHead(302, { Location: buildAuthorizeUrl(state) })
     res.end()
   })

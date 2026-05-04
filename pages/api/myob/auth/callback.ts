@@ -1,21 +1,29 @@
 // pages/api/myob/auth/callback.ts
-// MYOB redirects here after the user authorises. Instead of re-verifying the
-// Supabase session (which can be lost on cross-site redirects), we trust the
-// signed state cookie that connect.ts set — it was signed with our service-role
-// key so only our own /connect endpoint could have issued it, and the admin
-// check was already enforced there. Any failure to validate the signed cookie
-// = abort.
+// MYOB redirects here after the user authorises. Looks up the random state
+// in Supabase (set by connect.ts), verifies age, exchanges the code for
+// tokens, and persists the connection.
 //
-// Post-March 2025 OAuth changes:
-//   When `prompt=consent` is set on the authorise URL (see lib/myob.ts
-//   buildAuthorizeUrl()), MYOB returns a `businessId` query parameter on
-//   this callback URL. That businessId IS the company file GUID — for new
-//   keys it replaces the old "list company files, pick one" flow. We
-//   capture it here and persist it onto the connection alongside the tokens.
+// Server-side state replaces the previous cookie-based flow which proved
+// unreliable across MYOB's multi-redirect consent flow. The state row is
+// consumed (deleted) on every callback — successful or not — to prevent
+// replay of either the state value or the OAuth code.
+//
+// Post-March 2025 OAuth: when `prompt=consent` is set on the authorise URL
+// (see lib/myob.ts buildAuthorizeUrl()), MYOB returns a `businessId` query
+// parameter. That businessId IS the company file GUID — for new keys it
+// replaces the old "list company files, pick one" flow.
 
 import type { NextApiRequest, NextApiResponse } from 'next'
-import { createHmac, timingSafeEqual } from 'crypto'
+import { createClient } from '@supabase/supabase-js'
 import { exchangeCodeForTokens, saveConnection } from '../../../../lib/myob'
+
+function sb() {
+  return createClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.SUPABASE_SERVICE_ROLE_KEY!,
+    { auth: { persistSession: false } },
+  )
+}
 
 function renderError(res: NextApiResponse, msgHtml: string) {
   res.status(400).setHeader('Content-Type', 'text/html')
@@ -26,28 +34,9 @@ function renderError(res: NextApiResponse, msgHtml: string) {
   </body></html>`)
 }
 
-// Verify and unpack the signed state cookie. Returns { state, label, userId }
-// or null if tampered/invalid.
-function verifyStateCookie(cookie: string): { state: string; label: string; userId: string } | null {
-  const lastDot = cookie.lastIndexOf('.')
-  if (lastDot <= 0) return null
-  const payload = cookie.substring(0, lastDot)
-  const sig = cookie.substring(lastDot + 1)
-  const secret = process.env.SUPABASE_SERVICE_ROLE_KEY || 'fallback-dev-secret'
-  const expected = createHmac('sha256', secret).update(payload).digest('hex').slice(0, 16)
-  try {
-    const a = Buffer.from(sig)
-    const b = Buffer.from(expected)
-    if (a.length !== b.length) return null
-    if (!timingSafeEqual(a, b)) return null
-  } catch { return null }
-  const parts = payload.split(':')
-  if (parts.length !== 3) return null
-  return { state: parts[0], label: parts[1], userId: parts[2] }
-}
-
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  // Check MYOB-returned errors first
+  // MYOB-side errors (e.g. user denied consent, scope rejected) come back
+  // as ?error=... query params — render those before doing any state work.
   const errFromMyob = req.query.error ? String(req.query.error) : null
   if (errFromMyob) {
     const desc = req.query.error_description ? String(req.query.error_description) : ''
@@ -61,31 +50,46 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   // businessId is the company file GUID, returned only when prompt=consent
   // is on the authorise URL. Empty for legacy/pre-March 2025 keys.
   const businessId = req.query.businessId ? String(req.query.businessId) : null
-  if (!code) return renderError(res, 'No authorisation code returned from MYOB.')
 
-  // Verify signed state cookie (replaces session check — was flaky across cross-site redirect)
-  const stateCookie = req.cookies['myob-oauth-state']
-  if (!stateCookie) {
+  if (!code) return renderError(res, 'No authorisation code returned from MYOB.')
+  if (!stateFromUrl) return renderError(res, 'No state parameter returned from MYOB.')
+
+  const client = sb()
+
+  // Look up the state row that connect.ts inserted.
+  const { data: stateRow, error: stateErr } = await client
+    .from('myob_oauth_state')
+    .select('state, label, user_id, created_at')
+    .eq('state', stateFromUrl)
+    .maybeSingle()
+
+  if (stateErr) {
+    return renderError(res, 'Database error looking up OAuth state: ' + stateErr.message)
+  }
+  if (!stateRow) {
     return renderError(res,
-      'OAuth state cookie missing. This usually means either the session expired (10-min limit) ' +
-      'or the connection was not started from this browser. Please retry from Settings.')
+      'OAuth state not found. The connection may have been started in a different session, ' +
+      'or the state has already been consumed (do not retry the same callback URL — start over from Settings).')
   }
-  const unpacked = verifyStateCookie(stateCookie)
-  if (!unpacked) {
-    return renderError(res,
-      'OAuth state cookie failed signature check. Cookie may be tampered or from a different deployment. Please retry.')
+
+  // Age check — 30 minute window. MYOB's new consent flow can take a few
+  // minutes if the user has multiple files / 2FA / etc.
+  const ageMs = Date.now() - new Date(stateRow.created_at).getTime()
+  if (ageMs > 30 * 60 * 1000) {
+    await client.from('myob_oauth_state').delete().eq('state', stateFromUrl)
+    return renderError(res, 'OAuth state expired (>30 min). Please retry from Settings.')
   }
-  if (unpacked.state !== stateFromUrl) {
-    return renderError(res, 'OAuth state mismatch — possible CSRF or expired session. Please retry.')
-  }
+
+  // Consume the state row immediately. From this point even if token exchange
+  // fails, the state cannot be reused — replay attacks blocked.
+  await client.from('myob_oauth_state').delete().eq('state', stateFromUrl)
 
   try {
     const tokens = await exchangeCodeForTokens(code)
-    await saveConnection(unpacked.label || 'JAWS', tokens, unpacked.userId, businessId)
-    res.setHeader('Set-Cookie', 'myob-oauth-state=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0')
+    await saveConnection(stateRow.label || 'JAWS', tokens, stateRow.user_id, businessId)
     const qs = new URLSearchParams({
       tab: 'myob',
-      connected: unpacked.label || 'JAWS',
+      connected: stateRow.label || 'JAWS',
     })
     if (businessId) qs.append('businessId', businessId)
     res.writeHead(302, { Location: `/settings?${qs.toString()}` })
