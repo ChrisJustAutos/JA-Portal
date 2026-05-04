@@ -21,7 +21,7 @@
 // Post-March 2025 OAuth changes:
 //   - The legacy `CompanyFile` scope is deprecated for keys created after
 //     12 March 2025. New keys must use SME scopes (e.g. `sme-company-file`,
-//     `sme-sales`, `sme-customer`).
+//     `sme-sale`, `sme-customer`).
 //   - The legacy `GET /accountright/` endpoint no longer returns company
 //     file lists for new keys. Instead, the businessId of the chosen file
 //     is returned on the OAuth redirect — provided `prompt=consent` is set
@@ -57,18 +57,35 @@ const TOKEN_URL = 'https://secure.myob.com/oauth2/v1/authorize'
 const API_BASE  = 'https://api.myob.com'
 
 // Scope for MYOB OAuth. Behaviour:
-//   - If MYOB_SCOPE env var is set, use that (e.g. 'sme-company-file sme-sales')
+//   - If MYOB_SCOPE env var is set, normalise separators and use the value.
 //   - Otherwise omit the scope parameter entirely — MYOB will grant whatever
 //     the registered app is entitled to by default.
 //
+// Separator normalisation: OAuth spec requires SPACE-separated scopes, but
+// some env-var UIs (notably Vercel's) silently swallow literal spaces. We
+// accept any of these common separators and normalise to space:
+//   - underscore between scope tokens (e.g. `sme-company-file_sme-sale`)
+//   - comma, semicolon, pipe (e.g. `sme-company-file,sme-sale`)
+//   - any whitespace (multiple spaces, tabs)
+//
+// CRITICAL: underscores INSIDE a scope name (e.g. `offline_access`, `openid`)
+// must be preserved — we only split underscores that are followed by `sme-`,
+// which is the MYOB SME scope prefix. Standalone OIDC scope names like
+// `offline_access` keep their underscore.
+//
 // Post-March 2025: keys registered after 12 March 2025 must use new SME
-// scopes (`sme-company-file`, `sme-sales`, etc) — `CompanyFile` no longer
-// works for those keys. Pre-March 2025 keys must continue to use `CompanyFile`.
+// scopes (`sme-company-file`, `sme-sale`, `sme-customer`, `sme-general-ledger`,
+// etc) — `CompanyFile` no longer works for those keys. Pre-March 2025 keys
+// must continue to use `CompanyFile`.
 function getScope(): string | null {
   const v = process.env.MYOB_SCOPE
-  if (v === undefined) return null  // omit from URL
-  if (v === '') return null         // empty means omit
+  if (v === undefined) return null
+  if (v === '') return null
   return v
+    .replace(/_(?=sme-)/gi, ' ')   // `_sme-` → ` sme-`  (underscore-as-separator)
+    .replace(/[,;|]+/g, ' ')       // common separators → space
+    .replace(/\s+/g, ' ')          // collapse runs of whitespace
+    .trim() || null
 }
 
 // ── Types ───────────────────────────────────────────────────────────────
@@ -114,7 +131,9 @@ export interface CompanyFile {
 //
 // Scope is included only if configured (see getScope()). For pre-March 2025
 // keys, set MYOB_SCOPE=CompanyFile. For post-March 2025 keys, use space-
-// separated SME scopes (e.g. `MYOB_SCOPE=sme-company-file sme-sales`).
+// separated SME scopes (e.g. `MYOB_SCOPE=sme-company-file sme-sale`). If
+// the env-var UI doesn't accept literal spaces, underscore/comma/semicolon
+// separators between scope tokens also work — see getScope() docblock.
 export function buildAuthorizeUrl(state: string): string {
   const p = new URLSearchParams({
     client_id: clientId(),
