@@ -21,11 +21,11 @@
 // Post-March 2025 OAuth changes:
 //   - The legacy `CompanyFile` scope is deprecated for keys created after
 //     12 March 2025. New keys must use SME scopes (e.g. `sme-company-file`,
-//     `sme-sale`, `sme-customer`).
+//     `sme-sales`, `sme-contacts-customer`).
 //   - The legacy `GET /accountright/` endpoint no longer returns company
-//     file lists for new keys. Instead, the businessId of the chosen file
-//     is returned on the OAuth redirect — provided `prompt=consent` is set
-//     in the authorise URL.
+//     file lists for new keys. Instead, the businessId AND businessName of
+//     the chosen file are returned on the OAuth redirect — provided
+//     `prompt=consent` is set in the authorise URL.
 //   - `prompt=consent` also forces MYOB to show the file picker, so the
 //     user picks WHICH company file this OAuth flow is for. Each company
 //     file = one OAuth flow.
@@ -64,8 +64,8 @@ const API_BASE  = 'https://api.myob.com'
 // Separator normalisation: OAuth spec requires SPACE-separated scopes, but
 // some env-var UIs (notably Vercel's) silently swallow literal spaces. We
 // accept any of these common separators and normalise to space:
-//   - underscore between scope tokens (e.g. `sme-company-file_sme-sale`)
-//   - comma, semicolon, pipe (e.g. `sme-company-file,sme-sale`)
+//   - underscore between scope tokens (e.g. `sme-company-file_sme-sales`)
+//   - comma, semicolon, pipe (e.g. `sme-company-file,sme-sales`)
 //   - any whitespace (multiple spaces, tabs)
 //
 // CRITICAL: underscores INSIDE a scope name (e.g. `offline_access`, `openid`)
@@ -74,9 +74,9 @@ const API_BASE  = 'https://api.myob.com'
 // `offline_access` keep their underscore.
 //
 // Post-March 2025: keys registered after 12 March 2025 must use new SME
-// scopes (`sme-company-file`, `sme-sale`, `sme-customer`, `sme-general-ledger`,
-// etc) — `CompanyFile` no longer works for those keys. Pre-March 2025 keys
-// must continue to use `CompanyFile`.
+// scopes (`sme-company-file`, `sme-sales`, `sme-contacts-customer`,
+// `sme-general-ledger`, etc) — `CompanyFile` no longer works for those keys.
+// Pre-March 2025 keys must continue to use `CompanyFile`.
 function getScope(): string | null {
   const v = process.env.MYOB_SCOPE
   if (v === undefined) return null
@@ -125,13 +125,13 @@ export interface CompanyFile {
 // `prompt=consent` is REQUIRED for keys created after 12 March 2025:
 //   1. Forces the company-file picker on the consent screen so the user
 //      explicitly picks which file this OAuth flow represents.
-//   2. Causes MYOB to return `businessId` (the company file GUID) on the
+//   2. Causes MYOB to return `businessId` AND `businessName` on the
 //      callback URL, which we capture and persist alongside the tokens.
-//      Without `prompt=consent`, no businessId is returned.
+//      Without `prompt=consent`, neither is returned.
 //
 // Scope is included only if configured (see getScope()). For pre-March 2025
 // keys, set MYOB_SCOPE=CompanyFile. For post-March 2025 keys, use space-
-// separated SME scopes (e.g. `MYOB_SCOPE=sme-company-file sme-sale`). If
+// separated SME scopes (e.g. `MYOB_SCOPE=sme-company-file sme-sales`). If
 // the env-var UI doesn't accept literal spaces, underscore/comma/semicolon
 // separators between scope tokens also work — see getScope() docblock.
 export function buildAuthorizeUrl(state: string): string {
@@ -207,11 +207,16 @@ async function refreshTokens(refreshToken: string): Promise<TokenResponse> {
 // post-March 2025 keys. When provided, we persist it as company_file_id so
 // subsequent API calls can scope to /accountright/{businessId}/... without
 // needing a separate "list company files + pick one" step.
+//
+// `businessName` is the display name of the file (also returned on the
+// redirect). When provided, we persist it as company_file_name so the UI
+// can show "JAWS — Just Autos Wholesale" instead of "— not selected —".
 export async function saveConnection(
   label: string,
   tokens: TokenResponse,
   connectedBy: string | null,
   businessId?: string | null,
+  businessName?: string | null,
 ): Promise<MyobConnection> {
   const expiresAt = new Date(Date.now() + tokens.expires_in * 1000).toISOString()
   const update: Record<string, any> = {
@@ -223,7 +228,8 @@ export async function saveConnection(
     last_refreshed_at: new Date().toISOString(),
     is_active: true,
   }
-  if (businessId) update.company_file_id = businessId
+  if (businessId)   update.company_file_id   = businessId
+  if (businessName) update.company_file_name = businessName
   const { data, error } = await sb()
     .from('myob_connections')
     .upsert(update, { onConflict: 'label' })
@@ -441,9 +447,9 @@ export async function myobFetch(
 //
 // NOTE (post-March 2025): for keys created after 12 March 2025, the legacy
 // `GET /accountright/` endpoint is deprecated and returns 401. For those
-// keys, the businessId is captured directly from the OAuth redirect and
-// stored on the connection — there's no "list" step. This function remains
-// for legacy keys that still use the old flow.
+// keys, the businessId AND businessName are captured directly from the
+// OAuth redirect and stored on the connection — there's no "list" step.
+// This function remains for legacy keys that still use the old flow.
 export async function listCompanyFiles(connId: string): Promise<CompanyFile[]> {
   const { data, status } = await myobFetch(connId, '/accountright', { requiresCfAuth: false })
   if (status !== 200) throw new Error(`listCompanyFiles failed: HTTP ${status}`)

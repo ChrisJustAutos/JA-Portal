@@ -9,9 +9,14 @@
 // replay of either the state value or the OAuth code.
 //
 // Post-March 2025 OAuth: when `prompt=consent` is set on the authorise URL
-// (see lib/myob.ts buildAuthorizeUrl()), MYOB returns a `businessId` query
-// parameter. That businessId IS the company file GUID — for new keys it
-// replaces the old "list company files, pick one" flow.
+// (see lib/myob.ts buildAuthorizeUrl()), MYOB returns BOTH `businessId` AND
+// `businessName` query parameters:
+//   businessId   = company file GUID (used as company_file_id)
+//   businessName = display name like "Just Autos Wholesale" (used as
+//                  company_file_name so the UI shows it instead of
+//                  "— not selected —").
+// For new keys this entirely replaces the legacy "list company files +
+// pick one" flow.
 
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { createClient } from '@supabase/supabase-js'
@@ -47,9 +52,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   const code = String(req.query.code || '')
   const stateFromUrl = String(req.query.state || '')
-  // businessId is the company file GUID, returned only when prompt=consent
-  // is on the authorise URL. Empty for legacy/pre-March 2025 keys.
-  const businessId = req.query.businessId ? String(req.query.businessId) : null
+  // businessId + businessName are returned only when prompt=consent is set
+  // on the authorise URL. Empty for legacy/pre-March 2025 keys.
+  const businessId   = req.query.businessId   ? String(req.query.businessId)   : null
+  const businessName = req.query.businessName ? String(req.query.businessName) : null
 
   if (!code) return renderError(res, 'No authorisation code returned from MYOB.')
   if (!stateFromUrl) return renderError(res, 'No state parameter returned from MYOB.')
@@ -86,12 +92,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   try {
     const tokens = await exchangeCodeForTokens(code)
-    await saveConnection(stateRow.label || 'JAWS', tokens, stateRow.user_id, businessId)
+    await saveConnection(stateRow.label || 'JAWS', tokens, stateRow.user_id, businessId, businessName)
     const qs = new URLSearchParams({
       tab: 'myob',
       connected: stateRow.label || 'JAWS',
     })
-    if (businessId) qs.append('businessId', businessId)
+    if (businessId)   qs.append('businessId', businessId)
+    if (businessName) qs.append('businessName', businessName)
     res.writeHead(302, { Location: `/settings?${qs.toString()}` })
     res.end()
   } catch (e: any) {
