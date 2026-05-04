@@ -8,6 +8,7 @@
     "pages/api/chat.ts":                            { "maxDuration": 60 },
     "pages/api/test.ts":                            { "maxDuration": 60 },
     "pages/api/cron/sync-followups.ts":             { "maxDuration": 300 },
+    "pages/api/cron/health-check.ts":               { "maxDuration": 60 },
     "pages/api/calls/backfill-followups.ts":        { "maxDuration": 300 },
     "pages/api/webhooks/graph-mail.ts":             { "maxDuration": 60 },
     "pages/api/admin/setup-graph-subscriptions.ts": { "maxDuration": 60 },
@@ -25,6 +26,10 @@
     {
       "path": "/api/cron/renew-graph-subscriptions",
       "schedule": "0 */6 * * *"
+    },
+    {
+      "path": "/api/cron/health-check",
+      "schedule": "*/5 * * * *"
     }
   ]
 }
