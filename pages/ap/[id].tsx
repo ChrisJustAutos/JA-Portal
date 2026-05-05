@@ -1,14 +1,5 @@
 // pages/ap/[id].tsx
-// AP Invoice Detail — PDF preview alongside parsed data, line editor, save.
-//
-// Round 2 scope:
-//   - View parsed invoice + PDF
-//   - Edit line items (description, qty, price, tax code)
-//   - Save edits (re-runs triage)
-// Round 3 will add:
-//   - Supplier preset picker (MYOB lookup)
-//   - Approve → push to MYOB
-//   - Reject / Escalate buttons
+// AP Invoice Detail — PDF preview, line editor, MD job link, save.
 
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/router'
@@ -57,6 +48,10 @@ interface InvoiceRow {
   myob_bill_uid: string | null
   myob_posted_at: string | null
   myob_post_error: string | null
+  linked_job_number: string | null
+  linked_job_match_method: 'auto-po' | 'manual' | null
+  linked_job_at: string | null
+  po_check_status: 'matched' | 'unmatched' | 'no-po-on-invoice' | null
 }
 
 interface LineRow {
@@ -73,10 +68,23 @@ interface LineRow {
   tax_code: string
 }
 
+interface JobInfo {
+  job_number: string
+  customer_name: string | null
+  vehicle: string | null
+  status: string | null
+  opened_date: string | null
+  closed_date: string | null
+  job_type: string | null
+  vehicle_platform: string | null
+  estimated_total: number | null
+}
+
 interface DetailResponse {
   invoice: InvoiceRow
   lines: LineRow[]
   pdfUrl: string | null
+  linkedJob: JobInfo | null
 }
 
 interface PageProps {
@@ -97,6 +105,13 @@ export default function APDetailPage({ user }: PageProps) {
   const [saving, setSaving] = useState(false)
   const [saveMessage, setSaveMessage] = useState<string | null>(null)
   const canEdit = roleHasPermission(user.role, 'edit:supplier_invoices')
+
+  // Job picker state
+  const [pickerOpen, setPickerOpen] = useState(false)
+  const [pickerQuery, setPickerQuery] = useState('')
+  const [pickerResults, setPickerResults] = useState<JobInfo[]>([])
+  const [pickerLoading, setPickerLoading] = useState(false)
+  const [linkBusy, setLinkBusy] = useState(false)
 
   async function fetchData() {
     if (!id) return
@@ -119,6 +134,47 @@ export default function APDetailPage({ user }: PageProps) {
   }
 
   useEffect(() => { if (id) fetchData() }, [id])
+
+  // Debounced job search when picker is open
+  useEffect(() => {
+    if (!pickerOpen) return
+    setPickerLoading(true)
+    const t = setTimeout(async () => {
+      try {
+        const params = new URLSearchParams({ q: pickerQuery, limit: '25' })
+        const res = await fetch(`/api/ap/jobs/search?${params.toString()}`, { credentials: 'same-origin' })
+        const json = await res.json()
+        setPickerResults(Array.isArray(json.jobs) ? json.jobs : [])
+      } catch (e: any) {
+        console.error('job search failed:', e)
+        setPickerResults([])
+      } finally {
+        setPickerLoading(false)
+      }
+    }, 300)
+    return () => clearTimeout(t)
+  }, [pickerOpen, pickerQuery])
+
+  async function linkToJob(jobNumber: string | null) {
+    if (!id) return
+    setLinkBusy(true)
+    try {
+      const res = await fetch(`/api/ap/${id}/link-job`, {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ jobNumber }),
+      })
+      const json = await res.json()
+      if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`)
+      setPickerOpen(false)
+      await fetchData()
+    } catch (e: any) {
+      alert('Link failed: ' + (e?.message || e))
+    } finally {
+      setLinkBusy(false)
+    }
+  }
 
   function startEdit() {
     if (!data) return
@@ -291,6 +347,23 @@ export default function APDetailPage({ user }: PageProps) {
                 )}
               </div>
 
+              {/* Workshop Job (MD) */}
+              <WorkshopJobSection
+                invoice={data.invoice}
+                linkedJob={data.linkedJob}
+                canEdit={canEdit}
+                pickerOpen={pickerOpen}
+                pickerQuery={pickerQuery}
+                pickerResults={pickerResults}
+                pickerLoading={pickerLoading}
+                linkBusy={linkBusy}
+                onOpenPicker={() => { setPickerQuery(''); setPickerOpen(true) }}
+                onClosePicker={() => setPickerOpen(false)}
+                onPickerQueryChange={setPickerQuery}
+                onPickJob={(jn) => linkToJob(jn)}
+                onUnlink={() => linkToJob(null)}
+              />
+
               {/* Resolved supplier */}
               <div style={{background:T.bg2, border:`1px solid ${T.border}`, borderRadius:10, padding:'14px 16px'}}>
                 <div style={{fontSize:11, color:T.text3, textTransform:'uppercase', letterSpacing:'0.05em', marginBottom:10}}>MYOB mapping ({data.invoice.myob_company_file})</div>
@@ -301,7 +374,7 @@ export default function APDetailPage({ user }: PageProps) {
                   </div>
                 ) : (
                   <div style={{fontSize:12, color:T.amber}}>
-                    Supplier not mapped. {canEdit ? 'Set a preset to enable approval (Round 3 — coming soon).' : 'Ask an admin to set the preset.'}
+                    Supplier not mapped. {canEdit ? 'Set a preset to enable approval (Round 3b — coming soon).' : 'Ask an admin to set the preset.'}
                   </div>
                 )}
               </div>
@@ -339,6 +412,135 @@ export default function APDetailPage({ user }: PageProps) {
           </div>
         )}
       </div>
+    </div>
+  )
+}
+
+// ── Workshop Job section ─────────────────────────────────────────────────
+function WorkshopJobSection({
+  invoice, linkedJob, canEdit,
+  pickerOpen, pickerQuery, pickerResults, pickerLoading, linkBusy,
+  onOpenPicker, onClosePicker, onPickerQueryChange, onPickJob, onUnlink,
+}: {
+  invoice: InvoiceRow
+  linkedJob: JobInfo | null
+  canEdit: boolean
+  pickerOpen: boolean
+  pickerQuery: string
+  pickerResults: JobInfo[]
+  pickerLoading: boolean
+  linkBusy: boolean
+  onOpenPicker: () => void
+  onClosePicker: () => void
+  onPickerQueryChange: (q: string) => void
+  onPickJob: (jobNumber: string) => void
+  onUnlink: () => void
+}) {
+  const poStatus = invoice.po_check_status
+  const auto = invoice.linked_job_match_method === 'auto-po'
+  const manual = invoice.linked_job_match_method === 'manual'
+
+  // Decide the headline state
+  let headline: { color: string; text: string }
+  if (linkedJob) {
+    if (manual) headline = { color: T.green, text: '✅ Linked (manual)' }
+    else        headline = { color: T.green, text: '✅ Linked (auto by PO)' }
+  } else if (poStatus === 'unmatched') {
+    headline = { color: T.amber, text: `⚠️ PO ${invoice.po_number} doesn't match any open job` }
+  } else if (poStatus === 'no-po-on-invoice' && invoice.via_capricorn) {
+    headline = { color: T.text3, text: 'No PO on invoice (Capricorn-routed)' }
+  } else if (poStatus === 'no-po-on-invoice') {
+    headline = { color: T.text3, text: 'No PO on invoice' }
+  } else {
+    headline = { color: T.text3, text: 'PO check not run' }
+  }
+
+  return (
+    <div style={{background:T.bg2, border:`1px solid ${T.border}`, borderRadius:10, padding:'14px 16px'}}>
+      <div style={{display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:10}}>
+        <div style={{fontSize:11, color:T.text3, textTransform:'uppercase', letterSpacing:'0.05em'}}>Workshop Job (MD)</div>
+        {canEdit && !pickerOpen && (
+          <div style={{display:'flex', gap:8}}>
+            {linkedJob && (
+              <button onClick={onUnlink} disabled={linkBusy} style={btnSecondary()}>
+                {linkBusy ? 'Unlinking…' : 'Unlink'}
+              </button>
+            )}
+            <button onClick={onOpenPicker} disabled={linkBusy} style={btnSecondary()}>
+              {linkedJob ? 'Change…' : 'Find job…'}
+            </button>
+          </div>
+        )}
+        {canEdit && pickerOpen && (
+          <button onClick={onClosePicker} style={btnSecondary()}>Close picker</button>
+        )}
+      </div>
+
+      <div style={{fontSize:12, color: headline.color, marginBottom: linkedJob || pickerOpen ? 10 : 0}}>
+        {headline.text}
+      </div>
+
+      {linkedJob && !pickerOpen && (
+        <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:'8px 16px'}}>
+          <Field label="Job #"        value={linkedJob.job_number} mono/>
+          <Field label="Status"       value={linkedJob.status}/>
+          <Field label="Customer"     value={linkedJob.customer_name}/>
+          <Field label="Vehicle"      value={linkedJob.vehicle}/>
+          <Field label="Job type"     value={linkedJob.job_type}/>
+          <Field label="Platform"     value={linkedJob.vehicle_platform}/>
+          <Field label="Opened"       value={linkedJob.opened_date}/>
+          <Field label="Quoted total" value={fmtMoney(linkedJob.estimated_total)} mono align="right"/>
+        </div>
+      )}
+
+      {pickerOpen && (
+        <div style={{marginTop:8}}>
+          <input
+            autoFocus
+            value={pickerQuery}
+            onChange={e => onPickerQueryChange(e.target.value)}
+            placeholder="Search by job # / customer / vehicle…"
+            style={{
+              width:'100%', background: T.bg3, border:`1px solid ${T.border2}`, color: T.text,
+              padding:'8px 12px', borderRadius:6, fontSize:12, fontFamily:'inherit', outline:'none',
+              marginBottom:10,
+            }}
+          />
+          <div style={{
+            border:`1px solid ${T.border}`, borderRadius:6, overflow:'hidden',
+            maxHeight:300, overflowY:'auto', background: T.bg3,
+          }}>
+            {pickerLoading && (
+              <div style={{padding:14, textAlign:'center', color:T.text3, fontSize:12}}>Searching…</div>
+            )}
+            {!pickerLoading && pickerResults.length === 0 && (
+              <div style={{padding:14, textAlign:'center', color:T.text3, fontSize:12}}>
+                {pickerQuery ? 'No matching jobs.' : 'Type to search…'}
+              </div>
+            )}
+            {!pickerLoading && pickerResults.map((j, i) => (
+              <div
+                key={`${j.job_number}-${i}`}
+                onClick={() => !linkBusy && onPickJob(j.job_number)}
+                style={{
+                  padding:'9px 12px',
+                  borderTop: i > 0 ? `1px solid ${T.border}` : 'none',
+                  cursor: linkBusy ? 'wait' : 'pointer',
+                  fontSize: 12,
+                  display:'grid', gridTemplateColumns:'80px 1fr 1fr 90px', gap:10, alignItems:'center',
+                }}
+                onMouseEnter={e => (e.currentTarget.style.background = T.bg4)}
+                onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+              >
+                <span style={{fontFamily:'monospace', color:T.text}}>{j.job_number}</span>
+                <span style={{color:T.text2, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap'}}>{j.customer_name || '—'}</span>
+                <span style={{color:T.text3, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap'}}>{j.vehicle || '—'}</span>
+                <span style={{color:T.text3, fontSize:10, textTransform:'uppercase', letterSpacing:'0.05em'}}>{j.status || '—'}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   )
 }
@@ -430,17 +632,17 @@ function LinesTable({
 }
 
 // ── Small UI bits ──
-function Field({ label, value, mono, align, emphasised }: { label: string; value: string | null | undefined; mono?: boolean; align?: 'right'; emphasised?: boolean }) {
+function Field({ label, value, mono, align, emphasised }: { label: string; value: string | number | null | undefined; mono?: boolean; align?: 'right'; emphasised?: boolean }) {
   return (
     <div>
       <div style={{fontSize:10, color:T.text3, textTransform:'uppercase', letterSpacing:'0.05em', marginBottom:2}}>{label}</div>
       <div style={{
         fontSize: emphasised ? 14 : 12,
         fontWeight: emphasised ? 600 : 400,
-        color: value ? T.text : T.text3,
+        color: value !== null && value !== undefined && value !== '' ? T.text : T.text3,
         fontFamily: mono ? 'monospace' : 'inherit',
         textAlign: align,
-      }}>{value ?? '—'}</div>
+      }}>{value !== null && value !== undefined && value !== '' ? String(value) : '—'}</div>
     </div>
   )
 }
@@ -476,7 +678,7 @@ function StatusPill({ status }: { status: string }) {
   return <span style={{display:'inline-block', padding:'3px 9px', borderRadius:3, background:`${c}15`, border:`1px solid ${c}40`, color:c, fontSize:10, fontWeight:500, textTransform:'uppercase', letterSpacing:'0.04em'}}>{status.replace('_',' ')}</span>
 }
 
-function fmtMoney(n: number | null): string {
+function fmtMoney(n: number | null | undefined): string {
   if (n === null || n === undefined) return '—'
   return `$${Number(n).toFixed(2)}`
 }
