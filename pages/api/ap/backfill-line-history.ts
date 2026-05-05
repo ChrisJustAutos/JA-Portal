@@ -39,10 +39,10 @@
 
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
-import { withAuth } from '../../../../lib/authServer'
-import { getConnection, myobFetch } from '../../../../lib/myob'
-import { CompanyFileLabel } from '../../../../lib/ap-myob-lookup'
-import { normaliseDescription } from '../../../../lib/ap-line-resolver'
+import { withAuth } from '../../../lib/authServer'
+import { getConnection, myobFetch } from '../../../lib/myob'
+import { CompanyFileLabel } from '../../../lib/ap-myob-lookup'
+import { normaliseDescription } from '../../../lib/ap-line-resolver'
 
 let _sb: SupabaseClient | null = null
 function sb(): SupabaseClient {
