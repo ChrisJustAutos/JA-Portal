@@ -21,12 +21,16 @@
 //     Date: 'YYYY-MM-DD',
 //     SupplierInvoiceNumber: '3421025200',
 //     Supplier: { UID },
-//     Lines: [{ Type:'Transaction', Description, Account:{UID}, Amount, Tax:{UID} }],
+//     Lines: [{ Type:'Transaction', Description, Account:{UID}, Amount, TaxCode:{UID} }],
 //     JournalMemo: 'AP: <vendor> <inv#> [— Capricorn <ref>] [— Job <#>]',
 //     IsTaxInclusive: false,
 //     FreightAmount: 0,
 //     FreightTaxCode: { UID },     // REQUIRED even when FreightAmount=0
 //   }
+//
+// Field naming gotcha: line-level tax field is `TaxCode`, NOT `Tax`. MYOB
+// will reject with `TaxCode is required — Lines[0].TaxCode` if you use the
+// wrong name. Body-level FreightTaxCode follows the same convention.
 //
 // Attachment body shape:
 //   POST /accountright/{cf_id}/Purchase/Bill/Service/{billUid}/Attachment
@@ -43,8 +47,6 @@ import { CompanyFileLabel } from './ap-myob-lookup'
 const TAX_CODE_TTL_MS = 30 * 24 * 3600 * 1000
 const SETTINGS_ID = 'singleton'
 const STORAGE_BUCKET = 'ap-invoices'
-// MYOB attachment limit is ~10MB; we cap at 8MB raw (≈11MB base64) to leave
-// headroom in the JSON request envelope.
 const MAX_ATTACHMENT_BYTES = 8 * 1024 * 1024
 
 let _sb: SupabaseClient | null = null
@@ -134,7 +136,7 @@ interface ServiceBillLineBody {
   Description: string
   Account: { UID: string }
   Amount: number
-  Tax: { UID: string }
+  TaxCode: { UID: string }    // NB: field is `TaxCode`, NOT `Tax`
 }
 
 interface ServiceBillBody {
@@ -148,27 +150,12 @@ interface ServiceBillBody {
   FreightTaxCode: { UID: string }
 }
 
-/**
- * Build and POST a Service Bill to MYOB for the given AP invoice. After a
- * successful post, attach the source PDF.
- *
- * Pre-conditions (caller should validate, but we re-check):
- *   - status === 'pending_review' or 'ready'
- *   - triage_status !== 'red'
- *   - resolved_supplier_uid + resolved_account_uid populated
- *   - At least one line with line_total_ex_gst > 0
- *
- * On success: invoice row updated to status='posted' with myob_bill_uid set.
- * On bill failure: status='error', myob_post_error set, myob_post_attempts++. Throws.
- * On attachment failure: bill remains posted, myob_post_error captures attachment err.
- */
 export async function createServiceBill(
   invoiceId: string,
   postedBy: string,
 ): Promise<CreateServiceBillResult> {
   const c = sb()
 
-  // Load invoice + lines
   const { data: inv, error: invErr } = await c
     .from('ap_invoices')
     .select('*')
@@ -176,7 +163,6 @@ export async function createServiceBill(
     .single()
   if (invErr || !inv) throw new Error(`Invoice not found: ${invoiceId}`)
 
-  // Pre-flight validation
   if (inv.status === 'posted')   throw new Error('Invoice already posted to MYOB')
   if (inv.status === 'rejected') throw new Error('Invoice has been rejected')
   if (inv.triage_status === 'red') throw new Error('Invoice triage is RED — cannot post')
@@ -214,7 +200,7 @@ export async function createServiceBill(
       Description: description || 'AP line',
       Account: { UID: inv.resolved_account_uid },
       Amount: amount,
-      Tax: { UID: taxUidFor(l.tax_code) },
+      TaxCode: { UID: taxUidFor(l.tax_code) },
     }
   })
 
@@ -229,9 +215,6 @@ export async function createServiceBill(
   }
   const journalMemo = memoParts.join(' — ').substring(0, 255)
 
-  // FreightTaxCode is REQUIRED by MYOB even when FreightAmount is 0. We
-  // reuse the GST UID — applying GST to a $0 amount yields $0 tax, so it's
-  // mathematically harmless and saves an extra TaxCode lookup for N-T.
   const body: ServiceBillBody = {
     Date: inv.invoice_date,
     SupplierInvoiceNumber: String(inv.invoice_number).substring(0, 13),
@@ -316,7 +299,6 @@ export async function createServiceBill(
     myob_post_attempts:  attemptsSoFar,
     status:              'posted',
   }
-  // Track attachment outcome in myob_post_error so the UI surfaces it
   if (attachmentStatus === 'failed') {
     postUpdate.myob_post_error = `Bill posted but PDF attachment failed: ${attachmentError}`
   } else if (attachmentStatus === 'skipped') {
@@ -346,7 +328,6 @@ async function attachPdfToBill(opts: {
   filename: string
   postedBy: string
 }): Promise<void> {
-  // Fetch PDF from Supabase storage
   const { data: blob, error: dlErr } = await sb().storage
     .from(STORAGE_BUCKET)
     .download(opts.pdfStoragePath)
@@ -364,7 +345,6 @@ async function attachPdfToBill(opts: {
   const buffer = Buffer.from(arrayBuf)
   const base64 = buffer.toString('base64')
 
-  // Sanitise filename — MYOB rejects some unicode / control chars
   const safeName = (opts.filename || 'invoice.pdf')
     .replace(/[^\x20-\x7E]/g, '_')
     .substring(0, 100)
@@ -406,9 +386,6 @@ function extractMyobUid(result: { data: any; raw: string }): string | null {
     if (typeof result.data.UID === 'string') return result.data.UID
     if (typeof result.data.Uid === 'string') return result.data.Uid
   }
-  // Fallback: scrape a UUID from the raw response if present (some MYOB
-  // configs return only a Location header with an empty body — the raw
-  // body itself may then just contain the UID URL).
   const m = (result.raw || '').match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i)
   return m ? m[0] : null
 }
