@@ -26,6 +26,11 @@
 // a stack of `InvoiceCard`s. Each card shows triage + vendor + invoice #
 // + total + (when approvable) a big tappable Approve button. The desktop
 // table layout is untouched on >=768px.
+//
+// **Statement reconcile (May 2026):** a button in the header navigates to
+// /ap/statement where users upload a supplier statement PDF and get back
+// a list of which lines exist in MYOB and which are missing/mismatched.
+// Gated to canEdit since the underlying API requires edit:supplier_invoices.
 
 import { useState, useEffect, useRef, useMemo } from 'react'
 import { useRouter } from 'next/router'
@@ -482,6 +487,21 @@ export default function APListPage({ user }: PageProps) {
           />
           {canEdit && (
             <>
+              <button
+                onClick={() => router.push('/ap/statement')}
+                title="Cross-check a supplier statement against MYOB"
+                style={{
+                  background:'transparent', color:T.text, border:`1px solid ${T.border2}`,
+                  padding: isMobile ? '10px 14px' : '8px 12px',
+                  borderRadius:6,
+                  fontSize: isMobile ? 13 : 12,
+                  fontFamily:'inherit',
+                  cursor:'pointer',
+                  flex: isMobile ? '1 1 0' : '0 0 auto',
+                }}
+              >
+                📊 Statement
+              </button>
               <button
                 disabled={pulling}
                 onClick={handlePullInbox}
