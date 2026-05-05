@@ -172,8 +172,10 @@ const contactAttemptsColIdCache = new Map<string, string | null>()
  * Matches any numeric column whose title contains "attempt" (case-insensitive).
  * Returns null if no such column exists OR the lookup itself fails — the
  * caller should treat null as "skip the bump", not as an error.
+ *
+ * Exported so lib/monday-update.ts (Pipeline A) can reuse the same lookup.
  */
-async function getContactAttemptsColumnId(boardId: string): Promise<string | null> {
+export async function getContactAttemptsColumnId(boardId: string): Promise<string | null> {
   if (contactAttemptsColIdCache.has(boardId)) {
     return contactAttemptsColIdCache.get(boardId) ?? null
   }

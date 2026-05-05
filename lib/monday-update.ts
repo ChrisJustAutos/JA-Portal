@@ -17,12 +17,14 @@
 //     skip Monday entirely (Make handles new lead creation via AC). So
 //     we never create new items from this file. Pipeline B already has
 //     an item ID from Monday's integration recipe.
-//   - Bump Contact Attempts. The design says "bump if column exists",
-//     handled by bumpContactAttempts below — caller decides whether to call.
+//   - Bump Contact Attempts unconditionally. The design says "bump if
+//     column exists" — handled by bumpContactAttempts below using the
+//     per-board column resolver from monday-followup.
 
 import {
   mondayQuery,
   searchBoardByPhone,
+  getContactAttemptsColumnId,
   COLUMNS,
   ALL_QUOTE_BOARD_IDS,
   type FoundItem,
@@ -135,42 +137,56 @@ export async function updateItemColumns(
 
 /**
  * Read the current Contact Attempts value, increment by 1, write back.
- * No-op if the column doesn't exist on this board (per design §8 —
- * "Bump Contact Attempts if the column exists").
+ * Self-heals across boards by resolving the column ID per board at runtime
+ * (James and Tyronne have different IDs to the original 3 boards).
+ *
+ * No-op if the column doesn't exist on a particular board, or if any of
+ * the GraphQL calls fail (we log a warning and return). Bumping the
+ * counter is best-effort — the upstream caller has already done the
+ * primary work (item match + column updates) and we don't want a counter
+ * problem to throw and cancel that.
  *
  * Race condition note: read-modify-write is not atomic. If two quotes
  * arrive within seconds we may double-count by one. Acceptable given
  * the rate of inbound quotes (low single digits per hour).
  */
 export async function bumpContactAttempts(itemId: string, boardId: string): Promise<void> {
-  const cur = await mondayQuery<{ items: any[] }>(
-    `query GetAttempts($itemId: [ID!]) {
-      items(ids: $itemId) {
-        column_values(ids: ["${COLUMNS.CONTACT_ATTEMPTS}"]) { text }
-      }
-    }`,
-    { itemId: [itemId] },
-  )
+  try {
+    const colId = await getContactAttemptsColumnId(boardId)
+    if (!colId) {
+      // Column doesn't exist on this board — silent no-op.
+      return
+    }
 
-  // Column may not exist on this particular board — column_values returns
-  // an empty array in that case. Treat as no-op.
-  const cv = cur.items?.[0]?.column_values?.[0]
-  if (!cv) return
+    const cur = await mondayQuery<{ items: any[] }>(
+      `query GetAttempts($itemId: [ID!]) {
+        items(ids: $itemId) {
+          column_values(ids: ["${colId}"]) { text }
+        }
+      }`,
+      { itemId: [itemId] },
+    )
 
-  const curNum = parseInt(cv.text || '', 10) || 0
-  const next = curNum + 1
+    const cv = cur.items?.[0]?.column_values?.[0]
+    if (!cv) return
 
-  await mondayQuery(
-    `mutation BumpAttempts($itemId: ID!, $boardId: ID!, $value: String!) {
-      change_simple_column_value(
-        item_id: $itemId
-        board_id: $boardId
-        column_id: "${COLUMNS.CONTACT_ATTEMPTS}"
-        value: $value
-      ) { id }
-    }`,
-    { itemId, boardId, value: String(next) },
-  )
+    const curNum = parseInt(cv.text || '', 10) || 0
+    const next = curNum + 1
+
+    await mondayQuery(
+      `mutation BumpAttempts($itemId: ID!, $boardId: ID!, $value: String!) {
+        change_simple_column_value(
+          item_id: $itemId
+          board_id: $boardId
+          column_id: "${colId}"
+          value: $value
+        ) { id }
+      }`,
+      { itemId, boardId, value: String(next) },
+    )
+  } catch (e: any) {
+    console.warn(`bumpContactAttempts on board ${boardId}, item ${itemId} failed: ${e?.message || e}`)
+  }
 }
 
 
