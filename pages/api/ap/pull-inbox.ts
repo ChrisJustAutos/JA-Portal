@@ -6,14 +6,20 @@
 // Pipeline:
 //   1. List recent messages with attachments from accounts@<domain>
 //   2. Skip any message ID we've already ingested (graph_message_id column)
-//   3. For each remaining message, take the first PDF attachment and run
-//      it through the same pipeline as /api/ap/upload (parse → insert →
-//      upload PDF → triage). Tag the new invoice with graph_message_id
-//      so subsequent pulls skip it.
+//   3. Process remaining messages with a parallel worker pool. Each
+//      worker takes the first PDF attachment and runs it through the
+//      same pipeline as /api/ap/upload (parse → insert → upload PDF →
+//      triage). New invoices are tagged with graph_message_id so
+//      subsequent pulls skip them.
+//
+// Concurrency: the Claude Haiku parse call dominates (5–15s per invoice).
+// We run AP_INBOX_PULL_CONCURRENCY workers in parallel (default 4) which
+// gives a ~4× speedup on cold pulls without breaching Anthropic, Graph,
+// or MYOB rate limits at typical volumes. Set to 1 to revert to serial.
 //
 // Idempotency: graph_message_id is unique-indexed on ap_invoices, so even
-// concurrent pulls cannot create duplicate rows. We pre-filter for speed
-// but rely on the unique index as the hard guarantee.
+// concurrent workers cannot create duplicate rows. We pre-filter for
+// speed but rely on the unique index as the hard guarantee.
 //
 // Mailbox: defaults to accounts@justautosmechanical.com.au, override via
 // AP_INBOX_MAILBOX env var. Reads via Graph app-only token (Mail.Read app
@@ -21,7 +27,7 @@
 // subscription needed for pull-on-demand.
 //
 // Auth: edit:supplier_invoices.
-// Function timeout: 5 min (parse calls are 5–15s each, 30+ messages possible).
+// Function timeout: 5 min.
 
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
@@ -31,6 +37,7 @@ import {
   listAttachmentMeta,
   getAttachmentBase64,
   GraphAttachmentMeta,
+  GraphMessageSummary,
 } from '../../../lib/microsoft-graph'
 import { extractInvoiceFromPdf } from '../../../lib/ap-extraction'
 import {
@@ -40,6 +47,8 @@ import {
 } from '../../../lib/ap-supabase'
 
 const DEFAULT_MAILBOX = 'accounts@justautosmechanical.com.au'
+const DEFAULT_CONCURRENCY = 4
+const MAX_CONCURRENCY = 8
 
 export const config = {
   api: { bodyParser: { sizeLimit: '1mb' } },
@@ -69,6 +78,14 @@ interface IngestResult {
   reason?: string
 }
 
+function readConcurrency(): number {
+  const raw = process.env.AP_INBOX_PULL_CONCURRENCY
+  if (!raw) return DEFAULT_CONCURRENCY
+  const n = parseInt(raw, 10)
+  if (!Number.isFinite(n) || n < 1) return DEFAULT_CONCURRENCY
+  return Math.min(n, MAX_CONCURRENCY)
+}
+
 export default withAuth('edit:supplier_invoices', async (req: NextApiRequest, res: NextApiResponse) => {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' })
@@ -79,17 +96,16 @@ export default withAuth('edit:supplier_invoices', async (req: NextApiRequest, re
   const sinceIso = new Date(Date.now() - days * 24 * 3600 * 1000).toISOString()
 
   const mailbox = process.env.AP_INBOX_MAILBOX || DEFAULT_MAILBOX
+  const concurrency = readConcurrency()
 
   // ── Step 1: list candidate messages ──
-  let messages
+  let messages: GraphMessageSummary[]
   try {
     messages = await listMessagesWithAttachments(mailbox, {
       sinceIsoDate: sinceIso,
       top: 100,
     })
   } catch (e: any) {
-    // Log to Vercel runtime logs — the response body alone is hard to
-    // pull out of UI errors. Keep the full message so admins can read it.
     const detail = e?.message || String(e)
     console.error(`[pull-inbox] Graph mailbox listing failed for ${mailbox}: ${detail}`)
     return res.status(502).json({
@@ -105,6 +121,7 @@ export default withAuth('edit:supplier_invoices', async (req: NextApiRequest, re
       ok: true,
       mailbox,
       sinceDays: days,
+      concurrency,
       summary: { scanned: 0, ingested: 0, duplicates: 0, skipped: 0, failed: 0 },
       results: [],
     })
@@ -115,7 +132,6 @@ export default withAuth('edit:supplier_invoices', async (req: NextApiRequest, re
   const messageIds = messages.map(m => m.id)
   const alreadyProcessed = new Set<string>()
   {
-    // Supabase .in() has practical caps; chunk in 100s
     const chunkSize = 100
     for (let i = 0; i < messageIds.length; i += chunkSize) {
       const chunk = messageIds.slice(i, i + chunkSize)
@@ -132,14 +148,11 @@ export default withAuth('edit:supplier_invoices', async (req: NextApiRequest, re
     }
   }
 
-  const userEmail = (req as any).user?.email || 'inbox-pull'
-  const results: IngestResult[] = []
-
-  // ── Step 3: process each new message sequentially ──
-  // Sequential, not parallel: parse calls hit Anthropic rate limits, and
-  // sequential keeps memory + log noise sane. With 60s budget per message
-  // we comfortably handle 4–5 invoices per pull within the 300s timeout.
-  for (const msg of messages) {
+  // ── Per-message worker ──
+  // Runs the full ingest pipeline for one message. Returns a result row
+  // describing what happened. Never throws — all errors are captured
+  // into the result so the worker pool keeps draining.
+  async function processMessage(msg: GraphMessageSummary): Promise<IngestResult> {
     const base = {
       messageId: msg.id,
       receivedDateTime: msg.receivedDateTime,
@@ -148,53 +161,47 @@ export default withAuth('edit:supplier_invoices', async (req: NextApiRequest, re
     }
 
     if (alreadyProcessed.has(msg.id)) {
-      results.push({ ...base, attachmentName: '', status: 'duplicate', reason: 'Already ingested' })
-      continue
+      return { ...base, attachmentName: '', status: 'duplicate', reason: 'Already ingested' }
     }
 
     let attachments: GraphAttachmentMeta[]
     try {
       attachments = await listAttachmentMeta(mailbox, msg.id)
     } catch (e: any) {
-      results.push({ ...base, attachmentName: '', status: 'failed', reason: `Attachment list failed: ${e?.message || e}` })
-      continue
+      return { ...base, attachmentName: '', status: 'failed', reason: `Attachment list failed: ${e?.message || e}` }
     }
 
     const pdfAttachments = attachments.filter(a =>
       a.contentType === 'application/pdf' || /\.pdf$/i.test(a.name || '')
     )
     if (pdfAttachments.length === 0) {
-      results.push({ ...base, attachmentName: '', status: 'skipped', reason: 'No PDF attachments' })
-      continue
+      return { ...base, attachmentName: '', status: 'skipped', reason: 'No PDF attachments' }
     }
 
     // First PDF only. Multi-PDF emails are rare for invoices and would
-    // create attribution complexity (which PDF "is" the invoice). Tag the
-    // graph_message_id on the row so the unique constraint prevents a
-    // re-pull from creating a second invoice off the same message — even
-    // if a future pass attempts the second PDF.
+    // create attribution complexity (which PDF "is" the invoice). Tag
+    // the graph_message_id on the row so the unique constraint prevents
+    // a re-pull from creating a second invoice off the same message —
+    // even if a future pass attempts the second PDF.
     const att = pdfAttachments[0]
 
     let pdfBase64: string
     try {
       pdfBase64 = await getAttachmentBase64(mailbox, msg.id, att.id)
     } catch (e: any) {
-      results.push({ ...base, attachmentName: att.name, status: 'failed', reason: `Download failed: ${e?.message || e}` })
-      continue
+      return { ...base, attachmentName: att.name, status: 'failed', reason: `Download failed: ${e?.message || e}` }
     }
 
     const pdfBytes = Buffer.from(pdfBase64, 'base64')
     if (pdfBytes.length < 100 || !pdfBytes.subarray(0, 5).toString('ascii').startsWith('%PDF-')) {
-      results.push({ ...base, attachmentName: att.name, status: 'failed', reason: 'Decoded bytes are not a valid PDF' })
-      continue
+      return { ...base, attachmentName: att.name, status: 'failed', reason: 'Decoded bytes are not a valid PDF' }
     }
 
     let extraction
     try {
       extraction = await extractInvoiceFromPdf(pdfBase64)
     } catch (e: any) {
-      results.push({ ...base, attachmentName: att.name, status: 'failed', reason: `Parse failed: ${e?.message || e}` })
-      continue
+      return { ...base, attachmentName: att.name, status: 'failed', reason: `Parse failed: ${e?.message || e}` }
     }
 
     let inserted
@@ -212,8 +219,7 @@ export default withAuth('edit:supplier_invoices', async (req: NextApiRequest, re
         },
       })
     } catch (e: any) {
-      results.push({ ...base, attachmentName: att.name, status: 'failed', reason: `DB insert failed: ${e?.message || e}` })
-      continue
+      return { ...base, attachmentName: att.name, status: 'failed', reason: `DB insert failed: ${e?.message || e}` }
     }
 
     // Tag with Graph message ID for idempotency (unique-indexed column)
@@ -223,7 +229,6 @@ export default withAuth('edit:supplier_invoices', async (req: NextApiRequest, re
         .update({ graph_message_id: msg.id })
         .eq('id', inserted.id)
       if (tagErr) {
-        // The row exists, just couldn't tag it. Continue but flag.
         console.error(`Tag graph_message_id failed for ${inserted.id}: ${tagErr.message}`)
       }
     }
@@ -240,16 +245,53 @@ export default withAuth('edit:supplier_invoices', async (req: NextApiRequest, re
       console.error(`Triage failed for ${inserted.id}: ${e?.message || e}`)
     }
 
-    results.push({
+    return {
       ...base,
       attachmentName: att.name,
       status: 'ingested',
       invoiceId: inserted.id,
       vendor: extraction.invoice.vendor?.name || null,
       total: extraction.invoice.totals?.totalIncGst ?? null,
-    })
+    }
   }
 
+  // ── Worker pool ──
+  // Standard "shared index" pattern: every worker pulls from a single
+  // counter, ensuring each message is processed by exactly one worker
+  // and no busy-wait. Workers run independently; one worker hitting a
+  // slow Claude call doesn't stall the others.
+  const results: IngestResult[] = new Array(messages.length)
+  let nextIndex = 0
+
+  async function workerLoop(): Promise<void> {
+    while (true) {
+      const idx = nextIndex++
+      if (idx >= messages.length) return
+      try {
+        results[idx] = await processMessage(messages[idx])
+      } catch (e: any) {
+        // Defensive: processMessage shouldn't throw, but a wrap-around
+        // catch keeps the pool draining if a future change introduces
+        // an unhandled throw.
+        const msg = messages[idx]
+        results[idx] = {
+          messageId: msg.id,
+          receivedDateTime: msg.receivedDateTime,
+          subject: msg.subject,
+          from: msg.from,
+          attachmentName: '',
+          status: 'failed',
+          reason: `Unexpected worker error: ${e?.message || e}`,
+        }
+      }
+    }
+  }
+
+  const workerCount = Math.min(concurrency, messages.length)
+  const workers = Array.from({ length: workerCount }, () => workerLoop())
+  await Promise.all(workers)
+
+  const userEmail = (req as any).user?.email || 'inbox-pull'
   void userEmail   // reserved for audit logging in a later round
 
   const summary = {
@@ -264,6 +306,7 @@ export default withAuth('edit:supplier_invoices', async (req: NextApiRequest, re
     ok: true,
     mailbox,
     sinceDays: days,
+    concurrency,
     summary,
     results,
   })
