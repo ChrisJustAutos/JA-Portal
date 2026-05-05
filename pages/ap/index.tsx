@@ -21,6 +21,11 @@
 // existing UID and marks the invoice as posted (rather than throwing
 // "Duplicate in MYOB"). The UI surfaces this with a `↷ adopted` label so
 // the operator can tell apart freshly-posted bills from reconciled ones.
+//
+// **Mobile (Phase 1):** below 768px the dense data table is replaced with
+// a stack of `InvoiceCard`s. Each card shows triage + vendor + invoice #
+// + total + (when approvable) a big tappable Approve button. The desktop
+// table layout is untouched on >=768px.
 
 import { useState, useEffect, useRef, useMemo } from 'react'
 import { useRouter } from 'next/router'
@@ -28,6 +33,7 @@ import { GetServerSideProps } from 'next'
 import PortalSidebar from '../../lib/PortalSidebar'
 import { requirePageAuth } from '../../lib/authServer'
 import { UserRole, roleHasPermission } from '../../lib/permissions'
+import { useIsMobile } from '../../lib/useIsMobile'
 
 const BULK_BATCH_SIZE = 3
 
@@ -92,6 +98,7 @@ function isApprovable(inv: InvoiceRow): boolean {
 
 export default function APListPage({ user }: PageProps) {
   const router = useRouter()
+  const isMobile = useIsMobile()
   const [data, setData] = useState<ListResponse | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -319,7 +326,6 @@ export default function APListPage({ user }: PageProps) {
             totalFailed     += (s.failed     || 0)
             totalAttached   += (s.attached   || 0)
             totalAttachFail += (s.attachFail || 0)
-            // Count smart-adopt outcomes
             const adopted = (json.results || []).filter((r: any) => r.ok && r.attachmentStatus === 'adopted')
             totalAdopted += adopted.length
             const fails = (json.results || []).filter((r: any) => !r.ok)
@@ -403,6 +409,9 @@ export default function APListPage({ user }: PageProps) {
     : selectedApprovableIds.length > 0 ? 'partial'
     : 'unchecked'
 
+  // Mobile-aware container padding — leaner on phones.
+  const pagePad = isMobile ? '14px 14px 80px' : '24px 32px'
+
   return (
     <div style={{display:'flex', minHeight:'100vh', background:T.bg, color:T.text, fontFamily:"'DM Sans', system-ui, sans-serif"}}>
       <PortalSidebar
@@ -413,44 +422,62 @@ export default function APListPage({ user }: PageProps) {
         currentUserEmail={user.email}
       />
 
-      <div style={{flex:1, padding:'24px 32px', overflow:'auto'}}>
-        <div style={{display:'flex', alignItems:'baseline', justifyContent:'space-between', marginBottom:6}}>
-          <h1 style={{fontSize:22, fontWeight:600, margin:0}}>AP Invoices</h1>
-          <div style={{fontSize:11, color:T.text3}}>VPS · supplier invoices via email + manual upload</div>
+      <div style={{flex:1, padding: pagePad, overflow:'auto'}}>
+        <div style={{display:'flex', alignItems:'baseline', justifyContent:'space-between', marginBottom:6, gap:10, flexWrap:'wrap'}}>
+          <h1 style={{fontSize: isMobile ? 18 : 22, fontWeight:600, margin:0}}>AP Invoices</h1>
+          {!isMobile && <div style={{fontSize:11, color:T.text3}}>VPS · supplier invoices via email + manual upload</div>}
         </div>
-        <div style={{fontSize:12, color:T.text3, marginBottom:18}}>Triage incoming invoices, edit lines, and post to MYOB.</div>
+        {!isMobile && (
+          <div style={{fontSize:12, color:T.text3, marginBottom:18}}>Triage incoming invoices, edit lines, and post to MYOB.</div>
+        )}
 
         {data && (
-          <div style={{background:T.bg2, border:`1px solid ${T.border}`, borderRadius:10, padding:'14px 18px', marginBottom:14, display:'flex', flexWrap:'wrap', gap:24, alignItems:'center'}}>
+          <div style={{
+            background:T.bg2, border:`1px solid ${T.border}`, borderRadius:10,
+            padding: isMobile ? '12px 14px' : '14px 18px',
+            marginBottom:14,
+            display:'flex', flexWrap:'wrap',
+            gap: isMobile ? 16 : 24,
+            alignItems:'center',
+          }}>
             <Stat n={data.counts.red}     label="Red"     color={T.red}/>
             <Stat n={data.counts.yellow}  label="Yellow"  color={T.amber}/>
             <Stat n={data.counts.green}   label="Green"   color={T.green}/>
-            <span style={{flex:1}}/>
-            <Stat n={data.counts.pending} label="Pending review" color={T.text2}/>
-            <Stat n={data.counts.ready}   label="Ready"          color={T.blue}/>
-            <Stat n={data.counts.posted}  label="Posted"         color={T.text3}/>
+            {!isMobile && (
+              <>
+                <span style={{flex:1}}/>
+                <Stat n={data.counts.pending} label="Pending review" color={T.text2}/>
+                <Stat n={data.counts.ready}   label="Ready"          color={T.blue}/>
+                <Stat n={data.counts.posted}  label="Posted"         color={T.text3}/>
+              </>
+            )}
           </div>
         )}
 
+        {/* Filter bar — pills wrap on mobile, search and action buttons go full-width below */}
         <div style={{display:'flex', flexWrap:'wrap', gap:8, alignItems:'center', marginBottom:14}}>
-          <Pill active={statusFilter===''}                 onClick={()=>setStatusFilter('')}                  label="All statuses"/>
-          <Pill active={statusFilter==='pending_review'}   onClick={()=>setStatusFilter('pending_review')}    label="Pending review"/>
+          <Pill active={statusFilter===''}                 onClick={()=>setStatusFilter('')}                  label="All"/>
+          <Pill active={statusFilter==='pending_review'}   onClick={()=>setStatusFilter('pending_review')}    label="Pending"/>
           <Pill active={statusFilter==='ready'}            onClick={()=>setStatusFilter('ready')}             label="Ready"/>
           <Pill active={statusFilter==='posted'}           onClick={()=>setStatusFilter('posted')}            label="Posted"/>
-          <Pill active={statusFilter==='rejected'}         onClick={()=>setStatusFilter('rejected')}          label="Rejected"/>
-          <span style={{width:14}}/>
-          <Pill active={triageFilter===''}       onClick={()=>setTriageFilter('')}        label="All triage"/>
-          <Pill active={triageFilter==='red'}    onClick={()=>setTriageFilter('red')}     label="🔴 Red"     color={T.red}/>
-          <Pill active={triageFilter==='yellow'} onClick={()=>setTriageFilter('yellow')}  label="🟡 Yellow"  color={T.amber}/>
-          <Pill active={triageFilter==='green'}  onClick={()=>setTriageFilter('green')}   label="🟢 Green"   color={T.green}/>
-          <span style={{flex:1}}/>
+          {!isMobile && <Pill active={statusFilter==='rejected'} onClick={()=>setStatusFilter('rejected')} label="Rejected"/>}
+          <span style={{width: isMobile ? 4 : 14}}/>
+          <Pill active={triageFilter==='red'}    onClick={()=>setTriageFilter(triageFilter==='red'?'':'red')}     label="🔴"   color={T.red}/>
+          <Pill active={triageFilter==='yellow'} onClick={()=>setTriageFilter(triageFilter==='yellow'?'':'yellow')} label="🟡" color={T.amber}/>
+          <Pill active={triageFilter==='green'}  onClick={()=>setTriageFilter(triageFilter==='green'?'':'green')}   label="🟢" color={T.green}/>
+          {!isMobile && <span style={{flex:1}}/>}
           <input
             value={search}
             onChange={e => setSearch(e.target.value)}
             placeholder="Search vendor / invoice #…"
             style={{
               background: T.bg2, border: `1px solid ${T.border2}`, color: T.text,
-              padding: '7px 11px', borderRadius: 6, fontSize: 12, fontFamily:'inherit', minWidth: 240, outline:'none',
+              padding: '8px 12px', borderRadius: 6,
+              fontSize: 16,                              // 16px prevents iOS zoom-on-focus
+              fontFamily:'inherit',
+              minWidth: isMobile ? 0 : 240,
+              flex: isMobile ? '1 1 100%' : '0 1 auto',
+              outline:'none',
             }}
           />
           {canEdit && (
@@ -461,11 +488,15 @@ export default function APListPage({ user }: PageProps) {
                 title="Fetch new invoices from accounts@ inbox"
                 style={{
                   background:'transparent', color:T.text, border:`1px solid ${T.border2}`,
-                  padding:'8px 12px', borderRadius:6, fontSize:12, fontFamily:'inherit',
+                  padding: isMobile ? '10px 14px' : '8px 12px',
+                  borderRadius:6,
+                  fontSize: isMobile ? 13 : 12,
+                  fontFamily:'inherit',
                   cursor: pulling ? 'wait' : 'pointer', opacity: pulling ? 0.6 : 1,
+                  flex: isMobile ? '1 1 0' : '0 0 auto',
                 }}
               >
-                {pulling ? 'Pulling…' : '📥 Pull from Inbox'}
+                {pulling ? 'Pulling…' : '📥 Pull Inbox'}
               </button>
               <input
                 ref={fileRef}
@@ -479,9 +510,13 @@ export default function APListPage({ user }: PageProps) {
                 onClick={() => fileRef.current?.click()}
                 style={{
                   background: T.blue, color: '#fff', border:'none',
-                  padding: '8px 14px', borderRadius: 6, fontSize: 12, fontWeight: 500, fontFamily:'inherit',
+                  padding: isMobile ? '10px 14px' : '8px 14px',
+                  borderRadius: 6,
+                  fontSize: isMobile ? 13 : 12,
+                  fontWeight: 500, fontFamily:'inherit',
                   cursor: uploading ? 'wait' : 'pointer',
                   opacity: uploading ? 0.6 : 1,
+                  flex: isMobile ? '1 1 0' : '0 0 auto',
                 }}
               >
                 {uploading ? 'Uploading…' : '+ Upload PDF'}
@@ -493,7 +528,10 @@ export default function APListPage({ user }: PageProps) {
         {canEdit && selectedApprovableIds.length > 0 && (
           <div style={{
             background:`${T.green}10`, border:`1px solid ${T.green}40`, borderRadius:7,
-            padding:'8px 12px', marginBottom:10, display:'flex', gap:12, alignItems:'center', fontSize:12,
+            padding: isMobile ? '10px 12px' : '8px 12px',
+            marginBottom:10,
+            display:'flex', gap:10, alignItems:'center', flexWrap:'wrap',
+            fontSize:12,
           }}>
             <span style={{color:T.green, fontWeight:500}}>
               {selectedApprovableIds.length} selected
@@ -503,8 +541,10 @@ export default function APListPage({ user }: PageProps) {
               disabled={bulkApproving}
               style={{
                 background: T.green, color:'#fff', border:'none',
-                padding:'6px 12px', borderRadius:5, fontSize:11, fontWeight:500, fontFamily:'inherit',
+                padding: isMobile ? '9px 14px' : '6px 12px',
+                borderRadius:5, fontSize:12, fontWeight:500, fontFamily:'inherit',
                 cursor: bulkApproving ? 'wait' : 'pointer', opacity: bulkApproving ? 0.6 : 1,
+                flex: isMobile ? '1 1 100%' : '0 0 auto',
               }}
             >
               {bulkApproving ? 'Posting to MYOB…' : `✓ Approve & Post ${selectedApprovableIds.length}`}
@@ -514,13 +554,13 @@ export default function APListPage({ user }: PageProps) {
               disabled={bulkApproving}
               style={{
                 background:'transparent', color:T.text2, border:`1px solid ${T.border2}`,
-                padding:'6px 10px', borderRadius:5, fontSize:11, fontFamily:'inherit',
+                padding:'7px 11px', borderRadius:5, fontSize:11, fontFamily:'inherit',
                 cursor: bulkApproving ? 'wait' : 'pointer',
               }}
             >
               Clear selection
             </button>
-            {selectedApprovableIds.length > BULK_BATCH_SIZE && (
+            {!isMobile && selectedApprovableIds.length > BULK_BATCH_SIZE && (
               <span style={{color:T.text3, fontSize:11}}>
                 · processed in batches of {BULK_BATCH_SIZE}
               </span>
@@ -528,15 +568,9 @@ export default function APListPage({ user }: PageProps) {
           </div>
         )}
 
-        {pullMessage && (
-          <Banner kind={pullMessage.startsWith('❌') ? 'err' : 'ok'}>{pullMessage}</Banner>
-        )}
-        {approveMessage && (
-          <Banner kind={approveMessage.startsWith('❌') ? 'err' : approveMessage.startsWith('⏳') ? 'info' : 'ok'}>{approveMessage}</Banner>
-        )}
-        {uploadMessage && (
-          <Banner kind={uploadMessage.startsWith('❌') ? 'err' : 'ok'}>{uploadMessage}</Banner>
-        )}
+        {pullMessage && <Banner kind={pullMessage.startsWith('❌') ? 'err' : 'ok'}>{pullMessage}</Banner>}
+        {approveMessage && <Banner kind={approveMessage.startsWith('❌') ? 'err' : approveMessage.startsWith('⏳') ? 'info' : 'ok'}>{approveMessage}</Banner>}
+        {uploadMessage && <Banner kind={uploadMessage.startsWith('❌') ? 'err' : 'ok'}>{uploadMessage}</Banner>}
 
         {error && (
           <div style={{background:`${T.red}15`, border:`1px solid ${T.red}40`, borderRadius:7, padding:10, color:T.red, fontSize:12, marginBottom:12}}>
@@ -544,170 +578,352 @@ export default function APListPage({ user }: PageProps) {
           </div>
         )}
 
-        <div style={{background:T.bg2, border:`1px solid ${T.border}`, borderRadius:10, overflow:'hidden'}}>
-          <div style={{overflowX:'auto'}}>
-            <table style={{width:'100%', borderCollapse:'collapse', minWidth: 1280}}>
-              <thead>
-                <tr style={{borderBottom:`1px solid ${T.border2}`}}>
-                  {canEdit && (
-                    <th style={th(36)}>
-                      <HeaderCheckbox
-                        state={headerCheckboxState}
-                        disabled={approvableVisibleIds.size === 0}
-                        onClick={toggleSelectAll}
-                      />
-                    </th>
-                  )}
-                  <th style={th(80)}>Triage</th>
-                  <th style={th(110)}>Received</th>
-                  <th style={th()}>Vendor</th>
-                  <th style={th()}>Description</th>
-                  <th style={th(140)}>Invoice #</th>
-                  <th style={th(90)}>Inv Date</th>
-                  <th style={th()}>Supplier (MYOB)</th>
-                  <th style={{...th(110), textAlign:'right'}}>Total inc GST</th>
-                  <th style={th(110)}>Status</th>
-                  {canEdit && <th style={th(90)}>Approve</th>}
-                  {canEdit && <th style={th(40)}/>}
-                </tr>
-              </thead>
-              <tbody>
-                {loading && !data && (
-                  <tr><td colSpan={canEdit ? 12 : 9} style={{padding:30, textAlign:'center', color:T.text3, fontSize:12}}>Loading…</td></tr>
-                )}
-                {data && data.invoices.length === 0 && (
-                  <tr><td colSpan={canEdit ? 12 : 9} style={{padding:30, textAlign:'center', color:T.text3, fontSize:12}}>No invoices match the current filters.</td></tr>
-                )}
-                {data && data.invoices.map((inv, i) => {
-                  const isDeleting = deletingId === inv.id
-                  const isApprovingThis = approvingId === inv.id
-                  const isPosted = inv.status === 'posted'
-                  const approvable = isApprovable(inv)
-                  const isSelected = selectedIds.has(inv.id)
-                  return (
-                    <tr
-                      key={inv.id}
-                      onClick={() => router.push(`/ap/${inv.id}`)}
-                      style={{
-                        borderTop: i > 0 ? `1px solid ${T.border}` : 'none',
-                        cursor: 'pointer',
-                        opacity: isDeleting ? 0.4 : 1,
-                        background: isSelected ? `${T.green}08` : 'transparent',
-                      }}
-                      onMouseEnter={e => (e.currentTarget.style.background = isSelected ? `${T.green}12` : T.bg3)}
-                      onMouseLeave={e => (e.currentTarget.style.background = isSelected ? `${T.green}08` : 'transparent')}
-                    >
-                      {canEdit && (
-                        <td style={{...td(), padding:'10px 6px', textAlign:'center'}} onClick={e => e.stopPropagation()}>
-                          {approvable ? (
-                            <input
-                              type="checkbox"
-                              checked={isSelected}
-                              onChange={() => toggleSelect(inv.id)}
-                              style={{cursor:'pointer'}}
-                            />
-                          ) : (
-                            <span style={{color:T.text3, fontSize:11}}>—</span>
-                          )}
-                        </td>
-                      )}
-                      <td style={td()}><TriagePill status={inv.triage_status}/></td>
-                      <td style={{...td(), fontSize:11, color:T.text3, fontFamily:'monospace', whiteSpace:'nowrap'}}>
-                        {fmtDateTime(inv.received_at)}
-                      </td>
-                      <td style={td()}>
-                        <div style={{fontSize:13, color:T.text}}>{inv.vendor_name_parsed || <span style={{color:T.text3}}>—</span>}</div>
-                        {inv.via_capricorn && (
-                          <div style={{fontSize:10, color:T.amber, marginTop:2}}>via Capricorn{inv.capricorn_reference ? ` ${inv.capricorn_reference}` : ''}</div>
-                        )}
-                      </td>
-                      <td style={{...td(), fontSize:12, color:T.text2, maxWidth: 260}}>
-                        {inv.line_summary ? (
-                          <span title={inv.line_summary}>{inv.line_summary}</span>
-                        ) : (
-                          <span style={{color:T.text3, fontStyle:'italic'}}>—</span>
-                        )}
-                      </td>
-                      <td style={{...td(), fontFamily:'monospace', fontSize:12}}>
-                        {inv.invoice_number || <span style={{color:T.text3}}>—</span>}
-                      </td>
-                      <td style={{...td(), fontSize:11, color:T.text2, whiteSpace:'nowrap'}}>{inv.invoice_date || '—'}</td>
-                      <td style={td()}>
-                        {inv.resolved_supplier_name ? (
-                          <div>
-                            <div style={{fontSize:12, color:T.text}}>{inv.resolved_supplier_name}</div>
-                            <div style={{fontSize:10, color:T.text3, fontFamily:'monospace', marginTop:2}}>{inv.resolved_account_code || ''}</div>
-                          </div>
-                        ) : (
-                          <span style={{fontSize:11, color:T.text3, fontStyle:'italic'}}>not mapped</span>
-                        )}
-                      </td>
-                      <td style={{...td(), textAlign:'right', fontFamily:'monospace', fontSize:13, fontWeight:500}}>
-                        {inv.total_inc_gst !== null ? `$${Number(inv.total_inc_gst).toFixed(2)}` : '—'}
-                      </td>
-                      <td style={td()}>
-                        <StatusPill status={inv.status}/>
-                      </td>
-                      {canEdit && (
-                        <td style={{...td(), textAlign:'center', padding:'8px 6px'}} onClick={e => e.stopPropagation()}>
-                          {approvable ? (
-                            <button
-                              onClick={(e) => handleApproveOne(inv, e)}
-                              disabled={isApprovingThis || bulkApproving}
-                              title="Post this invoice to MYOB"
-                              style={{
-                                background: T.green, color:'#fff', border:'none',
-                                padding:'4px 10px', borderRadius:4, fontSize:11, fontWeight:500, fontFamily:'inherit',
-                                cursor: (isApprovingThis || bulkApproving) ? 'wait' : 'pointer',
-                                opacity: (isApprovingThis || bulkApproving) ? 0.5 : 1,
-                                whiteSpace:'nowrap',
-                              }}
-                            >
-                              {isApprovingThis ? '…' : '✓ Approve'}
-                            </button>
-                          ) : (
-                            <span style={{color:T.text3, fontSize:11}}>—</span>
-                          )}
-                        </td>
-                      )}
-                      {canEdit && (
-                        <td style={{...td(), textAlign:'center', padding:'8px 6px'}} onClick={e => e.stopPropagation()}>
-                          {isPosted ? (
-                            <span title="Posted invoices can't be deleted" style={{color:T.text3, fontSize:14}}>—</span>
-                          ) : (
-                            <button
-                              onClick={(e) => handleDelete(inv, e)}
-                              disabled={isDeleting}
-                              title="Delete invoice + PDF"
-                              style={{
-                                background:'none', border:'none',
-                                color: isDeleting ? T.text3 : T.text2,
-                                cursor: isDeleting ? 'wait' : 'pointer',
-                                fontSize:16, padding:'2px 6px', borderRadius:4,
-                                fontFamily:'inherit',
-                              }}
-                              onMouseEnter={e => { if (!isDeleting) (e.currentTarget.style.color = T.red) }}
-                              onMouseLeave={e => { if (!isDeleting) (e.currentTarget.style.color = T.text2) }}
-                            >
-                              {isDeleting ? '…' : '×'}
-                            </button>
-                          )}
-                        </td>
-                      )}
-                    </tr>
-                  )
-                })}
-              </tbody>
-            </table>
+        {/* ─── MOBILE: card stack ─── */}
+        {isMobile && (
+          <div style={{display:'flex', flexDirection:'column', gap:10}}>
+            {loading && !data && (
+              <div style={{padding:30, textAlign:'center', color:T.text3, fontSize:12}}>Loading…</div>
+            )}
+            {data && data.invoices.length === 0 && (
+              <div style={{
+                background:T.bg2, border:`1px solid ${T.border}`, borderRadius:10,
+                padding:30, textAlign:'center', color:T.text3, fontSize:12,
+              }}>No invoices match the current filters.</div>
+            )}
+            {data && data.invoices.map(inv => (
+              <InvoiceCard
+                key={inv.id}
+                inv={inv}
+                isSelected={selectedIds.has(inv.id)}
+                isApproving={approvingId === inv.id}
+                isDeleting={deletingId === inv.id}
+                bulkApproving={bulkApproving}
+                canEdit={canEdit}
+                onToggleSelect={() => toggleSelect(inv.id)}
+                onApprove={(e) => handleApproveOne(inv, e)}
+                onDelete={(e) => handleDelete(inv, e)}
+              />
+            ))}
           </div>
-        </div>
+        )}
+
+        {/* ─── DESKTOP: table ─── */}
+        {!isMobile && (
+          <div style={{background:T.bg2, border:`1px solid ${T.border}`, borderRadius:10, overflow:'hidden'}}>
+            <div style={{overflowX:'auto'}}>
+              <table style={{width:'100%', borderCollapse:'collapse', minWidth: 1280}}>
+                <thead>
+                  <tr style={{borderBottom:`1px solid ${T.border2}`}}>
+                    {canEdit && (
+                      <th style={th(36)}>
+                        <HeaderCheckbox
+                          state={headerCheckboxState}
+                          disabled={approvableVisibleIds.size === 0}
+                          onClick={toggleSelectAll}
+                        />
+                      </th>
+                    )}
+                    <th style={th(80)}>Triage</th>
+                    <th style={th(110)}>Received</th>
+                    <th style={th()}>Vendor</th>
+                    <th style={th()}>Description</th>
+                    <th style={th(140)}>Invoice #</th>
+                    <th style={th(90)}>Inv Date</th>
+                    <th style={th()}>Supplier (MYOB)</th>
+                    <th style={{...th(110), textAlign:'right'}}>Total inc GST</th>
+                    <th style={th(110)}>Status</th>
+                    {canEdit && <th style={th(90)}>Approve</th>}
+                    {canEdit && <th style={th(40)}/>}
+                  </tr>
+                </thead>
+                <tbody>
+                  {loading && !data && (
+                    <tr><td colSpan={canEdit ? 12 : 9} style={{padding:30, textAlign:'center', color:T.text3, fontSize:12}}>Loading…</td></tr>
+                  )}
+                  {data && data.invoices.length === 0 && (
+                    <tr><td colSpan={canEdit ? 12 : 9} style={{padding:30, textAlign:'center', color:T.text3, fontSize:12}}>No invoices match the current filters.</td></tr>
+                  )}
+                  {data && data.invoices.map((inv, i) => {
+                    const isDeletingThis = deletingId === inv.id
+                    const isApprovingThis = approvingId === inv.id
+                    const isPosted = inv.status === 'posted'
+                    const approvable = isApprovable(inv)
+                    const isSelected = selectedIds.has(inv.id)
+                    return (
+                      <tr
+                        key={inv.id}
+                        onClick={() => router.push(`/ap/${inv.id}`)}
+                        style={{
+                          borderTop: i > 0 ? `1px solid ${T.border}` : 'none',
+                          cursor: 'pointer',
+                          opacity: isDeletingThis ? 0.4 : 1,
+                          background: isSelected ? `${T.green}08` : 'transparent',
+                        }}
+                        onMouseEnter={e => (e.currentTarget.style.background = isSelected ? `${T.green}12` : T.bg3)}
+                        onMouseLeave={e => (e.currentTarget.style.background = isSelected ? `${T.green}08` : 'transparent')}
+                      >
+                        {canEdit && (
+                          <td style={{...td(), padding:'10px 6px', textAlign:'center'}} onClick={e => e.stopPropagation()}>
+                            {approvable ? (
+                              <input
+                                type="checkbox"
+                                checked={isSelected}
+                                onChange={() => toggleSelect(inv.id)}
+                                style={{cursor:'pointer'}}
+                              />
+                            ) : (
+                              <span style={{color:T.text3, fontSize:11}}>—</span>
+                            )}
+                          </td>
+                        )}
+                        <td style={td()}><TriagePill status={inv.triage_status}/></td>
+                        <td style={{...td(), fontSize:11, color:T.text3, fontFamily:'monospace', whiteSpace:'nowrap'}}>
+                          {fmtDateTime(inv.received_at)}
+                        </td>
+                        <td style={td()}>
+                          <div style={{fontSize:13, color:T.text}}>{inv.vendor_name_parsed || <span style={{color:T.text3}}>—</span>}</div>
+                          {inv.via_capricorn && (
+                            <div style={{fontSize:10, color:T.amber, marginTop:2}}>via Capricorn{inv.capricorn_reference ? ` ${inv.capricorn_reference}` : ''}</div>
+                          )}
+                        </td>
+                        <td style={{...td(), fontSize:12, color:T.text2, maxWidth: 260}}>
+                          {inv.line_summary ? (
+                            <span title={inv.line_summary}>{inv.line_summary}</span>
+                          ) : (
+                            <span style={{color:T.text3, fontStyle:'italic'}}>—</span>
+                          )}
+                        </td>
+                        <td style={{...td(), fontFamily:'monospace', fontSize:12}}>
+                          {inv.invoice_number || <span style={{color:T.text3}}>—</span>}
+                        </td>
+                        <td style={{...td(), fontSize:11, color:T.text2, whiteSpace:'nowrap'}}>{inv.invoice_date || '—'}</td>
+                        <td style={td()}>
+                          {inv.resolved_supplier_name ? (
+                            <div>
+                              <div style={{fontSize:12, color:T.text}}>{inv.resolved_supplier_name}</div>
+                              <div style={{fontSize:10, color:T.text3, fontFamily:'monospace', marginTop:2}}>{inv.resolved_account_code || ''}</div>
+                            </div>
+                          ) : (
+                            <span style={{fontSize:11, color:T.text3, fontStyle:'italic'}}>not mapped</span>
+                          )}
+                        </td>
+                        <td style={{...td(), textAlign:'right', fontFamily:'monospace', fontSize:13, fontWeight:500}}>
+                          {inv.total_inc_gst !== null ? `$${Number(inv.total_inc_gst).toFixed(2)}` : '—'}
+                        </td>
+                        <td style={td()}>
+                          <StatusPill status={inv.status}/>
+                        </td>
+                        {canEdit && (
+                          <td style={{...td(), textAlign:'center', padding:'8px 6px'}} onClick={e => e.stopPropagation()}>
+                            {approvable ? (
+                              <button
+                                onClick={(e) => handleApproveOne(inv, e)}
+                                disabled={isApprovingThis || bulkApproving}
+                                title="Post this invoice to MYOB"
+                                style={{
+                                  background: T.green, color:'#fff', border:'none',
+                                  padding:'4px 10px', borderRadius:4, fontSize:11, fontWeight:500, fontFamily:'inherit',
+                                  cursor: (isApprovingThis || bulkApproving) ? 'wait' : 'pointer',
+                                  opacity: (isApprovingThis || bulkApproving) ? 0.5 : 1,
+                                  whiteSpace:'nowrap',
+                                }}
+                              >
+                                {isApprovingThis ? '…' : '✓ Approve'}
+                              </button>
+                            ) : (
+                              <span style={{color:T.text3, fontSize:11}}>—</span>
+                            )}
+                          </td>
+                        )}
+                        {canEdit && (
+                          <td style={{...td(), textAlign:'center', padding:'8px 6px'}} onClick={e => e.stopPropagation()}>
+                            {isPosted ? (
+                              <span title="Posted invoices can't be deleted" style={{color:T.text3, fontSize:14}}>—</span>
+                            ) : (
+                              <button
+                                onClick={(e) => handleDelete(inv, e)}
+                                disabled={isDeletingThis}
+                                title="Delete invoice + PDF"
+                                style={{
+                                  background:'none', border:'none',
+                                  color: isDeletingThis ? T.text3 : T.text2,
+                                  cursor: isDeletingThis ? 'wait' : 'pointer',
+                                  fontSize:16, padding:'2px 6px', borderRadius:4,
+                                  fontFamily:'inherit',
+                                }}
+                                onMouseEnter={e => { if (!isDeletingThis) (e.currentTarget.style.color = T.red) }}
+                                onMouseLeave={e => { if (!isDeletingThis) (e.currentTarget.style.color = T.text2) }}
+                              >
+                                {isDeletingThis ? '…' : '×'}
+                              </button>
+                            )}
+                          </td>
+                        )}
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
 
         {data && (
-          <div style={{marginTop:10, fontSize:11, color:T.text3, textAlign:'right'}}>
+          <div style={{marginTop:10, fontSize:11, color:T.text3, textAlign: isMobile ? 'center' : 'right'}}>
             {data.invoices.length} of {data.total} {data.total === 1 ? 'invoice' : 'invoices'}
           </div>
         )}
       </div>
+    </div>
+  )
+}
+
+// ── Mobile invoice card ──────────────────────────────────────────────────
+function InvoiceCard({
+  inv, isSelected, isApproving, isDeleting, bulkApproving, canEdit,
+  onToggleSelect, onApprove, onDelete,
+}: {
+  inv: InvoiceRow
+  isSelected: boolean
+  isApproving: boolean
+  isDeleting: boolean
+  bulkApproving: boolean
+  canEdit: boolean
+  onToggleSelect: () => void
+  onApprove: (e: React.MouseEvent) => void
+  onDelete: (e: React.MouseEvent) => void
+}) {
+  const router = useRouter()
+  const approvable = isApprovable(inv)
+  const isPosted = inv.status === 'posted'
+
+  return (
+    <div
+      onClick={() => router.push(`/ap/${inv.id}`)}
+      style={{
+        background: isSelected ? `${T.green}08` : T.bg2,
+        border: `1px solid ${isSelected ? `${T.green}40` : T.border}`,
+        borderRadius: 10,
+        padding: '14px 14px',
+        opacity: isDeleting ? 0.5 : 1,
+        cursor: 'pointer',
+      }}
+    >
+      {/* Top row: triage + status + select checkbox */}
+      <div style={{display:'flex', alignItems:'center', gap:8, marginBottom:10}}>
+        <TriagePill status={inv.triage_status}/>
+        <StatusPill status={inv.status}/>
+        <span style={{flex:1}}/>
+        {canEdit && approvable && (
+          <label
+            onClick={e => e.stopPropagation()}
+            style={{display:'flex', alignItems:'center', gap:6, fontSize:11, color:T.text3, cursor:'pointer'}}
+          >
+            <input
+              type="checkbox"
+              checked={isSelected}
+              onChange={onToggleSelect}
+              style={{cursor:'pointer', width:18, height:18}}
+            />
+            Select
+          </label>
+        )}
+      </div>
+
+      {/* Vendor */}
+      <div style={{fontSize:15, color:T.text, fontWeight:500, marginBottom:2}}>
+        {inv.vendor_name_parsed || <span style={{color:T.text3}}>(unknown vendor)</span>}
+      </div>
+      {inv.via_capricorn && (
+        <div style={{fontSize:11, color:T.amber, marginBottom:6}}>
+          via Capricorn{inv.capricorn_reference ? ` ${inv.capricorn_reference}` : ''}
+        </div>
+      )}
+
+      {/* Invoice # + date */}
+      <div style={{fontSize:12, color:T.text2, fontFamily:'monospace', marginBottom:8}}>
+        {inv.invoice_number || '—'}
+        {inv.invoice_date && <span style={{color:T.text3}}> · {inv.invoice_date}</span>}
+      </div>
+
+      {/* Total — biggest element on the card */}
+      <div style={{fontSize:22, fontWeight:600, fontFamily:'monospace', color:T.text, marginBottom:8, fontVariantNumeric:'tabular-nums'}}>
+        {inv.total_inc_gst !== null ? `$${Number(inv.total_inc_gst).toFixed(2)}` : '—'}
+      </div>
+
+      {/* Line summary (truncated) */}
+      {inv.line_summary && (
+        <div style={{
+          fontSize:11, color:T.text3, marginBottom:10, lineHeight:1.4,
+          display:'-webkit-box', WebkitLineClamp:2, WebkitBoxOrient:'vertical',
+          overflow:'hidden',
+        }}>
+          {inv.line_summary}
+        </div>
+      )}
+
+      {/* Supplier mapped */}
+      {inv.resolved_supplier_name ? (
+        <div style={{fontSize:11, color:T.text3, marginBottom:10}}>
+          → {inv.resolved_supplier_name}
+          {inv.resolved_account_code && (
+            <span style={{fontFamily:'monospace', marginLeft:6}}>{inv.resolved_account_code}</span>
+          )}
+        </div>
+      ) : (
+        <div style={{fontSize:11, color:T.amber, marginBottom:10, fontStyle:'italic'}}>
+          ⚠ supplier not mapped
+        </div>
+      )}
+
+      {/* Action footer */}
+      {canEdit && (
+        <div
+          onClick={e => e.stopPropagation()}
+          style={{
+            display:'flex', gap:10, alignItems:'center',
+            paddingTop:10, borderTop:`1px solid ${T.border}`,
+          }}
+        >
+          {approvable ? (
+            <button
+              onClick={onApprove}
+              disabled={isApproving || bulkApproving}
+              style={{
+                flex:1,
+                background: T.green, color:'#fff', border:'none',
+                padding:'12px 14px', borderRadius:6,
+                fontSize:14, fontWeight:600, fontFamily:'inherit',
+                cursor: (isApproving || bulkApproving) ? 'wait' : 'pointer',
+                opacity: (isApproving || bulkApproving) ? 0.5 : 1,
+              }}
+            >
+              {isApproving ? 'Posting…' : '✓ Approve & Post'}
+            </button>
+          ) : (
+            <span style={{flex:1, fontSize:11, color:T.text3, fontStyle:'italic'}}>
+              {isPosted ? 'Already posted' : 'Not approvable yet'}
+            </span>
+          )}
+          {!isPosted && (
+            <button
+              onClick={onDelete}
+              disabled={isDeleting}
+              title="Delete invoice"
+              style={{
+                background:'transparent', border:`1px solid ${T.border2}`,
+                color: isDeleting ? T.text3 : T.text2,
+                width: 44, height: 44,
+                borderRadius:6, fontSize:18, fontFamily:'inherit',
+                cursor: isDeleting ? 'wait' : 'pointer',
+                display:'flex', alignItems:'center', justifyContent:'center',
+              }}
+            >
+              {isDeleting ? '…' : '🗑'}
+            </button>
+          )}
+        </div>
+      )}
     </div>
   )
 }
@@ -731,7 +947,12 @@ function Pill({ active, onClick, label, color }: { active: boolean; onClick: () 
         background: active ? (color ? `${color}25` : 'rgba(255,255,255,0.07)') : 'transparent',
         border: `1px solid ${active ? (color || T.border2) : T.border}`,
         color: active ? (color || T.text) : T.text2,
-        padding: '6px 11px', borderRadius: 6, fontSize: 11, fontFamily: 'inherit', cursor: 'pointer',
+        padding: '7px 12px',
+        borderRadius: 6,
+        fontSize: 12,
+        fontFamily: 'inherit',
+        cursor: 'pointer',
+        whiteSpace: 'nowrap',
       }}
     >{label}</button>
   )

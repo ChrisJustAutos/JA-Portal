@@ -4,13 +4,16 @@
 //
 // Round 6 additions (smart line→account pickup A+B):
 //   - LineRow extended with account_source + suggested_account_*
-//   - LinesTable shows a source badge under each picker button
-//     (🔁 Rule / 🔁 Auto / ✋ Manual) + a "💡 N past bills used X-XXXX" row
-//     with a one-click [Use] button for history-weak suggestions
+//   - LinesTable shows source badges + history suggestions
 //   - AccountPickerModal grew a "Save as rule for {supplier}" affordance
-//     that POSTs a new ap_line_account_rule before applying the manual pick
-//   - PUT /api/ap/[id]/lines body now includes account_source per line so
-//     the resolver respects manual choices
+//   - PUT /api/ap/[id]/lines body includes account_source per line
+//
+// Phase 1 mobile (Mar 2026):
+//   - Single-column stack on phones (no side-by-side PDF crush)
+//   - PDF preview sized to 50vh so it stays useful within the scroll flow
+//   - Sticky bottom action bar with big Approve / Reject buttons
+//   - 16px+ inputs to prevent iOS focus zoom
+//   - Desktop layout unchanged at >=768px
 
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/router'
@@ -18,6 +21,7 @@ import { GetServerSideProps } from 'next'
 import PortalSidebar from '../../lib/PortalSidebar'
 import { requirePageAuth } from '../../lib/authServer'
 import { UserRole, roleHasPermission } from '../../lib/permissions'
+import { useIsMobile } from '../../lib/useIsMobile'
 
 const T = {
   bg:'#0d0f12', bg2:'#131519', bg3:'#1a1d23', bg4:'#21252d',
@@ -85,7 +89,6 @@ interface LineRow {
   account_uid: string | null
   account_code: string | null
   account_name: string | null
-  // Round 6
   account_source: AccountSource | null
   suggested_account_uid: string | null
   suggested_account_code: string | null
@@ -138,6 +141,7 @@ export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => 
 
 export default function APDetailPage({ user }: PageProps) {
   const router = useRouter()
+  const isMobile = useIsMobile()
   const id = router.query.id as string | undefined
   const [data, setData] = useState<DetailResponse | null>(null)
   const [loading, setLoading] = useState(true)
@@ -246,14 +250,11 @@ export default function APDetailPage({ user }: PageProps) {
       `Post bill to MYOB ${inv.myob_company_file}?\n\n` +
       `Supplier:  ${inv.resolved_supplier_name || '(not set)'}\n` +
       `Account:   ${inv.resolved_account_code || '(not set)'}\n` +
-      `Subtotal:  ${fmtMoney(inv.subtotal_ex_gst)}\n` +
-      `GST:       ${fmtMoney(inv.gst_amount)}\n` +
       `Total:     ${fmtMoney(inv.total_inc_gst)}\n` +
       `Inv #:     ${inv.invoice_number}\n` +
       `Date:      ${inv.invoice_date}\n` +
       (inv.via_capricorn && inv.capricorn_reference ? `Capricorn: ${inv.capricorn_reference}\n` : '') +
-      (inv.linked_job_number ? `Job:       ${inv.linked_job_number}\n` : '') +
-      `\nThis writes a Service Bill to MYOB and attaches the source PDF.`
+      (inv.linked_job_number ? `Job:       ${inv.linked_job_number}\n` : '')
     if (!confirm(summary)) return
     setApproving(true)
     setActionMessage(null)
@@ -272,6 +273,7 @@ export default function APDetailPage({ user }: PageProps) {
         json.attachmentStatus === 'failed'   ? ` · ⚠️ PDF attach failed: ${json.attachmentError || ''}` :
         json.attachmentStatus === 'no-pdf'   ? ' · (no PDF on file)' :
         json.attachmentStatus === 'skipped'  ? ' · (PDF attach skipped)' :
+        json.attachmentStatus === 'adopted'  ? ` · ↷ adopted as posted` :
         ''
       setActionMessage({
         kind: json.attachmentStatus === 'failed' ? 'err' : 'ok',
@@ -355,8 +357,6 @@ export default function APDetailPage({ user }: PageProps) {
     setEditingLines(editingLines.filter(l => l.id !== lineId))
   }
 
-  /** One-click apply for a history-weak suggestion. Marks source='manual'
-   *  so the resolver doesn't second-guess it on the next re-triage. */
   function applySuggestion(l: LineRow) {
     if (!l.suggested_account_uid) return
     updateLine(l.id, {
@@ -428,6 +428,19 @@ export default function APDetailPage({ user }: PageProps) {
 
   const pickerLine = editingLines?.find(l => l.id === accountPickerLineId) || null
 
+  // Mobile layout: single column stack, sticky bottom action bar.
+  // Page padding-bottom leaves room above the sticky bar (~80px) so the
+  // last content card isn't hidden behind it.
+  const pagePadding   = isMobile ? '14px 14px 96px' : '20px 28px'
+  const showStickyBar = isMobile && !!data && !isTerminal && canEdit
+  const gridCols      = isMobile ? '1fr' : 'minmax(0, 5fr) minmax(0, 7fr)'
+  const rightColStyle: React.CSSProperties = isMobile
+    ? { display:'flex', flexDirection:'column', gap:14 }
+    : { display:'flex', flexDirection:'column', gap:14, height:'calc(100vh - 110px)', overflow:'auto' }
+  const pdfWrapStyle: React.CSSProperties = isMobile
+    ? { background:T.bg2, border:`1px solid ${T.border}`, borderRadius:10, overflow:'hidden', height:'50vh', display:'flex', flexDirection:'column' }
+    : { background:T.bg2, border:`1px solid ${T.border}`, borderRadius:10, overflow:'hidden', height:'calc(100vh - 110px)', display:'flex', flexDirection:'column' }
+
   return (
     <div style={{display:'flex', minHeight:'100vh', background:T.bg, color:T.text, fontFamily:"'DM Sans', system-ui, sans-serif"}}>
       <PortalSidebar
@@ -438,18 +451,18 @@ export default function APDetailPage({ user }: PageProps) {
         currentUserEmail={user.email}
       />
 
-      <div style={{flex:1, padding:'20px 28px', overflow:'auto'}}>
-        <div style={{display:'flex', alignItems:'center', gap:12, marginBottom:14}}>
+      <div style={{flex:1, padding: pagePadding, overflow:'auto'}}>
+        <div style={{display:'flex', alignItems:'center', gap:12, marginBottom:14, flexWrap:'wrap'}}>
           <button
             onClick={() => router.push('/ap')}
-            style={{background:'none', border:'none', color:T.text2, cursor:'pointer', fontSize:13, fontFamily:'inherit', padding:0}}
-          >← Back to AP list</button>
+            style={{background:'none', border:'none', color:T.text2, cursor:'pointer', fontSize: isMobile ? 14 : 13, fontFamily:'inherit', padding:0}}
+          >← Back</button>
           <span style={{fontSize:12, color:T.text3}}>·</span>
-          <span style={{fontSize:13, color:T.text}}>
+          <span style={{fontSize:13, color:T.text, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', minWidth:0}}>
             {data?.invoice.vendor_name_parsed || 'Loading…'}
             {data?.invoice.invoice_number ? ` — ${data.invoice.invoice_number}` : ''}
           </span>
-          {data && canEdit && !isPosted && (
+          {data && canEdit && !isPosted && !isMobile && (
             <>
               <span style={{flex:1}}/>
               <button
@@ -482,11 +495,25 @@ export default function APDetailPage({ user }: PageProps) {
         )}
 
         {data && (
-          <div style={{display:'grid', gridTemplateColumns:'minmax(0, 5fr) minmax(0, 7fr)', gap:18}}>
-            {/* LEFT: PDF preview */}
-            <div style={{background:T.bg2, border:`1px solid ${T.border}`, borderRadius:10, overflow:'hidden', height:'calc(100vh - 110px)', display:'flex', flexDirection:'column'}}>
-              <div style={{padding:'10px 14px', borderBottom:`1px solid ${T.border2}`, fontSize:11, color:T.text3, textTransform:'uppercase', letterSpacing:'0.05em'}}>
-                PDF · {data.invoice.pdf_filename || 'unnamed'}
+          <div style={{display:'grid', gridTemplateColumns: gridCols, gap:18}}>
+            {/* PDF preview — full-width on mobile, fixed-height side panel on desktop */}
+            <div style={pdfWrapStyle}>
+              <div style={{padding:'10px 14px', borderBottom:`1px solid ${T.border2}`, fontSize:11, color:T.text3, textTransform:'uppercase', letterSpacing:'0.05em', display:'flex', alignItems:'center', gap:10}}>
+                <span style={{flex:1, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap'}}>
+                  PDF · {data.invoice.pdf_filename || 'unnamed'}
+                </span>
+                {/* On mobile, an "Open" button to view the PDF full-screen in a new tab —
+                    iframes inside a 50vh box are hard to read */}
+                {isMobile && data.pdfUrl && (
+                  <a
+                    href={data.pdfUrl} target="_blank" rel="noopener noreferrer"
+                    style={{
+                      fontSize:11, color:T.blue, textDecoration:'none',
+                      padding:'4px 10px', border:`1px solid ${T.blue}40`,
+                      borderRadius:5, fontFamily:'inherit',
+                    }}
+                  >Open ↗</a>
+                )}
               </div>
               {data.pdfUrl ? (
                 <iframe src={data.pdfUrl} style={{flex:1, border:'none', background:'#fff'}} title="invoice pdf"/>
@@ -497,12 +524,12 @@ export default function APDetailPage({ user }: PageProps) {
               )}
             </div>
 
-            {/* RIGHT */}
-            <div style={{display:'flex', flexDirection:'column', gap:14, height:'calc(100vh - 110px)', overflow:'auto'}}>
+            {/* Right column / continuation on mobile */}
+            <div style={rightColStyle}>
 
               {/* Triage banner + actions */}
               <div style={{background:T.bg2, border:`1px solid ${T.border}`, borderRadius:10, padding:'14px 16px'}}>
-                <div style={{display:'flex', alignItems:'center', gap:12, marginBottom: data.invoice.triage_reasons && data.invoice.triage_reasons.length > 0 ? 8 : 10}}>
+                <div style={{display:'flex', alignItems:'center', gap:10, marginBottom: data.invoice.triage_reasons && data.invoice.triage_reasons.length > 0 ? 8 : 10, flexWrap:'wrap'}}>
                   <TriagePill status={data.invoice.triage_status}/>
                   <StatusPill status={data.invoice.status}/>
                   <span style={{fontSize:11, color:T.text3}}>
@@ -534,7 +561,9 @@ export default function APDetailPage({ user }: PageProps) {
                   </div>
                 )}
 
-                {!isTerminal && canEdit && (
+                {/* Inline approve/reject — desktop only.
+                    On mobile, those move to the sticky bottom action bar. */}
+                {!isTerminal && canEdit && !isMobile && (
                   <div style={{display:'flex', alignItems:'center', gap:8, paddingTop:10, borderTop:`1px solid ${T.border}`}}>
                     {data.invoice.myob_post_error && (
                       <span style={{fontSize:10, color:T.red, flex:1, fontFamily:'monospace', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap'}}
@@ -570,6 +599,13 @@ export default function APDetailPage({ user }: PageProps) {
                     </button>
                   </div>
                 )}
+                {/* Mobile error pill — sticky bar shows the buttons */}
+                {!isTerminal && canEdit && isMobile && data.invoice.myob_post_error && (
+                  <div style={{paddingTop:10, borderTop:`1px solid ${T.border}`, fontSize:11, color:T.red}}>
+                    Last error: {data.invoice.myob_post_error}
+                  </div>
+                )}
+
                 {isPosted && (
                   <div style={{paddingTop:10, borderTop:`1px solid ${T.border}`}}>
                     <div style={{fontSize:11, color:T.green, display:'flex', alignItems:'center', gap:10, flexWrap:'wrap'}}>
@@ -654,9 +690,9 @@ export default function APDetailPage({ user }: PageProps) {
 
               {/* Lines */}
               <div style={{background:T.bg2, border:`1px solid ${T.border}`, borderRadius:10, padding:'14px 16px'}}>
-                <div style={{display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:10}}>
+                <div style={{display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:10, gap:8, flexWrap:'wrap'}}>
                   <div style={{fontSize:11, color:T.text3, textTransform:'uppercase', letterSpacing:'0.05em'}}>Line items ({editingLines?.length ?? data.lines.length})</div>
-                  <div style={{display:'flex', gap:8}}>
+                  <div style={{display:'flex', gap:8, flexWrap:'wrap'}}>
                     {editingLines === null && canEdit && !isTerminal && (
                       <button onClick={startEdit} style={btnSecondary()}>Edit lines</button>
                     )}
@@ -683,12 +719,31 @@ export default function APDetailPage({ user }: PageProps) {
                   onPickAccount={(lineId) => setAccountPickerLineId(lineId)}
                   onApplySuggestion={applySuggestion}
                 />
-                {editingLines !== null && (
+                {editingLines !== null && !isMobile && (
                   <div style={{marginTop:10, fontSize:10, color:T.text3, lineHeight:1.5}}>
                     💡 Smart pickup: lines auto-mapped by rule or 5+ past bills with the same description show <span style={{color:T.teal}}>🔁 Auto</span>. Lower-confidence matches show <span style={{color:T.amber}}>💡 Suggestion</span> with one-click [Use]. Click an account button to override; tick &quot;Save as rule&quot; in the picker to teach the system.
                   </div>
                 )}
               </div>
+
+              {/* Mobile-only delete button (the desktop one lives in the top header row) */}
+              {data && canEdit && !isPosted && isMobile && (
+                <button
+                  onClick={deleteInvoice}
+                  disabled={deleting}
+                  style={{
+                    background:'transparent',
+                    border:`1px solid ${T.red}40`,
+                    color:T.red,
+                    padding:'12px 14px', borderRadius:6,
+                    fontSize:13, fontFamily:'inherit',
+                    cursor: deleting ? 'wait' : 'pointer',
+                    opacity: deleting ? 0.6 : 1,
+                  }}
+                >
+                  {deleting ? 'Deleting…' : '🗑 Delete invoice'}
+                </button>
+              )}
             </div>
           </div>
         )}
@@ -715,9 +770,6 @@ export default function APDetailPage({ user }: PageProps) {
                   account_code: null,
                   account_name: null,
                   account_source: 'unset',
-                  // Keep suggested_* in the editing buffer so the user can
-                  // still see the suggestion. The server will recompute on
-                  // re-triage anyway.
                 })
               } else {
                 updateLine(pickerLine.id, {
@@ -732,6 +784,50 @@ export default function APDetailPage({ user }: PageProps) {
           />
         )}
       </div>
+
+      {/* ─── STICKY MOBILE ACTION BAR ─── */}
+      {showStickyBar && data && (
+        <div style={{
+          position:'fixed', left:0, right:0, bottom:0, zIndex:900,
+          background: T.bg2,
+          borderTop: `1px solid ${T.border2}`,
+          padding: '10px 14px calc(10px + env(safe-area-inset-bottom)) 14px',
+          display:'flex', gap:10, alignItems:'center',
+          boxShadow: '0 -4px 16px rgba(0,0,0,0.4)',
+        }}>
+          <button
+            onClick={rejectInvoice}
+            disabled={rejecting || approving}
+            style={{
+              flex: '0 0 auto',
+              background:'transparent', border:`1px solid ${T.red}60`, color:T.red,
+              padding:'12px 16px', borderRadius:8,
+              fontSize:14, fontWeight:500, fontFamily:'inherit',
+              cursor: rejecting ? 'wait' : 'pointer',
+              opacity: rejecting ? 0.6 : 1,
+              minHeight: 48,
+            }}>
+            {rejecting ? '…' : 'Reject'}
+          </button>
+          <button
+            onClick={approveAndPost}
+            disabled={!canApprove || approving || rejecting}
+            title={canApprove ? '' : `Cannot post: ${approveBlockedReason}`}
+            style={{
+              flex: 1,
+              background: canApprove ? T.blue : T.bg4,
+              color: canApprove ? '#fff' : T.text3,
+              border:'none',
+              padding:'12px 16px', borderRadius:8,
+              fontSize:15, fontWeight:600, fontFamily:'inherit',
+              cursor: !canApprove ? 'not-allowed' : approving ? 'wait' : 'pointer',
+              opacity: approving ? 0.6 : 1,
+              minHeight: 48,
+            }}>
+            {approving ? 'Posting…' : '✓ Approve & Post'}
+          </button>
+        </div>
+      )}
     </div>
   )
 }
@@ -752,7 +848,7 @@ function MyobMappingSection({
 
   return (
     <div style={{background:T.bg2, border:`1px solid ${T.border}`, borderRadius:10, padding:'14px 16px'}}>
-      <div style={{display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:10}}>
+      <div style={{display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:10, gap:8, flexWrap:'wrap'}}>
         <div style={{fontSize:11, color:T.text3, textTransform:'uppercase', letterSpacing:'0.05em'}}>
           MYOB mapping ({invoice.myob_company_file})
         </div>
@@ -939,7 +1035,9 @@ function inputStyle(): React.CSSProperties {
   return {
     width:'100%',
     background: T.bg3, border:`1px solid ${T.border2}`, color: T.text,
-    padding:'7px 10px', borderRadius:5, fontSize:12, fontFamily:'inherit', outline:'none',
+    padding:'8px 10px', borderRadius:5,
+    // 16px font prevents iOS Safari from auto-zooming on focus
+    fontSize:16, fontFamily:'inherit', outline:'none',
   }
 }
 
@@ -959,7 +1057,7 @@ function AccountPickerModal({
   linePartNumber: string | null
   supplier: { uid: string; name: string } | null
   onClose: () => void
-  onSelect: (account: MyobAccount | null) => void   // null = reset to invoice default
+  onSelect: (account: MyobAccount | null) => void
 }) {
   const [saveAsRule, setSaveAsRule] = useState(false)
   const [pattern, setPattern] = useState<string>(defaultPatternFor(lineDescription, linePartNumber))
@@ -968,11 +1066,6 @@ function AccountPickerModal({
   const [savingRule, setSavingRule] = useState(false)
   const [ruleError, setRuleError] = useState<string | null>(null)
 
-  /**
-   * When the user clicks an account row in the typeahead:
-   *   - If "save as rule" is ticked, POST the rule first; bail on failure.
-   *   - Then call onSelect to apply the manual pick to this line.
-   */
   async function handleAccountClick(account: MyobAccount) {
     if (saveAsRule && supplier) {
       const trimmedPattern = pattern.trim()
@@ -1004,7 +1097,7 @@ function AccountPickerModal({
       } catch (e: any) {
         setRuleError(`Rule save failed: ${e?.message || e}`)
         setSavingRule(false)
-        return   // don't proceed with the line update
+        return
       }
       setSavingRule(false)
     }
@@ -1017,7 +1110,7 @@ function AccountPickerModal({
       style={{
         position:'fixed', inset:0, background:'rgba(0,0,0,0.6)',
         display:'flex', alignItems:'flex-start', justifyContent:'center',
-        zIndex:1000, paddingTop:'10vh',
+        zIndex:1000, paddingTop:'8vh',
       }}
     >
       <div
@@ -1028,26 +1121,25 @@ function AccountPickerModal({
           borderRadius: 10,
           width: 'min(680px, 92vw)',
           padding: '18px 20px',
-          maxHeight: '80vh',
+          maxHeight: '84vh',
           overflowY: 'auto',
           boxShadow: '0 16px 48px rgba(0,0,0,0.5)',
         }}
       >
         <div style={{display:'flex', alignItems:'center', marginBottom:12}}>
-          <div>
+          <div style={{flex:1, minWidth:0}}>
             <div style={{fontSize:11, color:T.text3, textTransform:'uppercase', letterSpacing:'0.05em', marginBottom:3}}>
-              Pick account for line ({companyFile})
+              Pick account ({companyFile})
             </div>
-            <div style={{fontSize:13, color:T.text}}>{lineLabel}</div>
+            <div style={{fontSize:13, color:T.text, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap'}}>{lineLabel}</div>
           </div>
-          <span style={{flex:1}}/>
           <button onClick={onClose} style={btnSecondary()}>Close</button>
         </div>
 
         <div style={{
           padding:'8px 10px', background:T.bg3, borderRadius:6, fontSize:11,
           color:T.text2, marginBottom:12,
-          display:'flex', alignItems:'center', justifyContent:'space-between', gap:8,
+          display:'flex', alignItems:'center', justifyContent:'space-between', gap:8, flexWrap:'wrap',
         }}>
           <div>
             Current:{' '}
@@ -1076,7 +1168,6 @@ function AccountPickerModal({
           )}
         </div>
 
-        {/* Save-as-rule (only when we have a resolved supplier) */}
         {supplier && (
           <div style={{
             marginBottom:12, padding:'10px 12px',
@@ -1088,6 +1179,7 @@ function AccountPickerModal({
                 checked={saveAsRule}
                 onChange={e => setSaveAsRule(e.target.checked)}
                 disabled={savingRule}
+                style={{width:18, height:18}}
               />
               <span>Save as rule for <span style={{color:T.text}}>{supplier.name}</span></span>
             </label>
@@ -1102,35 +1194,30 @@ function AccountPickerModal({
                     disabled={savingRule}
                   />
                 </FormRow>
-                <FormRow label="Match type">
+                <FormRow label="Match">
                   <select
                     value={matchType}
                     onChange={e => setMatchType(e.target.value as any)}
                     disabled={savingRule}
-                    style={{...inputStyle(), padding:'6px 8px'}}
+                    style={{...inputStyle(), padding:'7px 8px'}}
                   >
                     <option value="contains">contains</option>
                     <option value="starts_with">starts with</option>
                     <option value="exact">exact</option>
                   </select>
                 </FormRow>
-                <FormRow label="Match against">
+                <FormRow label="Field">
                   <select
                     value={matchField}
                     onChange={e => setMatchField(e.target.value as any)}
                     disabled={savingRule}
-                    style={{...inputStyle(), padding:'6px 8px'}}
+                    style={{...inputStyle(), padding:'7px 8px'}}
                   >
                     <option value="description">description</option>
                     <option value="part_number">part number</option>
                     <option value="both">both</option>
                   </select>
                 </FormRow>
-              </div>
-            )}
-            {saveAsRule && (
-              <div style={{marginTop:8, fontSize:10, color:T.text3, lineHeight:1.5}}>
-                Rule applies to <strong>{supplier.name}</strong> only. Click an account below — the rule is saved first, then the line is updated. Other matching lines on this invoice will pick up the rule when you Save.
               </div>
             )}
             {ruleError && (
@@ -1155,9 +1242,6 @@ function AccountPickerModal({
   )
 }
 
-/** Default rule pattern: prefer first 2 words of the description. Fall back
- *  to the part number if the description is empty. Lowercased so the user
- *  doesn't have to remember casing — match is case-insensitive by default. */
 function defaultPatternFor(description: string, partNumber: string | null): string {
   const desc = (description || '').trim()
   if (desc) {
@@ -1205,8 +1289,8 @@ function SupplierTypeahead({
 
   if (!open) {
     return (
-      <div style={{display:'flex', gap:8, alignItems:'center'}}>
-        <div style={{flex:1, fontSize:12, color: selected ? T.text : T.text3}}>
+      <div style={{display:'flex', gap:8, alignItems:'center', flexWrap:'wrap'}}>
+        <div style={{flex:1, fontSize:12, color: selected ? T.text : T.text3, minWidth:0}}>
           {selected ? selected.name : 'No supplier picked'}
           {selected?.abn && <span style={{color:T.text3, marginLeft:8, fontFamily:'monospace'}}>ABN {selected.abn}</span>}
         </div>
@@ -1250,14 +1334,12 @@ function SupplierTypeahead({
             key={s.uid}
             onClick={() => { onSelect(s); setOpen(false) }}
             style={{
-              padding:'8px 12px',
+              padding:'10px 12px',
               borderTop: i > 0 ? `1px solid ${T.border}` : 'none',
               cursor:'pointer',
               fontSize: 12,
               display:'grid', gridTemplateColumns:'1fr auto', gap:10, alignItems:'center',
             }}
-            onMouseEnter={e => (e.currentTarget.style.background = T.bg4)}
-            onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
           >
             <div>
               <div style={{color:T.text}}>{s.name}</div>
@@ -1311,8 +1393,8 @@ function AccountTypeahead({
 
   if (!open) {
     return (
-      <div style={{display:'flex', gap:8, alignItems:'center'}}>
-        <div style={{flex:1, fontSize:12, color: selected ? T.text : T.text3}}>
+      <div style={{display:'flex', gap:8, alignItems:'center', flexWrap:'wrap'}}>
+        <div style={{flex:1, fontSize:12, color: selected ? T.text : T.text3, minWidth:0}}>
           {selected ? (
             <>
               <span style={{fontFamily:'monospace'}}>{selected.displayId}</span>
@@ -1362,14 +1444,12 @@ function AccountTypeahead({
             key={a.uid}
             onClick={() => { onSelect(a); if (!forceOpen) setOpen(false) }}
             style={{
-              padding:'8px 12px',
+              padding:'10px 12px',
               borderTop: i > 0 ? `1px solid ${T.border}` : 'none',
               cursor:'pointer',
               fontSize: 12,
               display:'grid', gridTemplateColumns:'80px 1fr 110px', gap:10, alignItems:'center',
             }}
-            onMouseEnter={e => (e.currentTarget.style.background = T.bg4)}
-            onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
           >
             <span style={{fontFamily:'monospace', color:T.text}}>{a.displayId}</span>
             <span style={{color:T.text2, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap'}}>{a.name}</span>
@@ -1420,7 +1500,7 @@ function WorkshopJobSection({
 
   return (
     <div style={{background:T.bg2, border:`1px solid ${T.border}`, borderRadius:10, padding:'14px 16px'}}>
-      <div style={{display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:10}}>
+      <div style={{display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:10, gap:8, flexWrap:'wrap'}}>
         <div style={{fontSize:11, color:T.text3, textTransform:'uppercase', letterSpacing:'0.05em'}}>Workshop Job (MD)</div>
         {canEdit && !pickerOpen && (
           <div style={{display:'flex', gap:8}}>
@@ -1465,7 +1545,8 @@ function WorkshopJobSection({
             placeholder="Search by job # / customer / vehicle…"
             style={{
               width:'100%', background: T.bg3, border:`1px solid ${T.border2}`, color: T.text,
-              padding:'8px 12px', borderRadius:6, fontSize:12, fontFamily:'inherit', outline:'none',
+              padding:'10px 12px', borderRadius:6,
+              fontSize: 16, fontFamily:'inherit', outline:'none',
               marginBottom:10,
             }}
           />
@@ -1486,14 +1567,12 @@ function WorkshopJobSection({
                 key={`${j.job_number}-${i}`}
                 onClick={() => !linkBusy && onPickJob(j.job_number)}
                 style={{
-                  padding:'9px 12px',
+                  padding:'10px 12px',
                   borderTop: i > 0 ? `1px solid ${T.border}` : 'none',
                   cursor: linkBusy ? 'wait' : 'pointer',
                   fontSize: 12,
                   display:'grid', gridTemplateColumns:'80px 1fr 1fr 90px', gap:10, alignItems:'center',
                 }}
-                onMouseEnter={e => (e.currentTarget.style.background = T.bg4)}
-                onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
               >
                 <span style={{fontFamily:'monospace', color:T.text}}>{j.job_number}</span>
                 <span style={{color:T.text2, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap'}}>{j.customer_name || '—'}</span>
@@ -1508,7 +1587,7 @@ function WorkshopJobSection({
   )
 }
 
-// ── Lines table ──────────────────────────────────────────────────────────
+// ── Lines table — horizontal scroll on mobile ───────────────────────────
 function LinesTable({
   lines, invoiceDefaultAccountCode, editable,
   onChange, onRemove, onPickAccount, onApplySuggestion,
@@ -1525,8 +1604,12 @@ function LinesTable({
     return <div style={{padding:14, textAlign:'center', color:T.text3, fontSize:12}}>No line items.</div>
   }
   return (
-    <div style={{overflowX:'auto'}}>
-      <table style={{width:'100%', borderCollapse:'collapse', fontSize:12}}>
+    // The table stays as-is on mobile; horizontal scroll is preserved via
+    // overflowX:'auto'. Redesigning lines as cards is queued for a later
+    // mobile pass — for now the table on a phone is "scroll right to see
+    // more" but still completely usable.
+    <div style={{overflowX:'auto', WebkitOverflowScrolling:'touch'}}>
+      <table style={{width:'100%', borderCollapse:'collapse', fontSize:12, minWidth: 720}}>
         <thead>
           <tr style={{borderBottom:`1px solid ${T.border}`}}>
             <th style={lh(36)}>#</th>
@@ -1580,7 +1663,7 @@ function LinesTable({
                   <select
                     value={l.tax_code}
                     onChange={e => onChange(l.id, { tax_code: e.target.value })}
-                    style={{background:T.bg3, border:`1px solid ${T.border2}`, color:T.text, padding:'3px 4px', borderRadius:4, fontSize:11, fontFamily:'inherit'}}
+                    style={{background:T.bg3, border:`1px solid ${T.border2}`, color:T.text, padding:'4px 6px', borderRadius:4, fontSize:12, fontFamily:'inherit'}}
                   >
                     {['GST','FRE','CAP','EXP','GNR','ITS','N-T'].map(c => <option key={c} value={c}>{c}</option>)}
                   </select>
@@ -1597,7 +1680,7 @@ function LinesTable({
               </td>
               {editable && (
                 <td style={ld()}>
-                  <button onClick={() => onRemove(l.id)} style={{background:'none', border:'none', color:T.red, cursor:'pointer', fontSize:14}}>×</button>
+                  <button onClick={() => onRemove(l.id)} style={{background:'none', border:'none', color:T.red, cursor:'pointer', fontSize:18, padding:'4px 8px'}}>×</button>
                 </td>
               )}
             </tr>
@@ -1608,14 +1691,6 @@ function LinesTable({
   )
 }
 
-/**
- * Account column for a single line. Stacks (top-to-bottom):
- *   1. Picker button (read-only span when not editable)
- *   2. Source badge: 🔁 Auto / ✋ Manual (omitted for 'unset')
- *   3. Suggestion row: "💡 X-XXXX" + [Use] button (only when account_uid
- *      is empty AND a suggested_account_uid exists — i.e. account_source
- *      is 'history-weak' from the resolver)
- */
 function AccountCell({
   line, invoiceDefaultAccountCode, editable, onPickAccount, onApplySuggestion,
 }: {
@@ -1637,10 +1712,11 @@ function AccountCell({
           style={{
             background: T.bg3, border:`1px solid ${T.border2}`,
             color: line.account_code ? T.text : T.text3,
-            padding:'3px 8px', borderRadius:4,
-            fontSize:11, fontFamily: line.account_code ? 'monospace' : 'inherit',
+            padding:'6px 10px', borderRadius:4,
+            fontSize:12, fontFamily: line.account_code ? 'monospace' : 'inherit',
             cursor:'pointer', textAlign:'left',
             width:'100%', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap',
+            minHeight: 32,
           }}
         >
           {line.account_code || `Default${invoiceDefaultAccountCode ? ` (${invoiceDefaultAccountCode})` : ''}`}
@@ -1655,24 +1731,16 @@ function AccountCell({
         </span>
       )}
 
-      {/* Source badge */}
-      {source === 'rule' && (
-        <span style={badgeStyle(T.teal)}>🔁 Rule</span>
-      )}
-      {source === 'history-strong' && (
-        <span style={badgeStyle(T.teal)}>🔁 Auto</span>
-      )}
-      {source === 'manual' && (
-        <span style={badgeStyle(T.text3)}>✋ Manual</span>
-      )}
+      {source === 'rule' && <span style={badgeStyle(T.teal)}>🔁 Rule</span>}
+      {source === 'history-strong' && <span style={badgeStyle(T.teal)}>🔁 Auto</span>}
+      {source === 'manual' && <span style={badgeStyle(T.text3)}>✋ Manual</span>}
 
-      {/* Suggestion row */}
       {hasSuggestion && (
         <div style={{
           display:'flex', alignItems:'center', gap:6,
           fontSize:10, color:T.amber,
           background:`${T.amber}10`, border:`1px solid ${T.amber}30`,
-          padding:'2px 6px', borderRadius:3,
+          padding:'3px 6px', borderRadius:3,
           width:'100%',
         }}>
           <span style={{flex:1, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', fontFamily:'monospace'}}>
@@ -1730,7 +1798,8 @@ function Inp({ value, onChange, alignRight }: { value: string; onChange: (v: str
       onChange={e => onChange(e.target.value)}
       style={{
         width:'100%', background:T.bg3, border:`1px solid ${T.border2}`, color:T.text,
-        padding:'3px 6px', borderRadius:4, fontSize:11, fontFamily:'inherit', outline:'none',
+        padding:'5px 8px', borderRadius:4,
+        fontSize:13, fontFamily:'inherit', outline:'none',
         textAlign: alignRight ? 'right' : 'left',
       }}
     />
@@ -1762,18 +1831,18 @@ function fmtMoney(n: number | null | undefined): string {
 function btnPrimary(): React.CSSProperties {
   return {
     background:T.blue, color:'#fff', border:'none',
-    padding:'5px 11px', borderRadius:5, fontSize:11, fontWeight:500, fontFamily:'inherit', cursor:'pointer',
+    padding:'7px 14px', borderRadius:5, fontSize:12, fontWeight:500, fontFamily:'inherit', cursor:'pointer',
   }
 }
 function btnSecondary(): React.CSSProperties {
   return {
     background:'transparent', color:T.text2, border:`1px solid ${T.border2}`,
-    padding:'5px 11px', borderRadius:5, fontSize:11, fontFamily:'inherit', cursor:'pointer',
+    padding:'7px 12px', borderRadius:5, fontSize:12, fontFamily:'inherit', cursor:'pointer',
   }
 }
 function lh(width?: number): React.CSSProperties {
-  return { fontSize:10, color:T.text3, padding:'7px 8px', textAlign:'left', fontWeight:500, textTransform:'uppercase', letterSpacing:'0.05em', width }
+  return { fontSize:10, color:T.text3, padding:'8px 10px', textAlign:'left', fontWeight:500, textTransform:'uppercase', letterSpacing:'0.05em', width }
 }
 function ld(): React.CSSProperties {
-  return { padding:'7px 8px', verticalAlign:'top' }
+  return { padding:'8px 10px', verticalAlign:'top' }
 }
