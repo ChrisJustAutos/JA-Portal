@@ -2,12 +2,18 @@
 // AP invoice detail endpoint.
 //   GET    /api/ap/{id}         → full invoice + lines + signed PDF URL
 //                                  + linkedJob (if linked_job_number is set)
-//   PATCH  /api/ap/{id}         → update header fields
+//   PATCH  /api/ap/{id}         → update header fields (re-runs triage)
+//   DELETE /api/ap/{id}         → permanently remove invoice + PDF
+//                                  (blocked once status='posted')
 
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
 import { withAuth } from '../../../lib/authServer'
-import { getInvoicePdfSignedUrl, applyTriageAndResolve } from '../../../lib/ap-supabase'
+import {
+  getInvoicePdfSignedUrl,
+  applyTriageAndResolve,
+  deleteInvoice,
+} from '../../../lib/ap-supabase'
 import { roleHasPermission } from '../../../lib/permissions'
 import { getJobByNumber } from '../../../lib/ap-job-link'
 
@@ -44,8 +50,9 @@ export default withAuth(null, async (req: NextApiRequest, res: NextApiResponse, 
   const id = String(req.query.id || '').trim()
   if (!id) return res.status(400).json({ error: 'id required' })
 
-  if (req.method === 'GET') return handleGet(id, res)
-  if (req.method === 'PATCH') return handlePatch(id, req, res, user)
+  if (req.method === 'GET')    return handleGet(id, res)
+  if (req.method === 'PATCH')  return handlePatch(id, req, res, user)
+  if (req.method === 'DELETE') return handleDelete(id, res, user)
   return res.status(405).json({ error: 'Method not allowed' })
 })
 
@@ -71,7 +78,6 @@ async function handleGet(id: string, res: NextApiResponse) {
     }
   }
 
-  // Fetch linked job details if present
   let linkedJob: any = null
   if (inv.linked_job_number) {
     try {
@@ -107,8 +113,6 @@ async function handlePatch(id: string, req: NextApiRequest, res: NextApiResponse
   const { error } = await c.from('ap_invoices').update(update).eq('id', id)
   if (error) return res.status(500).json({ error: error.message })
 
-  // Re-run triage if any field that affects it was changed (including po_number,
-  // since it drives PO match)
   const triageRelevant = [
     'vendor_name_parsed','invoice_number','total_inc_gst','subtotal_ex_gst',
     'gst_amount','resolved_supplier_uid','resolved_account_uid','po_number',
@@ -120,4 +124,22 @@ async function handlePatch(id: string, req: NextApiRequest, res: NextApiResponse
   }
 
   return handleGet(id, res)
+}
+
+async function handleDelete(id: string, res: NextApiResponse, user: any) {
+  if (!roleHasPermission(user.role, 'edit:supplier_invoices')) {
+    return res.status(403).json({ error: 'Forbidden — edit:supplier_invoices required' })
+  }
+  try {
+    const result = await deleteInvoice(id)
+    return res.status(200).json(result)
+  } catch (e: any) {
+    const msg = e?.message || String(e)
+    if (msg === 'NOT_FOUND') return res.status(404).json({ error: 'Invoice not found' })
+    if (msg === 'CANNOT_DELETE_POSTED') {
+      return res.status(409).json({ error: 'Cannot delete a posted invoice — reject it in MYOB instead' })
+    }
+    console.error(`DELETE /api/ap/${id} failed:`, msg)
+    return res.status(500).json({ error: msg })
+  }
 }

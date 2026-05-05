@@ -21,6 +21,11 @@ function sb(): SupabaseClient {
 const STORAGE_BUCKET = 'ap-invoices'
 const SIGNED_URL_TTL_SEC = 60 * 60   // 1 hour for the UI's PDF preview
 
+// Window for amount-based duplicate detection. A genuine duplicate is almost
+// always within a few weeks of the original — wider windows produce false
+// positives from coincidentally-equal totals on unrelated invoices.
+const AMOUNT_DUP_WINDOW_DAYS = 30
+
 // ── Insert parsed invoice + lines ───────────────────────────────────────
 
 export interface InvoiceInsertInput {
@@ -125,6 +130,57 @@ export async function getInvoicePdfSignedUrl(pdfStoragePath: string): Promise<st
   return data.signedUrl
 }
 
+/**
+ * Best-effort delete of the PDF from storage. Logs and continues on failure
+ * — the invoice row delete is the source of truth.
+ */
+export async function deleteInvoicePdf(pdfStoragePath: string): Promise<void> {
+  const c = sb()
+  try {
+    const { error } = await c.storage.from(STORAGE_BUCKET).remove([pdfStoragePath])
+    if (error) console.error(`PDF storage delete failed for ${pdfStoragePath}:`, error.message)
+  } catch (e: any) {
+    console.error(`PDF storage delete threw for ${pdfStoragePath}:`, e?.message)
+  }
+}
+
+// ── Hard delete an invoice (cascades lines, removes PDF) ────────────────
+
+export interface DeleteInvoiceResult {
+  ok: true
+  deleted: { id: string; pdfRemoved: boolean }
+}
+
+/**
+ * Permanently removes an AP invoice, its lines (via FK cascade), and its
+ * PDF from storage. Refuses if the invoice has been posted to MYOB —
+ * posted bills must remain auditable; reject the bill in MYOB instead.
+ */
+export async function deleteInvoice(invoiceId: string): Promise<DeleteInvoiceResult> {
+  const c = sb()
+
+  const { data: inv, error: fetchErr } = await c
+    .from('ap_invoices')
+    .select('id, status, pdf_storage_path')
+    .eq('id', invoiceId)
+    .maybeSingle()
+
+  if (fetchErr) throw new Error(`fetch before delete failed: ${fetchErr.message}`)
+  if (!inv) throw new Error('NOT_FOUND')
+  if (inv.status === 'posted') throw new Error('CANNOT_DELETE_POSTED')
+
+  let pdfRemoved = false
+  if (inv.pdf_storage_path) {
+    await deleteInvoicePdf(inv.pdf_storage_path)
+    pdfRemoved = true
+  }
+
+  const { error: delErr } = await c.from('ap_invoices').delete().eq('id', invoiceId)
+  if (delErr) throw new Error(`delete failed: ${delErr.message}`)
+
+  return { ok: true, deleted: { id: invoiceId, pdfRemoved } }
+}
+
 // ── Supplier lookup (preset account map) ────────────────────────────────
 
 export interface SupplierMatch {
@@ -199,18 +255,19 @@ export interface TriageOutcome {
 export interface TriageInput {
   extracted: ExtractedAPInvoice
   supplier: SupplierMatch | null
-  duplicateOf: string | null
+  exactDuplicateOf: string | null         // same vendor + same invoice_number
+  amountDuplicates: string[]              // same vendor + same total within window
   poCheckStatus: 'matched' | 'unmatched' | 'no-po-on-invoice'
 }
 
 /**
  * Triage philosophy:
  * - 🟢 GREEN: parsed cleanly + supplier preset exists + totals reconcile +
- *             (PO matched a job OR no PO needed)
+ *             (PO matched a job OR no PO needed) + no duplicates
  * - 🟡 YELLOW: needs human eyes — new supplier, unmatched PO, totals off,
- *              low confidence, missing date.
+ *              low confidence, missing date, possible amount duplicate.
  * - 🔴 RED: cannot post — missing invoice number, missing total, parser
- *           unsure, duplicate, no line items.
+ *           unsure, exact duplicate, no line items.
  */
 export function triageInvoice(input: TriageInput): TriageOutcome {
   const reasons: string[] = []
@@ -220,7 +277,7 @@ export function triageInvoice(input: TriageInput): TriageOutcome {
   if (!e.invoiceNumber) reasons.push('RED:missing-invoice-number')
   if (e.totals.totalIncGst === null) reasons.push('RED:missing-total')
   if (e.parseConfidence === 'low') reasons.push('RED:low-parse-confidence')
-  if (input.duplicateOf) reasons.push(`RED:duplicate-of:${input.duplicateOf}`)
+  if (input.exactDuplicateOf) reasons.push(`RED:duplicate-of:${input.exactDuplicateOf}`)
   if (e.lineItems.length === 0) reasons.push('RED:no-line-items')
 
   if (reasons.some(r => r.startsWith('RED:'))) {
@@ -236,6 +293,14 @@ export function triageInvoice(input: TriageInput): TriageOutcome {
   // No-PO is normal for Capricorn-routed invoices — neutral, not a flag.
   if (input.poCheckStatus === 'unmatched') {
     reasons.push('YELLOW:po-no-job-match')
+  }
+
+  // Possible duplicate by amount — different invoice number but same vendor
+  // and total within the recent window. Flag once per match (cap at 3 IDs
+  // listed in reasons to keep them readable).
+  if (input.amountDuplicates.length > 0) {
+    const ids = input.amountDuplicates.slice(0, 3).join(',')
+    reasons.push(`YELLOW:possible-duplicate-amount:${ids}`)
   }
 
   if (e.totals.subtotalExGst !== null && e.totals.gstAmount !== null && e.totals.totalIncGst !== null) {
@@ -259,7 +324,11 @@ export function triageInvoice(input: TriageInput): TriageOutcome {
 
 // ── Duplicate detection ────────────────────────────────────────────────
 
-export async function findDuplicateInvoice(
+/**
+ * Exact duplicate: same vendor + same invoice number. This is a hard block —
+ * no two genuine invoices ever share the exact (vendor, invoice number) pair.
+ */
+export async function findExactDuplicate(
   vendorNameParsed: string | null,
   invoiceNumber: string | null,
   excludeId?: string,
@@ -275,6 +344,49 @@ export async function findDuplicateInvoice(
   if (excludeId) q = q.neq('id', excludeId)
   const { data } = await q.maybeSingle()
   return data?.id ?? null
+}
+
+/**
+ * Amount-based duplicate detection: same vendor, same total (inc GST), within
+ * the recent window (default 30 days), but DIFFERENT invoice number. Returns
+ * matching invoice IDs (most recent first, capped). Returns [] when total is
+ * null or no candidates exist.
+ *
+ * Real-world rationale: workshops sometimes get the same charge billed twice
+ * with different invoice numbers (supplier credit/rebill, or a person uploads
+ * a re-issued invoice that still describes the same goods). Same vendor, same
+ * dollar amount, close in time = worth a second look.
+ */
+export async function findAmountDuplicates(
+  vendorNameParsed: string | null,
+  totalIncGst: number | null,
+  invoiceNumber: string | null,
+  excludeId?: string,
+  windowDays: number = AMOUNT_DUP_WINDOW_DAYS,
+): Promise<string[]> {
+  if (!vendorNameParsed || totalIncGst === null) return []
+  const c = sb()
+  const sinceIso = new Date(Date.now() - windowDays * 24 * 3600 * 1000).toISOString()
+
+  let q = c
+    .from('ap_invoices')
+    .select('id')
+    .eq('vendor_name_parsed', vendorNameParsed)
+    .eq('total_inc_gst', totalIncGst)
+    .gte('received_at', sinceIso)
+    .order('received_at', { ascending: false })
+    .limit(5)
+  if (excludeId) q = q.neq('id', excludeId)
+  // If we know our own invoice number, exclude rows that share it (those are
+  // the *exact* dup branch — don't double-flag the same row in two reasons).
+  if (invoiceNumber) q = q.neq('invoice_number', invoiceNumber)
+
+  const { data, error } = await q
+  if (error) {
+    console.error('findAmountDuplicates error:', error.message)
+    return []
+  }
+  return (data || []).map((r: any) => r.id)
 }
 
 // ── Apply triage + supplier resolution + auto job link ──────────────────
@@ -327,18 +439,22 @@ export async function applyTriageAndResolve(invoiceId: string): Promise<void> {
   }
 
   const supplier = await findSupplierMatch(extracted.vendor.name, extracted.vendor.abn)
-  const duplicateOf = await findDuplicateInvoice(
+  const exactDuplicateOf = await findExactDuplicate(
     extracted.vendor.name,
+    extracted.invoiceNumber,
+    invoiceId,
+  )
+  const amountDuplicates = await findAmountDuplicates(
+    extracted.vendor.name,
+    extracted.totals.totalIncGst,
     extracted.invoiceNumber,
     invoiceId,
   )
 
   // ── Auto-link to MD job by PO, but DON'T overwrite a manual link ──
-  // If the user has manually picked a job, we keep their choice and just
-  // recompute po_check_status for triage purposes.
   let poCheckStatus: 'matched' | 'unmatched' | 'no-po-on-invoice'
   if (inv.linked_job_match_method === 'manual' && inv.linked_job_number) {
-    poCheckStatus = 'matched'   // user vouched for the link manually
+    poCheckStatus = 'matched'
   } else {
     const auto = await attemptAutoLink(extracted.poNumber)
     poCheckStatus = auto.status
@@ -350,7 +466,11 @@ export async function applyTriageAndResolve(invoiceId: string): Promise<void> {
     )
   }
 
-  const triage = triageInvoice({ extracted, supplier, duplicateOf, poCheckStatus })
+  const triage = triageInvoice({
+    extracted, supplier,
+    exactDuplicateOf, amountDuplicates,
+    poCheckStatus,
+  })
 
   await c
     .from('ap_invoices')

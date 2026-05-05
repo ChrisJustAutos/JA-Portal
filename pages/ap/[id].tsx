@@ -1,5 +1,5 @@
 // pages/ap/[id].tsx
-// AP Invoice Detail — PDF preview, line editor, MD job link, save.
+// AP Invoice Detail — PDF preview, line editor, MD job link, delete, save.
 
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/router'
@@ -104,6 +104,7 @@ export default function APDetailPage({ user }: PageProps) {
   const [editingLines, setEditingLines] = useState<LineRow[] | null>(null)
   const [saving, setSaving] = useState(false)
   const [saveMessage, setSaveMessage] = useState<string | null>(null)
+  const [deleting, setDeleting] = useState(false)
   const canEdit = roleHasPermission(user.role, 'edit:supplier_invoices')
 
   // Job picker state
@@ -176,6 +177,26 @@ export default function APDetailPage({ user }: PageProps) {
     }
   }
 
+  async function deleteInvoice() {
+    if (!id || !data) return
+    const label = `${data.invoice.vendor_name_parsed || 'this invoice'} ${data.invoice.invoice_number || ''}`.trim()
+    const ok = confirm(`Delete ${label}?\n\nThis permanently removes the invoice, its lines, and the PDF. This cannot be undone.`)
+    if (!ok) return
+    setDeleting(true)
+    try {
+      const res = await fetch(`/api/ap/${id}`, {
+        method: 'DELETE',
+        credentials: 'same-origin',
+      })
+      const json = await res.json()
+      if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`)
+      router.push('/ap')
+    } catch (e: any) {
+      alert('Delete failed: ' + (e?.message || e))
+      setDeleting(false)
+    }
+  }
+
   function startEdit() {
     if (!data) return
     setEditingLines(data.lines.map(l => ({ ...l })))
@@ -245,6 +266,8 @@ export default function APDetailPage({ user }: PageProps) {
     }
   }
 
+  const isPosted = data?.invoice.status === 'posted'
+
   return (
     <div style={{display:'flex', minHeight:'100vh', background:T.bg, color:T.text, fontFamily:"'DM Sans', system-ui, sans-serif"}}>
       <PortalSidebar
@@ -266,6 +289,27 @@ export default function APDetailPage({ user }: PageProps) {
             {data?.invoice.vendor_name_parsed || 'Loading…'}
             {data?.invoice.invoice_number ? ` — ${data.invoice.invoice_number}` : ''}
           </span>
+          {data && canEdit && !isPosted && (
+            <>
+              <span style={{flex:1}}/>
+              <button
+                onClick={deleteInvoice}
+                disabled={deleting}
+                title="Delete invoice + PDF"
+                style={{
+                  background:'transparent',
+                  border:`1px solid ${T.red}40`,
+                  color:T.red,
+                  padding:'5px 11px', borderRadius:5,
+                  fontSize:11, fontFamily:'inherit',
+                  cursor: deleting ? 'wait' : 'pointer',
+                  opacity: deleting ? 0.6 : 1,
+                }}
+              >
+                {deleting ? 'Deleting…' : '🗑 Delete'}
+              </button>
+            </>
+          )}
         </div>
 
         {error && (
@@ -437,10 +481,8 @@ function WorkshopJobSection({
   onUnlink: () => void
 }) {
   const poStatus = invoice.po_check_status
-  const auto = invoice.linked_job_match_method === 'auto-po'
   const manual = invoice.linked_job_match_method === 'manual'
 
-  // Decide the headline state
   let headline: { color: string; text: string }
   if (linkedJob) {
     if (manual) headline = { color: T.green, text: '✅ Linked (manual)' }

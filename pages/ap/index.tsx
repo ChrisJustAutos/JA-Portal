@@ -1,9 +1,5 @@
 // pages/ap/index.tsx
-// AP Invoice Processor — triage list page.
-//
-// Shows all parsed invoices with status + triage pills, supports upload of
-// PDF for testing/backstop, filters by status/triage/search, and links to
-// detail pages for review.
+// AP Invoice Processor — triage list page with upload, filters, and delete.
 
 import { useState, useEffect, useRef } from 'react'
 import { useRouter } from 'next/router'
@@ -74,6 +70,7 @@ export default function APListPage({ user }: PageProps) {
   const [search, setSearch] = useState<string>('')
   const [uploading, setUploading] = useState(false)
   const [uploadMessage, setUploadMessage] = useState<string | null>(null)
+  const [deletingId, setDeletingId] = useState<string | null>(null)
   const fileRef = useRef<HTMLInputElement>(null)
   const canEdit = roleHasPermission(user.role, 'edit:supplier_invoices')
 
@@ -112,7 +109,6 @@ export default function APListPage({ user }: PageProps) {
     try {
       const buf = await file.arrayBuffer()
       const bytes = new Uint8Array(buf)
-      // Convert to base64 in chunks to avoid stack overflow for large files
       let binary = ''
       const chunkSize = 32 * 1024
       for (let i = 0; i < bytes.length; i += chunkSize) {
@@ -131,7 +127,6 @@ export default function APListPage({ user }: PageProps) {
       if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`)
       setUploadMessage(`✅ Uploaded "${file.name}" — vendor: ${json.extraction?.vendor?.name || 'unknown'}, total: $${json.extraction?.totalIncGst?.toFixed(2) || '?'}`)
       fetchData()
-      // Open the new invoice detail page
       if (json.invoiceId) {
         setTimeout(() => router.push(`/ap/${json.invoiceId}`), 800)
       }
@@ -140,6 +135,33 @@ export default function APListPage({ user }: PageProps) {
     } finally {
       setUploading(false)
       if (fileRef.current) fileRef.current.value = ''
+    }
+  }
+
+  async function handleDelete(inv: InvoiceRow, e: React.MouseEvent) {
+    e.stopPropagation()
+    e.preventDefault()
+    const label = `${inv.vendor_name_parsed || 'this invoice'} ${inv.invoice_number || ''}`.trim()
+    const ok = confirm(`Delete ${label}?\n\nThis permanently removes the invoice, its lines, and the PDF. This cannot be undone.`)
+    if (!ok) return
+    setDeletingId(inv.id)
+    try {
+      const res = await fetch(`/api/ap/${inv.id}`, {
+        method: 'DELETE',
+        credentials: 'same-origin',
+      })
+      const json = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`)
+      // Optimistic: drop from current view immediately
+      if (data) {
+        setData({ ...data, invoices: data.invoices.filter(i => i.id !== inv.id), total: Math.max(0, data.total - 1) })
+      }
+      // Refresh to update counts
+      fetchData()
+    } catch (err: any) {
+      alert('Delete failed: ' + (err?.message || err))
+    } finally {
+      setDeletingId(null)
     }
   }
 
@@ -160,7 +182,6 @@ export default function APListPage({ user }: PageProps) {
         </div>
         <div style={{fontSize:12, color:T.text3, marginBottom:18}}>Triage incoming invoices, edit lines, and post to MYOB.</div>
 
-        {/* Counts banner */}
         {data && (
           <div style={{background:T.bg2, border:`1px solid ${T.border}`, borderRadius:10, padding:'14px 18px', marginBottom:14, display:'flex', flexWrap:'wrap', gap:24, alignItems:'center'}}>
             <Stat n={data.counts.red}     label="Red"     color={T.red}/>
@@ -173,7 +194,6 @@ export default function APListPage({ user }: PageProps) {
           </div>
         )}
 
-        {/* Filters + actions */}
         <div style={{display:'flex', flexWrap:'wrap', gap:8, alignItems:'center', marginBottom:14}}>
           <Pill active={statusFilter===''}                 onClick={()=>setStatusFilter('')}                  label="All statuses"/>
           <Pill active={statusFilter==='pending_review'}   onClick={()=>setStatusFilter('pending_review')}    label="Pending review"/>
@@ -237,7 +257,6 @@ export default function APListPage({ user }: PageProps) {
           </div>
         )}
 
-        {/* Table */}
         <div style={{background:T.bg2, border:`1px solid ${T.border}`, borderRadius:10, overflow:'hidden'}}>
           <div style={{overflowX:'auto'}}>
             <table style={{width:'100%', borderCollapse:'collapse'}}>
@@ -251,58 +270,88 @@ export default function APListPage({ user }: PageProps) {
                   <th style={th()}>Supplier (MYOB)</th>
                   <th style={{...th(100), textAlign:'right'}}>Total inc GST</th>
                   <th style={th(110)}>Status</th>
+                  {canEdit && <th style={th(40)}/>}
                 </tr>
               </thead>
               <tbody>
                 {loading && !data && (
-                  <tr><td colSpan={8} style={{padding:30, textAlign:'center', color:T.text3, fontSize:12}}>Loading…</td></tr>
+                  <tr><td colSpan={canEdit ? 9 : 8} style={{padding:30, textAlign:'center', color:T.text3, fontSize:12}}>Loading…</td></tr>
                 )}
                 {data && data.invoices.length === 0 && (
-                  <tr><td colSpan={8} style={{padding:30, textAlign:'center', color:T.text3, fontSize:12}}>No invoices match the current filters.</td></tr>
+                  <tr><td colSpan={canEdit ? 9 : 8} style={{padding:30, textAlign:'center', color:T.text3, fontSize:12}}>No invoices match the current filters.</td></tr>
                 )}
-                {data && data.invoices.map((inv, i) => (
-                  <tr
-                    key={inv.id}
-                    onClick={() => router.push(`/ap/${inv.id}`)}
-                    style={{
-                      borderTop: i > 0 ? `1px solid ${T.border}` : 'none',
-                      cursor: 'pointer',
-                    }}
-                    onMouseEnter={e => (e.currentTarget.style.background = T.bg3)}
-                    onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
-                  >
-                    <td style={td()}><TriagePill status={inv.triage_status}/></td>
-                    <td style={{...td(), fontSize:11, color:T.text3, fontFamily:'monospace', whiteSpace:'nowrap'}}>
-                      {fmtDateTime(inv.received_at)}
-                    </td>
-                    <td style={td()}>
-                      <div style={{fontSize:13, color:T.text}}>{inv.vendor_name_parsed || <span style={{color:T.text3}}>—</span>}</div>
-                      {inv.via_capricorn && (
-                        <div style={{fontSize:10, color:T.amber, marginTop:2}}>via Capricorn{inv.capricorn_reference ? ` ${inv.capricorn_reference}` : ''}</div>
+                {data && data.invoices.map((inv, i) => {
+                  const isDeleting = deletingId === inv.id
+                  const isPosted = inv.status === 'posted'
+                  return (
+                    <tr
+                      key={inv.id}
+                      onClick={() => router.push(`/ap/${inv.id}`)}
+                      style={{
+                        borderTop: i > 0 ? `1px solid ${T.border}` : 'none',
+                        cursor: 'pointer',
+                        opacity: isDeleting ? 0.4 : 1,
+                      }}
+                      onMouseEnter={e => (e.currentTarget.style.background = T.bg3)}
+                      onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+                    >
+                      <td style={td()}><TriagePill status={inv.triage_status}/></td>
+                      <td style={{...td(), fontSize:11, color:T.text3, fontFamily:'monospace', whiteSpace:'nowrap'}}>
+                        {fmtDateTime(inv.received_at)}
+                      </td>
+                      <td style={td()}>
+                        <div style={{fontSize:13, color:T.text}}>{inv.vendor_name_parsed || <span style={{color:T.text3}}>—</span>}</div>
+                        {inv.via_capricorn && (
+                          <div style={{fontSize:10, color:T.amber, marginTop:2}}>via Capricorn{inv.capricorn_reference ? ` ${inv.capricorn_reference}` : ''}</div>
+                        )}
+                      </td>
+                      <td style={{...td(), fontFamily:'monospace', fontSize:12}}>
+                        {inv.invoice_number || <span style={{color:T.text3}}>—</span>}
+                      </td>
+                      <td style={{...td(), fontSize:11, color:T.text2, whiteSpace:'nowrap'}}>{inv.invoice_date || '—'}</td>
+                      <td style={td()}>
+                        {inv.resolved_supplier_name ? (
+                          <div>
+                            <div style={{fontSize:12, color:T.text}}>{inv.resolved_supplier_name}</div>
+                            <div style={{fontSize:10, color:T.text3, fontFamily:'monospace', marginTop:2}}>{inv.resolved_account_code || ''}</div>
+                          </div>
+                        ) : (
+                          <span style={{fontSize:11, color:T.text3, fontStyle:'italic'}}>not mapped</span>
+                        )}
+                      </td>
+                      <td style={{...td(), textAlign:'right', fontFamily:'monospace', fontSize:13, fontWeight:500}}>
+                        {inv.total_inc_gst !== null ? `$${Number(inv.total_inc_gst).toFixed(2)}` : '—'}
+                      </td>
+                      <td style={td()}>
+                        <StatusPill status={inv.status}/>
+                      </td>
+                      {canEdit && (
+                        <td style={{...td(), textAlign:'center', padding:'8px 6px'}}>
+                          {isPosted ? (
+                            <span title="Posted invoices can't be deleted" style={{color:T.text3, fontSize:14}}>—</span>
+                          ) : (
+                            <button
+                              onClick={(e) => handleDelete(inv, e)}
+                              disabled={isDeleting}
+                              title="Delete invoice + PDF"
+                              style={{
+                                background:'none', border:'none',
+                                color: isDeleting ? T.text3 : T.text2,
+                                cursor: isDeleting ? 'wait' : 'pointer',
+                                fontSize:16, padding:'2px 6px', borderRadius:4,
+                                fontFamily:'inherit',
+                              }}
+                              onMouseEnter={e => { if (!isDeleting) (e.currentTarget.style.color = T.red) }}
+                              onMouseLeave={e => { if (!isDeleting) (e.currentTarget.style.color = T.text2) }}
+                            >
+                              {isDeleting ? '…' : '×'}
+                            </button>
+                          )}
+                        </td>
                       )}
-                    </td>
-                    <td style={{...td(), fontFamily:'monospace', fontSize:12}}>
-                      {inv.invoice_number || <span style={{color:T.text3}}>—</span>}
-                    </td>
-                    <td style={{...td(), fontSize:11, color:T.text2, whiteSpace:'nowrap'}}>{inv.invoice_date || '—'}</td>
-                    <td style={td()}>
-                      {inv.resolved_supplier_name ? (
-                        <div>
-                          <div style={{fontSize:12, color:T.text}}>{inv.resolved_supplier_name}</div>
-                          <div style={{fontSize:10, color:T.text3, fontFamily:'monospace', marginTop:2}}>{inv.resolved_account_code || ''}</div>
-                        </div>
-                      ) : (
-                        <span style={{fontSize:11, color:T.text3, fontStyle:'italic'}}>not mapped</span>
-                      )}
-                    </td>
-                    <td style={{...td(), textAlign:'right', fontFamily:'monospace', fontSize:13, fontWeight:500}}>
-                      {inv.total_inc_gst !== null ? `$${Number(inv.total_inc_gst).toFixed(2)}` : '—'}
-                    </td>
-                    <td style={td()}>
-                      <StatusPill status={inv.status}/>
-                    </td>
-                  </tr>
-                ))}
+                    </tr>
+                  )
+                })}
               </tbody>
             </table>
           </div>
