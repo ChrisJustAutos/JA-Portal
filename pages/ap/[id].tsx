@@ -1,37 +1,36 @@
 // pages/ap/[id].tsx
 // AP Invoice Detail — PDF preview, line editor with per-line account picker,
-// MD job link, MYOB preset picker, approve/reject actions, delete, save.
+// MD job link, MYOB preset picker, approve/reject/unpost actions, delete.
 //
-// Round 6 additions (smart line→account pickup A+B):
+// Round 6 (smart line→account pickup A+B):
 //   - LineRow extended with account_source + suggested_account_*
 //   - LinesTable shows source badges + history suggestions
 //   - AccountPickerModal grew a "Save as rule for {supplier}" affordance
-//   - PUT /api/ap/[id]/lines body includes account_source per line
 //
 // Phase 1 mobile (Mar 2026):
-//   - Single-column stack on phones (no side-by-side PDF crush)
-//   - PDF preview sized to 50vh so it stays useful within the scroll flow
-//   - Sticky bottom action bar with big Approve / Reject buttons
-//   - 16px+ inputs to prevent iOS focus zoom
-//   - Desktop layout unchanged at >=768px
+//   - Single-column stack on phones, sticky bottom action bar
 //
-// May 2026 — invoice header edit + form overlap fix:
-//   - "Edit invoice" button on the Invoice card swaps read-only Fields for
-//     inputs covering: vendor, ABN, invoice #, invoice date, PO #, due date,
-//     subtotal/GST/total, notes. Save → PATCH /api/ap/[id] (server already
-//     supports these in PATCHABLE_FIELDS and re-runs triage on save).
-//   - SupplierPresetForm was rendering with overlap when the long
-//     "MATCH PATTERN..." label wrapped — the side-by-side grid cell didn't
-//     constrain the input. Switched to single-column stacking and added
-//     boxSizing: border-box to inputStyle().
+// May 2026 — invoice header edit + form overlap fix
 //
 // May 2026 — AccountTypeahead pre-pick name + bigger results:
 //   - When seeded from invoice.resolved_account_uid/_code (no name on the
 //     invoice row), fetch the chart-of-accounts entry by displayId on
 //     mount and show "6-1174 BAS Agent MYOB Consultant Fees" instead of
 //     just "6-1174". Falls back silently if the lookup fails.
-//   - Bumped account search limit 40 → 100 (server caps at 100) and
-//     container maxHeight 380 → 480 so users see ~16 rows instead of ~12.
+//   - Bumped account search limit 40 → 100 (server cap) and container
+//     maxHeight 380 → 480 so users see ~16 rows instead of ~12.
+//
+// May 2026 — Un-post button:
+//   - When an invoice is in `posted` state, admin/canEdit users see an
+//     "Un-post" button next to the green "Posted to MYOB" line. Use case:
+//     someone deletes the bill manually in MYOB; we need to flip the
+//     portal back to pending_review so they can re-approve and re-post.
+//   - Calls POST /api/ap/{id}/unpost with an optional reason. Server
+//     resets myob_bill_uid/posted_at/posted_by, re-runs triage, leaves
+//     attempts counter intact for audit.
+//   - Safety net: on re-approve, smart-adopt's findExistingMyobBill
+//     detects any remaining MYOB bill and re-links it instead of
+//     creating a duplicate.
 
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/router'
@@ -186,6 +185,7 @@ export default function APDetailPage({ user }: PageProps) {
   const [deleting, setDeleting] = useState(false)
   const [approving, setApproving] = useState(false)
   const [rejecting, setRejecting] = useState(false)
+  const [unposting, setUnposting] = useState(false)
   const [actionMessage, setActionMessage] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null)
   const [accountPickerLineId, setAccountPickerLineId] = useState<string | null>(null)
   const canEdit = roleHasPermission(user.role, 'edit:supplier_invoices')
@@ -344,6 +344,57 @@ export default function APDetailPage({ user }: PageProps) {
       setActionMessage({ kind: 'err', text: `❌ ${e?.message || String(e)}` })
     } finally {
       setRejecting(false)
+    }
+  }
+
+  // Un-post: flip a `posted` invoice back to `pending_review` so it can be
+  // re-approved. Use case: someone deleted the bill in MYOB, and our DB
+  // still says it's posted — re-approve from the portal otherwise refuses.
+  // Safe by design: smart-adopt will detect any remaining MYOB bill on
+  // re-approve and re-link it without duplicating.
+  async function unpostInvoice() {
+    if (!id || !data) return
+    const inv = data.invoice
+    const confirmMsg =
+      `Un-post this invoice?\n\n` +
+      `Vendor:  ${inv.vendor_name_parsed || '?'}\n` +
+      `Inv #:   ${inv.invoice_number || '?'}\n` +
+      `Total:   ${fmtMoney(inv.total_inc_gst)}\n` +
+      (inv.myob_bill_uid ? `MYOB UID: ${inv.myob_bill_uid.substring(0, 8)}…\n` : '') +
+      `\n` +
+      `Use this when the bill has been deleted in MYOB and you need to re-enter it.\n\n` +
+      `The invoice will go back to pending_review. When you re-approve, the system\n` +
+      `will check MYOB first — if the bill still exists it'll just re-link, otherwise\n` +
+      `it'll create a fresh one.`
+    if (!confirm(confirmMsg)) return
+
+    const reason = prompt(
+      'Reason for un-posting? (optional, stored as audit note)',
+      'Bill deleted in MYOB',
+    )
+    // null = user cancelled the second prompt; treat as cancel.
+    if (reason === null) return
+
+    setUnposting(true)
+    setActionMessage(null)
+    try {
+      const res = await fetch(`/api/ap/${id}/unpost`, {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reason: reason.trim() }),
+      })
+      const json = await res.json()
+      if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`)
+      setActionMessage({
+        kind: 'ok',
+        text: `↩ Un-posted — back to pending_review${json.previousMyobBillUid ? ` (was UID ${String(json.previousMyobBillUid).substring(0, 8)}…)` : ''}`,
+      })
+      await fetchData()
+    } catch (e: any) {
+      setActionMessage({ kind: 'err', text: `❌ Un-post failed: ${e?.message || String(e)}` })
+    } finally {
+      setUnposting(false)
     }
   }
 
@@ -696,12 +747,36 @@ export default function APDetailPage({ user }: PageProps) {
 
                 {isPosted && (
                   <div style={{paddingTop:10, borderTop:`1px solid ${T.border}`}}>
-                    <div style={{fontSize:11, color:T.green, display:'flex', alignItems:'center', gap:10, flexWrap:'wrap'}}>
-                      <span>✅ Posted to MYOB {data.invoice.myob_posted_at ? new Date(data.invoice.myob_posted_at).toLocaleString() : ''}</span>
-                      {data.invoice.myob_bill_uid && (
-                        <span style={{fontFamily:'monospace', color:T.text3}}>
-                          · UID {data.invoice.myob_bill_uid.substring(0, 8)}…
-                        </span>
+                    <div style={{
+                      display:'flex', alignItems:'center', gap:10, flexWrap:'wrap',
+                      justifyContent:'space-between',
+                    }}>
+                      <div style={{fontSize:11, color:T.green, display:'flex', alignItems:'center', gap:10, flexWrap:'wrap', flex:1, minWidth:0}}>
+                        <span>✅ Posted to MYOB {data.invoice.myob_posted_at ? new Date(data.invoice.myob_posted_at).toLocaleString() : ''}</span>
+                        {data.invoice.myob_bill_uid && (
+                          <span style={{fontFamily:'monospace', color:T.text3}}>
+                            · UID {data.invoice.myob_bill_uid.substring(0, 8)}…
+                          </span>
+                        )}
+                      </div>
+                      {canEdit && (
+                        <button
+                          onClick={unpostInvoice}
+                          disabled={unposting}
+                          title="Reset to pending_review (use if the bill was deleted in MYOB and you need to re-enter it)"
+                          style={{
+                            background:'transparent',
+                            border:`1px solid ${T.amber}50`,
+                            color:T.amber,
+                            padding:'5px 11px', borderRadius:5,
+                            fontSize:11, fontFamily:'inherit',
+                            cursor: unposting ? 'wait' : 'pointer',
+                            opacity: unposting ? 0.6 : 1,
+                            whiteSpace:'nowrap',
+                          }}
+                        >
+                          {unposting ? 'Un-posting…' : '↩ Un-post'}
+                        </button>
                       )}
                     </div>
                     {data.invoice.myob_post_error && (
@@ -1594,7 +1669,7 @@ function SupplierTypeahead({
 
 // ── AccountTypeahead ─────────────────────────────────────────────────────
 //
-// Two changes in this round (May 2026):
+// Two changes in May 2026:
 //
 // 1. PRE-PICKED NAME HYDRATION
 //    SupplierPresetForm seeds `selected` from the invoice's
@@ -1607,13 +1682,10 @@ function SupplierTypeahead({
 //    to find the matching entry and enrich `name` (and type / parent /
 //    isHeader). We DON'T call onSelect with the enriched account —
 //    parent state stays as-is until the user actually changes the pick.
-//    This avoids surprising the parent with re-renders.
 //
 // 2. RESULT LIMIT + LIST HEIGHT
 //    Frontend was asking for 40 rows; bumped to 100 (server's hard cap).
-//    Container maxHeight 380px → 480px so users see ~16 rows at once
-//    instead of ~12 — fewer cases of "I can't find my account, scroll,
-//    scroll, oh there it is".
+//    Container maxHeight 380px → 480px so users see ~16 rows at once.
 function AccountTypeahead({
   companyFile, selected, onSelect, forceOpen, placeholder,
 }: {
@@ -1641,8 +1713,7 @@ function AccountTypeahead({
 
   // Hydrate the name when it's missing. Searches /api/myob/accounts by
   // the displayId and finds the exact match. Fails silently — if the
-  // lookup errors out, we keep showing just the code, which is the
-  // pre-fix behaviour.
+  // lookup errors out, we keep showing just the code (pre-fix behaviour).
   useEffect(() => {
     if (!selected || !selected.uid || !selected.displayId) return
     if (selected.name) return
