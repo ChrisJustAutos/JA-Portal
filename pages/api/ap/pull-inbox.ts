@@ -88,10 +88,15 @@ export default withAuth('edit:supplier_invoices', async (req: NextApiRequest, re
       top: 100,
     })
   } catch (e: any) {
+    // Log to Vercel runtime logs — the response body alone is hard to
+    // pull out of UI errors. Keep the full message so admins can read it.
+    const detail = e?.message || String(e)
+    console.error(`[pull-inbox] Graph mailbox listing failed for ${mailbox}: ${detail}`)
     return res.status(502).json({
       error: 'Graph mailbox listing failed',
-      detail: e?.message || String(e),
+      detail,
       mailbox,
+      hint: 'Check Vercel function logs for the full Graph response. Common causes: mailbox does not exist or is unlicensed, Mail.Read application permission not granted/admin-consented, or an ApplicationAccessPolicy restricting which mailboxes the app can read.',
     })
   }
 

@@ -309,8 +309,15 @@ export default function APListPage({ user }: PageProps) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ sinceDays: 30 }),
       })
-      const json = await res.json()
-      if (!res.ok) throw new Error(json.error || json.detail || `HTTP ${res.status}`)
+      const json = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        // Surface BOTH the high-level error label and the detailed cause.
+        // (The previous version only surfaced json.error and threw away
+        // json.detail, which hid the actual Graph response from the UI.)
+        const parts = [json.error, json.detail].filter(Boolean)
+        const mailboxNote = json.mailbox ? ` (mailbox: ${json.mailbox})` : ''
+        throw new Error((parts.join(' — ') || `HTTP ${res.status}`) + mailboxNote)
+      }
 
       const s = json.summary
       const parts = [`📥 Scanned ${s.scanned}`]
