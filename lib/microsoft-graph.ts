@@ -1,40 +1,41 @@
 // lib/microsoft-graph.ts
-// Microsoft Graph API helpers for Pipeline A's mailbox webhook.
+// Microsoft Graph API helpers for Pipeline A's mailbox webhook + AP inbox pull.
 //
-// Auth: OAuth client credentials flow (app-only). No user signin — the
-// Azure App Registration is granted Mail.Read application permission.
+// Auth: OAuth client credentials flow (app-only). The Azure App Registration
+// is granted Mail.Read (read mailboxes) and Mail.ReadWrite (mark-as-read,
+// move). Token cached ~30 min in-process.
 //
-// **Mark-as-read and move-to-folder operations require Mail.ReadWrite
-// (not just Mail.Read).** If the app registration only has Mail.Read,
-// PATCH /messages/{id} and POST /messages/{id}/move will both return
-// 403. Callers handle the failure gracefully.
-//
-// We watch each rep's Inbox for new messages. When a Mechanics Desk quote
-// email arrives in someone's Inbox, Graph POSTs a notification to our
-// webhook (lib/../pages/api/webhooks/graph-mail.ts), which then uses
-// these helpers to fetch the message + attachments by ID.
-//
-// Subscription lifecycle:
-//   - Outlook message subscriptions max out at 4230 mins (~70.5 hrs).
-//   - We renew via PATCH before expiry.
-//   - Renewal cron runs frequently to catch expirations.
-//
-// Token caching: in-memory, lasts ~50 mins (Graph tokens are 60-min by
-// default; we refresh at 50 to be safe). Module-scoped cache; Vercel
-// serverless functions reuse warm instances so this is generally fine.
-// On a cold start we acquire a fresh token, ~150ms.
+// **401/403 token-bust retry:** If a Graph call returns 401 (Unauthorized)
+// or 403 (Forbidden) and we're holding a cached token, the helper assumes
+// the token was issued *before* a permission was granted/changed and tries
+// once more with a freshly-acquired token. This makes the system
+// self-healing after Azure permission grants — no redeploy or wait for
+// natural token expiry needed. Persistent 403s (real permission missing)
+// still bubble up as errors.
 
 import { createClient } from '@supabase/supabase-js'
 
 const GRAPH_BASE = 'https://graph.microsoft.com/v1.0'
-const TOKEN_LIFETIME_MS = 50 * 60 * 1000   // refresh at 50 mins (token expires at 60)
+// Shorter-than-stock token TTL: 30 mins. Vercel functions can stay warm
+// across ~hours, and Azure permission grants typically take effect almost
+// immediately — a 30-min ceiling means worst-case staleness is half an
+// hour. The 401/403 retry below covers everything inside that window.
+const TOKEN_LIFETIME_MS = 30 * 60 * 1000
 
 // ── Token cache ────────────────────────────────────────────────────────
 
 let cachedToken: { value: string; expiresAt: number } | null = null
 
+/**
+ * Force the next getAppToken() call to fetch a brand-new token from Azure.
+ * Used by the 401/403 retry path in graphFetch when a cached token appears
+ * to be missing newly-granted scopes.
+ */
+function invalidateAppToken(): void {
+  cachedToken = null
+}
+
 async function getAppToken(): Promise<string> {
-  // Reuse cached token if still valid
   if (cachedToken && cachedToken.expiresAt > Date.now()) {
     return cachedToken.value
   }
@@ -79,10 +80,21 @@ async function getAppToken(): Promise<string> {
 
 // ── Generic Graph request ──────────────────────────────────────────────
 
+/**
+ * Low-level Graph fetch with built-in 401/403 retry.
+ *
+ * If the first call returns 401 or 403 AND we used a cached (non-fresh)
+ * token, we discard the cache, get a fresh token, and retry once. If the
+ * fresh-token call also fails, the original failure is the real one (real
+ * permission gap, expired secret, etc.) and we return it.
+ */
 async function graphFetch(path: string, opts: RequestInit = {}): Promise<Response> {
-  const token = await getAppToken()
   const url = path.startsWith('http') ? path : `${GRAPH_BASE}${path}`
-  return fetch(url, {
+
+  const tokenWasCachedBefore = !!cachedToken
+  const token = await getAppToken()
+
+  const r1 = await fetch(url, {
     ...opts,
     headers: {
       Authorization: `Bearer ${token}`,
@@ -91,6 +103,24 @@ async function graphFetch(path: string, opts: RequestInit = {}): Promise<Respons
       ...(opts.headers || {}),
     },
   })
+
+  // Only retry if the failing token was a reused cache hit. A 401/403 from
+  // a freshly-fetched token is the real answer.
+  if ((r1.status === 401 || r1.status === 403) && tokenWasCachedBefore) {
+    invalidateAppToken()
+    const freshToken = await getAppToken()
+    return fetch(url, {
+      ...opts,
+      headers: {
+        Authorization: `Bearer ${freshToken}`,
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+        ...(opts.headers || {}),
+      },
+    })
+  }
+
+  return r1
 }
 
 async function graphJson<T = any>(path: string, opts: RequestInit = {}): Promise<T> {
@@ -139,8 +169,7 @@ export async function getMessageMeta(mailbox: string, messageId: string): Promis
 }
 
 /**
- * List attachment metadata for a message. Returns name + contentType so
- * the caller can decide which attachments to actually download.
+ * List attachment metadata for a message.
  */
 export async function listAttachmentMeta(mailbox: string, messageId: string): Promise<GraphAttachmentMeta[]> {
   const data = await graphJson<{ value: any[] }>(
@@ -155,9 +184,7 @@ export async function listAttachmentMeta(mailbox: string, messageId: string): Pr
 }
 
 /**
- * Download a single attachment as base64. Graph returns the contentBytes
- * field already base64-encoded for FileAttachment types — perfect, no
- * re-encoding needed.
+ * Download a single attachment as base64.
  */
 export async function getAttachmentBase64(
   mailbox: string,
@@ -177,9 +204,6 @@ export async function getAttachmentBase64(
 }
 
 // ── Bulk message listing ────────────────────────────────────────────────
-// Used by the AP "Pull from Inbox" feature to ingest invoices in bulk
-// from a shared mailbox (accounts@). Different from the webhook path,
-// which fetches messages one at a time as notifications arrive.
 
 export interface GraphMessageSummary {
   id: string
@@ -190,31 +214,18 @@ export interface GraphMessageSummary {
 }
 
 /**
- * List recent messages from a mailbox's Inbox folder, filtered to
- * receivedDateTime >= sinceIsoDate (when provided), sorted newest first.
+ * List recent messages from a mailbox's Inbox folder.
  *
  * **hasAttachments is filtered client-side, not server-side.** Combining
  * `hasAttachments eq true` with `receivedDateTime ge X` and `$orderby
- * receivedDateTime desc` triggers Graph's "InefficientFilter" error
- * because the combined filter+sort isn't covered by their index.
- *
- * Filtering on a single indexed property (receivedDateTime) and sorting
- * on the same property is the canonical Graph pattern that reliably
- * works. We pull a batch and filter hasAttachments in memory afterwards.
- *
- * Used for bulk pull jobs that want to scan a mailbox and ingest any
- * unprocessed invoices. The caller is responsible for de-duping against
- * already-ingested message IDs.
+ * receivedDateTime desc` triggers Graph's "InefficientFilter" error.
+ * Filter on a single indexed property + sort on the same property is the
+ * canonical pattern that reliably works.
  */
 export async function listMessagesWithAttachments(
   mailbox: string,
   opts: { sinceIsoDate?: string; top?: number } = {},
 ): Promise<GraphMessageSummary[]> {
-  // Pull a wider window than `top` so client-side filtering for
-  // hasAttachments still returns ~`top` useful results. Cap at 200 to
-  // avoid hammering Graph; pagination via $skiptoken can come later if
-  // a single account@ inbox routinely has >200 non-invoice emails per
-  // pull window.
   const wanted = Math.min(Math.max(opts.top || 50, 1), 100)
   const fetchTop = Math.min(wanted * 2, 200)
 
@@ -238,19 +249,13 @@ export async function listMessagesWithAttachments(
     hasAttachments: !!m.hasAttachments,
   }))
 
-  // Client-side filter for attachments + cap at requested `top`.
   return all.filter(m => m.hasAttachments).slice(0, wanted)
 }
 
 // ── Mailbox write operations ────────────────────────────────────────────
-// Mark-as-read and folder-move both require Mail.ReadWrite application
-// permission with admin consent. With only Mail.Read, every call here
-// returns 403 — callers should treat both as best-effort.
 
 /**
- * Mark a message as read via PATCH /messages/{id} { isRead: true }.
- * Throws on non-2xx so callers can detect 403 (permission missing) vs
- * other failures.
+ * Mark a message as read. Requires Mail.ReadWrite app permission.
  */
 export async function markMessageAsRead(mailbox: string, messageId: string): Promise<void> {
   const r = await graphFetch(`/users/${encodeURIComponent(mailbox)}/messages/${messageId}`, {
@@ -264,10 +269,9 @@ export async function markMessageAsRead(mailbox: string, messageId: string): Pro
 }
 
 /**
- * Find a mail folder by display name. Searches Inbox children first
- * (the most common location for user-created subfolders like
- * "Processed" or "Printed"), then falls back to top-level folders if
- * not found there. Returns the folder UID, or null if no match.
+ * Find a mail folder by display name. Searches Inbox children first (the
+ * most common location for user-created subfolders like "Read /Printed"),
+ * then falls back to top-level folders.
  */
 export async function findFolderByDisplayName(
   mailbox: string,
@@ -277,7 +281,6 @@ export async function findFolderByDisplayName(
   const filter = `displayName eq '${escaped}'`
   const select = 'id,displayName'
 
-  // 1. Inbox children (most common for "Processed" / "Printed" folders)
   try {
     const params1 = new URLSearchParams({ '$filter': filter, '$select': select, '$top': '5' })
     const data1 = await graphJson<{ value: any[] }>(
@@ -289,7 +292,6 @@ export async function findFolderByDisplayName(
     // ignore — fall through to top-level search
   }
 
-  // 2. Top-level folders
   try {
     const params2 = new URLSearchParams({ '$filter': filter, '$select': select, '$top': '5' })
     const data2 = await graphJson<{ value: any[] }>(
@@ -305,10 +307,10 @@ export async function findFolderByDisplayName(
 }
 
 /**
- * Move a message to a different folder. The Graph response returns the
- * message at its new location with a new ID — the original message ID
- * is no longer valid afterwards, so do all read-side work first and
- * call move LAST.
+ * Move a message to a folder. Requires Mail.ReadWrite. The Graph response
+ * returns the message at its new location with a new ID — the original
+ * message ID is no longer valid afterwards, so do all read-side work first
+ * and call move LAST.
  */
 export async function moveMessageToFolder(
   mailbox: string,
@@ -332,24 +334,16 @@ export interface GraphSubscription {
   resource: string
   changeType: string
   notificationUrl: string
-  expirationDateTime: string       // ISO
+  expirationDateTime: string
   clientState: string
 }
 
-/**
- * Create a Graph subscription. For mailbox-level Inbox watching, resource
- * should be `users/{mailbox}/mailFolders('Inbox')/messages`.
- *
- * Note: Outlook message subscriptions max ~4230 mins from now. We default
- * to 4200 mins (just shy of the cap) to give plenty of headroom on the
- * server side.
- */
 export async function createSubscription(input: {
   resource: string
   notificationUrl: string
   clientState: string
-  changeType?: string              // default 'created'
-  expirationMinutes?: number       // default 4200 (just under 70-hr cap)
+  changeType?: string
+  expirationMinutes?: number
 }): Promise<GraphSubscription> {
   const expirationMins = input.expirationMinutes ?? 4200
   const expirationDateTime = new Date(Date.now() + expirationMins * 60 * 1000).toISOString()
@@ -377,9 +371,6 @@ export async function createSubscription(input: {
   }
 }
 
-/**
- * Renew (extend) an existing subscription. Pushes the expiration forward.
- */
 export async function renewSubscription(
   subscriptionId: string,
   expirationMinutes: number = 4200,
@@ -401,10 +392,6 @@ export async function renewSubscription(
   }
 }
 
-/**
- * List all subscriptions owned by this app. Useful for diagnosing duplicates
- * and dead subscriptions.
- */
 export async function listSubscriptions(): Promise<GraphSubscription[]> {
   const data = await graphJson<{ value: any[] }>(`/subscriptions`)
   return (data.value || []).map(s => ({
@@ -417,9 +404,6 @@ export async function listSubscriptions(): Promise<GraphSubscription[]> {
   }))
 }
 
-/**
- * Delete a subscription. Used during cleanup or when re-subscribing.
- */
 export async function deleteSubscription(subscriptionId: string): Promise<void> {
   const r = await graphFetch(`/subscriptions/${subscriptionId}`, { method: 'DELETE' })
   if (!r.ok && r.status !== 404) {
@@ -427,12 +411,6 @@ export async function deleteSubscription(subscriptionId: string): Promise<void> 
     throw new Error(`Graph DELETE subscription ${subscriptionId} failed ${r.status}: ${errText.substring(0, 300)}`)
   }
 }
-
-// ── Helper: random hex string for clientState ──────────────────────────
-//
-// clientState is a random secret echoed back by Graph in every notification.
-// Used for verifying notifications are genuine. Generated when subscribing
-// and stored in graph_subscriptions table for later comparison.
 
 export function generateClientState(): string {
   const bytes = new Uint8Array(32)
@@ -450,10 +428,10 @@ function supa() {
 }
 
 export interface StoredSubscription {
-  id: string                       // Our row UUID
+  id: string
   mailbox: string
   resource: string
-  subscription_id: string          // Graph's UUID
+  subscription_id: string
   expiration_date_time: string
   client_state: string
   notification_url: string

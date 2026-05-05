@@ -1,6 +1,6 @@
 // pages/ap/[id].tsx
-// AP Invoice Detail — PDF preview, line editor, MD job link, MYOB preset
-// picker, approve/reject actions, delete, save.
+// AP Invoice Detail — PDF preview, line editor with per-line account picker,
+// MD job link, MYOB preset picker, approve/reject actions, delete, save.
 
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/router'
@@ -69,6 +69,9 @@ interface LineRow {
   line_total_ex_gst: number
   gst_amount: number | null
   tax_code: string
+  account_uid: string | null
+  account_code: string | null
+  account_name: string | null
 }
 
 interface JobInfo {
@@ -128,6 +131,8 @@ export default function APDetailPage({ user }: PageProps) {
   const [approving, setApproving] = useState(false)
   const [rejecting, setRejecting] = useState(false)
   const [actionMessage, setActionMessage] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null)
+  // Per-line account picker modal — null when closed, line.id when open
+  const [accountPickerLineId, setAccountPickerLineId] = useState<string | null>(null)
   const canEdit = roleHasPermission(user.role, 'edit:supplier_invoices')
 
   // Job picker state
@@ -220,7 +225,6 @@ export default function APDetailPage({ user }: PageProps) {
     }
   }
 
-  // ── Approve (push to MYOB) ──
   async function approveAndPost() {
     if (!id || !data) return
     const inv = data.invoice
@@ -248,8 +252,6 @@ export default function APDetailPage({ user }: PageProps) {
       const json = await res.json()
       if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`)
 
-      // Build success message that reflects attachment outcome separately —
-      // bill posting and PDF attachment are independent steps.
       const uidPart = json.myobBillUid ? ` — bill UID ${String(json.myobBillUid).substring(0, 8)}…` : ''
       const attachPart =
         json.attachmentStatus === 'attached' ? ' · 📎 PDF attached' :
@@ -264,13 +266,12 @@ export default function APDetailPage({ user }: PageProps) {
       await fetchData()
     } catch (e: any) {
       setActionMessage({ kind: 'err', text: `❌ ${e?.message || String(e)}` })
-      await fetchData()  // Pull updated myob_post_error
+      await fetchData()
     } finally {
       setApproving(false)
     }
   }
 
-  // ── Reject (no MYOB write) ──
   async function rejectInvoice() {
     if (!id) return
     const reason = prompt('Reason for rejecting this invoice?\n(Will be stored on the record. Required.)')
@@ -302,6 +303,7 @@ export default function APDetailPage({ user }: PageProps) {
   function cancelEdit() {
     setEditingLines(null)
     setSaveMessage(null)
+    setAccountPickerLineId(null)
   }
   function updateLine(lineId: string, patch: Partial<LineRow>) {
     if (!editingLines) return
@@ -324,6 +326,9 @@ export default function APDetailPage({ user }: PageProps) {
         line_total_ex_gst: 0,
         gst_amount: null,
         tax_code: 'GST',
+        account_uid: null,
+        account_code: null,
+        account_name: null,
       },
     ])
   }
@@ -346,6 +351,9 @@ export default function APDetailPage({ user }: PageProps) {
         line_total_ex_gst: l.line_total_ex_gst,
         gst_amount: l.gst_amount,
         tax_code: l.tax_code,
+        account_uid: l.account_uid,
+        account_code: l.account_code,
+        account_name: l.account_name,
       }))
       const res = await fetch(`/api/ap/${id}/lines`, {
         method: 'PUT',
@@ -367,19 +375,29 @@ export default function APDetailPage({ user }: PageProps) {
   const isPosted   = data?.invoice.status === 'posted'
   const isRejected = data?.invoice.status === 'rejected'
   const isTerminal = isPosted || isRejected
+  // Per-line accounts: approval is OK if every line has an account_uid OR the
+  // invoice has a fallback resolved_account_uid.
+  const hasAccountFallbackOrPerLine = (() => {
+    if (!data) return false
+    if (data.invoice.resolved_account_uid) return true
+    return data.lines.length > 0 && data.lines.every(l => !!l.account_uid)
+  })()
   const canApprove = canEdit && data
                   && !isTerminal
                   && data.invoice.triage_status !== 'red'
                   && !!data.invoice.resolved_supplier_uid
-                  && !!data.invoice.resolved_account_uid
+                  && hasAccountFallbackOrPerLine
   const approveBlockedReason =
     !data ? '' :
     isPosted   ? 'Already posted' :
     isRejected ? 'Invoice rejected' :
     data.invoice.triage_status === 'red' ? 'Triage RED — fix issues' :
     !data.invoice.resolved_supplier_uid ? 'No MYOB supplier mapped' :
-    !data.invoice.resolved_account_uid  ? 'No default account mapped' :
+    !hasAccountFallbackOrPerLine ? 'Some lines have no account and no default account is set' :
     ''
+
+  // Resolve the line being edited in the picker modal
+  const pickerLine = editingLines?.find(l => l.id === accountPickerLineId) || null
 
   return (
     <div style={{display:'flex', minHeight:'100vh', background:T.bg, color:T.text, fontFamily:"'DM Sans', system-ui, sans-serif"}}>
@@ -469,19 +487,24 @@ export default function APDetailPage({ user }: PageProps) {
                 </div>
                 {data.invoice.triage_reasons && data.invoice.triage_reasons.length > 0 && (
                   <div style={{display:'flex', flexWrap:'wrap', gap:6, marginBottom:10}}>
-                    {data.invoice.triage_reasons.map((r, i) => (
-                      <span key={i} style={{
-                        fontSize:10, fontFamily:'monospace',
-                        padding:'2px 8px', borderRadius:3,
-                        background: r.startsWith('RED:') ? `${T.red}15` : r.startsWith('YELLOW:') ? `${T.amber}15` : `${T.text3}15`,
-                        color: r.startsWith('RED:') ? T.red : r.startsWith('YELLOW:') ? T.amber : T.text3,
-                        border: `1px solid ${r.startsWith('RED:') ? T.red : r.startsWith('YELLOW:') ? T.amber : T.text3}40`,
-                      }}>{r}</span>
-                    ))}
+                    {data.invoice.triage_reasons.map((r, i) => {
+                      const isRed    = r.startsWith('RED:')
+                      const isYellow = r.startsWith('YELLOW:')
+                      const isInfo   = r.startsWith('INFO:')
+                      const c = isRed ? T.red : isYellow ? T.amber : isInfo ? T.teal : T.text3
+                      return (
+                        <span key={i} style={{
+                          fontSize:10, fontFamily:'monospace',
+                          padding:'2px 8px', borderRadius:3,
+                          background: `${c}15`,
+                          color: c,
+                          border: `1px solid ${c}40`,
+                        }}>{r}</span>
+                      )
+                    })}
                   </div>
                 )}
 
-                {/* Action row */}
                 {!isTerminal && canEdit && (
                   <div style={{display:'flex', alignItems:'center', gap:8, paddingTop:10, borderTop:`1px solid ${T.border}`}}>
                     {data.invoice.myob_post_error && (
@@ -528,7 +551,6 @@ export default function APDetailPage({ user }: PageProps) {
                         </span>
                       )}
                     </div>
-                    {/* Surface attachment errors / notes even when bill itself succeeded */}
                     {data.invoice.myob_post_error && (
                       <div style={{marginTop:6, fontSize:11, color:T.amber}}>
                         ⚠️ {data.invoice.myob_post_error}
@@ -576,7 +598,6 @@ export default function APDetailPage({ user }: PageProps) {
                 )}
               </div>
 
-              {/* Workshop Job (MD) */}
               <WorkshopJobSection
                 invoice={data.invoice}
                 linkedJob={data.linkedJob}
@@ -593,7 +614,6 @@ export default function APDetailPage({ user }: PageProps) {
                 onUnlink={() => linkToJob(null)}
               />
 
-              {/* MYOB mapping (with preset picker) */}
               <MyobMappingSection
                 invoice={data.invoice}
                 canEdit={canEdit && !isTerminal}
@@ -627,13 +647,49 @@ export default function APDetailPage({ user }: PageProps) {
                 )}
                 <LinesTable
                   lines={editingLines || data.lines}
+                  invoiceDefaultAccountCode={data.invoice.resolved_account_code}
                   editable={editingLines !== null}
                   onChange={updateLine}
                   onRemove={removeLine}
+                  onPickAccount={(lineId) => setAccountPickerLineId(lineId)}
                 />
+                {editingLines !== null && (
+                  <div style={{marginTop:10, fontSize:10, color:T.text3}}>
+                    💡 Per-line account override: leave as "Default" to use the invoice-level account, or click to set a different account for that line only.
+                  </div>
+                )}
               </div>
             </div>
           </div>
+        )}
+
+        {/* Per-line account picker modal */}
+        {pickerLine && data && (
+          <AccountPickerModal
+            companyFile={data.invoice.myob_company_file}
+            currentAccountCode={pickerLine.account_code}
+            currentAccountName={pickerLine.account_name}
+            invoiceDefaultCode={data.invoice.resolved_account_code}
+            lineLabel={`Line #${pickerLine.line_no}: ${pickerLine.description.substring(0, 60)}`}
+            onClose={() => setAccountPickerLineId(null)}
+            onSelect={(account) => {
+              if (account === null) {
+                // Reset to invoice default
+                updateLine(pickerLine.id, {
+                  account_uid: null,
+                  account_code: null,
+                  account_name: null,
+                })
+              } else {
+                updateLine(pickerLine.id, {
+                  account_uid: account.uid,
+                  account_code: account.displayId,
+                  account_name: account.name || null,
+                })
+              }
+              setAccountPickerLineId(null)
+            }}
+          />
         )}
       </div>
     </div>
@@ -679,7 +735,7 @@ function MyobMappingSection({
           {accountMissing && (
             <div style={{marginTop:10, fontSize:11, color:T.amber}}>
               Supplier auto-matched but no default account on the MYOB supplier card.
-              Click "Change…" to pick the account and save the preset.
+              Click "Change…" to pick a default, or set per-line accounts in the line editor.
             </div>
           )}
         </>
@@ -784,7 +840,7 @@ function SupplierPresetForm({
         />
       </FormRow>
 
-      <FormRow label="Default account (Expense + CostOfSales)">
+      <FormRow label="Default account (any account type)">
         <AccountTypeahead
           companyFile={invoice.myob_company_file}
           selected={account}
@@ -845,6 +901,96 @@ function inputStyle(): React.CSSProperties {
     background: T.bg3, border:`1px solid ${T.border2}`, color: T.text,
     padding:'7px 10px', borderRadius:5, fontSize:12, fontFamily:'inherit', outline:'none',
   }
+}
+
+// ── Per-line account picker modal ────────────────────────────────────────
+function AccountPickerModal({
+  companyFile, currentAccountCode, currentAccountName, invoiceDefaultCode,
+  lineLabel, onClose, onSelect,
+}: {
+  companyFile: 'VPS' | 'JAWS'
+  currentAccountCode: string | null
+  currentAccountName: string | null
+  invoiceDefaultCode: string | null
+  lineLabel: string
+  onClose: () => void
+  onSelect: (account: MyobAccount | null) => void   // null = reset to invoice default
+}) {
+  return (
+    <div
+      onClick={onClose}
+      style={{
+        position:'fixed', inset:0, background:'rgba(0,0,0,0.6)',
+        display:'flex', alignItems:'flex-start', justifyContent:'center',
+        zIndex:1000, paddingTop:'10vh',
+      }}
+    >
+      <div
+        onClick={e => e.stopPropagation()}
+        style={{
+          background: T.bg2,
+          border: `1px solid ${T.border2}`,
+          borderRadius: 10,
+          width: 'min(620px, 92vw)',
+          padding: '18px 20px',
+          maxHeight: '75vh',
+          overflowY: 'auto',
+          boxShadow: '0 16px 48px rgba(0,0,0,0.5)',
+        }}
+      >
+        <div style={{display:'flex', alignItems:'center', marginBottom:12}}>
+          <div>
+            <div style={{fontSize:11, color:T.text3, textTransform:'uppercase', letterSpacing:'0.05em', marginBottom:3}}>
+              Pick account for line ({companyFile})
+            </div>
+            <div style={{fontSize:13, color:T.text}}>{lineLabel}</div>
+          </div>
+          <span style={{flex:1}}/>
+          <button onClick={onClose} style={btnSecondary()}>Close</button>
+        </div>
+
+        <div style={{
+          padding:'8px 10px', background:T.bg3, borderRadius:6, fontSize:11,
+          color:T.text2, marginBottom:12,
+          display:'flex', alignItems:'center', justifyContent:'space-between', gap:8,
+        }}>
+          <div>
+            Current:{' '}
+            {currentAccountCode ? (
+              <span style={{fontFamily:'monospace', color:T.text}}>
+                {currentAccountCode}
+                {currentAccountName ? <span style={{color:T.text3}}> · {currentAccountName}</span> : null}
+              </span>
+            ) : (
+              <span style={{color:T.text3}}>
+                Default ({invoiceDefaultCode ? <span style={{fontFamily:'monospace'}}>{invoiceDefaultCode}</span> : 'none'})
+              </span>
+            )}
+          </div>
+          {currentAccountCode && (
+            <button
+              onClick={() => onSelect(null)}
+              style={{
+                ...btnSecondary(),
+                color: T.amber,
+                borderColor: `${T.amber}40`,
+              }}
+            >
+              Reset to default
+            </button>
+          )}
+        </div>
+
+        <AccountTypeahead
+          companyFile={companyFile}
+          selected={null}
+          onSelect={(a) => { if (a) onSelect(a) }}
+          forceOpen
+          placeholder="Search any account by code or name…"
+        />
+      </div>
+    </div>
+  )
 }
 
 // ── Reusable typeaheads ──────────────────────────────────────────────────
@@ -954,13 +1100,15 @@ function SupplierTypeahead({
 }
 
 function AccountTypeahead({
-  companyFile, selected, onSelect,
+  companyFile, selected, onSelect, forceOpen, placeholder,
 }: {
   companyFile: 'VPS' | 'JAWS'
   selected: MyobAccount | null
   onSelect: (a: MyobAccount | null) => void
+  forceOpen?: boolean
+  placeholder?: string
 }) {
-  const [open, setOpen] = useState(false)
+  const [open, setOpen] = useState(!!forceOpen)
   const [query, setQuery] = useState('')
   const [loading, setLoading] = useState(false)
   const [results, setResults] = useState<MyobAccount[]>([])
@@ -972,6 +1120,7 @@ function AccountTypeahead({
     setSearchError(null)
     const t = setTimeout(async () => {
       try {
+        // No types= param → API default 'all', returns every account type.
         const params = new URLSearchParams({ q: query, company: companyFile, limit: '40' })
         const res = await fetch(`/api/myob/accounts?${params.toString()}`, { credentials: 'same-origin' })
         const json = await res.json()
@@ -1013,36 +1162,38 @@ function AccountTypeahead({
           autoFocus
           value={query}
           onChange={e => setQuery(e.target.value)}
-          placeholder="Search by code or name (e.g. 5-1100, parts, freight)…"
+          placeholder={placeholder || "Search by code or name (any account type)…"}
           style={inputStyle()}
         />
-        <button onClick={() => setOpen(false)} style={btnSecondary()}>Close</button>
+        {!forceOpen && (
+          <button onClick={() => setOpen(false)} style={btnSecondary()}>Close</button>
+        )}
       </div>
       {searchError && (
         <div style={{fontSize:11, color:T.red, marginBottom:8}}>MYOB error: {searchError}</div>
       )}
       <div style={{
         border:`1px solid ${T.border}`, borderRadius:6, overflow:'hidden',
-        maxHeight:280, overflowY:'auto', background: T.bg3,
+        maxHeight:380, overflowY:'auto', background: T.bg3,
       }}>
         {loading && (
           <div style={{padding:14, textAlign:'center', color:T.text3, fontSize:12}}>Searching MYOB…</div>
         )}
         {!loading && results.length === 0 && (
           <div style={{padding:14, textAlign:'center', color:T.text3, fontSize:12}}>
-            {query ? 'No matching accounts.' : 'Showing top expense + cost-of-sales accounts. Refine with a query.'}
+            {query ? 'No matching accounts.' : 'Showing top accounts. Refine with a query.'}
           </div>
         )}
         {!loading && results.map((a, i) => (
           <div
             key={a.uid}
-            onClick={() => { onSelect(a); setOpen(false) }}
+            onClick={() => { onSelect(a); if (!forceOpen) setOpen(false) }}
             style={{
               padding:'8px 12px',
               borderTop: i > 0 ? `1px solid ${T.border}` : 'none',
               cursor:'pointer',
               fontSize: 12,
-              display:'grid', gridTemplateColumns:'80px 1fr 90px', gap:10, alignItems:'center',
+              display:'grid', gridTemplateColumns:'80px 1fr 110px', gap:10, alignItems:'center',
             }}
             onMouseEnter={e => (e.currentTarget.style.background = T.bg4)}
             onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
@@ -1186,12 +1337,14 @@ function WorkshopJobSection({
 
 // ── Lines table ──────────────────────────────────────────────────────────
 function LinesTable({
-  lines, editable, onChange, onRemove,
+  lines, invoiceDefaultAccountCode, editable, onChange, onRemove, onPickAccount,
 }: {
   lines: LineRow[]
+  invoiceDefaultAccountCode: string | null
   editable: boolean
   onChange: (id: string, patch: Partial<LineRow>) => void
   onRemove: (id: string) => void
+  onPickAccount: (lineId: string) => void
 }) {
   if (lines.length === 0) {
     return <div style={{padding:14, textAlign:'center', color:T.text3, fontSize:12}}>No line items.</div>
@@ -1205,10 +1358,11 @@ function LinesTable({
             <th style={lh(120)}>Part</th>
             <th style={lh()}>Description</th>
             <th style={{...lh(60), textAlign:'right'}}>Qty</th>
-            <th style={lh(60)}>UoM</th>
+            <th style={lh(50)}>UoM</th>
             <th style={{...lh(80), textAlign:'right'}}>Unit ex</th>
             <th style={{...lh(80), textAlign:'right'}}>Total ex</th>
-            <th style={lh(60)}>Tax</th>
+            <th style={lh(56)}>Tax</th>
+            <th style={lh(140)}>Account</th>
             {editable && <th style={lh(40)}/>}
           </tr>
         </thead>
@@ -1256,6 +1410,32 @@ function LinesTable({
                     {['GST','FRE','CAP','EXP','GNR','ITS','N-T'].map(c => <option key={c} value={c}>{c}</option>)}
                   </select>
                 ) : l.tax_code}
+              </td>
+              <td style={ld()}>
+                {editable ? (
+                  <button
+                    onClick={() => onPickAccount(l.id)}
+                    title={l.account_name || (l.account_code ? '' : `Default: ${invoiceDefaultAccountCode || 'none'}`)}
+                    style={{
+                      background: T.bg3, border:`1px solid ${T.border2}`,
+                      color: l.account_code ? T.text : T.text3,
+                      padding:'3px 8px', borderRadius:4,
+                      fontSize:11, fontFamily: l.account_code ? 'monospace' : 'inherit',
+                      cursor:'pointer', textAlign:'left',
+                      width:'100%', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap',
+                    }}
+                  >
+                    {l.account_code || `Default${invoiceDefaultAccountCode ? ` (${invoiceDefaultAccountCode})` : ''}`}
+                  </button>
+                ) : (
+                  <span title={l.account_name || ''} style={{
+                    fontSize:11,
+                    color: l.account_code ? T.text : T.text3,
+                    fontFamily: l.account_code ? 'monospace' : 'inherit',
+                  }}>
+                    {l.account_code || `Default${invoiceDefaultAccountCode ? ` (${invoiceDefaultAccountCode})` : ''}`}
+                  </span>
+                )}
               </td>
               {editable && (
                 <td style={ld()}>

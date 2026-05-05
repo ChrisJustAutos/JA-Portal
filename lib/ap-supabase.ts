@@ -28,6 +28,19 @@ const SIGNED_URL_TTL_SEC = 60 * 60   // 1 hour for the UI's PDF preview
 // positives from coincidentally-equal totals on unrelated invoices.
 const AMOUNT_DUP_WINDOW_DAYS = 30
 
+const GST_RATE = 0.10
+// $0.10 absolute tolerance for line-sum reconciliation. Tight enough to
+// catch real arithmetic discrepancies, loose enough to absorb the standard
+// per-line rounding to cents that vendor invoices accumulate.
+const LINE_SUM_TOLERANCE = 0.10
+
+function round2(n: number): number {
+  return Math.round(n * 100) / 100
+}
+function round4(n: number): number {
+  return Math.round(n * 10000) / 10000
+}
+
 // ── Insert parsed invoice + lines ───────────────────────────────────────
 
 export interface InvoiceInsertInput {
@@ -272,6 +285,10 @@ export interface TriageInput {
  *              possible amount duplicate.
  * - 🔴 RED: cannot post — missing invoice number, missing total, parser
  *           unsure, exact duplicate, no line items.
+ *
+ * Reasons may also include `INFO:*` entries that are appended after triage
+ * (e.g. for auto-corrections); these never affect status — they're just
+ * surfaced in the UI so the user can see what happened.
  */
 export function triageInvoice(input: TriageInput): TriageOutcome {
   const reasons: string[] = []
@@ -323,7 +340,7 @@ export function triageInvoice(input: TriageInput): TriageOutcome {
   }
 
   const lineSum = e.lineItems.reduce((s, li) => s + (li.lineTotalExGst ?? 0), 0)
-  if (e.totals.subtotalExGst !== null && Math.abs(lineSum - e.totals.subtotalExGst) > 0.10) {
+  if (e.totals.subtotalExGst !== null && Math.abs(lineSum - e.totals.subtotalExGst) > LINE_SUM_TOLERANCE) {
     reasons.push('YELLOW:line-sum-mismatch')
   }
 
@@ -332,6 +349,117 @@ export function triageInvoice(input: TriageInput): TriageOutcome {
   }
 
   return { triageStatus: 'green', triageReasons: [] }
+}
+
+// ── Inc-GST line auto-correction ────────────────────────────────────────
+//
+// Some AU trade vendors (Diesel Care is one) print line "Amount" columns as
+// GST-INCLUSIVE while still showing a separate Subtotal/GST/Total breakdown
+// at the bottom. The parser takes the line amounts at face value as ex-GST,
+// which produces a sum that matches `total_inc_gst` instead of
+// `subtotal_ex_gst`. If we posted as-is, MYOB would re-add 10% on top — the
+// bill would be wrong by ~$X for every invoice.
+//
+// Detection rule (deterministic, no Claude judgement):
+//   - lineSum ≈ subtotal_ex_gst (within $0.10) → lines are correctly ex-GST
+//   - lineSum ≈ total_inc_gst   (within $0.10) → lines are inc-GST,
+//                                                divide GST lines by 1.10
+//                                                in place, mark INFO
+//   - neither match              → leave alone, triage will yellow-flag
+//
+// We only divide GST-coded lines. FRE/EXP/N-T lines stay untouched because
+// they have no GST baked in — for those, "inc" and "ex" are the same value.
+
+interface LineRowCorrection {
+  id: string
+  tax_code: string | null
+  line_total_ex_gst: number | string | null
+  unit_price_ex_gst: number | string | null
+}
+
+interface AutoCorrectionResult {
+  applied: boolean
+  reason?: string                    // human note for the audit log
+  before: { lineSum: number; subtotal: number | null; total: number | null }
+  after?:  { lineSum: number }
+}
+
+async function maybeAutoCorrectIncGstLines(
+  invoiceId: string,
+  invoice: { subtotal_ex_gst: any; total_inc_gst: any },
+  lines: LineRowCorrection[],
+): Promise<AutoCorrectionResult> {
+  const subtotalEx = invoice.subtotal_ex_gst !== null && invoice.subtotal_ex_gst !== undefined
+    ? Number(invoice.subtotal_ex_gst) : null
+  const totalInc = invoice.total_inc_gst !== null && invoice.total_inc_gst !== undefined
+    ? Number(invoice.total_inc_gst) : null
+
+  const lineSum = round2(lines.reduce((s, l) => s + Number(l.line_total_ex_gst || 0), 0))
+  const before = { lineSum, subtotal: subtotalEx, total: totalInc }
+
+  // Need both subtotal_ex_gst and total_inc_gst to safely diagnose. Without
+  // both anchors, there's no reliable signal that the lines are inc-GST.
+  if (subtotalEx === null || totalInc === null || lines.length === 0) {
+    return { applied: false, before }
+  }
+
+  // Don't run if the invoice has no GST (subtotal == total). Some vendors
+  // bill GST-free, in which case lineSum == subtotal == total is the
+  // expected ex-GST shape and we'd incorrectly "correct" it.
+  if (Math.abs(totalInc - subtotalEx) < 0.01) {
+    return { applied: false, before }
+  }
+
+  const matchesSubtotal = Math.abs(lineSum - subtotalEx) <= LINE_SUM_TOLERANCE
+  const matchesTotalInc = Math.abs(lineSum - totalInc)   <= LINE_SUM_TOLERANCE
+
+  // Already correct (matches subtotal) — nothing to do.
+  if (matchesSubtotal) return { applied: false, before }
+
+  // Doesn't match either anchor — let triage flag it yellow as before.
+  if (!matchesTotalInc) return { applied: false, before }
+
+  // Lines look inc-GST. Divide GST-coded lines by 1.1, leave the rest alone.
+  const c = sb()
+  let mutated = 0
+
+  for (const l of lines) {
+    const code = (l.tax_code || 'GST').toUpperCase()
+    if (code !== 'GST') continue
+
+    const oldLine = Number(l.line_total_ex_gst || 0)
+    const newLine = round2(oldLine / (1 + GST_RATE))
+    const oldUnit = l.unit_price_ex_gst === null || l.unit_price_ex_gst === undefined || l.unit_price_ex_gst === ''
+      ? null : Number(l.unit_price_ex_gst)
+    const newUnit = oldUnit !== null ? round4(oldUnit / (1 + GST_RATE)) : null
+
+    const update: Record<string, any> = { line_total_ex_gst: newLine }
+    if (newUnit !== null) update.unit_price_ex_gst = newUnit
+
+    const { error } = await c.from('ap_invoice_lines').update(update).eq('id', l.id)
+    if (error) {
+      console.error(`auto-correct line ${l.id} failed: ${error.message}`)
+      continue
+    }
+
+    // Reflect the new value into the in-memory list so the caller's
+    // subsequent triage sees the corrected sum without re-querying.
+    l.line_total_ex_gst = newLine
+    if (newUnit !== null) l.unit_price_ex_gst = newUnit
+    mutated++
+  }
+
+  if (mutated === 0) {
+    return { applied: false, before, reason: 'no GST-coded lines to correct' }
+  }
+
+  const newLineSum = round2(lines.reduce((s, l) => s + Number(l.line_total_ex_gst || 0), 0))
+  return {
+    applied: true,
+    reason: `Lines were inc-GST; ${mutated} line${mutated === 1 ? '' : 's'} divided by ${(1 + GST_RATE).toFixed(2)}`,
+    before,
+    after: { lineSum: newLineSum },
+  }
 }
 
 // ── Duplicate detection ────────────────────────────────────────────────
@@ -413,6 +541,10 @@ export async function findAmountDuplicates(
  *      account if the MYOB supplier card has a default expense account)
  *   3. Neither — leave nulls, triage will flag YELLOW:supplier-not-mapped
  *
+ * Pre-triage: runs `maybeAutoCorrectIncGstLines` to detect and fix vendors
+ * who print line totals inc-GST. If correction fires, lines are mutated in
+ * place and an INFO reason is appended after triage so the UI can surface it.
+ *
  * MYOB auto-match failures (network, expired token, etc.) are logged and
  * skipped — they must not break the parse pipeline.
  */
@@ -425,11 +557,22 @@ export async function applyTriageAndResolve(invoiceId: string): Promise<void> {
     .single()
   if (error || !inv) throw new Error(`ap_invoices not found: ${invoiceId}`)
 
-  const { data: lines } = await c
+  const { data: linesRaw } = await c
     .from('ap_invoice_lines')
     .select('*')
     .eq('invoice_id', invoiceId)
     .order('line_no', { ascending: true })
+
+  const lines: any[] = linesRaw || []
+
+  // ── Pre-triage step: auto-correct inc-GST line totals if detected ──
+  // This MUTATES `lines` in place when correction fires, so the triage
+  // calculation below sees the post-correction sums and yields GREEN.
+  const correction = await maybeAutoCorrectIncGstLines(
+    invoiceId,
+    { subtotal_ex_gst: inv.subtotal_ex_gst, total_inc_gst: inv.total_inc_gst },
+    lines as LineRowCorrection[],
+  )
 
   const extracted: ExtractedAPInvoice = {
     vendor: { name: inv.vendor_name_parsed, abn: inv.vendor_abn },
@@ -448,7 +591,7 @@ export async function applyTriageAndResolve(invoiceId: string): Promise<void> {
       memberNumber: inv.capricorn_member_number,
     },
     notes: inv.notes,
-    lineItems: (lines || []).map((l: any) => ({
+    lineItems: lines.map((l: any) => ({
       lineNo: l.line_no,
       partNumber: l.part_number,
       description: l.description,
@@ -533,6 +676,12 @@ export async function applyTriageAndResolve(invoiceId: string): Promise<void> {
     exactDuplicateOf, amountDuplicates,
     poCheckStatus,
   })
+
+  // Append INFO reason for auto-correction so it shows in the UI without
+  // changing the triage status.
+  if (correction.applied) {
+    triage.triageReasons.push(`INFO:auto-corrected-inc-gst-lines:${correction.reason || ''}`.replace(/[\r\n]+/g, ' '))
+  }
 
   await c
     .from('ap_invoices')

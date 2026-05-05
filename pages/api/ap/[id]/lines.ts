@@ -1,11 +1,19 @@
 // pages/api/ap/[id]/lines.ts
 // Bulk-replace line items for an invoice.
-// PUT body: { lines: [{ line_no, part_number, description, qty, uom,
-//                       unit_price_ex_gst, line_total_ex_gst, gst_amount, tax_code }] }
 //
-// Strategy: delete-all-then-insert-all inside a single API call. Simpler than
-// per-line diff and the line count is small (typically 1-20). Re-runs triage
-// after the replace so the row's status reflects the new line totals.
+// PUT body: { lines: [{
+//   line_no, part_number, description, qty, uom,
+//   unit_price_ex_gst, line_total_ex_gst, gst_amount, tax_code,
+//   account_uid?, account_code?, account_name?
+// }] }
+//
+// Strategy: delete-all-then-insert-all inside a single API call. Simpler
+// than per-line diff; line counts are small (typically 1-20). Re-runs
+// triage after the replace so the row's status reflects the new line
+// totals.
+//
+// Per-line account fields (optional): when set, override the
+// invoice-level resolved_account_uid for that line during MYOB posting.
 
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
@@ -23,6 +31,7 @@ function sb(): SupabaseClient {
 }
 
 const VALID_TAX_CODES = new Set(['GST','FRE','CAP','EXP','GNR','ITS','N-T'])
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 interface IncomingLine {
   line_no?: number | string
@@ -34,6 +43,9 @@ interface IncomingLine {
   line_total_ex_gst?: number | string
   gst_amount?: number | string | null
   tax_code?: string
+  account_uid?: string | null
+  account_code?: string | null
+  account_name?: string | null
 }
 
 export default withAuth('edit:supplier_invoices', async (req: NextApiRequest, res: NextApiResponse) => {
@@ -65,6 +77,16 @@ export default withAuth('edit:supplier_invoices', async (req: NextApiRequest, re
     if (lineTotal === null) {
       return res.status(400).json({ error: `lines[${i}].line_total_ex_gst is required and must be a number` })
     }
+
+    // Optional per-line account override. account_uid must be a UUID if set.
+    // code/name are denormalised from MYOB when the user picked the account
+    // — keep them as-is for display, but they're for UI only and not
+    // authoritative.
+    const accountUid = trimOrNull(raw.account_uid)
+    if (accountUid !== null && !UUID_REGEX.test(accountUid)) {
+      return res.status(400).json({ error: `lines[${i}].account_uid must be a UUID` })
+    }
+
     normalised.push({
       invoice_id:        id,
       line_no:           lineNo !== null && lineNo > 0 ? Math.round(lineNo) : i + 1,
@@ -76,22 +98,22 @@ export default withAuth('edit:supplier_invoices', async (req: NextApiRequest, re
       line_total_ex_gst: lineTotal,
       gst_amount:        numOrNull(raw.gst_amount),
       tax_code:          taxCode,
+      account_uid:       accountUid,
+      account_code:      accountUid ? trimOrNull(raw.account_code) : null,
+      account_name:      accountUid ? trimOrNull(raw.account_name) : null,
     })
   }
 
   const c = sb()
 
-  // Confirm invoice exists before mutating lines
   const { data: inv, error: invErr } = await c.from('ap_invoices').select('id, status').eq('id', id).maybeSingle()
   if (invErr) return res.status(500).json({ error: invErr.message })
   if (!inv) return res.status(404).json({ error: 'Invoice not found' })
 
-  // Block editing once posted to MYOB
   if (inv.status === 'posted') {
     return res.status(409).json({ error: 'Cannot edit lines on a posted invoice' })
   }
 
-  // Replace: delete then insert
   const { error: delErr } = await c.from('ap_invoice_lines').delete().eq('invoice_id', id)
   if (delErr) return res.status(500).json({ error: 'delete failed: ' + delErr.message })
 
@@ -100,14 +122,12 @@ export default withAuth('edit:supplier_invoices', async (req: NextApiRequest, re
     if (insErr) return res.status(500).json({ error: 'insert failed: ' + insErr.message })
   }
 
-  // Re-run triage based on new line totals
   try {
     await applyTriageAndResolve(id)
   } catch (e: any) {
     console.error('Re-triage after lines replace failed:', e?.message)
   }
 
-  // Return new state
   const { data: lines } = await c
     .from('ap_invoice_lines')
     .select('*')

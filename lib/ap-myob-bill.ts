@@ -9,13 +9,14 @@
 //      from Supabase, runs a MYOB-side duplicate pre-flight check, builds the
 //      bill body, POSTs to MYOB, attaches the PDF, updates the invoice row.
 //
-// MYOB duplicate check:
-//   Before posting, query MYOB for existing bills with the same
-//   SupplierInvoiceNumber + Supplier UID. If any exist, refuse to post and
-//   return an error referencing the existing bill UID. Triage's local
-//   duplicate check only catches Supabase-side duplicates — the user can
-//   have entered the same bill manually in MYOB which our DB doesn't know
-//   about, so we double-check against MYOB at approve time.
+// Per-line account override: if a line has its own `account_uid`, that wins
+// over the invoice-level `resolved_account_uid`. Lines without a per-line
+// account fall back to the invoice default (the ap_supplier_account_map
+// preset, or the MYOB supplier card's default expense account).
+//
+// MYOB duplicate check: Before posting, query MYOB for existing bills with
+// the same SupplierInvoiceNumber + Supplier UID. Catches manually-entered
+// bills that our local Supabase duplicate detection can't see.
 //
 // Bill body shape (IsTaxInclusive=false, amounts ex-GST):
 //   POST /accountright/{cf_id}/Purchase/Bill/Service
@@ -27,8 +28,7 @@
 //     Subtotal, TotalTax, TotalAmount,
 //   }
 //
-// Field naming gotchas (every one of these silently fails — MYOB returns
-// 201/200, the field gets ignored, no error):
+// Field naming gotchas (every one of these silently fails):
 //   - Line tax field is `TaxCode` not `Tax`
 //   - **Line amount field is `Total` not `Amount`** — matches CData column
 //   - FreightTaxCode is required even when FreightAmount is 0
@@ -40,15 +40,7 @@
 //
 // Attachment body shape (per MYOB official .NET SDK BillAttachmentWrapper):
 //   POST /accountright/{cf_id}/Purchase/Bill/Service/{billUid}/Attachment
-//   {
-//     "Attachments": [
-//       { "OriginalFileName": "Repco.pdf", "FileBase64Content": "<base64>" }
-//     ]
-//   }
-// **The body is a `BillAttachmentWrapper` containing an `Attachments` array
-// of `BillAttachmentData`.** Sending a flat `BillAttachmentData` object
-// returns 200 with empty Attachments[] (MYOB treats it as a wrapper with
-// zero attachments and saves nothing).
+//   { "Attachments": [ { "OriginalFileName": ..., "FileBase64Content": ... } ] }
 
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
 import { getConnection, myobFetch, MyobConnection } from './myob'
@@ -148,13 +140,6 @@ interface ExistingBillMatch {
   totalAmount: number | null
 }
 
-/**
- * Query MYOB for existing Service Bills (and Item Bills) matching the given
- * SupplierInvoiceNumber + Supplier UID. Returns the first match or null.
- *
- * We filter only on SupplierInvoiceNumber (OData on nested Supplier/UID can
- * be flaky on MYOB) and check the supplier UID in memory.
- */
 async function findExistingMyobBill(
   connId: string,
   cfId: string,
@@ -164,7 +149,6 @@ async function findExistingMyobBill(
   const escaped = String(supplierInvoiceNumber).replace(/'/g, "''")
   const filter = `SupplierInvoiceNumber eq '${escaped}'`
 
-  // Check both Service and Item bills (manual entries may use either form).
   const paths = [
     `/accountright/${cfId}/Purchase/Bill/Service`,
     `/accountright/${cfId}/Purchase/Bill/Item`,
@@ -174,7 +158,7 @@ async function findExistingMyobBill(
     const result = await myobFetch(connId, path, {
       query: { '$filter': filter, '$top': 10 },
     })
-    if (result.status !== 200) continue   // tolerate a missing endpoint
+    if (result.status !== 200) continue
 
     const items: any[] = Array.isArray(result.data?.Items) ? result.data.Items : []
     const match = items.find(b => b?.Supplier?.UID === supplierUid)
@@ -239,7 +223,6 @@ export async function createServiceBill(
   if (inv.status === 'rejected') throw new Error('Invoice has been rejected')
   if (inv.triage_status === 'red') throw new Error('Invoice triage is RED — cannot post')
   if (!inv.resolved_supplier_uid)  throw new Error('No MYOB supplier resolved')
-  if (!inv.resolved_account_uid)   throw new Error('No MYOB default account resolved')
   if (!inv.invoice_date)           throw new Error('Invoice date is required to post')
   if (!inv.invoice_number)         throw new Error('Supplier invoice number is required to post')
 
@@ -251,6 +234,19 @@ export async function createServiceBill(
   if (linesErr) throw new Error(`Failed to load lines: ${linesErr.message}`)
   if (!lines || lines.length === 0) throw new Error('Invoice has no line items')
 
+  // Per-line accounts: each line must have an account_uid OR the invoice
+  // must have a fallback resolved_account_uid. Validate up front so we
+  // give a helpful error before touching MYOB.
+  const linesMissingAccount = lines.filter((l: any) =>
+    !l.account_uid && !inv.resolved_account_uid
+  )
+  if (linesMissingAccount.length > 0) {
+    const which = linesMissingAccount.map((l: any) => `#${l.line_no}`).join(', ')
+    throw new Error(
+      `Lines ${which} have no per-line account and no invoice-level default account is set — pick one or set a default.`
+    )
+  }
+
   const companyFile = (inv.myob_company_file || 'VPS') as CompanyFileLabel
   const { gstUid, freUid } = await ensureTaxCodes(companyFile)
 
@@ -259,8 +255,6 @@ export async function createServiceBill(
   if (!conn.company_file_id) throw new Error(`MYOB connection ${companyFile} has no company file selected`)
 
   // ── Pre-flight: MYOB-side duplicate check ──
-  // Catches manually-entered bills in MYOB that our local Supabase duplicate
-  // detection can't see. Throws BEFORE we POST anything.
   const existingMyob = await findExistingMyobBill(
     conn.id,
     conn.company_file_id,
@@ -295,10 +289,13 @@ export async function createServiceBill(
   const billLines: ServiceBillLineBody[] = lines.map((l: any) => {
     const description = [l.part_number, l.description].filter(Boolean).join(' — ').substring(0, 255)
     const lineTotal = round2(Number(l.line_total_ex_gst || 0))
+    // Per-line account wins over invoice-level fallback. Validation above
+    // guarantees one of them is set.
+    const accountUid: string = l.account_uid || inv.resolved_account_uid
     return {
       Type: 'Transaction',
       Description: description || 'AP line',
-      Account: { UID: inv.resolved_account_uid },
+      Account: { UID: accountUid },
       Total: lineTotal,
       TaxCode: { UID: taxUidFor(l.tax_code) },
     }
@@ -459,10 +456,6 @@ async function attachPdfToBill(opts: {
     .replace(/[^\x20-\x7E]/g, '_')
     .substring(0, 100)
 
-  // Body shape per MYOB official .NET SDK BillAttachmentWrapper:
-  //   { "Attachments": [ { OriginalFileName, FileBase64Content } ] }
-  // The wrapper wraps a list — sending a flat object returns 200 with empty
-  // Attachments[] (MYOB parses no Attachments and saves nothing).
   const path = `/accountright/${opts.cfId}/Purchase/Bill/Service/${opts.billUid}/Attachment`
   const result = await myobFetch(opts.connId, path, {
     method: 'POST',
@@ -481,8 +474,6 @@ async function attachPdfToBill(opts: {
     throw new Error(`MYOB rejected attachment (HTTP ${result.status}): ${extractMyobError(result)}`)
   }
 
-  // Sanity check — MYOB returns Attachments[] in the response. If it's empty
-  // after a "successful" 200, the body shape was probably wrong.
   const attachmentsArr = result.data?.Attachments
   if (Array.isArray(attachmentsArr) && attachmentsArr.length === 0) {
     throw new Error('MYOB returned 200 but Attachments[] is empty — body shape may be wrong')
