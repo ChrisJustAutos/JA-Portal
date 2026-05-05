@@ -485,6 +485,7 @@ function MyobMappingSection({
   onPresetSaved: () => Promise<void>
 }) {
   const isMapped = !!invoice.resolved_supplier_uid
+  const accountMissing = isMapped && !invoice.resolved_account_uid
 
   return (
     <div style={{background:T.bg2, border:`1px solid ${T.border}`, borderRadius:10, padding:'14px 16px'}}>
@@ -503,10 +504,18 @@ function MyobMappingSection({
       </div>
 
       {!presetOpen && isMapped && (
-        <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:'8px 16px'}}>
-          <Field label="Supplier"        value={invoice.resolved_supplier_name}/>
-          <Field label="Default account" value={invoice.resolved_account_code} mono/>
-        </div>
+        <>
+          <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:'8px 16px'}}>
+            <Field label="Supplier"        value={invoice.resolved_supplier_name}/>
+            <Field label="Default account" value={invoice.resolved_account_code} mono/>
+          </div>
+          {accountMissing && (
+            <div style={{marginTop:10, fontSize:11, color:T.amber}}>
+              Supplier auto-matched but no default account on the MYOB supplier card.
+              Click "Change…" to pick the account and save the preset.
+            </div>
+          )}
+        </>
       )}
 
       {!presetOpen && !isMapped && (

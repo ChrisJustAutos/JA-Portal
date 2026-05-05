@@ -7,6 +7,8 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
 import type { ExtractedAPInvoice, ExtractedAPLineItem } from './ap-extraction'
 import { attemptAutoLink, writeJobLink } from './ap-job-link'
+import { tryAutoMatchSupplier } from './ap-myob-automatch'
+import type { CompanyFileLabel } from './ap-myob-lookup'
 
 let _sb: SupabaseClient | null = null
 function sb(): SupabaseClient {
@@ -254,7 +256,8 @@ export interface TriageOutcome {
 
 export interface TriageInput {
   extracted: ExtractedAPInvoice
-  supplier: SupplierMatch | null
+  hasResolvedSupplier: boolean
+  hasResolvedAccount: boolean
   exactDuplicateOf: string | null         // same vendor + same invoice_number
   amountDuplicates: string[]              // same vendor + same total within window
   poCheckStatus: 'matched' | 'unmatched' | 'no-po-on-invoice'
@@ -262,10 +265,11 @@ export interface TriageInput {
 
 /**
  * Triage philosophy:
- * - 🟢 GREEN: parsed cleanly + supplier preset exists + totals reconcile +
- *             (PO matched a job OR no PO needed) + no duplicates
- * - 🟡 YELLOW: needs human eyes — new supplier, unmatched PO, totals off,
- *              low confidence, missing date, possible amount duplicate.
+ * - 🟢 GREEN: parsed cleanly + supplier+account resolved + totals reconcile
+ *             + (PO matched a job OR no PO needed) + no duplicates
+ * - 🟡 YELLOW: needs human eyes — new supplier, missing default account,
+ *              unmatched PO, totals off, low confidence, missing date,
+ *              possible amount duplicate.
  * - 🔴 RED: cannot post — missing invoice number, missing total, parser
  *           unsure, exact duplicate, no line items.
  */
@@ -285,7 +289,15 @@ export function triageInvoice(input: TriageInput): TriageOutcome {
   }
 
   // YELLOW conditions
-  if (!input.supplier) reasons.push('YELLOW:supplier-not-mapped')
+  // Supplier mapping — flag whichever of supplier/account isn't resolved.
+  // (If neither, surface only the supplier flag; account picks up automatically
+  // once a supplier is chosen.)
+  if (!input.hasResolvedSupplier) {
+    reasons.push('YELLOW:supplier-not-mapped')
+  } else if (!input.hasResolvedAccount) {
+    reasons.push('YELLOW:account-not-mapped')
+  }
+
   if (e.parseConfidence === 'medium') reasons.push('YELLOW:medium-parse-confidence')
   if (!e.invoiceDate) reasons.push('YELLOW:missing-invoice-date')
 
@@ -391,6 +403,19 @@ export async function findAmountDuplicates(
 
 // ── Apply triage + supplier resolution + auto job link ──────────────────
 
+/**
+ * Resolves an invoice's supplier+account mapping (preset → MYOB auto-match
+ * fallback), runs PO→job auto-link, runs triage, and writes everything back.
+ *
+ * Resolution order:
+ *   1. ap_supplier_account_map preset (durable user choice)  — supplier+account
+ *   2. MYOB auto-match by ABN, then single-name match        — supplier (and
+ *      account if the MYOB supplier card has a default expense account)
+ *   3. Neither — leave nulls, triage will flag YELLOW:supplier-not-mapped
+ *
+ * MYOB auto-match failures (network, expired token, etc.) are logged and
+ * skipped — they must not break the parse pipeline.
+ */
 export async function applyTriageAndResolve(invoiceId: string): Promise<void> {
   const c = sb()
   const { data: inv, error } = await c
@@ -438,7 +463,42 @@ export async function applyTriageAndResolve(invoiceId: string): Promise<void> {
     parseConfidence: (inv.parse_confidence || 'medium') as 'high' | 'medium' | 'low',
   }
 
-  const supplier = await findSupplierMatch(extracted.vendor.name, extracted.vendor.abn)
+  // ── Step 1: preset lookup ──
+  const preset = await findSupplierMatch(extracted.vendor.name, extracted.vendor.abn)
+
+  let resolvedSupplierUid:  string | null = preset?.myobSupplierUid    || null
+  let resolvedSupplierName: string | null = preset?.myobSupplierName   || null
+  let resolvedAccountUid:   string | null = preset?.defaultAccountUid  || null
+  let resolvedAccountCode:  string | null = preset?.defaultAccountCode || null
+
+  const companyFile: CompanyFileLabel =
+    (preset?.myobCompanyFile as CompanyFileLabel | undefined) ||
+    ((inv.myob_company_file as CompanyFileLabel | null) || 'VPS')
+
+  // ── Step 2: MYOB auto-match if no preset ──
+  if (!resolvedSupplierUid) {
+    try {
+      const auto = await tryAutoMatchSupplier(
+        extracted.vendor.name,
+        extracted.vendor.abn,
+        companyFile,
+      )
+      if (auto) {
+        resolvedSupplierUid  = auto.supplier.uid
+        resolvedSupplierName = auto.supplier.name
+        if (auto.supplier.defaultExpenseAccount) {
+          resolvedAccountUid  = auto.supplier.defaultExpenseAccount.uid
+          resolvedAccountCode = auto.supplier.defaultExpenseAccount.displayId
+        }
+      }
+    } catch (e: any) {
+      // MYOB unreachable / token expired / etc — log and continue. The
+      // invoice still needs to land in the queue with a YELLOW flag so
+      // the user can pick a supplier manually.
+      console.error(`auto-match failed for invoice ${invoiceId}:`, e?.message)
+    }
+  }
+
   const exactDuplicateOf = await findExactDuplicate(
     extracted.vendor.name,
     extracted.invoiceNumber,
@@ -467,7 +527,9 @@ export async function applyTriageAndResolve(invoiceId: string): Promise<void> {
   }
 
   const triage = triageInvoice({
-    extracted, supplier,
+    extracted,
+    hasResolvedSupplier: !!resolvedSupplierUid,
+    hasResolvedAccount:  !!resolvedAccountUid,
     exactDuplicateOf, amountDuplicates,
     poCheckStatus,
   })
@@ -475,11 +537,11 @@ export async function applyTriageAndResolve(invoiceId: string): Promise<void> {
   await c
     .from('ap_invoices')
     .update({
-      resolved_supplier_uid:  supplier?.myobSupplierUid || null,
-      resolved_supplier_name: supplier?.myobSupplierName || null,
-      resolved_account_uid:   supplier?.defaultAccountUid || null,
-      resolved_account_code:  supplier?.defaultAccountCode || null,
-      myob_company_file:      supplier?.myobCompanyFile || 'VPS',
+      resolved_supplier_uid:  resolvedSupplierUid,
+      resolved_supplier_name: resolvedSupplierName,
+      resolved_account_uid:   resolvedAccountUid,
+      resolved_account_code:  resolvedAccountCode,
+      myob_company_file:      companyFile,
       triage_status:          triage.triageStatus,
       triage_reasons:         triage.triageReasons,
       status:                 'pending_review',

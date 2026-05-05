@@ -1,6 +1,6 @@
 // lib/ap-myob-lookup.ts
 // MYOB supplier + chart-of-account search wrappers used by the AP supplier
-// preset picker.
+// preset picker AND the auto-match flow.
 //
 // Built on top of lib/myob.ts:
 //   - getConnection(label)  returns the active VPS/JAWS connection row
@@ -10,6 +10,8 @@
 //   - Substring filter is `substringof('needle', haystack)` (not `contains`)
 //   - String literals use single quotes; quotes inside strings double-up
 //   - Boolean operators are `and` / `or` (lowercase)
+//   - BuyingDetails is returned inline on /Contact/Supplier list calls — no
+//     $expand needed. ExpenseAccount lives there as a nested ref object.
 
 import { getConnection, myobFetch, MyobConnection } from './myob'
 
@@ -17,12 +19,21 @@ export type CompanyFileLabel = 'VPS' | 'JAWS'
 
 // ── Types returned to callers ───────────────────────────────────────────
 
+export interface MyobAccountRef {
+  uid: string
+  displayId: string
+  name: string
+}
+
 export interface MyobSupplierLite {
   uid: string
   displayId: string | null      // typically a sequence like "*200"
   name: string                  // CompanyName or fallback
   abn: string | null
   isIndividual: boolean
+  // Default purchase/expense account on the MYOB supplier card. Used by
+  // the auto-match flow to pre-fill the AP invoice's resolved_account_*.
+  defaultExpenseAccount: MyobAccountRef | null
 }
 
 export interface MyobAccountLite {
@@ -114,12 +125,23 @@ function mapSupplier(it: any): MyobSupplierLite {
     it?.SellingDetails?.ABN ||
     it?.ABN ||
     null
+
+  const expenseAcc = it?.BuyingDetails?.ExpenseAccount
+  const defaultExpenseAccount: MyobAccountRef | null = expenseAcc?.UID
+    ? {
+        uid: expenseAcc.UID,
+        displayId: expenseAcc.DisplayID || '',
+        name: expenseAcc.Name || '',
+      }
+    : null
+
   return {
     uid: it.UID,
     displayId: it.DisplayID || null,
     name,
     abn: abn ? String(abn).replace(/\s/g, '') : null,
     isIndividual: it.IsIndividual === true,
+    defaultExpenseAccount,
   }
 }
 
