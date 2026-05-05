@@ -16,6 +16,13 @@
 // AC didn't have a profile. AC is the source of truth for contact details;
 // Monday is the lead-pipeline view.
 //
+// Contact-attempts counter (5 May 2026): the counter column ID is no
+// longer hardcoded — we resolve it per-board at runtime by querying the
+// board's columns and matching on title. James and Tyronne had different
+// IDs to the original 3 boards, which caused 'invalid column id' errors
+// on every update. Now self-heals; the bump is best-effort and never
+// fails the note posting.
+//
 // All Monday API calls go through a single fetch helper that uses the
 // MONDAY_API_TOKEN env var. Don't import this from a request-scoped handler
 // without setting MONDAY_API_TOKEN — it'll throw on first call.
@@ -44,8 +51,11 @@ export const REP_BOARDS: Record<string, { boardId: string; repName: string }> = 
 // All board IDs we'll search when finding existing items, regardless of rep.
 export const ALL_QUOTE_BOARD_IDS = Object.values(REP_BOARDS).map(b => b.boardId)
 
-// Column IDs on the Quote Channel boards (consistent across all 5 boards
-// since they were forked from the same template).
+// Column IDs on the Quote Channel boards.
+// Most are consistent across all 5 boards (forked from the same template).
+// EXCEPTION: CONTACT_ATTEMPTS — James and Tyronne have different IDs, so we
+// resolve per-board at runtime via getContactAttemptsColumnId() instead of
+// using a hardcoded value here.
 export const COLUMNS = {
   PHONE:           'text_mkzbenay',
   EMAIL:           'text_mkzbpqje',
@@ -54,7 +64,6 @@ export const COLUMNS = {
   QUOTE_VALUE:     'numeric_mkzcbhz2',
   DATE:            'date4',
   STATUS:          'status',
-  CONTACT_ATTEMPTS:'numeric_mm12czp1',
   QUALIFYING_STAGE:'text_mm1jn5v0',
   OWNER:           'person',
 }
@@ -142,6 +151,54 @@ export async function mondayQuery<T = any>(query: string, variables?: Record<str
 // Exported for reuse by lib/monday-update.ts (quote-pipeline phone search).
 export function escGqlString(s: string): string {
   return JSON.stringify(s)
+}
+
+// ── Per-board column ID resolution ───────────────────────────────────────
+//
+// The "Contact Attempts" counter column has different IDs on different
+// boards (James and Tyronne were diverged at creation time and never
+// reconciled). Rather than hardcoding, we look up the ID per board at
+// runtime via the board's column metadata.
+//
+// Cache scope: module-level. Persists across warm Vercel function
+// invocations; resets on cold start. Worst case = 5 column-list queries
+// per cold start. Cache stores `null` for boards where the column doesn't
+// exist so we don't repeatedly probe.
+
+const contactAttemptsColIdCache = new Map<string, string | null>()
+
+/**
+ * Find the contact-attempts counter column ID on the given board.
+ * Matches any numeric column whose title contains "attempt" (case-insensitive).
+ * Returns null if no such column exists OR the lookup itself fails — the
+ * caller should treat null as "skip the bump", not as an error.
+ */
+async function getContactAttemptsColumnId(boardId: string): Promise<string | null> {
+  if (contactAttemptsColIdCache.has(boardId)) {
+    return contactAttemptsColIdCache.get(boardId) ?? null
+  }
+  try {
+    const data = await mondayQuery<{ boards: Array<{ columns: Array<{ id: string; title: string; type: string }> }> }>(
+      `query GetCols($boardId: [ID!]) {
+        boards(ids: $boardId) {
+          columns { id title type }
+        }
+      }`,
+      { boardId: [boardId] },
+    )
+    const cols = data.boards?.[0]?.columns || []
+    const match = cols.find(c =>
+      c.type === 'numbers' && /attempt/i.test(c.title || '')
+    )
+    const resolved = match?.id || null
+    contactAttemptsColIdCache.set(boardId, resolved)
+    return resolved
+  } catch (e: any) {
+    // Cache the miss so we don't retry per-job. Will recover next cold start.
+    console.warn(`getContactAttemptsColumnId(${boardId}) failed: ${e?.message || e}`)
+    contactAttemptsColIdCache.set(boardId, null)
+    return null
+  }
 }
 
 // ── Lookup: find an existing item across all 5 boards ────────────────────
@@ -279,12 +336,25 @@ async function searchBoardByNameFuzzy(boardId: string, normalisedName: string): 
 }
 
 // ── Update existing item ─────────────────────────────────────────────────
+//
+// Two-step:
+//   1. Post the follow-up note as an Update on the item (always works —
+//      column-agnostic mutation).
+//   2. Bump the contact-attempts counter (best-effort — wrapped in
+//      try/catch and tolerant of missing/different column IDs per board).
+//
+// If step 2 fails for any reason — column doesn't exist on this board,
+// network blip, anything — we log a warning and return successfully. The
+// note (the actual deliverable) has already been posted. We do not throw
+// on counter failures because they used to take down the whole follow-up
+// job and create false-positive Monday errors in the job log.
 
 export async function updateExistingItem(
   itemId: string,
   boardId: string,
   noteBody: string,
 ): Promise<void> {
+  // Step 1: Post the note. THIS is the primary deliverable.
   await mondayQuery(
     `mutation PostUpdate($itemId: ID!, $body: String!) {
       create_update(item_id: $itemId, body: $body) { id }
@@ -292,29 +362,41 @@ export async function updateExistingItem(
     { itemId, body: noteBody },
   )
 
-  const cur = await mondayQuery<{ items: any[] }>(
-    `query GetAttempts($itemId: [ID!]) {
-      items(ids: $itemId) {
-        column_values(ids: ["${COLUMNS.CONTACT_ATTEMPTS}"]) { text }
-      }
-    }`,
-    { itemId: [itemId] },
-  )
-  const curText = cur.items?.[0]?.column_values?.[0]?.text || ''
-  const curNum = parseInt(curText, 10) || 0
-  const next = curNum + 1
+  // Step 2: Best-effort counter bump.
+  try {
+    const colId = await getContactAttemptsColumnId(boardId)
+    if (!colId) {
+      // Column doesn't exist on this board — skip silently. Not an error.
+      return
+    }
 
-  await mondayQuery(
-    `mutation BumpAttempts($itemId: ID!, $boardId: ID!, $value: String!) {
-      change_simple_column_value(
-        item_id: $itemId
-        board_id: $boardId
-        column_id: "${COLUMNS.CONTACT_ATTEMPTS}"
-        value: $value
-      ) { id }
-    }`,
-    { itemId, boardId, value: String(next) },
-  )
+    const cur = await mondayQuery<{ items: any[] }>(
+      `query GetAttempts($itemId: [ID!]) {
+        items(ids: $itemId) {
+          column_values(ids: ["${colId}"]) { text }
+        }
+      }`,
+      { itemId: [itemId] },
+    )
+    const curText = cur.items?.[0]?.column_values?.[0]?.text || ''
+    const curNum = parseInt(curText, 10) || 0
+    const next = curNum + 1
+
+    await mondayQuery(
+      `mutation BumpAttempts($itemId: ID!, $boardId: ID!, $value: String!) {
+        change_simple_column_value(
+          item_id: $itemId
+          board_id: $boardId
+          column_id: "${colId}"
+          value: $value
+        ) { id }
+      }`,
+      { itemId, boardId, value: String(next) },
+    )
+  } catch (e: any) {
+    // Don't fail the whole call — note was already posted in Step 1.
+    console.warn(`Contact attempts bump failed on board ${boardId}, item ${itemId}: ${e?.message || e}`)
+  }
 }
 
 // ── Create new item ──────────────────────────────────────────────────────
