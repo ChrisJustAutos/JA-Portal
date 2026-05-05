@@ -170,10 +170,10 @@ async function checkMonday(): Promise<CheckResult> {
 // ActiveCampaign — /users/me confirms API key is valid and AC is up.
 async function checkActiveCampaign(): Promise<CheckResult> {
   try {
-    const apiUrl = process.env.AC_API_URL
-    const apiKey = process.env.AC_API_KEY
+    const apiUrl = process.env.ACTIVECAMPAIGN_API_URL
+    const apiKey = process.env.ACTIVECAMPAIGN_API_KEY
     if (!apiUrl || !apiKey) {
-      return { status: 'red', error: 'AC_API_URL or AC_API_KEY not set in environment' }
+      return { status: 'red', error: 'ACTIVECAMPAIGN_API_URL or ACTIVECAMPAIGN_API_KEY not set in environment' }
     }
     const start = Date.now()
     const url = `${apiUrl.replace(/\/$/, '')}/api/3/users/me`

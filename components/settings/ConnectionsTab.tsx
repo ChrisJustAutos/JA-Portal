@@ -236,14 +236,22 @@ function CategorySection({ category, rows }: { category: string; rows: Integrati
                   )}
                 </td>
                 <td style={{...tdStyle(),textAlign:'right',whiteSpace:'nowrap'}}>
-                  {row.fix_url ? (
-                    <a href={row.fix_url}
-                       target={row.fix_url.startsWith('http') ? '_blank' : undefined}
-                       rel="noopener noreferrer"
-                       style={{fontSize:11,color:T.blue,textDecoration:'none'}}>
-                      Fix →
-                    </a>
-                  ) : (
+                  {row.fix_url ? (() => {
+                    const needsFix = row.status === 'red' || row.status === 'yellow'
+                    return (
+                      <a href={row.fix_url}
+                         target={row.fix_url.startsWith('http') ? '_blank' : undefined}
+                         rel="noopener noreferrer"
+                         style={{
+                           fontSize:11,
+                           color: needsFix ? T.red : T.text2,
+                           textDecoration:'none',
+                           fontWeight: needsFix ? 600 : 400,
+                         }}>
+                        {needsFix ? 'Fix →' : 'Open →'}
+                      </a>
+                    )
+                  })() : (
                     <span style={{fontSize:11,color:T.text3}}>—</span>
                   )}
                 </td>
