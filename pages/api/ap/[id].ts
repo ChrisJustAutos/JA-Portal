@@ -1,14 +1,15 @@
 // pages/api/ap/[id].ts
 // AP invoice detail endpoint.
 //   GET    /api/ap/{id}         → full invoice + lines + signed PDF URL
-//   PATCH  /api/ap/{id}         → update header fields (status, triage notes,
-//                                  resolved supplier/account override, etc.)
+//                                  + linkedJob (if linked_job_number is set)
+//   PATCH  /api/ap/{id}         → update header fields
 
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
 import { withAuth } from '../../../lib/authServer'
 import { getInvoicePdfSignedUrl, applyTriageAndResolve } from '../../../lib/ap-supabase'
 import { roleHasPermission } from '../../../lib/permissions'
+import { getJobByNumber } from '../../../lib/ap-job-link'
 
 let _sb: SupabaseClient | null = null
 function sb(): SupabaseClient {
@@ -21,7 +22,6 @@ function sb(): SupabaseClient {
 }
 
 const PATCHABLE_FIELDS = new Set([
-  // User-editable header fields after parsing
   'vendor_name_parsed',
   'invoice_number',
   'invoice_date',
@@ -31,13 +31,11 @@ const PATCHABLE_FIELDS = new Set([
   'gst_amount',
   'total_inc_gst',
   'notes',
-  // Resolved-supplier overrides (when user picks/changes)
   'resolved_supplier_uid',
   'resolved_supplier_name',
   'resolved_account_uid',
   'resolved_account_code',
   'myob_company_file',
-  // Status transitions (subset — approve/reject endpoints handle the full flow)
   'status',
   'rejection_reason',
 ])
@@ -50,9 +48,6 @@ export default withAuth(null, async (req: NextApiRequest, res: NextApiResponse, 
   if (req.method === 'PATCH') return handlePatch(id, req, res, user)
   return res.status(405).json({ error: 'Method not allowed' })
 })
-
-// withAuth(null) checks login but not permission — we gate per-method below
-// because GET needs view:* and PATCH needs edit:*
 
 async function handleGet(id: string, res: NextApiResponse) {
   const c = sb()
@@ -76,10 +71,21 @@ async function handleGet(id: string, res: NextApiResponse) {
     }
   }
 
+  // Fetch linked job details if present
+  let linkedJob: any = null
+  if (inv.linked_job_number) {
+    try {
+      linkedJob = await getJobByNumber(inv.linked_job_number)
+    } catch (e: any) {
+      console.error(`getJobByNumber failed for ${inv.linked_job_number}:`, e?.message)
+    }
+  }
+
   return res.status(200).json({
     invoice: inv,
     lines: lines || [],
     pdfUrl,
+    linkedJob,
   })
 }
 
@@ -101,10 +107,11 @@ async function handlePatch(id: string, req: NextApiRequest, res: NextApiResponse
   const { error } = await c.from('ap_invoices').update(update).eq('id', id)
   if (error) return res.status(500).json({ error: error.message })
 
-  // Re-run triage if any field that affects it was changed
+  // Re-run triage if any field that affects it was changed (including po_number,
+  // since it drives PO match)
   const triageRelevant = [
     'vendor_name_parsed','invoice_number','total_inc_gst','subtotal_ex_gst',
-    'gst_amount','resolved_supplier_uid','resolved_account_uid',
+    'gst_amount','resolved_supplier_uid','resolved_account_uid','po_number',
   ]
   if (triageRelevant.some(f => f in update)) {
     try { await applyTriageAndResolve(id) } catch (e: any) {
@@ -112,6 +119,5 @@ async function handlePatch(id: string, req: NextApiRequest, res: NextApiResponse
     }
   }
 
-  // Return the updated row (with lines + pdf URL) so the UI can refresh
   return handleGet(id, res)
 }

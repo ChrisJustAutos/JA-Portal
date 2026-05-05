@@ -6,6 +6,7 @@
 
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
 import type { ExtractedAPInvoice, ExtractedAPLineItem } from './ap-extraction'
+import { attemptAutoLink, writeJobLink } from './ap-job-link'
 
 let _sb: SupabaseClient | null = null
 function sb(): SupabaseClient {
@@ -29,20 +30,18 @@ export interface InvoiceInsertInput {
   emailSubject?: string | null
   pdfFilename: string
   extracted: ExtractedAPInvoice
-  rawExtraction: any                 // store the raw model output for debugging
+  rawExtraction: any
 }
 
 export interface InsertedInvoice {
   id: string
-  pdfStoragePath: string             // caller still needs to upload the bytes
+  pdfStoragePath: string
 }
 
 export async function insertInvoiceWithLines(input: InvoiceInsertInput): Promise<InsertedInvoice> {
   const c = sb()
   const e = input.extracted
 
-  // Storage path is keyed off the new id — generate first via uuid.
-  // We let Postgres assign the id by inserting and reading back the row.
   const { data: row, error: err } = await c
     .from('ap_invoices')
     .insert({
@@ -51,7 +50,7 @@ export async function insertInvoiceWithLines(input: InvoiceInsertInput): Promise
       email_from:              input.emailFrom || null,
       email_subject:           input.emailSubject || null,
       pdf_filename:            input.pdfFilename,
-      pdf_storage_path:        null,                  // set after upload
+      pdf_storage_path:        null,
       vendor_name_parsed:      e.vendor.name,
       vendor_abn:              e.vendor.abn,
       invoice_number:          e.invoiceNumber,
@@ -77,7 +76,6 @@ export async function insertInvoiceWithLines(input: InvoiceInsertInput): Promise
   const invoiceId = row.id as string
   const pdfStoragePath = `${invoiceId}.pdf`
 
-  // Insert line items
   if (e.lineItems.length > 0) {
     const linesPayload = e.lineItems.map(li => ({
       invoice_id:        invoiceId,
@@ -93,13 +91,11 @@ export async function insertInvoiceWithLines(input: InvoiceInsertInput): Promise
     }))
     const { error: linesErr } = await c.from('ap_invoice_lines').insert(linesPayload)
     if (linesErr) {
-      // Roll back the header insert so we don't leave orphans
       await c.from('ap_invoices').delete().eq('id', invoiceId)
       throw new Error(`ap_invoice_lines insert failed: ${linesErr.message}`)
     }
   }
 
-  // Set pdf_storage_path now that we know the path; caller uploads bytes after.
   await c.from('ap_invoices').update({ pdf_storage_path: pdfStoragePath }).eq('id', invoiceId)
 
   return { id: invoiceId, pdfStoragePath }
@@ -144,15 +140,6 @@ export interface SupplierMatch {
   autoApprove: boolean
 }
 
-/**
- * Find the supplier-to-account mapping for a parsed vendor name.
- * Matches via case-insensitive substring against supplier_match_pattern,
- * preferring the longest pattern (so "BURSON AUTO PARTS" beats "AUTO" if
- * both are configured).
- *
- * Returns null when no preset exists — caller should leave the invoice
- * unresolved and surface yellow status with "supplier preset missing".
- */
 export async function findSupplierMatch(
   vendorNameParsed: string | null,
   abn: string | null,
@@ -160,7 +147,6 @@ export async function findSupplierMatch(
   if (!vendorNameParsed && !abn) return null
   const c = sb()
 
-  // ABN match wins if we have one
   if (abn) {
     const { data } = await c
       .from('ap_supplier_account_map')
@@ -171,15 +157,13 @@ export async function findSupplierMatch(
     if (data) return mapRowToSupplier(data)
   }
 
-  // Otherwise try pattern match (case-insensitive, longest pattern wins)
   if (vendorNameParsed) {
     const upperVendor = vendorNameParsed.toUpperCase()
     const { data: rows } = await c
       .from('ap_supplier_account_map')
       .select('*')
-      .order('supplier_match_pattern', { ascending: false })  // not perfect but rough longest-first
+      .order('supplier_match_pattern', { ascending: false })
     if (rows) {
-      // Filter to substring matches, then sort by pattern length desc
       const matches = (rows as any[])
         .filter(r => upperVendor.includes(r.supplier_match_pattern.toUpperCase()))
         .sort((a, b) => b.supplier_match_pattern.length - a.supplier_match_pattern.length)
@@ -212,29 +196,27 @@ export interface TriageOutcome {
   triageReasons: string[]
 }
 
-/**
- * Apply triage rules to a parsed invoice + supplier match outcome.
- * Returns the colour and human-readable reason codes.
- *
- * Triage philosophy:
- * - 🟢 GREEN: parsed cleanly + supplier preset exists + totals reconcile
- * - 🟡 YELLOW: connected to MYOB-actionable state but needs human eyes
- *              (new supplier, totals slightly off, low confidence parse)
- * - 🔴 RED:    cannot post without intervention
- *              (missing invoice number, missing total, parser unsure,
- *              duplicate of existing invoice)
- */
 export interface TriageInput {
   extracted: ExtractedAPInvoice
   supplier: SupplierMatch | null
-  duplicateOf: string | null    // existing invoice id with same vendor+number, or null
+  duplicateOf: string | null
+  poCheckStatus: 'matched' | 'unmatched' | 'no-po-on-invoice'
 }
 
+/**
+ * Triage philosophy:
+ * - 🟢 GREEN: parsed cleanly + supplier preset exists + totals reconcile +
+ *             (PO matched a job OR no PO needed)
+ * - 🟡 YELLOW: needs human eyes — new supplier, unmatched PO, totals off,
+ *              low confidence, missing date.
+ * - 🔴 RED: cannot post — missing invoice number, missing total, parser
+ *           unsure, duplicate, no line items.
+ */
 export function triageInvoice(input: TriageInput): TriageOutcome {
   const reasons: string[] = []
   const e = input.extracted
 
-  // ── RED conditions ──
+  // RED conditions
   if (!e.invoiceNumber) reasons.push('RED:missing-invoice-number')
   if (e.totals.totalIncGst === null) reasons.push('RED:missing-total')
   if (e.parseConfidence === 'low') reasons.push('RED:low-parse-confidence')
@@ -245,12 +227,17 @@ export function triageInvoice(input: TriageInput): TriageOutcome {
     return { triageStatus: 'red', triageReasons: reasons }
   }
 
-  // ── YELLOW conditions ──
+  // YELLOW conditions
   if (!input.supplier) reasons.push('YELLOW:supplier-not-mapped')
   if (e.parseConfidence === 'medium') reasons.push('YELLOW:medium-parse-confidence')
   if (!e.invoiceDate) reasons.push('YELLOW:missing-invoice-date')
 
-  // Totals reconcile check: subtotal + gst should equal total (within $0.05)
+  // PO check: only flag if PO was on the invoice but didn't match any job.
+  // No-PO is normal for Capricorn-routed invoices — neutral, not a flag.
+  if (input.poCheckStatus === 'unmatched') {
+    reasons.push('YELLOW:po-no-job-match')
+  }
+
   if (e.totals.subtotalExGst !== null && e.totals.gstAmount !== null && e.totals.totalIncGst !== null) {
     const reconciled = e.totals.subtotalExGst + e.totals.gstAmount
     if (Math.abs(reconciled - e.totals.totalIncGst) > 0.05) {
@@ -258,7 +245,6 @@ export function triageInvoice(input: TriageInput): TriageOutcome {
     }
   }
 
-  // Sum of line totals vs subtotal (within $0.10 to allow rounding)
   const lineSum = e.lineItems.reduce((s, li) => s + (li.lineTotalExGst ?? 0), 0)
   if (e.totals.subtotalExGst !== null && Math.abs(lineSum - e.totals.subtotalExGst) > 0.10) {
     reasons.push('YELLOW:line-sum-mismatch')
@@ -291,7 +277,7 @@ export async function findDuplicateInvoice(
   return data?.id ?? null
 }
 
-// ── Apply triage + supplier resolution to an invoice row ────────────────
+// ── Apply triage + supplier resolution + auto job link ──────────────────
 
 export async function applyTriageAndResolve(invoiceId: string): Promise<void> {
   const c = sb()
@@ -308,7 +294,6 @@ export async function applyTriageAndResolve(invoiceId: string): Promise<void> {
     .eq('invoice_id', invoiceId)
     .order('line_no', { ascending: true })
 
-  // Reconstruct ExtractedAPInvoice shape from the row for triage()
   const extracted: ExtractedAPInvoice = {
     vendor: { name: inv.vendor_name_parsed, abn: inv.vendor_abn },
     invoiceNumber: inv.invoice_number,
@@ -348,7 +333,24 @@ export async function applyTriageAndResolve(invoiceId: string): Promise<void> {
     invoiceId,
   )
 
-  const triage = triageInvoice({ extracted, supplier, duplicateOf })
+  // ── Auto-link to MD job by PO, but DON'T overwrite a manual link ──
+  // If the user has manually picked a job, we keep their choice and just
+  // recompute po_check_status for triage purposes.
+  let poCheckStatus: 'matched' | 'unmatched' | 'no-po-on-invoice'
+  if (inv.linked_job_match_method === 'manual' && inv.linked_job_number) {
+    poCheckStatus = 'matched'   // user vouched for the link manually
+  } else {
+    const auto = await attemptAutoLink(extracted.poNumber)
+    poCheckStatus = auto.status
+    await writeJobLink(
+      invoiceId,
+      auto.job?.job_number || null,
+      'auto-po',
+      auto.status,
+    )
+  }
+
+  const triage = triageInvoice({ extracted, supplier, duplicateOf, poCheckStatus })
 
   await c
     .from('ap_invoices')
