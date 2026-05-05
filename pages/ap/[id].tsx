@@ -24,6 +24,14 @@
 //     "MATCH PATTERN..." label wrapped — the side-by-side grid cell didn't
 //     constrain the input. Switched to single-column stacking and added
 //     boxSizing: border-box to inputStyle().
+//
+// May 2026 — AccountTypeahead pre-pick name + bigger results:
+//   - When seeded from invoice.resolved_account_uid/_code (no name on the
+//     invoice row), fetch the chart-of-accounts entry by displayId on
+//     mount and show "6-1174 BAS Agent MYOB Consultant Fees" instead of
+//     just "6-1174". Falls back silently if the lookup fails.
+//   - Bumped account search limit 40 → 100 (server caps at 100) and
+//     container maxHeight 380 → 480 so users see ~16 rows instead of ~12.
 
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/router'
@@ -141,17 +149,13 @@ interface DetailResponse {
   linkedJob: JobInfo | null
 }
 
-// Editable subset of InvoiceRow used by the header edit form.
-// All values are kept as strings so the input fields stay controlled
-// (a partially-typed number like "12." would otherwise blow up).
-// Conversion to numeric/null happens at save time.
 interface HeaderEditable {
   vendor_name_parsed: string
   vendor_abn:         string
   invoice_number:     string
-  invoice_date:       string   // YYYY-MM-DD
+  invoice_date:       string
   po_number:          string
-  due_date:           string   // YYYY-MM-DD
+  due_date:           string
   subtotal_ex_gst:    string
   gst_amount:         string
   total_inc_gst:      string
@@ -343,7 +347,6 @@ export default function APDetailPage({ user }: PageProps) {
     }
   }
 
-  // ── Header (invoice meta) edit ──
   function startHeaderEdit() {
     if (!data) return
     const inv = data.invoice
@@ -377,8 +380,6 @@ export default function APDetailPage({ user }: PageProps) {
     setSavingHeader(true)
     setHeaderMessage(null)
     try {
-      // Build PATCH body. Convert empty strings to null and numerics from
-      // strings. Server's PATCHABLE_FIELDS validates the keys.
       const body: Record<string, any> = {
         vendor_name_parsed: trimToNull(editingHeader.vendor_name_parsed),
         vendor_abn:         trimToNull(editingHeader.vendor_abn),
@@ -399,8 +400,6 @@ export default function APDetailPage({ user }: PageProps) {
       })
       const json = await res.json()
       if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`)
-      // Server returns the same shape as GET — use it directly to avoid
-      // a second round trip and preserve the editing state ergonomics.
       if (json && json.invoice) setData(json)
       else await fetchData()
       setEditingHeader(null)
@@ -620,7 +619,6 @@ export default function APDetailPage({ user }: PageProps) {
 
             <div style={rightColStyle}>
 
-              {/* Triage banner + actions */}
               <div style={{background:T.bg2, border:`1px solid ${T.border}`, borderRadius:10, padding:'14px 16px'}}>
                 <div style={{display:'flex', alignItems:'center', gap:10, marginBottom: data.invoice.triage_reasons && data.invoice.triage_reasons.length > 0 ? 8 : 10, flexWrap:'wrap'}}>
                   <TriagePill status={data.invoice.triage_status}/>
@@ -731,9 +729,6 @@ export default function APDetailPage({ user }: PageProps) {
                 )}
               </div>
 
-              {/* Header data — toggles between read-only Field grid and an
-                  editable form. PATCH on save runs server-side triage so
-                  RED:missing-invoice-number etc. clears immediately. */}
               <div style={{background:T.bg2, border:`1px solid ${T.border}`, borderRadius:10, padding:'14px 16px'}}>
                 <div style={{display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:10, gap:8, flexWrap:'wrap'}}>
                   <div style={{fontSize:11, color:T.text3, textTransform:'uppercase', letterSpacing:'0.05em'}}>Invoice</div>
@@ -814,7 +809,6 @@ export default function APDetailPage({ user }: PageProps) {
                 onPresetSaved={async () => { setPresetOpen(false); await fetchData() }}
               />
 
-              {/* Lines */}
               <div style={{background:T.bg2, border:`1px solid ${T.border}`, borderRadius:10, padding:'14px 16px'}}>
                 <div style={{display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:10, gap:8, flexWrap:'wrap'}}>
                   <div style={{fontSize:11, color:T.text3, textTransform:'uppercase', letterSpacing:'0.05em'}}>Line items ({editingLines?.length ?? data.lines.length})</div>
@@ -956,13 +950,6 @@ export default function APDetailPage({ user }: PageProps) {
   )
 }
 
-// ── Header (invoice meta) edit form ─────────────────────────────────────
-//
-// Two-column responsive grid that collapses to one column on phones.
-// Date inputs use type="date" — Chrome/Safari date pickers behave well
-// with our YYYY-MM-DD strings out of the box. Numeric inputs keep
-// type="text" so partial entries don't fight us; conversion happens at
-// save time.
 function HeaderEditForm({
   value, onChange, disabled,
 }: {
@@ -1084,7 +1071,6 @@ function HeaderEditForm({
   )
 }
 
-// ── MYOB mapping section ─────────────────────────────────────────────────
 function MyobMappingSection({
   invoice, canEdit, presetOpen, onOpenPreset, onClosePreset, onPresetSaved,
 }: {
@@ -1145,12 +1131,6 @@ function MyobMappingSection({
   )
 }
 
-// ── Supplier preset form ─────────────────────────────────────────────────
-//
-// Switched from a 2-column grid to a single-column stack — the long
-// "MATCH PATTERN (CASE-INSENSITIVE SUBSTRING…)" label was wrapping and
-// the input then overflowed the grid cell into the COMPANY FILE column.
-// Stacking + box-sizing on inputs keeps it tidy at any width.
 function SupplierPresetForm({
   invoice, onSaved,
 }: {
@@ -1166,6 +1146,9 @@ function SupplierPresetForm({
       ? { uid: invoice.resolved_supplier_uid, displayId: null, name: invoice.resolved_supplier_name, abn: invoice.vendor_abn, isIndividual: false }
       : null
   )
+  // Account starts with empty name when seeded from invoice.resolved_*
+  // (the invoice row doesn't store the account name). AccountTypeahead's
+  // displaySelected hydration will fetch and show the full name.
   const [account, setAccount] = useState<MyobAccount | null>(
     invoice.resolved_account_uid && invoice.resolved_account_code
       ? { uid: invoice.resolved_account_uid, displayId: invoice.resolved_account_code, name: '', type: 'Expense', parentName: null, isHeader: false }
@@ -1279,9 +1262,6 @@ function SupplierPresetForm({
 }
 
 function FormRow({ label, children }: { label: string; children: React.ReactNode }) {
-  // minWidth:0 is critical inside CSS grids — without it, children with
-  // long content force the grid cell wider than its track and cause
-  // overflow into adjacent cells (the bug fixed in this round).
   return (
     <div style={{minWidth:0}}>
       <div style={{fontSize:10, color:T.text3, textTransform:'uppercase', letterSpacing:'0.05em', marginBottom:4}}>{label}</div>
@@ -1293,14 +1273,13 @@ function FormRow({ label, children }: { label: string; children: React.ReactNode
 function inputStyle(): React.CSSProperties {
   return {
     width:'100%',
-    boxSizing:'border-box',     // padding inside the declared width — fixes overflow
+    boxSizing:'border-box',
     background: T.bg3, border:`1px solid ${T.border2}`, color: T.text,
     padding:'8px 10px', borderRadius:5,
-    fontSize:16, fontFamily:'inherit', outline:'none',   // 16px = no iOS zoom
+    fontSize:16, fontFamily:'inherit', outline:'none',
   }
 }
 
-// ── Per-line account picker modal w/ Save-as-rule ────────────────────────
 function AccountPickerModal({
   companyFile, currentAccountCode, currentAccountName, invoiceDefaultCode,
   lineLabel, lineDescription, linePartNumber,
@@ -1510,7 +1489,6 @@ function defaultPatternFor(description: string, partNumber: string | null): stri
   return ''
 }
 
-// ── Reusable typeaheads ──────────────────────────────────────────────────
 function SupplierTypeahead({
   companyFile, selected, onSelect, initialQuery,
 }: {
@@ -1614,6 +1592,28 @@ function SupplierTypeahead({
   )
 }
 
+// ── AccountTypeahead ─────────────────────────────────────────────────────
+//
+// Two changes in this round (May 2026):
+//
+// 1. PRE-PICKED NAME HYDRATION
+//    SupplierPresetForm seeds `selected` from the invoice's
+//    resolved_account_uid + resolved_account_code. The invoice doesn't
+//    store the account name — there's no resolved_account_name column —
+//    so the seed has `name: ''`. The closed-state display showed only
+//    "6-1174" until the user re-selected. Fix: track an internal
+//    `displaySelected` state that mirrors `selected` but, when the name
+//    is empty, fires a one-shot fetch via /api/myob/accounts?q=<displayId>
+//    to find the matching entry and enrich `name` (and type / parent /
+//    isHeader). We DON'T call onSelect with the enriched account —
+//    parent state stays as-is until the user actually changes the pick.
+//    This avoids surprising the parent with re-renders.
+//
+// 2. RESULT LIMIT + LIST HEIGHT
+//    Frontend was asking for 40 rows; bumped to 100 (server's hard cap).
+//    Container maxHeight 380px → 480px so users see ~16 rows at once
+//    instead of ~12 — fewer cases of "I can't find my account, scroll,
+//    scroll, oh there it is".
 function AccountTypeahead({
   companyFile, selected, onSelect, forceOpen, placeholder,
 }: {
@@ -1629,13 +1629,59 @@ function AccountTypeahead({
   const [results, setResults] = useState<MyobAccount[]>([])
   const [searchError, setSearchError] = useState<string | null>(null)
 
+  // Display copy of `selected` — same data, but with the name hydrated
+  // when the upstream caller couldn't supply it.
+  const [displaySelected, setDisplaySelected] = useState<MyobAccount | null>(selected)
+
+  // Re-sync if the parent's selected prop changes (e.g. user picks a
+  // different account in this typeahead, parent re-renders us).
+  useEffect(() => {
+    setDisplaySelected(selected)
+  }, [selected?.uid, selected?.displayId, selected?.name])
+
+  // Hydrate the name when it's missing. Searches /api/myob/accounts by
+  // the displayId and finds the exact match. Fails silently — if the
+  // lookup errors out, we keep showing just the code, which is the
+  // pre-fix behaviour.
+  useEffect(() => {
+    if (!selected || !selected.uid || !selected.displayId) return
+    if (selected.name) return
+    let cancelled = false
+    ;(async () => {
+      try {
+        const params = new URLSearchParams({
+          q: selected.displayId, company: companyFile, limit: '5',
+        })
+        const res = await fetch(`/api/myob/accounts?${params.toString()}`, { credentials: 'same-origin' })
+        if (!res.ok) return
+        const json = await res.json()
+        const accounts: MyobAccount[] = Array.isArray(json.accounts) ? json.accounts : []
+        const match = accounts.find(a => a.displayId === selected.displayId) || null
+        if (match && !cancelled) {
+          setDisplaySelected({
+            ...selected,
+            name:       match.name,
+            type:       match.type       || selected.type,
+            parentName: match.parentName ?? selected.parentName,
+            isHeader:   match.isHeader,
+          })
+        }
+      } catch {
+        // swallow — falls back to just the code in the closed state
+      }
+    })()
+    return () => { cancelled = true }
+  }, [selected?.uid, selected?.displayId, selected?.name, companyFile])
+
   useEffect(() => {
     if (!open) return
     setLoading(true)
     setSearchError(null)
     const t = setTimeout(async () => {
       try {
-        const params = new URLSearchParams({ q: query, company: companyFile, limit: '40' })
+        // limit 100 = server's hard cap. Combined with maxHeight 480px
+        // below, this surfaces ~16 rows on screen at once.
+        const params = new URLSearchParams({ q: query, company: companyFile, limit: '100' })
         const res = await fetch(`/api/myob/accounts?${params.toString()}`, { credentials: 'same-origin' })
         const json = await res.json()
         if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`)
@@ -1653,16 +1699,16 @@ function AccountTypeahead({
   if (!open) {
     return (
       <div style={{display:'flex', gap:8, alignItems:'center', flexWrap:'wrap'}}>
-        <div style={{flex:1, fontSize:12, color: selected ? T.text : T.text3, minWidth:0}}>
-          {selected ? (
+        <div style={{flex:1, fontSize:12, color: displaySelected ? T.text : T.text3, minWidth:0}}>
+          {displaySelected ? (
             <>
-              <span style={{fontFamily:'monospace'}}>{selected.displayId}</span>
-              {selected.name && <span style={{marginLeft:8, color:T.text2}}>{selected.name}</span>}
+              <span style={{fontFamily:'monospace'}}>{displaySelected.displayId}</span>
+              {displaySelected.name && <span style={{marginLeft:8, color:T.text2}}>{displaySelected.name}</span>}
             </>
           ) : 'No account picked'}
         </div>
-        <button onClick={() => setOpen(true)} style={btnSecondary()}>{selected ? 'Change…' : 'Search MYOB…'}</button>
-        {selected && (
+        <button onClick={() => setOpen(true)} style={btnSecondary()}>{displaySelected ? 'Change…' : 'Search MYOB…'}</button>
+        {displaySelected && (
           <button onClick={() => onSelect(null)} style={btnSecondary()}>Clear</button>
         )}
       </div>
@@ -1688,7 +1734,7 @@ function AccountTypeahead({
       )}
       <div style={{
         border:`1px solid ${T.border}`, borderRadius:6, overflow:'hidden',
-        maxHeight:380, overflowY:'auto', background: T.bg3,
+        maxHeight:480, overflowY:'auto', background: T.bg3,
       }}>
         {loading && (
           <div style={{padding:14, textAlign:'center', color:T.text3, fontSize:12}}>Searching MYOB…</div>
@@ -1720,7 +1766,6 @@ function AccountTypeahead({
   )
 }
 
-// ── Workshop Job section ────────────────────────────────────────────────
 function WorkshopJobSection({
   invoice, linkedJob, canEdit,
   pickerOpen, pickerQuery, pickerResults, pickerLoading, linkBusy,
@@ -1847,7 +1892,6 @@ function WorkshopJobSection({
   )
 }
 
-// ── Lines table — horizontal scroll on mobile ───────────────────────────
 function LinesTable({
   lines, invoiceDefaultAccountCode, editable,
   onChange, onRemove, onPickAccount, onApplySuggestion,
@@ -2031,7 +2075,6 @@ function badgeStyle(color: string): React.CSSProperties {
   }
 }
 
-// ── Small UI bits ──
 function Field({ label, value, mono, align, emphasised }: { label: string; value: string | number | null | undefined; mono?: boolean; align?: 'right'; emphasised?: boolean }) {
   return (
     <div>
@@ -2104,14 +2147,11 @@ function ld(): React.CSSProperties {
   return { padding:'8px 10px', verticalAlign:'top' }
 }
 
-// Helpers for the header edit save path.
-// Empty/whitespace-only string → null. Otherwise → trimmed string.
 function trimToNull(s: string | null | undefined): string | null {
   if (s === null || s === undefined) return null
   const t = String(s).trim()
   return t ? t : null
 }
-// Empty string → null. Non-numeric → null. Otherwise → number.
 function parseNumOrNull(s: string | null | undefined): number | null {
   if (s === null || s === undefined) return null
   const t = String(s).trim()
