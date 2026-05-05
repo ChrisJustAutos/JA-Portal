@@ -8,6 +8,19 @@
 //     either still being triaged or has been finalised.
 //   - Bulk Approve operates on selected approvable rows. Non-approvable
 //     rows can't be ticked.
+//
+// **Bulk approve batching:** the client chunks selectedApprovableIds into
+// batches of BULK_BATCH_SIZE (3) and POSTs each batch sequentially to
+// /api/ap/bulk-approve. This keeps each backend call short enough to
+// finish well within Vercel's serverless function time budget — even if
+// each invoice takes 15-20s for POST + PDF attach, three at a time is
+// ~60s max per call. Progress is shown to the user as batches complete.
+//
+// **Adopted-on-dup:** when MYOB already has a bill matching the same
+// SupplierInvoiceNumber + Supplier UID, the backend now adopts that
+// existing UID and marks the invoice as posted (rather than throwing
+// "Duplicate in MYOB"). The UI surfaces this with a `↷ adopted` label so
+// the operator can tell apart freshly-posted bills from reconciled ones.
 
 import { useState, useEffect, useRef, useMemo } from 'react'
 import { useRouter } from 'next/router'
@@ -15,6 +28,8 @@ import { GetServerSideProps } from 'next'
 import PortalSidebar from '../../lib/PortalSidebar'
 import { requirePageAuth } from '../../lib/authServer'
 import { UserRole, roleHasPermission } from '../../lib/permissions'
+
+const BULK_BATCH_SIZE = 3
 
 const T = {
   bg:'#0d0f12', bg2:'#131519', bg3:'#1a1d23', bg4:'#21252d',
@@ -88,15 +103,12 @@ export default function APListPage({ user }: PageProps) {
   const [deletingId, setDeletingId] = useState<string | null>(null)
   const fileRef = useRef<HTMLInputElement>(null)
 
-  // Selection (bulk approve)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
 
-  // Approval state
   const [approvingId, setApprovingId] = useState<string | null>(null)
   const [bulkApproving, setBulkApproving] = useState(false)
   const [approveMessage, setApproveMessage] = useState<string | null>(null)
 
-  // Inbox pull state
   const [pulling, setPulling] = useState(false)
   const [pullMessage, setPullMessage] = useState<string | null>(null)
 
@@ -130,8 +142,6 @@ export default function APListPage({ user }: PageProps) {
     return () => clearTimeout(t)
   }, [search])
 
-  // Drop selections that are no longer in the visible list (e.g. after a
-  // filter change or a successful approval that moves rows to 'posted').
   useEffect(() => {
     if (!data) return
     const visible = new Set(data.invoices.map(i => i.id))
@@ -249,10 +259,12 @@ export default function APListPage({ user }: PageProps) {
       const billUidShort = (json.myobBillUid || '').substring(0, 8)
       const att = json.attachmentStatus
       const attLabel = att === 'attached' ? '📎 PDF attached'
+                     : att === 'adopted'  ? `↷ Already in MYOB (#${json.adoptedBillNumber || '?'}) — adopted as posted`
                      : att === 'failed'   ? `⚠️ PDF attach failed: ${json.attachmentError || ''}`
                      : att === 'no-pdf'   ? '(no PDF on file)'
                      : '(attachment skipped)'
-      setApproveMessage(`✅ Posted "${inv.vendor_name_parsed} ${inv.invoice_number}" — bill ${billUidShort}… · ${attLabel}`)
+      const verb = json.adopted ? 'Reconciled' : 'Posted'
+      setApproveMessage(`✅ ${verb} "${inv.vendor_name_parsed} ${inv.invoice_number}" — bill ${billUidShort}… · ${attLabel}`)
       fetchData()
     } catch (err: any) {
       setApproveMessage(`❌ ${inv.vendor_name_parsed} ${inv.invoice_number}: ${err?.message || err}`)
@@ -263,31 +275,79 @@ export default function APListPage({ user }: PageProps) {
 
   async function handleBulkApprove() {
     if (selectedApprovableIds.length === 0) return
-    const ok = confirm(`Approve & post ${selectedApprovableIds.length} invoice(s) to MYOB?\n\nEach is posted sequentially. Failures will be reported per-invoice.`)
+    const ok = confirm(`Approve & post ${selectedApprovableIds.length} invoice(s) to MYOB?\n\nProcessed in batches of ${BULK_BATCH_SIZE} to stay within timeout limits. Progress shown as each batch completes.`)
     if (!ok) return
 
     setBulkApproving(true)
     setApproveMessage(null)
+
+    const allIds = [...selectedApprovableIds]
+    const batches: string[][] = []
+    for (let i = 0; i < allIds.length; i += BULK_BATCH_SIZE) {
+      batches.push(allIds.slice(i, i + BULK_BATCH_SIZE))
+    }
+
+    let totalSucceeded = 0
+    let totalFailed = 0
+    let totalAttached = 0
+    let totalAttachFail = 0
+    let totalAdopted = 0
+    let processedSoFar = 0
+    const allFails: any[] = []
+    let firstError: string | null = null
+
     try {
-      const res = await fetch('/api/ap/bulk-approve', {
-        method: 'POST',
-        credentials: 'same-origin',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ invoiceIds: selectedApprovableIds }),
-      })
-      const json = await res.json()
-      if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`)
+      for (let i = 0; i < batches.length; i++) {
+        const batch = batches[i]
+        setApproveMessage(`⏳ Batch ${i + 1}/${batches.length} (${processedSoFar}/${allIds.length} done)…`)
 
-      const s = json.summary
-      const parts = [`✅ Posted ${s.succeeded}/${s.total}`]
-      if (s.attached !== undefined)   parts.push(`📎 ${s.attached} attached`)
-      if (s.attachFail > 0)           parts.push(`⚠️ ${s.attachFail} attach failed`)
-      if (s.failed > 0)               parts.push(`❌ ${s.failed} failed`)
-      setApproveMessage(parts.join(' · '))
+        try {
+          const res = await fetch('/api/ap/bulk-approve', {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ invoiceIds: batch }),
+          })
+          const json = await res.json().catch(() => ({}))
 
-      if (s.failed > 0) {
-        const fails = (json.results || []).filter((r: any) => !r.ok)
-        console.error('Bulk approve failures:', fails)
+          if (!res.ok) {
+            if (!firstError) firstError = json.error || `HTTP ${res.status}`
+            totalFailed += batch.length
+          } else {
+            const s = json.summary || {}
+            totalSucceeded  += (s.succeeded  || 0)
+            totalFailed     += (s.failed     || 0)
+            totalAttached   += (s.attached   || 0)
+            totalAttachFail += (s.attachFail || 0)
+            // Count smart-adopt outcomes
+            const adopted = (json.results || []).filter((r: any) => r.ok && r.attachmentStatus === 'adopted')
+            totalAdopted += adopted.length
+            const fails = (json.results || []).filter((r: any) => !r.ok)
+            allFails.push(...fails)
+          }
+        } catch (e: any) {
+          if (!firstError) firstError = e?.message || String(e)
+          totalFailed += batch.length
+        }
+
+        processedSoFar += batch.length
+      }
+
+      const parts = [`✅ Posted ${totalSucceeded}/${allIds.length}`]
+      if (totalAdopted > 0)    parts.push(`↷ ${totalAdopted} adopted`)
+      if (totalAttached > 0)   parts.push(`📎 ${totalAttached} attached`)
+      if (totalAttachFail > 0) parts.push(`⚠️ ${totalAttachFail} attach failed`)
+      if (totalFailed > 0)     parts.push(`❌ ${totalFailed} failed`)
+      const summaryMsg = parts.join(' · ')
+
+      if (firstError && totalSucceeded === 0) {
+        setApproveMessage(`❌ Bulk approve failed: ${firstError}`)
+      } else {
+        setApproveMessage(summaryMsg)
+      }
+
+      if (allFails.length > 0) {
+        console.error('Bulk approve failures:', allFails)
       }
 
       setSelectedIds(new Set())
@@ -311,9 +371,6 @@ export default function APListPage({ user }: PageProps) {
       })
       const json = await res.json().catch(() => ({}))
       if (!res.ok) {
-        // Surface BOTH the high-level error label and the detailed cause.
-        // (The previous version only surfaced json.error and threw away
-        // json.detail, which hid the actual Graph response from the UI.)
         const parts = [json.error, json.detail].filter(Boolean)
         const mailboxNote = json.mailbox ? ` (mailbox: ${json.mailbox})` : ''
         throw new Error((parts.join(' — ') || `HTTP ${res.status}`) + mailboxNote)
@@ -340,7 +397,6 @@ export default function APListPage({ user }: PageProps) {
     }
   }
 
-  // Derived state for the header checkbox
   const headerCheckboxState: 'unchecked' | 'partial' | 'checked' =
     approvableVisibleIds.size === 0 ? 'unchecked'
     : Array.from(approvableVisibleIds).every(id => selectedIds.has(id)) ? 'checked'
@@ -434,7 +490,6 @@ export default function APListPage({ user }: PageProps) {
           )}
         </div>
 
-        {/* Bulk action bar — only when something approvable is selected */}
         {canEdit && selectedApprovableIds.length > 0 && (
           <div style={{
             background:`${T.green}10`, border:`1px solid ${T.green}40`, borderRadius:7,
@@ -465,15 +520,19 @@ export default function APListPage({ user }: PageProps) {
             >
               Clear selection
             </button>
+            {selectedApprovableIds.length > BULK_BATCH_SIZE && (
+              <span style={{color:T.text3, fontSize:11}}>
+                · processed in batches of {BULK_BATCH_SIZE}
+              </span>
+            )}
           </div>
         )}
 
-        {/* Operation messages */}
         {pullMessage && (
           <Banner kind={pullMessage.startsWith('❌') ? 'err' : 'ok'}>{pullMessage}</Banner>
         )}
         {approveMessage && (
-          <Banner kind={approveMessage.startsWith('❌') ? 'err' : 'ok'}>{approveMessage}</Banner>
+          <Banner kind={approveMessage.startsWith('❌') ? 'err' : approveMessage.startsWith('⏳') ? 'info' : 'ok'}>{approveMessage}</Banner>
         )}
         {uploadMessage && (
           <Banner kind={uploadMessage.startsWith('❌') ? 'err' : 'ok'}>{uploadMessage}</Banner>
@@ -707,8 +766,8 @@ function StatusPill({ status }: { status: string }) {
   )
 }
 
-function Banner({ kind, children }: { kind: 'ok' | 'err'; children: React.ReactNode }) {
-  const c = kind === 'err' ? T.red : T.green
+function Banner({ kind, children }: { kind: 'ok' | 'err' | 'info'; children: React.ReactNode }) {
+  const c = kind === 'err' ? T.red : kind === 'info' ? T.blue : T.green
   return (
     <div style={{
       background:`${c}15`, border:`1px solid ${c}40`, borderRadius:7,

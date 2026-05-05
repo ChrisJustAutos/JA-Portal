@@ -16,21 +16,10 @@
 //       SSO mode (post-March 2025 default): bearer token alone is sufficient,
 //         no x-myobapi-cftoken header.
 //       Legacy mode: file requires per-file user/password, sent as cftoken.
-//   - Every API call is logged to `myob_api_log` for audit + debugging.
-//
-// Post-March 2025 OAuth changes:
-//   - The legacy `CompanyFile` scope is deprecated for keys created after
-//     12 March 2025. New keys must use SME scopes (e.g. `sme-company-file`,
-//     `sme-sales`, `sme-contacts-customer`).
-//   - The legacy `GET /accountright/` endpoint no longer returns company
-//     file lists for new keys. Instead, the businessId AND businessName of
-//     the chosen file are returned on the OAuth redirect — provided
-//     `prompt=consent` is set in the authorise URL.
-//   - `prompt=consent` also forces MYOB to show the file picker, so the
-//     user picks WHICH company file this OAuth flow is for. Each company
-//     file = one OAuth flow.
-//   - SSO mode is the default for new keys: x-myobapi-cftoken is NOT
-//     required when the user authenticated via OAuth.
+//   - **Every API call is logged to `myob_api_log` for audit + debugging.
+//     The log insert is AWAITED inside the finally block so log entries are
+//     durable even when the calling function gets terminated by Vercel
+//     (e.g. exceeding maxDuration).**
 
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
 import { createHash } from 'crypto'
@@ -56,35 +45,14 @@ const AUTH_URL  = 'https://secure.myob.com/oauth2/account/authorize'
 const TOKEN_URL = 'https://secure.myob.com/oauth2/v1/authorize'
 const API_BASE  = 'https://api.myob.com'
 
-// Scope for MYOB OAuth. Behaviour:
-//   - If MYOB_SCOPE env var is set, normalise separators and use the value.
-//   - Otherwise omit the scope parameter entirely — MYOB will grant whatever
-//     the registered app is entitled to by default.
-//
-// Separator normalisation: OAuth spec requires SPACE-separated scopes, but
-// some env-var UIs (notably Vercel's) silently swallow literal spaces. We
-// accept any of these common separators and normalise to space:
-//   - underscore between scope tokens (e.g. `sme-company-file_sme-sales`)
-//   - comma, semicolon, pipe (e.g. `sme-company-file,sme-sales`)
-//   - any whitespace (multiple spaces, tabs)
-//
-// CRITICAL: underscores INSIDE a scope name (e.g. `offline_access`, `openid`)
-// must be preserved — we only split underscores that are followed by `sme-`,
-// which is the MYOB SME scope prefix. Standalone OIDC scope names like
-// `offline_access` keep their underscore.
-//
-// Post-March 2025: keys registered after 12 March 2025 must use new SME
-// scopes (`sme-company-file`, `sme-sales`, `sme-contacts-customer`,
-// `sme-general-ledger`, etc) — `CompanyFile` no longer works for those keys.
-// Pre-March 2025 keys must continue to use `CompanyFile`.
 function getScope(): string | null {
   const v = process.env.MYOB_SCOPE
   if (v === undefined) return null
   if (v === '') return null
   return v
-    .replace(/_(?=sme-)/gi, ' ')   // `_sme-` → ` sme-`  (underscore-as-separator)
-    .replace(/[,;|]+/g, ' ')       // common separators → space
-    .replace(/\s+/g, ' ')          // collapse runs of whitespace
+    .replace(/_(?=sme-)/gi, ' ')
+    .replace(/[,;|]+/g, ' ')
+    .replace(/\s+/g, ' ')
     .trim() || null
 }
 
@@ -118,22 +86,6 @@ export interface CompanyFile {
 
 // ── OAuth helpers ───────────────────────────────────────────────────────
 
-// Build the authorise URL the browser redirects to. `state` is a random
-// CSRF value that connect.ts persists to Supabase (see myob_oauth_state
-// table) and callback.ts looks up after MYOB redirects back.
-//
-// `prompt=consent` is REQUIRED for keys created after 12 March 2025:
-//   1. Forces the company-file picker on the consent screen so the user
-//      explicitly picks which file this OAuth flow represents.
-//   2. Causes MYOB to return `businessId` AND `businessName` on the
-//      callback URL, which we capture and persist alongside the tokens.
-//      Without `prompt=consent`, neither is returned.
-//
-// Scope is included only if configured (see getScope()). For pre-March 2025
-// keys, set MYOB_SCOPE=CompanyFile. For post-March 2025 keys, use space-
-// separated SME scopes (e.g. `MYOB_SCOPE=sme-company-file sme-sales`). If
-// the env-var UI doesn't accept literal spaces, underscore/comma/semicolon
-// separators between scope tokens also work — see getScope() docblock.
 export function buildAuthorizeUrl(state: string): string {
   const p = new URLSearchParams({
     client_id: clientId(),
@@ -150,16 +102,12 @@ export function buildAuthorizeUrl(state: string): string {
 interface TokenResponse {
   access_token: string
   refresh_token: string
-  expires_in: number              // seconds (typically 1200 = 20 min)
+  expires_in: number
   scope: string
-  token_type: string              // "bearer"
+  token_type: string
   user: { uid: string; username: string }
 }
 
-// Exchange the authorisation code from the callback for tokens.
-// MYOB requires x-www-form-urlencoded body, not JSON. Scope is omitted here
-// — the authorise step already established what scopes the user granted, and
-// the token endpoint doesn't require scope to be re-sent.
 export async function exchangeCodeForTokens(code: string): Promise<TokenResponse> {
   const body = new URLSearchParams({
     client_id: clientId(),
@@ -201,16 +149,6 @@ async function refreshTokens(refreshToken: string): Promise<TokenResponse> {
   }
 }
 
-// Save or update a connection's tokens (upsert by label).
-//
-// `businessId` is the company file GUID returned on the OAuth redirect for
-// post-March 2025 keys. When provided, we persist it as company_file_id so
-// subsequent API calls can scope to /accountright/{businessId}/... without
-// needing a separate "list company files + pick one" step.
-//
-// `businessName` is the display name of the file (also returned on the
-// redirect). When provided, we persist it as company_file_name so the UI
-// can show "JAWS — Just Autos Wholesale" instead of "— not selected —".
 export async function saveConnection(
   label: string,
   tokens: TokenResponse,
@@ -239,7 +177,6 @@ export async function saveConnection(
   return data as MyobConnection
 }
 
-// Load a single connection by label. Returns null if not found/inactive.
 export async function getConnection(label: string): Promise<MyobConnection | null> {
   const { data, error } = await sb()
     .from('myob_connections')
@@ -260,7 +197,6 @@ export async function listConnections(): Promise<MyobConnection[]> {
   return (data || []) as MyobConnection[]
 }
 
-// Get a valid access token — refresh if within 60s of expiring.
 export async function getValidAccessToken(connId: string): Promise<string> {
   const { data, error } = await sb()
     .from('myob_connections')
@@ -272,7 +208,6 @@ export async function getValidAccessToken(connId: string): Promise<string> {
 
   const expiresMs = new Date(conn.access_expires_at).getTime()
   const now = Date.now()
-  // Refresh if we're within 60s of expiry
   if (expiresMs - now > 60_000) return conn.access_token
 
   const fresh = await refreshTokens(conn.refresh_token)
@@ -314,37 +249,23 @@ async function logApiCall(entry: {
       performed_by: entry.performedBy || null,
     })
   } catch (e: any) {
-    // Logging failure mustn't break the main flow — just console it.
     console.error('myob: failed to log API call:', e?.message)
   }
 }
 
 // ── Authenticated fetch ─────────────────────────────────────────────────
-// Handles:
-//  - OAuth bearer token (auto-refreshed)
-//  - CompanyFile auth header (mode-dependent — see below)
-//  - MYOB-specific required headers (`x-myobapi-key`, `x-myobapi-version`)
-//  - Audit logging
 //
-// Returns the response status, parsed body (`data`), raw text body (`raw`),
-// and headers (`headers`, lowercase keys). The `headers` field is critical
-// for MYOB POSTs that return 201 Created with empty bodies — the new
-// resource UID is in the `Location` header and that's the only place to
-// read it from.
-//
-// CF auth modes:
-//   SSO mode (post-March 2025 default): the OAuth token alone is sufficient,
-//     no x-myobapi-cftoken header is sent. This is the case when the
-//     connection's company_file_username is null/undefined — i.e. the user
-//     authenticated via OAuth and we trust that as proof of identity.
-//   Legacy mode: file has per-file user/password set. We send
-//     base64(username:password) in x-myobapi-cftoken. This is the case when
-//     company_file_username is set on the row.
-//   `requiresCfAuth: false` overrides both — used for the /accountright/
-//     listing endpoint which has no file context. Defaults to true.
+// **Logging durability:** the finally block AWAITS logApiCall before
+// returning. Without the await, logApiCall is fire-and-forget — and on
+// Vercel serverless, when the calling handler exceeds maxDuration or
+// otherwise terminates, in-flight Promises (like the log insert) get
+// killed before they finish. That produced a class of bugs where MYOB
+// POSTs would land but their log entries (and our DB status updates)
+// would silently disappear. Awaiting trades a few ms of latency per
+// MYOB call for forensic reliability.
 export async function myobFetch(
   connId: string,
-  path: string,                    // e.g. '/accountright/{id}/Sale/Invoice'
+  path: string,
   opts: {
     method?: 'GET' | 'POST' | 'PUT' | 'DELETE'
     body?: any
@@ -355,9 +276,8 @@ export async function myobFetch(
 ): Promise<{ status: number; data: any; raw: string; headers: Record<string, string> }> {
   const method = opts.method || 'GET'
   const performedBy = opts.performedBy || null
-  const requiresCfAuth = opts.requiresCfAuth !== false  // default true
+  const requiresCfAuth = opts.requiresCfAuth !== false
 
-  // Build URL with query params
   let url = API_BASE + path
   if (opts.query) {
     const qp = new URLSearchParams()
@@ -368,7 +288,6 @@ export async function myobFetch(
     if (qs) url += (path.includes('?') ? '&' : '?') + qs
   }
 
-  // Get connection for CF credentials
   const { data: connData, error: connErr } = await sb()
     .from('myob_connections')
     .select('*')
@@ -377,7 +296,6 @@ export async function myobFetch(
   if (connErr || !connData) throw new Error('MYOB connection not found for fetch')
   const conn = connData as MyobConnection
 
-  // Refresh token if needed
   const accessToken = await getValidAccessToken(connId)
 
   const headers: Record<string, string> = {
@@ -389,9 +307,6 @@ export async function myobFetch(
   }
   if (opts.body) headers['Content-Type'] = 'application/json'
 
-  // Company File auth header — see "CF auth modes" docblock above.
-  // SSO mode (no username on connection) → no cftoken header sent.
-  // Legacy mode (username set) → base64(user:pass) cftoken header.
   if (requiresCfAuth) {
     const hasCfCreds = conn.company_file_username !== null
                     && conn.company_file_username !== undefined
@@ -401,8 +316,6 @@ export async function myobFetch(
       const b64 = Buffer.from(`${user}:${pw}`, 'utf-8').toString('base64')
       headers['x-myobapi-cftoken'] = b64
     }
-    // else: SSO mode — bearer token alone is sufficient, MYOB recognises the
-    // OAuth user as the file user. No cftoken sent.
   }
 
   const startMs = Date.now()
@@ -417,10 +330,6 @@ export async function myobFetch(
     const res = await fetch(url, { method, headers, body: requestBody })
     status = res.status
 
-    // Capture response headers (lowercase keys for consistent lookup).
-    // fetch's Headers object is case-insensitive on read, but iteration
-    // order and casing are implementation-dependent — we lowercase
-    // explicitly so callers can use `result.headers['location']` reliably.
     res.headers.forEach((v, k) => {
       responseHeaders[k.toLowerCase()] = v
     })
@@ -439,7 +348,8 @@ export async function myobFetch(
     throw e
   } finally {
     const durationMs = Date.now() - startMs
-    logApiCall({
+    // AWAIT the log insert — see "Logging durability" docblock above.
+    await logApiCall({
       connectionId: connId,
       method, path,
       status, durationMs,
@@ -448,7 +358,7 @@ export async function myobFetch(
       response: raw,
       performedBy,
     })
-    // Update last_used_at on the connection
+    // last_used_at is fire-and-forget — non-critical bookkeeping.
     sb().from('myob_connections').update({ last_used_at: new Date().toISOString() }).eq('id', connId)
       .then(() => {}, () => {})
   }
@@ -458,14 +368,6 @@ export async function myobFetch(
 
 // ── Company file helpers ────────────────────────────────────────────────
 
-// List all company files the user has access to (called right after OAuth to
-// let the user pick which CF this connection represents).
-//
-// NOTE (post-March 2025): for keys created after 12 March 2025, the legacy
-// `GET /accountright/` endpoint is deprecated and returns 401. For those
-// keys, the businessId AND businessName are captured directly from the
-// OAuth redirect and stored on the connection — there's no "list" step.
-// This function remains for legacy keys that still use the old flow.
 export async function listCompanyFiles(connId: string): Promise<CompanyFile[]> {
   const { data, status } = await myobFetch(connId, '/accountright', { requiresCfAuth: false })
   if (status !== 200) throw new Error(`listCompanyFiles failed: HTTP ${status}`)

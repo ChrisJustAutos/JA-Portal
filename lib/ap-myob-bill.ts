@@ -14,9 +14,24 @@
 // account fall back to the invoice default (the ap_supplier_account_map
 // preset, or the MYOB supplier card's default expense account).
 //
-// MYOB duplicate check: Before posting, query MYOB for existing bills with
-// the same SupplierInvoiceNumber + Supplier UID. Catches manually-entered
-// bills that our local Supabase duplicate detection can't see.
+// SMART ADOPT on duplicate detection:
+//   The pre-flight check queries MYOB for existing bills with the same
+//   SupplierInvoiceNumber + Supplier UID. **If a match is found, we ADOPT
+//   the existing UID and mark this invoice as posted** instead of throwing
+//   a "Duplicate in MYOB" error.
+//
+//   Why: the pre-flight only matches on (invoice number + supplier), which
+//   uniquely identifies the same logical invoice. Whether it ended up in
+//   MYOB via:
+//     (a) A previous attempt of ours that succeeded but lost its DB update
+//         (e.g. bulk-approve hitting a serverless function timeout),
+//     (b) A manual bill entry in MYOB by a person, or
+//     (c) An import from somewhere else,
+//   the right behaviour is the same: don't create a second bill, just
+//   record that this invoice is reconciled to the existing UID.
+//
+//   This makes bulk-approve idempotent and self-healing — re-running it
+//   after a partial failure recovers cleanly without operator intervention.
 //
 // Bill body shape (IsTaxInclusive=false, amounts ex-GST):
 //   POST /accountright/{cf_id}/Purchase/Bill/Service
@@ -180,8 +195,12 @@ export interface CreateServiceBillResult {
   ok: true
   myobBillUid: string
   myobBillRowId: number | null
-  attachmentStatus: 'attached' | 'failed' | 'skipped' | 'no-pdf'
+  attachmentStatus: 'attached' | 'failed' | 'skipped' | 'no-pdf' | 'adopted'
   attachmentError?: string
+  /** True when an existing MYOB bill was adopted instead of posting a new one. */
+  adopted?: boolean
+  /** When adopted, the existing MYOB bill number for the operator's reference. */
+  adoptedBillNumber?: string | null
 }
 
 interface ServiceBillLineBody {
@@ -234,9 +253,6 @@ export async function createServiceBill(
   if (linesErr) throw new Error(`Failed to load lines: ${linesErr.message}`)
   if (!lines || lines.length === 0) throw new Error('Invoice has no line items')
 
-  // Per-line accounts: each line must have an account_uid OR the invoice
-  // must have a fallback resolved_account_uid. Validate up front so we
-  // give a helpful error before touching MYOB.
   const linesMissingAccount = lines.filter((l: any) =>
     !l.account_uid && !inv.resolved_account_uid
   )
@@ -254,7 +270,9 @@ export async function createServiceBill(
   if (!conn) throw new Error(`No active MYOB connection for ${companyFile}`)
   if (!conn.company_file_id) throw new Error(`MYOB connection ${companyFile} has no company file selected`)
 
-  // ── Pre-flight: MYOB-side duplicate check ──
+  // ── Pre-flight: MYOB-side duplicate check (now SMART ADOPT) ──
+  // If MYOB already has a bill with this SupplierInvoiceNumber + Supplier
+  // UID, we adopt it rather than throwing. See module docblock for rationale.
   const existingMyob = await findExistingMyobBill(
     conn.id,
     conn.company_file_id,
@@ -262,14 +280,29 @@ export async function createServiceBill(
     String(inv.resolved_supplier_uid),
   )
   if (existingMyob) {
-    const detail = `Bill ${existingMyob.number || ''} dated ${existingMyob.date?.substring(0, 10) || '?'} (UID ${existingMyob.uid.substring(0, 8)}…)`
-    const msg = `Duplicate in MYOB: ${detail} already exists with SupplierInvoiceNumber ${inv.invoice_number} for this supplier`
+    const note = `Adopted existing MYOB bill #${existingMyob.number || '?'} dated ${existingMyob.date?.substring(0, 10) || '?'} (UID ${existingMyob.uid.substring(0, 8)}…) — already in MYOB with same SupplierInvoiceNumber + Supplier`
+
+    const safeBillUid = existingMyob.uid && existingMyob.uid !== conn.company_file_id
+      ? existingMyob.uid
+      : null
+
     await c.from('ap_invoices').update({
-      myob_post_attempts: (inv.myob_post_attempts || 0) + 1,
-      myob_post_error: msg.substring(0, 500),
-      status: 'error',
+      myob_bill_uid:       safeBillUid,
+      myob_posted_at:      existingMyob.date || new Date().toISOString(),
+      myob_post_attempts:  (inv.myob_post_attempts || 0) + 1,
+      myob_post_error:     note,
+      status:              'posted',
     }).eq('id', invoiceId)
-    throw new Error(msg)
+
+    return {
+      ok: true,
+      myobBillUid: safeBillUid || '',
+      myobBillRowId: null,
+      attachmentStatus: 'adopted',
+      attachmentError: undefined,
+      adopted: true,
+      adoptedBillNumber: existingMyob.number,
+    }
   }
 
   function taxUidFor(taxCode: string): string {
@@ -289,8 +322,6 @@ export async function createServiceBill(
   const billLines: ServiceBillLineBody[] = lines.map((l: any) => {
     const description = [l.part_number, l.description].filter(Boolean).join(' — ').substring(0, 255)
     const lineTotal = round2(Number(l.line_total_ex_gst || 0))
-    // Per-line account wins over invoice-level fallback. Validation above
-    // guarantees one of them is set.
     const accountUid: string = l.account_uid || inv.resolved_account_uid
     return {
       Type: 'Transaction',
