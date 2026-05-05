@@ -198,6 +198,7 @@ export const PORTAL_TABS: PortalTab[] = [
   { id: 'pnl',           label: 'P&L',             permission: 'view:pnl' },
   { id: 'stock',         label: 'Stock',           permission: 'view:stock' },
   { id: 'payables',      label: 'Payables',        permission: 'view:payables' },
+  { id: 'ap',            label: 'AP Invoices',     permission: 'view:supplier_invoices' },
   { id: 'stocktake',     label: 'Stocktake',       permission: 'view:stocktakes' },
 ]
 
