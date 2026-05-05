@@ -10,11 +10,6 @@
 //      from Supabase, builds the bill body, POSTs to MYOB, attaches the PDF
 //      as a follow-up step, updates the invoice row.
 //
-// Attachment is best-effort and runs AFTER the bill posts successfully. If
-// the attachment POST fails, the bill remains posted (status='posted') but
-// myob_post_error gets populated with the attachment error so the user can
-// re-attach manually in MYOB.
-//
 // Bill body shape (IsTaxInclusive=false, amounts ex-GST):
 //   POST /accountright/{cf_id}/Purchase/Bill/Service
 //   {
@@ -22,23 +17,33 @@
 //     SupplierInvoiceNumber: '3421025200',
 //     Supplier: { UID },
 //     Lines: [{ Type:'Transaction', Description, Account:{UID}, Amount, TaxCode:{UID} }],
-//     JournalMemo: 'AP: <vendor> <inv#> [— Capricorn <ref>] [— Job <#>]',
+//     JournalMemo: '...',
 //     IsTaxInclusive: false,
 //     FreightAmount: 0,
-//     FreightTaxCode: { UID },     // REQUIRED even when FreightAmount=0
+//     FreightTaxCode: { UID },
+//     Subtotal: 46.50,         // ex-GST sum of line Amounts + freight ex-GST
+//     TotalTax: 4.65,          // sum of line tax + freight tax
+//     TotalAmount: 51.15,      // Subtotal + TotalTax
 //   }
 //
-// Field naming gotcha: line-level tax field is `TaxCode`, NOT `Tax`. MYOB
-// will reject with `TaxCode is required — Lines[0].TaxCode` if you use the
-// wrong name. Body-level FreightTaxCode follows the same convention.
+// Field naming gotchas (learned the hard way):
+//   - Line tax field is `TaxCode` not `Tax` (matches body-level FreightTaxCode)
+//   - FreightTaxCode is required even when FreightAmount is 0
+//   - Subtotal/TotalTax/TotalAmount must be sent on the body envelope. MYOB
+//     will accept a POST without them and create a bill, but display it as
+//     $0 in the UI even though Lines[i].Amount is set correctly.
+//
+// Bill UID extraction: MYOB returns 201 Created with an empty body. The new
+// bill's UID lives in the `Location` response header (a URL ending in the
+// UID). myobFetch exposes lowercased headers — see extractMyobUid().
+//
+// Attachment is best-effort and runs AFTER the bill posts successfully. If
+// the attachment POST fails, the bill remains posted (status='posted') but
+// myob_post_error is populated so the user can re-attach manually in MYOB.
 //
 // Attachment body shape:
 //   POST /accountright/{cf_id}/Purchase/Bill/Service/{billUid}/Attachment
-//   {
-//     OriginalFileName: 'Repco_3421025200.pdf',
-//     AttachmentFileName: 'Repco_3421025200.pdf',
-//     FileBytes: '<base64>',
-//   }
+//   { OriginalFileName, AttachmentFileName, FileBytes (base64) }
 
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
 import { getConnection, myobFetch, MyobConnection } from './myob'
@@ -49,6 +54,9 @@ const SETTINGS_ID = 'singleton'
 const STORAGE_BUCKET = 'ap-invoices'
 const MAX_ATTACHMENT_BYTES = 8 * 1024 * 1024
 
+// AU GST is 10%. FRE (Free) is 0%. Other tax codes aren't supported in v0.
+const GST_RATE = 0.10
+
 let _sb: SupabaseClient | null = null
 function sb(): SupabaseClient {
   if (_sb) return _sb
@@ -57,6 +65,10 @@ function sb(): SupabaseClient {
   if (!url || !key) throw new Error('Supabase env vars missing')
   _sb = createClient(url, key, { auth: { persistSession: false } })
   return _sb
+}
+
+function round2(n: number): number {
+  return Math.round(n * 100) / 100
 }
 
 // ── Tax code cache ──────────────────────────────────────────────────────
@@ -136,7 +148,7 @@ interface ServiceBillLineBody {
   Description: string
   Account: { UID: string }
   Amount: number
-  TaxCode: { UID: string }    // NB: field is `TaxCode`, NOT `Tax`
+  TaxCode: { UID: string }
 }
 
 interface ServiceBillBody {
@@ -148,6 +160,9 @@ interface ServiceBillBody {
   IsTaxInclusive: boolean
   FreightAmount: number
   FreightTaxCode: { UID: string }
+  Subtotal: number
+  TotalTax: number
+  TotalAmount: number
 }
 
 export async function createServiceBill(
@@ -192,9 +207,13 @@ export async function createServiceBill(
     throw new Error(`Unsupported tax code "${code}" — supported: GST, FRE`)
   }
 
+  function rateFor(taxCode: string): number {
+    return (taxCode || 'GST').toUpperCase() === 'FRE' ? 0 : GST_RATE
+  }
+
   const billLines: ServiceBillLineBody[] = lines.map((l: any) => {
     const description = [l.part_number, l.description].filter(Boolean).join(' — ').substring(0, 255)
-    const amount = Number(l.line_total_ex_gst || 0)
+    const amount = round2(Number(l.line_total_ex_gst || 0))
     return {
       Type: 'Transaction',
       Description: description || 'AP line',
@@ -203,6 +222,21 @@ export async function createServiceBill(
       TaxCode: { UID: taxUidFor(l.tax_code) },
     }
   })
+
+  // ── Compute envelope totals ──
+  // MYOB requires Subtotal/TotalTax/TotalAmount on the body even though Lines
+  // carry the amounts. Without these, MYOB creates the bill but displays
+  // $0 in the UI (we hit this on the first successful post).
+  //
+  // Tax computed per-line so a mixed GST/FRE bill totals correctly. Freight
+  // is always 0 in v0 so its tax is 0.
+  const subtotal = round2(billLines.reduce((s, l) => s + l.Amount, 0))
+  const totalTax = round2(lines.reduce((s: number, l: any) => {
+    const lineEx = Number(l.line_total_ex_gst || 0)
+    return s + lineEx * rateFor(l.tax_code)
+  }, 0))
+  const freightAmount = 0
+  const totalAmount = round2(subtotal + totalTax + freightAmount)
 
   const memoParts = [
     `AP: ${inv.vendor_name_parsed || 'Vendor'} — ${inv.invoice_number}`,
@@ -222,8 +256,11 @@ export async function createServiceBill(
     Lines: billLines,
     JournalMemo: journalMemo,
     IsTaxInclusive: false,
-    FreightAmount: 0,
+    FreightAmount: freightAmount,
     FreightTaxCode: { UID: gstUid },
+    Subtotal: subtotal,
+    TotalTax: totalTax,
+    TotalAmount: totalAmount,
   }
 
   const conn = await getConnection(companyFile)
@@ -234,7 +271,7 @@ export async function createServiceBill(
   const attemptsSoFar = (inv.myob_post_attempts || 0) + 1
 
   // ── Step 1: post the bill ──
-  let result: { status: number; data: any; raw: string }
+  let result: { status: number; data: any; raw: string; headers: Record<string, string> }
   try {
     result = await myobFetch(conn.id, path, {
       method: 'POST',
@@ -381,12 +418,31 @@ function extractMyobError(result: { status: number; data: any; raw: string }): s
   return `HTTP ${result.status}`
 }
 
-function extractMyobUid(result: { data: any; raw: string }): string | null {
+// Extract bill UID from a 201 Created response.
+//
+// MYOB AccountRight POSTs typically return:
+//   - Status: 201
+//   - Body: empty (or minimal)
+//   - Location: https://api.myob.com/accountright/{cfId}/.../{newUid}
+//
+// Order of attempts:
+//   1. body.UID / body.Uid                      (some versions/endpoints)
+//   2. Location header (the standard 201 case)  ← primary path
+//   3. Regex over raw body                      (last-resort fallback)
+const UUID_REGEX = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i
+
+function extractMyobUid(result: { data: any; raw: string; headers: Record<string, string> }): string | null {
   if (result.data && typeof result.data === 'object') {
     if (typeof result.data.UID === 'string') return result.data.UID
     if (typeof result.data.Uid === 'string') return result.data.Uid
   }
-  const m = (result.raw || '').match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i)
+  // myobFetch lowercases header keys.
+  const location = result.headers?.['location']
+  if (location) {
+    const m = location.match(UUID_REGEX)
+    if (m) return m[0]
+  }
+  const m = (result.raw || '').match(UUID_REGEX)
   return m ? m[0] : null
 }
 

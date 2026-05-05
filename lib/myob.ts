@@ -326,6 +326,12 @@ async function logApiCall(entry: {
 //  - MYOB-specific required headers (`x-myobapi-key`, `x-myobapi-version`)
 //  - Audit logging
 //
+// Returns the response status, parsed body (`data`), raw text body (`raw`),
+// and headers (`headers`, lowercase keys). The `headers` field is critical
+// for MYOB POSTs that return 201 Created with empty bodies — the new
+// resource UID is in the `Location` header and that's the only place to
+// read it from.
+//
 // CF auth modes:
 //   SSO mode (post-March 2025 default): the OAuth token alone is sufficient,
 //     no x-myobapi-cftoken header is sent. This is the case when the
@@ -346,7 +352,7 @@ export async function myobFetch(
     performedBy?: string | null
     requiresCfAuth?: boolean
   } = {},
-): Promise<{ status: number; data: any; raw: string }> {
+): Promise<{ status: number; data: any; raw: string; headers: Record<string, string> }> {
   const method = opts.method || 'GET'
   const performedBy = opts.performedBy || null
   const requiresCfAuth = opts.requiresCfAuth !== false  // default true
@@ -404,11 +410,21 @@ export async function myobFetch(
   let status = 0
   let raw = ''
   let data: any = null
+  const responseHeaders: Record<string, string> = {}
   let errMsg: string | undefined
 
   try {
     const res = await fetch(url, { method, headers, body: requestBody })
     status = res.status
+
+    // Capture response headers (lowercase keys for consistent lookup).
+    // fetch's Headers object is case-insensitive on read, but iteration
+    // order and casing are implementation-dependent — we lowercase
+    // explicitly so callers can use `result.headers['location']` reliably.
+    res.headers.forEach((v, k) => {
+      responseHeaders[k.toLowerCase()] = v
+    })
+
     raw = await res.text()
     if (raw) {
       try { data = JSON.parse(raw) } catch { data = raw }
@@ -437,7 +453,7 @@ export async function myobFetch(
       .then(() => {}, () => {})
   }
 
-  return { status, data, raw }
+  return { status, data, raw, headers: responseHeaders }
 }
 
 // ── Company file helpers ────────────────────────────────────────────────
