@@ -171,6 +171,55 @@ export async function getAttachmentBase64(
   return data.contentBytes as string
 }
 
+// ── Bulk message listing ────────────────────────────────────────────────
+// Used by the AP "Pull from Inbox" feature to ingest invoices in bulk
+// from a shared mailbox (accounts@). Different from the webhook path,
+// which fetches messages one at a time as notifications arrive.
+
+export interface GraphMessageSummary {
+  id: string
+  subject: string | null
+  from: string | null
+  receivedDateTime: string
+  hasAttachments: boolean
+}
+
+/**
+ * List recent messages with attachments from a mailbox's Inbox folder.
+ * Filters server-side on hasAttachments=true and (optionally) a since-date.
+ * Sorted newest first.
+ *
+ * Used for bulk pull jobs that want to scan a mailbox and ingest any
+ * unprocessed invoices. The caller is responsible for de-duping against
+ * already-ingested message IDs.
+ */
+export async function listMessagesWithAttachments(
+  mailbox: string,
+  opts: { sinceIsoDate?: string; top?: number } = {},
+): Promise<GraphMessageSummary[]> {
+  const top = Math.min(Math.max(opts.top || 50, 1), 100)
+  const filterParts = ['hasAttachments eq true']
+  if (opts.sinceIsoDate) {
+    filterParts.push(`receivedDateTime ge ${opts.sinceIsoDate}`)
+  }
+  const params = new URLSearchParams({
+    '$select':  'id,subject,from,receivedDateTime,hasAttachments',
+    '$filter':  filterParts.join(' and '),
+    '$orderby': 'receivedDateTime desc',
+    '$top':     String(top),
+  })
+  const path = `/users/${encodeURIComponent(mailbox)}/mailFolders/Inbox/messages?${params.toString()}`
+
+  const data = await graphJson<{ value: any[] }>(path)
+  return (data.value || []).map(m => ({
+    id: m.id,
+    subject: m.subject || null,
+    from: m.from?.emailAddress?.address || null,
+    receivedDateTime: m.receivedDateTime,
+    hasAttachments: !!m.hasAttachments,
+  }))
+}
+
 // ── Subscription management ────────────────────────────────────────────
 
 export interface GraphSubscription {

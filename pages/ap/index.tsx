@@ -1,7 +1,15 @@
 // pages/ap/index.tsx
-// AP Invoice Processor — triage list page with upload, filters, and delete.
+// AP Invoice Processor — triage list with upload, filters, description
+// column, per-row + bulk Approve, and Pull from Inbox.
+//
+// Approval rules (UX side; the API enforces too):
+//   - Per-row Approve is offered when the invoice's triage is GREEN and
+//     status is not already 'posted' or 'rejected'. Anything else is
+//     either still being triaged or has been finalised.
+//   - Bulk Approve operates on selected approvable rows. Non-approvable
+//     rows can't be ticked.
 
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useMemo } from 'react'
 import { useRouter } from 'next/router'
 import { GetServerSideProps } from 'next'
 import PortalSidebar from '../../lib/PortalSidebar'
@@ -39,6 +47,7 @@ interface InvoiceRow {
   myob_company_file: 'VPS' | 'JAWS'
   myob_bill_uid: string | null
   myob_posted_at: string | null
+  line_summary: string | null
 }
 
 interface ListResponse {
@@ -60,6 +69,12 @@ export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => 
   return requirePageAuth(ctx, 'view:supplier_invoices') as any
 }
 
+function isApprovable(inv: InvoiceRow): boolean {
+  return inv.triage_status === 'green'
+      && inv.status !== 'posted'
+      && inv.status !== 'rejected'
+}
+
 export default function APListPage({ user }: PageProps) {
   const router = useRouter()
   const [data, setData] = useState<ListResponse | null>(null)
@@ -72,6 +87,19 @@ export default function APListPage({ user }: PageProps) {
   const [uploadMessage, setUploadMessage] = useState<string | null>(null)
   const [deletingId, setDeletingId] = useState<string | null>(null)
   const fileRef = useRef<HTMLInputElement>(null)
+
+  // Selection (bulk approve)
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+
+  // Approval state
+  const [approvingId, setApprovingId] = useState<string | null>(null)
+  const [bulkApproving, setBulkApproving] = useState(false)
+  const [approveMessage, setApproveMessage] = useState<string | null>(null)
+
+  // Inbox pull state
+  const [pulling, setPulling] = useState(false)
+  const [pullMessage, setPullMessage] = useState<string | null>(null)
+
   const canEdit = roleHasPermission(user.role, 'edit:supplier_invoices')
 
   async function fetchData() {
@@ -101,6 +129,47 @@ export default function APListPage({ user }: PageProps) {
     const t = setTimeout(fetchData, 300)
     return () => clearTimeout(t)
   }, [search])
+
+  // Drop selections that are no longer in the visible list (e.g. after a
+  // filter change or a successful approval that moves rows to 'posted').
+  useEffect(() => {
+    if (!data) return
+    const visible = new Set(data.invoices.map(i => i.id))
+    let changed = false
+    const next = new Set<string>()
+    selectedIds.forEach(id => {
+      if (visible.has(id)) next.add(id)
+      else changed = true
+    })
+    if (changed) setSelectedIds(next)
+  }, [data])
+
+  const approvableVisibleIds = useMemo(
+    () => new Set((data?.invoices || []).filter(isApprovable).map(i => i.id)),
+    [data]
+  )
+  const selectedApprovableIds = useMemo(
+    () => Array.from(selectedIds).filter(id => approvableVisibleIds.has(id)),
+    [selectedIds, approvableVisibleIds]
+  )
+
+  function toggleSelect(id: string) {
+    setSelectedIds(prev => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+
+  function toggleSelectAll() {
+    setSelectedIds(prev => {
+      const allSelected = approvableVisibleIds.size > 0
+        && Array.from(approvableVisibleIds).every(id => prev.has(id))
+      if (allSelected) return new Set()
+      return new Set(approvableVisibleIds)
+    })
+  }
 
   async function handleFile(file: File) {
     if (!file) return
@@ -152,11 +221,9 @@ export default function APListPage({ user }: PageProps) {
       })
       const json = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`)
-      // Optimistic: drop from current view immediately
       if (data) {
         setData({ ...data, invoices: data.invoices.filter(i => i.id !== inv.id), total: Math.max(0, data.total - 1) })
       }
-      // Refresh to update counts
       fetchData()
     } catch (err: any) {
       alert('Delete failed: ' + (err?.message || err))
@@ -164,6 +231,114 @@ export default function APListPage({ user }: PageProps) {
       setDeletingId(null)
     }
   }
+
+  async function handleApproveOne(inv: InvoiceRow, e: React.MouseEvent) {
+    e.stopPropagation()
+    e.preventDefault()
+    setApprovingId(inv.id)
+    setApproveMessage(null)
+    try {
+      const res = await fetch(`/api/ap/${inv.id}/approve`, {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+      })
+      const json = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`)
+
+      const billUidShort = (json.myobBillUid || '').substring(0, 8)
+      const att = json.attachmentStatus
+      const attLabel = att === 'attached' ? '📎 PDF attached'
+                     : att === 'failed'   ? `⚠️ PDF attach failed: ${json.attachmentError || ''}`
+                     : att === 'no-pdf'   ? '(no PDF on file)'
+                     : '(attachment skipped)'
+      setApproveMessage(`✅ Posted "${inv.vendor_name_parsed} ${inv.invoice_number}" — bill ${billUidShort}… · ${attLabel}`)
+      fetchData()
+    } catch (err: any) {
+      setApproveMessage(`❌ ${inv.vendor_name_parsed} ${inv.invoice_number}: ${err?.message || err}`)
+    } finally {
+      setApprovingId(null)
+    }
+  }
+
+  async function handleBulkApprove() {
+    if (selectedApprovableIds.length === 0) return
+    const ok = confirm(`Approve & post ${selectedApprovableIds.length} invoice(s) to MYOB?\n\nEach is posted sequentially. Failures will be reported per-invoice.`)
+    if (!ok) return
+
+    setBulkApproving(true)
+    setApproveMessage(null)
+    try {
+      const res = await fetch('/api/ap/bulk-approve', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ invoiceIds: selectedApprovableIds }),
+      })
+      const json = await res.json()
+      if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`)
+
+      const s = json.summary
+      const parts = [`✅ Posted ${s.succeeded}/${s.total}`]
+      if (s.attached !== undefined)   parts.push(`📎 ${s.attached} attached`)
+      if (s.attachFail > 0)           parts.push(`⚠️ ${s.attachFail} attach failed`)
+      if (s.failed > 0)               parts.push(`❌ ${s.failed} failed`)
+      setApproveMessage(parts.join(' · '))
+
+      if (s.failed > 0) {
+        const fails = (json.results || []).filter((r: any) => !r.ok)
+        console.error('Bulk approve failures:', fails)
+      }
+
+      setSelectedIds(new Set())
+      fetchData()
+    } catch (err: any) {
+      setApproveMessage(`❌ Bulk approve failed: ${err?.message || err}`)
+    } finally {
+      setBulkApproving(false)
+    }
+  }
+
+  async function handlePullInbox() {
+    setPulling(true)
+    setPullMessage(null)
+    try {
+      const res = await fetch('/api/ap/pull-inbox', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sinceDays: 30 }),
+      })
+      const json = await res.json()
+      if (!res.ok) throw new Error(json.error || json.detail || `HTTP ${res.status}`)
+
+      const s = json.summary
+      const parts = [`📥 Scanned ${s.scanned}`]
+      if (s.ingested > 0)   parts.push(`✅ ${s.ingested} ingested`)
+      if (s.duplicates > 0) parts.push(`↷ ${s.duplicates} already done`)
+      if (s.skipped > 0)    parts.push(`◌ ${s.skipped} skipped`)
+      if (s.failed > 0)     parts.push(`❌ ${s.failed} failed`)
+      setPullMessage(parts.join(' · '))
+
+      if (s.failed > 0) {
+        const fails = (json.results || []).filter((r: any) => r.status === 'failed')
+        console.error('Pull failures:', fails)
+      }
+
+      fetchData()
+    } catch (err: any) {
+      setPullMessage(`❌ Pull failed: ${err?.message || err}`)
+    } finally {
+      setPulling(false)
+    }
+  }
+
+  // Derived state for the header checkbox
+  const headerCheckboxState: 'unchecked' | 'partial' | 'checked' =
+    approvableVisibleIds.size === 0 ? 'unchecked'
+    : Array.from(approvableVisibleIds).every(id => selectedIds.has(id)) ? 'checked'
+    : selectedApprovableIds.length > 0 ? 'partial'
+    : 'unchecked'
 
   return (
     <div style={{display:'flex', minHeight:'100vh', background:T.bg, color:T.text, fontFamily:"'DM Sans', system-ui, sans-serif"}}>
@@ -217,6 +392,18 @@ export default function APListPage({ user }: PageProps) {
           />
           {canEdit && (
             <>
+              <button
+                disabled={pulling}
+                onClick={handlePullInbox}
+                title="Fetch new invoices from accounts@ inbox"
+                style={{
+                  background:'transparent', color:T.text, border:`1px solid ${T.border2}`,
+                  padding:'8px 12px', borderRadius:6, fontSize:12, fontFamily:'inherit',
+                  cursor: pulling ? 'wait' : 'pointer', opacity: pulling ? 0.6 : 1,
+                }}
+              >
+                {pulling ? 'Pulling…' : '📥 Pull from Inbox'}
+              </button>
               <input
                 ref={fileRef}
                 type="file"
@@ -240,15 +427,49 @@ export default function APListPage({ user }: PageProps) {
           )}
         </div>
 
-        {uploadMessage && (
+        {/* Bulk action bar — only when something approvable is selected */}
+        {canEdit && selectedApprovableIds.length > 0 && (
           <div style={{
-            background: uploadMessage.startsWith('❌') ? `${T.red}15` : `${T.green}15`,
-            border:`1px solid ${uploadMessage.startsWith('❌') ? T.red : T.green}40`,
-            borderRadius: 7, padding: 10, marginBottom: 12, fontSize: 12,
-            color: uploadMessage.startsWith('❌') ? T.red : T.green,
+            background:`${T.green}10`, border:`1px solid ${T.green}40`, borderRadius:7,
+            padding:'8px 12px', marginBottom:10, display:'flex', gap:12, alignItems:'center', fontSize:12,
           }}>
-            {uploadMessage}
+            <span style={{color:T.green, fontWeight:500}}>
+              {selectedApprovableIds.length} selected
+            </span>
+            <button
+              onClick={handleBulkApprove}
+              disabled={bulkApproving}
+              style={{
+                background: T.green, color:'#fff', border:'none',
+                padding:'6px 12px', borderRadius:5, fontSize:11, fontWeight:500, fontFamily:'inherit',
+                cursor: bulkApproving ? 'wait' : 'pointer', opacity: bulkApproving ? 0.6 : 1,
+              }}
+            >
+              {bulkApproving ? 'Posting to MYOB…' : `✓ Approve & Post ${selectedApprovableIds.length}`}
+            </button>
+            <button
+              onClick={() => setSelectedIds(new Set())}
+              disabled={bulkApproving}
+              style={{
+                background:'transparent', color:T.text2, border:`1px solid ${T.border2}`,
+                padding:'6px 10px', borderRadius:5, fontSize:11, fontFamily:'inherit',
+                cursor: bulkApproving ? 'wait' : 'pointer',
+              }}
+            >
+              Clear selection
+            </button>
           </div>
+        )}
+
+        {/* Operation messages */}
+        {pullMessage && (
+          <Banner kind={pullMessage.startsWith('❌') ? 'err' : 'ok'}>{pullMessage}</Banner>
+        )}
+        {approveMessage && (
+          <Banner kind={approveMessage.startsWith('❌') ? 'err' : 'ok'}>{approveMessage}</Banner>
+        )}
+        {uploadMessage && (
+          <Banner kind={uploadMessage.startsWith('❌') ? 'err' : 'ok'}>{uploadMessage}</Banner>
         )}
 
         {error && (
@@ -259,30 +480,44 @@ export default function APListPage({ user }: PageProps) {
 
         <div style={{background:T.bg2, border:`1px solid ${T.border}`, borderRadius:10, overflow:'hidden'}}>
           <div style={{overflowX:'auto'}}>
-            <table style={{width:'100%', borderCollapse:'collapse'}}>
+            <table style={{width:'100%', borderCollapse:'collapse', minWidth: 1280}}>
               <thead>
                 <tr style={{borderBottom:`1px solid ${T.border2}`}}>
+                  {canEdit && (
+                    <th style={th(36)}>
+                      <HeaderCheckbox
+                        state={headerCheckboxState}
+                        disabled={approvableVisibleIds.size === 0}
+                        onClick={toggleSelectAll}
+                      />
+                    </th>
+                  )}
                   <th style={th(80)}>Triage</th>
                   <th style={th(110)}>Received</th>
                   <th style={th()}>Vendor</th>
+                  <th style={th()}>Description</th>
                   <th style={th(140)}>Invoice #</th>
                   <th style={th(90)}>Inv Date</th>
                   <th style={th()}>Supplier (MYOB)</th>
-                  <th style={{...th(100), textAlign:'right'}}>Total inc GST</th>
+                  <th style={{...th(110), textAlign:'right'}}>Total inc GST</th>
                   <th style={th(110)}>Status</th>
+                  {canEdit && <th style={th(90)}>Approve</th>}
                   {canEdit && <th style={th(40)}/>}
                 </tr>
               </thead>
               <tbody>
                 {loading && !data && (
-                  <tr><td colSpan={canEdit ? 9 : 8} style={{padding:30, textAlign:'center', color:T.text3, fontSize:12}}>Loading…</td></tr>
+                  <tr><td colSpan={canEdit ? 12 : 9} style={{padding:30, textAlign:'center', color:T.text3, fontSize:12}}>Loading…</td></tr>
                 )}
                 {data && data.invoices.length === 0 && (
-                  <tr><td colSpan={canEdit ? 9 : 8} style={{padding:30, textAlign:'center', color:T.text3, fontSize:12}}>No invoices match the current filters.</td></tr>
+                  <tr><td colSpan={canEdit ? 12 : 9} style={{padding:30, textAlign:'center', color:T.text3, fontSize:12}}>No invoices match the current filters.</td></tr>
                 )}
                 {data && data.invoices.map((inv, i) => {
                   const isDeleting = deletingId === inv.id
+                  const isApprovingThis = approvingId === inv.id
                   const isPosted = inv.status === 'posted'
+                  const approvable = isApprovable(inv)
+                  const isSelected = selectedIds.has(inv.id)
                   return (
                     <tr
                       key={inv.id}
@@ -291,10 +526,25 @@ export default function APListPage({ user }: PageProps) {
                         borderTop: i > 0 ? `1px solid ${T.border}` : 'none',
                         cursor: 'pointer',
                         opacity: isDeleting ? 0.4 : 1,
+                        background: isSelected ? `${T.green}08` : 'transparent',
                       }}
-                      onMouseEnter={e => (e.currentTarget.style.background = T.bg3)}
-                      onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+                      onMouseEnter={e => (e.currentTarget.style.background = isSelected ? `${T.green}12` : T.bg3)}
+                      onMouseLeave={e => (e.currentTarget.style.background = isSelected ? `${T.green}08` : 'transparent')}
                     >
+                      {canEdit && (
+                        <td style={{...td(), padding:'10px 6px', textAlign:'center'}} onClick={e => e.stopPropagation()}>
+                          {approvable ? (
+                            <input
+                              type="checkbox"
+                              checked={isSelected}
+                              onChange={() => toggleSelect(inv.id)}
+                              style={{cursor:'pointer'}}
+                            />
+                          ) : (
+                            <span style={{color:T.text3, fontSize:11}}>—</span>
+                          )}
+                        </td>
+                      )}
                       <td style={td()}><TriagePill status={inv.triage_status}/></td>
                       <td style={{...td(), fontSize:11, color:T.text3, fontFamily:'monospace', whiteSpace:'nowrap'}}>
                         {fmtDateTime(inv.received_at)}
@@ -303,6 +553,13 @@ export default function APListPage({ user }: PageProps) {
                         <div style={{fontSize:13, color:T.text}}>{inv.vendor_name_parsed || <span style={{color:T.text3}}>—</span>}</div>
                         {inv.via_capricorn && (
                           <div style={{fontSize:10, color:T.amber, marginTop:2}}>via Capricorn{inv.capricorn_reference ? ` ${inv.capricorn_reference}` : ''}</div>
+                        )}
+                      </td>
+                      <td style={{...td(), fontSize:12, color:T.text2, maxWidth: 260}}>
+                        {inv.line_summary ? (
+                          <span title={inv.line_summary}>{inv.line_summary}</span>
+                        ) : (
+                          <span style={{color:T.text3, fontStyle:'italic'}}>—</span>
                         )}
                       </td>
                       <td style={{...td(), fontFamily:'monospace', fontSize:12}}>
@@ -326,7 +583,29 @@ export default function APListPage({ user }: PageProps) {
                         <StatusPill status={inv.status}/>
                       </td>
                       {canEdit && (
-                        <td style={{...td(), textAlign:'center', padding:'8px 6px'}}>
+                        <td style={{...td(), textAlign:'center', padding:'8px 6px'}} onClick={e => e.stopPropagation()}>
+                          {approvable ? (
+                            <button
+                              onClick={(e) => handleApproveOne(inv, e)}
+                              disabled={isApprovingThis || bulkApproving}
+                              title="Post this invoice to MYOB"
+                              style={{
+                                background: T.green, color:'#fff', border:'none',
+                                padding:'4px 10px', borderRadius:4, fontSize:11, fontWeight:500, fontFamily:'inherit',
+                                cursor: (isApprovingThis || bulkApproving) ? 'wait' : 'pointer',
+                                opacity: (isApprovingThis || bulkApproving) ? 0.5 : 1,
+                                whiteSpace:'nowrap',
+                              }}
+                            >
+                              {isApprovingThis ? '…' : '✓ Approve'}
+                            </button>
+                          ) : (
+                            <span style={{color:T.text3, fontSize:11}}>—</span>
+                          )}
+                        </td>
+                      )}
+                      {canEdit && (
+                        <td style={{...td(), textAlign:'center', padding:'8px 6px'}} onClick={e => e.stopPropagation()}>
                           {isPosted ? (
                             <span title="Posted invoices can't be deleted" style={{color:T.text3, fontSize:14}}>—</span>
                           ) : (
@@ -367,7 +646,8 @@ export default function APListPage({ user }: PageProps) {
   )
 }
 
-// ── UI primitives ──
+// ── UI primitives ──────────────────────────────────────────────────────
+
 function Stat({ n, label, color }: { n: number; label: string; color: string }) {
   return (
     <div style={{display:'flex', alignItems:'baseline', gap:6}}>
@@ -417,6 +697,32 @@ function StatusPill({ status }: { status: string }) {
       background:`${c}15`, border:`1px solid ${c}40`, color:c,
       fontSize:10, fontWeight:500, textTransform:'uppercase', letterSpacing:'0.04em', whiteSpace:'nowrap',
     }}>{status.replace('_',' ')}</span>
+  )
+}
+
+function Banner({ kind, children }: { kind: 'ok' | 'err'; children: React.ReactNode }) {
+  const c = kind === 'err' ? T.red : T.green
+  return (
+    <div style={{
+      background:`${c}15`, border:`1px solid ${c}40`, borderRadius:7,
+      padding:10, marginBottom:12, fontSize:12, color:c,
+    }}>{children}</div>
+  )
+}
+
+function HeaderCheckbox({
+  state, disabled, onClick,
+}: { state: 'unchecked' | 'partial' | 'checked'; disabled: boolean; onClick: () => void }) {
+  return (
+    <input
+      type="checkbox"
+      ref={el => { if (el) el.indeterminate = state === 'partial' }}
+      checked={state === 'checked'}
+      onChange={() => { if (!disabled) onClick() }}
+      disabled={disabled}
+      title="Select all approvable invoices on this page"
+      style={{cursor: disabled ? 'not-allowed' : 'pointer'}}
+    />
   )
 }
 
