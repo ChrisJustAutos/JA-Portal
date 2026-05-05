@@ -260,7 +260,7 @@ async function checkGraphRenewalCron(): Promise<CheckResult> {
     let mostRecentRenewal: Date | null = null
     let firstError: { mailbox: string; err: string } | null = null
 
-    for (const sub of subs.values()) {
+    for (const sub of Array.from(subs.values())) {
       const expiresAt = new Date(sub.expiration_date_time)
       if (!oldestExpiry || expiresAt < oldestExpiry) oldestExpiry = expiresAt
       if (sub.last_renewed_at) {
