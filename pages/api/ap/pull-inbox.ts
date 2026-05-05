@@ -11,6 +11,10 @@
 //      same pipeline as /api/ap/upload (parse → insert → upload PDF →
 //      triage). New invoices are tagged with graph_message_id so
 //      subsequent pulls skip them.
+//   4. Mark the source email as read (always) and move it to a
+//      configured folder (when AP_INBOX_PROCESSED_FOLDER is set). Both
+//      operations require Mail.ReadWrite app permission and degrade
+//      gracefully if the grant is missing.
 //
 // Concurrency: the Claude Haiku parse call dominates (5–15s per invoice).
 // We run AP_INBOX_PULL_CONCURRENCY workers in parallel (default 4) which
@@ -26,6 +30,14 @@
 // permission), which can read any mailbox in the tenant — no per-mailbox
 // subscription needed for pull-on-demand.
 //
+// Mark-as-read / move:
+//   - AP_INBOX_MARK_READ        — 'true' (default) / 'false'
+//   - AP_INBOX_PROCESSED_FOLDER — folder name (e.g. 'Printed' or
+//                                 'Processed'). Unset = no move.
+// Mark-as-read & move are best-effort. Failures (incl. 403 due to
+// Mail.Read-only grant) do NOT roll back the ingest. The first 403
+// of each kind is logged once to Vercel runtime logs.
+//
 // Auth: edit:supplier_invoices.
 // Function timeout: 5 min.
 
@@ -36,6 +48,9 @@ import {
   listMessagesWithAttachments,
   listAttachmentMeta,
   getAttachmentBase64,
+  markMessageAsRead,
+  findFolderByDisplayName,
+  moveMessageToFolder,
   GraphAttachmentMeta,
   GraphMessageSummary,
 } from '../../../lib/microsoft-graph'
@@ -76,6 +91,8 @@ interface IngestResult {
   vendor?: string | null
   total?: number | null
   reason?: string
+  markedRead?: boolean
+  moved?: boolean
 }
 
 function readConcurrency(): number {
@@ -84,6 +101,12 @@ function readConcurrency(): number {
   const n = parseInt(raw, 10)
   if (!Number.isFinite(n) || n < 1) return DEFAULT_CONCURRENCY
   return Math.min(n, MAX_CONCURRENCY)
+}
+
+function readMarkReadEnabled(): boolean {
+  // Default ON; flip with AP_INBOX_MARK_READ=false
+  const raw = (process.env.AP_INBOX_MARK_READ || 'true').toLowerCase().trim()
+  return raw !== 'false' && raw !== '0' && raw !== 'no'
 }
 
 export default withAuth('edit:supplier_invoices', async (req: NextApiRequest, res: NextApiResponse) => {
@@ -97,6 +120,8 @@ export default withAuth('edit:supplier_invoices', async (req: NextApiRequest, re
 
   const mailbox = process.env.AP_INBOX_MAILBOX || DEFAULT_MAILBOX
   const concurrency = readConcurrency()
+  const markReadEnabled = readMarkReadEnabled()
+  const processedFolderName = (process.env.AP_INBOX_PROCESSED_FOLDER || '').trim()
 
   // ── Step 1: list candidate messages ──
   let messages: GraphMessageSummary[]
@@ -122,7 +147,7 @@ export default withAuth('edit:supplier_invoices', async (req: NextApiRequest, re
       mailbox,
       sinceDays: days,
       concurrency,
-      summary: { scanned: 0, ingested: 0, duplicates: 0, skipped: 0, failed: 0 },
+      summary: { scanned: 0, ingested: 0, duplicates: 0, skipped: 0, failed: 0, markedRead: 0, moved: 0 },
       results: [],
     })
   }
@@ -148,6 +173,75 @@ export default withAuth('edit:supplier_invoices', async (req: NextApiRequest, re
     }
   }
 
+  // ── Step 2.5: resolve processed-folder ID once (best effort) ──
+  let processedFolderId: string | null = null
+  let processedFolderResolveError: string | null = null
+  if (processedFolderName) {
+    try {
+      processedFolderId = await findFolderByDisplayName(mailbox, processedFolderName)
+      if (!processedFolderId) {
+        processedFolderResolveError = `No folder named "${processedFolderName}" found in Inbox children or top-level — moves disabled`
+        console.error(`[pull-inbox] ${processedFolderResolveError}`)
+      }
+    } catch (e: any) {
+      processedFolderResolveError = `Folder lookup failed: ${e?.message || e}`
+      console.error(`[pull-inbox] ${processedFolderResolveError}`)
+    }
+  }
+
+  // ── Mailbox-write degradation guards ──
+  // First 403 of each kind disables further attempts for the whole pull
+  // and logs once to Vercel. Other errors are surfaced per-result but
+  // don't disable subsequent attempts (transient failures are still
+  // worth retrying for the next message).
+  let markReadDisabled = !markReadEnabled
+  let moveDisabled     = !processedFolderId
+  let markReadLogged403 = false
+  let moveLogged403    = false
+
+  function is403(e: any): boolean {
+    const msg = String(e?.message || e || '')
+    return /\b403\b/.test(msg) || /Forbidden/i.test(msg) || /AccessDenied/i.test(msg)
+  }
+
+  async function tryMarkRead(messageId: string): Promise<boolean> {
+    if (markReadDisabled) return false
+    try {
+      await markMessageAsRead(mailbox, messageId)
+      return true
+    } catch (e: any) {
+      if (is403(e)) {
+        markReadDisabled = true
+        if (!markReadLogged403) {
+          markReadLogged403 = true
+          console.error('[pull-inbox] Mark-as-read got 403 — Mail.ReadWrite app permission needed. Disabling for this pull.')
+        }
+      } else {
+        console.error(`[pull-inbox] Mark-as-read failed for ${messageId}: ${e?.message || e}`)
+      }
+      return false
+    }
+  }
+
+  async function tryMove(messageId: string): Promise<boolean> {
+    if (moveDisabled || !processedFolderId) return false
+    try {
+      await moveMessageToFolder(mailbox, messageId, processedFolderId)
+      return true
+    } catch (e: any) {
+      if (is403(e)) {
+        moveDisabled = true
+        if (!moveLogged403) {
+          moveLogged403 = true
+          console.error('[pull-inbox] Move-to-folder got 403 — Mail.ReadWrite app permission needed. Disabling for this pull.')
+        }
+      } else {
+        console.error(`[pull-inbox] Move-to-folder failed for ${messageId}: ${e?.message || e}`)
+      }
+      return false
+    }
+  }
+
   // ── Per-message worker ──
   // Runs the full ingest pipeline for one message. Returns a result row
   // describing what happened. Never throws — all errors are captured
@@ -161,7 +255,11 @@ export default withAuth('edit:supplier_invoices', async (req: NextApiRequest, re
     }
 
     if (alreadyProcessed.has(msg.id)) {
-      return { ...base, attachmentName: '', status: 'duplicate', reason: 'Already ingested' }
+      // Still mark+move duplicates so already-ingested items get out of
+      // the inbox even if the previous run predates this feature.
+      const markedRead = await tryMarkRead(msg.id)
+      const moved      = await tryMove(msg.id)
+      return { ...base, attachmentName: '', status: 'duplicate', reason: 'Already ingested', markedRead, moved }
     }
 
     let attachments: GraphAttachmentMeta[]
@@ -245,6 +343,11 @@ export default withAuth('edit:supplier_invoices', async (req: NextApiRequest, re
       console.error(`Triage failed for ${inserted.id}: ${e?.message || e}`)
     }
 
+    // Mark-read first (uses original ID), then move (returns new ID,
+    // original becomes invalid). Order matters.
+    const markedRead = await tryMarkRead(msg.id)
+    const moved      = await tryMove(msg.id)
+
     return {
       ...base,
       attachmentName: att.name,
@@ -252,6 +355,8 @@ export default withAuth('edit:supplier_invoices', async (req: NextApiRequest, re
       invoiceId: inserted.id,
       vendor: extraction.invoice.vendor?.name || null,
       total: extraction.invoice.totals?.totalIncGst ?? null,
+      markedRead,
+      moved,
     }
   }
 
@@ -270,15 +375,12 @@ export default withAuth('edit:supplier_invoices', async (req: NextApiRequest, re
       try {
         results[idx] = await processMessage(messages[idx])
       } catch (e: any) {
-        // Defensive: processMessage shouldn't throw, but a wrap-around
-        // catch keeps the pool draining if a future change introduces
-        // an unhandled throw.
-        const msg = messages[idx]
+        const m = messages[idx]
         results[idx] = {
-          messageId: msg.id,
-          receivedDateTime: msg.receivedDateTime,
-          subject: msg.subject,
-          from: msg.from,
+          messageId: m.id,
+          receivedDateTime: m.receivedDateTime,
+          subject: m.subject,
+          from: m.from,
           attachmentName: '',
           status: 'failed',
           reason: `Unexpected worker error: ${e?.message || e}`,
@@ -300,6 +402,8 @@ export default withAuth('edit:supplier_invoices', async (req: NextApiRequest, re
     duplicates: results.filter(r => r.status === 'duplicate').length,
     skipped:    results.filter(r => r.status === 'skipped').length,
     failed:     results.filter(r => r.status === 'failed').length,
+    markedRead: results.filter(r => r.markedRead).length,
+    moved:      results.filter(r => r.moved).length,
   }
 
   return res.status(200).json({
@@ -307,6 +411,13 @@ export default withAuth('edit:supplier_invoices', async (req: NextApiRequest, re
     mailbox,
     sinceDays: days,
     concurrency,
+    markRead: { enabled: markReadEnabled, disabledByPermission: markReadEnabled && markReadLogged403 },
+    moveTo: {
+      folderName: processedFolderName || null,
+      folderResolved: !!processedFolderId,
+      folderResolveError: processedFolderResolveError,
+      disabledByPermission: !!processedFolderId && moveLogged403,
+    },
     summary,
     results,
   })

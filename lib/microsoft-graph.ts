@@ -4,6 +4,11 @@
 // Auth: OAuth client credentials flow (app-only). No user signin — the
 // Azure App Registration is granted Mail.Read application permission.
 //
+// **Mark-as-read and move-to-folder operations require Mail.ReadWrite
+// (not just Mail.Read).** If the app registration only has Mail.Read,
+// PATCH /messages/{id} and POST /messages/{id}/move will both return
+// 403. Callers handle the failure gracefully.
+//
 // We watch each rep's Inbox for new messages. When a Mechanics Desk quote
 // email arrives in someone's Inbox, Graph POSTs a notification to our
 // webhook (lib/../pages/api/webhooks/graph-mail.ts), which then uses
@@ -235,6 +240,89 @@ export async function listMessagesWithAttachments(
 
   // Client-side filter for attachments + cap at requested `top`.
   return all.filter(m => m.hasAttachments).slice(0, wanted)
+}
+
+// ── Mailbox write operations ────────────────────────────────────────────
+// Mark-as-read and folder-move both require Mail.ReadWrite application
+// permission with admin consent. With only Mail.Read, every call here
+// returns 403 — callers should treat both as best-effort.
+
+/**
+ * Mark a message as read via PATCH /messages/{id} { isRead: true }.
+ * Throws on non-2xx so callers can detect 403 (permission missing) vs
+ * other failures.
+ */
+export async function markMessageAsRead(mailbox: string, messageId: string): Promise<void> {
+  const r = await graphFetch(`/users/${encodeURIComponent(mailbox)}/messages/${messageId}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ isRead: true }),
+  })
+  if (!r.ok) {
+    const errText = await r.text()
+    throw new Error(`Graph mark-as-read ${r.status}: ${errText.substring(0, 300)}`)
+  }
+}
+
+/**
+ * Find a mail folder by display name. Searches Inbox children first
+ * (the most common location for user-created subfolders like
+ * "Processed" or "Printed"), then falls back to top-level folders if
+ * not found there. Returns the folder UID, or null if no match.
+ */
+export async function findFolderByDisplayName(
+  mailbox: string,
+  displayName: string,
+): Promise<string | null> {
+  const escaped = displayName.replace(/'/g, "''")
+  const filter = `displayName eq '${escaped}'`
+  const select = 'id,displayName'
+
+  // 1. Inbox children (most common for "Processed" / "Printed" folders)
+  try {
+    const params1 = new URLSearchParams({ '$filter': filter, '$select': select, '$top': '5' })
+    const data1 = await graphJson<{ value: any[] }>(
+      `/users/${encodeURIComponent(mailbox)}/mailFolders/Inbox/childFolders?${params1.toString()}`,
+    )
+    const m1 = (data1.value || [])[0]
+    if (m1?.id) return m1.id as string
+  } catch {
+    // ignore — fall through to top-level search
+  }
+
+  // 2. Top-level folders
+  try {
+    const params2 = new URLSearchParams({ '$filter': filter, '$select': select, '$top': '5' })
+    const data2 = await graphJson<{ value: any[] }>(
+      `/users/${encodeURIComponent(mailbox)}/mailFolders?${params2.toString()}`,
+    )
+    const m2 = (data2.value || [])[0]
+    if (m2?.id) return m2.id as string
+  } catch {
+    // ignore
+  }
+
+  return null
+}
+
+/**
+ * Move a message to a different folder. The Graph response returns the
+ * message at its new location with a new ID — the original message ID
+ * is no longer valid afterwards, so do all read-side work first and
+ * call move LAST.
+ */
+export async function moveMessageToFolder(
+  mailbox: string,
+  messageId: string,
+  destinationFolderId: string,
+): Promise<void> {
+  const r = await graphFetch(`/users/${encodeURIComponent(mailbox)}/messages/${messageId}/move`, {
+    method: 'POST',
+    body: JSON.stringify({ destinationId: destinationFolderId }),
+  })
+  if (!r.ok) {
+    const errText = await r.text()
+    throw new Error(`Graph move-to-folder ${r.status}: ${errText.substring(0, 300)}`)
+  }
 }
 
 // ── Subscription management ────────────────────────────────────────────
