@@ -185,9 +185,17 @@ export interface GraphMessageSummary {
 }
 
 /**
- * List recent messages with attachments from a mailbox's Inbox folder.
- * Filters server-side on hasAttachments=true and (optionally) a since-date.
- * Sorted newest first.
+ * List recent messages from a mailbox's Inbox folder, filtered to
+ * receivedDateTime >= sinceIsoDate (when provided), sorted newest first.
+ *
+ * **hasAttachments is filtered client-side, not server-side.** Combining
+ * `hasAttachments eq true` with `receivedDateTime ge X` and `$orderby
+ * receivedDateTime desc` triggers Graph's "InefficientFilter" error
+ * because the combined filter+sort isn't covered by their index.
+ *
+ * Filtering on a single indexed property (receivedDateTime) and sorting
+ * on the same property is the canonical Graph pattern that reliably
+ * works. We pull a batch and filter hasAttachments in memory afterwards.
  *
  * Used for bulk pull jobs that want to scan a mailbox and ingest any
  * unprocessed invoices. The caller is responsible for de-duping against
@@ -197,27 +205,36 @@ export async function listMessagesWithAttachments(
   mailbox: string,
   opts: { sinceIsoDate?: string; top?: number } = {},
 ): Promise<GraphMessageSummary[]> {
-  const top = Math.min(Math.max(opts.top || 50, 1), 100)
-  const filterParts = ['hasAttachments eq true']
-  if (opts.sinceIsoDate) {
-    filterParts.push(`receivedDateTime ge ${opts.sinceIsoDate}`)
-  }
-  const params = new URLSearchParams({
+  // Pull a wider window than `top` so client-side filtering for
+  // hasAttachments still returns ~`top` useful results. Cap at 200 to
+  // avoid hammering Graph; pagination via $skiptoken can come later if
+  // a single account@ inbox routinely has >200 non-invoice emails per
+  // pull window.
+  const wanted = Math.min(Math.max(opts.top || 50, 1), 100)
+  const fetchTop = Math.min(wanted * 2, 200)
+
+  const queryParams: Record<string, string> = {
     '$select':  'id,subject,from,receivedDateTime,hasAttachments',
-    '$filter':  filterParts.join(' and '),
     '$orderby': 'receivedDateTime desc',
-    '$top':     String(top),
-  })
+    '$top':     String(fetchTop),
+  }
+  if (opts.sinceIsoDate) {
+    queryParams['$filter'] = `receivedDateTime ge ${opts.sinceIsoDate}`
+  }
+  const params = new URLSearchParams(queryParams)
   const path = `/users/${encodeURIComponent(mailbox)}/mailFolders/Inbox/messages?${params.toString()}`
 
   const data = await graphJson<{ value: any[] }>(path)
-  return (data.value || []).map(m => ({
+  const all = (data.value || []).map(m => ({
     id: m.id,
     subject: m.subject || null,
     from: m.from?.emailAddress?.address || null,
     receivedDateTime: m.receivedDateTime,
     hasAttachments: !!m.hasAttachments,
   }))
+
+  // Client-side filter for attachments + cap at requested `top`.
+  return all.filter(m => m.hasAttachments).slice(0, wanted)
 }
 
 // ── Subscription management ────────────────────────────────────────────
