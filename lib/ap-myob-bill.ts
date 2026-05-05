@@ -1,20 +1,21 @@
 // lib/ap-myob-bill.ts
-// Build and post Service Bills to MYOB AccountRight.
+// Build and post Service Bills to MYOB AccountRight, then attach the source
+// PDF to the new bill.
 //
 // Two responsibilities:
 //   1. ensureTaxCodes(label) — looks up the GST/FRE tax-code UIDs for the
 //      given company file, caches them in ap_settings. Lazy refresh: only
 //      hits MYOB when missing or older than 30 days.
 //   2. createServiceBill(invoiceId, postedBy) — fetches the invoice + lines
-//      from Supabase, builds the bill body, POSTs to MYOB, updates the
-//      invoice row with the result.
+//      from Supabase, builds the bill body, POSTs to MYOB, attaches the PDF
+//      as a follow-up step, updates the invoice row.
 //
-// Service bills are MYOB's "no inventory tracking" purchase bill type, which
-// matches AP for parts/services where we just want the GL hit (we're not
-// using MYOB's stock module). Each line goes against an Account UID with a
-// Tax UID; MYOB calculates totals server-side.
+// Attachment is best-effort and runs AFTER the bill posts successfully. If
+// the attachment POST fails, the bill remains posted (status='posted') but
+// myob_post_error gets populated with the attachment error so the user can
+// re-attach manually in MYOB.
 //
-// Body shape (IsTaxInclusive=false, amounts ex-GST):
+// Bill body shape (IsTaxInclusive=false, amounts ex-GST):
 //   POST /accountright/{cf_id}/Purchase/Bill/Service
 //   {
 //     Date: 'YYYY-MM-DD',
@@ -23,14 +24,28 @@
 //     Lines: [{ Type:'Transaction', Description, Account:{UID}, Amount, Tax:{UID} }],
 //     JournalMemo: 'AP: <vendor> <inv#> [— Capricorn <ref>] [— Job <#>]',
 //     IsTaxInclusive: false,
+//     FreightAmount: 0,
+//     FreightTaxCode: { UID },     // REQUIRED even when FreightAmount=0
+//   }
+//
+// Attachment body shape:
+//   POST /accountright/{cf_id}/Purchase/Bill/Service/{billUid}/Attachment
+//   {
+//     OriginalFileName: 'Repco_3421025200.pdf',
+//     AttachmentFileName: 'Repco_3421025200.pdf',
+//     FileBytes: '<base64>',
 //   }
 
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
-import { getConnection, myobFetch } from './myob'
+import { getConnection, myobFetch, MyobConnection } from './myob'
 import { CompanyFileLabel } from './ap-myob-lookup'
 
 const TAX_CODE_TTL_MS = 30 * 24 * 3600 * 1000
 const SETTINGS_ID = 'singleton'
+const STORAGE_BUCKET = 'ap-invoices'
+// MYOB attachment limit is ~10MB; we cap at 8MB raw (≈11MB base64) to leave
+// headroom in the JSON request envelope.
+const MAX_ATTACHMENT_BYTES = 8 * 1024 * 1024
 
 let _sb: SupabaseClient | null = null
 function sb(): SupabaseClient {
@@ -96,7 +111,6 @@ export async function ensureTaxCodes(label: CompanyFileLabel): Promise<TaxCodeBu
     }
     const { error: upErr } = await c.from('ap_settings').update(update).eq('id', SETTINGS_ID)
     if (upErr) {
-      // Logging only — we already have what we need to post.
       console.error('ap_settings tax-code cache update failed:', upErr.message)
     }
   }
@@ -111,6 +125,8 @@ export interface CreateServiceBillResult {
   ok: true
   myobBillUid: string
   myobBillRowId: number | null
+  attachmentStatus: 'attached' | 'failed' | 'skipped' | 'no-pdf'
+  attachmentError?: string
 }
 
 interface ServiceBillLineBody {
@@ -128,10 +144,13 @@ interface ServiceBillBody {
   Lines: ServiceBillLineBody[]
   JournalMemo: string
   IsTaxInclusive: boolean
+  FreightAmount: number
+  FreightTaxCode: { UID: string }
 }
 
 /**
- * Build and POST a Service Bill to MYOB for the given AP invoice.
+ * Build and POST a Service Bill to MYOB for the given AP invoice. After a
+ * successful post, attach the source PDF.
  *
  * Pre-conditions (caller should validate, but we re-check):
  *   - status === 'pending_review' or 'ready'
@@ -140,7 +159,8 @@ interface ServiceBillBody {
  *   - At least one line with line_total_ex_gst > 0
  *
  * On success: invoice row updated to status='posted' with myob_bill_uid set.
- * On failure: status='error', myob_post_error set, myob_post_attempts++. Throws.
+ * On bill failure: status='error', myob_post_error set, myob_post_attempts++. Throws.
+ * On attachment failure: bill remains posted, myob_post_error captures attachment err.
  */
 export async function createServiceBill(
   invoiceId: string,
@@ -176,8 +196,6 @@ export async function createServiceBill(
   const companyFile = (inv.myob_company_file || 'VPS') as CompanyFileLabel
   const { gstUid, freUid } = await ensureTaxCodes(companyFile)
 
-  // Map AP tax codes → MYOB tax UIDs. Anything unsupported throws so we
-  // surface a clear error rather than silently posting with the wrong tax.
   function taxUidFor(taxCode: string): string {
     const code = (taxCode || 'GST').toUpperCase()
     if (code === 'GST') return gstUid
@@ -200,7 +218,6 @@ export async function createServiceBill(
     }
   })
 
-  // Memo: keep human-readable, include cross-references for MYOB users
   const memoParts = [
     `AP: ${inv.vendor_name_parsed || 'Vendor'} — ${inv.invoice_number}`,
   ]
@@ -212,6 +229,9 @@ export async function createServiceBill(
   }
   const journalMemo = memoParts.join(' — ').substring(0, 255)
 
+  // FreightTaxCode is REQUIRED by MYOB even when FreightAmount is 0. We
+  // reuse the GST UID — applying GST to a $0 amount yields $0 tax, so it's
+  // mathematically harmless and saves an extra TaxCode lookup for N-T.
   const body: ServiceBillBody = {
     Date: inv.invoice_date,
     SupplierInvoiceNumber: String(inv.invoice_number).substring(0, 13),
@@ -219,18 +239,18 @@ export async function createServiceBill(
     Lines: billLines,
     JournalMemo: journalMemo,
     IsTaxInclusive: false,
+    FreightAmount: 0,
+    FreightTaxCode: { UID: gstUid },
   }
 
-  // Resolve the connection for the company file
   const conn = await getConnection(companyFile)
   if (!conn) throw new Error(`No active MYOB connection for ${companyFile}`)
   if (!conn.company_file_id) throw new Error(`MYOB connection ${companyFile} has no company file selected`)
 
   const path = `/accountright/${conn.company_file_id}/Purchase/Bill/Service`
-
-  // Increment attempts BEFORE posting so even crashes mid-call are recorded
   const attemptsSoFar = (inv.myob_post_attempts || 0) + 1
 
+  // ── Step 1: post the bill ──
   let result: { status: number; data: any; raw: string }
   try {
     result = await myobFetch(conn.id, path, {
@@ -257,34 +277,112 @@ export async function createServiceBill(
     throw new Error(`MYOB rejected the bill (HTTP ${result.status}): ${errMsg}`)
   }
 
-  // Success — extract the new bill's UID
   const myobBillUid = extractMyobUid(result)
-  if (!myobBillUid) {
-    // Posted but we couldn't parse the response — record what we have and
-    // surface a soft error so Chris can verify in MYOB.
-    await c.from('ap_invoices').update({
-      myob_post_attempts: attemptsSoFar,
-      myob_post_error: 'Posted (HTTP ' + result.status + ') but no UID returned — verify in MYOB',
-      status: 'posted',
-      myob_posted_at: new Date().toISOString(),
-      myob_posted_by: postedBy,
-    }).eq('id', invoiceId)
-    return { ok: true, myobBillUid: '', myobBillRowId: null }
-  }
-
   const myobBillRowId = extractMyobRowId(result)
 
-  await c.from('ap_invoices').update({
-    myob_bill_uid:       myobBillUid,
+  // ── Step 2: attach the PDF (best effort) ──
+  let attachmentStatus: 'attached' | 'failed' | 'skipped' | 'no-pdf' = 'skipped'
+  let attachmentError: string | undefined
+
+  if (!myobBillUid) {
+    attachmentStatus = 'skipped'
+    attachmentError = 'No MYOB bill UID returned — cannot attach PDF'
+  } else if (!inv.pdf_storage_path) {
+    attachmentStatus = 'no-pdf'
+  } else {
+    try {
+      await attachPdfToBill({
+        connId: conn.id,
+        cfId: conn.company_file_id,
+        billUid: myobBillUid,
+        pdfStoragePath: inv.pdf_storage_path,
+        filename: inv.pdf_filename || `${inv.invoice_number}.pdf`,
+        postedBy,
+      })
+      attachmentStatus = 'attached'
+    } catch (e: any) {
+      attachmentStatus = 'failed'
+      attachmentError = (e?.message || String(e)).substring(0, 400)
+      console.error(`Bill ${myobBillUid} posted but attachment failed:`, attachmentError)
+    }
+  }
+
+  // ── Step 3: persist final state ──
+  const postUpdate: Record<string, any> = {
+    myob_bill_uid:       myobBillUid || null,
     myob_bill_row_id:    myobBillRowId,
     myob_posted_at:      new Date().toISOString(),
     myob_posted_by:      postedBy,
     myob_post_attempts:  attemptsSoFar,
-    myob_post_error:     null,
     status:              'posted',
-  }).eq('id', invoiceId)
+  }
+  // Track attachment outcome in myob_post_error so the UI surfaces it
+  if (attachmentStatus === 'failed') {
+    postUpdate.myob_post_error = `Bill posted but PDF attachment failed: ${attachmentError}`
+  } else if (attachmentStatus === 'skipped') {
+    postUpdate.myob_post_error = `Bill posted: ${attachmentError}`
+  } else {
+    postUpdate.myob_post_error = null
+  }
 
-  return { ok: true, myobBillUid, myobBillRowId }
+  await c.from('ap_invoices').update(postUpdate).eq('id', invoiceId)
+
+  return {
+    ok: true,
+    myobBillUid: myobBillUid || '',
+    myobBillRowId,
+    attachmentStatus,
+    attachmentError,
+  }
+}
+
+// ── Attachment helper ───────────────────────────────────────────────────
+
+async function attachPdfToBill(opts: {
+  connId: string
+  cfId: string
+  billUid: string
+  pdfStoragePath: string
+  filename: string
+  postedBy: string
+}): Promise<void> {
+  // Fetch PDF from Supabase storage
+  const { data: blob, error: dlErr } = await sb().storage
+    .from(STORAGE_BUCKET)
+    .download(opts.pdfStoragePath)
+  if (dlErr || !blob) {
+    throw new Error(`PDF fetch from Supabase storage failed: ${dlErr?.message || 'unknown'}`)
+  }
+
+  const arrayBuf = await blob.arrayBuffer()
+  if (arrayBuf.byteLength > MAX_ATTACHMENT_BYTES) {
+    throw new Error(
+      `PDF too large (${Math.round(arrayBuf.byteLength / 1024)}KB) — MYOB limit ${Math.round(MAX_ATTACHMENT_BYTES / 1024)}KB`
+    )
+  }
+
+  const buffer = Buffer.from(arrayBuf)
+  const base64 = buffer.toString('base64')
+
+  // Sanitise filename — MYOB rejects some unicode / control chars
+  const safeName = (opts.filename || 'invoice.pdf')
+    .replace(/[^\x20-\x7E]/g, '_')
+    .substring(0, 100)
+
+  const path = `/accountright/${opts.cfId}/Purchase/Bill/Service/${opts.billUid}/Attachment`
+  const result = await myobFetch(opts.connId, path, {
+    method: 'POST',
+    body: {
+      OriginalFileName:    safeName,
+      AttachmentFileName:  safeName,
+      FileBytes:           base64,
+    },
+    performedBy: opts.postedBy,
+  })
+
+  if (result.status >= 400) {
+    throw new Error(`MYOB rejected attachment (HTTP ${result.status}): ${extractMyobError(result)}`)
+  }
 }
 
 // ── Response parsing ────────────────────────────────────────────────────
@@ -304,14 +402,13 @@ function extractMyobError(result: { status: number; data: any; raw: string }): s
 }
 
 function extractMyobUid(result: { data: any; raw: string }): string | null {
-  // MYOB often returns the resource on POST with a UID field. Also some
-  // configs return a plain string in raw. Cover both.
   if (result.data && typeof result.data === 'object') {
     if (typeof result.data.UID === 'string') return result.data.UID
     if (typeof result.data.Uid === 'string') return result.data.Uid
   }
-  // Try Location header would be ideal but myobFetch doesn't expose headers.
-  // Fallback: scrape a UUID from the raw response if present.
+  // Fallback: scrape a UUID from the raw response if present (some MYOB
+  // configs return only a Location header with an empty body — the raw
+  // body itself may then just contain the UID URL).
   const m = (result.raw || '').match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i)
   return m ? m[0] : null
 }

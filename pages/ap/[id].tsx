@@ -235,7 +235,7 @@ export default function APDetailPage({ user }: PageProps) {
       `Date:      ${inv.invoice_date}\n` +
       (inv.via_capricorn && inv.capricorn_reference ? `Capricorn: ${inv.capricorn_reference}\n` : '') +
       (inv.linked_job_number ? `Job:       ${inv.linked_job_number}\n` : '') +
-      `\nThis writes a Service Bill to MYOB.`
+      `\nThis writes a Service Bill to MYOB and attaches the source PDF.`
     if (!confirm(summary)) return
     setApproving(true)
     setActionMessage(null)
@@ -247,7 +247,20 @@ export default function APDetailPage({ user }: PageProps) {
       })
       const json = await res.json()
       if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`)
-      setActionMessage({ kind: 'ok', text: `✅ Posted to MYOB${json.myobBillUid ? ` — bill UID ${json.myobBillUid}` : ''}` })
+
+      // Build success message that reflects attachment outcome separately —
+      // bill posting and PDF attachment are independent steps.
+      const uidPart = json.myobBillUid ? ` — bill UID ${String(json.myobBillUid).substring(0, 8)}…` : ''
+      const attachPart =
+        json.attachmentStatus === 'attached' ? ' · 📎 PDF attached' :
+        json.attachmentStatus === 'failed'   ? ` · ⚠️ PDF attach failed: ${json.attachmentError || ''}` :
+        json.attachmentStatus === 'no-pdf'   ? ' · (no PDF on file)' :
+        json.attachmentStatus === 'skipped'  ? ' · (PDF attach skipped)' :
+        ''
+      setActionMessage({
+        kind: json.attachmentStatus === 'failed' ? 'err' : 'ok',
+        text: `✅ Posted to MYOB${uidPart}${attachPart}`,
+      })
       await fetchData()
     } catch (e: any) {
       setActionMessage({ kind: 'err', text: `❌ ${e?.message || String(e)}` })
@@ -506,12 +519,20 @@ export default function APDetailPage({ user }: PageProps) {
                   </div>
                 )}
                 {isPosted && (
-                  <div style={{paddingTop:10, borderTop:`1px solid ${T.border}`, fontSize:11, color:T.green, display:'flex', alignItems:'center', gap:10}}>
-                    <span>✅ Posted to MYOB {data.invoice.myob_posted_at ? new Date(data.invoice.myob_posted_at).toLocaleString() : ''}</span>
-                    {data.invoice.myob_bill_uid && (
-                      <span style={{fontFamily:'monospace', color:T.text3}}>
-                        · UID {data.invoice.myob_bill_uid.substring(0, 8)}…
-                      </span>
+                  <div style={{paddingTop:10, borderTop:`1px solid ${T.border}`}}>
+                    <div style={{fontSize:11, color:T.green, display:'flex', alignItems:'center', gap:10, flexWrap:'wrap'}}>
+                      <span>✅ Posted to MYOB {data.invoice.myob_posted_at ? new Date(data.invoice.myob_posted_at).toLocaleString() : ''}</span>
+                      {data.invoice.myob_bill_uid && (
+                        <span style={{fontFamily:'monospace', color:T.text3}}>
+                          · UID {data.invoice.myob_bill_uid.substring(0, 8)}…
+                        </span>
+                      )}
+                    </div>
+                    {/* Surface attachment errors / notes even when bill itself succeeded */}
+                    {data.invoice.myob_post_error && (
+                      <div style={{marginTop:6, fontSize:11, color:T.amber}}>
+                        ⚠️ {data.invoice.myob_post_error}
+                      </div>
                     )}
                   </div>
                 )}
