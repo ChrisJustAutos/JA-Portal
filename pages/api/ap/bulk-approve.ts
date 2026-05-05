@@ -21,7 +21,10 @@ interface PerIdResult {
   id: string
   ok: boolean
   billUid?: string
-  attachmentStatus?: 'attached' | 'failed' | 'skipped' | 'no-pdf'
+  // 'adopted' is returned when createServiceBill detects an existing MYOB bill
+  // with the same SupplierInvoiceNumber + Supplier and adopts that UID instead
+  // of creating a duplicate. Counts toward succeeded; never has an attachment.
+  attachmentStatus?: 'attached' | 'failed' | 'skipped' | 'no-pdf' | 'adopted'
   attachmentError?: string
   error?: string
 }
@@ -67,6 +70,7 @@ export default withAuth('edit:supplier_invoices', async (req: NextApiRequest, re
     failed:     results.filter(r => !r.ok).length,
     attached:   results.filter(r => r.ok && r.attachmentStatus === 'attached').length,
     attachFail: results.filter(r => r.ok && r.attachmentStatus === 'failed').length,
+    adopted:    results.filter(r => r.ok && r.attachmentStatus === 'adopted').length,
   }
 
   return res.status(200).json({ ok: true, summary, results })
