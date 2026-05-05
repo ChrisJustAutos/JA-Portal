@@ -1,5 +1,6 @@
 // pages/ap/[id].tsx
-// AP Invoice Detail — PDF preview, line editor, MD job link, delete, save.
+// AP Invoice Detail — PDF preview, line editor, MD job link, MYOB preset
+// picker, delete, save.
 
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/router'
@@ -80,6 +81,23 @@ interface JobInfo {
   estimated_total: number | null
 }
 
+interface MyobSupplier {
+  uid: string
+  displayId: string | null
+  name: string
+  abn: string | null
+  isIndividual: boolean
+}
+
+interface MyobAccount {
+  uid: string
+  displayId: string
+  name: string
+  type: string
+  parentName: string | null
+  isHeader: boolean
+}
+
 interface DetailResponse {
   invoice: InvoiceRow
   lines: LineRow[]
@@ -114,6 +132,9 @@ export default function APDetailPage({ user }: PageProps) {
   const [pickerLoading, setPickerLoading] = useState(false)
   const [linkBusy, setLinkBusy] = useState(false)
 
+  // Supplier preset form state
+  const [presetOpen, setPresetOpen] = useState(false)
+
   async function fetchData() {
     if (!id) return
     setLoading(true)
@@ -136,7 +157,7 @@ export default function APDetailPage({ user }: PageProps) {
 
   useEffect(() => { if (id) fetchData() }, [id])
 
-  // Debounced job search when picker is open
+  // ── Job picker effects + handlers (unchanged from R3a) ──
   useEffect(() => {
     if (!pickerOpen) return
     setPickerLoading(true)
@@ -184,10 +205,7 @@ export default function APDetailPage({ user }: PageProps) {
     if (!ok) return
     setDeleting(true)
     try {
-      const res = await fetch(`/api/ap/${id}`, {
-        method: 'DELETE',
-        credentials: 'same-origin',
-      })
+      const res = await fetch(`/api/ap/${id}`, { method: 'DELETE', credentials: 'same-origin' })
       const json = await res.json()
       if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`)
       router.push('/ap')
@@ -408,20 +426,15 @@ export default function APDetailPage({ user }: PageProps) {
                 onUnlink={() => linkToJob(null)}
               />
 
-              {/* Resolved supplier */}
-              <div style={{background:T.bg2, border:`1px solid ${T.border}`, borderRadius:10, padding:'14px 16px'}}>
-                <div style={{fontSize:11, color:T.text3, textTransform:'uppercase', letterSpacing:'0.05em', marginBottom:10}}>MYOB mapping ({data.invoice.myob_company_file})</div>
-                {data.invoice.resolved_supplier_name ? (
-                  <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:'8px 16px'}}>
-                    <Field label="Supplier"        value={data.invoice.resolved_supplier_name}/>
-                    <Field label="Default account" value={`${data.invoice.resolved_account_code || '—'}`} mono/>
-                  </div>
-                ) : (
-                  <div style={{fontSize:12, color:T.amber}}>
-                    Supplier not mapped. {canEdit ? 'Set a preset to enable approval (Round 3b — coming soon).' : 'Ask an admin to set the preset.'}
-                  </div>
-                )}
-              </div>
+              {/* MYOB mapping (with preset picker) */}
+              <MyobMappingSection
+                invoice={data.invoice}
+                canEdit={canEdit}
+                presetOpen={presetOpen}
+                onOpenPreset={() => setPresetOpen(true)}
+                onClosePreset={() => setPresetOpen(false)}
+                onPresetSaved={async () => { setPresetOpen(false); await fetchData() }}
+              />
 
               {/* Lines */}
               <div style={{background:T.bg2, border:`1px solid ${T.border}`, borderRadius:10, padding:'14px 16px'}}>
@@ -460,7 +473,415 @@ export default function APDetailPage({ user }: PageProps) {
   )
 }
 
-// ── Workshop Job section ─────────────────────────────────────────────────
+// ── MYOB mapping section ─────────────────────────────────────────────────
+function MyobMappingSection({
+  invoice, canEdit, presetOpen, onOpenPreset, onClosePreset, onPresetSaved,
+}: {
+  invoice: InvoiceRow
+  canEdit: boolean
+  presetOpen: boolean
+  onOpenPreset: () => void
+  onClosePreset: () => void
+  onPresetSaved: () => Promise<void>
+}) {
+  const isMapped = !!invoice.resolved_supplier_uid
+
+  return (
+    <div style={{background:T.bg2, border:`1px solid ${T.border}`, borderRadius:10, padding:'14px 16px'}}>
+      <div style={{display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:10}}>
+        <div style={{fontSize:11, color:T.text3, textTransform:'uppercase', letterSpacing:'0.05em'}}>
+          MYOB mapping ({invoice.myob_company_file})
+        </div>
+        {canEdit && !presetOpen && (
+          <button onClick={onOpenPreset} style={btnSecondary()}>
+            {isMapped ? 'Change…' : 'Set preset…'}
+          </button>
+        )}
+        {canEdit && presetOpen && (
+          <button onClick={onClosePreset} style={btnSecondary()}>Close</button>
+        )}
+      </div>
+
+      {!presetOpen && isMapped && (
+        <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:'8px 16px'}}>
+          <Field label="Supplier"        value={invoice.resolved_supplier_name}/>
+          <Field label="Default account" value={invoice.resolved_account_code} mono/>
+        </div>
+      )}
+
+      {!presetOpen && !isMapped && (
+        <div style={{fontSize:12, color:T.amber}}>
+          Supplier not mapped. {canEdit ? 'Click "Set preset…" to pick the MYOB supplier and account.' : 'Ask an admin to set the preset.'}
+        </div>
+      )}
+
+      {presetOpen && (
+        <SupplierPresetForm
+          invoice={invoice}
+          onSaved={onPresetSaved}
+        />
+      )}
+    </div>
+  )
+}
+
+// ── Supplier preset form ─────────────────────────────────────────────────
+function SupplierPresetForm({
+  invoice, onSaved,
+}: {
+  invoice: InvoiceRow
+  onSaved: () => Promise<void>
+}) {
+  const [pattern, setPattern] = useState<string>(
+    (invoice.vendor_name_parsed || '').trim().toUpperCase().split(/[\s,]+/).slice(0, 2).join(' ') || ''
+  )
+  const [viaCapricorn, setViaCapricorn] = useState<boolean>(invoice.via_capricorn)
+  const [supplier, setSupplier] = useState<MyobSupplier | null>(
+    invoice.resolved_supplier_uid && invoice.resolved_supplier_name
+      ? { uid: invoice.resolved_supplier_uid, displayId: null, name: invoice.resolved_supplier_name, abn: invoice.vendor_abn, isIndividual: false }
+      : null
+  )
+  const [account, setAccount] = useState<MyobAccount | null>(
+    invoice.resolved_account_uid && invoice.resolved_account_code
+      ? { uid: invoice.resolved_account_uid, displayId: invoice.resolved_account_code, name: '', type: 'Expense', parentName: null, isHeader: false }
+      : null
+  )
+  const [saving, setSavingState] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  async function save() {
+    if (!pattern.trim()) { setError('Match pattern is required'); return }
+    if (!supplier) { setError('Pick a MYOB supplier'); return }
+    if (!account)  { setError('Pick a MYOB default account'); return }
+    setError(null)
+    setSavingState(true)
+    try {
+      const res = await fetch('/api/ap/supplier-presets', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          pattern: pattern.trim().toUpperCase(),
+          matchAbn: invoice.vendor_abn || null,
+          myobCompanyFile: invoice.myob_company_file,
+          myobSupplierUid: supplier.uid,
+          myobSupplierName: supplier.name,
+          defaultAccountUid: account.uid,
+          defaultAccountCode: account.displayId,
+          defaultAccountName: account.name || null,
+          viaCapricorn,
+          applyToInvoiceId: invoice.id,
+        }),
+      })
+      const json = await res.json()
+      if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`)
+      await onSaved()
+    } catch (e: any) {
+      setError(e?.message || String(e))
+    } finally {
+      setSavingState(false)
+    }
+  }
+
+  return (
+    <div style={{display:'flex', flexDirection:'column', gap:12}}>
+      <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:12}}>
+        <FormRow label="Match pattern (case-insensitive substring of parsed vendor name)">
+          <input
+            value={pattern}
+            onChange={e => setPattern(e.target.value)}
+            placeholder="e.g. REPCO"
+            style={inputStyle()}
+          />
+        </FormRow>
+        <FormRow label={`Company file`}>
+          <div style={{fontSize:12, color:T.text2, paddingTop:6}}>{invoice.myob_company_file}</div>
+        </FormRow>
+      </div>
+
+      <FormRow label="MYOB supplier">
+        <SupplierTypeahead
+          companyFile={invoice.myob_company_file}
+          selected={supplier}
+          onSelect={setSupplier}
+          initialQuery={(invoice.vendor_name_parsed || '').trim()}
+        />
+      </FormRow>
+
+      <FormRow label="Default account (Expense + CostOfSales)">
+        <AccountTypeahead
+          companyFile={invoice.myob_company_file}
+          selected={account}
+          onSelect={setAccount}
+        />
+      </FormRow>
+
+      <div style={{display:'flex', alignItems:'center', gap:8}}>
+        <input
+          id="viaCapricorn"
+          type="checkbox"
+          checked={viaCapricorn}
+          onChange={e => setViaCapricorn(e.target.checked)}
+        />
+        <label htmlFor="viaCapricorn" style={{fontSize:12, color:T.text2, cursor:'pointer'}}>
+          This vendor is typically billed via Capricorn
+        </label>
+      </div>
+
+      {error && (
+        <div style={{fontSize:11, color:T.red, padding:'6px 10px', background:`${T.red}15`, border:`1px solid ${T.red}40`, borderRadius:5}}>
+          {error}
+        </div>
+      )}
+
+      <div style={{display:'flex', gap:8, justifyContent:'flex-end'}}>
+        <button
+          onClick={save}
+          disabled={saving || !supplier || !account || !pattern.trim()}
+          style={{
+            ...btnPrimary(),
+            opacity: saving || !supplier || !account || !pattern.trim() ? 0.6 : 1,
+            cursor: saving ? 'wait' : 'pointer',
+          }}
+        >
+          {saving ? 'Saving…' : 'Save preset & re-triage'}
+        </button>
+      </div>
+      <div style={{fontSize:10, color:T.text3}}>
+        Saving creates/updates a preset for the pattern. Future invoices whose parsed vendor name contains "{pattern.toUpperCase() || '…'}" will auto-resolve.
+      </div>
+    </div>
+  )
+}
+
+function FormRow({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div>
+      <div style={{fontSize:10, color:T.text3, textTransform:'uppercase', letterSpacing:'0.05em', marginBottom:4}}>{label}</div>
+      {children}
+    </div>
+  )
+}
+
+function inputStyle(): React.CSSProperties {
+  return {
+    width:'100%',
+    background: T.bg3, border:`1px solid ${T.border2}`, color: T.text,
+    padding:'7px 10px', borderRadius:5, fontSize:12, fontFamily:'inherit', outline:'none',
+  }
+}
+
+// ── Reusable typeaheads ──────────────────────────────────────────────────
+function SupplierTypeahead({
+  companyFile, selected, onSelect, initialQuery,
+}: {
+  companyFile: 'VPS' | 'JAWS'
+  selected: MyobSupplier | null
+  onSelect: (s: MyobSupplier | null) => void
+  initialQuery?: string
+}) {
+  const [open, setOpen] = useState(false)
+  const [query, setQuery] = useState(initialQuery || '')
+  const [loading, setLoading] = useState(false)
+  const [results, setResults] = useState<MyobSupplier[]>([])
+  const [searchError, setSearchError] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!open) return
+    setLoading(true)
+    setSearchError(null)
+    const t = setTimeout(async () => {
+      try {
+        const params = new URLSearchParams({ q: query, company: companyFile, limit: '20' })
+        const res = await fetch(`/api/myob/suppliers?${params.toString()}`, { credentials: 'same-origin' })
+        const json = await res.json()
+        if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`)
+        setResults(Array.isArray(json.suppliers) ? json.suppliers : [])
+      } catch (e: any) {
+        setSearchError(e?.message || 'search failed')
+        setResults([])
+      } finally {
+        setLoading(false)
+      }
+    }, 300)
+    return () => clearTimeout(t)
+  }, [open, query, companyFile])
+
+  if (!open) {
+    return (
+      <div style={{display:'flex', gap:8, alignItems:'center'}}>
+        <div style={{flex:1, fontSize:12, color: selected ? T.text : T.text3}}>
+          {selected ? selected.name : 'No supplier picked'}
+          {selected?.abn && <span style={{color:T.text3, marginLeft:8, fontFamily:'monospace'}}>ABN {selected.abn}</span>}
+        </div>
+        <button onClick={() => setOpen(true)} style={btnSecondary()}>{selected ? 'Change…' : 'Search MYOB…'}</button>
+        {selected && (
+          <button onClick={() => onSelect(null)} style={btnSecondary()}>Clear</button>
+        )}
+      </div>
+    )
+  }
+
+  return (
+    <div>
+      <div style={{display:'flex', gap:8, marginBottom:8}}>
+        <input
+          autoFocus
+          value={query}
+          onChange={e => setQuery(e.target.value)}
+          placeholder="Search MYOB suppliers…"
+          style={inputStyle()}
+        />
+        <button onClick={() => setOpen(false)} style={btnSecondary()}>Close</button>
+      </div>
+      {searchError && (
+        <div style={{fontSize:11, color:T.red, marginBottom:8}}>MYOB error: {searchError}</div>
+      )}
+      <div style={{
+        border:`1px solid ${T.border}`, borderRadius:6, overflow:'hidden',
+        maxHeight:240, overflowY:'auto', background: T.bg3,
+      }}>
+        {loading && (
+          <div style={{padding:14, textAlign:'center', color:T.text3, fontSize:12}}>Searching MYOB…</div>
+        )}
+        {!loading && results.length === 0 && (
+          <div style={{padding:14, textAlign:'center', color:T.text3, fontSize:12}}>
+            {query ? 'No matching suppliers in MYOB.' : 'Type to search…'}
+          </div>
+        )}
+        {!loading && results.map((s, i) => (
+          <div
+            key={s.uid}
+            onClick={() => { onSelect(s); setOpen(false) }}
+            style={{
+              padding:'8px 12px',
+              borderTop: i > 0 ? `1px solid ${T.border}` : 'none',
+              cursor:'pointer',
+              fontSize: 12,
+              display:'grid', gridTemplateColumns:'1fr auto', gap:10, alignItems:'center',
+            }}
+            onMouseEnter={e => (e.currentTarget.style.background = T.bg4)}
+            onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+          >
+            <div>
+              <div style={{color:T.text}}>{s.name}</div>
+              {s.abn && <div style={{fontSize:10, fontFamily:'monospace', color:T.text3, marginTop:2}}>ABN {s.abn}</div>}
+            </div>
+            {s.displayId && (
+              <span style={{fontSize:10, color:T.text3, fontFamily:'monospace'}}>{s.displayId}</span>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function AccountTypeahead({
+  companyFile, selected, onSelect,
+}: {
+  companyFile: 'VPS' | 'JAWS'
+  selected: MyobAccount | null
+  onSelect: (a: MyobAccount | null) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const [query, setQuery] = useState('')
+  const [loading, setLoading] = useState(false)
+  const [results, setResults] = useState<MyobAccount[]>([])
+  const [searchError, setSearchError] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!open) return
+    setLoading(true)
+    setSearchError(null)
+    const t = setTimeout(async () => {
+      try {
+        const params = new URLSearchParams({ q: query, company: companyFile, limit: '40' })
+        const res = await fetch(`/api/myob/accounts?${params.toString()}`, { credentials: 'same-origin' })
+        const json = await res.json()
+        if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`)
+        setResults(Array.isArray(json.accounts) ? json.accounts : [])
+      } catch (e: any) {
+        setSearchError(e?.message || 'search failed')
+        setResults([])
+      } finally {
+        setLoading(false)
+      }
+    }, 300)
+    return () => clearTimeout(t)
+  }, [open, query, companyFile])
+
+  if (!open) {
+    return (
+      <div style={{display:'flex', gap:8, alignItems:'center'}}>
+        <div style={{flex:1, fontSize:12, color: selected ? T.text : T.text3}}>
+          {selected ? (
+            <>
+              <span style={{fontFamily:'monospace'}}>{selected.displayId}</span>
+              {selected.name && <span style={{marginLeft:8, color:T.text2}}>{selected.name}</span>}
+            </>
+          ) : 'No account picked'}
+        </div>
+        <button onClick={() => setOpen(true)} style={btnSecondary()}>{selected ? 'Change…' : 'Search MYOB…'}</button>
+        {selected && (
+          <button onClick={() => onSelect(null)} style={btnSecondary()}>Clear</button>
+        )}
+      </div>
+    )
+  }
+
+  return (
+    <div>
+      <div style={{display:'flex', gap:8, marginBottom:8}}>
+        <input
+          autoFocus
+          value={query}
+          onChange={e => setQuery(e.target.value)}
+          placeholder="Search by code or name (e.g. 5-1100, parts, freight)…"
+          style={inputStyle()}
+        />
+        <button onClick={() => setOpen(false)} style={btnSecondary()}>Close</button>
+      </div>
+      {searchError && (
+        <div style={{fontSize:11, color:T.red, marginBottom:8}}>MYOB error: {searchError}</div>
+      )}
+      <div style={{
+        border:`1px solid ${T.border}`, borderRadius:6, overflow:'hidden',
+        maxHeight:280, overflowY:'auto', background: T.bg3,
+      }}>
+        {loading && (
+          <div style={{padding:14, textAlign:'center', color:T.text3, fontSize:12}}>Searching MYOB…</div>
+        )}
+        {!loading && results.length === 0 && (
+          <div style={{padding:14, textAlign:'center', color:T.text3, fontSize:12}}>
+            {query ? 'No matching accounts.' : 'Showing top expense + cost-of-sales accounts. Refine with a query.'}
+          </div>
+        )}
+        {!loading && results.map((a, i) => (
+          <div
+            key={a.uid}
+            onClick={() => { onSelect(a); setOpen(false) }}
+            style={{
+              padding:'8px 12px',
+              borderTop: i > 0 ? `1px solid ${T.border}` : 'none',
+              cursor:'pointer',
+              fontSize: 12,
+              display:'grid', gridTemplateColumns:'80px 1fr 90px', gap:10, alignItems:'center',
+            }}
+            onMouseEnter={e => (e.currentTarget.style.background = T.bg4)}
+            onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+          >
+            <span style={{fontFamily:'monospace', color:T.text}}>{a.displayId}</span>
+            <span style={{color:T.text2, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap'}}>{a.name}</span>
+            <span style={{fontSize:10, color:T.text3, textTransform:'uppercase', letterSpacing:'0.04em', textAlign:'right'}}>{a.type}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+// ── Workshop Job section (unchanged from R3a) ────────────────────────────
 function WorkshopJobSection({
   invoice, linkedJob, canEdit,
   pickerOpen, pickerQuery, pickerResults, pickerLoading, linkBusy,
