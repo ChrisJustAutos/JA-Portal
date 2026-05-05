@@ -15,12 +15,24 @@
 // extract everything so the UI can show the full picture and let the
 // user spot weird stuff.
 //
-// COST: ~$0.01-0.04 per statement via Haiku (statements are 1-3 pages,
-// fewer tokens than invoices). Negligible at supplier-statement volume
-// (a handful per month).
+// COST: ~$0.01-0.05 per statement via Haiku. Negligible at supplier-
+// statement volume (a handful per month).
+//
+// May 2026 — robustness pass:
+//   - Bumped max_tokens 4096 → 16384. Toyota dealership statements can
+//     have 80+ line items, easily exceeding 4k output tokens, which
+//     truncated the JSON mid-array and produced "Expected ',' or ']'"
+//     parse errors.
+//   - Added a repair fallback that walks the raw output, salvages every
+//     valid {...} object inside the lines array, and rebuilds the parent
+//     JSON. So a truncated or messily-emitted output still yields useful
+//     results instead of a hard parse failure.
+//   - We surface stop_reason in errors so we can tell whether truncation
+//     was the cause vs the model going off-script.
 
 const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages'
 const DEFAULT_MODEL = 'claude-haiku-4-5-20251001'
+const MAX_OUTPUT_TOKENS = 16384
 
 // ── Types ───────────────────────────────────────────────────────────────
 
@@ -60,6 +72,11 @@ export interface StatementExtractionResult {
   outputTokens: number
   costMicroUsd: number
   rawOutput: string
+  // True when the model hit max_tokens AND we needed to repair the JSON.
+  // The result is best-effort — caller should warn the user that some
+  // lines may have been dropped.
+  repaired: boolean
+  stopReason: string | null
 }
 
 /**
@@ -75,7 +92,7 @@ export async function extractStatementFromPdf(pdfBase64: string): Promise<Statem
 
   const body = {
     model,
-    max_tokens: 4096,
+    max_tokens: MAX_OUTPUT_TOKENS,
     system: buildSystemPrompt(),
     messages: [
       {
@@ -104,9 +121,34 @@ export async function extractStatementFromPdf(pdfBase64: string): Promise<Statem
   }
 
   const data = await r.json()
+  const stopReason: string | null = data.stop_reason ?? null
   const text = data.content?.[0]?.text || ''
-  const raw = extractJson(text)
+
+  let raw: any
+  let repaired = false
+  try {
+    raw = extractJson(text)
+  } catch (firstErr: any) {
+    // Fallback path — try to repair the JSON by salvaging individual line
+    // objects from a broken/truncated array.
+    const salvaged = tryRepairTruncatedJson(text)
+    if (salvaged) {
+      raw = salvaged
+      repaired = true
+      console.warn(`statement extraction: repaired truncated/broken JSON (stop_reason=${stopReason}, salvaged ${(salvaged.lines || []).length} lines)`)
+    } else {
+      const truncatedNote = stopReason === 'max_tokens'
+        ? ' Output hit max_tokens — statement may be too long for current limit.'
+        : ''
+      throw new Error(`${firstErr?.message || firstErr}.${truncatedNote}`)
+    }
+  }
+
   const statement = validateAndNormalise(raw)
+  if (repaired) {
+    // Force confidence to 'low' so the UI shows the warning chip.
+    statement.parseConfidence = 'low'
+  }
 
   const inputTokens = data.usage?.input_tokens ?? 0
   const outputTokens = data.usage?.output_tokens ?? 0
@@ -116,7 +158,16 @@ export async function extractStatementFromPdf(pdfBase64: string): Promise<Statem
     Math.round((inputTokens / 1_000_000) * inputCostPerMTok) +
     Math.round((outputTokens / 1_000_000) * outputCostPerMTok)
 
-  return { statement, model, inputTokens, outputTokens, costMicroUsd, rawOutput: text }
+  return {
+    statement,
+    model,
+    inputTokens,
+    outputTokens,
+    costMicroUsd,
+    rawOutput: text,
+    repaired,
+    stopReason,
+  }
 }
 
 // ── Prompt ──────────────────────────────────────────────────────────────
@@ -165,7 +216,8 @@ Rules:
 - Skip rows that are only the brought-forward balance at the top — that's openingBalance, not a line.
 - If a row's amount column is blank or zero, still emit the line if it has a date and reference; set amount: 0.
 - Be conservative with type classification: when unsure between invoice and unknown, prefer 'unknown' so the user can review.
-- For invoiceNumber: ONLY populate when type === 'invoice'. For payment rows or credits, set invoiceNumber: null even if reference is set.`
+- For invoiceNumber: ONLY populate when type === 'invoice'. For payment rows or credits, set invoiceNumber: null even if reference is set.
+- Keep description text concise. Strip trailing whitespace. Avoid copying long auxiliary text — invoice numbers, dates, and the amount are the critical fields.`
 }
 
 // ── Output parsing ──────────────────────────────────────────────────────
@@ -177,14 +229,119 @@ function extractJson(text: string): any {
     .trim()
   try {
     return JSON.parse(cleaned)
-  } catch {
+  } catch (e1) {
     const first = cleaned.indexOf('{')
     const last = cleaned.lastIndexOf('}')
     if (first >= 0 && last > first) {
-      return JSON.parse(cleaned.substring(first, last + 1))
+      try {
+        return JSON.parse(cleaned.substring(first, last + 1))
+      } catch (e2: any) {
+        throw new Error(`Could not parse JSON from statement extraction (${cleaned.length} chars): ${e2?.message || e2}`)
+      }
     }
-    throw new Error(`Could not parse JSON from statement extraction: ${cleaned.substring(0, 200)}`)
+    throw new Error(`Could not parse JSON from statement extraction (${cleaned.length} chars, no valid object boundaries): ${(e1 as any)?.message || e1}`)
   }
+}
+
+/**
+ * Repair-mode JSON extraction.
+ *
+ * When the model hits max_tokens or emits malformed JSON inside the lines
+ * array, the standard parse fails. This function walks the raw text and
+ * salvages every complete `{ ... }` object it can find inside the
+ * `"lines": [` array, plus parses the header fields (supplier, dates,
+ * balances) before the array. It then reconstructs a synthetic parent
+ * JSON object with the salvaged lines.
+ *
+ * Returns null if the structure is too damaged to recover anything.
+ */
+function tryRepairTruncatedJson(rawText: string): any | null {
+  const cleaned = rawText
+    .replace(/^```(?:json)?\s*/i, '')
+    .replace(/\s*```\s*$/i, '')
+    .trim()
+
+  // Locate "lines": [
+  const linesMatch = cleaned.match(/"lines"\s*:\s*\[/)
+  if (!linesMatch || linesMatch.index === undefined) return null
+  const linesPropStart = linesMatch.index
+  const arrayOpen = cleaned.indexOf('[', linesPropStart)
+  if (arrayOpen < 0) return null
+
+  // Salvage individual {...} objects from inside the array
+  const items = walkArrayObjects(cleaned, arrayOpen + 1)
+
+  // Build a synthetic header by taking everything before "lines": and
+  // appending `"lines":[]` + closing `}`. Parse that to get the header
+  // fields, then attach the salvaged items.
+  let beforeLines = cleaned.substring(0, linesPropStart).trim()
+  // Strip any trailing comma so we can safely append the synthetic prop
+  beforeLines = beforeLines.replace(/,\s*$/, '').trim()
+  // Ensure it starts with `{`
+  const objStart = beforeLines.indexOf('{')
+  if (objStart < 0) return null
+  beforeLines = beforeLines.substring(objStart)
+
+  const synthetic = beforeLines.endsWith('{')
+    ? `${beforeLines}"lines":[]}`
+    : `${beforeLines},"lines":[]}`
+
+  let header: any
+  try {
+    header = JSON.parse(synthetic)
+  } catch {
+    // Last-ditch: just return a barebones structure with the salvaged lines
+    return { lines: items, parseConfidence: 'low' }
+  }
+  header.lines = items
+  if (!header.parseConfidence) header.parseConfidence = 'low'
+  return header
+}
+
+/**
+ * Walk forward from inside an array, collecting valid top-level `{...}`
+ * substrings and parsing them. Skips any that fail to parse (e.g. the
+ * truncated final element).
+ */
+function walkArrayObjects(src: string, startIdx: number): any[] {
+  const out: any[] = []
+  let i = startIdx
+  let depth = 0
+  let inString = false
+  let escapeNext = false
+  let elementStart = -1
+
+  while (i < src.length) {
+    const ch = src[i]
+    if (escapeNext) { escapeNext = false; i++; continue }
+    if (inString) {
+      if (ch === '\\') escapeNext = true
+      else if (ch === '"') inString = false
+      i++
+      continue
+    }
+    if (ch === '"') { inString = true; i++; continue }
+    if (ch === '{') {
+      if (depth === 0) elementStart = i
+      depth++
+    } else if (ch === '}') {
+      depth--
+      if (depth === 0 && elementStart >= 0) {
+        const raw = src.substring(elementStart, i + 1)
+        try {
+          out.push(JSON.parse(raw))
+        } catch {
+          // skip — likely contained a malformed nested value, drop the row
+        }
+        elementStart = -1
+      }
+    } else if (ch === ']' && depth === 0) {
+      // End of the lines array reached cleanly
+      break
+    }
+    i++
+  }
+  return out
 }
 
 // ── Validation + normalisation ──────────────────────────────────────────
