@@ -9,6 +9,7 @@ import type { ExtractedAPInvoice, ExtractedAPLineItem } from './ap-extraction'
 import { attemptAutoLink, writeJobLink } from './ap-job-link'
 import { tryAutoMatchSupplier } from './ap-myob-automatch'
 import type { CompanyFileLabel } from './ap-myob-lookup'
+import { resolveAllLinesForInvoice } from './ap-line-resolver'
 
 let _sb: SupabaseClient | null = null
 function sb(): SupabaseClient {
@@ -145,10 +146,6 @@ export async function getInvoicePdfSignedUrl(pdfStoragePath: string): Promise<st
   return data.signedUrl
 }
 
-/**
- * Best-effort delete of the PDF from storage. Logs and continues on failure
- * — the invoice row delete is the source of truth.
- */
 export async function deleteInvoicePdf(pdfStoragePath: string): Promise<void> {
   const c = sb()
   try {
@@ -166,11 +163,6 @@ export interface DeleteInvoiceResult {
   deleted: { id: string; pdfRemoved: boolean }
 }
 
-/**
- * Permanently removes an AP invoice, its lines (via FK cascade), and its
- * PDF from storage. Refuses if the invoice has been posted to MYOB —
- * posted bills must remain auditable; reject the bill in MYOB instead.
- */
 export async function deleteInvoice(invoiceId: string): Promise<DeleteInvoiceResult> {
   const c = sb()
 
@@ -271,30 +263,15 @@ export interface TriageInput {
   extracted: ExtractedAPInvoice
   hasResolvedSupplier: boolean
   hasResolvedAccount: boolean
-  exactDuplicateOf: string | null         // same vendor + same invoice_number
-  amountDuplicates: string[]              // same vendor + same total within window
+  exactDuplicateOf: string | null
+  amountDuplicates: string[]
   poCheckStatus: 'matched' | 'unmatched' | 'no-po-on-invoice'
 }
 
-/**
- * Triage philosophy:
- * - 🟢 GREEN: parsed cleanly + supplier+account resolved + totals reconcile
- *             + (PO matched a job OR no PO needed) + no duplicates
- * - 🟡 YELLOW: needs human eyes — new supplier, missing default account,
- *              unmatched PO, totals off, low confidence, missing date,
- *              possible amount duplicate.
- * - 🔴 RED: cannot post — missing invoice number, missing total, parser
- *           unsure, exact duplicate, no line items.
- *
- * Reasons may also include `INFO:*` entries that are appended after triage
- * (e.g. for auto-corrections); these never affect status — they're just
- * surfaced in the UI so the user can see what happened.
- */
 export function triageInvoice(input: TriageInput): TriageOutcome {
   const reasons: string[] = []
   const e = input.extracted
 
-  // RED conditions
   if (!e.invoiceNumber) reasons.push('RED:missing-invoice-number')
   if (e.totals.totalIncGst === null) reasons.push('RED:missing-total')
   if (e.parseConfidence === 'low') reasons.push('RED:low-parse-confidence')
@@ -305,10 +282,6 @@ export function triageInvoice(input: TriageInput): TriageOutcome {
     return { triageStatus: 'red', triageReasons: reasons }
   }
 
-  // YELLOW conditions
-  // Supplier mapping — flag whichever of supplier/account isn't resolved.
-  // (If neither, surface only the supplier flag; account picks up automatically
-  // once a supplier is chosen.)
   if (!input.hasResolvedSupplier) {
     reasons.push('YELLOW:supplier-not-mapped')
   } else if (!input.hasResolvedAccount) {
@@ -318,15 +291,10 @@ export function triageInvoice(input: TriageInput): TriageOutcome {
   if (e.parseConfidence === 'medium') reasons.push('YELLOW:medium-parse-confidence')
   if (!e.invoiceDate) reasons.push('YELLOW:missing-invoice-date')
 
-  // PO check: only flag if PO was on the invoice but didn't match any job.
-  // No-PO is normal for Capricorn-routed invoices — neutral, not a flag.
   if (input.poCheckStatus === 'unmatched') {
     reasons.push('YELLOW:po-no-job-match')
   }
 
-  // Possible duplicate by amount — different invoice number but same vendor
-  // and total within the recent window. Flag once per match (cap at 3 IDs
-  // listed in reasons to keep them readable).
   if (input.amountDuplicates.length > 0) {
     const ids = input.amountDuplicates.slice(0, 3).join(',')
     reasons.push(`YELLOW:possible-duplicate-amount:${ids}`)
@@ -352,23 +320,6 @@ export function triageInvoice(input: TriageInput): TriageOutcome {
 }
 
 // ── Inc-GST line auto-correction ────────────────────────────────────────
-//
-// Some AU trade vendors (Diesel Care is one) print line "Amount" columns as
-// GST-INCLUSIVE while still showing a separate Subtotal/GST/Total breakdown
-// at the bottom. The parser takes the line amounts at face value as ex-GST,
-// which produces a sum that matches `total_inc_gst` instead of
-// `subtotal_ex_gst`. If we posted as-is, MYOB would re-add 10% on top — the
-// bill would be wrong by ~$X for every invoice.
-//
-// Detection rule (deterministic, no Claude judgement):
-//   - lineSum ≈ subtotal_ex_gst (within $0.10) → lines are correctly ex-GST
-//   - lineSum ≈ total_inc_gst   (within $0.10) → lines are inc-GST,
-//                                                divide GST lines by 1.10
-//                                                in place, mark INFO
-//   - neither match              → leave alone, triage will yellow-flag
-//
-// We only divide GST-coded lines. FRE/EXP/N-T lines stay untouched because
-// they have no GST baked in — for those, "inc" and "ex" are the same value.
 
 interface LineRowCorrection {
   id: string
@@ -379,7 +330,7 @@ interface LineRowCorrection {
 
 interface AutoCorrectionResult {
   applied: boolean
-  reason?: string                    // human note for the audit log
+  reason?: string
   before: { lineSum: number; subtotal: number | null; total: number | null }
   after?:  { lineSum: number }
 }
@@ -397,15 +348,10 @@ async function maybeAutoCorrectIncGstLines(
   const lineSum = round2(lines.reduce((s, l) => s + Number(l.line_total_ex_gst || 0), 0))
   const before = { lineSum, subtotal: subtotalEx, total: totalInc }
 
-  // Need both subtotal_ex_gst and total_inc_gst to safely diagnose. Without
-  // both anchors, there's no reliable signal that the lines are inc-GST.
   if (subtotalEx === null || totalInc === null || lines.length === 0) {
     return { applied: false, before }
   }
 
-  // Don't run if the invoice has no GST (subtotal == total). Some vendors
-  // bill GST-free, in which case lineSum == subtotal == total is the
-  // expected ex-GST shape and we'd incorrectly "correct" it.
   if (Math.abs(totalInc - subtotalEx) < 0.01) {
     return { applied: false, before }
   }
@@ -413,13 +359,9 @@ async function maybeAutoCorrectIncGstLines(
   const matchesSubtotal = Math.abs(lineSum - subtotalEx) <= LINE_SUM_TOLERANCE
   const matchesTotalInc = Math.abs(lineSum - totalInc)   <= LINE_SUM_TOLERANCE
 
-  // Already correct (matches subtotal) — nothing to do.
   if (matchesSubtotal) return { applied: false, before }
-
-  // Doesn't match either anchor — let triage flag it yellow as before.
   if (!matchesTotalInc) return { applied: false, before }
 
-  // Lines look inc-GST. Divide GST-coded lines by 1.1, leave the rest alone.
   const c = sb()
   let mutated = 0
 
@@ -442,8 +384,6 @@ async function maybeAutoCorrectIncGstLines(
       continue
     }
 
-    // Reflect the new value into the in-memory list so the caller's
-    // subsequent triage sees the corrected sum without re-querying.
     l.line_total_ex_gst = newLine
     if (newUnit !== null) l.unit_price_ex_gst = newUnit
     mutated++
@@ -464,10 +404,6 @@ async function maybeAutoCorrectIncGstLines(
 
 // ── Duplicate detection ────────────────────────────────────────────────
 
-/**
- * Exact duplicate: same vendor + same invoice number. This is a hard block —
- * no two genuine invoices ever share the exact (vendor, invoice number) pair.
- */
 export async function findExactDuplicate(
   vendorNameParsed: string | null,
   invoiceNumber: string | null,
@@ -486,17 +422,6 @@ export async function findExactDuplicate(
   return data?.id ?? null
 }
 
-/**
- * Amount-based duplicate detection: same vendor, same total (inc GST), within
- * the recent window (default 30 days), but DIFFERENT invoice number. Returns
- * matching invoice IDs (most recent first, capped). Returns [] when total is
- * null or no candidates exist.
- *
- * Real-world rationale: workshops sometimes get the same charge billed twice
- * with different invoice numbers (supplier credit/rebill, or a person uploads
- * a re-issued invoice that still describes the same goods). Same vendor, same
- * dollar amount, close in time = worth a second look.
- */
 export async function findAmountDuplicates(
   vendorNameParsed: string | null,
   totalIncGst: number | null,
@@ -517,8 +442,6 @@ export async function findAmountDuplicates(
     .order('received_at', { ascending: false })
     .limit(5)
   if (excludeId) q = q.neq('id', excludeId)
-  // If we know our own invoice number, exclude rows that share it (those are
-  // the *exact* dup branch — don't double-flag the same row in two reasons).
   if (invoiceNumber) q = q.neq('invoice_number', invoiceNumber)
 
   const { data, error } = await q
@@ -529,24 +452,25 @@ export async function findAmountDuplicates(
   return (data || []).map((r: any) => r.id)
 }
 
-// ── Apply triage + supplier resolution + auto job link ──────────────────
+// ── Apply triage + supplier resolution + auto job link + line resolver ──
 
 /**
- * Resolves an invoice's supplier+account mapping (preset → MYOB auto-match
- * fallback), runs PO→job auto-link, runs triage, and writes everything back.
+ * Resolves an invoice's supplier+account mapping, runs PO→job auto-link,
+ * runs triage, runs the smart per-line account resolver, and writes
+ * everything back.
  *
- * Resolution order:
- *   1. ap_supplier_account_map preset (durable user choice)  — supplier+account
- *   2. MYOB auto-match by ABN, then single-name match        — supplier (and
- *      account if the MYOB supplier card has a default expense account)
- *   3. Neither — leave nulls, triage will flag YELLOW:supplier-not-mapped
+ * Order:
+ *   1. Auto-correct inc-GST lines if detected (mutates lines in place)
+ *   2. Resolve invoice-level supplier/account (preset → MYOB auto-match)
+ *   3. PO→job auto-link (skipped if linked manually)
+ *   4. Run triage
+ *   5. Persist invoice-level state
+ *   6. Run line-account resolver — populates per-line account_uid OR
+ *      suggested_account_uid based on rules + history. Skips lines whose
+ *      account_source = 'manual'. See lib/ap-line-resolver.ts.
  *
- * Pre-triage: runs `maybeAutoCorrectIncGstLines` to detect and fix vendors
- * who print line totals inc-GST. If correction fires, lines are mutated in
- * place and an INFO reason is appended after triage so the UI can surface it.
- *
- * MYOB auto-match failures (network, expired token, etc.) are logged and
- * skipped — they must not break the parse pipeline.
+ * Failures in non-critical steps (auto-match, line resolver) are logged
+ * and don't break the parse pipeline.
  */
 export async function applyTriageAndResolve(invoiceId: string): Promise<void> {
   const c = sb()
@@ -565,9 +489,6 @@ export async function applyTriageAndResolve(invoiceId: string): Promise<void> {
 
   const lines: any[] = linesRaw || []
 
-  // ── Pre-triage step: auto-correct inc-GST line totals if detected ──
-  // This MUTATES `lines` in place when correction fires, so the triage
-  // calculation below sees the post-correction sums and yields GREEN.
   const correction = await maybeAutoCorrectIncGstLines(
     invoiceId,
     { subtotal_ex_gst: inv.subtotal_ex_gst, total_inc_gst: inv.total_inc_gst },
@@ -606,7 +527,6 @@ export async function applyTriageAndResolve(invoiceId: string): Promise<void> {
     parseConfidence: (inv.parse_confidence || 'medium') as 'high' | 'medium' | 'low',
   }
 
-  // ── Step 1: preset lookup ──
   const preset = await findSupplierMatch(extracted.vendor.name, extracted.vendor.abn)
 
   let resolvedSupplierUid:  string | null = preset?.myobSupplierUid    || null
@@ -618,7 +538,6 @@ export async function applyTriageAndResolve(invoiceId: string): Promise<void> {
     (preset?.myobCompanyFile as CompanyFileLabel | undefined) ||
     ((inv.myob_company_file as CompanyFileLabel | null) || 'VPS')
 
-  // ── Step 2: MYOB auto-match if no preset ──
   if (!resolvedSupplierUid) {
     try {
       const auto = await tryAutoMatchSupplier(
@@ -635,9 +554,6 @@ export async function applyTriageAndResolve(invoiceId: string): Promise<void> {
         }
       }
     } catch (e: any) {
-      // MYOB unreachable / token expired / etc — log and continue. The
-      // invoice still needs to land in the queue with a YELLOW flag so
-      // the user can pick a supplier manually.
       console.error(`auto-match failed for invoice ${invoiceId}:`, e?.message)
     }
   }
@@ -654,7 +570,6 @@ export async function applyTriageAndResolve(invoiceId: string): Promise<void> {
     invoiceId,
   )
 
-  // ── Auto-link to MD job by PO, but DON'T overwrite a manual link ──
   let poCheckStatus: 'matched' | 'unmatched' | 'no-po-on-invoice'
   if (inv.linked_job_match_method === 'manual' && inv.linked_job_number) {
     poCheckStatus = 'matched'
@@ -677,8 +592,6 @@ export async function applyTriageAndResolve(invoiceId: string): Promise<void> {
     poCheckStatus,
   })
 
-  // Append INFO reason for auto-correction so it shows in the UI without
-  // changing the triage status.
   if (correction.applied) {
     triage.triageReasons.push(`INFO:auto-corrected-inc-gst-lines:${correction.reason || ''}`.replace(/[\r\n]+/g, ' '))
   }
@@ -696,4 +609,14 @@ export async function applyTriageAndResolve(invoiceId: string): Promise<void> {
       status:                 'pending_review',
     })
     .eq('id', invoiceId)
+
+  // ── Step 6: smart per-line account resolution ──
+  // Runs after the supplier is set, so the resolver has the right context.
+  // Skips lines with account_source='manual' to preserve user picks. Logs
+  // and continues on failure — line resolution is non-critical.
+  try {
+    await resolveAllLinesForInvoice(c, invoiceId)
+  } catch (e: any) {
+    console.error(`resolveAllLinesForInvoice failed for ${invoiceId}: ${e?.message}`)
+  }
 }

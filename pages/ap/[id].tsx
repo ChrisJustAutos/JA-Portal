@@ -1,6 +1,16 @@
 // pages/ap/[id].tsx
 // AP Invoice Detail — PDF preview, line editor with per-line account picker,
 // MD job link, MYOB preset picker, approve/reject actions, delete, save.
+//
+// Round 6 additions (smart line→account pickup A+B):
+//   - LineRow extended with account_source + suggested_account_*
+//   - LinesTable shows a source badge under each picker button
+//     (🔁 Rule / 🔁 Auto / ✋ Manual) + a "💡 N past bills used X-XXXX" row
+//     with a one-click [Use] button for history-weak suggestions
+//   - AccountPickerModal grew a "Save as rule for {supplier}" affordance
+//     that POSTs a new ap_line_account_rule before applying the manual pick
+//   - PUT /api/ap/[id]/lines body now includes account_source per line so
+//     the resolver respects manual choices
 
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/router'
@@ -16,6 +26,9 @@ const T = {
   blue:'#4f8ef7', teal:'#2dd4bf', green:'#34c77b',
   amber:'#f5a623', red:'#f04e4e', purple:'#a78bfa', accent:'#4f8ef7',
 }
+
+type AccountSource =
+  | 'unset' | 'rule' | 'history-strong' | 'history-weak' | 'manual' | 'supplier-default'
 
 interface InvoiceRow {
   id: string
@@ -72,6 +85,11 @@ interface LineRow {
   account_uid: string | null
   account_code: string | null
   account_name: string | null
+  // Round 6
+  account_source: AccountSource | null
+  suggested_account_uid: string | null
+  suggested_account_code: string | null
+  suggested_account_name: string | null
 }
 
 interface JobInfo {
@@ -131,18 +149,15 @@ export default function APDetailPage({ user }: PageProps) {
   const [approving, setApproving] = useState(false)
   const [rejecting, setRejecting] = useState(false)
   const [actionMessage, setActionMessage] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null)
-  // Per-line account picker modal — null when closed, line.id when open
   const [accountPickerLineId, setAccountPickerLineId] = useState<string | null>(null)
   const canEdit = roleHasPermission(user.role, 'edit:supplier_invoices')
 
-  // Job picker state
   const [pickerOpen, setPickerOpen] = useState(false)
   const [pickerQuery, setPickerQuery] = useState('')
   const [pickerResults, setPickerResults] = useState<JobInfo[]>([])
   const [pickerLoading, setPickerLoading] = useState(false)
   const [linkBusy, setLinkBusy] = useState(false)
 
-  // Supplier preset form state
   const [presetOpen, setPresetOpen] = useState(false)
 
   async function fetchData() {
@@ -167,7 +182,6 @@ export default function APDetailPage({ user }: PageProps) {
 
   useEffect(() => { if (id) fetchData() }, [id])
 
-  // ── Job picker effects + handlers ──
   useEffect(() => {
     if (!pickerOpen) return
     setPickerLoading(true)
@@ -329,6 +343,10 @@ export default function APDetailPage({ user }: PageProps) {
         account_uid: null,
         account_code: null,
         account_name: null,
+        account_source: 'unset',
+        suggested_account_uid: null,
+        suggested_account_code: null,
+        suggested_account_name: null,
       },
     ])
   }
@@ -336,6 +354,19 @@ export default function APDetailPage({ user }: PageProps) {
     if (!editingLines) return
     setEditingLines(editingLines.filter(l => l.id !== lineId))
   }
+
+  /** One-click apply for a history-weak suggestion. Marks source='manual'
+   *  so the resolver doesn't second-guess it on the next re-triage. */
+  function applySuggestion(l: LineRow) {
+    if (!l.suggested_account_uid) return
+    updateLine(l.id, {
+      account_uid:    l.suggested_account_uid,
+      account_code:   l.suggested_account_code,
+      account_name:   l.suggested_account_name,
+      account_source: 'manual',
+    })
+  }
+
   async function saveLines() {
     if (!editingLines || !id) return
     setSaving(true)
@@ -354,6 +385,7 @@ export default function APDetailPage({ user }: PageProps) {
         account_uid: l.account_uid,
         account_code: l.account_code,
         account_name: l.account_name,
+        account_source: l.account_source || (l.account_uid ? 'manual' : 'unset'),
       }))
       const res = await fetch(`/api/ap/${id}/lines`, {
         method: 'PUT',
@@ -375,8 +407,6 @@ export default function APDetailPage({ user }: PageProps) {
   const isPosted   = data?.invoice.status === 'posted'
   const isRejected = data?.invoice.status === 'rejected'
   const isTerminal = isPosted || isRejected
-  // Per-line accounts: approval is OK if every line has an account_uid OR the
-  // invoice has a fallback resolved_account_uid.
   const hasAccountFallbackOrPerLine = (() => {
     if (!data) return false
     if (data.invoice.resolved_account_uid) return true
@@ -396,7 +426,6 @@ export default function APDetailPage({ user }: PageProps) {
     !hasAccountFallbackOrPerLine ? 'Some lines have no account and no default account is set' :
     ''
 
-  // Resolve the line being edited in the picker modal
   const pickerLine = editingLines?.find(l => l.id === accountPickerLineId) || null
 
   return (
@@ -468,7 +497,7 @@ export default function APDetailPage({ user }: PageProps) {
               )}
             </div>
 
-            {/* RIGHT: data + lines */}
+            {/* RIGHT */}
             <div style={{display:'flex', flexDirection:'column', gap:14, height:'calc(100vh - 110px)', overflow:'auto'}}>
 
               {/* Triage banner + actions */}
@@ -652,10 +681,11 @@ export default function APDetailPage({ user }: PageProps) {
                   onChange={updateLine}
                   onRemove={removeLine}
                   onPickAccount={(lineId) => setAccountPickerLineId(lineId)}
+                  onApplySuggestion={applySuggestion}
                 />
                 {editingLines !== null && (
-                  <div style={{marginTop:10, fontSize:10, color:T.text3}}>
-                    💡 Per-line account override: leave as "Default" to use the invoice-level account, or click to set a different account for that line only.
+                  <div style={{marginTop:10, fontSize:10, color:T.text3, lineHeight:1.5}}>
+                    💡 Smart pickup: lines auto-mapped by rule or 5+ past bills with the same description show <span style={{color:T.teal}}>🔁 Auto</span>. Lower-confidence matches show <span style={{color:T.amber}}>💡 Suggestion</span> with one-click [Use]. Click an account button to override; tick &quot;Save as rule&quot; in the picker to teach the system.
                   </div>
                 )}
               </div>
@@ -663,7 +693,6 @@ export default function APDetailPage({ user }: PageProps) {
           </div>
         )}
 
-        {/* Per-line account picker modal */}
         {pickerLine && data && (
           <AccountPickerModal
             companyFile={data.invoice.myob_company_file}
@@ -671,20 +700,31 @@ export default function APDetailPage({ user }: PageProps) {
             currentAccountName={pickerLine.account_name}
             invoiceDefaultCode={data.invoice.resolved_account_code}
             lineLabel={`Line #${pickerLine.line_no}: ${pickerLine.description.substring(0, 60)}`}
+            lineDescription={pickerLine.description}
+            linePartNumber={pickerLine.part_number}
+            supplier={
+              data.invoice.resolved_supplier_uid && data.invoice.resolved_supplier_name
+                ? { uid: data.invoice.resolved_supplier_uid, name: data.invoice.resolved_supplier_name }
+                : null
+            }
             onClose={() => setAccountPickerLineId(null)}
             onSelect={(account) => {
               if (account === null) {
-                // Reset to invoice default
                 updateLine(pickerLine.id, {
                   account_uid: null,
                   account_code: null,
                   account_name: null,
+                  account_source: 'unset',
+                  // Keep suggested_* in the editing buffer so the user can
+                  // still see the suggestion. The server will recompute on
+                  // re-triage anyway.
                 })
               } else {
                 updateLine(pickerLine.id, {
                   account_uid: account.uid,
                   account_code: account.displayId,
                   account_name: account.name || null,
+                  account_source: 'manual',
                 })
               }
               setAccountPickerLineId(null)
@@ -903,19 +943,74 @@ function inputStyle(): React.CSSProperties {
   }
 }
 
-// ── Per-line account picker modal ────────────────────────────────────────
+// ── Per-line account picker modal w/ Save-as-rule ────────────────────────
 function AccountPickerModal({
   companyFile, currentAccountCode, currentAccountName, invoiceDefaultCode,
-  lineLabel, onClose, onSelect,
+  lineLabel, lineDescription, linePartNumber,
+  supplier,
+  onClose, onSelect,
 }: {
   companyFile: 'VPS' | 'JAWS'
   currentAccountCode: string | null
   currentAccountName: string | null
   invoiceDefaultCode: string | null
   lineLabel: string
+  lineDescription: string
+  linePartNumber: string | null
+  supplier: { uid: string; name: string } | null
   onClose: () => void
   onSelect: (account: MyobAccount | null) => void   // null = reset to invoice default
 }) {
+  const [saveAsRule, setSaveAsRule] = useState(false)
+  const [pattern, setPattern] = useState<string>(defaultPatternFor(lineDescription, linePartNumber))
+  const [matchType, setMatchType] = useState<'contains' | 'starts_with' | 'exact'>('contains')
+  const [matchField, setMatchField] = useState<'description' | 'part_number' | 'both'>('description')
+  const [savingRule, setSavingRule] = useState(false)
+  const [ruleError, setRuleError] = useState<string | null>(null)
+
+  /**
+   * When the user clicks an account row in the typeahead:
+   *   - If "save as rule" is ticked, POST the rule first; bail on failure.
+   *   - Then call onSelect to apply the manual pick to this line.
+   */
+  async function handleAccountClick(account: MyobAccount) {
+    if (saveAsRule && supplier) {
+      const trimmedPattern = pattern.trim()
+      if (!trimmedPattern) {
+        setRuleError('Pattern is required')
+        return
+      }
+      setSavingRule(true)
+      setRuleError(null)
+      try {
+        const res = await fetch('/api/ap/line-rules', {
+          method: 'POST',
+          credentials: 'same-origin',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            supplier_uid:      supplier.uid,
+            supplier_name:     supplier.name,
+            myob_company_file: companyFile,
+            pattern:           trimmedPattern,
+            match_type:        matchType,
+            match_field:       matchField,
+            account_uid:       account.uid,
+            account_code:      account.displayId,
+            account_name:      account.name || account.displayId,
+          }),
+        })
+        const json = await res.json()
+        if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`)
+      } catch (e: any) {
+        setRuleError(`Rule save failed: ${e?.message || e}`)
+        setSavingRule(false)
+        return   // don't proceed with the line update
+      }
+      setSavingRule(false)
+    }
+    onSelect(account)
+  }
+
   return (
     <div
       onClick={onClose}
@@ -931,9 +1026,9 @@ function AccountPickerModal({
           background: T.bg2,
           border: `1px solid ${T.border2}`,
           borderRadius: 10,
-          width: 'min(620px, 92vw)',
+          width: 'min(680px, 92vw)',
           padding: '18px 20px',
-          maxHeight: '75vh',
+          maxHeight: '80vh',
           overflowY: 'auto',
           boxShadow: '0 16px 48px rgba(0,0,0,0.5)',
         }}
@@ -981,16 +1076,95 @@ function AccountPickerModal({
           )}
         </div>
 
+        {/* Save-as-rule (only when we have a resolved supplier) */}
+        {supplier && (
+          <div style={{
+            marginBottom:12, padding:'10px 12px',
+            background:T.bg3, border:`1px solid ${T.border}`, borderRadius:6,
+          }}>
+            <label style={{display:'flex', alignItems:'center', gap:8, fontSize:12, color:T.text2, cursor:'pointer'}}>
+              <input
+                type="checkbox"
+                checked={saveAsRule}
+                onChange={e => setSaveAsRule(e.target.checked)}
+                disabled={savingRule}
+              />
+              <span>Save as rule for <span style={{color:T.text}}>{supplier.name}</span></span>
+            </label>
+            {saveAsRule && (
+              <div style={{marginTop:10, display:'grid', gridTemplateColumns:'2fr 1fr 1fr', gap:8, alignItems:'end'}}>
+                <FormRow label="Pattern">
+                  <input
+                    value={pattern}
+                    onChange={e => setPattern(e.target.value)}
+                    placeholder="brake pad"
+                    style={inputStyle()}
+                    disabled={savingRule}
+                  />
+                </FormRow>
+                <FormRow label="Match type">
+                  <select
+                    value={matchType}
+                    onChange={e => setMatchType(e.target.value as any)}
+                    disabled={savingRule}
+                    style={{...inputStyle(), padding:'6px 8px'}}
+                  >
+                    <option value="contains">contains</option>
+                    <option value="starts_with">starts with</option>
+                    <option value="exact">exact</option>
+                  </select>
+                </FormRow>
+                <FormRow label="Match against">
+                  <select
+                    value={matchField}
+                    onChange={e => setMatchField(e.target.value as any)}
+                    disabled={savingRule}
+                    style={{...inputStyle(), padding:'6px 8px'}}
+                  >
+                    <option value="description">description</option>
+                    <option value="part_number">part number</option>
+                    <option value="both">both</option>
+                  </select>
+                </FormRow>
+              </div>
+            )}
+            {saveAsRule && (
+              <div style={{marginTop:8, fontSize:10, color:T.text3, lineHeight:1.5}}>
+                Rule applies to <strong>{supplier.name}</strong> only. Click an account below — the rule is saved first, then the line is updated. Other matching lines on this invoice will pick up the rule when you Save.
+              </div>
+            )}
+            {ruleError && (
+              <div style={{marginTop:8, fontSize:11, color:T.red}}>{ruleError}</div>
+            )}
+          </div>
+        )}
+
         <AccountTypeahead
           companyFile={companyFile}
           selected={null}
-          onSelect={(a) => { if (a) onSelect(a) }}
+          onSelect={(a) => { if (a) handleAccountClick(a) }}
           forceOpen
           placeholder="Search any account by code or name…"
         />
+
+        {savingRule && (
+          <div style={{marginTop:10, fontSize:11, color:T.text3}}>Saving rule…</div>
+        )}
       </div>
     </div>
   )
+}
+
+/** Default rule pattern: prefer first 2 words of the description. Fall back
+ *  to the part number if the description is empty. Lowercased so the user
+ *  doesn't have to remember casing — match is case-insensitive by default. */
+function defaultPatternFor(description: string, partNumber: string | null): string {
+  const desc = (description || '').trim()
+  if (desc) {
+    return desc.split(/\s+/).slice(0, 2).join(' ').toLowerCase()
+  }
+  if (partNumber) return partNumber.trim().toLowerCase()
+  return ''
 }
 
 // ── Reusable typeaheads ──────────────────────────────────────────────────
@@ -1120,7 +1294,6 @@ function AccountTypeahead({
     setSearchError(null)
     const t = setTimeout(async () => {
       try {
-        // No types= param → API default 'all', returns every account type.
         const params = new URLSearchParams({ q: query, company: companyFile, limit: '40' })
         const res = await fetch(`/api/myob/accounts?${params.toString()}`, { credentials: 'same-origin' })
         const json = await res.json()
@@ -1208,7 +1381,7 @@ function AccountTypeahead({
   )
 }
 
-// ── Workshop Job section ────────────────────────────
+// ── Workshop Job section ────────────────────────────────────────────────
 function WorkshopJobSection({
   invoice, linkedJob, canEdit,
   pickerOpen, pickerQuery, pickerResults, pickerLoading, linkBusy,
@@ -1337,7 +1510,8 @@ function WorkshopJobSection({
 
 // ── Lines table ──────────────────────────────────────────────────────────
 function LinesTable({
-  lines, invoiceDefaultAccountCode, editable, onChange, onRemove, onPickAccount,
+  lines, invoiceDefaultAccountCode, editable,
+  onChange, onRemove, onPickAccount, onApplySuggestion,
 }: {
   lines: LineRow[]
   invoiceDefaultAccountCode: string | null
@@ -1345,6 +1519,7 @@ function LinesTable({
   onChange: (id: string, patch: Partial<LineRow>) => void
   onRemove: (id: string) => void
   onPickAccount: (lineId: string) => void
+  onApplySuggestion: (l: LineRow) => void
 }) {
   if (lines.length === 0) {
     return <div style={{padding:14, textAlign:'center', color:T.text3, fontSize:12}}>No line items.</div>
@@ -1362,7 +1537,7 @@ function LinesTable({
             <th style={{...lh(80), textAlign:'right'}}>Unit ex</th>
             <th style={{...lh(80), textAlign:'right'}}>Total ex</th>
             <th style={lh(56)}>Tax</th>
-            <th style={lh(140)}>Account</th>
+            <th style={lh(170)}>Account</th>
             {editable && <th style={lh(40)}/>}
           </tr>
         </thead>
@@ -1412,30 +1587,13 @@ function LinesTable({
                 ) : l.tax_code}
               </td>
               <td style={ld()}>
-                {editable ? (
-                  <button
-                    onClick={() => onPickAccount(l.id)}
-                    title={l.account_name || (l.account_code ? '' : `Default: ${invoiceDefaultAccountCode || 'none'}`)}
-                    style={{
-                      background: T.bg3, border:`1px solid ${T.border2}`,
-                      color: l.account_code ? T.text : T.text3,
-                      padding:'3px 8px', borderRadius:4,
-                      fontSize:11, fontFamily: l.account_code ? 'monospace' : 'inherit',
-                      cursor:'pointer', textAlign:'left',
-                      width:'100%', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap',
-                    }}
-                  >
-                    {l.account_code || `Default${invoiceDefaultAccountCode ? ` (${invoiceDefaultAccountCode})` : ''}`}
-                  </button>
-                ) : (
-                  <span title={l.account_name || ''} style={{
-                    fontSize:11,
-                    color: l.account_code ? T.text : T.text3,
-                    fontFamily: l.account_code ? 'monospace' : 'inherit',
-                  }}>
-                    {l.account_code || `Default${invoiceDefaultAccountCode ? ` (${invoiceDefaultAccountCode})` : ''}`}
-                  </span>
-                )}
+                <AccountCell
+                  line={l}
+                  invoiceDefaultAccountCode={invoiceDefaultAccountCode}
+                  editable={editable}
+                  onPickAccount={onPickAccount}
+                  onApplySuggestion={onApplySuggestion}
+                />
               </td>
               {editable && (
                 <td style={ld()}>
@@ -1448,6 +1606,105 @@ function LinesTable({
       </table>
     </div>
   )
+}
+
+/**
+ * Account column for a single line. Stacks (top-to-bottom):
+ *   1. Picker button (read-only span when not editable)
+ *   2. Source badge: 🔁 Auto / ✋ Manual (omitted for 'unset')
+ *   3. Suggestion row: "💡 X-XXXX" + [Use] button (only when account_uid
+ *      is empty AND a suggested_account_uid exists — i.e. account_source
+ *      is 'history-weak' from the resolver)
+ */
+function AccountCell({
+  line, invoiceDefaultAccountCode, editable, onPickAccount, onApplySuggestion,
+}: {
+  line: LineRow
+  invoiceDefaultAccountCode: string | null
+  editable: boolean
+  onPickAccount: (lineId: string) => void
+  onApplySuggestion: (l: LineRow) => void
+}) {
+  const source = line.account_source || 'unset'
+  const hasSuggestion = !line.account_uid && !!line.suggested_account_uid
+
+  return (
+    <div style={{display:'flex', flexDirection:'column', gap:4}}>
+      {editable ? (
+        <button
+          onClick={() => onPickAccount(line.id)}
+          title={line.account_name || (line.account_code ? '' : `Default: ${invoiceDefaultAccountCode || 'none'}`)}
+          style={{
+            background: T.bg3, border:`1px solid ${T.border2}`,
+            color: line.account_code ? T.text : T.text3,
+            padding:'3px 8px', borderRadius:4,
+            fontSize:11, fontFamily: line.account_code ? 'monospace' : 'inherit',
+            cursor:'pointer', textAlign:'left',
+            width:'100%', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap',
+          }}
+        >
+          {line.account_code || `Default${invoiceDefaultAccountCode ? ` (${invoiceDefaultAccountCode})` : ''}`}
+        </button>
+      ) : (
+        <span title={line.account_name || ''} style={{
+          fontSize:11,
+          color: line.account_code ? T.text : T.text3,
+          fontFamily: line.account_code ? 'monospace' : 'inherit',
+        }}>
+          {line.account_code || `Default${invoiceDefaultAccountCode ? ` (${invoiceDefaultAccountCode})` : ''}`}
+        </span>
+      )}
+
+      {/* Source badge */}
+      {source === 'rule' && (
+        <span style={badgeStyle(T.teal)}>🔁 Rule</span>
+      )}
+      {source === 'history-strong' && (
+        <span style={badgeStyle(T.teal)}>🔁 Auto</span>
+      )}
+      {source === 'manual' && (
+        <span style={badgeStyle(T.text3)}>✋ Manual</span>
+      )}
+
+      {/* Suggestion row */}
+      {hasSuggestion && (
+        <div style={{
+          display:'flex', alignItems:'center', gap:6,
+          fontSize:10, color:T.amber,
+          background:`${T.amber}10`, border:`1px solid ${T.amber}30`,
+          padding:'2px 6px', borderRadius:3,
+          width:'100%',
+        }}>
+          <span style={{flex:1, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', fontFamily:'monospace'}}>
+            💡 {line.suggested_account_code}
+          </span>
+          {editable && (
+            <button
+              onClick={() => onApplySuggestion(line)}
+              style={{
+                background:'transparent', border:'none', color:T.amber,
+                fontSize:10, cursor:'pointer', padding:'0 2px',
+                fontFamily:'inherit', whiteSpace:'nowrap',
+              }}
+              title={line.suggested_account_name || ''}
+            >
+              Use →
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function badgeStyle(color: string): React.CSSProperties {
+  return {
+    fontSize:9, color,
+    background:`${color}15`, border:`1px solid ${color}40`,
+    padding:'1px 5px', borderRadius:3,
+    width:'fit-content',
+    textTransform:'uppercase', letterSpacing:'0.04em', fontWeight:500,
+  }
 }
 
 // ── Small UI bits ──

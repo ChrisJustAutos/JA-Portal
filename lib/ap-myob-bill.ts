@@ -7,31 +7,25 @@
 //      given company file, caches them in ap_settings.
 //   2. createServiceBill(invoiceId, postedBy) — fetches the invoice + lines
 //      from Supabase, runs a MYOB-side duplicate pre-flight check, builds the
-//      bill body, POSTs to MYOB, attaches the PDF, updates the invoice row.
+//      bill body, POSTs to MYOB, attaches the PDF, updates the invoice row,
+//      and records line→account history for future smart-pickup.
 //
 // Per-line account override: if a line has its own `account_uid`, that wins
 // over the invoice-level `resolved_account_uid`. Lines without a per-line
-// account fall back to the invoice default (the ap_supplier_account_map
-// preset, or the MYOB supplier card's default expense account).
+// account fall back to the invoice default.
 //
 // SMART ADOPT on duplicate detection:
 //   The pre-flight check queries MYOB for existing bills with the same
-//   SupplierInvoiceNumber + Supplier UID. **If a match is found, we ADOPT
-//   the existing UID and mark this invoice as posted** instead of throwing
-//   a "Duplicate in MYOB" error.
+//   SupplierInvoiceNumber + Supplier UID. If a match is found, we ADOPT
+//   the existing UID and mark this invoice as posted (instead of throwing
+//   "Duplicate in MYOB"). This makes bulk-approve idempotent and self-
+//   healing — re-running after a partial failure recovers cleanly.
 //
-//   Why: the pre-flight only matches on (invoice number + supplier), which
-//   uniquely identifies the same logical invoice. Whether it ended up in
-//   MYOB via:
-//     (a) A previous attempt of ours that succeeded but lost its DB update
-//         (e.g. bulk-approve hitting a serverless function timeout),
-//     (b) A manual bill entry in MYOB by a person, or
-//     (c) An import from somewhere else,
-//   the right behaviour is the same: don't create a second bill, just
-//   record that this invoice is reconciled to the existing UID.
-//
-//   This makes bulk-approve idempotent and self-healing — re-running it
-//   after a partial failure recovers cleanly without operator intervention.
+// LINE→ACCOUNT HISTORY (B layer of smart pickup):
+//   On successful post, recordPostedLineHistory increments bill_count for
+//   each (supplier_uid, normalised description, account_uid) tuple. The
+//   resolver in lib/ap-line-resolver.ts uses this to suggest accounts for
+//   future invoices from the same supplier with similar line descriptions.
 //
 // Bill body shape (IsTaxInclusive=false, amounts ex-GST):
 //   POST /accountright/{cf_id}/Purchase/Bill/Service
@@ -45,7 +39,7 @@
 //
 // Field naming gotchas (every one of these silently fails):
 //   - Line tax field is `TaxCode` not `Tax`
-//   - **Line amount field is `Total` not `Amount`** — matches CData column
+//   - Line amount field is `Total` not `Amount`
 //   - FreightTaxCode is required even when FreightAmount is 0
 //   - Subtotal/TotalTax/TotalAmount must be sent on the body envelope
 //
@@ -60,6 +54,7 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
 import { getConnection, myobFetch, MyobConnection } from './myob'
 import { CompanyFileLabel } from './ap-myob-lookup'
+import { recordPostedLineHistory } from './ap-line-resolver'
 
 const TAX_CODE_TTL_MS = 30 * 24 * 3600 * 1000
 const SETTINGS_ID = 'singleton'
@@ -197,9 +192,7 @@ export interface CreateServiceBillResult {
   myobBillRowId: number | null
   attachmentStatus: 'attached' | 'failed' | 'skipped' | 'no-pdf' | 'adopted'
   attachmentError?: string
-  /** True when an existing MYOB bill was adopted instead of posting a new one. */
   adopted?: boolean
-  /** When adopted, the existing MYOB bill number for the operator's reference. */
   adoptedBillNumber?: string | null
 }
 
@@ -270,9 +263,7 @@ export async function createServiceBill(
   if (!conn) throw new Error(`No active MYOB connection for ${companyFile}`)
   if (!conn.company_file_id) throw new Error(`MYOB connection ${companyFile} has no company file selected`)
 
-  // ── Pre-flight: MYOB-side duplicate check (now SMART ADOPT) ──
-  // If MYOB already has a bill with this SupplierInvoiceNumber + Supplier
-  // UID, we adopt it rather than throwing. See module docblock for rationale.
+  // ── Pre-flight: MYOB-side duplicate check (smart adopt) ──
   const existingMyob = await findExistingMyobBill(
     conn.id,
     conn.company_file_id,
@@ -446,6 +437,27 @@ export async function createServiceBill(
   }
 
   await c.from('ap_invoices').update(postUpdate).eq('id', invoiceId)
+
+  // ── Step 4: record line→account history for future smart-pickup ──
+  // Best-effort: failures are logged but never fail the post. Each line is
+  // recorded with the account that was actually used (per-line override
+  // wins over invoice-level resolved_account_uid). Lines without a valid
+  // account+description are skipped inside recordPostedLineHistory.
+  try {
+    await recordPostedLineHistory(c, {
+      supplier_uid:      String(inv.resolved_supplier_uid),
+      supplier_name:     inv.resolved_supplier_name || null,
+      myob_company_file: companyFile,
+      lines: lines.map((l: any) => ({
+        description:  String(l.description || ''),
+        account_uid:  String(l.account_uid || inv.resolved_account_uid || ''),
+        account_code: String(l.account_code || inv.resolved_account_code || ''),
+        account_name: String(l.account_name || ''),
+      })).filter((l: any) => l.account_uid && l.description),
+    })
+  } catch (e: any) {
+    console.error(`recordPostedLineHistory for ${invoiceId} failed: ${e?.message}`)
+  }
 
   return {
     ok: true,
