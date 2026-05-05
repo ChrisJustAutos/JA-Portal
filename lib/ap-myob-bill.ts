@@ -13,29 +13,25 @@
 // Bill body shape (IsTaxInclusive=false, amounts ex-GST):
 //   POST /accountright/{cf_id}/Purchase/Bill/Service
 //   {
-//     Date: 'YYYY-MM-DD',
-//     SupplierInvoiceNumber: '3421025200',
-//     Supplier: { UID },
+//     Date, SupplierInvoiceNumber, Supplier:{UID},
 //     Lines: [{ Type:'Transaction', Description, Account:{UID}, Amount, TaxCode:{UID} }],
-//     JournalMemo: '...',
-//     IsTaxInclusive: false,
-//     FreightAmount: 0,
-//     FreightTaxCode: { UID },
-//     Subtotal: 46.50,         // ex-GST sum of line Amounts + freight ex-GST
-//     TotalTax: 4.65,          // sum of line tax + freight tax
-//     TotalAmount: 51.15,      // Subtotal + TotalTax
+//     JournalMemo, IsTaxInclusive: false,
+//     FreightAmount: 0, FreightTaxCode: {UID},
+//     Subtotal, TotalTax, TotalAmount,
 //   }
 //
 // Field naming gotchas (learned the hard way):
 //   - Line tax field is `TaxCode` not `Tax` (matches body-level FreightTaxCode)
 //   - FreightTaxCode is required even when FreightAmount is 0
-//   - Subtotal/TotalTax/TotalAmount must be sent on the body envelope. MYOB
-//     will accept a POST without them and create a bill, but display it as
-//     $0 in the UI even though Lines[i].Amount is set correctly.
+//   - Subtotal/TotalTax/TotalAmount must be sent on the body envelope
 //
-// Bill UID extraction: MYOB returns 201 Created with an empty body. The new
-// bill's UID lives in the `Location` response header (a URL ending in the
-// UID). myobFetch exposes lowercased headers — see extractMyobUid().
+// Bill UID extraction: MYOB returns 201 Created with an empty body. The
+// `Location` response header contains the new resource URL:
+//   https://api.myob.com/accountright/{cfId}/Purchase/Bill/Service/{newUid}
+// The cfId AND the bill UID are both UUIDs in this string — we MUST take
+// the LAST UUID, not the first. (Initial implementation grabbed the first
+// and ended up POSTing the attachment to /Service/{cfId}/Attachment which
+// MYOB cheerfully accepted with HTTP 200 and no actual side-effect.)
 //
 // Attachment is best-effort and runs AFTER the bill posts successfully. If
 // the attachment POST fails, the bill remains posted (status='posted') but
@@ -54,8 +50,11 @@ const SETTINGS_ID = 'singleton'
 const STORAGE_BUCKET = 'ap-invoices'
 const MAX_ATTACHMENT_BYTES = 8 * 1024 * 1024
 
-// AU GST is 10%. FRE (Free) is 0%. Other tax codes aren't supported in v0.
 const GST_RATE = 0.10
+
+// Global flag — `match()` with `g` returns ALL matches as a string array.
+// Without `g` it returns only the first match (with capture groups).
+const UUID_REGEX_G = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi
 
 let _sb: SupabaseClient | null = null
 function sb(): SupabaseClient {
@@ -223,13 +222,8 @@ export async function createServiceBill(
     }
   })
 
-  // ── Compute envelope totals ──
-  // MYOB requires Subtotal/TotalTax/TotalAmount on the body even though Lines
-  // carry the amounts. Without these, MYOB creates the bill but displays
-  // $0 in the UI (we hit this on the first successful post).
-  //
-  // Tax computed per-line so a mixed GST/FRE bill totals correctly. Freight
-  // is always 0 in v0 so its tax is 0.
+  // Compute envelope totals from line data — MYOB requires Subtotal/TotalTax/
+  // TotalAmount on the body even though Lines carry the amounts.
   const subtotal = round2(billLines.reduce((s, l) => s + l.Amount, 0))
   const totalTax = round2(lines.reduce((s: number, l: any) => {
     const lineEx = Number(l.line_total_ex_gst || 0)
@@ -297,16 +291,24 @@ export async function createServiceBill(
     throw new Error(`MYOB rejected the bill (HTTP ${result.status}): ${errMsg}`)
   }
 
-  const myobBillUid = extractMyobUid(result)
+  const myobBillUid = extractMyobUid(result, conn.company_file_id)
   const myobBillRowId = extractMyobRowId(result)
+
+  // Defensive: if the extracted UID equals the cfId, something went wrong
+  // — refuse to use it. This shouldn't happen anymore (we take LAST UUID
+  // from Location), but the cost of catching the regression here is one
+  // string compare and it saves a bad attachment POST.
+  const safeBillUid = (myobBillUid && myobBillUid !== conn.company_file_id) ? myobBillUid : null
 
   // ── Step 2: attach the PDF (best effort) ──
   let attachmentStatus: 'attached' | 'failed' | 'skipped' | 'no-pdf' = 'skipped'
   let attachmentError: string | undefined
 
-  if (!myobBillUid) {
+  if (!safeBillUid) {
     attachmentStatus = 'skipped'
-    attachmentError = 'No MYOB bill UID returned — cannot attach PDF'
+    attachmentError = myobBillUid
+      ? `Extracted UID looked like cfId — refusing to attach to wrong target. Raw="${(result.raw || '').substring(0, 80)}" Location="${result.headers?.['location'] || ''}"`
+      : 'No MYOB bill UID returned — cannot attach PDF'
   } else if (!inv.pdf_storage_path) {
     attachmentStatus = 'no-pdf'
   } else {
@@ -314,7 +316,7 @@ export async function createServiceBill(
       await attachPdfToBill({
         connId: conn.id,
         cfId: conn.company_file_id,
-        billUid: myobBillUid,
+        billUid: safeBillUid,
         pdfStoragePath: inv.pdf_storage_path,
         filename: inv.pdf_filename || `${inv.invoice_number}.pdf`,
         postedBy,
@@ -323,13 +325,13 @@ export async function createServiceBill(
     } catch (e: any) {
       attachmentStatus = 'failed'
       attachmentError = (e?.message || String(e)).substring(0, 400)
-      console.error(`Bill ${myobBillUid} posted but attachment failed:`, attachmentError)
+      console.error(`Bill ${safeBillUid} posted but attachment failed:`, attachmentError)
     }
   }
 
   // ── Step 3: persist final state ──
   const postUpdate: Record<string, any> = {
-    myob_bill_uid:       myobBillUid || null,
+    myob_bill_uid:       safeBillUid || null,
     myob_bill_row_id:    myobBillRowId,
     myob_posted_at:      new Date().toISOString(),
     myob_posted_by:      postedBy,
@@ -348,7 +350,7 @@ export async function createServiceBill(
 
   return {
     ok: true,
-    myobBillUid: myobBillUid || '',
+    myobBillUid: safeBillUid || '',
     myobBillRowId,
     attachmentStatus,
     attachmentError,
@@ -418,32 +420,42 @@ function extractMyobError(result: { status: number; data: any; raw: string }): s
   return `HTTP ${result.status}`
 }
 
-// Extract bill UID from a 201 Created response.
+// Extract the UID of the newly-created resource from a MYOB POST response.
 //
-// MYOB AccountRight POSTs typically return:
+// MYOB AccountRight Live POSTs return:
 //   - Status: 201
 //   - Body: empty (or minimal)
 //   - Location: https://api.myob.com/accountright/{cfId}/.../{newUid}
 //
+// The Location header URL contains TWO UUIDs — cfId and newUid. We must
+// take the LAST one. (Earlier we took the first via String.match without
+// the `g` flag, ended up with cfId, and POSTed our attachment to a
+// nonsense URL that MYOB cheerfully accepted with HTTP 200 + empty
+// Attachments[].)
+//
+// `cfId` is passed in so we can also defensively check the result against
+// it — if for any reason a future MYOB endpoint returns the cfId in a
+// different position in the URL, this lets the caller spot it.
+//
 // Order of attempts:
-//   1. body.UID / body.Uid                      (some versions/endpoints)
-//   2. Location header (the standard 201 case)  ← primary path
-//   3. Regex over raw body                      (last-resort fallback)
-const UUID_REGEX = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i
-
-function extractMyobUid(result: { data: any; raw: string; headers: Record<string, string> }): string | null {
+//   1. body.UID / body.Uid                  (some endpoints/versions return this)
+//   2. LAST UUID in Location header         (the standard 201 case)
+//   3. LAST UUID in raw body                (last-resort fallback)
+function extractMyobUid(
+  result: { data: any; raw: string; headers: Record<string, string> },
+  _cfId?: string,
+): string | null {
   if (result.data && typeof result.data === 'object') {
     if (typeof result.data.UID === 'string') return result.data.UID
     if (typeof result.data.Uid === 'string') return result.data.Uid
   }
-  // myobFetch lowercases header keys.
   const location = result.headers?.['location']
   if (location) {
-    const m = location.match(UUID_REGEX)
-    if (m) return m[0]
+    const matches = location.match(UUID_REGEX_G)
+    if (matches && matches.length > 0) return matches[matches.length - 1]
   }
-  const m = (result.raw || '').match(UUID_REGEX)
-  return m ? m[0] : null
+  const matches = (result.raw || '').match(UUID_REGEX_G)
+  return matches && matches.length > 0 ? matches[matches.length - 1] : null
 }
 
 function extractMyobRowId(result: { data: any }): number | null {
