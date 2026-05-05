@@ -6,6 +6,17 @@
 //
 // After updating the link the row's triage is recomputed so the YELLOW
 // po-no-job-match flag clears (or returns) accordingly.
+//
+// May 2026 — PO auto-fill on manual link:
+//   When the user manually picks a job and the invoice's po_number is
+//   currently null/empty, we copy the job_number into po_number. Common
+//   case: invoices like the Fatz/Mitch Duff one where the workshop never
+//   wrote the job # into the PO field, so auto-link missed it. Auto-
+//   filling closes the loop — future re-triage will then auto-link via
+//   PO instead of relying on the manual_method flag, and the PO field
+//   becomes a useful audit trail. We never overwrite an existing PO —
+//   a different non-matching value might be a legitimate vendor reference
+//   the user wants to keep.
 
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
@@ -33,11 +44,12 @@ export default withAuth('edit:supplier_invoices', async (req: NextApiRequest, re
   const body = (req.body || {}) as { jobNumber?: string | null }
   const jobNumberInput = body.jobNumber
 
-  // Confirm invoice exists
+  // Confirm invoice exists. Pull po_number too so we know whether to
+  // auto-fill on link.
   const c = sb()
   const { data: inv, error: invErr } = await c
     .from('ap_invoices')
-    .select('id, status')
+    .select('id, status, po_number')
     .eq('id', id)
     .maybeSingle()
   if (invErr) return res.status(500).json({ error: invErr.message })
@@ -64,9 +76,27 @@ export default withAuth('edit:supplier_invoices', async (req: NextApiRequest, re
     return res.status(404).json({ error: `Job ${jobNumber} not found in latest workshop snapshot` })
   }
 
+  // Auto-fill PO from job number when the invoice has no PO yet. Done
+  // BEFORE writeJobLink + applyTriageAndResolve so the subsequent triage
+  // sees the new PO and runs auto-link cleanly.
+  let poAutoFilled = false
+  const existingPo = (inv.po_number || '').toString().trim()
+  if (!existingPo) {
+    const { error: poErr } = await c
+      .from('ap_invoices')
+      .update({ po_number: job.job_number })
+      .eq('id', id)
+    if (poErr) {
+      console.error(`link-job: po auto-fill failed for ${id}: ${poErr.message}`)
+    } else {
+      poAutoFilled = true
+    }
+  }
+
   await writeJobLink(id, job.job_number, 'manual', 'matched', user.id)
 
-  // Re-run triage so YELLOW:po-no-job-match clears if it was set
+  // Re-run triage so YELLOW:po-no-job-match clears if it was set, and so
+  // the auto-fill PO above gets reflected in re-resolved fields.
   try { await applyTriageAndResolve(id) } catch (e: any) {
     console.error('triage after manual link failed:', e?.message)
   }
@@ -74,6 +104,7 @@ export default withAuth('edit:supplier_invoices', async (req: NextApiRequest, re
   return res.status(200).json({
     ok: true,
     action: 'linked',
+    poAutoFilled,
     job: {
       job_number: job.job_number,
       customer_name: job.customer_name,

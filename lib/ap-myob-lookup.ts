@@ -8,6 +8,9 @@
 //
 // MYOB AccountRight uses OData v3 syntax for filtering. Notable quirks:
 //   - Substring filter is `substringof('needle', haystack)` (not `contains`)
+//   - **substringof is CASE-SENSITIVE** — wrap haystack with tolower() and
+//     send needle in lowercase to make searches case-insensitive (this is
+//     how we make "fat" find "Fatz Pty Ltd").
 //   - String literals use single quotes; quotes inside strings double-up
 //   - Boolean operators are `and` / `or` (lowercase)
 //   - BuyingDetails is returned inline on /Contact/Supplier list calls — no
@@ -65,8 +68,19 @@ function escapeOData(s: string): string {
 /**
  * Search MYOB suppliers in the given company file.
  *
- * @param query   optional substring; matched against CompanyName, FirstName,
- *                LastName (covers both companies and sole traders)
+ * Case-insensitive multi-token search (May 2026 update):
+ *   - The query is lowercased and split into whitespace-separated tokens
+ *     (max 3 tokens used, extras dropped). Each token must substring-match
+ *     at least one of: CompanyName, LastName, FirstName, DisplayID. All
+ *     fields are wrapped in tolower() so casing in the supplier card
+ *     doesn't matter.
+ *   - Tokens combine with AND, fields combine with OR. So "fatz pty"
+ *     finds "Fatz Pty Ltd" because both "fatz" and "pty" appear in the
+ *     CompanyName, but it won't match "Fatz Industries" (no "pty").
+ *   - Empty/whitespace-only query returns the first `limit` suppliers
+ *     ordered by CompanyName, useful as an initial picker list.
+ *
+ * @param query   optional substring; case-insensitive, multi-token
  * @param limit   max rows returned (capped at 50)
  */
 export async function searchSuppliers(
@@ -83,13 +97,26 @@ export async function searchSuppliers(
     '$orderby': 'CompanyName',
   }
 
-  const trimmed = query.trim()
-  if (trimmed) {
-    const safe = escapeOData(trimmed)
-    params['$filter'] =
-      `substringof('${safe}',CompanyName) or ` +
-      `substringof('${safe}',LastName) or ` +
-      `substringof('${safe}',FirstName)`
+  // Build a case-insensitive multi-token filter. Each token must hit at
+  // least one of the four searchable fields (CompanyName, LastName,
+  // FirstName, DisplayID). All comparisons are lowercase. We cap at 3
+  // tokens — beyond that, OData $filter strings get long and supplier
+  // names rarely span more than a couple of distinctive words.
+  const lowered = query.trim().toLowerCase()
+  if (lowered) {
+    const tokens = lowered.split(/\s+/).filter(t => t.length > 0).slice(0, 3)
+    if (tokens.length > 0) {
+      const tokenClauses = tokens.map(tok => {
+        const safe = escapeOData(tok)
+        return (
+          `(substringof('${safe}',tolower(CompanyName)) or ` +
+          `substringof('${safe}',tolower(LastName)) or ` +
+          `substringof('${safe}',tolower(FirstName)) or ` +
+          `substringof('${safe}',tolower(DisplayID)))`
+        )
+      })
+      params['$filter'] = tokenClauses.join(' and ')
+    }
   }
 
   const result = await myobFetch(conn.id, path, { query: params })
@@ -152,8 +179,10 @@ function mapSupplier(it: any): MyobSupplierLite {
  * covers the typical AP postings (parts COGS, operating expenses). Pass an
  * empty types array to search everything.
  *
- * @param query   optional substring; matched against Name, DisplayID,
- *                Description
+ * Same case-insensitive convention as searchSuppliers — query is
+ * lowercased and matched against tolower(Name) and tolower(DisplayID).
+ *
+ * @param query   optional substring; matched against Name + DisplayID
  */
 export async function searchAccounts(
   label: CompanyFileLabel,
@@ -175,11 +204,11 @@ export async function searchAccounts(
   // Header accounts can't have transactions posted to them — filter out.
   filterParts.push(`IsHeader eq false`)
 
-  const trimmed = query.trim()
-  if (trimmed) {
-    const safe = escapeOData(trimmed)
+  const lowered = query.trim().toLowerCase()
+  if (lowered) {
+    const safe = escapeOData(lowered)
     filterParts.push(
-      `(substringof('${safe}',Name) or substringof('${safe}',DisplayID))`
+      `(substringof('${safe}',tolower(Name)) or substringof('${safe}',tolower(DisplayID)))`
     )
   }
 
