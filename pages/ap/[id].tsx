@@ -14,6 +14,16 @@
 //   - Sticky bottom action bar with big Approve / Reject buttons
 //   - 16px+ inputs to prevent iOS focus zoom
 //   - Desktop layout unchanged at >=768px
+//
+// May 2026 — invoice header edit + form overlap fix:
+//   - "Edit invoice" button on the Invoice card swaps read-only Fields for
+//     inputs covering: vendor, ABN, invoice #, invoice date, PO #, due date,
+//     subtotal/GST/total, notes. Save → PATCH /api/ap/[id] (server already
+//     supports these in PATCHABLE_FIELDS and re-runs triage on save).
+//   - SupplierPresetForm was rendering with overlap when the long
+//     "MATCH PATTERN..." label wrapped — the side-by-side grid cell didn't
+//     constrain the input. Switched to single-column stacking and added
+//     boxSizing: border-box to inputStyle().
 
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/router'
@@ -131,6 +141,23 @@ interface DetailResponse {
   linkedJob: JobInfo | null
 }
 
+// Editable subset of InvoiceRow used by the header edit form.
+// All values are kept as strings so the input fields stay controlled
+// (a partially-typed number like "12." would otherwise blow up).
+// Conversion to numeric/null happens at save time.
+interface HeaderEditable {
+  vendor_name_parsed: string
+  vendor_abn:         string
+  invoice_number:     string
+  invoice_date:       string   // YYYY-MM-DD
+  po_number:          string
+  due_date:           string   // YYYY-MM-DD
+  subtotal_ex_gst:    string
+  gst_amount:         string
+  total_inc_gst:      string
+  notes:              string
+}
+
 interface PageProps {
   user: { id: string; email: string; displayName: string | null; role: UserRole; visibleTabs: string[] | null }
 }
@@ -147,6 +174,9 @@ export default function APDetailPage({ user }: PageProps) {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [editingLines, setEditingLines] = useState<LineRow[] | null>(null)
+  const [editingHeader, setEditingHeader] = useState<HeaderEditable | null>(null)
+  const [savingHeader, setSavingHeader] = useState(false)
+  const [headerMessage, setHeaderMessage] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
   const [saveMessage, setSaveMessage] = useState<string | null>(null)
   const [deleting, setDeleting] = useState(false)
@@ -176,6 +206,7 @@ export default function APDetailPage({ user }: PageProps) {
       const json: DetailResponse = await res.json()
       setData(json)
       setEditingLines(null)
+      setEditingHeader(null)
       setError(null)
     } catch (e: any) {
       setError(e?.message || String(e))
@@ -312,6 +343,75 @@ export default function APDetailPage({ user }: PageProps) {
     }
   }
 
+  // ── Header (invoice meta) edit ──
+  function startHeaderEdit() {
+    if (!data) return
+    const inv = data.invoice
+    setEditingHeader({
+      vendor_name_parsed: inv.vendor_name_parsed || '',
+      vendor_abn:         inv.vendor_abn || '',
+      invoice_number:     inv.invoice_number || '',
+      invoice_date:       (inv.invoice_date || '').substring(0, 10),
+      po_number:          inv.po_number || '',
+      due_date:           (inv.due_date || '').substring(0, 10),
+      subtotal_ex_gst:    inv.subtotal_ex_gst !== null ? String(inv.subtotal_ex_gst) : '',
+      gst_amount:         inv.gst_amount      !== null ? String(inv.gst_amount)      : '',
+      total_inc_gst:      inv.total_inc_gst   !== null ? String(inv.total_inc_gst)   : '',
+      notes:              inv.notes || '',
+    })
+    setHeaderMessage(null)
+  }
+
+  function cancelHeaderEdit() {
+    setEditingHeader(null)
+    setHeaderMessage(null)
+  }
+
+  function updateHeader(patch: Partial<HeaderEditable>) {
+    if (!editingHeader) return
+    setEditingHeader({ ...editingHeader, ...patch })
+  }
+
+  async function saveHeader() {
+    if (!editingHeader || !id) return
+    setSavingHeader(true)
+    setHeaderMessage(null)
+    try {
+      // Build PATCH body. Convert empty strings to null and numerics from
+      // strings. Server's PATCHABLE_FIELDS validates the keys.
+      const body: Record<string, any> = {
+        vendor_name_parsed: trimToNull(editingHeader.vendor_name_parsed),
+        vendor_abn:         trimToNull(editingHeader.vendor_abn),
+        invoice_number:     trimToNull(editingHeader.invoice_number),
+        invoice_date:       trimToNull(editingHeader.invoice_date),
+        po_number:          trimToNull(editingHeader.po_number),
+        due_date:           trimToNull(editingHeader.due_date),
+        subtotal_ex_gst:    parseNumOrNull(editingHeader.subtotal_ex_gst),
+        gst_amount:         parseNumOrNull(editingHeader.gst_amount),
+        total_inc_gst:      parseNumOrNull(editingHeader.total_inc_gst),
+        notes:              trimToNull(editingHeader.notes),
+      }
+      const res = await fetch(`/api/ap/${id}`, {
+        method: 'PATCH',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+      const json = await res.json()
+      if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`)
+      // Server returns the same shape as GET — use it directly to avoid
+      // a second round trip and preserve the editing state ergonomics.
+      if (json && json.invoice) setData(json)
+      else await fetchData()
+      setEditingHeader(null)
+      setHeaderMessage('✅ Saved · re-triaged')
+    } catch (e: any) {
+      setHeaderMessage(`❌ Save failed: ${e?.message || e}`)
+    } finally {
+      setSavingHeader(false)
+    }
+  }
+
   function startEdit() {
     if (!data) return
     setEditingLines(data.lines.map(l => ({ ...l })))
@@ -428,9 +528,6 @@ export default function APDetailPage({ user }: PageProps) {
 
   const pickerLine = editingLines?.find(l => l.id === accountPickerLineId) || null
 
-  // Mobile layout: single column stack, sticky bottom action bar.
-  // Page padding-bottom leaves room above the sticky bar (~80px) so the
-  // last content card isn't hidden behind it.
   const pagePadding   = isMobile ? '14px 14px 96px' : '20px 28px'
   const showStickyBar = isMobile && !!data && !isTerminal && canEdit
   const gridCols      = isMobile ? '1fr' : 'minmax(0, 5fr) minmax(0, 7fr)'
@@ -496,14 +593,11 @@ export default function APDetailPage({ user }: PageProps) {
 
         {data && (
           <div style={{display:'grid', gridTemplateColumns: gridCols, gap:18}}>
-            {/* PDF preview — full-width on mobile, fixed-height side panel on desktop */}
             <div style={pdfWrapStyle}>
               <div style={{padding:'10px 14px', borderBottom:`1px solid ${T.border2}`, fontSize:11, color:T.text3, textTransform:'uppercase', letterSpacing:'0.05em', display:'flex', alignItems:'center', gap:10}}>
                 <span style={{flex:1, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap'}}>
                   PDF · {data.invoice.pdf_filename || 'unnamed'}
                 </span>
-                {/* On mobile, an "Open" button to view the PDF full-screen in a new tab —
-                    iframes inside a 50vh box are hard to read */}
                 {isMobile && data.pdfUrl && (
                   <a
                     href={data.pdfUrl} target="_blank" rel="noopener noreferrer"
@@ -524,7 +618,6 @@ export default function APDetailPage({ user }: PageProps) {
               )}
             </div>
 
-            {/* Right column / continuation on mobile */}
             <div style={rightColStyle}>
 
               {/* Triage banner + actions */}
@@ -561,8 +654,6 @@ export default function APDetailPage({ user }: PageProps) {
                   </div>
                 )}
 
-                {/* Inline approve/reject — desktop only.
-                    On mobile, those move to the sticky bottom action bar. */}
                 {!isTerminal && canEdit && !isMobile && (
                   <div style={{display:'flex', alignItems:'center', gap:8, paddingTop:10, borderTop:`1px solid ${T.border}`}}>
                     {data.invoice.myob_post_error && (
@@ -599,7 +690,6 @@ export default function APDetailPage({ user }: PageProps) {
                     </button>
                   </div>
                 )}
-                {/* Mobile error pill — sticky bar shows the buttons */}
                 {!isTerminal && canEdit && isMobile && data.invoice.myob_post_error && (
                   <div style={{paddingTop:10, borderTop:`1px solid ${T.border}`, fontSize:11, color:T.red}}>
                     Last error: {data.invoice.myob_post_error}
@@ -641,25 +731,61 @@ export default function APDetailPage({ user }: PageProps) {
                 )}
               </div>
 
-              {/* Header data */}
+              {/* Header data — toggles between read-only Field grid and an
+                  editable form. PATCH on save runs server-side triage so
+                  RED:missing-invoice-number etc. clears immediately. */}
               <div style={{background:T.bg2, border:`1px solid ${T.border}`, borderRadius:10, padding:'14px 16px'}}>
-                <div style={{fontSize:11, color:T.text3, textTransform:'uppercase', letterSpacing:'0.05em', marginBottom:10}}>Invoice</div>
-                <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:'8px 16px'}}>
-                  <Field label="Vendor"        value={data.invoice.vendor_name_parsed}/>
-                  <Field label="ABN"           value={data.invoice.vendor_abn} mono/>
-                  <Field label="Invoice #"     value={data.invoice.invoice_number} mono/>
-                  <Field label="Invoice date"  value={data.invoice.invoice_date}/>
-                  <Field label="PO #"          value={data.invoice.po_number || '—'} mono/>
-                  <Field label="Due date"      value={data.invoice.due_date || '—'}/>
-                  <Field label="Subtotal"      value={fmtMoney(data.invoice.subtotal_ex_gst)} mono align="right"/>
-                  <Field label="GST"           value={fmtMoney(data.invoice.gst_amount)}      mono align="right"/>
-                  <Field label="Total inc GST" value={fmtMoney(data.invoice.total_inc_gst)}   mono align="right" emphasised/>
-                  <Field label="Source"        value={`${data.invoice.source}${data.invoice.email_from ? ' · ' + data.invoice.email_from : ''}`}/>
-                </div>
-                {data.invoice.notes && (
-                  <div style={{marginTop:10, padding:'8px 10px', background:T.bg3, borderRadius:6, fontSize:11, color:T.text2}}>
-                    📝 {data.invoice.notes}
+                <div style={{display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:10, gap:8, flexWrap:'wrap'}}>
+                  <div style={{fontSize:11, color:T.text3, textTransform:'uppercase', letterSpacing:'0.05em'}}>Invoice</div>
+                  <div style={{display:'flex', gap:8, flexWrap:'wrap'}}>
+                    {editingHeader === null && canEdit && !isTerminal && (
+                      <button onClick={startHeaderEdit} style={btnSecondary()}>Edit</button>
+                    )}
+                    {editingHeader !== null && (
+                      <>
+                        <button onClick={cancelHeaderEdit} disabled={savingHeader} style={btnSecondary()}>Cancel</button>
+                        <button onClick={saveHeader} disabled={savingHeader} style={btnPrimary()}>
+                          {savingHeader ? 'Saving…' : 'Save'}
+                        </button>
+                      </>
+                    )}
                   </div>
+                </div>
+
+                {headerMessage && (
+                  <div style={{
+                    fontSize:11,
+                    color: headerMessage.startsWith('❌') ? T.red : T.green,
+                    marginBottom:10,
+                  }}>{headerMessage}</div>
+                )}
+
+                {editingHeader === null ? (
+                  <>
+                    <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:'8px 16px'}}>
+                      <Field label="Vendor"        value={data.invoice.vendor_name_parsed}/>
+                      <Field label="ABN"           value={data.invoice.vendor_abn} mono/>
+                      <Field label="Invoice #"     value={data.invoice.invoice_number} mono/>
+                      <Field label="Invoice date"  value={data.invoice.invoice_date}/>
+                      <Field label="PO #"          value={data.invoice.po_number || '—'} mono/>
+                      <Field label="Due date"      value={data.invoice.due_date || '—'}/>
+                      <Field label="Subtotal"      value={fmtMoney(data.invoice.subtotal_ex_gst)} mono align="right"/>
+                      <Field label="GST"           value={fmtMoney(data.invoice.gst_amount)}      mono align="right"/>
+                      <Field label="Total inc GST" value={fmtMoney(data.invoice.total_inc_gst)}   mono align="right" emphasised/>
+                      <Field label="Source"        value={`${data.invoice.source}${data.invoice.email_from ? ' · ' + data.invoice.email_from : ''}`}/>
+                    </div>
+                    {data.invoice.notes && (
+                      <div style={{marginTop:10, padding:'8px 10px', background:T.bg3, borderRadius:6, fontSize:11, color:T.text2}}>
+                        📝 {data.invoice.notes}
+                      </div>
+                    )}
+                  </>
+                ) : (
+                  <HeaderEditForm
+                    value={editingHeader}
+                    onChange={updateHeader}
+                    disabled={savingHeader}
+                  />
                 )}
               </div>
 
@@ -726,7 +852,6 @@ export default function APDetailPage({ user }: PageProps) {
                 )}
               </div>
 
-              {/* Mobile-only delete button (the desktop one lives in the top header row) */}
               {data && canEdit && !isPosted && isMobile && (
                 <button
                   onClick={deleteInvoice}
@@ -785,7 +910,6 @@ export default function APDetailPage({ user }: PageProps) {
         )}
       </div>
 
-      {/* ─── STICKY MOBILE ACTION BAR ─── */}
       {showStickyBar && data && (
         <div style={{
           position:'fixed', left:0, right:0, bottom:0, zIndex:900,
@@ -828,6 +952,134 @@ export default function APDetailPage({ user }: PageProps) {
           </button>
         </div>
       )}
+    </div>
+  )
+}
+
+// ── Header (invoice meta) edit form ─────────────────────────────────────
+//
+// Two-column responsive grid that collapses to one column on phones.
+// Date inputs use type="date" — Chrome/Safari date pickers behave well
+// with our YYYY-MM-DD strings out of the box. Numeric inputs keep
+// type="text" so partial entries don't fight us; conversion happens at
+// save time.
+function HeaderEditForm({
+  value, onChange, disabled,
+}: {
+  value: HeaderEditable
+  onChange: (patch: Partial<HeaderEditable>) => void
+  disabled: boolean
+}) {
+  return (
+    <div style={{display:'flex', flexDirection:'column', gap:12}}>
+      <div style={{display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(180px, 1fr))', gap:10}}>
+        <FormRow label="Vendor">
+          <input
+            value={value.vendor_name_parsed}
+            onChange={e => onChange({ vendor_name_parsed: e.target.value })}
+            placeholder="e.g. TIME EXPRESS COURIER"
+            disabled={disabled}
+            style={inputStyle()}
+          />
+        </FormRow>
+        <FormRow label="ABN">
+          <input
+            value={value.vendor_abn}
+            onChange={e => onChange({ vendor_abn: e.target.value })}
+            placeholder="11 digits"
+            disabled={disabled}
+            style={{...inputStyle(), fontFamily:'monospace'}}
+          />
+        </FormRow>
+        <FormRow label="Invoice #">
+          <input
+            value={value.invoice_number}
+            onChange={e => onChange({ invoice_number: e.target.value })}
+            placeholder="required to post"
+            disabled={disabled}
+            style={{...inputStyle(), fontFamily:'monospace'}}
+          />
+        </FormRow>
+        <FormRow label="Invoice date">
+          <input
+            type="date"
+            value={value.invoice_date}
+            onChange={e => onChange({ invoice_date: e.target.value })}
+            disabled={disabled}
+            style={inputStyle()}
+          />
+        </FormRow>
+        <FormRow label="PO #">
+          <input
+            value={value.po_number}
+            onChange={e => onChange({ po_number: e.target.value })}
+            placeholder="(optional)"
+            disabled={disabled}
+            style={{...inputStyle(), fontFamily:'monospace'}}
+          />
+        </FormRow>
+        <FormRow label="Due date">
+          <input
+            type="date"
+            value={value.due_date}
+            onChange={e => onChange({ due_date: e.target.value })}
+            disabled={disabled}
+            style={inputStyle()}
+          />
+        </FormRow>
+      </div>
+
+      <div style={{display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(140px, 1fr))', gap:10}}>
+        <FormRow label="Subtotal ex GST">
+          <input
+            value={value.subtotal_ex_gst}
+            onChange={e => onChange({ subtotal_ex_gst: e.target.value })}
+            placeholder="0.00"
+            inputMode="decimal"
+            disabled={disabled}
+            style={{...inputStyle(), fontFamily:'monospace', textAlign:'right'}}
+          />
+        </FormRow>
+        <FormRow label="GST">
+          <input
+            value={value.gst_amount}
+            onChange={e => onChange({ gst_amount: e.target.value })}
+            placeholder="0.00"
+            inputMode="decimal"
+            disabled={disabled}
+            style={{...inputStyle(), fontFamily:'monospace', textAlign:'right'}}
+          />
+        </FormRow>
+        <FormRow label="Total inc GST">
+          <input
+            value={value.total_inc_gst}
+            onChange={e => onChange({ total_inc_gst: e.target.value })}
+            placeholder="0.00"
+            inputMode="decimal"
+            disabled={disabled}
+            style={{...inputStyle(), fontFamily:'monospace', textAlign:'right', fontWeight:600}}
+          />
+        </FormRow>
+      </div>
+
+      <FormRow label="Notes">
+        <textarea
+          value={value.notes}
+          onChange={e => onChange({ notes: e.target.value })}
+          placeholder="(optional)"
+          disabled={disabled}
+          rows={2}
+          style={{
+            ...inputStyle(),
+            resize: 'vertical',
+            minHeight: 50,
+          }}
+        />
+      </FormRow>
+
+      <div style={{fontSize:10, color:T.text3, lineHeight:1.5}}>
+        Save runs triage again — fixing missing invoice # / total clears the matching RED reason. PO # changes also re-run the auto job-link.
+      </div>
     </div>
   )
 }
@@ -894,6 +1146,11 @@ function MyobMappingSection({
 }
 
 // ── Supplier preset form ─────────────────────────────────────────────────
+//
+// Switched from a 2-column grid to a single-column stack — the long
+// "MATCH PATTERN (CASE-INSENSITIVE SUBSTRING…)" label was wrapping and
+// the input then overflowed the grid cell into the COMPANY FILE column.
+// Stacking + box-sizing on inputs keeps it tidy at any width.
 function SupplierPresetForm({
   invoice, onSaved,
 }: {
@@ -953,18 +1210,17 @@ function SupplierPresetForm({
 
   return (
     <div style={{display:'flex', flexDirection:'column', gap:12}}>
-      <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:12}}>
-        <FormRow label="Match pattern (case-insensitive substring of parsed vendor name)">
-          <input
-            value={pattern}
-            onChange={e => setPattern(e.target.value)}
-            placeholder="e.g. REPCO"
-            style={inputStyle()}
-          />
-        </FormRow>
-        <FormRow label={`Company file`}>
-          <div style={{fontSize:12, color:T.text2, paddingTop:6}}>{invoice.myob_company_file}</div>
-        </FormRow>
+      <FormRow label="Match pattern (case-insensitive substring of parsed vendor name)">
+        <input
+          value={pattern}
+          onChange={e => setPattern(e.target.value)}
+          placeholder="e.g. REPCO"
+          style={inputStyle()}
+        />
+      </FormRow>
+
+      <div style={{fontSize:10, color:T.text3}}>
+        Company file: <span style={{color:T.text2}}>{invoice.myob_company_file}</span>
       </div>
 
       <FormRow label="MYOB supplier">
@@ -1023,8 +1279,11 @@ function SupplierPresetForm({
 }
 
 function FormRow({ label, children }: { label: string; children: React.ReactNode }) {
+  // minWidth:0 is critical inside CSS grids — without it, children with
+  // long content force the grid cell wider than its track and cause
+  // overflow into adjacent cells (the bug fixed in this round).
   return (
-    <div>
+    <div style={{minWidth:0}}>
       <div style={{fontSize:10, color:T.text3, textTransform:'uppercase', letterSpacing:'0.05em', marginBottom:4}}>{label}</div>
       {children}
     </div>
@@ -1034,10 +1293,10 @@ function FormRow({ label, children }: { label: string; children: React.ReactNode
 function inputStyle(): React.CSSProperties {
   return {
     width:'100%',
+    boxSizing:'border-box',     // padding inside the declared width — fixes overflow
     background: T.bg3, border:`1px solid ${T.border2}`, color: T.text,
     padding:'8px 10px', borderRadius:5,
-    // 16px font prevents iOS Safari from auto-zooming on focus
-    fontSize:16, fontFamily:'inherit', outline:'none',
+    fontSize:16, fontFamily:'inherit', outline:'none',   // 16px = no iOS zoom
   }
 }
 
@@ -1184,7 +1443,7 @@ function AccountPickerModal({
               <span>Save as rule for <span style={{color:T.text}}>{supplier.name}</span></span>
             </label>
             {saveAsRule && (
-              <div style={{marginTop:10, display:'grid', gridTemplateColumns:'2fr 1fr 1fr', gap:8, alignItems:'end'}}>
+              <div style={{marginTop:10, display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(140px, 1fr))', gap:8, alignItems:'end'}}>
                 <FormRow label="Pattern">
                   <input
                     value={pattern}
@@ -1544,7 +1803,8 @@ function WorkshopJobSection({
             onChange={e => onPickerQueryChange(e.target.value)}
             placeholder="Search by job # / customer / vehicle…"
             style={{
-              width:'100%', background: T.bg3, border:`1px solid ${T.border2}`, color: T.text,
+              width:'100%', boxSizing:'border-box',
+              background: T.bg3, border:`1px solid ${T.border2}`, color: T.text,
               padding:'10px 12px', borderRadius:6,
               fontSize: 16, fontFamily:'inherit', outline:'none',
               marginBottom:10,
@@ -1604,10 +1864,6 @@ function LinesTable({
     return <div style={{padding:14, textAlign:'center', color:T.text3, fontSize:12}}>No line items.</div>
   }
   return (
-    // The table stays as-is on mobile; horizontal scroll is preserved via
-    // overflowX:'auto'. Redesigning lines as cards is queued for a later
-    // mobile pass — for now the table on a phone is "scroll right to see
-    // more" but still completely usable.
     <div style={{overflowX:'auto', WebkitOverflowScrolling:'touch'}}>
       <table style={{width:'100%', borderCollapse:'collapse', fontSize:12, minWidth: 720}}>
         <thead>
@@ -1797,7 +2053,8 @@ function Inp({ value, onChange, alignRight }: { value: string; onChange: (v: str
       value={value}
       onChange={e => onChange(e.target.value)}
       style={{
-        width:'100%', background:T.bg3, border:`1px solid ${T.border2}`, color:T.text,
+        width:'100%', boxSizing:'border-box',
+        background:T.bg3, border:`1px solid ${T.border2}`, color:T.text,
         padding:'5px 8px', borderRadius:4,
         fontSize:13, fontFamily:'inherit', outline:'none',
         textAlign: alignRight ? 'right' : 'left',
@@ -1845,4 +2102,20 @@ function lh(width?: number): React.CSSProperties {
 }
 function ld(): React.CSSProperties {
   return { padding:'8px 10px', verticalAlign:'top' }
+}
+
+// Helpers for the header edit save path.
+// Empty/whitespace-only string → null. Otherwise → trimmed string.
+function trimToNull(s: string | null | undefined): string | null {
+  if (s === null || s === undefined) return null
+  const t = String(s).trim()
+  return t ? t : null
+}
+// Empty string → null. Non-numeric → null. Otherwise → number.
+function parseNumOrNull(s: string | null | undefined): number | null {
+  if (s === null || s === undefined) return null
+  const t = String(s).trim()
+  if (!t) return null
+  const n = Number(t)
+  return Number.isFinite(n) ? n : null
 }
