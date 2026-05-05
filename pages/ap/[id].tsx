@@ -1,6 +1,6 @@
 // pages/ap/[id].tsx
 // AP Invoice Detail — PDF preview, line editor, MD job link, MYOB preset
-// picker, delete, save.
+// picker, approve/reject actions, delete, save.
 
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/router'
@@ -49,6 +49,8 @@ interface InvoiceRow {
   myob_bill_uid: string | null
   myob_posted_at: string | null
   myob_post_error: string | null
+  myob_post_attempts: number | null
+  rejection_reason: string | null
   linked_job_number: string | null
   linked_job_match_method: 'auto-po' | 'manual' | null
   linked_job_at: string | null
@@ -123,6 +125,9 @@ export default function APDetailPage({ user }: PageProps) {
   const [saving, setSaving] = useState(false)
   const [saveMessage, setSaveMessage] = useState<string | null>(null)
   const [deleting, setDeleting] = useState(false)
+  const [approving, setApproving] = useState(false)
+  const [rejecting, setRejecting] = useState(false)
+  const [actionMessage, setActionMessage] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null)
   const canEdit = roleHasPermission(user.role, 'edit:supplier_invoices')
 
   // Job picker state
@@ -157,7 +162,7 @@ export default function APDetailPage({ user }: PageProps) {
 
   useEffect(() => { if (id) fetchData() }, [id])
 
-  // ── Job picker effects + handlers (unchanged from R3a) ──
+  // ── Job picker effects + handlers ──
   useEffect(() => {
     if (!pickerOpen) return
     setPickerLoading(true)
@@ -212,6 +217,68 @@ export default function APDetailPage({ user }: PageProps) {
     } catch (e: any) {
       alert('Delete failed: ' + (e?.message || e))
       setDeleting(false)
+    }
+  }
+
+  // ── Approve (push to MYOB) ──
+  async function approveAndPost() {
+    if (!id || !data) return
+    const inv = data.invoice
+    const summary =
+      `Post bill to MYOB ${inv.myob_company_file}?\n\n` +
+      `Supplier:  ${inv.resolved_supplier_name || '(not set)'}\n` +
+      `Account:   ${inv.resolved_account_code || '(not set)'}\n` +
+      `Subtotal:  ${fmtMoney(inv.subtotal_ex_gst)}\n` +
+      `GST:       ${fmtMoney(inv.gst_amount)}\n` +
+      `Total:     ${fmtMoney(inv.total_inc_gst)}\n` +
+      `Inv #:     ${inv.invoice_number}\n` +
+      `Date:      ${inv.invoice_date}\n` +
+      (inv.via_capricorn && inv.capricorn_reference ? `Capricorn: ${inv.capricorn_reference}\n` : '') +
+      (inv.linked_job_number ? `Job:       ${inv.linked_job_number}\n` : '') +
+      `\nThis writes a Service Bill to MYOB.`
+    if (!confirm(summary)) return
+    setApproving(true)
+    setActionMessage(null)
+    try {
+      const res = await fetch(`/api/ap/${id}/approve`, {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+      })
+      const json = await res.json()
+      if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`)
+      setActionMessage({ kind: 'ok', text: `✅ Posted to MYOB${json.myobBillUid ? ` — bill UID ${json.myobBillUid}` : ''}` })
+      await fetchData()
+    } catch (e: any) {
+      setActionMessage({ kind: 'err', text: `❌ ${e?.message || String(e)}` })
+      await fetchData()  // Pull updated myob_post_error
+    } finally {
+      setApproving(false)
+    }
+  }
+
+  // ── Reject (no MYOB write) ──
+  async function rejectInvoice() {
+    if (!id) return
+    const reason = prompt('Reason for rejecting this invoice?\n(Will be stored on the record. Required.)')
+    if (!reason || !reason.trim()) return
+    setRejecting(true)
+    setActionMessage(null)
+    try {
+      const res = await fetch(`/api/ap/${id}/reject`, {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reason: reason.trim() }),
+      })
+      const json = await res.json()
+      if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`)
+      setActionMessage({ kind: 'ok', text: '✅ Rejected' })
+      await fetchData()
+    } catch (e: any) {
+      setActionMessage({ kind: 'err', text: `❌ ${e?.message || String(e)}` })
+    } finally {
+      setRejecting(false)
     }
   }
 
@@ -284,7 +351,22 @@ export default function APDetailPage({ user }: PageProps) {
     }
   }
 
-  const isPosted = data?.invoice.status === 'posted'
+  const isPosted   = data?.invoice.status === 'posted'
+  const isRejected = data?.invoice.status === 'rejected'
+  const isTerminal = isPosted || isRejected
+  const canApprove = canEdit && data
+                  && !isTerminal
+                  && data.invoice.triage_status !== 'red'
+                  && !!data.invoice.resolved_supplier_uid
+                  && !!data.invoice.resolved_account_uid
+  const approveBlockedReason =
+    !data ? '' :
+    isPosted   ? 'Already posted' :
+    isRejected ? 'Invoice rejected' :
+    data.invoice.triage_status === 'red' ? 'Triage RED — fix issues' :
+    !data.invoice.resolved_supplier_uid ? 'No MYOB supplier mapped' :
+    !data.invoice.resolved_account_uid  ? 'No default account mapped' :
+    ''
 
   return (
     <div style={{display:'flex', minHeight:'100vh', background:T.bg, color:T.text, fontFamily:"'DM Sans', system-ui, sans-serif"}}>
@@ -358,9 +440,9 @@ export default function APDetailPage({ user }: PageProps) {
             {/* RIGHT: data + lines */}
             <div style={{display:'flex', flexDirection:'column', gap:14, height:'calc(100vh - 110px)', overflow:'auto'}}>
 
-              {/* Triage banner */}
+              {/* Triage banner + actions */}
               <div style={{background:T.bg2, border:`1px solid ${T.border}`, borderRadius:10, padding:'14px 16px'}}>
-                <div style={{display:'flex', alignItems:'center', gap:12, marginBottom: data.invoice.triage_reasons && data.invoice.triage_reasons.length > 0 ? 8 : 0}}>
+                <div style={{display:'flex', alignItems:'center', gap:12, marginBottom: data.invoice.triage_reasons && data.invoice.triage_reasons.length > 0 ? 8 : 10}}>
                   <TriagePill status={data.invoice.triage_status}/>
                   <StatusPill status={data.invoice.status}/>
                   <span style={{fontSize:11, color:T.text3}}>
@@ -373,7 +455,7 @@ export default function APDetailPage({ user }: PageProps) {
                   <span style={{fontSize:11, color:T.text3}}>{data.invoice.myob_company_file}</span>
                 </div>
                 {data.invoice.triage_reasons && data.invoice.triage_reasons.length > 0 && (
-                  <div style={{display:'flex', flexWrap:'wrap', gap:6}}>
+                  <div style={{display:'flex', flexWrap:'wrap', gap:6, marginBottom:10}}>
                     {data.invoice.triage_reasons.map((r, i) => (
                       <span key={i} style={{
                         fontSize:10, fontFamily:'monospace',
@@ -383,6 +465,70 @@ export default function APDetailPage({ user }: PageProps) {
                         border: `1px solid ${r.startsWith('RED:') ? T.red : r.startsWith('YELLOW:') ? T.amber : T.text3}40`,
                       }}>{r}</span>
                     ))}
+                  </div>
+                )}
+
+                {/* Action row */}
+                {!isTerminal && canEdit && (
+                  <div style={{display:'flex', alignItems:'center', gap:8, paddingTop:10, borderTop:`1px solid ${T.border}`}}>
+                    {data.invoice.myob_post_error && (
+                      <span style={{fontSize:10, color:T.red, flex:1, fontFamily:'monospace', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap'}}
+                        title={data.invoice.myob_post_error}>
+                        Last error: {data.invoice.myob_post_error}
+                      </span>
+                    )}
+                    {!data.invoice.myob_post_error && <span style={{flex:1}}/>}
+                    <button
+                      onClick={rejectInvoice}
+                      disabled={rejecting || approving}
+                      style={{
+                        background:'transparent', border:`1px solid ${T.red}40`, color:T.red,
+                        padding:'6px 14px', borderRadius:5, fontSize:11, fontFamily:'inherit',
+                        cursor: rejecting ? 'wait' : 'pointer',
+                        opacity: rejecting ? 0.6 : 1,
+                      }}>
+                      {rejecting ? 'Rejecting…' : 'Reject'}
+                    </button>
+                    <button
+                      onClick={approveAndPost}
+                      disabled={!canApprove || approving || rejecting}
+                      title={canApprove ? '' : `Cannot post: ${approveBlockedReason}`}
+                      style={{
+                        background: canApprove ? T.blue : T.bg4,
+                        color: canApprove ? '#fff' : T.text3,
+                        border:'none',
+                        padding:'6px 14px', borderRadius:5, fontSize:11, fontWeight:600, fontFamily:'inherit',
+                        cursor: !canApprove ? 'not-allowed' : approving ? 'wait' : 'pointer',
+                        opacity: approving ? 0.6 : 1,
+                      }}>
+                      {approving ? 'Posting…' : 'Approve & Post to MYOB'}
+                    </button>
+                  </div>
+                )}
+                {isPosted && (
+                  <div style={{paddingTop:10, borderTop:`1px solid ${T.border}`, fontSize:11, color:T.green, display:'flex', alignItems:'center', gap:10}}>
+                    <span>✅ Posted to MYOB {data.invoice.myob_posted_at ? new Date(data.invoice.myob_posted_at).toLocaleString() : ''}</span>
+                    {data.invoice.myob_bill_uid && (
+                      <span style={{fontFamily:'monospace', color:T.text3}}>
+                        · UID {data.invoice.myob_bill_uid.substring(0, 8)}…
+                      </span>
+                    )}
+                  </div>
+                )}
+                {isRejected && (
+                  <div style={{paddingTop:10, borderTop:`1px solid ${T.border}`, fontSize:11, color:T.text2}}>
+                    🚫 Rejected{data.invoice.rejection_reason ? ` — ${data.invoice.rejection_reason}` : ''}
+                  </div>
+                )}
+
+                {actionMessage && (
+                  <div style={{
+                    marginTop:10, padding:'8px 10px', borderRadius:5, fontSize:11,
+                    background: actionMessage.kind === 'ok' ? `${T.green}15` : `${T.red}15`,
+                    border: `1px solid ${actionMessage.kind === 'ok' ? T.green : T.red}40`,
+                    color: actionMessage.kind === 'ok' ? T.green : T.red,
+                  }}>
+                    {actionMessage.text}
                   </div>
                 )}
               </div>
@@ -413,7 +559,7 @@ export default function APDetailPage({ user }: PageProps) {
               <WorkshopJobSection
                 invoice={data.invoice}
                 linkedJob={data.linkedJob}
-                canEdit={canEdit}
+                canEdit={canEdit && !isTerminal}
                 pickerOpen={pickerOpen}
                 pickerQuery={pickerQuery}
                 pickerResults={pickerResults}
@@ -429,7 +575,7 @@ export default function APDetailPage({ user }: PageProps) {
               {/* MYOB mapping (with preset picker) */}
               <MyobMappingSection
                 invoice={data.invoice}
-                canEdit={canEdit}
+                canEdit={canEdit && !isTerminal}
                 presetOpen={presetOpen}
                 onOpenPreset={() => setPresetOpen(true)}
                 onClosePreset={() => setPresetOpen(false)}
@@ -441,7 +587,7 @@ export default function APDetailPage({ user }: PageProps) {
                 <div style={{display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:10}}>
                   <div style={{fontSize:11, color:T.text3, textTransform:'uppercase', letterSpacing:'0.05em'}}>Line items ({editingLines?.length ?? data.lines.length})</div>
                   <div style={{display:'flex', gap:8}}>
-                    {editingLines === null && canEdit && (
+                    {editingLines === null && canEdit && !isTerminal && (
                       <button onClick={startEdit} style={btnSecondary()}>Edit lines</button>
                     )}
                     {editingLines !== null && (
@@ -890,7 +1036,7 @@ function AccountTypeahead({
   )
 }
 
-// ── Workshop Job section (unchanged from R3a) ────────────────────────────
+// ── Workshop Job section ────────────────────────────
 function WorkshopJobSection({
   invoice, linkedJob, canEdit,
   pickerOpen, pickerQuery, pickerResults, pickerLoading, linkBusy,
