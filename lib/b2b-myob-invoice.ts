@@ -146,13 +146,21 @@ export async function writeOrderToMyob(orderId: string): Promise<MyobWriteResult
   const subtotalEnv   = round2(subtotalExGst + cardFeeInc)
   const totalAmount   = round2(subtotalEnv + totalTax)
 
+  // 4b. Reserve the next portal-controlled MYOB invoice number BEFORE the
+  // POST. Atomic via the RPC. This way invoice numbering is deterministic
+  // and visible to staff — not whatever MYOB auto-assigns.
+  const { data: rpcNumber, error: rpcErr } = await c.rpc('b2b_next_myob_invoice_number')
+  if (rpcErr) throw new Error(`Failed to allocate MYOB invoice number: ${rpcErr.message}`)
+  const myobInvoiceNumber = String(rpcNumber || '').trim()
+  if (!myobInvoiceNumber) throw new Error('b2b_next_myob_invoice_number returned empty')
+
   const today = new Date().toISOString().substring(0, 10)
   const memo = `B2B Sale; Order ${order.order_number}; Stripe ${order.stripe_payment_intent_id || ''}`.substring(0, 255)
 
   const body = {
     Customer: { UID: dist.myob_primary_customer_uid },
     Date: today,
-    Number: order.order_number,  // MYOB will accept; needs to fit MYOB's number length limit
+    Number: myobInvoiceNumber,
     Lines: myobLines,
     IsTaxInclusive: false,
     FreightAmount: 0,
@@ -197,15 +205,15 @@ export async function writeOrderToMyob(orderId: string): Promise<MyobWriteResult
     throw new Error(`MYOB returned 201 but no invoice UID in Location header: "${location}"`)
   }
 
-  // 8. Fetch the created invoice to get its assigned Number (in case MYOB
-  // overrode our suggested Number)
-  let invoiceNumber: string | null = order.order_number
+  // 8. Fetch the created invoice to confirm Number (sanity check — MYOB
+  // should have used what we sent in body.Number)
+  let invoiceNumber: string | null = myobInvoiceNumber
   try {
     const detail = await myobFetch(conn.id, `/accountright/${conn.company_file_id}/Sale/Invoice/Item/${invoiceUid}`)
     if (detail.status === 200 && detail.data?.Number) {
       invoiceNumber = String(detail.data.Number)
     }
-  } catch { /* not fatal — keep our order number */ }
+  } catch { /* not fatal — keep the reserved number */ }
 
   // 9. Save to order
   await c.from('b2b_orders')
