@@ -4,7 +4,8 @@
 // remove buttons, and a totals panel showing subtotal/GST/card-fee/total.
 //
 // Checkout flow:
-//   - "Checkout" POSTs to /api/b2b/checkout/start
+//   - Optional Purchase Order field (max 20 chars — MYOB limit)
+//   - "Checkout" POSTs to /api/b2b/checkout/start with { customer_po }
 //   - On success, redirects browser to the returned Stripe URL
 //   - On Stripe cancel, user lands back here with ?cancelled={order_id}
 //     and we show a small "checkout cancelled" banner
@@ -78,6 +79,7 @@ export default function B2BCartPage({ b2bUser }: Props) {
   const [checkoutBusy, setCheckoutBusy] = useState(false)
   const [checkoutError, setCheckoutError] = useState<string | null>(null)
   const [checkoutIssues, setCheckoutIssues] = useState<string[] | null>(null)
+  const [customerPo, setCustomerPo] = useState('')
 
   const cancelledOrderId = router.query.cancelled ? String(router.query.cancelled) : null
 
@@ -144,7 +146,9 @@ export default function B2BCartPage({ b2bUser }: Props) {
         method: 'POST',
         credentials: 'same-origin',
         headers: { 'Content-Type': 'application/json' },
-        body: '{}',
+        body: JSON.stringify({
+          customer_po: customerPo.trim() || undefined,
+        }),
       })
       const j = await r.json()
       if (!r.ok) {
@@ -154,7 +158,6 @@ export default function B2BCartPage({ b2bUser }: Props) {
         throw new Error(j?.error || `HTTP ${r.status}`)
       }
       if (!j?.checkout_url) throw new Error('No checkout URL returned')
-      // Hard redirect to Stripe
       window.location.href = j.checkout_url
     } catch (e: any) {
       setCheckoutError(e?.message || String(e))
@@ -243,6 +246,8 @@ export default function B2BCartPage({ b2bUser }: Props) {
             <TotalsPanel
               totals={data.totals}
               cardFeeNote={data.card_fee.note}
+              customerPo={customerPo}
+              onCustomerPoChange={setCustomerPo}
               onCheckout={startCheckout}
               checkoutBusy={checkoutBusy}
             />
@@ -350,14 +355,19 @@ function qtyBtn(disabled?: boolean): React.CSSProperties {
 
 // ─── Totals panel ──────────────────────────────────────────────────────
 function TotalsPanel({
-  totals, cardFeeNote, onCheckout, checkoutBusy,
+  totals, cardFeeNote, customerPo, onCustomerPoChange, onCheckout, checkoutBusy,
 }: {
   totals: CartTotals
   cardFeeNote: string
+  customerPo: string
+  onCustomerPoChange: (v: string) => void
   onCheckout: () => void
   checkoutBusy: boolean
 }) {
   const canCheckout = totals.total_inc > 0
+  const poTrimmed = customerPo.trim()
+  const poTooLong = poTrimmed.length > 20
+
   return (
     <div style={{
       background:T.bg2,border:`1px solid ${T.border}`,borderRadius:10,
@@ -381,16 +391,43 @@ function TotalsPanel({
       <div style={{borderTop:`1px solid ${T.border2}`,paddingTop:10,marginTop:6}}/>
       <Row label="Total to pay" value={`$${totals.total_inc.toFixed(2)}`} large/>
 
+      {/* Purchase Order */}
+      <div style={{marginTop:14}}>
+        <label style={{display:'block',fontSize:10,color:T.text2,textTransform:'uppercase',letterSpacing:'0.06em',marginBottom:4,fontWeight:500}}>
+          Your PO number <span style={{textTransform:'none',color:T.text3,fontWeight:400,letterSpacing:0}}>(optional)</span>
+        </label>
+        <input
+          type="text"
+          value={customerPo}
+          onChange={e => onCustomerPoChange(e.target.value)}
+          placeholder="e.g. PO-12345"
+          maxLength={20}
+          style={{
+            width:'100%',boxSizing:'border-box',
+            background:T.bg3,
+            border:`1px solid ${poTooLong ? T.red : T.border2}`,
+            color:T.text,borderRadius:5,padding:'8px 10px',fontSize:12,outline:'none',
+            fontFamily:'inherit',
+          }}/>
+        <div style={{fontSize:10,color: poTooLong ? T.red : T.text3,marginTop:3}}>
+          {poTooLong
+            ? 'Maximum 20 characters'
+            : poTrimmed.length > 0
+              ? `${poTrimmed.length}/20 chars · written to MYOB`
+              : 'Will appear on the MYOB sales order'}
+        </div>
+      </div>
+
       <button
         onClick={onCheckout}
-        disabled={!canCheckout || checkoutBusy}
+        disabled={!canCheckout || checkoutBusy || poTooLong}
         style={{
           width:'100%',padding:'12px 16px',borderRadius:7,marginTop:14,
-          border:`1px solid ${canCheckout ? T.blue : T.border2}`,
-          background: canCheckout && !checkoutBusy ? T.blue : T.bg3,
-          color: canCheckout && !checkoutBusy ? '#fff' : T.text3,
+          border:`1px solid ${canCheckout && !poTooLong ? T.blue : T.border2}`,
+          background: canCheckout && !checkoutBusy && !poTooLong ? T.blue : T.bg3,
+          color: canCheckout && !checkoutBusy && !poTooLong ? '#fff' : T.text3,
           fontSize:13,fontWeight:600,
-          cursor: canCheckout && !checkoutBusy ? 'pointer' : 'not-allowed',
+          cursor: canCheckout && !checkoutBusy && !poTooLong ? 'pointer' : 'not-allowed',
           fontFamily:'inherit',
         }}>
         {checkoutBusy ? 'Connecting to Stripe…' : 'Checkout'}

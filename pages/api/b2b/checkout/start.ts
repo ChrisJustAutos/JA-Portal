@@ -1,6 +1,7 @@
 // pages/api/b2b/checkout/start.ts
 //
 // POST /api/b2b/checkout/start
+//   body: { customer_po?: string }
 //
 // Creates a b2b_orders row in 'pending_payment' status, snapshots cart
 // lines into b2b_order_lines, then opens a Stripe Checkout Session.
@@ -19,8 +20,6 @@ import { createCheckoutSession, StripeLineItem } from '../../../../lib/stripe'
 import { assertCheckoutConfigured } from '../../../../lib/b2b-settings'
 
 const GST_RATE = 0.10
-const CARD_FEE_PCT_DEFAULT   = 0.017
-const CARD_FEE_FIXED_DEFAULT = 0.30
 
 let _sb: SupabaseClient | null = null
 function sb(): SupabaseClient {
@@ -42,6 +41,17 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, use
     return res.status(405).json({ error: 'POST only' })
   }
 
+  // Parse PO from request body. Optional, max 20 chars (MYOB limit).
+  let customerPo: string | null = null
+  try {
+    const body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : (req.body || {})
+    if (typeof body.customer_po === 'string') {
+      customerPo = body.customer_po.trim().substring(0, 20) || null
+    }
+  } catch {
+    // Bad JSON in body — ignore, treat as no PO
+  }
+
   // Verify Stripe + MYOB are configured before we charge anyone.
   let cfg
   try {
@@ -49,7 +59,7 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, use
   } catch (e: any) {
     return res.status(503).json({
       error: 'Checkout temporarily unavailable. Please contact your account manager.',
-      detail: e?.message,  // shown only to the API consumer; UI hides this
+      detail: e?.message,
     })
   }
 
@@ -135,7 +145,6 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, use
   try {
     stockMap = await getStockForItems(validated.map(v => v.myobItemUid!).filter(Boolean) as string[])
   } catch (e) {
-    // Stock unavailable — block checkout to be safe rather than over-promise
     return res.status(503).json({
       error: 'Live stock check failed — please try again in a moment',
     })
@@ -185,6 +194,7 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, use
       total_inc: totalInc,
       currency: 'AUD',
       myob_company_file: 'JAWS',
+      customer_po: customerPo,
     })
     .select('id, order_number')
     .single()
@@ -211,7 +221,6 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, use
   })
   const { error: olErr } = await c.from('b2b_order_lines').insert(orderLineRows)
   if (olErr) {
-    // Roll back the order so user isn't stuck with a half-baked record
     await c.from('b2b_orders').delete().eq('id', order.id)
     return res.status(500).json({ error: `Order lines insert failed: ${olErr.message}` })
   }
@@ -227,7 +236,7 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, use
           name: v.name,
           description: `SKU: ${v.sku}`,
         },
-        unit_amount: Math.round(unitInc * 100),  // cents
+        unit_amount: Math.round(unitInc * 100),
       },
       quantity: v.qty,
     }
@@ -262,15 +271,15 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, use
         distributor_id: user.distributor.id,
       },
       payment_intent_data: {
-        description: `${order.order_number} — ${user.distributor.displayName}`,
+        description: `${order.order_number} — ${user.distributor.displayName}${customerPo ? ` — PO ${customerPo}` : ''}`,
         metadata: {
           order_id: order.id,
           order_number: order.order_number,
+          customer_po: customerPo || '',
         },
       },
     })
   } catch (e: any) {
-    // Roll back the order to avoid orphan pending_payment records
     await c.from('b2b_order_lines').delete().eq('order_id', order.id)
     await c.from('b2b_orders').delete().eq('id', order.id)
     return res.status(502).json({ error: `Stripe checkout failed: ${e?.message || String(e)}` })
@@ -285,9 +294,9 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, use
     event_type: 'checkout_started',
     to_status: 'pending_payment',
     actor_type: 'distributor_user',
-    actor_id: null,  // b2b_distributor_users.id isn't a uuid type the FK expects in actor_id, leave null
-    notes: `Stripe session ${session.id} created`,
-    metadata: { stripe_session_id: session.id, total_inc: totalInc },
+    actor_id: null,
+    notes: `Stripe session ${session.id} created${customerPo ? ` (PO: ${customerPo})` : ''}`,
+    metadata: { stripe_session_id: session.id, total_inc: totalInc, customer_po: customerPo },
   })
 
   return res.status(200).json({
@@ -295,6 +304,7 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, use
     order_number: order.order_number,
     checkout_url: session.url,
     stripe_session_id: session.id,
+    customer_po: customerPo,
     totals: {
       subtotal_ex_gst: subtotalEx,
       gst: gst,
