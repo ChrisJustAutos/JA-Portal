@@ -127,14 +127,19 @@ export async function writeOrderToMyob(orderId: string): Promise<MyobWriteResult
     })
   }
 
-  // Card surcharge line — no GST (pure pass-through)
+  // Card surcharge line — uses a MYOB Service Item (e.g. "Bank Fees") so
+  // every line on the order is an Item line. This avoids the "hybrid
+  // layout" warning that AccountRight Desktop applies when an Item
+  // invoice/order also has Account-only lines, which makes the transaction
+  // read-only in Desktop. TaxCode is overridden to FRE so no GST is applied
+  // to the surcharge (pure pass-through).
   const cardFeeInc = round2(Number(order.card_fee_inc || 0))
   if (cardFeeInc > 0) {
     myobLines.push({
       Type: 'Transaction',
       Description: 'Card processing surcharge',
-      Account: { UID: cfg.cardFeeAccountUid },
-      UnitCount: 1,           // MYOB requires UnitCount + UnitPrice as a pair on every line
+      Item: { UID: cfg.cardFeeItemUid },
+      ShipQuantity: 1,
       UnitPrice: cardFeeInc,
       Total: cardFeeInc,
       TaxCode: { UID: cfg.freTaxCodeUid },

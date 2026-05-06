@@ -4,11 +4,17 @@
 // code UIDs on first use. Mirrors the pattern in lib/ap-myob-bill.ts.
 //
 // What MUST be configured manually before checkout works:
-//   - myob_card_fee_account_uid   (an Income or Other-Income account in MYOB)
+//   - myob_card_fee_item_uid  (a MYOB Item used for the card surcharge line)
 //
 // What auto-resolves on first checkout (cached in DB):
 //   - myob_jaws_gst_tax_code_uid
 //   - myob_jaws_fre_tax_code_uid
+//
+// Deprecated (kept for backwards-compat reads):
+//   - myob_card_fee_account_uid   (was used when surcharge was an Account-only
+//                                  line; now superseded by the Item UID above
+//                                  to keep the MYOB Sale.Order in pure Item
+//                                  layout — fixes "hybrid layout" read-only)
 
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
 import { getConnection, myobFetch } from './myob'
@@ -31,8 +37,10 @@ export interface B2BSettings {
   card_fee_fixed: number
   myob_jaws_gst_tax_code_uid: string | null
   myob_jaws_fre_tax_code_uid: string | null
-  myob_card_fee_account_uid: string | null
-  myob_card_fee_account_code: string | null
+  myob_card_fee_account_uid: string | null      // deprecated, kept for compat
+  myob_card_fee_account_code: string | null     // deprecated, kept for compat
+  myob_card_fee_item_uid: string | null         // NEW — required
+  myob_card_fee_item_name: string | null
   myob_default_freight_account_uid: string | null
   slack_new_order_webhook_url: string | null
   tax_codes_refreshed_at: string | null
@@ -104,30 +112,30 @@ export async function ensureJawsTaxCodes(): Promise<{ gstUid: string; freUid: st
 
 /**
  * Validates that all MYOB-side settings required for checkout are configured.
- * Throws a descriptive error if anything is missing — surfaces to the
- * distributor as "Checkout temporarily unavailable" with a helpful detail
- * for staff.
+ * Throws a descriptive error if anything is missing.
  */
 export async function assertCheckoutConfigured(): Promise<{
-  cardFeeAccountUid: string
+  cardFeeItemUid: string
+  cardFeeAccountUid: string | null    // kept for compat callers, not required
   gstTaxCodeUid: string
   freTaxCodeUid: string
   cardFeePct: number
   cardFeeFixed: number
 }> {
   const settings = await loadSettings()
-  if (!settings.myob_card_fee_account_uid) {
+  if (!settings.myob_card_fee_item_uid) {
     throw new Error(
-      'Checkout misconfigured: b2b_settings.myob_card_fee_account_uid is not set. ' +
-      'Staff must pick a MYOB JAWS income account for the card surcharge line.',
+      'Checkout misconfigured: b2b_settings.myob_card_fee_item_uid is not set. ' +
+      'Staff must pick a MYOB Service-type Item (e.g. "Bank Fees") for the card surcharge line.',
     )
   }
   const taxCodes = await ensureJawsTaxCodes()
   return {
+    cardFeeItemUid:    settings.myob_card_fee_item_uid,
     cardFeeAccountUid: settings.myob_card_fee_account_uid,
-    gstTaxCodeUid: taxCodes.gstUid,
-    freTaxCodeUid: taxCodes.freUid,
-    cardFeePct:    Number(settings.card_fee_percent || 0.017),
-    cardFeeFixed:  Number(settings.card_fee_fixed   || 0.30),
+    gstTaxCodeUid:     taxCodes.gstUid,
+    freTaxCodeUid:     taxCodes.freUid,
+    cardFeePct:        Number(settings.card_fee_percent || 0.017),
+    cardFeeFixed:      Number(settings.card_fee_fixed   || 0.30),
   }
 }
