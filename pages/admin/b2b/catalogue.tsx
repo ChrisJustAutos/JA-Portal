@@ -464,26 +464,34 @@ function CatalogueRow({
         )}
       </td>
 
-      {/* Model (inline editable) */}
+      {/* Model (inline editable, only when item is visible) */}
       <td style={td()}>
-        <InlineTaxonomySelect
-          value={item.model_id}
-          options={models}
-          saving={savingField === 'model'}
-          addLabel="+ Add model…"
-          onChange={handleModelChange}
-        />
+        {item.b2b_visible ? (
+          <InlineTaxonomySelect
+            value={item.model_id}
+            options={models}
+            saving={savingField === 'model'}
+            addLabel="+ Add model…"
+            onChange={handleModelChange}
+          />
+        ) : (
+          <span style={{color:T.text3,fontSize:11}}>—</span>
+        )}
       </td>
 
-      {/* Product type (inline editable) */}
+      {/* Product type (inline editable, only when item is visible) */}
       <td style={td()}>
-        <InlineTaxonomySelect
-          value={item.product_type_id}
-          options={productTypes}
-          saving={savingField === 'type'}
-          addLabel="+ Add type…"
-          onChange={handleTypeChange}
-        />
+        {item.b2b_visible ? (
+          <InlineTaxonomySelect
+            value={item.product_type_id}
+            options={productTypes}
+            saving={savingField === 'type'}
+            addLabel="+ Add type…"
+            onChange={handleTypeChange}
+          />
+        ) : (
+          <span style={{color:T.text3,fontSize:11}}>—</span>
+        )}
       </td>
 
       {/* RRP */}
