@@ -152,17 +152,17 @@ export async function refreshAllStock(): Promise<{ scanned: number; updated: num
 
     // Upsert ONLY when a matching catalogue row exists. Cheaper to do it
     // as an UPDATE-by-uid (no row created if it doesn't already exist).
-    const { error, count } = await c
+    const { error, data } = await c
       .from('b2b_catalogue')
       .update({
         qty_available: qty,
         is_inventoried: isInv,
         stock_cached_at: cachedAt,
-      }, { count: 'exact' })
+      })
       .eq('myob_item_uid', uid)
-      .select('id', { head: true, count: 'exact' })
+      .select('id')
 
-    if (!error && count && count > 0) updated++
+    if (!error && data && data.length > 0) updated++
   }
 
   return { scanned: allItems.length, updated }
