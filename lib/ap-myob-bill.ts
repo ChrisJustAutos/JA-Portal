@@ -43,6 +43,40 @@
 //   - FreightTaxCode is required even when FreightAmount is 0
 //   - Subtotal/TotalTax/TotalAmount must be sent on the body envelope
 //
+// **GST PRECISION — STRICT HEADER RECONCILIATION (May 2026)**:
+//   Hard requirement: the bill posted to MYOB MUST reconcile to the totals
+//   on the source PDF. No 1-2c drift, no quiet "close enough" tolerance.
+//
+//   Strategy:
+//     1. Read PDF header values: total_inc_gst, gst_amount, subtotal_ex_gst.
+//        These are the authoritative numbers — what Amanda compares against
+//        statements, Capricorn, vendor portals.
+//     2. If header values are internally inconsistent (subtotal + gst !=
+//        total within 2c rounding), trust total_inc_gst as the anchor and
+//        derive: subtotal = total - gst. The total is the most prominent
+//        and least-likely-to-be-misread number on the PDF.
+//     3. Build line totals (each rounded to 2dp). Compute their sum.
+//     4. Adjust the LARGEST-magnitude line by the delta needed to make the
+//        line sum equal headerSubtotal exactly. This means lines always
+//        sum to the PDF subtotal. The largest line absorbs the cents with
+//        least visible impact.
+//     5. If the adjustment delta is more than $1, the line items genuinely
+//        don't match the header — extractor missed a line, freight not
+//        captured, vendor discount wasn't itemised, etc. Refuse to post
+//        with a clear error so the user can edit lines first. This is a
+//        feature: silent line-nudging by $50 to "match" would be wrong.
+//     6. Set Subtotal/TotalTax/TotalAmount on the envelope = the header
+//        values, exactly. MYOB's internal tax math (per-line round-then-
+//        sum) will agree because we adjusted the largest line.
+//
+//   Fallback (no header values present): compute subtotal as line sum,
+//   compute tax PER LINE as round2(line.Total × rate) summed, total =
+//   sub + tax. This matches MYOB's own internal calc so envelope and
+//   recalc agree.
+//
+//   ALL adjustments + fallbacks log to console with the invoice ID so
+//   anything weird shows up in Vercel logs for forensics.
+//
 // Bill UID extraction: MYOB returns 201 with empty body; UID is in the
 // `Location` response header. URL contains TWO UUIDs (cfId + bill UID),
 // take the LAST one.
@@ -62,6 +96,20 @@ const STORAGE_BUCKET = 'ap-invoices'
 const MAX_ATTACHMENT_BYTES = 8 * 1024 * 1024
 
 const GST_RATE = 0.10
+
+// Maximum delta we'll silently absorb by nudging the largest line so the
+// line sum matches the PDF subtotal. Beyond this is a real discrepancy
+// that needs manual review — extractor missed a line, vendor freight,
+// etc. We refuse to post rather than silently shifting cash to the
+// wrong line. $1 covers all reasonable rounding/cents quirks while
+// catching genuine extraction errors.
+const MAX_LINE_NUDGE = 1.00
+
+// Maximum allowed inconsistency within the header itself (subtotal + gst
+// vs total). 2c covers vendor rounding. Beyond this we still trust the
+// header total but log a warning — the gst/subtotal printed on the PDF
+// might have a typo.
+const HEADER_CONSISTENCY_TOLERANCE = 0.02
 
 const UUID_REGEX_G = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi
 
@@ -310,26 +358,102 @@ export async function createServiceBill(
     return (taxCode || 'GST').toUpperCase() === 'FRE' ? 0 : GST_RATE
   }
 
-  const billLines: ServiceBillLineBody[] = lines.map((l: any) => {
+  // ── Build bill lines (each Total rounded to 2dp) ──
+  // Track per-line rates in a parallel array so tax math can use them
+  // without mutating the line body shape MYOB expects.
+  const billLines: ServiceBillLineBody[] = []
+  const lineRates: number[] = []
+  for (const l of lines) {
     const description = [l.part_number, l.description].filter(Boolean).join(' — ').substring(0, 255)
     const lineTotal = round2(Number(l.line_total_ex_gst || 0))
     const accountUid: string = l.account_uid || inv.resolved_account_uid
-    return {
+    billLines.push({
       Type: 'Transaction',
       Description: description || 'AP line',
       Account: { UID: accountUid },
       Total: lineTotal,
       TaxCode: { UID: taxUidFor(l.tax_code) },
-    }
-  })
+    })
+    lineRates.push(rateFor(l.tax_code))
+  }
 
-  const subtotal = round2(billLines.reduce((s, l) => s + l.Total, 0))
-  const totalTax = round2(lines.reduce((s: number, l: any) => {
-    const lineEx = Number(l.line_total_ex_gst || 0)
-    return s + lineEx * rateFor(l.tax_code)
-  }, 0))
+  // ── Determine authoritative subtotal / GST / total ──
+  // STRICT MODE: PDF header is the source of truth. Bill envelope numbers
+  // exactly match what Amanda sees on the printed invoice.
+  const headerTotalRaw    = inv.total_inc_gst != null && Number.isFinite(Number(inv.total_inc_gst))    ? Number(inv.total_inc_gst)    : null
+  const headerGstRaw      = inv.gst_amount != null && Number.isFinite(Number(inv.gst_amount))          ? Number(inv.gst_amount)       : null
+  const headerSubtotalRaw = inv.subtotal_ex_gst != null && Number.isFinite(Number(inv.subtotal_ex_gst)) ? Number(inv.subtotal_ex_gst) : null
+
+  const headerTotal    = headerTotalRaw    !== null ? round2(headerTotalRaw)    : null
+  let   headerGst      = headerGstRaw      !== null ? round2(headerGstRaw)      : null
+  let   headerSubtotal = headerSubtotalRaw !== null ? round2(headerSubtotalRaw) : null
+
+  // Internal-consistency check on the header values themselves.
+  // If subtotal + gst != total within tolerance, trust the total (the
+  // most prominent number on the PDF) and re-derive the other two.
+  if (headerTotal !== null && headerGst !== null && headerSubtotal !== null) {
+    const impliedTotal = round2(headerSubtotal + headerGst)
+    const internalDelta = round2(headerTotal - impliedTotal)
+    if (Math.abs(internalDelta) > HEADER_CONSISTENCY_TOLERANCE) {
+      console.warn(`AP ${invoiceId}: header values inconsistent — subtotal ${headerSubtotal.toFixed(2)} + gst ${headerGst.toFixed(2)} = ${impliedTotal.toFixed(2)}, but total says ${headerTotal.toFixed(2)} (delta ${internalDelta.toFixed(2)}). Trusting total + gst, re-deriving subtotal.`)
+      headerSubtotal = round2(headerTotal - headerGst)
+    }
+  } else if (headerTotal !== null && headerGst !== null && headerSubtotal === null) {
+    headerSubtotal = round2(headerTotal - headerGst)
+  } else if (headerTotal !== null && headerSubtotal !== null && headerGst === null) {
+    headerGst = round2(headerTotal - headerSubtotal)
+  }
+
+  // ── Reconcile lines to header subtotal, OR fall back to per-line ──
+  let subtotal: number
+  let totalTax: number
+  let totalAmount: number
+
+  const initialLineSum = round2(billLines.reduce((s, l) => s + l.Total, 0))
+
+  if (headerTotal !== null && headerGst !== null && headerSubtotal !== null) {
+    // STRICT PATH — header values present and reconciled. Bill MUST match.
+    const lineDelta = round2(headerSubtotal - initialLineSum)
+
+    if (lineDelta !== 0) {
+      if (Math.abs(lineDelta) > MAX_LINE_NUDGE) {
+        // Genuine extraction error — refuse to post rather than silently
+        // dump $X onto the largest line.
+        throw new Error(
+          `Cannot post: line items sum to $${initialLineSum.toFixed(2)} but PDF header subtotal is $${headerSubtotal.toFixed(2)} (delta $${lineDelta.toFixed(2)}). Edit the line items to match the invoice subtotal before approving.`
+        )
+      }
+      // Within nudge tolerance — adjust largest line so the line sum
+      // exactly equals the header subtotal.
+      let maxIdx = 0
+      for (let i = 1; i < billLines.length; i++) {
+        if (Math.abs(billLines[i].Total) > Math.abs(billLines[maxIdx].Total)) maxIdx = i
+      }
+      billLines[maxIdx].Total = round2(billLines[maxIdx].Total + lineDelta)
+      const adjustedLineSum = round2(billLines.reduce((s, l) => s + l.Total, 0))
+      console.log(`AP ${invoiceId}: nudged line ${maxIdx} (${billLines[maxIdx].Description.substring(0, 40)}) by ${lineDelta.toFixed(2)} — line sum now ${adjustedLineSum.toFixed(2)} matches header subtotal ${headerSubtotal.toFixed(2)}`)
+    }
+
+    // Header values are authoritative. MYOB will recompute tax per line
+    // (round2(Total × rate)) but with our nudged line sum the per-line
+    // recalc agrees with headerGst within sub-cent precision.
+    subtotal    = headerSubtotal
+    totalTax    = headerGst
+    totalAmount = headerTotal
+  } else {
+    // FALLBACK — no header values to reconcile against. Compute totals
+    // using MYOB's own per-line round-then-sum method so our envelope
+    // matches what MYOB will recalc internally.
+    const computedTax = round2(billLines.reduce((s, l, idx) => {
+      return s + round2(l.Total * lineRates[idx])
+    }, 0))
+    subtotal    = initialLineSum
+    totalTax    = computedTax
+    totalAmount = round2(subtotal + totalTax)
+    console.log(`AP ${invoiceId}: no PDF header totals — using computed subtotal ${subtotal.toFixed(2)}, tax ${totalTax.toFixed(2)}, total ${totalAmount.toFixed(2)} (per-line method).`)
+  }
+
   const freightAmount = 0
-  const totalAmount = round2(subtotal + totalTax + freightAmount)
 
   const memoParts = [
     `AP: ${inv.vendor_name_parsed || 'Vendor'} — ${inv.invoice_number}`,
