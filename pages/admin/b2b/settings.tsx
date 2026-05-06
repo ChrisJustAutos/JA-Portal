@@ -1,29 +1,30 @@
 // pages/admin/b2b/settings.tsx
 //
 // B2B portal settings — staff-only.
-//
-// Sections:
-//   - Invoice numbering (prefix, padding, current seq, live preview)
-//   - Card surcharge rates (% + fixed)
-//   - Slack notifications
-//   - Read-only diagnostics (Stripe env status, MYOB tax codes,
-//     card fee account, last catalogue sync)
+// Layout matches the rest of /admin/b2b/* (PortalSidebar + main content).
 
 import { useEffect, useMemo, useState } from 'react'
 import Head from 'next/head'
-import type { GetServerSideProps } from 'next'
+import PortalSidebar from '../../../lib/PortalSidebar'
 import { requirePageAuth } from '../../../lib/authServer'
+import type { UserRole } from '../../../lib/permissions'
 
 const T = {
   bg:'#0d0f12', bg2:'#131519', bg3:'#1a1d23', bg4:'#21252d',
   border:'rgba(255,255,255,0.07)', border2:'rgba(255,255,255,0.12)',
   text:'#e8eaf0', text2:'#8b90a0', text3:'#545968',
   blue:'#4f8ef7', teal:'#2dd4bf', green:'#34c77b',
-  amber:'#f5a623', red:'#f04e4e',
+  amber:'#f5a623', red:'#f04e4e', purple:'#a78bfa', accent:'#4f8ef7',
 }
 
 interface Props {
-  user: any  // staff user from requirePageAuth
+  user: {
+    id: string
+    email: string
+    displayName: string | null
+    role: UserRole
+    visibleTabs: string[] | null
+  }
 }
 
 interface Settings {
@@ -90,7 +91,7 @@ export default function B2BSettingsPage({ user }: Props) {
   }
   useEffect(() => { load() }, [])
 
-  // Live preview of next invoice number based on local edits
+  // Live preview based on local edits
   const livePreview = useMemo(() => {
     const p = (prefix || '').trim()
     const seq = parseInt(seqInput || '0', 10) || 0
@@ -132,14 +133,27 @@ export default function B2BSettingsPage({ user }: Props) {
   return (
     <>
       <Head><title>B2B Settings · JA Portal</title></Head>
-      <div style={{minHeight:'100vh',background:T.bg,color:T.text,fontFamily:'system-ui,-apple-system,sans-serif'}}>
-        <main style={{maxWidth:900,margin:'0 auto',padding:'32px 24px 60px'}}>
+      <div style={{display:'flex',minHeight:'100vh',background:T.bg,color:T.text,fontFamily:'system-ui,-apple-system,sans-serif'}}>
+        <PortalSidebar
+          activeId="b2b"
+          currentUserRole={user.role}
+          currentUserVisibleTabs={user.visibleTabs}
+          currentUserName={user.displayName}
+          currentUserEmail={user.email}
+        />
+        <main style={{flex:1,padding:'28px 32px',maxWidth:1100}}>
 
-          {/* Header */}
-          <header style={{marginBottom:24}}>
-            <a href="/admin/b2b/catalogue" style={{fontSize:11,color:T.text3,textDecoration:'none'}}>← Back to B2B</a>
-            <h1 style={{fontSize:24,fontWeight:600,margin:'8px 0 4px',letterSpacing:'-0.01em'}}>B2B Portal Settings</h1>
-            <div style={{fontSize:12,color:T.text3}}>Configure how the distributor portal interacts with Stripe and MYOB.</div>
+          {/* Breadcrumb header — same pattern as catalogue.tsx */}
+          <header style={{marginBottom:18}}>
+            <div style={{fontSize:11,color:T.text3,textTransform:'uppercase',letterSpacing:'0.08em',marginBottom:4}}>
+              <a href="/admin/b2b" style={{color:T.text3,textDecoration:'none'}}>B2B Portal</a>
+              {' / '}
+              <span style={{color:T.text2}}>Settings</span>
+            </div>
+            <h1 style={{fontSize:22,fontWeight:600,margin:0,letterSpacing:'-0.01em'}}>B2B portal settings</h1>
+            <div style={{fontSize:12,color:T.text3,marginTop:4}}>
+              Configure how the distributor portal interacts with Stripe and MYOB.
+            </div>
           </header>
 
           {error && (
@@ -162,7 +176,7 @@ export default function B2BSettingsPage({ user }: Props) {
             <>
               {/* ─── Invoice numbering ─── */}
               <Section title="MYOB Invoice Numbering"
-                description="Each B2B order writes a Sale.Invoice to MYOB JAWS. The invoice number is portal-controlled (prefix + zero-padded sequence) so you can keep portal invoices in their own number range. MYOB caps the field at 13 characters total.">
+                description="Each B2B order writes a Sale.Invoice to MYOB JAWS. The invoice number is portal-controlled (prefix + zero-padded sequence). MYOB caps the field at 13 characters total.">
 
                 <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:14,marginBottom:14}}>
                   <Field label="Prefix" hint="Letters/digits, no spaces. Max 8 chars.">
@@ -366,6 +380,6 @@ function DiagRow({ label, status, value }: { label: string; status: 'ok'|'pendin
   )
 }
 
-export const getServerSideProps: GetServerSideProps = async (ctx) => {
-  return await requirePageAuth(ctx, 'edit:b2b_distributors') as any
+export async function getServerSideProps(context: any) {
+  return requirePageAuth(context, 'edit:b2b_distributors')
 }
