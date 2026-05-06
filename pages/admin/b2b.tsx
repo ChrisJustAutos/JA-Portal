@@ -248,9 +248,10 @@ export default function B2BAdminPage({ user }: Props) {
               ready
             />
             <QuickLinkCard
-              href="#"
+              href="/admin/b2b/distributors"
               title="Distributors"
-              subtitle="Coming next — accounts and magic-link invites"
+              subtitle="Create accounts · link MYOB customers · invite users"
+              ready
             />
             <QuickLinkCard
               href="#"
