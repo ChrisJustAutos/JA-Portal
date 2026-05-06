@@ -71,7 +71,7 @@ export default function B2BLayout({ user, active = null, children, cartCount }: 
         <nav style={{display:'flex',gap:4,marginLeft:16}}>
           <NavLink href="/b2b/catalogue" active={active === 'catalogue'}>Catalogue</NavLink>
           <NavLink href="/b2b/cart"      active={active === 'cart'} badge={cartCount}>Cart</NavLink>
-          <NavLink href="/b2b/orders"    active={active === 'orders'} disabled>Orders</NavLink>
+          <NavLink href="/b2b/orders"    active={active === 'orders'}>Orders</NavLink>
         </nav>
 
         <div style={{marginLeft:'auto',display:'flex',alignItems:'center',gap:14}}>
@@ -93,7 +93,6 @@ export default function B2BLayout({ user, active = null, children, cartCount }: 
         </div>
       </header>
 
-      {/* Page content */}
       <main style={{maxWidth:1280,margin:'0 auto',padding:'24px 24px 60px'}}>
         {children}
       </main>

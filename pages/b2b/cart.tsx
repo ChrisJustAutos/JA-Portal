@@ -3,10 +3,15 @@
 // Distributor cart page. Lists all current cart lines with qty steppers,
 // remove buttons, and a totals panel showing subtotal/GST/card-fee/total.
 //
-// Checkout button is present but disabled until chunk 3b adds the Stripe flow.
+// Checkout flow:
+//   - "Checkout" POSTs to /api/b2b/checkout/start
+//   - On success, redirects browser to the returned Stripe URL
+//   - On Stripe cancel, user lands back here with ?cancelled={order_id}
+//     and we show a small "checkout cancelled" banner
 
 import { useEffect, useState } from 'react'
 import Head from 'next/head'
+import { useRouter } from 'next/router'
 import type { GetServerSideProps } from 'next'
 import B2BLayout from '../../components/b2b/B2BLayout'
 import { requireB2BPageAuth } from '../../lib/b2bAuthServer'
@@ -65,10 +70,16 @@ interface CartResponse {
 }
 
 export default function B2BCartPage({ b2bUser }: Props) {
+  const router = useRouter()
   const [data, setData] = useState<CartResponse | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [busyLineId, setBusyLineId] = useState<string | null>(null)
+  const [checkoutBusy, setCheckoutBusy] = useState(false)
+  const [checkoutError, setCheckoutError] = useState<string | null>(null)
+  const [checkoutIssues, setCheckoutIssues] = useState<string[] | null>(null)
+
+  const cancelledOrderId = router.query.cancelled ? String(router.query.cancelled) : null
 
   async function load() {
     setLoading(true)
@@ -98,7 +109,6 @@ export default function B2BCartPage({ b2bUser }: Props) {
       })
       const j = await r.json()
       if (!r.ok) throw new Error(j?.error || `HTTP ${r.status}`)
-      // Re-fetch to get recomputed totals
       await load()
     } catch (e: any) {
       alert(e?.message || 'Could not update cart')
@@ -125,6 +135,33 @@ export default function B2BCartPage({ b2bUser }: Props) {
     }
   }
 
+  async function startCheckout() {
+    setCheckoutBusy(true)
+    setCheckoutError(null)
+    setCheckoutIssues(null)
+    try {
+      const r = await fetch('/api/b2b/checkout/start', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: '{}',
+      })
+      const j = await r.json()
+      if (!r.ok) {
+        if (j?.details && Array.isArray(j.details) && j.details.length > 0) {
+          setCheckoutIssues(j.details)
+        }
+        throw new Error(j?.error || `HTTP ${r.status}`)
+      }
+      if (!j?.checkout_url) throw new Error('No checkout URL returned')
+      // Hard redirect to Stripe
+      window.location.href = j.checkout_url
+    } catch (e: any) {
+      setCheckoutError(e?.message || String(e))
+      setCheckoutBusy(false)
+    }
+  }
+
   const cartItemCount = data ? data.item_count : 0
   const isEmpty = !data || data.lines.length === 0
 
@@ -142,9 +179,30 @@ export default function B2BCartPage({ b2bUser }: Props) {
           )}
         </header>
 
+        {/* Stripe-cancelled banner */}
+        {cancelledOrderId && (
+          <div style={{padding:'12px 16px',background:`${T.amber}15`,border:`1px solid ${T.amber}40`,borderRadius:7,fontSize:12,color:T.text,marginBottom:14,display:'flex',alignItems:'center',justifyContent:'space-between',gap:14}}>
+            <span>Checkout cancelled. Your cart has been saved — you can try again whenever you're ready.</span>
+            <button
+              onClick={() => router.replace('/b2b/cart', undefined, { shallow: true })}
+              style={{background:'transparent',border:'none',color:T.text3,cursor:'pointer',fontSize:14,fontFamily:'inherit'}}>×</button>
+          </div>
+        )}
+
         {error && (
           <div style={{padding:12,background:`${T.red}15`,border:`1px solid ${T.red}40`,borderRadius:7,color:T.red,fontSize:12,marginBottom:14}}>
             {error}
+          </div>
+        )}
+
+        {checkoutError && (
+          <div style={{padding:'12px 16px',background:`${T.red}15`,border:`1px solid ${T.red}40`,borderRadius:7,color:T.red,fontSize:12,marginBottom:14}}>
+            <div style={{fontWeight:500,marginBottom:4}}>{checkoutError}</div>
+            {checkoutIssues && checkoutIssues.length > 0 && (
+              <ul style={{margin:'4px 0 0',paddingLeft:18,color:T.text2}}>
+                {checkoutIssues.map((iss, i) => <li key={i}>{iss}</li>)}
+              </ul>
+            )}
           </div>
         )}
 
@@ -158,11 +216,7 @@ export default function B2BCartPage({ b2bUser }: Props) {
           <div style={{padding:36,textAlign:'center',background:T.bg2,border:`1px solid ${T.border}`,borderRadius:10}}>
             <div style={{fontSize:14,color:T.text2,marginBottom:14}}>Your cart is empty.</div>
             <a href="/b2b/catalogue"
-              style={{
-                display:'inline-block',padding:'9px 18px',borderRadius:6,
-                border:`1px solid ${T.blue}`,background:T.blue,color:'#fff',
-                fontSize:12,fontWeight:500,textDecoration:'none',
-              }}>
+              style={{display:'inline-block',padding:'9px 18px',borderRadius:6,border:`1px solid ${T.blue}`,background:T.blue,color:'#fff',fontSize:12,fontWeight:500,textDecoration:'none'}}>
               Browse catalogue
             </a>
           </div>
@@ -186,7 +240,12 @@ export default function B2BCartPage({ b2bUser }: Props) {
             </div>
 
             {/* Totals panel */}
-            <TotalsPanel totals={data.totals} cardFeeNote={data.card_fee.note}/>
+            <TotalsPanel
+              totals={data.totals}
+              cardFeeNote={data.card_fee.note}
+              onCheckout={startCheckout}
+              checkoutBusy={checkoutBusy}
+            />
 
           </div>
         )}
@@ -215,7 +274,6 @@ function CartLineRow({
       opacity: busy ? 0.6 : 1,
       pointerEvents: busy ? 'none' : 'auto',
     }}>
-      {/* Image */}
       <div style={{
         width:74,height:74,flexShrink:0,
         borderRadius:6,background:'#fff',overflow:'hidden',
@@ -224,21 +282,17 @@ function CartLineRow({
         {line.image_url ? (
           <img src={line.image_url} alt={line.name}
             style={{maxWidth:'100%',maxHeight:'100%',objectFit:'contain'}}
-            onError={e => { (e.target as HTMLImageElement).style.display = 'none' }}
-          />
+            onError={e => { (e.target as HTMLImageElement).style.display = 'none' }}/>
         ) : (
           <span style={{fontSize:9,color:'#aaa',fontFamily:'monospace'}}>no image</span>
         )}
       </div>
 
-      {/* Title + warnings */}
       <div style={{flex:1,minWidth:0}}>
         <div style={{fontSize:9,color:T.text3,fontFamily:'monospace',textTransform:'uppercase',letterSpacing:'0.04em'}}>{line.sku}</div>
         <div style={{fontSize:13,color:T.text,fontWeight:500,marginTop:2}}>{line.name}</div>
         <div style={{display:'flex',alignItems:'center',gap:10,flexWrap:'wrap',marginTop:5}}>
-          <span style={{fontSize:11,color:T.text3}}>
-            ${line.unit_price_ex_gst.toFixed(2)} ex GST · each
-          </span>
+          <span style={{fontSize:11,color:T.text3}}>${line.unit_price_ex_gst.toFixed(2)} ex GST · each</span>
           <span style={{
             display:'inline-block',padding:'1px 7px',borderRadius:8,fontSize:9,fontWeight:500,
             background:`${stockColor}18`,color:stockColor,
@@ -249,21 +303,13 @@ function CartLineRow({
                 ? `Low · ${line.stock_qty_available} left`
                 : 'In stock'}
           </span>
-          {!line.currently_visible && (
-            <span style={{fontSize:10,color:T.amber}}>⚠ no longer in catalogue</span>
-          )}
-          {line.price_changed && (
-            <span style={{fontSize:10,color:T.amber}}>⚠ price changed since added</span>
-          )}
+          {!line.currently_visible && <span style={{fontSize:10,color:T.amber}}>⚠ no longer in catalogue</span>}
+          {line.price_changed && <span style={{fontSize:10,color:T.amber}}>⚠ price changed since added</span>}
         </div>
       </div>
 
-      {/* Qty + line total + remove */}
       <div style={{display:'flex',flexDirection:'column',alignItems:'flex-end',gap:6,minWidth:120}}>
-        <div style={{
-          display:'flex',alignItems:'center',
-          border:`1px solid ${T.border2}`,borderRadius:6,background:T.bg3,
-        }}>
+        <div style={{display:'flex',alignItems:'center',border:`1px solid ${T.border2}`,borderRadius:6,background:T.bg3}}>
           <button onClick={() => onChangeQty(line.qty - 1)} style={qtyBtn()}>−</button>
           <input
             type="number" value={line.qty} min={0}
@@ -277,13 +323,10 @@ function CartLineRow({
               background:'transparent',border:'none',color:T.text,
               fontSize:13,outline:'none',fontFamily:'inherit',padding:'6px 0',
               MozAppearance:'textfield' as any,
-            }}
-          />
+            }}/>
           <button onClick={() => onChangeQty(line.qty + 1)}
             disabled={line.stock_qty_available != null && line.qty >= line.stock_qty_available}
-            style={qtyBtn(line.stock_qty_available != null && line.qty >= line.stock_qty_available)}>
-            +
-          </button>
+            style={qtyBtn(line.stock_qty_available != null && line.qty >= line.stock_qty_available)}>+</button>
         </div>
         <div style={{fontSize:13,color:T.text,fontWeight:600,fontVariantNumeric:'tabular-nums'}}>
           ${line.line_subtotal_ex_gst.toFixed(2)}
@@ -306,7 +349,15 @@ function qtyBtn(disabled?: boolean): React.CSSProperties {
 }
 
 // ─── Totals panel ──────────────────────────────────────────────────────
-function TotalsPanel({ totals, cardFeeNote }: { totals: CartTotals; cardFeeNote: string }) {
+function TotalsPanel({
+  totals, cardFeeNote, onCheckout, checkoutBusy,
+}: {
+  totals: CartTotals
+  cardFeeNote: string
+  onCheckout: () => void
+  checkoutBusy: boolean
+}) {
+  const canCheckout = totals.total_inc > 0
   return (
     <div style={{
       background:T.bg2,border:`1px solid ${T.border}`,borderRadius:10,
@@ -316,8 +367,8 @@ function TotalsPanel({ totals, cardFeeNote }: { totals: CartTotals; cardFeeNote:
         Order summary
       </div>
 
-      <Row label="Subtotal (ex GST)" value={`$${totals.subtotal_ex_gst.toFixed(2)}`}/>
-      <Row label="GST"               value={`$${totals.gst.toFixed(2)}`}/>
+      <Row label="Subtotal (ex GST)"  value={`$${totals.subtotal_ex_gst.toFixed(2)}`}/>
+      <Row label="GST"                value={`$${totals.gst.toFixed(2)}`}/>
       <Row label="Subtotal (inc GST)" value={`$${totals.subtotal_inc_gst.toFixed(2)}`} bold/>
 
       <div style={{height:10}}/>
@@ -331,19 +382,21 @@ function TotalsPanel({ totals, cardFeeNote }: { totals: CartTotals; cardFeeNote:
       <Row label="Total to pay" value={`$${totals.total_inc.toFixed(2)}`} large/>
 
       <button
-        disabled
-        title="Checkout will be enabled when the Stripe integration ships in the next deploy."
+        onClick={onCheckout}
+        disabled={!canCheckout || checkoutBusy}
         style={{
           width:'100%',padding:'12px 16px',borderRadius:7,marginTop:14,
-          border:`1px solid ${T.border2}`,
-          background: T.bg3, color: T.text3,
+          border:`1px solid ${canCheckout ? T.blue : T.border2}`,
+          background: canCheckout && !checkoutBusy ? T.blue : T.bg3,
+          color: canCheckout && !checkoutBusy ? '#fff' : T.text3,
           fontSize:13,fontWeight:600,
-          cursor:'not-allowed',fontFamily:'inherit',
+          cursor: canCheckout && !checkoutBusy ? 'pointer' : 'not-allowed',
+          fontFamily:'inherit',
         }}>
-        Checkout (coming soon)
+        {checkoutBusy ? 'Connecting to Stripe…' : 'Checkout'}
       </button>
       <div style={{fontSize:10,color:T.text3,marginTop:8,textAlign:'center',lineHeight:1.5}}>
-        Stripe checkout will be enabled in the next portal update.
+        You'll be redirected to Stripe to enter card details.
       </div>
     </div>
   )
@@ -352,8 +405,7 @@ function TotalsPanel({ totals, cardFeeNote }: { totals: CartTotals; cardFeeNote:
 function Row({ label, value, bold, muted, large }: { label: string; value: string; bold?: boolean; muted?: boolean; large?: boolean }) {
   return (
     <div style={{
-      display:'flex',justifyContent:'space-between',alignItems:'baseline',
-      padding:'4px 0',
+      display:'flex',justifyContent:'space-between',alignItems:'baseline',padding:'4px 0',
       fontSize: large ? 14 : 12,
       color: muted ? T.text3 : T.text2,
       fontWeight: bold || large ? 600 : 400,
