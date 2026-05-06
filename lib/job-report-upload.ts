@@ -65,6 +65,7 @@ export async function ingestJobReport(input: IngestJobReportInput): Promise<Inge
     row_count: parsed.jobs.length,
     notes: input.notes || null,
     is_current: false,
+    warnings: parsed.warnings,
   }).select().single()
   if (runErr || !run) throw new Error(`Failed to create run: ${runErr?.message || 'unknown'}`)
 
