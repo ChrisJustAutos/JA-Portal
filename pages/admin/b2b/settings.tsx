@@ -196,6 +196,28 @@ export default function B2BSettingsPage({ user }: Props) {
 
           {data && (
             <>
+              {/* ─── Models ─── */}
+              <Section title="Models"
+                description="Vehicle models (or other primary attribute) used to group products on the distributor catalogue.">
+                <TaxonomyEditor
+                  endpoint="/api/b2b/admin/models"
+                  collectionKey="models"
+                  itemKey="model"
+                  itemLabel="model"
+                />
+              </Section>
+
+              {/* ─── Product Types ─── */}
+              <Section title="Product Types"
+                description="Product categories (e.g. Brake disc, CV axle) used to group products on the distributor catalogue.">
+                <TaxonomyEditor
+                  endpoint="/api/b2b/admin/product-types"
+                  collectionKey="product_types"
+                  itemKey="product_type"
+                  itemLabel="product type"
+                />
+              </Section>
+
               {/* ─── Invoice numbering ─── */}
               <Section title="MYOB Invoice Numbering"
                 description="Each B2B order writes a Sale.Invoice to MYOB JAWS. The invoice number is portal-controlled (prefix + zero-padded sequence). MYOB caps the field at 13 characters total.">
@@ -455,6 +477,231 @@ function primaryBtn(enabled: boolean): React.CSSProperties {
     cursor: enabled ? 'pointer' : 'not-allowed',
     fontFamily:'inherit',
   }
+}
+
+// ─── Taxonomy editor (shared by Models + Product Types) ──────────────────
+interface TaxonomyItem {
+  id: string
+  name: string
+  sort_order: number
+  is_active: boolean
+  usage_count: number
+}
+
+function TaxonomyEditor({
+  endpoint, collectionKey, itemKey, itemLabel,
+}: {
+  endpoint: string
+  collectionKey: string   // 'models' | 'product_types'
+  itemKey: string         // 'model' | 'product_type'
+  itemLabel: string       // 'model' | 'product type'
+}) {
+  const [items, setItems] = useState<TaxonomyItem[] | null>(null)
+  const [loadErr, setLoadErr] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [actionErr, setActionErr] = useState<string | null>(null)
+  const [newName, setNewName] = useState('')
+
+  async function load() {
+    setLoadErr(null)
+    try {
+      const r = await fetch(endpoint, { credentials: 'same-origin' })
+      const j = await r.json()
+      if (!r.ok) throw new Error(j?.error || `HTTP ${r.status}`)
+      setItems(j[collectionKey] || [])
+    } catch (e: any) {
+      setLoadErr(e?.message || String(e))
+    }
+  }
+  useEffect(() => { load() }, [])
+
+  async function create() {
+    const name = newName.trim()
+    if (!name) return
+    setBusy(true); setActionErr(null)
+    try {
+      const r = await fetch(endpoint, {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name }),
+      })
+      const j = await r.json()
+      if (!r.ok) throw new Error(j?.error || `HTTP ${r.status}`)
+      setNewName('')
+      await load()
+    } catch (e: any) {
+      setActionErr(e?.message || String(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function patch(id: string, body: Record<string, any>) {
+    setBusy(true); setActionErr(null)
+    try {
+      const r = await fetch(`${endpoint}/${id}`, {
+        method: 'PATCH',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+      const j = await r.json()
+      if (!r.ok) throw new Error(j?.error || `HTTP ${r.status}`)
+      await load()
+    } catch (e: any) {
+      setActionErr(e?.message || String(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function remove(item: TaxonomyItem) {
+    const noun = `"${item.name}"`
+    const msg = item.usage_count > 0
+      ? `Delete ${itemLabel} ${noun}? It is currently linked to ${item.usage_count} product(s) — they will be un-tagged.`
+      : `Delete ${itemLabel} ${noun}?`
+    if (!confirm(msg)) return
+    setBusy(true); setActionErr(null)
+    try {
+      const r = await fetch(`${endpoint}/${item.id}`, { method: 'DELETE', credentials: 'same-origin' })
+      const j = await r.json().catch(() => ({}))
+      if (!r.ok) throw new Error(j?.error || `HTTP ${r.status}`)
+      await load()
+    } catch (e: any) {
+      setActionErr(e?.message || String(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  if (loadErr) {
+    return <div style={{padding:8,color:T.red,fontSize:12}}>Couldn't load: {loadErr}</div>
+  }
+  if (!items) {
+    return <div style={{padding:8,color:T.text3,fontSize:12}}>Loading…</div>
+  }
+
+  return (
+    <div>
+      {actionErr && (
+        <div style={{padding:8,marginBottom:10,background:`${T.red}15`,border:`1px solid ${T.red}40`,borderRadius:6,color:T.red,fontSize:12}}>
+          {actionErr}
+        </div>
+      )}
+
+      {items.length === 0 ? (
+        <div style={{padding:'12px 0',color:T.text3,fontSize:13}}>No {itemLabel}s yet — add one below.</div>
+      ) : (
+        <div style={{display:'flex',flexDirection:'column',gap:1,marginBottom:14,background:T.border,borderRadius:6,overflow:'hidden'}}>
+          {items.map(item => (
+            <TaxonomyRow key={item.id} item={item} busy={busy}
+              onRename={(name) => patch(item.id, { name })}
+              onToggleActive={() => patch(item.id, { is_active: !item.is_active })}
+              onDelete={() => remove(item)} />
+          ))}
+        </div>
+      )}
+
+      <div style={{display:'flex',gap:8}}>
+        <input
+          type="text"
+          value={newName}
+          onChange={e => setNewName(e.target.value)}
+          onKeyDown={e => { if (e.key === 'Enter') create() }}
+          placeholder={`Add a ${itemLabel}…`}
+          maxLength={80}
+          disabled={busy}
+          style={{...inputStyle(), flex:1}}
+        />
+        <button
+          onClick={create}
+          disabled={busy || !newName.trim()}
+          style={primaryBtn(!busy && !!newName.trim())}>
+          Add
+        </button>
+      </div>
+    </div>
+  )
+}
+
+function TaxonomyRow({ item, busy, onRename, onToggleActive, onDelete }: {
+  item: TaxonomyItem
+  busy: boolean
+  onRename: (name: string) => void
+  onToggleActive: () => void
+  onDelete: () => void
+}) {
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState(item.name)
+  useEffect(() => { setDraft(item.name) }, [item.name])
+
+  function commit() {
+    const v = draft.trim()
+    if (!v || v === item.name) { setEditing(false); setDraft(item.name); return }
+    onRename(v)
+    setEditing(false)
+  }
+
+  return (
+    <div style={{
+      display:'flex',alignItems:'center',gap:10,padding:'10px 12px',
+      background:T.bg2,opacity: item.is_active ? 1 : 0.55,
+    }}>
+      <div style={{flex:1,minWidth:0}}>
+        {editing ? (
+          <input
+            type="text"
+            value={draft}
+            autoFocus
+            onChange={e => setDraft(e.target.value)}
+            onBlur={commit}
+            onKeyDown={e => {
+              if (e.key === 'Enter') commit()
+              if (e.key === 'Escape') { setDraft(item.name); setEditing(false) }
+            }}
+            style={{...inputStyle(), padding:'4px 8px', fontSize:13}}
+          />
+        ) : (
+          <button
+            onClick={() => setEditing(true)}
+            style={{
+              background:'transparent',border:'none',color:T.text,fontSize:13,
+              padding:0,cursor:'pointer',fontFamily:'inherit',textAlign:'left',
+              maxWidth:'100%',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',
+            }}>
+            {item.name}
+          </button>
+        )}
+      </div>
+      <div style={{fontSize:11,color:T.text3,fontFamily:'monospace',whiteSpace:'nowrap'}}>
+        {item.usage_count} product{item.usage_count === 1 ? '' : 's'}
+      </div>
+      <button
+        onClick={onToggleActive}
+        disabled={busy}
+        title={item.is_active ? 'Deactivate (hide from distributors)' : 'Reactivate'}
+        style={{
+          padding:'4px 10px',borderRadius:4,
+          border:`1px solid ${item.is_active ? T.green : T.border2}`,
+          background:'transparent',
+          color: item.is_active ? T.green : T.text3,
+          fontSize:11,fontFamily:'inherit',cursor:'pointer',whiteSpace:'nowrap',
+        }}>
+        {item.is_active ? 'Active' : 'Inactive'}
+      </button>
+      <button
+        onClick={onDelete}
+        disabled={busy}
+        title="Delete"
+        style={{
+          background:'transparent',border:'none',color:T.text3,
+          fontSize:16,cursor:'pointer',padding:'0 4px',
+        }}>
+        ×
+      </button>
+    </div>
+  )
 }
 
 function DiagRow({ label, status, value }: { label: string; status: 'ok'|'pending'|'missing'; value: string }) {

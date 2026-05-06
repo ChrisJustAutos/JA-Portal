@@ -23,6 +23,11 @@ function sb(): SupabaseClient {
   return _sb
 }
 
+interface TaxonomyRef {
+  id: string
+  name: string
+}
+
 interface PublicCatalogueItem {
   id: string
   sku: string
@@ -32,7 +37,8 @@ interface PublicCatalogueItem {
   rrp_ex_gst: number | null
   is_taxable: boolean
   primary_image_url: string | null
-  category_id: string | null
+  model: TaxonomyRef | null
+  product_type: TaxonomyRef | null
   stock: {
     state: StockState
     qty_available: number | null  // null = unlimited
@@ -54,7 +60,9 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, _us
     .select(`
       id, myob_item_uid, sku, name, description,
       trade_price_ex_gst, rrp_ex_gst, is_taxable,
-      primary_image_url, category_id
+      primary_image_url,
+      model:b2b_models!b2b_catalogue_model_id_fkey ( id, name ),
+      product_type:b2b_product_types!b2b_catalogue_product_type_id_fkey ( id, name )
     `)
     .eq('b2b_visible', true)
     .order('name', { ascending: true })
@@ -76,6 +84,11 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, _us
     console.error('Stock fetch failed:', stockError)
   }
 
+  const pickRef = (raw: any): TaxonomyRef | null => {
+    const r = Array.isArray(raw) ? raw[0] : raw
+    return r && r.id ? { id: r.id, name: r.name } : null
+  }
+
   const out: PublicCatalogueItem[] = items.map((it: any) => {
     const s = it.myob_item_uid ? stockMap[it.myob_item_uid] : null
     return {
@@ -87,7 +100,8 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, _us
       rrp_ex_gst:         it.rrp_ex_gst != null ? Number(it.rrp_ex_gst) : null,
       is_taxable:         it.is_taxable !== false,
       primary_image_url:  it.primary_image_url,
-      category_id:        it.category_id,
+      model:              pickRef(it.model),
+      product_type:       pickRef(it.product_type),
       stock: {
         state:          stockState(s),
         qty_available:  s ? (s.isInventoried ? s.qtyAvailable : null) : null,

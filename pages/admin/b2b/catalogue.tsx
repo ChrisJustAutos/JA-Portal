@@ -40,7 +40,8 @@ interface CatalogueItem {
   sku: string
   name: string
   description: string | null
-  category_id: string | null
+  model_id: string | null
+  product_type_id: string | null
   trade_price_ex_gst: number
   rrp_ex_gst: number | null
   is_taxable: boolean
@@ -49,6 +50,12 @@ interface CatalogueItem {
   last_synced_from_myob_at: string | null
   created_at: string
   updated_at: string
+}
+
+interface TaxonomyOption {
+  id: string
+  name: string
+  is_active: boolean
 }
 
 type VisibilityFilter = 'all' | 'visible' | 'hidden'
@@ -81,6 +88,8 @@ function fileExt(file: File): string {
 // ─── Page ───────────────────────────────────────────────────────────────
 export default function CatalogueAdminPage({ user }: Props) {
   const [items, setItems] = useState<CatalogueItem[]>([])
+  const [models, setModels] = useState<TaxonomyOption[]>([])
+  const [productTypes, setProductTypes] = useState<TaxonomyOption[]>([])
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [search, setSearch] = useState('')
@@ -90,10 +99,20 @@ export default function CatalogueAdminPage({ user }: Props) {
   async function load() {
     setLoading(true)
     try {
-      const r = await fetch('/api/b2b/admin/catalogue', { credentials: 'same-origin' })
-      if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text()}`)
-      const j = await r.json()
-      setItems(j.items || [])
+      const [itemsRes, modelsRes, typesRes] = await Promise.all([
+        fetch('/api/b2b/admin/catalogue',     { credentials: 'same-origin' }),
+        fetch('/api/b2b/admin/models',        { credentials: 'same-origin' }),
+        fetch('/api/b2b/admin/product-types', { credentials: 'same-origin' }),
+      ])
+      if (!itemsRes.ok)  throw new Error(`Catalogue HTTP ${itemsRes.status}: ${await itemsRes.text()}`)
+      if (!modelsRes.ok) throw new Error(`Models HTTP ${modelsRes.status}`)
+      if (!typesRes.ok)  throw new Error(`Product types HTTP ${typesRes.status}`)
+      const itemsJson  = await itemsRes.json()
+      const modelsJson = await modelsRes.json()
+      const typesJson  = await typesRes.json()
+      setItems(itemsJson.items || [])
+      setModels((modelsJson.models || []).map((m: any) => ({ id: m.id, name: m.name, is_active: m.is_active })))
+      setProductTypes((typesJson.product_types || []).map((t: any) => ({ id: t.id, name: t.name, is_active: t.is_active })))
       setLoadError(null)
     } catch (e: any) {
       setLoadError(e?.message || String(e))
@@ -244,6 +263,8 @@ export default function CatalogueAdminPage({ user }: Props) {
         {drawerItem && (
           <EditDrawer
             item={drawerItem}
+            models={models}
+            productTypes={productTypes}
             onClose={() => setDrawerItemId(null)}
             onPatch={patchLocalItem}
           />
@@ -397,9 +418,11 @@ function CatalogueRow({
 
 // ─── Drawer ─────────────────────────────────────────────────────────────
 function EditDrawer({
-  item, onClose, onPatch,
+  item, models, productTypes, onClose, onPatch,
 }: {
   item: CatalogueItem
+  models: TaxonomyOption[]
+  productTypes: TaxonomyOption[]
   onClose: () => void
   onPatch: (id: string, patch: Partial<CatalogueItem>) => void
 }) {
@@ -624,6 +647,26 @@ function EditDrawer({
             )}
           </Section>
 
+          {/* Tags (model + product type) */}
+          <Section title="Tags" subtitle="Used to group products on the distributor catalogue">
+            <TaxonomySelect
+              label="Model"
+              value={item.model_id}
+              options={models}
+              onChange={async (v) => { try { await patch({ model_id: v }) } catch {} }}
+            />
+            <div style={{height:10}}/>
+            <TaxonomySelect
+              label="Product type"
+              value={item.product_type_id}
+              options={productTypes}
+              onChange={async (v) => { try { await patch({ product_type_id: v }) } catch {} }}
+            />
+            <div style={{fontSize:10,color:T.text3,marginTop:6}}>
+              Manage the available options under <a href="/admin/b2b/settings" style={{color:T.text2}}>B2B Settings</a>.
+            </div>
+          </Section>
+
           {/* Read-only MYOB info */}
           <Section title="From MYOB" subtitle="Refreshed on every catalogue sync">
             <KV label="MYOB UID"      value={item.myob_item_uid || '—'} mono/>
@@ -703,6 +746,37 @@ function Section({ title, subtitle, children }: { title: string; subtitle?: stri
       </div>
       {children}
     </div>
+  )
+}
+
+function TaxonomySelect({
+  label, value, options, onChange,
+}: {
+  label: string
+  value: string | null
+  options: TaxonomyOption[]
+  onChange: (v: string | null) => void
+}) {
+  // Show inactive options only if currently selected (so the value is preserved
+  // visually); otherwise hide them from the picker.
+  const visible = options.filter(o => o.is_active || o.id === value)
+  return (
+    <label style={{display:'flex',flexDirection:'column',gap:4}}>
+      <span style={{fontSize:11,color:T.text2,fontWeight:500}}>{label}</span>
+      <select
+        value={value || ''}
+        onChange={e => onChange(e.target.value || null)}
+        style={{
+          background:T.bg3,border:`1px solid ${T.border2}`,color:T.text,
+          borderRadius:5,padding:'8px 10px',fontSize:13,outline:'none',
+          fontFamily:'inherit',width:'100%',
+        }}>
+        <option value="">— None —</option>
+        {visible.map(o => (
+          <option key={o.id} value={o.id}>{o.name}{!o.is_active ? ' (inactive)' : ''}</option>
+        ))}
+      </select>
+    </label>
   )
 }
 

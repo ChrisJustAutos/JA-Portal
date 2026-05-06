@@ -6,7 +6,8 @@
 //   - b2b_visible          boolean
 //   - description          string | null
 //   - primary_image_url    string | null
-//   - category_id          uuid | null
+//   - model_id             uuid | null
+//   - product_type_id      uuid | null
 //
 // MYOB-canonical fields (sku, name, rrp_ex_gst, is_taxable) are NOT editable
 // here — they get refreshed from MYOB on every sync.
@@ -32,7 +33,8 @@ const EDITABLE_FIELDS = [
   'b2b_visible',
   'description',
   'primary_image_url',
-  'category_id',
+  'model_id',
+  'product_type_id',
 ] as const
 
 type EditableField = typeof EDITABLE_FIELDS[number]
@@ -80,8 +82,11 @@ export default withAuth('edit:b2b_catalogue', async (req: NextApiRequest, res: N
   if ('primary_image_url' in update && update.primary_image_url !== null && typeof update.primary_image_url !== 'string') {
     return res.status(400).json({ error: 'primary_image_url must be string or null' })
   }
-  if ('category_id' in update && update.category_id !== null && typeof update.category_id !== 'string') {
-    return res.status(400).json({ error: 'category_id must be uuid string or null' })
+  if ('model_id' in update && update.model_id !== null && typeof update.model_id !== 'string') {
+    return res.status(400).json({ error: 'model_id must be uuid string or null' })
+  }
+  if ('product_type_id' in update && update.product_type_id !== null && typeof update.product_type_id !== 'string') {
+    return res.status(400).json({ error: 'product_type_id must be uuid string or null' })
   }
 
   const c = sb()

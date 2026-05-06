@@ -30,6 +30,11 @@ interface Props {
   }
 }
 
+interface TaxonomyRef {
+  id: string
+  name: string
+}
+
 interface CatalogueItem {
   id: string
   sku: string
@@ -39,13 +44,16 @@ interface CatalogueItem {
   rrp_ex_gst: number | null
   is_taxable: boolean
   primary_image_url: string | null
-  category_id: string | null
+  model: TaxonomyRef | null
+  product_type: TaxonomyRef | null
   stock: {
     state: 'in_stock' | 'low_stock' | 'out_of_stock'
     qty_available: number | null
     is_inventoried: boolean
   }
 }
+
+type GroupBy = 'none' | 'model' | 'product_type'
 
 interface CartLine {
   id: string
@@ -60,6 +68,7 @@ export default function B2BCataloguePage({ b2bUser }: Props) {
   const [error, setError] = useState<string | null>(null)
   const [stockError, setStockError] = useState<string | null>(null)
   const [search, setSearch] = useState('')
+  const [groupBy, setGroupBy] = useState<GroupBy>('none')
 
   async function loadAll() {
     setLoading(true)
@@ -109,6 +118,25 @@ export default function B2BCataloguePage({ b2bUser }: Props) {
       (i.description || '').toLowerCase().includes(q),
     )
   }, [items, search])
+
+  const grouped = useMemo(() => {
+    if (groupBy === 'none') return null
+    const groups = new Map<string, { key: string; label: string; items: CatalogueItem[] }>()
+    const UNCAT = '__uncategorised__'
+    for (const it of filtered) {
+      const ref = groupBy === 'model' ? it.model : it.product_type
+      const key = ref?.id || UNCAT
+      const label = ref?.name || (groupBy === 'model' ? 'Other models' : 'Other')
+      if (!groups.has(key)) groups.set(key, { key, label, items: [] })
+      groups.get(key)!.items.push(it)
+    }
+    // Sort: named groups by label asc, "Other"/uncategorised last
+    return Array.from(groups.values()).sort((a, b) => {
+      if (a.key === UNCAT) return 1
+      if (b.key === UNCAT) return -1
+      return a.label.localeCompare(b.label)
+    })
+  }, [filtered, groupBy])
 
   async function setQty(catalogueId: string, qty: number) {
     // Optimistic update
@@ -161,7 +189,7 @@ export default function B2BCataloguePage({ b2bUser }: Props) {
               Browse products and add to cart. Pricing is ex GST.
             </div>
           </div>
-          <div style={{display:'flex',gap:10,alignItems:'center'}}>
+          <div style={{display:'flex',gap:10,alignItems:'center',flexWrap:'wrap'}}>
             <input
               type="text"
               placeholder="Search by name or SKU…"
@@ -173,6 +201,21 @@ export default function B2BCataloguePage({ b2bUser }: Props) {
                 borderRadius:6,padding:'8px 12px',fontSize:13,outline:'none',fontFamily:'inherit',
               }}
             />
+            <div style={{display:'flex',alignItems:'center',gap:6}}>
+              <span style={{fontSize:12,color:T.text3}}>Group by</span>
+              <select
+                value={groupBy}
+                onChange={e => setGroupBy(e.target.value as GroupBy)}
+                style={{
+                  background:T.bg2,border:`1px solid ${T.border2}`,color:T.text,
+                  borderRadius:6,padding:'7px 10px',fontSize:12,outline:'none',fontFamily:'inherit',
+                  cursor:'pointer',
+                }}>
+                <option value="none">None</option>
+                <option value="model">Model</option>
+                <option value="product_type">Product type</option>
+              </select>
+            </div>
             <button onClick={loadAll} disabled={loading}
               style={{padding:'7px 12px',borderRadius:5,border:`1px solid ${T.border2}`,background:'transparent',color:T.text2,fontSize:12,cursor:loading?'wait':'pointer',fontFamily:'inherit'}}>
               {loading ? '…' : '↻'}
@@ -198,21 +241,55 @@ export default function B2BCataloguePage({ b2bUser }: Props) {
           </div>
         )}
 
-        {/* Card grid */}
-        <div style={{
-          display:'grid',
-          gridTemplateColumns:'repeat(auto-fill, minmax(240px, 1fr))',
-          gap:14,
-        }}>
-          {filtered.map(item => (
-            <CatalogueCard
-              key={item.id}
-              item={item}
-              qtyInCart={cartByCatalogueId[item.id] || 0}
-              onSetQty={qty => setQty(item.id, qty)}
-            />
-          ))}
-        </div>
+        {/* Card grid (flat or grouped) */}
+        {grouped ? (
+          <div style={{display:'flex',flexDirection:'column',gap:24}}>
+            {grouped.map(g => (
+              <section key={g.key}>
+                <h2 style={{
+                  fontSize:13,fontWeight:600,margin:'0 0 10px',color:T.text2,
+                  textTransform:'uppercase',letterSpacing:'0.06em',
+                  paddingBottom:6,borderBottom:`1px solid ${T.border2}`,
+                  display:'flex',justifyContent:'space-between',alignItems:'baseline',gap:8,
+                }}>
+                  <span>{g.label}</span>
+                  <span style={{fontSize:11,color:T.text3,fontWeight:400,letterSpacing:'normal',textTransform:'none'}}>
+                    {g.items.length} item{g.items.length === 1 ? '' : 's'}
+                  </span>
+                </h2>
+                <div style={{
+                  display:'grid',
+                  gridTemplateColumns:'repeat(auto-fill, minmax(240px, 1fr))',
+                  gap:14,
+                }}>
+                  {g.items.map(item => (
+                    <CatalogueCard
+                      key={item.id}
+                      item={item}
+                      qtyInCart={cartByCatalogueId[item.id] || 0}
+                      onSetQty={qty => setQty(item.id, qty)}
+                    />
+                  ))}
+                </div>
+              </section>
+            ))}
+          </div>
+        ) : (
+          <div style={{
+            display:'grid',
+            gridTemplateColumns:'repeat(auto-fill, minmax(240px, 1fr))',
+            gap:14,
+          }}>
+            {filtered.map(item => (
+              <CatalogueCard
+                key={item.id}
+                item={item}
+                qtyInCart={cartByCatalogueId[item.id] || 0}
+                onSetQty={qty => setQty(item.id, qty)}
+              />
+            ))}
+          </div>
+        )}
 
       </B2BLayout>
     </>
