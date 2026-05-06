@@ -234,3 +234,193 @@ export async function writeOrderToMyob(orderId: string): Promise<MyobWriteResult
     status: 'created',
   }
 }
+
+// ─── Refund credit note ────────────────────────────────────────────────
+
+export interface MyobCreditNoteResult {
+  credit_note_uid: string
+  credit_note_number: string
+  amount: number          // positive — the refund value (credit note totals are negative)
+  shape: 'mirror_full' | 'single_line'
+}
+
+/**
+ * Creates a credit note (negative-amount Sale.Invoice) in MYOB JAWS to
+ * mirror a Stripe refund. Posts to /Sale/Invoice/Item rather than
+ * /Sale/Order so the credit hits the GL immediately and shows up under
+ * the customer's record in MYOB.
+ *
+ *   - Full refund (no prior refunds): mirrors all original lines with
+ *     negative quantities/totals — clean reversal that nets the original
+ *     order to zero on the customer ledger.
+ *   - Partial / additional refund: single line for the refund amount,
+ *     using the Bank Fees item with FRE tax. (Tax treatment is approximate
+ *     for partials — staff can refine the GST split manually if needed.)
+ *
+ * Numbering: pulls the next number from the same `b2b_next_myob_invoice_number`
+ * RPC used for orders. Each credit note consumes one slot in the sequence.
+ *
+ * Throws on failure. The caller (refund API) catches the throw and logs
+ * it as a non-fatal warning event — the Stripe refund stays valid even
+ * if the MYOB credit note fails (Stripe is the source of truth for cash).
+ */
+export async function writeRefundCreditNoteToMyob(
+  orderId: string,
+  refundAmount: number,
+  meta: { stripeRefundId?: string; reason?: string } = {},
+): Promise<MyobCreditNoteResult> {
+  const c = sb()
+
+  // Load order + lines + distributor + the surcharge value
+  const { data: order, error: oErr } = await c
+    .from('b2b_orders')
+    .select(`
+      id, order_number, customer_po,
+      total_inc, refunded_total, card_fee_inc,
+      stripe_payment_intent_id,
+      myob_invoice_number,
+      distributor:b2b_distributors!b2b_orders_distributor_id_fkey (
+        id, display_name, myob_primary_customer_uid
+      )
+    `)
+    .eq('id', orderId)
+    .maybeSingle()
+  if (oErr) throw new Error(`Order load failed: ${oErr.message}`)
+  if (!order) throw new Error(`Order ${orderId} not found`)
+
+  const dist: any = Array.isArray(order.distributor) ? order.distributor[0] : order.distributor
+  if (!dist?.myob_primary_customer_uid) {
+    throw new Error(`Distributor ${dist?.display_name || dist?.id} has no MYOB customer UID`)
+  }
+
+  const { data: lines, error: lErr } = await c
+    .from('b2b_order_lines')
+    .select('id, myob_item_uid, sku, name, qty, unit_trade_price_ex_gst, line_subtotal_ex_gst, line_gst, line_total_inc, is_taxable, sort_order')
+    .eq('order_id', orderId)
+    .order('sort_order', { ascending: true })
+  if (lErr) throw new Error(`Order lines load failed: ${lErr.message}`)
+  if (!lines || lines.length === 0) throw new Error(`Order ${orderId} has no lines`)
+
+  const cfg = await assertCheckoutConfigured()
+  const conn = await getConnection('JAWS')
+  if (!conn) throw new Error('JAWS MYOB connection not configured')
+
+  const totalInc      = round2(Number(order.total_inc || 0))
+  const cardFeeInc    = round2(Number(order.card_fee_inc || 0))
+  // refunded_total INCLUDES the current refund (caller has already updated it).
+  // Prior refunds = current refunded_total minus this refund amount.
+  const priorRefunded = round2(Number(order.refunded_total || 0)) - round2(refundAmount)
+  const isFullMirror  = Math.abs(refundAmount - totalInc) < 0.005 && Math.abs(priorRefunded) < 0.005
+
+  // Build the credit-note Lines
+  const myobLines: any[] = []
+  let subtotalEnv = 0
+  let totalTax    = 0
+
+  if (isFullMirror) {
+    for (const ln of lines) {
+      if (!ln.myob_item_uid) {
+        throw new Error(`Order line ${ln.sku} has no MYOB item UID — cannot mirror`)
+      }
+      const taxUid  = ln.is_taxable !== false ? cfg.gstTaxCodeUid : cfg.freTaxCodeUid
+      const lineEx  = round2(-Number(ln.line_subtotal_ex_gst || 0))
+      const lineGst = ln.is_taxable !== false ? round2(-Number(ln.line_gst || 0)) : 0
+      myobLines.push({
+        Type: 'Transaction',
+        Description: `Refund: ${ln.name} — ${ln.sku}`.substring(0, 255),
+        Item: { UID: ln.myob_item_uid },
+        ShipQuantity: -Number(ln.qty),
+        UnitPrice: round2(Number(ln.unit_trade_price_ex_gst || 0)),
+        Total: lineEx,
+        TaxCode: { UID: taxUid },
+      })
+      subtotalEnv += lineEx
+      totalTax    += lineGst
+    }
+
+    // Mirror the original card surcharge line (negative, FRE)
+    if (cardFeeInc > 0) {
+      const surchargeNeg = round2(-cardFeeInc)
+      myobLines.push({
+        Type: 'Transaction',
+        Description: 'Card processing surcharge — refund',
+        Item: { UID: cfg.cardFeeItemUid },
+        ShipQuantity: 1,
+        UnitPrice: surchargeNeg,
+        Total: surchargeNeg,
+        TaxCode: { UID: cfg.freTaxCodeUid },
+      })
+      subtotalEnv += surchargeNeg
+    }
+  } else {
+    // Single-line credit note for partial / additional refunds
+    const refundNeg = round2(-refundAmount)
+    myobLines.push({
+      Type: 'Transaction',
+      Description: `Refund — Order ${order.order_number}`.substring(0, 255),
+      Item: { UID: cfg.cardFeeItemUid },
+      ShipQuantity: 1,
+      UnitPrice: refundNeg,
+      Total: refundNeg,
+      TaxCode: { UID: cfg.freTaxCodeUid },
+    })
+    subtotalEnv = refundNeg
+    totalTax    = 0
+  }
+
+  subtotalEnv = round2(subtotalEnv)
+  totalTax    = round2(totalTax)
+  const totalAmount = round2(subtotalEnv + totalTax)
+
+  // Reserve the next number from the shared sequence
+  const { data: rpcNumber, error: rpcErr } = await c.rpc('b2b_next_myob_invoice_number')
+  if (rpcErr) throw new Error(`Failed to allocate credit note number: ${rpcErr.message}`)
+  const creditNumber = String(rpcNumber || '').trim()
+  if (!creditNumber) throw new Error('b2b_next_myob_invoice_number returned empty')
+
+  const today = new Date().toISOString().substring(0, 10)
+  const refundIdMemo = meta.stripeRefundId ? `; Stripe refund ${meta.stripeRefundId}` : ''
+  const memo = `B2B Refund credit note; Order ${order.order_number}${refundIdMemo}`.substring(0, 255)
+  const customerPo = (order.customer_po || '').trim().substring(0, 20)
+
+  const body: Record<string, any> = {
+    Customer: { UID: dist.myob_primary_customer_uid },
+    Date: today,
+    Number: creditNumber,
+    Lines: myobLines,
+    IsTaxInclusive: false,
+    FreightAmount: 0,
+    FreightTaxCode: { UID: cfg.freTaxCodeUid },
+    Subtotal: subtotalEnv,
+    TotalTax: totalTax,
+    TotalAmount: totalAmount,
+    Comment: `Credit note for refund of order ${order.order_number}${meta.reason ? ` (${meta.reason.replace(/_/g, ' ')})` : ''}`,
+    JournalMemo: memo,
+  }
+  if (customerPo) body.CustomerPurchaseOrderNumber = customerPo
+
+  // POST to /Sale/Invoice/Item (NOT /Sale/Order — credits need to hit GL)
+  const path = `/accountright/${conn.company_file_id}/Sale/Invoice/Item`
+  const result = await myobFetch(conn.id, path, { method: 'POST', body })
+
+  if (result.status !== 201 && result.status !== 200) {
+    throw new Error(
+      `MYOB credit note POST failed (HTTP ${result.status}): ${(result.raw || '').substring(0, 400)}`,
+    )
+  }
+
+  // Extract UID from Location header
+  const location = (result.headers || {})['location'] || (result.headers || {})['Location'] || ''
+  const uuidMatches = String(location).match(UUID_REGEX_G) || []
+  const creditUid = uuidMatches[uuidMatches.length - 1] || null
+  if (!creditUid || creditUid === conn.company_file_id) {
+    throw new Error(`MYOB returned 201 but no credit note UID in Location header: "${location}"`)
+  }
+
+  return {
+    credit_note_uid:    creditUid,
+    credit_note_number: creditNumber,
+    amount:             round2(refundAmount),
+    shape:              isFullMirror ? 'mirror_full' : 'single_line',
+  }
+}

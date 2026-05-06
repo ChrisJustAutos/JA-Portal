@@ -17,6 +17,7 @@ import type { NextApiRequest, NextApiResponse } from 'next'
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
 import { withAuth } from '../../../../../../lib/authServer'
 import { createRefund } from '../../../../../../lib/stripe'
+import { writeRefundCreditNoteToMyob } from '../../../../../../lib/b2b-myob-invoice'
 
 let _sb: SupabaseClient | null = null
 function sb(): SupabaseClient {
@@ -152,7 +153,7 @@ export default withAuth('admin:b2b', async (req: NextApiRequest, res: NextApiRes
     })
   }
 
-  // Audit event
+  // Audit event for the Stripe refund itself
   await c.from('b2b_order_events').insert({
     order_id: id,
     event_type: fullyRefunded ? 'refunded_full' : 'refunded_partial',
@@ -170,6 +171,56 @@ export default withAuth('admin:b2b', async (req: NextApiRequest, res: NextApiRes
     },
   })
 
+  // ─── MYOB credit note (best-effort) ────────────────────────────────
+  // Stripe is the source of truth for cash. If MYOB write fails, we still
+  // return success on the refund — the staff can manually create the
+  // credit note in MYOB or retry. The failure is logged as its own event.
+  let creditNote: { uid: string; number: string; amount: number; shape: string } | null = null
+  let creditNoteError: string | null = null
+  try {
+    const cn = await writeRefundCreditNoteToMyob(id, finalAmount, {
+      stripeRefundId: refund.id,
+      reason,
+    })
+    creditNote = {
+      uid: cn.credit_note_uid,
+      number: cn.credit_note_number,
+      amount: cn.amount,
+      shape: cn.shape,
+    }
+    await c.from('b2b_order_events').insert({
+      order_id: id,
+      event_type: 'myob_credit_note_written',
+      from_status: update.status || order.status,
+      to_status:   update.status || order.status,
+      actor_type: 'system',
+      actor_id: null,
+      notes: `MYOB credit note ${cn.credit_note_number} created (${cn.shape === 'mirror_full' ? 'full mirror of original lines' : 'single line'})`,
+      metadata: {
+        myob_credit_note_uid: cn.credit_note_uid,
+        myob_credit_note_number: cn.credit_note_number,
+        amount: cn.amount,
+        shape: cn.shape,
+        stripe_refund_id: refund.id,
+      },
+    })
+  } catch (e: any) {
+    creditNoteError = e?.message || String(e)
+    await c.from('b2b_order_events').insert({
+      order_id: id,
+      event_type: 'myob_credit_note_failed',
+      from_status: update.status || order.status,
+      to_status:   update.status || order.status,
+      actor_type: 'system',
+      actor_id: null,
+      notes: `MYOB credit note creation failed: ${creditNoteError?.substring(0, 400)}`,
+      metadata: {
+        amount: finalAmount,
+        stripe_refund_id: refund.id,
+      },
+    })
+  }
+
   return res.status(200).json({
     ok: true,
     refund: {
@@ -178,6 +229,8 @@ export default withAuth('admin:b2b', async (req: NextApiRequest, res: NextApiRes
       status: refund.status,
       reason,
     },
+    myob_credit_note: creditNote,
+    myob_credit_note_error: creditNoteError,
     order: updated,
   })
 })

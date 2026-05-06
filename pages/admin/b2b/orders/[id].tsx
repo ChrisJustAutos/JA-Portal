@@ -619,6 +619,9 @@ function Timeline({ events }: { events: OrderEvent[] }) {
       {events.map((ev, i) => {
         const isStatus = ev.event_type === 'status_changed'
         const color    = isStatus && ev.to_status ? (STATUS_COLOR[ev.to_status] || T.text3) :
+                         ev.event_type === 'myob_credit_note_written' ? T.purple :
+                         ev.event_type === 'myob_credit_note_failed'  ? T.red :
+                         ev.event_type === 'refund_failed'            ? T.red :
                          ev.event_type.startsWith('refund') ? T.purple :
                          ev.event_type === 'admin_edited' ? T.text3 :
                          ev.event_type === 'checkout_started' ? T.amber :
@@ -659,11 +662,16 @@ function labelForEvent(ev: OrderEvent): string {
     const to   = ev.to_status   ? (STATUS_LABEL[ev.to_status]   || ev.to_status)   : '?'
     return `${from} → ${to}`
   }
-  if (ev.event_type === 'refunded_full')    return `Full refund · $${money(Number(ev.metadata?.amount || 0))}`
-  if (ev.event_type === 'refunded_partial') return `Partial refund · $${money(Number(ev.metadata?.amount || 0))}`
-  if (ev.event_type === 'refund_failed')    return 'Refund attempt failed'
-  if (ev.event_type === 'admin_edited')     return 'Admin updated fields'
-  if (ev.event_type === 'checkout_started') return 'Checkout started'
+  if (ev.event_type === 'refunded_full')          return `Full refund · $${money(Number(ev.metadata?.amount || 0))}`
+  if (ev.event_type === 'refunded_partial')       return `Partial refund · $${money(Number(ev.metadata?.amount || 0))}`
+  if (ev.event_type === 'refund_failed')          return 'Refund attempt failed'
+  if (ev.event_type === 'myob_credit_note_written') {
+    const num = ev.metadata?.myob_credit_note_number || '?'
+    return `MYOB credit note ${num} created`
+  }
+  if (ev.event_type === 'myob_credit_note_failed') return 'MYOB credit note failed'
+  if (ev.event_type === 'admin_edited')           return 'Admin updated fields'
+  if (ev.event_type === 'checkout_started')       return 'Checkout started'
   return ev.event_type.replace(/_/g, ' ')
 }
 
