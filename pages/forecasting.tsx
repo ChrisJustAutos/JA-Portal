@@ -79,6 +79,17 @@ function fmtDate(d: string | null | undefined): string {
   return d
 }
 
+// Convert a UTC ISO timestamp (e.g. "2026-05-06T23:11:35.232922+00:00") to a
+// Brisbane-local YYYY-MM-DD date string. AEST = UTC+10, no DST in QLD, so a
+// simple offset is correct year-round.
+function brisbaneDateISO(iso: string | null | undefined): string {
+  if (!iso) return ''
+  const t = Date.parse(iso)
+  if (!isFinite(t)) return iso.substring(0, 10)
+  const bris = new Date(t + 10 * 3600 * 1000)
+  return `${bris.getUTCFullYear()}-${String(bris.getUTCMonth() + 1).padStart(2, '0')}-${String(bris.getUTCDate()).padStart(2, '0')}`
+}
+
 // "Nice" axis algorithm — picks a round-number tick interval that gives ~5
 // gridlines and rounds the chart max up to a clean number.
 function niceAxis(rawMax: number, targetTicks = 5): { max: number; step: number; ticks: number[] } {
@@ -191,7 +202,7 @@ export default function ForecastingPage({ user }: { user: SessionUser }) {
             <h1 style={{margin:0, fontSize:22, fontWeight:600}}>Forecasting</h1>
             {data?.report && (
               <span style={{fontSize:11, color:T.text3}}>
-                Report from <strong style={{color:T.text2}}>{fmtDate(data.report.uploaded_at.substring(0,10))}</strong>
+                Report from <strong style={{color:T.text2}}>{fmtDate(brisbaneDateISO(data.report.uploaded_at))}</strong>
                 {data.report.filename && <> · {data.report.filename}</>}
                 {data.report.source === 'api' && (
                   <span style={{marginLeft:8, padding:'2px 6px', borderRadius:3, background:'rgba(45,212,191,0.12)', color:T.teal, fontSize:10, fontWeight:600}}>
