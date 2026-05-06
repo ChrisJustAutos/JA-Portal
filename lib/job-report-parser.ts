@@ -189,9 +189,9 @@ export function parseJobReport(buf: Buffer, filename: string): ParsedJobReport {
   }
 
   if (jobs.length === 0) warnings.push('Header row matched but no data rows had valid job numbers')
-  if (!headerMap.status && headerMap.closed_date) {
-    warnings.push('No explicit Status column — deriving Open/Completed from Finished Date')
-  }
+  // Note: the MD export never includes a Status column — status is always
+  // derived from Finished Date. Not surfaced as a warning since it's the
+  // normal/expected shape of every report.
 
   return { jobs, warnings, detectedFormat: format, headerMap }
 }
