@@ -38,6 +38,9 @@ interface Settings {
   myob_invoice_number_prefix: string
   myob_invoice_number_padding: number
   myob_invoice_number_seq: number
+  myob_credit_note_number_prefix: string
+  myob_credit_note_number_padding: number
+  myob_credit_note_number_seq: number
   slack_new_order_webhook_url: string | null
   last_catalogue_sync_at: string | null
   last_catalogue_sync_added: number | null
@@ -49,6 +52,7 @@ interface Settings {
 interface ApiResponse {
   settings: Settings
   next_invoice_number_preview: string | null
+  next_credit_note_number_preview: string | null
   stripe_env: {
     secret_key_set: boolean
     webhook_secret_set: boolean
@@ -66,6 +70,9 @@ export default function B2BSettingsPage({ user }: Props) {
   const [prefix, setPrefix]   = useState('')
   const [padding, setPadding] = useState(6)
   const [seqInput, setSeqInput] = useState<string>('')
+  const [cnPrefix, setCnPrefix]     = useState('')
+  const [cnPadding, setCnPadding]   = useState(6)
+  const [cnSeqInput, setCnSeqInput] = useState<string>('')
   const [feePct, setFeePct]   = useState(0)
   const [feeFixed, setFeeFixed] = useState(0)
   const [slackUrl, setSlackUrl] = useState('')
@@ -80,6 +87,9 @@ export default function B2BSettingsPage({ user }: Props) {
       setPrefix(j.settings.myob_invoice_number_prefix || 'JA')
       setPadding(j.settings.myob_invoice_number_padding || 6)
       setSeqInput(String(j.settings.myob_invoice_number_seq ?? 0))
+      setCnPrefix(j.settings.myob_credit_note_number_prefix || 'CR')
+      setCnPadding(j.settings.myob_credit_note_number_padding || 6)
+      setCnSeqInput(String(j.settings.myob_credit_note_number_seq ?? 0))
       setFeePct(Number(j.settings.card_fee_percent || 0.017))
       setFeeFixed(Number(j.settings.card_fee_fixed || 0.30))
       setSlackUrl(j.settings.slack_new_order_webhook_url || '')
@@ -103,6 +113,18 @@ export default function B2BSettingsPage({ user }: Props) {
 
   const livePreviewLength = livePreview.length
   const overLimit = livePreviewLength > 13
+
+  const cnLivePreview = useMemo(() => {
+    const p = (cnPrefix || '').trim()
+    const seq = parseInt(cnSeqInput || '0', 10) || 0
+    const pad = cnPadding || 6
+    if (!p) return ''
+    const num = String(seq + 1).padStart(pad, '0')
+    return p + num
+  }, [cnPrefix, cnPadding, cnSeqInput])
+
+  const cnLivePreviewLength = cnLivePreview.length
+  const cnOverLimit = cnLivePreviewLength > 13
 
   async function save(payload: Record<string, any>) {
     setSaving(true); setError(null); setSavedFlash(null)
@@ -237,6 +259,73 @@ export default function B2BSettingsPage({ user }: Props) {
                   })}
                   disabled={saving || overLimit || !prefix.trim()}
                   style={primaryBtn(!saving && !overLimit && !!prefix.trim())}>
+                  {saving ? 'Saving…' : 'Save numbering'}
+                </button>
+              </Section>
+
+              {/* ─── Credit note numbering ─── */}
+              <Section title="MYOB Credit Note Numbering"
+                description="Refund credit notes are written to MYOB JAWS as a separate stream from order invoices. Same 13-character MYOB cap applies.">
+
+                <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:14,marginBottom:14}}>
+                  <Field label="Prefix" hint="Letters/digits, no spaces. Max 8 chars.">
+                    <input
+                      type="text"
+                      value={cnPrefix}
+                      onChange={e => setCnPrefix(e.target.value.replace(/\s/g, ''))}
+                      maxLength={8}
+                      style={inputStyle()}
+                    />
+                  </Field>
+                  <Field label="Sequence padding" hint="Zero-pad width (4-8 digits)">
+                    <input
+                      type="number"
+                      value={cnPadding}
+                      onChange={e => setCnPadding(Math.max(4, Math.min(8, parseInt(e.target.value || '6', 10) || 6)))}
+                      min={4}
+                      max={8}
+                      style={inputStyle()}
+                    />
+                  </Field>
+                  <Field label="Current sequence" hint="Last consumed value. Edit to skip ahead.">
+                    <input
+                      type="number"
+                      value={cnSeqInput}
+                      onChange={e => setCnSeqInput(e.target.value)}
+                      min={0}
+                      style={inputStyle()}
+                    />
+                  </Field>
+                </div>
+
+                <div style={{
+                  padding:'12px 14px',
+                  background:T.bg3,
+                  border:`1px solid ${cnOverLimit ? T.red : T.border2}`,
+                  borderRadius:6,
+                  marginBottom:14,
+                  display:'flex',justifyContent:'space-between',alignItems:'center',gap:12,
+                }}>
+                  <div>
+                    <div style={{fontSize:10,color:T.text3,textTransform:'uppercase',letterSpacing:'0.06em',marginBottom:2}}>Next credit note number</div>
+                    <div style={{fontSize:18,fontWeight:600,fontFamily:'monospace',color:cnOverLimit?T.red:T.text}}>
+                      {cnLivePreview || '—'}
+                    </div>
+                  </div>
+                  <div style={{textAlign:'right',fontSize:11,color: cnOverLimit ? T.red : T.text3}}>
+                    {cnLivePreviewLength} / 13 chars
+                    {cnOverLimit && <div style={{fontWeight:500}}>Exceeds MYOB limit</div>}
+                  </div>
+                </div>
+
+                <button
+                  onClick={() => save({
+                    myob_credit_note_number_prefix: cnPrefix,
+                    myob_credit_note_number_padding: cnPadding,
+                    myob_credit_note_number_seq: parseInt(cnSeqInput || '0', 10) || 0,
+                  })}
+                  disabled={saving || cnOverLimit || !cnPrefix.trim()}
+                  style={primaryBtn(!saving && !cnOverLimit && !!cnPrefix.trim())}>
                   {saving ? 'Saving…' : 'Save numbering'}
                 </button>
               </Section>

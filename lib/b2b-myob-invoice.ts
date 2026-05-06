@@ -257,8 +257,9 @@ export interface MyobCreditNoteResult {
  *     using the Bank Fees item with FRE tax. (Tax treatment is approximate
  *     for partials — staff can refine the GST split manually if needed.)
  *
- * Numbering: pulls the next number from the same `b2b_next_myob_invoice_number`
- * RPC used for orders. Each credit note consumes one slot in the sequence.
+ * Numbering: pulls the next number from `b2b_next_myob_credit_note_number`,
+ * which is a separate stream from order invoices (default prefix "CR").
+ * Configured via b2b_settings.myob_credit_note_number_* on the admin Settings page.
  *
  * Throws on failure. The caller (refund API) catches the throw and logs
  * it as a non-fatal warning event — the Stripe refund stays valid even
@@ -371,11 +372,11 @@ export async function writeRefundCreditNoteToMyob(
   totalTax    = round2(totalTax)
   const totalAmount = round2(subtotalEnv + totalTax)
 
-  // Reserve the next number from the shared sequence
-  const { data: rpcNumber, error: rpcErr } = await c.rpc('b2b_next_myob_invoice_number')
+  // Reserve the next number from the credit-note sequence (independent of invoices)
+  const { data: rpcNumber, error: rpcErr } = await c.rpc('b2b_next_myob_credit_note_number')
   if (rpcErr) throw new Error(`Failed to allocate credit note number: ${rpcErr.message}`)
   const creditNumber = String(rpcNumber || '').trim()
-  if (!creditNumber) throw new Error('b2b_next_myob_invoice_number returned empty')
+  if (!creditNumber) throw new Error('b2b_next_myob_credit_note_number returned empty')
 
   const today = new Date().toISOString().substring(0, 10)
   const refundIdMemo = meta.stripeRefundId ? `; Stripe refund ${meta.stripeRefundId}` : ''
