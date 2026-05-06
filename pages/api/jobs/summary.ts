@@ -62,7 +62,7 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
       // Forecast lane only — never reads from wip_snapshot.
       const { data: run } = await sb()
         .from('job_report_runs')
-        .select('id, uploaded_at, filename, row_count, notes, source, report_type')
+        .select('id, uploaded_at, filename, row_count, notes, source, report_type, warnings')
         .eq('is_current', true)
         .eq('report_type', 'forecast')
         .maybeSingle()

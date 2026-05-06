@@ -39,6 +39,7 @@ interface Report {
   id: string; uploaded_at: string; filename: string | null;
   row_count: number; notes: string | null;
   source?: string | null; report_type?: string | null;
+  warnings?: string[] | null;
 }
 interface ForecastJob {
   job_number: string; customer_name: string | null; vehicle: string | null;
@@ -200,6 +201,9 @@ export default function ForecastingPage({ user }: { user: SessionUser }) {
                 {' · '}
                 <Link href="/settings?tab=data-imports" style={{color:T.blue, textDecoration:'none'}}>upload manually →</Link>
               </span>
+            )}
+            {data?.report?.warnings && data.report.warnings.length > 0 && (
+              <ReportWarnings warnings={data.report.warnings}/>
             )}
           </div>
 
@@ -640,6 +644,44 @@ function TargetEditor({ initial, isAdmin, onSaved }: {
       </button>
       {error && <span style={{fontSize:10, color:T.red, marginLeft:4}}>{error}</span>}
     </div>
+  )
+}
+
+function ReportWarnings({ warnings }: { warnings: string[] }) {
+  const [open, setOpen] = useState(false)
+  const n = warnings.length
+  return (
+    <span style={{position:'relative', display:'inline-block'}}>
+      <button
+        onClick={() => setOpen(o => !o)}
+        title={open ? 'Hide warnings' : 'Show parser warnings'}
+        style={{
+          padding:'2px 8px', borderRadius:3,
+          background:'rgba(245,166,35,0.12)', color:T.amber,
+          border:`1px solid ${T.amber}40`,
+          fontSize:10, fontWeight:600, cursor:'pointer',
+          fontFamily:'inherit',
+          display:'inline-flex', alignItems:'center', gap:4,
+        }}>
+        ⚠ {n} warning{n === 1 ? '' : 's'}
+        <span style={{fontSize:9, opacity:0.7}}>{open ? '▴' : '▾'}</span>
+      </button>
+      {open && (
+        <div style={{
+          position:'absolute', top:'calc(100% + 6px)', left:0, zIndex:10,
+          minWidth:320, maxWidth:520,
+          background:T.bg2, border:`1px solid ${T.border2}`, borderRadius:8,
+          padding:12, boxShadow:'0 8px 24px rgba(0,0,0,0.4)',
+        }}>
+          <div style={{fontSize:10, color:T.text3, textTransform:'uppercase', letterSpacing:'0.05em', fontWeight:600, marginBottom:8}}>
+            Parser warnings on current report
+          </div>
+          <ul style={{margin:0, padding:'0 0 0 16px', color:T.text2, fontSize:12, lineHeight:1.5}}>
+            {warnings.map((w, i) => <li key={i}>{w}</li>)}
+          </ul>
+        </div>
+      )}
+    </span>
   )
 }
 
