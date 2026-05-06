@@ -69,6 +69,7 @@ export interface CatalogueSyncResult {
   added: number
   updated: number
   unchanged: number
+  skipped: number
   errors: Array<{ uid: string; sku: string; error: string }>
   durationMs: number
   startedAt: string
@@ -96,6 +97,7 @@ export async function syncJawsCatalogue(
     added: 0,
     updated: 0,
     unchanged: 0,
+    skipped: 0,
     errors: [],
     durationMs: 0,
     startedAt: startedAt.toISOString(),
@@ -171,17 +173,16 @@ export async function syncJawsCatalogue(
 
   for (const it of allItems) {
     if (!it.UID || !it.Number || !it.Name) {
-      result.errors.push({
-        uid: it.UID || '?',
-        sku: it.Number || '?',
-        error: 'Missing UID, Number or Name on MYOB item',
-      })
+      // Placeholder items in MYOB (e.g. "*Special* Snorkel Non-Stock") have
+      // no real Number/Name. They're not catalogue items — skip silently.
+      result.skipped++
       continue
     }
 
     // JS-side filter for what we want to ingest. Treats undefined as
     // "include" so an item missing these flags doesn't get silently dropped.
     if (it.IsActive === false || it.IsSold === false) {
+      result.skipped++
       continue
     }
 

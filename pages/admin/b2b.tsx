@@ -44,6 +44,7 @@ interface SyncResult {
   added: number
   updated: number
   unchanged: number
+  skipped: number
   errors: Array<{ uid: string; sku: string; error: string }>
   durationMs: number
   startedAt: string
@@ -157,7 +158,7 @@ export default function B2BAdminPage({ user }: Props) {
           {/* Sync card */}
           <section style={{
             background:T.bg2,border:`1px solid ${T.border}`,borderRadius:10,
-            padding:'18px 20px',marginBottom:24,
+            padding:'18px 20px',marginBottom:14,
           }}>
             <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:16,flexWrap:'wrap'}}>
               <div style={{flex:1,minWidth:240}}>
@@ -210,6 +211,7 @@ export default function B2BAdminPage({ user }: Props) {
                   <ResultStat label="Added"     value={syncResult.added}                                            color={T.green}/>
                   <ResultStat label="Updated"   value={syncResult.updated}                                          color={T.blue}/>
                   <ResultStat label="Unchanged" value={syncResult.unchanged}                                        color={T.text3}/>
+                  <ResultStat label="Skipped"   value={syncResult.skipped ?? 0}                                     color={T.text3}/>
                   <ResultStat label="Errors"    value={syncResult.errors.length}                                    color={syncResult.errors.length ? T.red : T.text3}/>
                   <ResultStat label="Duration"  value={`${(syncResult.durationMs/1000).toFixed(1)}s`}              color={T.text2}/>
                 </div>
@@ -235,6 +237,26 @@ export default function B2BAdminPage({ user }: Props) {
                 )}
               </div>
             )}
+          </section>
+
+          {/* Quick links */}
+          <section style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(220px,1fr))',gap:10,marginBottom:24}}>
+            <QuickLinkCard
+              href="/admin/b2b/catalogue"
+              title="Manage catalogue"
+              subtitle="Toggle visibility · edit trade prices · upload images"
+              ready
+            />
+            <QuickLinkCard
+              href="#"
+              title="Distributors"
+              subtitle="Coming next — accounts and magic-link invites"
+            />
+            <QuickLinkCard
+              href="#"
+              title="Orders"
+              subtitle="Coming after distributor surface goes live"
+            />
           </section>
 
           {/* Coming next */}
@@ -291,6 +313,38 @@ function ResultStat({ label, value, color }: { label: string; value: number | st
         {value}
       </div>
     </div>
+  )
+}
+
+function QuickLinkCard({
+  href, title, subtitle, ready,
+}: {
+  href: string
+  title: string
+  subtitle: string
+  ready?: boolean
+}) {
+  const disabled = href === '#'
+  const Wrapper: any = disabled ? 'div' : 'a'
+  return (
+    <Wrapper
+      {...(disabled ? {} : { href })}
+      style={{
+        display:'block',
+        background: T.bg2,
+        border: `1px solid ${ready ? T.blue : T.border}`,
+        borderRadius:8,padding:'14px 16px',
+        textDecoration:'none',
+        cursor: disabled ? 'default' : 'pointer',
+        opacity: disabled ? 0.55 : 1,
+        transition:'transform 120ms ease, border-color 120ms ease',
+      }}>
+      <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:6,marginBottom:4}}>
+        <div style={{fontSize:13,fontWeight:600,color: ready ? T.blue : T.text}}>{title}</div>
+        {!disabled && <span style={{color: ready ? T.blue : T.text3,fontSize:14}}>→</span>}
+      </div>
+      <div style={{fontSize:11,color:T.text3,lineHeight:1.4}}>{subtitle}</div>
+    </Wrapper>
   )
 }
 
