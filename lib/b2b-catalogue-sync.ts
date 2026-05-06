@@ -30,7 +30,7 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
 import { getConnection, myobFetch } from './myob'
 
-const PAGE_SIZE = 1000
+const PAGE_SIZE = 400  // MYOB AccountRight caps $top at 400 per page
 const GST_RATE = 0.10
 
 let _sb: SupabaseClient | null = null
@@ -53,7 +53,8 @@ interface MyobItem {
   Name: string
   Description: string | null
   IsActive: boolean
-  IsSelling: boolean
+  IsSold: boolean
+  IsBought: boolean
   IsInventoried: boolean
   SellingDetails?: {
     BaseSellingPrice?: number
@@ -102,22 +103,28 @@ export async function syncJawsCatalogue(
   }
 
   // ── 1. Page through MYOB Inventory/Item ────────────────────────────────
+  // No OData $filter on the request — we filter IsActive/IsSold in JS.
+  // MYOB Item OData filters are fragile across tenants, and pulling the full
+  // catalogue then filtering locally is a few hundred KB extra per sync.
   let skip = 0
   const allItems: MyobItem[] = []
-  // Cap at 50 pages (50k items) as a sanity bound
+  // Cap at 50 pages (20k items at 400/page) as a sanity bound
   for (let page = 0; page < 50; page++) {
-    const { status, data } = await myobFetch(conn.id, `${cfPath}/Inventory/Item`, {
+    const { status, data, raw } = await myobFetch(conn.id, `${cfPath}/Inventory/Item`, {
       method: 'GET',
       query: {
-        '$filter':  'IsSelling eq true and IsActive eq true',
-        '$top':     PAGE_SIZE,
-        '$skip':    skip,
-        '$orderby': 'Number',
+        '$top':  PAGE_SIZE,
+        '$skip': skip,
       },
       performedBy,
     })
     if (status !== 200) {
-      throw new Error(`MYOB Inventory/Item fetch failed (skip=${skip}): HTTP ${status}`)
+      const myobMsg = data?.Errors?.[0]?.Message
+                   || data?.Message
+                   || (raw || '').substring(0, 400)
+      throw new Error(
+        `MYOB Inventory/Item fetch failed (skip=${skip}, HTTP ${status}): ${myobMsg}`
+      )
     }
     const items: MyobItem[] = Array.isArray(data?.Items) ? data.Items : []
     allItems.push(...items)
@@ -169,6 +176,12 @@ export async function syncJawsCatalogue(
         sku: it.Number || '?',
         error: 'Missing UID, Number or Name on MYOB item',
       })
+      continue
+    }
+
+    // JS-side filter for what we want to ingest. Treats undefined as
+    // "include" so an item missing these flags doesn't get silently dropped.
+    if (it.IsActive === false || it.IsSold === false) {
       continue
     }
 
