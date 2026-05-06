@@ -1,5 +1,7 @@
 # Just Autos Management Portal
 
+Updated from phone-driven Claude Code session — 7 May 2026
+
 Live management dashboard for JAWS and VPS — built on Next.js, deployed on Vercel.
 Connects live to MYOB AccountRight via CData Connect Cloud. Includes an AI chatbot powered by Claude.
 
