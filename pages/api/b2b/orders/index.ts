@@ -34,12 +34,12 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, use
     .select(`
       id, order_number, status,
       subtotal_ex_gst, gst, card_fee_inc, total_inc, currency,
-      placed_at, paid_at,
+      created_at, paid_at,
       myob_invoice_number, myob_write_error,
       placed_by_user_id
     `)
     .eq('distributor_id', user.distributor.id)
-    .order('placed_at', { ascending: false })
+    .order('created_at', { ascending: false })
     .limit(limit)
   if (error) return res.status(500).json({ error: error.message })
 
@@ -48,12 +48,29 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, use
   const cutoff = Date.now() - 60 * 60 * 1000
   const filtered = (data || []).filter((o: any) => {
     if (o.status !== 'pending_payment') return true
-    const placed = o.placed_at ? new Date(o.placed_at).getTime() : 0
+    const placed = o.created_at ? new Date(o.created_at).getTime() : 0
     return placed > cutoff
   })
 
+  // Alias created_at → placed_at so the UI has a stable name
+  const out = filtered.map((o: any) => ({
+    id: o.id,
+    order_number: o.order_number,
+    status: o.status,
+    subtotal_ex_gst: o.subtotal_ex_gst,
+    gst: o.gst,
+    card_fee_inc: o.card_fee_inc,
+    total_inc: o.total_inc,
+    currency: o.currency,
+    placed_at: o.created_at,
+    paid_at: o.paid_at,
+    myob_invoice_number: o.myob_invoice_number,
+    myob_write_error: o.myob_write_error,
+    placed_by_user_id: o.placed_by_user_id,
+  }))
+
   return res.status(200).json({
-    orders: filtered,
+    orders: out,
     distributor: { id: user.distributor.id, display_name: user.distributor.displayName },
   })
 })

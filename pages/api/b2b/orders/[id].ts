@@ -43,7 +43,7 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, use
     .select(`
       id, order_number, status, distributor_id, placed_by_user_id,
       subtotal_ex_gst, gst, card_fee_inc, total_inc, currency,
-      placed_at, paid_at,
+      created_at, paid_at,
       stripe_checkout_session_id, stripe_payment_intent_id,
       myob_invoice_uid, myob_invoice_number, myob_written_at, myob_write_error,
       lines:b2b_order_lines!b2b_order_lines_order_id_fkey (
@@ -87,7 +87,7 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, use
       id: order.id,
       order_number: order.order_number,
       status: order.status,
-      placed_at: order.placed_at,
+      placed_at: order.created_at,
       paid_at: order.paid_at,
       currency: order.currency,
       subtotal_ex_gst: order.subtotal_ex_gst,
