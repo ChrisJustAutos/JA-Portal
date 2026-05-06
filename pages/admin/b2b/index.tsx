@@ -94,7 +94,7 @@ export default function B2BHubPage({ user }: Props) {
 
           {/* Card grid */}
           <div style={{
-            display:'grid',gridTemplateColumns:'repeat(auto-fill, minmax(260px, 1fr))',gap:16,
+            display:'grid',gridTemplateColumns:'repeat(auto-fit, minmax(260px, 1fr))',gap:18,
           }}>
             <Card
               href="/admin/b2b/catalogue"
@@ -122,18 +122,16 @@ export default function B2BHubPage({ user }: Props) {
               warning={!cfgComplete}
             />
             <Card
-              href={null}
-              dot={T.text3}
+              href="/admin/b2b/orders"
+              dot={T.amber}
               title="Orders"
               description="Live orders dashboard with status transitions, refunds and shipping tracking."
-              meta="Coming in next update"
-              disabled
             />
           </div>
 
           {/* Quick links */}
           <section style={{
-            marginTop:32,padding:'18px 22px',
+            marginTop:48,padding:'22px 26px',
             background:T.bg2,border:`1px solid ${T.border}`,borderRadius:10,
           }}>
             <div style={{fontSize:11,color:T.text3,textTransform:'uppercase',letterSpacing:'0.08em',marginBottom:10,fontWeight:500}}>

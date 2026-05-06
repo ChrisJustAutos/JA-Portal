@@ -3,7 +3,7 @@
 // Lightweight Stripe API wrapper. Uses raw fetch + form-encoding rather
 // than the official Stripe SDK to avoid adding ~1MB of dependencies.
 // We only need a tiny slice of the API: creating checkout sessions,
-// retrieving sessions, and verifying webhook signatures.
+// retrieving sessions, issuing refunds, and verifying webhook signatures.
 //
 // Required env vars:
 //   STRIPE_SECRET_KEY      — sk_live_... or sk_test_...
@@ -116,6 +116,58 @@ export async function createCheckoutSession(p: CreateCheckoutSessionParams): Pro
 
 export async function retrieveCheckoutSession(sessionId: string): Promise<StripeCheckoutSession> {
   return stripeRequest('GET', `/checkout/sessions/${sessionId}`)
+}
+
+// ── PaymentIntent + Refunds ────────────────────────────────────────────
+
+export interface StripePaymentIntent {
+  id: string
+  amount: number             // cents
+  amount_received: number    // cents
+  currency: string
+  status: string
+  latest_charge: string | null
+  metadata: Record<string, string>
+}
+
+export async function retrievePaymentIntent(piId: string): Promise<StripePaymentIntent> {
+  return stripeRequest('GET', `/payment_intents/${piId}`)
+}
+
+export interface StripeRefund {
+  id: string
+  amount: number             // cents
+  currency: string
+  status: string             // 'pending' | 'succeeded' | 'failed' | 'requires_action'
+  reason: string | null      // 'duplicate' | 'fraudulent' | 'requested_by_customer'
+  payment_intent: string
+  created: number
+  metadata: Record<string, string>
+}
+
+export interface CreateRefundParams {
+  payment_intent: string
+  amount?: number                      // cents — omit for full refund
+  reason?: 'duplicate' | 'fraudulent' | 'requested_by_customer'
+  metadata?: Record<string, string>
+}
+
+export async function createRefund(p: CreateRefundParams): Promise<StripeRefund> {
+  return stripeRequest('POST', '/refunds', {
+    payment_intent: p.payment_intent,
+    amount: p.amount,
+    reason: p.reason,
+    metadata: p.metadata || {},
+  })
+}
+
+export interface ListRefundsResult {
+  data: StripeRefund[]
+  has_more: boolean
+}
+
+export async function listRefundsForPaymentIntent(piId: string): Promise<ListRefundsResult> {
+  return stripeRequest('GET', `/refunds?payment_intent=${encodeURIComponent(piId)}&limit=100`)
 }
 
 // ── Webhook signature verification ──────────────────────────────────────
