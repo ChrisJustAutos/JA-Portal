@@ -16,7 +16,7 @@ import { getSupabase } from '../../lib/supabaseClient'
 const T = {
   bg:'#0d0f12', bg2:'#131519', bg3:'#1a1d23', bg4:'#21252d',
   border:'rgba(255,255,255,0.07)', border2:'rgba(255,255,255,0.12)',
-  text:'#e8eaf0', text2:'#8b90a0', text3:'#545968',
+  text:'#e8eaf0', text2:'#aab0c0', text3:'#8d93a4',
   blue:'#4f8ef7', teal:'#2dd4bf', green:'#34c77b',
   amber:'#f5a623', red:'#f04e4e',
 }
@@ -62,7 +62,7 @@ export default function B2BLayout({ user, active = null, children, cartCount }: 
         display:'flex',alignItems:'center',gap:24,
       }}>
         <a href="/b2b/catalogue" style={{textDecoration:'none',display:'flex',alignItems:'baseline',gap:10}}>
-          <span style={{fontSize:11,color:T.text3,textTransform:'uppercase',letterSpacing:'0.12em',fontWeight:600}}>
+          <span style={{fontSize:12,color:T.text3,textTransform:'uppercase',letterSpacing:'0.12em',fontWeight:600}}>
             Just Autos
           </span>
           <span style={{fontSize:13,color:T.text,fontWeight:500}}>Distributor Portal</span>
@@ -76,7 +76,7 @@ export default function B2BLayout({ user, active = null, children, cartCount }: 
 
         <div style={{marginLeft:'auto',display:'flex',alignItems:'center',gap:14}}>
           <div style={{textAlign:'right'}}>
-            <div style={{fontSize:12,color:T.text,fontWeight:500}}>{user.distributor.displayName}</div>
+            <div style={{fontSize:13,color:T.text,fontWeight:500}}>{user.distributor.displayName}</div>
             <div style={{fontSize:10,color:T.text3,marginTop:1}}>
               {user.fullName || user.email}
               {user.role === 'owner' && <span style={{marginLeft:6,color:T.blue}}>· owner</span>}
@@ -86,7 +86,7 @@ export default function B2BLayout({ user, active = null, children, cartCount }: 
             style={{
               padding:'6px 12px',borderRadius:5,
               border:`1px solid ${T.border2}`,background:'transparent',color:T.text2,
-              fontSize:11,cursor:'pointer',fontFamily:'inherit',
+              fontSize:12,cursor:'pointer',fontFamily:'inherit',
             }}>
             Sign out
           </button>
@@ -112,7 +112,7 @@ function NavLink({
   const style: React.CSSProperties = {
     padding:'7px 13px',
     borderRadius:6,
-    fontSize:12,fontWeight:500,
+    fontSize:13,fontWeight:500,
     color: disabled ? T.text3 : (active ? T.text : T.text2),
     background: active ? T.bg3 : 'transparent',
     border: `1px solid ${active ? T.border2 : 'transparent'}`,

@@ -17,7 +17,7 @@ import type { UserRole } from '../../../../lib/permissions'
 const T = {
   bg:'#0d0f12', bg2:'#131519', bg3:'#1a1d23', bg4:'#21252d',
   border:'rgba(255,255,255,0.07)', border2:'rgba(255,255,255,0.12)',
-  text:'#e8eaf0', text2:'#8b90a0', text3:'#545968',
+  text:'#e8eaf0', text2:'#aab0c0', text3:'#8d93a4',
   blue:'#4f8ef7', teal:'#2dd4bf', green:'#34c77b',
   amber:'#f5a623', red:'#f04e4e', purple:'#a78bfa',
 }
@@ -123,7 +123,7 @@ export default function DistributorDetailPage({ user }: Props) {
 
           {/* Header */}
           <header style={{marginBottom:18}}>
-            <div style={{fontSize:11,color:T.text3,textTransform:'uppercase',letterSpacing:'0.08em',marginBottom:4}}>
+            <div style={{fontSize:12,color:T.text3,textTransform:'uppercase',letterSpacing:'0.08em',marginBottom:4}}>
               <a href="/admin/b2b" style={{color:T.text3,textDecoration:'none'}}>B2B Portal</a>
               {' / '}
               <a href="/admin/b2b/distributors" style={{color:T.text3,textDecoration:'none'}}>Distributors</a>
@@ -136,7 +136,7 @@ export default function DistributorDetailPage({ user }: Props) {
               </h1>
               {dist && (
                 <div style={{display:'flex',alignItems:'center',gap:10}}>
-                  <span style={{fontSize:11,color:T.text3}}>Active</span>
+                  <span style={{fontSize:12,color:T.text3}}>Active</span>
                   <ToggleSwitch
                     on={dist.is_active}
                     onChange={v => patchDist({ is_active: v }).catch(e => alert(e?.message || String(e)))}
@@ -147,13 +147,13 @@ export default function DistributorDetailPage({ user }: Props) {
           </header>
 
           {error && (
-            <div style={{padding:10,background:`${T.red}15`,border:`1px solid ${T.red}40`,borderRadius:7,color:T.red,fontSize:12,marginBottom:14}}>
+            <div style={{padding:10,background:`${T.red}15`,border:`1px solid ${T.red}40`,borderRadius:7,color:T.red,fontSize:13,marginBottom:14}}>
               {error}
             </div>
           )}
 
           {loading && !dist && (
-            <div style={{padding:24,textAlign:'center',color:T.text3,fontSize:12}}>Loading…</div>
+            <div style={{padding:24,textAlign:'center',color:T.text3,fontSize:13}}>Loading…</div>
           )}
 
           {dist && (
@@ -211,7 +211,7 @@ function DetailsSection({ dist, onPatch }: { dist: Distributor; onPatch: (p: Par
   return (
     <Section title="Details" flash={savingFlash}>
       {error && (
-        <div style={{padding:8,background:`${T.red}15`,border:`1px solid ${T.red}40`,borderRadius:5,color:T.red,fontSize:11,marginBottom:10}}>
+        <div style={{padding:8,background:`${T.red}15`,border:`1px solid ${T.red}40`,borderRadius:5,color:T.red,fontSize:12,marginBottom:10}}>
           {error}
         </div>
       )}
@@ -322,7 +322,7 @@ function MyobLinksSection({
           <div style={{flex:1,minWidth:0}}>
             <div style={{display:'flex',alignItems:'center',gap:8}}>
               <span style={{fontSize:9,color:T.purple,textTransform:'uppercase',letterSpacing:'0.08em',fontWeight:600}}>Linked</span>
-              <span style={{fontFamily:'monospace',fontSize:11,color:T.text2}}>{c.uid}</span>
+              <span style={{fontFamily:'monospace',fontSize:12,color:T.text2}}>{c.uid}</span>
             </div>
           </div>
           <button onClick={() => removeLinked(c.uid)}
@@ -337,7 +337,7 @@ function MyobLinksSection({
           style={{
             marginTop:6,padding:'8px 14px',borderRadius:5,
             border:`1px dashed ${T.border2}`,background:'transparent',color:T.text2,
-            fontSize:11,cursor:'pointer',fontFamily:'inherit',
+            fontSize:12,cursor:'pointer',fontFamily:'inherit',
           }}>
           + Link another MYOB customer
         </button>
@@ -346,7 +346,7 @@ function MyobLinksSection({
       {showAdd && (
         <div style={{marginTop:10,padding:14,background:T.bg3,border:`1px solid ${T.border2}`,borderRadius:7}}>
           <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:8}}>
-            <div style={{fontSize:11,color:T.text2,fontWeight:500}}>Search for a MYOB customer to link</div>
+            <div style={{fontSize:12,color:T.text2,fontWeight:500}}>Search for a MYOB customer to link</div>
             <button onClick={() => setShowAdd(false)}
               style={{background:'transparent',border:'none',color:T.text2,fontSize:18,cursor:'pointer'}}>×</button>
           </div>
@@ -374,7 +374,7 @@ function UsersSection({
   return (
     <Section title="Users" subtitle="People who can sign in to the distributor portal for this account">
       {users.length === 0 && !showInvite && (
-        <div style={{padding:'14px 12px',color:T.text3,fontSize:12,textAlign:'center',background:T.bg3,border:`1px dashed ${T.border}`,borderRadius:7,marginBottom:10}}>
+        <div style={{padding:'14px 12px',color:T.text3,fontSize:13,textAlign:'center',background:T.bg3,border:`1px dashed ${T.border}`,borderRadius:7,marginBottom:10}}>
           No users yet. Invite the first one below.
         </div>
       )}
@@ -390,7 +390,7 @@ function UsersSection({
           style={{
             marginTop:10,padding:'9px 16px',borderRadius:6,
             border:`1px solid ${T.blue}`,background:T.blue,color:'#fff',
-            fontSize:12,fontWeight:500,cursor:'pointer',fontFamily:'inherit',
+            fontSize:13,fontWeight:500,cursor:'pointer',fontFamily:'inherit',
           }}>
           + Invite user
         </button>
@@ -452,11 +452,11 @@ function UserRow({ distId, user, onChange }: { distId: string; user: Distributor
     }}>
       <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:10}}>
         <div style={{flex:1,minWidth:0}}>
-          <div style={{fontSize:12,color:T.text,fontWeight:500}}>
+          <div style={{fontSize:13,color:T.text,fontWeight:500}}>
             {user.full_name || user.email}
           </div>
           {user.full_name && (
-            <div style={{fontSize:11,color:T.text3,marginTop:2}}>{user.email}</div>
+            <div style={{fontSize:12,color:T.text3,marginTop:2}}>{user.email}</div>
           )}
         </div>
 
@@ -468,7 +468,7 @@ function UserRow({ distId, user, onChange }: { distId: string; user: Distributor
             autoFocus
             style={{
               background:T.bg4,border:`1px solid ${T.border2}`,color:T.text,
-              borderRadius:4,padding:'4px 6px',fontSize:11,fontFamily:'inherit',cursor:'pointer',
+              borderRadius:4,padding:'4px 6px',fontSize:12,fontFamily:'inherit',cursor:'pointer',
             }}>
             <option value="owner">Owner</option>
             <option value="member">Member</option>
@@ -548,7 +548,7 @@ function InviteForm({ distId, onDone, onCancel }: { distId: string; onDone: () =
   return (
     <div style={{marginTop:10,padding:14,background:T.bg3,border:`1px solid ${T.blue}40`,borderRadius:7}}>
       <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:10}}>
-        <div style={{fontSize:11,color:T.text2,fontWeight:500}}>Invite a new user</div>
+        <div style={{fontSize:12,color:T.text2,fontWeight:500}}>Invite a new user</div>
         <button onClick={onCancel} style={{background:'transparent',border:'none',color:T.text2,fontSize:18,cursor:'pointer'}}>×</button>
       </div>
       <FormGrid>
@@ -567,7 +567,7 @@ function InviteForm({ distId, onDone, onCancel }: { distId: string; onDone: () =
         </select>
       </FormRow>
       {error && (
-        <div style={{padding:8,background:`${T.red}15`,border:`1px solid ${T.red}40`,borderRadius:5,color:T.red,fontSize:11,marginBottom:10}}>
+        <div style={{padding:8,background:`${T.red}15`,border:`1px solid ${T.red}40`,borderRadius:5,color:T.red,fontSize:12,marginBottom:10}}>
           {error}
         </div>
       )}
@@ -577,12 +577,12 @@ function InviteForm({ distId, onDone, onCancel }: { distId: string; onDone: () =
             flex:1,padding:'8px 14px',borderRadius:6,
             border:`1px solid ${busy ? T.border2 : T.blue}`,
             background: busy ? T.bg4 : T.blue, color: busy ? T.text3 : '#fff',
-            fontSize:12,fontWeight:500,cursor:busy?'wait':'pointer',fontFamily:'inherit',
+            fontSize:13,fontWeight:500,cursor:busy?'wait':'pointer',fontFamily:'inherit',
           }}>
           {busy ? 'Sending invite…' : 'Send magic-link invite'}
         </button>
         <button onClick={onCancel} disabled={busy}
-          style={{padding:'8px 12px',borderRadius:6,border:`1px solid ${T.border2}`,background:'transparent',color:T.text2,fontSize:11,cursor:'pointer',fontFamily:'inherit'}}>
+          style={{padding:'8px 12px',borderRadius:6,border:`1px solid ${T.border2}`,background:'transparent',color:T.text2,fontSize:12,cursor:'pointer',fontFamily:'inherit'}}>
           Cancel
         </button>
       </div>
@@ -598,11 +598,11 @@ function DistGroupSection({ distGroupName, distGroupId }: { distGroupName: strin
   return (
     <Section title="Distributor group" subtitle="Used by distributor reporting and invoice rollups">
       {distGroupId ? (
-        <div style={{padding:'10px 12px',background:T.bg3,border:`1px solid ${T.border}`,borderRadius:7,fontSize:12,color:T.text2}}>
+        <div style={{padding:'10px 12px',background:T.bg3,border:`1px solid ${T.border}`,borderRadius:7,fontSize:13,color:T.text2}}>
           Linked to: <strong style={{color:T.text}}>{distGroupName || distGroupId}</strong>
         </div>
       ) : (
-        <div style={{padding:'10px 12px',background:T.bg3,border:`1px dashed ${T.border}`,borderRadius:7,fontSize:11,color:T.text3}}>
+        <div style={{padding:'10px 12px',background:T.bg3,border:`1px dashed ${T.border}`,borderRadius:7,fontSize:12,color:T.text3}}>
           Not linked. To link, edit the distributor group's members on the Groups admin page.
         </div>
       )}
@@ -642,9 +642,9 @@ function CustomerSearch({ onPick }: { onPick: (c: MyobCustomer) => void }) {
       <input type="text" placeholder="Search MYOB JAWS customers…"
         value={q} onChange={e => setQ(e.target.value)} autoFocus
         style={{...input, marginBottom:8}}/>
-      {loading && <div style={{fontSize:11,color:T.text3,padding:'6px 4px'}}>Searching…</div>}
+      {loading && <div style={{fontSize:12,color:T.text3,padding:'6px 4px'}}>Searching…</div>}
       {error && (
-        <div style={{padding:8,background:`${T.red}15`,border:`1px solid ${T.red}40`,borderRadius:5,color:T.red,fontSize:11}}>
+        <div style={{padding:8,background:`${T.red}15`,border:`1px solid ${T.red}40`,borderRadius:5,color:T.red,fontSize:12}}>
           {error}
         </div>
       )}
@@ -657,7 +657,7 @@ function CustomerSearch({ onPick }: { onPick: (c: MyobCustomer) => void }) {
                 background:T.bg4,border:`1px solid ${T.border}`,borderRadius:5,
                 color:T.text,cursor:'pointer',fontFamily:'inherit',
               }}>
-              <div style={{fontSize:12,fontWeight:500}}>{c.name}</div>
+              <div style={{fontSize:13,fontWeight:500}}>{c.name}</div>
               <div style={{fontFamily:'monospace',fontSize:10,color:T.text3,marginTop:2}}>{c.display_id}</div>
             </button>
           ))}
@@ -677,7 +677,7 @@ function Section({ title, subtitle, flash, children }: { title: string; subtitle
       <div style={{display:'flex',alignItems:'baseline',justifyContent:'space-between',marginBottom:14,gap:10}}>
         <div>
           <div style={{fontSize:13,fontWeight:600,color:T.text}}>{title}</div>
-          {subtitle && <div style={{fontSize:11,color:T.text3,marginTop:2}}>{subtitle}</div>}
+          {subtitle && <div style={{fontSize:12,color:T.text3,marginTop:2}}>{subtitle}</div>}
         </div>
         {flash && <span style={{fontSize:10,color:T.green,fontWeight:500}}>✓ {flash} saved</span>}
       </div>
@@ -693,7 +693,7 @@ function FormGrid({ children }: { children: React.ReactNode }) {
 function FormRow({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
   return (
     <div style={{marginBottom:14}}>
-      <div style={{fontSize:11,color:T.text2,marginBottom:4,fontWeight:500}}>{label}</div>
+      <div style={{fontSize:12,color:T.text2,marginBottom:4,fontWeight:500}}>{label}</div>
       {children}
       {hint && <div style={{fontSize:10,color:T.text3,marginTop:3}}>{hint}</div>}
     </div>
@@ -724,7 +724,7 @@ function ToggleSwitch({ on, disabled, onChange }: { on: boolean; disabled?: bool
 const input: React.CSSProperties = {
   width:'100%',
   background:T.bg3,border:`1px solid ${T.border}`,color:T.text,
-  borderRadius:5,padding:'8px 11px',fontSize:12,outline:'none',fontFamily:'inherit',
+  borderRadius:5,padding:'8px 11px',fontSize:13,outline:'none',fontFamily:'inherit',
 }
 
 export async function getServerSideProps(context: any) {

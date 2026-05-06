@@ -14,7 +14,7 @@ import type { UserRole } from '../../../../lib/permissions'
 const T = {
   bg:'#0d0f12', bg2:'#131519', bg3:'#1a1d23', bg4:'#21252d',
   border:'rgba(255,255,255,0.07)', border2:'rgba(255,255,255,0.12)',
-  text:'#e8eaf0', text2:'#8b90a0', text3:'#545968',
+  text:'#e8eaf0', text2:'#aab0c0', text3:'#8d93a4',
   blue:'#4f8ef7', teal:'#2dd4bf', green:'#34c77b',
   amber:'#f5a623', red:'#f04e4e', purple:'#a78bfa',
 }
@@ -102,7 +102,7 @@ export default function DistributorsListPage({ user }: Props) {
           {/* Header */}
           <header style={{marginBottom:18,display:'flex',alignItems:'flex-end',justifyContent:'space-between',gap:16,flexWrap:'wrap'}}>
             <div>
-              <div style={{fontSize:11,color:T.text3,textTransform:'uppercase',letterSpacing:'0.08em',marginBottom:4}}>
+              <div style={{fontSize:12,color:T.text3,textTransform:'uppercase',letterSpacing:'0.08em',marginBottom:4}}>
                 <a href="/admin/b2b" style={{color:T.text3,textDecoration:'none'}}>B2B Portal</a>
                 {' / '}
                 <span style={{color:T.text2}}>Distributors</span>
@@ -139,14 +139,14 @@ export default function DistributorsListPage({ user }: Props) {
               }}
             />
             <button onClick={load} disabled={loading}
-              style={{padding:'6px 12px',borderRadius:5,border:`1px solid ${T.border2}`,background:'transparent',color:T.text2,fontSize:11,cursor:loading?'wait':'pointer',fontFamily:'inherit'}}>
+              style={{padding:'6px 12px',borderRadius:5,border:`1px solid ${T.border2}`,background:'transparent',color:T.text2,fontSize:12,cursor:loading?'wait':'pointer',fontFamily:'inherit'}}>
               {loading ? 'Loading…' : '↻ Refresh'}
             </button>
           </div>
 
           {/* Errors */}
           {error && (
-            <div style={{padding:10,background:`${T.red}15`,border:`1px solid ${T.red}40`,borderRadius:7,color:T.red,fontSize:12,marginBottom:10}}>
+            <div style={{padding:10,background:`${T.red}15`,border:`1px solid ${T.red}40`,borderRadius:7,color:T.red,fontSize:13,marginBottom:10}}>
               {error}
             </div>
           )}
@@ -154,7 +154,7 @@ export default function DistributorsListPage({ user }: Props) {
           {/* Table */}
           <div style={{background:T.bg2,border:`1px solid ${T.border}`,borderRadius:10,overflow:'hidden'}}>
             <div style={{overflowX:'auto'}}>
-              <table style={{width:'100%',borderCollapse:'collapse',fontSize:12}}>
+              <table style={{width:'100%',borderCollapse:'collapse',fontSize:13}}>
                 <thead>
                   <tr style={{borderBottom:`1px solid ${T.border2}`}}>
                     <th style={th()}>Distributor</th>
@@ -168,7 +168,7 @@ export default function DistributorsListPage({ user }: Props) {
                 </thead>
                 <tbody>
                   {filtered.length === 0 && !loading && (
-                    <tr><td colSpan={7} style={{padding:24,textAlign:'center',color:T.text3,fontSize:12}}>
+                    <tr><td colSpan={7} style={{padding:24,textAlign:'center',color:T.text3,fontSize:13}}>
                       {items.length === 0 ? 'No distributors yet — click "Add distributor" to create your first one.' : 'No matches.'}
                     </td></tr>
                   )}
@@ -183,10 +183,10 @@ export default function DistributorsListPage({ user }: Props) {
                         <div style={{color:T.text,fontWeight:500}}>{d.display_name}</div>
                         {d.abn && <div style={{fontSize:10,color:T.text3,fontFamily:'monospace',marginTop:2}}>ABN {d.abn}</div>}
                       </td>
-                      <td style={{...td(),fontFamily:'monospace',fontSize:11,color:T.text2}}>
+                      <td style={{...td(),fontFamily:'monospace',fontSize:12,color:T.text2}}>
                         {d.myob_primary_customer_display_id || '—'}
                       </td>
-                      <td style={{...td(),color:T.text3,fontSize:11}}>
+                      <td style={{...td(),color:T.text3,fontSize:12}}>
                         {d.myob_linked_customer_uids?.length
                           ? `+${d.myob_linked_customer_uids.length} linked`
                           : '—'}
@@ -314,14 +314,14 @@ function AddDistributorDrawer({
                 marginBottom:18,display:'flex',alignItems:'center',justifyContent:'space-between',gap:10,
               }}>
                 <div style={{flex:1,minWidth:0}}>
-                  <div style={{fontSize:11,color:T.text3,marginBottom:2}}>MYOB Customer</div>
+                  <div style={{fontSize:12,color:T.text3,marginBottom:2}}>MYOB Customer</div>
                   <div style={{fontSize:13,color:T.text,fontWeight:500}}>{picked.name}</div>
                   <div style={{fontFamily:'monospace',fontSize:10,color:T.text3,marginTop:2}}>
                     {picked.display_id} · {picked.uid}
                   </div>
                 </div>
                 <button onClick={() => { setPicked(null); setStep('search') }}
-                  style={{padding:'5px 10px',borderRadius:5,border:`1px solid ${T.border2}`,background:'transparent',color:T.text2,fontSize:11,cursor:'pointer',fontFamily:'inherit'}}>
+                  style={{padding:'5px 10px',borderRadius:5,border:`1px solid ${T.border2}`,background:'transparent',color:T.text2,fontSize:12,cursor:'pointer',fontFamily:'inherit'}}>
                   Change
                 </button>
               </div>
@@ -343,7 +343,7 @@ function AddDistributorDrawer({
               </FormRow>
 
               {error && (
-                <div style={{padding:10,background:`${T.red}15`,border:`1px solid ${T.red}40`,borderRadius:5,color:T.red,fontSize:11,marginTop:10}}>
+                <div style={{padding:10,background:`${T.red}15`,border:`1px solid ${T.red}40`,borderRadius:5,color:T.red,fontSize:12,marginTop:10}}>
                   {error}
                 </div>
               )}
@@ -360,7 +360,7 @@ function AddDistributorDrawer({
                   {saving ? 'Creating…' : 'Create distributor'}
                 </button>
                 <button onClick={onClose} disabled={saving}
-                  style={{padding:'10px 14px',borderRadius:6,border:`1px solid ${T.border2}`,background:'transparent',color:T.text2,fontSize:12,cursor:'pointer',fontFamily:'inherit'}}>
+                  style={{padding:'10px 14px',borderRadius:6,border:`1px solid ${T.border2}`,background:'transparent',color:T.text2,fontSize:13,cursor:'pointer',fontFamily:'inherit'}}>
                   Cancel
                 </button>
               </div>
@@ -406,7 +406,7 @@ function CustomerSearch({ onPick }: { onPick: (c: MyobCustomer) => void }) {
 
   return (
     <div>
-      <div style={{fontSize:11,color:T.text3,textTransform:'uppercase',letterSpacing:'0.08em',marginBottom:8}}>
+      <div style={{fontSize:12,color:T.text3,textTransform:'uppercase',letterSpacing:'0.08em',marginBottom:8}}>
         Step 1 · Pick a MYOB customer
       </div>
       <input
@@ -423,21 +423,21 @@ function CustomerSearch({ onPick }: { onPick: (c: MyobCustomer) => void }) {
         }}
       />
 
-      {loading && <div style={{fontSize:11,color:T.text3,padding:'8px 4px'}}>Searching MYOB…</div>}
+      {loading && <div style={{fontSize:12,color:T.text3,padding:'8px 4px'}}>Searching MYOB…</div>}
       {error && (
-        <div style={{padding:10,background:`${T.red}15`,border:`1px solid ${T.red}40`,borderRadius:5,color:T.red,fontSize:11}}>
+        <div style={{padding:10,background:`${T.red}15`,border:`1px solid ${T.red}40`,borderRadius:5,color:T.red,fontSize:12}}>
           {error}
         </div>
       )}
 
       {!loading && !error && results.length === 0 && q && (
-        <div style={{fontSize:12,color:T.text3,padding:'12px 4px'}}>
+        <div style={{fontSize:13,color:T.text3,padding:'12px 4px'}}>
           No matches in MYOB. Check spelling or try a customer code.
         </div>
       )}
 
       {!loading && !error && results.length === 0 && !q && (
-        <div style={{fontSize:12,color:T.text3,padding:'12px 4px'}}>
+        <div style={{fontSize:13,color:T.text3,padding:'12px 4px'}}>
           Start typing to search MYOB customer cards.
         </div>
       )}
@@ -453,7 +453,7 @@ function CustomerSearch({ onPick }: { onPick: (c: MyobCustomer) => void }) {
                 display:'flex',alignItems:'center',justifyContent:'space-between',gap:10,
               }}>
               <div style={{flex:1,minWidth:0}}>
-                <div style={{fontSize:12,fontWeight:500}}>{c.name}</div>
+                <div style={{fontSize:13,fontWeight:500}}>{c.name}</div>
                 <div style={{fontFamily:'monospace',fontSize:10,color:T.text3,marginTop:2}}>
                   {c.display_id || '—'}
                   {c.is_individual && <span style={{marginLeft:8,color:T.purple}}>· Individual</span>}
@@ -472,7 +472,7 @@ function CustomerSearch({ onPick }: { onPick: (c: MyobCustomer) => void }) {
 function FormRow({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
   return (
     <div style={{marginBottom:14}}>
-      <div style={{fontSize:11,color:T.text2,marginBottom:4,fontWeight:500}}>{label}</div>
+      <div style={{fontSize:12,color:T.text2,marginBottom:4,fontWeight:500}}>{label}</div>
       {children}
       {hint && <div style={{fontSize:10,color:T.text3,marginTop:3}}>{hint}</div>}
     </div>
@@ -482,7 +482,7 @@ function FormRow({ label, hint, children }: { label: string; hint?: string; chil
 const input: React.CSSProperties = {
   width:'100%',
   background:T.bg3,border:`1px solid ${T.border}`,color:T.text,
-  borderRadius:5,padding:'8px 11px',fontSize:12,outline:'none',fontFamily:'inherit',
+  borderRadius:5,padding:'8px 11px',fontSize:13,outline:'none',fontFamily:'inherit',
 }
 
 function th(width?: number): React.CSSProperties {

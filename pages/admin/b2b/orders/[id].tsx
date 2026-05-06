@@ -16,7 +16,7 @@ import { roleHasPermission, type UserRole } from '../../../../lib/permissions'
 const T = {
   bg:'#0d0f12', bg2:'#131519', bg3:'#1a1d23', bg4:'#21252d',
   border:'rgba(255,255,255,0.07)', border2:'rgba(255,255,255,0.12)',
-  text:'#e8eaf0', text2:'#8b90a0', text3:'#545968',
+  text:'#e8eaf0', text2:'#aab0c0', text3:'#8d93a4',
   blue:'#4f8ef7', teal:'#2dd4bf', green:'#34c77b',
   amber:'#f5a623', red:'#f04e4e', purple:'#a78bfa',
 }
@@ -300,7 +300,7 @@ export default function AdminOrderDetailPage({ user }: Props) {
         <main style={{flex:1,padding:'28px 32px',maxWidth:1500}}>
 
           <header style={{marginBottom:18}}>
-            <div style={{fontSize:11,color:T.text3,textTransform:'uppercase',letterSpacing:'0.08em',marginBottom:4}}>
+            <div style={{fontSize:12,color:T.text3,textTransform:'uppercase',letterSpacing:'0.08em',marginBottom:4}}>
               <a href="/admin/b2b" style={{color:T.text3,textDecoration:'none'}}>B2B Portal</a>
               {' / '}
               <a href="/admin/b2b/orders" style={{color:T.text3,textDecoration:'none'}}>Orders</a>
@@ -320,24 +320,24 @@ export default function AdminOrderDetailPage({ user }: Props) {
           </header>
 
           {flash && (
-            <div style={{padding:'8px 14px',background:`${T.green}15`,border:`1px solid ${T.green}40`,borderRadius:7,color:T.green,fontSize:12,marginBottom:14}}>
+            <div style={{padding:'8px 14px',background:`${T.green}15`,border:`1px solid ${T.green}40`,borderRadius:7,color:T.green,fontSize:13,marginBottom:14}}>
               ✓ {flash}
             </div>
           )}
           {error && (
-            <div style={{padding:12,background:`${T.red}15`,border:`1px solid ${T.red}40`,borderRadius:7,color:T.red,fontSize:12,marginBottom:14}}>
+            <div style={{padding:12,background:`${T.red}15`,border:`1px solid ${T.red}40`,borderRadius:7,color:T.red,fontSize:13,marginBottom:14}}>
               {error}
             </div>
           )}
           {actionError && (
-            <div style={{padding:12,background:`${T.red}15`,border:`1px solid ${T.red}40`,borderRadius:7,color:T.red,fontSize:12,marginBottom:14,display:'flex',justifyContent:'space-between',gap:14}}>
+            <div style={{padding:12,background:`${T.red}15`,border:`1px solid ${T.red}40`,borderRadius:7,color:T.red,fontSize:13,marginBottom:14,display:'flex',justifyContent:'space-between',gap:14}}>
               <span>{actionError}</span>
               <button onClick={() => setActionError(null)} style={{background:'transparent',border:'none',color:T.red,cursor:'pointer',fontSize:14}}>×</button>
             </div>
           )}
 
           {loading && !data && (
-            <div style={{padding:40,textAlign:'center',color:T.text3,fontSize:12}}>Loading…</div>
+            <div style={{padding:40,textAlign:'center',color:T.text3,fontSize:13}}>Loading…</div>
           )}
 
           {data && (
@@ -359,7 +359,7 @@ export default function AdminOrderDetailPage({ user }: Props) {
                 {/* Lines */}
                 <Card title={`Items (${data.lines.length})`}>
                   <div style={{overflowX:'auto',margin:'0 -22px',padding:'0 22px'}}>
-                    <table style={{width:'100%',borderCollapse:'collapse',fontSize:12}}>
+                    <table style={{width:'100%',borderCollapse:'collapse',fontSize:13}}>
                       <thead>
                         <tr style={{borderBottom:`1px solid ${T.border}`}}>
                           <th style={th(140)}>SKU</th>
@@ -372,7 +372,7 @@ export default function AdminOrderDetailPage({ user }: Props) {
                       <tbody>
                         {data.lines.map((ln, i) => (
                           <tr key={ln.id} style={{borderTop: i > 0 ? `1px solid ${T.border}` : 'none'}}>
-                            <td style={td()}><span style={{fontFamily:'monospace',fontSize:11,color:T.text2}}>{ln.sku}</span></td>
+                            <td style={td()}><span style={{fontFamily:'monospace',fontSize:12,color:T.text2}}>{ln.sku}</span></td>
                             <td style={td()}>{ln.name}</td>
                             <td style={{...td(),textAlign:'right',fontVariantNumeric:'tabular-nums'}}>{ln.qty}</td>
                             <td style={{...td(),textAlign:'right',fontVariantNumeric:'tabular-nums',fontFamily:'monospace'}}>${money(ln.unit_trade_price_ex_gst)}</td>
@@ -406,7 +406,7 @@ export default function AdminOrderDetailPage({ user }: Props) {
                       <div style={{marginTop:8}}>
                         <a href={`https://dashboard.stripe.com/payments/${data.stripe.payment_intent_id}`}
                           target="_blank" rel="noopener noreferrer"
-                          style={{fontSize:11,color:T.blue,textDecoration:'none'}}>
+                          style={{fontSize:12,color:T.blue,textDecoration:'none'}}>
                           Open in Stripe →
                         </a>
                       </div>
@@ -418,7 +418,7 @@ export default function AdminOrderDetailPage({ user }: Props) {
                     <KV label="Written"      value={data.myob.written_at ? fullDate(data.myob.written_at) : '—'} mono small/>
                     <KV label="Attempts"     value={String(data.myob.write_attempts ?? 0)}/>
                     {data.myob.write_error && (
-                      <div style={{marginTop:8,padding:8,background:`${T.red}15`,border:`1px solid ${T.red}40`,borderRadius:5,color:T.red,fontSize:11}}>
+                      <div style={{marginTop:8,padding:8,background:`${T.red}15`,border:`1px solid ${T.red}40`,borderRadius:5,color:T.red,fontSize:12}}>
                         ⚠ {data.myob.write_error}
                       </div>
                     )}
@@ -429,7 +429,7 @@ export default function AdminOrderDetailPage({ user }: Props) {
                 {data.refunds.length > 0 && (
                   <Card title={`Refunds (${data.refunds.length})`}>
                     {data.refunds.map(rf => (
-                      <div key={rf.id} style={{display:'flex',justifyContent:'space-between',gap:14,padding:'8px 0',borderTop:`1px solid ${T.border}`,fontSize:12}}>
+                      <div key={rf.id} style={{display:'flex',justifyContent:'space-between',gap:14,padding:'8px 0',borderTop:`1px solid ${T.border}`,fontSize:13}}>
                         <div>
                           <div style={{color:T.text}}>${money(rf.amount)} <span style={{color:T.text3,fontSize:10}}>{rf.currency.toUpperCase()}</span></div>
                           <div style={{fontSize:10,color:T.text3,marginTop:2,fontFamily:'monospace'}}>
@@ -453,7 +453,7 @@ export default function AdminOrderDetailPage({ user }: Props) {
                 {/* Customer notes (read-only) */}
                 {data.customer_notes && (
                   <Card title="Customer notes">
-                    <p style={{margin:0,whiteSpace:'pre-wrap',fontSize:12,color:T.text2,lineHeight:1.5}}>{data.customer_notes}</p>
+                    <p style={{margin:0,whiteSpace:'pre-wrap',fontSize:13,color:T.text2,lineHeight:1.5}}>{data.customer_notes}</p>
                   </Card>
                 )}
 
@@ -471,7 +471,7 @@ export default function AdminOrderDetailPage({ user }: Props) {
                 {canEdit && (
                   <Card title="Actions">
                     {allowedTransitions.length === 0 && !canCancel && !canDoRefund && (
-                      <div style={{fontSize:11,color:T.text3}}>No actions available for this status.</div>
+                      <div style={{fontSize:12,color:T.text3}}>No actions available for this status.</div>
                     )}
 
                     {allowedTransitions.map(t => (
@@ -527,7 +527,7 @@ export default function AdminOrderDetailPage({ user }: Props) {
                       style={{
                         width:'100%',boxSizing:'border-box',
                         background:T.bg3,border:`1px solid ${T.border}`,color:T.text,
-                        borderRadius:5,padding:'8px 10px',fontSize:12,outline:'none',
+                        borderRadius:5,padding:'8px 10px',fontSize:13,outline:'none',
                         resize:'vertical',fontFamily:'inherit',
                       }}/>
                     <div style={{fontSize:10,color: notesError ? T.red : T.text3,marginTop:4}}>
@@ -567,7 +567,7 @@ function Card({ title, children }: { title: string; children: React.ReactNode })
 
 function KV({ label, value, mono, small, valueColor }: { label: string; value: string; mono?: boolean; small?: boolean; valueColor?: string }) {
   return (
-    <div style={{display:'flex',justifyContent:'space-between',gap:14,padding:'5px 0',fontSize:12,borderBottom:`1px solid ${T.border}`}}>
+    <div style={{display:'flex',justifyContent:'space-between',gap:14,padding:'5px 0',fontSize:13,borderBottom:`1px solid ${T.border}`}}>
       <span style={{color:T.text3,flexShrink:0}}>{label}</span>
       <span style={{
         color: valueColor || T.text2,
@@ -604,7 +604,7 @@ function StatusPill({ status }: { status: string }) {
       display:'inline-flex',alignItems:'center',gap:6,
       padding:'3px 10px',borderRadius:5,
       background:`${color}15`,border:`1px solid ${color}40`,color,
-      fontSize:11,fontWeight:600,textTransform:'uppercase',letterSpacing:'0.05em',
+      fontSize:12,fontWeight:600,textTransform:'uppercase',letterSpacing:'0.05em',
     }}>
       <span style={{display:'inline-block',width:7,height:7,borderRadius:'50%',background:color}}/>
       {label}
@@ -613,7 +613,7 @@ function StatusPill({ status }: { status: string }) {
 }
 
 function Timeline({ events }: { events: OrderEvent[] }) {
-  if (events.length === 0) return <div style={{fontSize:11,color:T.text3}}>No events yet.</div>
+  if (events.length === 0) return <div style={{fontSize:12,color:T.text3}}>No events yet.</div>
   return (
     <div style={{display:'flex',flexDirection:'column',gap:10}}>
       {events.map((ev, i) => {
@@ -627,7 +627,7 @@ function Timeline({ events }: { events: OrderEvent[] }) {
                          ev.event_type === 'checkout_started' ? T.amber :
                          T.blue
         return (
-          <div key={ev.id} style={{display:'flex',gap:10,fontSize:11}}>
+          <div key={ev.id} style={{display:'flex',gap:10,fontSize:12}}>
             <div style={{
               width:8,height:8,borderRadius:'50%',background:color,
               flexShrink:0,marginTop:5,
@@ -641,7 +641,7 @@ function Timeline({ events }: { events: OrderEvent[] }) {
                 {' · '}{ev.actor_name}
               </div>
               {ev.notes && (
-                <div style={{color:T.text2,fontSize:11,marginTop:3,fontStyle:'italic',lineHeight:1.4}}>{ev.notes}</div>
+                <div style={{color:T.text2,fontSize:12,marginTop:3,fontStyle:'italic',lineHeight:1.4}}>{ev.notes}</div>
               )}
               {ev.event_type === 'status_changed' && ev.metadata?.tracking_number && (
                 <div style={{color:T.text3,fontSize:10,marginTop:3,fontFamily:'monospace'}}>
@@ -790,14 +790,14 @@ function CancelModal({ order, busy, canRefund, onClose, onConfirm }: { order: Or
       {isPaid && canRefund && (
         <label style={{display:'flex',gap:10,padding:12,borderRadius:6,border:`1px solid ${alsoRefund ? T.purple : T.border2}`,background:alsoRefund ? `${T.purple}10` : 'transparent',cursor:'pointer',marginBottom:14}}>
           <input type="checkbox" checked={alsoRefund} onChange={e => setAlsoRefund(e.target.checked)} style={{marginTop:2}}/>
-          <span style={{fontSize:12,color:T.text2,lineHeight:1.5}}>
+          <span style={{fontSize:13,color:T.text2,lineHeight:1.5}}>
             Also refund the remaining <strong style={{color:T.text}}>${money(remaining)}</strong> via Stripe.
           </span>
         </label>
       )}
 
       {isPaid && !canRefund && (
-        <div style={{padding:10,borderRadius:6,background:`${T.amber}15`,border:`1px solid ${T.amber}40`,color:T.amber,fontSize:11,marginBottom:14}}>
+        <div style={{padding:10,borderRadius:6,background:`${T.amber}15`,border:`1px solid ${T.amber}40`,color:T.amber,fontSize:12,marginBottom:14}}>
           ⚠ This order is paid, but you don't have refund permissions. You can cancel without refund (money stays in Stripe), or ask an admin to issue the refund first.
         </div>
       )}
@@ -830,7 +830,7 @@ function CancelModal({ order, busy, canRefund, onClose, onConfirm }: { order: Or
 function Field({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
   return (
     <label style={{display:'flex',flexDirection:'column',gap:4,marginBottom:14}}>
-      <span style={{fontSize:11,color:T.text2,fontWeight:500}}>{label}</span>
+      <span style={{fontSize:12,color:T.text2,fontWeight:500}}>{label}</span>
       {children}
       {hint && <span style={{fontSize:10,color:T.text3}}>{hint}</span>}
     </label>
@@ -852,7 +852,7 @@ function actionBtn(primary: boolean, busy: boolean, color?: string): React.CSSPr
     border:`1px solid ${primary ? c : T.border2}`,
     background: primary && !busy ? c : 'transparent',
     color: primary && !busy ? '#fff' : (color || T.text2),
-    fontSize:12,fontWeight: primary ? 600 : 400,
+    fontSize:13,fontWeight: primary ? 600 : 400,
     cursor: busy ? 'wait' : 'pointer',
     fontFamily:'inherit',
     opacity: busy ? 0.6 : 1,
@@ -864,7 +864,7 @@ function modalTitle(): React.CSSProperties {
   return { fontSize:16,fontWeight:600,margin:'0 0 6px',color:T.text,letterSpacing:'-0.005em' }
 }
 function modalDesc(): React.CSSProperties {
-  return { fontSize:12,color:T.text3,margin:'0 0 18px',lineHeight:1.5 }
+  return { fontSize:13,color:T.text3,margin:'0 0 18px',lineHeight:1.5 }
 }
 function modalInput(): React.CSSProperties {
   return {
@@ -879,7 +879,7 @@ function modalBtnPrimary(enabled: boolean, color: string): React.CSSProperties {
     border:`1px solid ${enabled ? color : T.border2}`,
     background: enabled ? color : T.bg3,
     color: enabled ? '#fff' : T.text3,
-    fontSize:12,fontWeight:500,
+    fontSize:13,fontWeight:500,
     cursor: enabled ? 'pointer' : 'not-allowed',
     fontFamily:'inherit',
   }
@@ -889,7 +889,7 @@ function modalBtnSecondary(): React.CSSProperties {
     padding:'9px 16px',borderRadius:6,
     border:`1px solid ${T.border2}`,
     background:'transparent',color:T.text2,
-    fontSize:12,fontFamily:'inherit',cursor:'pointer',
+    fontSize:13,fontFamily:'inherit',cursor:'pointer',
   }
 }
 function modeBtn(active: boolean, color: string): React.CSSProperties {
@@ -898,7 +898,7 @@ function modeBtn(active: boolean, color: string): React.CSSProperties {
     border:`1px solid ${active ? color : T.border2}`,
     background: active ? `${color}20` : 'transparent',
     color: active ? color : T.text2,
-    fontSize:12,fontWeight: active ? 600 : 400,
+    fontSize:13,fontWeight: active ? 600 : 400,
     cursor:'pointer',fontFamily:'inherit',
   }
 }

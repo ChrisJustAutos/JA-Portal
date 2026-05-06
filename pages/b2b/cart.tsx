@@ -20,7 +20,7 @@ import { requireB2BPageAuth } from '../../lib/b2bAuthServer'
 const T = {
   bg:'#0d0f12', bg2:'#131519', bg3:'#1a1d23', bg4:'#21252d',
   border:'rgba(255,255,255,0.07)', border2:'rgba(255,255,255,0.12)',
-  text:'#e8eaf0', text2:'#8b90a0', text3:'#545968',
+  text:'#e8eaf0', text2:'#aab0c0', text3:'#8d93a4',
   blue:'#4f8ef7', teal:'#2dd4bf', green:'#34c77b',
   amber:'#f5a623', red:'#f04e4e',
 }
@@ -176,7 +176,7 @@ export default function B2BCartPage({ b2bUser }: Props) {
         <header style={{marginBottom:18}}>
           <h1 style={{fontSize:22,fontWeight:600,margin:0,letterSpacing:'-0.01em'}}>Your cart</h1>
           {data && data.lines.length > 0 && (
-            <div style={{fontSize:12,color:T.text3,marginTop:4}}>
+            <div style={{fontSize:13,color:T.text3,marginTop:4}}>
               {data.line_count} {data.line_count === 1 ? 'item' : 'items'} · {data.item_count} {data.item_count === 1 ? 'unit' : 'units'}
             </div>
           )}
@@ -184,7 +184,7 @@ export default function B2BCartPage({ b2bUser }: Props) {
 
         {/* Stripe-cancelled banner */}
         {cancelledOrderId && (
-          <div style={{padding:'12px 16px',background:`${T.amber}15`,border:`1px solid ${T.amber}40`,borderRadius:7,fontSize:12,color:T.text,marginBottom:14,display:'flex',alignItems:'center',justifyContent:'space-between',gap:14}}>
+          <div style={{padding:'12px 16px',background:`${T.amber}15`,border:`1px solid ${T.amber}40`,borderRadius:7,fontSize:13,color:T.text,marginBottom:14,display:'flex',alignItems:'center',justifyContent:'space-between',gap:14}}>
             <span>Checkout cancelled. Your cart has been saved — you can try again whenever you're ready.</span>
             <button
               onClick={() => router.replace('/b2b/cart', undefined, { shallow: true })}
@@ -193,13 +193,13 @@ export default function B2BCartPage({ b2bUser }: Props) {
         )}
 
         {error && (
-          <div style={{padding:12,background:`${T.red}15`,border:`1px solid ${T.red}40`,borderRadius:7,color:T.red,fontSize:12,marginBottom:14}}>
+          <div style={{padding:12,background:`${T.red}15`,border:`1px solid ${T.red}40`,borderRadius:7,color:T.red,fontSize:13,marginBottom:14}}>
             {error}
           </div>
         )}
 
         {checkoutError && (
-          <div style={{padding:'12px 16px',background:`${T.red}15`,border:`1px solid ${T.red}40`,borderRadius:7,color:T.red,fontSize:12,marginBottom:14}}>
+          <div style={{padding:'12px 16px',background:`${T.red}15`,border:`1px solid ${T.red}40`,borderRadius:7,color:T.red,fontSize:13,marginBottom:14}}>
             <div style={{fontWeight:500,marginBottom:4}}>{checkoutError}</div>
             {checkoutIssues && checkoutIssues.length > 0 && (
               <ul style={{margin:'4px 0 0',paddingLeft:18,color:T.text2}}>
@@ -210,7 +210,7 @@ export default function B2BCartPage({ b2bUser }: Props) {
         )}
 
         {loading && !data && (
-          <div style={{padding:36,textAlign:'center',color:T.text3,fontSize:12,background:T.bg2,border:`1px solid ${T.border}`,borderRadius:10}}>
+          <div style={{padding:36,textAlign:'center',color:T.text3,fontSize:13,background:T.bg2,border:`1px solid ${T.border}`,borderRadius:10}}>
             Loading…
           </div>
         )}
@@ -219,7 +219,7 @@ export default function B2BCartPage({ b2bUser }: Props) {
           <div style={{padding:36,textAlign:'center',background:T.bg2,border:`1px solid ${T.border}`,borderRadius:10}}>
             <div style={{fontSize:14,color:T.text2,marginBottom:14}}>Your cart is empty.</div>
             <a href="/b2b/catalogue"
-              style={{display:'inline-block',padding:'9px 18px',borderRadius:6,border:`1px solid ${T.blue}`,background:T.blue,color:'#fff',fontSize:12,fontWeight:500,textDecoration:'none'}}>
+              style={{display:'inline-block',padding:'9px 18px',borderRadius:6,border:`1px solid ${T.blue}`,background:T.blue,color:'#fff',fontSize:13,fontWeight:500,textDecoration:'none'}}>
               Browse catalogue
             </a>
           </div>
@@ -297,7 +297,7 @@ function CartLineRow({
         <div style={{fontSize:9,color:T.text3,fontFamily:'monospace',textTransform:'uppercase',letterSpacing:'0.04em'}}>{line.sku}</div>
         <div style={{fontSize:13,color:T.text,fontWeight:500,marginTop:2}}>{line.name}</div>
         <div style={{display:'flex',alignItems:'center',gap:10,flexWrap:'wrap',marginTop:5}}>
-          <span style={{fontSize:11,color:T.text3}}>${line.unit_price_ex_gst.toFixed(2)} ex GST · each</span>
+          <span style={{fontSize:12,color:T.text3}}>${line.unit_price_ex_gst.toFixed(2)} ex GST · each</span>
           <span style={{
             display:'inline-block',padding:'1px 7px',borderRadius:8,fontSize:9,fontWeight:500,
             background:`${stockColor}18`,color:stockColor,
@@ -373,7 +373,7 @@ function TotalsPanel({
       background:T.bg2,border:`1px solid ${T.border}`,borderRadius:10,
       padding:'18px 20px',position:'sticky',top:74,
     }}>
-      <div style={{fontSize:11,color:T.text3,textTransform:'uppercase',letterSpacing:'0.08em',marginBottom:12,fontWeight:500}}>
+      <div style={{fontSize:12,color:T.text3,textTransform:'uppercase',letterSpacing:'0.08em',marginBottom:12,fontWeight:500}}>
         Order summary
       </div>
 
@@ -406,7 +406,7 @@ function TotalsPanel({
             width:'100%',boxSizing:'border-box',
             background:T.bg3,
             border:`1px solid ${poTooLong ? T.red : T.border2}`,
-            color:T.text,borderRadius:5,padding:'8px 10px',fontSize:12,outline:'none',
+            color:T.text,borderRadius:5,padding:'8px 10px',fontSize:13,outline:'none',
             fontFamily:'inherit',
           }}/>
         <div style={{fontSize:10,color: poTooLong ? T.red : T.text3,marginTop:3}}>

@@ -11,7 +11,7 @@ import { requireB2BPageAuth } from '../../lib/b2bAuthServer'
 const T = {
   bg:'#0d0f12', bg2:'#131519', bg3:'#1a1d23', bg4:'#21252d',
   border:'rgba(255,255,255,0.07)', border2:'rgba(255,255,255,0.12)',
-  text:'#e8eaf0', text2:'#8b90a0', text3:'#545968',
+  text:'#e8eaf0', text2:'#aab0c0', text3:'#8d93a4',
   blue:'#4f8ef7', teal:'#2dd4bf', green:'#34c77b',
   amber:'#f5a623', red:'#f04e4e',
 }
@@ -70,18 +70,18 @@ export default function OrdersListPage({ b2bUser }: Props) {
         <header style={{display:'flex',alignItems:'flex-end',justifyContent:'space-between',marginBottom:18,gap:12,flexWrap:'wrap'}}>
           <div>
             <h1 style={{fontSize:22,fontWeight:600,margin:0,letterSpacing:'-0.01em'}}>Orders</h1>
-            <div style={{fontSize:12,color:T.text3,marginTop:4}}>
+            <div style={{fontSize:13,color:T.text3,marginTop:4}}>
               Recent purchases for {b2bUser.distributor.displayName}.
             </div>
           </div>
           <button onClick={load} disabled={loading}
-            style={{padding:'7px 12px',borderRadius:5,border:`1px solid ${T.border2}`,background:'transparent',color:T.text2,fontSize:11,cursor:loading?'wait':'pointer',fontFamily:'inherit'}}>
+            style={{padding:'7px 12px',borderRadius:5,border:`1px solid ${T.border2}`,background:'transparent',color:T.text2,fontSize:12,cursor:loading?'wait':'pointer',fontFamily:'inherit'}}>
             {loading ? '…' : '↻'}
           </button>
         </header>
 
         {error && (
-          <div style={{padding:12,background:`${T.red}15`,border:`1px solid ${T.red}40`,borderRadius:7,color:T.red,fontSize:12,marginBottom:14}}>
+          <div style={{padding:12,background:`${T.red}15`,border:`1px solid ${T.red}40`,borderRadius:7,color:T.red,fontSize:13,marginBottom:14}}>
             {error}
           </div>
         )}
@@ -90,7 +90,7 @@ export default function OrdersListPage({ b2bUser }: Props) {
           <div style={{padding:36,textAlign:'center',background:T.bg2,border:`1px solid ${T.border}`,borderRadius:10}}>
             <div style={{fontSize:14,color:T.text2,marginBottom:14}}>No orders yet.</div>
             <a href="/b2b/catalogue"
-              style={{display:'inline-block',padding:'9px 18px',borderRadius:6,border:`1px solid ${T.blue}`,background:T.blue,color:'#fff',fontSize:12,fontWeight:500,textDecoration:'none'}}>
+              style={{display:'inline-block',padding:'9px 18px',borderRadius:6,border:`1px solid ${T.blue}`,background:T.blue,color:'#fff',fontSize:13,fontWeight:500,textDecoration:'none'}}>
               Browse catalogue
             </a>
           </div>
@@ -117,7 +117,7 @@ export default function OrdersListPage({ b2bUser }: Props) {
                     <Td><StatusPill status={o.status} hasError={!!o.myob_write_error}/></Td>
                     <Td align="right">${Number(o.total_inc).toFixed(2)}</Td>
                     <Td muted>{o.myob_invoice_number || (o.status === 'paid' ? <span style={{color:T.amber}}>processing…</span> : '—')}</Td>
-                    <Td><a href={`/b2b/orders/${o.id}`} style={{color:T.blue,textDecoration:'none',fontSize:11}}>→</a></Td>
+                    <Td><a href={`/b2b/orders/${o.id}`} style={{color:T.blue,textDecoration:'none',fontSize:12}}>→</a></Td>
                   </tr>
                 ))}
               </tbody>
@@ -148,7 +148,7 @@ function Td({ children, align, muted }: { children?: React.ReactNode; align?: 'l
   return (
     <td style={{
       textAlign: align || 'left',
-      fontSize:12,color: muted ? T.text2 : T.text,
+      fontSize:13,color: muted ? T.text2 : T.text,
       padding:'12px 14px',
       fontVariantNumeric: align === 'right' ? 'tabular-nums' : undefined,
     }}>

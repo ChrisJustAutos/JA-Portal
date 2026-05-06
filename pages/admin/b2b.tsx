@@ -14,7 +14,7 @@ import type { UserRole } from '../../lib/permissions'
 const T = {
   bg:'#0d0f12', bg2:'#131519', bg3:'#1a1d23', bg4:'#21252d',
   border:'rgba(255,255,255,0.07)', border2:'rgba(255,255,255,0.12)',
-  text:'#e8eaf0', text2:'#8b90a0', text3:'#545968',
+  text:'#e8eaf0', text2:'#aab0c0', text3:'#8d93a4',
   blue:'#4f8ef7', teal:'#2dd4bf', green:'#34c77b',
   amber:'#f5a623', red:'#f04e4e', purple:'#a78bfa', accent:'#4f8ef7',
 }
@@ -125,7 +125,7 @@ export default function B2BAdminPage({ user }: Props) {
 
           {/* Header */}
           <header style={{marginBottom:24}}>
-            <div style={{fontSize:11,color:T.text3,textTransform:'uppercase',letterSpacing:'0.08em',marginBottom:4}}>
+            <div style={{fontSize:12,color:T.text3,textTransform:'uppercase',letterSpacing:'0.08em',marginBottom:4}}>
               JAWS Distribution
             </div>
             <h1 style={{fontSize:24,fontWeight:600,margin:0,letterSpacing:'-0.01em'}}>
@@ -133,13 +133,13 @@ export default function B2BAdminPage({ user }: Props) {
             </h1>
             <p style={{margin:'6px 0 0',color:T.text2,fontSize:13}}>
               Manage the JAWS distributor portal: catalogue sync, distributor accounts, orders.
-              Distributor-facing pages will live at <code style={{color:T.teal,fontSize:12}}>/b2b/*</code>.
+              Distributor-facing pages will live at <code style={{color:T.teal,fontSize:13}}>/b2b/*</code>.
             </p>
           </header>
 
           {/* Catalogue stats grid */}
           <section style={{marginBottom:24}}>
-            <div style={{fontSize:11,color:T.text3,textTransform:'uppercase',letterSpacing:'0.08em',marginBottom:10}}>
+            <div style={{fontSize:12,color:T.text3,textTransform:'uppercase',letterSpacing:'0.08em',marginBottom:10}}>
               Catalogue
             </div>
             <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(180px,1fr))',gap:12}}>
@@ -149,7 +149,7 @@ export default function B2BAdminPage({ user }: Props) {
               <StatTile label="Last sync"              display={relativeTime(stats?.lastSyncAt ?? null)} loading={statsLoading} color={T.text2}/>
             </div>
             {statsError && (
-              <div style={{marginTop:10,padding:10,background:`${T.red}15`,border:`1px solid ${T.red}40`,borderRadius:6,color:T.red,fontSize:12}}>
+              <div style={{marginTop:10,padding:10,background:`${T.red}15`,border:`1px solid ${T.red}40`,borderRadius:6,color:T.red,fontSize:13}}>
                 Couldn't load stats: {statsError}
               </div>
             )}
@@ -163,12 +163,12 @@ export default function B2BAdminPage({ user }: Props) {
             <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:16,flexWrap:'wrap'}}>
               <div style={{flex:1,minWidth:240}}>
                 <div style={{fontSize:14,fontWeight:600,marginBottom:3}}>Sync catalogue from MYOB</div>
-                <div style={{fontSize:12,color:T.text2}}>
+                <div style={{fontSize:13,color:T.text2}}>
                   Pulls all active selling items from MYOB JAWS and upserts into the B2B catalogue.
                   Preserves visibility, trade prices, descriptions, and images on existing rows.
                 </div>
                 {stats?.lastSyncAdded != null && (
-                  <div style={{fontSize:11,color:T.text3,marginTop:6,fontFamily:'monospace'}}>
+                  <div style={{fontSize:12,color:T.text3,marginTop:6,fontFamily:'monospace'}}>
                     Last run: +{stats.lastSyncAdded} added · ~{stats.lastSyncUpdated ?? 0} updated
                     {stats?.lastSyncError && <span style={{color:T.red}}> · {stats.lastSyncError}</span>}
                   </div>
@@ -193,19 +193,19 @@ export default function B2BAdminPage({ user }: Props) {
             </div>
 
             {syncing && (
-              <div style={{marginTop:14,fontSize:12,color:T.text3,fontStyle:'italic'}}>
+              <div style={{marginTop:14,fontSize:13,color:T.text3,fontStyle:'italic'}}>
                 Pulling JAWS Inventory items… can take 30-90s for the full catalogue.
               </div>
             )}
 
             {syncError && (
-              <div style={{marginTop:14,padding:10,background:`${T.red}15`,border:`1px solid ${T.red}40`,borderRadius:6,color:T.red,fontSize:12}}>
+              <div style={{marginTop:14,padding:10,background:`${T.red}15`,border:`1px solid ${T.red}40`,borderRadius:6,color:T.red,fontSize:13}}>
                 <strong>Sync failed:</strong> {syncError}
               </div>
             )}
 
             {syncResult && (
-              <div style={{marginTop:14,padding:12,background:T.bg3,border:`1px solid ${T.border}`,borderRadius:6,fontSize:12}}>
+              <div style={{marginTop:14,padding:12,background:T.bg3,border:`1px solid ${T.border}`,borderRadius:6,fontSize:13}}>
                 <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(110px,1fr))',gap:10}}>
                   <ResultStat label="Scanned"   value={syncResult.totalScanned}                                    color={T.text}/>
                   <ResultStat label="Added"     value={syncResult.added}                                            color={T.green}/>
@@ -217,7 +217,7 @@ export default function B2BAdminPage({ user }: Props) {
                 </div>
                 {syncResult.errors.length > 0 && (
                   <details style={{marginTop:12}}>
-                    <summary style={{cursor:'pointer',color:T.amber,fontSize:12}}>
+                    <summary style={{cursor:'pointer',color:T.amber,fontSize:13}}>
                       {syncResult.errors.length} error{syncResult.errors.length === 1 ? '' : 's'} — click to expand
                     </summary>
                     <div style={{marginTop:8,maxHeight:200,overflowY:'auto'}}>
@@ -225,7 +225,7 @@ export default function B2BAdminPage({ user }: Props) {
                         <div key={i} style={{
                           padding:'6px 8px',marginBottom:4,
                           background:T.bg2,border:`1px solid ${T.border}`,borderRadius:4,
-                          fontFamily:'monospace',fontSize:11,
+                          fontFamily:'monospace',fontSize:12,
                         }}>
                           <span style={{color:T.text3}}>{err.sku}</span>
                           {' — '}
@@ -261,8 +261,8 @@ export default function B2BAdminPage({ user }: Props) {
           </section>
 
           {/* Coming next */}
-          <section style={{padding:'14px 18px',background:T.bg2,border:`1px dashed ${T.border2}`,borderRadius:10,fontSize:12,color:T.text2}}>
-            <div style={{fontSize:11,color:T.text3,textTransform:'uppercase',letterSpacing:'0.08em',marginBottom:6}}>
+          <section style={{padding:'14px 18px',background:T.bg2,border:`1px dashed ${T.border2}`,borderRadius:10,fontSize:13,color:T.text2}}>
+            <div style={{fontSize:12,color:T.text3,textTransform:'uppercase',letterSpacing:'0.08em',marginBottom:6}}>
               Phase 2 — coming next
             </div>
             Catalogue management grid (visibility, trade prices, image upload),
@@ -344,7 +344,7 @@ function QuickLinkCard({
         <div style={{fontSize:13,fontWeight:600,color: ready ? T.blue : T.text}}>{title}</div>
         {!disabled && <span style={{color: ready ? T.blue : T.text3,fontSize:14}}>→</span>}
       </div>
-      <div style={{fontSize:11,color:T.text3,lineHeight:1.4}}>{subtitle}</div>
+      <div style={{fontSize:12,color:T.text3,lineHeight:1.4}}>{subtitle}</div>
     </Wrapper>
   )
 }

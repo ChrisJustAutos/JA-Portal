@@ -19,7 +19,7 @@ import { requireB2BPageAuth } from '../../../lib/b2bAuthServer'
 const T = {
   bg:'#0d0f12', bg2:'#131519', bg3:'#1a1d23', bg4:'#21252d',
   border:'rgba(255,255,255,0.07)', border2:'rgba(255,255,255,0.12)',
-  text:'#e8eaf0', text2:'#8b90a0', text3:'#545968',
+  text:'#e8eaf0', text2:'#aab0c0', text3:'#8d93a4',
   blue:'#4f8ef7', teal:'#2dd4bf', green:'#34c77b',
   amber:'#f5a623', red:'#f04e4e',
 }
@@ -117,7 +117,7 @@ export default function OrderDetailPage({ b2bUser }: Props) {
       <B2BLayout user={b2bUser} active="orders">
 
         {error && (
-          <div style={{padding:12,background:`${T.red}15`,border:`1px solid ${T.red}40`,borderRadius:7,color:T.red,fontSize:12,marginBottom:14}}>
+          <div style={{padding:12,background:`${T.red}15`,border:`1px solid ${T.red}40`,borderRadius:7,color:T.red,fontSize:13,marginBottom:14}}>
             {error}
           </div>
         )}
@@ -130,11 +130,11 @@ export default function OrderDetailPage({ b2bUser }: Props) {
           <>
             {/* Top breadcrumb / heading */}
             <div style={{marginBottom:18}}>
-              <a href="/b2b/orders" style={{fontSize:11,color:T.text3,textDecoration:'none'}}>← All orders</a>
+              <a href="/b2b/orders" style={{fontSize:12,color:T.text3,textDecoration:'none'}}>← All orders</a>
               <h1 style={{fontSize:22,fontWeight:600,margin:'6px 0 4px',letterSpacing:'-0.01em'}}>
                 {order.order_number}
               </h1>
-              <div style={{display:'flex',alignItems:'center',gap:10,flexWrap:'wrap',fontSize:12,color:T.text3}}>
+              <div style={{display:'flex',alignItems:'center',gap:10,flexWrap:'wrap',fontSize:13,color:T.text3}}>
                 <StatusPill status={order.status} hasError={!!order.myob.write_error}/>
                 <span>· Placed {formatDate(order.placed_at)}</span>
                 {order.paid_at && <span>· Paid {formatDate(order.paid_at)}</span>}
@@ -151,7 +151,7 @@ export default function OrderDetailPage({ b2bUser }: Props) {
                 <div style={{fontSize:24,color:T.green}}>✓</div>
                 <div>
                   <div style={{fontSize:14,color:T.text,fontWeight:500}}>Payment received</div>
-                  <div style={{fontSize:12,color:T.text2,marginTop:2}}>
+                  <div style={{fontSize:13,color:T.text2,marginTop:2}}>
                     A receipt has been emailed to {b2bUser.email}. We'll process and dispatch your order shortly.
                   </div>
                 </div>
@@ -165,7 +165,7 @@ export default function OrderDetailPage({ b2bUser }: Props) {
                 background:`${T.amber}10`,border:`1px solid ${T.amber}30`,borderRadius:8,
               }}>
                 <div style={{fontSize:14,color:T.text}}>Confirming your payment with Stripe…</div>
-                <div style={{fontSize:11,color:T.text3,marginTop:4}}>This usually takes a couple of seconds. Please don't close this page.</div>
+                <div style={{fontSize:12,color:T.text3,marginTop:4}}>This usually takes a couple of seconds. Please don't close this page.</div>
               </div>
             )}
 
@@ -185,7 +185,7 @@ export default function OrderDetailPage({ b2bUser }: Props) {
               <div style={{
                 padding:'12px 16px',marginBottom:18,
                 background:T.bg2,border:`1px solid ${T.border}`,borderRadius:8,
-                fontSize:12,color:T.text2,
+                fontSize:13,color:T.text2,
               }}>
                 Your order has been paid and is being processed. Invoice details will appear here once finalised.
               </div>
@@ -209,7 +209,7 @@ export default function OrderDetailPage({ b2bUser }: Props) {
                     {order.lines.map(l => (
                       <tr key={l.id} style={{borderBottom:`1px solid ${T.border}`}}>
                         <Td>
-                          <div style={{fontSize:12,color:T.text}}>{l.name}</div>
+                          <div style={{fontSize:13,color:T.text}}>{l.name}</div>
                           <div style={{fontSize:9,color:T.text3,fontFamily:'monospace',marginTop:1,letterSpacing:'0.04em'}}>{l.sku}</div>
                         </Td>
                         <Td align="right">{l.qty}</Td>
@@ -236,16 +236,16 @@ export default function OrderDetailPage({ b2bUser }: Props) {
                 <div style={{background:T.bg2,border:`1px solid ${T.border}`,borderRadius:10,padding:'18px 20px'}}>
                   <SectionTitle>Invoice</SectionTitle>
                   {order.myob.invoice_number ? (
-                    <div style={{fontSize:12,color:T.text}}>
+                    <div style={{fontSize:13,color:T.text}}>
                       MYOB Invoice <strong style={{color:T.text}}>{order.myob.invoice_number}</strong>
                       <div style={{fontSize:10,color:T.text3,marginTop:4}}>
                         Issued {formatDate(order.myob.written_at || '')}
                       </div>
                     </div>
                   ) : order.status === 'paid' ? (
-                    <div style={{fontSize:11,color:T.text3}}>Generating invoice…</div>
+                    <div style={{fontSize:12,color:T.text3}}>Generating invoice…</div>
                   ) : (
-                    <div style={{fontSize:11,color:T.text3}}>Will be generated after payment</div>
+                    <div style={{fontSize:12,color:T.text3}}>Will be generated after payment</div>
                   )}
                 </div>
 
@@ -277,7 +277,7 @@ function Td({ children, align, muted }: { children?: React.ReactNode; align?: 'l
   return (
     <td style={{
       textAlign: align || 'left',
-      fontSize:12,color: muted ? T.text2 : T.text,
+      fontSize:13,color: muted ? T.text2 : T.text,
       padding:'12px 14px',
       fontVariantNumeric: align === 'right' ? 'tabular-nums' : undefined,
     }}>
@@ -288,7 +288,7 @@ function Td({ children, align, muted }: { children?: React.ReactNode; align?: 'l
 
 function SectionTitle({ children }: { children: React.ReactNode }) {
   return (
-    <div style={{fontSize:11,color:T.text3,textTransform:'uppercase',letterSpacing:'0.08em',marginBottom:12,fontWeight:500}}>
+    <div style={{fontSize:12,color:T.text3,textTransform:'uppercase',letterSpacing:'0.08em',marginBottom:12,fontWeight:500}}>
       {children}
     </div>
   )

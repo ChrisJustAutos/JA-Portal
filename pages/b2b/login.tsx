@@ -15,7 +15,7 @@ import { getSupabase } from '../../lib/supabaseClient'
 const T = {
   bg:'#0d0f12', bg2:'#131519', bg3:'#1a1d23',
   border:'rgba(255,255,255,0.07)', border2:'rgba(255,255,255,0.12)',
-  text:'#e8eaf0', text2:'#8b90a0', text3:'#545968',
+  text:'#e8eaf0', text2:'#aab0c0', text3:'#8d93a4',
   blue:'#4f8ef7', green:'#34c77b', red:'#f04e4e',
 }
 
@@ -72,7 +72,7 @@ export default function B2BLoginPage() {
           background:T.bg2,border:`1px solid ${T.border}`,borderRadius:10,
           padding:'32px 28px',
         }}>
-          <div style={{fontSize:11,color:T.text3,textTransform:'uppercase',letterSpacing:'0.1em',marginBottom:8}}>
+          <div style={{fontSize:12,color:T.text3,textTransform:'uppercase',letterSpacing:'0.1em',marginBottom:8}}>
             Just Autos · Distributor Portal
           </div>
           <h1 style={{fontSize:22,fontWeight:600,margin:'0 0 18px',letterSpacing:'-0.01em'}}>
@@ -83,7 +83,7 @@ export default function B2BLoginPage() {
             <div>
               <div style={{
                 padding:14,background:`${T.green}15`,border:`1px solid ${T.green}40`,
-                borderRadius:7,color:T.green,fontSize:12,marginBottom:14,
+                borderRadius:7,color:T.green,fontSize:13,marginBottom:14,
               }}>
                 ✓ If <strong>{email}</strong> is registered, we've sent a magic link.
                 Check your inbox.
@@ -91,7 +91,7 @@ export default function B2BLoginPage() {
               <button onClick={() => { setSent(false); setEmail('') }}
                 style={{
                   padding:'8px 14px',borderRadius:5,border:`1px solid ${T.border2}`,
-                  background:'transparent',color:T.text2,fontSize:11,cursor:'pointer',fontFamily:'inherit',
+                  background:'transparent',color:T.text2,fontSize:12,cursor:'pointer',fontFamily:'inherit',
                 }}>
                 Try another email
               </button>
@@ -134,7 +134,7 @@ export default function B2BLoginPage() {
               {error && (
                 <div style={{
                   marginTop:12,padding:10,background:`${T.red}15`,border:`1px solid ${T.red}40`,
-                  borderRadius:5,color:T.red,fontSize:12,
+                  borderRadius:5,color:T.red,fontSize:13,
                 }}>
                   {error}
                 </div>
@@ -142,7 +142,7 @@ export default function B2BLoginPage() {
             </>
           )}
 
-          <div style={{marginTop:20,paddingTop:16,borderTop:`1px solid ${T.border}`,fontSize:11,color:T.text3,lineHeight:1.5}}>
+          <div style={{marginTop:20,paddingTop:16,borderTop:`1px solid ${T.border}`,fontSize:12,color:T.text3,lineHeight:1.5}}>
             Are you a Just Autos staff member? <a href="/login" style={{color:T.blue,textDecoration:'none'}}>Sign in to the staff portal</a>.
           </div>
         </div>

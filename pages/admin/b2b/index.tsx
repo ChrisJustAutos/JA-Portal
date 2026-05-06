@@ -15,7 +15,7 @@ import type { UserRole } from '../../../lib/permissions'
 const T = {
   bg:'#0d0f12', bg2:'#131519', bg3:'#1a1d23', bg4:'#21252d',
   border:'rgba(255,255,255,0.07)', border2:'rgba(255,255,255,0.12)',
-  text:'#e8eaf0', text2:'#8b90a0', text3:'#545968',
+  text:'#e8eaf0', text2:'#aab0c0', text3:'#8d93a4',
   blue:'#4f8ef7', teal:'#2dd4bf', green:'#34c77b',
   amber:'#f5a623', red:'#f04e4e', purple:'#a78bfa',
 }
@@ -72,11 +72,11 @@ export default function B2BHubPage({ user }: Props) {
         <main style={{flex:1,padding:'28px 32px',maxWidth:1200}}>
 
           <header style={{marginBottom:24}}>
-            <div style={{fontSize:11,color:T.text3,textTransform:'uppercase',letterSpacing:'0.08em',marginBottom:4}}>
+            <div style={{fontSize:12,color:T.text3,textTransform:'uppercase',letterSpacing:'0.08em',marginBottom:4}}>
               <span style={{color:T.text2}}>B2B Portal</span>
             </div>
             <h1 style={{fontSize:24,fontWeight:600,margin:0,letterSpacing:'-0.01em'}}>B2B distributor portal</h1>
-            <div style={{fontSize:12,color:T.text3,marginTop:6}}>
+            <div style={{fontSize:13,color:T.text3,marginTop:6}}>
               JAWS-side wholesale ordering. Distributors sign in at <a href="/b2b/login" style={{color:T.blue,textDecoration:'none'}}>/b2b/login</a> with magic links.
             </div>
           </header>
@@ -85,7 +85,7 @@ export default function B2BHubPage({ user }: Props) {
           {settings && !cfgComplete && (
             <div style={{
               padding:'12px 16px',background:`${T.amber}15`,border:`1px solid ${T.amber}40`,
-              borderRadius:8,marginBottom:18,fontSize:12,color:T.text2,
+              borderRadius:8,marginBottom:18,fontSize:13,color:T.text2,
             }}>
               ⚠ Checkout is currently disabled — some configuration is missing.{' '}
               <a href="/admin/b2b/settings" style={{color:T.amber,fontWeight:500,textDecoration:'none'}}>Open Settings →</a>
@@ -134,7 +134,7 @@ export default function B2BHubPage({ user }: Props) {
             marginTop:48,padding:'22px 26px',
             background:T.bg2,border:`1px solid ${T.border}`,borderRadius:10,
           }}>
-            <div style={{fontSize:11,color:T.text3,textTransform:'uppercase',letterSpacing:'0.08em',marginBottom:10,fontWeight:500}}>
+            <div style={{fontSize:12,color:T.text3,textTransform:'uppercase',letterSpacing:'0.08em',marginBottom:10,fontWeight:500}}>
               Distributor portal links
             </div>
             <div style={{display:'flex',gap:14,flexWrap:'wrap'}}>
@@ -177,9 +177,9 @@ function Card({
         {warning && <span style={{fontSize:14,color:T.amber}}>⚠</span>}
         {!disabled && <span style={{marginLeft:'auto',color:T.text3,fontSize:14}}>→</span>}
       </div>
-      <div style={{fontSize:12,color:T.text2,lineHeight:1.5}}>{description}</div>
+      <div style={{fontSize:13,color:T.text2,lineHeight:1.5}}>{description}</div>
       {meta && (
-        <div style={{fontSize:11,color:T.text3,marginTop:'auto',paddingTop:8,fontFamily:'monospace'}}>
+        <div style={{fontSize:12,color:T.text3,marginTop:'auto',paddingTop:8,fontFamily:'monospace'}}>
           {meta}
         </div>
       )}
@@ -194,7 +194,7 @@ function ExternalLink({ href, label }: { href: string; label: string }) {
   return (
     <a href={href} target="_blank" rel="noopener noreferrer"
       style={{
-        fontSize:12,color:T.text2,textDecoration:'none',
+        fontSize:13,color:T.text2,textDecoration:'none',
         padding:'6px 10px',borderRadius:5,border:`1px solid ${T.border2}`,
       }}>
       {label} ↗

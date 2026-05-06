@@ -12,7 +12,7 @@ import type { UserRole } from '../../../lib/permissions'
 const T = {
   bg:'#0d0f12', bg2:'#131519', bg3:'#1a1d23', bg4:'#21252d',
   border:'rgba(255,255,255,0.07)', border2:'rgba(255,255,255,0.12)',
-  text:'#e8eaf0', text2:'#8b90a0', text3:'#545968',
+  text:'#e8eaf0', text2:'#aab0c0', text3:'#8d93a4',
   blue:'#4f8ef7', teal:'#2dd4bf', green:'#34c77b',
   amber:'#f5a623', red:'#f04e4e', purple:'#a78bfa', accent:'#4f8ef7',
 }
@@ -167,31 +167,31 @@ export default function B2BSettingsPage({ user }: Props) {
 
           {/* Breadcrumb header — same pattern as catalogue.tsx */}
           <header style={{marginBottom:18}}>
-            <div style={{fontSize:11,color:T.text3,textTransform:'uppercase',letterSpacing:'0.08em',marginBottom:4}}>
+            <div style={{fontSize:12,color:T.text3,textTransform:'uppercase',letterSpacing:'0.08em',marginBottom:4}}>
               <a href="/admin/b2b" style={{color:T.text3,textDecoration:'none'}}>B2B Portal</a>
               {' / '}
               <span style={{color:T.text2}}>Settings</span>
             </div>
             <h1 style={{fontSize:22,fontWeight:600,margin:0,letterSpacing:'-0.01em'}}>B2B portal settings</h1>
-            <div style={{fontSize:12,color:T.text3,marginTop:4}}>
+            <div style={{fontSize:13,color:T.text3,marginTop:4}}>
               Configure how the distributor portal interacts with Stripe and MYOB.
             </div>
           </header>
 
           {error && (
-            <div style={{padding:12,background:`${T.red}15`,border:`1px solid ${T.red}40`,borderRadius:7,color:T.red,fontSize:12,marginBottom:14}}>
+            <div style={{padding:12,background:`${T.red}15`,border:`1px solid ${T.red}40`,borderRadius:7,color:T.red,fontSize:13,marginBottom:14}}>
               {error}
             </div>
           )}
 
           {savedFlash && (
-            <div style={{padding:'8px 12px',background:`${T.green}15`,border:`1px solid ${T.green}40`,borderRadius:7,color:T.green,fontSize:12,marginBottom:14}}>
+            <div style={{padding:'8px 12px',background:`${T.green}15`,border:`1px solid ${T.green}40`,borderRadius:7,color:T.green,fontSize:13,marginBottom:14}}>
               ✓ {savedFlash}
             </div>
           )}
 
           {loading && !data && (
-            <div style={{padding:36,textAlign:'center',color:T.text3,fontSize:12}}>Loading…</div>
+            <div style={{padding:36,textAlign:'center',color:T.text3,fontSize:13}}>Loading…</div>
           )}
 
           {data && (
@@ -245,7 +245,7 @@ export default function B2BSettingsPage({ user }: Props) {
                       {livePreview || '—'}
                     </div>
                   </div>
-                  <div style={{textAlign:'right',fontSize:11,color: overLimit ? T.red : T.text3}}>
+                  <div style={{textAlign:'right',fontSize:12,color: overLimit ? T.red : T.text3}}>
                     {livePreviewLength} / 13 chars
                     {overLimit && <div style={{fontWeight:500}}>Exceeds MYOB limit</div>}
                   </div>
@@ -312,7 +312,7 @@ export default function B2BSettingsPage({ user }: Props) {
                       {cnLivePreview || '—'}
                     </div>
                   </div>
-                  <div style={{textAlign:'right',fontSize:11,color: cnOverLimit ? T.red : T.text3}}>
+                  <div style={{textAlign:'right',fontSize:12,color: cnOverLimit ? T.red : T.text3}}>
                     {cnLivePreviewLength} / 13 chars
                     {cnOverLimit && <div style={{fontWeight:500}}>Exceeds MYOB limit</div>}
                   </div>
@@ -420,7 +420,7 @@ function Section({ title, description, children }: { title: string; description?
     }}>
       <h2 style={{fontSize:14,fontWeight:600,margin:'0 0 4px',letterSpacing:'-0.005em'}}>{title}</h2>
       {description && (
-        <p style={{fontSize:12,color:T.text3,margin:'0 0 18px',lineHeight:1.5}}>{description}</p>
+        <p style={{fontSize:13,color:T.text3,margin:'0 0 18px',lineHeight:1.5}}>{description}</p>
       )}
       {children}
     </section>
@@ -430,7 +430,7 @@ function Section({ title, description, children }: { title: string; description?
 function Field({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
   return (
     <label style={{display:'flex',flexDirection:'column',gap:4}}>
-      <span style={{fontSize:11,color:T.text2,fontWeight:500}}>{label}</span>
+      <span style={{fontSize:12,color:T.text2,fontWeight:500}}>{label}</span>
       {children}
       {hint && <span style={{fontSize:10,color:T.text3}}>{hint}</span>}
     </label>
@@ -451,7 +451,7 @@ function primaryBtn(enabled: boolean): React.CSSProperties {
     border:`1px solid ${enabled ? T.blue : T.border2}`,
     background: enabled ? T.blue : T.bg3,
     color: enabled ? '#fff' : T.text3,
-    fontSize:12,fontWeight:500,
+    fontSize:13,fontWeight:500,
     cursor: enabled ? 'pointer' : 'not-allowed',
     fontFamily:'inherit',
   }
@@ -463,8 +463,8 @@ function DiagRow({ label, status, value }: { label: string; status: 'ok'|'pendin
   return (
     <div style={{display:'flex',alignItems:'center',gap:12,padding:'8px 0',borderTop:`1px solid ${T.border}`}}>
       <span style={{color, fontSize:14, width:14}}>{dot}</span>
-      <span style={{fontSize:12,color:T.text2,minWidth:160}}>{label}</span>
-      <span style={{fontSize:12,color:T.text3,flex:1}}>{value}</span>
+      <span style={{fontSize:13,color:T.text2,minWidth:160}}>{label}</span>
+      <span style={{fontSize:13,color:T.text3,flex:1}}>{value}</span>
     </div>
   )
 }

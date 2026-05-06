@@ -14,7 +14,7 @@ import type { UserRole } from '../../../../lib/permissions'
 const T = {
   bg:'#0d0f12', bg2:'#131519', bg3:'#1a1d23', bg4:'#21252d',
   border:'rgba(255,255,255,0.07)', border2:'rgba(255,255,255,0.12)',
-  text:'#e8eaf0', text2:'#8b90a0', text3:'#545968',
+  text:'#e8eaf0', text2:'#aab0c0', text3:'#8d93a4',
   blue:'#4f8ef7', teal:'#2dd4bf', green:'#34c77b',
   amber:'#f5a623', red:'#f04e4e', purple:'#a78bfa', accent:'#4f8ef7',
 }
@@ -161,7 +161,7 @@ export default function AdminOrdersListPage({ user }: Props) {
           {/* Header */}
           <header style={{marginBottom:18,display:'flex',alignItems:'flex-end',justifyContent:'space-between',gap:16,flexWrap:'wrap'}}>
             <div>
-              <div style={{fontSize:11,color:T.text3,textTransform:'uppercase',letterSpacing:'0.08em',marginBottom:4}}>
+              <div style={{fontSize:12,color:T.text3,textTransform:'uppercase',letterSpacing:'0.08em',marginBottom:4}}>
                 <a href="/admin/b2b" style={{color:T.text3,textDecoration:'none'}}>B2B Portal</a>
                 {' / '}
                 <span style={{color:T.text2}}>Orders</span>
@@ -238,7 +238,7 @@ export default function AdminOrdersListPage({ user }: Props) {
                 value={dateFromFilter}
                 onChange={e => updateFilter({ from: e.target.value || null })}
                 style={dateStyle()}/>
-              <span style={{color:T.text3,fontSize:11}}>→</span>
+              <span style={{color:T.text3,fontSize:12}}>→</span>
               <input
                 type="date"
                 value={dateToFilter}
@@ -257,7 +257,7 @@ export default function AdminOrdersListPage({ user }: Props) {
 
           {/* Errors */}
           {error && (
-            <div style={{padding:10,background:`${T.red}15`,border:`1px solid ${T.red}40`,borderRadius:7,color:T.red,fontSize:12,marginBottom:10}}>
+            <div style={{padding:10,background:`${T.red}15`,border:`1px solid ${T.red}40`,borderRadius:7,color:T.red,fontSize:13,marginBottom:10}}>
               Couldn't load orders: {error}
             </div>
           )}
@@ -267,7 +267,7 @@ export default function AdminOrdersListPage({ user }: Props) {
             background:T.bg2,border:`1px solid ${T.border}`,borderRadius:10,overflow:'hidden',
           }}>
             <div style={{overflowX:'auto'}}>
-              <table style={{width:'100%',borderCollapse:'collapse',fontSize:12}}>
+              <table style={{width:'100%',borderCollapse:'collapse',fontSize:13}}>
                 <thead>
                   <tr style={{borderBottom:`1px solid ${T.border2}`}}>
                     <th style={th(140)}>Order</th>
@@ -281,7 +281,7 @@ export default function AdminOrdersListPage({ user }: Props) {
                 </thead>
                 <tbody>
                   {data && data.orders.length === 0 && !loading && (
-                    <tr><td colSpan={7} style={{padding:30,textAlign:'center',color:T.text3,fontSize:12}}>
+                    <tr><td colSpan={7} style={{padding:30,textAlign:'center',color:T.text3,fontSize:13}}>
                       No orders match these filters.
                     </td></tr>
                   )}
@@ -289,7 +289,7 @@ export default function AdminOrdersListPage({ user }: Props) {
                     <OrderRowDisplay key={o.id} order={o} isFirst={i === 0}/>
                   ))}
                   {loading && (
-                    <tr><td colSpan={7} style={{padding:30,textAlign:'center',color:T.text3,fontSize:12}}>Loading…</td></tr>
+                    <tr><td colSpan={7} style={{padding:30,textAlign:'center',color:T.text3,fontSize:13}}>Loading…</td></tr>
                   )}
                 </tbody>
               </table>
@@ -300,7 +300,7 @@ export default function AdminOrdersListPage({ user }: Props) {
               <div style={{
                 padding:'10px 16px',borderTop:`1px solid ${T.border2}`,
                 display:'flex',justifyContent:'space-between',alignItems:'center',gap:14,
-                fontSize:11,color:T.text3,
+                fontSize:12,color:T.text3,
               }}>
                 <span>
                   Showing {offset + 1}–{Math.min(offset + LIMIT, data.total_count)} of {data.total_count}
@@ -346,17 +346,17 @@ function OrderRowDisplay({ order, isFirst }: { order: OrderRow; isFirst: boolean
       onClick={() => { window.location.href = `/admin/b2b/orders/${order.id}` }}>
 
       <td style={td()}>
-        <div style={{fontFamily:'monospace',fontSize:12,color:T.text}}>{order.order_number}</div>
+        <div style={{fontFamily:'monospace',fontSize:13,color:T.text}}>{order.order_number}</div>
         {order.customer_po && (
           <div style={{fontSize:10,color:T.text3,marginTop:2}}>PO: {order.customer_po}</div>
         )}
       </td>
 
       <td style={td()}>
-        <div style={{fontSize:12,color:T.text}}>{dist}</div>
+        <div style={{fontSize:13,color:T.text}}>{dist}</div>
       </td>
 
-      <td style={{...td(),fontSize:11,color:T.text3,fontFamily:'monospace',whiteSpace:'nowrap'}}>
+      <td style={{...td(),fontSize:12,color:T.text3,fontFamily:'monospace',whiteSpace:'nowrap'}}>
         {placedDate}
         <div style={{fontSize:10,color:T.text3,opacity:0.7}}>{placedTime}</div>
       </td>
@@ -374,7 +374,7 @@ function OrderRowDisplay({ order, isFirst }: { order: OrderRow; isFirst: boolean
         ${money(Number(order.total_inc))}
       </td>
 
-      <td style={{...td(),fontSize:11}}>
+      <td style={{...td(),fontSize:12}}>
         {order.myob_invoice_number ? (
           <span style={{fontFamily:'monospace',color:T.text2}}>{order.myob_invoice_number}</span>
         ) : order.myob_write_error ? (
@@ -419,7 +419,7 @@ function FilterPill({ active, onClick, color, count, children }: { active: boole
         border:`1px solid ${active ? (color || T.blue) : T.border2}`,
         background: active ? `${color || T.blue}20` : 'transparent',
         color: active ? (color || T.blue) : T.text2,
-        fontSize:11,fontWeight: active ? 600 : 400,
+        fontSize:12,fontWeight: active ? 600 : 400,
         cursor:'pointer',fontFamily:'inherit',whiteSpace:'nowrap',
         display:'inline-flex',alignItems:'center',gap:6,
       }}>
@@ -470,7 +470,7 @@ function iconBtn(enabled: boolean): React.CSSProperties {
     border:`1px solid ${T.border2}`,
     background:'transparent',
     color: enabled ? T.text2 : T.text3,
-    fontSize:11,fontFamily:'inherit',
+    fontSize:12,fontFamily:'inherit',
     cursor: enabled ? 'pointer' : 'not-allowed',
   }
 }
@@ -478,7 +478,7 @@ function selectStyle(): React.CSSProperties {
   return {
     padding:'7px 10px',borderRadius:5,
     background:T.bg3,border:`1px solid ${T.border2}`,
-    color:T.text,fontSize:12,fontFamily:'inherit',
+    color:T.text,fontSize:13,fontFamily:'inherit',
     outline:'none',cursor:'pointer',
   }
 }
@@ -486,7 +486,7 @@ function dateStyle(): React.CSSProperties {
   return {
     padding:'6px 10px',borderRadius:5,
     background:T.bg3,border:`1px solid ${T.border2}`,
-    color:T.text,fontSize:11,fontFamily:'inherit',
+    color:T.text,fontSize:12,fontFamily:'inherit',
     outline:'none',colorScheme:'dark',
   }
 }

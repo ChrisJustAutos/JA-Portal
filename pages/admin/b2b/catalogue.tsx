@@ -19,7 +19,7 @@ import type { UserRole } from '../../../lib/permissions'
 const T = {
   bg:'#0d0f12', bg2:'#131519', bg3:'#1a1d23', bg4:'#21252d',
   border:'rgba(255,255,255,0.07)', border2:'rgba(255,255,255,0.12)',
-  text:'#e8eaf0', text2:'#8b90a0', text3:'#545968',
+  text:'#e8eaf0', text2:'#aab0c0', text3:'#8d93a4',
   blue:'#4f8ef7', teal:'#2dd4bf', green:'#34c77b',
   amber:'#f5a623', red:'#f04e4e', purple:'#a78bfa', accent:'#4f8ef7',
 }
@@ -148,7 +148,7 @@ export default function CatalogueAdminPage({ user }: Props) {
           {/* Header */}
           <header style={{marginBottom:18,display:'flex',alignItems:'flex-end',justifyContent:'space-between',gap:16,flexWrap:'wrap'}}>
             <div>
-              <div style={{fontSize:11,color:T.text3,textTransform:'uppercase',letterSpacing:'0.08em',marginBottom:4}}>
+              <div style={{fontSize:12,color:T.text3,textTransform:'uppercase',letterSpacing:'0.08em',marginBottom:4}}>
                 <a href="/admin/b2b" style={{color:T.text3,textDecoration:'none'}}>B2B Portal</a>
                 {' / '}
                 <span style={{color:T.text2}}>Catalogue</span>
@@ -188,14 +188,14 @@ export default function CatalogueAdminPage({ user }: Props) {
             <FilterPill active={visibilityFilter==='visible'} onClick={()=>setVisibilityFilter('visible')} color={T.green}>Visible ({stats.visible})</FilterPill>
             <FilterPill active={visibilityFilter==='hidden'}  onClick={()=>setVisibilityFilter('hidden')}  color={T.text3}>Hidden ({items.length - stats.visible})</FilterPill>
             <button onClick={load} disabled={loading}
-              style={{padding:'6px 12px',borderRadius:5,border:`1px solid ${T.border2}`,background:'transparent',color:T.text2,fontSize:11,cursor:loading?'wait':'pointer',fontFamily:'inherit'}}>
+              style={{padding:'6px 12px',borderRadius:5,border:`1px solid ${T.border2}`,background:'transparent',color:T.text2,fontSize:12,cursor:loading?'wait':'pointer',fontFamily:'inherit'}}>
               {loading ? 'Loading…' : '↻ Refresh'}
             </button>
           </div>
 
           {/* Errors */}
           {loadError && (
-            <div style={{padding:10,background:`${T.red}15`,border:`1px solid ${T.red}40`,borderRadius:7,color:T.red,fontSize:12,marginBottom:10}}>
+            <div style={{padding:10,background:`${T.red}15`,border:`1px solid ${T.red}40`,borderRadius:7,color:T.red,fontSize:13,marginBottom:10}}>
               Couldn't load catalogue: {loadError}
             </div>
           )}
@@ -206,7 +206,7 @@ export default function CatalogueAdminPage({ user }: Props) {
             overflow:'hidden',
           }}>
             <div style={{overflowX:'auto'}}>
-              <table style={{width:'100%',borderCollapse:'collapse',fontSize:12}}>
+              <table style={{width:'100%',borderCollapse:'collapse',fontSize:13}}>
                 <thead>
                   <tr style={{borderBottom:`1px solid ${T.border2}`}}>
                     <th style={th(70)}></th>
@@ -220,7 +220,7 @@ export default function CatalogueAdminPage({ user }: Props) {
                 </thead>
                 <tbody>
                   {filtered.length === 0 && !loading && (
-                    <tr><td colSpan={7} style={{padding:24,textAlign:'center',color:T.text3,fontSize:12}}>
+                    <tr><td colSpan={7} style={{padding:24,textAlign:'center',color:T.text3,fontSize:13}}>
                       {items.length === 0 ? 'No items yet — run a catalogue sync from the B2B Portal page.' : 'No items match your filters.'}
                     </td></tr>
                   )}
@@ -328,7 +328,7 @@ function CatalogueRow({
 
       {/* SKU */}
       <td style={{...td(),cursor:'pointer'}} onClick={onOpenDrawer}>
-        <div style={{fontFamily:'monospace',fontSize:11,color:T.text2}}>{item.sku}</div>
+        <div style={{fontFamily:'monospace',fontSize:12,color:T.text2}}>{item.sku}</div>
       </td>
 
       {/* Name */}
@@ -352,7 +352,7 @@ function CatalogueRow({
       {/* Trade price input */}
       <td style={{...td(),textAlign:'right',padding:'6px 10px'}}>
         <div style={{display:'flex',alignItems:'center',justifyContent:'flex-end',gap:4}}>
-          <span style={{fontSize:11,color:T.text3}}>$</span>
+          <span style={{fontSize:12,color:T.text3}}>$</span>
           <input
             type="text"
             inputMode="decimal"
@@ -370,7 +370,7 @@ function CatalogueRow({
             style={{
               width:80,textAlign:'right',
               background:T.bg3,border:`1px solid ${T.border}`,color:T.text,
-              borderRadius:4,padding:'5px 8px',fontSize:12,outline:'none',
+              borderRadius:4,padding:'5px 8px',fontSize:13,outline:'none',
               fontFamily:'monospace',
               opacity: savingField === 'price' ? 0.5 : 1,
             }}
@@ -530,7 +530,7 @@ function EditDrawer({
         {/* Header */}
         <div style={{padding:'16px 20px',borderBottom:`1px solid ${T.border}`,display:'flex',alignItems:'center',justifyContent:'space-between',gap:12}}>
           <div style={{flex:1,minWidth:0}}>
-            <div style={{fontFamily:'monospace',fontSize:11,color:T.text3,marginBottom:2}}>{item.sku}</div>
+            <div style={{fontFamily:'monospace',fontSize:12,color:T.text3,marginBottom:2}}>{item.sku}</div>
             <div style={{fontSize:14,fontWeight:600,color:T.text,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{item.name}</div>
           </div>
           <button onClick={onClose}
@@ -561,7 +561,7 @@ function EditDrawer({
                 style={{
                   flex:1,padding:'9px 14px',borderRadius:6,
                   border:`1px solid ${T.blue}`,background:T.blue,color:'#fff',
-                  fontSize:12,fontWeight:500,fontFamily:'inherit',
+                  fontSize:13,fontWeight:500,fontFamily:'inherit',
                   cursor: uploading ? 'wait' : 'pointer',
                 }}>
                 {uploading ? 'Uploading…' : (item.primary_image_url ? 'Replace image' : 'Upload image')}
@@ -573,7 +573,7 @@ function EditDrawer({
                   style={{
                     padding:'9px 14px',borderRadius:6,
                     border:`1px solid ${T.border2}`,background:'transparent',color:T.red,
-                    fontSize:12,fontFamily:'inherit',cursor:'pointer',
+                    fontSize:13,fontFamily:'inherit',cursor:'pointer',
                   }}>
                   Remove
                 </button>
@@ -594,7 +594,7 @@ function EditDrawer({
               PNG, JPG or WEBP · Max 10 MB · Stored at <code style={{fontFamily:'monospace'}}>b2b-catalogue/{item.id}/...</code>
             </div>
             {imageError && (
-              <div style={{marginTop:8,padding:8,background:`${T.red}15`,border:`1px solid ${T.red}40`,borderRadius:5,color:T.red,fontSize:11}}>
+              <div style={{marginTop:8,padding:8,background:`${T.red}15`,border:`1px solid ${T.red}40`,borderRadius:5,color:T.red,fontSize:12}}>
                 {imageError}
               </div>
             )}
@@ -610,7 +610,7 @@ function EditDrawer({
               rows={6}
               style={{
                 width:'100%',background:T.bg3,border:`1px solid ${T.border}`,color:T.text,
-                borderRadius:6,padding:'10px 12px',fontSize:12,fontFamily:'inherit',outline:'none',
+                borderRadius:6,padding:'10px 12px',fontSize:13,fontFamily:'inherit',outline:'none',
                 resize:'vertical',
               }}
             />
@@ -618,7 +618,7 @@ function EditDrawer({
               {savingDesc ? 'Saving…' : 'Saves automatically when you click outside'}
             </div>
             {descError && (
-              <div style={{marginTop:6,padding:6,background:`${T.red}15`,border:`1px solid ${T.red}40`,borderRadius:5,color:T.red,fontSize:11}}>
+              <div style={{marginTop:6,padding:6,background:`${T.red}15`,border:`1px solid ${T.red}40`,borderRadius:5,color:T.red,fontSize:12}}>
                 {descError}
               </div>
             )}
@@ -664,7 +664,7 @@ function FilterPill({ active, onClick, color, children }: { active: boolean; onC
         border:`1px solid ${active ? (color || T.blue) : T.border2}`,
         background: active ? `${color || T.blue}20` : 'transparent',
         color: active ? (color || T.blue) : T.text2,
-        fontSize:11,fontWeight: active ? 600 : 400,
+        fontSize:12,fontWeight: active ? 600 : 400,
         cursor:'pointer',fontFamily:'inherit',whiteSpace:'nowrap',
       }}>
       {children}
@@ -708,7 +708,7 @@ function Section({ title, subtitle, children }: { title: string; subtitle?: stri
 
 function KV({ label, value, mono, valueColor }: { label: string; value: string; mono?: boolean; valueColor?: string }) {
   return (
-    <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'5px 0',borderBottom:`1px solid ${T.border}`,fontSize:12}}>
+    <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'5px 0',borderBottom:`1px solid ${T.border}`,fontSize:13}}>
       <span style={{color:T.text3}}>{label}</span>
       <span style={{color: valueColor || T.text2, fontFamily: mono ? 'monospace' : 'inherit', fontSize: mono ? 11 : 12}}>{value}</span>
     </div>

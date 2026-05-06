@@ -22,7 +22,7 @@ import { getSupabase } from '../../../lib/supabaseClient'
 const T = {
   bg:'#0d0f12', bg2:'#131519',
   border:'rgba(255,255,255,0.07)',
-  text:'#e8eaf0', text2:'#8b90a0', text3:'#545968',
+  text:'#e8eaf0', text2:'#aab0c0', text3:'#8d93a4',
   blue:'#4f8ef7', green:'#34c77b', red:'#f04e4e',
 }
 
@@ -103,28 +103,28 @@ export default function B2BAuthCallback() {
             <>
               <div style={{fontSize:32,marginBottom:12}}>🔐</div>
               <div style={{fontSize:16,fontWeight:600,marginBottom:6}}>Signing you in…</div>
-              <div style={{fontSize:12,color:T.text3}}>Verifying your magic link.</div>
+              <div style={{fontSize:13,color:T.text3}}>Verifying your magic link.</div>
             </>
           )}
           {status === 'success' && (
             <>
               <div style={{fontSize:32,marginBottom:12,color:T.green}}>✓</div>
               <div style={{fontSize:16,fontWeight:600,marginBottom:6}}>Signed in</div>
-              <div style={{fontSize:12,color:T.text3}}>Taking you to the catalogue…</div>
+              <div style={{fontSize:13,color:T.text3}}>Taking you to the catalogue…</div>
             </>
           )}
           {status === 'error' && (
             <>
               <div style={{fontSize:32,marginBottom:12,color:T.red}}>!</div>
               <div style={{fontSize:16,fontWeight:600,marginBottom:6}}>Sign-in failed</div>
-              <div style={{fontSize:12,color:T.text2,lineHeight:1.5,marginBottom:16}}>
+              <div style={{fontSize:13,color:T.text2,lineHeight:1.5,marginBottom:16}}>
                 {error}
               </div>
               <a href="/b2b/login"
                 style={{
                   display:'inline-block',padding:'9px 18px',borderRadius:6,
                   border:`1px solid ${T.blue}`,background:T.blue,color:'#fff',
-                  fontSize:12,fontWeight:500,textDecoration:'none',
+                  fontSize:13,fontWeight:500,textDecoration:'none',
                 }}>
                 Request a new link
               </a>

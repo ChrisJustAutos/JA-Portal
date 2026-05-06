@@ -15,7 +15,7 @@ import { requireB2BPageAuth } from '../../lib/b2bAuthServer'
 const T = {
   bg:'#0d0f12', bg2:'#131519', bg3:'#1a1d23', bg4:'#21252d',
   border:'rgba(255,255,255,0.07)', border2:'rgba(255,255,255,0.12)',
-  text:'#e8eaf0', text2:'#8b90a0', text3:'#545968',
+  text:'#e8eaf0', text2:'#aab0c0', text3:'#8d93a4',
   blue:'#4f8ef7', teal:'#2dd4bf', green:'#34c77b',
   amber:'#f5a623', red:'#f04e4e',
 }
@@ -157,7 +157,7 @@ export default function B2BCataloguePage({ b2bUser }: Props) {
         <header style={{display:'flex',alignItems:'flex-end',justifyContent:'space-between',gap:16,flexWrap:'wrap',marginBottom:18}}>
           <div>
             <h1 style={{fontSize:22,fontWeight:600,margin:0,letterSpacing:'-0.01em'}}>Catalogue</h1>
-            <div style={{fontSize:12,color:T.text3,marginTop:4}}>
+            <div style={{fontSize:13,color:T.text3,marginTop:4}}>
               Browse products and add to cart. Pricing is ex GST.
             </div>
           </div>
@@ -174,20 +174,20 @@ export default function B2BCataloguePage({ b2bUser }: Props) {
               }}
             />
             <button onClick={loadAll} disabled={loading}
-              style={{padding:'7px 12px',borderRadius:5,border:`1px solid ${T.border2}`,background:'transparent',color:T.text2,fontSize:11,cursor:loading?'wait':'pointer',fontFamily:'inherit'}}>
+              style={{padding:'7px 12px',borderRadius:5,border:`1px solid ${T.border2}`,background:'transparent',color:T.text2,fontSize:12,cursor:loading?'wait':'pointer',fontFamily:'inherit'}}>
               {loading ? '…' : '↻'}
             </button>
           </div>
         </header>
 
         {error && (
-          <div style={{padding:12,background:`${T.red}15`,border:`1px solid ${T.red}40`,borderRadius:7,color:T.red,fontSize:12,marginBottom:14}}>
+          <div style={{padding:12,background:`${T.red}15`,border:`1px solid ${T.red}40`,borderRadius:7,color:T.red,fontSize:13,marginBottom:14}}>
             {error}
           </div>
         )}
 
         {stockError && (
-          <div style={{padding:10,background:`${T.amber}10`,border:`1px solid ${T.amber}30`,borderRadius:7,color:T.amber,fontSize:11,marginBottom:14}}>
+          <div style={{padding:10,background:`${T.amber}10`,border:`1px solid ${T.amber}30`,borderRadius:7,color:T.amber,fontSize:12,marginBottom:14}}>
             ⚠ Live stock unavailable right now ({stockError}). You can still browse but stock indicators may be out of date.
           </div>
         )}
@@ -247,7 +247,7 @@ function CatalogueCard({
             onError={e => { (e.target as HTMLImageElement).style.display = 'none' }}
           />
         ) : (
-          <span style={{fontSize:11,color:'#aaa',fontFamily:'monospace'}}>no image</span>
+          <span style={{fontSize:12,color:'#aaa',fontFamily:'monospace'}}>no image</span>
         )}
       </div>
 
@@ -287,7 +287,7 @@ function CatalogueCard({
                 border:`1px solid ${canAdd ? T.blue : T.border2}`,
                 background: canAdd ? T.blue : T.bg3,
                 color: canAdd ? '#fff' : T.text3,
-                fontSize:12,fontWeight:500,
+                fontSize:13,fontWeight:500,
                 cursor: canAdd ? 'pointer' : 'not-allowed',
                 fontFamily:'inherit',
               }}>
