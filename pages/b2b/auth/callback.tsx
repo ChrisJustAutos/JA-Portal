@@ -2,20 +2,17 @@
 //
 // Distributor magic-link landing page.
 //
-// When a distributor clicks the invite email link, Supabase redirects them
-// here with the access/refresh tokens in the URL hash. The Supabase JS SDK
-// is configured with detectSessionInUrl: true, so it auto-processes the
-// hash and creates a session in localStorage.
+// Flow on click of magic link:
+//   1. Land here with #access_token=... in URL
+//   2. Supabase JS SDK auto-processes the hash and creates a localStorage session
+//   3. We POST the access_token to /api/b2b/auth/session, which:
+//        - verifies the token resolves to an active b2b_distributor_users row
+//        - sets the httpOnly cookie used by getServerSideProps on /b2b/* pages
+//   4. Redirect to /b2b/catalogue
 //
-// We just need to:
-//   1. Wait for the session to be available
-//   2. Update the distributor user's last_login_at (best-effort)
-//   3. Redirect to /b2b
-//
-// Note: this page shares the storageKey 'ja-portal-auth' with staff sessions.
-// A staff user signing in here would still create a B2B session, but the
-// staff portal's requirePageAuth checks user_profiles, which distributor
-// users don't have — so they'd just bounce back to /login. Acceptable for V1.
+// Note: the storageKey 'ja-portal-auth' is shared with staff sessions but
+// the cookies are separate (`ja-b2b-access-token` vs `ja-portal-access-token`),
+// so SSR auth on staff vs distributor pages stays cleanly partitioned.
 
 import { useEffect, useState } from 'react'
 import Head from 'next/head'
@@ -23,8 +20,8 @@ import { useRouter } from 'next/router'
 import { getSupabase } from '../../../lib/supabaseClient'
 
 const T = {
-  bg:'#0d0f12', bg2:'#131519', bg3:'#1a1d23',
-  border:'rgba(255,255,255,0.07)', border2:'rgba(255,255,255,0.12)',
+  bg:'#0d0f12', bg2:'#131519',
+  border:'rgba(255,255,255,0.07)',
   text:'#e8eaf0', text2:'#8b90a0', text3:'#545968',
   blue:'#4f8ef7', green:'#34c77b', red:'#f04e4e',
 }
@@ -39,8 +36,8 @@ export default function B2BAuthCallback() {
     let cancelled = false
 
     async function check() {
-      // The SDK has a small window during which it's still parsing the URL hash.
-      // Poll briefly rather than racing it.
+      // Wait for the SDK to parse the URL hash and create a session
+      let session: any = null
       for (let i = 0; i < 20; i++) {
         if (cancelled) return
         const { data, error } = await supabase.auth.getSession()
@@ -49,29 +46,43 @@ export default function B2BAuthCallback() {
           setStatus('error')
           return
         }
-        if (data.session) {
-          // Best-effort: update last_login_at via the API.
-          // Don't block the redirect on this.
-          fetch('/api/b2b/auth/check-in', {
-            method: 'POST', credentials: 'same-origin',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ access_token: data.session.access_token }),
-          }).catch(() => {})
-
-          if (cancelled) return
-          setStatus('success')
-          // Brief pause so the user sees confirmation
-          setTimeout(() => router.replace('/b2b'), 600)
-          return
-        }
+        if (data.session) { session = data.session; break }
         await new Promise(r => setTimeout(r, 150))
       }
-      // No session after 3 seconds — invite link probably expired or invalid
-      setError('Could not establish a session. The invite link may have expired — ask your account manager to send a new one.')
-      setStatus('error')
-    }
-    check()
+      if (!session) {
+        setError('Could not establish a session. The invite link may have expired — ask your account manager to send a new one.')
+        setStatus('error')
+        return
+      }
 
+      // Set the SSR cookie (also bumps last_login_at server-side)
+      try {
+        const r = await fetch('/api/b2b/auth/session', {
+          method: 'POST',
+          credentials: 'same-origin',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            access_token: session.access_token,
+            refresh_token: session.refresh_token,
+          }),
+        })
+        if (!r.ok) {
+          const j = await r.json().catch(() => ({}))
+          throw new Error(j?.error || `Session setup failed (HTTP ${r.status})`)
+        }
+      } catch (e: any) {
+        if (cancelled) return
+        setError(e?.message || 'Session setup failed')
+        setStatus('error')
+        return
+      }
+
+      if (cancelled) return
+      setStatus('success')
+      setTimeout(() => router.replace('/b2b/catalogue'), 500)
+    }
+
+    check()
     return () => { cancelled = true }
   }, [router])
 
@@ -99,7 +110,7 @@ export default function B2BAuthCallback() {
             <>
               <div style={{fontSize:32,marginBottom:12,color:T.green}}>✓</div>
               <div style={{fontSize:16,fontWeight:600,marginBottom:6}}>Signed in</div>
-              <div style={{fontSize:12,color:T.text3}}>Taking you to the portal…</div>
+              <div style={{fontSize:12,color:T.text3}}>Taking you to the catalogue…</div>
             </>
           )}
           {status === 'error' && (
