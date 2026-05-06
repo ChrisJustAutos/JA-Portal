@@ -19,7 +19,7 @@ function sb(): SupabaseClient {
   return _sb
 }
 
-const VALID_ROLES = ['admin', 'buyer', 'viewer'] as const
+const VALID_ROLES = ['owner', 'member'] as const
 const EDITABLE = ['full_name', 'role', 'is_active'] as const
 
 export default withAuth('edit:b2b_distributors', async (req: NextApiRequest, res: NextApiResponse, _user: PortalUser) => {

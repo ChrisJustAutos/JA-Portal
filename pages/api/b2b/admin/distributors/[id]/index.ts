@@ -28,9 +28,6 @@ const EDITABLE = [
   'dist_group_id',
   'primary_contact_email',
   'primary_contact_phone',
-  'account_terms_days',
-  'credit_limit_ex_gst',
-  'payment_methods',
   'is_active',
   'notes',
 ] as const
@@ -111,11 +108,6 @@ async function handlePatch(id: string, req: NextApiRequest, res: NextApiResponse
     }
     update.myob_linked_customer_uids = update.myob_linked_customer_uids
       .filter((x: any) => typeof x === 'string' && x.length > 0)
-  }
-  if ('payment_methods' in update) {
-    if (!Array.isArray(update.payment_methods)) {
-      return res.status(400).json({ error: 'payment_methods must be array' })
-    }
   }
   if ('is_active' in update && typeof update.is_active !== 'boolean') {
     return res.status(400).json({ error: 'is_active must be boolean' })

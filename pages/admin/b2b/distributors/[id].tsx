@@ -39,12 +39,9 @@ interface Distributor {
   myob_primary_customer_uid: string
   myob_primary_customer_display_id: string | null
   myob_linked_customer_uids: string[]
-  dist_group_id: string | null
+  dist_group_id: number | null
   primary_contact_email: string | null
   primary_contact_phone: string | null
-  account_terms_days: number | null
-  credit_limit_ex_gst: number | null
-  payment_methods: string[]
   is_active: boolean
   notes: string | null
   created_at: string
@@ -55,7 +52,7 @@ interface DistributorUser {
   auth_user_id: string | null
   email: string
   full_name: string | null
-  role: 'admin' | 'buyer' | 'viewer'
+  role: 'owner' | 'member'
   last_login_at: string | null
   invited_at: string | null
   invited_by: string | null
@@ -473,9 +470,8 @@ function UserRow({ distId, user, onChange }: { distId: string; user: Distributor
               background:T.bg4,border:`1px solid ${T.border2}`,color:T.text,
               borderRadius:4,padding:'4px 6px',fontSize:11,fontFamily:'inherit',cursor:'pointer',
             }}>
-            <option value="admin">Admin</option>
-            <option value="buyer">Buyer</option>
-            <option value="viewer">Viewer</option>
+            <option value="owner">Owner</option>
+            <option value="member">Member</option>
           </select>
         ) : (
           <button onClick={() => setEditingRole(true)}
@@ -526,7 +522,7 @@ function UserRow({ distId, user, onChange }: { distId: string; user: Distributor
 function InviteForm({ distId, onDone, onCancel }: { distId: string; onDone: () => void; onCancel: () => void }) {
   const [email, setEmail] = useState('')
   const [fullName, setFullName] = useState('')
-  const [role, setRole] = useState<'admin'|'buyer'|'viewer'>('buyer')
+  const [role, setRole] = useState<'owner'|'member'>('member')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -566,9 +562,8 @@ function InviteForm({ distId, onDone, onCancel }: { distId: string; onDone: () =
       <FormRow label="Role">
         <select value={role} onChange={e => setRole(e.target.value as any)}
           style={{...input,cursor:'pointer'}}>
-          <option value="admin">Admin — can manage users for this distributor</option>
-          <option value="buyer">Buyer — can place orders</option>
-          <option value="viewer">Viewer — can browse the catalogue only</option>
+          <option value="member">Member — can browse the catalogue and place orders</option>
+          <option value="owner">Owner — same as Member, plus can manage their distributor's users</option>
         </select>
       </FormRow>
       {error && (
@@ -599,7 +594,7 @@ function InviteForm({ distId, onDone, onCancel }: { distId: string; onDone: () =
 }
 
 // ─── Dist group section ────────────────────────────────────────────────
-function DistGroupSection({ distGroupName, distGroupId }: { distGroupName: string | null; distGroupId: string | null }) {
+function DistGroupSection({ distGroupName, distGroupId }: { distGroupName: string | null; distGroupId: number | null }) {
   return (
     <Section title="Distributor group" subtitle="Used by distributor reporting and invoice rollups">
       {distGroupId ? (

@@ -27,7 +27,7 @@ function sb(): SupabaseClient {
   return _sb
 }
 
-const VALID_ROLES = ['admin', 'buyer', 'viewer'] as const
+const VALID_ROLES = ['owner', 'member'] as const
 
 export default withAuth('edit:b2b_distributors', async (req: NextApiRequest, res: NextApiResponse, user: PortalUser) => {
   if (req.method !== 'POST') {
@@ -41,7 +41,7 @@ export default withAuth('edit:b2b_distributors', async (req: NextApiRequest, res
   const body = (req.body && typeof req.body === 'object') ? req.body : {}
   const email     = String(body.email || '').trim().toLowerCase()
   const full_name = body.full_name ? String(body.full_name).trim() : null
-  const role      = body.role && VALID_ROLES.includes(body.role) ? body.role : 'buyer'
+  const role      = body.role && VALID_ROLES.includes(body.role) ? body.role : 'member'
 
   if (!email) return res.status(400).json({ error: 'email required' })
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return res.status(400).json({ error: 'invalid email format' })
