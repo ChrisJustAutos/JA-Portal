@@ -128,6 +128,38 @@ export default function CatalogueAdminPage({ user }: Props) {
     setItems(prev => prev.map(it => it.id === id ? { ...it, ...patch } : it))
   }
 
+  // Create a new model/product type from an inline row dropdown.
+  // Returns the new id on success so the caller can immediately PATCH the
+  // catalogue item with it.
+  async function createModel(name: string): Promise<string> {
+    const r = await fetch('/api/b2b/admin/models', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name }),
+    })
+    const j = await r.json()
+    if (!r.ok) throw new Error(j?.error || `HTTP ${r.status}`)
+    const m = j.model
+    setModels(prev => [...prev, { id: m.id, name: m.name, is_active: m.is_active !== false }]
+      .sort((a, b) => a.name.localeCompare(b.name)))
+    return m.id
+  }
+  async function createProductType(name: string): Promise<string> {
+    const r = await fetch('/api/b2b/admin/product-types', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name }),
+    })
+    const j = await r.json()
+    if (!r.ok) throw new Error(j?.error || `HTTP ${r.status}`)
+    const t = j.product_type
+    setProductTypes(prev => [...prev, { id: t.id, name: t.name, is_active: t.is_active !== false }]
+      .sort((a, b) => a.name.localeCompare(b.name)))
+    return t.id
+  }
+
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase()
     return items.filter(it => {
@@ -145,17 +177,6 @@ export default function CatalogueAdminPage({ user }: Props) {
     })
   }, [items, search, visibilityFilter, modelFilter, productTypeFilter])
 
-  // Lookup maps for resolving names on rows (model/product_type names aren't on the row payload)
-  const modelById = useMemo(() => {
-    const m = new Map<string, string>()
-    for (const o of models) m.set(o.id, o.name)
-    return m
-  }, [models])
-  const productTypeById = useMemo(() => {
-    const m = new Map<string, string>()
-    for (const o of productTypes) m.set(o.id, o.name)
-    return m
-  }, [productTypes])
 
   const stats = useMemo(() => {
     const total       = items.length
@@ -261,6 +282,8 @@ export default function CatalogueAdminPage({ user }: Props) {
                     <th style={th(70)}></th>
                     <th style={th(140)}>SKU</th>
                     <th style={th()}>Name</th>
+                    <th style={th(150)}>Model</th>
+                    <th style={th(150)}>Type</th>
                     <th style={{...th(100),textAlign:'right'}}>RRP</th>
                     <th style={{...th(140),textAlign:'right'}}>Trade $ (ex GST)</th>
                     <th style={{...th(100),textAlign:'center'}}>Visible</th>
@@ -269,7 +292,7 @@ export default function CatalogueAdminPage({ user }: Props) {
                 </thead>
                 <tbody>
                   {filtered.length === 0 && !loading && (
-                    <tr><td colSpan={7} style={{padding:24,textAlign:'center',color:T.text3,fontSize:13}}>
+                    <tr><td colSpan={9} style={{padding:24,textAlign:'center',color:T.text3,fontSize:13}}>
                       {items.length === 0 ? 'No items yet — run a catalogue sync from the B2B Portal page.' : 'No items match your filters.'}
                     </td></tr>
                   )}
@@ -278,8 +301,10 @@ export default function CatalogueAdminPage({ user }: Props) {
                       key={it.id}
                       item={it}
                       index={i}
-                      modelName={it.model_id ? modelById.get(it.model_id) || null : null}
-                      productTypeName={it.product_type_id ? productTypeById.get(it.product_type_id) || null : null}
+                      models={models}
+                      productTypes={productTypes}
+                      onCreateModel={createModel}
+                      onCreateProductType={createProductType}
                       onPatch={patchLocalItem}
                       onOpenDrawer={() => setDrawerItemId(it.id)}
                     />
@@ -308,23 +333,27 @@ export default function CatalogueAdminPage({ user }: Props) {
 
 // ─── Row component ──────────────────────────────────────────────────────
 function CatalogueRow({
-  item, index, modelName, productTypeName, onPatch, onOpenDrawer,
+  item, index, models, productTypes,
+  onCreateModel, onCreateProductType,
+  onPatch, onOpenDrawer,
 }: {
   item: CatalogueItem
   index: number
-  modelName: string | null
-  productTypeName: string | null
+  models: TaxonomyOption[]
+  productTypes: TaxonomyOption[]
+  onCreateModel: (name: string) => Promise<string>
+  onCreateProductType: (name: string) => Promise<string>
   onPatch: (id: string, patch: Partial<CatalogueItem>) => void
   onOpenDrawer: () => void
 }) {
   const [priceDraft, setPriceDraft] = useState<string>(item.trade_price_ex_gst.toFixed(2))
-  const [savingField, setSavingField] = useState<'price'|'visible'|null>(null)
+  const [savingField, setSavingField] = useState<'price'|'visible'|'model'|'type'|null>(null)
   const [error, setError] = useState<string | null>(null)
 
   // Sync local price draft when the underlying item changes (e.g. after refresh)
   useEffect(() => { setPriceDraft(item.trade_price_ex_gst.toFixed(2)) }, [item.trade_price_ex_gst])
 
-  async function patchServer(patch: Partial<CatalogueItem>, fieldKey: 'price'|'visible') {
+  async function patchServer(patch: Partial<CatalogueItem>, fieldKey: 'price'|'visible'|'model'|'type') {
     setSavingField(fieldKey)
     setError(null)
     try {
@@ -343,6 +372,42 @@ function CatalogueRow({
     } finally {
       setSavingField(null)
     }
+  }
+
+  async function handleModelChange(v: string | null | '__add__') {
+    if (v === '__add__') {
+      const name = window.prompt('New model name:')?.trim()
+      if (!name) return
+      try {
+        setSavingField('model')
+        const newId = await onCreateModel(name)
+        await patchServer({ model_id: newId }, 'model')
+      } catch (e: any) {
+        setError(e?.message || String(e))
+        setTimeout(() => setError(null), 4000)
+        setSavingField(null)
+      }
+      return
+    }
+    patchServer({ model_id: v || null }, 'model')
+  }
+
+  async function handleTypeChange(v: string | null | '__add__') {
+    if (v === '__add__') {
+      const name = window.prompt('New product type name:')?.trim()
+      if (!name) return
+      try {
+        setSavingField('type')
+        const newId = await onCreateProductType(name)
+        await patchServer({ product_type_id: newId }, 'type')
+      } catch (e: any) {
+        setError(e?.message || String(e))
+        setTimeout(() => setError(null), 4000)
+        setSavingField(null)
+      }
+      return
+    }
+    patchServer({ product_type_id: v || null }, 'type')
   }
 
   function commitPrice() {
@@ -389,12 +454,6 @@ function CatalogueRow({
       {/* Name */}
       <td style={{...td(),cursor:'pointer'}} onClick={onOpenDrawer}>
         <div style={{color:T.text}}>{item.name}</div>
-        {(modelName || productTypeName) && (
-          <div style={{display:'flex',gap:6,marginTop:4,flexWrap:'wrap'}}>
-            {modelName && <TagChip color={T.purple}>{modelName}</TagChip>}
-            {productTypeName && <TagChip color={T.teal}>{productTypeName}</TagChip>}
-          </div>
-        )}
         {(showWarning || showImageWarning) && (
           <div style={{fontSize:10,color:T.amber,marginTop:2,fontFamily:'monospace'}}>
             ⚠ {[
@@ -403,6 +462,28 @@ function CatalogueRow({
             ].filter(Boolean).join(' · ')}
           </div>
         )}
+      </td>
+
+      {/* Model (inline editable) */}
+      <td style={td()}>
+        <InlineTaxonomySelect
+          value={item.model_id}
+          options={models}
+          saving={savingField === 'model'}
+          addLabel="+ Add model…"
+          onChange={handleModelChange}
+        />
+      </td>
+
+      {/* Product type (inline editable) */}
+      <td style={td()}>
+        <InlineTaxonomySelect
+          value={item.product_type_id}
+          options={productTypes}
+          saving={savingField === 'type'}
+          addLabel="+ Add type…"
+          onChange={handleTypeChange}
+        />
       </td>
 
       {/* RRP */}
@@ -739,15 +820,40 @@ function Stat({ n, label, color }: { n: number; label: string; color?: string })
   )
 }
 
-function TagChip({ color, children }: { color: string; children: React.ReactNode }) {
+function InlineTaxonomySelect({
+  value, options, saving, addLabel, onChange,
+}: {
+  value: string | null
+  options: TaxonomyOption[]
+  saving: boolean
+  addLabel: string
+  onChange: (v: string | null | '__add__') => void
+}) {
+  // Hide inactive options unless one is currently selected (so the displayed
+  // value is preserved). Sort active options first, alphabetically.
+  const visible = options.filter(o => o.is_active || o.id === value)
   return (
-    <span style={{
-      display:'inline-block',padding:'1px 7px',borderRadius:8,fontSize:10,
-      background:`${color}18`,color,border:`1px solid ${color}30`,
-      whiteSpace:'nowrap',
-    }}>
-      {children}
-    </span>
+    <select
+      value={value || ''}
+      disabled={saving}
+      onChange={e => {
+        const v = e.target.value
+        if (v === '__add__') onChange('__add__')
+        else onChange(v || null)
+      }}
+      style={{
+        width:'100%',
+        background:T.bg3,border:`1px solid ${T.border}`,color:T.text,
+        borderRadius:5,padding:'6px 8px',fontSize:12,outline:'none',
+        fontFamily:'inherit',cursor: saving ? 'wait' : 'pointer',
+        opacity: saving ? 0.5 : 1,
+      }}>
+      <option value="">— None —</option>
+      {visible.map(o => (
+        <option key={o.id} value={o.id}>{o.name}{!o.is_active ? ' (inactive)' : ''}</option>
+      ))}
+      <option value="__add__">{addLabel}</option>
+    </select>
   )
 }
 
