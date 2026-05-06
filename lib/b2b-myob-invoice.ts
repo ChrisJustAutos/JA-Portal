@@ -338,33 +338,32 @@ export async function writeRefundCreditNoteToMyob(
       totalTax    += lineGst
     }
 
-    // Mirror the original card surcharge line (negative, FRE)
+    // Mirror the original card surcharge line (negative qty, FRE)
     if (cardFeeInc > 0) {
-      const surchargeNeg = round2(-cardFeeInc)
       myobLines.push({
         Type: 'Transaction',
         Description: 'Card processing surcharge — refund',
         Item: { UID: cfg.cardFeeItemUid },
-        ShipQuantity: 1,
-        UnitPrice: surchargeNeg,
-        Total: surchargeNeg,
+        ShipQuantity: -1,                       // negative qty drives negative total
+        UnitPrice: round2(cardFeeInc),          // positive (MYOB rejects negative UnitPrice)
+        Total: round2(-cardFeeInc),
         TaxCode: { UID: cfg.freTaxCodeUid },
       })
-      subtotalEnv += surchargeNeg
+      subtotalEnv += round2(-cardFeeInc)
     }
   } else {
     // Single-line credit note for partial / additional refunds
-    const refundNeg = round2(-refundAmount)
+    const refundPos = round2(refundAmount)
     myobLines.push({
       Type: 'Transaction',
       Description: `Refund — Order ${order.order_number}`.substring(0, 255),
       Item: { UID: cfg.cardFeeItemUid },
-      ShipQuantity: 1,
-      UnitPrice: refundNeg,
-      Total: refundNeg,
+      ShipQuantity: -1,                         // negative qty drives negative total
+      UnitPrice: refundPos,                     // positive (MYOB rejects negative UnitPrice)
+      Total: round2(-refundPos),
       TaxCode: { UID: cfg.freTaxCodeUid },
     })
-    subtotalEnv = refundNeg
+    subtotalEnv = round2(-refundPos)
     totalTax    = 0
   }
 
