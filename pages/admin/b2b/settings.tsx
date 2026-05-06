@@ -327,7 +327,7 @@ function Section({ title, description, children }: { title: string; description?
   return (
     <section style={{
       background:T.bg2,border:`1px solid ${T.border}`,borderRadius:10,
-      padding:'20px 22px',marginBottom:16,
+      padding:'24px 28px',marginBottom:18,
     }}>
       <h2 style={{fontSize:14,fontWeight:600,margin:'0 0 4px',letterSpacing:'-0.005em'}}>{title}</h2>
       {description && (
@@ -352,7 +352,7 @@ function inputStyle(): React.CSSProperties {
   return {
     background:T.bg3,border:`1px solid ${T.border2}`,color:T.text,
     borderRadius:5,padding:'8px 10px',fontSize:13,outline:'none',
-    fontFamily:'inherit',width:'100%',
+    fontFamily:'inherit',width:'100%',boxSizing:'border-box',
   }
 }
 
