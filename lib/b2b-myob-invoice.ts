@@ -133,6 +133,7 @@ export async function writeOrderToMyob(orderId: string): Promise<MyobWriteResult
       Type: 'Transaction',
       Description: 'Card processing surcharge',
       Account: { UID: cfg.cardFeeAccountUid },
+      UnitCount: 1,           // MYOB requires this on every line, even Account-only ones
       Total: cardFeeInc,
       TaxCode: { UID: cfg.freTaxCodeUid },
     })

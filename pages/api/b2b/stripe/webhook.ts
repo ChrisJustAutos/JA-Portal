@@ -101,7 +101,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   // 3. Load order
   const { data: order, error: oErr } = await c
     .from('b2b_orders')
-    .select('id, status, order_number, stripe_checkout_session_id')
+    .select('id, status, order_number, stripe_checkout_session_id, myob_invoice_uid')
     .eq('id', orderId)
     .maybeSingle()
   if (oErr) {
@@ -120,42 +120,46 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // shouldn't block the payment from being recorded if metadata is correct.
   }
 
-  // 4. Idempotency: if already paid, treat as no-op
-  if (order.status === 'paid') {
-    return res.status(200).json({ received: true, already_paid: true, order_id: orderId })
+  // 4. Idempotency: only fully no-op if BOTH paid AND MYOB invoice exists.
+  // If paid but MYOB hasn't been written yet (writeback failed earlier),
+  // fall through and retry the MYOB write.
+  if (order.status === 'paid' && order.myob_invoice_uid) {
+    return res.status(200).json({ received: true, already_paid: true, already_written: true, order_id: orderId })
   }
 
-  // 5. Mark order paid
+  // 5. Mark order paid (only if not already)
   const nowIso = new Date().toISOString()
-  const { error: updErr } = await c
-    .from('b2b_orders')
-    .update({
-      status: 'paid',
-      paid_at: nowIso,
-      stripe_payment_intent_id: paymentIntentId,
-    })
-    .eq('id', orderId)
-  if (updErr) {
-    console.error('webhook: order update failed', updErr)
-    // Return 500 so Stripe retries
-    return res.status(500).json({ error: updErr.message })
-  }
+  if (order.status !== 'paid') {
+    const { error: updErr } = await c
+      .from('b2b_orders')
+      .update({
+        status: 'paid',
+        paid_at: nowIso,
+        stripe_payment_intent_id: paymentIntentId,
+      })
+      .eq('id', orderId)
+    if (updErr) {
+      console.error('webhook: order update failed', updErr)
+      // Return 500 so Stripe retries
+      return res.status(500).json({ error: updErr.message })
+    }
 
-  await c.from('b2b_order_events').insert({
-    order_id: orderId,
-    event_type: 'payment_succeeded',
-    from_status: 'pending_payment',
-    to_status: 'paid',
-    actor_type: 'stripe_webhook',
-    actor_id: null,
-    notes: `Stripe ${eventId}; PaymentIntent ${paymentIntentId || 'n/a'}`,
-    metadata: {
-      stripe_event_id: eventId,
-      stripe_session_id: stripeSessionId,
-      stripe_payment_intent_id: paymentIntentId,
-      amount_total: session.amount_total,
-    },
-  })
+    await c.from('b2b_order_events').insert({
+      order_id: orderId,
+      event_type: 'payment_succeeded',
+      from_status: 'pending_payment',
+      to_status: 'paid',
+      actor_type: 'stripe_webhook',
+      actor_id: null,
+      notes: `Stripe ${eventId}; PaymentIntent ${paymentIntentId || 'n/a'}`,
+      metadata: {
+        stripe_event_id: eventId,
+        stripe_session_id: stripeSessionId,
+        stripe_payment_intent_id: paymentIntentId,
+        amount_total: session.amount_total,
+      },
+    })
+  }
 
   // 6. Trigger MYOB writeback. Wrapped in try/catch so MYOB failure doesn't
   // 500 the webhook (Stripe would keep retrying for 3 days, won't help).
