@@ -69,6 +69,8 @@ export default function B2BCataloguePage({ b2bUser }: Props) {
   const [stockError, setStockError] = useState<string | null>(null)
   const [search, setSearch] = useState('')
   const [groupBy, setGroupBy] = useState<GroupBy>('none')
+  const [modelFilter, setModelFilter] = useState<string>('all')         // 'all' | 'none' | <id>
+  const [productTypeFilter, setProductTypeFilter] = useState<string>('all')
 
   async function loadAll() {
     setLoading(true)
@@ -109,15 +111,32 @@ export default function B2BCataloguePage({ b2bUser }: Props) {
 
   const cartItemCount = useMemo(() => cartLines.reduce((s, l) => s + l.qty, 0), [cartLines])
 
+  // Build option lists from the loaded items (de-duped, sorted)
+  const modelOptions = useMemo(() => {
+    const m = new Map<string, string>()
+    for (const it of items) if (it.model) m.set(it.model.id, it.model.name)
+    return Array.from(m.entries()).map(([id, name]) => ({ id, name })).sort((a, b) => a.name.localeCompare(b.name))
+  }, [items])
+  const productTypeOptions = useMemo(() => {
+    const m = new Map<string, string>()
+    for (const it of items) if (it.product_type) m.set(it.product_type.id, it.product_type.name)
+    return Array.from(m.entries()).map(([id, name]) => ({ id, name })).sort((a, b) => a.name.localeCompare(b.name))
+  }, [items])
+
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase()
-    if (!q) return items
-    return items.filter(i =>
-      i.name.toLowerCase().includes(q) ||
-      i.sku.toLowerCase().includes(q) ||
-      (i.description || '').toLowerCase().includes(q),
-    )
-  }, [items, search])
+    return items.filter(i => {
+      if (modelFilter === 'none' && i.model) return false
+      if (modelFilter !== 'all' && modelFilter !== 'none' && i.model?.id !== modelFilter) return false
+      if (productTypeFilter === 'none' && i.product_type) return false
+      if (productTypeFilter !== 'all' && productTypeFilter !== 'none' && i.product_type?.id !== productTypeFilter) return false
+      if (q) {
+        const hay = (i.name + ' ' + i.sku + ' ' + (i.description || '')).toLowerCase()
+        if (!hay.includes(q)) return false
+      }
+      return true
+    })
+  }, [items, search, modelFilter, productTypeFilter])
 
   const grouped = useMemo(() => {
     if (groupBy === 'none') return null
@@ -200,6 +219,18 @@ export default function B2BCataloguePage({ b2bUser }: Props) {
                 background:T.bg2,border:`1px solid ${T.border2}`,color:T.text,
                 borderRadius:6,padding:'8px 12px',fontSize:13,outline:'none',fontFamily:'inherit',
               }}
+            />
+            <FilterSelect
+              label="Model"
+              value={modelFilter}
+              options={modelOptions}
+              onChange={setModelFilter}
+            />
+            <FilterSelect
+              label="Type"
+              value={productTypeFilter}
+              options={productTypeOptions}
+              onChange={setProductTypeFilter}
             />
             <div style={{display:'flex',alignItems:'center',gap:6}}>
               <span style={{fontSize:12,color:T.text3}}>Group by</span>
@@ -333,6 +364,13 @@ function CatalogueCard({
         <div style={{fontSize:9,color:T.text3,fontFamily:'monospace',textTransform:'uppercase',letterSpacing:'0.04em'}}>{item.sku}</div>
         <div style={{fontSize:13,color:T.text,fontWeight:500,lineHeight:1.3,minHeight:34}}>{item.name}</div>
 
+        {(item.model || item.product_type) && (
+          <div style={{display:'flex',gap:5,flexWrap:'wrap'}}>
+            {item.model && <TagChip color={T.teal}>{item.model.name}</TagChip>}
+            {item.product_type && <TagChip color={T.blue}>{item.product_type.name}</TagChip>}
+          </div>
+        )}
+
         {/* Stock + price */}
         <div style={{display:'flex',alignItems:'baseline',justifyContent:'space-between',marginTop:4,gap:8}}>
           <div style={{fontSize:15,color:T.text,fontWeight:600,fontVariantNumeric:'tabular-nums'}}>
@@ -412,6 +450,48 @@ function QtyStepper({ qty, max, onChange }: { qty: number; max?: number; onChang
         +
       </button>
     </div>
+  )
+}
+
+function TagChip({ color, children }: { color: string; children: React.ReactNode }) {
+  return (
+    <span style={{
+      display:'inline-block',padding:'1px 7px',borderRadius:8,fontSize:10,
+      background:`${color}18`,color,border:`1px solid ${color}30`,
+      whiteSpace:'nowrap',
+    }}>
+      {children}
+    </span>
+  )
+}
+
+function FilterSelect({
+  label, value, options, onChange,
+}: {
+  label: string
+  value: string
+  options: { id: string; name: string }[]
+  onChange: (v: string) => void
+}) {
+  const active = value !== 'all'
+  return (
+    <select
+      value={value}
+      onChange={e => onChange(e.target.value)}
+      title={`Filter by ${label.toLowerCase()}`}
+      style={{
+        background: active ? `${T.blue}20` : T.bg2,
+        border:`1px solid ${active ? T.blue : T.border2}`,
+        color: active ? T.blue : T.text,
+        borderRadius:6,padding:'7px 10px',fontSize:12,outline:'none',fontFamily:'inherit',
+        cursor:'pointer',fontWeight: active ? 600 : 400,
+      }}>
+      <option value="all">{label}: All</option>
+      <option value="none">{label}: None</option>
+      {options.map(o => (
+        <option key={o.id} value={o.id}>{o.name}</option>
+      ))}
+    </select>
   )
 }
 

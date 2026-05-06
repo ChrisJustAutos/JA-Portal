@@ -94,6 +94,8 @@ export default function CatalogueAdminPage({ user }: Props) {
   const [loadError, setLoadError] = useState<string | null>(null)
   const [search, setSearch] = useState('')
   const [visibilityFilter, setVisibilityFilter] = useState<VisibilityFilter>('all')
+  const [modelFilter, setModelFilter] = useState<string>('all')         // 'all' | 'none' | <id>
+  const [productTypeFilter, setProductTypeFilter] = useState<string>('all')
   const [drawerItemId, setDrawerItemId] = useState<string | null>(null)
 
   async function load() {
@@ -131,13 +133,29 @@ export default function CatalogueAdminPage({ user }: Props) {
     return items.filter(it => {
       if (visibilityFilter === 'visible' && !it.b2b_visible) return false
       if (visibilityFilter === 'hidden'  &&  it.b2b_visible) return false
+      if (modelFilter === 'none' && it.model_id) return false
+      if (modelFilter !== 'all' && modelFilter !== 'none' && it.model_id !== modelFilter) return false
+      if (productTypeFilter === 'none' && it.product_type_id) return false
+      if (productTypeFilter !== 'all' && productTypeFilter !== 'none' && it.product_type_id !== productTypeFilter) return false
       if (q) {
         const hay = (it.sku + ' ' + it.name).toLowerCase()
         if (!hay.includes(q)) return false
       }
       return true
     })
-  }, [items, search, visibilityFilter])
+  }, [items, search, visibilityFilter, modelFilter, productTypeFilter])
+
+  // Lookup maps for resolving names on rows (model/product_type names aren't on the row payload)
+  const modelById = useMemo(() => {
+    const m = new Map<string, string>()
+    for (const o of models) m.set(o.id, o.name)
+    return m
+  }, [models])
+  const productTypeById = useMemo(() => {
+    const m = new Map<string, string>()
+    for (const o of productTypes) m.set(o.id, o.name)
+    return m
+  }, [productTypes])
 
   const stats = useMemo(() => {
     const total       = items.length
@@ -206,6 +224,18 @@ export default function CatalogueAdminPage({ user }: Props) {
             <FilterPill active={visibilityFilter==='all'}     onClick={()=>setVisibilityFilter('all')}>All ({items.length})</FilterPill>
             <FilterPill active={visibilityFilter==='visible'} onClick={()=>setVisibilityFilter('visible')} color={T.green}>Visible ({stats.visible})</FilterPill>
             <FilterPill active={visibilityFilter==='hidden'}  onClick={()=>setVisibilityFilter('hidden')}  color={T.text3}>Hidden ({items.length - stats.visible})</FilterPill>
+            <TaxonomyFilterDropdown
+              label="Model"
+              value={modelFilter}
+              options={models}
+              onChange={setModelFilter}
+            />
+            <TaxonomyFilterDropdown
+              label="Type"
+              value={productTypeFilter}
+              options={productTypes}
+              onChange={setProductTypeFilter}
+            />
             <button onClick={load} disabled={loading}
               style={{padding:'6px 12px',borderRadius:5,border:`1px solid ${T.border2}`,background:'transparent',color:T.text2,fontSize:12,cursor:loading?'wait':'pointer',fontFamily:'inherit'}}>
               {loading ? 'Loading…' : '↻ Refresh'}
@@ -248,6 +278,8 @@ export default function CatalogueAdminPage({ user }: Props) {
                       key={it.id}
                       item={it}
                       index={i}
+                      modelName={it.model_id ? modelById.get(it.model_id) || null : null}
+                      productTypeName={it.product_type_id ? productTypeById.get(it.product_type_id) || null : null}
                       onPatch={patchLocalItem}
                       onOpenDrawer={() => setDrawerItemId(it.id)}
                     />
@@ -276,10 +308,12 @@ export default function CatalogueAdminPage({ user }: Props) {
 
 // ─── Row component ──────────────────────────────────────────────────────
 function CatalogueRow({
-  item, index, onPatch, onOpenDrawer,
+  item, index, modelName, productTypeName, onPatch, onOpenDrawer,
 }: {
   item: CatalogueItem
   index: number
+  modelName: string | null
+  productTypeName: string | null
   onPatch: (id: string, patch: Partial<CatalogueItem>) => void
   onOpenDrawer: () => void
 }) {
@@ -355,6 +389,12 @@ function CatalogueRow({
       {/* Name */}
       <td style={{...td(),cursor:'pointer'}} onClick={onOpenDrawer}>
         <div style={{color:T.text}}>{item.name}</div>
+        {(modelName || productTypeName) && (
+          <div style={{display:'flex',gap:6,marginTop:4,flexWrap:'wrap'}}>
+            {modelName && <TagChip color={T.purple}>{modelName}</TagChip>}
+            {productTypeName && <TagChip color={T.teal}>{productTypeName}</TagChip>}
+          </div>
+        )}
         {(showWarning || showImageWarning) && (
           <div style={{fontSize:10,color:T.amber,marginTop:2,fontFamily:'monospace'}}>
             ⚠ {[
@@ -696,6 +736,51 @@ function Stat({ n, label, color }: { n: number; label: string; color?: string })
       <span style={{fontSize:18,fontWeight:600,color: color || T.text,fontVariantNumeric:'tabular-nums'}}>{n}</span>
       <span style={{fontSize:10,color:T.text3,textTransform:'uppercase',letterSpacing:'0.05em'}}>{label}</span>
     </div>
+  )
+}
+
+function TagChip({ color, children }: { color: string; children: React.ReactNode }) {
+  return (
+    <span style={{
+      display:'inline-block',padding:'1px 7px',borderRadius:8,fontSize:10,
+      background:`${color}18`,color,border:`1px solid ${color}30`,
+      whiteSpace:'nowrap',
+    }}>
+      {children}
+    </span>
+  )
+}
+
+function TaxonomyFilterDropdown({
+  label, value, options, onChange,
+}: {
+  label: string
+  value: string
+  options: TaxonomyOption[]
+  onChange: (v: string) => void
+}) {
+  const active = value !== 'all'
+  // Show inactive options only if currently selected
+  const visible = options.filter(o => o.is_active || o.id === value)
+  return (
+    <select
+      value={value}
+      onChange={e => onChange(e.target.value)}
+      title={`Filter by ${label.toLowerCase()}`}
+      style={{
+        padding:'6px 10px',borderRadius:5,
+        border:`1px solid ${active ? T.blue : T.border2}`,
+        background: active ? `${T.blue}20` : 'transparent',
+        color: active ? T.blue : T.text2,
+        fontSize:12,fontWeight: active ? 600 : 400,
+        cursor:'pointer',fontFamily:'inherit',outline:'none',
+      }}>
+      <option value="all">{label}: All</option>
+      <option value="none">{label}: None</option>
+      {visible.map(o => (
+        <option key={o.id} value={o.id}>{o.name}{!o.is_active ? ' (inactive)' : ''}</option>
+      ))}
+    </select>
   )
 }
 
