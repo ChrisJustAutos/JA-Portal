@@ -1473,6 +1473,7 @@ function SupplierPresetForm({
           selected={supplier}
           onSelect={setSupplier}
           initialQuery={(invoice.vendor_name_parsed || '').trim()}
+          createFrom={{ vendorName: invoice.vendor_name_parsed, vendorAbn: invoice.vendor_abn }}
         />
       </FormRow>
 
@@ -1751,18 +1752,60 @@ function defaultPatternFor(description: string, partNumber: string | null): stri
 }
 
 function SupplierTypeahead({
-  companyFile, selected, onSelect, initialQuery,
+  companyFile, selected, onSelect, initialQuery, createFrom,
 }: {
   companyFile: 'VPS' | 'JAWS'
   selected: MyobSupplier | null
   onSelect: (s: MyobSupplier | null) => void
   initialQuery?: string
+  /** When provided, surfaces a "Create new MYOB supplier" button in the
+   *  picker that POSTs CompanyName + ABN (no bank/payment details) and
+   *  auto-selects the new card. Used on the AP detail page so editors
+   *  can mint a card straight from the parsed invoice header. */
+  createFrom?: { vendorName: string | null; vendorAbn: string | null }
 }) {
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState(initialQuery || '')
   const [loading, setLoading] = useState(false)
   const [results, setResults] = useState<MyobSupplier[]>([])
   const [searchError, setSearchError] = useState<string | null>(null)
+  const [createOpen, setCreateOpen] = useState(false)
+  const [createName, setCreateName] = useState('')
+  const [createAbn, setCreateAbn] = useState('')
+  const [creating, setCreating] = useState(false)
+  const [createError, setCreateError] = useState<string | null>(null)
+
+  function startCreate() {
+    setCreateName((createFrom?.vendorName || query || '').trim())
+    setCreateAbn((createFrom?.vendorAbn || '').trim())
+    setCreateError(null)
+    setCreateOpen(true)
+  }
+
+  async function submitCreate() {
+    const name = createName.trim()
+    if (!name) { setCreateError('Company name is required'); return }
+    const abn = createAbn.replace(/\s/g, '').trim()
+    if (abn && !/^\d{11}$/.test(abn)) { setCreateError('ABN must be 11 digits'); return }
+    setCreating(true)
+    setCreateError(null)
+    try {
+      const res = await fetch('/api/myob/suppliers', {
+        method: 'POST', credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ company: companyFile, companyName: name, abn: abn || null }),
+      })
+      const json = await res.json()
+      if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`)
+      onSelect(json.supplier)
+      setCreateOpen(false)
+      setOpen(false)
+    } catch (e: any) {
+      setCreateError(e?.message || 'create failed')
+    } finally {
+      setCreating(false)
+    }
+  }
 
   useEffect(() => {
     if (!open) return
@@ -1849,6 +1892,63 @@ function SupplierTypeahead({
           </div>
         ))}
       </div>
+
+      {createFrom && !createOpen && (
+        <div style={{marginTop:10, paddingTop:10, borderTop:`1px solid ${T.border}`}}>
+          <button onClick={startCreate} style={{
+            ...btnSecondary(),
+            color: T.green, borderColor: `${T.green}40`,
+          }}>
+            + Create new MYOB supplier{createFrom.vendorName ? ` ("${createFrom.vendorName}")` : ''}
+          </button>
+          <div style={{fontSize:10, color:T.text3, marginTop:6, lineHeight:1.5}}>
+            Writes Company name + ABN only. Bank/payment details, addresses and the default expense account stay manual in MYOB.
+          </div>
+        </div>
+      )}
+
+      {createFrom && createOpen && (
+        <div style={{
+          marginTop:10, padding:12, borderRadius:6,
+          border:`1px solid ${T.green}40`, background: `${T.green}08`,
+        }}>
+          <div style={{fontSize:11, color:T.text2, marginBottom:8, fontWeight:600}}>
+            Create new MYOB supplier in {companyFile}
+          </div>
+          <div style={{display:'flex', flexDirection:'column', gap:8}}>
+            <input
+              autoFocus
+              value={createName}
+              onChange={e => setCreateName(e.target.value)}
+              placeholder="Company name (required)"
+              style={inputStyle()}
+            />
+            <input
+              value={createAbn}
+              onChange={e => setCreateAbn(e.target.value)}
+              placeholder="ABN — 11 digits (optional)"
+              style={inputStyle()}
+            />
+          </div>
+          {createError && (
+            <div style={{fontSize:11, color:T.red, marginTop:8}}>{createError}</div>
+          )}
+          <div style={{display:'flex', gap:8, marginTop:10, justifyContent:'flex-end'}}>
+            <button onClick={() => setCreateOpen(false)} disabled={creating} style={btnSecondary()}>
+              Cancel
+            </button>
+            <button onClick={submitCreate} disabled={creating || !createName.trim()} style={{
+              ...btnSecondary(),
+              background: creating || !createName.trim() ? T.bg3 : T.green,
+              color: creating || !createName.trim() ? T.text3 : '#fff',
+              borderColor: creating || !createName.trim() ? T.border2 : T.green,
+              fontWeight: 600,
+            }}>
+              {creating ? 'Creating…' : 'Create in MYOB'}
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

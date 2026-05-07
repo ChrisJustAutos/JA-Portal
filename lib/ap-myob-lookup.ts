@@ -142,6 +142,63 @@ export async function getSupplierByUid(
   return mapSupplier(result.data)
 }
 
+/**
+ * Create a new MYOB supplier card. Used by the AP detail page so an editor
+ * can mint a card straight from the parsed invoice header without leaving
+ * the portal.
+ *
+ * Deliberately minimal: only CompanyName + (optional) ABN are written.
+ * Payment/bank details, expense account, addresses, contact email/phone
+ * etc. are NOT set here — staff add those in MYOB by hand. This keeps the
+ * surface area for mistakes small (a wrong BSB on a card pays the wrong
+ * bank account) while still saving the typing.
+ *
+ * MYOB returns 201 with a Location header pointing at the new resource
+ * (`/Contact/Supplier/{UID}`). We extract the UID and re-fetch so callers
+ * get the same shape `searchSuppliers` returns.
+ */
+export async function createSupplier(
+  label: CompanyFileLabel,
+  input: { companyName: string; abn?: string | null },
+): Promise<MyobSupplierLite> {
+  const company = input.companyName.trim()
+  if (!company) throw new Error('Company name is required')
+
+  const conn = await resolveConn(label)
+  const path = `/accountright/${conn.company_file_id}/Contact/Supplier`
+
+  const body: Record<string, any> = {
+    CompanyName: company,
+    IsIndividual: false,
+    IsActive: true,
+  }
+  const abn = (input.abn || '').replace(/\s/g, '').trim()
+  if (abn) {
+    body.BuyingDetails = { ABN: abn }
+  }
+
+  const result = await myobFetch(conn.id, path, { method: 'POST', body })
+  if (result.status !== 201 && result.status !== 200) {
+    // MYOB returns the error JSON in `data`; fall back to the raw body.
+    const detail = result.data?.Errors?.[0]?.Message
+                || result.data?.Errors?.[0]?.AdditionalDetails
+                || (result.raw || '').substring(0, 300)
+    throw new Error(`MYOB createSupplier failed (HTTP ${result.status}): ${detail}`)
+  }
+
+  // Extract UID from the Location header (lowercased by myobFetch).
+  const location = result.headers?.['location'] || ''
+  const uidMatch = location.match(/\/Supplier\/([0-9a-f-]{36})/i)
+  if (!uidMatch) {
+    throw new Error(`MYOB createSupplier returned no UID — Location: "${location}"`)
+  }
+  const uid = uidMatch[1]
+
+  const created = await getSupplierByUid(label, uid)
+  if (!created) throw new Error('Created supplier but could not re-fetch it')
+  return created
+}
+
 function mapSupplier(it: any): MyobSupplierLite {
   const company = (it?.CompanyName || '').trim()
   const first = (it?.FirstName || '').trim()
