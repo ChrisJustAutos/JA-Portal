@@ -108,6 +108,7 @@ interface InvoiceRow {
   myob_payment_applied_at: string | null
   myob_payment_error: string | null
   is_credit_note: boolean
+  myob_txn_type: 'bill' | 'spend_money' | null
 }
 
 interface PaymentAccount {
@@ -462,17 +463,25 @@ export default function APDetailPage({ user }: PageProps) {
     if (!id || !data) return
     const inv = data.invoice
     const isCN = inv.is_credit_note
+    const isSpendMoney = !inv.resolved_supplier_uid && !!inv.payment_account_uid
     const total = inv.total_inc_gst != null ? Number(inv.total_inc_gst) : 0
+    const heading = isSpendMoney
+      ? `Post as SPEND MONEY to MYOB ${inv.myob_company_file}? (no supplier card)`
+      : isCN
+        ? `Post CREDIT NOTE to MYOB ${inv.myob_company_file}?`
+        : `Post bill to MYOB ${inv.myob_company_file}?`
     const summary =
-      `${isCN ? 'Post CREDIT NOTE to MYOB' : 'Post bill to MYOB'} ${inv.myob_company_file}?\n\n` +
-      `Supplier:  ${inv.resolved_supplier_name || '(not set)'}\n` +
-      `Account:   ${inv.resolved_account_code || '(not set)'}\n` +
+      `${heading}\n\n` +
+      (isSpendMoney
+        ? `Spend from: ${inv.payment_account_code || ''} ${inv.payment_account_name || ''}\n`
+        : `Supplier:  ${inv.resolved_supplier_name || '(not set)'}\n`) +
+      `Account:   ${inv.resolved_account_code || '(per-line)'}\n` +
       `Total:     ${fmtMoney(isCN ? -total : total)}${isCN ? '   (negative bill)' : ''}\n` +
       `Inv #:     ${inv.invoice_number}\n` +
       `Date:      ${inv.invoice_date}\n` +
       (inv.via_capricorn && inv.capricorn_reference ? `Capricorn: ${inv.capricorn_reference}\n` : '') +
       (inv.linked_job_number ? `Job:       ${inv.linked_job_number}\n` : '') +
-      (inv.payment_account_uid
+      (!isSpendMoney && inv.payment_account_uid
         ? `${isCN ? 'Refund to:' : 'Pay from: '} ${inv.payment_account_code || ''} ${inv.payment_account_name || ''} (auto-applied)\n`
         : '')
     if (!confirm(summary)) return
@@ -876,19 +885,28 @@ export default function APDetailPage({ user }: PageProps) {
     if (data.invoice.resolved_account_uid) return true
     return data.lines.length > 0 && data.lines.every(l => !!l.account_uid)
   })()
+  // Approve path:
+  //   - supplier mapped              → posts as Service Bill
+  //   - no supplier + payment account → posts as Spend Money (no supplier needed)
+  //   - no supplier + no payment acct → blocked
+  const willPostAsSpendMoney = !!data && !data.invoice.resolved_supplier_uid && !!data.invoice.payment_account_uid
   const canApprove = canEdit && data
                   && !isTerminal
                   && data.invoice.triage_status !== 'red'
-                  && !!data.invoice.resolved_supplier_uid
+                  && (!!data.invoice.resolved_supplier_uid || !!data.invoice.payment_account_uid)
                   && hasAccountFallbackOrPerLine
+                  && !(willPostAsSpendMoney && data.invoice.is_credit_note)
   const approveBlockedReason =
     !data ? '' :
     isPosted   ? 'Already posted' :
     isRejected ? 'Invoice rejected' :
     data.invoice.triage_status === 'red' ? 'Triage RED — fix issues' :
-    !data.invoice.resolved_supplier_uid ? 'No MYOB supplier mapped' :
-    !hasAccountFallbackOrPerLine ? 'Some lines have no account and no default account is set' :
-    ''
+    (!data.invoice.resolved_supplier_uid && !data.invoice.payment_account_uid)
+      ? 'No MYOB supplier mapped — either map a supplier or pick a clearing account under "Mark as paid" to post as Spend Money'
+      : !hasAccountFallbackOrPerLine ? 'Some lines have no account and no default account is set'
+      : (willPostAsSpendMoney && data.invoice.is_credit_note)
+        ? 'No-supplier credit notes cannot be posted as Spend Money — assign a supplier or handle in MYOB'
+        : ''
 
   const pickerLine = editingLines?.find(l => l.id === accountPickerLineId) || null
 
@@ -1137,7 +1155,11 @@ export default function APDetailPage({ user }: PageProps) {
                         cursor: !canApprove ? 'not-allowed' : approving ? 'wait' : 'pointer',
                         opacity: approving ? 0.6 : 1,
                       }}>
-                      {approving ? 'Posting…' : 'Approve & Post to MYOB'}
+                      {approving
+                        ? 'Posting…'
+                        : willPostAsSpendMoney
+                          ? 'Approve & Spend Money'
+                          : 'Approve & Post to MYOB'}
                     </button>
                   </div>
                 )}
@@ -1166,6 +1188,11 @@ export default function APDetailPage({ user }: PageProps) {
                     }}>
                       <div style={{fontSize:11, color:T.green, display:'flex', alignItems:'center', gap:10, flexWrap:'wrap', flex:1, minWidth:0}}>
                         <span>✅ Posted to MYOB {data.invoice.myob_posted_at ? new Date(data.invoice.myob_posted_at).toLocaleString() : ''}</span>
+                        {data.invoice.myob_txn_type === 'spend_money' && (
+                          <span style={{fontSize:10, padding:'1px 6px', borderRadius:3, background:`${T.purple}20`, color:T.purple, border:`1px solid ${T.purple}40`}}>
+                            SPEND MONEY
+                          </span>
+                        )}
                         {data.invoice.myob_bill_uid && (
                           <span style={{fontFamily:'monospace', color:T.text3}}>
                             · UID {data.invoice.myob_bill_uid.substring(0, 8)}…

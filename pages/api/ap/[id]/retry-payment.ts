@@ -48,6 +48,9 @@ export default withAuth('edit:supplier_invoices', async (req: NextApiRequest, re
   if (!inv.myob_bill_uid) {
     return res.status(409).json({ error: 'Invoice has no posted MYOB bill UID — approve it first.' })
   }
+  if (inv.myob_txn_type === 'spend_money') {
+    return res.status(409).json({ error: 'This invoice posted as Spend Money — the transaction itself is the payment, no separate retry needed.' })
+  }
   if (!inv.payment_account_uid) {
     return res.status(409).json({ error: 'No payment account selected on this invoice.' })
   }

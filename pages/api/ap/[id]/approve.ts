@@ -12,7 +12,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { withAuth } from '../../../../lib/authServer'
 import { roleHasPermission } from '../../../../lib/permissions'
-import { createServiceBill } from '../../../../lib/ap-myob-bill'
+import { createServiceBill, createSpendMoneyTxn } from '../../../../lib/ap-myob-bill'
 import { createClient } from '@supabase/supabase-js'
 
 function sb() {
@@ -36,7 +36,7 @@ export default withAuth(null, async (req: NextApiRequest, res: NextApiResponse, 
   // Idempotency check
   const { data: inv, error: fetchErr } = await sb()
     .from('ap_invoices')
-    .select('id, status, myob_bill_uid, triage_status')
+    .select('id, status, myob_bill_uid, triage_status, resolved_supplier_uid, payment_account_uid')
     .eq('id', id)
     .maybeSingle()
   if (fetchErr) return res.status(500).json({ error: fetchErr.message })
@@ -52,9 +52,17 @@ export default withAuth(null, async (req: NextApiRequest, res: NextApiResponse, 
     return res.status(409).json({ error: 'Cannot post — triage is RED. Resolve issues first.' })
   }
 
+  // Path selection:
+  //   - supplier mapped              → Service Bill (the default)
+  //   - no supplier + payment_account → Spend Money (clearing/bank account)
+  //   - no supplier + no payment_acc  → reject (need one of the two to post)
+  const useSpendMoney = !inv.resolved_supplier_uid && !!inv.payment_account_uid
+
   try {
-    const result = await createServiceBill(id, user.id)
-    return res.status(200).json(result)
+    const result = useSpendMoney
+      ? await createSpendMoneyTxn(id, user.id)
+      : await createServiceBill(id, user.id)
+    return res.status(200).json({ ...result, postedAs: useSpendMoney ? 'spend_money' : 'bill' })
   } catch (e: any) {
     const msg = e?.message || String(e)
     // Distinguish validation vs MYOB-rejection vs network

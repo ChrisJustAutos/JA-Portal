@@ -665,6 +665,305 @@ export async function createServiceBill(
   }
 }
 
+// ── Spend Money path (no-supplier invoices) ────────────────────────────
+//
+// Mirrors createServiceBill but POSTs to /Banking/SpendMoneyTxn — used
+// when an invoice doesn't have a MYOB supplier mapped. The invoice's
+// payment_account_uid is the "from" account (where money is paid out
+// of, e.g. a bank account or clearing), each line debits its expense
+// account directly, and there's no follow-up payment txn since the
+// SpendMoney transaction IS the payment.
+//
+// PDF attaches to /Banking/SpendMoneyTxn/{uid}/Attachment (same shape).
+//
+// Limitations (deliberate):
+//   - Credit notes aren't handled here — those need ReceiveMoneyTxn,
+//     which is a separate endpoint with the opposite money flow. If a
+//     no-supplier credit note needs posting today, the user should
+//     either assign a supplier or handle it directly in MYOB.
+//   - No idempotency adopt — there's no SupplierInvoiceNumber on
+//     SpendMoney to query against, so a retry could create a duplicate.
+//     Approve is one-shot; client-side idempotency check still applies
+//     (status !== 'posted' guard at the API layer).
+
+export interface CreateSpendMoneyTxnResult {
+  ok: true
+  myobTxnUid: string
+  attachmentStatus: 'attached' | 'failed' | 'skipped' | 'no-pdf'
+  attachmentError?: string
+}
+
+interface SpendMoneyLineBody {
+  Description: string
+  Account: { UID: string }
+  Amount: number
+  TaxCode: { UID: string }
+}
+
+interface SpendMoneyBody {
+  Date: string
+  Account: { UID: string }     // FROM account (bank / clearing)
+  Memo: string
+  IsTaxInclusive: boolean
+  Lines: SpendMoneyLineBody[]
+  Subtotal: number
+  TotalTax: number
+  TotalAmount: number
+}
+
+export async function createSpendMoneyTxn(
+  invoiceId: string,
+  postedBy: string,
+): Promise<CreateSpendMoneyTxnResult> {
+  const c = sb()
+
+  const { data: inv, error: invErr } = await c
+    .from('ap_invoices')
+    .select('*')
+    .eq('id', invoiceId)
+    .single()
+  if (invErr || !inv) throw new Error(`Invoice not found: ${invoiceId}`)
+
+  if (inv.status === 'posted')   throw new Error('Invoice already posted to MYOB')
+  if (inv.status === 'rejected') throw new Error('Invoice has been rejected')
+  if (inv.triage_status === 'red') throw new Error('Invoice triage is RED — cannot post')
+  if (inv.is_credit_note === true) {
+    throw new Error('No-supplier credit notes need ReceiveMoneyTxn — handle in MYOB or assign a supplier card.')
+  }
+  if (!inv.payment_account_uid) {
+    throw new Error('Spend Money requires a clearing/bank account — tick "Mark as paid" with an account first.')
+  }
+  if (!inv.invoice_date) throw new Error('Invoice date is required to post')
+
+  const { data: lines, error: linesErr } = await c
+    .from('ap_invoice_lines')
+    .select('*')
+    .eq('invoice_id', invoiceId)
+    .order('line_no', { ascending: true })
+  if (linesErr) throw new Error(`Failed to load lines: ${linesErr.message}`)
+  if (!lines || lines.length === 0) throw new Error('Invoice has no line items')
+
+  const linesMissingAccount = lines.filter((l: any) =>
+    !l.account_uid && !inv.resolved_account_uid
+  )
+  if (linesMissingAccount.length > 0) {
+    const which = linesMissingAccount.map((l: any) => `#${l.line_no}`).join(', ')
+    throw new Error(
+      `Lines ${which} have no per-line account and no invoice-level default account is set — pick one or set a default.`
+    )
+  }
+
+  const companyFile = (inv.myob_company_file || 'VPS') as CompanyFileLabel
+  const { gstUid, freUid } = await ensureTaxCodes(companyFile)
+
+  const conn = await getConnection(companyFile)
+  if (!conn) throw new Error(`No active MYOB connection for ${companyFile}`)
+  if (!conn.company_file_id) throw new Error(`MYOB connection ${companyFile} has no company file selected`)
+
+  function taxUidFor(taxCode: string): string {
+    const code = (taxCode || 'GST').toUpperCase()
+    if (code === 'GST') return gstUid
+    if (code === 'FRE') {
+      if (!freUid) throw new Error(`Line uses FRE but FRE tax code is not set up in MYOB ${companyFile}`)
+      return freUid
+    }
+    throw new Error(`Unsupported tax code "${code}" — supported: GST, FRE`)
+  }
+  function rateFor(taxCode: string): number {
+    return (taxCode || 'GST').toUpperCase() === 'FRE' ? 0 : GST_RATE
+  }
+
+  // Build SpendMoney lines + capture rates for downstream tax math.
+  const txnLines: SpendMoneyLineBody[] = []
+  const lineRates: number[] = []
+  for (const l of lines) {
+    const description = [l.part_number, l.description].filter(Boolean).join(' — ').substring(0, 255)
+    const lineAmount = round2(Number(l.line_total_ex_gst || 0))
+    const accountUid: string = l.account_uid || inv.resolved_account_uid
+    txnLines.push({
+      Description: description || 'AP line',
+      Account: { UID: accountUid },
+      Amount: lineAmount,
+      TaxCode: { UID: taxUidFor(l.tax_code) },
+    })
+    lineRates.push(rateFor(l.tax_code))
+  }
+
+  // ── Reconcile lines to PDF header subtotal (same logic as createServiceBill) ──
+  // NOTE: duplicated from createServiceBill's reconciliation block. If this
+  // diverges or grows, factor into a shared helper.
+  const headerTotalRaw    = inv.total_inc_gst    != null && Number.isFinite(Number(inv.total_inc_gst))    ? Number(inv.total_inc_gst)    : null
+  const headerGstRaw      = inv.gst_amount       != null && Number.isFinite(Number(inv.gst_amount))       ? Number(inv.gst_amount)       : null
+  const headerSubtotalRaw = inv.subtotal_ex_gst  != null && Number.isFinite(Number(inv.subtotal_ex_gst))  ? Number(inv.subtotal_ex_gst)  : null
+  const headerTotal    = headerTotalRaw    !== null ? round2(headerTotalRaw)    : null
+  let   headerGst      = headerGstRaw      !== null ? round2(headerGstRaw)      : null
+  let   headerSubtotal = headerSubtotalRaw !== null ? round2(headerSubtotalRaw) : null
+  if (headerTotal !== null && headerGst !== null && headerSubtotal !== null) {
+    const impliedTotal = round2(headerSubtotal + headerGst)
+    const internalDelta = round2(headerTotal - impliedTotal)
+    if (Math.abs(internalDelta) > HEADER_CONSISTENCY_TOLERANCE) {
+      console.warn(`AP-SM ${invoiceId}: header values inconsistent — trusting total + gst, re-deriving subtotal.`)
+      headerSubtotal = round2(headerTotal - headerGst)
+    }
+  } else if (headerTotal !== null && headerGst !== null && headerSubtotal === null) {
+    headerSubtotal = round2(headerTotal - headerGst)
+  } else if (headerTotal !== null && headerSubtotal !== null && headerGst === null) {
+    headerGst = round2(headerTotal - headerSubtotal)
+  }
+
+  const initialLineSum = round2(txnLines.reduce((s, l) => s + l.Amount, 0))
+  let subtotal: number, totalTax: number, totalAmount: number
+  if (headerTotal !== null && headerGst !== null && headerSubtotal !== null) {
+    const lineDelta = round2(headerSubtotal - initialLineSum)
+    if (lineDelta !== 0) {
+      if (Math.abs(lineDelta) > MAX_LINE_NUDGE) {
+        throw new Error(
+          `Cannot post: line items sum to $${initialLineSum.toFixed(2)} but PDF header subtotal is $${headerSubtotal.toFixed(2)} (delta $${lineDelta.toFixed(2)}). Edit the line items to match the invoice subtotal before approving.`
+        )
+      }
+      let maxIdx = 0
+      for (let i = 1; i < txnLines.length; i++) {
+        if (Math.abs(txnLines[i].Amount) > Math.abs(txnLines[maxIdx].Amount)) maxIdx = i
+      }
+      txnLines[maxIdx].Amount = round2(txnLines[maxIdx].Amount + lineDelta)
+    }
+    subtotal    = headerSubtotal
+    totalTax    = headerGst
+    totalAmount = headerTotal
+  } else {
+    const computedTax = round2(txnLines.reduce((s, l, idx) => s + round2(l.Amount * lineRates[idx]), 0))
+    subtotal    = initialLineSum
+    totalTax    = computedTax
+    totalAmount = round2(subtotal + totalTax)
+  }
+
+  const memoParts = [
+    `AP (Spend Money): ${inv.vendor_name_parsed || 'Vendor'}${inv.invoice_number ? ' — ' + inv.invoice_number : ''}`,
+  ]
+  if (inv.linked_job_number) memoParts.push(`Job ${inv.linked_job_number}`)
+  const journalMemo = memoParts.join(' — ').substring(0, 255)
+
+  const body: SpendMoneyBody = {
+    Date: inv.invoice_date,
+    Account: { UID: String(inv.payment_account_uid) },
+    Memo: journalMemo,
+    IsTaxInclusive: false,
+    Lines: txnLines,
+    Subtotal: subtotal,
+    TotalTax: totalTax,
+    TotalAmount: totalAmount,
+  }
+
+  const path = `/accountright/${conn.company_file_id}/Banking/SpendMoneyTxn`
+  const attemptsSoFar = (inv.myob_post_attempts || 0) + 1
+
+  let result: { status: number; data: any; raw: string; headers: Record<string, string> }
+  try {
+    result = await myobFetch(conn.id, path, { method: 'POST', body, performedBy: postedBy })
+  } catch (e: any) {
+    await c.from('ap_invoices').update({
+      myob_post_attempts: attemptsSoFar,
+      myob_post_error: `Network error: ${e?.message || String(e)}`.substring(0, 500),
+      status: 'error',
+    }).eq('id', invoiceId)
+    throw e
+  }
+
+  if (result.status >= 400) {
+    const errMsg = extractMyobError(result)
+    await c.from('ap_invoices').update({
+      myob_post_attempts: attemptsSoFar,
+      myob_post_error: errMsg.substring(0, 500),
+      status: 'error',
+    }).eq('id', invoiceId)
+    throw new Error(`MYOB rejected the spend-money txn (HTTP ${result.status}): ${errMsg}`)
+  }
+
+  const txnUid = extractMyobUid(result)
+  const safeTxnUid = (txnUid && txnUid !== conn.company_file_id) ? txnUid : null
+
+  // Attach PDF (best effort)
+  let attachmentStatus: 'attached' | 'failed' | 'skipped' | 'no-pdf' = 'skipped'
+  let attachmentError: string | undefined
+  if (!safeTxnUid) {
+    attachmentStatus = 'skipped'
+    attachmentError = `No txn UID returned — cannot attach PDF`
+  } else if (!inv.pdf_storage_path) {
+    attachmentStatus = 'no-pdf'
+  } else {
+    try {
+      await attachPdfToSpendMoney({
+        connId: conn.id,
+        cfId: conn.company_file_id,
+        txnUid: safeTxnUid,
+        pdfStoragePath: inv.pdf_storage_path,
+        filename: inv.pdf_filename || `${inv.invoice_number || 'spend-money'}.pdf`,
+        postedBy,
+      })
+      attachmentStatus = 'attached'
+    } catch (e: any) {
+      attachmentStatus = 'failed'
+      attachmentError = (e?.message || String(e)).substring(0, 400)
+      console.error(`SpendMoney ${safeTxnUid} posted but attachment failed:`, attachmentError)
+    }
+  }
+
+  await c.from('ap_invoices').update({
+    myob_bill_uid:       safeTxnUid || null,
+    myob_txn_type:       'spend_money',
+    myob_posted_at:      new Date().toISOString(),
+    myob_posted_by:      postedBy,
+    myob_post_attempts:  attemptsSoFar,
+    status:              'posted',
+    myob_post_error:     attachmentStatus === 'failed' ? `Posted but PDF attach failed: ${attachmentError}` : null,
+    // Spend Money is the payment too — clear payment-side fields to avoid
+    // confusion with the bill+payment flow.
+    myob_payment_uid:        null,
+    myob_payment_applied_at: null,
+    myob_payment_error:      null,
+  }).eq('id', invoiceId)
+
+  return {
+    ok: true,
+    myobTxnUid: safeTxnUid || '',
+    attachmentStatus,
+    attachmentError,
+  }
+}
+
+async function attachPdfToSpendMoney(opts: {
+  connId: string
+  cfId: string
+  txnUid: string
+  pdfStoragePath: string
+  filename: string
+  postedBy: string
+}): Promise<void> {
+  const { data: blob, error: dlErr } = await sb().storage
+    .from(STORAGE_BUCKET)
+    .download(opts.pdfStoragePath)
+  if (dlErr || !blob) {
+    throw new Error(`PDF fetch from Supabase storage failed: ${dlErr?.message || 'unknown'}`)
+  }
+  const arrayBuf = await blob.arrayBuffer()
+  if (arrayBuf.byteLength > MAX_ATTACHMENT_BYTES) {
+    throw new Error(`PDF too large (${Math.round(arrayBuf.byteLength / 1024)}KB) — MYOB limit ${Math.round(MAX_ATTACHMENT_BYTES / 1024)}KB`)
+  }
+  const buffer = Buffer.from(arrayBuf)
+  const base64 = buffer.toString('base64')
+  const safeName = (opts.filename || 'invoice.pdf').replace(/[^\x20-\x7E]/g, '_').substring(0, 100)
+
+  const path = `/accountright/${opts.cfId}/Banking/SpendMoneyTxn/${opts.txnUid}/Attachment`
+  const result = await myobFetch(opts.connId, path, {
+    method: 'POST',
+    body: { Attachments: [{ OriginalFileName: safeName, FileBase64Content: base64 }] },
+    performedBy: opts.postedBy,
+  })
+  if (result.status >= 400) {
+    throw new Error(`MYOB rejected attachment (HTTP ${result.status}): ${extractMyobError(result)}`)
+  }
+}
+
 // ── Attachment helper ───────────────────────────────────────────────────
 
 async function attachPdfToBill(opts: {
