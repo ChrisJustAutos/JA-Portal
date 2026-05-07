@@ -30,6 +30,7 @@ const EDITABLE = [
   'primary_contact_phone',
   'is_active',
   'notes',
+  'tier_id',
   // Shipping address
   'ship_line1', 'ship_line2', 'ship_suburb', 'ship_state', 'ship_postcode', 'ship_country',
   // Billing address
@@ -85,10 +86,31 @@ async function handleGet(id: string, res: NextApiResponse) {
     dist_group_name = dg?.name || null
   }
 
+  // Load tier name if linked
+  let tier_name: string | null = null
+  if (data.tier_id) {
+    const { data: tier } = await c
+      .from('b2b_tiers')
+      .select('name')
+      .eq('id', data.tier_id)
+      .maybeSingle()
+    tier_name = tier?.name || null
+  }
+
+  // Load all active tiers so the dropdown can render even when this
+  // distributor has no tier assigned yet.
+  const { data: tiers } = await c
+    .from('b2b_tiers')
+    .select('id, name, is_active')
+    .order('display_order', { ascending: true })
+    .order('name',          { ascending: true })
+
   return res.status(200).json({
     item: data,
     users: users || [],
     dist_group_name,
+    tier_name,
+    tiers: tiers || [],
   })
 }
 
@@ -137,6 +159,12 @@ async function handlePatch(id: string, req: NextApiRequest, res: NextApiResponse
   }
   if ('is_active' in update && typeof update.is_active !== 'boolean') {
     return res.status(400).json({ error: 'is_active must be boolean' })
+  }
+  if ('tier_id' in update && update.tier_id !== null && typeof update.tier_id !== 'string') {
+    return res.status(400).json({ error: 'tier_id must be uuid string or null' })
+  }
+  if ('tier_id' in update && typeof update.tier_id === 'string' && update.tier_id === '') {
+    update.tier_id = null
   }
   // Address fields: trim, coerce empty string to null. Country uppercased.
   for (const k of ADDRESS_FIELDS) {

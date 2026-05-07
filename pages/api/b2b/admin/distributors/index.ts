@@ -38,12 +38,14 @@ async function handleList(res: NextApiResponse) {
       myob_primary_customer_display_id,
       myob_linked_customer_uids,
       dist_group_id,
+      tier_id,
       primary_contact_email,
       primary_contact_phone,
       is_active,
       notes,
       created_at,
-      updated_at
+      updated_at,
+      tier:b2b_tiers!b2b_distributors_tier_id_fkey ( id, name )
     `)
     .order('display_name', { ascending: true })
 
@@ -66,10 +68,15 @@ async function handleList(res: NextApiResponse) {
     }
   }
 
-  const items = (data || []).map((d: any) => ({
-    ...d,
-    active_user_count: userCounts[d.id] || 0,
-  }))
+  const items = (data || []).map((d: any) => {
+    const tier = Array.isArray(d.tier) ? d.tier[0] : d.tier
+    return {
+      ...d,
+      tier: undefined,
+      tier_name: tier?.name || null,
+      active_user_count: userCounts[d.id] || 0,
+    }
+  })
 
   return res.status(200).json({ items })
 }

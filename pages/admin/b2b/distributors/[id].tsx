@@ -47,6 +47,7 @@ interface Distributor {
   freight_email: string | null
   invoice_email: string | null
   instructions_email: string | null
+  tier_id: string | null
   ship_line1: string | null
   ship_line2: string | null
   ship_suburb: string | null
@@ -89,6 +90,7 @@ export default function DistributorDetailPage({ user }: Props) {
   const [dist, setDist] = useState<Distributor | null>(null)
   const [users, setUsers] = useState<DistributorUser[]>([])
   const [distGroupName, setDistGroupName] = useState<string | null>(null)
+  const [tiers, setTiers] = useState<{ id: string; name: string; is_active: boolean }[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
@@ -102,6 +104,7 @@ export default function DistributorDetailPage({ user }: Props) {
       setDist(j.item)
       setUsers(j.users || [])
       setDistGroupName(j.dist_group_name || null)
+      setTiers(j.tiers || [])
       setError(null)
     } catch (e: any) {
       setError(e?.message || String(e))
@@ -173,7 +176,7 @@ export default function DistributorDetailPage({ user }: Props) {
 
           {dist && (
             <>
-              <DetailsSection dist={dist} onPatch={patchDist}/>
+              <DetailsSection dist={dist} onPatch={patchDist} tiers={tiers}/>
               <NotificationEmailsSection dist={dist} onPatch={patchDist}/>
               <AddressSection
                 title="Shipping address"
@@ -206,7 +209,13 @@ export default function DistributorDetailPage({ user }: Props) {
 }
 
 // ─── Details section (editable form) ───────────────────────────────────
-function DetailsSection({ dist, onPatch }: { dist: Distributor; onPatch: (p: Partial<Distributor>) => Promise<void> }) {
+function DetailsSection({
+  dist, onPatch, tiers,
+}: {
+  dist: Distributor
+  onPatch: (p: Partial<Distributor>) => Promise<void>
+  tiers: { id: string; name: string; is_active: boolean }[]
+}) {
   const [displayName, setDisplayName] = useState(dist.display_name)
   const [abn, setAbn] = useState(dist.abn || '')
   const [contactEmail, setContactEmail] = useState(dist.primary_contact_email || '')
@@ -265,6 +274,21 @@ function DetailsSection({ dist, onPatch }: { dist: Distributor; onPatch: (p: Par
             style={input}/>
         </FormRow>
       </FormGrid>
+      <FormRow label="Tier" hint="Pricing / access tier — manage tier list under B2B Settings">
+        <select
+          value={dist.tier_id || ''}
+          onChange={e => commit('tier_id', e.target.value || null, 'Tier')}
+          style={{...input, cursor:'pointer'}}>
+          <option value="">— No tier —</option>
+          {tiers
+            .filter(t => t.is_active || t.id === dist.tier_id)
+            .map(t => (
+              <option key={t.id} value={t.id}>
+                {t.name}{!t.is_active ? ' (inactive)' : ''}
+              </option>
+            ))}
+        </select>
+      </FormRow>
       <FormRow label="Internal notes" hint="Only visible to staff">
         <textarea rows={3} value={notes} onChange={e => setNotes(e.target.value)}
           onBlur={() => commit('notes', notes.trim() || null, 'Notes')}

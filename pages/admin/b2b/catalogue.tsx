@@ -87,6 +87,15 @@ interface DistributorOption {
   display_name: string
   is_active: boolean
   active_user_count: number
+  tier_id?: string | null
+  tier_name?: string | null
+}
+
+interface TierOption {
+  id: string
+  name: string
+  is_active: boolean
+  usage_count: number  // active distributors in this tier
 }
 
 type VisibilityFilter = 'all' | 'visible' | 'hidden'
@@ -204,6 +213,7 @@ export default function CatalogueAdminPage({ user }: Props) {
   const [models, setModels] = useState<TaxonomyOption[]>([])
   const [productTypes, setProductTypes] = useState<TaxonomyOption[]>([])
   const [distributors, setDistributors] = useState<DistributorOption[]>([])
+  const [tiers, setTiers] = useState<TierOption[]>([])
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [search, setSearch] = useState('')
@@ -218,11 +228,12 @@ export default function CatalogueAdminPage({ user }: Props) {
   async function load() {
     setLoading(true)
     try {
-      const [itemsRes, modelsRes, typesRes, distRes] = await Promise.all([
+      const [itemsRes, modelsRes, typesRes, distRes, tiersRes] = await Promise.all([
         fetch('/api/b2b/admin/catalogue',     { credentials: 'same-origin' }),
         fetch('/api/b2b/admin/models',        { credentials: 'same-origin' }),
         fetch('/api/b2b/admin/product-types', { credentials: 'same-origin' }),
         fetch('/api/b2b/admin/distributors',  { credentials: 'same-origin' }),
+        fetch('/api/b2b/admin/tiers',         { credentials: 'same-origin' }),
       ])
       if (!itemsRes.ok)  throw new Error(`Catalogue HTTP ${itemsRes.status}: ${await itemsRes.text()}`)
       if (!modelsRes.ok) throw new Error(`Models HTTP ${modelsRes.status}`)
@@ -233,11 +244,16 @@ export default function CatalogueAdminPage({ user }: Props) {
       const modelsJson = await modelsRes.json()
       const typesJson  = await typesRes.json()
       const distJson   = distRes.ok ? await distRes.json() : { items: [] }
+      const tiersJson  = tiersRes.ok ? await tiersRes.json() : { tiers: [] }
       setItems(itemsJson.items || [])
       setModels((modelsJson.models || []).map((m: any) => ({ id: m.id, name: m.name, is_active: m.is_active })))
       setProductTypes((typesJson.product_types || []).map((t: any) => ({ id: t.id, name: t.name, is_active: t.is_active })))
       setDistributors((distJson.items || []).map((d: any) => ({
         id: d.id, display_name: d.display_name, is_active: d.is_active, active_user_count: d.active_user_count || 0,
+        tier_id: d.tier_id || null, tier_name: d.tier_name || null,
+      })))
+      setTiers((tiersJson.tiers || []).map((t: any) => ({
+        id: t.id, name: t.name, is_active: t.is_active, usage_count: t.usage_count || 0,
       })))
       setLoadError(null)
     } catch (e: any) {
@@ -248,7 +264,7 @@ export default function CatalogueAdminPage({ user }: Props) {
   }
   useEffect(() => { load() }, [])
 
-  async function startPreview(distributorId: string) {
+  async function startPreview(payload: { distributor_id?: string; tier_id?: string }) {
     setPreviewLoading(true)
     setPreviewError(null)
     try {
@@ -256,7 +272,7 @@ export default function CatalogueAdminPage({ user }: Props) {
         method: 'POST',
         credentials: 'same-origin',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ distributor_id: distributorId }),
+        body: JSON.stringify(payload),
       })
       const j = await r.json()
       if (!r.ok || !j.link) throw new Error(j?.error || `HTTP ${r.status}`)
@@ -409,11 +425,13 @@ export default function CatalogueAdminPage({ user }: Props) {
             </button>
             <PreviewMenu
               distributors={distributors}
+              tiers={tiers}
               open={previewMenuOpen}
               loading={previewLoading}
               onToggle={() => setPreviewMenuOpen(v => !v)}
               onClose={() => setPreviewMenuOpen(false)}
-              onPick={startPreview}
+              onPickDistributor={id => startPreview({ distributor_id: id })}
+              onPickTier={id => startPreview({ tier_id: id })}
             />
           </div>
           {previewError && (
@@ -1103,18 +1121,23 @@ function Stat({ n, label, color }: { n: number; label: string; color?: string })
 }
 
 function PreviewMenu({
-  distributors, open, loading, onToggle, onClose, onPick,
+  distributors, tiers, open, loading, onToggle, onClose, onPickDistributor, onPickTier,
 }: {
   distributors: DistributorOption[]
+  tiers: TierOption[]
   open: boolean
   loading: boolean
   onToggle: () => void
   onClose: () => void
-  onPick: (id: string) => void
+  onPickDistributor: (id: string) => void
+  onPickTier: (id: string) => void
 }) {
-  const eligible = distributors
+  const eligibleDistributors = distributors
     .filter(d => d.is_active && d.active_user_count > 0)
     .sort((a, b) => a.display_name.localeCompare(b.display_name))
+  const eligibleTiers = tiers
+    .filter(t => t.is_active && t.usage_count > 0)
+    .sort((a, b) => a.name.localeCompare(b.name))
   const disabled = loading
 
   return (
@@ -1122,7 +1145,7 @@ function PreviewMenu({
       <button
         onClick={onToggle}
         disabled={disabled}
-        title="Open the distributor catalogue in a new tab as a chosen distributor — no email magic-link round-trip."
+        title="Open the distributor catalogue in a new tab as a chosen tier or distributor — no email magic-link round-trip."
         style={{
           padding:'6px 12px',borderRadius:5,
           border:`1px solid ${T.blue}`,background:`${T.blue}20`,color:T.blue,
@@ -1136,23 +1159,56 @@ function PreviewMenu({
           <div onClick={onClose} style={{position:'fixed',inset:0,zIndex:50}}/>
           <div style={{
             position:'absolute',top:'calc(100% + 4px)',right:0,
-            minWidth:220,maxWidth:320,maxHeight:340,overflowY:'auto',
+            minWidth:240,maxWidth:340,maxHeight:420,overflowY:'auto',
             background:T.bg2,border:`1px solid ${T.border2}`,borderRadius:6,
             boxShadow:'0 12px 28px rgba(0,0,0,0.4)',
             padding:6,zIndex:51,
           }}>
+            {/* Tiers section */}
+            {eligibleTiers.length > 0 && (
+              <>
+                <div style={{fontSize:10,color:T.text3,padding:'6px 10px',textTransform:'uppercase',letterSpacing:'0.06em'}}>
+                  Open as tier
+                </div>
+                {eligibleTiers.map(t => (
+                  <button
+                    key={t.id}
+                    onClick={() => onPickTier(t.id)}
+                    style={{
+                      display:'flex',width:'100%',textAlign:'left',alignItems:'center',gap:8,
+                      padding:'8px 10px',borderRadius:4,
+                      background:'transparent',border:'none',color:T.text,
+                      fontSize:13,cursor:'pointer',fontFamily:'inherit',
+                    }}
+                    onMouseEnter={e => { e.currentTarget.style.background = T.bg3 }}
+                    onMouseLeave={e => { e.currentTarget.style.background = 'transparent' }}>
+                    <span style={{
+                      display:'inline-block',padding:'1px 7px',borderRadius:8,fontSize:9,fontWeight:600,
+                      background:`${T.purple}18`,color:T.purple,letterSpacing:'0.04em',
+                    }}>TIER</span>
+                    <span style={{flex:1,fontWeight:500}}>{t.name}</span>
+                    <span style={{fontSize:10,color:T.text3}}>
+                      {t.usage_count} dist{t.usage_count===1?'':'s'}
+                    </span>
+                  </button>
+                ))}
+                <div style={{height:1,background:T.border,margin:'6px 4px'}}/>
+              </>
+            )}
+
+            {/* Distributors section */}
             <div style={{fontSize:10,color:T.text3,padding:'6px 10px',textTransform:'uppercase',letterSpacing:'0.06em'}}>
               Open as distributor
             </div>
-            {eligible.length === 0 && (
+            {eligibleDistributors.length === 0 && eligibleTiers.length === 0 && (
               <div style={{padding:'10px 12px',fontSize:12,color:T.text3}}>
                 No active distributors with users yet. Create one in <a href="/admin/b2b/distributors" style={{color:T.text2}}>Distributors</a>.
               </div>
             )}
-            {eligible.map(d => (
+            {eligibleDistributors.map(d => (
               <button
                 key={d.id}
-                onClick={() => onPick(d.id)}
+                onClick={() => onPickDistributor(d.id)}
                 style={{
                   display:'block',width:'100%',textAlign:'left',
                   padding:'8px 10px',borderRadius:4,
@@ -1161,7 +1217,17 @@ function PreviewMenu({
                 }}
                 onMouseEnter={e => { e.currentTarget.style.background = T.bg3 }}
                 onMouseLeave={e => { e.currentTarget.style.background = 'transparent' }}>
-                <div style={{fontWeight:500}}>{d.display_name}</div>
+                <div style={{fontWeight:500,display:'flex',alignItems:'center',gap:6}}>
+                  <span>{d.display_name}</span>
+                  {d.tier_name && (
+                    <span style={{
+                      fontSize:9,padding:'1px 5px',borderRadius:6,
+                      background:`${T.purple}18`,color:T.purple,
+                    }}>
+                      {d.tier_name}
+                    </span>
+                  )}
+                </div>
                 <div style={{fontSize:10,color:T.text3,marginTop:2}}>
                   {d.active_user_count} user{d.active_user_count===1?'':'s'}
                 </div>

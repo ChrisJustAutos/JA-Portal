@@ -41,6 +41,8 @@ interface Distributor {
   primary_contact_phone: string | null
   is_active: boolean
   active_user_count: number
+  tier_id: string | null
+  tier_name: string | null
   created_at: string
 }
 
@@ -161,6 +163,7 @@ export default function DistributorsListPage({ user }: Props) {
                     <th style={th(140)}>MYOB ID</th>
                     <th style={th(160)}>Linked customers</th>
                     <th style={th(220)}>Primary contact</th>
+                    <th style={th(110)}>Tier</th>
                     <th style={{...th(80),textAlign:'center'}}>Users</th>
                     <th style={{...th(80),textAlign:'center'}}>Active</th>
                     <th style={th(40)}></th>
@@ -194,6 +197,18 @@ export default function DistributorsListPage({ user }: Props) {
                       <td style={td()}>
                         <div style={{color:T.text2}}>{d.primary_contact_email || '—'}</div>
                         {d.primary_contact_phone && <div style={{fontSize:10,color:T.text3,marginTop:2}}>{d.primary_contact_phone}</div>}
+                      </td>
+                      <td style={td()}>
+                        {d.tier_name ? (
+                          <span style={{
+                            display:'inline-block',padding:'2px 8px',borderRadius:8,fontSize:10,fontWeight:500,
+                            background:`${T.purple}18`,color:T.purple,
+                          }}>
+                            {d.tier_name}
+                          </span>
+                        ) : (
+                          <span style={{color:T.text3,fontSize:11}}>—</span>
+                        )}
                       </td>
                       <td style={{...td(),textAlign:'center',color:d.active_user_count > 0 ? T.text : T.text3,fontVariantNumeric:'tabular-nums'}}>
                         {d.active_user_count}

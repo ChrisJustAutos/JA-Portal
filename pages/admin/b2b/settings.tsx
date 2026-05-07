@@ -218,6 +218,17 @@ export default function B2BSettingsPage({ user }: Props) {
                 />
               </Section>
 
+              {/* ─── Tiers ─── */}
+              <Section title="Distributor Tiers"
+                description="Pricing / access tiers (e.g. Bronze, Silver, Gold). Assign distributors to a tier from the distributor detail page. Tier-specific controls (visibility, discounts) are layered on in follow-up updates.">
+                <TaxonomyEditor
+                  endpoint="/api/b2b/admin/tiers"
+                  collectionKey="tiers"
+                  itemKey="tier"
+                  itemLabel="tier"
+                />
+              </Section>
+
               {/* ─── Invoice numbering ─── */}
               <Section title="MYOB Invoice Numbering"
                 description="Each B2B order writes a Sale.Invoice to MYOB JAWS. The invoice number is portal-controlled (prefix + zero-padded sequence). MYOB caps the field at 13 characters total.">
