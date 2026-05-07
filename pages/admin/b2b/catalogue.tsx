@@ -58,6 +58,13 @@ interface TaxonomyOption {
   is_active: boolean
 }
 
+interface DistributorOption {
+  id: string
+  display_name: string
+  is_active: boolean
+  active_user_count: number
+}
+
 type VisibilityFilter = 'all' | 'visible' | 'hidden'
 
 const ALLOWED_IMAGE_TYPES = ['image/png','image/jpeg','image/jpg','image/webp']
@@ -128,6 +135,7 @@ export default function CatalogueAdminPage({ user }: Props) {
   const [items, setItems] = useState<CatalogueItem[]>([])
   const [models, setModels] = useState<TaxonomyOption[]>([])
   const [productTypes, setProductTypes] = useState<TaxonomyOption[]>([])
+  const [distributors, setDistributors] = useState<DistributorOption[]>([])
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [search, setSearch] = useState('')
@@ -135,24 +143,34 @@ export default function CatalogueAdminPage({ user }: Props) {
   const [modelFilter, setModelFilter] = useState<string>('all')         // 'all' | 'none' | <id>
   const [productTypeFilter, setProductTypeFilter] = useState<string>('all')
   const [drawerItemId, setDrawerItemId] = useState<string | null>(null)
+  const [previewMenuOpen, setPreviewMenuOpen] = useState(false)
+  const [previewLoading, setPreviewLoading] = useState(false)
+  const [previewError, setPreviewError] = useState<string | null>(null)
 
   async function load() {
     setLoading(true)
     try {
-      const [itemsRes, modelsRes, typesRes] = await Promise.all([
+      const [itemsRes, modelsRes, typesRes, distRes] = await Promise.all([
         fetch('/api/b2b/admin/catalogue',     { credentials: 'same-origin' }),
         fetch('/api/b2b/admin/models',        { credentials: 'same-origin' }),
         fetch('/api/b2b/admin/product-types', { credentials: 'same-origin' }),
+        fetch('/api/b2b/admin/distributors',  { credentials: 'same-origin' }),
       ])
       if (!itemsRes.ok)  throw new Error(`Catalogue HTTP ${itemsRes.status}: ${await itemsRes.text()}`)
       if (!modelsRes.ok) throw new Error(`Models HTTP ${modelsRes.status}`)
       if (!typesRes.ok)  throw new Error(`Product types HTTP ${typesRes.status}`)
+      // Distributors list is non-critical for the page; failure here just
+      // disables the Preview button.
       const itemsJson  = await itemsRes.json()
       const modelsJson = await modelsRes.json()
       const typesJson  = await typesRes.json()
+      const distJson   = distRes.ok ? await distRes.json() : { items: [] }
       setItems(itemsJson.items || [])
       setModels((modelsJson.models || []).map((m: any) => ({ id: m.id, name: m.name, is_active: m.is_active })))
       setProductTypes((typesJson.product_types || []).map((t: any) => ({ id: t.id, name: t.name, is_active: t.is_active })))
+      setDistributors((distJson.items || []).map((d: any) => ({
+        id: d.id, display_name: d.display_name, is_active: d.is_active, active_user_count: d.active_user_count || 0,
+      })))
       setLoadError(null)
     } catch (e: any) {
       setLoadError(e?.message || String(e))
@@ -161,6 +179,28 @@ export default function CatalogueAdminPage({ user }: Props) {
     }
   }
   useEffect(() => { load() }, [])
+
+  async function startPreview(distributorId: string) {
+    setPreviewLoading(true)
+    setPreviewError(null)
+    try {
+      const r = await fetch('/api/b2b/admin/preview-link', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ distributor_id: distributorId }),
+      })
+      const j = await r.json()
+      if (!r.ok || !j.link) throw new Error(j?.error || `HTTP ${r.status}`)
+      setPreviewMenuOpen(false)
+      window.open(j.link, '_blank', 'noopener')
+    } catch (e: any) {
+      setPreviewError(e?.message || String(e))
+      setTimeout(() => setPreviewError(null), 6000)
+    } finally {
+      setPreviewLoading(false)
+    }
+  }
 
   function patchLocalItem(id: string, patch: Partial<CatalogueItem>) {
     setItems(prev => prev.map(it => it.id === id ? { ...it, ...patch } : it))
@@ -299,7 +339,20 @@ export default function CatalogueAdminPage({ user }: Props) {
               style={{padding:'6px 12px',borderRadius:5,border:`1px solid ${T.border2}`,background:'transparent',color:T.text2,fontSize:12,cursor:loading?'wait':'pointer',fontFamily:'inherit'}}>
               {loading ? 'Loading…' : '↻ Refresh'}
             </button>
+            <PreviewMenu
+              distributors={distributors}
+              open={previewMenuOpen}
+              loading={previewLoading}
+              onToggle={() => setPreviewMenuOpen(v => !v)}
+              onClose={() => setPreviewMenuOpen(false)}
+              onPick={startPreview}
+            />
           </div>
+          {previewError && (
+            <div style={{padding:8,marginTop:8,background:`${T.red}15`,border:`1px solid ${T.red}40`,borderRadius:6,color:T.red,fontSize:12}}>
+              Preview failed: {previewError}
+            </div>
+          )}
 
           {/* Errors */}
           {loadError && (
@@ -877,6 +930,78 @@ function Stat({ n, label, color }: { n: number; label: string; color?: string })
     <div style={{display:'flex',alignItems:'baseline',gap:5}}>
       <span style={{fontSize:18,fontWeight:600,color: color || T.text,fontVariantNumeric:'tabular-nums'}}>{n}</span>
       <span style={{fontSize:10,color:T.text3,textTransform:'uppercase',letterSpacing:'0.05em'}}>{label}</span>
+    </div>
+  )
+}
+
+function PreviewMenu({
+  distributors, open, loading, onToggle, onClose, onPick,
+}: {
+  distributors: DistributorOption[]
+  open: boolean
+  loading: boolean
+  onToggle: () => void
+  onClose: () => void
+  onPick: (id: string) => void
+}) {
+  const eligible = distributors
+    .filter(d => d.is_active && d.active_user_count > 0)
+    .sort((a, b) => a.display_name.localeCompare(b.display_name))
+  const disabled = loading
+
+  return (
+    <div style={{position:'relative'}}>
+      <button
+        onClick={onToggle}
+        disabled={disabled}
+        title="Open the distributor catalogue in a new tab as a chosen distributor — no email magic-link round-trip."
+        style={{
+          padding:'6px 12px',borderRadius:5,
+          border:`1px solid ${T.blue}`,background:`${T.blue}20`,color:T.blue,
+          fontSize:12,fontWeight:500,cursor: disabled ? 'wait' : 'pointer',
+          fontFamily:'inherit',whiteSpace:'nowrap',
+        }}>
+        {loading ? 'Opening…' : '👁 Preview as ▾'}
+      </button>
+      {open && (
+        <>
+          <div onClick={onClose} style={{position:'fixed',inset:0,zIndex:50}}/>
+          <div style={{
+            position:'absolute',top:'calc(100% + 4px)',right:0,
+            minWidth:220,maxWidth:320,maxHeight:340,overflowY:'auto',
+            background:T.bg2,border:`1px solid ${T.border2}`,borderRadius:6,
+            boxShadow:'0 12px 28px rgba(0,0,0,0.4)',
+            padding:6,zIndex:51,
+          }}>
+            <div style={{fontSize:10,color:T.text3,padding:'6px 10px',textTransform:'uppercase',letterSpacing:'0.06em'}}>
+              Open as distributor
+            </div>
+            {eligible.length === 0 && (
+              <div style={{padding:'10px 12px',fontSize:12,color:T.text3}}>
+                No active distributors with users yet. Create one in <a href="/admin/b2b/distributors" style={{color:T.text2}}>Distributors</a>.
+              </div>
+            )}
+            {eligible.map(d => (
+              <button
+                key={d.id}
+                onClick={() => onPick(d.id)}
+                style={{
+                  display:'block',width:'100%',textAlign:'left',
+                  padding:'8px 10px',borderRadius:4,
+                  background:'transparent',border:'none',color:T.text,
+                  fontSize:13,cursor:'pointer',fontFamily:'inherit',
+                }}
+                onMouseEnter={e => { e.currentTarget.style.background = T.bg3 }}
+                onMouseLeave={e => { e.currentTarget.style.background = 'transparent' }}>
+                <div style={{fontWeight:500}}>{d.display_name}</div>
+                <div style={{fontSize:10,color:T.text3,marginTop:2}}>
+                  {d.active_user_count} user{d.active_user_count===1?'':'s'}
+                </div>
+              </button>
+            ))}
+          </div>
+        </>
+      )}
     </div>
   )
 }
