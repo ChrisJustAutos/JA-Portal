@@ -85,6 +85,44 @@ function fileExt(file: File): string {
   return 'jpg'
 }
 
+// Validates + uploads a catalogue image and returns its public URL. Best-effort
+// removes prior files in the same {itemId}/ folder so we don't leak storage on
+// re-uploads. Throws on validation or upload error. Shared by the inline row
+// thumbnail uploader and the drawer's "Replace image" button.
+async function uploadCatalogueImage(itemId: string, file: File): Promise<string> {
+  if (!ALLOWED_IMAGE_TYPES.includes(file.type.toLowerCase())) {
+    throw new Error(`File type "${file.type || 'unknown'}" not allowed. Use PNG, JPG or WEBP.`)
+  }
+  if (file.size > MAX_IMAGE_BYTES) {
+    throw new Error(`File is ${(file.size/1024/1024).toFixed(1)} MB — max 10 MB.`)
+  }
+  if (file.size === 0) {
+    throw new Error('File appears to be empty.')
+  }
+
+  const supabase = getSupabase()
+  const ext = fileExt(file)
+  const path = `${itemId}/${nanoid()}.${ext}`
+  const { error: upErr } = await supabase.storage
+    .from('b2b-catalogue')
+    .upload(path, file, { cacheControl: '3600', upsert: false, contentType: file.type })
+  if (upErr) throw new Error(upErr.message || 'Upload failed')
+
+  const { data: { publicUrl } } = supabase.storage.from('b2b-catalogue').getPublicUrl(path)
+
+  // Best-effort cleanup of previous files in this catalogue folder
+  try {
+    const { data: list } = await supabase.storage.from('b2b-catalogue').list(itemId, { limit: 50 })
+    const newName = path.split('/').pop()
+    if (list) {
+      const toDelete = list.filter(f => f.name !== newName).map(f => `${itemId}/${f.name}`)
+      if (toDelete.length > 0) await supabase.storage.from('b2b-catalogue').remove(toDelete)
+    }
+  } catch { /* silent — best-effort cleanup */ }
+
+  return publicUrl
+}
+
 // ─── Page ───────────────────────────────────────────────────────────────
 export default function CatalogueAdminPage({ user }: Props) {
   const [items, setItems] = useState<CatalogueItem[]>([])
@@ -349,6 +387,8 @@ function CatalogueRow({
   const [priceDraft, setPriceDraft] = useState<string>(item.trade_price_ex_gst.toFixed(2))
   const [savingField, setSavingField] = useState<'price'|'visible'|'model'|'type'|null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [uploading, setUploading] = useState(false)
+  const fileInputRef = useRef<HTMLInputElement>(null)
 
   // Sync local price draft when the underlying item changes (e.g. after refresh)
   useEffect(() => { setPriceDraft(item.trade_price_ex_gst.toFixed(2)) }, [item.trade_price_ex_gst])
@@ -422,6 +462,28 @@ function CatalogueRow({
     patchServer({ trade_price_ex_gst: n }, 'price')
   }
 
+  async function handleImageFile(file: File) {
+    setError(null)
+    setUploading(true)
+    try {
+      const publicUrl = await uploadCatalogueImage(item.id, file)
+      const r = await fetch(`/api/b2b/admin/catalogue/${item.id}`, {
+        method: 'PATCH',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ primary_image_url: publicUrl }),
+      })
+      const j = await r.json()
+      if (!r.ok) throw new Error(j?.error || `HTTP ${r.status}`)
+      onPatch(item.id, j.item || { primary_image_url: publicUrl })
+    } catch (e: any) {
+      setError(e?.message || String(e))
+      setTimeout(() => setError(null), 5000)
+    } finally {
+      setUploading(false)
+    }
+  }
+
   const showWarning = item.b2b_visible && item.trade_price_ex_gst <= 0
   const showImageWarning = item.b2b_visible && !item.primary_image_url
 
@@ -430,20 +492,46 @@ function CatalogueRow({
       borderTop: index > 0 ? `1px solid ${T.border}` : 'none',
       background: error ? `${T.red}08` : 'transparent',
     }}>
-      {/* Image thumb */}
-      <td style={{...td(),padding:6,cursor:'pointer'}} onClick={onOpenDrawer}>
-        <div style={{
-          width:50,height:50,borderRadius:5,overflow:'hidden',
-          background:T.bg3,border:`1px solid ${T.border}`,
-          display:'flex',alignItems:'center',justifyContent:'center',
-        }}>
+      {/* Image thumb — click to upload/replace; drawer reachable via SKU/Name/chevron */}
+      <td style={{...td(),padding:6}}>
+        <div
+          onClick={() => !uploading && fileInputRef.current?.click()}
+          title={item.primary_image_url ? 'Click to replace image' : 'Click to upload image'}
+          style={{
+            width:50,height:50,borderRadius:5,overflow:'hidden',
+            background:T.bg3,border:`1px solid ${T.border}`,
+            display:'flex',alignItems:'center',justifyContent:'center',
+            cursor: uploading ? 'wait' : 'pointer',
+            position:'relative',
+          }}>
           {item.primary_image_url ? (
             <img src={item.primary_image_url} alt="" style={{maxWidth:'100%',maxHeight:'100%',objectFit:'contain'}}
               onError={e => { (e.target as HTMLImageElement).style.display='none' }}/>
           ) : (
-            <span style={{fontSize:9,color:T.text3,fontFamily:'monospace'}}>no img</span>
+            <span style={{fontSize:9,color:T.text3,fontFamily:'monospace'}}>+ img</span>
+          )}
+          {uploading && (
+            <div style={{
+              position:'absolute',inset:0,
+              background:'rgba(0,0,0,0.6)',
+              display:'flex',alignItems:'center',justifyContent:'center',
+              fontSize:9,color:'#fff',fontFamily:'monospace',
+            }}>
+              …
+            </div>
           )}
         </div>
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="image/png,image/jpeg,image/jpg,image/webp"
+          onChange={e => {
+            const f = e.target.files?.[0]
+            if (f) handleImageFile(f)
+            if (fileInputRef.current) fileInputRef.current.value = ''
+          }}
+          style={{display:'none'}}
+        />
       </td>
 
       {/* SKU */}
@@ -597,44 +685,9 @@ function EditDrawer({
 
   const handleFile = useCallback(async (file: File) => {
     setImageError(null)
-
-    if (!ALLOWED_IMAGE_TYPES.includes(file.type.toLowerCase())) {
-      setImageError(`File type "${file.type || 'unknown'}" not allowed. Use PNG, JPG or WEBP.`)
-      return
-    }
-    if (file.size > MAX_IMAGE_BYTES) {
-      setImageError(`File is ${(file.size/1024/1024).toFixed(1)} MB — max 10 MB.`)
-      return
-    }
-    if (file.size === 0) {
-      setImageError('File appears to be empty.')
-      return
-    }
-
     setUploading(true)
     try {
-      const supabase = getSupabase()
-      const ext = fileExt(file)
-      // Path: {catalogue_id}/{nanoid}.{ext}  per migration comment
-      const path = `${item.id}/${nanoid()}.${ext}`
-      const { error: upErr } = await supabase.storage
-        .from('b2b-catalogue')
-        .upload(path, file, { cacheControl: '3600', upsert: false, contentType: file.type })
-      if (upErr) throw new Error(upErr.message || 'Upload failed')
-
-      const { data: { publicUrl } } = supabase.storage.from('b2b-catalogue').getPublicUrl(path)
-
-      // Best-effort: remove the previous primary image (other files in this
-      // catalogue folder) so we don't leak storage on re-uploads.
-      try {
-        const { data: list } = await supabase.storage.from('b2b-catalogue').list(item.id, { limit: 50 })
-        const newName = path.split('/').pop()
-        if (list) {
-          const toDelete = list.filter(f => f.name !== newName).map(f => `${item.id}/${f.name}`)
-          if (toDelete.length > 0) await supabase.storage.from('b2b-catalogue').remove(toDelete)
-        }
-      } catch { /* silent — best-effort cleanup */ }
-
+      const publicUrl = await uploadCatalogueImage(item.id, file)
       await patch({ primary_image_url: publicUrl })
     } catch (e: any) {
       setImageError(e?.message || String(e))
