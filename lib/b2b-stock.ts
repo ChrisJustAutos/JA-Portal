@@ -43,6 +43,61 @@ export function stockState(info: StockInfo | null | undefined): StockState {
   return 'out_of_stock'
 }
 
+// ── In-flight order commitments ────────────────────────────────────────
+// A B2B order is "in-flight" when it's been placed but the MYOB invoice
+// hasn't been written yet (so MYOB QtyAvailable still reflects the
+// pre-order amount). We deduct in-flight commitments from the MYOB qty
+// to compute the true "available to commit right now" number — keeping
+// two distributors from both grabbing the last 10 of something during
+// the gap between checkout-start and MYOB-invoice-written.
+//
+// Definition: myob_invoice_uid IS NULL AND status NOT IN ('cancelled','refunded').
+// Once myob_invoice_uid is populated, MYOB has decremented stock and our
+// stock cache will catch up on the next refresh.
+
+/**
+ * Returns a map of catalogue_id → qty currently committed to in-flight
+ * orders. Defaults to 0 for any catalogue id not present.
+ */
+export async function getCommittedQtyByCatalogue(
+  catalogueIds: string[],
+): Promise<Record<string, number>> {
+  if (catalogueIds.length === 0) return {}
+  const c = sb()
+  const { data, error } = await c
+    .from('b2b_order_lines')
+    .select(`
+      catalogue_id, qty,
+      order:b2b_orders!b2b_order_lines_order_id_fkey ( status, myob_invoice_uid )
+    `)
+    .in('catalogue_id', catalogueIds)
+  if (error) throw new Error(`Committed qty lookup failed: ${error.message}`)
+
+  const out: Record<string, number> = {}
+  for (const row of (data || []) as any[]) {
+    const order = Array.isArray(row.order) ? row.order[0] : row.order
+    if (!order) continue
+    if (order.myob_invoice_uid) continue                  // already deducted in MYOB
+    if (order.status === 'cancelled' || order.status === 'refunded') continue
+    out[row.catalogue_id] = (out[row.catalogue_id] || 0) + Number(row.qty || 0)
+  }
+  return out
+}
+
+/**
+ * For a stock entry + its committed quantity, returns the qty a
+ * distributor can commit to a new order. Returns null for non-inventoried
+ * (no cap).
+ */
+export function availableQty(
+  info: StockInfo | null | undefined,
+  committed: number,
+): number | null {
+  if (!info) return 0
+  if (!info.isInventoried) return null
+  return Math.max(0, info.qtyAvailable - (committed || 0))
+}
+
 // ── Public API ─────────────────────────────────────────────────────────
 /**
  * Returns a stock map for the requested item UIDs. If any are stale (or

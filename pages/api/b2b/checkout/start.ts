@@ -15,7 +15,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
 import { withB2BAuth, B2BUser } from '../../../../lib/b2bAuthServer'
-import { getStockForItems, stockState } from '../../../../lib/b2b-stock'
+import { getStockForItems, stockState, getCommittedQtyByCatalogue, availableQty } from '../../../../lib/b2b-stock'
 import { createCheckoutSession, StripeLineItem } from '../../../../lib/stripe'
 import { assertCheckoutConfigured } from '../../../../lib/b2b-settings'
 
@@ -140,10 +140,16 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, use
     })
   }
 
-  // Stock check (cached + auto-refresh)
+  // Stock check (cached + auto-refresh) — and deduct in-flight commitments
+  // so two distributors can't both claim the last 10 units while one of
+  // them already has them on a pending_payment order.
   let stockMap: Record<string, any> = {}
+  let committed: Record<string, number> = {}
   try {
-    stockMap = await getStockForItems(validated.map(v => v.myobItemUid!).filter(Boolean) as string[])
+    [stockMap, committed] = await Promise.all([
+      getStockForItems(validated.map(v => v.myobItemUid!).filter(Boolean) as string[]),
+      getCommittedQtyByCatalogue(validated.map(v => v.catalogueId)),
+    ])
   } catch (e) {
     return res.status(503).json({
       error: 'Live stock check failed — please try again in a moment',
@@ -151,8 +157,13 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, use
   }
   for (const v of validated) {
     const s = stockMap[v.myobItemUid!]
-    if (s && s.isInventoried && v.qty > s.qtyAvailable) {
-      issues.push(`"${v.name}" — only ${s.qtyAvailable} available, you have ${v.qty} in your cart`)
+    const avail = availableQty(s, committed[v.catalogueId] || 0)
+    if (avail !== null && v.qty > avail) {
+      if (avail === 0) {
+        issues.push(`"${v.name}" is out of stock — please remove it`)
+      } else {
+        issues.push(`"${v.name}" — only ${avail} available, you have ${v.qty} in your cart`)
+      }
     } else if (s && stockState(s) === 'out_of_stock') {
       issues.push(`"${v.name}" is out of stock — please remove it`)
     }

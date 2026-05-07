@@ -15,6 +15,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
 import { withB2BAuth, B2BUser } from '../../../../lib/b2bAuthServer'
+import { getStockForItems, getCommittedQtyByCatalogue, availableQty } from '../../../../lib/b2b-stock'
 
 let _sb: SupabaseClient | null = null
 function sb(): SupabaseClient {
@@ -44,12 +45,37 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, use
   // Verify the catalogue item exists and is visible
   const { data: cat, error: catErr } = await c
     .from('b2b_catalogue')
-    .select('id, sku, name, trade_price_ex_gst, b2b_visible')
+    .select('id, myob_item_uid, sku, name, trade_price_ex_gst, b2b_visible')
     .eq('id', catalogueId)
     .maybeSingle()
   if (catErr) return res.status(500).json({ error: catErr.message })
   if (!cat) return res.status(404).json({ error: 'Catalogue item not found' })
   if (cat.b2b_visible === false) return res.status(403).json({ error: 'Item is not available' })
+
+  // Stock cap: cannot commit more than (MYOB qty − in-flight commitments).
+  // Skipped for qty=0 (delete) and for non-inventoried items.
+  if (qty > 0 && cat.myob_item_uid) {
+    try {
+      const [stockMap, committed] = await Promise.all([
+        getStockForItems([cat.myob_item_uid]),
+        getCommittedQtyByCatalogue([cat.id]),
+      ])
+      const info = stockMap[cat.myob_item_uid] || null
+      const avail = availableQty(info, committed[cat.id] || 0)
+      if (avail !== null && qty > avail) {
+        return res.status(409).json({
+          error: avail === 0
+            ? `"${cat.name}" is out of stock — please contact your account manager for availability`
+            : `"${cat.name}" — only ${avail} available right now (you asked for ${qty})`,
+          available: avail,
+        })
+      }
+    } catch (e) {
+      // Stock lookup failure shouldn't block cart writes — checkout will
+      // re-validate before money changes hands. Log but allow the write.
+      console.error('Cart-add stock check failed:', e)
+    }
+  }
 
   // Get-or-create cart
   let cartId: string

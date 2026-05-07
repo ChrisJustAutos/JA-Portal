@@ -51,6 +51,8 @@ interface CartLine {
   price_changed: boolean
   stock_state: 'in_stock' | 'low_stock' | 'out_of_stock'
   stock_qty_available: number | null
+  // Available right now = MYOB qty − in-flight commitments. null = unlimited.
+  available_qty: number | null
 }
 
 interface CartTotals {
@@ -167,6 +169,7 @@ export default function B2BCartPage({ b2bUser }: Props) {
 
   const cartItemCount = data ? data.item_count : 0
   const isEmpty = !data || data.lines.length === 0
+  const anyLineOverStock = data ? data.lines.some(l => l.available_qty !== null && l.qty > l.available_qty) : false
 
   return (
     <>
@@ -250,6 +253,7 @@ export default function B2BCartPage({ b2bUser }: Props) {
               onCustomerPoChange={setCustomerPo}
               onCheckout={startCheckout}
               checkoutBusy={checkoutBusy}
+              blockedReason={anyLineOverStock ? 'One or more items exceed available stock — adjust your cart to continue.' : null}
             />
 
           </div>
@@ -311,6 +315,30 @@ function CartLineRow({
           {!line.currently_visible && <span style={{fontSize:10,color:T.amber}}>⚠ no longer in catalogue</span>}
           {line.price_changed && <span style={{fontSize:10,color:T.amber}}>⚠ price changed since added</span>}
         </div>
+        {line.available_qty !== null && line.qty > line.available_qty && (
+          <div style={{
+            marginTop:8,padding:'7px 10px',
+            background:`${T.red}12`,border:`1px solid ${T.red}40`,borderRadius:6,
+            display:'flex',alignItems:'center',justifyContent:'space-between',gap:10,flexWrap:'wrap',
+          }}>
+            <span style={{fontSize:11,color:T.red,lineHeight:1.4}}>
+              {line.available_qty === 0
+                ? `Stock has dropped — none available right now.`
+                : `Only ${line.available_qty} available right now (your cart has ${line.qty}).`}
+            </span>
+            {line.available_qty === 0 ? (
+              <button onClick={onRemove}
+                style={{padding:'4px 10px',borderRadius:5,border:`1px solid ${T.red}`,background:`${T.red}20`,color:T.red,fontSize:11,fontWeight:500,cursor:'pointer',fontFamily:'inherit'}}>
+                Remove
+              </button>
+            ) : (
+              <button onClick={() => onChangeQty(line.available_qty as number)}
+                style={{padding:'4px 10px',borderRadius:5,border:`1px solid ${T.red}`,background:`${T.red}20`,color:T.red,fontSize:11,fontWeight:500,cursor:'pointer',fontFamily:'inherit'}}>
+                Reduce to {line.available_qty}
+              </button>
+            )}
+          </div>
+        )}
       </div>
 
       <div style={{display:'flex',flexDirection:'column',alignItems:'flex-end',gap:6,minWidth:120}}>
@@ -318,7 +346,7 @@ function CartLineRow({
           <button onClick={() => onChangeQty(line.qty - 1)} style={qtyBtn()}>−</button>
           <input
             type="number" value={line.qty} min={0}
-            max={line.stock_qty_available ?? undefined}
+            max={line.available_qty ?? undefined}
             onChange={e => {
               const v = parseInt(e.target.value || '0', 10)
               if (isFinite(v) && v >= 0) onChangeQty(v)
@@ -330,8 +358,8 @@ function CartLineRow({
               MozAppearance:'textfield' as any,
             }}/>
           <button onClick={() => onChangeQty(line.qty + 1)}
-            disabled={line.stock_qty_available != null && line.qty >= line.stock_qty_available}
-            style={qtyBtn(line.stock_qty_available != null && line.qty >= line.stock_qty_available)}>+</button>
+            disabled={line.available_qty != null && line.qty >= line.available_qty}
+            style={qtyBtn(line.available_qty != null && line.qty >= line.available_qty)}>+</button>
         </div>
         <div style={{fontSize:13,color:T.text,fontWeight:600,fontVariantNumeric:'tabular-nums'}}>
           ${line.line_subtotal_ex_gst.toFixed(2)}
@@ -355,7 +383,7 @@ function qtyBtn(disabled?: boolean): React.CSSProperties {
 
 // ─── Totals panel ──────────────────────────────────────────────────────
 function TotalsPanel({
-  totals, cardFeeNote, customerPo, onCustomerPoChange, onCheckout, checkoutBusy,
+  totals, cardFeeNote, customerPo, onCustomerPoChange, onCheckout, checkoutBusy, blockedReason,
 }: {
   totals: CartTotals
   cardFeeNote: string
@@ -363,8 +391,9 @@ function TotalsPanel({
   onCustomerPoChange: (v: string) => void
   onCheckout: () => void
   checkoutBusy: boolean
+  blockedReason: string | null
 }) {
-  const canCheckout = totals.total_inc > 0
+  const canCheckout = totals.total_inc > 0 && !blockedReason
   const poTrimmed = customerPo.trim()
   const poTooLong = poTrimmed.length > 20
 
@@ -432,9 +461,15 @@ function TotalsPanel({
         }}>
         {checkoutBusy ? 'Connecting to Stripe…' : 'Checkout'}
       </button>
-      <div style={{fontSize:10,color:T.text3,marginTop:8,textAlign:'center',lineHeight:1.5}}>
-        You'll be redirected to Stripe to enter card details.
-      </div>
+      {blockedReason ? (
+        <div style={{fontSize:10,color:T.red,marginTop:8,textAlign:'center',lineHeight:1.5}}>
+          {blockedReason}
+        </div>
+      ) : (
+        <div style={{fontSize:10,color:T.text3,marginTop:8,textAlign:'center',lineHeight:1.5}}>
+          You'll be redirected to Stripe to enter card details.
+        </div>
+      )}
     </div>
   )
 }

@@ -9,7 +9,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
 import { withB2BAuth, B2BUser } from '../../../lib/b2bAuthServer'
-import { getStockForItems, stockState } from '../../../lib/b2b-stock'
+import { getStockForItems, stockState, getCommittedQtyByCatalogue, availableQty } from '../../../lib/b2b-stock'
 
 let _sb: SupabaseClient | null = null
 function sb(): SupabaseClient {
@@ -50,13 +50,22 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, use
 
   if (itemsErr) return res.status(500).json({ error: itemsErr.message })
 
-  // Pull live stock for everything in the cart
+  // Pull live stock for everything in the cart, plus in-flight commitments
+  // so we can show "X available right now" honestly (not just the MYOB
+  // number, which doesn't yet account for orders pending invoice).
   const uids = (items || [])
     .map((i: any) => Array.isArray(i.catalogue) ? i.catalogue[0]?.myob_item_uid : i.catalogue?.myob_item_uid)
     .filter(Boolean) as string[]
+  const catalogueIds = (items || [])
+    .map((i: any) => (Array.isArray(i.catalogue) ? i.catalogue[0] : i.catalogue)?.id)
+    .filter(Boolean) as string[]
   let stockMap: Record<string, any> = {}
+  let committed: Record<string, number> = {}
   try {
-    stockMap = await getStockForItems(uids)
+    [stockMap, committed] = await Promise.all([
+      getStockForItems(uids),
+      getCommittedQtyByCatalogue(catalogueIds),
+    ])
   } catch (e) {
     console.error('Cart stock fetch failed:', e)
   }
@@ -64,6 +73,12 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, use
   const lines = (items || []).map((it: any) => {
     const cat = Array.isArray(it.catalogue) ? it.catalogue[0] : it.catalogue
     const stock = cat?.myob_item_uid ? stockMap[cat.myob_item_uid] : null
+    const cmt = cat?.id ? (committed[cat.id] || 0) : 0
+    // available_qty = MYOB qty − in-flight commitments. null = unlimited.
+    // Subtract THIS line's own qty when surfacing an "available beyond
+    // what's already in your cart" hint so distributors don't see their
+    // own qty held against them.
+    const availIncludingMine = availableQty(stock, Math.max(0, cmt - it.qty))
     const unitPriceEx = Number(cat?.trade_price_ex_gst ?? it.trade_price_ex_gst_at_add ?? 0)
     const lineSubEx = unitPriceEx * it.qty
     const lineGst = (cat?.is_taxable !== false) ? lineSubEx * 0.10 : 0
@@ -84,6 +99,8 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, use
       price_changed: cat ? Math.abs(Number(cat.trade_price_ex_gst) - Number(it.trade_price_ex_gst_at_add)) > 0.005 : false,
       stock_state: stockState(stock),
       stock_qty_available: stock ? (stock.isInventoried ? stock.qtyAvailable : null) : null,
+      // True ceiling — null = unlimited / non-inventoried
+      available_qty: availIncludingMine,
     }
   })
 
