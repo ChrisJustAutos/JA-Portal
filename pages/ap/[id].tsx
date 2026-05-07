@@ -233,6 +233,26 @@ export default function APDetailPage({ user }: PageProps) {
   const [paymentSaving, setPaymentSaving] = useState(false)
   const [paymentRetrying, setPaymentRetrying] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
+  const [clearingError, setClearingError] = useState(false)
+
+  async function clearErrors() {
+    if (!id) return
+    setClearingError(true)
+    setActionMessage(null)
+    try {
+      const res = await fetch(`/api/ap/${id}`, {
+        method: 'PATCH', credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ myob_post_error: null, myob_payment_error: null }),
+      })
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || `HTTP ${res.status}`)
+      await fetchData()
+    } catch (e: any) {
+      setActionMessage({ kind: 'err', text: `Clear failed: ${e?.message || e}` })
+    } finally {
+      setClearingError(false)
+    }
+  }
 
   async function refreshInvoice() {
     if (!id) return
@@ -989,10 +1009,24 @@ export default function APDetailPage({ user }: PageProps) {
                 {!isTerminal && canEdit && !isMobile && (
                   <div style={{display:'flex', alignItems:'center', gap:8, paddingTop:10, borderTop:`1px solid ${T.border}`}}>
                     {data.invoice.myob_post_error && (
-                      <span style={{fontSize:10, color:T.red, flex:1, fontFamily:'monospace', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap'}}
-                        title={data.invoice.myob_post_error}>
-                        Last error: {data.invoice.myob_post_error}
-                      </span>
+                      <>
+                        <span style={{fontSize:10, color:T.red, flex:1, fontFamily:'monospace', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap'}}
+                          title={data.invoice.myob_post_error}>
+                          Last error: {data.invoice.myob_post_error}
+                        </span>
+                        <button
+                          onClick={clearErrors}
+                          disabled={clearingError}
+                          title="Dismiss this error message — only do this once you've confirmed the underlying issue is resolved"
+                          style={{
+                            background:'transparent', border:'none', color:T.text3,
+                            fontSize:11, cursor: clearingError ? 'wait' : 'pointer',
+                            padding:'2px 6px', fontFamily:'inherit',
+                            opacity: clearingError ? 0.5 : 1,
+                          }}>
+                          ✕ clear
+                        </button>
+                      </>
                     )}
                     {!data.invoice.myob_post_error && <span style={{flex:1}}/>}
                     {data.invoice.triage_override === 'green' ? (
@@ -1050,8 +1084,19 @@ export default function APDetailPage({ user }: PageProps) {
                   </div>
                 )}
                 {!isTerminal && canEdit && isMobile && data.invoice.myob_post_error && (
-                  <div style={{paddingTop:10, borderTop:`1px solid ${T.border}`, fontSize:11, color:T.red}}>
-                    Last error: {data.invoice.myob_post_error}
+                  <div style={{paddingTop:10, borderTop:`1px solid ${T.border}`, fontSize:11, color:T.red, display:'flex', alignItems:'flex-start', gap:8}}>
+                    <span style={{flex:1, wordBreak:'break-word'}}>Last error: {data.invoice.myob_post_error}</span>
+                    <button
+                      onClick={clearErrors}
+                      disabled={clearingError}
+                      style={{
+                        background:'transparent', border:`1px solid ${T.text3}40`, color:T.text3,
+                        fontSize:11, cursor: clearingError ? 'wait' : 'pointer',
+                        padding:'4px 10px', borderRadius:4, fontFamily:'inherit',
+                        opacity: clearingError ? 0.5 : 1, flexShrink:0,
+                      }}>
+                      ✕ clear
+                    </button>
                   </div>
                 )}
 
@@ -1090,8 +1135,22 @@ export default function APDetailPage({ user }: PageProps) {
                       )}
                     </div>
                     {data.invoice.myob_post_error && (
-                      <div style={{marginTop:6, fontSize:11, color:T.amber}}>
-                        ⚠️ {data.invoice.myob_post_error}
+                      <div style={{marginTop:6, fontSize:11, color:T.amber, display:'flex', alignItems:'flex-start', gap:8}}>
+                        <span style={{flex:1, wordBreak:'break-word'}}>⚠️ {data.invoice.myob_post_error}</span>
+                        {canEdit && (
+                          <button
+                            onClick={clearErrors}
+                            disabled={clearingError}
+                            title="Dismiss this note"
+                            style={{
+                              background:'transparent', border:'none', color:T.text3,
+                              fontSize:11, cursor: clearingError ? 'wait' : 'pointer',
+                              padding:'2px 6px', fontFamily:'inherit',
+                              opacity: clearingError ? 0.5 : 1, flexShrink:0,
+                            }}>
+                            ✕ clear
+                          </button>
+                        )}
                       </div>
                     )}
                   </div>

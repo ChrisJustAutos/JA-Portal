@@ -48,6 +48,11 @@ const PATCHABLE_FIELDS = new Set([
   'payment_account_code',
   'payment_account_name',
   'is_credit_note',
+  // Stale-error dismissal: editors can null these out when they've
+  // confirmed the underlying issue is resolved (e.g. payment retried
+  // successfully via a different route, MYOB connection re-tested).
+  'myob_post_error',
+  'myob_payment_error',
 ])
 
 export default withAuth(null, async (req: NextApiRequest, res: NextApiResponse, user) => {
