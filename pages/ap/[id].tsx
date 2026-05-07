@@ -79,6 +79,10 @@ interface InvoiceRow {
   myob_company_file: 'VPS' | 'JAWS'
   triage_status: 'pending' | 'green' | 'yellow' | 'red'
   triage_reasons: string[] | null
+  triage_override: 'green' | null
+  triage_override_reason: string | null
+  triage_override_by: string | null
+  triage_override_at: string | null
   status: string
   myob_bill_uid: string | null
   myob_posted_at: string | null
@@ -186,6 +190,7 @@ export default function APDetailPage({ user }: PageProps) {
   const [approving, setApproving] = useState(false)
   const [rejecting, setRejecting] = useState(false)
   const [unposting, setUnposting] = useState(false)
+  const [overriding, setOverriding] = useState(false)
   const [actionMessage, setActionMessage] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null)
   const [accountPickerLineId, setAccountPickerLineId] = useState<string | null>(null)
   const canEdit = roleHasPermission(user.role, 'edit:supplier_invoices')
@@ -320,6 +325,50 @@ export default function APDetailPage({ user }: PageProps) {
       await fetchData()
     } finally {
       setApproving(false)
+    }
+  }
+
+  async function setTriageOverride() {
+    if (!id) return
+    const reason = prompt('Override triage to GREEN. Reason? (audit-logged; optional but recommended)')
+    if (reason === null) return // user cancelled
+    setOverriding(true)
+    setActionMessage(null)
+    try {
+      const res = await fetch(`/api/ap/${id}/triage-override`, {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reason: reason.trim() }),
+      })
+      const json = await res.json()
+      if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`)
+      setActionMessage({ kind: 'ok', text: '✅ Triage overridden to GREEN' })
+      await fetchData()
+    } catch (e: any) {
+      setActionMessage({ kind: 'err', text: `❌ Override failed: ${e?.message || e}` })
+    } finally {
+      setOverriding(false)
+    }
+  }
+
+  async function clearTriageOverride() {
+    if (!id) return
+    if (!confirm('Clear triage override and let triage recompute naturally?')) return
+    setOverriding(true)
+    setActionMessage(null)
+    try {
+      const res = await fetch(`/api/ap/${id}/triage-override`, {
+        method: 'DELETE', credentials: 'same-origin',
+      })
+      const json = await res.json()
+      if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`)
+      setActionMessage({ kind: 'ok', text: 'Override cleared' })
+      await fetchData()
+    } catch (e: any) {
+      setActionMessage({ kind: 'err', text: `❌ Clear failed: ${e?.message || e}` })
+    } finally {
+      setOverriding(false)
     }
   }
 
@@ -474,6 +523,58 @@ export default function APDetailPage({ user }: PageProps) {
   function updateLine(lineId: string, patch: Partial<LineRow>) {
     if (!editingLines) return
     setEditingLines(editingLines.map(l => l.id === lineId ? { ...l, ...patch } : l))
+  }
+  // Collapse all lines into a single line. Useful for invoices where the
+  // PDF is one block of text and the parser produced many tiny rows that
+  // really should book against a single account. Description is the
+  // concatenation; totals are summed; account taken from the first line
+  // that has one (preserves a manual pick); tax_code from the majority.
+  function mergeLines() {
+    if (!editingLines || !data || editingLines.length < 2) return
+    const ok = confirm(`Merge all ${editingLines.length} lines into one?\n\nDescriptions will be joined, line totals summed, qty cleared. Account is taken from the first line that has one. You can still tweak before saving.`)
+    if (!ok) return
+
+    const total = editingLines.reduce((s, l) => s + Number(l.line_total_ex_gst || 0), 0)
+    const description = editingLines
+      .map(l => [l.part_number, l.description].filter(Boolean).join(' '))
+      .map(s => s.trim())
+      .filter(Boolean)
+      .join(' · ')
+      .slice(0, 4000)
+
+    // Tax code = majority vote among existing lines, default GST.
+    const taxCounts = new Map<string, number>()
+    for (const l of editingLines) {
+      const tc = (l.tax_code || 'GST').toUpperCase()
+      taxCounts.set(tc, (taxCounts.get(tc) || 0) + 1)
+    }
+    const taxCode = Array.from(taxCounts.entries()).sort((a, b) => b[1] - a[1])[0]?.[0] || 'GST'
+
+    // Account = first line that has one. Prefer manual picks.
+    const withAccount = editingLines.find(l => !!l.account_uid && l.account_source === 'manual')
+                     ?? editingLines.find(l => !!l.account_uid)
+    const merged: LineRow = {
+      id: `new-${Date.now()}`,
+      invoice_id: data.invoice.id,
+      line_no: 1,
+      part_number: null,
+      description: description || '(merged line)',
+      qty: null,
+      uom: null,
+      unit_price_ex_gst: total,
+      line_total_ex_gst: total,
+      gst_amount: null,
+      tax_code: taxCode,
+      account_uid:    withAccount?.account_uid    ?? null,
+      account_code:   withAccount?.account_code   ?? null,
+      account_name:   withAccount?.account_name   ?? null,
+      account_source: withAccount?.account_uid    ? 'manual' : 'unset',
+      suggested_account_uid:  null,
+      suggested_account_code: null,
+      suggested_account_name: null,
+    }
+    setEditingLines([merged])
+    setAccountPickerLineId(null)
   }
   function addLine() {
     if (!editingLines || !data) return
@@ -703,6 +804,25 @@ export default function APDetailPage({ user }: PageProps) {
                   </div>
                 )}
 
+                {data.invoice.triage_override === 'green' && (
+                  <div style={{
+                    fontSize: 11, color: T.amber,
+                    background: `${T.amber}10`, border: `1px solid ${T.amber}40`,
+                    borderRadius: 6, padding: '6px 10px', marginBottom: 10,
+                    display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap',
+                  }}>
+                    <span>🛈 Triage manually overridden → GREEN</span>
+                    {data.invoice.triage_override_reason && (
+                      <span style={{ color: T.text3 }}>· {data.invoice.triage_override_reason}</span>
+                    )}
+                    {data.invoice.triage_override_at && (
+                      <span style={{ color: T.text3, fontFamily: 'monospace', fontSize: 10 }}>
+                        · {new Date(data.invoice.triage_override_at).toLocaleString()}
+                      </span>
+                    )}
+                  </div>
+                )}
+
                 {!isTerminal && canEdit && !isMobile && (
                   <div style={{display:'flex', alignItems:'center', gap:8, paddingTop:10, borderTop:`1px solid ${T.border}`}}>
                     {data.invoice.myob_post_error && (
@@ -712,9 +832,36 @@ export default function APDetailPage({ user }: PageProps) {
                       </span>
                     )}
                     {!data.invoice.myob_post_error && <span style={{flex:1}}/>}
+                    {data.invoice.triage_override === 'green' ? (
+                      <button
+                        onClick={clearTriageOverride}
+                        disabled={overriding || approving || rejecting}
+                        title="Clear the triage override and recompute naturally"
+                        style={{
+                          background:'transparent', border:`1px solid ${T.amber}40`, color:T.amber,
+                          padding:'6px 14px', borderRadius:5, fontSize:11, fontFamily:'inherit',
+                          cursor: overriding ? 'wait' : 'pointer',
+                          opacity: overriding ? 0.6 : 1,
+                        }}>
+                        {overriding ? 'Working…' : 'Clear override'}
+                      </button>
+                    ) : data.invoice.triage_status !== 'red' && data.invoice.triage_status !== 'green' && (
+                      <button
+                        onClick={setTriageOverride}
+                        disabled={overriding || approving || rejecting}
+                        title="Force triage status to GREEN (e.g. for invoices with no PO that you've manually verified). Cannot bypass RED."
+                        style={{
+                          background:'transparent', border:`1px solid ${T.green}40`, color:T.green,
+                          padding:'6px 14px', borderRadius:5, fontSize:11, fontFamily:'inherit',
+                          cursor: overriding ? 'wait' : 'pointer',
+                          opacity: overriding ? 0.6 : 1,
+                        }}>
+                        {overriding ? 'Working…' : 'Override → Green'}
+                      </button>
+                    )}
                     <button
                       onClick={rejectInvoice}
-                      disabled={rejecting || approving}
+                      disabled={rejecting || approving || overriding}
                       style={{
                         background:'transparent', border:`1px solid ${T.red}40`, color:T.red,
                         padding:'6px 14px', borderRadius:5, fontSize:11, fontFamily:'inherit',
@@ -894,6 +1041,14 @@ export default function APDetailPage({ user }: PageProps) {
                     {editingLines !== null && (
                       <>
                         <button onClick={addLine} style={btnSecondary()}>+ Add line</button>
+                        {editingLines.length >= 2 && (
+                          <button
+                            onClick={mergeLines}
+                            title="Combine all lines into one (descriptions joined, totals summed)"
+                            style={btnSecondary()}>
+                            ⇊ Merge into one
+                          </button>
+                        )}
                         <button onClick={cancelEdit} disabled={saving} style={btnSecondary()}>Cancel</button>
                         <button onClick={saveLines} disabled={saving} style={btnPrimary()}>
                           {saving ? 'Saving…' : 'Save'}
@@ -988,9 +1143,40 @@ export default function APDetailPage({ user }: PageProps) {
           display:'flex', gap:10, alignItems:'center',
           boxShadow: '0 -4px 16px rgba(0,0,0,0.4)',
         }}>
+          {data.invoice.triage_override === 'green' ? (
+            <button
+              onClick={clearTriageOverride}
+              disabled={overriding || approving || rejecting}
+              style={{
+                flex: '0 0 auto',
+                background:'transparent', border:`1px solid ${T.amber}60`, color:T.amber,
+                padding:'12px 12px', borderRadius:8,
+                fontSize:13, fontFamily:'inherit',
+                cursor: overriding ? 'wait' : 'pointer',
+                opacity: overriding ? 0.6 : 1,
+                minHeight: 48,
+              }}>
+              {overriding ? '…' : 'Clear OR'}
+            </button>
+          ) : data.invoice.triage_status !== 'red' && data.invoice.triage_status !== 'green' && (
+            <button
+              onClick={setTriageOverride}
+              disabled={overriding || approving || rejecting}
+              style={{
+                flex: '0 0 auto',
+                background:'transparent', border:`1px solid ${T.green}60`, color:T.green,
+                padding:'12px 12px', borderRadius:8,
+                fontSize:13, fontFamily:'inherit',
+                cursor: overriding ? 'wait' : 'pointer',
+                opacity: overriding ? 0.6 : 1,
+                minHeight: 48,
+              }}>
+              {overriding ? '…' : '→ 🟢'}
+            </button>
+          )}
           <button
             onClick={rejectInvoice}
-            disabled={rejecting || approving}
+            disabled={rejecting || approving || overriding}
             style={{
               flex: '0 0 auto',
               background:'transparent', border:`1px solid ${T.red}60`, color:T.red,

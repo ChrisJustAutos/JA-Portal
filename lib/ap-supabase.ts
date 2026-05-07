@@ -596,6 +596,24 @@ export async function applyTriageAndResolve(invoiceId: string): Promise<void> {
     triage.triageReasons.push(`INFO:auto-corrected-inc-gst-lines:${correction.reason || ''}`.replace(/[\r\n]+/g, ' '))
   }
 
+  // Persistent override: when triage_override='green', force the effective
+  // status. Surface the original natural status + reasons in INFO: lines so
+  // the audit trail is visible on the invoice. Override does NOT bypass RED:
+  // a hard error (missing total, dup-of, etc.) cannot be silenced.
+  let effectiveStatus = triage.triageStatus
+  let effectiveReasons = triage.triageReasons
+  if (inv.triage_override === 'green' && triage.triageStatus !== 'red') {
+    const reasonText = (inv.triage_override_reason || '').replace(/[\r\n]+/g, ' ').trim()
+    const overrideTrail = [
+      `INFO:override-applied:was-${triage.triageStatus}`,
+      ...(reasonText ? [`INFO:override-reason:${reasonText}`] : []),
+      ...triage.triageReasons.filter(r => r.startsWith('YELLOW:')).map(r => 'INFO:overridden-' + r.toLowerCase()),
+      ...triage.triageReasons.filter(r => !r.startsWith('YELLOW:')),
+    ]
+    effectiveStatus = 'green'
+    effectiveReasons = overrideTrail
+  }
+
   await c
     .from('ap_invoices')
     .update({
@@ -604,8 +622,8 @@ export async function applyTriageAndResolve(invoiceId: string): Promise<void> {
       resolved_account_uid:   resolvedAccountUid,
       resolved_account_code:  resolvedAccountCode,
       myob_company_file:      companyFile,
-      triage_status:          triage.triageStatus,
-      triage_reasons:         triage.triageReasons,
+      triage_status:          effectiveStatus,
+      triage_reasons:         effectiveReasons,
       status:                 'pending_review',
     })
     .eq('id', invoiceId)
