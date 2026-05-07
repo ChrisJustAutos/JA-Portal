@@ -12,20 +12,26 @@
 //   POST /accountright/{cf_id}/Purchase/SupplierPayment
 //
 //   {
-//     "Date":     "YYYY-MM-DD",            // payment date — bill date
-//     "Account":  { "UID": "<from-account>" },  // e.g. Capricorn 2-1120
+//     "Date":     "YYYY-MM-DD",                     // payment date — bill date
+//     "Account":  { "UID": "<from-account>" },      // e.g. Capricorn 2-1120
 //     "Supplier": { "UID": "<supplier>" },
 //     "Memo":     "<short>",
-//     "Amount":   <number>,                // total payment amount
-//     "Lines":    [ { "Type": "Bill", "UID": "<bill>", "AmountApplied": <number> } ]
+//     "Amount":   <number>,                         // total payment amount
+//     "Lines":    [ {
+//       "Purchase":      { "UID": "<bill>" },       // bill (or order) being paid
+//       "Type":          "Bill",                    // 'Bill' or 'Order'
+//       "AmountApplied": <number>
+//     } ]
 //   }
 //
 // Returns 201 with a Location header containing the new payment UID.
 //
-// Note: an earlier draft used /Purchase/PaymentTxn and a {Bill:{UID}} line
-// shape — both were wrong. MYOB returned 401 OAuthTokenIsInvalid (31001)
-// for the bad path (it returns that error for any unknown path under the
-// authenticated namespace, not just genuine token failures).
+// Endpoint/shape gotchas (each silently looks like an auth error):
+//   - The endpoint is /Purchase/SupplierPayment, NOT /Purchase/PaymentTxn —
+//     MYOB returns 401 OAuthTokenIsInvalid (31001) for any unknown path
+//     under the authenticated namespace, masking the real cause.
+//   - Lines need a `Purchase: { UID }` wrapper. Putting UID directly on
+//     the line yields 400 "Purchase is required" on Lines[0].Purchase.
 
 import { myobFetch } from './myob'
 
@@ -64,7 +70,7 @@ export async function applyBillPayment(input: ApplyBillPaymentInput): Promise<Ap
     Memo:     (input.memo || '').substring(0, 255),
     Amount:   input.amount,
     Lines: [
-      { Type: 'Bill', UID: input.billUid, AmountApplied: input.amount },
+      { Purchase: { UID: input.billUid }, Type: 'Bill', AmountApplied: input.amount },
     ],
   }
 
