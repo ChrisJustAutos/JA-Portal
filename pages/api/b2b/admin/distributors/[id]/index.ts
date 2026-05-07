@@ -30,6 +30,15 @@ const EDITABLE = [
   'primary_contact_phone',
   'is_active',
   'notes',
+  // Shipping address
+  'ship_line1', 'ship_line2', 'ship_suburb', 'ship_state', 'ship_postcode', 'ship_country',
+  // Billing address
+  'bill_line1', 'bill_line2', 'bill_suburb', 'bill_state', 'bill_postcode', 'bill_country',
+] as const
+
+const ADDRESS_FIELDS = [
+  'ship_line1', 'ship_line2', 'ship_suburb', 'ship_state', 'ship_postcode', 'ship_country',
+  'bill_line1', 'bill_line2', 'bill_suburb', 'bill_state', 'bill_postcode', 'bill_country',
 ] as const
 
 export default withAuth('edit:b2b_distributors', async (req: NextApiRequest, res: NextApiResponse, _user: PortalUser) => {
@@ -111,6 +120,17 @@ async function handlePatch(id: string, req: NextApiRequest, res: NextApiResponse
   }
   if ('is_active' in update && typeof update.is_active !== 'boolean') {
     return res.status(400).json({ error: 'is_active must be boolean' })
+  }
+  // Address fields: trim, coerce empty string to null. Country uppercased.
+  for (const k of ADDRESS_FIELDS) {
+    if (k in update) {
+      if (update[k] === null) continue
+      if (typeof update[k] !== 'string') {
+        return res.status(400).json({ error: `${k} must be string or null` })
+      }
+      const trimmed = update[k].trim()
+      update[k] = trimmed === '' ? null : (k.endsWith('_country') ? trimmed.toUpperCase() : trimmed)
+    }
   }
 
   const c = sb()

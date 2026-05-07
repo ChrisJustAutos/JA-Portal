@@ -44,6 +44,18 @@ interface Distributor {
   primary_contact_phone: string | null
   is_active: boolean
   notes: string | null
+  ship_line1: string | null
+  ship_line2: string | null
+  ship_suburb: string | null
+  ship_state: string | null
+  ship_postcode: string | null
+  ship_country: string | null
+  bill_line1: string | null
+  bill_line2: string | null
+  bill_suburb: string | null
+  bill_state: string | null
+  bill_postcode: string | null
+  bill_country: string | null
   created_at: string
 }
 
@@ -159,6 +171,18 @@ export default function DistributorDetailPage({ user }: Props) {
           {dist && (
             <>
               <DetailsSection dist={dist} onPatch={patchDist}/>
+              <AddressSection
+                title="Shipping address"
+                kind="ship"
+                dist={dist}
+                onPatch={patchDist}
+              />
+              <AddressSection
+                title="Billing address"
+                kind="bill"
+                dist={dist}
+                onPatch={patchDist}
+              />
               <MyobLinksSection
                 dist={dist}
                 onChangeLinked={uids => patchDist({ myob_linked_customer_uids: uids }).catch(e => alert(e?.message || String(e)))}
@@ -242,6 +266,144 @@ function DetailsSection({ dist, onPatch }: { dist: Distributor; onPatch: (p: Par
           onBlur={() => commit('notes', notes.trim() || null, 'Notes')}
           style={{...input,resize:'vertical'}}/>
       </FormRow>
+      <div style={{fontSize:10,color:T.text3,marginTop:6}}>Saves automatically when you click outside a field.</div>
+    </Section>
+  )
+}
+
+// ─── Shipping / billing address ────────────────────────────────────────
+type AddressKind = 'ship' | 'bill'
+
+function AddressSection({
+  title, kind, dist, onPatch,
+}: {
+  title: string
+  kind: AddressKind
+  dist: Distributor
+  onPatch: (p: Partial<Distributor>) => Promise<void>
+}) {
+  const k = (suffix: string) => `${kind}_${suffix}` as keyof Distributor
+
+  // Local drafts so typing doesn't fight with auto-save
+  const [line1, setLine1] = useState(String(dist[k('line1')] || ''))
+  const [line2, setLine2] = useState(String(dist[k('line2')] || ''))
+  const [suburb, setSuburb] = useState(String(dist[k('suburb')] || ''))
+  const [state, setState] = useState(String(dist[k('state')] || ''))
+  const [postcode, setPostcode] = useState(String(dist[k('postcode')] || ''))
+  const [country, setCountry] = useState(String(dist[k('country')] || ''))
+  const [savingFlash, setSavingFlash] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  // Sync local fields when dist changes
+  useEffect(() => {
+    setLine1(String(dist[k('line1')] || ''))
+    setLine2(String(dist[k('line2')] || ''))
+    setSuburb(String(dist[k('suburb')] || ''))
+    setState(String(dist[k('state')] || ''))
+    setPostcode(String(dist[k('postcode')] || ''))
+    setCountry(String(dist[k('country')] || ''))
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    dist.id,
+    dist[k('line1')], dist[k('line2')], dist[k('suburb')],
+    dist[k('state')], dist[k('postcode')], dist[k('country')],
+  ])
+
+  async function commit(field: keyof Distributor, value: string | null, label: string) {
+    setError(null)
+    if (value === (dist as any)[field] || (value == null && !((dist as any)[field]))) return
+    try {
+      await onPatch({ [field]: value } as any)
+      setSavingFlash(label)
+      setTimeout(() => setSavingFlash(null), 1500)
+    } catch (e: any) {
+      setError(e?.message || String(e))
+    }
+  }
+
+  async function copyFromShipping() {
+    if (kind !== 'bill') return
+    setError(null)
+    try {
+      await onPatch({
+        bill_line1:    dist.ship_line1,
+        bill_line2:    dist.ship_line2,
+        bill_suburb:   dist.ship_suburb,
+        bill_state:    dist.ship_state,
+        bill_postcode: dist.ship_postcode,
+        bill_country:  dist.ship_country,
+      })
+      setSavingFlash('Copied from shipping')
+      setTimeout(() => setSavingFlash(null), 1500)
+    } catch (e: any) {
+      setError(e?.message || String(e))
+    }
+  }
+
+  const empty = !line1 && !line2 && !suburb && !state && !postcode && !country
+
+  return (
+    <Section title={title} flash={savingFlash}>
+      {error && (
+        <div style={{padding:8,background:`${T.red}15`,border:`1px solid ${T.red}40`,borderRadius:5,color:T.red,fontSize:12,marginBottom:10}}>
+          {error}
+        </div>
+      )}
+      {kind === 'bill' && !empty && (
+        <button
+          onClick={copyFromShipping}
+          style={{
+            padding:'5px 10px',borderRadius:5,
+            border:`1px solid ${T.border2}`,background:'transparent',color:T.text2,
+            fontSize:11,cursor:'pointer',fontFamily:'inherit',marginBottom:12,
+          }}>
+          Copy from shipping
+        </button>
+      )}
+      {kind === 'bill' && empty && (
+        <button
+          onClick={copyFromShipping}
+          style={{
+            padding:'5px 10px',borderRadius:5,
+            border:`1px solid ${T.blue}`,background:`${T.blue}20`,color:T.blue,
+            fontSize:11,cursor:'pointer',fontFamily:'inherit',marginBottom:12,
+          }}>
+          Same as shipping → copy
+        </button>
+      )}
+
+      <FormRow label="Address line 1" hint="Street number + name">
+        <input type="text" value={line1} onChange={e => setLine1(e.target.value)}
+          onBlur={() => commit(k('line1'), line1.trim() || null, 'Line 1')}
+          placeholder="e.g. 12 Industrial Ave" style={input}/>
+      </FormRow>
+      <FormRow label="Address line 2" hint="Unit, floor, building (optional)">
+        <input type="text" value={line2} onChange={e => setLine2(e.target.value)}
+          onBlur={() => commit(k('line2'), line2.trim() || null, 'Line 2')}
+          style={input}/>
+      </FormRow>
+      <FormGrid>
+        <FormRow label="Suburb / city">
+          <input type="text" value={suburb} onChange={e => setSuburb(e.target.value)}
+            onBlur={() => commit(k('suburb'), suburb.trim() || null, 'Suburb')}
+            style={input}/>
+        </FormRow>
+        <FormRow label="State">
+          <input type="text" value={state} onChange={e => setState(e.target.value)}
+            onBlur={() => commit(k('state'), state.trim() || null, 'State')}
+            placeholder="e.g. QLD" style={input}/>
+        </FormRow>
+        <FormRow label="Postcode">
+          <input type="text" inputMode="numeric" value={postcode} onChange={e => setPostcode(e.target.value)}
+            onBlur={() => commit(k('postcode'), postcode.trim() || null, 'Postcode')}
+            style={input}/>
+        </FormRow>
+        <FormRow label="Country" hint="2-letter code, e.g. AU">
+          <input type="text" value={country} onChange={e => setCountry(e.target.value.toUpperCase())}
+            onBlur={() => commit(k('country'), country.trim().toUpperCase() || null, 'Country')}
+            placeholder="AU" style={input}/>
+        </FormRow>
+      </FormGrid>
       <div style={{fontSize:10,color:T.text3,marginTop:6}}>Saves automatically when you click outside a field.</div>
     </Section>
   )
