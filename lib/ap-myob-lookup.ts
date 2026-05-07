@@ -128,6 +128,49 @@ export async function searchSuppliers(
   return items.map(mapSupplier)
 }
 
+// Look up a tax code by its short Code (e.g. 'GST', 'FRE'). Used when
+// creating supplier cards — MYOB requires a TaxCode UID on
+// BuyingDetails, but our callers know the code (e.g. 'GST'), not the UID.
+// Cached per company file for the life of the lambda invocation since
+// tax codes don't change between requests.
+const _taxCodeCache = new Map<string, MyobTaxCodeLite>()
+
+export interface MyobTaxCodeLite {
+  uid: string
+  code: string
+  description: string
+  rate: number
+}
+
+export async function getTaxCodeByCode(
+  label: CompanyFileLabel,
+  code: string,
+): Promise<MyobTaxCodeLite | null> {
+  const key = `${label}:${code.toUpperCase()}`
+  const cached = _taxCodeCache.get(key)
+  if (cached) return cached
+
+  const conn = await resolveConn(label)
+  const path = `/accountright/${conn.company_file_id}/GeneralLedger/TaxCode`
+  const result = await myobFetch(conn.id, path, {
+    query: { '$filter': `Code eq '${escapeOData(code)}'`, '$top': 1 },
+  })
+  if (result.status !== 200) {
+    throw new Error(`MYOB tax-code lookup failed (HTTP ${result.status}): ${(result.raw || '').substring(0, 200)}`)
+  }
+  const items: any[] = Array.isArray(result.data?.Items) ? result.data.Items : []
+  if (items.length === 0) return null
+  const it = items[0]
+  const tc: MyobTaxCodeLite = {
+    uid: it.UID,
+    code: it.Code,
+    description: it.Description || '',
+    rate: typeof it.Rate === 'number' ? it.Rate : Number(it.Rate) || 0,
+  }
+  _taxCodeCache.set(key, tc)
+  return tc
+}
+
 export async function getSupplierByUid(
   label: CompanyFileLabel,
   uid: string,
@@ -188,10 +231,24 @@ export async function createSupplier(
     IsIndividual: false,
     IsActive: true,
   }
+
+  // BuyingDetails: MYOB rejects a supplier card without a tax code on the
+  // buying tab, so we always set TaxCode + FreightTaxCode to GST. ABN is
+  // added if supplied. Fail loudly if the company file has no GST tax
+  // code (extremely unusual — every AU file ships with one).
+  const gst = await getTaxCodeByCode(label, 'GST')
+  if (!gst) {
+    throw new Error(`MYOB ${label} company file has no tax code with Code='GST'`)
+  }
+  const buyingDetails: Record<string, any> = {
+    TaxCode:        { UID: gst.uid },
+    FreightTaxCode: { UID: gst.uid },
+  }
   const abn = (input.abn || '').replace(/\s/g, '').trim()
   if (abn) {
-    body.BuyingDetails = { ABN: abn }
+    buyingDetails.ABN = abn
   }
+  body.BuyingDetails = buyingDetails
 
   // Build a primary-address object (Location=1) only with fields the caller
   // actually filled in. MYOB accepts an Addresses array; supplying a slot
