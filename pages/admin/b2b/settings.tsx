@@ -9,6 +9,7 @@ import PortalSidebar from '../../../lib/PortalSidebar'
 import { requirePageAuth } from '../../../lib/authServer'
 import type { UserRole } from '../../../lib/permissions'
 import FreightZonesManager from '../../../components/b2b/FreightZonesManager'
+import FreightCarriersManager from '../../../components/b2b/FreightCarriersManager'
 
 const T = {
   bg:'#0d0f12', bg2:'#131519', bg3:'#1a1d23', bg4:'#21252d',
@@ -399,9 +400,15 @@ export default function B2BSettingsPage({ user }: Props) {
                 </button>
               </Section>
 
-              {/* ─── Freight ─── */}
-              <Section title="Freight Zones &amp; Rates"
-                description="Postcode-driven shipping rates the cart shows distributors at checkout. Add a zone, paste the postcode ranges it covers, then add 1+ rates (Standard, Express, etc.).">
+              {/* ─── Carrier connections ─── */}
+              <Section title="Freight Carrier Connections"
+                description="Plug in API credentials for each freight carrier we use. Once a connection tests green, we'll start wiring its live quote and booking into the cart and admin order pages — until then, the postcode zones below are still what distributors see at checkout.">
+                <FreightCarriersManager/>
+              </Section>
+
+              {/* ─── Freight zones (manual fallback) ─── */}
+              <Section title="Freight Zones &amp; Rates (manual fallback)"
+                description="Postcode-driven shipping rates the cart shows when no live carrier rates are available. Add a zone, paste the postcode ranges it covers, then add 1+ rates (Standard, Express, etc.).">
                 <FreightZonesManager/>
               </Section>
 
