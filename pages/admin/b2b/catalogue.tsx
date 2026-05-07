@@ -116,6 +116,50 @@ function fileExt(file: File): string {
   return 'jpg'
 }
 
+const PDF_MAX_BYTES = 10 * 1024 * 1024
+
+// Validates + uploads an instructions PDF to the b2b-catalogue-pdfs bucket and
+// returns its public URL. Best-effort cleans the {itemId}/ folder so we don't
+// leak storage on re-uploads.
+async function uploadCatalogueInstructionsPdf(itemId: string, file: File): Promise<string> {
+  const type = (file.type || '').toLowerCase()
+  if (type !== 'application/pdf') {
+    throw new Error(`File must be a PDF (got "${file.type || 'unknown'}").`)
+  }
+  if (file.size > PDF_MAX_BYTES) {
+    throw new Error(`File is ${(file.size/1024/1024).toFixed(1)} MB — max 10 MB.`)
+  }
+  if (file.size === 0) {
+    throw new Error('File appears to be empty.')
+  }
+  const supabase = getSupabase()
+  const path = `${itemId}/${nanoid()}.pdf`
+  const { error: upErr } = await supabase.storage
+    .from('b2b-catalogue-pdfs')
+    .upload(path, file, { cacheControl: '3600', upsert: false, contentType: 'application/pdf' })
+  if (upErr) throw new Error(upErr.message || 'Upload failed')
+  const { data: { publicUrl } } = supabase.storage.from('b2b-catalogue-pdfs').getPublicUrl(path)
+  try {
+    const { data: list } = await supabase.storage.from('b2b-catalogue-pdfs').list(itemId, { limit: 50 })
+    const newName = path.split('/').pop()
+    if (list) {
+      const toDelete = list.filter(f => f.name !== newName).map(f => `${itemId}/${f.name}`)
+      if (toDelete.length > 0) await supabase.storage.from('b2b-catalogue-pdfs').remove(toDelete)
+    }
+  } catch { /* silent */ }
+  return publicUrl
+}
+
+async function removeCatalogueInstructionsPdf(itemId: string): Promise<void> {
+  const supabase = getSupabase()
+  try {
+    const { data: list } = await supabase.storage.from('b2b-catalogue-pdfs').list(itemId, { limit: 50 })
+    if (list && list.length > 0) {
+      await supabase.storage.from('b2b-catalogue-pdfs').remove(list.map(f => `${itemId}/${f.name}`))
+    }
+  } catch { /* silent */ }
+}
+
 // Validates + uploads a catalogue image and returns its public URL. Best-effort
 // removes prior files in the same {itemId}/ folder so we don't leak storage on
 // re-uploads. Throws on validation or upload error. Shared by the inline row
@@ -1018,12 +1062,11 @@ function EditDrawer({
           </Section>
 
           {/* Resources */}
-          <Section title="Resources">
-            <FieldText
-              label="Instructions URL"
-              placeholder="https://… link to installation/use instructions"
+          <Section title="Resources" subtitle="Installation / use instructions">
+            <InstructionsPdfField
+              itemId={item.id}
               value={item.instructions_url}
-              onSave={async v => { try { await patch({ instructions_url: v }) } catch {} }}
+              onPatch={async v => { try { await patch({ instructions_url: v }) } catch {} }}
             />
           </Section>
 
@@ -1236,6 +1279,107 @@ function ToggleSwitch({ on, disabled, onChange }: { on: boolean; disabled?: bool
         background:'#fff',transition:'left 0.15s ease',
       }}/>
     </button>
+  )
+}
+
+// ─── Instructions PDF upload ───────────────────────────────────────────
+function InstructionsPdfField({
+  itemId, value, onPatch,
+}: {
+  itemId: string
+  value: string | null
+  onPatch: (v: string | null) => Promise<void>
+}) {
+  const [busy, setBusy] = useState<'upload'|'remove'|null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const fileRef = useRef<HTMLInputElement>(null)
+
+  async function handleFile(file: File) {
+    setError(null); setBusy('upload')
+    try {
+      const url = await uploadCatalogueInstructionsPdf(itemId, file)
+      await onPatch(url)
+    } catch (e: any) {
+      setError(e?.message || String(e))
+    } finally {
+      setBusy(null)
+    }
+  }
+  async function handleRemove() {
+    if (!value) return
+    setError(null); setBusy('remove')
+    try {
+      await removeCatalogueInstructionsPdf(itemId)
+      await onPatch(null)
+    } catch (e: any) {
+      setError(e?.message || String(e))
+    } finally {
+      setBusy(null)
+    }
+  }
+  return (
+    <div>
+      {value && (
+        <div style={{
+          background:T.bg3,border:`1px solid ${T.border2}`,borderRadius:6,
+          padding:'10px 12px',marginBottom:10,
+          display:'flex',alignItems:'center',justifyContent:'space-between',gap:10,
+        }}>
+          <div style={{display:'flex',alignItems:'center',gap:10,minWidth:0}}>
+            <span style={{fontSize:18}}>📄</span>
+            <a href={value} target="_blank" rel="noopener noreferrer"
+              style={{fontSize:12,color:T.blue,textDecoration:'underline',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>
+              View current PDF
+            </a>
+          </div>
+          <span style={{fontSize:9,color:T.text3,fontFamily:'monospace'}}>uploaded</span>
+        </div>
+      )}
+      <div style={{display:'flex',gap:8}}>
+        <button
+          onClick={() => !busy && fileRef.current?.click()}
+          disabled={!!busy}
+          style={{
+            flex:1,padding:'9px 14px',borderRadius:6,
+            border:`1px solid ${T.blue}`,background:T.blue,color:'#fff',
+            fontSize:13,fontWeight:500,fontFamily:'inherit',
+            cursor: busy ? 'wait' : 'pointer',
+          }}>
+          {busy === 'upload' ? 'Uploading…' : (value ? 'Replace PDF' : 'Upload PDF')}
+        </button>
+        {value && (
+          <button
+            onClick={handleRemove}
+            disabled={!!busy}
+            style={{
+              padding:'9px 14px',borderRadius:6,
+              border:`1px solid ${T.border2}`,background:'transparent',color:T.red,
+              fontSize:13,fontFamily:'inherit',cursor: busy ? 'wait' : 'pointer',
+            }}>
+            {busy === 'remove' ? 'Removing…' : 'Remove'}
+          </button>
+        )}
+      </div>
+      <input
+        ref={fileRef}
+        type="file"
+        accept="application/pdf,.pdf"
+        onChange={e => {
+          const f = e.target.files?.[0]
+          if (f) handleFile(f)
+          if (fileRef.current) fileRef.current.value = ''
+        }}
+        style={{display:'none'}}
+      />
+      <div style={{fontSize:10,color:T.text3,marginTop:6}}>
+        PDF only · Max 10 MB · Stored at <code style={{fontFamily:'monospace'}}>b2b-catalogue-pdfs/{itemId}/...</code>
+      </div>
+      {error && (
+        <div style={{marginTop:8,padding:8,background:`${T.red}15`,border:`1px solid ${T.red}40`,borderRadius:5,color:T.red,fontSize:12}}>
+          {error}
+        </div>
+      )}
+    </div>
   )
 }
 
