@@ -8,6 +8,7 @@ import Head from 'next/head'
 import PortalSidebar from '../../../lib/PortalSidebar'
 import { requirePageAuth } from '../../../lib/authServer'
 import type { UserRole } from '../../../lib/permissions'
+import FreightZonesManager from '../../../components/b2b/FreightZonesManager'
 
 const T = {
   bg:'#0d0f12', bg2:'#131519', bg3:'#1a1d23', bg4:'#21252d',
@@ -396,6 +397,12 @@ export default function B2BSettingsPage({ user }: Props) {
                   style={primaryBtn(!saving)}>
                   {saving ? 'Saving…' : 'Save surcharge'}
                 </button>
+              </Section>
+
+              {/* ─── Freight ─── */}
+              <Section title="Freight Zones &amp; Rates"
+                description="Postcode-driven shipping rates the cart shows distributors at checkout. Add a zone, paste the postcode ranges it covers, then add 1+ rates (Standard, Express, etc.).">
+                <FreightZonesManager/>
               </Section>
 
               {/* ─── Slack ─── */}

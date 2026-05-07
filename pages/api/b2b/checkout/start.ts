@@ -43,14 +43,20 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, use
   }
 
   // Parse PO from request body. Optional, max 20 chars (MYOB limit).
+  // Also parse freight_rate_id (optional) — when present, the chosen
+  // freight rate is added to the order + Stripe checkout as a line item.
   let customerPo: string | null = null
+  let chosenFreightRateId: string | null = null
   try {
     const body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : (req.body || {})
     if (typeof body.customer_po === 'string') {
       customerPo = body.customer_po.trim().substring(0, 20) || null
     }
+    if (typeof body.freight_rate_id === 'string' && body.freight_rate_id.trim()) {
+      chosenFreightRateId = body.freight_rate_id.trim()
+    }
   } catch {
-    // Bad JSON in body — ignore, treat as no PO
+    // Bad JSON in body — ignore, treat as no PO / no freight
   }
 
   // Verify Stripe + MYOB are configured before we charge anyone.
@@ -203,6 +209,35 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, use
     subtotalEx += lineEx
     if (v.isTaxable) gst += lineEx * GST_RATE
   }
+
+  // Resolve freight rate (if any) and fold its ex-GST cost into the
+  // subtotal. Freight is GST-applicable; we add the GST onto the running
+  // total like any other line. If the rate id is unknown / inactive,
+  // refuse the checkout — better than silently posting without freight.
+  let freightExGst = 0
+  let freightLabel: string | null = null
+  let freightZoneId: string | null = null
+  if (chosenFreightRateId) {
+    const { data: rate, error: rErr } = await c
+      .from('b2b_freight_rates')
+      .select('id, label, price_ex_gst, is_active, zone_id, b2b_freight_zones!inner(id, name, is_active)')
+      .eq('id', chosenFreightRateId)
+      .maybeSingle()
+    if (rErr) return res.status(500).json({ error: rErr.message })
+    if (!rate || !rate.is_active) {
+      return res.status(400).json({ error: 'Selected freight rate is not available — refresh the cart and pick again.' })
+    }
+    const zone: any = Array.isArray(rate.b2b_freight_zones) ? rate.b2b_freight_zones[0] : rate.b2b_freight_zones
+    if (!zone || !zone.is_active) {
+      return res.status(400).json({ error: 'Freight zone for the selected rate is no longer active.' })
+    }
+    freightExGst = round2(Number(rate.price_ex_gst) || 0)
+    freightLabel = `${zone.name} — ${rate.label}`
+    freightZoneId = zone.id
+    subtotalEx += freightExGst
+    gst += freightExGst * GST_RATE  // freight is taxable
+  }
+
   subtotalEx = round2(subtotalEx)
   gst = round2(gst)
   const subtotalInc = round2(subtotalEx + gst)
@@ -226,6 +261,10 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, use
       currency: 'AUD',
       myob_company_file: 'JAWS',
       customer_po: customerPo,
+      freight_rate_id:        chosenFreightRateId,
+      freight_zone_id:        freightZoneId,
+      freight_method_label:   freightLabel,
+      freight_cost_ex_gst:    chosenFreightRateId ? freightExGst : null,
     })
     .select('id, order_number')
     .single()
@@ -272,6 +311,21 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, use
       quantity: v.qty,
     }
   })
+
+  if (chosenFreightRateId && freightExGst > 0) {
+    const freightInc = round2(freightExGst * 1.10)  // freight is GST-taxable
+    stripeLineItems.push({
+      price_data: {
+        currency: 'aud',
+        product_data: {
+          name: 'Freight',
+          description: freightLabel || 'Shipping',
+        },
+        unit_amount: Math.round(freightInc * 100),
+      },
+      quantity: 1,
+    })
+  }
 
   if (cardFeeInc > 0) {
     stripeLineItems.push({

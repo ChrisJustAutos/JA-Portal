@@ -11,6 +11,7 @@ import { createClient, SupabaseClient } from '@supabase/supabase-js'
 import { withB2BAuth, B2BUser } from '../../../lib/b2bAuthServer'
 import { getStockForItems, stockState, getCommittedQtyByCatalogue, availableQty } from '../../../lib/b2b-stock'
 import { applyPricing, effectiveQtyCap } from '../../../lib/b2b-pricing'
+import { getFreightQuote } from '../../../lib/b2b-freight'
 
 let _sb: SupabaseClient | null = null
 function sb(): SupabaseClient {
@@ -157,6 +158,27 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, use
   const card_fee_inc = Math.max(0, charged - subtotal_inc_gst)
   const total_inc = subtotal_inc_gst + card_fee_inc
 
+  // Pull the distributor's shipping postcode so we can quote freight for
+  // the cart in one round-trip. Falls back to billing postcode if shipping
+  // isn't set; null when neither is configured.
+  let shipPostcode: string | null = null
+  let freightQuote: Awaited<ReturnType<typeof getFreightQuote>> = null
+  try {
+    const { data: dist } = await c
+      .from('b2b_distributors')
+      .select('ship_postcode, bill_postcode')
+      .eq('id', user.distributor.id)
+      .maybeSingle()
+    shipPostcode = dist?.ship_postcode || dist?.bill_postcode || null
+    if (shipPostcode) {
+      freightQuote = await getFreightQuote(shipPostcode)
+    }
+  } catch (e: any) {
+    // Freight quote is informational — failing here shouldn't break the
+    // whole cart load. UI will just hide the freight section.
+    console.error('cart freight-quote failed (non-fatal):', e?.message)
+  }
+
   return res.status(200).json({
     cart_id: cart.id,
     distributor: {
@@ -166,6 +188,7 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, use
     lines,
     line_count: lines.length,
     item_count: lines.reduce((s: number, l: any) => s + l.qty, 0),
+    freight: shipPostcode ? { postcode: shipPostcode, quote: freightQuote } : null,
     totals: {
       subtotal_ex_gst:  round2(subtotal_ex_gst),
       gst:              round2(gst),

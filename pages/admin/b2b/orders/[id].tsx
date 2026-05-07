@@ -88,6 +88,10 @@ interface OrderDetail {
   refunded_total: number
   carrier: string | null
   tracking_number: string | null
+  tracking_url: string | null
+  freight_method_label: string | null
+  freight_cost_ex_gst: number | null
+  label_pdf_path: string | null
   customer_notes: string | null
   internal_notes: string | null
   distributor: { id: string; display_name: string; myob_customer_uid: string | null } | null
@@ -188,6 +192,29 @@ export default function AdminOrderDetailPage({ user }: Props) {
       const j = await r.json()
       if (!r.ok) throw new Error(j?.error || `HTTP ${r.status}`)
       flashMsg(`Status changed to ${STATUS_LABEL[toStatus] || toStatus}`)
+      await load()
+    } catch (e: any) {
+      setActionError(e?.message || String(e))
+    } finally {
+      setActionBusy(false)
+    }
+  }, [orderId])
+
+  // Posts to the new ship endpoint that handles freight cost + label upload
+  // alongside the carrier/tracking fields. Stamps shipped_at on first call,
+  // updates fields in place on later calls.
+  const shipOrder = useCallback(async (body: Record<string, any>) => {
+    setActionBusy(true); setActionError(null)
+    try {
+      const r = await fetch(`/api/b2b/admin/orders/${orderId}/ship`, {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+      const j = await r.json()
+      if (!r.ok) throw new Error(j?.error || `HTTP ${r.status}`)
+      flashMsg('Shipping saved')
       await load()
     } catch (e: any) {
       setActionError(e?.message || String(e))
@@ -507,12 +534,12 @@ export default function AdminOrderDetailPage({ user }: Props) {
                   </Card>
                 )}
 
-                {/* Shipping info preview */}
-                {(data.carrier || data.tracking_number) && (
-                  <Card title="Shipping">
-                    <KV label="Carrier"  value={data.carrier || '—'}/>
-                    <KV label="Tracking" value={data.tracking_number || '—'} mono/>
-                  </Card>
+                {/* Shipping panel — always shown for staff so they can book / edit */}
+                {canEdit && (
+                  <ShippingCard
+                    order={data}
+                    onEdit={() => setShipModal(true)}
+                  />
                 )}
 
                 {/* Internal notes */}
@@ -544,7 +571,7 @@ export default function AdminOrderDetailPage({ user }: Props) {
       </div>
 
       {/* ── Modals ── */}
-      {data && shipModal   && <ShipModal   order={data} busy={actionBusy} onClose={() => setShipModal(false)}   onConfirm={(c, t) => { setShipModal(false); doTransition('shipped', { carrier: c, tracking_number: t }) }}/>}
+      {data && shipModal   && <ShipModal   order={data} busy={actionBusy} onClose={() => setShipModal(false)}   onConfirm={(body) => { setShipModal(false); shipOrder(body) }}/>}
       {data && refundModal && <RefundModal order={data} busy={actionBusy} onClose={() => setRefundModal(false)} onConfirm={doRefund}/>}
       {data && cancelModal && <CancelModal order={data} busy={actionBusy} canRefund={!!canDoRefund} onClose={() => setCancelModal(false)} onConfirm={doCancel}/>}
     </>
@@ -693,26 +720,137 @@ function Backdrop({ children, onClose }: { children: React.ReactNode; onClose: (
   )
 }
 
-function ShipModal({ order, busy, onClose, onConfirm }: { order: OrderDetail; busy: boolean; onClose: () => void; onConfirm: (carrier: string, tracking: string) => void }) {
+// Always-visible shipping panel — surfaces whatever's been set + a "Book
+// freight / edit" button. Once the order is shipped the panel also offers
+// "Print label" (signed-URL fetch) and a tracking link.
+function ShippingCard({ order, onEdit }: { order: OrderDetail; onEdit: () => void }) {
+  const isShipped = !!order.shipped_at
+  async function openLabel() {
+    try {
+      const r = await fetch(`/api/b2b/admin/orders/${order.id}/label`)
+      const j = await r.json()
+      if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`)
+      window.open(j.url, '_blank', 'noopener,noreferrer')
+    } catch (e: any) {
+      alert(`Could not open label: ${e?.message || e}`)
+    }
+  }
+  return (
+    <Card title="Shipping">
+      <div style={{display:'flex', alignItems:'center', gap:8, marginBottom:10, flexWrap:'wrap'}}>
+        {isShipped ? (
+          <span style={{fontSize:11, padding:'2px 8px', borderRadius:3, background:`${T.teal}20`, color:T.teal, border:`1px solid ${T.teal}40`}}>
+            ✓ Shipped {order.shipped_at ? fullDate(order.shipped_at) : ''}
+          </span>
+        ) : (
+          <span style={{fontSize:11, color:T.text3}}>Not shipped yet</span>
+        )}
+        <span style={{flex:1}}/>
+        <button onClick={onEdit} style={{padding:'5px 12px', borderRadius:5, border:`1px solid ${T.border2}`, background:'transparent', color: T.blue, fontSize:11, cursor:'pointer', fontFamily:'inherit'}}>
+          {isShipped ? 'Edit shipping' : '+ Book freight'}
+        </button>
+        {order.label_pdf_path && (
+          <button onClick={openLabel} style={{padding:'5px 12px', borderRadius:5, border:`1px solid ${T.teal}40`, background:'transparent', color: T.teal, fontSize:11, cursor:'pointer', fontFamily:'inherit'}}>
+            🖨 Print label
+          </button>
+        )}
+      </div>
+      <KV label="Method"   value={order.freight_method_label || '—'}/>
+      <KV label="Carrier"  value={order.carrier || '—'}/>
+      <KV label="Tracking" value={order.tracking_number || '—'} mono/>
+      {order.tracking_url && order.tracking_number && (
+        <div style={{display:'grid', gridTemplateColumns:'90px 1fr', gap:'4px 12px', alignItems:'baseline'}}>
+          <span style={{fontSize:11, color:T.text3}}>Track</span>
+          <a href={order.tracking_url} target="_blank" rel="noopener noreferrer" style={{color:T.blue, fontSize:13, textDecoration:'none'}}>Open in carrier site →</a>
+        </div>
+      )}
+      <KV label="Cost ex"  value={order.freight_cost_ex_gst != null ? `$${money(order.freight_cost_ex_gst)}` : '—'} mono/>
+    </Card>
+  )
+}
+
+function ShipModal({ order, busy, onClose, onConfirm }: {
+  order: OrderDetail
+  busy: boolean
+  onClose: () => void
+  onConfirm: (body: {
+    carrier: string
+    tracking_number: string
+    tracking_url?: string
+    freight_cost_ex_gst?: number
+    label_pdf_base64?: string
+    label_filename?: string
+  }) => void
+}) {
   const [carrier, setCarrier]   = useState(order.carrier || '')
   const [tracking, setTracking] = useState(order.tracking_number || '')
+  const [trackingUrl, setTrackingUrl] = useState(order.tracking_url || '')
+  const [cost, setCost] = useState(order.freight_cost_ex_gst != null ? String(order.freight_cost_ex_gst) : '')
+  const [labelB64, setLabelB64] = useState<string>('')
+  const [labelName, setLabelName] = useState<string>('')
+  const [labelErr, setLabelErr] = useState<string>('')
   const ok = carrier.trim().length > 0 && tracking.trim().length > 0
+
+  function onLabelPick(file: File | null) {
+    setLabelErr('')
+    if (!file) { setLabelB64(''); setLabelName(''); return }
+    if (file.size > 10 * 1024 * 1024) { setLabelErr('File too large (max 10MB)'); return }
+    setLabelName(file.name)
+    const reader = new FileReader()
+    reader.onload = () => {
+      const result = String(reader.result || '')
+      // strip data URL prefix
+      const b64 = result.replace(/^data:[^,]+;base64,/, '')
+      setLabelB64(b64)
+    }
+    reader.onerror = () => setLabelErr('Could not read file')
+    reader.readAsDataURL(file)
+  }
+
   return (
     <Backdrop onClose={onClose}>
-      <h2 style={modalTitle()}>Mark as shipped</h2>
-      <p style={modalDesc()}>Enter the carrier and tracking number. Required to mark as shipped.</p>
+      <h2 style={modalTitle()}>{order.shipped_at ? 'Edit shipping' : 'Book freight / mark as shipped'}</h2>
+      <p style={modalDesc()}>
+        Carrier + tracking are required. Freight cost and label PDF are optional but recommended — the cost is recorded on the order and the label is stored so you can re-print later.
+      </p>
 
-      <Field label="Carrier" hint="e.g. Australia Post, StarTrack, TNT, Toll">
-        <input type="text" value={carrier} onChange={e => setCarrier(e.target.value)} maxLength={100} style={modalInput()}/>
+      <Field label="Carrier" hint="e.g. InXpress (DHL/Couriers Please/Aramex), StarTrack, TNT">
+        <input type="text" value={carrier} onChange={e => setCarrier(e.target.value)} maxLength={80} style={modalInput()}/>
       </Field>
       <Field label="Tracking number">
-        <input type="text" value={tracking} onChange={e => setTracking(e.target.value)} maxLength={100} style={modalInput()}/>
+        <input type="text" value={tracking} onChange={e => setTracking(e.target.value)} maxLength={120} style={modalInput()}/>
+      </Field>
+      <Field label="Tracking URL (optional)" hint="Direct link to the carrier's tracking page for this consignment">
+        <input type="url" value={trackingUrl} onChange={e => setTrackingUrl(e.target.value)} maxLength={500} style={modalInput()} placeholder="https://..."/>
+      </Field>
+      <Field label="Freight cost ex GST (optional)" hint="What you paid the carrier — surfaces on the order page">
+        <input type="number" value={cost} onChange={e => setCost(e.target.value)} step="0.01" min="0" style={modalInput()}/>
+      </Field>
+      <Field label="Shipping label (optional)" hint="PDF or image — saved to the order so it can be re-printed">
+        <div style={{display:'flex', alignItems:'center', gap:8}}>
+          <input type="file" accept="application/pdf,image/png,image/jpeg" onChange={e => onLabelPick(e.target.files?.[0] || null)}
+            style={{flex:1, fontSize:12, color:T.text2}}/>
+          {labelName && <span style={{fontSize:11, color:T.text3}}>{labelName}</span>}
+        </div>
+        {labelErr && <div style={{marginTop:4, fontSize:11, color:T.red}}>{labelErr}</div>}
+        {order.label_pdf_path && !labelB64 && (
+          <div style={{marginTop:4, fontSize:11, color:T.text3}}>A label is already attached. Pick a new file to replace it.</div>
+        )}
       </Field>
 
       <ModalButtons>
         <button onClick={onClose} disabled={busy} style={modalBtnSecondary()}>Cancel</button>
-        <button onClick={() => onConfirm(carrier.trim(), tracking.trim())} disabled={!ok || busy} style={modalBtnPrimary(ok && !busy, T.teal)}>
-          {busy ? 'Saving…' : 'Mark as shipped'}
+        <button
+          onClick={() => onConfirm({
+            carrier: carrier.trim(),
+            tracking_number: tracking.trim(),
+            tracking_url: trackingUrl.trim() || undefined,
+            freight_cost_ex_gst: cost ? Number(cost) : undefined,
+            label_pdf_base64: labelB64 || undefined,
+            label_filename: labelName || undefined,
+          })}
+          disabled={!ok || busy} style={modalBtnPrimary(ok && !busy, T.teal)}>
+          {busy ? 'Saving…' : order.shipped_at ? 'Save shipping' : 'Mark as shipped'}
         </button>
       </ModalButtons>
     </Backdrop>

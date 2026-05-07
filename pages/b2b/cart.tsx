@@ -74,6 +74,16 @@ interface CartTotals {
   total_inc: number
 }
 
+interface FreightRateOption {
+  id: string
+  label: string
+  price_ex_gst: number
+  transit_days: number | null
+}
+interface FreightQuote {
+  zone: { id: string; name: string }
+  rates: FreightRateOption[]
+}
 interface CartResponse {
   cart_id: string
   lines: CartLine[]
@@ -81,6 +91,7 @@ interface CartResponse {
   item_count: number
   totals: CartTotals
   card_fee: { pct: number; fixed: number; note: string }
+  freight: { postcode: string; quote: FreightQuote | null } | null
 }
 
 export default function B2BCartPage({ b2bUser }: Props) {
@@ -93,6 +104,17 @@ export default function B2BCartPage({ b2bUser }: Props) {
   const [checkoutError, setCheckoutError] = useState<string | null>(null)
   const [checkoutIssues, setCheckoutIssues] = useState<string[] | null>(null)
   const [customerPo, setCustomerPo] = useState('')
+  const [selectedFreightId, setSelectedFreightId] = useState<string | null>(null)
+
+  // Auto-pick the cheapest rate when the quote arrives so the totals reflect
+  // a real freight cost from the moment the cart loads. User can change.
+  useEffect(() => {
+    if (selectedFreightId) return
+    const rates = data?.freight?.quote?.rates
+    if (!rates || rates.length === 0) return
+    const cheapest = [...rates].sort((a, b) => a.price_ex_gst - b.price_ex_gst)[0]
+    if (cheapest) setSelectedFreightId(cheapest.id)
+  }, [data?.freight?.quote, selectedFreightId])
 
   const cancelledOrderId = router.query.cancelled ? String(router.query.cancelled) : null
 
@@ -161,6 +183,7 @@ export default function B2BCartPage({ b2bUser }: Props) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           customer_po: customerPo.trim() || undefined,
+          freight_rate_id: selectedFreightId || undefined,
         }),
       })
       const j = await r.json()
@@ -259,12 +282,15 @@ export default function B2BCartPage({ b2bUser }: Props) {
             {/* Totals panel */}
             <TotalsPanel
               totals={data.totals}
-              cardFeeNote={data.card_fee.note}
+              cardFee={data.card_fee}
               customerPo={customerPo}
               onCustomerPoChange={setCustomerPo}
               onCheckout={startCheckout}
               checkoutBusy={checkoutBusy}
               blockedReason={anyLineOverCap ? 'One or more items exceed the available qty or per-order max — adjust your cart to continue.' : null}
+              freight={data.freight}
+              selectedFreightId={selectedFreightId}
+              onSelectFreight={setSelectedFreightId}
             />
 
           </div>
@@ -426,17 +452,38 @@ function qtyBtn(disabled?: boolean): React.CSSProperties {
 
 // ─── Totals panel ──────────────────────────────────────────────────────
 function TotalsPanel({
-  totals, cardFeeNote, customerPo, onCustomerPoChange, onCheckout, checkoutBusy, blockedReason,
+  totals, cardFee, customerPo, onCustomerPoChange, onCheckout, checkoutBusy, blockedReason,
+  freight, selectedFreightId, onSelectFreight,
 }: {
   totals: CartTotals
-  cardFeeNote: string
+  cardFee: { pct: number; fixed: number; note: string }
   customerPo: string
   onCustomerPoChange: (v: string) => void
   onCheckout: () => void
   checkoutBusy: boolean
   blockedReason: string | null
+  freight: { postcode: string; quote: FreightQuote | null } | null
+  selectedFreightId: string | null
+  onSelectFreight: (id: string | null) => void
 }) {
-  const canCheckout = totals.total_inc > 0 && !blockedReason
+  const selectedFreight = freight?.quote?.rates.find(r => r.id === selectedFreightId) || null
+  const freightExGst = selectedFreight ? Number(selectedFreight.price_ex_gst) : 0
+  const freightGst = freightExGst * 0.10
+  const freightInc = freightExGst + freightGst
+
+  // Recompute totals with freight folded in. Mirrors the formula in
+  // pages/api/b2b/checkout/start.ts so the displayed total matches what
+  // the user will see in Stripe.
+  const newSubtotalEx  = totals.subtotal_ex_gst + freightExGst
+  const newGst         = totals.gst + freightGst
+  const newSubtotalInc = newSubtotalEx + newGst
+  const charged        = newSubtotalInc > 0
+    ? (newSubtotalInc + cardFee.fixed) / (1 - cardFee.pct)
+    : 0
+  const newCardFeeInc  = Math.max(0, charged - newSubtotalInc)
+  const grandTotalInc  = newSubtotalInc + newCardFeeInc
+
+  const canCheckout = grandTotalInc > 0 && !blockedReason
   const poTrimmed = customerPo.trim()
   const poTooLong = poTrimmed.length > 20
 
@@ -450,18 +497,58 @@ function TotalsPanel({
       </div>
 
       <Row label="Subtotal (ex GST)"  value={`$${totals.subtotal_ex_gst.toFixed(2)}`}/>
-      <Row label="GST"                value={`$${totals.gst.toFixed(2)}`}/>
-      <Row label="Subtotal (inc GST)" value={`$${totals.subtotal_inc_gst.toFixed(2)}`} bold/>
+      {selectedFreight && (
+        <Row label={`Freight (${selectedFreight.label})`} value={`+$${freightExGst.toFixed(2)}`} muted/>
+      )}
+      <Row label="GST"                value={`$${newGst.toFixed(2)}`}/>
+      <Row label="Subtotal (inc GST)" value={`$${newSubtotalInc.toFixed(2)}`} bold/>
 
       <div style={{height:10}}/>
 
-      <Row label="Card surcharge" value={`+$${totals.card_fee_inc.toFixed(2)}`} muted/>
+      <Row label="Card surcharge" value={`+$${newCardFeeInc.toFixed(2)}`} muted/>
       <div style={{fontSize:10,color:T.text3,marginTop:-4,marginBottom:8,lineHeight:1.5}}>
-        {cardFeeNote}
+        {cardFee.note}
       </div>
 
       <div style={{borderTop:`1px solid ${T.border2}`,paddingTop:10,marginTop:6}}/>
-      <Row label="Total to pay" value={`$${totals.total_inc.toFixed(2)}`} large/>
+      <Row label="Total to pay" value={`$${grandTotalInc.toFixed(2)}`} large/>
+
+      {/* Freight picker */}
+      {freight && (
+        <div style={{marginTop:14, paddingTop:12, borderTop:`1px solid ${T.border}`}}>
+          <div style={{fontSize:10,color:T.text2,textTransform:'uppercase',letterSpacing:'0.06em',marginBottom:6,fontWeight:500}}>
+            Shipping to {freight.postcode}
+          </div>
+          {freight.quote && freight.quote.rates.length > 0 ? (
+            <div style={{display:'flex', flexDirection:'column', gap:6}}>
+              {freight.quote.rates.map(r => {
+                const on = selectedFreightId === r.id
+                return (
+                  <label key={r.id} style={{
+                    display:'flex', alignItems:'center', gap:8,
+                    padding:'8px 10px', borderRadius:6,
+                    border:`1px solid ${on ? T.blue : T.border2}`,
+                    background: on ? `${T.blue}12` : T.bg3,
+                    cursor:'pointer', fontSize:12,
+                  }}>
+                    <input type="radio" name="freight" checked={on}
+                      onChange={() => onSelectFreight(r.id)}/>
+                    <span style={{flex:1, color:T.text}}>{r.label}</span>
+                    {r.transit_days != null && (
+                      <span style={{fontSize:10, color:T.text3}}>{r.transit_days}d</span>
+                    )}
+                    <span style={{fontFamily:'monospace', color:T.text2}}>${r.price_ex_gst.toFixed(2)} ex</span>
+                  </label>
+                )
+              })}
+            </div>
+          ) : (
+            <div style={{fontSize:11, color:T.amber, lineHeight:1.5}}>
+              No freight rate configured for postcode {freight.postcode}. Contact your account manager for a quote.
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Purchase Order */}
       <div style={{marginTop:14}}>
