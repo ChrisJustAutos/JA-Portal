@@ -97,10 +97,28 @@ export default function SettingsPage({ user }: { user: PortalUserSSR }) {
             <span style={{fontSize:11,color:T.text3}}>Signed in as {user.displayName || user.email}</span>
           </div>
 
-          <div style={{display:'flex',gap:2,padding:'0 20px',background:T.bg2,borderBottom:`1px solid ${T.border}`,flexShrink:0}}>
+          {/* Tab nav — scrolls horizontally on narrow viewports so all tabs
+              are reachable without wrapping. The selected tab self-scrolls
+              into view. */}
+          <div style={{
+            display:'flex', gap:2, padding:'0 20px',
+            background:T.bg2, borderBottom:`1px solid ${T.border}`,
+            flexShrink:0,
+            overflowX:'auto', WebkitOverflowScrolling:'touch',
+            scrollbarWidth:'none',  // Firefox
+          }}>
             {visibleTabs.map(t => (
               <button key={t.id} onClick={()=>changeTab(t.id)}
-                style={{fontSize:12,padding:'12px 18px',border:'none',borderBottom:tab===t.id?`2px solid var(--accent, ${T.accent})`:'2px solid transparent',background:'transparent',color:tab===t.id?'var(--accent)':T.text2,cursor:'pointer',fontFamily:'inherit'}}>
+                ref={el => { if (tab === t.id && el) el.scrollIntoView({ block:'nearest', inline:'center' }) }}
+                style={{
+                  fontSize:12, padding:'12px 18px', border:'none',
+                  borderBottom: tab===t.id ? `2px solid var(--accent, ${T.accent})` : '2px solid transparent',
+                  background:'transparent',
+                  color: tab===t.id ? 'var(--accent)' : T.text2,
+                  cursor:'pointer', fontFamily:'inherit',
+                  whiteSpace:'nowrap', flexShrink:0,
+                  minHeight: 40,
+                }}>
                 {t.label}
               </button>
             ))}

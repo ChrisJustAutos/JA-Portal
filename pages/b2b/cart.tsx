@@ -16,6 +16,7 @@ import { useRouter } from 'next/router'
 import type { GetServerSideProps } from 'next'
 import B2BLayout from '../../components/b2b/B2BLayout'
 import { requireB2BPageAuth } from '../../lib/b2bAuthServer'
+import { useIsMobile } from '../../lib/useIsMobile'
 
 const T = {
   bg:'#0d0f12', bg2:'#131519', bg3:'#1a1d23', bg4:'#21252d',
@@ -96,6 +97,7 @@ interface CartResponse {
 
 export default function B2BCartPage({ b2bUser }: Props) {
   const router = useRouter()
+  const isMobile = useIsMobile()
   const [data, setData] = useState<CartResponse | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -263,7 +265,13 @@ export default function B2BCartPage({ b2bUser }: Props) {
         )}
 
         {data && data.lines.length > 0 && (
-          <div style={{display:'grid',gridTemplateColumns:'1fr 320px',gap:18,alignItems:'start'}}>
+          <div style={{
+            display:'grid',
+            // Stack on mobile (lines first, totals after); 2-column with
+            // a fixed 320px totals rail on tablet/desktop.
+            gridTemplateColumns: isMobile ? '1fr' : '1fr 320px',
+            gap: isMobile ? 14 : 18, alignItems:'start',
+          }}>
 
             {/* Lines */}
             <div style={{background:T.bg2,border:`1px solid ${T.border}`,borderRadius:10,overflow:'hidden'}}>

@@ -348,7 +348,7 @@ export default function B2BCataloguePage({ b2bUser }: Props) {
         {tileStep === 'model' && items.length > 0 && (
           <div style={{
             display:'grid',
-            gridTemplateColumns:'repeat(auto-fill, minmax(220px, 1fr))',
+            gridTemplateColumns:'repeat(auto-fill, minmax(min(50% - 7px, 220px), 1fr))',
             gap:14,
           }}>
             <Tile index={0} accent={T.text2} name="View all models" subtitle={`${items.length} item${items.length===1?'':'s'}`} onClick={() => { setModelFilter('all'); setProductTypeFilter('all'); setTileStep('browse') }} />
@@ -365,7 +365,7 @@ export default function B2BCataloguePage({ b2bUser }: Props) {
         {tileStep === 'type' && items.length > 0 && (
           <div style={{
             display:'grid',
-            gridTemplateColumns:'repeat(auto-fill, minmax(220px, 1fr))',
+            gridTemplateColumns:'repeat(auto-fill, minmax(min(50% - 7px, 220px), 1fr))',
             gap:14,
           }}>
             <Tile index={0} accent={T.text2} name={`All types in ${modelLabel}`} subtitle={`${itemsAfterModel.length} item${itemsAfterModel.length===1?'':'s'}`} onClick={() => pickType('all')} />
@@ -451,7 +451,7 @@ export default function B2BCataloguePage({ b2bUser }: Props) {
                     </h2>
                     <div style={{
                       display:'grid',
-                      gridTemplateColumns:'repeat(auto-fill, minmax(240px, 1fr))',
+                      gridTemplateColumns:'repeat(auto-fill, minmax(min(50% - 7px, 240px), 1fr))',
                       gap:14,
                     }}>
                       {g.items.map(item => (
@@ -469,7 +469,7 @@ export default function B2BCataloguePage({ b2bUser }: Props) {
             ) : (
               <div style={{
                 display:'grid',
-                gridTemplateColumns:'repeat(auto-fill, minmax(240px, 1fr))',
+                gridTemplateColumns:'repeat(auto-fill, minmax(min(50% - 7px, 240px), 1fr))',
                 gap:14,
               }}>
                 {filtered.map(item => (

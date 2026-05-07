@@ -7,6 +7,7 @@ import Head from 'next/head'
 import type { GetServerSideProps } from 'next'
 import B2BLayout from '../../components/b2b/B2BLayout'
 import { requireB2BPageAuth } from '../../lib/b2bAuthServer'
+import { useIsMobile } from '../../lib/useIsMobile'
 
 const T = {
   bg:'#0d0f12', bg2:'#131519', bg3:'#1a1d23', bg4:'#21252d',
@@ -42,6 +43,7 @@ interface OrderRow {
 }
 
 export default function OrdersListPage({ b2bUser }: Props) {
+  const isMobile = useIsMobile()
   const [orders, setOrders] = useState<OrderRow[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -96,7 +98,39 @@ export default function OrdersListPage({ b2bUser }: Props) {
           </div>
         )}
 
-        {orders.length > 0 && (
+        {orders.length > 0 && isMobile && (
+          /* Mobile: card list (touch-friendly, easy to scan on a phone) */
+          <div style={{display:'flex',flexDirection:'column',gap:10}}>
+            {orders.map(o => (
+              <a key={o.id} href={`/b2b/orders/${o.id}`}
+                style={{
+                  display:'block',
+                  background:T.bg2, border:`1px solid ${T.border}`, borderRadius:10,
+                  padding:'14px 16px',
+                  textDecoration:'none', color: T.text,
+                }}>
+                <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:8,flexWrap:'wrap'}}>
+                  <strong style={{fontSize:14,fontWeight:600,letterSpacing:'-0.005em'}}>{o.order_number}</strong>
+                  <StatusPill status={o.status} hasError={!!o.myob_write_error}/>
+                  <span style={{flex:1}}/>
+                  <span style={{fontSize:14, fontWeight:600, color:T.text}}>${Number(o.total_inc).toFixed(2)}</span>
+                </div>
+                <div style={{display:'flex',alignItems:'center',gap:10,fontSize:11,color:T.text3,flexWrap:'wrap'}}>
+                  <span>{formatDate(o.placed_at)}</span>
+                  <span style={{flex:1}}/>
+                  <span>
+                    {o.myob_invoice_number
+                      ? `Invoice ${o.myob_invoice_number}`
+                      : (o.status === 'paid' ? <span style={{color:T.amber}}>Processing…</span> : '—')}
+                  </span>
+                </div>
+              </a>
+            ))}
+          </div>
+        )}
+
+        {orders.length > 0 && !isMobile && (
+          /* Desktop: traditional table */
           <div style={{background:T.bg2,border:`1px solid ${T.border}`,borderRadius:10,overflow:'hidden'}}>
             <table style={{width:'100%',borderCollapse:'collapse'}}>
               <thead>

@@ -15,6 +15,7 @@ import { useRouter } from 'next/router'
 import type { GetServerSideProps } from 'next'
 import B2BLayout from '../../../components/b2b/B2BLayout'
 import { requireB2BPageAuth } from '../../../lib/b2bAuthServer'
+import { useIsMobile } from '../../../lib/useIsMobile'
 
 const T = {
   bg:'#0d0f12', bg2:'#131519', bg3:'#1a1d23', bg4:'#21252d',
@@ -72,6 +73,7 @@ interface OrderDetail {
 
 export default function OrderDetailPage({ b2bUser }: Props) {
   const router = useRouter()
+  const isMobile = useIsMobile()
   const orderId = String(router.query.id || '')
   const sessionIdParam = router.query.session_id ? String(router.query.session_id) : null
   const justReturnedFromStripe = !!sessionIdParam
@@ -192,11 +194,16 @@ export default function OrderDetailPage({ b2bUser }: Props) {
             )}
 
             {/* Two-column layout */}
-            <div style={{display:'grid',gridTemplateColumns:'1fr 320px',gap:18,alignItems:'start'}}>
+            <div style={{
+              display:'grid',
+              gridTemplateColumns: isMobile ? '1fr' : '1fr 320px',
+              gap: isMobile ? 14 : 18, alignItems:'start',
+            }}>
 
-              {/* Lines */}
-              <div style={{background:T.bg2,border:`1px solid ${T.border}`,borderRadius:10,overflow:'hidden'}}>
-                <table style={{width:'100%',borderCollapse:'collapse'}}>
+              {/* Lines — horizontal scroll on small screens to avoid blowing
+                  out the page when there's lots of columns / long names */}
+              <div style={{background:T.bg2,border:`1px solid ${T.border}`,borderRadius:10,overflow:'auto', WebkitOverflowScrolling:'touch'}}>
+                <table style={{width:'100%',borderCollapse:'collapse', minWidth: 540}}>
                   <thead>
                     <tr style={{background:T.bg3,borderBottom:`1px solid ${T.border2}`}}>
                       <Th>Item</Th>
