@@ -25,6 +25,14 @@
 //     Same Graph→parse→insert→triage pipeline as /api/ap/pull-inbox.
 //     Returns the same JSON shape as that endpoint.
 //
+//   action='backfill_contact':
+//     body: { action:'backfill_contact', limit?: number }   default 25, max 100
+//     Re-runs the AI extractor against stored PDFs for invoices missing
+//     the vendor contact fields (email, phone, website, address). Only
+//     writes those 8 columns; lines/totals/triage/supplier mapping are
+//     untouched. Same job as /api/ap/admin/backfill-contact (portal),
+//     exposed here so it can be called via Bearer auth (cron / mobile).
+//
 // IMPORTANT: this endpoint can create real MYOB bills and ingest real
 // emails. Treat the API key like any other production secret. Rotate
 // via Vercel env vars.
@@ -34,6 +42,7 @@ import { createClient, SupabaseClient } from '@supabase/supabase-js'
 import { checkBearer } from '../../../../lib/api-key-auth'
 import { createServiceBill } from '../../../../lib/ap-myob-bill'
 import { runInboxPull } from '../../../../lib/ap-inbox-pull'
+import { runContactBackfill } from '../../../../lib/ap-backfill-contact'
 
 // Synthetic actor — distinguishable from any real user in audit queries.
 const AUTOMATION_ACTOR_UUID = '00000000-0000-0000-0000-000000000a01'
@@ -123,8 +132,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
     }
 
+    if (action === 'backfill_contact') {
+      try {
+        const limit = typeof body.limit === 'number' ? body.limit : undefined
+        const result = await runContactBackfill({ limit })
+        console.log(`[ap-automation] backfill_contact: processed=${result.processed} ok=${result.ok} failed=${result.failed}`)
+        return res.status(200).json(result)
+      } catch (e: any) {
+        const msg = e?.message || String(e)
+        console.error(`[ap-automation] backfill_contact unexpected error: ${msg}`)
+        return res.status(500).json({ error: msg })
+      }
+    }
+
     if (action !== 'push') {
-      return res.status(400).json({ error: `Unknown action "${action}". Supported: push, pull_inbox.` })
+      return res.status(400).json({ error: `Unknown action "${action}". Supported: push, pull_inbox, backfill_contact.` })
     }
 
     const requestedIds = Array.isArray(body.ids) ? body.ids.filter((x: any) => typeof x === 'string') as string[] : null
