@@ -1,12 +1,14 @@
 // lib/PortalSidebar.tsx
 // Shared sidebar component used by index, sales, distributors, calls, reports, settings pages.
-// Handles nav rendering, drag-reorder, sort dropdown, and refresh/signout footer.
+// Handles nav rendering, sort dropdown, user-defined groups (drag-and-drop in edit
+// mode, persisted via /api/preferences -> user_preferences.nav_groups), and the
+// refresh/signout footer.
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { useRouter } from 'next/router'
 import { getSupabase } from './supabaseClient'
 import { UserRole, visibleNavSections } from './permissions'
-import { usePreferences } from './preferences'
+import { usePreferences, NavGroup } from './preferences'
 
 // ── Design tokens (kept in sync with portal) ─────────────────
 const T = {
@@ -19,7 +21,21 @@ const T = {
 }
 
 export type PortalSection = 'overview'|'invoices'|'pnl'|'stock'|'payables'
-export type NavSort = 'default'|'az'|'za'|'custom'
+export type NavSort = 'default'|'az'|'za'
+
+// Per-group drag state. Tracks what's being dragged and where it's hovering
+// so we can render drop indicators and resolve drops to the right container.
+type DragKind = 'item' | 'group'
+interface DragState {
+  kind: DragKind
+  id: string
+  // For item drags: source container — group id or null (ungrouped)
+  fromGroupId: string | null
+}
+
+function genGroupId(): string {
+  return 'grp_' + Math.random().toString(36).slice(2, 10)
+}
 
 export interface PortalNavItem {
   id: string
@@ -82,11 +98,13 @@ export default function PortalSidebar({
   currentUserEmail,
 }: PortalSidebarProps) {
   const router = useRouter()
-  const { prefs } = usePreferences()
+  const { prefs, update } = usePreferences()
   const [navSort, setNavSort] = useState<NavSort>('default')
-  const [customOrder, setCustomOrder] = useState<string[]>([])
-  const [draggedId, setDraggedId] = useState<string|null>(null)
-  const [dragOverId, setDragOverId] = useState<string|null>(null)
+  const [editing, setEditing] = useState(false)
+  const [drag, setDrag] = useState<DragState | null>(null)
+  const [dragOverItemId, setDragOverItemId] = useState<string | null>(null)
+  const [dragOverContainerId, setDragOverContainerId] = useState<string | null>(null) // group id or '__ungrouped__'
+  const [renamingGroupId, setRenamingGroupId] = useState<string | null>(null)
 
   const [isMobile, setIsMobile] = useState(false)
   const [drawerOpen, setDrawerOpen] = useState(false)
@@ -102,26 +120,47 @@ export default function PortalSidebar({
     return () => router.events.off('routeChangeStart', close)
   }, [router])
 
-  const baseNav: PortalNavItem[] = (() => {
+  const baseNav: PortalNavItem[] = useMemo(() => {
     if (!currentUserRole) return [...DEFAULT_NAV]
     const allowed = new Set(visibleNavSections(currentUserRole, currentUserVisibleTabs))
     const filtered = DEFAULT_NAV.filter(it => allowed.has(it.id))
     if (allowed.has('settings')) filtered.push(SETTINGS_NAV_ITEM)
     return filtered
-  })()
+  }, [currentUserRole, currentUserVisibleTabs])
 
-  const sortedItems: PortalNavItem[] = (() => {
-    if (navSort === 'az') return [...baseNav].sort((a,b) => a.label.localeCompare(b.label))
-    if (navSort === 'za') return [...baseNav].sort((a,b) => b.label.localeCompare(a.label))
-    if (navSort === 'custom' && customOrder.length === baseNav.length) {
-      const byId: Record<string, PortalNavItem> = {}
-      baseNav.forEach(it => { byId[it.id] = it })
-      return customOrder.map(id => byId[id]).filter(Boolean)
-    }
-    return baseNav
-  })()
+  const navById: Record<string, PortalNavItem> = useMemo(() => {
+    const m: Record<string, PortalNavItem> = {}
+    baseNav.forEach(it => { m[it.id] = it })
+    return m
+  }, [baseNav])
+
+  // Resolve persisted groups against the current allowed nav list. Drops
+  // unknown ids silently (a removed feature or a permission change) without
+  // mutating stored prefs — they'll be cleaned up next time the user saves.
+  const resolvedGroups = useMemo(() => {
+    return (prefs.nav_groups || []).map(g => ({
+      id: g.id,
+      name: g.name,
+      collapsed: g.collapsed,
+      items: g.item_ids.map(id => navById[id]).filter(Boolean) as PortalNavItem[],
+    }))
+  }, [prefs.nav_groups, navById])
+
+  const groupedItemIds = useMemo(() => {
+    const s = new Set<string>()
+    for (const g of prefs.nav_groups || []) for (const id of g.item_ids) s.add(id)
+    return s
+  }, [prefs.nav_groups])
+
+  const ungroupedItems: PortalNavItem[] = useMemo(() => {
+    const items = baseNav.filter(it => !groupedItemIds.has(it.id))
+    if (navSort === 'az') return [...items].sort((a, b) => a.label.localeCompare(b.label))
+    if (navSort === 'za') return [...items].sort((a, b) => b.label.localeCompare(a.label))
+    return items
+  }, [baseNav, groupedItemIds, navSort])
 
   function handleClick(item: PortalNavItem) {
+    if (editing) return  // clicks select for rename / no-op while editing
     if (item.kind === 'link') {
       router.push(item.href!)
       return
@@ -130,37 +169,125 @@ export default function PortalSidebar({
     else router.push(`/dashboard?s=${item.section}`)
   }
 
-  function handleDragStart(e: React.DragEvent, id: string) {
-    if (navSort !== 'custom') return
-    setDraggedId(id)
-    e.dataTransfer.effectAllowed = 'move'
-    e.dataTransfer.setData('text/plain', id)
+  // ── Group mutations (autosave on every change) ──────────────────────────
+  async function saveGroups(next: NavGroup[]) {
+    try { await update({ nav_groups: next }) } catch { /* preferences hook surfaces errors */ }
   }
-  function handleDragOver(e: React.DragEvent, id: string) {
-    if (navSort !== 'custom' || !draggedId) return
+  function addGroup() {
+    const id = genGroupId()
+    const next: NavGroup[] = [...(prefs.nav_groups || []), { id, name: 'New group', collapsed: false, item_ids: [] }]
+    saveGroups(next)
+    setRenamingGroupId(id)
+  }
+  function renameGroup(id: string, name: string) {
+    const trimmed = name.trim().slice(0, 80) || 'Untitled'
+    const next = (prefs.nav_groups || []).map(g => g.id === id ? { ...g, name: trimmed } : g)
+    saveGroups(next)
+  }
+  function deleteGroup(id: string) {
+    const next = (prefs.nav_groups || []).filter(g => g.id !== id)
+    saveGroups(next)
+  }
+  function toggleCollapsed(id: string) {
+    const next = (prefs.nav_groups || []).map(g => g.id === id ? { ...g, collapsed: !g.collapsed } : g)
+    saveGroups(next)
+  }
+  function reorderGroups(draggedId: string, targetId: string) {
+    if (draggedId === targetId) return
+    const order = (prefs.nav_groups || []).map(g => g.id)
+    const from = order.indexOf(draggedId)
+    const to = order.indexOf(targetId)
+    if (from < 0 || to < 0) return
+    const [moved] = order.splice(from, 1)
+    order.splice(to, 0, moved)
+    const byId: Record<string, NavGroup> = {}
+    for (const g of prefs.nav_groups || []) byId[g.id] = g
+    saveGroups(order.map(id => byId[id]))
+  }
+  // Move item to (or within) a target. targetGroupId=null means ungrouped.
+  // beforeItemId=null means append to the end.
+  function moveItem(itemId: string, targetGroupId: string | null, beforeItemId: string | null) {
+    let next = (prefs.nav_groups || []).map(g => ({ ...g, item_ids: g.item_ids.filter(id => id !== itemId) }))
+    if (targetGroupId) {
+      next = next.map(g => {
+        if (g.id !== targetGroupId) return g
+        const arr = [...g.item_ids]
+        const insertAt = beforeItemId ? arr.indexOf(beforeItemId) : -1
+        if (insertAt >= 0) arr.splice(insertAt, 0, itemId)
+        else arr.push(itemId)
+        return { ...g, item_ids: arr }
+      })
+    }
+    saveGroups(next)
+  }
+
+  // ── DnD handlers ────────────────────────────────────────────────────────
+  function onDragStartItem(e: React.DragEvent, itemId: string, fromGroupId: string | null) {
+    if (!editing) return
+    setDrag({ kind: 'item', id: itemId, fromGroupId })
+    e.dataTransfer.effectAllowed = 'move'
+    e.dataTransfer.setData('text/plain', itemId)
+  }
+  function onDragStartGroup(e: React.DragEvent, groupId: string) {
+    if (!editing) return
+    setDrag({ kind: 'group', id: groupId, fromGroupId: null })
+    e.dataTransfer.effectAllowed = 'move'
+    e.dataTransfer.setData('text/plain', groupId)
+  }
+  function onDragOverItem(e: React.DragEvent, itemId: string, containerId: string) {
+    if (!drag || drag.kind !== 'item') return
+    e.preventDefault(); e.stopPropagation()
+    e.dataTransfer.dropEffect = 'move'
+    if (dragOverItemId !== itemId) setDragOverItemId(itemId)
+    if (dragOverContainerId !== containerId) setDragOverContainerId(containerId)
+  }
+  function onDragOverContainer(e: React.DragEvent, containerId: string) {
+    if (!drag || drag.kind !== 'item') return
     e.preventDefault()
     e.dataTransfer.dropEffect = 'move'
-    if (id !== dragOverId) setDragOverId(id)
+    if (dragOverContainerId !== containerId) setDragOverContainerId(containerId)
+    if (dragOverItemId !== null) setDragOverItemId(null)
   }
-  function handleDrop(e: React.DragEvent, targetId: string) {
-    if (navSort !== 'custom' || !draggedId) return
+  function onDragOverGroupHeader(e: React.DragEvent, groupId: string) {
+    if (!drag) return
+    if (drag.kind === 'group') {
+      e.preventDefault()
+      e.dataTransfer.dropEffect = 'move'
+      if (dragOverContainerId !== `__group_header__${groupId}`) setDragOverContainerId(`__group_header__${groupId}`)
+    } else if (drag.kind === 'item') {
+      e.preventDefault()
+      e.dataTransfer.dropEffect = 'move'
+      if (dragOverContainerId !== groupId) setDragOverContainerId(groupId)
+      if (dragOverItemId !== null) setDragOverItemId(null)
+    }
+  }
+  function onDropItem(e: React.DragEvent, beforeItemId: string, containerId: string) {
+    if (!drag || drag.kind !== 'item') return
+    e.preventDefault(); e.stopPropagation()
+    const targetGroupId = containerId === '__ungrouped__' ? null : containerId
+    if (drag.id !== beforeItemId) moveItem(drag.id, targetGroupId, beforeItemId)
+    resetDrag()
+  }
+  function onDropContainer(e: React.DragEvent, containerId: string) {
+    if (!drag || drag.kind !== 'item') return
     e.preventDefault()
-    if (draggedId === targetId) { setDraggedId(null); setDragOverId(null); return }
-    const order = sortedItems.map(it => it.id)
-    const fromIdx = order.indexOf(draggedId)
-    const toIdx = order.indexOf(targetId)
-    if (fromIdx < 0 || toIdx < 0) { setDraggedId(null); setDragOverId(null); return }
-    const [moved] = order.splice(fromIdx, 1)
-    order.splice(toIdx, 0, moved)
-    setCustomOrder(order)
-    setDraggedId(null); setDragOverId(null)
+    const targetGroupId = containerId === '__ungrouped__' ? null : containerId
+    moveItem(drag.id, targetGroupId, null)
+    resetDrag()
   }
-  function handleDragEnd() { setDraggedId(null); setDragOverId(null) }
+  function onDropGroupHeader(e: React.DragEvent, groupId: string) {
+    if (!drag) return
+    e.preventDefault()
+    if (drag.kind === 'group') {
+      reorderGroups(drag.id, groupId)
+    } else if (drag.kind === 'item') {
+      moveItem(drag.id, groupId, null)
+    }
+    resetDrag()
+  }
+  function resetDrag() { setDrag(null); setDragOverItemId(null); setDragOverContainerId(null) }
 
-  function handleSortChange(v: NavSort) {
-    if (v === 'custom') setCustomOrder(sortedItems.map(it => it.id))
-    setNavSort(v)
-  }
+  function handleSortChange(v: NavSort) { setNavSort(v) }
 
   async function handleSignOut() {
     try {
@@ -171,7 +298,47 @@ export default function PortalSidebar({
     }
   }
 
-  const dragEnabled = navSort === 'custom'
+  // Renders a single nav item. containerId = group id or null (ungrouped).
+  function renderNavItem(it: PortalNavItem, containerId: string | null) {
+    const isActive = activeId === it.id
+    const isDragging = drag?.kind === 'item' && drag.id === it.id
+    const isDropTarget = drag?.kind === 'item' && dragOverItemId === it.id && drag.id !== it.id
+    const alertCount = it.alertKey ? (alertCounts[it.alertKey] || 0) : 0
+    const bg = isActive ? 'rgba(255,255,255,0.04)' : 'transparent'
+    const color = isActive ? T.text : T.text2
+    const containerKey = containerId ?? '__ungrouped__'
+
+    return (
+      <div
+        key={it.id}
+        draggable={editing}
+        onDragStart={(e) => onDragStartItem(e, it.id, containerId)}
+        onDragOver={(e) => onDragOverItem(e, it.id, containerKey)}
+        onDrop={(e) => onDropItem(e, it.id, containerKey)}
+        onDragEnd={resetDrag}
+        onClick={() => handleClick(it)}
+        style={{
+          display:'flex', alignItems:'center', gap:9,
+          padding:'8px 10px', borderRadius:7,
+          cursor: editing ? 'grab' : 'pointer',
+          fontSize:13, marginBottom:1,
+          background: bg, color: color,
+          opacity: isDragging ? 0.4 : 1,
+          borderTop: isDropTarget ? `2px solid ${T.accent}` : '2px solid transparent',
+          transition: 'opacity 0.15s, background 0.1s',
+          userSelect: 'none',
+        }}>
+        {editing && <span style={{fontSize:10, color:T.text3, marginRight:-4}}>⋮⋮</span>}
+        <div style={{width:7, height:7, borderRadius:'50%', background:it.dot, flexShrink:0}}/>
+        <span style={{flex:1}}>{it.label}</span>
+        {it.alertKey && !loading && alertCount > 0 && (
+          <span style={{fontSize:10, fontFamily:'monospace', background:'rgba(240,78,78,0.2)', color:T.red, padding:'2px 6px', borderRadius:4}}>
+            {alertCount}
+          </span>
+        )}
+      </div>
+    )
+  }
 
   const sidebarBody = (
     <div style={{
@@ -207,58 +374,127 @@ export default function PortalSidebar({
       </div>
 
       <div style={{padding:'14px 10px 4px', flex:1}}>
-        <div style={{display:'flex', alignItems:'center', justifyContent:'space-between', padding:'0 8px', marginBottom:6}}>
+        <div style={{display:'flex', alignItems:'center', justifyContent:'space-between', padding:'0 8px', marginBottom:6, gap:6}}>
           <div style={{fontSize:9, fontWeight:600, color:T.text3, textTransform:'uppercase', letterSpacing:'0.1em'}}>Navigation</div>
-          <select value={navSort} onChange={e => handleSortChange(e.target.value as NavSort)}
-            style={{background:'transparent', border:`1px solid ${T.border}`, color:T.text3, borderRadius:4, padding:'2px 5px', fontSize:9, fontFamily:'inherit', cursor:'pointer', outline:'none'}}>
-            <option value="default">Default</option>
-            <option value="az">A–Z</option>
-            <option value="za">Z–A</option>
-            <option value="custom">Custom (drag)</option>
-          </select>
+          <div style={{display:'flex', alignItems:'center', gap:4}}>
+            <select value={navSort} onChange={e => handleSortChange(e.target.value as NavSort)}
+              style={{background:'transparent', border:`1px solid ${T.border}`, color:T.text3, borderRadius:4, padding:'2px 5px', fontSize:9, fontFamily:'inherit', cursor:'pointer', outline:'none'}}>
+              <option value="default">Default</option>
+              <option value="az">A–Z</option>
+              <option value="za">Z–A</option>
+            </select>
+            <button onClick={() => setEditing(e => !e)} title={editing ? 'Done editing' : 'Edit groups'}
+              style={{
+                background: editing ? T.accent : 'transparent', border:`1px solid ${editing ? T.accent : T.border}`,
+                color: editing ? '#fff' : T.text3, borderRadius:4, padding:'2px 6px',
+                fontSize:9, fontFamily:'inherit', cursor:'pointer', outline:'none',
+              }}>
+              {editing ? 'Done' : '✎ Edit'}
+            </button>
+          </div>
         </div>
 
-        {sortedItems.map(it => {
-          const isActive = activeId === it.id
-          const isDragging = draggedId === it.id
-          const isDragOver = dragOverId === it.id && draggedId !== it.id
-          const alertCount = it.alertKey ? (alertCounts[it.alertKey] || 0) : 0
+        {editing && (
+          <button onClick={addGroup}
+            style={{
+              width:'calc(100% - 4px)', margin:'0 2px 6px', padding:'6px 8px',
+              background:'transparent', border:`1px dashed ${T.border}`, color:T.text2,
+              borderRadius:6, fontSize:11, fontFamily:'inherit', cursor:'pointer', outline:'none',
+            }}>
+            + New group
+          </button>
+        )}
 
-          const bg = isActive ? 'rgba(255,255,255,0.04)' : 'transparent'
-          const color = isActive ? T.text : T.text2
-
+        {/* Groups (top) */}
+        {resolvedGroups.map(g => {
+          const isGroupDragOver = dragOverContainerId === `__group_header__${g.id}` && drag?.kind === 'group' && drag.id !== g.id
+          const isItemDropOver = dragOverContainerId === g.id && drag?.kind === 'item' && dragOverItemId === null
           return (
-            <div
-              key={it.id}
-              draggable={dragEnabled}
-              onDragStart={(e) => handleDragStart(e, it.id)}
-              onDragOver={(e) => handleDragOver(e, it.id)}
-              onDrop={(e) => handleDrop(e, it.id)}
-              onDragEnd={handleDragEnd}
-              onClick={() => handleClick(it)}
-              style={{
-                display:'flex', alignItems:'center', gap:9,
-                padding:'8px 10px', borderRadius:7,
-                cursor: dragEnabled ? 'grab' : 'pointer',
-                fontSize:13, marginBottom:1,
-                background: bg, color: color,
-                opacity: isDragging ? 0.4 : 1,
-                outline: isDragOver ? `2px dashed ${T.accent}` : 'none',
-                outlineOffset: -2,
-                transition: 'opacity 0.15s, outline 0.1s, background 0.1s',
-                userSelect: 'none',
-              }}>
-              {dragEnabled && <span style={{fontSize:10, color:T.text3, cursor:'grab', marginRight:-4}}>⋮⋮</span>}
-              <div style={{width:7, height:7, borderRadius:'50%', background:it.dot, flexShrink:0}}/>
-              <span style={{flex:1}}>{it.label}</span>
-              {it.alertKey && !loading && alertCount > 0 && (
-                <span style={{fontSize:10, fontFamily:'monospace', background:'rgba(240,78,78,0.2)', color:T.red, padding:'2px 6px', borderRadius:4}}>
-                  {alertCount}
-                </span>
+            <div key={g.id} style={{marginBottom:4}}>
+              <div
+                draggable={editing}
+                onDragStart={(e) => onDragStartGroup(e, g.id)}
+                onDragOver={(e) => onDragOverGroupHeader(e, g.id)}
+                onDrop={(e) => onDropGroupHeader(e, g.id)}
+                onDragEnd={resetDrag}
+                onClick={() => !editing && toggleCollapsed(g.id)}
+                style={{
+                  display:'flex', alignItems:'center', gap:6,
+                  padding:'5px 8px', borderRadius:6,
+                  cursor: editing ? 'grab' : 'pointer',
+                  fontSize:10, fontWeight:600, textTransform:'uppercase', letterSpacing:'0.08em',
+                  color: T.text3,
+                  background: isItemDropOver ? 'rgba(79,142,247,0.10)' : 'transparent',
+                  outline: isGroupDragOver ? `2px dashed ${T.accent}` : 'none',
+                  outlineOffset: -2,
+                  userSelect:'none',
+                }}>
+                {editing && <span style={{fontSize:10, color:T.text3}}>⋮⋮</span>}
+                <span style={{
+                  display:'inline-block', width:8, transform: g.collapsed ? 'rotate(0deg)' : 'rotate(90deg)',
+                  transition:'transform 0.12s', color:T.text3, fontSize:8,
+                }}>▶</span>
+                {editing && renamingGroupId === g.id ? (
+                  <input
+                    autoFocus
+                    defaultValue={g.name}
+                    onBlur={(e) => { renameGroup(g.id, e.target.value); setRenamingGroupId(null) }}
+                    onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); if (e.key === 'Escape') setRenamingGroupId(null) }}
+                    style={{
+                      flex:1, background:T.bg3, border:`1px solid ${T.border}`, color:T.text,
+                      borderRadius:3, padding:'1px 5px', fontSize:10, fontFamily:'inherit',
+                      textTransform:'uppercase', letterSpacing:'0.08em', outline:'none',
+                    }}
+                  />
+                ) : (
+                  <span
+                    onClick={(e) => { if (editing) { e.stopPropagation(); setRenamingGroupId(g.id) } }}
+                    style={{flex:1}}
+                  >{g.name}</span>
+                )}
+                {!editing && <span style={{fontSize:9, color:T.text3, fontFamily:'monospace'}}>{g.items.length}</span>}
+                {editing && (
+                  <button
+                    onClick={(e) => { e.stopPropagation(); if (g.items.length === 0 || confirm(`Delete group "${g.name}"? Items will return to ungrouped.`)) deleteGroup(g.id) }}
+                    title="Delete group"
+                    style={{background:'transparent', border:'none', color:T.text3, fontSize:12, cursor:'pointer', padding:'0 2px', lineHeight:1}}
+                  >×</button>
+                )}
+              </div>
+
+              {!g.collapsed && (
+                <div
+                  onDragOver={(e) => onDragOverContainer(e, g.id)}
+                  onDrop={(e) => onDropContainer(e, g.id)}
+                  style={{minHeight: editing && g.items.length === 0 ? 22 : undefined, paddingLeft: 8}}
+                >
+                  {editing && g.items.length === 0 && (
+                    <div style={{fontSize:10, color:T.text3, padding:'3px 8px', fontStyle:'italic'}}>Drop items here</div>
+                  )}
+                  {g.items.map(it => renderNavItem(it, g.id))}
+                </div>
               )}
             </div>
           )
         })}
+
+        {/* Ungrouped (bottom) */}
+        {(ungroupedItems.length > 0 || (editing && resolvedGroups.length > 0)) && (
+          <div style={{marginTop: resolvedGroups.length > 0 ? 8 : 0}}>
+            {resolvedGroups.length > 0 && (
+              <div style={{
+                fontSize:10, fontWeight:600, color:T.text3, textTransform:'uppercase', letterSpacing:'0.08em',
+                padding:'5px 8px',
+              }}>Ungrouped</div>
+            )}
+            <div
+              onDragOver={(e) => onDragOverContainer(e, '__ungrouped__')}
+              onDrop={(e) => onDropContainer(e, '__ungrouped__')}
+            >
+              {ungroupedItems.map(it => renderNavItem(it, null))}
+            </div>
+          </div>
+        )}
       </div>
 
       <div style={{padding:'12px 14px', borderTop:`1px solid ${T.border}`}}>

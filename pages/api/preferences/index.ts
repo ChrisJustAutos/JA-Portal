@@ -27,7 +27,42 @@ const PATCHABLE_KEYS = new Set([
   'locale',
   'theme',
   'company_logo_url',
+  'nav_groups',
 ])
+
+// Coerce + validate the nav_groups payload. Rejects on shape mismatch;
+// returns the cleaned array on success.
+function sanitizeNavGroups(input: any): { ok: true; value: any[] } | { ok: false; error: string } {
+  if (!Array.isArray(input)) return { ok: false, error: 'nav_groups must be an array' }
+  if (input.length > 50) return { ok: false, error: 'too many groups (max 50)' }
+  const cleaned: any[] = []
+  const seenIds = new Set<string>()
+  for (const g of input) {
+    if (!g || typeof g !== 'object') return { ok: false, error: 'each group must be an object' }
+    const id = String(g.id || '').trim()
+    const name = String(g.name || '').trim()
+    if (!id) return { ok: false, error: 'group id required' }
+    if (id.length > 64) return { ok: false, error: 'group id too long' }
+    if (seenIds.has(id)) return { ok: false, error: `duplicate group id: ${id}` }
+    seenIds.add(id)
+    if (!name) return { ok: false, error: 'group name required' }
+    if (name.length > 80) return { ok: false, error: 'group name too long' }
+    if (!Array.isArray(g.item_ids)) return { ok: false, error: `group ${id}: item_ids must be an array` }
+    if (g.item_ids.length > 200) return { ok: false, error: `group ${id}: too many items` }
+    const itemIds: string[] = []
+    for (const it of g.item_ids) {
+      if (typeof it !== 'string' || !it) continue
+      itemIds.push(it.slice(0, 64))
+    }
+    cleaned.push({
+      id: id.slice(0, 64),
+      name: name.slice(0, 80),
+      collapsed: !!g.collapsed,
+      item_ids: itemIds,
+    })
+  }
+  return { ok: true, value: cleaned }
+}
 
 async function handler(req: NextApiRequest, res: NextApiResponse, user: any) {
   const sb = getAdmin()
@@ -61,6 +96,12 @@ async function handler(req: NextApiRequest, res: NextApiResponse, user: any) {
     }
     if (Object.keys(patch).length === 0) {
       return res.status(400).json({ error: 'No patchable fields in request body' })
+    }
+
+    if ('nav_groups' in patch) {
+      const result = sanitizeNavGroups(patch.nav_groups)
+      if (!result.ok) return res.status(400).json({ error: `nav_groups: ${result.error}` })
+      patch.nav_groups = result.value
     }
 
     // Ensure row exists first (in case GET was never called)

@@ -23,6 +23,13 @@ export type DateRangeKey =
   | 'ytd'
   | 'custom'
 
+export interface NavGroup {
+  id: string
+  name: string
+  collapsed: boolean
+  item_ids: string[]
+}
+
 export interface UserPreferences {
   gst_display: GstDisplay
   default_date_range: DateRangeKey
@@ -32,6 +39,7 @@ export interface UserPreferences {
   locale: string
   theme: Theme
   company_logo_url: string | null
+  nav_groups: NavGroup[]
 }
 
 export const DEFAULT_PREFERENCES: UserPreferences = {
@@ -43,6 +51,7 @@ export const DEFAULT_PREFERENCES: UserPreferences = {
   locale: 'en-AU',
   theme: 'dark',
   company_logo_url: null,
+  nav_groups: [],
 }
 
 // Human labels for UI (alphabetical locale list kept short; extend if needed)
