@@ -630,6 +630,10 @@ export default function APDetailPage({ user }: PageProps) {
   function startHeaderEdit() {
     if (!data) return
     const inv = data.invoice
+    // Pre-flip signs for credit notes so the editor mirrors what the user
+    // sees in the read-only card. saveHeader takes Math.abs to write the
+    // magnitude back to the DB (sign lives on the is_credit_note flag).
+    const flip = (v: number | null) => v == null ? '' : String(signedAmount(Number(v), inv.is_credit_note))
     setEditingHeader({
       vendor_name_parsed: inv.vendor_name_parsed || '',
       vendor_abn:         inv.vendor_abn || '',
@@ -637,9 +641,9 @@ export default function APDetailPage({ user }: PageProps) {
       invoice_date:       (inv.invoice_date || '').substring(0, 10),
       po_number:          inv.po_number || '',
       due_date:           (inv.due_date || '').substring(0, 10),
-      subtotal_ex_gst:    inv.subtotal_ex_gst !== null ? String(inv.subtotal_ex_gst) : '',
-      gst_amount:         inv.gst_amount      !== null ? String(inv.gst_amount)      : '',
-      total_inc_gst:      inv.total_inc_gst   !== null ? String(inv.total_inc_gst)   : '',
+      subtotal_ex_gst:    flip(inv.subtotal_ex_gst),
+      gst_amount:         flip(inv.gst_amount),
+      total_inc_gst:      flip(inv.total_inc_gst),
       notes:              inv.notes || '',
     })
     setHeaderMessage(null)
@@ -660,6 +664,15 @@ export default function APDetailPage({ user }: PageProps) {
     setSavingHeader(true)
     setHeaderMessage(null)
     try {
+      // Credit notes are stored as positive magnitudes — sign lives on the
+      // is_credit_note flag. Take Math.abs to strip whatever sign the user
+      // typed (or that the pre-flipped form fed in).
+      const isCN = data?.invoice.is_credit_note === true
+      const absMoney = (s: string) => {
+        const n = parseNumOrNull(s)
+        if (n == null) return null
+        return isCN ? Math.abs(n) : n
+      }
       const body: Record<string, any> = {
         vendor_name_parsed: trimToNull(editingHeader.vendor_name_parsed),
         vendor_abn:         trimToNull(editingHeader.vendor_abn),
@@ -667,9 +680,9 @@ export default function APDetailPage({ user }: PageProps) {
         invoice_date:       trimToNull(editingHeader.invoice_date),
         po_number:          trimToNull(editingHeader.po_number),
         due_date:           trimToNull(editingHeader.due_date),
-        subtotal_ex_gst:    parseNumOrNull(editingHeader.subtotal_ex_gst),
-        gst_amount:         parseNumOrNull(editingHeader.gst_amount),
-        total_inc_gst:      parseNumOrNull(editingHeader.total_inc_gst),
+        subtotal_ex_gst:    absMoney(editingHeader.subtotal_ex_gst),
+        gst_amount:         absMoney(editingHeader.gst_amount),
+        total_inc_gst:      absMoney(editingHeader.total_inc_gst),
         notes:              trimToNull(editingHeader.notes),
       }
       const res = await fetch(`/api/ap/${id}`, {
@@ -693,7 +706,20 @@ export default function APDetailPage({ user }: PageProps) {
 
   function startEdit() {
     if (!data) return
-    setEditingLines(data.lines.map(l => ({ ...l })))
+    // Pre-flip the line numbers for credit-note display so the editor
+    // matches the read-only view. saveLines re-applies Math.abs to write
+    // positive magnitudes back to the DB.
+    const isCN = data.invoice.is_credit_note === true
+    const flip = (n: number | null | undefined) => {
+      if (n == null) return n ?? null
+      return isCN ? -Number(n) : Number(n)
+    }
+    setEditingLines(data.lines.map(l => ({
+      ...l,
+      unit_price_ex_gst: flip(l.unit_price_ex_gst),
+      line_total_ex_gst: flip(l.line_total_ex_gst) ?? 0,
+      gst_amount:        flip(l.gst_amount),
+    })))
   }
   function cancelEdit() {
     setEditingLines(null)
@@ -803,15 +829,22 @@ export default function APDetailPage({ user }: PageProps) {
     setSaving(true)
     setSaveMessage(null)
     try {
+      // Credit notes are stored as positive magnitudes; the user has been
+      // editing negative-displayed values so flip back to abs on save.
+      const isCN = data?.invoice.is_credit_note === true
+      const absNum = (n: number | null | undefined) => {
+        if (n == null) return n ?? null
+        return isCN ? Math.abs(n) : n
+      }
       const payload = editingLines.map(l => ({
         line_no: l.line_no,
         part_number: l.part_number,
         description: l.description,
         qty: l.qty,
         uom: l.uom,
-        unit_price_ex_gst: l.unit_price_ex_gst,
-        line_total_ex_gst: l.line_total_ex_gst,
-        gst_amount: l.gst_amount,
+        unit_price_ex_gst: absNum(l.unit_price_ex_gst),
+        line_total_ex_gst: absNum(l.line_total_ex_gst) ?? 0,
+        gst_amount: absNum(l.gst_amount),
         tax_code: l.tax_code,
         account_uid: l.account_uid,
         account_code: l.account_code,
@@ -893,29 +926,6 @@ export default function APDetailPage({ user }: PageProps) {
           {data && canEdit && !isMobile && (
             <>
               <span style={{flex:1}}/>
-              {!isTerminal && (
-                <button
-                  onClick={toggleCreditNote}
-                  disabled={togglingCredit}
-                  title={data.invoice.is_credit_note
-                    ? 'Currently flagged as a credit note. Click to unmark.'
-                    : 'Flag this document as a credit note. When approved it posts to MYOB as a negative Bill and (if Mark-as-refunded is ticked) auto-credits the clearing account.'}
-                  style={{
-                    background: data.invoice.is_credit_note ? `${T.red}20` : 'transparent',
-                    border:`1px solid ${data.invoice.is_credit_note ? T.red : T.border2}`,
-                    color: data.invoice.is_credit_note ? T.red : T.text2,
-                    padding:'5px 11px', borderRadius:5,
-                    fontSize:11, fontFamily:'inherit', fontWeight: data.invoice.is_credit_note ? 600 : 400,
-                    cursor: togglingCredit ? 'wait' : 'pointer',
-                    opacity: togglingCredit ? 0.6 : 1,
-                  }}>
-                  {togglingCredit
-                    ? '…'
-                    : data.invoice.is_credit_note
-                      ? '✓ Credit note'
-                      : 'Mark as credit note'}
-                </button>
-              )}
               <button
                 onClick={refreshInvoice}
                 disabled={refreshing}
@@ -1225,6 +1235,29 @@ export default function APDetailPage({ user }: PageProps) {
                 <div style={{display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:10, gap:8, flexWrap:'wrap'}}>
                   <div style={{fontSize:11, color:T.text3, textTransform:'uppercase', letterSpacing:'0.05em'}}>Invoice</div>
                   <div style={{display:'flex', gap:8, flexWrap:'wrap'}}>
+                    {canEdit && !isTerminal && (
+                      <button
+                        onClick={toggleCreditNote}
+                        disabled={togglingCredit}
+                        title={data.invoice.is_credit_note
+                          ? 'Currently flagged as a credit note (totals shown as negative). Click to unmark.'
+                          : 'Flag this document as a credit note. Totals will display as negative; when approved it posts to MYOB as a negative Bill and auto-credits the clearing account.'}
+                        style={{
+                          background: data.invoice.is_credit_note ? `${T.red}20` : 'transparent',
+                          border:`1px solid ${data.invoice.is_credit_note ? T.red : T.border2}`,
+                          color: data.invoice.is_credit_note ? T.red : T.text2,
+                          padding:'5px 11px', borderRadius:5,
+                          fontSize:11, fontFamily:'inherit', fontWeight: data.invoice.is_credit_note ? 600 : 400,
+                          cursor: togglingCredit ? 'wait' : 'pointer',
+                          opacity: togglingCredit ? 0.6 : 1,
+                        }}>
+                        {togglingCredit
+                          ? '…'
+                          : data.invoice.is_credit_note
+                            ? '✓ Credit note'
+                            : 'Mark as credit note'}
+                      </button>
+                    )}
                     {editingHeader === null && canEdit && !isTerminal && (
                       <button onClick={startHeaderEdit} style={btnSecondary()}>Edit</button>
                     )}
@@ -1256,9 +1289,9 @@ export default function APDetailPage({ user }: PageProps) {
                       <Field label="Invoice date"  value={data.invoice.invoice_date}/>
                       <Field label="PO #"          value={data.invoice.po_number || '—'} mono/>
                       <Field label="Due date"      value={data.invoice.due_date || '—'}/>
-                      <Field label="Subtotal"      value={fmtMoney(data.invoice.subtotal_ex_gst)} mono align="right"/>
-                      <Field label="GST"           value={fmtMoney(data.invoice.gst_amount)}      mono align="right"/>
-                      <Field label="Total inc GST" value={fmtMoney(data.invoice.total_inc_gst)}   mono align="right" emphasised/>
+                      <Field label="Subtotal"      value={fmtMoney(signedAmount(data.invoice.subtotal_ex_gst, data.invoice.is_credit_note))} mono align="right"/>
+                      <Field label="GST"           value={fmtMoney(signedAmount(data.invoice.gst_amount, data.invoice.is_credit_note))}      mono align="right"/>
+                      <Field label="Total inc GST" value={fmtMoney(signedAmount(data.invoice.total_inc_gst, data.invoice.is_credit_note))}   mono align="right" emphasised/>
                       <Field label="Source"        value={`${data.invoice.source}${data.invoice.email_from ? ' · ' + data.invoice.email_from : ''}`}/>
                     </div>
                     {data.invoice.notes && (
@@ -1342,7 +1375,16 @@ export default function APDetailPage({ user }: PageProps) {
                   <div style={{fontSize:11, color: saveMessage.startsWith('❌') ? T.red : T.green, marginBottom:8}}>{saveMessage}</div>
                 )}
                 <LinesTable
-                  lines={editingLines || data.lines}
+                  lines={editingLines ?? (
+                    data.invoice.is_credit_note
+                      ? data.lines.map(l => ({
+                          ...l,
+                          unit_price_ex_gst: l.unit_price_ex_gst != null ? -Number(l.unit_price_ex_gst) : null,
+                          line_total_ex_gst: l.line_total_ex_gst != null ? -Number(l.line_total_ex_gst) : 0,
+                          gst_amount:        l.gst_amount != null ? -Number(l.gst_amount) : null,
+                        }))
+                      : data.lines
+                  )}
                   invoiceDefaultAccountCode={data.invoice.resolved_account_code}
                   editable={editingLines !== null}
                   onChange={updateLine}
@@ -3147,6 +3189,21 @@ function StatusPill({ status }: { status: string }) {
   }
   const c = map[status] || T.text3
   return <span style={{display:'inline-block', padding:'3px 9px', borderRadius:3, background:`${c}15`, border:`1px solid ${c}40`, color:c, fontSize:10, fontWeight:500, textTransform:'uppercase', letterSpacing:'0.04em'}}>{status.replace('_',' ')}</span>
+}
+
+// Display helper for credit-note awareness. The DB always stores monetary
+// values as positive magnitudes (subtotal/gst/total/line_total); the
+// is_credit_note flag is the sign indicator. Anywhere we surface those
+// values to the user we run them through this so a credit note shows
+// "-$100" not "$100" — and on save we take Math.abs so the magnitude
+// stays in the column. Returns the input untouched when not a credit
+// note or when the value is null/non-numeric.
+function signedAmount<T>(v: T, isCreditNote: boolean | null | undefined): T {
+  if (!isCreditNote) return v
+  if (v == null) return v
+  const n = Number(v as any)
+  if (!Number.isFinite(n)) return v
+  return (-n) as any
 }
 
 function fmtMoney(n: number | null | undefined): string {
