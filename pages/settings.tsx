@@ -16,8 +16,7 @@ import { ROLE_LABELS, ROLE_DESCRIPTIONS, UserRole, roleHasPermission, PORTAL_TAB
 import { requirePageAuth } from '../lib/authServer'
 import GeneralTab from '../components/settings/GeneralTab'
 import DistributorTab from '../components/settings/DistributorTab'
-import MyobTab from '../components/settings/MyobTab'
-import ConnectionsTab from '../components/settings/ConnectionsTab'
+import ConnectionsHubTab from '../components/settings/ConnectionsHubTab'
 import DataImportsTab from '../components/settings/DataImportsTab'
 
 const T = {
@@ -29,27 +28,28 @@ const T = {
 }
 
 interface PortalUserSSR { id: string; email: string; displayName: string | null; role: UserRole }
-type SettingsTab = 'general'|'vin-codes'|'backfill'|'dist-report'|'myob'|'connections'|'data-imports'|'users'|'audit'|'profile'
+type SettingsTab = 'general'|'vin-codes'|'backfill'|'dist-report'|'connections'|'data-imports'|'users'|'audit'|'profile'
 
 export default function SettingsPage({ user }: { user: PortalUserSSR }) {
   const router = useRouter()
   const isAdmin = user.role === 'admin'
 
   // Read ?tab= from query string for direct linking to a tab.
-  // Legacy: ?tab=groups now redirects to dist-report (with the customers sub-tab).
+  // Legacy: ?tab=groups → dist-report (Customers sub-tab).
+  // Legacy: ?tab=myob   → connections (MYOB sub-tab).
   const qTab = (router.query.tab as string) || 'general'
   const initialTab: SettingsTab =
     qTab === 'general' ? 'general' :
     qTab === 'vin-codes' ? 'vin-codes' :
     qTab === 'backfill' ? 'backfill' :
     qTab === 'dist-report' ? 'dist-report' :
-    qTab === 'myob' ? 'myob' :
     qTab === 'connections' ? 'connections' :
     qTab === 'data-imports' ? 'data-imports' :
     qTab === 'users' ? 'users' :
     qTab === 'audit' ? 'audit' :
     qTab === 'profile' ? 'profile' :
     qTab === 'groups' ? 'dist-report' :
+    qTab === 'myob' ? 'connections' :
     'general'
   const [tab, setTab] = useState<SettingsTab>(initialTab)
 
@@ -58,10 +58,15 @@ export default function SettingsPage({ user }: { user: PortalUserSSR }) {
     qTab === 'groups' ? 'customers' :
     (router.query.sub === 'categories' ? 'categories' : 'customers')
 
+  // Sub-tab for the merged Connections tab. ?tab=myob → 'myob' for backwards
+  // compat; explicit ?sub=health|myob also honoured.
+  const initialConnSub: 'health' | 'myob' =
+    qTab === 'myob' ? 'myob' :
+    (router.query.sub === 'myob' ? 'myob' : 'health')
+
   const tabs: {id: SettingsTab; label: string; adminOnly: boolean}[] = [
     { id: 'general',     label: 'General',            adminOnly: false },
     { id: 'dist-report', label: 'Distributor Report', adminOnly: true },
-    { id: 'myob',        label: 'MYOB Connection',    adminOnly: true },
     { id: 'connections', label: 'Connections',        adminOnly: true },
     { id: 'data-imports',label: 'Data Imports',       adminOnly: true },
     { id: 'vin-codes',   label: 'VIN Codes',          adminOnly: true },
@@ -104,8 +109,7 @@ export default function SettingsPage({ user }: { user: PortalUserSSR }) {
           <div style={{flex:1,overflowY:'auto',padding:20}}>
             {tab === 'general'                && <GeneralTab/>}
             {tab === 'dist-report' && isAdmin && <DistributorTab initialSubTab={initialDistSub}/>}
-            {tab === 'myob'      && isAdmin && <MyobTab/>}
-            {tab === 'connections' && isAdmin && <ConnectionsTab/>}
+            {tab === 'connections' && isAdmin && <ConnectionsHubTab initialSubTab={initialConnSub}/>}
             {tab === 'data-imports' && isAdmin && <DataImportsTab/>}
             {tab === 'vin-codes' && isAdmin && <VinCodesTab/>}
             {tab === 'backfill'  && isAdmin && <BackfillTab/>}
