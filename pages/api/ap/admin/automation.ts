@@ -1,39 +1,39 @@
 // pages/api/ap/admin/automation.ts
 //
-// Service-role endpoint for automated AP push (Claude / mobile shortcut /
-// cron). Bearer-auth via AP_AUTOMATION_API_KEY env var — bypasses the
-// portal user session intentionally so it can be called when the user
-// isn't at a desk.
+// Service-role endpoint for automated AP push + inbox pull (Claude /
+// mobile shortcut / cron). Bearer-auth via AP_AUTOMATION_API_KEY env
+// var — bypasses the portal user session intentionally so it can be
+// called when the user isn't at a desk.
 //
 // GET  /api/ap/admin/automation
 //   → { invoices: [...green+unposted...] }
-//   Useful as a preview before posting.
+//   Preview eligible push targets.
 //
 // POST /api/ap/admin/automation
-//   body: { action: 'push', ids?: string[], dry_run?: boolean }
-//   - ids omitted = push every eligible invoice
-//   - ids provided = filter to those, then re-check eligibility server-side
-//     (a non-eligible id is silently skipped, not pushed)
-//   - dry_run = true → returns what WOULD be pushed without firing
+//   action='push':
+//     body: { action:'push', ids?: string[], dry_run?: boolean }
+//     - ids omitted = push every eligible invoice
+//     - ids provided = filter to those, then re-check eligibility server-side
+//     - dry_run = true → returns what WOULD be pushed without firing
+//     Eligibility (server-side, regardless of caller):
+//       triage_status='green' AND status!='posted' AND myob_bill_uid IS NULL
+//     Pushed rows are stamped with a sentinel UUID in myob_posted_by so
+//     automated bills are identifiable in logs / DB queries.
 //
-// Eligibility (enforced server-side, regardless of what the caller passes):
-//   triage_status = 'green'
-//   AND status != 'posted'
-//   AND myob_bill_uid IS NULL
+//   action='pull_inbox':
+//     body: { action:'pull_inbox', sinceDays?: number }   default 30, max 90
+//     Same Graph→parse→insert→triage pipeline as /api/ap/pull-inbox.
+//     Returns the same JSON shape as that endpoint.
 //
-// Audit:
-//   - myob_posted_by is set to a fixed sentinel UUID so these rows are
-//     identifiable in logs / DB queries.
-//   - Each push attempt and result is console.log'd (visible in Vercel
-//     runtime logs).
-//
-// IMPORTANT: this endpoint can create real MYOB bills. Treat the API key
-// like any other production secret. Rotate via Vercel env vars.
+// IMPORTANT: this endpoint can create real MYOB bills and ingest real
+// emails. Treat the API key like any other production secret. Rotate
+// via Vercel env vars.
 
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
 import { checkBearer } from '../../../../lib/api-key-auth'
 import { createServiceBill } from '../../../../lib/ap-myob-bill'
+import { runInboxPull } from '../../../../lib/ap-inbox-pull'
 
 // Synthetic actor — distinguishable from any real user in audit queries.
 const AUTOMATION_ACTOR_UUID = '00000000-0000-0000-0000-000000000a01'
@@ -106,8 +106,25 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const body = (req.body && typeof req.body === 'object') ? req.body : {}
     const action = String(body.action || '').trim()
 
+    if (action === 'pull_inbox') {
+      try {
+        const result = await runInboxPull({ sinceDays: body.sinceDays })
+        if (!result.ok) {
+          const { status, ...payload } = result
+          console.error(`[ap-automation] pull_inbox failed: ${result.error}`)
+          return res.status(status).json(payload)
+        }
+        console.log(`[ap-automation] pull_inbox: scanned=${result.summary.scanned} ingested=${result.summary.ingested} duplicates=${result.summary.duplicates} failed=${result.summary.failed}`)
+        return res.status(200).json(result)
+      } catch (e: any) {
+        const msg = e?.message || String(e)
+        console.error(`[ap-automation] pull_inbox unexpected error: ${msg}`)
+        return res.status(500).json({ error: msg })
+      }
+    }
+
     if (action !== 'push') {
-      return res.status(400).json({ error: `Unknown action "${action}". Supported: push.` })
+      return res.status(400).json({ error: `Unknown action "${action}". Supported: push, pull_inbox.` })
     }
 
     const requestedIds = Array.isArray(body.ids) ? body.ids.filter((x: any) => typeof x === 'string') as string[] : null
