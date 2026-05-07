@@ -34,6 +34,8 @@ interface Props {
   }
 }
 
+type FreightPackaging = 'box' | 'pallet' | 'other'
+
 interface CatalogueItem {
   id: string
   myob_item_uid: string | null
@@ -47,6 +49,18 @@ interface CatalogueItem {
   is_taxable: boolean
   primary_image_url: string | null
   b2b_visible: boolean
+  barcode: string | null
+  max_order_qty: number | null
+  freight_length_mm: number | null
+  freight_width_mm: number | null
+  freight_height_mm: number | null
+  freight_weight_g: number | null
+  freight_packaging: FreightPackaging | null
+  is_special_order: boolean
+  is_drop_ship: boolean
+  call_for_availability_below_qty: number | null
+  call_for_availability_when_zero: boolean
+  instructions_url: string | null
   last_synced_from_myob_at: string | null
   created_at: string
   updated_at: string
@@ -902,6 +916,104 @@ function EditDrawer({
             </div>
           </Section>
 
+          {/* Identity */}
+          <Section title="Identity">
+            <FieldText
+              label="Barcode"
+              placeholder="EAN/UPC — admin-entered, not from MYOB"
+              value={item.barcode}
+              onSave={async v => { try { await patch({ barcode: v }) } catch {} }}
+            />
+          </Section>
+
+          {/* Stock & availability */}
+          <Section title="Stock & availability" subtitle="How stock is presented to distributors">
+            <BoolRow
+              label="Special order"
+              hint="Extended lead times — supplier-sourced"
+              value={item.is_special_order}
+              onChange={v => { patch({ is_special_order: v }).catch(() => {}) }}
+            />
+            <BoolRow
+              label="Drop ship"
+              hint="Ships direct from supplier"
+              value={item.is_drop_ship}
+              onChange={v => { patch({ is_drop_ship: v }).catch(() => {}) }}
+            />
+            <BoolRow
+              label="Show 'Call for availability' when out of stock"
+              hint="Replaces the 'Out of stock' badge"
+              value={item.call_for_availability_when_zero}
+              onChange={v => { patch({ call_for_availability_when_zero: v }).catch(() => {}) }}
+            />
+            <FieldInt
+              label="Show 'Call for availability' when stock is at or below"
+              hint="Leave blank to use the default Low / In-stock badges"
+              suffix="units"
+              min={0}
+              value={item.call_for_availability_below_qty}
+              onSave={async v => { try { await patch({ call_for_availability_below_qty: v }) } catch {} }}
+            />
+          </Section>
+
+          {/* Order limits */}
+          <Section title="Order limits">
+            <FieldInt
+              label="Max qty per order"
+              hint="Leave blank for no cap"
+              suffix="units"
+              min={1}
+              value={item.max_order_qty}
+              onSave={async v => { try { await patch({ max_order_qty: v }) } catch {} }}
+            />
+          </Section>
+
+          {/* Freight & packaging */}
+          <Section title="Freight & packaging" subtitle="Used by future shipping calculators">
+            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:8}}>
+              <FieldInt
+                label="Length"
+                suffix="mm"
+                value={item.freight_length_mm}
+                onSave={async v => { try { await patch({ freight_length_mm: v }) } catch {} }}
+              />
+              <FieldInt
+                label="Width"
+                suffix="mm"
+                value={item.freight_width_mm}
+                onSave={async v => { try { await patch({ freight_width_mm: v }) } catch {} }}
+              />
+              <FieldInt
+                label="Height"
+                suffix="mm"
+                value={item.freight_height_mm}
+                onSave={async v => { try { await patch({ freight_height_mm: v }) } catch {} }}
+              />
+            </div>
+            <div style={{height:10}}/>
+            <FieldInt
+              label="Weight"
+              suffix="g"
+              value={item.freight_weight_g}
+              onSave={async v => { try { await patch({ freight_weight_g: v }) } catch {} }}
+            />
+            <div style={{height:10}}/>
+            <PackagingSelect
+              value={item.freight_packaging}
+              onChange={async v => { try { await patch({ freight_packaging: v }) } catch {} }}
+            />
+          </Section>
+
+          {/* Resources */}
+          <Section title="Resources">
+            <FieldText
+              label="Instructions URL"
+              placeholder="https://… link to installation/use instructions"
+              value={item.instructions_url}
+              onSave={async v => { try { await patch({ instructions_url: v }) } catch {} }}
+            />
+          </Section>
+
           {/* Read-only MYOB info */}
           <Section title="From MYOB" subtitle="Refreshed on every catalogue sync">
             <KV label="MYOB UID"      value={item.myob_item_uid || '—'} mono/>
@@ -1111,6 +1223,172 @@ function ToggleSwitch({ on, disabled, onChange }: { on: boolean; disabled?: bool
         background:'#fff',transition:'left 0.15s ease',
       }}/>
     </button>
+  )
+}
+
+// Auto-saving text field — saves on blur if value differs from prop. Empty input
+// becomes null on save (keeps the column clean and matches the API behavior).
+function FieldText({
+  label, placeholder, value, onSave,
+}: {
+  label: string
+  placeholder?: string
+  value: string | null
+  onSave: (v: string | null) => Promise<void>
+}) {
+  const [draft, setDraft] = useState<string>(value || '')
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => { setDraft(value || '') }, [value])
+
+  async function commit() {
+    const next = draft.trim() || null
+    if ((next || '') === (value || '')) return
+    setSaving(true); setError(null)
+    try {
+      await onSave(next)
+    } catch (e: any) {
+      setError(e?.message || String(e))
+      setTimeout(() => setError(null), 4000)
+    } finally {
+      setSaving(false)
+    }
+  }
+  return (
+    <label style={{display:'flex',flexDirection:'column',gap:4}}>
+      <span style={{fontSize:11,color:T.text2,fontWeight:500}}>{label}</span>
+      <input
+        type="text"
+        value={draft}
+        placeholder={placeholder}
+        onChange={e => setDraft(e.target.value)}
+        onBlur={commit}
+        onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
+        style={{
+          background:T.bg3,border:`1px solid ${T.border2}`,color:T.text,
+          borderRadius:5,padding:'8px 10px',fontSize:13,outline:'none',fontFamily:'inherit',
+          opacity: saving ? 0.5 : 1,
+        }}
+      />
+      {error && <span style={{fontSize:10,color:T.red}}>{error}</span>}
+    </label>
+  )
+}
+
+// Auto-saving integer field. Empty input → null. Validates min on blur.
+function FieldInt({
+  label, hint, suffix, min, value, onSave,
+}: {
+  label: string
+  hint?: string
+  suffix?: string
+  min?: number
+  value: number | null
+  onSave: (v: number | null) => Promise<void>
+}) {
+  const [draft, setDraft] = useState<string>(value != null ? String(value) : '')
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => { setDraft(value != null ? String(value) : '') }, [value])
+
+  async function commit() {
+    const trimmed = draft.trim()
+    let next: number | null = null
+    if (trimmed !== '') {
+      const n = Number(trimmed)
+      if (!Number.isInteger(n) || n < (min ?? 0)) {
+        setError(`Must be a whole number${min != null ? ` ≥ ${min}` : ''}`)
+        setTimeout(() => setError(null), 4000)
+        setDraft(value != null ? String(value) : '')
+        return
+      }
+      next = n
+    }
+    if (next === value) return
+    setSaving(true); setError(null)
+    try {
+      await onSave(next)
+    } catch (e: any) {
+      setError(e?.message || String(e))
+      setTimeout(() => setError(null), 4000)
+    } finally {
+      setSaving(false)
+    }
+  }
+  return (
+    <label style={{display:'flex',flexDirection:'column',gap:4}}>
+      <span style={{fontSize:11,color:T.text2,fontWeight:500}}>{label}</span>
+      <div style={{display:'flex',alignItems:'center',gap:6}}>
+        <input
+          type="text"
+          inputMode="numeric"
+          value={draft}
+          onChange={e => setDraft(e.target.value.replace(/[^\d]/g, ''))}
+          onBlur={commit}
+          onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
+          placeholder="—"
+          style={{
+            flex:1,
+            background:T.bg3,border:`1px solid ${T.border2}`,color:T.text,
+            borderRadius:5,padding:'8px 10px',fontSize:13,outline:'none',
+            fontFamily:'monospace',
+            opacity: saving ? 0.5 : 1,
+          }}
+        />
+        {suffix && <span style={{fontSize:11,color:T.text3}}>{suffix}</span>}
+      </div>
+      {hint && <span style={{fontSize:10,color:T.text3}}>{hint}</span>}
+      {error && <span style={{fontSize:10,color:T.red}}>{error}</span>}
+    </label>
+  )
+}
+
+function BoolRow({
+  label, hint, value, onChange,
+}: {
+  label: string
+  hint?: string
+  value: boolean
+  onChange: (v: boolean) => void
+}) {
+  return (
+    <div style={{
+      display:'flex',alignItems:'center',justifyContent:'space-between',gap:12,
+      padding:'8px 0',borderBottom:`1px solid ${T.border}`,
+    }}>
+      <div style={{flex:1,minWidth:0}}>
+        <div style={{fontSize:13,color:T.text}}>{label}</div>
+        {hint && <div style={{fontSize:10,color:T.text3,marginTop:2}}>{hint}</div>}
+      </div>
+      <ToggleSwitch on={value} onChange={onChange}/>
+    </div>
+  )
+}
+
+function PackagingSelect({
+  value, onChange,
+}: {
+  value: FreightPackaging | null
+  onChange: (v: FreightPackaging | null) => void
+}) {
+  return (
+    <label style={{display:'flex',flexDirection:'column',gap:4}}>
+      <span style={{fontSize:11,color:T.text2,fontWeight:500}}>Packaging</span>
+      <select
+        value={value || ''}
+        onChange={e => onChange((e.target.value || null) as FreightPackaging | null)}
+        style={{
+          background:T.bg3,border:`1px solid ${T.border2}`,color:T.text,
+          borderRadius:5,padding:'8px 10px',fontSize:13,outline:'none',fontFamily:'inherit',
+        }}>
+        <option value="">— Not specified —</option>
+        <option value="box">Box</option>
+        <option value="pallet">Pallet</option>
+        <option value="other">Other</option>
+      </select>
+    </label>
   )
 }
 
