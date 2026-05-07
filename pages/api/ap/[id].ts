@@ -44,6 +44,9 @@ const PATCHABLE_FIELDS = new Set([
   'myob_company_file',
   'status',
   'rejection_reason',
+  'payment_account_uid',
+  'payment_account_code',
+  'payment_account_name',
 ])
 
 export default withAuth(null, async (req: NextApiRequest, res: NextApiResponse, user) => {

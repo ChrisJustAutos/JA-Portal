@@ -101,6 +101,24 @@ interface InvoiceRow {
   linked_job_match_method: 'auto-po' | 'manual' | null
   linked_job_at: string | null
   po_check_status: 'matched' | 'unmatched' | 'no-po-on-invoice' | null
+  payment_account_uid: string | null
+  payment_account_code: string | null
+  payment_account_name: string | null
+  myob_payment_uid: string | null
+  myob_payment_applied_at: string | null
+  myob_payment_error: string | null
+}
+
+interface PaymentAccount {
+  id: string
+  myob_company_file: 'VPS' | 'JAWS'
+  label: string
+  account_uid: string
+  account_code: string
+  account_name: string
+  is_default_for_capricorn: boolean
+  is_active: boolean
+  sort_order: number
 }
 
 interface LineRow {
@@ -210,6 +228,61 @@ export default function APDetailPage({ user }: PageProps) {
   const [linkBusy, setLinkBusy] = useState(false)
 
   const [presetOpen, setPresetOpen] = useState(false)
+  const [paymentAccounts, setPaymentAccounts] = useState<PaymentAccount[]>([])
+  const [paymentSaving, setPaymentSaving] = useState(false)
+
+  // Fetch the active clearing accounts for this invoice's company file so
+  // the "Mark as paid" dropdown has its options. Refetches when the
+  // company file flips (rare). Failures are silent — empty list just
+  // leaves the dropdown empty.
+  useEffect(() => {
+    if (!data?.invoice.myob_company_file) return
+    const cf = data.invoice.myob_company_file
+    fetch(`/api/ap/payment-accounts?company=${cf}&active=1`, { credentials: 'same-origin' })
+      .then(r => r.ok ? r.json() : { accounts: [] })
+      .then(j => setPaymentAccounts(j.accounts || []))
+      .catch(() => setPaymentAccounts([]))
+  }, [data?.invoice.myob_company_file])
+
+  // Auto-select the Capricorn-default payment account on first view of a
+  // via_capricorn invoice that doesn't yet have a payment account picked.
+  // Best-effort: failures are silent. Re-runs only when the invoice ID
+  // changes or the accounts list arrives.
+  useEffect(() => {
+    if (!data || !canEdit) return
+    const inv = data.invoice
+    if (inv.status === 'posted' || inv.status === 'rejected') return
+    if (inv.payment_account_uid) return
+    if (!inv.via_capricorn) return
+    const cap = paymentAccounts.find(a => a.is_default_for_capricorn)
+    if (!cap) return
+    void setPaymentAccountOnInvoice({
+      uid: cap.account_uid, code: cap.account_code, name: cap.account_name,
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data?.invoice.id, paymentAccounts.length])
+
+  async function setPaymentAccountOnInvoice(acc: { uid: string; code: string; name: string } | null) {
+    if (!id) return
+    setPaymentSaving(true)
+    try {
+      const res = await fetch(`/api/ap/${id}`, {
+        method: 'PATCH', credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          payment_account_uid:  acc?.uid  ?? null,
+          payment_account_code: acc?.code ?? null,
+          payment_account_name: acc?.name ?? null,
+        }),
+      })
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || `HTTP ${res.status}`)
+      await fetchData()
+    } catch (e: any) {
+      setActionMessage({ kind: 'err', text: `Save payment account failed: ${e?.message || e}` })
+    } finally {
+      setPaymentSaving(false)
+    }
+  }
 
   async function fetchData() {
     if (!id) return
@@ -302,7 +375,8 @@ export default function APDetailPage({ user }: PageProps) {
       `Inv #:     ${inv.invoice_number}\n` +
       `Date:      ${inv.invoice_date}\n` +
       (inv.via_capricorn && inv.capricorn_reference ? `Capricorn: ${inv.capricorn_reference}\n` : '') +
-      (inv.linked_job_number ? `Job:       ${inv.linked_job_number}\n` : '')
+      (inv.linked_job_number ? `Job:       ${inv.linked_job_number}\n` : '') +
+      (inv.payment_account_uid ? `Pay from:  ${inv.payment_account_code || ''} ${inv.payment_account_name || ''} (auto-applied)\n` : '')
     if (!confirm(summary)) return
     setApproving(true)
     setActionMessage(null)
@@ -1028,6 +1102,14 @@ export default function APDetailPage({ user }: PageProps) {
                 onPickerQueryChange={setPickerQuery}
                 onPickJob={(jn) => linkToJob(jn)}
                 onUnlink={() => linkToJob(null)}
+              />
+
+              <PaymentSection
+                invoice={data.invoice}
+                accounts={paymentAccounts}
+                canEdit={canEdit && !isTerminal}
+                busy={paymentSaving}
+                onChange={setPaymentAccountOnInvoice}
               />
 
               <MyobMappingSection
@@ -2356,6 +2438,118 @@ function AccountTypeahead({
           </div>
         ))}
       </div>
+    </div>
+  )
+}
+
+// Mark-as-paid card. Tick the checkbox to apply a payment from a clearing
+// account immediately after the bill posts to MYOB. Capricorn-routed
+// invoices auto-tick the configured Capricorn default; user can still
+// flip / change. Shown next to the workshop-job card.
+function PaymentSection({
+  invoice, accounts, canEdit, busy, onChange,
+}: {
+  invoice: InvoiceRow
+  accounts: PaymentAccount[]
+  canEdit: boolean
+  busy: boolean
+  onChange: (acc: { uid: string; code: string; name: string } | null) => void
+}) {
+  const isPosted   = invoice.status === 'posted'
+  const isMarked   = !!invoice.payment_account_uid
+  const cap        = accounts.find(a => a.is_default_for_capricorn)
+  const empty      = accounts.length === 0
+
+  function toggleMarkAsPaid(on: boolean) {
+    if (!on) { onChange(null); return }
+    // Default selection: Capricorn default if invoice is via_capricorn,
+    // otherwise the first active account.
+    const pick = (invoice.via_capricorn && cap) ? cap : accounts[0]
+    if (!pick) return
+    onChange({ uid: pick.account_uid, code: pick.account_code, name: pick.account_name })
+  }
+
+  function pickAccount(uid: string) {
+    const acc = accounts.find(a => a.account_uid === uid)
+    if (!acc) return
+    onChange({ uid: acc.account_uid, code: acc.account_code, name: acc.account_name })
+  }
+
+  return (
+    <div style={{background:T.bg2, border:`1px solid ${T.border}`, borderRadius:10, padding:'14px 16px'}}>
+      <div style={{display:'flex', alignItems:'center', gap:10, marginBottom:10, flexWrap:'wrap'}}>
+        <div style={{fontSize:11, color:T.text3, textTransform:'uppercase', letterSpacing:'0.05em'}}>Payment</div>
+        {invoice.via_capricorn && (
+          <span style={{fontSize:10, padding:'2px 8px', borderRadius:3, background:`${T.amber}20`, color:T.amber, border:`1px solid ${T.amber}40`}}>
+            via Capricorn
+          </span>
+        )}
+        <div style={{flex:1}}/>
+        {invoice.myob_payment_uid && (
+          <span style={{fontSize:11, color:T.green}}>
+            ✅ Payment applied
+            <span style={{fontFamily:'monospace', color:T.text3, marginLeft:6}}>UID {invoice.myob_payment_uid.substring(0, 8)}…</span>
+          </span>
+        )}
+        {invoice.myob_payment_error && !invoice.myob_payment_uid && (
+          <span title={invoice.myob_payment_error} style={{fontSize:11, color:T.red, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', maxWidth:300}}>
+            ⚠️ Payment failed: {invoice.myob_payment_error}
+          </span>
+        )}
+      </div>
+
+      {empty && canEdit && !isPosted && (
+        <div style={{fontSize:11, color:T.text3, lineHeight:1.5}}>
+          No payment clearing accounts configured. Add one in Settings → MYOB Connection → Payment clearing accounts.
+        </div>
+      )}
+
+      {!empty && (
+        <>
+          <label style={{
+            display:'flex', alignItems:'center', gap:8, cursor: canEdit && !isPosted ? 'pointer' : 'not-allowed',
+            opacity: canEdit && !isPosted ? 1 : 0.6,
+          }}>
+            <input
+              type="checkbox"
+              checked={isMarked}
+              disabled={!canEdit || isPosted || busy}
+              onChange={e => toggleMarkAsPaid(e.target.checked)}
+              style={{margin:0}}
+            />
+            <span style={{fontSize:12, color:T.text}}>
+              Mark as paid — apply payment to a clearing account
+            </span>
+          </label>
+
+          {isMarked && (
+            <div style={{marginTop:10, paddingLeft:24}}>
+              <div style={{fontSize:10, color:T.text3, marginBottom:4, textTransform:'uppercase', letterSpacing:'0.05em'}}>
+                Pay from
+              </div>
+              <select
+                value={invoice.payment_account_uid || ''}
+                disabled={!canEdit || isPosted || busy}
+                onChange={e => pickAccount(e.target.value)}
+                style={{
+                  width:'100%', maxWidth:420,
+                  background: T.bg3, border:`1px solid ${T.border2}`, color: T.text,
+                  borderRadius:6, padding:'7px 10px', fontSize:12, outline:'none',
+                  fontFamily:'inherit',
+                }}>
+                {accounts.map(a => (
+                  <option key={a.id} value={a.account_uid}>
+                    {a.label} — {a.account_code} {a.account_name}{a.is_default_for_capricorn ? ' (Cap default)' : ''}
+                  </option>
+                ))}
+              </select>
+              <div style={{fontSize:10, color:T.text3, marginTop:6, lineHeight:1.5}}>
+                When this invoice is posted, a Purchase Payment will immediately apply the full amount from this account, settling the bill.
+              </div>
+            </div>
+          )}
+        </>
+      )}
     </div>
   )
 }

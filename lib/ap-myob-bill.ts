@@ -89,6 +89,7 @@ import { createClient, SupabaseClient } from '@supabase/supabase-js'
 import { getConnection, myobFetch, MyobConnection } from './myob'
 import { CompanyFileLabel } from './ap-myob-lookup'
 import { recordPostedLineHistory } from './ap-line-resolver'
+import { applyBillPayment } from './ap-payment'
 
 const TAX_CODE_TTL_MS = 30 * 24 * 3600 * 1000
 const SETTINGS_ID = 'singleton'
@@ -242,6 +243,12 @@ export interface CreateServiceBillResult {
   attachmentError?: string
   adopted?: boolean
   adoptedBillNumber?: string | null
+  /** When 'applied': payment was applied to a clearing account (e.g. Capricorn)
+   *  immediately after the bill was posted. 'failed' means the bill is in
+   *  MYOB but the payment didn't post — see paymentError for the reason. */
+  paymentStatus?: 'applied' | 'failed' | 'skipped'
+  paymentUid?: string | null
+  paymentError?: string
 }
 
 interface ServiceBillLineBody {
@@ -543,6 +550,39 @@ export async function createServiceBill(
     }
   }
 
+  // ── Step 2.5: apply payment if requested (best effort) ──
+  // When the AP invoice has payment_account_uid set, immediately post a
+  // Purchase/PaymentTxn against the new bill so it doesn't sit on the
+  // payables ledger. Used for Capricorn-routed invoices and similar
+  // where the supplier balance is settled via a clearing account.
+  // Failures are recorded on myob_payment_error but DON'T fail the bill
+  // post — the bill is real in MYOB regardless.
+  let paymentUid: string | null = null
+  let paymentAppliedAt: string | null = null
+  let paymentError: string | null = null
+
+  if (safeBillUid && inv.payment_account_uid && totalAmount > 0) {
+    try {
+      const memo = `Auto-payment ${inv.via_capricorn ? '(Capricorn)' : ''} — ${inv.invoice_number || 'AP'}`.trim()
+      const r = await applyBillPayment({
+        connId:         conn.id,
+        cfId:           conn.company_file_id,
+        date:           inv.invoice_date,
+        fromAccountUid: String(inv.payment_account_uid),
+        supplierUid:    String(inv.resolved_supplier_uid),
+        billUid:        safeBillUid,
+        amount:         totalAmount,
+        memo,
+        performedBy:    postedBy,
+      })
+      paymentUid = r.paymentUid
+      paymentAppliedAt = new Date().toISOString()
+    } catch (e: any) {
+      paymentError = (e?.message || String(e)).substring(0, 500)
+      console.error(`AP ${invoiceId}: bill posted (UID ${safeBillUid}) but payment apply failed: ${paymentError}`)
+    }
+  }
+
   // ── Step 3: persist final state ──
   const postUpdate: Record<string, any> = {
     myob_bill_uid:       safeBillUid || null,
@@ -551,14 +591,17 @@ export async function createServiceBill(
     myob_posted_by:      postedBy,
     myob_post_attempts:  attemptsSoFar,
     status:              'posted',
+    // Payment-side fields (NULL when payment wasn't requested)
+    myob_payment_uid:        paymentUid,
+    myob_payment_applied_at: paymentAppliedAt,
+    myob_payment_error:      paymentError,
   }
-  if (attachmentStatus === 'failed') {
-    postUpdate.myob_post_error = `Bill posted but PDF attachment failed: ${attachmentError}`
-  } else if (attachmentStatus === 'skipped') {
-    postUpdate.myob_post_error = `Bill posted: ${attachmentError}`
-  } else {
-    postUpdate.myob_post_error = null
-  }
+  // Combine bill-side and payment-side errors into the existing column.
+  const noteParts: string[] = []
+  if (attachmentStatus === 'failed')  noteParts.push(`PDF attach failed: ${attachmentError}`)
+  if (attachmentStatus === 'skipped') noteParts.push(`Bill posted: ${attachmentError}`)
+  if (paymentError)                   noteParts.push(`Payment apply failed: ${paymentError}`)
+  postUpdate.myob_post_error = noteParts.length > 0 ? noteParts.join(' · ') : null
 
   await c.from('ap_invoices').update(postUpdate).eq('id', invoiceId)
 
@@ -583,12 +626,19 @@ export async function createServiceBill(
     console.error(`recordPostedLineHistory for ${invoiceId} failed: ${e?.message}`)
   }
 
+  let paymentStatus: 'applied' | 'failed' | 'skipped' = 'skipped'
+  if (paymentUid) paymentStatus = 'applied'
+  else if (paymentError) paymentStatus = 'failed'
+
   return {
     ok: true,
     myobBillUid: safeBillUid || '',
     myobBillRowId,
     attachmentStatus,
     attachmentError,
+    paymentStatus,
+    paymentUid,
+    paymentError: paymentError || undefined,
   }
 }
 

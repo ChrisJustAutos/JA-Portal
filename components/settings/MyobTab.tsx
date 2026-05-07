@@ -7,6 +7,7 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { useRouter } from 'next/router'
+import PaymentAccountsManager from './PaymentAccountsManager'
 
 const T = {
   bg:'#0d0f12', bg2:'#131519', bg3:'#1a1d23', bg4:'#21252d',
@@ -295,6 +296,8 @@ export default function MyobTab() {
           </div>
         )
       })}
+
+      <PaymentAccountsManager />
     </div>
   )
 }
