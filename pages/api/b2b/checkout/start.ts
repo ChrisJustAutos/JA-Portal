@@ -16,6 +16,7 @@ import type { NextApiRequest, NextApiResponse } from 'next'
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
 import { withB2BAuth, B2BUser } from '../../../../lib/b2bAuthServer'
 import { getStockForItems, stockState, getCommittedQtyByCatalogue, availableQty } from '../../../../lib/b2b-stock'
+import { applyPricing, effectiveQtyCap } from '../../../../lib/b2b-pricing'
 import { createCheckoutSession, StripeLineItem } from '../../../../lib/stripe'
 import { assertCheckoutConfigured } from '../../../../lib/b2b-settings'
 
@@ -79,7 +80,9 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, use
       id, qty,
       catalogue:b2b_catalogue!b2b_cart_items_catalogue_id_fkey (
         id, myob_item_uid, sku, name,
-        trade_price_ex_gst, is_taxable, b2b_visible
+        trade_price_ex_gst, is_taxable, b2b_visible,
+        promo_price_ex_gst, promo_starts_at, promo_ends_at, volume_breaks,
+        max_order_qty
       )
     `)
     .eq('cart_id', cart.id)
@@ -87,7 +90,7 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, use
   if (linesErr) return res.status(500).json({ error: linesErr.message })
   if (!lines || lines.length === 0) return res.status(400).json({ error: 'Your cart is empty' })
 
-  // 2. Validate each line + pull current stock
+  // 2. Validate each line + pull current stock + compute effective price
   type RawLine = {
     cartItemId: string
     catalogueId: string
@@ -95,11 +98,14 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, use
     sku: string
     name: string
     qty: number
-    unitPriceEx: number
+    unitPriceEx: number     // effective price (promo + volume break applied)
+    tradePriceEx: number    // for reference / order_lines snapshot
+    maxOrderQty: number | null
     isTaxable: boolean
   }
   const validated: RawLine[] = []
   const issues: string[] = []
+  const now = new Date()
 
   for (const ln of lines) {
     const cat: any = Array.isArray(ln.catalogue) ? ln.catalogue[0] : ln.catalogue
@@ -111,8 +117,8 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, use
       issues.push(`"${cat.name}" is no longer available — please remove it from your cart`)
       continue
     }
-    const unitPrice = Number(cat.trade_price_ex_gst || 0)
-    if (unitPrice <= 0) {
+    const tradePrice = Number(cat.trade_price_ex_gst || 0)
+    if (tradePrice <= 0) {
       issues.push(`"${cat.name}" has no price set — please remove it from your cart`)
       continue
     }
@@ -121,6 +127,18 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, use
       continue
     }
     if (ln.qty <= 0) continue
+    const maxOrderQty = cat.max_order_qty != null ? Number(cat.max_order_qty) : null
+    if (maxOrderQty != null && ln.qty > maxOrderQty) {
+      issues.push(`"${cat.name}" — max ${maxOrderQty} per order (cart has ${ln.qty})`)
+      continue
+    }
+    const px = applyPricing({
+      trade_price_ex_gst: tradePrice,
+      promo_price_ex_gst: cat.promo_price_ex_gst != null ? Number(cat.promo_price_ex_gst) : null,
+      promo_starts_at:    cat.promo_starts_at,
+      promo_ends_at:      cat.promo_ends_at,
+      volume_breaks:      Array.isArray(cat.volume_breaks) ? cat.volume_breaks : [],
+    }, ln.qty, now)
     validated.push({
       cartItemId:   ln.id,
       catalogueId:  cat.id,
@@ -128,7 +146,9 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, use
       sku:          cat.sku,
       name:         cat.name,
       qty:          ln.qty,
-      unitPriceEx:  unitPrice,
+      unitPriceEx:  px.unit_price_ex_gst,
+      tradePriceEx: tradePrice,
+      maxOrderQty,
       isTaxable:    cat.is_taxable !== false,
     })
   }

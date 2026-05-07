@@ -22,7 +22,7 @@ const T = {
   border:'rgba(255,255,255,0.07)', border2:'rgba(255,255,255,0.12)',
   text:'#e8eaf0', text2:'#aab0c0', text3:'#8d93a4',
   blue:'#4f8ef7', teal:'#2dd4bf', green:'#34c77b',
-  amber:'#f5a623', red:'#f04e4e',
+  amber:'#f5a623', red:'#f04e4e', purple:'#a78bfa',
 }
 
 interface Props {
@@ -43,6 +43,10 @@ interface CartLine {
   name: string
   image_url: string | null
   unit_price_ex_gst: number
+  trade_price_ex_gst: number
+  promo_active: boolean
+  volume_break_applied: boolean
+  volume_break_min_qty: number | null
   is_taxable: boolean
   line_subtotal_ex_gst: number
   line_gst: number
@@ -53,6 +57,13 @@ interface CartLine {
   stock_qty_available: number | null
   // Available right now = MYOB qty − in-flight commitments. null = unlimited.
   available_qty: number | null
+  max_order_qty: number | null
+  // min(available_qty, max_order_qty) — used as the stepper ceiling
+  effective_cap: number | null
+  call_for_availability: boolean
+  is_special_order: boolean
+  is_drop_ship: boolean
+  instructions_url: string | null
 }
 
 interface CartTotals {
@@ -169,7 +180,7 @@ export default function B2BCartPage({ b2bUser }: Props) {
 
   const cartItemCount = data ? data.item_count : 0
   const isEmpty = !data || data.lines.length === 0
-  const anyLineOverStock = data ? data.lines.some(l => l.available_qty !== null && l.qty > l.available_qty) : false
+  const anyLineOverCap = data ? data.lines.some(l => l.effective_cap !== null && l.qty > l.effective_cap) : false
 
   return (
     <>
@@ -253,7 +264,7 @@ export default function B2BCartPage({ b2bUser }: Props) {
               onCustomerPoChange={setCustomerPo}
               onCheckout={startCheckout}
               checkoutBusy={checkoutBusy}
-              blockedReason={anyLineOverStock ? 'One or more items exceed available stock — adjust your cart to continue.' : null}
+              blockedReason={anyLineOverCap ? 'One or more items exceed the available qty or per-order max — adjust your cart to continue.' : null}
             />
 
           </div>
@@ -298,43 +309,75 @@ function CartLineRow({
       </div>
 
       <div style={{flex:1,minWidth:0}}>
-        <div style={{fontSize:9,color:T.text3,fontFamily:'monospace',textTransform:'uppercase',letterSpacing:'0.04em'}}>{line.sku}</div>
+        <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:6}}>
+          <div style={{fontSize:9,color:T.text3,fontFamily:'monospace',textTransform:'uppercase',letterSpacing:'0.04em'}}>{line.sku}</div>
+          {line.instructions_url && (
+            <a href={line.instructions_url} target="_blank" rel="noopener noreferrer"
+              style={{fontSize:10,color:T.blue,textDecoration:'none',padding:'1px 6px',borderRadius:4,background:`${T.blue}12`,border:`1px solid ${T.blue}30`}}>
+              📄 PDF
+            </a>
+          )}
+        </div>
         <div style={{fontSize:13,color:T.text,fontWeight:500,marginTop:2}}>{line.name}</div>
         <div style={{display:'flex',alignItems:'center',gap:10,flexWrap:'wrap',marginTop:5}}>
-          <span style={{fontSize:12,color:T.text3}}>${line.unit_price_ex_gst.toFixed(2)} ex GST · each</span>
+          <span style={{fontSize:12,color:T.text,fontWeight:500,fontVariantNumeric:'tabular-nums'}}>
+            ${line.unit_price_ex_gst.toFixed(2)} ex GST · each
+            {(line.promo_active || line.volume_break_applied) && line.unit_price_ex_gst < line.trade_price_ex_gst && (
+              <span style={{fontSize:10,color:T.text3,fontWeight:400,marginLeft:5,textDecoration:'line-through'}}>
+                ${line.trade_price_ex_gst.toFixed(2)}
+              </span>
+            )}
+          </span>
+          {line.promo_active && (
+            <span style={{fontSize:9,fontWeight:600,padding:'1px 5px',borderRadius:6,background:`${T.green}20`,color:T.green,letterSpacing:'0.04em'}}>
+              PROMO
+            </span>
+          )}
+          {line.volume_break_applied && line.volume_break_min_qty != null && (
+            <span style={{fontSize:9,fontWeight:600,padding:'1px 5px',borderRadius:6,background:`${T.green}20`,color:T.green,letterSpacing:'0.04em'}}>
+              {line.volume_break_min_qty}+ PRICE
+            </span>
+          )}
           <span style={{
             display:'inline-block',padding:'1px 7px',borderRadius:8,fontSize:9,fontWeight:500,
-            background:`${stockColor}18`,color:stockColor,
+            background: line.call_for_availability ? `${T.amber}18` : `${stockColor}18`,
+            color: line.call_for_availability ? T.amber : stockColor,
           }}>
-            {line.stock_state === 'out_of_stock'
-              ? 'Out of stock'
-              : line.stock_state === 'low_stock' && line.stock_qty_available != null
-                ? `Low · ${line.stock_qty_available} left`
-                : 'In stock'}
+            {line.call_for_availability
+              ? 'Call for availability'
+              : line.stock_state === 'out_of_stock'
+                ? 'Out of stock'
+                : line.stock_state === 'low_stock' && line.stock_qty_available != null
+                  ? `Low · ${line.stock_qty_available} left`
+                  : 'In stock'}
           </span>
+          {line.is_special_order && <span style={{fontSize:9,fontWeight:500,padding:'1px 6px',borderRadius:6,background:`${T.amber}18`,color:T.amber}}>Special order</span>}
+          {line.is_drop_ship && <span style={{fontSize:9,fontWeight:500,padding:'1px 6px',borderRadius:6,background:`${T.purple}18`,color:T.purple}}>Drop ship</span>}
           {!line.currently_visible && <span style={{fontSize:10,color:T.amber}}>⚠ no longer in catalogue</span>}
           {line.price_changed && <span style={{fontSize:10,color:T.amber}}>⚠ price changed since added</span>}
         </div>
-        {line.available_qty !== null && line.qty > line.available_qty && (
+        {line.effective_cap !== null && line.qty > line.effective_cap && (
           <div style={{
             marginTop:8,padding:'7px 10px',
             background:`${T.red}12`,border:`1px solid ${T.red}40`,borderRadius:6,
             display:'flex',alignItems:'center',justifyContent:'space-between',gap:10,flexWrap:'wrap',
           }}>
             <span style={{fontSize:11,color:T.red,lineHeight:1.4}}>
-              {line.available_qty === 0
-                ? `Stock has dropped — none available right now.`
-                : `Only ${line.available_qty} available right now (your cart has ${line.qty}).`}
+              {line.effective_cap === 0
+                ? `Not available right now.`
+                : line.max_order_qty != null && line.effective_cap === line.max_order_qty
+                  ? `Max ${line.max_order_qty} per order (your cart has ${line.qty}).`
+                  : `Only ${line.effective_cap} available right now (your cart has ${line.qty}).`}
             </span>
-            {line.available_qty === 0 ? (
+            {line.effective_cap === 0 ? (
               <button onClick={onRemove}
                 style={{padding:'4px 10px',borderRadius:5,border:`1px solid ${T.red}`,background:`${T.red}20`,color:T.red,fontSize:11,fontWeight:500,cursor:'pointer',fontFamily:'inherit'}}>
                 Remove
               </button>
             ) : (
-              <button onClick={() => onChangeQty(line.available_qty as number)}
+              <button onClick={() => onChangeQty(line.effective_cap as number)}
                 style={{padding:'4px 10px',borderRadius:5,border:`1px solid ${T.red}`,background:`${T.red}20`,color:T.red,fontSize:11,fontWeight:500,cursor:'pointer',fontFamily:'inherit'}}>
-                Reduce to {line.available_qty}
+                Reduce to {line.effective_cap}
               </button>
             )}
           </div>
@@ -346,7 +389,7 @@ function CartLineRow({
           <button onClick={() => onChangeQty(line.qty - 1)} style={qtyBtn()}>−</button>
           <input
             type="number" value={line.qty} min={0}
-            max={line.available_qty ?? undefined}
+            max={line.effective_cap ?? undefined}
             onChange={e => {
               const v = parseInt(e.target.value || '0', 10)
               if (isFinite(v) && v >= 0) onChangeQty(v)
@@ -358,8 +401,8 @@ function CartLineRow({
               MozAppearance:'textfield' as any,
             }}/>
           <button onClick={() => onChangeQty(line.qty + 1)}
-            disabled={line.available_qty != null && line.qty >= line.available_qty}
-            style={qtyBtn(line.available_qty != null && line.qty >= line.available_qty)}>+</button>
+            disabled={line.effective_cap != null && line.qty >= line.effective_cap}
+            style={qtyBtn(line.effective_cap != null && line.qty >= line.effective_cap)}>+</button>
         </div>
         <div style={{fontSize:13,color:T.text,fontWeight:600,fontVariantNumeric:'tabular-nums'}}>
           ${line.line_subtotal_ex_gst.toFixed(2)}

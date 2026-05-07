@@ -17,7 +17,7 @@ const T = {
   border:'rgba(255,255,255,0.07)', border2:'rgba(255,255,255,0.12)',
   text:'#e8eaf0', text2:'#aab0c0', text3:'#8d93a4',
   blue:'#4f8ef7', teal:'#2dd4bf', green:'#34c77b',
-  amber:'#f5a623', red:'#f04e4e',
+  amber:'#f5a623', red:'#f04e4e', purple:'#a78bfa',
 }
 
 interface Props {
@@ -35,6 +35,11 @@ interface TaxonomyRef {
   name: string
 }
 
+interface VolumeBreak {
+  min_qty: number
+  unit_price_ex_gst: number
+}
+
 interface CatalogueItem {
   id: string
   sku: string
@@ -46,10 +51,19 @@ interface CatalogueItem {
   primary_image_url: string | null
   model: TaxonomyRef | null
   product_type: TaxonomyRef | null
+  unit_price_ex_gst: number
+  promo_active: boolean
+  has_volume_breaks: boolean
+  volume_breaks: VolumeBreak[]
+  is_special_order: boolean
+  is_drop_ship: boolean
+  instructions_url: string | null
+  max_order_qty: number | null
   stock: {
     state: 'in_stock' | 'low_stock' | 'out_of_stock'
     qty_available: number | null
     is_inventoried: boolean
+    call_for_availability: boolean
   }
 }
 
@@ -484,8 +498,19 @@ function CatalogueCard({
   qtyInCart: number
   onSetQty: (qty: number) => void
 }) {
-  const stockColor = stockColorFor(item.stock.state)
-  const canAdd = item.stock.state !== 'out_of_stock'
+  const stockColor = item.stock.call_for_availability
+    ? T.amber
+    : stockColorFor(item.stock.state)
+  const canAdd = item.stock.call_for_availability
+    ? false  // route through "Call for availability" instead of cart
+    : item.stock.state !== 'out_of_stock'
+  // Stepper cap: prefer available stock, then per-item max-order-qty.
+  const stepperMax: number | undefined = (() => {
+    if (!item.stock.is_inventoried) return item.max_order_qty ?? undefined
+    const avail = item.stock.qty_available
+    if (avail == null) return item.max_order_qty ?? undefined
+    return item.max_order_qty != null ? Math.min(avail, item.max_order_qty) : avail
+  })()
 
   return (
     <div style={{
@@ -510,36 +535,91 @@ function CatalogueCard({
 
       {/* Body */}
       <div style={{padding:'12px 14px 14px',display:'flex',flexDirection:'column',gap:6,flex:1}}>
-        <div style={{fontSize:9,color:T.text3,fontFamily:'monospace',textTransform:'uppercase',letterSpacing:'0.04em'}}>{item.sku}</div>
+        <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:6}}>
+          <div style={{fontSize:9,color:T.text3,fontFamily:'monospace',textTransform:'uppercase',letterSpacing:'0.04em'}}>{item.sku}</div>
+          {item.instructions_url && (
+            <a
+              href={item.instructions_url}
+              target="_blank"
+              rel="noopener noreferrer"
+              title="Download instructions PDF"
+              style={{
+                fontSize:10,color:T.blue,textDecoration:'none',
+                padding:'2px 6px',borderRadius:4,
+                background:`${T.blue}12`,border:`1px solid ${T.blue}30`,
+              }}>
+              📄 PDF
+            </a>
+          )}
+        </div>
         <div style={{fontSize:13,color:T.text,fontWeight:500,lineHeight:1.3,minHeight:34}}>{item.name}</div>
 
-        {(item.model || item.product_type) && (
+        {/* Tags + ordering badges */}
+        {(item.model || item.product_type || item.is_special_order || item.is_drop_ship) && (
           <div style={{display:'flex',gap:5,flexWrap:'wrap'}}>
             {item.model && <TagChip color={T.teal}>{item.model.name}</TagChip>}
             {item.product_type && <TagChip color={T.blue}>{item.product_type.name}</TagChip>}
+            {item.is_special_order && <TagChip color={T.amber}>Special order</TagChip>}
+            {item.is_drop_ship && <TagChip color={T.purple}>Drop ship</TagChip>}
           </div>
         )}
 
         {/* Stock + price */}
         <div style={{display:'flex',alignItems:'baseline',justifyContent:'space-between',marginTop:4,gap:8}}>
-          <div style={{fontSize:15,color:T.text,fontWeight:600,fontVariantNumeric:'tabular-nums'}}>
-            ${item.trade_price_ex_gst.toFixed(2)}
-            <span style={{fontSize:9,color:T.text3,fontWeight:400,marginLeft:4}}>ex GST</span>
+          <div style={{fontSize:15,color:T.text,fontWeight:600,fontVariantNumeric:'tabular-nums',display:'flex',alignItems:'baseline',gap:6,flexWrap:'wrap'}}>
+            <span>
+              ${item.unit_price_ex_gst.toFixed(2)}
+              <span style={{fontSize:9,color:T.text3,fontWeight:400,marginLeft:4}}>ex GST</span>
+            </span>
+            {item.promo_active && item.unit_price_ex_gst < item.trade_price_ex_gst && (
+              <span style={{fontSize:11,color:T.text3,fontWeight:400,textDecoration:'line-through'}}>
+                ${item.trade_price_ex_gst.toFixed(2)}
+              </span>
+            )}
+            {item.promo_active && (
+              <span style={{
+                fontSize:9,fontWeight:600,padding:'1px 5px',borderRadius:6,
+                background:`${T.green}20`,color:T.green,letterSpacing:'0.04em',
+              }}>
+                PROMO
+              </span>
+            )}
           </div>
           <span style={{
             display:'inline-block',padding:'2px 8px',borderRadius:8,fontSize:10,fontWeight:500,
             background:`${stockColor}18`,color:stockColor,whiteSpace:'nowrap',
           }}>
-            {stockLabel(item.stock)}
+            {item.stock.call_for_availability
+              ? 'Call for availability'
+              : stockLabel(item.stock)}
           </span>
         </div>
 
+        {/* Volume breaks hint */}
+        {item.has_volume_breaks && (
+          <div style={{fontSize:10,color:T.text3,marginTop:-2}}>
+            Save more on {item.volume_breaks.map(b => `${b.min_qty}+`).join(', ')}
+          </div>
+        )}
+
         {/* Add to cart / qty stepper */}
         <div style={{marginTop:8}}>
-          {qtyInCart > 0 ? (
+          {item.stock.call_for_availability ? (
+            <a
+              href={`mailto:?subject=${encodeURIComponent('Availability enquiry — ' + item.sku)}&body=${encodeURIComponent('Hi,\n\nCould you let me know availability and lead time for ' + item.name + ' (SKU ' + item.sku + ')?\n\nThanks')}`}
+              style={{
+                display:'block',width:'100%',padding:'8px 12px',borderRadius:6,
+                border:`1px solid ${T.amber}`,background:`${T.amber}20`,color:T.amber,
+                fontSize:13,fontWeight:500,fontFamily:'inherit',
+                textAlign:'center',textDecoration:'none',
+                boxSizing:'border-box',
+              }}>
+              Call for availability
+            </a>
+          ) : qtyInCart > 0 ? (
             <QtyStepper
               qty={qtyInCart}
-              max={item.stock.is_inventoried ? (item.stock.qty_available ?? undefined) : undefined}
+              max={stepperMax}
               onChange={onSetQty}
             />
           ) : (

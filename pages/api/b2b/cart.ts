@@ -10,6 +10,7 @@ import type { NextApiRequest, NextApiResponse } from 'next'
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
 import { withB2BAuth, B2BUser } from '../../../lib/b2bAuthServer'
 import { getStockForItems, stockState, getCommittedQtyByCatalogue, availableQty } from '../../../lib/b2b-stock'
+import { applyPricing, effectiveQtyCap } from '../../../lib/b2b-pricing'
 
 let _sb: SupabaseClient | null = null
 function sb(): SupabaseClient {
@@ -42,7 +43,11 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, use
       id, qty, trade_price_ex_gst_at_add, added_at, updated_at,
       catalogue:b2b_catalogue!b2b_cart_items_catalogue_id_fkey (
         id, myob_item_uid, sku, name, primary_image_url,
-        trade_price_ex_gst, is_taxable, b2b_visible
+        trade_price_ex_gst, is_taxable, b2b_visible,
+        promo_price_ex_gst, promo_starts_at, promo_ends_at, volume_breaks,
+        is_special_order, is_drop_ship, instructions_url,
+        max_order_qty,
+        call_for_availability_below_qty, call_for_availability_when_zero
       )
     `)
     .eq('cart_id', cart.id)
@@ -70,18 +75,41 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, use
     console.error('Cart stock fetch failed:', e)
   }
 
+  const now = new Date()
   const lines = (items || []).map((it: any) => {
     const cat = Array.isArray(it.catalogue) ? it.catalogue[0] : it.catalogue
     const stock = cat?.myob_item_uid ? stockMap[cat.myob_item_uid] : null
     const cmt = cat?.id ? (committed[cat.id] || 0) : 0
-    // available_qty = MYOB qty − in-flight commitments. null = unlimited.
-    // Subtract THIS line's own qty when surfacing an "available beyond
-    // what's already in your cart" hint so distributors don't see their
-    // own qty held against them.
+    // available_qty = MYOB qty − in-flight commitments. Subtract THIS
+    // line's own qty so distributors don't see their own qty held
+    // against them.
     const availIncludingMine = availableQty(stock, Math.max(0, cmt - it.qty))
-    const unitPriceEx = Number(cat?.trade_price_ex_gst ?? it.trade_price_ex_gst_at_add ?? 0)
+    const tradePrice = Number(cat?.trade_price_ex_gst ?? it.trade_price_ex_gst_at_add ?? 0)
+    const breaks = Array.isArray(cat?.volume_breaks) ? cat.volume_breaks : []
+    const px = applyPricing({
+      trade_price_ex_gst: tradePrice,
+      promo_price_ex_gst: cat?.promo_price_ex_gst != null ? Number(cat.promo_price_ex_gst) : null,
+      promo_starts_at:    cat?.promo_starts_at ?? null,
+      promo_ends_at:      cat?.promo_ends_at ?? null,
+      volume_breaks:      breaks,
+    }, it.qty, now)
+    const unitPriceEx = px.unit_price_ex_gst
     const lineSubEx = unitPriceEx * it.qty
     const lineGst = (cat?.is_taxable !== false) ? lineSubEx * 0.10 : 0
+
+    // "Call for availability" overrides the normal stock label
+    const inv = stock ? stock.isInventoried : true
+    const qtyAvail = availIncludingMine
+    let callForAvail = false
+    if (inv && cat) {
+      if (cat.call_for_availability_when_zero && (qtyAvail ?? 0) <= 0) callForAvail = true
+      const threshold = cat.call_for_availability_below_qty
+      if (threshold != null && qtyAvail != null && qtyAvail <= threshold) callForAvail = true
+    }
+
+    const maxOrderQty = cat?.max_order_qty != null ? Number(cat.max_order_qty) : null
+    const effectiveCap = effectiveQtyCap(availIncludingMine, maxOrderQty)
+
     return {
       id: it.id,
       qty: it.qty,
@@ -90,6 +118,10 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, use
       name: cat?.name ?? '(item removed)',
       image_url: cat?.primary_image_url ?? null,
       unit_price_ex_gst: unitPriceEx,
+      trade_price_ex_gst: tradePrice,
+      promo_active: px.promo_active,
+      volume_break_applied: px.volume_break_applied,
+      volume_break_min_qty: px.volume_break_min_qty,
       is_taxable: cat?.is_taxable !== false,
       line_subtotal_ex_gst: lineSubEx,
       line_gst: lineGst,
@@ -99,8 +131,14 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, use
       price_changed: cat ? Math.abs(Number(cat.trade_price_ex_gst) - Number(it.trade_price_ex_gst_at_add)) > 0.005 : false,
       stock_state: stockState(stock),
       stock_qty_available: stock ? (stock.isInventoried ? stock.qtyAvailable : null) : null,
-      // True ceiling — null = unlimited / non-inventoried
+      // True ceiling — null = unlimited / non-inventoried + no max-order-qty
       available_qty: availIncludingMine,
+      max_order_qty: maxOrderQty,
+      effective_cap: effectiveCap,
+      call_for_availability: callForAvail,
+      is_special_order: cat?.is_special_order === true,
+      is_drop_ship: cat?.is_drop_ship === true,
+      instructions_url: cat?.instructions_url ?? null,
     }
   })
 

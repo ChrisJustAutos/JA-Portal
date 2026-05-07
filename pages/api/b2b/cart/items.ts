@@ -16,6 +16,7 @@ import type { NextApiRequest, NextApiResponse } from 'next'
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
 import { withB2BAuth, B2BUser } from '../../../../lib/b2bAuthServer'
 import { getStockForItems, getCommittedQtyByCatalogue, availableQty } from '../../../../lib/b2b-stock'
+import { applyPricing, effectiveQtyCap } from '../../../../lib/b2b-pricing'
 
 let _sb: SupabaseClient | null = null
 function sb(): SupabaseClient {
@@ -45,12 +46,26 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, use
   // Verify the catalogue item exists and is visible
   const { data: cat, error: catErr } = await c
     .from('b2b_catalogue')
-    .select('id, myob_item_uid, sku, name, trade_price_ex_gst, b2b_visible')
+    .select(`
+      id, myob_item_uid, sku, name, trade_price_ex_gst, b2b_visible,
+      max_order_qty,
+      promo_price_ex_gst, promo_starts_at, promo_ends_at, volume_breaks
+    `)
     .eq('id', catalogueId)
     .maybeSingle()
   if (catErr) return res.status(500).json({ error: catErr.message })
   if (!cat) return res.status(404).json({ error: 'Catalogue item not found' })
   if (cat.b2b_visible === false) return res.status(403).json({ error: 'Item is not available' })
+
+  // Per-item max-order-qty cap. Independent of stock; enforced even when
+  // we can't fetch stock.
+  const maxOrderQty: number | null = cat.max_order_qty != null ? Number(cat.max_order_qty) : null
+  if (qty > 0 && maxOrderQty != null && qty > maxOrderQty) {
+    return res.status(409).json({
+      error: `"${cat.name}" — max ${maxOrderQty} per order (you asked for ${qty})`,
+      available: maxOrderQty,
+    })
+  }
 
   // Stock cap: cannot commit more than (MYOB qty − in-flight commitments).
   // Skipped for qty=0 (delete) and for non-inventoried items.
@@ -62,12 +77,13 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, use
       ])
       const info = stockMap[cat.myob_item_uid] || null
       const avail = availableQty(info, committed[cat.id] || 0)
-      if (avail !== null && qty > avail) {
+      const cap = effectiveQtyCap(avail, maxOrderQty)
+      if (cap !== null && qty > cap) {
         return res.status(409).json({
-          error: avail === 0
+          error: cap === 0
             ? `"${cat.name}" is out of stock — please contact your account manager for availability`
-            : `"${cat.name}" — only ${avail} available right now (you asked for ${qty})`,
-          available: avail,
+            : `"${cat.name}" — only ${cap} available right now (you asked for ${qty})`,
+          available: cap,
         })
       }
     } catch (e) {
