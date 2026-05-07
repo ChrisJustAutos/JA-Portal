@@ -1,11 +1,11 @@
 // pages/settings.tsx
 // Unified Settings hub. Tabs:
-//   - General      (any user)   — display/behaviour preferences
-//   - Groups       (admin only) — distributor group/alias management
-//   - VIN Codes    (admin only) — VIN prefix → model code rules
-//   - Users        (admin only) — invite, edit role, deactivate, delete
-//   - Audit log    (admin only) — recent user-management events
-//   - Profile      (any user)   — change own display name & password
+//   - General             (any user)   — display/behaviour preferences
+//   - Distributor Report  (admin only) — customers (groups/aliases) + revenue categories
+//   - VIN Codes           (admin only) — VIN prefix → model code rules
+//   - Users               (admin only) — invite, edit role, deactivate, delete
+//   - Audit log           (admin only) — recent user-management events
+//   - Profile             (any user)   — change own display name & password
 
 import { useEffect, useState, useCallback } from 'react'
 import Head from 'next/head'
@@ -15,7 +15,7 @@ import { getSupabase } from '../lib/supabaseClient'
 import { ROLE_LABELS, ROLE_DESCRIPTIONS, UserRole, roleHasPermission, PORTAL_TABS, defaultTabsForRole } from '../lib/permissions'
 import { requirePageAuth } from '../lib/authServer'
 import GeneralTab from '../components/settings/GeneralTab'
-import DistributorReportTab from '../components/settings/DistributorReportTab'
+import DistributorTab from '../components/settings/DistributorTab'
 import MyobTab from '../components/settings/MyobTab'
 import ConnectionsTab from '../components/settings/ConnectionsTab'
 import DataImportsTab from '../components/settings/DataImportsTab'
@@ -29,13 +29,14 @@ const T = {
 }
 
 interface PortalUserSSR { id: string; email: string; displayName: string | null; role: UserRole }
-type SettingsTab = 'general'|'groups'|'vin-codes'|'backfill'|'dist-report'|'myob'|'connections'|'data-imports'|'users'|'audit'|'profile'
+type SettingsTab = 'general'|'vin-codes'|'backfill'|'dist-report'|'myob'|'connections'|'data-imports'|'users'|'audit'|'profile'
 
 export default function SettingsPage({ user }: { user: PortalUserSSR }) {
   const router = useRouter()
   const isAdmin = user.role === 'admin'
 
-  // Read ?tab= from query string for direct linking to a tab
+  // Read ?tab= from query string for direct linking to a tab.
+  // Legacy: ?tab=groups now redirects to dist-report (with the customers sub-tab).
   const qTab = (router.query.tab as string) || 'general'
   const initialTab: SettingsTab =
     qTab === 'general' ? 'general' :
@@ -48,13 +49,17 @@ export default function SettingsPage({ user }: { user: PortalUserSSR }) {
     qTab === 'users' ? 'users' :
     qTab === 'audit' ? 'audit' :
     qTab === 'profile' ? 'profile' :
-    qTab === 'groups' ? 'groups' :
+    qTab === 'groups' ? 'dist-report' :
     'general'
   const [tab, setTab] = useState<SettingsTab>(initialTab)
 
+  // Sub-tab for the merged Distributor Report tab. ?tab=groups → 'customers'.
+  const initialDistSub: 'customers' | 'categories' =
+    qTab === 'groups' ? 'customers' :
+    (router.query.sub === 'categories' ? 'categories' : 'customers')
+
   const tabs: {id: SettingsTab; label: string; adminOnly: boolean}[] = [
     { id: 'general',     label: 'General',            adminOnly: false },
-    { id: 'groups',      label: 'Distributor Groups', adminOnly: true },
     { id: 'dist-report', label: 'Distributor Report', adminOnly: true },
     { id: 'myob',        label: 'MYOB Connection',    adminOnly: true },
     { id: 'connections', label: 'Connections',        adminOnly: true },
@@ -90,7 +95,7 @@ export default function SettingsPage({ user }: { user: PortalUserSSR }) {
           <div style={{display:'flex',gap:2,padding:'0 20px',background:T.bg2,borderBottom:`1px solid ${T.border}`,flexShrink:0}}>
             {visibleTabs.map(t => (
               <button key={t.id} onClick={()=>changeTab(t.id)}
-                style={{fontSize:12,padding:'12px 18px',border:'none',borderBottom:tab===t.id?`2px solid ${T.accent}`:'2px solid transparent',background:'transparent',color:tab===t.id?T.accent:T.text2,cursor:'pointer',fontFamily:'inherit'}}>
+                style={{fontSize:12,padding:'12px 18px',border:'none',borderBottom:tab===t.id?`2px solid var(--accent, ${T.accent})`:'2px solid transparent',background:'transparent',color:tab===t.id?'var(--accent)':T.text2,cursor:'pointer',fontFamily:'inherit'}}>
                 {t.label}
               </button>
             ))}
@@ -98,8 +103,7 @@ export default function SettingsPage({ user }: { user: PortalUserSSR }) {
 
           <div style={{flex:1,overflowY:'auto',padding:20}}>
             {tab === 'general'                && <GeneralTab/>}
-            {tab === 'groups'    && isAdmin && <GroupsTab/>}
-            {tab === 'dist-report' && isAdmin && <DistributorReportTab/>}
+            {tab === 'dist-report' && isAdmin && <DistributorTab initialSubTab={initialDistSub}/>}
             {tab === 'myob'      && isAdmin && <MyobTab/>}
             {tab === 'connections' && isAdmin && <ConnectionsTab/>}
             {tab === 'data-imports' && isAdmin && <DataImportsTab/>}
@@ -590,16 +594,12 @@ function AuditTab() {
 }
 
 // ═══════════════════════════════════════════════════════════════════
-// GROUPS & VIN CODES TABS — thin wrappers around the existing admin UIs
+// VIN CODES & BACKFILL TABS — thin wrappers around the existing admin UIs
 // ═══════════════════════════════════════════════════════════════════
-// These embed the existing /admin/groups and /admin/vin-codes pages as iframes.
-// That keeps the code as-is without extraction/refactor. The nav inside those
-// pages hides when rendered in an iframe (we check window !== top).
-function GroupsTab() {
-  return <div style={{background:T.bg2,border:`1px solid ${T.border}`,borderRadius:10,overflow:'hidden',height:'calc(100vh - 200px)',minHeight:600}}>
-    <iframe src="/admin/groups?embed=1" style={{width:'100%',height:'100%',border:'none',display:'block'}} title="Groups admin"/>
-  </div>
-}
+// These embed the existing /admin/vin-codes and /admin/backfill pages as
+// iframes. That keeps the code as-is without extraction/refactor. The nav
+// inside those pages hides when rendered in an iframe (we check window !== top).
+// (Distributor customers admin lives in DistributorTab and is also iframed.)
 function VinCodesTab() {
   return <div style={{background:T.bg2,border:`1px solid ${T.border}`,borderRadius:10,overflow:'hidden',height:'calc(100vh - 200px)',minHeight:600}}>
     <iframe src="/admin/vin-codes?embed=1" style={{width:'100%',height:'100%',border:'none',display:'block'}} title="VIN codes admin"/>

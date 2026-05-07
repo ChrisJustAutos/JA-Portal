@@ -7,10 +7,29 @@
 // style + <GlobalChatbot /> into your existing return statement rather than
 // replacing the whole file.
 
+import { useEffect } from 'react'
 import type { AppProps } from 'next/app'
 import Head from 'next/head'
-import { PreferencesProvider } from '../lib/preferences'
+import { PreferencesProvider, usePreferences, ACCENT_HEX, THEME_PRESETS } from '../lib/preferences'
 import GlobalChatbot, { ChatContextProvider } from '../components/GlobalChatbot'
+
+// Reads the user's accent_color + theme_preset and exposes them as CSS
+// custom properties on <html>. Components can opt in to the live values via
+// var(--accent) / var(--theme-bg) — existing inline palettes (the local `T = {…}`
+// blocks) keep working unchanged.
+function ThemeVarsBridge() {
+  const { prefs, loading } = usePreferences()
+  useEffect(() => {
+    if (loading || typeof document === 'undefined') return
+    const accent = ACCENT_HEX[prefs.accent_color] || ACCENT_HEX.blue
+    const preset = THEME_PRESETS[prefs.theme_preset] || THEME_PRESETS.midnight
+    const root = document.documentElement
+    root.style.setProperty('--accent', accent)
+    root.style.setProperty('--theme-bg', preset.bg)
+    root.style.setProperty('--theme-bg2', preset.bg2)
+  }, [prefs.accent_color, prefs.theme_preset, loading])
+  return null
+}
 
 export default function App({ Component, pageProps }: AppProps) {
   return (
@@ -23,17 +42,23 @@ export default function App({ Component, pageProps }: AppProps) {
           <meta name="theme-color" content="#0d0f12"/>
           {/* Global dark background — prevents any white flash/leak.
               Every portal page draws on top of this, so even if a component
-              fails to render a background, the user still sees the dark portal. */}
+              fails to render a background, the user still sees the dark portal.
+              `--theme-bg` is overridden per user by ThemeVarsBridge once prefs load. */}
           <style>{`
+            :root {
+              --theme-bg: #0d0f12;
+              --theme-bg2: #131519;
+              --accent: #4f8ef7;
+            }
             html, body {
-              background: #0d0f12;
+              background: var(--theme-bg);
               color: #e8eaf0;
               margin: 0;
               padding: 0;
               -webkit-text-size-adjust: 100%;
             }
             #__next {
-              background: #0d0f12;
+              background: var(--theme-bg);
               min-height: 100vh;
             }
             input[type="date"] {
@@ -47,6 +72,7 @@ export default function App({ Component, pageProps }: AppProps) {
             }
           `}</style>
         </Head>
+        <ThemeVarsBridge/>
         <Component {...pageProps} />
         <GlobalChatbot />
       </ChatContextProvider>

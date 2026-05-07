@@ -9,8 +9,13 @@ import {
   REFRESH_LABELS,
   TIMEZONE_OPTIONS,
   LOCALE_OPTIONS,
+  ACCENT_HEX,
+  ACCENT_LABELS,
+  THEME_PRESETS,
   type DateRangeKey,
   type Theme,
+  type AccentColor,
+  type ThemePreset,
 } from '../../lib/preferences'
 import LogoUpload from './LogoUpload'
 
@@ -102,7 +107,7 @@ export default function GeneralTab() {
         </Field>
 
         <Field
-          label="Theme"
+          label="Theme mode"
           help="Light mode is coming soon."
         >
           <ButtonGroup
@@ -114,6 +119,79 @@ export default function GeneralTab() {
             ]}
             onChange={v => save({ theme: v as Theme }, 'theme')}
           />
+        </Field>
+
+        <Field
+          label="Theme preset"
+          help="Switches the page background tone. Picking a preset also sets a matching default accent — adjust the accent below to taste."
+          saving={saving === 'theme_preset'}
+          saved={savedFlash === 'theme_preset'}
+        >
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            {(Object.keys(THEME_PRESETS) as ThemePreset[]).map(key => {
+              const spec = THEME_PRESETS[key]
+              const active = prefs.theme_preset === key
+              const accentHex = ACCENT_HEX[spec.accent]
+              return (
+                <button key={key}
+                  onClick={() => save({ theme_preset: key, accent_color: spec.accent }, 'theme_preset')}
+                  style={{
+                    padding: 0, borderRadius: 8,
+                    border: `1px solid ${active ? accentHex : T.border2}`,
+                    background: 'transparent', cursor: 'pointer', fontFamily: 'inherit',
+                    width: 132, textAlign: 'left', overflow: 'hidden',
+                    boxShadow: active ? `0 0 0 1px ${accentHex}40` : 'none',
+                  }}>
+                  {/* Preview swatch */}
+                  <div style={{ height: 38, background: spec.bg, position: 'relative' }}>
+                    <div style={{ position: 'absolute', left: 8, top: 8, width: 32, height: 22, background: spec.bg2, borderRadius: 3 }}/>
+                    <div style={{ position: 'absolute', right: 8, bottom: 8, width: 18, height: 6, background: accentHex, borderRadius: 3 }}/>
+                  </div>
+                  <div style={{ padding: '6px 9px', background: T.bg3 }}>
+                    <div style={{ fontSize: 11, color: active ? accentHex : T.text, fontWeight: active ? 600 : 500 }}>
+                      {spec.label}
+                    </div>
+                    <div style={{ fontSize: 9, color: T.text3, marginTop: 1, lineHeight: 1.3 }}>
+                      {spec.description.split(' — ')[1] ?? spec.description}
+                    </div>
+                  </div>
+                </button>
+              )
+            })}
+          </div>
+        </Field>
+
+        <Field
+          label="Accent colour"
+          help="Highlights, active tabs, links and primary buttons."
+          saving={saving === 'accent_color'}
+          saved={savedFlash === 'accent_color'}
+        >
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            {(Object.keys(ACCENT_HEX) as AccentColor[]).map(key => {
+              const hex = ACCENT_HEX[key]
+              const active = prefs.accent_color === key
+              return (
+                <button key={key}
+                  onClick={() => save({ accent_color: key }, 'accent_color')}
+                  title={ACCENT_LABELS[key]}
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: 7,
+                    padding: '6px 10px 6px 6px', borderRadius: 6,
+                    border: `1px solid ${active ? hex : T.border2}`,
+                    background: active ? `${hex}18` : T.bg3,
+                    cursor: 'pointer', fontFamily: 'inherit', fontSize: 12,
+                    color: active ? hex : T.text, fontWeight: active ? 600 : 400,
+                  }}>
+                  <span style={{
+                    display: 'inline-block', width: 16, height: 16, borderRadius: 4,
+                    background: hex, border: `1px solid ${hex}`,
+                  }}/>
+                  {ACCENT_LABELS[key]}
+                </button>
+              )
+            })}
+          </div>
         </Field>
       </SettingsCard>
 

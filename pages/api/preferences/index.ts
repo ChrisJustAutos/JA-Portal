@@ -26,6 +26,8 @@ const PATCHABLE_KEYS = new Set([
   'decimal_precision',
   'locale',
   'theme',
+  'accent_color',
+  'theme_preset',
   'company_logo_url',
   'nav_groups',
 ])

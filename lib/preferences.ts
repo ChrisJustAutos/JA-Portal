@@ -16,6 +16,8 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState, R
 
 export type GstDisplay = 'inc' | 'ex'
 export type Theme = 'dark' | 'light' | 'auto'
+export type AccentColor = 'blue' | 'green' | 'purple' | 'amber' | 'teal'
+export type ThemePreset = 'midnight' | 'ocean' | 'forest' | 'slate'
 export type DateRangeKey =
   | 'this_month' | 'last_month'
   | 'this_quarter'
@@ -38,6 +40,8 @@ export interface UserPreferences {
   decimal_precision: 0 | 2
   locale: string
   theme: Theme
+  accent_color: AccentColor
+  theme_preset: ThemePreset
   company_logo_url: string | null
   nav_groups: NavGroup[]
 }
@@ -50,8 +54,45 @@ export const DEFAULT_PREFERENCES: UserPreferences = {
   decimal_precision: 0,
   locale: 'en-AU',
   theme: 'dark',
+  accent_color: 'blue',
+  theme_preset: 'midnight',
   company_logo_url: null,
   nav_groups: [],
+}
+
+// Hex values for each accent option (used both for swatches in the picker and
+// for CSS variable injection at the document root).
+export const ACCENT_HEX: Record<AccentColor, string> = {
+  blue:   '#4f8ef7',
+  green:  '#34c77b',
+  purple: '#a78bfa',
+  amber:  '#f5a623',
+  teal:   '#2dd4bf',
+}
+
+export const ACCENT_LABELS: Record<AccentColor, string> = {
+  blue:   'Blue',
+  green:  'Green',
+  purple: 'Purple',
+  amber:  'Amber',
+  teal:   'Teal',
+}
+
+// Named full-theme presets. Each pairs a background tone with a default accent
+// so the picker can switch the whole look in one click.
+export interface ThemePresetSpec {
+  label: string
+  description: string
+  bg: string          // page background
+  bg2: string         // panel background
+  accent: AccentColor // default accent for the preset
+}
+
+export const THEME_PRESETS: Record<ThemePreset, ThemePresetSpec> = {
+  midnight: { label: 'Midnight', description: 'Default — near-black with blue accents.',  bg: '#0d0f12', bg2: '#131519', accent: 'blue' },
+  ocean:    { label: 'Ocean',    description: 'Cool deep-blue panels with teal accents.', bg: '#0a1220', bg2: '#101a2c', accent: 'teal' },
+  forest:   { label: 'Forest',   description: 'Muted green-black with green accents.',    bg: '#0c130d', bg2: '#121a14', accent: 'green' },
+  slate:    { label: 'Slate',    description: 'Warm slate with purple accents.',          bg: '#11141a', bg2: '#181c25', accent: 'purple' },
 }
 
 // Human labels for UI (alphabetical locale list kept short; extend if needed)
