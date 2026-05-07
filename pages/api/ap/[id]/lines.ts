@@ -44,7 +44,7 @@ function sb(): SupabaseClient {
 
 const VALID_TAX_CODES = new Set(['GST','FRE','CAP','EXP','GNR','ITS','N-T'])
 const VALID_ACCOUNT_SOURCES = new Set([
-  'unset', 'rule', 'history-strong', 'history-weak', 'manual', 'supplier-default',
+  'unset', 'rule', 'history-strong', 'history-weak', 'keyword-match', 'manual', 'supplier-default',
 ])
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 

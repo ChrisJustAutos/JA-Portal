@@ -2514,7 +2514,7 @@ function LinesTable({
             <th style={{...lh(80), textAlign:'right'}}>Unit ex</th>
             <th style={{...lh(80), textAlign:'right'}}>Total ex</th>
             <th style={lh(56)}>Tax</th>
-            <th style={lh(170)}>Account</th>
+            <th style={lh(220)}>Account</th>
             {editable && <th style={lh(40)}/>}
           </tr>
         </thead>
@@ -2606,23 +2606,42 @@ function AccountCell({
           style={{
             background: T.bg3, border:`1px solid ${T.border2}`,
             color: line.account_code ? T.text : T.text3,
-            padding:'6px 10px', borderRadius:4,
-            fontSize:12, fontFamily: line.account_code ? 'monospace' : 'inherit',
+            padding:'5px 10px', borderRadius:4,
+            fontSize:12, fontFamily:'inherit',
             cursor:'pointer', textAlign:'left',
-            width:'100%', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap',
+            width:'100%', overflow:'hidden',
             minHeight: 32,
+            display:'flex', flexDirection:'column', gap:1,
           }}
         >
-          {line.account_code || `Default${invoiceDefaultAccountCode ? ` (${invoiceDefaultAccountCode})` : ''}`}
+          {line.account_code ? (
+            <>
+              <span style={{fontFamily:'monospace', color:T.text, lineHeight:1.2}}>{line.account_code}</span>
+              {line.account_name && (
+                <span style={{fontSize:10, color:T.text3, lineHeight:1.2, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap'}}>
+                  {line.account_name}
+                </span>
+              )}
+            </>
+          ) : (
+            <span style={{color:T.text3}}>Default{invoiceDefaultAccountCode ? ` (${invoiceDefaultAccountCode})` : ''}</span>
+          )}
         </button>
       ) : (
-        <span title={line.account_name || ''} style={{
-          fontSize:11,
-          color: line.account_code ? T.text : T.text3,
-          fontFamily: line.account_code ? 'monospace' : 'inherit',
-        }}>
-          {line.account_code || `Default${invoiceDefaultAccountCode ? ` (${invoiceDefaultAccountCode})` : ''}`}
-        </span>
+        line.account_code ? (
+          <div style={{display:'flex', flexDirection:'column', gap:1}}>
+            <span style={{fontSize:11, fontFamily:'monospace', color:T.text}}>{line.account_code}</span>
+            {line.account_name && (
+              <span style={{fontSize:10, color:T.text3, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap'}}>
+                {line.account_name}
+              </span>
+            )}
+          </div>
+        ) : (
+          <span style={{fontSize:11, color:T.text3}}>
+            Default{invoiceDefaultAccountCode ? ` (${invoiceDefaultAccountCode})` : ''}
+          </span>
+        )
       )}
 
       {source === 'rule' && <span style={badgeStyle(T.teal)}>🔁 Rule</span>}
@@ -2637,8 +2656,9 @@ function AccountCell({
           padding:'3px 6px', borderRadius:3,
           width:'100%',
         }}>
-          <span style={{flex:1, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', fontFamily:'monospace'}}>
-            💡 {line.suggested_account_code}
+          <span style={{flex:1, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap'}}>
+            💡 <span style={{fontFamily:'monospace'}}>{line.suggested_account_code}</span>
+            {line.suggested_account_name && <span style={{color:T.text3, marginLeft:4}}>{line.suggested_account_name}</span>}
           </span>
           {editable && (
             <button

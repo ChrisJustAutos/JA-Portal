@@ -1,19 +1,26 @@
 // lib/ap-line-resolver.ts
 // Smart per-line account resolver for AP invoices.
 //
-// Two layers:
-//   A) Rules    — manual patterns from ap_line_account_rules
-//                 Highest priority. Supplier-specific rules outrank globals
-//                 at the same priority value.
-//   B) History  — learned from past posted bills in ap_line_account_history
-//                 Auto-applies when ONE account dominates ≥ HISTORY_STRONG_DOMINANCE
-//                 of past usage AND has at least HISTORY_STRONG_MIN_BILLS supporting
-//                 bills. Otherwise the top candidate is surfaced as a UI suggestion
-//                 (suggested_account_*) for one-click application.
+// Three layers:
+//   A) Rules         — manual patterns from ap_line_account_rules
+//                      Highest priority. Supplier-specific rules outrank
+//                      globals at the same priority value.
+//   B) History       — learned from past posted bills in
+//                      ap_line_account_history. Auto-applies when ONE
+//                      account dominates ≥ HISTORY_STRONG_DOMINANCE AND
+//                      has at least HISTORY_STRONG_MIN_BILLS supporting
+//                      bills. Otherwise the top candidate is surfaced as a
+//                      UI suggestion (suggested_account_*).
+//   C) Keyword match — fuzzy match between line description tokens and the
+//                      cached MYOB account names (myob_accounts_cache).
+//                      "freight charge to brisbane" suggests the
+//                      "Freight Inwards" account etc. Always a soft
+//                      suggestion (source='keyword-match'), never auto-
+//                      applied — too easy to misclassify on weak signal.
 //
-// Resolution order: rules first, then history. If neither produces a confident
-// answer, the line is left with account_uid=NULL and falls back to the
-// invoice-level resolved_account_uid at MYOB-post time.
+// Resolution order: rules → history → keyword. First confident answer wins.
+// If nothing produces a hit, the line falls back to invoice-level
+// resolved_account_uid at MYOB-post time.
 //
 // Safety: lines whose account_source = 'manual' are NEVER overwritten by the
 // resolver. Once a human picks an account, that pick is sacred until the human
@@ -24,6 +31,8 @@
 // (lib/ap-myob-bill.ts) on success to learn from each posted bill.
 
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { getCachedAccounts, type CachedAccount } from './myob-accounts-cache'
+import type { CompanyFileLabel } from './ap-myob-lookup'
 
 // ── Confidence thresholds ───────────────────────────────────────────────
 
@@ -38,6 +47,28 @@ const HISTORY_STRONG_DOMINANCE = 0.80
 // are used as ilike anchors when no exact-normalised match exists.
 const FUZZY_TOKEN_MIN_LEN = 4
 
+// Keyword-match tier: minimum description-token length we'll consider for
+// matching against account names. Same threshold as fuzzy lookup — "fre"
+// would match too much.
+const KEYWORD_TOKEN_MIN_LEN = 4
+
+// Keyword-match score threshold. Score = sum of matched token lengths
+// (longer == more specific). 5 = a single 5-char token like "labor" or
+// "freig"-as-prefix; 8+ = strong multi-token match.
+const KEYWORD_MIN_SCORE = 5
+
+// Stop words we never let drive a match — bookkeeping/parts vocabulary
+// that matches too many accounts ("parts", "expense") or just adds noise.
+const KEYWORD_STOPWORDS = new Set([
+  'and', 'the', 'for', 'with', 'from', 'into', 'each', 'unit', 'units',
+  'expense', 'expenses', 'account', 'general', 'parts', 'part', 'item',
+  'items', 'invoice', 'price', 'amount', 'total', 'subtotal', 'gst',
+  'supply', 'supplies', 'qty', 'quantity', 'each', 'kit', 'kits', 'set',
+  'sets', 'assembly', 'complete', 'used', 'goods', 'sold', 'cost', 'sale',
+  'sales', 'service', 'services', 'misc', 'other', 'various', 'extra',
+  'standard', 'special', 'order', 'product', 'inventory',
+])
+
 // ── Types ───────────────────────────────────────────────────────────────
 
 export type AccountSource =
@@ -45,6 +76,7 @@ export type AccountSource =
   | 'rule'              // auto-applied from ap_line_account_rules
   | 'history-strong'    // auto-applied from ap_line_account_history
   | 'history-weak'      // suggestion only (in suggested_*); not applied
+  | 'keyword-match'     // suggestion from token overlap with MYOB account names
   | 'manual'            // user explicitly picked
   | 'supplier-default'  // explicitly accepted invoice-level fallback
 
@@ -159,6 +191,27 @@ export async function resolveLineAccount(
         history_total_count: hist.total,
       }
     }
+  }
+
+  // ── C: keyword match against cached MYOB account names ──
+  // Soft suggestion only — never auto-apply. Failures (cache miss, MYOB
+  // unreachable during refresh) are swallowed so the resolver doesn't
+  // crash the triage pass over a non-critical hint.
+  try {
+    const kw = await tryKeywordMatch(input.myob_company_file as CompanyFileLabel, input.description, input.part_number)
+    if (kw) {
+      return {
+        source: 'keyword-match',
+        account_uid: null,
+        account_code: null,
+        account_name: null,
+        suggested_account_uid: kw.uid,
+        suggested_account_code: kw.displayId,
+        suggested_account_name: kw.name,
+      }
+    }
+  } catch (e: any) {
+    console.error(`[resolver] keyword-match failed: ${e?.message}`)
   }
 
   // ── Nothing applies ──
@@ -396,6 +449,75 @@ function matchesRule(rule: Rule, description: string, partNumber: string | null)
     case 'contains':    return test.includes(pat)
     default:            return false
   }
+}
+
+// ── Internal: keyword match against cached MYOB account names ──────────
+
+function tokenize(text: string): string[] {
+  return (text || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]+/g, ' ')
+    .split(/\s+/)
+    .filter(t => t.length >= KEYWORD_TOKEN_MIN_LEN && !KEYWORD_STOPWORDS.has(t))
+}
+
+/**
+ * Score how well a line description matches an account name.
+ *
+ * Score = sum of matched-token lengths. Longer matches win, since
+ * "exhaust" (7) is a more confident signal than "labor" (5).
+ *
+ * We tokenize the account name itself and intersect with description
+ * tokens — substring matching would let "free" match "freight" and
+ * "freezer" wins for the wrong reason. Token equality is stricter.
+ */
+function scoreAccountForLine(accountName: string, descriptionTokens: Set<string>): number {
+  const accTokens = tokenize(accountName)
+  let score = 0
+  for (const t of accTokens) {
+    if (descriptionTokens.has(t)) score += t.length
+  }
+  return score
+}
+
+async function tryKeywordMatch(
+  companyFile: CompanyFileLabel,
+  description: string,
+  partNumber: string | null,
+): Promise<CachedAccount | null> {
+  // Description + part number are both signals. Part numbers like
+  // "EX1234" don't tokenize, but a description "EXHAUST PIPE" does.
+  const blob = `${description || ''} ${partNumber || ''}`
+  const descTokens = new Set(tokenize(blob))
+  if (descTokens.size === 0) return null
+
+  let accounts: CachedAccount[]
+  try {
+    accounts = await getCachedAccounts(companyFile)
+  } catch (e: any) {
+    console.error(`[resolver] getCachedAccounts(${companyFile}) failed: ${e?.message}`)
+    return null
+  }
+  if (accounts.length === 0) return null
+
+  let best: { acc: CachedAccount; score: number } | null = null
+  for (const acc of accounts) {
+    if (acc.isHeader) continue
+    const score = scoreAccountForLine(acc.name, descTokens)
+    if (score < KEYWORD_MIN_SCORE) continue
+    if (!best || score > best.score) {
+      best = { acc, score }
+    } else if (score === best.score) {
+      // Tiebreaker: prefer the more specific (shorter) account name.
+      // "Freight" beats "Freight and Customs Charges" when both score
+      // identically because the shorter one is less likely to be a
+      // catch-all parent.
+      if (acc.name.length < best.acc.name.length) {
+        best = { acc, score }
+      }
+    }
+  }
+  return best?.acc || null
 }
 
 // ── Internal: history ───────────────────────────────────────────────────
