@@ -42,6 +42,17 @@ export interface ExtractedAPInvoice {
   vendor: {
     name: string | null              // e.g. "Repco" or "GPC Asia Pacific Pty Ltd"
     abn: string | null               // 11-digit ABN if present
+    // Supplier contact + address — used to pre-fill the "Create new MYOB
+    // supplier" form on the AP detail page. All optional; the model returns
+    // null for any field that isn't visible on the PDF.
+    email:    string | null
+    phone:    string | null
+    website:  string | null
+    street:   string | null
+    city:     string | null
+    state:    string | null
+    postcode: string | null
+    country:  string | null
   }
   invoiceNumber: string | null
   invoiceDate: string | null         // ISO YYYY-MM-DD
@@ -142,8 +153,16 @@ Output ONLY a JSON object with this exact shape:
 
 {
   "vendor": {
-    "name": "The actual supplier issuing the invoice (e.g. 'Repco', 'GPC Asia Pacific Pty Ltd', 'BNT'). NOT Capricorn — Capricorn is the billing intermediary, not the vendor. Use the most prominent supplier branding/header. null if unclear.",
-    "abn":  "Supplier's ABN as shown (11 digits, may have spaces). Strip non-digits in output. null if not shown."
+    "name":     "The actual supplier issuing the invoice (e.g. 'Repco', 'GPC Asia Pacific Pty Ltd', 'BNT'). NOT Capricorn — Capricorn is the billing intermediary, not the vendor. Use the most prominent supplier branding/header. null if unclear.",
+    "abn":      "Supplier's ABN as shown (11 digits, may have spaces). Strip non-digits in output. null if not shown.",
+    "email":    "Supplier's contact / accounts email if printed on the invoice (header or footer). null if not shown.",
+    "phone":    "Supplier's primary phone number as printed. Keep formatting roughly as shown. null if not shown.",
+    "website":  "Supplier's website URL as printed (e.g. 'www.repco.com.au'). null if not shown.",
+    "street":   "Supplier's street address — building number + street. Multi-line allowed (use \\n between lines). null if not shown. Use the supplier's own address (header/footer), NOT 'Bill To' / 'Ship To'.",
+    "city":     "Supplier's suburb / city / town. null if not shown.",
+    "state":    "Supplier's state — Australian abbreviation if obvious (QLD, NSW, VIC, WA, SA, TAS, NT, ACT). null if not shown.",
+    "postcode": "Supplier's postcode (4 digits in AU). null if not shown.",
+    "country":  "Supplier's country. Default to 'Australia' for Australian addresses if state/postcode look AU; null only if address truly absent."
   },
   "invoiceNumber": "Invoice number / Tax invoice number as shown. String even if numeric. Required where shown — null only if genuinely absent.",
   "invoiceDate":   "Date the invoice was issued, ISO format YYYY-MM-DD. Convert from DD/MM/YY or DD/MM/YYYY. null if not present.",
@@ -232,8 +251,16 @@ function validateAndNormalise(raw: any): ExtractedAPInvoice {
 
   return {
     vendor: {
-      name: nullableString(vendor.name),
-      abn:  nullableAbn(vendor.abn),
+      name:     nullableString(vendor.name),
+      abn:      nullableAbn(vendor.abn),
+      email:    nullableEmail(vendor.email),
+      phone:    nullableString(vendor.phone),
+      website:  nullableString(vendor.website),
+      street:   nullableString(vendor.street),
+      city:     nullableString(vendor.city),
+      state:    nullableString(vendor.state),
+      postcode: nullableString(vendor.postcode),
+      country:  nullableString(vendor.country),
     },
     invoiceNumber,
     invoiceDate: nullableIsoDate(raw.invoiceDate),
@@ -285,6 +312,15 @@ function nullableAbn(v: any): string | null {
   if (!s) return null
   const digits = s.replace(/\D/g, '')
   return digits.length === 11 ? digits : null
+}
+
+// Drops obviously bad emails (no @, no dot). The model occasionally returns
+// the literal "(email not shown)" or similar — this filter prevents those
+// strings ending up in the supplier card.
+function nullableEmail(v: any): string | null {
+  const s = nullableString(v)
+  if (!s) return null
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s) ? s : null
 }
 
 function nullableIsoDate(v: any): string | null {

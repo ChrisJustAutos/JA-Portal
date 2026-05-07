@@ -60,6 +60,14 @@ interface InvoiceRow {
   received_at: string
   vendor_name_parsed: string | null
   vendor_abn: string | null
+  vendor_email: string | null
+  vendor_phone: string | null
+  vendor_website: string | null
+  vendor_street: string | null
+  vendor_city: string | null
+  vendor_state: string | null
+  vendor_postcode: string | null
+  vendor_country: string | null
   invoice_number: string | null
   invoice_date: string | null
   due_date: string | null
@@ -1473,7 +1481,18 @@ function SupplierPresetForm({
           selected={supplier}
           onSelect={setSupplier}
           initialQuery={(invoice.vendor_name_parsed || '').trim()}
-          createFrom={{ vendorName: invoice.vendor_name_parsed, vendorAbn: invoice.vendor_abn }}
+          createFrom={{
+            vendorName: invoice.vendor_name_parsed,
+            vendorAbn:  invoice.vendor_abn,
+            email:      invoice.vendor_email,
+            phone:      invoice.vendor_phone,
+            website:    invoice.vendor_website,
+            street:     invoice.vendor_street,
+            city:       invoice.vendor_city,
+            state:      invoice.vendor_state,
+            postcode:   invoice.vendor_postcode,
+            country:    invoice.vendor_country,
+          }}
         />
       </FormRow>
 
@@ -1759,10 +1778,23 @@ function SupplierTypeahead({
   onSelect: (s: MyobSupplier | null) => void
   initialQuery?: string
   /** When provided, surfaces a "Create new MYOB supplier" button in the
-   *  picker that POSTs CompanyName + ABN (no bank/payment details) and
+   *  picker that POSTs the supplied fields (no bank/payment details) and
    *  auto-selects the new card. Used on the AP detail page so editors
-   *  can mint a card straight from the parsed invoice header. */
-  createFrom?: { vendorName: string | null; vendorAbn: string | null }
+   *  can mint a card straight from the parsed invoice header. The fields
+   *  beyond name + ABN are pulled from the AI extraction (lib/ap-extraction)
+   *  and pre-fill the inline form. */
+  createFrom?: {
+    vendorName: string | null
+    vendorAbn:  string | null
+    email?:    string | null
+    phone?:    string | null
+    website?:  string | null
+    street?:   string | null
+    city?:     string | null
+    state?:    string | null
+    postcode?: string | null
+    country?:  string | null
+  }
 }) {
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState(initialQuery || '')
@@ -1780,10 +1812,16 @@ function SupplierTypeahead({
 
   function startCreate() {
     setCreateForm({
-      name: (createFrom?.vendorName || query || '').trim(),
-      abn:  (createFrom?.vendorAbn || '').trim(),
-      email: '', phone: '', website: '',
-      street: '', city: '', state: '', postcode: '', country: 'Australia',
+      name:     (createFrom?.vendorName || query || '').trim(),
+      abn:      (createFrom?.vendorAbn || '').trim(),
+      email:    (createFrom?.email    || '').trim(),
+      phone:    (createFrom?.phone    || '').trim(),
+      website:  (createFrom?.website  || '').trim(),
+      street:   (createFrom?.street   || '').trim(),
+      city:     (createFrom?.city     || '').trim(),
+      state:    (createFrom?.state    || '').trim(),
+      postcode: (createFrom?.postcode || '').trim(),
+      country:  (createFrom?.country  || 'Australia').trim(),
     })
     setCreateError(null)
     setCreateOpen(true)
