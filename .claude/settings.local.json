@@ -1,0 +1,25 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__claude_ai_Supabase__execute_sql",
+      "mcp__claude_ai_Supabase__apply_migration",
+      "Bash(npx *)",
+      "Bash(echo \"EXIT=$?\")",
+      "Bash(git add *)",
+      "Bash(git commit *)",
+      "Bash(git push *)",
+      "Bash(git fetch *)",
+      "Bash(git pull *)",
+      "mcp__claude_ai_Vercel__list_teams",
+      "mcp__claude_ai_Vercel__list_projects",
+      "mcp__claude_ai_Vercel__list_deployments",
+      "mcp__claude_ai_Supabase__list_projects",
+      "Bash(gh run *)",
+      "mcp__claude_ai_Vercel__get_deployment",
+      "PowerShell($user = [System.Environment]::GetEnvironmentVariable\\('JA_PORTAL_URL','User'\\); $userKey = [System.Environment]::GetEnvironmentVariable\\('AP_AUTOMATION_API_KEY','User'\\); \"User-level JA_PORTAL_URL: $\\(if\\($user\\){'SET \\('+$user+'\\)'}else{'missing'}\\)\"; \"User-level AP_AUTOMATION_API_KEY: $\\(if\\($userKey\\){'SET \\(len='+$userKey.Length+'\\)'}else{'missing'}\\)\")",
+      "PowerShell(npx tsc --noEmit 2>&1 | Select-Object -First 30)",
+      "PowerShell(npm run *)",
+      "PowerShell(npx tsc --noEmit 2>&1 | Select-Object -First 50)"
+    ]
+  }
+}
