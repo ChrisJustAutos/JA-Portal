@@ -21,7 +21,7 @@ const T = {
   amber:'#f5a623', red:'#f04e4e',
 }
 
-type ActiveNav = 'catalogue' | 'cart' | 'orders' | null
+type ActiveNav = 'catalogue' | 'cart' | 'orders' | 'team' | null
 
 interface Props {
   user: {
@@ -72,6 +72,7 @@ export default function B2BLayout({ user, active = null, children, cartCount }: 
           <NavLink href="/b2b/catalogue" active={active === 'catalogue'}>Catalogue</NavLink>
           <NavLink href="/b2b/cart"      active={active === 'cart'} badge={cartCount}>Cart</NavLink>
           <NavLink href="/b2b/orders"    active={active === 'orders'}>Orders</NavLink>
+          <NavLink href="/b2b/team"      active={active === 'team'}>Team</NavLink>
         </nav>
 
         <div style={{marginLeft:'auto',display:'flex',alignItems:'center',gap:14}}>
