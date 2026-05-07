@@ -44,6 +44,9 @@ interface Distributor {
   primary_contact_phone: string | null
   is_active: boolean
   notes: string | null
+  freight_email: string | null
+  invoice_email: string | null
+  instructions_email: string | null
   ship_line1: string | null
   ship_line2: string | null
   ship_suburb: string | null
@@ -171,6 +174,7 @@ export default function DistributorDetailPage({ user }: Props) {
           {dist && (
             <>
               <DetailsSection dist={dist} onPatch={patchDist}/>
+              <NotificationEmailsSection dist={dist} onPatch={patchDist}/>
               <AddressSection
                 title="Shipping address"
                 kind="ship"
@@ -267,6 +271,72 @@ function DetailsSection({ dist, onPatch }: { dist: Distributor; onPatch: (p: Par
           style={{...input,resize:'vertical'}}/>
       </FormRow>
       <div style={{fontSize:10,color:T.text3,marginTop:6}}>Saves automatically when you click outside a field.</div>
+    </Section>
+  )
+}
+
+// ─── Notification emails ───────────────────────────────────────────────
+// Separate from the login email on primary_contact_email — these only
+// receive outbound notifications (freight updates, invoices, instructions).
+function NotificationEmailsSection({
+  dist, onPatch,
+}: {
+  dist: Distributor
+  onPatch: (p: Partial<Distributor>) => Promise<void>
+}) {
+  const [freight, setFreight] = useState(dist.freight_email || '')
+  const [invoice, setInvoice] = useState(dist.invoice_email || '')
+  const [instructions, setInstructions] = useState(dist.instructions_email || '')
+  const [savingFlash, setSavingFlash] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    setFreight(dist.freight_email || '')
+    setInvoice(dist.invoice_email || '')
+    setInstructions(dist.instructions_email || '')
+  }, [dist.id, dist.freight_email, dist.invoice_email, dist.instructions_email])
+
+  async function commit(field: keyof Distributor, raw: string, label: string) {
+    setError(null)
+    const value = raw.trim().toLowerCase() || null
+    if (value === (dist as any)[field]) return
+    try {
+      await onPatch({ [field]: value } as any)
+      setSavingFlash(label)
+      setTimeout(() => setSavingFlash(null), 1500)
+    } catch (e: any) {
+      setError(e?.message || String(e))
+    }
+  }
+
+  return (
+    <Section title="Notification emails" subtitle="Where outbound emails go (separate from the login contact)" flash={savingFlash}>
+      {error && (
+        <div style={{padding:8,background:`${T.red}15`,border:`1px solid ${T.red}40`,borderRadius:5,color:T.red,fontSize:12,marginBottom:10}}>
+          {error}
+        </div>
+      )}
+      <FormGrid>
+        <FormRow label="Freight / shipping" hint="Tracking + dispatch notifications">
+          <input type="email" value={freight} onChange={e => setFreight(e.target.value)}
+            onBlur={() => commit('freight_email', freight, 'Freight email')}
+            placeholder="freight@example.com"
+            style={input}/>
+        </FormRow>
+        <FormRow label="Invoices" hint="Invoices + credit notes">
+          <input type="email" value={invoice} onChange={e => setInvoice(e.target.value)}
+            onBlur={() => commit('invoice_email', invoice, 'Invoice email')}
+            placeholder="accounts@example.com"
+            style={input}/>
+        </FormRow>
+        <FormRow label="Instructions / docs" hint="Product install + use instructions">
+          <input type="email" value={instructions} onChange={e => setInstructions(e.target.value)}
+            onBlur={() => commit('instructions_email', instructions, 'Instructions email')}
+            placeholder="warehouse@example.com"
+            style={input}/>
+        </FormRow>
+      </FormGrid>
+      <div style={{fontSize:10,color:T.text3,marginTop:6}}>Leave blank to fall back to the primary contact email.</div>
     </Section>
   )
 }

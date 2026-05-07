@@ -34,6 +34,13 @@ const EDITABLE = [
   'ship_line1', 'ship_line2', 'ship_suburb', 'ship_state', 'ship_postcode', 'ship_country',
   // Billing address
   'bill_line1', 'bill_line2', 'bill_suburb', 'bill_state', 'bill_postcode', 'bill_country',
+  // Outbound notification emails (separate from the login email on
+  // primary_contact_email — these are purely "send mail to here" addresses)
+  'freight_email', 'invoice_email', 'instructions_email',
+] as const
+
+const NOTIFICATION_EMAIL_FIELDS = [
+  'freight_email', 'invoice_email', 'instructions_email',
 ] as const
 
 const ADDRESS_FIELDS = [
@@ -110,6 +117,16 @@ async function handlePatch(id: string, req: NextApiRequest, res: NextApiResponse
   }
   if ('primary_contact_email' in update && update.primary_contact_email != null) {
     update.primary_contact_email = String(update.primary_contact_email).trim().toLowerCase() || null
+  }
+  for (const k of NOTIFICATION_EMAIL_FIELDS) {
+    if (k in update) {
+      if (update[k] === null) continue
+      if (typeof update[k] !== 'string') {
+        return res.status(400).json({ error: `${k} must be string or null` })
+      }
+      const v = update[k].trim().toLowerCase()
+      update[k] = v === '' ? null : v
+    }
   }
   if ('myob_linked_customer_uids' in update) {
     if (!Array.isArray(update.myob_linked_customer_uids)) {
