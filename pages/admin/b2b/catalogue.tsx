@@ -36,6 +36,11 @@ interface Props {
 
 type FreightPackaging = 'box' | 'pallet' | 'other'
 
+interface VolumeBreak {
+  min_qty: number
+  unit_price_ex_gst: number
+}
+
 interface CatalogueItem {
   id: string
   myob_item_uid: string | null
@@ -61,6 +66,11 @@ interface CatalogueItem {
   call_for_availability_below_qty: number | null
   call_for_availability_when_zero: boolean
   instructions_url: string | null
+  cost_price_ex_gst: number | null
+  volume_breaks: VolumeBreak[]
+  promo_price_ex_gst: number | null
+  promo_starts_at: string | null
+  promo_ends_at: string | null
   last_synced_from_myob_at: string | null
   created_at: string
   updated_at: string
@@ -896,6 +906,9 @@ function EditDrawer({
             )}
           </Section>
 
+          {/* Pricing */}
+          <PricingSection item={item} onPatch={async p => { try { await patch(p) } catch {} }}/>
+
           {/* Tags (model + product type) */}
           <Section title="Tags" subtitle="Used to group products on the distributor catalogue">
             <TaxonomySelect
@@ -1223,6 +1236,320 @@ function ToggleSwitch({ on, disabled, onChange }: { on: boolean; disabled?: bool
         background:'#fff',transition:'left 0.15s ease',
       }}/>
     </button>
+  )
+}
+
+// ─── Pricing section (drawer) ──────────────────────────────────────────
+function PricingSection({
+  item, onPatch,
+}: {
+  item: CatalogueItem
+  onPatch: (p: Partial<CatalogueItem>) => Promise<void>
+}) {
+  const margin =
+    item.cost_price_ex_gst != null && item.trade_price_ex_gst > 0
+      ? ((item.trade_price_ex_gst - item.cost_price_ex_gst) / item.trade_price_ex_gst) * 100
+      : null
+
+  // Promo "active right now" indicator
+  const now = Date.now()
+  const promoActive =
+    item.promo_price_ex_gst != null &&
+    (item.promo_starts_at == null || Date.parse(item.promo_starts_at) <= now) &&
+    (item.promo_ends_at   == null || Date.parse(item.promo_ends_at)   >  now)
+
+  return (
+    <Section title="Pricing" subtitle="Cost is admin-only. Volume breaks and promos apply on the distributor side.">
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10,marginBottom:8}}>
+        <FieldNumber
+          label="Cost (ex GST)"
+          prefix="$"
+          value={item.cost_price_ex_gst}
+          onSave={v => onPatch({ cost_price_ex_gst: v })}
+        />
+        <FieldNumber
+          label="Trade (ex GST)"
+          prefix="$"
+          value={item.trade_price_ex_gst}
+          required
+          onSave={v => { if (v != null) onPatch({ trade_price_ex_gst: v }) }}
+        />
+      </div>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'5px 0',borderBottom:`1px solid ${T.border}`,fontSize:13}}>
+        <span style={{color:T.text3}}>Margin</span>
+        <span style={{color: margin == null ? T.text3 : (margin > 30 ? T.green : margin > 10 ? T.amber : T.red),fontFamily:'monospace',fontSize:12}}>
+          {margin == null ? '—' : `${margin.toFixed(1)}%`}
+        </span>
+      </div>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'5px 0',borderBottom:`1px solid ${T.border}`,fontSize:13,marginBottom:14}}>
+        <span style={{color:T.text3}}>RRP (ex GST)</span>
+        <span style={{color:T.text2,fontFamily:'monospace',fontSize:11}}>{fmtMoney(item.rrp_ex_gst)}</span>
+      </div>
+
+      {/* Promo */}
+      <div style={{fontSize:11,color:T.text2,fontWeight:500,marginBottom:6,display:'flex',alignItems:'center',gap:8}}>
+        Promo price
+        {promoActive && (
+          <span style={{
+            display:'inline-block',padding:'1px 7px',borderRadius:8,fontSize:9,
+            background:`${T.green}18`,color:T.green,
+          }}>
+            ACTIVE
+          </span>
+        )}
+      </div>
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:8,marginBottom:14}}>
+        <FieldNumber
+          label="Price"
+          prefix="$"
+          value={item.promo_price_ex_gst}
+          onSave={v => onPatch({ promo_price_ex_gst: v })}
+        />
+        <FieldDateTime
+          label="Starts"
+          value={item.promo_starts_at}
+          onSave={v => onPatch({ promo_starts_at: v })}
+        />
+        <FieldDateTime
+          label="Ends"
+          value={item.promo_ends_at}
+          onSave={v => onPatch({ promo_ends_at: v })}
+        />
+      </div>
+
+      {/* Volume breaks */}
+      <VolumeBreaksEditor
+        breaks={item.volume_breaks || []}
+        tradePrice={item.trade_price_ex_gst}
+        onSave={breaks => onPatch({ volume_breaks: breaks })}
+      />
+    </Section>
+  )
+}
+
+// ─── Pricing helpers ───────────────────────────────────────────────────
+// Decimal-friendly auto-save number field. NULL when blank.
+function FieldNumber({
+  label, prefix, value, required, onSave,
+}: {
+  label: string
+  prefix?: string
+  value: number | null
+  required?: boolean
+  onSave: (v: number | null) => Promise<void> | void
+}) {
+  const [draft, setDraft] = useState<string>(value != null ? value.toFixed(2) : '')
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  useEffect(() => { setDraft(value != null ? value.toFixed(2) : '') }, [value])
+  async function commit() {
+    const trimmed = draft.trim()
+    let next: number | null = null
+    if (trimmed !== '') {
+      const n = Number(trimmed)
+      if (!isFinite(n) || n < 0) {
+        setError('Must be a non-negative number')
+        setTimeout(() => setError(null), 3500)
+        setDraft(value != null ? value.toFixed(2) : '')
+        return
+      }
+      next = Math.round(n * 100) / 100
+    } else if (required) {
+      setError('Required')
+      setTimeout(() => setError(null), 3500)
+      setDraft(value != null ? value.toFixed(2) : '')
+      return
+    }
+    if (next === value) return
+    setSaving(true); setError(null)
+    try { await onSave(next) } catch (e: any) {
+      setError(e?.message || String(e))
+      setTimeout(() => setError(null), 4000)
+    } finally { setSaving(false) }
+  }
+  return (
+    <label style={{display:'flex',flexDirection:'column',gap:4}}>
+      <span style={{fontSize:11,color:T.text2,fontWeight:500}}>{label}</span>
+      <div style={{display:'flex',alignItems:'center',gap:4,
+        background:T.bg3,border:`1px solid ${T.border2}`,borderRadius:5,
+        padding:'2px 6px 2px 8px',
+      }}>
+        {prefix && <span style={{fontSize:11,color:T.text3}}>{prefix}</span>}
+        <input
+          type="text"
+          inputMode="decimal"
+          value={draft}
+          placeholder="—"
+          onChange={e => setDraft(e.target.value.replace(/[^\d.]/g, ''))}
+          onBlur={commit}
+          onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
+          style={{
+            flex:1,minWidth:0,
+            background:'transparent',border:'none',color:T.text,
+            padding:'6px 0',fontSize:13,outline:'none',fontFamily:'monospace',
+            opacity: saving ? 0.5 : 1,
+          }}
+        />
+      </div>
+      {error && <span style={{fontSize:10,color:T.red}}>{error}</span>}
+    </label>
+  )
+}
+
+function FieldDateTime({
+  label, value, onSave,
+}: {
+  label: string
+  value: string | null
+  onSave: (v: string | null) => Promise<void> | void
+}) {
+  // Convert ISO → datetime-local format (YYYY-MM-DDTHH:mm) and back
+  const toLocal = (iso: string | null): string => {
+    if (!iso) return ''
+    const d = new Date(iso)
+    if (isNaN(d.getTime())) return ''
+    const pad = (n: number) => String(n).padStart(2, '0')
+    return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
+  }
+  const [draft, setDraft] = useState<string>(toLocal(value))
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  useEffect(() => { setDraft(toLocal(value)) }, [value])
+  async function commit() {
+    const next = draft ? new Date(draft).toISOString() : null
+    if ((next || null) === (value || null)) return
+    setSaving(true); setError(null)
+    try { await onSave(next) } catch (e: any) {
+      setError(e?.message || String(e))
+      setTimeout(() => setError(null), 4000)
+    } finally { setSaving(false) }
+  }
+  return (
+    <label style={{display:'flex',flexDirection:'column',gap:4}}>
+      <span style={{fontSize:11,color:T.text2,fontWeight:500}}>{label}</span>
+      <input
+        type="datetime-local"
+        value={draft}
+        onChange={e => setDraft(e.target.value)}
+        onBlur={commit}
+        style={{
+          background:T.bg3,border:`1px solid ${T.border2}`,color:T.text,
+          borderRadius:5,padding:'7px 8px',fontSize:12,outline:'none',fontFamily:'inherit',
+          opacity: saving ? 0.5 : 1,
+        }}
+      />
+      {error && <span style={{fontSize:10,color:T.red}}>{error}</span>}
+    </label>
+  )
+}
+
+function VolumeBreaksEditor({
+  breaks, tradePrice, onSave,
+}: {
+  breaks: VolumeBreak[]
+  tradePrice: number
+  onSave: (next: VolumeBreak[]) => Promise<void> | void
+}) {
+  const [rows, setRows] = useState<VolumeBreak[]>(breaks)
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => { setRows(breaks) }, [breaks])
+
+  function patchRow(i: number, p: Partial<VolumeBreak>) {
+    setRows(prev => prev.map((r, idx) => idx === i ? { ...r, ...p } : r))
+  }
+  function removeRow(i: number) {
+    const next = rows.filter((_, idx) => idx !== i)
+    setRows(next)
+    commit(next)
+  }
+  function addRow() {
+    const lastQty = rows.length > 0 ? rows[rows.length - 1].min_qty : 1
+    setRows([...rows, { min_qty: lastQty + 10, unit_price_ex_gst: tradePrice }])
+  }
+  async function commit(next: VolumeBreak[] = rows) {
+    // Skip if any row is invalid; surface error
+    for (const r of next) {
+      if (!Number.isInteger(r.min_qty) || r.min_qty < 1) {
+        setError('Each break needs a qty ≥ 1')
+        setTimeout(() => setError(null), 3500)
+        return
+      }
+      if (!isFinite(r.unit_price_ex_gst) || r.unit_price_ex_gst < 0) {
+        setError('Each break needs a non-negative price')
+        setTimeout(() => setError(null), 3500)
+        return
+      }
+    }
+    const sorted = [...next].sort((a, b) => a.min_qty - b.min_qty)
+    setSaving(true); setError(null)
+    try { await onSave(sorted) } catch (e: any) {
+      setError(e?.message || String(e))
+      setTimeout(() => setError(null), 4000)
+    } finally { setSaving(false) }
+  }
+
+  return (
+    <div>
+      <div style={{fontSize:11,color:T.text2,fontWeight:500,marginBottom:6}}>Volume breaks</div>
+      {rows.length === 0 && (
+        <div style={{fontSize:11,color:T.text3,padding:'6px 0'}}>None — distributor pays trade price at every qty.</div>
+      )}
+      {rows.map((r, i) => (
+        <div key={i} style={{display:'grid',gridTemplateColumns:'auto 1fr 1fr auto',gap:8,alignItems:'end',marginBottom:6}}>
+          <span style={{fontSize:11,color:T.text3,paddingBottom:8}}>Qty ≥</span>
+          <input
+            type="text"
+            inputMode="numeric"
+            value={String(r.min_qty)}
+            onChange={e => patchRow(i, { min_qty: parseInt(e.target.value.replace(/[^\d]/g, '') || '0', 10) })}
+            onBlur={() => commit()}
+            style={{
+              background:T.bg3,border:`1px solid ${T.border2}`,color:T.text,
+              borderRadius:5,padding:'7px 8px',fontSize:13,outline:'none',fontFamily:'monospace',
+            }}
+          />
+          <div style={{display:'flex',alignItems:'center',gap:4,
+            background:T.bg3,border:`1px solid ${T.border2}`,borderRadius:5,padding:'2px 6px 2px 8px',
+          }}>
+            <span style={{fontSize:11,color:T.text3}}>$</span>
+            <input
+              type="text"
+              inputMode="decimal"
+              value={r.unit_price_ex_gst.toFixed(2)}
+              onChange={e => patchRow(i, { unit_price_ex_gst: Number(e.target.value.replace(/[^\d.]/g, '')) || 0 })}
+              onBlur={() => commit()}
+              style={{
+                flex:1,minWidth:0,
+                background:'transparent',border:'none',color:T.text,
+                padding:'6px 0',fontSize:13,outline:'none',fontFamily:'monospace',
+              }}
+            />
+          </div>
+          <button
+            onClick={() => removeRow(i)}
+            disabled={saving}
+            style={{
+              background:'transparent',border:'none',color:T.text3,
+              padding:'6px 8px',fontSize:14,cursor:'pointer',fontFamily:'inherit',
+            }}>
+            ×
+          </button>
+        </div>
+      ))}
+      <button
+        onClick={addRow}
+        disabled={saving}
+        style={{
+          padding:'6px 12px',borderRadius:5,marginTop:4,
+          border:`1px dashed ${T.border2}`,background:'transparent',color:T.text2,
+          fontSize:11,cursor:'pointer',fontFamily:'inherit',
+        }}>
+        + Add break
+      </button>
+      {error && <div style={{fontSize:10,color:T.red,marginTop:6}}>{error}</div>}
+    </div>
   )
 }
 

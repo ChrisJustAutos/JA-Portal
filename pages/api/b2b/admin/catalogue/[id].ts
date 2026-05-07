@@ -57,6 +57,11 @@ const EDITABLE_FIELDS = [
   'call_for_availability_below_qty',
   'call_for_availability_when_zero',
   'instructions_url',
+  'cost_price_ex_gst',
+  'volume_breaks',
+  'promo_price_ex_gst',
+  'promo_starts_at',
+  'promo_ends_at',
 ] as const
 
 const NULLABLE_STRING_FIELDS = ['description', 'primary_image_url', 'barcode', 'instructions_url'] as const
@@ -65,6 +70,8 @@ const NULLABLE_INT_FIELDS = [
   'freight_length_mm', 'freight_width_mm', 'freight_height_mm', 'freight_weight_g',
   'call_for_availability_below_qty',
 ] as const
+const NULLABLE_NUMERIC_FIELDS = ['cost_price_ex_gst', 'promo_price_ex_gst'] as const
+const NULLABLE_TIMESTAMP_FIELDS = ['promo_starts_at', 'promo_ends_at'] as const
 const BOOLEAN_FIELDS = ['b2b_visible', 'is_special_order', 'is_drop_ship', 'call_for_availability_when_zero'] as const
 const PACKAGING_VALUES = ['box', 'pallet', 'other'] as const
 
@@ -140,6 +147,67 @@ export default withAuth('edit:b2b_catalogue', async (req: NextApiRequest, res: N
       update.freight_packaging = null
     } else if (typeof v !== 'string' || !(PACKAGING_VALUES as readonly string[]).includes(v)) {
       return res.status(400).json({ error: `freight_packaging must be one of ${PACKAGING_VALUES.join(', ')} or null` })
+    }
+  }
+  for (const k of NULLABLE_NUMERIC_FIELDS) {
+    if (k in update) {
+      const raw = update[k]
+      if (raw === null || raw === '') {
+        update[k] = null
+      } else {
+        const v = Number(raw)
+        if (!isFinite(v) || v < 0) {
+          return res.status(400).json({ error: `${k} must be a non-negative number or null` })
+        }
+        update[k] = v
+      }
+    }
+  }
+  for (const k of NULLABLE_TIMESTAMP_FIELDS) {
+    if (k in update) {
+      const raw = update[k]
+      if (raw === null || raw === '') {
+        update[k] = null
+      } else if (typeof raw !== 'string' || isNaN(Date.parse(raw))) {
+        return res.status(400).json({ error: `${k} must be an ISO timestamp string or null` })
+      }
+    }
+  }
+  if ('volume_breaks' in update) {
+    const arr = update.volume_breaks
+    if (!Array.isArray(arr)) {
+      return res.status(400).json({ error: 'volume_breaks must be an array' })
+    }
+    const cleaned: { min_qty: number; unit_price_ex_gst: number }[] = []
+    for (const row of arr) {
+      if (!row || typeof row !== 'object') {
+        return res.status(400).json({ error: 'each volume_breaks row must be an object' })
+      }
+      const min = Number((row as any).min_qty)
+      const px  = Number((row as any).unit_price_ex_gst)
+      if (!Number.isInteger(min) || min < 1) {
+        return res.status(400).json({ error: 'volume_breaks[].min_qty must be an integer >= 1' })
+      }
+      if (!isFinite(px) || px < 0) {
+        return res.status(400).json({ error: 'volume_breaks[].unit_price_ex_gst must be a non-negative number' })
+      }
+      cleaned.push({ min_qty: min, unit_price_ex_gst: px })
+    }
+    cleaned.sort((a, b) => a.min_qty - b.min_qty)
+    // Reject duplicate min_qty rows
+    for (let i = 1; i < cleaned.length; i++) {
+      if (cleaned[i].min_qty === cleaned[i - 1].min_qty) {
+        return res.status(400).json({ error: `Duplicate volume_breaks for min_qty=${cleaned[i].min_qty}` })
+      }
+    }
+    update.volume_breaks = cleaned
+  }
+  // Cross-field check: promo window must be ordered if both ends supplied
+  if ('promo_starts_at' in update || 'promo_ends_at' in update) {
+    const s = update.promo_starts_at
+    const e = update.promo_ends_at
+    if (s && e && Date.parse(s) >= Date.parse(e)) {
+      return res.status(400).json({ error: 'promo_starts_at must be before promo_ends_at' })
     }
   }
 
