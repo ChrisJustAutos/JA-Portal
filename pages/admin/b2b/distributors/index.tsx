@@ -416,7 +416,7 @@ function CustomerSearch({ onPick }: { onPick: (c: MyobCustomer) => void }) {
         onChange={e => setQ(e.target.value)}
         autoFocus
         style={{
-          width:'100%',
+          width:'100%',boxSizing:'border-box',
           background:T.bg3,border:`1px solid ${T.border2}`,color:T.text,
           borderRadius:6,padding:'10px 12px',fontSize:13,outline:'none',fontFamily:'inherit',
           marginBottom:10,
@@ -480,7 +480,7 @@ function FormRow({ label, hint, children }: { label: string; hint?: string; chil
 }
 
 const input: React.CSSProperties = {
-  width:'100%',
+  width:'100%',boxSizing:'border-box',
   background:T.bg3,border:`1px solid ${T.border}`,color:T.text,
   borderRadius:5,padding:'8px 11px',fontSize:13,outline:'none',fontFamily:'inherit',
 }

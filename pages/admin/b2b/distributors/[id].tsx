@@ -954,7 +954,7 @@ function ToggleSwitch({ on, disabled, onChange }: { on: boolean; disabled?: bool
 }
 
 const input: React.CSSProperties = {
-  width:'100%',
+  width:'100%',boxSizing:'border-box',
   background:T.bg3,border:`1px solid ${T.border}`,color:T.text,
   borderRadius:5,padding:'8px 11px',fontSize:13,outline:'none',fontFamily:'inherit',
 }
