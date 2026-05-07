@@ -616,21 +616,19 @@ export async function applyTriageAndResolve(invoiceId: string): Promise<void> {
   }
 
   // Persistent override: when triage_override='green', force the effective
-  // status. Surface the original natural status + reasons in INFO: lines so
-  // the audit trail is visible on the invoice. Override does NOT bypass RED:
-  // a hard error (missing total, dup-of, etc.) cannot be silenced.
+  // status. The amber banner on the AP detail page already shows the
+  // override reason + timestamp, so the chip list collapses to a single
+  // 'INFO:overridden' marker — no need to enumerate the natural yellow
+  // reasons here. Override does NOT bypass RED: a hard error (missing
+  // total, dup-of, etc.) cannot be silenced.
   let effectiveStatus = triage.triageStatus
   let effectiveReasons = triage.triageReasons
   if (inv.triage_override === 'green' && triage.triageStatus !== 'red') {
-    const reasonText = (inv.triage_override_reason || '').replace(/[\r\n]+/g, ' ').trim()
-    const overrideTrail = [
-      `INFO:override-applied:was-${triage.triageStatus}`,
-      ...(reasonText ? [`INFO:override-reason:${reasonText}`] : []),
-      ...triage.triageReasons.filter(r => r.startsWith('YELLOW:')).map(r => 'INFO:overridden-' + r.toLowerCase()),
-      ...triage.triageReasons.filter(r => !r.startsWith('YELLOW:')),
-    ]
+    // Keep any non-status INFOs (e.g. auto-correct notes) so they still
+    // surface; drop YELLOW chips since the override supersedes them.
+    const preserved = triage.triageReasons.filter(r => !r.startsWith('YELLOW:') && !r.startsWith('RED:'))
     effectiveStatus = 'green'
-    effectiveReasons = overrideTrail
+    effectiveReasons = ['INFO:overridden', ...preserved]
   }
 
   await c

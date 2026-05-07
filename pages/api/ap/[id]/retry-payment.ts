@@ -81,10 +81,21 @@ export default withAuth('edit:supplier_invoices', async (req: NextApiRequest, re
       performedBy:    user.id,
     })
 
+    // Strip any "Payment apply failed: …" note that the original bill post
+    // appended to myob_post_error so the AP detail header doesn't keep
+    // showing "Payment failed" after a successful retry. Other notes in
+    // that column (PDF attach issues etc.) are preserved.
+    const postErrParts = String(inv.myob_post_error || '')
+      .split(' · ')
+      .map(s => s.trim())
+      .filter(s => s && !s.toLowerCase().startsWith('payment apply failed'))
+    const cleanedPostError = postErrParts.length > 0 ? postErrParts.join(' · ') : null
+
     await c.from('ap_invoices').update({
       myob_payment_uid:        r.paymentUid,
       myob_payment_applied_at: new Date().toISOString(),
       myob_payment_error:      null,
+      myob_post_error:         cleanedPostError,
     }).eq('id', id)
 
     return res.status(200).json({ ok: true, paymentUid: r.paymentUid })
