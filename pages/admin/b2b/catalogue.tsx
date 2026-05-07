@@ -1497,42 +1497,57 @@ function PricingSection({
       </div>
 
       {/* Promo */}
-      <div style={{fontSize:11,color:T.text2,fontWeight:500,marginBottom:6,display:'flex',alignItems:'center',gap:8}}>
-        Promo price
-        {promoActive && (
+      <Collapsible
+        title="Promo price"
+        badge={promoActive ? (
           <span style={{
             display:'inline-block',padding:'1px 7px',borderRadius:8,fontSize:9,
             background:`${T.green}18`,color:T.green,
           }}>
             ACTIVE
           </span>
-        )}
-      </div>
-      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:8,marginBottom:14}}>
-        <FieldNumber
-          label="Price"
-          prefix="$"
-          value={item.promo_price_ex_gst}
-          onSave={v => onPatch({ promo_price_ex_gst: v })}
-        />
-        <FieldDateTime
-          label="Starts"
-          value={item.promo_starts_at}
-          onSave={v => onPatch({ promo_starts_at: v })}
-        />
-        <FieldDateTime
-          label="Ends"
-          value={item.promo_ends_at}
-          onSave={v => onPatch({ promo_ends_at: v })}
-        />
-      </div>
+        ) : null}
+        summary={item.promo_price_ex_gst != null ? `$${item.promo_price_ex_gst.toFixed(2)}` : '—'}
+        defaultOpen={
+          item.promo_price_ex_gst != null ||
+          item.promo_starts_at != null ||
+          item.promo_ends_at != null
+        }
+      >
+        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:8}}>
+          <FieldNumber
+            label="Price"
+            prefix="$"
+            value={item.promo_price_ex_gst}
+            onSave={v => onPatch({ promo_price_ex_gst: v })}
+          />
+          <FieldDateTime
+            label="Starts"
+            value={item.promo_starts_at}
+            onSave={v => onPatch({ promo_starts_at: v })}
+          />
+          <FieldDateTime
+            label="Ends"
+            value={item.promo_ends_at}
+            onSave={v => onPatch({ promo_ends_at: v })}
+          />
+        </div>
+      </Collapsible>
 
       {/* Volume breaks */}
-      <VolumeBreaksEditor
-        breaks={item.volume_breaks || []}
-        tradePrice={item.trade_price_ex_gst}
-        onSave={breaks => onPatch({ volume_breaks: breaks })}
-      />
+      <Collapsible
+        title="Volume breaks"
+        summary={(item.volume_breaks?.length || 0) > 0
+          ? `${item.volume_breaks!.length} break${item.volume_breaks!.length === 1 ? '' : 's'}`
+          : '—'}
+        defaultOpen={(item.volume_breaks?.length || 0) > 0}
+      >
+        <VolumeBreaksEditor
+          breaks={item.volume_breaks || []}
+          tradePrice={item.trade_price_ex_gst}
+          onSave={breaks => onPatch({ volume_breaks: breaks })}
+        />
+      </Collapsible>
     </Section>
   )
 }
@@ -1702,7 +1717,6 @@ function VolumeBreaksEditor({
 
   return (
     <div>
-      <div style={{fontSize:11,color:T.text2,fontWeight:500,marginBottom:6}}>Volume breaks</div>
       {rows.length === 0 && (
         <div style={{fontSize:11,color:T.text3,padding:'6px 0'}}>None — distributor pays trade price at every qty.</div>
       )}
@@ -1937,6 +1951,45 @@ function Section({ title, subtitle, children }: { title: string; subtitle?: stri
         {subtitle && <span style={{textTransform:'none',letterSpacing:0,marginLeft:8,color:T.text3}}>· {subtitle}</span>}
       </div>
       {children}
+    </div>
+  )
+}
+
+// Collapsible sub-block within a Section. Header is a click target; when
+// closed, an optional `summary` chip shows current state at a glance.
+function Collapsible({
+  title, badge, summary, defaultOpen, children,
+}: {
+  title: string
+  badge?: React.ReactNode
+  summary?: string
+  defaultOpen?: boolean
+  children: React.ReactNode
+}) {
+  const [open, setOpen] = useState(!!defaultOpen)
+  return (
+    <div style={{marginBottom:14}}>
+      <button
+        type="button"
+        onClick={() => setOpen(o => !o)}
+        style={{
+          width:'100%',display:'flex',alignItems:'center',gap:8,
+          background:'transparent',border:'none',color:T.text2,fontWeight:500,
+          fontSize:11,padding:'4px 0',cursor:'pointer',fontFamily:'inherit',
+          textAlign:'left',
+        }}
+      >
+        <span style={{
+          color:T.text3,fontSize:9,width:9,display:'inline-block',
+          transition:'transform 0.15s',transform: open ? 'rotate(90deg)' : 'rotate(0deg)',
+        }}>▶</span>
+        <span>{title}</span>
+        {badge}
+        {!open && summary && (
+          <span style={{marginLeft:'auto',color:T.text3,fontSize:11,fontFamily:'monospace'}}>{summary}</span>
+        )}
+      </button>
+      {open && <div style={{paddingTop:8}}>{children}</div>}
     </div>
   )
 }
