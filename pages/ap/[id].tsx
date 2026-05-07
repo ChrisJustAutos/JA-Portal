@@ -239,8 +239,8 @@ export default function APDetailPage({ user }: PageProps) {
   async function toggleCreditNote() {
     if (!id || !data) return
     const next = !data.invoice.is_credit_note
-    if (next && !confirm('Mark this invoice as a CREDIT NOTE? Approve & Post will be blocked — credits must be handled in MYOB directly.')) return
-    if (!next && !confirm('Remove credit note flag? The invoice will be treated as a regular bill again.')) return
+    if (next && !confirm('Mark this invoice as a CREDIT NOTE?\n\nWhen approved, it will post to MYOB as a Bill with negative totals and (if "Mark as refunded" is ticked) auto-credit the clearing account as a Pay Refund.')) return
+    if (!next && !confirm('Remove credit note flag? The invoice will be treated as a regular bill again — Approve will post a positive Bill and Pay Bills.')) return
     setTogglingCredit(true)
     setActionMessage(null)
     try {
@@ -893,6 +893,29 @@ export default function APDetailPage({ user }: PageProps) {
           {data && canEdit && !isMobile && (
             <>
               <span style={{flex:1}}/>
+              {!isTerminal && (
+                <button
+                  onClick={toggleCreditNote}
+                  disabled={togglingCredit}
+                  title={data.invoice.is_credit_note
+                    ? 'Currently flagged as a credit note. Click to unmark.'
+                    : 'Flag this document as a credit note. When approved it posts to MYOB as a negative Bill and (if Mark-as-refunded is ticked) auto-credits the clearing account.'}
+                  style={{
+                    background: data.invoice.is_credit_note ? `${T.red}20` : 'transparent',
+                    border:`1px solid ${data.invoice.is_credit_note ? T.red : T.border2}`,
+                    color: data.invoice.is_credit_note ? T.red : T.text2,
+                    padding:'5px 11px', borderRadius:5,
+                    fontSize:11, fontFamily:'inherit', fontWeight: data.invoice.is_credit_note ? 600 : 400,
+                    cursor: togglingCredit ? 'wait' : 'pointer',
+                    opacity: togglingCredit ? 0.6 : 1,
+                  }}>
+                  {togglingCredit
+                    ? '…'
+                    : data.invoice.is_credit_note
+                      ? '✓ Credit note'
+                      : 'Mark as credit note'}
+                </button>
+              )}
               <button
                 onClick={refreshInvoice}
                 disabled={refreshing}
@@ -975,41 +998,13 @@ export default function APDetailPage({ user }: PageProps) {
                   <StatusPill status={data.invoice.status}/>
                   {data.invoice.is_credit_note && (
                     <span style={{
-                      fontSize:11, padding:'3px 6px 3px 10px', borderRadius:4,
+                      fontSize:11, padding:'3px 10px', borderRadius:4,
                       background:`${T.red}15`, color:T.red,
                       border:`1px solid ${T.red}40`, fontWeight:600,
                       letterSpacing:'0.04em',
-                      display:'inline-flex', alignItems:'center', gap:6,
                     }}>
                       CREDIT NOTE
-                      {canEdit && !isTerminal && (
-                        <button
-                          onClick={toggleCreditNote}
-                          disabled={togglingCredit}
-                          title="Remove credit note flag"
-                          style={{
-                            background:'transparent', border:'none', color:T.red,
-                            fontSize:11, cursor: togglingCredit ? 'wait' : 'pointer',
-                            padding:'0 2px', fontFamily:'inherit', opacity: togglingCredit ? 0.5 : 1,
-                          }}>
-                          ✕
-                        </button>
-                      )}
                     </span>
-                  )}
-                  {!data.invoice.is_credit_note && canEdit && !isTerminal && (
-                    <button
-                      onClick={toggleCreditNote}
-                      disabled={togglingCredit}
-                      title="Flag this document as a credit note (blocks Approve & Post)"
-                      style={{
-                        background:'transparent', border:`1px solid ${T.border2}`,
-                        color: T.text3, fontSize:10,
-                        padding:'2px 8px', borderRadius:3, cursor: togglingCredit ? 'wait' : 'pointer',
-                        fontFamily:'inherit', opacity: togglingCredit ? 0.5 : 1,
-                      }}>
-                      {togglingCredit ? '…' : 'Mark as credit note'}
-                    </button>
                   )}
                   <span style={{fontSize:11, color:T.text3}}>
                     Parse: {data.invoice.parse_confidence || 'unknown'}
