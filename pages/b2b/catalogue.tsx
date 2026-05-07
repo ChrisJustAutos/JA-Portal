@@ -54,6 +54,9 @@ interface CatalogueItem {
 }
 
 type GroupBy = 'none' | 'model' | 'product_type'
+type TileStep = 'model' | 'type' | 'browse'
+
+const TILE_COLORS = ['#4f8ef7', '#2dd4bf', '#34c77b', '#f5a623', '#a78bfa', '#ec4899', '#06b6d4']
 
 interface CartLine {
   id: string
@@ -71,6 +74,7 @@ export default function B2BCataloguePage({ b2bUser }: Props) {
   const [groupBy, setGroupBy] = useState<GroupBy>('none')
   const [modelFilter, setModelFilter] = useState<string>('all')         // 'all' | 'none' | <id>
   const [productTypeFilter, setProductTypeFilter] = useState<string>('all')
+  const [tileStep, setTileStep] = useState<TileStep>('model')
 
   async function loadAll() {
     setLoading(true)
@@ -122,6 +126,66 @@ export default function B2BCataloguePage({ b2bUser }: Props) {
     for (const it of items) if (it.product_type) m.set(it.product_type.id, it.product_type.name)
     return Array.from(m.entries()).map(([id, name]) => ({ id, name })).sort((a, b) => a.name.localeCompare(b.name))
   }, [items])
+
+  // Items in scope for the type-step / browse-step (after model has been chosen).
+  const itemsAfterModel = useMemo(() => {
+    if (modelFilter === 'all')  return items
+    if (modelFilter === 'none') return items.filter(i => !i.model)
+    return items.filter(i => i.model?.id === modelFilter)
+  }, [items, modelFilter])
+
+  // Tile data for the model step
+  const modelTiles = useMemo(() => modelOptions.map(o => ({
+    id: o.id,
+    name: o.name,
+    count: items.filter(i => i.model?.id === o.id).length,
+  })), [modelOptions, items])
+  const noModelCount = useMemo(() => items.filter(i => !i.model).length, [items])
+
+  // Tile data for the type step (scoped to chosen model)
+  const typeTiles = useMemo(() => {
+    const m = new Map<string, { id: string; name: string; count: number }>()
+    for (const it of itemsAfterModel) {
+      if (!it.product_type) continue
+      const cur = m.get(it.product_type.id)
+      if (cur) cur.count++
+      else m.set(it.product_type.id, { id: it.product_type.id, name: it.product_type.name, count: 1 })
+    }
+    return Array.from(m.values()).sort((a, b) => a.name.localeCompare(b.name))
+  }, [itemsAfterModel])
+  const noTypeCount = useMemo(() => itemsAfterModel.filter(i => !i.product_type).length, [itemsAfterModel])
+
+  // Resolve the current model/type label for breadcrumb purposes
+  const modelLabel =
+    modelFilter === 'all'  ? 'All models'
+    : modelFilter === 'none' ? 'Other'
+    : modelOptions.find(o => o.id === modelFilter)?.name || 'Model'
+  const typeLabel =
+    productTypeFilter === 'all'  ? 'All types'
+    : productTypeFilter === 'none' ? 'Other'
+    : productTypeOptions.find(o => o.id === productTypeFilter)?.name || 'Type'
+
+  // Navigation helpers
+  function pickModel(id: string | 'all' | 'none') {
+    setModelFilter(id)
+    setProductTypeFilter('all')
+    setTileStep('type')
+  }
+  function pickType(id: string | 'all' | 'none') {
+    setProductTypeFilter(id)
+    setTileStep('browse')
+  }
+  function backToModelStep() {
+    setModelFilter('all')
+    setProductTypeFilter('all')
+    setSearch('')
+    setTileStep('model')
+  }
+  function backToTypeStep() {
+    setProductTypeFilter('all')
+    setSearch('')
+    setTileStep('type')
+  }
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase()
@@ -201,57 +265,43 @@ export default function B2BCataloguePage({ b2bUser }: Props) {
       <Head><title>Catalogue · Just Autos B2B</title></Head>
       <B2BLayout user={b2bUser} active="catalogue" cartCount={cartItemCount}>
 
-        <header style={{display:'flex',alignItems:'flex-end',justifyContent:'space-between',gap:16,flexWrap:'wrap',marginBottom:18}}>
-          <div>
-            <h1 style={{fontSize:22,fontWeight:600,margin:0,letterSpacing:'-0.01em'}}>Catalogue</h1>
-            <div style={{fontSize:13,color:T.text3,marginTop:4}}>
-              Browse products and add to cart. Pricing is ex GST.
+        {/* Header — title always; on browse step, breadcrumb sits below */}
+        <header style={{marginBottom:18}}>
+          <div style={{display:'flex',alignItems:'flex-end',justifyContent:'space-between',gap:16,flexWrap:'wrap'}}>
+            <div>
+              <h1 style={{fontSize:22,fontWeight:600,margin:0,letterSpacing:'-0.01em'}}>Catalogue</h1>
+              <div style={{fontSize:13,color:T.text3,marginTop:4}}>
+                {tileStep === 'model'  && 'Choose a model to begin. Pricing is ex GST.'}
+                {tileStep === 'type'   && `Choose a product type within ${modelLabel}.`}
+                {tileStep === 'browse' && 'Add to cart. Pricing is ex GST.'}
+              </div>
             </div>
+            {tileStep === 'browse' && (
+              <button onClick={backToModelStep}
+                style={{padding:'7px 12px',borderRadius:5,border:`1px solid ${T.border2}`,background:'transparent',color:T.text2,fontSize:12,cursor:'pointer',fontFamily:'inherit'}}>
+                ← Start over
+              </button>
+            )}
+            {tileStep === 'type' && (
+              <button onClick={backToModelStep}
+                style={{padding:'7px 12px',borderRadius:5,border:`1px solid ${T.border2}`,background:'transparent',color:T.text2,fontSize:12,cursor:'pointer',fontFamily:'inherit'}}>
+                ← Choose different model
+              </button>
+            )}
           </div>
-          <div style={{display:'flex',gap:10,alignItems:'center',flexWrap:'wrap'}}>
-            <input
-              type="text"
-              placeholder="Search by name or SKU…"
-              value={search}
-              onChange={e => setSearch(e.target.value)}
-              style={{
-                width:280,
-                background:T.bg2,border:`1px solid ${T.border2}`,color:T.text,
-                borderRadius:6,padding:'8px 12px',fontSize:13,outline:'none',fontFamily:'inherit',
-              }}
-            />
-            <FilterSelect
-              label="Model"
-              value={modelFilter}
-              options={modelOptions}
-              onChange={setModelFilter}
-            />
-            <FilterSelect
-              label="Type"
-              value={productTypeFilter}
-              options={productTypeOptions}
-              onChange={setProductTypeFilter}
-            />
-            <div style={{display:'flex',alignItems:'center',gap:6}}>
-              <span style={{fontSize:12,color:T.text3}}>Group by</span>
-              <select
-                value={groupBy}
-                onChange={e => setGroupBy(e.target.value as GroupBy)}
-                style={{
-                  background:T.bg2,border:`1px solid ${T.border2}`,color:T.text,
-                  borderRadius:6,padding:'7px 10px',fontSize:12,outline:'none',fontFamily:'inherit',
-                  cursor:'pointer',
-                }}>
-                <option value="none">None</option>
-                <option value="model">Model</option>
-                <option value="product_type">Product type</option>
-              </select>
+
+          {/* Breadcrumb (browse step) */}
+          {tileStep === 'browse' && (
+            <div style={{display:'flex',alignItems:'center',gap:8,marginTop:10,fontSize:12,color:T.text3,flexWrap:'wrap'}}>
+              <button onClick={backToModelStep}
+                style={crumbStyle(true)}>Models</button>
+              <span>›</span>
+              <button onClick={backToTypeStep}
+                style={crumbStyle(true)}>{modelLabel}</button>
+              <span>›</span>
+              <span style={crumbStyle(false)}>{typeLabel}</span>
             </div>
-            <button onClick={loadAll} disabled={loading}
-              style={{padding:'7px 12px',borderRadius:5,border:`1px solid ${T.border2}`,background:'transparent',color:T.text2,fontSize:12,cursor:loading?'wait':'pointer',fontFamily:'inherit'}}>
-              {loading ? '…' : '↻'}
-            </button>
-          </div>
+          )}
         </header>
 
         {error && (
@@ -266,60 +316,159 @@ export default function B2BCataloguePage({ b2bUser }: Props) {
           </div>
         )}
 
-        {!loading && filtered.length === 0 && (
+        {/* Loading shell while items haven't arrived yet */}
+        {loading && items.length === 0 && (
           <div style={{padding:36,textAlign:'center',color:T.text3,fontSize:13,background:T.bg2,border:`1px solid ${T.border}`,borderRadius:10}}>
-            {items.length === 0 ? 'No products available yet — check back soon.' : 'No products match your search.'}
+            Loading…
           </div>
         )}
 
-        {/* Card grid (flat or grouped) */}
-        {grouped ? (
-          <div style={{display:'flex',flexDirection:'column',gap:24}}>
-            {grouped.map(g => (
-              <section key={g.key}>
-                <h2 style={{
-                  fontSize:13,fontWeight:600,margin:'0 0 10px',color:T.text2,
-                  textTransform:'uppercase',letterSpacing:'0.06em',
-                  paddingBottom:6,borderBottom:`1px solid ${T.border2}`,
-                  display:'flex',justifyContent:'space-between',alignItems:'baseline',gap:8,
-                }}>
-                  <span>{g.label}</span>
-                  <span style={{fontSize:11,color:T.text3,fontWeight:400,letterSpacing:'normal',textTransform:'none'}}>
-                    {g.items.length} item{g.items.length === 1 ? '' : 's'}
-                  </span>
-                </h2>
-                <div style={{
-                  display:'grid',
-                  gridTemplateColumns:'repeat(auto-fill, minmax(240px, 1fr))',
-                  gap:14,
-                }}>
-                  {g.items.map(item => (
-                    <CatalogueCard
-                      key={item.id}
-                      item={item}
-                      qtyInCart={cartByCatalogueId[item.id] || 0}
-                      onSetQty={qty => setQty(item.id, qty)}
-                    />
-                  ))}
-                </div>
-              </section>
-            ))}
+        {/* No products at all */}
+        {!loading && items.length === 0 && (
+          <div style={{padding:36,textAlign:'center',color:T.text3,fontSize:13,background:T.bg2,border:`1px solid ${T.border}`,borderRadius:10}}>
+            No products available yet — check back soon.
           </div>
-        ) : (
+        )}
+
+        {/* ─── Step: Model ─────────────────────────────────────────────── */}
+        {tileStep === 'model' && items.length > 0 && (
           <div style={{
             display:'grid',
-            gridTemplateColumns:'repeat(auto-fill, minmax(240px, 1fr))',
+            gridTemplateColumns:'repeat(auto-fill, minmax(220px, 1fr))',
             gap:14,
           }}>
-            {filtered.map(item => (
-              <CatalogueCard
-                key={item.id}
-                item={item}
-                qtyInCart={cartByCatalogueId[item.id] || 0}
-                onSetQty={qty => setQty(item.id, qty)}
-              />
+            <Tile index={0} accent={T.text2} name="View all models" subtitle={`${items.length} item${items.length===1?'':'s'}`} onClick={() => { setModelFilter('all'); setProductTypeFilter('all'); setTileStep('browse') }} />
+            {modelTiles.map((m, i) => (
+              <Tile key={m.id} index={i + 1} name={m.name} subtitle={`${m.count} item${m.count===1?'':'s'}`} onClick={() => pickModel(m.id)} />
             ))}
+            {noModelCount > 0 && (
+              <Tile index={modelTiles.length + 1} accent={T.text3} name="Other" subtitle={`${noModelCount} item${noModelCount===1?'':'s'}`} onClick={() => pickModel('none')} />
+            )}
           </div>
+        )}
+
+        {/* ─── Step: Type ──────────────────────────────────────────────── */}
+        {tileStep === 'type' && items.length > 0 && (
+          <div style={{
+            display:'grid',
+            gridTemplateColumns:'repeat(auto-fill, minmax(220px, 1fr))',
+            gap:14,
+          }}>
+            <Tile index={0} accent={T.text2} name={`All types in ${modelLabel}`} subtitle={`${itemsAfterModel.length} item${itemsAfterModel.length===1?'':'s'}`} onClick={() => pickType('all')} />
+            {typeTiles.map((t, i) => (
+              <Tile key={t.id} index={i + 1} name={t.name} subtitle={`${t.count} item${t.count===1?'':'s'}`} onClick={() => pickType(t.id)} />
+            ))}
+            {noTypeCount > 0 && (
+              <Tile index={typeTiles.length + 1} accent={T.text3} name="Other" subtitle={`${noTypeCount} item${noTypeCount===1?'':'s'}`} onClick={() => pickType('none')} />
+            )}
+          </div>
+        )}
+
+        {/* ─── Step: Browse ────────────────────────────────────────────── */}
+        {tileStep === 'browse' && items.length > 0 && (
+          <>
+            {/* Toolbar */}
+            <div style={{display:'flex',gap:10,alignItems:'center',flexWrap:'wrap',marginBottom:14}}>
+              <input
+                type="text"
+                placeholder="Search by name or SKU…"
+                value={search}
+                onChange={e => setSearch(e.target.value)}
+                style={{
+                  flex:1,minWidth:200,maxWidth:360,
+                  background:T.bg2,border:`1px solid ${T.border2}`,color:T.text,
+                  borderRadius:6,padding:'8px 12px',fontSize:13,outline:'none',fontFamily:'inherit',
+                }}
+              />
+              <FilterSelect
+                label="Model"
+                value={modelFilter}
+                options={modelOptions}
+                onChange={setModelFilter}
+              />
+              <FilterSelect
+                label="Type"
+                value={productTypeFilter}
+                options={productTypeOptions}
+                onChange={setProductTypeFilter}
+              />
+              <div style={{display:'flex',alignItems:'center',gap:6}}>
+                <span style={{fontSize:12,color:T.text3}}>Group by</span>
+                <select
+                  value={groupBy}
+                  onChange={e => setGroupBy(e.target.value as GroupBy)}
+                  style={{
+                    background:T.bg2,border:`1px solid ${T.border2}`,color:T.text,
+                    borderRadius:6,padding:'7px 10px',fontSize:12,outline:'none',fontFamily:'inherit',
+                    cursor:'pointer',
+                  }}>
+                  <option value="none">None</option>
+                  <option value="model">Model</option>
+                  <option value="product_type">Product type</option>
+                </select>
+              </div>
+              <button onClick={loadAll} disabled={loading}
+                style={{padding:'7px 12px',borderRadius:5,border:`1px solid ${T.border2}`,background:'transparent',color:T.text2,fontSize:12,cursor:loading?'wait':'pointer',fontFamily:'inherit'}}>
+                {loading ? '…' : '↻'}
+              </button>
+            </div>
+
+            {!loading && filtered.length === 0 && (
+              <div style={{padding:36,textAlign:'center',color:T.text3,fontSize:13,background:T.bg2,border:`1px solid ${T.border}`,borderRadius:10}}>
+                No products match your search.
+              </div>
+            )}
+
+            {/* Card grid (flat or grouped) */}
+            {grouped ? (
+              <div style={{display:'flex',flexDirection:'column',gap:24}}>
+                {grouped.map(g => (
+                  <section key={g.key}>
+                    <h2 style={{
+                      fontSize:13,fontWeight:600,margin:'0 0 10px',color:T.text2,
+                      textTransform:'uppercase',letterSpacing:'0.06em',
+                      paddingBottom:6,borderBottom:`1px solid ${T.border2}`,
+                      display:'flex',justifyContent:'space-between',alignItems:'baseline',gap:8,
+                    }}>
+                      <span>{g.label}</span>
+                      <span style={{fontSize:11,color:T.text3,fontWeight:400,letterSpacing:'normal',textTransform:'none'}}>
+                        {g.items.length} item{g.items.length === 1 ? '' : 's'}
+                      </span>
+                    </h2>
+                    <div style={{
+                      display:'grid',
+                      gridTemplateColumns:'repeat(auto-fill, minmax(240px, 1fr))',
+                      gap:14,
+                    }}>
+                      {g.items.map(item => (
+                        <CatalogueCard
+                          key={item.id}
+                          item={item}
+                          qtyInCart={cartByCatalogueId[item.id] || 0}
+                          onSetQty={qty => setQty(item.id, qty)}
+                        />
+                      ))}
+                    </div>
+                  </section>
+                ))}
+              </div>
+            ) : (
+              <div style={{
+                display:'grid',
+                gridTemplateColumns:'repeat(auto-fill, minmax(240px, 1fr))',
+                gap:14,
+              }}>
+                {filtered.map(item => (
+                  <CatalogueCard
+                    key={item.id}
+                    item={item}
+                    qtyInCart={cartByCatalogueId[item.id] || 0}
+                    onSetQty={qty => setQty(item.id, qty)}
+                  />
+                ))}
+              </div>
+            )}
+          </>
         )}
 
       </B2BLayout>
@@ -451,6 +600,55 @@ function QtyStepper({ qty, max, onChange }: { qty: number; max?: number; onChang
       </button>
     </div>
   )
+}
+
+function Tile({
+  index, name, subtitle, accent, onClick,
+}: {
+  index: number
+  name: string
+  subtitle: string
+  accent?: string
+  onClick: () => void
+}) {
+  const color = accent || TILE_COLORS[index % TILE_COLORS.length]
+  return (
+    <button
+      onClick={onClick}
+      style={{
+        background:T.bg2,border:`1px solid ${T.border}`,borderRadius:10,
+        padding:0,overflow:'hidden',
+        display:'flex',flexDirection:'column',
+        cursor:'pointer',fontFamily:'inherit',color:T.text,
+        textAlign:'left',transition:'background 0.12s, border-color 0.12s',
+      }}
+      onMouseEnter={e => {
+        e.currentTarget.style.background = T.bg3
+        e.currentTarget.style.borderColor = T.border2
+      }}
+      onMouseLeave={e => {
+        e.currentTarget.style.background = T.bg2
+        e.currentTarget.style.borderColor = T.border
+      }}>
+      <div style={{height:5,background:color}}/>
+      <div style={{padding:'18px 18px 16px',display:'flex',flexDirection:'column',gap:6,minHeight:90,justifyContent:'center'}}>
+        <div style={{fontSize:15,fontWeight:600,color:T.text,lineHeight:1.25}}>{name}</div>
+        <div style={{fontSize:11,color:T.text3}}>{subtitle}</div>
+      </div>
+    </button>
+  )
+}
+
+function crumbStyle(clickable: boolean): React.CSSProperties {
+  return {
+    background:'transparent',border:'none',padding:0,
+    color: clickable ? T.text2 : T.text,
+    fontSize:12,fontWeight: clickable ? 400 : 600,
+    cursor: clickable ? 'pointer' : 'default',
+    fontFamily:'inherit',
+    textDecoration: clickable ? 'underline dotted' : 'none',
+    textUnderlineOffset:3,
+  }
 }
 
 function TagChip({ color, children }: { color: string; children: React.ReactNode }) {
