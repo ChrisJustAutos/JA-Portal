@@ -9,7 +9,7 @@
 // myob_payment_error column captures the failure for follow-up.
 //
 // MYOB endpoint:
-//   POST /accountright/{cf_id}/Purchase/PaymentTxn
+//   POST /accountright/{cf_id}/Purchase/SupplierPayment
 //
 //   {
 //     "Date":     "YYYY-MM-DD",            // payment date — bill date
@@ -17,10 +17,15 @@
 //     "Supplier": { "UID": "<supplier>" },
 //     "Memo":     "<short>",
 //     "Amount":   <number>,                // total payment amount
-//     "Lines":    [ { "Bill": { "UID": "<bill>" }, "AmountApplied": <number> } ]
+//     "Lines":    [ { "Type": "Bill", "UID": "<bill>", "AmountApplied": <number> } ]
 //   }
 //
 // Returns 201 with a Location header containing the new payment UID.
+//
+// Note: an earlier draft used /Purchase/PaymentTxn and a {Bill:{UID}} line
+// shape — both were wrong. MYOB returned 401 OAuthTokenIsInvalid (31001)
+// for the bad path (it returns that error for any unknown path under the
+// authenticated namespace, not just genuine token failures).
 
 import { myobFetch } from './myob'
 
@@ -59,11 +64,11 @@ export async function applyBillPayment(input: ApplyBillPaymentInput): Promise<Ap
     Memo:     (input.memo || '').substring(0, 255),
     Amount:   input.amount,
     Lines: [
-      { Bill: { UID: input.billUid }, AmountApplied: input.amount },
+      { Type: 'Bill', UID: input.billUid, AmountApplied: input.amount },
     ],
   }
 
-  const path = `/accountright/${input.cfId}/Purchase/PaymentTxn`
+  const path = `/accountright/${input.cfId}/Purchase/SupplierPayment`
   const result = await myobFetch(input.connId, path, {
     method: 'POST',
     body,

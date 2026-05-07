@@ -230,6 +230,26 @@ export default function APDetailPage({ user }: PageProps) {
   const [presetOpen, setPresetOpen] = useState(false)
   const [paymentAccounts, setPaymentAccounts] = useState<PaymentAccount[]>([])
   const [paymentSaving, setPaymentSaving] = useState(false)
+  const [paymentRetrying, setPaymentRetrying] = useState(false)
+
+  async function retryPayment() {
+    if (!id) return
+    setPaymentRetrying(true)
+    setActionMessage(null)
+    try {
+      const res = await fetch(`/api/ap/${id}/retry-payment`, {
+        method: 'POST', credentials: 'same-origin',
+      })
+      const json = await res.json()
+      if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`)
+      setActionMessage({ kind: 'ok', text: `✅ Payment applied — UID ${String(json.paymentUid || '').substring(0, 8)}…` })
+      await fetchData()
+    } catch (e: any) {
+      setActionMessage({ kind: 'err', text: `❌ Retry failed: ${e?.message || e}` })
+    } finally {
+      setPaymentRetrying(false)
+    }
+  }
 
   // Fetch the active clearing accounts for this invoice's company file so
   // the "Mark as paid" dropdown has its options. Refetches when the
@@ -1108,8 +1128,11 @@ export default function APDetailPage({ user }: PageProps) {
                 invoice={data.invoice}
                 accounts={paymentAccounts}
                 canEdit={canEdit && !isTerminal}
+                canRetry={canEdit}
                 busy={paymentSaving}
+                retryBusy={paymentRetrying}
                 onChange={setPaymentAccountOnInvoice}
+                onRetryPayment={retryPayment}
               />
 
               <MyobMappingSection
@@ -2447,18 +2470,26 @@ function AccountTypeahead({
 // invoices auto-tick the configured Capricorn default; user can still
 // flip / change. Shown next to the workshop-job card.
 function PaymentSection({
-  invoice, accounts, canEdit, busy, onChange,
+  invoice, accounts, canEdit, canRetry, busy, retryBusy, onChange, onRetryPayment,
 }: {
   invoice: InvoiceRow
   accounts: PaymentAccount[]
   canEdit: boolean
+  canRetry: boolean
   busy: boolean
+  retryBusy: boolean
   onChange: (acc: { uid: string; code: string; name: string } | null) => void
+  onRetryPayment: () => void
 }) {
-  const isPosted   = invoice.status === 'posted'
-  const isMarked   = !!invoice.payment_account_uid
-  const cap        = accounts.find(a => a.is_default_for_capricorn)
-  const empty      = accounts.length === 0
+  const isPosted     = invoice.status === 'posted'
+  const isMarked     = !!invoice.payment_account_uid
+  const cap          = accounts.find(a => a.is_default_for_capricorn)
+  const empty        = accounts.length === 0
+  const canShowRetry = canRetry
+                    && !!invoice.myob_bill_uid
+                    && !!invoice.payment_account_uid
+                    && !invoice.myob_payment_uid
+                    && !!invoice.myob_payment_error
 
   function toggleMarkAsPaid(on: boolean) {
     if (!on) { onChange(null); return }
@@ -2495,6 +2526,21 @@ function PaymentSection({
           <span title={invoice.myob_payment_error} style={{fontSize:11, color:T.red, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', maxWidth:300}}>
             ⚠️ Payment failed: {invoice.myob_payment_error}
           </span>
+        )}
+        {canShowRetry && (
+          <button
+            onClick={onRetryPayment}
+            disabled={retryBusy}
+            style={{
+              padding:'5px 12px', borderRadius:5,
+              border:`1px solid ${T.amber}40`,
+              background:'transparent', color: T.amber,
+              fontSize:11, fontFamily:'inherit',
+              cursor: retryBusy ? 'wait' : 'pointer',
+              opacity: retryBusy ? 0.6 : 1,
+            }}>
+            {retryBusy ? 'Retrying…' : 'Retry payment'}
+          </button>
         )}
       </div>
 
