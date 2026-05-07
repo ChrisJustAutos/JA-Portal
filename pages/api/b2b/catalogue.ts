@@ -66,6 +66,7 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, _us
     return res.status(405).json({ error: 'GET only' })
   }
 
+  const tStart = Date.now()
   const c = sb()
 
   // Fetch visible items only. Admin-only fields excluded from the projection.
@@ -164,6 +165,7 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, _us
     }
   })
 
+  console.log(`[b2b/catalogue] ${items.length} items, ${Date.now() - tStart}ms total${stockError ? ' (stock error: ' + stockError + ')' : ''}`)
   return res.status(200).json({
     items: out,
     stock_error: stockError,  // null on success; surface in UI if non-null

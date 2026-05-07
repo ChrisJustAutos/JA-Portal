@@ -141,7 +141,9 @@ export async function getStockForItems(uids: string[]): Promise<StockMap> {
   if (!needsRefresh) return fresh
 
   // 2. Refresh all JAWS inventory and re-query
+  const refreshStart = Date.now()
   await refreshAllStock()
+  console.log(`[b2b-stock] cache miss → refreshAllStock took ${Date.now() - refreshStart}ms`)
 
   const { data: refreshed, error: rErr } = await c
     .from('b2b_catalogue')
@@ -168,13 +170,17 @@ export async function getStockForItems(uids: string[]): Promise<StockMap> {
  * Items in MYOB that aren't in our catalogue are ignored. This is a
  * one-way write — never modifies the catalogue's editable fields
  * (price, visibility, description, image).
+ *
+ * Two phases:
+ *   1. Paginated MYOB Inventory.Item fetch
+ *   2. ONE bulk UPDATE via the b2b_bulk_update_stock SQL function
  */
 export async function refreshAllStock(): Promise<{ scanned: number; updated: number }> {
   const conn = await getConnection('JAWS')
   if (!conn) throw new Error('JAWS MYOB connection not configured')
 
-  // Fetch all inventory items, paginated. Active filter applied client-side
-  // since OData $filter on Inventory.Item has been flaky for us before.
+  // Phase 1: paginated MYOB fetch
+  const fetchStart = Date.now()
   const allItems: any[] = []
   let skip = 0
   while (true) {
@@ -189,36 +195,36 @@ export async function refreshAllStock(): Promise<{ scanned: number; updated: num
     if (items.length < PAGE_SIZE) break
     skip += PAGE_SIZE
   }
+  const fetchMs = Date.now() - fetchStart
 
-  // Build update payload keyed by UID. We trust QuantityAvailable as the
-  // canonical "what can we sell right now" number; falls back to
-  // QuantityOnHand for non-tracked items (where Available may be null).
+  // Build the update payload. We trust QuantityAvailable as the canonical
+  // "what can we sell right now" number; falls back to QuantityOnHand
+  // for non-tracked items (where Available may be null).
   const cachedAt = new Date().toISOString()
-  const c = sb()
-  let updated = 0
-
+  const updates: { uid: string; qty: number; is_inventoried: boolean; cached_at: string }[] = []
   for (const it of allItems) {
     const uid = it.UID
     if (!uid) continue
     const isInv = it.IsInventoried !== false
     const qty = isInv
       ? Number(it.QuantityAvailable ?? it.QuantityOnHand ?? 0)
-      : 0  // for non-inventoried items, qty doesn't matter — flagged as unlimited
-
-    // Upsert ONLY when a matching catalogue row exists. Cheaper to do it
-    // as an UPDATE-by-uid (no row created if it doesn't already exist).
-    const { error, data } = await c
-      .from('b2b_catalogue')
-      .update({
-        qty_available: qty,
-        is_inventoried: isInv,
-        stock_cached_at: cachedAt,
-      })
-      .eq('myob_item_uid', uid)
-      .select('id')
-
-    if (!error && data && data.length > 0) updated++
+      : 0
+    updates.push({ uid, qty, is_inventoried: isInv, cached_at: cachedAt })
   }
 
+  // Phase 2: one-shot bulk UPDATE via the SQL function. Replaces what was
+  // previously ~N sequential UPDATE round trips (a major part of the
+  // first-load cliff on /b2b/catalogue).
+  const writeStart = Date.now()
+  let updated = 0
+  if (updates.length > 0) {
+    const c = sb()
+    const { data, error } = await c.rpc('b2b_bulk_update_stock', { updates })
+    if (error) throw new Error(`Stock bulk update failed: ${error.message}`)
+    updated = typeof data === 'number' ? data : 0
+  }
+  const writeMs = Date.now() - writeStart
+
+  console.log(`[b2b-stock] refreshAllStock: ${allItems.length} from MYOB in ${fetchMs}ms, ${updated} rows updated in ${writeMs}ms`)
   return { scanned: allItems.length, updated }
 }
