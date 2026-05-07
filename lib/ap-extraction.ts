@@ -69,6 +69,11 @@ export interface ExtractedAPInvoice {
     memberNumber: string | null      // our customer/member number on the invoice
   }
   notes: string | null               // free-text annotations on the PDF
+  // True when the document is a supplier credit / credit note / adjustment
+  // note / return rather than a regular invoice. Posting these as bills
+  // would book a credit as a payable, so the portal blocks the Approve
+  // flow and surfaces a red "CREDIT NOTE" badge.
+  isCreditNote: boolean
   lineItems: ExtractedAPLineItem[]
   parseConfidence: 'high' | 'medium' | 'low'
 }
@@ -179,6 +184,7 @@ Output ONLY a JSON object with this exact shape:
     "memberNumber": "Just Autos's customer/member number with this supplier (e.g. '5734438-0001'). Often labelled CUSTOMER NUMBER. null if not shown."
   },
   "notes": "Any free-text annotations relevant to the order — names of staff who placed it ('N: MATTHEW'), delivery instructions ('T: REPCO TO DELIVER'), special remarks. Concatenate multiple into one string with semicolons. null if nothing notable.",
+  "isCreditNote": "true if this document is a credit note / supplier credit / adjustment note / return rather than a regular invoice. Strong signals: header text says 'CREDIT NOTE', 'TAX CREDIT NOTE', 'ADJUSTMENT NOTE', 'CR', or 'RETURN'; the document number prefixed with 'CR'; total amount is shown as negative or in parentheses; line totals are negative; line description says 'refund' or 'return'. When true, totals.totalIncGst and lineTotalExGst should still be returned as POSITIVE numbers (the credit-note flag is the sign indicator). false for normal invoices.",
   "lineItems": [
     {
       "lineNo":          "Line number as shown (often 0001, 0002...). Cast to integer. Use 1-based sequence if not shown.",
@@ -277,6 +283,7 @@ function validateAndNormalise(raw: any): ExtractedAPInvoice {
       memberNumber: nullableString(capricorn.memberNumber),
     },
     notes: nullableString(raw.notes),
+    isCreditNote: raw.isCreditNote === true,
     lineItems: normaliseLineItems(raw.lineItems),
     parseConfidence: ['high', 'medium', 'low'].includes(raw.parseConfidence) ? raw.parseConfidence : 'medium',
   }

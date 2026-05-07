@@ -192,14 +192,14 @@ export async function ensureTaxCodes(label: CompanyFileLabel): Promise<TaxCodeBu
 
 // ── MYOB duplicate pre-flight ───────────────────────────────────────────
 
-interface ExistingBillMatch {
+export interface ExistingBillMatch {
   uid: string
   number: string | null
   date: string | null
   totalAmount: number | null
 }
 
-async function findExistingMyobBill(
+export async function findExistingMyobBill(
   connId: string,
   cfId: string,
   supplierInvoiceNumber: string,
@@ -289,6 +289,12 @@ export async function createServiceBill(
   if (inv.status === 'posted')   throw new Error('Invoice already posted to MYOB')
   if (inv.status === 'rejected') throw new Error('Invoice has been rejected')
   if (inv.triage_status === 'red') throw new Error('Invoice triage is RED — cannot post')
+  if (inv.is_credit_note === true) {
+    // Credit notes / supplier credits must NOT be booked as regular bills.
+    // Posting one as a bill increases payables instead of reducing them.
+    // Handle these directly in MYOB for now (separate flow on the roadmap).
+    throw new Error('This document is a credit note — handle in MYOB directly. Bills cannot be created from credits.')
+  }
   if (!inv.resolved_supplier_uid)  throw new Error('No MYOB supplier resolved')
   if (!inv.invoice_date)           throw new Error('Invoice date is required to post')
   if (!inv.invoice_number)         throw new Error('Supplier invoice number is required to post')

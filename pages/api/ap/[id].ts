@@ -47,6 +47,7 @@ const PATCHABLE_FIELDS = new Set([
   'payment_account_uid',
   'payment_account_code',
   'payment_account_name',
+  'is_credit_note',
 ])
 
 export default withAuth(null, async (req: NextApiRequest, res: NextApiResponse, user) => {

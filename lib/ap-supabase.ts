@@ -82,6 +82,7 @@ export async function insertInvoiceWithLines(input: InvoiceInsertInput): Promise
       vendor_state:            e.vendor.state,
       vendor_postcode:         e.vendor.postcode,
       vendor_country:          e.vendor.country,
+      is_credit_note:          e.isCreditNote === true,
       invoice_number:          e.invoiceNumber,
       invoice_date:            e.invoiceDate,
       po_number:               e.poNumber,
@@ -531,6 +532,7 @@ export async function applyTriageAndResolve(invoiceId: string): Promise<void> {
       memberNumber: inv.capricorn_member_number,
     },
     notes: inv.notes,
+    isCreditNote: inv.is_credit_note === true,
     lineItems: lines.map((l: any) => ({
       lineNo: l.line_no,
       partNumber: l.part_number,

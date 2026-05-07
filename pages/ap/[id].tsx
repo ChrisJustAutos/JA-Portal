@@ -107,6 +107,7 @@ interface InvoiceRow {
   myob_payment_uid: string | null
   myob_payment_applied_at: string | null
   myob_payment_error: string | null
+  is_credit_note: boolean
 }
 
 interface PaymentAccount {
@@ -231,6 +232,36 @@ export default function APDetailPage({ user }: PageProps) {
   const [paymentAccounts, setPaymentAccounts] = useState<PaymentAccount[]>([])
   const [paymentSaving, setPaymentSaving] = useState(false)
   const [paymentRetrying, setPaymentRetrying] = useState(false)
+  const [refreshing, setRefreshing] = useState(false)
+
+  async function refreshInvoice() {
+    if (!id) return
+    setRefreshing(true)
+    setActionMessage(null)
+    try {
+      const res = await fetch(`/api/ap/${id}/refresh`, {
+        method: 'POST', credentials: 'same-origin',
+      })
+      const json = await res.json()
+      if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`)
+
+      const parts: string[] = []
+      parts.push(`Triage: ${json.triage?.status?.toUpperCase() || '?'}`)
+      if (json.myobMatch) {
+        parts.push(`MYOB has bill #${json.myobMatch.number || '?'}`)
+        if (json.adoptedBillUid) parts.push('— adopted into this row')
+      } else {
+        parts.push('no MYOB match')
+      }
+      if (json.myobCheckError) parts.push(`(MYOB check failed: ${json.myobCheckError})`)
+      setActionMessage({ kind: 'ok', text: '🔄 Refreshed — ' + parts.join(' · ') })
+      await fetchData()
+    } catch (e: any) {
+      setActionMessage({ kind: 'err', text: `❌ Refresh failed: ${e?.message || e}` })
+    } finally {
+      setRefreshing(false)
+    }
+  }
 
   async function retryPayment() {
     if (!id) return
@@ -768,12 +799,14 @@ export default function APDetailPage({ user }: PageProps) {
   const canApprove = canEdit && data
                   && !isTerminal
                   && data.invoice.triage_status !== 'red'
+                  && !data.invoice.is_credit_note
                   && !!data.invoice.resolved_supplier_uid
                   && hasAccountFallbackOrPerLine
   const approveBlockedReason =
     !data ? '' :
     isPosted   ? 'Already posted' :
     isRejected ? 'Invoice rejected' :
+    data.invoice.is_credit_note ? 'Credit note — handle in MYOB directly' :
     data.invoice.triage_status === 'red' ? 'Triage RED — fix issues' :
     !data.invoice.resolved_supplier_uid ? 'No MYOB supplier mapped' :
     !hasAccountFallbackOrPerLine ? 'Some lines have no account and no default account is set' :
@@ -812,25 +845,43 @@ export default function APDetailPage({ user }: PageProps) {
             {data?.invoice.vendor_name_parsed || 'Loading…'}
             {data?.invoice.invoice_number ? ` — ${data.invoice.invoice_number}` : ''}
           </span>
-          {data && canEdit && !isPosted && !isMobile && (
+          {data && canEdit && !isMobile && (
             <>
               <span style={{flex:1}}/>
               <button
-                onClick={deleteInvoice}
-                disabled={deleting}
-                title="Delete invoice + PDF"
+                onClick={refreshInvoice}
+                disabled={refreshing}
+                title="Re-run triage, dup checks, line resolver and look up MYOB for an existing bill with this supplier-invoice-number"
                 style={{
                   background:'transparent',
-                  border:`1px solid ${T.red}40`,
-                  color:T.red,
+                  border:`1px solid ${T.border2}`,
+                  color: T.text2,
                   padding:'5px 11px', borderRadius:5,
                   fontSize:11, fontFamily:'inherit',
-                  cursor: deleting ? 'wait' : 'pointer',
-                  opacity: deleting ? 0.6 : 1,
+                  cursor: refreshing ? 'wait' : 'pointer',
+                  opacity: refreshing ? 0.6 : 1,
                 }}
               >
-                {deleting ? 'Deleting…' : '🗑 Delete'}
+                {refreshing ? 'Refreshing…' : '🔄 Refresh'}
               </button>
+              {!isPosted && (
+                <button
+                  onClick={deleteInvoice}
+                  disabled={deleting}
+                  title="Delete invoice + PDF"
+                  style={{
+                    background:'transparent',
+                    border:`1px solid ${T.red}40`,
+                    color:T.red,
+                    padding:'5px 11px', borderRadius:5,
+                    fontSize:11, fontFamily:'inherit',
+                    cursor: deleting ? 'wait' : 'pointer',
+                    opacity: deleting ? 0.6 : 1,
+                  }}
+                >
+                  {deleting ? 'Deleting…' : '🗑 Delete'}
+                </button>
+              )}
             </>
           )}
         </div>
@@ -877,6 +928,16 @@ export default function APDetailPage({ user }: PageProps) {
                 <div style={{display:'flex', alignItems:'center', gap:10, marginBottom: data.invoice.triage_reasons && data.invoice.triage_reasons.length > 0 ? 8 : 10, flexWrap:'wrap'}}>
                   <TriagePill status={data.invoice.triage_status}/>
                   <StatusPill status={data.invoice.status}/>
+                  {data.invoice.is_credit_note && (
+                    <span style={{
+                      fontSize:11, padding:'3px 10px', borderRadius:4,
+                      background:`${T.red}15`, color:T.red,
+                      border:`1px solid ${T.red}40`, fontWeight:600,
+                      letterSpacing:'0.04em',
+                    }}>
+                      CREDIT NOTE
+                    </span>
+                  )}
                   <span style={{fontSize:11, color:T.text3}}>
                     Parse: {data.invoice.parse_confidence || 'unknown'}
                     {data.invoice.via_capricorn && (
