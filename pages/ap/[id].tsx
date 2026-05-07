@@ -234,6 +234,29 @@ export default function APDetailPage({ user }: PageProps) {
   const [paymentRetrying, setPaymentRetrying] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
   const [clearingError, setClearingError] = useState(false)
+  const [togglingCredit, setTogglingCredit] = useState(false)
+
+  async function toggleCreditNote() {
+    if (!id || !data) return
+    const next = !data.invoice.is_credit_note
+    if (next && !confirm('Mark this invoice as a CREDIT NOTE? Approve & Post will be blocked — credits must be handled in MYOB directly.')) return
+    if (!next && !confirm('Remove credit note flag? The invoice will be treated as a regular bill again.')) return
+    setTogglingCredit(true)
+    setActionMessage(null)
+    try {
+      const res = await fetch(`/api/ap/${id}`, {
+        method: 'PATCH', credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ is_credit_note: next }),
+      })
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || `HTTP ${res.status}`)
+      await fetchData()
+    } catch (e: any) {
+      setActionMessage({ kind: 'err', text: `Toggle failed: ${e?.message || e}` })
+    } finally {
+      setTogglingCredit(false)
+    }
+  }
 
   async function clearErrors() {
     if (!id) return
@@ -950,13 +973,41 @@ export default function APDetailPage({ user }: PageProps) {
                   <StatusPill status={data.invoice.status}/>
                   {data.invoice.is_credit_note && (
                     <span style={{
-                      fontSize:11, padding:'3px 10px', borderRadius:4,
+                      fontSize:11, padding:'3px 6px 3px 10px', borderRadius:4,
                       background:`${T.red}15`, color:T.red,
                       border:`1px solid ${T.red}40`, fontWeight:600,
                       letterSpacing:'0.04em',
+                      display:'inline-flex', alignItems:'center', gap:6,
                     }}>
                       CREDIT NOTE
+                      {canEdit && !isTerminal && (
+                        <button
+                          onClick={toggleCreditNote}
+                          disabled={togglingCredit}
+                          title="Remove credit note flag"
+                          style={{
+                            background:'transparent', border:'none', color:T.red,
+                            fontSize:11, cursor: togglingCredit ? 'wait' : 'pointer',
+                            padding:'0 2px', fontFamily:'inherit', opacity: togglingCredit ? 0.5 : 1,
+                          }}>
+                          ✕
+                        </button>
+                      )}
                     </span>
+                  )}
+                  {!data.invoice.is_credit_note && canEdit && !isTerminal && (
+                    <button
+                      onClick={toggleCreditNote}
+                      disabled={togglingCredit}
+                      title="Flag this document as a credit note (blocks Approve & Post)"
+                      style={{
+                        background:'transparent', border:`1px solid ${T.border2}`,
+                        color: T.text3, fontSize:10,
+                        padding:'2px 8px', borderRadius:3, cursor: togglingCredit ? 'wait' : 'pointer',
+                        fontFamily:'inherit', opacity: togglingCredit ? 0.5 : 1,
+                      }}>
+                      {togglingCredit ? '…' : 'Mark as credit note'}
+                    </button>
                   )}
                   <span style={{fontSize:11, color:T.text3}}>
                     Parse: {data.invoice.parse_confidence || 'unknown'}
