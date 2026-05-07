@@ -147,19 +147,35 @@ export async function getSupplierByUid(
  * can mint a card straight from the parsed invoice header without leaving
  * the portal.
  *
- * Deliberately minimal: only CompanyName + (optional) ABN are written.
- * Payment/bank details, expense account, addresses, contact email/phone
- * etc. are NOT set here — staff add those in MYOB by hand. This keeps the
- * surface area for mistakes small (a wrong BSB on a card pays the wrong
- * bank account) while still saving the typing.
+ * Writes the company name + ABN, plus a primary address card (Location=1)
+ * with whichever contact fields the caller supplies (email, phone, website,
+ * street, city, state, postcode, country). Empty / undefined fields are
+ * skipped so MYOB doesn't reject them as blank values.
+ *
+ * Deliberately does NOT write any payment/bank details — those stay manual
+ * in MYOB to keep the wrong-BSB blast radius small.
  *
  * MYOB returns 201 with a Location header pointing at the new resource
  * (`/Contact/Supplier/{UID}`). We extract the UID and re-fetch so callers
  * get the same shape `searchSuppliers` returns.
  */
+export interface CreateSupplierInput {
+  companyName: string
+  abn?: string | null
+  // Primary address fields. All optional — MYOB only requires CompanyName.
+  email?: string | null
+  phone?: string | null
+  website?: string | null
+  street?: string | null
+  city?: string | null
+  state?: string | null
+  postcode?: string | null
+  country?: string | null
+}
+
 export async function createSupplier(
   label: CompanyFileLabel,
-  input: { companyName: string; abn?: string | null },
+  input: CreateSupplierInput,
 ): Promise<MyobSupplierLite> {
   const company = input.companyName.trim()
   if (!company) throw new Error('Company name is required')
@@ -175,6 +191,32 @@ export async function createSupplier(
   const abn = (input.abn || '').replace(/\s/g, '').trim()
   if (abn) {
     body.BuyingDetails = { ABN: abn }
+  }
+
+  // Build a primary-address object (Location=1) only with fields the caller
+  // actually filled in. MYOB accepts an Addresses array; supplying a slot
+  // with all-empty fields wastes one of the five address slots, so we skip
+  // the whole array when nothing was provided.
+  const primary: Record<string, any> = { Location: 1 }
+  let primaryHasData = false
+  function set(key: string, raw: string | null | undefined) {
+    if (raw == null) return
+    const v = String(raw).trim()
+    if (!v) return
+    primary[key] = v
+    primaryHasData = true
+  }
+  set('Email',    input.email)
+  set('Phone1',   input.phone)
+  set('Website',  input.website)
+  set('Street',   input.street)
+  set('City',     input.city)
+  set('State',    input.state)
+  set('PostCode', input.postcode)
+  set('Country',  input.country)
+
+  if (primaryHasData) {
+    body.Addresses = [primary]
   }
 
   const result = await myobFetch(conn.id, path, { method: 'POST', body })

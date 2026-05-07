@@ -1770,30 +1770,57 @@ function SupplierTypeahead({
   const [results, setResults] = useState<MyobSupplier[]>([])
   const [searchError, setSearchError] = useState<string | null>(null)
   const [createOpen, setCreateOpen] = useState(false)
-  const [createName, setCreateName] = useState('')
-  const [createAbn, setCreateAbn] = useState('')
+  const [createForm, setCreateForm] = useState({
+    name: '', abn: '',
+    email: '', phone: '', website: '',
+    street: '', city: '', state: '', postcode: '', country: 'Australia',
+  })
   const [creating, setCreating] = useState(false)
   const [createError, setCreateError] = useState<string | null>(null)
 
   function startCreate() {
-    setCreateName((createFrom?.vendorName || query || '').trim())
-    setCreateAbn((createFrom?.vendorAbn || '').trim())
+    setCreateForm({
+      name: (createFrom?.vendorName || query || '').trim(),
+      abn:  (createFrom?.vendorAbn || '').trim(),
+      email: '', phone: '', website: '',
+      street: '', city: '', state: '', postcode: '', country: 'Australia',
+    })
     setCreateError(null)
     setCreateOpen(true)
   }
 
+  function setCreateField<K extends keyof typeof createForm>(key: K, value: string) {
+    setCreateForm(f => ({ ...f, [key]: value }))
+  }
+
   async function submitCreate() {
-    const name = createName.trim()
+    const name = createForm.name.trim()
     if (!name) { setCreateError('Company name is required'); return }
-    const abn = createAbn.replace(/\s/g, '').trim()
+    const abn = createForm.abn.replace(/\s/g, '').trim()
     if (abn && !/^\d{11}$/.test(abn)) { setCreateError('ABN must be 11 digits'); return }
+    const email = createForm.email.trim()
+    if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      setCreateError('Email is not a valid address'); return
+    }
     setCreating(true)
     setCreateError(null)
     try {
       const res = await fetch('/api/myob/suppliers', {
         method: 'POST', credentials: 'same-origin',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ company: companyFile, companyName: name, abn: abn || null }),
+        body: JSON.stringify({
+          company: companyFile,
+          companyName: name,
+          abn: abn || null,
+          email:    email || null,
+          phone:    createForm.phone.trim()    || null,
+          website:  createForm.website.trim()  || null,
+          street:   createForm.street.trim()   || null,
+          city:     createForm.city.trim()     || null,
+          state:    createForm.state.trim()    || null,
+          postcode: createForm.postcode.trim() || null,
+          country:  createForm.country.trim()  || null,
+        }),
       })
       const json = await res.json()
       if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`)
@@ -1909,39 +1936,138 @@ function SupplierTypeahead({
 
       {createFrom && createOpen && (
         <div style={{
-          marginTop:10, padding:12, borderRadius:6,
+          marginTop:10, padding:14, borderRadius:6,
           border:`1px solid ${T.green}40`, background: `${T.green}08`,
         }}>
-          <div style={{fontSize:11, color:T.text2, marginBottom:8, fontWeight:600}}>
+          <div style={{fontSize:11, color:T.text2, marginBottom:10, fontWeight:600}}>
             Create new MYOB supplier in {companyFile}
           </div>
+
+          {/* ── Identity ────────────────────────────────────────────── */}
           <div style={{display:'flex', flexDirection:'column', gap:8}}>
-            <input
-              autoFocus
-              value={createName}
-              onChange={e => setCreateName(e.target.value)}
-              placeholder="Company name (required)"
-              style={inputStyle()}
-            />
-            <input
-              value={createAbn}
-              onChange={e => setCreateAbn(e.target.value)}
-              placeholder="ABN — 11 digits (optional)"
-              style={inputStyle()}
-            />
+            <FormRow label="Company name *">
+              <input
+                autoFocus
+                value={createForm.name}
+                onChange={e => setCreateField('name', e.target.value)}
+                placeholder="ACME Pty Ltd"
+                style={inputStyle()}
+              />
+            </FormRow>
+            <FormRow label="ABN (11 digits)">
+              <input
+                value={createForm.abn}
+                onChange={e => setCreateField('abn', e.target.value)}
+                placeholder="12345678901"
+                style={inputStyle()}
+              />
+            </FormRow>
           </div>
+
+          {/* ── Contact ─────────────────────────────────────────────── */}
+          <div style={{
+            marginTop:12, paddingTop:10, borderTop:`1px solid ${T.border}`,
+            display:'flex', flexDirection:'column', gap:8,
+          }}>
+            <div style={{fontSize:10, color:T.text3, textTransform:'uppercase', letterSpacing:'0.05em', fontWeight:600}}>
+              Contact
+            </div>
+            <FormRow label="Email">
+              <input
+                type="email"
+                value={createForm.email}
+                onChange={e => setCreateField('email', e.target.value)}
+                placeholder="accounts@acme.com.au"
+                style={inputStyle()}
+              />
+            </FormRow>
+            <FormRow label="Phone">
+              <input
+                value={createForm.phone}
+                onChange={e => setCreateField('phone', e.target.value)}
+                placeholder="(07) 1234 5678"
+                style={inputStyle()}
+              />
+            </FormRow>
+            <FormRow label="Website">
+              <input
+                value={createForm.website}
+                onChange={e => setCreateField('website', e.target.value)}
+                placeholder="https://acme.com.au"
+                style={inputStyle()}
+              />
+            </FormRow>
+          </div>
+
+          {/* ── Address ─────────────────────────────────────────────── */}
+          <div style={{
+            marginTop:12, paddingTop:10, borderTop:`1px solid ${T.border}`,
+            display:'flex', flexDirection:'column', gap:8,
+          }}>
+            <div style={{fontSize:10, color:T.text3, textTransform:'uppercase', letterSpacing:'0.05em', fontWeight:600}}>
+              Address
+            </div>
+            <FormRow label="Street">
+              <textarea
+                value={createForm.street}
+                onChange={e => setCreateField('street', e.target.value)}
+                placeholder={'123 Example St\nSuite 4'}
+                rows={2}
+                style={{...inputStyle(), resize:'vertical', minHeight:46, fontFamily:'inherit'}}
+              />
+            </FormRow>
+            <div style={{display:'grid', gridTemplateColumns:'2fr 1fr 1fr', gap:8}}>
+              <FormRow label="Suburb">
+                <input
+                  value={createForm.city}
+                  onChange={e => setCreateField('city', e.target.value)}
+                  placeholder="Brisbane"
+                  style={inputStyle()}
+                />
+              </FormRow>
+              <FormRow label="State">
+                <input
+                  value={createForm.state}
+                  onChange={e => setCreateField('state', e.target.value.toUpperCase())}
+                  placeholder="QLD"
+                  style={inputStyle()}
+                />
+              </FormRow>
+              <FormRow label="Postcode">
+                <input
+                  value={createForm.postcode}
+                  onChange={e => setCreateField('postcode', e.target.value)}
+                  placeholder="4000"
+                  style={inputStyle()}
+                />
+              </FormRow>
+            </div>
+            <FormRow label="Country">
+              <input
+                value={createForm.country}
+                onChange={e => setCreateField('country', e.target.value)}
+                placeholder="Australia"
+                style={inputStyle()}
+              />
+            </FormRow>
+          </div>
+
+          <div style={{fontSize:10, color:T.text3, marginTop:10, lineHeight:1.5}}>
+            Bank/payment details and the default expense account are not written here — set those in MYOB.
+          </div>
+
           {createError && (
             <div style={{fontSize:11, color:T.red, marginTop:8}}>{createError}</div>
           )}
-          <div style={{display:'flex', gap:8, marginTop:10, justifyContent:'flex-end'}}>
+          <div style={{display:'flex', gap:8, marginTop:12, justifyContent:'flex-end'}}>
             <button onClick={() => setCreateOpen(false)} disabled={creating} style={btnSecondary()}>
               Cancel
             </button>
-            <button onClick={submitCreate} disabled={creating || !createName.trim()} style={{
+            <button onClick={submitCreate} disabled={creating || !createForm.name.trim()} style={{
               ...btnSecondary(),
-              background: creating || !createName.trim() ? T.bg3 : T.green,
-              color: creating || !createName.trim() ? T.text3 : '#fff',
-              borderColor: creating || !createName.trim() ? T.border2 : T.green,
+              background: creating || !createForm.name.trim() ? T.bg3 : T.green,
+              color: creating || !createForm.name.trim() ? T.text3 : '#fff',
+              borderColor: creating || !createForm.name.trim() ? T.border2 : T.green,
               fontWeight: 600,
             }}>
               {creating ? 'Creating…' : 'Create in MYOB'}

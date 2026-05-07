@@ -6,11 +6,13 @@
 //        → { suppliers: MyobSupplierLite[] }
 //
 //   POST /api/myob/suppliers
-//        body: { company: 'VPS' | 'JAWS', companyName: string, abn?: string }
+//        body: { company, companyName, abn?, email?, phone?, website?,
+//                street?, city?, state?, postcode?, country? }
 //        → { supplier: MyobSupplierLite }
 //
-// POST writes only CompanyName + ABN to MYOB. Bank/payment details,
-// expense account, addresses, contact email/phone etc. are NOT set —
+// POST writes CompanyName + ABN + optional contact card (Location=1 address
+// with email/phone/website + street/city/state/postcode/country). Bank
+// details, payment terms and the default expense account are NOT set —
 // those stay manual in MYOB to keep the wrong-BSB blast radius small.
 
 import type { NextApiRequest, NextApiResponse } from 'next'
@@ -50,7 +52,7 @@ export default withAuth('view:supplier_invoices', async (req: NextApiRequest, re
       }
     }
 
-    const body = (req.body || {}) as { company?: string; companyName?: string; abn?: string }
+    const body = (req.body || {}) as Record<string, any>
     const company = parseCompany(body.company)
     if (!company) return res.status(400).json({ error: "company must be 'VPS' or 'JAWS'" })
 
@@ -63,8 +65,40 @@ export default withAuth('view:supplier_invoices', async (req: NextApiRequest, re
       return res.status(400).json({ error: 'abn must be 11 digits' })
     }
 
+    const trim = (field: string, max: number): string | null => {
+      const v = String(body[field] || '').trim()
+      if (!v) return null
+      if (v.length > max) {
+        throw new Error(`${field} too long (max ${max} chars)`)
+      }
+      return v
+    }
+
+    let email: string | null, phone: string | null, website: string | null
+    let street: string | null, city: string | null, state: string | null
+    let postcode: string | null, country: string | null
     try {
-      const supplier = await createSupplier(company, { companyName, abn: abnRaw || null })
+      email    = trim('email',    255)
+      phone    = trim('phone',     30)
+      website  = trim('website',  255)
+      street   = trim('street',   255)  // MYOB lets multi-line via \n; cap is generous
+      city     = trim('city',     100)
+      state    = trim('state',     30)
+      postcode = trim('postcode',  20)
+      country  = trim('country',  100)
+    } catch (e: any) {
+      return res.status(400).json({ error: e.message })
+    }
+
+    if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      return res.status(400).json({ error: 'email is not a valid address' })
+    }
+
+    try {
+      const supplier = await createSupplier(company, {
+        companyName, abn: abnRaw || null,
+        email, phone, website, street, city, state, postcode, country,
+      })
       return res.status(201).json({ supplier })
     } catch (e: any) {
       console.error('MYOB createSupplier failed:', e?.message)
