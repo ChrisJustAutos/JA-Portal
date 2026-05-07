@@ -461,16 +461,20 @@ export default function APDetailPage({ user }: PageProps) {
   async function approveAndPost() {
     if (!id || !data) return
     const inv = data.invoice
+    const isCN = inv.is_credit_note
+    const total = inv.total_inc_gst != null ? Number(inv.total_inc_gst) : 0
     const summary =
-      `Post bill to MYOB ${inv.myob_company_file}?\n\n` +
+      `${isCN ? 'Post CREDIT NOTE to MYOB' : 'Post bill to MYOB'} ${inv.myob_company_file}?\n\n` +
       `Supplier:  ${inv.resolved_supplier_name || '(not set)'}\n` +
       `Account:   ${inv.resolved_account_code || '(not set)'}\n` +
-      `Total:     ${fmtMoney(inv.total_inc_gst)}\n` +
+      `Total:     ${fmtMoney(isCN ? -total : total)}${isCN ? '   (negative bill)' : ''}\n` +
       `Inv #:     ${inv.invoice_number}\n` +
       `Date:      ${inv.invoice_date}\n` +
       (inv.via_capricorn && inv.capricorn_reference ? `Capricorn: ${inv.capricorn_reference}\n` : '') +
       (inv.linked_job_number ? `Job:       ${inv.linked_job_number}\n` : '') +
-      (inv.payment_account_uid ? `Pay from:  ${inv.payment_account_code || ''} ${inv.payment_account_name || ''} (auto-applied)\n` : '')
+      (inv.payment_account_uid
+        ? `${isCN ? 'Refund to:' : 'Pay from: '} ${inv.payment_account_code || ''} ${inv.payment_account_name || ''} (auto-applied)\n`
+        : '')
     if (!confirm(summary)) return
     setApproving(true)
     setActionMessage(null)
@@ -842,14 +846,12 @@ export default function APDetailPage({ user }: PageProps) {
   const canApprove = canEdit && data
                   && !isTerminal
                   && data.invoice.triage_status !== 'red'
-                  && !data.invoice.is_credit_note
                   && !!data.invoice.resolved_supplier_uid
                   && hasAccountFallbackOrPerLine
   const approveBlockedReason =
     !data ? '' :
     isPosted   ? 'Already posted' :
     isRejected ? 'Invoice rejected' :
-    data.invoice.is_credit_note ? 'Credit note — handle in MYOB directly' :
     data.invoice.triage_status === 'red' ? 'Triage RED — fix issues' :
     !data.invoice.resolved_supplier_uid ? 'No MYOB supplier mapped' :
     !hasAccountFallbackOrPerLine ? 'Some lines have no account and no default account is set' :
@@ -2735,14 +2737,16 @@ function PaymentSection({
               style={{margin:0}}
             />
             <span style={{fontSize:12, color:T.text}}>
-              Mark as paid — apply payment to a clearing account
+              {invoice.is_credit_note
+                ? 'Mark as refunded — apply refund to a clearing account'
+                : 'Mark as paid — apply payment to a clearing account'}
             </span>
           </label>
 
           {isMarked && (
             <div style={{marginTop:10, paddingLeft:24}}>
               <div style={{fontSize:10, color:T.text3, marginBottom:4, textTransform:'uppercase', letterSpacing:'0.05em'}}>
-                Pay from
+                {invoice.is_credit_note ? 'Refund to' : 'Pay from'}
               </div>
               <select
                 value={invoice.payment_account_uid || ''}
@@ -2761,7 +2765,9 @@ function PaymentSection({
                 ))}
               </select>
               <div style={{fontSize:10, color:T.text3, marginTop:6, lineHeight:1.5}}>
-                When this invoice is posted, a Purchase Payment will immediately apply the full amount from this account, settling the bill.
+                {invoice.is_credit_note
+                  ? 'When this credit note is posted, a Pay Refund will immediately credit this account by the full amount, settling the supplier credit.'
+                  : 'When this invoice is posted, a Purchase Payment will immediately apply the full amount from this account, settling the bill.'}
               </div>
             </div>
           )}

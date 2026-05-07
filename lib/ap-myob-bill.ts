@@ -289,15 +289,15 @@ export async function createServiceBill(
   if (inv.status === 'posted')   throw new Error('Invoice already posted to MYOB')
   if (inv.status === 'rejected') throw new Error('Invoice has been rejected')
   if (inv.triage_status === 'red') throw new Error('Invoice triage is RED — cannot post')
-  if (inv.is_credit_note === true) {
-    // Credit notes / supplier credits must NOT be booked as regular bills.
-    // Posting one as a bill increases payables instead of reducing them.
-    // Handle these directly in MYOB for now (separate flow on the roadmap).
-    throw new Error('This document is a credit note — handle in MYOB directly. Bills cannot be created from credits.')
-  }
   if (!inv.resolved_supplier_uid)  throw new Error('No MYOB supplier resolved')
   if (!inv.invoice_date)           throw new Error('Invoice date is required to post')
   if (!inv.invoice_number)         throw new Error('Supplier invoice number is required to post')
+
+  // Credit-note path: posts as a Bill with negative Totals (matches the
+  // MYOB UI's "enter as bill with negative amounts" workflow). The
+  // SupplierPayment that follows will also have a negative amount —
+  // i.e. a Pay Refund crediting the clearing account.
+  const isCreditNote = inv.is_credit_note === true
 
   const { data: lines, error: linesErr } = await c
     .from('ap_invoice_lines')
@@ -466,10 +466,23 @@ export async function createServiceBill(
     console.log(`AP ${invoiceId}: no PDF header totals — using computed subtotal ${subtotal.toFixed(2)}, tax ${totalTax.toFixed(2)}, total ${totalAmount.toFixed(2)} (per-line method).`)
   }
 
+  // Credit note → flip every line + envelope total to negative. Reconciliation
+  // above runs against the positive numbers from the PDF (those are what
+  // Amanda sees), so the negation happens once at the end and the line/header
+  // math stays consistent. MYOB UI does the same when you enter a bill with
+  // negative quantities/amounts as a supplier credit.
+  if (isCreditNote) {
+    for (const l of billLines) l.Total = round2(-l.Total)
+    subtotal    = round2(-subtotal)
+    totalTax    = round2(-totalTax)
+    totalAmount = round2(-totalAmount)
+    console.log(`AP ${invoiceId}: credit note — posting bill with negative totals (subtotal ${subtotal.toFixed(2)}, total ${totalAmount.toFixed(2)})`)
+  }
+
   const freightAmount = 0
 
   const memoParts = [
-    `AP: ${inv.vendor_name_parsed || 'Vendor'} — ${inv.invoice_number}`,
+    `${isCreditNote ? 'AP CREDIT' : 'AP'}: ${inv.vendor_name_parsed || 'Vendor'} — ${inv.invoice_number}`,
   ]
   if (inv.via_capricorn && inv.capricorn_reference) {
     memoParts.push(`Capricorn ${inv.capricorn_reference}`)
@@ -567,9 +580,13 @@ export async function createServiceBill(
   let paymentAppliedAt: string | null = null
   let paymentError: string | null = null
 
-  if (safeBillUid && inv.payment_account_uid && totalAmount > 0) {
+  // Apply payment when an account is set and the bill has a non-zero
+  // total. Negative totalAmount = credit note → MYOB SupplierPayment with
+  // negative Amount, which is the "Pay Refund" workflow that credits the
+  // clearing account.
+  if (safeBillUid && inv.payment_account_uid && totalAmount !== 0) {
     try {
-      const memo = `Auto-payment ${inv.via_capricorn ? '(Capricorn)' : ''} — ${inv.invoice_number || 'AP'}`.trim()
+      const memo = `${isCreditNote ? 'Auto-refund' : 'Auto-payment'} ${inv.via_capricorn ? '(Capricorn)' : ''} — ${inv.invoice_number || 'AP'}`.trim()
       const r = await applyBillPayment({
         connId:         conn.id,
         cfId:           conn.company_file_id,

@@ -59,9 +59,12 @@ export async function applyBillPayment(input: ApplyBillPaymentInput): Promise<Ap
   if (!input.supplierUid)    throw new Error('supplierUid is required')
   if (!input.billUid)        throw new Error('billUid is required')
   if (!input.date)           throw new Error('date is required')
-  if (!Number.isFinite(input.amount) || input.amount <= 0) {
-    throw new Error(`amount must be a positive number (got ${input.amount})`)
+  if (!Number.isFinite(input.amount) || input.amount === 0) {
+    throw new Error(`amount must be a non-zero number (got ${input.amount})`)
   }
+  // Negative amount = Pay Refund. MYOB accepts negative Amount + negative
+  // AmountApplied on SupplierPayment, which credits the clearing account
+  // (the inverse of paying a regular bill).
 
   const body = {
     Date:     input.date,

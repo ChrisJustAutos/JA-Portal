@@ -62,6 +62,10 @@ export default withAuth('edit:supplier_invoices', async (req: NextApiRequest, re
   if (!Number.isFinite(total) || total <= 0) {
     return res.status(409).json({ error: `Invoice total invalid (${inv.total_inc_gst})` })
   }
+  // Credit notes are stored as positive totals + is_credit_note flag.
+  // Negate here so the SupplierPayment is a refund crediting the clearing
+  // account (matches the auto-payment path inside createServiceBill).
+  const signedTotal = inv.is_credit_note ? -total : total
 
   const cfLabel = (inv.myob_company_file || 'VPS') as CompanyFileLabel
   const conn = await getConnection(cfLabel)
@@ -76,8 +80,8 @@ export default withAuth('edit:supplier_invoices', async (req: NextApiRequest, re
       fromAccountUid: String(inv.payment_account_uid),
       supplierUid:    String(inv.resolved_supplier_uid),
       billUid:        String(inv.myob_bill_uid),
-      amount:         total,
-      memo:           `Retry payment ${inv.via_capricorn ? '(Capricorn)' : ''} — ${inv.invoice_number || 'AP'}`.trim(),
+      amount:         signedTotal,
+      memo:           `${inv.is_credit_note ? 'Retry refund' : 'Retry payment'} ${inv.via_capricorn ? '(Capricorn)' : ''} — ${inv.invoice_number || 'AP'}`.trim(),
       performedBy:    user.id,
     })
 
