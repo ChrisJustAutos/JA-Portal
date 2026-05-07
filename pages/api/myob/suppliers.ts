@@ -94,9 +94,18 @@ export default withAuth('view:supplier_invoices', async (req: NextApiRequest, re
       return res.status(400).json({ error: 'email is not a valid address' })
     }
 
+    const taxCodeRaw = String(body.taxCode || '').trim().toUpperCase()
+    let taxCode: 'GST' | 'FRE' = 'GST'
+    if (taxCodeRaw) {
+      if (taxCodeRaw !== 'GST' && taxCodeRaw !== 'FRE') {
+        return res.status(400).json({ error: "taxCode must be 'GST' or 'FRE'" })
+      }
+      taxCode = taxCodeRaw
+    }
+
     try {
       const supplier = await createSupplier(company, {
-        companyName, abn: abnRaw || null,
+        companyName, abn: abnRaw || null, taxCode,
         email, phone, website, street, city, state, postcode, country,
       })
       return res.status(201).json({ supplier })

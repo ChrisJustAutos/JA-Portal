@@ -1492,6 +1492,7 @@ function SupplierPresetForm({
             state:      invoice.vendor_state,
             postcode:   invoice.vendor_postcode,
             country:    invoice.vendor_country,
+            ...deriveDefaultTaxCode(invoice),
           }}
         />
       </FormRow>
@@ -1540,6 +1541,37 @@ function SupplierPresetForm({
       </div>
     </div>
   )
+}
+
+// Pick a sensible default purchase tax code for a brand-new MYOB supplier
+// card based on what the invoice itself shows. We don't want to assume
+// every supplier is GST — banks, payroll, GST-exempt vendors etc. should
+// default to FRE. The user can still flip the toggle in the create form.
+//
+// Signals (in priority order):
+//   1. gst_amount > 0                   → GST
+//   2. gst_amount === 0  AND total > 0  → FRE
+//   3. subtotal_ex_gst ≈ total_inc_gst  → FRE  (no GST baked into the total)
+//   4. fallback                         → GST
+//
+// Returns suggestedTaxCode + a one-line human-readable reason that
+// renders under the toggle so the choice is auditable at create time.
+function deriveDefaultTaxCode(inv: InvoiceRow): { suggestedTaxCode: 'GST' | 'FRE'; taxCodeReason: string } {
+  const fmt = (n: number | null) => n == null ? '—' : `$${n.toFixed(2)}`
+  const gst = inv.gst_amount  != null ? Number(inv.gst_amount)  : null
+  const sub = inv.subtotal_ex_gst != null ? Number(inv.subtotal_ex_gst) : null
+  const tot = inv.total_inc_gst   != null ? Number(inv.total_inc_gst)   : null
+
+  if (gst != null && gst > 0.005) {
+    return { suggestedTaxCode: 'GST', taxCodeReason: `invoice shows ${fmt(gst)} GST` }
+  }
+  if (gst != null && Math.abs(gst) < 0.005 && tot != null && tot > 0) {
+    return { suggestedTaxCode: 'FRE', taxCodeReason: 'invoice shows $0 GST on a non-zero total' }
+  }
+  if (sub != null && tot != null && tot > 0 && Math.abs(sub - tot) < 0.05) {
+    return { suggestedTaxCode: 'FRE', taxCodeReason: 'subtotal matches total — no GST baked in' }
+  }
+  return { suggestedTaxCode: 'GST', taxCodeReason: 'no clear GST/FRE signal — defaulting to GST' }
 }
 
 function FormRow({ label, children }: { label: string; children: React.ReactNode }) {
@@ -1794,6 +1826,15 @@ function SupplierTypeahead({
     state?:    string | null
     postcode?: string | null
     country?:  string | null
+    /** Suggested default tax code for the new supplier card. The AP detail
+     *  page derives this from the invoice's GST signals (gst_amount + per
+     *  line tax_code) so a no-GST invoice (bank, payroll, etc) starts the
+     *  form on FRE. The user can still flip it before saving. */
+    suggestedTaxCode?: 'GST' | 'FRE'
+    /** Short human-readable explanation of why suggestedTaxCode was picked
+     *  (e.g. "Invoice shows $25.50 GST"). Rendered as a hint under the
+     *  GST/FRE toggle so the choice is auditable. */
+    taxCodeReason?: string
   }
 }) {
   const [open, setOpen] = useState(false)
@@ -1806,6 +1847,7 @@ function SupplierTypeahead({
     name: '', abn: '',
     email: '', phone: '', website: '',
     street: '', city: '', state: '', postcode: '', country: 'Australia',
+    taxCode: 'GST' as 'GST' | 'FRE',
   })
   const [creating, setCreating] = useState(false)
   const [createError, setCreateError] = useState<string | null>(null)
@@ -1822,6 +1864,7 @@ function SupplierTypeahead({
       state:    (createFrom?.state    || '').trim(),
       postcode: (createFrom?.postcode || '').trim(),
       country:  (createFrom?.country  || 'Australia').trim(),
+      taxCode:  createFrom?.suggestedTaxCode || 'GST',
     })
     setCreateError(null)
     setCreateOpen(true)
@@ -1850,6 +1893,7 @@ function SupplierTypeahead({
           company: companyFile,
           companyName: name,
           abn: abn || null,
+          taxCode:  createForm.taxCode,
           email:    email || null,
           phone:    createForm.phone.trim()    || null,
           website:  createForm.website.trim()  || null,
@@ -1999,6 +2043,35 @@ function SupplierTypeahead({
                 placeholder="12345678901"
                 style={inputStyle()}
               />
+            </FormRow>
+            <FormRow label="Default purchase tax code">
+              <div style={{display:'flex', gap:6, flexWrap:'wrap'}}>
+                {(['GST', 'FRE'] as const).map(code => {
+                  const on = createForm.taxCode === code
+                  return (
+                    <button
+                      key={code}
+                      type="button"
+                      onClick={() => setCreateField('taxCode', code)}
+                      style={{
+                        padding:'6px 14px',
+                        borderRadius:5,
+                        border:`1px solid ${on ? T.green : T.border2}`,
+                        background: on ? `${T.green}20` : T.bg3,
+                        color: on ? T.green : T.text,
+                        fontSize:12, fontFamily:'inherit', fontWeight: on ? 600 : 400,
+                        cursor:'pointer', minWidth:80,
+                      }}>
+                      {code === 'GST' ? 'GST (10%)' : 'FRE (no GST)'}
+                    </button>
+                  )
+                })}
+              </div>
+              {createFrom?.taxCodeReason && (
+                <div style={{fontSize:10, color:T.text3, marginTop:4, lineHeight:1.4}}>
+                  Suggested from invoice: {createFrom.taxCodeReason}
+                </div>
+              )}
             </FormRow>
           </div>
 

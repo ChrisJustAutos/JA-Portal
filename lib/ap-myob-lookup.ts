@@ -205,6 +205,11 @@ export async function getSupplierByUid(
 export interface CreateSupplierInput {
   companyName: string
   abn?: string | null
+  // Default purchase tax code on the new card. The caller picks the value
+  // (the AP detail page derives a suggestion from the invoice's actual
+  // GST/FRE signals — see deriveDefaultTaxCode in pages/ap/[id].tsx).
+  // Defaults to GST when not provided.
+  taxCode?: 'GST' | 'FRE'
   // Primary address fields. All optional — MYOB only requires CompanyName.
   email?: string | null
   phone?: string | null
@@ -233,16 +238,17 @@ export async function createSupplier(
   }
 
   // BuyingDetails: MYOB rejects a supplier card without a tax code on the
-  // buying tab, so we always set TaxCode + FreightTaxCode to GST. ABN is
-  // added if supplied. Fail loudly if the company file has no GST tax
-  // code (extremely unusual — every AU file ships with one).
-  const gst = await getTaxCodeByCode(label, 'GST')
-  if (!gst) {
-    throw new Error(`MYOB ${label} company file has no tax code with Code='GST'`)
+  // buying tab. Caller picks 'GST' or 'FRE' (default GST). FreightTaxCode
+  // tracks the same value — there's no separate freight signal on a
+  // supplier invoice. Fail loudly if the chosen code isn't in the file.
+  const taxCodeValue: 'GST' | 'FRE' = input.taxCode === 'FRE' ? 'FRE' : 'GST'
+  const tax = await getTaxCodeByCode(label, taxCodeValue)
+  if (!tax) {
+    throw new Error(`MYOB ${label} company file has no tax code with Code='${taxCodeValue}'`)
   }
   const buyingDetails: Record<string, any> = {
-    TaxCode:        { UID: gst.uid },
-    FreightTaxCode: { UID: gst.uid },
+    TaxCode:        { UID: tax.uid },
+    FreightTaxCode: { UID: tax.uid },
   }
   const abn = (input.abn || '').replace(/\s/g, '').trim()
   if (abn) {
