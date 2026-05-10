@@ -196,6 +196,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     : userAgent.includes('vercel-cron')
   if (!authorized) return res.status(401).json({ error: 'Unauthorised' })
 
+  try {
+    return await runHandler(req, res)
+  } catch (e: any) {
+    console.error('bank-payments-slack: unhandled error', e)
+    return res.status(500).json({
+      ok: false,
+      error: (e?.message || String(e)).slice(0, 500),
+      stack: process.env.NODE_ENV === 'production' ? undefined : (e?.stack || null),
+    })
+  }
+}
+
+async function runHandler(req: NextApiRequest, res: NextApiResponse) {
   const force = req.query.force === '1'
   const dryRun = req.query.dry === '1'
 
@@ -233,13 +246,34 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   const { since, hours, label: windowLabel } = windowStart(now)
 
-  const [vpsResult, jawsResult] = await Promise.all([
+  // Use allSettled so one company's MYOB fetch failing doesn't tank the other.
+  const settled = await Promise.allSettled([
     fetchBankTxnsSince('VPS',  since),
     fetchBankTxnsSince('JAWS', since),
   ])
 
-  const vpsMsg  = buildMessage('VPS',  vpsResult,  now, windowLabel)
-  const jawsMsg = buildMessage('JAWS', jawsResult, now, windowLabel)
+  const safeResult = (label: CompanyFileLabel, s: PromiseSettledResult<CompanyTxnsResult>): CompanyTxnsResult => {
+    if (s.status === 'fulfilled') return s.value
+    return { label, connected: true, txns: [], error: (s.reason?.message || String(s.reason)).slice(0, 300) }
+  }
+  const vpsResult  = safeResult('VPS',  settled[0])
+  const jawsResult = safeResult('JAWS', settled[1])
+
+  // Wrap message-building too — a bad row shouldn't kill the whole digest.
+  function safeBuild(label: CompanyFileLabel, r: CompanyTxnsResult) {
+    try { return buildMessage(label, r, now, windowLabel) }
+    catch (e: any) {
+      return {
+        text: `${label} Payments — digest build failed: ${e?.message || e}`,
+        blocks: [
+          { type: 'header', text: { type: 'plain_text', text: `${label} Payments — build error` } },
+          { type: 'section', text: { type: 'mrkdwn', text: `:warning: Couldn't build message: ${(e?.message || String(e)).slice(0, 200)}` } },
+        ],
+      }
+    }
+  }
+  const vpsMsg  = safeBuild('VPS',  vpsResult)
+  const jawsMsg = safeBuild('JAWS', jawsResult)
 
   if (dryRun) {
     return res.status(200).json({
@@ -252,16 +286,26 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     })
   }
 
-  const posts = await Promise.all([
-    webhookVps  ? postWebhook(webhookVps,  vpsMsg)  : Promise.resolve({ ok: false, status: 0, body: 'SLACK_WEBHOOK_VPS_PAYMENTS not set' }),
-    webhookJaws ? postWebhook(webhookJaws, jawsMsg) : Promise.resolve({ ok: false, status: 0, body: 'SLACK_WEBHOOK_JAWS_PAYMENTS not set' }),
+  // Same allSettled treatment for the posts — VPS webhook erroring out
+  // shouldn't prevent the JAWS message from going through.
+  async function safePost(label: CompanyFileLabel, url: string | undefined, msg: { text: string; blocks: any[] }) {
+    if (!url) return { ok: false, status: 0, body: `SLACK_WEBHOOK_${label}_PAYMENTS not set` }
+    try {
+      return await postWebhook(url, msg)
+    } catch (e: any) {
+      return { ok: false, status: 0, body: `fetch threw: ${(e?.message || String(e)).slice(0, 200)}` }
+    }
+  }
+  const [vpsPost, jawsPost] = await Promise.all([
+    safePost('VPS',  webhookVps,  vpsMsg),
+    safePost('JAWS', webhookJaws, jawsMsg),
   ])
 
   return res.status(200).json({
-    ok: posts.every(p => p.ok),
+    ok: vpsPost.ok && jawsPost.ok,
     sinceUtc: since.toISOString(),
     windowHours: hours,
-    vps:  { txnCount: vpsResult.txns.length,  posted: posts[0].ok, status: posts[0].status, body: posts[0].body, error: vpsResult.error },
-    jaws: { txnCount: jawsResult.txns.length, posted: posts[1].ok, status: posts[1].status, body: posts[1].body, error: jawsResult.error },
+    vps:  { txnCount: vpsResult.txns.length,  posted: vpsPost.ok,  status: vpsPost.status,  body: vpsPost.body,  fetchError: vpsResult.error  || null },
+    jaws: { txnCount: jawsResult.txns.length, posted: jawsPost.ok, status: jawsPost.status, body: jawsPost.body, fetchError: jawsResult.error || null },
   })
 }
