@@ -234,6 +234,22 @@ export async function retrieveBalanceTransaction(
   return req(label, 'GET', `/balance_transactions/${encodeURIComponent(txnId)}`)
 }
 
+/** Retrieve a single charge. */
+export async function retrieveCharge(
+  label: StripeAccountLabel,
+  chargeId: string,
+): Promise<StripeChargeLite> {
+  return req(label, 'GET', `/charges/${encodeURIComponent(chargeId)}`)
+}
+
+/** Retrieve a single payment intent (used to find the latest_charge). */
+export async function retrievePaymentIntent(
+  label: StripeAccountLabel,
+  piId: string,
+): Promise<{ id: string; latest_charge: string | null; status: string }> {
+  return req(label, 'GET', `/payment_intents/${encodeURIComponent(piId)}`)
+}
+
 /** Look up a Stripe customer. */
 export async function retrieveCustomer(
   label: StripeAccountLabel,

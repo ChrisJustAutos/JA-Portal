@@ -30,6 +30,8 @@ import {
   StripeInvoiceLite,
   StripeBalanceTxLite,
   retrieveBalanceTransaction,
+  retrieveCharge,
+  retrievePaymentIntent,
 } from './stripe-multi'
 
 // ── Constants: JAWS company file UIDs ──────────────────────────────────
@@ -191,25 +193,32 @@ async function findExistingMyobInvoiceByStripeId(
 async function getStripeInvoiceFee(
   account: StripeAccountLabel,
   invoice: StripeInvoiceLite,
-): Promise<{ fee_cents: number; balance_transaction_id: string | null; note: string }> {
-  if (!invoice.charge) {
-    return { fee_cents: 0, balance_transaction_id: null, note: 'no charge attached — assuming zero fee' }
+): Promise<{ fee_cents: number; balance_transaction_id: string | null; charge_id: string | null; note: string }> {
+  // 1. Find the charge. invoice.charge can be null on newer Stripe API
+  //    versions where the field is no longer populated inline — fall back
+  //    to payment_intent.latest_charge.
+  let chargeId: string | null = invoice.charge
+  if (!chargeId && invoice.payment_intent) {
+    try {
+      const pi = await retrievePaymentIntent(account, invoice.payment_intent)
+      chargeId = pi.latest_charge || null
+    } catch {
+      // swallow — we'll bail out below
+    }
   }
-  // The Stripe invoice doesn't include the charge or balance_transaction
-  // inline (we couldn't expand on the list call). Fetch the charge first
-  // to get its balance_transaction id.
-  const chRes = await fetch(`https://api.stripe.com/v1/charges/${encodeURIComponent(invoice.charge)}`, {
-    headers: { 'Authorization': `Bearer ${process.env['STRIPE_SECRET_KEY_' + account]}` },
-  })
-  if (!chRes.ok) {
-    throw new Error(`Stripe charge fetch failed (${chRes.status}) for ${invoice.charge}`)
+  if (!chargeId) {
+    return { fee_cents: 0, balance_transaction_id: null, charge_id: null, note: 'no charge/payment_intent attached — assuming zero fee' }
   }
-  const charge = await chRes.json() as { balance_transaction: string | null }
+
+  // 2. Fetch charge → balance_transaction id
+  const charge = await retrieveCharge(account, chargeId)
   if (!charge.balance_transaction) {
-    return { fee_cents: 0, balance_transaction_id: null, note: 'charge has no balance_transaction yet' }
+    return { fee_cents: 0, balance_transaction_id: null, charge_id: chargeId, note: 'charge has no balance_transaction yet' }
   }
+
+  // 3. Fetch balance_transaction → fee
   const bt: StripeBalanceTxLite = await retrieveBalanceTransaction(account, charge.balance_transaction)
-  return { fee_cents: bt.fee || 0, balance_transaction_id: bt.id, note: 'fee resolved from balance_transaction' }
+  return { fee_cents: bt.fee || 0, balance_transaction_id: bt.id, charge_id: chargeId, note: 'fee resolved from balance_transaction' }
 }
 
 // ── Payload builders ────────────────────────────────────────────────────
