@@ -199,7 +199,6 @@ export async function listPaidInvoices(
     status: 'paid',
     'created[gte]': sinceUnix,
     'created[lte]': untilUnix,
-    expand: ['data.customer'].join(','),  // expand customer for email/name
   })
 }
 
