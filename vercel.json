@@ -12,7 +12,8 @@
     "pages/api/calls/backfill-followups.ts":        { "maxDuration": 300 },
     "pages/api/webhooks/graph-mail.ts":             { "maxDuration": 60 },
     "pages/api/admin/setup-graph-subscriptions.ts": { "maxDuration": 60 },
-    "pages/api/cron/renew-graph-subscriptions.ts":  { "maxDuration": 60 }
+    "pages/api/cron/renew-graph-subscriptions.ts":  { "maxDuration": 60 },
+    "pages/api/cron/bank-payments-slack.ts":        { "maxDuration": 120 }
   },
   "crons": [
     {
@@ -30,6 +31,10 @@
     {
       "path": "/api/cron/health-check",
       "schedule": "*/5 * * * *"
+    },
+    {
+      "path": "/api/cron/bank-payments-slack",
+      "schedule": "0 20,21 * * *"
     }
   ]
 }
