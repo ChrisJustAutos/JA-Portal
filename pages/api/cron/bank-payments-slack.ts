@@ -86,33 +86,46 @@ function windowStart(now: Date): { since: Date; hours: number; label: string } {
   return { since, hours, label }
 }
 
+// ── Filter ──────────────────────────────────────────────────────────────
+// The digest is for *incoming* payments only (deposits). Outgoing
+// Spend Money is dropped entirely. Deposits at or above $50k are also
+// hidden — those go through a separate manual review channel — but we
+// keep a count so it's visible in the message that some were excluded.
+
+const HIGH_VALUE_THRESHOLD = 50_000
+
+interface FilteredResult {
+  txns: BankTxn[]
+  hiddenHighValue: number   // count of receive-money >= $50k that were dropped
+}
+
+function applyFilter(txns: BankTxn[]): FilteredResult {
+  let hiddenHighValue = 0
+  const out: BankTxn[] = []
+  for (const t of txns) {
+    if (t.kind !== 'receive') continue
+    if (t.amount >= HIGH_VALUE_THRESHOLD) { hiddenHighValue++; continue }
+    out.push(t)
+  }
+  return { txns: out, hiddenHighValue }
+}
+
 // ── Message formatting ─────────────────────────────────────────────────
 
 const MAX_LINES = 25     // Slack soft-truncates very long blocks; keep tidy.
 
-interface CompanyTotals {
-  count: number
-  totalIn: number
-  totalOut: number
-}
-
-function totals(txns: BankTxn[]): CompanyTotals {
-  let totalIn = 0, totalOut = 0
-  for (const t of txns) {
-    if (t.kind === 'receive') totalIn += t.amount
-    else totalOut += t.amount
-  }
-  return { count: txns.length, totalIn, totalOut }
-}
-
 function buildMessage(
   label: CompanyFileLabel,
   result: CompanyTxnsResult,
+  filtered: FilteredResult,
   now: Date,
   windowLabel: string,
 ): { text: string; blocks: SlackBlock[] } {
   const dayStr = formatSydneyDayLong(now)
   const header = `${label} Payments — ${dayStr}`
+  const hiddenFooter = filtered.hiddenHighValue > 0
+    ? `\n_${filtered.hiddenHighValue} deposit${filtered.hiddenHighValue === 1 ? '' : 's'} ≥ ${fmtAud(HIGH_VALUE_THRESHOLD)} hidden — review in MYOB._`
+    : ''
 
   if (!result.connected) {
     return {
@@ -134,44 +147,46 @@ function buildMessage(
     }
   }
 
-  const t = totals(result.txns)
-  if (t.count === 0) {
+  const txns = filtered.txns
+  if (txns.length === 0) {
+    const text = filtered.hiddenHighValue > 0
+      ? `No new deposits under ${fmtAud(HIGH_VALUE_THRESHOLD)} in MYOB ${label} for the ${windowLabel}.${hiddenFooter}`
+      : `No new deposits in MYOB ${label} for the ${windowLabel}. :tea:`
     return {
-      text: `${header}: no new bank transactions (${windowLabel}).`,
+      text: `${header}: no new deposits (${windowLabel}).`,
       blocks: [
         { type: 'header', text: { type: 'plain_text', text: header } },
-        { type: 'section', text: { type: 'mrkdwn', text: `No new bank transactions in MYOB ${label} for the ${windowLabel}. :tea:` } },
+        { type: 'section', text: { type: 'mrkdwn', text: text } },
       ],
     }
   }
 
-  const summaryParts: string[] = [`*${t.count}* new transaction${t.count === 1 ? '' : 's'}`]
-  if (t.totalIn > 0)  summaryParts.push(`:arrow_down: ${fmtAud(t.totalIn)} in`)
-  if (t.totalOut > 0) summaryParts.push(`:arrow_up: ${fmtAud(t.totalOut)} out`)
-  const summary = summaryParts.join('  ·  ') + `   _(${windowLabel})_`
+  const totalIn = txns.reduce((s, t) => s + t.amount, 0)
+  const summary = `*${txns.length}* new deposit${txns.length === 1 ? '' : 's'}  ·  :arrow_down: ${fmtAud(totalIn)} received   _(${windowLabel})_`
 
-  const shown = result.txns.slice(0, MAX_LINES)
-  const overflow = result.txns.length - shown.length
+  const shown = txns.slice(0, MAX_LINES)
+  const overflow = txns.length - shown.length
 
-  // Build a single mrkdwn section with one line per txn. Keep concise:
-  //   Tue 12/05 · -$450.00 · Bunnings (parts) · BankAcct
+  // Build a single mrkdwn section with one line per deposit. Keep concise:
+  //   Tue 12/05 · +$1,200.00 · Customer Pty Ltd · NAB 1-1100
   const lines = shown.map(tx => {
-    const sign = tx.kind === 'spend' ? '−' : '+'
-    const who = tx.payeeOrPayer || (tx.kind === 'spend' ? 'Spend Money' : 'Receive Money')
+    const who = tx.payeeOrPayer || 'Deposit'
     const memo = tx.memo ? ` _(${truncate(tx.memo, 60)})_` : ''
     const acct = tx.bankAccountName ? ` · ${tx.bankAccountName}` : ''
-    return `• ${formatSydneyShortDate(tx.date)} · *${sign}${fmtAud(tx.amount).replace('-', '')}* · ${escapeMrkdwn(who)}${memo}${acct}`
+    return `• ${formatSydneyShortDate(tx.date)} · *+${fmtAud(tx.amount)}* · ${escapeMrkdwn(who)}${memo}${acct}`
   })
   if (overflow > 0) lines.push(`_…and ${overflow} more — open MYOB ${label} to view._`)
+
+  const bodyText = lines.join('\n') + hiddenFooter
 
   const blocks: SlackBlock[] = [
     { type: 'header', text: { type: 'plain_text', text: header } },
     { type: 'section', text: { type: 'mrkdwn', text: summary } },
     { type: 'divider' },
-    { type: 'section', text: { type: 'mrkdwn', text: lines.join('\n') } },
+    { type: 'section', text: { type: 'mrkdwn', text: bodyText } },
   ]
 
-  const text = `${header}: ${t.count} new transaction${t.count === 1 ? '' : 's'} (${windowLabel})`
+  const text = `${header}: ${txns.length} new deposit${txns.length === 1 ? '' : 's'} (${windowLabel})`
   return { text, blocks }
 }
 
@@ -259,9 +274,12 @@ async function runHandler(req: NextApiRequest, res: NextApiResponse) {
   const vpsResult  = safeResult('VPS',  settled[0])
   const jawsResult = safeResult('JAWS', settled[1])
 
+  const vpsFiltered  = applyFilter(vpsResult.txns)
+  const jawsFiltered = applyFilter(jawsResult.txns)
+
   // Wrap message-building too — a bad row shouldn't kill the whole digest.
-  function safeBuild(label: CompanyFileLabel, r: CompanyTxnsResult) {
-    try { return buildMessage(label, r, now, windowLabel) }
+  function safeBuild(label: CompanyFileLabel, r: CompanyTxnsResult, f: FilteredResult) {
+    try { return buildMessage(label, r, f, now, windowLabel) }
     catch (e: any) {
       return {
         text: `${label} Payments — digest build failed: ${e?.message || e}`,
@@ -272,8 +290,8 @@ async function runHandler(req: NextApiRequest, res: NextApiResponse) {
       }
     }
   }
-  const vpsMsg  = safeBuild('VPS',  vpsResult)
-  const jawsMsg = safeBuild('JAWS', jawsResult)
+  const vpsMsg  = safeBuild('VPS',  vpsResult,  vpsFiltered)
+  const jawsMsg = safeBuild('JAWS', jawsResult, jawsFiltered)
 
   if (dryRun) {
     return res.status(200).json({
@@ -281,8 +299,8 @@ async function runHandler(req: NextApiRequest, res: NextApiResponse) {
       dryRun: true,
       sinceUtc: since.toISOString(),
       windowHours: hours,
-      vps:  { result: { ...vpsResult,  txns: vpsResult.txns.length },  message: vpsMsg },
-      jaws: { result: { ...jawsResult, txns: jawsResult.txns.length }, message: jawsMsg },
+      vps:  { result: { ...vpsResult,  txns: vpsResult.txns.length  },  shown: vpsFiltered.txns.length,  hiddenHighValue: vpsFiltered.hiddenHighValue,  message: vpsMsg  },
+      jaws: { result: { ...jawsResult, txns: jawsResult.txns.length }, shown: jawsFiltered.txns.length, hiddenHighValue: jawsFiltered.hiddenHighValue, message: jawsMsg },
     })
   }
 
@@ -305,7 +323,7 @@ async function runHandler(req: NextApiRequest, res: NextApiResponse) {
     ok: vpsPost.ok && jawsPost.ok,
     sinceUtc: since.toISOString(),
     windowHours: hours,
-    vps:  { txnCount: vpsResult.txns.length,  posted: vpsPost.ok,  status: vpsPost.status,  body: vpsPost.body,  fetchError: vpsResult.error  || null },
-    jaws: { txnCount: jawsResult.txns.length, posted: jawsPost.ok, status: jawsPost.status, body: jawsPost.body, fetchError: jawsResult.error || null },
+    vps:  { rawCount: vpsResult.txns.length,  shown: vpsFiltered.txns.length,  hiddenHighValue: vpsFiltered.hiddenHighValue,  posted: vpsPost.ok,  status: vpsPost.status,  body: vpsPost.body,  fetchError: vpsResult.error  || null },
+    jaws: { rawCount: jawsResult.txns.length, shown: jawsFiltered.txns.length, hiddenHighValue: jawsFiltered.hiddenHighValue, posted: jawsPost.ok, status: jawsPost.status, body: jawsPost.body, fetchError: jawsResult.error || null },
   })
 }
