@@ -32,6 +32,8 @@ import {
   retrieveBalanceTransaction,
   retrieveCharge,
   retrievePaymentIntent,
+  retrieveInvoice,
+  listChargesForInvoice,
 } from './stripe-multi'
 
 // ── Constants: JAWS company file UIDs ──────────────────────────────────
@@ -74,6 +76,7 @@ export interface PushPreview {
   gross_cents: number          // Stripe gross (= invoice total)
   fee_cents: number            // Stripe fee from balance_transaction.fee
   net_cents: number            // gross - fee
+  feeResolution: string        // note describing how we found the fee (or didn't)
 
   customer: {
     decision: 'reuse' | 'create' | 'ambiguous' | 'error'
@@ -194,31 +197,60 @@ async function getStripeInvoiceFee(
   account: StripeAccountLabel,
   invoice: StripeInvoiceLite,
 ): Promise<{ fee_cents: number; balance_transaction_id: string | null; charge_id: string | null; note: string }> {
-  // 1. Find the charge. invoice.charge can be null on newer Stripe API
-  //    versions where the field is no longer populated inline — fall back
-  //    to payment_intent.latest_charge.
+  // Find a charge id via multiple fallbacks — Stripe API version drift
+  // means different fields are populated on different accounts.
   let chargeId: string | null = invoice.charge
+  let path = 'invoice.charge'
+
   if (!chargeId && invoice.payment_intent) {
     try {
       const pi = await retrievePaymentIntent(account, invoice.payment_intent)
       chargeId = pi.latest_charge || null
-    } catch {
-      // swallow — we'll bail out below
-    }
-  }
-  if (!chargeId) {
-    return { fee_cents: 0, balance_transaction_id: null, charge_id: null, note: 'no charge/payment_intent attached — assuming zero fee' }
+      path = 'payment_intent.latest_charge'
+    } catch { /* fall through */ }
   }
 
-  // 2. Fetch charge → balance_transaction id
+  // Last-resort: re-fetch the invoice directly (single-retrieve returns
+  // fields the list endpoint strips) and re-check both.
+  if (!chargeId) {
+    try {
+      const full = await retrieveInvoice(account, invoice.id)
+      chargeId = full.charge || null
+      if (!chargeId && full.payment_intent) {
+        const pi = await retrievePaymentIntent(account, full.payment_intent)
+        chargeId = pi.latest_charge || null
+        path = 'retrieve-invoice → payment_intent.latest_charge'
+      } else if (chargeId) {
+        path = 'retrieve-invoice → charge'
+      }
+    } catch { /* fall through */ }
+  }
+
+  // Last-last-resort: list charges filtered by invoice id.
+  if (!chargeId) {
+    try {
+      const charges = await listChargesForInvoice(account, invoice.id)
+      const succeeded = charges.find(c => c.status === 'succeeded') || charges[0]
+      if (succeeded) {
+        chargeId = succeeded.id
+        path = 'list-charges?invoice='
+      }
+    } catch { /* fall through */ }
+  }
+
+  if (!chargeId) {
+    return { fee_cents: 0, balance_transaction_id: null, charge_id: null, note: 'no charge findable via any path — assuming zero fee' }
+  }
+
+  // Fetch charge → balance_transaction id
   const charge = await retrieveCharge(account, chargeId)
   if (!charge.balance_transaction) {
-    return { fee_cents: 0, balance_transaction_id: null, charge_id: chargeId, note: 'charge has no balance_transaction yet' }
+    return { fee_cents: 0, balance_transaction_id: null, charge_id: chargeId, note: `charge ${chargeId} has no balance_transaction yet (via ${path})` }
   }
 
-  // 3. Fetch balance_transaction → fee
+  // Fetch balance_transaction → fee
   const bt: StripeBalanceTxLite = await retrieveBalanceTransaction(account, charge.balance_transaction)
-  return { fee_cents: bt.fee || 0, balance_transaction_id: bt.id, charge_id: chargeId, note: 'fee resolved from balance_transaction' }
+  return { fee_cents: bt.fee || 0, balance_transaction_id: bt.id, charge_id: chargeId, note: `fee resolved via ${path}` }
 }
 
 // ── Payload builders ────────────────────────────────────────────────────
@@ -332,6 +364,7 @@ export async function pushStripeInvoiceToJaws(
       gross_cents: invoice.total,
       fee_cents: existing.data.fee_cents || 0,
       net_cents:  existing.data.net_cents  || invoice.total,
+      feeResolution: 'cached from previous push',
       customer: {
         decision: 'reuse',
         myobUid: existing.data.myob_customer_uid || undefined,
@@ -371,6 +404,7 @@ export async function pushStripeInvoiceToJaws(
       gross_cents: invoice.total,
       fee_cents: 0,
       net_cents: invoice.total,
+      feeResolution: 'not needed — duplicate already in MYOB',
       customer: {
         decision: 'reuse',
         note: `Found existing MYOB invoice ${duplicate.number} containing this Stripe id`,
@@ -491,6 +525,7 @@ export async function pushStripeInvoiceToJaws(
     gross_cents,
     fee_cents,
     net_cents,
+    feeResolution: feeInfo.note,
     customer,
     invoicePayload,
     paymentPayload,

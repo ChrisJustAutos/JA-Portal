@@ -250,6 +250,23 @@ export async function retrievePaymentIntent(
   return req(label, 'GET', `/payment_intents/${encodeURIComponent(piId)}`)
 }
 
+/** Retrieve a single invoice (returns more fields than the list endpoint). */
+export async function retrieveInvoice(
+  label: StripeAccountLabel,
+  invoiceId: string,
+): Promise<StripeInvoiceLite> {
+  return req(label, 'GET', `/invoices/${encodeURIComponent(invoiceId)}`)
+}
+
+/** List charges filtered by the invoice they belong to. Works across API versions. */
+export async function listChargesForInvoice(
+  label: StripeAccountLabel,
+  invoiceId: string,
+): Promise<StripeChargeLite[]> {
+  const page = await req(label, 'GET', `/charges${buildQuery({ invoice: invoiceId, limit: 10 })}`) as StripeListPage<StripeChargeLite>
+  return Array.isArray(page?.data) ? page.data : []
+}
+
 /** Look up a Stripe customer. */
 export async function retrieveCustomer(
   label: StripeAccountLabel,
