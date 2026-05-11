@@ -286,7 +286,7 @@ async function main() {
   }
 
   // Process rows
-  let stats = { updated: 0, created: 0, mdNotFound: 0, mdAmbiguous: 0, errors: 0 }
+  let stats = { updated: 0, created: 0, skippedGood: 0, mdNotFound: 0, mdAmbiguous: 0, errors: 0 }
   let idx = 0
   for (const row of uniqueRows) {
     idx++
@@ -310,6 +310,7 @@ async function main() {
 
       const existingItem = byPartNumber.get(row.stockNumber.toLowerCase())
       if (existingItem) {
+        // Always reflect the latest availability on items already on the board.
         if (existingItem.availabilityLabel === availLabel) {
           log(`${prefix} · already ${availLabel} (no change)`)
         } else {
@@ -318,20 +319,29 @@ async function main() {
           log(`${prefix} · updated ${existingItem.availabilityLabel || '(blank)'} → ${availLabel}`)
         }
       } else {
-        const vehicle = fuzzyVehicle(row.name)
-        const itemId = await createItem({
-          name: row.name || row.stockNumber,
-          partNumber: row.stockNumber,
-          vehicleLabel: vehicle,
-          availabilityLabel: availLabel,
-        })
-        stats.created++
-        log(`${prefix} · CREATED ${itemId} · ${row.name || row.stockNumber} · ${vehicle} · ${availLabel}`)
-        // Notify Morgan + Terry
-        const notice = `New product added by stock sync: ${row.name || row.stockNumber} (${row.stockNumber}). ETA defaulted to TBA — please set the real ETA and confirm Vehicle.`
-        await postUpdate(itemId, notice)
-        await notifyUser(NOTIFY_USER_IDS.morgan, itemId, notice)
-        await notifyUser(NOTIFY_USER_IDS.terry,  itemId, notice)
+        // Only create new items for parts that actually need watching —
+        // i.e. stock is below the "Good" threshold (≥6). Plenty-in-stock
+        // parts don't need to clutter the Delays board.
+        const needsTracking = (stockCount ?? 0) < 6
+        if (!needsTracking) {
+          stats.skippedGood++
+          log(`${prefix} · skip create — stock ${stockCount} (Good), not adding to Delays`)
+        } else {
+          const vehicle = fuzzyVehicle(row.name)
+          const itemId = await createItem({
+            name: row.name || row.stockNumber,
+            partNumber: row.stockNumber,
+            vehicleLabel: vehicle,
+            availabilityLabel: availLabel,
+          })
+          stats.created++
+          log(`${prefix} · CREATED ${itemId} · ${row.name || row.stockNumber} · ${vehicle} · ${availLabel}`)
+          // Notify Morgan + Terry
+          const notice = `New product added by stock sync: ${row.name || row.stockNumber} (${row.stockNumber}). ETA defaulted to TBA — please set the real ETA and confirm Vehicle.`
+          await postUpdate(itemId, notice)
+          await notifyUser(NOTIFY_USER_IDS.morgan, itemId, notice)
+          await notifyUser(NOTIFY_USER_IDS.terry,  itemId, notice)
+        }
       }
     } catch (e: any) {
       stats.errors++
@@ -339,7 +349,7 @@ async function main() {
     }
   }
 
-  log(`=== Done. Updated ${stats.updated} · Created ${stats.created} · MD-not-found ${stats.mdNotFound} · MD-ambiguous ${stats.mdAmbiguous} · Errors ${stats.errors} ===`)
+  log(`=== Done. Updated ${stats.updated} · Created ${stats.created} · Skipped-good ${stats.skippedGood} · MD-not-found ${stats.mdNotFound} · MD-ambiguous ${stats.mdAmbiguous} · Errors ${stats.errors} ===`)
   if (stats.errors > 0) process.exit(1)
 }
 
