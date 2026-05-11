@@ -212,6 +212,12 @@ function buildFeePaymentPayload(args: {
 // details for every charge in the payout — used to build the Slack
 // message listing exactly which UF entries to tick when the user does
 // "Prepare Bank Deposit" in MYOB UI.
+//
+// Match strategy: for each Stripe charge in the payout, search MYOB
+// Sale/CustomerPayment for an entry whose AmountReceived matches the
+// charge net (within 1c) and whose Date is within ±2 days of the
+// charge date. Catches both our pushes AND Make-era records uniformly.
+// Ambiguous matches (>1 hit) are left unmatched for human review.
 async function getPayoutChargeDetails(
   account: StripeAccountLabel,
   txns: StripeBalanceTxLite[],
@@ -219,52 +225,57 @@ async function getPayoutChargeDetails(
   const details: PayoutChargeDetail[] = []
   const conn = await getConnection('JAWS')
   if (!conn?.company_file_id) return details
+  const cfId = conn.company_file_id
 
   for (const t of txns) {
     if (t.type !== 'charge' && t.type !== 'payment') continue
     if (!t.source) continue
 
-    // Resolve the charge → invoice
-    let invoiceId: string | null = null
-    try {
-      const charge = await retrieveCharge(account, t.source)
-      invoiceId = charge.invoice || null
-    } catch {
-      // skip — keep going on partial data
-    }
+    const netCents = (t.amount || 0) - (t.fee || 0)
+    const netDollars = netCents / 100
+    const chargeDate = new Date((t.created || 0) * 1000)
+    const fromIso = new Date(chargeDate.getTime() - 2 * 86400_000).toISOString().slice(0, 10) + 'T00:00:00'
+    const toIso   = new Date(chargeDate.getTime() + 2 * 86400_000).toISOString().slice(0, 10) + 'T23:59:59'
 
-    // Look up MYOB receipt via sync log
     let myobReceiptNumber: string | null = null
     let myobCustomerName: string | null = null
-    if (invoiceId) {
-      const { data: log } = await sb()
-        .from('stripe_myob_sync_log')
-        .select('myob_payment_uid, myob_invoice_uid, customer_name')
-        .eq('stripe_account', account)
-        .eq('stripe_entity_type', 'invoice')
-        .eq('stripe_entity_id', invoiceId)
-        .maybeSingle()
-      if (log?.customer_name) myobCustomerName = log.customer_name
-      if (log?.myob_payment_uid && conn.company_file_id) {
-        // Fetch the receipt number from MYOB
-        try {
-          const { data } = await myobFetch(
-            conn.id,
-            `/accountright/${conn.company_file_id}/Sale/CustomerPayment/${log.myob_payment_uid}`,
-            {},
-          )
-          if (data?.ReceiptNumber) myobReceiptNumber = data.ReceiptNumber
-          if (data?.Customer?.Name) myobCustomerName = data.Customer.Name
-        } catch { /* ignore */ }
+    let stripeInvoiceId: string | null = null
+
+    try {
+      // Search MYOB Customer Payments in window for exact amount match.
+      // We can't filter on AmountReceived in OData reliably, so pull
+      // payments by date and filter in JS.
+      const { data } = await myobFetch(conn.id, `/accountright/${cfId}/Sale/CustomerPayment`, {
+        query: {
+          '$top': 50,
+          '$filter': `Date ge datetime'${fromIso}' and Date le datetime'${toIso}'`,
+        },
+      })
+      const items: any[] = Array.isArray(data?.Items) ? data.Items : []
+      const matches = items.filter((p: any) => {
+        const amt = typeof p.AmountReceived === 'number' ? p.AmountReceived : parseFloat(p.AmountReceived || '0')
+        return Math.abs(amt - netDollars) < 0.01
+      })
+      if (matches.length === 1) {
+        const m = matches[0]
+        myobReceiptNumber = m.ReceiptNumber || null
+        myobCustomerName = m.Customer?.Name || null
       }
-    }
+      // If multiple matches, leave unmatched — human picks via Slack hint
+    } catch { /* keep going */ }
+
+    // Optional: try to also resolve stripe invoice id (helps future debug).
+    try {
+      const charge = await retrieveCharge(account, t.source)
+      stripeInvoiceId = charge.invoice || null
+    } catch { /* ignore */ }
 
     details.push({
       stripeChargeId: t.source,
-      stripeInvoiceId: invoiceId,
+      stripeInvoiceId,
       myobReceiptNumber,
       myobCustomerName,
-      netCents: (t.amount || 0) - (t.fee || 0),
+      netCents,
     })
   }
   return details
