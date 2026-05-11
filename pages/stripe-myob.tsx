@@ -387,7 +387,9 @@ export default function StripeMyobPage({ user }: { user: PageUser }) {
                     </td>
                     <td style={tdStyle}>
                       {fmtDateShort(r.paid_at || r.created)}
-                      {isPreCutover(r.paid_at || r.created) && (
+                      {isPreCutover(r.paid_at || r.created)
+                        && r.myobStatus !== 'pushed'
+                        && r.myobStatus !== 'skipped_duplicate' && (
                         <div title="Before Make cutover — possible Make duplicate"
                           style={{ fontSize:10, color:T.red, marginTop:3 }}>⚠ pre-cutover</div>
                       )}
