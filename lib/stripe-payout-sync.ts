@@ -240,11 +240,17 @@ async function getPayoutChargeDetails(
     let myobReceiptNumber: string | null = null
     let myobCustomerName: string | null = null
     let stripeInvoiceId: string | null = null
+    let stripeCustomerName: string | null = null
+
+    // Resolve the Stripe customer name from the charge (used to
+    // disambiguate when multiple MYOB payments match the date+amount).
+    try {
+      const charge = await retrieveCharge(account, t.source)
+      stripeInvoiceId = charge.invoice || null
+      stripeCustomerName = charge.billing_details?.name || null
+    } catch { /* ignore */ }
 
     try {
-      // Search MYOB Customer Payments in window for exact amount match.
-      // We can't filter on AmountReceived in OData reliably, so pull
-      // payments by date and filter in JS.
       const { data } = await myobFetch(conn.id, `/accountright/${cfId}/Sale/CustomerPayment`, {
         query: {
           '$top': 50,
@@ -252,23 +258,31 @@ async function getPayoutChargeDetails(
         },
       })
       const items: any[] = Array.isArray(data?.Items) ? data.Items : []
-      const matches = items.filter((p: any) => {
+
+      // Step 1: filter by amount (always required).
+      const amountMatches = items.filter((p: any) => {
         const amt = typeof p.AmountReceived === 'number' ? p.AmountReceived : parseFloat(p.AmountReceived || '0')
         return Math.abs(amt - netDollars) < 0.01
       })
+
+      // Step 2: if we have a Stripe customer name, narrow to that customer.
+      let matches = amountMatches
+      if (stripeCustomerName && amountMatches.length > 1) {
+        const stripeTokens = stripeCustomerName.toLowerCase().split(/\s+/).filter(Boolean)
+        matches = amountMatches.filter((p: any) => {
+          const myobName: string = (p.Customer?.Name || '').toLowerCase()
+          // Match if any token from the Stripe name appears in MYOB name
+          return stripeTokens.some(tok => tok.length >= 3 && myobName.includes(tok))
+        })
+      }
+
       if (matches.length === 1) {
         const m = matches[0]
         myobReceiptNumber = m.ReceiptNumber || null
         myobCustomerName = m.Customer?.Name || null
       }
-      // If multiple matches, leave unmatched — human picks via Slack hint
+      // If matches.length > 1 or === 0, leave unmatched — human picks via Slack hint
     } catch { /* keep going */ }
-
-    // Optional: try to also resolve stripe invoice id (helps future debug).
-    try {
-      const charge = await retrieveCharge(account, t.source)
-      stripeInvoiceId = charge.invoice || null
-    } catch { /* ignore */ }
 
     details.push({
       stripeChargeId: t.source,
