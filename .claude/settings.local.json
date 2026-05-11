@@ -30,7 +30,9 @@
       "Bash(curl *)",
       "Read(//tmp/**)",
       "PowerShell(npx tsc --noEmit -p tsconfig.json 2>&1 | Select-Object -First 80)",
-      "mcp__claude_ai_Supabase__list_migrations"
+      "mcp__claude_ai_Supabase__list_migrations",
+      "WebFetch(domain:accountrightapi.myob.com)",
+      "WebFetch(domain:developer.myob.com)"
     ]
   }
 }
