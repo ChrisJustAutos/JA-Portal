@@ -37,7 +37,7 @@ import { loginToMechanicDesk, findStockBySku, type MdClient } from '../lib/mecha
 
 const BOARD_ID = 2060835661
 const DELAYS_GROUP_ID = 'topics'
-const SHEET_ID = process.env.GOOGLE_SHEET_ID || '1qpUFT-bI4U3bB0uqW2aNqD6ZIe3-Y4Qd'
+const SHEET_ID = process.env.GOOGLE_SHEET_ID || '1QYNf9YdxH0xMP9-J5I_L47BA6rYq14Fy'
 
 const COL = {
   partNumber:    'text_mkv0n9h7',
@@ -107,10 +107,14 @@ async function downloadAndParseSheet(): Promise<StockRow[]> {
   log(`Sheet downloaded · ${buf.byteLength} bytes`)
 
   const wb = XLSX.read(buf, { type: 'buffer' })
-  const TARGET_SHEETS = ['DOWNSTAIRS', 'BULK RACKING', 'UPSTAIRS RACKING']
+  // Auto-detect rack sheets: process every tab EXCEPT 'Blank Sheet' (the
+  // empty template). The shape inside each tab is identical: banner row,
+  // optional blank row, then a 'Stock Number' header, then data.
+  const sheetsToProcess = wb.SheetNames.filter(n => n.trim().toLowerCase() !== 'blank sheet')
+  log(`Processing ${sheetsToProcess.length} tabs: ${sheetsToProcess.join(', ')}`)
   const rows: StockRow[] = []
 
-  for (const sheetName of TARGET_SHEETS) {
+  for (const sheetName of sheetsToProcess) {
     const ws = wb.Sheets[sheetName]
     if (!ws) { log(`Sheet "${sheetName}" missing — skipping`); continue }
     // Read as raw arrays so we can find the header row ourselves.
@@ -336,11 +340,9 @@ async function main() {
           })
           stats.created++
           log(`${prefix} · CREATED ${itemId} · ${row.name || row.stockNumber} · ${vehicle} · ${availLabel}`)
-          // Notify Morgan + Terry
-          const notice = `New product added by stock sync: ${row.name || row.stockNumber} (${row.stockNumber}). ETA defaulted to TBA — please set the real ETA and confirm Vehicle.`
-          await postUpdate(itemId, notice)
-          await notifyUser(NOTIFY_USER_IDS.morgan, itemId, notice)
-          await notifyUser(NOTIFY_USER_IDS.terry,  itemId, notice)
+          // Per Morgan: no item updates / comments / notifications on
+          // create. The Monday board itself is the signal — Morgan +
+          // Terry will see new items appear when they look.
         }
       }
     } catch (e: any) {

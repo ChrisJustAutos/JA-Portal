@@ -38,5 +38,5 @@ jobs:
           MECHANICDESK_WORKSHOP_ID: ${{ secrets.MECHANICDESK_WORKSHOP_ID }}
           MECHANICDESK_USERNAME:    ${{ secrets.MECHANICDESK_USERNAME }}
           MECHANICDESK_PASSWORD:    ${{ secrets.MECHANICDESK_PASSWORD }}
-          GOOGLE_SHEET_ID:          ${{ secrets.GOOGLE_SHEET_ID || '1qpUFT-bI4U3bB0uqW2aNqD6ZIe3-Y4Qd' }}
+          GOOGLE_SHEET_ID:          ${{ secrets.GOOGLE_SHEET_ID || '1QYNf9YdxH0xMP9-J5I_L47BA6rYq14Fy' }}
         run: npx tsx scripts/monday-stock-sync.ts
