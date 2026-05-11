@@ -45,6 +45,7 @@ export const JAWS_UIDS = {
   TAX_CODE_GST:        '839eb531-1491-45aa-9571-aac88d2cb2b0',
   ACCT_STRIPE_FEE:     '4cae35d7-c8f7-4b12-b94a-f147283d0132',  // 6-1350
   ACCT_UNDEP_FUNDS:    'e5df6e92-04b6-41ab-876f-be55abc7fa1d',  // 1-1210
+  ACCT_CHQ_3369:       '5cfabf25-ced5-45fc-b04f-2a73632ebb7d',  // 1-1110 NAB Business Acc 3369
   // Sale-revenue accounts. Make appears to vary these per product —
   // for the backfill we default to "Tuning - Default" and surface the
   // choice in dry-run output so the user can override per-row.
@@ -52,6 +53,9 @@ export const JAWS_UIDS = {
   ACCT_MULTIMAP:       '76491034-2115-4faf-80f9-b052c6a6a420',  // 4-1910
   ACCT_EASY_LOCK:      'fa2d1a03-ec24-4da9-9e63-044240df4157',  // 4-1915
   ACCT_REMAP:          'c8dbc437-cd2a-4daf-aed4-0076283dfde6',  // 4-1905
+  // Generic "Stripe" customer card — fees + payout adjustments get
+  // booked against this rather than a real end-customer.
+  CUSTOMER_STRIPE:     '5249a1d5-5324-4d72-91e6-fe7e29761627',
 } as const
 
 // ── Supabase (service-role) ─────────────────────────────────────────────

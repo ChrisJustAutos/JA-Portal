@@ -153,6 +153,25 @@ export interface StripeRefundLite {
   metadata: Record<string, string>
 }
 
+export interface StripePayoutLite {
+  id: string                       // pyout_... (or po_...)
+  amount: number                   // cents — net to bank
+  currency: string
+  status: string                   // 'paid' | 'pending' | 'in_transit' | 'canceled' | 'failed'
+  arrival_date: number             // unix seconds — when it lands
+  created: number                  // unix seconds
+  description: string | null
+  destination: string | null       // ba_xxx
+  method: string                   // 'standard' | 'instant'
+  type: string                     // 'bank_account'
+  balance_transaction: string | null   // txn_xxx for the payout itself (carries fee)
+  failure_balance_transaction: string | null
+  failure_code: string | null
+  failure_message: string | null
+  statement_descriptor: string | null
+  metadata: Record<string, string>
+}
+
 // ── Listing helpers ─────────────────────────────────────────────────────
 // Stripe paginates with `starting_after=<last_id>`, max 100 per page.
 
@@ -266,6 +285,48 @@ export async function listChargesForInvoice(
 ): Promise<StripeChargeLite[]> {
   const page = await req(label, 'GET', `/charges${buildQuery({ invoice: invoiceId, limit: 10 })}`) as StripeListPage<StripeChargeLite>
   return Array.isArray(page?.data) ? page.data : []
+}
+
+/** List payouts in a date range. arrival_date is when the deposit hits the bank. */
+export async function listPayouts(
+  label: StripeAccountLabel,
+  sinceUnix: number,
+  untilUnix: number,
+): Promise<StripePayoutLite[]> {
+  // Filter on arrival_date since that's the accounting date that matters.
+  return listAll<StripePayoutLite>(label, '/payouts', {
+    'arrival_date[gte]': sinceUnix,
+    'arrival_date[lte]': untilUnix,
+  })
+}
+
+/** Retrieve a single payout. */
+export async function retrievePayout(
+  label: StripeAccountLabel,
+  payoutId: string,
+): Promise<StripePayoutLite> {
+  return req(label, 'GET', `/payouts/${encodeURIComponent(payoutId)}`)
+}
+
+/** List all balance transactions associated with a payout. */
+export async function listBalanceTransactionsForPayout(
+  label: StripeAccountLabel,
+  payoutId: string,
+): Promise<StripeBalanceTxLite[]> {
+  const out: StripeBalanceTxLite[] = []
+  let startingAfter: string | undefined = undefined
+  for (let i = 0; i < 50; i++) {
+    const page = await req(label, 'GET', `/balance_transactions${buildQuery({
+      payout: payoutId,
+      limit: 100,
+      starting_after: startingAfter,
+    })}`) as StripeListPage<StripeBalanceTxLite>
+    const items = Array.isArray(page?.data) ? page.data : []
+    out.push(...items)
+    if (!page.has_more || items.length === 0) break
+    startingAfter = items[items.length - 1].id
+  }
+  return out
 }
 
 /** Look up a Stripe customer. */
