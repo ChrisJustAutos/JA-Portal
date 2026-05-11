@@ -97,7 +97,6 @@ async function buildBreakdown(
     listBalanceTransactionsForPayout(account, payoutId),
   ])
 
-  let payoutFee = 0
   let chargeCount = 0, refundCount = 0, otherCount = 0
   let totalCharges = 0, totalChargeFees = 0, totalRefunds = 0
   const balanceTxIds: string[] = []
@@ -105,18 +104,33 @@ async function buildBreakdown(
   for (const t of txns) {
     balanceTxIds.push(t.id)
     if (t.type === 'payout') {
-      payoutFee += t.fee || 0
-    } else if (t.type === 'charge' || t.type === 'payment') {
+      // The payout txn itself — its amount mirrors payout.amount as a
+      // debit from the Stripe balance. Doesn't represent extra fees,
+      // skip it.
+      continue
+    }
+    if (t.type === 'charge' || t.type === 'payment') {
       chargeCount++
-      totalCharges += t.amount || 0
-      totalChargeFees += t.fee || 0
+      totalCharges += t.amount || 0           // gross
+      totalChargeFees += t.fee || 0           // per-charge fee (already on invoice)
     } else if (t.type === 'refund' || t.type === 'payment_refund') {
       refundCount++
       totalRefunds += Math.abs(t.amount || 0)
     } else {
+      // Everything else (stripe_fee, tax_fee, application_fee, adjustment, ...)
+      // is captured in the gap calculation below.
       otherCount++
     }
   }
+
+  // Per-charge fees are already on individual sale invoices, so what
+  // we expect to hit the bank from the matched charges is the gross
+  // minus the per-charge fees minus refunds:
+  const expected_net = totalCharges - totalChargeFees - totalRefunds
+  // Any gap between expected and actual payout amount is the
+  // payout-level fee (Stripe payout fee + GST on fees + adjustments).
+  // Positive number = additional fees taken at payout time.
+  const payoutFee = expected_net - payout.amount
 
   return {
     payoutId: payout.id,
