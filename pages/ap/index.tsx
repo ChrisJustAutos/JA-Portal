@@ -155,6 +155,8 @@ export default function APListPage({ user }: PageProps) {
   const [smAccountResults, setSmAccountResults] = useState<Array<{uid:string;displayId:string;name:string;type:string}>>([])
   const [smAccountSelected, setSmAccountSelected] = useState<{uid:string;displayId:string;name:string}|null>(null)
   const [smSearching, setSmSearching] = useState(false)
+  const [smPushing, setSmPushing] = useState(false)
+  const [smError, setSmError] = useState<string | null>(null)
 
   const [pulling, setPulling] = useState(false)
   const [pullMessage, setPullMessage] = useState<string | null>(null)
@@ -222,18 +224,18 @@ export default function APListPage({ user }: PageProps) {
     setSmAccountQuery('')
     setSmAccountResults([])
     setSmAccountSelected(null)
+    setSmError(null)
+    setSmPushing(false)
   }
   function closeSpendMoneyModal() {
     setSpendMoneyInv(null)
+    setSmError(null)
   }
   async function submitSpendMoney() {
-    if (!spendMoneyInv) return
-    if (!smPaymentUid) return
-    if (!smAccountSelected) return
+    if (!spendMoneyInv || !smPaymentUid || !smAccountSelected) return
     const inv = spendMoneyInv
-    setApprovingId(inv.id)
-    setApproveMessage(null)
-    closeSpendMoneyModal()
+    setSmPushing(true)
+    setSmError(null)
     try {
       const res = await fetch(`/api/ap/${inv.id}/approve`, {
         method: 'POST',
@@ -243,13 +245,16 @@ export default function APListPage({ user }: PageProps) {
       })
       const json = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`)
-      const billUidShort = (json.myobBillUid || '').substring(0, 8)
-      setApproveMessage(`✅ Posted "${inv.vendor_name_parsed} ${inv.invoice_number}" as Spend Money — ${billUidShort}…`)
+      // Spend Money returns myobTxnUid (not myobBillUid). Show whichever is present.
+      const uidShort = (json.myobTxnUid || json.myobBillUid || '').substring(0, 8)
+      setApproveMessage(`✅ Posted "${inv.vendor_name_parsed} ${inv.invoice_number}" as Spend Money — ${uidShort}…`)
+      closeSpendMoneyModal()
       fetchData()
     } catch (err: any) {
-      setApproveMessage(`❌ ${inv.vendor_name_parsed} ${inv.invoice_number}: ${err?.message || err}`)
+      // Keep the modal open so the user can see what went wrong + retry.
+      setSmError(err?.message || String(err))
     } finally {
-      setApprovingId(null)
+      setSmPushing(false)
     }
   }
 
@@ -1027,22 +1032,36 @@ export default function APListPage({ user }: PageProps) {
                 )}
               </div>
 
+              {/* Error banner */}
+              {smError && (
+                <div style={{
+                  padding:'10px 14px', marginBottom:14,
+                  background:`${T.red}15`, color:T.red,
+                  border:`1px solid ${T.red}40`, borderRadius:6,
+                  fontSize:12, lineHeight:1.4, whiteSpace:'pre-wrap', wordBreak:'break-word',
+                }}>
+                  <strong>Push failed.</strong> {smError}
+                </div>
+              )}
+
               {/* Actions */}
               <div style={{display:'flex', gap:10, justifyContent:'flex-end', marginTop:8}}>
-                <button onClick={closeSpendMoneyModal} style={{
+                <button onClick={closeSpendMoneyModal} disabled={smPushing} style={{
                   padding:'8px 14px', background:'transparent', color:T.text2,
-                  border:`1px solid ${T.border2}`, borderRadius:6, fontSize:13, cursor:'pointer',
+                  border:`1px solid ${T.border2}`, borderRadius:6, fontSize:13,
+                  cursor: smPushing ? 'wait' : 'pointer',
                 }}>Cancel</button>
                 <button
                   onClick={submitSpendMoney}
-                  disabled={!smPaymentUid || !smAccountSelected}
+                  disabled={!smPaymentUid || !smAccountSelected || smPushing}
                   style={{
                     padding:'8px 16px', background:T.purple, color:'#fff',
-                    border:'none', borderRadius:6, fontSize:13, fontWeight:600, cursor:'pointer',
-                    opacity: (!smPaymentUid || !smAccountSelected) ? 0.4 : 1,
+                    border:'none', borderRadius:6, fontSize:13, fontWeight:600,
+                    cursor: smPushing ? 'wait' : 'pointer',
+                    opacity: (!smPaymentUid || !smAccountSelected || smPushing) ? 0.5 : 1,
                   }}
                 >
-                  $ Push to MYOB
+                  {smPushing ? 'Pushing…' : '$ Push to MYOB'}
                 </button>
               </div>
             </div>
