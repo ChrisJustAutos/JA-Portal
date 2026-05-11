@@ -234,7 +234,9 @@ async function main() {
   const allStocks = await fetchAllStocks(client)
   log(`MD total inventory rows: ${allStocks.length}`)
 
-  // Filter to "below alert" stocks
+  // Filter to "below alert" stocks AND skip anything still in Good range
+  // (6+). Even if a part is technically below its alert threshold, if there
+  // are still 6+ on the shelf it doesn't belong on the Delays board.
   const qualifying = allStocks.filter(s => {
     if (s.deleted) return false
     if (s.deactivated) return false
@@ -242,9 +244,11 @@ async function main() {
     if (!s.stock_alert) return false
     if (typeof s.alert_quantity !== 'number' || s.alert_quantity <= 0) return false
     if (typeof s.available_quantity !== 'number') return false
-    return s.available_quantity < s.alert_quantity
+    if (s.available_quantity >= s.alert_quantity) return false
+    if (s.available_quantity > 5) return false
+    return true
   })
-  log(`Below-alert qualifying stocks: ${qualifying.length}`)
+  log(`Below-alert + ≤5 on-hand qualifying stocks: ${qualifying.length}`)
 
   // Fetch existing Monday items
   log('Fetching existing Monday board items…')
