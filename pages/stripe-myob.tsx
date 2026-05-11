@@ -200,6 +200,8 @@ export default function StripeMyobPage({ user }: { user: PageUser }) {
   const [payoutSummary, setPayoutSummary] = useState<PayoutListResponse['summary'] | null>(null)
   const [payoutLoading, setPayoutLoading] = useState(false)
   const [reconcilingPayoutIds, setReconcilingPayoutIds] = useState<Set<string>>(new Set())
+  const [payoutSyncing, setPayoutSyncing] = useState(false)
+  const [payoutSyncResult, setPayoutSyncResult] = useState<{ scanned: number; matched: number } | null>(null)
 
   // ── Push state (sales) ──────────────────────────────────────────────
   const [pushingIds, setPushingIds] = useState<Set<string>>(new Set())
@@ -259,6 +261,29 @@ export default function StripeMyobPage({ user }: { user: PageUser }) {
     if (view === 'sales') load()
     else loadPayouts()
   }, [view, load, loadPayouts])
+
+  // Sync payouts from MYOB — look for existing deposits matching pending payouts
+  const syncPayoutsFromMyob = useCallback(async () => {
+    setPayoutSyncing(true)
+    setPayoutSyncResult(null)
+    setErr(null)
+    try {
+      const res = await fetch('/api/stripe-myob/payouts-sync', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ account, since, until }),
+      })
+      const json: any = await res.json()
+      if (!res.ok || !json.ok) throw new Error(json.error || `HTTP ${res.status}`)
+      setPayoutSyncResult(json.summary)
+      await loadPayouts()
+    } catch (e: any) {
+      setErr(e?.message || String(e))
+    } finally {
+      setPayoutSyncing(false)
+    }
+  }, [account, since, until, loadPayouts])
 
   // Reconcile a single payout from the UI
   const reconcilePayout = useCallback(async (payoutId: string) => {
@@ -542,6 +567,27 @@ export default function StripeMyobPage({ user }: { user: PageUser }) {
 
           {/* === PAYOUTS VIEW === */}
           {view === 'payouts' && <>
+
+          {/* Payouts action bar */}
+          <div style={{
+            display:'flex', gap:12, alignItems:'center',
+            padding:'10px 16px', background:T.bg2, border:`1px solid ${T.border}`, borderRadius:8,
+            marginBottom:12,
+          }}>
+            <button onClick={loadPayouts} disabled={payoutLoading} style={primaryBtnStyle}>
+              {payoutLoading ? 'Loading…' : 'Refresh'}
+            </button>
+            {canPush && (
+              <button onClick={syncPayoutsFromMyob} disabled={payoutSyncing || payoutLoading} style={syncBtnStyle} title="Scan MYOB CHQ 1-1110 for existing bank deposits matching these payouts (Make-era or manual) and mark them as Already in MYOB">
+                {payoutSyncing ? 'Syncing…' : 'Sync from MYOB'}
+              </button>
+            )}
+            {payoutSyncResult && (
+              <span style={{ fontSize:12, color:T.text2 }}>
+                Scanned {payoutSyncResult.scanned}, matched <strong style={{ color:T.purple }}>{payoutSyncResult.matched}</strong>
+              </span>
+            )}
+          </div>
 
           {/* Payouts summary */}
           {payoutSummary && (
