@@ -141,6 +141,7 @@ interface MondayItem {
   name: string
   partNumber: string
   availabilityLabel: string | null
+  groupId: string | null
 }
 
 async function fetchBoardItems(): Promise<MondayItem[]> {
@@ -155,6 +156,7 @@ async function fetchBoardItems(): Promise<MondayItem[]> {
           items {
             id
             name
+            group { id }
             column_values(ids: $cols) { id text }
           }
         }
@@ -166,12 +168,18 @@ async function fetchBoardItems(): Promise<MondayItem[]> {
     for (const it of its) {
       const partNumber = (it.column_values.find((c: any) => c.id === COL.partNumber)?.text || '').trim()
       const availability = it.column_values.find((c: any) => c.id === COL.availability)?.text || null
-      items.push({ id: it.id, name: it.name, partNumber, availabilityLabel: availability })
+      const groupId = it.group?.id || null
+      items.push({ id: it.id, name: it.name, partNumber, availabilityLabel: availability, groupId })
     }
     cursor = page_?.cursor || null
     if (!cursor) break
   }
   return items
+}
+
+async function archiveItem(itemId: string): Promise<void> {
+  const q = `mutation ($itemId: ID!) { archive_item(item_id: $itemId) { id } }`
+  await mondayQuery(q, { itemId })
 }
 
 async function updateAvailability(itemId: string, label: string): Promise<void> {
@@ -259,8 +267,16 @@ async function main() {
   }
   log(`Board has ${existing.length} items, ${byPartNumber.size} with Part Number set`)
 
+  // Build a set of currently-qualifying part numbers so we can detect
+  // which board items are now resolved (no longer below alert, or now Good).
+  const qualifyingPartNumbers = new Set<string>()
+  for (const s of qualifying) {
+    const sn = String(s.stock_number || '').trim().toLowerCase()
+    if (sn) qualifyingPartNumbers.add(sn)
+  }
+
   // Process qualifying stocks
-  let stats = { updated: 0, created: 0, noChange: 0, errors: 0 }
+  let stats = { updated: 0, created: 0, noChange: 0, errors: 0, archived: 0 }
   let idx = 0
   for (const s of qualifying) {
     idx++
@@ -296,7 +312,25 @@ async function main() {
     }
   }
 
-  log(`=== Done. MD-total ${allStocks.length} · Below-alert ${qualifying.length} · Created ${stats.created} · Updated ${stats.updated} · No-change ${stats.noChange} · Errors ${stats.errors} ===`)
+  // Archive items on the Delays board that are no longer qualifying.
+  // Only touch items still in the Delays group — anything Morgan moved
+  // to a different group (Resolved etc.) has already been triaged.
+  for (const it of existing) {
+    if (it.groupId !== DELAYS_GROUP_ID) continue
+    if (!it.partNumber) continue   // manual entry without a part number — leave alone
+    const partKey = it.partNumber.toLowerCase()
+    if (qualifyingPartNumbers.has(partKey)) continue
+    try {
+      await archiveItem(it.id)
+      stats.archived++
+      log(`archived · ${it.partNumber} · ${it.name} (was ${it.availabilityLabel || '(blank)'} — now resolved or Good)`)
+    } catch (e: any) {
+      stats.errors++
+      log(`archive ${it.partNumber} · ERROR: ${(e?.message || String(e)).slice(0, 300)}`)
+    }
+  }
+
+  log(`=== Done. MD-total ${allStocks.length} · Below-alert ${qualifying.length} · Created ${stats.created} · Updated ${stats.updated} · No-change ${stats.noChange} · Archived ${stats.archived} · Errors ${stats.errors} ===`)
   if (stats.errors > 0) process.exit(1)
 }
 
