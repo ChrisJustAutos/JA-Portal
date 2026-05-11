@@ -187,19 +187,37 @@ async function createJawsCustomer(
 // "Platinu Parters Stripe Invoice #in_xxx". We do a substring match on
 // the Stripe id portion — that's reliable across either prefix variant.
 
-async function findExistingMyobInvoiceByStripeId(
+// Search MYOB for any Sale.Invoice/Professional whose JournalMemo contains
+// any of the supplied Stripe ids. This catches duplicates created by Make
+// (which used the invoice-item id `ii_xxx`) as well as anything created by
+// this tool (which uses the invoice id `in_xxx`). Pass the invoice id PLUS
+// every line's id and invoice_item id for max coverage.
+async function findExistingMyobInvoiceByAnyStripeId(
   connId: string,
   cfId: string,
-  stripeInvoiceId: string,
-): Promise<{ uid: string; number: string } | null> {
-  const safe = escapeOData(stripeInvoiceId)
-  const filter = `substringof('${safe}',JournalMemo)`
-  const { data } = await myobFetch(connId, `/accountright/${cfId}/Sale/Invoice/Professional`, {
-    query: { '$top': 1, '$filter': filter },
-  })
-  const items: any[] = Array.isArray(data?.Items) ? data.Items : []
-  if (items.length === 0) return null
-  return { uid: items[0].UID, number: items[0].Number || '' }
+  stripeIds: string[],
+): Promise<{ uid: string; number: string; matchedStripeId: string } | null> {
+  const unique = Array.from(new Set(stripeIds.filter(Boolean)))
+  if (unique.length === 0) return null
+
+  // OR-chained substringof — MYOB caps URL length so batch in groups of 8
+  // (each clause is ~50 chars; 8 fits well under typical 2KB query limit).
+  for (let i = 0; i < unique.length; i += 8) {
+    const batch = unique.slice(i, i + 8)
+    const clauses = batch.map(id => `substringof('${escapeOData(id)}',JournalMemo)`)
+    const filter = clauses.join(' or ')
+    const { data } = await myobFetch(connId, `/accountright/${cfId}/Sale/Invoice/Professional`, {
+      query: { '$top': 1, '$filter': filter },
+    })
+    const items: any[] = Array.isArray(data?.Items) ? data.Items : []
+    if (items.length > 0) {
+      // Figure out which of our ids matched, for the audit note.
+      const memo: string = String(items[0].JournalMemo || '')
+      const matched = batch.find(id => memo.includes(id)) || batch[0]
+      return { uid: items[0].UID, number: items[0].Number || '', matchedStripeId: matched }
+    }
+  }
+  return null
 }
 
 // ── Stripe: get the fee for an invoice via its charge → balance_txn ───
@@ -390,10 +408,16 @@ export async function pushStripeInvoiceToJaws(
     }
   }
 
-  // 2. Defence-in-depth: check MYOB for an invoice with this Stripe id in
-  //    its JournalMemo (e.g. created by the old Make automation that ran
-  //    before the freeze).
-  const duplicate = await findExistingMyobInvoiceByStripeId(conn.id, cfId, invoice.id)
+  // 2. Defence-in-depth: check MYOB for an invoice whose JournalMemo
+  //    contains the invoice id OR any of its line ids / underlying
+  //    invoice-item ids. The broader search catches Make-created records
+  //    (which used ii_xxx) as well as anything we may have written before.
+  const stripeIdsToCheck: string[] = [invoice.id]
+  for (const ln of (invoice.lines?.data || [])) {
+    if (ln.id) stripeIdsToCheck.push(ln.id)
+    if (ln.invoice_item) stripeIdsToCheck.push(ln.invoice_item)
+  }
+  const duplicate = await findExistingMyobInvoiceByAnyStripeId(conn.id, cfId, stripeIdsToCheck)
   if (duplicate) {
     // Record it as skipped_duplicate so the UI shows it correctly.
     await sb().from('stripe_myob_sync_log').upsert({
@@ -418,7 +442,7 @@ export async function pushStripeInvoiceToJaws(
       feeResolution: 'not needed — duplicate already in MYOB',
       customer: {
         decision: 'reuse',
-        note: `Found existing MYOB invoice ${duplicate.number} containing this Stripe id`,
+        note: `Found existing MYOB invoice ${duplicate.number} (JournalMemo contains ${duplicate.matchedStripeId})`,
         stripeEmail: invoice.customer_email,
         stripeName: invoice.customer_name,
       },

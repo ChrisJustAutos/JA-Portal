@@ -23,6 +23,16 @@ const T = {
   accent:'#4f8ef7',
 }
 
+// Date the Make.com Stripe→MYOB automation broke. Pushes for invoices
+// dated before this are higher-risk for duplicates because Make almost
+// certainly already created them. Adjust if the cutover shifts.
+const MAKE_CUTOVER_DATE = '2026-04-16'
+
+function isPreCutover(iso: string | null): boolean {
+  if (!iso) return false
+  return iso.slice(0, 10) < MAKE_CUTOVER_DATE
+}
+
 type AccountLabel = 'JAWS_JMACX' | 'JAWS_ET'
 
 interface StripeInvoiceRow {
@@ -158,8 +168,10 @@ export default function StripeMyobPage({ user }: { user: PageUser }) {
   // ── Push state ──────────────────────────────────────────────────────
   const [pushingIds, setPushingIds] = useState<Set<string>>(new Set())
   const [activePreview, setActivePreview] = useState<PushPreview | null>(null)
+  const [activeRowDate, setActiveRowDate] = useState<string | null>(null)
   const [previewLoading, setPreviewLoading] = useState(false)
   const [overrideCustomerUid, setOverrideCustomerUid] = useState<string | null>(null)
+  const [preCutoverAck, setPreCutoverAck] = useState(false)
 
   // ── Load data ───────────────────────────────────────────────────────
   const load = useCallback(async () => {
@@ -210,6 +222,8 @@ export default function StripeMyobPage({ user }: { user: PageUser }) {
   const onPreviewClick = useCallback(async (row: StripeInvoiceRow) => {
     setActivePreview(null)
     setOverrideCustomerUid(null)
+    setPreCutoverAck(false)
+    setActiveRowDate(row.paid_at || row.created)
     const preview = await dryRun(row)
     if (preview) setActivePreview(preview)
   }, [dryRun])
@@ -251,6 +265,7 @@ export default function StripeMyobPage({ user }: { user: PageUser }) {
 
   const totalGross  = useMemo(() => rows.reduce((s, r) => s + r.total_cents, 0), [rows])
   const pendingRows = useMemo(() => rows.filter(r => r.myobStatus === 'pending'), [rows])
+  const rangeIncludesPreCutover = useMemo(() => since < MAKE_CUTOVER_DATE, [since])
 
   return (
     <>
@@ -297,6 +312,18 @@ export default function StripeMyobPage({ user }: { user: PageUser }) {
             {err && <span style={{ color:T.red, fontSize:12, marginLeft:'auto' }}>{err}</span>}
           </div>
 
+          {/* Pre-cutover warning */}
+          {rangeIncludesPreCutover && (
+            <div style={{
+              padding:'12px 16px', marginBottom:14,
+              background:`${T.red}1a`, color:T.red,
+              border:`1px solid ${T.red}55`, borderRadius:8,
+              fontSize:13,
+            }}>
+              ⚠ <strong>Date range crosses {MAKE_CUTOVER_DATE}</strong> — the day Make.com stopped syncing. Invoices dated before this were almost certainly already pushed by Make and may exist in MYOB already. The duplicate check searches MYOB for matching Stripe ids but isn't infallible — eyeball each row carefully before pushing. Rows dated before the cutover get an extra confirmation step in the preview modal.
+            </div>
+          )}
+
           {/* Summary */}
           {summary && (
             <div style={{ display:'flex', gap:10, marginBottom:16, flexWrap:'wrap' }}>
@@ -336,7 +363,13 @@ export default function StripeMyobPage({ user }: { user: PageUser }) {
                       <div style={{ fontWeight:600 }}>{r.number || '—'}</div>
                       <div style={{ fontSize:10, color:T.text3, fontFamily:'monospace' }}>{r.id}</div>
                     </td>
-                    <td style={tdStyle}>{fmtDateShort(r.paid_at || r.created)}</td>
+                    <td style={tdStyle}>
+                      {fmtDateShort(r.paid_at || r.created)}
+                      {isPreCutover(r.paid_at || r.created) && (
+                        <div title="Before Make cutover — possible Make duplicate"
+                          style={{ fontSize:10, color:T.red, marginTop:3 }}>⚠ pre-cutover</div>
+                      )}
+                    </td>
                     <td style={tdStyle}>
                       <div>{r.customer_name || '—'}</div>
                       <div style={{ fontSize:11, color:T.text3 }}>{r.customer_email || ''}</div>
@@ -375,9 +408,12 @@ export default function StripeMyobPage({ user }: { user: PageUser }) {
           {activePreview && (
             <PreviewModal
               preview={activePreview}
+              rowDate={activeRowDate}
               overrideCustomerUid={overrideCustomerUid}
               setOverrideCustomerUid={setOverrideCustomerUid}
-              onClose={() => { setActivePreview(null); setOverrideCustomerUid(null) }}
+              preCutoverAck={preCutoverAck}
+              setPreCutoverAck={setPreCutoverAck}
+              onClose={() => { setActivePreview(null); setOverrideCustomerUid(null); setPreCutoverAck(false) }}
               onConfirm={onPushConfirm}
               pushing={pushingIds.has(activePreview.stripeInvoiceId)}
             />
@@ -405,8 +441,11 @@ function KpiChip({ label, value, color }: { label: string; value: string; color:
 
 interface PreviewModalProps {
   preview: PushPreview
+  rowDate: string | null
   overrideCustomerUid: string | null
   setOverrideCustomerUid: (s: string | null) => void
+  preCutoverAck: boolean
+  setPreCutoverAck: (b: boolean) => void
   onClose: () => void
   onConfirm: () => void
   pushing: boolean
@@ -418,9 +457,11 @@ function PreviewModal(p: PreviewModalProps) {
   const isBlocked = pv.stripeStatus === 'blocked'
   const isAmbiguous = cust.decision === 'ambiguous'
   const isDuplicate = pv.stripeStatus === 'duplicate-in-myob' || pv.stripeStatus === 'idempotent'
+  const isPreCutoverRow = isPreCutover(p.rowDate)
 
   const overrideOk = isAmbiguous ? !!p.overrideCustomerUid : true
-  const canConfirm = !isDuplicate && overrideOk && !p.pushing
+  const cutoverOk = !isPreCutoverRow || p.preCutoverAck
+  const canConfirm = !isDuplicate && overrideOk && cutoverOk && !p.pushing
 
   return (
     <div style={{
@@ -491,6 +532,19 @@ function PreviewModal(p: PreviewModalProps) {
         )}
 
         {pv.error && <div style={infoBoxStyle(T.red)}>Last error: {pv.error}</div>}
+
+        {/* Pre-cutover acknowledgement */}
+        {isPreCutoverRow && !isDuplicate && (
+          <div style={infoBoxStyle(T.red)}>
+            <strong>This invoice is dated before {MAKE_CUTOVER_DATE}</strong> — when Make was working. The duplicate scan didn't find a match in MYOB JournalMemo, but Make may have used a different memo format and missed it.
+            <label style={{ display:'flex', alignItems:'center', gap:8, marginTop:10, cursor:'pointer' }}>
+              <input type="checkbox"
+                checked={p.preCutoverAck}
+                onChange={e => p.setPreCutoverAck(e.target.checked)} />
+              <span style={{ fontSize:12 }}>I've checked MYOB manually — this invoice is not already there. Push it.</span>
+            </label>
+          </div>
+        )}
 
         {/* Actions */}
         <div style={{ display:'flex', gap:10, justifyContent:'flex-end', marginTop:16 }}>

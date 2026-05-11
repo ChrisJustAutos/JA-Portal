@@ -63,7 +63,8 @@ export interface StripeCustomerLite {
 }
 
 export interface StripeInvoiceLineLite {
-  id: string             // ii_... (invoice item) or il_... (invoice line)
+  id: string             // il_... (invoice line) — current API
+  invoice_item: string | null  // ii_... — the underlying InvoiceItem if any
   amount: number         // cents (gross)
   currency: string
   description: string | null
