@@ -740,7 +740,12 @@ export async function createSpendMoneyTxn(
 
   if (inv.status === 'posted')   throw new Error('Invoice already posted to MYOB')
   if (inv.status === 'rejected') throw new Error('Invoice has been rejected')
-  if (inv.triage_status === 'red') throw new Error('Invoice triage is RED — cannot post')
+  // Triage RED is bypassed when the caller passes singleLineAccountUid —
+  // that override means the user has explicitly picked the destination
+  // account, which is typically what triage was waiting for.
+  if (inv.triage_status === 'red' && !options?.singleLineAccountUid) {
+    throw new Error('Invoice triage is RED — cannot post')
+  }
   if (inv.is_credit_note === true) {
     throw new Error('No-supplier credit notes need ReceiveMoneyTxn — handle in MYOB or assign a supplier card.')
   }

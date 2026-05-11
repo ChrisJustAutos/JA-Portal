@@ -48,9 +48,6 @@ export default withAuth(null, async (req: NextApiRequest, res: NextApiResponse, 
       myobBillUid: inv.myob_bill_uid,
     })
   }
-  if (inv.triage_status === 'red') {
-    return res.status(409).json({ error: 'Cannot post — triage is RED. Resolve issues first.' })
-  }
 
   // Optional override: if the request body includes paymentAccountUid,
   // and the invoice has no supplier mapped, treat it as a Spend Money
@@ -86,6 +83,15 @@ export default withAuth(null, async (req: NextApiRequest, res: NextApiResponse, 
   //   - no supplier + payment_account → Spend Money (clearing/bank account)
   //   - no supplier + no payment_acc  → reject (need one of the two to post)
   const useSpendMoney = !inv.resolved_supplier_uid && !!inv.payment_account_uid
+
+  // Triage RED is normally blocking, but the explicit Spend-Money override
+  // (paymentAccountUid + accountUid in the request body) implies the user
+  // has already made the routing decisions that triage was waiting for,
+  // so we let it through.
+  const explicitSpendMoneyOverride = !!paymentAccountUid && !!accountUid && useSpendMoney
+  if (inv.triage_status === 'red' && !explicitSpendMoneyOverride) {
+    return res.status(409).json({ error: 'Cannot post — triage is RED. Resolve issues first.' })
+  }
 
   try {
     const result = useSpendMoney
