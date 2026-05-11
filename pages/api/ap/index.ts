@@ -54,6 +54,7 @@ export default withAuth('view:supplier_invoices', async (req: NextApiRequest, re
       via_capricorn, capricorn_reference,
       parse_confidence,
       resolved_supplier_uid, resolved_supplier_name, resolved_account_code,
+      payment_account_uid, payment_account_code, payment_account_name,
       triage_status, triage_reasons,
       status, myob_company_file, myob_bill_uid, myob_posted_at, myob_post_error
     `, { count: 'exact' })

@@ -447,12 +447,19 @@ export async function createServiceBill(
       console.log(`AP ${invoiceId}: nudged line ${maxIdx} (${billLines[maxIdx].Description.substring(0, 40)}) by ${lineDelta.toFixed(2)} — line sum now ${adjustedLineSum.toFixed(2)} matches header subtotal ${headerSubtotal.toFixed(2)}`)
     }
 
-    // Header values are authoritative. MYOB will recompute tax per line
-    // (round2(Total × rate)) but with our nudged line sum the per-line
-    // recalc agrees with headerGst within sub-cent precision.
+    // Recompute tax MYOB-style: per-line round2(Total × rate) then sum.
+    // We were previously trusting headerGst here, but MYOB independently
+    // recalculates tax per line — if the PDF's gst line happened to use
+    // a different rounding (whole-bill 10% vs sum-of-rounded-lines), the
+    // submitted TotalTax/TotalAmount would disagree with MYOB's internal
+    // computation by 1c. Submitting MYOB's own calc keeps the envelope
+    // and the line-level GL entries consistent.
     subtotal    = headerSubtotal
-    totalTax    = headerGst
-    totalAmount = headerTotal
+    totalTax    = round2(billLines.reduce((s, l, idx) => s + round2(l.Total * lineRates[idx]), 0))
+    totalAmount = round2(subtotal + totalTax)
+    if (Math.abs(totalAmount - headerTotal) >= 0.01) {
+      console.warn(`AP ${invoiceId}: MYOB-style total $${totalAmount.toFixed(2)} differs from PDF header total $${headerTotal.toFixed(2)} by $${(totalAmount - headerTotal).toFixed(2)}. Using MYOB-style — this is the value MYOB will accept and store.`)
+    }
   } else {
     // FALLBACK — no header values to reconcile against. Compute totals
     // using MYOB's own per-line round-then-sum method so our envelope
@@ -827,9 +834,15 @@ export async function createSpendMoneyTxn(
       }
       txnLines[maxIdx].Amount = round2(txnLines[maxIdx].Amount + lineDelta)
     }
+    // Recompute tax MYOB-style — see same comment in createServiceBill.
+    // Submitting PDF's headerGst would disagree with MYOB's per-line
+    // recalculation by 1c when the PDF rounded GST whole-bill vs per-line.
     subtotal    = headerSubtotal
-    totalTax    = headerGst
-    totalAmount = headerTotal
+    totalTax    = round2(txnLines.reduce((s, l, idx) => s + round2(l.Amount * lineRates[idx]), 0))
+    totalAmount = round2(subtotal + totalTax)
+    if (Math.abs(totalAmount - headerTotal) >= 0.01) {
+      console.warn(`AP ${invoiceId} (SpendMoney): MYOB-style total $${totalAmount.toFixed(2)} differs from PDF header total $${headerTotal.toFixed(2)} by $${(totalAmount - headerTotal).toFixed(2)}. Using MYOB-style.`)
+    }
   } else {
     const computedTax = round2(txnLines.reduce((s, l, idx) => s + round2(l.Amount * lineRates[idx]), 0))
     subtotal    = initialLineSum

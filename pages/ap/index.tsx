@@ -65,8 +65,12 @@ interface InvoiceRow {
   via_capricorn: boolean
   capricorn_reference: string | null
   parse_confidence: 'high' | 'medium' | 'low' | null
+  resolved_supplier_uid: string | null
   resolved_supplier_name: string | null
   resolved_account_code: string | null
+  payment_account_uid: string | null
+  payment_account_code: string | null
+  payment_account_name: string | null
   triage_status: 'pending' | 'green' | 'yellow' | 'red'
   triage_reasons: string[] | null
   status: 'parsing' | 'pending_review' | 'ready' | 'posted' | 'rejected' | 'escalated' | 'error'
@@ -97,6 +101,18 @@ export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => 
 
 function isApprovable(inv: InvoiceRow): boolean {
   return inv.triage_status === 'green'
+      && inv.status !== 'posted'
+      && inv.status !== 'rejected'
+}
+
+// Spend Money (no-supplier) eligibility: invoice has no supplier
+// mapped but does have a payment/clearing account selected, and
+// hasn't been posted/rejected yet. Triage doesn't have to be green
+// since the typical reason for no-supplier rows being non-green is
+// "supplier not mapped" — and Spend Money explicitly doesn't need one.
+function isSpendMoneyEligible(inv: InvoiceRow): boolean {
+  return !inv.resolved_supplier_uid
+      && !!inv.payment_account_uid
       && inv.status !== 'posted'
       && inv.status !== 'rejected'
 }
@@ -750,6 +766,21 @@ export default function APListPage({ user }: PageProps) {
                               >
                                 {isApprovingThis ? '…' : '✓ Approve'}
                               </button>
+                            ) : isSpendMoneyEligible(inv) ? (
+                              <button
+                                onClick={(e) => handleApproveOne(inv, e)}
+                                disabled={isApprovingThis || bulkApproving}
+                                title={`Push as Spend Money (no supplier) — clears to ${inv.payment_account_code || ''} ${inv.payment_account_name || ''}`.trim()}
+                                style={{
+                                  background: T.purple, color:'#fff', border:'none',
+                                  padding:'4px 10px', borderRadius:4, fontSize:11, fontWeight:500, fontFamily:'inherit',
+                                  cursor: (isApprovingThis || bulkApproving) ? 'wait' : 'pointer',
+                                  opacity: (isApprovingThis || bulkApproving) ? 0.5 : 1,
+                                  whiteSpace:'nowrap',
+                                }}
+                              >
+                                {isApprovingThis ? '…' : '$ Spend Money'}
+                              </button>
                             ) : (
                               <span style={{color:T.text3, fontSize:11}}>—</span>
                             )}
@@ -919,6 +950,22 @@ function InvoiceCard({
               }}
             >
               {isApproving ? 'Posting…' : '✓ Approve & Post'}
+            </button>
+          ) : isSpendMoneyEligible(inv) ? (
+            <button
+              onClick={onApprove}
+              disabled={isApproving || bulkApproving}
+              title={`Push as Spend Money (no supplier) — clears to ${inv.payment_account_code || ''} ${inv.payment_account_name || ''}`.trim()}
+              style={{
+                flex:1,
+                background: T.purple, color:'#fff', border:'none',
+                padding:'12px 14px', borderRadius:6,
+                fontSize:14, fontWeight:600, fontFamily:'inherit',
+                cursor: (isApproving || bulkApproving) ? 'wait' : 'pointer',
+                opacity: (isApproving || bulkApproving) ? 0.5 : 1,
+              }}
+            >
+              {isApproving ? 'Posting…' : '$ Push as Spend Money'}
             </button>
           ) : (
             <span style={{flex:1, fontSize:11, color:T.text3, fontStyle:'italic'}}>
