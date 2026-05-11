@@ -201,11 +201,13 @@ function buildBankTransferPayload(args: {
   netCents: number
   isoDate: string
 }): any {
+  // MYOB endpoint: /Banking/TransferMoneyTxn (NOT /Banking/Transfer —
+  // that path returns a misleading 401 OAuthTokenIsInvalid).
   const netDollars = args.netCents / 100
   return {
     Date: args.isoDate + 'T00:00:00',
-    TransferFromAccount: { UID: JAWS_UIDS.ACCT_UNDEP_FUNDS },
-    TransferToAccount:   { UID: JAWS_UIDS.ACCT_CHQ_3369 },
+    AccountFrom: { UID: JAWS_UIDS.ACCT_UNDEP_FUNDS },
+    AccountTo:   { UID: JAWS_UIDS.ACCT_CHQ_3369 },
     Amount: netDollars,
     Memo: `Stripe payout deposit #${args.payoutId}`,
   }
@@ -297,13 +299,17 @@ export async function reconcileStripePayoutToJaws(
   if (!conn?.company_file_id) throw new Error('No JAWS MYOB connection / company file')
   const cfId = conn.company_file_id
 
-  let myobFeeInvoiceUid: string | undefined
-  let myobFeeInvoiceNumber: string | undefined
-  let myobFeePaymentUid: string | undefined
-  let myobTransferUid: string | undefined
+  // Resume from any partial state recorded on a prior failed attempt.
+  // The raw_payload.partialResult is set in the catch block below
+  // every time a step succeeds before a later step fails.
+  const prevPartial: any = (existing.data?.raw_payload as any)?.partialResult || {}
+  let myobFeeInvoiceUid: string | undefined = prevPartial.myobFeeInvoiceUid
+  let myobFeeInvoiceNumber: string | undefined = prevPartial.myobFeeInvoiceNumber
+  let myobFeePaymentUid: string | undefined = prevPartial.myobFeePaymentUid
+  let myobTransferUid: string | undefined = prevPartial.myobTransferUid
 
   try {
-    if (feeInvoicePayload) {
+    if (feeInvoicePayload && !myobFeeInvoiceUid) {
       const invRes = await myobFetch(conn.id, `/accountright/${cfId}/Sale/Invoice/Service`, {
         method: 'POST', body: feeInvoicePayload, query: { returnBody: 'true' },
       })
@@ -312,7 +318,9 @@ export async function reconcileStripePayoutToJaws(
       }
       myobFeeInvoiceUid = invRes.data?.UID
       myobFeeInvoiceNumber = invRes.data?.Number
+    }
 
+    if (feeInvoicePayload && myobFeeInvoiceUid && !myobFeePaymentUid) {
       const payRes = await myobFetch(conn.id, `/accountright/${cfId}/Sale/CustomerPayment`, {
         method: 'POST',
         body: {
@@ -328,13 +336,15 @@ export async function reconcileStripePayoutToJaws(
     }
 
     // Bank Transfer UF → CHQ for the actual deposited amount.
-    const xferRes = await myobFetch(conn.id, `/accountright/${cfId}/Banking/Transfer`, {
-      method: 'POST', body: bankTransferPayload, query: { returnBody: 'true' },
-    })
-    if (xferRes.status !== 200 && xferRes.status !== 201) {
-      throw new Error(`Banking/Transfer POST HTTP ${xferRes.status}: ${xferRes.raw?.slice(0, 300)}`)
+    if (!myobTransferUid) {
+      const xferRes = await myobFetch(conn.id, `/accountright/${cfId}/Banking/TransferMoneyTxn`, {
+        method: 'POST', body: bankTransferPayload, query: { returnBody: 'true' },
+      })
+      if (xferRes.status !== 200 && xferRes.status !== 201) {
+        throw new Error(`Banking/TransferMoneyTxn POST HTTP ${xferRes.status}: ${xferRes.raw?.slice(0, 300)}`)
+      }
+      myobTransferUid = xferRes.data?.UID
     }
-    myobTransferUid = xferRes.data?.UID
 
     await sb().from('stripe_myob_sync_log').upsert({
       stripe_account: account,
