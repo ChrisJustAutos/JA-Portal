@@ -145,7 +145,18 @@ async function createJawsCustomer(
   const trimmed = (name || '').trim()
   const looksLikePerson = /^[A-Z][a-z]+(?:\s+[A-Z][a-z\-']+){1,3}$/.test(trimmed)
 
-  const body: any = { IsIndividual: looksLikePerson, IsActive: true }
+  const body: any = {
+    IsIndividual: looksLikePerson,
+    IsActive: true,
+    // MYOB requires SellingDetails on customer create — defaults match
+    // the JAWS Professional invoice flow.
+    SellingDetails: {
+      SaleLayout: 'Professional',
+      TaxCode:        { UID: JAWS_UIDS.TAX_CODE_GST },
+      FreightTaxCode: { UID: JAWS_UIDS.TAX_CODE_GST },
+      IsTaxInclusive: true,
+    },
+  }
   if (looksLikePerson) {
     const parts = trimmed.split(/\s+/)
     body.FirstName = parts.slice(0, parts.length - 1).join(' ')
