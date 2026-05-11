@@ -201,6 +201,25 @@ export async function findMyobMatchForStripeIds(
   return findExistingMyobInvoiceByAnyStripeId(connId, cfId, stripeIds)
 }
 
+// Match by exact MYOB Number = Stripe invoice number. Make's older
+// automation used the Stripe number (e.g. JAWSGCM-0040) verbatim as
+// the MYOB invoice Number, so this is the most reliable single match.
+export async function findMyobMatchByStripeNumber(
+  connId: string,
+  cfId: string,
+  stripeNumber: string,
+): Promise<{ uid: string; number: string } | null> {
+  const safe = escapeOData(stripeNumber.trim())
+  if (!safe) return null
+  const filter = `Number eq '${safe}'`
+  const { data } = await myobFetch(connId, `/accountright/${cfId}/Sale/Invoice/Professional`, {
+    query: { '$top': 1, '$filter': filter },
+  })
+  const items: any[] = Array.isArray(data?.Items) ? data.Items : []
+  if (items.length === 0) return null
+  return { uid: items[0].UID, number: items[0].Number || '' }
+}
+
 // Fuzzy fallback: find a MYOB Sale/Invoice/Professional where the
 // customer-name search hits AND the total amount equals (in dollars,
 // tolerance 1c) AND the invoice date is within ±dayWindow of the
@@ -474,16 +493,26 @@ export async function pushStripeInvoiceToJaws(
     }
   }
 
-  // 2. Defence-in-depth: check MYOB for an invoice whose JournalMemo
-  //    contains the invoice id OR any of its line ids / underlying
-  //    invoice-item ids. The broader search catches Make-created records
-  //    (which used ii_xxx) as well as anything we may have written before.
-  const stripeIdsToCheck: string[] = [invoice.id]
-  for (const ln of (invoice.lines?.data || [])) {
-    if (ln.id) stripeIdsToCheck.push(ln.id)
-    if (ln.invoice_item) stripeIdsToCheck.push(ln.invoice_item)
+  // 2. Defence-in-depth — search MYOB for a duplicate via two paths:
+  //    a) exact MYOB.Number = Stripe invoice number (e.g. JAWSGCM-0040)
+  //       — most reliable, this is how Make recorded older invoices.
+  //    b) Stripe id (invoice / line / invoice_item) substring in JournalMemo
+  //       — covers anything pushed by this tool or memo-based variants.
+  let duplicate: { uid: string; number: string; matchedStripeId: string } | null = null
+  if (invoice.number) {
+    const byNumber = await findMyobMatchByStripeNumber(conn.id, cfId, invoice.number)
+    if (byNumber) {
+      duplicate = { uid: byNumber.uid, number: byNumber.number, matchedStripeId: invoice.number }
+    }
   }
-  const duplicate = await findExistingMyobInvoiceByAnyStripeId(conn.id, cfId, stripeIdsToCheck)
+  if (!duplicate) {
+    const stripeIdsToCheck: string[] = [invoice.id]
+    for (const ln of (invoice.lines?.data || [])) {
+      if (ln.id) stripeIdsToCheck.push(ln.id)
+      if (ln.invoice_item) stripeIdsToCheck.push(ln.invoice_item)
+    }
+    duplicate = await findExistingMyobInvoiceByAnyStripeId(conn.id, cfId, stripeIdsToCheck)
+  }
   if (duplicate) {
     // Record it as skipped_duplicate so the UI shows it correctly.
     await sb().from('stripe_myob_sync_log').upsert({

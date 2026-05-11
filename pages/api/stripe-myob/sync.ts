@@ -26,6 +26,7 @@ import {
 } from '../../../lib/stripe-multi'
 import {
   findMyobMatchForStripeIds,
+  findMyobMatchByStripeNumber,
   findMyobMatchByCustomerAmountDate,
 } from '../../../lib/stripe-myob-sync'
 import { getConnection } from '../../../lib/myob'
@@ -112,7 +113,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     stripeInvoiceId: string
     stripeNumber: string | null
     matched: boolean
-    matchMethod?: 'stripe-id' | 'customer-amount-date'
+    matchMethod?: 'stripe-number' | 'stripe-id' | 'customer-amount-date'
     matchedStripeId?: string
     matchReason?: string
     myobInvoiceUid?: string
@@ -123,18 +124,41 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   let matchedCount = 0
   for (const inv of toScan) {
     try {
-      // 1. ID-based search — Stripe ids in MYOB JournalMemo.
-      const stripeIds: string[] = [inv.id]
-      for (const ln of (inv.lines?.data || [])) {
-        if (ln.id) stripeIds.push(ln.id)
-        if (ln.invoice_item) stripeIds.push(ln.invoice_item)
-      }
-      let hit = await findMyobMatchForStripeIds(conn.id, cfId, stripeIds)
-      let method: 'stripe-id' | 'customer-amount-date' = 'stripe-id'
-      let matchedStripeId = hit?.matchedStripeId
-      let matchReason: string | undefined = hit ? `JournalMemo contains ${hit.matchedStripeId}` : undefined
+      let hit: { uid: string; number: string; matchedStripeId: string } | null = null
+      let method: 'stripe-number' | 'stripe-id' | 'customer-amount-date' = 'stripe-number'
+      let matchedStripeId: string | undefined
+      let matchReason: string | undefined
 
-      // 2. Fuzzy fallback — customer name + same dollar amount + ±3 days.
+      // 1. Exact match by Stripe invoice number → MYOB Number field.
+      //    This is the most reliable — Make's older automation wrote the
+      //    Stripe number (e.g. JAWSGCM-0040) verbatim into MYOB.Number.
+      if (inv.number) {
+        const numHit = await findMyobMatchByStripeNumber(conn.id, cfId, inv.number)
+        if (numHit) {
+          hit = { uid: numHit.uid, number: numHit.number, matchedStripeId: inv.number }
+          method = 'stripe-number'
+          matchedStripeId = inv.number
+          matchReason = `MYOB Number = ${inv.number}`
+        }
+      }
+
+      // 2. ID substring search — Stripe ids in MYOB JournalMemo.
+      if (!hit) {
+        const stripeIds: string[] = [inv.id]
+        for (const ln of (inv.lines?.data || [])) {
+          if (ln.id) stripeIds.push(ln.id)
+          if (ln.invoice_item) stripeIds.push(ln.invoice_item)
+        }
+        const idHit = await findMyobMatchForStripeIds(conn.id, cfId, stripeIds)
+        if (idHit) {
+          hit = idHit
+          method = 'stripe-id'
+          matchedStripeId = idHit.matchedStripeId
+          matchReason = `JournalMemo contains ${idHit.matchedStripeId}`
+        }
+      }
+
+      // 3. Fuzzy fallback — customer name + same dollar amount + ±3 days.
       if (!hit) {
         const paidIso = (inv.status_transitions?.paid_at
           ? new Date(inv.status_transitions.paid_at * 1000).toISOString()
