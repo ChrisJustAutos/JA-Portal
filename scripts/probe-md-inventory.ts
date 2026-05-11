@@ -75,6 +75,33 @@ async function probe(client: MdClient, path: string): Promise<void> {
   }
 }
 
+async function probeListShape(client: MdClient): Promise<void> {
+  console.log('\n=== Inspecting /stocks.json?page=1 first item ===')
+  const r = await fetch(MD_BASE + '/stocks.json?page=1', {
+    headers: { 'Cookie': client.cookieHeader, 'Accept': 'application/json' },
+  })
+  if (!r.ok) { console.log(`Failed ${r.status}`); return }
+  const j: any = await r.json()
+  console.log(`Total in meta: ${JSON.stringify(j.meta || {})}`)
+  console.log(`stocks.length on page 1: ${(j.stocks || []).length}`)
+  if (j.stocks?.[0]) {
+    const first = j.stocks[0]
+    console.log(`First item keys: ${Object.keys(first).join(', ')}`)
+    console.log(`First item: ${JSON.stringify(first, null, 2)}`)
+  }
+  // Also try with below-alert filters
+  for (const qs of ['?stock_alert=true', '?below_alert=true', '?alert_only=true', '?filter=below_alert']) {
+    const u = MD_BASE + '/stocks.json' + qs
+    const rr = await fetch(u, { headers: { 'Cookie': client.cookieHeader, 'Accept': 'application/json' } })
+    if (rr.ok) {
+      const jj: any = await rr.json()
+      console.log(`Filter ${qs} → meta=${JSON.stringify(jj.meta || {})}, stocks=${(jj.stocks || []).length}`)
+    } else {
+      console.log(`Filter ${qs} → HTTP ${rr.status}`)
+    }
+  }
+}
+
 async function main() {
   const wsId = process.env.MECHANICDESK_WORKSHOP_ID
   const user = process.env.MECHANICDESK_USERNAME
@@ -88,10 +115,7 @@ async function main() {
   await browser.close().catch(() => {})
   console.log(`Logged in · ${client.cookieHeader.split(';').length} cookies\n`)
 
-  console.log('=== Probing inventory endpoints ===')
-  for (const p of PATHS) {
-    await probe(client, p)
-  }
+  await probeListShape(client)
 }
 
 main().catch(e => {
