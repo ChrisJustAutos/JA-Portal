@@ -39,6 +39,7 @@ export type Permission =
   | 'view:vehicle_sales'
   | 'view:stocktakes'
   | 'view:b2b'
+  | 'view:stripe_myob'
   // Actions
   | 'edit:any'
   | 'edit:distributors_groups'
@@ -49,6 +50,7 @@ export type Permission =
   | 'edit:b2b_catalogue'
   | 'edit:b2b_distributors'
   | 'edit:b2b_orders'
+  | 'edit:stripe_myob'
   | 'generate:reports'
   // Admin
   | 'admin:users'
@@ -60,15 +62,15 @@ const ROLE_PERMISSIONS: Record<UserRole, Permission[]> = {
   admin: [
     'view:dashboards','view:overview','view:invoices','view:pnl','view:stock','view:payables',
     'view:leads','view:distributors','view:calls','view:reports','view:todos','view:supplier_invoices',
-    'view:jobs','view:vehicle_sales','view:stocktakes','view:b2b',
+    'view:jobs','view:vehicle_sales','view:stocktakes','view:b2b','view:stripe_myob',
     'edit:any','edit:distributors_groups','edit:vin_codes','edit:leads','edit:supplier_invoices','edit:stocktakes','generate:reports',
-    'edit:b2b_catalogue','edit:b2b_distributors','edit:b2b_orders',
+    'edit:b2b_catalogue','edit:b2b_distributors','edit:b2b_orders','edit:stripe_myob',
     'admin:users','admin:settings','admin:audit_log','admin:b2b',
   ],
   manager: [
     'view:dashboards','view:overview','view:invoices','view:pnl','view:stock','view:payables',
     'view:leads','view:distributors','view:calls','view:reports','view:todos','view:supplier_invoices',
-    'view:jobs','view:vehicle_sales','view:stocktakes','view:b2b',
+    'view:jobs','view:vehicle_sales','view:stocktakes','view:b2b','view:stripe_myob',
     'edit:leads','edit:supplier_invoices','edit:stocktakes','generate:reports',
     'edit:b2b_catalogue','edit:b2b_distributors','edit:b2b_orders',
   ],
@@ -80,7 +82,7 @@ const ROLE_PERMISSIONS: Record<UserRole, Permission[]> = {
   accountant: [
     'view:dashboards','view:overview','view:invoices','view:pnl','view:payables','view:reports',
     'view:supplier_invoices','edit:supplier_invoices',
-    'view:jobs','view:vehicle_sales','view:b2b',
+    'view:jobs','view:vehicle_sales','view:b2b','view:stripe_myob','edit:stripe_myob',
     'generate:reports',
   ],
   viewer: [
@@ -208,6 +210,7 @@ export const PORTAL_TABS: PortalTab[] = [
   { id: 'payables',      label: 'Payables',        permission: 'view:payables' },
   { id: 'ap',            label: 'AP Invoices',     permission: 'view:supplier_invoices' },
   { id: 'stocktake',     label: 'Stocktake',       permission: 'view:stocktakes' },
+  { id: 'stripe-myob',   label: 'Stripe → MYOB',   permission: 'view:stripe_myob' },
   { id: 'b2b',           label: 'B2B Portal',      permission: 'view:b2b' },
 ]
 

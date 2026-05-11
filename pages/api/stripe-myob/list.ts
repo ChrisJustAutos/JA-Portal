@@ -1,16 +1,14 @@
 // pages/api/stripe-myob/list.ts
 //
-// Stage 1 of the Stripe→MYOB JAWS backfill: read-only listing of Stripe
-// invoices, charges and refunds for a given connected account + date
-// range. NO writes to MYOB — this is the data-source for the Portal
-// page and the backfill tool. Once we're confident the data looks
-// right we'll add a /push companion endpoint.
+// Returns Stripe invoices for a connected account + date range, joined
+// with the local sync log so each row carries its MYOB push status.
+// This is what backs the Portal /stripe-myob page.
 //
-// Auth: CRON_SECRET bearer.
+// Auth: either CRON_SECRET bearer (for backfill scripts) OR portal
+// session with `view:stripe_myob`.
 //
 // Usage:
-//   curl -H "Authorization: Bearer $CRON_SECRET" \
-//     "https://ja-portal.vercel.app/api/stripe-myob/list?account=JAWS_JMACX&since=2026-04-16"
+//   GET /api/stripe-myob/list?account=JAWS_JMACX&since=2026-04-16
 //
 // Query params:
 //   ?account=JAWS_JMACX | JAWS_ET   (required)
@@ -19,6 +17,7 @@
 //   ?kind=invoices | charges | refunds | all   (default 'invoices')
 
 import type { NextApiRequest, NextApiResponse } from 'next'
+import { createClient, SupabaseClient } from '@supabase/supabase-js'
 import {
   STRIPE_ACCOUNT_LABELS,
   StripeAccountLabel,
@@ -27,6 +26,18 @@ import {
   listRefunds,
   pingAccount,
 } from '../../../lib/stripe-multi'
+import { getCurrentUser } from '../../../lib/authServer'
+import { roleHasPermission } from '../../../lib/permissions'
+
+let _sb: SupabaseClient | null = null
+function sb(): SupabaseClient {
+  if (_sb) return _sb
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY
+  if (!url || !key) throw new Error('Supabase env vars missing')
+  _sb = createClient(url, key, { auth: { persistSession: false } })
+  return _sb
+}
 
 function parseUnixDay(s: string, endOfDay = false): number | null {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return null
@@ -35,12 +46,24 @@ function parseUnixDay(s: string, endOfDay = false): number | null {
   return Math.floor(ms / 1000)
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function authorize(req: NextApiRequest): Promise<{ ok: true } | { ok: false; status: number; error: string }> {
+  // CRON_SECRET — used by backfill scripts/curl
   const cronSecret = process.env.CRON_SECRET
   const authHeader = req.headers.authorization || ''
-  if (!cronSecret || authHeader !== `Bearer ${cronSecret}`) {
-    return res.status(401).json({ error: 'Unauthorised' })
+  if (cronSecret && authHeader === `Bearer ${cronSecret}`) return { ok: true }
+
+  // Portal session
+  const user = await getCurrentUser(req)
+  if (!user) return { ok: false, status: 401, error: 'Unauthenticated' }
+  if (!roleHasPermission(user.role, 'view:stripe_myob')) {
+    return { ok: false, status: 403, error: 'Forbidden — view:stripe_myob required' }
   }
+  return { ok: true }
+}
+
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+  const auth = await authorize(req)
+  if (!auth.ok) return res.status(auth.status).json({ error: auth.error })
 
   const accountParam = String(req.query.account || '').trim()
   if (!STRIPE_ACCOUNT_LABELS.includes(accountParam as StripeAccountLabel)) {
@@ -52,9 +75,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const untilStr = String(req.query.until || '').trim()
   const since = parseUnixDay(sinceStr, false)
   if (!since) return res.status(400).json({ error: 'since must be YYYY-MM-DD' })
-  const until = untilStr
-    ? parseUnixDay(untilStr, true)
-    : Math.floor(Date.now() / 1000)
+  const until = untilStr ? parseUnixDay(untilStr, true) : Math.floor(Date.now() / 1000)
   if (!until) return res.status(400).json({ error: 'until must be YYYY-MM-DD' })
 
   const kindRaw = String(req.query.kind || 'invoices').trim().toLowerCase()
@@ -73,65 +94,67 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       wantRefunds  ? listRefunds(account, since, until)      : Promise.resolve([]),
     ])
 
-    // Trim invoice payloads for response — full list of invoice lines bloats
-    // the JSON. Keep enough for the user to verify what we'd push.
-    const slimInvoices = invoices.map(inv => ({
-      id: inv.id,
-      number: inv.number,
-      status: inv.status,
-      paid: inv.paid,
-      created: new Date(inv.created * 1000).toISOString(),
-      paid_at: inv.status_transitions?.paid_at
-        ? new Date(inv.status_transitions.paid_at * 1000).toISOString()
-        : null,
-      customer: inv.customer,
-      customer_email: inv.customer_email,
-      customer_name: inv.customer_name,
-      total_cents: inv.total,
-      currency: inv.currency,
-      charge: inv.charge,
-      payment_intent: inv.payment_intent,
-      description: inv.description,
-      metadata: inv.metadata,
-      lines: (inv.lines?.data || []).map(ln => ({
-        id: ln.id,
-        amount_cents: ln.amount,
-        description: ln.description,
-        quantity: ln.quantity,
-      })),
-    }))
+    // Pull sync log entries for these Stripe ids in one round-trip.
+    const allIds = [
+      ...invoices.map(i => i.id),
+      ...charges.map(c => c.id),
+      ...refunds.map(r => r.id),
+    ]
+    let logByEntityId = new Map<string, any>()
+    if (allIds.length > 0) {
+      const { data: logRows } = await sb()
+        .from('stripe_myob_sync_log')
+        .select('stripe_entity_id, status, myob_invoice_uid, myob_invoice_number:myob_invoice_uid, myob_payment_uid, myob_customer_uid, amount_cents, fee_cents, net_cents, last_error, pushed_at, attempts')
+        .eq('stripe_account', account)
+        .in('stripe_entity_id', allIds)
+      // Note: we re-fetch the MYOB invoice Number lazily later if needed.
+      logByEntityId = new Map((logRows || []).map(r => [r.stripe_entity_id, r]))
+    }
 
-    const slimCharges = charges.map(c => ({
-      id: c.id,
-      amount_cents: c.amount,
-      amount_refunded_cents: c.amount_refunded,
-      currency: c.currency,
-      status: c.status,
-      paid: c.paid,
-      refunded: c.refunded,
-      created: new Date(c.created * 1000).toISOString(),
-      customer: c.customer,
-      invoice: c.invoice,
-      payment_intent: c.payment_intent,
-      balance_transaction: c.balance_transaction,
-      description: c.description,
-      receipt_email: c.receipt_email,
-      billing_details: c.billing_details,
-      metadata: c.metadata,
-    }))
+    const slimInvoices = invoices.map(inv => {
+      const log = logByEntityId.get(inv.id)
+      return {
+        id: inv.id,
+        number: inv.number,
+        status: inv.status,
+        paid: inv.paid,
+        created: new Date(inv.created * 1000).toISOString(),
+        paid_at: inv.status_transitions?.paid_at
+          ? new Date(inv.status_transitions.paid_at * 1000).toISOString()
+          : null,
+        customer: inv.customer,
+        customer_email: inv.customer_email,
+        customer_name: inv.customer_name,
+        total_cents: inv.total,
+        currency: inv.currency,
+        description: inv.description,
+        metadata: inv.metadata,
+        lines: (inv.lines?.data || []).map(ln => ({
+          id: ln.id,
+          amount_cents: ln.amount,
+          description: ln.description,
+          quantity: ln.quantity,
+        })),
+        // MYOB sync state
+        myobStatus: log?.status || 'pending',     // pending | pushed | failed | skipped_duplicate
+        myobInvoiceUid: log?.myob_invoice_uid || null,
+        myobPaymentUid: log?.myob_payment_uid || null,
+        myobCustomerUid: log?.myob_customer_uid || null,
+        myobFeeCents: log?.fee_cents ?? null,
+        myobNetCents: log?.net_cents ?? null,
+        lastError: log?.last_error || null,
+        pushedAt: log?.pushed_at || null,
+        attempts: log?.attempts ?? 0,
+      }
+    })
 
-    const slimRefunds = refunds.map(r => ({
-      id: r.id,
-      amount_cents: r.amount,
-      currency: r.currency,
-      status: r.status,
-      reason: r.reason,
-      charge: r.charge,
-      payment_intent: r.payment_intent,
-      balance_transaction: r.balance_transaction,
-      created: new Date(r.created * 1000).toISOString(),
-      metadata: r.metadata,
-    }))
+    const summary = {
+      total: slimInvoices.length,
+      pushed:   slimInvoices.filter(i => i.myobStatus === 'pushed').length,
+      pending:  slimInvoices.filter(i => i.myobStatus === 'pending').length,
+      failed:   slimInvoices.filter(i => i.myobStatus === 'failed').length,
+      duplicate: slimInvoices.filter(i => i.myobStatus === 'skipped_duplicate').length,
+    }
 
     return res.status(200).json({
       ok: true,
@@ -139,14 +162,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       since: new Date(since * 1000).toISOString(),
       until: new Date(until * 1000).toISOString(),
       stripeAccount: acct,
+      summary,
       counts: {
         invoices: slimInvoices.length,
-        charges: slimCharges.length,
-        refunds: slimRefunds.length,
+        charges: charges.length,
+        refunds: refunds.length,
       },
       invoices: slimInvoices,
-      charges:  slimCharges,
-      refunds:  slimRefunds,
     })
   } catch (e: any) {
     return res.status(500).json({

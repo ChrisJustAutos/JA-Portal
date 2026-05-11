@@ -59,6 +59,7 @@ export const DEFAULT_NAV: PortalNavItem[] = [
   {id:'vehicle-sales',kind:'link',    label:'Vehicle Sales',href:'/vehicle-sales', dot:'#34c77b'},
   {id:'stocktake',    kind:'link',    label:'Stocktake',    href:'/stocktake',     dot:T.purple},
   {id:'ap',           kind:'link',    label:'AP Invoices',  href:'/ap',            dot:T.amber},
+  {id:'stripe-myob',  kind:'link',    label:'Stripe → MYOB',href:'/stripe-myob',   dot:T.teal},
   {id:'b2b',          kind:'link',    label:'B2B Portal',   href:'/admin/b2b',     dot:T.teal},
   {id:'invoices',     kind:'section', label:'Invoices',          section:'invoices', dot:T.amber, alertKey:'invoices'},
   {id:'pnl',          kind:'section', label:'P&L — This Month',  section:'pnl',      dot:T.green},

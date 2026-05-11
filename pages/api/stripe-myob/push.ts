@@ -27,13 +27,26 @@ import {
   listPaidInvoices,
 } from '../../../lib/stripe-multi'
 import { pushStripeInvoiceToJaws } from '../../../lib/stripe-myob-sync'
+import { getCurrentUser } from '../../../lib/authServer'
+import { roleHasPermission } from '../../../lib/permissions'
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+  // Auth: either CRON_SECRET bearer (scripts) or portal session with edit:stripe_myob (UI)
   const cronSecret = process.env.CRON_SECRET
   const authHeader = req.headers.authorization || ''
-  if (!cronSecret || authHeader !== `Bearer ${cronSecret}`) {
-    return res.status(401).json({ error: 'Unauthorised' })
+  let performedBy: string | null = null
+
+  if (cronSecret && authHeader === `Bearer ${cronSecret}`) {
+    performedBy = 'cron'
+  } else {
+    const user = await getCurrentUser(req)
+    if (!user) return res.status(401).json({ error: 'Unauthenticated' })
+    if (!roleHasPermission(user.role, 'edit:stripe_myob')) {
+      return res.status(403).json({ error: 'Forbidden — edit:stripe_myob required' })
+    }
+    performedBy = user.email
   }
+
   if (req.method !== 'POST') {
     res.setHeader('Allow', 'POST')
     return res.status(405).json({ error: 'POST only' })
@@ -81,6 +94,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     try {
       const r = await pushStripeInvoiceToJaws(account, inv, {
         dryRun,
+        performedBy,
         customerOverrideUid,
         saleAccountUid,
       })

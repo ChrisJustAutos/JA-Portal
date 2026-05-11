@@ -19,7 +19,18 @@
       "PowerShell($user = [System.Environment]::GetEnvironmentVariable\\('JA_PORTAL_URL','User'\\); $userKey = [System.Environment]::GetEnvironmentVariable\\('AP_AUTOMATION_API_KEY','User'\\); \"User-level JA_PORTAL_URL: $\\(if\\($user\\){'SET \\('+$user+'\\)'}else{'missing'}\\)\"; \"User-level AP_AUTOMATION_API_KEY: $\\(if\\($userKey\\){'SET \\(len='+$userKey.Length+'\\)'}else{'missing'}\\)\")",
       "PowerShell(npx tsc --noEmit 2>&1 | Select-Object -First 30)",
       "PowerShell(npm run *)",
-      "PowerShell(npx tsc --noEmit 2>&1 | Select-Object -First 50)"
+      "PowerShell(npx tsc --noEmit 2>&1 | Select-Object -First 50)",
+      "WebSearch",
+      "WebFetch(domain:docs.inxpressapps.com)",
+      "WebFetch(domain:auwebship.inxpress.com)",
+      "WebFetch(domain:www.inxpressapps.com)",
+      "WebFetch(domain:github.com)",
+      "Bash(curl -s -L https://docs.inxpressapps.com/)",
+      "Bash(curl -s -L https://docs.inxpressapps.com/sitemap.xml)",
+      "Bash(curl *)",
+      "Read(//tmp/**)",
+      "PowerShell(npx tsc --noEmit -p tsconfig.json 2>&1 | Select-Object -First 80)",
+      "mcp__claude_ai_Supabase__list_migrations"
     ]
   }
 }
