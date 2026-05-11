@@ -122,27 +122,35 @@ async function downloadAndParseSheet(): Promise<StockRow[]> {
     // Find the row that starts with "Stock Number" (or close to it).
     const headerRowIdx = aoa.findIndex(r => String(r[0] || '').trim().toLowerCase() === 'stock number')
     if (headerRowIdx < 0) { log(`Sheet "${sheetName}" has no Stock Number header — skipping`); continue }
+    // Resolve column indices dynamically from the header row — different
+    // tabs may put Non-Stock at index 4 or 5.
+    const headerRow = aoa[headerRowIdx].map(c => String(c || '').trim().toLowerCase())
+    const idxStock    = headerRow.indexOf('stock number')
+    const idxName     = headerRow.indexOf('name')
+    const idxNonStock = headerRow.indexOf('non-stock')
     const dataRows = aoa.slice(headerRowIdx + 1)
-    let added = 0, skippedBanner = 0
+    let added = 0, skippedBanner = 0, skippedNonStock = 0
     for (const r of dataRows) {
-      const sn = String(r[0] || '').trim()
+      const sn = String(r[idxStock] || '').trim()
       if (!sn) continue
-      const nm = String(r[1] || '').trim()
+      const nm = idxName >= 0 ? String(r[idxName] || '').trim() : ''
       // Filter out interstitial banner / section-header rows that appear
       // between sub-racks within the same xlsx tab (e.g. "RACK LOCATION M",
       // "EXTRAS", or another "Stock Number" header row). Real parts always
-      // have a Name in column B; banners don't.
+      // have a Name; banners don't.
       const looksLikeBanner =
         /^rack location\b/i.test(sn) ||
         sn.toLowerCase() === 'stock number' ||
         sn.toLowerCase() === 'extras' ||
         /^[A-Z][A-Z\s]+$/.test(sn) && !nm
       if (looksLikeBanner || !nm) { skippedBanner++; continue }
-      const nonStock = r[4] === true || String(r[4] || '').toLowerCase() === 'true'
+      const nonStockRaw = idxNonStock >= 0 ? r[idxNonStock] : false
+      const nonStock = nonStockRaw === true || String(nonStockRaw || '').toLowerCase() === 'true'
+      if (nonStock) { skippedNonStock++; continue }
       rows.push({ sheet: sheetName, stockNumber: sn, name: nm, nonStock })
       added++
     }
-    log(`Sheet "${sheetName}" → ${added} rows (skipped ${skippedBanner} banner/blank)`)
+    log(`Sheet "${sheetName}" → ${added} rows (skipped ${skippedBanner} banner/blank, ${skippedNonStock} non-stock)`)
   }
   return rows
 }
@@ -302,6 +310,7 @@ async function main() {
   // Process rows
   let stats = { updated: 0, created: 0, skippedGood: 0, mdNotFound: 0, mdAmbiguous: 0, errors: 0 }
   let idx = 0
+  let mdSampleDumped = 0
   for (const row of uniqueRows) {
     idx++
     const prefix = `[${idx}/${uniqueRows.length}] ${row.stockNumber}`
@@ -310,6 +319,13 @@ async function main() {
       let stockCount: number | null = null
       if (match.kind === 'matched' && match.stock) {
         stockCount = typeof match.stock.available === 'number' ? match.stock.available : null
+        // Dump the full MD stock object for the first 3 matches so we can
+        // see what fields are available — looking for any "low moving" /
+        // classification / velocity signal we can filter on.
+        if (mdSampleDumped < 3) {
+          log(`MD-SAMPLE ${row.stockNumber}: ${JSON.stringify(match.stock)}`)
+          mdSampleDumped++
+        }
       } else if (match.kind === 'ambiguous') {
         stats.mdAmbiguous++
         log(`${prefix} · MD ambiguous (${match.candidates?.length || 0} hits) — using first`)
