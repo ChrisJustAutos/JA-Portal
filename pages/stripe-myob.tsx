@@ -184,12 +184,17 @@ export default function StripeMyobPage({ user }: { user: PageUser }) {
   // ── Tab ─────────────────────────────────────────────────────────────
   const [view, setView] = useState<'sales' | 'payouts'>('sales')
 
-  // ── Filters (shared between tabs) ───────────────────────────────────
+  // ── Filters ─────────────────────────────────────────────────────────
+  // Account picker is shared across tabs (one Stripe account at a time).
   const [account, setAccount] = useState<AccountLabel>('JAWS_JMACX')
-  const [since, setSince] = useState<string>(daysAgoIso(60))
-  const [until, setUntil] = useState<string>(todayIso())
 
-  // Separate sync window (independent of table view's since/until)
+  // Display date range — per-tab.
+  const [since, setSince] = useState<string>(daysAgoIso(60))           // Sales tab
+  const [until, setUntil] = useState<string>(todayIso())
+  const [payoutSince, setPayoutSince] = useState<string>(daysAgoIso(60)) // Payouts tab
+  const [payoutUntil, setPayoutUntil] = useState<string>(todayIso())
+
+  // Separate sync windows (independent of display range)
   const [syncSince, setSyncSince] = useState<string>(daysAgoIso(365))
   const [syncUntil, setSyncUntil] = useState<string>(todayIso())
 
@@ -245,7 +250,7 @@ export default function StripeMyobPage({ user }: { user: PageUser }) {
     setPayoutLoading(true)
     setErr(null)
     try {
-      const qs = new URLSearchParams({ account, since, until })
+      const qs = new URLSearchParams({ account, since: payoutSince, until: payoutUntil })
       const res = await fetch(`/api/stripe-myob/payouts?${qs.toString()}`, { credentials: 'include' })
       const json: any = await res.json()
       if (!res.ok || !json.ok) throw new Error(json.error || `HTTP ${res.status}`)
@@ -259,7 +264,7 @@ export default function StripeMyobPage({ user }: { user: PageUser }) {
     } finally {
       setPayoutLoading(false)
     }
-  }, [account, since, until])
+  }, [account, payoutSince, payoutUntil])
 
   useEffect(() => {
     if (view === 'sales') load()
@@ -453,7 +458,8 @@ export default function StripeMyobPage({ user }: { user: PageUser }) {
             <TabButton active={view === 'payouts'} onClick={() => setView('payouts')} label="Payouts" count={payoutSummary?.total ?? null} />
           </div>
 
-          {/* Filters */}
+          {/* Top filter — account picker is shared across tabs.
+              Date range + refresh are per-tab below. */}
           <div style={{
             display:'flex', gap:12, alignItems:'flex-end',
             padding:'14px 16px', background:T.bg2, border:`1px solid ${T.border}`, borderRadius:8,
@@ -467,17 +473,32 @@ export default function StripeMyobPage({ user }: { user: PageUser }) {
                 <option value="JAWS_ET">JAWS - ET (Easy Tune)</option>
               </select>
             </div>
-            <div>
-              <label style={{ display:'block', fontSize:11, color:T.text2, marginBottom:4 }}>Since</label>
-              <input type="date" value={since} onChange={e => setSince(e.target.value)} style={inputStyle} />
-            </div>
-            <div>
-              <label style={{ display:'block', fontSize:11, color:T.text2, marginBottom:4 }}>Until</label>
-              <input type="date" value={until} onChange={e => setUntil(e.target.value)} style={inputStyle} />
-            </div>
-            <button onClick={load} disabled={loading} style={primaryBtnStyle}>
-              {loading ? 'Loading…' : 'Refresh'}
-            </button>
+            {view === 'sales' && <>
+              <div>
+                <label style={{ display:'block', fontSize:11, color:T.text2, marginBottom:4 }}>Since</label>
+                <input type="date" value={since} onChange={e => setSince(e.target.value)} style={inputStyle} />
+              </div>
+              <div>
+                <label style={{ display:'block', fontSize:11, color:T.text2, marginBottom:4 }}>Until</label>
+                <input type="date" value={until} onChange={e => setUntil(e.target.value)} style={inputStyle} />
+              </div>
+              <button onClick={load} disabled={loading} style={primaryBtnStyle}>
+                {loading ? 'Loading…' : 'Refresh'}
+              </button>
+            </>}
+            {view === 'payouts' && <>
+              <div>
+                <label style={{ display:'block', fontSize:11, color:T.text2, marginBottom:4 }}>Since</label>
+                <input type="date" value={payoutSince} onChange={e => setPayoutSince(e.target.value)} style={inputStyle} />
+              </div>
+              <div>
+                <label style={{ display:'block', fontSize:11, color:T.text2, marginBottom:4 }}>Until</label>
+                <input type="date" value={payoutUntil} onChange={e => setPayoutUntil(e.target.value)} style={inputStyle} />
+              </div>
+              <button onClick={loadPayouts} disabled={payoutLoading} style={primaryBtnStyle}>
+                {payoutLoading ? 'Loading…' : 'Refresh'}
+              </button>
+            </>}
             {err && <span style={{ color:T.red, fontSize:12, marginLeft:'auto' }}>{err}</span>}
           </div>
 
@@ -612,17 +633,6 @@ export default function StripeMyobPage({ user }: { user: PageUser }) {
 
           {/* === PAYOUTS VIEW === */}
           {view === 'payouts' && <>
-
-          {/* Payouts action bar */}
-          <div style={{
-            display:'flex', gap:12, alignItems:'center',
-            padding:'10px 16px', background:T.bg2, border:`1px solid ${T.border}`, borderRadius:8,
-            marginBottom:12,
-          }}>
-            <button onClick={loadPayouts} disabled={payoutLoading} style={primaryBtnStyle}>
-              {payoutLoading ? 'Loading…' : 'Refresh'}
-            </button>
-          </div>
 
           {/* Payouts sync sub-bar — independent date range */}
           {canPush && (
