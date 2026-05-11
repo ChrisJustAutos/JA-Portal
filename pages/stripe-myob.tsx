@@ -172,6 +172,8 @@ export default function StripeMyobPage({ user }: { user: PageUser }) {
   const [previewLoading, setPreviewLoading] = useState(false)
   const [overrideCustomerUid, setOverrideCustomerUid] = useState<string | null>(null)
   const [preCutoverAck, setPreCutoverAck] = useState(false)
+  const [syncing, setSyncing] = useState(false)
+  const [syncResult, setSyncResult] = useState<{ scanned: number; matched: number } | null>(null)
 
   // ── Load data ───────────────────────────────────────────────────────
   const load = useCallback(async () => {
@@ -263,6 +265,28 @@ export default function StripeMyobPage({ user }: { user: PageUser }) {
     }
   }, [activePreview, account, overrideCustomerUid, load])
 
+  const syncFromMyob = useCallback(async () => {
+    setSyncing(true)
+    setSyncResult(null)
+    setErr(null)
+    try {
+      const res = await fetch('/api/stripe-myob/sync', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ account, since, until }),
+      })
+      const json: any = await res.json()
+      if (!res.ok || !json.ok) throw new Error(json.error || `HTTP ${res.status}`)
+      setSyncResult(json.summary)
+      await load()
+    } catch (e: any) {
+      setErr(e?.message || String(e))
+    } finally {
+      setSyncing(false)
+    }
+  }, [account, since, until, load])
+
   const totalGross  = useMemo(() => rows.reduce((s, r) => s + r.total_cents, 0), [rows])
   const pendingRows = useMemo(() => rows.filter(r => r.myobStatus === 'pending'), [rows])
   const rangeIncludesPreCutover = useMemo(() => since < MAKE_CUTOVER_DATE, [since])
@@ -309,6 +333,16 @@ export default function StripeMyobPage({ user }: { user: PageUser }) {
             <button onClick={load} disabled={loading} style={primaryBtnStyle}>
               {loading ? 'Loading…' : 'Refresh'}
             </button>
+            {canPush && (
+              <button onClick={syncFromMyob} disabled={syncing || loading} style={syncBtnStyle} title="Scan MYOB for any of these invoices that already exist there (e.g. from Make) and mark them as Already in MYOB">
+                {syncing ? 'Syncing…' : 'Sync from MYOB'}
+              </button>
+            )}
+            {syncResult && (
+              <span style={{ fontSize:12, color:T.text2 }}>
+                Scanned {syncResult.scanned}, matched <strong style={{ color:T.purple }}>{syncResult.matched}</strong>
+              </span>
+            )}
             {err && <span style={{ color:T.red, fontSize:12, marginLeft:'auto' }}>{err}</span>}
           </div>
 
@@ -583,6 +617,10 @@ const primaryBtnStyle: React.CSSProperties = {
 const secondaryBtnStyle: React.CSSProperties = {
   padding:'8px 14px', background:'transparent', color:T.text2,
   border:`1px solid ${T.border2}`, borderRadius:6, fontSize:13, cursor:'pointer',
+}
+const syncBtnStyle: React.CSSProperties = {
+  padding:'8px 14px', background:T.purple, color:'#fff',
+  border:'none', borderRadius:6, fontSize:13, fontWeight:600, cursor:'pointer',
 }
 const pushBtnStyle: React.CSSProperties = {
   padding:'5px 12px', fontSize:12, background:T.accent, color:'#fff',

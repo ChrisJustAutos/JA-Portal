@@ -192,6 +192,15 @@ async function createJawsCustomer(
 // (which used the invoice-item id `ii_xxx`) as well as anything created by
 // this tool (which uses the invoice id `in_xxx`). Pass the invoice id PLUS
 // every line's id and invoice_item id for max coverage.
+// Exposed for the sync endpoint — same function, different caller.
+export async function findMyobMatchForStripeIds(
+  connId: string,
+  cfId: string,
+  stripeIds: string[],
+): Promise<{ uid: string; number: string; matchedStripeId: string } | null> {
+  return findExistingMyobInvoiceByAnyStripeId(connId, cfId, stripeIds)
+}
+
 async function findExistingMyobInvoiceByAnyStripeId(
   connId: string,
   cfId: string,
