@@ -709,7 +709,8 @@ interface SpendMoneyLineBody {
 
 interface SpendMoneyBody {
   Date: string
-  Account: { UID: string }     // FROM account (bank / clearing)
+  PayFrom: 'Account' | 'ElectronicPayments'  // category — 'Account' for normal bank/clearing
+  Account: { UID: string }                   // the FROM account itself
   Memo: string
   IsTaxInclusive: boolean
   Lines: SpendMoneyLineBody[]
@@ -896,6 +897,10 @@ export async function createSpendMoneyTxn(
 
   const body: SpendMoneyBody = {
     Date: inv.invoice_date,
+    // MYOB SpendMoneyTxn requires BOTH PayFrom (the category — 'Account'
+    // for normal bank/clearing accounts) and Account (the actual UID).
+    // Sending only Account → 400 "PayFrom is required".
+    PayFrom: 'Account',
     Account: { UID: String(inv.payment_account_uid) },
     Memo: journalMemo,
     IsTaxInclusive: false,
