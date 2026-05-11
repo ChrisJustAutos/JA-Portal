@@ -289,6 +289,30 @@ export default function StripeMyobPage({ user }: { user: PageUser }) {
     }
   }, [account, syncSince, syncUntil, loadPayouts])
 
+  // Mark a single payout as already reconciled in MYOB (no MYOB write).
+  const markPayoutReconciled = useCallback(async (payoutId: string) => {
+    if (!window.confirm('Mark this payout as already reconciled in MYOB? No MYOB write will happen — this only updates the local sync log so the row stops showing as Pending.')) return
+    setReconcilingPayoutIds(prev => new Set(prev).add(payoutId))
+    setErr(null)
+    try {
+      const res = await fetch('/api/stripe-myob/payouts-mark', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ account, payoutId }),
+      })
+      const json: any = await res.json()
+      if (!res.ok || !json.ok) throw new Error(json.error || `HTTP ${res.status}`)
+      await loadPayouts()
+    } catch (e: any) {
+      setErr(e?.message || String(e))
+    } finally {
+      setReconcilingPayoutIds(prev => {
+        const next = new Set(prev); next.delete(payoutId); return next
+      })
+    }
+  }, [account, loadPayouts])
+
   // Reconcile a single payout from the UI
   const reconcilePayout = useCallback(async (payoutId: string) => {
     setReconcilingPayoutIds(prev => new Set(prev).add(payoutId))
@@ -682,14 +706,22 @@ export default function StripeMyobPage({ user }: { user: PageUser }) {
                       )}
                     </td>
                     <td style={tdStyle}>
-                      {p.myobStatus === 'pushed' ? (
+                      {p.myobStatus === 'pushed' || p.myobStatus === 'skipped_duplicate' ? (
                         <span style={{ color:T.text3, fontSize:11 }}>—</span>
                       ) : canPush ? (
-                        <button onClick={() => reconcilePayout(p.id)}
-                          disabled={reconcilingPayoutIds.has(p.id)}
-                          style={pushBtnStyle}>
-                          {reconcilingPayoutIds.has(p.id) ? 'Reconciling…' : 'Reconcile'}
-                        </button>
+                        <div style={{ display:'flex', gap:6, flexDirection:'column' }}>
+                          <button onClick={() => reconcilePayout(p.id)}
+                            disabled={reconcilingPayoutIds.has(p.id)}
+                            style={pushBtnStyle}>
+                            {reconcilingPayoutIds.has(p.id) ? 'Working…' : 'Reconcile'}
+                          </button>
+                          <button onClick={() => markPayoutReconciled(p.id)}
+                            disabled={reconcilingPayoutIds.has(p.id)}
+                            style={markBtnStyle}
+                            title="Skip the MYOB write — just mark this payout as already reconciled (use when Make / manual rec already handled it)">
+                            Mark reconciled
+                          </button>
+                        </div>
                       ) : (
                         <span style={{ color:T.text3, fontSize:11 }}>Read-only</span>
                       )}
@@ -890,6 +922,10 @@ const secondaryBtnStyle: React.CSSProperties = {
 const syncBtnStyle: React.CSSProperties = {
   padding:'8px 14px', background:T.purple, color:'#fff',
   border:'none', borderRadius:6, fontSize:13, fontWeight:600, cursor:'pointer',
+}
+const markBtnStyle: React.CSSProperties = {
+  padding:'4px 10px', background:'transparent', color:T.purple,
+  border:`1px solid ${T.purple}55`, borderRadius:5, fontSize:11, cursor:'pointer',
 }
 const pushBtnStyle: React.CSSProperties = {
   padding:'5px 12px', fontSize:12, background:T.accent, color:'#fff',
