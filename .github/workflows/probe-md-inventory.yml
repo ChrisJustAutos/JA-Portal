@@ -1,0 +1,25 @@
+name: Probe MD inventory endpoints (manual)
+
+# One-off diagnostic. Manually triggered. Logs which MD URLs respond
+# and what shape the JSON has so we can figure out where alert
+# quantity lives.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    container:
+      image: mcr.microsoft.com/playwright:v1.59.1-noble
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: npm ci || npm install
+      - name: Run probe
+        env:
+          MECHANICDESK_WORKSHOP_ID: ${{ secrets.MECHANICDESK_WORKSHOP_ID }}
+          MECHANICDESK_USERNAME:    ${{ secrets.MECHANICDESK_USERNAME }}
+          MECHANICDESK_PASSWORD:    ${{ secrets.MECHANICDESK_PASSWORD }}
+        run: npx tsx scripts/probe-md-inventory.ts
