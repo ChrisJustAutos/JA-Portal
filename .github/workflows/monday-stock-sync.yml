@@ -1,0 +1,42 @@
+name: Monday stock sync (twice daily)
+
+# Syncs Morgan's stocktake xlsx → Mechanics Desk live counts → Monday
+# "Product Availability Delays" board. See scripts/monday-stock-sync.ts
+# for the full flow.
+#
+# Schedule:
+#   "0 22 * * *" = 22:00 UTC = 8am Sydney AEST (9am AEDT during DST)
+#   "0 6  * * *" =  6:00 UTC = 4pm Sydney AEST (5pm AEDT during DST)
+#   The 1-hour drift through DST transitions is acceptable.
+#
+# Also supports manual dispatch from the Actions tab for ad-hoc runs.
+
+on:
+  schedule:
+    - cron: '0 22 * * *'   # 8am Sydney (winter) / 9am (summer)
+    - cron: '0 6 * * *'    # 4pm Sydney (winter) / 5pm (summer)
+  workflow_dispatch:
+
+jobs:
+  run:
+    name: stock sync
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    container:
+      image: mcr.microsoft.com/playwright:v1.59.1-noble
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: npm ci || npm install
+
+      - name: Run sync
+        env:
+          MONDAY_API_TOKEN:         ${{ secrets.MONDAY_API_TOKEN }}
+          MECHANICDESK_WORKSHOP_ID: ${{ secrets.MECHANICDESK_WORKSHOP_ID }}
+          MECHANICDESK_USERNAME:    ${{ secrets.MECHANICDESK_USERNAME }}
+          MECHANICDESK_PASSWORD:    ${{ secrets.MECHANICDESK_PASSWORD }}
+          GOOGLE_SHEET_ID:          ${{ secrets.GOOGLE_SHEET_ID || '1qpUFT-bI4U3bB0uqW2aNqD6ZIe3-Y4Qd' }}
+        run: npx tsx scripts/monday-stock-sync.ts
