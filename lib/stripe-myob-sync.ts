@@ -201,6 +201,63 @@ export async function findMyobMatchForStripeIds(
   return findExistingMyobInvoiceByAnyStripeId(connId, cfId, stripeIds)
 }
 
+// Fuzzy fallback: find a MYOB Sale/Invoice/Professional where the
+// customer-name search hits AND the total amount equals (in dollars,
+// tolerance 1c) AND the invoice date is within ±dayWindow of the
+// Stripe paid date. Used by the sync endpoint when the id-substring
+// search misses (typically older Make-created records).
+//
+// Returns null if zero matches OR more than one match (we never
+// auto-resolve ambiguity — a human picks via the preview modal).
+export async function findMyobMatchByCustomerAmountDate(
+  connId: string,
+  cfId: string,
+  args: {
+    customerName: string
+    grossDollars: number
+    isoDate: string         // yyyy-mm-dd — Stripe paid date
+    dayWindow?: number      // default ±3
+  },
+): Promise<{ uid: string; number: string; reason: string } | null> {
+  const dayWindow = args.dayWindow ?? 3
+  if (!args.customerName.trim() || !isFinite(args.grossDollars) || args.grossDollars <= 0) return null
+
+  // 1. Find candidate MYOB customers by name (same logic as push).
+  const customers = await searchJawsCustomersByName(connId, cfId, args.customerName, 5)
+  if (customers.length === 0) return null
+
+  // 2. Build a date range filter (±dayWindow days).
+  const baseMs = Date.parse(args.isoDate + 'T00:00:00Z')
+  if (!isFinite(baseMs)) return null
+  const fromIso = new Date(baseMs - dayWindow * 86400_000).toISOString().slice(0, 10) + 'T00:00:00'
+  const toIso   = new Date(baseMs + dayWindow * 86400_000).toISOString().slice(0, 10) + 'T23:59:59'
+
+  // 3. For each candidate customer, pull their invoices in the window
+  //    and check totals. (MYOB OData doesn't reliably support nested
+  //    Customer/UID navigation in $filter — keep it simple.)
+  const hits: Array<{ uid: string; number: string; reason: string }> = []
+  for (const cust of customers) {
+    const filter = `Customer/UID eq guid'${cust.uid}' and Date ge datetime'${fromIso}' and Date le datetime'${toIso}'`
+    const { status, data } = await myobFetch(connId, `/accountright/${cfId}/Sale/Invoice/Professional`, {
+      query: { '$top': 20, '$filter': filter },
+    })
+    if (status !== 200) continue
+    const items: any[] = Array.isArray(data?.Items) ? data.Items : []
+    for (const inv of items) {
+      const total = typeof inv.TotalAmount === 'number' ? inv.TotalAmount : parseFloat(inv.TotalAmount || '0')
+      if (Math.abs(total - args.grossDollars) < 0.01) {
+        hits.push({
+          uid: inv.UID,
+          number: inv.Number || '',
+          reason: `${cust.name} · $${total.toFixed(2)} · ${String(inv.Date).slice(0, 10)}`,
+        })
+      }
+    }
+  }
+  if (hits.length === 1) return hits[0]
+  return null  // zero or ambiguous → don't auto-match
+}
+
 async function findExistingMyobInvoiceByAnyStripeId(
   connId: string,
   cfId: string,
@@ -639,6 +696,7 @@ export async function pushStripeInvoiceToJaws(
       pushed_at: new Date().toISOString(),
       raw_payload: { invoice, fee: feeInfo, myobInvoice: createdInvoice, myobPayment: createdPayment },
       attempts: (existing.data?.attempts || 0) + 1,
+      last_error: null,  // clear any prior failure message
       created_by: options.performedBy || 'system',
     }, { onConflict: 'stripe_account,stripe_entity_type,stripe_entity_id' })
 

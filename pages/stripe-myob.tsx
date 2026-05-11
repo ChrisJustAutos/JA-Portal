@@ -346,18 +346,6 @@ export default function StripeMyobPage({ user }: { user: PageUser }) {
             {err && <span style={{ color:T.red, fontSize:12, marginLeft:'auto' }}>{err}</span>}
           </div>
 
-          {/* Pre-cutover warning */}
-          {rangeIncludesPreCutover && (
-            <div style={{
-              padding:'12px 16px', marginBottom:14,
-              background:`${T.red}1a`, color:T.red,
-              border:`1px solid ${T.red}55`, borderRadius:8,
-              fontSize:13,
-            }}>
-              ⚠ <strong>Date range crosses {MAKE_CUTOVER_DATE}</strong> — the day Make.com stopped syncing. Invoices dated before this were almost certainly already pushed by Make and may exist in MYOB already. The duplicate check searches MYOB for matching Stripe ids but isn't infallible — eyeball each row carefully before pushing. Rows dated before the cutover get an extra confirmation step in the preview modal.
-            </div>
-          )}
-
           {/* Summary */}
           {summary && (
             <div style={{ display:'flex', gap:10, marginBottom:16, flexWrap:'wrap' }}>

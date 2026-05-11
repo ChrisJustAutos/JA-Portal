@@ -24,7 +24,10 @@ import {
   StripeAccountLabel,
   listPaidInvoices,
 } from '../../../lib/stripe-multi'
-import { findMyobMatchForStripeIds } from '../../../lib/stripe-myob-sync'
+import {
+  findMyobMatchForStripeIds,
+  findMyobMatchByCustomerAmountDate,
+} from '../../../lib/stripe-myob-sync'
 import { getConnection } from '../../../lib/myob'
 import { getCurrentUser } from '../../../lib/authServer'
 import { roleHasPermission } from '../../../lib/permissions'
@@ -109,7 +112,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     stripeInvoiceId: string
     stripeNumber: string | null
     matched: boolean
+    matchMethod?: 'stripe-id' | 'customer-amount-date'
     matchedStripeId?: string
+    matchReason?: string
     myobInvoiceUid?: string
     myobInvoiceNumber?: string
     error?: string
@@ -117,14 +122,35 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   let matchedCount = 0
   for (const inv of toScan) {
-    // Build the universe of Stripe ids that might appear in MYOB JournalMemo.
-    const stripeIds: string[] = [inv.id]
-    for (const ln of (inv.lines?.data || [])) {
-      if (ln.id) stripeIds.push(ln.id)
-      if (ln.invoice_item) stripeIds.push(ln.invoice_item)
-    }
     try {
-      const hit = await findMyobMatchForStripeIds(conn.id, cfId, stripeIds)
+      // 1. ID-based search — Stripe ids in MYOB JournalMemo.
+      const stripeIds: string[] = [inv.id]
+      for (const ln of (inv.lines?.data || [])) {
+        if (ln.id) stripeIds.push(ln.id)
+        if (ln.invoice_item) stripeIds.push(ln.invoice_item)
+      }
+      let hit = await findMyobMatchForStripeIds(conn.id, cfId, stripeIds)
+      let method: 'stripe-id' | 'customer-amount-date' = 'stripe-id'
+      let matchedStripeId = hit?.matchedStripeId
+      let matchReason: string | undefined = hit ? `JournalMemo contains ${hit.matchedStripeId}` : undefined
+
+      // 2. Fuzzy fallback — customer name + same dollar amount + ±3 days.
+      if (!hit) {
+        const paidIso = (inv.status_transitions?.paid_at
+          ? new Date(inv.status_transitions.paid_at * 1000).toISOString()
+          : new Date(inv.created * 1000).toISOString()).slice(0, 10)
+        const fuzzy = await findMyobMatchByCustomerAmountDate(conn.id, cfId, {
+          customerName: inv.customer_name || '',
+          grossDollars: inv.total / 100,
+          isoDate: paidIso,
+        })
+        if (fuzzy) {
+          hit = { uid: fuzzy.uid, number: fuzzy.number, matchedStripeId: '(fuzzy)' }
+          method = 'customer-amount-date'
+          matchReason = `${fuzzy.reason} (fuzzy)`
+        }
+      }
+
       if (hit) {
         matchedCount++
         await sb().from('stripe_myob_sync_log').upsert({
@@ -137,14 +163,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           amount_cents: inv.total,
           customer_email: inv.customer_email,
           customer_name: inv.customer_name,
-          last_error: `matched via ${hit.matchedStripeId} in MYOB invoice ${hit.number}`,
+          last_error: null,
+          raw_payload: { matched: { method, reason: matchReason, myobNumber: hit.number } },
           created_by: performedBy || 'system',
         }, { onConflict: 'stripe_account,stripe_entity_type,stripe_entity_id' })
         results.push({
           stripeInvoiceId: inv.id,
           stripeNumber: inv.number,
           matched: true,
-          matchedStripeId: hit.matchedStripeId,
+          matchMethod: method,
+          matchedStripeId,
+          matchReason,
           myobInvoiceUid: hit.uid,
           myobInvoiceNumber: hit.number,
         })
