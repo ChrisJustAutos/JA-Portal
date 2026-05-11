@@ -52,6 +52,30 @@ export default withAuth(null, async (req: NextApiRequest, res: NextApiResponse, 
     return res.status(409).json({ error: 'Cannot post — triage is RED. Resolve issues first.' })
   }
 
+  // Optional override: if the request body includes paymentAccountUid,
+  // and the invoice has no supplier mapped, treat it as a Spend Money
+  // post against that account. This lets the AP list "Spend Money" button
+  // pick an account at click-time without first opening the detail page.
+  const body = (req.body || {}) as Record<string, any>
+  const paymentAccountUid = typeof body.paymentAccountUid === 'string'
+    ? body.paymentAccountUid.trim() : ''
+  if (paymentAccountUid && !inv.resolved_supplier_uid) {
+    // Look up account details to keep ap_invoices in sync (code + name).
+    const { data: acct } = await sb()
+      .from('ap_payment_accounts')
+      .select('account_uid, account_code, account_name')
+      .eq('account_uid', paymentAccountUid)
+      .maybeSingle()
+    if (!acct) return res.status(400).json({ error: 'paymentAccountUid not found in ap_payment_accounts' })
+    const { error: updErr } = await sb().from('ap_invoices').update({
+      payment_account_uid:  acct.account_uid,
+      payment_account_code: acct.account_code,
+      payment_account_name: acct.account_name,
+    }).eq('id', id)
+    if (updErr) return res.status(500).json({ error: 'Failed to set payment account: ' + updErr.message })
+    inv.payment_account_uid = acct.account_uid
+  }
+
   // Path selection:
   //   - supplier mapped              → Service Bill (the default)
   //   - no supplier + payment_account → Spend Money (clearing/bank account)

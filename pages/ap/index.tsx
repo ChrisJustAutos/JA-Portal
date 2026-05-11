@@ -105,16 +105,26 @@ function isApprovable(inv: InvoiceRow): boolean {
       && inv.status !== 'rejected'
 }
 
-// Spend Money (no-supplier) eligibility: invoice has no supplier
-// mapped but does have a payment/clearing account selected, and
-// hasn't been posted/rejected yet. Triage doesn't have to be green
-// since the typical reason for no-supplier rows being non-green is
-// "supplier not mapped" — and Spend Money explicitly doesn't need one.
+// Spend Money (no-supplier) eligibility. Triage doesn't have to be
+// green since the typical reason for no-supplier rows being non-green
+// is "supplier not mapped" — and Spend Money explicitly doesn't need
+// one. The payment account is now picked at click-time via a dropdown,
+// so we no longer require payment_account_uid up-front.
 function isSpendMoneyEligible(inv: InvoiceRow): boolean {
   return !inv.resolved_supplier_uid
-      && !!inv.payment_account_uid
       && inv.status !== 'posted'
       && inv.status !== 'rejected'
+}
+
+interface PaymentAccount {
+  id: string
+  myob_company_file: 'VPS' | 'JAWS'
+  label: string
+  account_uid: string
+  account_code: string
+  account_name: string
+  is_active: boolean
+  sort_order: number
 }
 
 export default function APListPage({ user }: PageProps) {
@@ -136,6 +146,10 @@ export default function APListPage({ user }: PageProps) {
   const [approvingId, setApprovingId] = useState<string | null>(null)
   const [bulkApproving, setBulkApproving] = useState(false)
   const [approveMessage, setApproveMessage] = useState<string | null>(null)
+
+  // Spend Money dropdown state
+  const [paymentAccounts, setPaymentAccounts] = useState<PaymentAccount[]>([])
+  const [spendMoneyMenuFor, setSpendMoneyMenuFor] = useState<string | null>(null)
 
   const [pulling, setPulling] = useState(false)
   const [pullMessage, setPullMessage] = useState<string | null>(null)
@@ -169,6 +183,23 @@ export default function APListPage({ user }: PageProps) {
     const t = setTimeout(fetchData, 300)
     return () => clearTimeout(t)
   }, [search])
+
+  // Load payment accounts once for the Spend Money dropdown.
+  useEffect(() => {
+    if (!canEdit) return
+    fetch('/api/ap/payment-accounts?active=1', { credentials: 'same-origin' })
+      .then(r => r.json())
+      .then(j => setPaymentAccounts(Array.isArray(j.accounts) ? j.accounts : []))
+      .catch(() => {})
+  }, [canEdit])
+
+  // Close the Spend Money menu on outside click.
+  useEffect(() => {
+    if (!spendMoneyMenuFor) return
+    const onDocClick = () => setSpendMoneyMenuFor(null)
+    document.addEventListener('click', onDocClick)
+    return () => document.removeEventListener('click', onDocClick)
+  }, [spendMoneyMenuFor])
 
   useEffect(() => {
     if (!data) return
@@ -270,16 +301,18 @@ export default function APListPage({ user }: PageProps) {
     }
   }
 
-  async function handleApproveOne(inv: InvoiceRow, e: React.MouseEvent) {
+  async function handleApproveOne(inv: InvoiceRow, e: React.MouseEvent, paymentAccountUid?: string) {
     e.stopPropagation()
     e.preventDefault()
     setApprovingId(inv.id)
     setApproveMessage(null)
+    setSpendMoneyMenuFor(null)
     try {
       const res = await fetch(`/api/ap/${inv.id}/approve`, {
         method: 'POST',
         credentials: 'same-origin',
         headers: { 'Content-Type': 'application/json' },
+        body: paymentAccountUid ? JSON.stringify({ paymentAccountUid }) : undefined,
       })
       const json = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`)
@@ -635,8 +668,10 @@ export default function APListPage({ user }: PageProps) {
                 isDeleting={deletingId === inv.id}
                 bulkApproving={bulkApproving}
                 canEdit={canEdit}
+                paymentAccounts={paymentAccounts.filter(a => a.myob_company_file === inv.myob_company_file)}
                 onToggleSelect={() => toggleSelect(inv.id)}
                 onApprove={(e) => handleApproveOne(inv, e)}
+                onApproveAsSpendMoney={(e, uid) => handleApproveOne(inv, e, uid)}
                 onDelete={(e) => handleDelete(inv, e)}
               />
             ))}
@@ -767,20 +802,55 @@ export default function APListPage({ user }: PageProps) {
                                 {isApprovingThis ? '…' : '✓ Approve'}
                               </button>
                             ) : isSpendMoneyEligible(inv) ? (
-                              <button
-                                onClick={(e) => handleApproveOne(inv, e)}
-                                disabled={isApprovingThis || bulkApproving}
-                                title={`Push as Spend Money (no supplier) — clears to ${inv.payment_account_code || ''} ${inv.payment_account_name || ''}`.trim()}
-                                style={{
-                                  background: T.purple, color:'#fff', border:'none',
-                                  padding:'4px 10px', borderRadius:4, fontSize:11, fontWeight:500, fontFamily:'inherit',
-                                  cursor: (isApprovingThis || bulkApproving) ? 'wait' : 'pointer',
-                                  opacity: (isApprovingThis || bulkApproving) ? 0.5 : 1,
-                                  whiteSpace:'nowrap',
-                                }}
-                              >
-                                {isApprovingThis ? '…' : '$ Spend Money'}
-                              </button>
+                              <div style={{position:'relative', display:'inline-block'}}>
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation()
+                                    setSpendMoneyMenuFor(spendMoneyMenuFor === inv.id ? null : inv.id)
+                                  }}
+                                  disabled={isApprovingThis || bulkApproving}
+                                  title="Push this invoice to MYOB as a Spend Money — pick the account to clear it against"
+                                  style={{
+                                    background: T.purple, color:'#fff', border:'none',
+                                    padding:'4px 10px', borderRadius:4, fontSize:11, fontWeight:500, fontFamily:'inherit',
+                                    cursor: (isApprovingThis || bulkApproving) ? 'wait' : 'pointer',
+                                    opacity: (isApprovingThis || bulkApproving) ? 0.5 : 1,
+                                    whiteSpace:'nowrap',
+                                  }}
+                                >
+                                  {isApprovingThis ? '…' : '$ Spend Money ▾'}
+                                </button>
+                                {spendMoneyMenuFor === inv.id && (
+                                  <div onClick={e => e.stopPropagation()} style={{
+                                    position:'absolute', right:0, top:'100%', marginTop:4,
+                                    background:T.bg2, border:`1px solid ${T.border2}`, borderRadius:6,
+                                    boxShadow:'0 6px 20px rgba(0,0,0,0.4)',
+                                    minWidth:200, padding:4, zIndex:50,
+                                  }}>
+                                    <div style={{padding:'6px 8px', fontSize:10, color:T.text3, textTransform:'uppercase', letterSpacing:'0.05em'}}>Post to {inv.myob_company_file} as Spend Money</div>
+                                    {paymentAccounts.filter(a => a.myob_company_file === inv.myob_company_file).length === 0 && (
+                                      <div style={{padding:'8px', fontSize:11, color:T.text3, fontStyle:'italic'}}>
+                                        No payment accounts configured for {inv.myob_company_file}. Add some in Settings → MYOB Connection.
+                                      </div>
+                                    )}
+                                    {paymentAccounts.filter(a => a.myob_company_file === inv.myob_company_file).map(a => (
+                                      <button key={a.id}
+                                        onClick={(e) => handleApproveOne(inv, e, a.account_uid)}
+                                        style={{
+                                          display:'block', width:'100%', textAlign:'left',
+                                          padding:'8px 10px', background:'transparent', color:T.text,
+                                          border:'none', borderRadius:4, fontSize:12, fontFamily:'inherit',
+                                          cursor:'pointer',
+                                        }}
+                                        onMouseEnter={e => e.currentTarget.style.background = T.bg3}
+                                        onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
+                                        <div style={{fontWeight:500}}>{a.label}</div>
+                                        <div style={{fontSize:10, color:T.text3, fontFamily:'monospace', marginTop:2}}>{a.account_code} · {a.account_name}</div>
+                                      </button>
+                                    ))}
+                                  </div>
+                                )}
+                              </div>
                             ) : (
                               <span style={{color:T.text3, fontSize:11}}>—</span>
                             )}
@@ -832,7 +902,8 @@ export default function APListPage({ user }: PageProps) {
 // ── Mobile invoice card ──────────────────────────────────────────────────
 function InvoiceCard({
   inv, isSelected, isApproving, isDeleting, bulkApproving, canEdit,
-  onToggleSelect, onApprove, onDelete,
+  paymentAccounts,
+  onToggleSelect, onApprove, onApproveAsSpendMoney, onDelete,
 }: {
   inv: InvoiceRow
   isSelected: boolean
@@ -840,8 +911,10 @@ function InvoiceCard({
   isDeleting: boolean
   bulkApproving: boolean
   canEdit: boolean
+  paymentAccounts: PaymentAccount[]
   onToggleSelect: () => void
   onApprove: (e: React.MouseEvent) => void
+  onApproveAsSpendMoney: (e: React.MouseEvent, paymentAccountUid: string) => void
   onDelete: (e: React.MouseEvent) => void
 }) {
   const router = useRouter()
@@ -952,10 +1025,15 @@ function InvoiceCard({
               {isApproving ? 'Posting…' : '✓ Approve & Post'}
             </button>
           ) : isSpendMoneyEligible(inv) ? (
-            <button
-              onClick={onApprove}
-              disabled={isApproving || bulkApproving}
-              title={`Push as Spend Money (no supplier) — clears to ${inv.payment_account_code || ''} ${inv.payment_account_name || ''}`.trim()}
+            <select
+              defaultValue=""
+              disabled={isApproving || bulkApproving || paymentAccounts.length === 0}
+              onChange={(e) => {
+                const uid = e.target.value
+                if (!uid) return
+                onApproveAsSpendMoney(e as any, uid)
+                e.target.value = ''
+              }}
               style={{
                 flex:1,
                 background: T.purple, color:'#fff', border:'none',
@@ -963,10 +1041,20 @@ function InvoiceCard({
                 fontSize:14, fontWeight:600, fontFamily:'inherit',
                 cursor: (isApproving || bulkApproving) ? 'wait' : 'pointer',
                 opacity: (isApproving || bulkApproving) ? 0.5 : 1,
+                appearance:'none',
+                WebkitAppearance:'none',
               }}
             >
-              {isApproving ? 'Posting…' : '$ Push as Spend Money'}
-            </button>
+              <option value="">{isApproving ? 'Posting…' : '$ Push as Spend Money ▾'}</option>
+              {paymentAccounts.length === 0
+                ? <option value="" disabled>No payment accounts configured</option>
+                : paymentAccounts.map(a => (
+                    <option key={a.id} value={a.account_uid}>
+                      {a.label} ({a.account_code})
+                    </option>
+                  ))
+              }
+            </select>
           ) : (
             <span style={{flex:1, fontSize:11, color:T.text3, fontStyle:'italic'}}>
               {isPosted ? 'Already posted' : 'Not approvable yet'}
