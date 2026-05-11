@@ -147,9 +147,14 @@ export default function APListPage({ user }: PageProps) {
   const [bulkApproving, setBulkApproving] = useState(false)
   const [approveMessage, setApproveMessage] = useState<string | null>(null)
 
-  // Spend Money dropdown state
+  // Spend Money state — modal driven (replaces previous dropdown)
   const [paymentAccounts, setPaymentAccounts] = useState<PaymentAccount[]>([])
-  const [spendMoneyMenuFor, setSpendMoneyMenuFor] = useState<string | null>(null)
+  const [spendMoneyInv, setSpendMoneyInv] = useState<InvoiceRow | null>(null)
+  const [smPaymentUid, setSmPaymentUid] = useState<string>('')
+  const [smAccountQuery, setSmAccountQuery] = useState<string>('')
+  const [smAccountResults, setSmAccountResults] = useState<Array<{uid:string;displayId:string;name:string;type:string}>>([])
+  const [smAccountSelected, setSmAccountSelected] = useState<{uid:string;displayId:string;name:string}|null>(null)
+  const [smSearching, setSmSearching] = useState(false)
 
   const [pulling, setPulling] = useState(false)
   const [pullMessage, setPullMessage] = useState<string | null>(null)
@@ -193,13 +198,60 @@ export default function APListPage({ user }: PageProps) {
       .catch(() => {})
   }, [canEdit])
 
-  // Close the Spend Money menu on outside click.
+  // Debounced account search for the Spend Money modal.
   useEffect(() => {
-    if (!spendMoneyMenuFor) return
-    const onDocClick = () => setSpendMoneyMenuFor(null)
-    document.addEventListener('click', onDocClick)
-    return () => document.removeEventListener('click', onDocClick)
-  }, [spendMoneyMenuFor])
+    if (!spendMoneyInv) return
+    const q = smAccountQuery.trim()
+    setSmSearching(true)
+    const t = setTimeout(async () => {
+      try {
+        const url = `/api/myob/accounts?q=${encodeURIComponent(q)}&company=${spendMoneyInv.myob_company_file}&limit=30`
+        const r = await fetch(url, { credentials: 'same-origin' })
+        const j = await r.json()
+        setSmAccountResults(Array.isArray(j.accounts) ? j.accounts : [])
+      } catch { setSmAccountResults([]) }
+      finally { setSmSearching(false) }
+    }, 200)
+    return () => clearTimeout(t)
+  }, [smAccountQuery, spendMoneyInv])
+
+  // Reset modal state when opened for a new invoice
+  function openSpendMoneyModal(inv: InvoiceRow) {
+    setSpendMoneyInv(inv)
+    setSmPaymentUid('')
+    setSmAccountQuery('')
+    setSmAccountResults([])
+    setSmAccountSelected(null)
+  }
+  function closeSpendMoneyModal() {
+    setSpendMoneyInv(null)
+  }
+  async function submitSpendMoney() {
+    if (!spendMoneyInv) return
+    if (!smPaymentUid) return
+    if (!smAccountSelected) return
+    const inv = spendMoneyInv
+    setApprovingId(inv.id)
+    setApproveMessage(null)
+    closeSpendMoneyModal()
+    try {
+      const res = await fetch(`/api/ap/${inv.id}/approve`, {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ paymentAccountUid: smPaymentUid, accountUid: smAccountSelected.uid }),
+      })
+      const json = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`)
+      const billUidShort = (json.myobBillUid || '').substring(0, 8)
+      setApproveMessage(`✅ Posted "${inv.vendor_name_parsed} ${inv.invoice_number}" as Spend Money — ${billUidShort}…`)
+      fetchData()
+    } catch (err: any) {
+      setApproveMessage(`❌ ${inv.vendor_name_parsed} ${inv.invoice_number}: ${err?.message || err}`)
+    } finally {
+      setApprovingId(null)
+    }
+  }
 
   useEffect(() => {
     if (!data) return
@@ -306,7 +358,6 @@ export default function APListPage({ user }: PageProps) {
     e.preventDefault()
     setApprovingId(inv.id)
     setApproveMessage(null)
-    setSpendMoneyMenuFor(null)
     try {
       const res = await fetch(`/api/ap/${inv.id}/approve`, {
         method: 'POST',
@@ -668,10 +719,9 @@ export default function APListPage({ user }: PageProps) {
                 isDeleting={deletingId === inv.id}
                 bulkApproving={bulkApproving}
                 canEdit={canEdit}
-                paymentAccounts={paymentAccounts.filter(a => a.myob_company_file === inv.myob_company_file)}
                 onToggleSelect={() => toggleSelect(inv.id)}
                 onApprove={(e) => handleApproveOne(inv, e)}
-                onApproveAsSpendMoney={(e, uid) => handleApproveOne(inv, e, uid)}
+                onOpenSpendMoney={() => openSpendMoneyModal(inv)}
                 onDelete={(e) => handleDelete(inv, e)}
               />
             ))}
@@ -802,55 +852,20 @@ export default function APListPage({ user }: PageProps) {
                                 {isApprovingThis ? '…' : '✓ Approve'}
                               </button>
                             ) : isSpendMoneyEligible(inv) ? (
-                              <div style={{position:'relative', display:'inline-block'}}>
-                                <button
-                                  onClick={(e) => {
-                                    e.stopPropagation()
-                                    setSpendMoneyMenuFor(spendMoneyMenuFor === inv.id ? null : inv.id)
-                                  }}
-                                  disabled={isApprovingThis || bulkApproving}
-                                  title="Push this invoice to MYOB as a Spend Money — pick the account to clear it against"
-                                  style={{
-                                    background: T.purple, color:'#fff', border:'none',
-                                    padding:'4px 10px', borderRadius:4, fontSize:11, fontWeight:500, fontFamily:'inherit',
-                                    cursor: (isApprovingThis || bulkApproving) ? 'wait' : 'pointer',
-                                    opacity: (isApprovingThis || bulkApproving) ? 0.5 : 1,
-                                    whiteSpace:'nowrap',
-                                  }}
-                                >
-                                  {isApprovingThis ? '…' : '$ Spend Money ▾'}
-                                </button>
-                                {spendMoneyMenuFor === inv.id && (
-                                  <div onClick={e => e.stopPropagation()} style={{
-                                    position:'absolute', right:0, top:'100%', marginTop:4,
-                                    background:T.bg2, border:`1px solid ${T.border2}`, borderRadius:6,
-                                    boxShadow:'0 6px 20px rgba(0,0,0,0.4)',
-                                    minWidth:200, padding:4, zIndex:50,
-                                  }}>
-                                    <div style={{padding:'6px 8px', fontSize:10, color:T.text3, textTransform:'uppercase', letterSpacing:'0.05em'}}>Post to {inv.myob_company_file} as Spend Money</div>
-                                    {paymentAccounts.filter(a => a.myob_company_file === inv.myob_company_file).length === 0 && (
-                                      <div style={{padding:'8px', fontSize:11, color:T.text3, fontStyle:'italic'}}>
-                                        No payment accounts configured for {inv.myob_company_file}. Add some in Settings → MYOB Connection.
-                                      </div>
-                                    )}
-                                    {paymentAccounts.filter(a => a.myob_company_file === inv.myob_company_file).map(a => (
-                                      <button key={a.id}
-                                        onClick={(e) => handleApproveOne(inv, e, a.account_uid)}
-                                        style={{
-                                          display:'block', width:'100%', textAlign:'left',
-                                          padding:'8px 10px', background:'transparent', color:T.text,
-                                          border:'none', borderRadius:4, fontSize:12, fontFamily:'inherit',
-                                          cursor:'pointer',
-                                        }}
-                                        onMouseEnter={e => e.currentTarget.style.background = T.bg3}
-                                        onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
-                                        <div style={{fontWeight:500}}>{a.label}</div>
-                                        <div style={{fontSize:10, color:T.text3, fontFamily:'monospace', marginTop:2}}>{a.account_code} · {a.account_name}</div>
-                                      </button>
-                                    ))}
-                                  </div>
-                                )}
-                              </div>
+                              <button
+                                onClick={(e) => { e.stopPropagation(); openSpendMoneyModal(inv) }}
+                                disabled={isApprovingThis || bulkApproving}
+                                title="Push this invoice to MYOB as a Spend Money — pick payment + expense account"
+                                style={{
+                                  background: T.purple, color:'#fff', border:'none',
+                                  padding:'4px 10px', borderRadius:4, fontSize:11, fontWeight:500, fontFamily:'inherit',
+                                  cursor: (isApprovingThis || bulkApproving) ? 'wait' : 'pointer',
+                                  opacity: (isApprovingThis || bulkApproving) ? 0.5 : 1,
+                                  whiteSpace:'nowrap',
+                                }}
+                              >
+                                {isApprovingThis ? '…' : '$ Spend Money…'}
+                              </button>
                             ) : (
                               <span style={{color:T.text3, fontSize:11}}>—</span>
                             )}
@@ -894,6 +909,145 @@ export default function APListPage({ user }: PageProps) {
             {data.invoices.length} of {data.total} {data.total === 1 ? 'invoice' : 'invoices'}
           </div>
         )}
+
+        {/* === Spend Money modal === */}
+        {spendMoneyInv && (
+          <div
+            onClick={closeSpendMoneyModal}
+            style={{
+              position:'fixed', inset:0, background:'rgba(0,0,0,0.65)',
+              display:'flex', alignItems:'center', justifyContent:'center',
+              zIndex:1000, padding:20,
+            }}
+          >
+            <div onClick={e => e.stopPropagation()} style={{
+              background:T.bg2, border:`1px solid ${T.border2}`, borderRadius:10,
+              padding:24, maxWidth:540, width:'100%', maxHeight:'85vh', overflow:'auto',
+            }}>
+              <div style={{display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:14}}>
+                <div>
+                  <h2 style={{margin:0, fontSize:18}}>Push as Spend Money</h2>
+                  <div style={{fontSize:11, color:T.text3, marginTop:4}}>
+                    {spendMoneyInv.vendor_name_parsed || '(no vendor)'} · {spendMoneyInv.invoice_number || '—'} · MYOB {spendMoneyInv.myob_company_file}
+                    {spendMoneyInv.total_inc_gst !== null && (
+                      <span style={{fontFamily:'monospace', marginLeft:8}}>${Number(spendMoneyInv.total_inc_gst).toFixed(2)}</span>
+                    )}
+                  </div>
+                </div>
+                <button onClick={closeSpendMoneyModal} style={{
+                  background:'transparent', border:'none', color:T.text2, fontSize:24, cursor:'pointer', lineHeight:1,
+                }}>×</button>
+              </div>
+
+              {/* Payment account */}
+              <div style={{marginBottom:16}}>
+                <label style={{display:'block', fontSize:11, color:T.text2, marginBottom:6, textTransform:'uppercase', letterSpacing:'0.05em'}}>
+                  1. Payment account (source — bank/CC paying)
+                </label>
+                <select
+                  value={smPaymentUid}
+                  onChange={e => setSmPaymentUid(e.target.value)}
+                  style={{
+                    width:'100%', padding:'8px 10px', fontSize:13,
+                    background:T.bg3, color:T.text,
+                    border:`1px solid ${T.border2}`, borderRadius:6,
+                  }}
+                >
+                  <option value="">— select payment account —</option>
+                  {paymentAccounts
+                    .filter(a => a.myob_company_file === spendMoneyInv.myob_company_file)
+                    .map(a => (
+                      <option key={a.id} value={a.account_uid}>
+                        {a.label} · {a.account_code} {a.account_name}
+                      </option>
+                    ))
+                  }
+                </select>
+              </div>
+
+              {/* Account code search */}
+              <div style={{marginBottom:16}}>
+                <label style={{display:'block', fontSize:11, color:T.text2, marginBottom:6, textTransform:'uppercase', letterSpacing:'0.05em'}}>
+                  2. Expense account (destination — where the spend posts)
+                </label>
+                {smAccountSelected ? (
+                  <div style={{
+                    padding:'8px 10px', background:T.bg3, border:`1px solid ${T.purple}55`, borderRadius:6,
+                    display:'flex', justifyContent:'space-between', alignItems:'center',
+                  }}>
+                    <div>
+                      <div style={{fontSize:13, color:T.text, fontWeight:500}}>
+                        {smAccountSelected.displayId} · {smAccountSelected.name}
+                      </div>
+                    </div>
+                    <button onClick={() => { setSmAccountSelected(null); setSmAccountQuery('') }} style={{
+                      background:'transparent', border:'none', color:T.text2, cursor:'pointer', fontSize:11,
+                    }}>change</button>
+                  </div>
+                ) : (
+                  <>
+                    <input
+                      type="text"
+                      value={smAccountQuery}
+                      onChange={e => setSmAccountQuery(e.target.value)}
+                      placeholder="Type to search by code (e.g. 5-1000) or name (e.g. Parts)"
+                      style={{
+                        width:'100%', padding:'8px 10px', fontSize:13,
+                        background:T.bg3, color:T.text,
+                        border:`1px solid ${T.border2}`, borderRadius:6,
+                      }}
+                    />
+                    <div style={{
+                      marginTop:6, maxHeight:220, overflowY:'auto',
+                      background:T.bg3, border:`1px solid ${T.border}`, borderRadius:6,
+                    }}>
+                      {smSearching && <div style={{padding:'10px 12px', fontSize:11, color:T.text3}}>Searching…</div>}
+                      {!smSearching && smAccountResults.length === 0 && smAccountQuery && (
+                        <div style={{padding:'10px 12px', fontSize:11, color:T.text3, fontStyle:'italic'}}>No accounts match.</div>
+                      )}
+                      {smAccountResults.map(a => (
+                        <button
+                          key={a.uid}
+                          onClick={() => setSmAccountSelected({ uid:a.uid, displayId:a.displayId, name:a.name })}
+                          style={{
+                            display:'block', width:'100%', textAlign:'left',
+                            padding:'8px 12px', background:'transparent', color:T.text,
+                            border:'none', borderBottom:`1px solid ${T.border}`,
+                            fontSize:12, fontFamily:'inherit', cursor:'pointer',
+                          }}
+                          onMouseEnter={e => e.currentTarget.style.background = T.bg4}
+                          onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
+                        >
+                          <div style={{fontFamily:'monospace', color:T.text}}>{a.displayId} <span style={{color:T.text2, fontFamily:'inherit'}}>· {a.name}</span></div>
+                          <div style={{fontSize:10, color:T.text3, marginTop:2}}>{a.type}</div>
+                        </button>
+                      ))}
+                    </div>
+                  </>
+                )}
+              </div>
+
+              {/* Actions */}
+              <div style={{display:'flex', gap:10, justifyContent:'flex-end', marginTop:8}}>
+                <button onClick={closeSpendMoneyModal} style={{
+                  padding:'8px 14px', background:'transparent', color:T.text2,
+                  border:`1px solid ${T.border2}`, borderRadius:6, fontSize:13, cursor:'pointer',
+                }}>Cancel</button>
+                <button
+                  onClick={submitSpendMoney}
+                  disabled={!smPaymentUid || !smAccountSelected}
+                  style={{
+                    padding:'8px 16px', background:T.purple, color:'#fff',
+                    border:'none', borderRadius:6, fontSize:13, fontWeight:600, cursor:'pointer',
+                    opacity: (!smPaymentUid || !smAccountSelected) ? 0.4 : 1,
+                  }}
+                >
+                  $ Push to MYOB
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   )
@@ -902,8 +1056,7 @@ export default function APListPage({ user }: PageProps) {
 // ── Mobile invoice card ──────────────────────────────────────────────────
 function InvoiceCard({
   inv, isSelected, isApproving, isDeleting, bulkApproving, canEdit,
-  paymentAccounts,
-  onToggleSelect, onApprove, onApproveAsSpendMoney, onDelete,
+  onToggleSelect, onApprove, onOpenSpendMoney, onDelete,
 }: {
   inv: InvoiceRow
   isSelected: boolean
@@ -911,10 +1064,9 @@ function InvoiceCard({
   isDeleting: boolean
   bulkApproving: boolean
   canEdit: boolean
-  paymentAccounts: PaymentAccount[]
   onToggleSelect: () => void
   onApprove: (e: React.MouseEvent) => void
-  onApproveAsSpendMoney: (e: React.MouseEvent, paymentAccountUid: string) => void
+  onOpenSpendMoney: () => void
   onDelete: (e: React.MouseEvent) => void
 }) {
   const router = useRouter()
@@ -1025,15 +1177,9 @@ function InvoiceCard({
               {isApproving ? 'Posting…' : '✓ Approve & Post'}
             </button>
           ) : isSpendMoneyEligible(inv) ? (
-            <select
-              defaultValue=""
-              disabled={isApproving || bulkApproving || paymentAccounts.length === 0}
-              onChange={(e) => {
-                const uid = e.target.value
-                if (!uid) return
-                onApproveAsSpendMoney(e as any, uid)
-                e.target.value = ''
-              }}
+            <button
+              onClick={onOpenSpendMoney}
+              disabled={isApproving || bulkApproving}
               style={{
                 flex:1,
                 background: T.purple, color:'#fff', border:'none',
@@ -1041,20 +1187,10 @@ function InvoiceCard({
                 fontSize:14, fontWeight:600, fontFamily:'inherit',
                 cursor: (isApproving || bulkApproving) ? 'wait' : 'pointer',
                 opacity: (isApproving || bulkApproving) ? 0.5 : 1,
-                appearance:'none',
-                WebkitAppearance:'none',
               }}
             >
-              <option value="">{isApproving ? 'Posting…' : '$ Push as Spend Money ▾'}</option>
-              {paymentAccounts.length === 0
-                ? <option value="" disabled>No payment accounts configured</option>
-                : paymentAccounts.map(a => (
-                    <option key={a.id} value={a.account_uid}>
-                      {a.label} ({a.account_code})
-                    </option>
-                  ))
-              }
-            </select>
+              {isApproving ? 'Posting…' : '$ Push as Spend Money…'}
+            </button>
           ) : (
             <span style={{flex:1, fontSize:11, color:T.text3, fontStyle:'italic'}}>
               {isPosted ? 'Already posted' : 'Not approvable yet'}

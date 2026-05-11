@@ -721,6 +721,13 @@ interface SpendMoneyBody {
 export async function createSpendMoneyTxn(
   invoiceId: string,
   postedBy: string,
+  options?: {
+    // Override: collapse all invoice lines into a single SpendMoney line
+    // posted at this account UID. Used by the AP list "$ Spend Money"
+    // quick-post flow where the user picks one expense account at click
+    // time instead of relying on per-line triage.
+    singleLineAccountUid?: string
+  },
 ): Promise<CreateSpendMoneyTxnResult> {
   const c = sb()
 
@@ -748,16 +755,20 @@ export async function createSpendMoneyTxn(
     .eq('invoice_id', invoiceId)
     .order('line_no', { ascending: true })
   if (linesErr) throw new Error(`Failed to load lines: ${linesErr.message}`)
-  if (!lines || lines.length === 0) throw new Error('Invoice has no line items')
 
-  const linesMissingAccount = lines.filter((l: any) =>
-    !l.account_uid && !inv.resolved_account_uid
-  )
-  if (linesMissingAccount.length > 0) {
-    const which = linesMissingAccount.map((l: any) => `#${l.line_no}`).join(', ')
-    throw new Error(
-      `Lines ${which} have no per-line account and no invoice-level default account is set — pick one or set a default.`
+  // Line-account validation is bypassed when singleLineAccountUid is set —
+  // the override replaces the line items with a single synthetic line.
+  if (!options?.singleLineAccountUid) {
+    if (!lines || lines.length === 0) throw new Error('Invoice has no line items')
+    const linesMissingAccount = lines.filter((l: any) =>
+      !l.account_uid && !inv.resolved_account_uid
     )
+    if (linesMissingAccount.length > 0) {
+      const which = linesMissingAccount.map((l: any) => `#${l.line_no}`).join(', ')
+      throw new Error(
+        `Lines ${which} have no per-line account and no invoice-level default account is set — pick one or set a default.`
+      )
+    }
   }
 
   const companyFile = (inv.myob_company_file || 'VPS') as CompanyFileLabel
@@ -783,17 +794,39 @@ export async function createSpendMoneyTxn(
   // Build SpendMoney lines + capture rates for downstream tax math.
   const txnLines: SpendMoneyLineBody[] = []
   const lineRates: number[] = []
-  for (const l of lines) {
-    const description = [l.part_number, l.description].filter(Boolean).join(' — ').substring(0, 255)
-    const lineAmount = round2(Number(l.line_total_ex_gst || 0))
-    const accountUid: string = l.account_uid || inv.resolved_account_uid
+
+  if (options?.singleLineAccountUid) {
+    // OVERRIDE: collapse to a single line at the chosen account.
+    const headerSubtotal = inv.subtotal_ex_gst != null && Number.isFinite(Number(inv.subtotal_ex_gst))
+      ? round2(Number(inv.subtotal_ex_gst))
+      : (inv.total_inc_gst != null && Number.isFinite(Number(inv.total_inc_gst)) && inv.gst_amount != null
+          ? round2(Number(inv.total_inc_gst) - Number(inv.gst_amount))
+          : null)
+    if (headerSubtotal === null) {
+      throw new Error('Single-line Spend Money override requires a numeric subtotal_ex_gst on the invoice.')
+    }
+    const taxCode: 'GST' | 'FRE' = (inv.gst_amount && Number(inv.gst_amount) > 0) ? 'GST' : 'FRE'
+    const description = [inv.vendor_name_parsed, inv.invoice_number].filter(Boolean).join(' — ').substring(0, 255) || 'AP Spend Money'
     txnLines.push({
-      Description: description || 'AP line',
-      Account: { UID: accountUid },
-      Amount: lineAmount,
-      TaxCode: { UID: taxUidFor(l.tax_code) },
+      Description: description,
+      Account: { UID: options.singleLineAccountUid },
+      Amount: headerSubtotal,
+      TaxCode: { UID: taxUidFor(taxCode) },
     })
-    lineRates.push(rateFor(l.tax_code))
+    lineRates.push(rateFor(taxCode))
+  } else {
+    for (const l of lines) {
+      const description = [l.part_number, l.description].filter(Boolean).join(' — ').substring(0, 255)
+      const lineAmount = round2(Number(l.line_total_ex_gst || 0))
+      const accountUid: string = l.account_uid || inv.resolved_account_uid
+      txnLines.push({
+        Description: description || 'AP line',
+        Account: { UID: accountUid },
+        Amount: lineAmount,
+        TaxCode: { UID: taxUidFor(l.tax_code) },
+      })
+      lineRates.push(rateFor(l.tax_code))
+    }
   }
 
   // ── Reconcile lines to PDF header subtotal (same logic as createServiceBill) ──

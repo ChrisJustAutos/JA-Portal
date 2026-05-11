@@ -56,9 +56,14 @@ export default withAuth(null, async (req: NextApiRequest, res: NextApiResponse, 
   // and the invoice has no supplier mapped, treat it as a Spend Money
   // post against that account. This lets the AP list "Spend Money" button
   // pick an account at click-time without first opening the detail page.
+  // accountUid (the destination expense/asset account) is optional — when
+  // provided, the spend posts as a single line at that account, ignoring
+  // any per-line triage on the invoice.
   const body = (req.body || {}) as Record<string, any>
   const paymentAccountUid = typeof body.paymentAccountUid === 'string'
     ? body.paymentAccountUid.trim() : ''
+  const accountUid = typeof body.accountUid === 'string'
+    ? body.accountUid.trim() : ''
   if (paymentAccountUid && !inv.resolved_supplier_uid) {
     // Look up account details to keep ap_invoices in sync (code + name).
     const { data: acct } = await sb()
@@ -84,7 +89,7 @@ export default withAuth(null, async (req: NextApiRequest, res: NextApiResponse, 
 
   try {
     const result = useSpendMoney
-      ? await createSpendMoneyTxn(id, user.id)
+      ? await createSpendMoneyTxn(id, user.id, accountUid ? { singleLineAccountUid: accountUid } : undefined)
       : await createServiceBill(id, user.id)
     return res.status(200).json({ ...result, postedAs: useSpendMoney ? 'spend_money' : 'bill' })
   } catch (e: any) {
