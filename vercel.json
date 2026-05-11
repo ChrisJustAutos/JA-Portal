@@ -13,7 +13,11 @@
     "pages/api/webhooks/graph-mail.ts":             { "maxDuration": 60 },
     "pages/api/admin/setup-graph-subscriptions.ts": { "maxDuration": 60 },
     "pages/api/cron/renew-graph-subscriptions.ts":  { "maxDuration": 60 },
-    "pages/api/cron/bank-payments-slack.ts":        { "maxDuration": 120 }
+    "pages/api/cron/bank-payments-slack.ts":        { "maxDuration": 120 },
+    "pages/api/stripe-myob/list.ts":                { "maxDuration": 60 },
+    "pages/api/stripe-myob/push.ts":                { "maxDuration": 120 },
+    "pages/api/stripe-myob/sync.ts":                { "maxDuration": 300 },
+    "pages/api/admin/inspect-jaws-invoices.ts":     { "maxDuration": 60 }
   },
   "crons": [
     {
