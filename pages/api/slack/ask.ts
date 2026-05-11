@@ -33,6 +33,15 @@ function stripBotMention(text: string): string {
   return text.replace(/<@[A-Z0-9]+>\s*/g, '').trim()
 }
 
+// Restrict the bot to specific channel IDs via SLACK_ALLOWED_CHANNEL_IDS
+// (comma-separated). If unset, all channels are allowed.
+function isAllowedChannel(channelId: string): boolean {
+  const raw = (process.env.SLACK_ALLOWED_CHANNEL_IDS || '').trim()
+  if (!raw) return true
+  const allow = raw.split(',').map(s => s.trim()).filter(Boolean)
+  return allow.includes(channelId)
+}
+
 // Coarse in-memory dedupe — Slack retries events on 3s timeout. Survives
 // only as long as the warm function instance, which is fine for "ignore the
 // retry of the same event id we just answered".
@@ -71,6 +80,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     if (!text) {
       return res.status(200).json({ response_type: 'ephemeral', text: 'Usage: `/ask <your question>`' })
+    }
+
+    if (!isAllowedChannel(channel)) {
+      return res.status(200).json({
+        response_type: 'ephemeral',
+        text: ':lock: The JA Portal Assistant only works in #ja-portal-queries. Head over there and try again.',
+      })
     }
 
     // Ack immediately with a placeholder so Slack doesn't time out.
@@ -129,8 +145,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(200).json({ ok: true })
   }
 
-  const question = stripBotMention(event.text || '')
   const channel: string = event.channel
+  if (!isAllowedChannel(channel)) {
+    // Silently drop mentions in non-allowed channels.
+    return res.status(200).json({ ok: true })
+  }
+
+  const question = stripBotMention(event.text || '')
   const threadTs: string | undefined = event.thread_ts || event.ts
 
   // Ack Slack immediately.
