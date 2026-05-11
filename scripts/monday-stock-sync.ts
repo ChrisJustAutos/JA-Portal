@@ -123,16 +123,26 @@ async function downloadAndParseSheet(): Promise<StockRow[]> {
     const headerRowIdx = aoa.findIndex(r => String(r[0] || '').trim().toLowerCase() === 'stock number')
     if (headerRowIdx < 0) { log(`Sheet "${sheetName}" has no Stock Number header — skipping`); continue }
     const dataRows = aoa.slice(headerRowIdx + 1)
-    let added = 0
+    let added = 0, skippedBanner = 0
     for (const r of dataRows) {
       const sn = String(r[0] || '').trim()
       if (!sn) continue
       const nm = String(r[1] || '').trim()
+      // Filter out interstitial banner / section-header rows that appear
+      // between sub-racks within the same xlsx tab (e.g. "RACK LOCATION M",
+      // "EXTRAS", or another "Stock Number" header row). Real parts always
+      // have a Name in column B; banners don't.
+      const looksLikeBanner =
+        /^rack location\b/i.test(sn) ||
+        sn.toLowerCase() === 'stock number' ||
+        sn.toLowerCase() === 'extras' ||
+        /^[A-Z][A-Z\s]+$/.test(sn) && !nm
+      if (looksLikeBanner || !nm) { skippedBanner++; continue }
       const nonStock = r[4] === true || String(r[4] || '').toLowerCase() === 'true'
       rows.push({ sheet: sheetName, stockNumber: sn, name: nm, nonStock })
       added++
     }
-    log(`Sheet "${sheetName}" → ${added} rows`)
+    log(`Sheet "${sheetName}" → ${added} rows (skipped ${skippedBanner} banner/blank)`)
   }
   return rows
 }
