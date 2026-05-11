@@ -28,9 +28,11 @@ import {
   StripePayoutLite,
   StripeBalanceTxLite,
   retrievePayout,
+  retrieveCharge,
   listBalanceTransactionsForPayout,
 } from './stripe-multi'
 import { JAWS_UIDS } from './stripe-myob-sync'
+import { postWebhook } from './slack'
 
 // ── Supabase ────────────────────────────────────────────────────────────
 let _sb: SupabaseClient | null = null
@@ -60,19 +62,29 @@ export interface PayoutBreakdown {
   balanceTxIds: string[]              // for the audit trail
 }
 
+export interface PayoutChargeDetail {
+  stripeChargeId: string
+  stripeInvoiceId: string | null
+  myobReceiptNumber: string | null
+  myobCustomerName: string | null
+  netCents: number                   // what landed in UF for this charge
+}
+
 export interface PayoutReconcilePreview {
   payoutId: string
   status: 'idempotent' | 'ready' | 'failed-fetch' | 'no-fee-zero-amount'
   breakdown: PayoutBreakdown | null
+  chargeDetails: PayoutChargeDetail[]
   // The MYOB entries we'd POST. All null if status != 'ready'.
   feeInvoicePayload: any | null       // negative Service Invoice for payout fee
   feePaymentPayload: any | null       // Customer Payment of the negative invoice → UF
-  bankTransferPayload: any | null     // Banking/Transfer UF → CHQ
+  slackMessageText: string | null     // preview of what we'd post to slack
   // After-write fields (only present on real push):
   myobFeeInvoiceUid?: string
   myobFeeInvoiceNumber?: string
   myobFeePaymentUid?: string
-  myobTransferUid?: string
+  slackPosted?: boolean
+  slackPostError?: string
   error?: string
 }
 
@@ -196,20 +208,127 @@ function buildFeePaymentPayload(args: {
   }
 }
 
-function buildBankTransferPayload(args: {
-  payoutId: string
-  netCents: number
-  isoDate: string
-}): any {
-  // MYOB endpoint: /Banking/TransferMoneyTxn (NOT /Banking/Transfer —
-  // that path returns a misleading 401 OAuthTokenIsInvalid).
-  const netDollars = args.netCents / 100
+// Enrich the payout breakdown with the matching MYOB customer-payment
+// details for every charge in the payout — used to build the Slack
+// message listing exactly which UF entries to tick when the user does
+// "Prepare Bank Deposit" in MYOB UI.
+async function getPayoutChargeDetails(
+  account: StripeAccountLabel,
+  txns: StripeBalanceTxLite[],
+): Promise<PayoutChargeDetail[]> {
+  const details: PayoutChargeDetail[] = []
+  const conn = await getConnection('JAWS')
+  if (!conn?.company_file_id) return details
+
+  for (const t of txns) {
+    if (t.type !== 'charge' && t.type !== 'payment') continue
+    if (!t.source) continue
+
+    // Resolve the charge → invoice
+    let invoiceId: string | null = null
+    try {
+      const charge = await retrieveCharge(account, t.source)
+      invoiceId = charge.invoice || null
+    } catch {
+      // skip — keep going on partial data
+    }
+
+    // Look up MYOB receipt via sync log
+    let myobReceiptNumber: string | null = null
+    let myobCustomerName: string | null = null
+    if (invoiceId) {
+      const { data: log } = await sb()
+        .from('stripe_myob_sync_log')
+        .select('myob_payment_uid, myob_invoice_uid, customer_name')
+        .eq('stripe_account', account)
+        .eq('stripe_entity_type', 'invoice')
+        .eq('stripe_entity_id', invoiceId)
+        .maybeSingle()
+      if (log?.customer_name) myobCustomerName = log.customer_name
+      if (log?.myob_payment_uid && conn.company_file_id) {
+        // Fetch the receipt number from MYOB
+        try {
+          const { data } = await myobFetch(
+            conn.id,
+            `/accountright/${conn.company_file_id}/Sale/CustomerPayment/${log.myob_payment_uid}`,
+            {},
+          )
+          if (data?.ReceiptNumber) myobReceiptNumber = data.ReceiptNumber
+          if (data?.Customer?.Name) myobCustomerName = data.Customer.Name
+        } catch { /* ignore */ }
+      }
+    }
+
+    details.push({
+      stripeChargeId: t.source,
+      stripeInvoiceId: invoiceId,
+      myobReceiptNumber,
+      myobCustomerName,
+      netCents: (t.amount || 0) - (t.fee || 0),
+    })
+  }
+  return details
+}
+
+function fmtMoneyCents(cents: number): string {
+  const n = cents / 100
+  const negative = n < 0
+  const formatted = '$' + Math.abs(n).toLocaleString('en-AU', {
+    minimumFractionDigits: 2, maximumFractionDigits: 2,
+  })
+  return negative ? '-' + formatted : formatted
+}
+
+function buildPayoutSlackMessage(args: {
+  account: StripeAccountLabel
+  payout: StripePayoutLite
+  breakdown: PayoutBreakdown
+  chargeDetails: PayoutChargeDetail[]
+  feeInvoiceNumber: string | null
+}): { text: string; blocks: any[] } {
+  const accountLabel = args.account === 'JAWS_JMACX' ? 'JMACX' : 'ET'
+  const dateStr = new Date(args.payout.arrival_date * 1000).toLocaleDateString('en-AU', {
+    timeZone: 'Australia/Sydney',
+    weekday: 'long', day: 'numeric', month: 'long',
+  })
+  const header = `${accountLabel} Stripe payout — ${fmtMoneyCents(args.breakdown.net_cents)} on ${dateStr}`
+
+  const lines: string[] = []
+  let listedTotal = 0
+  let unmatched = 0
+  for (const d of args.chargeDetails) {
+    if (d.myobReceiptNumber) {
+      lines.push(`• \`${d.myobReceiptNumber}\` · ${d.myobCustomerName || 'Customer'} · ${fmtMoneyCents(d.netCents)}`)
+      listedTotal += d.netCents
+    } else {
+      lines.push(`• :grey_question: Stripe charge \`${d.stripeChargeId}\` · ${fmtMoneyCents(d.netCents)} _(not in MYOB sync log — may be a Make-era invoice)_`)
+      unmatched++
+    }
+  }
+  if (args.feeInvoiceNumber && args.breakdown.payoutFee_cents > 0) {
+    lines.push(`• \`${args.feeInvoiceNumber}\` · Stripe (payout fee) · ${fmtMoneyCents(-args.breakdown.payoutFee_cents)}`)
+    listedTotal += -args.breakdown.payoutFee_cents
+  }
+
+  const totalLine = `*Total:* ${fmtMoneyCents(listedTotal)}`
+  const matchNote = listedTotal === args.breakdown.net_cents
+    ? `:white_check_mark: Matches Stripe payout exactly`
+    : `:warning: Stripe payout is ${fmtMoneyCents(args.breakdown.net_cents)} — gap of ${fmtMoneyCents(args.breakdown.net_cents - listedTotal)}`
+
+  const blocks: any[] = [
+    { type: 'header', text: { type: 'plain_text', text: header } },
+    { type: 'section', text: { type: 'mrkdwn', text: `In MYOB JAWS → *Prepare Bank Deposit* → tick these Undeposited Funds entries and deposit to *CHQ 1-1110 (NAB Business Acc 3369)*:` } },
+    { type: 'section', text: { type: 'mrkdwn', text: lines.join('\n') || '_no entries — nothing to deposit_' } },
+    { type: 'divider' },
+    { type: 'section', text: { type: 'mrkdwn', text: `${totalLine}\n${matchNote}` } },
+  ]
+  if (unmatched > 0) {
+    blocks.push({ type: 'section', text: { type: 'mrkdwn', text: `:information_source: ${unmatched} charge${unmatched === 1 ? ' is' : 's are'} not in our sync log. Likely Make-era invoices in MYOB — find them by date/customer/amount and include in the deposit anyway.` } })
+  }
+
   return {
-    Date: args.isoDate + 'T00:00:00',
-    FromAccount: { UID: JAWS_UIDS.ACCT_UNDEP_FUNDS },
-    ToAccount:   { UID: JAWS_UIDS.ACCT_CHQ_3369 },
-    Amount: netDollars,
-    Memo: `Stripe payout deposit #${args.payoutId}`,
+    text: `${header} — ${args.chargeDetails.length} charges to deposit`,
+    blocks,
   }
 }
 
@@ -239,26 +358,61 @@ export async function reconcileStripePayoutToJaws(
       payoutId,
       status: 'idempotent',
       breakdown: null,
+      chargeDetails: [],
       feeInvoicePayload: null,
       feePaymentPayload: null,
-      bankTransferPayload: null,
-      myobTransferUid: existing.data.myob_invoice_uid || undefined,
+      slackMessageText: null,
     }
   }
 
   // 2. Pull Stripe data
   let breakdown: PayoutBreakdown
+  let txns: StripeBalanceTxLite[]
+  let payoutObj: StripePayoutLite
   try {
-    breakdown = await buildBreakdown(account, payoutId)
+    payoutObj = await retrievePayout(account, payoutId)
+    txns = await listBalanceTransactionsForPayout(account, payoutId)
+    // Rebuild breakdown locally to avoid a duplicate retrieve
+    let chargeCount = 0, refundCount = 0, otherCount = 0
+    let totalCharges = 0, totalChargeFees = 0, totalRefunds = 0
+    const balanceTxIds: string[] = []
+    for (const t of txns) {
+      balanceTxIds.push(t.id)
+      if (t.type === 'payout') continue
+      if (t.type === 'charge' || t.type === 'payment') {
+        chargeCount++; totalCharges += t.amount || 0; totalChargeFees += t.fee || 0
+      } else if (t.type === 'refund' || t.type === 'payment_refund') {
+        refundCount++; totalRefunds += Math.abs(t.amount || 0)
+      } else {
+        otherCount++
+      }
+    }
+    const expected_net = totalCharges - totalChargeFees - totalRefunds
+    breakdown = {
+      payoutId: payoutObj.id,
+      status: payoutObj.status,
+      arrival_date_iso: ymdSydney(payoutObj.arrival_date || payoutObj.created),
+      net_cents: payoutObj.amount,
+      payoutFee_cents: expected_net - payoutObj.amount,
+      chargeCount, refundCount, otherCount,
+      totalCharges_cents: totalCharges,
+      totalChargeFees_cents: totalChargeFees,
+      totalRefunds_cents: totalRefunds,
+      balanceTxIds,
+    }
   } catch (e: any) {
     return {
       payoutId, status: 'failed-fetch', breakdown: null,
-      feeInvoicePayload: null, feePaymentPayload: null, bankTransferPayload: null,
+      chargeDetails: [],
+      feeInvoicePayload: null, feePaymentPayload: null, slackMessageText: null,
       error: (e?.message || String(e)).slice(0, 300),
     }
   }
 
-  // 3. Build payloads. If payoutFee is 0, skip the fee invoice/payment.
+  // 3. Build the itemised charge details (for the Slack message)
+  const chargeDetails = await getPayoutChargeDetails(account, txns)
+
+  // 4. Build payloads. If payoutFee is 0, skip the fee invoice/payment.
   const isoDate = breakdown.arrival_date_iso
   const feeInvoicePayload = breakdown.payoutFee_cents > 0
     ? buildFeeInvoicePayload({ payoutId, feeCents: breakdown.payoutFee_cents, isoDate })
@@ -266,8 +420,14 @@ export async function reconcileStripePayoutToJaws(
   const feePaymentPayload = breakdown.payoutFee_cents > 0
     ? buildFeePaymentPayload({ payoutId, feeCents: breakdown.payoutFee_cents, invoiceUid: '<<NEW_FEE_INVOICE_UID>>', isoDate })
     : null
-  const bankTransferPayload = buildBankTransferPayload({
-    payoutId, netCents: breakdown.net_cents, isoDate,
+
+  // Preview the Slack message (without the actual fee invoice number — will be filled in on real push)
+  const previewSlack = buildPayoutSlackMessage({
+    account,
+    payout: payoutObj,
+    breakdown,
+    chargeDetails,
+    feeInvoiceNumber: feeInvoicePayload ? '(will be assigned on push)' : null,
   })
 
   if (options.dryRun) {
@@ -280,7 +440,7 @@ export async function reconcileStripePayoutToJaws(
       amount_cents: breakdown.net_cents,
       fee_cents: breakdown.payoutFee_cents,
       net_cents: breakdown.net_cents,
-      raw_payload: { breakdown },
+      raw_payload: { breakdown, chargeDetailsCount: chargeDetails.length },
       created_by: options.performedBy || 'system',
     }, { onConflict: 'stripe_account,stripe_entity_type,stripe_entity_id' })
 
@@ -288,25 +448,25 @@ export async function reconcileStripePayoutToJaws(
       payoutId,
       status: 'ready',
       breakdown,
+      chargeDetails,
       feeInvoicePayload,
       feePaymentPayload,
-      bankTransferPayload,
+      slackMessageText: previewSlack.text,
     }
   }
 
-  // 4. Real push — get the MYOB connection and POST.
+  // 5. Real push — get the MYOB connection and POST.
   const conn = await getConnection('JAWS')
   if (!conn?.company_file_id) throw new Error('No JAWS MYOB connection / company file')
   const cfId = conn.company_file_id
 
   // Resume from any partial state recorded on a prior failed attempt.
-  // The raw_payload.partialResult is set in the catch block below
-  // every time a step succeeds before a later step fails.
   const prevPartial: any = (existing.data?.raw_payload as any)?.partialResult || {}
   let myobFeeInvoiceUid: string | undefined = prevPartial.myobFeeInvoiceUid
   let myobFeeInvoiceNumber: string | undefined = prevPartial.myobFeeInvoiceNumber
   let myobFeePaymentUid: string | undefined = prevPartial.myobFeePaymentUid
-  let myobTransferUid: string | undefined = prevPartial.myobTransferUid
+  let slackPosted: boolean | undefined = prevPartial.slackPosted
+  let slackPostError: string | undefined
 
   try {
     if (feeInvoicePayload && !myobFeeInvoiceUid) {
@@ -335,15 +495,28 @@ export async function reconcileStripePayoutToJaws(
       myobFeePaymentUid = payRes.data?.UID
     }
 
-    // Bank Transfer UF → CHQ for the actual deposited amount.
-    if (!myobTransferUid) {
-      const xferRes = await myobFetch(conn.id, `/accountright/${cfId}/Banking/TransferMoneyTxn`, {
-        method: 'POST', body: bankTransferPayload, query: { returnBody: 'true' },
-      })
-      if (xferRes.status !== 200 && xferRes.status !== 201) {
-        throw new Error(`Banking/TransferMoneyTxn POST HTTP ${xferRes.status}: ${xferRes.raw?.slice(0, 300)}`)
+    // Slack notification with itemised list for manual Prepare Bank Deposit
+    if (!slackPosted) {
+      const webhookUrl = process.env.SLACK_WEBHOOK_JAWS_PAYOUTS
+        || process.env.SLACK_WEBHOOK_JAWS_PAYMENTS
+      if (webhookUrl) {
+        const finalSlack = buildPayoutSlackMessage({
+          account,
+          payout: payoutObj,
+          breakdown,
+          chargeDetails,
+          feeInvoiceNumber: myobFeeInvoiceNumber || null,
+        })
+        try {
+          const r = await postWebhook(webhookUrl, finalSlack)
+          slackPosted = r.ok
+          if (!r.ok) slackPostError = `Slack HTTP ${r.status}: ${r.body}`
+        } catch (e: any) {
+          slackPostError = (e?.message || String(e)).slice(0, 300)
+        }
+      } else {
+        slackPostError = 'No SLACK_WEBHOOK_JAWS_PAYOUTS or SLACK_WEBHOOK_JAWS_PAYMENTS env var set'
       }
-      myobTransferUid = xferRes.data?.UID
     }
 
     await sb().from('stripe_myob_sync_log').upsert({
@@ -351,7 +524,7 @@ export async function reconcileStripePayoutToJaws(
       stripe_entity_type: 'payout',
       stripe_entity_id: payoutId,
       myob_company_file: 'JAWS',
-      myob_invoice_uid: myobTransferUid || null,
+      myob_invoice_uid: myobFeeInvoiceUid || null,
       myob_payment_uid: myobFeePaymentUid || null,
       status: 'pushed',
       amount_cents: breakdown.net_cents,
@@ -360,10 +533,12 @@ export async function reconcileStripePayoutToJaws(
       pushed_at: new Date().toISOString(),
       raw_payload: {
         breakdown,
-        myobFeeInvoiceUid, myobFeeInvoiceNumber, myobFeePaymentUid, myobTransferUid,
+        chargeDetails,
+        myobFeeInvoiceUid, myobFeeInvoiceNumber, myobFeePaymentUid,
+        slackPosted, slackPostError,
       },
       attempts: (existing.data?.attempts || 0) + 1,
-      last_error: null,
+      last_error: slackPostError || null,
       created_by: options.performedBy || 'system',
     }, { onConflict: 'stripe_account,stripe_entity_type,stripe_entity_id' })
 
@@ -371,13 +546,15 @@ export async function reconcileStripePayoutToJaws(
       payoutId,
       status: 'ready',
       breakdown,
+      chargeDetails,
       feeInvoicePayload,
       feePaymentPayload,
-      bankTransferPayload,
+      slackMessageText: previewSlack.text,
       myobFeeInvoiceUid,
       myobFeeInvoiceNumber,
       myobFeePaymentUid,
-      myobTransferUid,
+      slackPosted,
+      slackPostError,
     }
   } catch (e: any) {
     const errMsg = (e?.message || String(e)).slice(0, 500)
@@ -392,7 +569,7 @@ export async function reconcileStripePayoutToJaws(
       net_cents: breakdown.net_cents,
       last_error: errMsg,
       attempts: (existing.data?.attempts || 0) + 1,
-      raw_payload: { breakdown, partialResult: { myobFeeInvoiceUid, myobFeePaymentUid, myobTransferUid } },
+      raw_payload: { breakdown, partialResult: { myobFeeInvoiceUid, myobFeeInvoiceNumber, myobFeePaymentUid, slackPosted } },
       created_by: options.performedBy || 'system',
     }, { onConflict: 'stripe_account,stripe_entity_type,stripe_entity_id' })
 
@@ -400,13 +577,13 @@ export async function reconcileStripePayoutToJaws(
       payoutId,
       status: 'ready',
       breakdown,
+      chargeDetails,
       feeInvoicePayload,
       feePaymentPayload,
-      bankTransferPayload,
+      slackMessageText: previewSlack.text,
       myobFeeInvoiceUid,
       myobFeeInvoiceNumber,
       myobFeePaymentUid,
-      myobTransferUid,
       error: errMsg,
     }
   }
