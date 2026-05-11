@@ -1,43 +1,41 @@
 // scripts/monday-stock-sync.ts
 //
-// Twice-daily GH Actions worker that syncs stock availability into the
-// Monday "Product Availability Delays" board (id 2060835661).
+// Twice-daily GH Actions worker that syncs Mechanics Desk inventory
+// alerts → Monday "Product Availability Delays" board (id 2060835661).
 //
-// Flow:
-//   1. Download Morgan's stocktake xlsx from Google Drive
-//      (sheet id 1qpUFT-bI4U3bB0uqW2aNqD6ZIe3-Y4Qd, shared "anyone with link")
-//   2. Parse the 3 rack tabs (DOWNSTAIRS / BULK RACKING / UPSTAIRS RACKING)
-//      and pull stock_number + name from each row
-//   3. Login to Mechanics Desk via Playwright; for each part, call
-//      findStockBySku → available count
-//   4. Map count → board's Availability status label:
+// Flow (pivoted away from the Google Sheet stocktake list):
+//   1. Login to Mechanics Desk via Playwright.
+//   2. Paginate /stocks.json (~28 pages × 30 stocks ≈ 840 total).
+//      Filter in JS to qualifying stocks:
+//         stock_alert === true            (alert is enabled)
+//         alert_quantity > 0              (threshold is set)
+//         available_quantity < alert_quantity  (currently below threshold)
+//         !deleted && !deactivated && !disable_tracking
+//   3. Map count → board's Availability label:
 //        0  → Not Available
 //        1  → Very low
 //        2-3 → Low
 //        4-5 → Moderate
-//        6+ → Good
-//   5. Fetch all items currently on the Monday board, index by Part Number
-//   6. For each sheet row:
-//        - if Part Number matches an existing Monday item → update Availability
-//          (leave Priority + ETA + Notes alone, per Morgan)
-//        - else → create a new item in the "Delays" group with Name,
-//          Part Number, Vehicle (fuzzy-matched from the product name),
-//          Availability, ETA = TBA. Then post a create_update on it tagging
-//          Morgan + Terry, AND send each an explicit create_notification.
+//        6+ → Good  (in practice rare here — those wouldn't be < alert)
+//   4. Fetch existing Monday items by Part Number. For each qualifying
+//      stock:
+//        - Existing item    → update Availability if changed
+//        - No existing item → create new in "Delays" group with Name,
+//          Part Number, Vehicle (fuzzy from name), Availability,
+//          ETA = TBA. No update/notification (Morgan asked us not to).
 //
-// Env vars expected (set as GH Actions secrets):
+// Env vars (set as GH Actions secrets):
 //   MONDAY_API_TOKEN
 //   MECHANICDESK_WORKSHOP_ID / USERNAME / PASSWORD
-//   GOOGLE_SHEET_ID  (default: 1qpUFT-bI4U3bB0uqW2aNqD6ZIe3-Y4Qd)
 
-import * as XLSX from 'xlsx'
-import { loginToMechanicDesk, findStockBySku, type MdClient } from '../lib/mechanicdesk-stocktake'
+import { loginToMechanicDesk, type MdClient } from '../lib/mechanicdesk-stocktake'
 
 // ── Constants ──────────────────────────────────────────────────────────
 
+const MD_BASE = 'https://www.mechanicdesk.com.au'
+
 const BOARD_ID = 2060835661
 const DELAYS_GROUP_ID = 'topics'
-const SHEET_ID = process.env.GOOGLE_SHEET_ID || '1QYNf9YdxH0xMP9-J5I_L47BA6rYq14Fy'
 
 const COL = {
   partNumber:    'text_mkv0n9h7',
@@ -46,14 +44,8 @@ const COL = {
   eta:           'color_mkncj8ds',
 }
 
-// Monday user IDs
-const NOTIFY_USER_IDS = {
-  morgan: 54523486,
-  terry:  79602714,
-} as const
-
 // Vehicle label keywords (case-insensitive substring match against the
-// product name). First match wins; multiple hits → 'OTHER' to stay safe.
+// product name). Multiple hits → 'OTHER' to stay safe.
 const VEHICLE_KEYWORDS: Array<{ label: string; keywords: string[] }> = [
   { label: 'FJA300',  keywords: ['fja300', 'fja 300', '300 series', 'lc300', 'land cruiser 300'] },
   { label: 'VDJ200',  keywords: ['vdj200', 'vdj 200', '200 series', 'lc200', 'land cruiser 200'] },
@@ -65,18 +57,16 @@ const VEHICLE_KEYWORDS: Array<{ label: string; keywords: string[] }> = [
 
 function fuzzyVehicle(name: string): string {
   const n = (name || '').toLowerCase()
-  let hits: string[] = []
+  const hits: string[] = []
   for (const v of VEHICLE_KEYWORDS) {
     for (const kw of v.keywords) {
       if (n.includes(kw)) { hits.push(v.label); break }
     }
   }
-  if (hits.length === 1) return hits[0]
-  return 'OTHER'
+  return hits.length === 1 ? hits[0] : 'OTHER'
 }
 
-function availabilityLabel(stock: number | null | undefined): string {
-  if (stock == null) return 'Not Available'
+function availabilityLabel(stock: number): string {
   const n = Math.max(0, Math.floor(stock))
   if (n === 0) return 'Not Available'
   if (n === 1) return 'Very low'
@@ -85,74 +75,47 @@ function availabilityLabel(stock: number | null | undefined): string {
   return 'Good'
 }
 
-function log(msg: string) {
-  console.log(`[${new Date().toISOString()}] ${msg}`)
-}
+function log(msg: string) { console.log(`[${new Date().toISOString()}] ${msg}`) }
 
-// ── Sheet download + parse ─────────────────────────────────────────────
+// ── MD inventory pagination ────────────────────────────────────────────
 
-interface StockRow {
-  sheet: string
-  stockNumber: string
+interface MdInventoryItem {
+  id: number
   name: string
-  nonStock: boolean
+  stock_number: string
+  stock_alert: boolean
+  alert_quantity: number
+  available_quantity: number
+  quantity: number
+  deleted: boolean
+  deactivated: boolean
+  disable_tracking: boolean
+  tags?: any[]
 }
 
-async function downloadAndParseSheet(): Promise<StockRow[]> {
-  const url = `https://docs.google.com/uc?export=download&id=${SHEET_ID}`
-  log(`Downloading sheet from ${url}`)
-  const r = await fetch(url)
-  if (!r.ok) throw new Error(`Sheet download failed: HTTP ${r.status}`)
-  const buf = Buffer.from(await r.arrayBuffer())
-  log(`Sheet downloaded · ${buf.byteLength} bytes`)
-
-  const wb = XLSX.read(buf, { type: 'buffer' })
-  // Auto-detect rack sheets: process every tab EXCEPT 'Blank Sheet' (the
-  // empty template). The shape inside each tab is identical: banner row,
-  // optional blank row, then a 'Stock Number' header, then data.
-  const sheetsToProcess = wb.SheetNames.filter(n => n.trim().toLowerCase() !== 'blank sheet')
-  log(`Processing ${sheetsToProcess.length} tabs: ${sheetsToProcess.join(', ')}`)
-  const rows: StockRow[] = []
-
-  for (const sheetName of sheetsToProcess) {
-    const ws = wb.Sheets[sheetName]
-    if (!ws) { log(`Sheet "${sheetName}" missing — skipping`); continue }
-    // Read as raw arrays so we can find the header row ourselves.
-    const aoa = XLSX.utils.sheet_to_json<any[]>(ws, { header: 1, defval: '' })
-    // Find the row that starts with "Stock Number" (or close to it).
-    const headerRowIdx = aoa.findIndex(r => String(r[0] || '').trim().toLowerCase() === 'stock number')
-    if (headerRowIdx < 0) { log(`Sheet "${sheetName}" has no Stock Number header — skipping`); continue }
-    // Resolve column indices dynamically from the header row — different
-    // tabs may put Non-Stock at index 4 or 5.
-    const headerRow = aoa[headerRowIdx].map(c => String(c || '').trim().toLowerCase())
-    const idxStock    = headerRow.indexOf('stock number')
-    const idxName     = headerRow.indexOf('name')
-    const idxNonStock = headerRow.indexOf('non-stock')
-    const dataRows = aoa.slice(headerRowIdx + 1)
-    let added = 0, skippedBanner = 0, skippedNonStock = 0
-    for (const r of dataRows) {
-      const sn = String(r[idxStock] || '').trim()
-      if (!sn) continue
-      const nm = idxName >= 0 ? String(r[idxName] || '').trim() : ''
-      // Filter out interstitial banner / section-header rows that appear
-      // between sub-racks within the same xlsx tab (e.g. "RACK LOCATION M",
-      // "EXTRAS", or another "Stock Number" header row). Real parts always
-      // have a Name; banners don't.
-      const looksLikeBanner =
-        /^rack location\b/i.test(sn) ||
-        sn.toLowerCase() === 'stock number' ||
-        sn.toLowerCase() === 'extras' ||
-        /^[A-Z][A-Z\s]+$/.test(sn) && !nm
-      if (looksLikeBanner || !nm) { skippedBanner++; continue }
-      const nonStockRaw = idxNonStock >= 0 ? r[idxNonStock] : false
-      const nonStock = nonStockRaw === true || String(nonStockRaw || '').toLowerCase() === 'true'
-      if (nonStock) { skippedNonStock++; continue }
-      rows.push({ sheet: sheetName, stockNumber: sn, name: nm, nonStock })
-      added++
-    }
-    log(`Sheet "${sheetName}" → ${added} rows (skipped ${skippedBanner} banner/blank, ${skippedNonStock} non-stock)`)
+async function fetchAllStocks(client: MdClient): Promise<MdInventoryItem[]> {
+  const all: MdInventoryItem[] = []
+  let page = 1
+  while (page <= 200) {
+    const url = `${MD_BASE}/stocks.json?page=${page}`
+    const r = await fetch(url, {
+      headers: {
+        'Cookie': client.cookieHeader,
+        'Accept': 'application/json',
+        'User-Agent': 'ja-portal-stock-sync',
+      },
+    })
+    if (!r.ok) throw new Error(`MD /stocks.json page ${page} → HTTP ${r.status}`)
+    const j: any = await r.json()
+    const stocks: MdInventoryItem[] = Array.isArray(j.stocks) ? j.stocks : []
+    all.push(...stocks)
+    const meta = j.meta || {}
+    const totalPages = Number(meta.total_pages || 1)
+    if (page === 1) log(`MD inventory: ${totalPages} pages × ~${stocks.length} per page`)
+    if (page >= totalPages || stocks.length === 0) break
+    page++
   }
-  return rows
+  return all
 }
 
 // ── Monday API helpers ─────────────────────────────────────────────────
@@ -176,7 +139,7 @@ async function mondayQuery<T = any>(query: string, variables?: Record<string, an
 interface MondayItem {
   id: string
   name: string
-  partNumber: string  // pulled from column values
+  partNumber: string
   availabilityLabel: string | null
 }
 
@@ -243,48 +206,10 @@ async function createItem(args: {
   return r.create_item.id
 }
 
-async function postUpdate(itemId: string, body: string): Promise<void> {
-  const q = `mutation ($itemId: ID!, $body: String!) {
-    create_update(item_id: $itemId, body: $body) { id }
-  }`
-  await mondayQuery(q, { itemId, body })
-}
-
-async function notifyUser(userId: number, itemId: string, text: string): Promise<void> {
-  const q = `mutation ($userId: ID!, $targetId: ID!, $text: String!) {
-    create_notification(user_id: $userId, target_id: $targetId, text: $text, target_type: Project) { id }
-  }`
-  try {
-    await mondayQuery(q, { userId, targetId: itemId, text })
-  } catch (e: any) {
-    log(`notifyUser ${userId} failed: ${e?.message}`)
-  }
-}
-
 // ── Main ───────────────────────────────────────────────────────────────
 
 async function main() {
-  log('=== Monday stock sync ===')
-
-  const sheetRows = await downloadAndParseSheet()
-  log(`Total sheet rows: ${sheetRows.length}`)
-
-  // Dedupe by stock number — same part might appear in multiple rack tabs.
-  const byStock = new Map<string, StockRow>()
-  for (const r of sheetRows) {
-    if (!byStock.has(r.stockNumber)) byStock.set(r.stockNumber, r)
-  }
-  const uniqueRows = Array.from(byStock.values())
-  log(`After dedupe: ${uniqueRows.length} unique part numbers`)
-
-  // Fetch existing Monday items first so we know what to update vs create.
-  log('Fetching existing Monday board items…')
-  const existing = await fetchBoardItems()
-  const byPartNumber = new Map<string, MondayItem>()
-  for (const it of existing) {
-    if (it.partNumber) byPartNumber.set(it.partNumber.toLowerCase(), it)
-  }
-  log(`Board has ${existing.length} items, ${byPartNumber.size} with Part Number set`)
+  log('=== Monday stock sync (MD inventory → alert-based) ===')
 
   // MD login
   const wsId = process.env.MECHANICDESK_WORKSHOP_ID
@@ -301,75 +226,65 @@ async function main() {
     client = r.client
     log(`MD login OK · ${client.cookieHeader.split(';').length} cookies`)
   } finally {
-    // Keep the browser around in case Playwright needs it for follow-up
-    // calls. The HTTP-based fetches will use cookies from client directly,
-    // not the browser, so we can close it now.
     await browser.close().catch(() => {})
   }
 
-  // Process rows
-  let stats = { updated: 0, created: 0, skippedGood: 0, mdNotFound: 0, mdAmbiguous: 0, errors: 0 }
-  let idx = 0
-  let mdSampleDumped = 0
-  for (const row of uniqueRows) {
-    idx++
-    const prefix = `[${idx}/${uniqueRows.length}] ${row.stockNumber}`
-    try {
-      const match = await findStockBySku(client, row.stockNumber)
-      let stockCount: number | null = null
-      if (match.kind === 'matched' && match.stock) {
-        stockCount = typeof match.stock.available === 'number' ? match.stock.available : null
-        // Dump the full MD stock object for the first 3 matches so we can
-        // see what fields are available — looking for any "low moving" /
-        // classification / velocity signal we can filter on.
-        if (mdSampleDumped < 3) {
-          log(`MD-SAMPLE ${row.stockNumber}: ${JSON.stringify(match.stock)}`)
-          mdSampleDumped++
-        }
-      } else if (match.kind === 'ambiguous') {
-        stats.mdAmbiguous++
-        log(`${prefix} · MD ambiguous (${match.candidates?.length || 0} hits) — using first`)
-        const first = match.candidates?.[0]
-        stockCount = first && typeof first.available === 'number' ? first.available : null
-      } else {
-        stats.mdNotFound++
-        log(`${prefix} · MD not found — treating as 0`)
-        stockCount = 0
-      }
-      const availLabel = availabilityLabel(stockCount)
+  // Pull MD inventory
+  log('Pulling MD inventory (paginated)…')
+  const allStocks = await fetchAllStocks(client)
+  log(`MD total inventory rows: ${allStocks.length}`)
 
-      const existingItem = byPartNumber.get(row.stockNumber.toLowerCase())
+  // Filter to "below alert" stocks
+  const qualifying = allStocks.filter(s => {
+    if (s.deleted) return false
+    if (s.deactivated) return false
+    if (s.disable_tracking) return false
+    if (!s.stock_alert) return false
+    if (typeof s.alert_quantity !== 'number' || s.alert_quantity <= 0) return false
+    if (typeof s.available_quantity !== 'number') return false
+    return s.available_quantity < s.alert_quantity
+  })
+  log(`Below-alert qualifying stocks: ${qualifying.length}`)
+
+  // Fetch existing Monday items
+  log('Fetching existing Monday board items…')
+  const existing = await fetchBoardItems()
+  const byPartNumber = new Map<string, MondayItem>()
+  for (const it of existing) {
+    if (it.partNumber) byPartNumber.set(it.partNumber.toLowerCase(), it)
+  }
+  log(`Board has ${existing.length} items, ${byPartNumber.size} with Part Number set`)
+
+  // Process qualifying stocks
+  let stats = { updated: 0, created: 0, noChange: 0, errors: 0 }
+  let idx = 0
+  for (const s of qualifying) {
+    idx++
+    const sn = String(s.stock_number || '').trim()
+    if (!sn) continue
+    const prefix = `[${idx}/${qualifying.length}] ${sn}`
+    try {
+      const availLabel = availabilityLabel(s.available_quantity)
+      const existingItem = byPartNumber.get(sn.toLowerCase())
       if (existingItem) {
-        // Always reflect the latest availability on items already on the board.
         if (existingItem.availabilityLabel === availLabel) {
-          log(`${prefix} · already ${availLabel} (no change)`)
+          stats.noChange++
+          // No log noise for unchanged — keep summary clean.
         } else {
           await updateAvailability(existingItem.id, availLabel)
           stats.updated++
-          log(`${prefix} · updated ${existingItem.availabilityLabel || '(blank)'} → ${availLabel}`)
+          log(`${prefix} · updated ${existingItem.availabilityLabel || '(blank)'} → ${availLabel} (qty ${s.available_quantity}/alert ${s.alert_quantity})`)
         }
       } else {
-        // Only create new items for parts that actually need watching —
-        // i.e. stock is below the "Good" threshold (≥6). Plenty-in-stock
-        // parts don't need to clutter the Delays board.
-        const needsTracking = (stockCount ?? 0) < 6
-        if (!needsTracking) {
-          stats.skippedGood++
-          log(`${prefix} · skip create — stock ${stockCount} (Good), not adding to Delays`)
-        } else {
-          const vehicle = fuzzyVehicle(row.name)
-          const itemId = await createItem({
-            name: row.name || row.stockNumber,
-            partNumber: row.stockNumber,
-            vehicleLabel: vehicle,
-            availabilityLabel: availLabel,
-          })
-          stats.created++
-          log(`${prefix} · CREATED ${itemId} · ${row.name || row.stockNumber} · ${vehicle} · ${availLabel}`)
-          // Per Morgan: no item updates / comments / notifications on
-          // create. The Monday board itself is the signal — Morgan +
-          // Terry will see new items appear when they look.
-        }
+        const vehicle = fuzzyVehicle(s.name)
+        const itemId = await createItem({
+          name: s.name || sn,
+          partNumber: sn,
+          vehicleLabel: vehicle,
+          availabilityLabel: availLabel,
+        })
+        stats.created++
+        log(`${prefix} · CREATED ${itemId} · ${s.name || sn} · ${vehicle} · ${availLabel} (qty ${s.available_quantity}/alert ${s.alert_quantity})`)
       }
     } catch (e: any) {
       stats.errors++
@@ -377,7 +292,7 @@ async function main() {
     }
   }
 
-  log(`=== Done. Updated ${stats.updated} · Created ${stats.created} · Skipped-good ${stats.skippedGood} · MD-not-found ${stats.mdNotFound} · MD-ambiguous ${stats.mdAmbiguous} · Errors ${stats.errors} ===`)
+  log(`=== Done. MD-total ${allStocks.length} · Below-alert ${qualifying.length} · Created ${stats.created} · Updated ${stats.updated} · No-change ${stats.noChange} · Errors ${stats.errors} ===`)
   if (stats.errors > 0) process.exit(1)
 }
 
