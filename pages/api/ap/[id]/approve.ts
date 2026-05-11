@@ -61,6 +61,8 @@ export default withAuth(null, async (req: NextApiRequest, res: NextApiResponse, 
     ? body.paymentAccountUid.trim() : ''
   const accountUid = typeof body.accountUid === 'string'
     ? body.accountUid.trim() : ''
+  const memoOverride = typeof body.memo === 'string'
+    ? body.memo.trim().slice(0, 255) : ''
   if (paymentAccountUid && !inv.resolved_supplier_uid) {
     // Look up account details to keep ap_invoices in sync (code + name).
     const { data: acct } = await sb()
@@ -94,8 +96,14 @@ export default withAuth(null, async (req: NextApiRequest, res: NextApiResponse, 
   }
 
   try {
+    const spendMoneyOpts = (accountUid || memoOverride)
+      ? {
+          ...(accountUid    ? { singleLineAccountUid: accountUid } : {}),
+          ...(memoOverride  ? { memoOverride } : {}),
+        }
+      : undefined
     const result = useSpendMoney
-      ? await createSpendMoneyTxn(id, user.id, accountUid ? { singleLineAccountUid: accountUid } : undefined)
+      ? await createSpendMoneyTxn(id, user.id, spendMoneyOpts)
       : await createServiceBill(id, user.id)
     return res.status(200).json({ ...result, postedAs: useSpendMoney ? 'spend_money' : 'bill' })
   } catch (e: any) {

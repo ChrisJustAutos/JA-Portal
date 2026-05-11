@@ -728,6 +728,8 @@ export async function createSpendMoneyTxn(
     // quick-post flow where the user picks one expense account at click
     // time instead of relying on per-line triage.
     singleLineAccountUid?: string
+    // Override: replaces the auto-generated JournalMemo. Truncated to 255.
+    memoOverride?: string
   },
 ): Promise<CreateSpendMoneyTxnResult> {
   const c = sb()
@@ -889,11 +891,16 @@ export async function createSpendMoneyTxn(
     totalAmount = round2(subtotal + totalTax)
   }
 
-  const memoParts = [
-    `AP (Spend Money): ${inv.vendor_name_parsed || 'Vendor'}${inv.invoice_number ? ' — ' + inv.invoice_number : ''}`,
-  ]
-  if (inv.linked_job_number) memoParts.push(`Job ${inv.linked_job_number}`)
-  const journalMemo = memoParts.join(' — ').substring(0, 255)
+  let journalMemo: string
+  if (options?.memoOverride) {
+    journalMemo = options.memoOverride.substring(0, 255)
+  } else {
+    const memoParts = [
+      `AP (Spend Money): ${inv.vendor_name_parsed || 'Vendor'}${inv.invoice_number ? ' — ' + inv.invoice_number : ''}`,
+    ]
+    if (inv.linked_job_number) memoParts.push(`Job ${inv.linked_job_number}`)
+    journalMemo = memoParts.join(' — ').substring(0, 255)
+  }
 
   const body: SpendMoneyBody = {
     Date: inv.invoice_date,

@@ -154,6 +154,7 @@ export default function APListPage({ user }: PageProps) {
   const [smAccountQuery, setSmAccountQuery] = useState<string>('')
   const [smAccountResults, setSmAccountResults] = useState<Array<{uid:string;displayId:string;name:string;type:string}>>([])
   const [smAccountSelected, setSmAccountSelected] = useState<{uid:string;displayId:string;name:string}|null>(null)
+  const [smMemo, setSmMemo] = useState<string>('')
   const [smSearching, setSmSearching] = useState(false)
   const [smPushing, setSmPushing] = useState(false)
   const [smError, setSmError] = useState<string | null>(null)
@@ -224,6 +225,12 @@ export default function APListPage({ user }: PageProps) {
     setSmAccountQuery('')
     setSmAccountResults([])
     setSmAccountSelected(null)
+    // Pre-fill the memo with a sensible default the user can edit/clear.
+    const defaultMemoParts = [
+      `AP (Spend Money): ${inv.vendor_name_parsed || 'Vendor'}`,
+    ]
+    if (inv.invoice_number) defaultMemoParts.push(inv.invoice_number)
+    setSmMemo(defaultMemoParts.join(' — '))
     setSmError(null)
     setSmPushing(false)
   }
@@ -241,7 +248,11 @@ export default function APListPage({ user }: PageProps) {
         method: 'POST',
         credentials: 'same-origin',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ paymentAccountUid: smPaymentUid, accountUid: smAccountSelected.uid }),
+        body: JSON.stringify({
+          paymentAccountUid: smPaymentUid,
+          accountUid: smAccountSelected.uid,
+          memo: smMemo.trim() || undefined,
+        }),
       })
       const json = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`)
@@ -1030,6 +1041,28 @@ export default function APListPage({ user }: PageProps) {
                     </div>
                   </>
                 )}
+              </div>
+
+              {/* Memo */}
+              <div style={{marginBottom:16}}>
+                <label style={{display:'block', fontSize:11, color:T.text2, marginBottom:6, textTransform:'uppercase', letterSpacing:'0.05em'}}>
+                  3. Memo (shown on the MYOB transaction)
+                </label>
+                <textarea
+                  value={smMemo}
+                  onChange={e => setSmMemo(e.target.value.slice(0, 255))}
+                  rows={2}
+                  placeholder="Description for the MYOB SpendMoney record"
+                  style={{
+                    width:'100%', padding:'8px 10px', fontSize:13,
+                    background:T.bg3, color:T.text,
+                    border:`1px solid ${T.border2}`, borderRadius:6,
+                    resize:'vertical', fontFamily:'inherit',
+                  }}
+                />
+                <div style={{fontSize:10, color:T.text3, marginTop:4, textAlign:'right'}}>
+                  {smMemo.length}/255
+                </div>
               </div>
 
               {/* Error banner */}
