@@ -71,6 +71,33 @@ interface ListResponse {
   invoices: StripeInvoiceRow[]
 }
 
+interface PayoutRow {
+  id: string
+  amount_cents: number
+  currency: string
+  status: string
+  arrival_date: string
+  created: string
+  description: string | null
+  method: string
+  myobStatus: 'pending' | 'pushed' | 'failed' | 'skipped_duplicate'
+  myobFeeCents: number | null
+  myobTransferUid: string | null
+  myobFeePaymentUid: string | null
+  lastError: string | null
+  pushedAt: string | null
+  breakdown: any | null
+}
+
+interface PayoutListResponse {
+  ok: true
+  account: AccountLabel
+  since: string
+  until: string
+  summary: { total: number; pushed: number; pending: number; failed: number }
+  payouts: PayoutRow[]
+}
+
 interface PushPreview {
   stripeInvoiceId: string
   stripeNumber: string | null
@@ -154,18 +181,27 @@ interface PageUser { id: string; email: string; role: UserRole; displayName: str
 export default function StripeMyobPage({ user }: { user: PageUser }) {
   const canPush = roleHasPermission(user.role, 'edit:stripe_myob')
 
-  // ── Filters ─────────────────────────────────────────────────────────
+  // ── Tab ─────────────────────────────────────────────────────────────
+  const [view, setView] = useState<'sales' | 'payouts'>('sales')
+
+  // ── Filters (shared between tabs) ───────────────────────────────────
   const [account, setAccount] = useState<AccountLabel>('JAWS_JMACX')
   const [since, setSince] = useState<string>(daysAgoIso(60))
   const [until, setUntil] = useState<string>(todayIso())
 
-  // ── Data ────────────────────────────────────────────────────────────
+  // ── Sales data ──────────────────────────────────────────────────────
   const [rows, setRows] = useState<StripeInvoiceRow[]>([])
   const [summary, setSummary] = useState<ListResponse['summary'] | null>(null)
   const [loading, setLoading] = useState(false)
   const [err, setErr] = useState<string | null>(null)
 
-  // ── Push state ──────────────────────────────────────────────────────
+  // ── Payouts data ────────────────────────────────────────────────────
+  const [payouts, setPayouts] = useState<PayoutRow[]>([])
+  const [payoutSummary, setPayoutSummary] = useState<PayoutListResponse['summary'] | null>(null)
+  const [payoutLoading, setPayoutLoading] = useState(false)
+  const [reconcilingPayoutIds, setReconcilingPayoutIds] = useState<Set<string>>(new Set())
+
+  // ── Push state (sales) ──────────────────────────────────────────────
   const [pushingIds, setPushingIds] = useState<Set<string>>(new Set())
   const [activePreview, setActivePreview] = useState<PushPreview | null>(null)
   const [activeRowDate, setActiveRowDate] = useState<string | null>(null)
@@ -198,7 +234,56 @@ export default function StripeMyobPage({ user }: { user: PageUser }) {
     }
   }, [account, since, until])
 
-  useEffect(() => { load() }, [load])
+  // Payouts loader
+  const loadPayouts = useCallback(async () => {
+    setPayoutLoading(true)
+    setErr(null)
+    try {
+      const qs = new URLSearchParams({ account, since, until })
+      const res = await fetch(`/api/stripe-myob/payouts?${qs.toString()}`, { credentials: 'include' })
+      const json: any = await res.json()
+      if (!res.ok || !json.ok) throw new Error(json.error || `HTTP ${res.status}`)
+      const data = json as PayoutListResponse
+      setPayouts(data.payouts)
+      setPayoutSummary(data.summary)
+    } catch (e: any) {
+      setErr(e?.message || String(e))
+      setPayouts([])
+      setPayoutSummary(null)
+    } finally {
+      setPayoutLoading(false)
+    }
+  }, [account, since, until])
+
+  useEffect(() => {
+    if (view === 'sales') load()
+    else loadPayouts()
+  }, [view, load, loadPayouts])
+
+  // Reconcile a single payout from the UI
+  const reconcilePayout = useCallback(async (payoutId: string) => {
+    setReconcilingPayoutIds(prev => new Set(prev).add(payoutId))
+    setErr(null)
+    try {
+      const res = await fetch('/api/stripe-myob/payouts-reconcile?dry=0', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ account, payoutIds: [payoutId] }),
+      })
+      const json: any = await res.json()
+      if (!res.ok || !json.ok) throw new Error(json.error || `HTTP ${res.status}`)
+      const r = json.results?.[0]
+      if (r?.error) setErr(`${payoutId}: ${r.error}`)
+      await loadPayouts()
+    } catch (e: any) {
+      setErr(e?.message || String(e))
+    } finally {
+      setReconcilingPayoutIds(prev => {
+        const next = new Set(prev); next.delete(payoutId); return next
+      })
+    }
+  }, [account, loadPayouts])
 
   // ── Push handlers ───────────────────────────────────────────────────
   const dryRun = useCallback(async (row: StripeInvoiceRow): Promise<PushPreview | null> => {
@@ -290,6 +375,7 @@ export default function StripeMyobPage({ user }: { user: PageUser }) {
   const totalGross  = useMemo(() => rows.reduce((s, r) => s + r.total_cents, 0), [rows])
   const pendingRows = useMemo(() => rows.filter(r => r.myobStatus === 'pending'), [rows])
   const rangeIncludesPreCutover = useMemo(() => since < MAKE_CUTOVER_DATE, [since])
+  const totalPayoutNet = useMemo(() => payouts.reduce((s, p) => s + p.amount_cents, 0), [payouts])
 
   return (
     <>
@@ -299,13 +385,19 @@ export default function StripeMyobPage({ user }: { user: PageUser }) {
         <div style={{ flex:1, padding:'24px 32px', maxWidth:1400 }}>
 
           {/* Header */}
-          <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:20 }}>
+          <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:16 }}>
             <div>
               <h1 style={{ margin:0, fontSize:24, fontWeight:600 }}>Stripe → MYOB</h1>
               <div style={{ marginTop:4, color:T.text2, fontSize:13 }}>
-                Manual fallback for the Make automation. Reviews Stripe sales and pushes them into MYOB JAWS as Professional Invoices + Customer Payments.
+                Manual fallback for the Make automation. Reviews Stripe sales + payouts and pushes them into MYOB JAWS.
               </div>
             </div>
+          </div>
+
+          {/* Tabs */}
+          <div style={{ display:'flex', gap:2, marginBottom:16, borderBottom:`1px solid ${T.border}` }}>
+            <TabButton active={view === 'sales'}   onClick={() => setView('sales')}   label="Sales" count={summary?.total ?? null} />
+            <TabButton active={view === 'payouts'} onClick={() => setView('payouts')} label="Payouts" count={payoutSummary?.total ?? null} />
           </div>
 
           {/* Filters */}
@@ -345,6 +437,9 @@ export default function StripeMyobPage({ user }: { user: PageUser }) {
             )}
             {err && <span style={{ color:T.red, fontSize:12, marginLeft:'auto' }}>{err}</span>}
           </div>
+
+          {/* === SALES VIEW === */}
+          {view === 'sales' && <>
 
           {/* Summary */}
           {summary && (
@@ -443,6 +538,90 @@ export default function StripeMyobPage({ user }: { user: PageUser }) {
             />
           )}
 
+          </>}{/* end sales view */}
+
+          {/* === PAYOUTS VIEW === */}
+          {view === 'payouts' && <>
+
+          {/* Payouts summary */}
+          {payoutSummary && (
+            <div style={{ display:'flex', gap:10, marginBottom:16, flexWrap:'wrap' }}>
+              <KpiChip label="Payouts in window" value={String(payoutSummary.total)}   color={T.blue} />
+              <KpiChip label="Pending reconcile" value={String(payoutSummary.pending)} color={T.amber} />
+              <KpiChip label="Reconciled"        value={String(payoutSummary.pushed)}  color={T.green} />
+              <KpiChip label="Failed"            value={String(payoutSummary.failed)}  color={T.red} />
+              <KpiChip label="Net to bank"       value={fmtMoneyCents(totalPayoutNet)} color={T.teal} />
+            </div>
+          )}
+
+          {/* Payouts table */}
+          <div style={{ background:T.bg2, border:`1px solid ${T.border}`, borderRadius:8, overflow:'hidden' }}>
+            <table style={{ width:'100%', borderCollapse:'collapse', fontSize:13 }}>
+              <thead>
+                <tr style={{ background:T.bg3, borderBottom:`1px solid ${T.border}` }}>
+                  <th style={thStyle}>Payout</th>
+                  <th style={thStyle}>Arrival</th>
+                  <th style={{...thStyle, textAlign:'right'}}>Net to bank</th>
+                  <th style={{...thStyle, textAlign:'right'}}>Payout fee</th>
+                  <th style={thStyle}>MYOB</th>
+                  <th style={thStyle}>Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                {payouts.length === 0 && !payoutLoading && (
+                  <tr><td colSpan={6} style={{ padding:'40px 20px', textAlign:'center', color:T.text3 }}>
+                    No payouts in this window.
+                  </td></tr>
+                )}
+                {payouts.map(p => (
+                  <tr key={p.id} style={{ borderBottom:`1px solid ${T.border}` }}>
+                    <td style={tdStyle}>
+                      <div style={{ fontWeight:600 }}>{p.description || 'Stripe payout'}</div>
+                      <div style={{ fontSize:10, color:T.text3, fontFamily:'monospace' }}>{p.id}</div>
+                      {p.amount_cents < 0 && (
+                        <div style={{ fontSize:10, color:T.red, marginTop:3 }}>⚠ negative (refund-only)</div>
+                      )}
+                    </td>
+                    <td style={tdStyle}>{fmtDateShort(p.arrival_date)}</td>
+                    <td style={{...tdStyle, textAlign:'right', fontVariantNumeric:'tabular-nums',
+                                color: p.amount_cents < 0 ? T.red : T.text }}>
+                      {fmtMoneyCents(p.amount_cents)}
+                    </td>
+                    <td style={{...tdStyle, textAlign:'right', fontVariantNumeric:'tabular-nums', color:T.text2}}>
+                      {p.myobFeeCents !== null ? fmtMoneyCents(p.myobFeeCents) : '—'}
+                    </td>
+                    <td style={tdStyle}>
+                      <StatusBadge status={p.myobStatus} />
+                      {p.lastError && <div style={{ fontSize:10, color:T.red, marginTop:3, maxWidth:200 }}>{p.lastError.slice(0, 100)}</div>}
+                      {p.pushedAt && p.myobStatus === 'pushed' && (
+                        <div style={{ fontSize:10, color:T.text3, marginTop:3 }}>{fmtDateShort(p.pushedAt)}</div>
+                      )}
+                    </td>
+                    <td style={tdStyle}>
+                      {p.myobStatus === 'pushed' ? (
+                        <span style={{ color:T.text3, fontSize:11 }}>—</span>
+                      ) : canPush ? (
+                        <button onClick={() => reconcilePayout(p.id)}
+                          disabled={reconcilingPayoutIds.has(p.id)}
+                          style={pushBtnStyle}>
+                          {reconcilingPayoutIds.has(p.id) ? 'Reconciling…' : 'Reconcile'}
+                        </button>
+                      ) : (
+                        <span style={{ color:T.text3, fontSize:11 }}>Read-only</span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          <div style={{ marginTop:14, padding:'10px 14px', background:T.bg2, border:`1px solid ${T.border}`, borderRadius:8, fontSize:12, color:T.text2 }}>
+            <strong style={{ color:T.text }}>How this works:</strong> Reconcile creates the Stripe payout fee credit invoice in MYOB JAWS (if non-zero) and posts a Slack message to the JAWS Payments channel listing the Undeposited Funds entries to tick in MYOB's <em>Prepare Bank Deposit</em>, depositing to <strong>CHQ 1-1110 (NAB Business Acc 3369)</strong>. The actual bank deposit grouping remains a manual MYOB UI step.
+          </div>
+
+          </>}{/* end payouts view */}
+
         </div>
       </div>
     </>
@@ -450,6 +629,22 @@ export default function StripeMyobPage({ user }: { user: PageUser }) {
 }
 
 // ── Sub-components ─────────────────────────────────────────────────────
+
+function TabButton({ active, onClick, label, count }: { active: boolean; onClick: () => void; label: string; count: number | null }) {
+  return (
+    <button onClick={onClick} style={{
+      padding:'8px 18px',
+      background: active ? T.bg2 : 'transparent',
+      color: active ? T.text : T.text2,
+      border:'none',
+      borderBottom: active ? `2px solid ${T.accent}` : '2px solid transparent',
+      fontSize:13, fontWeight:600, cursor:'pointer',
+      marginBottom:-1,
+    }}>
+      {label}{count !== null && <span style={{ marginLeft:6, color:T.text3, fontWeight:400 }}>({count})</span>}
+    </button>
+  )
+}
 
 function KpiChip({ label, value, color }: { label: string; value: string; color: string }) {
   return (
