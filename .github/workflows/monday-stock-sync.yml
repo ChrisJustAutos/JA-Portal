@@ -4,17 +4,16 @@ name: Monday stock sync (twice daily)
 # "Product Availability Delays" board. See scripts/monday-stock-sync.ts
 # for the full flow.
 #
-# Schedule:
-#   "0 22 * * *" = 22:00 UTC = 8am Sydney AEST (9am AEDT during DST)
-#   "0 4  * * *" =  4:00 UTC = 2pm Sydney AEST (3pm AEDT during DST)
-#   The 1-hour drift through DST transitions is acceptable.
+# Schedule (Brisbane time — QLD does not observe DST, so AEST year-round):
+#   "0 22 * * *" = 22:00 UTC = 8am Brisbane
+#   "0 4  * * *" =  4:00 UTC = 2pm Brisbane
 #
 # Also supports manual dispatch from the Actions tab for ad-hoc runs.
 
 on:
   schedule:
-    - cron: '0 22 * * *'   # 8am Sydney (winter) / 9am (summer)
-    - cron: '0 4 * * *'    # 2pm Sydney (winter) / 3pm (summer)
+    - cron: '0 22 * * *'   # 8am Brisbane
+    - cron: '0 4 * * *'    # 2pm Brisbane
   workflow_dispatch:
 
 jobs:
