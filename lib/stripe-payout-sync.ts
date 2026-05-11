@@ -64,9 +64,9 @@ export interface PayoutBreakdown {
 
 export interface PayoutChargeDetail {
   stripeChargeId: string
-  stripeInvoiceId: string | null
-  myobReceiptNumber: string | null
-  myobCustomerName: string | null
+  stripeCustomerName: string | null  // from Stripe billing_details.name
+  stripeCustomerEmail: string | null
+  stripeChargeDateIso: string        // yyyy-mm-dd (charge.created in Sydney)
   netCents: number                   // what landed in UF for this charge
 }
 
@@ -208,87 +208,34 @@ function buildFeePaymentPayload(args: {
   }
 }
 
-// Enrich the payout breakdown with the matching MYOB customer-payment
-// details for every charge in the payout — used to build the Slack
-// message listing exactly which UF entries to tick when the user does
-// "Prepare Bank Deposit" in MYOB UI.
-//
-// Match strategy: for each Stripe charge in the payout, search MYOB
-// Sale/CustomerPayment for an entry whose AmountReceived matches the
-// charge net (within 1c) and whose Date is within ±2 days of the
-// charge date. Catches both our pushes AND Make-era records uniformly.
-// Ambiguous matches (>1 hit) are left unmatched for human review.
+// Charge-level info for the Slack checklist. We don't try to identify
+// the exact MYOB receipt number — the user does that in the Prepare
+// Bank Deposit screen using customer name + amount + date as the
+// reference. Make-era and our-pushed entries are both findable the
+// same way.
 async function getPayoutChargeDetails(
   account: StripeAccountLabel,
   txns: StripeBalanceTxLite[],
 ): Promise<PayoutChargeDetail[]> {
   const details: PayoutChargeDetail[] = []
-  const conn = await getConnection('JAWS')
-  if (!conn?.company_file_id) return details
-  const cfId = conn.company_file_id
-
   for (const t of txns) {
     if (t.type !== 'charge' && t.type !== 'payment') continue
     if (!t.source) continue
 
     const netCents = (t.amount || 0) - (t.fee || 0)
-    const netDollars = netCents / 100
-    const chargeDate = new Date((t.created || 0) * 1000)
-    const fromIso = new Date(chargeDate.getTime() - 2 * 86400_000).toISOString().slice(0, 10) + 'T00:00:00'
-    const toIso   = new Date(chargeDate.getTime() + 2 * 86400_000).toISOString().slice(0, 10) + 'T23:59:59'
-
-    let myobReceiptNumber: string | null = null
-    let myobCustomerName: string | null = null
-    let stripeInvoiceId: string | null = null
     let stripeCustomerName: string | null = null
-
-    // Resolve the Stripe customer name from the charge (used to
-    // disambiguate when multiple MYOB payments match the date+amount).
+    let stripeCustomerEmail: string | null = null
     try {
       const charge = await retrieveCharge(account, t.source)
-      stripeInvoiceId = charge.invoice || null
       stripeCustomerName = charge.billing_details?.name || null
-    } catch { /* ignore */ }
-
-    try {
-      const { data } = await myobFetch(conn.id, `/accountright/${cfId}/Sale/CustomerPayment`, {
-        query: {
-          '$top': 50,
-          '$filter': `Date ge datetime'${fromIso}' and Date le datetime'${toIso}'`,
-        },
-      })
-      const items: any[] = Array.isArray(data?.Items) ? data.Items : []
-
-      // Step 1: filter by amount (always required).
-      const amountMatches = items.filter((p: any) => {
-        const amt = typeof p.AmountReceived === 'number' ? p.AmountReceived : parseFloat(p.AmountReceived || '0')
-        return Math.abs(amt - netDollars) < 0.01
-      })
-
-      // Step 2: if we have a Stripe customer name, narrow to that customer.
-      let matches = amountMatches
-      if (stripeCustomerName && amountMatches.length > 1) {
-        const stripeTokens = stripeCustomerName.toLowerCase().split(/\s+/).filter(Boolean)
-        matches = amountMatches.filter((p: any) => {
-          const myobName: string = (p.Customer?.Name || '').toLowerCase()
-          // Match if any token from the Stripe name appears in MYOB name
-          return stripeTokens.some(tok => tok.length >= 3 && myobName.includes(tok))
-        })
-      }
-
-      if (matches.length === 1) {
-        const m = matches[0]
-        myobReceiptNumber = m.ReceiptNumber || null
-        myobCustomerName = m.Customer?.Name || null
-      }
-      // If matches.length > 1 or === 0, leave unmatched — human picks via Slack hint
+      stripeCustomerEmail = charge.billing_details?.email || null
     } catch { /* keep going */ }
 
     details.push({
       stripeChargeId: t.source,
-      stripeInvoiceId,
-      myobReceiptNumber,
-      myobCustomerName,
+      stripeCustomerName,
+      stripeCustomerEmail,
+      stripeChargeDateIso: ymdSydney(t.created || 0),
       netCents,
     })
   }
@@ -320,18 +267,13 @@ function buildPayoutSlackMessage(args: {
 
   const lines: string[] = []
   let listedTotal = 0
-  let unmatched = 0
   for (const d of args.chargeDetails) {
-    if (d.myobReceiptNumber) {
-      lines.push(`• \`${d.myobReceiptNumber}\` · ${d.myobCustomerName || 'Customer'} · ${fmtMoneyCents(d.netCents)}`)
-      listedTotal += d.netCents
-    } else {
-      lines.push(`• :grey_question: Stripe charge \`${d.stripeChargeId}\` · ${fmtMoneyCents(d.netCents)} _(not in MYOB sync log — may be a Make-era invoice)_`)
-      unmatched++
-    }
+    const who = d.stripeCustomerName || d.stripeCustomerEmail || 'Customer'
+    lines.push(`• ${who} · *${fmtMoneyCents(d.netCents)}* · ${d.stripeChargeDateIso}`)
+    listedTotal += d.netCents
   }
   if (args.feeInvoiceNumber && args.breakdown.payoutFee_cents > 0) {
-    lines.push(`• \`${args.feeInvoiceNumber}\` · Stripe (payout fee) · ${fmtMoneyCents(-args.breakdown.payoutFee_cents)}`)
+    lines.push(`• Stripe (payout fee) · *${fmtMoneyCents(-args.breakdown.payoutFee_cents)}* · ${args.breakdown.arrival_date_iso} _(invoice \`${args.feeInvoiceNumber}\`)_`)
     listedTotal += -args.breakdown.payoutFee_cents
   }
 
@@ -342,14 +284,11 @@ function buildPayoutSlackMessage(args: {
 
   const blocks: any[] = [
     { type: 'header', text: { type: 'plain_text', text: header } },
-    { type: 'section', text: { type: 'mrkdwn', text: `In MYOB JAWS → *Prepare Bank Deposit* → tick these Undeposited Funds entries and deposit to *CHQ 1-1110 (NAB Business Acc 3369)*:` } },
+    { type: 'section', text: { type: 'mrkdwn', text: `In MYOB JAWS → *Prepare Bank Deposit* → tick the Undeposited Funds entries matching these and deposit to *CHQ 1-1110 (NAB Business Acc 3369)*:` } },
     { type: 'section', text: { type: 'mrkdwn', text: lines.join('\n') || '_no entries — nothing to deposit_' } },
     { type: 'divider' },
     { type: 'section', text: { type: 'mrkdwn', text: `${totalLine}\n${matchNote}` } },
   ]
-  if (unmatched > 0) {
-    blocks.push({ type: 'section', text: { type: 'mrkdwn', text: `:information_source: ${unmatched} charge${unmatched === 1 ? ' is' : 's are'} not in our sync log. Likely Make-era invoices in MYOB — find them by date/customer/amount and include in the deposit anyway.` } })
-  }
 
   return {
     text: `${header} — ${args.chargeDetails.length} charges to deposit`,
