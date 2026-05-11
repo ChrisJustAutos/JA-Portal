@@ -189,6 +189,10 @@ export default function StripeMyobPage({ user }: { user: PageUser }) {
   const [since, setSince] = useState<string>(daysAgoIso(60))
   const [until, setUntil] = useState<string>(todayIso())
 
+  // Separate sync window (independent of table view's since/until)
+  const [syncSince, setSyncSince] = useState<string>(daysAgoIso(365))
+  const [syncUntil, setSyncUntil] = useState<string>(todayIso())
+
   // ── Sales data ──────────────────────────────────────────────────────
   const [rows, setRows] = useState<StripeInvoiceRow[]>([])
   const [summary, setSummary] = useState<ListResponse['summary'] | null>(null)
@@ -272,7 +276,7 @@ export default function StripeMyobPage({ user }: { user: PageUser }) {
         method: 'POST',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ account, since, until }),
+        body: JSON.stringify({ account, since: syncSince, until: syncUntil }),
       })
       const json: any = await res.json()
       if (!res.ok || !json.ok) throw new Error(json.error || `HTTP ${res.status}`)
@@ -283,7 +287,7 @@ export default function StripeMyobPage({ user }: { user: PageUser }) {
     } finally {
       setPayoutSyncing(false)
     }
-  }, [account, since, until, loadPayouts])
+  }, [account, syncSince, syncUntil, loadPayouts])
 
   // Reconcile a single payout from the UI
   const reconcilePayout = useCallback(async (payoutId: string) => {
@@ -384,7 +388,7 @@ export default function StripeMyobPage({ user }: { user: PageUser }) {
         method: 'POST',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ account, since, until }),
+        body: JSON.stringify({ account, since: syncSince, until: syncUntil }),
       })
       const json: any = await res.json()
       if (!res.ok || !json.ok) throw new Error(json.error || `HTTP ${res.status}`)
@@ -395,7 +399,7 @@ export default function StripeMyobPage({ user }: { user: PageUser }) {
     } finally {
       setSyncing(false)
     }
-  }, [account, since, until, load])
+  }, [account, syncSince, syncUntil, load])
 
   const totalGross  = useMemo(() => rows.reduce((s, r) => s + r.total_cents, 0), [rows])
   const pendingRows = useMemo(() => rows.filter(r => r.myobStatus === 'pending'), [rows])
@@ -450,18 +454,35 @@ export default function StripeMyobPage({ user }: { user: PageUser }) {
             <button onClick={load} disabled={loading} style={primaryBtnStyle}>
               {loading ? 'Loading…' : 'Refresh'}
             </button>
-            {canPush && (
+            {err && <span style={{ color:T.red, fontSize:12, marginLeft:'auto' }}>{err}</span>}
+          </div>
+
+          {/* Sync sub-bar — independent date range, scans wider than display */}
+          {canPush && view === 'sales' && (
+            <div style={{
+              display:'flex', gap:12, alignItems:'flex-end',
+              padding:'10px 16px', background:T.bg2, border:`1px solid ${T.border}`,
+              borderRadius:8, marginBottom:16,
+            }}>
+              <div style={{ fontSize:11, color:T.text2 }}>Scan MYOB to mark already-existing entries:</div>
+              <div>
+                <label style={{ display:'block', fontSize:10, color:T.text3, marginBottom:2 }}>Scan since</label>
+                <input type="date" value={syncSince} onChange={e => setSyncSince(e.target.value)} style={{...inputStyle, padding:'4px 6px', fontSize:12}} />
+              </div>
+              <div>
+                <label style={{ display:'block', fontSize:10, color:T.text3, marginBottom:2 }}>Scan until</label>
+                <input type="date" value={syncUntil} onChange={e => setSyncUntil(e.target.value)} style={{...inputStyle, padding:'4px 6px', fontSize:12}} />
+              </div>
               <button onClick={syncFromMyob} disabled={syncing || loading} style={syncBtnStyle} title="Scan MYOB for any of these invoices that already exist there (e.g. from Make) and mark them as Already in MYOB">
                 {syncing ? 'Syncing…' : 'Sync from MYOB'}
               </button>
-            )}
-            {syncResult && (
-              <span style={{ fontSize:12, color:T.text2 }}>
-                Scanned {syncResult.scanned}, matched <strong style={{ color:T.purple }}>{syncResult.matched}</strong>
-              </span>
-            )}
-            {err && <span style={{ color:T.red, fontSize:12, marginLeft:'auto' }}>{err}</span>}
-          </div>
+              {syncResult && (
+                <span style={{ fontSize:12, color:T.text2 }}>
+                  Scanned {syncResult.scanned}, matched <strong style={{ color:T.purple }}>{syncResult.matched}</strong>
+                </span>
+              )}
+            </div>
+          )}
 
           {/* === SALES VIEW === */}
           {view === 'sales' && <>
@@ -577,17 +598,34 @@ export default function StripeMyobPage({ user }: { user: PageUser }) {
             <button onClick={loadPayouts} disabled={payoutLoading} style={primaryBtnStyle}>
               {payoutLoading ? 'Loading…' : 'Refresh'}
             </button>
-            {canPush && (
-              <button onClick={syncPayoutsFromMyob} disabled={payoutSyncing || payoutLoading} style={syncBtnStyle} title="Scan MYOB CHQ 1-1110 for existing bank deposits matching these payouts (Make-era or manual) and mark them as Already in MYOB">
+          </div>
+
+          {/* Payouts sync sub-bar — independent date range */}
+          {canPush && (
+            <div style={{
+              display:'flex', gap:12, alignItems:'flex-end',
+              padding:'10px 16px', background:T.bg2, border:`1px solid ${T.border}`,
+              borderRadius:8, marginBottom:16,
+            }}>
+              <div style={{ fontSize:11, color:T.text2 }}>Scan MYOB bank feed:</div>
+              <div>
+                <label style={{ display:'block', fontSize:10, color:T.text3, marginBottom:2 }}>Scan since</label>
+                <input type="date" value={syncSince} onChange={e => setSyncSince(e.target.value)} style={{...inputStyle, padding:'4px 6px', fontSize:12}} />
+              </div>
+              <div>
+                <label style={{ display:'block', fontSize:10, color:T.text3, marginBottom:2 }}>Scan until</label>
+                <input type="date" value={syncUntil} onChange={e => setSyncUntil(e.target.value)} style={{...inputStyle, padding:'4px 6px', fontSize:12}} />
+              </div>
+              <button onClick={syncPayoutsFromMyob} disabled={payoutSyncing || payoutLoading} style={syncBtnStyle} title="If a payout's amount is no longer in the MYOB CHQ bank feed inbox, assume it's been reconciled and mark as Already in MYOB.">
                 {payoutSyncing ? 'Syncing…' : 'Sync from MYOB'}
               </button>
-            )}
-            {payoutSyncResult && (
-              <span style={{ fontSize:12, color:T.text2 }}>
-                Scanned {payoutSyncResult.scanned}, matched <strong style={{ color:T.purple }}>{payoutSyncResult.matched}</strong>
-              </span>
-            )}
-          </div>
+              {payoutSyncResult && (
+                <span style={{ fontSize:12, color:T.text2 }}>
+                  Scanned {payoutSyncResult.scanned}, matched <strong style={{ color:T.purple }}>{payoutSyncResult.matched}</strong>
+                </span>
+              )}
+            </div>
+          )}
 
           {/* Payouts summary */}
           {payoutSummary && (
