@@ -206,8 +206,8 @@ function buildBankTransferPayload(args: {
   const netDollars = args.netCents / 100
   return {
     Date: args.isoDate + 'T00:00:00',
-    AccountFrom: { UID: JAWS_UIDS.ACCT_UNDEP_FUNDS },
-    AccountTo:   { UID: JAWS_UIDS.ACCT_CHQ_3369 },
+    FromAccount: { UID: JAWS_UIDS.ACCT_UNDEP_FUNDS },
+    ToAccount:   { UID: JAWS_UIDS.ACCT_CHQ_3369 },
     Amount: netDollars,
     Memo: `Stripe payout deposit #${args.payoutId}`,
   }
