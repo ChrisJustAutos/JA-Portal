@@ -11,6 +11,7 @@
 //     function alive until it returns; maxDuration set below).
 
 import type { NextApiRequest, NextApiResponse } from 'next'
+import { waitUntil } from '@vercel/functions'
 import { verifySlackSignature } from '../../../lib/slack-bot/verify'
 import { askClaude } from '../../../lib/slack-bot/claude'
 import { postMessage } from '../../../lib/slack-bot/slack'
@@ -89,36 +90,38 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       })
     }
 
+    // Hand the slow work off to waitUntil so Vercel keeps the function
+    // alive after we ack Slack within 3s.
+    waitUntil((async () => {
+      try {
+        const result = await askClaude(text)
+        const reply = result.text + (result.toolsUsed.length ? `\n\n_Used: ${result.toolsUsed.join(', ')}_` : '')
+        if (responseUrl) {
+          await fetch(responseUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ response_type: 'in_channel', replace_original: false, text: reply }),
+          })
+        } else if (channel) {
+          await postMessage({ channel, text: reply })
+        }
+      } catch (e: any) {
+        console.error('[slack/ask] slash-command error:', e)
+        if (responseUrl) {
+          await fetch(responseUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ response_type: 'ephemeral', text: `:warning: Error: ${e?.message || String(e)}` }),
+          })
+        }
+      }
+    })())
+
     // Ack immediately with a placeholder so Slack doesn't time out.
-    res.status(200).json({
+    return res.status(200).json({
       response_type: 'in_channel',
       text: `:hourglass_flowing_sand: <@${user}> asked: _${text}_`,
     })
-
-    // Process and post final answer.
-    try {
-      const result = await askClaude(text)
-      const reply = result.text + (result.toolsUsed.length ? `\n\n_Used: ${result.toolsUsed.join(', ')}_` : '')
-      if (responseUrl) {
-        await fetch(responseUrl, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ response_type: 'in_channel', replace_original: false, text: reply }),
-        })
-      } else if (channel) {
-        await postMessage({ channel, text: reply })
-      }
-    } catch (e: any) {
-      console.error('[slack/ask] slash-command error:', e)
-      if (responseUrl) {
-        await fetch(responseUrl, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ response_type: 'ephemeral', text: `:warning: Error: ${e?.message || String(e)}` }),
-        })
-      }
-    }
-    return
   }
 
   // ── Events API — JSON ────────────────────────────────────────────────
@@ -154,19 +157,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const question = stripBotMention(event.text || '')
   const threadTs: string | undefined = event.thread_ts || event.ts
 
-  // Ack Slack immediately.
-  res.status(200).json({ ok: true })
+  // Run Claude + post in background so we can ack Slack within 3s.
+  waitUntil((async () => {
+    try {
+      const result = await askClaude(question || 'Hi — what can you help me with?')
+      const reply = result.text + (result.toolsUsed.length ? `\n\n_Used: ${result.toolsUsed.join(', ')}_` : '')
+      await postMessage({ channel, text: reply, thread_ts: threadTs })
+    } catch (e: any) {
+      console.error('[slack/ask] mention error:', e)
+      await postMessage({
+        channel,
+        text: `:warning: I hit an error: ${e?.message || String(e)}`,
+        thread_ts: threadTs,
+      })
+    }
+  })())
 
-  try {
-    const result = await askClaude(question || 'Hi — what can you help me with?')
-    const reply = result.text + (result.toolsUsed.length ? `\n\n_Used: ${result.toolsUsed.join(', ')}_` : '')
-    await postMessage({ channel, text: reply, thread_ts: threadTs })
-  } catch (e: any) {
-    console.error('[slack/ask] mention error:', e)
-    await postMessage({
-      channel,
-      text: `:warning: I hit an error: ${e?.message || String(e)}`,
-      thread_ts: threadTs,
-    })
-  }
+  return res.status(200).json({ ok: true })
 }
