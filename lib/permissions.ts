@@ -82,6 +82,7 @@ const ROLE_PERMISSIONS: Record<UserRole, Permission[]> = {
   accountant: [
     'view:dashboards','view:overview','view:invoices','view:pnl','view:payables','view:reports',
     'view:supplier_invoices','edit:supplier_invoices',
+    'view:distributors',
     'view:jobs','view:vehicle_sales','view:b2b','view:stripe_myob','edit:stripe_myob',
     'generate:reports',
   ],
