@@ -40,10 +40,6 @@
     {
       "path": "/api/cron/health-check",
       "schedule": "*/5 * * * *"
-    },
-    {
-      "path": "/api/cron/bank-payments-slack",
-      "schedule": "0 20,21 * * *"
     }
   ]
 }
