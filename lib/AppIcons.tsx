@@ -95,6 +95,24 @@ const ICONS: Record<string, (p: IconProps) => JSX.Element> = {
     <rect x="2" y="6" width="20" height="12" rx="2"/><circle cx="12" cy="12" r="2.5"/>
     <path d="M6 12h.01M18 12h.01"/>
   </>, p),
+  // Distributor portal + admin B2B sub-nav
+  catalogue: (p) => svg(<>
+    <path d="M6 2 3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4Z"/>
+    <path d="M3 6h18"/><path d="M16 10a4 4 0 0 1-8 0"/>
+  </>, p),
+  cart: (p) => svg(<>
+    <circle cx="9" cy="20" r="1.4"/><circle cx="18" cy="20" r="1.4"/>
+    <path d="M2 3h2.2l2.1 12.4a1.5 1.5 0 0 0 1.5 1.2h8.9a1.5 1.5 0 0 0 1.5-1.2L21 7H5.2"/>
+  </>, p),
+  orders: (p) => svg(<>
+    <path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/>
+    <path d="m3.3 7 8.7 5 8.7-5"/><path d="M12 22V12"/>
+  </>, p),
+  team: (p) => svg(<>
+    <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/>
+    <circle cx="9" cy="7" r="3.5"/>
+    <path d="M22 21v-2a4 4 0 0 0-3-3.85"/><path d="M16 3.5a4 4 0 0 1 0 7"/>
+  </>, p),
 }
 
 // Fallback: a generic grid square so an unmapped id never crashes.

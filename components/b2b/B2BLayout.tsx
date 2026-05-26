@@ -14,6 +14,7 @@ import React from 'react'
 import { useRouter } from 'next/router'
 import { getSupabase } from '../../lib/supabaseClient'
 import { useIsMobile } from '../../lib/useIsMobile'
+import { AppIcon } from '../../lib/AppIcons'
 
 const T = {
   bg:'#0d0f12', bg2:'#131519', bg3:'#1a1d23', bg4:'#21252d',
@@ -42,11 +43,13 @@ interface Props {
   cartCount?: number
 }
 
+// `icon` is an AppIcons name (lucide-style SVG) so the distributor
+// portal matches the staff launcher's look.
 const NAV_ITEMS: Array<{ id: ActiveNav; label: string; href: string; icon: string }> = [
-  { id: 'catalogue', label: 'Shop',   href: '/b2b/catalogue', icon: '🛍️' },
-  { id: 'cart',      label: 'Cart',   href: '/b2b/cart',      icon: '🛒' },
-  { id: 'orders',    label: 'Orders', href: '/b2b/orders',    icon: '📦' },
-  { id: 'team',      label: 'Team',   href: '/b2b/team',      icon: '👥' },
+  { id: 'catalogue', label: 'Shop',   href: '/b2b/catalogue', icon: 'catalogue' },
+  { id: 'cart',      label: 'Cart',   href: '/b2b/cart',      icon: 'cart' },
+  { id: 'orders',    label: 'Orders', href: '/b2b/orders',    icon: 'orders' },
+  { id: 'team',      label: 'Team',   href: '/b2b/team',      icon: 'team' },
 ]
 
 export default function B2BLayout({ user, active = null, children, cartCount }: Props) {
@@ -99,6 +102,7 @@ export default function B2BLayout({ user, active = null, children, cartCount }: 
                 key={item.id}
                 href={item.href}
                 active={active === item.id}
+                iconName={item.icon}
                 badge={item.id === 'cart' ? cartCount : undefined}>
                 {item.label === 'Shop' ? 'Catalogue' : item.label}
               </NavLink>
@@ -178,7 +182,7 @@ export default function B2BLayout({ user, active = null, children, cartCount }: 
                     color: on ? T.blue : T.text3,
                     position:'relative',
                   }}>
-                  <span style={{fontSize:20, lineHeight:1, opacity: on ? 1 : 0.85}}>{item.icon}</span>
+                  <span style={{lineHeight:1, opacity: on ? 1 : 0.85, display:'flex'}}><AppIcon name={item.icon} size={21}/></span>
                   <span style={{
                     fontSize:10, fontWeight: on ? 600 : 500,
                     letterSpacing:'0.02em',
@@ -215,12 +219,13 @@ export default function B2BLayout({ user, active = null, children, cartCount }: 
 }
 
 function NavLink({
-  href, active, disabled, badge, children,
+  href, active, disabled, badge, iconName, children,
 }: {
   href: string
   active?: boolean
   disabled?: boolean
   badge?: number
+  iconName?: string
   children: React.ReactNode
 }) {
   const style: React.CSSProperties = {
@@ -231,12 +236,13 @@ function NavLink({
     background: active ? T.bg3 : 'transparent',
     border: `1px solid ${active ? T.border2 : 'transparent'}`,
     textDecoration:'none',
-    display:'inline-flex', alignItems:'center', gap:6,
+    display:'inline-flex', alignItems:'center', gap:7,
     cursor: disabled ? 'not-allowed' : 'pointer',
     opacity: disabled ? 0.5 : 1,
   }
   const label = (
     <>
+      {iconName && <span style={{display:'flex', color: active ? T.blue : T.text3}}><AppIcon name={iconName} size={16}/></span>}
       {children}
       {badge != null && badge > 0 && (
         <span style={{

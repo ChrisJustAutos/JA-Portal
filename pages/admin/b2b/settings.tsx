@@ -6,6 +6,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import Head from 'next/head'
 import PortalTopBar from '../../../lib/PortalTopBar'
+import B2BAdminTabs from '../../../components/b2b/B2BAdminTabs'
 import { requirePageAuth } from '../../../lib/authServer'
 import type { UserRole } from '../../../lib/permissions'
 import FreightZonesManager from '../../../components/b2b/FreightZonesManager'
@@ -197,6 +198,7 @@ export default function B2BSettingsPage({ user }: Props) {
           currentUserEmail={user.email}
         />
         <main style={{flex:1,padding:'28px 32px',maxWidth:1100}}>
+          <B2BAdminTabs active="settings"/>
 
           {/* Breadcrumb header — same pattern as catalogue.tsx */}
           <header style={{marginBottom:18}}>

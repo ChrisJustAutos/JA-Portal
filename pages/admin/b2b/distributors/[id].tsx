@@ -11,6 +11,7 @@ import { useEffect, useState } from 'react'
 import Head from 'next/head'
 import { useRouter } from 'next/router'
 import PortalTopBar from '../../../../lib/PortalTopBar'
+import B2BAdminTabs from '../../../../components/b2b/B2BAdminTabs'
 import { requirePageAuth } from '../../../../lib/authServer'
 import type { UserRole } from '../../../../lib/permissions'
 
@@ -138,6 +139,7 @@ export default function DistributorDetailPage({ user }: Props) {
           currentUserEmail={user.email}
         />
         <main style={{flex:1,padding:'28px 32px',maxWidth:1100}}>
+          <B2BAdminTabs active="distributors"/>
 
           {/* Header */}
           <header style={{marginBottom:18}}>

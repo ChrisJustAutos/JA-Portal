@@ -12,6 +12,7 @@
 import { useEffect, useState, useMemo, useRef, useCallback } from 'react'
 import Head from 'next/head'
 import PortalTopBar from '../../../lib/PortalTopBar'
+import B2BAdminTabs from '../../../components/b2b/B2BAdminTabs'
 import { requirePageAuth } from '../../../lib/authServer'
 import { getSupabase } from '../../../lib/supabaseClient'
 import type { UserRole } from '../../../lib/permissions'
@@ -364,6 +365,7 @@ export default function CatalogueAdminPage({ user }: Props) {
           currentUserEmail={user.email}
         />
         <main style={{flex:1,padding:'28px 32px',maxWidth:1400}}>
+          <B2BAdminTabs active="catalogue"/>
 
           {/* Header */}
           <header style={{marginBottom:18,display:'flex',alignItems:'flex-end',justifyContent:'space-between',gap:16,flexWrap:'wrap'}}>
