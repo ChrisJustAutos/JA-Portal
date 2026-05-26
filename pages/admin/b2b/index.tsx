@@ -10,6 +10,7 @@ import { useEffect, useState } from 'react'
 import Head from 'next/head'
 import PortalTopBar from '../../../lib/PortalTopBar'
 import B2BAdminTabs from '../../../components/b2b/B2BAdminTabs'
+import { AppIcon } from '../../../lib/AppIcons'
 import { requirePageAuth } from '../../../lib/authServer'
 import type { UserRole } from '../../../lib/permissions'
 
@@ -173,7 +174,8 @@ export default function B2BHubPage({ user }: Props) {
           }}>
             <Card
               href="/admin/b2b/catalogue"
-              dot={T.teal}
+              icon="catalogue"
+              accent={T.teal}
               title="Catalogue"
               description="Set trade prices, upload images, control which items are visible to distributors."
               meta={settings?.settings.last_catalogue_sync_at
@@ -182,13 +184,15 @@ export default function B2BHubPage({ user }: Props) {
             />
             <Card
               href="/admin/b2b/distributors"
-              dot={T.blue}
+              icon="distributors"
+              accent={T.blue}
               title="Distributors"
               description="Add distributor accounts, link them to MYOB customers, manage their portal users."
             />
             <Card
               href="/admin/b2b/settings"
-              dot={T.purple}
+              icon="settings"
+              accent={T.purple}
               title="Settings"
               description="Invoice numbering, card surcharge rates, Stripe + MYOB configuration, Slack notifications."
               meta={settings?.next_invoice_number_preview
@@ -198,7 +202,8 @@ export default function B2BHubPage({ user }: Props) {
             />
             <Card
               href="/admin/b2b/orders"
-              dot={T.amber}
+              icon="orders"
+              accent={T.amber}
               title="Orders"
               description="Live orders dashboard with status transitions, refunds and shipping tracking."
             />
@@ -226,10 +231,11 @@ export default function B2BHubPage({ user }: Props) {
 }
 
 function Card({
-  href, dot, title, description, meta, warning, disabled,
+  href, icon, accent, title, description, meta, warning, disabled,
 }: {
   href: string | null
-  dot: string
+  icon: string
+  accent: string
   title: string
   description: string
   meta?: string
@@ -238,16 +244,22 @@ function Card({
 }) {
   const content = (
     <div style={{
-      display:'flex',flexDirection:'column',gap:8,height:'100%',
+      display:'flex',flexDirection:'column',gap:10,height:'100%',
       padding:'18px 20px',
       background:T.bg2,border:`1px solid ${warning ? T.amber + '60' : T.border}`,
-      borderRadius:10,
+      borderRadius:12,
       cursor: disabled ? 'not-allowed' : 'pointer',
       opacity: disabled ? 0.55 : 1,
       transition:'border-color 0.15s, transform 0.1s',
     }}>
-      <div style={{display:'flex',alignItems:'center',gap:10}}>
-        <div style={{width:10,height:10,borderRadius:'50%',background:dot,flexShrink:0}}/>
+      <div style={{display:'flex',alignItems:'center',gap:12}}>
+        <div style={{
+          width:42,height:42,borderRadius:11,flexShrink:0,
+          display:'flex',alignItems:'center',justifyContent:'center',
+          background:`${accent}1f`,color:accent,border:`1px solid ${accent}33`,
+        }}>
+          <AppIcon name={icon} size={22}/>
+        </div>
         <div style={{fontSize:14,fontWeight:600,color:T.text}}>{title}</div>
         {warning && <span style={{fontSize:14,color:T.amber}}>⚠</span>}
         {!disabled && <span style={{marginLeft:'auto',color:T.text3,fontSize:14}}>→</span>}
