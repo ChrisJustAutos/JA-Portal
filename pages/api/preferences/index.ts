@@ -31,7 +31,25 @@ const PATCHABLE_KEYS = new Set([
   'company_logo_url',
   'nav_groups',
   'app_labels',
+  'launcher_order',
 ])
+
+// Coerce + validate launcher_order: a flat list of cell id strings.
+function sanitizeLauncherOrder(input: any): { ok: true; value: string[] } | { ok: false; error: string } {
+  if (input == null) return { ok: true, value: [] }
+  if (!Array.isArray(input)) return { ok: false, error: 'launcher_order must be an array' }
+  if (input.length > 200) return { ok: false, error: 'too many entries (max 200)' }
+  const out: string[] = []
+  const seen = new Set<string>()
+  for (const it of input) {
+    if (typeof it !== 'string') continue
+    const id = it.trim().slice(0, 64)
+    if (!id || seen.has(id)) continue
+    seen.add(id)
+    out.push(id)
+  }
+  return { ok: true, value: out }
+}
 
 // Coerce + validate app_labels: a flat { appId: customLabel } map.
 function sanitizeAppLabels(input: any): { ok: true; value: Record<string, string> } | { ok: false; error: string } {
@@ -128,6 +146,12 @@ async function handler(req: NextApiRequest, res: NextApiResponse, user: any) {
       const result = sanitizeAppLabels(patch.app_labels)
       if (!result.ok) return res.status(400).json({ error: `app_labels: ${result.error}` })
       patch.app_labels = result.value
+    }
+
+    if ('launcher_order' in patch) {
+      const result = sanitizeLauncherOrder(patch.launcher_order)
+      if (!result.ok) return res.status(400).json({ error: `launcher_order: ${result.error}` })
+      patch.launcher_order = result.value
     }
 
     // Ensure row exists first (in case GET was never called)

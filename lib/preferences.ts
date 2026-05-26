@@ -46,6 +46,8 @@ export interface UserPreferences {
   nav_groups: NavGroup[]
   // Per-user launcher tile renames: app id → custom label. Missing = use default.
   app_labels: Record<string, string>
+  // Per-user launcher tile order: list of cell ids (app ids + folder ids).
+  launcher_order: string[]
 }
 
 export const DEFAULT_PREFERENCES: UserPreferences = {
@@ -61,6 +63,7 @@ export const DEFAULT_PREFERENCES: UserPreferences = {
   company_logo_url: null,
   nav_groups: [],
   app_labels: {},
+  launcher_order: [],
 }
 
 // Hex values for each accent option (used both for swatches in the picker and

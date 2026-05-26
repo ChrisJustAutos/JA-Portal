@@ -1,9 +1,12 @@
 // pages/home.tsx
 // Odoo-style app launcher — the portal's landing page. A grid of app
-// tiles, role-filtered, with search-as-you-type AND iPhone-style
-// folders: drag one app tile onto another to create a folder, drag a
-// tile onto a folder to add it. Folders persist per-user by reusing
-// the existing user_preferences.nav_groups store.
+// tiles, role-filtered, with search-as-you-type plus iPhone-style
+// gestures:
+//   - drag a tile onto the CENTRE of another → make/expand a folder
+//   - drag a tile onto the LEFT/RIGHT EDGE of another → reorder
+//   - "Edit names" mode → rename tiles inline
+// All of it persists per-user via user_preferences (nav_groups for
+// folders, app_labels for renames, launcher_order for arrangement).
 
 import { useMemo, useState, useCallback, useEffect } from 'react'
 import Head from 'next/head'
@@ -32,8 +35,13 @@ interface Props {
 
 function genGroupId(): string { return 'grp_' + Math.random().toString(36).slice(2, 10) }
 
-// What's currently being dragged.
-type Drag = { appId: string } | null
+type ResolvedFolder = { id: string; name: string; apps: LauncherApp[] }
+type Cell =
+  | { kind: 'folder'; id: string; folder: ResolvedFolder }
+  | { kind: 'app'; id: string; app: LauncherApp }
+
+type DropMode = 'before' | 'after' | 'merge'
+type Drag = { id: string; kind: 'app' | 'folder' } | null
 
 export default function HomePage({ user }: Props) {
   const router = useRouter()
@@ -41,7 +49,7 @@ export default function HomePage({ user }: Props) {
   const { prefs, update } = usePreferences()
   const [query, setQuery] = useState('')
   const [drag, setDrag] = useState<Drag>(null)
-  const [dragOverId, setDragOverId] = useState<string | null>(null)
+  const [dragOver, setDragOver] = useState<{ id: string; mode: DropMode } | null>(null)
   const [openFolderId, setOpenFolderId] = useState<string | null>(null)
   const [renaming, setRenaming] = useState(false)
   const [editMode, setEditMode] = useState(false)
@@ -52,8 +60,7 @@ export default function HomePage({ user }: Props) {
     return m
   }, [apps])
 
-  // Resolve folders against the visible app set; drop unknown ids.
-  const folders = useMemo(() => {
+  const folders: ResolvedFolder[] = useMemo(() => {
     return (prefs.nav_groups || []).map(g => ({
       id: g.id,
       name: g.name,
@@ -69,58 +76,122 @@ export default function HomePage({ user }: Props) {
 
   const ungrouped = useMemo(() => apps.filter(a => !groupedIds.has(a.id)), [apps, groupedIds])
 
+  // Unified, ordered list of grid cells. Default order is folders first,
+  // then apps; launcher_order (per-user) overrides it. Unlisted cells
+  // keep their default relative position, appended after listed ones.
+  const orderedCells: Cell[] = useMemo(() => {
+    const base: Cell[] = [
+      ...folders.map(f => ({ kind: 'folder' as const, id: f.id, folder: f })),
+      ...ungrouped.map(a => ({ kind: 'app' as const, id: a.id, app: a })),
+    ]
+    const order = prefs.launcher_order || []
+    const idx = new Map(order.map((id, i) => [id, i]))
+    return base
+      .map((c, i) => ({ c, i }))
+      .sort((a, b) => {
+        const ai = idx.has(a.c.id) ? (idx.get(a.c.id) as number) : Infinity
+        const bi = idx.has(b.c.id) ? (idx.get(b.c.id) as number) : Infinity
+        return ai !== bi ? ai - bi : a.i - b.i
+      })
+      .map(x => x.c)
+  }, [folders, ungrouped, prefs.launcher_order])
+
   const openFolder = folders.find(f => f.id === openFolderId) || null
 
   // Safety net: always clear drag state when any drag ends, even if the
-  // dragged tile unmounted mid-merge (its own onDragEnd wouldn't fire
-  // then, which previously left `drag` stuck and broke the next merge).
+  // dragged tile unmounted mid-merge (its own onDragEnd wouldn't fire).
   useEffect(() => {
-    const clear = () => { setDrag(null); setDragOverId(null) }
+    const clear = () => { setDrag(null); setDragOver(null) }
     window.addEventListener('dragend', clear)
     window.addEventListener('drop', clear)
     return () => { window.removeEventListener('dragend', clear); window.removeEventListener('drop', clear) }
   }, [])
 
   // ── Persistence helpers ───────────────────────────────────────────
-  const saveGroups = useCallback((next: NavGroup[]) => {
-    update({ nav_groups: next }).catch(() => {})
-  }, [update])
+  const saveGroups = useCallback((next: NavGroup[]) => { update({ nav_groups: next }).catch(() => {}) }, [update])
+  const saveOrder = useCallback((next: string[]) => { update({ launcher_order: next }).catch(() => {}) }, [update])
 
   function createFolder(targetAppId: string, draggedAppId: string) {
     if (targetAppId === draggedAppId) return
-    const g: NavGroup = { id: genGroupId(), name: 'Folder', collapsed: false, item_ids: [targetAppId, draggedAppId] }
-    // Strip the dragged/target ids out of any existing folder first.
-    const cleaned = (prefs.nav_groups || []).map(x => ({ ...x, item_ids: x.item_ids.filter(id => id !== targetAppId && id !== draggedAppId) }))
-    saveGroups([g, ...cleaned].filter(x => x.item_ids.length > 0))
+    const gid = genGroupId()
+    const g: NavGroup = { id: gid, name: 'Folder', collapsed: false, item_ids: [targetAppId, draggedAppId] }
+    const groups = [g, ...(prefs.nav_groups || []).map(x => ({ ...x, item_ids: x.item_ids.filter(id => id !== targetAppId && id !== draggedAppId) }))].filter(x => x.item_ids.length > 0)
+    // Drop the two merged app ids out of the order and slot the new
+    // folder where the target tile was, so it appears in place.
+    const ids = orderedCells.map(c => c.id)
+    const tpos = ids.indexOf(targetAppId)
+    const nextOrder = ids.filter(id => id !== targetAppId && id !== draggedAppId)
+    nextOrder.splice(tpos < 0 ? nextOrder.length : Math.min(tpos, nextOrder.length), 0, gid)
+    update({ nav_groups: groups, launcher_order: nextOrder }).catch(() => {})
   }
   function addToFolder(folderId: string, appId: string) {
     const next = (prefs.nav_groups || []).map(g => {
       if (g.id === folderId) return { ...g, item_ids: Array.from(new Set([...g.item_ids, appId])) }
-      // Remove from any other folder so an app lives in exactly one.
       return { ...g, item_ids: g.item_ids.filter(id => id !== appId) }
     })
     saveGroups(next.filter(g => g.item_ids.length > 0))
   }
   function removeFromFolder(folderId: string, appId: string) {
     let next = (prefs.nav_groups || []).map(g => g.id === folderId ? { ...g, item_ids: g.item_ids.filter(id => id !== appId) } : g)
-    // iOS behaviour: a folder with a single app left dissolves.
-    next = next.filter(g => g.item_ids.length >= 2)
+    next = next.filter(g => g.item_ids.length >= 2)   // dissolve singletons (iOS-style)
     saveGroups(next)
-    const stillThere = next.find(g => g.id === folderId)
-    if (!stillThere) setOpenFolderId(null)
+    if (!next.find(g => g.id === folderId)) setOpenFolderId(null)
   }
   function renameFolder(folderId: string, name: string) {
     const trimmed = name.trim().slice(0, 40) || 'Folder'
     saveGroups((prefs.nav_groups || []).map(g => g.id === folderId ? { ...g, name: trimmed } : g))
   }
-
-  // Per-user app rename. Blank or equal-to-default clears the override.
+  function reorder(draggedId: string, targetId: string, mode: 'before' | 'after') {
+    if (draggedId === targetId) return
+    const ids = orderedCells.map(c => c.id)
+    const from = ids.indexOf(draggedId); if (from < 0) return
+    ids.splice(from, 1)
+    let to = ids.indexOf(targetId); if (to < 0) return
+    if (mode === 'after') to += 1
+    ids.splice(to, 0, draggedId)
+    saveOrder(ids)
+  }
   function saveLabel(appId: string, name: string, defaultLabel: string) {
     const next = { ...(prefs.app_labels || {}) }
     const trimmed = name.trim().slice(0, 40)
     if (!trimmed || trimmed === defaultLabel) delete next[appId]
     else next[appId] = trimmed
     update({ app_labels: next }).catch(() => {})
+  }
+
+  // Which third of a tile is the cursor over → reorder vs merge.
+  function modeFor(e: React.DragEvent, targetKind: 'app' | 'folder'): DropMode {
+    const rect = e.currentTarget.getBoundingClientRect()
+    const x = e.clientX - rect.left
+    const w = rect.width || 1
+    // A dragged folder can't be merged into anything — reorder only.
+    if (drag?.kind === 'folder') return x < w / 2 ? 'before' : 'after'
+    if (x < w * 0.30) return 'before'
+    if (x > w * 0.70) return 'after'
+    return 'merge'
+  }
+
+  function handleCellDragOver(e: React.DragEvent, cell: Cell) {
+    if (!drag || drag.id === cell.id) return
+    e.preventDefault()
+    e.dataTransfer.dropEffect = 'move'
+    const mode = modeFor(e, cell.kind)
+    setDragOver(prev => (prev && prev.id === cell.id && prev.mode === mode) ? prev : { id: cell.id, mode })
+  }
+  function handleCellDrop(e: React.DragEvent, cell: Cell) {
+    e.preventDefault()
+    const d = drag
+    const ov = dragOver
+    setDrag(null); setDragOver(null)
+    if (!d || d.id === cell.id) return
+    const mode = ov && ov.id === cell.id ? ov.mode : modeFor(e, cell.kind)
+    if (mode === 'merge') {
+      if (cell.kind === 'folder') { if (d.kind === 'app') addToFolder(cell.id, d.id) }
+      else if (d.kind === 'app') createFolder(cell.id, d.id)
+      else reorder(d.id, cell.id, 'before')
+    } else {
+      reorder(d.id, cell.id, mode)
+    }
   }
 
   // ── Search (flat, folder-agnostic) ────────────────────────────────
@@ -142,6 +213,7 @@ export default function HomePage({ user }: Props) {
   }
 
   const greetingName = (user.displayName || user.email || '').split('@')[0].split(' ')[0]
+  const dropModeFor = (cellId: string): DropMode | undefined => (dragOver && dragOver.id === cellId && !!drag && drag.id !== cellId) ? dragOver.mode : undefined
 
   return (
     <>
@@ -164,7 +236,7 @@ export default function HomePage({ user }: Props) {
             {greetingName ? `Welcome back, ${greetingName}` : 'Welcome back'}
           </h1>
           <div style={{ fontSize: 14, color: T.text3, marginBottom: 26 }}>
-            Pick an app to get started. Drag one tile onto another to make a folder.
+            Drag a tile onto another to make a folder, or onto its left/right edge to reorder.
           </div>
 
           <input
@@ -181,46 +253,42 @@ export default function HomePage({ user }: Props) {
                 style={{ background: editMode ? T.accent : 'transparent', border: `1px solid ${editMode ? T.accent : T.border2}`, color: editMode ? '#fff' : T.text2, borderRadius: 8, padding: '6px 12px', fontSize: 12.5, fontFamily: 'inherit', cursor: 'pointer' }}>
                 {editMode ? 'Done' : '✎ Edit names'}
               </button>
-              {editMode && <span style={{ fontSize: 11.5, color: T.text3 }}>Type a new name on any tile. Drag-to-merge is paused while editing.</span>}
+              {editMode && <span style={{ fontSize: 11.5, color: T.text3 }}>Type a new name on any tile. Drag is paused while editing.</span>}
             </div>
           )}
 
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(132px, 1fr))', gap: 14 }}>
             {searching
-              ? searchResults.map(app => (
-                  <AppTile key={app.id} app={app} onClick={() => launch(app)}/>
-                ))
-              : (
-                <>
-                  {folders.map(f => (
-                    <FolderTile
-                      key={f.id}
-                      name={f.name}
-                      apps={f.apps}
-                      isDropTarget={dragOverId === f.id && !!drag}
-                      onOpen={() => { if (!drag) setOpenFolderId(f.id) }}
-                      onDragOver={(e) => { if (drag) { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; setDragOverId(f.id) } }}
-                      onDrop={(e) => { e.preventDefault(); const d = drag; setDrag(null); setDragOverId(null); if (d) addToFolder(f.id, d.appId) }}
-                    />
-                  ))}
-                  {ungrouped.map(app => (
-                    <AppTile
-                      key={app.id}
-                      app={app}
-                      draggable={!editMode}
-                      editMode={editMode}
-                      onCommitRename={(name) => saveLabel(app.id, name, app.defaultLabel)}
-                      isDragging={drag?.appId === app.id}
-                      isDropTarget={dragOverId === app.id && !!drag && drag.appId !== app.id}
-                      onClick={() => { if (!drag) launch(app) }}
-                      onDragStart={(e) => { e.dataTransfer.setData('text/plain', app.id); e.dataTransfer.effectAllowed = 'move'; setDrag({ appId: app.id }) }}
-                      onDragEnd={() => { setDrag(null); setDragOverId(null) }}
-                      onDragOver={(e) => { if (drag && drag.appId !== app.id) { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; setDragOverId(app.id) } }}
-                      onDrop={(e) => { e.preventDefault(); const d = drag; setDrag(null); setDragOverId(null); if (d && d.appId !== app.id) createFolder(app.id, d.appId) }}
-                    />
-                  ))}
-                </>
-              )}
+              ? searchResults.map(app => (<AppTile key={app.id} app={app} onClick={() => launch(app)}/>))
+              : orderedCells.map(cell => cell.kind === 'folder' ? (
+                  <FolderTile
+                    key={cell.id}
+                    name={cell.folder.name}
+                    apps={cell.folder.apps}
+                    draggable={!editMode}
+                    dropMode={dropModeFor(cell.id)}
+                    onOpen={() => { if (!drag) setOpenFolderId(cell.id) }}
+                    onDragStart={(e) => { e.dataTransfer.setData('text/plain', cell.id); e.dataTransfer.effectAllowed = 'move'; setDrag({ id: cell.id, kind: 'folder' }) }}
+                    onDragEnd={() => { setDrag(null); setDragOver(null) }}
+                    onDragOver={(e) => handleCellDragOver(e, cell)}
+                    onDrop={(e) => handleCellDrop(e, cell)}
+                  />
+                ) : (
+                  <AppTile
+                    key={cell.id}
+                    app={cell.app}
+                    draggable={!editMode}
+                    editMode={editMode}
+                    onCommitRename={(name) => saveLabel(cell.app.id, name, cell.app.defaultLabel)}
+                    isDragging={drag?.id === cell.id}
+                    dropMode={dropModeFor(cell.id)}
+                    onClick={() => { if (!drag) launch(cell.app) }}
+                    onDragStart={(e) => { e.dataTransfer.setData('text/plain', cell.id); e.dataTransfer.effectAllowed = 'move'; setDrag({ id: cell.id, kind: 'app' }) }}
+                    onDragEnd={() => { setDrag(null); setDragOver(null) }}
+                    onDragOver={(e) => handleCellDragOver(e, cell)}
+                    onDrop={(e) => handleCellDrop(e, cell)}
+                  />
+                ))}
           </div>
           {searching && searchResults.length === 0 && (
             <div style={{ color: T.text3, fontSize: 13, textAlign: 'center', padding: 28 }}>No apps match “{query}”.</div>
@@ -270,16 +338,21 @@ export default function HomePage({ user }: Props) {
   )
 }
 
+// ── Insertion bar shown on a tile edge during a reorder drag ──────────
+function InsertBar({ side }: { side: 'left' | 'right' }) {
+  return <div style={{ position: 'absolute', top: 4, bottom: 4, [side]: -9, width: 3, borderRadius: 2, background: T.accent, boxShadow: `0 0 6px ${T.accent}` }}/>
+}
+
 // ── Tiles ────────────────────────────────────────────────────────────
 function AppTile({
-  app, onClick, draggable, isDragging, isDropTarget, editMode, onCommitRename,
+  app, onClick, draggable, isDragging, dropMode, editMode, onCommitRename,
   onDragStart, onDragEnd, onDragOver, onDrop,
 }: {
   app: LauncherApp
   onClick: () => void
   draggable?: boolean
   isDragging?: boolean
-  isDropTarget?: boolean
+  dropMode?: DropMode
   editMode?: boolean
   onCommitRename?: (name: string) => void
   onDragStart?: (e: React.DragEvent) => void
@@ -288,6 +361,7 @@ function AppTile({
   onDrop?: (e: React.DragEvent) => void
 }) {
   const isCustom = app.label !== app.defaultLabel
+  const merging = dropMode === 'merge'
   return (
     <div
       draggable={draggable}
@@ -301,16 +375,18 @@ function AppTile({
         display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10,
         padding: '22px 12px',
         background: T.bg2,
-        border: `1px solid ${isDropTarget ? app.accent : T.border}`,
+        border: `1px solid ${merging ? app.accent : T.border}`,
         borderRadius: 14, cursor: editMode ? 'default' : 'pointer',
         opacity: isDragging ? 0.4 : 1,
-        boxShadow: isDropTarget ? `0 0 0 2px ${app.accent}55` : 'none',
+        boxShadow: merging ? `0 0 0 2px ${app.accent}55` : 'none',
         transition: 'transform 0.12s ease, border-color 0.12s ease, box-shadow 0.12s ease',
         userSelect: 'none',
       }}
-      onMouseEnter={e => { if (!isDropTarget && !editMode) e.currentTarget.style.transform = 'translateY(-3px)' }}
+      onMouseEnter={e => { if (!dropMode && !editMode) e.currentTarget.style.transform = 'translateY(-3px)' }}
       onMouseLeave={e => { e.currentTarget.style.transform = 'translateY(0)' }}
     >
+      {dropMode === 'before' && <InsertBar side="left"/>}
+      {dropMode === 'after' && <InsertBar side="right"/>}
       <div style={{ width: 60, height: 60, borderRadius: 14, display: 'flex', alignItems: 'center', justifyContent: 'center', background: `${app.accent}1f`, color: app.accent, border: `1px solid ${app.accent}33`, pointerEvents: 'none' }}>
         <AppIcon name={app.id} size={34}/>
       </div>
@@ -341,19 +417,26 @@ function AppTile({
 }
 
 function FolderTile({
-  name, apps, isDropTarget, onOpen, onDragOver, onDrop,
+  name, apps, draggable, dropMode, onOpen, onDragStart, onDragEnd, onDragOver, onDrop,
 }: {
   name: string
   apps: LauncherApp[]
-  isDropTarget?: boolean
+  draggable?: boolean
+  dropMode?: DropMode
   onOpen: () => void
+  onDragStart?: (e: React.DragEvent) => void
+  onDragEnd?: () => void
   onDragOver?: (e: React.DragEvent) => void
   onDrop?: (e: React.DragEvent) => void
 }) {
   const preview = apps.slice(0, 4)
+  const merging = dropMode === 'merge'
   return (
     <div
+      draggable={draggable}
       onClick={onOpen}
+      onDragStart={onDragStart}
+      onDragEnd={onDragEnd}
       onDragOver={onDragOver}
       onDrop={onDrop}
       style={{
@@ -361,15 +444,17 @@ function FolderTile({
         display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10,
         padding: '22px 12px',
         background: T.bg2,
-        border: `1px solid ${isDropTarget ? T.accent : T.border}`,
+        border: `1px solid ${merging ? T.accent : T.border}`,
         borderRadius: 14, cursor: 'pointer',
-        boxShadow: isDropTarget ? `0 0 0 2px ${T.accent}55` : 'none',
+        boxShadow: merging ? `0 0 0 2px ${T.accent}55` : 'none',
         transition: 'transform 0.12s ease, border-color 0.12s ease',
         userSelect: 'none',
       }}
-      onMouseEnter={e => { e.currentTarget.style.transform = 'translateY(-3px)' }}
+      onMouseEnter={e => { if (!dropMode) e.currentTarget.style.transform = 'translateY(-3px)' }}
       onMouseLeave={e => { e.currentTarget.style.transform = 'translateY(0)' }}
     >
+      {dropMode === 'before' && <InsertBar side="left"/>}
+      {dropMode === 'after' && <InsertBar side="right"/>}
       {/* iOS-style mini 2x2 preview */}
       <div style={{ width: 60, height: 60, borderRadius: 14, background: T.bg4, border: `1px solid ${T.border2}`, padding: 7, display: 'grid', gridTemplateColumns: '1fr 1fr', gridTemplateRows: '1fr 1fr', gap: 4, pointerEvents: 'none' }}>
         {preview.map(a => (
