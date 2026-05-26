@@ -87,6 +87,19 @@ export interface ExtractionResult {
   rawOutput: string                  // for debugging
 }
 
+// Image media types Claude accepts natively. HEIC/HEIF aren't on this
+// list — staff is told to convert before resending. Order doesn't
+// matter; the set is matched against the Graph attachment's contentType.
+export type SupportedImageMediaType =
+  | 'image/jpeg'
+  | 'image/png'
+  | 'image/gif'
+  | 'image/webp'
+
+export const SUPPORTED_IMAGE_MEDIA_TYPES: readonly SupportedImageMediaType[] = [
+  'image/jpeg', 'image/png', 'image/gif', 'image/webp',
+]
+
 /**
  * Parse a supplier invoice PDF using Claude.
  *
@@ -96,6 +109,28 @@ export interface ExtractionResult {
  *                   total_inc_gst are missing (no anchor to trust the rest).
  */
 export async function extractInvoiceFromPdf(pdfBase64: string): Promise<ExtractionResult> {
+  return runExtraction([
+    { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: pdfBase64 } },
+    { type: 'text', text: 'Extract the supplier invoice details as JSON per the system instructions. Output ONLY the JSON object.' },
+  ])
+}
+
+/**
+ * Parse a supplier invoice image (JPG/PNG/GIF/WebP photo or scan) using
+ * Claude. Same return shape as extractInvoiceFromPdf — used when an
+ * email arrives with a phone snap of the invoice instead of a PDF.
+ */
+export async function extractInvoiceFromImage(
+  imageBase64: string,
+  mediaType: SupportedImageMediaType,
+): Promise<ExtractionResult> {
+  return runExtraction([
+    { type: 'image', source: { type: 'base64', media_type: mediaType, data: imageBase64 } },
+    { type: 'text', text: 'Extract the supplier invoice details as JSON per the system instructions. Output ONLY the JSON object.' },
+  ])
+}
+
+async function runExtraction(content: any[]): Promise<ExtractionResult> {
   const apiKey = process.env.ANTHROPIC_API_KEY
   if (!apiKey) throw new Error('ANTHROPIC_API_KEY not configured')
 
@@ -105,15 +140,7 @@ export async function extractInvoiceFromPdf(pdfBase64: string): Promise<Extracti
     model,
     max_tokens: 4096,
     system: buildSystemPrompt(),
-    messages: [
-      {
-        role: 'user',
-        content: [
-          { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: pdfBase64 } },
-          { type: 'text', text: 'Extract the supplier invoice details as JSON per the system instructions. Output ONLY the JSON object.' },
-        ],
-      },
-    ],
+    messages: [{ role: 'user', content }],
   }
 
   const r = await fetch(ANTHROPIC_API_URL, {

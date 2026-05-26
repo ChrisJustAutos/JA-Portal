@@ -52,6 +52,10 @@ export interface InvoiceInsertInput {
   pdfFilename: string
   extracted: ExtractedAPInvoice
   rawExtraction: any
+  // Storage path extension. Defaults to 'pdf' (legacy callers stay
+  // working unchanged). Image-sourced invoices set this to 'jpg', 'png'
+  // etc. so the signed URL serves the file with a sensible filename.
+  fileExtension?: string
 }
 
 export interface InsertedInvoice {
@@ -104,7 +108,8 @@ export async function insertInvoiceWithLines(input: InvoiceInsertInput): Promise
   if (err || !row) throw new Error(`ap_invoices insert failed: ${err?.message}`)
 
   const invoiceId = row.id as string
-  const pdfStoragePath = `${invoiceId}.pdf`
+  const ext = (input.fileExtension || 'pdf').replace(/^\.+/, '').toLowerCase()
+  const pdfStoragePath = `${invoiceId}.${ext}`
 
   if (e.lineItems.length > 0) {
     const linesPayload = e.lineItems.map(li => ({
@@ -133,12 +138,16 @@ export async function insertInvoiceWithLines(input: InvoiceInsertInput): Promise
 
 // ── PDF storage ────────────────────────────────────────────────────────
 
-export async function uploadInvoicePdf(pdfStoragePath: string, pdfBytes: Buffer): Promise<void> {
+export async function uploadInvoicePdf(
+  pdfStoragePath: string,
+  pdfBytes: Buffer,
+  contentType: string = 'application/pdf',
+): Promise<void> {
   const c = sb()
   const { error } = await c.storage
     .from(STORAGE_BUCKET)
     .upload(pdfStoragePath, pdfBytes, {
-      contentType: 'application/pdf',
+      contentType,
       upsert: true,
     })
   if (error) throw new Error(`PDF upload to ${pdfStoragePath} failed: ${error.message}`)
