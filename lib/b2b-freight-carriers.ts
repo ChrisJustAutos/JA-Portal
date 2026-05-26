@@ -8,7 +8,7 @@
 // /api/b2b/admin/freight-carriers endpoints are provider-agnostic and
 // will pick the new entry up automatically.
 
-export type ProviderId = 'shippit' | 'starshipit' | 'auspost' | 'sendle'
+export type ProviderId = 'shippit' | 'starshipit' | 'auspost' | 'sendle' | 'machship'
 export type Environment = 'live' | 'sandbox'
 
 export interface CredentialField {
@@ -193,6 +193,47 @@ async function testSendle(creds: Record<string, string>, env: Environment): Prom
   }
 }
 
+// MachShip — REST API at live.machship.com. Auth is a custom header
+// (`token: <api_token>`), not Bearer. There is no separate sandbox host;
+// test vs live is a property of the API user the token was minted on.
+// /apiv2/authenticate/ping is the documented credential-check endpoint —
+// returns 200 { object: true, errors: null } on success, 401 otherwise.
+async function testMachShip(creds: Record<string, string>, _env: Environment): Promise<TestResult> {
+  const apiToken = creds.api_token?.trim()
+  if (!apiToken) return { ok: false, message: 'API token is required' }
+  const r = await fetch('https://live.machship.com/apiv2/authenticate/ping', {
+    method: 'POST',
+    headers: {
+      'token':        apiToken,
+      'Content-Type': 'application/json',
+      'Accept':       'application/json',
+    },
+  })
+  const text = await r.text()
+  let body: any = null
+  try { body = JSON.parse(text) } catch {}
+  if (!r.ok) {
+    return {
+      ok: false,
+      message: `MachShip replied ${r.status}: ${body?.errors?.[0]?.message || body?.error || text.slice(0, 200) || 'no body'}`,
+      detail: { status: r.status, body },
+    }
+  }
+  const errs = Array.isArray(body?.errors) ? body.errors : null
+  if (errs && errs.length > 0) {
+    return {
+      ok: false,
+      message: `MachShip rejected the token: ${errs[0]?.message || 'see detail'}`,
+      detail: { body },
+    }
+  }
+  return {
+    ok: true,
+    message: 'Connected',
+    detail: { object: body?.object },
+  }
+}
+
 // ─── Registry ───────────────────────────────────────────────────────
 
 export const PROVIDERS: Record<ProviderId, ProviderDef> = {
@@ -244,9 +285,20 @@ export const PROVIDERS: Record<ProviderId, ProviderDef> = {
     ],
     testConnection: testSendle,
   },
+  machship: {
+    id: 'machship',
+    label: 'MachShip',
+    blurb: 'AU multi-carrier aggregator. Single token; live vs test mode is set on the API user that minted it.',
+    docsUrl: 'https://developers.live.machship.com',
+    environments: ['live'],
+    fields: [
+      { key: 'api_token', label: 'API token', hint: 'MachShip → Settings → API Users & Tokens.', type: 'secret', required: true },
+    ],
+    testConnection: testMachShip,
+  },
 }
 
-export const PROVIDER_ORDER: ProviderId[] = ['shippit', 'starshipit', 'auspost', 'sendle']
+export const PROVIDER_ORDER: ProviderId[] = ['shippit', 'starshipit', 'auspost', 'sendle', 'machship']
 
 export function getProvider(id: string): ProviderDef | null {
   return (PROVIDERS as any)[id] || null
