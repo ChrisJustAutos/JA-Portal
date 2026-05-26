@@ -14,6 +14,8 @@
     "pages/api/admin/setup-graph-subscriptions.ts": { "maxDuration": 60 },
     "pages/api/cron/renew-graph-subscriptions.ts":  { "maxDuration": 60 },
     "pages/api/cron/bank-payments-slack.ts":        { "maxDuration": 120 },
+    "pages/api/cron/b2b-freight-poll.ts":            { "maxDuration": 120 },
+    "pages/api/b2b/admin/orders/[id]/book-freight.ts": { "maxDuration": 60 },
     "pages/api/stripe-myob/list.ts":                { "maxDuration": 60 },
     "pages/api/stripe-myob/push.ts":                { "maxDuration": 120 },
     "pages/api/stripe-myob/sync.ts":                { "maxDuration": 300 },
@@ -40,6 +42,10 @@
     {
       "path": "/api/cron/health-check",
       "schedule": "*/5 * * * *"
+    },
+    {
+      "path": "/api/cron/b2b-freight-poll",
+      "schedule": "*/30 * * * *"
     }
   ]
 }

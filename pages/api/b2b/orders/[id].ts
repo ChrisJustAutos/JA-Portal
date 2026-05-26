@@ -43,7 +43,11 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, use
     .select(`
       id, order_number, status, distributor_id, placed_by_user_id,
       subtotal_ex_gst, gst, card_fee_inc, total_inc, currency,
-      created_at, paid_at,
+      created_at, paid_at, shipped_at, delivered_at,
+      carrier, tracking_number, tracking_url,
+      freight_method_label, freight_service_label, freight_cost_ex_gst,
+      machship_consignment_number, freight_eta_at, freight_status,
+      tracking_page_access_token,
       stripe_checkout_session_id, stripe_payment_intent_id,
       myob_invoice_uid, myob_invoice_number, myob_written_at, myob_write_error,
       lines:b2b_order_lines!b2b_order_lines_order_id_fkey (
@@ -89,11 +93,28 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, use
       status: order.status,
       placed_at: order.created_at,
       paid_at: order.paid_at,
+      shipped_at: order.shipped_at,
+      delivered_at: order.delivered_at,
       currency: order.currency,
       subtotal_ex_gst: order.subtotal_ex_gst,
       gst: order.gst,
       card_fee_inc: order.card_fee_inc,
       total_inc: order.total_inc,
+      // Shipping — distributor-safe subset. The tracking page URL is
+      // built on the fly from MachShip's per-consignment access token
+      // so we never leak the consignment id itself.
+      shipping: {
+        carrier:             order.freight_service_label || order.carrier || null,
+        method_label:        order.freight_method_label || null,
+        tracking_number:     order.tracking_number || null,
+        tracking_url:        order.tracking_page_access_token
+                               ? `https://live.machship.com/track/${encodeURIComponent(order.tracking_page_access_token)}`
+                               : (order.tracking_url || null),
+        consignment_number:  order.machship_consignment_number || null,
+        eta_at:              order.freight_eta_at || null,
+        status:              order.freight_status || null,
+        freight_cost_ex_gst: order.freight_cost_ex_gst != null ? Number(order.freight_cost_ex_gst) : null,
+      },
       stripe: {
         checkout_session_id: order.stripe_checkout_session_id,
         payment_intent_id: order.stripe_payment_intent_id,

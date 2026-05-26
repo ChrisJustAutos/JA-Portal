@@ -38,6 +38,10 @@ export default withAuth('edit:b2b_distributors', async (req: NextApiRequest, res
         myob_invoice_number_prefix, myob_invoice_number_padding, myob_invoice_number_seq,
         myob_credit_note_number_prefix, myob_credit_note_number_padding, myob_credit_note_number_seq,
         slack_new_order_webhook_url,
+        freight_markup_percent,
+        machship_from_name, machship_from_company, machship_from_phone, machship_from_email,
+        machship_from_address_line1, machship_from_address_line2,
+        machship_from_suburb, machship_from_postcode, machship_from_state,
         last_catalogue_sync_at, last_catalogue_sync_added, last_catalogue_sync_updated, last_catalogue_sync_error,
         updated_at, updated_by
       `)
@@ -126,6 +130,48 @@ export default withAuth('edit:b2b_distributors', async (req: NextApiRequest, res
       const u = String(body.slack_new_order_webhook_url || '').trim()
       if (u && !u.startsWith('https://hooks.slack.com/')) issues.push('Slack webhook URL must start with https://hooks.slack.com/')
       else update.slack_new_order_webhook_url = u || null
+    }
+
+    // ── Freight markup ──
+    // MachShip's totalSellPrice is grossed up by this % before it's
+    // shown to the distributor at checkout. 0–200% allowed; the column
+    // CHECK constraint enforces the same.
+    if ('freight_markup_percent' in body) {
+      const v = Number(body.freight_markup_percent)
+      if (!isFinite(v) || v < 0 || v > 200) issues.push('Freight markup % must be between 0 and 200')
+      else update.freight_markup_percent = v
+    }
+
+    // ── MachShip sender (pickup) address ──
+    // Single configured pickup used for every booking. Each field is
+    // free text up to 200 chars; phone is loose-validated to digits/
+    // spaces/+/(), email format is lightly checked. All nullable.
+    const SENDER_TEXT_FIELDS = [
+      'machship_from_name', 'machship_from_company',
+      'machship_from_address_line1', 'machship_from_address_line2',
+      'machship_from_suburb', 'machship_from_state',
+    ] as const
+    for (const k of SENDER_TEXT_FIELDS) {
+      if (k in body) {
+        const v = String(body[k] ?? '').trim()
+        if (v.length > 200) issues.push(`${k} must be ≤ 200 chars`)
+        else update[k] = v || null
+      }
+    }
+    if ('machship_from_phone' in body) {
+      const v = String(body.machship_from_phone ?? '').trim()
+      if (v.length > 0 && !/^[\d+\-\s()]{6,}$/.test(v)) issues.push('Sender phone looks invalid')
+      else update.machship_from_phone = v || null
+    }
+    if ('machship_from_email' in body) {
+      const v = String(body.machship_from_email ?? '').trim()
+      if (v.length > 0 && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v)) issues.push('Sender email looks invalid')
+      else update.machship_from_email = v || null
+    }
+    if ('machship_from_postcode' in body) {
+      const v = String(body.machship_from_postcode ?? '').trim()
+      if (v.length > 0 && !/^\d{4}$/.test(v)) issues.push('Sender postcode must be 4 digits')
+      else update.machship_from_postcode = v || null
     }
 
     // Cross-field validation: prefix + padding ≤ 13 (MYOB cap) for both streams

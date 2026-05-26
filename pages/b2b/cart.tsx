@@ -80,11 +80,29 @@ interface FreightRateOption {
   label: string
   price_ex_gst: number
   transit_days: number | null
+  source: 'machship' | 'static'
+  // Live MachShip rates carry the route metadata so checkout/start can
+  // persist the chosen carrier+service against the order.
+  machship?: {
+    carrierId: number
+    carrierServiceId: number
+    companyCarrierAccountId?: number
+    routeSnapshot: any
+  }
+  eta_utc?: string | null
+  base_price_ex_gst?: number
+  markup_pct?: number
 }
-interface FreightQuote {
-  zone: { id: string; name: string }
+
+interface FreightPayload {
+  postcode: string
+  suburb:   string | null
+  mode: 'live' | 'static' | 'blocked' | 'no_zone'
   rates: FreightRateOption[]
+  blocked?: { reason: string; missing: Array<{ sku: string; name: string; missing_fields: string[] }> }
+  zone?:    { id: string; name: string } | null
 }
+
 interface CartResponse {
   cart_id: string
   lines: CartLine[]
@@ -92,7 +110,7 @@ interface CartResponse {
   item_count: number
   totals: CartTotals
   card_fee: { pct: number; fixed: number; note: string }
-  freight: { postcode: string; quote: FreightQuote | null } | null
+  freight: FreightPayload | null
 }
 
 export default function B2BCartPage({ b2bUser }: Props) {
@@ -112,11 +130,11 @@ export default function B2BCartPage({ b2bUser }: Props) {
   // a real freight cost from the moment the cart loads. User can change.
   useEffect(() => {
     if (selectedFreightId) return
-    const rates = data?.freight?.quote?.rates
+    const rates = data?.freight?.rates
     if (!rates || rates.length === 0) return
     const cheapest = [...rates].sort((a, b) => a.price_ex_gst - b.price_ex_gst)[0]
     if (cheapest) setSelectedFreightId(cheapest.id)
-  }, [data?.freight?.quote, selectedFreightId])
+  }, [data?.freight, selectedFreightId])
 
   const cancelledOrderId = router.query.cancelled ? String(router.query.cancelled) : null
 
@@ -179,13 +197,30 @@ export default function B2BCartPage({ b2bUser }: Props) {
     setCheckoutError(null)
     setCheckoutIssues(null)
     try {
+      // Live MachShip rates carry a synthetic id (`ms:carrierId:serviceId`)
+      // and we hand the full route snapshot back to the server so it can
+      // book the exact quote the distributor saw. Static zone rates just
+      // pass the rate uuid as before.
+      const chosenRate = (data?.freight?.rates || []).find(r => r.id === selectedFreightId)
+      const machshipRoute = chosenRate?.source === 'machship' ? {
+        carrierId:                chosenRate.machship?.carrierId,
+        carrierServiceId:         chosenRate.machship?.carrierServiceId,
+        companyCarrierAccountId:  chosenRate.machship?.companyCarrierAccountId,
+        label:                    chosenRate.label,
+        price_ex_gst:             chosenRate.price_ex_gst,
+        base_price_ex_gst:        chosenRate.base_price_ex_gst,
+        markup_pct:               chosenRate.markup_pct,
+        eta_utc:                  chosenRate.eta_utc,
+        route_snapshot:           chosenRate.machship?.routeSnapshot,
+      } : undefined
       const r = await fetch('/api/b2b/checkout/start', {
         method: 'POST',
         credentials: 'same-origin',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           customer_po: customerPo.trim() || undefined,
-          freight_rate_id: selectedFreightId || undefined,
+          freight_rate_id: chosenRate?.source === 'static' ? selectedFreightId : undefined,
+          freight_machship_route: machshipRoute,
         }),
       })
       const j = await r.json()
@@ -295,7 +330,13 @@ export default function B2BCartPage({ b2bUser }: Props) {
               onCustomerPoChange={setCustomerPo}
               onCheckout={startCheckout}
               checkoutBusy={checkoutBusy}
-              blockedReason={anyLineOverCap ? 'One or more items exceed the available qty or per-order max — adjust your cart to continue.' : null}
+              blockedReason={
+                anyLineOverCap
+                  ? 'One or more items exceed the available qty or per-order max — adjust your cart to continue.'
+                  : data.freight?.mode === 'blocked'
+                    ? (data.freight.blocked?.reason || 'Freight quote unavailable for this cart — contact your account manager.')
+                    : null
+              }
               freight={data.freight}
               selectedFreightId={selectedFreightId}
               onSelectFreight={setSelectedFreightId}
@@ -470,11 +511,11 @@ function TotalsPanel({
   onCheckout: () => void
   checkoutBusy: boolean
   blockedReason: string | null
-  freight: { postcode: string; quote: FreightQuote | null } | null
+  freight: FreightPayload | null
   selectedFreightId: string | null
   onSelectFreight: (id: string | null) => void
 }) {
-  const selectedFreight = freight?.quote?.rates.find(r => r.id === selectedFreightId) || null
+  const selectedFreight = freight?.rates.find(r => r.id === selectedFreightId) || null
   const freightExGst = selectedFreight ? Number(selectedFreight.price_ex_gst) : 0
   const freightGst = freightExGst * 0.10
   const freightInc = freightExGst + freightGst
@@ -524,12 +565,38 @@ function TotalsPanel({
       {/* Freight picker */}
       {freight && (
         <div style={{marginTop:14, paddingTop:12, borderTop:`1px solid ${T.border}`}}>
-          <div style={{fontSize:10,color:T.text2,textTransform:'uppercase',letterSpacing:'0.06em',marginBottom:6,fontWeight:500}}>
-            Shipping to {freight.postcode}
+          <div style={{display:'flex', alignItems:'baseline', justifyContent:'space-between', marginBottom:6}}>
+            <div style={{fontSize:10,color:T.text2,textTransform:'uppercase',letterSpacing:'0.06em',fontWeight:500}}>
+              Shipping to {freight.postcode}
+            </div>
+            {freight.mode === 'live' && (
+              <span title="Quoted live from MachShip" style={{fontSize:9,color:T.teal,fontWeight:600,letterSpacing:'0.05em'}}>LIVE</span>
+            )}
+            {freight.mode === 'static' && (
+              <span title="Postcode-zone fallback rate" style={{fontSize:9,color:T.text3,fontWeight:600,letterSpacing:'0.05em'}}>EST</span>
+            )}
           </div>
-          {freight.quote && freight.quote.rates.length > 0 ? (
+          {freight.mode === 'blocked' ? (
+            <div style={{fontSize:11, color:T.red, lineHeight:1.5}}>
+              <div style={{fontWeight:600, marginBottom:4}}>Freight quote unavailable</div>
+              <div style={{color:T.text2}}>
+                {freight.blocked?.reason || 'Some items in your cart are missing shipping dimensions.'}
+              </div>
+              {freight.blocked?.missing && freight.blocked.missing.length > 0 && (
+                <ul style={{margin:'6px 0 0', paddingLeft:18, color:T.text3, fontSize:10}}>
+                  {freight.blocked.missing.slice(0, 6).map(m => (
+                    <li key={m.sku}>{m.sku} — {m.name} <span style={{color:T.text3}}>(needs {m.missing_fields.join(', ')})</span></li>
+                  ))}
+                  {freight.blocked.missing.length > 6 && (
+                    <li style={{listStyle:'none', color:T.text3}}>… and {freight.blocked.missing.length - 6} more</li>
+                  )}
+                </ul>
+              )}
+              <div style={{marginTop:6, color:T.text3, fontSize:10}}>Contact your account manager to get this sorted.</div>
+            </div>
+          ) : freight.rates.length > 0 ? (
             <div style={{display:'flex', flexDirection:'column', gap:6}}>
-              {freight.quote.rates.map(r => {
+              {freight.rates.map(r => {
                 const on = selectedFreightId === r.id
                 return (
                   <label key={r.id} style={{

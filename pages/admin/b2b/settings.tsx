@@ -44,6 +44,16 @@ interface Settings {
   myob_credit_note_number_padding: number
   myob_credit_note_number_seq: number
   slack_new_order_webhook_url: string | null
+  freight_markup_percent: number
+  machship_from_name: string | null
+  machship_from_company: string | null
+  machship_from_phone: string | null
+  machship_from_email: string | null
+  machship_from_address_line1: string | null
+  machship_from_address_line2: string | null
+  machship_from_suburb: string | null
+  machship_from_postcode: string | null
+  machship_from_state: string | null
   last_catalogue_sync_at: string | null
   last_catalogue_sync_added: number | null
   last_catalogue_sync_updated: number | null
@@ -78,6 +88,17 @@ export default function B2BSettingsPage({ user }: Props) {
   const [feePct, setFeePct]   = useState(0)
   const [feeFixed, setFeeFixed] = useState(0)
   const [slackUrl, setSlackUrl] = useState('')
+  // Freight (MachShip): admin-settable markup % + sender pickup address
+  const [freightMarkup, setFreightMarkup] = useState<number>(20)
+  const [msFromName,    setMsFromName]    = useState('')
+  const [msFromCompany, setMsFromCompany] = useState('')
+  const [msFromPhone,   setMsFromPhone]   = useState('')
+  const [msFromEmail,   setMsFromEmail]   = useState('')
+  const [msFromAddr1,   setMsFromAddr1]   = useState('')
+  const [msFromAddr2,   setMsFromAddr2]   = useState('')
+  const [msFromSuburb,  setMsFromSuburb]  = useState('')
+  const [msFromPost,    setMsFromPost]    = useState('')
+  const [msFromState,   setMsFromState]   = useState('')
 
   async function load() {
     setLoading(true); setError(null)
@@ -95,6 +116,16 @@ export default function B2BSettingsPage({ user }: Props) {
       setFeePct(Number(j.settings.card_fee_percent || 0.017))
       setFeeFixed(Number(j.settings.card_fee_fixed || 0.30))
       setSlackUrl(j.settings.slack_new_order_webhook_url || '')
+      setFreightMarkup(Number(j.settings.freight_markup_percent ?? 20))
+      setMsFromName(j.settings.machship_from_name || '')
+      setMsFromCompany(j.settings.machship_from_company || '')
+      setMsFromPhone(j.settings.machship_from_phone || '')
+      setMsFromEmail(j.settings.machship_from_email || '')
+      setMsFromAddr1(j.settings.machship_from_address_line1 || '')
+      setMsFromAddr2(j.settings.machship_from_address_line2 || '')
+      setMsFromSuburb(j.settings.machship_from_suburb || '')
+      setMsFromPost(j.settings.machship_from_postcode || '')
+      setMsFromState(j.settings.machship_from_state || '')
     } catch (e: any) {
       setError(e?.message || String(e))
     } finally {
@@ -402,8 +433,83 @@ export default function B2BSettingsPage({ user }: Props) {
 
               {/* ─── Carrier connections ─── */}
               <Section title="Freight Carrier Connections"
-                description="Plug in API credentials for each freight carrier we use. Once a connection tests green, we'll start wiring its live quote and booking into the cart and admin order pages — until then, the postcode zones below are still what distributors see at checkout.">
+                description="Plug in API credentials for each freight carrier we use. The MachShip token here drives live quoting and booking — the postcode zones further down are only used as a fallback when live quoting isn't available.">
                 <FreightCarriersManager/>
+              </Section>
+
+              {/* ─── Freight pricing & sender (MachShip) ─── */}
+              <Section title="Freight Pricing &amp; Sender Address"
+                description="Markup applied to MachShip's quoted price before showing it to distributors, plus the pickup address used for every booking. Both are required for live quoting and booking to work end-to-end.">
+                <Field label="Markup %" hint="Added on top of MachShip's quote (e.g. 20 = quote × 1.20). Range 0–200.">
+                  <input
+                    type="number"
+                    min={0}
+                    max={200}
+                    step={0.1}
+                    value={freightMarkup}
+                    onChange={e => setFreightMarkup(Number(e.target.value))}
+                    style={{...inputStyle(), maxWidth: 120}}
+                  />
+                </Field>
+                <div style={{marginTop:14}}>
+                  <button
+                    onClick={() => save({ freight_markup_percent: freightMarkup })}
+                    disabled={saving}
+                    style={primaryBtn(!saving)}>
+                    {saving ? 'Saving…' : 'Save markup'}
+                  </button>
+                </div>
+
+                <div style={{height:24}}/>
+
+                <div style={{fontSize:13,color:T.text2,fontWeight:500,marginBottom:8}}>Sender (pickup) address</div>
+                <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}}>
+                  <Field label="Contact name">
+                    <input type="text" value={msFromName} onChange={e => setMsFromName(e.target.value)} style={inputStyle()} placeholder="Workshop staff name"/>
+                  </Field>
+                  <Field label="Company">
+                    <input type="text" value={msFromCompany} onChange={e => setMsFromCompany(e.target.value)} style={inputStyle()} placeholder="Just Autos Mechanical"/>
+                  </Field>
+                  <Field label="Phone">
+                    <input type="text" value={msFromPhone} onChange={e => setMsFromPhone(e.target.value)} style={inputStyle()} placeholder="07 ..."/>
+                  </Field>
+                  <Field label="Email">
+                    <input type="text" value={msFromEmail} onChange={e => setMsFromEmail(e.target.value)} style={inputStyle()} placeholder="dispatch@..."/>
+                  </Field>
+                  <Field label="Address line 1">
+                    <input type="text" value={msFromAddr1} onChange={e => setMsFromAddr1(e.target.value)} style={inputStyle()}/>
+                  </Field>
+                  <Field label="Address line 2">
+                    <input type="text" value={msFromAddr2} onChange={e => setMsFromAddr2(e.target.value)} style={inputStyle()}/>
+                  </Field>
+                  <Field label="Suburb">
+                    <input type="text" value={msFromSuburb} onChange={e => setMsFromSuburb(e.target.value)} style={inputStyle()}/>
+                  </Field>
+                  <Field label="Postcode" hint="4 digits">
+                    <input type="text" value={msFromPost} onChange={e => setMsFromPost(e.target.value)} style={{...inputStyle(), maxWidth: 120}} placeholder="4000"/>
+                  </Field>
+                  <Field label="State" hint="QLD, NSW, VIC, etc.">
+                    <input type="text" value={msFromState} onChange={e => setMsFromState(e.target.value)} style={{...inputStyle(), maxWidth: 120}}/>
+                  </Field>
+                </div>
+                <div style={{marginTop:14}}>
+                  <button
+                    onClick={() => save({
+                      machship_from_name:          msFromName,
+                      machship_from_company:       msFromCompany,
+                      machship_from_phone:         msFromPhone,
+                      machship_from_email:         msFromEmail,
+                      machship_from_address_line1: msFromAddr1,
+                      machship_from_address_line2: msFromAddr2,
+                      machship_from_suburb:        msFromSuburb,
+                      machship_from_postcode:      msFromPost,
+                      machship_from_state:         msFromState,
+                    })}
+                    disabled={saving}
+                    style={primaryBtn(!saving)}>
+                    {saving ? 'Saving…' : 'Save sender address'}
+                  </button>
+                </div>
               </Section>
 
               {/* ─── Freight zones (manual fallback) ─── */}

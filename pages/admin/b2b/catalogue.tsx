@@ -1044,40 +1044,53 @@ function EditDrawer({
           </Section>
 
           {/* Freight & packaging */}
-          <Section title="Freight & packaging" subtitle="Used by future shipping calculators">
-            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:8}}>
-              <FieldInt
-                label="Length"
-                suffix="mm"
-                value={item.freight_length_mm}
-                onSave={async v => { try { await patch({ freight_length_mm: v }) } catch {} }}
-              />
-              <FieldInt
-                label="Width"
-                suffix="mm"
-                value={item.freight_width_mm}
-                onSave={async v => { try { await patch({ freight_width_mm: v }) } catch {} }}
-              />
-              <FieldInt
-                label="Height"
-                suffix="mm"
-                value={item.freight_height_mm}
-                onSave={async v => { try { await patch({ freight_height_mm: v }) } catch {} }}
-              />
-            </div>
-            <div style={{height:10}}/>
-            <FieldInt
-              label="Weight"
-              suffix="g"
-              value={item.freight_weight_g}
-              onSave={async v => { try { await patch({ freight_weight_g: v }) } catch {} }}
-            />
-            <div style={{height:10}}/>
-            <PackagingSelect
-              value={item.freight_packaging}
-              onChange={async v => { try { await patch({ freight_packaging: v }) } catch {} }}
-            />
-          </Section>
+          {(() => {
+            const missingDims = !item.freight_length_mm || !item.freight_width_mm || !item.freight_height_mm || !item.freight_weight_g
+            const blocksLiveQuote = missingDims && item.b2b_visible
+            return (
+              <Section
+                title={blocksLiveQuote ? 'Freight & packaging ⚠️' : 'Freight & packaging'}
+                subtitle={
+                  blocksLiveQuote
+                    ? 'Required for MachShip live quoting. Carts containing this product cannot check out until all four values are filled in.'
+                    : 'Used by MachShip live freight quoting (weight in grams, dimensions in millimetres).'
+                }
+              >
+                <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:8}}>
+                  <FieldInt
+                    label="Length"
+                    suffix="mm"
+                    value={item.freight_length_mm}
+                    onSave={async v => { try { await patch({ freight_length_mm: v }) } catch {} }}
+                  />
+                  <FieldInt
+                    label="Width"
+                    suffix="mm"
+                    value={item.freight_width_mm}
+                    onSave={async v => { try { await patch({ freight_width_mm: v }) } catch {} }}
+                  />
+                  <FieldInt
+                    label="Height"
+                    suffix="mm"
+                    value={item.freight_height_mm}
+                    onSave={async v => { try { await patch({ freight_height_mm: v }) } catch {} }}
+                  />
+                </div>
+                <div style={{height:10}}/>
+                <FieldInt
+                  label="Weight"
+                  suffix="g"
+                  value={item.freight_weight_g}
+                  onSave={async v => { try { await patch({ freight_weight_g: v }) } catch {} }}
+                />
+                <div style={{height:10}}/>
+                <PackagingSelect
+                  value={item.freight_packaging}
+                  onChange={async v => { try { await patch({ freight_packaging: v }) } catch {} }}
+                />
+              </Section>
+            )
+          })()}
 
           {/* Resources */}
           <Section title="Resources" subtitle="Installation / use instructions">

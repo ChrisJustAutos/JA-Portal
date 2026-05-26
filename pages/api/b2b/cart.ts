@@ -11,7 +11,7 @@ import { createClient, SupabaseClient } from '@supabase/supabase-js'
 import { withB2BAuth, B2BUser } from '../../../lib/b2bAuthServer'
 import { getStockForItems, stockState, getCommittedQtyByCatalogue, availableQty } from '../../../lib/b2b-stock'
 import { applyPricing, effectiveQtyCap } from '../../../lib/b2b-pricing'
-import { getFreightQuote } from '../../../lib/b2b-freight'
+import { getFreightQuote, getLiveQuote, type LiveQuoteCartItem, type LiveQuoteRate } from '../../../lib/b2b-freight'
 
 let _sb: SupabaseClient | null = null
 function sb(): SupabaseClient {
@@ -48,7 +48,8 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, use
         promo_price_ex_gst, promo_starts_at, promo_ends_at, volume_breaks,
         is_special_order, is_drop_ship, instructions_url,
         max_order_qty,
-        call_for_availability_below_qty, call_for_availability_when_zero
+        call_for_availability_below_qty, call_for_availability_when_zero,
+        freight_weight_g, freight_length_mm, freight_width_mm, freight_height_mm, freight_packaging
       )
     `)
     .eq('cart_id', cart.id)
@@ -158,20 +159,90 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, use
   const card_fee_inc = Math.max(0, charged - subtotal_inc_gst)
   const total_inc = subtotal_inc_gst + card_fee_inc
 
-  // Pull the distributor's shipping postcode so we can quote freight for
-  // the cart in one round-trip. Falls back to billing postcode if shipping
-  // isn't set; null when neither is configured.
-  let shipPostcode: string | null = null
-  let freightQuote: Awaited<ReturnType<typeof getFreightQuote>> = null
+  // Pull the distributor's shipping address so we can quote freight
+  // for the cart in one round-trip. Both suburb and postcode are
+  // needed for MachShip; we fall back to billing if shipping isn't
+  // set. When neither is configured the UI hides the freight panel.
+  type FreightPayload =
+    | null
+    | {
+        postcode: string
+        suburb:   string | null
+        mode: 'live' | 'static' | 'blocked' | 'no_zone'
+        rates: Array<{
+          id: string
+          label: string
+          price_ex_gst: number
+          transit_days: number | null
+          source: 'machship' | 'static'
+          machship?: LiveQuoteRate['machship']
+          eta_utc?: string | null
+          base_price_ex_gst?: number
+          markup_pct?: number
+        }>
+        blocked?: { reason: string; missing: Array<{ sku: string; name: string; missing_fields: string[] }> }
+        zone?: { id: string; name: string } | null
+      }
+
+  let freight: FreightPayload = null
   try {
     const { data: dist } = await c
       .from('b2b_distributors')
-      .select('ship_postcode, bill_postcode')
+      .select('ship_postcode, ship_suburb, bill_postcode, bill_suburb')
       .eq('id', user.distributor.id)
       .maybeSingle()
-    shipPostcode = dist?.ship_postcode || dist?.bill_postcode || null
+    const shipPostcode = dist?.ship_postcode || dist?.bill_postcode || null
+    const shipSuburb   = dist?.ship_suburb   || dist?.bill_suburb   || null
     if (shipPostcode) {
-      freightQuote = await getFreightQuote(shipPostcode)
+      // Build the live-quote input from cart items + their catalogue
+      // freight columns. Empty cart → live returns 'unavailable' and
+      // we fall through to static, mirroring the old behaviour.
+      const liveItems: LiveQuoteCartItem[] = (items || []).map((it: any) => {
+        const cat = Array.isArray(it.catalogue) ? it.catalogue[0] : it.catalogue
+        return {
+          sku:               cat?.sku || '',
+          name:              cat?.name || cat?.sku || '(item)',
+          qty:               Number(it.qty || 0),
+          freight_weight_g:  cat?.freight_weight_g ?? null,
+          freight_length_mm: cat?.freight_length_mm ?? null,
+          freight_width_mm:  cat?.freight_width_mm ?? null,
+          freight_height_mm: cat?.freight_height_mm ?? null,
+          freight_packaging: cat?.freight_packaging ?? null,
+        }
+      })
+
+      const live = await getLiveQuote(liveItems, { postcode: shipPostcode, suburb: shipSuburb || '' })
+      if (live.mode === 'live') {
+        freight = {
+          postcode: shipPostcode, suburb: shipSuburb, mode: 'live',
+          rates: live.rates.map(r => ({
+            id: r.id, label: r.label, price_ex_gst: r.price_ex_gst,
+            transit_days: r.transit_days, source: 'machship' as const,
+            machship: r.machship, eta_utc: r.eta_utc,
+            base_price_ex_gst: r.base_price_ex_gst, markup_pct: r.markup_pct,
+          })),
+        }
+      } else if (live.mode === 'blocked') {
+        freight = {
+          postcode: shipPostcode, suburb: shipSuburb, mode: 'blocked',
+          rates: [], blocked: { reason: live.reason, missing: live.missing },
+        }
+      } else {
+        // Live unavailable — fall back to static postcode zones.
+        const stat = await getFreightQuote(shipPostcode)
+        if (stat) {
+          freight = {
+            postcode: shipPostcode, suburb: shipSuburb, mode: 'static',
+            zone: stat.zone,
+            rates: stat.rates.map(r => ({
+              id: r.id, label: r.label, price_ex_gst: Number(r.price_ex_gst),
+              transit_days: r.transit_days, source: 'static' as const,
+            })),
+          }
+        } else {
+          freight = { postcode: shipPostcode, suburb: shipSuburb, mode: 'no_zone', rates: [] }
+        }
+      }
     }
   } catch (e: any) {
     // Freight quote is informational — failing here shouldn't break the
@@ -188,7 +259,7 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, use
     lines,
     line_count: lines.length,
     item_count: lines.reduce((s: number, l: any) => s + l.qty, 0),
-    freight: shipPostcode ? { postcode: shipPostcode, quote: freightQuote } : null,
+    freight,
     totals: {
       subtotal_ex_gst:  round2(subtotal_ex_gst),
       gst:              round2(gst),

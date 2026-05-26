@@ -41,6 +41,8 @@ interface OrderDetail {
   status: string
   placed_at: string
   paid_at: string | null
+  shipped_at: string | null
+  delivered_at: string | null
   currency: string
   subtotal_ex_gst: number
   gst: number
@@ -57,6 +59,16 @@ interface OrderDetail {
     invoice_number: string | null
     written_at: string | null
     write_error: string | null
+  }
+  shipping?: {
+    carrier: string | null
+    method_label: string | null
+    tracking_number: string | null
+    tracking_url: string | null
+    consignment_number: string | null
+    eta_at: string | null
+    status: string | null
+    freight_cost_ex_gst: number | null
   }
   lines: Array<{
     id: string
@@ -239,6 +251,51 @@ export default function OrderDetailPage({ b2bUser }: Props) {
                   <div style={{borderTop:`1px solid ${T.border2}`,marginTop:8,paddingTop:8}}/>
                   <Row label="Total" value={`$${Number(order.total_inc).toFixed(2)}`} large/>
                 </div>
+
+                {order.shipping && (order.shipping.carrier || order.shipping.tracking_number || order.shipping.consignment_number) && (
+                  <div style={{background:T.bg2,border:`1px solid ${T.border}`,borderRadius:10,padding:'18px 20px'}}>
+                    <SectionTitle>Shipping</SectionTitle>
+                    {order.shipping.carrier && (
+                      <Row label="Carrier" value={order.shipping.carrier}/>
+                    )}
+                    {order.shipping.status && (
+                      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'4px 0'}}>
+                        <span style={{fontSize:12,color:T.text3}}>Status</span>
+                        <span style={{
+                          fontSize:11, padding:'2px 8px', borderRadius:99, fontWeight:600,
+                          color: order.shipping.status === 'delivered' ? T.green
+                               : order.shipping.status === 'in_transit' ? T.teal
+                               : T.amber,
+                          background: `${order.shipping.status === 'delivered' ? T.green : order.shipping.status === 'in_transit' ? T.teal : T.amber}15`,
+                          border: `1px solid ${order.shipping.status === 'delivered' ? T.green : order.shipping.status === 'in_transit' ? T.teal : T.amber}40`,
+                          textTransform:'capitalize',
+                        }}>
+                          {order.shipping.status.replace(/_/g, ' ')}
+                        </span>
+                      </div>
+                    )}
+                    {order.shipping.eta_at && (
+                      <Row label="ETA" value={formatDate(order.shipping.eta_at)}/>
+                    )}
+                    {order.shipping.tracking_number && (
+                      <Row label="Tracking #" value={order.shipping.tracking_number}/>
+                    )}
+                    {order.shipping.consignment_number && (
+                      <Row label="Consignment" value={order.shipping.consignment_number}/>
+                    )}
+                    {order.shipping.tracking_url && (
+                      <div style={{marginTop:10}}>
+                        <a href={order.shipping.tracking_url} target="_blank" rel="noopener noreferrer" style={{
+                          display:'inline-block', fontSize:13, color:T.blue, textDecoration:'none',
+                          padding:'8px 14px', borderRadius:6, border:`1px solid ${T.blue}40`,
+                          background: `${T.blue}10`, fontWeight:500,
+                        }}>
+                          Track shipment →
+                        </a>
+                      </div>
+                    )}
+                  </div>
+                )}
 
                 <div style={{background:T.bg2,border:`1px solid ${T.border}`,borderRadius:10,padding:'18px 20px'}}>
                   <SectionTitle>Invoice</SectionTitle>

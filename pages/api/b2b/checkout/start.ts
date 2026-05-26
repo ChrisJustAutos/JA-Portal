@@ -19,6 +19,7 @@ import { getStockForItems, stockState, getCommittedQtyByCatalogue, availableQty 
 import { applyPricing, effectiveQtyCap } from '../../../../lib/b2b-pricing'
 import { createCheckoutSession, StripeLineItem } from '../../../../lib/stripe'
 import { assertCheckoutConfigured } from '../../../../lib/b2b-settings'
+import { getLiveQuote, type LiveQuoteCartItem } from '../../../../lib/b2b-freight'
 
 const GST_RATE = 0.10
 
@@ -43,10 +44,16 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, use
   }
 
   // Parse PO from request body. Optional, max 20 chars (MYOB limit).
-  // Also parse freight_rate_id (optional) — when present, the chosen
-  // freight rate is added to the order + Stripe checkout as a line item.
+  // Also parse freight selection — either a static-zone rate id or a
+  // live MachShip route. The two are mutually exclusive; freight_rate_id
+  // is preserved for the static-fallback path.
   let customerPo: string | null = null
   let chosenFreightRateId: string | null = null
+  let chosenMachShipRoute: {
+    carrierId: number
+    carrierServiceId: number
+    companyCarrierAccountId?: number
+  } | null = null
   try {
     const body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : (req.body || {})
     if (typeof body.customer_po === 'string') {
@@ -55,8 +62,19 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, use
     if (typeof body.freight_rate_id === 'string' && body.freight_rate_id.trim()) {
       chosenFreightRateId = body.freight_rate_id.trim()
     }
+    const fr = body.freight_machship_route
+    if (fr && typeof fr === 'object' && Number.isFinite(Number(fr.carrierId)) && Number.isFinite(Number(fr.carrierServiceId))) {
+      chosenMachShipRoute = {
+        carrierId:               Number(fr.carrierId),
+        carrierServiceId:        Number(fr.carrierServiceId),
+        companyCarrierAccountId: Number.isFinite(Number(fr.companyCarrierAccountId)) ? Number(fr.companyCarrierAccountId) : undefined,
+      }
+    }
   } catch {
     // Bad JSON in body — ignore, treat as no PO / no freight
+  }
+  if (chosenMachShipRoute && chosenFreightRateId) {
+    return res.status(400).json({ error: 'Cannot pass both freight_rate_id and freight_machship_route — pick one.' })
   }
 
   // Verify Stripe + MYOB are configured before we charge anyone.
@@ -212,11 +230,18 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, use
 
   // Resolve freight rate (if any) and fold its ex-GST cost into the
   // subtotal. Freight is GST-applicable; we add the GST onto the running
-  // total like any other line. If the rate id is unknown / inactive,
-  // refuse the checkout — better than silently posting without freight.
+  // total like any other line. If the selection is unknown / inactive
+  // / no longer offered by MachShip, refuse the checkout — better than
+  // silently posting without freight.
   let freightExGst = 0
   let freightLabel: string | null = null
   let freightZoneId: string | null = null
+  // MachShip extras — populated only when chosenMachShipRoute is set.
+  let freightMachShipCarrierId:     number | null = null
+  let freightMachShipServiceId:     number | null = null
+  let freightChosenQuoteSnapshot:   any            = null
+  let freightQuoteMarkupPct:        number | null = null
+
   if (chosenFreightRateId) {
     const { data: rate, error: rErr } = await c
       .from('b2b_freight_rates')
@@ -236,6 +261,85 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, use
     freightZoneId = zone.id
     subtotalEx += freightExGst
     gst += freightExGst * GST_RATE  // freight is taxable
+  } else if (chosenMachShipRoute) {
+    // Re-quote server-side so the distributor pays the live price the
+    // server computes — not whatever the cart UI submitted. If the
+    // carrier+service the user chose is no longer available, refuse.
+    // We need the destination address + per-item freight dims, which
+    // means a second cart lookup (the earlier `lines` query doesn't
+    // include freight columns).
+    const { data: dist } = await c
+      .from('b2b_distributors')
+      .select('ship_postcode, ship_suburb, bill_postcode, bill_suburb')
+      .eq('id', user.distributor.id)
+      .maybeSingle()
+    const shipPostcode = dist?.ship_postcode || dist?.bill_postcode
+    const shipSuburb   = dist?.ship_suburb   || dist?.bill_suburb || ''
+    if (!shipPostcode) {
+      return res.status(400).json({ error: 'Live freight needs a shipping address on file — contact your account manager.' })
+    }
+
+    const { data: liveRows, error: liErr } = await c
+      .from('b2b_cart_items')
+      .select(`
+        qty,
+        catalogue:b2b_catalogue!b2b_cart_items_catalogue_id_fkey (
+          sku, name,
+          freight_weight_g, freight_length_mm, freight_width_mm, freight_height_mm, freight_packaging
+        )
+      `)
+      .eq('cart_id', cart.id)
+    if (liErr) return res.status(500).json({ error: liErr.message })
+    const liveItems: LiveQuoteCartItem[] = (liveRows || []).map((r: any) => {
+      const cat = Array.isArray(r.catalogue) ? r.catalogue[0] : r.catalogue
+      return {
+        sku:               cat?.sku || '',
+        name:              cat?.name || cat?.sku || '(item)',
+        qty:               Number(r.qty || 0),
+        freight_weight_g:  cat?.freight_weight_g ?? null,
+        freight_length_mm: cat?.freight_length_mm ?? null,
+        freight_width_mm:  cat?.freight_width_mm ?? null,
+        freight_height_mm: cat?.freight_height_mm ?? null,
+        freight_packaging: cat?.freight_packaging ?? null,
+      }
+    })
+
+    const liveQuote = await getLiveQuote(liveItems, { postcode: shipPostcode, suburb: shipSuburb })
+    if (liveQuote.mode === 'blocked') {
+      return res.status(400).json({
+        error: 'Freight quote unavailable — some products are missing dimensions. Refresh your cart and try again.',
+        details: liveQuote.missing.map(m => `${m.sku} ${m.name} (needs ${m.missing_fields.join(', ')})`),
+      })
+    }
+    if (liveQuote.mode !== 'live') {
+      return res.status(503).json({ error: 'Live freight quoting is temporarily unavailable. Refresh your cart and pick a fallback rate, or contact your account manager.' })
+    }
+    const match = liveQuote.rates.find(r =>
+      r.machship.carrierId        === chosenMachShipRoute!.carrierId &&
+      r.machship.carrierServiceId === chosenMachShipRoute!.carrierServiceId
+    )
+    if (!match) {
+      return res.status(400).json({ error: 'The freight option you chose is no longer offered — refresh your cart and pick again.' })
+    }
+    freightExGst              = round2(match.price_ex_gst)
+    freightLabel              = match.label
+    freightMachShipCarrierId  = match.machship.carrierId
+    freightMachShipServiceId  = match.machship.carrierServiceId
+    freightChosenQuoteSnapshot = {
+      carrierId:               match.machship.carrierId,
+      carrierServiceId:        match.machship.carrierServiceId,
+      companyCarrierAccountId: match.machship.companyCarrierAccountId ?? null,
+      label:                   match.label,
+      price_ex_gst:            match.price_ex_gst,
+      base_price_ex_gst:       match.base_price_ex_gst,
+      markup_pct:              match.markup_pct,
+      eta_utc:                 match.eta_utc,
+      transit_days:            match.transit_days,
+      route_snapshot:          match.machship.routeSnapshot,
+    }
+    freightQuoteMarkupPct = match.markup_pct
+    subtotalEx += freightExGst
+    gst += freightExGst * GST_RATE
   }
 
   subtotalEx = round2(subtotalEx)
@@ -261,10 +365,15 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, use
       currency: 'AUD',
       myob_company_file: 'JAWS',
       customer_po: customerPo,
-      freight_rate_id:        chosenFreightRateId,
-      freight_zone_id:        freightZoneId,
-      freight_method_label:   freightLabel,
-      freight_cost_ex_gst:    chosenFreightRateId ? freightExGst : null,
+      freight_rate_id:               chosenFreightRateId,
+      freight_zone_id:               freightZoneId,
+      freight_method_label:          freightLabel,
+      freight_cost_ex_gst:           (chosenFreightRateId || chosenMachShipRoute) ? freightExGst : null,
+      freight_chosen_quote:          freightChosenQuoteSnapshot,
+      freight_quote_markup_pct:      freightQuoteMarkupPct,
+      machship_carrier_id:           freightMachShipCarrierId,
+      machship_carrier_service_id:   freightMachShipServiceId,
+      freight_service_label:         chosenMachShipRoute ? freightLabel : null,
     })
     .select('id, order_number')
     .single()
@@ -312,7 +421,7 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, use
     }
   })
 
-  if (chosenFreightRateId && freightExGst > 0) {
+  if ((chosenFreightRateId || chosenMachShipRoute) && freightExGst > 0) {
     const freightInc = round2(freightExGst * 1.10)  // freight is GST-taxable
     stripeLineItems.push({
       price_data: {

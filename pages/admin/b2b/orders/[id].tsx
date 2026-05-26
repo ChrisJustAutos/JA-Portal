@@ -92,6 +92,18 @@ interface OrderDetail {
   freight_method_label: string | null
   freight_cost_ex_gst: number | null
   label_pdf_path: string | null
+  // MachShip live freight
+  machship_consignment_id: string | null
+  machship_consignment_number: string | null
+  machship_carrier_id: number | null
+  machship_carrier_service_id: number | null
+  freight_service_label: string | null
+  freight_eta_at: string | null
+  freight_status: string | null
+  last_freight_poll_at: string | null
+  tracking_page_access_token: string | null
+  freight_chosen_quote: any | null
+  freight_quote_markup_pct: number | null
   customer_notes: string | null
   internal_notes: string | null
   distributor: { id: string; display_name: string; myob_customer_uid: string | null } | null
@@ -539,6 +551,8 @@ export default function AdminOrderDetailPage({ user }: Props) {
                   <ShippingCard
                     order={data}
                     onEdit={() => setShipModal(true)}
+                    onReloaded={() => { void load() }}
+                    onFlash={flashMsg}
                   />
                 )}
 
@@ -723,8 +737,27 @@ function Backdrop({ children, onClose }: { children: React.ReactNode; onClose: (
 // Always-visible shipping panel — surfaces whatever's been set + a "Book
 // freight / edit" button. Once the order is shipped the panel also offers
 // "Print label" (signed-URL fetch) and a tracking link.
-function ShippingCard({ order, onEdit }: { order: OrderDetail; onEdit: () => void }) {
-  const isShipped = !!order.shipped_at
+//
+// When the order was placed on a live MachShip quote (machship_carrier_id
+// populated), the panel also shows:
+//   - "Book via MachShip" — calls /book-freight which creates the
+//     consignment, pulls the label, stores tracking + ETA on the order.
+//   - "Refresh from MachShip" — calls /refresh-freight to re-fetch the
+//     current status + ETA. The 30-min cron does this automatically;
+//     the button is for when admin wants it RIGHT NOW.
+function ShippingCard({ order, onEdit, onReloaded, onFlash }: {
+  order: OrderDetail
+  onEdit: () => void
+  onReloaded: () => void
+  onFlash: (msg: string) => void
+}) {
+  const isShipped       = !!order.shipped_at
+  const hasLiveQuote    = !!order.machship_carrier_id && !!order.machship_carrier_service_id
+  const hasConsignment  = !!order.machship_consignment_id
+  const [bookingBusy,  setBookingBusy]  = useState(false)
+  const [refreshBusy,  setRefreshBusy]  = useState(false)
+  const [actionError,  setActionError]  = useState<string | null>(null)
+
   async function openLabel() {
     try {
       const r = await fetch(`/api/b2b/admin/orders/${order.id}/label`)
@@ -735,6 +768,52 @@ function ShippingCard({ order, onEdit }: { order: OrderDetail; onEdit: () => voi
       alert(`Could not open label: ${e?.message || e}`)
     }
   }
+
+  async function bookViaMachShip(force = false) {
+    if (bookingBusy) return
+    if (hasConsignment && !force && !confirm('A consignment is already booked. Re-book?')) return
+    setBookingBusy(true); setActionError(null)
+    try {
+      const r = await fetch(`/api/b2b/admin/orders/${order.id}/book-freight${force ? '?force=1' : ''}`, {
+        method: 'POST', credentials: 'same-origin',
+      })
+      const j = await r.json()
+      if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`)
+      if (j.label_warning) onFlash(`Booked, but label fetch warning: ${j.label_warning}`)
+      else                 onFlash(`Booked: ${j.consignment_number || j.consignment_id}`)
+      onReloaded()
+    } catch (e: any) {
+      setActionError(e?.message || String(e))
+    } finally {
+      setBookingBusy(false)
+    }
+  }
+
+  async function refreshFromMachShip() {
+    if (refreshBusy) return
+    setRefreshBusy(true); setActionError(null)
+    try {
+      const r = await fetch(`/api/b2b/admin/orders/${order.id}/refresh-freight`, {
+        method: 'POST', credentials: 'same-origin',
+      })
+      const j = await r.json()
+      if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`)
+      onFlash(`Refreshed — status: ${j.order?.freight_status || 'unknown'}`)
+      onReloaded()
+    } catch (e: any) {
+      setActionError(e?.message || String(e))
+    } finally {
+      setRefreshBusy(false)
+    }
+  }
+
+  // Tracking URL preference: MachShip's hosted tracking page if we
+  // have an access token, otherwise whatever was manually set.
+  const machshipTrackingUrl = order.tracking_page_access_token
+    ? `https://live.machship.com/track/${encodeURIComponent(order.tracking_page_access_token)}`
+    : null
+  const effectiveTrackingUrl = machshipTrackingUrl || order.tracking_url
+
   return (
     <Card title="Shipping">
       <div style={{display:'flex', alignItems:'center', gap:8, marginBottom:10, flexWrap:'wrap'}}>
@@ -746,8 +825,24 @@ function ShippingCard({ order, onEdit }: { order: OrderDetail; onEdit: () => voi
           <span style={{fontSize:11, color:T.text3}}>Not shipped yet</span>
         )}
         <span style={{flex:1}}/>
+        {hasLiveQuote && !hasConsignment && (
+          <button
+            onClick={() => bookViaMachShip(false)}
+            disabled={bookingBusy}
+            style={{padding:'5px 12px', borderRadius:5, border:`1px solid ${T.teal}60`, background:`${T.teal}15`, color: T.teal, fontSize:11, cursor: bookingBusy ? 'wait' : 'pointer', fontFamily:'inherit', fontWeight:600}}>
+            {bookingBusy ? 'Booking…' : '⚡ Book via MachShip'}
+          </button>
+        )}
+        {hasConsignment && (
+          <button
+            onClick={refreshFromMachShip}
+            disabled={refreshBusy}
+            style={{padding:'5px 12px', borderRadius:5, border:`1px solid ${T.border2}`, background:'transparent', color: T.blue, fontSize:11, cursor: refreshBusy ? 'wait' : 'pointer', fontFamily:'inherit'}}>
+            {refreshBusy ? 'Refreshing…' : '↻ Refresh from MachShip'}
+          </button>
+        )}
         <button onClick={onEdit} style={{padding:'5px 12px', borderRadius:5, border:`1px solid ${T.border2}`, background:'transparent', color: T.blue, fontSize:11, cursor:'pointer', fontFamily:'inherit'}}>
-          {isShipped ? 'Edit shipping' : '+ Book freight'}
+          {isShipped ? 'Edit shipping' : '+ Manual book'}
         </button>
         {order.label_pdf_path && (
           <button onClick={openLabel} style={{padding:'5px 12px', borderRadius:5, border:`1px solid ${T.teal}40`, background:'transparent', color: T.teal, fontSize:11, cursor:'pointer', fontFamily:'inherit'}}>
@@ -755,18 +850,37 @@ function ShippingCard({ order, onEdit }: { order: OrderDetail; onEdit: () => voi
           </button>
         )}
       </div>
-      <KV label="Method"   value={order.freight_method_label || '—'}/>
+
+      {actionError && (
+        <div style={{fontSize:11, color:T.red, marginBottom:10, lineHeight:1.5}}>{actionError}</div>
+      )}
+
+      <KV label="Method"   value={order.freight_service_label || order.freight_method_label || '—'}/>
       <KV label="Carrier"  value={order.carrier || '—'}/>
       <KV label="Tracking" value={order.tracking_number || '—'} mono/>
-      {order.tracking_url && order.tracking_number && (
+      {effectiveTrackingUrl && order.tracking_number && (
         <div style={{display:'grid', gridTemplateColumns:'90px 1fr', gap:'4px 12px', alignItems:'baseline'}}>
           <span style={{fontSize:11, color:T.text3}}>Track</span>
-          <a href={order.tracking_url} target="_blank" rel="noopener noreferrer" style={{color:T.blue, fontSize:13, textDecoration:'none'}}>Open in carrier site →</a>
+          <a href={effectiveTrackingUrl} target="_blank" rel="noopener noreferrer" style={{color:T.blue, fontSize:13, textDecoration:'none'}}>Open tracking page →</a>
         </div>
       )}
       <KV label="Cost ex"  value={order.freight_cost_ex_gst != null ? `$${money(order.freight_cost_ex_gst)}` : '—'} mono/>
+
+      {hasConsignment && (
+        <div style={{marginTop:10, paddingTop:10, borderTop:`1px dashed ${T.border}`}}>
+          <KV label="Consignment" value={order.machship_consignment_number || order.machship_consignment_id || '—'} mono/>
+          <KV label="Status"      value={prettyFreightStatus(order.freight_status)}/>
+          <KV label="ETA"         value={order.freight_eta_at ? fullDate(order.freight_eta_at) : '—'}/>
+          <KV label="Last poll"   value={order.last_freight_poll_at ? fullDate(order.last_freight_poll_at) : 'never'}/>
+        </div>
+      )}
     </Card>
   )
+}
+
+function prettyFreightStatus(status: string | null): string {
+  if (!status) return '—'
+  return status.replace(/_/g, ' ').replace(/\b\w/g, ch => ch.toUpperCase())
 }
 
 function ShipModal({ order, busy, onClose, onConfirm }: {
