@@ -63,6 +63,7 @@ export async function writeOrderToMyob(orderId: string): Promise<MyobWriteResult
     .select(`
       id, order_number, status,
       subtotal_ex_gst, gst, card_fee_inc, total_inc, currency,
+      freight_cost_ex_gst,
       customer_po,
       myob_invoice_uid, myob_invoice_number,
       myob_write_attempts, paid_at,
@@ -146,11 +147,24 @@ export async function writeOrderToMyob(orderId: string): Promise<MyobWriteResult
     })
   }
 
-  // 4. Compute envelope totals (ex-GST goods + ex-GST surcharge)
-  const subtotalExGst = round2(Number(order.subtotal_ex_gst || 0))
-  const totalTax      = round2(Number(order.gst || 0))
-  const subtotalEnv   = round2(subtotalExGst + cardFeeInc)
-  const totalAmount   = round2(subtotalEnv + totalTax)
+  // 4. Compute envelope totals.
+  //
+  // order.subtotal_ex_gst and order.gst already INCLUDE freight (checkout
+  // folds it in). MYOB models freight separately via FreightAmount, so we
+  // back the freight out of the line subtotal and hand it to MYOB's native
+  // freight field — otherwise the goods lines wouldn't reconcile and the
+  // freight portion silently vanished from the posted invoice.
+  //
+  //   MYOB: TotalAmount = Subtotal (sum of line Totals) + FreightAmount + TotalTax
+  const freightExGst  = round2(Number(order.freight_cost_ex_gst || 0))
+  const subtotalExGst = round2(Number(order.subtotal_ex_gst || 0))   // goods + freight (ex GST)
+  const goodsExGst    = round2(subtotalExGst - freightExGst)         // goods only (matches product lines)
+  const totalTax      = round2(Number(order.gst || 0))               // products GST + freight GST
+  const subtotalEnv   = round2(goodsExGst + cardFeeInc)              // sum of myobLines (products + surcharge)
+  const totalAmount   = round2(subtotalEnv + freightExGst + totalTax)
+  // Freight is GST-taxable in the portal, so book it against GST when
+  // present; fall back to FRE when there's no freight so the field is valid.
+  const freightTaxUid = freightExGst > 0 ? cfg.gstTaxCodeUid : cfg.freTaxCodeUid
 
   // 4b. Reserve the next portal-controlled MYOB number BEFORE the POST.
   const { data: rpcNumber, error: rpcErr } = await c.rpc('b2b_next_myob_invoice_number')
@@ -168,8 +182,8 @@ export async function writeOrderToMyob(orderId: string): Promise<MyobWriteResult
     Number: myobOrderNumber,
     Lines: myobLines,
     IsTaxInclusive: false,
-    FreightAmount: 0,
-    FreightTaxCode: { UID: cfg.freTaxCodeUid },
+    FreightAmount: freightExGst,
+    FreightTaxCode: { UID: freightTaxUid },
     Subtotal: subtotalEnv,
     TotalTax: totalTax,
     TotalAmount: totalAmount,
@@ -277,7 +291,7 @@ export async function writeRefundCreditNoteToMyob(
     .from('b2b_orders')
     .select(`
       id, order_number, customer_po,
-      total_inc, refunded_total, card_fee_inc,
+      total_inc, refunded_total, card_fee_inc, freight_cost_ex_gst,
       stripe_payment_intent_id,
       myob_invoice_number,
       distributor:b2b_distributors!b2b_orders_distributor_id_fkey (
@@ -317,6 +331,10 @@ export async function writeRefundCreditNoteToMyob(
   const myobLines: any[] = []
   let subtotalEnv = 0
   let totalTax    = 0
+  // Freight refunded via MYOB's native (negative) FreightAmount on a full
+  // mirror. Partial refunds use a single catch-all line that already
+  // absorbs any freight portion, so freight stays 0 there.
+  let freightRefundEx = 0
 
   if (isFullMirror) {
     for (const ln of lines) {
@@ -352,6 +370,15 @@ export async function writeRefundCreditNoteToMyob(
       })
       subtotalEnv += round2(-cardFeeInc)
     }
+
+    // Mirror freight via MYOB's native freight field (negative on a
+    // credit note). GST-taxable, so add the negative freight GST to the
+    // running tax. Without this a full refund under-credits by freight.
+    const freightExGst = round2(Number(order.freight_cost_ex_gst || 0))
+    if (freightExGst > 0) {
+      freightRefundEx = round2(-freightExGst)
+      totalTax += round2(-freightExGst * 0.10)   // freight GST @ 10%
+    }
   } else {
     // Single-line credit note for partial / additional refunds
     const refundPos = round2(refundAmount)
@@ -370,7 +397,7 @@ export async function writeRefundCreditNoteToMyob(
 
   subtotalEnv = round2(subtotalEnv)
   totalTax    = round2(totalTax)
-  const totalAmount = round2(subtotalEnv + totalTax)
+  const totalAmount = round2(subtotalEnv + freightRefundEx + totalTax)
 
   // Reserve the next number from the credit-note sequence (independent of invoices)
   const { data: rpcNumber, error: rpcErr } = await c.rpc('b2b_next_myob_credit_note_number')
@@ -389,8 +416,8 @@ export async function writeRefundCreditNoteToMyob(
     Number: creditNumber,
     Lines: myobLines,
     IsTaxInclusive: false,
-    FreightAmount: 0,
-    FreightTaxCode: { UID: cfg.freTaxCodeUid },
+    FreightAmount: freightRefundEx,
+    FreightTaxCode: { UID: freightRefundEx !== 0 ? cfg.gstTaxCodeUid : cfg.freTaxCodeUid },
     Subtotal: subtotalEnv,
     TotalTax: totalTax,
     TotalAmount: totalAmount,
