@@ -223,6 +223,11 @@ export default withAuth('admin:b2b', async (req: NextApiRequest, res: NextApiRes
   try {
     consignment = await createConsignment(req2)
   } catch (e: any) {
+    // Log the full request body so we can diagnose validation rejects
+    // by replaying the exact payload against MachShip's swagger. Never
+    // returned to the client — request bag stays server-side.
+    console.error(`[book-freight] order ${id} createConsignment failed:`, e?.message || e)
+    console.error(`[book-freight] order ${id} request body:`, JSON.stringify(req2).slice(0, 4000))
     if (e instanceof MachShipNotConfiguredError) return res.status(503).json({ error: e.message })
     if (e instanceof MachShipApiError)            return res.status(502).json({ error: e.message, detail: e.detail })
     return res.status(500).json({ error: `createConsignment failed: ${e?.message || e}` })

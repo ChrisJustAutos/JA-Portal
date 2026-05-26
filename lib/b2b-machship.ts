@@ -68,7 +68,32 @@ async function getApiToken(): Promise<string> {
 
 interface MachShipEnvelope<T> {
   object: T | null
-  errors: Array<{ message?: string; code?: string }> | null
+  // MachShip's error shape varies across endpoints — sometimes `message`,
+  // sometimes `errorMessage`, sometimes nested under `description`. We
+  // type it loosely and read defensively in extractErrorMessage().
+  errors: Array<Record<string, any>> | null
+}
+
+// MachShip is inconsistent about which field carries the human error
+// text. Walk the common variants in priority order; if none match, dump
+// the whole error object as JSON so at least the operator sees what
+// MachShip actually said. Never returns the empty string — callers can
+// `||` against it confidently.
+function extractErrorMessage(errors: any): string | null {
+  if (!Array.isArray(errors) || errors.length === 0) return null
+  const e = errors[0]
+  if (!e || typeof e !== 'object') return String(e || '') || null
+  const pick =
+       e.message
+    || e.errorMessage
+    || e.description
+    || e.detail
+    || e.error
+    || e.reason
+  if (typeof pick === 'string' && pick.trim()) return pick
+  // Last resort — dump the full error object so we can see fields like
+  // code/field/path that MachShip uses for validation failures.
+  try { return JSON.stringify(e) } catch { return null }
 }
 
 async function machshipFetch<T>(
@@ -93,16 +118,19 @@ async function machshipFetch<T>(
 
   if (!r.ok) {
     const detailMsg =
-      parsed?.errors?.[0]?.message
+      extractErrorMessage(parsed?.errors)
       || (parsed as any)?.message
       || text.slice(0, 300)
       || `${method} ${path} returned ${r.status}`
+    console.error(`[machship] ${method} ${path} → ${r.status}:`, text.slice(0, 1000))
     throw new MachShipApiError(`MachShip ${r.status}: ${detailMsg}`, r.status, parsed ?? text)
   }
   // A 200 with errors[] populated is still a failure per MachShip's
-  // envelope convention.
+  // envelope convention. Log the full envelope to console so we can
+  // diagnose unexpected error shapes server-side.
   if (parsed?.errors && parsed.errors.length > 0) {
-    const detailMsg = parsed.errors[0]?.message || 'errors[] populated on 200 response'
+    const detailMsg = extractErrorMessage(parsed.errors) || 'errors[] populated on 200 response'
+    console.error(`[machship] ${method} ${path} → 200 with errors:`, JSON.stringify(parsed.errors).slice(0, 1000))
     throw new MachShipApiError(`MachShip ${r.status} (envelope): ${detailMsg}`, r.status, parsed)
   }
   if (parsed?.object == null) {
