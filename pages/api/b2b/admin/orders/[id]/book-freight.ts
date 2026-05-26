@@ -101,47 +101,45 @@ export default withAuth('admin:b2b', async (req: NextApiRequest, res: NextApiRes
     return res.status(400).json({ error: 'MachShip sender address is not configured — set it in B2B Settings before booking.' })
   }
 
-  // ── Receiver — prefer the snapshot taken at order time, fall back
-  // to the distributor's current shipping address. ──
-  let recvName    = ''
-  let recvCompany = ''
-  let recvPhone   = ''
-  let recvEmail   = ''
-  let recvLine1   = ''
-  let recvLine2   = ''
-  let recvSuburb  = ''
-  let recvState   = ''
-  let recvPost    = ''
+  // ── Receiver — read both the snapshot taken at order time AND the
+  // distributor's current row, then fill each field with snapshot first
+  // then dist fallback. Loading dist unconditionally keeps things sane
+  // when the snapshot is partial (e.g. has postcode but no contact name
+  // — MachShip rejects empty toName with a 200 envelope error).
   const snap: any = order.shipping_address_snapshot || null
-  if (snap && typeof snap === 'object') {
-    recvName    = String(snap.recipient_name || snap.contact_name || '').trim()
-    recvCompany = String(snap.company_name   || '').trim()
-    recvPhone   = String(snap.phone          || '').trim()
-    recvEmail   = String(snap.email          || '').trim()
-    recvLine1   = String(snap.line1          || snap.address_line1 || '').trim()
-    recvLine2   = String(snap.line2          || snap.address_line2 || '').trim()
-    recvSuburb  = String(snap.suburb         || '').trim()
-    recvState   = String(snap.state          || '').trim()
-    recvPost    = String(snap.postcode       || '').trim()
+  const { data: dist } = await c
+    .from('b2b_distributors')
+    .select('display_name, trading_name, primary_contact_phone, primary_contact_email, ship_line1, ship_line2, ship_suburb, ship_state, ship_postcode')
+    .eq('id', order.distributor_id)
+    .maybeSingle()
+
+  const pick = (...vals: any[]): string => {
+    for (const v of vals) {
+      if (v == null) continue
+      const s = String(v).trim()
+      if (s) return s
+    }
+    return ''
   }
-  if (!recvSuburb || !recvPost) {
-    // Fall back to the distributor's primary ship_* fields.
-    const { data: dist } = await c
-      .from('b2b_distributors')
-      .select('display_name, primary_contact_phone, primary_contact_email, ship_line1, ship_line2, ship_suburb, ship_state, ship_postcode')
-      .eq('id', order.distributor_id)
-      .maybeSingle()
-    recvCompany = recvCompany || (dist?.display_name || '')
-    recvPhone   = recvPhone   || (dist?.primary_contact_phone || '')
-    recvEmail   = recvEmail   || (dist?.primary_contact_email || '')
-    recvLine1   = recvLine1   || (dist?.ship_line1 || '')
-    recvLine2   = recvLine2   || (dist?.ship_line2 || '')
-    recvSuburb  = recvSuburb  || (dist?.ship_suburb || '')
-    recvState   = recvState   || (dist?.ship_state || '')
-    recvPost    = recvPost    || (dist?.ship_postcode || '')
-  }
+
+  const recvCompany = pick(snap?.company_name, dist?.display_name, dist?.trading_name)
+  // MachShip requires toName (or toAbbreviation, which we don't use).
+  // Snapshot rarely carries a recipient name today, so fall through to
+  // the distributor's company name as a guaranteed non-empty value.
+  const recvName    = pick(snap?.recipient_name, snap?.contact_name, recvCompany)
+  const recvPhone   = pick(snap?.phone, dist?.primary_contact_phone)
+  const recvEmail   = pick(snap?.email, dist?.primary_contact_email)
+  const recvLine1   = pick(snap?.line1, snap?.address_line1, dist?.ship_line1)
+  const recvLine2   = pick(snap?.line2, snap?.address_line2, dist?.ship_line2)
+  const recvSuburb  = pick(snap?.suburb,   dist?.ship_suburb)
+  const recvState   = pick(snap?.state,    dist?.ship_state)
+  const recvPost    = pick(snap?.postcode, dist?.ship_postcode)
+
   if (!recvSuburb || !recvPost) {
     return res.status(400).json({ error: 'Receiver address missing suburb/postcode — fix the order address before booking.' })
+  }
+  if (!recvName) {
+    return res.status(400).json({ error: 'Receiver has no name or company on file — set the distributor display name before booking.' })
   }
 
   // ── Items — pull from order lines joined to catalogue freight cols ──
