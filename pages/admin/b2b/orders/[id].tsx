@@ -105,6 +105,10 @@ interface OrderDetail {
   tracking_page_access_token: string | null
   freight_chosen_quote: any | null
   freight_quote_markup_pct: number | null
+  // Drop-ship
+  has_drop_ship: boolean
+  dropship_po_raised_at: string | null
+  dropship_pos: Array<{ supplier_name: string; myob_po_number: string | null; myob_po_uid: string | null; line_count: number; created_at: string }>
   customer_notes: string | null
   internal_notes: string | null
   distributor: { id: string; display_name: string; myob_customer_uid: string | null } | null
@@ -558,6 +562,11 @@ export default function AdminOrderDetailPage({ user }: Props) {
                   />
                 )}
 
+                {/* Drop-ship purchase orders */}
+                {canEdit && data.has_drop_ship && (
+                  <DropShipCard order={data} onReloaded={() => { void load() }} onFlash={flashMsg}/>
+                )}
+
                 {/* Internal notes */}
                 {canEdit && (
                   <Card title="Internal notes">
@@ -883,6 +892,72 @@ function ShippingCard({ order, onEdit, onReloaded, onFlash }: {
 function prettyFreightStatus(status: string | null): string {
   if (!status) return '—'
   return status.replace(/_/g, ' ').replace(/\b\w/g, ch => ch.toUpperCase())
+}
+
+// Raise + show drop-ship purchase orders. Shown only when the order has
+// drop-ship line items (see has_drop_ship from the detail API).
+function DropShipCard({ order, onReloaded, onFlash }: {
+  order: OrderDetail
+  onReloaded: () => void
+  onFlash: (msg: string) => void
+}) {
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState<string | null>(null)
+  const raised = order.dropship_pos || []
+  const alreadyRaised = raised.length > 0
+
+  async function raise(force = false) {
+    if (busy) return
+    if (alreadyRaised && !force && !confirm('Drop-ship POs were already raised for this order. Raise again?')) return
+    setBusy(true); setErr(null)
+    try {
+      const r = await fetch(`/api/b2b/admin/orders/${order.id}/dropship-po${force ? '?force=1' : ''}`, {
+        method: 'POST', credentials: 'same-origin',
+      })
+      const j = await r.json()
+      if (!r.ok) {
+        const detail = Array.isArray(j.details) ? ` — ${j.details.join(', ')}` : ''
+        throw new Error((j.error || `HTTP ${r.status}`) + detail)
+      }
+      const n = (j.raised || []).length
+      if (j.failures?.length) onFlash(`Raised ${n} PO(s); ${j.failures.length} failed`)
+      else                    onFlash(`Raised ${n} purchase order${n === 1 ? '' : 's'}`)
+      onReloaded()
+    } catch (e: any) {
+      setErr(e?.message || String(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Card title="Drop-ship purchase orders">
+      <div style={{fontSize:12, color:T.text3, lineHeight:1.5, marginBottom:10}}>
+        This order has drop-ship items. Raising a PO creates one MYOB purchase order per supplier, shipped direct to the distributor.
+      </div>
+      {err && <div style={{fontSize:11, color:T.red, marginBottom:10}}>{err}</div>}
+      {raised.length > 0 ? (
+        <div style={{display:'flex', flexDirection:'column', gap:6, marginBottom:10}}>
+          {raised.map((po, i) => (
+            <div key={i} style={{display:'flex', alignItems:'center', gap:8, fontSize:12}}>
+              <span style={{color:T.text}}>{po.supplier_name}</span>
+              <span style={{flex:1}}/>
+              <span style={{fontFamily:'monospace', color:T.text2}}>{po.myob_po_number || po.myob_po_uid?.slice(0, 8) || 'PO'}</span>
+              <span style={{color:T.text3}}>{po.line_count} line{po.line_count === 1 ? '' : 's'}</span>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div style={{fontSize:12, color:T.text3, marginBottom:10}}>No POs raised yet.</div>
+      )}
+      <button
+        onClick={() => raise(alreadyRaised)}
+        disabled={busy}
+        style={{padding:'6px 12px', borderRadius:5, border:`1px solid ${T.teal}60`, background:`${T.teal}15`, color:T.teal, fontSize:11, cursor: busy ? 'wait' : 'pointer', fontFamily:'inherit', fontWeight:600}}>
+        {busy ? 'Raising…' : alreadyRaised ? '↻ Re-raise drop-ship PO' : '⚡ Raise drop-ship PO'}
+      </button>
+    </Card>
+  )
 }
 
 function ShipModal({ order, busy, onClose, onConfirm }: {

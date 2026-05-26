@@ -67,6 +67,7 @@ async function getDetail(id: string, res: NextApiResponse) {
       machship_carrier_id, machship_carrier_service_id,
       freight_service_label, freight_eta_at, freight_status, last_freight_poll_at,
       tracking_page_access_token, freight_chosen_quote, freight_quote_markup_pct,
+      dropship_pos, dropship_po_raised_at,
       customer_notes, internal_notes,
       stripe_checkout_session_id, stripe_payment_intent_id, stripe_charge_id,
       myob_invoice_uid, myob_invoice_number, myob_company_file,
@@ -77,7 +78,8 @@ async function getDetail(id: string, res: NextApiResponse) {
       lines:b2b_order_lines!b2b_order_lines_order_id_fkey (
         id, sku, name, qty, myob_item_uid,
         unit_trade_price_ex_gst, line_subtotal_ex_gst, line_gst, line_total_inc,
-        is_taxable, sort_order
+        is_taxable, sort_order,
+        catalogue:b2b_catalogue!b2b_order_lines_catalogue_id_fkey ( is_drop_ship, myob_supplier_name )
       ),
       events:b2b_order_events!b2b_order_events_order_id_fkey (
         id, event_type, from_status, to_status,
@@ -89,9 +91,16 @@ async function getDetail(id: string, res: NextApiResponse) {
   if (oErr) return res.status(500).json({ error: oErr.message })
   if (!order) return res.status(404).json({ error: 'Order not found' })
 
-  const lines = Array.isArray(order.lines)
+  const linesRaw = Array.isArray(order.lines)
     ? [...order.lines].sort((a: any, b: any) => (a.sort_order || 0) - (b.sort_order || 0))
     : []
+  // Flatten the catalogue join into a per-line drop_ship + supplier flag.
+  const lines = linesRaw.map((l: any) => {
+    const cat = Array.isArray(l.catalogue) ? l.catalogue[0] : l.catalogue
+    const { catalogue, ...rest } = l
+    return { ...rest, drop_ship: cat?.is_drop_ship === true, supplier_name: cat?.myob_supplier_name || null }
+  })
+  const hasDropShip = lines.some((l: any) => l.drop_ship)
   const events = Array.isArray(order.events)
     ? [...order.events].sort((a: any, b: any) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime())
     : []
@@ -178,6 +187,10 @@ async function getDetail(id: string, res: NextApiResponse) {
       tracking_page_access_token:   order.tracking_page_access_token,
       freight_chosen_quote:         order.freight_chosen_quote,
       freight_quote_markup_pct:     order.freight_quote_markup_pct != null ? Number(order.freight_quote_markup_pct) : null,
+      // Drop-ship
+      has_drop_ship:        hasDropShip,
+      dropship_pos:         Array.isArray(order.dropship_pos) ? order.dropship_pos : [],
+      dropship_po_raised_at: order.dropship_po_raised_at,
       customer_notes: order.customer_notes,
       internal_notes: order.internal_notes,
       distributor: dist ? {
