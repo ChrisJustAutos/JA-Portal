@@ -5,7 +5,7 @@
 // tile onto a folder to add it. Folders persist per-user by reusing
 // the existing user_preferences.nav_groups store.
 
-import { useMemo, useState, useCallback } from 'react'
+import { useMemo, useState, useCallback, useEffect } from 'react'
 import Head from 'next/head'
 import { useRouter } from 'next/router'
 import { requirePageAuth } from '../lib/authServer'
@@ -70,6 +70,16 @@ export default function HomePage({ user }: Props) {
   const ungrouped = useMemo(() => apps.filter(a => !groupedIds.has(a.id)), [apps, groupedIds])
 
   const openFolder = folders.find(f => f.id === openFolderId) || null
+
+  // Safety net: always clear drag state when any drag ends, even if the
+  // dragged tile unmounted mid-merge (its own onDragEnd wouldn't fire
+  // then, which previously left `drag` stuck and broke the next merge).
+  useEffect(() => {
+    const clear = () => { setDrag(null); setDragOverId(null) }
+    window.addEventListener('dragend', clear)
+    window.addEventListener('drop', clear)
+    return () => { window.removeEventListener('dragend', clear); window.removeEventListener('drop', clear) }
+  }, [])
 
   // ── Persistence helpers ───────────────────────────────────────────
   const saveGroups = useCallback((next: NavGroup[]) => {
@@ -187,11 +197,10 @@ export default function HomePage({ user }: Props) {
                       key={f.id}
                       name={f.name}
                       apps={f.apps}
-                      isDropTarget={dragOverId === f.id}
-                      onOpen={() => setOpenFolderId(f.id)}
-                      onDragOver={(e) => { if (drag) { e.preventDefault(); setDragOverId(f.id) } }}
-                      onDragLeave={() => setDragOverId(prev => prev === f.id ? null : prev)}
-                      onDrop={(e) => { e.preventDefault(); if (drag) addToFolder(f.id, drag.appId); setDrag(null); setDragOverId(null) }}
+                      isDropTarget={dragOverId === f.id && !!drag}
+                      onOpen={() => { if (!drag) setOpenFolderId(f.id) }}
+                      onDragOver={(e) => { if (drag) { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; setDragOverId(f.id) } }}
+                      onDrop={(e) => { e.preventDefault(); const d = drag; setDrag(null); setDragOverId(null); if (d) addToFolder(f.id, d.appId) }}
                     />
                   ))}
                   {ungrouped.map(app => (
@@ -202,13 +211,12 @@ export default function HomePage({ user }: Props) {
                       editMode={editMode}
                       onCommitRename={(name) => saveLabel(app.id, name, app.defaultLabel)}
                       isDragging={drag?.appId === app.id}
-                      isDropTarget={dragOverId === app.id && drag?.appId !== app.id}
-                      onClick={() => launch(app)}
-                      onDragStart={() => setDrag({ appId: app.id })}
+                      isDropTarget={dragOverId === app.id && !!drag && drag.appId !== app.id}
+                      onClick={() => { if (!drag) launch(app) }}
+                      onDragStart={(e) => { e.dataTransfer.setData('text/plain', app.id); e.dataTransfer.effectAllowed = 'move'; setDrag({ appId: app.id }) }}
                       onDragEnd={() => { setDrag(null); setDragOverId(null) }}
-                      onDragOver={(e) => { if (drag && drag.appId !== app.id) { e.preventDefault(); setDragOverId(app.id) } }}
-                      onDragLeave={() => setDragOverId(prev => prev === app.id ? null : prev)}
-                      onDrop={(e) => { e.preventDefault(); if (drag && drag.appId !== app.id) createFolder(app.id, drag.appId); setDrag(null); setDragOverId(null) }}
+                      onDragOver={(e) => { if (drag && drag.appId !== app.id) { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; setDragOverId(app.id) } }}
+                      onDrop={(e) => { e.preventDefault(); const d = drag; setDrag(null); setDragOverId(null); if (d && d.appId !== app.id) createFolder(app.id, d.appId) }}
                     />
                   ))}
                 </>
@@ -265,7 +273,7 @@ export default function HomePage({ user }: Props) {
 // ── Tiles ────────────────────────────────────────────────────────────
 function AppTile({
   app, onClick, draggable, isDragging, isDropTarget, editMode, onCommitRename,
-  onDragStart, onDragEnd, onDragOver, onDragLeave, onDrop,
+  onDragStart, onDragEnd, onDragOver, onDrop,
 }: {
   app: LauncherApp
   onClick: () => void
@@ -274,10 +282,9 @@ function AppTile({
   isDropTarget?: boolean
   editMode?: boolean
   onCommitRename?: (name: string) => void
-  onDragStart?: () => void
+  onDragStart?: (e: React.DragEvent) => void
   onDragEnd?: () => void
   onDragOver?: (e: React.DragEvent) => void
-  onDragLeave?: () => void
   onDrop?: (e: React.DragEvent) => void
 }) {
   const isCustom = app.label !== app.defaultLabel
@@ -288,7 +295,6 @@ function AppTile({
       onDragStart={onDragStart}
       onDragEnd={onDragEnd}
       onDragOver={onDragOver}
-      onDragLeave={onDragLeave}
       onDrop={onDrop}
       style={{
         position: 'relative',
@@ -305,7 +311,7 @@ function AppTile({
       onMouseEnter={e => { if (!isDropTarget && !editMode) e.currentTarget.style.transform = 'translateY(-3px)' }}
       onMouseLeave={e => { e.currentTarget.style.transform = 'translateY(0)' }}
     >
-      <div style={{ width: 60, height: 60, borderRadius: 14, display: 'flex', alignItems: 'center', justifyContent: 'center', background: `${app.accent}1f`, color: app.accent, border: `1px solid ${app.accent}33` }}>
+      <div style={{ width: 60, height: 60, borderRadius: 14, display: 'flex', alignItems: 'center', justifyContent: 'center', background: `${app.accent}1f`, color: app.accent, border: `1px solid ${app.accent}33`, pointerEvents: 'none' }}>
         <AppIcon name={app.id} size={34}/>
       </div>
       {editMode ? (
@@ -328,21 +334,20 @@ function AppTile({
           )}
         </div>
       ) : (
-        <span style={{ fontSize: 12.5, fontWeight: 500, color: T.text, textAlign: 'center', lineHeight: 1.25 }}>{app.label}</span>
+        <span style={{ fontSize: 12.5, fontWeight: 500, color: T.text, textAlign: 'center', lineHeight: 1.25, pointerEvents: 'none' }}>{app.label}</span>
       )}
     </div>
   )
 }
 
 function FolderTile({
-  name, apps, isDropTarget, onOpen, onDragOver, onDragLeave, onDrop,
+  name, apps, isDropTarget, onOpen, onDragOver, onDrop,
 }: {
   name: string
   apps: LauncherApp[]
   isDropTarget?: boolean
   onOpen: () => void
   onDragOver?: (e: React.DragEvent) => void
-  onDragLeave?: () => void
   onDrop?: (e: React.DragEvent) => void
 }) {
   const preview = apps.slice(0, 4)
@@ -350,7 +355,6 @@ function FolderTile({
     <div
       onClick={onOpen}
       onDragOver={onDragOver}
-      onDragLeave={onDragLeave}
       onDrop={onDrop}
       style={{
         position: 'relative',
@@ -367,7 +371,7 @@ function FolderTile({
       onMouseLeave={e => { e.currentTarget.style.transform = 'translateY(0)' }}
     >
       {/* iOS-style mini 2x2 preview */}
-      <div style={{ width: 60, height: 60, borderRadius: 14, background: T.bg4, border: `1px solid ${T.border2}`, padding: 7, display: 'grid', gridTemplateColumns: '1fr 1fr', gridTemplateRows: '1fr 1fr', gap: 4 }}>
+      <div style={{ width: 60, height: 60, borderRadius: 14, background: T.bg4, border: `1px solid ${T.border2}`, padding: 7, display: 'grid', gridTemplateColumns: '1fr 1fr', gridTemplateRows: '1fr 1fr', gap: 4, pointerEvents: 'none' }}>
         {preview.map(a => (
           <div key={a.id} style={{ borderRadius: 5, background: `${a.accent}22`, color: a.accent, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
             <AppIcon name={a.id} size={13}/>
@@ -377,7 +381,7 @@ function FolderTile({
           <div key={`e${i}`} style={{ borderRadius: 5, background: 'rgba(255,255,255,0.03)' }}/>
         ))}
       </div>
-      <span style={{ fontSize: 12.5, fontWeight: 500, color: T.text, textAlign: 'center', lineHeight: 1.25 }}>
+      <span style={{ fontSize: 12.5, fontWeight: 500, color: T.text, textAlign: 'center', lineHeight: 1.25, pointerEvents: 'none' }}>
         {name} <span style={{ color: T.text3 }}>({apps.length})</span>
       </span>
     </div>
