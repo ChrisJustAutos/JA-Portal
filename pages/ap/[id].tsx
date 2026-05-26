@@ -209,6 +209,9 @@ export default function APDetailPage({ user }: PageProps) {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [editingLines, setEditingLines] = useState<LineRow[] | null>(null)
+  // Lines ticked for partial-merge. Only meaningful while editingLines !== null.
+  // Cleared on enter-edit, cancel, save, and after any merge.
+  const [selectedLineIds, setSelectedLineIds] = useState<Set<string>>(() => new Set())
   const [editingHeader, setEditingHeader] = useState<HeaderEditable | null>(null)
   const [savingHeader, setSavingHeader] = useState(false)
   const [headerMessage, setHeaderMessage] = useState<string | null>(null)
@@ -391,6 +394,7 @@ export default function APDetailPage({ user }: PageProps) {
       const json: DetailResponse = await res.json()
       setData(json)
       setEditingLines(null)
+      setSelectedLineIds(new Set())
       setEditingHeader(null)
       setError(null)
     } catch (e: any) {
@@ -729,9 +733,19 @@ export default function APDetailPage({ user }: PageProps) {
       line_total_ex_gst: flip(l.line_total_ex_gst) ?? 0,
       gst_amount:        flip(l.gst_amount),
     })))
+    setSelectedLineIds(new Set())
+  }
+  function toggleLineSelected(lineId: string) {
+    setSelectedLineIds(prev => {
+      const next = new Set(prev)
+      if (next.has(lineId)) next.delete(lineId)
+      else next.add(lineId)
+      return next
+    })
   }
   function cancelEdit() {
     setEditingLines(null)
+    setSelectedLineIds(new Set())
     setSaveMessage(null)
     setAccountPickerLineId(null)
   }
@@ -739,39 +753,49 @@ export default function APDetailPage({ user }: PageProps) {
     if (!editingLines) return
     setEditingLines(editingLines.map(l => l.id === lineId ? { ...l, ...patch } : l))
   }
-  // Collapse all lines into a single line. Useful for invoices where the
-  // PDF is one block of text and the parser produced many tiny rows that
-  // really should book against a single account. Description is the
-  // concatenation; totals are summed; account taken from the first line
-  // that has one (preserves a manual pick); tax_code from the majority.
-  function mergeLines() {
-    if (!editingLines || !data || editingLines.length < 2) return
-    const ok = confirm(`Merge all ${editingLines.length} lines into one?\n\nDescriptions will be joined, line totals summed, qty cleared. Account is taken from the first line that has one. You can still tweak before saving.`)
-    if (!ok) return
+  // Collapse the given lines into a single line, in-place. Useful for
+  // invoices where the parser produced many tiny rows that really
+  // should book against a single account, or where a few lines (e.g.
+  // freight + handling) belong together but the rest are fine as-is.
+  // Description is the concatenation; totals are summed; account taken
+  // from the first selected line that has one (preserves a manual
+  // pick); tax_code from the majority of the selected lines.
+  function mergeLines(idsToMerge: string[]) {
+    if (!editingLines || !data) return
+    const idSet = new Set(idsToMerge)
+    const subset = editingLines.filter(l => idSet.has(l.id))
+    if (subset.length < 2) return
 
-    const total = editingLines.reduce((s, l) => s + Number(l.line_total_ex_gst || 0), 0)
-    const description = editingLines
+    const isAll = subset.length === editingLines.length
+    const confirmMsg = isAll
+      ? `Merge all ${subset.length} lines into one?\n\nDescriptions will be joined, line totals summed, qty cleared. Account is taken from the first line that has one. You can still tweak before saving.`
+      : `Merge ${subset.length} selected lines into one?\n\nDescriptions will be joined, line totals summed, qty cleared. Account is taken from the first selected line that has one. Other lines are left as-is. You can still tweak before saving.`
+    if (!confirm(confirmMsg)) return
+
+    const total = subset.reduce((s, l) => s + Number(l.line_total_ex_gst || 0), 0)
+    const description = subset
       .map(l => [l.part_number, l.description].filter(Boolean).join(' '))
       .map(s => s.trim())
       .filter(Boolean)
       .join(' · ')
       .slice(0, 4000)
 
-    // Tax code = majority vote among existing lines, default GST.
+    // Tax code = majority vote among the selected lines, default GST.
     const taxCounts = new Map<string, number>()
-    for (const l of editingLines) {
+    for (const l of subset) {
       const tc = (l.tax_code || 'GST').toUpperCase()
       taxCounts.set(tc, (taxCounts.get(tc) || 0) + 1)
     }
     const taxCode = Array.from(taxCounts.entries()).sort((a, b) => b[1] - a[1])[0]?.[0] || 'GST'
 
-    // Account = first line that has one. Prefer manual picks.
-    const withAccount = editingLines.find(l => !!l.account_uid && l.account_source === 'manual')
-                     ?? editingLines.find(l => !!l.account_uid)
+    // Account = first selected line that has one. Prefer manual picks.
+    const withAccount = subset.find(l => !!l.account_uid && l.account_source === 'manual')
+                     ?? subset.find(l => !!l.account_uid)
     const merged: LineRow = {
       id: `new-${Date.now()}`,
       invoice_id: data.invoice.id,
-      line_no: 1,
+      // Renumbered below — placeholder for now.
+      line_no: 0,
       part_number: null,
       description: description || '(merged line)',
       qty: null,
@@ -788,7 +812,27 @@ export default function APDetailPage({ user }: PageProps) {
       suggested_account_code: null,
       suggested_account_name: null,
     }
-    setEditingLines([merged])
+
+    // Rebuild the list: put the merged row at the position of the first
+    // selected line, drop the rest of the selection. Then renumber the
+    // whole list 1..N so line_no stays contiguous and predictable.
+    const firstIdx = editingLines.findIndex(l => idSet.has(l.id))
+    const next: LineRow[] = []
+    let inserted = false
+    editingLines.forEach((l, i) => {
+      if (idSet.has(l.id)) {
+        if (!inserted && i === firstIdx) {
+          next.push(merged)
+          inserted = true
+        }
+        // Otherwise drop this selected line.
+      } else {
+        next.push(l)
+      }
+    })
+    const renumbered = next.map((l, i) => ({ ...l, line_no: i + 1 }))
+    setEditingLines(renumbered)
+    setSelectedLineIds(new Set())
     setAccountPickerLineId(null)
   }
   function addLine() {
@@ -1382,10 +1426,18 @@ export default function APDetailPage({ user }: PageProps) {
                     {editingLines !== null && (
                       <>
                         <button onClick={addLine} style={btnSecondary()}>+ Add line</button>
+                        {selectedLineIds.size >= 2 && (
+                          <button
+                            onClick={() => mergeLines(Array.from(selectedLineIds))}
+                            title="Combine the ticked lines into one (descriptions joined, totals summed); leaves the rest alone"
+                            style={btnSecondary()}>
+                            ⇊ Merge selected ({selectedLineIds.size})
+                          </button>
+                        )}
                         {editingLines.length >= 2 && (
                           <button
-                            onClick={mergeLines}
-                            title="Combine all lines into one (descriptions joined, totals summed)"
+                            onClick={() => mergeLines(editingLines.map(l => l.id))}
+                            title="Combine ALL lines into one (descriptions joined, totals summed)"
                             style={btnSecondary()}>
                             ⇊ Merge into one
                           </button>
@@ -1414,6 +1466,8 @@ export default function APDetailPage({ user }: PageProps) {
                   )}
                   invoiceDefaultAccountCode={data.invoice.resolved_account_code}
                   editable={editingLines !== null}
+                  selectedIds={selectedLineIds}
+                  onToggleSelect={toggleLineSelected}
                   onChange={updateLine}
                   onRemove={removeLine}
                   onPickAccount={(lineId) => setAccountPickerLineId(lineId)}
@@ -2968,12 +3022,16 @@ function WorkshopJobSection({
 }
 
 function LinesTable({
-  lines, invoiceDefaultAccountCode, editable,
+  lines, invoiceDefaultAccountCode, editable, selectedIds, onToggleSelect,
   onChange, onRemove, onPickAccount, onApplySuggestion,
 }: {
   lines: LineRow[]
   invoiceDefaultAccountCode: string | null
   editable: boolean
+  // Optional: present only in edit mode. When provided, renders a
+  // checkbox column for partial-merge selection.
+  selectedIds?: Set<string>
+  onToggleSelect?: (id: string) => void
   onChange: (id: string, patch: Partial<LineRow>) => void
   onRemove: (id: string) => void
   onPickAccount: (lineId: string) => void
@@ -2982,11 +3040,13 @@ function LinesTable({
   if (lines.length === 0) {
     return <div style={{padding:14, textAlign:'center', color:T.text3, fontSize:12}}>No line items.</div>
   }
+  const showSelect = editable && !!onToggleSelect
   return (
     <div style={{overflowX:'auto', WebkitOverflowScrolling:'touch'}}>
       <table style={{width:'100%', borderCollapse:'collapse', fontSize:12, minWidth: 720}}>
         <thead>
           <tr style={{borderBottom:`1px solid ${T.border}`}}>
+            {showSelect && <th style={lh(28)} title="Tick to merge"/>}
             <th style={lh(36)}>#</th>
             <th style={lh(120)}>Part</th>
             <th style={lh()}>Description</th>
@@ -3002,6 +3062,17 @@ function LinesTable({
         <tbody>
           {lines.map((l, i) => (
             <tr key={l.id} style={{borderTop: i > 0 ? `1px solid ${T.border}` : 'none'}}>
+              {showSelect && (
+                <td style={{...ld(), textAlign:'center'}}>
+                  <input
+                    type="checkbox"
+                    checked={!!selectedIds?.has(l.id)}
+                    onChange={() => onToggleSelect!(l.id)}
+                    style={{cursor:'pointer'}}
+                    title="Include in merge"
+                  />
+                </td>
+              )}
               <td style={ld()}>{l.line_no}</td>
               <td style={ld()}>
                 {editable
