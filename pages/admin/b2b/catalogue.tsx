@@ -64,6 +64,9 @@ interface CatalogueItem {
   freight_packaging: FreightPackaging | null
   is_special_order: boolean
   is_drop_ship: boolean
+  myob_supplier_uid: string | null
+  myob_supplier_name: string | null
+  supplier_item_number: string | null
   call_for_availability_below_qty: number | null
   call_for_availability_when_zero: boolean
   instructions_url: string | null
@@ -1017,6 +1020,18 @@ function EditDrawer({
               value={item.is_drop_ship}
               onChange={v => { patch({ is_drop_ship: v }).catch(() => {}) }}
             />
+            {item.is_drop_ship && (
+              <div style={{padding:'6px 0 2px', fontSize:12, lineHeight:1.5}}>
+                {item.myob_supplier_name ? (
+                  <span style={{color:T.text2}}>
+                    Drop-ship supplier: <strong style={{color:T.text}}>{item.myob_supplier_name}</strong>
+                    {item.supplier_item_number ? <span style={{color:T.text3}}> · their #{item.supplier_item_number}</span> : null}
+                  </span>
+                ) : (
+                  <span style={{color:T.amber}}>⚠ No reorder supplier on this MYOB item — set one in MYOB (Buying Details) so a drop-ship PO can be raised.</span>
+                )}
+              </div>
+            )}
             <BoolRow
               label="Show 'Call for availability' when out of stock"
               hint="Replaces the 'Out of stock' badge"

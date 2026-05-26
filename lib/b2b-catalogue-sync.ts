@@ -158,6 +158,9 @@ export async function syncJawsCatalogue(
     name: string
     rrp_ex_gst: number | null
     is_taxable: boolean
+    myob_supplier_uid: string | null
+    myob_supplier_name: string | null
+    supplier_item_number: string | null
     last_synced_from_myob_at: string
     myob_snapshot: any
     // Insert-only seed fields
@@ -194,6 +197,10 @@ export async function syncJawsCatalogue(
     const isTaxable   = !!it.SellingDetails?.TaxCode
     const existing    = existingByUid.get(it.UID)
 
+    // MYOB reorder/primary supplier lives on the item's buying details.
+    const restock     = it.BuyingDetails?.RestockingInformation
+    const supplier     = restock?.Supplier
+
     const base: SyncRow = {
       myob_item_uid: it.UID,
       myob_company_file: 'JAWS',
@@ -201,6 +208,9 @@ export async function syncJawsCatalogue(
       name: it.Name,
       rrp_ex_gst: rrpExGst,
       is_taxable: isTaxable,
+      myob_supplier_uid:    supplier?.UID || null,
+      myob_supplier_name:   supplier?.Name || null,
+      supplier_item_number: restock?.SupplierItemNumber || null,
       last_synced_from_myob_at: nowIso,
       myob_snapshot: it,
     }
@@ -262,6 +272,9 @@ export async function syncJawsCatalogue(
               name: row.name,
               rrp_ex_gst: row.rrp_ex_gst,
               is_taxable: row.is_taxable,
+              myob_supplier_uid: row.myob_supplier_uid,
+              myob_supplier_name: row.myob_supplier_name,
+              supplier_item_number: row.supplier_item_number,
               last_synced_from_myob_at: row.last_synced_from_myob_at,
               myob_snapshot: row.myob_snapshot,
             })
