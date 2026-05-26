@@ -3041,6 +3041,28 @@ function LinesTable({
     return <div style={{padding:14, textAlign:'center', color:T.text3, fontSize:12}}>No line items.</div>
   }
   const showSelect = editable && !!onToggleSelect
+
+  // Per-line GST: never charge GST on FRE lines (even if a stale
+  // gst_amount lingers from extraction). Otherwise prefer the recorded
+  // gst_amount so we display exactly what the supplier charged; only
+  // fall back to a calculated 10% when gst_amount is missing.
+  const perLineGst = (l: LineRow): number => {
+    const tc = (l.tax_code || '').toUpperCase()
+    if (tc === 'FRE') return 0
+    const stored = l.gst_amount == null ? null : Number(l.gst_amount)
+    if (stored !== null && Number.isFinite(stored)) return stored
+    if (tc === 'GST') return Number(l.line_total_ex_gst || 0) * 0.10
+    return 0
+  }
+
+  const totalEx       = lines.reduce((s, l) => s + Number(l.line_total_ex_gst || 0), 0)
+  const totalGst      = lines.reduce((s, l) => s + perLineGst(l), 0)
+  const taxableExSum  = lines.reduce((s, l) => s + ((l.tax_code || '').toUpperCase() === 'GST' ? Number(l.line_total_ex_gst || 0) : 0), 0)
+  const freeExSum     = lines.reduce((s, l) => s + ((l.tax_code || '').toUpperCase() === 'FRE' ? Number(l.line_total_ex_gst || 0) : 0), 0)
+
+  const preTotalExCols = showSelect ? 7 : 6
+  const postGstCols    = editable ? 3 : 2
+
   return (
     <div style={{overflowX:'auto', WebkitOverflowScrolling:'touch'}}>
       <table style={{width:'100%', borderCollapse:'collapse', fontSize:12, minWidth: 720}}>
@@ -3054,6 +3076,7 @@ function LinesTable({
             <th style={lh(50)}>UoM</th>
             <th style={{...lh(80), textAlign:'right'}}>Unit ex</th>
             <th style={{...lh(80), textAlign:'right'}}>Total ex</th>
+            <th style={{...lh(70), textAlign:'right'}}>GST $</th>
             <th style={lh(56)}>Tax</th>
             <th style={lh(220)}>Account</th>
             {editable && <th style={lh(40)}/>}
@@ -3104,6 +3127,16 @@ function LinesTable({
                   ? <Inp value={l.line_total_ex_gst?.toString() || ''} onChange={v => onChange(l.id, { line_total_ex_gst: Number(v) || 0 })} alignRight/>
                   : fmtMoney(l.line_total_ex_gst)}
               </td>
+              <td style={{
+                ...ld(),
+                textAlign:'right',
+                fontFamily:'monospace',
+                color: (l.tax_code || '').toUpperCase() === 'FRE' ? T.text3 : T.text,
+              }}>
+                {(l.tax_code || '').toUpperCase() === 'FRE'
+                  ? <span title="GST-free line — no GST charged">—</span>
+                  : fmtMoney(perLineGst(l))}
+              </td>
               <td style={ld()}>
                 {editable ? (
                   <select
@@ -3113,7 +3146,9 @@ function LinesTable({
                   >
                     {['GST','FRE','CAP','EXP','GNR','ITS','N-T'].map(c => <option key={c} value={c}>{c}</option>)}
                   </select>
-                ) : l.tax_code}
+                ) : (
+                  <TaxCodePill code={l.tax_code}/>
+                )}
               </td>
               <td style={ld()}>
                 <AccountCell
@@ -3132,8 +3167,48 @@ function LinesTable({
             </tr>
           ))}
         </tbody>
+        <tfoot>
+          <tr style={{borderTop:`2px solid ${T.border}`, background: T.bg3}}>
+            <td colSpan={preTotalExCols} style={{padding:'8px 10px', fontSize:11, color:T.text3, fontWeight:500}}>
+              {lines.length} line{lines.length === 1 ? '' : 's'}
+            </td>
+            <td style={{padding:'8px 10px', textAlign:'right', fontFamily:'monospace', fontSize:12, color:T.text, fontWeight:500}}>
+              {fmtMoney(totalEx)}
+            </td>
+            <td style={{padding:'8px 10px', textAlign:'right', fontFamily:'monospace', fontSize:12, color:T.text, fontWeight:500}}>
+              {fmtMoney(totalGst)}
+            </td>
+            <td colSpan={postGstCols} style={{padding:'8px 10px', fontSize:10, color:T.text3, lineHeight:1.5}}>
+              <span title="Total ex-GST of lines with tax code GST">GST-taxable <span style={{fontFamily:'monospace', color:T.text}}>{fmtMoney(taxableExSum)}</span></span>
+              <span style={{margin:'0 6px', color:T.border2}}>·</span>
+              <span title="Total ex-GST of lines marked GST-free">GST-free <span style={{fontFamily:'monospace', color:T.text}}>{fmtMoney(freeExSum)}</span></span>
+            </td>
+          </tr>
+        </tfoot>
       </table>
     </div>
+  )
+}
+
+function TaxCodePill({ code }: { code: string }) {
+  const c = (code || '').toUpperCase()
+  // GST = claimable (green), FRE = explicitly GST-free (amber). Anything
+  // else (CAP, EXP, GNR, ITS, N-T) is rare on supplier bills, so render
+  // as neutral so it doesn't accidentally look "approved".
+  const color = c === 'GST' ? T.green
+              : c === 'FRE' ? T.amber
+              : T.text3
+  return (
+    <span style={{
+      display:'inline-block',
+      fontSize:10, fontWeight:600,
+      color, background:`${color}15`, border:`1px solid ${color}40`,
+      padding:'2px 7px', borderRadius:99,
+      letterSpacing:'0.03em',
+      fontFamily:'inherit',
+    }}>
+      {c || '—'}
+    </span>
   )
 }
 
