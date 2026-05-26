@@ -462,7 +462,39 @@ export default function B2BSettingsPage({ user }: Props) {
 
                 <div style={{height:24}}/>
 
-                <div style={{fontSize:13,color:T.text2,fontWeight:500,marginBottom:8}}>Sender (pickup) address</div>
+                <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:8,flexWrap:'wrap'}}>
+                  <div style={{fontSize:13,color:T.text2,fontWeight:500}}>Sender (pickup) address</div>
+                  <span style={{flex:1}}/>
+                  <button
+                    onClick={async () => {
+                      try {
+                        const r = await fetch('/api/b2b/admin/machship-sender-from-myob', { credentials: 'same-origin' })
+                        const j = await r.json()
+                        if (!r.ok) throw new Error(j?.error || `HTTP ${r.status}`)
+                        const s = j.sender || {}
+                        setMsFromName(s.name || '')
+                        setMsFromCompany(s.company || '')
+                        setMsFromPhone(s.phone || '')
+                        setMsFromEmail(s.email || '')
+                        setMsFromAddr1(s.address_line1 || '')
+                        setMsFromAddr2(s.address_line2 || '')
+                        setMsFromSuburb(s.suburb || '')
+                        setMsFromPost(s.postcode || '')
+                        setMsFromState(s.state || '')
+                        setSavedFlash('Pulled from MYOB — review and click Save sender address to apply.')
+                        setTimeout(() => setSavedFlash(null), 4000)
+                      } catch (e: any) {
+                        setError(e?.message || String(e))
+                      }
+                    }}
+                    style={{
+                      padding:'5px 10px', borderRadius:5,
+                      border:`1px solid ${T.border2}`, background:'transparent',
+                      color: T.blue, fontSize:11, fontFamily:'inherit', cursor:'pointer',
+                    }}>
+                    ⤓ Pull from MYOB JAWS
+                  </button>
+                </div>
                 <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}}>
                   <Field label="Contact name">
                     <input type="text" value={msFromName} onChange={e => setMsFromName(e.target.value)} style={inputStyle()} placeholder="Workshop staff name"/>
