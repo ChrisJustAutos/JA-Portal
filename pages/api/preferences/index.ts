@@ -32,7 +32,32 @@ const PATCHABLE_KEYS = new Set([
   'nav_groups',
   'app_labels',
   'launcher_order',
+  'order_status_groups',
 ])
+
+const VALID_ORDER_STATUSES = new Set(['pending_payment','paid','picking','packed','shipped','delivered','cancelled','refunded'])
+
+// Coerce + validate order_status_groups: [{ id, name, statuses[] }].
+function sanitizeOrderStatusGroups(input: any): { ok: true; value: any[] } | { ok: false; error: string } {
+  if (input == null) return { ok: true, value: [] }
+  if (!Array.isArray(input)) return { ok: false, error: 'must be an array' }
+  if (input.length > 20) return { ok: false, error: 'too many groups (max 20)' }
+  const out: any[] = []
+  const seen = new Set<string>()
+  for (const g of input) {
+    if (!g || typeof g !== 'object') return { ok: false, error: 'each group must be an object' }
+    const id = String(g.id || '').trim().slice(0, 64)
+    const name = String(g.name || '').trim().slice(0, 40)
+    if (!id || seen.has(id)) continue
+    seen.add(id)
+    if (!name) return { ok: false, error: 'group name required' }
+    if (!Array.isArray(g.statuses)) return { ok: false, error: 'statuses must be an array' }
+    const statuses = Array.from(new Set(g.statuses.filter((s: any) => typeof s === 'string' && VALID_ORDER_STATUSES.has(s))))
+    if (statuses.length === 0) continue
+    out.push({ id, name, statuses })
+  }
+  return { ok: true, value: out }
+}
 
 // Coerce + validate launcher_order: a flat list of cell id strings.
 function sanitizeLauncherOrder(input: any): { ok: true; value: string[] } | { ok: false; error: string } {
@@ -152,6 +177,12 @@ async function handler(req: NextApiRequest, res: NextApiResponse, user: any) {
       const result = sanitizeLauncherOrder(patch.launcher_order)
       if (!result.ok) return res.status(400).json({ error: `launcher_order: ${result.error}` })
       patch.launcher_order = result.value
+    }
+
+    if ('order_status_groups' in patch) {
+      const result = sanitizeOrderStatusGroups(patch.order_status_groups)
+      if (!result.ok) return res.status(400).json({ error: `order_status_groups: ${result.error}` })
+      patch.order_status_groups = result.value
     }
 
     // Ensure row exists first (in case GET was never called)

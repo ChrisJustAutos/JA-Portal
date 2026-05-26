@@ -113,6 +113,21 @@ const ICONS: Record<string, (p: IconProps) => JSX.Element> = {
     <circle cx="9" cy="7" r="3.5"/>
     <path d="M22 21v-2a4 4 0 0 0-3-3.85"/><path d="M16 3.5a4 4 0 0 1 0 7"/>
   </>, p),
+  // Order-status glyphs
+  pending: (p) => svg(<><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></>, p),
+  truck: (p) => svg(<>
+    <path d="M3 6h11v9H3zM14 9h4l3 3v3h-7z"/>
+    <circle cx="7" cy="18" r="1.6"/><circle cx="17.5" cy="18" r="1.6"/>
+  </>, p),
+  'check-circle': (p) => svg(<><circle cx="12" cy="12" r="9"/><path d="m8.5 12 2.5 2.5 4.5-5"/></>, p),
+  'x-circle': (p) => svg(<><circle cx="12" cy="12" r="9"/><path d="m9 9 6 6M15 9l-6 6"/></>, p),
+  refund: (p) => svg(<>
+    <path d="M3 7v6h6"/><path d="M3 13a9 9 0 1 0 2.6-6.4L3 9"/>
+  </>, p),
+  all: (p) => svg(<>
+    <rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/>
+    <rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>
+  </>, p),
 }
 
 // Fallback: a generic grid square so an unmapped id never crashes.

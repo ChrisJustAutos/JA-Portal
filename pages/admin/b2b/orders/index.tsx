@@ -9,6 +9,8 @@ import Head from 'next/head'
 import { useRouter } from 'next/router'
 import PortalTopBar from '../../../../lib/PortalTopBar'
 import B2BAdminTabs from '../../../../components/b2b/B2BAdminTabs'
+import { AppIcon } from '../../../../lib/AppIcons'
+import { usePreferences } from '../../../../lib/preferences'
 import { requirePageAuth } from '../../../../lib/authServer'
 import type { UserRole } from '../../../../lib/permissions'
 
@@ -81,6 +83,21 @@ const STATUS_COLOR: Record<string, string> = {
   cancelled: T.red,
   refunded: T.purple,
 }
+const STATUS_ICON: Record<string, string> = {
+  pending_payment: 'pending',
+  paid: 'payables',
+  picking: 'stocktake',
+  packed: 'orders',
+  shipped: 'truck',
+  delivered: 'check-circle',
+  cancelled: 'x-circle',
+  refunded: 'refund',
+}
+
+function genGroupId(): string { return 'osg_' + Math.random().toString(36).slice(2, 10) }
+
+// A tile is either a single status or a user-defined group of statuses.
+interface StatusTile { id: string; label: string; statuses: string[]; color: string; icon: string; isGroup: boolean }
 
 export default function AdminOrdersListPage({ user }: Props) {
   const router = useRouter()
@@ -98,6 +115,18 @@ export default function AdminOrdersListPage({ user }: Props) {
   const [loading, setLoading] = useState(true)
   const [error, setError]     = useState<string | null>(null)
   const [searchInput, setSearchInput] = useState(searchQuery)
+
+  // Per-user combined status buckets + drag-to-combine state.
+  const { prefs, update } = usePreferences()
+  const [drag, setDrag] = useState<{ id: string; statuses: string[] } | null>(null)
+  const [dragOverId, setDragOverId] = useState<string | null>(null)
+  const [tileEdit, setTileEdit] = useState(false)
+  useEffect(() => {
+    const clear = () => { setDrag(null); setDragOverId(null) }
+    window.addEventListener('dragend', clear)
+    window.addEventListener('drop', clear)
+    return () => { window.removeEventListener('dragend', clear); window.removeEventListener('drop', clear) }
+  }, [])
 
   // Sync the search input with the URL when navigation happens externally
   useEffect(() => { setSearchInput(searchQuery) }, [searchQuery])
@@ -146,6 +175,50 @@ export default function AdminOrdersListPage({ user }: Props) {
   const totalPages = data ? Math.ceil(data.total_count / LIMIT) : 0
   const currentPage = Math.floor(offset / LIMIT) + 1
 
+  // ── Status tiles (groups + ungrouped statuses) ──────────────────────
+  const groups = (prefs.order_status_groups || []).filter(g => g.statuses.length > 0)
+  const groupedStatuses = new Set<string>(groups.flatMap(g => g.statuses))
+  const statusCount = (s: string) => (data?.status_counts?.[s] ?? 0)
+  const tiles: StatusTile[] = useMemo(() => {
+    const groupTiles: StatusTile[] = groups.map(g => ({
+      id: g.id, label: g.name, statuses: g.statuses, isGroup: true,
+      color: STATUS_COLOR[g.statuses[0]] || T.blue, icon: 'all',
+    }))
+    const singleTiles: StatusTile[] = STATUS_ORDER.filter(s => !groupedStatuses.has(s)).map(s => ({
+      id: s, label: STATUS_LABEL[s], statuses: [s], isGroup: false,
+      color: STATUS_COLOR[s], icon: STATUS_ICON[s] || 'all',
+    }))
+    return [...groupTiles, ...singleTiles]
+  }, [prefs.order_status_groups, data?.status_counts])
+
+  const activeSet = new Set(statusFilter ? statusFilter.split(',').filter(Boolean) : [])
+  const sameSet = (a: string[], b: Set<string>) => a.length === b.size && a.every(x => b.has(x))
+
+  const saveGroups = (next: typeof groups) => { update({ order_status_groups: next }).catch(() => {}) }
+
+  function combineTiles(targetId: string, draggedId: string) {
+    if (targetId === draggedId) return
+    const target = tiles.find(t => t.id === targetId)
+    const dragged = tiles.find(t => t.id === draggedId)
+    if (!target || !dragged) return
+    const union = Array.from(new Set([...target.statuses, ...dragged.statuses]))
+    // Drop any existing group that overlaps the union, then add the merged one.
+    const keep = groups.filter(g => !g.statuses.some(s => union.includes(s)))
+    const merged = {
+      id: target.isGroup ? target.id : genGroupId(),
+      name: target.isGroup ? target.label : 'Group',
+      statuses: union,
+    }
+    saveGroups([merged, ...keep])
+  }
+  function ungroup(groupId: string) {
+    saveGroups(groups.filter(g => g.id !== groupId))
+  }
+  function renameGroup(groupId: string, name: string) {
+    const trimmed = name.trim().slice(0, 40) || 'Group'
+    saveGroups(groups.map(g => g.id === groupId ? { ...g, name: trimmed } : g))
+  }
+
   return (
     <>
       <Head><title>B2B Orders · JA Portal</title></Head>
@@ -179,25 +252,51 @@ export default function AdminOrdersListPage({ user }: Props) {
             )}
           </header>
 
-          {/* Filter pills row */}
+          {/* Status tiles — click to filter, drag one onto another to combine */}
           {data && (
-            <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:12}}>
-              <FilterPill
-                active={!statusFilter}
-                onClick={() => updateFilter({ status: null })}
-                count={data.status_counts['_all'] ?? null}>
-                All
-              </FilterPill>
-              {STATUS_ORDER.map(s => (
-                <FilterPill
-                  key={s}
-                  active={statusFilter === s}
-                  onClick={() => updateFilter({ status: s })}
-                  color={STATUS_COLOR[s]}
-                  count={data.status_counts[s] ?? 0}>
-                  {STATUS_LABEL[s]}
-                </FilterPill>
-              ))}
+            <div style={{marginBottom:14}}>
+              <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:8}}>
+                <span style={{fontSize:10,color:T.text3,textTransform:'uppercase',letterSpacing:'0.06em',fontWeight:600}}>Filter by status</span>
+                <button onClick={() => setTileEdit(e => !e)}
+                  style={{background: tileEdit ? T.accent : 'transparent',border:`1px solid ${tileEdit ? T.accent : T.border2}`,color: tileEdit ? '#fff' : T.text3,borderRadius:6,padding:'3px 9px',fontSize:11,fontFamily:'inherit',cursor:'pointer'}}>
+                  {tileEdit ? 'Done' : '✎ Edit buckets'}
+                </button>
+                {tileEdit
+                  ? <span style={{fontSize:11,color:T.text3}}>Rename or ungroup combined buckets. Drag is paused.</span>
+                  : <span style={{fontSize:11,color:T.text3}}>Drag one tile onto another to combine.</span>}
+              </div>
+              <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill, minmax(150px, 1fr))',gap:10}}>
+                {/* All */}
+                <StatusCard
+                  label="All orders" icon="all" color={T.blue}
+                  count={data.status_counts['_all'] ?? null}
+                  active={activeSet.size === 0}
+                  onClick={() => updateFilter({ status: null })}
+                />
+                {tiles.map(t => {
+                  const count = t.statuses.reduce((sum, s) => sum + statusCount(s), 0)
+                  return (
+                    <StatusCard
+                      key={t.id}
+                      label={t.label} icon={t.icon} color={t.color}
+                      count={count}
+                      active={sameSet(t.statuses, activeSet)}
+                      isGroup={t.isGroup}
+                      editMode={tileEdit}
+                      draggable={!tileEdit}
+                      isDragging={drag?.id === t.id}
+                      isDropTarget={dragOverId === t.id && !!drag && drag.id !== t.id}
+                      onClick={() => updateFilter({ status: t.statuses.join(',') })}
+                      onRename={(name) => renameGroup(t.id, name)}
+                      onUngroup={() => ungroup(t.id)}
+                      onDragStart={(e) => { e.dataTransfer.setData('text/plain', t.id); e.dataTransfer.effectAllowed = 'move'; setDrag({ id: t.id, statuses: t.statuses }) }}
+                      onDragEnd={() => { setDrag(null); setDragOverId(null) }}
+                      onDragOver={(e) => { if (drag && drag.id !== t.id) { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; setDragOverId(t.id) } }}
+                      onDrop={(e) => { e.preventDefault(); const d = drag; setDrag(null); setDragOverId(null); if (d && d.id !== t.id) combineTiles(t.id, d.id) }}
+                    />
+                  )
+                })}
+              </div>
             </div>
           )}
 
@@ -413,30 +512,67 @@ function StatusPill({ status }: { status: string }) {
   )
 }
 
-function FilterPill({ active, onClick, color, count, children }: { active: boolean; onClick: () => void; color?: string; count?: number | null; children: React.ReactNode }) {
+function StatusCard({
+  label, icon, color, count, active, isGroup, editMode, draggable, isDragging, isDropTarget,
+  onClick, onRename, onUngroup, onDragStart, onDragEnd, onDragOver, onDrop,
+}: {
+  label: string
+  icon: string
+  color: string
+  count: number | null
+  active: boolean
+  isGroup?: boolean
+  editMode?: boolean
+  draggable?: boolean
+  isDragging?: boolean
+  isDropTarget?: boolean
+  onClick: () => void
+  onRename?: (name: string) => void
+  onUngroup?: () => void
+  onDragStart?: (e: React.DragEvent) => void
+  onDragEnd?: () => void
+  onDragOver?: (e: React.DragEvent) => void
+  onDrop?: (e: React.DragEvent) => void
+}) {
   return (
-    <button onClick={onClick}
+    <div
+      draggable={draggable}
+      onClick={editMode ? undefined : onClick}
+      onDragStart={onDragStart}
+      onDragEnd={onDragEnd}
+      onDragOver={onDragOver}
+      onDrop={onDrop}
       style={{
-        padding:'5px 10px',borderRadius:5,
-        border:`1px solid ${active ? (color || T.blue) : T.border2}`,
-        background: active ? `${color || T.blue}20` : 'transparent',
-        color: active ? (color || T.blue) : T.text2,
-        fontSize:12,fontWeight: active ? 600 : 400,
-        cursor:'pointer',fontFamily:'inherit',whiteSpace:'nowrap',
-        display:'inline-flex',alignItems:'center',gap:6,
+        position:'relative',display:'flex',alignItems:'center',gap:10,padding:'11px 13px',
+        background: active ? `${color}18` : T.bg2,
+        border:`1px solid ${isDropTarget ? color : active ? `${color}66` : T.border}`,
+        borderRadius:10,cursor: editMode ? 'default' : 'pointer',
+        opacity: isDragging ? 0.4 : 1,
+        boxShadow: isDropTarget ? `0 0 0 2px ${color}55` : 'none',
+        transition:'border-color 0.12s, box-shadow 0.12s',
+        userSelect:'none',
       }}>
-      {children}
-      {count != null && (
-        <span style={{
-          fontSize:10,
-          padding:'1px 6px',borderRadius:8,
-          background: active ? `${color || T.blue}30` : T.bg3,
-          color: active ? (color || T.blue) : T.text3,
-        }}>
-          {count}
-        </span>
+      <span style={{width:34,height:34,borderRadius:9,flexShrink:0,display:'flex',alignItems:'center',justifyContent:'center',background:`${color}1f`,color,border:`1px solid ${color}33`,pointerEvents:'none'}}>
+        <AppIcon name={icon} size={18}/>
+      </span>
+      <div style={{flex:1,minWidth:0}}>
+        {editMode && isGroup ? (
+          <input
+            defaultValue={label}
+            onClick={e => e.stopPropagation()}
+            onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
+            onBlur={e => onRename?.(e.target.value)}
+            style={{width:'100%',boxSizing:'border-box',background:T.bg3,border:`1px solid ${T.border2}`,color:T.text,borderRadius:5,padding:'3px 6px',fontSize:12,fontFamily:'inherit',outline:'none'}}
+          />
+        ) : (
+          <div style={{fontSize:13,fontWeight:600,color:T.text,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis',pointerEvents:'none'}}>{label}</div>
+        )}
+        {count != null && <div style={{fontSize:11,color:T.text3,pointerEvents:'none'}}>{count} order{count === 1 ? '' : 's'}</div>}
+      </div>
+      {editMode && isGroup && (
+        <button onClick={e => { e.stopPropagation(); onUngroup?.() }} title="Ungroup" style={{background:'none',border:'none',color:T.text3,fontSize:15,cursor:'pointer',lineHeight:1,padding:'0 2px'}}>⊟</button>
       )}
-    </button>
+    </div>
   )
 }
 

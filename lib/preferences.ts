@@ -48,6 +48,8 @@ export interface UserPreferences {
   app_labels: Record<string, string>
   // Per-user launcher tile order: list of cell ids (app ids + folder ids).
   launcher_order: string[]
+  // Per-user combined status buckets on the B2B orders page.
+  order_status_groups: Array<{ id: string; name: string; statuses: string[] }>
 }
 
 export const DEFAULT_PREFERENCES: UserPreferences = {
@@ -64,6 +66,7 @@ export const DEFAULT_PREFERENCES: UserPreferences = {
   nav_groups: [],
   app_labels: {},
   launcher_order: [],
+  order_status_groups: [],
 }
 
 // Hex values for each accent option (used both for swatches in the picker and
