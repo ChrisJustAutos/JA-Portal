@@ -44,6 +44,7 @@ export default function HomePage({ user }: Props) {
   const [dragOverId, setDragOverId] = useState<string | null>(null)
   const [openFolderId, setOpenFolderId] = useState<string | null>(null)
   const [renaming, setRenaming] = useState(false)
+  const [editMode, setEditMode] = useState(false)
 
   const appById = useMemo(() => {
     const m: Record<string, LauncherApp> = {}
@@ -103,6 +104,15 @@ export default function HomePage({ user }: Props) {
     saveGroups((prefs.nav_groups || []).map(g => g.id === folderId ? { ...g, name: trimmed } : g))
   }
 
+  // Per-user app rename. Blank or equal-to-default clears the override.
+  function saveLabel(appId: string, name: string, defaultLabel: string) {
+    const next = { ...(prefs.app_labels || {}) }
+    const trimmed = name.trim().slice(0, 40)
+    if (!trimmed || trimmed === defaultLabel) delete next[appId]
+    else next[appId] = trimmed
+    update({ app_labels: next }).catch(() => {})
+  }
+
   // ── Search (flat, folder-agnostic) ────────────────────────────────
   const searching = query.trim().length > 0
   const searchResults = useMemo(() => {
@@ -151,8 +161,19 @@ export default function HomePage({ user }: Props) {
             value={query}
             onChange={e => setQuery(e.target.value)}
             placeholder="Search apps…"
-            style={{ width: '100%', boxSizing: 'border-box', marginBottom: 24, background: T.bg2, border: `1px solid ${T.border2}`, color: T.text, borderRadius: 10, padding: '12px 16px', fontSize: 15, fontFamily: 'inherit', outline: 'none' }}
+            style={{ width: '100%', boxSizing: 'border-box', marginBottom: 16, background: T.bg2, border: `1px solid ${T.border2}`, color: T.text, borderRadius: 10, padding: '12px 16px', fontSize: 15, fontFamily: 'inherit', outline: 'none' }}
           />
+
+          {!searching && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 18 }}>
+              <button
+                onClick={() => setEditMode(e => !e)}
+                style={{ background: editMode ? T.accent : 'transparent', border: `1px solid ${editMode ? T.accent : T.border2}`, color: editMode ? '#fff' : T.text2, borderRadius: 8, padding: '6px 12px', fontSize: 12.5, fontFamily: 'inherit', cursor: 'pointer' }}>
+                {editMode ? 'Done' : '✎ Edit names'}
+              </button>
+              {editMode && <span style={{ fontSize: 11.5, color: T.text3 }}>Type a new name on any tile. Drag-to-merge is paused while editing.</span>}
+            </div>
+          )}
 
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(132px, 1fr))', gap: 14 }}>
             {searching
@@ -177,7 +198,9 @@ export default function HomePage({ user }: Props) {
                     <AppTile
                       key={app.id}
                       app={app}
-                      draggable
+                      draggable={!editMode}
+                      editMode={editMode}
+                      onCommitRename={(name) => saveLabel(app.id, name, app.defaultLabel)}
                       isDragging={drag?.appId === app.id}
                       isDropTarget={dragOverId === app.id && drag?.appId !== app.id}
                       onClick={() => launch(app)}
@@ -241,7 +264,7 @@ export default function HomePage({ user }: Props) {
 
 // ── Tiles ────────────────────────────────────────────────────────────
 function AppTile({
-  app, onClick, draggable, isDragging, isDropTarget,
+  app, onClick, draggable, isDragging, isDropTarget, editMode, onCommitRename,
   onDragStart, onDragEnd, onDragOver, onDragLeave, onDrop,
 }: {
   app: LauncherApp
@@ -249,16 +272,19 @@ function AppTile({
   draggable?: boolean
   isDragging?: boolean
   isDropTarget?: boolean
+  editMode?: boolean
+  onCommitRename?: (name: string) => void
   onDragStart?: () => void
   onDragEnd?: () => void
   onDragOver?: (e: React.DragEvent) => void
   onDragLeave?: () => void
   onDrop?: (e: React.DragEvent) => void
 }) {
+  const isCustom = app.label !== app.defaultLabel
   return (
     <div
       draggable={draggable}
-      onClick={onClick}
+      onClick={editMode ? undefined : onClick}
       onDragStart={onDragStart}
       onDragEnd={onDragEnd}
       onDragOver={onDragOver}
@@ -270,19 +296,40 @@ function AppTile({
         padding: '22px 12px',
         background: T.bg2,
         border: `1px solid ${isDropTarget ? app.accent : T.border}`,
-        borderRadius: 14, cursor: 'pointer',
+        borderRadius: 14, cursor: editMode ? 'default' : 'pointer',
         opacity: isDragging ? 0.4 : 1,
         boxShadow: isDropTarget ? `0 0 0 2px ${app.accent}55` : 'none',
         transition: 'transform 0.12s ease, border-color 0.12s ease, box-shadow 0.12s ease',
         userSelect: 'none',
       }}
-      onMouseEnter={e => { if (!isDropTarget) e.currentTarget.style.transform = 'translateY(-3px)' }}
+      onMouseEnter={e => { if (!isDropTarget && !editMode) e.currentTarget.style.transform = 'translateY(-3px)' }}
       onMouseLeave={e => { e.currentTarget.style.transform = 'translateY(0)' }}
     >
       <div style={{ width: 60, height: 60, borderRadius: 14, display: 'flex', alignItems: 'center', justifyContent: 'center', background: `${app.accent}1f`, color: app.accent, border: `1px solid ${app.accent}33` }}>
         <AppIcon name={app.id} size={34}/>
       </div>
-      <span style={{ fontSize: 12.5, fontWeight: 500, color: T.text, textAlign: 'center', lineHeight: 1.25 }}>{app.label}</span>
+      {editMode ? (
+        <div style={{ width: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4 }}>
+          <input
+            defaultValue={app.label}
+            placeholder={app.defaultLabel}
+            onClick={e => e.stopPropagation()}
+            onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
+            onBlur={e => onCommitRename?.(e.target.value)}
+            style={{ width: '100%', boxSizing: 'border-box', background: T.bg3, border: `1px solid ${T.border2}`, color: T.text, borderRadius: 6, padding: '4px 6px', fontSize: 12, fontFamily: 'inherit', textAlign: 'center', outline: 'none' }}
+          />
+          {isCustom && (
+            <button
+              onClick={e => { e.stopPropagation(); onCommitRename?.('') }}
+              title={`Reset to “${app.defaultLabel}”`}
+              style={{ background: 'none', border: 'none', color: T.text3, fontSize: 10.5, cursor: 'pointer', fontFamily: 'inherit', padding: 0 }}>
+              ↺ reset
+            </button>
+          )}
+        </div>
+      ) : (
+        <span style={{ fontSize: 12.5, fontWeight: 500, color: T.text, textAlign: 'center', lineHeight: 1.25 }}>{app.label}</span>
+      )}
     </div>
   )
 }

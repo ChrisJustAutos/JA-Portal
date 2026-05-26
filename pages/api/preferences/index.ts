@@ -30,7 +30,25 @@ const PATCHABLE_KEYS = new Set([
   'theme_preset',
   'company_logo_url',
   'nav_groups',
+  'app_labels',
 ])
+
+// Coerce + validate app_labels: a flat { appId: customLabel } map.
+function sanitizeAppLabels(input: any): { ok: true; value: Record<string, string> } | { ok: false; error: string } {
+  if (input == null) return { ok: true, value: {} }
+  if (typeof input !== 'object' || Array.isArray(input)) return { ok: false, error: 'app_labels must be an object' }
+  const entries = Object.entries(input as Record<string, any>)
+  if (entries.length > 100) return { ok: false, error: 'too many app_labels (max 100)' }
+  const out: Record<string, string> = {}
+  for (const [k, v] of entries) {
+    const key = String(k || '').trim().slice(0, 64)
+    if (!key) continue
+    const val = String(v ?? '').trim().slice(0, 40)
+    if (!val) continue   // empty value = no override; drop it
+    out[key] = val
+  }
+  return { ok: true, value: out }
+}
 
 // Coerce + validate the nav_groups payload. Rejects on shape mismatch;
 // returns the cleaned array on success.
@@ -104,6 +122,12 @@ async function handler(req: NextApiRequest, res: NextApiResponse, user: any) {
       const result = sanitizeNavGroups(patch.nav_groups)
       if (!result.ok) return res.status(400).json({ error: `nav_groups: ${result.error}` })
       patch.nav_groups = result.value
+    }
+
+    if ('app_labels' in patch) {
+      const result = sanitizeAppLabels(patch.app_labels)
+      if (!result.ok) return res.status(400).json({ error: `app_labels: ${result.error}` })
+      patch.app_labels = result.value
     }
 
     // Ensure row exists first (in case GET was never called)

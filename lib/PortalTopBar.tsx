@@ -16,6 +16,7 @@ import { getSupabase } from './supabaseClient'
 import { UserRole, visibleNavSections } from './permissions'
 import { DEFAULT_NAV, PortalNavItem } from './PortalSidebar'
 import { AppIcon } from './AppIcons'
+import { usePreferences } from './preferences'
 
 const T = {
   bg: '#0d0f12', bg2: '#131519', bg3: '#1a1d23', bg4: '#21252d',
@@ -33,7 +34,8 @@ export const TOPBAR_HEIGHT = 56
 
 export interface LauncherApp {
   id: string
-  label: string
+  label: string          // custom label if the user renamed it, else defaultLabel
+  defaultLabel: string   // the built-in name (for placeholders / reset)
   href: string
   accent: string
   alertKey?: 'invoices' | 'payables'
@@ -41,8 +43,11 @@ export interface LauncherApp {
 
 // Resolve the apps this user can see, in DEFAULT_NAV order, mapped to
 // launcher tiles. Section-kind items (invoices/pnl/stock/payables) route
-// through /dashboard like the sidebar did.
+// through /dashboard like the sidebar did. Per-user app_labels (set on
+// the home launcher) override the display label everywhere apps appear.
 export function useVisibleApps(role?: UserRole, visibleTabs?: string[] | null): LauncherApp[] {
+  const { prefs } = usePreferences()
+  const labels = prefs.app_labels || {}
   return useMemo(() => {
     const items = role
       ? (() => {
@@ -52,14 +57,19 @@ export function useVisibleApps(role?: UserRole, visibleTabs?: string[] | null): 
           return filtered
         })()
       : [...DEFAULT_NAV]
-    return items.map(it => ({
-      id: it.id,
-      label: it.label.replace(/^⚙\s*/, ''),
-      href: it.kind === 'link' ? (it.href || '/') : `/dashboard?s=${it.section}`,
-      accent: it.dot,
-      alertKey: it.alertKey,
-    }))
-  }, [role, visibleTabs])
+    return items.map(it => {
+      const defaultLabel = it.label.replace(/^⚙\s*/, '')
+      const custom = labels[it.id]
+      return {
+        id: it.id,
+        label: (custom && custom.trim()) ? custom : defaultLabel,
+        defaultLabel,
+        href: it.kind === 'link' ? (it.href || '/') : `/dashboard?s=${it.section}`,
+        accent: it.dot,
+        alertKey: it.alertKey,
+      }
+    })
+  }, [role, visibleTabs, labels])
 }
 
 // ── Shared grid of app tiles ────────────────────────────────────────

@@ -44,6 +44,8 @@ export interface UserPreferences {
   theme_preset: ThemePreset
   company_logo_url: string | null
   nav_groups: NavGroup[]
+  // Per-user launcher tile renames: app id → custom label. Missing = use default.
+  app_labels: Record<string, string>
 }
 
 export const DEFAULT_PREFERENCES: UserPreferences = {
@@ -58,6 +60,7 @@ export const DEFAULT_PREFERENCES: UserPreferences = {
   theme_preset: 'midnight',
   company_logo_url: null,
   nav_groups: [],
+  app_labels: {},
 }
 
 // Hex values for each accent option (used both for swatches in the picker and
