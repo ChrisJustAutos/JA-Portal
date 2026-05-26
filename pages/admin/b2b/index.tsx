@@ -55,8 +55,34 @@ interface SyncResult {
   durationMs: number
 }
 
+interface OrdersSummary {
+  total_count: number
+  totals: { total_inc_sum: number; paid_sum: number }
+  status_counts: Record<string, number>
+  orders: Array<{
+    id: string
+    order_number: string
+    status: string
+    total_inc: number
+    created_at: string
+    distributor: { display_name: string } | null
+    myob_invoice_number: string | null
+    myob_write_error: string | null
+  }>
+}
+
+const STATUS_COLOR: Record<string, string> = {
+  pending_payment: T.text3, paid: T.blue, picking: T.amber, packed: T.amber,
+  shipped: T.teal, delivered: T.green, cancelled: T.red, refunded: T.purple,
+}
+const STATUS_LABEL: Record<string, string> = {
+  pending_payment: 'Pending', paid: 'Paid', picking: 'Picking', packed: 'Packed',
+  shipped: 'Shipped', delivered: 'Delivered', cancelled: 'Cancelled', refunded: 'Refunded',
+}
+
 export default function B2BHubPage({ user }: Props) {
   const [settings, setSettings] = useState<SettingsSummary | null>(null)
+  const [orders, setOrders] = useState<OrdersSummary | null>(null)
   const [syncing, setSyncing] = useState(false)
   const [syncResult, setSyncResult] = useState<SyncResult | null>(null)
   const [syncError, setSyncError] = useState<string | null>(null)
@@ -67,8 +93,14 @@ export default function B2BHubPage({ user }: Props) {
       .then(j => { if (j) setSettings(j) })
       .catch(() => { /* ignore */ })
   }
+  function loadOrders() {
+    fetch('/api/b2b/admin/orders?limit=6', { credentials: 'same-origin' })
+      .then(r => r.ok ? r.json() : null)
+      .then(j => { if (j) setOrders(j) })
+      .catch(() => { /* ignore */ })
+  }
 
-  useEffect(() => { loadSettings() }, [])
+  useEffect(() => { loadSettings(); loadOrders() }, [])
 
   async function runSync() {
     if (syncing) return
@@ -168,46 +200,50 @@ export default function B2BHubPage({ user }: Props) {
             </div>
           )}
 
-          {/* Card grid */}
-          <div style={{
-            display:'grid',gridTemplateColumns:'repeat(auto-fit, minmax(260px, 1fr))',gap:18,
-          }}>
-            <Card
-              href="/admin/b2b/catalogue"
-              icon="catalogue"
-              accent={T.teal}
-              title="Catalogue"
-              description="Set trade prices, upload images, control which items are visible to distributors."
-              meta={settings?.settings.last_catalogue_sync_at
-                ? `Last synced ${formatRel(settings.settings.last_catalogue_sync_at)}`
-                : 'Not yet synced from MYOB'}
-            />
-            <Card
-              href="/admin/b2b/distributors"
-              icon="distributors"
-              accent={T.blue}
-              title="Distributors"
-              description="Add distributor accounts, link them to MYOB customers, manage their portal users."
-            />
-            <Card
-              href="/admin/b2b/settings"
-              icon="settings"
-              accent={T.purple}
-              title="Settings"
-              description="Invoice numbering, card surcharge rates, Stripe + MYOB configuration, Slack notifications."
-              meta={settings?.next_invoice_number_preview
-                ? `Next invoice: ${settings.next_invoice_number_preview}`
-                : undefined}
-              warning={!cfgComplete}
-            />
-            <Card
-              href="/admin/b2b/orders"
-              icon="orders"
-              accent={T.amber}
-              title="Orders"
-              description="Live orders dashboard with status transitions, refunds and shipping tracking."
-            />
-          </div>
+          {/* At-a-glance stats — each links to the orders list pre-filtered */}
+          {(() => {
+            const sc = orders?.status_counts || {}
+            const pending   = sc.pending_payment || 0
+            const awaiting  = (sc.paid || 0) + (sc.picking || 0) + (sc.packed || 0)
+            const inTransit = sc.shipped || 0
+            const delivered = sc.delivered || 0
+            return (
+              <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit, minmax(168px, 1fr))',gap:14,marginBottom:18}}>
+                <StatTile icon="pending"      color={T.amber} label="Pending payment"     value={pending}   href="/admin/b2b/orders?status=pending_payment"/>
+                <StatTile icon="orders"       color={T.blue}  label="Awaiting fulfilment" value={awaiting}  href="/admin/b2b/orders?status=paid,picking,packed"/>
+                <StatTile icon="truck"        color={T.teal}  label="In transit"          value={inTransit} href="/admin/b2b/orders?status=shipped"/>
+                <StatTile icon="check-circle" color={T.green} label="Delivered"           value={delivered} href="/admin/b2b/orders?status=delivered"/>
+                <StatTile icon="payables"     color={T.green} label="Paid revenue"        value={orders ? `$${money(orders.totals.paid_sum)}` : '—'} href="/admin/b2b/orders"/>
+              </div>
+            )
+          })()}
+
+          {/* Recent orders */}
+          <section style={{background:T.bg2,border:`1px solid ${T.border}`,borderRadius:12,overflow:'hidden',marginBottom:18}}>
+            <div style={{display:'flex',alignItems:'center',padding:'14px 18px',borderBottom:`1px solid ${T.border}`}}>
+              <div style={{fontSize:13,fontWeight:600}}>Recent orders</div>
+              {orders && <span style={{fontSize:12,color:T.text3,marginLeft:10}}>{orders.total_count} total</span>}
+              <span style={{flex:1}}/>
+              <a href="/admin/b2b/orders" style={{fontSize:12,color:T.blue,textDecoration:'none'}}>View all →</a>
+            </div>
+            {!orders ? (
+              <div style={{padding:20,color:T.text3,fontSize:13}}>Loading…</div>
+            ) : orders.orders.length === 0 ? (
+              <div style={{padding:20,color:T.text3,fontSize:13}}>No orders yet.</div>
+            ) : (
+              orders.orders.map((o, i) => (
+                <a key={o.id} href={`/admin/b2b/orders/${o.id}`}
+                  style={{display:'flex',alignItems:'center',gap:12,padding:'12px 18px',borderTop:i>0?`1px solid ${T.border}`:'none',textDecoration:'none',color:T.text}}>
+                  <span style={{fontFamily:'monospace',fontSize:13,minWidth:120}}>{o.order_number}</span>
+                  <span style={{flex:1,fontSize:13,color:T.text2,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{o.distributor?.display_name || '—'}</span>
+                  {o.myob_write_error && <span title={o.myob_write_error} style={{fontSize:11,color:T.red}}>⚠ MYOB</span>}
+                  <StatusChip status={o.status}/>
+                  <span style={{fontFamily:'monospace',fontSize:13,minWidth:84,textAlign:'right'}}>${money(Number(o.total_inc))}</span>
+                  <span style={{fontSize:11,color:T.text3,minWidth:74,textAlign:'right'}}>{formatRel(o.created_at)}</span>
+                </a>
+              ))
+            )}
+          </section>
 
           {/* Quick links */}
           <section style={{
@@ -230,51 +266,29 @@ export default function B2BHubPage({ user }: Props) {
   )
 }
 
-function Card({
-  href, icon, accent, title, description, meta, warning, disabled,
-}: {
-  href: string | null
-  icon: string
-  accent: string
-  title: string
-  description: string
-  meta?: string
-  warning?: boolean
-  disabled?: boolean
+function StatTile({ icon, color, label, value, href }: {
+  icon: string; color: string; label: string; value: number | string; href: string
 }) {
-  const content = (
-    <div style={{
-      display:'flex',flexDirection:'column',gap:10,height:'100%',
-      padding:'18px 20px',
-      background:T.bg2,border:`1px solid ${warning ? T.amber + '60' : T.border}`,
-      borderRadius:12,
-      cursor: disabled ? 'not-allowed' : 'pointer',
-      opacity: disabled ? 0.55 : 1,
-      transition:'border-color 0.15s, transform 0.1s',
-    }}>
-      <div style={{display:'flex',alignItems:'center',gap:12}}>
-        <div style={{
-          width:42,height:42,borderRadius:11,flexShrink:0,
-          display:'flex',alignItems:'center',justifyContent:'center',
-          background:`${accent}1f`,color:accent,border:`1px solid ${accent}33`,
-        }}>
-          <AppIcon name={icon} size={22}/>
-        </div>
-        <div style={{fontSize:14,fontWeight:600,color:T.text}}>{title}</div>
-        {warning && <span style={{fontSize:14,color:T.amber}}>⚠</span>}
-        {!disabled && <span style={{marginLeft:'auto',color:T.text3,fontSize:14}}>→</span>}
+  return (
+    <a href={href} style={{display:'flex',alignItems:'center',gap:12,padding:'16px 16px',background:T.bg2,border:`1px solid ${T.border}`,borderRadius:12,textDecoration:'none',color:T.text}}>
+      <span style={{width:42,height:42,borderRadius:11,flexShrink:0,display:'flex',alignItems:'center',justifyContent:'center',background:`${color}1f`,color,border:`1px solid ${color}33`}}>
+        <AppIcon name={icon} size={22}/>
+      </span>
+      <div style={{minWidth:0}}>
+        <div style={{fontSize:20,fontWeight:600,lineHeight:1.1,fontVariantNumeric:'tabular-nums'}}>{value}</div>
+        <div style={{fontSize:11,color:T.text3,marginTop:2}}>{label}</div>
       </div>
-      <div style={{fontSize:13,color:T.text2,lineHeight:1.5}}>{description}</div>
-      {meta && (
-        <div style={{fontSize:12,color:T.text3,marginTop:'auto',paddingTop:8,fontFamily:'monospace'}}>
-          {meta}
-        </div>
-      )}
-    </div>
+    </a>
   )
+}
 
-  if (disabled || !href) return <div>{content}</div>
-  return <a href={href} style={{textDecoration:'none'}}>{content}</a>
+function StatusChip({ status }: { status: string }) {
+  const color = STATUS_COLOR[status] || T.text3
+  return (
+    <span style={{fontSize:10,fontWeight:600,textTransform:'uppercase',letterSpacing:'0.04em',color,background:`${color}15`,border:`1px solid ${color}40`,padding:'2px 8px',borderRadius:4,whiteSpace:'nowrap'}}>
+      {STATUS_LABEL[status] || status}
+    </span>
+  )
 }
 
 function ExternalLink({ href, label }: { href: string; label: string }) {
@@ -287,6 +301,10 @@ function ExternalLink({ href, label }: { href: string; label: string }) {
       {label} ↗
     </a>
   )
+}
+
+function money(n: number): string {
+  return n.toLocaleString('en-AU', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 }
 
 function formatRel(iso: string): string {
