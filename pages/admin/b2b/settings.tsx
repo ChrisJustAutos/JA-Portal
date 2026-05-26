@@ -7,6 +7,7 @@ import { useEffect, useMemo, useState } from 'react'
 import Head from 'next/head'
 import PortalTopBar from '../../../lib/PortalTopBar'
 import B2BAdminTabs from '../../../components/b2b/B2BAdminTabs'
+import { AppIcon } from '../../../lib/AppIcons'
 import { requirePageAuth } from '../../../lib/authServer'
 import type { UserRole } from '../../../lib/permissions'
 import FreightZonesManager from '../../../components/b2b/FreightZonesManager'
@@ -29,6 +30,21 @@ interface Props {
     visibleTabs: string[] | null
   }
 }
+
+// Tiles shown on the settings page. id matches each <Section id="…">.
+const SETTINGS_SECTIONS: Array<{ id: string; title: string; icon: string; accent: string }> = [
+  { id: 'models',            title: 'Models',                 icon: 'vehicle-sales', accent: T.green },
+  { id: 'product-types',     title: 'Product Types',          icon: 'stock',         accent: T.purple },
+  { id: 'tiers',             title: 'Distributor Tiers',      icon: 'distributors',  accent: T.blue },
+  { id: 'invoice-numbering', title: 'Invoice Numbering',      icon: 'invoices',      accent: T.amber },
+  { id: 'credit-numbering',  title: 'Credit Note Numbering',  icon: 'ap',            accent: T.red },
+  { id: 'card-surcharge',    title: 'Card Surcharge',         icon: 'payables',      accent: T.teal },
+  { id: 'carriers',          title: 'Freight Carriers',       icon: 'orders',        accent: T.teal },
+  { id: 'freight-pricing',   title: 'Freight Pricing & Sender', icon: 'payables',    accent: T.blue },
+  { id: 'freight-zones',     title: 'Freight Zones',          icon: 'stock',         accent: T.amber },
+  { id: 'slack',             title: 'Slack Notifications',    icon: 'calls',         accent: T.purple },
+  { id: 'status',            title: 'System Status',          icon: 'reports',       accent: T.text3 },
+]
 
 interface Settings {
   card_fee_percent: number
@@ -78,6 +94,9 @@ export default function B2BSettingsPage({ user }: Props) {
   const [error, setError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
   const [savedFlash, setSavedFlash] = useState<string | null>(null)
+  // Which settings section is open in the floating window (null = none).
+  const [openSectionId, setOpenSectionId] = useState<string | null>(null)
+  const closeSection = () => setOpenSectionId(null)
 
   // Local edit state
   const [prefix, setPrefix]   = useState('')
@@ -213,14 +232,14 @@ export default function B2BSettingsPage({ user }: Props) {
             </div>
           </header>
 
+          {/* Toasts — fixed so they stay visible above an open settings window */}
           {error && (
-            <div style={{padding:12,background:`${T.red}15`,border:`1px solid ${T.red}40`,borderRadius:7,color:T.red,fontSize:13,marginBottom:14}}>
+            <div style={{position:'fixed',top:70,left:'50%',transform:'translateX(-50%)',zIndex:1000,maxWidth:560,padding:12,background:`${T.red}1f`,border:`1px solid ${T.red}55`,borderRadius:8,color:T.red,fontSize:13,boxShadow:'0 10px 30px rgba(0,0,0,0.4)'}}>
               {error}
             </div>
           )}
-
           {savedFlash && (
-            <div style={{padding:'8px 12px',background:`${T.green}15`,border:`1px solid ${T.green}40`,borderRadius:7,color:T.green,fontSize:13,marginBottom:14}}>
+            <div style={{position:'fixed',top:70,left:'50%',transform:'translateX(-50%)',zIndex:1000,padding:'8px 14px',background:`${T.green}1f`,border:`1px solid ${T.green}55`,borderRadius:8,color:T.green,fontSize:13,boxShadow:'0 10px 30px rgba(0,0,0,0.4)'}}>
               ✓ {savedFlash}
             </div>
           )}
@@ -231,8 +250,21 @@ export default function B2BSettingsPage({ user }: Props) {
 
           {data && (
             <>
+              {/* Icon tiles — click one to open its settings in a floating window */}
+              <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill, minmax(190px, 1fr))',gap:14,marginBottom:8}}>
+                {SETTINGS_SECTIONS.map(s => (
+                  <button key={s.id} onClick={() => setOpenSectionId(s.id)}
+                    style={{display:'flex',alignItems:'center',gap:12,padding:'15px 16px',background:T.bg2,border:`1px solid ${T.border}`,borderRadius:12,cursor:'pointer',fontFamily:'inherit',color:T.text,textAlign:'left'}}>
+                    <span style={{width:42,height:42,borderRadius:11,flexShrink:0,display:'flex',alignItems:'center',justifyContent:'center',background:`${s.accent}1f`,color:s.accent,border:`1px solid ${s.accent}33`}}>
+                      <AppIcon name={s.icon} size={22}/>
+                    </span>
+                    <span style={{fontSize:13,fontWeight:600}}>{s.title}</span>
+                  </button>
+                ))}
+              </div>
+
               {/* ─── Models ─── */}
-              <Section title="Models"
+              <Section id="models" activeId={openSectionId} onClose={closeSection} title="Models"
                 description="Vehicle models (or other primary attribute) used to group products on the distributor catalogue.">
                 <TaxonomyEditor
                   endpoint="/api/b2b/admin/models"
@@ -243,7 +275,7 @@ export default function B2BSettingsPage({ user }: Props) {
               </Section>
 
               {/* ─── Product Types ─── */}
-              <Section title="Product Types"
+              <Section id="product-types" activeId={openSectionId} onClose={closeSection} title="Product Types"
                 description="Product categories (e.g. Brake disc, CV axle) used to group products on the distributor catalogue.">
                 <TaxonomyEditor
                   endpoint="/api/b2b/admin/product-types"
@@ -254,7 +286,7 @@ export default function B2BSettingsPage({ user }: Props) {
               </Section>
 
               {/* ─── Tiers ─── */}
-              <Section title="Distributor Tiers"
+              <Section id="tiers" activeId={openSectionId} onClose={closeSection} title="Distributor Tiers"
                 description="Pricing / access tiers (e.g. Bronze, Silver, Gold). Assign distributors to a tier from the distributor detail page. Tier-specific controls (visibility, discounts) are layered on in follow-up updates.">
                 <TaxonomyEditor
                   endpoint="/api/b2b/admin/tiers"
@@ -265,7 +297,7 @@ export default function B2BSettingsPage({ user }: Props) {
               </Section>
 
               {/* ─── Invoice numbering ─── */}
-              <Section title="MYOB Invoice Numbering"
+              <Section id="invoice-numbering" activeId={openSectionId} onClose={closeSection} title="MYOB Invoice Numbering"
                 description="Each B2B order writes a Sale.Invoice to MYOB JAWS. The invoice number is portal-controlled (prefix + zero-padded sequence). MYOB caps the field at 13 characters total.">
 
                 <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:14,marginBottom:14}}>
@@ -332,7 +364,7 @@ export default function B2BSettingsPage({ user }: Props) {
               </Section>
 
               {/* ─── Credit note numbering ─── */}
-              <Section title="MYOB Credit Note Numbering"
+              <Section id="credit-numbering" activeId={openSectionId} onClose={closeSection} title="MYOB Credit Note Numbering"
                 description="Refund credit notes are written to MYOB JAWS as a separate stream from order invoices. Same 13-character MYOB cap applies.">
 
                 <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:14,marginBottom:14}}>
@@ -399,7 +431,7 @@ export default function B2BSettingsPage({ user }: Props) {
               </Section>
 
               {/* ─── Card surcharge ─── */}
-              <Section title="Card Surcharge"
+              <Section id="card-surcharge" activeId={openSectionId} onClose={closeSection} title="Card Surcharge"
                 description="Pass-through Stripe processing fee. Applied to each order during checkout to make the JAWS payout equal the goods subtotal (inc GST) after Stripe takes its cut.">
 
                 <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:14,marginBottom:14}}>
@@ -434,13 +466,13 @@ export default function B2BSettingsPage({ user }: Props) {
               </Section>
 
               {/* ─── Carrier connections ─── */}
-              <Section title="Freight Carrier Connections"
+              <Section id="carriers" activeId={openSectionId} onClose={closeSection} title="Freight Carrier Connections"
                 description="Plug in API credentials for each freight carrier we use. The MachShip token here drives live quoting and booking — the postcode zones further down are only used as a fallback when live quoting isn't available.">
                 <FreightCarriersManager/>
               </Section>
 
               {/* ─── Freight pricing & sender (MachShip) ─── */}
-              <Section title="Freight Pricing &amp; Sender Address"
+              <Section id="freight-pricing" activeId={openSectionId} onClose={closeSection} title="Freight Pricing &amp; Sender Address"
                 description="Markup applied to MachShip's quoted price before showing it to distributors, plus the pickup address used for every booking. Both are required for live quoting and booking to work end-to-end.">
                 <Field label="Markup %" hint="Added on top of MachShip's quote (e.g. 20 = quote × 1.20). Range 0–200.">
                   <input
@@ -515,13 +547,13 @@ export default function B2BSettingsPage({ user }: Props) {
               </Section>
 
               {/* ─── Freight zones (manual fallback) ─── */}
-              <Section title="Freight Zones &amp; Rates (manual fallback)"
+              <Section id="freight-zones" activeId={openSectionId} onClose={closeSection} title="Freight Zones &amp; Rates (manual fallback)"
                 description="Postcode-driven shipping rates the cart shows when no live carrier rates are available. Add a zone, paste the postcode ranges it covers, then add 1+ rates (Standard, Express, etc.).">
                 <FreightZonesManager/>
               </Section>
 
               {/* ─── Slack ─── */}
-              <Section title="Slack Notifications"
+              <Section id="slack" activeId={openSectionId} onClose={closeSection} title="Slack Notifications"
                 description="Optional. If set, a message posts to the channel each time an order is paid.">
 
                 <Field label="Incoming webhook URL" hint="Must start with https://hooks.slack.com/">
@@ -545,7 +577,7 @@ export default function B2BSettingsPage({ user }: Props) {
               </Section>
 
               {/* ─── Read-only diagnostics ─── */}
-              <Section title="System Status" description="Read-only — for debugging.">
+              <Section id="status" activeId={openSectionId} onClose={closeSection} title="System Status" description="Read-only — for debugging.">
                 <DiagRow label="Stripe Secret Key"     status={data.stripe_env.secret_key_set     ? 'ok' : 'missing'} value={data.stripe_env.secret_key_set     ? 'Set in env' : 'Not configured — checkout disabled'}/>
                 <DiagRow label="Stripe Webhook Secret" status={data.stripe_env.webhook_secret_set ? 'ok' : 'missing'} value={data.stripe_env.webhook_secret_set ? 'Set in env' : 'Not configured — webhooks will be rejected'}/>
                 <DiagRow label="MYOB GST Tax Code"     status={data.settings.myob_jaws_gst_tax_code_uid ? 'ok' : 'pending'} value={data.settings.myob_jaws_gst_tax_code_uid ? 'Resolved' : 'Will auto-resolve on first checkout'}/>
@@ -567,18 +599,43 @@ export default function B2BSettingsPage({ user }: Props) {
 }
 
 // ─── UI helpers ────────────────────────────────────────────────────────
-function Section({ title, description, children }: { title: string; description?: string; children: React.ReactNode }) {
+// Each settings section renders as a floating window — only when its tile
+// (id) is the active one. Returns null otherwise, so its body (and any
+// data fetches inside it) stays unmounted until opened.
+function Section({ id, activeId, onClose, title, description, children }: {
+  id: string
+  activeId: string | null
+  onClose: () => void
+  title: string
+  description?: string
+  children: React.ReactNode
+}) {
+  const open = id === activeId
+  useEffect(() => {
+    if (!open) return
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [open, onClose])
+  if (!open) return null
   return (
-    <section style={{
-      background:T.bg2,border:`1px solid ${T.border}`,borderRadius:10,
-      padding:'24px 28px',marginBottom:18,
-    }}>
-      <h2 style={{fontSize:14,fontWeight:600,margin:'0 0 4px',letterSpacing:'-0.005em'}}>{title}</h2>
-      {description && (
-        <p style={{fontSize:13,color:T.text3,margin:'0 0 18px',lineHeight:1.5}}>{description}</p>
-      )}
-      {children}
-    </section>
+    <div onClick={onClose}
+      style={{position:'fixed',inset:0,zIndex:950,background:'rgba(8,10,13,0.8)',backdropFilter:'blur(6px)',display:'flex',alignItems:'flex-start',justifyContent:'center',padding:'64px 20px 32px',overflowY:'auto'}}>
+      <div onClick={e => e.stopPropagation()}
+        style={{width:'100%',maxWidth:760,background:T.bg2,border:`1px solid ${T.border2}`,borderRadius:14,boxShadow:'0 24px 60px rgba(0,0,0,0.5)',overflow:'hidden'}}>
+        <div style={{display:'flex',alignItems:'center',gap:10,padding:'16px 22px',borderBottom:`1px solid ${T.border}`,position:'sticky',top:0,background:T.bg2,zIndex:1}}>
+          <h2 style={{fontSize:16,fontWeight:600,margin:0,letterSpacing:'-0.005em'}}>{title}</h2>
+          <span style={{flex:1}}/>
+          <button onClick={onClose} style={{background:'none',border:'none',color:T.text3,fontSize:24,cursor:'pointer',lineHeight:1,padding:'0 4px'}}>×</button>
+        </div>
+        <div style={{padding:'20px 22px'}}>
+          {description && (
+            <p style={{fontSize:13,color:T.text3,margin:'0 0 18px',lineHeight:1.5}}>{description}</p>
+          )}
+          {children}
+        </div>
+      </div>
+    </div>
   )
 }
 
