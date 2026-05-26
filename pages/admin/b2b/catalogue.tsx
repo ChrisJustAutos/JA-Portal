@@ -1055,35 +1055,32 @@ function EditDrawer({
                 subtitle={
                   blocksLiveQuote
                     ? 'Required for MachShip live quoting. Carts containing this product cannot check out until all four values are filled in.'
-                    : 'Used by MachShip live freight quoting (weight in grams, dimensions in millimetres).'
+                    : 'Used by MachShip live freight quoting (weight in kg, dimensions in cm).'
                 }
               >
+                {/* Stored as mm/g; shown + edited in cm/kg. */}
                 <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:8}}>
-                  <FieldInt
-                    label="Length"
-                    suffix="mm"
-                    value={item.freight_length_mm}
-                    onSave={async v => { try { await patch({ freight_length_mm: v }) } catch {} }}
+                  <FieldNumber
+                    label="Length (cm)"
+                    value={item.freight_length_mm == null ? null : item.freight_length_mm / 10}
+                    onSave={async v => { try { await patch({ freight_length_mm: v == null ? null : Math.round(v * 10) }) } catch {} }}
                   />
-                  <FieldInt
-                    label="Width"
-                    suffix="mm"
-                    value={item.freight_width_mm}
-                    onSave={async v => { try { await patch({ freight_width_mm: v }) } catch {} }}
+                  <FieldNumber
+                    label="Width (cm)"
+                    value={item.freight_width_mm == null ? null : item.freight_width_mm / 10}
+                    onSave={async v => { try { await patch({ freight_width_mm: v == null ? null : Math.round(v * 10) }) } catch {} }}
                   />
-                  <FieldInt
-                    label="Height"
-                    suffix="mm"
-                    value={item.freight_height_mm}
-                    onSave={async v => { try { await patch({ freight_height_mm: v }) } catch {} }}
+                  <FieldNumber
+                    label="Height (cm)"
+                    value={item.freight_height_mm == null ? null : item.freight_height_mm / 10}
+                    onSave={async v => { try { await patch({ freight_height_mm: v == null ? null : Math.round(v * 10) }) } catch {} }}
                   />
                 </div>
                 <div style={{height:10}}/>
-                <FieldInt
-                  label="Weight"
-                  suffix="g"
-                  value={item.freight_weight_g}
-                  onSave={async v => { try { await patch({ freight_weight_g: v }) } catch {} }}
+                <FieldNumber
+                  label="Weight (kg)"
+                  value={item.freight_weight_g == null ? null : item.freight_weight_g / 1000}
+                  onSave={async v => { try { await patch({ freight_weight_g: v == null ? null : Math.round(v * 1000) }) } catch {} }}
                 />
                 <div style={{height:10}}/>
                 <PackagingSelect
@@ -1476,15 +1473,8 @@ function PricingSection({
       ? ((item.trade_price_ex_gst - item.cost_price_ex_gst) / item.trade_price_ex_gst) * 100
       : null
 
-  // Promo "active right now" indicator
-  const now = Date.now()
-  const promoActive =
-    item.promo_price_ex_gst != null &&
-    (item.promo_starts_at == null || Date.parse(item.promo_starts_at) <= now) &&
-    (item.promo_ends_at   == null || Date.parse(item.promo_ends_at)   >  now)
-
   return (
-    <Section title="Pricing" subtitle="Cost is admin-only. Volume breaks and promos apply on the distributor side.">
+    <Section title="Pricing" subtitle="Cost is admin-only. Trade price applies to all distributors.">
       <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10,marginBottom:8}}>
         <FieldNumber
           label="Cost (ex GST)"
@@ -1511,58 +1501,6 @@ function PricingSection({
         <span style={{color:T.text2,fontFamily:'monospace',fontSize:11}}>{fmtMoney(item.rrp_ex_gst)}</span>
       </div>
 
-      {/* Promo */}
-      <Collapsible
-        title="Promo price"
-        badge={promoActive ? (
-          <span style={{
-            display:'inline-block',padding:'1px 7px',borderRadius:8,fontSize:9,
-            background:`${T.green}18`,color:T.green,
-          }}>
-            ACTIVE
-          </span>
-        ) : null}
-        summary={item.promo_price_ex_gst != null ? `$${item.promo_price_ex_gst.toFixed(2)}` : '—'}
-        defaultOpen={
-          item.promo_price_ex_gst != null ||
-          item.promo_starts_at != null ||
-          item.promo_ends_at != null
-        }
-      >
-        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:8}}>
-          <FieldNumber
-            label="Price"
-            prefix="$"
-            value={item.promo_price_ex_gst}
-            onSave={v => onPatch({ promo_price_ex_gst: v })}
-          />
-          <FieldDateTime
-            label="Starts"
-            value={item.promo_starts_at}
-            onSave={v => onPatch({ promo_starts_at: v })}
-          />
-          <FieldDateTime
-            label="Ends"
-            value={item.promo_ends_at}
-            onSave={v => onPatch({ promo_ends_at: v })}
-          />
-        </div>
-      </Collapsible>
-
-      {/* Volume breaks */}
-      <Collapsible
-        title="Volume breaks"
-        summary={(item.volume_breaks?.length || 0) > 0
-          ? `${item.volume_breaks!.length} break${item.volume_breaks!.length === 1 ? '' : 's'}`
-          : '—'}
-        defaultOpen={(item.volume_breaks?.length || 0) > 0}
-      >
-        <VolumeBreaksEditor
-          breaks={item.volume_breaks || []}
-          tradePrice={item.trade_price_ex_gst}
-          onSave={breaks => onPatch({ volume_breaks: breaks })}
-        />
-      </Collapsible>
     </Section>
   )
 }
