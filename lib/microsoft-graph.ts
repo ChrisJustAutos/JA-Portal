@@ -132,6 +132,38 @@ async function graphJson<T = any>(path: string, opts: RequestInit = {}): Promise
   return r.json()
 }
 
+// ── Sending mail ───────────────────────────────────────────────────────
+// Sends from the given mailbox via POST /users/{mailbox}/sendMail.
+// Requires the Mail.Send application permission on the app registration
+// (admin-consented). Throws with the Graph error body on failure (e.g.
+// 403 if the permission isn't granted).
+export async function sendMail(mailbox: string, opts: {
+  to: string[]
+  subject: string
+  html: string
+  cc?: string[]
+  replyTo?: string
+}): Promise<void> {
+  const body = {
+    message: {
+      subject: opts.subject,
+      body: { contentType: 'HTML', content: opts.html },
+      toRecipients: opts.to.map(a => ({ emailAddress: { address: a } })),
+      ...(opts.cc && opts.cc.length ? { ccRecipients: opts.cc.map(a => ({ emailAddress: { address: a } })) } : {}),
+      ...(opts.replyTo ? { replyTo: [{ emailAddress: { address: opts.replyTo } }] } : {}),
+    },
+    saveToSentItems: true,
+  }
+  const r = await graphFetch(`/users/${encodeURIComponent(mailbox)}/sendMail`, {
+    method: 'POST',
+    body: JSON.stringify(body),
+  })
+  if (!r.ok) {
+    const t = await r.text().catch(() => '')
+    throw new Error(`Graph sendMail ${r.status}: ${t.slice(0, 400)}`)
+  }
+}
+
 // ── Message + attachment fetching ──────────────────────────────────────
 
 export interface GraphMessageMeta {

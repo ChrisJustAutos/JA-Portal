@@ -85,6 +85,19 @@ function extractUid(result: { headers?: Record<string, string> }, cfId: string):
   return last && last !== cfId ? last : null
 }
 
+// Fetch a supplier's email + name from MYOB Contact/Supplier. The email
+// isn't on the item, so we read the card when we need it (PO emailing).
+export async function getSupplierContact(supplierUid: string): Promise<{ email: string | null; name: string | null }> {
+  const conn = await getConnection('JAWS')
+  if (!conn?.company_file_id) throw new Error('MYOB JAWS not connected')
+  const r = await myobFetch(conn.id, `/accountright/${conn.company_file_id}/Contact/Supplier/${encodeURIComponent(supplierUid)}`)
+  if (r.status !== 200 || !r.data) return { email: null, name: null }
+  const d = r.data
+  const addrs: any[] = Array.isArray(d.Addresses) ? d.Addresses : []
+  const email = (addrs.find(a => a?.Email)?.Email || '').trim() || null
+  return { email, name: d.CompanyName || null }
+}
+
 function extractErr(result: { status: number; data: any; raw: string }): string {
   const d = result.data
   if (d && Array.isArray(d.Errors) && d.Errors.length > 0) {

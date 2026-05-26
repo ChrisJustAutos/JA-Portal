@@ -108,7 +108,7 @@ interface OrderDetail {
   // Drop-ship
   has_drop_ship: boolean
   dropship_po_raised_at: string | null
-  dropship_pos: Array<{ supplier_name: string; myob_po_number: string | null; myob_po_uid: string | null; line_count: number; created_at: string }>
+  dropship_pos: Array<{ supplier_name: string; myob_po_number: string | null; myob_po_uid: string | null; line_count: number; created_at: string; email_status?: 'sent' | 'no_email' | 'failed'; emailed_to?: string | null }>
   customer_notes: string | null
   internal_notes: string | null
   distributor: { id: string; display_name: string; myob_customer_uid: string | null } | null
@@ -939,11 +939,14 @@ function DropShipCard({ order, onReloaded, onFlash }: {
       {raised.length > 0 ? (
         <div style={{display:'flex', flexDirection:'column', gap:6, marginBottom:10}}>
           {raised.map((po, i) => (
-            <div key={i} style={{display:'flex', alignItems:'center', gap:8, fontSize:12}}>
+            <div key={i} style={{display:'flex', alignItems:'center', gap:8, fontSize:12, flexWrap:'wrap'}}>
               <span style={{color:T.text}}>{po.supplier_name}</span>
               <span style={{flex:1}}/>
               <span style={{fontFamily:'monospace', color:T.text2}}>{po.myob_po_number || po.myob_po_uid?.slice(0, 8) || 'PO'}</span>
               <span style={{color:T.text3}}>{po.line_count} line{po.line_count === 1 ? '' : 's'}</span>
+              {po.email_status === 'sent'    && <span title={po.emailed_to || ''} style={{color:T.green}}>✉ emailed</span>}
+              {po.email_status === 'no_email'&& <span title="No email on the MYOB supplier card" style={{color:T.amber}}>no email</span>}
+              {po.email_status === 'failed'  && <span style={{color:T.red}}>✉ failed</span>}
             </div>
           ))}
         </div>

@@ -16,7 +16,38 @@ import type { NextApiRequest, NextApiResponse } from 'next'
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
 import { withAuth } from '../../../../../../lib/authServer'
 import { assertCheckoutConfigured } from '../../../../../../lib/b2b-settings'
-import { createDropShipPurchaseOrder, DropShipPOLine } from '../../../../../../lib/b2b-myob-po'
+import { createDropShipPurchaseOrder, getSupplierContact, DropShipPOLine } from '../../../../../../lib/b2b-myob-po'
+import { sendMail } from '../../../../../../lib/microsoft-graph'
+
+const PO_FROM_MAILBOX = process.env.B2B_PO_FROM_MAILBOX || process.env.AP_INBOX_MAILBOX || 'accounts@justautosmechanical.com.au'
+
+function esc(s: string): string {
+  return String(s).replace(/[&<>"]/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch] as string))
+}
+
+function buildPoEmailHtml(input: { poNumber: string | null; supplierName: string; reference: string; shipTo: string; lines: DropShipPOLine[] }): string {
+  const rows = input.lines.map(l => `
+    <tr>
+      <td style="padding:6px 10px;border-bottom:1px solid #eee">${esc(l.description)}</td>
+      <td style="padding:6px 10px;border-bottom:1px solid #eee;text-align:right">${l.qty}</td>
+    </tr>`).join('')
+  return `
+  <div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#222;max-width:620px">
+    <p>Hi ${esc(input.supplierName)},</p>
+    <p>Please supply the following on <strong>drop ship</strong> — deliver direct to the customer at the address below.
+       Our purchase order ${input.poNumber ? `<strong>${esc(input.poNumber)}</strong> ` : ''}(ref ${esc(input.reference)}) follows.</p>
+    <table style="border-collapse:collapse;width:100%;margin:14px 0">
+      <thead><tr>
+        <th style="padding:6px 10px;border-bottom:2px solid #333;text-align:left">Item</th>
+        <th style="padding:6px 10px;border-bottom:2px solid #333;text-align:right">Qty</th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+    <p style="margin:0 0 4px"><strong>Deliver to:</strong></p>
+    <pre style="font-family:inherit;background:#f6f6f6;padding:10px 12px;border-radius:6px;white-space:pre-wrap;margin:0 0 16px">${esc(input.shipTo)}</pre>
+    <p>Thanks,<br/>Just Autos Mechanical</p>
+  </div>`
+}
 
 let _sb: SupabaseClient | null = null
 function sb(): SupabaseClient {
@@ -118,12 +149,35 @@ export default withAuth('admin:b2b', async (req: NextApiRequest, res: NextApiRes
         comment: `Drop ship — deliver direct to customer. JA order ${reference}`,
         journalMemo: `B2B drop-ship; order ${order.order_number}`,
       })
+
+      // Email the supplier their PO (best-effort — PO is already real in MYOB).
+      let emailStatus: 'sent' | 'no_email' | 'failed' = 'no_email'
+      let emailedTo: string | null = null
+      let emailError: string | null = null
+      try {
+        const contact = await getSupplierContact(g.supplierUid)
+        if (contact.email) {
+          await sendMail(PO_FROM_MAILBOX, {
+            to: [contact.email],
+            subject: `Purchase Order ${po.number || ''} — Just Autos (drop ship)`.replace(/\s+/g, ' ').trim(),
+            html: buildPoEmailHtml({ poNumber: po.number, supplierName: g.supplierName, reference, shipTo, lines: g.lines }),
+          })
+          emailStatus = 'sent'; emailedTo = contact.email
+        }
+      } catch (e: any) {
+        emailStatus = 'failed'; emailError = (e?.message || String(e)).slice(0, 300)
+        console.error(`drop-ship PO email failed for ${g.supplierName}:`, emailError)
+      }
+
       raised.push({
         supplier_uid: g.supplierUid,
         supplier_name: g.supplierName,
         myob_po_uid: po.uid,
         myob_po_number: po.number,
         line_count: g.lines.length,
+        email_status: emailStatus,
+        emailed_to: emailedTo,
+        email_error: emailError,
         created_at: new Date().toISOString(),
       })
     } catch (e: any) {
