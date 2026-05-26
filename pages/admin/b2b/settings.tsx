@@ -1,11 +1,11 @@
 // pages/admin/b2b/settings.tsx
 //
 // B2B portal settings — staff-only.
-// Layout matches the rest of /admin/b2b/* (PortalSidebar + main content).
+// Layout matches the rest of /admin/b2b/* (PortalTopBar + main content).
 
 import { useEffect, useMemo, useState } from 'react'
 import Head from 'next/head'
-import PortalSidebar from '../../../lib/PortalSidebar'
+import PortalTopBar from '../../../lib/PortalTopBar'
 import { requirePageAuth } from '../../../lib/authServer'
 import type { UserRole } from '../../../lib/permissions'
 import FreightZonesManager from '../../../components/b2b/FreightZonesManager'
@@ -188,8 +188,8 @@ export default function B2BSettingsPage({ user }: Props) {
   return (
     <>
       <Head><title>B2B Settings · JA Portal</title></Head>
-      <div style={{display:'flex',minHeight:'100vh',background:T.bg,color:T.text,fontFamily:'system-ui,-apple-system,sans-serif'}}>
-        <PortalSidebar
+      <div style={{display:'flex',flexDirection:'column',minHeight:'100vh',background:T.bg,color:T.text,fontFamily:'system-ui,-apple-system,sans-serif'}}>
+        <PortalTopBar
           activeId="b2b"
           currentUserRole={user.role}
           currentUserVisibleTabs={user.visibleTabs}

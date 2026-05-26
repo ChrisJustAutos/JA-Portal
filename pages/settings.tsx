@@ -10,7 +10,7 @@
 import { useEffect, useState, useCallback } from 'react'
 import Head from 'next/head'
 import { useRouter } from 'next/router'
-import PortalSidebar from '../lib/PortalSidebar'
+import PortalTopBar from '../lib/PortalTopBar'
 import { getSupabase } from '../lib/supabaseClient'
 import { ROLE_LABELS, ROLE_DESCRIPTIONS, UserRole, roleHasPermission, PORTAL_TABS, defaultTabsForRole } from '../lib/permissions'
 import { requirePageAuth } from '../lib/authServer'
@@ -85,8 +85,8 @@ export default function SettingsPage({ user }: { user: PortalUserSSR }) {
   return (
     <>
       <Head><title>Settings — Just Autos</title><meta name="robots" content="noindex,nofollow"/></Head>
-      <div style={{display:'flex',height:'100vh',overflow:'hidden',fontFamily:"'DM Sans',system-ui,sans-serif",color:T.text}}>
-        <PortalSidebar activeId="settings" currentUserRole={user.role} currentUserVisibleTabs={(user as any).visibleTabs}/>
+      <div style={{display:'flex',flexDirection:'column',height:'100vh',overflow:'hidden',fontFamily:"'DM Sans',system-ui,sans-serif",color:T.text}}>
+        <PortalTopBar activeId="settings" currentUserRole={user.role} currentUserVisibleTabs={(user as any).visibleTabs} currentUserName={(user as any).displayName} currentUserEmail={(user as any).email}/>
         <div style={{flex:1,display:'flex',flexDirection:'column',overflow:'hidden',background:T.bg}}>
           <div style={{height:52,background:T.bg2,borderBottom:`1px solid ${T.border}`,display:'flex',alignItems:'center',padding:'0 20px',gap:12,flexShrink:0}}>
             <div style={{fontSize:14,fontWeight:600}}>Settings</div>

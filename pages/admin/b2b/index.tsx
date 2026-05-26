@@ -8,7 +8,7 @@
 
 import { useEffect, useState } from 'react'
 import Head from 'next/head'
-import PortalSidebar from '../../../lib/PortalSidebar'
+import PortalTopBar from '../../../lib/PortalTopBar'
 import { requirePageAuth } from '../../../lib/authServer'
 import type { UserRole } from '../../../lib/permissions'
 
@@ -95,8 +95,8 @@ export default function B2BHubPage({ user }: Props) {
   return (
     <>
       <Head><title>B2B Portal · JA Portal</title></Head>
-      <div style={{display:'flex',minHeight:'100vh',background:T.bg,color:T.text,fontFamily:'system-ui,-apple-system,sans-serif'}}>
-        <PortalSidebar
+      <div style={{display:'flex',flexDirection:'column',minHeight:'100vh',background:T.bg,color:T.text,fontFamily:'system-ui,-apple-system,sans-serif'}}>
+        <PortalTopBar
           activeId="b2b"
           currentUserRole={user.role}
           currentUserVisibleTabs={user.visibleTabs}

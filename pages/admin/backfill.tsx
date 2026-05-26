@@ -5,7 +5,7 @@
 import { useEffect, useState, useCallback, useRef } from 'react'
 import Head from 'next/head'
 import { useRouter } from 'next/router'
-import PortalSidebar from '../../lib/PortalSidebar'
+import PortalTopBar from '../../lib/PortalTopBar'
 import { requirePageAuth } from '../../lib/authServer'
 
 const T = {
@@ -223,8 +223,8 @@ export default function BackfillPage() {
   return (
     <>
       <Head><title>Backfill — Orders ↔ Quotes</title><meta name="robots" content="noindex,nofollow"/></Head>
-      <div style={{display:'flex',height:'100vh',overflow:'hidden',fontFamily:"'DM Sans',system-ui,sans-serif",color:T.text}}>
-        {!isEmbed && <PortalSidebar activeId="reports"/>}
+      <div style={{display:'flex',flexDirection:'column',height:'100vh',overflow:'hidden',fontFamily:"'DM Sans',system-ui,sans-serif",color:T.text}}>
+        {!isEmbed && <PortalTopBar activeId="reports"/>}
         <div style={{flex:1,display:'flex',flexDirection:'column',overflow:'hidden',background:T.bg}}>
           {!isEmbed && (
           <div style={{height:52,background:T.bg2,borderBottom:`1px solid ${T.border}`,display:'flex',alignItems:'center',padding:'0 20px',gap:12,flexShrink:0}}>

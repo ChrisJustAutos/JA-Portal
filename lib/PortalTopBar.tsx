@@ -137,6 +137,10 @@ export function AppGrid({
 
 export interface PortalTopBarProps {
   activeId: string
+  // Accepted for drop-in compatibility with the old sidebar (the
+  // dashboard passed it for in-page section switching). The top bar
+  // routes to sections via the launcher instead, so it's ignored here.
+  onSectionClick?: (section: any) => void
   lastRefresh?: Date | null
   onRefresh?: () => void
   refreshing?: boolean

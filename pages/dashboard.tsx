@@ -4,7 +4,7 @@ import { useEffect, useState, useRef, useCallback } from 'react'
 import Head from 'next/head'
 import Script from 'next/script'
 import { useRouter } from 'next/router'
-import PortalSidebar from '../lib/PortalSidebar'
+import PortalTopBar from '../lib/PortalTopBar'
 import { requirePageAuth } from '../lib/authServer'
 import { usePreferences, applyGstPreferenceToDashboard, applyGstPreferenceToQuotesOrders } from '../lib/preferences'
 import { useChatContext } from '../components/GlobalChatbot'
@@ -973,8 +973,8 @@ export default function Portal({ user }: { user: PortalUserSSR }) {
       </Head>
       <Script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js" strategy="beforeInteractive"/>
 
-      <div style={{display:'flex',height:'100vh',overflow:'hidden',fontFamily:"'DM Sans',system-ui,sans-serif",background:T.bg,color:T.text}}>
-        <PortalSidebar
+      <div style={{display:'flex',flexDirection:'column',height:'100vh',overflow:'hidden',fontFamily:"'DM Sans',system-ui,sans-serif",background:T.bg,color:T.text}}>
+        <PortalTopBar
           activeId={section}
           onSectionClick={(s)=>handleSectionChange(s as Section)}
           lastRefresh={lastRefresh}

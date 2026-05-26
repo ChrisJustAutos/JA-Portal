@@ -6,7 +6,7 @@
 import { useEffect, useState, useCallback, useMemo } from 'react'
 import Head from 'next/head'
 import { useRouter } from 'next/router'
-import PortalSidebar from '../lib/PortalSidebar'
+import PortalTopBar from '../lib/PortalTopBar'
 import { requirePageAuth } from '../lib/authServer'
 import { useChatContext } from '../components/GlobalChatbot'
 
@@ -959,10 +959,10 @@ export default function CallsPage({ user }: { user: PortalUserSSR }) {
     <>
       <Head><title>Phone Calls — Just Autos</title><meta name="viewport" content="width=device-width,initial-scale=1"/><meta name="robots" content="noindex,nofollow"/></Head>
 
-      <div style={{ display: 'flex', height: '100vh', overflow: 'hidden', fontFamily: "'DM Sans',system-ui,sans-serif", color: T.text }}>
+      <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', overflow: 'hidden', fontFamily: "'DM Sans',system-ui,sans-serif", color: T.text }}>
         <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet"/>
 
-        <PortalSidebar
+        <PortalTopBar
           activeId="calls"
           lastRefresh={lastRefresh}
           onRefresh={() => load(true)}

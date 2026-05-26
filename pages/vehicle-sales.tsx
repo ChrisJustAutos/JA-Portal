@@ -7,7 +7,7 @@
 
 import { useState, useEffect, useMemo } from 'react'
 import Head from 'next/head'
-import PortalSidebar from '../lib/PortalSidebar'
+import PortalTopBar from '../lib/PortalTopBar'
 import { requirePageAuth } from '../lib/authServer'
 import { UserRole } from '../lib/permissions'
 
@@ -189,8 +189,8 @@ export default function VehicleSalesPage({ user }: { user: { id: string; email: 
   return (
     <>
       <Head><title>Vehicle Sales — Just Autos</title></Head>
-      <div style={{display:'flex', minHeight:'100vh', background:T.bg, color:T.text, fontFamily:'system-ui, -apple-system, sans-serif'}}>
-        <PortalSidebar activeId="vehicle-sales" currentUserRole={user.role} currentUserVisibleTabs={(user as any).visibleTabs}/>
+      <div style={{display:'flex', flexDirection:'column', minHeight:'100vh', background:T.bg, color:T.text, fontFamily:'system-ui, -apple-system, sans-serif'}}>
+        <PortalTopBar activeId="vehicle-sales" currentUserRole={user.role} currentUserVisibleTabs={(user as any).visibleTabs} currentUserName={(user as any).displayName} currentUserEmail={(user as any).email}/>
         <main style={{flex:1, padding:'20px 32px 40px', overflow:'auto'}}>
 
           <div style={{display:'flex', alignItems:'flex-start', justifyContent:'space-between', gap:12, marginBottom:16, flexWrap:'wrap'}}>

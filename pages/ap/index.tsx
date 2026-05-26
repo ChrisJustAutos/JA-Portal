@@ -35,7 +35,7 @@
 import { useState, useEffect, useRef, useMemo } from 'react'
 import { useRouter } from 'next/router'
 import { GetServerSideProps } from 'next'
-import PortalSidebar from '../../lib/PortalSidebar'
+import PortalTopBar from '../../lib/PortalTopBar'
 import { requirePageAuth } from '../../lib/authServer'
 import { UserRole, roleHasPermission } from '../../lib/permissions'
 import { useIsMobile } from '../../lib/useIsMobile'
@@ -534,8 +534,8 @@ export default function APListPage({ user }: PageProps) {
   const pagePad = isMobile ? '14px 14px 80px' : '24px 32px'
 
   return (
-    <div style={{display:'flex', minHeight:'100vh', background:T.bg, color:T.text, fontFamily:"'DM Sans', system-ui, sans-serif"}}>
-      <PortalSidebar
+    <div style={{display:'flex', flexDirection:'column', minHeight:'100vh', background:T.bg, color:T.text, fontFamily:"'DM Sans', system-ui, sans-serif"}}>
+      <PortalTopBar
         activeId="ap"
         currentUserRole={user.role}
         currentUserVisibleTabs={user.visibleTabs}

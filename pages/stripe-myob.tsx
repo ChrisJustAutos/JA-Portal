@@ -10,7 +10,7 @@
 
 import { useState, useEffect, useMemo, useCallback } from 'react'
 import Head from 'next/head'
-import PortalSidebar from '../lib/PortalSidebar'
+import PortalTopBar from '../lib/PortalTopBar'
 import { requirePageAuth } from '../lib/authServer'
 import { UserRole, roleHasPermission } from '../lib/permissions'
 
@@ -438,8 +438,8 @@ export default function StripeMyobPage({ user }: { user: PageUser }) {
   return (
     <>
       <Head><title>Stripe → MYOB · JA Portal</title></Head>
-      <div style={{ display:'flex', minHeight:'100vh', background:T.bg, color:T.text }}>
-        <PortalSidebar activeId="stripe-myob" />
+      <div style={{ display:'flex', flexDirection:'column', minHeight:'100vh', background:T.bg, color:T.text }}>
+        <PortalTopBar activeId="stripe-myob" />
         <div style={{ flex:1, padding:'24px 32px', maxWidth:1400 }}>
 
           {/* Header */}
