@@ -38,6 +38,8 @@ export default function QuoteBuilderPage({ user }: { user: PortalUserSSR }) {
   const [loading, setLoading] = useState(true)
   const [err, setErr] = useState('')
   const [busy, setBusy] = useState(false)
+  const [emailing, setEmailing] = useState(false)
+  const [emailMsg, setEmailMsg] = useState('')
 
   const load = useCallback(async () => {
     if (!id) return
@@ -79,6 +81,15 @@ export default function QuoteBuilderPage({ user }: { user: PortalUserSSR }) {
     if (!confirm('Delete this quote?')) return
     await fetch(`/api/workshop/quotes/${id}`, { method: 'DELETE' })
     router.push('/workshop/quotes')
+  }
+  function openPdf() { window.open(`/api/workshop/document?type=quote&id=${encodeURIComponent(id)}`, '_blank') }
+  async function emailQuote() {
+    setEmailing(true); setEmailMsg('')
+    try {
+      const r = await fetch('/api/workshop/document', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ type: 'quote', id }) })
+      const d = await r.json()
+      setEmailMsg(r.ok && d.ok ? `Emailed to ${d.to} ✓` : (d.message || d.error || 'Email failed'))
+    } catch (e: any) { setEmailMsg(e?.message || 'Email failed') } finally { setEmailing(false) }
   }
 
   const q = data?.quote
@@ -145,6 +156,13 @@ export default function QuoteBuilderPage({ user }: { user: PortalUserSSR }) {
                 <div style={{ marginTop: 16 }}>
                   <div style={{ fontSize: 10, color: T.text3, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 4 }}>Notes</div>
                   <NotesField initial={q.notes || ''} disabled={!canEdit} onSave={(v) => patchQuote({ notes: v })} />
+                </div>
+
+                {/* Print / email */}
+                <div style={{ display: 'flex', gap: 8, marginTop: 16, alignItems: 'center', flexWrap: 'wrap' }}>
+                  <button onClick={openPdf} style={qbtn(T.text2)}>🖨 Print / PDF</button>
+                  {canEdit && <button onClick={emailQuote} disabled={emailing} style={qbtn(T.blue)}>{emailing ? 'Sending…' : '✉ Email to customer'}</button>}
+                  {emailMsg && <span style={{ fontSize: 11, color: T.text2 }}>{emailMsg}</span>}
                 </div>
 
                 {canEdit && (

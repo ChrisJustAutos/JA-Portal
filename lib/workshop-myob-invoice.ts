@@ -35,6 +35,13 @@ export interface WorkshopSettings {
   myob_sales_account_uid: string | null
   myob_sales_account_name: string | null
   invoice_as_order: boolean
+  // Letterhead/footer for printed + emailed documents (migration 036).
+  business_name: string | null
+  business_abn: string | null
+  business_address: string | null
+  business_phone: string | null
+  business_email: string | null
+  document_footer: string | null
 }
 
 export async function getWorkshopSettings(): Promise<WorkshopSettings> {
@@ -43,6 +50,12 @@ export async function getWorkshopSettings(): Promise<WorkshopSettings> {
     myob_sales_account_uid: data?.myob_sales_account_uid ?? null,
     myob_sales_account_name: data?.myob_sales_account_name ?? null,
     invoice_as_order: data?.invoice_as_order ?? true,
+    business_name: data?.business_name ?? 'Vehicle Performance Solutions',
+    business_abn: data?.business_abn ?? null,
+    business_address: data?.business_address ?? null,
+    business_phone: data?.business_phone ?? null,
+    business_email: data?.business_email ?? null,
+    document_footer: data?.document_footer ?? null,
   }
 }
 

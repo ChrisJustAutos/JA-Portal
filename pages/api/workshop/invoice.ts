@@ -31,6 +31,10 @@ export default withAuth('view:diary', async (req, res, user) => {
     if ('myob_sales_account_uid' in body) patch.myob_sales_account_uid = body.myob_sales_account_uid || null
     if ('myob_sales_account_name' in body) patch.myob_sales_account_name = body.myob_sales_account_name || null
     if ('invoice_as_order' in body) patch.invoice_as_order = !!body.invoice_as_order
+    // Document letterhead / footer (migration 036)
+    for (const f of ['business_name', 'business_abn', 'business_address', 'business_phone', 'business_email', 'document_footer'] as const) {
+      if (f in body) patch[f] = body[f] === '' ? null : body[f]
+    }
     await setWorkshopSettings(patch)
     return res.status(200).json({ ok: true, settings: await getWorkshopSettings() })
   }

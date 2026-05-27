@@ -63,6 +63,8 @@ export default function JobCardPage({ user }: { user: PortalUserSSR }) {
   const [inv, setInv] = useState<{ busy: boolean; msg: string; needAccount: boolean }>({ busy: false, msg: '', needAccount: false })
   const [acct, setAcct] = useState<{ candidates: any[]; sel: string; saving: boolean } | null>(null)
   const [sms, setSms] = useState<{ open: boolean; body: string; busy: boolean; msg: string }>({ open: false, body: '', busy: false, msg: '' })
+  const [emailing, setEmailing] = useState(false)
+  const [emailMsg, setEmailMsg] = useState('')
 
   const load = useCallback(async () => {
     if (!id) return
@@ -148,6 +150,18 @@ export default function JobCardPage({ user }: { user: PortalUserSSR }) {
       if (r.ok && d.ok) setSms(s => ({ ...s, busy: false, open: false, msg: 'Text sent ✓' }))
       else setSms(s => ({ ...s, busy: false, msg: d.message || d.error || 'Send failed' }))
     } catch (e: any) { setSms(s => ({ ...s, busy: false, msg: e?.message || 'Send failed' })) }
+  }
+
+  function openPdf(type: 'jobcard' | 'invoice') { window.open(`/api/workshop/document?type=${type}&id=${encodeURIComponent(id)}`, '_blank') }
+  async function emailDoc() {
+    const status = data?.booking?.status
+    const type = (status === 'invoiced' || status === 'paid') ? 'invoice' : 'jobcard'
+    setEmailing(true); setEmailMsg('')
+    try {
+      const r = await fetch('/api/workshop/document', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ type, id }) })
+      const d = await r.json()
+      setEmailMsg(r.ok && d.ok ? `Emailed to ${d.to} ✓` : (d.message || d.error || 'Email failed'))
+    } catch (e: any) { setEmailMsg(e?.message || 'Email failed') } finally { setEmailing(false) }
   }
 
   const lines = data?.lines || []
@@ -243,6 +257,14 @@ export default function JobCardPage({ user }: { user: PortalUserSSR }) {
                   </div>
                 )}
                 {err && b && <div style={{ fontSize: 12, color: T.red, marginTop: 8 }}>{err}</div>}
+
+                {/* Print / email the job card or tax invoice */}
+                <div style={{ display: 'flex', gap: 8, marginTop: 12, flexWrap: 'wrap', alignItems: 'center' }}>
+                  <button onClick={() => openPdf('jobcard')} style={qbtn(T.text2)}>🖨 Print job card</button>
+                  {(b.status === 'invoiced' || b.status === 'paid') && <button onClick={() => openPdf('invoice')} style={qbtn(T.teal)}>🧾 Tax invoice PDF</button>}
+                  {canEdit && <button onClick={emailDoc} disabled={emailing} style={qbtn(T.blue)}>{emailing ? 'Sending…' : '✉ Email customer'}</button>}
+                  {emailMsg && <span style={{ fontSize: 11, color: T.text2 }}>{emailMsg}</span>}
+                </div>
 
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 300px', gap: 16, marginTop: 16, alignItems: 'start' }}>
                   {/* Line items */}

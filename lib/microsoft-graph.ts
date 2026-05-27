@@ -143,6 +143,7 @@ export async function sendMail(mailbox: string, opts: {
   html: string
   cc?: string[]
   replyTo?: string
+  attachments?: { name: string; contentType: string; content: Buffer }[]
 }): Promise<void> {
   const body = {
     message: {
@@ -151,6 +152,14 @@ export async function sendMail(mailbox: string, opts: {
       toRecipients: opts.to.map(a => ({ emailAddress: { address: a } })),
       ...(opts.cc && opts.cc.length ? { ccRecipients: opts.cc.map(a => ({ emailAddress: { address: a } })) } : {}),
       ...(opts.replyTo ? { replyTo: [{ emailAddress: { address: opts.replyTo } }] } : {}),
+      ...(opts.attachments && opts.attachments.length ? {
+        attachments: opts.attachments.map(a => ({
+          '@odata.type': '#microsoft.graph.fileAttachment',
+          name: a.name,
+          contentType: a.contentType,
+          contentBytes: a.content.toString('base64'),
+        })),
+      } : {}),
     },
     saveToSentItems: true,
   }
