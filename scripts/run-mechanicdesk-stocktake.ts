@@ -57,6 +57,8 @@ interface MatchResultEntry {
   md_stock_name?: string
   md_stock_number?: string
   md_current_qty?: number
+  md_bin?: string
+  md_location?: string
   candidates?: Array<{ id: number; stock_number: string; name: string }>
   error?: string
 }
@@ -73,7 +75,7 @@ const MODE = process.env.MODE || ''
 if (!PORTAL_BASE) throw new Error('JA_PORTAL_BASE_URL required')
 if (!PORTAL_TOKEN) throw new Error('JA_PORTAL_API_KEY required')
 if (!UPLOAD_ID) throw new Error('UPLOAD_ID required')
-if (!['match', 'push'].includes(MODE)) throw new Error(`Invalid MODE: ${MODE}`)
+if (!['match', 'push', 'recheck'].includes(MODE)) throw new Error(`Invalid MODE: ${MODE}`)
 
 async function readUpload(): Promise<any> {
   const r = await fetch(`${PORTAL_BASE}/api/stocktake/${UPLOAD_ID}`, {
@@ -166,6 +168,8 @@ async function matchSingleRow(
           md_stock_name: r.stock.name || '',
           md_stock_number: r.stock.stock_number || '',
           md_current_qty: typeof r.stock.available === 'number' ? r.stock.available : undefined,
+          md_bin: r.stock.bin || undefined,
+          md_location: r.stock.location || undefined,
         },
         throttled: false,
       }
@@ -315,23 +319,17 @@ async function runMatch(client: MdClient, parsedRows: ParsedRow[]): Promise<Matc
 
 const normSku = (s: string | undefined | null) => String(s || '').trim().toUpperCase()
 
-async function runCoverage(client: MdClient, results: MatchResultEntry[]): Promise<void> {
+// Pull MD's in-stock universe and store the items NOT in `counted`. `source`
+// records what the count was compared against (uploaded sheet vs live MD
+// stocktake) so the UI can show it.
+async function storeCoverage(client: MdClient, counted: Set<string>, source: string): Promise<void> {
   log('Coverage: pulling MD in-stock universe (Stock Value)…')
   const universe = await fetchInStockUniverse(client, { log })
-  log(`Coverage: ${universe.length} in-stock items in MD`)
+  log(`Coverage: ${universe.length} in-stock items in MD; ${counted.size} counted`)
   if (universe.length === 0) {
     log('Coverage: empty universe — skipping (check /stocks.json shape in logs above)')
     return
   }
-
-  // What did the sheet cover? Use the matched MD stock number when we have it,
-  // and always include the raw SKU as a fallback key.
-  const counted = new Set<string>()
-  for (const r of results) {
-    if (r.md_stock_number) counted.add(normSku(r.md_stock_number))
-    if (r.sku) counted.add(normSku(r.sku))
-  }
-
   const uncounted = universe.filter(s => !counted.has(normSku(s.stock_number)))
   uncounted.sort((a, b) => (b.value || 0) - (a.value || 0))   // biggest $ exposure first
   const uncountedValue = Math.round(uncounted.reduce((sum, s) => sum + (s.value || 0), 0) * 100) / 100
@@ -349,11 +347,40 @@ async function runCoverage(client: MdClient, results: MatchResultEntry[]): Promi
       uncounted_value: uncountedValue,
       uncounted: stored,
       truncated: uncounted.length > CAP,
-      source: 'stocks.json',
+      source,
     },
   })
   log(`Coverage: ${uncounted.length}/${universe.length} in-stock items NOT counted ($${uncountedValue} at buy price)`)
-  await notifySlack(`Coverage: ${uncounted.length} of ${universe.length} in-stock items were NOT counted ($${uncountedValue} value at buy price)`, false)
+  await notifySlack(`Coverage (vs ${source}): ${uncounted.length} of ${universe.length} in-stock items NOT counted ($${uncountedValue} at buy price)`, false)
+}
+
+// Coverage from the just-matched upload sheet.
+async function runCoverage(client: MdClient, results: MatchResultEntry[]): Promise<void> {
+  const counted = new Set<string>()
+  for (const r of results) {
+    if (r.md_stock_number) counted.add(normSku(r.md_stock_number))
+    if (r.sku) counted.add(normSku(r.sku))
+  }
+  await storeCoverage(client, counted, 'uploaded sheet')
+}
+
+// Re-check: read what's actually in the MD stocktake now and compare against
+// the live Stock Value report (used after pushing, or after staff add counts
+// directly in MD).
+async function runRecheck(client: MdClient, stocktakeId: string): Promise<void> {
+  log(`Recheck: reading MD stocktake ${stocktakeId}…`)
+  const st = await fetchStocktakeWithSheet(client, Number(stocktakeId))
+  const counted = new Set<string>()
+  let rows = 0
+  for (const sheet of st.stocktake_sheets || []) {
+    if (!sheet || sheet.deleted) continue
+    for (const it of (sheet.stocktake_items || [])) {
+      const sn = (it.stock && it.stock.stock_number) || it.stock_number
+      if (sn) { counted.add(normSku(sn)); rows++ }
+    }
+  }
+  log(`Recheck: MD stocktake has ${counted.size} distinct counted items (${rows} rows)`)
+  await storeCoverage(client, counted, 'MD stocktake')
 }
 
 // ── Push mode ─────────────────────────────────────────────────────────
@@ -635,6 +662,9 @@ async function main(): Promise<void> {
       const results = (upload.match_results || []) as MatchResultEntry[]
       if (results.length === 0) throw new Error('No match_results in upload')
       await runPush(client, results)
+    } else if (MODE === 'recheck') {
+      if (!upload.mechanicdesk_stocktake_id) throw new Error('No MechanicDesk stocktake id on this upload — push to MD first.')
+      await runRecheck(client, String(upload.mechanicdesk_stocktake_id))
     }
 
     log('Worker done')

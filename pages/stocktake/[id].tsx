@@ -46,6 +46,8 @@ interface MatchEntry {
   md_stock_name?: string
   md_stock_number?: string
   md_current_qty?: number
+  md_bin?: string
+  md_location?: string
   candidates?: Array<{ id: number; stock_number: string; name: string }>
   error?: string
 }
@@ -77,7 +79,7 @@ interface Upload {
   coverage?: CoverageData | null
 }
 
-interface CoverageItem { stock_number: string; name: string; available: number; buy_price: number; value: number }
+interface CoverageItem { stock_number: string; name: string; available: number; buy_price: number; value: number; bin?: string | null; location?: string | null }
 interface CoverageData {
   total: number
   counted: number
@@ -133,6 +135,10 @@ export default function StocktakeDetailPage({ user }: { user: SessionUser }) {
   const [deleting, setDeleting] = useState(false)
   const [filter, setFilter] = useState<'all' | 'matched' | 'unmatched' | 'variance'>('all')
   const [sheetFilter, setSheetFilter] = useState<string>('all')
+  const [exportCols, setExportCols] = useState<string[]>(MATCH_COLS.map(c => c.key))
+  const [colsOpen, setColsOpen] = useState(false)
+  const [rechecking, setRechecking] = useState(false)
+  const [recheckMsg, setRecheckMsg] = useState('')
 
   const canEdit = roleHasPermission(user.role, 'edit:stocktakes')
   const isPolling = upload && (upload.status === 'matching' || upload.status === 'pushing')
@@ -183,6 +189,33 @@ export default function StocktakeDetailPage({ user }: { user: SessionUser }) {
       await load()
     } catch (e: any) { setError(e.message) }
     finally { setActionInFlight(false) }
+  }
+
+  // Re-check coverage against the LIVE MD stocktake (after pushing / counting in
+  // MD). Dispatches the worker, then polls coverage_at until it updates.
+  async function runRecheck() {
+    if (!id || rechecking) return
+    setRecheckMsg('')
+    const prev = upload?.coverage_at || null
+    try {
+      const r = await fetch(`/api/stocktake/${id}/recheck`, { method: 'POST' })
+      const d = await r.json()
+      if (!r.ok) { setRecheckMsg(d.error || 'Re-check failed'); return }
+    } catch (e: any) { setRecheckMsg(e.message || 'Re-check failed'); return }
+    setRechecking(true); setRecheckMsg('Re-checking against the MD stocktake…')
+    let tries = 0
+    const iv = setInterval(async () => {
+      tries++
+      try {
+        const rr = await fetch(`/api/stocktake/${id}`)
+        const dd = await rr.json()
+        if (rr.ok && dd.coverage_at && dd.coverage_at !== prev) {
+          clearInterval(iv); setRechecking(false); setUpload(dd); setRecheckMsg('Coverage updated ✓')
+          setTimeout(() => setRecheckMsg(''), 4000); return
+        }
+      } catch { /* keep polling */ }
+      if (tries >= 30) { clearInterval(iv); setRechecking(false); setRecheckMsg('Still running — refresh in a moment.') }
+    }, 5000)
   }
 
   async function runDelete() {
@@ -420,7 +453,8 @@ export default function StocktakeDetailPage({ user }: { user: SessionUser }) {
 
               {/* ── Coverage vs in-stock (MD Stock Value report) ── */}
               {upload.coverage && (
-                <CoverageSection coverage={upload.coverage} coverageAt={upload.coverage_at || null} filename={upload.filename} />
+                <CoverageSection coverage={upload.coverage} coverageAt={upload.coverage_at || null} filename={upload.filename}
+                  canRecheck={canEdit && !!upload.mechanicdesk_stocktake_id} onRecheck={runRecheck} rechecking={rechecking} recheckMsg={recheckMsg} />
               )}
 
               {/* ── Match results table ──────────────────────────── */}
@@ -458,16 +492,36 @@ export default function StocktakeDetailPage({ user }: { user: SessionUser }) {
                         </button>
                       ))}
                       <span style={{width:1, height:18, background:T.border2, margin:'0 2px'}}/>
+                      <div style={{ position:'relative' }}>
+                        <button onClick={() => setColsOpen(o => !o)} title="Choose which columns to export"
+                          style={{ padding:'4px 10px', borderRadius:4, fontSize:11, fontFamily:'inherit', background:'transparent', color:T.text2, border:`1px solid ${T.border2}`, cursor:'pointer' }}>
+                          Columns ({exportCols.length}) ▾
+                        </button>
+                        {colsOpen && (
+                          <div onMouseLeave={() => setColsOpen(false)} style={{ position:'absolute', top:'100%', right:0, zIndex:20, marginTop:4, background:T.bg3, border:`1px solid ${T.border2}`, borderRadius:6, padding:'8px 10px', width:200, boxShadow:'0 10px 30px rgba(0,0,0,0.5)' }}>
+                            <div style={{ display:'flex', justifyContent:'space-between', marginBottom:6 }}>
+                              <button onClick={() => setExportCols(MATCH_COLS.map(c => c.key))} style={{ background:'none', border:'none', color:T.text3, fontSize:10, cursor:'pointer', fontFamily:'inherit', padding:0 }}>All</button>
+                              <button onClick={() => setExportCols([])} style={{ background:'none', border:'none', color:T.text3, fontSize:10, cursor:'pointer', fontFamily:'inherit', padding:0 }}>None</button>
+                            </div>
+                            {MATCH_COLS.map(c => (
+                              <label key={c.key} style={{ display:'flex', alignItems:'center', gap:7, padding:'3px 0', fontSize:12, cursor:'pointer', color:T.text2 }}>
+                                <input type="checkbox" checked={exportCols.includes(c.key)} onChange={() => setExportCols(prev => prev.includes(c.key) ? prev.filter(k => k !== c.key) : [...prev, c.key])} style={{ margin:0 }} />
+                                {c.label}
+                              </label>
+                            ))}
+                          </div>
+                        )}
+                      </div>
                       <button
-                        onClick={() => downloadMatchCsv(filteredResults, filter, upload.filename)}
-                        disabled={filteredResults.length === 0}
+                        onClick={() => downloadMatchCsv(filteredResults, filter, upload.filename, exportCols)}
+                        disabled={filteredResults.length === 0 || exportCols.length === 0}
                         title={`Download the "${filter}" results (${filteredResults.length} rows) as CSV`}
                         style={{
                           padding:'4px 10px', borderRadius:4, fontSize:11, fontFamily:'inherit', fontWeight:600,
                           background:'transparent',
-                          color: filteredResults.length === 0 ? T.text3 : T.blue,
-                          border:`1px solid ${filteredResults.length === 0 ? T.border2 : T.blue + '55'}`,
-                          cursor: filteredResults.length === 0 ? 'default' : 'pointer',
+                          color: (filteredResults.length === 0 || exportCols.length === 0) ? T.text3 : T.blue,
+                          border:`1px solid ${(filteredResults.length === 0 || exportCols.length === 0) ? T.border2 : T.blue + '55'}`,
+                          cursor: (filteredResults.length === 0 || exportCols.length === 0) ? 'default' : 'pointer',
                         }}>
                         ↓ CSV ({filteredResults.length})
                       </button>
@@ -718,9 +772,9 @@ const money = (n: number) => `$${(Number(n) || 0).toLocaleString('en-AU', { mini
 
 function downloadCoverageCsv(items: CoverageItem[], filename: string) {
   const esc = (v: any) => { const s = String(v ?? ''); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s }
-  const header = ['Stock Number', 'Name', 'On Hand Qty', 'Buy Price', 'Value (qty x buy)']
+  const header = ['Stock Number', 'Name', 'Bin', 'Location', 'On Hand Qty', 'Buy Price', 'Value (qty x buy)']
   const lines = [header.join(',')]
-  for (const it of items) lines.push([esc(it.stock_number), esc(it.name), it.available, it.buy_price, it.value].join(','))
+  for (const it of items) lines.push([esc(it.stock_number), esc(it.name), esc(it.bin || ''), esc(it.location || ''), it.available, it.buy_price, it.value].join(','))
   const blob = new Blob([lines.join('\r\n')], { type: 'text/csv;charset=utf-8;' })
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
@@ -730,30 +784,29 @@ function downloadCoverageCsv(items: CoverageItem[], filename: string) {
   setTimeout(() => URL.revokeObjectURL(url), 1000)
 }
 
-// Export match results (whatever the active filter shows: all / matched /
-// unmatched / variance) as CSV — mirrors the on-screen table columns.
-function downloadMatchCsv(rows: MatchEntry[], label: string, filename: string) {
+// Selectable match-result columns. Order here is the CSV column order.
+const MATCH_COLS: { key: string; label: string; get: (r: MatchEntry) => any }[] = [
+  { key: 'row', label: 'Row', get: r => r.row_number },
+  { key: 'sheet', label: 'Sheet', get: r => r.sheet_name || '' },
+  { key: 'sku', label: 'SKU', get: r => r.sku },
+  { key: 'md_match', label: 'MD Match', get: r => r.md_stock_name || '' },
+  { key: 'md_stock_number', label: 'MD Stock #', get: r => r.md_stock_number || '' },
+  { key: 'bin', label: 'Bin', get: r => r.md_bin || '' },
+  { key: 'location', label: 'Location', get: r => r.md_location || '' },
+  { key: 'counted', label: 'Counted', get: r => r.qty },
+  { key: 'system', label: 'System Qty', get: r => (r.md_current_qty != null ? r.md_current_qty : '') },
+  { key: 'variance', label: 'Variance', get: r => { const v = rowVariance(r); return v != null ? v : '' } },
+  { key: 'status', label: 'Status', get: r => r.status },
+  { key: 'note', label: 'Note', get: r => r.status === 'ambiguous' && r.candidates ? `${r.candidates.length} candidates: ${r.candidates.map(c => c.stock_number).join(' | ')}` : (r.error || '') },
+]
+
+// Export the active filter's rows as CSV with the chosen columns.
+function downloadMatchCsv(rows: MatchEntry[], label: string, filename: string, cols: string[]) {
   const esc = (v: any) => { const s = String(v ?? ''); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s }
-  const header = ['Row', 'Sheet', 'SKU', 'MD Match', 'MD Stock #', 'Counted', 'System Qty', 'Variance', 'Status', 'Note']
-  const lines = [header.join(',')]
-  for (const r of rows) {
-    const v = rowVariance(r)
-    const note = r.status === 'ambiguous' && r.candidates
-      ? `${r.candidates.length} candidates: ${r.candidates.map(c => c.stock_number).join(' | ')}`
-      : (r.error || '')
-    lines.push([
-      r.row_number,
-      esc(r.sheet_name || ''),
-      esc(r.sku),
-      esc(r.md_stock_name || ''),
-      esc(r.md_stock_number || ''),
-      r.qty,
-      r.md_current_qty != null ? r.md_current_qty : '',
-      v != null ? v : '',
-      r.status,
-      esc(note),
-    ].join(','))
-  }
+  const sel = MATCH_COLS.filter(c => cols.includes(c.key))
+  if (sel.length === 0) return
+  const lines = [sel.map(c => esc(c.label)).join(',')]
+  for (const r of rows) lines.push(sel.map(c => esc(c.get(r))).join(','))
   const blob = new Blob([lines.join('\r\n')], { type: 'text/csv;charset=utf-8;' })
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
@@ -766,12 +819,16 @@ function downloadMatchCsv(rows: MatchEntry[], label: string, filename: string) {
 // Coverage: which in-stock MD items weren't in the counted sheet. The worker
 // pulls MD's in-stock universe (Stock Value report) during Run Match and diffs
 // it against the count. This surfaces the gap so nothing is missed.
-function CoverageSection({ coverage, coverageAt, filename }: { coverage: CoverageData; coverageAt: string | null; filename: string }) {
+function CoverageSection({ coverage, coverageAt, filename, canRecheck, onRecheck, rechecking, recheckMsg }: {
+  coverage: CoverageData; coverageAt: string | null; filename: string
+  canRecheck: boolean; onRecheck: () => void; rechecking: boolean; recheckMsg: string
+}) {
   const [open, setOpen] = useState(false)
   const items = coverage.uncounted || []
   const DISPLAY = 200
   const shown = open ? items : items.slice(0, DISPLAY)
   const allCounted = coverage.uncounted_count === 0
+  const GRID = '140px 1fr 80px 70px 80px 90px'
 
   return (
     <div style={{marginTop:24}}>
@@ -779,12 +836,21 @@ function CoverageSection({ coverage, coverageAt, filename }: { coverage: Coverag
         <h2 style={{margin:0, fontSize:14, fontWeight:600, color:T.text2, textTransform:'uppercase', letterSpacing:'0.05em'}}>
           Coverage vs in-stock
         </h2>
-        {items.length > 0 && (
-          <button onClick={() => downloadCoverageCsv(items, filename)}
-            style={{padding:'4px 12px', borderRadius:4, fontSize:11, fontFamily:'inherit', fontWeight:600, background:'transparent', color:T.blue, border:`1px solid ${T.blue}55`, cursor:'pointer'}}>
-            ↓ Download CSV ({coverage.uncounted_count})
-          </button>
-        )}
+        <div style={{display:'flex', gap:8, alignItems:'center', flexWrap:'wrap'}}>
+          {recheckMsg && <span style={{fontSize:11, color: recheckMsg.includes('✓') ? T.green : T.text3}}>{recheckMsg}</span>}
+          {canRecheck && (
+            <button onClick={onRecheck} disabled={rechecking} title="Read the live MechanicDesk stocktake and compare it to the Stock Value report again"
+              style={{padding:'4px 12px', borderRadius:4, fontSize:11, fontFamily:'inherit', fontWeight:600, background:'transparent', color: rechecking ? T.text3 : T.amber, border:`1px solid ${rechecking ? T.border2 : T.amber + '55'}`, cursor: rechecking ? 'default' : 'pointer'}}>
+              {rechecking ? '↻ Re-checking…' : '↻ Re-check vs MD stocktake'}
+            </button>
+          )}
+          {items.length > 0 && (
+            <button onClick={() => downloadCoverageCsv(items, filename)}
+              style={{padding:'4px 12px', borderRadius:4, fontSize:11, fontFamily:'inherit', fontWeight:600, background:'transparent', color:T.blue, border:`1px solid ${T.blue}55`, cursor:'pointer'}}>
+              ↓ Download CSV ({coverage.uncounted_count})
+            </button>
+          )}
+        </div>
       </div>
 
       <div style={{display:'flex', flexWrap:'wrap', alignItems:'center', gap:10, marginBottom:items.length ? 12 : 0, padding:'12px 14px', background:T.bg2, border:`1px solid ${allCounted ? T.green + '40' : T.amber + '40'}`, borderRadius:8}}>
@@ -801,13 +867,14 @@ function CoverageSection({ coverage, coverageAt, filename }: { coverage: Coverag
 
       {items.length > 0 && (
         <div style={{background:T.bg2, border:`1px solid ${T.border}`, borderRadius:10, overflow:'hidden'}}>
-          <div style={{display:'grid', gridTemplateColumns:'150px 1fr 90px 100px 110px', gap:12, padding:'10px 14px', borderBottom:`1px solid ${T.border}`, background:T.bg3, fontSize:10, color:T.text3, textTransform:'uppercase', letterSpacing:'0.05em', fontWeight:600}}>
-            <div>Stock #</div><div>Name</div><div style={{textAlign:'right'}}>On hand</div><div style={{textAlign:'right'}}>Buy price</div><div style={{textAlign:'right'}}>Value</div>
+          <div style={{display:'grid', gridTemplateColumns:GRID, gap:12, padding:'10px 14px', borderBottom:`1px solid ${T.border}`, background:T.bg3, fontSize:10, color:T.text3, textTransform:'uppercase', letterSpacing:'0.05em', fontWeight:600}}>
+            <div>Stock #</div><div>Name</div><div>Bin</div><div style={{textAlign:'right'}}>On hand</div><div style={{textAlign:'right'}}>Buy</div><div style={{textAlign:'right'}}>Value</div>
           </div>
           {shown.map((it, i) => (
-            <div key={i} style={{display:'grid', gridTemplateColumns:'150px 1fr 90px 100px 110px', gap:12, padding:'9px 14px', borderBottom:`1px solid ${T.border}`, fontSize:12, alignItems:'center'}}>
+            <div key={i} style={{display:'grid', gridTemplateColumns:GRID, gap:12, padding:'9px 14px', borderBottom:`1px solid ${T.border}`, fontSize:12, alignItems:'center'}}>
               <div style={{color:T.text, fontFamily:'monospace', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap'}}>{it.stock_number || '—'}</div>
               <div style={{color:T.text2, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap'}}>{it.name || '—'}</div>
+              <div style={{color:T.text3, fontFamily:'monospace', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap'}}>{it.bin || '—'}</div>
               <div style={{textAlign:'right', color:T.text2, fontVariantNumeric:'tabular-nums'}}>{it.available}</div>
               <div style={{textAlign:'right', color:T.text3, fontVariantNumeric:'tabular-nums'}}>{money(it.buy_price)}</div>
               <div style={{textAlign:'right', color:T.text, fontVariantNumeric:'tabular-nums'}}>{money(it.value)}</div>
@@ -823,7 +890,7 @@ function CoverageSection({ coverage, coverageAt, filename }: { coverage: Coverag
           )}
         </div>
       )}
-      {coverageAt && <div style={{fontSize:10, color:T.text3, marginTop:6}}>Checked {new Date(coverageAt).toLocaleString('en-AU')} · in stock = MD on-hand qty &gt; 0</div>}
+      {coverageAt && <div style={{fontSize:10, color:T.text3, marginTop:6}}>Checked {new Date(coverageAt).toLocaleString('en-AU')} · counted from {coverage.source === 'MD stocktake' ? 'the live MD stocktake' : 'the uploaded sheet'} · in stock = MD on-hand qty &gt; 0</div>}
     </div>
   )
 }

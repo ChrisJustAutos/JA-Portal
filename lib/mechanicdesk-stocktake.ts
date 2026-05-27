@@ -351,6 +351,8 @@ export interface InStockItem {
   available: number     // on-hand qty (> 0)
   buy_price: number
   value: number         // available × buy_price
+  bin: string | null
+  location: string | null
 }
 
 /** Read the first present numeric field from a candidate list (defensive — MD
@@ -362,6 +364,15 @@ function pickNum(obj: any, keys: string[]): number | undefined {
     if (typeof v === 'string' && v.trim() !== '' && isFinite(Number(v))) return Number(v)
   }
   return undefined
+}
+
+/** First present non-empty string from a candidate list. */
+function pickStr(obj: any, keys: string[]): string | null {
+  for (const k of keys) {
+    const v = obj?.[k]
+    if (v != null && String(v).trim() !== '') return String(v).trim()
+  }
+  return null
 }
 
 /**
@@ -405,6 +416,8 @@ export async function fetchInStockUniverse(
         available,
         buy_price: buy,
         value: Math.round(available * buy * 100) / 100,
+        bin: pickStr(s, ['bin', 'bin_location', 'shelf']),
+        location: pickStr(s, ['location', 'location_name']),
       })
     }
 
