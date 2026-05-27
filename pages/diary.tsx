@@ -27,7 +27,7 @@ const T = {
   amber: '#f5a623', red: '#f04e4e', purple: '#a78bfa', accent: '#4f8ef7',
 }
 
-interface Tech { ext: string; name: string }
+interface Tech { ext: string; name: string; color?: string | null; daily_hours?: number }
 interface BookingRow {
   id: string
   customer_id: string | null
@@ -283,6 +283,7 @@ export default function DiaryPage({ user }: { user: PortalUserSSR }) {
                   {sync.busy ? '↻ Syncing…' : '↻ MYOB'}
                 </button>
                 {sync.msg && <span style={{ fontSize: 11, color: T.text3, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 260 }}>{sync.msg}</span>}
+                <button onClick={() => router.push('/workshop/settings')} style={btn(false)} title="Workshop settings — technicians, business details, invoicing, SMS">⚙ Settings</button>
               </>
             )}
             <div style={{ flex: 1 }} />
@@ -373,7 +374,7 @@ function TechPills({ techs, active, onPick }: { techs: Tech[]; active: string | 
   return (
     <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 12 }}>
       {pill(null, 'All techs', '✶', T.text3)}
-      {techs.map((t, i) => pill(t.ext, t.name.split(/\s+/)[0] || t.ext, techInitials(t.name), PILL_COLORS[i % PILL_COLORS.length]))}
+      {techs.map((t, i) => pill(t.ext, t.name.split(/\s+/)[0] || t.ext, techInitials(t.name), t.color || PILL_COLORS[i % PILL_COLORS.length]))}
     </div>
   )
 }

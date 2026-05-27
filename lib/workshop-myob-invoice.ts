@@ -42,6 +42,10 @@ export interface WorkshopSettings {
   business_phone: string | null
   business_email: string | null
   document_footer: string | null
+  // SMS reminders (migration 034).
+  sms_enabled: boolean
+  sms_from: string | null
+  booking_reminder_lead_hours: number
 }
 
 export async function getWorkshopSettings(): Promise<WorkshopSettings> {
@@ -56,6 +60,9 @@ export async function getWorkshopSettings(): Promise<WorkshopSettings> {
     business_phone: data?.business_phone ?? null,
     business_email: data?.business_email ?? null,
     document_footer: data?.document_footer ?? null,
+    sms_enabled: data?.sms_enabled ?? false,
+    sms_from: data?.sms_from ?? null,
+    booking_reminder_lead_hours: Number(data?.booking_reminder_lead_hours ?? 24),
   }
 }
 

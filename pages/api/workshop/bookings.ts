@@ -34,12 +34,16 @@ export default withAuth('view:diary', async (req, res, user) => {
         .gte('starts_at', from)
         .lt('starts_at', to)
         .order('starts_at', { ascending: true }),
-      db.from('extensions').select('extension, display_name, role').eq('active', true).order('extension', { ascending: true }),
+      db.from('workshop_technicians').select('code, name, color, daily_hours')
+        .eq('active', true).eq('show_in_diary', true)
+        .order('sort_order', { ascending: true }).order('name', { ascending: true }),
     ])
     if (bRes.error) return res.status(500).json({ error: bRes.error.message })
-    const technicians = (tRes.data || [])
-      .filter((e: any) => !['system', 'test'].includes(String(e.role || '').toLowerCase()))
-      .map((e: any) => ({ ext: String(e.extension), name: e.display_name || `Ext ${e.extension}` }))
+    // Diary lanes are workshop-managed (workshop_technicians); ext = lane code.
+    const technicians = (tRes.data || []).map((t: any) => ({
+      ext: String(t.code), name: t.name || `Ext ${t.code}`,
+      color: t.color || null, daily_hours: Number(t.daily_hours ?? 8),
+    }))
     return res.status(200).json({ bookings: bRes.data || [], technicians })
   }
 
