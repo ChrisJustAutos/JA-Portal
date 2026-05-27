@@ -6,6 +6,7 @@
 
 import { useEffect, useState, useCallback, useMemo } from 'react'
 import Head from 'next/head'
+import { useRouter } from 'next/router'
 import PortalTopBar from '../lib/PortalTopBar'
 import { requirePageAuth } from '../lib/authServer'
 import { roleHasPermission } from '../lib/permissions'
@@ -73,6 +74,24 @@ function topPxFor(iso: string): number {
 function dayLabel(ymd: string): string {
   return new Date(`${ymd}T00:00:00+10:00`).toLocaleDateString('en-AU', { weekday: 'short', day: 'numeric', month: 'short' })
 }
+function monthStartYmd(ymd: string): string { return ymd.slice(0, 8) + '01' }
+function addMonthsYmd(ymd: string, n: number): string {
+  const [y, m] = ymd.split('-').map(Number)
+  return new Date(Date.UTC(y, (m - 1) + n, 1)).toISOString().slice(0, 10)
+}
+function monthLabel(ymd: string): string {
+  return new Date(`${monthStartYmd(ymd)}T00:00:00+10:00`).toLocaleDateString('en-AU', { month: 'long', year: 'numeric' })
+}
+// 6-week (42-day) grid starting on the Monday on/before the 1st.
+function monthGridDays(ymd: string): string[] {
+  const first = monthStartYmd(ymd)
+  const dow = (new Date(`${first}T00:00:00+10:00`).getUTCDay() + 6) % 7
+  const start = addDaysYmd(first, -dow)
+  return Array.from({ length: 42 }, (_, i) => addDaysYmd(start, i))
+}
+function durationHours(b: { starts_at: string; ends_at: string }): number {
+  return Math.max(0, (new Date(b.ends_at).getTime() - new Date(b.starts_at).getTime()) / 3600000)
+}
 
 // ── Booking block (positioned in a lane) ────────────────────────────────
 function BookingBlock({ b, onClick, showTech }: { b: BookingRow; onClick: () => void; showTech?: boolean }) {
@@ -101,22 +120,29 @@ function BookingBlock({ b, onClick, showTech }: { b: BookingRow; onClick: () => 
 }
 
 // ── Page ────────────────────────────────────────────────────────────────
-type View = 'day' | 'week'
+type View = 'day' | 'week' | 'month'
 
 export default function DiaryPage({ user }: { user: PortalUserSSR }) {
+  const router = useRouter()
   const canEdit = roleHasPermission(user.role, 'edit:bookings')
+  const isAdmin = roleHasPermission(user.role, 'admin:settings')
   const [view, setView] = useState<View>('day')
   const [date, setDate] = useState<string>(() => ymdBrisbane(new Date()))
   const [bookings, setBookings] = useState<BookingRow[]>([])
   const [techs, setTechs] = useState<Tech[]>([])
+  const [notes, setNotes] = useState<any[]>([])
+  const [capacity, setCapacity] = useState<Record<string, number>>({})
   const [loading, setLoading] = useState(true)
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null)
   const [editing, setEditing] = useState<Partial<BookingRow> | null>(null) // open modal when non-null
   const [sync, setSync] = useState<{ busy: boolean; msg: string }>({ busy: false, msg: '' })
-  const isAdmin = roleHasPermission(user.role, 'admin:settings')
 
   const range = useMemo(() => {
     if (view === 'day') return brisbaneDayBounds(date)
+    if (view === 'month') {
+      const ms = monthStartYmd(date)
+      return { fromIso: brisbaneDayBounds(ms).fromIso, toIso: brisbaneDayBounds(addMonthsYmd(ms, 1)).fromIso }
+    }
     const ws = weekStartYmd(date)
     return { fromIso: brisbaneDayBounds(ws).fromIso, toIso: brisbaneDayBounds(addDaysYmd(ws, 7)).fromIso }
   }, [view, date])
@@ -124,12 +150,18 @@ export default function DiaryPage({ user }: { user: PortalUserSSR }) {
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      const r = await fetch(`/api/workshop/bookings?from=${encodeURIComponent(range.fromIso)}&to=${encodeURIComponent(range.toIso)}`)
-      const d = await r.json()
-      if (r.ok) {
+      const [bRes, nRes, cRes] = await Promise.all([
+        fetch(`/api/workshop/bookings?from=${encodeURIComponent(range.fromIso)}&to=${encodeURIComponent(range.toIso)}`),
+        fetch(`/api/workshop/diary-notes?from=${encodeURIComponent(range.fromIso)}&to=${encodeURIComponent(range.toIso)}`),
+        fetch('/api/workshop/tech-capacity'),
+      ])
+      const d = await bRes.json()
+      if (bRes.ok) {
         setBookings(Array.isArray(d.bookings) ? d.bookings : [])
         setTechs(Array.isArray(d.technicians) ? d.technicians : [])
       }
+      const nd = await nRes.json().catch(() => ({})); if (nRes.ok) setNotes(Array.isArray(nd.notes) ? nd.notes : [])
+      const cd = await cRes.json().catch(() => ({})); if (cRes.ok) setCapacity(cd.capacity || {})
       setLastRefresh(new Date())
     } catch { /* leave previous data */ } finally { setLoading(false) }
   }, [range])
@@ -170,7 +202,31 @@ export default function DiaryPage({ user }: { user: PortalUserSSR }) {
     openNew({ ymd, startMin: DAY_START_MIN + slot * SLOT_MIN, techExt })
   }
 
-  const shiftDate = (days: number) => setDate(d => addDaysYmd(d, view === 'week' ? days * 7 : days))
+  const shiftDate = (delta: number) => setDate(d => view === 'month' ? addMonthsYmd(monthStartYmd(d), delta) : addDaysYmd(d, view === 'week' ? delta * 7 : delta))
+
+  async function openNewJob() {
+    if (!canEdit) return
+    const ymd = view === 'day' ? date : view === 'week' ? weekStartYmd(date) : monthStartYmd(date)
+    const startIso = isoFromBne(ymd, '09:00')
+    const endIso = new Date(new Date(startIso).getTime() + 60 * 60000).toISOString()
+    const r = await fetch('/api/workshop/bookings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ starts_at: startIso, ends_at: endIso, status: 'booking', job_type: 'general_service' }) })
+    const d = await r.json()
+    if (r.ok && d.id) router.push(`/workshop/job/${d.id}`)
+  }
+  async function addNote(ymd: string, content: string) {
+    if (!content.trim()) return
+    await fetch('/api/workshop/diary-notes', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content, note_date: isoFromBne(ymd, '00:00') }) })
+    load()
+  }
+  async function delNote(id: string) { await fetch(`/api/workshop/diary-notes?id=${encodeURIComponent(id)}`, { method: 'DELETE' }); load() }
+  async function setLaneCapacity(ext: string) {
+    if (!isAdmin || !ext) return
+    const v = window.prompt(`Daily capacity (hours) for ext ${ext}:`, String(capacity[ext] ?? 8))
+    if (v == null) return
+    const hours = Number(v); if (!isFinite(hours)) return
+    await fetch('/api/workshop/tech-capacity', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ technician_ext: ext, daily_hours: hours }) })
+    load()
+  }
 
   return (
     <>
@@ -197,7 +253,7 @@ export default function DiaryPage({ user }: { user: PortalUserSSR }) {
             <button onClick={() => shiftDate(-1)} style={btn(false)}>‹</button>
             <button onClick={() => shiftDate(1)} style={btn(false)}>›</button>
             <span style={{ fontSize: 13, color: T.text2, fontWeight: 500, minWidth: 200 }}>
-              {view === 'day' ? dayLabel(date) : `Week of ${dayLabel(weekStartYmd(date))}`}
+              {view === 'day' ? dayLabel(date) : view === 'week' ? `Week of ${dayLabel(weekStartYmd(date))}` : monthLabel(date)}
             </span>
             {isAdmin && (
               <>
@@ -211,24 +267,35 @@ export default function DiaryPage({ user }: { user: PortalUserSSR }) {
             <div style={{ display: 'flex', gap: 4 }}>
               <button onClick={() => setView('day')} style={btn(view === 'day')}>Day</button>
               <button onClick={() => setView('week')} style={btn(view === 'week')}>Week</button>
+              <button onClick={() => setView('month')} style={btn(view === 'month')}>Month</button>
             </div>
             {canEdit && (
-              <button onClick={() => openNew({ ymd: view === 'day' ? date : weekStartYmd(date), startMin: 9 * 60 })}
-                style={{ ...btn(true), background: T.accent, color: '#fff', borderColor: T.accent }}>+ New booking</button>
+              <>
+                <button onClick={() => openNew({ ymd: view === 'day' ? date : view === 'week' ? weekStartYmd(date) : monthStartYmd(date), startMin: 9 * 60 })}
+                  style={{ ...btn(true), background: T.accent, color: '#fff', borderColor: T.accent }}>+ Booking</button>
+                <button onClick={openNewJob} style={btn(false)} title="Create a job and open its job card">+ Job</button>
+              </>
             )}
           </div>
 
           {/* Grid */}
           <div style={{ flex: 1, overflow: 'auto', padding: 16 }}>
+            {view === 'day' && (
+              <DayNotes date={date} notes={notes} canEdit={canEdit} onAdd={(c) => addNote(date, c)} onDelete={delNote} />
+            )}
             {view === 'day' ? (
-              <DayGrid bookings={bookings} techs={techs} date={date} hourLines={hourLines} onLaneClick={laneClick} onBooking={(b) => canEdit && setEditing(b)} />
-            ) : (
+              <DayGrid bookings={bookings} techs={techs} date={date} hourLines={hourLines}
+                capacity={capacity} canEditCapacity={isAdmin} onSetCapacity={setLaneCapacity}
+                onLaneClick={laneClick} onBooking={(b) => canEdit && setEditing(b)} />
+            ) : view === 'week' ? (
               <WeekGrid bookings={bookings} days={weekDays} hourLines={hourLines}
                 onDayClick={(ymd) => { setDate(ymd); setView('day') }}
                 onSlotClick={(ymd, e) => laneClick(e, ymd, null)}
                 onBooking={(b) => canEdit && setEditing(b)} />
+            ) : (
+              <MonthGrid date={date} bookings={bookings} notes={notes} onDayClick={(ymd) => { setDate(ymd); setView('day') }} />
             )}
-            {!loading && bookings.length === 0 && (
+            {!loading && bookings.length === 0 && view !== 'month' && (
               <div style={{ textAlign: 'center', color: T.text3, fontSize: 12, marginTop: 24 }}>
                 No bookings {view === 'day' ? 'today' : 'this week'}.{canEdit ? ' Click a slot to add one.' : ''}
               </div>
@@ -258,9 +325,11 @@ function btn(active: boolean): React.CSSProperties {
   }
 }
 
-// ── Day grid: time axis + one lane per technician ───────────────────────
-function DayGrid({ bookings, techs, date, hourLines, onLaneClick, onBooking }: {
+// ── Day grid: time axis + one lane per technician (with workload bar) ────
+const LANE_HEADER_PX = 46
+function DayGrid({ bookings, techs, date, hourLines, capacity, canEditCapacity, onSetCapacity, onLaneClick, onBooking }: {
   bookings: BookingRow[]; techs: Tech[]; date: string; hourLines: number[]
+  capacity: Record<string, number>; canEditCapacity: boolean; onSetCapacity: (ext: string) => void
   onLaneClick: (e: React.MouseEvent<HTMLDivElement>, ymd: string, techExt: string | null) => void
   onBooking: (b: BookingRow) => void
 }) {
@@ -271,7 +340,7 @@ function DayGrid({ bookings, techs, date, hourLines, onLaneClick, onBooking }: {
     <div style={{ display: 'flex', minWidth: 'fit-content', border: `1px solid ${T.border}`, borderRadius: 8, overflow: 'hidden', background: T.bg2 }}>
       {/* time axis */}
       <div style={{ width: 56, flexShrink: 0, borderRight: `1px solid ${T.border}` }}>
-        <div style={{ height: 32, borderBottom: `1px solid ${T.border}` }} />
+        <div style={{ height: LANE_HEADER_PX, borderBottom: `1px solid ${T.border}` }} />
         <div style={{ position: 'relative', height: GRID_PX }}>
           {hourLines.map((h, i) => (
             <div key={h} style={{ position: 'absolute', top: i * 2 * SLOT_PX - 6, right: 6, fontSize: 10, color: T.text3, fontFamily: 'monospace' }}>{pad(h)}:00</div>
@@ -279,19 +348,92 @@ function DayGrid({ bookings, techs, date, hourLines, onLaneClick, onBooking }: {
         </div>
       </div>
       {/* lanes */}
-      {lanes.map(lane => (
-        <div key={lane.ext || 'unassigned'} style={{ flex: 1, minWidth: 150, borderRight: `1px solid ${T.border}` }}>
-          <div style={{ height: 32, borderBottom: `1px solid ${T.border}`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, fontWeight: 600, color: lane.ext ? T.text2 : T.text3, background: T.bg3, whiteSpace: 'nowrap', overflow: 'hidden', padding: '0 6px' }}>
-            {lane.name}{lane.ext ? <span style={{ color: T.text3, fontWeight: 400, marginLeft: 4 }}>·{lane.ext}</span> : null}
+      {lanes.map(lane => {
+        const laneBookings = byLane(lane.ext)
+        const booked = laneBookings.reduce((s, b) => s + durationHours(b), 0)
+        const cap = lane.ext ? (capacity[lane.ext] ?? 8) : 0
+        const pct = cap > 0 ? Math.min(100, (booked / cap) * 100) : 0
+        const over = cap > 0 && booked > cap
+        const barColor = over ? T.red : pct > 80 ? T.amber : T.green
+        return (
+          <div key={lane.ext || 'unassigned'} style={{ flex: 1, minWidth: 150, borderRight: `1px solid ${T.border}` }}>
+            <div style={{ height: LANE_HEADER_PX, borderBottom: `1px solid ${T.border}`, background: T.bg3, padding: '4px 6px', display: 'flex', flexDirection: 'column', justifyContent: 'center', gap: 3 }}>
+              <div style={{ fontSize: 11, fontWeight: 600, color: lane.ext ? T.text2 : T.text3, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', textAlign: 'center' }}>
+                {lane.name}{lane.ext ? <span style={{ color: T.text3, fontWeight: 400 }}> ·{lane.ext}</span> : null}
+              </div>
+              {lane.ext ? (
+                <div onClick={() => canEditCapacity && onSetCapacity(lane.ext)} title={canEditCapacity ? 'Click to set daily capacity' : `${booked.toFixed(1)} of ${cap}h booked`} style={{ cursor: canEditCapacity ? 'pointer' : 'default' }}>
+                  <div style={{ height: 4, background: T.bg4, borderRadius: 2, overflow: 'hidden' }}>
+                    <div style={{ height: '100%', width: `${pct}%`, background: barColor }} />
+                  </div>
+                  <div style={{ fontSize: 9, color: over ? T.red : T.text3, fontFamily: 'monospace', textAlign: 'center', marginTop: 1 }}>{booked.toFixed(1)}/{cap}h</div>
+                </div>
+              ) : <div style={{ height: 13 }} />}
+            </div>
+            <div onClick={(e) => onLaneClick(e, date, lane.ext || null)} style={{ position: 'relative', height: GRID_PX, cursor: 'copy' }}>
+              {hourLines.map((h, i) => (
+                <div key={h} style={{ position: 'absolute', top: i * 2 * SLOT_PX, left: 0, right: 0, borderTop: `1px solid ${T.border}` }} />
+              ))}
+              {laneBookings.map(b => <BookingBlock key={b.id} b={b} onClick={() => onBooking(b)} />)}
+            </div>
           </div>
-          <div onClick={(e) => onLaneClick(e, date, lane.ext || null)} style={{ position: 'relative', height: GRID_PX, cursor: 'copy' }}>
-            {hourLines.map((h, i) => (
-              <div key={h} style={{ position: 'absolute', top: i * 2 * SLOT_PX, left: 0, right: 0, borderTop: `1px solid ${T.border}` }} />
-            ))}
-            {byLane(lane.ext).map(b => <BookingBlock key={b.id} b={b} onClick={() => onBooking(b)} />)}
-          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+// ── Month grid: 6-week calendar, day cells with job/note counts ─────────
+function MonthGrid({ date, bookings, notes, onDayClick }: { date: string; bookings: BookingRow[]; notes: any[]; onDayClick: (ymd: string) => void }) {
+  const days = monthGridDays(date)
+  const today = ymdBrisbane(new Date())
+  const monthNum = monthStartYmd(date).slice(5, 7)
+  const dow = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
+  return (
+    <div style={{ border: `1px solid ${T.border}`, borderRadius: 8, overflow: 'hidden', background: T.bg2 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)' }}>
+        {dow.map(d => <div key={d} style={{ padding: '8px 0', textAlign: 'center', fontSize: 10, fontWeight: 600, color: T.text3, textTransform: 'uppercase', background: T.bg3, borderBottom: `1px solid ${T.border}` }}>{d}</div>)}
+        {days.map((ymd, i) => {
+          const inMonth = ymd.slice(5, 7) === monthNum
+          const count = bookings.filter(b => bneYmd(b.starts_at) === ymd).length
+          const nNotes = notes.filter((n: any) => bneYmd(n.note_date) === ymd).length
+          const isToday = ymd === today
+          return (
+            <div key={ymd} onClick={() => onDayClick(ymd)} title="Open day"
+              style={{ minHeight: 84, padding: 6, borderRight: (i % 7 !== 6) ? `1px solid ${T.border}` : 'none', borderBottom: `1px solid ${T.border}`, background: isToday ? 'rgba(79,142,247,0.06)' : 'transparent', opacity: inMonth ? 1 : 0.4, cursor: 'pointer' }}>
+              <div style={{ fontSize: 11, fontWeight: isToday ? 700 : 500, color: isToday ? T.blue : T.text2 }}>{Number(ymd.slice(8, 10))}</div>
+              {count > 0 && <div style={{ marginTop: 4, fontSize: 11, color: T.text }}>{count} job{count > 1 ? 's' : ''}</div>}
+              {nNotes > 0 && <div style={{ marginTop: 2, fontSize: 9, color: T.amber }}>📝 {nNotes}</div>}
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+// ── Notes for the day ───────────────────────────────────────────────────
+function DayNotes({ date, notes, canEdit, onAdd, onDelete }: { date: string; notes: any[]; canEdit: boolean; onAdd: (c: string) => void; onDelete: (id: string) => void }) {
+  const [val, setVal] = useState('')
+  const dayNotes = notes.filter((n: any) => bneYmd(n.note_date) === date)
+  return (
+    <div style={{ marginBottom: 12, background: T.bg2, border: `1px solid ${T.border}`, borderRadius: 8, padding: 10 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+        <span style={{ fontSize: 10, fontWeight: 600, color: T.text3, textTransform: 'uppercase', letterSpacing: '0.06em' }}>Notes · {dayLabel(date)}</span>
+        {dayNotes.length === 0 && <span style={{ fontSize: 11, color: T.text3 }}>—</span>}
+        {dayNotes.map((n: any) => (
+          <span key={n.id} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11, color: T.text, background: T.bg3, border: `1px solid ${T.border}`, borderRadius: 5, padding: '3px 8px' }}>
+            {n.content}{n.author_name ? <span style={{ color: T.text3 }}>· {n.author_name}</span> : null}
+            {canEdit && <button onClick={() => onDelete(n.id)} style={{ background: 'transparent', border: 'none', color: T.text3, cursor: 'pointer', fontSize: 13, lineHeight: 1 }}>×</button>}
+          </span>
+        ))}
+      </div>
+      {canEdit && (
+        <div style={{ display: 'flex', gap: 6, marginTop: 8 }}>
+          <input value={val} onChange={e => setVal(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') { onAdd(val); setVal('') } }} placeholder="Add a note for this day…" style={{ flex: 1, padding: '6px 9px', background: T.bg3, border: `1px solid ${T.border}`, borderRadius: 5, color: T.text, fontSize: 12, fontFamily: 'inherit', outline: 'none' }} />
+          <button onClick={() => { onAdd(val); setVal('') }} style={btn(false)}>Add</button>
         </div>
-      ))}
+      )}
     </div>
   )
 }
