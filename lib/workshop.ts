@@ -82,6 +82,24 @@ export const QUOTE_STATUS_META: Record<QuoteStatus, { label: string; color: stri
   converted: { label: 'Converted', color: '#2dd4bf' },
 }
 
+// ── Tasks ───────────────────────────────────────────────────────────────
+export type TaskStatus = 'todo' | 'in_progress' | 'done' | 'cancelled'
+export const TASK_STATUSES: TaskStatus[] = ['todo', 'in_progress', 'done', 'cancelled']
+export const TASK_STATUS_META: Record<TaskStatus, { label: string; color: string }> = {
+  todo:        { label: 'To do',       color: '#8b90a0' },
+  in_progress: { label: 'In progress', color: '#f5a623' },
+  done:        { label: 'Done',        color: '#34c77b' },
+  cancelled:   { label: 'Cancelled',   color: '#545968' },
+}
+export type TaskPriority = 'low' | 'medium' | 'high' | 'urgent'
+export const TASK_PRIORITIES: TaskPriority[] = ['low', 'medium', 'high', 'urgent']
+export const TASK_PRIORITY_META: Record<TaskPriority, { label: string; color: string }> = {
+  low:    { label: 'Low',    color: '#545968' },
+  medium: { label: 'Medium', color: '#4f8ef7' },
+  high:   { label: 'High',   color: '#f5a623' },
+  urgent: { label: 'Urgent', color: '#f04e4e' },
+}
+
 export interface WorkshopCustomer {
   id: string
   myob_uid: string | null

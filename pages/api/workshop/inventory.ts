@@ -1,6 +1,6 @@
 // pages/api/workshop/inventory.ts
-// GET ?q= — search active inventory items (max 20), for the job-card parts
-//           picker. Gated view:diary. (Sync from MYOB lands in a later pass.)
+// GET ?q= &low=1 &limit= — search/list active inventory (for the parts picker
+//           and the inventory screen). low=1 = at/under alert qty. Gated view:diary.
 
 import { createClient } from '@supabase/supabase-js'
 import { withAuth } from '../../../lib/authServer'
@@ -20,14 +20,20 @@ export default withAuth('view:diary', async (req, res) => {
     return res.status(405).json({ error: 'GET only' })
   }
   const q = String(req.query.q || '').trim().replace(/[%,()*]/g, ' ').trim()
+  const low = String(req.query.low || '') === '1'
+  const limit = Math.min(Math.max(parseInt(String(req.query.limit || '50'), 10) || 50, 1), 500)
   const db = sb()
   let query = db.from('workshop_inventory')
-    .select('id, sku, part_name, brand, sell_price, buy_price, available, location, bin')
+    .select('id, sku, part_name, brand, category, supplier, sell_price, buy_price, quantity, available, allocated, on_order, alert_qty, reorder_qty, location, bin')
     .eq('deactivated', false)
     .order('part_name', { ascending: true })
-    .limit(20)
+    .limit(limit)
   if (q) query = query.or(`sku.ilike.%${q}%,part_name.ilike.%${q}%,brand.ilike.%${q}%,barcode.ilike.%${q}%`)
+  if (low) query = query.gt('alert_qty', 0)
   const { data, error } = await query
   if (error) return res.status(500).json({ error: error.message })
-  return res.status(200).json({ items: data || [] })
+  // PostgREST can't compare two columns, so apply the available<=alert_qty
+  // low-stock test here.
+  const items = low ? (data || []).filter((r: any) => Number(r.available) <= Number(r.alert_qty)) : (data || [])
+  return res.status(200).json({ items })
 })

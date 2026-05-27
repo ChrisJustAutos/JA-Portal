@@ -51,6 +51,12 @@ const ICONS: Record<string, (p: IconProps) => JSX.Element> = {
     <path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/>
     <path d="M14 3v5h5"/><path d="M9 13h6M9 17h6"/>
   </>, p),
+  'workshop-inventory': (p) => svg(<>
+    <path d="M21 8 12 3 3 8l9 5 9-5Z"/><path d="M3 8v8l9 5 9-5V8"/><path d="M12 13v8"/>
+  </>, p),
+  'workshop-tasks': (p) => svg(<>
+    <path d="m3 7 2 2 4-4"/><path d="m3 17 2 2 4-4"/><path d="M11 6h10M11 12h10M11 18h10"/>
+  </>, p),
   reports: (p) => svg(<>
     <path d="M3 3v18h18"/><rect x="7" y="11" width="3" height="6" rx="0.5"/>
     <rect x="12.5" y="7" width="3" height="10" rx="0.5"/><rect x="18" y="13" width="3" height="4" rx="0.5"/>
