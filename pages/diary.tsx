@@ -409,14 +409,21 @@ function BookingModal({ initial, techs, canEdit, onClose, onSaved }: {
 
           {err && <div style={{ fontSize: 12, color: T.red }}>{err}</div>}
 
-          {canEdit && (
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 4 }}>
-              <button onClick={onClose} style={{ ...btn(false), padding: '7px 14px' }}>Cancel</button>
-              <button onClick={save} disabled={saving} style={{ ...btn(true), padding: '7px 16px', background: T.accent, color: '#fff', borderColor: T.accent, cursor: saving ? 'wait' : 'pointer' }}>
-                {saving ? 'Saving…' : (isNew ? 'Create booking' : 'Save changes')}
-              </button>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, marginTop: 4 }}>
+            <div>
+              {!isNew && (
+                <a href={`/workshop/job/${initial.id}`} style={{ fontSize: 12, color: T.blue, textDecoration: 'none', fontWeight: 600 }}>Open job card →</a>
+              )}
             </div>
-          )}
+            {canEdit && (
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button onClick={onClose} style={{ ...btn(false), padding: '7px 14px' }}>Cancel</button>
+                <button onClick={save} disabled={saving} style={{ ...btn(true), padding: '7px 16px', background: T.accent, color: '#fff', borderColor: T.accent, cursor: saving ? 'wait' : 'pointer' }}>
+                  {saving ? 'Saving…' : (isNew ? 'Create booking' : 'Save changes')}
+                </button>
+              </div>
+            )}
+          </div>
         </div>
       </div>
     </div>
