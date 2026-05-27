@@ -14,7 +14,7 @@ import { requirePageAuth } from '../../../lib/authServer'
 import { roleHasPermission } from '../../../lib/permissions'
 import {
   BOOKING_STATUS_META, BOOKING_STATUSES, BookingStatus,
-  JOB_TYPES, jobTypeLabel, vehicleLabel, customerLabel,
+  JOB_TYPES, jobTypeLabel, vehicleLabel, customerLabel, PAYMENT_TENDERS,
 } from '../../../lib/workshop'
 
 interface PortalUserSSR { id: string; email: string; displayName: string | null; role: 'admin'|'manager'|'sales'|'accountant'|'viewer'; visibleTabs?: string[] | null }
@@ -65,6 +65,9 @@ export default function JobCardPage({ user }: { user: PortalUserSSR }) {
   const [sms, setSms] = useState<{ open: boolean; body: string; busy: boolean; msg: string }>({ open: false, body: '', busy: false, msg: '' })
   const [emailing, setEmailing] = useState(false)
   const [emailMsg, setEmailMsg] = useState('')
+  const [payments, setPayments] = useState<any[]>([])
+  const [paidTotal, setPaidTotal] = useState(0)
+  const [pay, setPay] = useState<{ open: boolean; amount: string; tender: string; note: string; busy: boolean; msg: string }>({ open: false, amount: '', tender: 'card', note: '', busy: false, msg: '' })
 
   const load = useCallback(async () => {
     if (!id) return
@@ -75,7 +78,12 @@ export default function JobCardPage({ user }: { user: PortalUserSSR }) {
     } catch (e: any) { setErr(e?.message || 'Failed to load') } finally { setLoading(false) }
   }, [id])
 
-  useEffect(() => { load() }, [load])
+  const loadPayments = useCallback(async () => {
+    if (!id) return
+    try { const r = await fetch(`/api/workshop/payment?booking_id=${id}`); if (r.ok) { const d = await r.json(); setPayments(d.payments || []); setPaidTotal(Number(d.paid_total) || 0) } } catch { /* ignore */ }
+  }, [id])
+
+  useEffect(() => { load(); loadPayments() }, [load, loadPayments])
 
   async function patchBooking(patch: any) {
     const r = await fetch(`/api/workshop/bookings/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(patch) })
@@ -164,6 +172,20 @@ export default function JobCardPage({ user }: { user: PortalUserSSR }) {
     } catch (e: any) { setEmailMsg(e?.message || 'Email failed') } finally { setEmailing(false) }
   }
 
+  function openPay() {
+    const bal = Math.max(0, Math.round((totals.inc - paidTotal) * 100) / 100)
+    setPay({ open: true, amount: bal ? bal.toFixed(2) : '', tender: 'card', note: '', busy: false, msg: '' })
+  }
+  async function submitPay() {
+    setPay(p => ({ ...p, busy: true, msg: '' }))
+    try {
+      const r = await fetch('/api/workshop/payment', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ booking_id: id, amount: Number(pay.amount), tender: pay.tender, note: pay.note }) })
+      const d = await r.json()
+      if (r.ok && d.ok) { setPay(p => ({ ...p, busy: false, open: false })); await Promise.all([load(), loadPayments()]) }
+      else setPay(p => ({ ...p, busy: false, msg: d.error || 'Payment failed' }))
+    } catch (e: any) { setPay(p => ({ ...p, busy: false, msg: e?.message || 'Payment failed' })) }
+  }
+
   const lines = data?.lines || []
   const totals = (() => {
     let ex = 0, gst = 0
@@ -228,6 +250,7 @@ export default function JobCardPage({ user }: { user: PortalUserSSR }) {
                     <button onClick={() => changeStatus('awaiting_parts')} style={qbtn(T.purple)}>⏸ Awaiting parts</button>
                     <button onClick={() => changeStatus('done')} style={qbtn(T.green)}>✓ Done</button>
                     <button onClick={createInvoice} disabled={inv.busy} style={qbtn(T.teal)}>{inv.busy ? '🧾 Sending…' : '🧾 Invoice → MYOB'}</button>
+                    <button onClick={openPay} style={qbtn(T.teal)}>💳 Take payment</button>
                     <button onClick={() => changeStatus('paid')} style={qbtn(T.green)}>$ Paid</button>
                     <button onClick={openSms} style={qbtn(T.blue)}>📱 Text customer</button>
                     {inv.msg && <span style={{ fontSize: 11, color: inv.needAccount ? T.amber : T.text2 }}>{inv.msg}</span>}
@@ -266,6 +289,31 @@ export default function JobCardPage({ user }: { user: PortalUserSSR }) {
                   {emailMsg && <span style={{ fontSize: 11, color: T.text2 }}>{emailMsg}</span>}
                 </div>
 
+                {pay.open && (
+                  <div style={{ marginTop: 10, padding: 12, background: T.bg2, border: `1px solid ${T.border2}`, borderRadius: 8 }}>
+                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+                      <div><div style={{ fontSize: 10, color: T.text3, marginBottom: 4 }}>Amount</div><input value={pay.amount} inputMode="decimal" onChange={e => setPay(p => ({ ...p, amount: e.target.value }))} style={{ ...inp, width: 120 }} /></div>
+                      <div><div style={{ fontSize: 10, color: T.text3, marginBottom: 4 }}>Tender</div><select value={pay.tender} onChange={e => setPay(p => ({ ...p, tender: e.target.value }))} style={inp}>{PAYMENT_TENDERS.map(t => <option key={t.id} value={t.id}>{t.label}</option>)}</select></div>
+                      <input value={pay.note} onChange={e => setPay(p => ({ ...p, note: e.target.value }))} placeholder="Note (optional)" style={{ ...inp, flex: 1, minWidth: 140 }} />
+                      <button onClick={() => setPay(p => ({ ...p, open: false }))} style={qbtn(T.text3)}>Cancel</button>
+                      <button onClick={submitPay} disabled={pay.busy} style={{ ...qbtn(T.teal), background: `${T.teal}1e` }}>{pay.busy ? 'Saving…' : 'Record payment'}</button>
+                    </div>
+                    {pay.msg && <div style={{ fontSize: 11, color: T.amber, marginTop: 8 }}>{pay.msg}</div>}
+                    {payments.length > 0 && (
+                      <div style={{ marginTop: 10, borderTop: `1px solid ${T.border}`, paddingTop: 8, fontSize: 11, color: T.text3 }}>
+                        {payments.map((p: any) => (
+                          <div key={p.id} style={{ display: 'flex', gap: 8 }}>
+                            <span style={{ fontFamily: 'monospace', color: T.text2 }}>{money(p.amount)}</span>
+                            <span>{p.tender}</span>
+                            {p.posted_to_myob ? <span style={{ color: T.green }}>· MYOB</span> : <span style={{ color: T.text3 }}>· local</span>}
+                            <span style={{ marginLeft: 'auto' }}>{new Date(p.created_at).toLocaleDateString('en-AU')}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 300px', gap: 16, marginTop: 16, alignItems: 'start' }}>
                   {/* Line items */}
                   <div style={{ background: T.bg2, border: `1px solid ${T.border}`, borderRadius: 10, overflow: 'hidden' }}>
@@ -297,6 +345,8 @@ export default function JobCardPage({ user }: { user: PortalUserSSR }) {
                       <Row label="Subtotal (ex GST)" value={money(totals.ex)} />
                       <Row label="GST" value={money(totals.gst)} />
                       <Row label="Total (inc GST)" value={money(totals.inc)} bold />
+                      {paidTotal > 0 && <Row label="Paid" value={money(paidTotal)} />}
+                      {paidTotal > 0 && <Row label="Balance" value={money(Math.round((totals.inc - paidTotal) * 100) / 100)} bold />}
                     </div>
                   </div>
 

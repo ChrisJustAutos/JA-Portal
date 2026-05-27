@@ -16,7 +16,7 @@
 
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
 import { getConnection, myobFetch } from './myob'
-import { WORKSHOP_MYOB_LABEL, PaymentAccounts } from './workshop'
+import { WORKSHOP_MYOB_LABEL, PaymentAccounts, PaymentTender } from './workshop'
 
 const UUID_REGEX_G = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi
 const round2 = (n: number) => Math.round(n * 100) / 100
@@ -276,4 +276,112 @@ export async function createJobInvoiceInMyob(bookingId: string, performedBy: str
   })
 
   return { myob_uid: uid, myob_number: number, mode, status: 'created' }
+}
+
+// ── Customer payments ────────────────────────────────────────────────────
+
+export interface JobPaymentResult {
+  payment_id: string
+  posted_to_myob: boolean
+  myob_payment_uid: string | null
+  paid_total: number
+  balance: number
+  status: string
+}
+
+export class WorkshopPaymentError extends Error {
+  code: 'no_amount' | 'payment_account_not_set' | 'customer_not_synced' | 'myob_error'
+  constructor(code: WorkshopPaymentError['code'], message: string) { super(message); this.code = code }
+}
+
+/**
+ * Record a customer payment against a job. Always saved locally (paid/balance
+ * tracking); also posted to MYOB as a Sale/CustomerPayment — to the tender's
+ * mapped deposit account — when posting is enabled, the job has a MYOB
+ * **invoice** (orders can't take payments) and the customer is synced.
+ */
+export async function recordJobPayment(
+  bookingId: string,
+  opts: { amount: number; tender: PaymentTender; note?: string | null },
+  performedBy: string | null = null,
+): Promise<JobPaymentResult> {
+  const c = sb()
+  const amount = round2(Number(opts.amount) || 0)
+  if (!(amount > 0)) throw new WorkshopPaymentError('no_amount', 'Enter a payment amount greater than zero.')
+
+  const { data: booking, error } = await c
+    .from('workshop_bookings')
+    .select('id, status, total_inc_gst, myob_invoice_uid, customer:workshop_customers(myob_uid)')
+    .eq('id', bookingId).maybeSingle()
+  if (error) throw new Error(`Job load failed: ${error.message}`)
+  if (!booking) throw new Error('Job not found')
+
+  const settings = await getWorkshopSettings()
+  const tender = opts.tender
+  const acct = (settings.payment_accounts || {})[tender]
+  const cust: any = Array.isArray(booking.customer) ? booking.customer[0] : booking.customer
+
+  // MYOB posting requires: enabled + a MYOB invoice (not an order) + synced
+  // customer + a deposit account for this tender.
+  const wantMyob = settings.myob_posting_enabled && !!booking.myob_invoice_uid && !settings.invoice_as_order
+  let myobPaymentUid: string | null = null
+  let postedToMyob = false
+
+  if (wantMyob) {
+    if (!cust?.myob_uid) throw new WorkshopPaymentError('customer_not_synced', 'Customer has no MYOB link — can’t post the payment to MYOB.')
+    if (!acct?.uid) throw new WorkshopPaymentError('payment_account_not_set', `No MYOB deposit account set for "${tender}". Set it in Workshop Settings → MYOB accounts.`)
+    const conn = await getConnection(WORKSHOP_MYOB_LABEL)
+    if (!conn || !conn.company_file_id) throw new Error(`${WORKSHOP_MYOB_LABEL} MYOB connection not configured`)
+    const today = new Date().toISOString().substring(0, 10)
+    const body: Record<string, any> = {
+      Date: today + 'T00:00:00',
+      Customer: { UID: cust.myob_uid },
+      DepositTo: 'Account',
+      Account: { UID: acct.uid },
+      PaymentMethod: acct.method || 'Other',
+      AmountReceived: amount,
+      Memo: `Workshop job ${bookingId} payment`.substring(0, 255),
+      Invoices: [{ UID: booking.myob_invoice_uid, AmountApplied: amount, Type: 'Invoice' }],
+    }
+    const r = await myobFetch(conn.id, `/accountright/${conn.company_file_id}/Sale/CustomerPayment`, { method: 'POST', body, performedBy })
+    if (r.status !== 201 && r.status !== 200) {
+      throw new WorkshopPaymentError('myob_error', `MYOB CustomerPayment failed (HTTP ${r.status}): ${(r.raw || '').substring(0, 300)}`)
+    }
+    const loc = (r.headers || {})['location'] || (r.headers || {})['Location'] || ''
+    const uuids = String(loc).match(UUID_REGEX_G) || []
+    myobPaymentUid = uuids[uuids.length - 1] || null
+    if (myobPaymentUid === conn.company_file_id) myobPaymentUid = null
+    postedToMyob = true
+  }
+
+  const { data: inserted, error: insErr } = await c.from('workshop_payments').insert({
+    booking_id: bookingId, amount, tender,
+    method: acct?.method || null,
+    deposit_account_uid: acct?.uid || null,
+    deposit_account_name: acct?.name || null,
+    myob_payment_uid: myobPaymentUid,
+    posted_to_myob: postedToMyob,
+    note: opts.note || null,
+    created_by: performedBy,
+  }).select('id').single()
+  if (insErr) throw new Error(`Payment save failed: ${insErr.message}`)
+
+  const { data: pays } = await c.from('workshop_payments').select('amount').eq('booking_id', bookingId)
+  const paidTotal = round2((pays || []).reduce((s: number, p: any) => s + (Number(p.amount) || 0), 0))
+  const total = round2(Number(booking.total_inc_gst) || 0)
+  const balance = round2(total - paidTotal)
+  let status = booking.status as string
+  if (total > 0 && balance <= 0 && ['invoiced', 'done', 'ready'].includes(status)) {
+    status = 'paid'
+    await c.from('workshop_bookings').update({ status, updated_at: new Date().toISOString() }).eq('id', bookingId)
+  }
+
+  return { payment_id: inserted.id, posted_to_myob: postedToMyob, myob_payment_uid: myobPaymentUid, paid_total: paidTotal, balance, status }
+}
+
+export async function listJobPayments(bookingId: string): Promise<{ payments: any[]; paid_total: number }> {
+  const c = sb()
+  const { data } = await c.from('workshop_payments').select('*').eq('booking_id', bookingId).order('created_at', { ascending: true })
+  const paid = round2((data || []).reduce((s: number, p: any) => s + (Number(p.amount) || 0), 0))
+  return { payments: data || [], paid_total: paid }
 }
