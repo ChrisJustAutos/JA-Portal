@@ -27,7 +27,7 @@ const T = {
   amber: '#f5a623', red: '#f04e4e', purple: '#a78bfa', accent: '#4f8ef7',
 }
 
-interface Tech { ext: string; name: string; color?: string | null; daily_hours?: number }
+interface Tech { ext: string; name: string; color?: string | null; daily_hours?: number; role?: string | null }
 interface BookingRow {
   id: string
   customer_id: string | null
@@ -135,6 +135,7 @@ export default function DiaryPage({ user }: { user: PortalUserSSR }) {
   const [notes, setNotes] = useState<any[]>([])
   const [capacity, setCapacity] = useState<Record<string, number>>({})
   const [techFilter, setTechFilter] = useState<string | null>(null)
+  const [deptFilter, setDeptFilter] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null)
   const [editing, setEditing] = useState<Partial<BookingRow> | null>(null) // open modal when non-null
@@ -248,7 +249,15 @@ export default function DiaryPage({ user }: { user: PortalUserSSR }) {
     fetch(`/api/workshop/bookings/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(patch) }).then(load)
   }
 
-  const displayBookings = techFilter ? bookings.filter(b => (b.technician_ext || '') === techFilter) : bookings
+  // Department (technician role) tabs + single-tech pills narrow the lanes/bookings.
+  const departments = Array.from(new Set(techs.map(t => (t.role || '').trim()).filter(Boolean))).sort()
+  const deptTechs = deptFilter ? techs.filter(t => (t.role || '') === deptFilter) : techs
+  const deptCodes = new Set(deptTechs.map(t => t.ext))
+  const displayBookings = bookings.filter(b => {
+    if (techFilter) return (b.technician_ext || '') === techFilter
+    if (deptFilter) return deptCodes.has(b.technician_ext || '')
+    return true
+  })
 
   return (
     <>
@@ -303,12 +312,15 @@ export default function DiaryPage({ user }: { user: PortalUserSSR }) {
 
           {/* Grid */}
           <div style={{ flex: 1, overflow: 'auto', padding: 16 }}>
-            {view !== 'month' && <TechPills techs={techs} active={techFilter} onPick={setTechFilter} />}
+            {view !== 'month' && departments.length > 1 && (
+              <DeptTabs departments={departments} active={deptFilter} onPick={(d) => { setDeptFilter(d); setTechFilter(null) }} />
+            )}
+            {view !== 'month' && <TechPills techs={deptTechs} active={techFilter} onPick={setTechFilter} />}
             {view === 'day' && (
               <DayNotes date={date} notes={notes} canEdit={canEdit} onAdd={(c) => addNote(date, c)} onDelete={delNote} />
             )}
             {view === 'day' ? (
-              <DayGrid bookings={displayBookings} techs={techFilter ? techs.filter(t => t.ext === techFilter) : techs} showUnassigned={!techFilter}
+              <DayGrid bookings={displayBookings} techs={techFilter ? deptTechs.filter(t => t.ext === techFilter) : deptTechs} showUnassigned={!techFilter && !deptFilter}
                 date={date} hourLines={hourLines} capacity={capacity} canEdit={canEdit} canEditCapacity={isAdmin} onSetCapacity={setLaneCapacity}
                 onLaneClick={laneClick} onBooking={(b) => canEdit && setEditing(b)}
                 onDropBooking={(e, techExt) => dropMove(e, date, techExt, true)} />
@@ -358,6 +370,25 @@ function techInitials(name: string): string {
   if (!parts.length) return '?'
   return (parts[0][0] + (parts[1]?.[0] || '')).toUpperCase()
 }
+// ── Department tabs (technician role) — separate the diary by Technician / Dyno / … ──
+function DeptTabs({ departments, active, onPick }: { departments: string[]; active: string | null; onPick: (d: string | null) => void }) {
+  function tab(key: string | null, label: string) {
+    const on = active === key
+    return (
+      <button key={key ?? '__all'} onClick={() => onPick(on ? null : key)} style={{
+        padding: '5px 13px', borderRadius: 6, fontSize: 12, fontFamily: 'inherit', fontWeight: 600, cursor: 'pointer',
+        background: on ? T.blue : T.bg2, color: on ? '#fff' : T.text2, border: `1px solid ${on ? T.blue : T.border2}`,
+      }}>{label}</button>
+    )
+  }
+  return (
+    <div style={{ display: 'flex', gap: 6, marginBottom: 10, flexWrap: 'wrap' }}>
+      {tab(null, 'All')}
+      {departments.map(d => tab(d, d))}
+    </div>
+  )
+}
+
 function TechPills({ techs, active, onPick }: { techs: Tech[]; active: string | null; onPick: (ext: string | null) => void }) {
   function pill(key: string | null, label: string, initials: string, color: string) {
     const on = active === key
@@ -415,7 +446,7 @@ function DayGrid({ bookings, techs, date, hourLines, capacity, canEdit, canEditC
           <div key={lane.ext || 'unassigned'} style={{ flex: 1, minWidth: 150, borderRight: `1px solid ${T.border}` }}>
             <div style={{ height: LANE_HEADER_PX, borderBottom: `1px solid ${T.border}`, background: T.bg3, padding: '4px 6px', display: 'flex', flexDirection: 'column', justifyContent: 'center', gap: 3 }}>
               <div style={{ fontSize: 11, fontWeight: 600, color: lane.ext ? T.text2 : T.text3, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', textAlign: 'center' }}>
-                {lane.name}{lane.ext ? <span style={{ color: T.text3, fontWeight: 400 }}> ·{lane.ext}</span> : null}
+                {lane.name}
               </div>
               {lane.ext ? (
                 <div onClick={() => canEditCapacity && onSetCapacity(lane.ext)} title={canEditCapacity ? 'Click to set daily capacity' : `${booked.toFixed(1)} of ${cap}h booked`} style={{ cursor: canEditCapacity ? 'pointer' : 'default' }}>
@@ -555,6 +586,18 @@ function BookingModal({ initial, techs, canEdit, onClose, onSaved }: {
   const [vehicle, setVehicle] = useState<{ id: string; label: string } | null>(initial.vehicle ? { id: initial.vehicle.id, label: vehicleLabel(initial.vehicle) } : null)
   const [saving, setSaving] = useState(false)
   const [err, setErr] = useState('')
+  const [splitTech, setSplitTech] = useState('')
+  const [splitting, setSplitting] = useState(false)
+
+  async function doSplit() {
+    setSplitting(true); setErr('')
+    try {
+      const r = await fetch(`/api/workshop/bookings/${initial.id}/split`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ technician_ext: splitTech || null }) })
+      const d = await r.json()
+      if (!r.ok) { setErr(d.error || 'Split failed'); return }
+      onSaved(); onClose()
+    } catch (e: any) { setErr(e?.message || 'Split failed') } finally { setSplitting(false) }
+  }
 
   async function save() {
     setSaving(true); setErr('')
@@ -606,7 +649,7 @@ function BookingModal({ initial, techs, canEdit, onClose, onSaved }: {
             <Field label="Technician">
               <select value={tech} disabled={!canEdit} onChange={e => setTech(e.target.value)} style={inp}>
                 <option value="">Unassigned</option>
-                {techs.map(t => <option key={t.ext} value={t.ext}>{t.name} ·{t.ext}</option>)}
+                {techs.map(t => <option key={t.ext} value={t.ext}>{t.name}{t.role ? ` · ${t.role}` : ''}</option>)}
               </select>
             </Field>
             <Field label="Bay"><input value={bay} disabled={!canEdit} onChange={e => setBay(e.target.value)} placeholder="e.g. Hoist 1" style={inp} /></Field>
@@ -631,6 +674,17 @@ function BookingModal({ initial, techs, canEdit, onClose, onSaved }: {
           </Field>
 
           <Field label="Notes"><textarea value={notes} disabled={!canEdit} onChange={e => setNotes(e.target.value)} rows={2} style={{ ...inp, resize: 'vertical' }} /></Field>
+
+          {!isNew && canEdit && (
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center', paddingTop: 12, borderTop: `1px solid ${T.border}` }}>
+              <span style={{ fontSize: 12, color: T.text3, whiteSpace: 'nowrap' }}>Split job to</span>
+              <select value={splitTech} onChange={e => setSplitTech(e.target.value)} style={{ ...inp, flex: 1 }}>
+                <option value="">Unassigned</option>
+                {techs.map(t => <option key={t.ext} value={t.ext}>{t.name}{t.role ? ` · ${t.role}` : ''}</option>)}
+              </select>
+              <button onClick={doSplit} disabled={splitting} title="Create a linked second booking (same vehicle/job) for another technician or time" style={{ ...btn(false), padding: '7px 14px' }}>{splitting ? 'Splitting…' : 'Split'}</button>
+            </div>
+          )}
 
           {err && <div style={{ fontSize: 12, color: T.red }}>{err}</div>}
 

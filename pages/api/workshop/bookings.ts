@@ -34,7 +34,7 @@ export default withAuth('view:diary', async (req, res, user) => {
         .gte('starts_at', from)
         .lt('starts_at', to)
         .order('starts_at', { ascending: true }),
-      db.from('workshop_technicians').select('code, name, color, daily_hours')
+      db.from('workshop_technicians').select('code, name, color, daily_hours, role')
         .eq('active', true).eq('show_in_diary', true)
         .order('sort_order', { ascending: true }).order('name', { ascending: true }),
     ])
@@ -42,7 +42,7 @@ export default withAuth('view:diary', async (req, res, user) => {
     // Diary lanes are workshop-managed (workshop_technicians); ext = lane code.
     const technicians = (tRes.data || []).map((t: any) => ({
       ext: String(t.code), name: t.name || `Ext ${t.code}`,
-      color: t.color || null, daily_hours: Number(t.daily_hours ?? 8),
+      color: t.color || null, daily_hours: Number(t.daily_hours ?? 8), role: t.role || null,
     }))
     return res.status(200).json({ bookings: bRes.data || [], technicians })
   }
