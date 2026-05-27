@@ -16,7 +16,7 @@
 
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
 import { getConnection, myobFetch } from './myob'
-import { WORKSHOP_MYOB_LABEL } from './workshop'
+import { WORKSHOP_MYOB_LABEL, PaymentAccounts } from './workshop'
 
 const UUID_REGEX_G = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi
 const round2 = (n: number) => Math.round(n * 100) / 100
@@ -35,6 +35,17 @@ export interface WorkshopSettings {
   myob_sales_account_uid: string | null
   myob_sales_account_name: string | null
   invoice_as_order: boolean
+  // Full MYOB account map (migration 039). myob_sales_account_* = default/labour.
+  part_sale_account_uid: string | null
+  part_sale_account_name: string | null
+  discount_account_uid: string | null
+  discount_account_name: string | null
+  refund_account_uid: string | null
+  refund_account_name: string | null
+  tracking_category_uid: string | null
+  tracking_category_name: string | null
+  payment_accounts: PaymentAccounts
+  myob_posting_enabled: boolean
   // Letterhead/footer for printed + emailed documents (migration 036).
   business_name: string | null
   business_abn: string | null
@@ -63,6 +74,16 @@ export async function getWorkshopSettings(): Promise<WorkshopSettings> {
     sms_enabled: data?.sms_enabled ?? false,
     sms_from: data?.sms_from ?? null,
     booking_reminder_lead_hours: Number(data?.booking_reminder_lead_hours ?? 24),
+    part_sale_account_uid: data?.part_sale_account_uid ?? null,
+    part_sale_account_name: data?.part_sale_account_name ?? null,
+    discount_account_uid: data?.discount_account_uid ?? null,
+    discount_account_name: data?.discount_account_name ?? null,
+    refund_account_uid: data?.refund_account_uid ?? null,
+    refund_account_name: data?.refund_account_name ?? null,
+    tracking_category_uid: data?.tracking_category_uid ?? null,
+    tracking_category_name: data?.tracking_category_name ?? null,
+    payment_accounts: (data?.payment_accounts as PaymentAccounts) ?? {},
+    myob_posting_enabled: data?.myob_posting_enabled ?? false,
   }
 }
 
@@ -97,6 +118,36 @@ export async function listIncomeAccounts(): Promise<Array<{ uid: string; display
     .filter(a => !a.IsHeader && (a.Type === 'Income' || a.Type === 'OtherIncome'))
     .map(a => ({ uid: a.UID, displayId: a.DisplayID, name: a.Name, type: a.Type }))
     .sort((a, b) => a.displayId.localeCompare(b.displayId))
+}
+
+export interface MyobAccount { uid: string; displayId: string; name: string; type: string }
+
+// Bank/asset accounts the workshop can deposit customer payments into
+// (cash drawer, undeposited funds, cheque/bank). Bank-type in MYOB.
+export async function listBankAccounts(): Promise<MyobAccount[]> {
+  const conn = await getConnection(WORKSHOP_MYOB_LABEL)
+  if (!conn || !conn.company_file_id) throw new Error(`${WORKSHOP_MYOB_LABEL} MYOB connection not configured`)
+  const r = await myobFetch(conn.id, `/accountright/${conn.company_file_id}/GeneralLedger/Account`, { query: { '$top': 1000 } })
+  if (r.status !== 200) throw new Error(`MYOB Account fetch failed (HTTP ${r.status})`)
+  const items: any[] = Array.isArray(r.data?.Items) ? r.data.Items : []
+  return items
+    .filter(a => !a.IsHeader && a.Type === 'Bank')
+    .map(a => ({ uid: a.UID, displayId: a.DisplayID, name: a.Name, type: a.Type }))
+    .sort((a, b) => a.displayId.localeCompare(b.displayId))
+}
+
+// MYOB tracking categories (AccountRight "Categories"), e.g. "Performance".
+// Returns [] if categories aren't enabled on the file.
+export async function listTrackingCategories(): Promise<Array<{ uid: string; name: string; displayId: string }>> {
+  const conn = await getConnection(WORKSHOP_MYOB_LABEL)
+  if (!conn || !conn.company_file_id) throw new Error(`${WORKSHOP_MYOB_LABEL} MYOB connection not configured`)
+  const r = await myobFetch(conn.id, `/accountright/${conn.company_file_id}/GeneralLedger/Category`, { query: { '$top': 1000 } })
+  if (r.status !== 200) return []
+  const items: any[] = Array.isArray(r.data?.Items) ? r.data.Items : []
+  return items
+    .filter(c => c.IsActive !== false)
+    .map(c => ({ uid: c.UID, name: c.Name, displayId: c.DisplayID || '' }))
+    .sort((a, b) => a.name.localeCompare(b.name))
 }
 
 export interface JobInvoiceResult {

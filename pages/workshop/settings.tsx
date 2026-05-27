@@ -14,6 +14,7 @@ import Link from 'next/link'
 import { useRouter } from 'next/router'
 import PortalTopBar from '../../lib/PortalTopBar'
 import { requirePageAuth } from '../../lib/authServer'
+import { PAYMENT_TENDERS } from '../../lib/workshop'
 
 interface PortalUserSSR { id: string; email: string; displayName: string | null; role: 'admin'|'manager'|'sales'|'accountant'|'viewer'; visibleTabs?: string[] | null }
 
@@ -29,10 +30,11 @@ function pbtn(color: string, solid?: boolean): React.CSSProperties {
   return { padding: '7px 14px', borderRadius: 6, fontSize: 12, fontFamily: 'inherit', fontWeight: 600, cursor: 'pointer', background: solid ? color : 'transparent', color: solid ? '#fff' : color, border: `1px solid ${solid ? color : color + '55'}` }
 }
 
-type Tab = 'business' | 'invoicing' | 'sms' | 'techs'
+type Tab = 'business' | 'invoicing' | 'accounts' | 'sms' | 'techs'
 const TABS: { id: Tab; label: string }[] = [
   { id: 'business', label: 'Business & documents' },
   { id: 'invoicing', label: 'Invoicing (MYOB)' },
+  { id: 'accounts', label: 'MYOB accounts' },
   { id: 'sms', label: 'SMS reminders' },
   { id: 'techs', label: 'Technicians & staff' },
 ]
@@ -43,6 +45,8 @@ export default function WorkshopSettingsPage({ user }: { user: PortalUserSSR }) 
   const [tab, setTab] = useState<Tab>('business')
   const [settings, setSettings] = useState<any | null>(null)
   const [accounts, setAccounts] = useState<any[]>([])
+  const [bankAccounts, setBankAccounts] = useState<any[]>([])
+  const [trackingCategories, setTrackingCategories] = useState<any[]>([])
   const [accountsError, setAccountsError] = useState('')
   const [techs, setTechs] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
@@ -50,7 +54,7 @@ export default function WorkshopSettingsPage({ user }: { user: PortalUserSSR }) 
 
   const loadSettings = useCallback(async () => {
     const r = await fetch('/api/workshop/settings')
-    if (r.ok) { const d = await r.json(); setSettings(d.settings); setAccounts(d.incomeAccounts || []); setAccountsError(d.accountsError || '') }
+    if (r.ok) { const d = await r.json(); setSettings(d.settings); setAccounts(d.incomeAccounts || []); setBankAccounts(d.bankAccounts || []); setTrackingCategories(d.trackingCategories || []); setAccountsError(d.accountsError || '') }
   }, [])
   const loadTechs = useCallback(async () => {
     const r = await fetch('/api/workshop/technicians')
@@ -116,6 +120,7 @@ export default function WorkshopSettingsPage({ user }: { user: PortalUserSSR }) 
                 <div>
                   {tab === 'business' && settings && <BusinessSection settings={settings} onSave={saveSettings} />}
                   {tab === 'invoicing' && settings && <InvoicingSection settings={settings} accounts={accounts} accountsError={accountsError} onSave={saveSettings} />}
+                  {tab === 'accounts' && settings && <AccountsSection settings={settings} income={accounts} banks={bankAccounts} categories={trackingCategories} accountsError={accountsError} onSave={saveSettings} />}
                   {tab === 'sms' && settings && <SmsSection settings={settings} onSave={saveSettings} />}
                   {tab === 'techs' && <TechsSection techs={techs} onAdd={addTech} onPatch={patchTech} onRemove={removeTech} />}
                 </div>
@@ -180,6 +185,53 @@ function InvoicingSection({ settings, accounts, accountsError, onSave }: { setti
         Post as a Sale <strong>Order</strong> (no GL impact — staff convert to an invoice in MYOB). Uncheck to post a Sale <strong>Invoice</strong> directly.
       </label>
       <button onClick={() => onSave({ myob_sales_account_uid: uid || null, myob_sales_account_name: accounts.find(a => a.uid === uid)?.name || null, invoice_as_order: asOrder })} style={pbtn(T.accent, true)}>Save invoicing</button>
+    </Card>
+  )
+}
+
+function AccountsSection({ settings, income, banks, categories, accountsError, onSave }: { settings: any; income: any[]; banks: any[]; categories: any[]; accountsError: string; onSave: (p: any) => void }) {
+  const pa: Record<string, any> = settings.payment_accounts || {}
+  const acctOpts = (list: any[]) => list.map((a: any) => <option key={a.uid} value={a.uid}>{a.displayId ? `${a.displayId} · ${a.name}` : a.name}</option>)
+  function saveAcct(uidField: string, nameField: string, list: any[], uid: string) {
+    const a = list.find((x: any) => x.uid === uid)
+    onSave({ [uidField]: uid || null, [nameField]: a ? a.name : null })
+  }
+  function savePayment(tender: string, uid: string, method: string) {
+    const a = banks.find((x: any) => x.uid === uid)
+    onSave({ payment_accounts: { ...(settings.payment_accounts || {}), [tender]: { uid: uid || null, name: a ? a.name : null, method } } })
+  }
+  return (
+    <Card title="MYOB accounts (VPS)" hint="Where workshop sales, parts and payments post in MYOB — mirrors the MechanicDesk account map. Pickers load live from the VPS chart of accounts.">
+      {accountsError && <div style={{ fontSize: 12, color: T.amber, marginBottom: 12 }}>{accountsError}</div>}
+
+      <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start', padding: '12px 14px', borderRadius: 8, marginBottom: 18, background: settings.myob_posting_enabled ? `${T.green}14` : T.bg3, border: `1px solid ${settings.myob_posting_enabled ? T.green + '55' : T.border2}` }}>
+        <input type="checkbox" checked={!!settings.myob_posting_enabled} onChange={e => onSave({ myob_posting_enabled: e.target.checked })} style={{ marginTop: 2 }} />
+        <div>
+          <div style={{ fontSize: 13, fontWeight: 600 }}>Post workshop sales &amp; payments to MYOB</div>
+          <div style={{ fontSize: 11, color: T.text3, marginTop: 2, lineHeight: 1.5 }}>Leave OFF until MechanicDesk is retired — otherwise invoices/payments would be entered in MYOB twice. When OFF, the portal still records jobs and payments locally but sends nothing to MYOB.</div>
+        </div>
+      </div>
+
+      <div style={{ fontSize: 11, color: T.text3, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 8 }}>Sale accounts (income)</div>
+      <Field label="Default / labour sale account"><select style={inp} value={settings.myob_sales_account_uid || ''} onChange={e => saveAcct('myob_sales_account_uid', 'myob_sales_account_name', income, e.target.value)}><option value="">— none —</option>{acctOpts(income)}</select></Field>
+      <Field label="Parts sale account"><select style={inp} value={settings.part_sale_account_uid || ''} onChange={e => saveAcct('part_sale_account_uid', 'part_sale_account_name', income, e.target.value)}><option value="">— same as default —</option>{acctOpts(income)}</select></Field>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+        <Field label="Discount account"><select style={inp} value={settings.discount_account_uid || ''} onChange={e => saveAcct('discount_account_uid', 'discount_account_name', income, e.target.value)}><option value="">— none —</option>{acctOpts(income)}</select></Field>
+        <Field label="Refund / credit account"><select style={inp} value={settings.refund_account_uid || ''} onChange={e => saveAcct('refund_account_uid', 'refund_account_name', income, e.target.value)}><option value="">— none —</option>{acctOpts(income)}</select></Field>
+      </div>
+      <Field label="Tracking category"><select style={inp} value={settings.tracking_category_uid || ''} onChange={e => saveAcct('tracking_category_uid', 'tracking_category_name', categories, e.target.value)}><option value="">— none —</option>{categories.map((c: any) => <option key={c.uid} value={c.uid}>{c.name}</option>)}</select></Field>
+
+      <div style={{ fontSize: 11, color: T.text3, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', margin: '20px 0 4px' }}>Customer payment accounts (by tender)</div>
+      <div style={{ fontSize: 11, color: T.text3, marginBottom: 10, lineHeight: 1.5 }}>Each payment type deposits into its MYOB account (e.g. cash/EFTPOS/card → Undeposited Funds; bank transfer/direct deposit → bank). Bank-type accounts only.</div>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+        {PAYMENT_TENDERS.map(t => (
+          <Field key={t.id} label={t.label}>
+            <select style={inp} value={pa[t.id]?.uid || ''} onChange={e => savePayment(t.id, e.target.value, t.defaultMethod)}>
+              <option value="">— not set —</option>{acctOpts(banks)}
+            </select>
+          </Field>
+        ))}
+      </div>
     </Card>
   )
 }

@@ -11,6 +11,22 @@
 // (JAWS). Customer/inventory sync + job invoices all use this connection label.
 export const WORKSHOP_MYOB_LABEL = 'VPS'
 
+// Payment tenders → MYOB deposit account + PaymentMethod (mirrors MD's map).
+// Client-safe so both the settings UI and the take-payment dialog can use it.
+export type PaymentTender = 'cash' | 'eftpos' | 'card' | 'bank_transfer' | 'direct_deposit' | 'direct_debit' | 'paypal' | 'other'
+export interface PaymentAccount { uid: string | null; name: string | null; method: string | null }
+export type PaymentAccounts = Partial<Record<PaymentTender, PaymentAccount>>
+export const PAYMENT_TENDERS: { id: PaymentTender; label: string; defaultMethod: string }[] = [
+  { id: 'cash',           label: 'Cash',           defaultMethod: 'Cash' },
+  { id: 'eftpos',         label: 'EFTPOS',         defaultMethod: 'EFTPOS' },
+  { id: 'card',           label: 'Credit card',    defaultMethod: 'Other' },
+  { id: 'bank_transfer',  label: 'Bank transfer',  defaultMethod: 'Other' },
+  { id: 'direct_deposit', label: 'Direct deposit', defaultMethod: 'Other' },
+  { id: 'direct_debit',   label: 'Direct debit',   defaultMethod: 'Other' },
+  { id: 'paypal',         label: 'PayPal',         defaultMethod: 'PayPal' },
+  { id: 'other',          label: 'Other',          defaultMethod: 'Other' },
+]
+
 // Job status flow — reconciled with the autodesk_pro prototype
 // (booking → in_progress → invoiced → paid), plus diary-side states.
 export type BookingStatus =
