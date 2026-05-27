@@ -59,6 +59,9 @@ export default function JobCardPage({ user }: { user: PortalUserSSR }) {
   const [loading, setLoading] = useState(true)
   const [err, setErr] = useState('')
   const [savingStatus, setSavingStatus] = useState(false)
+  const isAdmin = roleHasPermission(user.role, 'admin:settings')
+  const [inv, setInv] = useState<{ busy: boolean; msg: string; needAccount: boolean }>({ busy: false, msg: '', needAccount: false })
+  const [acct, setAcct] = useState<{ candidates: any[]; sel: string; saving: boolean } | null>(null)
 
   const load = useCallback(async () => {
     if (!id) return
@@ -101,6 +104,33 @@ export default function JobCardPage({ user }: { user: PortalUserSSR }) {
   async function deleteLine(lineId: string) {
     await fetch(`/api/workshop/booking-lines?id=${encodeURIComponent(lineId)}`, { method: 'DELETE' })
     await load()
+  }
+
+  async function createInvoice() {
+    setInv({ busy: true, msg: 'Sending to MYOB…', needAccount: false })
+    try {
+      const r = await fetch('/api/workshop/invoice', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ booking_id: id }) })
+      const d = await r.json()
+      if (r.ok && d.ok) {
+        setInv({ busy: false, msg: `Sent to MYOB${d.myob_number ? ` #${d.myob_number}` : ''} (${d.mode})${d.status === 'already_written' ? ' — already linked' : ''}`, needAccount: false })
+        await load(); return
+      }
+      if (d.code === 'sales_account_not_set' && isAdmin) {
+        setInv({ busy: false, msg: 'Pick the MYOB income account workshop sales post to:', needAccount: true })
+        try { const ar = await fetch('/api/workshop/invoice'); const ad = await ar.json(); setAcct({ candidates: ad.candidates || [], sel: ad.settings?.myob_sales_account_uid || '', saving: false }) } catch { /* ignore */ }
+        return
+      }
+      setInv({ busy: false, msg: d.error || 'Invoice failed', needAccount: false })
+    } catch (e: any) { setInv({ busy: false, msg: e?.message || 'Invoice failed', needAccount: false }) }
+  }
+
+  async function saveAcct() {
+    if (!acct?.sel) return
+    setAcct({ ...acct, saving: true })
+    const chosen = acct.candidates.find((a: any) => a.uid === acct.sel)
+    await fetch('/api/workshop/invoice', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ myob_sales_account_uid: acct.sel, myob_sales_account_name: chosen?.name || null }) })
+    setAcct(null)
+    await createInvoice()
   }
 
   const lines = data?.lines || []
@@ -162,12 +192,24 @@ export default function JobCardPage({ user }: { user: PortalUserSSR }) {
 
                 {/* Quick status actions */}
                 {canEdit && (
-                  <div style={{ display: 'flex', gap: 8, marginTop: 12, flexWrap: 'wrap' }}>
+                  <div style={{ display: 'flex', gap: 8, marginTop: 12, flexWrap: 'wrap', alignItems: 'center' }}>
                     <button onClick={() => changeStatus('in_progress')} style={qbtn(T.amber)}>▶ Start job</button>
                     <button onClick={() => changeStatus('awaiting_parts')} style={qbtn(T.purple)}>⏸ Awaiting parts</button>
                     <button onClick={() => changeStatus('done')} style={qbtn(T.green)}>✓ Done</button>
-                    <button onClick={() => changeStatus('invoiced')} style={qbtn(T.teal)}>🧾 Mark invoiced</button>
+                    <button onClick={createInvoice} disabled={inv.busy} style={qbtn(T.teal)}>{inv.busy ? '🧾 Sending…' : '🧾 Invoice → MYOB'}</button>
                     <button onClick={() => changeStatus('paid')} style={qbtn(T.green)}>$ Paid</button>
+                    {inv.msg && <span style={{ fontSize: 11, color: inv.needAccount ? T.amber : T.text2 }}>{inv.msg}</span>}
+                  </div>
+                )}
+                {acct && (
+                  <div style={{ marginTop: 10, padding: 12, background: T.bg2, border: `1px solid ${T.border2}`, borderRadius: 8, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                    <span style={{ fontSize: 12, color: T.text2 }}>MYOB sales account:</span>
+                    <select value={acct.sel} onChange={e => setAcct({ ...acct, sel: e.target.value })} style={{ ...inp, minWidth: 300 }}>
+                      <option value="">— pick income account —</option>
+                      {acct.candidates.map((a: any) => <option key={a.uid} value={a.uid}>{a.displayId} · {a.name}</option>)}
+                    </select>
+                    <button onClick={saveAcct} disabled={!acct.sel || acct.saving} style={qbtn(T.accent)}>{acct.saving ? 'Saving…' : 'Save & invoice'}</button>
+                    <button onClick={() => setAcct(null)} style={qbtn(T.text3)}>Cancel</button>
                   </div>
                 )}
                 {err && b && <div style={{ fontSize: 12, color: T.red, marginTop: 8 }}>{err}</div>}
