@@ -463,21 +463,25 @@ function DayGrid({ bookings, techs, date, hourLines, capacity, canEdit, canEditC
         return (
           <div key={lane.ext || 'unassigned'} style={{ flex: 1, minWidth: 150, borderRight: `1px solid ${T.border}` }}>
             <div
-              draggable={canReorder && !!lane.ext}
-              onDragStart={canReorder && lane.ext ? (e) => { e.dataTransfer.setData('text/plain', `lane:${lane.ext}`); e.dataTransfer.effectAllowed = 'move' } : undefined}
               onDragOver={canReorder && lane.ext ? (e) => e.preventDefault() : undefined}
               onDrop={canReorder && lane.ext ? (e) => { const d = e.dataTransfer.getData('text/plain'); if (d.startsWith('lane:')) { e.preventDefault(); reorderLanes(d.slice(5), lane.ext) } } : undefined}
-              title={canReorder && lane.ext ? 'Drag to reorder lanes' : undefined}
-              style={{ height: LANE_HEADER_PX, borderBottom: `1px solid ${T.border}`, background: T.bg3, padding: '4px 6px', display: 'flex', flexDirection: 'column', justifyContent: 'center', gap: 3, cursor: canReorder && lane.ext ? 'grab' : 'default' }}>
-              <div style={{ fontSize: 11, fontWeight: 600, color: lane.ext ? T.text2 : T.text3, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', textAlign: 'center' }}>
-                {canReorder && lane.ext ? <span style={{ color: T.text3, marginRight: 4 }}>⠿</span> : null}{lane.name}
+              style={{ height: LANE_HEADER_PX, borderBottom: `1px solid ${T.border}`, background: T.bg3, padding: '4px 6px', display: 'flex', flexDirection: 'column', justifyContent: 'center', gap: 3 }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4, minWidth: 0 }}>
+                {canReorder && lane.ext && (
+                  <span draggable
+                    onDragStart={(e) => { e.dataTransfer.setData('text/plain', `lane:${lane.ext}`); e.dataTransfer.effectAllowed = 'move' }}
+                    title="Drag to reorder this lane"
+                    style={{ cursor: 'grab', color: T.text3, fontSize: 12, lineHeight: 1, flexShrink: 0, padding: '0 1px' }}>⠿</span>
+                )}
+                <span style={{ fontSize: 11, fontWeight: 600, color: lane.ext ? T.text2 : T.text3, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{lane.name}</span>
               </div>
               {lane.ext ? (
-                <div onClick={() => canEditCapacity && onSetCapacity(lane.ext)} title={canEditCapacity ? 'Click to set daily capacity' : `${booked.toFixed(1)} of ${cap}h booked`} style={{ cursor: canEditCapacity ? 'pointer' : 'default' }}>
+                <div onClick={() => canEditCapacity && onSetCapacity(lane.ext)} title={canEditCapacity ? 'Click to set this technician’s hours for the day' : `${booked.toFixed(1)} of ${cap}h booked`}
+                  style={{ cursor: canEditCapacity ? 'pointer' : 'default', borderRadius: 3, padding: '1px 2px', ...(canEditCapacity ? { outline: `1px solid ${T.border}` } : {}) }}>
                   <div style={{ height: 4, background: T.bg4, borderRadius: 2, overflow: 'hidden' }}>
                     <div style={{ height: '100%', width: `${pct}%`, background: barColor }} />
                   </div>
-                  <div style={{ fontSize: 9, color: over ? T.red : T.text3, fontFamily: 'monospace', textAlign: 'center', marginTop: 1 }}>{booked.toFixed(1)}/{cap}h</div>
+                  <div style={{ fontSize: 9, color: over ? T.red : T.text3, fontFamily: 'monospace', textAlign: 'center', marginTop: 1 }}>{booked.toFixed(1)}/{cap}h{canEditCapacity ? ' ✎' : ''}</div>
                 </div>
               ) : <div style={{ height: 13 }} />}
             </div>
