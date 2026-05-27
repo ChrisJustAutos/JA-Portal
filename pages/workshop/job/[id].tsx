@@ -68,6 +68,8 @@ export default function JobCardPage({ user }: { user: PortalUserSSR }) {
   const [payments, setPayments] = useState<any[]>([])
   const [paidTotal, setPaidTotal] = useState(0)
   const [pay, setPay] = useState<{ open: boolean; amount: string; tender: string; note: string; busy: boolean; msg: string }>({ open: false, amount: '', tender: 'card', note: '', busy: false, msg: '' })
+  const [jobTypes, setJobTypes] = useState<any[]>([])
+  const [applyJt, setApplyJt] = useState('')
 
   const load = useCallback(async () => {
     if (!id) return
@@ -84,6 +86,14 @@ export default function JobCardPage({ user }: { user: PortalUserSSR }) {
   }, [id])
 
   useEffect(() => { load(); loadPayments() }, [load, loadPayments])
+  useEffect(() => { (async () => { try { const r = await fetch('/api/workshop/job-types'); if (r.ok) setJobTypes((await r.json()).jobTypes || []) } catch { /* */ } })() }, [])
+
+  async function applyJobType() {
+    if (!applyJt) return
+    await fetch(`/api/workshop/job-types/${applyJt}/apply`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ booking_id: id }) })
+    setApplyJt('')
+    await load()
+  }
 
   async function patchBooking(patch: any) {
     const r = await fetch(`/api/workshop/bookings/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(patch) })
@@ -337,6 +347,16 @@ export default function JobCardPage({ user }: { user: PortalUserSSR }) {
                         <button onClick={() => addLine({ line_type: 'labour', description: 'Labour', qty: 1, unit_price_ex_gst: 0 })} style={addBtn}>+ Labour</button>
                         <button onClick={() => addLine({ line_type: 'fee', description: '', qty: 1, unit_price_ex_gst: 0 })} style={addBtn}>+ Fee</button>
                         <PartPicker onPick={(it) => addLine({ line_type: 'part', description: it.part_name, part_number: it.sku, qty: 1, unit_price_ex_gst: Number(it.sell_price) || 0, inventory_id: it.id } as any)} />
+                        {jobTypes.filter(t => t.active).length > 0 && (
+                          <>
+                            <div style={{ flex: 1 }} />
+                            <select value={applyJt} onChange={e => setApplyJt(e.target.value)} style={{ ...inp, maxWidth: 200 }} title="Fill the job from a preset job type">
+                              <option value="">Apply job type…</option>
+                              {jobTypes.filter(t => t.active).map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+                            </select>
+                            <button onClick={applyJobType} disabled={!applyJt} style={addBtn}>Apply</button>
+                          </>
+                        )}
                       </div>
                     )}
 

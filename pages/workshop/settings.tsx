@@ -30,11 +30,12 @@ function pbtn(color: string, solid?: boolean): React.CSSProperties {
   return { padding: '7px 14px', borderRadius: 6, fontSize: 12, fontFamily: 'inherit', fontWeight: 600, cursor: 'pointer', background: solid ? color : 'transparent', color: solid ? '#fff' : color, border: `1px solid ${solid ? color : color + '55'}` }
 }
 
-type Tab = 'business' | 'invoicing' | 'accounts' | 'sms' | 'techs'
+type Tab = 'business' | 'invoicing' | 'accounts' | 'sms' | 'techs' | 'job-types'
 const TABS: { id: Tab; label: string }[] = [
   { id: 'business', label: 'Business & documents' },
   { id: 'invoicing', label: 'Invoicing (MYOB)' },
   { id: 'accounts', label: 'MYOB accounts' },
+  { id: 'job-types', label: 'Job types' },
   { id: 'sms', label: 'SMS reminders' },
   { id: 'techs', label: 'Technicians & staff' },
 ]
@@ -121,6 +122,7 @@ export default function WorkshopSettingsPage({ user }: { user: PortalUserSSR }) 
                   {tab === 'business' && settings && <BusinessSection settings={settings} onSave={saveSettings} />}
                   {tab === 'invoicing' && settings && <InvoicingSection settings={settings} accounts={accounts} accountsError={accountsError} onSave={saveSettings} />}
                   {tab === 'accounts' && settings && <AccountsSection settings={settings} income={accounts} banks={bankAccounts} categories={trackingCategories} accountsError={accountsError} onSave={saveSettings} />}
+                  {tab === 'job-types' && <JobTypesSection />}
                   {tab === 'sms' && settings && <SmsSection settings={settings} onSave={saveSettings} />}
                   {tab === 'techs' && <TechsSection techs={techs} onAdd={addTech} onPatch={patchTech} onRemove={removeTech} />}
                 </div>
@@ -238,6 +240,82 @@ function AccountsSection({ settings, income, banks, categories, accountsError, o
         ))}
       </div>
     </Card>
+  )
+}
+
+function JobTypesSection() {
+  const [types, setTypes] = useState<any[]>([])
+  const [newName, setNewName] = useState('')
+  const [openId, setOpenId] = useState<string | null>(null)
+  const load = useCallback(async () => { try { const r = await fetch('/api/workshop/job-types'); if (r.ok) setTypes((await r.json()).jobTypes || []) } catch { /* */ } }, [])
+  useEffect(() => { load() }, [load])
+  async function api(url: string, method: string, body?: any) {
+    await fetch(url, { method, headers: body ? { 'Content-Type': 'application/json' } : undefined, body: body ? JSON.stringify(body) : undefined })
+    await load()
+  }
+  function addType() { const n = newName.trim(); if (!n) return; setNewName(''); api('/api/workshop/job-types', 'POST', { name: n, sort_order: (types.length + 1) * 10 }) }
+  return (
+    <Card title="Job types (presets)" hint="A job type is a named job with preset labour + parts. Apply it on a job card to fill the lines in one click. Importable from your MechanicDesk job-type export.">
+      {types.length === 0 && <div style={{ fontSize: 12, color: T.text3, padding: '4px 0 12px' }}>No job types yet — add one below, or import from MechanicDesk.</div>}
+      {types.map(t => (
+        <div key={t.id} style={{ border: `1px solid ${T.border}`, borderRadius: 8, marginBottom: 8, background: T.bg3, opacity: t.active ? 1 : 0.55 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 10px' }}>
+            <input defaultValue={t.name} onBlur={e => { const v = e.target.value.trim(); if (v && v !== t.name) api(`/api/workshop/job-types?id=${t.id}`, 'PATCH', { name: v }) }} style={{ ...cellInp, flex: 1, fontWeight: 600 }} />
+            <label style={{ fontSize: 11, color: T.text2, display: 'flex', gap: 4, alignItems: 'center', cursor: 'pointer' }}><input type="checkbox" checked={!!t.active} onChange={e => api(`/api/workshop/job-types?id=${t.id}`, 'PATCH', { active: e.target.checked })} />Active</label>
+            <span style={{ fontSize: 11, color: T.text3, whiteSpace: 'nowrap' }}>{(t.lines || []).length} lines</span>
+            <button onClick={() => setOpenId(openId === t.id ? null : t.id)} style={pbtn(T.blue)}>{openId === t.id ? 'Close' : 'Edit lines'}</button>
+            <button onClick={() => { if (confirm(`Delete job type “${t.name}”?`)) api(`/api/workshop/job-types?id=${t.id}`, 'DELETE') }} title="Delete" style={{ background: 'transparent', border: 'none', color: T.text3, cursor: 'pointer', fontSize: 16 }}>×</button>
+          </div>
+          {openId === t.id && (
+            <div style={{ padding: '0 10px 10px' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: '64px 1fr 50px 80px 26px', gap: 6, padding: '4px 2px', fontSize: 9, color: T.text3, textTransform: 'uppercase', letterSpacing: '0.04em' }}><div>Type</div><div>Description</div><div style={{ textAlign: 'right' }}>Qty</div><div style={{ textAlign: 'right' }}>Unit ex</div><div /></div>
+              {(t.lines || []).map((l: any) => <JobTypeLineRow key={l.id} line={l} onPatch={(p: any) => api(`/api/workshop/job-type-lines?id=${l.id}`, 'PATCH', p)} onRemove={() => api(`/api/workshop/job-type-lines?id=${l.id}`, 'DELETE')} />)}
+              <div style={{ display: 'flex', gap: 6, marginTop: 8 }}>
+                <button onClick={() => api('/api/workshop/job-type-lines', 'POST', { job_type_id: t.id, line_type: 'labour', description: 'Labour', qty: 1, unit_price_ex_gst: 0, sort_order: (t.lines || []).length })} style={pbtn(T.blue)}>+ Labour</button>
+                <button onClick={() => api('/api/workshop/job-type-lines', 'POST', { job_type_id: t.id, line_type: 'fee', description: '', qty: 1, unit_price_ex_gst: 0, sort_order: (t.lines || []).length })} style={pbtn(T.blue)}>+ Fee</button>
+                <JTPartPicker onPick={(it: any) => api('/api/workshop/job-type-lines', 'POST', { job_type_id: t.id, line_type: 'part', description: it.part_name, part_number: it.sku, qty: 1, unit_price_ex_gst: Number(it.sell_price) || 0, inventory_id: it.id, sort_order: (t.lines || []).length })} />
+              </div>
+            </div>
+          )}
+        </div>
+      ))}
+      <div style={{ display: 'flex', gap: 8, marginTop: 12, paddingTop: 12, borderTop: `1px solid ${T.border}` }}>
+        <input value={newName} onChange={e => setNewName(e.target.value)} placeholder="New job type (e.g. Logbook Service)" style={{ ...inp, flex: 1 }} onKeyDown={e => { if (e.key === 'Enter') addType() }} />
+        <button onClick={addType} style={pbtn(T.accent, true)}>+ Add</button>
+      </div>
+    </Card>
+  )
+}
+
+function JobTypeLineRow({ line, onPatch, onRemove }: { line: any; onPatch: (p: any) => void; onRemove: () => void }) {
+  const [desc, setDesc] = useState(line.description || '')
+  const [qty, setQty] = useState(String(line.qty))
+  const [price, setPrice] = useState(String(line.unit_price_ex_gst))
+  useEffect(() => { setDesc(line.description || ''); setQty(String(line.qty)); setPrice(String(line.unit_price_ex_gst)) }, [line.id, line.description, line.qty, line.unit_price_ex_gst])
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: '64px 1fr 50px 80px 26px', gap: 6, padding: '4px 2px', alignItems: 'center' }}>
+      <span style={{ fontSize: 10, color: T.text3, textTransform: 'uppercase' }}>{line.line_type}</span>
+      <input value={desc} onChange={e => setDesc(e.target.value)} onBlur={() => desc !== (line.description || '') && onPatch({ description: desc })} placeholder={line.part_number || 'Description'} style={cellInp} />
+      <input value={qty} inputMode="decimal" onChange={e => setQty(e.target.value)} onBlur={() => Number(qty) !== Number(line.qty) && onPatch({ qty: Number(qty) || 0 })} style={{ ...cellInp, textAlign: 'right' }} />
+      <input value={price} inputMode="decimal" onChange={e => setPrice(e.target.value)} onBlur={() => Number(price) !== Number(line.unit_price_ex_gst) && onPatch({ unit_price_ex_gst: Number(price) || 0 })} style={{ ...cellInp, textAlign: 'right' }} />
+      <button onClick={onRemove} title="Remove" style={{ background: 'transparent', border: 'none', color: T.text3, cursor: 'pointer', fontSize: 14 }}>×</button>
+    </div>
+  )
+}
+
+function JTPartPicker({ onPick }: { onPick: (item: any) => void }) {
+  const [open, setOpen] = useState(false); const [q, setQ] = useState(''); const [results, setResults] = useState<any[]>([])
+  useEffect(() => { if (!open) return; const t = setTimeout(async () => { try { const r = await fetch(`/api/workshop/inventory?q=${encodeURIComponent(q)}`); setResults((await r.json()).items || []) } catch { /* */ } }, 250); return () => clearTimeout(t) }, [q, open])
+  if (!open) return <button onClick={() => setOpen(true)} style={pbtn(T.blue)}>+ Part</button>
+  return (
+    <div style={{ position: 'relative' }}>
+      <input autoFocus value={q} onChange={e => setQ(e.target.value)} placeholder="Search parts…" onBlur={() => setTimeout(() => setOpen(false), 200)} style={{ ...cellInp, width: 200 }} />
+      {results.length > 0 && (
+        <div style={{ position: 'absolute', bottom: '100%', left: 0, width: 260, background: T.bg3, border: `1px solid ${T.border2}`, borderRadius: 6, marginBottom: 4, maxHeight: 220, overflowY: 'auto', zIndex: 10 }}>
+          {results.map((it: any) => <div key={it.id} onMouseDown={() => { onPick(it); setOpen(false); setQ('') }} style={{ padding: '7px 10px', fontSize: 12, cursor: 'pointer', borderBottom: `1px solid ${T.border}` }}><div style={{ color: T.text }}>{it.part_name}</div><div style={{ fontSize: 10, color: T.text3, fontFamily: 'monospace' }}>{it.sku || ''}</div></div>)}
+        </div>
+      )}
+    </div>
   )
 }
 
