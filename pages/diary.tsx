@@ -55,7 +55,6 @@ const SLOT_MIN = 30
 const SLOT_PX = 30
 const DAY_START_MIN = DAY_START_H * 60
 const GRID_PX = ((DAY_END_H - DAY_START_H) * 60 / SLOT_MIN) * SLOT_PX
-const DURATIONS = [30, 60, 90, 120, 180, 240, 360, 480]
 const pad = (n: number) => String(n).padStart(2, '0')
 
 // Brisbane (UTC+10) wall-clock hour/min from an ISO timestamp.
@@ -67,6 +66,7 @@ function bneTimeStr(iso: string): string { const { h, m } = bneHM(iso); return `
 function bneYmd(iso: string): string { return ymdBrisbane(new Date(iso)) }
 function isoFromBne(ymd: string, hhmm: string): string { return new Date(`${ymd}T${hhmm}:00+10:00`).toISOString() }
 function minsToHHMM(mins: number): string { return `${pad(Math.floor(mins / 60))}:${pad(mins % 60)}` }
+function hhmmPlus(hhmm: string, mins: number): string { const [h, m] = String(hhmm || '0:0').split(':').map(Number); const t = ((h * 60 + (m || 0)) + mins + 1440) % 1440; return minsToHHMM(t) }
 function topPxFor(iso: string): number {
   const { h, m } = bneHM(iso)
   return Math.max(0, ((h * 60 + m) - DAY_START_MIN) / SLOT_MIN * SLOT_PX)
@@ -94,7 +94,7 @@ function durationHours(b: { starts_at: string; ends_at: string }): number {
 }
 
 // ── Booking block (positioned in a lane) ────────────────────────────────
-function BookingBlock({ b, onClick, showTech, draggable }: { b: BookingRow; onClick: () => void; showTech?: boolean; draggable?: boolean }) {
+function BookingBlock({ b, onClick, showTech, draggable, onDragEnd }: { b: BookingRow; onClick: () => void; showTech?: boolean; draggable?: boolean; onDragEnd?: () => void }) {
   const top = topPxFor(b.starts_at)
   const height = Math.max(SLOT_PX * 0.9, bookingDurationMin(b) / SLOT_MIN * SLOT_PX - 2)
   const c = BOOKING_STATUS_META[b.status].color
@@ -104,6 +104,7 @@ function BookingBlock({ b, onClick, showTech, draggable }: { b: BookingRow; onCl
     <div
       draggable={!!draggable}
       onDragStart={draggable ? (e) => { e.dataTransfer.setData('text/plain', b.id); e.dataTransfer.effectAllowed = 'move' } : undefined}
+      onDragEnd={onDragEnd}
       onClick={(e) => { e.stopPropagation(); onClick() }}
       title={`${bneTimeStr(b.starts_at)}–${bneTimeStr(b.ends_at)} · ${cust} · ${veh}`}
       style={{
@@ -279,10 +280,10 @@ export default function DiaryPage({ user }: { user: PortalUserSSR }) {
             <span style={{ fontSize: 13, color: T.text2, fontWeight: 500, minWidth: 200 }}>
               {view === 'day' ? dayLabel(date) : view === 'week' ? `Week of ${dayLabel(weekStartYmd(date))}` : monthLabel(date)}
             </span>
+            <div style={{ flex: 1 }} />
             {isAdmin && (
               <button onClick={() => router.push('/settings?tab=workshop')} style={btn(false)} title="Workshop settings — technicians, MYOB, business details, SMS">⚙ Settings</button>
             )}
-            <div style={{ flex: 1 }} />
             <div style={{ display: 'flex', gap: 4 }}>
               <button onClick={() => setView('day')} style={btn(view === 'day')}>Day</button>
               <button onClick={() => setView('week')} style={btn(view === 'week')}>Week</button>
@@ -413,6 +414,8 @@ function DayGrid({ bookings, techs, date, hourLines, capacity, canEdit, canEditC
   // "Unassigned" lane catches bookings with no technician (hidden when filtered to a tech).
   const lanes: Tech[] = showUnassigned ? [{ ext: '', name: 'Unassigned' }, ...techs] : [...techs]
   const byLane = (ext: string) => bookings.filter(b => (b.technician_ext || '') === ext)
+  // Live drop hint: which lane + the time the booking would land at.
+  const [dropHint, setDropHint] = useState<{ ext: string; top: number; label: string } | null>(null)
   // Reorder lanes: move the dragged lane to the drop target's position.
   function reorderLanes(draggedCode: string, targetCode: string) {
     if (!draggedCode || !targetCode || draggedCode === targetCode) return
@@ -467,12 +470,18 @@ function DayGrid({ bookings, techs, date, hourLines, capacity, canEdit, canEditC
               ) : <div style={{ height: 13 }} />}
             </div>
             <div onClick={(e) => onLaneClick(e, date, lane.ext || null)}
-              onDragOver={(e) => e.preventDefault()} onDrop={(e) => onDropBooking(e, lane.ext || null)}
+              onDragOver={(e) => { e.preventDefault(); const rect = e.currentTarget.getBoundingClientRect(); const slot = Math.max(0, Math.floor((e.clientY - rect.top) / SLOT_PX)); setDropHint({ ext: lane.ext || '', top: slot * SLOT_PX, label: minsToHHMM(DAY_START_MIN + slot * SLOT_MIN) }) }}
+              onDrop={(e) => { setDropHint(null); onDropBooking(e, lane.ext || null) }}
               style={{ position: 'relative', height: GRID_PX, cursor: 'copy' }}>
               {hourLines.map((h, i) => (
                 <div key={h} style={{ position: 'absolute', top: i * 2 * SLOT_PX, left: 0, right: 0, borderTop: `1px solid ${T.border}` }} />
               ))}
-              {laneBookings.map(b => <BookingBlock key={b.id} b={b} draggable={canEdit} onClick={() => onBooking(b)} />)}
+              {laneBookings.map(b => <BookingBlock key={b.id} b={b} draggable={canEdit} onClick={() => onBooking(b)} onDragEnd={() => setDropHint(null)} />)}
+              {dropHint && dropHint.ext === (lane.ext || '') && (
+                <div style={{ position: 'absolute', top: dropHint.top, left: 0, right: 0, borderTop: `2px solid ${T.accent}`, pointerEvents: 'none', zIndex: 6 }}>
+                  <span style={{ position: 'absolute', top: -9, left: 2, background: T.accent, color: '#fff', fontSize: 10, fontWeight: 700, padding: '1px 5px', borderRadius: 3, fontFamily: 'monospace' }}>{dropHint.label}</span>
+                </div>
+              )}
             </div>
           </div>
         )
@@ -545,6 +554,7 @@ function WeekGrid({ bookings, days, hourLines, canEdit, onDayClick, onSlotClick,
   onDropBooking: (e: React.DragEvent<HTMLDivElement>, ymd: string) => void
 }) {
   const today = ymdBrisbane(new Date())
+  const [dropHint, setDropHint] = useState<{ ymd: string; top: number; label: string } | null>(null)
   return (
     <div style={{ display: 'flex', minWidth: 'fit-content', border: `1px solid ${T.border}`, borderRadius: 8, overflow: 'hidden', background: T.bg2 }}>
       <div style={{ width: 56, flexShrink: 0, borderRight: `1px solid ${T.border}` }}>
@@ -562,12 +572,18 @@ function WeekGrid({ bookings, days, hourLines, canEdit, onDayClick, onSlotClick,
             {dayLabel(ymd)}
           </div>
           <div onClick={(e) => onSlotClick(ymd, e)}
-            onDragOver={(e) => e.preventDefault()} onDrop={(e) => onDropBooking(e, ymd)}
+            onDragOver={(e) => { e.preventDefault(); const rect = e.currentTarget.getBoundingClientRect(); const slot = Math.max(0, Math.floor((e.clientY - rect.top) / SLOT_PX)); setDropHint({ ymd, top: slot * SLOT_PX, label: minsToHHMM(DAY_START_MIN + slot * SLOT_MIN) }) }}
+            onDrop={(e) => { setDropHint(null); onDropBooking(e, ymd) }}
             style={{ position: 'relative', height: GRID_PX, cursor: 'copy' }}>
             {hourLines.map((h, i) => (
               <div key={h} style={{ position: 'absolute', top: i * 2 * SLOT_PX, left: 0, right: 0, borderTop: `1px solid ${T.border}` }} />
             ))}
-            {bookings.filter(b => bneYmd(b.starts_at) === ymd).map(b => <BookingBlock key={b.id} b={b} draggable={canEdit} onClick={() => onBooking(b)} showTech />)}
+            {bookings.filter(b => bneYmd(b.starts_at) === ymd).map(b => <BookingBlock key={b.id} b={b} draggable={canEdit} onClick={() => onBooking(b)} onDragEnd={() => setDropHint(null)} showTech />)}
+            {dropHint && dropHint.ymd === ymd && (
+              <div style={{ position: 'absolute', top: dropHint.top, left: 0, right: 0, borderTop: `2px solid ${T.accent}`, pointerEvents: 'none', zIndex: 6 }}>
+                <span style={{ position: 'absolute', top: -9, left: 2, background: T.accent, color: '#fff', fontSize: 10, fontWeight: 700, padding: '1px 5px', borderRadius: 3, fontFamily: 'monospace' }}>{dropHint.label}</span>
+              </div>
+            )}
           </div>
         </div>
       ))}
@@ -583,7 +599,7 @@ function BookingModal({ initial, techs, canEdit, onClose, onSaved }: {
   const isNew = !initial.id
   const [ymd, setYmd] = useState<string>(initial.starts_at ? bneYmd(initial.starts_at) : ymdBrisbane(new Date()))
   const [time, setTime] = useState<string>(initial.starts_at ? bneTimeStr(initial.starts_at) : '09:00')
-  const [duration, setDuration] = useState<number>(initial.starts_at && initial.ends_at ? bookingDurationMin(initial as BookingRow) : 60)
+  const [finish, setFinish] = useState<string>(initial.ends_at ? bneTimeStr(initial.ends_at) : hhmmPlus(initial.starts_at ? bneTimeStr(initial.starts_at) : '09:00', 60))
   const [tech, setTech] = useState<string>(initial.technician_ext || '')
   const [bay, setBay] = useState<string>(initial.bay || '')
   const [jobType, setJobType] = useState<string>(initial.job_type || 'general_service')
@@ -596,12 +612,17 @@ function BookingModal({ initial, techs, canEdit, onClose, onSaved }: {
   const [saving, setSaving] = useState(false)
   const [err, setErr] = useState('')
   const [splitTech, setSplitTech] = useState('')
+  const [splitStart, setSplitStart] = useState<string>(() => initial.ends_at ? bneTimeStr(initial.ends_at) : '10:00')
+  const [splitFinish, setSplitFinish] = useState<string>(() => hhmmPlus(initial.ends_at ? bneTimeStr(initial.ends_at) : '10:00', 60))
   const [splitting, setSplitting] = useState(false)
 
   async function doSplit() {
     setSplitting(true); setErr('')
+    const sIso = isoFromBne(ymd, splitStart)
+    const eIso = isoFromBne(ymd, splitFinish)
+    if (new Date(eIso).getTime() <= new Date(sIso).getTime()) { setErr('Split finish must be after its start.'); setSplitting(false); return }
     try {
-      const r = await fetch(`/api/workshop/bookings/${initial.id}/split`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ technician_ext: splitTech || null }) })
+      const r = await fetch(`/api/workshop/bookings/${initial.id}/split`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ technician_ext: splitTech || null, starts_at: sIso, ends_at: eIso }) })
       const d = await r.json()
       if (!r.ok) { setErr(d.error || 'Split failed'); return }
       onSaved(); onClose()
@@ -611,7 +632,8 @@ function BookingModal({ initial, techs, canEdit, onClose, onSaved }: {
   async function save() {
     setSaving(true); setErr('')
     const startIso = isoFromBne(ymd, time)
-    const endIso = new Date(new Date(startIso).getTime() + duration * 60000).toISOString()
+    const endIso = isoFromBne(ymd, finish)
+    if (new Date(endIso).getTime() <= new Date(startIso).getTime()) { setErr('Finish time must be after the start time.'); setSaving(false); return }
     const payload: any = {
       starts_at: startIso, ends_at: endIso,
       technician_ext: tech || null, bay: bay || null,
@@ -647,11 +669,7 @@ function BookingModal({ initial, techs, canEdit, onClose, onSaved }: {
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8 }}>
             <Field label="Date"><input type="date" value={ymd} disabled={!canEdit} onChange={e => setYmd(e.target.value)} style={inp} /></Field>
             <Field label="Start"><input type="time" value={time} disabled={!canEdit} step={900} onChange={e => setTime(e.target.value)} style={inp} /></Field>
-            <Field label="Duration">
-              <select value={duration} disabled={!canEdit} onChange={e => setDuration(Number(e.target.value))} style={inp}>
-                {DURATIONS.map(m => <option key={m} value={m}>{m < 60 ? `${m}m` : `${m / 60}h${m % 60 ? ` ${m % 60}m` : ''}`}</option>)}
-              </select>
-            </Field>
+            <Field label="Finish"><input type="time" value={finish} disabled={!canEdit} step={900} onChange={e => setFinish(e.target.value)} style={inp} /></Field>
           </div>
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
@@ -685,13 +703,20 @@ function BookingModal({ initial, techs, canEdit, onClose, onSaved }: {
           <Field label="Notes"><textarea value={notes} disabled={!canEdit} onChange={e => setNotes(e.target.value)} rows={2} style={{ ...inp, resize: 'vertical' }} /></Field>
 
           {!isNew && canEdit && (
-            <div style={{ display: 'flex', gap: 8, alignItems: 'center', paddingTop: 12, borderTop: `1px solid ${T.border}` }}>
-              <span style={{ fontSize: 12, color: T.text3, whiteSpace: 'nowrap' }}>Split job to</span>
-              <select value={splitTech} onChange={e => setSplitTech(e.target.value)} style={{ ...inp, flex: 1 }}>
-                <option value="">Unassigned</option>
-                {techs.map(t => <option key={t.ext} value={t.ext}>{t.name}{t.role ? ` · ${t.role}` : ''}</option>)}
-              </select>
-              <button onClick={doSplit} disabled={splitting} title="Create a linked second booking (same vehicle/job) for another technician or time" style={{ ...btn(false), padding: '7px 14px' }}>{splitting ? 'Splitting…' : 'Split'}</button>
+            <div style={{ paddingTop: 12, borderTop: `1px solid ${T.border}` }}>
+              <div style={{ fontSize: 11, color: T.text3, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 6 }}>Split job</div>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+                <div style={{ flex: 1, minWidth: 130 }}>
+                  <div style={{ fontSize: 10, color: T.text3, marginBottom: 4 }}>To technician</div>
+                  <select value={splitTech} onChange={e => setSplitTech(e.target.value)} style={inp}>
+                    <option value="">Unassigned</option>
+                    {techs.map(t => <option key={t.ext} value={t.ext}>{t.name}{t.role ? ` · ${t.role}` : ''}</option>)}
+                  </select>
+                </div>
+                <div><div style={{ fontSize: 10, color: T.text3, marginBottom: 4 }}>From</div><input type="time" step={900} value={splitStart} onChange={e => setSplitStart(e.target.value)} style={{ ...inp, width: 96 }} /></div>
+                <div><div style={{ fontSize: 10, color: T.text3, marginBottom: 4 }}>To</div><input type="time" step={900} value={splitFinish} onChange={e => setSplitFinish(e.target.value)} style={{ ...inp, width: 96 }} /></div>
+                <button onClick={doSplit} disabled={splitting} title="Create a linked second booking (same vehicle/job) at this time/technician" style={{ ...btn(false), padding: '7px 14px' }}>{splitting ? 'Splitting…' : 'Split'}</button>
+              </div>
             </div>
           )}
 
