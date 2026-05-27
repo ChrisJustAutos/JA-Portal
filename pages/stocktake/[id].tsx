@@ -5,7 +5,8 @@
 //   • If parsed/failed: "Run Match" button to dispatch the GH Action
 //   • If matching/pushing: live progress (polls every 3s)
 //     — If stuck > 5 min, Delete button surfaces (worker likely crashed)
-//   • If matched: preview table with matched/unmatched + "Push to MD" button
+//   • If matched: preview table with matched/unmatched + counted-vs-system
+//     variance (compare counts to MD on-hand for manual checking) + "Push to MD"
 //   • If completed: link to the MD stocktake + summary
 
 import { useState, useEffect, useMemo, useCallback } from 'react'
@@ -96,6 +97,17 @@ function getActiveMinutes(u: Upload): number | null {
   return null
 }
 
+/**
+ * Counted − system variance for a matched row, or null when it can't be
+ * compared (row didn't match, or MD returned no on-hand qty for it).
+ * Positive = more counted than the system says (overage); negative = shortage.
+ */
+function rowVariance(r: MatchEntry): number | null {
+  if (r.status !== 'matched') return null
+  if (typeof r.md_current_qty !== 'number') return null
+  return r.qty - r.md_current_qty
+}
+
 export default function StocktakeDetailPage({ user }: { user: SessionUser }) {
   const router = useRouter()
   const id = router.query.id as string | undefined
@@ -104,7 +116,7 @@ export default function StocktakeDetailPage({ user }: { user: SessionUser }) {
   const [error, setError] = useState('')
   const [actionInFlight, setActionInFlight] = useState(false)
   const [deleting, setDeleting] = useState(false)
-  const [filter, setFilter] = useState<'all' | 'matched' | 'unmatched'>('all')
+  const [filter, setFilter] = useState<'all' | 'matched' | 'unmatched' | 'variance'>('all')
   const [sheetFilter, setSheetFilter] = useState<string>('all')
 
   const canEdit = roleHasPermission(user.role, 'edit:stocktakes')
@@ -224,8 +236,29 @@ export default function StocktakeDetailPage({ user }: { user: SessionUser }) {
     }
     if (filter === 'matched') return rows.filter(r => r.status === 'matched')
     if (filter === 'unmatched') return rows.filter(r => r.status !== 'matched')
+    if (filter === 'variance') return rows.filter(r => { const v = rowVariance(r); return v !== null && v !== 0 })
     return rows
   }, [upload, filter, sheetFilter])
+
+  // Count-vs-system reconciliation across matched rows (respects the sheet
+  // filter so the strip lines up with what's shown). Drives the summary
+  // strip and the "review discrepancies" shortcut.
+  const comparison = useMemo(() => {
+    if (!upload?.match_results) return null
+    let rows = upload.match_results.filter(r => r.status === 'matched')
+    if (sheetFilter !== 'all') rows = rows.filter(r => r.sheet_name === sheetFilter)
+    if (rows.length === 0) return null
+    let exact = 0, over = 0, short = 0, unknown = 0, netUnits = 0
+    for (const r of rows) {
+      const v = rowVariance(r)
+      if (v === null) { unknown++; continue }
+      netUnits += v
+      if (v === 0) exact++
+      else if (v > 0) over++
+      else short++
+    }
+    return { total: rows.length, exact, over, short, unknown, netUnits, discrepancies: over + short }
+  }, [upload, sheetFilter])
 
   // Stuck detection — recomputed on every render via the polling cycle
   const activeMin = upload ? getActiveMinutes(upload) : null
@@ -342,6 +375,34 @@ export default function StocktakeDetailPage({ user }: { user: SessionUser }) {
                 </div>
               )}
 
+              {/* ── Count vs system reconciliation ───────────────── */}
+              {comparison && (
+                <div style={{display:'flex', flexWrap:'wrap', alignItems:'center', gap:10, marginBottom:14, padding:'12px 14px', background:T.bg2, border:`1px solid ${T.border}`, borderRadius:8}}>
+                  <div style={{fontSize:10, color:T.text3, textTransform:'uppercase', letterSpacing:'0.05em', fontWeight:600, marginRight:2}}>Count vs system</div>
+                  <Pill color={T.green} label={`${comparison.exact} exact`}/>
+                  <Pill color={T.red}   label={`${comparison.short} short`}/>
+                  <Pill color={T.amber} label={`${comparison.over} over`}/>
+                  {comparison.unknown > 0 && <Pill color={T.text3} label={`${comparison.unknown} no system qty`}/>}
+                  <div style={{marginLeft:'auto', display:'flex', alignItems:'center', gap:12}}>
+                    <div style={{fontSize:12, color:T.text2}}>
+                      Net variance:{' '}
+                      <strong style={{color: comparison.netUnits === 0 ? T.text2 : comparison.netUnits > 0 ? T.amber : T.red, fontVariantNumeric:'tabular-nums'}}>
+                        {comparison.netUnits > 0 ? `+${comparison.netUnits}` : comparison.netUnits}
+                      </strong>{' '}units
+                    </div>
+                    {comparison.discrepancies > 0 && (
+                      <button onClick={() => setFilter('variance')}
+                        style={{padding:'4px 12px', borderRadius:4, fontSize:11, fontFamily:'inherit', fontWeight:600,
+                          background: filter === 'variance' ? T.amber : 'transparent',
+                          color: filter === 'variance' ? '#1a1d23' : T.amber,
+                          border:`1px solid ${T.amber}`, cursor:'pointer'}}>
+                        Review {comparison.discrepancies} discrepanc{comparison.discrepancies === 1 ? 'y' : 'ies'}
+                      </button>
+                    )}
+                  </div>
+                </div>
+              )}
+
               {/* ── Match results table ──────────────────────────── */}
               {upload.match_results && upload.match_results.length > 0 && (
                 <div style={{marginTop:24}}>
@@ -363,7 +424,7 @@ export default function StocktakeDetailPage({ user }: { user: SessionUser }) {
                           {sheetNames.map(s => <option key={s} value={s}>{s}</option>)}
                         </select>
                       )}
-                      {(['all', 'matched', 'unmatched'] as const).map(f => (
+                      {(['all', 'matched', 'unmatched', 'variance'] as const).map(f => (
                         <button key={f}
                           onClick={() => setFilter(f)}
                           style={{
@@ -380,19 +441,20 @@ export default function StocktakeDetailPage({ user }: { user: SessionUser }) {
                   </div>
 
                   <div style={{background:T.bg2, border:`1px solid ${T.border}`, borderRadius:10, overflow:'hidden'}}>
-                    <div style={{display:'grid', gridTemplateColumns: hasSheetNames ? '60px 110px 130px 1fr 80px 90px 110px' : '60px 130px 1fr 80px 90px 110px', gap:12, padding:'10px 14px', borderBottom:`1px solid ${T.border}`, background:T.bg3, fontSize:10, color:T.text3, textTransform:'uppercase', letterSpacing:'0.05em', fontWeight:600}}>
+                    <div style={{display:'grid', gridTemplateColumns: hasSheetNames ? '60px 110px 130px 1fr 80px 90px 90px 110px' : '60px 130px 1fr 80px 90px 90px 110px', gap:12, padding:'10px 14px', borderBottom:`1px solid ${T.border}`, background:T.bg3, fontSize:10, color:T.text3, textTransform:'uppercase', letterSpacing:'0.05em', fontWeight:600}}>
                       <div>Row</div>
                       {hasSheetNames && <div>Sheet</div>}
                       <div>SKU</div>
                       <div>MD Match</div>
                       <div style={{textAlign:'right'}}>Counted</div>
                       <div style={{textAlign:'right'}}>System</div>
+                      <div style={{textAlign:'right'}}>Variance</div>
                       <div>Status</div>
                     </div>
                     {filteredResults.length === 0 ? (
                       <div style={{padding:20, textAlign:'center', fontSize:12, color:T.text3}}>No results in this filter.</div>
                     ) : filteredResults.map((r, i) => (
-                      <div key={i} style={{display:'grid', gridTemplateColumns: hasSheetNames ? '60px 110px 130px 1fr 80px 90px 110px' : '60px 130px 1fr 80px 90px 110px', gap:12, padding:'9px 14px', borderBottom:`1px solid ${T.border}`, fontSize:12, alignItems:'center'}}>
+                      <div key={i} style={{display:'grid', gridTemplateColumns: hasSheetNames ? '60px 110px 130px 1fr 80px 90px 90px 110px' : '60px 130px 1fr 80px 90px 90px 110px', gap:12, padding:'9px 14px', borderBottom:`1px solid ${T.border}`, fontSize:12, alignItems:'center'}}>
                         <div style={{color:T.text3, fontFamily:'monospace'}}>{r.row_number}</div>
                         {hasSheetNames && (
                           <div style={{color:T.text2, fontFamily:'monospace', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', fontSize:11}}>
@@ -418,6 +480,12 @@ export default function StocktakeDetailPage({ user }: { user: SessionUser }) {
                         </div>
                         <div style={{textAlign:'right', color:T.text, fontVariantNumeric:'tabular-nums', fontWeight:500}}>{r.qty}</div>
                         <div style={{textAlign:'right', color:T.text3, fontVariantNumeric:'tabular-nums'}}>{r.md_current_qty ?? '—'}</div>
+                        {(() => {
+                          const v = rowVariance(r)
+                          if (v === null) return <div style={{textAlign:'right', color:T.text3}}>—</div>
+                          const col = v === 0 ? T.text3 : v > 0 ? T.amber : T.red
+                          return <div style={{textAlign:'right', color:col, fontVariantNumeric:'tabular-nums', fontWeight: v === 0 ? 400 : 600}}>{v > 0 ? `+${v}` : v}</div>
+                        })()}
                         <div><MatchStatusBadge status={r.status}/></div>
                       </div>
                     ))}
@@ -590,6 +658,15 @@ function MatchStatusBadge({ status }: { status: string }) {
   return (
     <span style={{padding:'2px 6px', borderRadius:3, background:`${e.color}22`, color:e.color, fontSize:10, fontWeight:600}}>
       {e.label}
+    </span>
+  )
+}
+
+function Pill({ color, label }: { color: string; label: string }) {
+  return (
+    <span style={{display:'inline-flex', alignItems:'center', gap:6, padding:'3px 9px', borderRadius:20, background:`${color}1a`, border:`1px solid ${color}40`, fontSize:11, fontWeight:600, color}}>
+      <span style={{width:6, height:6, borderRadius:'50%', background:color}}/>
+      {label}
     </span>
   )
 }
