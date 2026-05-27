@@ -43,6 +43,10 @@ const ICONS: Record<string, (p: IconProps) => JSX.Element> = {
   calls: (p) => svg(
     <path d="M22 16.9v3a2 2 0 0 1-2.2 2 19.8 19.8 0 0 1-8.6-3.1 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2.1 4.2 2 2 0 0 1 4.1 2h3a2 2 0 0 1 2 1.7c.1 1 .4 1.9.7 2.8a2 2 0 0 1-.5 2.1L8.1 9.9a16 16 0 0 0 6 6l1.3-1.3a2 2 0 0 1 2.1-.4c.9.3 1.8.6 2.8.7a2 2 0 0 1 1.7 2Z"/>
   , p),
+  diary: (p) => svg(<>
+    <rect x="3" y="4" width="18" height="17" rx="2"/><path d="M8 2v4M16 2v4M3 10h18"/>
+    <circle cx="12" cy="15.5" r="3"/><path d="M12 14.2V15.5l1 .9"/>
+  </>, p),
   reports: (p) => svg(<>
     <path d="M3 3v18h18"/><rect x="7" y="11" width="3" height="6" rx="0.5"/>
     <rect x="12.5" y="7" width="3" height="10" rx="0.5"/><rect x="18" y="13" width="3" height="4" rx="0.5"/>

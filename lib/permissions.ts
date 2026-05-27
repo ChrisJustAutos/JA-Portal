@@ -40,6 +40,7 @@ export type Permission =
   | 'view:stocktakes'
   | 'view:b2b'
   | 'view:stripe_myob'
+  | 'view:diary'
   // Actions
   | 'edit:any'
   | 'edit:distributors_groups'
@@ -51,6 +52,7 @@ export type Permission =
   | 'edit:b2b_distributors'
   | 'edit:b2b_orders'
   | 'edit:stripe_myob'
+  | 'edit:bookings'
   | 'generate:reports'
   | 'monitor:calls'
   // Admin
@@ -67,6 +69,7 @@ const ROLE_PERMISSIONS: Record<UserRole, Permission[]> = {
     'edit:any','edit:distributors_groups','edit:vin_codes','edit:leads','edit:supplier_invoices','edit:stocktakes','generate:reports',
     'edit:b2b_catalogue','edit:b2b_distributors','edit:b2b_orders','edit:stripe_myob',
     'monitor:calls',
+    'view:diary','edit:bookings',
     'admin:users','admin:settings','admin:audit_log','admin:b2b',
   ],
   manager: [
@@ -76,11 +79,13 @@ const ROLE_PERMISSIONS: Record<UserRole, Permission[]> = {
     'edit:leads','edit:supplier_invoices','edit:stocktakes','generate:reports',
     'edit:b2b_catalogue','edit:b2b_distributors','edit:b2b_orders',
     'monitor:calls',
+    'view:diary','edit:bookings',
   ],
   sales: [
     'view:dashboards','view:overview','view:leads','view:distributors','view:calls','view:reports',
     'view:b2b',
     'edit:leads','generate:reports',
+    'view:diary','edit:bookings',
   ],
   accountant: [
     'view:dashboards','view:overview','view:invoices','view:pnl','view:payables','view:reports',
@@ -204,6 +209,7 @@ export const PORTAL_TABS: PortalTab[] = [
   { id: 'leads',         label: 'Leads/Orders',    permission: 'view:leads' },
   { id: 'distributors',  label: 'Distributors',    permission: 'view:distributors' },
   { id: 'calls',         label: 'Phone Calls',     permission: 'view:calls' },
+  { id: 'diary',         label: 'Workshop Diary',  permission: 'view:diary' },
   { id: 'reports',       label: 'Reports',         permission: 'view:reports' },
   { id: 'todos',         label: 'To-Dos',          permission: 'view:todos' },
   { id: 'jobs',          label: 'Jobs',            permission: 'view:jobs' },
