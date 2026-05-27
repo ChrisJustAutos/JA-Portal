@@ -249,6 +249,12 @@ export default function DiaryPage({ user }: { user: PortalUserSSR }) {
     fetch(`/api/workshop/bookings/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(patch) }).then(load)
   }
 
+  // Persist a new lane order (drag-reorder in the diary day view).
+  function reorderTechs(codes: string[]) {
+    setTechs(prev => { const by: Record<string, Tech> = {}; prev.forEach(t => { by[t.ext] = t }); return codes.map(c => by[c]).filter(Boolean).concat(prev.filter(t => !codes.includes(t.ext))) })
+    fetch('/api/workshop/technicians/reorder', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ codes }) }).then(load)
+  }
+
   // Department (technician role) tabs + single-tech pills narrow the lanes/bookings.
   const departments = Array.from(new Set(techs.map(t => (t.role || '').trim()).filter(Boolean))).sort()
   const deptTechs = deptFilter ? techs.filter(t => (t.role || '') === deptFilter) : techs
@@ -323,7 +329,8 @@ export default function DiaryPage({ user }: { user: PortalUserSSR }) {
               <DayGrid bookings={displayBookings} techs={techFilter ? deptTechs.filter(t => t.ext === techFilter) : deptTechs} showUnassigned={!techFilter && !deptFilter}
                 date={date} hourLines={hourLines} capacity={capacity} canEdit={canEdit} canEditCapacity={isAdmin} onSetCapacity={setLaneCapacity}
                 onLaneClick={laneClick} onBooking={(b) => canEdit && setEditing(b)}
-                onDropBooking={(e, techExt) => dropMove(e, date, techExt, true)} />
+                onDropBooking={(e, techExt) => dropMove(e, date, techExt, true)}
+                canReorder={canEdit && !techFilter && !deptFilter} onReorder={reorderTechs} />
             ) : view === 'week' ? (
               <WeekGrid bookings={displayBookings} days={weekDays} hourLines={hourLines} canEdit={canEdit}
                 onDayClick={(ymd) => { setDate(ymd); setView('day') }}
@@ -412,17 +419,28 @@ function TechPills({ techs, active, onPick }: { techs: Tech[]; active: string | 
 
 // ── Day grid: time axis + one lane per technician (with workload bar) ────
 const LANE_HEADER_PX = 46
-function DayGrid({ bookings, techs, date, hourLines, capacity, canEdit, canEditCapacity, onSetCapacity, onLaneClick, onBooking, onDropBooking, showUnassigned }: {
+function DayGrid({ bookings, techs, date, hourLines, capacity, canEdit, canEditCapacity, onSetCapacity, onLaneClick, onBooking, onDropBooking, showUnassigned, canReorder, onReorder }: {
   bookings: BookingRow[]; techs: Tech[]; date: string; hourLines: number[]
   capacity: Record<string, number>; canEdit: boolean; canEditCapacity: boolean; onSetCapacity: (ext: string) => void
   onLaneClick: (e: React.MouseEvent<HTMLDivElement>, ymd: string, techExt: string | null) => void
   onBooking: (b: BookingRow) => void
   onDropBooking: (e: React.DragEvent<HTMLDivElement>, techExt: string | null) => void
   showUnassigned: boolean
+  canReorder: boolean
+  onReorder: (codes: string[]) => void
 }) {
   // "Unassigned" lane catches bookings with no technician (hidden when filtered to a tech).
   const lanes: Tech[] = showUnassigned ? [{ ext: '', name: 'Unassigned' }, ...techs] : [...techs]
   const byLane = (ext: string) => bookings.filter(b => (b.technician_ext || '') === ext)
+  // Reorder lanes: move the dragged lane to the drop target's position.
+  function reorderLanes(draggedCode: string, targetCode: string) {
+    if (!draggedCode || !targetCode || draggedCode === targetCode) return
+    const order = techs.map(t => t.ext)
+    const from = order.indexOf(draggedCode), to = order.indexOf(targetCode)
+    if (from < 0 || to < 0) return
+    order.splice(to, 0, order.splice(from, 1)[0])
+    onReorder(order)
+  }
   return (
     <div style={{ display: 'flex', minWidth: 'fit-content', border: `1px solid ${T.border}`, borderRadius: 8, overflow: 'hidden', background: T.bg2 }}>
       {/* time axis */}
@@ -444,9 +462,15 @@ function DayGrid({ bookings, techs, date, hourLines, capacity, canEdit, canEditC
         const barColor = over ? T.red : pct > 80 ? T.amber : T.green
         return (
           <div key={lane.ext || 'unassigned'} style={{ flex: 1, minWidth: 150, borderRight: `1px solid ${T.border}` }}>
-            <div style={{ height: LANE_HEADER_PX, borderBottom: `1px solid ${T.border}`, background: T.bg3, padding: '4px 6px', display: 'flex', flexDirection: 'column', justifyContent: 'center', gap: 3 }}>
+            <div
+              draggable={canReorder && !!lane.ext}
+              onDragStart={canReorder && lane.ext ? (e) => { e.dataTransfer.setData('text/plain', `lane:${lane.ext}`); e.dataTransfer.effectAllowed = 'move' } : undefined}
+              onDragOver={canReorder && lane.ext ? (e) => e.preventDefault() : undefined}
+              onDrop={canReorder && lane.ext ? (e) => { const d = e.dataTransfer.getData('text/plain'); if (d.startsWith('lane:')) { e.preventDefault(); reorderLanes(d.slice(5), lane.ext) } } : undefined}
+              title={canReorder && lane.ext ? 'Drag to reorder lanes' : undefined}
+              style={{ height: LANE_HEADER_PX, borderBottom: `1px solid ${T.border}`, background: T.bg3, padding: '4px 6px', display: 'flex', flexDirection: 'column', justifyContent: 'center', gap: 3, cursor: canReorder && lane.ext ? 'grab' : 'default' }}>
               <div style={{ fontSize: 11, fontWeight: 600, color: lane.ext ? T.text2 : T.text3, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', textAlign: 'center' }}>
-                {lane.name}
+                {canReorder && lane.ext ? <span style={{ color: T.text3, marginRight: 4 }}>⠿</span> : null}{lane.name}
               </div>
               {lane.ext ? (
                 <div onClick={() => canEditCapacity && onSetCapacity(lane.ext)} title={canEditCapacity ? 'Click to set daily capacity' : `${booked.toFixed(1)} of ${cap}h booked`} style={{ cursor: canEditCapacity ? 'pointer' : 'default' }}>
