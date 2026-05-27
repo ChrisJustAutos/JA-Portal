@@ -12,11 +12,14 @@
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { createClient } from '@supabase/supabase-js'
 import { requireAuth } from '../../../lib/auth'
+import { parseAgentKey } from '../../../lib/calls-advisor'
 
 export const config = { maxDuration: 30 }
 
 interface AgentStats {
-  extension: string
+  key: string                 // advisor filter token: "slack:<id>" | "ext:<n>"
+  extension: string           // kept for frontend compat (== key)
+  ext_label: string | null    // extension number to show, or null for identified hot-deskers
   display_name: string
   role: string | null
   today_total: number
@@ -102,14 +105,17 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
       // another agent to switch). When no extension is selected, the two
       // queries are identical — we still run both to keep the code simple,
       // and Supabase will cache the second one.
+      const agentKey = parseAgentKey(extensionParam)
+
       let kpiQuery = sb.from('calls')
-        .select('direction, disposition, billsec_seconds, agent_ext, call_date')
+        .select('direction, disposition, billsec_seconds, agent_ext, effective_advisor_slack_user_id, call_date')
         .gte('call_date', periodFromIso)
       if (periodToIso) kpiQuery = kpiQuery.lte('call_date', periodToIso)
-      if (extensionParam) kpiQuery = kpiQuery.eq('agent_ext', extensionParam)
+      if (agentKey?.kind === 'slack') kpiQuery = kpiQuery.eq('effective_advisor_slack_user_id', agentKey.id)
+      else if (agentKey?.kind === 'ext') kpiQuery = kpiQuery.eq('agent_ext', agentKey.ext).is('effective_advisor_slack_user_id', null)
 
       let agentBreakdownQuery = sb.from('calls')
-        .select('direction, disposition, billsec_seconds, agent_ext')
+        .select('direction, disposition, billsec_seconds, agent_ext, agent_name, effective_advisor_name, effective_advisor_slack_user_id')
         .gte('call_date', periodFromIso)
       if (periodToIso) agentBreakdownQuery = agentBreakdownQuery.lte('call_date', periodToIso)
 
@@ -150,24 +156,45 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
         ? Math.round((inbound.filter(c => c.disposition === 'ANSWERED').length / inbound.length) * 100)
         : 0
 
-      // Per-agent aggregates — always full period, never narrowed by extension.
-      const agentMap = new Map<string, AgentStats>()
+      // Per-agent aggregates — always full period, never narrowed by the
+      // selected agent. Keyed by *effective advisor*: identified advisors
+      // (incl. hot-deskers with no extension of their own) group by slack id;
+      // everything else groups by extension. This stops one person's calls
+      // being miscredited to whichever handset happened to ring.
+      const extMap = new Map<string, { display_name: string; role: string | null }>()
       for (const ext of extensions) {
-        agentMap.set(ext.extension, {
-          extension: ext.extension,
-          display_name: ext.display_name,
-          role: ext.role,
-          today_total: 0,
-          today_answered_inbound: 0,
-          today_outbound: 0,
-          today_talk_seconds: 0,
-          week_talk_seconds: 0,
-        })
+        extMap.set(ext.extension, { display_name: ext.display_name, role: ext.role })
       }
+
+      const agentMap = new Map<string, AgentStats>()
       for (const c of agentCalls) {
-        if (!c.agent_ext) continue
-        const a = agentMap.get(c.agent_ext)
-        if (!a) continue
+        let key: string
+        let displayName: string
+        let extLabel: string | null
+        let role: string | null
+        if (c.effective_advisor_slack_user_id) {
+          key = `slack:${c.effective_advisor_slack_user_id}`
+          displayName = c.effective_advisor_name || c.agent_name || 'Advisor'
+          extLabel = null
+          role = null
+        } else if (c.agent_ext) {
+          key = `ext:${c.agent_ext}`
+          const e = extMap.get(c.agent_ext)
+          displayName = e?.display_name || c.agent_name || `Ext ${c.agent_ext}`
+          extLabel = c.agent_ext
+          role = e?.role || null
+        } else {
+          continue  // missed / no answering agent — counted as "unassigned" below
+        }
+        let a = agentMap.get(key)
+        if (!a) {
+          a = {
+            key, extension: key, ext_label: extLabel, display_name: displayName, role,
+            today_total: 0, today_answered_inbound: 0, today_outbound: 0,
+            today_talk_seconds: 0, week_talk_seconds: 0,
+          }
+          agentMap.set(key, a)
+        }
         a.today_total += 1
         if (c.direction === 'inbound' && c.disposition === 'ANSWERED') a.today_answered_inbound += 1
         if (c.direction === 'outbound') a.today_outbound += 1

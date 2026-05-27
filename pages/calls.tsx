@@ -21,6 +21,7 @@ interface CallRow {
   caller_name: string | null
   agent_ext: string | null
   agent_name: string | null
+  effective_advisor_name: string | null
   duration_seconds: number
   billsec_seconds: number
   disposition: string
@@ -31,7 +32,9 @@ interface CallRow {
 }
 
 interface AgentStats {
-  extension: string
+  key: string                 // advisor filter token: "slack:<id>" | "ext:<n>"
+  extension: string           // == key (kept for compat)
+  ext_label: string | null    // extension number, or null for identified hot-deskers
   display_name: string
   role: string | null
   today_total: number
@@ -433,7 +436,7 @@ const speakerLabel = (n: number) => {
 
 function BatchTranscribeButton({ callCount, filters }: {
   callCount: number;
-  filters: { startDate?: string; endDate?: string; extension?: string; direction?: string; disposition?: string }
+  filters: { startDate?: string; endDate?: string; agent?: string; direction?: string; disposition?: string }
 }) {
   const [state, setState] = useState<'idle'|'confirming'|'queuing'|'done'|'error'>('idle')
   const [message, setMessage] = useState('')
@@ -794,8 +797,8 @@ export default function CallsPage({ user }: { user: PortalUserSSR }) {
   const [endDate, setEndDate] = useState<string>(ymdToday())
   const [activePreset, setActivePreset] = useState<Preset>('today')
 
-  // Other filters
-  const [filterExt, setFilterExt] = useState<string>('all')
+  // Other filters. filterAgent holds an advisor key ("slack:<id>"/"ext:<n>") or 'all'.
+  const [filterAgent, setFilterAgent] = useState<string>('all')
   const [filterDir, setFilterDir] = useState<string>('all')
   const [filterDisp, setFilterDisp] = useState<string>('all')
   const [search, setSearch] = useState<string>('')
@@ -835,7 +838,7 @@ export default function CallsPage({ user }: { user: PortalUserSSR }) {
       const params = new URLSearchParams()
       params.set('startDate', startDate)
       params.set('endDate', endDate)
-      if (filterExt !== 'all') params.set('extension', filterExt)
+      if (filterAgent !== 'all') params.set('agent', filterAgent)
       if (filterDir !== 'all') params.set('direction', filterDir)
       if (filterDisp !== 'all') params.set('disposition', filterDisp)
       if (searchDebounced) params.set('search', searchDebounced)
@@ -843,7 +846,7 @@ export default function CallsPage({ user }: { user: PortalUserSSR }) {
       const statsParams = new URLSearchParams()
       statsParams.set('startDate', startDate)
       statsParams.set('endDate', endDate)
-      if (filterExt !== 'all') statsParams.set('extension', filterExt)
+      if (filterAgent !== 'all') statsParams.set('agent', filterAgent)
 
       const [callsRes, statsRes] = await Promise.all([
         fetch(`/api/calls?${params.toString()}`),
@@ -863,7 +866,7 @@ export default function CallsPage({ user }: { user: PortalUserSSR }) {
     } finally {
       setLoading(false); setRefreshing(false)
     }
-  }, [router, startDate, endDate, filterExt, filterDir, filterDisp, searchDebounced])
+  }, [router, startDate, endDate, filterAgent, filterDir, filterDisp, searchDebounced])
 
   useEffect(() => { load(false) }, [load])
 
@@ -879,7 +882,7 @@ export default function CallsPage({ user }: { user: PortalUserSSR }) {
     return Math.max(...stats.agents.map(a => a.week_talk_seconds), 1)
   }, [stats])
 
-  const filterExtName = filterExt !== 'all' ? stats?.agents.find(a => a.extension === filterExt)?.display_name : null
+  const filterAgentName = filterAgent !== 'all' ? stats?.agents.find(a => a.key === filterAgent)?.display_name : null
   const fy = currentFY()
 
   // ─── Feed call analytics summary to the global AI chatbot ───────────────
@@ -892,8 +895,8 @@ export default function CallsPage({ user }: { user: PortalUserSSR }) {
     setChatContext({
       dateRange: { startDate, endDate, preset: activePreset },
       filters: {
-        extension: filterExt === 'all' ? null : filterExt,
-        extensionName: filterExtName || null,
+        agent: filterAgent === 'all' ? null : filterAgent,
+        agentName: filterAgentName || null,
         direction: filterDir === 'all' ? null : filterDir,
         disposition: filterDisp === 'all' ? null : filterDisp,
         searchTerm: searchDebounced || null,
@@ -910,7 +913,7 @@ export default function CallsPage({ user }: { user: PortalUserSSR }) {
         .slice(0, 8)
         .map(a => ({
           name: a.display_name,
-          extension: a.extension,
+          extension: a.ext_label,
           role: a.role,
           todayCalls: a.today_total,
           todayAnsweredInbound: a.today_answered_inbound,
@@ -928,6 +931,7 @@ export default function CallsPage({ user }: { user: PortalUserSSR }) {
         callerName: c.caller_name,
         agentName: c.agent_name,
         agentExt: c.agent_ext,
+        advisorName: c.effective_advisor_name,
         durationSeconds: c.duration_seconds,
         billsecSeconds: c.billsec_seconds,
         disposition: c.disposition,
@@ -943,6 +947,7 @@ export default function CallsPage({ user }: { user: PortalUserSSR }) {
         callerName: selectedCall.caller_name,
         agentName: selectedCall.agent_name,
         agentExt: selectedCall.agent_ext,
+        advisorName: selectedCall.effective_advisor_name,
         durationSeconds: selectedCall.duration_seconds,
         billsecSeconds: selectedCall.billsec_seconds,
         disposition: selectedCall.disposition,
@@ -953,7 +958,7 @@ export default function CallsPage({ user }: { user: PortalUserSSR }) {
     })
     return () => { setChatContext(null) }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [loading, calls, stats, selectedCall, startDate, endDate, activePreset, filterExt, filterDir, filterDisp, searchDebounced, truncated])
+  }, [loading, calls, stats, selectedCall, startDate, endDate, activePreset, filterAgent, filterDir, filterDisp, searchDebounced, truncated])
 
   return (
     <>
@@ -1060,12 +1065,12 @@ export default function CallsPage({ user }: { user: PortalUserSSR }) {
                           {stats.agents.length === 0 ? (
                             <div style={{ padding: 24, textAlign: 'center', fontSize: 12, color: T.text3 }}>No agent activity yet</div>
                           ) : stats.agents.map(a => {
-                            const isActive = filterExt === a.extension
+                            const isActive = filterAgent === a.key
                             const pct = Math.round((a.week_talk_seconds / maxWeekTalk) * 100)
                             return (
                               <button
-                                key={a.extension}
-                                onClick={() => setFilterExt(isActive ? 'all' : a.extension)}
+                                key={a.key}
+                                onClick={() => setFilterAgent(isActive ? 'all' : a.key)}
                                 style={{
                                   display: 'block', width: '100%', padding: '12px 16px',
                                   border: 'none', borderBottom: `1px solid ${T.border}`,
@@ -1075,7 +1080,7 @@ export default function CallsPage({ user }: { user: PortalUserSSR }) {
                                 }}>
                                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 4 }}>
                                   <div style={{ fontSize: 13, fontWeight: 500 }}>{a.display_name}</div>
-                                  <div style={{ fontSize: 10, color: T.text3, fontFamily: 'monospace' }}>{a.extension}</div>
+                                  <div style={{ fontSize: 10, color: T.text3, fontFamily: 'monospace' }}>{a.ext_label ? `Ext ${a.ext_label}` : 'identified'}</div>
                                 </div>
                                 <div style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 11, color: T.text2, fontFamily: 'monospace', marginBottom: 6 }}>
                                   <span>Period: {a.today_total}</span>
@@ -1151,10 +1156,10 @@ export default function CallsPage({ user }: { user: PortalUserSSR }) {
                         <option value="answered">Answered</option>
                         <option value="missed">Missed</option>
                       </select>
-                      {filterExt !== 'all' && filterExtName && (
-                        <button onClick={() => setFilterExt('all')}
+                      {filterAgent !== 'all' && filterAgentName && (
+                        <button onClick={() => setFilterAgent('all')}
                           style={{ padding: '5px 10px', background: T.blue, border: 'none', borderRadius: 5, color: '#fff', fontSize: 11, cursor: 'pointer', fontFamily: 'inherit', display: 'flex', alignItems: 'center', gap: 6 }}>
-                          {filterExtName} <span style={{ fontSize: 14, lineHeight: 1 }}>×</span>
+                          {filterAgentName} <span style={{ fontSize: 14, lineHeight: 1 }}>×</span>
                         </button>
                       )}
                     </div>
@@ -1208,10 +1213,10 @@ export default function CallsPage({ user }: { user: PortalUserSSR }) {
                             )}
                           </div>
                           <div>
-                            {c.agent_name ? (
+                            {(c.effective_advisor_name || c.agent_name) ? (
                               <>
-                                <div style={{ fontSize: 11, color: T.text }}>{c.agent_name}</div>
-                                <div style={{ fontSize: 10, color: T.text3, fontFamily: 'monospace' }}>Ext {c.agent_ext}</div>
+                                <div style={{ fontSize: 11, color: T.text }}>{c.effective_advisor_name || c.agent_name}</div>
+                                <div style={{ fontSize: 10, color: T.text3, fontFamily: 'monospace' }}>{c.agent_ext ? `Ext ${c.agent_ext}` : '—'}</div>
                               </>
                             ) : (
                               <div style={{ fontSize: 11, color: T.text3, fontStyle: 'italic' }}>Unanswered</div>
@@ -1237,7 +1242,7 @@ export default function CallsPage({ user }: { user: PortalUserSSR }) {
                       <span style={{ fontFamily: 'monospace' }}>{calls.length} calls shown{truncated ? ' (row limit hit — narrow filters for more)' : ''}</span>
                       <BatchTranscribeButton
                         callCount={calls.length}
-                        filters={{ startDate, endDate, extension: filterExt !== 'all' ? filterExt : undefined, direction: filterDir !== 'all' ? filterDir : undefined, disposition: filterDisp !== 'all' ? filterDisp : undefined }}
+                        filters={{ startDate, endDate, agent: filterAgent !== 'all' ? filterAgent : undefined, direction: filterDir !== 'all' ? filterDir : undefined, disposition: filterDisp !== 'all' ? filterDisp : undefined }}
                       />
                     </div>
                   </div>
@@ -1291,7 +1296,9 @@ export default function CallsPage({ user }: { user: PortalUserSSR }) {
                 {[
                   ['Direction', selectedCall.direction.charAt(0).toUpperCase() + selectedCall.direction.slice(1)],
                   ['Status', selectedCall.disposition === 'ANSWERED' ? 'Answered' : 'Missed'],
-                  ['Agent', selectedCall.agent_name ? `${selectedCall.agent_name} (Ext ${selectedCall.agent_ext})` : 'Nobody answered'],
+                  ['Agent', selectedCall.effective_advisor_name
+                    ? `${selectedCall.effective_advisor_name}${selectedCall.agent_ext ? ` (on Ext ${selectedCall.agent_ext})` : ''}`
+                    : (selectedCall.agent_name ? `${selectedCall.agent_name} (Ext ${selectedCall.agent_ext})` : 'Nobody answered')],
                   ['Talk Time', formatDuration(selectedCall.billsec_seconds || selectedCall.duration_seconds)],
                   ['When', new Date(selectedCall.call_date).toLocaleString('en-AU')],
                   ['Recording', selectedCall.has_recording ? 'Available (see player below)' : 'None'],

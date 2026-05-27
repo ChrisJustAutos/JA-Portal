@@ -5,6 +5,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { createClient } from '@supabase/supabase-js'
 import { requireAuth } from '../../../lib/auth'
+import { parseAgentKey } from '../../../lib/calls-advisor'
 
 export const config = { maxDuration: 30 }
 
@@ -26,7 +27,7 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
       const q = req.body || {}
       const startDate = q.startDate ? String(q.startDate) : null
       const endDate = q.endDate ? String(q.endDate) : null
-      const extension = q.extension ? String(q.extension) : null
+      const agentKey = parseAgentKey(q.agent ? String(q.agent) : (q.extension ? String(q.extension) : null))
       const direction = q.direction ? String(q.direction) : null
       const disposition = q.disposition ? String(q.disposition) : null
       const maxJobs = Math.min(parseInt(String(q.maxJobs || '50'), 10) || 50, 500)
@@ -51,7 +52,8 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
         const d = new Date(endDate + 'T23:59:59.999Z')
         query = query.lte('call_date', new Date(d.getTime() - tzOffsetMs).toISOString())
       }
-      if (extension) query = query.eq('agent_ext', extension)
+      if (agentKey?.kind === 'slack') query = query.eq('effective_advisor_slack_user_id', agentKey.id)
+      else if (agentKey?.kind === 'ext') query = query.eq('agent_ext', agentKey.ext).is('effective_advisor_slack_user_id', null)
       if (direction === 'inbound' || direction === 'outbound') query = query.eq('direction', direction)
       if (disposition === 'answered') query = query.eq('disposition', 'ANSWERED')
       else if (disposition === 'missed') query = query.neq('disposition', 'ANSWERED')
