@@ -202,9 +202,26 @@ function AccountsSection({ settings, income, banks, categories, accountsError, o
     const a = banks.find((x: any) => x.uid === uid)
     onSave({ payment_accounts: { ...(settings.payment_accounts || {}), [tender]: { uid: uid || null, name: a ? a.name : null, method } } })
   }
+  const [sync, setSync] = useState<{ busy: boolean; msg: string }>({ busy: false, msg: '' })
+  async function runSync() {
+    setSync({ busy: true, msg: 'Syncing from MYOB…' })
+    try {
+      const r = await fetch('/api/workshop/sync?what=all', { method: 'POST' })
+      const d = await r.json()
+      if (!r.ok || !d.ok) { setSync({ busy: false, msg: d.error || 'Sync failed' }); return }
+      const parts = (d.results || []).map((x: any) => `${x.kind} ${x.upserted}/${x.scanned}`).join(' · ')
+      setSync({ busy: false, msg: `Synced — ${parts}` })
+    } catch (e: any) { setSync({ busy: false, msg: e?.message || 'Sync failed' }) }
+  }
   return (
     <Card title="MYOB accounts (VPS)" hint="Where workshop sales, parts and payments post in MYOB — mirrors the MechanicDesk account map. Pickers load live from the VPS chart of accounts.">
       {accountsError && <div style={{ fontSize: 12, color: T.amber, marginBottom: 12 }}>{accountsError}</div>}
+
+      {/* Pull customers + inventory from MYOB (moved here from the diary) */}
+      <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', padding: '12px 14px', borderRadius: 8, marginBottom: 14, background: T.bg3, border: `1px solid ${T.border2}` }}>
+        <button onClick={runSync} disabled={sync.busy} style={pbtn(T.accent, true)}>{sync.busy ? 'Syncing…' : '↻ Sync customers & stock from MYOB'}</button>
+        <span style={{ fontSize: 11, color: sync.msg.startsWith('Synced') ? T.green : (sync.msg ? T.amber : T.text3) }}>{sync.msg || 'Pulls VPS customers + inventory into the portal pickers.'}</span>
+      </div>
 
       <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start', padding: '12px 14px', borderRadius: 8, marginBottom: 18, background: settings.myob_posting_enabled ? `${T.green}14` : T.bg3, border: `1px solid ${settings.myob_posting_enabled ? T.green + '55' : T.border2}` }}>
         <input type="checkbox" checked={!!settings.myob_posting_enabled} onChange={e => onSave({ myob_posting_enabled: e.target.checked })} style={{ marginTop: 2 }} />
