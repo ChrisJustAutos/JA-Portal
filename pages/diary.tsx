@@ -94,7 +94,7 @@ function durationHours(b: { starts_at: string; ends_at: string }): number {
 }
 
 // ── Booking block (positioned in a lane) ────────────────────────────────
-function BookingBlock({ b, onClick, showTech }: { b: BookingRow; onClick: () => void; showTech?: boolean }) {
+function BookingBlock({ b, onClick, showTech, draggable }: { b: BookingRow; onClick: () => void; showTech?: boolean; draggable?: boolean }) {
   const top = topPxFor(b.starts_at)
   const height = Math.max(SLOT_PX * 0.9, bookingDurationMin(b) / SLOT_MIN * SLOT_PX - 2)
   const c = BOOKING_STATUS_META[b.status].color
@@ -102,12 +102,14 @@ function BookingBlock({ b, onClick, showTech }: { b: BookingRow; onClick: () => 
   const cust = b.customer ? customerLabel(b.customer) : ''
   return (
     <div
+      draggable={!!draggable}
+      onDragStart={draggable ? (e) => { e.dataTransfer.setData('text/plain', b.id); e.dataTransfer.effectAllowed = 'move' } : undefined}
       onClick={(e) => { e.stopPropagation(); onClick() }}
       title={`${bneTimeStr(b.starts_at)}–${bneTimeStr(b.ends_at)} · ${cust} · ${veh}`}
       style={{
         position: 'absolute', top, left: 2, right: 2, height, overflow: 'hidden',
         background: `${c}1c`, borderLeft: `3px solid ${c}`, border: `1px solid ${c}44`,
-        borderRadius: 4, padding: '3px 6px', cursor: 'pointer', fontSize: 11, lineHeight: 1.25,
+        borderRadius: 4, padding: '3px 6px', cursor: draggable ? 'grab' : 'pointer', fontSize: 11, lineHeight: 1.25,
       }}>
       <div style={{ color: T.text, fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
         {veh || cust || 'Booking'}
@@ -132,6 +134,7 @@ export default function DiaryPage({ user }: { user: PortalUserSSR }) {
   const [techs, setTechs] = useState<Tech[]>([])
   const [notes, setNotes] = useState<any[]>([])
   const [capacity, setCapacity] = useState<Record<string, number>>({})
+  const [techFilter, setTechFilter] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null)
   const [editing, setEditing] = useState<Partial<BookingRow> | null>(null) // open modal when non-null
@@ -228,6 +231,25 @@ export default function DiaryPage({ user }: { user: PortalUserSSR }) {
     load()
   }
 
+  // Drag a booking to a new lane (day: reassign tech + retime) or day (week: move date + retime).
+  function dropMove(e: React.DragEvent<HTMLDivElement>, ymd: string, techExt: string | null, setTech: boolean) {
+    e.preventDefault()
+    if (!canEdit) return
+    const id = e.dataTransfer.getData('text/plain'); if (!id) return
+    const b = bookings.find(x => x.id === id); if (!b) return
+    const rect = e.currentTarget.getBoundingClientRect()
+    const slot = Math.max(0, Math.floor((e.clientY - rect.top) / SLOT_PX))
+    const startMin = DAY_START_MIN + slot * SLOT_MIN
+    const durMin = Math.max(30, Math.round((new Date(b.ends_at).getTime() - new Date(b.starts_at).getTime()) / 60000))
+    const startIso = isoFromBne(ymd, minsToHHMM(startMin))
+    const endIso = new Date(new Date(startIso).getTime() + durMin * 60000).toISOString()
+    const patch: any = { starts_at: startIso, ends_at: endIso }
+    if (setTech) patch.technician_ext = techExt
+    fetch(`/api/workshop/bookings/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(patch) }).then(load)
+  }
+
+  const displayBookings = techFilter ? bookings.filter(b => (b.technician_ext || '') === techFilter) : bookings
+
   return (
     <>
       <Head><title>Workshop Diary — Just Autos</title><meta name="viewport" content="width=device-width,initial-scale=1"/><meta name="robots" content="noindex,nofollow"/></Head>
@@ -280,20 +302,23 @@ export default function DiaryPage({ user }: { user: PortalUserSSR }) {
 
           {/* Grid */}
           <div style={{ flex: 1, overflow: 'auto', padding: 16 }}>
+            {view !== 'month' && <TechPills techs={techs} active={techFilter} onPick={setTechFilter} />}
             {view === 'day' && (
               <DayNotes date={date} notes={notes} canEdit={canEdit} onAdd={(c) => addNote(date, c)} onDelete={delNote} />
             )}
             {view === 'day' ? (
-              <DayGrid bookings={bookings} techs={techs} date={date} hourLines={hourLines}
-                capacity={capacity} canEditCapacity={isAdmin} onSetCapacity={setLaneCapacity}
-                onLaneClick={laneClick} onBooking={(b) => canEdit && setEditing(b)} />
+              <DayGrid bookings={displayBookings} techs={techFilter ? techs.filter(t => t.ext === techFilter) : techs} showUnassigned={!techFilter}
+                date={date} hourLines={hourLines} capacity={capacity} canEdit={canEdit} canEditCapacity={isAdmin} onSetCapacity={setLaneCapacity}
+                onLaneClick={laneClick} onBooking={(b) => canEdit && setEditing(b)}
+                onDropBooking={(e, techExt) => dropMove(e, date, techExt, true)} />
             ) : view === 'week' ? (
-              <WeekGrid bookings={bookings} days={weekDays} hourLines={hourLines}
+              <WeekGrid bookings={displayBookings} days={weekDays} hourLines={hourLines} canEdit={canEdit}
                 onDayClick={(ymd) => { setDate(ymd); setView('day') }}
                 onSlotClick={(ymd, e) => laneClick(e, ymd, null)}
-                onBooking={(b) => canEdit && setEditing(b)} />
+                onBooking={(b) => canEdit && setEditing(b)}
+                onDropBooking={(e, ymd) => dropMove(e, ymd, null, false)} />
             ) : (
-              <MonthGrid date={date} bookings={bookings} notes={notes} onDayClick={(ymd) => { setDate(ymd); setView('day') }} />
+              <MonthGrid date={date} bookings={displayBookings} notes={notes} onDayClick={(ymd) => { setDate(ymd); setView('day') }} />
             )}
             {!loading && bookings.length === 0 && view !== 'month' && (
               <div style={{ textAlign: 'center', color: T.text3, fontSize: 12, marginTop: 24 }}>
@@ -325,16 +350,46 @@ function btn(active: boolean): React.CSSProperties {
   }
 }
 
+// ── Technician filter pills (avatar chips; click to focus one tech's lane) ──
+const PILL_COLORS = ['#4f8ef7', '#a78bfa', '#34c77b', '#f5a623', '#f04e4e', '#2dd4bf', '#ef7bd0', '#8b90a0']
+function techInitials(name: string): string {
+  const parts = name.replace(/^[A-Za-z]\s*-\s*/, '').trim().split(/\s+/).filter(Boolean)
+  if (!parts.length) return '?'
+  return (parts[0][0] + (parts[1]?.[0] || '')).toUpperCase()
+}
+function TechPills({ techs, active, onPick }: { techs: Tech[]; active: string | null; onPick: (ext: string | null) => void }) {
+  function pill(key: string | null, label: string, initials: string, color: string) {
+    const on = active === key
+    return (
+      <button key={key ?? '__all'} onClick={() => onPick(on ? null : key)} style={{
+        display: 'inline-flex', alignItems: 'center', gap: 6, padding: '3px 11px 3px 3px', borderRadius: 20, cursor: 'pointer', fontFamily: 'inherit',
+        background: on ? `${color}22` : T.bg2, border: `1px solid ${on ? color : T.border2}`,
+      }}>
+        <span style={{ width: 22, height: 22, borderRadius: '50%', background: color, color: '#fff', fontSize: 9, fontWeight: 800, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{initials}</span>
+        <span style={{ fontSize: 11, fontWeight: 600, color: on ? color : T.text2 }}>{label}</span>
+      </button>
+    )
+  }
+  return (
+    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 12 }}>
+      {pill(null, 'All techs', '✶', T.text3)}
+      {techs.map((t, i) => pill(t.ext, t.name.split(/\s+/)[0] || t.ext, techInitials(t.name), PILL_COLORS[i % PILL_COLORS.length]))}
+    </div>
+  )
+}
+
 // ── Day grid: time axis + one lane per technician (with workload bar) ────
 const LANE_HEADER_PX = 46
-function DayGrid({ bookings, techs, date, hourLines, capacity, canEditCapacity, onSetCapacity, onLaneClick, onBooking }: {
+function DayGrid({ bookings, techs, date, hourLines, capacity, canEdit, canEditCapacity, onSetCapacity, onLaneClick, onBooking, onDropBooking, showUnassigned }: {
   bookings: BookingRow[]; techs: Tech[]; date: string; hourLines: number[]
-  capacity: Record<string, number>; canEditCapacity: boolean; onSetCapacity: (ext: string) => void
+  capacity: Record<string, number>; canEdit: boolean; canEditCapacity: boolean; onSetCapacity: (ext: string) => void
   onLaneClick: (e: React.MouseEvent<HTMLDivElement>, ymd: string, techExt: string | null) => void
   onBooking: (b: BookingRow) => void
+  onDropBooking: (e: React.DragEvent<HTMLDivElement>, techExt: string | null) => void
+  showUnassigned: boolean
 }) {
-  // "Unassigned" lane catches bookings with no technician.
-  const lanes: Tech[] = [{ ext: '', name: 'Unassigned' }, ...techs]
+  // "Unassigned" lane catches bookings with no technician (hidden when filtered to a tech).
+  const lanes: Tech[] = showUnassigned ? [{ ext: '', name: 'Unassigned' }, ...techs] : [...techs]
   const byLane = (ext: string) => bookings.filter(b => (b.technician_ext || '') === ext)
   return (
     <div style={{ display: 'flex', minWidth: 'fit-content', border: `1px solid ${T.border}`, borderRadius: 8, overflow: 'hidden', background: T.bg2 }}>
@@ -370,11 +425,13 @@ function DayGrid({ bookings, techs, date, hourLines, capacity, canEditCapacity, 
                 </div>
               ) : <div style={{ height: 13 }} />}
             </div>
-            <div onClick={(e) => onLaneClick(e, date, lane.ext || null)} style={{ position: 'relative', height: GRID_PX, cursor: 'copy' }}>
+            <div onClick={(e) => onLaneClick(e, date, lane.ext || null)}
+              onDragOver={(e) => e.preventDefault()} onDrop={(e) => onDropBooking(e, lane.ext || null)}
+              style={{ position: 'relative', height: GRID_PX, cursor: 'copy' }}>
               {hourLines.map((h, i) => (
                 <div key={h} style={{ position: 'absolute', top: i * 2 * SLOT_PX, left: 0, right: 0, borderTop: `1px solid ${T.border}` }} />
               ))}
-              {laneBookings.map(b => <BookingBlock key={b.id} b={b} onClick={() => onBooking(b)} />)}
+              {laneBookings.map(b => <BookingBlock key={b.id} b={b} draggable={canEdit} onClick={() => onBooking(b)} />)}
             </div>
           </div>
         )
@@ -439,11 +496,12 @@ function DayNotes({ date, notes, canEdit, onAdd, onDelete }: { date: string; not
 }
 
 // ── Week grid: 7 day columns ────────────────────────────────────────────
-function WeekGrid({ bookings, days, hourLines, onDayClick, onSlotClick, onBooking }: {
-  bookings: BookingRow[]; days: string[]; hourLines: number[]
+function WeekGrid({ bookings, days, hourLines, canEdit, onDayClick, onSlotClick, onBooking, onDropBooking }: {
+  bookings: BookingRow[]; days: string[]; hourLines: number[]; canEdit: boolean
   onDayClick: (ymd: string) => void
   onSlotClick: (ymd: string, e: React.MouseEvent<HTMLDivElement>) => void
   onBooking: (b: BookingRow) => void
+  onDropBooking: (e: React.DragEvent<HTMLDivElement>, ymd: string) => void
 }) {
   const today = ymdBrisbane(new Date())
   return (
@@ -462,11 +520,13 @@ function WeekGrid({ bookings, days, hourLines, onDayClick, onSlotClick, onBookin
             style={{ height: 32, borderBottom: `1px solid ${T.border}`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, fontWeight: 600, color: ymd === today ? T.blue : T.text2, background: ymd === today ? 'rgba(79,142,247,0.08)' : T.bg3, cursor: 'pointer' }}>
             {dayLabel(ymd)}
           </div>
-          <div onClick={(e) => onSlotClick(ymd, e)} style={{ position: 'relative', height: GRID_PX, cursor: 'copy' }}>
+          <div onClick={(e) => onSlotClick(ymd, e)}
+            onDragOver={(e) => e.preventDefault()} onDrop={(e) => onDropBooking(e, ymd)}
+            style={{ position: 'relative', height: GRID_PX, cursor: 'copy' }}>
             {hourLines.map((h, i) => (
               <div key={h} style={{ position: 'absolute', top: i * 2 * SLOT_PX, left: 0, right: 0, borderTop: `1px solid ${T.border}` }} />
             ))}
-            {bookings.filter(b => bneYmd(b.starts_at) === ymd).map(b => <BookingBlock key={b.id} b={b} onClick={() => onBooking(b)} showTech />)}
+            {bookings.filter(b => bneYmd(b.starts_at) === ymd).map(b => <BookingBlock key={b.id} b={b} draggable={canEdit} onClick={() => onBooking(b)} showTech />)}
           </div>
         </div>
       ))}
