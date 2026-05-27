@@ -2,12 +2,13 @@
 // Role → permission mapping. Shared between client (for UI gating) and server (for API gating).
 // Source of truth — if you add a new feature, add its permission here first.
 
-export type UserRole = 'admin' | 'manager' | 'sales' | 'accountant' | 'viewer'
+export type UserRole = 'admin' | 'manager' | 'sales' | 'accountant' | 'viewer' | 'workshop'
 
 export const ROLE_LABELS: Record<UserRole, string> = {
   admin:      'Admin',
   manager:    'Manager',
   sales:      'Sales',
+  workshop:   'Workshop',
   accountant: 'Accountant',
   viewer:     'Viewer',
 }
@@ -16,6 +17,7 @@ export const ROLE_DESCRIPTIONS: Record<UserRole, string> = {
   admin:      'Full access including user management and settings',
   manager:    'All data, cannot manage users or settings',
   sales:      'Leads/Orders, read-only distributors',
+  workshop:   'Workshop only — diary, jobs, quotes, inventory & tasks. No financial, leads or admin access.',
   accountant: 'P&L, invoices, payables, reports',
   viewer:     'Read-only view of dashboards',
 }
@@ -85,6 +87,12 @@ const ROLE_PERMISSIONS: Record<UserRole, Permission[]> = {
     'view:dashboards','view:overview','view:leads','view:distributors','view:calls','view:reports',
     'view:b2b',
     'edit:leads','generate:reports',
+    'view:diary','edit:bookings',
+  ],
+  // Least-privilege workshop login: only the workshop area (diary + jobs +
+  // quotes + inventory + tasks all gate on view:diary). No financial/leads/
+  // calls/admin access. Trim to diary-only per user via the tab allowlist.
+  workshop: [
     'view:diary','edit:bookings',
   ],
   accountant: [
@@ -213,7 +221,6 @@ export const PORTAL_TABS: PortalTab[] = [
   { id: 'workshop-quotes', label: 'Quotes',        permission: 'view:diary' },
   { id: 'workshop-inventory', label: 'Inventory',  permission: 'view:diary' },
   { id: 'workshop-tasks',  label: 'Tasks',          permission: 'view:diary' },
-  { id: 'workshop-settings', label: 'Workshop Settings', permission: 'admin:settings' },
   { id: 'reports',       label: 'Reports',         permission: 'view:reports' },
   { id: 'todos',         label: 'To-Dos',          permission: 'view:todos' },
   { id: 'jobs',          label: 'Jobs',            permission: 'view:jobs' },

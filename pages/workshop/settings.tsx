@@ -11,6 +11,7 @@
 import { useEffect, useState, useCallback } from 'react'
 import Head from 'next/head'
 import Link from 'next/link'
+import { useRouter } from 'next/router'
 import PortalTopBar from '../../lib/PortalTopBar'
 import { requirePageAuth } from '../../lib/authServer'
 
@@ -37,6 +38,8 @@ const TABS: { id: Tab; label: string }[] = [
 ]
 
 export default function WorkshopSettingsPage({ user }: { user: PortalUserSSR }) {
+  const router = useRouter()
+  const embed = router.query.embed === '1'   // rendered inside the Settings hub window
   const [tab, setTab] = useState<Tab>('business')
   const [settings, setSettings] = useState<any | null>(null)
   const [accounts, setAccounts] = useState<any[]>([])
@@ -84,17 +87,17 @@ export default function WorkshopSettingsPage({ user }: { user: PortalUserSSR }) 
   return (
     <>
       <Head><title>Workshop Settings — Just Autos</title><meta name="viewport" content="width=device-width,initial-scale=1"/><meta name="robots" content="noindex,nofollow"/></Head>
-      <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', overflow: 'hidden', fontFamily: "'DM Sans',system-ui,sans-serif", color: T.text }}>
+      <div style={{ display: 'flex', flexDirection: 'column', height: embed ? 'auto' : '100vh', minHeight: embed ? '100%' : undefined, overflow: embed ? 'visible' : 'hidden', fontFamily: "'DM Sans',system-ui,sans-serif", color: T.text, background: T.bg }}>
         <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet"/>
-        <PortalTopBar activeId="workshop-settings" currentUserRole={user.role} currentUserVisibleTabs={user.visibleTabs} currentUserName={user.displayName} currentUserEmail={user.email} />
+        {!embed && <PortalTopBar activeId="settings" currentUserRole={user.role} currentUserVisibleTabs={user.visibleTabs} currentUserName={user.displayName} currentUserEmail={user.email} />}
 
-        <div style={{ flex: 1, overflow: 'auto', background: T.bg, padding: 20 }}>
+        <div style={{ flex: embed ? undefined : 1, overflow: embed ? 'visible' : 'auto', background: T.bg, padding: embed ? 4 : 20 }}>
           <div style={{ maxWidth: 960, margin: '0 auto' }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
-              <Link href="/diary" style={{ fontSize: 12, color: T.text2, textDecoration: 'none' }}>‹ Back to diary</Link>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: embed ? 'flex-end' : 'space-between', marginBottom: 6, minHeight: 18 }}>
+              {!embed && <Link href="/diary" style={{ fontSize: 12, color: T.text2, textDecoration: 'none' }}>‹ Back to diary</Link>}
               {flash && <span style={{ fontSize: 12, color: flash.includes('✓') || flash.startsWith('Saved') || flash.startsWith('Retired') || flash.startsWith('Removed') ? T.green : T.amber }}>{flash}</span>}
             </div>
-            <h1 style={{ fontSize: 22, fontWeight: 600, margin: '4px 0 16px' }}>Workshop settings</h1>
+            {!embed && <h1 style={{ fontSize: 22, fontWeight: 600, margin: '4px 0 16px' }}>Workshop settings</h1>}
 
             {loading ? <div style={{ color: T.text3, padding: 40, textAlign: 'center' }}>Loading…</div> : (
               <div style={{ display: 'grid', gridTemplateColumns: '210px 1fr', gap: 18, alignItems: 'start' }}>

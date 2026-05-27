@@ -15,7 +15,7 @@ async function patch(req: NextApiRequest, res: NextApiResponse, actor: any) {
   const id = req.query.id as string
   if (!id) return res.status(400).json({ error: 'id required' })
   const { role, display_name, is_active, visible_tabs, phone_extension } = req.body || {}
-  const validRoles = ['admin','manager','sales','accountant','viewer']
+  const validRoles = ['admin','manager','sales','accountant','viewer','workshop']
   if (role !== undefined && !validRoles.includes(role)) return res.status(400).json({ error: 'Invalid role' })
 
   // Prevent self-demoting (admin can't remove their own admin role — safety against locking yourself out)

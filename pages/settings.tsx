@@ -30,7 +30,7 @@ const T = {
 }
 
 interface PortalUserSSR { id: string; email: string; displayName: string | null; role: UserRole }
-type SettingsTab = 'general'|'vin-codes'|'backfill'|'dist-report'|'connections'|'data-imports'|'users'|'audit'|'profile'
+type SettingsTab = 'general'|'vin-codes'|'backfill'|'dist-report'|'connections'|'data-imports'|'users'|'audit'|'profile'|'workshop'
 
 export default function SettingsPage({ user }: { user: PortalUserSSR }) {
   const router = useRouter()
@@ -50,6 +50,7 @@ export default function SettingsPage({ user }: { user: PortalUserSSR }) {
     qTab === 'users' ? 'users' :
     qTab === 'audit' ? 'audit' :
     qTab === 'profile' ? 'profile' :
+    qTab === 'workshop' ? 'workshop' :
     qTab === 'groups' ? 'dist-report' :
     qTab === 'myob' ? 'connections' :
     'general'
@@ -74,6 +75,7 @@ export default function SettingsPage({ user }: { user: PortalUserSSR }) {
     { id: 'dist-report', label: 'Distributor Report', adminOnly: true,  icon: 'reports',       accent: T.green,  desc: 'Customers, groups & revenue categories' },
     { id: 'connections', label: 'Connections',        adminOnly: true,  icon: 'stripe-myob',   accent: T.teal,   desc: 'Integration health & MYOB' },
     { id: 'data-imports',label: 'Data Imports',       adminOnly: true,  icon: 'stocktake',     accent: T.purple, desc: 'Bulk imports & uploads' },
+    { id: 'workshop',    label: 'Workshop',           adminOnly: true,  icon: 'diary',         accent: T.teal,   desc: 'Technicians, documents, invoicing & SMS' },
     { id: 'vin-codes',   label: 'VIN Codes',          adminOnly: true,  icon: 'vehicle-sales', accent: T.amber,  desc: 'VIN prefix → model code rules' },
     { id: 'backfill',    label: 'Backfill',           adminOnly: true,  icon: 'jobs',          accent: T.teal,   desc: 'Orders ↔ quotes backfill' },
     { id: 'users',       label: 'Users',              adminOnly: true,  icon: 'team',          accent: T.blue,   desc: 'Invite, roles & tab access' },
@@ -83,7 +85,7 @@ export default function SettingsPage({ user }: { user: PortalUserSSR }) {
   const visibleSections = SECTIONS.filter(s => !s.adminOnly || isAdmin)
   const active = SECTIONS.find(s => s.id === openId) || null
   // Heavy sections (tables / iframes) get a wider window.
-  const WIDE: SettingsTab[] = ['dist-report','connections','data-imports','vin-codes','backfill','users']
+  const WIDE: SettingsTab[] = ['dist-report','connections','data-imports','vin-codes','backfill','users','workshop']
 
   function openSection(t: SettingsTab) {
     setOpenId(t)
@@ -190,6 +192,7 @@ export default function SettingsPage({ user }: { user: PortalUserSSR }) {
                   {active.id === 'connections' && isAdmin && <ConnectionsHubTab initialSubTab={initialConnSub}/>}
                   {active.id === 'data-imports'&& isAdmin && <DataImportsTab/>}
                   {active.id === 'vin-codes'   && isAdmin && <VinCodesTab/>}
+                  {active.id === 'workshop'    && isAdmin && <WorkshopSettingsEmbed/>}
                   {active.id === 'backfill'    && isAdmin && <BackfillTab/>}
                   {active.id === 'users'       && isAdmin && <UsersTab currentUser={user}/>}
                   {active.id === 'audit'       && isAdmin && <AuditTab/>}
@@ -700,6 +703,11 @@ function VinCodesTab() {
 function BackfillTab() {
   return <div style={{background:T.bg2,border:`1px solid ${T.border}`,borderRadius:10,overflow:'hidden',height:'calc(100vh - 200px)',minHeight:600}}>
     <iframe src="/admin/backfill?embed=1" style={{width:'100%',height:'100%',border:'none',display:'block'}} title="Orders ↔ Quotes backfill"/>
+  </div>
+}
+function WorkshopSettingsEmbed() {
+  return <div style={{background:T.bg2,border:`1px solid ${T.border}`,borderRadius:10,overflow:'hidden',height:'calc(100vh - 200px)',minHeight:600}}>
+    <iframe src="/workshop/settings?embed=1" style={{width:'100%',height:'100%',border:'none',display:'block'}} title="Workshop settings"/>
   </div>
 }
 

@@ -26,7 +26,7 @@ async function list(req: NextApiRequest, res: NextApiResponse) {
 async function invite(req: NextApiRequest, res: NextApiResponse, actor: any) {
   const { email, displayName, role, visible_tabs } = req.body || {}
   if (!email || !role) return res.status(400).json({ error: 'email and role required' })
-  const validRoles = ['admin','manager','sales','accountant','viewer']
+  const validRoles = ['admin','manager','sales','accountant','viewer','workshop']
   if (!validRoles.includes(role)) return res.status(400).json({ error: 'Invalid role' })
 
   // Validate visible_tabs: must be an array of strings from PORTAL_TABS ids,

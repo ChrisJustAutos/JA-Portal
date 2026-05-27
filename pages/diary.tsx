@@ -283,7 +283,7 @@ export default function DiaryPage({ user }: { user: PortalUserSSR }) {
                   {sync.busy ? '↻ Syncing…' : '↻ MYOB'}
                 </button>
                 {sync.msg && <span style={{ fontSize: 11, color: T.text3, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 260 }}>{sync.msg}</span>}
-                <button onClick={() => router.push('/workshop/settings')} style={btn(false)} title="Workshop settings — technicians, business details, invoicing, SMS">⚙ Settings</button>
+                <button onClick={() => router.push('/settings?tab=workshop')} style={btn(false)} title="Workshop settings — technicians, business details, invoicing, SMS">⚙ Settings</button>
               </>
             )}
             <div style={{ flex: 1 }} />
