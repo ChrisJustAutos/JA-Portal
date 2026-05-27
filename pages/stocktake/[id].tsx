@@ -457,6 +457,20 @@ export default function StocktakeDetailPage({ user }: { user: SessionUser }) {
                           {f}
                         </button>
                       ))}
+                      <span style={{width:1, height:18, background:T.border2, margin:'0 2px'}}/>
+                      <button
+                        onClick={() => downloadMatchCsv(filteredResults, filter, upload.filename)}
+                        disabled={filteredResults.length === 0}
+                        title={`Download the "${filter}" results (${filteredResults.length} rows) as CSV`}
+                        style={{
+                          padding:'4px 10px', borderRadius:4, fontSize:11, fontFamily:'inherit', fontWeight:600,
+                          background:'transparent',
+                          color: filteredResults.length === 0 ? T.text3 : T.blue,
+                          border:`1px solid ${filteredResults.length === 0 ? T.border2 : T.blue + '55'}`,
+                          cursor: filteredResults.length === 0 ? 'default' : 'pointer',
+                        }}>
+                        ↓ CSV ({filteredResults.length})
+                      </button>
                     </div>
                   </div>
 
@@ -712,6 +726,39 @@ function downloadCoverageCsv(items: CoverageItem[], filename: string) {
   const a = document.createElement('a')
   a.href = url
   a.download = `${filename.replace(/\.xlsx?$/i, '')}-uncounted-instock.csv`
+  document.body.appendChild(a); a.click(); a.remove()
+  setTimeout(() => URL.revokeObjectURL(url), 1000)
+}
+
+// Export match results (whatever the active filter shows: all / matched /
+// unmatched / variance) as CSV — mirrors the on-screen table columns.
+function downloadMatchCsv(rows: MatchEntry[], label: string, filename: string) {
+  const esc = (v: any) => { const s = String(v ?? ''); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s }
+  const header = ['Row', 'Sheet', 'SKU', 'MD Match', 'MD Stock #', 'Counted', 'System Qty', 'Variance', 'Status', 'Note']
+  const lines = [header.join(',')]
+  for (const r of rows) {
+    const v = rowVariance(r)
+    const note = r.status === 'ambiguous' && r.candidates
+      ? `${r.candidates.length} candidates: ${r.candidates.map(c => c.stock_number).join(' | ')}`
+      : (r.error || '')
+    lines.push([
+      r.row_number,
+      esc(r.sheet_name || ''),
+      esc(r.sku),
+      esc(r.md_stock_name || ''),
+      esc(r.md_stock_number || ''),
+      r.qty,
+      r.md_current_qty != null ? r.md_current_qty : '',
+      v != null ? v : '',
+      r.status,
+      esc(note),
+    ].join(','))
+  }
+  const blob = new Blob([lines.join('\r\n')], { type: 'text/csv;charset=utf-8;' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = `${filename.replace(/\.xlsx?$/i, '')}-${label}.csv`
   document.body.appendChild(a); a.click(); a.remove()
   setTimeout(() => URL.revokeObjectURL(url), 1000)
 }
