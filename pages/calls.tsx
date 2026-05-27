@@ -913,7 +913,7 @@ function LiveCallsBoard({ canMonitor }: { canMonitor: boolean }) {
         <div>
           {cards.map(c => {
             const secs = Math.max(0, Math.floor((Date.now() - new Date(c.startedAt).getTime()) / 1000))
-            const stateLabel = c.monitorable ? 'connected' : (c.state === 'up' ? 'up' : c.state)
+            const stateLabel = c.bridgedAt ? 'connected' : (c.state === 'up' ? 'live' : c.state)
             const agentName = c.agentExt ? extMap[c.agentExt] : null
             const agentLabel = agentName
               ? `${agentName} · Ext ${c.agentExt}`

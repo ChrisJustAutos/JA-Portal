@@ -14,11 +14,11 @@
 //     back. Nothing is exposed inbound on the PBX.
 
 // ── Snapshot shape ───────────────────────────────────────────────────────
-// One entry per Asterisk channel. A bridged call appears as two entries that
-// reference each other via peer_uniqueid / peer_channel; groupCalls() collapses
-// each pair into a single card.
+// One entry per Asterisk channel. All legs of one call share a `linkedid`,
+// which groupCalls() uses to collapse them into a single card.
 export interface LiveChannel {
-  uniqueid: string                 // Asterisk Uniqueid — stable across transfers
+  uniqueid: string                 // Asterisk Uniqueid — this channel/leg
+  linkedid: string | null          // shared across every leg of the same call
   channel: string                  // e.g. "PJSIP/203-000015eb"
   state: 'ringing' | 'up' | 'dialing' | 'busy' | 'down' | 'unknown'
   caller_id_num: string | null
@@ -46,7 +46,7 @@ export interface LiveCallCard {
   state: LiveChannel['state']
   startedAt: string
   bridgedAt: string | null
-  monitorable: boolean             // true only once state==='up' && bridged_at != null
+  monitorable: boolean             // true once the channel is answered (state==='up')
 }
 
 export type SpyMode = 'listen' | 'whisper' | 'barge'
@@ -87,9 +87,11 @@ export function isExtensionChannel(c: LiveChannel): boolean {
   return extOfChannel(c.channel) != null
 }
 
-// Buttons are only meaningful once both legs are bridged and talking.
-export function isMonitorable(state: LiveChannel['state'], bridgedAt: string | null): boolean {
-  return state === 'up' && !!bridgedAt
+// A channel is spyable once it's answered (state 'up'). We deliberately do NOT
+// require bridged_at: this Asterisk leaves it (and peer_uniqueid) unset for some
+// calls (e.g. inbound hot-desk), and ChanSpy attaches fine to any up channel.
+export function isMonitorable(state: LiveChannel['state']): boolean {
+  return state === 'up'
 }
 
 // PBX-side name fields are often junk for display ("<unknown>", "CID:074…").
@@ -113,56 +115,76 @@ function sameCall(a: LiveChannel, b: LiveChannel): boolean {
     a.connected_num === b.caller_id_num
 }
 
+// Build one card from all the legs of a single logical call.
+function buildCardFromLegs(legs: LiveChannel[]): LiveCallCard {
+  // Spy the internal PJSIP/<ext> leg (so Whisper reaches the agent).
+  const internal = legs.find(isExtensionChannel) ?? legs[0]
+  // The other party's leg = a non-extension (trunk) leg if present, else any
+  // other leg in the group.
+  const other =
+    legs.find(l => l.uniqueid !== internal.uniqueid && !isExtensionChannel(l)) ??
+    legs.find(l => l.uniqueid !== internal.uniqueid)
+
+  const externalNumber =
+    internal.connected_num || other?.caller_id_num || internal.caller_id_num || null
+  const externalName =
+    cleanName(internal.connected_name) || cleanName(other?.caller_id_name) || cleanName(internal.caller_id_name)
+  const bridgedAt = internal.bridged_at || legs.map(l => l.bridged_at).find(Boolean) || null
+  const startedAt =
+    legs.map(l => l.started_at).filter(Boolean).sort()[0] || internal.started_at
+
+  return {
+    key: internal.linkedid || internal.uniqueid,
+    spyTargetChannel: internal.channel,
+    spyTargetUniqueid: internal.uniqueid,
+    agentExt: extOfChannel(internal.channel),
+    externalNumber,
+    externalName,
+    direction: internal.direction ?? other?.direction ?? null,
+    state: internal.state,
+    startedAt,
+    bridgedAt,
+    monitorable: isMonitorable(internal.state),
+  }
+}
+
 // Collapse the raw channel list into one card per logical call. We spy the
 // agent's extension leg (so Whisper reaches the agent); the external party is
-// read from that leg's connected line (the customer it's bridged to).
+// read from that leg's connected line.
 //
-// Verified against a live bridged snapshot 2026-05-27: peer_uniqueid was null,
-// so pairing falls back to mirrored caller/connected ids. If the agent starts
-// emitting peer_uniqueid, that path is preferred automatically.
+// Pairing is by `linkedid` — the agent stamps the same one on every leg of a
+// call (verified 2026-05-27), so it's deterministic even when peer_uniqueid is
+// null (which it is on this Asterisk). Mirrored caller/connected ids are only a
+// last-resort fallback for a leg that somehow lacks a linkedid.
 export function groupCalls(channels: LiveChannel[] | null | undefined): LiveCallCard[] {
   const list = Array.isArray(channels) ? channels.filter(c => c && c.uniqueid && c.channel) : []
-  const seen = new Set<string>()
   const cards: LiveCallCard[] = []
+  const seen = new Set<string>()
 
+  // 1. Primary: group every leg sharing a linkedid into one call.
+  const byLinked = new Map<string, LiveChannel[]>()
+  for (const ch of list) {
+    if (!ch.linkedid) continue
+    const g = byLinked.get(ch.linkedid)
+    if (g) g.push(ch); else byLinked.set(ch.linkedid, [ch])
+    seen.add(ch.uniqueid)
+  }
+  for (const legs of Array.from(byLinked.values())) cards.push(buildCardFromLegs(legs))
+
+  // 2. Fallback for any leg without a linkedid: explicit peer link, else
+  //    mirrored caller/connected ids, else a standalone single-leg card.
   for (const ch of list) {
     if (seen.has(ch.uniqueid)) continue
-    // Prefer an explicit peer link; otherwise pair by mirrored caller/connected.
-    let peer = ch.peer_uniqueid ? list.find(c => c.uniqueid === ch.peer_uniqueid) : undefined
+    let peer = ch.peer_uniqueid
+      ? list.find(c => c.uniqueid === ch.peer_uniqueid && !seen.has(c.uniqueid))
+      : undefined
     if (!peer) peer = list.find(c => !seen.has(c.uniqueid) && sameCall(ch, c))
     seen.add(ch.uniqueid)
     if (peer) seen.add(peer.uniqueid)
-
-    const legs = peer ? [ch, peer] : [ch]
-    // Prefer the internal PJSIP/<ext> leg as the spy target; fall back to the
-    // first leg if neither (or both) is internal.
-    const internal = legs.find(isExtensionChannel) ?? legs[0]
-    const other = legs.find(l => l.uniqueid !== internal.uniqueid)
-
-    const externalNumber =
-      internal.connected_num || other?.caller_id_num || internal.caller_id_num || null
-    const externalName =
-      cleanName(internal.connected_name) || cleanName(other?.caller_id_name) || cleanName(internal.caller_id_name)
-    const bridgedAt = internal.bridged_at || other?.bridged_at || null
-    const startedAt =
-      [internal.started_at, other?.started_at].filter(Boolean).sort()[0] || internal.started_at
-
-    cards.push({
-      key: internal.uniqueid,
-      spyTargetChannel: internal.channel,
-      spyTargetUniqueid: internal.uniqueid,
-      agentExt: extOfChannel(internal.channel),
-      externalNumber,
-      externalName,
-      direction: internal.direction ?? other?.direction ?? null,
-      state: internal.state,
-      startedAt,
-      bridgedAt,
-      monitorable: isMonitorable(internal.state, bridgedAt),
-    })
+    cards.push(buildCardFromLegs(peer ? [ch, peer] : [ch]))
   }
 
-  // Live/bridged calls first, then longest-running first.
+  // Live calls first, then longest-running first.
   cards.sort((a, b) => {
     if (a.monitorable !== b.monitorable) return a.monitorable ? -1 : 1
     return new Date(a.startedAt).getTime() - new Date(b.startedAt).getTime()
