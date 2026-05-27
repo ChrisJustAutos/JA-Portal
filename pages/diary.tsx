@@ -112,6 +112,8 @@ export default function DiaryPage({ user }: { user: PortalUserSSR }) {
   const [loading, setLoading] = useState(true)
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null)
   const [editing, setEditing] = useState<Partial<BookingRow> | null>(null) // open modal when non-null
+  const [sync, setSync] = useState<{ busy: boolean; msg: string }>({ busy: false, msg: '' })
+  const isAdmin = roleHasPermission(user.role, 'admin:settings')
 
   const range = useMemo(() => {
     if (view === 'day') return brisbaneDayBounds(date)
@@ -133,6 +135,18 @@ export default function DiaryPage({ user }: { user: PortalUserSSR }) {
   }, [range])
 
   useEffect(() => { load() }, [load])
+
+  async function doSync() {
+    setSync({ busy: true, msg: 'Syncing from MYOB…' })
+    try {
+      const r = await fetch('/api/workshop/sync?what=all', { method: 'POST' })
+      const d = await r.json()
+      if (!r.ok || !d.ok) { setSync({ busy: false, msg: d.error || 'Sync failed' }); return }
+      const parts = (d.results || []).map((x: any) => `${x.kind} ${x.upserted}/${x.scanned}`).join(' · ')
+      setSync({ busy: false, msg: `Synced — ${parts}` })
+      load()
+    } catch (e: any) { setSync({ busy: false, msg: e?.message || 'Sync failed' }) }
+  }
 
   const weekDays = useMemo(() => {
     const ws = weekStartYmd(date)
@@ -185,6 +199,14 @@ export default function DiaryPage({ user }: { user: PortalUserSSR }) {
             <span style={{ fontSize: 13, color: T.text2, fontWeight: 500, minWidth: 200 }}>
               {view === 'day' ? dayLabel(date) : `Week of ${dayLabel(weekStartYmd(date))}`}
             </span>
+            {isAdmin && (
+              <>
+                <button onClick={doSync} disabled={sync.busy} style={btn(false)} title="Pull customers + inventory from MYOB">
+                  {sync.busy ? '↻ Syncing…' : '↻ MYOB'}
+                </button>
+                {sync.msg && <span style={{ fontSize: 11, color: T.text3, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 260 }}>{sync.msg}</span>}
+              </>
+            )}
             <div style={{ flex: 1 }} />
             <div style={{ display: 'flex', gap: 4 }}>
               <button onClick={() => setView('day')} style={btn(view === 'day')}>Day</button>
