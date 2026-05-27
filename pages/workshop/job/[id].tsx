@@ -62,6 +62,7 @@ export default function JobCardPage({ user }: { user: PortalUserSSR }) {
   const isAdmin = roleHasPermission(user.role, 'admin:settings')
   const [inv, setInv] = useState<{ busy: boolean; msg: string; needAccount: boolean }>({ busy: false, msg: '', needAccount: false })
   const [acct, setAcct] = useState<{ candidates: any[]; sel: string; saving: boolean } | null>(null)
+  const [sms, setSms] = useState<{ open: boolean; body: string; busy: boolean; msg: string }>({ open: false, body: '', busy: false, msg: '' })
 
   const load = useCallback(async () => {
     if (!id) return
@@ -133,6 +134,22 @@ export default function JobCardPage({ user }: { user: PortalUserSSR }) {
     await createInvoice()
   }
 
+  function openSms() {
+    const bk = data?.booking
+    const name = bk?.customer?.name ? String(bk.customer.name).split(' ')[0] : 'there'
+    const v = bk?.vehicle ? vehicleLabel(bk.vehicle) : 'your vehicle'
+    setSms({ open: true, body: `Hi ${name}, your ${v} is ready for collection at Just Autos.`, busy: false, msg: '' })
+  }
+  async function sendSmsNow() {
+    setSms(s => ({ ...s, busy: true, msg: '' }))
+    try {
+      const r = await fetch('/api/workshop/sms', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ customer_id: data?.booking?.customer_id, booking_id: id, type: 'ready', body: sms.body }) })
+      const d = await r.json()
+      if (r.ok && d.ok) setSms(s => ({ ...s, busy: false, open: false, msg: 'Text sent ✓' }))
+      else setSms(s => ({ ...s, busy: false, msg: d.message || d.error || 'Send failed' }))
+    } catch (e: any) { setSms(s => ({ ...s, busy: false, msg: e?.message || 'Send failed' })) }
+  }
+
   const lines = data?.lines || []
   const totals = (() => {
     let ex = 0, gst = 0
@@ -198,7 +215,20 @@ export default function JobCardPage({ user }: { user: PortalUserSSR }) {
                     <button onClick={() => changeStatus('done')} style={qbtn(T.green)}>✓ Done</button>
                     <button onClick={createInvoice} disabled={inv.busy} style={qbtn(T.teal)}>{inv.busy ? '🧾 Sending…' : '🧾 Invoice → MYOB'}</button>
                     <button onClick={() => changeStatus('paid')} style={qbtn(T.green)}>$ Paid</button>
+                    <button onClick={openSms} style={qbtn(T.blue)}>📱 Text customer</button>
                     {inv.msg && <span style={{ fontSize: 11, color: inv.needAccount ? T.amber : T.text2 }}>{inv.msg}</span>}
+                    {sms.msg && !sms.open && <span style={{ fontSize: 11, color: T.text2 }}>{sms.msg}</span>}
+                  </div>
+                )}
+                {sms.open && (
+                  <div style={{ marginTop: 10, padding: 12, background: T.bg2, border: `1px solid ${T.border2}`, borderRadius: 8 }}>
+                    <textarea value={sms.body} onChange={e => setSms(s => ({ ...s, body: e.target.value }))} rows={3} style={{ ...inp, width: '100%', resize: 'vertical' }} />
+                    <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 8, alignItems: 'center' }}>
+                      {sms.msg && <span style={{ fontSize: 11, color: T.amber, marginRight: 'auto' }}>{sms.msg}</span>}
+                      <span style={{ fontSize: 10, color: T.text3 }}>{sms.body.length} chars</span>
+                      <button onClick={() => setSms(s => ({ ...s, open: false }))} style={qbtn(T.text3)}>Cancel</button>
+                      <button onClick={sendSmsNow} disabled={sms.busy} style={{ ...qbtn(T.blue), background: `${T.blue}1e` }}>{sms.busy ? 'Sending…' : 'Send SMS'}</button>
+                    </div>
                   </div>
                 )}
                 {acct && (

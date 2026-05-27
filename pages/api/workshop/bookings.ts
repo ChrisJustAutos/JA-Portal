@@ -7,6 +7,7 @@ import { createClient } from '@supabase/supabase-js'
 import { withAuth } from '../../../lib/authServer'
 import { roleHasPermission } from '../../../lib/permissions'
 import { BOOKING_STATUSES, BookingStatus } from '../../../lib/workshop'
+import { queueBookingReminder } from '../../../lib/workshop-reminders'
 
 export const config = { maxDuration: 10 }
 
@@ -72,6 +73,7 @@ export default withAuth('view:diary', async (req, res, user) => {
       created_by: user.id,
     }).select('id').single()
     if (error) return res.status(500).json({ error: error.message })
+    await queueBookingReminder(data.id)  // best-effort SMS reminder (gated by sms_enabled at send time)
     return res.status(201).json({ ok: true, id: data.id })
   }
 
