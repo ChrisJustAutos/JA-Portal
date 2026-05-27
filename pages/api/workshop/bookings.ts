@@ -27,6 +27,7 @@ export default withAuth('view:diary', async (req, res, user) => {
     const [bRes, tRes] = await Promise.all([
       db.from('workshop_bookings')
         .select(`id, customer_id, vehicle_id, starts_at, ends_at, technician_ext, bay, service_type, status, notes,
+                 job_type, description, internal_notes, estimated_value, span_techs, is_overdue,
                  customer:workshop_customers(id, name, phone, mobile),
                  vehicle:workshop_vehicles(id, rego, make, model, year)`)
         .gte('starts_at', from)
@@ -58,8 +59,14 @@ export default withAuth('view:diary', async (req, res, user) => {
       starts_at,
       ends_at,
       technician_ext: body.technician_ext ? String(body.technician_ext) : null,
+      span_techs: body.span_techs ? String(body.span_techs) : null,
       bay: body.bay ? String(body.bay) : null,
       service_type: body.service_type ? String(body.service_type) : null,
+      job_type: body.job_type ? String(body.job_type) : 'general_service',
+      description: body.description ? String(body.description) : null,
+      internal_notes: body.internal_notes ? String(body.internal_notes) : null,
+      estimated_value: typeof body.estimated_value === 'number' ? body.estimated_value
+        : (body.estimated_value ? Number(body.estimated_value) || null : null),
       status,
       notes: body.notes ? String(body.notes) : null,
       created_by: user.id,

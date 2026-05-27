@@ -13,6 +13,7 @@ import {
   BOOKING_STATUS_META, BOOKING_STATUSES, BookingStatus,
   vehicleLabel, customerLabel, bookingDurationMin,
   ymdBrisbane, brisbaneDayBounds, addDaysYmd, weekStartYmd,
+  JOB_TYPES, jobTypeLabel,
 } from '../lib/workshop'
 
 interface PortalUserSSR { id: string; email: string; displayName: string | null; role: 'admin'|'manager'|'sales'|'accountant'|'viewer'; visibleTabs?: string[] | null }
@@ -37,6 +38,11 @@ interface BookingRow {
   service_type: string | null
   status: BookingStatus
   notes: string | null
+  job_type: string | null
+  description: string | null
+  internal_notes: string | null
+  estimated_value: number | null
+  span_techs: string | null
   customer: { id: string; name: string; phone: string | null; mobile: string | null } | null
   vehicle: { id: string; rego: string | null; make: string | null; model: string | null; year: number | null } | null
 }
@@ -88,7 +94,7 @@ function BookingBlock({ b, onClick, showTech }: { b: BookingRow; onClick: () => 
         {veh || cust || 'Booking'}
       </div>
       <div style={{ color: T.text2, fontSize: 10, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-        {bneTimeStr(b.starts_at)} · {b.service_type || cust || '—'}{showTech && b.technician_ext ? ` · ${b.technician_ext}` : ''}
+        {bneTimeStr(b.starts_at)} · {b.description || jobTypeLabel(b.job_type) || cust || '—'}{showTech && b.technician_ext ? ` · ${b.technician_ext}` : ''}
       </div>
     </div>
   )
@@ -139,7 +145,7 @@ export default function DiaryPage({ user }: { user: PortalUserSSR }) {
     if (!canEdit) return
     const startIso = isoFromBne(opts.ymd, minsToHHMM(opts.startMin))
     const endIso = new Date(new Date(startIso).getTime() + 60 * 60000).toISOString()
-    setEditing({ starts_at: startIso, ends_at: endIso, technician_ext: opts.techExt || null, status: 'prebooked' })
+    setEditing({ starts_at: startIso, ends_at: endIso, technician_ext: opts.techExt || null, status: 'booking', job_type: 'general_service' })
   }
 
   function laneClick(e: React.MouseEvent<HTMLDivElement>, ymd: string, techExt: string | null) {
@@ -315,8 +321,10 @@ function BookingModal({ initial, techs, canEdit, onClose, onSaved }: {
   const [duration, setDuration] = useState<number>(initial.starts_at && initial.ends_at ? bookingDurationMin(initial as BookingRow) : 60)
   const [tech, setTech] = useState<string>(initial.technician_ext || '')
   const [bay, setBay] = useState<string>(initial.bay || '')
-  const [serviceType, setServiceType] = useState<string>(initial.service_type || '')
-  const [status, setStatus] = useState<BookingStatus>(initial.status || 'prebooked')
+  const [jobType, setJobType] = useState<string>(initial.job_type || 'general_service')
+  const [description, setDescription] = useState<string>(initial.description || '')
+  const [estValue, setEstValue] = useState<string>(initial.estimated_value != null ? String(initial.estimated_value) : '')
+  const [status, setStatus] = useState<BookingStatus>(initial.status || 'booking')
   const [notes, setNotes] = useState<string>(initial.notes || '')
   const [customer, setCustomer] = useState<{ id: string; name: string } | null>(initial.customer ? { id: initial.customer.id, name: initial.customer.name } : null)
   const [vehicle, setVehicle] = useState<{ id: string; label: string } | null>(initial.vehicle ? { id: initial.vehicle.id, label: vehicleLabel(initial.vehicle) } : null)
@@ -329,7 +337,9 @@ function BookingModal({ initial, techs, canEdit, onClose, onSaved }: {
     const endIso = new Date(new Date(startIso).getTime() + duration * 60000).toISOString()
     const payload: any = {
       starts_at: startIso, ends_at: endIso,
-      technician_ext: tech || null, bay: bay || null, service_type: serviceType || null,
+      technician_ext: tech || null, bay: bay || null,
+      job_type: jobType || null, description: description || null,
+      estimated_value: estValue.trim() ? (Number(estValue) || null) : null,
       status, notes: notes || null,
       customer_id: customer?.id || null, vehicle_id: vehicle?.id || null,
     }
@@ -377,7 +387,17 @@ function BookingModal({ initial, techs, canEdit, onClose, onSaved }: {
             <Field label="Bay"><input value={bay} disabled={!canEdit} onChange={e => setBay(e.target.value)} placeholder="e.g. Hoist 1" style={inp} /></Field>
           </div>
 
-          <Field label="Service type"><input value={serviceType} disabled={!canEdit} onChange={e => setServiceType(e.target.value)} placeholder="Logbook service, brakes…" style={inp} /></Field>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 120px', gap: 8 }}>
+            <Field label="Job type">
+              <select value={jobType} disabled={!canEdit} onChange={e => setJobType(e.target.value)} style={inp}>
+                {JOB_TYPES.map(j => <option key={j.value} value={j.value}>{j.label}</option>)}
+              </select>
+            </Field>
+            <Field label="Est. value">
+              <input value={estValue} disabled={!canEdit} inputMode="decimal" onChange={e => setEstValue(e.target.value)} placeholder="$" style={inp} />
+            </Field>
+          </div>
+          <Field label="Description"><textarea value={description} disabled={!canEdit} onChange={e => setDescription(e.target.value)} rows={2} placeholder="Work to be done…" style={{ ...inp, resize: 'vertical' }} /></Field>
 
           <Field label="Status">
             <select value={status} disabled={!canEdit} onChange={e => setStatus(e.target.value as BookingStatus)} style={inp}>

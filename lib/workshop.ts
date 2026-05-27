@@ -6,30 +6,63 @@
 // migration 031 (workshop_*). All access is server-side via service-role API
 // routes gated on view:diary / edit:bookings.
 
+// Job status flow — reconciled with the autodesk_pro prototype
+// (booking → in_progress → invoiced → paid), plus diary-side states.
 export type BookingStatus =
   | 'prebooked'
+  | 'booking'
   | 'confirmed'
   | 'in_progress'
   | 'awaiting_parts'
+  | 'ready'
   | 'done'
   | 'invoiced'
+  | 'paid'
   | 'cancelled'
   | 'no_show'
 
 export const BOOKING_STATUSES: BookingStatus[] = [
-  'prebooked', 'confirmed', 'in_progress', 'awaiting_parts', 'done', 'invoiced', 'cancelled', 'no_show',
+  'prebooked', 'booking', 'confirmed', 'in_progress', 'awaiting_parts', 'ready', 'done', 'invoiced', 'paid', 'cancelled', 'no_show',
 ]
 
 // Label + colour for diary chips. Colours mirror the portal's T theme palette.
 export const BOOKING_STATUS_META: Record<BookingStatus, { label: string; color: string }> = {
-  prebooked:      { label: 'Pre-booked',     color: '#8b90a0' }, // text2 / grey
-  confirmed:      { label: 'Confirmed',      color: '#4f8ef7' }, // blue
-  in_progress:    { label: 'In progress',    color: '#f5a623' }, // amber
-  awaiting_parts: { label: 'Awaiting parts', color: '#a78bfa' }, // purple
-  done:           { label: 'Done',           color: '#34c77b' }, // green
-  invoiced:       { label: 'Invoiced',       color: '#2dd4bf' }, // teal
-  cancelled:      { label: 'Cancelled',      color: '#545968' }, // text3
-  no_show:        { label: 'No show',        color: '#f04e4e' }, // red
+  prebooked:      { label: 'Pre-booked',     color: '#8b90a0' },
+  booking:        { label: 'Booked',         color: '#8b90a0' },
+  confirmed:      { label: 'Confirmed',      color: '#4f8ef7' },
+  in_progress:    { label: 'In progress',    color: '#f5a623' },
+  awaiting_parts: { label: 'Awaiting parts', color: '#a78bfa' },
+  ready:          { label: 'Ready',          color: '#2dd4bf' },
+  done:           { label: 'Done',           color: '#34c77b' },
+  invoiced:       { label: 'Invoiced',       color: '#2dd4bf' },
+  paid:           { label: 'Paid',           color: '#34c77b' },
+  cancelled:      { label: 'Cancelled',      color: '#545968' },
+  no_show:        { label: 'No show',        color: '#f04e4e' },
+}
+
+// Job types — curated common set. The prototype shipped a large job-type
+// catalogue (assets/job_type_data) importable as seed data later; job_type is
+// a free-text column so this list just drives the picker default.
+export type JobTypeOption = { value: string; label: string }
+export const JOB_TYPES: JobTypeOption[] = [
+  { value: 'general_service',     label: 'General Service' },
+  { value: 'logbook_service',     label: 'Logbook Service' },
+  { value: 'brakes',              label: 'Brakes' },
+  { value: 'tyres',               label: 'Tyres / Wheels' },
+  { value: 'suspension',          label: 'Suspension / Steering' },
+  { value: 'diagnostic',          label: 'Diagnostic' },
+  { value: 'electrical',          label: 'Electrical' },
+  { value: 'air_conditioning',    label: 'Air Conditioning' },
+  { value: 'clutch_transmission', label: 'Clutch / Transmission' },
+  { value: 'engine',              label: 'Engine' },
+  { value: 'roadworthy',          label: 'Roadworthy / Inspection' },
+  { value: 'repair',              label: 'General Repair' },
+  { value: 'warranty',            label: 'Warranty' },
+  { value: 'other',               label: 'Other' },
+]
+export function jobTypeLabel(v: string | null | undefined): string {
+  if (!v) return ''
+  return JOB_TYPES.find(j => j.value === v)?.label || v
 }
 
 export interface WorkshopCustomer {
@@ -72,6 +105,19 @@ export interface WorkshopBooking {
   status: BookingStatus
   notes: string | null
   created_by: string | null
+  // Unified job fields (autodesk_pro Jobs model):
+  job_type?: string | null
+  description?: string | null
+  internal_notes?: string | null
+  estimated_value?: number | null
+  span_techs?: string | null            // comma-separated extra technician exts
+  is_overdue?: boolean
+  odometer?: number | null
+  summary?: string | null
+  myob_invoice_uid?: string | null
+  total_ex_gst?: number | null
+  total_inc_gst?: number | null
+  completed_at?: string | null
   // Joined for display (filled by the bookings API):
   customer?: Pick<WorkshopCustomer, 'id' | 'name' | 'phone' | 'mobile'> | null
   vehicle?: Pick<WorkshopVehicle, 'id' | 'rego' | 'make' | 'model' | 'year'> | null

@@ -16,7 +16,10 @@ function sb() {
   return createClient(url, key, { auth: { persistSession: false } })
 }
 
-const EDITABLE = ['starts_at', 'ends_at', 'technician_ext', 'bay', 'service_type', 'notes', 'customer_id', 'vehicle_id'] as const
+const EDITABLE = [
+  'starts_at', 'ends_at', 'technician_ext', 'span_techs', 'bay', 'service_type', 'notes', 'customer_id', 'vehicle_id',
+  'job_type', 'description', 'internal_notes', 'estimated_value', 'odometer', 'summary', 'is_overdue',
+] as const
 
 export default withAuth('view:diary', async (req, res, user) => {
   if (req.method !== 'PATCH') {
