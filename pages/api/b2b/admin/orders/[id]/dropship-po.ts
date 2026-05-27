@@ -69,6 +69,9 @@ export default withAuth('admin:b2b', async (req: NextApiRequest, res: NextApiRes
   const id = String(req.query.id || '').trim()
   if (!id) return res.status(400).json({ error: 'id required' })
   const force = String(req.query.force || '') === '1'
+  const body = (req.body && typeof req.body === 'object') ? req.body : {}
+  // When set, re-email only this supplier's already-raised PO (no new PO).
+  const resendSupplierUid = typeof body.resend_supplier_uid === 'string' ? body.resend_supplier_uid.trim() : ''
 
   const c = sb()
   const { data: order, error: oErr } = await c
@@ -78,7 +81,7 @@ export default withAuth('admin:b2b', async (req: NextApiRequest, res: NextApiRes
     .maybeSingle()
   if (oErr)   return res.status(500).json({ error: oErr.message })
   if (!order) return res.status(404).json({ error: 'Order not found' })
-  if (Array.isArray(order.dropship_pos) && order.dropship_pos.length > 0 && !force) {
+  if (!resendSupplierUid && Array.isArray(order.dropship_pos) && order.dropship_pos.length > 0 && !force) {
     return res.status(409).json({ error: 'Drop-ship POs already raised for this order. Pass ?force=1 to raise again.' })
   }
 
@@ -135,9 +138,40 @@ export default withAuth('admin:b2b', async (req: NextApiRequest, res: NextApiRes
 
   // Build the ship-to address from the order snapshot / distributor.
   const shipTo = await buildShipTo(c, order)
+  const reference = order.order_number + (order.customer_po ? ` / ${order.customer_po}` : '')
+
+  // ── Re-send mode: email an already-raised PO again, no new PO. ──
+  if (resendSupplierUid) {
+    const g = bySupplier.get(resendSupplierUid)
+    if (!g) return res.status(400).json({ error: 'No drop-ship lines for that supplier on this order.' })
+    const existingPos = Array.isArray(order.dropship_pos) ? order.dropship_pos : []
+    const rec = existingPos.find((p: any) => p.supplier_uid === resendSupplierUid)
+    const patchRec = (patch: Record<string, any>) =>
+      c.from('b2b_orders').update({
+        dropship_pos: existingPos.map((p: any) => p.supplier_uid === resendSupplierUid ? { ...p, ...patch } : p),
+      }).eq('id', id)
+    try {
+      const contact = await getSupplierContact(resendSupplierUid)
+      if (!contact.email) {
+        await patchRec({ email_status: 'no_email', emailed_to: null, email_error: 'No email on the MYOB supplier card' })
+        return res.status(200).json({ ok: false, email_status: 'no_email', error: 'Supplier has no email on their MYOB card.' })
+      }
+      await sendMail(PO_FROM_MAILBOX, {
+        to: [contact.email],
+        subject: `Purchase Order ${rec?.myob_po_number || ''} — Just Autos (drop ship)`.replace(/\s+/g, ' ').trim(),
+        html: buildPoEmailHtml({ poNumber: rec?.myob_po_number || null, supplierName: g.supplierName, reference, shipTo, lines: g.lines }),
+      })
+      await patchRec({ email_status: 'sent', emailed_to: contact.email, email_error: null })
+      try { await c.from('b2b_order_events').insert({ order_id: id, event_type: 'dropship_po_emailed', actor_type: 'admin', actor_id: user.id, metadata: { supplier: g.supplierName, to: contact.email } }) } catch {}
+      return res.status(200).json({ ok: true, email_status: 'sent', emailed_to: contact.email })
+    } catch (e: any) {
+      const msg = (e?.message || String(e)).slice(0, 300)
+      await patchRec({ email_status: 'failed', email_error: msg })
+      return res.status(502).json({ ok: false, email_status: 'failed', error: msg })
+    }
+  }
 
   // Raise one PO per supplier.
-  const reference = order.order_number + (order.customer_po ? ` / ${order.customer_po}` : '')
   const raised: any[] = []
   const failures: Array<{ supplier: string; error: string }> = []
   for (const g of Array.from(bySupplier.values())) {

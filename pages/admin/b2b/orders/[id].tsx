@@ -108,7 +108,7 @@ interface OrderDetail {
   // Drop-ship
   has_drop_ship: boolean
   dropship_po_raised_at: string | null
-  dropship_pos: Array<{ supplier_name: string; myob_po_number: string | null; myob_po_uid: string | null; line_count: number; created_at: string; email_status?: 'sent' | 'no_email' | 'failed'; emailed_to?: string | null }>
+  dropship_pos: Array<{ supplier_uid: string; supplier_name: string; myob_po_number: string | null; myob_po_uid: string | null; line_count: number; created_at: string; email_status?: 'sent' | 'no_email' | 'failed'; emailed_to?: string | null }>
   customer_notes: string | null
   internal_notes: string | null
   distributor: { id: string; display_name: string; myob_customer_uid: string | null } | null
@@ -902,6 +902,7 @@ function DropShipCard({ order, onReloaded, onFlash }: {
   onFlash: (msg: string) => void
 }) {
   const [busy, setBusy] = useState(false)
+  const [resendingUid, setResendingUid] = useState<string | null>(null)
   const [err, setErr] = useState<string | null>(null)
   const raised = order.dropship_pos || []
   const alreadyRaised = raised.length > 0
@@ -930,6 +931,27 @@ function DropShipCard({ order, onReloaded, onFlash }: {
     }
   }
 
+  async function resend(supplierUid: string) {
+    if (resendingUid) return
+    setResendingUid(supplierUid); setErr(null)
+    try {
+      const r = await fetch(`/api/b2b/admin/orders/${order.id}/dropship-po`, {
+        method: 'POST', credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ resend_supplier_uid: supplierUid }),
+      })
+      const j = await r.json()
+      if (j.email_status === 'sent') onFlash(`Emailed ${j.emailed_to}`)
+      else if (j.email_status === 'no_email') onFlash('Supplier has no email on file')
+      else throw new Error(j.error || `HTTP ${r.status}`)
+      onReloaded()
+    } catch (e: any) {
+      setErr(e?.message || String(e))
+    } finally {
+      setResendingUid(null)
+    }
+  }
+
   return (
     <Card title="Drop-ship purchase orders">
       <div style={{fontSize:12, color:T.text3, lineHeight:1.5, marginBottom:10}}>
@@ -947,6 +969,13 @@ function DropShipCard({ order, onReloaded, onFlash }: {
               {po.email_status === 'sent'    && <span title={po.emailed_to || ''} style={{color:T.green}}>✉ emailed</span>}
               {po.email_status === 'no_email'&& <span title="No email on the MYOB supplier card" style={{color:T.amber}}>no email</span>}
               {po.email_status === 'failed'  && <span style={{color:T.red}}>✉ failed</span>}
+              <button
+                onClick={() => resend(po.supplier_uid)}
+                disabled={resendingUid === po.supplier_uid}
+                title="Re-send the PO email to this supplier"
+                style={{background:'none', border:`1px solid ${T.border2}`, color:T.text2, borderRadius:5, padding:'2px 8px', fontSize:10.5, cursor: resendingUid === po.supplier_uid ? 'wait' : 'pointer', fontFamily:'inherit'}}>
+                {resendingUid === po.supplier_uid ? 'Sending…' : '↻ Re-send'}
+              </button>
             </div>
           ))}
         </div>
