@@ -803,6 +803,7 @@ interface LiveCall {
 function LiveCallsBoard({ canMonitor }: { canMonitor: boolean }) {
   const [status, setStatus] = useState<'loading' | 'ready' | 'notconfigured' | 'error'>('loading')
   const [calls, setCalls] = useState<LiveCall[]>([])
+  const [stale, setStale] = useState(false)
   const [note, setNote] = useState('')
   const [busyKey, setBusyKey] = useState<string | null>(null)
   const [toast, setToast] = useState<{ kind: 'ok' | 'err'; msg: string } | null>(null)
@@ -814,6 +815,7 @@ function LiveCallsBoard({ canMonitor }: { canMonitor: boolean }) {
       const d = await r.json()
       if (d.configured === false) { setStatus('notconfigured'); return }
       setCalls(Array.isArray(d.calls) ? d.calls : [])
+      setStale(!!d.stale)
       setNote(d.error || '')
       setStatus('ready')
     } catch (e: any) { setStatus('error'); setNote(e?.message || 'Failed to load live calls') }
@@ -837,17 +839,46 @@ function LiveCallsBoard({ canMonitor }: { canMonitor: boolean }) {
   async function spy(c: LiveCall, mode: 'listen' | 'whisper' | 'barge') {
     const key = `${c.channel}:${mode}`
     setBusyKey(key); setToast(null)
+    let enq: any = null
     try {
       const r = await fetch('/api/calls/live/spy', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ target_channel: c.channel, target_call_linkedid: c.linkedid, target_agent_ext: c.agent_ext, mode }),
       })
-      const d = await r.json()
-      if (!r.ok || d.ok === false) setToast({ kind: 'err', msg: d.message || d.error || 'Could not start monitoring' })
-      else setToast({ kind: 'ok', msg: `Your phone (ext ${d.extension}) is ringing — answer to ${mode}.` })
+      enq = await r.json()
+      if (!r.ok || !enq?.request_id) {
+        setToast({ kind: 'err', msg: enq?.message || enq?.error || 'Could not start monitoring' })
+        return
+      }
     } catch (e: any) {
-      setToast({ kind: 'err', msg: e?.message || 'Request failed' })
+      setToast({ kind: 'err', msg: e?.message || 'Request failed' }); return
     } finally { setBusyKey(null) }
+
+    // Enqueued — the on-PBX agent claims it within a couple of seconds. Poll
+    // the request's outcome so we can surface ringing / not-registered / failed.
+    const ext = enq.extension
+    setToast({ kind: 'ok', msg: `Requested ${mode} — your phone (ext ${ext}) should ring shortly…` })
+    const id = enq.request_id
+    const deadline = Date.now() + 12000
+    while (Date.now() < deadline) {
+      await new Promise(r => setTimeout(r, 1500))
+      let sd: any
+      try {
+        const sr = await fetch(`/api/calls/live/spy?id=${encodeURIComponent(id)}`)
+        if (!sr.ok) continue
+        sd = await sr.json()
+      } catch { continue }
+      if (sd.status === 'connected') { setToast({ kind: 'ok', msg: `Your phone (ext ${ext}) is ringing — answer to ${mode}.` }); return }
+      if (sd.status === 'failed') {
+        const msg = sd.error === 'not_registered'
+          ? `Your phone (ext ${ext}) isn't registered — log into your handset/softphone first.`
+          : (sd.error || 'Could not start monitoring.')
+        setToast({ kind: 'err', msg }); return
+      }
+      if (sd.status === 'expired') { setToast({ kind: 'err', msg: 'No response from the phone system — the monitor agent may be offline.' }); return }
+      if (sd.status === 'claimed') setToast({ kind: 'ok', msg: `Ringing your phone (ext ${ext}) — answer to ${mode}.` })
+    }
+    setToast({ kind: 'ok', msg: `Request queued for ext ${ext}. If your phone doesn't ring, check you're logged in.` })
   }
 
   const MODE_META: { mode: 'listen' | 'whisper' | 'barge'; label: string; color: string; hint: string }[] = [
@@ -861,7 +892,8 @@ function LiveCallsBoard({ canMonitor }: { canMonitor: boolean }) {
       <div style={{ padding: '10px 16px', borderBottom: `1px solid ${T.border}`, display: 'flex', alignItems: 'center', gap: 10 }}>
         <span style={{ width: 8, height: 8, borderRadius: '50%', background: status === 'ready' && calls.length > 0 ? T.red : T.text3, boxShadow: status === 'ready' && calls.length > 0 ? `0 0 6px ${T.red}` : 'none' }} />
         <span style={{ fontSize: 11, color: T.text2, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.1em' }}>Live calls</span>
-        {status === 'ready' && <span style={{ fontSize: 11, color: T.text3 }}>{calls.length} in progress</span>}
+        {status === 'ready' && !stale && <span style={{ fontSize: 11, color: T.text3 }}>{calls.length} in progress</span>}
+        {status === 'ready' && stale && <span style={{ fontSize: 11, color: T.amber }}>monitor agent offline?</span>}
         {toast && (
           <span style={{ marginLeft: 'auto', fontSize: 11, color: toast.kind === 'ok' ? T.green : T.red }}>{toast.msg}</span>
         )}
