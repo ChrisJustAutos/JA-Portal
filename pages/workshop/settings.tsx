@@ -221,6 +221,11 @@ function AccountsSection({ settings, income, banks, categories, accountsError, o
       </div>
       <Field label="Tracking category"><select style={inp} value={settings.tracking_category_uid || ''} onChange={e => saveAcct('tracking_category_uid', 'tracking_category_name', categories, e.target.value)}><option value="">— none —</option>{categories.map((c: any) => <option key={c.uid} value={c.uid}>{c.name}</option>)}</select></Field>
 
+      <Field label="Labour / sundry MYOB item">
+        <LabourItemPicker value={settings.labour_item_name || null} onPick={(uid, name) => onSave({ labour_item_uid: uid, labour_item_name: name })} onClear={() => onSave({ labour_item_uid: null, labour_item_name: null })} />
+        <div style={{ fontSize: 10, color: T.text3, marginTop: 4, lineHeight: 1.5 }}>Set this to post invoices as MYOB <strong>Item</strong> sales — parts decrement stock &amp; book COGS, with labour/fees on this item (keeps the invoice editable in MYOB). Leave blank to post account lines instead.</div>
+      </Field>
+
       <div style={{ fontSize: 11, color: T.text3, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', margin: '20px 0 4px' }}>Customer payment accounts (by tender)</div>
       <div style={{ fontSize: 11, color: T.text3, marginBottom: 10, lineHeight: 1.5 }}>Each payment type deposits into its MYOB account (e.g. cash/EFTPOS/card → Undeposited Funds; bank transfer/direct deposit → bank). Bank-type accounts only.</div>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
@@ -233,6 +238,37 @@ function AccountsSection({ settings, income, banks, categories, accountsError, o
         ))}
       </div>
     </Card>
+  )
+}
+
+function LabourItemPicker({ value, onPick, onClear }: { value: string | null; onPick: (uid: string, name: string) => void; onClear: () => void }) {
+  const [open, setOpen] = useState(false)
+  const [q, setQ] = useState('')
+  const [results, setResults] = useState<any[]>([])
+  useEffect(() => {
+    if (!open) return
+    const t = setTimeout(async () => { try { const r = await fetch(`/api/workshop/inventory?q=${encodeURIComponent(q)}`); const d = await r.json(); setResults(d.items || []) } catch { /* */ } }, 250)
+    return () => clearTimeout(t)
+  }, [q, open])
+  if (value && !open) {
+    return <div style={{ display: 'flex', gap: 8 }}><div style={{ ...inp, flex: 1 }}>{value}</div><button onClick={() => setOpen(true)} style={pbtn(T.blue)}>Change</button><button onClick={onClear} style={pbtn(T.text3)}>Clear</button></div>
+  }
+  return (
+    <div style={{ position: 'relative' }}>
+      <input value={q} onChange={e => setQ(e.target.value)} onFocus={() => setOpen(true)} onBlur={() => setTimeout(() => setOpen(false), 200)} placeholder="Search MYOB items (e.g. Labour)…" style={inp} />
+      {open && results.length > 0 && (
+        <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 5, background: T.bg3, border: `1px solid ${T.border2}`, borderRadius: 6, marginTop: 2, maxHeight: 220, overflowY: 'auto' }}>
+          {results.map((it: any) => (
+            <div key={it.id} onMouseDown={() => { if (it.myob_uid) { onPick(it.myob_uid, it.part_name); setOpen(false); setQ('') } }}
+              style={{ padding: '7px 10px', fontSize: 12, cursor: it.myob_uid ? 'pointer' : 'not-allowed', opacity: it.myob_uid ? 1 : 0.5, borderBottom: `1px solid ${T.border}` }}
+              title={it.myob_uid ? '' : 'Not linked to a MYOB item — can’t be used'}>
+              <div style={{ color: T.text }}>{it.part_name}</div>
+              <div style={{ fontSize: 10, color: T.text3, fontFamily: 'monospace' }}>{it.sku || ''}{it.myob_uid ? '' : ' · no MYOB link'}</div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
   )
 }
 

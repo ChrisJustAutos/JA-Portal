@@ -16,6 +16,7 @@ const TEXT_FIELDS = [
   'myob_sales_account_uid', 'myob_sales_account_name',
   'part_sale_account_uid', 'part_sale_account_name', 'discount_account_uid', 'discount_account_name',
   'refund_account_uid', 'refund_account_name', 'tracking_category_uid', 'tracking_category_name',
+  'labour_item_uid', 'labour_item_name',
 ] as const
 const BOOL_FIELDS = ['invoice_as_order', 'sms_enabled', 'myob_posting_enabled'] as const
 

@@ -44,6 +44,8 @@ export interface WorkshopSettings {
   refund_account_name: string | null
   tracking_category_uid: string | null
   tracking_category_name: string | null
+  labour_item_uid: string | null
+  labour_item_name: string | null
   payment_accounts: PaymentAccounts
   myob_posting_enabled: boolean
   // Letterhead/footer for printed + emailed documents (migration 036).
@@ -82,6 +84,8 @@ export async function getWorkshopSettings(): Promise<WorkshopSettings> {
     refund_account_name: data?.refund_account_name ?? null,
     tracking_category_uid: data?.tracking_category_uid ?? null,
     tracking_category_name: data?.tracking_category_name ?? null,
+    labour_item_uid: data?.labour_item_uid ?? null,
+    labour_item_name: data?.labour_item_name ?? null,
     payment_accounts: (data?.payment_accounts as PaymentAccounts) ?? {},
     myob_posting_enabled: data?.myob_posting_enabled ?? false,
   }
@@ -195,17 +199,22 @@ export async function createJobInvoiceInMyob(bookingId: string, performedBy: str
     throw new WorkshopInvoiceError('sales_account_not_set', 'No workshop sales account configured. An admin must pick the MYOB income account workshop sales post to.')
   }
 
-  const { data: lines } = await c.from('workshop_booking_lines').select('*').eq('booking_id', bookingId).order('sort_order', { ascending: true })
+  // Join inventory so part lines can resolve their MYOB item UID (stock + COGS).
+  const { data: lines } = await c.from('workshop_booking_lines')
+    .select('*, inventory:workshop_inventory(myob_uid)')
+    .eq('booking_id', bookingId).order('sort_order', { ascending: true })
   if (!lines || lines.length === 0) throw new WorkshopInvoiceError('no_lines', 'Add at least one line item before invoicing.')
 
   const conn = await getConnection(WORKSHOP_MYOB_LABEL)
   if (!conn || !conn.company_file_id) throw new Error(`${WORKSHOP_MYOB_LABEL} MYOB connection not configured`)
   const { gstUid, freUid } = await resolveTaxCodes(conn.id, conn.company_file_id)
 
-  // Per-line sale account: parts → parts account, everything else → default.
-  // (Account/Service lines, not Item lines — keeps the invoice editable in MYOB
-  // Desktop. Item lines for stock decrement are a follow-up needing a labour
-  // service item to avoid MYOB's read-only "hybrid layout".)
+  // Item layout (when a Labour service item is configured): parts post as Item
+  // lines so MYOB decrements stock + books COGS, and every non-part line uses
+  // the Labour item — so the whole invoice is item lines and stays editable in
+  // MYOB (no read-only "hybrid layout"). Without a Labour item, fall back to
+  // account lines (parts → parts account, else default).
+  const useItems = !!settings.labour_item_uid
   const defaultAcct = settings.myob_sales_account_uid
   const partAcct = settings.part_sale_account_uid || defaultAcct
   const myobLines: any[] = []
@@ -215,9 +224,18 @@ export async function createJobInvoiceInMyob(bookingId: string, performedBy: str
     if (lineEx === 0 && !ln.description) continue
     const rate = Number(ln.gst_rate) || 0
     const taxable = rate > 0
-    const acctUid = ln.line_type === 'part' ? partAcct : defaultAcct
+    const taxUid = taxable ? gstUid : freUid
     const desc = `${ln.description || ln.part_number || ln.line_type}${ln.part_number ? ` (${ln.part_number})` : ''}`.substring(0, 255)
-    myobLines.push({ Type: 'Transaction', Description: desc, Account: { UID: acctUid }, Total: lineEx, TaxCode: { UID: taxable ? gstUid : freUid } })
+    if (useItems) {
+      const inv: any = Array.isArray(ln.inventory) ? ln.inventory[0] : ln.inventory
+      const itemUid = (ln.line_type === 'part' && inv?.myob_uid) ? inv.myob_uid : settings.labour_item_uid
+      const qty = Number(ln.qty) || 1
+      const unit = qty ? round2(lineEx / qty) : lineEx
+      myobLines.push({ Type: 'Transaction', Item: { UID: itemUid }, Description: desc, ShipQuantity: qty, UnitPrice: unit, Total: lineEx, TaxCode: { UID: taxUid } })
+    } else {
+      const acctUid = ln.line_type === 'part' ? partAcct : defaultAcct
+      myobLines.push({ Type: 'Transaction', Description: desc, Account: { UID: acctUid }, Total: lineEx, TaxCode: { UID: taxUid } })
+    }
     subtotal += lineEx
     if (taxable) totalTax += lineEx * rate
   }
@@ -226,7 +244,8 @@ export async function createJobInvoiceInMyob(bookingId: string, performedBy: str
   if (myobLines.length === 0) throw new WorkshopInvoiceError('no_lines', 'No billable lines to invoice.')
 
   const mode: 'order' | 'invoice' = settings.invoice_as_order ? 'order' : 'invoice'
-  const path = `/accountright/${conn.company_file_id}/Sale/${mode === 'order' ? 'Order' : 'Invoice'}/Service`
+  const layout = useItems ? 'Item' : 'Service'
+  const path = `/accountright/${conn.company_file_id}/Sale/${mode === 'order' ? 'Order' : 'Invoice'}/${layout}`
   const today = new Date().toISOString().substring(0, 10)
   const body: Record<string, any> = {
     Customer: { UID: cust.myob_uid },
