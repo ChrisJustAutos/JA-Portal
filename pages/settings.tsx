@@ -211,6 +211,7 @@ interface UserRow {
   id: string; email: string; display_name: string | null; role: UserRole
   is_active: boolean; created_at: string; last_sign_in_at: string | null
   visible_tabs: string[] | null
+  phone_extension: string | null
 }
 
 function UsersTab({ currentUser }: { currentUser: PortalUserSSR }) {
@@ -416,7 +417,7 @@ function UsersTab({ currentUser }: { currentUser: PortalUserSSR }) {
       {!loading && (
         <table style={{width:'100%',borderCollapse:'collapse'}}>
           <thead><tr style={{borderBottom:`1px solid ${T.border}`}}>
-            {['Email','Name','Role','Tabs','Active','Last sign-in','Created',''].map(h =>
+            {['Email','Name','Role','Ext','Tabs','Active','Last sign-in','Created',''].map(h =>
               <th key={h} style={{fontSize:10,color:T.text3,padding:'10px 12px',textAlign:'left',fontWeight:500,textTransform:'uppercase',letterSpacing:'0.05em'}}>{h}</th>
             )}
           </tr></thead>
@@ -430,6 +431,12 @@ function UsersTab({ currentUser }: { currentUser: PortalUserSSR }) {
                   style={{background:T.bg3,border:`1px solid ${T.border}`,color:isSelf?T.text3:T.text,borderRadius:3,padding:'3px 6px',fontSize:11,outline:'none',cursor:isSelf?'not-allowed':'pointer'}}>
                   {Object.entries(ROLE_LABELS).map(([k,v])=><option key={k} value={k}>{v}</option>)}
                 </select>
+              </td>
+              <td style={{padding:'8px 12px'}}>
+                <input defaultValue={u.phone_extension || ''} placeholder="—"
+                  title="SIP extension to ring for live call monitoring"
+                  onBlur={e=>{ const v=e.target.value.trim(); if (v !== (u.phone_extension||'')) update(u.id,{phone_extension: v || null}) }}
+                  style={{width:58,background:T.bg3,border:`1px solid ${T.border}`,color:T.text,borderRadius:3,padding:'3px 6px',fontSize:11,outline:'none',fontFamily:'monospace'}}/>
               </td>
               <td style={{padding:'8px 12px',whiteSpace:'nowrap'}}>
                 <button onClick={()=>openEditTabs(u)}

@@ -52,6 +52,7 @@ export type Permission =
   | 'edit:b2b_orders'
   | 'edit:stripe_myob'
   | 'generate:reports'
+  | 'monitor:calls'
   // Admin
   | 'admin:users'
   | 'admin:settings'
@@ -65,6 +66,7 @@ const ROLE_PERMISSIONS: Record<UserRole, Permission[]> = {
     'view:jobs','view:vehicle_sales','view:stocktakes','view:b2b','view:stripe_myob',
     'edit:any','edit:distributors_groups','edit:vin_codes','edit:leads','edit:supplier_invoices','edit:stocktakes','generate:reports',
     'edit:b2b_catalogue','edit:b2b_distributors','edit:b2b_orders','edit:stripe_myob',
+    'monitor:calls',
     'admin:users','admin:settings','admin:audit_log','admin:b2b',
   ],
   manager: [
@@ -73,6 +75,7 @@ const ROLE_PERMISSIONS: Record<UserRole, Permission[]> = {
     'view:jobs','view:vehicle_sales','view:stocktakes','view:b2b','view:stripe_myob',
     'edit:leads','edit:supplier_invoices','edit:stocktakes','generate:reports',
     'edit:b2b_catalogue','edit:b2b_distributors','edit:b2b_orders',
+    'monitor:calls',
   ],
   sales: [
     'view:dashboards','view:overview','view:leads','view:distributors','view:calls','view:reports',

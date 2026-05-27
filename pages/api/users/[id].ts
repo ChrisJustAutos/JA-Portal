@@ -14,7 +14,7 @@ function getAdmin() {
 async function patch(req: NextApiRequest, res: NextApiResponse, actor: any) {
   const id = req.query.id as string
   if (!id) return res.status(400).json({ error: 'id required' })
-  const { role, display_name, is_active, visible_tabs } = req.body || {}
+  const { role, display_name, is_active, visible_tabs, phone_extension } = req.body || {}
   const validRoles = ['admin','manager','sales','accountant','viewer']
   if (role !== undefined && !validRoles.includes(role)) return res.status(400).json({ error: 'Invalid role' })
 
@@ -32,6 +32,15 @@ async function patch(req: NextApiRequest, res: NextApiResponse, actor: any) {
   if (role !== undefined) patch.role = role
   if (display_name !== undefined) patch.display_name = display_name
   if (is_active !== undefined) patch.is_active = is_active
+
+  // phone_extension: the SIP extension to ring for live call monitoring.
+  // '' / null clears it; otherwise a short string (kept loose — extensions
+  // aren't always pure digits).
+  if (phone_extension !== undefined) {
+    if (phone_extension === null || phone_extension === '') patch.phone_extension = null
+    else if (typeof phone_extension === 'string') patch.phone_extension = phone_extension.trim().slice(0, 20)
+    else return res.status(400).json({ error: 'phone_extension must be a string or null' })
+  }
 
   // visible_tabs: null = reset to role defaults; array = explicit allowlist
   if (visible_tabs !== undefined) {

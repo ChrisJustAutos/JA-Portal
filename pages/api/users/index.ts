@@ -17,7 +17,7 @@ async function list(req: NextApiRequest, res: NextApiResponse) {
   const sb = getAdmin()
   const { data, error } = await sb
     .from('user_profiles')
-    .select('id, email, display_name, role, is_active, created_at, last_sign_in_at, visible_tabs')
+    .select('id, email, display_name, role, is_active, created_at, last_sign_in_at, visible_tabs, phone_extension')
     .order('created_at', { ascending: false })
   if (error) return res.status(500).json({ error: error.message })
   return res.status(200).json({ users: data || [] })

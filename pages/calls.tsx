@@ -8,6 +8,7 @@ import Head from 'next/head'
 import { useRouter } from 'next/router'
 import PortalTopBar from '../lib/PortalTopBar'
 import { requirePageAuth } from '../lib/authServer'
+import { roleHasPermission } from '../lib/permissions'
 import { useChatContext } from '../components/GlobalChatbot'
 
 interface PortalUserSSR { id: string; email: string; displayName: string | null; role: 'admin'|'manager'|'sales'|'accountant'|'viewer' }
@@ -780,6 +781,140 @@ function AnalysisPanel({ callId, hasTranscript, billsecSeconds }: { callId: stri
 
 // ── Main page component ────────────────────────────────────────────────────
 
+// ── Live call monitoring board (management only) ────────────────────────
+// Polls /api/calls/live for in-progress calls and lets a manager Listen /
+// Whisper / Barge — which rings their own registered handset via the
+// FreePBX-side ChanSpy service. Hidden entirely for users without the
+// monitor:calls permission.
+
+interface LiveCall {
+  linkedid: string
+  channel: string
+  direction: 'inbound' | 'outbound' | null
+  external_number: string | null
+  caller_name: string | null
+  agent_ext: string | null
+  agent_name: string | null
+  started_at: string | null
+  duration_seconds: number | null
+  state: string | null
+}
+
+function LiveCallsBoard({ canMonitor }: { canMonitor: boolean }) {
+  const [status, setStatus] = useState<'loading' | 'ready' | 'notconfigured' | 'error'>('loading')
+  const [calls, setCalls] = useState<LiveCall[]>([])
+  const [note, setNote] = useState('')
+  const [busyKey, setBusyKey] = useState<string | null>(null)
+  const [toast, setToast] = useState<{ kind: 'ok' | 'err'; msg: string } | null>(null)
+
+  const load = useCallback(async () => {
+    try {
+      const r = await fetch('/api/calls/live')
+      if (r.status === 403) { setStatus('error'); setNote('Not permitted'); return }
+      const d = await r.json()
+      if (d.configured === false) { setStatus('notconfigured'); return }
+      setCalls(Array.isArray(d.calls) ? d.calls : [])
+      setNote(d.error || '')
+      setStatus('ready')
+    } catch (e: any) { setStatus('error'); setNote(e?.message || 'Failed to load live calls') }
+  }, [])
+
+  useEffect(() => {
+    if (!canMonitor) return
+    load()
+    const i = setInterval(load, 5000)
+    return () => clearInterval(i)
+  }, [canMonitor, load])
+
+  useEffect(() => {
+    if (!toast) return
+    const t = setTimeout(() => setToast(null), 6000)
+    return () => clearTimeout(t)
+  }, [toast])
+
+  if (!canMonitor) return null
+
+  async function spy(c: LiveCall, mode: 'listen' | 'whisper' | 'barge') {
+    const key = `${c.channel}:${mode}`
+    setBusyKey(key); setToast(null)
+    try {
+      const r = await fetch('/api/calls/live/spy', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ target_channel: c.channel, target_call_linkedid: c.linkedid, target_agent_ext: c.agent_ext, mode }),
+      })
+      const d = await r.json()
+      if (!r.ok || d.ok === false) setToast({ kind: 'err', msg: d.message || d.error || 'Could not start monitoring' })
+      else setToast({ kind: 'ok', msg: `Your phone (ext ${d.extension}) is ringing — answer to ${mode}.` })
+    } catch (e: any) {
+      setToast({ kind: 'err', msg: e?.message || 'Request failed' })
+    } finally { setBusyKey(null) }
+  }
+
+  const MODE_META: { mode: 'listen' | 'whisper' | 'barge'; label: string; color: string; hint: string }[] = [
+    { mode: 'listen',  label: 'Listen',  color: T.blue,  hint: 'Silent — neither party hears you' },
+    { mode: 'whisper', label: 'Whisper', color: T.amber, hint: 'Only the agent hears you' },
+    { mode: 'barge',   label: 'Barge',   color: T.red,   hint: 'Join the call — both parties hear you' },
+  ]
+
+  return (
+    <div style={{ marginBottom: 20, background: T.bg2, border: `1px solid ${T.border}`, borderRadius: 8, overflow: 'hidden' }}>
+      <div style={{ padding: '10px 16px', borderBottom: `1px solid ${T.border}`, display: 'flex', alignItems: 'center', gap: 10 }}>
+        <span style={{ width: 8, height: 8, borderRadius: '50%', background: status === 'ready' && calls.length > 0 ? T.red : T.text3, boxShadow: status === 'ready' && calls.length > 0 ? `0 0 6px ${T.red}` : 'none' }} />
+        <span style={{ fontSize: 11, color: T.text2, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.1em' }}>Live calls</span>
+        {status === 'ready' && <span style={{ fontSize: 11, color: T.text3 }}>{calls.length} in progress</span>}
+        {toast && (
+          <span style={{ marginLeft: 'auto', fontSize: 11, color: toast.kind === 'ok' ? T.green : T.red }}>{toast.msg}</span>
+        )}
+      </div>
+
+      {status === 'notconfigured' ? (
+        <div style={{ padding: '12px 16px', fontSize: 11, color: T.text3 }}>
+          Live monitoring isn’t connected yet — the FreePBX-side service (ChanSpy) needs to be set up. Until then this panel stays empty.
+        </div>
+      ) : status === 'error' ? (
+        <div style={{ padding: '12px 16px', fontSize: 11, color: T.amber }}>Couldn’t reach the live service{note ? ` — ${note}` : ''}. Retrying…</div>
+      ) : status === 'loading' ? (
+        <div style={{ padding: '12px 16px', fontSize: 11, color: T.text3 }}>Checking for live calls…</div>
+      ) : calls.length === 0 ? (
+        <div style={{ padding: '12px 16px', fontSize: 11, color: T.text3 }}>No calls in progress right now.</div>
+      ) : (
+        <div>
+          {calls.map(c => (
+            <div key={c.channel} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 16px', borderTop: `1px solid ${T.border}` }}>
+              <DirectionBadge direction={c.direction || 'inbound'} disposition="ANSWERED" />
+              <div style={{ minWidth: 0, flex: 1 }}>
+                <div style={{ fontSize: 12, color: T.text, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                  {c.caller_name || formatPhone(c.external_number)}
+                  <span style={{ color: T.text3 }}> · </span>
+                  <span style={{ color: T.text2 }}>{c.agent_name || (c.agent_ext ? `Ext ${c.agent_ext}` : 'Agent')}</span>
+                </div>
+                <div style={{ fontSize: 10, color: T.text3, fontFamily: 'monospace' }}>
+                  {c.duration_seconds != null ? formatDuration(c.duration_seconds) : 'live'}{c.agent_ext ? ` · ext ${c.agent_ext}` : ''}
+                </div>
+              </div>
+              <div style={{ display: 'flex', gap: 6 }}>
+                {MODE_META.map(m => {
+                  const busy = busyKey === `${c.channel}:${m.mode}`
+                  return (
+                    <button key={m.mode} onClick={() => spy(c, m.mode)} disabled={!!busyKey} title={m.hint}
+                      style={{
+                        padding: '5px 12px', borderRadius: 5, fontSize: 11, fontFamily: 'inherit', fontWeight: 600,
+                        background: 'transparent', color: busy ? T.text3 : m.color,
+                        border: `1px solid ${m.color}55`, cursor: busyKey ? 'default' : 'pointer',
+                      }}>
+                      {busy ? '…' : m.label}
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 type Preset = 'today' | 'yesterday' | 'week' | 'month' | 'custom'
 
 export default function CallsPage({ user }: { user: PortalUserSSR }) {
@@ -884,6 +1019,7 @@ export default function CallsPage({ user }: { user: PortalUserSSR }) {
 
   const filterAgentName = filterAgent !== 'all' ? stats?.agents.find(a => a.key === filterAgent)?.display_name : null
   const fy = currentFY()
+  const canMonitor = roleHasPermission(user.role, 'monitor:calls')
 
   // ─── Feed call analytics summary to the global AI chatbot ───────────────
   // The assistant can answer questions about who's been on the phone, missed
@@ -1029,6 +1165,9 @@ export default function CallsPage({ user }: { user: PortalUserSSR }) {
               </div>
             ) : (
               <>
+                {/* Live call monitoring — management only */}
+                <LiveCallsBoard canMonitor={canMonitor} />
+
                 {/* Stats row */}
                 {stats && (
                   <div style={{ marginBottom: 20 }}>
