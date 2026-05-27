@@ -1,5 +1,6 @@
 // pages/settings.tsx
-// Unified Settings hub. Tabs:
+// Unified Settings hub. An icon launcher of tiles; tapping a tile opens that
+// area in a floating window (?tab= deep-links straight into one). Sections:
 //   - General             (any user)   — display/behaviour preferences
 //   - Distributor Report  (admin only) — customers (groups/aliases) + revenue categories
 //   - VIN Codes           (admin only) — VIN prefix → model code rules
@@ -11,6 +12,7 @@ import { useEffect, useState, useCallback } from 'react'
 import Head from 'next/head'
 import { useRouter } from 'next/router'
 import PortalTopBar from '../lib/PortalTopBar'
+import { AppIcon } from '../lib/AppIcons'
 import { getSupabase } from '../lib/supabaseClient'
 import { ROLE_LABELS, ROLE_DESCRIPTIONS, UserRole, roleHasPermission, PORTAL_TABS, defaultTabsForRole } from '../lib/permissions'
 import { requirePageAuth } from '../lib/authServer'
@@ -51,7 +53,10 @@ export default function SettingsPage({ user }: { user: PortalUserSSR }) {
     qTab === 'groups' ? 'dist-report' :
     qTab === 'myob' ? 'connections' :
     'general'
-  const [tab, setTab] = useState<SettingsTab>(initialTab)
+  // null = show the tile launcher; a section id = that section's floating window is open.
+  // A ?tab= deep-link opens straight into the matching window.
+  const hasTabParam = !!router.query.tab
+  const [openId, setOpenId] = useState<SettingsTab | null>(hasTabParam ? initialTab : null)
 
   // Sub-tab for the merged Distributor Report tab. ?tab=groups → 'customers'.
   const initialDistSub: 'customers' | 'categories' =
@@ -64,23 +69,39 @@ export default function SettingsPage({ user }: { user: PortalUserSSR }) {
     qTab === 'myob' ? 'myob' :
     (router.query.sub === 'myob' ? 'myob' : 'health')
 
-  const tabs: {id: SettingsTab; label: string; adminOnly: boolean}[] = [
-    { id: 'general',     label: 'General',            adminOnly: false },
-    { id: 'dist-report', label: 'Distributor Report', adminOnly: true },
-    { id: 'connections', label: 'Connections',        adminOnly: true },
-    { id: 'data-imports',label: 'Data Imports',       adminOnly: true },
-    { id: 'vin-codes',   label: 'VIN Codes',          adminOnly: true },
-    { id: 'backfill',    label: 'Backfill',           adminOnly: true },
-    { id: 'users',       label: 'Users',              adminOnly: true },
-    { id: 'audit',       label: 'Audit Log',          adminOnly: true },
-    { id: 'profile',     label: 'My Profile',         adminOnly: false },
+  const SECTIONS: {id: SettingsTab; label: string; adminOnly: boolean; icon: string; accent: string; desc: string}[] = [
+    { id: 'general',     label: 'General',            adminOnly: false, icon: 'settings',      accent: T.blue,   desc: 'Display & behaviour preferences' },
+    { id: 'dist-report', label: 'Distributor Report', adminOnly: true,  icon: 'reports',       accent: T.green,  desc: 'Customers, groups & revenue categories' },
+    { id: 'connections', label: 'Connections',        adminOnly: true,  icon: 'stripe-myob',   accent: T.teal,   desc: 'Integration health & MYOB' },
+    { id: 'data-imports',label: 'Data Imports',       adminOnly: true,  icon: 'stocktake',     accent: T.purple, desc: 'Bulk imports & uploads' },
+    { id: 'vin-codes',   label: 'VIN Codes',          adminOnly: true,  icon: 'vehicle-sales', accent: T.amber,  desc: 'VIN prefix → model code rules' },
+    { id: 'backfill',    label: 'Backfill',           adminOnly: true,  icon: 'jobs',          accent: T.teal,   desc: 'Orders ↔ quotes backfill' },
+    { id: 'users',       label: 'Users',              adminOnly: true,  icon: 'team',          accent: T.blue,   desc: 'Invite, roles & tab access' },
+    { id: 'audit',       label: 'Audit Log',          adminOnly: true,  icon: 'todos',         accent: T.text2,  desc: 'Recent user-management events' },
+    { id: 'profile',     label: 'My Profile',         adminOnly: false, icon: 'distributors',  accent: T.purple, desc: 'Your name & password' },
   ]
-  const visibleTabs = tabs.filter(t => !t.adminOnly || isAdmin)
+  const visibleSections = SECTIONS.filter(s => !s.adminOnly || isAdmin)
+  const active = SECTIONS.find(s => s.id === openId) || null
+  // Heavy sections (tables / iframes) get a wider window.
+  const WIDE: SettingsTab[] = ['dist-report','connections','data-imports','vin-codes','backfill','users']
 
-  function changeTab(t: SettingsTab) {
-    setTab(t)
+  function openSection(t: SettingsTab) {
+    setOpenId(t)
     router.replace({ pathname: '/settings', query: { tab: t } }, undefined, { shallow: true })
   }
+  function closeSection() {
+    setOpenId(null)
+    router.replace({ pathname: '/settings' }, undefined, { shallow: true })
+  }
+
+  // Escape closes the open window.
+  useEffect(() => {
+    if (!openId) return
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') closeSection() }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openId])
 
   return (
     <>
@@ -97,44 +118,86 @@ export default function SettingsPage({ user }: { user: PortalUserSSR }) {
             <span style={{fontSize:11,color:T.text3}}>Signed in as {user.displayName || user.email}</span>
           </div>
 
-          {/* Tab nav — scrolls horizontally on narrow viewports so all tabs
-              are reachable without wrapping. The selected tab self-scrolls
-              into view. */}
-          <div style={{
-            display:'flex', gap:2, padding:'0 20px',
-            background:T.bg2, borderBottom:`1px solid ${T.border}`,
-            flexShrink:0,
-            overflowX:'auto', WebkitOverflowScrolling:'touch',
-            scrollbarWidth:'none',  // Firefox
-          }}>
-            {visibleTabs.map(t => (
-              <button key={t.id} onClick={()=>changeTab(t.id)}
-                ref={el => { if (tab === t.id && el) el.scrollIntoView({ block:'nearest', inline:'center' }) }}
-                style={{
-                  fontSize:12, padding:'12px 18px', border:'none',
-                  borderBottom: tab===t.id ? `2px solid var(--accent, ${T.accent})` : '2px solid transparent',
-                  background:'transparent',
-                  color: tab===t.id ? 'var(--accent)' : T.text2,
-                  cursor:'pointer', fontFamily:'inherit',
-                  whiteSpace:'nowrap', flexShrink:0,
-                  minHeight: 40,
-                }}>
-                {t.label}
-              </button>
-            ))}
+          {/* Icon launcher — tap a tile to open that area in a floating window. */}
+          <div style={{flex:1,overflowY:'auto',padding:'28px 20px'}}>
+            <div style={{maxWidth:1000,margin:'0 auto'}}>
+              <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(200px,1fr))',gap:14}}>
+                {visibleSections.map(s => (
+                  <button key={s.id} onClick={()=>openSection(s.id)}
+                    onMouseEnter={e=>{ e.currentTarget.style.borderColor = s.accent }}
+                    onMouseLeave={e=>{ e.currentTarget.style.borderColor = T.border }}
+                    style={{
+                      display:'flex',flexDirection:'column',gap:12,alignItems:'flex-start',
+                      textAlign:'left',padding:16,borderRadius:14,
+                      background:T.bg2,border:`1px solid ${T.border}`,
+                      cursor:'pointer',fontFamily:'inherit',color:T.text,
+                      transition:'border-color .12s',
+                    }}>
+                    <span style={{
+                      width:46,height:46,borderRadius:12,flexShrink:0,
+                      display:'flex',alignItems:'center',justifyContent:'center',
+                      background:`${s.accent}1f`,color:s.accent,
+                    }}>
+                      <AppIcon name={s.icon} size={24}/>
+                    </span>
+                    <span>
+                      <span style={{display:'block',fontSize:13,fontWeight:600}}>{s.label}</span>
+                      <span style={{display:'block',fontSize:11,color:T.text3,marginTop:3,lineHeight:1.4}}>{s.desc}</span>
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </div>
           </div>
 
-          <div style={{flex:1,overflowY:'auto',padding:20}}>
-            {tab === 'general'                && <GeneralTab/>}
-            {tab === 'dist-report' && isAdmin && <DistributorTab initialSubTab={initialDistSub}/>}
-            {tab === 'connections' && isAdmin && <ConnectionsHubTab initialSubTab={initialConnSub}/>}
-            {tab === 'data-imports' && isAdmin && <DataImportsTab/>}
-            {tab === 'vin-codes' && isAdmin && <VinCodesTab/>}
-            {tab === 'backfill'  && isAdmin && <BackfillTab/>}
-            {tab === 'users'     && isAdmin && <UsersTab currentUser={user}/>}
-            {tab === 'audit'     && isAdmin && <AuditTab/>}
-            {tab === 'profile'                && <ProfileTab user={user}/>}
-          </div>
+          {/* Floating section window */}
+          {active && (
+            <div onClick={closeSection} style={{
+              position:'fixed',inset:0,zIndex:950,
+              background:'rgba(8,10,13,0.8)',backdropFilter:'blur(6px)',
+              display:'flex',alignItems:'flex-start',justifyContent:'center',
+              padding:'40px 20px',overflowY:'auto',
+            }}>
+              <div onClick={e=>e.stopPropagation()} style={{
+                width:'100%',maxWidth: WIDE.includes(active.id) ? 1100 : 760,
+                background:T.bg2,border:`1px solid ${T.border2}`,borderRadius:14,
+                display:'flex',flexDirection:'column',maxHeight:'calc(100vh - 80px)',
+                boxShadow:'0 24px 60px rgba(0,0,0,0.5)',
+              }}>
+                <div style={{
+                  display:'flex',alignItems:'center',gap:10,
+                  padding:'14px 18px',borderBottom:`1px solid ${T.border}`,
+                  position:'sticky',top:0,background:T.bg2,
+                  borderTopLeftRadius:14,borderTopRightRadius:14,zIndex:1,flexShrink:0,
+                }}>
+                  <span style={{
+                    width:30,height:30,borderRadius:8,flexShrink:0,
+                    display:'flex',alignItems:'center',justifyContent:'center',
+                    background:`${active.accent}1f`,color:active.accent,
+                  }}>
+                    <AppIcon name={active.icon} size={17}/>
+                  </span>
+                  <div style={{flex:1,minWidth:0}}>
+                    <div style={{fontSize:14,fontWeight:600}}>{active.label}</div>
+                    <div style={{fontSize:11,color:T.text3}}>{active.desc}</div>
+                  </div>
+                  <button onClick={closeSection} aria-label="Close"
+                    style={{background:'none',border:'none',color:T.text2,fontSize:22,cursor:'pointer',lineHeight:1,padding:'0 4px'}}>×</button>
+                </div>
+                <div style={{padding:18,overflowY:'auto'}}>
+                  {active.id === 'general'                && <GeneralTab/>}
+                  {active.id === 'dist-report' && isAdmin && <DistributorTab initialSubTab={initialDistSub}/>}
+                  {active.id === 'connections' && isAdmin && <ConnectionsHubTab initialSubTab={initialConnSub}/>}
+                  {active.id === 'data-imports'&& isAdmin && <DataImportsTab/>}
+                  {active.id === 'vin-codes'   && isAdmin && <VinCodesTab/>}
+                  {active.id === 'backfill'    && isAdmin && <BackfillTab/>}
+                  {active.id === 'users'       && isAdmin && <UsersTab currentUser={user}/>}
+                  {active.id === 'audit'       && isAdmin && <AuditTab/>}
+                  {active.id === 'profile'                && <ProfileTab user={user}/>}
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </>
