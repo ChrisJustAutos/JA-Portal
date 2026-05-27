@@ -33,7 +33,16 @@
       "mcp__claude_ai_Supabase__list_migrations",
       "WebFetch(domain:accountrightapi.myob.com)",
       "WebFetch(domain:developer.myob.com)",
-      "Bash(node -e ' *)"
+      "Bash(node -e ' *)",
+      "Bash(xargs -I {} sh -c 'echo \"=== {} ===\" && grep -A 5 \"CREATE.*TABLE\" {} | head -10')",
+      "Bash(git diff *)",
+      "WebFetch(domain:developers.live.machship.com)",
+      "Bash(echo \"TSC_EXIT=$?\")",
+      "Bash(git switch *)",
+      "Bash(git merge *)",
+      "Bash(git branch *)",
+      "mcp__claude_ai_Vercel__get_project",
+      "mcp__claude_ai_GitHub__search_repositories"
     ]
   }
 }
