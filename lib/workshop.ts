@@ -6,6 +6,11 @@
 // migration 031 (workshop_*). All access is server-side via service-role API
 // routes gated on view:diary / edit:bookings.
 
+// The MYOB company file the workshop integrates with. The workshop/mechanical
+// business is "Vehicle Performance Solutions" (VPS) — NOT the wholesale file
+// (JAWS). Customer/inventory sync + job invoices all use this connection label.
+export const WORKSHOP_MYOB_LABEL = 'VPS'
+
 // Job status flow — reconciled with the autodesk_pro prototype
 // (booking → in_progress → invoiced → paid), plus diary-side states.
 export type BookingStatus =

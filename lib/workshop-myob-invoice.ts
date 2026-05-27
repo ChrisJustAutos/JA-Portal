@@ -1,9 +1,9 @@
 // lib/workshop-myob-invoice.ts
 //
-// Push a workshop job to MYOB (JAWS) as a Service sale. Workshop lines are
-// labour/parts/fees (no per-line MYOB item), so we use a Service sale where
-// every line is an account line against one configured workshop sales account
-// + the JAWS GST/FRE tax codes.
+// Push a workshop job to MYOB (VPS — Vehicle Performance Solutions) as a
+// Service sale. Workshop lines are labour/parts/fees (no per-line MYOB item),
+// so we use a Service sale where every line is an account line against one
+// configured workshop sales account + the VPS GST/FRE tax codes.
 //
 //   POST /accountright/{cf}/Sale/{Order|Invoice}/Service
 //   { Customer:{UID}, Date, Lines:[{ Type:'Transaction', Description,
@@ -16,7 +16,7 @@
 
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
 import { getConnection, myobFetch } from './myob'
-import { ensureJawsTaxCodes } from './b2b-settings'
+import { WORKSHOP_MYOB_LABEL } from './workshop'
 
 const UUID_REGEX_G = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi
 const round2 = (n: number) => Math.round(n * 100) / 100
@@ -50,10 +50,26 @@ export async function setWorkshopSettings(patch: Partial<WorkshopSettings>): Pro
   await sb().from('workshop_settings').update({ ...patch, updated_at: new Date().toISOString() }).eq('id', 'singleton')
 }
 
-// Live list of JAWS income accounts (for the admin sales-account picker).
-export async function listJawsIncomeAccounts(): Promise<Array<{ uid: string; displayId: string; name: string; type: string }>> {
-  const conn = await getConnection('JAWS')
-  if (!conn || !conn.company_file_id) throw new Error('JAWS MYOB connection not configured')
+// Resolve the workshop (VPS) file's GST + FRE/N-T tax-code UIDs, fetched live.
+async function resolveTaxCodes(connId: string, cfId: string): Promise<{ gstUid: string; freUid: string }> {
+  const r = await myobFetch(connId, `/accountright/${cfId}/GeneralLedger/TaxCode`, { query: { '$top': 200 } })
+  if (r.status !== 200) throw new Error(`MYOB tax code fetch failed (HTTP ${r.status})`)
+  const items: any[] = Array.isArray(r.data?.Items) ? r.data.Items : []
+  let gst: string | undefined, fre: string | undefined, nt: string | undefined
+  for (const it of items) {
+    const code = String(it.Code || '').toUpperCase()
+    if (code === 'GST' && it.UID) gst = it.UID
+    else if (code === 'FRE' && it.UID) fre = it.UID
+    else if (code === 'N-T' && it.UID) nt = it.UID
+  }
+  if (!gst) throw new Error(`${WORKSHOP_MYOB_LABEL} MYOB has no GST tax code`)
+  return { gstUid: gst, freUid: fre || nt || gst }
+}
+
+// Live list of workshop (VPS) income accounts (for the admin sales-account picker).
+export async function listIncomeAccounts(): Promise<Array<{ uid: string; displayId: string; name: string; type: string }>> {
+  const conn = await getConnection(WORKSHOP_MYOB_LABEL)
+  if (!conn || !conn.company_file_id) throw new Error(`${WORKSHOP_MYOB_LABEL} MYOB connection not configured`)
   const r = await myobFetch(conn.id, `/accountright/${conn.company_file_id}/GeneralLedger/Account`, { query: { '$top': 1000 } })
   if (r.status !== 200) throw new Error(`MYOB Account fetch failed (HTTP ${r.status}): ${(r.raw || '').substring(0, 200)}`)
   const items: any[] = Array.isArray(r.data?.Items) ? r.data.Items : []
@@ -105,9 +121,9 @@ export async function createJobInvoiceInMyob(bookingId: string, performedBy: str
   const { data: lines } = await c.from('workshop_booking_lines').select('*').eq('booking_id', bookingId).order('sort_order', { ascending: true })
   if (!lines || lines.length === 0) throw new WorkshopInvoiceError('no_lines', 'Add at least one line item before invoicing.')
 
-  const { gstUid, freUid } = await ensureJawsTaxCodes()
-  const conn = await getConnection('JAWS')
-  if (!conn) throw new Error('JAWS MYOB connection not configured')
+  const conn = await getConnection(WORKSHOP_MYOB_LABEL)
+  if (!conn || !conn.company_file_id) throw new Error(`${WORKSHOP_MYOB_LABEL} MYOB connection not configured`)
+  const { gstUid, freUid } = await resolveTaxCodes(conn.id, conn.company_file_id)
 
   const acctUid = settings.myob_sales_account_uid
   const myobLines: any[] = []

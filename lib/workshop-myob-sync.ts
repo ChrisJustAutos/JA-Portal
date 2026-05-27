@@ -1,12 +1,13 @@
 // lib/workshop-myob-sync.ts
-// Pull MYOB (JAWS company file) Contacts → workshop_customers and Inventory
-// Items → workshop_inventory, so the workshop diary/job-card pickers run on
-// live MYOB data. MYOB is the master for these; the sync upserts on myob_uid
-// and only touches the synced columns (portal-added notes etc. are preserved
-// on update). Mirrors the b2b-catalogue-sync paging pattern.
+// Pull MYOB (VPS — Vehicle Performance Solutions) Contacts → workshop_customers
+// and Inventory Items → workshop_inventory, so the workshop diary/job-card
+// pickers run on live MYOB data. MYOB is the master for these; the sync upserts
+// on myob_uid and only touches the synced columns (portal-added notes etc. are
+// preserved on update). Mirrors the b2b-catalogue-sync paging pattern.
 
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
 import { getConnection, myobFetch } from './myob'
+import { WORKSHOP_MYOB_LABEL } from './workshop'
 
 const PAGE_SIZE = 400          // MYOB caps $top at 400
 const GST_RATE = 0.10
@@ -32,11 +33,11 @@ export interface WorkshopSyncResult {
   durationMs: number
 }
 
-// Resolve the JAWS connection + company-file path, shared by both syncs.
-async function jaws(): Promise<{ connId: string; cfPath: string }> {
-  const conn = await getConnection('JAWS')
-  if (!conn || !conn.is_active) throw new Error('No active JAWS MYOB connection. Connect via Settings → MYOB.')
-  if (!conn.company_file_id) throw new Error('JAWS MYOB connection has no company file selected.')
+// Resolve the workshop (VPS) connection + company-file path, shared by both syncs.
+async function workshopConn(): Promise<{ connId: string; cfPath: string }> {
+  const conn = await getConnection(WORKSHOP_MYOB_LABEL)
+  if (!conn || !conn.is_active) throw new Error(`No active ${WORKSHOP_MYOB_LABEL} MYOB connection. Connect via Settings → MYOB.`)
+  if (!conn.company_file_id) throw new Error(`${WORKSHOP_MYOB_LABEL} MYOB connection has no company file selected.`)
   return { connId: conn.id, cfPath: `/accountright/${conn.company_file_id}` }
 }
 
@@ -83,7 +84,7 @@ async function upsertChunked(table: string, rows: any[], onConflict: string, err
 // ── Customers (MYOB Contact/Customer) ───────────────────────────────────
 export async function syncWorkshopCustomers(performedBy: string | null = null): Promise<WorkshopSyncResult> {
   const start = Date.now()
-  const { connId, cfPath } = await jaws()
+  const { connId, cfPath } = await workshopConn()
   const errors: string[] = []
   const contacts = await pageAll(connId, `${cfPath}/Contact/Customer`, performedBy)
 
@@ -122,7 +123,7 @@ export async function syncWorkshopCustomers(performedBy: string | null = null): 
 // ── Inventory (MYOB Inventory/Item) ─────────────────────────────────────
 export async function syncWorkshopInventory(performedBy: string | null = null): Promise<WorkshopSyncResult> {
   const start = Date.now()
-  const { connId, cfPath } = await jaws()
+  const { connId, cfPath } = await workshopConn()
   const errors: string[] = []
   const items = await pageAll(connId, `${cfPath}/Inventory/Item`, performedBy)
 

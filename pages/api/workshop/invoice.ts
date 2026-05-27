@@ -1,6 +1,6 @@
 // pages/api/workshop/invoice.ts
 // POST  { booking_id }  — create a MYOB Service sale for the job (edit:bookings)
-// GET                   — workshop settings + JAWS income-account candidates
+// GET                   — workshop settings + VPS income-account candidates
 //                         for the sales-account picker (admin)
 // PATCH { myob_sales_account_uid, myob_sales_account_name, invoice_as_order }
 //                       — set workshop invoice settings (admin)
@@ -9,7 +9,7 @@ import { withAuth } from '../../../lib/authServer'
 import { roleHasPermission } from '../../../lib/permissions'
 import {
   createJobInvoiceInMyob, getWorkshopSettings, setWorkshopSettings,
-  listJawsIncomeAccounts, WorkshopInvoiceError,
+  listIncomeAccounts, WorkshopInvoiceError,
 } from '../../../lib/workshop-myob-invoice'
 
 export const config = { maxDuration: 60 }
@@ -18,7 +18,7 @@ export default withAuth('view:diary', async (req, res, user) => {
   if (req.method === 'GET') {
     if (!roleHasPermission(user.role, 'admin:settings')) return res.status(403).json({ error: 'Admin only' })
     try {
-      const [settings, candidates] = await Promise.all([getWorkshopSettings(), listJawsIncomeAccounts()])
+      const [settings, candidates] = await Promise.all([getWorkshopSettings(), listIncomeAccounts()])
       return res.status(200).json({ settings, candidates })
     } catch (e: any) { return res.status(500).json({ error: e?.message || 'Failed to load accounts' }) }
   }

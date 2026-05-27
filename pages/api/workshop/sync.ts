@@ -1,5 +1,5 @@
 // pages/api/workshop/sync.ts
-// POST ?what=customers|inventory|all — pull MYOB (JAWS) Contacts + Items into
+// POST ?what=customers|inventory|all — pull MYOB (VPS) Contacts + Items into
 // workshop_customers / workshop_inventory. Admin-only; long-running.
 
 import { withAuth } from '../../../lib/authServer'
