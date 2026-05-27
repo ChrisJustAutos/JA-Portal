@@ -795,6 +795,7 @@ function LiveCallsBoard({ canMonitor }: { canMonitor: boolean }) {
   const [note, setNote] = useState('')
   const [busyKey, setBusyKey] = useState<string | null>(null)
   const [toast, setToast] = useState<{ kind: 'ok' | 'err'; msg: string } | null>(null)
+  const [extMap, setExtMap] = useState<Record<string, string>>({})  // extension → staff name
   const [, tick] = useState(0)   // 1s heartbeat so live durations keep counting
 
   const load = useCallback(async () => {
@@ -802,6 +803,7 @@ function LiveCallsBoard({ canMonitor }: { canMonitor: boolean }) {
       const r = await fetch('/api/calls/live')
       if (r.status === 403) { setStatus('error'); setNote('Not permitted'); return }
       const d = await r.json()
+      if (d.extensions) setExtMap(d.extensions)
       if (d.configured === false) { setStatus('notconfigured'); return }
       setChannels(Array.isArray(d.calls) ? d.calls : [])
       setStale(!!d.stale)
@@ -912,6 +914,10 @@ function LiveCallsBoard({ canMonitor }: { canMonitor: boolean }) {
           {cards.map(c => {
             const secs = Math.max(0, Math.floor((Date.now() - new Date(c.startedAt).getTime()) / 1000))
             const stateLabel = c.monitorable ? 'connected' : (c.state === 'up' ? 'up' : c.state)
+            const agentName = c.agentExt ? extMap[c.agentExt] : null
+            const agentLabel = agentName
+              ? `${agentName} · Ext ${c.agentExt}`
+              : (c.agentExt ? `Ext ${c.agentExt}` : 'Agent')
             return (
               <div key={c.key} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 16px', borderTop: `1px solid ${T.border}` }}>
                 <DirectionBadge direction={c.direction === 'out' ? 'outbound' : 'inbound'} disposition="ANSWERED" />
@@ -919,7 +925,7 @@ function LiveCallsBoard({ canMonitor }: { canMonitor: boolean }) {
                   <div style={{ fontSize: 12, color: T.text, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                     {c.externalName || formatPhone(c.externalNumber) || 'Unknown caller'}
                     <span style={{ color: T.text3 }}> · </span>
-                    <span style={{ color: T.text2 }}>{c.agentExt ? `Ext ${c.agentExt}` : 'Agent'}</span>
+                    <span style={{ color: T.text2 }}>{agentLabel}</span>
                   </div>
                   <div style={{ fontSize: 10, color: T.text3, fontFamily: 'monospace', display: 'flex', alignItems: 'center', gap: 8 }}>
                     <span>{formatDuration(secs)}</span>

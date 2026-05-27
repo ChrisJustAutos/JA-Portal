@@ -19,13 +19,22 @@ export default withAuth('monitor:calls', async (req, res) => {
   if (!url || !key) return res.status(500).json({ error: 'Supabase not configured' })
   const sb = createClient(url, key, { auth: { persistSession: false } })
 
-  const { data, error } = await sb
-    .from('live_call_snapshot')
-    .select('calls, updated_at')
-    .eq('id', SNAPSHOT_ID)
-    .maybeSingle()
-  if (error) return res.status(500).json({ error: error.message })
-  if (!data) return res.status(200).json({ configured: false, calls: [] })
+  const [snapRes, extRes] = await Promise.all([
+    sb.from('live_call_snapshot').select('calls, updated_at').eq('id', SNAPSHOT_ID).maybeSingle(),
+    sb.from('extensions').select('extension, display_name').eq('active', true),
+  ])
+  if (snapRes.error) return res.status(500).json({ error: snapRes.error.message })
+
+  // extension → staff name, so the board can label each call's agent leg. The
+  // snapshot's caller_id_name is unreliable ("<unknown>"), so we resolve the
+  // dialled extension against the directory. Best-effort — ignore lookup errors.
+  const extensions: Record<string, string> = {}
+  for (const e of (extRes.data || [])) {
+    if (e.extension && e.display_name) extensions[String(e.extension)] = e.display_name
+  }
+
+  const data = snapRes.data
+  if (!data) return res.status(200).json({ configured: false, calls: [], extensions })
 
   const updatedMs = new Date(data.updated_at).getTime()
   const stale = !isFinite(updatedMs) || Date.now() - updatedMs > SNAPSHOT_STALE_MS
@@ -34,5 +43,6 @@ export default withAuth('monitor:calls', async (req, res) => {
     stale,
     updated_at: data.updated_at,
     calls: Array.isArray(data.calls) ? data.calls : [],
+    extensions,
   })
 })
