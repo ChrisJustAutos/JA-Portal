@@ -341,3 +341,77 @@ export async function addItemToSheet(
     { method: 'POST', body: JSON.stringify(body) },
   )
 }
+
+// ── In-stock universe (for the stocktake coverage check) ─────────────────
+
+export interface InStockItem {
+  stock_id: number
+  stock_number: string
+  name: string
+  available: number     // on-hand qty (> 0)
+  buy_price: number
+  value: number         // available × buy_price
+}
+
+/** Read the first present numeric field from a candidate list (defensive — MD
+ *  field names for stock aren't fully documented). Accepts numeric strings. */
+function pickNum(obj: any, keys: string[]): number | undefined {
+  for (const k of keys) {
+    const v = obj?.[k]
+    if (typeof v === 'number' && isFinite(v)) return v
+    if (typeof v === 'string' && v.trim() !== '' && isFinite(Number(v))) return Number(v)
+  }
+  return undefined
+}
+
+/**
+ * Pull the full in-stock universe from MD — the data behind the Stock Value
+ * report — by paging /stocks.json. "In stock" = on-hand qty > 0. Used by the
+ * stocktake coverage check to flag items in the system that weren't counted.
+ *
+ * On-hand qty + buy price are read from a prioritised list of candidate keys
+ * (MD's stock JSON shape isn't fully documented); the first page logs the item
+ * keys so the true shape is captured in the worker logs.
+ */
+export async function fetchInStockUniverse(
+  client: MdClient,
+  opts: { log?: (...a: any[]) => void; maxPages?: number } = {},
+): Promise<InStockItem[]> {
+  const log = opts.log || (() => {})
+  const maxPages = opts.maxPages || 500
+  const items: InStockItem[] = []
+
+  for (let page = 1; page <= maxPages; page++) {
+    let resp: { stocks?: any[]; meta?: any }
+    try {
+      resp = await mdFetch<{ stocks?: any[]; meta?: any }>(client, `/stocks.json?page=${page}`)
+    } catch (e: any) {
+      if (page === 1) throw e   // first-page failure is fatal
+      log(`  coverage: /stocks.json page ${page} failed (${String(e?.message).slice(0, 120)}) — stopping at ${items.length} kept`)
+      break
+    }
+    const stocks = Array.isArray(resp?.stocks) ? resp.stocks : []
+    if (page === 1 && stocks[0]) log(`  coverage: /stocks.json item keys = ${Object.keys(stocks[0]).join(', ')}`)
+    if (stocks.length === 0) break
+
+    for (const s of stocks) {
+      const available = pickNum(s, ['available', 'quantity', 'current_quantity', 'on_hand', 'qty']) ?? 0
+      if (!(available > 0)) continue   // in-stock only
+      const buy = pickNum(s, ['average_buy_price', 'buy_price', 'cost_price', 'price']) ?? 0
+      items.push({
+        stock_id: Number(s.id) || 0,
+        stock_number: String(s.stock_number || '').trim(),
+        name: String(s.name || '').trim(),
+        available,
+        buy_price: buy,
+        value: Math.round(available * buy * 100) / 100,
+      })
+    }
+
+    const totalPages = pickNum(resp?.meta || {}, ['total_pages', 'last_page', 'pages'])
+    if (totalPages && page >= totalPages) break
+    log(`  coverage: page ${page} → ${stocks.length} stocks (in-stock kept so far: ${items.length})`)
+  }
+
+  return items
+}

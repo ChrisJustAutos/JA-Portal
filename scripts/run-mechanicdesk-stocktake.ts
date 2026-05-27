@@ -34,6 +34,7 @@ import {
   createStocktake,
   getStocktake,
   addItemToSheet,
+  fetchInStockUniverse,
   type MdClient,
   type MdStocktake,
 } from '../lib/mechanicdesk-stocktake'
@@ -205,7 +206,7 @@ async function matchSingleRow(
  *   - 100ms gap between starts within a single worker (so 5 workers
  *     ≈ 50 rows/sec ceiling, vs 10 rows/sec serial)
  */
-async function runMatch(client: MdClient, parsedRows: ParsedRow[]): Promise<void> {
+async function runMatch(client: MdClient, parsedRows: ParsedRow[]): Promise<MatchResultEntry[]> {
   const total = parsedRows.length
 
   const concurrencyEnv = parseInt(process.env.STOCKTAKE_MATCH_CONCURRENCY || '', 10)
@@ -303,6 +304,56 @@ async function runMatch(client: MdClient, parsedRows: ParsedRow[]): Promise<void
     (throttleEvents > 0 ? ` · ${throttleEvents} throttle events, final concurrency ${activeConcurrency}` : ''),
     false,
   )
+
+  return results
+}
+
+// ── Coverage mode (folded into match) ─────────────────────────────────
+// Compare the counted sheet against MD's full in-stock universe (the Stock
+// Value report) so nothing in the system is missed. Non-fatal: a failure here
+// must never fail the match itself.
+
+const normSku = (s: string | undefined | null) => String(s || '').trim().toUpperCase()
+
+async function runCoverage(client: MdClient, results: MatchResultEntry[]): Promise<void> {
+  log('Coverage: pulling MD in-stock universe (Stock Value)…')
+  const universe = await fetchInStockUniverse(client, { log })
+  log(`Coverage: ${universe.length} in-stock items in MD`)
+  if (universe.length === 0) {
+    log('Coverage: empty universe — skipping (check /stocks.json shape in logs above)')
+    return
+  }
+
+  // What did the sheet cover? Use the matched MD stock number when we have it,
+  // and always include the raw SKU as a fallback key.
+  const counted = new Set<string>()
+  for (const r of results) {
+    if (r.md_stock_number) counted.add(normSku(r.md_stock_number))
+    if (r.sku) counted.add(normSku(r.sku))
+  }
+
+  const uncounted = universe.filter(s => !counted.has(normSku(s.stock_number)))
+  uncounted.sort((a, b) => (b.value || 0) - (a.value || 0))   // biggest $ exposure first
+  const uncountedValue = Math.round(uncounted.reduce((sum, s) => sum + (s.value || 0), 0) * 100) / 100
+  const CAP = 5000
+  const stored = uncounted.slice(0, CAP)
+
+  await patchUpload({
+    coverage_at: new Date().toISOString(),
+    in_stock_total: universe.length,
+    in_stock_uncounted: uncounted.length,
+    coverage: {
+      total: universe.length,
+      counted: universe.length - uncounted.length,
+      uncounted_count: uncounted.length,
+      uncounted_value: uncountedValue,
+      uncounted: stored,
+      truncated: uncounted.length > CAP,
+      source: 'stocks.json',
+    },
+  })
+  log(`Coverage: ${uncounted.length}/${universe.length} in-stock items NOT counted ($${uncountedValue} at buy price)`)
+  await notifySlack(`Coverage: ${uncounted.length} of ${universe.length} in-stock items were NOT counted ($${uncountedValue} value at buy price)`, false)
 }
 
 // ── Push mode ─────────────────────────────────────────────────────────
@@ -572,7 +623,14 @@ async function main(): Promise<void> {
     if (MODE === 'match') {
       const rows = (upload.parsed_rows || []) as ParsedRow[]
       if (rows.length === 0) throw new Error('No parsed_rows in upload')
-      await runMatch(client, rows)
+      const results = await runMatch(client, rows)
+      // Coverage is best-effort — never let it fail the match it rides on.
+      try {
+        await runCoverage(client, results)
+      } catch (e: any) {
+        log(`Coverage step failed (non-fatal): ${e?.message || e}`)
+        await notifySlack(`Coverage check failed (match still OK): ${e?.message || e}`, false).catch(() => undefined)
+      }
     } else if (MODE === 'push') {
       const results = (upload.match_results || []) as MatchResultEntry[]
       if (results.length === 0) throw new Error('No match_results in upload')

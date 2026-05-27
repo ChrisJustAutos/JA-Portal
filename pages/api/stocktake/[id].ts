@@ -78,6 +78,10 @@ async function handlePatch(req: NextApiRequest, res: NextApiResponse, id: string
     mechanicdesk_sheet_id: true,
     mechanicdesk_stocktake_was_created: true,
     notes: true,
+    coverage_at: true,
+    in_stock_total: true,
+    in_stock_uncounted: true,
+    coverage: true,
   }
   const update: Record<string, any> = {}
   for (const [k, v] of Object.entries(req.body || {})) {

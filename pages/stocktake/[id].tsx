@@ -71,6 +71,21 @@ interface Upload {
   mechanicdesk_sheet_id: string | null
   mechanicdesk_stocktake_was_created: boolean | null
   notes: string | null
+  coverage_at?: string | null
+  in_stock_total?: number | null
+  in_stock_uncounted?: number | null
+  coverage?: CoverageData | null
+}
+
+interface CoverageItem { stock_number: string; name: string; available: number; buy_price: number; value: number }
+interface CoverageData {
+  total: number
+  counted: number
+  uncounted_count: number
+  uncounted_value: number
+  uncounted: CoverageItem[]
+  truncated?: boolean
+  source?: string
 }
 
 interface SessionUser {
@@ -403,6 +418,11 @@ export default function StocktakeDetailPage({ user }: { user: SessionUser }) {
                 </div>
               )}
 
+              {/* ── Coverage vs in-stock (MD Stock Value report) ── */}
+              {upload.coverage && (
+                <CoverageSection coverage={upload.coverage} coverageAt={upload.coverage_at || null} filename={upload.filename} />
+              )}
+
               {/* ── Match results table ──────────────────────────── */}
               {upload.match_results && upload.match_results.length > 0 && (
                 <div style={{marginTop:24}}>
@@ -676,6 +696,87 @@ function Tile({ label, value, highlight }: { label: string; value: string; highl
     <div style={{background:T.bg2, border:`1px solid ${T.border}`, borderLeft: highlight ? `3px solid ${highlight}` : `1px solid ${T.border}`, borderRadius:10, padding:'12px 14px'}}>
       <div style={{fontSize:10, color:T.text3, textTransform:'uppercase', letterSpacing:'0.05em', fontWeight:600}}>{label}</div>
       <div style={{fontSize:22, fontWeight:700, color:T.text, fontVariantNumeric:'tabular-nums', marginTop:4, lineHeight:1.1}}>{value}</div>
+    </div>
+  )
+}
+
+const money = (n: number) => `$${(Number(n) || 0).toLocaleString('en-AU', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+
+function downloadCoverageCsv(items: CoverageItem[], filename: string) {
+  const esc = (v: any) => { const s = String(v ?? ''); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s }
+  const header = ['Stock Number', 'Name', 'On Hand Qty', 'Buy Price', 'Value (qty x buy)']
+  const lines = [header.join(',')]
+  for (const it of items) lines.push([esc(it.stock_number), esc(it.name), it.available, it.buy_price, it.value].join(','))
+  const blob = new Blob([lines.join('\r\n')], { type: 'text/csv;charset=utf-8;' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = `${filename.replace(/\.xlsx?$/i, '')}-uncounted-instock.csv`
+  document.body.appendChild(a); a.click(); a.remove()
+  setTimeout(() => URL.revokeObjectURL(url), 1000)
+}
+
+// Coverage: which in-stock MD items weren't in the counted sheet. The worker
+// pulls MD's in-stock universe (Stock Value report) during Run Match and diffs
+// it against the count. This surfaces the gap so nothing is missed.
+function CoverageSection({ coverage, coverageAt, filename }: { coverage: CoverageData; coverageAt: string | null; filename: string }) {
+  const [open, setOpen] = useState(false)
+  const items = coverage.uncounted || []
+  const DISPLAY = 200
+  const shown = open ? items : items.slice(0, DISPLAY)
+  const allCounted = coverage.uncounted_count === 0
+
+  return (
+    <div style={{marginTop:24}}>
+      <div style={{display:'flex', alignItems:'baseline', justifyContent:'space-between', marginBottom:10, gap:12, flexWrap:'wrap'}}>
+        <h2 style={{margin:0, fontSize:14, fontWeight:600, color:T.text2, textTransform:'uppercase', letterSpacing:'0.05em'}}>
+          Coverage vs in-stock
+        </h2>
+        {items.length > 0 && (
+          <button onClick={() => downloadCoverageCsv(items, filename)}
+            style={{padding:'4px 12px', borderRadius:4, fontSize:11, fontFamily:'inherit', fontWeight:600, background:'transparent', color:T.blue, border:`1px solid ${T.blue}55`, cursor:'pointer'}}>
+            ↓ Download CSV ({coverage.uncounted_count})
+          </button>
+        )}
+      </div>
+
+      <div style={{display:'flex', flexWrap:'wrap', alignItems:'center', gap:10, marginBottom:items.length ? 12 : 0, padding:'12px 14px', background:T.bg2, border:`1px solid ${allCounted ? T.green + '40' : T.amber + '40'}`, borderRadius:8}}>
+        <div style={{fontSize:10, color:T.text3, textTransform:'uppercase', letterSpacing:'0.05em', fontWeight:600, marginRight:2}}>MD Stock Value</div>
+        <Pill color={T.text2} label={`${coverage.total} in stock`}/>
+        <Pill color={T.green} label={`${coverage.counted} counted`}/>
+        <Pill color={allCounted ? T.green : T.amber} label={`${coverage.uncounted_count} not counted`}/>
+        <div style={{marginLeft:'auto', fontSize:12, color:T.text2}}>
+          {allCounted
+            ? <span style={{color:T.green, fontWeight:600}}>✓ Every in-stock item was counted</span>
+            : <>Uncounted value: <strong style={{color:T.amber, fontVariantNumeric:'tabular-nums'}}>{money(coverage.uncounted_value)}</strong> <span style={{color:T.text3}}>at buy price</span></>}
+        </div>
+      </div>
+
+      {items.length > 0 && (
+        <div style={{background:T.bg2, border:`1px solid ${T.border}`, borderRadius:10, overflow:'hidden'}}>
+          <div style={{display:'grid', gridTemplateColumns:'150px 1fr 90px 100px 110px', gap:12, padding:'10px 14px', borderBottom:`1px solid ${T.border}`, background:T.bg3, fontSize:10, color:T.text3, textTransform:'uppercase', letterSpacing:'0.05em', fontWeight:600}}>
+            <div>Stock #</div><div>Name</div><div style={{textAlign:'right'}}>On hand</div><div style={{textAlign:'right'}}>Buy price</div><div style={{textAlign:'right'}}>Value</div>
+          </div>
+          {shown.map((it, i) => (
+            <div key={i} style={{display:'grid', gridTemplateColumns:'150px 1fr 90px 100px 110px', gap:12, padding:'9px 14px', borderBottom:`1px solid ${T.border}`, fontSize:12, alignItems:'center'}}>
+              <div style={{color:T.text, fontFamily:'monospace', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap'}}>{it.stock_number || '—'}</div>
+              <div style={{color:T.text2, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap'}}>{it.name || '—'}</div>
+              <div style={{textAlign:'right', color:T.text2, fontVariantNumeric:'tabular-nums'}}>{it.available}</div>
+              <div style={{textAlign:'right', color:T.text3, fontVariantNumeric:'tabular-nums'}}>{money(it.buy_price)}</div>
+              <div style={{textAlign:'right', color:T.text, fontVariantNumeric:'tabular-nums'}}>{money(it.value)}</div>
+            </div>
+          ))}
+          {items.length > DISPLAY && (
+            <div style={{padding:'10px 14px', textAlign:'center', fontSize:12}}>
+              <button onClick={() => setOpen(o => !o)} style={{background:'transparent', border:'none', color:T.blue, cursor:'pointer', fontSize:12, fontFamily:'inherit'}}>
+                {open ? 'Show fewer' : `Show all ${items.length}${coverage.truncated ? ' (stored)' : ''}`}
+              </button>
+              {coverage.truncated && <div style={{fontSize:10, color:T.text3, marginTop:4}}>List capped at {items.length}; download CSV for the stored set.</div>}
+            </div>
+          )}
+        </div>
+      )}
+      {coverageAt && <div style={{fontSize:10, color:T.text3, marginTop:6}}>Checked {new Date(coverageAt).toLocaleString('en-AU')} · in stock = MD on-hand qty &gt; 0</div>}
     </div>
   )
 }
