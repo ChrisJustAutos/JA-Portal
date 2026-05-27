@@ -70,6 +70,18 @@ export function jobTypeLabel(v: string | null | undefined): string {
   return JOB_TYPES.find(j => j.value === v)?.label || v
 }
 
+// ── Quotes ──────────────────────────────────────────────────────────────
+export type QuoteStatus = 'pending' | 'sent' | 'accepted' | 'declined' | 'expired' | 'converted'
+export const QUOTE_STATUSES: QuoteStatus[] = ['pending', 'sent', 'accepted', 'declined', 'expired', 'converted']
+export const QUOTE_STATUS_META: Record<QuoteStatus, { label: string; color: string }> = {
+  pending:   { label: 'Pending',   color: '#8b90a0' },
+  sent:      { label: 'Sent',      color: '#4f8ef7' },
+  accepted:  { label: 'Accepted',  color: '#34c77b' },
+  declined:  { label: 'Declined',  color: '#f04e4e' },
+  expired:   { label: 'Expired',   color: '#545968' },
+  converted: { label: 'Converted', color: '#2dd4bf' },
+}
+
 export interface WorkshopCustomer {
   id: string
   myob_uid: string | null
