@@ -10,6 +10,7 @@ import PortalTopBar from '../lib/PortalTopBar'
 import { requirePageAuth } from '../lib/authServer'
 import { roleHasPermission } from '../lib/permissions'
 import { useChatContext } from '../components/GlobalChatbot'
+import { groupCalls, type LiveChannel, type LiveCallCard, type SpyMode } from '../lib/live-calls'
 
 interface PortalUserSSR { id: string; email: string; displayName: string | null; role: 'admin'|'manager'|'sales'|'accountant'|'viewer' }
 
@@ -787,26 +788,14 @@ function AnalysisPanel({ callId, hasTranscript, billsecSeconds }: { callId: stri
 // FreePBX-side ChanSpy service. Hidden entirely for users without the
 // monitor:calls permission.
 
-interface LiveCall {
-  linkedid: string
-  channel: string
-  direction: 'inbound' | 'outbound' | null
-  external_number: string | null
-  caller_name: string | null
-  agent_ext: string | null
-  agent_name: string | null
-  started_at: string | null
-  duration_seconds: number | null
-  state: string | null
-}
-
 function LiveCallsBoard({ canMonitor }: { canMonitor: boolean }) {
   const [status, setStatus] = useState<'loading' | 'ready' | 'notconfigured' | 'error'>('loading')
-  const [calls, setCalls] = useState<LiveCall[]>([])
+  const [channels, setChannels] = useState<LiveChannel[]>([])
   const [stale, setStale] = useState(false)
   const [note, setNote] = useState('')
   const [busyKey, setBusyKey] = useState<string | null>(null)
   const [toast, setToast] = useState<{ kind: 'ok' | 'err'; msg: string } | null>(null)
+  const [, tick] = useState(0)   // 1s heartbeat so live durations keep counting
 
   const load = useCallback(async () => {
     try {
@@ -814,7 +803,7 @@ function LiveCallsBoard({ canMonitor }: { canMonitor: boolean }) {
       if (r.status === 403) { setStatus('error'); setNote('Not permitted'); return }
       const d = await r.json()
       if (d.configured === false) { setStatus('notconfigured'); return }
-      setCalls(Array.isArray(d.calls) ? d.calls : [])
+      setChannels(Array.isArray(d.calls) ? d.calls : [])
       setStale(!!d.stale)
       setNote(d.error || '')
       setStatus('ready')
@@ -834,16 +823,25 @@ function LiveCallsBoard({ canMonitor }: { canMonitor: boolean }) {
     return () => clearTimeout(t)
   }, [toast])
 
+  // 1s heartbeat so live durations keep counting between 5s snapshot polls.
+  useEffect(() => {
+    if (!canMonitor) return
+    const i = setInterval(() => tick(t => t + 1), 1000)
+    return () => clearInterval(i)
+  }, [canMonitor])
+
+  const cards = useMemo(() => groupCalls(channels), [channels])
+
   if (!canMonitor) return null
 
-  async function spy(c: LiveCall, mode: 'listen' | 'whisper' | 'barge') {
-    const key = `${c.channel}:${mode}`
+  async function spy(c: LiveCallCard, mode: SpyMode) {
+    const key = `${c.key}:${mode}`
     setBusyKey(key); setToast(null)
     let enq: any = null
     try {
       const r = await fetch('/api/calls/live/spy', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ target_channel: c.channel, target_call_linkedid: c.linkedid, target_agent_ext: c.agent_ext, mode }),
+        body: JSON.stringify({ target_channel: c.spyTargetChannel, target_call_linkedid: c.spyTargetUniqueid, target_agent_ext: c.agentExt, mode }),
       })
       enq = await r.json()
       if (!r.ok || !enq?.request_id) {
@@ -881,7 +879,7 @@ function LiveCallsBoard({ canMonitor }: { canMonitor: boolean }) {
     setToast({ kind: 'ok', msg: `Request queued for ext ${ext}. If your phone doesn't ring, check you're logged in.` })
   }
 
-  const MODE_META: { mode: 'listen' | 'whisper' | 'barge'; label: string; color: string; hint: string }[] = [
+  const MODE_META: { mode: SpyMode; label: string; color: string; hint: string }[] = [
     { mode: 'listen',  label: 'Listen',  color: T.blue,  hint: 'Silent — neither party hears you' },
     { mode: 'whisper', label: 'Whisper', color: T.amber, hint: 'Only the agent hears you' },
     { mode: 'barge',   label: 'Barge',   color: T.red,   hint: 'Join the call — both parties hear you' },
@@ -890,9 +888,9 @@ function LiveCallsBoard({ canMonitor }: { canMonitor: boolean }) {
   return (
     <div style={{ marginBottom: 20, background: T.bg2, border: `1px solid ${T.border}`, borderRadius: 8, overflow: 'hidden' }}>
       <div style={{ padding: '10px 16px', borderBottom: `1px solid ${T.border}`, display: 'flex', alignItems: 'center', gap: 10 }}>
-        <span style={{ width: 8, height: 8, borderRadius: '50%', background: status === 'ready' && calls.length > 0 ? T.red : T.text3, boxShadow: status === 'ready' && calls.length > 0 ? `0 0 6px ${T.red}` : 'none' }} />
+        <span style={{ width: 8, height: 8, borderRadius: '50%', background: status === 'ready' && cards.length > 0 ? T.red : T.text3, boxShadow: status === 'ready' && cards.length > 0 ? `0 0 6px ${T.red}` : 'none' }} />
         <span style={{ fontSize: 11, color: T.text2, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.1em' }}>Live calls</span>
-        {status === 'ready' && !stale && <span style={{ fontSize: 11, color: T.text3 }}>{calls.length} in progress</span>}
+        {status === 'ready' && !stale && <span style={{ fontSize: 11, color: T.text3 }}>{cards.length} in progress</span>}
         {status === 'ready' && stale && <span style={{ fontSize: 11, color: T.amber }}>monitor agent offline?</span>}
         {toast && (
           <span style={{ marginLeft: 'auto', fontSize: 11, color: toast.kind === 'ok' ? T.green : T.red }}>{toast.msg}</span>
@@ -907,40 +905,48 @@ function LiveCallsBoard({ canMonitor }: { canMonitor: boolean }) {
         <div style={{ padding: '12px 16px', fontSize: 11, color: T.amber }}>Couldn’t reach the live service{note ? ` — ${note}` : ''}. Retrying…</div>
       ) : status === 'loading' ? (
         <div style={{ padding: '12px 16px', fontSize: 11, color: T.text3 }}>Checking for live calls…</div>
-      ) : calls.length === 0 ? (
+      ) : cards.length === 0 ? (
         <div style={{ padding: '12px 16px', fontSize: 11, color: T.text3 }}>No calls in progress right now.</div>
       ) : (
         <div>
-          {calls.map(c => (
-            <div key={c.channel} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 16px', borderTop: `1px solid ${T.border}` }}>
-              <DirectionBadge direction={c.direction || 'inbound'} disposition="ANSWERED" />
-              <div style={{ minWidth: 0, flex: 1 }}>
-                <div style={{ fontSize: 12, color: T.text, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                  {c.caller_name || formatPhone(c.external_number)}
-                  <span style={{ color: T.text3 }}> · </span>
-                  <span style={{ color: T.text2 }}>{c.agent_name || (c.agent_ext ? `Ext ${c.agent_ext}` : 'Agent')}</span>
+          {cards.map(c => {
+            const secs = Math.max(0, Math.floor((Date.now() - new Date(c.startedAt).getTime()) / 1000))
+            const stateLabel = c.monitorable ? 'connected' : (c.state === 'up' ? 'up' : c.state)
+            return (
+              <div key={c.key} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 16px', borderTop: `1px solid ${T.border}` }}>
+                <DirectionBadge direction={c.direction === 'out' ? 'outbound' : 'inbound'} disposition="ANSWERED" />
+                <div style={{ minWidth: 0, flex: 1 }}>
+                  <div style={{ fontSize: 12, color: T.text, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                    {c.externalName || formatPhone(c.externalNumber) || 'Unknown caller'}
+                    <span style={{ color: T.text3 }}> · </span>
+                    <span style={{ color: T.text2 }}>{c.agentExt ? `Ext ${c.agentExt}` : 'Agent'}</span>
+                  </div>
+                  <div style={{ fontSize: 10, color: T.text3, fontFamily: 'monospace', display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <span>{formatDuration(secs)}</span>
+                    <span style={{ color: c.monitorable ? T.green : T.amber, textTransform: 'uppercase', letterSpacing: '0.05em' }}>● {stateLabel}</span>
+                  </div>
                 </div>
-                <div style={{ fontSize: 10, color: T.text3, fontFamily: 'monospace' }}>
-                  {c.duration_seconds != null ? formatDuration(c.duration_seconds) : 'live'}{c.agent_ext ? ` · ext ${c.agent_ext}` : ''}
+                <div style={{ display: 'flex', gap: 6 }}>
+                  {MODE_META.map(m => {
+                    const busy = busyKey === `${c.key}:${m.mode}`
+                    const disabled = !!busyKey || !c.monitorable
+                    return (
+                      <button key={m.mode} onClick={() => spy(c, m.mode)} disabled={disabled}
+                        title={c.monitorable ? m.hint : 'Available once the call connects'}
+                        style={{
+                          padding: '5px 12px', borderRadius: 5, fontSize: 11, fontFamily: 'inherit', fontWeight: 600,
+                          background: 'transparent', color: disabled ? T.text3 : m.color,
+                          border: `1px solid ${disabled ? T.border2 : `${m.color}55`}`,
+                          cursor: disabled ? 'default' : 'pointer', opacity: c.monitorable ? 1 : 0.5,
+                        }}>
+                        {busy ? '…' : m.label}
+                      </button>
+                    )
+                  })}
                 </div>
               </div>
-              <div style={{ display: 'flex', gap: 6 }}>
-                {MODE_META.map(m => {
-                  const busy = busyKey === `${c.channel}:${m.mode}`
-                  return (
-                    <button key={m.mode} onClick={() => spy(c, m.mode)} disabled={!!busyKey} title={m.hint}
-                      style={{
-                        padding: '5px 12px', borderRadius: 5, fontSize: 11, fontFamily: 'inherit', fontWeight: 600,
-                        background: 'transparent', color: busy ? T.text3 : m.color,
-                        border: `1px solid ${m.color}55`, cursor: busyKey ? 'default' : 'pointer',
-                      }}>
-                      {busy ? '…' : m.label}
-                    </button>
-                  )
-                })}
-              </div>
-            </div>
-          ))}
+            )
+          })}
         </div>
       )}
     </div>

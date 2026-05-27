@@ -13,6 +13,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { createClient } from '@supabase/supabase-js'
 import { requireAdmin } from '../../../lib/auth'
+import { SNAPSHOT_ID, MONITOR_HEALTH_WARN_MS, MONITOR_HEALTH_DOWN_MS } from '../../../lib/live-calls'
 
 function sb() {
   return createClient(
@@ -37,6 +38,46 @@ interface IntegrationRow {
   updated_at: string
 }
 
+// Derive the AMI monitor's health from the freshness of the snapshot it
+// writes. Yellow if the last flush was > 60s ago, red if > 5min, unknown if it
+// has never reported.
+function buildAmiMonitorRow(snap: { calls: any; updated_at: string } | null): IntegrationRow {
+  const nowIso = new Date().toISOString()
+  const updatedAt = snap?.updated_at ?? null
+  const ageMs = updatedAt ? Date.now() - new Date(updatedAt).getTime() : null
+  const channels = Array.isArray(snap?.calls) ? snap!.calls.length : 0
+
+  let status: IntegrationRow['status']
+  let last_error: string | null = null
+  if (!snap || ageMs == null || !isFinite(ageMs)) {
+    status = 'unknown'
+    last_error = 'No snapshot reported yet'
+  } else if (ageMs > MONITOR_HEALTH_DOWN_MS) {
+    status = 'red'
+    last_error = `No snapshot for ${Math.round(ageMs / 1000)}s — monitor likely offline`
+  } else if (ageMs > MONITOR_HEALTH_WARN_MS) {
+    status = 'yellow'
+    last_error = `Last snapshot ${Math.round(ageMs / 1000)}s ago`
+  } else {
+    status = 'green'
+  }
+
+  return {
+    name: 'ami-monitor',
+    display_name: 'Live Call Monitor (AMI)',
+    category: 'phone',
+    status,
+    last_check_at: updatedAt,
+    last_success_at: status === 'green' ? updatedAt : null,
+    last_error,
+    metadata: { host_id: SNAPSHOT_ID, active_channels: channels },
+    fix_url: null,
+    runbook_section: null,
+    check_interval_min: 0,
+    updated_at: updatedAt ?? nowIso,
+  }
+}
+
 export default function handler(req: NextApiRequest, res: NextApiResponse) {
   return requireAdmin(req, res, async () => {
     if (req.method !== 'GET') {
@@ -56,6 +97,21 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
     }
 
     const rows = (data || []) as IntegrationRow[]
+
+    // Computed row for the on-PBX AMI monitor. We can't reach the agent's
+    // /healthz from Vercel (Tailscale), so liveness is derived from how fresh
+    // the snapshot it writes to live_call_snapshot is. Done on the fly here so
+    // it never depends on the connections cron actually running.
+    try {
+      const { data: snap } = await sb()
+        .from('live_call_snapshot')
+        .select('calls, updated_at')
+        .eq('id', SNAPSHOT_ID)
+        .maybeSingle()
+      rows.push(buildAmiMonitorRow(snap as { calls: any; updated_at: string } | null))
+    } catch {
+      // Non-fatal — fall through with whatever integration_health returned.
+    }
 
     // Tally per status — UI shows a header summary like "18 green / 2 yellow / 1 red / 1 unknown"
     const summary = {

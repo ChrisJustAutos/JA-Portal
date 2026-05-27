@@ -9,7 +9,7 @@
 
 import { createClient } from '@supabase/supabase-js'
 import { withAuth } from '../../../../lib/authServer'
-import { SPY_MODES, SpyMode } from '../../../../lib/live-calls'
+import { SPY_MODES, SpyMode, REQUEST_TTL_MS } from '../../../../lib/live-calls'
 
 export const config = { maxDuration: 10 }
 
@@ -58,6 +58,14 @@ export default withAuth('monitor:calls', async (req, res, user) => {
       message: 'No phone extension is set on your profile. Ask an admin to map your extension in Settings → Users.',
     })
   }
+
+  // Sweep stale pendings to 'expired'. Under Option B the agent claims/acks
+  // rows directly, so nothing else expires forgotten requests; do it here on
+  // each enqueue to keep the queue clean and the polling UI honest.
+  await sb.from('call_monitor_events')
+    .update({ status: 'expired', completed_at: new Date().toISOString() })
+    .eq('status', 'pending')
+    .lt('created_at', new Date(Date.now() - REQUEST_TTL_MS).toISOString())
 
   const { data: row, error } = await sb.from('call_monitor_events').insert({
     actor_user_id: user.id,
