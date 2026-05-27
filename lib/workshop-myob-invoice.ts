@@ -159,7 +159,7 @@ export interface JobInvoiceResult {
 
 // Sentinel error codes the API surfaces to the UI.
 export class WorkshopInvoiceError extends Error {
-  code: 'customer_not_synced' | 'sales_account_not_set' | 'no_lines' | 'myob_error'
+  code: 'customer_not_synced' | 'sales_account_not_set' | 'no_lines' | 'myob_error' | 'posting_disabled'
   constructor(code: WorkshopInvoiceError['code'], message: string) { super(message); this.code = code }
 }
 
@@ -181,6 +181,12 @@ export async function createJobInvoiceInMyob(bookingId: string, performedBy: str
     return { myob_uid: booking.myob_invoice_uid, myob_number: null, mode: settings.invoice_as_order ? 'order' : 'invoice', status: 'already_written' }
   }
 
+  // Master gate — nothing posts to MYOB until an admin turns it on (so we don't
+  // double-post while MechanicDesk is still syncing the same VPS file).
+  if (!settings.myob_posting_enabled) {
+    throw new WorkshopInvoiceError('posting_disabled', 'MYOB posting is turned off. Turn it on in Workshop Settings → MYOB accounts once MechanicDesk is retired.')
+  }
+
   const cust: any = Array.isArray(booking.customer) ? booking.customer[0] : booking.customer
   if (!cust?.myob_uid) {
     throw new WorkshopInvoiceError('customer_not_synced', 'This job’s customer has no MYOB link. Sync customers from MYOB (or pick a synced customer) first.')
@@ -196,7 +202,12 @@ export async function createJobInvoiceInMyob(bookingId: string, performedBy: str
   if (!conn || !conn.company_file_id) throw new Error(`${WORKSHOP_MYOB_LABEL} MYOB connection not configured`)
   const { gstUid, freUid } = await resolveTaxCodes(conn.id, conn.company_file_id)
 
-  const acctUid = settings.myob_sales_account_uid
+  // Per-line sale account: parts → parts account, everything else → default.
+  // (Account/Service lines, not Item lines — keeps the invoice editable in MYOB
+  // Desktop. Item lines for stock decrement are a follow-up needing a labour
+  // service item to avoid MYOB's read-only "hybrid layout".)
+  const defaultAcct = settings.myob_sales_account_uid
+  const partAcct = settings.part_sale_account_uid || defaultAcct
   const myobLines: any[] = []
   let subtotal = 0, totalTax = 0
   for (const ln of lines as any[]) {
@@ -204,6 +215,7 @@ export async function createJobInvoiceInMyob(bookingId: string, performedBy: str
     if (lineEx === 0 && !ln.description) continue
     const rate = Number(ln.gst_rate) || 0
     const taxable = rate > 0
+    const acctUid = ln.line_type === 'part' ? partAcct : defaultAcct
     const desc = `${ln.description || ln.part_number || ln.line_type}${ln.part_number ? ` (${ln.part_number})` : ''}`.substring(0, 255)
     myobLines.push({ Type: 'Transaction', Description: desc, Account: { UID: acctUid }, Total: lineEx, TaxCode: { UID: taxable ? gstUid : freUid } })
     subtotal += lineEx
@@ -227,6 +239,7 @@ export async function createJobInvoiceInMyob(bookingId: string, performedBy: str
     Comment: `Workshop job ${bookingId} — via JA Portal`,
     JournalMemo: `Workshop job ${bookingId}`.substring(0, 255),
   }
+  if (settings.tracking_category_uid) body.Category = { UID: settings.tracking_category_uid }
 
   const result = await myobFetch(conn.id, path, { method: 'POST', body, performedBy })
   if (result.status !== 201 && result.status !== 200) {
