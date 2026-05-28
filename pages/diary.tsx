@@ -49,13 +49,20 @@ interface BookingRow {
   vehicle: { id: string; rego: string | null; make: string | null; model: string | null; year: number | null } | null
 }
 
-// ── Time grid config (Brisbane wall clock) ──────────────────────────────
-const DAY_START_H = 7
-const DAY_END_H = 18
+// ── Time grid config (Brisbane wall clock) — workshop hours are configurable ──
 const SLOT_MIN = 30
 const SLOT_PX = 30
-const DAY_START_MIN = DAY_START_H * 60
-const GRID_PX = ((DAY_END_H - DAY_START_H) * 60 / SLOT_MIN) * SLOT_PX
+const DEFAULT_START_MIN = 7 * 60    // 7:00
+const DEFAULT_END_MIN = 18 * 60     // 18:00
+interface GridCfg { startMin: number; endMin: number; gridPx: number; hourMarks: number[] }
+function makeGrid(startMin: number, endMin: number): GridCfg {
+  const s = Math.max(0, Math.min(startMin, endMin - SLOT_MIN))
+  const e = Math.min(1440, Math.max(endMin, s + SLOT_MIN))
+  const gridPx = ((e - s) / SLOT_MIN) * SLOT_PX
+  const hourMarks: number[] = []
+  for (let m = Math.ceil(s / 60) * 60; m <= e; m += 60) hourMarks.push(m)   // hour gridlines within range
+  return { startMin: s, endMin: e, gridPx, hourMarks }
+}
 const pad = (n: number) => String(n).padStart(2, '0')
 
 // Brisbane (UTC+10) wall-clock hour/min from an ISO timestamp.
@@ -86,18 +93,18 @@ function monthGridDays(ymd: string): string[] {
   const start = addDaysYmd(first, -dow)
   return Array.from({ length: 42 }, (_, i) => addDaysYmd(start, i))
 }
-// The visible window (7am–6pm) of a day, in epoch ms.
-function dayWindowMs(ymd: string): { winStart: number; winEnd: number } {
+// The visible window (configured workshop hours) of a day, in epoch ms.
+function dayWindowMs(ymd: string, grid: GridCfg): { winStart: number; winEnd: number } {
   return {
-    winStart: new Date(isoFromBne(ymd, minsToHHMM(DAY_START_MIN))).getTime(),
-    winEnd: new Date(isoFromBne(ymd, minsToHHMM(DAY_START_MIN + (DAY_END_H - DAY_START_H) * 60))).getTime(),
+    winStart: new Date(isoFromBne(ymd, minsToHHMM(grid.startMin))).getTime(),
+    winEnd: new Date(isoFromBne(ymd, minsToHHMM(grid.endMin))).getTime(),
   }
 }
 // The slice of a (possibly multi-day) booking that falls on `ymd`, positioned
 // within that day's time grid. null if it doesn't touch this day's window.
-function daySegment(b: { starts_at: string; ends_at: string }, ymd: string):
+function daySegment(b: { starts_at: string; ends_at: string }, ymd: string, grid: GridCfg):
   { top: number; height: number; clipTop: boolean; clipBottom: boolean } | null {
-  const { winStart, winEnd } = dayWindowMs(ymd)
+  const { winStart, winEnd } = dayWindowMs(ymd, grid)
   const s = new Date(b.starts_at).getTime(), e = new Date(b.ends_at).getTime()
   if (!(e > winStart && s < winEnd)) return null
   const segS = Math.max(s, winStart), segE = Math.min(e, winEnd)
@@ -105,8 +112,8 @@ function daySegment(b: { starts_at: string; ends_at: string }, ymd: string):
   const height = Math.max(SLOT_PX * 0.6, (segE - segS) / 60000 / SLOT_MIN * SLOT_PX - 2)
   return { top, height, clipTop: s < winStart, clipBottom: e > winEnd }
 }
-function segmentHours(b: { starts_at: string; ends_at: string }, ymd: string): number {
-  const { winStart, winEnd } = dayWindowMs(ymd)
+function segmentHours(b: { starts_at: string; ends_at: string }, ymd: string, grid: GridCfg): number {
+  const { winStart, winEnd } = dayWindowMs(ymd, grid)
   const s = new Date(b.starts_at).getTime(), e = new Date(b.ends_at).getTime()
   if (!(e > winStart && s < winEnd)) return 0
   return (Math.min(e, winEnd) - Math.max(s, winStart)) / 3600000
@@ -161,6 +168,7 @@ export default function DiaryPage({ user }: { user: PortalUserSSR }) {
   const [capacity, setCapacity] = useState<Record<string, number>>({})
   const [techFilter, setTechFilter] = useState<string | null>(null)
   const [deptFilter, setDeptFilter] = useState<string | null>(null)
+  const [grid, setGrid] = useState<GridCfg>(() => makeGrid(DEFAULT_START_MIN, DEFAULT_END_MIN))
   const [loading, setLoading] = useState(true)
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null)
   const [editing, setEditing] = useState<Partial<BookingRow> | null>(null) // open modal when non-null
@@ -187,6 +195,7 @@ export default function DiaryPage({ user }: { user: PortalUserSSR }) {
       if (bRes.ok) {
         setBookings(Array.isArray(d.bookings) ? d.bookings : [])
         setTechs(Array.isArray(d.technicians) ? d.technicians : [])
+        if (d.diary) setGrid(makeGrid(Number(d.diary.startMin), Number(d.diary.endMin)))
       }
       const nd = await nRes.json().catch(() => ({})); if (nRes.ok) setNotes(Array.isArray(nd.notes) ? nd.notes : [])
       const cd = await cRes.json().catch(() => ({})); if (cRes.ok) setCapacity(cd.capacity || {})
@@ -201,8 +210,6 @@ export default function DiaryPage({ user }: { user: PortalUserSSR }) {
     return Array.from({ length: 7 }, (_, i) => addDaysYmd(ws, i))
   }, [date])
 
-  const hourLines = useMemo(() => Array.from({ length: DAY_END_H - DAY_START_H + 1 }, (_, i) => DAY_START_H + i), [])
-
   function openNew(opts: { ymd: string; startMin: number; techExt?: string | null }) {
     if (!canEdit) return
     const startIso = isoFromBne(opts.ymd, minsToHHMM(opts.startMin))
@@ -215,7 +222,7 @@ export default function DiaryPage({ user }: { user: PortalUserSSR }) {
     const rect = e.currentTarget.getBoundingClientRect()
     const y = e.clientY - rect.top
     const slot = Math.max(0, Math.floor(y / SLOT_PX))
-    openNew({ ymd, startMin: DAY_START_MIN + slot * SLOT_MIN, techExt })
+    openNew({ ymd, startMin: grid.startMin + slot * SLOT_MIN, techExt })
   }
 
   const shiftDate = (delta: number) => setDate(d => view === 'month' ? addMonthsYmd(monthStartYmd(d), delta) : addDaysYmd(d, view === 'week' ? delta * 7 : delta))
@@ -252,7 +259,7 @@ export default function DiaryPage({ user }: { user: PortalUserSSR }) {
     const b = bookings.find(x => x.id === id); if (!b) return
     const rect = e.currentTarget.getBoundingClientRect()
     const slot = Math.max(0, Math.floor((e.clientY - rect.top) / SLOT_PX))
-    const startMin = DAY_START_MIN + slot * SLOT_MIN
+    const startMin = grid.startMin + slot * SLOT_MIN
     const durMin = Math.max(30, Math.round((new Date(b.ends_at).getTime() - new Date(b.starts_at).getTime()) / 60000))
     const startIso = isoFromBne(ymd, minsToHHMM(startMin))
     const endIso = new Date(new Date(startIso).getTime() + durMin * 60000).toISOString()
@@ -333,12 +340,12 @@ export default function DiaryPage({ user }: { user: PortalUserSSR }) {
             )}
             {view === 'day' ? (
               <DayGrid bookings={displayBookings} techs={techFilter ? deptTechs.filter(t => t.ext === techFilter) : deptTechs} showUnassigned={!techFilter && !deptFilter}
-                date={date} hourLines={hourLines} capacity={capacity} canEdit={canEdit} canEditCapacity={isAdmin} onSetCapacity={setLaneCapacity}
+                date={date} grid={grid} capacity={capacity} canEdit={canEdit} canEditCapacity={isAdmin} onSetCapacity={setLaneCapacity}
                 onLaneClick={laneClick} onBooking={(b) => canEdit && setEditing(b)}
                 onDropBooking={(e, techExt) => dropMove(e, date, techExt, true)}
                 canReorder={canEdit && !techFilter && !deptFilter} onReorder={reorderTechs} />
             ) : view === 'week' ? (
-              <WeekGrid bookings={displayBookings} days={weekDays} hourLines={hourLines} canEdit={canEdit}
+              <WeekGrid bookings={displayBookings} days={weekDays} grid={grid} canEdit={canEdit}
                 onDayClick={(ymd) => { setDate(ymd); setView('day') }}
                 onSlotClick={(ymd, e) => laneClick(e, ymd, null)}
                 onBooking={(b) => canEdit && setEditing(b)}
@@ -425,8 +432,8 @@ function TechPills({ techs, active, onPick }: { techs: Tech[]; active: string | 
 
 // ── Day grid: time axis + one lane per technician (with workload bar) ────
 const LANE_HEADER_PX = 46
-function DayGrid({ bookings, techs, date, hourLines, capacity, canEdit, canEditCapacity, onSetCapacity, onLaneClick, onBooking, onDropBooking, showUnassigned, canReorder, onReorder }: {
-  bookings: BookingRow[]; techs: Tech[]; date: string; hourLines: number[]
+function DayGrid({ bookings, techs, date, grid, capacity, canEdit, canEditCapacity, onSetCapacity, onLaneClick, onBooking, onDropBooking, showUnassigned, canReorder, onReorder }: {
+  bookings: BookingRow[]; techs: Tech[]; date: string; grid: GridCfg
   capacity: Record<string, number>; canEdit: boolean; canEditCapacity: boolean; onSetCapacity: (ext: string) => void
   onLaneClick: (e: React.MouseEvent<HTMLDivElement>, ymd: string, techExt: string | null) => void
   onBooking: (b: BookingRow) => void
@@ -454,16 +461,16 @@ function DayGrid({ bookings, techs, date, hourLines, capacity, canEdit, canEditC
       {/* time axis */}
       <div style={{ width: 56, flexShrink: 0, borderRight: `1px solid ${T.border}` }}>
         <div style={{ height: LANE_HEADER_PX, borderBottom: `1px solid ${T.border}` }} />
-        <div style={{ position: 'relative', height: GRID_PX }}>
-          {hourLines.map((h, i) => (
-            <div key={h} style={{ position: 'absolute', top: i * 2 * SLOT_PX - 6, right: 6, fontSize: 10, color: T.text3, fontFamily: 'monospace' }}>{pad(h)}:00</div>
+        <div style={{ position: 'relative', height: grid.gridPx }}>
+          {grid.hourMarks.map(m => (
+            <div key={m} style={{ position: 'absolute', top: (m - grid.startMin) / SLOT_MIN * SLOT_PX - 6, right: 6, fontSize: 10, color: T.text3, fontFamily: 'monospace' }}>{pad(Math.floor(m / 60))}:00</div>
           ))}
         </div>
       </div>
       {/* lanes */}
       {lanes.map(lane => {
         const laneBookings = byLane(lane.ext)
-        const booked = laneBookings.reduce((s, b) => s + segmentHours(b, date), 0)
+        const booked = laneBookings.reduce((s, b) => s + segmentHours(b, date, grid), 0)
         const cap = lane.ext ? (capacity[lane.ext] ?? 8) : 0
         const pct = cap > 0 ? Math.min(100, (booked / cap) * 100) : 0
         const over = cap > 0 && booked > cap
@@ -494,13 +501,13 @@ function DayGrid({ bookings, techs, date, hourLines, capacity, canEdit, canEditC
               ) : <div style={{ height: 13 }} />}
             </div>
             <div onClick={(e) => onLaneClick(e, date, lane.ext || null)}
-              onDragOver={(e) => { e.preventDefault(); const rect = e.currentTarget.getBoundingClientRect(); const slot = Math.max(0, Math.floor((e.clientY - rect.top) / SLOT_PX)); setDropHint({ ext: lane.ext || '', top: slot * SLOT_PX, label: minsToHHMM(DAY_START_MIN + slot * SLOT_MIN) }) }}
+              onDragOver={(e) => { e.preventDefault(); const rect = e.currentTarget.getBoundingClientRect(); const slot = Math.max(0, Math.floor((e.clientY - rect.top) / SLOT_PX)); setDropHint({ ext: lane.ext || '', top: slot * SLOT_PX, label: minsToHHMM(grid.startMin + slot * SLOT_MIN) }) }}
               onDrop={(e) => { setDropHint(null); onDropBooking(e, lane.ext || null) }}
-              style={{ position: 'relative', height: GRID_PX, cursor: 'copy' }}>
-              {hourLines.map((h, i) => (
-                <div key={h} style={{ position: 'absolute', top: i * 2 * SLOT_PX, left: 0, right: 0, borderTop: `1px solid ${T.border}` }} />
+              style={{ position: 'relative', height: grid.gridPx, cursor: 'copy' }}>
+              {grid.hourMarks.map(m => (
+                <div key={m} style={{ position: 'absolute', top: (m - grid.startMin) / SLOT_MIN * SLOT_PX, left: 0, right: 0, borderTop: `1px solid ${T.border}` }} />
               ))}
-              {laneBookings.map(b => { const seg = daySegment(b, date); return seg ? <BookingBlock key={b.id} b={b} seg={seg} draggable={canEdit} onClick={() => onBooking(b)} onDragEnd={() => setDropHint(null)} /> : null })}
+              {laneBookings.map(b => { const seg = daySegment(b, date, grid); return seg ? <BookingBlock key={b.id} b={b} seg={seg} draggable={canEdit} onClick={() => onBooking(b)} onDragEnd={() => setDropHint(null)} /> : null })}
               {dropHint && dropHint.ext === (lane.ext || '') && (
                 <div style={{ position: 'absolute', top: dropHint.top, left: 0, right: 0, borderTop: `2px solid ${T.accent}`, pointerEvents: 'none', zIndex: 6 }}>
                   <span style={{ position: 'absolute', top: -9, left: 2, background: T.accent, color: '#fff', fontSize: 10, fontWeight: 700, padding: '1px 5px', borderRadius: 3, fontFamily: 'monospace' }}>{dropHint.label}</span>
@@ -570,8 +577,8 @@ function DayNotes({ date, notes, canEdit, onAdd, onDelete }: { date: string; not
 }
 
 // ── Week grid: 7 day columns ────────────────────────────────────────────
-function WeekGrid({ bookings, days, hourLines, canEdit, onDayClick, onSlotClick, onBooking, onDropBooking }: {
-  bookings: BookingRow[]; days: string[]; hourLines: number[]; canEdit: boolean
+function WeekGrid({ bookings, days, grid, canEdit, onDayClick, onSlotClick, onBooking, onDropBooking }: {
+  bookings: BookingRow[]; days: string[]; grid: GridCfg; canEdit: boolean
   onDayClick: (ymd: string) => void
   onSlotClick: (ymd: string, e: React.MouseEvent<HTMLDivElement>) => void
   onBooking: (b: BookingRow) => void
@@ -583,9 +590,9 @@ function WeekGrid({ bookings, days, hourLines, canEdit, onDayClick, onSlotClick,
     <div style={{ display: 'flex', minWidth: 'fit-content', border: `1px solid ${T.border}`, borderRadius: 8, overflow: 'hidden', background: T.bg2 }}>
       <div style={{ width: 56, flexShrink: 0, borderRight: `1px solid ${T.border}` }}>
         <div style={{ height: 32, borderBottom: `1px solid ${T.border}` }} />
-        <div style={{ position: 'relative', height: GRID_PX }}>
-          {hourLines.map((h, i) => (
-            <div key={h} style={{ position: 'absolute', top: i * 2 * SLOT_PX - 6, right: 6, fontSize: 10, color: T.text3, fontFamily: 'monospace' }}>{pad(h)}:00</div>
+        <div style={{ position: 'relative', height: grid.gridPx }}>
+          {grid.hourMarks.map(m => (
+            <div key={m} style={{ position: 'absolute', top: (m - grid.startMin) / SLOT_MIN * SLOT_PX - 6, right: 6, fontSize: 10, color: T.text3, fontFamily: 'monospace' }}>{pad(Math.floor(m / 60))}:00</div>
           ))}
         </div>
       </div>
@@ -596,13 +603,13 @@ function WeekGrid({ bookings, days, hourLines, canEdit, onDayClick, onSlotClick,
             {dayLabel(ymd)}
           </div>
           <div onClick={(e) => onSlotClick(ymd, e)}
-            onDragOver={(e) => { e.preventDefault(); const rect = e.currentTarget.getBoundingClientRect(); const slot = Math.max(0, Math.floor((e.clientY - rect.top) / SLOT_PX)); setDropHint({ ymd, top: slot * SLOT_PX, label: minsToHHMM(DAY_START_MIN + slot * SLOT_MIN) }) }}
+            onDragOver={(e) => { e.preventDefault(); const rect = e.currentTarget.getBoundingClientRect(); const slot = Math.max(0, Math.floor((e.clientY - rect.top) / SLOT_PX)); setDropHint({ ymd, top: slot * SLOT_PX, label: minsToHHMM(grid.startMin + slot * SLOT_MIN) }) }}
             onDrop={(e) => { setDropHint(null); onDropBooking(e, ymd) }}
-            style={{ position: 'relative', height: GRID_PX, cursor: 'copy' }}>
-            {hourLines.map((h, i) => (
-              <div key={h} style={{ position: 'absolute', top: i * 2 * SLOT_PX, left: 0, right: 0, borderTop: `1px solid ${T.border}` }} />
+            style={{ position: 'relative', height: grid.gridPx, cursor: 'copy' }}>
+            {grid.hourMarks.map(m => (
+              <div key={m} style={{ position: 'absolute', top: (m - grid.startMin) / SLOT_MIN * SLOT_PX, left: 0, right: 0, borderTop: `1px solid ${T.border}` }} />
             ))}
-            {bookings.map(b => { const seg = daySegment(b, ymd); return seg ? <BookingBlock key={b.id} b={b} seg={seg} draggable={canEdit} onClick={() => onBooking(b)} onDragEnd={() => setDropHint(null)} showTech /> : null })}
+            {bookings.map(b => { const seg = daySegment(b, ymd, grid); return seg ? <BookingBlock key={b.id} b={b} seg={seg} draggable={canEdit} onClick={() => onBooking(b)} onDragEnd={() => setDropHint(null)} showTech /> : null })}
             {dropHint && dropHint.ymd === ymd && (
               <div style={{ position: 'absolute', top: dropHint.top, left: 0, right: 0, borderTop: `2px solid ${T.accent}`, pointerEvents: 'none', zIndex: 6 }}>
                 <span style={{ position: 'absolute', top: -9, left: 2, background: T.accent, color: '#fff', fontSize: 10, fontWeight: 700, padding: '1px 5px', borderRadius: 3, fontFamily: 'monospace' }}>{dropHint.label}</span>

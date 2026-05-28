@@ -48,6 +48,8 @@ export default withAuth('view:diary', async (req, res, user) => {
     for (const f of TEXT_FIELDS) if (f in body) patch[f] = body[f] === '' ? null : String(body[f])
     for (const f of BOOL_FIELDS) if (f in body) patch[f] = !!body[f]
     if ('booking_reminder_lead_hours' in body) patch.booking_reminder_lead_hours = Math.max(0, Number(body.booking_reminder_lead_hours) || 0)
+    if ('diary_start_min' in body) patch.diary_start_min = Math.min(1439, Math.max(0, Number(body.diary_start_min) || 0))
+    if ('diary_end_min' in body) patch.diary_end_min = Math.min(1440, Math.max(1, Number(body.diary_end_min) || 1080))
     if ('payment_accounts' in body && body.payment_accounts && typeof body.payment_accounts === 'object') patch.payment_accounts = body.payment_accounts
     if (Object.keys(patch).length === 0) return res.status(400).json({ error: 'No known settings fields in body' })
     await setWorkshopSettings(patch)

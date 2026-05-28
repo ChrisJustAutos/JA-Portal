@@ -166,9 +166,18 @@ function BusinessSection({ settings, onSave }: { settings: any; onSave: (p: any)
       <Field label="Address"><textarea style={{ ...inp, resize: 'vertical' }} rows={2} value={f.business_address} onChange={e => set('business_address', e.target.value)} placeholder="Street, suburb, state postcode" /></Field>
       <Field label="Document footer (optional)"><textarea style={{ ...inp, resize: 'vertical' }} rows={2} value={f.document_footer} onChange={e => set('document_footer', e.target.value)} placeholder="Payment terms, bank details, thank-you note…" /></Field>
       <button onClick={() => onSave(f)} style={pbtn(T.accent, true)}>Save business details</button>
+
+      <div style={{ fontSize: 11, color: T.text3, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', margin: '22px 0 4px' }}>Diary hours</div>
+      <div style={{ fontSize: 11, color: T.text3, marginBottom: 10 }}>The opening hours shown on the diary time grid (saves immediately).</div>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+        <Field label="Opens"><input type="time" step={1800} value={minToHHMM(settings.diary_start_min ?? 420)} onChange={e => onSave({ diary_start_min: hhmmToMin(e.target.value) })} style={inp} /></Field>
+        <Field label="Closes"><input type="time" step={1800} value={minToHHMM(settings.diary_end_min ?? 1080)} onChange={e => onSave({ diary_end_min: hhmmToMin(e.target.value) })} style={inp} /></Field>
+      </div>
     </Card>
   )
 }
+const minToHHMM = (m: number) => `${String(Math.floor((Number(m) || 0) / 60)).padStart(2, '0')}:${String((Number(m) || 0) % 60).padStart(2, '0')}`
+const hhmmToMin = (s: string) => { const [h, m] = String(s || '').split(':').map(Number); return (h || 0) * 60 + (m || 0) }
 
 function InvoicingSection({ settings, accounts, accountsError, onSave }: { settings: any; accounts: any[]; accountsError: string; onSave: (p: any) => void }) {
   const [uid, setUid] = useState(settings.myob_sales_account_uid || '')

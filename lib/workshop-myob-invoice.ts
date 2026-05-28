@@ -59,6 +59,8 @@ export interface WorkshopSettings {
   sms_enabled: boolean
   sms_from: string | null
   booking_reminder_lead_hours: number
+  diary_start_min: number
+  diary_end_min: number
 }
 
 export async function getWorkshopSettings(): Promise<WorkshopSettings> {
@@ -76,6 +78,8 @@ export async function getWorkshopSettings(): Promise<WorkshopSettings> {
     sms_enabled: data?.sms_enabled ?? false,
     sms_from: data?.sms_from ?? null,
     booking_reminder_lead_hours: Number(data?.booking_reminder_lead_hours ?? 24),
+    diary_start_min: Number(data?.diary_start_min ?? 420),
+    diary_end_min: Number(data?.diary_end_min ?? 1080),
     part_sale_account_uid: data?.part_sale_account_uid ?? null,
     part_sale_account_name: data?.part_sale_account_name ?? null,
     discount_account_uid: data?.discount_account_uid ?? null,
