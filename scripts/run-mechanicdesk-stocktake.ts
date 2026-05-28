@@ -67,6 +67,9 @@ function log(...args: any[]) {
   console.log(`[${new Date().toISOString()}]`, ...args)
 }
 
+// Log the MD stock object's field names once per run (to confirm qty fields).
+let loggedStockKeys = false
+
 const PORTAL_BASE = process.env.JA_PORTAL_BASE_URL || ''
 const PORTAL_TOKEN = process.env.JA_PORTAL_API_KEY || ''
 const UPLOAD_ID = process.env.UPLOAD_ID || ''
@@ -160,6 +163,12 @@ async function matchSingleRow(
   try {
     const r = await findStockBySku(client, row.sku)
     if (r.kind === 'matched' && r.stock) {
+      const st: any = r.stock
+      if (!loggedStockKeys) { loggedStockKeys = true; log(`  match: MD stock fields = ${Object.keys(st).join(', ')} (quantity=${st.quantity}, available=${st.available}, allocated=${st.allocated_quantity})`) }
+      // System QTY = TOTAL on hand, not "available" (= total − allocated).
+      const total = typeof st.quantity === 'number' ? st.quantity
+        : (typeof st.available === 'number' && typeof st.allocated_quantity === 'number') ? st.available + st.allocated_quantity
+        : (typeof st.available === 'number' ? st.available : undefined)
       return {
         entry: {
           ...baseEntry,
@@ -167,7 +176,7 @@ async function matchSingleRow(
           md_stock_id: r.stock.id,
           md_stock_name: r.stock.name || '',
           md_stock_number: r.stock.stock_number || '',
-          md_current_qty: typeof r.stock.available === 'number' ? r.stock.available : undefined,
+          md_current_qty: total,
           md_bin: r.stock.bin || undefined,
           md_location: r.stock.location || undefined,
         },

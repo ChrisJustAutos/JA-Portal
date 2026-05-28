@@ -26,7 +26,9 @@ export interface MdStock {
   id: number
   stock_number: string | null
   name: string | null
-  available?: number
+  quantity?: number            // total on-hand (the stocktake "system QTY")
+  available?: number           // total − allocated/reserved
+  allocated_quantity?: number
   buy_price?: number
   sell_price_excluded_gst?: number
   sell_price_included_gst?: number
@@ -406,7 +408,9 @@ export async function fetchInStockUniverse(
     if (stocks.length === 0) break
 
     for (const s of stocks) {
-      const available = pickNum(s, ['available', 'quantity', 'current_quantity', 'on_hand', 'qty']) ?? 0
+      // Total on-hand qty (NOT "available" = total − allocated). Prefer the
+      // total/quantity fields; fall back to available only if that's all MD gives.
+      const available = pickNum(s, ['quantity', 'total_quantity', 'current_quantity', 'on_hand', 'available', 'qty']) ?? 0
       if (!(available > 0)) continue   // in-stock only
       const buy = pickNum(s, ['average_buy_price', 'buy_price', 'cost_price', 'price']) ?? 0
       items.push({
