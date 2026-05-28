@@ -153,15 +153,17 @@ export default function SettingsPage({ user }: { user: PortalUserSSR }) {
             </div>
           </div>
 
-          {/* Floating section window */}
+          {/* Floating section window — closes only via the × button or Esc.
+              The overlay itself doesn't close on click so accidental clicks
+              don't kill an in-progress upload / form. */}
           {active && (
-            <div onClick={closeSection} style={{
+            <div style={{
               position:'fixed',inset:0,zIndex:950,
               background:'rgba(8,10,13,0.8)',backdropFilter:'blur(6px)',
               display:'flex',alignItems:'flex-start',justifyContent:'center',
               padding:'40px 20px',overflowY:'auto',
             }}>
-              <div onClick={e=>e.stopPropagation()} style={{
+              <div style={{
                 width:'100%',maxWidth: WIDE.includes(active.id) ? 1100 : 760,
                 background:T.bg2,border:`1px solid ${T.border2}`,borderRadius:14,
                 display:'flex',flexDirection:'column',maxHeight:'calc(100vh - 80px)',

@@ -26,8 +26,9 @@ interface TypeMeta { id: string; label: string; sheets: string[]; blurb: string;
 
 interface ImportRow {
   id: string; type: string; filename: string; uploaded_at: string
-  status: 'parsed' | 'running' | 'completed' | 'failed' | 'cancelled'
+  status: 'uploading' | 'parsed' | 'running' | 'completed' | 'failed' | 'cancelled'
   parsed_summary: any; result_summary: any; error: string | null
+  started_at: string | null; completed_at: string | null
 }
 
 export default function ImportsPage() {
@@ -35,6 +36,7 @@ export default function ImportsPage() {
   const [active, setActive] = useState<string>('customers')
   const [history, setHistory] = useState<ImportRow[]>([])
   const [refreshing, setRefreshing] = useState(false)
+  const [selectedId, setSelectedId] = useState<string | null>(null)
   const activeMeta = useMemo(() => types.find(t => t.id === active), [types, active])
 
   useEffect(() => {
@@ -79,11 +81,14 @@ export default function ImportsPage() {
               <div style={{ padding: 24, textAlign: 'center', fontSize: 12, color: T.text3, background: T.bg2, border: `1px solid ${T.border}`, borderRadius: 8 }}>No imports yet.</div>
             ) : (
               <div style={{ background: T.bg2, border: `1px solid ${T.border}`, borderRadius: 8, overflow: 'hidden' }}>
-                {history.map((h, i) => <HistoryRow key={h.id} row={h} first={i === 0} typeLabel={types.find(t => t.id === h.type)?.label || h.type} onChange={reload} />)}
+                {history.map((h, i) => <HistoryRow key={h.id} row={h} first={i === 0} typeLabel={types.find(t => t.id === h.type)?.label || h.type} onOpen={() => setSelectedId(h.id)} onChange={reload} />)}
               </div>
             )}
           </div>
         </div>
+        {selectedId && (
+          <ImportDetail id={selectedId} typeLabel={(h => types.find(t => t.id === h?.type)?.label || h?.type || '')(history.find(h => h.id === selectedId))} onClose={() => setSelectedId(null)} onChange={reload} />
+        )}
       </div>
     </>
   )
@@ -405,26 +410,160 @@ function Stat({ label, value, accent, muted }: { label: string; value: any; acce
 }
 
 // ── History row ───────────────────────────────────────────────────────────────
-function HistoryRow({ row, first, typeLabel, onChange }: { row: ImportRow; first: boolean; typeLabel: string; onChange: () => void }) {
-  async function del() {
+function HistoryRow({ row, first, typeLabel, onOpen, onChange }: { row: ImportRow; first: boolean; typeLabel: string; onOpen: () => void; onChange: () => void }) {
+  async function del(e: React.MouseEvent) {
+    e.stopPropagation()
     if (!confirm(`Delete this import record (${row.filename})? It won't undo what was imported.`)) return
     const r = await fetch(`/api/imports/${row.id}`, { method: 'DELETE' })
     if (r.ok) onChange()
   }
-  const colour = row.status === 'completed' ? T.green : row.status === 'failed' ? T.red : row.status === 'running' ? T.amber : T.text3
+  const colour = row.status === 'completed' ? T.green : row.status === 'failed' ? T.red : row.status === 'running' || row.status === 'uploading' ? T.amber : T.text3
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: '110px 1fr 1fr 120px 100px 30px', gap: 10, padding: '10px 14px', borderTop: first ? 'none' : `1px solid ${T.border}`, alignItems: 'center', fontSize: 12 }}>
+    <div onClick={onOpen} style={{ display: 'grid', gridTemplateColumns: '110px 1fr 1fr 120px 100px 30px', gap: 10, padding: '10px 14px', borderTop: first ? 'none' : `1px solid ${T.border}`, alignItems: 'center', fontSize: 12, cursor: 'pointer' }}>
       <div style={{ color: T.text2, fontFamily: 'monospace' }}>{typeLabel}</div>
       <div style={{ color: T.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{row.filename}</div>
       <div style={{ color: T.text3, fontFamily: 'monospace', fontSize: 11 }}>
         {row.result_summary ? summariseRun(row.result_summary)
-         : row.parsed_summary ? `${row.parsed_summary.total_to_import || row.parsed_summary.total_in_file || '?'} parsed`
+         : row.parsed_summary ? `${row.parsed_summary.total_to_import || row.parsed_summary.total_in_file || row.parsed_summary.expected_chunks ? `${row.parsed_summary.expected_chunks} chunks expected` : '?'} parsed`
          : '—'}
         {row.error && <span style={{ color: T.red, marginLeft: 6 }}>· {row.error.substring(0, 60)}</span>}
       </div>
       <div style={{ color: T.text3, fontSize: 11 }}>{new Date(row.uploaded_at).toLocaleString()}</div>
       <div style={{ color: colour, fontWeight: 600, fontSize: 11 }}>{row.status}</div>
       <button onClick={del} title="Delete record" style={{ background: 'none', border: 'none', color: T.text3, cursor: 'pointer', fontSize: 14 }}>×</button>
+    </div>
+  )
+}
+
+// ── Import detail modal — click a history row to open ────────────────────────
+function ImportDetail({ id, typeLabel, onClose, onChange }: { id: string; typeLabel: string; onClose: () => void; onChange: () => void }) {
+  const [row, setRow] = useState<ImportRow | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState('')
+
+  async function load() {
+    try {
+      const r = await fetch(`/api/imports/${id}`)
+      const d = await r.json()
+      if (r.ok) setRow(d)
+      else setErr(d.error || 'Failed to load')
+    } catch (e: any) { setErr(e?.message || 'Failed to load') }
+  }
+  useEffect(() => { load() }, [id])
+  // Poll while running/uploading.
+  useEffect(() => {
+    if (!row) return
+    if (row.status !== 'running' && row.status !== 'uploading') return
+    const iv = setInterval(load, 3000)
+    return () => clearInterval(iv)
+  }, [row?.status])
+
+  async function runImport() {
+    if (!row) return
+    setBusy(true); setErr('')
+    try {
+      const r = await fetch(`/api/imports/${id}/run`, { method: 'POST' })
+      const d = await r.json()
+      if (!r.ok) { setErr(d.error || 'Run failed'); return }
+      await load(); onChange()
+    } catch (e: any) { setErr(e?.message || 'Run failed') }
+    finally { setBusy(false) }
+  }
+  async function cancelOrDelete() {
+    if (!row) return
+    if (!confirm(row.status === 'uploading' ? `Cancel this upload? Any uploaded chunks will be discarded — you can re-upload the file fresh.` : `Delete this import record (${row.filename})? It won't undo what was imported.`)) return
+    setBusy(true); setErr('')
+    try {
+      const r = await fetch(`/api/imports/${id}`, { method: 'DELETE' })
+      const d = await r.json().catch(() => ({}))
+      if (!r.ok) { setErr(d.error || 'Failed'); return }
+      onChange(); onClose()
+    } catch (e: any) { setErr(e?.message || 'Failed') }
+    finally { setBusy(false) }
+  }
+
+  return (
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', zIndex: 9000, backdropFilter: 'blur(4px)', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', padding: '40px 20px', overflowY: 'auto' }}>
+      <div style={{ width: '100%', maxWidth: 640, background: T.bg2, border: `1px solid ${T.border2}`, borderRadius: 12, maxHeight: 'calc(100vh - 80px)', display: 'flex', flexDirection: 'column' }}>
+        <div style={{ display: 'flex', alignItems: 'center', padding: '14px 18px', borderBottom: `1px solid ${T.border}` }}>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontSize: 13, fontWeight: 600 }}>{typeLabel} import</div>
+            <div style={{ fontSize: 11, color: T.text3, marginTop: 2 }}>{row?.filename}</div>
+          </div>
+          <button onClick={onClose} aria-label="Close" style={{ width: 30, height: 30, borderRadius: 6, background: T.bg3, border: `1px solid ${T.border}`, color: T.text2, cursor: 'pointer', fontSize: 16 }}>×</button>
+        </div>
+
+        <div style={{ padding: 18, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 14 }}>
+          {!row && !err && <div style={{ fontSize: 12, color: T.text3 }}>Loading…</div>}
+          {err && <div style={{ padding: 10, background: '#3a1d1d', border: `1px solid ${T.red}`, borderRadius: 6, color: T.red, fontSize: 12 }}>{err}</div>}
+
+          {row && (
+            <>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 10, fontSize: 11 }}>
+                <Info label="Status" value={<span style={{ color: row.status === 'completed' ? T.green : row.status === 'failed' ? T.red : row.status === 'uploading' || row.status === 'running' ? T.amber : T.text2, fontWeight: 600, textTransform: 'uppercase', fontSize: 11 }}>{row.status}</span>} />
+                <Info label="Uploaded" value={new Date(row.uploaded_at).toLocaleString()} />
+                {row.started_at && <Info label="Started" value={new Date(row.started_at).toLocaleString()} />}
+                {row.completed_at && <Info label="Finished" value={new Date(row.completed_at).toLocaleString()} />}
+              </div>
+
+              {row.parsed_summary && (
+                <div>
+                  <div style={{ fontSize: 10, color: T.text3, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 8, fontWeight: 600 }}>Parsed</div>
+                  <div style={{ padding: 12, background: T.bg3, border: `1px solid ${T.border}`, borderRadius: 6 }}>
+                    <SummaryGrid s={row.parsed_summary} type={row.type} />
+                  </div>
+                </div>
+              )}
+
+              {row.result_summary && (
+                <div>
+                  <div style={{ fontSize: 10, color: T.text3, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 8, fontWeight: 600 }}>Result</div>
+                  <div style={{ padding: 12, background: T.bg3, border: `1px solid ${row.status === 'completed' ? T.green + '33' : T.border}`, borderRadius: 6 }}>
+                    <ResultGrid s={row.result_summary} type={row.type} />
+                  </div>
+                </div>
+              )}
+
+              {row.error && (
+                <div style={{ padding: 10, background: '#3a1d1d', border: `1px solid ${T.red}`, borderRadius: 6, color: T.red, fontSize: 12 }}>
+                  <div style={{ fontWeight: 600, marginBottom: 4 }}>Error</div>
+                  {row.error}
+                </div>
+              )}
+
+              {row.status === 'uploading' && (
+                <div style={{ padding: 10, background: T.bg3, border: `1px solid ${T.amber}55`, borderRadius: 6, fontSize: 12, color: T.text2 }}>
+                  This upload was interrupted before all chunks arrived. The file isn't on the server anymore — your best bet is to cancel this record and re-upload the file fresh.
+                </div>
+              )}
+            </>
+          )}
+        </div>
+
+        {row && (
+          <div style={{ padding: '12px 18px', borderTop: `1px solid ${T.border}`, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            {row.status === 'parsed' && (
+              <button onClick={runImport} disabled={busy} style={btn(true)}>{busy ? 'Running…' : 'Run import'}</button>
+            )}
+            {(row.status === 'uploading' || row.status === 'parsed' || row.status === 'completed' || row.status === 'failed' || row.status === 'cancelled') && (
+              <button onClick={cancelOrDelete} disabled={busy} style={{ ...btn(false), color: T.red, borderColor: T.red + '55' }}>
+                {row.status === 'uploading' ? 'Cancel upload' : row.status === 'parsed' ? 'Discard' : 'Delete record'}
+              </button>
+            )}
+            <div style={{ flex: 1 }} />
+            <button onClick={onClose} disabled={busy} style={btn(false)}>Close</button>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function Info({ label, value }: { label: string; value: any }) {
+  return (
+    <div>
+      <div style={{ fontSize: 9, color: T.text3, textTransform: 'uppercase', letterSpacing: '0.05em' }}>{label}</div>
+      <div style={{ fontSize: 12, color: T.text2, marginTop: 2 }}>{value}</div>
     </div>
   )
 }
