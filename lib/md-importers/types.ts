@@ -1,18 +1,23 @@
 // lib/md-importers/types.ts
 //
-// Shared interfaces for the MD importer framework. One config per importable
-// type — fields + aliases + a runner. The client uses fields to drive the
-// "map your columns" UI; the server uses the runner to actually insert/merge.
+// Shared interfaces for the MD importer framework.
+//
+// An import type has one or more ROLES — each role is one sheet's worth of
+// rows. Most types have one role (id: 'main'), but composite types like
+// invoices have several (header / items / payments) that all get uploaded
+// together and stitched server-side during run.
+//
+// Single-role types: client picks the file → picks one sheet → maps columns.
+// Multi-role types : client picks the file → for each role, picks a sheet +
+//                    maps columns. Optional roles can be skipped.
 
 import { SupabaseClient } from '@supabase/supabase-js'
 
 export type ImportType = 'customers' | 'job_types' | 'vehicles' | 'inventory' | 'quotes' | 'invoices'
 
 export interface ImportField {
-  /** Portal-side field name (used as the key in mapped rows). */
   id: string
   label: string
-  /** Source-column header strings we'll try to auto-match against. */
   aliases: string[]
   required?: boolean
   hint?: string
@@ -20,18 +25,30 @@ export interface ImportField {
 
 /** A single source row already keyed by portal field id (post column-mapping). */
 export type MappedRow = Record<string, any>
+/** Per-role bundle of rows after column mapping. */
+export type MultiRoleRows = Record<string, MappedRow[]>
+
+export interface ImportRole {
+  /** Stable id used in the URL / db (e.g. 'main', 'header', 'items', 'payments'). */
+  id: string
+  label: string
+  /** Candidate sheet names. */
+  sheets: string[]
+  fields: ImportField[]
+  /** When false, the user can skip mapping/uploading this role. Defaults to true. */
+  required?: boolean
+  /** Short blurb on the role card (e.g. "One row per invoice"). */
+  blurb?: string
+}
 
 export interface ImportTypeConfig {
   id: ImportType
   label: string
-  /** Candidate sheet names within the workbook (resolved case-insensitively). */
-  sheets: string[]
-  /** What the user maps their columns to. */
-  fields: ImportField[]
-  /** Server-side: validates + cleans the mapped rows. Returns rows to persist + a preview. */
-  normalize: (rows: MappedRow[]) => { rows: MappedRow[]; summary: any }
-  /** Server-side: writes them to the DB. */
-  run: (db: SupabaseClient, rows: MappedRow[]) => Promise<any>
-  /** A short blurb shown on the upload card explaining what this importer does. */
+  roles: ImportRole[]
+  /** Validates + cleans per-role rows. Returns per-role normalised rows + an
+   *  overall summary shown on the preview screen. */
+  normalize: (data: MultiRoleRows) => { rows: MultiRoleRows; summary: any }
+  /** Writes the normalised per-role rows to the DB. */
+  run: (db: SupabaseClient, data: MultiRoleRows) => Promise<any>
   blurb: string
 }

@@ -1,8 +1,7 @@
 // pages/api/imports/[id]/run.ts
-// POST — execute the import via the type's runner. Reads rows back from
-// md_import_chunks (one query per chunk, to keep statements small enough to
-// stay inside the Supabase per-statement timeout), normalises in memory, then
-// hands the full set to the type's run(). Chunks are deleted on success.
+// POST — runs the import. Streams chunks back grouped by role (same pattern
+// as finalize, one chunk per SELECT to dodge the statement timeout) and
+// hands the full per-role set to the type's run(). Chunks deleted on success.
 
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
 import { withAuth } from '../../../../lib/authServer'
@@ -19,6 +18,31 @@ function sb(): SupabaseClient {
   )
 }
 
+async function streamRows(db: SupabaseClient, importId: string): Promise<Record<string, any[]>> {
+  const roleSet = new Set<string>()
+  {
+    const { data } = await db.from('md_import_chunks').select('role').eq('import_id', importId).limit(10000)
+    for (const r of data || []) roleSet.add((r as any).role)
+  }
+  const data: Record<string, any[]> = {}
+  for (const role of Array.from(roleSet)) {
+    data[role] = []
+    let i = 0
+    while (true) {
+      const { data: chunks, error } = await db.from('md_import_chunks')
+        .select('chunk_index, rows')
+        .eq('import_id', importId).eq('role', role)
+        .order('chunk_index', { ascending: true })
+        .range(i, i)
+      if (error) throw new Error(`role ${role} chunk ${i}: ${error.message}`)
+      if (!chunks || chunks.length === 0) break
+      for (const r of (chunks[0] as any).rows || []) data[role].push(r)
+      i++
+    }
+  }
+  return data
+}
+
 export default withAuth('view:diary', async (req, res, user) => {
   if (!roleHasPermission(user.role, 'admin:settings')) return res.status(403).json({ error: 'Admin only' })
   if (req.method !== 'POST') { res.setHeader('Allow', 'POST'); return res.status(405).json({ error: 'POST only' }) }
@@ -26,9 +50,7 @@ export default withAuth('view:diary', async (req, res, user) => {
   if (!id) return res.status(400).json({ error: 'id required' })
 
   const db = sb()
-  const { data: row, error: loadErr } = await db.from('md_imports')
-    .select('id, type, status')
-    .eq('id', id).maybeSingle()
+  const { data: row, error: loadErr } = await db.from('md_imports').select('id, type, status').eq('id', id).maybeSingle()
   if (loadErr || !row) return res.status(404).json({ error: 'Import not found' })
   if ((row as any).status === 'running') return res.status(409).json({ error: 'Already running' })
   if ((row as any).status === 'completed') return res.status(409).json({ error: 'Already completed — upload again to re-run.' })
@@ -40,24 +62,11 @@ export default withAuth('view:diary', async (req, res, user) => {
     const importer = getImporter((row as any).type)
     if (!importer) throw new Error(`No importer registered for "${(row as any).type}"`)
 
-    // Stream chunks one at a time to keep each SELECT well under the timeout.
-    const allRows: any[] = []
-    let chunkIdx = 0
-    while (true) {
-      const { data, error } = await db.from('md_import_chunks')
-        .select('chunk_index, rows')
-        .eq('import_id', id)
-        .order('chunk_index', { ascending: true })
-        .range(chunkIdx, chunkIdx)
-      if (error) throw new Error(`chunk ${chunkIdx} read: ${error.message}`)
-      if (!data || data.length === 0) break
-      for (const r of (data[0] as any).rows || []) allRows.push(r)
-      chunkIdx++
-    }
-    if (allRows.length === 0) throw new Error('No rows in chunks — re-upload the file.')
+    const rolesData = await streamRows(db, id)
+    const totalRows = Object.values(rolesData).reduce((a, b) => a + b.length, 0)
+    if (totalRows === 0) throw new Error('No rows in chunks — re-upload the file.')
 
-    // Re-normalise (cheap, in-memory) and run.
-    const normalized = importer.normalize(allRows).rows
+    const normalized = importer.normalize(rolesData).rows
     const summary = await importer.run(db, normalized)
 
     await db.from('md_imports').update({
@@ -66,7 +75,6 @@ export default withAuth('view:diary', async (req, res, user) => {
       completed_at: new Date().toISOString(),
     }).eq('id', id)
 
-    // Free the staged rows now that they've been applied.
     try { await db.from('md_import_chunks').delete().eq('import_id', id) } catch { /* best-effort */ }
 
     return res.status(200).json({ ok: true, result_summary: summary })

@@ -1,6 +1,6 @@
 // pages/api/imports/meta.ts
-// Returns the field config (fields + aliases + sheet candidates + blurb) for
-// every importable type. The /imports UI uses this to drive the mapping form.
+// Returns the per-type config: roles (each with its own sheets/fields) + blurb.
+// The /imports UI uses this to drive the multi-role mapping form.
 
 import { withAuth } from '../../../lib/authServer'
 import { roleHasPermission } from '../../../lib/permissions'
@@ -14,8 +14,11 @@ export default withAuth('view:diary', async (req, res, user) => {
   const types = IMPORTER_TYPES.map(id => {
     const cfg = IMPORTERS[id]
     return {
-      id: cfg.id, label: cfg.label, sheets: cfg.sheets, blurb: cfg.blurb,
-      fields: cfg.fields.map(f => ({ id: f.id, label: f.label, aliases: f.aliases, required: !!f.required, hint: f.hint || null })),
+      id: cfg.id, label: cfg.label, blurb: cfg.blurb,
+      roles: cfg.roles.map(r => ({
+        id: r.id, label: r.label, sheets: r.sheets, required: r.required !== false, blurb: r.blurb || null,
+        fields: r.fields.map(f => ({ id: f.id, label: f.label, aliases: f.aliases, required: !!f.required, hint: f.hint || null })),
+      })),
     }
   })
   return res.status(200).json({ types })

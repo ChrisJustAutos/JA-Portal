@@ -1,12 +1,15 @@
 // pages/imports.tsx
-// Admin page for importing MechanicDesk data. Step-driven flow:
-//   1. Pick the file.
-//   2. Pick the sheet (auto-suggested but always shown).
-//   3. Map portal fields ← source columns (auto-suggested via aliases).
-//   4. Preview counts.
+// Admin imports page.
+//
+// Flow:
+//   1. Pick a file (browser parses with SheetJS).
+//   2. For each role the type defines: pick a sheet → map portal fields ←
+//      source columns. Optional roles can be skipped. Single-role types
+//      (customers, vehicles, inventory, job types, quotes) have one role
+//      called "main"; multi-role types (invoices) have several.
+//   3. Click Continue — chunks upload per role.
+//   4. Server normalises + returns preview counts.
 //   5. Run import.
-// Browser parses the file with SheetJS, applies the mapping, and POSTs the
-// pre-mapped rows. The server runs the type's normalizer + runner.
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import Head from 'next/head'
@@ -22,7 +25,8 @@ const T = {
 } as const
 
 interface FieldDef { id: string; label: string; aliases: string[]; required: boolean; hint: string | null }
-interface TypeMeta { id: string; label: string; sheets: string[]; blurb: string; fields: FieldDef[] }
+interface RoleDef { id: string; label: string; sheets: string[]; required: boolean; blurb: string | null; fields: FieldDef[] }
+interface TypeMeta { id: string; label: string; blurb: string; roles: RoleDef[] }
 
 interface ImportRow {
   id: string; type: string; filename: string; uploaded_at: string
@@ -57,7 +61,7 @@ export default function ImportsPage() {
             <div>
               <Link href="/settings" style={{ fontSize: 11, color: T.text3, textDecoration: 'none', fontFamily: 'monospace' }}>← Settings</Link>
               <h1 style={{ fontSize: 22, fontWeight: 600, margin: '6px 0 2px' }}>Imports</h1>
-              <div style={{ fontSize: 12, color: T.text3 }}>Drop a spreadsheet, pick the sheet, confirm which column maps to which field, then run.</div>
+              <div style={{ fontSize: 12, color: T.text3 }}>Drop a spreadsheet, pick the sheet(s), confirm which column maps to which field, then run.</div>
             </div>
             <button onClick={() => { setRefreshing(true); reload().finally(() => setRefreshing(false)) }} style={btn(false)}>{refreshing ? '↻ Refreshing…' : '↻ Refresh'}</button>
           </div>
@@ -69,7 +73,7 @@ export default function ImportsPage() {
                 border: 'none', borderBottom: active === t.id ? `2px solid ${T.amber}` : '2px solid transparent',
                 color: active === t.id ? T.text : T.text3,
                 fontSize: 12, fontFamily: 'inherit', fontWeight: 600, cursor: 'pointer', whiteSpace: 'nowrap',
-              }}>{t.label}</button>
+              }}>{t.label}{t.roles.length > 1 && <span style={{ marginLeft: 6, fontSize: 9, color: T.text3, fontWeight: 400 }}>{t.roles.length} sheets</span>}</button>
             ))}
           </div>
 
@@ -94,8 +98,16 @@ export default function ImportsPage() {
   )
 }
 
-// ── Step-driven flow per type ─────────────────────────────────────────────────
-type Step = 'idle' | 'sheet' | 'mapping' | 'preview' | 'result'
+// ── Per-role config tracked in state ─────────────────────────────────────────
+interface RoleConfig {
+  skipped: boolean
+  sheetName: string
+  columns: string[]
+  sampleRows: any[]
+  mapping: Record<string, string>
+}
+
+type Step = 'idle' | 'config' | 'preview' | 'result'
 
 function ImportFlow({ meta, onComplete }: { meta: TypeMeta; onComplete: () => void }) {
   const [step, setStep] = useState<Step>('idle')
@@ -104,18 +116,29 @@ function ImportFlow({ meta, onComplete }: { meta: TypeMeta; onComplete: () => vo
   const [err, setErr] = useState('')
   const [file, setFile] = useState<File | null>(null)
   const [wb, setWb] = useState<XLSX.WorkBook | null>(null)
-  const [sheetName, setSheetName] = useState<string>('')
-  const [columns, setColumns] = useState<string[]>([])
-  const [sampleRows, setSampleRows] = useState<any[]>([])
-  const [mapping, setMapping] = useState<Record<string, string>>({})
+  const [configs, setConfigs] = useState<Record<string, RoleConfig>>({})
   const [preview, setPreview] = useState<{ id: string; summary: any } | null>(null)
   const [result, setResult] = useState<{ summary: any } | null>(null)
   const fileRef = useRef<HTMLInputElement>(null)
 
   function reset() {
     setStep('idle'); setBusy(false); setProgress(''); setErr('')
-    setFile(null); setWb(null); setSheetName(''); setColumns([]); setSampleRows([])
-    setMapping({}); setPreview(null); setResult(null)
+    setFile(null); setWb(null); setConfigs({}); setPreview(null); setResult(null)
+  }
+
+  function loadSheetForRole(w: XLSX.WorkBook, roleId: string, sheetName: string) {
+    const sheet = w.Sheets[sheetName]
+    if (!sheet) return
+    const role = meta.roles.find(r => r.id === roleId)!
+    const arr: any[][] = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: null })
+    const headers = (arr[0] || []).map(h => String(h ?? '').trim()).filter(Boolean)
+    const obj = XLSX.utils.sheet_to_json(sheet, { defval: null }).slice(0, 3)
+    const mapping: Record<string, string> = {}
+    for (const f of role.fields) {
+      const hit = bestMatch(headers, f.aliases, f.label, f.id)
+      if (hit) mapping[f.id] = hit
+    }
+    setConfigs(prev => ({ ...prev, [roleId]: { skipped: false, sheetName, columns: headers, sampleRows: obj, mapping } }))
   }
 
   async function onFile(f: File) {
@@ -126,76 +149,110 @@ function ImportFlow({ meta, onComplete }: { meta: TypeMeta; onComplete: () => vo
       const buf = await f.arrayBuffer()
       const w = XLSX.read(buf, { type: 'array' })
       setWb(w)
-      // Auto-pick the first matching sheet from candidates; otherwise show picker.
-      const sheet = pickSheet(w, meta.sheets) || w.SheetNames[0]
-      if (sheet) {
-        loadSheet(w, sheet)
-        // Always show the sheet picker so the user can change their mind.
-        setStep('sheet')
-      } else {
-        setErr('No sheets found in the file.')
+      // Auto-pick the best sheet for each role.
+      const next: Record<string, RoleConfig> = {}
+      for (const role of meta.roles) {
+        const hit = pickSheet(w, role.sheets)
+        if (hit) {
+          const sheet = w.Sheets[hit]
+          const arr: any[][] = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: null })
+          const headers = (arr[0] || []).map(h => String(h ?? '').trim()).filter(Boolean)
+          const obj = XLSX.utils.sheet_to_json(sheet, { defval: null }).slice(0, 3)
+          const mapping: Record<string, string> = {}
+          for (const f of role.fields) {
+            const m = bestMatch(headers, f.aliases, f.label, f.id)
+            if (m) mapping[f.id] = m
+          }
+          next[role.id] = { skipped: false, sheetName: hit, columns: headers, sampleRows: obj, mapping }
+        } else {
+          // No auto-pick — leave empty for user to fill in OR skip if optional.
+          next[role.id] = { skipped: !role.required ? false : false, sheetName: '', columns: [], sampleRows: [], mapping: {} }
+        }
       }
+      setConfigs(next)
+      setStep('config')
     } catch (e: any) { setErr(e?.message || 'Failed to read file') }
     finally { setBusy(false) }
   }
 
-  function loadSheet(w: XLSX.WorkBook, name: string) {
-    setSheetName(name)
-    const sheet = w.Sheets[name]
-    const arr: any[][] = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: null })
-    const headers = (arr[0] || []).map(h => String(h ?? '').trim()).filter(Boolean)
-    setColumns(headers)
-    // first 3 data rows for the preview pane on the mapping screen
-    const obj = XLSX.utils.sheet_to_json(sheet, { defval: null })
-    setSampleRows(obj.slice(0, 3))
-    // auto-suggest mapping
-    const m: Record<string, string> = {}
-    for (const f of meta.fields) {
-      const hit = bestMatch(headers, f.aliases, f.label, f.id)
-      if (hit) m[f.id] = hit
+  function setRoleSheet(roleId: string, name: string) {
+    if (!wb) return
+    if (!name) {
+      setConfigs(prev => ({ ...prev, [roleId]: { skipped: prev[roleId]?.skipped || false, sheetName: '', columns: [], sampleRows: [], mapping: {} } }))
+      return
     }
-    setMapping(m)
+    loadSheetForRole(wb, roleId, name)
+  }
+  function setRoleMapping(roleId: string, fieldId: string, columnName: string) {
+    setConfigs(prev => ({ ...prev, [roleId]: { ...prev[roleId], mapping: { ...prev[roleId].mapping, [fieldId]: columnName } } }))
+  }
+  function toggleSkip(roleId: string, skip: boolean) {
+    setConfigs(prev => ({ ...prev, [roleId]: { ...prev[roleId], skipped: skip, ...(skip ? { sheetName: '', columns: [], mapping: {} } : {}) } }))
   }
 
-  async function submitMapping() {
-    if (!wb || !sheetName) return
-    const missing = meta.fields.filter(f => f.required && !mapping[f.id])
-    if (missing.length) { setErr(`Required field${missing.length > 1 ? 's' : ''} not mapped: ${missing.map(f => f.label).join(', ')}.`); return }
+  // Validate: every required role must have a sheet picked + every required field mapped.
+  function validate(): string | null {
+    for (const role of meta.roles) {
+      const cfg = configs[role.id]
+      if (role.required) {
+        if (!cfg?.sheetName) return `${role.label}: pick a sheet`
+        const missing = role.fields.filter(f => f.required && !cfg.mapping[f.id])
+        if (missing.length) return `${role.label}: missing required field${missing.length > 1 ? 's' : ''} ${missing.map(f => f.label).join(', ')}`
+      } else if (cfg && !cfg.skipped && cfg.sheetName) {
+        const missing = role.fields.filter(f => f.required && !cfg.mapping[f.id])
+        if (missing.length) return `${role.label}: missing required field${missing.length > 1 ? 's' : ''} ${missing.map(f => f.label).join(', ')}`
+      }
+    }
+    return null
+  }
+
+  async function submit() {
+    if (!wb) return
+    const v = validate(); if (v) { setErr(v); return }
     setBusy(true); setErr(''); setProgress('Reading rows…')
     try {
-      const sheet = wb.Sheets[sheetName]
-      const raw = XLSX.utils.sheet_to_json(sheet, { defval: null }) as any[]
-      const mapped = raw.map(r => {
-        const out: any = {}
-        for (const f of meta.fields) {
-          const col = mapping[f.id]
-          if (col) out[f.id] = r[col]
-        }
-        return out
-      })
+      // Build per-role mapped row arrays.
+      const perRole: { roleId: string; rows: any[] }[] = []
+      for (const role of meta.roles) {
+        const cfg = configs[role.id]
+        if (!cfg || cfg.skipped || !cfg.sheetName) continue
+        const sheet = wb.Sheets[cfg.sheetName]
+        const raw = XLSX.utils.sheet_to_json(sheet, { defval: null }) as any[]
+        const mapped = raw.map(r => {
+          const out: any = {}
+          for (const f of role.fields) {
+            const col = cfg.mapping[f.id]
+            if (col) out[f.id] = r[col]
+          }
+          return out
+        })
+        perRole.push({ roleId: role.id, rows: mapped })
+      }
 
-      // Chunked upload — Vercel's request-body limit is ~4.5MB, so split.
-      const CHUNK = 1500
-      const chunkCount = Math.max(1, Math.ceil(mapped.length / CHUNK))
-      setProgress(`Uploading 1 / ${chunkCount} chunks (${mapped.length} rows)…`)
-
+      // Create the import row.
       const r0 = await fetch('/api/imports', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ type: meta.id, filename: file?.name || 'upload.xls', rows: mapped.slice(0, CHUNK), chunk_count: chunkCount }),
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ type: meta.id, filename: file?.name || 'upload.xls' }),
       })
       const d0 = await safeJson(r0)
       if (!r0.ok) { setErr(d0?.error || `Upload failed (HTTP ${r0.status})`); return }
       const importId = d0.id
 
-      for (let i = 1; i < chunkCount; i++) {
-        setProgress(`Uploading ${i + 1} / ${chunkCount} chunks…`)
-        const r = await fetch(`/api/imports/${importId}/chunk`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ chunk_index: i, rows: mapped.slice(i * CHUNK, (i + 1) * CHUNK) }),
-        })
-        if (!r.ok) { const e = await safeJson(r); setErr(e?.error || `Chunk ${i + 1} failed (HTTP ${r.status})`); return }
+      // Stream each role's chunks (≤ ~4MB body per request).
+      const CHUNK = 1500
+      const totalChunks = perRole.reduce((sum, r) => sum + Math.max(1, Math.ceil(r.rows.length / CHUNK)), 0)
+      let chunksDone = 0
+      for (const { roleId, rows } of perRole) {
+        const count = Math.max(1, Math.ceil(rows.length / CHUNK))
+        for (let i = 0; i < count; i++) {
+          chunksDone++
+          setProgress(`Uploading ${chunksDone} / ${totalChunks} · ${roleId} chunk ${i + 1}/${count}`)
+          const r = await fetch(`/api/imports/${importId}/chunk`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ role: roleId, chunk_index: i, rows: rows.slice(i * CHUNK, (i + 1) * CHUNK) }),
+          })
+          if (!r.ok) { const e = await safeJson(r); setErr(e?.error || `Chunk failed (HTTP ${r.status})`); return }
+        }
       }
 
       setProgress('Finalising…')
@@ -208,25 +265,25 @@ function ImportFlow({ meta, onComplete }: { meta: TypeMeta; onComplete: () => vo
     finally { setBusy(false); setProgress('') }
   }
 
-  async function safeJson(r: Response): Promise<any> {
-    try { return await r.clone().json() } catch {
-      const text = await r.text().catch(() => '')
-      return { error: text ? `Server returned non-JSON: ${text.substring(0, 200)}` : `HTTP ${r.status}` }
-    }
-  }
-
   async function runImport() {
     if (!preview) return
     setBusy(true); setErr('')
     try {
       const r = await fetch(`/api/imports/${preview.id}/run`, { method: 'POST' })
-      const d = await r.json()
-      if (!r.ok) { setErr(d.error || 'Import failed'); return }
+      const d = await safeJson(r)
+      if (!r.ok) { setErr(d?.error || 'Import failed'); return }
       setResult({ summary: d.result_summary })
       setStep('result')
       onComplete()
     } catch (e: any) { setErr(e?.message || 'Import failed') }
     finally { setBusy(false) }
+  }
+
+  async function safeJson(r: Response): Promise<any> {
+    try { return await r.clone().json() } catch {
+      const text = await r.text().catch(() => '')
+      return { error: text ? `Server returned non-JSON: ${text.substring(0, 200)}` : `HTTP ${r.status}` }
+    }
   }
 
   return (
@@ -241,68 +298,24 @@ function ImportFlow({ meta, onComplete }: { meta: TypeMeta; onComplete: () => vo
              style={{ padding: '36px 20px', textAlign: 'center', border: `2px dashed ${T.border2}`, borderRadius: 8, cursor: busy ? 'default' : 'pointer', background: T.bg3 }}>
           <input ref={fileRef} type="file" accept=".xls,.xlsx" style={{ display: 'none' }} onChange={e => { const f = e.target.files?.[0]; if (f) onFile(f) }} />
           <div style={{ fontSize: 13, color: T.text2, fontWeight: 500 }}>{busy ? 'Reading…' : 'Drop .xls/.xlsx here, or click to browse'}</div>
-          <div style={{ fontSize: 10, color: T.text3, marginTop: 6 }}>Parsed in your browser — nothing is uploaded until you confirm.</div>
+          <div style={{ fontSize: 10, color: T.text3, marginTop: 6 }}>Parsed in your browser — nothing's uploaded until you confirm.</div>
         </div>
       )}
 
-      {step === 'sheet' && wb && (
+      {step === 'config' && wb && (
         <div>
-          <Section label="1. Sheet" />
-          <div style={{ fontSize: 11, color: T.text3, marginBottom: 8 }}>File: <strong style={{ color: T.text2 }}>{file?.name}</strong></div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginBottom: 14 }}>
-            {wb.SheetNames.map(n => {
-              const isSel = n === sheetName
-              const rowCount = (() => { try { return XLSX.utils.sheet_to_json(wb.Sheets[n], { header: 1, defval: null }).length } catch { return '?' } })()
-              return (
-                <label key={n} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 12px', background: isSel ? T.bg3 : 'transparent', border: `1px solid ${isSel ? T.amber : T.border}`, borderRadius: 6, cursor: 'pointer' }}>
-                  <input type="radio" name="sheet" checked={isSel} onChange={() => loadSheet(wb, n)} />
-                  <span style={{ fontSize: 13, color: T.text }}>{n}</span>
-                  <span style={{ fontSize: 11, color: T.text3, marginLeft: 'auto' }}>{rowCount} rows</span>
-                </label>
-              )
-            })}
-          </div>
-          <div style={{ display: 'flex', gap: 8 }}>
-            <button onClick={() => setStep('mapping')} disabled={!sheetName || columns.length === 0} style={btn(true)}>Continue → Map columns</button>
-            <button onClick={reset} style={btn(false)}>Start over</button>
-          </div>
-          {columns.length === 0 && sheetName && <div style={{ marginTop: 10, fontSize: 11, color: T.amber }}>This sheet has no header row. Pick a different sheet.</div>}
-        </div>
-      )}
+          <div style={{ fontSize: 11, color: T.text3, marginBottom: 10 }}>File: <strong style={{ color: T.text2 }}>{file?.name}</strong> · {wb.SheetNames.length} sheet{wb.SheetNames.length === 1 ? '' : 's'}</div>
+          {meta.roles.map(role => (
+            <RolePanel key={role.id} role={role} wb={wb}
+              config={configs[role.id]}
+              onPickSheet={n => setRoleSheet(role.id, n)}
+              onPickMapping={(f, c) => setRoleMapping(role.id, f, c)}
+              onSkip={s => toggleSkip(role.id, s)}
+            />
+          ))}
 
-      {step === 'mapping' && (
-        <div>
-          <Section label="2. Column mapping" />
-          <div style={{ fontSize: 11, color: T.text3, marginBottom: 12 }}>Auto-suggested from headers in the <strong style={{ color: T.text2 }}>{sheetName}</strong> sheet. Adjust where needed.</div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 14 }}>
-            {meta.fields.map(f => (
-              <div key={f.id} style={{ display: 'grid', gridTemplateColumns: '200px 1fr', gap: 10, alignItems: 'center' }}>
-                <div>
-                  <div style={{ fontSize: 12, color: T.text2 }}>
-                    {f.label}{f.required && <span style={{ color: T.red, marginLeft: 4 }}>*</span>}
-                  </div>
-                  {f.hint && <div style={{ fontSize: 10, color: T.text3, marginTop: 1 }}>{f.hint}</div>}
-                </div>
-                <select value={mapping[f.id] || ''} onChange={e => setMapping(m => ({ ...m, [f.id]: e.target.value }))} style={inp}>
-                  <option value="">— not in this sheet —</option>
-                  {columns.map(c => <option key={c} value={c}>{c}</option>)}
-                </select>
-              </div>
-            ))}
-          </div>
-
-          {sampleRows.length > 0 && (
-            <details style={{ marginBottom: 14 }}>
-              <summary style={{ cursor: 'pointer', fontSize: 11, color: T.text3, marginBottom: 8 }}>Preview first 3 rows (mapped)</summary>
-              <pre style={{ background: T.bg3, padding: 10, borderRadius: 6, fontSize: 10, color: T.text2, overflow: 'auto', maxHeight: 200 }}>
-{JSON.stringify(sampleRows.slice(0, 3).map(r => Object.fromEntries(meta.fields.map(f => [f.id, mapping[f.id] ? r[mapping[f.id]] : null]).filter(([_, v]) => v != null))), null, 2)}
-              </pre>
-            </details>
-          )}
-
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-            <button onClick={submitMapping} disabled={busy} style={btn(true)}>{busy ? 'Uploading…' : 'Continue → Preview'}</button>
-            <button onClick={() => setStep('sheet')} disabled={busy} style={btn(false)}>← Back</button>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 6 }}>
+            <button onClick={submit} disabled={busy} style={btn(true)}>{busy ? 'Uploading…' : 'Continue → Preview'}</button>
             <button onClick={reset} disabled={busy} style={btn(false)}>Start over</button>
             {busy && progress && <span style={{ fontSize: 11, color: T.text3, marginLeft: 8 }}>{progress}</span>}
           </div>
@@ -311,13 +324,13 @@ function ImportFlow({ meta, onComplete }: { meta: TypeMeta; onComplete: () => vo
 
       {step === 'preview' && preview && (
         <div>
-          <Section label="3. Preview" />
+          <Section label="Preview" />
           <div style={{ padding: 14, background: T.bg3, border: `1px solid ${T.border}`, borderRadius: 6, marginBottom: 14 }}>
-            <SummaryGrid s={preview.summary} type={meta.id} />
+            <SummaryGrid s={preview.summary} />
           </div>
           <div style={{ display: 'flex', gap: 8 }}>
             <button onClick={runImport} disabled={busy} style={btn(true)}>{busy ? 'Running…' : 'Run import'}</button>
-            <button onClick={() => setStep('mapping')} disabled={busy} style={btn(false)}>← Back</button>
+            <button onClick={() => setStep('config')} disabled={busy} style={btn(false)}>← Back</button>
             <button onClick={reset} disabled={busy} style={btn(false)}>Cancel</button>
           </div>
         </div>
@@ -327,13 +340,86 @@ function ImportFlow({ meta, onComplete }: { meta: TypeMeta; onComplete: () => vo
         <div>
           <Section label="✓ Done" />
           <div style={{ padding: 14, background: T.bg3, border: `1px solid ${T.green}33`, borderRadius: 6, marginBottom: 14 }}>
-            <ResultGrid s={result.summary} type={meta.id} />
+            <ResultGrid s={result.summary} />
           </div>
           <button onClick={reset} style={btn(false)}>Run another import</button>
         </div>
       )}
 
       {err && <div style={{ marginTop: 12, padding: 10, background: '#3a1d1d', border: `1px solid ${T.red}`, borderRadius: 6, color: T.red, fontSize: 12 }}>{err}</div>}
+    </div>
+  )
+}
+
+// ── Per-role config panel ────────────────────────────────────────────────────
+function RolePanel({ role, wb, config, onPickSheet, onPickMapping, onSkip }: {
+  role: RoleDef; wb: XLSX.WorkBook; config: RoleConfig | undefined
+  onPickSheet: (n: string) => void
+  onPickMapping: (fieldId: string, col: string) => void
+  onSkip: (skip: boolean) => void
+}) {
+  const skipped = config?.skipped === true
+  const isMulti = true  // panel always shown for clarity, even with 1 role
+  return (
+    <div style={{ marginBottom: 16, padding: 14, background: T.bg3, border: `1px solid ${skipped ? T.border : T.border2}`, borderRadius: 8, opacity: skipped ? 0.5 : 1 }}>
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 4 }}>
+        <div style={{ fontSize: 13, fontWeight: 600, color: T.text }}>{role.label}</div>
+        {!role.required && <span style={{ fontSize: 9, color: T.text3, fontFamily: 'monospace', textTransform: 'uppercase' }}>optional</span>}
+        {role.required && <span style={{ fontSize: 9, color: T.amber, fontFamily: 'monospace', textTransform: 'uppercase' }}>required</span>}
+        <div style={{ flex: 1 }} />
+        {!role.required && (
+          <button onClick={() => onSkip(!skipped)} style={{ background: 'none', border: 'none', color: T.text3, fontSize: 11, cursor: 'pointer', fontFamily: 'inherit' }}>
+            {skipped ? 'Include' : 'Skip'}
+          </button>
+        )}
+      </div>
+      {role.blurb && <div style={{ fontSize: 11, color: T.text3, marginBottom: 10 }}>{role.blurb}</div>}
+
+      {skipped ? (
+        <div style={{ fontSize: 11, color: T.text3, padding: '8px 0' }}>Skipped — no rows will be uploaded for this role.</div>
+      ) : (
+        <>
+          <div style={{ fontSize: 10, color: T.text3, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 6, marginTop: 6 }}>Sheet</div>
+          <select value={config?.sheetName || ''} onChange={e => onPickSheet(e.target.value)} style={{ ...inp, marginBottom: 12 }}>
+            <option value="">— pick a sheet —</option>
+            {wb.SheetNames.map(n => {
+              const rowCount = (() => { try { return XLSX.utils.sheet_to_json(wb.Sheets[n], { header: 1, defval: null }).length } catch { return 0 } })()
+              return <option key={n} value={n}>{n} · {rowCount} rows</option>
+            })}
+          </select>
+
+          {config?.sheetName && config.columns.length > 0 && (
+            <>
+              <div style={{ fontSize: 10, color: T.text3, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 6 }}>Column mapping</div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+                {role.fields.map(f => (
+                  <div key={f.id} style={{ display: 'grid', gridTemplateColumns: '200px 1fr', gap: 10, alignItems: 'center' }}>
+                    <div>
+                      <div style={{ fontSize: 11, color: T.text2 }}>
+                        {f.label}{f.required && <span style={{ color: T.red, marginLeft: 4 }}>*</span>}
+                      </div>
+                      {f.hint && <div style={{ fontSize: 9, color: T.text3, marginTop: 1 }}>{f.hint}</div>}
+                    </div>
+                    <select value={config.mapping[f.id] || ''} onChange={e => onPickMapping(f.id, e.target.value)} style={inp}>
+                      <option value="">— not in this sheet —</option>
+                      {config.columns.map(c => <option key={c} value={c}>{c}</option>)}
+                    </select>
+                  </div>
+                ))}
+              </div>
+              {config.sampleRows.length > 0 && (
+                <details style={{ marginTop: 10 }}>
+                  <summary style={{ cursor: 'pointer', fontSize: 11, color: T.text3 }}>Preview first 3 rows (mapped)</summary>
+                  <pre style={{ background: T.bg2, padding: 10, borderRadius: 6, fontSize: 10, color: T.text2, overflow: 'auto', maxHeight: 200, marginTop: 6 }}>
+{JSON.stringify(config.sampleRows.map(r => Object.fromEntries(role.fields.map(f => [f.id, config.mapping[f.id] ? r[config.mapping[f.id]] : null]).filter(([_, v]) => v != null))), null, 2)}
+                  </pre>
+                </details>
+              )}
+            </>
+          )}
+          {config?.sheetName && config.columns.length === 0 && <div style={{ fontSize: 11, color: T.amber }}>That sheet has no header row.</div>}
+        </>
+      )}
     </div>
   )
 }
@@ -370,30 +456,36 @@ function bestMatch(columns: string[], aliases: string[], label: string, id: stri
   return null
 }
 
-// ── Summaries ─────────────────────────────────────────────────────────────────
-function SummaryGrid({ s, type }: { s: any; type: string }) {
+// ── Summaries (generic — render whatever keys come back) ─────────────────────
+function SummaryGrid({ s }: { s: any }) {
   return (
     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 10, fontSize: 12 }}>
       {Object.entries(s || {}).map(([k, v]) => (
         <Stat key={k} label={prettyLabel(k)} value={v as any}
-          accent={k === 'total_to_import' ? 'text' : k.startsWith('skipped') ? undefined : undefined}
-          muted={k.startsWith('skipped')} />
+          muted={k.startsWith('skipped') || k.startsWith('headers_no_') || k.startsWith('payments_orphan') || k.startsWith('items_orphan')} />
       ))}
     </div>
   )
 }
-function ResultGrid({ s, type }: { s: any; type: string }) {
-  const order = ['inserted', 'updated', 'upserted', 'matched_by_mobile', 'matched_by_email', 'matched_by_name', 'matched_md_id', 'matched_rego', 'matched_sku', 'already_linked', 'no_customer', 'no_vehicle', 'errors']
+function ResultGrid({ s }: { s: any }) {
+  const order = ['inserted', 'updated', 'upserted', 'headers_inserted', 'items_inserted', 'payments_inserted',
+                 'matched_by_mobile', 'matched_by_email', 'matched_by_name', 'matched_md_id', 'matched_rego', 'matched_sku',
+                 'already_linked', 'duplicate_in_file', 'headers_skipped', 'headers_no_customer', 'items_orphan', 'payments_orphan',
+                 'no_customer', 'no_vehicle', 'errors', 'first_error']
   const keys = Object.keys(s || {}).sort((a, b) => {
     const ia = order.indexOf(a), ib = order.indexOf(b)
     return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib)
   })
   return (
     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 10, fontSize: 12 }}>
-      {keys.map(k => (
+      {keys.map(k => k === 'first_error' && s[k] ? (
+        <div key={k} style={{ gridColumn: '1 / -1', padding: 8, background: '#3a1d1d', border: `1px solid ${T.red}55`, borderRadius: 4, fontSize: 11, color: T.red }}>
+          <strong>First error:</strong> {s[k]}
+        </div>
+      ) : (
         <Stat key={k} label={prettyLabel(k)} value={s[k]}
-          accent={k === 'inserted' ? 'green' : k === 'updated' || k === 'upserted' ? 'teal' : k === 'errors' && s[k] > 0 ? 'red' : undefined}
-          muted={k.startsWith('matched') || k === 'already_linked' || k === 'no_customer' || k === 'no_vehicle'} />
+          accent={k.includes('inserted') || k === 'upserted' ? 'green' : k === 'updated' ? 'teal' : k === 'errors' && s[k] > 0 ? 'red' : undefined}
+          muted={k.startsWith('matched') || k === 'already_linked' || k === 'duplicate_in_file' || k.includes('orphan') || k.includes('no_') || k === 'headers_skipped'} />
       ))}
     </div>
   )
@@ -423,9 +515,7 @@ function HistoryRow({ row, first, typeLabel, onOpen, onChange }: { row: ImportRo
       <div style={{ color: T.text2, fontFamily: 'monospace' }}>{typeLabel}</div>
       <div style={{ color: T.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{row.filename}</div>
       <div style={{ color: T.text3, fontFamily: 'monospace', fontSize: 11 }}>
-        {row.result_summary ? summariseRun(row.result_summary)
-         : row.parsed_summary ? `${row.parsed_summary.total_to_import || row.parsed_summary.total_in_file || row.parsed_summary.expected_chunks ? `${row.parsed_summary.expected_chunks} chunks expected` : '?'} parsed`
-         : '—'}
+        {row.result_summary ? summariseRun(row.result_summary) : row.parsed_summary ? `${Object.values(row.parsed_summary).filter((v: any) => typeof v === 'number').reduce((a: number, b: any) => a + b, 0)} rows parsed` : '—'}
         {row.error && <span style={{ color: T.red, marginLeft: 6 }}>· {row.error.substring(0, 60)}</span>}
       </div>
       <div style={{ color: T.text3, fontSize: 11 }}>{new Date(row.uploaded_at).toLocaleString()}</div>
@@ -434,28 +524,32 @@ function HistoryRow({ row, first, typeLabel, onOpen, onChange }: { row: ImportRo
     </div>
   )
 }
+function summariseRun(s: any): string {
+  const parts: string[] = []
+  if (s.inserted != null) parts.push(`+${s.inserted}`)
+  if (s.updated != null) parts.push(`${s.updated} merged`)
+  if (s.headers_inserted != null) parts.push(`${s.headers_inserted} hdrs`)
+  if (s.items_inserted != null) parts.push(`${s.items_inserted} items`)
+  if (s.payments_inserted != null) parts.push(`${s.payments_inserted} pmts`)
+  if (s.upserted != null) parts.push(`${s.upserted} upserted`)
+  if (s.errors) parts.push(`${s.errors} err`)
+  return parts.join(' · ') || '—'
+}
 
-// ── Import detail modal — click a history row to open ────────────────────────
+// ── Import detail (inspect a history row) ─────────────────────────────────────
 function ImportDetail({ id, typeLabel, onClose, onChange }: { id: string; typeLabel: string; onClose: () => void; onChange: () => void }) {
   const [row, setRow] = useState<ImportRow | null>(null)
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
-
   async function load() {
-    try {
-      const r = await fetch(`/api/imports/${id}`)
-      const d = await r.json()
-      if (r.ok) setRow(d)
-      else setErr(d.error || 'Failed to load')
-    } catch (e: any) { setErr(e?.message || 'Failed to load') }
+    try { const r = await fetch(`/api/imports/${id}`); const d = await r.json(); if (r.ok) setRow(d); else setErr(d.error || 'Failed to load') }
+    catch (e: any) { setErr(e?.message || 'Failed to load') }
   }
   useEffect(() => { load() }, [id])
-  // Poll while running/uploading.
   useEffect(() => {
     if (!row) return
     if (row.status !== 'running' && row.status !== 'uploading') return
-    const iv = setInterval(load, 3000)
-    return () => clearInterval(iv)
+    const iv = setInterval(load, 3000); return () => clearInterval(iv)
   }, [row?.status])
 
   async function runImport() {
@@ -463,23 +557,19 @@ function ImportDetail({ id, typeLabel, onClose, onChange }: { id: string; typeLa
     setBusy(true); setErr('')
     try {
       const r = await fetch(`/api/imports/${id}/run`, { method: 'POST' })
-      const d = await r.json()
-      if (!r.ok) { setErr(d.error || 'Run failed'); return }
+      const d = await r.json(); if (!r.ok) { setErr(d.error || 'Run failed'); return }
       await load(); onChange()
-    } catch (e: any) { setErr(e?.message || 'Run failed') }
-    finally { setBusy(false) }
+    } catch (e: any) { setErr(e?.message || 'Run failed') } finally { setBusy(false) }
   }
   async function cancelOrDelete() {
     if (!row) return
-    if (!confirm(row.status === 'uploading' ? `Cancel this upload? Any uploaded chunks will be discarded — you can re-upload the file fresh.` : `Delete this import record (${row.filename})? It won't undo what was imported.`)) return
+    if (!confirm(row.status === 'uploading' ? `Cancel this upload? Any uploaded chunks will be discarded.` : `Delete this import record (${row.filename})? Won't undo what was imported.`)) return
     setBusy(true); setErr('')
     try {
       const r = await fetch(`/api/imports/${id}`, { method: 'DELETE' })
-      const d = await r.json().catch(() => ({}))
-      if (!r.ok) { setErr(d.error || 'Failed'); return }
+      const d = await r.json().catch(() => ({})); if (!r.ok) { setErr(d.error || 'Failed'); return }
       onChange(); onClose()
-    } catch (e: any) { setErr(e?.message || 'Failed') }
-    finally { setBusy(false) }
+    } catch (e: any) { setErr(e?.message || 'Failed') } finally { setBusy(false) }
   }
 
   return (
@@ -496,7 +586,6 @@ function ImportDetail({ id, typeLabel, onClose, onChange }: { id: string; typeLa
         <div style={{ padding: 18, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 14 }}>
           {!row && !err && <div style={{ fontSize: 12, color: T.text3 }}>Loading…</div>}
           {err && <div style={{ padding: 10, background: '#3a1d1d', border: `1px solid ${T.red}`, borderRadius: 6, color: T.red, fontSize: 12 }}>{err}</div>}
-
           {row && (
             <>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 10, fontSize: 11 }}>
@@ -505,35 +594,31 @@ function ImportDetail({ id, typeLabel, onClose, onChange }: { id: string; typeLa
                 {row.started_at && <Info label="Started" value={new Date(row.started_at).toLocaleString()} />}
                 {row.completed_at && <Info label="Finished" value={new Date(row.completed_at).toLocaleString()} />}
               </div>
-
               {row.parsed_summary && (
                 <div>
                   <div style={{ fontSize: 10, color: T.text3, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 8, fontWeight: 600 }}>Parsed</div>
                   <div style={{ padding: 12, background: T.bg3, border: `1px solid ${T.border}`, borderRadius: 6 }}>
-                    <SummaryGrid s={row.parsed_summary} type={row.type} />
+                    <SummaryGrid s={row.parsed_summary} />
                   </div>
                 </div>
               )}
-
               {row.result_summary && (
                 <div>
                   <div style={{ fontSize: 10, color: T.text3, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 8, fontWeight: 600 }}>Result</div>
                   <div style={{ padding: 12, background: T.bg3, border: `1px solid ${row.status === 'completed' ? T.green + '33' : T.border}`, borderRadius: 6 }}>
-                    <ResultGrid s={row.result_summary} type={row.type} />
+                    <ResultGrid s={row.result_summary} />
                   </div>
                 </div>
               )}
-
               {row.error && (
                 <div style={{ padding: 10, background: '#3a1d1d', border: `1px solid ${T.red}`, borderRadius: 6, color: T.red, fontSize: 12 }}>
                   <div style={{ fontWeight: 600, marginBottom: 4 }}>Error</div>
                   {row.error}
                 </div>
               )}
-
               {row.status === 'uploading' && (
                 <div style={{ padding: 10, background: T.bg3, border: `1px solid ${T.amber}55`, borderRadius: 6, fontSize: 12, color: T.text2 }}>
-                  This upload was interrupted before all chunks arrived. The file isn't on the server anymore — your best bet is to cancel this record and re-upload the file fresh.
+                  This upload was interrupted before all chunks arrived. The file isn't on the server — cancel this record and re-upload.
                 </div>
               )}
             </>
@@ -542,14 +627,10 @@ function ImportDetail({ id, typeLabel, onClose, onChange }: { id: string; typeLa
 
         {row && (
           <div style={{ padding: '12px 18px', borderTop: `1px solid ${T.border}`, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-            {row.status === 'parsed' && (
-              <button onClick={runImport} disabled={busy} style={btn(true)}>{busy ? 'Running…' : 'Run import'}</button>
-            )}
-            {(row.status === 'uploading' || row.status === 'parsed' || row.status === 'completed' || row.status === 'failed' || row.status === 'cancelled') && (
-              <button onClick={cancelOrDelete} disabled={busy} style={{ ...btn(false), color: T.red, borderColor: T.red + '55' }}>
-                {row.status === 'uploading' ? 'Cancel upload' : row.status === 'parsed' ? 'Discard' : 'Delete record'}
-              </button>
-            )}
+            {row.status === 'parsed' && <button onClick={runImport} disabled={busy} style={btn(true)}>{busy ? 'Running…' : 'Run import'}</button>}
+            <button onClick={cancelOrDelete} disabled={busy} style={{ ...btn(false), color: T.red, borderColor: T.red + '55' }}>
+              {row.status === 'uploading' ? 'Cancel upload' : row.status === 'parsed' ? 'Discard' : 'Delete record'}
+            </button>
             <div style={{ flex: 1 }} />
             <button onClick={onClose} disabled={busy} style={btn(false)}>Close</button>
           </div>
@@ -566,11 +647,6 @@ function Info({ label, value }: { label: string; value: any }) {
       <div style={{ fontSize: 12, color: T.text2, marginTop: 2 }}>{value}</div>
     </div>
   )
-}
-function summariseRun(s: any): string {
-  if (s.inserted != null || s.updated != null) return `+${s.inserted || 0} new · ${s.updated || 0} merged${s.errors ? ` · ${s.errors} err` : ''}`
-  if (s.upserted != null) return `${s.upserted} upserted${s.errors ? ` · ${s.errors} err` : ''}`
-  return Object.entries(s || {}).map(([k, v]) => `${prettyLabel(k)}: ${v}`).join(' · ').substring(0, 80)
 }
 
 const btn = (primary: boolean): React.CSSProperties => ({

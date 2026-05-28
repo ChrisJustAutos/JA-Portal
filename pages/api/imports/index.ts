@@ -1,15 +1,17 @@
 // pages/api/imports/index.ts
-//   GET   — list recent imports (admin)
-//   POST  — { type, filename, rows: MappedRow[], chunk_count } — uploads
-//           the FIRST chunk and creates the import row in status 'uploading'.
-//           Returns the new id. Remaining chunks go to /chunk; finalize ends.
+//   GET  — list recent imports (admin)
+//   POST { type, filename } — creates an import row in 'uploading'. Chunks
+//        get streamed to /[id]/chunk afterwards (per role). Then /finalize.
+//
+// (Previous shape baked the first chunk into this endpoint — moved out so
+// multi-role imports can stream chunks for each role separately.)
 
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
 import { withAuth } from '../../../lib/authServer'
 import { roleHasPermission } from '../../../lib/permissions'
 import { IMPORTER_TYPES } from '../../../lib/md-importers'
 
-export const config = { maxDuration: 60, api: { bodyParser: { sizeLimit: '4mb' } } }
+export const config = { maxDuration: 30 }
 
 function sb(): SupabaseClient {
   return createClient(
@@ -40,21 +42,13 @@ export default withAuth('view:diary', async (req, res, user) => {
     const type = String(body.type || '')
     if (!IMPORTER_TYPES.includes(type as any)) return res.status(400).json({ error: `Unsupported type. Use one of: ${IMPORTER_TYPES.join(', ')}` })
     const filename = String(body.filename || 'upload.xls').slice(0, 200)
-    const rows = Array.isArray(body.rows) ? body.rows : null
-    if (!rows) return res.status(400).json({ error: 'rows (array) required' })
-    const chunkCount = Math.max(1, Number(body.chunk_count) || 1)
 
-    const { data: created, error: createErr } = await db.from('md_imports').insert({
+    const { data, error } = await db.from('md_imports').insert({
       type, filename, uploaded_by: user.id, status: 'uploading',
-      parsed_summary: { expected_chunks: chunkCount },
     }).select('id').single()
-    if (createErr) return res.status(500).json({ error: createErr.message })
-    const importId = created!.id as string
+    if (error) return res.status(500).json({ error: error.message })
 
-    const { error: chunkErr } = await db.from('md_import_chunks').insert({ import_id: importId, chunk_index: 0, rows })
-    if (chunkErr) return res.status(500).json({ error: 'chunk 0: ' + chunkErr.message })
-
-    return res.status(201).json({ id: importId, chunk_count: chunkCount })
+    return res.status(201).json({ id: data!.id })
   }
 
   res.setHeader('Allow', 'GET, POST')

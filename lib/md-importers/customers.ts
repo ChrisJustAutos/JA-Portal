@@ -10,7 +10,7 @@
 //      stamps md_id, fills empty fields, preserves myob_uid + curated name.
 
 import { SupabaseClient } from '@supabase/supabase-js'
-import { ImportField, ImportTypeConfig, MappedRow } from './types'
+import { ImportField, ImportTypeConfig, MappedRow, MultiRoleRows } from './types'
 
 const str = (v: any) => (v == null ? '' : String(v).trim())
 export function normMobile(v: any): string {
@@ -63,7 +63,7 @@ interface Existing {
   md_id: string | null
 }
 
-function normalize(rows: MappedRow[]) {
+function normalizeMain(rows: MappedRow[]) {
   let skippedThirdParty = 0
   let skippedNoName = 0
   const out: MappedRow[] = []
@@ -99,7 +99,7 @@ function normalize(rows: MappedRow[]) {
   }
 }
 
-async function run(db: SupabaseClient, rows: MappedRow[]): Promise<any> {
+async function runMain(db: SupabaseClient, rows: MappedRow[]): Promise<any> {
   const existing: Existing[] = []
   for (let from = 0; ; from += 1000) {
     const { data, error } = await db.from('workshop_customers')
@@ -215,9 +215,11 @@ async function run(db: SupabaseClient, rows: MappedRow[]): Promise<any> {
 export const CUSTOMERS_CONFIG: ImportTypeConfig = {
   id: 'customers',
   label: 'Customers',
-  sheets: ['Customers', 'Customer'],
-  fields: FIELDS,
-  normalize,
-  run,
+  roles: [{ id: 'main', label: 'Customers', sheets: ['Customers', 'Customer'], fields: FIELDS, required: true }],
+  normalize: (data: MultiRoleRows) => {
+    const { rows, summary } = normalizeMain(data.main || [])
+    return { rows: { main: rows }, summary }
+  },
+  run: async (db: SupabaseClient, data: MultiRoleRows) => runMain(db, data.main || []),
   blurb: 'Customers merge with existing rows by mobile → email → name. Unmatched rows are inserted. Third-party rows are skipped. Preserves any existing MYOB links.',
 }

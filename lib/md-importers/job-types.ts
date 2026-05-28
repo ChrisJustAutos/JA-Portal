@@ -6,7 +6,7 @@
 // this is the same logic exposed through the in-portal importer UI.
 
 import { SupabaseClient } from '@supabase/supabase-js'
-import { ImportField, ImportTypeConfig, MappedRow } from './types'
+import { ImportField, ImportTypeConfig, MappedRow, MultiRoleRows } from './types'
 
 const str = (v: any) => (v == null ? '' : String(v).trim())
 const num = (v: any) => { const n = Number(v); return isFinite(n) ? n : null }
@@ -19,7 +19,7 @@ const FIELDS: ImportField[] = [
   { id: 'tags',                 label: 'Tags',                aliases: ['Tags'] },
 ]
 
-function normalize(rows: MappedRow[]) {
+function normalizeMain(rows: MappedRow[]) {
   let skippedNoName = 0
   const seen = new Set<string>()
   const out: MappedRow[] = []
@@ -50,7 +50,7 @@ function normalize(rows: MappedRow[]) {
   }
 }
 
-async function run(db: SupabaseClient, rows: MappedRow[]): Promise<any> {
+async function runMain(db: SupabaseClient, rows: MappedRow[]): Promise<any> {
   const summary = { upserted: 0, errors: 0 }
   for (let i = 0; i < rows.length; i += 200) {
     const batch = rows.slice(i, i + 200)
@@ -64,9 +64,8 @@ async function run(db: SupabaseClient, rows: MappedRow[]): Promise<any> {
 export const JOB_TYPES_CONFIG: ImportTypeConfig = {
   id: 'job_types',
   label: 'Job types',
-  sheets: ['Job Type Summaries', 'Job Types', 'Job Type'],
-  fields: FIELDS,
-  normalize,
-  run,
+  roles: [{ id: 'main', label: 'Job type summaries', sheets: ['Job Type Summaries', 'Job Types', 'Job Type'], fields: FIELDS, required: true }],
+  normalize: (data: MultiRoleRows) => { const r = normalizeMain(data.main || []); return { rows: { main: r.rows }, summary: r.summary } },
+  run: async (db: SupabaseClient, data: MultiRoleRows) => runMain(db, data.main || []),
   blurb: 'Upserts job types on name. Estimated hours convert to minutes (used as default booking duration). Re-running updates existing rows.',
 }

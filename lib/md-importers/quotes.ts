@@ -4,7 +4,7 @@
 // the next phase. Links to customers/vehicles via their md_id.
 
 import { SupabaseClient } from '@supabase/supabase-js'
-import { ImportField, ImportTypeConfig, MappedRow } from './types'
+import { ImportField, ImportTypeConfig, MappedRow, MultiRoleRows } from './types'
 
 const str = (v: any) => (v == null ? '' : String(v).trim())
 const numOr = (v: any, d: number) => { const n = Number(v); return isFinite(n) ? n : d }
@@ -21,7 +21,7 @@ const FIELDS: ImportField[] = [
   { id: 'notes',            label: 'Notes',            aliases: ['Notes', 'Note', 'Description'] },
 ]
 
-function normalize(rows: MappedRow[]) {
+function normalizeMain(rows: MappedRow[]) {
   let skipped = 0
   const out: MappedRow[] = []
   for (const r of rows) {
@@ -40,7 +40,7 @@ function normalize(rows: MappedRow[]) {
   return { rows: out, summary: { total_in_file: rows.length, skipped: skipped, total_to_import: out.length } }
 }
 
-async function run(db: SupabaseClient, rows: MappedRow[]): Promise<any> {
+async function runMain(db: SupabaseClient, rows: MappedRow[]): Promise<any> {
   // Build lookup maps for customer + vehicle.
   const custMdToId = new Map<string, string>()
   for (let from = 0; ; from += 1000) {
@@ -90,9 +90,8 @@ async function run(db: SupabaseClient, rows: MappedRow[]): Promise<any> {
 export const QUOTES_CONFIG: ImportTypeConfig = {
   id: 'quotes',
   label: 'Quotes',
-  sheets: ['Quotes', 'Quote'],
-  fields: FIELDS,
-  normalize,
-  run,
+  roles: [{ id: 'main', label: 'Quote headers', sheets: ['Quotes', 'Quote'], fields: FIELDS, required: true }],
+  normalize: (data: MultiRoleRows) => { const r = normalizeMain(data.main || []); return { rows: { main: r.rows }, summary: r.summary } },
+  run: async (db: SupabaseClient, data: MultiRoleRows) => runMain(db, data.main || []),
   blurb: 'Header-only quote import (no line items yet). Links to customers via external customer ID and vehicles via rego. Skips already-imported quote IDs.',
 }

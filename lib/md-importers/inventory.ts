@@ -5,7 +5,7 @@
 // the existing row already has them.
 
 import { SupabaseClient } from '@supabase/supabase-js'
-import { ImportField, ImportTypeConfig, MappedRow } from './types'
+import { ImportField, ImportTypeConfig, MappedRow, MultiRoleRows } from './types'
 
 const str = (v: any) => (v == null ? '' : String(v).trim())
 const num = (v: any) => { const n = Number(v); return isFinite(n) ? n : null }
@@ -28,7 +28,7 @@ const FIELDS: ImportField[] = [
   { id: 'uom',           label: 'Unit of measure', aliases: ['UOM', 'Unit', 'Unit of Measure'] },
 ]
 
-function normalize(rows: MappedRow[]) {
+function normalizeMain(rows: MappedRow[]) {
   let skipped = 0
   const out: MappedRow[] = []
   for (const r of rows) {
@@ -57,7 +57,7 @@ function normalize(rows: MappedRow[]) {
   return { rows: out, summary: { total_in_file: rows.length, skipped: skipped, total_to_import: out.length } }
 }
 
-async function run(db: SupabaseClient, rows: MappedRow[]): Promise<any> {
+async function runMain(db: SupabaseClient, rows: MappedRow[]): Promise<any> {
   const existing: any[] = []
   for (let from = 0; ; from += 1000) {
     const { data } = await db.from('workshop_inventory').select('id, sku, md_id').range(from, from + 999)
@@ -105,9 +105,8 @@ async function run(db: SupabaseClient, rows: MappedRow[]): Promise<any> {
 export const INVENTORY_CONFIG: ImportTypeConfig = {
   id: 'inventory',
   label: 'Inventory',
-  sheets: ['Stocks', 'Stock', 'Inventory', 'Items'],
-  fields: FIELDS,
-  normalize,
-  run,
+  roles: [{ id: 'main', label: 'Inventory', sheets: ['Stocks', 'Stock', 'Inventory', 'Items'], fields: FIELDS, required: true }],
+  normalize: (data: MultiRoleRows) => { const r = normalizeMain(data.main || []); return { rows: { main: r.rows }, summary: r.summary } },
+  run: async (db: SupabaseClient, data: MultiRoleRows) => runMain(db, data.main || []),
   blurb: 'Inventory rows match existing on External Stock ID, then SKU. Buy/sell prices + on-hand qty update on match. Defaults allocated/on-order to 0.',
 }

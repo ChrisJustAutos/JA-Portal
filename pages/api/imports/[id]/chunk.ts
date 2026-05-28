@@ -1,6 +1,6 @@
 // pages/api/imports/[id]/chunk.ts
-// POST { chunk_index, rows } — appends another chunk of mapped rows to an
-// in-progress upload (status must be 'uploading').
+// POST { role, chunk_index, rows } — appends a chunk to an in-progress upload.
+// `role` lets multi-role types (invoices) keep their sheets separate.
 
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
 import { withAuth } from '../../../../lib/authServer'
@@ -25,9 +25,10 @@ export default withAuth('view:diary', async (req, res, user) => {
   let body: any = {}
   try { body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : (req.body || {}) }
   catch { return res.status(400).json({ error: 'Bad JSON body' }) }
+  const role = String(body.role || 'main')
   const chunkIndex = Number(body.chunk_index)
   const rows = Array.isArray(body.rows) ? body.rows : null
-  if (!isFinite(chunkIndex) || chunkIndex < 1) return res.status(400).json({ error: 'chunk_index (>=1) required' })
+  if (!isFinite(chunkIndex) || chunkIndex < 0) return res.status(400).json({ error: 'chunk_index (>=0) required' })
   if (!rows) return res.status(400).json({ error: 'rows (array) required' })
 
   const db = sb()
@@ -35,7 +36,7 @@ export default withAuth('view:diary', async (req, res, user) => {
   if (!imp) return res.status(404).json({ error: 'Import not found' })
   if ((imp as any).status !== 'uploading') return res.status(409).json({ error: `Import is ${(imp as any).status}, not accepting more chunks` })
 
-  const { error } = await db.from('md_import_chunks').insert({ import_id: id, chunk_index: chunkIndex, rows })
+  const { error } = await db.from('md_import_chunks').insert({ import_id: id, role, chunk_index: chunkIndex, rows })
   if (error) return res.status(500).json({ error: error.message })
 
   return res.status(200).json({ ok: true })

@@ -8,7 +8,7 @@
 // are reported in the summary so you can review.
 
 import { SupabaseClient } from '@supabase/supabase-js'
-import { ImportField, ImportTypeConfig, MappedRow } from './types'
+import { ImportField, ImportTypeConfig, MappedRow, MultiRoleRows } from './types'
 
 const str = (v: any) => (v == null ? '' : String(v).trim())
 const intOr = (v: any) => { const n = parseInt(String(v ?? ''), 10); return isFinite(n) ? n : null }
@@ -29,7 +29,7 @@ const FIELDS: ImportField[] = [
   { id: 'customer_md_id',  label: 'Customer (external ID)', aliases: ['Customer ID', 'Owner ID', 'CustomerID'], hint: 'Matches a customer imported earlier so the vehicle gets attached to the right card' },
 ]
 
-function normalize(rows: MappedRow[]) {
+function normalizeMain(rows: MappedRow[]) {
   let skipped = 0
   const out: MappedRow[] = []
   for (const r of rows) {
@@ -56,7 +56,7 @@ function normalize(rows: MappedRow[]) {
   }
 }
 
-async function run(db: SupabaseClient, rows: MappedRow[]): Promise<any> {
+async function runMain(db: SupabaseClient, rows: MappedRow[]): Promise<any> {
   // 1. Build customer md_id → id map so we can attach vehicles.
   const custMdToId = new Map<string, string>()
   for (let from = 0; ; from += 1000) {
@@ -122,9 +122,8 @@ async function run(db: SupabaseClient, rows: MappedRow[]): Promise<any> {
 export const VEHICLES_CONFIG: ImportTypeConfig = {
   id: 'vehicles',
   label: 'Vehicles',
-  sheets: ['Vehicles', 'Vehicle'],
-  fields: FIELDS,
-  normalize,
-  run,
+  roles: [{ id: 'main', label: 'Vehicles', sheets: ['Vehicles', 'Vehicle'], fields: FIELDS, required: true }],
+  normalize: (data: MultiRoleRows) => { const r = normalizeMain(data.main || []); return { rows: { main: r.rows }, summary: r.summary } },
+  run: async (db: SupabaseClient, data: MultiRoleRows) => runMain(db, data.main || []),
   blurb: 'Vehicles match existing rows by External Vehicle ID, then by rego. Linked to customers via their external customer ID — import customers first so the link finds a match.',
 }
