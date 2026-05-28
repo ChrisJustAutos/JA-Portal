@@ -99,9 +99,12 @@ export default function ImportsPage() {
 }
 
 // ── Per-role config tracked in state ─────────────────────────────────────────
+// sheetNames is a LIST — for multi-sheet roles (e.g. invoice items split
+// across "Invoice Items", "Invoice Items 2", etc.) the user adds each one
+// and they all share the same column mapping (derived from the first sheet).
 interface RoleConfig {
   skipped: boolean
-  sheetName: string
+  sheetNames: string[]
   columns: string[]
   sampleRows: any[]
   mapping: Record<string, string>
@@ -126,10 +129,10 @@ function ImportFlow({ meta, onComplete }: { meta: TypeMeta; onComplete: () => vo
     setFile(null); setWb(null); setConfigs({}); setPreview(null); setResult(null)
   }
 
-  function loadSheetForRole(w: XLSX.WorkBook, roleId: string, sheetName: string) {
-    const sheet = w.Sheets[sheetName]
-    if (!sheet) return
+  /** Build a role config from a sheet — extracts headers + auto-maps fields. */
+  function buildConfigFromSheet(w: XLSX.WorkBook, roleId: string, sheetName: string): RoleConfig {
     const role = meta.roles.find(r => r.id === roleId)!
+    const sheet = w.Sheets[sheetName]
     const arr: any[][] = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: null })
     const headers = (arr[0] || []).map(h => String(h ?? '').trim()).filter(Boolean)
     const obj = XLSX.utils.sheet_to_json(sheet, { defval: null }).slice(0, 3)
@@ -138,7 +141,21 @@ function ImportFlow({ meta, onComplete }: { meta: TypeMeta; onComplete: () => vo
       const hit = bestMatch(headers, f.aliases, f.label, f.id)
       if (hit) mapping[f.id] = hit
     }
-    setConfigs(prev => ({ ...prev, [roleId]: { skipped: false, sheetName, columns: headers, sampleRows: obj, mapping } }))
+    return { skipped: false, sheetNames: [sheetName], columns: headers, sampleRows: obj, mapping }
+  }
+
+  /** Auto-pick all sheets whose names match the role's aliases (handles MD
+   *  splitting items across "Invoice Items", "Invoice Items 2", etc.). */
+  function autoSheetsForRole(w: XLSX.WorkBook, sheetAliases: string[]): string[] {
+    const norm = (s: string) => s.trim().toLowerCase()
+    const aliasN = sheetAliases.map(norm)
+    const hits: string[] = []
+    for (const n of w.SheetNames) {
+      const nn = norm(n)
+      // Exact match OR alias is a prefix (catches "Invoice Items 2", "3"…)
+      if (aliasN.some(a => nn === a || nn.startsWith(a))) hits.push(n)
+    }
+    return hits
   }
 
   async function onFile(f: File) {
@@ -149,24 +166,17 @@ function ImportFlow({ meta, onComplete }: { meta: TypeMeta; onComplete: () => vo
       const buf = await f.arrayBuffer()
       const w = XLSX.read(buf, { type: 'array' })
       setWb(w)
-      // Auto-pick the best sheet for each role.
+      // Auto-pick the best sheets for each role. Pick ALL matching sheets so
+      // splits like "Invoice Items / Items 2 / Items 3" all land in one role.
       const next: Record<string, RoleConfig> = {}
       for (const role of meta.roles) {
-        const hit = pickSheet(w, role.sheets)
-        if (hit) {
-          const sheet = w.Sheets[hit]
-          const arr: any[][] = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: null })
-          const headers = (arr[0] || []).map(h => String(h ?? '').trim()).filter(Boolean)
-          const obj = XLSX.utils.sheet_to_json(sheet, { defval: null }).slice(0, 3)
-          const mapping: Record<string, string> = {}
-          for (const f of role.fields) {
-            const m = bestMatch(headers, f.aliases, f.label, f.id)
-            if (m) mapping[f.id] = m
-          }
-          next[role.id] = { skipped: false, sheetName: hit, columns: headers, sampleRows: obj, mapping }
+        const hits = autoSheetsForRole(w, role.sheets)
+        if (hits.length > 0) {
+          const cfg = buildConfigFromSheet(w, role.id, hits[0])
+          cfg.sheetNames = hits  // keep all matched sheets
+          next[role.id] = cfg
         } else {
-          // No auto-pick — leave empty for user to fill in OR skip if optional.
-          next[role.id] = { skipped: !role.required ? false : false, sheetName: '', columns: [], sampleRows: [], mapping: {} }
+          next[role.id] = { skipped: false, sheetNames: [], columns: [], sampleRows: [], mapping: {} }
         }
       }
       setConfigs(next)
@@ -178,27 +188,51 @@ function ImportFlow({ meta, onComplete }: { meta: TypeMeta; onComplete: () => vo
   function setRoleSheet(roleId: string, name: string) {
     if (!wb) return
     if (!name) {
-      setConfigs(prev => ({ ...prev, [roleId]: { skipped: prev[roleId]?.skipped || false, sheetName: '', columns: [], sampleRows: [], mapping: {} } }))
+      setConfigs(prev => ({ ...prev, [roleId]: { skipped: prev[roleId]?.skipped || false, sheetNames: [], columns: [], sampleRows: [], mapping: {} } }))
       return
     }
-    loadSheetForRole(wb, roleId, name)
+    setConfigs(prev => ({ ...prev, [roleId]: buildConfigFromSheet(wb!, roleId, name) }))
+  }
+  function addSheetToRole(roleId: string, sheetName: string) {
+    if (!wb || !sheetName) return
+    setConfigs(prev => {
+      const cur = prev[roleId]
+      if (!cur || cur.sheetNames.includes(sheetName)) return prev
+      return { ...prev, [roleId]: { ...cur, sheetNames: [...cur.sheetNames, sheetName] } }
+    })
+  }
+  function removeSheetFromRole(roleId: string, sheetName: string) {
+    setConfigs(prev => {
+      const cur = prev[roleId]
+      if (!cur) return prev
+      const remaining = cur.sheetNames.filter(n => n !== sheetName)
+      if (remaining.length === 0) return { ...prev, [roleId]: { skipped: cur.skipped, sheetNames: [], columns: [], sampleRows: [], mapping: {} } }
+      // If we removed the leading sheet, rebuild mapping from the new leader.
+      if (cur.sheetNames[0] === sheetName && wb) {
+        const cfg = buildConfigFromSheet(wb, roleId, remaining[0])
+        cfg.sheetNames = remaining
+        return { ...prev, [roleId]: cfg }
+      }
+      return { ...prev, [roleId]: { ...cur, sheetNames: remaining } }
+    })
   }
   function setRoleMapping(roleId: string, fieldId: string, columnName: string) {
     setConfigs(prev => ({ ...prev, [roleId]: { ...prev[roleId], mapping: { ...prev[roleId].mapping, [fieldId]: columnName } } }))
   }
   function toggleSkip(roleId: string, skip: boolean) {
-    setConfigs(prev => ({ ...prev, [roleId]: { ...prev[roleId], skipped: skip, ...(skip ? { sheetName: '', columns: [], mapping: {} } : {}) } }))
+    setConfigs(prev => ({ ...prev, [roleId]: { ...prev[roleId], skipped: skip, ...(skip ? { sheetNames: [], columns: [], mapping: {} } : {}) } }))
   }
 
-  // Validate: every required role must have a sheet picked + every required field mapped.
+  // Validate: every required role must have at least one sheet picked + every
+  // required field mapped.
   function validate(): string | null {
     for (const role of meta.roles) {
       const cfg = configs[role.id]
       if (role.required) {
-        if (!cfg?.sheetName) return `${role.label}: pick a sheet`
+        if (!cfg?.sheetNames?.length) return `${role.label}: pick a sheet`
         const missing = role.fields.filter(f => f.required && !cfg.mapping[f.id])
         if (missing.length) return `${role.label}: missing required field${missing.length > 1 ? 's' : ''} ${missing.map(f => f.label).join(', ')}`
-      } else if (cfg && !cfg.skipped && cfg.sheetName) {
+      } else if (cfg && !cfg.skipped && cfg.sheetNames.length > 0) {
         const missing = role.fields.filter(f => f.required && !cfg.mapping[f.id])
         if (missing.length) return `${role.label}: missing required field${missing.length > 1 ? 's' : ''} ${missing.map(f => f.label).join(', ')}`
       }
@@ -211,22 +245,28 @@ function ImportFlow({ meta, onComplete }: { meta: TypeMeta; onComplete: () => vo
     const v = validate(); if (v) { setErr(v); return }
     setBusy(true); setErr(''); setProgress('Reading rows…')
     try {
-      // Build per-role mapped row arrays.
+      // Build per-role mapped row arrays. For a role with multiple sheets
+      // selected (e.g. invoice items split across 4 sheets), iterate all of
+      // them and concatenate — using the same mapping for each.
       const perRole: { roleId: string; rows: any[] }[] = []
       for (const role of meta.roles) {
         const cfg = configs[role.id]
-        if (!cfg || cfg.skipped || !cfg.sheetName) continue
-        const sheet = wb.Sheets[cfg.sheetName]
-        const raw = XLSX.utils.sheet_to_json(sheet, { defval: null }) as any[]
-        const mapped = raw.map(r => {
-          const out: any = {}
-          for (const f of role.fields) {
-            const col = cfg.mapping[f.id]
-            if (col) out[f.id] = r[col]
+        if (!cfg || cfg.skipped || cfg.sheetNames.length === 0) continue
+        const allMapped: any[] = []
+        for (const sheetName of cfg.sheetNames) {
+          const sheet = wb.Sheets[sheetName]
+          if (!sheet) continue
+          const raw = XLSX.utils.sheet_to_json(sheet, { defval: null }) as any[]
+          for (const r of raw) {
+            const out: any = {}
+            for (const f of role.fields) {
+              const col = cfg.mapping[f.id]
+              if (col) out[f.id] = r[col]
+            }
+            allMapped.push(out)
           }
-          return out
-        })
-        perRole.push({ roleId: role.id, rows: mapped })
+        }
+        perRole.push({ roleId: role.id, rows: allMapped })
       }
 
       // Create the import row.
@@ -308,7 +348,9 @@ function ImportFlow({ meta, onComplete }: { meta: TypeMeta; onComplete: () => vo
           {meta.roles.map(role => (
             <RolePanel key={role.id} role={role} wb={wb}
               config={configs[role.id]}
-              onPickSheet={n => setRoleSheet(role.id, n)}
+              onSetSheet={n => setRoleSheet(role.id, n)}
+              onAddSheet={n => addSheetToRole(role.id, n)}
+              onRemoveSheet={n => removeSheetFromRole(role.id, n)}
               onPickMapping={(f, c) => setRoleMapping(role.id, f, c)}
               onSkip={s => toggleSkip(role.id, s)}
             />
@@ -352,14 +394,18 @@ function ImportFlow({ meta, onComplete }: { meta: TypeMeta; onComplete: () => vo
 }
 
 // ── Per-role config panel ────────────────────────────────────────────────────
-function RolePanel({ role, wb, config, onPickSheet, onPickMapping, onSkip }: {
+function RolePanel({ role, wb, config, onSetSheet, onAddSheet, onRemoveSheet, onPickMapping, onSkip }: {
   role: RoleDef; wb: XLSX.WorkBook; config: RoleConfig | undefined
-  onPickSheet: (n: string) => void
+  onSetSheet: (n: string) => void
+  onAddSheet: (n: string) => void
+  onRemoveSheet: (n: string) => void
   onPickMapping: (fieldId: string, col: string) => void
   onSkip: (skip: boolean) => void
 }) {
   const skipped = config?.skipped === true
-  const isMulti = true  // panel always shown for clarity, even with 1 role
+  const picked = config?.sheetNames || []
+  // Row counts for the picker label.
+  const sheetMeta = (n: string) => { try { return XLSX.utils.sheet_to_json(wb.Sheets[n], { header: 1, defval: null }).length } catch { return 0 } }
   return (
     <div style={{ marginBottom: 16, padding: 14, background: T.bg3, border: `1px solid ${skipped ? T.border : T.border2}`, borderRadius: 8, opacity: skipped ? 0.5 : 1 }}>
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 4 }}>
@@ -379,16 +425,35 @@ function RolePanel({ role, wb, config, onPickSheet, onPickMapping, onSkip }: {
         <div style={{ fontSize: 11, color: T.text3, padding: '8px 0' }}>Skipped — no rows will be uploaded for this role.</div>
       ) : (
         <>
-          <div style={{ fontSize: 10, color: T.text3, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 6, marginTop: 6 }}>Sheet</div>
-          <select value={config?.sheetName || ''} onChange={e => onPickSheet(e.target.value)} style={{ ...inp, marginBottom: 12 }}>
-            <option value="">— pick a sheet —</option>
-            {wb.SheetNames.map(n => {
-              const rowCount = (() => { try { return XLSX.utils.sheet_to_json(wb.Sheets[n], { header: 1, defval: null }).length } catch { return 0 } })()
-              return <option key={n} value={n}>{n} · {rowCount} rows</option>
-            })}
-          </select>
+          <div style={{ fontSize: 10, color: T.text3, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 6, marginTop: 6 }}>
+            Sheet{picked.length > 1 ? 's' : ''} {picked.length > 0 && <span style={{ color: T.amber, marginLeft: 4 }}>· {picked.length} selected</span>}
+          </div>
 
-          {config?.sheetName && config.columns.length > 0 && (
+          {picked.length === 0 ? (
+            <select value="" onChange={e => onSetSheet(e.target.value)} style={{ ...inp, marginBottom: 12 }}>
+              <option value="">— pick a sheet —</option>
+              {wb.SheetNames.map(n => <option key={n} value={n}>{n} · {sheetMeta(n)} rows</option>)}
+            </select>
+          ) : (
+            <>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 8 }}>
+                {picked.map((n, i) => (
+                  <span key={n} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '4px 8px 4px 10px', background: T.bg2, border: `1px solid ${T.amber}55`, borderRadius: 4, fontSize: 11, color: T.text2 }}>
+                    {n} · {sheetMeta(n)} rows
+                    <button onClick={() => onRemoveSheet(n)} title="Remove" style={{ background: 'none', border: 'none', color: T.text3, cursor: 'pointer', fontSize: 13, padding: 0, lineHeight: 1 }}>×</button>
+                  </span>
+                ))}
+              </div>
+              {wb.SheetNames.filter(n => !picked.includes(n)).length > 0 && (
+                <select value="" onChange={e => { if (e.target.value) onAddSheet(e.target.value) }} style={{ ...inp, marginBottom: 12 }} title="Add another sheet — picks up extra rows using the same column mapping (e.g. Invoice Items, Invoice Items 2…)">
+                  <option value="">+ Add another sheet</option>
+                  {wb.SheetNames.filter(n => !picked.includes(n)).map(n => <option key={n} value={n}>{n} · {sheetMeta(n)} rows</option>)}
+                </select>
+              )}
+            </>
+          )}
+
+          {picked.length > 0 && config && config.columns.length > 0 && (
             <>
               <div style={{ fontSize: 10, color: T.text3, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 6 }}>Column mapping</div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
@@ -417,7 +482,7 @@ function RolePanel({ role, wb, config, onPickSheet, onPickMapping, onSkip }: {
               )}
             </>
           )}
-          {config?.sheetName && config.columns.length === 0 && <div style={{ fontSize: 11, color: T.amber }}>That sheet has no header row.</div>}
+          {picked.length > 0 && config && config.columns.length === 0 && <div style={{ fontSize: 11, color: T.amber }}>That sheet has no header row.</div>}
         </>
       )}
     </div>
