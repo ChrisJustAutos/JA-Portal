@@ -1,20 +1,17 @@
 // pages/api/imports/index.ts
 // MD imports — list + create (parse) endpoints.
 //   GET   — list recent imports (admin)
-//   POST  — { type, filename, raw_rows: any[] } → parse + store as 'parsed'
+//   POST  — { type, filename, rows: MappedRow[] } → normalise + store as 'parsed'
 //
-// Client parses the .xls with SheetJS (already a dep) and posts the rows here,
-// so we don't need multipart parsing in the API layer.
+// Client parses the .xls with SheetJS, applies the user's column mapping, and
+// posts pre-mapped rows here. Server just normalises (cleanup) and stores.
 
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
 import { withAuth } from '../../../lib/authServer'
 import { roleHasPermission } from '../../../lib/permissions'
-import { normalizeCustomerRows } from '../../../lib/md-importers/customers'
+import { getImporter, IMPORTER_TYPES } from '../../../lib/md-importers'
 
 export const config = { maxDuration: 60, api: { bodyParser: { sizeLimit: '40mb' } } }
-
-const SUPPORTED = ['customers','job_types','vehicles','inventory','quotes','invoices','purchase_orders'] as const
-type ImportType = typeof SUPPORTED[number]
 
 function sb(): SupabaseClient {
   return createClient(
@@ -42,25 +39,18 @@ export default withAuth('view:diary', async (req, res, user) => {
     try { body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : (req.body || {}) }
     catch { return res.status(400).json({ error: 'Bad JSON body' }) }
 
-    const type = String(body.type || '') as ImportType
-    if (!SUPPORTED.includes(type)) return res.status(400).json({ error: `Unsupported type. Use one of: ${SUPPORTED.join(', ')}` })
+    const type = String(body.type || '')
+    if (!IMPORTER_TYPES.includes(type as any)) return res.status(400).json({ error: `Unsupported type. Use one of: ${IMPORTER_TYPES.join(', ')}` })
+    const importer = getImporter(type)!
     const filename = String(body.filename || 'upload.xls').slice(0, 200)
-    const rawRows = Array.isArray(body.raw_rows) ? body.raw_rows : null
-    if (!rawRows) return res.status(400).json({ error: 'raw_rows (array) required' })
+    const rows = Array.isArray(body.rows) ? body.rows : null
+    if (!rows) return res.status(400).json({ error: 'rows (array of mapped rows) required' })
 
-    let parsedRows: any[] = []
-    let summary: any = null
-    if (type === 'customers') {
-      const r = normalizeCustomerRows(rawRows)
-      parsedRows = r.rows
-      summary = r.summary
-    } else {
-      return res.status(501).json({ error: `Importer for "${type}" not implemented yet — coming soon.` })
-    }
+    const { rows: normalized, summary } = importer.normalize(rows)
 
     const { data, error } = await db.from('md_imports').insert({
       type, filename, uploaded_by: user.id, status: 'parsed',
-      parsed_summary: summary, parsed_data: parsedRows,
+      parsed_summary: summary, parsed_data: normalized,
     }).select('id, parsed_summary').single()
     if (error) return res.status(500).json({ error: error.message })
 

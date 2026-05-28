@@ -1,13 +1,11 @@
 // pages/api/imports/[id]/run.ts
-// POST — execute the import (reads parsed_data, calls the type's importer,
-// writes result_summary). Runs synchronously inside the Vercel function.
-// Vercel functions allow up to 300s execution — the customer importer batches
-// in chunks of 500 so even 38k+ rows complete in a few seconds.
+// POST — execute the import via the type's runner. Runs synchronously inside
+// the Vercel function (maxDuration: 300).
 
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
 import { withAuth } from '../../../../lib/authServer'
 import { roleHasPermission } from '../../../../lib/permissions'
-import { runCustomersImport, MdCustomerRow } from '../../../../lib/md-importers/customers'
+import { getImporter } from '../../../../lib/md-importers'
 
 export const config = { maxDuration: 300 }
 
@@ -33,23 +31,16 @@ export default withAuth('view:diary', async (req, res, user) => {
   if ((row as any).status === 'running') return res.status(409).json({ error: 'Already running' })
   if ((row as any).status === 'completed') return res.status(409).json({ error: 'Already completed — upload again to re-run.' })
 
-  // Flag running so concurrent clicks bail.
   await db.from('md_imports').update({ status: 'running', started_at: new Date().toISOString() }).eq('id', id)
 
   try {
+    const importer = getImporter((row as any).type)
+    if (!importer) throw new Error(`No importer registered for "${(row as any).type}"`)
     const parsedData = (row as any).parsed_data as any[]
-    if (!Array.isArray(parsedData) || parsedData.length === 0) {
-      throw new Error('No parsed data on this import — re-upload the file.')
-    }
+    if (!Array.isArray(parsedData) || parsedData.length === 0) throw new Error('No parsed data on this import — re-upload the file.')
 
-    let summary: any
-    if ((row as any).type === 'customers') {
-      summary = await runCustomersImport(db, parsedData as MdCustomerRow[])
-    } else {
-      throw new Error(`Importer for "${(row as any).type}" not implemented yet.`)
-    }
+    const summary = await importer.run(db, parsedData)
 
-    // Clear parsed_data to keep the table small; we don't need it after a successful run.
     await db.from('md_imports').update({
       status: 'completed',
       result_summary: summary,

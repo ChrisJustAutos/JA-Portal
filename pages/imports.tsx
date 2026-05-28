@@ -1,11 +1,14 @@
 // pages/imports.tsx
-// Admin page for importing MechanicDesk data into the portal. Drop an .xls/.xlsx,
-// the browser parses it with SheetJS, the server normalises + previews, you
-// confirm, the server runs it.
-//
-// Phase 1: Customers (live). Others stubbed as "coming soon".
+// Admin page for importing MechanicDesk data. Step-driven flow:
+//   1. Pick the file.
+//   2. Pick the sheet (auto-suggested but always shown).
+//   3. Map portal fields ← source columns (auto-suggested via aliases).
+//   4. Preview counts.
+//   5. Run import.
+// Browser parses the file with SheetJS, applies the mapping, and POSTs the
+// pre-mapped rows. The server runs the type's normalizer + runner.
 
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import Head from 'next/head'
 import Link from 'next/link'
 import * as XLSX from 'xlsx'
@@ -18,59 +21,27 @@ const T = {
   red: '#d97757', purple: '#a78bbd', cobalt: '#5e8acf',
 } as const
 
-type ImportType = 'customers' | 'job_types' | 'vehicles' | 'inventory' | 'quotes' | 'invoices' | 'purchase_orders'
-
-const TYPES: { id: ImportType; label: string; sheets: string[]; status: 'live' | 'soon' }[] = [
-  { id: 'customers',        label: 'Customers',        sheets: ['Customers', 'Customer'],                     status: 'live' },
-  { id: 'job_types',        label: 'Job types',        sheets: ['Job Type Summaries', 'Job Types'],           status: 'soon' },
-  { id: 'vehicles',         label: 'Vehicles',         sheets: ['Vehicles', 'Vehicle'],                       status: 'soon' },
-  { id: 'inventory',        label: 'Inventory',        sheets: ['Stocks', 'Stock', 'Inventory'],              status: 'soon' },
-  { id: 'quotes',           label: 'Quotes',           sheets: ['Quotes', 'Quote'],                           status: 'soon' },
-  { id: 'invoices',         label: 'Invoices',         sheets: ['Invoices', 'Invoice'],                       status: 'soon' },
-  { id: 'purchase_orders',  label: 'Purchase orders',  sheets: ['Purchases', 'Purchase Orders', 'Purchase'],  status: 'soon' },
-]
-
-// Try to resolve the right sheet from a workbook. Order:
-//   1. exact match against any candidate
-//   2. case-insensitive + trimmed match
-//   3. partial substring match either direction
-function resolveSheet(wb: XLSX.WorkBook, candidates: string[]): { name: string; sheet: XLSX.WorkSheet } | null {
-  for (const c of candidates) if (wb.Sheets[c]) return { name: c, sheet: wb.Sheets[c] }
-  const norm = wb.SheetNames.map(n => ({ orig: n, n: n.trim().toLowerCase() }))
-  for (const c of candidates) {
-    const cn = c.trim().toLowerCase()
-    const hit = norm.find(x => x.n === cn)
-    if (hit) return { name: hit.orig, sheet: wb.Sheets[hit.orig] }
-  }
-  for (const c of candidates) {
-    const cn = c.trim().toLowerCase()
-    const hit = norm.find(x => x.n.includes(cn) || cn.includes(x.n))
-    if (hit) return { name: hit.orig, sheet: wb.Sheets[hit.orig] }
-  }
-  return null
-}
+interface FieldDef { id: string; label: string; aliases: string[]; required: boolean; hint: string | null }
+interface TypeMeta { id: string; label: string; sheets: string[]; blurb: string; fields: FieldDef[] }
 
 interface ImportRow {
-  id: string
-  type: ImportType
-  filename: string
-  uploaded_at: string
+  id: string; type: string; filename: string; uploaded_at: string
   status: 'parsed' | 'running' | 'completed' | 'failed' | 'cancelled'
-  parsed_summary: any
-  result_summary: any
-  error: string | null
-  started_at: string | null
-  completed_at: string | null
+  parsed_summary: any; result_summary: any; error: string | null
 }
 
 export default function ImportsPage() {
-  const [active, setActive] = useState<ImportType>('customers')
+  const [types, setTypes] = useState<TypeMeta[]>([])
+  const [active, setActive] = useState<string>('customers')
   const [history, setHistory] = useState<ImportRow[]>([])
   const [refreshing, setRefreshing] = useState(false)
+  const activeMeta = useMemo(() => types.find(t => t.id === active), [types, active])
 
+  useEffect(() => {
+    fetch('/api/imports/meta').then(r => r.json()).then(d => setTypes(d.types || [])).catch(() => undefined)
+  }, [])
   const reload = async () => {
-    const r = await fetch('/api/imports')
-    const d = await r.json()
+    const r = await fetch('/api/imports'); const d = await r.json()
     if (r.ok) setHistory(d.imports || [])
   }
   useEffect(() => { reload() }, [])
@@ -83,36 +54,32 @@ export default function ImportsPage() {
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', marginBottom: 22, gap: 16, flexWrap: 'wrap' }}>
             <div>
               <Link href="/settings" style={{ fontSize: 11, color: T.text3, textDecoration: 'none', fontFamily: 'monospace' }}>← Settings</Link>
-              <h1 style={{ fontSize: 22, fontWeight: 600, margin: '6px 0 2px' }}>Imports</h1>
-              <div style={{ fontSize: 12, color: T.text3 }}>Bring MechanicDesk data into the portal. Drop an XLS/XLSX export from MD; the portal parses it, shows a preview, and you confirm before anything is written.</div>
+              <h1 style={{ fontSize: 22, fontWeight: 600, margin: '6px 0 2px' }}>MD Imports</h1>
+              <div style={{ fontSize: 12, color: T.text3 }}>Bring MechanicDesk data in. Drop a file, pick the sheet, confirm which column maps to which field, run.</div>
             </div>
             <button onClick={() => { setRefreshing(true); reload().finally(() => setRefreshing(false)) }} style={btn(false)}>{refreshing ? '↻ Refreshing…' : '↻ Refresh'}</button>
           </div>
 
-          {/* Type tabs */}
           <div style={{ display: 'flex', gap: 4, borderBottom: `1px solid ${T.border}`, marginBottom: 18, overflowX: 'auto' }}>
-            {TYPES.map(t => (
+            {types.map(t => (
               <button key={t.id} onClick={() => setActive(t.id)} style={{
                 padding: '8px 14px', background: 'transparent',
                 border: 'none', borderBottom: active === t.id ? `2px solid ${T.amber}` : '2px solid transparent',
                 color: active === t.id ? T.text : T.text3,
                 fontSize: 12, fontFamily: 'inherit', fontWeight: 600, cursor: 'pointer', whiteSpace: 'nowrap',
-              }}>
-                {t.label}{t.status === 'soon' && <span style={{ marginLeft: 6, fontSize: 9, color: T.text3, fontWeight: 400 }}>soon</span>}
-              </button>
+              }}>{t.label}</button>
             ))}
           </div>
 
-          <UploadCard type={active} typeMeta={TYPES.find(t => t.id === active)!} onComplete={reload} />
+          {activeMeta && <ImportFlow key={active} meta={activeMeta} onComplete={reload} />}
 
-          {/* History */}
           <div style={{ marginTop: 28 }}>
             <div style={{ fontSize: 11, fontWeight: 600, color: T.text3, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 10 }}>Recent imports</div>
             {history.length === 0 ? (
               <div style={{ padding: 24, textAlign: 'center', fontSize: 12, color: T.text3, background: T.bg2, border: `1px solid ${T.border}`, borderRadius: 8 }}>No imports yet.</div>
             ) : (
               <div style={{ background: T.bg2, border: `1px solid ${T.border}`, borderRadius: 8, overflow: 'hidden' }}>
-                {history.map((h, i) => <HistoryRow key={h.id} row={h} first={i === 0} onChange={reload} />)}
+                {history.map((h, i) => <HistoryRow key={h.id} row={h} first={i === 0} typeLabel={types.find(t => t.id === h.type)?.label || h.type} onChange={reload} />)}
               </div>
             )}
           </div>
@@ -122,130 +89,210 @@ export default function ImportsPage() {
   )
 }
 
-// ── Upload card ───────────────────────────────────────────────────────────────
-function UploadCard({ type, typeMeta, onComplete }: { type: ImportType; typeMeta: { label: string; sheets: string[]; status: 'live' | 'soon' }; onComplete: () => void }) {
-  const [busy, setBusy] = useState<'parse' | 'run' | null>(null)
-  const [preview, setPreview] = useState<{ id: string; summary: any; filename: string } | null>(null)
-  const [result, setResult] = useState<{ summary: any } | null>(null)
+// ── Step-driven flow per type ─────────────────────────────────────────────────
+type Step = 'idle' | 'sheet' | 'mapping' | 'preview' | 'result'
+
+function ImportFlow({ meta, onComplete }: { meta: TypeMeta; onComplete: () => void }) {
+  const [step, setStep] = useState<Step>('idle')
+  const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
-  // If we couldn't auto-find the sheet, stash the parsed workbook + filename
-  // here so the user can pick which sheet to use.
-  const [pendingPick, setPendingPick] = useState<{ wb: XLSX.WorkBook; filename: string } | null>(null)
-  const inputRef = useRef<HTMLInputElement>(null)
+  const [file, setFile] = useState<File | null>(null)
+  const [wb, setWb] = useState<XLSX.WorkBook | null>(null)
+  const [sheetName, setSheetName] = useState<string>('')
+  const [columns, setColumns] = useState<string[]>([])
+  const [sampleRows, setSampleRows] = useState<any[]>([])
+  const [mapping, setMapping] = useState<Record<string, string>>({})
+  const [preview, setPreview] = useState<{ id: string; summary: any } | null>(null)
+  const [result, setResult] = useState<{ summary: any } | null>(null)
+  const fileRef = useRef<HTMLInputElement>(null)
 
-  const reset = () => { setPreview(null); setResult(null); setErr(''); setPendingPick(null) }
+  function reset() {
+    setStep('idle'); setBusy(false); setErr('')
+    setFile(null); setWb(null); setSheetName(''); setColumns([]); setSampleRows([])
+    setMapping({}); setPreview(null); setResult(null)
+  }
 
-  async function uploadSheet(wb: XLSX.WorkBook, sheetName: string, filename: string) {
-    setBusy('parse')
+  async function onFile(f: File) {
+    reset()
+    if (!/\.xlsx?$/i.test(f.name)) { setErr('File must be .xls or .xlsx'); return }
+    setBusy(true); setFile(f)
+    try {
+      const buf = await f.arrayBuffer()
+      const w = XLSX.read(buf, { type: 'array' })
+      setWb(w)
+      // Auto-pick the first matching sheet from candidates; otherwise show picker.
+      const sheet = pickSheet(w, meta.sheets) || w.SheetNames[0]
+      if (sheet) {
+        loadSheet(w, sheet)
+        // Always show the sheet picker so the user can change their mind.
+        setStep('sheet')
+      } else {
+        setErr('No sheets found in the file.')
+      }
+    } catch (e: any) { setErr(e?.message || 'Failed to read file') }
+    finally { setBusy(false) }
+  }
+
+  function loadSheet(w: XLSX.WorkBook, name: string) {
+    setSheetName(name)
+    const sheet = w.Sheets[name]
+    const arr: any[][] = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: null })
+    const headers = (arr[0] || []).map(h => String(h ?? '').trim()).filter(Boolean)
+    setColumns(headers)
+    // first 3 data rows for the preview pane on the mapping screen
+    const obj = XLSX.utils.sheet_to_json(sheet, { defval: null })
+    setSampleRows(obj.slice(0, 3))
+    // auto-suggest mapping
+    const m: Record<string, string> = {}
+    for (const f of meta.fields) {
+      const hit = bestMatch(headers, f.aliases, f.label, f.id)
+      if (hit) m[f.id] = hit
+    }
+    setMapping(m)
+  }
+
+  async function submitMapping() {
+    if (!wb || !sheetName) return
+    // Check required fields are mapped.
+    const missing = meta.fields.filter(f => f.required && !mapping[f.id])
+    if (missing.length) { setErr(`Required field${missing.length > 1 ? 's' : ''} not mapped: ${missing.map(f => f.label).join(', ')}.`); return }
+    setBusy(true); setErr('')
     try {
       const sheet = wb.Sheets[sheetName]
-      if (!sheet) { setErr(`Sheet "${sheetName}" not found.`); return }
-      const rawRows = XLSX.utils.sheet_to_json(sheet, { defval: null })
+      const raw = XLSX.utils.sheet_to_json(sheet, { defval: null }) as any[]
+      const mapped = raw.map(r => {
+        const out: any = {}
+        for (const f of meta.fields) {
+          const col = mapping[f.id]
+          if (col) out[f.id] = r[col]
+        }
+        return out
+      })
       const r = await fetch('/api/imports', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ type, filename, raw_rows: rawRows }),
+        body: JSON.stringify({ type: meta.id, filename: file?.name || 'upload.xls', rows: mapped }),
       })
       const d = await r.json()
       if (!r.ok) { setErr(d.error || 'Parse failed'); return }
-      setPreview({ id: d.id, summary: d.parsed_summary, filename })
-      setPendingPick(null)
+      setPreview({ id: d.id, summary: d.parsed_summary })
+      setStep('preview')
     } catch (e: any) { setErr(e?.message || 'Parse failed') }
-    finally { setBusy(null) }
+    finally { setBusy(false) }
   }
 
-  async function onFile(file: File) {
-    reset()
-    if (typeMeta.status === 'soon') { setErr(`The ${typeMeta.label} importer isn't live yet — coming soon.`); return }
-    if (!/\.xlsx?$/i.test(file.name)) { setErr('File must be .xls or .xlsx'); return }
-    setBusy('parse')
-    try {
-      const buf = await file.arrayBuffer()
-      const wb = XLSX.read(buf, { type: 'array' })
-      const hit = resolveSheet(wb, typeMeta.sheets)
-      if (!hit) {
-        // Let the user pick which sheet to use.
-        setBusy(null)
-        setPendingPick({ wb, filename: file.name })
-        return
-      }
-      await uploadSheet(wb, hit.name, file.name)
-    } catch (e: any) { setErr(e?.message || 'Failed to read file'); setBusy(null) }
-  }
-
-  async function run() {
+  async function runImport() {
     if (!preview) return
-    setBusy('run'); setErr('')
+    setBusy(true); setErr('')
     try {
       const r = await fetch(`/api/imports/${preview.id}/run`, { method: 'POST' })
       const d = await r.json()
       if (!r.ok) { setErr(d.error || 'Import failed'); return }
       setResult({ summary: d.result_summary })
+      setStep('result')
       onComplete()
     } catch (e: any) { setErr(e?.message || 'Import failed') }
-    finally { setBusy(null) }
-  }
-
-  if (typeMeta.status === 'soon') {
-    return (
-      <div style={{ padding: 28, background: T.bg2, border: `1px solid ${T.border}`, borderRadius: 10, textAlign: 'center' }}>
-        <div style={{ fontSize: 15, fontWeight: 600, color: T.text, marginBottom: 6 }}>{typeMeta.label} importer — coming soon</div>
-        <div style={{ fontSize: 12, color: T.text3 }}>Phase 1 ships with the Customers importer. {typeMeta.label.toLowerCase()} follows in the next batch.</div>
-      </div>
-    )
+    finally { setBusy(false) }
   }
 
   return (
     <div style={{ padding: 20, background: T.bg2, border: `1px solid ${T.border}`, borderRadius: 10 }}>
-      <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 4 }}>Import {typeMeta.label.toLowerCase()}</div>
-      <div style={{ fontSize: 11, color: T.text3, marginBottom: 14 }}>Expects the MD <code style={{ fontFamily: 'monospace', color: T.text2 }}>{typeMeta.sheets[0]}</code> sheet (case-insensitive — you'll be asked to pick if auto-detect can't find it). Customers are merged with existing rows by mobile → email → name; unmatched rows are inserted.</div>
+      <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 4 }}>Import {meta.label.toLowerCase()}</div>
+      <div style={{ fontSize: 11, color: T.text3, marginBottom: 14 }}>{meta.blurb}</div>
 
-      {!preview && !result && !pendingPick && (
-        <div onClick={() => inputRef.current?.click()}
+      {step === 'idle' && (
+        <div onClick={() => fileRef.current?.click()}
              onDragOver={e => e.preventDefault()}
              onDrop={e => { e.preventDefault(); const f = e.dataTransfer.files[0]; if (f) onFile(f) }}
              style={{ padding: '36px 20px', textAlign: 'center', border: `2px dashed ${T.border2}`, borderRadius: 8, cursor: busy ? 'default' : 'pointer', background: T.bg3 }}>
-          <input ref={inputRef} type="file" accept=".xls,.xlsx" style={{ display: 'none' }} onChange={e => { const f = e.target.files?.[0]; if (f) onFile(f) }} />
-          <div style={{ fontSize: 13, color: T.text2, fontWeight: 500 }}>{busy === 'parse' ? 'Parsing…' : 'Drop .xls/.xlsx here, or click to browse'}</div>
-          <div style={{ fontSize: 10, color: T.text3, marginTop: 6 }}>The file isn't uploaded — your browser parses it and posts the rows as JSON.</div>
+          <input ref={fileRef} type="file" accept=".xls,.xlsx" style={{ display: 'none' }} onChange={e => { const f = e.target.files?.[0]; if (f) onFile(f) }} />
+          <div style={{ fontSize: 13, color: T.text2, fontWeight: 500 }}>{busy ? 'Reading…' : 'Drop .xls/.xlsx here, or click to browse'}</div>
+          <div style={{ fontSize: 10, color: T.text3, marginTop: 6 }}>Parsed in your browser — nothing is uploaded until you confirm.</div>
         </div>
       )}
 
-      {pendingPick && !preview && !result && (
-        <div style={{ padding: 14, background: T.bg3, border: `1px solid ${T.amber}55`, borderRadius: 6 }}>
-          <div style={{ fontSize: 12, color: T.text2, marginBottom: 8 }}>
-            Couldn't auto-find the {typeMeta.label.toLowerCase()} sheet (looked for: <code style={{ fontFamily: 'monospace', color: T.text3 }}>{typeMeta.sheets.join(', ')}</code>). Pick the right one:
-          </div>
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-            {pendingPick.wb.SheetNames.map(n => (
-              <button key={n} onClick={() => uploadSheet(pendingPick.wb, n, pendingPick.filename)} disabled={busy === 'parse'} style={{
-                padding: '6px 12px', borderRadius: 4, fontSize: 11, fontFamily: 'inherit', fontWeight: 600,
-                background: 'transparent', color: T.text2, border: `1px solid ${T.border2}`, cursor: 'pointer',
-              }}>{n}</button>
-            ))}
-          </div>
-          <button onClick={reset} style={{ ...btn(false), marginTop: 10, padding: '5px 10px', fontSize: 11 }}>Cancel</button>
-        </div>
-      )}
-
-      {preview && !result && (
+      {step === 'sheet' && wb && (
         <div>
-          <div style={{ padding: 14, background: T.bg3, border: `1px solid ${T.border}`, borderRadius: 6, marginBottom: 14 }}>
-            <div style={{ fontSize: 12, color: T.text2, marginBottom: 8 }}>Parsed <strong style={{ color: T.text }}>{preview.filename}</strong></div>
-            <SummaryGrid s={preview.summary} type={type} />
+          <Section label="1. Sheet" />
+          <div style={{ fontSize: 11, color: T.text3, marginBottom: 8 }}>File: <strong style={{ color: T.text2 }}>{file?.name}</strong></div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginBottom: 14 }}>
+            {wb.SheetNames.map(n => {
+              const isSel = n === sheetName
+              const rowCount = (() => { try { return XLSX.utils.sheet_to_json(wb.Sheets[n], { header: 1, defval: null }).length } catch { return '?' } })()
+              return (
+                <label key={n} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 12px', background: isSel ? T.bg3 : 'transparent', border: `1px solid ${isSel ? T.amber : T.border}`, borderRadius: 6, cursor: 'pointer' }}>
+                  <input type="radio" name="sheet" checked={isSel} onChange={() => loadSheet(wb, n)} />
+                  <span style={{ fontSize: 13, color: T.text }}>{n}</span>
+                  <span style={{ fontSize: 11, color: T.text3, marginLeft: 'auto' }}>{rowCount} rows</span>
+                </label>
+              )
+            })}
           </div>
           <div style={{ display: 'flex', gap: 8 }}>
-            <button onClick={run} disabled={busy === 'run'} style={btn(true)}>{busy === 'run' ? 'Running…' : 'Run import'}</button>
-            <button onClick={reset} disabled={busy === 'run'} style={btn(false)}>Cancel</button>
+            <button onClick={() => setStep('mapping')} disabled={!sheetName || columns.length === 0} style={btn(true)}>Continue → Map columns</button>
+            <button onClick={reset} style={btn(false)}>Start over</button>
+          </div>
+          {columns.length === 0 && sheetName && <div style={{ marginTop: 10, fontSize: 11, color: T.amber }}>This sheet has no header row. Pick a different sheet.</div>}
+        </div>
+      )}
+
+      {step === 'mapping' && (
+        <div>
+          <Section label="2. Column mapping" />
+          <div style={{ fontSize: 11, color: T.text3, marginBottom: 12 }}>Auto-suggested from headers in the <strong style={{ color: T.text2 }}>{sheetName}</strong> sheet. Adjust where needed.</div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 14 }}>
+            {meta.fields.map(f => (
+              <div key={f.id} style={{ display: 'grid', gridTemplateColumns: '200px 1fr', gap: 10, alignItems: 'center' }}>
+                <div>
+                  <div style={{ fontSize: 12, color: T.text2 }}>
+                    {f.label}{f.required && <span style={{ color: T.red, marginLeft: 4 }}>*</span>}
+                  </div>
+                  {f.hint && <div style={{ fontSize: 10, color: T.text3, marginTop: 1 }}>{f.hint}</div>}
+                </div>
+                <select value={mapping[f.id] || ''} onChange={e => setMapping(m => ({ ...m, [f.id]: e.target.value }))} style={inp}>
+                  <option value="">— not in this sheet —</option>
+                  {columns.map(c => <option key={c} value={c}>{c}</option>)}
+                </select>
+              </div>
+            ))}
+          </div>
+
+          {sampleRows.length > 0 && (
+            <details style={{ marginBottom: 14 }}>
+              <summary style={{ cursor: 'pointer', fontSize: 11, color: T.text3, marginBottom: 8 }}>Preview first 3 rows (mapped)</summary>
+              <pre style={{ background: T.bg3, padding: 10, borderRadius: 6, fontSize: 10, color: T.text2, overflow: 'auto', maxHeight: 200 }}>
+{JSON.stringify(sampleRows.slice(0, 3).map(r => Object.fromEntries(meta.fields.map(f => [f.id, mapping[f.id] ? r[mapping[f.id]] : null]).filter(([_, v]) => v != null))), null, 2)}
+              </pre>
+            </details>
+          )}
+
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button onClick={submitMapping} disabled={busy} style={btn(true)}>{busy ? 'Parsing…' : 'Continue → Preview'}</button>
+            <button onClick={() => setStep('sheet')} disabled={busy} style={btn(false)}>← Back</button>
+            <button onClick={reset} disabled={busy} style={btn(false)}>Start over</button>
           </div>
         </div>
       )}
 
-      {result && (
+      {step === 'preview' && preview && (
         <div>
+          <Section label="3. Preview" />
+          <div style={{ padding: 14, background: T.bg3, border: `1px solid ${T.border}`, borderRadius: 6, marginBottom: 14 }}>
+            <SummaryGrid s={preview.summary} type={meta.id} />
+          </div>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button onClick={runImport} disabled={busy} style={btn(true)}>{busy ? 'Running…' : 'Run import'}</button>
+            <button onClick={() => setStep('mapping')} disabled={busy} style={btn(false)}>← Back</button>
+            <button onClick={reset} disabled={busy} style={btn(false)}>Cancel</button>
+          </div>
+        </div>
+      )}
+
+      {step === 'result' && result && (
+        <div>
+          <Section label="✓ Done" />
           <div style={{ padding: 14, background: T.bg3, border: `1px solid ${T.green}33`, borderRadius: 6, marginBottom: 14 }}>
-            <div style={{ fontSize: 13, color: T.green, fontWeight: 600, marginBottom: 8 }}>✓ Import complete</div>
-            <ResultGrid s={result.summary} type={type} />
+            <ResultGrid s={result.summary} type={meta.id} />
           </div>
           <button onClick={reset} style={btn(false)}>Run another import</button>
         </div>
@@ -256,51 +303,79 @@ function UploadCard({ type, typeMeta, onComplete }: { type: ImportType; typeMeta
   )
 }
 
-// ── Summary grids ─────────────────────────────────────────────────────────────
-function SummaryGrid({ s, type }: { s: any; type: ImportType }) {
-  if (type === 'customers') {
-    return (
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10, fontSize: 12 }}>
-        <Stat label="In file"        value={s.total_in_file} />
-        <Stat label="To import"      value={s.total_to_import} accent="text" />
-        <Stat label="Skipped — third-party" value={s.skipped_third_party} muted />
-        <Stat label="Skipped — no name"     value={s.skipped_no_name} muted />
-      </div>
-    )
-  }
-  return <pre style={{ fontSize: 11, color: T.text2 }}>{JSON.stringify(s, null, 2)}</pre>
+function Section({ label }: { label: string }) {
+  return <div style={{ fontSize: 10, fontWeight: 700, color: T.amber, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 10 }}>{label}</div>
 }
 
-function ResultGrid({ s, type }: { s: any; type: ImportType }) {
-  if (type === 'customers') {
-    const matched = (s.matched_by_mobile || 0) + (s.matched_by_email || 0) + (s.matched_by_name || 0)
-    return (
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10, fontSize: 12 }}>
-        <Stat label="New (inserted)" value={s.inserted} accent="green" />
-        <Stat label="Merged into existing" value={s.updated} accent="teal" />
-        <Stat label="Already linked" value={s.already_linked} muted />
-        <Stat label="Matched by mobile" value={s.matched_by_mobile} muted />
-        <Stat label="Matched by email" value={s.matched_by_email} muted />
-        <Stat label="Matched by name" value={s.matched_by_name} muted />
-        {s.errors > 0 && <Stat label="Errors" value={s.errors} accent="red" />}
-      </div>
-    )
+// ── Auto-suggest helpers ──────────────────────────────────────────────────────
+function pickSheet(wb: XLSX.WorkBook, candidates: string[]): string | null {
+  for (const c of candidates) if (wb.Sheets[c]) return c
+  const norm = wb.SheetNames.map(n => ({ orig: n, n: n.trim().toLowerCase() }))
+  for (const c of candidates) {
+    const cn = c.trim().toLowerCase()
+    const hit = norm.find(x => x.n === cn) || norm.find(x => x.n.includes(cn) || cn.includes(x.n))
+    if (hit) return hit.orig
   }
-  return <pre style={{ fontSize: 11, color: T.text2 }}>{JSON.stringify(s, null, 2)}</pre>
+  return null
 }
 
+function bestMatch(columns: string[], aliases: string[], label: string, id: string): string | null {
+  const cols = columns.map(c => ({ orig: c, n: c.trim().toLowerCase() }))
+  const candidates = [label, id, ...aliases]
+  for (const a of candidates) {
+    const an = a.trim().toLowerCase()
+    const exact = cols.find(c => c.n === an)
+    if (exact) return exact.orig
+  }
+  for (const a of candidates) {
+    const an = a.trim().toLowerCase()
+    const partial = cols.find(c => c.n.includes(an) || an.includes(c.n))
+    if (partial) return partial.orig
+  }
+  return null
+}
+
+// ── Summaries ─────────────────────────────────────────────────────────────────
+function SummaryGrid({ s, type }: { s: any; type: string }) {
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 10, fontSize: 12 }}>
+      {Object.entries(s || {}).map(([k, v]) => (
+        <Stat key={k} label={prettyLabel(k)} value={v as any}
+          accent={k === 'total_to_import' ? 'text' : k.startsWith('skipped') ? undefined : undefined}
+          muted={k.startsWith('skipped')} />
+      ))}
+    </div>
+  )
+}
+function ResultGrid({ s, type }: { s: any; type: string }) {
+  const order = ['inserted', 'updated', 'upserted', 'matched_by_mobile', 'matched_by_email', 'matched_by_name', 'matched_md_id', 'matched_rego', 'matched_sku', 'already_linked', 'no_customer', 'no_vehicle', 'errors']
+  const keys = Object.keys(s || {}).sort((a, b) => {
+    const ia = order.indexOf(a), ib = order.indexOf(b)
+    return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib)
+  })
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 10, fontSize: 12 }}>
+      {keys.map(k => (
+        <Stat key={k} label={prettyLabel(k)} value={s[k]}
+          accent={k === 'inserted' ? 'green' : k === 'updated' || k === 'upserted' ? 'teal' : k === 'errors' && s[k] > 0 ? 'red' : undefined}
+          muted={k.startsWith('matched') || k === 'already_linked' || k === 'no_customer' || k === 'no_vehicle'} />
+      ))}
+    </div>
+  )
+}
+function prettyLabel(k: string) { return k.replace(/_/g, ' ').replace(/(^|\s)\w/g, m => m.toUpperCase()) }
 function Stat({ label, value, accent, muted }: { label: string; value: any; accent?: 'green' | 'teal' | 'red' | 'text'; muted?: boolean }) {
   const c = accent === 'green' ? T.green : accent === 'teal' ? T.teal : accent === 'red' ? T.red : accent === 'text' ? T.text : (muted ? T.text3 : T.text2)
   return (
     <div>
       <div style={{ fontSize: 9, color: T.text3, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 3 }}>{label}</div>
-      <div style={{ fontSize: 18, color: c, fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>{value ?? 0}</div>
+      <div style={{ fontSize: 18, color: c, fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>{typeof value === 'number' ? value : (value ?? 0)}</div>
     </div>
   )
 }
 
 // ── History row ───────────────────────────────────────────────────────────────
-function HistoryRow({ row, first, onChange }: { row: ImportRow; first: boolean; onChange: () => void }) {
+function HistoryRow({ row, first, typeLabel, onChange }: { row: ImportRow; first: boolean; typeLabel: string; onChange: () => void }) {
   async function del() {
     if (!confirm(`Delete this import record (${row.filename})? It won't undo what was imported.`)) return
     const r = await fetch(`/api/imports/${row.id}`, { method: 'DELETE' })
@@ -308,11 +383,14 @@ function HistoryRow({ row, first, onChange }: { row: ImportRow; first: boolean; 
   }
   const colour = row.status === 'completed' ? T.green : row.status === 'failed' ? T.red : row.status === 'running' ? T.amber : T.text3
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: '100px 1fr 1fr 120px 100px 30px', gap: 10, padding: '10px 14px', borderTop: first ? 'none' : `1px solid ${T.border}`, alignItems: 'center', fontSize: 12 }}>
-      <div style={{ color: T.text2, fontFamily: 'monospace' }}>{TYPES.find(t => t.id === row.type)?.label || row.type}</div>
+    <div style={{ display: 'grid', gridTemplateColumns: '110px 1fr 1fr 120px 100px 30px', gap: 10, padding: '10px 14px', borderTop: first ? 'none' : `1px solid ${T.border}`, alignItems: 'center', fontSize: 12 }}>
+      <div style={{ color: T.text2, fontFamily: 'monospace' }}>{typeLabel}</div>
       <div style={{ color: T.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{row.filename}</div>
       <div style={{ color: T.text3, fontFamily: 'monospace', fontSize: 11 }}>
-        {row.result_summary ? <ResultInline s={row.result_summary} type={row.type} /> : row.parsed_summary ? <span>{row.parsed_summary.total_to_import || row.parsed_summary.total_in_file} parsed</span> : '—'}
+        {row.result_summary ? summariseRun(row.result_summary)
+         : row.parsed_summary ? `${row.parsed_summary.total_to_import || row.parsed_summary.total_in_file || '?'} parsed`
+         : '—'}
+        {row.error && <span style={{ color: T.red, marginLeft: 6 }}>· {row.error.substring(0, 60)}</span>}
       </div>
       <div style={{ color: T.text3, fontSize: 11 }}>{new Date(row.uploaded_at).toLocaleString()}</div>
       <div style={{ color: colour, fontWeight: 600, fontSize: 11 }}>{row.status}</div>
@@ -320,12 +398,10 @@ function HistoryRow({ row, first, onChange }: { row: ImportRow; first: boolean; 
     </div>
   )
 }
-
-function ResultInline({ s, type }: { s: any; type: ImportType }) {
-  if (type === 'customers') {
-    return <span>+{s.inserted || 0} new · {s.updated || 0} merged{s.errors ? ` · ${s.errors} err` : ''}</span>
-  }
-  return <span>—</span>
+function summariseRun(s: any): string {
+  if (s.inserted != null || s.updated != null) return `+${s.inserted || 0} new · ${s.updated || 0} merged${s.errors ? ` · ${s.errors} err` : ''}`
+  if (s.upserted != null) return `${s.upserted} upserted${s.errors ? ` · ${s.errors} err` : ''}`
+  return Object.entries(s || {}).map(([k, v]) => `${prettyLabel(k)}: ${v}`).join(' · ').substring(0, 80)
 }
 
 const btn = (primary: boolean): React.CSSProperties => ({
@@ -333,3 +409,7 @@ const btn = (primary: boolean): React.CSSProperties => ({
   background: primary ? T.amber : 'transparent', color: primary ? '#1a1d23' : T.text2,
   border: primary ? 'none' : `1px solid ${T.border2}`, cursor: 'pointer',
 })
+const inp: React.CSSProperties = {
+  padding: '6px 10px', background: T.bg3, border: `1px solid ${T.border2}`, borderRadius: 4,
+  color: T.text, fontSize: 12, fontFamily: 'inherit', width: '100%',
+}
