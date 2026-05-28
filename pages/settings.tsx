@@ -30,7 +30,7 @@ const T = {
 }
 
 interface PortalUserSSR { id: string; email: string; displayName: string | null; role: UserRole }
-type SettingsTab = 'general'|'vin-codes'|'backfill'|'dist-report'|'connections'|'data-imports'|'users'|'audit'|'profile'|'workshop'
+type SettingsTab = 'general'|'vin-codes'|'backfill'|'dist-report'|'connections'|'data-imports'|'users'|'audit'|'profile'|'workshop'|'md-imports'
 
 export default function SettingsPage({ user }: { user: PortalUserSSR }) {
   const router = useRouter()
@@ -76,6 +76,7 @@ export default function SettingsPage({ user }: { user: PortalUserSSR }) {
     { id: 'connections', label: 'Connections',        adminOnly: true,  icon: 'stripe-myob',   accent: T.teal,   desc: 'Integration health & MYOB' },
     { id: 'data-imports',label: 'Data Imports',       adminOnly: true,  icon: 'stocktake',     accent: T.purple, desc: 'Bulk imports & uploads' },
     { id: 'workshop',    label: 'Workshop',           adminOnly: true,  icon: 'diary',         accent: T.teal,   desc: 'Technicians, documents, invoicing & SMS' },
+    { id: 'md-imports',  label: 'MD Imports',         adminOnly: true,  icon: 'stocktake',     accent: T.amber,  desc: 'Bring MechanicDesk data into the portal — customers, job types, vehicles…' },
     { id: 'vin-codes',   label: 'VIN Codes',          adminOnly: true,  icon: 'vehicle-sales', accent: T.amber,  desc: 'VIN prefix → model code rules' },
     { id: 'backfill',    label: 'Backfill',           adminOnly: true,  icon: 'jobs',          accent: T.teal,   desc: 'Orders ↔ quotes backfill' },
     { id: 'users',       label: 'Users',              adminOnly: true,  icon: 'team',          accent: T.blue,   desc: 'Invite, roles & tab access' },
@@ -85,7 +86,7 @@ export default function SettingsPage({ user }: { user: PortalUserSSR }) {
   const visibleSections = SECTIONS.filter(s => !s.adminOnly || isAdmin)
   const active = SECTIONS.find(s => s.id === openId) || null
   // Heavy sections (tables / iframes) get a wider window.
-  const WIDE: SettingsTab[] = ['dist-report','connections','data-imports','vin-codes','backfill','users','workshop']
+  const WIDE: SettingsTab[] = ['dist-report','connections','data-imports','vin-codes','backfill','users','workshop','md-imports']
 
   function openSection(t: SettingsTab) {
     setOpenId(t)
@@ -193,6 +194,7 @@ export default function SettingsPage({ user }: { user: PortalUserSSR }) {
                   {active.id === 'data-imports'&& isAdmin && <DataImportsTab/>}
                   {active.id === 'vin-codes'   && isAdmin && <VinCodesTab/>}
                   {active.id === 'workshop'    && isAdmin && <WorkshopSettingsEmbed/>}
+                  {active.id === 'md-imports'  && isAdmin && <MdImportsEmbed/>}
                   {active.id === 'backfill'    && isAdmin && <BackfillTab/>}
                   {active.id === 'users'       && isAdmin && <UsersTab currentUser={user}/>}
                   {active.id === 'audit'       && isAdmin && <AuditTab/>}
@@ -708,6 +710,11 @@ function BackfillTab() {
 function WorkshopSettingsEmbed() {
   return <div style={{background:T.bg2,border:`1px solid ${T.border}`,borderRadius:10,overflow:'hidden',height:'calc(100vh - 200px)',minHeight:600}}>
     <iframe src="/workshop/settings?embed=1" style={{width:'100%',height:'100%',border:'none',display:'block'}} title="Workshop settings"/>
+  </div>
+}
+function MdImportsEmbed() {
+  return <div style={{background:T.bg2,border:`1px solid ${T.border}`,borderRadius:10,overflow:'hidden',height:'calc(100vh - 200px)',minHeight:600}}>
+    <iframe src="/imports?embed=1" style={{width:'100%',height:'100%',border:'none',display:'block'}} title="MD Imports"/>
   </div>
 }
 
