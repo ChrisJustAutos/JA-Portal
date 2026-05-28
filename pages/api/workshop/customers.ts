@@ -21,14 +21,16 @@ export default withAuth('view:diary', async (req, res, user) => {
 
   if (req.method === 'GET') {
     const q = String(req.query.q || '').trim().replace(/[%,()*]/g, ' ').trim()
+    const limit = Math.min(200, Math.max(1, Number(req.query.limit) || 20))
+    const offset = Math.max(0, Number(req.query.offset) || 0)
     let query = db.from('workshop_customers')
-      .select('id, name, first_name, last_name, phone, mobile, email')
+      .select('id, name, first_name, last_name, phone, mobile, email, company, customer_number', { count: 'exact' })
       .order('name', { ascending: true })
-      .limit(20)
+      .range(offset, offset + limit - 1)
     if (q) query = query.or(`name.ilike.%${q}%,phone.ilike.%${q}%,mobile.ilike.%${q}%,email.ilike.%${q}%`)
-    const { data, error } = await query
+    const { data, count, error } = await query
     if (error) return res.status(500).json({ error: error.message })
-    return res.status(200).json({ customers: data || [] })
+    return res.status(200).json({ customers: data || [], total: count || 0 })
   }
 
   if (req.method === 'POST') {

@@ -218,6 +218,7 @@ export const PORTAL_TABS: PortalTab[] = [
   { id: 'distributors',  label: 'Distributors',    permission: 'view:distributors' },
   { id: 'calls',         label: 'Phone Calls',     permission: 'view:calls' },
   { id: 'diary',         label: 'Workshop Diary',  permission: 'view:diary' },
+  { id: 'workshop-customers', label: 'Customers',  permission: 'view:diary' },
   { id: 'workshop-quotes', label: 'Quotes',        permission: 'view:diary' },
   { id: 'workshop-inventory', label: 'Inventory',  permission: 'view:diary' },
   { id: 'workshop-tasks',  label: 'Tasks',          permission: 'view:diary' },

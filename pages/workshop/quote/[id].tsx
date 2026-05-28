@@ -40,6 +40,24 @@ export default function QuoteBuilderPage({ user }: { user: PortalUserSSR }) {
   const [busy, setBusy] = useState(false)
   const [emailing, setEmailing] = useState(false)
   const [emailMsg, setEmailMsg] = useState('')
+  // Job-type presets — fills quote lines from a template.
+  const [presets, setPresets] = useState<Array<{ id: string; name: string }>>([])
+  const [applyJt, setApplyJt] = useState('')
+  useEffect(() => {
+    fetch('/api/workshop/job-types').then(r => r.json())
+      .then(d => setPresets((d.jobTypes || []).filter((t: any) => t.active).map((t: any) => ({ id: t.id, name: t.name }))))
+      .catch(() => undefined)
+  }, [])
+  async function applyJobType() {
+    if (!applyJt || !id) return
+    const r = await fetch(`/api/workshop/job-types/${applyJt}/apply-to-quote`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ quote_id: id }),
+    })
+    if (!r.ok) { setErr((await r.json()).error || 'Apply failed'); return }
+    setApplyJt('')
+    await load()
+  }
 
   const load = useCallback(async () => {
     if (!id) return
@@ -143,6 +161,16 @@ export default function QuoteBuilderPage({ user }: { user: PortalUserSSR }) {
                     <div style={{ padding: 12, borderTop: `1px solid ${T.border}`, display: 'flex', gap: 8, alignItems: 'center' }}>
                       <button onClick={() => addLine({ description: 'Labour', qty: 1, unit_price: 0 })} style={addBtn}>+ Line</button>
                       <PartPicker onPick={(it) => addLine({ description: it.part_name, part_number: it.sku, qty: 1, unit_price: Number(it.sell_price) || 0, inventory_id: it.id } as any)} />
+                      {presets.length > 0 && (
+                        <>
+                          <div style={{ flex: 1 }} />
+                          <select value={applyJt} onChange={e => setApplyJt(e.target.value)} title="Apply a job-type preset — adds its lines + appends its work narrative to the notes" style={{ padding: '5px 9px', background: T.bg3, color: T.text, border: `1px solid ${T.border2}`, borderRadius: 5, fontSize: 11, fontFamily: 'inherit', maxWidth: 220 }}>
+                            <option value="">Apply job type…</option>
+                            {presets.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                          </select>
+                          <button onClick={applyJobType} disabled={!applyJt} style={addBtn}>Apply</button>
+                        </>
+                      )}
                     </div>
                   )}
                   <div style={{ padding: '12px 16px', borderTop: `1px solid ${T.border2}`, display: 'flex', flexDirection: 'column', gap: 4, alignItems: 'flex-end' }}>

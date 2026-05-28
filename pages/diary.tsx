@@ -650,11 +650,12 @@ function BookingModal({ initial, techs, canEdit, onClose, onSaved }: {
   const [splitFinish, setSplitFinish] = useState<string>(() => hhmmPlus(initial.ends_at ? bneTimeStr(initial.ends_at) : '10:00', 60))
   const [splitting, setSplitting] = useState(false)
 
-  // Imported job-type presets (294 from MD). Picking one fills the description
-  // (= the checklist on the job card + the work narrative on the invoice) and,
-  // after save, copies the labour + parts template lines onto the booking.
+  // Imported job-type presets. Booking can stack multiple — each one's
+  // description appends to the booking's description, and on save the lines
+  // from each picked preset get applied in sequence.
   const [presets, setPresets] = useState<Array<{ id: string; name: string; description: string | null; default_duration_min: number | null }>>([])
-  const [applyPresetId, setApplyPresetId] = useState<string>('')
+  const [applyPresetIds, setApplyPresetIds] = useState<string[]>([])
+  const [presetToAdd, setPresetToAdd] = useState<string>('')
   useEffect(() => {
     let alive = true
     fetch('/api/workshop/job-types').then(r => r.json()).then(d => {
@@ -663,9 +664,11 @@ function BookingModal({ initial, techs, canEdit, onClose, onSaved }: {
     }).catch(() => undefined)
     return () => { alive = false }
   }, [])
-  function pickPreset(id: string) {
-    setApplyPresetId(id)
+  function addPreset(id: string) {
     if (!id) return
+    if (applyPresetIds.includes(id)) { setPresetToAdd(''); return }  // already added
+    setApplyPresetIds(prev => [...prev, id])
+    setPresetToAdd('')
     const p = presets.find(x => x.id === id)
     if (!p?.description) return
     const jt = String(p.description).trim()
@@ -675,6 +678,11 @@ function BookingModal({ initial, techs, canEdit, onClose, onSaved }: {
       if (cur.includes(jt)) return cur
       return `${cur}\n\n${jt}`
     })
+  }
+  function removePreset(id: string) {
+    setApplyPresetIds(prev => prev.filter(x => x !== id))
+    // We deliberately DON'T strip the description text — the user may have
+    // edited it. If they want it gone they can do so manually.
   }
 
   async function doSplit() {
@@ -710,17 +718,19 @@ function BookingModal({ initial, techs, canEdit, onClose, onSaved }: {
         : await fetch(`/api/workshop/bookings/${initial.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
       const d = await r.json()
       if (!r.ok) { setErr(d.error || d.message || 'Save failed'); return }
-      // If the user picked a job-type preset, copy its labour + parts lines now
-      // that we have a booking id. Description was already saved above so pass
-      // lines_only to avoid touching it again.
-      if (applyPresetId) {
+      // If the user added job-type presets, copy each one's labour + parts
+      // lines now that we have a booking id. Description was already saved
+      // above so pass lines_only to avoid touching it again.
+      if (applyPresetIds.length > 0) {
         const bookingId = isNew ? (d.id || d.booking?.id) : initial.id
         if (bookingId) {
-          await fetch(`/api/workshop/job-types/${applyPresetId}/apply`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ booking_id: bookingId, lines_only: true }),
-          }).catch(() => undefined)
+          for (const presetId of applyPresetIds) {
+            await fetch(`/api/workshop/job-types/${presetId}/apply`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ booking_id: bookingId, lines_only: true }),
+            }).catch(() => undefined)
+          }
         }
       }
       onSaved()
@@ -774,11 +784,26 @@ function BookingModal({ initial, techs, canEdit, onClose, onSaved }: {
             </Field>
           </div>
           {presets.length > 0 && (
-            <Field label="Apply job type (fills description + lines)">
-              <select value={applyPresetId} disabled={!canEdit} onChange={e => pickPreset(e.target.value)} style={inp} title="Pick a preset to fill in the work-done description and invoice line items">
-                <option value="">— pick one —</option>
-                {presets.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-              </select>
+            <Field label={`Apply job types (${applyPresetIds.length} added — fills description + lines)`}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                {applyPresetIds.length > 0 && (
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                    {applyPresetIds.map(id => {
+                      const p = presets.find(x => x.id === id)
+                      return (
+                        <span key={id} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '4px 8px 4px 10px', background: T.bg3, border: `1px solid ${T.amber}55`, borderRadius: 4, fontSize: 11, color: T.text2 }}>
+                          {p?.name || id}
+                          {canEdit && <button onClick={() => removePreset(id)} title="Remove this preset" style={{ background: 'none', border: 'none', color: T.text3, cursor: 'pointer', fontSize: 13, padding: 0, lineHeight: 1 }}>×</button>}
+                        </span>
+                      )
+                    })}
+                  </div>
+                )}
+                <select value={presetToAdd} disabled={!canEdit} onChange={e => addPreset(e.target.value)} style={inp} title="Add a preset — its description appends to this booking and its lines get applied on save">
+                  <option value="">+ Add job type…</option>
+                  {presets.filter(p => !applyPresetIds.includes(p.id)).map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                </select>
+              </div>
             </Field>
           )}
           <Field label="Description (work to do — shows on job card + invoice)">
