@@ -410,7 +410,7 @@ export async function fetchInStockUniverse(
     for (const s of stocks) {
       // Total on-hand qty (NOT "available" = total − allocated). Prefer the
       // total/quantity fields; fall back to available only if that's all MD gives.
-      const available = pickNum(s, ['quantity', 'total_quantity', 'current_quantity', 'on_hand', 'available', 'qty']) ?? 0
+      const available = pickNum(s, ['quantity', 'total_quantity', 'total_qty', 'on_hand', 'on_hand_quantity', 'quantity_on_hand', 'stock_on_hand', 'soh', 'current_quantity', 'available', 'qty']) ?? 0
       if (!(available > 0)) continue   // in-stock only
       const buy = pickNum(s, ['average_buy_price', 'buy_price', 'cost_price', 'price']) ?? 0
       items.push({

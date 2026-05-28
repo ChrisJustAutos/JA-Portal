@@ -37,6 +37,7 @@ import {
   fetchInStockUniverse,
   type MdClient,
   type MdStocktake,
+  type InStockItem,
 } from '../lib/mechanicdesk-stocktake'
 
 interface ParsedRow {
@@ -328,12 +329,27 @@ async function runMatch(client: MdClient, parsedRows: ParsedRow[]): Promise<Matc
 
 const normSku = (s: string | undefined | null) => String(s || '').trim().toUpperCase()
 
+// Overwrite matched rows' md_current_qty with the TOTAL on-hand qty from the
+// Stock Value list (MD's search endpoint only returns "available" = total −
+// allocated). Returns how many rows were updated.
+function applyTotalQty(results: MatchResultEntry[], universe: InStockItem[]): number {
+  const qtyByNum = new Map<string, number>()
+  for (const u of universe) { if (u.stock_number) qtyByNum.set(normSku(u.stock_number), u.available) }
+  let n = 0
+  for (const r of results) {
+    if (r.status !== 'matched') continue
+    const q = qtyByNum.get(normSku(r.md_stock_number || r.sku))
+    if (q != null) { r.md_current_qty = q; n++ }
+  }
+  return n
+}
+
 // Pull MD's in-stock universe and store the items NOT in `counted`. `source`
 // records what the count was compared against (uploaded sheet vs live MD
-// stocktake) so the UI can show it.
-async function storeCoverage(client: MdClient, counted: Set<string>, source: string): Promise<void> {
-  log('Coverage: pulling MD in-stock universe (Stock Value)…')
-  const universe = await fetchInStockUniverse(client, { log })
+// stocktake) so the UI can show it. Pass `preUniverse` to reuse one pull.
+async function storeCoverage(client: MdClient, counted: Set<string>, source: string, preUniverse?: InStockItem[]): Promise<void> {
+  let universe = preUniverse
+  if (!universe) { log('Coverage: pulling MD in-stock universe (Stock Value)…'); universe = await fetchInStockUniverse(client, { log }) }
   log(`Coverage: ${universe.length} in-stock items in MD; ${counted.size} counted`)
   if (universe.length === 0) {
     log('Coverage: empty universe — skipping (check /stocks.json shape in logs above)')
@@ -363,14 +379,16 @@ async function storeCoverage(client: MdClient, counted: Set<string>, source: str
   await notifySlack(`Coverage (vs ${source}): ${uncounted.length} of ${universe.length} in-stock items NOT counted ($${uncountedValue} at buy price)`, false)
 }
 
-// Coverage from the just-matched upload sheet.
-async function runCoverage(client: MdClient, results: MatchResultEntry[]): Promise<void> {
+// After a match: pull the Stock Value list once, set TOTAL system qty on the
+// matched rows from it, then run coverage off the same pull.
+async function runMatchPostPass(client: MdClient, results: MatchResultEntry[]): Promise<void> {
+  log('Match: pulling MD Stock Value to set total system qty…')
+  const universe = await fetchInStockUniverse(client, { log })
+  const n = applyTotalQty(results, universe)
+  if (n > 0) { await patchUpload({ match_results: results }); log(`Match: set total system qty on ${n} matched rows from Stock Value`) }
   const counted = new Set<string>()
-  for (const r of results) {
-    if (r.md_stock_number) counted.add(normSku(r.md_stock_number))
-    if (r.sku) counted.add(normSku(r.sku))
-  }
-  await storeCoverage(client, counted, 'uploaded sheet')
+  for (const r of results) { if (r.md_stock_number) counted.add(normSku(r.md_stock_number)); if (r.sku) counted.add(normSku(r.sku)) }
+  await storeCoverage(client, counted, 'uploaded sheet', universe)
 }
 
 // Re-check: read what's actually in the MD stocktake now and compare against
@@ -396,36 +414,12 @@ async function runRecheck(client: MdClient, stocktakeId: string): Promise<void> 
 // matched row, without redoing the SKU match. Updates md_current_qty (+ bin/
 // location) in place and saves match_results back.
 async function runRefresh(client: MdClient, results: MatchResultEntry[]): Promise<void> {
-  const matched = results.filter(r => r.status === 'matched' && (r.md_stock_number || r.sku))
-  log(`Refresh: re-reading system qty for ${matched.length} matched items…`)
-  let updated = 0, next = 0
-  const conc = 5
-  async function worker() {
-    while (true) {
-      const i = next++
-      if (i >= matched.length) return
-      const row = matched[i]
-      try {
-        const rr = await findStockBySku(client, row.md_stock_number || row.sku)
-        if (rr.kind === 'matched' && rr.stock) {
-          const st: any = rr.stock
-          if (!loggedStockKeys) { loggedStockKeys = true; log(`  refresh: MD stock fields = ${Object.keys(st).join(', ')} (quantity=${st.quantity}, available=${st.available}, allocated=${st.allocated_quantity})`) }
-          const total = typeof st.quantity === 'number' ? st.quantity
-            : (typeof st.available === 'number' && typeof st.allocated_quantity === 'number') ? st.available + st.allocated_quantity
-            : (typeof st.available === 'number' ? st.available : undefined)
-          if (total != null) { row.md_current_qty = total; updated++ }
-          if (st.bin) row.md_bin = st.bin
-          if (st.location) row.md_location = st.location
-        }
-      } catch (e: any) { log(`  refresh: SKU "${row.sku}" failed: ${String(e?.message).slice(0, 100)}`) }
-      await new Promise(r => setTimeout(r, 80))
-    }
-  }
-  await Promise.all(Array.from({ length: conc }, () => worker()))
-  // matched[] entries are references into results, so results is updated in place.
+  log('Refresh: pulling MD Stock Value for current total system qty…')
+  const universe = await fetchInStockUniverse(client, { log })
+  const updated = applyTotalQty(results, universe)
   await patchUpload({ match_results: results, matched_at: new Date().toISOString() })
-  log(`Refresh: updated system qty on ${updated}/${matched.length} matched items`)
-  await notifySlack(`Refresh: updated system qty on ${updated} of ${matched.length} matched items`, false)
+  log(`Refresh: updated system qty on ${updated} matched items from Stock Value (${universe.length} in stock)`)
+  await notifySlack(`Refresh: updated system qty on ${updated} matched items from Stock Value`, false)
 }
 
 // ── Push mode ─────────────────────────────────────────────────────────
@@ -696,12 +690,13 @@ async function main(): Promise<void> {
       const rows = (upload.parsed_rows || []) as ParsedRow[]
       if (rows.length === 0) throw new Error('No parsed_rows in upload')
       const results = await runMatch(client, rows)
-      // Coverage is best-effort — never let it fail the match it rides on.
+      // Set total system qty + coverage off one Stock Value pull. Best-effort —
+      // never let it fail the match it rides on.
       try {
-        await runCoverage(client, results)
+        await runMatchPostPass(client, results)
       } catch (e: any) {
-        log(`Coverage step failed (non-fatal): ${e?.message || e}`)
-        await notifySlack(`Coverage check failed (match still OK): ${e?.message || e}`, false).catch(() => undefined)
+        log(`Match post-pass (qty + coverage) failed (non-fatal): ${e?.message || e}`)
+        await notifySlack(`Match qty/coverage step failed (match still OK): ${e?.message || e}`, false).catch(() => undefined)
       }
     } else if (MODE === 'push') {
       const results = (upload.match_results || []) as MatchResultEntry[]
