@@ -139,6 +139,8 @@ export default function StocktakeDetailPage({ user }: { user: SessionUser }) {
   const [colsOpen, setColsOpen] = useState(false)
   const [rechecking, setRechecking] = useState(false)
   const [recheckMsg, setRecheckMsg] = useState('')
+  const [refreshing, setRefreshing] = useState(false)
+  const [refreshMsg, setRefreshMsg] = useState('')
 
   const canEdit = roleHasPermission(user.role, 'edit:stocktakes')
   const isPolling = upload && (upload.status === 'matching' || upload.status === 'pushing')
@@ -215,6 +217,33 @@ export default function StocktakeDetailPage({ user }: { user: SessionUser }) {
         }
       } catch { /* keep polling */ }
       if (tries >= 30) { clearInterval(iv); setRechecking(false); setRecheckMsg('Still running — refresh in a moment.') }
+    }, 5000)
+  }
+
+  // Re-read current MD system qty for matched rows (no re-match). Polls
+  // matched_at until the worker writes the updated match_results.
+  async function runRefreshSystem() {
+    if (!id || refreshing) return
+    setRefreshMsg('')
+    const prev = upload?.matched_at || null
+    try {
+      const r = await fetch(`/api/stocktake/${id}/refresh`, { method: 'POST' })
+      const d = await r.json()
+      if (!r.ok) { setRefreshMsg(d.error || 'Refresh failed'); return }
+    } catch (e: any) { setRefreshMsg(e.message || 'Refresh failed'); return }
+    setRefreshing(true); setRefreshMsg('Refreshing system quantities…')
+    let tries = 0
+    const iv = setInterval(async () => {
+      tries++
+      try {
+        const rr = await fetch(`/api/stocktake/${id}`)
+        const dd = await rr.json()
+        if (rr.ok && dd.matched_at && dd.matched_at !== prev) {
+          clearInterval(iv); setRefreshing(false); setUpload(dd); setRefreshMsg('System quantities updated ✓')
+          setTimeout(() => setRefreshMsg(''), 4000); return
+        }
+      } catch { /* keep polling */ }
+      if (tries >= 30) { clearInterval(iv); setRefreshing(false); setRefreshMsg('Still running — refresh shortly.') }
     }, 5000)
   }
 
@@ -491,6 +520,13 @@ export default function StocktakeDetailPage({ user }: { user: SessionUser }) {
                           {f}
                         </button>
                       ))}
+                      {canEdit && (
+                        <button onClick={runRefreshSystem} disabled={refreshing} title="Re-read current MD system quantities for the matched items"
+                          style={{ padding:'4px 10px', borderRadius:4, fontSize:11, fontFamily:'inherit', fontWeight:600, background:'transparent', color: refreshing ? T.text3 : T.amber, border:`1px solid ${refreshing ? T.border2 : T.amber + '55'}`, cursor: refreshing ? 'default' : 'pointer' }}>
+                          {refreshing ? '↻ Refreshing…' : '↻ Refresh system qty'}
+                        </button>
+                      )}
+                      {refreshMsg && <span style={{ fontSize:11, color: refreshMsg.includes('✓') ? T.green : T.text3, alignSelf:'center' }}>{refreshMsg}</span>}
                       <span style={{width:1, height:18, background:T.border2, margin:'0 2px'}}/>
                       <div style={{ position:'relative' }}>
                         <button onClick={() => setColsOpen(o => !o)} title="Choose which columns to export"

@@ -78,7 +78,7 @@ const MODE = process.env.MODE || ''
 if (!PORTAL_BASE) throw new Error('JA_PORTAL_BASE_URL required')
 if (!PORTAL_TOKEN) throw new Error('JA_PORTAL_API_KEY required')
 if (!UPLOAD_ID) throw new Error('UPLOAD_ID required')
-if (!['match', 'push', 'recheck'].includes(MODE)) throw new Error(`Invalid MODE: ${MODE}`)
+if (!['match', 'push', 'recheck', 'refresh'].includes(MODE)) throw new Error(`Invalid MODE: ${MODE}`)
 
 async function readUpload(): Promise<any> {
   const r = await fetch(`${PORTAL_BASE}/api/stocktake/${UPLOAD_ID}`, {
@@ -392,6 +392,42 @@ async function runRecheck(client: MdClient, stocktakeId: string): Promise<void> 
   await storeCoverage(client, counted, 'MD stocktake')
 }
 
+// Refresh: re-read the current MD system qty (total on hand) for every already
+// matched row, without redoing the SKU match. Updates md_current_qty (+ bin/
+// location) in place and saves match_results back.
+async function runRefresh(client: MdClient, results: MatchResultEntry[]): Promise<void> {
+  const matched = results.filter(r => r.status === 'matched' && (r.md_stock_number || r.sku))
+  log(`Refresh: re-reading system qty for ${matched.length} matched items…`)
+  let updated = 0, next = 0
+  const conc = 5
+  async function worker() {
+    while (true) {
+      const i = next++
+      if (i >= matched.length) return
+      const row = matched[i]
+      try {
+        const rr = await findStockBySku(client, row.md_stock_number || row.sku)
+        if (rr.kind === 'matched' && rr.stock) {
+          const st: any = rr.stock
+          if (!loggedStockKeys) { loggedStockKeys = true; log(`  refresh: MD stock fields = ${Object.keys(st).join(', ')} (quantity=${st.quantity}, available=${st.available}, allocated=${st.allocated_quantity})`) }
+          const total = typeof st.quantity === 'number' ? st.quantity
+            : (typeof st.available === 'number' && typeof st.allocated_quantity === 'number') ? st.available + st.allocated_quantity
+            : (typeof st.available === 'number' ? st.available : undefined)
+          if (total != null) { row.md_current_qty = total; updated++ }
+          if (st.bin) row.md_bin = st.bin
+          if (st.location) row.md_location = st.location
+        }
+      } catch (e: any) { log(`  refresh: SKU "${row.sku}" failed: ${String(e?.message).slice(0, 100)}`) }
+      await new Promise(r => setTimeout(r, 80))
+    }
+  }
+  await Promise.all(Array.from({ length: conc }, () => worker()))
+  // matched[] entries are references into results, so results is updated in place.
+  await patchUpload({ match_results: results, matched_at: new Date().toISOString() })
+  log(`Refresh: updated system qty on ${updated}/${matched.length} matched items`)
+  await notifySlack(`Refresh: updated system qty on ${updated} of ${matched.length} matched items`, false)
+}
+
 // ── Push mode ─────────────────────────────────────────────────────────
 
 function pickUsableSheet(stocktake: MdStocktake): { id: number; status: string; finished: boolean } | null {
@@ -674,6 +710,10 @@ async function main(): Promise<void> {
     } else if (MODE === 'recheck') {
       if (!upload.mechanicdesk_stocktake_id) throw new Error('No MechanicDesk stocktake id on this upload — push to MD first.')
       await runRecheck(client, String(upload.mechanicdesk_stocktake_id))
+    } else if (MODE === 'refresh') {
+      const results = (upload.match_results || []) as MatchResultEntry[]
+      if (results.length === 0) throw new Error('No match_results to refresh')
+      await runRefresh(client, results)
     }
 
     log('Worker done')

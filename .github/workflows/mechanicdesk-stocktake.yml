@@ -23,6 +23,7 @@ on:
       - stocktake-match
       - stocktake-push
       - stocktake-recheck
+      - stocktake-refresh
   workflow_dispatch:
     inputs:
       upload_id:
@@ -36,6 +37,7 @@ on:
           - match
           - push
           - recheck
+          - refresh
 
 jobs:
   run:
