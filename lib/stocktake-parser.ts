@@ -310,12 +310,7 @@ export function parseStocktakeWorkbook(
       const seenAt = seenSkus.get(tagged.sku)
       if (seenAt) {
         duplicates.add(tagged.sku)
-        if (seenAt.sheet !== name) {
-          allWarnings.push(
-            `Sheet "${name}" row ${tagged.row_number}: SKU "${tagged.sku}" also appears in sheet "${seenAt.sheet}" row ${seenAt.row} — both kept (counts will be summed when pushed)`
-          )
-        }
-        // Per-sheet duplicate already warned by parseStocktakeRows
+        // Per-sheet + cross-sheet duplicates are combined below — no per-row noise.
       } else {
         seenSkus.set(tagged.sku, { sheet: name, row: tagged.row_number })
       }
@@ -336,14 +331,36 @@ export function parseStocktakeWorkbook(
     totalSkippedInvalid += result.skipped_invalid
   }
 
-  if (allRows.length === 0) {
+  // Combine duplicate part numbers: the same SKU counted in several rows or
+  // locations (same sheet or across tabs) is ONE line with the counts summed.
+  // Keyed case-insensitively; the first occurrence's SKU text / sheet / row is
+  // kept, and a missing name is backfilled from a later duplicate.
+  const combined = new Map<string, { row: ParsedRow; locations: number }>()
+  for (const r of allRows) {
+    const key = r.sku.trim().toUpperCase()
+    const hit = combined.get(key)
+    if (hit) {
+      hit.row.qty = Math.round((hit.row.qty + r.qty) * 1000) / 1000
+      if (!hit.row.raw_name && r.raw_name) hit.row.raw_name = r.raw_name
+      hit.locations++
+    } else {
+      combined.set(key, { row: { ...r }, locations: 1 })
+    }
+  }
+  const combinedRows = Array.from(combined.values()).map(v => v.row)
+  const combinedSkuCount = Array.from(combined.values()).filter(v => v.locations > 1).length
+  if (combinedSkuCount > 0) {
+    allWarnings.unshift(`Combined ${combinedSkuCount} part number${combinedSkuCount === 1 ? '' : 's'} that appeared in multiple rows/locations — their counts were summed into one.`)
+  }
+
+  if (combinedRows.length === 0) {
     allWarnings.unshift('No usable rows found across any sheet in the workbook.')
   }
 
   return {
-    rows: allRows,
+    rows: combinedRows,
     warnings: allWarnings,
-    total_rows: allRows.length,
+    total_rows: combinedRows.length,
     skipped_blank: totalSkippedBlank,
     skipped_invalid: totalSkippedInvalid,
     duplicate_skus: Array.from(duplicates),
