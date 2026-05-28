@@ -866,9 +866,12 @@ function CoverageSection({ coverage, coverageAt, filename, canRecheck, onRecheck
   canRecheck: boolean; onRecheck: () => void; rechecking: boolean; recheckMsg: string
 }) {
   const [open, setOpen] = useState(false)
+  const [search, setSearch] = useState('')
   const items = coverage.uncounted || []
+  const q = search.trim().toLowerCase()
+  const filtered = q ? items.filter(it => [it.stock_number, it.name, it.bin, it.location].some(v => String(v || '').toLowerCase().includes(q))) : items
   const DISPLAY = 200
-  const shown = open ? items : items.slice(0, DISPLAY)
+  const shown = open ? filtered : filtered.slice(0, DISPLAY)
   const allCounted = coverage.uncounted_count === 0
   const GRID = '140px 1fr 80px 70px 80px 90px'
 
@@ -887,9 +890,16 @@ function CoverageSection({ coverage, coverageAt, filename, canRecheck, onRecheck
             </button>
           )}
           {items.length > 0 && (
-            <button onClick={() => downloadCoverageCsv(items, filename)}
+            <div style={{ position:'relative' }}>
+              <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search stock # / name / bin…"
+                style={{ padding:'4px 22px 4px 9px', borderRadius:4, fontSize:11, width:180, background:T.bg3, color:T.text, border:`1px solid ${T.border2}`, fontFamily:'inherit', outline:'none' }} />
+              {search && <button onClick={() => setSearch('')} title="Clear" style={{ position:'absolute', right:4, top:'50%', transform:'translateY(-50%)', background:'none', border:'none', color:T.text3, cursor:'pointer', fontSize:13, lineHeight:1, padding:0 }}>×</button>}
+            </div>
+          )}
+          {items.length > 0 && (
+            <button onClick={() => downloadCoverageCsv(filtered, filename)}
               style={{padding:'4px 12px', borderRadius:4, fontSize:11, fontFamily:'inherit', fontWeight:600, background:'transparent', color:T.blue, border:`1px solid ${T.blue}55`, cursor:'pointer'}}>
-              ↓ Download CSV ({coverage.uncounted_count})
+              ↓ Download CSV ({q ? filtered.length : coverage.uncounted_count})
             </button>
           )}
         </div>
@@ -912,7 +922,9 @@ function CoverageSection({ coverage, coverageAt, filename, canRecheck, onRecheck
           <div style={{display:'grid', gridTemplateColumns:GRID, gap:12, padding:'10px 14px', borderBottom:`1px solid ${T.border}`, background:T.bg3, fontSize:10, color:T.text3, textTransform:'uppercase', letterSpacing:'0.05em', fontWeight:600}}>
             <div>Stock #</div><div>Name</div><div>Bin</div><div style={{textAlign:'right'}}>On hand</div><div style={{textAlign:'right'}}>Buy</div><div style={{textAlign:'right'}}>Value</div>
           </div>
-          {shown.map((it, i) => (
+          {shown.length === 0 ? (
+            <div style={{padding:16, textAlign:'center', fontSize:12, color:T.text3}}>No items match “{search}”.</div>
+          ) : shown.map((it, i) => (
             <div key={i} style={{display:'grid', gridTemplateColumns:GRID, gap:12, padding:'9px 14px', borderBottom:`1px solid ${T.border}`, fontSize:12, alignItems:'center'}}>
               <div style={{color:T.text, fontFamily:'monospace', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap'}}>{it.stock_number || '—'}</div>
               <div style={{color:T.text2, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap'}}>{it.name || '—'}</div>
@@ -922,12 +934,12 @@ function CoverageSection({ coverage, coverageAt, filename, canRecheck, onRecheck
               <div style={{textAlign:'right', color:T.text, fontVariantNumeric:'tabular-nums'}}>{money(it.value)}</div>
             </div>
           ))}
-          {items.length > DISPLAY && (
+          {filtered.length > DISPLAY && (
             <div style={{padding:'10px 14px', textAlign:'center', fontSize:12}}>
               <button onClick={() => setOpen(o => !o)} style={{background:'transparent', border:'none', color:T.blue, cursor:'pointer', fontSize:12, fontFamily:'inherit'}}>
-                {open ? 'Show fewer' : `Show all ${items.length}${coverage.truncated ? ' (stored)' : ''}`}
+                {open ? 'Show fewer' : `Show all ${filtered.length}${(!q && coverage.truncated) ? ' (stored)' : ''}`}
               </button>
-              {coverage.truncated && <div style={{fontSize:10, color:T.text3, marginTop:4}}>List capped at {items.length}; download CSV for the stored set.</div>}
+              {!q && coverage.truncated && <div style={{fontSize:10, color:T.text3, marginTop:4}}>List capped at {items.length}; download CSV for the stored set.</div>}
             </div>
           )}
         </div>
