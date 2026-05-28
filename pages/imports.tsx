@@ -56,7 +56,7 @@ export default function ImportsPage() {
     <>
       <Head><title>Imports · JA Portal</title></Head>
       <div style={{ minHeight: '100vh', background: T.bg, color: T.text, fontFamily: '"DM Sans", system-ui, sans-serif' }}>
-        <div style={{ maxWidth: 1100, margin: '0 auto', padding: '24px 32px' }}>
+        <div style={{ maxWidth: 1500, margin: '0 auto', padding: '24px 32px' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', marginBottom: 22, gap: 16, flexWrap: 'wrap' }}>
             <div>
               <Link href="/settings" style={{ fontSize: 11, color: T.text3, textDecoration: 'none', fontFamily: 'monospace' }}>← Settings</Link>

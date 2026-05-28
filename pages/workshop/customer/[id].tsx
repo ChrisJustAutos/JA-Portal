@@ -41,7 +41,7 @@ export default function CustomerDetailPage({ user }: { user: PortalUserSSR }) {
       <div style={{ display:'flex', flexDirection:'column', height:'100vh', background:T.bg, color:T.text, fontFamily:'"DM Sans", system-ui, sans-serif' }}>
         <PortalTopBar activeId="workshop-customers" currentUserRole={user.role} currentUserVisibleTabs={user.visibleTabs} currentUserName={user.displayName} currentUserEmail={user.email} />
         <div style={{ flex:1, overflowY:'auto' }}>
-          <div style={{ maxWidth:1200, margin:'0 auto', padding:'24px 28px' }}>
+          <div style={{ maxWidth:1600, margin:'0 auto', padding:'24px 28px' }}>
             <Link href="/workshop/customers" style={{ fontSize:11, color:T.text3, textDecoration:'none', fontFamily:'monospace' }}>← Customers</Link>
             {err && <div style={{ marginTop:14, padding:12, background:'#3a1d1d', border:`1px solid ${T.red}`, borderRadius:6, color:T.red, fontSize:13 }}>{err}</div>}
             {!data && !err && <div style={{ marginTop:14, fontSize:13, color:T.text3 }}>Loading…</div>}

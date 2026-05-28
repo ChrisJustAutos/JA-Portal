@@ -121,7 +121,7 @@ export default function QuoteBuilderPage({ user }: { user: PortalUserSSR }) {
         <PortalTopBar activeId="workshop-quotes" currentUserRole={user.role} currentUserVisibleTabs={user.visibleTabs} currentUserName={user.displayName} currentUserEmail={user.email} />
 
         <div style={{ flex: 1, overflow: 'auto', background: T.bg, padding: 20 }}>
-          <div style={{ maxWidth: 820, margin: '0 auto' }}>
+          <div style={{ maxWidth: 1200, margin: '0 auto' }}>
             <Link href="/workshop/quotes" style={{ fontSize: 12, color: T.text2, textDecoration: 'none' }}>‹ Back to quotes</Link>
 
             {loading ? <div style={{ textAlign: 'center', color: T.text3, padding: 60 }}>Loading…</div>

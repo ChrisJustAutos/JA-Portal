@@ -220,7 +220,7 @@ export default function JobCardPage({ user }: { user: PortalUserSSR }) {
         <PortalTopBar activeId="diary" currentUserRole={user.role} currentUserVisibleTabs={user.visibleTabs} currentUserName={user.displayName} currentUserEmail={user.email} />
 
         <div style={{ flex: 1, overflow: 'auto', background: T.bg, padding: 20 }}>
-          <div style={{ maxWidth: 1100, margin: '0 auto' }}>
+          <div style={{ maxWidth: 1500, margin: '0 auto' }}>
             <Link href="/diary" style={{ fontSize: 12, color: T.text2, textDecoration: 'none' }}>‹ Back to diary</Link>
 
             {loading ? (

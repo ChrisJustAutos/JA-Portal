@@ -164,7 +164,7 @@ export default function SettingsPage({ user }: { user: PortalUserSSR }) {
               padding:'40px 20px',overflowY:'auto',
             }}>
               <div style={{
-                width:'100%',maxWidth: WIDE.includes(active.id) ? 1100 : 760,
+                width:'100%',maxWidth: WIDE.includes(active.id) ? 1500 : 760,
                 background:T.bg2,border:`1px solid ${T.border2}`,borderRadius:14,
                 display:'flex',flexDirection:'column',maxHeight:'calc(100vh - 80px)',
                 boxShadow:'0 24px 60px rgba(0,0,0,0.5)',
