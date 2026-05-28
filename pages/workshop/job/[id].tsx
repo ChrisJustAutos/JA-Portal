@@ -70,6 +70,9 @@ export default function JobCardPage({ user }: { user: PortalUserSSR }) {
   const [pay, setPay] = useState<{ open: boolean; amount: string; tender: string; note: string; busy: boolean; msg: string }>({ open: false, amount: '', tender: 'card', note: '', busy: false, msg: '' })
   const [jobTypes, setJobTypes] = useState<any[]>([])
   const [applyJt, setApplyJt] = useState('')
+  const [tab, setTab] = useState<'invoice' | 'notes' | 'files' | 'activity' | 'history'>('invoice')
+  const [internalNotes, setInternalNotes] = useState('')
+  useEffect(() => { if (data?.booking) setInternalNotes(data.booking.internal_notes || '') }, [data?.booking?.id])
 
   const load = useCallback(async () => {
     if (!id) return
@@ -229,38 +232,20 @@ export default function JobCardPage({ user }: { user: PortalUserSSR }) {
               <div style={{ background: `${T.red}15`, border: `1px solid ${T.red}40`, borderRadius: 8, padding: 14, color: T.red, fontSize: 13, marginTop: 16 }}>{err}</div>
             ) : b ? (
               <>
-                {/* Header */}
-                <div style={{ background: T.bg2, border: `1px solid ${T.border}`, borderRadius: 10, padding: 18, marginTop: 12, display: 'flex', gap: 20, flexWrap: 'wrap', alignItems: 'flex-start' }}>
+                {/* Compact header strip */}
+                <div style={{ background: T.bg2, border: `1px solid ${T.border}`, borderRadius: 10, padding: '12px 18px', marginTop: 12, display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
                   <div style={{ flex: 1, minWidth: 220 }}>
-                    <div style={{ fontSize: 19, fontWeight: 600 }}>{veh ? vehicleLabel(veh) : 'No vehicle'}</div>
-                    <div style={{ fontSize: 13, color: T.text2, marginTop: 3 }}>
+                    <div style={{ fontSize: 17, fontWeight: 600 }}>{veh ? vehicleLabel(veh) : 'No vehicle'}</div>
+                    <div style={{ fontSize: 12, color: T.text2, marginTop: 2 }}>
                       {cust ? customerLabel(cust) : 'No customer'}{cust?.mobile || cust?.phone ? ` · ${cust.mobile || cust.phone}` : ''}
                     </div>
-                    <div style={{ fontSize: 12, color: T.text3, marginTop: 6, fontFamily: 'monospace' }}>
-                      {jobTypeLabel(b.job_type)} · {fmtDateTime(b.starts_at)}{b.ends_at ? `–${fmtDateTime(b.ends_at)}` : ''}{b.technician_ext ? ` · Ext ${b.technician_ext}` : ''}
-                    </div>
-                    {b.pickup_at && <div style={{ fontSize: 12, color: T.amber, marginTop: 4, fontWeight: 600 }}>🕑 Collection: {fmtDateTime(b.pickup_at)}</div>}
-                    {b.description && (
-                      <div style={{ marginTop: 10, padding: '10px 12px', background: T.bg3, border: `1px solid ${T.border}`, borderRadius: 6 }}>
-                        <div style={{ fontSize: 10, color: T.text3, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 6 }}>Job checklist · also shown on invoice</div>
-                        <div style={{ fontSize: 13, color: T.text, whiteSpace: 'pre-wrap', lineHeight: 1.5 }}>
-                          {b.description.split(/\r?\n/).map((line: string, i: number) => {
-                            const trimmed = line.trim()
-                            if (!trimmed) return <div key={i} style={{ height: 4 }} />
-                            return <div key={i} style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}><span style={{ color: T.text3, marginTop: 1 }}>☐</span><span style={{ flex: 1 }}>{trimmed}</span></div>
-                          })}
-                        </div>
-                      </div>
-                    )}
                   </div>
-                  <div style={{ textAlign: 'right' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                     <StatusPill status={b.status} />
                     {canEdit && (
-                      <div style={{ marginTop: 8 }}>
-                        <select value={b.status} disabled={savingStatus} onChange={e => changeStatus(e.target.value as BookingStatus)} style={inp}>
-                          {BOOKING_STATUSES.map(s => <option key={s} value={s}>{BOOKING_STATUS_META[s].label}</option>)}
-                        </select>
-                      </div>
+                      <select value={b.status} disabled={savingStatus} onChange={e => changeStatus(e.target.value as BookingStatus)} style={inp}>
+                        {BOOKING_STATUSES.map(s => <option key={s} value={s}>{BOOKING_STATUS_META[s].label}</option>)}
+                      </select>
                     )}
                   </div>
                 </div>
@@ -336,73 +321,160 @@ export default function JobCardPage({ user }: { user: PortalUserSSR }) {
                   </div>
                 )}
 
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 300px', gap: 16, marginTop: 16, alignItems: 'start' }}>
-                  {/* Line items */}
-                  <div style={{ background: T.bg2, border: `1px solid ${T.border}`, borderRadius: 10, overflow: 'hidden' }}>
-                    <div style={{ padding: '12px 16px', borderBottom: `1px solid ${T.border}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                      <div style={{ fontSize: 11, fontWeight: 600, color: T.text2, textTransform: 'uppercase', letterSpacing: '0.08em' }}>Line items</div>
-                      <div style={{ fontSize: 11, color: T.text3 }}>{lines.length} lines</div>
-                    </div>
+                <div style={{ display: 'grid', gridTemplateColumns: '360px 1fr', gap: 16, marginTop: 16, alignItems: 'start' }}>
+                  {/* LEFT — Job details panel(s) */}
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                    <Panel title="Vehicle">
+                      {veh ? (
+                        <>
+                          <FieldRow label="Rego" value={veh.rego} mono />
+                          <FieldRow label="Make / Model" value={[veh.make, veh.model].filter(Boolean).join(' ') || '—'} />
+                          <FieldRow label="Year" value={veh.year || '—'} />
+                          <FieldRow label="VIN" value={veh.vin || '—'} mono />
+                          <FieldRow label="Colour" value={veh.colour || '—'} />
+                          <FieldRow label="Odometer" value={veh.odometer ? `${Number(veh.odometer).toLocaleString()} km` : '—'} mono />
+                        </>
+                      ) : <div style={{ padding: '8px 0', fontSize: 12, color: T.text3 }}>No vehicle attached.</div>}
+                    </Panel>
 
-                    {/* header row */}
-                    <div style={{ display: 'grid', gridTemplateColumns: '70px 1fr 60px 90px 90px 28px', gap: 8, padding: '7px 14px', fontSize: 9, color: T.text3, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', background: T.bg3, borderBottom: `1px solid ${T.border}` }}>
-                      <div>Type</div><div>Description</div><div style={{ textAlign: 'right' }}>Qty</div><div style={{ textAlign: 'right' }}>Unit ex</div><div style={{ textAlign: 'right' }}>Total ex</div><div/>
-                    </div>
+                    <Panel title="Customer">
+                      {cust ? (
+                        <>
+                          <FieldRow label="Name" value={cust.name} />
+                          <FieldRow label="Mobile" value={cust.mobile || '—'} mono />
+                          <FieldRow label="Phone" value={cust.phone || '—'} mono />
+                          <FieldRow label="Email" value={cust.email || '—'} />
+                          <div style={{ paddingTop: 6, marginTop: 4, borderTop: `1px solid ${T.border}` }}>
+                            <Link href={`/workshop/customer/${cust.id}`} style={{ fontSize: 11, color: T.blue, textDecoration: 'none' }}>View customer history →</Link>
+                          </div>
+                        </>
+                      ) : <div style={{ padding: '8px 0', fontSize: 12, color: T.text3 }}>No customer attached.</div>}
+                    </Panel>
 
-                    {lines.length === 0 && <div style={{ padding: 20, textAlign: 'center', fontSize: 12, color: T.text3 }}>No lines yet.</div>}
-                    {lines.map(l => (
-                      <LineRow key={l.id} line={l} canEdit={canEdit} onPatch={(p) => patchLine(l.id, p)} onDelete={() => deleteLine(l.id)} />
-                    ))}
+                    <Panel title="Booking">
+                      <FieldRow label="Start" value={fmtDateTime(b.starts_at)} mono />
+                      <FieldRow label="End" value={fmtDateTime(b.ends_at)} mono />
+                      {b.pickup_at && <FieldRow label="Collection" value={fmtDateTime(b.pickup_at)} mono accent={T.amber} />}
+                      <FieldRow label="Technician" value={b.technician_ext || '—'} />
+                      <FieldRow label="Bay" value={b.bay || '—'} />
+                      <FieldRow label="Est. value" value={b.estimated_value ? money(b.estimated_value) : '—'} mono />
+                      <FieldRow label="Category" value={jobTypeLabel(b.job_type) || '—'} />
+                    </Panel>
+
+                    {b.description && (
+                      <Panel title="Job checklist · also shows on invoice">
+                        <div style={{ fontSize: 13, color: T.text, whiteSpace: 'pre-wrap', lineHeight: 1.5 }}>
+                          {b.description.split(/\r?\n/).map((line: string, i: number) => {
+                            const trimmed = line.trim()
+                            if (!trimmed) return <div key={i} style={{ height: 4 }} />
+                            return <div key={i} style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}><span style={{ color: T.text3, marginTop: 1 }}>☐</span><span style={{ flex: 1 }}>{trimmed}</span></div>
+                          })}
+                        </div>
+                      </Panel>
+                    )}
 
                     {canEdit && (
-                      <div style={{ padding: 12, borderTop: `1px solid ${T.border}`, display: 'flex', gap: 8, alignItems: 'center' }}>
-                        <button onClick={() => addLine({ line_type: 'labour', description: 'Labour', qty: 1, unit_price_ex_gst: 0 })} style={addBtn}>+ Labour</button>
-                        <button onClick={() => addLine({ line_type: 'fee', description: '', qty: 1, unit_price_ex_gst: 0 })} style={addBtn}>+ Fee</button>
-                        <PartPicker onPick={(it) => addLine({ line_type: 'part', description: it.part_name, part_number: it.sku, qty: 1, unit_price_ex_gst: Number(it.sell_price) || 0, inventory_id: it.id } as any)} />
-                        {jobTypes.filter(t => t.active).length > 0 && (
-                          <>
-                            <div style={{ flex: 1 }} />
-                            <select value={applyJt} onChange={e => setApplyJt(e.target.value)} style={{ ...inp, maxWidth: 200 }} title="Fill the job from a preset job type">
-                              <option value="">Apply job type…</option>
-                              {jobTypes.filter(t => t.active).map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
-                            </select>
-                            <button onClick={applyJobType} disabled={!applyJt} style={addBtn}>Apply</button>
-                          </>
+                      <Panel title="Internal notes · staff only">
+                        <textarea value={internalNotes} onChange={e => setInternalNotes(e.target.value)}
+                          onBlur={async () => { if (internalNotes !== (b.internal_notes || '')) { await patchBooking({ internal_notes: internalNotes || null }); await load() } }}
+                          rows={4} placeholder="Notes that never appear on the customer's invoice…"
+                          style={{ ...inp, width: '100%', resize: 'vertical', minHeight: 70, fontFamily: 'inherit' }} />
+                      </Panel>
+                    )}
+                  </div>
+
+                  {/* RIGHT — Tabbed content */}
+                  <div style={{ background: T.bg2, border: `1px solid ${T.border}`, borderRadius: 10, overflow: 'hidden' }}>
+                    <div style={{ display: 'flex', borderBottom: `1px solid ${T.border}`, background: T.bg3 }}>
+                      <TabBtn active={tab==='invoice'} onClick={() => setTab('invoice')} label="Invoice" badge={lines.length || undefined} />
+                      <TabBtn active={tab==='notes'} onClick={() => setTab('notes')} label="Notes" />
+                      <TabBtn active={tab==='files'} onClick={() => setTab('files')} label="Files & photos" />
+                      <TabBtn active={tab==='activity'} onClick={() => setTab('activity')} label="Activity / time" />
+                      <TabBtn active={tab==='history'} onClick={() => setTab('history')} label="Service history" badge={(data?.history || []).length || undefined} />
+                    </div>
+
+                    {tab === 'invoice' && (
+                      <>
+                        <div style={{ display: 'grid', gridTemplateColumns: '70px 1fr 60px 90px 90px 28px', gap: 8, padding: '7px 14px', fontSize: 9, color: T.text3, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', background: T.bg3, borderBottom: `1px solid ${T.border}` }}>
+                          <div>Type</div><div>Description</div><div style={{ textAlign: 'right' }}>Qty</div><div style={{ textAlign: 'right' }}>Unit ex</div><div style={{ textAlign: 'right' }}>Total ex</div><div/>
+                        </div>
+                        {lines.length === 0 && <div style={{ padding: 20, textAlign: 'center', fontSize: 12, color: T.text3 }}>No lines yet.</div>}
+                        {lines.map(l => <LineRow key={l.id} line={l} canEdit={canEdit} onPatch={(p) => patchLine(l.id, p)} onDelete={() => deleteLine(l.id)} />)}
+
+                        {canEdit && (
+                          <div style={{ padding: 12, borderTop: `1px solid ${T.border}`, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                            <button onClick={() => addLine({ line_type: 'labour', description: 'Labour', qty: 1, unit_price_ex_gst: 0 })} style={addBtn}>+ Labour</button>
+                            <button onClick={() => addLine({ line_type: 'fee', description: '', qty: 1, unit_price_ex_gst: 0 })} style={addBtn}>+ Fee</button>
+                            <PartPicker onPick={(it) => addLine({ line_type: 'part', description: it.part_name, part_number: it.sku, qty: 1, unit_price_ex_gst: Number(it.sell_price) || 0, inventory_id: it.id } as any)} />
+                            {jobTypes.filter(t => t.active).length > 0 && (
+                              <>
+                                <div style={{ flex: 1 }} />
+                                <select value={applyJt} onChange={e => setApplyJt(e.target.value)} style={{ ...inp, maxWidth: 200 }} title="Fill the job from a preset job type">
+                                  <option value="">Apply job type…</option>
+                                  {jobTypes.filter(t => t.active).map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+                                </select>
+                                <button onClick={applyJobType} disabled={!applyJt} style={addBtn}>Apply</button>
+                              </>
+                            )}
+                          </div>
                         )}
+
+                        <div style={{ padding: '12px 16px', borderTop: `1px solid ${T.border2}`, display: 'flex', flexDirection: 'column', gap: 4, alignItems: 'flex-end' }}>
+                          <Row label="Subtotal (ex GST)" value={money(totals.ex)} />
+                          <Row label="GST" value={money(totals.gst)} />
+                          <Row label="Total (inc GST)" value={money(totals.inc)} bold />
+                          {paidTotal > 0 && <Row label="Paid" value={money(paidTotal)} />}
+                          {paidTotal > 0 && <Row label="Balance" value={money(Math.round((totals.inc - paidTotal) * 100) / 100)} bold />}
+                        </div>
+
+                        {payments.length > 0 && (
+                          <div style={{ padding: '10px 16px', borderTop: `1px solid ${T.border}` }}>
+                            <div style={{ fontSize: 9, color: T.text3, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 6 }}>Payments</div>
+                            {payments.map((p: any) => (
+                              <div key={p.id} style={{ display: 'flex', gap: 8, fontSize: 11, color: T.text3, padding: '4px 0' }}>
+                                <span style={{ fontFamily: 'monospace', color: T.text2, minWidth: 70 }}>{money(p.amount)}</span>
+                                <span>{p.tender}</span>
+                                {p.posted_to_myob ? <span style={{ color: T.green }}>· MYOB</span> : <span>· local</span>}
+                                <span style={{ marginLeft: 'auto', fontFamily: 'monospace' }}>{new Date(p.created_at).toLocaleDateString('en-AU')}</span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </>
+                    )}
+
+                    {tab === 'notes' && (
+                      <div style={{ padding: 20, fontSize: 12, color: T.text3, lineHeight: 1.6 }}>
+                        Per-note timeline (timestamped, with author) lands in the next batch. For now, the "Internal notes" panel on the left holds staff-only notes, and "Job checklist" holds the work narrative that appears on the invoice.
                       </div>
                     )}
 
-                    {/* totals */}
-                    <div style={{ padding: '12px 16px', borderTop: `1px solid ${T.border2}`, display: 'flex', flexDirection: 'column', gap: 4, alignItems: 'flex-end' }}>
-                      <Row label="Subtotal (ex GST)" value={money(totals.ex)} />
-                      <Row label="GST" value={money(totals.gst)} />
-                      <Row label="Total (inc GST)" value={money(totals.inc)} bold />
-                      {paidTotal > 0 && <Row label="Paid" value={money(paidTotal)} />}
-                      {paidTotal > 0 && <Row label="Balance" value={money(Math.round((totals.inc - paidTotal) * 100) / 100)} bold />}
-                    </div>
-                  </div>
+                    {tab === 'files' && (
+                      <div style={{ padding: 20, fontSize: 12, color: T.text3, lineHeight: 1.6 }}>
+                        Photos & document uploads land in the next batch — Supabase Storage with a thumbnail grid + downloadable docs list (job sheets, signed authorities, etc.).
+                      </div>
+                    )}
 
-                  {/* Service history */}
-                  <div style={{ background: T.bg2, border: `1px solid ${T.border}`, borderRadius: 10, overflow: 'hidden' }}>
-                    <div style={{ padding: '12px 16px', borderBottom: `1px solid ${T.border}`, fontSize: 11, fontWeight: 600, color: T.text2, textTransform: 'uppercase', letterSpacing: '0.08em' }}>
-                      Service history{veh ? '' : ' — no vehicle'}
-                    </div>
-                    {(data?.history || []).length === 0 ? (
-                      <div style={{ padding: 16, fontSize: 12, color: T.text3 }}>No prior completed jobs on this vehicle.</div>
-                    ) : (
-                      (data?.history || []).map((h: any) => (
-                        <Link key={h.id} href={`/workshop/job/${h.id}`} style={{ display: 'block', padding: '10px 16px', borderTop: `1px solid ${T.border}`, textDecoration: 'none', color: 'inherit' }}>
-                          <div style={{ fontSize: 12, color: T.text }}>{jobTypeLabel(h.job_type) || 'Job'}{h.total_inc_gst ? ` · ${money(h.total_inc_gst)}` : ''}</div>
-                          <div style={{ fontSize: 10, color: T.text3, fontFamily: 'monospace', marginTop: 2 }}>{fmtDateTime(h.completed_at || h.starts_at)}{h.odometer ? ` · ${h.odometer.toLocaleString()} km` : ''}</div>
-                          {h.summary && <div style={{ fontSize: 11, color: T.text2, marginTop: 3 }}>{h.summary}</div>}
-                        </Link>
-                      ))
+                    {tab === 'activity' && (
+                      <div style={{ padding: 20, fontSize: 12, color: T.text3, lineHeight: 1.6 }}>
+                        Mechanic clock-on/off + per-job time totals land in the next batch.
+                      </div>
+                    )}
+
+                    {tab === 'history' && (
+                      <>
+                        {(data?.history || []).length === 0 ? (
+                          <div style={{ padding: 20, textAlign: 'center', fontSize: 12, color: T.text3 }}>No prior completed jobs on this vehicle.</div>
+                        ) : (data?.history || []).map((h: any) => (
+                          <Link key={h.id} href={`/workshop/job/${h.id}`} style={{ display: 'block', padding: '10px 16px', borderTop: `1px solid ${T.border}`, textDecoration: 'none', color: 'inherit' }}>
+                            <div style={{ fontSize: 12, color: T.text }}>{jobTypeLabel(h.job_type) || 'Job'}{h.total_inc_gst ? ` · ${money(h.total_inc_gst)}` : ''}</div>
+                            <div style={{ fontSize: 10, color: T.text3, fontFamily: 'monospace', marginTop: 2 }}>{fmtDateTime(h.completed_at || h.starts_at)}{h.odometer ? ` · ${h.odometer.toLocaleString()} km` : ''}</div>
+                            {h.summary && <div style={{ fontSize: 11, color: T.text2, marginTop: 3 }}>{h.summary}</div>}
+                          </Link>
+                        ))}
+                      </>
                     )}
                   </div>
-                </div>
-
-                <div style={{ fontSize: 11, color: T.text3, marginTop: 14 }}>
-                  MYOB invoice push reuses the existing invoicing rails — wired in the next pass. “Mark invoiced” saves the totals + completes the job so it shows in the vehicle’s history.
                 </div>
               </>
             ) : null}
@@ -418,6 +490,38 @@ function Row({ label, value, bold }: { label: string; value: string; bold?: bool
     <div style={{ display: 'flex', gap: 20, fontSize: bold ? 14 : 12, color: bold ? T.text : T.text2, fontWeight: bold ? 700 : 400 }}>
       <span>{label}</span><span style={{ fontFamily: 'monospace', minWidth: 90, textAlign: 'right' }}>{value}</span>
     </div>
+  )
+}
+
+function Panel({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <div style={{ background: T.bg2, border: `1px solid ${T.border}`, borderRadius: 10, overflow: 'hidden' }}>
+      <div style={{ padding: '8px 14px', borderBottom: `1px solid ${T.border}`, fontSize: 10, fontWeight: 600, color: T.text2, textTransform: 'uppercase', letterSpacing: '0.08em', background: T.bg3 }}>{title}</div>
+      <div style={{ padding: '10px 14px', display: 'flex', flexDirection: 'column', gap: 5 }}>{children}</div>
+    </div>
+  )
+}
+
+function FieldRow({ label, value, mono, accent }: { label: string; value: any; mono?: boolean; accent?: string }) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, fontSize: 12 }}>
+      <span style={{ color: T.text3, minWidth: 80, fontSize: 11 }}>{label}</span>
+      <span style={{ flex: 1, color: accent || T.text, fontFamily: mono ? 'monospace' : 'inherit', wordBreak: 'break-word' }}>{value ?? '—'}</span>
+    </div>
+  )
+}
+
+function TabBtn({ active, onClick, label, badge }: { active: boolean; onClick: () => void; label: string; badge?: number }) {
+  return (
+    <button onClick={onClick} style={{
+      flex: 1, padding: '10px 14px', background: active ? T.bg2 : 'transparent', border: 'none',
+      borderBottom: active ? `2px solid ${T.blue}` : '2px solid transparent',
+      color: active ? T.text : T.text3, fontSize: 12, fontWeight: active ? 600 : 500,
+      cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+    }}>
+      {label}
+      {badge !== undefined && <span style={{ fontSize: 10, padding: '1px 6px', borderRadius: 8, background: active ? T.blue : T.bg3, color: active ? '#fff' : T.text3 }}>{badge}</span>}
+    </button>
   )
 }
 
