@@ -20,15 +20,35 @@ const T = {
 
 type ImportType = 'customers' | 'job_types' | 'vehicles' | 'inventory' | 'quotes' | 'invoices' | 'purchase_orders'
 
-const TYPES: { id: ImportType; label: string; sheet: string; status: 'live' | 'soon' }[] = [
-  { id: 'customers',        label: 'Customers',        sheet: 'Customers',           status: 'live' },
-  { id: 'job_types',        label: 'Job types',        sheet: 'Job Type Summaries',  status: 'soon' },
-  { id: 'vehicles',         label: 'Vehicles',         sheet: 'Vehicles',            status: 'soon' },
-  { id: 'inventory',        label: 'Inventory',        sheet: 'Stocks',              status: 'soon' },
-  { id: 'quotes',           label: 'Quotes',           sheet: 'Quotes',              status: 'soon' },
-  { id: 'invoices',         label: 'Invoices',         sheet: 'Invoices',            status: 'soon' },
-  { id: 'purchase_orders',  label: 'Purchase orders',  sheet: 'Purchases',           status: 'soon' },
+const TYPES: { id: ImportType; label: string; sheets: string[]; status: 'live' | 'soon' }[] = [
+  { id: 'customers',        label: 'Customers',        sheets: ['Customers', 'Customer'],                     status: 'live' },
+  { id: 'job_types',        label: 'Job types',        sheets: ['Job Type Summaries', 'Job Types'],           status: 'soon' },
+  { id: 'vehicles',         label: 'Vehicles',         sheets: ['Vehicles', 'Vehicle'],                       status: 'soon' },
+  { id: 'inventory',        label: 'Inventory',        sheets: ['Stocks', 'Stock', 'Inventory'],              status: 'soon' },
+  { id: 'quotes',           label: 'Quotes',           sheets: ['Quotes', 'Quote'],                           status: 'soon' },
+  { id: 'invoices',         label: 'Invoices',         sheets: ['Invoices', 'Invoice'],                       status: 'soon' },
+  { id: 'purchase_orders',  label: 'Purchase orders',  sheets: ['Purchases', 'Purchase Orders', 'Purchase'],  status: 'soon' },
 ]
+
+// Try to resolve the right sheet from a workbook. Order:
+//   1. exact match against any candidate
+//   2. case-insensitive + trimmed match
+//   3. partial substring match either direction
+function resolveSheet(wb: XLSX.WorkBook, candidates: string[]): { name: string; sheet: XLSX.WorkSheet } | null {
+  for (const c of candidates) if (wb.Sheets[c]) return { name: c, sheet: wb.Sheets[c] }
+  const norm = wb.SheetNames.map(n => ({ orig: n, n: n.trim().toLowerCase() }))
+  for (const c of candidates) {
+    const cn = c.trim().toLowerCase()
+    const hit = norm.find(x => x.n === cn)
+    if (hit) return { name: hit.orig, sheet: wb.Sheets[hit.orig] }
+  }
+  for (const c of candidates) {
+    const cn = c.trim().toLowerCase()
+    const hit = norm.find(x => x.n.includes(cn) || cn.includes(x.n))
+    if (hit) return { name: hit.orig, sheet: wb.Sheets[hit.orig] }
+  }
+  return null
+}
 
 interface ImportRow {
   id: string
@@ -103,14 +123,36 @@ export default function ImportsPage() {
 }
 
 // ── Upload card ───────────────────────────────────────────────────────────────
-function UploadCard({ type, typeMeta, onComplete }: { type: ImportType; typeMeta: { label: string; sheet: string; status: 'live' | 'soon' }; onComplete: () => void }) {
+function UploadCard({ type, typeMeta, onComplete }: { type: ImportType; typeMeta: { label: string; sheets: string[]; status: 'live' | 'soon' }; onComplete: () => void }) {
   const [busy, setBusy] = useState<'parse' | 'run' | null>(null)
   const [preview, setPreview] = useState<{ id: string; summary: any; filename: string } | null>(null)
   const [result, setResult] = useState<{ summary: any } | null>(null)
   const [err, setErr] = useState('')
+  // If we couldn't auto-find the sheet, stash the parsed workbook + filename
+  // here so the user can pick which sheet to use.
+  const [pendingPick, setPendingPick] = useState<{ wb: XLSX.WorkBook; filename: string } | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
 
-  const reset = () => { setPreview(null); setResult(null); setErr('') }
+  const reset = () => { setPreview(null); setResult(null); setErr(''); setPendingPick(null) }
+
+  async function uploadSheet(wb: XLSX.WorkBook, sheetName: string, filename: string) {
+    setBusy('parse')
+    try {
+      const sheet = wb.Sheets[sheetName]
+      if (!sheet) { setErr(`Sheet "${sheetName}" not found.`); return }
+      const rawRows = XLSX.utils.sheet_to_json(sheet, { defval: null })
+      const r = await fetch('/api/imports', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ type, filename, raw_rows: rawRows }),
+      })
+      const d = await r.json()
+      if (!r.ok) { setErr(d.error || 'Parse failed'); return }
+      setPreview({ id: d.id, summary: d.parsed_summary, filename })
+      setPendingPick(null)
+    } catch (e: any) { setErr(e?.message || 'Parse failed') }
+    finally { setBusy(null) }
+  }
 
   async function onFile(file: File) {
     reset()
@@ -120,19 +162,15 @@ function UploadCard({ type, typeMeta, onComplete }: { type: ImportType; typeMeta
     try {
       const buf = await file.arrayBuffer()
       const wb = XLSX.read(buf, { type: 'array' })
-      const sheet = wb.Sheets[typeMeta.sheet]
-      if (!sheet) { setErr(`The file has no "${typeMeta.sheet}" sheet. Sheets in this file: ${wb.SheetNames.join(', ')}.`); return }
-      const rawRows = XLSX.utils.sheet_to_json(sheet, { defval: null })
-      const r = await fetch('/api/imports', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ type, filename: file.name, raw_rows: rawRows }),
-      })
-      const d = await r.json()
-      if (!r.ok) { setErr(d.error || 'Parse failed'); return }
-      setPreview({ id: d.id, summary: d.parsed_summary, filename: file.name })
-    } catch (e: any) { setErr(e?.message || 'Failed to read file') }
-    finally { setBusy(null) }
+      const hit = resolveSheet(wb, typeMeta.sheets)
+      if (!hit) {
+        // Let the user pick which sheet to use.
+        setBusy(null)
+        setPendingPick({ wb, filename: file.name })
+        return
+      }
+      await uploadSheet(wb, hit.name, file.name)
+    } catch (e: any) { setErr(e?.message || 'Failed to read file'); setBusy(null) }
   }
 
   async function run() {
@@ -160,9 +198,9 @@ function UploadCard({ type, typeMeta, onComplete }: { type: ImportType; typeMeta
   return (
     <div style={{ padding: 20, background: T.bg2, border: `1px solid ${T.border}`, borderRadius: 10 }}>
       <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 4 }}>Import {typeMeta.label.toLowerCase()}</div>
-      <div style={{ fontSize: 11, color: T.text3, marginBottom: 14 }}>Expects the MD <code style={{ fontFamily: 'monospace', color: T.text2 }}>{typeMeta.sheet}</code> sheet. Customers are merged with existing rows by mobile → email → name; unmatched rows are inserted.</div>
+      <div style={{ fontSize: 11, color: T.text3, marginBottom: 14 }}>Expects the MD <code style={{ fontFamily: 'monospace', color: T.text2 }}>{typeMeta.sheets[0]}</code> sheet (case-insensitive — you'll be asked to pick if auto-detect can't find it). Customers are merged with existing rows by mobile → email → name; unmatched rows are inserted.</div>
 
-      {!preview && !result && (
+      {!preview && !result && !pendingPick && (
         <div onClick={() => inputRef.current?.click()}
              onDragOver={e => e.preventDefault()}
              onDrop={e => { e.preventDefault(); const f = e.dataTransfer.files[0]; if (f) onFile(f) }}
@@ -170,6 +208,23 @@ function UploadCard({ type, typeMeta, onComplete }: { type: ImportType; typeMeta
           <input ref={inputRef} type="file" accept=".xls,.xlsx" style={{ display: 'none' }} onChange={e => { const f = e.target.files?.[0]; if (f) onFile(f) }} />
           <div style={{ fontSize: 13, color: T.text2, fontWeight: 500 }}>{busy === 'parse' ? 'Parsing…' : 'Drop .xls/.xlsx here, or click to browse'}</div>
           <div style={{ fontSize: 10, color: T.text3, marginTop: 6 }}>The file isn't uploaded — your browser parses it and posts the rows as JSON.</div>
+        </div>
+      )}
+
+      {pendingPick && !preview && !result && (
+        <div style={{ padding: 14, background: T.bg3, border: `1px solid ${T.amber}55`, borderRadius: 6 }}>
+          <div style={{ fontSize: 12, color: T.text2, marginBottom: 8 }}>
+            Couldn't auto-find the {typeMeta.label.toLowerCase()} sheet (looked for: <code style={{ fontFamily: 'monospace', color: T.text3 }}>{typeMeta.sheets.join(', ')}</code>). Pick the right one:
+          </div>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            {pendingPick.wb.SheetNames.map(n => (
+              <button key={n} onClick={() => uploadSheet(pendingPick.wb, n, pendingPick.filename)} disabled={busy === 'parse'} style={{
+                padding: '6px 12px', borderRadius: 4, fontSize: 11, fontFamily: 'inherit', fontWeight: 600,
+                background: 'transparent', color: T.text2, border: `1px solid ${T.border2}`, cursor: 'pointer',
+              }}>{n}</button>
+            ))}
+          </div>
+          <button onClick={reset} style={{ ...btn(false), marginTop: 10, padding: '5px 10px', fontSize: 11 }}>Cancel</button>
         </div>
       )}
 
