@@ -304,8 +304,10 @@ async function runMatch(client: MdClient, parsedRows: ParsedRow[]): Promise<Matc
     }
   }
 
+  // Stay in 'matching' until the post-pass sets total System Qty + coverage,
+  // so the UI doesn't briefly show the search "available" value. main() flips
+  // status to 'matched' after the post-pass.
   await patchUpload({
-    status: 'matched',
     matched_at: new Date().toISOString(),
     matched_count: matched,
     unmatched_count: unmatched,
@@ -701,6 +703,9 @@ async function main(): Promise<void> {
         log(`Match post-pass (qty + coverage) failed (non-fatal): ${e?.message || e}`)
         await notifySlack(`Match qty/coverage step failed (match still OK): ${e?.message || e}`, false).catch(() => undefined)
       }
+      // Finalise only now — after System Qty is set — so the UI never shows the
+      // intermediate "available" value.
+      await patchUpload({ status: 'matched' })
     } else if (MODE === 'push') {
       const results = (upload.match_results || []) as MatchResultEntry[]
       if (results.length === 0) throw new Error('No match_results in upload')
