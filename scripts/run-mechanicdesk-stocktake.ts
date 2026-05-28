@@ -62,6 +62,8 @@ interface MatchResultEntry {
   md_location?: string
   candidates?: Array<{ id: number; stock_number: string; name: string }>
   error?: string
+  count_source?: 'md_stocktake'  // counted qty was pulled from the live MD stocktake entry
+  added_from_md?: boolean        // row was counted directly in MD, not present in our sheet
 }
 
 function log(...args: any[]) {
@@ -396,23 +398,78 @@ async function runMatchPostPass(client: MdClient, results: MatchResultEntry[]): 
   await storeCoverage(client, counted, 'uploaded sheet', universe, sample)
 }
 
-// Re-check: read what's actually in the MD stocktake now and compare against
-// the live Stock Value report (used after pushing, or after staff add counts
-// directly in MD).
-async function runRecheck(client: MdClient, stocktakeId: string): Promise<void> {
+// Re-check: read what's actually in the MD stocktake now and pull the changes
+// back. Used after pushing, after editing counts in MD, or after staff count
+// directly in MD. Two things happen off one read:
+//   1. Counted qty (+ the system-qty snapshot) on each matched row is synced to
+//      whatever the MD stocktake entry currently says, so Count/Variance match
+//      MD. Items counted in MD that we don't have are appended.
+//   2. Coverage is recomputed against the live Stock Value report (as before).
+async function runRecheck(client: MdClient, stocktakeId: string, results: MatchResultEntry[]): Promise<void> {
   log(`Recheck: reading MD stocktake ${stocktakeId}…`)
   const st = await fetchStocktakeWithSheet(client, Number(stocktakeId))
+
+  // What MD currently has counted, keyed by SKU. Counts are summed if a SKU
+  // somehow appears on more than one sheet (it's one physical item).
+  const mdBySku = new Map<string, { count: number; systemQty?: number; stockId?: number; name?: string; stockNumber: string }>()
   const counted = new Set<string>()
   let rows = 0
   for (const sheet of st.stocktake_sheets || []) {
     if (!sheet || sheet.deleted) continue
     for (const it of (sheet.stocktake_items || [])) {
-      const sn = (it.stock && it.stock.stock_number) || it.stock_number
-      if (sn) { counted.add(normSku(sn)); rows++ }
+      const stockNumber = String((it.stock && it.stock.stock_number) || it.stock_number || '').trim()
+      if (!stockNumber) continue
+      const key = normSku(stockNumber)
+      counted.add(key); rows++
+      const count = typeof it.count === 'number' ? it.count : 0
+      const systemQty = typeof it.quantity === 'number' ? it.quantity
+        : (it.stock && typeof it.stock.quantity === 'number' ? it.stock.quantity : undefined)
+      const prev = mdBySku.get(key)
+      if (prev) { prev.count += count }
+      else mdBySku.set(key, { count, systemQty, stockId: it.stock?.id, name: it.stock?.name, stockNumber })
     }
   }
   log(`Recheck: MD stocktake has ${counted.size} distinct counted items (${rows} rows)`)
+
+  // 1) Sync counts onto existing matched rows; append rows MD has that we don't.
+  let updated = 0, changed = 0, added = 0
+  const present = new Set<string>()
+  for (const r of results) {
+    const key = normSku(r.md_stock_number || r.sku)
+    const md = mdBySku.get(key)
+    if (!md) continue
+    present.add(key)
+    if (r.qty !== md.count) changed++
+    r.qty = md.count
+    if (typeof md.systemQty === 'number') r.md_current_qty = md.systemQty
+    r.count_source = 'md_stocktake'
+    updated++
+  }
+  let nextRow = results.reduce((m, r) => Math.max(m, r.row_number || 0), 0)
+  for (const [key, md] of mdBySku) {
+    if (present.has(key)) continue
+    results.push({
+      row_number: ++nextRow,
+      sku: md.stockNumber,
+      qty: md.count,
+      sheet_name: 'MD stocktake',
+      status: 'matched',
+      md_stock_id: md.stockId,
+      md_stock_name: md.name || '',
+      md_stock_number: md.stockNumber,
+      md_current_qty: md.systemQty,
+      count_source: 'md_stocktake',
+      added_from_md: true,
+    })
+    added++
+  }
+  const matchedCount = results.filter(r => r.status === 'matched').length
+  await patchUpload({ match_results: results, matched_count: matchedCount, matched_at: new Date().toISOString() })
+  log(`Recheck: counts synced — ${updated} matched rows updated (${changed} changed), ${added} added from MD`)
+
+  // 2) Coverage off the live Stock Value report.
   await storeCoverage(client, counted, 'MD stocktake')
+  await notifySlack(`Recheck: synced counts from MD stocktake — ${updated} updated (${changed} changed), ${added} new · then coverage`, false)
 }
 
 // Refresh: re-read the current MD system qty (total on hand) for every already
@@ -712,7 +769,8 @@ async function main(): Promise<void> {
       await runPush(client, results)
     } else if (MODE === 'recheck') {
       if (!upload.mechanicdesk_stocktake_id) throw new Error('No MechanicDesk stocktake id on this upload — push to MD first.')
-      await runRecheck(client, String(upload.mechanicdesk_stocktake_id))
+      const results = (upload.match_results || []) as MatchResultEntry[]
+      await runRecheck(client, String(upload.mechanicdesk_stocktake_id), results)
     } else if (MODE === 'refresh') {
       const results = (upload.match_results || []) as MatchResultEntry[]
       if (results.length === 0) throw new Error('No match_results to refresh')

@@ -50,6 +50,8 @@ interface MatchEntry {
   md_location?: string
   candidates?: Array<{ id: number; stock_number: string; name: string }>
   error?: string
+  count_source?: 'md_stocktake'  // Count came from the live MD stocktake entry (recheck)
+  added_from_md?: boolean        // Row was counted in MD, not in our uploaded sheet
 }
 
 interface Upload {
@@ -194,8 +196,10 @@ export default function StocktakeDetailPage({ user }: { user: SessionUser }) {
     finally { setActionInFlight(false) }
   }
 
-  // Re-check coverage against the LIVE MD stocktake (after pushing / counting in
-  // MD). Dispatches the worker, then polls coverage_at until it updates.
+  // Sync from the LIVE MD stocktake entry (after pushing, after editing counts
+  // in MD, or after staff count directly in MD). The worker pulls each item's
+  // counted qty + system qty back into our match results AND refreshes coverage
+  // off the same read. Polls coverage_at to know when it's done.
   async function runRecheck() {
     if (!id || rechecking) return
     setRecheckMsg('')
@@ -203,9 +207,9 @@ export default function StocktakeDetailPage({ user }: { user: SessionUser }) {
     try {
       const r = await fetch(`/api/stocktake/${id}/recheck`, { method: 'POST' })
       const d = await r.json()
-      if (!r.ok) { setRecheckMsg(d.error || 'Re-check failed'); return }
-    } catch (e: any) { setRecheckMsg(e.message || 'Re-check failed'); return }
-    setRechecking(true); setRecheckMsg('Re-checking against the MD stocktake…')
+      if (!r.ok) { setRecheckMsg(d.error || 'Sync failed'); return }
+    } catch (e: any) { setRecheckMsg(e.message || 'Sync failed'); return }
+    setRechecking(true); setRecheckMsg('Syncing counts + coverage from MD stocktake…')
     let tries = 0
     const iv = setInterval(async () => {
       tries++
@@ -213,7 +217,7 @@ export default function StocktakeDetailPage({ user }: { user: SessionUser }) {
         const rr = await fetch(`/api/stocktake/${id}`)
         const dd = await rr.json()
         if (rr.ok && dd.coverage_at && dd.coverage_at !== prev) {
-          clearInterval(iv); setRechecking(false); setUpload(dd); setRecheckMsg('Coverage updated ✓')
+          clearInterval(iv); setRechecking(false); setUpload(dd); setRecheckMsg('Counts + coverage updated ✓')
           setTimeout(() => setRecheckMsg(''), 4000); return
         }
       } catch { /* keep polling */ }
@@ -591,7 +595,12 @@ export default function StocktakeDetailPage({ user }: { user: SessionUser }) {
                             {r.sheet_name || '—'}
                           </div>
                         )}
-                        <div style={{color:T.text, fontFamily:'monospace', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap'}}>{r.sku}</div>
+                        <div style={{color:T.text, fontFamily:'monospace', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap'}}>
+                          {r.sku}
+                          {r.added_from_md && (
+                            <span title="Counted directly in MD — not in our uploaded sheet" style={{marginLeft:6, padding:'1px 5px', fontSize:9, fontWeight:700, color:T.amber, border:`1px solid ${T.amber}55`, borderRadius:3, fontFamily:'inherit'}}>MD</span>
+                          )}
+                        </div>
                         <div style={{color:T.text2, fontSize:11, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap'}}>
                           {r.status === 'matched' ? (
                             <>
@@ -884,9 +893,9 @@ function CoverageSection({ coverage, coverageAt, filename, canRecheck, onRecheck
         <div style={{display:'flex', gap:8, alignItems:'center', flexWrap:'wrap'}}>
           {recheckMsg && <span style={{fontSize:11, color: recheckMsg.includes('✓') ? T.green : T.text3}}>{recheckMsg}</span>}
           {canRecheck && (
-            <button onClick={onRecheck} disabled={rechecking} title="Read the live MechanicDesk stocktake and compare it to the Stock Value report again"
+            <button onClick={onRecheck} disabled={rechecking} title="Read the live MechanicDesk stocktake — pulls counted qty + system qty back into the match results AND refreshes coverage"
               style={{padding:'4px 12px', borderRadius:4, fontSize:11, fontFamily:'inherit', fontWeight:600, background:'transparent', color: rechecking ? T.text3 : T.amber, border:`1px solid ${rechecking ? T.border2 : T.amber + '55'}`, cursor: rechecking ? 'default' : 'pointer'}}>
-              {rechecking ? '↻ Re-checking…' : '↻ Re-check vs MD stocktake'}
+              {rechecking ? '↻ Syncing…' : '↻ Sync counts + coverage from MD'}
             </button>
           )}
           {items.length > 0 && (

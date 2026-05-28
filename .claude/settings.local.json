@@ -44,7 +44,8 @@
       "mcp__claude_ai_Vercel__get_project",
       "mcp__claude_ai_GitHub__search_repositories",
       "PowerShell(Get-ChildItem *)",
-      "Bash(powershell *)"
+      "Bash(powershell *)",
+      "Bash(node *)"
     ]
   }
 }

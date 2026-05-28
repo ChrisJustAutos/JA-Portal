@@ -57,5 +57,5 @@ export default withAuth('edit:stocktakes', async (req: NextApiRequest, res: Next
     const errText = await dispatchRes.text().catch(() => '')
     return res.status(502).json({ error: `Failed to trigger re-check: ${dispatchRes.status} ${errText.slice(0, 300)}` })
   }
-  return res.status(202).json({ ok: true, message: 'Re-check started — coverage refreshes in ~1 minute.' })
+  return res.status(202).json({ ok: true, message: 'Sync started — counts + coverage refresh from MD in ~1 minute.' })
 })
