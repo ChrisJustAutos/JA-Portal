@@ -278,22 +278,42 @@ function ImportFlow({ meta, onComplete }: { meta: TypeMeta; onComplete: () => vo
       if (!r0.ok) { setErr(d0?.error || `Upload failed (HTTP ${r0.status})`); return }
       const importId = d0.id
 
-      // Stream each role's chunks (≤ ~4MB body per request).
-      const CHUNK = 1500
-      const totalChunks = perRole.reduce((sum, r) => sum + Math.max(1, Math.ceil(r.rows.length / CHUNK)), 0)
-      let chunksDone = 0
+      // Build every (role, chunk_index) task up front, then run them through
+      // a small concurrency pool. Was sequential — for 270k-row imports that
+      // meant 5+ minutes of HTTP roundtrips. Now ~12x faster.
+      const CHUNK = 2500   // ~1MB per chunk (safe vs Vercel's ~4.5MB body limit)
+      const CONCURRENCY = 6
+      type Task = { role: string; index: number; rows: any[] }
+      const tasks: Task[] = []
       for (const { roleId, rows } of perRole) {
         const count = Math.max(1, Math.ceil(rows.length / CHUNK))
-        for (let i = 0; i < count; i++) {
-          chunksDone++
-          setProgress(`Uploading ${chunksDone} / ${totalChunks} · ${roleId} chunk ${i + 1}/${count}`)
+        for (let i = 0; i < count; i++) tasks.push({ role: roleId, index: i, rows: rows.slice(i * CHUNK, (i + 1) * CHUNK) })
+      }
+      const total = tasks.length
+      let done = 0
+      let failed: string | null = null
+      let nextIdx = 0
+      const worker = async (): Promise<void> => {
+        while (true) {
+          if (failed) return
+          const i = nextIdx++
+          if (i >= tasks.length) return
+          const t = tasks[i]
           const r = await fetch(`/api/imports/${importId}/chunk`, {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ role: roleId, chunk_index: i, rows: rows.slice(i * CHUNK, (i + 1) * CHUNK) }),
+            body: JSON.stringify({ role: t.role, chunk_index: t.index, rows: t.rows }),
           })
-          if (!r.ok) { const e = await safeJson(r); setErr(e?.error || `Chunk failed (HTTP ${r.status})`); return }
+          if (!r.ok) {
+            const e = await safeJson(r)
+            if (!failed) failed = e?.error || `Chunk failed (HTTP ${r.status})`
+            return
+          }
+          done++
+          setProgress(`Uploading ${done} / ${total} chunks (${CONCURRENCY} in parallel)`)
         }
       }
+      await Promise.all(Array.from({ length: Math.min(CONCURRENCY, total) }, () => worker()))
+      if (failed) { setErr(failed); return }
 
       setProgress('Finalising…')
       const rf = await fetch(`/api/imports/${importId}/finalize`, { method: 'POST' })
