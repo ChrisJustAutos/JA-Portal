@@ -56,6 +56,7 @@ export const DEFAULT_NAV: PortalNavItem[] = [
   {id:'diary',        kind:'link',    label:'Workshop Diary',href:'/diary',        dot:T.blue},
   {id:'workshop-customers',kind:'link',label:'Customers',  href:'/workshop/customers',dot:T.blue},
   {id:'workshop-quotes',kind:'link',  label:'Quotes',       href:'/workshop/quotes',dot:T.purple},
+  {id:'workshop-invoices',kind:'link', label:'Invoices',    href:'/workshop/invoices',dot:T.amber},
   {id:'workshop-inventory',kind:'link',label:'Inventory',   href:'/workshop/inventory',dot:T.purple},
   {id:'workshop-tasks', kind:'link',  label:'Tasks',        href:'/workshop/tasks', dot:T.amber},
   {id:'reports',      kind:'link',    label:'Reports',      href:'/reports',       dot:T.green},

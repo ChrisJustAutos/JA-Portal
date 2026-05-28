@@ -41,17 +41,27 @@ export default function QuotesPage({ user }: { user: PortalUserSSR }) {
   const [loading, setLoading] = useState(true)
   const [creating, setCreating] = useState(false)
   const [filter, setFilter] = useState<string>('')
+  const [view, setView] = useState<'active'|'trash'>('active')
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null)
 
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      const r = await fetch(`/api/workshop/quotes${filter ? `?status=${filter}` : ''}`)
+      const params = new URLSearchParams()
+      if (filter) params.set('status', filter)
+      params.set('view', view)
+      const r = await fetch(`/api/workshop/quotes?${params}`)
       const d = await r.json()
       if (r.ok) setQuotes(Array.isArray(d.quotes) ? d.quotes : [])
       setLastRefresh(new Date())
     } catch { /* keep prior */ } finally { setLoading(false) }
-  }, [filter])
+  }, [filter, view])
+
+  async function restoreQuote(id: string, e: React.MouseEvent) {
+    e.preventDefault(); e.stopPropagation()
+    const r = await fetch(`/api/workshop/quotes/${id}/restore`, { method: 'POST' })
+    if (r.ok) load()
+  }
 
   useEffect(() => { load() }, [load])
 
@@ -76,12 +86,16 @@ export default function QuotesPage({ user }: { user: PortalUserSSR }) {
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', background: T.bg }}>
           <div style={{ height: 52, background: T.bg2, borderBottom: `1px solid ${T.border}`, display: 'flex', alignItems: 'center', padding: '0 20px', gap: 10, flexShrink: 0 }}>
             <span style={{ fontSize: 14, fontWeight: 600 }}>Quotes</span>
-            <select value={filter} onChange={e => setFilter(e.target.value)} style={{ padding: '4px 8px', background: T.bg3, border: `1px solid ${T.border}`, borderRadius: 5, color: T.text2, fontSize: 12, fontFamily: 'inherit', cursor: 'pointer' }}>
+            <div style={{ display: 'flex', gap: 4 }}>
+              <FilterChip label="Active" active={view === 'active'} onClick={() => setView('active')} />
+              <FilterChip label="Trash" active={view === 'trash'} onClick={() => setView('trash')} accent={T.red} />
+            </div>
+            <select value={filter} onChange={e => setFilter(e.target.value)} disabled={view === 'trash'} style={{ padding: '4px 8px', background: T.bg3, border: `1px solid ${T.border}`, borderRadius: 5, color: T.text2, fontSize: 12, fontFamily: 'inherit', cursor: 'pointer', opacity: view === 'trash' ? 0.5 : 1 }}>
               <option value="">All statuses</option>
               {QUOTE_STATUSES.map(s => <option key={s} value={s}>{QUOTE_STATUS_META[s].label}</option>)}
             </select>
             <div style={{ flex: 1 }} />
-            {canEdit && (
+            {canEdit && view === 'active' && (
               <button onClick={newQuote} disabled={creating} style={{ padding: '5px 14px', borderRadius: 5, fontSize: 12, fontWeight: 600, background: T.accent, color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'inherit' }}>
                 {creating ? 'Creating…' : '+ New quote'}
               </button>
@@ -90,20 +104,27 @@ export default function QuotesPage({ user }: { user: PortalUserSSR }) {
 
           <div style={{ flex: 1, overflow: 'auto', padding: 20 }}>
             <div style={{ maxWidth: 1400, margin: '0 auto', background: T.bg2, border: `1px solid ${T.border}`, borderRadius: 10, overflow: 'hidden' }}>
-              <div style={{ display: 'grid', gridTemplateColumns: '90px 1fr 1fr 110px 90px', gap: 8, padding: '9px 16px', background: T.bg3, borderBottom: `1px solid ${T.border}`, fontSize: 9, color: T.text3, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                <div>Status</div><div>Customer</div><div>Vehicle</div><div style={{ textAlign: 'right' }}>Total</div><div style={{ textAlign: 'right' }}>Created</div>
+              <div style={{ display: 'grid', gridTemplateColumns: view === 'trash' ? '90px 1fr 1fr 110px 90px 90px' : '90px 1fr 1fr 110px 90px', gap: 8, padding: '9px 16px', background: T.bg3, borderBottom: `1px solid ${T.border}`, fontSize: 9, color: T.text3, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                <div>Status</div><div>Customer</div><div>Vehicle</div><div style={{ textAlign: 'right' }}>Total</div><div style={{ textAlign: 'right' }}>Created</div>{view === 'trash' && <div style={{ textAlign: 'right' }}></div>}
               </div>
               {loading && quotes.length === 0 ? (
                 <div style={{ padding: 40, textAlign: 'center', color: T.text3, fontSize: 12 }}>Loading…</div>
               ) : quotes.length === 0 ? (
-                <div style={{ padding: 40, textAlign: 'center', color: T.text3, fontSize: 12 }}>No quotes{filter ? ' with that status' : ''}.{canEdit ? ' Create one with “+ New quote”.' : ''}</div>
+                <div style={{ padding: 40, textAlign: 'center', color: T.text3, fontSize: 12 }}>
+                  {view === 'trash' ? 'Trash is empty.' : `No quotes${filter ? ' with that status' : ''}.${canEdit ? ' Create one with “+ New quote”.' : ''}`}
+                </div>
               ) : quotes.map(q => (
-                <Link key={q.id} href={`/workshop/quote/${q.id}`} style={{ display: 'grid', gridTemplateColumns: '90px 1fr 1fr 110px 90px', gap: 8, padding: '11px 16px', borderTop: `1px solid ${T.border}`, alignItems: 'center', textDecoration: 'none', color: 'inherit' }}>
+                <Link key={q.id} href={`/workshop/quote/${q.id}`} style={{ display: 'grid', gridTemplateColumns: view === 'trash' ? '90px 1fr 1fr 110px 90px 90px' : '90px 1fr 1fr 110px 90px', gap: 8, padding: '11px 16px', borderTop: `1px solid ${T.border}`, alignItems: 'center', textDecoration: 'none', color: 'inherit', opacity: view === 'trash' ? 0.7 : 1 }}>
                   <div><QuoteChip status={q.status} /></div>
                   <div style={{ fontSize: 12, color: T.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{q.customer ? customerLabel(q.customer) : '—'}</div>
                   <div style={{ fontSize: 12, color: T.text2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{q.vehicle ? vehicleLabel(q.vehicle) : '—'}</div>
                   <div style={{ fontSize: 12, fontFamily: 'monospace', color: T.text, textAlign: 'right' }}>{money(q.total)}</div>
                   <div style={{ fontSize: 11, color: T.text3, fontFamily: 'monospace', textAlign: 'right' }}>{fmtDate(q.created_at)}</div>
+                  {view === 'trash' && canEdit && (
+                    <div style={{ textAlign: 'right' }}>
+                      <button onClick={e => restoreQuote(q.id, e)} style={{ padding: '3px 8px', borderRadius: 4, fontSize: 10, fontFamily: 'inherit', fontWeight: 600, background: 'transparent', color: T.green, border: `1px solid ${T.green}55`, cursor: 'pointer' }}>Restore</button>
+                    </div>
+                  )}
                 </Link>
               ))}
             </div>
@@ -111,6 +132,17 @@ export default function QuotesPage({ user }: { user: PortalUserSSR }) {
         </div>
       </div>
     </>
+  )
+}
+
+function FilterChip({ label, active, onClick, accent }: { label: string; active: boolean; onClick: () => void; accent?: string }) {
+  const c = accent || '#4f8ef7'
+  return (
+    <button onClick={onClick} style={{
+      padding: '4px 10px', borderRadius: 4, fontSize: 11, fontFamily: 'inherit', fontWeight: 600,
+      background: active ? `${c}1f` : 'transparent', color: active ? c : '#8b90a0',
+      border: `1px solid ${active ? c + '55' : 'rgba(255,255,255,0.07)'}`, cursor: 'pointer',
+    }}>{label}</button>
   )
 }
 

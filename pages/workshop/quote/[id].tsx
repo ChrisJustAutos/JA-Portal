@@ -186,11 +186,20 @@ export default function QuoteBuilderPage({ user }: { user: PortalUserSSR }) {
                   <NotesField initial={q.notes || ''} disabled={!canEdit} onSave={(v) => patchQuote({ notes: v })} />
                 </div>
 
-                {/* Print / email */}
+                {/* Print / email / delete */}
                 <div style={{ display: 'flex', gap: 8, marginTop: 16, alignItems: 'center', flexWrap: 'wrap' }}>
                   <button onClick={openPdf} style={qbtn(T.text2)}>🖨 Print / PDF</button>
                   {canEdit && <button onClick={emailQuote} disabled={emailing} style={qbtn(T.blue)}>{emailing ? 'Sending…' : '✉ Email to customer'}</button>}
                   {emailMsg && <span style={{ fontSize: 11, color: T.text2 }}>{emailMsg}</span>}
+                  <div style={{ flex: 1 }} />
+                  {canEdit && (
+                    <button onClick={async () => {
+                      if (!confirm('Move this quote to Trash? You can restore it later from the trash view.')) return
+                      const r = await fetch(`/api/workshop/quotes/${id}`, { method: 'DELETE' })
+                      if (r.ok) router.push('/workshop/quotes')
+                      else { const d = await r.json().catch(()=>({})); setErr(d.error || 'Delete failed') }
+                    }} style={qbtn(T.red)}>🗑 Delete</button>
+                  )}
                 </div>
 
                 {canEdit && (

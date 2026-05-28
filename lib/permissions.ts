@@ -220,6 +220,7 @@ export const PORTAL_TABS: PortalTab[] = [
   { id: 'diary',         label: 'Workshop Diary',  permission: 'view:diary' },
   { id: 'workshop-customers', label: 'Customers',  permission: 'view:diary' },
   { id: 'workshop-quotes', label: 'Quotes',        permission: 'view:diary' },
+  { id: 'workshop-invoices', label: 'Invoices (workshop)', permission: 'view:diary' },
   { id: 'workshop-inventory', label: 'Inventory',  permission: 'view:diary' },
   { id: 'workshop-tasks',  label: 'Tasks',          permission: 'view:diary' },
   { id: 'reports',       label: 'Reports',         permission: 'view:reports' },

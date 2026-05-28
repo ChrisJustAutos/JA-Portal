@@ -53,7 +53,15 @@ export default withAuth('view:diary', async (req, res, user) => {
 
   if (req.method === 'DELETE') {
     if (!roleHasPermission(user.role, 'edit:bookings')) return res.status(403).json({ error: 'Forbidden' })
-    const { error } = await db.from('workshop_quotes').delete().eq('id', id)
+    // Soft delete — moves to trash. Pass ?hard=1 to wipe (admin only).
+    const hard = String(req.query.hard || '') === '1'
+    if (hard) {
+      if (!roleHasPermission(user.role, 'admin:settings')) return res.status(403).json({ error: 'Admin only for hard delete' })
+      const { error } = await db.from('workshop_quotes').delete().eq('id', id)
+      if (error) return res.status(500).json({ error: error.message })
+      return res.status(200).json({ ok: true, hard: true })
+    }
+    const { error } = await db.from('workshop_quotes').update({ deleted_at: new Date().toISOString() }).eq('id', id)
     if (error) return res.status(500).json({ error: error.message })
     return res.status(200).json({ ok: true })
   }
