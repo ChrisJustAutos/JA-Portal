@@ -44,6 +44,7 @@ interface BookingRow {
   internal_notes: string | null
   estimated_value: number | null
   span_techs: string | null
+  pickup_at: string | null
   customer: { id: string; name: string; phone: string | null; mobile: string | null } | null
   vehicle: { id: string; rego: string | null; make: string | null; model: string | null; year: number | null } | null
 }
@@ -96,7 +97,8 @@ function durationHours(b: { starts_at: string; ends_at: string }): number {
 // ── Booking block (positioned in a lane) ────────────────────────────────
 function BookingBlock({ b, onClick, showTech, draggable, onDragEnd }: { b: BookingRow; onClick: () => void; showTech?: boolean; draggable?: boolean; onDragEnd?: () => void }) {
   const top = topPxFor(b.starts_at)
-  const height = Math.max(SLOT_PX * 0.9, bookingDurationMin(b) / SLOT_MIN * SLOT_PX - 2)
+  // Clamp to the day grid so a multi-day booking fills to the bottom rather than overflowing.
+  const height = Math.max(SLOT_PX * 0.9, Math.min(GRID_PX - top, bookingDurationMin(b) / SLOT_MIN * SLOT_PX - 2))
   const c = BOOKING_STATUS_META[b.status].color
   const veh = b.vehicle ? vehicleLabel(b.vehicle) : ''
   const cust = b.customer ? customerLabel(b.customer) : ''
@@ -599,7 +601,10 @@ function BookingModal({ initial, techs, canEdit, onClose, onSaved }: {
   const isNew = !initial.id
   const [ymd, setYmd] = useState<string>(initial.starts_at ? bneYmd(initial.starts_at) : ymdBrisbane(new Date()))
   const [time, setTime] = useState<string>(initial.starts_at ? bneTimeStr(initial.starts_at) : '09:00')
+  const [endYmd, setEndYmd] = useState<string>(initial.ends_at ? bneYmd(initial.ends_at) : (initial.starts_at ? bneYmd(initial.starts_at) : ymdBrisbane(new Date())))
   const [finish, setFinish] = useState<string>(initial.ends_at ? bneTimeStr(initial.ends_at) : hhmmPlus(initial.starts_at ? bneTimeStr(initial.starts_at) : '09:00', 60))
+  const [pickupYmd, setPickupYmd] = useState<string>(initial.pickup_at ? bneYmd(initial.pickup_at) : '')
+  const [pickupTime, setPickupTime] = useState<string>(initial.pickup_at ? bneTimeStr(initial.pickup_at) : '')
   const [tech, setTech] = useState<string>(initial.technician_ext || '')
   const [bay, setBay] = useState<string>(initial.bay || '')
   const [jobType, setJobType] = useState<string>(initial.job_type || 'general_service')
@@ -632,10 +637,11 @@ function BookingModal({ initial, techs, canEdit, onClose, onSaved }: {
   async function save() {
     setSaving(true); setErr('')
     const startIso = isoFromBne(ymd, time)
-    const endIso = isoFromBne(ymd, finish)
-    if (new Date(endIso).getTime() <= new Date(startIso).getTime()) { setErr('Finish time must be after the start time.'); setSaving(false); return }
+    const endIso = isoFromBne(endYmd, finish)
+    if (new Date(endIso).getTime() <= new Date(startIso).getTime()) { setErr('The end (date + finish time) must be after the start.'); setSaving(false); return }
+    const pickupIso = pickupTime ? isoFromBne(pickupYmd || endYmd, pickupTime) : null
     const payload: any = {
-      starts_at: startIso, ends_at: endIso,
+      starts_at: startIso, ends_at: endIso, pickup_at: pickupIso,
       technician_ext: tech || null, bay: bay || null,
       job_type: jobType || null, description: description || null,
       estimated_value: estValue.trim() ? (Number(estValue) || null) : null,
@@ -666,11 +672,17 @@ function BookingModal({ initial, techs, canEdit, onClose, onSaved }: {
           <EntityPicker label="Vehicle" kind="vehicle" customerId={customer?.id || null} value={vehicle}
             disabled={!canEdit} onPick={(v) => setVehicle(v)} />
 
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8 }}>
-            <Field label="Date"><input type="date" value={ymd} disabled={!canEdit} onChange={e => setYmd(e.target.value)} style={inp} /></Field>
-            <Field label="Start"><input type="time" value={time} disabled={!canEdit} step={900} onChange={e => setTime(e.target.value)} style={inp} /></Field>
-            <Field label="Finish"><input type="time" value={finish} disabled={!canEdit} step={900} onChange={e => setFinish(e.target.value)} style={inp} /></Field>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+            <Field label="Start date"><input type="date" value={ymd} disabled={!canEdit} onChange={e => { const v = e.target.value; setYmd(v); if (endYmd < v) setEndYmd(v) }} style={inp} /></Field>
+            <Field label="Start time"><input type="time" value={time} disabled={!canEdit} step={900} onChange={e => setTime(e.target.value)} style={inp} /></Field>
+            <Field label="End date"><input type="date" value={endYmd} disabled={!canEdit} min={ymd} onChange={e => setEndYmd(e.target.value)} style={inp} /></Field>
+            <Field label="Finish time"><input type="time" value={finish} disabled={!canEdit} step={900} onChange={e => setFinish(e.target.value)} style={inp} /></Field>
           </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+            <Field label="Pick-up date"><input type="date" value={pickupYmd} disabled={!canEdit} onChange={e => setPickupYmd(e.target.value)} style={inp} /></Field>
+            <Field label="Pick-up time"><input type="time" value={pickupTime} disabled={!canEdit} step={900} onChange={e => setPickupTime(e.target.value)} style={inp} /></Field>
+          </div>
+          <div style={{ fontSize: 10, color: T.text3, marginTop: -4 }}>Pick-up = customer collection time (job card only — doesn’t change the diary slot).</div>
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
             <Field label="Technician">

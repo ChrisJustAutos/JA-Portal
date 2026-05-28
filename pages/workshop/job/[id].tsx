@@ -237,8 +237,9 @@ export default function JobCardPage({ user }: { user: PortalUserSSR }) {
                       {cust ? customerLabel(cust) : 'No customer'}{cust?.mobile || cust?.phone ? ` · ${cust.mobile || cust.phone}` : ''}
                     </div>
                     <div style={{ fontSize: 12, color: T.text3, marginTop: 6, fontFamily: 'monospace' }}>
-                      {jobTypeLabel(b.job_type)} · {fmtDateTime(b.starts_at)}{b.technician_ext ? ` · Ext ${b.technician_ext}` : ''}
+                      {jobTypeLabel(b.job_type)} · {fmtDateTime(b.starts_at)}{b.ends_at ? `–${fmtDateTime(b.ends_at)}` : ''}{b.technician_ext ? ` · Ext ${b.technician_ext}` : ''}
                     </div>
+                    {b.pickup_at && <div style={{ fontSize: 12, color: T.amber, marginTop: 4, fontWeight: 600 }}>🕑 Collection: {fmtDateTime(b.pickup_at)}</div>}
                     {b.description && <div style={{ fontSize: 13, color: T.text, marginTop: 8 }}>{b.description}</div>}
                   </div>
                   <div style={{ textAlign: 'right' }}>
