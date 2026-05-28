@@ -17,10 +17,16 @@ async function list(req: NextApiRequest, res: NextApiResponse) {
   const sb = getAdmin()
   const { data, error } = await sb
     .from('user_profiles')
-    .select('id, email, display_name, role, is_active, created_at, last_sign_in_at, visible_tabs, phone_extension')
+    .select('id, email, display_name, role, is_active, created_at, last_sign_in_at, visible_tabs, phone_extension, webrtc_extension, webrtc_password')
     .order('created_at', { ascending: false })
   if (error) return res.status(500).json({ error: error.message })
-  return res.status(200).json({ users: data || [] })
+  // Never expose the WebRTC password back to the admin UI — only whether it's set.
+  const users = (data || []).map((u: any) => ({
+    ...u,
+    webrtc_password_set: !!u.webrtc_password,
+    webrtc_password: undefined,
+  }))
+  return res.status(200).json({ users })
 }
 
 async function invite(req: NextApiRequest, res: NextApiResponse, actor: any) {

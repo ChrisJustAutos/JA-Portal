@@ -45,17 +45,26 @@ export default withAuth('monitor:calls', async (req, res, user) => {
 
   const mode = String(body.mode || '') as SpyMode
   const targetChannel = String(body.target_channel || '').trim()
+  const actorKind = (body.actor_kind === 'device') ? 'device' : 'handset'
   if (!SPY_MODES.includes(mode)) return res.status(400).json({ error: 'mode must be listen|whisper|barge' })
   if (!targetChannel) return res.status(400).json({ error: 'target_channel required' })
 
-  // Resolve the manager's extension (the phone the agent will ring).
+  // Resolve the extension the agent will ring — handset (phone_extension) or
+  // web softphone (webrtc_extension), depending on which button the user hit.
   const { data: prof } = await sb
-    .from('user_profiles').select('phone_extension').eq('id', user.id).maybeSingle()
-  const ext = ((prof as any)?.phone_extension || '').trim()
+    .from('user_profiles')
+    .select('phone_extension, webrtc_extension')
+    .eq('id', user.id)
+    .maybeSingle()
+  const ext = actorKind === 'device'
+    ? ((prof as any)?.webrtc_extension || '').trim()
+    : ((prof as any)?.phone_extension  || '').trim()
   if (!ext) {
     return res.status(400).json({
       error: 'no_extension',
-      message: 'No phone extension is set on your profile. Ask an admin to map your extension in Settings → Users.',
+      message: actorKind === 'device'
+        ? 'No browser softphone extension is set on your profile. Ask an admin to set one in Settings → Users.'
+        : 'No phone extension is set on your profile. Ask an admin to map your extension in Settings → Users.',
     })
   }
 
@@ -70,6 +79,7 @@ export default withAuth('monitor:calls', async (req, res, user) => {
   const { data: row, error } = await sb.from('call_monitor_events').insert({
     actor_user_id: user.id,
     actor_extension: ext,
+    actor_kind: actorKind,
     mode,
     target_call_linkedid: body.target_call_linkedid ? String(body.target_call_linkedid) : null,
     target_channel: targetChannel,

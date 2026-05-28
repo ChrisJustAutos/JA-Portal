@@ -14,7 +14,7 @@ function getAdmin() {
 async function patch(req: NextApiRequest, res: NextApiResponse, actor: any) {
   const id = req.query.id as string
   if (!id) return res.status(400).json({ error: 'id required' })
-  const { role, display_name, is_active, visible_tabs, phone_extension } = req.body || {}
+  const { role, display_name, is_active, visible_tabs, phone_extension, webrtc_extension, webrtc_password } = req.body || {}
   const validRoles = ['admin','manager','sales','accountant','viewer','workshop']
   if (role !== undefined && !validRoles.includes(role)) return res.status(400).json({ error: 'Invalid role' })
 
@@ -42,6 +42,20 @@ async function patch(req: NextApiRequest, res: NextApiResponse, actor: any) {
     else return res.status(400).json({ error: 'phone_extension must be a string or null' })
   }
 
+  // webrtc_extension + webrtc_password: the in-browser softphone's SIP creds.
+  // Same shape as phone_extension. Password is sensitive — only stored at the
+  // admin's request and only read back to its owner via /api/me/webrtc.
+  if (webrtc_extension !== undefined) {
+    if (webrtc_extension === null || webrtc_extension === '') patch.webrtc_extension = null
+    else if (typeof webrtc_extension === 'string') patch.webrtc_extension = webrtc_extension.trim().slice(0, 20)
+    else return res.status(400).json({ error: 'webrtc_extension must be a string or null' })
+  }
+  if (webrtc_password !== undefined) {
+    if (webrtc_password === null || webrtc_password === '') patch.webrtc_password = null
+    else if (typeof webrtc_password === 'string') patch.webrtc_password = webrtc_password.slice(0, 200)
+    else return res.status(400).json({ error: 'webrtc_password must be a string or null' })
+  }
+
   // visible_tabs: null = reset to role defaults; array = explicit allowlist
   if (visible_tabs !== undefined) {
     if (visible_tabs === null) {
@@ -57,7 +71,11 @@ async function patch(req: NextApiRequest, res: NextApiResponse, actor: any) {
   const { data, error } = await sb.from('user_profiles').update(patch).eq('id', id).select().single()
   if (error) return res.status(500).json({ error: error.message })
 
-  audit(actor, 'user_updated', { target_user_id: id, target_email: data?.email, patch })
+  // Don't put the WebRTC password in the audit payload — only log whether it
+  // changed.
+  const auditPatch = { ...patch }
+  if (auditPatch.webrtc_password !== undefined) auditPatch.webrtc_password = auditPatch.webrtc_password ? '[set]' : null
+  audit(actor, 'user_updated', { target_user_id: id, target_email: data?.email, patch: auditPatch })
   return res.status(200).json({ user: data })
 }
 

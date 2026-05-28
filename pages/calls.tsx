@@ -3,7 +3,7 @@
 // (pushed to Supabase by ja-cdr-sync agent). Per-agent stats, filtering, drill-down.
 // Phase 1 of 3 — Phase 2 adds transcription, Phase 3 adds AI coaching analysis.
 
-import { useEffect, useState, useCallback, useMemo } from 'react'
+import { useEffect, useState, useCallback, useMemo, useRef } from 'react'
 import Head from 'next/head'
 import { useRouter } from 'next/router'
 import PortalTopBar from '../lib/PortalTopBar'
@@ -788,6 +788,9 @@ function AnalysisPanel({ callId, hasTranscript, billsecSeconds }: { callId: stri
 // FreePBX-side ChanSpy service. Hidden entirely for users without the
 // monitor:calls permission.
 
+type ActorKind = 'handset' | 'device'
+type SoftphoneStatus = 'idle' | 'connecting' | 'registered' | 'incall' | 'failed' | 'unavailable'
+
 function LiveCallsBoard({ canMonitor }: { canMonitor: boolean }) {
   const [status, setStatus] = useState<'loading' | 'ready' | 'notconfigured' | 'error'>('loading')
   const [channels, setChannels] = useState<LiveChannel[]>([])
@@ -797,6 +800,72 @@ function LiveCallsBoard({ canMonitor }: { canMonitor: boolean }) {
   const [toast, setToast] = useState<{ kind: 'ok' | 'err'; msg: string } | null>(null)
   const [extMap, setExtMap] = useState<Record<string, string>>({})  // extension → staff name
   const [, tick] = useState(0)   // 1s heartbeat so live durations keep counting
+
+  // ── Browser softphone (WebRTC) ──────────────────────────────────────
+  const softphoneRef = useRef<any>(null)
+  const audioElRef = useRef<HTMLAudioElement | null>(null)
+  const [spStatus, setSpStatus] = useState<SoftphoneStatus>('idle')
+  const [spReason, setSpReason] = useState<string>('')
+  const [activeDeviceMode, setActiveDeviceMode] = useState<SpyMode | null>(null)
+
+  // Lazily set up the audio element and connect the softphone if the user has
+  // WebRTC creds configured. Stays as 'idle' until something tries to use it.
+  const connectSoftphone = useCallback(async (): Promise<boolean> => {
+    if (softphoneRef.current) return spStatus === 'registered' || spStatus === 'incall'
+    if (!audioElRef.current) {
+      const el = document.createElement('audio')
+      el.autoplay = true
+      el.style.display = 'none'
+      document.body.appendChild(el)
+      audioElRef.current = el
+    }
+    setSpStatus('connecting'); setSpReason('')
+    try {
+      const r = await fetch('/api/me/webrtc')
+      const d = await r.json()
+      if (!d.configured) {
+        setSpStatus('unavailable')
+        setSpReason(d.reason === 'no_extension'
+          ? 'No browser extension is set on your profile. Ask an admin to add one in Settings → Users.'
+          : 'WebRTC server isn’t configured on the portal. Set NEXT_PUBLIC_FREEPBX_WSS_URL + NEXT_PUBLIC_FREEPBX_SIP_DOMAIN to enable.')
+        return false
+      }
+      const { Softphone } = await import('../lib/softphone')
+      const sp = new Softphone({
+        wssUrl: d.wss_url, sipDomain: d.sip_domain,
+        extension: d.extension, password: d.password,
+        audioEl: audioElRef.current!,
+      })
+      sp.on('status', (s: any, det: any) => {
+        if (s === 'registered') setSpStatus(curr => (curr === 'incall' ? 'incall' : 'registered'))
+        else if (s === 'connecting') setSpStatus('connecting')
+        else if (s === 'failed')     { setSpStatus('failed');     setSpReason(det?.reason || 'register failed') }
+        else if (s === 'unregistered') setSpStatus(curr => (curr === 'incall' ? curr : 'idle'))
+      })
+      sp.on('call', (e: any) => {
+        if (e === 'answered') setSpStatus('incall')
+        if (e === 'ended')    { setSpStatus('registered'); setActiveDeviceMode(null) }
+      })
+      softphoneRef.current = sp
+      await sp.connect()
+      return true
+    } catch (e: any) {
+      setSpStatus('failed'); setSpReason(e?.message || 'Could not connect softphone')
+      return false
+    }
+  }, [spStatus])
+
+  // Cleanup on unmount.
+  useEffect(() => () => {
+    try { softphoneRef.current?.disconnect() } catch {}
+    if (audioElRef.current) { try { audioElRef.current.remove() } catch {} }
+  }, [])
+
+  function hangupDevice() {
+    try { softphoneRef.current?.hangup() } catch {}
+    setActiveDeviceMode(null)
+    setSpStatus(curr => (curr === 'incall' ? 'registered' : curr))
+  }
 
   const load = useCallback(async () => {
     try {
@@ -836,28 +905,51 @@ function LiveCallsBoard({ canMonitor }: { canMonitor: boolean }) {
 
   if (!canMonitor) return null
 
-  async function spy(c: LiveCallCard, mode: SpyMode) {
-    const key = `${c.key}:${mode}`
+  async function spy(c: LiveCallCard, mode: SpyMode, actorKind: ActorKind) {
+    const key = `${c.key}:${mode}:${actorKind}`
     setBusyKey(key); setToast(null)
+
+    // For device monitoring, ensure the softphone is registered first AND tell
+    // it to expect the inbound INVITE so it auto-answers instead of rejecting.
+    if (actorKind === 'device') {
+      const ok = await connectSoftphone()
+      if (!ok) {
+        setBusyKey(null)
+        setToast({ kind: 'err', msg: spReason || 'Softphone isn’t available.' })
+        return
+      }
+      // Listen = mic muted; Whisper/Barge = mic open.
+      softphoneRef.current?.setMicMuted(mode === 'listen')
+      softphoneRef.current?.expectIncoming()
+      setActiveDeviceMode(mode)
+    }
+
     let enq: any = null
     try {
       const r = await fetch('/api/calls/live/spy', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ target_channel: c.spyTargetChannel, target_call_linkedid: c.spyTargetUniqueid, target_agent_ext: c.agentExt, mode }),
+        body: JSON.stringify({
+          target_channel: c.spyTargetChannel, target_call_linkedid: c.spyTargetUniqueid,
+          target_agent_ext: c.agentExt, mode, actor_kind: actorKind,
+        }),
       })
       enq = await r.json()
       if (!r.ok || !enq?.request_id) {
         setToast({ kind: 'err', msg: enq?.message || enq?.error || 'Could not start monitoring' })
+        if (actorKind === 'device') setActiveDeviceMode(null)
         return
       }
     } catch (e: any) {
-      setToast({ kind: 'err', msg: e?.message || 'Request failed' }); return
+      setToast({ kind: 'err', msg: e?.message || 'Request failed' })
+      if (actorKind === 'device') setActiveDeviceMode(null)
+      return
     } finally { setBusyKey(null) }
 
     // Enqueued — the on-PBX agent claims it within a couple of seconds. Poll
     // the request's outcome so we can surface ringing / not-registered / failed.
     const ext = enq.extension
-    setToast({ kind: 'ok', msg: `Requested ${mode} — your phone (ext ${ext}) should ring shortly…` })
+    const target = actorKind === 'device' ? `browser (ext ${ext})` : `phone (ext ${ext})`
+    setToast({ kind: 'ok', msg: `Requested ${mode} — your ${target} should connect shortly…` })
     const id = enq.request_id
     const deadline = Date.now() + 12000
     while (Date.now() < deadline) {
@@ -868,17 +960,34 @@ function LiveCallsBoard({ canMonitor }: { canMonitor: boolean }) {
         if (!sr.ok) continue
         sd = await sr.json()
       } catch { continue }
-      if (sd.status === 'connected') { setToast({ kind: 'ok', msg: `Your phone (ext ${ext}) is ringing — answer to ${mode}.` }); return }
+      if (sd.status === 'connected') {
+        setToast({ kind: 'ok', msg: actorKind === 'device'
+          ? `Streaming to this browser — ${mode}.`
+          : `Your phone (ext ${ext}) is ringing — answer to ${mode}.` })
+        return
+      }
       if (sd.status === 'failed') {
         const msg = sd.error === 'not_registered'
-          ? `Your phone (ext ${ext}) isn't registered — log into your handset/softphone first.`
+          ? (actorKind === 'device'
+              ? `Your browser softphone (ext ${ext}) isn’t registered with the PBX yet.`
+              : `Your phone (ext ${ext}) isn’t registered — log into your handset/softphone first.`)
           : (sd.error || 'Could not start monitoring.')
-        setToast({ kind: 'err', msg }); return
+        setToast({ kind: 'err', msg })
+        if (actorKind === 'device') setActiveDeviceMode(null)
+        return
       }
-      if (sd.status === 'expired') { setToast({ kind: 'err', msg: 'No response from the phone system — the monitor agent may be offline.' }); return }
-      if (sd.status === 'claimed') setToast({ kind: 'ok', msg: `Ringing your phone (ext ${ext}) — answer to ${mode}.` })
+      if (sd.status === 'expired') {
+        setToast({ kind: 'err', msg: 'No response from the phone system — the monitor agent may be offline.' })
+        if (actorKind === 'device') setActiveDeviceMode(null)
+        return
+      }
+      if (sd.status === 'claimed') {
+        setToast({ kind: 'ok', msg: actorKind === 'device' ? `Connecting browser audio for ${mode}…` : `Ringing your phone (ext ${ext}) — answer to ${mode}.` })
+      }
     }
-    setToast({ kind: 'ok', msg: `Request queued for ext ${ext}. If your phone doesn't ring, check you're logged in.` })
+    setToast({ kind: 'ok', msg: actorKind === 'device'
+      ? `Request queued. If audio doesn’t start, refresh and try again.`
+      : `Request queued for ext ${ext}. If your phone doesn’t ring, check you’re logged in.` })
   }
 
   const MODE_META: { mode: SpyMode; label: string; color: string; hint: string }[] = [
@@ -894,6 +1003,24 @@ function LiveCallsBoard({ canMonitor }: { canMonitor: boolean }) {
         <span style={{ fontSize: 11, color: T.text2, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.1em' }}>Live calls</span>
         {status === 'ready' && !stale && <span style={{ fontSize: 11, color: T.text3 }}>{cards.length} in progress</span>}
         {status === 'ready' && stale && <span style={{ fontSize: 11, color: T.amber }}>monitor agent offline?</span>}
+
+        {/* Softphone status pill */}
+        {spStatus !== 'idle' && (
+          <span title={spReason || ''} style={{
+            fontSize: 10, padding: '2px 8px', borderRadius: 10, fontFamily: 'monospace', letterSpacing: '0.05em',
+            background: spStatus === 'incall' ? `${T.green}22` : spStatus === 'registered' ? `${T.blue}22` : spStatus === 'connecting' ? `${T.amber}22` : `${T.red}22`,
+            color:      spStatus === 'incall' ? T.green        : spStatus === 'registered' ? T.blue        : spStatus === 'connecting' ? T.amber        : T.red,
+            border: `1px solid ${spStatus === 'incall' ? T.green : spStatus === 'registered' ? T.blue : spStatus === 'connecting' ? T.amber : T.red}55`,
+          }}>
+            ● softphone {spStatus}
+          </span>
+        )}
+        {spStatus === 'incall' && (
+          <button onClick={hangupDevice} style={{ fontSize: 10, padding: '3px 10px', borderRadius: 4, background: 'transparent', color: T.red, border: `1px solid ${T.red}55`, fontFamily: 'inherit', fontWeight: 700, cursor: 'pointer' }}>
+            Hang up{activeDeviceMode ? ` (${activeDeviceMode})` : ''}
+          </button>
+        )}
+
         {toast && (
           <span style={{ marginLeft: 'auto', fontSize: 11, color: toast.kind === 'ok' ? T.green : T.red }}>{toast.msg}</span>
         )}
@@ -932,21 +1059,27 @@ function LiveCallsBoard({ canMonitor }: { canMonitor: boolean }) {
                     <span style={{ color: c.monitorable ? T.green : T.amber, textTransform: 'uppercase', letterSpacing: '0.05em' }}>● {stateLabel}</span>
                   </div>
                 </div>
-                <div style={{ display: 'flex', gap: 6 }}>
+                <div style={{ display: 'flex', gap: 12 }}>
                   {MODE_META.map(m => {
-                    const busy = busyKey === `${c.key}:${m.mode}`
-                    const disabled = !!busyKey || !c.monitorable
+                    const handsetBusy = busyKey === `${c.key}:${m.mode}:handset`
+                    const deviceBusy  = busyKey === `${c.key}:${m.mode}:device`
+                    const baseDisabled = !!busyKey || !c.monitorable
                     return (
-                      <button key={m.mode} onClick={() => spy(c, m.mode)} disabled={disabled}
-                        title={c.monitorable ? m.hint : 'Available once the call connects'}
-                        style={{
-                          padding: '5px 12px', borderRadius: 5, fontSize: 11, fontFamily: 'inherit', fontWeight: 600,
-                          background: 'transparent', color: disabled ? T.text3 : m.color,
-                          border: `1px solid ${disabled ? T.border2 : `${m.color}55`}`,
-                          cursor: disabled ? 'default' : 'pointer', opacity: c.monitorable ? 1 : 0.5,
-                        }}>
-                        {busy ? '…' : m.label}
-                      </button>
+                      <div key={m.mode} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3 }}>
+                        <div style={{ fontSize: 9, color: T.text3, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.08em' }}>{m.label}</div>
+                        <div style={{ display: 'flex', gap: 4 }}>
+                          <button onClick={() => spy(c, m.mode, 'handset')} disabled={baseDisabled}
+                            title={c.monitorable ? `${m.hint} — rings your deskphone` : 'Available once the call connects'}
+                            style={modeBtn(m.color, baseDisabled, c.monitorable)}>
+                            {handsetBusy ? '…' : '☎ Handset'}
+                          </button>
+                          <button onClick={() => spy(c, m.mode, 'device')} disabled={baseDisabled}
+                            title={c.monitorable ? `${m.hint} — streams to this browser` : 'Available once the call connects'}
+                            style={modeBtn(m.color, baseDisabled, c.monitorable)}>
+                            {deviceBusy ? '…' : '💻 Device'}
+                          </button>
+                        </div>
+                      </div>
                     )
                   })}
                 </div>
@@ -957,6 +1090,17 @@ function LiveCallsBoard({ canMonitor }: { canMonitor: boolean }) {
       )}
     </div>
   )
+}
+
+// Shared style for Listen/Whisper/Barge mode buttons (used by both Handset & Device variants).
+function modeBtn(color: string, disabled: boolean, monitorable: boolean): React.CSSProperties {
+  return {
+    padding: '4px 9px', borderRadius: 4, fontSize: 10, fontFamily: 'inherit', fontWeight: 600,
+    background: 'transparent', color: disabled ? '#545968' : color,
+    border: `1px solid ${disabled ? 'rgba(255,255,255,0.12)' : `${color}55`}`,
+    cursor: disabled ? 'default' : 'pointer', opacity: monitorable ? 1 : 0.5,
+    whiteSpace: 'nowrap',
+  }
 }
 
 type Preset = 'today' | 'yesterday' | 'week' | 'month' | 'custom'
