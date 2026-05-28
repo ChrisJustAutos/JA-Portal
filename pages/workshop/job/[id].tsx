@@ -240,7 +240,18 @@ export default function JobCardPage({ user }: { user: PortalUserSSR }) {
                       {jobTypeLabel(b.job_type)} · {fmtDateTime(b.starts_at)}{b.ends_at ? `–${fmtDateTime(b.ends_at)}` : ''}{b.technician_ext ? ` · Ext ${b.technician_ext}` : ''}
                     </div>
                     {b.pickup_at && <div style={{ fontSize: 12, color: T.amber, marginTop: 4, fontWeight: 600 }}>🕑 Collection: {fmtDateTime(b.pickup_at)}</div>}
-                    {b.description && <div style={{ fontSize: 13, color: T.text, marginTop: 8 }}>{b.description}</div>}
+                    {b.description && (
+                      <div style={{ marginTop: 10, padding: '10px 12px', background: T.bg3, border: `1px solid ${T.border}`, borderRadius: 6 }}>
+                        <div style={{ fontSize: 10, color: T.text3, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 6 }}>Job checklist · also shown on invoice</div>
+                        <div style={{ fontSize: 13, color: T.text, whiteSpace: 'pre-wrap', lineHeight: 1.5 }}>
+                          {b.description.split(/\r?\n/).map((line: string, i: number) => {
+                            const trimmed = line.trim()
+                            if (!trimmed) return <div key={i} style={{ height: 4 }} />
+                            return <div key={i} style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}><span style={{ color: T.text3, marginTop: 1 }}>☐</span><span style={{ flex: 1 }}>{trimmed}</span></div>
+                          })}
+                        </div>
+                      </div>
+                    )}
                   </div>
                   <div style={{ textAlign: 'right' }}>
                     <StatusPill status={b.status} />

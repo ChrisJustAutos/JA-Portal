@@ -176,7 +176,7 @@ export async function createJobInvoiceInMyob(bookingId: string, performedBy: str
 
   const { data: booking, error: bErr } = await c
     .from('workshop_bookings')
-    .select('id, status, customer_id, myob_invoice_uid, customer:workshop_customers(id, name, myob_uid)')
+    .select('id, status, customer_id, description, myob_invoice_uid, customer:workshop_customers(id, name, myob_uid)')
     .eq('id', bookingId)
     .maybeSingle()
   if (bErr) throw new Error(`Job load failed: ${bErr.message}`)
@@ -259,7 +259,10 @@ export async function createJobInvoiceInMyob(bookingId: string, performedBy: str
     Subtotal: subtotal,
     TotalTax: totalTax,
     TotalAmount: totalAmount,
-    Comment: `Workshop job ${bookingId} — via JA Portal`,
+    // Comment shows on the customer-facing invoice — put the work-done
+    // description there so the same narrative the mechanic sees as a checklist
+    // is what the customer reads. Falls back to a generic tag if blank.
+    Comment: String((booking as any).description || `Workshop job ${bookingId} — via JA Portal`).substring(0, 255),
     JournalMemo: `Workshop job ${bookingId}`.substring(0, 255),
   }
   if (settings.tracking_category_uid) body.Category = { UID: settings.tracking_category_uid }

@@ -650,6 +650,33 @@ function BookingModal({ initial, techs, canEdit, onClose, onSaved }: {
   const [splitFinish, setSplitFinish] = useState<string>(() => hhmmPlus(initial.ends_at ? bneTimeStr(initial.ends_at) : '10:00', 60))
   const [splitting, setSplitting] = useState(false)
 
+  // Imported job-type presets (294 from MD). Picking one fills the description
+  // (= the checklist on the job card + the work narrative on the invoice) and,
+  // after save, copies the labour + parts template lines onto the booking.
+  const [presets, setPresets] = useState<Array<{ id: string; name: string; description: string | null; default_duration_min: number | null }>>([])
+  const [applyPresetId, setApplyPresetId] = useState<string>('')
+  useEffect(() => {
+    let alive = true
+    fetch('/api/workshop/job-types').then(r => r.json()).then(d => {
+      if (!alive) return
+      setPresets((d.jobTypes || []).filter((t: any) => t.active).map((t: any) => ({ id: t.id, name: t.name, description: t.description, default_duration_min: t.default_duration_min })))
+    }).catch(() => undefined)
+    return () => { alive = false }
+  }, [])
+  function pickPreset(id: string) {
+    setApplyPresetId(id)
+    if (!id) return
+    const p = presets.find(x => x.id === id)
+    if (!p?.description) return
+    const jt = String(p.description).trim()
+    setDescription(prev => {
+      const cur = (prev || '').trim()
+      if (!cur) return jt
+      if (cur.includes(jt)) return cur
+      return `${cur}\n\n${jt}`
+    })
+  }
+
   async function doSplit() {
     setSplitting(true); setErr('')
     const sIso = isoFromBne(ymd, splitStart)
@@ -683,6 +710,19 @@ function BookingModal({ initial, techs, canEdit, onClose, onSaved }: {
         : await fetch(`/api/workshop/bookings/${initial.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
       const d = await r.json()
       if (!r.ok) { setErr(d.error || d.message || 'Save failed'); return }
+      // If the user picked a job-type preset, copy its labour + parts lines now
+      // that we have a booking id. Description was already saved above so pass
+      // lines_only to avoid touching it again.
+      if (applyPresetId) {
+        const bookingId = isNew ? (d.id || d.booking?.id) : initial.id
+        if (bookingId) {
+          await fetch(`/api/workshop/job-types/${applyPresetId}/apply`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ booking_id: bookingId, lines_only: true }),
+          }).catch(() => undefined)
+        }
+      }
       onSaved()
     } catch (e: any) { setErr(e?.message || 'Save failed') } finally { setSaving(false) }
   }
@@ -724,8 +764,8 @@ function BookingModal({ initial, techs, canEdit, onClose, onSaved }: {
           </div>
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 120px', gap: 8 }}>
-            <Field label="Job type">
-              <select value={jobType} disabled={!canEdit} onChange={e => setJobType(e.target.value)} style={inp}>
+            <Field label="Category">
+              <select value={jobType} disabled={!canEdit} onChange={e => setJobType(e.target.value)} style={inp} title="Diary category for colour-coding and reporting">
                 {JOB_TYPES.map(j => <option key={j.value} value={j.value}>{j.label}</option>)}
               </select>
             </Field>
@@ -733,7 +773,17 @@ function BookingModal({ initial, techs, canEdit, onClose, onSaved }: {
               <input value={estValue} disabled={!canEdit} inputMode="decimal" onChange={e => setEstValue(e.target.value)} placeholder="$" style={inp} />
             </Field>
           </div>
-          <Field label="Description"><textarea value={description} disabled={!canEdit} onChange={e => setDescription(e.target.value)} rows={2} placeholder="Work to be done…" style={{ ...inp, resize: 'vertical' }} /></Field>
+          {presets.length > 0 && (
+            <Field label="Apply job type (fills description + lines)">
+              <select value={applyPresetId} disabled={!canEdit} onChange={e => pickPreset(e.target.value)} style={inp} title="Pick a preset to fill in the work-done description and invoice line items">
+                <option value="">— pick one —</option>
+                {presets.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+              </select>
+            </Field>
+          )}
+          <Field label="Description (work to do — shows on job card + invoice)">
+            <textarea value={description} disabled={!canEdit} onChange={e => setDescription(e.target.value)} rows={4} placeholder="Work to be done…" style={{ ...inp, resize: 'vertical', whiteSpace: 'pre-wrap', fontFamily: 'inherit' }} />
+          </Field>
 
           <Field label="Status">
             <select value={status} disabled={!canEdit} onChange={e => setStatus(e.target.value as BookingStatus)} style={inp}>
