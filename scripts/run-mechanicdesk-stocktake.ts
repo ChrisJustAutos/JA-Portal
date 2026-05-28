@@ -472,16 +472,82 @@ async function runRecheck(client: MdClient, stocktakeId: string, results: MatchR
   await notifySlack(`Recheck: synced counts from MD stocktake — ${updated} updated (${changed} changed), ${added} new · then coverage`, false)
 }
 
-// Refresh: re-read the current MD system qty (total on hand) for every already
-// matched row, without redoing the SKU match. Updates md_current_qty (+ bin/
-// location) in place and saves match_results back.
+// Detect "non-stock" flag from an MD stock object. MD doesn't document the
+// exact field, so we accept any of the likely names. Logs the inferred call.
+function detectNonStock(raw: any): boolean {
+  if (raw == null) return false
+  const truthy = (v: any) => v === true || v === 'true' || v === 1 || v === '1' || v === 'Y' || v === 'y'
+  if (truthy(raw.non_stock) || truthy(raw.is_non_stock) || truthy(raw.is_non_stock_item)
+      || truthy(raw.non_stock_item) || truthy(raw.do_not_track) || truthy(raw.non_inventoried)) return true
+  if (raw.track_inventory === false || raw.tracked === false || raw.inventoried === false) return true
+  return false
+}
+
+// Refresh: pulls MD Stock Value for bulk qty refresh on matched rows. For
+// matched rows that AREN'T in the Stock Value universe, hits MD per-item to
+// figure out why — non-stock (removed in MD), deleted, or just zero. Non-stock
+// + deleted rows are dropped from match_results; zero-stock items stay but
+// with md_current_qty set to 0.
 async function runRefresh(client: MdClient, results: MatchResultEntry[]): Promise<void> {
   log('Refresh: pulling MD Stock Value for current total system qty…')
-  const universe = await fetchInStockUniverse(client, { log })
+  let sample: any = null
+  const universe = await fetchInStockUniverse(client, { log, onSample: r => { sample = r } })
   const updated = applyTotalQty(results, universe)
-  await patchUpload({ match_results: results, matched_at: new Date().toISOString() })
-  log(`Refresh: updated system qty on ${updated} matched items from Stock Value (${universe.length} in stock)`)
-  await notifySlack(`Refresh: updated system qty on ${updated} matched items from Stock Value`, false)
+  const universeBySku = new Set<string>()
+  for (const u of universe) if (u.stock_number) universeBySku.add(normSku(u.stock_number))
+
+  // Anything matched but absent from /stocks.json — could be non-stock (which
+  // MD's Stock Value report omits by design), deleted, or genuinely 0-on-hand.
+  // Resolve with per-item lookups.
+  const orphans = results.filter(r => r.status === 'matched' && !universeBySku.has(normSku(r.md_stock_number || r.sku)))
+  log(`Refresh: ${orphans.length} matched rows not in Stock Value — checking each via resource_search…`)
+
+  let firstOrphanFieldsLogged = false
+  const removedRowNums = new Set<number>()
+  let removedNonStock = 0
+  let removedDeleted = 0
+  let zeroedOut = 0
+  let lookupErrors = 0
+  const CONCURRENCY = 4
+  let nextIdx = 0
+  async function worker() {
+    while (true) {
+      const i = nextIdx++
+      if (i >= orphans.length) return
+      const r = orphans[i]
+      try {
+        const lookup = await findStockBySku(client, r.md_stock_number || r.sku)
+        if (lookup.kind === 'not_found') {
+          removedRowNums.add(r.row_number); removedDeleted++
+          continue
+        }
+        const st: any = lookup.stock || (lookup.candidates && lookup.candidates[0])
+        if (!firstOrphanFieldsLogged && st) {
+          firstOrphanFieldsLogged = true
+          log(`  refresh: sample orphan MD stock fields = ${Object.keys(st).join(', ')}`)
+        }
+        if (st && detectNonStock(st)) {
+          removedRowNums.add(r.row_number); removedNonStock++
+          continue
+        }
+        // Item still tracked but missing from Stock Value → 0 on hand.
+        if (st) { r.md_current_qty = typeof st.quantity === 'number' ? st.quantity : 0; zeroedOut++ }
+      } catch (e: any) {
+        lookupErrors++
+        log(`  refresh check "${r.sku}" failed: ${(e?.message || String(e)).slice(0, 120)}`)
+      }
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(CONCURRENCY, orphans.length) }, () => worker()))
+
+  const kept = results.filter(r => !removedRowNums.has(r.row_number))
+  await patchUpload({ match_results: kept, matched_at: new Date().toISOString() })
+
+  log(`Refresh: qty updated on ${updated} from Stock Value; ${zeroedOut} zeroed out; removed ${removedNonStock} non-stock + ${removedDeleted} deleted (lookup errors: ${lookupErrors})`)
+  await notifySlack(
+    `Refresh: ${updated} updated · ${zeroedOut} zeroed · removed ${removedNonStock} non-stock${removedDeleted ? ` + ${removedDeleted} deleted` : ''}${lookupErrors ? ` · ${lookupErrors} lookup errors` : ''}`,
+    false,
+  )
 }
 
 // ── Push mode ─────────────────────────────────────────────────────────

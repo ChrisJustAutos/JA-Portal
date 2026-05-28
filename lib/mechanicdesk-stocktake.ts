@@ -36,6 +36,10 @@ export interface MdStock {
   average_buy_price?: number
   location?: string | null
   bin?: string | null
+  // Free-form passthrough so callers can sniff for fields like
+  // non_stock / is_non_stock / track_inventory that aren't documented but
+  // come back from MD's API. See detectNonStock() in the stocktake worker.
+  [key: string]: any
 }
 
 export interface MdResourceSearchResponse {
