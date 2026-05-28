@@ -135,6 +135,7 @@ export default function StocktakeDetailPage({ user }: { user: SessionUser }) {
   const [deleting, setDeleting] = useState(false)
   const [filter, setFilter] = useState<'all' | 'matched' | 'unmatched' | 'variance'>('all')
   const [sheetFilter, setSheetFilter] = useState<string>('all')
+  const [search, setSearch] = useState('')
   const [exportCols, setExportCols] = useState<string[]>(MATCH_COLS.map(c => c.key))
   const [colsOpen, setColsOpen] = useState(false)
   const [rechecking, setRechecking] = useState(false)
@@ -308,14 +309,14 @@ export default function StocktakeDetailPage({ user }: { user: SessionUser }) {
   const filteredResults = useMemo(() => {
     if (!upload?.match_results) return []
     let rows = upload.match_results
-    if (sheetFilter !== 'all') {
-      rows = rows.filter(r => r.sheet_name === sheetFilter)
-    }
-    if (filter === 'matched') return rows.filter(r => r.status === 'matched')
-    if (filter === 'unmatched') return rows.filter(r => r.status !== 'matched')
-    if (filter === 'variance') return rows.filter(r => { const v = rowVariance(r); return v !== null && v !== 0 })
+    if (sheetFilter !== 'all') rows = rows.filter(r => r.sheet_name === sheetFilter)
+    if (filter === 'matched') rows = rows.filter(r => r.status === 'matched')
+    else if (filter === 'unmatched') rows = rows.filter(r => r.status !== 'matched')
+    else if (filter === 'variance') rows = rows.filter(r => { const v = rowVariance(r); return v !== null && v !== 0 })
+    const q = search.trim().toLowerCase()
+    if (q) rows = rows.filter(r => [r.sku, r.md_stock_number, r.md_stock_name, r.md_bin, r.md_location].some(v => String(v || '').toLowerCase().includes(q)))
     return rows
-  }, [upload, filter, sheetFilter])
+  }, [upload, filter, sheetFilter, search])
 
   // Count-vs-system reconciliation across matched rows (respects the sheet
   // filter so the strip lines up with what's shown). Drives the summary
@@ -494,6 +495,11 @@ export default function StocktakeDetailPage({ user }: { user: SessionUser }) {
                       Match results
                     </h2>
                     <div style={{display:'flex', gap:6, alignItems:'center', flexWrap:'wrap'}}>
+                      <div style={{ position:'relative' }}>
+                        <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search SKU / name / bin…"
+                          style={{ padding:'4px 22px 4px 9px', borderRadius:4, fontSize:11, width:180, background:T.bg3, color:T.text, border:`1px solid ${T.border2}`, fontFamily:'inherit', outline:'none' }} />
+                        {search && <button onClick={() => setSearch('')} title="Clear" style={{ position:'absolute', right:4, top:'50%', transform:'translateY(-50%)', background:'none', border:'none', color:T.text3, cursor:'pointer', fontSize:13, lineHeight:1, padding:0 }}>×</button>}
+                      </div>
                       {hasSheetNames && sheetNames.length > 1 && (
                         <select
                           value={sheetFilter}
