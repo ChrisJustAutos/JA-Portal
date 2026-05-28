@@ -127,10 +127,28 @@ async function run(db: SupabaseClient, rows: MappedRow[]): Promise<any> {
 
   const updates: any[] = []
   const inserts: any[] = []
-  const summary = { matched_by_mobile: 0, matched_by_email: 0, matched_by_name: 0, already_linked: 0, inserted: 0, updated: 0, errors: 0 }
+  const summary = {
+    matched_by_mobile: 0, matched_by_email: 0, matched_by_name: 0,
+    already_linked: 0, duplicate_in_file: 0, inserted: 0, updated: 0,
+    errors: 0, first_error: null as string | null,
+  }
+
+  // Track every md_id we've classified in THIS run so a duplicate Customer ID
+  // appearing later in the same file doesn't double-classify (which would put
+  // two rows with the same md_id into the inserts pool and crash the whole
+  // batch on the unique index).
+  const seenInRun = new Set<string>(alreadyLinked)
 
   for (const r of rows) {
-    if (alreadyLinked.has(r.md_id)) { summary.already_linked++; continue }
+    if (!r.md_id) continue
+    if (seenInRun.has(r.md_id)) {
+      // Already linked in DB OR already seen earlier in this file
+      if (alreadyLinked.has(r.md_id)) summary.already_linked++
+      else summary.duplicate_in_file++
+      continue
+    }
+    seenInRun.add(r.md_id)
+
     const nMobile = normMobile(r.mobile) || normMobile(r.phone)
     const nEmail = normEmail(r.email)
     const nName = normName(r.name)
@@ -166,7 +184,6 @@ async function run(db: SupabaseClient, rows: MappedRow[]): Promise<any> {
       if (mm) byMobile.delete(mm)
       if (em) byEmail.delete(em)
       if (nm) byName.delete(nm)
-      alreadyLinked.add(r.md_id)
     } else {
       inserts.push(r)
     }
@@ -175,13 +192,21 @@ async function run(db: SupabaseClient, rows: MappedRow[]): Promise<any> {
   for (let i = 0; i < updates.length; i += 500) {
     const batch = updates.slice(i, i + 500)
     const { error } = await db.from('workshop_customers').upsert(batch, { onConflict: 'id' })
-    if (error) { summary.errors += batch.length; continue }
+    if (error) {
+      summary.errors += batch.length
+      if (!summary.first_error) summary.first_error = `update batch @${i}: ${error.message}`
+      continue
+    }
     summary.updated += batch.length
   }
   for (let i = 0; i < inserts.length; i += 500) {
     const batch = inserts.slice(i, i + 500)
     const { error } = await db.from('workshop_customers').insert(batch)
-    if (error) { summary.errors += batch.length; continue }
+    if (error) {
+      summary.errors += batch.length
+      if (!summary.first_error) summary.first_error = `insert batch @${i}: ${error.message}`
+      continue
+    }
     summary.inserted += batch.length
   }
   return summary
