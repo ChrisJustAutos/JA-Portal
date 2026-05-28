@@ -76,7 +76,7 @@ export default function SettingsPage({ user }: { user: PortalUserSSR }) {
     { id: 'connections', label: 'Connections',        adminOnly: true,  icon: 'stripe-myob',   accent: T.teal,   desc: 'Integration health & MYOB' },
     { id: 'data-imports',label: 'Data Imports',       adminOnly: true,  icon: 'stocktake',     accent: T.purple, desc: 'Bulk imports & uploads' },
     { id: 'workshop',    label: 'Workshop',           adminOnly: true,  icon: 'diary',         accent: T.teal,   desc: 'Technicians, documents, invoicing & SMS' },
-    { id: 'md-imports',  label: 'MD Imports',         adminOnly: true,  icon: 'stocktake',     accent: T.amber,  desc: 'Bring MechanicDesk data into the portal — customers, job types, vehicles…' },
+    { id: 'md-imports',  label: 'Imports',            adminOnly: true,  icon: 'stocktake',     accent: T.amber,  desc: 'Upload customers, job types, vehicles, inventory, quotes & invoices from a spreadsheet' },
     { id: 'vin-codes',   label: 'VIN Codes',          adminOnly: true,  icon: 'vehicle-sales', accent: T.amber,  desc: 'VIN prefix → model code rules' },
     { id: 'backfill',    label: 'Backfill',           adminOnly: true,  icon: 'jobs',          accent: T.teal,   desc: 'Orders ↔ quotes backfill' },
     { id: 'users',       label: 'Users',              adminOnly: true,  icon: 'team',          accent: T.blue,   desc: 'Invite, roles & tab access' },

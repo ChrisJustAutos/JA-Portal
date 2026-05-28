@@ -10,8 +10,8 @@ const str = (v: any) => (v == null ? '' : String(v).trim())
 const numOr = (v: any, d: number) => { const n = Number(v); return isFinite(n) ? n : d }
 
 const FIELDS: ImportField[] = [
-  { id: 'md_id',           label: 'MD Invoice ID',    aliases: ['Invoice ID', 'InvoiceID', 'Invoice Number', 'Number'], required: true },
-  { id: 'customer_md_id',  label: 'Customer MD ID',   aliases: ['Customer ID', 'CustomerID'] },
+  { id: 'md_id',           label: 'External Invoice ID',  aliases: ['Invoice ID', 'InvoiceID', 'Invoice Number', 'Number', 'External ID'], required: true, hint: 'Unique row ID from your source system' },
+  { id: 'customer_md_id',  label: 'Customer (external ID)', aliases: ['Customer ID', 'CustomerID'], hint: 'Attaches the invoice to a customer imported earlier' },
   { id: 'status',          label: 'Status',           aliases: ['Status', 'Payment Status'] },
   { id: 'subtotal',        label: 'Subtotal ex GST',  aliases: ['Subtotal', 'Sub Total'] },
   { id: 'gst',             label: 'GST',              aliases: ['GST', 'Tax'] },
@@ -82,5 +82,5 @@ export const INVOICES_CONFIG: ImportTypeConfig = {
   fields: FIELDS,
   normalize,
   run,
-  blurb: 'Header-only invoice import (no line items yet). Links to customers via MD Customer ID. Skips already-imported MD invoice IDs.',
+  blurb: 'Header-only invoice import (no line items yet). Links to customers via external customer ID. Skips already-imported invoice IDs.',
 }

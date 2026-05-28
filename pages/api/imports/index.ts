@@ -1,17 +1,15 @@
 // pages/api/imports/index.ts
-// MD imports — list + create (parse) endpoints.
 //   GET   — list recent imports (admin)
-//   POST  — { type, filename, rows: MappedRow[] } → normalise + store as 'parsed'
-//
-// Client parses the .xls with SheetJS, applies the user's column mapping, and
-// posts pre-mapped rows here. Server just normalises (cleanup) and stores.
+//   POST  — { type, filename, rows: MappedRow[], chunk_count } — uploads
+//           the FIRST chunk and creates the import row in status 'uploading'.
+//           Returns the new id. Remaining chunks go to /chunk; finalize ends.
 
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
 import { withAuth } from '../../../lib/authServer'
 import { roleHasPermission } from '../../../lib/permissions'
-import { getImporter, IMPORTER_TYPES } from '../../../lib/md-importers'
+import { IMPORTER_TYPES } from '../../../lib/md-importers'
 
-export const config = { maxDuration: 60, api: { bodyParser: { sizeLimit: '40mb' } } }
+export const config = { maxDuration: 60, api: { bodyParser: { sizeLimit: '4mb' } } }
 
 function sb(): SupabaseClient {
   return createClient(
@@ -41,20 +39,22 @@ export default withAuth('view:diary', async (req, res, user) => {
 
     const type = String(body.type || '')
     if (!IMPORTER_TYPES.includes(type as any)) return res.status(400).json({ error: `Unsupported type. Use one of: ${IMPORTER_TYPES.join(', ')}` })
-    const importer = getImporter(type)!
     const filename = String(body.filename || 'upload.xls').slice(0, 200)
     const rows = Array.isArray(body.rows) ? body.rows : null
-    if (!rows) return res.status(400).json({ error: 'rows (array of mapped rows) required' })
+    if (!rows) return res.status(400).json({ error: 'rows (array) required' })
+    const chunkCount = Math.max(1, Number(body.chunk_count) || 1)
 
-    const { rows: normalized, summary } = importer.normalize(rows)
+    const { data: created, error: createErr } = await db.from('md_imports').insert({
+      type, filename, uploaded_by: user.id, status: 'uploading',
+      parsed_summary: { expected_chunks: chunkCount },
+    }).select('id').single()
+    if (createErr) return res.status(500).json({ error: createErr.message })
+    const importId = created!.id as string
 
-    const { data, error } = await db.from('md_imports').insert({
-      type, filename, uploaded_by: user.id, status: 'parsed',
-      parsed_summary: summary, parsed_data: normalized,
-    }).select('id, parsed_summary').single()
-    if (error) return res.status(500).json({ error: error.message })
+    const { error: chunkErr } = await db.from('md_import_chunks').insert({ import_id: importId, chunk_index: 0, rows })
+    if (chunkErr) return res.status(500).json({ error: 'chunk 0: ' + chunkErr.message })
 
-    return res.status(201).json({ id: data!.id, parsed_summary: (data as any).parsed_summary })
+    return res.status(201).json({ id: importId, chunk_count: chunkCount })
   }
 
   res.setHeader('Allow', 'GET, POST')

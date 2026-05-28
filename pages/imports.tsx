@@ -54,8 +54,8 @@ export default function ImportsPage() {
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', marginBottom: 22, gap: 16, flexWrap: 'wrap' }}>
             <div>
               <Link href="/settings" style={{ fontSize: 11, color: T.text3, textDecoration: 'none', fontFamily: 'monospace' }}>← Settings</Link>
-              <h1 style={{ fontSize: 22, fontWeight: 600, margin: '6px 0 2px' }}>MD Imports</h1>
-              <div style={{ fontSize: 12, color: T.text3 }}>Bring MechanicDesk data in. Drop a file, pick the sheet, confirm which column maps to which field, run.</div>
+              <h1 style={{ fontSize: 22, fontWeight: 600, margin: '6px 0 2px' }}>Imports</h1>
+              <div style={{ fontSize: 12, color: T.text3 }}>Drop a spreadsheet, pick the sheet, confirm which column maps to which field, then run.</div>
             </div>
             <button onClick={() => { setRefreshing(true); reload().finally(() => setRefreshing(false)) }} style={btn(false)}>{refreshing ? '↻ Refreshing…' : '↻ Refresh'}</button>
           </div>
@@ -95,6 +95,7 @@ type Step = 'idle' | 'sheet' | 'mapping' | 'preview' | 'result'
 function ImportFlow({ meta, onComplete }: { meta: TypeMeta; onComplete: () => void }) {
   const [step, setStep] = useState<Step>('idle')
   const [busy, setBusy] = useState(false)
+  const [progress, setProgress] = useState('')
   const [err, setErr] = useState('')
   const [file, setFile] = useState<File | null>(null)
   const [wb, setWb] = useState<XLSX.WorkBook | null>(null)
@@ -107,7 +108,7 @@ function ImportFlow({ meta, onComplete }: { meta: TypeMeta; onComplete: () => vo
   const fileRef = useRef<HTMLInputElement>(null)
 
   function reset() {
-    setStep('idle'); setBusy(false); setErr('')
+    setStep('idle'); setBusy(false); setProgress(''); setErr('')
     setFile(null); setWb(null); setSheetName(''); setColumns([]); setSampleRows([])
     setMapping({}); setPreview(null); setResult(null)
   }
@@ -153,10 +154,9 @@ function ImportFlow({ meta, onComplete }: { meta: TypeMeta; onComplete: () => vo
 
   async function submitMapping() {
     if (!wb || !sheetName) return
-    // Check required fields are mapped.
     const missing = meta.fields.filter(f => f.required && !mapping[f.id])
     if (missing.length) { setErr(`Required field${missing.length > 1 ? 's' : ''} not mapped: ${missing.map(f => f.label).join(', ')}.`); return }
-    setBusy(true); setErr('')
+    setBusy(true); setErr(''); setProgress('Reading rows…')
     try {
       const sheet = wb.Sheets[sheetName]
       const raw = XLSX.utils.sheet_to_json(sheet, { defval: null }) as any[]
@@ -168,17 +168,46 @@ function ImportFlow({ meta, onComplete }: { meta: TypeMeta; onComplete: () => vo
         }
         return out
       })
-      const r = await fetch('/api/imports', {
+
+      // Chunked upload — Vercel's request-body limit is ~4.5MB, so split.
+      const CHUNK = 1500
+      const chunkCount = Math.max(1, Math.ceil(mapped.length / CHUNK))
+      setProgress(`Uploading 1 / ${chunkCount} chunks (${mapped.length} rows)…`)
+
+      const r0 = await fetch('/api/imports', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ type: meta.id, filename: file?.name || 'upload.xls', rows: mapped }),
+        body: JSON.stringify({ type: meta.id, filename: file?.name || 'upload.xls', rows: mapped.slice(0, CHUNK), chunk_count: chunkCount }),
       })
-      const d = await r.json()
-      if (!r.ok) { setErr(d.error || 'Parse failed'); return }
-      setPreview({ id: d.id, summary: d.parsed_summary })
+      const d0 = await safeJson(r0)
+      if (!r0.ok) { setErr(d0?.error || `Upload failed (HTTP ${r0.status})`); return }
+      const importId = d0.id
+
+      for (let i = 1; i < chunkCount; i++) {
+        setProgress(`Uploading ${i + 1} / ${chunkCount} chunks…`)
+        const r = await fetch(`/api/imports/${importId}/chunk`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ chunk_index: i, rows: mapped.slice(i * CHUNK, (i + 1) * CHUNK) }),
+        })
+        if (!r.ok) { const e = await safeJson(r); setErr(e?.error || `Chunk ${i + 1} failed (HTTP ${r.status})`); return }
+      }
+
+      setProgress('Finalising…')
+      const rf = await fetch(`/api/imports/${importId}/finalize`, { method: 'POST' })
+      const df = await safeJson(rf)
+      if (!rf.ok) { setErr(df?.error || `Finalise failed (HTTP ${rf.status})`); return }
+      setPreview({ id: importId, summary: df.parsed_summary })
       setStep('preview')
-    } catch (e: any) { setErr(e?.message || 'Parse failed') }
-    finally { setBusy(false) }
+    } catch (e: any) { setErr(e?.message || 'Upload failed') }
+    finally { setBusy(false); setProgress('') }
+  }
+
+  async function safeJson(r: Response): Promise<any> {
+    try { return await r.clone().json() } catch {
+      const text = await r.text().catch(() => '')
+      return { error: text ? `Server returned non-JSON: ${text.substring(0, 200)}` : `HTTP ${r.status}` }
+    }
   }
 
   async function runImport() {
@@ -266,10 +295,11 @@ function ImportFlow({ meta, onComplete }: { meta: TypeMeta; onComplete: () => vo
             </details>
           )}
 
-          <div style={{ display: 'flex', gap: 8 }}>
-            <button onClick={submitMapping} disabled={busy} style={btn(true)}>{busy ? 'Parsing…' : 'Continue → Preview'}</button>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <button onClick={submitMapping} disabled={busy} style={btn(true)}>{busy ? 'Uploading…' : 'Continue → Preview'}</button>
             <button onClick={() => setStep('sheet')} disabled={busy} style={btn(false)}>← Back</button>
             <button onClick={reset} disabled={busy} style={btn(false)}>Start over</button>
+            {busy && progress && <span style={{ fontSize: 11, color: T.text3, marginLeft: 8 }}>{progress}</span>}
           </div>
         </div>
       )}

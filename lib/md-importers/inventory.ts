@@ -13,7 +13,7 @@ const numOr = (v: any, d: number) => { const n = Number(v); return isFinite(n) ?
 const normSku = (v: any) => String(v || '').trim().toUpperCase()
 
 const FIELDS: ImportField[] = [
-  { id: 'md_id',         label: 'MD Stock ID',   aliases: ['Stock ID', 'StockID', 'MD ID'], required: true },
+  { id: 'md_id',         label: 'External Stock ID',   aliases: ['Stock ID', 'StockID', 'External ID', 'Source ID'], required: true, hint: 'Unique row ID from your source system' },
   { id: 'sku',           label: 'SKU',           aliases: ['Stock Number', 'SKU', 'Part Number', 'Code'] },
   { id: 'part_name',     label: 'Part name',     aliases: ['Name', 'Part Name', 'Description', 'Item'], required: true },
   { id: 'category',      label: 'Category',      aliases: ['Category', 'Group'] },
@@ -109,5 +109,5 @@ export const INVENTORY_CONFIG: ImportTypeConfig = {
   fields: FIELDS,
   normalize,
   run,
-  blurb: 'Inventory rows match existing on MD Stock ID, then SKU. Buy/sell prices + on-hand qty update on match. Defaults allocated/on_order to 0.',
+  blurb: 'Inventory rows match existing on External Stock ID, then SKU. Buy/sell prices + on-hand qty update on match. Defaults allocated/on-order to 0.',
 }

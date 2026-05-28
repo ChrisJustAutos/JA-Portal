@@ -11,8 +11,8 @@ const numOr = (v: any, d: number) => { const n = Number(v); return isFinite(n) ?
 const normRego = (v: any) => String(v || '').replace(/\s+/g, '').toUpperCase()
 
 const FIELDS: ImportField[] = [
-  { id: 'md_id',            label: 'MD Quote ID',      aliases: ['Quote ID', 'QuoteID', 'MD ID', 'Number'], required: true },
-  { id: 'customer_md_id',   label: 'Customer MD ID',   aliases: ['Customer ID', 'CustomerID'], hint: 'Used to attach the quote to its customer' },
+  { id: 'md_id',            label: 'External Quote ID',  aliases: ['Quote ID', 'QuoteID', 'External ID', 'Number'], required: true, hint: 'Unique row ID from your source system' },
+  { id: 'customer_md_id',   label: 'Customer (external ID)', aliases: ['Customer ID', 'CustomerID'], hint: 'Attaches the quote to a customer imported earlier' },
   { id: 'vehicle_rego',     label: 'Vehicle rego',     aliases: ['Rego', 'Vehicle Rego', 'Plate'] },
   { id: 'status',           label: 'Status',           aliases: ['Status', 'State'] },
   { id: 'subtotal',         label: 'Subtotal ex GST',  aliases: ['Subtotal', 'Sub Total', 'Sub-Total Ex GST'] },
@@ -94,5 +94,5 @@ export const QUOTES_CONFIG: ImportTypeConfig = {
   fields: FIELDS,
   normalize,
   run,
-  blurb: 'Header-only quote import (no line items yet). Links to customers via MD Customer ID and vehicles via rego. Skips already-imported MD quote IDs.',
+  blurb: 'Header-only quote import (no line items yet). Links to customers via external customer ID and vehicles via rego. Skips already-imported quote IDs.',
 }

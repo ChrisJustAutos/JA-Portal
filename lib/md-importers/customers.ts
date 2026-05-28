@@ -22,7 +22,7 @@ const normEmail = (v: any) => String(v || '').trim().toLowerCase()
 const normName = (v: any) => String(v || '').trim().toLowerCase().replace(/\s+/g, ' ')
 
 const FIELDS: ImportField[] = [
-  { id: 'md_id',          label: 'MD Customer ID',  aliases: ['Customer ID', 'CustomerID', 'MD ID'], required: true },
+  { id: 'md_id',          label: 'External Customer ID', aliases: ['Customer ID', 'CustomerID', 'External ID', 'Source ID'], required: true, hint: 'Unique row ID from your source system — used to dedupe on re-import' },
   { id: 'name',           label: 'Name',            aliases: ['Name', 'Customer Name', 'Full Name'], required: true, hint: 'Falls back to First + Last if blank' },
   { id: 'first_name',     label: 'First name',      aliases: ['First Name', 'FirstName', 'Given Name'] },
   { id: 'last_name',      label: 'Last name',       aliases: ['Last Name', 'LastName', 'Surname', 'Family Name'] },
@@ -194,5 +194,5 @@ export const CUSTOMERS_CONFIG: ImportTypeConfig = {
   fields: FIELDS,
   normalize,
   run,
-  blurb: 'Customers are merged with existing rows by mobile → email → name. Unmatched rows are inserted. Third-party rows are skipped. Preserves MYOB UIDs.',
+  blurb: 'Customers merge with existing rows by mobile → email → name. Unmatched rows are inserted. Third-party rows are skipped. Preserves any existing MYOB links.',
 }

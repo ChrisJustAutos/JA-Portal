@@ -15,7 +15,7 @@ const intOr = (v: any) => { const n = parseInt(String(v ?? ''), 10); return isFi
 const normRego = (v: any) => String(v || '').replace(/\s+/g, '').toUpperCase()
 
 const FIELDS: ImportField[] = [
-  { id: 'md_id',           label: 'MD Vehicle ID',  aliases: ['Vehicle ID', 'VehicleID', 'MD ID'], required: true },
+  { id: 'md_id',           label: 'External Vehicle ID',  aliases: ['Vehicle ID', 'VehicleID', 'External ID', 'Source ID'], required: true, hint: 'Unique row ID from your source system' },
   { id: 'rego',            label: 'Rego',           aliases: ['Rego', 'Registration', 'Plate', 'Number Plate'] },
   { id: 'make',            label: 'Make',           aliases: ['Make', 'Manufacturer'] },
   { id: 'model',           label: 'Model',          aliases: ['Model'] },
@@ -26,7 +26,7 @@ const FIELDS: ImportField[] = [
   { id: 'transmission',    label: 'Transmission',   aliases: ['Transmission', 'Gearbox'] },
   { id: 'odometer',        label: 'Odometer',       aliases: ['Odometer', 'Kms', 'Mileage'] },
   { id: 'notes',           label: 'Notes',          aliases: ['Notes', 'Note', 'Description'] },
-  { id: 'customer_md_id',  label: 'Customer MD ID', aliases: ['Customer ID', 'Owner MD ID', 'CustomerID'], hint: 'Used to attach the vehicle to its customer' },
+  { id: 'customer_md_id',  label: 'Customer (external ID)', aliases: ['Customer ID', 'Owner ID', 'CustomerID'], hint: 'Matches a customer imported earlier so the vehicle gets attached to the right card' },
 ]
 
 function normalize(rows: MappedRow[]) {
@@ -126,5 +126,5 @@ export const VEHICLES_CONFIG: ImportTypeConfig = {
   fields: FIELDS,
   normalize,
   run,
-  blurb: 'Vehicles match existing rows by MD Vehicle ID, then by rego. Linked to customers by Customer MD ID — make sure to import customers first.',
+  blurb: 'Vehicles match existing rows by External Vehicle ID, then by rego. Linked to customers via their external customer ID — import customers first so the link finds a match.',
 }
