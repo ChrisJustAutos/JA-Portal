@@ -12,7 +12,7 @@ import { requirePageAuth } from '../lib/authServer'
 import { roleHasPermission } from '../lib/permissions'
 import {
   BOOKING_STATUS_META, BOOKING_STATUSES, BookingStatus,
-  vehicleLabel, customerLabel, bookingDurationMin,
+  vehicleLabel, customerLabel,
   ymdBrisbane, brisbaneDayBounds, addDaysYmd, weekStartYmd,
   JOB_TYPES, jobTypeLabel,
 } from '../lib/workshop'
@@ -68,10 +68,6 @@ function bneYmd(iso: string): string { return ymdBrisbane(new Date(iso)) }
 function isoFromBne(ymd: string, hhmm: string): string { return new Date(`${ymd}T${hhmm}:00+10:00`).toISOString() }
 function minsToHHMM(mins: number): string { return `${pad(Math.floor(mins / 60))}:${pad(mins % 60)}` }
 function hhmmPlus(hhmm: string, mins: number): string { const [h, m] = String(hhmm || '0:0').split(':').map(Number); const t = ((h * 60 + (m || 0)) + mins + 1440) % 1440; return minsToHHMM(t) }
-function topPxFor(iso: string): number {
-  const { h, m } = bneHM(iso)
-  return Math.max(0, ((h * 60 + m) - DAY_START_MIN) / SLOT_MIN * SLOT_PX)
-}
 function dayLabel(ymd: string): string {
   return new Date(`${ymd}T00:00:00+10:00`).toLocaleDateString('en-AU', { weekday: 'short', day: 'numeric', month: 'short' })
 }
@@ -90,38 +86,64 @@ function monthGridDays(ymd: string): string[] {
   const start = addDaysYmd(first, -dow)
   return Array.from({ length: 42 }, (_, i) => addDaysYmd(start, i))
 }
-function durationHours(b: { starts_at: string; ends_at: string }): number {
-  return Math.max(0, (new Date(b.ends_at).getTime() - new Date(b.starts_at).getTime()) / 3600000)
+// The visible window (7am–6pm) of a day, in epoch ms.
+function dayWindowMs(ymd: string): { winStart: number; winEnd: number } {
+  return {
+    winStart: new Date(isoFromBne(ymd, minsToHHMM(DAY_START_MIN))).getTime(),
+    winEnd: new Date(isoFromBne(ymd, minsToHHMM(DAY_START_MIN + (DAY_END_H - DAY_START_H) * 60))).getTime(),
+  }
+}
+// The slice of a (possibly multi-day) booking that falls on `ymd`, positioned
+// within that day's time grid. null if it doesn't touch this day's window.
+function daySegment(b: { starts_at: string; ends_at: string }, ymd: string):
+  { top: number; height: number; clipTop: boolean; clipBottom: boolean } | null {
+  const { winStart, winEnd } = dayWindowMs(ymd)
+  const s = new Date(b.starts_at).getTime(), e = new Date(b.ends_at).getTime()
+  if (!(e > winStart && s < winEnd)) return null
+  const segS = Math.max(s, winStart), segE = Math.min(e, winEnd)
+  const top = (segS - winStart) / 60000 / SLOT_MIN * SLOT_PX
+  const height = Math.max(SLOT_PX * 0.6, (segE - segS) / 60000 / SLOT_MIN * SLOT_PX - 2)
+  return { top, height, clipTop: s < winStart, clipBottom: e > winEnd }
+}
+function segmentHours(b: { starts_at: string; ends_at: string }, ymd: string): number {
+  const { winStart, winEnd } = dayWindowMs(ymd)
+  const s = new Date(b.starts_at).getTime(), e = new Date(b.ends_at).getTime()
+  if (!(e > winStart && s < winEnd)) return 0
+  return (Math.min(e, winEnd) - Math.max(s, winStart)) / 3600000
 }
 
-// ── Booking block (positioned in a lane) ────────────────────────────────
-function BookingBlock({ b, onClick, showTech, draggable, onDragEnd }: { b: BookingRow; onClick: () => void; showTech?: boolean; draggable?: boolean; onDragEnd?: () => void }) {
-  const top = topPxFor(b.starts_at)
-  // Clamp to the day grid so a multi-day booking fills to the bottom rather than overflowing.
-  const height = Math.max(SLOT_PX * 0.9, Math.min(GRID_PX - top, bookingDurationMin(b) / SLOT_MIN * SLOT_PX - 2))
+// ── Booking block (positioned in a lane for a given day's segment) ──────
+function BookingBlock({ b, seg, onClick, showTech, draggable, onDragEnd }: { b: BookingRow; seg: { top: number; height: number; clipTop?: boolean; clipBottom?: boolean }; onClick: () => void; showTech?: boolean; draggable?: boolean; onDragEnd?: () => void }) {
+  const { top, height } = seg
   const c = BOOKING_STATUS_META[b.status].color
   const veh = b.vehicle ? vehicleLabel(b.vehicle) : ''
   const cust = b.customer ? customerLabel(b.customer) : ''
+  const spans = seg.clipTop || seg.clipBottom
   return (
     <div
       draggable={!!draggable}
       onDragStart={draggable ? (e) => { e.dataTransfer.setData('text/plain', b.id); e.dataTransfer.effectAllowed = 'move' } : undefined}
       onDragEnd={onDragEnd}
       onClick={(e) => { e.stopPropagation(); onClick() }}
-      title={`${bneTimeStr(b.starts_at)}–${bneTimeStr(b.ends_at)} · ${cust} · ${veh}`}
+      title={`${fmtDateTimeShort(b.starts_at)} – ${fmtDateTimeShort(b.ends_at)} · ${cust} · ${veh}`}
       style={{
         position: 'absolute', top, left: 2, right: 2, height, overflow: 'hidden',
         background: `${c}1c`, borderLeft: `3px solid ${c}`, border: `1px solid ${c}44`,
-        borderRadius: 4, padding: '3px 6px', cursor: draggable ? 'grab' : 'pointer', fontSize: 11, lineHeight: 1.25,
+        borderTopLeftRadius: seg.clipTop ? 0 : 4, borderTopRightRadius: seg.clipTop ? 0 : 4,
+        borderBottomLeftRadius: seg.clipBottom ? 0 : 4, borderBottomRightRadius: seg.clipBottom ? 0 : 4,
+        padding: '3px 6px', cursor: draggable ? 'grab' : 'pointer', fontSize: 11, lineHeight: 1.25,
       }}>
       <div style={{ color: T.text, fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-        {veh || cust || 'Booking'}
+        {seg.clipTop ? '↑ ' : ''}{veh || cust || 'Booking'}{spans ? ' ⇕' : ''}
       </div>
       <div style={{ color: T.text2, fontSize: 10, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-        {bneTimeStr(b.starts_at)} · {b.description || jobTypeLabel(b.job_type) || cust || '—'}{showTech && b.technician_ext ? ` · ${b.technician_ext}` : ''}
+        {seg.clipTop ? 'cont.' : bneTimeStr(b.starts_at)} · {b.description || jobTypeLabel(b.job_type) || cust || '—'}{showTech && b.technician_ext ? ` · ${b.technician_ext}` : ''}{seg.clipBottom ? ' →' : ''}
       </div>
     </div>
   )
+}
+function fmtDateTimeShort(iso: string): string {
+  try { return new Date(iso).toLocaleString('en-AU', { weekday: 'short', hour: '2-digit', minute: '2-digit', hour12: false }) } catch { return iso }
 }
 
 // ── Page ────────────────────────────────────────────────────────────────
@@ -441,7 +463,7 @@ function DayGrid({ bookings, techs, date, hourLines, capacity, canEdit, canEditC
       {/* lanes */}
       {lanes.map(lane => {
         const laneBookings = byLane(lane.ext)
-        const booked = laneBookings.reduce((s, b) => s + durationHours(b), 0)
+        const booked = laneBookings.reduce((s, b) => s + segmentHours(b, date), 0)
         const cap = lane.ext ? (capacity[lane.ext] ?? 8) : 0
         const pct = cap > 0 ? Math.min(100, (booked / cap) * 100) : 0
         const over = cap > 0 && booked > cap
@@ -478,7 +500,7 @@ function DayGrid({ bookings, techs, date, hourLines, capacity, canEdit, canEditC
               {hourLines.map((h, i) => (
                 <div key={h} style={{ position: 'absolute', top: i * 2 * SLOT_PX, left: 0, right: 0, borderTop: `1px solid ${T.border}` }} />
               ))}
-              {laneBookings.map(b => <BookingBlock key={b.id} b={b} draggable={canEdit} onClick={() => onBooking(b)} onDragEnd={() => setDropHint(null)} />)}
+              {laneBookings.map(b => { const seg = daySegment(b, date); return seg ? <BookingBlock key={b.id} b={b} seg={seg} draggable={canEdit} onClick={() => onBooking(b)} onDragEnd={() => setDropHint(null)} /> : null })}
               {dropHint && dropHint.ext === (lane.ext || '') && (
                 <div style={{ position: 'absolute', top: dropHint.top, left: 0, right: 0, borderTop: `2px solid ${T.accent}`, pointerEvents: 'none', zIndex: 6 }}>
                   <span style={{ position: 'absolute', top: -9, left: 2, background: T.accent, color: '#fff', fontSize: 10, fontWeight: 700, padding: '1px 5px', borderRadius: 3, fontFamily: 'monospace' }}>{dropHint.label}</span>
@@ -580,7 +602,7 @@ function WeekGrid({ bookings, days, hourLines, canEdit, onDayClick, onSlotClick,
             {hourLines.map((h, i) => (
               <div key={h} style={{ position: 'absolute', top: i * 2 * SLOT_PX, left: 0, right: 0, borderTop: `1px solid ${T.border}` }} />
             ))}
-            {bookings.filter(b => bneYmd(b.starts_at) === ymd).map(b => <BookingBlock key={b.id} b={b} draggable={canEdit} onClick={() => onBooking(b)} onDragEnd={() => setDropHint(null)} showTech />)}
+            {bookings.map(b => { const seg = daySegment(b, ymd); return seg ? <BookingBlock key={b.id} b={b} seg={seg} draggable={canEdit} onClick={() => onBooking(b)} onDragEnd={() => setDropHint(null)} showTech /> : null })}
             {dropHint && dropHint.ymd === ymd && (
               <div style={{ position: 'absolute', top: dropHint.top, left: 0, right: 0, borderTop: `2px solid ${T.accent}`, pointerEvents: 'none', zIndex: 6 }}>
                 <span style={{ position: 'absolute', top: -9, left: 2, background: T.accent, color: '#fff', fontSize: 10, fontWeight: 700, padding: '1px 5px', borderRadius: 3, fontFamily: 'monospace' }}>{dropHint.label}</span>

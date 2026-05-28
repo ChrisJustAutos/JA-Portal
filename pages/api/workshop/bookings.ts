@@ -31,8 +31,10 @@ export default withAuth('view:diary', async (req, res, user) => {
                  job_type, description, internal_notes, estimated_value, span_techs, is_overdue, pickup_at,
                  customer:workshop_customers(id, name, phone, mobile),
                  vehicle:workshop_vehicles(id, rego, make, model, year)`)
-        .gte('starts_at', from)
+        // Overlap the window (not just start in it) so multi-day bookings show
+        // on every day they span.
         .lt('starts_at', to)
+        .gt('ends_at', from)
         .order('starts_at', { ascending: true }),
       db.from('workshop_technicians').select('code, name, color, daily_hours, role')
         .eq('active', true).eq('show_in_diary', true)
