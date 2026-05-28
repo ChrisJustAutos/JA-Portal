@@ -388,7 +388,7 @@ function pickStr(obj: any, keys: string[]): string | null {
  */
 export async function fetchInStockUniverse(
   client: MdClient,
-  opts: { log?: (...a: any[]) => void; maxPages?: number } = {},
+  opts: { log?: (...a: any[]) => void; maxPages?: number; onSample?: (raw: any) => void } = {},
 ): Promise<InStockItem[]> {
   const log = opts.log || (() => {})
   const maxPages = opts.maxPages || 500
@@ -404,7 +404,7 @@ export async function fetchInStockUniverse(
       break
     }
     const stocks = Array.isArray(resp?.stocks) ? resp.stocks : []
-    if (page === 1 && stocks[0]) log(`  coverage: /stocks.json item keys = ${Object.keys(stocks[0]).join(', ')}`)
+    if (page === 1 && stocks[0]) { log(`  coverage: /stocks.json item keys = ${Object.keys(stocks[0]).join(', ')}`); opts.onSample?.(stocks[0]) }
     if (stocks.length === 0) break
 
     for (const s of stocks) {

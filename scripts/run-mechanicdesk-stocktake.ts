@@ -347,7 +347,7 @@ function applyTotalQty(results: MatchResultEntry[], universe: InStockItem[]): nu
 // Pull MD's in-stock universe and store the items NOT in `counted`. `source`
 // records what the count was compared against (uploaded sheet vs live MD
 // stocktake) so the UI can show it. Pass `preUniverse` to reuse one pull.
-async function storeCoverage(client: MdClient, counted: Set<string>, source: string, preUniverse?: InStockItem[]): Promise<void> {
+async function storeCoverage(client: MdClient, counted: Set<string>, source: string, preUniverse?: InStockItem[], sampleStock?: any): Promise<void> {
   let universe = preUniverse
   if (!universe) { log('Coverage: pulling MD in-stock universe (Stock Value)…'); universe = await fetchInStockUniverse(client, { log }) }
   log(`Coverage: ${universe.length} in-stock items in MD; ${counted.size} counted`)
@@ -373,6 +373,8 @@ async function storeCoverage(client: MdClient, counted: Set<string>, source: str
       uncounted: stored,
       truncated: uncounted.length > CAP,
       source,
+      // Diagnostic: one raw MD stock object so we can confirm the qty field names.
+      sample_stock: sampleStock || null,
     },
   })
   log(`Coverage: ${uncounted.length}/${universe.length} in-stock items NOT counted ($${uncountedValue} at buy price)`)
@@ -383,12 +385,13 @@ async function storeCoverage(client: MdClient, counted: Set<string>, source: str
 // matched rows from it, then run coverage off the same pull.
 async function runMatchPostPass(client: MdClient, results: MatchResultEntry[]): Promise<void> {
   log('Match: pulling MD Stock Value to set total system qty…')
-  const universe = await fetchInStockUniverse(client, { log })
+  let sample: any = null
+  const universe = await fetchInStockUniverse(client, { log, onSample: (r) => { sample = r } })
   const n = applyTotalQty(results, universe)
   if (n > 0) { await patchUpload({ match_results: results }); log(`Match: set total system qty on ${n} matched rows from Stock Value`) }
   const counted = new Set<string>()
   for (const r of results) { if (r.md_stock_number) counted.add(normSku(r.md_stock_number)); if (r.sku) counted.add(normSku(r.sku)) }
-  await storeCoverage(client, counted, 'uploaded sheet', universe)
+  await storeCoverage(client, counted, 'uploaded sheet', universe, sample)
 }
 
 // Re-check: read what's actually in the MD stocktake now and compare against
