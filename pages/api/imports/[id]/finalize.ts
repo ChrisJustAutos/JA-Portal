@@ -1,8 +1,13 @@
 // pages/api/imports/[id]/finalize.ts
-// POST — reads all chunks, concatenates them, runs the type's normalize(),
-// stores parsed_data + parsed_summary on the import row, flips status to
-// 'parsed', deletes the now-redundant chunk rows. Client polls this after
-// uploading the last chunk.
+// POST — closes off an upload after all chunks have arrived.
+//
+// Streams the chunks back one at a time (a paged single-row SELECT — keeps each
+// individual query tiny, avoids the per-statement timeout you'd hit reading all
+// ~10MB at once), concatenates them in memory, runs the type's normalize() to
+// compute the preview summary, and stamps status='parsed' + parsed_summary on
+// md_imports. The actual rows STAY in md_import_chunks until run completes —
+// writing the whole array back as parsed_data on md_imports was what was
+// timing out previously.
 
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
 import { withAuth } from '../../../../lib/authServer'
@@ -33,38 +38,32 @@ export default withAuth('view:diary', async (req, res, user) => {
   const importer = getImporter((imp as any).type)
   if (!importer) return res.status(500).json({ error: 'No importer registered' })
 
-  // Pull all chunks in order. Even huge imports come in as ~20 chunks so this
-  // is one query of jsonb rows.
   const allRows: any[] = []
-  for (let from = 0; ; from += 100) {
+  let chunkIdx = 0
+  while (true) {
     const { data, error } = await db.from('md_import_chunks')
       .select('chunk_index, rows')
       .eq('import_id', id)
       .order('chunk_index', { ascending: true })
-      .range(from, from + 99)
-    if (error) return res.status(500).json({ error: 'chunks read: ' + error.message })
+      .range(chunkIdx, chunkIdx)
+    if (error) return res.status(500).json({ error: `chunk ${chunkIdx} read: ${error.message}` })
     if (!data || data.length === 0) break
-    for (const c of data) for (const r of (c as any).rows || []) allRows.push(r)
-    if (data.length < 100) break
+    for (const r of (data[0] as any).rows || []) allRows.push(r)
+    chunkIdx++
   }
 
   if (allRows.length === 0) return res.status(400).json({ error: 'No rows uploaded' })
 
-  let normalized: any[], summary: any
-  try {
-    const r = importer.normalize(allRows)
-    normalized = r.rows; summary = r.summary
-  } catch (e: any) {
-    return res.status(500).json({ error: 'Normalise failed: ' + (e?.message || e) })
-  }
+  let summary: any
+  try { summary = importer.normalize(allRows).summary }
+  catch (e: any) { return res.status(500).json({ error: 'Normalise failed: ' + (e?.message || e) }) }
 
-  const { error: updErr } = await db.from('md_imports').update({
-    status: 'parsed', parsed_summary: summary, parsed_data: normalized,
-  }).eq('id', id)
+  const { error: updErr } = await db.from('md_imports')
+    .update({ status: 'parsed', parsed_summary: summary })
+    .eq('id', id)
   if (updErr) return res.status(500).json({ error: updErr.message })
 
-  // Free the chunks — they've been consumed.
-  try { await db.from('md_import_chunks').delete().eq('import_id', id) } catch { /* best-effort cleanup */ }
-
+  // Chunks intentionally NOT deleted here — run() reads them again and only
+  // cleans up on success.
   return res.status(200).json({ id, parsed_summary: summary })
 })
