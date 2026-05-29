@@ -31,6 +31,23 @@ export default function GeneralTab() {
   const [saving, setSaving] = useState<string | null>(null)  // which field is saving
   const [err, setErr] = useState('')
   const [savedFlash, setSavedFlash] = useState<string | null>(null)
+  const [savingAll, setSavingAll] = useState(false)
+
+  // Explicit "Save all" — re-commits the whole preferences object in one PATCH.
+  // Fields already auto-save on change; this is the reassuring belt-and-braces
+  // save that confirms everything is persisted.
+  async function saveAll() {
+    setSavingAll(true); setErr('')
+    try {
+      await update(prefs)
+      setSavedFlash('__all__')
+      setTimeout(() => setSavedFlash(null), 2000)
+    } catch (e: any) {
+      setErr(e?.message || 'Save failed')
+    } finally {
+      setSavingAll(false)
+    }
+  }
 
   async function save(patch: Partial<typeof prefs>, fieldKey: string) {
     setSaving(fieldKey)
@@ -248,6 +265,25 @@ export default function GeneralTab() {
         <Row label="Currency" value="Australian Dollar (AUD)"/>
         <Row label="Financial year" value="1 July – 30 June (Australian)"/>
       </SettingsCard>
+
+      {/* Explicit Save bar — preferences auto-save as you change them; this
+          confirms everything is committed in one click. */}
+      <div style={{
+        position: 'sticky', bottom: 0, marginTop: -4,
+        display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 12,
+        padding: '12px 0 4px', background: `linear-gradient(transparent, ${T.bg} 40%)`,
+      }}>
+        <span style={{ fontSize: 11, color: T.text3 }}>Changes auto-save as you edit.</span>
+        {savedFlash === '__all__' && <span style={{ fontSize: 12, color: T.green }}>✓ All preferences saved</span>}
+        <button onClick={saveAll} disabled={savingAll}
+          style={{
+            padding: '9px 20px', borderRadius: 8, border: 'none',
+            background: savingAll ? T.bg4 : T.blue, color: savingAll ? T.text3 : '#fff',
+            fontSize: 13, fontWeight: 600, cursor: savingAll ? 'wait' : 'pointer', fontFamily: 'inherit',
+          }}>
+          {savingAll ? 'Saving…' : 'Save all preferences'}
+        </button>
+      </div>
     </div>
   )
 }

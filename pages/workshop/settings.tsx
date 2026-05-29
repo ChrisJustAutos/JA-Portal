@@ -8,7 +8,7 @@
 //                             per-lane daily capacity + colour
 // All settings live in workshop_settings / workshop_technicians via gated APIs.
 
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useRef } from 'react'
 import Head from 'next/head'
 import Link from 'next/link'
 import { useRouter } from 'next/router'
@@ -31,6 +31,10 @@ function pbtn(color: string, solid?: boolean): React.CSSProperties {
 }
 
 type Tab = 'business' | 'invoicing' | 'accounts' | 'sms' | 'techs' | 'job-types'
+// A settings saver. `silent` (used by "Save all") suppresses the per-card flash
+// and throws on failure so the page can show one combined confirmation.
+type SaveFn = (patch: any, opts?: { silent?: boolean }) => void | Promise<void>
+type RegisterFn = (key: string, fn: ((opts?: { silent?: boolean }) => Promise<void>) | null) => void
 const TABS: { id: Tab; label: string }[] = [
   { id: 'business', label: 'Business & documents' },
   { id: 'invoicing', label: 'Invoicing (MYOB)' },
@@ -52,6 +56,18 @@ export default function WorkshopSettingsPage({ user }: { user: PortalUserSSR }) 
   const [techs, setTechs] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
   const [flash, setFlash] = useState('')
+  const [savingAll, setSavingAll] = useState(false)
+
+  // Save-all flush registry. Cards that buffer edits locally (Business,
+  // Invoicing, SMS) register an async saver here so the page-level "Save all
+  // settings" button can commit them in one click. Auto-save cards (MYOB
+  // accounts, Job types, Technicians, Diary hours) persist on change/blur and
+  // don't need to register.
+  const saversRef = useRef<Record<string, (opts?: { silent?: boolean }) => Promise<void>>>({})
+  const registerSaver = useCallback((key: string, fn: ((opts?: { silent?: boolean }) => Promise<void>) | null) => {
+    if (fn) saversRef.current[key] = fn
+    else delete saversRef.current[key]
+  }, [])
 
   const loadSettings = useCallback(async () => {
     const r = await fetch('/api/workshop/settings')
@@ -65,10 +81,27 @@ export default function WorkshopSettingsPage({ user }: { user: PortalUserSSR }) 
 
   function flashSaved() { setFlash('Saved ✓'); setTimeout(() => setFlash(''), 2000) }
 
-  async function saveSettings(patch: any) {
+  // `silent` suppresses the per-save flash + throws on error, so the page-level
+  // "Save all" can drive many saves and show a single combined confirmation.
+  const saveSettings = useCallback(async (patch: any, opts: { silent?: boolean } = {}) => {
     const r = await fetch('/api/workshop/settings', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(patch) })
-    if (r.ok) { const d = await r.json(); setSettings(d.settings); flashSaved() }
-    else { const d = await r.json().catch(() => ({})); setFlash(d.error || 'Save failed'); setTimeout(() => setFlash(''), 3000) }
+    if (r.ok) { const d = await r.json(); setSettings(d.settings); if (!opts.silent) { setFlash('Saved ✓'); setTimeout(() => setFlash(''), 2000) } }
+    else {
+      const d = await r.json().catch(() => ({}))
+      if (opts.silent) throw new Error(d.error || 'Save failed')
+      setFlash(d.error || 'Save failed'); setTimeout(() => setFlash(''), 3000)
+    }
+  }, [])
+
+  async function saveAll() {
+    setSavingAll(true)
+    try {
+      // Sequential so the settings PATCHes don't race each other on the row.
+      for (const fn of Object.values(saversRef.current)) { await fn({ silent: true }) }
+      setFlash('All settings saved ✓'); setTimeout(() => setFlash(''), 2500)
+    } catch (e: any) {
+      setFlash(e?.message || 'Save failed'); setTimeout(() => setFlash(''), 3500)
+    } finally { setSavingAll(false) }
   }
 
   async function addTech(name: string) {
@@ -119,13 +152,30 @@ export default function WorkshopSettingsPage({ user }: { user: PortalUserSSR }) 
 
                 {/* Panel */}
                 <div>
-                  {tab === 'business' && settings && <BusinessSection settings={settings} onSave={saveSettings} />}
-                  {tab === 'invoicing' && settings && <InvoicingSection settings={settings} accounts={accounts} accountsError={accountsError} onSave={saveSettings} />}
+                  {tab === 'business' && settings && <BusinessSection settings={settings} onSave={saveSettings} register={registerSaver} />}
+                  {tab === 'invoicing' && settings && <InvoicingSection settings={settings} accounts={accounts} accountsError={accountsError} onSave={saveSettings} register={registerSaver} />}
                   {tab === 'accounts' && settings && <AccountsSection settings={settings} income={accounts} banks={bankAccounts} categories={trackingCategories} accountsError={accountsError} onSave={saveSettings} />}
                   {tab === 'job-types' && <JobTypesSection />}
-                  {tab === 'sms' && settings && <SmsSection settings={settings} onSave={saveSettings} />}
+                  {tab === 'sms' && settings && <SmsSection settings={settings} onSave={saveSettings} register={registerSaver} />}
                   {tab === 'techs' && <TechsSection techs={techs} onAdd={addTech} onPatch={patchTech} onRemove={removeTech} />}
                 </div>
+              </div>
+            )}
+
+            {/* Page-level Save bar — commits any in-progress edits across every
+                tab and confirms. Settings still auto-save as you go; this is the
+                explicit "make sure it's saved" button. */}
+            {!loading && (
+              <div style={{
+                position: 'sticky', bottom: 0, marginTop: 18, padding: '12px 0 4px',
+                display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 14,
+                background: `linear-gradient(transparent, ${T.bg} 40%)`,
+              }}>
+                <span style={{ fontSize: 11, color: T.text3 }}>Changes auto-save as you edit — use this to save everything at once.</span>
+                {flash && <span style={{ fontSize: 12, color: flash.includes('✓') || flash.startsWith('Saved') ? T.green : T.amber }}>{flash}</span>}
+                <button onClick={saveAll} disabled={savingAll} style={{ ...pbtn(T.accent, true), padding: '9px 20px', fontSize: 13, opacity: savingAll ? 0.7 : 1, cursor: savingAll ? 'wait' : 'pointer' }}>
+                  {savingAll ? 'Saving…' : 'Save all settings'}
+                </button>
               </div>
             )}
           </div>
@@ -148,13 +198,19 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   return <label style={{ display: 'block', marginBottom: 12 }}><div style={{ fontSize: 11, color: T.text3, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 4 }}>{label}</div>{children}</label>
 }
 
-function BusinessSection({ settings, onSave }: { settings: any; onSave: (p: any) => void }) {
+function BusinessSection({ settings, onSave, register }: { settings: any; onSave: SaveFn; register?: RegisterFn }) {
   const [f, setF] = useState({
     business_name: settings.business_name || '', business_abn: settings.business_abn || '',
     business_address: settings.business_address || '', business_phone: settings.business_phone || '',
     business_email: settings.business_email || '', document_footer: settings.document_footer || '',
   })
   const set = (k: string, v: string) => setF(s => ({ ...s, [k]: v }))
+  const fRef = useRef(f); fRef.current = f
+  useEffect(() => {
+    if (!register) return
+    register('business', (opts) => Promise.resolve(onSave(fRef.current, opts)))
+    return () => register('business', null)
+  }, [register, onSave])
   return (
     <Card title="Business & documents" hint="Appears as the letterhead and footer on printed and emailed quotes, invoices and job cards.">
       <Field label="Business name"><input style={inp} value={f.business_name} onChange={e => set('business_name', e.target.value)} placeholder="Vehicle Performance Solutions" /></Field>
@@ -179,9 +235,16 @@ function BusinessSection({ settings, onSave }: { settings: any; onSave: (p: any)
 const minToHHMM = (m: number) => `${String(Math.floor((Number(m) || 0) / 60)).padStart(2, '0')}:${String((Number(m) || 0) % 60).padStart(2, '0')}`
 const hhmmToMin = (s: string) => { const [h, m] = String(s || '').split(':').map(Number); return (h || 0) * 60 + (m || 0) }
 
-function InvoicingSection({ settings, accounts, accountsError, onSave }: { settings: any; accounts: any[]; accountsError: string; onSave: (p: any) => void }) {
+function InvoicingSection({ settings, accounts, accountsError, onSave, register }: { settings: any; accounts: any[]; accountsError: string; onSave: SaveFn; register?: RegisterFn }) {
   const [uid, setUid] = useState(settings.myob_sales_account_uid || '')
   const [asOrder, setAsOrder] = useState(!!settings.invoice_as_order)
+  const buildPatch = () => ({ myob_sales_account_uid: uid || null, myob_sales_account_name: accounts.find(a => a.uid === uid)?.name || null, invoice_as_order: asOrder })
+  const patchRef = useRef(buildPatch()); patchRef.current = buildPatch()
+  useEffect(() => {
+    if (!register) return
+    register('invoicing', (opts) => Promise.resolve(onSave(patchRef.current, opts)))
+    return () => register('invoicing', null)
+  }, [register, onSave])
   return (
     <Card title="Invoicing (MYOB — VPS)" hint="Workshop jobs post to MYOB as a Service sale against this income account.">
       <Field label="Sales income account">
@@ -376,10 +439,17 @@ function LabourItemPicker({ value, onPick, onClear }: { value: string | null; on
   )
 }
 
-function SmsSection({ settings, onSave }: { settings: any; onSave: (p: any) => void }) {
+function SmsSection({ settings, onSave, register }: { settings: any; onSave: SaveFn; register?: RegisterFn }) {
   const [enabled, setEnabled] = useState(!!settings.sms_enabled)
   const [from, setFrom] = useState(settings.sms_from || '')
   const [lead, setLead] = useState(String(settings.booking_reminder_lead_hours ?? 24))
+  const buildPatch = () => ({ sms_enabled: enabled, sms_from: from, booking_reminder_lead_hours: Number(lead) || 0 })
+  const patchRef = useRef(buildPatch()); patchRef.current = buildPatch()
+  useEffect(() => {
+    if (!register) return
+    register('sms', (opts) => Promise.resolve(onSave(patchRef.current, opts)))
+    return () => register('sms', null)
+  }, [register, onSave])
   return (
     <Card title="SMS reminders (ClickSend)" hint="Automated booking reminders + manual “ready for collection” texts. Needs ClickSend credentials set in the environment.">
       <label style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 13, marginBottom: 14, cursor: 'pointer' }}>
