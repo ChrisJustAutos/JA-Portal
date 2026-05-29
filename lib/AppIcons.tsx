@@ -146,6 +146,22 @@ const ICONS: Record<string, (p: IconProps) => JSX.Element> = {
     <rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/>
     <rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>
   </>, p),
+  // Call insight tabs
+  'call-sentiment': (p) => svg(<>
+    <circle cx="12" cy="12" r="9"/><path d="M8 14s1.4 2 4 2 4-2 4-2"/>
+    <path d="M8.5 9.5h.01"/><path d="M15.5 9.5h.01"/>
+  </>, p),
+  'call-coaching': (p) => svg(<>
+    <path d="M9 18h6"/><path d="M10 22h4"/>
+    <path d="M12 2a7 7 0 0 0-4 12.7c.6.5 1 1.3 1 2.1h6c0-.8.4-1.6 1-2.1A7 7 0 0 0 12 2Z"/>
+  </>, p),
+  'call-words': (p) => svg(<>
+    <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2Z"/>
+    <path d="M7 9h10M7 13h6"/>
+  </>, p),
+  'call-funnel': (p) => svg(
+    <path d="M3 4h18l-7 8v6l-4 2v-8L3 4Z"/>
+  , p),
 }
 
 // Fallback: a generic grid square so an unmapped id never crashes.

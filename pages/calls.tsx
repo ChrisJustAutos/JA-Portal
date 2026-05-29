@@ -11,6 +11,7 @@ import { requirePageAuth } from '../lib/authServer'
 import { roleHasPermission } from '../lib/permissions'
 import { useChatContext } from '../components/GlobalChatbot'
 import { groupCalls, type LiveChannel, type LiveCallCard, type SpyMode } from '../lib/live-calls'
+import CallInsights, { CallTabBar, type CallView } from '../components/calls/CallInsights'
 
 interface PortalUserSSR { id: string; email: string; displayName: string | null; role: 'admin'|'manager'|'sales'|'accountant'|'viewer' }
 
@@ -1114,6 +1115,7 @@ export default function CallsPage({ user }: { user: PortalUserSSR }) {
   const [stats, setStats] = useState<StatsPayload | null>(null)
   const [truncated, setTruncated] = useState(false)
   const [selectedCall, setSelectedCall] = useState<CallRow | null>(null)
+  const [view, setView] = useState<CallView>('overview')
 
   // Date range state — explicit YYYY-MM-DD strings (Brisbane time)
   const [startDate, setStartDate] = useState<string>(ymdToday())
@@ -1208,6 +1210,13 @@ export default function CallsPage({ user }: { user: PortalUserSSR }) {
   const filterAgentName = filterAgent !== 'all' ? stats?.agents.find(a => a.key === filterAgent)?.display_name : null
   const fy = currentFY()
   const canMonitor = roleHasPermission(user.role, 'monitor:calls')
+
+  // Open a call's detail drawer by id (used by the Conversion tab's
+  // missed-opportunity list). Only works if the call is in the current list.
+  const openCallById = useCallback((id: string) => {
+    const c = calls.find(x => x.id === id)
+    if (c) setSelectedCall(c)
+  }, [calls])
 
   // ─── Feed call analytics summary to the global AI chatbot ───────────────
   // The assistant can answer questions about who's been on the phone, missed
@@ -1353,6 +1362,13 @@ export default function CallsPage({ user }: { user: PortalUserSSR }) {
               </div>
             ) : (
               <>
+                {/* Icon tab bar — Overview + insight tabs (same AppIcon style as the Settings hub) */}
+                <CallTabBar view={view} onChange={setView} />
+
+                {view !== 'overview' ? (
+                  <CallInsights view={view} startDate={startDate} endDate={endDate} agent={filterAgent} onOpenCall={openCallById} />
+                ) : (
+                <>
                 {/* Live call monitoring — management only */}
                 <LiveCallsBoard canMonitor={canMonitor} />
 
@@ -1581,8 +1597,10 @@ export default function CallsPage({ user }: { user: PortalUserSSR }) {
                   <span>·</span>
                   <span style={{ color: T.text2, fontWeight: 600 }}>✓ Phase 2 · Transcription</span>
                   <span>·</span>
-                  <span>Phase 3 · AI Coaching</span>
+                  <span style={{ color: T.text2, fontWeight: 600 }}>✓ Phase 3 · AI Coaching &amp; Insights</span>
                 </div>
+                </>
+                )}
               </>
             )}
           </div>
