@@ -181,6 +181,20 @@ export default function PortalTopBar({
 
   const activeApp = apps.find(a => a.id === activeId) || null
 
+  // Cross-page unread badge for Messages: poll if the user has the app and the
+  // current page didn't already supply a messages count (the /messages page does).
+  const hasMessagesApp = apps.some(a => a.id === 'messages')
+  const [msgUnread, setMsgUnread] = useState<number | null>(null)
+  useEffect(() => {
+    if (!hasMessagesApp || typeof alertCounts.messages === 'number') return
+    let live = true
+    const poll = () => fetch('/api/messages/unread').then(r => r.ok ? r.json() : null).then(d => { if (live && d) setMsgUnread(d.total) }).catch(() => {})
+    poll()
+    const i = setInterval(poll, 30000)
+    return () => { live = false; clearInterval(i) }
+  }, [hasMessagesApp, alertCounts.messages])
+  const mergedAlerts = { ...alertCounts, messages: typeof alertCounts.messages === 'number' ? alertCounts.messages : (msgUnread ?? 0) }
+
   // Esc closes the launcher / menu.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -247,6 +261,9 @@ export default function PortalTopBar({
             <rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>
           </svg>
           Apps
+          {(mergedAlerts.messages || 0) > 0 && (
+            <span title={`${mergedAlerts.messages} unread message${mergedAlerts.messages === 1 ? '' : 's'}`} style={{ fontSize: 10, fontFamily: 'monospace', background: T.red, color: '#fff', borderRadius: 10, padding: '0 6px', marginLeft: 2 }}>{mergedAlerts.messages}</span>
+          )}
         </button>
 
         {/* Current app title */}
@@ -322,7 +339,7 @@ export default function PortalTopBar({
                 borderRadius: 10, padding: '12px 16px', fontSize: 15, fontFamily: 'inherit', outline: 'none',
               }}
             />
-            <AppGrid apps={filtered} onPick={pick} alertCounts={alertCounts} large/>
+            <AppGrid apps={filtered} onPick={pick} alertCounts={mergedAlerts} large/>
             {filtered.length === 0 && (
               <div style={{ color: T.text3, fontSize: 13, textAlign: 'center', padding: 24 }}>No apps match “{query}”.</div>
             )}

@@ -21,28 +21,44 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
       if (!conv) return res.status(404).json({ error: 'Not found' })
       if (!(await canAccessConversation(conv, me.id, me.role))) return res.status(403).json({ error: 'Forbidden' })
 
-      const limit = Math.min(parseInt(String(req.query.limit || '50'), 10) || 50, 200)
+      const limit = Math.min(parseInt(String(req.query.limit || '60'), 10) || 60, 200)
       const before = req.query.before ? String(req.query.before) : null
+      // parentId set → thread replies (ascending). Otherwise the main timeline
+      // (top-level only; thread replies are hidden from it).
+      const parentId = req.query.parentId ? String(req.query.parentId) : null
       let q = sb.from('conversation_messages')
         .select('id, conversation_id, sender_user_id, parent_message_id, body, message_type, direction, created_at, edited_at, deleted_at')
         .eq('conversation_id', conversationId)
         .order('created_at', { ascending: false })
         .limit(limit)
+      if (parentId) q = q.eq('parent_message_id', parentId)
+      else q = q.is('parent_message_id', null)
       if (before) q = q.lt('created_at', before)
       const { data: rows, error } = await q
       if (error) return res.status(500).json({ error: error.message })
       const msgs = (rows || []).reverse()
       const ids = msgs.map(m => m.id)
 
-      const [{ data: atts }, { data: ments }] = await Promise.all([
+      const [{ data: atts }, { data: ments }, { data: reacts }, { data: children }] = await Promise.all([
         ids.length ? sb.from('message_attachments').select('id, message_id, storage_path, filename, content_type, size_bytes').in('message_id', ids) : Promise.resolve({ data: [] as any[] }),
         ids.length ? sb.from('message_mentions').select('message_id, mentioned_user_id').in('message_id', ids) : Promise.resolve({ data: [] as any[] }),
+        ids.length ? sb.from('message_reactions').select('message_id, user_id, emoji').in('message_id', ids) : Promise.resolve({ data: [] as any[] }),
+        (!parentId && ids.length) ? sb.from('conversation_messages').select('parent_message_id').in('parent_message_id', ids).is('deleted_at', null) : Promise.resolve({ data: [] as any[] }),
       ])
       const dir = await userDirectory(msgs.map(m => m.sender_user_id).filter(Boolean) as string[])
       const attByMsg: Record<string, any[]> = {}
       for (const a of atts || []) (attByMsg[a.message_id] ||= []).push(a)
       const mentByMsg: Record<string, string[]> = {}
       for (const m of ments || []) (mentByMsg[m.message_id] ||= []).push(m.mentioned_user_id)
+      // Reactions grouped per message+emoji, with count and whether *I* reacted.
+      const reactByMsg: Record<string, Record<string, { count: number; mine: boolean }>> = {}
+      for (const r of reacts || []) {
+        const g = (reactByMsg[r.message_id] ||= {})
+        const e = (g[r.emoji] ||= { count: 0, mine: false })
+        e.count++; if (r.user_id === me.id) e.mine = true
+      }
+      const replyCount: Record<string, number> = {}
+      for (const c of children || []) replyCount[c.parent_message_id] = (replyCount[c.parent_message_id] || 0) + 1
 
       return res.status(200).json({
         messages: msgs.map(m => ({
@@ -50,6 +66,8 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
           senderName: m.sender_user_id ? (dir[m.sender_user_id]?.name || 'Unknown') : (m.message_type === 'external' ? 'Customer' : 'System'),
           attachments: attByMsg[m.id] || [],
           mentions: mentByMsg[m.id] || [],
+          reactions: Object.entries(reactByMsg[m.id] || {}).map(([emoji, v]) => ({ emoji, count: v.count, mine: v.mine })),
+          replyCount: replyCount[m.id] || 0,
         })),
         hasMore: (rows || []).length === limit,
       })

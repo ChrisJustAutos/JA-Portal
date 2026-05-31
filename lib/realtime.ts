@@ -59,6 +59,19 @@ export function subscribeToConversationList(onChange: () => void): () => void {
   return () => { if (ch) sb.removeChannel(ch) }
 }
 
+// All new messages the user can see (RLS-filtered), regardless of which
+// conversation is open — used to drive desktop notifications.
+export function subscribeToAllMessages(onInsert: (row: any) => void): () => void {
+  const sb = getSupabase()
+  let ch: RealtimeChannel | null = null
+  ensureRealtimeAuth().then(() => {
+    ch = sb.channel('all-messages')
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'conversation_messages' }, (p) => onInsert(p.new))
+      .subscribe()
+  })
+  return () => { if (ch) sb.removeChannel(ch) }
+}
+
 // Lightweight typing indicator over a Realtime broadcast channel (no DB writes).
 export interface TypingChannel {
   setTyping: (isTyping: boolean) => void
