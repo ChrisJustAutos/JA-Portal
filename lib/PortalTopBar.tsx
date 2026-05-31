@@ -38,7 +38,7 @@ export interface LauncherApp {
   defaultLabel: string   // the built-in name (for placeholders / reset)
   href: string
   accent: string
-  alertKey?: 'invoices' | 'payables'
+  alertKey?: 'invoices' | 'payables' | 'messages'
 }
 
 // Resolve the apps this user can see, in DEFAULT_NAV order, mapped to
@@ -78,7 +78,7 @@ export function AppGrid({
 }: {
   apps: LauncherApp[]
   onPick: (app: LauncherApp) => void
-  alertCounts?: { invoices?: number; payables?: number }
+  alertCounts?: { invoices?: number; payables?: number; messages?: number }
   large?: boolean
 }) {
   const tile = large ? 132 : 112
@@ -154,7 +154,7 @@ export interface PortalTopBarProps {
   lastRefresh?: Date | null
   onRefresh?: () => void
   refreshing?: boolean
-  alertCounts?: { invoices?: number; payables?: number }
+  alertCounts?: { invoices?: number; payables?: number; messages?: number }
   loading?: boolean
   currentUserRole?: UserRole
   currentUserVisibleTabs?: string[] | null

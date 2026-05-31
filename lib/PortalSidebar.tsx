@@ -44,7 +44,7 @@ export interface PortalNavItem {
   href?: string
   section?: PortalSection
   dot: string
-  alertKey?: 'invoices'|'payables'
+  alertKey?: 'invoices'|'payables'|'messages'
 }
 
 // Default nav order — same on every page. `settings` is appended for admins only (see rendering).
@@ -53,6 +53,7 @@ export const DEFAULT_NAV: PortalNavItem[] = [
   {id:'leads',        kind:'link',    label:'Leads/Orders', href:'/sales',         dot:'#a78bfa'},
   {id:'distributors', kind:'link',    label:'Distributors', href:'/distributors',  dot:T.blue},
   {id:'calls',        kind:'link',    label:'Phone Calls',  href:'/calls',         dot:T.teal},
+  {id:'messages',     kind:'link',    label:'Messages',     href:'/messages',      dot:T.purple, alertKey:'messages'},
   {id:'diary',        kind:'link',    label:'Workshop Diary',href:'/diary',        dot:T.blue},
   {id:'workshop-customers',kind:'link',label:'Customers',  href:'/workshop/customers',dot:T.blue},
   {id:'workshop-quotes',kind:'link',  label:'Quotes',       href:'/workshop/quotes',dot:T.purple},
@@ -83,7 +84,7 @@ export interface PortalSidebarProps {
   lastRefresh?: Date | null
   onRefresh?: () => void
   refreshing?: boolean
-  alertCounts?: { invoices?: number; payables?: number }
+  alertCounts?: { invoices?: number; payables?: number; messages?: number }
   loading?: boolean
   currentUserRole?: UserRole
   currentUserVisibleTabs?: string[] | null

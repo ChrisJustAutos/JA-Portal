@@ -43,6 +43,8 @@ export type Permission =
   | 'view:b2b'
   | 'view:stripe_myob'
   | 'view:diary'
+  | 'view:messages'
+  | 'manage:inbox'
   // Actions
   | 'edit:any'
   | 'edit:distributors_groups'
@@ -72,6 +74,7 @@ const ROLE_PERMISSIONS: Record<UserRole, Permission[]> = {
     'edit:b2b_catalogue','edit:b2b_distributors','edit:b2b_orders','edit:stripe_myob',
     'monitor:calls',
     'view:diary','edit:bookings',
+    'view:messages','manage:inbox',
     'admin:users','admin:settings','admin:audit_log','admin:b2b',
   ],
   manager: [
@@ -82,18 +85,21 @@ const ROLE_PERMISSIONS: Record<UserRole, Permission[]> = {
     'edit:b2b_catalogue','edit:b2b_distributors','edit:b2b_orders',
     'monitor:calls',
     'view:diary','edit:bookings',
+    'view:messages','manage:inbox',
   ],
   sales: [
     'view:dashboards','view:overview','view:leads','view:distributors','view:calls','view:reports',
     'view:b2b',
     'edit:leads','generate:reports',
     'view:diary','edit:bookings',
+    'view:messages','manage:inbox',
   ],
   // Least-privilege workshop login: only the workshop area (diary + jobs +
   // quotes + inventory + tasks all gate on view:diary). No financial/leads/
   // calls/admin access. Trim to diary-only per user via the tab allowlist.
   workshop: [
     'view:diary','edit:bookings',
+    'view:messages',
   ],
   accountant: [
     'view:dashboards','view:overview','view:invoices','view:pnl','view:payables','view:reports',
@@ -101,10 +107,12 @@ const ROLE_PERMISSIONS: Record<UserRole, Permission[]> = {
     'view:distributors',
     'view:jobs','view:vehicle_sales','view:b2b','view:stripe_myob','edit:stripe_myob',
     'generate:reports',
+    'view:messages',
   ],
   viewer: [
     'view:dashboards','view:overview','view:invoices','view:pnl','view:stock','view:payables',
     'view:leads','view:distributors','view:calls','view:reports',
+    'view:messages',
   ],
 }
 
@@ -217,6 +225,7 @@ export const PORTAL_TABS: PortalTab[] = [
   { id: 'leads',         label: 'Leads/Orders',    permission: 'view:leads' },
   { id: 'distributors',  label: 'Distributors',    permission: 'view:distributors' },
   { id: 'calls',         label: 'Phone Calls',     permission: 'view:calls' },
+  { id: 'messages',      label: 'Messages',        permission: 'view:messages' },
   { id: 'diary',         label: 'Workshop Diary',  permission: 'view:diary' },
   { id: 'workshop-customers', label: 'Customers',  permission: 'view:diary' },
   { id: 'workshop-quotes', label: 'Quotes',        permission: 'view:diary' },
