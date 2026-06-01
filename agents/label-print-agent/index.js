@@ -25,6 +25,9 @@ const PRINTER_NAME = process.env.DYMO_PRINTER_NAME || 'DYMO LabelWriter 4XL'
 const BUCKET = process.env.LABEL_BUCKET || 'b2b-shipping-labels'
 const POLL_MS = parseInt(process.env.POLL_MS || '30000', 10)
 const MAX_ATTEMPTS = parseInt(process.env.MAX_ATTEMPTS || '3', 10)
+// Reclaim a job stuck in 'printing' this long — covers a PC that grabbed a job
+// then crashed/was switched off mid-print (multi-PC setups).
+const STALE_PRINTING_MS = parseInt(process.env.STALE_PRINTING_MS || '120000', 10)
 const SCALE = process.env.PRINT_SCALE || 'fit' // 'fit' | 'noscale' | 'shrink'
 
 if (!SUPABASE_URL || !SERVICE_ROLE_KEY) {
@@ -38,12 +41,24 @@ const log = (...a) => console.log(new Date().toISOString(), ...a)
 let working = false
 
 async function claim(jobId) {
-  // Atomic claim: only the row still 'pending' flips to 'printing'.
+  // Atomic claim: only the row still 'pending' flips to 'printing'. With several
+  // agents racing, Postgres row-locking means exactly one UPDATE matches — the
+  // others get 0 rows back and skip. No duplicate prints.
   const { data } = await sb.from('label_print_jobs')
-    .update({ status: 'printing' })
+    .update({ status: 'printing', claimed_at: new Date().toISOString() })
     .eq('id', jobId).eq('status', 'pending')
     .select('id, storage_path, consignment_number, attempts')
   return data && data.length ? data[0] : null
+}
+
+async function reclaimStale() {
+  // Return jobs stuck in 'printing' (a PC died mid-print) back to the pool so
+  // another on PC can retry. Bounded by MAX_ATTEMPTS via the failure path.
+  const threshold = new Date(Date.now() - STALE_PRINTING_MS).toISOString()
+  await sb.from('label_print_jobs')
+    .update({ status: 'pending', error: 'reclaimed: previous printer went away mid-print' })
+    .eq('status', 'printing').lt('claimed_at', threshold)
+    .then(() => {}, () => {})
 }
 
 async function printJob(job) {
@@ -85,6 +100,7 @@ async function drainPending() {
   if (working) return
   working = true
   try {
+    await reclaimStale()
     const { data, error } = await sb.from('label_print_jobs').select('id, storage_path, consignment_number, attempts').eq('status', 'pending').order('created_at', { ascending: true }).limit(20)
     if (error) { log('poll error:', error.message); return }
     for (const job of data || []) await handleJob(job)

@@ -67,6 +67,19 @@ thing) — it must be rendered by the DYMO driver. So on the agent's PC:
 The agent then prints the PDF through the driver, which sends it to the printer
 over the network — no dependency on any other PC.
 
+## Run on several PCs (no single machine has to be on)
+
+You can install this agent on **every** front-of-house PC. They all watch the
+same queue, but the claim is atomic, so **exactly one** prints each label — no
+duplicates. Whichever PCs are on at the time share the work; if one is off the
+others cover; if all are off, labels queue and print when any PC comes back on.
+A job left half-done by a PC that crashed mid-print is auto-reclaimed after
+`STALE_PRINTING_MS` (default 2 min) and retried by another PC.
+
+Per PC: add the network DYMO (TCP/IP 9100, below), install + run the agent with
+its own `.env` (`DYMO_PRINTER_NAME` = the printer's name on that PC). Keep the
+service-role key in each local `.env` only (not on a synced/shared drive).
+
 ## Tuning the print
 `pdf-to-printer` prints via the bundled SumatraPDF. If labels come out scaled
 wrong, change `PRINT_SCALE` in `.env`:
