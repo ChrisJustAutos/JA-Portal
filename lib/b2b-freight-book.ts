@@ -123,9 +123,15 @@ export async function bookFreightForOrder(orderId: string, opts: { actorId?: str
   }
   // Desired despatch (collection) time, if one was chosen ("book later"). The
   // consignment is still created NOW; MachShip tells the carrier to collect then.
+  // MachShip's field is the British "despatch" spelling — sending "dispatch" is
+  // silently ignored (defaults despatch to NOW). Send both keys to be safe.
   if (opts.dispatchAt) {
     const d = opts.dispatchAt instanceof Date ? opts.dispatchAt : new Date(opts.dispatchAt)
-    if (!isNaN(d.getTime())) req2.dispatchDateTimeUtc = d.toISOString()
+    if (!isNaN(d.getTime())) {
+      const iso = d.toISOString()
+      req2.despatchDateTimeUtc = iso
+      req2.dispatchDateTimeUtc = iso
+    }
   }
 
   let consignment

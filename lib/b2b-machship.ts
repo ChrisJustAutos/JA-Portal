@@ -224,8 +224,11 @@ export interface CreateConsignmentRequest {
 
   // Desired despatch (collection) date/time — ISO "yyyy-MM-ddThh:mm:ss.000Z".
   // The consignment is created/booked now; the carrier collects at this time.
-  // A past value makes MachShip default to NOW.
-  dispatchDateTimeUtc?: string
+  // A missing/past value makes MachShip default to NOW.
+  // NOTE: MachShip uses the British spelling "despatch" (with an e). Sending the
+  // American "dispatch" spelling is silently ignored → it defaults to NOW.
+  despatchDateTimeUtc?: string
+  dispatchDateTimeUtc?: string   // tolerated alias; harmless if the API ignores it
 
   items: MachShipItem[]
 }
