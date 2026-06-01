@@ -111,6 +111,7 @@ interface OrderDetail {
   dropship_pos: Array<{ supplier_uid: string; supplier_name: string; myob_po_number: string | null; myob_po_uid: string | null; line_count: number; created_at: string; email_status?: 'sent' | 'no_email' | 'failed'; emailed_to?: string | null }>
   customer_notes: string | null
   internal_notes: string | null
+  ship_to: { company: string; name: string; phone: string; email: string; line1: string; line2: string; suburb: string; state: string; postcode: string; source: 'order' | 'distributor' } | null
   distributor: { id: string; display_name: string; myob_customer_uid: string | null } | null
   stripe: { checkout_session_id: string | null; payment_intent_id: string | null; charge_id: string | null }
   myob: {
@@ -416,6 +417,28 @@ export default function AdminOrderDetailPage({ user }: Props) {
                   {data.cancelled_at && <KV label="Cancelled" value={fullDate(data.cancelled_at)} mono valueColor={T.red}/>}
                 </Card>
 
+                {/* Ship to */}
+                <Card title="Ship to">
+                  {data.ship_to ? (
+                    <div style={{fontSize:13,color:T.text2,lineHeight:1.6}}>
+                      {data.ship_to.name && <div style={{color:T.text}}>{data.ship_to.name}</div>}
+                      {data.ship_to.company && data.ship_to.company !== data.ship_to.name && <div>{data.ship_to.company}</div>}
+                      {data.ship_to.line1 && <div>{data.ship_to.line1}</div>}
+                      {data.ship_to.line2 && <div>{data.ship_to.line2}</div>}
+                      {(data.ship_to.suburb || data.ship_to.state || data.ship_to.postcode) && (
+                        <div>{[data.ship_to.suburb, data.ship_to.state, data.ship_to.postcode].filter(Boolean).join(' ')}</div>
+                      )}
+                      {data.ship_to.phone && <div style={{color:T.text3,fontSize:12,marginTop:4}}>☎ {data.ship_to.phone}</div>}
+                      {data.ship_to.email && <div style={{color:T.text3,fontSize:12}}>✉ {data.ship_to.email}</div>}
+                      {data.ship_to.source === 'distributor' && (
+                        <div style={{fontSize:10,color:T.text3,marginTop:6,fontStyle:'italic'}}>From the distributor's ship address (no per-order delivery address on file).</div>
+                      )}
+                    </div>
+                  ) : (
+                    <div style={{fontSize:12,color:T.amber}}>No delivery address — add a ship address to the distributor before booking freight.</div>
+                  )}
+                </Card>
+
                 {/* Lines */}
                 <Card title={`Items (${data.lines.length})`}>
                   <div style={{overflowX:'auto',margin:'0 -22px',padding:'0 22px'}}>
@@ -444,9 +467,17 @@ export default function AdminOrderDetailPage({ user }: Props) {
                   </div>
                 </Card>
 
-                {/* Totals */}
+                {/* Totals — the stored subtotal_ex_gst includes freight, so break
+                    freight out as its own line and show items-only above it. */}
                 <Card title="Totals">
-                  <Row label="Subtotal (ex GST)"  value={`$${money(data.subtotal_ex_gst)}`}/>
+                  {data.freight_cost_ex_gst != null && data.freight_cost_ex_gst > 0 ? (
+                    <>
+                      <Row label="Items (ex GST)"   value={`$${money(data.subtotal_ex_gst - data.freight_cost_ex_gst)}`}/>
+                      <Row label={`Freight (ex GST)${data.freight_service_label || data.freight_method_label ? ` — ${data.freight_service_label || data.freight_method_label}` : ''}`} value={`$${money(data.freight_cost_ex_gst)}`}/>
+                    </>
+                  ) : (
+                    <Row label="Subtotal (ex GST)"  value={`$${money(data.subtotal_ex_gst)}`}/>
+                  )}
                   <Row label="GST"                value={`$${money(data.gst)}`}/>
                   <Row label="Card surcharge"     value={`$${money(data.card_fee_inc)}`} muted/>
                   <Row label="Total (inc GST)"    value={`$${money(data.total_inc)}`} bold/>

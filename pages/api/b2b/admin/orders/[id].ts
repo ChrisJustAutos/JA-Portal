@@ -87,12 +87,14 @@ async function getDetail(id: string, res: NextApiResponse) {
       freight_service_label, freight_eta_at, freight_status, last_freight_poll_at,
       tracking_page_access_token, freight_chosen_quote, freight_quote_markup_pct,
       dropship_pos, dropship_po_raised_at,
-      customer_notes, internal_notes,
+      customer_notes, internal_notes, shipping_address_snapshot,
       stripe_checkout_session_id, stripe_payment_intent_id, stripe_charge_id,
       myob_invoice_uid, myob_invoice_number, myob_company_file,
       myob_written_at, myob_write_attempts, myob_write_error,
       distributor:b2b_distributors!b2b_orders_distributor_id_fkey (
-        id, display_name, myob_primary_customer_uid
+        id, display_name, myob_primary_customer_uid,
+        primary_contact_phone, primary_contact_email,
+        ship_line1, ship_line2, ship_suburb, ship_state, ship_postcode
       ),
       lines:b2b_order_lines!b2b_order_lines_order_id_fkey (
         id, sku, name, qty, myob_item_uid,
@@ -168,6 +170,25 @@ async function getDetail(id: string, res: NextApiResponse) {
 
   const dist: any = Array.isArray(order.distributor) ? order.distributor[0] : order.distributor
 
+  // Resolve the delivery address: order snapshot wins, else fall back to the
+  // distributor's ship address (mirrors lib/b2b-freight-book + the admin email).
+  // Test orders carry no snapshot, so this is what makes their ship-to show.
+  const snap: any = order.shipping_address_snapshot || null
+  const pick = (...vals: any[]): string => { for (const v of vals) { if (v == null) continue; const s = String(v).trim(); if (s) return s } return '' }
+  const ship_to = {
+    company:  pick(snap?.company_name, dist?.display_name),
+    name:     pick(snap?.recipient_name, snap?.contact_name),
+    phone:    pick(snap?.phone, dist?.primary_contact_phone),
+    email:    pick(snap?.email, dist?.primary_contact_email),
+    line1:    pick(snap?.line1, snap?.address_line1, dist?.ship_line1),
+    line2:    pick(snap?.line2, snap?.address_line2, dist?.ship_line2),
+    suburb:   pick(snap?.suburb, dist?.ship_suburb),
+    state:    pick(snap?.state, dist?.ship_state),
+    postcode: pick(snap?.postcode, dist?.ship_postcode),
+    source:   (snap ? 'order' : 'distributor') as 'order' | 'distributor',
+  }
+  const ship_has_address = !!(ship_to.line1 || ship_to.suburb || ship_to.postcode)
+
   return res.status(200).json({
     order: {
       id: order.id,
@@ -212,6 +233,7 @@ async function getDetail(id: string, res: NextApiResponse) {
       dropship_po_raised_at: order.dropship_po_raised_at,
       customer_notes: order.customer_notes,
       internal_notes: order.internal_notes,
+      ship_to: ship_has_address ? ship_to : null,
       distributor: dist ? {
         id: dist.id,
         display_name: dist.display_name,
