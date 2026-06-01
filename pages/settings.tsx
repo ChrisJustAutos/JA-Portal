@@ -650,7 +650,113 @@ function ProfileTab({ user }: { user: PortalUserSSR }) {
         </button>
       </form>
     </div>
+
+    <TwoFactorCard/>
   </div>
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// TWO-FACTOR AUTHENTICATION (Supabase native TOTP) — lives in My Profile
+// ═══════════════════════════════════════════════════════════════════
+function TwoFactorCard() {
+  const [loading, setLoading] = useState(true)
+  const [enrolled, setEnrolled] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const [info, setInfo] = useState('')
+  const [enrolling, setEnrolling] = useState(false)
+  const [qr, setQr] = useState('')
+  const [secret, setSecret] = useState('')
+  const [factorId, setFactorId] = useState('')
+  const [code, setCode] = useState('')
+
+  const refresh = useCallback(async () => {
+    setError('')
+    try {
+      const { data, error } = await getSupabase().auth.mfa.listFactors()
+      if (error) throw error
+      setEnrolled((data?.totp?.length || 0) > 0)
+    } catch (e: any) { setError(e?.message || 'Could not load 2FA status') }
+    finally { setLoading(false) }
+  }, [])
+  useEffect(() => { refresh() }, [refresh])
+
+  async function startEnrol() {
+    setBusy(true); setError(''); setInfo('')
+    try {
+      const supabase = getSupabase()
+      const { data: existing } = await supabase.auth.mfa.listFactors()
+      for (const f of (existing?.all || [])) { if ((f as any).status !== 'verified') { try { await supabase.auth.mfa.unenroll({ factorId: f.id }) } catch {} } }
+      const { data, error } = await supabase.auth.mfa.enroll({ factorType: 'totp', friendlyName: 'Authenticator' })
+      if (error) throw error
+      setQr(data.totp.qr_code); setSecret(data.totp.secret); setFactorId(data.id); setCode(''); setEnrolling(true)
+    } catch (e: any) { setError(e?.message || 'Could not start enrolment') }
+    finally { setBusy(false) }
+  }
+
+  async function confirmEnrol(e: React.FormEvent) {
+    e.preventDefault()
+    setBusy(true); setError('')
+    try {
+      const { error } = await getSupabase().auth.mfa.challengeAndVerify({ factorId, code: code.replace(/\s/g, '') })
+      if (error) throw error
+      setEnrolling(false); setQr(''); setSecret(''); setFactorId(''); setCode('')
+      setInfo('Authenticator enabled. You’ll be asked for a code next time you sign in.')
+      await refresh()
+    } catch (e: any) { setError(e?.message || 'Invalid code — check your device clock and try again') }
+    finally { setBusy(false) }
+  }
+
+  async function removeAll() {
+    if (!confirm('Remove your authenticator? You will no longer be asked for a code at sign-in until you set one up again.')) return
+    setBusy(true); setError(''); setInfo('')
+    try {
+      const supabase = getSupabase()
+      const { data } = await supabase.auth.mfa.listFactors()
+      for (const f of (data?.all || [])) { try { await supabase.auth.mfa.unenroll({ factorId: f.id }) } catch {} }
+      setInfo('Authenticator removed.'); await refresh()
+    } catch (e: any) { setError(e?.message || 'Could not remove authenticator') }
+    finally { setBusy(false) }
+  }
+
+  const inp: React.CSSProperties = { width:'100%', background:T.bg3, border:`1px solid ${T.border2}`, color:T.text, borderRadius:6, padding:'10px 12px', fontSize:18, outline:'none', boxSizing:'border-box', letterSpacing:'0.3em', textAlign:'center' }
+  const btn = (bg: string, on = true): React.CSSProperties => ({ padding:'7px 16px', borderRadius:4, border:'none', background: on ? bg : T.bg4, color: on ? '#fff' : T.text3, fontSize:12, fontWeight:600, cursor: on ? 'pointer' : 'default', fontFamily:'inherit' })
+
+  return (
+    <div style={{background:T.bg2,border:`1px solid ${T.border}`,borderRadius:10,padding:18}}>
+      <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:6}}>
+        <div style={{fontSize:13,fontWeight:600,color:T.text}}>Two-factor authentication</div>
+        {loading ? <span style={{fontSize:10,color:T.text3}}>checking…</span>
+          : enrolled ? <span style={{fontSize:10,padding:'2px 8px',borderRadius:10,background:`${T.green}22`,color:T.green,border:`1px solid ${T.green}55`}}>● Active</span>
+          : <span style={{fontSize:10,padding:'2px 8px',borderRadius:10,background:`${T.amber}22`,color:T.amber,border:`1px solid ${T.amber}55`}}>Not set up</span>}
+      </div>
+      <div style={{fontSize:11.5,color:T.text3,marginBottom:14,lineHeight:1.5}}>A 6-digit code from an authenticator app (Google/Microsoft Authenticator, 1Password, Authy…) on top of your password.</div>
+
+      {info && <div style={{fontSize:12,color:T.green,marginBottom:10}}>{info}</div>}
+      {error && <div style={{fontSize:12,color:T.red,marginBottom:10}}>{error}</div>}
+
+      {!enrolling && !enrolled && !loading && (
+        <button onClick={startEnrol} disabled={busy} style={btn(T.blue, !busy)}>{busy ? 'Starting…' : 'Set up authenticator'}</button>
+      )}
+      {!enrolling && enrolled && (
+        <button onClick={removeAll} disabled={busy} style={{...btn(T.bg4), color:T.red, border:`1px solid ${T.red}40`}}>{busy ? 'Working…' : 'Remove authenticator'}</button>
+      )}
+      {enrolling && (
+        <form onSubmit={confirmEnrol}>
+          <div style={{fontSize:12,color:T.text2,marginBottom:10}}>1. Scan this QR code in your authenticator app:</div>
+          {qr && <div style={{background:'#fff',padding:12,borderRadius:10,display:'inline-block',marginBottom:12}}><img src={qr} alt="2FA QR" width={170} height={170} style={{display:'block'}}/></div>}
+          {secret && <div style={{fontSize:11,color:T.text3,marginBottom:12}}>Can’t scan? Key: <span style={{fontFamily:'monospace',color:T.text,userSelect:'all',wordBreak:'break-all'}}>{secret}</span></div>}
+          <div style={{fontSize:10,color:T.text3,textTransform:'uppercase',letterSpacing:'0.05em',marginBottom:6}}>2. Enter the 6-digit code</div>
+          <input type="text" inputMode="numeric" autoComplete="one-time-code" autoFocus value={code}
+            onChange={e => setCode(e.target.value.replace(/[^\d]/g, '').slice(0, 6))} placeholder="123456" style={inp}/>
+          <div style={{display:'flex',gap:8,marginTop:12}}>
+            <button type="submit" disabled={busy || code.length !== 6} style={btn(T.green, !busy && code.length === 6)}>{busy ? 'Verifying…' : 'Verify & enable'}</button>
+            <button type="button" onClick={() => { setEnrolling(false); setError('') }} disabled={busy} style={{...btn(T.bg4), color:T.text2}}>Cancel</button>
+          </div>
+        </form>
+      )}
+    </div>
+  )
 }
 
 // ═══════════════════════════════════════════════════════════════════
