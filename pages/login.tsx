@@ -13,7 +13,7 @@ const T = {
   blue:'#4f8ef7', green:'#34c77b', amber:'#f5a623', red:'#f04e4e', purple:'#a78bfa',
 }
 
-type Mode = 'loading' | 'login' | 'bootstrap' | 'done'
+type Mode = 'loading' | 'login' | 'bootstrap' | 'mfa' | 'done'
 
 export default function LoginPage() {
   const router = useRouter()
@@ -25,6 +25,8 @@ export default function LoginPage() {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [info, setInfo] = useState('')
+  const [mfaCode, setMfaCode] = useState('')
+  const [mfaFactorId, setMfaFactorId] = useState('')
 
   // On mount — figure out if we need to bootstrap or if there's already an admin
   useEffect(() => {
@@ -50,24 +52,60 @@ export default function LoginPage() {
       if (signErr) throw signErr
       if (!data.session) throw new Error('No session returned')
 
-      // Exchange Supabase token for our httpOnly session cookie
-      const sessRes = await fetch('/api/auth/session', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          access_token: data.session.access_token,
-          refresh_token: data.session.refresh_token,
-        }),
-      })
-      if (!sessRes.ok) {
-        const err = await sessRes.json().catch(()=>({error:'Session setup failed'}))
-        throw new Error(err.error || 'Session setup failed')
+      // 2FA: if the account has a verified authenticator, the session is still
+      // AAL1 — require the 6-digit code before we set the portal cookie.
+      const { data: aal } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel()
+      if (aal && aal.nextLevel === 'aal2' && aal.nextLevel !== aal.currentLevel) {
+        const { data: factors } = await supabase.auth.mfa.listFactors()
+        const totp = factors?.totp?.[0]
+        if (totp) {
+          setMfaFactorId(totp.id)
+          setMfaCode('')
+          setMode('mfa')
+          return
+        }
       }
 
+      await establishSession(data.session.access_token, data.session.refresh_token)
       setMode('done')
       router.push('/')
     } catch (e: any) {
       setError(e.message || 'Login failed')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  // Exchange a Supabase session for our httpOnly portal cookies.
+  async function establishSession(accessToken: string, refreshToken: string) {
+    const sessRes = await fetch('/api/auth/session', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ access_token: accessToken, refresh_token: refreshToken }),
+    })
+    if (!sessRes.ok) {
+      const err = await sessRes.json().catch(() => ({ error: 'Session setup failed' }))
+      throw new Error(err.error || 'Session setup failed')
+    }
+  }
+
+  // Step 2 of login: verify the authenticator code → upgrades the session to
+  // AAL2 → set cookies.
+  async function handleMfa(e: React.FormEvent) {
+    e.preventDefault()
+    setBusy(true); setError('')
+    try {
+      const supabase = getSupabase()
+      const code = mfaCode.replace(/\s/g, '')
+      const { error: vErr } = await supabase.auth.mfa.challengeAndVerify({ factorId: mfaFactorId, code })
+      if (vErr) throw vErr
+      const { data: sess } = await supabase.auth.getSession()
+      if (!sess.session) throw new Error('No session after verification')
+      await establishSession(sess.session.access_token, sess.session.refresh_token)
+      setMode('done')
+      router.push('/')
+    } catch (e: any) {
+      setError(e.message || 'Invalid code — try again')
     } finally {
       setBusy(false)
     }
@@ -216,6 +254,32 @@ export default function LoginPage() {
                   <button type="button" onClick={handleForgot} disabled={busy}
                     style={{background:'none',border:'none',color:T.blue,fontSize:12,cursor:'pointer',fontFamily:'inherit',padding:4}}>
                     Forgot password?
+                  </button>
+                </div>
+              </form>
+            )}
+
+            {mode === 'mfa' && (
+              <form onSubmit={handleMfa}>
+                <div style={{fontSize:18,fontWeight:600,marginBottom:6}}>Two-factor authentication</div>
+                <div style={{fontSize:12.5,color:T.text2,marginBottom:18,lineHeight:1.5}}>Enter the 6-digit code from your authenticator app.</div>
+                <Field label="Authenticator code">
+                  <input
+                    type="text" inputMode="numeric" autoComplete="one-time-code" autoFocus
+                    value={mfaCode}
+                    onChange={e => setMfaCode(e.target.value.replace(/[^\d]/g, '').slice(0, 6))}
+                    placeholder="123456"
+                    style={{...inputStyle(), letterSpacing:'0.3em', textAlign:'center', fontSize:22}}
+                  />
+                </Field>
+                {error && <Alert color={T.red}>{error}</Alert>}
+                <button type="submit" disabled={busy || mfaCode.length !== 6} style={btnPrimary(busy || mfaCode.length !== 6)}>
+                  {busy ? 'Verifying…' : 'Verify & sign in'}
+                </button>
+                <div style={{textAlign:'center',marginTop:14}}>
+                  <button type="button" onClick={() => { setMode('login'); setError(''); setMfaCode('') }} disabled={busy}
+                    style={{background:'none',border:'none',color:T.text3,fontSize:12,cursor:'pointer',fontFamily:'inherit',padding:4}}>
+                    ← Back
                   </button>
                 </div>
               </form>
