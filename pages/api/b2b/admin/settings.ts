@@ -39,6 +39,7 @@ export default withAuth('edit:b2b_distributors', async (req: NextApiRequest, res
         myob_credit_note_number_prefix, myob_credit_note_number_padding, myob_credit_note_number_seq,
         slack_new_order_webhook_url,
         admin_order_notify_emails,
+        outbound_from_email,
         freight_markup_percent,
         freight_pallet_length_mm, freight_pallet_width_mm, freight_pallet_max_height_mm,
         freight_pallet_max_weight_g, freight_pallet_threshold_g,
@@ -133,6 +134,13 @@ export default withAuth('edit:b2b_distributors', async (req: NextApiRequest, res
       const u = String(body.slack_new_order_webhook_url || '').trim()
       if (u && !u.startsWith('https://hooks.slack.com/')) issues.push('Slack webhook URL must start with https://hooks.slack.com/')
       else update.slack_new_order_webhook_url = u || null
+    }
+
+    // "From" mailbox for all outbound B2B emails (single address).
+    if ('outbound_from_email' in body) {
+      const v = String(body.outbound_from_email || '').trim()
+      if (v && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v)) issues.push('Outbound from email looks invalid')
+      else update.outbound_from_email = v || null
     }
 
     // Admin order-placed notification recipients (comma/space-separated).

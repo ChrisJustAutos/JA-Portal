@@ -46,6 +46,19 @@ export interface B2BSettings {
   tax_codes_refreshed_at: string | null
 }
 
+// The mailbox all portal outbound B2B emails are sent FROM. Configurable in
+// B2B Settings (outbound_from_email); falls back to env then a sensible default.
+// NOTE: this mailbox must exist in the M365 tenant the Graph app is registered
+// in, and the app needs Mail.Send (admin-consented) — else Graph returns 403.
+export async function getFromMailbox(): Promise<string> {
+  try {
+    const { data } = await sb().from('b2b_settings').select('outbound_from_email').eq('id', SETTINGS_ID).maybeSingle()
+    const v = String((data as any)?.outbound_from_email || '').trim()
+    if (v) return v
+  } catch { /* fall through to env/default */ }
+  return process.env.B2B_PO_FROM_MAILBOX || process.env.AP_INBOX_MAILBOX || 'accounts@justautoswholesale.com'
+}
+
 export async function loadSettings(): Promise<B2BSettings> {
   const c = sb()
   const { data, error } = await c

@@ -9,7 +9,7 @@
 // if POs were already raised unless { force }.
 
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
-import { assertCheckoutConfigured } from './b2b-settings'
+import { assertCheckoutConfigured, getFromMailbox } from './b2b-settings'
 import { createDropShipPurchaseOrder, getSupplierContact, DropShipPOLine } from './b2b-myob-po'
 import { sendMail } from './microsoft-graph'
 import { renderEmail, linesTableHtml, addressBlock } from './email-templates'
@@ -156,7 +156,7 @@ export async function raiseDropShipPOsForOrder(orderId: string, opts: { actorId?
         else {
           const contact = await getSupplierContact(g.supplierUid)
           if (contact.email) {
-            await sendMail(PO_FROM_MAILBOX, { to: [contact.email], subject: rendered.subject, html: rendered.html })
+            await sendMail(await getFromMailbox(), { to: [contact.email], subject: rendered.subject, html: rendered.html })
             emailStatus = 'sent'; emailedTo = contact.email
           }
         }
@@ -220,7 +220,7 @@ export async function resendDropShipPoEmail(orderId: string, supplierUid: string
       await patchRec({ email_status: 'no_email', emailed_to: null, email_error: 'No email on the MYOB supplier card' })
       return { ok: false, email_status: 'no_email', error: 'Supplier has no email on their MYOB card.' }
     }
-    await sendMail(PO_FROM_MAILBOX, { to: [contact.email], subject: rendered.subject, html: rendered.html })
+    await sendMail(await getFromMailbox(), { to: [contact.email], subject: rendered.subject, html: rendered.html })
     await patchRec({ email_status: 'sent', emailed_to: contact.email, email_error: null })
     try { await c.from('b2b_order_events').insert({ order_id: orderId, event_type: 'dropship_po_emailed', actor_type: actorId ? 'admin' : 'system', actor_id: actorId || null, metadata: { supplier: g.supplierName, to: contact.email } }) } catch {}
     return { ok: true, email_status: 'sent', emailed_to: contact.email }

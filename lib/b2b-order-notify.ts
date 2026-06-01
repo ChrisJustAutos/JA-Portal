@@ -7,7 +7,8 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
 import { sendMail } from './microsoft-graph'
 import { signOrderAction } from './order-action-token'
-import { PO_FROM_MAILBOX, type DropshipRaiseResult } from './b2b-dropship'
+import { type DropshipRaiseResult } from './b2b-dropship'
+import { getFromMailbox } from './b2b-settings'
 import { renderEmail, linesTableHtml, addressBlock, buttonHtml, linkHtml } from './email-templates'
 
 const BASE_URL = process.env.B2B_PUBLIC_BASE_URL || process.env.NEXT_PUBLIC_SITE_URL || process.env.JA_PORTAL_BASE_URL || 'https://ja-portal.vercel.app'
@@ -100,7 +101,7 @@ export async function sendOrderPlacedAdminEmail(orderId: string, opts: { dropshi
   await c.from('b2b_orders').update({ admin_notified_at: new Date().toISOString() }).eq('id', orderId)
   if (!rendered.enabled) return { ok: false, reason: 'disabled' }
 
-  await sendMail(PO_FROM_MAILBOX, { to: recipients, subject: rendered.subject, html: rendered.html })
+  await sendMail(await getFromMailbox(), { to: recipients, subject: rendered.subject, html: rendered.html })
   return { ok: true, recipients }
 }
 
@@ -129,7 +130,7 @@ export async function sendDistributorOrderEmails(orderId: string, opts: { invoic
       distributor_name: dist?.display_name || '', order_number: order.order_number,
       customer_po: order.customer_po ? ` (your PO ${order.customer_po})` : '', order_total: money(order.total_inc),
     }, { lines_table: linesBlock, ship_to: addressBlock(shipToText(order.shipping_address_snapshot, dist)) })
-    if (r.enabled) { try { await sendMail(PO_FROM_MAILBOX, { to: [primary], subject: r.subject, html: r.html }); sent.push('order_confirmed') } catch (e: any) { console.error('distributor order_confirmed email failed:', e?.message) } }
+    if (r.enabled) { try { await sendMail(await getFromMailbox(), { to: [primary], subject: r.subject, html: r.html }); sent.push('order_confirmed') } catch (e: any) { console.error('distributor order_confirmed email failed:', e?.message) } }
   }
 
   // Tax invoice → invoice email (fallback primary), only once we have a number.
@@ -140,7 +141,7 @@ export async function sendDistributorOrderEmails(orderId: string, opts: { invoic
       distributor_name: dist?.display_name || '', order_number: order.order_number,
       invoice_number: String(invNumber), order_total: money(order.total_inc),
     })
-    if (r.enabled) { try { await sendMail(PO_FROM_MAILBOX, { to: [invoiceTo], subject: r.subject, html: r.html }); sent.push('invoice') } catch (e: any) { console.error('distributor invoice email failed:', e?.message) } }
+    if (r.enabled) { try { await sendMail(await getFromMailbox(), { to: [invoiceTo], subject: r.subject, html: r.html }); sent.push('invoice') } catch (e: any) { console.error('distributor invoice email failed:', e?.message) } }
   }
 
   await c.from('b2b_orders').update({ distributor_notified_at: new Date().toISOString() }).eq('id', orderId)
@@ -164,5 +165,5 @@ export async function sendDistributorShippedEmail(orderId: string, info: { carri
     tracking_number: info.trackingNumber || '—', eta: info.eta || '',
   }, { tracking_link: info.trackingUrl ? buttonHtml('Track this shipment', info.trackingUrl, '#4f8ef7') : '' })
   if (!r.enabled) return
-  try { await sendMail(PO_FROM_MAILBOX, { to: [to], subject: r.subject, html: r.html }) } catch (e: any) { console.error('distributor shipped email failed:', e?.message) }
+  try { await sendMail(await getFromMailbox(), { to: [to], subject: r.subject, html: r.html }) } catch (e: any) { console.error('distributor shipped email failed:', e?.message) }
 }

@@ -67,6 +67,7 @@ interface Settings {
   myob_credit_note_number_seq: number
   slack_new_order_webhook_url: string | null
   admin_order_notify_emails: string | null
+  outbound_from_email: string | null
   freight_markup_percent: number
   machship_from_name: string | null
   machship_from_company: string | null
@@ -115,6 +116,7 @@ export default function B2BSettingsPage({ user }: Props) {
   const [feeFixed, setFeeFixed] = useState(0)
   const [slackUrl, setSlackUrl] = useState('')
   const [adminEmails, setAdminEmails] = useState('')
+  const [fromEmail, setFromEmail] = useState('')
   // Freight (MachShip): admin-settable markup % + sender pickup address
   const [freightMarkup, setFreightMarkup] = useState<number>(20)
   const [msFromName,    setMsFromName]    = useState('')
@@ -144,6 +146,7 @@ export default function B2BSettingsPage({ user }: Props) {
       setFeeFixed(Number(j.settings.card_fee_fixed || 0.30))
       setSlackUrl(j.settings.slack_new_order_webhook_url || '')
       setAdminEmails(j.settings.admin_order_notify_emails || '')
+      setFromEmail(j.settings.outbound_from_email || '')
       setFreightMarkup(Number(j.settings.freight_markup_percent ?? 20))
       setMsFromName(j.settings.machship_from_name || '')
       setMsFromCompany(j.settings.machship_from_company || '')
@@ -593,7 +596,22 @@ export default function B2BSettingsPage({ user }: Props) {
               {/* ─── Order notifications ─── */}
               <Section id="order-notify" activeId={openSectionId} onClose={closeSection} title="Order Notifications"
                 description="When an order is paid, the portal auto-raises drop-ship POs (emailing suppliers) and sends an order-placed email — with a no-login Book Freight button — to these recipients.">
-                <Field label="Order notification emails" hint="Comma-separated. Falls back to the B2B_ADMIN_NOTIFY_EMAILS env var if blank.">
+                <Field label="Send emails from" hint="The mailbox ALL outbound B2B emails are sent from (invoices, confirmations, freight, supplier POs). Must be a mailbox in your Microsoft 365 tenant with Mail.Send granted.">
+                  <input
+                    type="email"
+                    value={fromEmail}
+                    onChange={e => setFromEmail(e.target.value)}
+                    placeholder="accounts@justautoswholesale.com"
+                    style={inputStyle()}
+                  />
+                </Field>
+                <div style={{marginTop:14,marginBottom:20}}>
+                  <button onClick={() => save({ outbound_from_email: fromEmail })} disabled={saving} style={primaryBtn(!saving)}>
+                    {saving ? 'Saving…' : 'Save sender'}
+                  </button>
+                </div>
+
+                <Field label="Order notification emails" hint="Who gets the internal 'order placed' email. Comma-separated. Falls back to the B2B_ADMIN_NOTIFY_EMAILS env var if blank.">
                   <input
                     type="text"
                     value={adminEmails}
