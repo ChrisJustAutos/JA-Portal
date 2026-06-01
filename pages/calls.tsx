@@ -811,17 +811,28 @@ function LiveCallsBoard({ canMonitor }: { canMonitor: boolean }) {
   const [spReason, setSpReason] = useState<string>('')
   const [activeDeviceMode, setActiveDeviceMode] = useState<SpyMode | null>(null)
 
-  // Lazily set up the audio element and connect the softphone if the user has
-  // WebRTC creds configured. Stays as 'idle' until something tries to use it.
-  const connectSoftphone = useCallback(async (): Promise<boolean> => {
-    if (softphoneRef.current) return spStatus === 'registered' || spStatus === 'incall'
+  // Create (once) the hidden <audio> element the remote call audio attaches to.
+  // playsInline + autoplay are required for iOS/WebKit (incl. Chrome on iOS,
+  // which is WebKit under the hood).
+  function ensureAudioEl(): HTMLAudioElement {
     if (!audioElRef.current) {
       const el = document.createElement('audio')
       el.autoplay = true
+      ;(el as any).playsInline = true
+      el.setAttribute('playsinline', '')
+      el.setAttribute('autoplay', '')
       el.style.display = 'none'
       document.body.appendChild(el)
       audioElRef.current = el
     }
+    return audioElRef.current
+  }
+
+  // Lazily set up the audio element and connect the softphone if the user has
+  // WebRTC creds configured. Stays as 'idle' until something tries to use it.
+  const connectSoftphone = useCallback(async (): Promise<boolean> => {
+    if (softphoneRef.current) return spStatus === 'registered' || spStatus === 'incall'
+    ensureAudioEl()
     setSpStatus('connecting'); setSpReason('')
     try {
       const r = await fetch('/api/me/webrtc')
@@ -915,6 +926,16 @@ function LiveCallsBoard({ canMonitor }: { canMonitor: boolean }) {
     // For device monitoring, ensure the softphone is registered first AND tell
     // it to expect the inbound INVITE so it auto-answers instead of rejecting.
     if (actorKind === 'device') {
+      // iOS/WebKit: unlock audio + grab mic permission *inside this tap gesture*.
+      // The remote stream attaches later (after async SDP negotiation), well
+      // outside the gesture, so iOS would otherwise block playback + getUserMedia.
+      const el = ensureAudioEl()
+      try { el.muted = false; const p = el.play(); if (p && typeof p.catch === 'function') p.catch(() => {}) } catch {}
+      try {
+        const ms = await navigator.mediaDevices.getUserMedia({ audio: true })
+        ms.getTracks().forEach(t => t.stop())  // just needed the gesture-time permission
+      } catch { /* mic denied/unavailable — Listen can still attempt to play remote audio */ }
+
       const ok = await connectSoftphone()
       if (!ok) {
         setBusyKey(null)
