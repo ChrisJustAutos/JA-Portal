@@ -638,8 +638,14 @@ export default function AdminOrderDetailPage({ user }: Props) {
                         borderRadius:5,padding:'8px 10px',fontSize:13,outline:'none',
                         resize:'vertical',fontFamily:'inherit',
                       }}/>
-                    <div style={{fontSize:10,color: notesError ? T.red : T.text3,marginTop:4}}>
-                      {notesError || (notesBusy ? 'Saving…' : 'Saves automatically when you click outside')}
+                    <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:10,marginTop:6}}>
+                      <span style={{fontSize:10,color: notesError ? T.red : T.text3}}>
+                        {notesError || (notesBusy ? 'Saving…' : notesDraft !== (data.internal_notes || '') ? 'Unsaved changes' : 'Saved')}
+                      </span>
+                      <button onClick={saveNotes} disabled={notesBusy || notesDraft === (data.internal_notes || '')}
+                        style={{padding:'6px 14px',borderRadius:6,border:`1px solid ${notesDraft !== (data.internal_notes || '') ? T.blue : T.border2}`,background: notesDraft !== (data.internal_notes || '') && !notesBusy ? T.blue : 'transparent',color: notesDraft !== (data.internal_notes || '') && !notesBusy ? '#fff' : T.text3,fontSize:12,fontWeight:600,fontFamily:'inherit',cursor: notesBusy || notesDraft === (data.internal_notes || '') ? 'default' : 'pointer'}}>
+                        {notesBusy ? 'Saving…' : 'Save notes'}
+                      </button>
                     </div>
                   </Card>
                 )}
