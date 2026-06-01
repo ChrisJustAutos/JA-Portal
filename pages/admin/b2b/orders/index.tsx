@@ -11,6 +11,7 @@ import PortalTopBar from '../../../../lib/PortalTopBar'
 import B2BAdminTabs from '../../../../components/b2b/B2BAdminTabs'
 import { AppIcon } from '../../../../lib/AppIcons'
 import { usePreferences } from '../../../../lib/preferences'
+import { useIsMobile } from '../../../../lib/useIsMobile'
 import { requirePageAuth } from '../../../../lib/authServer'
 import type { UserRole } from '../../../../lib/permissions'
 
@@ -102,6 +103,7 @@ interface StatusTile { id: string; label: string; statuses: string[]; color: str
 
 export default function AdminOrdersListPage({ user }: Props) {
   const router = useRouter()
+  const isMobile = useIsMobile()
 
   // Filters from URL (so the URL is shareable + bookmarkable)
   const statusFilter      = String(router.query.status     || '')
@@ -231,7 +233,7 @@ export default function AdminOrdersListPage({ user }: Props) {
           currentUserName={user.displayName}
           currentUserEmail={user.email}
         />
-        <main style={{flex:1,padding:'28px 32px',maxWidth:1500}}>
+        <main style={{flex:1,padding: isMobile ? '16px 14px' : '28px 32px',maxWidth:1500}}>
           <B2BAdminTabs active="orders"/>
 
           {/* Header */}

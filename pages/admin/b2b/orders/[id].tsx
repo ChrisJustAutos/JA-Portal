@@ -13,6 +13,7 @@ import PortalTopBar from '../../../../lib/PortalTopBar'
 import B2BAdminTabs from '../../../../components/b2b/B2BAdminTabs'
 import { requirePageAuth } from '../../../../lib/authServer'
 import { roleHasPermission, type UserRole } from '../../../../lib/permissions'
+import { useIsMobile } from '../../../../lib/useIsMobile'
 
 const T = {
   bg:'#0d0f12', bg2:'#131519', bg3:'#1a1d23', bg4:'#21252d',
@@ -151,6 +152,7 @@ const ALLOWED_TRANSITIONS: Record<string, { to: string; label: string; primary?:
 
 export default function AdminOrderDetailPage({ user }: Props) {
   const router = useRouter()
+  const isMobile = useIsMobile()
   const orderId = String(router.query.id || '')
   const canEdit   = roleHasPermission(user.role, 'edit:b2b_orders')
   const canRefund = roleHasPermission(user.role, 'admin:b2b')
@@ -357,7 +359,7 @@ export default function AdminOrderDetailPage({ user }: Props) {
           currentUserName={user.displayName}
           currentUserEmail={user.email}
         />
-        <main style={{flex:1,padding:'28px 32px',maxWidth:1500}}>
+        <main style={{flex:1,padding: isMobile ? '16px 14px' : '28px 32px',maxWidth:1500}}>
           <B2BAdminTabs active="orders"/>
 
           <header style={{marginBottom:18}}>
@@ -402,7 +404,7 @@ export default function AdminOrderDetailPage({ user }: Props) {
           )}
 
           {data && (
-            <div style={{display:'grid',gridTemplateColumns:'1fr 360px',gap:18,alignItems:'start'}}>
+            <div style={{display:'grid',gridTemplateColumns: isMobile ? '1fr' : '1fr 360px',gap: isMobile ? 14 : 18,alignItems:'start'}}>
 
               {/* ── LEFT COLUMN ── */}
               <div style={{display:'flex',flexDirection:'column',gap:14}}>
@@ -555,7 +557,7 @@ export default function AdminOrderDetailPage({ user }: Props) {
               </div>
 
               {/* ── RIGHT COLUMN ── */}
-              <div style={{display:'flex',flexDirection:'column',gap:14,position:'sticky',top:18}}>
+              <div style={{display:'flex',flexDirection:'column',gap:14,position: isMobile ? 'static' : 'sticky',top:18}}>
 
                 {/* Status timeline */}
                 <Card title="Timeline">
