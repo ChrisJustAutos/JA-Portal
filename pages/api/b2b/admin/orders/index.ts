@@ -59,7 +59,7 @@ export default withAuth('view:b2b', async (req: NextApiRequest, res: NextApiResp
   let q = c.from('b2b_orders').select(`
     id, order_number, status, customer_po,
     subtotal_ex_gst, gst, card_fee_inc, total_inc, refunded_total, currency,
-    created_at, paid_at, shipped_at, cancelled_at,
+    created_at, paid_at, shipped_at, cancelled_at, is_test,
     myob_invoice_uid, myob_invoice_number, myob_write_error,
     distributor:b2b_distributors!b2b_orders_distributor_id_fkey ( id, display_name )
   `, { count: 'exact' })

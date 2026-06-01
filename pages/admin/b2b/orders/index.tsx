@@ -50,6 +50,7 @@ interface OrderRow {
   myob_invoice_uid: string | null
   myob_invoice_number: string | null
   myob_write_error: string | null
+  is_test: boolean | null
   distributor: { id: string; display_name: string } | null
 }
 
@@ -242,6 +243,10 @@ export default function AdminOrdersListPage({ user }: Props) {
                 <span style={{color:T.text2}}>Orders</span>
               </div>
               <h1 style={{fontSize:22,fontWeight:600,margin:0,letterSpacing:'-0.01em'}}>Orders</h1>
+              <button onClick={()=>router.push('/admin/b2b/test-order')}
+                style={{marginTop:8,padding:'6px 12px',borderRadius:6,border:`1px solid ${T.amber}55`,background:`${T.amber}18`,color:T.amber,fontSize:12,fontWeight:600,cursor:'pointer',fontFamily:'inherit'}}>
+                + Place test order
+              </button>
             </div>
             {data && (
               <div style={{display:'flex',gap:24,alignItems:'baseline'}}>
@@ -447,7 +452,7 @@ function OrderRowDisplay({ order, isFirst }: { order: OrderRow; isFirst: boolean
       onClick={() => { window.location.href = `/admin/b2b/orders/${order.id}` }}>
 
       <td style={td()}>
-        <div style={{fontFamily:'monospace',fontSize:13,color:T.text}}>{order.order_number}</div>
+        <div style={{fontFamily:'monospace',fontSize:13,color:T.text}}>{order.order_number}{order.is_test && <span style={{marginLeft:6,fontFamily:'inherit',fontSize:9,padding:'1px 6px',borderRadius:8,background:`${T.amber}22`,color:T.amber,border:`1px solid ${T.amber}55`,verticalAlign:'middle'}}>TEST</span>}</div>
         {order.customer_po && (
           <div style={{fontSize:10,color:T.text3,marginTop:2}}>PO: {order.customer_po}</div>
         )}

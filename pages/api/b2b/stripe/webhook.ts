@@ -24,9 +24,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
 import { verifyWebhookSignature, retrieveCheckoutSession } from '../../../../lib/stripe'
-import { writeOrderToMyob } from '../../../../lib/b2b-myob-invoice'
-import { raiseDropShipPOsForOrder, type DropshipRaiseResult } from '../../../../lib/b2b-dropship'
-import { sendOrderPlacedAdminEmail, sendDistributorOrderEmails } from '../../../../lib/b2b-order-notify'
+import { runPostPaymentPipeline } from '../../../../lib/b2b-order-pipeline'
 
 // CRITICAL: disable Next's body parser — we need the raw body bytes for HMAC
 export const config = {
@@ -129,141 +127,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(200).json({ received: true, already_paid: true, already_written: true, order_id: orderId })
   }
 
-  // 5. Mark order paid (only if not already)
-  const nowIso = new Date().toISOString()
-  if (order.status !== 'paid') {
-    const { error: updErr } = await c
-      .from('b2b_orders')
-      .update({
-        status: 'paid',
-        paid_at: nowIso,
-        stripe_payment_intent_id: paymentIntentId,
-      })
-      .eq('id', orderId)
-    if (updErr) {
-      console.error('webhook: order update failed', updErr)
-      // Return 500 so Stripe retries
-      return res.status(500).json({ error: updErr.message })
-    }
-
-    await c.from('b2b_order_events').insert({
-      order_id: orderId,
-      event_type: 'payment_succeeded',
-      from_status: 'pending_payment',
-      to_status: 'paid',
-      actor_type: 'stripe_webhook',
-      actor_id: null,
-      notes: `Stripe ${eventId}; PaymentIntent ${paymentIntentId || 'n/a'}`,
-      metadata: {
-        stripe_event_id: eventId,
-        stripe_session_id: stripeSessionId,
-        stripe_payment_intent_id: paymentIntentId,
-        amount_total: session.amount_total,
-      },
-    })
-  }
-
-  // 6. Trigger MYOB writeback. Wrapped in try/catch so MYOB failure doesn't
-  // 500 the webhook (Stripe would keep retrying for 3 days, won't help).
-  let myobInvoiceNumber: string | null = null
+  // 5. Run the post-payment pipeline (mark paid → MYOB invoice → drop-ship POs
+  // → admin + distributor emails → Slack). Extracted to lib/b2b-order-pipeline
+  // so the admin "mark paid" test shortcut shares the exact same path. Steps are
+  // best-effort + idempotent via the order's flag columns. Only a failed
+  // mark-paid throws → 500 so Stripe retries.
   try {
-    const myob = await writeOrderToMyob(orderId)
-    myobInvoiceNumber = myob.myob_invoice_number || null
-    await c.from('b2b_order_events').insert({
-      order_id: orderId,
-      event_type: 'myob_invoice_created',
-      to_status: 'paid',
-      actor_type: 'system',
-      actor_id: null,
-      notes: `MYOB invoice ${myob.myob_invoice_number || myob.myob_invoice_uid} (${myob.status})`,
-      metadata: {
-        myob_invoice_uid: myob.myob_invoice_uid,
-        myob_invoice_number: myob.myob_invoice_number,
-        write_status: myob.status,
-      },
-    })
+    await runPostPaymentPipeline(orderId, { paymentIntentId, eventId })
   } catch (e: any) {
-    const errMsg = e?.message || String(e)
-    console.error(`webhook: MYOB write failed for order ${orderId}:`, errMsg)
-    // Don't fail the webhook — record the error and let staff retry manually
-    await c.from('b2b_orders')
-      .update({ myob_write_error: errMsg.substring(0, 1000) })
-      .eq('id', orderId)
-    await c.from('b2b_order_events').insert({
-      order_id: orderId,
-      event_type: 'myob_write_failed',
-      to_status: 'paid',
-      actor_type: 'system',
-      actor_id: null,
-      notes: errMsg.substring(0, 500),
-      metadata: { error: errMsg },
-    })
+    console.error(`webhook: pipeline failed for order ${orderId}:`, e?.message || e)
+    return res.status(500).json({ error: e?.message || 'pipeline failed' })
   }
-
-  // 6b. Auto-raise drop-ship POs (best-effort). Idempotent: the lib skips if
-  // already raised. Failure must not 500 the webhook — admin email surfaces it
-  // and the manual "Raise drop-ship PO" button remains as a fallback.
-  let dropshipResult: DropshipRaiseResult | undefined
-  if (!order.dropship_po_raised_at) {
-    try {
-      dropshipResult = await raiseDropShipPOsForOrder(orderId, { actorId: null })
-    } catch (e: any) {
-      console.error(`webhook: auto drop-ship PO failed for order ${orderId}:`, e?.message || e)
-      try { await c.from('b2b_order_events').insert({ order_id: orderId, event_type: 'dropship_po_failed', actor_type: 'system', actor_id: null, notes: (e?.message || String(e)).slice(0, 500) }) } catch {}
-    }
-  }
-
-  // 6c. Admin "order placed" notification email (best-effort, once per order).
-  if (!order.admin_notified_at) {
-    try {
-      const r = await sendOrderPlacedAdminEmail(orderId, { dropshipResult })
-      await c.from('b2b_order_events').insert({
-        order_id: orderId, event_type: r.ok ? 'admin_notified' : 'admin_notify_skipped',
-        actor_type: 'system', actor_id: null,
-        notes: r.ok ? `Emailed ${r.recipients?.join(', ')}` : (r.reason || 'unknown'),
-      })
-    } catch (e: any) {
-      console.error(`webhook: admin notify failed for order ${orderId}:`, e?.message || e)
-    }
-  }
-
-  // 6d. Distributor-facing emails — order confirmation + tax invoice (best-effort,
-  // once per order). Each respects its template's on/off + the distributor email.
-  if (!order.distributor_notified_at) {
-    try {
-      await sendDistributorOrderEmails(orderId, { invoiceNumber: myobInvoiceNumber })
-    } catch (e: any) {
-      console.error(`webhook: distributor emails failed for order ${orderId}:`, e?.message || e)
-    }
-  }
-
-  // 7. Optional Slack notification (best-effort, fire-and-forget)
-  try {
-    const { data: settings } = await c
-      .from('b2b_settings')
-      .select('slack_new_order_webhook_url')
-      .eq('id', 'singleton')
-      .maybeSingle()
-    if (settings?.slack_new_order_webhook_url) {
-      const { data: detail } = await c
-        .from('b2b_orders')
-        .select(`
-          order_number, total_inc, distributor:b2b_distributors!b2b_orders_distributor_id_fkey ( display_name )
-        `)
-        .eq('id', orderId)
-        .maybeSingle()
-      const dist: any = Array.isArray(detail?.distributor) ? detail!.distributor[0] : detail?.distributor
-      await fetch(settings.slack_new_order_webhook_url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          text: `:moneybag: New B2B order *${detail?.order_number}* — ${dist?.display_name || 'unknown'} — $${Number(detail?.total_inc || 0).toFixed(2)} AUD`,
-        }),
-      }).catch(err => console.error('Slack notify failed:', err))
-    }
-  } catch (e) {
-    console.error('Slack notify error (non-fatal):', e)
-  }
-
   return res.status(200).json({ received: true, order_id: orderId, status: 'paid' })
 }
