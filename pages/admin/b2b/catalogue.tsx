@@ -62,7 +62,7 @@ interface CatalogueItem {
   freight_height_mm: number | null
   freight_weight_g: number | null
   freight_packaging: FreightPackaging | null
-  manual_handling_fee_ex_gst: number | null
+  manual_handling: boolean
   inbound_freight_cost_ex_gst: number | null
   is_special_order: boolean
   is_drop_ship: boolean
@@ -1171,19 +1171,19 @@ function EditDrawer({
                   onChange={async v => { try { await patch({ freight_packaging: v }) } catch {} }}
                 />
                 <div style={{height:14}}/>
-                <div style={{fontSize:11,color:'#8d93a4',marginBottom:6}}>Freight surcharges (ex GST) — added to the distributor's freight, per unit × qty:</div>
-                <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8}}>
-                  <FieldNumber
-                    label="Manual handling $/unit"
-                    value={item.manual_handling_fee_ex_gst}
-                    onSave={async v => { try { await patch({ manual_handling_fee_ex_gst: v }) } catch {} }}
-                  />
-                  <FieldNumber
-                    label="Inbound freight $/unit"
-                    value={item.inbound_freight_cost_ex_gst}
-                    onSave={async v => { try { await patch({ inbound_freight_cost_ex_gst: v }) } catch {} }}
-                  />
-                </div>
+                <BoolRow
+                  label="Manual handling"
+                  hint="Flags this item to MachShip as manual-handling so the freight quote/booking price adjusts"
+                  value={item.manual_handling}
+                  onChange={v => { patch({ manual_handling: v }).catch(() => {}) }}
+                />
+                <div style={{height:10}}/>
+                <div style={{fontSize:11,color:'#8d93a4',marginBottom:6}}>Inbound freight (ex GST) — added to the distributor's freight, per unit × qty:</div>
+                <FieldNumber
+                  label="Inbound freight $/unit"
+                  value={item.inbound_freight_cost_ex_gst}
+                  onSave={async v => { try { await patch({ inbound_freight_cost_ex_gst: v }) } catch {} }}
+                />
               </Section>
             )
           })()}
@@ -2110,8 +2110,7 @@ function BulkEditModal({ items, onClose, onApplied }: {
   const [visMode, setVisMode] = useState<'none'|'show'|'hide'>('none')
   const [priceMode, setPriceMode] = useState<'none'|'set'|'inc'|'dec'>('none')
   const [priceVal, setPriceVal] = useState('')
-  const [handMode, setHandMode] = useState<'none'|'set'|'clear'>('none')
-  const [handVal, setHandVal] = useState('')
+  const [handMode, setHandMode] = useState<'none'|'on'|'off'>('none')
   const [inbMode, setInbMode] = useState<'none'|'set'|'clear'>('none')
   const [inbVal, setInbVal] = useState('')
   const [pkgMode, setPkgMode] = useState<'none'|'box'|'pallet'|'other'>('none')
@@ -2130,8 +2129,8 @@ function BulkEditModal({ items, onClose, onApplied }: {
       if (priceMode === 'inc' && isFinite(v)) patch.trade_price_ex_gst = round2(it.trade_price_ex_gst * (1 + v/100))
       if (priceMode === 'dec' && isFinite(v)) patch.trade_price_ex_gst = round2(Math.max(0, it.trade_price_ex_gst * (1 - v/100)))
     }
-    if (handMode === 'set') { const v = Number(handVal); if (isFinite(v) && v >= 0) patch.manual_handling_fee_ex_gst = v }
-    if (handMode === 'clear') patch.manual_handling_fee_ex_gst = null
+    if (handMode === 'on') patch.manual_handling = true
+    if (handMode === 'off') patch.manual_handling = false
     if (inbMode === 'set') { const v = Number(inbVal); if (isFinite(v) && v >= 0) patch.inbound_freight_cost_ex_gst = v }
     if (inbMode === 'clear') patch.inbound_freight_cost_ex_gst = null
     if (pkgMode !== 'none') patch.freight_packaging = pkgMode as FreightPackaging
@@ -2189,15 +2188,12 @@ function BulkEditModal({ items, onClose, onApplied }: {
           </div>
 
           <div>
-            <div style={lbl}>Manual handling $/unit</div>
-            <div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}>
-              <select value={handMode} onChange={e => setHandMode(e.target.value as any)} style={sel}>
-                <option value="none">No change</option>
-                <option value="set">Set to $</option>
-                <option value="clear">Clear</option>
-              </select>
-              {handMode === 'set' && <input type="number" min="0" step="0.01" value={handVal} onChange={e => setHandVal(e.target.value)} placeholder="$" style={inp}/>}
-            </div>
+            <div style={lbl}>Manual handling</div>
+            <select value={handMode} onChange={e => setHandMode(e.target.value as any)} style={sel}>
+              <option value="none">No change</option>
+              <option value="on">Tick (manual handling on)</option>
+              <option value="off">Untick (off)</option>
+            </select>
           </div>
 
           <div>

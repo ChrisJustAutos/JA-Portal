@@ -58,7 +58,7 @@ const EDITABLE_FIELDS = [
   'call_for_availability_when_zero',
   'instructions_url',
   'cost_price_ex_gst',
-  'manual_handling_fee_ex_gst',
+  'manual_handling',
   'inbound_freight_cost_ex_gst',
   'volume_breaks',
   'promo_price_ex_gst',
@@ -72,9 +72,9 @@ const NULLABLE_INT_FIELDS = [
   'freight_length_mm', 'freight_width_mm', 'freight_height_mm', 'freight_weight_g',
   'call_for_availability_below_qty',
 ] as const
-const NULLABLE_NUMERIC_FIELDS = ['cost_price_ex_gst', 'promo_price_ex_gst', 'manual_handling_fee_ex_gst', 'inbound_freight_cost_ex_gst'] as const
+const NULLABLE_NUMERIC_FIELDS = ['cost_price_ex_gst', 'promo_price_ex_gst', 'inbound_freight_cost_ex_gst'] as const
 const NULLABLE_TIMESTAMP_FIELDS = ['promo_starts_at', 'promo_ends_at'] as const
-const BOOLEAN_FIELDS = ['b2b_visible', 'is_special_order', 'is_drop_ship', 'call_for_availability_when_zero'] as const
+const BOOLEAN_FIELDS = ['b2b_visible', 'is_special_order', 'is_drop_ship', 'call_for_availability_when_zero', 'manual_handling'] as const
 const PACKAGING_VALUES = ['box', 'pallet', 'other'] as const
 
 export default withAuth('edit:b2b_catalogue', async (req: NextApiRequest, res: NextApiResponse) => {

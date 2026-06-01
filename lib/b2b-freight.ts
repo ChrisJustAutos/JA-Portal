@@ -169,9 +169,11 @@ export interface LiveQuoteCartItem {
   freight_width_mm:  number | null
   freight_height_mm: number | null
   freight_packaging: 'box' | 'pallet' | 'other' | null
-  // Per-unit surcharges (ex GST) added on top of the carrier-quoted freight.
-  // Both are charged to the distributor and applied PER UNIT × qty.
-  manual_handling_fee_ex_gst?:  number | null
+  // Manual handling: a tickbox that flags the item to MachShip so the carrier's
+  // quote/booking price adjusts (no fixed portal fee).
+  manual_handling?: boolean | null
+  // Per-unit inbound freight surcharge (ex GST) added on top of the
+  // carrier-quoted freight, charged to the distributor, applied PER UNIT × qty.
   inbound_freight_cost_ex_gst?: number | null
 }
 
@@ -279,6 +281,7 @@ export async function getLiveQuote(
     length:   round1(Number(it.freight_length_mm!) / 10),
     width:    round1(Number(it.freight_width_mm!)  / 10),
     height:   round1(Number(it.freight_height_mm!) / 10),
+    ...(it.manual_handling ? { manualHandling: true } : {}),
   }))
 
   let routes: RouteOption[]
@@ -298,13 +301,13 @@ export async function getLiveQuote(
     return { mode: 'unavailable', reason: 'No MachShip routes available for this destination' }
   }
 
-  // Per-unit surcharges (manual handling + inbound freight), both charged to
-  // the distributor. Summed across the cart (× qty) and added on top of the
-  // marked-up carrier price — they're cost recovery, so no extra markup.
+  // Inbound-freight per-unit surcharge, charged to the distributor. Summed
+  // across the cart (× qty) and added on top of the marked-up carrier price —
+  // cost recovery, so no extra markup. (Manual handling is NOT a fixed fee — it
+  // flags the item to MachShip above so the carrier price already reflects it.)
   const surchargeExGst = round2(items.reduce((sum, it) => {
-    const handling = Number(it.manual_handling_fee_ex_gst  || 0)
-    const inbound  = Number(it.inbound_freight_cost_ex_gst || 0)
-    return sum + (handling + inbound) * Number(it.qty || 0)
+    const inbound = Number(it.inbound_freight_cost_ex_gst || 0)
+    return sum + inbound * Number(it.qty || 0)
   }, 0))
 
   const markupMultiplier = 1 + (markup / 100)

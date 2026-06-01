@@ -54,7 +54,7 @@ export default withAuth('view:b2b', async (req: NextApiRequest, res: NextApiResp
       freight_height_mm,
       freight_weight_g,
       freight_packaging,
-      manual_handling_fee_ex_gst,
+      manual_handling,
       inbound_freight_cost_ex_gst,
       is_special_order,
       is_drop_ship,

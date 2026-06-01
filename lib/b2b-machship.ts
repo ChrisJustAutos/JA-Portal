@@ -159,6 +159,9 @@ export interface MachShipItem {
   width:  number   // cm
   height: number   // cm
   sku?:   string
+  // When true, flags the item for manual handling so the carrier's quote/
+  // booking price is adjusted for it (set from the catalogue tickbox).
+  manualHandling?: boolean
 }
 
 export interface RoutesRequest {

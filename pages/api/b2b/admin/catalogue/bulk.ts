@@ -23,7 +23,7 @@ function sb(): SupabaseClient {
   return _sb
 }
 
-const NUMERIC_FIELDS = ['trade_price_ex_gst', 'manual_handling_fee_ex_gst', 'inbound_freight_cost_ex_gst'] as const
+const NUMERIC_FIELDS = ['trade_price_ex_gst', 'inbound_freight_cost_ex_gst'] as const
 const PACKAGING_VALUES = ['box', 'pallet', 'other'] as const
 // trade_price must be >= 0 and non-null; the surcharges are nullable (null clears).
 const REQUIRED_NUMERIC = new Set<string>(['trade_price_ex_gst'])
@@ -37,6 +37,10 @@ function cleanPatch(raw: any): { patch: Record<string, any> } | { error: string 
   if ('b2b_visible' in raw) {
     if (typeof raw.b2b_visible !== 'boolean') return { error: 'b2b_visible must be boolean' }
     patch.b2b_visible = raw.b2b_visible
+  }
+  if ('manual_handling' in raw) {
+    if (typeof raw.manual_handling !== 'boolean') return { error: 'manual_handling must be boolean' }
+    patch.manual_handling = raw.manual_handling
   }
   for (const k of NUMERIC_FIELDS) {
     if (k in raw) {
