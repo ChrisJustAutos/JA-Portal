@@ -448,8 +448,8 @@ export default function AdminOrderDetailPage({ user }: Props) {
                           <th style={th(140)}>SKU</th>
                           <th style={th()}>Item</th>
                           <th style={{...th(50),textAlign:'right'}}>Qty</th>
-                          <th style={{...th(110),textAlign:'right'}}>Unit (ex GST)</th>
-                          <th style={{...th(110),textAlign:'right'}}>Line (ex GST)</th>
+                          <th style={{...th(110),textAlign:'right'}}>Unit (inc GST)</th>
+                          <th style={{...th(110),textAlign:'right'}}>Line (inc GST)</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -458,8 +458,8 @@ export default function AdminOrderDetailPage({ user }: Props) {
                             <td style={td()}><span style={{fontFamily:'monospace',fontSize:12,color:T.text2}}>{ln.sku}</span></td>
                             <td style={td()}>{ln.name}</td>
                             <td style={{...td(),textAlign:'right',fontVariantNumeric:'tabular-nums'}}>{ln.qty}</td>
-                            <td style={{...td(),textAlign:'right',fontVariantNumeric:'tabular-nums',fontFamily:'monospace'}}>${money(ln.unit_trade_price_ex_gst)}</td>
-                            <td style={{...td(),textAlign:'right',fontVariantNumeric:'tabular-nums',fontFamily:'monospace'}}>${money(ln.line_subtotal_ex_gst)}</td>
+                            <td style={{...td(),textAlign:'right',fontVariantNumeric:'tabular-nums',fontFamily:'monospace'}}>${money(incGstAmt(ln.unit_trade_price_ex_gst, ln.is_taxable))}</td>
+                            <td style={{...td(),textAlign:'right',fontVariantNumeric:'tabular-nums',fontFamily:'monospace'}}>${money(ln.line_total_inc)}</td>
                           </tr>
                         ))}
                       </tbody>
@@ -470,17 +470,21 @@ export default function AdminOrderDetailPage({ user }: Props) {
                 {/* Totals — the stored subtotal_ex_gst includes freight, so break
                     freight out as its own line and show items-only above it. */}
                 <Card title="Totals">
-                  {data.freight_cost_ex_gst != null && data.freight_cost_ex_gst > 0 ? (
-                    <>
-                      <Row label="Items (ex GST)"   value={`$${money(data.subtotal_ex_gst - data.freight_cost_ex_gst)}`}/>
-                      <Row label={`Freight (ex GST)${data.freight_service_label || data.freight_method_label ? ` — ${data.freight_service_label || data.freight_method_label}` : ''}`} value={`$${money(data.freight_cost_ex_gst)}`}/>
-                    </>
-                  ) : (
-                    <Row label="Subtotal (ex GST)"  value={`$${money(data.subtotal_ex_gst)}`}/>
-                  )}
-                  <Row label="GST"                value={`$${money(data.gst)}`}/>
+                  {(() => {
+                    const itemsInc = data.lines.reduce((s, l) => s + (Number(l.line_total_inc) || 0), 0)
+                    const freightInc = data.freight_cost_ex_gst != null ? round2x(data.freight_cost_ex_gst * 1.10) : 0
+                    return (
+                      <>
+                        <Row label="Items (inc GST)" value={`$${money(itemsInc)}`}/>
+                        {freightInc > 0 && (
+                          <Row label={`Freight (inc GST)${data.freight_service_label || data.freight_method_label ? ` — ${data.freight_service_label || data.freight_method_label}` : ''}`} value={`$${money(freightInc)}`}/>
+                        )}
+                      </>
+                    )
+                  })()}
                   <Row label="Card surcharge"     value={`$${money(data.card_fee_inc)}`} muted/>
                   <Row label="Total (inc GST)"    value={`$${money(data.total_inc)}`} bold/>
+                  <Row label="(includes GST)"     value={`$${money(data.gst)}`} muted/>
                   {Number(data.refunded_total || 0) > 0 && (
                     <Row label={`Refunded${Number(data.refunded_total) >= data.total_inc - 0.005 ? ' (full)' : ' (partial)'}`}
                          value={`-$${money(Number(data.refunded_total))}`} valueColor={T.purple}/>
@@ -1342,6 +1346,9 @@ function td(): React.CSSProperties {
 function money(n: number): string {
   return n.toLocaleString('en-AU', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 }
+function round2x(n: number): number { return Math.round(n * 100) / 100 }
+// GST-inclusive amount (taxable +10%, FRE as-is).
+function incGstAmt(ex: number, taxable: boolean): number { return taxable ? round2x(ex * 1.10) : ex }
 
 function fullDate(iso: string): string {
   const d = new Date(iso)
