@@ -49,8 +49,9 @@ export default function TestOrderPage({ user }: Props) {
   const [freight, setFreight] = useState<FreightResult | null>(null)
   const [freightBusy, setFreightBusy] = useState(false)
   const [freightMsg, setFreightMsg] = useState('')
+  const [selFreightId, setSelFreightId] = useState<string | null>(null)
   const [creating, setCreating] = useState(false)
-  const [result, setResult] = useState<{ orderId: string; orderNumber: string; checkoutUrl: string | null; total_inc: number } | null>(null)
+  const [result, setResult] = useState<{ orderId: string; orderNumber: string; checkoutUrl: string | null; total_inc: number; freight?: { label: string | null; cost_ex_gst: number } | null } | null>(null)
   const [markState, setMarkState] = useState<'idle' | 'busy' | 'done' | 'err'>('idle')
   const [msg, setMsg] = useState('')
 
@@ -73,21 +74,35 @@ export default function TestOrderPage({ user }: Props) {
 
   async function quoteFreight() {
     if (lines.length === 0) return
-    setFreightBusy(true); setFreightMsg(''); setFreight(null)
+    setFreightBusy(true); setFreightMsg(''); setFreight(null); setSelFreightId(null)
     try {
       const r = await fetch('/api/b2b/admin/freight-quote', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ distributorId: distId, postcode: shipPostcode, suburb: shipSuburb, items: lines.map(l => ({ catalogueId: l.cat.id, qty: l.qty })) }) })
       const d = await r.json()
       if (!r.ok) { setFreightMsg(d.error || 'Freight quote failed'); return }
       setFreight(d)
+      if (d.rates?.length) setSelFreightId(d.rates[0].id) // pre-select cheapest
     } catch (e: any) { setFreightMsg(e?.message || 'Freight quote failed') }
     finally { setFreightBusy(false) }
+  }
+
+  // Build the freight payload for order creation from the chosen quoted rate.
+  function freightPayload(): Record<string, any> {
+    if (!freight || !selFreightId) return {}
+    const rate = freight.rates.find(r => r.id === selFreightId)
+    if (!rate) return {}
+    if (rate.source === 'machship') {
+      const m = rate.id.match(/^ms:(\d+):(\d+)$/) // ms:<carrierId>:<serviceId>
+      if (!m) return {}
+      return { freightMachShipRoute: { carrierId: Number(m[1]), carrierServiceId: Number(m[2]) }, shipPostcode, shipSuburb }
+    }
+    return { freightRateId: rate.id }
   }
 
   async function create() {
     if (!distId || lines.length === 0) return
     setCreating(true); setMsg('')
     try {
-      const r = await fetch('/api/b2b/admin/test-order', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ distributorId: distId, customerPo: po, items: lines.map(l => ({ catalogueId: l.cat.id, qty: l.qty })) }) })
+      const r = await fetch('/api/b2b/admin/test-order', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ distributorId: distId, customerPo: po, items: lines.map(l => ({ catalogueId: l.cat.id, qty: l.qty })), ...freightPayload() }) })
       const d = await r.json()
       if (!r.ok) { setMsg(d.error || 'Failed to create'); return }
       setResult(d); setMarkState('idle')
@@ -199,13 +214,15 @@ export default function TestOrderPage({ user }: Props) {
                         ) : (
                           <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
                             <div style={{ fontSize: 11, color: T.text3 }}>
-                              To {freight.suburb ? `${freight.suburb} ` : ''}{freight.postcode} · {freight.mode === 'live' ? 'live MachShip' : freight.mode === 'static' ? `static zone${freight.zone ? ` (${freight.zone.name})` : ''}` : freight.mode}
+                              To {freight.suburb ? `${freight.suburb} ` : ''}{freight.postcode} · {freight.mode === 'live' ? 'live MachShip' : freight.mode === 'static' ? `static zone${freight.zone ? ` (${freight.zone.name})` : ''}` : freight.mode} · click to attach to the order
                               {freight.mode === 'static' && freight.unavailable_reason ? ` — live unavailable: ${freight.unavailable_reason}` : ''}
                             </div>
-                            {freight.rates.map((r, i) => (
-                              <div key={r.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 8, padding: '6px 8px', background: i === 0 ? `${T.green}14` : T.bg3, border: `1px solid ${i === 0 ? `${T.green}44` : T.border}`, borderRadius: 6 }}>
+                            {freight.rates.map((r, i) => {
+                              const sel = selFreightId === r.id
+                              return (
+                              <div key={r.id} onClick={() => setSelFreightId(sel ? null : r.id)} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 8, padding: '6px 8px', cursor: 'pointer', background: sel ? `${T.blue}22` : T.bg3, border: `1px solid ${sel ? T.blue : T.border}`, borderRadius: 6 }}>
                                 <div>
-                                  <span style={{ fontSize: 12.5 }}>{r.label}</span>
+                                  <span style={{ fontSize: 12.5 }}>{sel ? '● ' : '○ '}{r.label}</span>
                                   {i === 0 && <span style={{ fontSize: 10, color: T.green, marginLeft: 6 }}>cheapest</span>}
                                   {r.transit_days != null && <span style={{ fontSize: 10, color: T.text3, marginLeft: 6 }}>~{r.transit_days}d</span>}
                                 </div>
@@ -215,7 +232,11 @@ export default function TestOrderPage({ user }: Props) {
                                   {r.base_price_ex_gst != null && r.markup_pct != null && r.markup_pct > 0 && <div style={{ fontSize: 9.5, color: T.text3 }}>base ${r.base_price_ex_gst.toFixed(2)} + {r.markup_pct}%</div>}
                                 </div>
                               </div>
-                            ))}
+                              )
+                            })}
+                            <div style={{ fontSize: 11, color: selFreightId ? T.blue : T.text3, marginTop: 2 }}>
+                              {selFreightId ? 'Selected freight will be added to the order (Book Freight will use it after payment).' : 'No freight selected — order will be created without freight.'}
+                            </div>
                           </div>
                         )}
                       </div>
@@ -236,6 +257,7 @@ export default function TestOrderPage({ user }: Props) {
             ) : (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 14, background: T.bg2, border: `1px solid ${T.border}`, borderRadius: 12, padding: 18 }}>
                 <div style={{ fontSize: 14 }}>Test order <strong>{result.orderNumber}</strong> created — <a href={`/admin/b2b/orders/${result.orderId}`} style={{ color: T.blue }}>open in admin</a>. Total ${result.total_inc.toFixed(2)} inc GST.</div>
+                {result.freight && <div style={{ fontSize: 12.5, color: T.text2 }}>Freight attached: <strong style={{ color: T.text }}>{result.freight.label}</strong> — ${result.freight.cost_ex_gst.toFixed(2)} ex GST. After payment, use <strong>Book Freight</strong> on the order to dispatch it.</div>}
                 <div style={{ fontSize: 12.5, color: T.text2 }}>Complete payment to fire the pipeline (MYOB invoice, drop-ship PO + supplier email, admin + distributor emails):</div>
                 <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
                   {result.checkoutUrl && <a href={result.checkoutUrl} target="_blank" rel="noreferrer" style={{ ...btn(T.teal), textDecoration: 'none', display: 'inline-block' }}>Open Stripe test checkout ↗</a>}

@@ -12,6 +12,7 @@ import { withAuth } from '../../../../lib/authServer'
 import { applyPricing } from '../../../../lib/b2b-pricing'
 import { createCheckoutSession, StripeLineItem } from '../../../../lib/stripe'
 import { assertCheckoutConfigured } from '../../../../lib/b2b-settings'
+import { getLiveQuote, type LiveQuoteCartItem } from '../../../../lib/b2b-freight'
 
 const GST_RATE = 0.10
 const round2 = (n: number) => Math.round(n * 100) / 100
@@ -40,17 +41,34 @@ export default withAuth('admin:b2b', async (req: NextApiRequest, res: NextApiRes
   if (!distributorId) return res.status(400).json({ error: 'distributorId required' })
   if (items.length === 0) return res.status(400).json({ error: 'At least one item required' })
 
+  // Optional freight selection (mirrors checkout/start.ts). Either a static
+  // zone rate id OR a live MachShip route — mutually exclusive. The chosen
+  // rate is re-quoted server-side below so the order carries a real, bookable
+  // freight selection (Mark paid → Book Freight uses it end-to-end).
+  let chosenFreightRateId: string | null = typeof body.freightRateId === 'string' && body.freightRateId.trim() ? body.freightRateId.trim() : null
+  let chosenMachShipRoute: { carrierId: number; carrierServiceId: number; companyCarrierAccountId?: number } | null = null
+  const fr = body.freightMachShipRoute
+  if (fr && typeof fr === 'object' && Number.isFinite(Number(fr.carrierId)) && Number.isFinite(Number(fr.carrierServiceId))) {
+    chosenMachShipRoute = {
+      carrierId: Number(fr.carrierId), carrierServiceId: Number(fr.carrierServiceId),
+      companyCarrierAccountId: Number.isFinite(Number(fr.companyCarrierAccountId)) ? Number(fr.companyCarrierAccountId) : undefined,
+    }
+  }
+  if (chosenFreightRateId && chosenMachShipRoute) return res.status(400).json({ error: 'Pass either freightRateId or freightMachShipRoute, not both.' })
+  const shipPostcodeIn = String(body.shipPostcode || '').trim()
+  const shipSuburbIn   = String(body.shipSuburb || '').trim()
+
   let cfg: any
   try { cfg = await assertCheckoutConfigured() }
   catch (e: any) { return res.status(503).json({ error: 'Checkout not configured — fix B2B Settings first.', detail: e?.message }) }
 
   const c = sb()
-  const { data: dist } = await c.from('b2b_distributors').select('id, display_name, primary_contact_email').eq('id', distributorId).maybeSingle()
+  const { data: dist } = await c.from('b2b_distributors').select('id, display_name, primary_contact_email, ship_suburb, ship_postcode, bill_suburb, bill_postcode').eq('id', distributorId).maybeSingle()
   if (!dist) return res.status(404).json({ error: 'Distributor not found' })
 
   const ids = items.map(i => i.catalogueId)
   const { data: catRows, error: catErr } = await c.from('b2b_catalogue')
-    .select('id, myob_item_uid, sku, name, trade_price_ex_gst, is_taxable, promo_price_ex_gst, promo_starts_at, promo_ends_at, volume_breaks')
+    .select('id, myob_item_uid, sku, name, trade_price_ex_gst, is_taxable, promo_price_ex_gst, promo_starts_at, promo_ends_at, volume_breaks, freight_weight_g, freight_length_mm, freight_width_mm, freight_height_mm, freight_packaging')
     .in('id', ids)
   if (catErr) return res.status(500).json({ error: catErr.message })
   const catById = new Map((catRows || []).map((r: any) => [r.id, r]))
@@ -73,6 +91,64 @@ export default withAuth('admin:b2b', async (req: NextApiRequest, res: NextApiRes
     subtotalEx += lineEx
     if (v.isTaxable) gst += lineEx * GST_RATE
   }
+  // ── Resolve freight (optional) — re-quote server-side, fold into totals ──
+  let freightExGst = 0
+  let freightLabel: string | null = null
+  let freightZoneId: string | null = null
+  let freightMachShipCarrierId: number | null = null
+  let freightMachShipServiceId: number | null = null
+  let freightChosenQuoteSnapshot: any = null
+  let freightQuoteMarkupPct: number | null = null
+
+  if (chosenFreightRateId) {
+    const { data: rate, error: rErr } = await c
+      .from('b2b_freight_rates')
+      .select('id, label, price_ex_gst, is_active, zone_id, b2b_freight_zones!inner(id, name, is_active)')
+      .eq('id', chosenFreightRateId)
+      .maybeSingle()
+    if (rErr) return res.status(500).json({ error: rErr.message })
+    if (!rate || !rate.is_active) return res.status(400).json({ error: 'Selected freight rate is not available — re-quote and pick again.' })
+    const zone: any = Array.isArray(rate.b2b_freight_zones) ? rate.b2b_freight_zones[0] : rate.b2b_freight_zones
+    if (!zone || !zone.is_active) return res.status(400).json({ error: 'Freight zone for the selected rate is no longer active.' })
+    freightExGst = round2(Number(rate.price_ex_gst) || 0)
+    freightLabel = `${zone.name} — ${rate.label}`
+    freightZoneId = zone.id
+  } else if (chosenMachShipRoute) {
+    const postcode = shipPostcodeIn || String((dist as any).ship_postcode || (dist as any).bill_postcode || '').trim()
+    const suburb   = shipSuburbIn   || String((dist as any).ship_suburb   || (dist as any).bill_suburb   || '').trim()
+    if (!postcode) return res.status(400).json({ error: 'Live freight needs a destination — give the distributor a ship address or pass a postcode/suburb.' })
+    const liveItems: LiveQuoteCartItem[] = validated.map(v => {
+      const cat: any = catById.get(v.catalogueId) || {}
+      return {
+        sku: v.sku, name: v.name, qty: v.qty,
+        freight_weight_g:  cat.freight_weight_g ?? null,
+        freight_length_mm: cat.freight_length_mm ?? null,
+        freight_width_mm:  cat.freight_width_mm ?? null,
+        freight_height_mm: cat.freight_height_mm ?? null,
+        freight_packaging: cat.freight_packaging ?? null,
+      }
+    })
+    const liveQuote = await getLiveQuote(liveItems, { postcode, suburb })
+    if (liveQuote.mode === 'blocked') return res.status(400).json({ error: 'Freight quote unavailable — some products are missing dimensions.', details: liveQuote.missing.map(m => `${m.sku} ${m.name} (needs ${m.missing_fields.join(', ')})`) })
+    if (liveQuote.mode !== 'live') return res.status(503).json({ error: 'Live freight quoting unavailable — re-quote, pick a static rate, or leave freight off.' })
+    const match = liveQuote.rates.find(r => r.machship.carrierId === chosenMachShipRoute!.carrierId && r.machship.carrierServiceId === chosenMachShipRoute!.carrierServiceId)
+    if (!match) return res.status(400).json({ error: 'The freight option you chose is no longer offered — re-quote and pick again.' })
+    freightExGst = round2(match.price_ex_gst)
+    freightLabel = match.label
+    freightMachShipCarrierId = match.machship.carrierId
+    freightMachShipServiceId = match.machship.carrierServiceId
+    freightQuoteMarkupPct = match.markup_pct
+    freightChosenQuoteSnapshot = {
+      carrierId: match.machship.carrierId, carrierServiceId: match.machship.carrierServiceId,
+      companyCarrierAccountId: match.machship.companyCarrierAccountId ?? null,
+      label: match.label, price_ex_gst: match.price_ex_gst, base_price_ex_gst: match.base_price_ex_gst,
+      markup_pct: match.markup_pct, eta_utc: match.eta_utc, transit_days: match.transit_days,
+      route_snapshot: match.machship.routeSnapshot,
+    }
+  }
+  const hasFreight = !!(chosenFreightRateId || chosenMachShipRoute)
+  if (hasFreight && freightExGst > 0) { subtotalEx += freightExGst; gst += freightExGst * GST_RATE }
+
   subtotalEx = round2(subtotalEx); gst = round2(gst)
   const subtotalInc = round2(subtotalEx + gst)
   const charged = subtotalInc > 0 ? (subtotalInc + cfg.cardFeeFixed) / (1 - cfg.cardFeePct) : 0
@@ -85,6 +161,15 @@ export default withAuth('admin:b2b', async (req: NextApiRequest, res: NextApiRes
     distributor_id: distributorId, placed_by_user_id: null, status: 'pending_payment',
     subtotal_ex_gst: subtotalEx, gst, card_fee_inc: cardFeeInc, total_inc: totalInc,
     currency: 'AUD', myob_company_file: 'JAWS', customer_po: customerPo, is_test: true,
+    freight_rate_id:             chosenFreightRateId,
+    freight_zone_id:             freightZoneId,
+    freight_method_label:        freightLabel,
+    freight_cost_ex_gst:         hasFreight ? freightExGst : null,
+    freight_chosen_quote:        freightChosenQuoteSnapshot,
+    freight_quote_markup_pct:    freightQuoteMarkupPct,
+    machship_carrier_id:         freightMachShipCarrierId,
+    machship_carrier_service_id: freightMachShipServiceId,
+    freight_service_label:       chosenMachShipRoute ? freightLabel : null,
   }).select('id, order_number').single()
   if (orderErr) return res.status(500).json({ error: orderErr.message })
 
@@ -102,6 +187,7 @@ export default withAuth('admin:b2b', async (req: NextApiRequest, res: NextApiRes
     price_data: { currency: 'aud', product_data: { name: v.name, description: `SKU: ${v.sku}` }, unit_amount: Math.round((v.isTaxable ? v.unitPriceEx * 1.10 : v.unitPriceEx) * 100) },
     quantity: v.qty,
   }))
+  if (hasFreight && freightExGst > 0) stripeLineItems.push({ price_data: { currency: 'aud', product_data: { name: 'Freight', description: freightLabel || 'Shipping' }, unit_amount: Math.round(round2(freightExGst * 1.10) * 100) }, quantity: 1 })
   if (cardFeeInc > 0) stripeLineItems.push({ price_data: { currency: 'aud', product_data: { name: 'Card processing surcharge', description: 'Recovers Stripe transaction fees' }, unit_amount: Math.round(cardFeeInc * 100) }, quantity: 1 })
 
   let checkoutUrl: string | null = null
@@ -123,5 +209,5 @@ export default withAuth('admin:b2b', async (req: NextApiRequest, res: NextApiRes
 
   await c.from('b2b_order_events').insert({ order_id: order.id, event_type: 'test_order_created', to_status: 'pending_payment', actor_type: 'system', actor_id: user.id, notes: `Test order by ${user.email}`, metadata: { total_inc: totalInc, customer_po: customerPo } })
 
-  return res.status(200).json({ orderId: order.id, orderNumber: order.order_number, checkoutUrl, total_inc: totalInc })
+  return res.status(200).json({ orderId: order.id, orderNumber: order.order_number, checkoutUrl, total_inc: totalInc, freight: hasFreight ? { label: freightLabel, cost_ex_gst: freightExGst } : null })
 })
