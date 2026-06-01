@@ -35,10 +35,6 @@ export interface SoftphoneConfig {
   extension: string     // SIP user (the WebRTC extension number)
   password: string      // SIP digest auth password
   audioEl: HTMLAudioElement   // where to attach the remote audio stream
-  // Optional Web Audio context (created + resumed in a user gesture). On iOS a
-  // remote WebRTC stream attached to an <audio> element is silent; routing it
-  // through an AudioContext is the reliable workaround. Created on the page.
-  audioContext?: AudioContext
 }
 
 type Listener<E> = (evt: E, detail?: any) => void
@@ -202,38 +198,23 @@ export class Softphone {
     for (const receiver of pc.getReceivers()) {
       if (receiver.track && receiver.track.kind === 'audio') stream.addTrack(receiver.track)
     }
+    // Plain <audio> element playback. NOTE: do NOT route remote WebRTC streams
+    // through the Web Audio API — WebKit (all iOS browsers) only supports
+    // createMediaStreamSource for LOCAL streams, so a remote stream there is
+    // silent. The element route is what works on iOS Safari.
     const el = this.cfg.audioEl
     el.srcObject = stream
+    el.muted = false
     el.volume = 1
     ;(el as any).playsInline = true
-
-    // Route the remote audio through the Web Audio API when a context is
-    // available. On iOS Safari/WebKit a remote WebRTC stream played via an
-    // <audio> element is SILENT — the AudioContext path actually produces
-    // sound. iOS also needs the stream attached to a playing media element as
-    // a "kick", so we still play the element but mute it (audio comes from the
-    // context). Without a context (or if routing fails) we fall back to the
-    // element unmuted, which is correct on desktop.
-    let routed = false
-    const ctx = this.cfg.audioContext
-    if (ctx) {
-      try {
-        if (ctx.state === 'suspended') void ctx.resume()
-        const src = ctx.createMediaStreamSource(stream)
-        src.connect(ctx.destination)
-        ;(this as any)._mediaSrc = src
-        routed = true
-      } catch { /* fall back to element playback below */ }
-    }
-    el.muted = routed
-
-    // Play the element (audible if not routed; a silent "kick" if routed).
-    // Retry a couple of times — on iOS the track isn't always flowing on the
-    // first tick after 'Established'. The on-screen "🔊 Tap to hear" button is
-    // the guaranteed-gesture fallback if autoplay stays blocked.
+    el.setAttribute('playsinline', '')
+    // Retry play() a few times — on iOS the track isn't always flowing on the
+    // first tick after 'Established'. The "🔊 Tap to hear" button is the
+    // guaranteed-gesture fallback if autoplay stays blocked.
     const tryPlay = () => { try { const p = el.play(); if (p && typeof p.catch === 'function') p.catch(() => {}) } catch {} }
     tryPlay()
-    setTimeout(tryPlay, 400)
-    setTimeout(tryPlay, 1200)
+    setTimeout(tryPlay, 300)
+    setTimeout(tryPlay, 1000)
+    setTimeout(tryPlay, 2500)
   }
 }
