@@ -820,22 +820,31 @@ function LiveCallsBoard({ canMonitor }: { canMonitor: boolean }) {
 
   // ── Browser softphone (WebRTC) ──────────────────────────────────────
   const softphoneRef = useRef<any>(null)
-  const audioElRef = useRef<HTMLAudioElement | null>(null)
+  const audioElRef = useRef<HTMLMediaElement | null>(null)
   const [spStatus, setSpStatus] = useState<SoftphoneStatus>('idle')
   const [spReason, setSpReason] = useState<string>('')
   const [activeDeviceMode, setActiveDeviceMode] = useState<SpyMode | null>(null)
 
-  // Create (once) the hidden <audio> element the remote call audio attaches to.
-  // playsInline + autoplay are required for iOS/WebKit (incl. Chrome on iOS,
-  // which is WebKit under the hood).
-  function ensureAudioEl(): HTMLAudioElement {
+  // Create (once) the element the remote call audio attaches to. We use a
+  // <video> element, not <audio>: WebKit/iOS (incl. Chrome on iOS, which is
+  // WebKit) plays a remote WebRTC stream reliably through a video element but
+  // is usually SILENT through an <audio> element. It must be rendered (not
+  // display:none — that blocks iOS playback), so it's parked 1px + invisible.
+  function ensureAudioEl(): HTMLMediaElement {
     if (!audioElRef.current) {
-      const el = document.createElement('audio')
+      const el = document.createElement('video')
       el.autoplay = true
+      el.muted = false
       ;(el as any).playsInline = true
       el.setAttribute('playsinline', '')
       el.setAttribute('autoplay', '')
-      el.style.display = 'none'
+      el.style.position = 'fixed'
+      el.style.right = '0'
+      el.style.bottom = '0'
+      el.style.width = '1px'
+      el.style.height = '1px'
+      el.style.opacity = '0'
+      el.style.pointerEvents = 'none'
       document.body.appendChild(el)
       audioElRef.current = el
     }

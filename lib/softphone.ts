@@ -34,7 +34,10 @@ export interface SoftphoneConfig {
   sipDomain: string     // e.g. pbx.example.com
   extension: string     // SIP user (the WebRTC extension number)
   password: string      // SIP digest auth password
-  audioEl: HTMLAudioElement   // where to attach the remote audio stream
+  // Where the remote audio stream attaches. A <video> element (playsinline) is
+  // used in practice — WebKit/iOS plays remote WebRTC audio reliably through a
+  // video element but is often silent through an <audio> element.
+  audioEl: HTMLMediaElement
 }
 
 type Listener<E> = (evt: E, detail?: any) => void
