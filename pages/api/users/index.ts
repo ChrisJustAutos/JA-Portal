@@ -76,9 +76,9 @@ async function invite(req: NextApiRequest, res: NextApiResponse, actor: any) {
     return res.status(500).json({ error: 'Profile creation failed: ' + profileErr.message })
   }
 
-  // Send password reset so user can set their own password
-  // This sends an email with a reset link.
-  const redirectTo = `${req.headers.origin || 'https://ja-portal.vercel.app'}/reset-password`
+  // Send password reset so the user can set their own password (first-time
+  // invite). ?welcome=1 → the landing page shows the welcoming first-run copy.
+  const redirectTo = `${req.headers.origin || 'https://ja-portal.vercel.app'}/reset-password?welcome=1`
   const { error: resetErr } = await sb.auth.resetPasswordForEmail(email, { redirectTo })
   if (resetErr) console.error('Reset email failed:', resetErr)
 
