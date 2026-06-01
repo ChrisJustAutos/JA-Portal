@@ -228,6 +228,8 @@ export default function CatalogueAdminPage({ user }: Props) {
   const [previewMenuOpen, setPreviewMenuOpen] = useState(false)
   const [previewLoading, setPreviewLoading] = useState(false)
   const [previewError, setPreviewError] = useState<string | null>(null)
+  const [syncing, setSyncing] = useState(false)
+  const [syncMsg, setSyncMsg] = useState<string | null>(null)
 
   async function load() {
     setLoading(true)
@@ -267,6 +269,23 @@ export default function CatalogueAdminPage({ user }: Props) {
     }
   }
   useEffect(() => { load() }, [])
+
+  // Pull products/prices/supplier/freight-dims from MYOB into the catalogue.
+  async function runSync() {
+    if (syncing) return
+    setSyncing(true); setSyncMsg(null)
+    try {
+      const r = await fetch('/api/b2b/admin/catalogue/sync', { method: 'POST', credentials: 'same-origin' })
+      const j = await r.json()
+      if (!r.ok) throw new Error(j?.error || `HTTP ${r.status}`)
+      setSyncMsg(`Synced ✓ +${j.added ?? 0} new · ${j.updated ?? 0} updated${j.errors?.length ? ` · ${j.errors.length} errors` : ''}`)
+      await load()
+    } catch (e: any) {
+      setSyncMsg(`Sync failed: ${e?.message || e}`)
+    } finally {
+      setSyncing(false)
+    }
+  }
 
   async function startPreview(payload: { distributor_id?: string; tier_id?: string }) {
     setPreviewLoading(true)
@@ -385,12 +404,23 @@ export default function CatalogueAdminPage({ user }: Props) {
                 Catalogue management
               </h1>
             </div>
-            <div style={{display:'flex',gap:18,alignItems:'baseline'}}>
-              <Stat n={stats.total}      label="items"/>
-              <Stat n={stats.visible}    label="visible"  color={T.green}/>
-              <Stat n={stats.withImage}  label="w/ image" color={T.teal}/>
-              <Stat n={stats.liveReady}  label="ready"    color={T.blue}/>
-              {stats.visibleNoP > 0 && <Stat n={stats.visibleNoP} label="visible · $0" color={T.amber}/>}
+            <div style={{display:'flex',flexDirection:'column',alignItems:'flex-end',gap:10}}>
+              <div style={{display:'flex',gap:18,alignItems:'baseline'}}>
+                <Stat n={stats.total}      label="items"/>
+                <Stat n={stats.visible}    label="visible"  color={T.green}/>
+                <Stat n={stats.withImage}  label="w/ image" color={T.teal}/>
+                <Stat n={stats.liveReady}  label="ready"    color={T.blue}/>
+                {stats.visibleNoP > 0 && <Stat n={stats.visibleNoP} label="visible · $0" color={T.amber}/>}
+              </div>
+              <div style={{display:'flex',alignItems:'center',gap:10}}>
+                {syncMsg && <span style={{fontSize:11,color:syncMsg.startsWith('Sync failed')?T.red:T.green}}>{syncMsg}</span>}
+                <span style={{fontSize:11,color:T.text3,textAlign:'right',maxWidth:280}}>Pulls products, prices, reorder supplier &amp; freight dims from MYOB</span>
+                <button onClick={runSync} disabled={syncing}
+                  title="Refresh the B2B catalogue from MYOB items (adds new products; updates name, price, reorder supplier and freight dimensions)"
+                  style={{padding:'8px 14px',borderRadius:6,background:syncing?T.bg3:T.blue,border:`1px solid ${syncing?T.border2:T.blue}`,color:syncing?T.text3:'#fff',fontSize:13,fontWeight:500,fontFamily:'inherit',cursor:syncing?'wait':'pointer',whiteSpace:'nowrap'}}>
+                  {syncing ? 'Syncing…' : '↻ Sync from MYOB'}
+                </button>
+              </div>
             </div>
           </header>
 

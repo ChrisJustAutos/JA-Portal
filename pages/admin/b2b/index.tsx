@@ -83,9 +83,6 @@ const STATUS_LABEL: Record<string, string> = {
 export default function B2BHubPage({ user }: Props) {
   const [settings, setSettings] = useState<SettingsSummary | null>(null)
   const [orders, setOrders] = useState<OrdersSummary | null>(null)
-  const [syncing, setSyncing] = useState(false)
-  const [syncResult, setSyncResult] = useState<SyncResult | null>(null)
-  const [syncError, setSyncError] = useState<string | null>(null)
 
   function loadSettings() {
     fetch('/api/b2b/admin/settings', { credentials: 'same-origin' })
@@ -101,25 +98,6 @@ export default function B2BHubPage({ user }: Props) {
   }
 
   useEffect(() => { loadSettings(); loadOrders() }, [])
-
-  async function runSync() {
-    if (syncing) return
-    setSyncing(true); setSyncResult(null); setSyncError(null)
-    try {
-      const r = await fetch('/api/b2b/admin/catalogue/sync', {
-        method: 'POST',
-        credentials: 'same-origin',
-      })
-      const j = await r.json()
-      if (!r.ok) throw new Error(j?.error || `HTTP ${r.status}`)
-      setSyncResult(j)
-      loadSettings()
-    } catch (e: any) {
-      setSyncError(e?.message || String(e))
-    } finally {
-      setSyncing(false)
-    }
-  }
 
   const cfgComplete =
     !!settings?.stripe_env.secret_key_set &&
@@ -150,44 +128,10 @@ export default function B2BHubPage({ user }: Props) {
                 JAWS-side wholesale ordering. Distributors sign in at <a href="/b2b/login" style={{color:T.blue,textDecoration:'none'}}>/b2b/login</a> with magic links.
               </div>
             </div>
-            <button
-              onClick={runSync}
-              disabled={syncing}
-              style={{
-                padding:'8px 14px',borderRadius:6,
-                background: syncing ? T.bg3 : T.blue,
-                border:`1px solid ${syncing ? T.border2 : T.blue}`,
-                color: syncing ? T.text3 : '#fff',
-                fontSize:13,fontWeight:500,fontFamily:'inherit',
-                cursor: syncing ? 'wait' : 'pointer',whiteSpace:'nowrap',
-              }}
-            >
-              {syncing ? 'Syncing…' : 'Sync from MYOB'}
-            </button>
+            <a href="/admin/b2b/catalogue" style={{fontSize:12,color:T.text3,textDecoration:'none',whiteSpace:'nowrap'}}>
+              Catalogue sync moved to the Catalogue page →
+            </a>
           </header>
-
-          {/* Sync result / error */}
-          {syncResult && (
-            <div style={{
-              padding:'10px 14px',marginBottom:14,borderRadius:6,fontSize:12,
-              background:`${T.green}12`,border:`1px solid ${T.green}38`,color:T.text2,
-              fontFamily:'monospace',
-            }}>
-              ✓ Sync complete · scanned {syncResult.totalScanned} · added {syncResult.added} · updated {syncResult.updated} · unchanged {syncResult.unchanged}
-              {syncResult.skipped > 0 && ` · skipped ${syncResult.skipped}`}
-              {syncResult.errors.length > 0 && ` · ${syncResult.errors.length} error${syncResult.errors.length === 1 ? '' : 's'}`}
-              {' · '}
-              {(syncResult.durationMs / 1000).toFixed(1)}s
-            </div>
-          )}
-          {syncError && (
-            <div style={{
-              padding:'10px 14px',marginBottom:14,borderRadius:6,fontSize:12,
-              background:`${T.red}12`,border:`1px solid ${T.red}38`,color:T.text2,
-            }}>
-              ✗ Sync failed: {syncError}
-            </div>
-          )}
 
           {/* Configuration health banner */}
           {settings && !cfgComplete && (
