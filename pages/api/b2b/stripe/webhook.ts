@@ -26,7 +26,7 @@ import { createClient, SupabaseClient } from '@supabase/supabase-js'
 import { verifyWebhookSignature, retrieveCheckoutSession } from '../../../../lib/stripe'
 import { writeOrderToMyob } from '../../../../lib/b2b-myob-invoice'
 import { raiseDropShipPOsForOrder, type DropshipRaiseResult } from '../../../../lib/b2b-dropship'
-import { sendOrderPlacedAdminEmail } from '../../../../lib/b2b-order-notify'
+import { sendOrderPlacedAdminEmail, sendDistributorOrderEmails } from '../../../../lib/b2b-order-notify'
 
 // CRITICAL: disable Next's body parser — we need the raw body bytes for HMAC
 export const config = {
@@ -103,7 +103,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   // 3. Load order
   const { data: order, error: oErr } = await c
     .from('b2b_orders')
-    .select('id, status, order_number, stripe_checkout_session_id, myob_invoice_uid, admin_notified_at, dropship_po_raised_at')
+    .select('id, status, order_number, stripe_checkout_session_id, myob_invoice_uid, admin_notified_at, dropship_po_raised_at, distributor_notified_at')
     .eq('id', orderId)
     .maybeSingle()
   if (oErr) {
@@ -165,8 +165,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   // 6. Trigger MYOB writeback. Wrapped in try/catch so MYOB failure doesn't
   // 500 the webhook (Stripe would keep retrying for 3 days, won't help).
+  let myobInvoiceNumber: string | null = null
   try {
     const myob = await writeOrderToMyob(orderId)
+    myobInvoiceNumber = myob.myob_invoice_number || null
     await c.from('b2b_order_events').insert({
       order_id: orderId,
       event_type: 'myob_invoice_created',
@@ -222,6 +224,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       })
     } catch (e: any) {
       console.error(`webhook: admin notify failed for order ${orderId}:`, e?.message || e)
+    }
+  }
+
+  // 6d. Distributor-facing emails — order confirmation + tax invoice (best-effort,
+  // once per order). Each respects its template's on/off + the distributor email.
+  if (!order.distributor_notified_at) {
+    try {
+      await sendDistributorOrderEmails(orderId, { invoiceNumber: myobInvoiceNumber })
+    } catch (e: any) {
+      console.error(`webhook: distributor emails failed for order ${orderId}:`, e?.message || e)
     }
   }
 

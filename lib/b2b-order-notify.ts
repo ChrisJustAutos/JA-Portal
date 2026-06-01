@@ -8,6 +8,7 @@ import { createClient, SupabaseClient } from '@supabase/supabase-js'
 import { sendMail } from './microsoft-graph'
 import { signOrderAction } from './order-action-token'
 import { PO_FROM_MAILBOX, type DropshipRaiseResult } from './b2b-dropship'
+import { renderEmail, linesTableHtml, addressBlock, buttonHtml, linkHtml } from './email-templates'
 
 const BASE_URL = process.env.B2B_PUBLIC_BASE_URL || process.env.NEXT_PUBLIC_SITE_URL || process.env.JA_PORTAL_BASE_URL || 'https://ja-portal.vercel.app'
 
@@ -67,8 +68,7 @@ export async function sendOrderPlacedAdminEmail(orderId: string, opts: { dropshi
   if (!order) return { ok: false, reason: 'order_not_found' }
   const dist: any = Array.isArray(order.distributor) ? order.distributor[0] : order.distributor
   const { data: lines } = await c.from('b2b_order_lines').select('qty, sku, name').eq('order_id', orderId)
-
-  const lineRows = (lines || []).map((l: any) => `<tr><td style="padding:4px 8px;border-bottom:1px solid #eee">${esc(l.sku)}</td><td style="padding:4px 8px;border-bottom:1px solid #eee">${esc(l.name)}</td><td style="padding:4px 8px;border-bottom:1px solid #eee;text-align:right">${esc(l.qty)}</td></tr>`).join('')
+  const linesBlock = linesTableHtml((lines || []).map((l: any) => ({ description: [l.sku, l.name].filter(Boolean).join(' — '), qty: l.qty })))
 
   const portalUrl = `${BASE_URL}/admin/b2b/orders/${orderId}`
   // Book-freight button: only meaningful if a carrier was chosen and not yet booked.
@@ -78,40 +78,91 @@ export async function sendOrderPlacedAdminEmail(orderId: string, opts: { dropshi
   } else if (order.machship_carrier_id) {
     const token = signOrderAction({ orderId, scope: 'book_freight' })
     const bookUrl = `${BASE_URL}/order-action?token=${encodeURIComponent(token)}`
-    freightBlock = `<p style="margin:18px 0"><a href="${bookUrl}" style="background:#34c77b;color:#fff;text-decoration:none;padding:11px 22px;border-radius:7px;font-weight:600;display:inline-block">📦 Book Freight${order.freight_service_label ? ` (${esc(order.freight_service_label)})` : ''}</a><br/><span style="font-size:12px;color:#888">No login needed — opens a confirmation page.</span></p>`
+    freightBlock = `${buttonHtml(`📦 Book Freight${order.freight_service_label ? ` (${order.freight_service_label})` : ''}`, bookUrl, '#34c77b')}<br/><span style="font-size:12px;color:#888">No login needed — opens a confirmation page.</span>`
   } else {
     freightBlock = `<p style="color:#a60">No freight quote on this order — book manually in the portal.</p>`
   }
 
-  const html = `
-  <div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#222;max-width:660px">
-    <h2 style="margin:0 0 4px">New B2B order ${esc(order.order_number)}</h2>
-    <p style="margin:0 0 14px;color:#555">${esc(dist?.display_name || 'Distributor')} · Total ${money(order.total_inc)} inc GST${order.customer_po ? ` · Their PO ${esc(order.customer_po)}` : ''}</p>
-
-    <a href="${portalUrl}" style="color:#4f8ef7">Open this order in the portal →</a>
-
-    <h3 style="margin:18px 0 4px">Items</h3>
-    <table style="border-collapse:collapse;width:100%">
-      <thead><tr><th style="padding:4px 8px;border-bottom:2px solid #333;text-align:left">SKU</th><th style="padding:4px 8px;border-bottom:2px solid #333;text-align:left">Item</th><th style="padding:4px 8px;border-bottom:2px solid #333;text-align:right">Qty</th></tr></thead>
-      <tbody>${lineRows}</tbody>
-    </table>
-
-    <h3 style="margin:18px 0 4px">Drop-ship</h3>
-    ${dropshipSummaryHtml(order, opts.dropshipResult)}
-
-    <h3 style="margin:18px 0 4px">Ship to</h3>
-    <pre style="font-family:inherit;background:#f6f6f6;padding:10px 12px;border-radius:6px;white-space:pre-wrap;margin:0">${esc(shipToText(order.shipping_address_snapshot, dist))}</pre>
-
-    <h3 style="margin:18px 0 4px">Freight</h3>
-    ${freightBlock}
-    ${order.customer_notes ? `<h3 style="margin:18px 0 4px">Customer notes</h3><p>${esc(order.customer_notes)}</p>` : ''}
-  </div>`
-
-  await sendMail(PO_FROM_MAILBOX, {
-    to: recipients,
-    subject: `New B2B order ${order.order_number} — ${dist?.display_name || ''}`.trim(),
-    html,
+  const rendered = await renderEmail('admin_order_placed', {
+    order_number: order.order_number,
+    distributor_name: dist?.display_name || 'Distributor',
+    order_total: money(order.total_inc),
+    customer_po: order.customer_po ? ` · Their PO ${order.customer_po}` : '',
+    customer_notes: order.customer_notes ? `Customer notes: ${order.customer_notes}` : '',
+  }, {
+    lines_table: linesBlock,
+    dropship_summary: dropshipSummaryHtml(order, opts.dropshipResult),
+    ship_to: addressBlock(shipToText(order.shipping_address_snapshot, dist)),
+    book_freight_button: freightBlock,
+    portal_link: linkHtml('Open this order in the portal →', portalUrl),
   })
+  // Mark notified even if disabled, so we don't recompute every webhook retry.
   await c.from('b2b_orders').update({ admin_notified_at: new Date().toISOString() }).eq('id', orderId)
+  if (!rendered.enabled) return { ok: false, reason: 'disabled' }
+
+  await sendMail(PO_FROM_MAILBOX, { to: recipients, subject: rendered.subject, html: rendered.html })
   return { ok: true, recipients }
+}
+
+// ── Distributor-facing emails ─────────────────────────────────────────
+// Sent on payment: order confirmation (to primary contact) + tax invoice (to
+// invoice email, once the MYOB invoice number exists). Each respects its
+// template's enabled flag and is skipped if the recipient email is blank.
+// Guarded once-per-order by b2b_orders.distributor_notified_at (set by caller
+// context — we set it here after attempting).
+export async function sendDistributorOrderEmails(orderId: string, opts: { invoiceNumber?: string | null } = {}): Promise<{ ok: boolean; sent: string[] }> {
+  const c = svc()
+  const { data: order } = await c.from('b2b_orders').select(`
+      id, order_number, customer_po, total_inc, shipping_address_snapshot, myob_invoice_number,
+      distributor:b2b_distributors!b2b_orders_distributor_id_fkey ( display_name, primary_contact_email, invoice_email, freight_email, ship_line1, ship_line2, ship_suburb, ship_state, ship_postcode )
+    `).eq('id', orderId).maybeSingle()
+  if (!order) return { ok: false, sent: [] }
+  const dist: any = Array.isArray(order.distributor) ? order.distributor[0] : order.distributor
+  const { data: lines } = await c.from('b2b_order_lines').select('qty, sku, name').eq('order_id', orderId)
+  const linesBlock = linesTableHtml((lines || []).map((l: any) => ({ description: [l.sku, l.name].filter(Boolean).join(' — '), qty: l.qty })))
+  const sent: string[] = []
+
+  // Order confirmation → primary contact.
+  const primary = (dist?.primary_contact_email || '').trim()
+  if (primary) {
+    const r = await renderEmail('distributor_order_confirmed', {
+      distributor_name: dist?.display_name || '', order_number: order.order_number,
+      customer_po: order.customer_po ? ` (your PO ${order.customer_po})` : '', order_total: money(order.total_inc),
+    }, { lines_table: linesBlock, ship_to: addressBlock(shipToText(order.shipping_address_snapshot, dist)) })
+    if (r.enabled) { try { await sendMail(PO_FROM_MAILBOX, { to: [primary], subject: r.subject, html: r.html }); sent.push('order_confirmed') } catch (e: any) { console.error('distributor order_confirmed email failed:', e?.message) } }
+  }
+
+  // Tax invoice → invoice email (fallback primary), only once we have a number.
+  const invNumber = opts.invoiceNumber || order.myob_invoice_number || ''
+  const invoiceTo = (dist?.invoice_email || dist?.primary_contact_email || '').trim()
+  if (invNumber && invoiceTo) {
+    const r = await renderEmail('distributor_invoice', {
+      distributor_name: dist?.display_name || '', order_number: order.order_number,
+      invoice_number: String(invNumber), order_total: money(order.total_inc),
+    })
+    if (r.enabled) { try { await sendMail(PO_FROM_MAILBOX, { to: [invoiceTo], subject: r.subject, html: r.html }); sent.push('invoice') } catch (e: any) { console.error('distributor invoice email failed:', e?.message) } }
+  }
+
+  await c.from('b2b_orders').update({ distributor_notified_at: new Date().toISOString() }).eq('id', orderId)
+  return { ok: true, sent }
+}
+
+// Distributor "shipped + tracking" — called from lib/b2b-freight-book after a
+// first successful booking. Best-effort; respects the template + recipient.
+export async function sendDistributorShippedEmail(orderId: string, info: { carrier?: string | null; consignmentNumber?: string | null; trackingNumber?: string | null; trackingUrl?: string | null; eta?: string | null }): Promise<void> {
+  const c = svc()
+  const { data: order } = await c.from('b2b_orders').select(`
+      order_number, distributor:b2b_distributors!b2b_orders_distributor_id_fkey ( display_name, freight_email, primary_contact_email )
+    `).eq('id', orderId).maybeSingle()
+  if (!order) return
+  const dist: any = Array.isArray(order.distributor) ? order.distributor[0] : order.distributor
+  const to = (dist?.freight_email || dist?.primary_contact_email || '').trim()
+  if (!to) return
+  const r = await renderEmail('distributor_shipped', {
+    distributor_name: dist?.display_name || '', order_number: order.order_number,
+    carrier: info.carrier || 'our carrier', consignment_number: info.consignmentNumber || '—',
+    tracking_number: info.trackingNumber || '—', eta: info.eta || '',
+  }, { tracking_link: info.trackingUrl ? buttonHtml('Track this shipment', info.trackingUrl, '#4f8ef7') : '' })
+  if (!r.enabled) return
+  try { await sendMail(PO_FROM_MAILBOX, { to: [to], subject: r.subject, html: r.html }) } catch (e: any) { console.error('distributor shipped email failed:', e?.message) }
 }

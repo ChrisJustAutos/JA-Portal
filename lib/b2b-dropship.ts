@@ -12,6 +12,7 @@ import { createClient, SupabaseClient } from '@supabase/supabase-js'
 import { assertCheckoutConfigured } from './b2b-settings'
 import { createDropShipPurchaseOrder, getSupplierContact, DropShipPOLine } from './b2b-myob-po'
 import { sendMail } from './microsoft-graph'
+import { renderEmail, linesTableHtml, addressBlock } from './email-templates'
 
 export const PO_FROM_MAILBOX = process.env.B2B_PO_FROM_MAILBOX || process.env.AP_INBOX_MAILBOX || 'accounts@justautosmechanical.com.au'
 
@@ -144,18 +145,20 @@ export async function raiseDropShipPOsForOrder(orderId: string, opts: { actorId?
         comment: `Drop ship — deliver direct to customer. JA order ${reference}`,
         journalMemo: `B2B drop-ship; order ${order.order_number}`,
       })
-      let emailStatus: 'sent' | 'no_email' | 'failed' = 'no_email'
+      let emailStatus: 'sent' | 'no_email' | 'failed' | 'disabled' = 'no_email'
       let emailedTo: string | null = null
       let emailError: string | null = null
       try {
-        const contact = await getSupplierContact(g.supplierUid)
-        if (contact.email) {
-          await sendMail(PO_FROM_MAILBOX, {
-            to: [contact.email],
-            subject: `Purchase Order ${po.number || ''} — Just Autos (drop ship)`.replace(/\s+/g, ' ').trim(),
-            html: buildPoEmailHtml({ poNumber: po.number, supplierName: g.supplierName, reference, shipTo, lines: g.lines }),
-          })
-          emailStatus = 'sent'; emailedTo = contact.email
+        const rendered = await renderEmail('supplier_dropship_po',
+          { supplier_name: g.supplierName, po_number: po.number || '', order_reference: reference },
+          { lines_table: linesTableHtml(g.lines.map(l => ({ description: l.description, qty: l.qty }))), ship_to: addressBlock(shipTo) })
+        if (!rendered.enabled) { emailStatus = 'disabled' }
+        else {
+          const contact = await getSupplierContact(g.supplierUid)
+          if (contact.email) {
+            await sendMail(PO_FROM_MAILBOX, { to: [contact.email], subject: rendered.subject, html: rendered.html })
+            emailStatus = 'sent'; emailedTo = contact.email
+          }
         }
       } catch (e: any) {
         emailStatus = 'failed'; emailError = (e?.message || String(e)).slice(0, 300)
@@ -208,16 +211,16 @@ export async function resendDropShipPoEmail(orderId: string, supplierUid: string
   const patchRec = (patch: Record<string, any>) =>
     c.from('b2b_orders').update({ dropship_pos: existingPos.map((p: any) => p.supplier_uid === supplierUid ? { ...p, ...patch } : p) }).eq('id', orderId)
   try {
+    const rendered = await renderEmail('supplier_dropship_po',
+      { supplier_name: g.supplierName, po_number: rec?.myob_po_number || '', order_reference: reference },
+      { lines_table: linesTableHtml(g.lines.map(l => ({ description: l.description, qty: l.qty }))), ship_to: addressBlock(shipTo) })
+    if (!rendered.enabled) return { ok: false, email_status: 'disabled', error: 'The supplier PO email template is turned off in B2B Settings.' }
     const contact = await getSupplierContact(supplierUid)
     if (!contact.email) {
       await patchRec({ email_status: 'no_email', emailed_to: null, email_error: 'No email on the MYOB supplier card' })
       return { ok: false, email_status: 'no_email', error: 'Supplier has no email on their MYOB card.' }
     }
-    await sendMail(PO_FROM_MAILBOX, {
-      to: [contact.email],
-      subject: `Purchase Order ${rec?.myob_po_number || ''} — Just Autos (drop ship)`.replace(/\s+/g, ' ').trim(),
-      html: buildPoEmailHtml({ poNumber: rec?.myob_po_number || null, supplierName: g.supplierName, reference, shipTo, lines: g.lines }),
-    })
+    await sendMail(PO_FROM_MAILBOX, { to: [contact.email], subject: rendered.subject, html: rendered.html })
     await patchRec({ email_status: 'sent', emailed_to: contact.email, email_error: null })
     try { await c.from('b2b_order_events').insert({ order_id: orderId, event_type: 'dropship_po_emailed', actor_type: actorId ? 'admin' : 'system', actor_id: actorId || null, metadata: { supplier: g.supplierName, to: contact.email } }) } catch {}
     return { ok: true, email_status: 'sent', emailed_to: contact.email }

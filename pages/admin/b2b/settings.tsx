@@ -11,6 +11,7 @@ import { AppIcon } from '../../../lib/AppIcons'
 import { requirePageAuth } from '../../../lib/authServer'
 import type { UserRole } from '../../../lib/permissions'
 import FreightZonesManager from '../../../components/b2b/FreightZonesManager'
+import EmailTemplatesManager from '../../../components/b2b/EmailTemplatesManager'
 import FreightCarriersManager from '../../../components/b2b/FreightCarriersManager'
 
 const T = {
@@ -43,6 +44,8 @@ const SETTINGS_SECTIONS: Array<{ id: string; title: string; icon: string; accent
   { id: 'freight-pricing',   title: 'Freight Pricing & Sender', icon: 'payables',    accent: T.blue },
   { id: 'freight-zones',     title: 'Freight Zones',          icon: 'stock',         accent: T.amber },
   { id: 'slack',             title: 'Slack Notifications',    icon: 'calls',         accent: T.purple },
+  { id: 'order-notify',      title: 'Order Notifications',    icon: 'messages',      accent: T.green },
+  { id: 'email-templates',   title: 'Email Notifications',    icon: 'messages',      accent: T.blue },
   { id: 'status',            title: 'System Status',          icon: 'reports',       accent: T.text3 },
 ]
 
@@ -596,6 +599,12 @@ export default function B2BSettingsPage({ user }: Props) {
                     {saving ? 'Saving…' : 'Save recipients'}
                   </button>
                 </div>
+              </Section>
+
+              {/* ─── Email templates ─── */}
+              <Section id="email-templates" activeId={openSectionId} onClose={closeSection} title="Email Notifications"
+                description="Edit the subject + wording (and turn on/off) every transactional email — to suppliers, distributors and your team. Structured bits drop in via {{placeholders}}.">
+                <EmailTemplatesManager/>
               </Section>
 
               {/* ─── Read-only diagnostics ─── */}

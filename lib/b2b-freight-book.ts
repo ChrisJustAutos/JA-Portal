@@ -10,6 +10,7 @@
 
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
 import { createConsignment, getLabelPdfBase64, MachShipApiError, MachShipNotConfiguredError, type CreateConsignmentRequest } from './b2b-machship'
+import { sendDistributorShippedEmail } from './b2b-order-notify'
 
 const LABELS_BUCKET = 'b2b-shipping-labels'
 
@@ -177,6 +178,19 @@ export async function bookFreightForOrder(orderId: string, opts: { actorId?: str
       metadata: { consignment_id: consignment.id, consignment_number: consignment.consignmentNumber, tracking_number: consignment.carrierConsignmentId, carrier_service: order.freight_service_label, label_warning: labelWarning },
     })
   } catch (e: any) { console.error('order_events insert failed (non-fatal):', e?.message) }
+
+  // Distributor "shipped + tracking" email on first booking (best-effort).
+  if (firstBook) {
+    try {
+      await sendDistributorShippedEmail(orderId, {
+        carrier: order.freight_service_label || consignment.status?.name || null,
+        consignmentNumber: consignment.consignmentNumber || null,
+        trackingNumber: consignment.carrierConsignmentId || null,
+        trackingUrl: null,
+        eta: consignment.etaUtc || consignment.etaLocal || null,
+      })
+    } catch (e: any) { console.error('distributor shipped email failed (non-fatal):', e?.message) }
+  }
 
   return {
     ok: true, httpStatus: 200,
