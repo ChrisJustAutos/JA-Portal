@@ -785,6 +785,20 @@ function AnalysisPanel({ callId, hasTranscript, billsecSeconds }: { callId: stri
 // ── Main page component ────────────────────────────────────────────────────
 
 // ── Live call monitoring board (management only) ────────────────────────
+// iOS third-party browsers (Chrome=CriOS, Firefox=FxiOS, Edge=EdgiOS) are all
+// WebKit but handle WebRTC audio less reliably than Safari. Returns a hint to
+// switch to Safari for device listening, or null when not applicable.
+function iosNonSafariHint(): string | null {
+  if (typeof navigator === 'undefined') return null
+  const ua = navigator.userAgent || ''
+  const isIOS = /iPad|iPhone|iPod/.test(ua) || (/Macintosh/.test(ua) && (navigator as any).maxTouchPoints > 1)
+  if (!isIOS) return null
+  if (/CriOS|FxiOS|EdgiOS|OPiOS|mercury/i.test(ua)) {
+    return 'Tip: on iPhone, live listening works best in Safari (not Chrome). If it stays silent, open this page in Safari — or use ☎ Handset.'
+  }
+  return null
+}
+
 // Polls /api/calls/live for in-progress calls and lets a manager Listen /
 // Whisper / Barge — which rings their own registered handset via the
 // FreePBX-side ChanSpy service. Hidden entirely for users without the
@@ -1004,7 +1018,7 @@ function LiveCallsBoard({ canMonitor }: { canMonitor: boolean }) {
       } catch { continue }
       if (sd.status === 'connected') {
         setToast({ kind: 'ok', msg: actorKind === 'device'
-          ? `Streaming to this browser — ${mode}.`
+          ? (iosNonSafariHint() || `Streaming to this browser — ${mode}.`)
           : `Your phone (ext ${ext}) is ringing — answer to ${mode}.` })
         return
       }
