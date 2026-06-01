@@ -794,6 +794,7 @@ type ActorKind = 'handset' | 'device'
 type SoftphoneStatus = 'idle' | 'connecting' | 'registered' | 'incall' | 'failed' | 'unavailable'
 
 function LiveCallsBoard({ canMonitor }: { canMonitor: boolean }) {
+  const isMobile = useIsMobile()
   const [status, setStatus] = useState<'loading' | 'ready' | 'notconfigured' | 'error'>('loading')
   const [channels, setChannels] = useState<LiveChannel[]>([])
   const [stale, setStale] = useState(false)
@@ -1048,7 +1049,8 @@ function LiveCallsBoard({ canMonitor }: { canMonitor: boolean }) {
               ? `${agentName} · Ext ${c.agentExt}`
               : (c.agentExt ? `Ext ${c.agentExt}` : 'Agent')
             return (
-              <div key={c.key} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 16px', borderTop: `1px solid ${T.border}` }}>
+              <div key={c.key} style={{ display: 'flex', flexDirection: isMobile ? 'column' : 'row', alignItems: isMobile ? 'stretch' : 'center', gap: isMobile ? 10 : 12, padding: '10px 16px', borderTop: `1px solid ${T.border}` }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 12, minWidth: 0, flex: 1 }}>
                 <DirectionBadge direction={c.direction === 'out' ? 'outbound' : 'inbound'} disposition="ANSWERED" />
                 <div style={{ minWidth: 0, flex: 1 }}>
                   <div style={{ fontSize: 12, color: T.text, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
@@ -1061,7 +1063,8 @@ function LiveCallsBoard({ canMonitor }: { canMonitor: boolean }) {
                     <span style={{ color: c.monitorable ? T.green : T.amber, textTransform: 'uppercase', letterSpacing: '0.05em' }}>● {stateLabel}</span>
                   </div>
                 </div>
-                <div style={{ display: 'flex', gap: 12 }}>
+                </div>
+                <div style={{ display: 'flex', gap: isMobile ? 8 : 12, flexWrap: 'wrap', justifyContent: isMobile ? 'flex-start' : 'flex-end' }}>
                   {MODE_META.map(m => {
                     const handsetBusy = busyKey === `${c.key}:${m.mode}:handset`
                     const deviceBusy  = busyKey === `${c.key}:${m.mode}:device`
