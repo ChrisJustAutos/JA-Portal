@@ -187,7 +187,20 @@ export async function bookFreightForOrder(orderId: string, opts: { actorId?: str
     } catch (e: any) { console.error('label_print_jobs enqueue failed (non-fatal):', e?.message) }
   }
 
-  // Distributor "shipped + tracking" email on first booking (best-effort).
+  // On first booking, convert the MYOB Sale.Order → Sale.Invoice (hits the GL)
+  // BEFORE the email so the invoice number is on the order for the PDF/subject.
+  if (firstBook) {
+    try {
+      const { convertOrderToInvoiceInMyob } = await import('./b2b-myob-invoice')
+      const conv = await convertOrderToInvoiceInMyob(orderId)
+      await c.from('b2b_order_events').insert({ order_id: orderId, event_type: 'myob_invoice_converted', actor_type: 'system', actor_id: null, notes: `MYOB invoice ${conv.myob_sale_invoice_number || conv.myob_sale_invoice_uid} (${conv.status})`, metadata: { myob_sale_invoice_uid: conv.myob_sale_invoice_uid, myob_sale_invoice_number: conv.myob_sale_invoice_number, status: conv.status } })
+    } catch (e: any) {
+      console.error(`book-freight: MYOB order→invoice convert failed for ${orderId}:`, e?.message || e)
+      try { await c.from('b2b_order_events').insert({ order_id: orderId, event_type: 'myob_invoice_convert_failed', actor_type: 'system', actor_id: null, notes: (e?.message || String(e)).slice(0, 500) }) } catch {}
+    }
+  }
+
+  // Distributor "shipped + tax invoice" email on first booking (best-effort).
   if (firstBook) {
     try {
       await sendDistributorShippedEmail(orderId, {

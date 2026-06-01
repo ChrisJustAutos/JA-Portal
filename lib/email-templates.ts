@@ -112,9 +112,9 @@ Just Autos`,
     variables: [v('distributor_name', 'Distributor'), v('order_number', 'Order number'), v('invoice_number', 'MYOB invoice number'), v('order_total', 'Total inc GST')],
   },
   distributor_shipped: {
-    label: 'Shipped + tracking', direction: 'Distributor',
-    description: 'Sent to the distributor (freight email) when freight is booked.',
-    defaultSubject: 'Order {{order_number}} shipped — tracking {{tracking_number}}',
+    label: 'Shipped + tax invoice', direction: 'Distributor',
+    description: 'Sent to the distributor when Just Autos books freight: consignment, tracking and the tax invoice (PDF attached).',
+    defaultSubject: 'Order {{order_number}} shipped — invoice {{invoice_number}}, tracking {{tracking_number}}',
     defaultBody:
 `Hi {{distributor_name}},
 
@@ -123,10 +123,12 @@ Consignment: {{consignment_number}}
 Tracking: {{tracking_number}}
 Estimated delivery: {{eta}}
 
+Your tax invoice {{invoice_number}} (total {{order_total}} inc GST) is attached.
+
 {{tracking_link}}
 
 Just Autos`,
-    variables: [v('distributor_name', 'Distributor'), v('order_number', 'Order number'), v('carrier', 'Carrier/service'), v('consignment_number', 'Consignment number'), v('tracking_number', 'Tracking number'), v('eta', 'ETA (or blank)'), v('tracking_link', 'Tracking link button (block)')],
+    variables: [v('distributor_name', 'Distributor'), v('order_number', 'Order number'), v('invoice_number', 'Tax invoice number'), v('order_total', 'Total inc GST'), v('carrier', 'Carrier/service'), v('consignment_number', 'Consignment number'), v('tracking_number', 'Tracking number'), v('eta', 'ETA (or blank)'), v('tracking_link', 'Tracking link button (block)')],
   },
 }
 

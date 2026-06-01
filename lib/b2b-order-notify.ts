@@ -106,16 +106,16 @@ export async function sendOrderPlacedAdminEmail(orderId: string, opts: { dropshi
 }
 
 // ── Distributor-facing emails ─────────────────────────────────────────
-// Sent on payment: order confirmation (to primary contact) + tax invoice (to
-// invoice email, once the MYOB invoice number exists). Each respects its
-// template's enabled flag and is skipped if the recipient email is blank.
-// Guarded once-per-order by b2b_orders.distributor_notified_at (set by caller
-// context — we set it here after attempting).
-export async function sendDistributorOrderEmails(orderId: string, opts: { invoiceNumber?: string | null } = {}): Promise<{ ok: boolean; sent: string[] }> {
+// Sent on PAYMENT: the order confirmation ONLY (to the primary contact). The
+// tax INVOICE is intentionally NOT sent here — it goes out on shipment, once
+// Just Autos has booked freight (see sendDistributorInvoiceShippedEmail).
+// Respects the template's enabled flag and is skipped if the recipient is blank.
+// Guarded once-per-order by b2b_orders.distributor_notified_at.
+export async function sendDistributorOrderEmails(orderId: string, _opts: { invoiceNumber?: string | null } = {}): Promise<{ ok: boolean; sent: string[] }> {
   const c = svc()
   const { data: order } = await c.from('b2b_orders').select(`
-      id, order_number, customer_po, total_inc, shipping_address_snapshot, myob_invoice_number,
-      distributor:b2b_distributors!b2b_orders_distributor_id_fkey ( display_name, primary_contact_email, invoice_email, freight_email, ship_line1, ship_line2, ship_suburb, ship_state, ship_postcode )
+      id, order_number, customer_po, total_inc, shipping_address_snapshot,
+      distributor:b2b_distributors!b2b_orders_distributor_id_fkey ( display_name, primary_contact_email, ship_line1, ship_line2, ship_suburb, ship_state, ship_postcode )
     `).eq('id', orderId).maybeSingle()
   if (!order) return { ok: false, sent: [] }
   const dist: any = Array.isArray(order.distributor) ? order.distributor[0] : order.distributor
@@ -123,7 +123,7 @@ export async function sendDistributorOrderEmails(orderId: string, opts: { invoic
   const linesBlock = linesTableHtml((lines || []).map((l: any) => ({ description: [l.sku, l.name].filter(Boolean).join(' — '), qty: l.qty })))
   const sent: string[] = []
 
-  // Order confirmation → primary contact.
+  // Order confirmation → primary contact. (NO invoice at this stage.)
   const primary = (dist?.primary_contact_email || '').trim()
   if (primary) {
     const r = await renderEmail('distributor_order_confirmed', {
@@ -133,37 +133,47 @@ export async function sendDistributorOrderEmails(orderId: string, opts: { invoic
     if (r.enabled) { try { await sendMail(await getFromMailbox(), { to: [primary], subject: r.subject, html: r.html }); sent.push('order_confirmed') } catch (e: any) { console.error('distributor order_confirmed email failed:', e?.message) } }
   }
 
-  // Tax invoice → invoice email (fallback primary), only once we have a number.
-  const invNumber = opts.invoiceNumber || order.myob_invoice_number || ''
-  const invoiceTo = (dist?.invoice_email || dist?.primary_contact_email || '').trim()
-  if (invNumber && invoiceTo) {
-    const r = await renderEmail('distributor_invoice', {
-      distributor_name: dist?.display_name || '', order_number: order.order_number,
-      invoice_number: String(invNumber), order_total: money(order.total_inc),
-    })
-    if (r.enabled) { try { await sendMail(await getFromMailbox(), { to: [invoiceTo], subject: r.subject, html: r.html }); sent.push('invoice') } catch (e: any) { console.error('distributor invoice email failed:', e?.message) } }
-  }
-
   await c.from('b2b_orders').update({ distributor_notified_at: new Date().toISOString() }).eq('id', orderId)
   return { ok: true, sent }
 }
 
-// Distributor "shipped + tracking" — called from lib/b2b-freight-book after a
-// first successful booking. Best-effort; respects the template + recipient.
+// Distributor "shipped + tax invoice" — called from lib/b2b-freight-book after
+// a first successful booking. Sends consignment + tracking + the tax invoice
+// (PDF attached). The invoice goes out HERE (on shipment), not at payment.
+// Guarded once-per-order by b2b_orders.distributor_invoice_sent_at so a
+// re-booking doesn't re-send. Best-effort; respects the template + recipient.
 export async function sendDistributorShippedEmail(orderId: string, info: { carrier?: string | null; consignmentNumber?: string | null; trackingNumber?: string | null; trackingUrl?: string | null; eta?: string | null }): Promise<void> {
   const c = svc()
   const { data: order } = await c.from('b2b_orders').select(`
-      order_number, distributor:b2b_distributors!b2b_orders_distributor_id_fkey ( display_name, freight_email, primary_contact_email )
+      order_number, total_inc, distributor_invoice_sent_at,
+      myob_sale_invoice_number, myob_invoice_number,
+      distributor:b2b_distributors!b2b_orders_distributor_id_fkey ( display_name, freight_email, invoice_email, primary_contact_email )
     `).eq('id', orderId).maybeSingle()
   if (!order) return
+  if (order.distributor_invoice_sent_at) return  // already sent the invoice/shipped email
   const dist: any = Array.isArray(order.distributor) ? order.distributor[0] : order.distributor
-  const to = (dist?.freight_email || dist?.primary_contact_email || '').trim()
+  const to = (dist?.freight_email || dist?.invoice_email || dist?.primary_contact_email || '').trim()
   if (!to) return
+
+  const invoiceNumber = String(order.myob_sale_invoice_number || order.myob_invoice_number || order.order_number)
+
+  // Render the invoice PDF (best-effort — still send the email if it fails).
+  let attachments: { name: string; contentType: string; content: Buffer }[] | undefined
+  try {
+    const { renderB2bOrderInvoicePdf } = await import('./b2b-invoice-pdf')
+    const pdf = await renderB2bOrderInvoicePdf(orderId)
+    attachments = [{ name: pdf.filename, contentType: 'application/pdf', content: pdf.buffer }]
+  } catch (e: any) { console.error('invoice PDF render failed (sending email without it):', e?.message) }
+
   const r = await renderEmail('distributor_shipped', {
     distributor_name: dist?.display_name || '', order_number: order.order_number,
+    invoice_number: invoiceNumber, order_total: money(order.total_inc),
     carrier: info.carrier || 'our carrier', consignment_number: info.consignmentNumber || '—',
     tracking_number: info.trackingNumber || '—', eta: info.eta || '',
   }, { tracking_link: info.trackingUrl ? buttonHtml('Track this shipment', info.trackingUrl, '#4f8ef7') : '' })
   if (!r.enabled) return
-  try { await sendMail(await getFromMailbox(), { to: [to], subject: r.subject, html: r.html }) } catch (e: any) { console.error('distributor shipped email failed:', e?.message) }
+  try {
+    await sendMail(await getFromMailbox(), { to: [to], subject: r.subject, html: r.html, attachments })
+    await c.from('b2b_orders').update({ distributor_invoice_sent_at: new Date().toISOString() }).eq('id', orderId)
+  } catch (e: any) { console.error('distributor shipped+invoice email failed:', e?.message) }
 }

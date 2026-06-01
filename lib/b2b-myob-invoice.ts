@@ -249,6 +249,141 @@ export async function writeOrderToMyob(orderId: string): Promise<MyobWriteResult
   }
 }
 
+// ─── Convert Sale.Order → Sale.Invoice (on shipment) ───────────────────
+
+export interface MyobConvertResult {
+  myob_sale_invoice_uid: string
+  myob_sale_invoice_number: string | null
+  status: 'created' | 'already_converted'
+}
+
+/**
+ * Converts the order's MYOB Sale.Order into a Sale.Invoice (hits the GL) when
+ * Just Autos ships it. Mirrors the order's lines/freight/surcharge onto a new
+ * /Sale/Invoice/Item with the SAME Number (continuity), then deletes the
+ * original Sale.Order so it's moved, not duplicated. Idempotent via
+ * b2b_orders.myob_sale_invoice_uid. Throws on failure (caller logs best-effort).
+ */
+export async function convertOrderToInvoiceInMyob(orderId: string): Promise<MyobConvertResult> {
+  const c = sb()
+  const { data: order, error: oErr } = await c
+    .from('b2b_orders')
+    .select(`
+      id, order_number, status,
+      subtotal_ex_gst, gst, card_fee_inc, total_inc,
+      freight_cost_ex_gst, customer_po,
+      myob_invoice_uid, myob_invoice_number,
+      myob_sale_invoice_uid, myob_sale_invoice_number,
+      stripe_payment_intent_id,
+      distributor:b2b_distributors!b2b_orders_distributor_id_fkey ( id, display_name, myob_primary_customer_uid )
+    `)
+    .eq('id', orderId).maybeSingle()
+  if (oErr) throw new Error(`Order load failed: ${oErr.message}`)
+  if (!order) throw new Error(`Order ${orderId} not found`)
+
+  if (order.myob_sale_invoice_uid) {
+    return { myob_sale_invoice_uid: order.myob_sale_invoice_uid, myob_sale_invoice_number: order.myob_sale_invoice_number, status: 'already_converted' }
+  }
+
+  const dist: any = Array.isArray(order.distributor) ? order.distributor[0] : order.distributor
+  if (!dist?.myob_primary_customer_uid) throw new Error(`Distributor ${dist?.display_name || dist?.id} has no MYOB customer UID`)
+
+  const { data: lines, error: lErr } = await c
+    .from('b2b_order_lines')
+    .select('id, myob_item_uid, sku, name, qty, unit_trade_price_ex_gst, line_subtotal_ex_gst, is_taxable, sort_order')
+    .eq('order_id', orderId).order('sort_order', { ascending: true })
+  if (lErr) throw new Error(`Order lines load failed: ${lErr.message}`)
+  if (!lines || lines.length === 0) throw new Error(`Order ${orderId} has no lines`)
+
+  const cfg = await assertCheckoutConfigured()
+  const conn = await getConnection('JAWS')
+  if (!conn) throw new Error('JAWS MYOB connection not configured')
+
+  // Build the invoice lines (identical mapping to writeOrderToMyob's order lines).
+  const myobLines: any[] = []
+  for (const ln of lines) {
+    if (!ln.myob_item_uid) throw new Error(`Order line ${ln.id} (${ln.sku}) has no MYOB item UID`)
+    const taxUid = ln.is_taxable !== false ? cfg.gstTaxCodeUid : cfg.freTaxCodeUid
+    myobLines.push({
+      Type: 'Transaction',
+      Description: `${ln.name} — ${ln.sku}`.substring(0, 255),
+      Item: { UID: ln.myob_item_uid },
+      ShipQuantity: ln.qty,
+      UnitPrice: round2(Number(ln.unit_trade_price_ex_gst || 0)),
+      Total: round2(Number(ln.line_subtotal_ex_gst || 0)),
+      TaxCode: { UID: taxUid },
+    })
+  }
+  const cardFeeInc = round2(Number(order.card_fee_inc || 0))
+  if (cardFeeInc > 0) {
+    myobLines.push({ Type: 'Transaction', Description: 'Card processing surcharge', Item: { UID: cfg.cardFeeItemUid }, ShipQuantity: 1, UnitPrice: cardFeeInc, Total: cardFeeInc, TaxCode: { UID: cfg.freTaxCodeUid } })
+  }
+
+  const freightExGst  = round2(Number(order.freight_cost_ex_gst || 0))
+  const subtotalExGst = round2(Number(order.subtotal_ex_gst || 0))
+  const goodsExGst    = round2(subtotalExGst - freightExGst)
+  const totalTax      = round2(Number(order.gst || 0))
+  const subtotalEnv   = round2(goodsExGst + cardFeeInc)
+  const totalAmount   = round2(subtotalEnv + freightExGst + totalTax)
+  const freightTaxUid = freightExGst > 0 ? cfg.gstTaxCodeUid : cfg.freTaxCodeUid
+
+  // Keep the same Number as the order for continuity. Fall back to a freshly
+  // reserved number if the order was never written (no number on file).
+  let number = (order.myob_sale_invoice_number || order.myob_invoice_number || '').trim()
+  if (!number) {
+    const { data: rpcNumber, error: rpcErr } = await c.rpc('b2b_next_myob_invoice_number')
+    if (rpcErr) throw new Error(`Failed to allocate MYOB invoice number: ${rpcErr.message}`)
+    number = String(rpcNumber || '').trim()
+  }
+  if (!number) throw new Error('Could not resolve a MYOB invoice number')
+
+  const today = new Date().toISOString().substring(0, 10)
+  const memo = `B2B Tax Invoice; Order ${order.order_number}; Stripe ${order.stripe_payment_intent_id || ''}`.substring(0, 255)
+  const customerPo = (order.customer_po || '').trim().substring(0, 20)
+  const body: Record<string, any> = {
+    Customer: { UID: dist.myob_primary_customer_uid },
+    Date: today,
+    Number: number,
+    Lines: myobLines,
+    IsTaxInclusive: false,
+    FreightAmount: freightExGst,
+    FreightTaxCode: { UID: freightTaxUid },
+    Subtotal: subtotalEnv,
+    TotalTax: totalTax,
+    TotalAmount: totalAmount,
+    Comment: `Tax invoice for order ${order.order_number} — shipped`,
+    JournalMemo: memo,
+  }
+  if (customerPo) body.CustomerPurchaseOrderNumber = customerPo
+
+  // Create the invoice (hits the GL).
+  const result = await myobFetch(conn.id, `/accountright/${conn.company_file_id}/Sale/Invoice/Item`, { method: 'POST', body })
+  if (result.status !== 201 && result.status !== 200) {
+    throw new Error(`MYOB Sale.Invoice POST failed (HTTP ${result.status}): ${(result.raw || '').substring(0, 400)}`)
+  }
+  const location = (result.headers || {})['location'] || (result.headers || {})['Location'] || ''
+  const uuidMatches = String(location).match(UUID_REGEX_G) || []
+  const invoiceUid = uuidMatches[uuidMatches.length - 1] || null
+  if (!invoiceUid || invoiceUid === conn.company_file_id) throw new Error(`MYOB returned 201 but no invoice UID in Location: "${location}"`)
+
+  // Persist BEFORE deleting the order, so we never lose the invoice reference.
+  await c.from('b2b_orders').update({
+    myob_sale_invoice_uid: invoiceUid,
+    myob_sale_invoice_number: number,
+    myob_sale_invoice_at: new Date().toISOString(),
+  }).eq('id', orderId)
+
+  // Delete the original Sale.Order so it's moved, not duplicated. Best-effort —
+  // a failed delete just leaves an order alongside the invoice for staff to tidy.
+  if (order.myob_invoice_uid) {
+    try {
+      await myobFetch(conn.id, `/accountright/${conn.company_file_id}/Sale/Order/Item/${order.myob_invoice_uid}`, { method: 'DELETE' })
+    } catch (e: any) { console.error(`convert: failed to delete original Sale.Order ${order.myob_invoice_uid}:`, e?.message || e) }
+  }
+
+  return { myob_sale_invoice_uid: invoiceUid, myob_sale_invoice_number: number, status: 'created' }
+}
+
 // ─── Refund credit note ────────────────────────────────────────────────
 
 export interface MyobCreditNoteResult {
