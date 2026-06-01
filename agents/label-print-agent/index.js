@@ -13,6 +13,7 @@
 // Setup: see README.md. Requires Node 18+ (built-in fetch) and the DYMO printer
 // installed in Windows with a known printer name.
 
+try { require('dotenv').config() } catch { /* dotenv optional; env may be set by the service manager */ }
 const os = require('os')
 const path = require('path')
 const fs = require('fs')
