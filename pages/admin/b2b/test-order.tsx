@@ -23,6 +23,15 @@ interface Props { user: { id: string; email: string; displayName: string | null;
 interface Dist { id: string; display_name: string; primary_contact_email: string | null; is_active: boolean }
 interface Cat { id: string; sku: string; name: string; trade_price_ex_gst: number | null }
 interface Line { cat: Cat; qty: number }
+interface FreightRate { id: string; label: string; price_ex_gst: number; transit_days: number | null; source: 'machship' | 'static'; base_price_ex_gst?: number; markup_pct?: number; eta_utc?: string | null }
+interface FreightResult {
+  mode: 'live' | 'static' | 'blocked' | 'no_zone'
+  postcode: string; suburb: string | null
+  rates: FreightRate[]
+  blocked?: { reason: string; missing: Array<{ sku: string; name: string; missing_fields: string[] }> }
+  zone?: { id: string; name: string } | null
+  unavailable_reason?: string
+}
 
 const inp: React.CSSProperties = { padding: '8px 11px', background: T.bg3, border: `1px solid ${T.border2}`, borderRadius: 7, color: T.text, fontSize: 13, fontFamily: 'inherit', outline: 'none', boxSizing: 'border-box' }
 const btn = (bg: string, on = true): React.CSSProperties => ({ padding: '9px 16px', borderRadius: 7, border: 'none', background: on ? bg : T.bg4, color: on ? '#fff' : T.text3, fontSize: 13, fontWeight: 600, cursor: on ? 'pointer' : 'default', fontFamily: 'inherit' })
@@ -35,6 +44,11 @@ export default function TestOrderPage({ user }: Props) {
   const [q, setQ] = useState('')
   const [lines, setLines] = useState<Line[]>([])
   const [po, setPo] = useState('')
+  const [shipPostcode, setShipPostcode] = useState('')
+  const [shipSuburb, setShipSuburb] = useState('')
+  const [freight, setFreight] = useState<FreightResult | null>(null)
+  const [freightBusy, setFreightBusy] = useState(false)
+  const [freightMsg, setFreightMsg] = useState('')
   const [creating, setCreating] = useState(false)
   const [result, setResult] = useState<{ orderId: string; orderNumber: string; checkoutUrl: string | null; total_inc: number } | null>(null)
   const [markState, setMarkState] = useState<'idle' | 'busy' | 'done' | 'err'>('idle')
@@ -53,9 +67,21 @@ export default function TestOrderPage({ user }: Props) {
 
   const total = useMemo(() => lines.reduce((sum, l) => sum + (Number(l.cat.trade_price_ex_gst) || 0) * l.qty, 0), [lines])
 
-  function addLine(c: Cat) { setLines(ls => ls.some(l => l.cat.id === c.id) ? ls : [...ls, { cat: c, qty: 1 }]); setQ('') }
-  function setQty(id: string, qty: number) { setLines(ls => ls.map(l => l.cat.id === id ? { ...l, qty: Math.max(1, qty) } : l)) }
-  function remove(id: string) { setLines(ls => ls.filter(l => l.cat.id !== id)) }
+  function addLine(c: Cat) { setLines(ls => ls.some(l => l.cat.id === c.id) ? ls : [...ls, { cat: c, qty: 1 }]); setQ(''); setFreight(null) }
+  function setQty(id: string, qty: number) { setLines(ls => ls.map(l => l.cat.id === id ? { ...l, qty: Math.max(1, qty) } : l)); setFreight(null) }
+  function remove(id: string) { setLines(ls => ls.filter(l => l.cat.id !== id)); setFreight(null) }
+
+  async function quoteFreight() {
+    if (lines.length === 0) return
+    setFreightBusy(true); setFreightMsg(''); setFreight(null)
+    try {
+      const r = await fetch('/api/b2b/admin/freight-quote', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ distributorId: distId, postcode: shipPostcode, suburb: shipSuburb, items: lines.map(l => ({ catalogueId: l.cat.id, qty: l.qty })) }) })
+      const d = await r.json()
+      if (!r.ok) { setFreightMsg(d.error || 'Freight quote failed'); return }
+      setFreight(d)
+    } catch (e: any) { setFreightMsg(e?.message || 'Freight quote failed') }
+    finally { setFreightBusy(false) }
+  }
 
   async function create() {
     if (!distId || lines.length === 0) return
@@ -137,6 +163,63 @@ export default function TestOrderPage({ user }: Props) {
                       </div>
                     ))}
                     <div style={{ padding: '8px 10px', textAlign: 'right', fontSize: 13, color: T.text2 }}>Subtotal ex GST: <strong style={{ color: T.text }}>${total.toFixed(2)}</strong></div>
+                  </div>
+                )}
+
+                {lines.length > 0 && (
+                  <div style={{ border: `1px solid ${T.border}`, borderRadius: 8, padding: 12, display: 'flex', flexDirection: 'column', gap: 10 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
+                      <span style={{ fontSize: 11, color: T.text3, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Test freight cost</span>
+                      <span style={{ fontSize: 11, color: T.text3 }}>Live MachShip rates (markup applied), same as the distributor sees</span>
+                    </div>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr auto', gap: 8, alignItems: 'end' }}>
+                      <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                        <span style={{ fontSize: 10, color: T.text3 }}>Suburb</span>
+                        <input style={inp} value={shipSuburb} onChange={e => { setShipSuburb(e.target.value); setFreight(null) }} placeholder={distId ? 'distributor address' : 'e.g. Brisbane'} />
+                      </label>
+                      <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                        <span style={{ fontSize: 10, color: T.text3 }}>Postcode</span>
+                        <input style={inp} value={shipPostcode} onChange={e => { setShipPostcode(e.target.value); setFreight(null) }} placeholder={distId ? 'distributor address' : 'e.g. 4000'} maxLength={4} />
+                      </label>
+                      <button onClick={quoteFreight} disabled={freightBusy} style={btn(T.purple, !freightBusy)}>{freightBusy ? 'Quoting…' : 'Quote freight'}</button>
+                    </div>
+                    {freightMsg && <div style={{ fontSize: 12, color: T.red }}>{freightMsg}</div>}
+                    {freight && (
+                      <div>
+                        {freight.mode === 'blocked' ? (
+                          <div style={{ fontSize: 12, color: T.amber }}>
+                            {freight.blocked?.reason}
+                            <ul style={{ margin: '6px 0 0', paddingLeft: 18 }}>
+                              {(freight.blocked?.missing || []).map(m => <li key={m.sku} style={{ color: T.text2 }}>{m.name} <span style={{ fontFamily: 'monospace', color: T.text3 }}>({m.sku})</span> — missing {m.missing_fields.join(', ')}</li>)}
+                            </ul>
+                            <div style={{ marginTop: 6, color: T.text3 }}>Fix dimensions on the catalogue page, then re-quote.</div>
+                          </div>
+                        ) : freight.rates.length === 0 ? (
+                          <div style={{ fontSize: 12, color: T.amber }}>No freight rates for {freight.postcode}{freight.unavailable_reason ? ` — ${freight.unavailable_reason}` : ''}.</div>
+                        ) : (
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                            <div style={{ fontSize: 11, color: T.text3 }}>
+                              To {freight.suburb ? `${freight.suburb} ` : ''}{freight.postcode} · {freight.mode === 'live' ? 'live MachShip' : freight.mode === 'static' ? `static zone${freight.zone ? ` (${freight.zone.name})` : ''}` : freight.mode}
+                              {freight.mode === 'static' && freight.unavailable_reason ? ` — live unavailable: ${freight.unavailable_reason}` : ''}
+                            </div>
+                            {freight.rates.map((r, i) => (
+                              <div key={r.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 8, padding: '6px 8px', background: i === 0 ? `${T.green}14` : T.bg3, border: `1px solid ${i === 0 ? `${T.green}44` : T.border}`, borderRadius: 6 }}>
+                                <div>
+                                  <span style={{ fontSize: 12.5 }}>{r.label}</span>
+                                  {i === 0 && <span style={{ fontSize: 10, color: T.green, marginLeft: 6 }}>cheapest</span>}
+                                  {r.transit_days != null && <span style={{ fontSize: 10, color: T.text3, marginLeft: 6 }}>~{r.transit_days}d</span>}
+                                </div>
+                                <div style={{ textAlign: 'right' }}>
+                                  <span style={{ fontSize: 13, fontFamily: 'monospace', fontWeight: 600 }}>${r.price_ex_gst.toFixed(2)}</span>
+                                  <span style={{ fontSize: 10, color: T.text3 }}> ex GST</span>
+                                  {r.base_price_ex_gst != null && r.markup_pct != null && r.markup_pct > 0 && <div style={{ fontSize: 9.5, color: T.text3 }}>base ${r.base_price_ex_gst.toFixed(2)} + {r.markup_pct}%</div>}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </div>
                 )}
 
