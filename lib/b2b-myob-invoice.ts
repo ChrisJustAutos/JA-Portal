@@ -259,9 +259,10 @@ export interface MyobConvertResult {
 
 /**
  * Converts the order's MYOB Sale.Order into a Sale.Invoice (hits the GL) when
- * Just Autos ships it. Mirrors the order's lines/freight/surcharge onto a new
- * /Sale/Invoice/Item with the SAME Number (continuity), then deletes the
- * original Sale.Order so it's moved, not duplicated. Idempotent via
+ * Just Autos ships it, using MYOB's NATIVE conversion: POST /Sale/Invoice/Item
+ * with the order's lines/freight/surcharge PLUS an `Order: { UID }` link to the
+ * originating order. AccountRight consumes/closes that order (no delete, no
+ * duplicate). Keeps the SAME Number for continuity. Idempotent via
  * b2b_orders.myob_sale_invoice_uid. Throws on failure (caller logs best-effort).
  */
 export async function convertOrderToInvoiceInMyob(orderId: string): Promise<MyobConvertResult> {
@@ -356,7 +357,14 @@ export async function convertOrderToInvoiceInMyob(orderId: string): Promise<Myob
   }
   if (customerPo) body.CustomerPurchaseOrderNumber = customerPo
 
-  // Create the invoice (hits the GL).
+  // Native MYOB conversion: link the new invoice to the originating order via
+  // the Order foreign key. AccountRight then CONVERTS the order (consumes/closes
+  // it) rather than leaving a duplicate — no delete needed. Requires the invoice
+  // layout to match the order's (both Item layout here). If the order was never
+  // written to MYOB (no UID), this is just a fresh invoice.
+  if (order.myob_invoice_uid) body.Order = { UID: order.myob_invoice_uid }
+
+  // Create the invoice (hits the GL; converts the linked order).
   const result = await myobFetch(conn.id, `/accountright/${conn.company_file_id}/Sale/Invoice/Item`, { method: 'POST', body })
   if (result.status !== 201 && result.status !== 200) {
     throw new Error(`MYOB Sale.Invoice POST failed (HTTP ${result.status}): ${(result.raw || '').substring(0, 400)}`)
@@ -366,20 +374,11 @@ export async function convertOrderToInvoiceInMyob(orderId: string): Promise<Myob
   const invoiceUid = uuidMatches[uuidMatches.length - 1] || null
   if (!invoiceUid || invoiceUid === conn.company_file_id) throw new Error(`MYOB returned 201 but no invoice UID in Location: "${location}"`)
 
-  // Persist BEFORE deleting the order, so we never lose the invoice reference.
   await c.from('b2b_orders').update({
     myob_sale_invoice_uid: invoiceUid,
     myob_sale_invoice_number: number,
     myob_sale_invoice_at: new Date().toISOString(),
   }).eq('id', orderId)
-
-  // Delete the original Sale.Order so it's moved, not duplicated. Best-effort —
-  // a failed delete just leaves an order alongside the invoice for staff to tidy.
-  if (order.myob_invoice_uid) {
-    try {
-      await myobFetch(conn.id, `/accountright/${conn.company_file_id}/Sale/Order/Item/${order.myob_invoice_uid}`, { method: 'DELETE' })
-    } catch (e: any) { console.error(`convert: failed to delete original Sale.Order ${order.myob_invoice_uid}:`, e?.message || e) }
-  }
 
   return { myob_sale_invoice_uid: invoiceUid, myob_sale_invoice_number: number, status: 'created' }
 }
