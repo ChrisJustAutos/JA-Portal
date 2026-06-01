@@ -80,7 +80,9 @@ export default withAuth('admin:b2b', async (req: NextApiRequest, res: NextApiRes
   const totalInc = round2(subtotalInc + cardFeeInc)
 
   const { data: order, error: orderErr } = await c.from('b2b_orders').insert({
-    distributor_id: distributorId, placed_by_user_id: user.id, status: 'pending_payment',
+    // placed_by_user_id FKs b2b_distributor_users — an admin isn't one, so leave
+    // it null (the test_order_created event records the admin actor instead).
+    distributor_id: distributorId, placed_by_user_id: null, status: 'pending_payment',
     subtotal_ex_gst: subtotalEx, gst, card_fee_inc: cardFeeInc, total_inc: totalInc,
     currency: 'AUD', myob_company_file: 'JAWS', customer_po: customerPo, is_test: true,
   }).select('id, order_number').single()
