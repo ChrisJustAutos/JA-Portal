@@ -20,6 +20,7 @@ export default function OrderActionPage() {
   const [busy, setBusy] = useState(false)
   const [result, setResult] = useState<any>(null)
   const [stage, setStage] = useState<'choose' | 'later'>('choose')
+  const [customWhen, setCustomWhen] = useState('')   // datetime-local string
 
   useEffect(() => {
     if (!router.isReady) return
@@ -107,14 +108,28 @@ export default function OrderActionPage() {
                     </div>
                   ) : (
                     <div>
-                      <div style={{ fontSize: 13, color: T.text2, marginBottom: 10 }}>Books the consignment now; the carrier collects at:</div>
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                      <div style={{ fontSize: 13, color: T.text2, marginBottom: 10 }}>Books the consignment now; the carrier collects at the time you pick:</div>
+                      <div style={{ fontSize: 11, color: T.text3, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 6 }}>Collection date &amp; time</div>
+                      <input
+                        type="datetime-local"
+                        value={customWhen}
+                        min={toLocalInput(new Date(Date.now() + 5 * 60 * 1000))}
+                        onChange={e => setCustomWhen(e.target.value)}
+                        style={{ width: '100%', background: T.bg3, border: `1px solid ${T.border}`, color: T.text, borderRadius: 8, padding: '12px 14px', fontSize: 16, outline: 'none', fontFamily: 'inherit', boxSizing: 'border-box', colorScheme: 'dark' }}
+                      />
+                      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 10 }}>
                         {laterOptions().map(opt => (
-                          <button key={opt.label} onClick={() => bookLater(opt.when)} disabled={busy} style={{ padding: '11px 14px', borderRadius: 8, border: `1px solid ${T.border}`, background: T.bg3, color: T.text, fontSize: 14, textAlign: 'left', cursor: busy ? 'wait' : 'pointer', fontFamily: 'inherit' }}>
-                            {opt.label} <span style={{ color: T.text3, fontSize: 12 }}>· {fmtWhen(opt.when.toISOString())}</span>
+                          <button key={opt.label} onClick={() => setCustomWhen(toLocalInput(opt.when))} disabled={busy} style={{ padding: '6px 11px', borderRadius: 16, border: `1px solid ${T.border}`, background: T.bg3, color: T.text2, fontSize: 12, cursor: 'pointer', fontFamily: 'inherit' }}>
+                            {opt.label}
                           </button>
                         ))}
                       </div>
+                      <button
+                        onClick={() => { const d = new Date(customWhen); if (isNaN(d.getTime())) { setError('Pick a collection date & time'); return } bookLater(d) }}
+                        disabled={busy || !customWhen}
+                        style={{ width: '100%', marginTop: 14, padding: '12px 0', borderRadius: 9, border: 'none', background: (busy || !customWhen) ? T.bg3 : T.green, color: (busy || !customWhen) ? T.text3 : '#fff', fontSize: 15, fontWeight: 600, cursor: (busy || !customWhen) ? 'default' : 'pointer', fontFamily: 'inherit' }}>
+                        {busy ? 'Booking…' : 'Book — collect at this time'}
+                      </button>
                       <button onClick={() => setStage('choose')} disabled={busy} style={{ marginTop: 12, background: 'transparent', border: 'none', color: T.text3, fontSize: 13, cursor: 'pointer', fontFamily: 'inherit' }}>← Back</button>
                     </div>
                   )}
@@ -144,4 +159,10 @@ function laterOptions(): { label: string; when: Date }[] {
 
 function fmtWhen(iso: string): string {
   try { return new Date(iso).toLocaleString('en-AU', { weekday: 'short', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) } catch { return iso }
+}
+
+// Format a Date as a local "YYYY-MM-DDTHH:mm" string for <input type=datetime-local>.
+function toLocalInput(d: Date): string {
+  const p = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`
 }

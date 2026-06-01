@@ -834,6 +834,7 @@ function ShippingCard({ order, onEdit, onReloaded, onFlash }: {
   const [bookingBusy,  setBookingBusy]  = useState(false)
   const [refreshBusy,  setRefreshBusy]  = useState(false)
   const [actionError,  setActionError]  = useState<string | null>(null)
+  const [dispatchAt,   setDispatchAt]   = useState('')   // datetime-local; blank = collect ASAP
 
   async function openLabel() {
     try {
@@ -853,6 +854,8 @@ function ShippingCard({ order, onEdit, onReloaded, onFlash }: {
     try {
       const r = await fetch(`/api/b2b/admin/orders/${order.id}/book-freight${force ? '?force=1' : ''}`, {
         method: 'POST', credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(dispatchAt ? { dispatch_at: new Date(dispatchAt).toISOString() } : {}),
       })
       const j = await r.json()
       if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`)
@@ -927,6 +930,24 @@ function ShippingCard({ order, onEdit, onReloaded, onFlash }: {
           </button>
         )}
       </div>
+
+      {/* Collection time — optional. Blank = collect ASAP; a future time sets
+          MachShip's desired despatch so the carrier collects then. */}
+      {hasLiveQuote && !hasConsignment && (
+        <div style={{display:'flex', alignItems:'center', gap:8, marginBottom:10, flexWrap:'wrap'}}>
+          <span style={{fontSize:11, color:T.text3, whiteSpace:'nowrap'}}>Collection time</span>
+          <input
+            type="datetime-local"
+            value={dispatchAt}
+            min={localNow()}
+            onChange={e => setDispatchAt(e.target.value)}
+            style={{flex:1, minWidth:180, background:T.bg3, border:`1px solid ${T.border2}`, color:T.text, borderRadius:5, padding:'5px 8px', fontSize:12, outline:'none', fontFamily:'inherit', colorScheme:'dark'}}
+          />
+          {dispatchAt
+            ? <button onClick={() => setDispatchAt('')} style={{background:'none', border:'none', color:T.text3, fontSize:11, cursor:'pointer', fontFamily:'inherit'}}>clear (ASAP)</button>
+            : <span style={{fontSize:10, color:T.text3}}>blank = ASAP</span>}
+        </div>
+      )}
 
       {actionError && (
         <div style={{fontSize:11, color:T.red, marginBottom:10, lineHeight:1.5}}>{actionError}</div>
@@ -1353,6 +1374,12 @@ function incGstAmt(ex: number, taxable: boolean): number { return taxable ? roun
 function fullDate(iso: string): string {
   const d = new Date(iso)
   return d.toLocaleString('en-AU', { day:'2-digit', month:'short', year:'numeric', hour:'2-digit', minute:'2-digit' })
+}
+// Local "YYYY-MM-DDTHH:mm" a few minutes out, for a datetime-local min.
+function localNow(): string {
+  const d = new Date(Date.now() + 5 * 60 * 1000)
+  const p = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`
 }
 
 export async function getServerSideProps(context: any) {

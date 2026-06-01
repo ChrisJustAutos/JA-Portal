@@ -17,7 +17,17 @@ export default withAuth('admin:b2b', async (req: NextApiRequest, res: NextApiRes
   if (!id) return res.status(400).json({ error: 'id required' })
   const force = String(req.query.force || '') === '1'
 
-  const r = await bookFreightForOrder(id, { actorId: user.id, force })
+  // Optional desired despatch (collection) time — books now, carrier collects then.
+  let dispatchAt: string | undefined
+  const body = (req.body && typeof req.body === 'object') ? req.body : {}
+  const rawWhen = String(body.dispatch_at || '').trim()
+  if (rawWhen) {
+    const d = new Date(rawWhen)
+    if (isNaN(d.getTime())) return res.status(400).json({ error: 'dispatch_at is not a valid date/time' })
+    dispatchAt = d.toISOString()
+  }
+
+  const r = await bookFreightForOrder(id, { actorId: user.id, force, dispatchAt })
   if (!r.ok) return res.status(r.httpStatus).json({ error: r.error, detail: r.detail })
   return res.status(200).json({
     ok: true, consignment_id: r.consignment_id, consignment_number: r.consignment_number,
