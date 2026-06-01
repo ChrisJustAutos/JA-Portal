@@ -49,6 +49,24 @@ nssm start JALabelPrint
 ```
 (or just load the `.env` and run under `pm2`.)
 
+## Network DYMO (raw port 9100)
+
+If the DYMO is a network unit (e.g. `DYMOLW5XL30234cE.local`, port 9100) it is
+independent of any one PC — run this agent on whichever machine is reliably on
+(e.g. the front-desk inbox PC), it doesn't have to be the machine the printer
+"belongs" to.
+
+DYMO can't be fed a PDF straight over 9100 (that raw stream is a Zebra/ZPL
+thing) — it must be rendered by the DYMO driver. So on the agent's PC:
+1. Install the **DYMO LabelWriter 5XL** driver (DYMO Connect).
+2. Add Printer → **Add using TCP/IP** → Hostname `DYMOLW5XL30234cE.local`,
+   **Raw**, **port 9100** → pick the DYMO 5XL driver → name it.
+3. Set default paper to 4×6 and print a Windows test page.
+4. Put that printer's exact name in `DYMO_PRINTER_NAME`.
+
+The agent then prints the PDF through the driver, which sends it to the printer
+over the network — no dependency on any other PC.
+
 ## Tuning the print
 `pdf-to-printer` prints via the bundled SumatraPDF. If labels come out scaled
 wrong, change `PRINT_SCALE` in `.env`:
