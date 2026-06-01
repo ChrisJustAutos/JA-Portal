@@ -1,0 +1,142 @@
+// components/b2b/FreightPackagingManager.tsx
+// Edit the standard freight cartons + pallet spec + palletise-by-weight
+// threshold. Feeds the cartonizer that packs multi-item orders for MachShip.
+// Dims are entered in mm; weights in kg (stored as grams).
+
+import { useEffect, useState } from 'react'
+
+const T = {
+  bg2: '#131519', bg3: '#1a1d23', bg4: '#21252d',
+  border: 'rgba(255,255,255,0.07)', border2: 'rgba(255,255,255,0.12)',
+  text: '#e8eaf0', text2: '#8b90a0', text3: '#545968',
+  blue: '#4f8ef7', green: '#34c77b', amber: '#f5a623', red: '#f04e4e',
+}
+const inp: React.CSSProperties = { padding: '6px 8px', background: T.bg3, border: `1px solid ${T.border2}`, borderRadius: 5, color: T.text, fontSize: 12, fontFamily: 'inherit', outline: 'none', boxSizing: 'border-box', width: '100%' }
+const num = (g: any) => (g == null || g === '' ? '' : String(g))
+const kg = (grams: any) => (grams == null ? '' : String(Math.round(Number(grams) / 100) / 10))
+const toG = (kgVal: string) => { const n = parseFloat(kgVal); return Number.isFinite(n) ? Math.round(n * 1000) : null }
+const toInt = (v: string) => { const n = parseInt(v, 10); return Number.isFinite(n) ? n : null }
+
+interface Box { id: string; name: string; length_mm: number; width_mm: number; height_mm: number; max_weight_g: number; sort_order: number; is_active: boolean }
+
+export default function FreightPackagingManager() {
+  const [boxes, setBoxes] = useState<Box[]>([])
+  const [pallet, setPallet] = useState({ length_mm: '', width_mm: '', max_height_mm: '', max_weight_kg: '', threshold_kg: '' })
+  const [loading, setLoading] = useState(true)
+  const [flash, setFlash] = useState('')
+  const [savingPallet, setSavingPallet] = useState(false)
+  const [adding, setAdding] = useState(false)
+  const [newBox, setNewBox] = useState({ name: '', length_mm: '', width_mm: '', height_mm: '', max_weight_kg: '' })
+
+  function flashMsg(m: string) { setFlash(m); setTimeout(() => setFlash(''), 2500) }
+
+  async function load() {
+    setLoading(true)
+    const [bx, st] = await Promise.all([
+      fetch('/api/b2b/admin/freight-boxes').then(r => r.ok ? r.json() : { boxes: [] }),
+      fetch('/api/b2b/admin/settings').then(r => r.ok ? r.json() : null),
+    ])
+    setBoxes(bx.boxes || [])
+    const s = st?.settings || {}
+    setPallet({
+      length_mm: num(s.freight_pallet_length_mm), width_mm: num(s.freight_pallet_width_mm),
+      max_height_mm: num(s.freight_pallet_max_height_mm), max_weight_kg: kg(s.freight_pallet_max_weight_g),
+      threshold_kg: kg(s.freight_pallet_threshold_g),
+    })
+    setLoading(false)
+  }
+  useEffect(() => { load() }, [])
+
+  async function patchBox(id: string, patch: Record<string, any>) {
+    const r = await fetch(`/api/b2b/admin/freight-boxes?id=${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(patch) })
+    if (r.ok) flashMsg('Saved'); else { const d = await r.json().catch(() => ({})); flashMsg(d.issues?.join('; ') || d.error || 'Save failed') }
+  }
+  function updateBoxLocal(id: string, p: Partial<Box>) { setBoxes(bs => bs.map(b => b.id === id ? { ...b, ...p } : b)) }
+
+  async function removeBox(id: string, name: string) {
+    if (!confirm(`Delete box "${name}"?`)) return
+    const r = await fetch(`/api/b2b/admin/freight-boxes?id=${id}`, { method: 'DELETE' })
+    if (r.ok) { setBoxes(bs => bs.filter(b => b.id !== id)); flashMsg('Deleted') }
+  }
+
+  async function addBox() {
+    const payload = { name: newBox.name.trim(), length_mm: toInt(newBox.length_mm), width_mm: toInt(newBox.width_mm), height_mm: toInt(newBox.height_mm), max_weight_g: toG(newBox.max_weight_kg) }
+    if (!payload.name || !payload.length_mm || !payload.width_mm || !payload.height_mm || !payload.max_weight_g) { flashMsg('Fill all box fields'); return }
+    setAdding(true)
+    const r = await fetch('/api/b2b/admin/freight-boxes', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...payload, sort_order: (boxes.length + 1) * 10 }) })
+    setAdding(false)
+    if (r.ok) { setNewBox({ name: '', length_mm: '', width_mm: '', height_mm: '', max_weight_kg: '' }); await load(); flashMsg('Box added') }
+    else { const d = await r.json().catch(() => ({})); flashMsg(d.issues?.join('; ') || d.error || 'Add failed') }
+  }
+
+  async function savePallet() {
+    setSavingPallet(true)
+    const body = {
+      freight_pallet_length_mm: toInt(pallet.length_mm), freight_pallet_width_mm: toInt(pallet.width_mm),
+      freight_pallet_max_height_mm: toInt(pallet.max_height_mm), freight_pallet_max_weight_g: toG(pallet.max_weight_kg),
+      freight_pallet_threshold_g: toG(pallet.threshold_kg),
+    }
+    const r = await fetch('/api/b2b/admin/settings', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+    setSavingPallet(false)
+    if (r.ok) flashMsg('Pallet settings saved'); else { const d = await r.json().catch(() => ({})); flashMsg(d.issues?.join('; ') || d.error || 'Save failed') }
+  }
+
+  if (loading) return <div style={{ color: T.text3, fontSize: 13, padding: 12 }}>Loading…</div>
+
+  const cols = '1.4fr 70px 70px 70px 80px 56px 30px'
+  const hdr: React.CSSProperties = { fontSize: 9, color: T.text3, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+      {flash && <div style={{ fontSize: 12, color: flash.includes('fail') || flash.includes('Fill') ? T.amber : T.green }}>{flash}</div>}
+
+      {/* Boxes */}
+      <div>
+        <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 8 }}>Standard cartons <span style={{ color: T.text3, fontWeight: 400 }}>· usable internal size (mm) + max weight (kg)</span></div>
+        <div style={{ display: 'grid', gridTemplateColumns: cols, gap: 8, padding: '0 2px 6px' }}>
+          <div style={hdr}>Name</div><div style={hdr}>L (mm)</div><div style={hdr}>W (mm)</div><div style={hdr}>H (mm)</div><div style={hdr}>Max kg</div><div style={{ ...hdr, textAlign: 'center' }}>Active</div><div />
+        </div>
+        {boxes.length === 0 && <div style={{ fontSize: 12, color: T.text3, padding: '4px 0 10px' }}>No boxes yet — add your standard cartons below.</div>}
+        {boxes.map(b => (
+          <div key={b.id} style={{ display: 'grid', gridTemplateColumns: cols, gap: 8, padding: '5px 0', alignItems: 'center', borderTop: `1px solid ${T.border}` }}>
+            <input style={inp} value={b.name} onChange={e => updateBoxLocal(b.id, { name: e.target.value })} onBlur={e => patchBox(b.id, { name: e.target.value })} />
+            <input style={inp} inputMode="numeric" value={num(b.length_mm)} onChange={e => updateBoxLocal(b.id, { length_mm: Number(e.target.value) })} onBlur={e => patchBox(b.id, { length_mm: toInt(e.target.value) })} />
+            <input style={inp} inputMode="numeric" value={num(b.width_mm)} onChange={e => updateBoxLocal(b.id, { width_mm: Number(e.target.value) })} onBlur={e => patchBox(b.id, { width_mm: toInt(e.target.value) })} />
+            <input style={inp} inputMode="numeric" value={num(b.height_mm)} onChange={e => updateBoxLocal(b.id, { height_mm: Number(e.target.value) })} onBlur={e => patchBox(b.id, { height_mm: toInt(e.target.value) })} />
+            <input style={inp} inputMode="decimal" value={kg(b.max_weight_g)} onChange={e => updateBoxLocal(b.id, { max_weight_g: toG(e.target.value) ?? 0 })} onBlur={e => patchBox(b.id, { max_weight_g: toG(e.target.value) })} />
+            <input type="checkbox" checked={b.is_active} onChange={e => { updateBoxLocal(b.id, { is_active: e.target.checked }); patchBox(b.id, { is_active: e.target.checked }) }} style={{ justifySelf: 'center', cursor: 'pointer' }} />
+            <button onClick={() => removeBox(b.id, b.name)} title="Delete" style={{ background: 'none', border: 'none', color: T.text3, cursor: 'pointer', fontSize: 15, justifySelf: 'center' }}>×</button>
+          </div>
+        ))}
+        {/* Add row */}
+        <div style={{ display: 'grid', gridTemplateColumns: cols, gap: 8, padding: '8px 0 0', alignItems: 'center', borderTop: `1px solid ${T.border}`, marginTop: 4 }}>
+          <input style={inp} placeholder="e.g. Medium" value={newBox.name} onChange={e => setNewBox(s => ({ ...s, name: e.target.value }))} />
+          <input style={inp} placeholder="L" inputMode="numeric" value={newBox.length_mm} onChange={e => setNewBox(s => ({ ...s, length_mm: e.target.value }))} />
+          <input style={inp} placeholder="W" inputMode="numeric" value={newBox.width_mm} onChange={e => setNewBox(s => ({ ...s, width_mm: e.target.value }))} />
+          <input style={inp} placeholder="H" inputMode="numeric" value={newBox.height_mm} onChange={e => setNewBox(s => ({ ...s, height_mm: e.target.value }))} />
+          <input style={inp} placeholder="kg" inputMode="decimal" value={newBox.max_weight_kg} onChange={e => setNewBox(s => ({ ...s, max_weight_kg: e.target.value }))} />
+          <button onClick={addBox} disabled={adding} style={{ gridColumn: '6 / 8', padding: '6px 10px', borderRadius: 5, border: 'none', background: T.blue, color: '#fff', fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>{adding ? '…' : '+ Add'}</button>
+        </div>
+      </div>
+
+      {/* Pallet + threshold */}
+      <div>
+        <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 8 }}>Pallet &amp; threshold</div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 10 }}>
+          {([['length_mm', 'Pallet L (mm)'], ['width_mm', 'Pallet W (mm)'], ['max_height_mm', 'Max stack H (mm)'], ['max_weight_kg', 'Max kg'], ['threshold_kg', 'Palletise over (kg)']] as const).map(([k, label]) => (
+            <label key={k} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+              <span style={{ ...hdr }}>{label}</span>
+              <input style={inp} inputMode={k.endsWith('kg') ? 'decimal' : 'numeric'} value={(pallet as any)[k]} onChange={e => setPallet(p => ({ ...p, [k]: e.target.value }))} />
+            </label>
+          ))}
+        </div>
+        <div style={{ fontSize: 11, color: T.text3, margin: '8px 0' }}>An order whose total weight exceeds <strong>Palletise over</strong> ships on a pallet instead of boxes.</div>
+        <button onClick={savePallet} disabled={savingPallet} style={{ padding: '7px 16px', borderRadius: 6, border: 'none', background: T.blue, color: '#fff', fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>{savingPallet ? 'Saving…' : 'Save pallet settings'}</button>
+      </div>
+
+      <div style={{ fontSize: 11, color: T.text3, lineHeight: 1.6, borderTop: `1px solid ${T.border}`, paddingTop: 12 }}>
+        These feed the freight cartonizer (coming next): it packs an order's items into the fewest cartons that fit by volume + weight, or onto a pallet once total weight passes the threshold — then quotes/books that. Box edits save as you leave each field.
+      </div>
+    </div>
+  )
+}

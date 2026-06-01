@@ -40,6 +40,8 @@ export default withAuth('edit:b2b_distributors', async (req: NextApiRequest, res
         slack_new_order_webhook_url,
         admin_order_notify_emails,
         freight_markup_percent,
+        freight_pallet_length_mm, freight_pallet_width_mm, freight_pallet_max_height_mm,
+        freight_pallet_max_weight_g, freight_pallet_threshold_g,
         machship_from_name, machship_from_company, machship_from_phone, machship_from_email,
         machship_from_address_line1, machship_from_address_line2,
         machship_from_suburb, machship_from_postcode, machship_from_state,
@@ -139,6 +141,21 @@ export default withAuth('edit:b2b_distributors', async (req: NextApiRequest, res
       const bad = v.split(/[,;\s]+/).filter(Boolean).filter(e => !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e))
       if (bad.length) issues.push(`Invalid email(s): ${bad.join(', ')}`)
       else update.admin_order_notify_emails = v || null
+    }
+
+    // ── Pallet spec + palletise threshold (mm / grams; nullable) ──
+    const PALLET_INT_FIELDS = [
+      'freight_pallet_length_mm', 'freight_pallet_width_mm', 'freight_pallet_max_height_mm',
+      'freight_pallet_max_weight_g', 'freight_pallet_threshold_g',
+    ] as const
+    for (const k of PALLET_INT_FIELDS) {
+      if (k in body) {
+        const raw = body[k]
+        if (raw === null || raw === '' || typeof raw === 'undefined') { update[k] = null; continue }
+        const v = parseInt(String(raw), 10)
+        if (!Number.isFinite(v) || v < 0) issues.push(`${k} must be a non-negative number`)
+        else update[k] = v
+      }
     }
 
     // ── Freight markup ──

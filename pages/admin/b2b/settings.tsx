@@ -12,6 +12,7 @@ import { requirePageAuth } from '../../../lib/authServer'
 import type { UserRole } from '../../../lib/permissions'
 import FreightZonesManager from '../../../components/b2b/FreightZonesManager'
 import EmailTemplatesManager from '../../../components/b2b/EmailTemplatesManager'
+import FreightPackagingManager from '../../../components/b2b/FreightPackagingManager'
 import FreightCarriersManager from '../../../components/b2b/FreightCarriersManager'
 
 const T = {
@@ -43,6 +44,7 @@ const SETTINGS_SECTIONS: Array<{ id: string; title: string; icon: string; accent
   { id: 'carriers',          title: 'Freight Carriers',       icon: 'orders',        accent: T.teal },
   { id: 'freight-pricing',   title: 'Freight Pricing & Sender', icon: 'payables',    accent: T.blue },
   { id: 'freight-zones',     title: 'Freight Zones',          icon: 'stock',         accent: T.amber },
+  { id: 'freight-packaging', title: 'Freight Packaging',      icon: 'stock',         accent: T.teal },
   { id: 'slack',             title: 'Slack Notifications',    icon: 'calls',         accent: T.purple },
   { id: 'order-notify',      title: 'Order Notifications',    icon: 'messages',      accent: T.green },
   { id: 'email-templates',   title: 'Email Notifications',    icon: 'messages',      accent: T.blue },
@@ -556,6 +558,12 @@ export default function B2BSettingsPage({ user }: Props) {
               <Section id="freight-zones" activeId={openSectionId} onClose={closeSection} title="Freight Zones &amp; Rates (manual fallback)"
                 description="Postcode-driven shipping rates the cart shows when no live carrier rates are available. Add a zone, paste the postcode ranges it covers, then add 1+ rates (Standard, Express, etc.).">
                 <FreightZonesManager/>
+              </Section>
+
+              {/* ─── Freight packaging ─── */}
+              <Section id="freight-packaging" activeId={openSectionId} onClose={closeSection} title="Freight Packaging"
+                description="Your standard cartons + pallet spec + the weight at which an order ships on a pallet. Feeds the cartonizer that packs multi-item orders for MachShip quotes.">
+                <FreightPackagingManager/>
               </Section>
 
               {/* ─── Slack ─── */}
