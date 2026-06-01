@@ -84,7 +84,9 @@ export default withAuth('view:b2b', async (req: NextApiRequest, res: NextApiResp
   // We re-issue a small aggregate query for the same filters.
   let totals = { count: count || 0, total_inc_sum: 0, paid_sum: 0 }
   try {
-    let agg = c.from('b2b_orders').select('total_inc, status')
+    // Exclude test orders from revenue totals so they never inflate the numbers
+    // (they still appear in the list, badged [TEST]).
+    let agg = c.from('b2b_orders').select('total_inc, status').eq('is_test', false)
     if (statuses.length > 0) agg = agg.in('status', statuses)
     if (distributorId)       agg = agg.eq('distributor_id', distributorId)
     if (dateFrom)            agg = agg.gte('created_at', `${dateFrom}T00:00:00`)
