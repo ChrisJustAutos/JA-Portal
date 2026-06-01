@@ -36,7 +36,16 @@ npm start
 Book a test order's freight in the portal → a label should print within a few
 seconds. Watch the console for `✓ printed`.
 
-## Run as a Windows service (so it survives reboots)
+## Auto-start at login (no admin needed)
+
+`run-agent-hidden.vbs` launches the agent with no console window and logs to
+`agent.log`. To start it at every login, put a shortcut to it in the Startup
+folder — press Win+R, type `shell:startup`, and drop a shortcut to
+`run-agent-hidden.vbs` there (or a tiny `.vbs` that `sh.Run`s it). No admin
+rights required; runs whenever that user is logged in (ideal for the front-desk
+PC that's on through the day).
+
+## Run as a Windows service (so it survives reboots, even logged out)
 Use [NSSM](https://nssm.cc/):
 ```bat
 nssm install JALabelPrint "C:\Program Files\nodejs\node.exe" "C:\path\to\agents\label-print-agent\index.js"
