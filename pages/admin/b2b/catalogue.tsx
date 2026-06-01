@@ -62,6 +62,8 @@ interface CatalogueItem {
   freight_height_mm: number | null
   freight_weight_g: number | null
   freight_packaging: FreightPackaging | null
+  manual_handling_fee_ex_gst: number | null
+  inbound_freight_cost_ex_gst: number | null
   is_special_order: boolean
   is_drop_ship: boolean
   myob_supplier_uid: string | null
@@ -1153,6 +1155,20 @@ function EditDrawer({
                   value={item.freight_packaging}
                   onChange={async v => { try { await patch({ freight_packaging: v }) } catch {} }}
                 />
+                <div style={{height:14}}/>
+                <div style={{fontSize:11,color:'#8d93a4',marginBottom:6}}>Freight surcharges (ex GST) — added to the distributor's freight, per unit × qty:</div>
+                <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8}}>
+                  <FieldNumber
+                    label="Manual handling $/unit"
+                    value={item.manual_handling_fee_ex_gst}
+                    onSave={async v => { try { await patch({ manual_handling_fee_ex_gst: v }) } catch {} }}
+                  />
+                  <FieldNumber
+                    label="Inbound freight $/unit"
+                    value={item.inbound_freight_cost_ex_gst}
+                    onSave={async v => { try { await patch({ inbound_freight_cost_ex_gst: v }) } catch {} }}
+                  />
+                </div>
               </Section>
             )
           })()}

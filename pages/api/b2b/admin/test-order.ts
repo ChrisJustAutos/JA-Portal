@@ -68,7 +68,7 @@ export default withAuth('admin:b2b', async (req: NextApiRequest, res: NextApiRes
 
   const ids = items.map(i => i.catalogueId)
   const { data: catRows, error: catErr } = await c.from('b2b_catalogue')
-    .select('id, myob_item_uid, sku, name, trade_price_ex_gst, is_taxable, promo_price_ex_gst, promo_starts_at, promo_ends_at, volume_breaks, freight_weight_g, freight_length_mm, freight_width_mm, freight_height_mm, freight_packaging')
+    .select('id, myob_item_uid, sku, name, trade_price_ex_gst, is_taxable, promo_price_ex_gst, promo_starts_at, promo_ends_at, volume_breaks, freight_weight_g, freight_length_mm, freight_width_mm, freight_height_mm, freight_packaging, manual_handling_fee_ex_gst, inbound_freight_cost_ex_gst')
     .in('id', ids)
   if (catErr) return res.status(500).json({ error: catErr.message })
   const catById = new Map((catRows || []).map((r: any) => [r.id, r]))
@@ -126,6 +126,8 @@ export default withAuth('admin:b2b', async (req: NextApiRequest, res: NextApiRes
         freight_width_mm:  cat.freight_width_mm ?? null,
         freight_height_mm: cat.freight_height_mm ?? null,
         freight_packaging: cat.freight_packaging ?? null,
+        manual_handling_fee_ex_gst:  cat.manual_handling_fee_ex_gst ?? null,
+        inbound_freight_cost_ex_gst: cat.inbound_freight_cost_ex_gst ?? null,
       }
     })
     const liveQuote = await getLiveQuote(liveItems, { postcode, suburb })

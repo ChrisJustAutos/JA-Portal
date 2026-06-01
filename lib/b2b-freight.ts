@@ -169,6 +169,10 @@ export interface LiveQuoteCartItem {
   freight_width_mm:  number | null
   freight_height_mm: number | null
   freight_packaging: 'box' | 'pallet' | 'other' | null
+  // Per-unit surcharges (ex GST) added on top of the carrier-quoted freight.
+  // Both are charged to the distributor and applied PER UNIT × qty.
+  manual_handling_fee_ex_gst?:  number | null
+  inbound_freight_cost_ex_gst?: number | null
 }
 
 export interface LiveQuoteDestination {
@@ -294,10 +298,19 @@ export async function getLiveQuote(
     return { mode: 'unavailable', reason: 'No MachShip routes available for this destination' }
   }
 
+  // Per-unit surcharges (manual handling + inbound freight), both charged to
+  // the distributor. Summed across the cart (× qty) and added on top of the
+  // marked-up carrier price — they're cost recovery, so no extra markup.
+  const surchargeExGst = round2(items.reduce((sum, it) => {
+    const handling = Number(it.manual_handling_fee_ex_gst  || 0)
+    const inbound  = Number(it.inbound_freight_cost_ex_gst || 0)
+    return sum + (handling + inbound) * Number(it.qty || 0)
+  }, 0))
+
   const markupMultiplier = 1 + (markup / 100)
   const rates: LiveQuoteRate[] = routes.map(r => {
     const base   = Number(r.consignmentTotal?.totalSellPrice || 0)
-    const marked = round2(base * markupMultiplier)
+    const marked = round2(round2(base * markupMultiplier) + surchargeExGst)
     const eta    = r.despatchOptions?.[0]?.etaUtc || r.despatchOptions?.[0]?.etaLocal || null
     const days   = r.despatchOptions?.[0]?.totalBusinessDays ?? r.despatchOptions?.[0]?.totalDays ?? null
     return {

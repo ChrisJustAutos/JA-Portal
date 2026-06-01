@@ -285,7 +285,8 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, use
         qty,
         catalogue:b2b_catalogue!b2b_cart_items_catalogue_id_fkey (
           sku, name,
-          freight_weight_g, freight_length_mm, freight_width_mm, freight_height_mm, freight_packaging
+          freight_weight_g, freight_length_mm, freight_width_mm, freight_height_mm, freight_packaging,
+          manual_handling_fee_ex_gst, inbound_freight_cost_ex_gst
         )
       `)
       .eq('cart_id', cart.id)
@@ -301,6 +302,8 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, use
         freight_width_mm:  cat?.freight_width_mm ?? null,
         freight_height_mm: cat?.freight_height_mm ?? null,
         freight_packaging: cat?.freight_packaging ?? null,
+        manual_handling_fee_ex_gst:  cat?.manual_handling_fee_ex_gst ?? null,
+        inbound_freight_cost_ex_gst: cat?.inbound_freight_cost_ex_gst ?? null,
       }
     })
 
