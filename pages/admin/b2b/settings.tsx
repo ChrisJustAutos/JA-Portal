@@ -61,6 +61,7 @@ interface Settings {
   myob_credit_note_number_padding: number
   myob_credit_note_number_seq: number
   slack_new_order_webhook_url: string | null
+  admin_order_notify_emails: string | null
   freight_markup_percent: number
   machship_from_name: string | null
   machship_from_company: string | null
@@ -108,6 +109,7 @@ export default function B2BSettingsPage({ user }: Props) {
   const [feePct, setFeePct]   = useState(0)
   const [feeFixed, setFeeFixed] = useState(0)
   const [slackUrl, setSlackUrl] = useState('')
+  const [adminEmails, setAdminEmails] = useState('')
   // Freight (MachShip): admin-settable markup % + sender pickup address
   const [freightMarkup, setFreightMarkup] = useState<number>(20)
   const [msFromName,    setMsFromName]    = useState('')
@@ -136,6 +138,7 @@ export default function B2BSettingsPage({ user }: Props) {
       setFeePct(Number(j.settings.card_fee_percent || 0.017))
       setFeeFixed(Number(j.settings.card_fee_fixed || 0.30))
       setSlackUrl(j.settings.slack_new_order_webhook_url || '')
+      setAdminEmails(j.settings.admin_order_notify_emails || '')
       setFreightMarkup(Number(j.settings.freight_markup_percent ?? 20))
       setMsFromName(j.settings.machship_from_name || '')
       setMsFromCompany(j.settings.machship_from_company || '')
@@ -572,6 +575,25 @@ export default function B2BSettingsPage({ user }: Props) {
                     disabled={saving}
                     style={primaryBtn(!saving)}>
                     {saving ? 'Saving…' : 'Save Slack URL'}
+                  </button>
+                </div>
+              </Section>
+
+              {/* ─── Order notifications ─── */}
+              <Section id="order-notify" activeId={openSectionId} onClose={closeSection} title="Order Notifications"
+                description="When an order is paid, the portal auto-raises drop-ship POs (emailing suppliers) and sends an order-placed email — with a no-login Book Freight button — to these recipients.">
+                <Field label="Order notification emails" hint="Comma-separated. Falls back to the B2B_ADMIN_NOTIFY_EMAILS env var if blank.">
+                  <input
+                    type="text"
+                    value={adminEmails}
+                    onChange={e => setAdminEmails(e.target.value)}
+                    placeholder="ops@justautosmechanical.com.au, chris@justautosmechanical.com.au"
+                    style={inputStyle()}
+                  />
+                </Field>
+                <div style={{marginTop:14}}>
+                  <button onClick={() => save({ admin_order_notify_emails: adminEmails })} disabled={saving} style={primaryBtn(!saving)}>
+                    {saving ? 'Saving…' : 'Save recipients'}
                   </button>
                 </div>
               </Section>

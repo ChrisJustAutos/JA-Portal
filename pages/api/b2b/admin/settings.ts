@@ -38,6 +38,7 @@ export default withAuth('edit:b2b_distributors', async (req: NextApiRequest, res
         myob_invoice_number_prefix, myob_invoice_number_padding, myob_invoice_number_seq,
         myob_credit_note_number_prefix, myob_credit_note_number_padding, myob_credit_note_number_seq,
         slack_new_order_webhook_url,
+        admin_order_notify_emails,
         freight_markup_percent,
         machship_from_name, machship_from_company, machship_from_phone, machship_from_email,
         machship_from_address_line1, machship_from_address_line2,
@@ -130,6 +131,14 @@ export default withAuth('edit:b2b_distributors', async (req: NextApiRequest, res
       const u = String(body.slack_new_order_webhook_url || '').trim()
       if (u && !u.startsWith('https://hooks.slack.com/')) issues.push('Slack webhook URL must start with https://hooks.slack.com/')
       else update.slack_new_order_webhook_url = u || null
+    }
+
+    // Admin order-placed notification recipients (comma/space-separated).
+    if ('admin_order_notify_emails' in body) {
+      const v = String(body.admin_order_notify_emails || '').trim()
+      const bad = v.split(/[,;\s]+/).filter(Boolean).filter(e => !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e))
+      if (bad.length) issues.push(`Invalid email(s): ${bad.join(', ')}`)
+      else update.admin_order_notify_emails = v || null
     }
 
     // ── Freight markup ──

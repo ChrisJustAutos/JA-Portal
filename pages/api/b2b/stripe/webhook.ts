@@ -25,6 +25,8 @@ import type { NextApiRequest, NextApiResponse } from 'next'
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
 import { verifyWebhookSignature, retrieveCheckoutSession } from '../../../../lib/stripe'
 import { writeOrderToMyob } from '../../../../lib/b2b-myob-invoice'
+import { raiseDropShipPOsForOrder, type DropshipRaiseResult } from '../../../../lib/b2b-dropship'
+import { sendOrderPlacedAdminEmail } from '../../../../lib/b2b-order-notify'
 
 // CRITICAL: disable Next's body parser — we need the raw body bytes for HMAC
 export const config = {
@@ -101,7 +103,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   // 3. Load order
   const { data: order, error: oErr } = await c
     .from('b2b_orders')
-    .select('id, status, order_number, stripe_checkout_session_id, myob_invoice_uid')
+    .select('id, status, order_number, stripe_checkout_session_id, myob_invoice_uid, admin_notified_at, dropship_po_raised_at')
     .eq('id', orderId)
     .maybeSingle()
   if (oErr) {
@@ -194,6 +196,33 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       notes: errMsg.substring(0, 500),
       metadata: { error: errMsg },
     })
+  }
+
+  // 6b. Auto-raise drop-ship POs (best-effort). Idempotent: the lib skips if
+  // already raised. Failure must not 500 the webhook — admin email surfaces it
+  // and the manual "Raise drop-ship PO" button remains as a fallback.
+  let dropshipResult: DropshipRaiseResult | undefined
+  if (!order.dropship_po_raised_at) {
+    try {
+      dropshipResult = await raiseDropShipPOsForOrder(orderId, { actorId: null })
+    } catch (e: any) {
+      console.error(`webhook: auto drop-ship PO failed for order ${orderId}:`, e?.message || e)
+      try { await c.from('b2b_order_events').insert({ order_id: orderId, event_type: 'dropship_po_failed', actor_type: 'system', actor_id: null, notes: (e?.message || String(e)).slice(0, 500) }) } catch {}
+    }
+  }
+
+  // 6c. Admin "order placed" notification email (best-effort, once per order).
+  if (!order.admin_notified_at) {
+    try {
+      const r = await sendOrderPlacedAdminEmail(orderId, { dropshipResult })
+      await c.from('b2b_order_events').insert({
+        order_id: orderId, event_type: r.ok ? 'admin_notified' : 'admin_notify_skipped',
+        actor_type: 'system', actor_id: null,
+        notes: r.ok ? `Emailed ${r.recipients?.join(', ')}` : (r.reason || 'unknown'),
+      })
+    } catch (e: any) {
+      console.error(`webhook: admin notify failed for order ${orderId}:`, e?.message || e)
+    }
   }
 
   // 7. Optional Slack notification (best-effort, fire-and-forget)
