@@ -96,6 +96,14 @@ async function handleCreate(req: NextApiRequest, res: NextApiResponse, user: Por
     : []
   const notes                            = body.notes ? String(body.notes) : null
 
+  // Optional ship/bill address (prefilled from the MYOB card on the client).
+  const ADDR_FIELDS = [
+    'ship_line1', 'ship_line2', 'ship_suburb', 'ship_state', 'ship_postcode', 'ship_country',
+    'bill_line1', 'bill_line2', 'bill_suburb', 'bill_state', 'bill_postcode', 'bill_country',
+  ] as const
+  const address: Record<string, string | null> = {}
+  for (const f of ADDR_FIELDS) address[f] = body[f] ? String(body[f]).trim() || null : null
+
   if (!display_name) return res.status(400).json({ error: 'display_name required' })
   if (!myob_primary_customer_uid) return res.status(400).json({ error: 'myob_primary_customer_uid required' })
 
@@ -126,6 +134,7 @@ async function handleCreate(req: NextApiRequest, res: NextApiResponse, user: Por
       primary_contact_email,
       primary_contact_phone,
       notes,
+      ...address,
       is_active: true,
       created_by: user.id,
     })

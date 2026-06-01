@@ -268,11 +268,30 @@ function AddDistributorDrawer({
   const [notes, setNotes] = useState('')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [ship, setShip] = useState<any>(null)
+  const [bill, setBill] = useState<any>(null)
+  const [loadingDetail, setLoadingDetail] = useState(false)
 
-  function pickCustomer(c: MyobCustomer) {
+  async function pickCustomer(c: MyobCustomer) {
     setPicked(c)
     setDisplayName(c.name)
     setStep('details')
+    // Prefill everything MYOB has on file (ABN, email, phone, address).
+    setLoadingDetail(true)
+    try {
+      const r = await fetch(`/api/b2b/admin/myob/customers?id=${encodeURIComponent(c.uid)}`, { credentials: 'same-origin' })
+      if (r.ok) {
+        const { customer } = await r.json()
+        if (customer) {
+          if (customer.abn) setAbn(customer.abn)
+          if (customer.email) setContactEmail(customer.email)
+          if (customer.phone) setContactPhone(customer.phone)
+          setShip(customer.ship || null)
+          setBill(customer.bill || null)
+        }
+      }
+    } catch { /* prefill is best-effort */ }
+    finally { setLoadingDetail(false) }
   }
 
   async function save() {
@@ -292,6 +311,10 @@ function AddDistributorDrawer({
           primary_contact_email: contactEmail.trim() || null,
           primary_contact_phone: contactPhone.trim() || null,
           notes: notes.trim() || null,
+          ship_line1: ship?.line1 || null, ship_line2: ship?.line2 || null, ship_suburb: ship?.suburb || null,
+          ship_state: ship?.state || null, ship_postcode: ship?.postcode || null, ship_country: ship?.country || null,
+          bill_line1: bill?.line1 || null, bill_line2: bill?.line2 || null, bill_suburb: bill?.suburb || null,
+          bill_state: bill?.state || null, bill_postcode: bill?.postcode || null, bill_country: bill?.country || null,
         }),
       })
       const j = await r.json()
@@ -342,6 +365,15 @@ function AddDistributorDrawer({
                   Change
                 </button>
               </div>
+
+              {loadingDetail && <div style={{fontSize:11,color:T.text3,marginBottom:14}}>Loading details from MYOB…</div>}
+              {!loadingDetail && (ship || bill) && (
+                <div style={{fontSize:11,color:T.text3,background:T.bg3,border:`1px solid ${T.border}`,borderRadius:6,padding:'8px 10px',marginBottom:16}}>
+                  <div style={{color:T.text2,marginBottom:4}}>Address prefilled from MYOB (saved with the distributor; edit on its page after):</div>
+                  {bill && <div>Billing: {[bill.line1,bill.suburb,bill.state,bill.postcode].filter(Boolean).join(', ') || '—'}</div>}
+                  {ship && <div>Shipping: {[ship.line1,ship.suburb,ship.state,ship.postcode].filter(Boolean).join(', ') || '—'}</div>}
+                </div>
+              )}
 
               <FormRow label="Display name" hint="How this distributor appears in the portal">
                 <input type="text" value={displayName} onChange={e => setDisplayName(e.target.value)} style={input}/>

@@ -46,6 +46,39 @@ function mapCustomer(c: any): MyobCustomerLite {
   }
 }
 
+interface Addr { line1: string; line2: string; suburb: string; state: string; postcode: string; country: string }
+function mapAddress(a: any): Addr {
+  const streetLines = String(a?.Street || '').split(/\r?\n/).map((s: string) => s.trim()).filter(Boolean)
+  return {
+    line1: streetLines[0] || '',
+    line2: streetLines.slice(1).join(', '),
+    suburb: (a?.City || '').trim(),
+    state: (a?.State || '').trim(),
+    postcode: (a?.PostCode || '').trim(),
+    country: (a?.Country || '').trim(),
+  }
+}
+
+// Full customer card → everything we can prefill a distributor with.
+function mapCustomerDetail(d: any) {
+  const company = (d.CompanyName || '').trim()
+  const name = company || [d.FirstName, d.LastName].filter(Boolean).join(' ').trim() || '(unnamed)'
+  const addrs: any[] = Array.isArray(d.Addresses) ? d.Addresses : []
+  const byLoc = (n: number) => addrs.find(a => a?.Location === n)
+  const primary = byLoc(1) || addrs[0] || {}
+  const second = byLoc(2)
+  return {
+    uid: d.UID || '',
+    display_id: d.DisplayID || '',
+    name,
+    abn: (d.ABN || d?.SellingDetails?.ABN || '').toString().trim() || null,
+    email: (primary?.Email || '').trim() || null,
+    phone: (primary?.Phone1 || primary?.Phone2 || '').trim() || null,
+    bill: mapAddress(primary),
+    ship: mapAddress(second || primary),  // Location 2 if present, else the primary
+  }
+}
+
 export default withAuth('edit:b2b_distributors', async (req: NextApiRequest, res: NextApiResponse) => {
   if (req.method !== 'GET') {
     res.setHeader('Allow', 'GET')
@@ -54,11 +87,21 @@ export default withAuth('edit:b2b_distributors', async (req: NextApiRequest, res
 
   const q = String(req.query.q || '').trim()
   const limit = Math.min(Math.max(parseInt(String(req.query.limit || '20'), 10) || 20, 1), 50)
+  const detailUid = String(req.query.id || '').trim()
 
   try {
     const conn = await getConnection('JAWS')
     if (!conn) {
       return res.status(500).json({ error: 'JAWS MYOB connection not configured' })
+    }
+
+    // ── Single-card detail fetch (for prefilling the Add-distributor form) ──
+    if (detailUid) {
+      const r = await myobFetch(conn.id, `/accountright/${conn.company_file_id}/Contact/Customer/${encodeURIComponent(detailUid)}`)
+      if (r.status !== 200 || !r.data) {
+        return res.status(502).json({ error: `MYOB customer fetch failed (HTTP ${r.status})` })
+      }
+      return res.status(200).json({ customer: mapCustomerDetail(r.data) })
     }
 
     const path = `/accountright/${conn.company_file_id}/Contact/Customer`
