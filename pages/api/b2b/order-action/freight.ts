@@ -48,27 +48,27 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   if (req.method === 'POST') {
-    // "Book later": schedule the booking for a chosen time; the b2b-freight-poll
-    // cron sweeps due rows and books them. No immediate MachShip call.
+    // "Book later": book the consignment NOW but set MachShip's desired despatch
+    // (collection) date/time to the chosen later time — so the label/booking
+    // exist immediately and the carrier knows when to collect.
+    let dispatchAt: string | undefined
     if (req.body?.action === 'later') {
       const whenRaw = String(req.body?.when || '').trim()
       const when = whenRaw && !isNaN(Date.parse(whenRaw)) ? new Date(whenRaw) : null
-      if (!when) return res.status(400).json({ error: 'Pick a valid time to book later.' })
+      if (!when) return res.status(400).json({ error: 'Pick a valid despatch time.' })
       if (when.getTime() < Date.now() - 60_000) return res.status(400).json({ error: 'That time is in the past — pick a future time.' })
-      const c = svc()
-      const { error } = await c.from('b2b_orders').update({ freight_book_scheduled_at: when.toISOString() }).eq('id', orderId)
-      if (error) return res.status(500).json({ ok: false, error: error.message })
-      try { await c.from('b2b_order_events').insert({ order_id: orderId, event_type: 'freight_book_scheduled', actor_type: 'system', actor_id: null, notes: `Scheduled to book at ${when.toISOString()}`, metadata: { scheduled_at: when.toISOString() } }) } catch {}
-      return res.status(200).json({ ok: true, scheduled_at: when.toISOString() })
+      dispatchAt = when.toISOString()
+      // Record the desired despatch for display (booking still happens now below).
+      try { await svc().from('b2b_orders').update({ freight_book_scheduled_at: dispatchAt }).eq('id', orderId) } catch {}
     }
 
-    const r = await bookFreightForOrder(orderId, { actorId: null })
+    const r = await bookFreightForOrder(orderId, { actorId: null, dispatchAt })
     if (!r.ok) {
       try { await svc().from('b2b_order_events').insert({ order_id: orderId, event_type: 'freight_book_via_email_failed', actor_type: 'system', actor_id: null, notes: (r.error || '').slice(0, 500) }) } catch {}
       return res.status(r.httpStatus).json({ ok: false, error: r.error, notConfigured: r.notConfigured, alreadyBooked: r.alreadyBooked, consignment_number: r.consignment_number })
     }
-    try { await svc().from('b2b_order_events').insert({ order_id: orderId, event_type: 'freight_booked_via_email', actor_type: 'system', actor_id: null, metadata: { consignment_number: r.consignment_number, tracking_number: r.tracking_number } }) } catch {}
-    return res.status(200).json({ ok: true, consignment_number: r.consignment_number, tracking_number: r.tracking_number, status: r.status, eta_utc: r.eta_utc })
+    try { await svc().from('b2b_order_events').insert({ order_id: orderId, event_type: 'freight_booked_via_email', actor_type: 'system', actor_id: null, metadata: { consignment_number: r.consignment_number, tracking_number: r.tracking_number, dispatch_at: dispatchAt || null } }) } catch {}
+    return res.status(200).json({ ok: true, consignment_number: r.consignment_number, tracking_number: r.tracking_number, status: r.status, eta_utc: r.eta_utc, dispatch_at: dispatchAt || null })
   }
 
   res.setHeader('Allow', 'GET, POST')

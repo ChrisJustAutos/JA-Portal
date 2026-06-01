@@ -222,6 +222,11 @@ export interface CreateConsignmentRequest {
   customerReference2?: string
   sendingTrackingEmail?: boolean
 
+  // Desired despatch (collection) date/time — ISO "yyyy-MM-ddThh:mm:ss.000Z".
+  // The consignment is created/booked now; the carrier collects at this time.
+  // A past value makes MachShip default to NOW.
+  dispatchDateTimeUtc?: string
+
   items: MachShipItem[]
 }
 

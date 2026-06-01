@@ -40,7 +40,7 @@ export interface BookFreightResult {
   label_warning?: string | null
 }
 
-export async function bookFreightForOrder(orderId: string, opts: { actorId?: string | null; force?: boolean } = {}): Promise<BookFreightResult> {
+export async function bookFreightForOrder(orderId: string, opts: { actorId?: string | null; force?: boolean; dispatchAt?: string | Date | null } = {}): Promise<BookFreightResult> {
   const c = svc()
   const fail = (httpStatus: number, error: string, detail?: any): BookFreightResult => ({ ok: false, httpStatus, error, detail })
 
@@ -120,6 +120,12 @@ export async function bookFreightForOrder(orderId: string, opts: { actorId?: str
     toName: recvName || undefined, toCompany: recvCompany || undefined, toPhone: recvPhone || undefined, toEmail: recvEmail || undefined,
     toAddressLine1: recvLine1 || undefined, toAddressLine2: recvLine2 || undefined, toLocation: { suburb: recvSuburb, postcode: recvPost },
     customerReference: reference, sendingTrackingEmail: false, items,
+  }
+  // Desired despatch (collection) time, if one was chosen ("book later"). The
+  // consignment is still created NOW; MachShip tells the carrier to collect then.
+  if (opts.dispatchAt) {
+    const d = opts.dispatchAt instanceof Date ? opts.dispatchAt : new Date(opts.dispatchAt)
+    if (!isNaN(d.getTime())) req2.dispatchDateTimeUtc = d.toISOString()
   }
 
   let consignment

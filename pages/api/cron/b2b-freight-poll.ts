@@ -21,7 +21,6 @@
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
 import { refreshOrderFreight } from '../../../lib/b2b-machship-refresh'
-import { bookFreightForOrder } from '../../../lib/b2b-freight-book'
 
 const POLL_INTERVAL_MIN = 25  // skip rows polled within the last N min
 const DEFAULT_BATCH     = 25
@@ -48,28 +47,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const limit = Math.max(1, Math.min(parseInt(String(req.query.limit || ''), 10) || DEFAULT_BATCH, 200))
   const c = sb()
 
-  // ── "Book later" sweep: book any order whose scheduled time has passed and
-  // that hasn't been booked yet. Clears the schedule regardless of outcome so a
-  // persistent failure doesn't retry forever (the order stays visible in admin).
-  let scheduledBooked = 0, scheduledFailed = 0
-  const nowIso = new Date().toISOString()
-  const { data: dueRows } = await c
-    .from('b2b_orders')
-    .select('id')
-    .not('freight_book_scheduled_at', 'is', null)
-    .lte('freight_book_scheduled_at', nowIso)
-    .is('machship_consignment_id', null)
-    .not('machship_carrier_id', 'is', null)
-    .limit(50)
-  for (const row of (dueRows || []) as any[]) {
-    try {
-      const r = await bookFreightForOrder(row.id, { actorId: null })
-      if (r.ok || r.alreadyBooked) scheduledBooked++
-      else { scheduledFailed++; try { await c.from('b2b_order_events').insert({ order_id: row.id, event_type: 'freight_scheduled_book_failed', actor_type: 'system', actor_id: null, notes: (r.error || '').slice(0, 500) }) } catch {} }
-    } catch (e: any) { scheduledFailed++; console.error(`scheduled book failed for ${row.id}:`, e?.message || e) }
-    await c.from('b2b_orders').update({ freight_book_scheduled_at: null }).eq('id', row.id)
-  }
-
   const sinceIso = new Date(Date.now() - POLL_INTERVAL_MIN * 60_000).toISOString()
   const { data: orders, error } = await c
     .from('b2b_orders')
@@ -84,7 +61,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   const ids = (orders || []).map((o: any) => o.id as string)
   if (ids.length === 0) {
-    return res.status(200).json({ ok: true, scanned: 0, refreshed: 0, errors: 0, scheduled_booked: scheduledBooked, scheduled_failed: scheduledFailed })
+    return res.status(200).json({ ok: true, scanned: 0, refreshed: 0, errors: 0 })
   }
 
   let refreshed = 0
@@ -105,7 +82,5 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     refreshed,
     errors,
     error_list: errorList,
-    scheduled_booked: scheduledBooked,
-    scheduled_failed: scheduledFailed,
   })
 }

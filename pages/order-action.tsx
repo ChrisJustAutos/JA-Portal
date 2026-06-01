@@ -20,7 +20,6 @@ export default function OrderActionPage() {
   const [busy, setBusy] = useState(false)
   const [result, setResult] = useState<any>(null)
   const [stage, setStage] = useState<'choose' | 'later'>('choose')
-  const [scheduled, setScheduled] = useState<string | null>(null)
 
   useEffect(() => {
     if (!router.isReady) return
@@ -42,15 +41,15 @@ export default function OrderActionPage() {
     finally { setBusy(false) }
   }
 
-  // Schedule the booking for `when` (a Date). The cron books it when due.
+  // Book NOW but set MachShip's desired despatch (collection) time to `when`.
   async function bookLater(when: Date) {
     setBusy(true); setError('')
     try {
       const r = await fetch('/api/b2b/order-action/freight', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token, action: 'later', when: when.toISOString() }) })
       const d = await r.json()
-      if (!r.ok) { setError(d.error || 'Could not schedule'); return }
-      setScheduled(d.scheduled_at)
-    } catch (e: any) { setError(e?.message || 'Could not schedule') }
+      if (!r.ok) { setResult(d); if (!d.notConfigured && !d.alreadyBooked) setError(d.error || 'Booking failed'); return }
+      setResult(d)
+    } catch (e: any) { setError(e?.message || 'Booking failed') }
     finally { setBusy(false) }
   }
 
@@ -82,21 +81,11 @@ export default function OrderActionPage() {
               {result?.ok ? (
                 <div style={{ background: 'rgba(52,199,123,0.12)', border: `1px solid ${T.green}55`, borderRadius: 8, padding: 14, fontSize: 14, color: T.green }}>
                   ✓ Freight booked. Consignment <strong>{result.consignment_number || '—'}</strong>{result.tracking_number ? ` · tracking ${result.tracking_number}` : ''}.
-                </div>
-              ) : scheduled ? (
-                <div style={{ background: 'rgba(79,142,247,0.12)', border: `1px solid ${T.blue}55`, borderRadius: 8, padding: 14, fontSize: 14, color: T.blue }}>
-                  ✓ Scheduled — freight will be booked automatically at <strong>{fmtWhen(scheduled)}</strong>. You can also book it now anytime from the portal.
+                  {result.dispatch_at && <div style={{ marginTop: 6 }}>Collection scheduled for <strong>{fmtWhen(result.dispatch_at)}</strong>.</div>}
                 </div>
               ) : summary.already_booked || result?.alreadyBooked ? (
                 <div style={{ background: T.bg3, border: `1px solid ${T.border}`, borderRadius: 8, padding: 14, fontSize: 14, color: T.text2 }}>
                   This order's freight is already booked{summary.consignment_number ? ` (consignment ${summary.consignment_number})` : ''}.
-                </div>
-              ) : summary.scheduled_at ? (
-                <div style={{ background: 'rgba(79,142,247,0.12)', border: `1px solid ${T.blue}55`, borderRadius: 8, padding: 14, fontSize: 14, color: T.blue }}>
-                  Already scheduled to book at <strong>{fmtWhen(summary.scheduled_at)}</strong>.
-                  <div style={{ marginTop: 10 }}>
-                    <button onClick={book} disabled={busy} style={{ padding: '9px 16px', borderRadius: 8, border: 'none', background: busy ? T.bg3 : T.green, color: '#fff', fontSize: 14, fontWeight: 600, cursor: busy ? 'wait' : 'pointer', fontFamily: 'inherit' }}>{busy ? 'Booking…' : 'Book now instead'}</button>
-                  </div>
                 </div>
               ) : result?.notConfigured ? (
                 <div style={{ background: 'rgba(245,166,35,0.12)', border: `1px solid ${T.amber}55`, borderRadius: 8, padding: 14, fontSize: 14, color: T.amber }}>
@@ -110,15 +99,15 @@ export default function OrderActionPage() {
                   {stage === 'choose' ? (
                     <div style={{ display: 'flex', gap: 10 }}>
                       <button onClick={book} disabled={busy} style={{ flex: 1, padding: '12px 0', borderRadius: 9, border: 'none', background: busy ? T.bg3 : T.green, color: busy ? T.text3 : '#fff', fontSize: 15, fontWeight: 600, cursor: busy ? 'wait' : 'pointer', fontFamily: 'inherit' }}>
-                        {busy ? 'Booking…' : 'Book now'}
+                        {busy ? 'Booking…' : 'Book now (collect ASAP)'}
                       </button>
                       <button onClick={() => setStage('later')} disabled={busy} style={{ flex: 1, padding: '12px 0', borderRadius: 9, border: `1px solid ${T.border}`, background: 'transparent', color: T.text, fontSize: 15, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>
-                        Book later
+                        Schedule collection
                       </button>
                     </div>
                   ) : (
                     <div>
-                      <div style={{ fontSize: 13, color: T.text2, marginBottom: 10 }}>When should we book it?</div>
+                      <div style={{ fontSize: 13, color: T.text2, marginBottom: 10 }}>Books the consignment now; the carrier collects at:</div>
                       <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                         {laterOptions().map(opt => (
                           <button key={opt.label} onClick={() => bookLater(opt.when)} disabled={busy} style={{ padding: '11px 14px', borderRadius: 8, border: `1px solid ${T.border}`, background: T.bg3, color: T.text, fontSize: 14, textAlign: 'left', cursor: busy ? 'wait' : 'pointer', fontFamily: 'inherit' }}>
