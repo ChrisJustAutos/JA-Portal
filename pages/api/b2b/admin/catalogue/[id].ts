@@ -76,13 +76,22 @@ const BOOLEAN_FIELDS = ['b2b_visible', 'is_special_order', 'is_drop_ship', 'call
 const PACKAGING_VALUES = ['box', 'pallet', 'other'] as const
 
 export default withAuth('edit:b2b_catalogue', async (req: NextApiRequest, res: NextApiResponse) => {
-  if (req.method !== 'PATCH') {
-    res.setHeader('Allow', 'PATCH')
-    return res.status(405).json({ error: 'PATCH only' })
-  }
-
   const id = String(req.query.id || '').trim()
   if (!id) return res.status(400).json({ error: 'Missing id' })
+
+  if (req.method === 'DELETE') {
+    const c = sb()
+    // FK cascades remove cart items + images; order-line links are SET NULL so
+    // order history is preserved (lines keep their sku/name snapshot).
+    const { error } = await c.from('b2b_catalogue').delete().eq('id', id)
+    if (error) return res.status(500).json({ error: error.message })
+    return res.status(200).json({ ok: true })
+  }
+
+  if (req.method !== 'PATCH') {
+    res.setHeader('Allow', 'PATCH, DELETE')
+    return res.status(405).json({ error: 'PATCH or DELETE only' })
+  }
 
   const body = (req.body && typeof req.body === 'object') ? req.body : {}
 

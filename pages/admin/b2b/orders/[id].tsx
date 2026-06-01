@@ -303,6 +303,21 @@ export default function AdminOrderDetailPage({ user }: Props) {
     }
   }, [orderId, data])
 
+  // ── Delete order (admin only) — permanent; removes lines/events/print jobs.
+  const doDelete = useCallback(async () => {
+    if (!data) return
+    if (!confirm(`Permanently delete order ${data.order_number}? This removes it and its lines/events from the portal. Any MYOB invoice is NOT affected — void that in MYOB separately. This cannot be undone.`)) return
+    setActionBusy(true); setActionError(null)
+    try {
+      const r = await fetch(`/api/b2b/admin/orders/${orderId}`, { method: 'DELETE', credentials: 'same-origin' })
+      const j = await r.json().catch(() => ({}))
+      if (!r.ok) throw new Error(j?.error || `Delete failed: HTTP ${r.status}`)
+      router.push('/admin/b2b/orders')
+    } catch (e: any) {
+      setActionError(e?.message || String(e)); setActionBusy(false)
+    }
+  }, [orderId, data, router])
+
   // ── Internal notes save
   const saveNotes = useCallback(async () => {
     if (!data) return
@@ -547,6 +562,16 @@ export default function AdminOrderDetailPage({ user }: Props) {
                         onClick={() => setCancelModal(true)}
                         style={actionBtn(false, actionBusy, T.red)}>
                         Cancel order…
+                      </button>
+                    )}
+
+                    {canRefund && (
+                      <button
+                        disabled={actionBusy}
+                        onClick={doDelete}
+                        title="Permanently delete this order from the portal"
+                        style={{ ...actionBtn(false, actionBusy, T.red), marginTop: 6, borderTop: `1px solid ${T.border}` }}>
+                        🗑 Delete order
                       </button>
                     )}
                   </Card>

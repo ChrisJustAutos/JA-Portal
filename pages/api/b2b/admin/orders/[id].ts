@@ -47,8 +47,27 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return patchOrder(id, req, res, user.id)
   }
 
-  res.setHeader('Allow', 'GET, PATCH')
-  return res.status(405).json({ error: 'GET or PATCH only' })
+  if (req.method === 'DELETE') {
+    // Destructive purge — admins only.
+    if (!roleHasPermission(user.role, 'admin:b2b')) {
+      return res.status(403).json({ error: 'Forbidden — admin only' })
+    }
+    return deleteOrder(id, res)
+  }
+
+  res.setHeader('Allow', 'GET, PATCH, DELETE')
+  return res.status(405).json({ error: 'GET, PATCH or DELETE only' })
+}
+
+async function deleteOrder(id: string, res: NextApiResponse) {
+  const c = sb()
+  const { data: existing } = await c.from('b2b_orders').select('order_number').eq('id', id).maybeSingle()
+  if (!existing) return res.status(404).json({ error: 'Order not found' })
+  // FK cascades remove order_lines, order_events and label_print_jobs. Any MYOB
+  // invoice already written is NOT affected — void it in MYOB separately.
+  const { error } = await c.from('b2b_orders').delete().eq('id', id)
+  if (error) return res.status(500).json({ error: error.message })
+  return res.status(200).json({ ok: true, order_number: existing.order_number })
 }
 
 async function getDetail(id: string, res: NextApiResponse) {

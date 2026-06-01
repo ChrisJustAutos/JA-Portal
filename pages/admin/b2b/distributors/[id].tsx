@@ -127,6 +127,19 @@ export default function DistributorDetailPage({ user }: Props) {
     setDist(j.item)
   }
 
+  const [deleting, setDeleting] = useState(false)
+  async function deleteDist() {
+    if (!dist) return
+    if (!confirm(`Delete distributor "${dist.display_name}"? This removes its users, carts and addresses. Blocked if it has any orders (deactivate instead). This can't be undone.`)) return
+    setDeleting(true)
+    try {
+      const r = await fetch(`/api/b2b/admin/distributors/${id}`, { method: 'DELETE', credentials: 'same-origin' })
+      const j = await r.json().catch(() => ({}))
+      if (!r.ok) throw new Error(j?.error || `HTTP ${r.status}`)
+      router.push('/admin/b2b/distributors')
+    } catch (e: any) { alert(e?.message || String(e)); setDeleting(false) }
+  }
+
   return (
     <>
       <Head><title>{dist?.display_name || 'Distributor'} · B2B Portal</title></Head>
@@ -155,12 +168,18 @@ export default function DistributorDetailPage({ user }: Props) {
                 {dist?.display_name || 'Loading…'}
               </h1>
               {dist && (
-                <div style={{display:'flex',alignItems:'center',gap:10}}>
-                  <span style={{fontSize:12,color:T.text3}}>Active</span>
-                  <ToggleSwitch
-                    on={dist.is_active}
-                    onChange={v => patchDist({ is_active: v }).catch(e => alert(e?.message || String(e)))}
-                  />
+                <div style={{display:'flex',alignItems:'center',gap:14}}>
+                  <div style={{display:'flex',alignItems:'center',gap:10}}>
+                    <span style={{fontSize:12,color:T.text3}}>Active</span>
+                    <ToggleSwitch
+                      on={dist.is_active}
+                      onChange={v => patchDist({ is_active: v }).catch(e => alert(e?.message || String(e)))}
+                    />
+                  </div>
+                  <button onClick={deleteDist} disabled={deleting} title="Delete distributor (blocked if it has orders)"
+                    style={{background:'transparent',border:`1px solid ${T.red}55`,color:T.red,borderRadius:7,padding:'6px 12px',fontSize:12,fontWeight:600,cursor:deleting?'wait':'pointer',fontFamily:'inherit'}}>
+                    {deleting ? 'Deleting…' : '🗑 Delete'}
+                  </button>
                 </div>
               )}
             </div>

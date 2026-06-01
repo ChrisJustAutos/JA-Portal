@@ -55,9 +55,24 @@ export default withAuth('edit:b2b_distributors', async (req: NextApiRequest, res
 
   if (req.method === 'GET') return handleGet(id, res)
   if (req.method === 'PATCH') return handlePatch(id, req, res)
-  res.setHeader('Allow', 'GET, PATCH')
-  return res.status(405).json({ error: 'GET or PATCH only' })
+  if (req.method === 'DELETE') return handleDelete(id, res)
+  res.setHeader('Allow', 'GET, PATCH, DELETE')
+  return res.status(405).json({ error: 'GET, PATCH or DELETE only' })
 })
+
+async function handleDelete(id: string, res: NextApiResponse) {
+  const c = sb()
+  // b2b_orders → distributor is NO ACTION, so refuse if any orders exist
+  // (deleting would orphan order history). Deactivate instead.
+  const { count } = await c.from('b2b_orders').select('id', { count: 'exact', head: true }).eq('distributor_id', id)
+  if ((count || 0) > 0) {
+    return res.status(409).json({ error: `Can't delete — this distributor has ${count} order(s). Set them inactive instead (toggle Active off).` })
+  }
+  // Cascades remove users, carts and shipping addresses.
+  const { error } = await c.from('b2b_distributors').delete().eq('id', id)
+  if (error) return res.status(500).json({ error: error.message })
+  return res.status(200).json({ ok: true })
+}
 
 async function handleGet(id: string, res: NextApiResponse) {
   const c = sb()
