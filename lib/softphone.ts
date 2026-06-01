@@ -198,7 +198,18 @@ export class Softphone {
     for (const receiver of pc.getReceivers()) {
       if (receiver.track && receiver.track.kind === 'audio') stream.addTrack(receiver.track)
     }
-    this.cfg.audioEl.srcObject = stream
-    void this.cfg.audioEl.play().catch(() => { /* autoplay blocked — first user gesture will play */ })
+    const el = this.cfg.audioEl
+    el.srcObject = stream
+    el.muted = false
+    el.volume = 1
+    ;(el as any).playsInline = true
+    // Try to start playback now, then a couple of short retries — on iOS the
+    // track sometimes isn't flowing on the first tick after 'Established'.
+    // If all are blocked (autoplay policy), the on-screen "🔊 Tap to hear"
+    // button gives the user a guaranteed gesture to start it.
+    const tryPlay = () => { try { const p = el.play(); if (p && typeof p.catch === 'function') p.catch(() => {}) } catch {} }
+    tryPlay()
+    setTimeout(tryPlay, 400)
+    setTimeout(tryPlay, 1200)
   }
 }

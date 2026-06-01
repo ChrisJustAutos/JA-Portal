@@ -1040,9 +1040,17 @@ function LiveCallsBoard({ canMonitor }: { canMonitor: boolean }) {
           </span>
         )}
         {spStatus === 'incall' && (
-          <button onClick={hangupDevice} style={{ fontSize: 10, padding: '3px 10px', borderRadius: 4, background: 'transparent', color: T.red, border: `1px solid ${T.red}55`, fontFamily: 'inherit', fontWeight: 700, cursor: 'pointer' }}>
-            Hang up{activeDeviceMode ? ` (${activeDeviceMode})` : ''}
-          </button>
+          <>
+            {/* iOS: a guaranteed user-gesture to (re)start playback if autoplay was blocked. */}
+            <button onClick={() => { const el = audioElRef.current; if (el) { el.muted = false; el.volume = 1; try { const p = el.play(); if (p && typeof p.catch === 'function') p.catch(() => {}) } catch {} } }}
+              title="If you can't hear the call, tap to start audio"
+              style={{ fontSize: 10, padding: '3px 10px', borderRadius: 4, background: `${T.green}18`, color: T.green, border: `1px solid ${T.green}55`, fontFamily: 'inherit', fontWeight: 700, cursor: 'pointer' }}>
+              🔊 Tap to hear
+            </button>
+            <button onClick={hangupDevice} style={{ fontSize: 10, padding: '3px 10px', borderRadius: 4, background: 'transparent', color: T.red, border: `1px solid ${T.red}55`, fontFamily: 'inherit', fontWeight: 700, cursor: 'pointer' }}>
+              Hang up{activeDeviceMode ? ` (${activeDeviceMode})` : ''}
+            </button>
+          </>
         )}
 
         {toast && (
