@@ -228,6 +228,7 @@ export default function CatalogueAdminPage({ user }: Props) {
   const [productTypeFilter, setProductTypeFilter] = useState<string>('all')
   const [drawerItemId, setDrawerItemId] = useState<string | null>(null)
   const [previewMenuOpen, setPreviewMenuOpen] = useState(false)
+  const [bulkOpen, setBulkOpen] = useState(false)
   const [previewLoading, setPreviewLoading] = useState(false)
   const [previewError, setPreviewError] = useState<string | null>(null)
   const [syncing, setSyncing] = useState(false)
@@ -463,6 +464,11 @@ export default function CatalogueAdminPage({ user }: Props) {
               style={{padding:'6px 12px',borderRadius:5,border:`1px solid ${T.border2}`,background:'transparent',color:T.text2,fontSize:12,cursor:loading?'wait':'pointer',fontFamily:'inherit'}}>
               {loading ? 'Loading…' : '↻ Refresh'}
             </button>
+            <button onClick={() => setBulkOpen(true)} disabled={filtered.length === 0}
+              title="Apply price / visibility / freight surcharge changes to every item matching the current filters"
+              style={{padding:'6px 12px',borderRadius:5,border:`1px solid ${T.purple}60`,background:`${T.purple}15`,color:T.purple,fontSize:12,fontWeight:600,cursor:filtered.length===0?'default':'pointer',fontFamily:'inherit',opacity:filtered.length===0?0.5:1}}>
+              ✎ Bulk edit ({filtered.length})
+            </button>
             <PreviewMenu
               distributors={distributors}
               tiers={tiers}
@@ -542,6 +548,15 @@ export default function CatalogueAdminPage({ user }: Props) {
             onClose={() => setDrawerItemId(null)}
             onPatch={patchLocalItem}
             onDeleted={(id) => { removeLocalItem(id); setDrawerItemId(null) }}
+          />
+        )}
+
+        {/* Bulk edit (operates on the current filtered set) */}
+        {bulkOpen && (
+          <BulkEditModal
+            items={filtered}
+            onClose={() => setBulkOpen(false)}
+            onApplied={(patched) => { for (const p of patched) patchLocalItem(p.id, p.patch); setBulkOpen(false) }}
           />
         )}
       </div>
@@ -2080,6 +2095,145 @@ function th(width?: number): React.CSSProperties {
 }
 function td(): React.CSSProperties {
   return { padding:'10px 12px',verticalAlign:'middle' }
+}
+
+// ─── Bulk edit modal ───────────────────────────────────────────────────
+// Applies a set of changes to every item in the current filtered view. Each
+// op has a "no change" default so you only touch the fields you intend to.
+// Percentage price changes resolve to concrete per-item values client-side.
+function BulkEditModal({ items, onClose, onApplied }: {
+  items: CatalogueItem[]
+  onClose: () => void
+  onApplied: (patched: Array<{ id: string; patch: Partial<CatalogueItem> }>) => void
+}) {
+  const round2 = (n: number) => Math.round(n * 100) / 100
+  const [visMode, setVisMode] = useState<'none'|'show'|'hide'>('none')
+  const [priceMode, setPriceMode] = useState<'none'|'set'|'inc'|'dec'>('none')
+  const [priceVal, setPriceVal] = useState('')
+  const [handMode, setHandMode] = useState<'none'|'set'|'clear'>('none')
+  const [handVal, setHandVal] = useState('')
+  const [inbMode, setInbMode] = useState<'none'|'set'|'clear'>('none')
+  const [inbVal, setInbVal] = useState('')
+  const [pkgMode, setPkgMode] = useState<'none'|'box'|'pallet'|'other'>('none')
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState<string | null>(null)
+
+  const anyOp = visMode!=='none' || priceMode!=='none' || handMode!=='none' || inbMode!=='none' || pkgMode!=='none'
+
+  function buildPatch(it: CatalogueItem): Partial<CatalogueItem> {
+    const patch: Partial<CatalogueItem> = {}
+    if (visMode === 'show') patch.b2b_visible = true
+    if (visMode === 'hide') patch.b2b_visible = false
+    if (priceMode !== 'none') {
+      const v = Number(priceVal)
+      if (priceMode === 'set' && isFinite(v) && v >= 0) patch.trade_price_ex_gst = round2(v)
+      if (priceMode === 'inc' && isFinite(v)) patch.trade_price_ex_gst = round2(it.trade_price_ex_gst * (1 + v/100))
+      if (priceMode === 'dec' && isFinite(v)) patch.trade_price_ex_gst = round2(Math.max(0, it.trade_price_ex_gst * (1 - v/100)))
+    }
+    if (handMode === 'set') { const v = Number(handVal); if (isFinite(v) && v >= 0) patch.manual_handling_fee_ex_gst = v }
+    if (handMode === 'clear') patch.manual_handling_fee_ex_gst = null
+    if (inbMode === 'set') { const v = Number(inbVal); if (isFinite(v) && v >= 0) patch.inbound_freight_cost_ex_gst = v }
+    if (inbMode === 'clear') patch.inbound_freight_cost_ex_gst = null
+    if (pkgMode !== 'none') patch.freight_packaging = pkgMode as FreightPackaging
+    return patch
+  }
+
+  async function apply() {
+    setErr(null)
+    const updates = items.map(it => ({ id: it.id, patch: buildPatch(it) })).filter(u => Object.keys(u.patch).length > 0)
+    if (updates.length === 0) { setErr('Nothing to change — pick at least one field.'); return }
+    setBusy(true)
+    try {
+      const r = await fetch('/api/b2b/admin/catalogue/bulk', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ updates }) })
+      const j = await r.json()
+      if (!r.ok) throw new Error(j?.error || `HTTP ${r.status}`)
+      if (j.failed > 0) setErr(`${j.updated} updated, ${j.failed} failed`)
+      onApplied(updates as any)
+    } catch (e: any) { setErr(e?.message || String(e)); setBusy(false) }
+  }
+
+  const lbl: React.CSSProperties = { fontSize:11, color:T.text3, textTransform:'uppercase', letterSpacing:'0.05em', marginBottom:6 }
+  const sel: React.CSSProperties = { background:T.bg3, border:`1px solid ${T.border2}`, color:T.text, borderRadius:5, padding:'7px 9px', fontSize:13, fontFamily:'inherit', outline:'none' }
+  const inp: React.CSSProperties = { ...sel, width:110 }
+
+  return (
+    <>
+      <div onClick={onClose} style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.6)',zIndex:1000}}/>
+      <div style={{position:'fixed',top:'50%',left:'50%',transform:'translate(-50%,-50%)',background:T.bg2,border:`1px solid ${T.border2}`,borderRadius:10,padding:24,width:560,maxWidth:'92vw',maxHeight:'88vh',overflowY:'auto',zIndex:1001,boxShadow:'0 20px 50px rgba(0,0,0,0.5)'}}>
+        <h2 style={{fontSize:16,fontWeight:600,margin:'0 0 4px'}}>Bulk edit</h2>
+        <p style={{fontSize:12.5,color:T.text3,margin:'0 0 18px',lineHeight:1.5}}>
+          Changes apply to all <strong style={{color:T.text2}}>{items.length}</strong> item{items.length===1?'':'s'} matching the current filters. Fields left on “No change” are untouched.
+        </p>
+
+        <div style={{display:'flex',flexDirection:'column',gap:16}}>
+          <div>
+            <div style={lbl}>Visibility</div>
+            <select value={visMode} onChange={e => setVisMode(e.target.value as any)} style={sel}>
+              <option value="none">No change</option>
+              <option value="show">Set visible</option>
+              <option value="hide">Set hidden</option>
+            </select>
+          </div>
+
+          <div>
+            <div style={lbl}>Trade price (ex GST)</div>
+            <div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}>
+              <select value={priceMode} onChange={e => setPriceMode(e.target.value as any)} style={sel}>
+                <option value="none">No change</option>
+                <option value="set">Set to $</option>
+                <option value="inc">Increase %</option>
+                <option value="dec">Decrease %</option>
+              </select>
+              {priceMode !== 'none' && <input type="number" min="0" step="0.01" value={priceVal} onChange={e => setPriceVal(e.target.value)} placeholder={priceMode==='set'?'$':'%'} style={inp}/>}
+            </div>
+          </div>
+
+          <div>
+            <div style={lbl}>Manual handling $/unit</div>
+            <div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}>
+              <select value={handMode} onChange={e => setHandMode(e.target.value as any)} style={sel}>
+                <option value="none">No change</option>
+                <option value="set">Set to $</option>
+                <option value="clear">Clear</option>
+              </select>
+              {handMode === 'set' && <input type="number" min="0" step="0.01" value={handVal} onChange={e => setHandVal(e.target.value)} placeholder="$" style={inp}/>}
+            </div>
+          </div>
+
+          <div>
+            <div style={lbl}>Inbound freight $/unit</div>
+            <div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}>
+              <select value={inbMode} onChange={e => setInbMode(e.target.value as any)} style={sel}>
+                <option value="none">No change</option>
+                <option value="set">Set to $</option>
+                <option value="clear">Clear</option>
+              </select>
+              {inbMode === 'set' && <input type="number" min="0" step="0.01" value={inbVal} onChange={e => setInbVal(e.target.value)} placeholder="$" style={inp}/>}
+            </div>
+          </div>
+
+          <div>
+            <div style={lbl}>Freight packaging</div>
+            <select value={pkgMode} onChange={e => setPkgMode(e.target.value as any)} style={sel}>
+              <option value="none">No change</option>
+              <option value="box">Box</option>
+              <option value="pallet">Pallet</option>
+              <option value="other">Other</option>
+            </select>
+          </div>
+        </div>
+
+        {err && <div style={{fontSize:12,color:T.red,marginTop:14}}>{err}</div>}
+
+        <div style={{display:'flex',gap:8,justifyContent:'flex-end',marginTop:20}}>
+          <button onClick={onClose} disabled={busy} style={{padding:'9px 16px',borderRadius:6,border:`1px solid ${T.border2}`,background:'transparent',color:T.text2,fontSize:13,fontFamily:'inherit',cursor:'pointer'}}>Cancel</button>
+          <button onClick={apply} disabled={!anyOp || busy} style={{padding:'9px 16px',borderRadius:6,border:`1px solid ${anyOp?T.purple:T.border2}`,background:anyOp&&!busy?T.purple:T.bg3,color:anyOp&&!busy?'#fff':T.text3,fontSize:13,fontWeight:600,fontFamily:'inherit',cursor:anyOp&&!busy?'pointer':'not-allowed'}}>
+            {busy ? 'Applying…' : `Apply to ${items.length} item${items.length===1?'':'s'}`}
+          </button>
+        </div>
+      </div>
+    </>
+  )
 }
 
 // ─── Auth gate ─────────────────────────────────────────────────────────
