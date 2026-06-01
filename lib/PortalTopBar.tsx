@@ -17,6 +17,7 @@ import { UserRole, visibleNavSections } from './permissions'
 import { DEFAULT_NAV, PortalNavItem } from './PortalSidebar'
 import { AppIcon } from './AppIcons'
 import { usePreferences } from './preferences'
+import { useIsMobile } from './useIsMobile'
 
 const T = {
   bg: '#0d0f12', bg2: '#131519', bg3: '#1a1d23', bg4: '#21252d',
@@ -174,6 +175,7 @@ export default function PortalTopBar({
   currentUserEmail,
 }: PortalTopBarProps) {
   const router = useRouter()
+  const isMobile = useIsMobile()
   const apps = useVisibleApps(currentUserRole, currentUserVisibleTabs)
   const [launcherOpen, setLauncherOpen] = useState(false)
   const [menuOpen, setMenuOpen] = useState(false)
@@ -251,46 +253,48 @@ export default function PortalTopBar({
         <button onClick={() => router.push('/home')} title="Home"
           style={{ display: 'flex', alignItems: 'center', gap: 10, background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}>
           <div style={{ width: 30, height: 30, borderRadius: 8, background: T.blue, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 13, fontWeight: 600, color: '#fff' }}>JA</div>
-          <span style={{ fontSize: 14, fontWeight: 600, color: T.text }}>Just Autos</span>
+          {!isMobile && <span style={{ fontSize: 14, fontWeight: 600, color: T.text }}>Just Autos</span>}
         </button>
 
         {/* Apps launcher button */}
-        <button onClick={() => setLauncherOpen(o => !o)} style={btn} title="All apps">
+        <button onClick={() => setLauncherOpen(o => !o)} style={{ ...btn, ...(isMobile ? { padding: '7px 9px' } : {}) }} title="All apps">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
             <rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/>
             <rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>
           </svg>
-          Apps
+          {!isMobile && 'Apps'}
           {(mergedAlerts.messages || 0) > 0 && (
             <span title={`${mergedAlerts.messages} unread message${mergedAlerts.messages === 1 ? '' : 's'}`} style={{ fontSize: 10, fontFamily: 'monospace', background: T.red, color: '#fff', borderRadius: 10, padding: '0 6px', marginLeft: 2 }}>{mergedAlerts.messages}</span>
           )}
         </button>
 
-        {/* Current app title */}
+        {/* Current app title (icon-only on mobile to save room) */}
         {activeApp && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: T.text, fontSize: 14, fontWeight: 600 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: T.text, fontSize: 14, fontWeight: 600, minWidth: 0 }}>
             <span style={{ color: activeApp.accent, display: 'flex' }}><AppIcon name={activeApp.id} size={18}/></span>
-            {activeApp.label}
+            {!isMobile && <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{activeApp.label}</span>}
           </div>
         )}
 
         <span style={{ flex: 1 }}/>
 
         {onRefresh && (
-          <button onClick={onRefresh} disabled={refreshing} style={{ ...btn, opacity: refreshing ? 0.6 : 1 }}
+          <button onClick={onRefresh} disabled={refreshing} style={{ ...btn, opacity: refreshing ? 0.6 : 1, ...(isMobile ? { padding: '7px 9px' } : {}) }}
             title={lastRefresh ? `Updated ${lastRefresh.toLocaleTimeString('en-AU', { hour: '2-digit', minute: '2-digit' })}` : 'Refresh'}>
-            {refreshing ? 'Refreshing…' : '↻ Refresh'}
+            {isMobile ? '↻' : (refreshing ? 'Refreshing…' : '↻ Refresh')}
           </button>
         )}
 
-        {/* User menu */}
-        <div style={{ position: 'relative' }}>
-          <button onClick={() => setMenuOpen(o => !o)} style={btn}>
-            <div style={{ width: 24, height: 24, borderRadius: '50%', background: T.bg4, color: T.text, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, fontWeight: 600 }}>
+        {/* User menu — avatar-only on mobile so it never pushes off-screen */}
+        <div style={{ position: 'relative', flexShrink: 0 }}>
+          <button onClick={() => setMenuOpen(o => !o)} style={{ ...btn, ...(isMobile ? { padding: 4, gap: 0 } : {}) }} aria-label="Account menu">
+            <div style={{ width: 26, height: 26, borderRadius: '50%', background: T.bg4, color: T.text, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 600 }}>
               {(currentUserName || currentUserEmail || '?').trim().charAt(0).toUpperCase()}
             </div>
-            <span style={{ maxWidth: 140, overflow: 'hidden', textOverflow: 'ellipsis' }}>{currentUserName || currentUserEmail || 'Account'}</span>
-            <span style={{ fontSize: 9, color: T.text3 }}>▾</span>
+            {!isMobile && <>
+              <span style={{ maxWidth: 140, overflow: 'hidden', textOverflow: 'ellipsis' }}>{currentUserName || currentUserEmail || 'Account'}</span>
+              <span style={{ fontSize: 9, color: T.text3 }}>▾</span>
+            </>}
           </button>
           {menuOpen && (
             <>

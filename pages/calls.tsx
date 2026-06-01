@@ -1340,7 +1340,6 @@ export default function CallsPage({ user }: { user: PortalUserSSR }) {
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', background: T.bg }}>
           {/* Top bar with date controls (matches distributors.tsx style) */}
           <div style={{ minHeight: 52, background: T.bg2, borderBottom: `1px solid ${T.border}`, display: 'flex', alignItems: 'center', padding: isMobile ? '8px 12px' : '0 20px', gap: isMobile ? 6 : 10, flexShrink: 0, flexWrap: 'wrap' }}>
-            <div style={{ width: 26, height: 26, borderRadius: 6, background: T.blue, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, fontWeight: 600, color: '#fff' }}>JA</div>
             <span style={{ fontSize: 14, fontWeight: 600 }}>Phone Calls</span>
             <div style={{ flex: 1 }}/>
             {!loading && stats && !isMobile && (
@@ -1355,27 +1354,33 @@ export default function CallsPage({ user }: { user: PortalUserSSR }) {
               </>
             )}
             {!isMobile && <div style={{ width: 1, height: 18, background: T.border }}/>}
-            {/* Preset buttons */}
-            {([
-              { id: 'today', label: 'Today' },
-              { id: 'yesterday', label: 'Yesterday' },
-              { id: 'week', label: '7d' },
-              { id: 'month', label: 'MTD' },
-            ] as { id: Preset; label: string }[]).map(p => (
-              <button key={p.id} onClick={() => applyPreset(p.id)}
-                style={{
-                  padding: '3px 10px', borderRadius: 4, border: '1px solid',
-                  fontSize: 11, fontFamily: 'monospace', fontWeight: 600, cursor: 'pointer',
-                  background: activePreset === p.id ? T.accent : 'transparent',
-                  color: activePreset === p.id ? '#fff' : T.text2,
-                  borderColor: activePreset === p.id ? T.accent : T.border,
-                }}>{p.label}</button>
-            ))}
-            <input type="date" value={startDate} max={endDate} onChange={e => handleStartChange(e.target.value)}
-              style={{ padding: '3px 6px', borderRadius: 4, border: `1px solid ${activePreset === 'custom' ? T.accent : T.border}`, fontSize: 11, fontFamily: 'monospace', background: 'transparent', color: T.text2, outline: 'none', colorScheme: 'dark' }}/>
-            <span style={{ fontSize: 11, color: T.text3 }}>→</span>
-            <input type="date" value={endDate} min={startDate} max={ymdToday()} onChange={e => handleEndChange(e.target.value)}
-              style={{ padding: '3px 6px', borderRadius: 4, border: `1px solid ${activePreset === 'custom' ? T.accent : T.border}`, fontSize: 11, fontFamily: 'monospace', background: 'transparent', color: T.text2, outline: 'none', colorScheme: 'dark' }}/>
+            {/* Preset buttons — bigger tap targets + flow to their own line on mobile */}
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', ...(isMobile ? { width: '100%' } : {}) }}>
+              {([
+                { id: 'today', label: 'Today' },
+                { id: 'yesterday', label: 'Yesterday' },
+                { id: 'week', label: '7d' },
+                { id: 'month', label: 'MTD' },
+              ] as { id: Preset; label: string }[]).map(p => (
+                <button key={p.id} onClick={() => applyPreset(p.id)}
+                  style={{
+                    flex: isMobile ? 1 : undefined,
+                    padding: isMobile ? '8px 10px' : '3px 10px', borderRadius: 5, border: '1px solid',
+                    fontSize: isMobile ? 12 : 11, fontFamily: 'monospace', fontWeight: 600, cursor: 'pointer',
+                    background: activePreset === p.id ? T.accent : 'transparent',
+                    color: activePreset === p.id ? '#fff' : T.text2,
+                    borderColor: activePreset === p.id ? T.accent : T.border,
+                  }}>{p.label}</button>
+              ))}
+            </div>
+            {/* Date range — kept together; full-width on mobile */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, ...(isMobile ? { width: '100%' } : {}) }}>
+              <input type="date" value={startDate} max={endDate} onChange={e => handleStartChange(e.target.value)}
+                style={{ flex: isMobile ? 1 : undefined, padding: isMobile ? '8px 8px' : '3px 6px', borderRadius: 5, border: `1px solid ${activePreset === 'custom' ? T.accent : T.border}`, fontSize: isMobile ? 13 : 11, fontFamily: 'monospace', background: 'transparent', color: T.text2, outline: 'none', colorScheme: 'dark' }}/>
+              <span style={{ fontSize: 11, color: T.text3 }}>→</span>
+              <input type="date" value={endDate} min={startDate} max={ymdToday()} onChange={e => handleEndChange(e.target.value)}
+                style={{ flex: isMobile ? 1 : undefined, padding: isMobile ? '8px 8px' : '3px 6px', borderRadius: 5, border: `1px solid ${activePreset === 'custom' ? T.accent : T.border}`, fontSize: isMobile ? 13 : 11, fontFamily: 'monospace', background: 'transparent', color: T.text2, outline: 'none', colorScheme: 'dark' }}/>
+            </div>
           </div>
 
           {/* Body */}
