@@ -179,6 +179,14 @@ export async function bookFreightForOrder(orderId: string, opts: { actorId?: str
     })
   } catch (e: any) { console.error('order_events insert failed (non-fatal):', e?.message) }
 
+  // Enqueue the label for auto-printing on the workshop DYMO (best-effort). The
+  // self-hosted print agent consumes label_print_jobs via Realtime.
+  if (labelPath) {
+    try {
+      await c.from('label_print_jobs').insert({ order_id: orderId, storage_path: labelPath, consignment_number: consignment.consignmentNumber || null })
+    } catch (e: any) { console.error('label_print_jobs enqueue failed (non-fatal):', e?.message) }
+  }
+
   // Distributor "shipped + tracking" email on first booking (best-effort).
   if (firstBook) {
     try {

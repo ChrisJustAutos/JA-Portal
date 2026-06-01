@@ -1,0 +1,17 @@
+{
+  "name": "ja-label-print-agent",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Auto-prints JA Portal B2B freight labels to the workshop DYMO LabelWriter 4XL",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.45.0",
+    "pdf-to-printer": "^5.6.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
