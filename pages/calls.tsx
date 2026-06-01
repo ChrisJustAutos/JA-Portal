@@ -7,6 +7,7 @@ import { useEffect, useState, useCallback, useMemo, useRef } from 'react'
 import Head from 'next/head'
 import { useRouter } from 'next/router'
 import PortalTopBar from '../lib/PortalTopBar'
+import { useIsMobile } from '../lib/useIsMobile'
 import { requirePageAuth } from '../lib/authServer'
 import { roleHasPermission } from '../lib/permissions'
 import { useChatContext } from '../components/GlobalChatbot'
@@ -1108,6 +1109,7 @@ type Preset = 'today' | 'yesterday' | 'week' | 'month' | 'custom'
 
 export default function CallsPage({ user }: { user: PortalUserSSR }) {
   const router = useRouter()
+  const isMobile = useIsMobile()
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null)
@@ -1313,11 +1315,11 @@ export default function CallsPage({ user }: { user: PortalUserSSR }) {
 
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', background: T.bg }}>
           {/* Top bar with date controls (matches distributors.tsx style) */}
-          <div style={{ height: 52, background: T.bg2, borderBottom: `1px solid ${T.border}`, display: 'flex', alignItems: 'center', padding: '0 20px', gap: 10, flexShrink: 0 }}>
+          <div style={{ minHeight: 52, background: T.bg2, borderBottom: `1px solid ${T.border}`, display: 'flex', alignItems: 'center', padding: isMobile ? '8px 12px' : '0 20px', gap: isMobile ? 6 : 10, flexShrink: 0, flexWrap: 'wrap' }}>
             <div style={{ width: 26, height: 26, borderRadius: 6, background: T.blue, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, fontWeight: 600, color: '#fff' }}>JA</div>
             <span style={{ fontSize: 14, fontWeight: 600 }}>Phone Calls</span>
             <div style={{ flex: 1 }}/>
-            {!loading && stats && (
+            {!loading && stats && !isMobile && (
               <>
                 <div style={{ width: 7, height: 7, borderRadius: '50%', background: stats.sync.last_error ? T.red : T.green, boxShadow: `0 0 6px ${stats.sync.last_error ? T.red : T.green}` }}/>
                 <span style={{ fontSize: 10, fontFamily: 'monospace', padding: '2px 8px', borderRadius: 4, background: stats.sync.last_error ? 'rgba(240,78,78,0.12)' : 'rgba(52,199,123,0.12)', color: stats.sync.last_error ? T.red : T.green, border: `1px solid ${stats.sync.last_error ? 'rgba(240,78,78,0.2)' : 'rgba(52,199,123,0.2)'}` }}>
@@ -1328,7 +1330,7 @@ export default function CallsPage({ user }: { user: PortalUserSSR }) {
                 </span>
               </>
             )}
-            <div style={{ width: 1, height: 18, background: T.border }}/>
+            {!isMobile && <div style={{ width: 1, height: 18, background: T.border }}/>}
             {/* Preset buttons */}
             {([
               { id: 'today', label: 'Today' },
@@ -1353,7 +1355,7 @@ export default function CallsPage({ user }: { user: PortalUserSSR }) {
           </div>
 
           {/* Body */}
-          <div style={{ flex: 1, overflow: 'auto', padding: 20 }}>
+          <div style={{ flex: 1, overflow: 'auto', padding: isMobile ? 12 : 20 }}>
             {loading && !stats ? (
               <div style={{ textAlign: 'center', padding: 80, color: T.text3 }}>
                 <div style={{ fontSize: 24, animation: 'spin 1s linear infinite', marginBottom: 12 }}>⟳</div>
@@ -1383,7 +1385,7 @@ export default function CallsPage({ user }: { user: PortalUserSSR }) {
                         {new Date().toLocaleDateString('en-AU', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}
                       </div>
                     </div>
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: 10 }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: isMobile ? 'repeat(2, 1fr)' : 'repeat(6, 1fr)', gap: 10 }}>
                       <StatCard label="Total Calls" value={stats.today.total} />
                       <StatCard label="Inbound" value={stats.today.inbound} sublabel={stats.today.total ? `${Math.round(stats.today.inbound / stats.today.total * 100)}% of period` : undefined} accent={T.green} />
                       <StatCard label="Outbound" value={stats.today.outbound} sublabel={stats.today.total ? `${Math.round(stats.today.outbound / stats.today.total * 100)}% of period` : undefined} accent={T.blue} />
@@ -1394,8 +1396,8 @@ export default function CallsPage({ user }: { user: PortalUserSSR }) {
                   </div>
                 )}
 
-                {/* Two-column layout */}
-                <div style={{ display: 'grid', gridTemplateColumns: '320px 1fr', gap: 16 }}>
+                {/* Two-column layout (stacks on mobile) */}
+                <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '320px 1fr', gap: 16 }}>
                   {/* Left: per-agent + splits */}
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
                     {stats && (
@@ -1507,7 +1509,8 @@ export default function CallsPage({ user }: { user: PortalUserSSR }) {
                       )}
                     </div>
 
-                    {/* Headers */}
+                    {/* Headers (desktop only — mobile uses stacked cards) */}
+                    {!isMobile && (
                     <div style={{
                       display: 'grid',
                       gridTemplateColumns: '34px 1fr 140px 30px 70px 70px 100px',
@@ -1524,6 +1527,7 @@ export default function CallsPage({ user }: { user: PortalUserSSR }) {
                       <div style={{ textAlign: 'right' }}>Status</div>
                       <div style={{ textAlign: 'right' }}>When</div>
                     </div>
+                    )}
 
                     {/* Rows */}
                     <div style={{ flex: 1, overflow: 'auto', maxHeight: 'calc(100vh - 340px)' }}>
@@ -1531,7 +1535,26 @@ export default function CallsPage({ user }: { user: PortalUserSSR }) {
                         <div style={{ padding: 60, textAlign: 'center', fontSize: 12, color: T.text3 }}>
                           No calls match the current filters
                         </div>
-                      ) : calls.map(c => (
+                      ) : calls.map(c => isMobile ? (
+                        <div
+                          key={c.id}
+                          onClick={() => setSelectedCall(c)}
+                          style={{ display: 'flex', gap: 10, alignItems: 'center', padding: '11px 14px', borderBottom: `1px solid ${T.border}`, cursor: 'pointer' }}>
+                          <DirectionBadge direction={c.direction} disposition={c.disposition} />
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={{ fontSize: 13, color: T.text, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                              {c.caller_name || formatPhone(c.external_number)}
+                            </div>
+                            <div style={{ fontSize: 10.5, color: T.text3, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                              {(c.effective_advisor_name || c.agent_name) || 'Unanswered'} · {formatRelative(c.call_date)}{c.has_recording ? ' · ●' : ''}
+                            </div>
+                          </div>
+                          <div style={{ textAlign: 'right', flexShrink: 0 }}>
+                            <div style={{ fontSize: 12, fontFamily: 'monospace', color: T.text2 }}>{formatDuration(c.billsec_seconds || c.duration_seconds)}</div>
+                            <div style={{ fontSize: 10, color: c.disposition === 'ANSWERED' ? T.text3 : T.red, textTransform: 'uppercase', letterSpacing: '0.04em' }}>{c.disposition === 'ANSWERED' ? 'Answered' : 'Missed'}</div>
+                          </div>
+                        </div>
+                      ) : (
                         <div
                           key={c.id}
                           onClick={() => setSelectedCall(c)}

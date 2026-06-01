@@ -28,6 +28,20 @@ export default function LoginPage() {
   const [mfaCode, setMfaCode] = useState('')
   const [mfaFactorId, setMfaFactorId] = useState('')
 
+  // Safety net: if a Supabase password-recovery link lands here (e.g. the
+  // project's Site URL fell back to the root → index redirects to /login,
+  // carrying the #access_token / ?code along), forward to /reset-password with
+  // the token intact so the user isn't stranded on the sign-in screen.
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const hash = window.location.hash || ''
+    const search = window.location.search || ''
+    const looksLikeRecovery = /type=recovery/.test(hash) || /type=recovery/.test(search) || (/[?&]code=/.test(search) && /reset|recovery/i.test(document.referrer))
+    if (looksLikeRecovery) {
+      window.location.replace('/reset-password' + search + hash)
+    }
+  }, [])
+
   // On mount — figure out if we need to bootstrap or if there's already an admin
   useEffect(() => {
     (async () => {
