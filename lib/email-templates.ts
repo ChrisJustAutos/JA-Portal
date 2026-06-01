@@ -151,12 +151,27 @@ export function linkHtml(label: string, url: string): string {
   return `<a href="${escapeHtml(url)}" style="color:#4f8ef7">${escapeHtml(label)}</a>`
 }
 
-function wrapHtml(inner: string): string {
+function wrapHtml(inner: string, logoUrl?: string | null): string {
+  // Header: logo image if configured (b2b_settings.email_logo_url), else the
+  // plain wordmark. max-height keeps oversized logos sane across mail clients.
+  const header = logoUrl
+    ? `<div style="border-bottom:2px solid #111;padding-bottom:10px;margin-bottom:16px"><img src="${escapeHtml(logoUrl)}" alt="Just Autos" style="max-height:56px;max-width:240px;display:block"/></div>`
+    : `<div style="border-bottom:2px solid #111;padding-bottom:8px;margin-bottom:16px;font-size:18px;font-weight:700">Just Autos</div>`
   return `<div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#222;max-width:640px;margin:0 auto">
-    <div style="border-bottom:2px solid #111;padding-bottom:8px;margin-bottom:16px;font-size:18px;font-weight:700">Just Autos</div>
+    ${header}
     ${inner}
     <div style="border-top:1px solid #eee;margin-top:20px;padding-top:10px;color:#888;font-size:12px">Just Autos Mechanical · Sent automatically by the Just Autos portal.</div>
   </div>`
+}
+
+// The configured email logo URL (b2b_settings.email_logo_url), or null. Read
+// per render — cheap and always current after an admin changes it.
+async function loadEmailLogoUrl(): Promise<string | null> {
+  try {
+    const { data } = await svc().from('b2b_settings').select('email_logo_url').eq('id', 'singleton').maybeSingle()
+    const u = String((data as any)?.email_logo_url || '').trim()
+    return u || null
+  } catch { return null }
 }
 
 // Convert the (plain-text-with-tokens) body to safe HTML, then substitute.
@@ -188,7 +203,8 @@ export interface RenderedEmail { enabled: boolean; subject: string; html: string
 export async function renderEmail(key: TemplateKey, vars: Record<string, string>, blocks: Record<string, string> = {}): Promise<RenderedEmail> {
   const t = await loadTemplate(key)
   if (!t.enabled) return { enabled: false, subject: '', html: '' }
-  return { enabled: true, subject: subjectSubstitute(t.subject, vars), html: wrapHtml(bodyToHtml(t.body, vars, blocks)) }
+  const logoUrl = await loadEmailLogoUrl()
+  return { enabled: true, subject: subjectSubstitute(t.subject, vars), html: wrapHtml(bodyToHtml(t.body, vars, blocks), logoUrl) }
 }
 
 // For the settings API: all templates merged with their defaults + metadata.

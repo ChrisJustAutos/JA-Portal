@@ -10,6 +10,7 @@ import B2BAdminTabs from '../../../components/b2b/B2BAdminTabs'
 import { AppIcon } from '../../../lib/AppIcons'
 import { requirePageAuth } from '../../../lib/authServer'
 import type { UserRole } from '../../../lib/permissions'
+import { getSupabase } from '../../../lib/supabaseClient'
 import FreightZonesManager from '../../../components/b2b/FreightZonesManager'
 import EmailTemplatesManager from '../../../components/b2b/EmailTemplatesManager'
 import FreightPackagingManager from '../../../components/b2b/FreightPackagingManager'
@@ -68,6 +69,7 @@ interface Settings {
   slack_new_order_webhook_url: string | null
   admin_order_notify_emails: string | null
   outbound_from_email: string | null
+  email_logo_url: string | null
   freight_markup_percent: number
   machship_from_name: string | null
   machship_from_company: string | null
@@ -117,6 +119,9 @@ export default function B2BSettingsPage({ user }: Props) {
   const [slackUrl, setSlackUrl] = useState('')
   const [adminEmails, setAdminEmails] = useState('')
   const [fromEmail, setFromEmail] = useState('')
+  const [logoUrl, setLogoUrl] = useState('')
+  const [logoUploading, setLogoUploading] = useState(false)
+  const [logoErr, setLogoErr] = useState('')
   // Freight (MachShip): admin-settable markup % + sender pickup address
   const [freightMarkup, setFreightMarkup] = useState<number>(20)
   const [msFromName,    setMsFromName]    = useState('')
@@ -147,6 +152,7 @@ export default function B2BSettingsPage({ user }: Props) {
       setSlackUrl(j.settings.slack_new_order_webhook_url || '')
       setAdminEmails(j.settings.admin_order_notify_emails || '')
       setFromEmail(j.settings.outbound_from_email || '')
+      setLogoUrl(j.settings.email_logo_url || '')
       setFreightMarkup(Number(j.settings.freight_markup_percent ?? 20))
       setMsFromName(j.settings.machship_from_name || '')
       setMsFromCompany(j.settings.machship_from_company || '')
@@ -214,6 +220,25 @@ export default function B2BSettingsPage({ user }: Props) {
     } finally {
       setSaving(false)
     }
+  }
+
+  // Upload an email logo to the public b2b-catalogue bucket and save its URL.
+  async function uploadLogo(file: File) {
+    setLogoErr('')
+    if (!/^image\//.test(file.type)) { setLogoErr('Pick an image file (PNG/JPG/SVG).'); return }
+    if (file.size > 5 * 1024 * 1024) { setLogoErr('Image too large (max 5MB).'); return }
+    setLogoUploading(true)
+    try {
+      const supabase = getSupabase()
+      const ext = (file.name.split('.').pop() || 'png').toLowerCase().replace(/[^a-z0-9]/g, '')
+      const path = `email-logo/logo-${Date.now()}.${ext}`
+      const { error: upErr } = await supabase.storage.from('b2b-catalogue').upload(path, file, { cacheControl: '3600', upsert: true, contentType: file.type })
+      if (upErr) throw new Error(upErr.message || 'Upload failed')
+      const { data: { publicUrl } } = supabase.storage.from('b2b-catalogue').getPublicUrl(path)
+      setLogoUrl(publicUrl)
+      await save({ email_logo_url: publicUrl })
+    } catch (e: any) { setLogoErr(e?.message || 'Upload failed') }
+    finally { setLogoUploading(false) }
   }
 
   return (
@@ -609,6 +634,38 @@ export default function B2BSettingsPage({ user }: Props) {
                   <button onClick={() => save({ outbound_from_email: fromEmail })} disabled={saving} style={primaryBtn(!saving)}>
                     {saving ? 'Saving…' : 'Save sender'}
                   </button>
+                </div>
+
+                <Field label="Email logo" hint="Shown in the header of every notification email. Upload an image, or paste a public image URL. Leave blank for the plain 'Just Autos' text header.">
+                  {logoUrl && (
+                    <div style={{marginBottom:10,padding:10,background:'#fff',borderRadius:8,display:'inline-block'}}>
+                      <img src={logoUrl} alt="Email logo preview" style={{maxHeight:56,maxWidth:240,display:'block'}}/>
+                    </div>
+                  )}
+                  <div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}>
+                    <input
+                      type="url"
+                      value={logoUrl}
+                      onChange={e => setLogoUrl(e.target.value)}
+                      placeholder="https://…/logo.png"
+                      style={{...inputStyle(), flex:1, minWidth:220}}
+                    />
+                    <label style={{...primaryBtn(!logoUploading), display:'inline-block', cursor: logoUploading ? 'wait' : 'pointer'}}>
+                      {logoUploading ? 'Uploading…' : 'Upload…'}
+                      <input type="file" accept="image/*" disabled={logoUploading} onChange={e => { const f = e.target.files?.[0]; if (f) uploadLogo(f); e.currentTarget.value = '' }} style={{display:'none'}}/>
+                    </label>
+                  </div>
+                  {logoErr && <div style={{fontSize:12, color:'#f04e4e', marginTop:6}}>{logoErr}</div>}
+                </Field>
+                <div style={{marginTop:14,marginBottom:20,display:'flex',gap:8}}>
+                  <button onClick={() => save({ email_logo_url: logoUrl })} disabled={saving} style={primaryBtn(!saving)}>
+                    {saving ? 'Saving…' : 'Save logo'}
+                  </button>
+                  {logoUrl && (
+                    <button onClick={() => { setLogoUrl(''); save({ email_logo_url: '' }) }} disabled={saving} style={{padding:'9px 16px',borderRadius:7,border:'1px solid rgba(255,255,255,0.18)',background:'transparent',color:'#aab0c0',fontSize:13,fontFamily:'inherit',cursor: saving ? 'default':'pointer'}}>
+                      Remove
+                    </button>
+                  )}
                 </div>
 
                 <Field label="Order notification emails" hint="Who gets the internal 'order placed' email. Comma-separated. Falls back to the B2B_ADMIN_NOTIFY_EMAILS env var if blank.">

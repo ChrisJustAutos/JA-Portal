@@ -40,6 +40,7 @@ export default withAuth('edit:b2b_distributors', async (req: NextApiRequest, res
         slack_new_order_webhook_url,
         admin_order_notify_emails,
         outbound_from_email,
+        email_logo_url,
         freight_markup_percent,
         freight_pallet_length_mm, freight_pallet_width_mm, freight_pallet_max_height_mm,
         freight_pallet_max_weight_g, freight_pallet_threshold_g,
@@ -134,6 +135,13 @@ export default withAuth('edit:b2b_distributors', async (req: NextApiRequest, res
       const u = String(body.slack_new_order_webhook_url || '').trim()
       if (u && !u.startsWith('https://hooks.slack.com/')) issues.push('Slack webhook URL must start with https://hooks.slack.com/')
       else update.slack_new_order_webhook_url = u || null
+    }
+
+    // Logo URL shown in the header of every notification email (public image URL).
+    if ('email_logo_url' in body) {
+      const v = String(body.email_logo_url || '').trim()
+      if (v && !/^https?:\/\/\S+$/i.test(v)) issues.push('Email logo URL must be a valid http(s) URL')
+      else update.email_logo_url = v || null
     }
 
     // "From" mailbox for all outbound B2B emails (single address).
