@@ -285,9 +285,9 @@ export default function B2BCataloguePage({ b2bUser }: Props) {
             <div>
               <h1 style={{fontSize:22,fontWeight:600,margin:0,letterSpacing:'-0.01em'}}>Catalogue</h1>
               <div style={{fontSize:13,color:T.text3,marginTop:4}}>
-                {tileStep === 'model'  && 'Choose a model to begin. Pricing is ex GST.'}
+                {tileStep === 'model'  && 'Choose a model to begin. Pricing is inc GST.'}
                 {tileStep === 'type'   && `Choose a product type within ${modelLabel}.`}
-                {tileStep === 'browse' && 'Add to cart. Pricing is ex GST.'}
+                {tileStep === 'browse' && 'Add to cart. Pricing is inc GST.'}
               </div>
             </div>
             {tileStep === 'browse' && (
@@ -568,12 +568,12 @@ function CatalogueCard({
         <div style={{display:'flex',alignItems:'baseline',justifyContent:'space-between',marginTop:4,gap:8}}>
           <div style={{fontSize:15,color:T.text,fontWeight:600,fontVariantNumeric:'tabular-nums',display:'flex',alignItems:'baseline',gap:6,flexWrap:'wrap'}}>
             <span>
-              ${item.unit_price_ex_gst.toFixed(2)}
-              <span style={{fontSize:9,color:T.text3,fontWeight:400,marginLeft:4}}>ex GST</span>
+              ${incGst(item.unit_price_ex_gst, item.is_taxable).toFixed(2)}
+              <span style={{fontSize:9,color:T.text3,fontWeight:400,marginLeft:4}}>inc GST</span>
             </span>
             {item.promo_active && item.unit_price_ex_gst < item.trade_price_ex_gst && (
               <span style={{fontSize:11,color:T.text3,fontWeight:400,textDecoration:'line-through'}}>
-                ${item.trade_price_ex_gst.toFixed(2)}
+                ${incGst(item.trade_price_ex_gst, item.is_taxable).toFixed(2)}
               </span>
             )}
             {item.promo_active && (
@@ -717,6 +717,12 @@ function Tile({
       </div>
     </button>
   )
+}
+
+// GST-inclusive display price. Portal shows prices inc GST; taxable items get
+// +10%, non-taxable (FRE) items are shown as-is.
+function incGst(ex: number, taxable: boolean): number {
+  return taxable ? Math.round(ex * 1.10 * 100) / 100 : ex
 }
 
 function crumbStyle(clickable: boolean): React.CSSProperties {

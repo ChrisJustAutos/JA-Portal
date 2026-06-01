@@ -396,10 +396,10 @@ function CartLineRow({
         <div style={{fontSize:13,color:T.text,fontWeight:500,marginTop:2}}>{line.name}</div>
         <div style={{display:'flex',alignItems:'center',gap:10,flexWrap:'wrap',marginTop:5}}>
           <span style={{fontSize:12,color:T.text,fontWeight:500,fontVariantNumeric:'tabular-nums'}}>
-            ${line.unit_price_ex_gst.toFixed(2)} ex GST · each
+            ${incGst(line.unit_price_ex_gst, line.is_taxable).toFixed(2)} inc GST · each
             {(line.promo_active || line.volume_break_applied) && line.unit_price_ex_gst < line.trade_price_ex_gst && (
               <span style={{fontSize:10,color:T.text3,fontWeight:400,marginLeft:5,textDecoration:'line-through'}}>
-                ${line.trade_price_ex_gst.toFixed(2)}
+                ${incGst(line.trade_price_ex_gst, line.is_taxable).toFixed(2)}
               </span>
             )}
           </span>
@@ -480,7 +480,7 @@ function CartLineRow({
             style={qtyBtn(line.effective_cap != null && line.qty >= line.effective_cap)}>+</button>
         </div>
         <div style={{fontSize:13,color:T.text,fontWeight:600,fontVariantNumeric:'tabular-nums'}}>
-          ${line.line_subtotal_ex_gst.toFixed(2)}
+          ${Number(line.line_total_inc_gst).toFixed(2)}
         </div>
         <button onClick={onRemove}
           style={{padding:'2px 6px',background:'transparent',border:'none',color:T.text3,fontSize:10,cursor:'pointer',fontFamily:'inherit'}}>
@@ -489,6 +489,11 @@ function CartLineRow({
       </div>
     </div>
   )
+}
+
+// GST-inclusive display price (taxable items +10%, FRE items as-is).
+function incGst(ex: number, taxable: boolean): number {
+  return taxable ? Math.round(ex * 1.10 * 100) / 100 : ex
 }
 
 function qtyBtn(disabled?: boolean): React.CSSProperties {
@@ -545,12 +550,10 @@ function TotalsPanel({
         Order summary
       </div>
 
-      <Row label="Subtotal (ex GST)"  value={`$${totals.subtotal_ex_gst.toFixed(2)}`}/>
+      <Row label="Items (inc GST)"  value={`$${totals.subtotal_inc_gst.toFixed(2)}`}/>
       {selectedFreight && (
-        <Row label={`Freight (${selectedFreight.label})`} value={`+$${freightExGst.toFixed(2)}`} muted/>
+        <Row label={`Freight (${selectedFreight.label})`} value={`+$${freightInc.toFixed(2)}`} muted/>
       )}
-      <Row label="GST"                value={`$${newGst.toFixed(2)}`}/>
-      <Row label="Subtotal (inc GST)" value={`$${newSubtotalInc.toFixed(2)}`} bold/>
 
       <div style={{height:10}}/>
 
@@ -560,7 +563,8 @@ function TotalsPanel({
       </div>
 
       <div style={{borderTop:`1px solid ${T.border2}`,paddingTop:10,marginTop:6}}/>
-      <Row label="Total to pay" value={`$${grandTotalInc.toFixed(2)}`} large/>
+      <Row label="Total to pay (inc GST)" value={`$${grandTotalInc.toFixed(2)}`} large/>
+      <div style={{fontSize:10,color:T.text3,marginTop:4}}>Includes ${newGst.toFixed(2)} GST</div>
 
       {/* Freight picker */}
       {freight && (
