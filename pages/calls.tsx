@@ -807,6 +807,7 @@ function LiveCallsBoard({ canMonitor }: { canMonitor: boolean }) {
   // ── Browser softphone (WebRTC) ──────────────────────────────────────
   const softphoneRef = useRef<any>(null)
   const audioElRef = useRef<HTMLAudioElement | null>(null)
+  const audioCtxRef = useRef<AudioContext | null>(null)
   const [spStatus, setSpStatus] = useState<SoftphoneStatus>('idle')
   const [spReason, setSpReason] = useState<string>('')
   const [activeDeviceMode, setActiveDeviceMode] = useState<SpyMode | null>(null)
@@ -826,6 +827,20 @@ function LiveCallsBoard({ canMonitor }: { canMonitor: boolean }) {
       audioElRef.current = el
     }
     return audioElRef.current
+  }
+
+  // Web Audio context for iOS remote-audio routing. Must be created/resumed in
+  // a user gesture (the Device tap / "Tap to hear" button) to make sound on iOS.
+  function ensureAudioCtx(): AudioContext | null {
+    if (typeof window === 'undefined') return null
+    if (!audioCtxRef.current) {
+      const Ctor = (window as any).AudioContext || (window as any).webkitAudioContext
+      if (!Ctor) return null
+      try { audioCtxRef.current = new Ctor() } catch { return null }
+    }
+    const ctx = audioCtxRef.current
+    if (ctx && ctx.state === 'suspended') { ctx.resume().catch(() => {}) }
+    return ctx
   }
 
   // Lazily set up the audio element and connect the softphone if the user has
@@ -849,6 +864,7 @@ function LiveCallsBoard({ canMonitor }: { canMonitor: boolean }) {
         wssUrl: d.wss_url, sipDomain: d.sip_domain,
         extension: d.extension, password: d.password,
         audioEl: audioElRef.current!,
+        audioContext: audioCtxRef.current || undefined,
       })
       sp.on('status', (s: any, det: any) => {
         if (s === 'registered') setSpStatus(curr => (curr === 'incall' ? 'incall' : 'registered'))
@@ -873,6 +889,7 @@ function LiveCallsBoard({ canMonitor }: { canMonitor: boolean }) {
   useEffect(() => () => {
     try { softphoneRef.current?.disconnect() } catch {}
     if (audioElRef.current) { try { audioElRef.current.remove() } catch {} }
+    if (audioCtxRef.current) { try { audioCtxRef.current.close() } catch {} }
   }, [])
 
   function hangupDevice() {
@@ -926,10 +943,11 @@ function LiveCallsBoard({ canMonitor }: { canMonitor: boolean }) {
     // For device monitoring, ensure the softphone is registered first AND tell
     // it to expect the inbound INVITE so it auto-answers instead of rejecting.
     if (actorKind === 'device') {
-      // iOS/WebKit: unlock audio + grab mic permission *inside this tap gesture*.
-      // The remote stream attaches later (after async SDP negotiation), well
-      // outside the gesture, so iOS would otherwise block playback + getUserMedia.
+      // iOS/WebKit: unlock audio + Web Audio context + grab mic permission *inside
+      // this tap gesture*. The remote stream attaches later (after async SDP),
+      // well outside the gesture, so iOS would otherwise block playback/routing.
       const el = ensureAudioEl()
+      ensureAudioCtx()  // create + resume the AudioContext within the gesture
       try { el.muted = false; const p = el.play(); if (p && typeof p.catch === 'function') p.catch(() => {}) } catch {}
       try {
         const ms = await navigator.mediaDevices.getUserMedia({ audio: true })
@@ -1042,7 +1060,7 @@ function LiveCallsBoard({ canMonitor }: { canMonitor: boolean }) {
         {spStatus === 'incall' && (
           <>
             {/* iOS: a guaranteed user-gesture to (re)start playback if autoplay was blocked. */}
-            <button onClick={() => { const el = audioElRef.current; if (el) { el.muted = false; el.volume = 1; try { const p = el.play(); if (p && typeof p.catch === 'function') p.catch(() => {}) } catch {} } }}
+            <button onClick={() => { ensureAudioCtx(); const el = audioElRef.current; if (el) { el.volume = 1; try { const p = el.play(); if (p && typeof p.catch === 'function') p.catch(() => {}) } catch {} } }}
               title="If you can't hear the call, tap to start audio"
               style={{ fontSize: 10, padding: '3px 10px', borderRadius: 4, background: `${T.green}18`, color: T.green, border: `1px solid ${T.green}55`, fontFamily: 'inherit', fontWeight: 700, cursor: 'pointer' }}>
               🔊 Tap to hear
