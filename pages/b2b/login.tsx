@@ -30,7 +30,7 @@ export default function B2BLoginPage() {
     setError(null)
     try {
       const supabase = getSupabase()
-      const baseUrl = (typeof window !== 'undefined' ? window.location.origin : 'https://ja-portal.vercel.app')
+      const baseUrl = (typeof window !== 'undefined' ? window.location.origin : 'https://justautos.app')
       const { error } = await supabase.auth.signInWithOtp({
         email: email.trim().toLowerCase(),
         options: {

@@ -9,7 +9,7 @@
 //
 // Usage:
 //   curl -H "Authorization: Bearer $CRON_SECRET" \
-//     "https://ja-portal.vercel.app/api/admin/inspect-jaws-invoices"
+//     "https://justautos.app/api/admin/inspect-jaws-invoices"
 //
 // Query params:
 //   ?limit=10              max rows per category (default 5, max 25)

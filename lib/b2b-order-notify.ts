@@ -11,7 +11,7 @@ import { type DropshipRaiseResult } from './b2b-dropship'
 import { getFromMailbox } from './b2b-settings'
 import { renderEmail, linesTableHtml, addressBlock, buttonHtml, linkHtml } from './email-templates'
 
-const BASE_URL = process.env.B2B_PUBLIC_BASE_URL || process.env.NEXT_PUBLIC_SITE_URL || process.env.JA_PORTAL_BASE_URL || 'https://ja-portal.vercel.app'
+const BASE_URL = process.env.B2B_PUBLIC_BASE_URL || process.env.NEXT_PUBLIC_SITE_URL || process.env.JA_PORTAL_BASE_URL || 'https://justautos.app'
 
 let _sb: SupabaseClient | null = null
 function svc(): SupabaseClient {

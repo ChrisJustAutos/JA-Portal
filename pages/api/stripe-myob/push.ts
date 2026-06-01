@@ -9,7 +9,7 @@
 //   curl -X POST -H "Authorization: Bearer $CRON_SECRET" \
 //        -H "Content-Type: application/json" \
 //        -d '{"account":"JAWS_JMACX","stripeInvoiceIds":["in_..."]}' \
-//        "https://ja-portal.vercel.app/api/stripe-myob/push?dry=1"
+//        "https://justautos.app/api/stripe-myob/push?dry=1"
 //
 // Body:
 //   account            'JAWS_JMACX' | 'JAWS_ET'   (required)

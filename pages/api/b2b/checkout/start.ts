@@ -408,7 +408,7 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, use
   }
 
   // 6. Build Stripe line_items (one per cart line + surcharge)
-  const baseUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://ja-portal.vercel.app'
+  const baseUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://justautos.app'
   const stripeLineItems: StripeLineItem[] = validated.map(v => {
     const unitInc = v.isTaxable ? v.unitPriceEx * 1.10 : v.unitPriceEx
     return {

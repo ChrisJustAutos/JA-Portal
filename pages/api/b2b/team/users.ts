@@ -72,7 +72,7 @@ async function handleInvite(user: B2BUser, req: NextApiRequest, res: NextApiResp
     })
   }
 
-  const baseUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://ja-portal.vercel.app'
+  const baseUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://justautos.app'
   const redirectTo = `${baseUrl}/b2b/auth/callback`
 
   let authUserId: string

@@ -6,7 +6,7 @@
 //
 // Stripe webhook setup:
 //   1. In Stripe Dashboard → Developers → Webhooks → Add endpoint
-//   2. URL: https://ja-portal.vercel.app/api/b2b/stripe/webhook
+//   2. URL: https://justautos.app/api/b2b/stripe/webhook
 //   3. Events to send: checkout.session.completed
 //   4. Copy the signing secret (whsec_...) into Vercel env STRIPE_WEBHOOK_SECRET
 //

@@ -45,7 +45,10 @@
       "mcp__claude_ai_GitHub__search_repositories",
       "PowerShell(Get-ChildItem *)",
       "Bash(powershell *)",
-      "Bash(node *)"
+      "Bash(node *)",
+      "Bash(echo \"---total errors:$\\(npx tsc --noEmit -p tsconfig.json 2>&1)",
+      "Bash(perl -i -pe 's/\\\\[\\\\.\\\\.\\\\.\\([\\\\w.]+\\\\.\\(?:entries|values|keys\\)\\\\\\(\\\\\\)\\)\\\\]/Array.from\\($1\\)/g' lib/calls-insights.ts)",
+      "Bash(echo \"total errors: $\\(npx tsc --noEmit -p tsconfig.json 2>&1)"
     ]
   }
 }

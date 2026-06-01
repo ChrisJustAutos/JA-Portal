@@ -16,7 +16,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse, actor: any) {
   const { data: target, error: lookupErr } = await sb.from('user_profiles').select('email').eq('id', id).single()
   if (lookupErr || !target) return res.status(404).json({ error: 'User not found' })
 
-  const redirectTo = `${req.headers.origin || 'https://ja-portal.vercel.app'}/reset-password?welcome=1`
+  const redirectTo = `${req.headers.origin || 'https://justautos.app'}/reset-password?welcome=1`
   const { error } = await sb.auth.resetPasswordForEmail(target.email, { redirectTo })
   if (error) return res.status(500).json({ error: error.message })
 

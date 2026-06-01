@@ -5,7 +5,7 @@
 // in lib/stripe-payout-sync.ts (CHQ bank account, etc).
 //
 //   curl -H "Authorization: Bearer $CRON_SECRET" \
-//     "https://ja-portal.vercel.app/api/admin/inspect-jaws-account?displayId=1-1110"
+//     "https://justautos.app/api/admin/inspect-jaws-account?displayId=1-1110"
 
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { getConnection, myobFetch } from '../../../lib/myob'

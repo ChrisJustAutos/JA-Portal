@@ -78,7 +78,7 @@ async function invite(req: NextApiRequest, res: NextApiResponse, actor: any) {
 
   // Send password reset so the user can set their own password (first-time
   // invite). ?welcome=1 → the landing page shows the welcoming first-run copy.
-  const redirectTo = `${req.headers.origin || 'https://ja-portal.vercel.app'}/reset-password?welcome=1`
+  const redirectTo = `${req.headers.origin || 'https://justautos.app'}/reset-password?welcome=1`
   const { error: resetErr } = await sb.auth.resetPasswordForEmail(email, { redirectTo })
   if (resetErr) console.error('Reset email failed:', resetErr)
 

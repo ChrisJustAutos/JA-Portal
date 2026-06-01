@@ -184,7 +184,7 @@ export default withAuth('admin:b2b', async (req: NextApiRequest, res: NextApiRes
   if (olErr) { await c.from('b2b_orders').delete().eq('id', order.id); return res.status(500).json({ error: `Order lines insert failed: ${olErr.message}` }) }
 
   // Stripe (test) checkout session.
-  const baseUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://ja-portal.vercel.app'
+  const baseUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://justautos.app'
   const stripeLineItems: StripeLineItem[] = validated.map(v => ({
     price_data: { currency: 'aud', product_data: { name: v.name, description: `SKU: ${v.sku}` }, unit_amount: Math.round((v.isTaxable ? v.unitPriceEx * 1.10 : v.unitPriceEx) * 100) },
     quantity: v.qty,
