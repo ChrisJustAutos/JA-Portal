@@ -110,6 +110,7 @@ export interface TransferResult {
 export async function executeStockTransfer(opts: {
   lines: TransferLineInput[]
   note?: string | null
+  poReference?: string | null   // lands on BOTH MYOB docs (sale CustomerPONumber + bill SupplierInvoiceNumber)
   userId: string
 }): Promise<TransferResult> {
   const c = sb()
@@ -183,6 +184,7 @@ export async function executeStockTransfer(opts: {
     .insert({
       status: 'pending',
       note: opts.note || null,
+      po_reference: (opts.poReference || '').trim() || null,
       line_count: built.length,
       subtotal_ex_gst: subtotalEx,
       gst,
@@ -237,6 +239,8 @@ export async function executeStockTransfer(opts: {
     Comment: `Internal stock transfer JAWS → VPS (${built.length} item${built.length === 1 ? '' : 's'} at average cost)`,
     JournalMemo: `Stock transfer ${transferId.substring(0, 8)} — JA Portal`.substring(0, 255),
   }
+  const poRef = (opts.poReference || '').trim()
+  if (poRef) invoiceBody.CustomerPurchaseOrderNumber = poRef.substring(0, 20)  // MYOB caps PO at 20 chars
 
   const invRes = await myobFetch(jaws.id, `/accountright/${jaws.company_file_id}/Sale/Invoice/Item`, {
     method: 'POST', body: invoiceBody, performedBy: opts.userId,
@@ -266,6 +270,7 @@ export async function executeStockTransfer(opts: {
     vpsBillUid = await writeVpsBill({
       transferId,
       jawsInvoiceNumber: invoiceNumber,
+      poReference: poRef || null,
       taxableEx, nonTaxableEx, gst,
       accountUid: cfgT.accountUid!,
       supplierUid: cfgT.supplierUid!,
@@ -302,6 +307,7 @@ export async function executeStockTransfer(opts: {
 async function writeVpsBill(opts: {
   transferId: string
   jawsInvoiceNumber: string
+  poReference?: string | null
   taxableEx: number
   nonTaxableEx: number
   gst: number
@@ -337,9 +343,13 @@ async function writeVpsBill(opts: {
   if (!lines.length) throw new Error('Transfer has zero value — nothing to bill')
 
   const subtotal = round2(opts.taxableEx + opts.nonTaxableEx)
+  // When a PO reference is supplied it becomes the bill's visible reference
+  // (Supplier Invoice No.) so both sides carry the same number; the JAWS
+  // invoice number always stays in the JournalMemo for matching.
+  const supplierInvNo = ((opts.poReference || '').trim() || opts.jawsInvoiceNumber).substring(0, 30)
   const body: Record<string, any> = {
     Date: new Date().toISOString().substring(0, 10),
-    SupplierInvoiceNumber: opts.jawsInvoiceNumber.substring(0, 30),
+    SupplierInvoiceNumber: supplierInvNo,
     Supplier: { UID: opts.supplierUid },
     Lines: lines,
     IsTaxInclusive: false,
@@ -395,6 +405,7 @@ export async function retryVpsBill(transferId: string, userId: string): Promise<
   const vpsBillUid = await writeVpsBill({
     transferId,
     jawsInvoiceNumber: t.jaws_invoice_number,
+    poReference: t.po_reference || null,
     taxableEx, nonTaxableEx,
     gst: Number(t.gst),
     accountUid: cfgT.accountUid,

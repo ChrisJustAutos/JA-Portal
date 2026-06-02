@@ -161,6 +161,7 @@ export default withAuth('edit:b2b_distributors', async (req: NextApiRequest, res
         const result = await executeStockTransfer({
           lines: lines.map((l: any) => ({ catalogue_id: String(l.catalogue_id || ''), qty: Number(l.qty) })),
           note: body.note ? String(body.note) : null,
+          poReference: body.po_reference ? String(body.po_reference) : null,
           userId: user.id,
         })
         return res.status(200).json({ ok: true, result })

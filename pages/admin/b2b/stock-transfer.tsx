@@ -58,6 +58,7 @@ interface TransferRow {
   total_inc: number
   jaws_invoice_number: string | null
   vps_bill_uid: string | null
+  po_reference: string | null
   error: string | null
   created_at: string
 }
@@ -72,6 +73,7 @@ export default function StockTransferPage({ user }: Props) {
   const [filter, setFilter] = useState('')
   const [selected, setSelected] = useState<Record<string, number>>({})  // catalogue_id → qty
   const [note, setNote] = useState('')
+  const [poRef, setPoRef] = useState('')
   const [confirming, setConfirming] = useState(false)
   const [running, setRunning] = useState(false)
   const [result, setResult] = useState<{ kind: 'ok' | 'partial' | 'error'; text: string } | null>(null)
@@ -138,7 +140,7 @@ export default function StockTransferPage({ user }: Props) {
       const r = await fetch('/api/b2b/admin/stock-transfer', {
         method: 'POST', credentials: 'same-origin',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'execute', lines, note: note.trim() || null }),
+        body: JSON.stringify({ action: 'execute', lines, note: note.trim() || null, po_reference: poRef.trim() || null }),
       })
       const j = await r.json().catch(() => null)
       if (!r.ok) throw new Error(j?.error || `HTTP ${r.status}`)
@@ -148,7 +150,7 @@ export default function StockTransferPage({ user }: Props) {
       } else {
         setResult({ kind: 'partial', text: `JAWS invoice ${tr.jawsInvoiceNumber} written, but the VPS bill failed: ${tr.error}. Use Retry in the history below.` })
       }
-      setSelected({}); setNote('')
+      setSelected({}); setNote(''); setPoRef('')
       loadItems(); loadHistory()
     } catch (e: any) {
       setResult({ kind: 'error', text: e?.message || String(e) })
@@ -279,6 +281,12 @@ export default function StockTransferPage({ user }: Props) {
                 {picked.length > 0 && <> — <b style={{color:T.text}}>{fmt$(totals.ex)}</b> ex GST · GST {fmt$(totals.gst)} · <b style={{color:T.text}}>{fmt$(totals.inc)}</b> inc</>}
               </div>
               <span style={{flex:1}}/>
+              <input
+                value={poRef} onChange={e=>setPoRef(e.target.value)} maxLength={20}
+                placeholder="PO reference (optional)"
+                title="Lands on both MYOB documents: Customer PO No. on the JAWS invoice and Supplier Invoice No. on the VPS bill"
+                style={{...inp,width:180,fontFamily:'monospace'}}
+              />
               <input value={note} onChange={e=>setNote(e.target.value)} placeholder="Note (optional)" style={{...inp,width:220}}/>
               <button
                 disabled={!configured || picked.length===0 || running}
@@ -306,6 +314,7 @@ export default function StockTransferPage({ user }: Props) {
                     <th style={{textAlign:'left',padding:'6px 8px'}}>Date</th>
                     <th style={{textAlign:'right',padding:'6px 8px'}}>Items</th>
                     <th style={{textAlign:'right',padding:'6px 8px'}}>Total (inc)</th>
+                    <th style={{textAlign:'left',padding:'6px 8px'}}>PO ref</th>
                     <th style={{textAlign:'left',padding:'6px 8px'}}>JAWS invoice</th>
                     <th style={{textAlign:'left',padding:'6px 8px'}}>VPS bill</th>
                     <th style={{textAlign:'left',padding:'6px 8px'}}>Status</th>
@@ -320,6 +329,7 @@ export default function StockTransferPage({ user }: Props) {
                       </td>
                       <td style={{padding:'7px 8px',textAlign:'right',fontFamily:'monospace'}}>{t.line_count}</td>
                       <td style={{padding:'7px 8px',textAlign:'right',fontFamily:'monospace'}}>{fmt$(t.total_inc)}</td>
+                      <td style={{padding:'7px 8px',fontFamily:'monospace',fontSize:12}}>{t.po_reference || '—'}</td>
                       <td style={{padding:'7px 8px',fontFamily:'monospace',fontSize:12}}>{t.jaws_invoice_number || '—'}</td>
                       <td style={{padding:'7px 8px',fontSize:12,color:t.vps_bill_uid?T.green:T.text3}}>{t.vps_bill_uid ? '✓ written' : '—'}</td>
                       <td style={{padding:'7px 8px'}}>
