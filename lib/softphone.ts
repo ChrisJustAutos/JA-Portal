@@ -38,6 +38,10 @@ export interface SoftphoneConfig {
   // used in practice — WebKit/iOS plays remote WebRTC audio reliably through a
   // video element but is often silent through an <audio> element.
   audioEl: HTMLMediaElement
+  // Diagnostic: periodic media stats while in a call. rxBytes growing = audio
+  // is actually arriving (so silence is a playback issue); rxBytes stuck at 0 +
+  // ice not 'connected' = the media path failed (e.g. needs TURN on mobile).
+  onStats?: (s: { ice: string; conn: string; rxBytes: number; rxPackets: number; level: number }) => void
 }
 
 type Listener<E> = (evt: E, detail?: any) => void
@@ -50,6 +54,7 @@ export class Softphone {
   private callListeners: Listener<CallEvt>[] = []
   private micMuted = true
   private autoAnswerNext = false
+  private statsTimer: any = null
 
   constructor(private cfg: SoftphoneConfig) {}
 
@@ -137,7 +142,30 @@ export class Softphone {
 
   isMicMuted() { return this.micMuted }
 
+  // Poll RTCPeerConnection stats so the UI can show whether audio is actually
+  // arriving (diagnoses media-path/TURN problems vs playback problems).
+  private startStats() {
+    const cb = this.cfg.onStats
+    if (!cb) return
+    const pc: RTCPeerConnection | undefined = this.currentSession?.sessionDescriptionHandler?.peerConnection
+    if (!pc) return
+    this.stopStats()
+    this.statsTimer = setInterval(async () => {
+      try {
+        const stats = await pc.getStats()
+        let rxBytes = 0, rxPackets = 0, level = 0
+        stats.forEach((r: any) => {
+          if (r.type === 'inbound-rtp' && (r.kind === 'audio' || r.mediaType === 'audio')) { rxBytes = r.bytesReceived || 0; rxPackets = r.packetsReceived || 0 }
+          if (r.type === 'track' && typeof r.audioLevel === 'number') level = r.audioLevel
+        })
+        cb({ ice: pc.iceConnectionState, conn: pc.connectionState, rxBytes, rxPackets, level })
+      } catch {}
+    }, 2000)
+  }
+  private stopStats() { if (this.statsTimer) { clearInterval(this.statsTimer); this.statsTimer = null } }
+
   hangup() {
+    this.stopStats()
     const s = this.currentSession
     if (!s) return
     try {
@@ -172,8 +200,9 @@ export class Softphone {
     // negotiated. sip.js's session description handler exposes the
     // RTCPeerConnection once accept() begins, so attach a one-shot listener.
     invitation.stateChange.addListener((state: string) => {
-      if (state === 'Established') this.attachRemoteAudio()
+      if (state === 'Established') { this.attachRemoteAudio(); this.startStats() }
       if (state === 'Terminated') {
+        this.stopStats()
         if (this.currentSession === invitation) this.currentSession = null
         this.emitCall('ended')
       }

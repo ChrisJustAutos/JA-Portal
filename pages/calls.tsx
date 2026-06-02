@@ -824,6 +824,7 @@ function LiveCallsBoard({ canMonitor }: { canMonitor: boolean }) {
   const [spStatus, setSpStatus] = useState<SoftphoneStatus>('idle')
   const [spReason, setSpReason] = useState<string>('')
   const [activeDeviceMode, setActiveDeviceMode] = useState<SpyMode | null>(null)
+  const [mediaStat, setMediaStat] = useState<{ ice: string; rxBytes: number; level: number } | null>(null)
 
   // Create (once) the element the remote call audio attaches to. We use a
   // <video> element, not <audio>: WebKit/iOS (incl. Chrome on iOS, which is
@@ -872,6 +873,7 @@ function LiveCallsBoard({ canMonitor }: { canMonitor: boolean }) {
         wssUrl: d.wss_url, sipDomain: d.sip_domain,
         extension: d.extension, password: d.password,
         audioEl: audioElRef.current!,
+        onStats: (s) => setMediaStat({ ice: s.ice, rxBytes: s.rxBytes, level: s.level }),
       })
       sp.on('status', (s: any, det: any) => {
         if (s === 'registered') setSpStatus(curr => (curr === 'incall' ? 'incall' : 'registered'))
@@ -881,7 +883,7 @@ function LiveCallsBoard({ canMonitor }: { canMonitor: boolean }) {
       })
       sp.on('call', (e: any) => {
         if (e === 'answered') setSpStatus('incall')
-        if (e === 'ended')    { setSpStatus('registered'); setActiveDeviceMode(null) }
+        if (e === 'ended')    { setSpStatus('registered'); setActiveDeviceMode(null); setMediaStat(null) }
       })
       softphoneRef.current = sp
       await sp.connect()
@@ -1073,6 +1075,11 @@ function LiveCallsBoard({ canMonitor }: { canMonitor: boolean }) {
             <button onClick={hangupDevice} style={{ fontSize: 10, padding: '3px 10px', borderRadius: 4, background: 'transparent', color: T.red, border: `1px solid ${T.red}55`, fontFamily: 'inherit', fontWeight: 700, cursor: 'pointer' }}>
               Hang up{activeDeviceMode ? ` (${activeDeviceMode})` : ''}
             </button>
+            {mediaStat && (
+              <span title="Diagnostic: audio bytes received · ICE state. If rx stays 0, the media path isn't reaching this device." style={{ fontSize: 10, fontFamily: 'monospace', color: mediaStat.rxBytes > 0 ? T.green : T.amber }}>
+                rx {Math.round(mediaStat.rxBytes / 1024)}KB · {mediaStat.ice}
+              </span>
+            )}
           </>
         )}
 
