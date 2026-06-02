@@ -201,15 +201,16 @@ export async function refreshAllStock(): Promise<{ scanned: number; updated: num
   // "what can we sell right now" number; falls back to QuantityOnHand
   // for non-tracked items (where Available may be null).
   const cachedAt = new Date().toISOString()
-  const updates: { uid: string; qty: number; is_inventoried: boolean; cached_at: string }[] = []
+  const updates: { uid: string; qty: number; qty_on_hand: number; is_inventoried: boolean; cached_at: string }[] = []
   for (const it of allItems) {
     const uid = it.UID
     if (!uid) continue
     const isInv = it.IsInventoried !== false
-    const qty = isInv
-      ? Number(it.QuantityAvailable ?? it.QuantityOnHand ?? 0)
-      : 0
-    updates.push({ uid, qty, is_inventoried: isInv, cached_at: cachedAt })
+    // qty (= available) gates checkout; qty_on_hand is the physical count shown
+    // on the admin catalogue.
+    const qty = isInv ? Number(it.QuantityAvailable ?? it.QuantityOnHand ?? 0) : 0
+    const onHand = isInv ? Number(it.QuantityOnHand ?? it.QuantityAvailable ?? 0) : 0
+    updates.push({ uid, qty, qty_on_hand: onHand, is_inventoried: isInv, cached_at: cachedAt })
   }
 
   // Phase 2: one-shot bulk UPDATE via the SQL function. Replaces what was

@@ -70,6 +70,7 @@ interface CatalogueItem {
   is_special_order: boolean
   is_drop_ship: boolean
   qty_available: number | null
+  qty_on_hand: number | null
   is_inventoried: boolean | null
   stock_cached_at: string | null
   myob_supplier_uid: string | null
@@ -848,12 +849,12 @@ function CatalogueRow({
         {(() => {
           if (item.is_drop_ship) return <span style={{fontSize:10.5,color:T.text3}} title="Ships direct from supplier — no warehouse stock">drop-ship</span>
           if (item.is_inventoried === false) return <span style={{color:T.text3,fontSize:14}} title="Not inventoried (unlimited)">∞</span>
-          const q = item.qty_available
-          if (q == null) return <span style={{color:T.text3,fontSize:11}} title="No stock cached yet">—</span>
+          const q = item.qty_on_hand   // physical quantity on hand (not netted by committed)
+          if (q == null) return <span style={{color:T.text3,fontSize:11}} title="No stock cached yet — hit Refresh stock">—</span>
           const col = q >= 5 ? T.green : q >= 1 ? T.amber : T.red
           return (
             <span style={{fontFamily:'monospace',fontWeight:600,color:col}}
-              title={item.stock_cached_at ? `MYOB stock as at ${new Date(item.stock_cached_at).toLocaleString('en-AU')}` : undefined}>
+              title={`Quantity on hand${item.stock_cached_at ? ` · as at ${new Date(item.stock_cached_at).toLocaleString('en-AU')}` : ''}`}>
               {q}
             </span>
           )

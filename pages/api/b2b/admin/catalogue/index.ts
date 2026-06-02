@@ -59,6 +59,7 @@ export default withAuth('view:b2b', async (req: NextApiRequest, res: NextApiResp
       is_special_order,
       is_drop_ship,
       qty_available,
+      qty_on_hand,
       is_inventoried,
       stock_cached_at,
       myob_supplier_uid,
