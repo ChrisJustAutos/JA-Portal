@@ -65,10 +65,12 @@ export default withAuth('admin:b2b', async (req: NextApiRequest, res: NextApiRes
   if (!supplier) return res.status(404).json({ error: `No MYOB supplier matching "${supplierName}" — pass supplierUid explicitly.` })
 
   // ── Load our zones (first-match by sort_order) + drop-ship catalogue map ──
-  const [{ data: zoneRows }, { data: catRows }] = await Promise.all([
+  const [{ data: zoneRows }, { data: catRows }, { data: settingsRow }] = await Promise.all([
     sb().from('b2b_freight_zones').select('id, name, postcode_ranges, sort_order, is_active').eq('is_active', true).order('sort_order', { ascending: true }),
     sb().from('b2b_catalogue').select('id, sku, name, myob_item_uid, is_drop_ship').eq('is_drop_ship', true),
+    sb().from('b2b_settings').select('freight_markup_percent').eq('id', 'singleton').maybeSingle(),
   ])
+  const markupPercent = Number((settingsRow as any)?.freight_markup_percent ?? 20)
   const zones = (zoneRows || []) as any[]
   const byItemUid = new Map<string, { id: string; sku: string; name: string }>()
   for (const c of (catRows || []) as any[]) {
@@ -157,6 +159,7 @@ export default withAuth('admin:b2b', async (req: NextApiRequest, res: NextApiRes
 
   return res.status(200).json({
     supplier,
+    markupPercent,
     totals,
     zones: zones.map(z => ({ id: z.id, name: z.name })),
     products: Array.from(seenProducts.values()).map(p => ({ catalogue_id: p.id, sku: p.sku, name: p.name })),

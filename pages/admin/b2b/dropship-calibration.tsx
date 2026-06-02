@@ -44,6 +44,7 @@ function waIndex(zoneName: string): number | null {
 interface Cell { max: number; count: number }
 interface ApiData {
   supplier: { uid: string; name: string } | null
+  markupPercent: number
   totals: { billsFetched: number; withFreight: number; withPostcode: number; withZone: number; singleProduct: number; multiProduct: number; noProductMatch: number }
   zones: { id: string; name: string }[]
   products: { catalogue_id: string; sku: string; name: string }[]
@@ -61,6 +62,7 @@ export default function DropshipCalibrationPage({ user }: Props) {
   // edits keyed `${catalogueId}|${zoneId}` → string price (ex GST)
   const [edits, setEdits] = useState<Record<string, string>>({})
   const [zoneDefaults, setZoneDefaults] = useState<Record<string, string>>({})
+  const [markupPct, setMarkupPct] = useState('20')
   const [applying, setApplying] = useState(false)
   const [flash, setFlash] = useState('')
 
@@ -71,6 +73,7 @@ export default function DropshipCalibrationPage({ user }: Props) {
       const j = await r.json()
       if (!r.ok) throw new Error(j?.error || `HTTP ${r.status}`)
       setData(j)
+      if (j.markupPercent != null) setMarkupPct(String(j.markupPercent))
       // The API returns freight ex-GST; show inc-GST (matches supplier invoices).
       const inc = (v: number) => String(Math.round(v * 1.1 * 100) / 100)
       // Prefill: product-level max where we have it, else the zone fallback max.
@@ -140,11 +143,12 @@ export default function DropshipCalibrationPage({ user }: Props) {
     setApplying(true); setFlash('')
     let ok = 0, fail = 0
     for (const p of data.products) {
+      // Matrix shows MPI's COST inc-GST. Bill = cost × markup; store ex-GST (÷1.1).
+      const markMul = 1 + (Number(markupPct) || 0) / 100
       const rates: Record<string, any> = {}
       for (const z of data.zones) {
         const v = edits[`${p.catalogue_id}|${z.id}`]
-        // Matrix is inc-GST; store ex-GST (÷1.1).
-        if (v != null && v.trim() !== '') rates[z.id] = Math.round((Number(v) / 1.1) * 100) / 100
+        if (v != null && v.trim() !== '') rates[z.id] = Math.round((Number(v) * markMul / 1.1) * 100) / 100
       }
       if (Object.keys(rates).length === 0) continue
       try {
@@ -174,7 +178,7 @@ export default function DropshipCalibrationPage({ user }: Props) {
             <p style={{ fontSize: 12.5, color: T.text2, marginTop: 0, lineHeight: 1.6 }}>
               Pulls a supplier&rsquo;s MYOB bills, maps each delivery postcode to a freight zone and reads the freight charged, then
               proposes a <strong>per-product × per-zone</strong> rate (the <strong>max</strong> seen, so you never under-recover).
-              Review/edit, then apply to the drop-ship freight rates. Freight is shown <strong>inc-GST</strong> (matching supplier invoices).
+              Cells show MPI&rsquo;s <strong>cost inc-GST</strong> (matching their invoices); on Apply the customer is billed <strong>cost × markup</strong>.
             </p>
 
             {/* Controls */}
@@ -229,9 +233,13 @@ export default function DropshipCalibrationPage({ user }: Props) {
                   <div style={{ ...card, overflowX: 'auto' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10, gap: 12 }}>
                       <div style={{ fontSize: 12, color: T.text2 }}>
-                        Cells show <strong>max freight (inc GST)</strong>. <span style={{ color: T.amber }}>Amber</span> = no per-product data for that zone, using the zone-wide max as an estimate. Edit any cell before applying.
+                        Cells show MPI&rsquo;s <strong>cost (inc GST)</strong>. <span style={{ color: T.amber }}>Amber</span> = zone-wide estimate (no per-product data). Customer is billed <strong>cost × markup</strong> on Apply.
                       </div>
-                      <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+                      <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+                        <label style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 12, color: T.text3 }}>
+                          Markup %
+                          <input inputMode="decimal" value={markupPct} onChange={e => setMarkupPct(e.target.value)} style={{ width: 56, padding: '6px 7px', textAlign: 'right', background: T.bg3, border: `1px solid ${T.border2}`, borderRadius: 5, color: T.text, fontSize: 12.5, fontFamily: 'inherit', outline: 'none' }} />
+                        </label>
                         {flash && <span style={{ fontSize: 12, color: T.green }}>{flash}</span>}
                         <button onClick={autoEstimate} title="Estimate empty zone defaults from the zones you have, scaled by distance from WA" style={{ padding: '8px 14px', borderRadius: 7, border: `1px solid ${T.border2}`, background: 'transparent', color: T.teal, fontSize: 12.5, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>
                           Auto-estimate gaps (MPI in WA)
@@ -240,7 +248,7 @@ export default function DropshipCalibrationPage({ user }: Props) {
                           Fill empty cells from zone defaults
                         </button>
                         <button onClick={apply} disabled={applying} style={{ padding: '8px 16px', borderRadius: 7, border: 'none', background: T.green, color: '#06210f', fontSize: 13, fontWeight: 700, cursor: applying ? 'wait' : 'pointer', fontFamily: 'inherit' }}>
-                          {applying ? 'Applying…' : 'Apply to drop-ship rates'}
+                          {applying ? 'Applying…' : `Apply to drop-ship rates (cost +${Number(markupPct) || 0}%)`}
                         </button>
                       </div>
                     </div>
