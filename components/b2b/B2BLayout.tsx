@@ -24,7 +24,7 @@ const T = {
   amber:'#f5a623', red:'#f04e4e',
 }
 
-type ActiveNav = 'catalogue' | 'cart' | 'orders' | 'team' | null
+type ActiveNav = 'catalogue' | 'cart' | 'orders' | 'team' | 'account' | null
 
 interface Props {
   user: {
@@ -50,6 +50,7 @@ const NAV_ITEMS: Array<{ id: ActiveNav; label: string; href: string; icon: strin
   { id: 'cart',      label: 'Cart',   href: '/b2b/cart',      icon: 'cart' },
   { id: 'orders',    label: 'Orders', href: '/b2b/orders',    icon: 'orders' },
   { id: 'team',      label: 'Team',   href: '/b2b/team',      icon: 'team' },
+  { id: 'account',   label: 'Settings', href: '/b2b/settings', icon: 'workshop-settings' },
 ]
 
 export default function B2BLayout({ user, active = null, children, cartCount }: Props) {
