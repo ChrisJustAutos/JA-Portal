@@ -2384,7 +2384,7 @@ function BulkEditModal({ items, onClose, onApplied }: {
 }) {
   const round2 = (n: number) => Math.round(n * 100) / 100
   const [visMode, setVisMode] = useState<'none'|'show'|'hide'>('none')
-  const [priceMode, setPriceMode] = useState<'none'|'set'|'inc'|'dec'|'rrp'>('none')
+  const [priceMode, setPriceMode] = useState<'none'|'set'|'rrp'>('none')
   const [priceVal, setPriceVal] = useState('')
   const [handMode, setHandMode] = useState<'none'|'on'|'off'>('none')
   const [dropMode, setDropMode] = useState<'none'|'on'|'off'>('none')
@@ -2403,8 +2403,6 @@ function BulkEditModal({ items, onClose, onApplied }: {
     if (priceMode !== 'none') {
       const v = Number(priceVal)
       if (priceMode === 'set' && isFinite(v) && v >= 0) patch.trade_price_ex_gst = round2(v)
-      if (priceMode === 'inc' && isFinite(v)) patch.trade_price_ex_gst = round2(it.trade_price_ex_gst * (1 + v/100))
-      if (priceMode === 'dec' && isFinite(v)) patch.trade_price_ex_gst = round2(Math.max(0, it.trade_price_ex_gst * (1 - v/100)))
       // Trade = RRP − v% (only for items that have an RRP set).
       if (priceMode === 'rrp' && isFinite(v) && it.rrp_ex_gst != null && it.rrp_ex_gst > 0) patch.trade_price_ex_gst = round2(Math.max(0, it.rrp_ex_gst * (1 - v/100)))
     }
@@ -2461,8 +2459,6 @@ function BulkEditModal({ items, onClose, onApplied }: {
               <select value={priceMode} onChange={e => setPriceMode(e.target.value as any)} style={sel}>
                 <option value="none">No change</option>
                 <option value="set">Set to $</option>
-                <option value="inc">Increase % (on current trade)</option>
-                <option value="dec">Decrease % (on current trade)</option>
                 <option value="rrp">Distributor discount % off RRP</option>
               </select>
               {priceMode !== 'none' && <input type="number" min="0" step="0.01" value={priceVal} onChange={e => setPriceVal(e.target.value)} placeholder={priceMode==='set'?'$':'%'} style={inp}/>}
