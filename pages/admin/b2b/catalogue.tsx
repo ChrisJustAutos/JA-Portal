@@ -10,6 +10,7 @@
 // session, with RLS enforcing the b2b_is_portal_admin() check.
 
 import { useEffect, useState, useMemo, useRef, useCallback, Fragment } from 'react'
+import DropshipCalibrationPanel from '../../../components/b2b/DropshipCalibrationPanel'
 import Head from 'next/head'
 import PortalTopBar from '../../../lib/PortalTopBar'
 import B2BAdminTabs from '../../../components/b2b/B2BAdminTabs'
@@ -2030,24 +2031,21 @@ function DropshipFreightEditor({ catalogueId }: { catalogueId: string }) {
   const [rates, setRates] = useState<Record<string, string>>({})
   const [loading, setLoading] = useState(true)
   const [flash, setFlash] = useState('')
+  const [calOpen, setCalOpen] = useState(false)
 
-  useEffect(() => {
-    let alive = true
-    ;(async () => {
-      setLoading(true)
-      const r = await fetch(`/api/b2b/admin/catalogue/${catalogueId}/dropship-freight`).then(x => x.ok ? x.json() : null).catch(() => null)
-      if (!alive) return
-      if (r) {
-        setZones(r.zones || [])
-        const m: Record<string, string> = {}
-        // Stored ex-GST; shown inc-GST (matches supplier invoices). 50 → 55.
-        for (const [zid, v] of Object.entries(r.rates || {})) m[zid] = String(Math.round(Number(v) * 1.1 * 100) / 100)
-        setRates(m)
-      }
-      setLoading(false)
-    })()
-    return () => { alive = false }
-  }, [catalogueId])
+  async function loadRates() {
+    const r = await fetch(`/api/b2b/admin/catalogue/${catalogueId}/dropship-freight`).then(x => x.ok ? x.json() : null).catch(() => null)
+    if (r) {
+      setZones(r.zones || [])
+      const m: Record<string, string> = {}
+      // Stored ex-GST; shown inc-GST (matches supplier invoices). 50 → 55.
+      for (const [zid, v] of Object.entries(r.rates || {})) m[zid] = String(Math.round(Number(v) * 1.1 * 100) / 100)
+      setRates(m)
+    }
+    setLoading(false)
+  }
+
+  useEffect(() => { setLoading(true); loadRates() }, [catalogueId])
 
   async function save(zoneId: string, value: string) {
     // Input is inc-GST; store ex-GST (÷1.1). 55 → 50.
@@ -2065,7 +2063,7 @@ function DropshipFreightEditor({ catalogueId }: { catalogueId: string }) {
     <div style={{ marginTop: 10, paddingTop: 10, borderTop: `1px solid ${T.border}` }}>
       <div style={{ fontSize: 11, fontWeight: 600, color: T.text2, marginBottom: 2, display: 'flex', justifyContent: 'space-between', gap: 8 }}>
         <span>Drop-ship freight by zone <span style={{ color: flash ? T.green : T.text3, fontWeight: 400 }}>{flash || '· $ inc GST (what the customer pays)'}</span></span>
-        <a href="/admin/b2b/dropship-calibration" target="_blank" rel="noopener noreferrer" style={{ color: T.blue, fontWeight: 400, textDecoration: 'none' }}>Calibrate from supplier history →</a>
+        <button onClick={() => setCalOpen(true)} style={{ background: 'none', border: 'none', padding: 0, color: T.blue, fontWeight: 400, fontSize: 11, cursor: 'pointer', fontFamily: 'inherit' }}>Calibrate from supplier history →</button>
       </div>
       {zones.length === 0 ? (
         <div style={{ fontSize: 11, color: T.amber, marginTop: 4 }}>No freight zones yet — add zones in Settings → Freight Zones, then set a price here per zone. Without a price for the customer's zone, this item can't be checked out.</div>
@@ -2084,6 +2082,19 @@ function DropshipFreightEditor({ catalogueId }: { catalogueId: string }) {
             </Fragment>
           ))}
         </div>
+      )}
+
+      {calOpen && (
+        <>
+          <div onClick={() => { setCalOpen(false); loadRates() }} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', zIndex: 1200 }} />
+          <div style={{ position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%,-50%)', width: '96vw', maxWidth: 1200, maxHeight: '92vh', overflowY: 'auto', background: '#131519', border: `1px solid ${T.border2}`, borderRadius: 12, padding: 20, zIndex: 1201, boxShadow: '0 20px 60px rgba(0,0,0,0.55)' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+              <h2 style={{ fontSize: 17, fontWeight: 600, margin: 0 }}>Drop-ship freight calibration</h2>
+              <button onClick={() => { setCalOpen(false); loadRates() }} style={{ background: 'none', border: 'none', color: T.text3, fontSize: 22, cursor: 'pointer', lineHeight: 1 }}>×</button>
+            </div>
+            <DropshipCalibrationPanel />
+          </div>
+        </>
       )}
     </div>
   )
