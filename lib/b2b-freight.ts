@@ -418,6 +418,91 @@ export async function getLiveQuote(
   return { mode: 'live', rates }
 }
 
+// ── Flat-rate satchels (e.g. AusPost prepaid) ─────────────────────
+// A satchel is a fixed freight price anywhere in Australia, gated by total
+// order weight. Offered ALONGSIDE the carrier/static rates so the cart's
+// "cheapest wins" picks it for light orders. Satchel orders ship manually
+// (no MachShip consignment) — see lib/b2b-freight-book / the order page.
+
+export interface SatchelRate {
+  id: string             // synthetic: `satchel:<uuid>`
+  satchel_id: string
+  label: string
+  price_ex_gst: number   // sell ex GST (what the distributor pays)
+  cost_ex_gst: number    // our cost ex GST (for margin reporting)
+  transit_days: number | null
+}
+
+export interface SatchelEligItem {
+  qty: number
+  weight_g: number | null
+  length_mm: number | null
+  width_mm: number | null
+  height_mm: number | null
+  packaging: 'box' | 'pallet' | 'other' | null
+}
+
+// Does every item fit inside the satchel's optional max dimensions? A satchel
+// with no max dims set (the common case — AusPost satchels are squishy bags
+// gated by weight) skips the size check entirely. Rotation allowed (compare
+// sorted dims). Missing item dims fail the check when the satchel has caps.
+function itemsFitSatchel(items: SatchelEligItem[], s: { max_length_mm: number | null; max_width_mm: number | null; max_height_mm: number | null }): boolean {
+  const caps = [s.max_length_mm, s.max_width_mm, s.max_height_mm].filter(v => v != null && v > 0) as number[]
+  if (caps.length === 0) return true   // weight-only satchel
+  const sortedCap = [s.max_length_mm || Infinity, s.max_width_mm || Infinity, s.max_height_mm || Infinity].sort((a, b) => a - b)
+  for (const it of items) {
+    if (it.length_mm == null || it.width_mm == null || it.height_mm == null) return false
+    const d = [it.length_mm, it.width_mm, it.height_mm].sort((a, b) => a - b)
+    if (d[0] > sortedCap[0] || d[1] > sortedCap[1] || d[2] > sortedCap[2]) return false
+  }
+  return true
+}
+
+// Return the satchels an order qualifies for, cheapest first. Empty when: no
+// active satchels, any item is pallet packaging, the admin forced a pallet pack,
+// any item is missing weight (can't trust a flat rate without it), or the order
+// is too heavy / too big for every satchel.
+export async function getSatchelRates(
+  items: SatchelEligItem[],
+  opts: { packMode?: PackMode } = {},
+): Promise<SatchelRate[]> {
+  if (!items.length) return []
+  if (opts.packMode === 'pallet') return []
+  if (items.some(i => i.packaging === 'pallet')) return []
+  let totalWeightG = 0
+  for (const it of items) {
+    const w = Number(it.weight_g || 0)
+    if (w <= 0) return []   // unknown weight → don't offer a flat satchel
+    totalWeightG += w * Math.max(0, Number(it.qty || 0))
+  }
+  if (totalWeightG <= 0) return []
+
+  const c = sb()
+  const { data } = await c
+    .from('b2b_freight_satchels')
+    .select('id, name, max_weight_g, max_length_mm, max_width_mm, max_height_mm, cost_ex_gst, sell_ex_gst, sort_order')
+    .eq('is_active', true)
+    .order('sort_order', { ascending: true })
+  const rows = (data || []) as any[]
+
+  const out: SatchelRate[] = []
+  for (const s of rows) {
+    const maxW = Number(s.max_weight_g || 0)
+    if (maxW <= 0 || totalWeightG > maxW) continue
+    if (!itemsFitSatchel(items, s)) continue
+    out.push({
+      id:           `satchel:${s.id}`,
+      satchel_id:   s.id,
+      label:        s.name,
+      price_ex_gst: round2(Number(s.sell_ex_gst || 0)),
+      cost_ex_gst:  round2(Number(s.cost_ex_gst || 0)),
+      transit_days: null,
+    })
+  }
+  out.sort((a, b) => a.price_ex_gst - b.price_ex_gst)
+  return out
+}
+
 function packagingForMachShip(p: LiveQuoteCartItem['freight_packaging']): 'Carton' | 'Pallet' | 'Skid' {
   if (p === 'pallet') return 'Pallet'
   // 'box' and 'other' both fall to Carton — MachShip's catch-all small

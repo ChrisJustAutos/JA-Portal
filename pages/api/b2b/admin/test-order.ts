@@ -46,6 +46,7 @@ export default withAuth('admin:b2b', async (req: NextApiRequest, res: NextApiRes
   // rate is re-quoted server-side below so the order carries a real, bookable
   // freight selection (Mark paid → Book Freight uses it end-to-end).
   let chosenFreightRateId: string | null = typeof body.freightRateId === 'string' && body.freightRateId.trim() ? body.freightRateId.trim() : null
+  let chosenSatchelId: string | null = typeof body.freightSatchelId === 'string' && body.freightSatchelId.trim() ? body.freightSatchelId.trim().replace(/^satchel:/, '') : null
   let chosenMachShipRoute: { carrierId: number; carrierServiceId: number; companyCarrierAccountId?: number } | null = null
   const fr = body.freightMachShipRoute
   if (fr && typeof fr === 'object' && Number.isFinite(Number(fr.carrierId)) && Number.isFinite(Number(fr.carrierServiceId))) {
@@ -54,7 +55,7 @@ export default withAuth('admin:b2b', async (req: NextApiRequest, res: NextApiRes
       companyCarrierAccountId: Number.isFinite(Number(fr.companyCarrierAccountId)) ? Number(fr.companyCarrierAccountId) : undefined,
     }
   }
-  if (chosenFreightRateId && chosenMachShipRoute) return res.status(400).json({ error: 'Pass either freightRateId or freightMachShipRoute, not both.' })
+  if ([chosenFreightRateId, chosenSatchelId, chosenMachShipRoute].filter(Boolean).length > 1) return res.status(400).json({ error: 'Pick a single freight option (rate, satchel, or carrier route).' })
   const pmRaw = String(body.packMode || '').trim()
   const packMode = (pmRaw === 'pallet' || pmRaw === 'cartons' || pmRaw === 'auto') ? pmRaw as ('pallet' | 'cartons' | 'auto') : undefined
   const shipPostcodeIn = String(body.shipPostcode || '').trim()
@@ -101,6 +102,7 @@ export default withAuth('admin:b2b', async (req: NextApiRequest, res: NextApiRes
   let freightMachShipServiceId: number | null = null
   let freightChosenQuoteSnapshot: any = null
   let freightQuoteMarkupPct: number | null = null
+  let freightSatchelId: string | null = null
 
   if (chosenFreightRateId) {
     const { data: rate, error: rErr } = await c
@@ -115,6 +117,33 @@ export default withAuth('admin:b2b', async (req: NextApiRequest, res: NextApiRes
     freightExGst = round2(Number(rate.price_ex_gst) || 0)
     freightLabel = `${zone.name} — ${rate.label}`
     freightZoneId = zone.id
+  } else if (chosenSatchelId) {
+    const { data: satchel, error: sErr } = await c
+      .from('b2b_freight_satchels')
+      .select('id, name, max_weight_g, cost_ex_gst, sell_ex_gst, is_active')
+      .eq('id', chosenSatchelId)
+      .maybeSingle()
+    if (sErr) return res.status(500).json({ error: sErr.message })
+    if (!satchel || !satchel.is_active) return res.status(400).json({ error: 'Selected satchel is not available — re-quote and pick again.' })
+    let totalWeightG = 0, hasPallet = false, missingWeight = false
+    for (const v of validated) {
+      const cat: any = catById.get(v.catalogueId) || {}
+      const w = Number(cat.freight_weight_g || 0)
+      if (cat.freight_packaging === 'pallet') hasPallet = true
+      if (w <= 0) missingWeight = true
+      totalWeightG += w * v.qty
+    }
+    if (hasPallet || missingWeight || totalWeightG <= 0 || totalWeightG > Number(satchel.max_weight_g || 0)) {
+      return res.status(400).json({ error: 'This order does not fit the selected satchel (too heavy / pallet / missing weight).' })
+    }
+    freightExGst = round2(Number(satchel.sell_ex_gst) || 0)
+    freightLabel = satchel.name
+    freightSatchelId = satchel.id
+    freightChosenQuoteSnapshot = {
+      type: 'satchel', satchel_id: satchel.id, name: satchel.name,
+      sell_ex_gst: round2(Number(satchel.sell_ex_gst) || 0), cost_ex_gst: round2(Number(satchel.cost_ex_gst) || 0),
+      total_weight_g: totalWeightG,
+    }
   } else if (chosenMachShipRoute) {
     const postcode = shipPostcodeIn || String((dist as any).ship_postcode || (dist as any).bill_postcode || '').trim()
     const suburb   = shipSuburbIn   || String((dist as any).ship_suburb   || (dist as any).bill_suburb   || '').trim()
@@ -150,7 +179,7 @@ export default withAuth('admin:b2b', async (req: NextApiRequest, res: NextApiRes
       route_snapshot: match.machship.routeSnapshot,
     }
   }
-  const hasFreight = !!(chosenFreightRateId || chosenMachShipRoute)
+  const hasFreight = !!(chosenFreightRateId || chosenSatchelId || chosenMachShipRoute)
   if (hasFreight && freightExGst > 0) { subtotalEx += freightExGst; gst += freightExGst * GST_RATE }
 
   subtotalEx = round2(subtotalEx); gst = round2(gst)
@@ -166,6 +195,7 @@ export default withAuth('admin:b2b', async (req: NextApiRequest, res: NextApiRes
     subtotal_ex_gst: subtotalEx, gst, card_fee_inc: cardFeeInc, total_inc: totalInc,
     currency: 'AUD', myob_company_file: 'JAWS', customer_po: customerPo, is_test: true,
     freight_rate_id:             chosenFreightRateId,
+    freight_satchel_id:          freightSatchelId,
     freight_zone_id:             freightZoneId,
     freight_method_label:        freightLabel,
     freight_cost_ex_gst:         hasFreight ? freightExGst : null,

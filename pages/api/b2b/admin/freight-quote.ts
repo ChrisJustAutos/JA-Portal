@@ -16,6 +16,7 @@ import { withAuth } from '../../../../lib/authServer'
 import {
   getFreightQuote,
   getLiveQuote,
+  getSatchelRates,
   type LiveQuoteCartItem,
 } from '../../../../lib/b2b-freight'
 
@@ -84,44 +85,68 @@ export default withAuth('admin:b2b', async (req: NextApiRequest, res: NextApiRes
     }
   })
 
-  // ── Try live MachShip first, then static-zone fallback ──
+  // ── Quote: live MachShip, then static fallback, plus flat-rate satchels ──
   const pm = String(body.packMode || '').trim()
   const packMode = (pm === 'pallet' || pm === 'cartons' || pm === 'auto') ? pm as any : undefined
-  const live = await getLiveQuote(liveItems, { suburb, postcode }, { packMode })
+  const [live, satchels] = await Promise.all([
+    getLiveQuote(liveItems, { suburb, postcode }, { packMode }),
+    getSatchelRates(liveItems.map(it => ({
+      qty: it.qty, weight_g: it.freight_weight_g, length_mm: it.freight_length_mm,
+      width_mm: it.freight_width_mm, height_mm: it.freight_height_mm, packaging: it.freight_packaging,
+    })), { packMode }),
+  ])
+  const satchelRates = satchels.map(s => ({
+    id: s.id, label: s.label, price_ex_gst: s.price_ex_gst, transit_days: s.transit_days,
+    source: 'satchel' as const,
+  }))
 
+  type Rate = { id: string; label: string; price_ex_gst: number; transit_days: number | null; source: 'machship' | 'static' | 'satchel'; eta_utc?: string | null; base_price_ex_gst?: number; markup_pct?: number }
+  let baseRates: Rate[] = []
+  let baseMode: 'live' | 'static' | 'blocked' | 'no_zone'
+  let zone: { id: string; name: string } | null = null
+  let unavailableReason: string | null = null
   if (live.mode === 'live') {
-    return res.status(200).json({
-      postcode, suburb: suburb || null, mode: 'live',
-      rates: live.rates.map(r => ({
-        id: r.id, label: r.label, price_ex_gst: r.price_ex_gst, transit_days: r.transit_days,
-        source: 'machship' as const, eta_utc: r.eta_utc,
-        base_price_ex_gst: r.base_price_ex_gst, markup_pct: r.markup_pct,
-      })),
-    })
+    baseMode = 'live'
+    baseRates = live.rates.map(r => ({
+      id: r.id, label: r.label, price_ex_gst: r.price_ex_gst, transit_days: r.transit_days,
+      source: 'machship' as const, eta_utc: r.eta_utc,
+      base_price_ex_gst: r.base_price_ex_gst, markup_pct: r.markup_pct,
+    }))
+  } else if (live.mode === 'blocked') {
+    baseMode = 'blocked'
+  } else {
+    unavailableReason = live.reason
+    const stat = await getFreightQuote(postcode)
+    if (stat) {
+      baseMode = 'static'
+      zone = stat.zone
+      baseRates = stat.rates.map(r => ({
+        id: r.id, label: r.label, price_ex_gst: Number(r.price_ex_gst),
+        transit_days: r.transit_days, source: 'static' as const,
+      }))
+    } else {
+      baseMode = 'no_zone'
+    }
   }
 
-  if (live.mode === 'blocked') {
+  const allRates = [...baseRates, ...satchelRates].sort((a, b) => a.price_ex_gst - b.price_ex_gst)
+
+  if (allRates.length > 0) {
+    return res.status(200).json({
+      postcode, suburb: suburb || null,
+      mode: baseMode === 'live' ? 'live' : 'static',
+      rates: allRates, zone,
+      ...(unavailableReason ? { unavailable_reason: unavailableReason } : {}),
+    })
+  }
+  if (baseMode === 'blocked') {
     return res.status(200).json({
       postcode, suburb: suburb || null, mode: 'blocked', rates: [],
-      blocked: { reason: live.reason, missing: live.missing },
-    })
-  }
-
-  // live.mode === 'unavailable' → fall back to static postcode zones.
-  const stat = await getFreightQuote(postcode)
-  if (!stat) {
-    return res.status(200).json({
-      postcode, suburb: suburb || null, mode: 'no_zone', rates: [],
-      unavailable_reason: live.reason,
+      blocked: { reason: (live as any).reason, missing: (live as any).missing },
     })
   }
   return res.status(200).json({
-    postcode, suburb: suburb || null, mode: 'static',
-    rates: stat.rates.map(r => ({
-      id: r.id, label: r.label, price_ex_gst: Number(r.price_ex_gst),
-      transit_days: r.transit_days, source: 'static' as const,
-    })),
-    zone: stat.zone,
-    unavailable_reason: live.reason,
+    postcode, suburb: suburb || null, mode: 'no_zone', rates: [],
+    unavailable_reason: unavailableReason,
   })
 })

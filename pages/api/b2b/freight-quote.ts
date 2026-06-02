@@ -27,6 +27,7 @@ import { withB2BAuth, B2BUser } from '../../../lib/b2bAuthServer'
 import {
   getFreightQuote,
   getLiveQuote,
+  getSatchelRates,
   type LiveQuoteCartItem,
   type LiveQuoteRate,
 } from '../../../lib/b2b-freight'
@@ -50,7 +51,7 @@ interface ResponseShape {
     label: string
     price_ex_gst: number
     transit_days: number | null
-    source: 'machship' | 'static'
+    source: 'machship' | 'static' | 'satchel'
     machship?: LiveQuoteRate['machship']
     eta_utc?: string | null
     base_price_ex_gst?: number
@@ -114,59 +115,67 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, use
     }
   }
 
-  // ── Try live MachShip first ──
+  // ── Quote: live MachShip, then static fallback, plus flat-rate satchels ──
+  // Satchels are computed independently (weight-gated, flat anywhere) and merged
+  // into whatever carrier/static rates we have — so a light order still gets the
+  // cheap satchel even if live quoting is blocked on missing dimensions.
   const dest = { suburb: suburb || '', postcode }
-  const live = await getLiveQuote(items, dest)
+  const [live, satchels] = await Promise.all([
+    getLiveQuote(items, dest),
+    getSatchelRates(items.map(it => ({
+      qty: it.qty, weight_g: it.freight_weight_g, length_mm: it.freight_length_mm,
+      width_mm: it.freight_width_mm, height_mm: it.freight_height_mm, packaging: it.freight_packaging,
+    }))),
+  ])
+  const satchelRates: ResponseShape['rates'] = satchels.map(s => ({
+    id: s.id, label: s.label, price_ex_gst: s.price_ex_gst, transit_days: s.transit_days,
+    source: 'satchel' as const,
+  }))
 
+  // Assemble the carrier/static base.
+  let baseRates: ResponseShape['rates'] = []
+  let baseMode: 'live' | 'static' | 'blocked' | 'no_zone'
+  let zone: { id: string; name: string } | null = null
+  let blocked: ResponseShape['blocked'] | undefined
   if (live.mode === 'live') {
-    const out: ResponseShape = {
-      postcode, suburb,
-      mode: 'live',
-      rates: live.rates.map(r => ({
-        id: r.id,
-        label: r.label,
-        price_ex_gst: r.price_ex_gst,
-        transit_days: r.transit_days,
-        source: 'machship' as const,
-        machship: r.machship,
-        eta_utc: r.eta_utc,
-        base_price_ex_gst: r.base_price_ex_gst,
-        markup_pct: r.markup_pct,
-      })),
+    baseMode = 'live'
+    baseRates = live.rates.map(r => ({
+      id: r.id, label: r.label, price_ex_gst: r.price_ex_gst, transit_days: r.transit_days,
+      source: 'machship' as const, machship: r.machship, eta_utc: r.eta_utc,
+      base_price_ex_gst: r.base_price_ex_gst, markup_pct: r.markup_pct,
+    }))
+  } else if (live.mode === 'blocked') {
+    baseMode = 'blocked'
+    blocked = { reason: live.reason, missing: live.missing }
+  } else {
+    const stat = await getFreightQuote(postcode)
+    if (stat) {
+      baseMode = 'static'
+      zone = stat.zone
+      baseRates = stat.rates.map(r => ({
+        id: r.id, label: r.label, price_ex_gst: Number(r.price_ex_gst),
+        transit_days: r.transit_days, source: 'static' as const,
+      }))
+    } else {
+      baseMode = 'no_zone'
     }
-    return res.status(200).json(out)
   }
 
-  if (live.mode === 'blocked') {
-    const out: ResponseShape = {
-      postcode, suburb,
-      mode: 'blocked',
-      rates: [],
-      blocked: { reason: live.reason, missing: live.missing },
-    }
-    return res.status(200).json(out)
-  }
+  const allRates = [...baseRates, ...satchelRates].sort((a, b) => a.price_ex_gst - b.price_ex_gst)
 
-  // ── Fall back to static postcode zones ──
-  const stat = await getFreightQuote(postcode)
-  if (!stat) {
+  // If satchels rescued an otherwise blocked/zoneless cart, present a normal
+  // pickable quote (flat rate → EST badge).
+  if (allRates.length > 0) {
     return res.status(200).json({
       postcode, suburb,
-      mode: 'no_zone',
-      rates: [],
+      mode: baseMode === 'live' ? 'live' : 'static',
+      rates: allRates,
+      zone,
     } as ResponseShape)
   }
-  const out: ResponseShape = {
-    postcode, suburb,
-    mode: 'static',
-    rates: stat.rates.map(r => ({
-      id: r.id,
-      label: r.label,
-      price_ex_gst: Number(r.price_ex_gst),
-      transit_days: r.transit_days,
-      source: 'static' as const,
-    })),
-    zone: stat.zone,
+
+  if (baseMode === 'blocked') {
+    return res.status(200).json({ postcode, suburb, mode: 'blocked', rates: [], blocked } as ResponseShape)
   }
-  return res.status(200).json(out)
+  return res.status(200).json({ postcode, suburb, mode: 'no_zone', rates: [] } as ResponseShape)
 })

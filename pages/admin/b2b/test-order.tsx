@@ -23,7 +23,7 @@ interface Props { user: { id: string; email: string; displayName: string | null;
 interface Dist { id: string; display_name: string; primary_contact_email: string | null; is_active: boolean }
 interface Cat { id: string; sku: string; name: string; trade_price_ex_gst: number | null }
 interface Line { cat: Cat; qty: number }
-interface FreightRate { id: string; label: string; price_ex_gst: number; transit_days: number | null; source: 'machship' | 'static'; base_price_ex_gst?: number; markup_pct?: number; eta_utc?: string | null }
+interface FreightRate { id: string; label: string; price_ex_gst: number; transit_days: number | null; source: 'machship' | 'static' | 'satchel'; base_price_ex_gst?: number; markup_pct?: number; eta_utc?: string | null }
 interface FreightResult {
   mode: 'live' | 'static' | 'blocked' | 'no_zone'
   postcode: string; suburb: string | null
@@ -96,6 +96,7 @@ export default function TestOrderPage({ user }: Props) {
       if (!m) return {}
       return { freightMachShipRoute: { carrierId: Number(m[1]), carrierServiceId: Number(m[2]) }, shipPostcode, shipSuburb }
     }
+    if (rate.source === 'satchel') return { freightSatchelId: rate.id }
     return { freightRateId: rate.id }
   }
 

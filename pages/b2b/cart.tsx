@@ -80,7 +80,7 @@ interface FreightRateOption {
   label: string
   price_ex_gst: number
   transit_days: number | null
-  source: 'machship' | 'static'
+  source: 'machship' | 'static' | 'satchel'
   // Live MachShip rates carry the route metadata so checkout/start can
   // persist the chosen carrier+service against the order.
   machship?: {
@@ -220,6 +220,7 @@ export default function B2BCartPage({ b2bUser }: Props) {
         body: JSON.stringify({
           customer_po: customerPo.trim() || undefined,
           freight_rate_id: chosenRate?.source === 'static' ? selectedFreightId : undefined,
+          freight_satchel_id: chosenRate?.source === 'satchel' ? selectedFreightId : undefined,
           freight_machship_route: machshipRoute,
         }),
       })
@@ -613,6 +614,9 @@ function TotalsPanel({
                     <input type="radio" name="freight" checked={on}
                       onChange={() => onSelectFreight(r.id)}/>
                     <span style={{flex:1, color:T.text}}>{r.label}</span>
+                    {r.source === 'satchel' && (
+                      <span title="Flat-rate satchel" style={{fontSize:9, color:T.green, fontWeight:700, letterSpacing:'0.05em', border:`1px solid ${T.green}55`, borderRadius:4, padding:'1px 4px'}}>SATCHEL</span>
+                    )}
                     {r.transit_days != null && (
                       <span style={{fontSize:10, color:T.text3}}>{r.transit_days}d</span>
                     )}

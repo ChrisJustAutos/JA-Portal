@@ -16,27 +16,36 @@ const num = (g: any) => (g == null || g === '' ? '' : String(g))
 const kg = (grams: any) => (grams == null ? '' : String(Math.round(Number(grams) / 100) / 10))
 const toG = (kgVal: string) => { const n = parseFloat(kgVal); return Number.isFinite(n) ? Math.round(n * 1000) : null }
 const toInt = (v: string) => { const n = parseInt(v, 10); return Number.isFinite(n) ? n : null }
+// Satchel prices are stored EX-GST but entered/shown INC-GST (Chris's call).
+const incFromEx = (ex: any) => (ex == null || ex === '' ? '' : String(Math.round(Number(ex) * 1.1 * 100) / 100))
+const exFromInc = (inc: string) => { const n = parseFloat(inc); return Number.isFinite(n) ? Math.round((n / 1.1) * 100) / 100 : null }
 
 interface Box { id: string; name: string; length_mm: number; width_mm: number; height_mm: number; max_weight_g: number; sort_order: number; is_active: boolean }
+interface Satchel { id: string; name: string; max_weight_g: number; cost_ex_gst: number; sell_ex_gst: number; sort_order: number; is_active: boolean }
 
 export default function FreightPackagingManager() {
   const [boxes, setBoxes] = useState<Box[]>([])
+  const [satchels, setSatchels] = useState<Satchel[]>([])
   const [pallet, setPallet] = useState({ length_mm: '', width_mm: '', max_height_mm: '', max_weight_kg: '', threshold_kg: '' })
   const [loading, setLoading] = useState(true)
   const [flash, setFlash] = useState('')
   const [savingPallet, setSavingPallet] = useState(false)
   const [adding, setAdding] = useState(false)
+  const [addingSat, setAddingSat] = useState(false)
   const [newBox, setNewBox] = useState({ name: '', length_mm: '', width_mm: '', height_mm: '', max_weight_kg: '' })
+  const [newSat, setNewSat] = useState({ name: '', max_weight_kg: '', cost_inc: '', sell_inc: '' })
 
   function flashMsg(m: string) { setFlash(m); setTimeout(() => setFlash(''), 2500) }
 
   async function load() {
     setLoading(true)
-    const [bx, st] = await Promise.all([
+    const [bx, sat, st] = await Promise.all([
       fetch('/api/b2b/admin/freight-boxes').then(r => r.ok ? r.json() : { boxes: [] }),
+      fetch('/api/b2b/admin/freight-satchels').then(r => r.ok ? r.json() : { satchels: [] }),
       fetch('/api/b2b/admin/settings').then(r => r.ok ? r.json() : null),
     ])
     setBoxes(bx.boxes || [])
+    setSatchels(sat.satchels || [])
     const s = st?.settings || {}
     setPallet({
       length_mm: num(s.freight_pallet_length_mm), width_mm: num(s.freight_pallet_width_mm),
@@ -66,6 +75,27 @@ export default function FreightPackagingManager() {
     const r = await fetch('/api/b2b/admin/freight-boxes', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...payload, sort_order: (boxes.length + 1) * 10 }) })
     setAdding(false)
     if (r.ok) { setNewBox({ name: '', length_mm: '', width_mm: '', height_mm: '', max_weight_kg: '' }); await load(); flashMsg('Box added') }
+    else { const d = await r.json().catch(() => ({})); flashMsg(d.issues?.join('; ') || d.error || 'Add failed') }
+  }
+
+  // ── Satchels ──
+  async function patchSatchel(id: string, patch: Record<string, any>) {
+    const r = await fetch(`/api/b2b/admin/freight-satchels?id=${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(patch) })
+    if (r.ok) flashMsg('Saved'); else { const d = await r.json().catch(() => ({})); flashMsg(d.issues?.join('; ') || d.error || 'Save failed') }
+  }
+  function updateSatLocal(id: string, p: Partial<Satchel>) { setSatchels(ss => ss.map(s => s.id === id ? { ...s, ...p } : s)) }
+  async function removeSatchel(id: string, name: string) {
+    if (!confirm(`Delete satchel "${name}"?`)) return
+    const r = await fetch(`/api/b2b/admin/freight-satchels?id=${id}`, { method: 'DELETE' })
+    if (r.ok) { setSatchels(ss => ss.filter(s => s.id !== id)); flashMsg('Deleted') }
+  }
+  async function addSatchel() {
+    const payload = { name: newSat.name.trim(), max_weight_g: toG(newSat.max_weight_kg), cost_ex_gst: exFromInc(newSat.cost_inc) ?? 0, sell_ex_gst: exFromInc(newSat.sell_inc) }
+    if (!payload.name || !payload.max_weight_g || payload.sell_ex_gst == null) { flashMsg('Fill name, max kg and sell $'); return }
+    setAddingSat(true)
+    const r = await fetch('/api/b2b/admin/freight-satchels', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...payload, sort_order: (satchels.length + 1) * 10 }) })
+    setAddingSat(false)
+    if (r.ok) { setNewSat({ name: '', max_weight_kg: '', cost_inc: '', sell_inc: '' }); await load(); flashMsg('Satchel added') }
     else { const d = await r.json().catch(() => ({})); flashMsg(d.issues?.join('; ') || d.error || 'Add failed') }
   }
 
@@ -118,6 +148,39 @@ export default function FreightPackagingManager() {
           <button onClick={addBox} disabled={adding} style={{ gridColumn: '6 / 8', padding: '6px 10px', borderRadius: 5, border: 'none', background: T.blue, color: '#fff', fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>{adding ? '…' : '+ Add'}</button>
         </div>
       </div>
+
+      {/* Satchels */}
+      {(() => {
+        const sCols = '1.6fr 80px 95px 95px 56px 30px'
+        return (
+          <div>
+            <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 4 }}>Flat-rate satchels <span style={{ color: T.text3, fontWeight: 400 }}>· e.g. Australia Post · flat price anywhere in Aus</span></div>
+            <div style={{ fontSize: 11, color: T.text3, marginBottom: 8 }}>Offered alongside carrier rates when an order is under the max weight — the cart auto-picks the cheapest. Prices are GST-inclusive. Satchel orders ship manually (no auto-booking).</div>
+            <div style={{ display: 'grid', gridTemplateColumns: sCols, gap: 8, padding: '0 2px 6px' }}>
+              <div style={hdr}>Name</div><div style={hdr}>Max kg</div><div style={hdr}>Cost $ inc</div><div style={hdr}>Sell $ inc</div><div style={{ ...hdr, textAlign: 'center' }}>Active</div><div />
+            </div>
+            {satchels.length === 0 && <div style={{ fontSize: 12, color: T.text3, padding: '4px 0 10px' }}>No satchels yet — add your AusPost satchel tiers below (e.g. 500g / 1kg / 3kg / 5kg).</div>}
+            {satchels.map(s => (
+              <div key={s.id} style={{ display: 'grid', gridTemplateColumns: sCols, gap: 8, padding: '5px 0', alignItems: 'center', borderTop: `1px solid ${T.border}` }}>
+                <input style={inp} value={s.name} onChange={e => updateSatLocal(s.id, { name: e.target.value })} onBlur={e => patchSatchel(s.id, { name: e.target.value })} />
+                <input style={inp} inputMode="decimal" value={kg(s.max_weight_g)} onChange={e => updateSatLocal(s.id, { max_weight_g: toG(e.target.value) ?? 0 })} onBlur={e => patchSatchel(s.id, { max_weight_g: toG(e.target.value) })} />
+                <input style={inp} inputMode="decimal" value={incFromEx(s.cost_ex_gst)} onChange={e => updateSatLocal(s.id, { cost_ex_gst: exFromInc(e.target.value) ?? 0 })} onBlur={e => patchSatchel(s.id, { cost_ex_gst: exFromInc(e.target.value) })} />
+                <input style={inp} inputMode="decimal" value={incFromEx(s.sell_ex_gst)} onChange={e => updateSatLocal(s.id, { sell_ex_gst: exFromInc(e.target.value) ?? 0 })} onBlur={e => patchSatchel(s.id, { sell_ex_gst: exFromInc(e.target.value) })} />
+                <input type="checkbox" checked={s.is_active} onChange={e => { updateSatLocal(s.id, { is_active: e.target.checked }); patchSatchel(s.id, { is_active: e.target.checked }) }} style={{ justifySelf: 'center', cursor: 'pointer' }} />
+                <button onClick={() => removeSatchel(s.id, s.name)} title="Delete" style={{ background: 'none', border: 'none', color: T.text3, cursor: 'pointer', fontSize: 15, justifySelf: 'center' }}>×</button>
+              </div>
+            ))}
+            {/* Add row */}
+            <div style={{ display: 'grid', gridTemplateColumns: sCols, gap: 8, padding: '8px 0 0', alignItems: 'center', borderTop: `1px solid ${T.border}`, marginTop: 4 }}>
+              <input style={inp} placeholder="e.g. AusPost 5kg" value={newSat.name} onChange={e => setNewSat(s => ({ ...s, name: e.target.value }))} />
+              <input style={inp} placeholder="kg" inputMode="decimal" value={newSat.max_weight_kg} onChange={e => setNewSat(s => ({ ...s, max_weight_kg: e.target.value }))} />
+              <input style={inp} placeholder="inc" inputMode="decimal" value={newSat.cost_inc} onChange={e => setNewSat(s => ({ ...s, cost_inc: e.target.value }))} />
+              <input style={inp} placeholder="inc" inputMode="decimal" value={newSat.sell_inc} onChange={e => setNewSat(s => ({ ...s, sell_inc: e.target.value }))} />
+              <button onClick={addSatchel} disabled={addingSat} style={{ gridColumn: '5 / 7', padding: '6px 10px', borderRadius: 5, border: 'none', background: T.blue, color: '#fff', fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>{addingSat ? '…' : '+ Add'}</button>
+            </div>
+          </div>
+        )
+      })()}
 
       {/* Pallet + threshold */}
       <div>

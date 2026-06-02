@@ -49,6 +49,7 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, use
   // is preserved for the static-fallback path.
   let customerPo: string | null = null
   let chosenFreightRateId: string | null = null
+  let chosenSatchelId: string | null = null
   let chosenMachShipRoute: {
     carrierId: number
     carrierServiceId: number
@@ -62,6 +63,11 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, use
     if (typeof body.freight_rate_id === 'string' && body.freight_rate_id.trim()) {
       chosenFreightRateId = body.freight_rate_id.trim()
     }
+    // Flat-rate satchel: the cart submits the bare uuid (it strips the
+    // `satchel:` prefix from the synthetic rate id).
+    if (typeof body.freight_satchel_id === 'string' && body.freight_satchel_id.trim()) {
+      chosenSatchelId = body.freight_satchel_id.trim().replace(/^satchel:/, '')
+    }
     const fr = body.freight_machship_route
     if (fr && typeof fr === 'object' && Number.isFinite(Number(fr.carrierId)) && Number.isFinite(Number(fr.carrierServiceId))) {
       chosenMachShipRoute = {
@@ -73,8 +79,8 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, use
   } catch {
     // Bad JSON in body — ignore, treat as no PO / no freight
   }
-  if (chosenMachShipRoute && chosenFreightRateId) {
-    return res.status(400).json({ error: 'Cannot pass both freight_rate_id and freight_machship_route — pick one.' })
+  if ([chosenFreightRateId, chosenSatchelId, chosenMachShipRoute].filter(Boolean).length > 1) {
+    return res.status(400).json({ error: 'Pick a single freight option (rate, satchel, or carrier route).' })
   }
 
   // Verify Stripe + MYOB are configured before we charge anyone.
@@ -236,6 +242,7 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, use
   let freightExGst = 0
   let freightLabel: string | null = null
   let freightZoneId: string | null = null
+  let freightSatchelId: string | null = null
   // MachShip extras — populated only when chosenMachShipRoute is set.
   let freightMachShipCarrierId:     number | null = null
   let freightMachShipServiceId:     number | null = null
@@ -261,6 +268,50 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, use
     freightZoneId = zone.id
     subtotalEx += freightExGst
     gst += freightExGst * GST_RATE  // freight is taxable
+  } else if (chosenSatchelId) {
+    // Flat-rate satchel. Re-validate server-side: the satchel must be active and
+    // the cart's total weight under its cap (no pallet items). The distributor
+    // pays the satchel's sell price; ships manually (no MachShip consignment).
+    const { data: satchel, error: sErr } = await c
+      .from('b2b_freight_satchels')
+      .select('id, name, max_weight_g, cost_ex_gst, sell_ex_gst, is_active')
+      .eq('id', chosenSatchelId)
+      .maybeSingle()
+    if (sErr) return res.status(500).json({ error: sErr.message })
+    if (!satchel || !satchel.is_active) {
+      return res.status(400).json({ error: 'Selected satchel is not available — refresh the cart and pick again.' })
+    }
+    const { data: wRows, error: wErr } = await c
+      .from('b2b_cart_items')
+      .select(`qty, catalogue:b2b_catalogue!b2b_cart_items_catalogue_id_fkey ( freight_weight_g, freight_packaging )`)
+      .eq('cart_id', cart.id)
+    if (wErr) return res.status(500).json({ error: wErr.message })
+    let totalWeightG = 0
+    let hasPallet = false
+    let missingWeight = false
+    for (const r of (wRows || []) as any[]) {
+      const cat = Array.isArray(r.catalogue) ? r.catalogue[0] : r.catalogue
+      const w = Number(cat?.freight_weight_g || 0)
+      if (cat?.freight_packaging === 'pallet') hasPallet = true
+      if (w <= 0) missingWeight = true
+      totalWeightG += w * Number(r.qty || 0)
+    }
+    if (hasPallet || missingWeight || totalWeightG <= 0 || totalWeightG > Number(satchel.max_weight_g || 0)) {
+      return res.status(400).json({ error: 'This order no longer fits the selected satchel — refresh the cart and pick again.' })
+    }
+    freightExGst = round2(Number(satchel.sell_ex_gst) || 0)
+    freightLabel = satchel.name
+    freightSatchelId = satchel.id
+    freightChosenQuoteSnapshot = {
+      type: 'satchel',
+      satchel_id: satchel.id,
+      name: satchel.name,
+      sell_ex_gst: round2(Number(satchel.sell_ex_gst) || 0),
+      cost_ex_gst: round2(Number(satchel.cost_ex_gst) || 0),
+      total_weight_g: totalWeightG,
+    }
+    subtotalEx += freightExGst
+    gst += freightExGst * GST_RATE
   } else if (chosenMachShipRoute) {
     // Re-quote server-side so the distributor pays the live price the
     // server computes — not whatever the cart UI submitted. If the
@@ -369,9 +420,10 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, use
       myob_company_file: 'JAWS',
       customer_po: customerPo,
       freight_rate_id:               chosenFreightRateId,
+      freight_satchel_id:            freightSatchelId,
       freight_zone_id:               freightZoneId,
       freight_method_label:          freightLabel,
-      freight_cost_ex_gst:           (chosenFreightRateId || chosenMachShipRoute) ? freightExGst : null,
+      freight_cost_ex_gst:           (chosenFreightRateId || chosenSatchelId || chosenMachShipRoute) ? freightExGst : null,
       freight_chosen_quote:          freightChosenQuoteSnapshot,
       freight_quote_markup_pct:      freightQuoteMarkupPct,
       machship_carrier_id:           freightMachShipCarrierId,
@@ -424,7 +476,7 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, use
     }
   })
 
-  if ((chosenFreightRateId || chosenMachShipRoute) && freightExGst > 0) {
+  if ((chosenFreightRateId || chosenSatchelId || chosenMachShipRoute) && freightExGst > 0) {
     const freightInc = round2(freightExGst * 1.10)  // freight is GST-taxable
     stripeLineItems.push({
       price_data: {
