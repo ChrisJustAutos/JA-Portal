@@ -110,11 +110,12 @@ export interface TransferResult {
 export async function executeStockTransfer(opts: {
   lines: TransferLineInput[]
   note?: string | null
-  poReference?: string | null   // lands on BOTH MYOB docs (sale CustomerPONumber + bill SupplierInvoiceNumber)
+  poReference?: string | null   // REQUIRED — lands on BOTH MYOB docs (sale CustomerPONumber + bill SupplierInvoiceNumber)
   userId: string
 }): Promise<TransferResult> {
   const c = sb()
   if (!opts.lines.length) throw new Error('No lines to transfer')
+  if (!(opts.poReference || '').trim()) throw new Error('A PO reference is required for a stock transfer')
 
   // 1. Config + connections
   const cfgT = await loadTransferConfig()

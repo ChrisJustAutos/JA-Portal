@@ -283,19 +283,19 @@ export default function StockTransferPage({ user }: Props) {
               <span style={{flex:1}}/>
               <input
                 value={poRef} onChange={e=>setPoRef(e.target.value)} maxLength={20}
-                placeholder="PO reference (optional)"
+                placeholder="PO reference (required)"
                 title="Lands on both MYOB documents: Customer PO No. on the JAWS invoice and Supplier Invoice No. on the VPS bill"
-                style={{...inp,width:180,fontFamily:'monospace'}}
+                style={{...inp,width:180,fontFamily:'monospace',borderColor: poRef.trim() ? T.border2 : T.amber+'88'}}
               />
               <input value={note} onChange={e=>setNote(e.target.value)} placeholder="Note (optional)" style={{...inp,width:220}}/>
               <button
-                disabled={!configured || picked.length===0 || running}
+                disabled={!configured || picked.length===0 || running || !poRef.trim()}
                 onClick={()=>setConfirming(true)}
-                title={!configured ? 'Complete the MYOB setup above first' : undefined}
+                title={!configured ? 'Complete the MYOB setup above first' : !poRef.trim() ? 'Enter a PO reference first' : undefined}
                 style={{
-                  ...inp, cursor: (!configured||picked.length===0||running)?'not-allowed':'pointer',
-                  background: (!configured||picked.length===0) ? T.bg3 : T.blue, border:'none',
-                  color: (!configured||picked.length===0) ? T.text3 : '#fff', fontWeight:600, padding:'9px 18px',
+                  ...inp, cursor: (!configured||picked.length===0||running||!poRef.trim())?'not-allowed':'pointer',
+                  background: (!configured||picked.length===0||!poRef.trim()) ? T.bg3 : T.blue, border:'none',
+                  color: (!configured||picked.length===0||!poRef.trim()) ? T.text3 : '#fff', fontWeight:600, padding:'9px 18px',
                 }}>
                 {running ? 'Transferring…' : 'Transfer to VPS →'}
               </button>
@@ -365,7 +365,8 @@ export default function StockTransferPage({ user }: Props) {
             style={{width:'100%',maxWidth:480,background:T.bg2,border:`1px solid ${T.border2}`,borderRadius:14,padding:22,fontFamily:'inherit',color:T.text}}>
             <h3 style={{margin:'0 0 10px',fontSize:16,fontWeight:600}}>Confirm stock transfer</h3>
             <div style={{fontSize:13,color:T.text2,lineHeight:1.6,marginBottom:16}}>
-              <b style={{color:T.text}}>{picked.length} item{picked.length===1?'':'s'}</b> will move JAWS → VPS at average cost:<br/>
+              <b style={{color:T.text}}>{picked.length} item{picked.length===1?'':'s'}</b> will move JAWS → VPS at average cost
+              {' '}under PO <b style={{color:T.text,fontFamily:'monospace'}}>{poRef.trim()}</b>:<br/>
               {fmt$(totals.ex)} ex GST + {fmt$(totals.gst)} GST = <b style={{color:T.text}}>{fmt$(totals.inc)}</b><br/><br/>
               This writes a <b style={{color:T.text}}>Sale Invoice in JAWS</b> (relieves stock immediately) and a
               {' '}<b style={{color:T.text}}>Purchase Bill in VPS</b>. It cannot be undone from the portal — reversals are manual in MYOB.
