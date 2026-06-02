@@ -2461,13 +2461,13 @@ function BulkEditModal({ items, onClose, onApplied }: {
               <select value={priceMode} onChange={e => setPriceMode(e.target.value as any)} style={sel}>
                 <option value="none">No change</option>
                 <option value="set">Set to $</option>
-                <option value="inc">Increase %</option>
-                <option value="dec">Decrease %</option>
-                <option value="rrp">RRP minus %</option>
+                <option value="inc">Increase % (on current trade)</option>
+                <option value="dec">Decrease % (on current trade)</option>
+                <option value="rrp">Distributor discount % off RRP</option>
               </select>
               {priceMode !== 'none' && <input type="number" min="0" step="0.01" value={priceVal} onChange={e => setPriceVal(e.target.value)} placeholder={priceMode==='set'?'$':'%'} style={inp}/>}
             </div>
-            {priceMode === 'rrp' && <div style={{fontSize:11,color:T.text3,marginTop:5}}>Sets trade = RRP − % for each item that has an RRP. Items without an RRP are skipped.</div>}
+            {priceMode === 'rrp' && <div style={{fontSize:11,color:T.text3,marginTop:5}}>Trade = RRP − this %. E.g. 20% off a $100 RRP → $80 trade. Items without an RRP are skipped.</div>}
           </div>
 
           <div>
