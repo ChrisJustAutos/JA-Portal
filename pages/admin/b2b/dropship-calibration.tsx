@@ -20,6 +20,27 @@ const T = {
 
 interface Props { user: { id: string; email: string; displayName: string | null; role: UserRole; visibleTabs: string[] | null } }
 
+// Relative road-freight cost from a WA (Perth) origin — Perth = 1.0, rising with
+// distance. Used to estimate a gap zone from the zones we DO have data for:
+// est(gap) = mean over known zones of rate[k] × index[gap] / index[k].
+// Rough but directionally right (MPI dispatches from WA); always editable.
+const WA_FREIGHT_INDEX: Record<string, number> = {
+  'Perth Metro': 1.0, 'WA Regional': 1.6,
+  'Adelaide Metro': 2.0, 'SA Regional': 2.4,
+  'Northern Territory': 2.8,
+  'Melbourne Metro': 2.6, 'VIC Regional': 3.0,
+  'Sydney Metro': 2.9, 'NSW Regional': 3.3, 'ACT (Canberra)': 3.0,
+  'Brisbane Metro (SEQ)': 3.2, 'QLD Regional': 3.6,
+  'Tasmania': 3.4,
+  'Remote & Outback': 4.0,
+}
+function waIndex(zoneName: string): number | null {
+  if (WA_FREIGHT_INDEX[zoneName] != null) return WA_FREIGHT_INDEX[zoneName]
+  const lc = zoneName.toLowerCase()
+  for (const [k, v] of Object.entries(WA_FREIGHT_INDEX)) if (k.toLowerCase() === lc) return v
+  return null
+}
+
 interface Cell { max: number; count: number }
 interface ApiData {
   supplier: { uid: string; name: string } | null
@@ -71,6 +92,29 @@ export default function DropshipCalibrationPage({ user }: Props) {
       setZoneDefaults(zd)
     } catch (e: any) { setError(e?.message || String(e)) }
     finally { setLoading(false) }
+  }
+
+  // Estimate the zone-default for any zone WITHOUT a rate, from the zones that
+  // have one, scaled by distance-from-WA (MPI dispatches from WA).
+  function autoEstimate() {
+    if (!data) return
+    const known = data.zones
+      .map(z => ({ rate: Number(zoneDefaults[z.id]), index: waIndex(z.name) }))
+      .filter(k => Number.isFinite(k.rate) && k.rate > 0 && k.index != null) as { rate: number; index: number }[]
+    if (known.length === 0) { setFlash('Need at least one zone with a rate to estimate the rest.'); return }
+    setZoneDefaults(prev => {
+      const next = { ...prev }
+      let filled = 0
+      for (const z of data.zones) {
+        if (next[z.id] != null && next[z.id].trim() !== '') continue   // keep what we have
+        const gi = waIndex(z.name); if (gi == null) continue
+        const est = known.reduce((s, k) => s + k.rate * (gi / k.index), 0) / known.length
+        next[z.id] = String(Math.round(est * 2) / 2)   // nearest $0.50
+        filled++
+      }
+      setFlash(`Estimated ${filled} zone${filled === 1 ? '' : 's'} from similar zones (MPI in WA).`)
+      return next
+    })
   }
 
   // Fill any empty product×zone cell with that zone's default figure.
@@ -186,6 +230,9 @@ export default function DropshipCalibrationPage({ user }: Props) {
                       </div>
                       <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
                         {flash && <span style={{ fontSize: 12, color: T.green }}>{flash}</span>}
+                        <button onClick={autoEstimate} title="Estimate empty zone defaults from the zones you have, scaled by distance from WA" style={{ padding: '8px 14px', borderRadius: 7, border: `1px solid ${T.border2}`, background: 'transparent', color: T.teal, fontSize: 12.5, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>
+                          Auto-estimate gaps (MPI in WA)
+                        </button>
                         <button onClick={fillEmpty} style={{ padding: '8px 14px', borderRadius: 7, border: `1px solid ${T.border2}`, background: 'transparent', color: T.blue, fontSize: 12.5, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>
                           Fill empty cells from zone defaults
                         </button>
