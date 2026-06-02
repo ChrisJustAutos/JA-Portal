@@ -2016,8 +2016,9 @@ function DropshipFreightEditor({ catalogueId }: { catalogueId: string }) {
   if (loading) return <div style={{ fontSize: 11, color: T.text3, marginTop: 8 }}>Loading drop-ship freight…</div>
   return (
     <div style={{ marginTop: 10, paddingTop: 10, borderTop: `1px solid ${T.border}` }}>
-      <div style={{ fontSize: 11, fontWeight: 600, color: T.text2, marginBottom: 2 }}>
-        Drop-ship freight by zone <span style={{ color: flash ? T.green : T.text3, fontWeight: 400 }}>{flash || '· $ ex GST billed to the customer'}</span>
+      <div style={{ fontSize: 11, fontWeight: 600, color: T.text2, marginBottom: 2, display: 'flex', justifyContent: 'space-between', gap: 8 }}>
+        <span>Drop-ship freight by zone <span style={{ color: flash ? T.green : T.text3, fontWeight: 400 }}>{flash || '· $ ex GST billed to the customer'}</span></span>
+        <a href="/admin/b2b/dropship-calibration" target="_blank" rel="noopener noreferrer" style={{ color: T.blue, fontWeight: 400, textDecoration: 'none' }}>Calibrate from supplier history →</a>
       </div>
       {zones.length === 0 ? (
         <div style={{ fontSize: 11, color: T.amber, marginTop: 4 }}>No freight zones yet — add zones in Settings → Freight Zones, then set a price here per zone. Without a price for the customer's zone, this item can't be checked out.</div>
