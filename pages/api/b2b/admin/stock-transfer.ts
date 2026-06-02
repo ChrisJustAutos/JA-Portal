@@ -108,7 +108,9 @@ export default withAuth('edit:b2b_distributors', async (req: NextApiRequest, res
               name: r.name,
               is_taxable: r.is_taxable !== false,
               on_hand: cost?.isInventoried ? Number(cost.onHand) : 0,
-              avg_cost: cost ? Number(cost.avgCost) : 0,
+              // 2dp to match exactly what the invoice line will charge
+              // (see the LineTotalUnbalanced note in lib/b2b-stock-transfer.ts)
+              avg_cost: cost ? Math.round(Number(cost.avgCost) * 100) / 100 : 0,
               is_inventoried: cost?.isInventoried === true,
             }
           })

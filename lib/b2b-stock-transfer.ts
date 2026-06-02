@@ -152,14 +152,19 @@ export async function executeStockTransfer(opts: {
     if (!cost) { problems.push(`${cat.sku}: not found in JAWS inventory`); continue }
     if (!cost.isInventoried) { problems.push(`${cat.sku}: not an inventoried item`); continue }
     if (qty > cost.onHand) { problems.push(`${cat.sku}: qty ${qty} exceeds on-hand ${cost.onHand}`); continue }
+    // MYOB AverageCost carries 4+ decimal places, but the invoice line must
+    // satisfy Total = ShipQuantity × UnitPrice at 2dp ("LineTotalUnbalanced"
+    // otherwise). Round the unit cost FIRST and derive the total from the
+    // rounded figure so the pair always balances.
+    const unitCost = round2(Number(cost.avgCost) || 0)
     built.push({
       catalogue_id: cat.id,
       myob_item_uid: cat.myob_item_uid,
       sku: cat.sku,
       name: cat.name,
       qty,
-      unit_cost_ex: Number(cost.avgCost) || 0,
-      total_ex: round2(qty * (Number(cost.avgCost) || 0)),
+      unit_cost_ex: unitCost,
+      total_ex: round2(qty * unitCost),
       is_taxable: cat.is_taxable !== false,
     })
   }
@@ -219,7 +224,7 @@ export async function executeStockTransfer(opts: {
       Description: `Stock transfer to VPS: ${b.name} — ${b.sku}`.substring(0, 255),
       Item: { UID: b.myob_item_uid },
       ShipQuantity: b.qty,
-      UnitPrice: round2(b.unit_cost_ex),
+      UnitPrice: b.unit_cost_ex,   // already 2dp; Total derived from it
       Total: b.total_ex,
       TaxCode: { UID: b.is_taxable ? jawsTax.gstUid : jawsTax.freUid },
     })),
