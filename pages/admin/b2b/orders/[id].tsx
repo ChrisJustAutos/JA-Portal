@@ -93,6 +93,7 @@ interface OrderDetail {
   tracking_url: string | null
   freight_method_label: string | null
   freight_cost_ex_gst: number | null
+  dropship_freight_ex_gst: number | null
   label_pdf_path: string | null
   // MachShip live freight
   machship_consignment_id: string | null
@@ -984,6 +985,9 @@ function ShippingCard({ order, onEdit, onReloaded, onFlash }: {
         </div>
       )}
       <KV label="Cost ex"  value={order.freight_cost_ex_gst != null ? `$${money(order.freight_cost_ex_gst)}` : '—'} mono/>
+      {order.dropship_freight_ex_gst != null && order.dropship_freight_ex_gst > 0 && (
+        <KV label="  incl. drop-ship" value={`$${money(order.dropship_freight_ex_gst)}`} mono/>
+      )}
 
       {hasConsignment && (
         <div style={{marginTop:10, paddingTop:10, borderTop:`1px dashed ${T.border}`}}>

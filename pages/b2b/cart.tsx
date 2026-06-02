@@ -80,7 +80,7 @@ interface FreightRateOption {
   label: string
   price_ex_gst: number
   transit_days: number | null
-  source: 'machship' | 'static' | 'satchel'
+  source: 'machship' | 'static' | 'satchel' | 'dropship'
   // Live MachShip rates carry the route metadata so checkout/start can
   // persist the chosen carrier+service against the order.
   machship?: {

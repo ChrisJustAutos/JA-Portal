@@ -81,7 +81,7 @@ async function getDetail(id: string, res: NextApiResponse) {
       subtotal_ex_gst, gst, card_fee_inc, total_inc, refunded_total, currency,
       created_at, paid_at, picked_at, packed_at, shipped_at, delivered_at,
       cancelled_at, refunded_at,
-      carrier, tracking_number, tracking_url, freight_method_label, freight_cost_ex_gst, label_pdf_path,
+      carrier, tracking_number, tracking_url, freight_method_label, freight_cost_ex_gst, dropship_freight_ex_gst, label_pdf_path,
       machship_consignment_id, machship_consignment_number,
       machship_carrier_id, machship_carrier_service_id,
       freight_service_label, freight_eta_at, freight_status, last_freight_poll_at,
@@ -214,6 +214,7 @@ async function getDetail(id: string, res: NextApiResponse) {
       tracking_url: order.tracking_url,
       freight_method_label: order.freight_method_label,
       freight_cost_ex_gst: order.freight_cost_ex_gst != null ? Number(order.freight_cost_ex_gst) : null,
+      dropship_freight_ex_gst: order.dropship_freight_ex_gst != null ? Number(order.dropship_freight_ex_gst) : null,
       label_pdf_path: order.label_pdf_path,
       // MachShip live freight
       machship_consignment_id:      order.machship_consignment_id,

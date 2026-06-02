@@ -9,7 +9,7 @@
 // upload to Supabase Storage (b2b-catalogue bucket) using the user's auth
 // session, with RLS enforcing the b2b_is_portal_admin() check.
 
-import { useEffect, useState, useMemo, useRef, useCallback } from 'react'
+import { useEffect, useState, useMemo, useRef, useCallback, Fragment } from 'react'
 import Head from 'next/head'
 import PortalTopBar from '../../../lib/PortalTopBar'
 import B2BAdminTabs from '../../../components/b2b/B2BAdminTabs'
@@ -1107,6 +1107,7 @@ function EditDrawer({
                 ) : (
                   <span style={{color:T.amber}}>⚠ No reorder supplier on this MYOB item — set one in MYOB (Buying Details) so a drop-ship PO can be raised.</span>
                 )}
+                <DropshipFreightEditor catalogueId={item.id} />
               </div>
             )}
             <BoolRow
@@ -1973,6 +1974,69 @@ function BoolRow({
         {hint && <div style={{fontSize:10,color:T.text3,marginTop:2}}>{hint}</div>}
       </div>
       <ToggleSwitch on={value} onChange={onChange}/>
+    </div>
+  )
+}
+
+// Per-zone drop-ship freight for one product. Shown when "Drop ship" is on.
+// Each row = a freight zone → the price (ex GST) billed to the customer to ship
+// this item to that zone. Saves on blur. Zones are managed in Settings → Freight Zones.
+function DropshipFreightEditor({ catalogueId }: { catalogueId: string }) {
+  const [zones, setZones] = useState<Array<{ id: string; name: string }>>([])
+  const [rates, setRates] = useState<Record<string, string>>({})
+  const [loading, setLoading] = useState(true)
+  const [flash, setFlash] = useState('')
+
+  useEffect(() => {
+    let alive = true
+    ;(async () => {
+      setLoading(true)
+      const r = await fetch(`/api/b2b/admin/catalogue/${catalogueId}/dropship-freight`).then(x => x.ok ? x.json() : null).catch(() => null)
+      if (!alive) return
+      if (r) {
+        setZones(r.zones || [])
+        const m: Record<string, string> = {}
+        for (const [zid, v] of Object.entries(r.rates || {})) m[zid] = String(v)
+        setRates(m)
+      }
+      setLoading(false)
+    })()
+    return () => { alive = false }
+  }, [catalogueId])
+
+  async function save(zoneId: string, value: string) {
+    const r = await fetch(`/api/b2b/admin/catalogue/${catalogueId}/dropship-freight`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ rates: { [zoneId]: value.trim() === '' ? null : Number(value) } }),
+    })
+    setFlash(r.ok ? 'Saved' : 'Save failed')
+    setTimeout(() => setFlash(''), 2000)
+  }
+
+  if (loading) return <div style={{ fontSize: 11, color: T.text3, marginTop: 8 }}>Loading drop-ship freight…</div>
+  return (
+    <div style={{ marginTop: 10, paddingTop: 10, borderTop: `1px solid ${T.border}` }}>
+      <div style={{ fontSize: 11, fontWeight: 600, color: T.text2, marginBottom: 2 }}>
+        Drop-ship freight by zone <span style={{ color: flash ? T.green : T.text3, fontWeight: 400 }}>{flash || '· $ ex GST billed to the customer'}</span>
+      </div>
+      {zones.length === 0 ? (
+        <div style={{ fontSize: 11, color: T.amber, marginTop: 4 }}>No freight zones yet — add zones in Settings → Freight Zones, then set a price here per zone. Without a price for the customer's zone, this item can't be checked out.</div>
+      ) : (
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 110px', gap: '4px 10px', alignItems: 'center', marginTop: 6 }}>
+          {zones.map(z => (
+            <Fragment key={z.id}>
+              <span style={{ fontSize: 12, color: T.text2 }}>{z.name}</span>
+              <input
+                inputMode="decimal" placeholder="$ ex GST"
+                value={rates[z.id] ?? ''}
+                onChange={e => setRates(s => ({ ...s, [z.id]: e.target.value }))}
+                onBlur={e => save(z.id, e.target.value)}
+                style={{ padding: '5px 8px', background: T.bg3, border: `1px solid ${T.border2}`, borderRadius: 5, color: T.text, fontSize: 12, fontFamily: 'inherit', outline: 'none', width: '100%', boxSizing: 'border-box' }}
+              />
+            </Fragment>
+          ))}
+        </div>
+      )}
     </div>
   )
 }

@@ -515,6 +515,73 @@ export async function getSatchelRates(
   return out
 }
 
+// ── Drop-ship freight (per product, per destination zone) ─────────
+// Drop-ship items ship direct from the supplier, so they're excluded from the
+// warehouse (MachShip/satchel) quote and instead carry their own freight price
+// by destination zone (reusing b2b_freight_zones). Single figure billed to the
+// customer, stored ex-GST.
+
+export interface DropshipFreightItem {
+  catalogue_id: string
+  sku: string
+  name: string
+  qty: number
+  is_drop_ship: boolean
+}
+
+export interface DropshipFreightResult {
+  total_ex_gst: number
+  zone: { id: string; name: string } | null
+  lines: Array<{ catalogue_id: string; sku: string; qty: number; unit_ex_gst: number; line_ex_gst: number }>
+  // Drop-ship items we couldn't price for the destination (no zone match, or no
+  // rate set for the matched zone) — callers should block checkout, like missing dims.
+  missing: Array<{ sku: string; name: string; reason: string }>
+}
+
+export async function getDropshipFreight(items: DropshipFreightItem[], postcode: string): Promise<DropshipFreightResult> {
+  const ds = items.filter(i => i.is_drop_ship && Number(i.qty) > 0)
+  if (ds.length === 0) return { total_ex_gst: 0, zone: null, lines: [], missing: [] }
+
+  const c = sb()
+  const { data: zones } = await c
+    .from('b2b_freight_zones')
+    .select('id, name, postcode_ranges, sort_order, is_active')
+    .eq('is_active', true)
+    .order('sort_order', { ascending: true })
+  const matched = (zones || []).find((z: any) =>
+    postcodeMatches(postcode, Array.isArray(z.postcode_ranges) ? z.postcode_ranges : [])
+  )
+  if (!matched) {
+    return {
+      total_ex_gst: 0, zone: null, lines: [],
+      missing: ds.map(i => ({ sku: i.sku, name: i.name, reason: 'no freight zone covers the destination postcode' })),
+    }
+  }
+
+  const ids = Array.from(new Set(ds.map(i => i.catalogue_id)))
+  const { data: rateRows } = await c
+    .from('b2b_dropship_freight_rates')
+    .select('catalogue_id, price_ex_gst')
+    .eq('zone_id', (matched as any).id)
+    .in('catalogue_id', ids)
+  const byId = new Map((rateRows || []).map((r: any) => [r.catalogue_id, Number(r.price_ex_gst)]))
+
+  const lines: DropshipFreightResult['lines'] = []
+  const missing: DropshipFreightResult['missing'] = []
+  let total = 0
+  for (const i of ds) {
+    if (!byId.has(i.catalogue_id)) {
+      missing.push({ sku: i.sku, name: i.name, reason: `no drop-ship freight set for zone "${(matched as any).name}"` })
+      continue
+    }
+    const unit = byId.get(i.catalogue_id)!
+    const line = round2(unit * Number(i.qty))
+    total += line
+    lines.push({ catalogue_id: i.catalogue_id, sku: i.sku, qty: Number(i.qty), unit_ex_gst: round2(unit), line_ex_gst: line })
+  }
+  return { total_ex_gst: round2(total), zone: { id: (matched as any).id, name: (matched as any).name }, lines, missing }
+}
+
 function packagingForMachShip(p: LiveQuoteCartItem['freight_packaging']): 'Carton' | 'Pallet' | 'Skid' {
   if (p === 'pallet') return 'Pallet'
   // 'box' and 'other' both fall to Carton — MachShip's catch-all small

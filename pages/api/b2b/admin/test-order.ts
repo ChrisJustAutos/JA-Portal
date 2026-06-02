@@ -12,7 +12,7 @@ import { withAuth } from '../../../../lib/authServer'
 import { applyPricing } from '../../../../lib/b2b-pricing'
 import { createCheckoutSession, StripeLineItem } from '../../../../lib/stripe'
 import { assertCheckoutConfigured } from '../../../../lib/b2b-settings'
-import { getLiveQuote, getSatchelRates, type LiveQuoteCartItem } from '../../../../lib/b2b-freight'
+import { getLiveQuote, getSatchelRates, getDropshipFreight, type LiveQuoteCartItem } from '../../../../lib/b2b-freight'
 
 const GST_RATE = 0.10
 const round2 = (n: number) => Math.round(n * 100) / 100
@@ -71,7 +71,7 @@ export default withAuth('admin:b2b', async (req: NextApiRequest, res: NextApiRes
 
   const ids = items.map(i => i.catalogueId)
   const { data: catRows, error: catErr } = await c.from('b2b_catalogue')
-    .select('id, myob_item_uid, sku, name, trade_price_ex_gst, is_taxable, promo_price_ex_gst, promo_starts_at, promo_ends_at, volume_breaks, freight_weight_g, freight_length_mm, freight_width_mm, freight_height_mm, freight_packaging, manual_handling, inbound_freight_cost_ex_gst')
+    .select('id, myob_item_uid, sku, name, trade_price_ex_gst, is_taxable, is_drop_ship, promo_price_ex_gst, promo_starts_at, promo_ends_at, volume_breaks, freight_weight_g, freight_length_mm, freight_width_mm, freight_height_mm, freight_packaging, manual_handling, inbound_freight_cost_ex_gst')
     .in('id', ids)
   if (catErr) return res.status(500).json({ error: catErr.message })
   const catById = new Map((catRows || []).map((r: any) => [r.id, r]))
@@ -118,17 +118,19 @@ export default withAuth('admin:b2b', async (req: NextApiRequest, res: NextApiRes
     freightLabel = `${zone.name} — ${rate.label}`
     freightZoneId = zone.id
   } else if (chosenSatchelId) {
-    const eligItems = validated.map(v => {
-      const cat: any = catById.get(v.catalogueId) || {}
-      return {
-        qty: v.qty,
-        weight_g: cat.freight_weight_g ?? null,
-        length_mm: cat.freight_length_mm ?? null,
-        width_mm: cat.freight_width_mm ?? null,
-        height_mm: cat.freight_height_mm ?? null,
-        packaging: cat.freight_packaging ?? null,
-      }
-    })
+    const eligItems = validated
+      .filter(v => (catById.get(v.catalogueId) as any)?.is_drop_ship !== true)
+      .map(v => {
+        const cat: any = catById.get(v.catalogueId) || {}
+        return {
+          qty: v.qty,
+          weight_g: cat.freight_weight_g ?? null,
+          length_mm: cat.freight_length_mm ?? null,
+          width_mm: cat.freight_width_mm ?? null,
+          height_mm: cat.freight_height_mm ?? null,
+          packaging: cat.freight_packaging ?? null,
+        }
+      })
     const eligible = await getSatchelRates(eligItems)
     const match = eligible.find(e => e.satchel_id === chosenSatchelId)
     if (!match) return res.status(400).json({ error: 'This order does not fit the selected satchel (too heavy / too big / pallet / missing weight).' })
@@ -143,19 +145,21 @@ export default withAuth('admin:b2b', async (req: NextApiRequest, res: NextApiRes
     const postcode = shipPostcodeIn || String((dist as any).ship_postcode || (dist as any).bill_postcode || '').trim()
     const suburb   = shipSuburbIn   || String((dist as any).ship_suburb   || (dist as any).bill_suburb   || '').trim()
     if (!postcode) return res.status(400).json({ error: 'Live freight needs a destination — give the distributor a ship address or pass a postcode/suburb.' })
-    const liveItems: LiveQuoteCartItem[] = validated.map(v => {
-      const cat: any = catById.get(v.catalogueId) || {}
-      return {
-        sku: v.sku, name: v.name, qty: v.qty,
-        freight_weight_g:  cat.freight_weight_g ?? null,
-        freight_length_mm: cat.freight_length_mm ?? null,
-        freight_width_mm:  cat.freight_width_mm ?? null,
-        freight_height_mm: cat.freight_height_mm ?? null,
-        freight_packaging: cat.freight_packaging ?? null,
-        manual_handling:             cat.manual_handling === true,
-        inbound_freight_cost_ex_gst: cat.inbound_freight_cost_ex_gst ?? null,
-      }
-    })
+    const liveItems: LiveQuoteCartItem[] = validated
+      .filter(v => (catById.get(v.catalogueId) as any)?.is_drop_ship !== true)
+      .map(v => {
+        const cat: any = catById.get(v.catalogueId) || {}
+        return {
+          sku: v.sku, name: v.name, qty: v.qty,
+          freight_weight_g:  cat.freight_weight_g ?? null,
+          freight_length_mm: cat.freight_length_mm ?? null,
+          freight_width_mm:  cat.freight_width_mm ?? null,
+          freight_height_mm: cat.freight_height_mm ?? null,
+          freight_packaging: cat.freight_packaging ?? null,
+          manual_handling:             cat.manual_handling === true,
+          inbound_freight_cost_ex_gst: cat.inbound_freight_cost_ex_gst ?? null,
+        }
+      })
     const liveQuote = await getLiveQuote(liveItems, { postcode, suburb }, { packMode })
     if (liveQuote.mode === 'blocked') return res.status(400).json({ error: 'Freight quote unavailable — some products are missing dimensions.', details: liveQuote.missing.map(m => `${m.sku} ${m.name} (needs ${m.missing_fields.join(', ')})`) })
     if (liveQuote.mode !== 'live') return res.status(503).json({ error: 'Live freight quoting unavailable — re-quote, pick a static rate, or leave freight off.' })
@@ -174,8 +178,21 @@ export default withAuth('admin:b2b', async (req: NextApiRequest, res: NextApiRes
       route_snapshot: match.machship.routeSnapshot,
     }
   }
-  const hasFreight = !!(chosenFreightRateId || chosenSatchelId || chosenMachShipRoute)
-  if (hasFreight && freightExGst > 0) { subtotalEx += freightExGst; gst += freightExGst * GST_RATE }
+  if (freightExGst > 0) { subtotalEx += freightExGst; gst += freightExGst * GST_RATE }
+
+  // Drop-ship freight (supplier-shipped lines, priced by destination zone).
+  let dropshipFreightExGst = 0
+  const dsLines = validated.filter(v => (catById.get(v.catalogueId) as any)?.is_drop_ship === true)
+  if (dsLines.length > 0) {
+    const dsPostcode = shipPostcodeIn || String((dist as any).ship_postcode || (dist as any).bill_postcode || '').trim()
+    const ds = await getDropshipFreight(dsLines.map(v => ({ catalogue_id: v.catalogueId, sku: v.sku, name: v.name, qty: v.qty, is_drop_ship: true })), dsPostcode)
+    if (ds.missing.length > 0) return res.status(400).json({ error: 'Drop-ship freight not set for some items to this destination.', details: ds.missing.map(m => `${m.sku} ${m.name} (${m.reason})`) })
+    dropshipFreightExGst = ds.total_ex_gst
+    if (dropshipFreightExGst > 0) { subtotalEx += dropshipFreightExGst; gst += dropshipFreightExGst * GST_RATE }
+  }
+  const hasFreight = !!(chosenFreightRateId || chosenSatchelId || chosenMachShipRoute) || dropshipFreightExGst > 0
+  const totalFreightExGst = round2(freightExGst + dropshipFreightExGst)
+  if (!freightLabel && dropshipFreightExGst > 0) freightLabel = 'Drop-ship freight'
 
   subtotalEx = round2(subtotalEx); gst = round2(gst)
   const subtotalInc = round2(subtotalEx + gst)
@@ -192,8 +209,9 @@ export default withAuth('admin:b2b', async (req: NextApiRequest, res: NextApiRes
     freight_rate_id:             chosenFreightRateId,
     freight_satchel_id:          freightSatchelId,
     freight_zone_id:             freightZoneId,
+    dropship_freight_ex_gst:     dropshipFreightExGst > 0 ? dropshipFreightExGst : null,
     freight_method_label:        freightLabel,
-    freight_cost_ex_gst:         hasFreight ? freightExGst : null,
+    freight_cost_ex_gst:         hasFreight ? totalFreightExGst : null,
     freight_chosen_quote:        freightChosenQuoteSnapshot,
     freight_quote_markup_pct:    freightQuoteMarkupPct,
     machship_carrier_id:         freightMachShipCarrierId,
@@ -217,7 +235,7 @@ export default withAuth('admin:b2b', async (req: NextApiRequest, res: NextApiRes
     price_data: { currency: 'aud', product_data: { name: v.name, description: `SKU: ${v.sku}` }, unit_amount: Math.round((v.isTaxable ? v.unitPriceEx * 1.10 : v.unitPriceEx) * 100) },
     quantity: v.qty,
   }))
-  if (hasFreight && freightExGst > 0) stripeLineItems.push({ price_data: { currency: 'aud', product_data: { name: 'Freight', description: freightLabel || 'Shipping' }, unit_amount: Math.round(round2(freightExGst * 1.10) * 100) }, quantity: 1 })
+  if (hasFreight && totalFreightExGst > 0) stripeLineItems.push({ price_data: { currency: 'aud', product_data: { name: 'Freight', description: freightLabel || 'Shipping' }, unit_amount: Math.round(round2(totalFreightExGst * 1.10) * 100) }, quantity: 1 })
   if (cardFeeInc > 0) stripeLineItems.push({ price_data: { currency: 'aud', product_data: { name: 'Card processing surcharge', description: 'Recovers Stripe transaction fees' }, unit_amount: Math.round(cardFeeInc * 100) }, quantity: 1 })
 
   let checkoutUrl: string | null = null

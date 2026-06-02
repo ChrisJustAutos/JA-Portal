@@ -17,7 +17,9 @@ import {
   getFreightQuote,
   getLiveQuote,
   getSatchelRates,
+  getDropshipFreight,
   type LiveQuoteCartItem,
+  type DropshipFreightItem,
 } from '../../../../lib/b2b-freight'
 
 let _sb: SupabaseClient | null = null
@@ -64,26 +66,43 @@ export default withAuth('admin:b2b', async (req: NextApiRequest, res: NextApiRes
   const ids = items.map(i => i.catalogueId)
   const { data: catRows, error: catErr } = await c
     .from('b2b_catalogue')
-    .select('id, sku, name, freight_weight_g, freight_length_mm, freight_width_mm, freight_height_mm, freight_packaging, manual_handling, inbound_freight_cost_ex_gst')
+    .select('id, sku, name, is_drop_ship, freight_weight_g, freight_length_mm, freight_width_mm, freight_height_mm, freight_packaging, manual_handling, inbound_freight_cost_ex_gst')
     .in('id', ids)
   if (catErr) return res.status(500).json({ error: catErr.message })
   const catById = new Map((catRows || []).map((r: any) => [r.id, r]))
 
-  const liveItems: LiveQuoteCartItem[] = items.map(it => {
-    const cat: any = catById.get(it.catalogueId) || {}
-    return {
-      sku:               cat.sku || '',
-      name:              cat.name || cat.sku || '(item)',
-      qty:               it.qty,
-      freight_weight_g:  cat.freight_weight_g ?? null,
-      freight_length_mm: cat.freight_length_mm ?? null,
-      freight_width_mm:  cat.freight_width_mm ?? null,
-      freight_height_mm: cat.freight_height_mm ?? null,
-      freight_packaging: cat.freight_packaging ?? null,
-      manual_handling:             cat.manual_handling === true,
-      inbound_freight_cost_ex_gst: cat.inbound_freight_cost_ex_gst ?? null,
-    }
-  })
+  // Stock items feed MachShip/satchel; drop-ship items are priced separately by zone.
+  const liveItems: LiveQuoteCartItem[] = items
+    .filter(it => (catById.get(it.catalogueId) as any)?.is_drop_ship !== true)
+    .map(it => {
+      const cat: any = catById.get(it.catalogueId) || {}
+      return {
+        sku:               cat.sku || '',
+        name:              cat.name || cat.sku || '(item)',
+        qty:               it.qty,
+        freight_weight_g:  cat.freight_weight_g ?? null,
+        freight_length_mm: cat.freight_length_mm ?? null,
+        freight_width_mm:  cat.freight_width_mm ?? null,
+        freight_height_mm: cat.freight_height_mm ?? null,
+        freight_packaging: cat.freight_packaging ?? null,
+        manual_handling:             cat.manual_handling === true,
+        inbound_freight_cost_ex_gst: cat.inbound_freight_cost_ex_gst ?? null,
+      }
+    })
+  const dsItems: DropshipFreightItem[] = items
+    .filter(it => (catById.get(it.catalogueId) as any)?.is_drop_ship === true)
+    .map(it => {
+      const cat: any = catById.get(it.catalogueId) || {}
+      return { catalogue_id: it.catalogueId, sku: cat.sku || '', name: cat.name || cat.sku || '(item)', qty: it.qty, is_drop_ship: true }
+    })
+  const dropship = await getDropshipFreight(dsItems, postcode)
+  if (dropship.missing.length > 0) {
+    return res.status(200).json({
+      postcode, suburb: suburb || null, mode: 'blocked', rates: [],
+      blocked: { reason: `Drop-ship freight not set for ${dropship.missing.length} item(s) to this destination`, missing: dropship.missing.map(m => ({ sku: m.sku, name: m.name, missing_fields: [m.reason] })) },
+    })
+  }
+  const dsFreight = dropship.total_ex_gst
 
   // ── Quote: live MachShip, then static fallback, plus flat-rate satchels ──
   const pm = String(body.packMode || '').trim()
@@ -100,7 +119,7 @@ export default withAuth('admin:b2b', async (req: NextApiRequest, res: NextApiRes
     source: 'satchel' as const,
   }))
 
-  type Rate = { id: string; label: string; price_ex_gst: number; transit_days: number | null; source: 'machship' | 'static' | 'satchel'; eta_utc?: string | null; base_price_ex_gst?: number; markup_pct?: number }
+  type Rate = { id: string; label: string; price_ex_gst: number; transit_days: number | null; source: 'machship' | 'static' | 'satchel' | 'dropship'; eta_utc?: string | null; base_price_ex_gst?: number; markup_pct?: number }
   let baseRates: Rate[] = []
   let baseMode: 'live' | 'static' | 'blocked' | 'no_zone'
   let zone: { id: string; name: string } | null = null
@@ -129,13 +148,27 @@ export default withAuth('admin:b2b', async (req: NextApiRequest, res: NextApiRes
     }
   }
 
-  const allRates = [...baseRates, ...satchelRates].sort((a, b) => a.price_ex_gst - b.price_ex_gst)
+  // Fold drop-ship freight into every stock rate (single freight figure).
+  const r2 = (n: number) => Math.round(n * 100) / 100
+  let combined: Rate[] = [...baseRates, ...satchelRates]
+  if (dsFreight > 0) combined = combined.map(r => ({ ...r, price_ex_gst: r2(r.price_ex_gst + dsFreight) }))
+  combined.sort((a, b) => a.price_ex_gst - b.price_ex_gst)
 
-  if (allRates.length > 0) {
+  // Only drop-ship items → offer the drop-ship freight as the single option.
+  if (combined.length === 0 && dsFreight > 0 && liveItems.length === 0) {
+    return res.status(200).json({
+      postcode, suburb: suburb || null, mode: 'static',
+      rates: [{ id: 'dropship', label: `Shipping${dropship.zone ? ` — ${dropship.zone.name}` : ''}`, price_ex_gst: dsFreight, transit_days: null, source: 'dropship' as const }],
+      zone, dropship_freight_ex_gst: dsFreight,
+    })
+  }
+
+  if (combined.length > 0) {
     return res.status(200).json({
       postcode, suburb: suburb || null,
       mode: baseMode === 'live' ? 'live' : 'static',
-      rates: allRates, zone,
+      rates: combined, zone,
+      dropship_freight_ex_gst: dsFreight > 0 ? dsFreight : undefined,
       ...(unavailableReason ? { unavailable_reason: unavailableReason } : {}),
     })
   }
