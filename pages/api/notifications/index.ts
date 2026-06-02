@@ -1,6 +1,7 @@
 // pages/api/notifications/index.ts
-// GET   — latest 50 notifications for the current user (bell dropdown).
-// PATCH — mark read: { id } for one, { all: true } for everything unread.
+// GET    — latest 50 notifications for the current user (bell dropdown).
+// PATCH  — mark read: { id } for one, { all: true } for everything unread.
+// DELETE — remove: { id } for one, { all: true } for everything.
 
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { requireAuth, getSessionUser } from '../../../lib/auth'
@@ -38,7 +39,20 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
       return res.status(200).json({ ok: true })
     }
 
-    res.setHeader('Allow', 'GET, PATCH')
-    return res.status(405).json({ error: 'GET or PATCH only' })
+    if (req.method === 'DELETE') {
+      let body: any = {}
+      try { body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : (req.body || {}) }
+      catch { return res.status(400).json({ error: 'Bad JSON body' }) }
+      let q = sb.from('notifications').delete().eq('user_id', me.id)
+      if (body.all === true) { /* everything */ }
+      else if (body.id) q = q.eq('id', String(body.id))
+      else return res.status(400).json({ error: 'id or all:true required' })
+      const { error } = await q
+      if (error) return res.status(500).json({ error: error.message })
+      return res.status(200).json({ ok: true })
+    }
+
+    res.setHeader('Allow', 'GET, PATCH, DELETE')
+    return res.status(405).json({ error: 'GET, PATCH or DELETE only' })
   })
 }

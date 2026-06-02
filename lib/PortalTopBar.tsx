@@ -213,6 +213,12 @@ export default function PortalTopBar({
       .then(() => refreshSummary()).catch(() => {})
   }, [refreshSummary])
 
+  const deleteNotifs = useCallback((body: { id?: string; all?: boolean }) => {
+    setNotifs(list => body.all ? [] : (list || []).filter(x => x.id !== body.id))
+    return fetch('/api/notifications', { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+      .then(() => refreshSummary()).catch(() => {})
+  }, [refreshSummary])
+
   function openNotification(n: NotificationRow) {
     setBellOpen(false)
     if (!n.read_at) {
@@ -339,6 +345,13 @@ export default function PortalTopBar({
                       Mark all read
                     </button>
                   )}
+                  {(notifs?.length || 0) > 0 && (
+                    <button
+                      onClick={() => { if (confirm('Delete all notifications?')) deleteNotifs({ all: true }) }}
+                      style={{ background: 'none', border: 'none', color: T.text3, fontSize: 11.5, fontFamily: 'inherit', cursor: 'pointer', padding: 0, marginLeft: 12 }}>
+                      Clear all
+                    </button>
+                  )}
                 </div>
                 {notifs === null && <div style={{ color: T.text3, fontSize: 12, padding: '14px 10px' }}>Loading…</div>}
                 {notifs !== null && notifs.length === 0 && <div style={{ color: T.text3, fontSize: 12, padding: '14px 10px' }}>No notifications yet.</div>}
@@ -346,10 +359,10 @@ export default function PortalTopBar({
                   const app = apps.find(a => a.id === n.module)
                   const unread = !n.read_at
                   return (
-                    <button key={n.id} onClick={() => openNotification(n)} style={{
+                    <div key={n.id} onClick={() => openNotification(n)} style={{
                       display: 'flex', alignItems: 'flex-start', gap: 9, width: '100%', textAlign: 'left',
-                      background: unread ? 'rgba(79,142,247,0.07)' : 'none', border: 'none', borderRadius: 7,
-                      padding: '8px 10px', cursor: 'pointer', fontFamily: 'inherit', marginBottom: 1,
+                      background: unread ? 'rgba(79,142,247,0.07)' : 'none', borderRadius: 7,
+                      padding: '8px 10px', cursor: 'pointer', fontFamily: 'inherit', marginBottom: 1, boxSizing: 'border-box',
                     }}>
                       <span style={{
                         width: 28, height: 28, borderRadius: 8, flexShrink: 0, marginTop: 1,
@@ -364,7 +377,18 @@ export default function PortalTopBar({
                       </span>
                       <span style={{ fontSize: 10, color: T.text3, fontFamily: 'monospace', flexShrink: 0, marginTop: 2 }}>{timeAgo(n.created_at)}</span>
                       {unread && <span style={{ width: 7, height: 7, borderRadius: '50%', background: T.red, flexShrink: 0, marginTop: 6 }}/>}
-                    </button>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); deleteNotifs({ id: n.id }) }}
+                        title="Delete notification"
+                        aria-label="Delete notification"
+                        style={{
+                          background: 'none', border: 'none', color: T.text3, fontSize: 14, lineHeight: 1,
+                          cursor: 'pointer', padding: '2px 3px', marginTop: 1, flexShrink: 0, borderRadius: 4,
+                        }}
+                        onMouseEnter={e => { e.currentTarget.style.color = T.red }}
+                        onMouseLeave={e => { e.currentTarget.style.color = T.text3 }}
+                      >×</button>
+                    </div>
                   )
                 })}
               </div>
