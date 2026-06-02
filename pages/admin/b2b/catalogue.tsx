@@ -1996,7 +1996,8 @@ function DropshipFreightEditor({ catalogueId }: { catalogueId: string }) {
       if (r) {
         setZones(r.zones || [])
         const m: Record<string, string> = {}
-        for (const [zid, v] of Object.entries(r.rates || {})) m[zid] = String(v)
+        // Stored ex-GST; shown inc-GST (matches supplier invoices). 50 → 55.
+        for (const [zid, v] of Object.entries(r.rates || {})) m[zid] = String(Math.round(Number(v) * 1.1 * 100) / 100)
         setRates(m)
       }
       setLoading(false)
@@ -2005,9 +2006,11 @@ function DropshipFreightEditor({ catalogueId }: { catalogueId: string }) {
   }, [catalogueId])
 
   async function save(zoneId: string, value: string) {
+    // Input is inc-GST; store ex-GST (÷1.1). 55 → 50.
+    const exVal = value.trim() === '' ? null : Math.round((Number(value) / 1.1) * 100) / 100
     const r = await fetch(`/api/b2b/admin/catalogue/${catalogueId}/dropship-freight`, {
       method: 'PUT', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ rates: { [zoneId]: value.trim() === '' ? null : Number(value) } }),
+      body: JSON.stringify({ rates: { [zoneId]: exVal } }),
     })
     setFlash(r.ok ? 'Saved' : 'Save failed')
     setTimeout(() => setFlash(''), 2000)
@@ -2017,7 +2020,7 @@ function DropshipFreightEditor({ catalogueId }: { catalogueId: string }) {
   return (
     <div style={{ marginTop: 10, paddingTop: 10, borderTop: `1px solid ${T.border}` }}>
       <div style={{ fontSize: 11, fontWeight: 600, color: T.text2, marginBottom: 2, display: 'flex', justifyContent: 'space-between', gap: 8 }}>
-        <span>Drop-ship freight by zone <span style={{ color: flash ? T.green : T.text3, fontWeight: 400 }}>{flash || '· $ ex GST billed to the customer'}</span></span>
+        <span>Drop-ship freight by zone <span style={{ color: flash ? T.green : T.text3, fontWeight: 400 }}>{flash || '· $ inc GST (what the customer pays)'}</span></span>
         <a href="/admin/b2b/dropship-calibration" target="_blank" rel="noopener noreferrer" style={{ color: T.blue, fontWeight: 400, textDecoration: 'none' }}>Calibrate from supplier history →</a>
       </div>
       {zones.length === 0 ? (
@@ -2028,7 +2031,7 @@ function DropshipFreightEditor({ catalogueId }: { catalogueId: string }) {
             <Fragment key={z.id}>
               <span style={{ fontSize: 12, color: T.text2 }}>{z.name}</span>
               <input
-                inputMode="decimal" placeholder="$ ex GST"
+                inputMode="decimal" placeholder="$ inc GST"
                 value={rates[z.id] ?? ''}
                 onChange={e => setRates(s => ({ ...s, [z.id]: e.target.value }))}
                 onBlur={e => save(z.id, e.target.value)}

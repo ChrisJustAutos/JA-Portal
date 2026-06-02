@@ -71,6 +71,8 @@ export default function DropshipCalibrationPage({ user }: Props) {
       const j = await r.json()
       if (!r.ok) throw new Error(j?.error || `HTTP ${r.status}`)
       setData(j)
+      // The API returns freight ex-GST; show inc-GST (matches supplier invoices).
+      const inc = (v: number) => String(Math.round(v * 1.1 * 100) / 100)
       // Prefill: product-level max where we have it, else the zone fallback max.
       const e: Record<string, string> = {}
       for (const p of j.products as ApiData['products']) {
@@ -78,7 +80,7 @@ export default function DropshipCalibrationPage({ user }: Props) {
           const pv = j.perProductZone?.[p.catalogue_id]?.[z.id]?.max
           const zv = j.perZone?.[z.id]?.max
           const v = pv != null ? pv : (zv != null ? zv : null)
-          if (v != null) e[`${p.catalogue_id}|${z.id}`] = String(v)
+          if (v != null) e[`${p.catalogue_id}|${z.id}`] = inc(v)
         }
       }
       setEdits(e)
@@ -87,7 +89,7 @@ export default function DropshipCalibrationPage({ user }: Props) {
       const zd: Record<string, string> = {}
       for (const z of j.zones as ApiData['zones']) {
         const v = j.perZone?.[z.id]?.max
-        if (v != null) zd[z.id] = String(v)
+        if (v != null) zd[z.id] = inc(v)
       }
       setZoneDefaults(zd)
     } catch (e: any) { setError(e?.message || String(e)) }
@@ -141,7 +143,8 @@ export default function DropshipCalibrationPage({ user }: Props) {
       const rates: Record<string, any> = {}
       for (const z of data.zones) {
         const v = edits[`${p.catalogue_id}|${z.id}`]
-        if (v != null && v.trim() !== '') rates[z.id] = Number(v)
+        // Matrix is inc-GST; store ex-GST (÷1.1).
+        if (v != null && v.trim() !== '') rates[z.id] = Math.round((Number(v) / 1.1) * 100) / 100
       }
       if (Object.keys(rates).length === 0) continue
       try {
@@ -171,7 +174,7 @@ export default function DropshipCalibrationPage({ user }: Props) {
             <p style={{ fontSize: 12.5, color: T.text2, marginTop: 0, lineHeight: 1.6 }}>
               Pulls a supplier&rsquo;s MYOB bills, maps each delivery postcode to a freight zone and reads the freight charged, then
               proposes a <strong>per-product × per-zone</strong> rate (the <strong>max</strong> seen, so you never under-recover).
-              Review/edit, then apply to the drop-ship freight rates. Freight is shown ex-GST.
+              Review/edit, then apply to the drop-ship freight rates. Freight is shown <strong>inc-GST</strong> (matching supplier invoices).
             </p>
 
             {/* Controls */}
@@ -226,7 +229,7 @@ export default function DropshipCalibrationPage({ user }: Props) {
                   <div style={{ ...card, overflowX: 'auto' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10, gap: 12 }}>
                       <div style={{ fontSize: 12, color: T.text2 }}>
-                        Cells show <strong>max freight (ex GST)</strong>. <span style={{ color: T.amber }}>Amber</span> = no per-product data for that zone, using the zone-wide max as an estimate. Edit any cell before applying.
+                        Cells show <strong>max freight (inc GST)</strong>. <span style={{ color: T.amber }}>Amber</span> = no per-product data for that zone, using the zone-wide max as an estimate. Edit any cell before applying.
                       </div>
                       <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
                         {flash && <span style={{ fontSize: 12, color: T.green }}>{flash}</span>}
