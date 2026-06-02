@@ -25,7 +25,8 @@
     "pages/api/stripe-myob/payouts-mark.ts":        { "maxDuration": 30 },
     "pages/api/admin/inspect-jaws-invoices.ts":     { "maxDuration": 60 },
     "pages/api/admin/inspect-jaws-account.ts":      { "maxDuration": 30 },
-    "pages/api/cron/workshop-reminders.ts":         { "maxDuration": 60 }
+    "pages/api/cron/workshop-reminders.ts":         { "maxDuration": 60 },
+    "pages/api/cron/notifications-sweep.ts":        { "maxDuration": 120 }
   },
   "crons": [
     {
@@ -50,6 +51,10 @@
     },
     {
       "path": "/api/cron/workshop-reminders",
+      "schedule": "*/15 * * * *"
+    },
+    {
+      "path": "/api/cron/notifications-sweep",
       "schedule": "*/15 * * * *"
     }
   ]

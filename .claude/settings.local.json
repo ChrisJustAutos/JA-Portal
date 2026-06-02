@@ -52,7 +52,12 @@
       "PowerShell($psql = Get-Command psql -ErrorAction SilentlyContinue; $supa = Get-Command supabase -ErrorAction SilentlyContinue; \"psql: $\\(if\\($psql\\){$psql.Source}else{'not found'}\\)\"; \"supabase: $\\(if\\($supa\\){$supa.Source}else{'not found'}\\)\"; \"SUPABASE_DB_URL env: $\\(if\\($env:SUPABASE_DB_URL\\){'set'}else{'not set'}\\)\")",
       "PowerShell(Test-NetConnection *)",
       "PowerShell(Get-Content migrations\\\\046_messaging.sql -TotalCount 8; ''; Get-Content migrations\\\\062_b2b_dropship_freight.sql -TotalCount 6)",
-      "PowerShell(npx tsc --noEmit 2>$null; \"exit: $LASTEXITCODE\")"
+      "PowerShell(npx tsc --noEmit 2>$null; \"exit: $LASTEXITCODE\")",
+      "Bash(Get-ChildItem -Path \"C:\\\\Users\\\\cjrus\\\\OneDrive\\\\Documents\\\\GitHub\\\\JA-Portal\" -Recurse -Directory)",
+      "Bash(Select-Object -First 50)",
+      "Bash(Format-Table -AutoSize)",
+      "Bash(grep *)",
+      "PowerShell(npx next build 2>&1 | Select-Object -Last 30)"
     ]
   }
 }

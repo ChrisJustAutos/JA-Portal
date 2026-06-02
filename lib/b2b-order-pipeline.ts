@@ -10,6 +10,7 @@ import { createClient, SupabaseClient } from '@supabase/supabase-js'
 import { writeOrderToMyob } from './b2b-myob-invoice'
 import { raiseDropShipPOsForOrder, type DropshipRaiseResult } from './b2b-dropship'
 import { sendOrderPlacedAdminEmail, sendDistributorOrderEmails } from './b2b-order-notify'
+import { notify } from './notifications'
 
 let _sb: SupabaseClient | null = null
 function sb(): SupabaseClient {
@@ -90,20 +91,32 @@ export async function runPostPaymentPipeline(orderId: string, opts: { paymentInt
     catch (e: any) { console.error(`pipeline: distributor emails failed for order ${orderId}:`, e?.message || e) }
   }
 
-  // Optional Slack alert (best-effort, fire-and-forget).
+  // Portal notification + optional Slack alert (best-effort, fire-and-forget).
   try {
+    const { data: detail } = await c.from('b2b_orders')
+      .select(`order_number, total_inc, is_test, distributor:b2b_distributors!b2b_orders_distributor_id_fkey ( display_name )`)
+      .eq('id', orderId).maybeSingle()
+    const dist: any = Array.isArray(detail?.distributor) ? detail!.distributor[0] : detail?.distributor
+
+    // Red badge on the B2B Portal tile for admins/managers (deduped per order,
+    // so webhook retries / the admin mark-paid shortcut never double-notify).
+    await notify({
+      module: 'b2b',
+      title: `${detail?.is_test ? '[TEST] ' : ''}New B2B order ${detail?.order_number || ''}`.trim(),
+      body: `${dist?.display_name || 'Unknown distributor'} — $${Number(detail?.total_inc || 0).toFixed(2)} inc GST`,
+      href: '/admin/b2b',
+      dedupeKey: `b2b-paid:${orderId}`,
+      roles: ['admin', 'manager'],
+    })
+
     const { data: settings } = await c.from('b2b_settings').select('slack_new_order_webhook_url').eq('id', 'singleton').maybeSingle()
     if (settings?.slack_new_order_webhook_url) {
-      const { data: detail } = await c.from('b2b_orders')
-        .select(`order_number, total_inc, is_test, distributor:b2b_distributors!b2b_orders_distributor_id_fkey ( display_name )`)
-        .eq('id', orderId).maybeSingle()
-      const dist: any = Array.isArray(detail?.distributor) ? detail!.distributor[0] : detail?.distributor
       await fetch(settings.slack_new_order_webhook_url, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ text: `:moneybag: ${detail?.is_test ? '[TEST] ' : ''}New B2B order *${detail?.order_number}* — ${dist?.display_name || 'unknown'} — $${Number(detail?.total_inc || 0).toFixed(2)} AUD` }),
       }).catch(err => console.error('Slack notify failed:', err))
     }
-  } catch (e) { console.error('Slack notify error (non-fatal):', e) }
+  } catch (e) { console.error('Order notify error (non-fatal):', e) }
 
   return { ok: true, status: 'paid' }
 }

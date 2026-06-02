@@ -9,6 +9,7 @@ import { useRouter } from 'next/router'
 import { getSupabase } from './supabaseClient'
 import { UserRole, visibleNavSections } from './permissions'
 import { usePreferences, NavGroup } from './preferences'
+import { useNotificationSummary } from './useNotifications'
 
 // ── Design tokens (kept in sync with portal) ─────────────────
 const T = {
@@ -44,7 +45,7 @@ export interface PortalNavItem {
   href?: string
   section?: PortalSection
   dot: string
-  alertKey?: 'invoices'|'payables'|'messages'
+  alertKey?: string
 }
 
 // Default nav order — same on every page. `settings` is appended for admins only (see rendering).
@@ -84,7 +85,7 @@ export interface PortalSidebarProps {
   lastRefresh?: Date | null
   onRefresh?: () => void
   refreshing?: boolean
-  alertCounts?: { invoices?: number; payables?: number; messages?: number }
+  alertCounts?: Record<string, number | undefined>
   loading?: boolean
   currentUserRole?: UserRole
   currentUserVisibleTabs?: string[] | null
@@ -107,6 +108,14 @@ export default function PortalSidebar({
 }: PortalSidebarProps) {
   const router = useRouter()
   const { prefs, update } = usePreferences()
+  // Per-module notification badges (30s poll) — counts the page passes in
+  // via alertCounts take precedence (e.g. dashboard's invoices/payables).
+  const { summary } = useNotificationSummary()
+  const mergedAlerts: Record<string, number | undefined> = {
+    ...(summary?.byModule || {}),
+    messages: typeof alertCounts.messages === 'number' ? alertCounts.messages : (summary?.messages ?? 0),
+    ...Object.fromEntries(Object.entries(alertCounts).filter(([, v]) => typeof v === 'number')),
+  }
   const [navSort, setNavSort] = useState<NavSort>('default')
   const [editing, setEditing] = useState(false)
   const [drag, setDrag] = useState<DragState | null>(null)
@@ -311,7 +320,7 @@ export default function PortalSidebar({
     const isActive = activeId === it.id
     const isDragging = drag?.kind === 'item' && drag.id === it.id
     const isDropTarget = drag?.kind === 'item' && dragOverItemId === it.id && drag.id !== it.id
-    const alertCount = it.alertKey ? (alertCounts[it.alertKey] || 0) : 0
+    const alertCount = (mergedAlerts[it.id] ?? (it.alertKey ? mergedAlerts[it.alertKey] : 0)) || 0
     const bg = isActive ? 'rgba(255,255,255,0.04)' : 'transparent'
     const color = isActive ? T.text : T.text2
     const containerKey = containerId ?? '__ungrouped__'
@@ -339,7 +348,7 @@ export default function PortalSidebar({
         {editing && <span style={{fontSize:10, color:T.text3, marginRight:-4}}>⋮⋮</span>}
         <div style={{width:7, height:7, borderRadius:'50%', background:it.dot, flexShrink:0}}/>
         <span style={{flex:1}}>{it.label}</span>
-        {it.alertKey && !loading && alertCount > 0 && (
+        {!loading && alertCount > 0 && (
           <span style={{fontSize:10, fontFamily:'monospace', background:'rgba(240,78,78,0.2)', color:T.red, padding:'2px 6px', borderRadius:4}}>
             {alertCount}
           </span>

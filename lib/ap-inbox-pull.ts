@@ -29,6 +29,7 @@ import {
   uploadInvoicePdf,
   applyTriageAndResolve,
 } from './ap-supabase'
+import { notify } from './notifications'
 
 const DEFAULT_MAILBOX = 'accounts@justautosmechanical.com.au'
 const DEFAULT_CONCURRENCY = 4
@@ -435,6 +436,18 @@ export async function runInboxPull(opts: PullInboxOptions = {}): Promise<PullInb
 
       processedAttachments.add(dedupeKey)
       ingestedAny = true
+
+      // Badge the AP Invoices tile (deduped per invoice — re-pulls are no-ops).
+      const apVendor = extraction.invoice.vendor?.name || null
+      const apTotal = extraction.invoice.totals?.totalIncGst ?? null
+      await notify({
+        module: 'ap',
+        title: 'New supplier invoice',
+        body: [apVendor, apTotal != null ? `$${Number(apTotal).toFixed(2)}` : null].filter(Boolean).join(' — ') || att.name,
+        href: '/ap',
+        dedupeKey: `ap:${inserted.id}`,
+        roles: ['admin', 'accountant'],
+      })
 
       results.push({
         ...base,

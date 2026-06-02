@@ -7,6 +7,7 @@ import { createClient } from '@supabase/supabase-js'
 import { withAuth } from '../../../../lib/authServer'
 import { roleHasPermission } from '../../../../lib/permissions'
 import { QUOTE_STATUSES } from '../../../../lib/workshop'
+import { notify } from '../../../../lib/notifications'
 
 export const config = { maxDuration: 10 }
 
@@ -46,8 +47,30 @@ export default withAuth('view:diary', async (req, res, user) => {
       if (!QUOTE_STATUSES.includes(body.status)) return res.status(400).json({ error: 'invalid status' })
       patch.status = body.status
     }
+    // Capture the prior status so we only notify on a real transition.
+    let prevStatus: string | null = null
+    if (patch.status) {
+      const { data: prev } = await db.from('workshop_quotes').select('status').eq('id', id).maybeSingle()
+      prevStatus = prev?.status || null
+    }
     const { error } = await db.from('workshop_quotes').update(patch).eq('id', id)
     if (error) return res.status(500).json({ error: error.message })
+
+    // Quote accepted/declined → badge the Quotes tile for the team.
+    if (patch.status && patch.status !== prevStatus && ['accepted', 'declined'].includes(patch.status)) {
+      const { data: q } = await db.from('workshop_quotes')
+        .select('total, customer:workshop_customers(name)').eq('id', id).maybeSingle()
+      const cust: any = Array.isArray(q?.customer) ? q!.customer[0] : q?.customer
+      await notify({
+        module: 'workshop-quotes',
+        title: `Quote ${patch.status}`,
+        body: [cust?.name || null, q?.total ? `$${Number(q.total).toFixed(2)}` : null].filter(Boolean).join(' — ') || null,
+        href: '/workshop/quotes',
+        roles: ['admin', 'manager', 'workshop'],
+        excludeUserId: user.id,
+        dedupeKey: `quote-${patch.status}:${id}`,
+      })
+    }
     return res.status(200).json({ ok: true })
   }
 

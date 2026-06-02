@@ -18,6 +18,11 @@ import { DEFAULT_NAV, PortalNavItem } from './PortalSidebar'
 import { AppIcon } from './AppIcons'
 import { usePreferences } from './preferences'
 import { useIsMobile } from './useIsMobile'
+import { useNotificationSummary, timeAgo, NotificationRow } from './useNotifications'
+
+// Per-module unread badge counts, keyed by app/module id (plus the legacy
+// 'invoices'/'payables'/'messages' alert keys, which equal their module ids).
+export type AlertCounts = Record<string, number | undefined>
 
 const T = {
   bg: '#0d0f12', bg2: '#131519', bg3: '#1a1d23', bg4: '#21252d',
@@ -39,7 +44,7 @@ export interface LauncherApp {
   defaultLabel: string   // the built-in name (for placeholders / reset)
   href: string
   accent: string
-  alertKey?: 'invoices' | 'payables' | 'messages'
+  alertKey?: string
 }
 
 // Resolve the apps this user can see, in DEFAULT_NAV order, mapped to
@@ -79,7 +84,7 @@ export function AppGrid({
 }: {
   apps: LauncherApp[]
   onPick: (app: LauncherApp) => void
-  alertCounts?: { invoices?: number; payables?: number; messages?: number }
+  alertCounts?: AlertCounts
   large?: boolean
 }) {
   const tile = large ? 132 : 112
@@ -92,7 +97,7 @@ export function AppGrid({
       width: '100%',
     }}>
       {apps.map(app => {
-        const alert = app.alertKey ? (alertCounts[app.alertKey] || 0) : 0
+        const alert = (alertCounts[app.id] ?? (app.alertKey ? alertCounts[app.alertKey] : 0)) || 0
         return (
           <button
             key={app.id}
@@ -155,7 +160,7 @@ export interface PortalTopBarProps {
   lastRefresh?: Date | null
   onRefresh?: () => void
   refreshing?: boolean
-  alertCounts?: { invoices?: number; payables?: number; messages?: number }
+  alertCounts?: AlertCounts
   loading?: boolean
   currentUserRole?: UserRole
   currentUserVisibleTabs?: string[] | null
@@ -183,31 +188,51 @@ export default function PortalTopBar({
 
   const activeApp = apps.find(a => a.id === activeId) || null
 
-  // Cross-page unread badge for Messages: poll if the user has the app and the
-  // current page didn't already supply a messages count (the /messages page does).
-  const hasMessagesApp = apps.some(a => a.id === 'messages')
-  const [msgUnread, setMsgUnread] = useState<number | null>(null)
+  // Cross-page unread badges: one 30s poll covers per-module notification
+  // counts AND the messaging unread total. Counts the page passes in via
+  // alertCounts (e.g. /messages live count, dashboard invoices/payables)
+  // take precedence over the polled values.
+  const { summary, refresh: refreshSummary } = useNotificationSummary()
+  const mergedAlerts: AlertCounts = {
+    ...(summary?.byModule || {}),
+    messages: typeof alertCounts.messages === 'number' ? alertCounts.messages : (summary?.messages ?? 0),
+    ...Object.fromEntries(Object.entries(alertCounts).filter(([, v]) => typeof v === 'number')),
+  }
+
+  // Bell dropdown state — list fetched on open.
+  const [bellOpen, setBellOpen] = useState(false)
+  const [notifs, setNotifs] = useState<NotificationRow[] | null>(null)
   useEffect(() => {
-    if (!hasMessagesApp || typeof alertCounts.messages === 'number') return
-    let live = true
-    const poll = () => fetch('/api/messages/unread').then(r => r.ok ? r.json() : null).then(d => { if (live && d) setMsgUnread(d.total) }).catch(() => {})
-    poll()
-    const i = setInterval(poll, 30000)
-    return () => { live = false; clearInterval(i) }
-  }, [hasMessagesApp, alertCounts.messages])
-  const mergedAlerts = { ...alertCounts, messages: typeof alertCounts.messages === 'number' ? alertCounts.messages : (msgUnread ?? 0) }
+    if (!bellOpen) return
+    fetch('/api/notifications').then(r => r.ok ? r.json() : null)
+      .then(d => { if (d) setNotifs(d.notifications) }).catch(() => {})
+  }, [bellOpen])
+
+  const markRead = useCallback((body: { id?: string; all?: boolean }) => {
+    return fetch('/api/notifications', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+      .then(() => refreshSummary()).catch(() => {})
+  }, [refreshSummary])
+
+  function openNotification(n: NotificationRow) {
+    setBellOpen(false)
+    if (!n.read_at) {
+      setNotifs(list => (list || []).map(x => x.id === n.id ? { ...x, read_at: new Date().toISOString() } : x))
+      markRead({ id: n.id })
+    }
+    if (n.href) router.push(n.href)
+  }
 
   // Esc closes the launcher / menu.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') { setLauncherOpen(false); setMenuOpen(false) }
+      if (e.key === 'Escape') { setLauncherOpen(false); setMenuOpen(false); setBellOpen(false) }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [])
   // Close launcher on navigation.
   useEffect(() => {
-    const close = () => { setLauncherOpen(false); setMenuOpen(false) }
+    const close = () => { setLauncherOpen(false); setMenuOpen(false); setBellOpen(false) }
     router.events.on('routeChangeStart', close)
     return () => router.events.off('routeChangeStart', close)
   }, [router])
@@ -277,6 +302,75 @@ export default function PortalTopBar({
         )}
 
         <span style={{ flex: 1 }}/>
+
+        {/* Notification bell */}
+        <div style={{ position: 'relative', flexShrink: 0 }}>
+          <button onClick={() => setBellOpen(o => !o)} style={{ ...btn, padding: '7px 9px', position: 'relative' }} aria-label="Notifications" title="Notifications">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/>
+              <path d="M13.7 21a2 2 0 0 1-3.4 0"/>
+            </svg>
+            {(summary?.total || 0) > 0 && (
+              <span style={{
+                position: 'absolute', top: -5, right: -5,
+                minWidth: 16, height: 16, padding: '0 4px', borderRadius: 8,
+                background: T.red, color: '#fff', fontSize: 9.5, fontWeight: 600,
+                display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'monospace',
+              }}>{summary!.total > 99 ? '99+' : summary!.total}</span>
+            )}
+          </button>
+          {bellOpen && (
+            <>
+              <div onClick={() => setBellOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 901 }}/>
+              <div style={{
+                position: 'absolute', top: 'calc(100% + 6px)', right: isMobile ? -60 : 0, zIndex: 902,
+                width: isMobile ? 'calc(100vw - 24px)' : 360, maxWidth: 'calc(100vw - 24px)',
+                maxHeight: '70vh', overflowY: 'auto',
+                background: T.bg2, border: `1px solid ${T.border2}`, borderRadius: 10,
+                boxShadow: '0 14px 40px rgba(0,0,0,0.45)', padding: 6,
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', padding: '6px 10px 8px', borderBottom: `1px solid ${T.border}`, marginBottom: 4 }}>
+                  <span style={{ fontSize: 12.5, fontWeight: 600, color: T.text }}>Notifications</span>
+                  <span style={{ flex: 1 }}/>
+                  {(summary?.total || 0) > 0 && (
+                    <button
+                      onClick={() => { markRead({ all: true }); setNotifs(list => (list || []).map(x => ({ ...x, read_at: x.read_at || new Date().toISOString() }))) }}
+                      style={{ background: 'none', border: 'none', color: T.blue, fontSize: 11.5, fontFamily: 'inherit', cursor: 'pointer', padding: 0 }}>
+                      Mark all read
+                    </button>
+                  )}
+                </div>
+                {notifs === null && <div style={{ color: T.text3, fontSize: 12, padding: '14px 10px' }}>Loading…</div>}
+                {notifs !== null && notifs.length === 0 && <div style={{ color: T.text3, fontSize: 12, padding: '14px 10px' }}>No notifications yet.</div>}
+                {(notifs || []).map(n => {
+                  const app = apps.find(a => a.id === n.module)
+                  const unread = !n.read_at
+                  return (
+                    <button key={n.id} onClick={() => openNotification(n)} style={{
+                      display: 'flex', alignItems: 'flex-start', gap: 9, width: '100%', textAlign: 'left',
+                      background: unread ? 'rgba(79,142,247,0.07)' : 'none', border: 'none', borderRadius: 7,
+                      padding: '8px 10px', cursor: 'pointer', fontFamily: 'inherit', marginBottom: 1,
+                    }}>
+                      <span style={{
+                        width: 28, height: 28, borderRadius: 8, flexShrink: 0, marginTop: 1,
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        background: `${app?.accent || T.blue}1f`, color: app?.accent || T.blue,
+                      }}>
+                        <AppIcon name={n.module} size={15}/>
+                      </span>
+                      <span style={{ flex: 1, minWidth: 0 }}>
+                        <span style={{ display: 'block', fontSize: 12.5, fontWeight: unread ? 600 : 500, color: T.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{n.title}</span>
+                        {n.body && <span style={{ display: 'block', fontSize: 11.5, color: T.text2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginTop: 1 }}>{n.body}</span>}
+                      </span>
+                      <span style={{ fontSize: 10, color: T.text3, fontFamily: 'monospace', flexShrink: 0, marginTop: 2 }}>{timeAgo(n.created_at)}</span>
+                      {unread && <span style={{ width: 7, height: 7, borderRadius: '50%', background: T.red, flexShrink: 0, marginTop: 6 }}/>}
+                    </button>
+                  )
+                })}
+              </div>
+            </>
+          )}
+        </div>
 
         {onRefresh && (
           <button onClick={onRefresh} disabled={refreshing} style={{ ...btn, opacity: refreshing ? 0.6 : 1, ...(isMobile ? { padding: '7px 9px' } : {}) }}

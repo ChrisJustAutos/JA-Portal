@@ -6,6 +6,7 @@ import { createClient } from '@supabase/supabase-js'
 import { withAuth } from '../../../lib/authServer'
 import { roleHasPermission } from '../../../lib/permissions'
 import { TASK_STATUSES, TASK_PRIORITIES } from '../../../lib/workshop'
+import { notify, findUserByName } from '../../../lib/notifications'
 
 export const config = { maxDuration: 10 }
 
@@ -46,6 +47,23 @@ export default withAuth('view:diary', async (req, res, user) => {
       created_by: user.id,
     }).select('id').single()
     if (error) return res.status(500).json({ error: error.message })
+
+    // Badge the assignee's Tasks tile (assignee is free text — only fires on
+    // an unambiguous display-name match, and never for self-assigned tasks).
+    if (body.assignee) {
+      const assigneeId = await findUserByName(String(body.assignee))
+      if (assigneeId) {
+        await notify({
+          module: 'workshop-tasks',
+          title: 'Task assigned to you',
+          body: title,
+          href: '/workshop/tasks',
+          userIds: [assigneeId],
+          excludeUserId: user.id,
+        })
+      }
+    }
+
     return res.status(201).json({ ok: true, id: data.id })
   }
 

@@ -17,6 +17,7 @@ import { useVisibleApps, LauncherApp } from '../lib/PortalTopBar'
 import { AppIcon } from '../lib/AppIcons'
 import { usePreferences, NavGroup } from '../lib/preferences'
 import { getSupabase } from '../lib/supabaseClient'
+import { useNotificationSummary } from '../lib/useNotifications'
 
 const T = {
   bg: '#0d0f12', bg2: '#131519', bg3: '#1a1d23', bg4: '#21252d',
@@ -46,6 +47,12 @@ type Drag = { id: string; kind: 'app' | 'folder' } | null
 export default function HomePage({ user }: Props) {
   const router = useRouter()
   const apps = useVisibleApps(user.role, user.visibleTabs)
+  // Per-module unread badges (notifications + chat messages), 30s poll.
+  const { summary } = useNotificationSummary()
+  const badgeFor = useCallback((appId: string): number => {
+    if (appId === 'messages') return summary?.messages || 0
+    return summary?.byModule?.[appId] || 0
+  }, [summary])
   const { prefs, update } = usePreferences()
   const [query, setQuery] = useState('')
   const [drag, setDrag] = useState<Drag>(null)
@@ -259,12 +266,13 @@ export default function HomePage({ user }: Props) {
 
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(132px, 1fr))', gap: 14 }}>
             {searching
-              ? searchResults.map(app => (<AppTile key={app.id} app={app} onClick={() => launch(app)}/>))
+              ? searchResults.map(app => (<AppTile key={app.id} app={app} badge={badgeFor(app.id)} onClick={() => launch(app)}/>))
               : orderedCells.map(cell => cell.kind === 'folder' ? (
                   <FolderTile
                     key={cell.id}
                     name={cell.folder.name}
                     apps={cell.folder.apps}
+                    badge={cell.folder.apps.reduce((s, a) => s + badgeFor(a.id), 0)}
                     draggable={!editMode}
                     dropMode={dropModeFor(cell.id)}
                     onOpen={() => { if (!drag) setOpenFolderId(cell.id) }}
@@ -277,6 +285,7 @@ export default function HomePage({ user }: Props) {
                   <AppTile
                     key={cell.id}
                     app={cell.app}
+                    badge={badgeFor(cell.app.id)}
                     draggable={!editMode}
                     editMode={editMode}
                     onCommitRename={(name) => saveLabel(cell.app.id, name, cell.app.defaultLabel)}
@@ -321,7 +330,7 @@ export default function HomePage({ user }: Props) {
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(120px, 1fr))', gap: 14 }}>
               {openFolder.apps.map(app => (
                 <div key={app.id} style={{ position: 'relative' }}>
-                  <AppTile app={app} onClick={() => launch(app)}/>
+                  <AppTile app={app} badge={badgeFor(app.id)} onClick={() => launch(app)}/>
                   <button
                     onClick={() => removeFromFolder(openFolder.id, app.id)}
                     title="Remove from folder"
@@ -344,11 +353,25 @@ function InsertBar({ side }: { side: 'left' | 'right' }) {
 }
 
 // ── Tiles ────────────────────────────────────────────────────────────
+function Badge({ count }: { count: number }) {
+  if (count <= 0) return null
+  return (
+    <span style={{
+      position: 'absolute', top: 8, right: 8,
+      minWidth: 18, height: 18, padding: '0 5px', borderRadius: 9,
+      background: '#f04e4e', color: '#fff', fontSize: 10, fontWeight: 600,
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
+      fontFamily: 'monospace', pointerEvents: 'none',
+    }}>{count > 99 ? '99+' : count}</span>
+  )
+}
+
 function AppTile({
-  app, onClick, draggable, isDragging, dropMode, editMode, onCommitRename,
+  app, badge = 0, onClick, draggable, isDragging, dropMode, editMode, onCommitRename,
   onDragStart, onDragEnd, onDragOver, onDrop,
 }: {
   app: LauncherApp
+  badge?: number
   onClick: () => void
   draggable?: boolean
   isDragging?: boolean
@@ -387,6 +410,7 @@ function AppTile({
     >
       {dropMode === 'before' && <InsertBar side="left"/>}
       {dropMode === 'after' && <InsertBar side="right"/>}
+      <Badge count={badge}/>
       <div style={{ width: 60, height: 60, borderRadius: 14, display: 'flex', alignItems: 'center', justifyContent: 'center', background: `${app.accent}1f`, color: app.accent, border: `1px solid ${app.accent}33`, pointerEvents: 'none' }}>
         <AppIcon name={app.id} size={34}/>
       </div>
@@ -417,10 +441,11 @@ function AppTile({
 }
 
 function FolderTile({
-  name, apps, draggable, dropMode, onOpen, onDragStart, onDragEnd, onDragOver, onDrop,
+  name, apps, badge = 0, draggable, dropMode, onOpen, onDragStart, onDragEnd, onDragOver, onDrop,
 }: {
   name: string
   apps: LauncherApp[]
+  badge?: number
   draggable?: boolean
   dropMode?: DropMode
   onOpen: () => void
@@ -455,6 +480,7 @@ function FolderTile({
     >
       {dropMode === 'before' && <InsertBar side="left"/>}
       {dropMode === 'after' && <InsertBar side="right"/>}
+      <Badge count={badge}/>
       {/* iOS-style mini 2x2 preview */}
       <div style={{ width: 60, height: 60, borderRadius: 14, background: T.bg4, border: `1px solid ${T.border2}`, padding: 7, display: 'grid', gridTemplateColumns: '1fr 1fr', gridTemplateRows: '1fr 1fr', gap: 4, pointerEvents: 'none' }}>
         {preview.map(a => (
