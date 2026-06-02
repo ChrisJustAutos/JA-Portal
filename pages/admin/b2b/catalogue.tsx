@@ -1628,6 +1628,9 @@ function PricingSection({
       ? ((item.trade_price_ex_gst - item.cost_price_ex_gst) / item.trade_price_ex_gst) * 100
       : null
 
+  const taxable = item.is_taxable !== false
+  const inc = (ex: number | null): number | null => ex == null ? null : Math.round((taxable ? ex * 1.1 : ex) * 100) / 100
+
   return (
     <Section title="Pricing" subtitle="Cost is admin-only. Trade price applies to all distributors.">
       <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10,marginBottom:8}}>
@@ -1645,18 +1648,95 @@ function PricingSection({
           onSave={v => { if (v != null) onPatch({ trade_price_ex_gst: v }) }}
         />
       </div>
+
+      {/* Retail + derive distributor (trade) price as a % off retail */}
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10,marginBottom:8}}>
+        <FieldNumber
+          label="RRP / retail (ex GST)"
+          prefix="$"
+          value={item.rrp_ex_gst}
+          onSave={v => onPatch({ rrp_ex_gst: v })}
+        />
+        <RetailDiscountField
+          rrp={item.rrp_ex_gst}
+          trade={item.trade_price_ex_gst}
+          onApply={t => onPatch({ trade_price_ex_gst: t })}
+        />
+      </div>
+
       <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'5px 0',borderBottom:`1px solid ${T.border}`,fontSize:13}}>
-        <span style={{color:T.text3}}>Margin</span>
+        <span style={{color:T.text3}}>Margin (on cost)</span>
         <span style={{color: margin == null ? T.text3 : (margin > 30 ? T.green : margin > 10 ? T.amber : T.red),fontFamily:'monospace',fontSize:12}}>
           {margin == null ? '—' : `${margin.toFixed(1)}%`}
         </span>
       </div>
-      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'5px 0',borderBottom:`1px solid ${T.border}`,fontSize:13,marginBottom:14}}>
-        <span style={{color:T.text3}}>RRP (ex GST)</span>
-        <span style={{color:T.text2,fontFamily:'monospace',fontSize:11}}>{fmtMoney(item.rrp_ex_gst)}</span>
+
+      {/* Inc-GST readout */}
+      <div style={{marginTop:12,padding:'10px 12px',background:T.bg3,border:`1px solid ${T.border}`,borderRadius:7,marginBottom:14}}>
+        <div style={{fontSize:10,color:T.text3,textTransform:'uppercase',letterSpacing:'0.06em',marginBottom:6}}>
+          Inc GST {taxable ? '' : '(item is GST-free)'}
+        </div>
+        {([
+          ['Trade (inc GST)', inc(item.trade_price_ex_gst)],
+          ['RRP (inc GST)',   inc(item.rrp_ex_gst)],
+        ] as [string, number | null][]).map(([label, v]) => (
+          <div key={label} style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'3px 0',fontSize:13}}>
+            <span style={{color:T.text3}}>{label}</span>
+            <span style={{color:T.text,fontFamily:'monospace',fontSize:12}}>{fmtMoney(v)}</span>
+          </div>
+        ))}
       </div>
 
     </Section>
+  )
+}
+
+// % off retail → distributor (trade) price. Shows the current implied discount;
+// committing a % sets trade = RRP × (1 − %/100).
+function RetailDiscountField({ rrp, trade, onApply }: {
+  rrp: number | null
+  trade: number
+  onApply: (tradeEx: number) => Promise<void> | void
+}) {
+  const implied = (rrp != null && rrp > 0) ? Math.round((1 - trade / rrp) * 1000) / 10 : null
+  const [draft, setDraft] = useState<string>(implied != null ? String(implied) : '')
+  const [saving, setSaving] = useState(false)
+  useEffect(() => { setDraft(implied != null ? String(implied) : '') }, [implied])
+
+  const pct = Number(draft)
+  const preview = (rrp != null && rrp > 0 && draft.trim() !== '' && isFinite(pct))
+    ? Math.round(rrp * (1 - pct / 100) * 100) / 100 : null
+
+  async function commit() {
+    if (rrp == null || rrp <= 0) return
+    if (draft.trim() === '' || !isFinite(pct)) { setDraft(implied != null ? String(implied) : ''); return }
+    const t = Math.round(rrp * (1 - pct / 100) * 100) / 100
+    if (t < 0 || t === trade) return
+    setSaving(true)
+    try { await onApply(t) } finally { setSaving(false) }
+  }
+
+  const disabled = rrp == null || rrp <= 0
+  return (
+    <label style={{display:'flex',flexDirection:'column',gap:4}}>
+      <span style={{fontSize:11,color:T.text2,fontWeight:500}}>Discount off retail</span>
+      <div style={{display:'flex',alignItems:'center',gap:6}}>
+        <input
+          inputMode="decimal"
+          value={draft}
+          disabled={disabled || saving}
+          placeholder={disabled ? 'set RRP first' : '%'}
+          onChange={e => setDraft(e.target.value)}
+          onBlur={commit}
+          onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
+          style={{flex:1,background:T.bg3,border:`1px solid ${T.border2}`,color:T.text,borderRadius:5,padding:'8px 10px',fontSize:13,outline:'none',fontFamily:'monospace',opacity:disabled?0.5:1}}
+        />
+        <span style={{fontSize:12,color:T.text3}}>%</span>
+      </div>
+      <span style={{fontSize:10,color:T.text3}}>
+        {disabled ? 'Enter RRP to derive trade price' : preview != null ? `→ trade $${preview.toFixed(2)} ex GST` : 'sets trade = RRP − %'}
+      </span>
+    </label>
   )
 }
 
@@ -2283,7 +2363,7 @@ function BulkEditModal({ items, onClose, onApplied }: {
 }) {
   const round2 = (n: number) => Math.round(n * 100) / 100
   const [visMode, setVisMode] = useState<'none'|'show'|'hide'>('none')
-  const [priceMode, setPriceMode] = useState<'none'|'set'|'inc'|'dec'>('none')
+  const [priceMode, setPriceMode] = useState<'none'|'set'|'inc'|'dec'|'rrp'>('none')
   const [priceVal, setPriceVal] = useState('')
   const [handMode, setHandMode] = useState<'none'|'on'|'off'>('none')
   const [dropMode, setDropMode] = useState<'none'|'on'|'off'>('none')
@@ -2304,6 +2384,8 @@ function BulkEditModal({ items, onClose, onApplied }: {
       if (priceMode === 'set' && isFinite(v) && v >= 0) patch.trade_price_ex_gst = round2(v)
       if (priceMode === 'inc' && isFinite(v)) patch.trade_price_ex_gst = round2(it.trade_price_ex_gst * (1 + v/100))
       if (priceMode === 'dec' && isFinite(v)) patch.trade_price_ex_gst = round2(Math.max(0, it.trade_price_ex_gst * (1 - v/100)))
+      // Trade = RRP − v% (only for items that have an RRP set).
+      if (priceMode === 'rrp' && isFinite(v) && it.rrp_ex_gst != null && it.rrp_ex_gst > 0) patch.trade_price_ex_gst = round2(Math.max(0, it.rrp_ex_gst * (1 - v/100)))
     }
     if (handMode === 'on') patch.manual_handling = true
     if (handMode === 'off') patch.manual_handling = false
@@ -2360,9 +2442,11 @@ function BulkEditModal({ items, onClose, onApplied }: {
                 <option value="set">Set to $</option>
                 <option value="inc">Increase %</option>
                 <option value="dec">Decrease %</option>
+                <option value="rrp">RRP minus %</option>
               </select>
               {priceMode !== 'none' && <input type="number" min="0" step="0.01" value={priceVal} onChange={e => setPriceVal(e.target.value)} placeholder={priceMode==='set'?'$':'%'} style={inp}/>}
             </div>
+            {priceMode === 'rrp' && <div style={{fontSize:11,color:T.text3,marginTop:5}}>Sets trade = RRP − % for each item that has an RRP. Items without an RRP are skipped.</div>}
           </div>
 
           <div>
