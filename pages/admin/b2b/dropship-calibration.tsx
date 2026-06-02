@@ -39,6 +39,7 @@ export default function DropshipCalibrationPage({ user }: Props) {
   const [error, setError] = useState<string | null>(null)
   // edits keyed `${catalogueId}|${zoneId}` → string price (ex GST)
   const [edits, setEdits] = useState<Record<string, string>>({})
+  const [zoneDefaults, setZoneDefaults] = useState<Record<string, string>>({})
   const [applying, setApplying] = useState(false)
   const [flash, setFlash] = useState('')
 
@@ -60,8 +61,32 @@ export default function DropshipCalibrationPage({ user }: Props) {
         }
       }
       setEdits(e)
+      // Zone defaults: prefilled from the zone-wide max where there's history,
+      // blank where the zone has never been shipped to (fill from MPI's chart).
+      const zd: Record<string, string> = {}
+      for (const z of j.zones as ApiData['zones']) {
+        const v = j.perZone?.[z.id]?.max
+        if (v != null) zd[z.id] = String(v)
+      }
+      setZoneDefaults(zd)
     } catch (e: any) { setError(e?.message || String(e)) }
     finally { setLoading(false) }
+  }
+
+  // Fill any empty product×zone cell with that zone's default figure.
+  function fillEmpty() {
+    if (!data) return
+    setEdits(prev => {
+      const next = { ...prev }
+      let filled = 0
+      for (const p of data.products) for (const z of data.zones) {
+        const key = `${p.catalogue_id}|${z.id}`
+        const def = zoneDefaults[z.id]
+        if ((next[key] == null || next[key] === '') && def != null && def.trim() !== '') { next[key] = def; filled++ }
+      }
+      setFlash(`Filled ${filled} empty cell${filled === 1 ? '' : 's'} from zone defaults.`)
+      return next
+    })
   }
 
   async function apply() {
@@ -161,6 +186,9 @@ export default function DropshipCalibrationPage({ user }: Props) {
                       </div>
                       <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
                         {flash && <span style={{ fontSize: 12, color: T.green }}>{flash}</span>}
+                        <button onClick={fillEmpty} style={{ padding: '8px 14px', borderRadius: 7, border: `1px solid ${T.border2}`, background: 'transparent', color: T.blue, fontSize: 12.5, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>
+                          Fill empty cells from zone defaults
+                        </button>
                         <button onClick={apply} disabled={applying} style={{ padding: '8px 16px', borderRadius: 7, border: 'none', background: T.green, color: '#06210f', fontSize: 13, fontWeight: 700, cursor: applying ? 'wait' : 'pointer', fontFamily: 'inherit' }}>
                           {applying ? 'Applying…' : 'Apply to drop-ship rates'}
                         </button>
@@ -176,6 +204,19 @@ export default function DropshipCalibrationPage({ user }: Props) {
                         </tr>
                       </thead>
                       <tbody>
+                        {/* Zone default row — type MPI's chart figure for gap zones, then "Fill empty cells". */}
+                        <tr style={{ borderTop: `1px solid ${T.border}`, background: `${T.blue}0d` }}>
+                          <td style={{ padding: '5px 8px', position: 'sticky', left: 0, background: T.bg2, whiteSpace: 'nowrap', fontSize: 11, color: T.blue, fontWeight: 600 }} title="Per-zone default — fills empty product cells">Zone default →</td>
+                          {data.zones.map(z => (
+                            <td key={z.id} style={{ padding: '3px 4px' }}>
+                              <input
+                                inputMode="decimal" placeholder="—" value={zoneDefaults[z.id] ?? ''}
+                                onChange={e => setZoneDefaults(s => ({ ...s, [z.id]: e.target.value }))}
+                                style={{ width: 64, padding: '4px 5px', textAlign: 'right', background: T.bg3, border: `1px solid ${T.blue}55`, borderRadius: 4, color: T.blue, fontSize: 11.5, fontWeight: 600, fontFamily: 'inherit', outline: 'none' }}
+                              />
+                            </td>
+                          ))}
+                        </tr>
                         {data.products.map(p => (
                           <tr key={p.catalogue_id} style={{ borderTop: `1px solid ${T.border}` }}>
                             <td style={{ padding: '5px 8px', position: 'sticky', left: 0, background: T.bg2, whiteSpace: 'nowrap', maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis' }} title={p.name}>
