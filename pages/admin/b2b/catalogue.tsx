@@ -68,6 +68,9 @@ interface CatalogueItem {
   inbound_freight_cost_ex_gst: number | null
   is_special_order: boolean
   is_drop_ship: boolean
+  qty_available: number | null
+  is_inventoried: boolean | null
+  stock_cached_at: string | null
   myob_supplier_uid: string | null
   myob_supplier_name: string | null
   supplier_item_number: string | null
@@ -231,10 +234,27 @@ export default function CatalogueAdminPage({ user }: Props) {
   const [drawerItemId, setDrawerItemId] = useState<string | null>(null)
   const [previewMenuOpen, setPreviewMenuOpen] = useState(false)
   const [bulkOpen, setBulkOpen] = useState(false)
+  const [refreshingStock, setRefreshingStock] = useState(false)
+  const [stockMsg, setStockMsg] = useState('')
   const [previewLoading, setPreviewLoading] = useState(false)
   const [previewError, setPreviewError] = useState<string | null>(null)
   const [syncing, setSyncing] = useState(false)
   const [syncMsg, setSyncMsg] = useState<string | null>(null)
+
+  async function refreshStock() {
+    setRefreshingStock(true); setStockMsg('')
+    try {
+      const r = await fetch('/api/b2b/admin/catalogue/refresh-stock', { method: 'POST', credentials: 'same-origin' })
+      const j = await r.json()
+      if (!r.ok) throw new Error(j?.error || `HTTP ${r.status}`)
+      await load()
+      setStockMsg(`Stock updated (${j.updated ?? j.scanned ?? 0} items)`)
+      setTimeout(() => setStockMsg(''), 3000)
+    } catch (e: any) {
+      setStockMsg(e?.message || 'Stock refresh failed')
+      setTimeout(() => setStockMsg(''), 4000)
+    } finally { setRefreshingStock(false) }
+  }
 
   async function load() {
     setLoading(true)
@@ -466,6 +486,12 @@ export default function CatalogueAdminPage({ user }: Props) {
               style={{padding:'6px 12px',borderRadius:5,border:`1px solid ${T.border2}`,background:'transparent',color:T.text2,fontSize:12,cursor:loading?'wait':'pointer',fontFamily:'inherit'}}>
               {loading ? 'Loading…' : '↻ Refresh'}
             </button>
+            <button onClick={refreshStock} disabled={refreshingStock}
+              title="Pull current stock levels from MYOB (JAWS) and update the Stock column"
+              style={{padding:'6px 12px',borderRadius:5,border:`1px solid ${T.border2}`,background:'transparent',color:T.text2,fontSize:12,cursor:refreshingStock?'wait':'pointer',fontFamily:'inherit'}}>
+              {refreshingStock ? 'Updating stock…' : '⟳ Refresh stock'}
+            </button>
+            {stockMsg && <span style={{fontSize:11,color:stockMsg.includes('fail')?T.amber:T.green}}>{stockMsg}</span>}
             <button onClick={() => setBulkOpen(true)} disabled={filtered.length === 0}
               title="Apply price / visibility / freight surcharge changes to every item matching the current filters"
               style={{padding:'6px 12px',borderRadius:5,border:`1px solid ${T.purple}60`,background:`${T.purple}15`,color:T.purple,fontSize:12,fontWeight:600,cursor:filtered.length===0?'default':'pointer',fontFamily:'inherit',opacity:filtered.length===0?0.5:1}}>
@@ -511,13 +537,14 @@ export default function CatalogueAdminPage({ user }: Props) {
                     <th style={th(150)}>Type</th>
                     <th style={{...th(100),textAlign:'right'}}>RRP</th>
                     <th style={{...th(140),textAlign:'right'}}>Trade $ (ex GST)</th>
+                    <th style={{...th(90),textAlign:'center'}}>Stock</th>
                     <th style={{...th(100),textAlign:'center'}}>Visible</th>
                     <th style={th(50)}></th>
                   </tr>
                 </thead>
                 <tbody>
                   {filtered.length === 0 && !loading && (
-                    <tr><td colSpan={9} style={{padding:24,textAlign:'center',color:T.text3,fontSize:13}}>
+                    <tr><td colSpan={10} style={{padding:24,textAlign:'center',color:T.text3,fontSize:13}}>
                       {items.length === 0 ? 'No items yet — run a catalogue sync from the B2B Portal page.' : 'No items match your filters.'}
                     </td></tr>
                   )}
@@ -813,6 +840,23 @@ function CatalogueRow({
             }}
           />
         </div>
+      </td>
+
+      {/* Stock (cached from MYOB) */}
+      <td style={{...td(),textAlign:'center'}}>
+        {(() => {
+          if (item.is_drop_ship) return <span style={{fontSize:10.5,color:T.text3}} title="Ships direct from supplier — no warehouse stock">drop-ship</span>
+          if (item.is_inventoried === false) return <span style={{color:T.text3,fontSize:14}} title="Not inventoried (unlimited)">∞</span>
+          const q = item.qty_available
+          if (q == null) return <span style={{color:T.text3,fontSize:11}} title="No stock cached yet">—</span>
+          const col = q >= 5 ? T.green : q >= 1 ? T.amber : T.red
+          return (
+            <span style={{fontFamily:'monospace',fontWeight:600,color:col}}
+              title={item.stock_cached_at ? `MYOB stock as at ${new Date(item.stock_cached_at).toLocaleString('en-AU')}` : undefined}>
+              {q}
+            </span>
+          )
+        })()}
       </td>
 
       {/* Visibility toggle */}
