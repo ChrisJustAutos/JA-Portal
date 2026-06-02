@@ -45,5 +45,19 @@ export default withAuth('monitor:calls', async (req, res, user) => {
     return res.status(200).json({ configured: false, reason: 'no_extension' })
   }
 
-  return res.status(200).json({ configured: true, extension: ext, password: pwd, wss_url, sip_domain })
+  // ICE servers. STUN alone fails on restrictive/symmetric NAT (e.g. mobile
+  // carriers / CGNAT) — calls connect but media never flows. Configure a TURN
+  // relay (FREEPBX_TURN_*) to fix listening on cellular. URLs comma-separated,
+  // e.g. "turn:turn.example.com:3478,turns:turn.example.com:5349".
+  const stunUrls = (process.env.FREEPBX_STUN_URLS || 'stun:stun.l.google.com:19302').split(',').map(s => s.trim()).filter(Boolean)
+  const turnUrls = (process.env.FREEPBX_TURN_URLS || '').split(',').map(s => s.trim()).filter(Boolean)
+  const turnUser = (process.env.FREEPBX_TURN_USERNAME || '').trim()
+  const turnCred = (process.env.FREEPBX_TURN_CREDENTIAL || '').trim()
+  const ice_servers: any[] = []
+  if (stunUrls.length) ice_servers.push({ urls: stunUrls })
+  if (turnUrls.length && turnUser && turnCred) {
+    ice_servers.push({ urls: turnUrls, username: turnUser, credential: turnCred })
+  }
+
+  return res.status(200).json({ configured: true, extension: ext, password: pwd, wss_url, sip_domain, ice_servers, has_turn: turnUrls.length > 0 && !!turnUser && !!turnCred })
 })

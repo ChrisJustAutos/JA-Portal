@@ -42,6 +42,9 @@ export interface SoftphoneConfig {
   // is actually arriving (so silence is a playback issue); rxBytes stuck at 0 +
   // ice not 'connected' = the media path failed (e.g. needs TURN on mobile).
   onStats?: (s: { ice: string; conn: string; rxBytes: number; rxPackets: number; level: number }) => void
+  // ICE servers (STUN + TURN). TURN is required for media to flow on restrictive
+  // NAT / mobile carriers. Defaults to a public STUN if omitted.
+  iceServers?: RTCIceServer[]
 }
 
 type Listener<E> = (evt: E, detail?: any) => void
@@ -97,7 +100,9 @@ export class Softphone {
       sessionDescriptionHandlerFactoryOptions: {
         constraints: { audio: true, video: false },
         peerConnectionConfiguration: {
-          iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
+          iceServers: (this.cfg.iceServers && this.cfg.iceServers.length)
+            ? this.cfg.iceServers
+            : [{ urls: 'stun:stun.l.google.com:19302' }],
         },
       },
       delegate: {

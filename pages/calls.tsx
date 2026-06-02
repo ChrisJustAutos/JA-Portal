@@ -873,6 +873,7 @@ function LiveCallsBoard({ canMonitor }: { canMonitor: boolean }) {
         wssUrl: d.wss_url, sipDomain: d.sip_domain,
         extension: d.extension, password: d.password,
         audioEl: audioElRef.current!,
+        iceServers: Array.isArray(d.ice_servers) ? d.ice_servers : undefined,
         onStats: (s) => setMediaStat({ ice: s.ice, rxBytes: s.rxBytes, level: s.level }),
       })
       sp.on('status', (s: any, det: any) => {
