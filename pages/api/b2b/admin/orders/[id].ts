@@ -85,7 +85,7 @@ async function getDetail(id: string, res: NextApiResponse) {
       machship_consignment_id, machship_consignment_number,
       machship_carrier_id, machship_carrier_service_id,
       freight_service_label, freight_eta_at, freight_status, last_freight_poll_at,
-      tracking_page_access_token, freight_chosen_quote, freight_quote_markup_pct,
+      tracking_page_access_token, freight_chosen_quote, freight_quote_markup_pct, freight_pack_mode,
       dropship_pos, dropship_po_raised_at,
       customer_notes, internal_notes, shipping_address_snapshot,
       stripe_checkout_session_id, stripe_payment_intent_id, stripe_charge_id,
@@ -227,6 +227,7 @@ async function getDetail(id: string, res: NextApiResponse) {
       tracking_page_access_token:   order.tracking_page_access_token,
       freight_chosen_quote:         order.freight_chosen_quote,
       freight_quote_markup_pct:     order.freight_quote_markup_pct != null ? Number(order.freight_quote_markup_pct) : null,
+      freight_pack_mode:            order.freight_pack_mode || null,
       // Drop-ship
       has_drop_ship:        hasDropShip,
       dropship_pos:         Array.isArray(order.dropship_pos) ? order.dropship_pos : [],

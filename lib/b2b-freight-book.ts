@@ -41,14 +41,14 @@ export interface BookFreightResult {
   label_warning?: string | null
 }
 
-export async function bookFreightForOrder(orderId: string, opts: { actorId?: string | null; force?: boolean; dispatchAt?: string | Date | null } = {}): Promise<BookFreightResult> {
+export async function bookFreightForOrder(orderId: string, opts: { actorId?: string | null; force?: boolean; dispatchAt?: string | Date | null; packMode?: 'auto' | 'pallet' | 'cartons' } = {}): Promise<BookFreightResult> {
   const c = svc()
   const fail = (httpStatus: number, error: string, detail?: any): BookFreightResult => ({ ok: false, httpStatus, error, detail })
 
   const { data: order, error: oErr } = await c.from('b2b_orders').select(`
       id, order_number, status, customer_po, distributor_id, shipping_address_snapshot,
       machship_consignment_id, machship_consignment_number,
-      freight_chosen_quote, machship_carrier_id, machship_carrier_service_id, freight_service_label
+      freight_chosen_quote, machship_carrier_id, machship_carrier_service_id, freight_service_label, freight_pack_mode
     `).eq('id', orderId).maybeSingle()
   if (oErr) return fail(500, oErr.message)
   if (!order) return fail(404, 'Order not found')
@@ -108,7 +108,11 @@ export async function bookFreightForOrder(orderId: string, opts: { actorId?: str
   }
   if (missing.length > 0) return fail(400, 'Some line items are missing freight dimensions — fix the catalogue before booking.', missing)
   // Cartonize the same way the quote did, so the booked consignment matches.
-  const items: CreateConsignmentRequest['items'] = await packForMachShip(packInput)
+  // packMode precedence: explicit opt → the order's stored override → auto.
+  const validMode = (m: any): 'auto' | 'pallet' | 'cartons' | undefined =>
+    (m === 'pallet' || m === 'cartons' || m === 'auto') ? m : undefined
+  const effPackMode = validMode(opts.packMode) || validMode((order as any).freight_pack_mode)
+  const items: CreateConsignmentRequest['items'] = await packForMachShip(packInput, { packMode: effPackMode })
 
   const reference = order.order_number + (order.customer_po ? ` / ${order.customer_po}` : '')
   const chosen: any = order.freight_chosen_quote || {}
@@ -147,6 +151,7 @@ export async function bookFreightForOrder(orderId: string, opts: { actorId?: str
   }
 
   const update: Record<string, any> = {
+    ...(opts.packMode ? { freight_pack_mode: opts.packMode } : {}),
     machship_consignment_id: String(consignment.id),
     machship_consignment_number: consignment.consignmentNumber || null,
     tracking_number: consignment.carrierConsignmentId || null,

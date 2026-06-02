@@ -55,6 +55,8 @@ export default withAuth('admin:b2b', async (req: NextApiRequest, res: NextApiRes
     }
   }
   if (chosenFreightRateId && chosenMachShipRoute) return res.status(400).json({ error: 'Pass either freightRateId or freightMachShipRoute, not both.' })
+  const pmRaw = String(body.packMode || '').trim()
+  const packMode = (pmRaw === 'pallet' || pmRaw === 'cartons' || pmRaw === 'auto') ? pmRaw as ('pallet' | 'cartons' | 'auto') : undefined
   const shipPostcodeIn = String(body.shipPostcode || '').trim()
   const shipSuburbIn   = String(body.shipSuburb || '').trim()
 
@@ -130,7 +132,7 @@ export default withAuth('admin:b2b', async (req: NextApiRequest, res: NextApiRes
         inbound_freight_cost_ex_gst: cat.inbound_freight_cost_ex_gst ?? null,
       }
     })
-    const liveQuote = await getLiveQuote(liveItems, { postcode, suburb })
+    const liveQuote = await getLiveQuote(liveItems, { postcode, suburb }, { packMode })
     if (liveQuote.mode === 'blocked') return res.status(400).json({ error: 'Freight quote unavailable — some products are missing dimensions.', details: liveQuote.missing.map(m => `${m.sku} ${m.name} (needs ${m.missing_fields.join(', ')})`) })
     if (liveQuote.mode !== 'live') return res.status(503).json({ error: 'Live freight quoting unavailable — re-quote, pick a static rate, or leave freight off.' })
     const match = liveQuote.rates.find(r => r.machship.carrierId === chosenMachShipRoute!.carrierId && r.machship.carrierServiceId === chosenMachShipRoute!.carrierServiceId)
@@ -172,6 +174,7 @@ export default withAuth('admin:b2b', async (req: NextApiRequest, res: NextApiRes
     machship_carrier_id:         freightMachShipCarrierId,
     machship_carrier_service_id: freightMachShipServiceId,
     freight_service_label:       chosenMachShipRoute ? freightLabel : null,
+    freight_pack_mode:           hasFreight ? (packMode || null) : null,
   }).select('id, order_number').single()
   if (orderErr) return res.status(500).json({ error: orderErr.message })
 

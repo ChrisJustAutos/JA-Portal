@@ -106,6 +106,7 @@ interface OrderDetail {
   tracking_page_access_token: string | null
   freight_chosen_quote: any | null
   freight_quote_markup_pct: number | null
+  freight_pack_mode: string | null
   // Drop-ship
   has_drop_ship: boolean
   dropship_po_raised_at: string | null
@@ -837,6 +838,7 @@ function ShippingCard({ order, onEdit, onReloaded, onFlash }: {
   const [refreshBusy,  setRefreshBusy]  = useState(false)
   const [actionError,  setActionError]  = useState<string | null>(null)
   const [dispatchAt,   setDispatchAt]   = useState('')   // datetime-local; blank = collect ASAP
+  const [packMode,     setPackMode]     = useState<string>(order.freight_pack_mode || 'auto')
 
   async function openLabel() {
     try {
@@ -857,7 +859,10 @@ function ShippingCard({ order, onEdit, onReloaded, onFlash }: {
       const r = await fetch(`/api/b2b/admin/orders/${order.id}/book-freight${force ? '?force=1' : ''}`, {
         method: 'POST', credentials: 'same-origin',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(dispatchAt ? { dispatch_at: new Date(dispatchAt).toISOString() } : {}),
+        body: JSON.stringify({
+          ...(dispatchAt ? { dispatch_at: new Date(dispatchAt).toISOString() } : {}),
+          pack_mode: packMode || 'auto',
+        }),
       })
       const j = await r.json()
       if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`)
@@ -932,6 +937,20 @@ function ShippingCard({ order, onEdit, onReloaded, onFlash }: {
           </button>
         )}
       </div>
+
+      {/* Pack mode — override the cartonizer for this order before booking. */}
+      {hasLiveQuote && !hasConsignment && (
+        <div style={{display:'flex', alignItems:'center', gap:8, marginBottom:10, flexWrap:'wrap'}}>
+          <span style={{fontSize:11, color:T.text3, whiteSpace:'nowrap'}}>Pack as</span>
+          <select value={packMode} onChange={e => setPackMode(e.target.value)}
+            style={{background:T.bg3, border:`1px solid ${T.border2}`, color:T.text, borderRadius:5, padding:'5px 8px', fontSize:12, outline:'none', fontFamily:'inherit'}}>
+            <option value="auto">Auto (weight/volume)</option>
+            <option value="cartons">Cartons</option>
+            <option value="pallet">Pallet</option>
+          </select>
+          <span style={{fontSize:10, color:T.text3}}>used when you book below</span>
+        </div>
+      )}
 
       {/* Collection time — optional. Blank = collect ASAP; a future time sets
           MachShip's desired despatch so the carrier collects then. */}

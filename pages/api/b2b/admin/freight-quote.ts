@@ -85,7 +85,9 @@ export default withAuth('admin:b2b', async (req: NextApiRequest, res: NextApiRes
   })
 
   // ── Try live MachShip first, then static-zone fallback ──
-  const live = await getLiveQuote(liveItems, { suburb, postcode })
+  const pm = String(body.packMode || '').trim()
+  const packMode = (pm === 'pallet' || pm === 'cartons' || pm === 'auto') ? pm as any : undefined
+  const live = await getLiveQuote(liveItems, { suburb, postcode }, { packMode })
 
   if (live.mode === 'live') {
     return res.status(200).json({

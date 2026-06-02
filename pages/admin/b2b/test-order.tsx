@@ -50,6 +50,7 @@ export default function TestOrderPage({ user }: Props) {
   const [freightBusy, setFreightBusy] = useState(false)
   const [freightMsg, setFreightMsg] = useState('')
   const [selFreightId, setSelFreightId] = useState<string | null>(null)
+  const [packMode, setPackMode] = useState<'auto' | 'cartons' | 'pallet'>('auto')
   const [creating, setCreating] = useState(false)
   const [result, setResult] = useState<{ orderId: string; orderNumber: string; checkoutUrl: string | null; total_inc: number; freight?: { label: string | null; cost_ex_gst: number } | null } | null>(null)
   const [markState, setMarkState] = useState<'idle' | 'busy' | 'done' | 'err'>('idle')
@@ -76,7 +77,7 @@ export default function TestOrderPage({ user }: Props) {
     if (lines.length === 0) return
     setFreightBusy(true); setFreightMsg(''); setFreight(null); setSelFreightId(null)
     try {
-      const r = await fetch('/api/b2b/admin/freight-quote', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ distributorId: distId, postcode: shipPostcode, suburb: shipSuburb, items: lines.map(l => ({ catalogueId: l.cat.id, qty: l.qty })) }) })
+      const r = await fetch('/api/b2b/admin/freight-quote', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ distributorId: distId, postcode: shipPostcode, suburb: shipSuburb, packMode, items: lines.map(l => ({ catalogueId: l.cat.id, qty: l.qty })) }) })
       const d = await r.json()
       if (!r.ok) { setFreightMsg(d.error || 'Freight quote failed'); return }
       setFreight(d)
@@ -102,7 +103,7 @@ export default function TestOrderPage({ user }: Props) {
     if (!distId || lines.length === 0) return
     setCreating(true); setMsg('')
     try {
-      const r = await fetch('/api/b2b/admin/test-order', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ distributorId: distId, customerPo: po, items: lines.map(l => ({ catalogueId: l.cat.id, qty: l.qty })), ...freightPayload() }) })
+      const r = await fetch('/api/b2b/admin/test-order', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ distributorId: distId, customerPo: po, packMode, items: lines.map(l => ({ catalogueId: l.cat.id, qty: l.qty })), ...freightPayload() }) })
       const d = await r.json()
       if (!r.ok) { setMsg(d.error || 'Failed to create'); return }
       setResult(d); setMarkState('idle')
@@ -197,6 +198,14 @@ export default function TestOrderPage({ user }: Props) {
                         <input style={inp} value={shipPostcode} onChange={e => { setShipPostcode(e.target.value); setFreight(null) }} placeholder={distId ? 'distributor address' : 'e.g. 4000'} maxLength={4} />
                       </label>
                       <button onClick={quoteFreight} disabled={freightBusy} style={btn(T.purple, !freightBusy)}>{freightBusy ? 'Quoting…' : 'Quote freight'}</button>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <span style={{ fontSize: 10, color: T.text3 }}>Pack as</span>
+                      <select value={packMode} onChange={e => { setPackMode(e.target.value as any); setFreight(null); setSelFreightId(null) }} style={{ ...inp, width: 'auto', padding: '6px 8px' }}>
+                        <option value="auto">Auto (weight/volume)</option>
+                        <option value="cartons">Cartons</option>
+                        <option value="pallet">Pallet</option>
+                      </select>
                     </div>
                     {freightMsg && <div style={{ fontSize: 12, color: T.red }}>{freightMsg}</div>}
                     {freight && (
