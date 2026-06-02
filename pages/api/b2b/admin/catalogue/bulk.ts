@@ -42,6 +42,10 @@ function cleanPatch(raw: any): { patch: Record<string, any> } | { error: string 
     if (typeof raw.manual_handling !== 'boolean') return { error: 'manual_handling must be boolean' }
     patch.manual_handling = raw.manual_handling
   }
+  if ('is_drop_ship' in raw) {
+    if (typeof raw.is_drop_ship !== 'boolean') return { error: 'is_drop_ship must be boolean' }
+    patch.is_drop_ship = raw.is_drop_ship
+  }
   for (const k of NUMERIC_FIELDS) {
     if (k in raw) {
       const v = raw[k]

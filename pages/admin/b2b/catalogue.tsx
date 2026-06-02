@@ -2225,13 +2225,14 @@ function BulkEditModal({ items, onClose, onApplied }: {
   const [priceMode, setPriceMode] = useState<'none'|'set'|'inc'|'dec'>('none')
   const [priceVal, setPriceVal] = useState('')
   const [handMode, setHandMode] = useState<'none'|'on'|'off'>('none')
+  const [dropMode, setDropMode] = useState<'none'|'on'|'off'>('none')
   const [inbMode, setInbMode] = useState<'none'|'set'|'clear'>('none')
   const [inbVal, setInbVal] = useState('')
   const [pkgMode, setPkgMode] = useState<'none'|'box'|'pallet'|'other'>('none')
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState<string | null>(null)
 
-  const anyOp = visMode!=='none' || priceMode!=='none' || handMode!=='none' || inbMode!=='none' || pkgMode!=='none'
+  const anyOp = visMode!=='none' || priceMode!=='none' || handMode!=='none' || dropMode!=='none' || inbMode!=='none' || pkgMode!=='none'
 
   function buildPatch(it: CatalogueItem): Partial<CatalogueItem> {
     const patch: Partial<CatalogueItem> = {}
@@ -2245,6 +2246,8 @@ function BulkEditModal({ items, onClose, onApplied }: {
     }
     if (handMode === 'on') patch.manual_handling = true
     if (handMode === 'off') patch.manual_handling = false
+    if (dropMode === 'on') patch.is_drop_ship = true
+    if (dropMode === 'off') patch.is_drop_ship = false
     if (inbMode === 'set') { const v = Number(inbVal); if (isFinite(v) && v >= 0) patch.inbound_freight_cost_ex_gst = v }
     if (inbMode === 'clear') patch.inbound_freight_cost_ex_gst = null
     if (pkgMode !== 'none') patch.freight_packaging = pkgMode as FreightPackaging
@@ -2308,6 +2311,16 @@ function BulkEditModal({ items, onClose, onApplied }: {
               <option value="on">Tick (manual handling on)</option>
               <option value="off">Untick (off)</option>
             </select>
+          </div>
+
+          <div>
+            <div style={lbl}>Drop ship</div>
+            <select value={dropMode} onChange={e => setDropMode(e.target.value as any)} style={sel}>
+              <option value="none">No change</option>
+              <option value="on">Turn on (ships direct from supplier)</option>
+              <option value="off">Turn off</option>
+            </select>
+            {dropMode === 'on' && <div style={{fontSize:11,color:T.text3,marginTop:5,lineHeight:1.4}}>Drop-ship items are excluded from your warehouse freight quote and need a per-zone freight set — use “Calibrate from supplier history”.</div>}
           </div>
 
           <div>
