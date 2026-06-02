@@ -16,43 +16,36 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
     const sb = svc()
 
     if (req.method === 'GET') {
-      // Conversations I'm a member of (+ my last_read_at).
-      const { data: myParts } = await sb.from('conversation_participants')
-        .select('conversation_id, last_read_at, muted').eq('user_id', me.id)
-      const myConvIds = new Set((myParts || []).map(p => p.conversation_id))
-      const lastReadByConv: Record<string, string | null> = {}
-      const mutedByConv: Record<string, boolean> = {}
-      for (const p of myParts || []) { lastReadByConv[p.conversation_id] = p.last_read_at; mutedByConv[p.conversation_id] = p.muted }
-
-      // Public channels (joinable) + customer inbox (if permitted).
+      // Conversations I'm a member of (+ my mute state), and public channels
+      // (joinable) + customer inbox (if permitted) — independent, in parallel.
       const orParts = ['and(type.eq.channel,is_private.eq.false)']
       if (INBOX_ROLES.includes(me.role)) orParts.push('type.eq.customer')
-      const { data: visibleExtra } = await sb.from('conversations')
-        .select('id').or(orParts.join(',')).is('archived_at', null)
+      const [{ data: myParts }, { data: visibleExtra }] = await Promise.all([
+        sb.from('conversation_participants').select('conversation_id, muted').eq('user_id', me.id),
+        sb.from('conversations').select('id').or(orParts.join(',')).is('archived_at', null),
+      ])
+      const myConvIds = new Set((myParts || []).map(p => p.conversation_id))
+      const mutedByConv: Record<string, boolean> = {}
+      for (const p of myParts || []) mutedByConv[p.conversation_id] = p.muted
       const allIds = Array.from(new Set(Array.from(myConvIds).concat((visibleExtra || []).map(c => c.id))))
       if (allIds.length === 0) return res.status(200).json({ conversations: [] })
 
-      const { data: convs } = await sb.from('conversations')
-        .select('id, type, name, topic, is_private, source, customer_id, assigned_user_id, status, last_message_at, created_by')
-        .in('id', allIds).is('archived_at', null).order('last_message_at', { ascending: false, nullsFirst: false })
-
-      // Participants for naming (DMs/groups) + unread counts.
-      const { data: parts } = await sb.from('conversation_participants')
-        .select('conversation_id, user_id').in('conversation_id', allIds)
+      // Conversations + participants + unread counts in parallel (unread = one
+      // GROUP BY RPC, migration 064 — not a count query per conversation).
+      const [{ data: convs }, { data: parts }, { data: unreadRows }] = await Promise.all([
+        sb.from('conversations')
+          .select('id, type, name, topic, is_private, source, customer_id, assigned_user_id, status, last_message_at, created_by')
+          .in('id', allIds).is('archived_at', null).order('last_message_at', { ascending: false, nullsFirst: false }),
+        sb.from('conversation_participants')
+          .select('conversation_id, user_id').in('conversation_id', allIds),
+        sb.rpc('messaging_unread_counts', { p_user_id: me.id }),
+      ])
       const partsByConv: Record<string, string[]> = {}
       for (const p of parts || []) (partsByConv[p.conversation_id] ||= []).push(p.user_id)
       const dir = await userDirectory((parts || []).map(p => p.user_id))
 
-      // Unread = my messages-since-last-read per conversation I'm a member of.
       const unreadByConv: Record<string, number> = {}
-      await Promise.all((convs || []).filter(c => myConvIds.has(c.id)).map(async c => {
-        const since = lastReadByConv[c.id]
-        let q = sb.from('conversation_messages').select('id', { count: 'exact', head: true })
-          .eq('conversation_id', c.id).neq('sender_user_id', me.id).is('deleted_at', null)
-        if (since) q = q.gt('created_at', since)
-        const { count } = await q
-        unreadByConv[c.id] = count || 0
-      }))
+      for (const r of unreadRows || []) unreadByConv[r.conversation_id] = Number(r.unread || 0)
 
       const conversations = (convs || []).map(c => {
         const members = (partsByConv[c.id] || [])

@@ -39,13 +39,13 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
       const msgs = (rows || []).reverse()
       const ids = msgs.map(m => m.id)
 
-      const [{ data: atts }, { data: ments }, { data: reacts }, { data: children }] = await Promise.all([
+      const [{ data: atts }, { data: ments }, { data: reacts }, { data: children }, dir] = await Promise.all([
         ids.length ? sb.from('message_attachments').select('id, message_id, storage_path, filename, content_type, size_bytes').in('message_id', ids) : Promise.resolve({ data: [] as any[] }),
         ids.length ? sb.from('message_mentions').select('message_id, mentioned_user_id').in('message_id', ids) : Promise.resolve({ data: [] as any[] }),
         ids.length ? sb.from('message_reactions').select('message_id, user_id, emoji').in('message_id', ids) : Promise.resolve({ data: [] as any[] }),
         (!parentId && ids.length) ? sb.from('conversation_messages').select('parent_message_id').in('parent_message_id', ids).is('deleted_at', null) : Promise.resolve({ data: [] as any[] }),
+        userDirectory(msgs.map(m => m.sender_user_id).filter(Boolean) as string[]),
       ])
-      const dir = await userDirectory(msgs.map(m => m.sender_user_id).filter(Boolean) as string[])
       const attByMsg: Record<string, any[]> = {}
       for (const a of atts || []) (attByMsg[a.message_id] ||= []).push(a)
       const mentByMsg: Record<string, string[]> = {}

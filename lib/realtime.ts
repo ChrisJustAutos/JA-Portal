@@ -38,8 +38,10 @@ export function subscribeToConversation(conversationId: string, h: ConversationH
         { event: 'UPDATE', schema: 'public', table: 'conversation_messages', filter: `conversation_id=eq.${conversationId}` },
         (p) => h.onMessageUpdate?.(p.new))
       .on('postgres_changes',
-        { event: '*', schema: 'public', table: 'message_reactions' },
-        (p) => h.onReaction?.((p.new ?? p.old), p.eventType as any))
+        // conversation_id denormalised onto reactions (migration 064) so we
+        // only receive this conversation's reactions, not the whole workspace.
+        { event: '*', schema: 'public', table: 'message_reactions', filter: `conversation_id=eq.${conversationId}` },
+        (p) => h.onReaction?.((p.eventType === 'DELETE' ? p.old : p.new), p.eventType as any))
       .subscribe()
   })
   return () => { if (ch) sb.removeChannel(ch) }
@@ -47,13 +49,21 @@ export function subscribeToConversation(conversationId: string, h: ConversationH
 
 // Live updates to the user's conversation list (new conversation, last_message_at
 // bump, read-state). RLS only delivers conversations the user can see.
-export function subscribeToConversationList(onChange: () => void): () => void {
+// Structured handlers so the client can patch its list incrementally instead
+// of refetching on every event (last_message_at bumps on EVERY message).
+export interface ConversationListHandlers {
+  onConversation?: (row: any, eventType: 'INSERT' | 'UPDATE' | 'DELETE') => void
+  onParticipant?: (row: any, eventType: 'INSERT' | 'UPDATE' | 'DELETE') => void
+}
+export function subscribeToConversationList(h: ConversationListHandlers): () => void {
   const sb = getSupabase()
   let ch: RealtimeChannel | null = null
   ensureRealtimeAuth().then(() => {
     ch = sb.channel('conv-list')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'conversations' }, () => onChange())
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'conversation_participants' }, () => onChange())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'conversations' },
+        (p) => h.onConversation?.((p.eventType === 'DELETE' ? p.old : p.new), p.eventType as any))
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'conversation_participants' },
+        (p) => h.onParticipant?.((p.eventType === 'DELETE' ? p.old : p.new), p.eventType as any))
       .subscribe()
   })
   return () => { if (ch) sb.removeChannel(ch) }

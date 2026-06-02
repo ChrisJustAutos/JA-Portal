@@ -48,7 +48,11 @@
       "Bash(node *)",
       "Bash(echo \"---total errors:$\\(npx tsc --noEmit -p tsconfig.json 2>&1)",
       "Bash(perl -i -pe 's/\\\\[\\\\.\\\\.\\\\.\\([\\\\w.]+\\\\.\\(?:entries|values|keys\\)\\\\\\(\\\\\\)\\)\\\\]/Array.from\\($1\\)/g' lib/calls-insights.ts)",
-      "Bash(echo \"total errors: $\\(npx tsc --noEmit -p tsconfig.json 2>&1)"
+      "Bash(echo \"total errors: $\\(npx tsc --noEmit -p tsconfig.json 2>&1)",
+      "PowerShell($psql = Get-Command psql -ErrorAction SilentlyContinue; $supa = Get-Command supabase -ErrorAction SilentlyContinue; \"psql: $\\(if\\($psql\\){$psql.Source}else{'not found'}\\)\"; \"supabase: $\\(if\\($supa\\){$supa.Source}else{'not found'}\\)\"; \"SUPABASE_DB_URL env: $\\(if\\($env:SUPABASE_DB_URL\\){'set'}else{'not set'}\\)\")",
+      "PowerShell(Test-NetConnection *)",
+      "PowerShell(Get-Content migrations\\\\046_messaging.sql -TotalCount 8; ''; Get-Content migrations\\\\062_b2b_dropship_freight.sql -TotalCount 6)",
+      "PowerShell(npx tsc --noEmit 2>$null; \"exit: $LASTEXITCODE\")"
     ]
   }
 }

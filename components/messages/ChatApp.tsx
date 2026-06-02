@@ -50,9 +50,23 @@ export default function ChatApp({ user, onUnreadChange }: { user: SSRUser; onUnr
   const [searchResults, setSearchResults] = useState<any[] | null>(null)
 
   const activeIdRef = useRef<string | null>(null); activeIdRef.current = activeId
+  const dirRef = useRef<DirUser[]>([]); dirRef.current = dir
+  const conversationsRef = useRef<Conversation[]>([]); conversationsRef.current = conversations
+  const threadParentRef = useRef<Message | null>(null); threadParentRef.current = threadParent
+  // Message ids already applied to state (own sends + realtime echoes) so the
+  // same insert is never double-counted.
+  const seenMsgIds = useRef<Set<string>>(new Set())
+  // Per-conversation message cache — switching back to a channel is instant.
+  const msgCache = useRef<Record<string, Message[]>>({})
   const active = useMemo(() => conversations.find(c => c.id === activeId) || null, [conversations, activeId])
   const totalUnread = useMemo(() => conversations.reduce((s, c) => s + (c.muted ? 0 : c.unread), 0), [conversations])
   useEffect(() => { onUnreadChange?.(totalUnread) }, [totalUnread, onUnreadChange])
+
+  const markSeen = useCallback((id: string) => {
+    seenMsgIds.current.add(id)
+    if (seenMsgIds.current.size > 600) seenMsgIds.current = new Set(Array.from(seenMsgIds.current).slice(-300))
+  }, [])
+  const sortConvs = (cs: Conversation[]) => [...cs].sort((a, b) => (b.last_message_at || '').localeCompare(a.last_message_at || ''))
 
   // ── Loaders ───────────────────────────────────────────────────────
   const loadConversations = useCallback(async () => {
@@ -60,12 +74,18 @@ export default function ChatApp({ user, onUnreadChange }: { user: SSRUser; onUnr
     if (r.ok) { const d = await r.json(); setConversations(d.conversations || []) }
     setLoadingConvs(false)
   }, [])
+  // Single write-path for a conversation's messages: updates the cache, and the
+  // visible list when that conversation is open.
+  const setConvMessages = useCallback((conversationId: string, updater: (prev: Message[]) => Message[]) => {
+    msgCache.current[conversationId] = updater(msgCache.current[conversationId] || [])
+    if (activeIdRef.current === conversationId) setMessages(msgCache.current[conversationId])
+  }, [])
   const loadMessages = useCallback(async (conversationId: string, opts: { quiet?: boolean } = {}) => {
     if (!opts.quiet) setLoadingMsgs(true)
     const r = await fetch(`/api/messages?conversationId=${conversationId}`)
-    if (r.ok) { const d = await r.json(); setMessages(d.messages || []) }
+    if (r.ok) { const d = await r.json(); setConvMessages(conversationId, () => d.messages || []) }
     setLoadingMsgs(false)
-  }, [])
+  }, [setConvMessages])
   const loadThread = useCallback(async (conversationId: string, parentId: string) => {
     const r = await fetch(`/api/messages?conversationId=${conversationId}&parentId=${parentId}`)
     if (r.ok) { const d = await r.json(); setThreadMessages(d.messages || []) }
@@ -77,20 +97,160 @@ export default function ChatApp({ user, onUnreadChange }: { user: SSRUser; onUnr
 
   useEffect(() => { loadConversations(); fetch('/api/messages/directory').then(r => r.ok ? r.json() : { users: [] }).then(d => setDir(d.users || [])) }, [loadConversations])
 
-  // Live conversation-list updates.
+  // Tab regained focus: reconcile quietly in case realtime events were missed
+  // while asleep (incremental updates below otherwise never refetch).
+  useEffect(() => {
+    const onVis = () => {
+      if (typeof document === 'undefined' || document.hidden) return
+      loadConversations()
+      if (activeIdRef.current) loadMessages(activeIdRef.current, { quiet: true })
+    }
+    document.addEventListener('visibilitychange', onVis)
+    return () => document.removeEventListener('visibilitychange', onVis)
+  }, [loadConversations, loadMessages])
+
+  // ── Incremental realtime appliers (no refetch per event) ──────────
+  const enrichRow = useCallback((row: any): Message => {
+    const sender = row.sender_user_id === user.id
+      ? { name: user.displayName || user.email }
+      : dirRef.current.find(u => u.id === row.sender_user_id)
+    return {
+      ...row,
+      senderName: row.sender_user_id ? (sender?.name || 'Unknown') : (row.message_type === 'external' ? 'Customer' : 'System'),
+      attachments: [], mentions: [], reactions: [], replyCount: 0,
+    }
+  }, [user.id, user.displayName, user.email])
+
+  // Realtime message rows don't carry attachments (separate table, inserted
+  // just after) — reconcile with one cheap RLS-scoped lookup shortly after.
+  const reconcileAttachments = useCallback((conversationId: string, messageId: string) => {
+    setTimeout(async () => {
+      try {
+        const { data } = await getSupabase().from('message_attachments')
+          .select('id, message_id, storage_path, filename, content_type, size_bytes').eq('message_id', messageId)
+        if (!data?.length) return
+        const apply = (m: Message) => m.id === messageId ? { ...m, attachments: data } : m
+        setConvMessages(conversationId, ms => ms.map(apply))
+        setThreadMessages(ms => ms.map(apply))
+      } catch {}
+    }, 700)
+  }, [setConvMessages])
+
+  const handleMessageInsert = useCallback((row: any) => {
+    if (!row?.id || seenMsgIds.current.has(row.id)) return
+    markSeen(row.id)
+    const convId = row.conversation_id
+    if (row.parent_message_id) {
+      setConvMessages(convId, ms => ms.map(m => m.id === row.parent_message_id ? { ...m, replyCount: (m.replyCount || 0) + 1 } : m))
+      const tp = threadParentRef.current
+      if (tp && tp.id === row.parent_message_id) {
+        const msg = enrichRow(row)
+        setThreadMessages(ms => ms.some(m => m.id === row.id) ? ms : [...ms, msg])
+      }
+    } else {
+      const msg = enrichRow(row)
+      setConvMessages(convId, ms => ms.some(m => m.id === row.id) ? ms : [...ms, msg])
+    }
+    reconcileAttachments(convId, row.id)
+    if (activeIdRef.current === convId && typeof document !== 'undefined' && !document.hidden && row.sender_user_id !== user.id) markRead(convId)
+  }, [enrichRow, markSeen, markRead, reconcileAttachments, setConvMessages, user.id])
+
+  const handleMessageUpdate = useCallback((row: any) => {
+    if (!row?.id) return
+    const apply = (m: Message) => m.id === row.id ? { ...m, body: row.body, edited_at: row.edited_at, deleted_at: row.deleted_at } : m
+    setConvMessages(row.conversation_id, ms => ms.map(apply))
+    setThreadMessages(ms => ms.map(apply))
+    setThreadParent(tp => tp && tp.id === row.id ? apply(tp) : tp)
+  }, [setConvMessages])
+
+  // Idempotent reaction patch — safe against the realtime echo of our own
+  // optimistic toggle (mine already set → skip).
+  const handleReaction = useCallback((row: any, eventType: 'INSERT' | 'UPDATE' | 'DELETE') => {
+    if (!row?.message_id || !row.emoji || eventType === 'UPDATE') return
+    const mineEvent = row.user_id === user.id
+    const apply = (m: Message): Message => {
+      if (m.id !== row.message_id) return m
+      const rs = [...(m.reactions || [])]
+      const i = rs.findIndex(r => r.emoji === row.emoji)
+      if (eventType === 'INSERT') {
+        if (i === -1) rs.push({ emoji: row.emoji, count: 1, mine: mineEvent })
+        else {
+          if (mineEvent && rs[i].mine) return m
+          rs[i] = { ...rs[i], count: rs[i].count + 1, mine: rs[i].mine || mineEvent }
+        }
+      } else {
+        if (i === -1) return m
+        if (mineEvent && !rs[i].mine) return m
+        const count = rs[i].count - 1
+        if (count <= 0) rs.splice(i, 1)
+        else rs[i] = { ...rs[i], count, mine: rs[i].mine && !mineEvent }
+      }
+      return { ...m, reactions: rs }
+    }
+    if (row.conversation_id) setConvMessages(row.conversation_id, ms => ms.map(apply))
+    setThreadMessages(ms => ms.map(apply))
+    setThreadParent(tp => tp ? apply(tp) : tp)
+  }, [setConvMessages, user.id])
+
+  // Live conversation-list updates — patch the list in place; only refetch for
+  // events we can't apply locally (new conversation, my membership changed).
+  // Previously ANY change here (including every message's last_message_at bump
+  // and every user's read-marker) refetched the whole list for everyone.
   useEffect(() => {
     let t: any
-    const debounced = () => { clearTimeout(t); t = setTimeout(loadConversations, 250) }
-    const off = subscribeToConversationList(debounced)
+    const scheduleReload = () => { clearTimeout(t); t = setTimeout(loadConversations, 400) }
+    const off = subscribeToConversationList({
+      onConversation: (row, type) => {
+        if (!row?.id) return
+        if (type === 'DELETE') { setConversations(cs => cs.filter(c => c.id !== row.id)); return }
+        if (type === 'INSERT') { scheduleReload(); return }
+        const existing = conversationsRef.current.find(c => c.id === row.id)
+        if (!existing) { scheduleReload(); return }
+        if (row.archived_at) { setConversations(cs => cs.filter(c => c.id !== row.id)); return }
+        setConversations(cs => sortConvs(cs.map(c => c.id === row.id
+          ? { ...c, name: row.name, topic: row.topic, is_private: row.is_private, status: row.status, last_message_at: row.last_message_at }
+          : c)))
+      },
+      onParticipant: (row, type) => {
+        if (!row?.conversation_id) return
+        if (row.user_id === user.id) {
+          if (type === 'UPDATE') {
+            // My read/mute state changed (e.g. read in another tab) — patch.
+            setConversations(cs => cs.map(c => c.id === row.conversation_id
+              ? { ...c, muted: !!row.muted, unread: row.last_read_at && (!c.last_message_at || row.last_read_at >= c.last_message_at) ? 0 : c.unread }
+              : c))
+          } else scheduleReload() // joined/left a conversation
+          return
+        }
+        // Someone else's read-state is irrelevant; membership changes patch
+        // the member lists locally.
+        if (type === 'UPDATE') return
+        setConversations(cs => cs.map(c => {
+          if (c.id !== row.conversation_id) return c
+          const ids = type === 'INSERT'
+            ? (c.memberIds.includes(row.user_id) ? c.memberIds : [...c.memberIds, row.user_id])
+            : c.memberIds.filter(id => id !== row.user_id)
+          return { ...c, memberIds: ids, memberNames: ids.map(id => dirRef.current.find(u => u.id === id)?.name).filter(Boolean) as string[] }
+        }))
+      },
+    })
     return () => { clearTimeout(t); off() }
-  }, [loadConversations])
+  }, [loadConversations, user.id])
 
-  // Desktop notifications for any incoming message while the tab is hidden.
+  // Any incoming message (RLS-filtered): bump the sidebar unread/recency
+  // locally, and desktop-notify while the tab is hidden.
   useEffect(() => {
     if (typeof Notification !== 'undefined' && Notification.permission === 'default') { try { Notification.requestPermission() } catch {} }
     const off = subscribeToAllMessages((row) => {
       if (!row || row.sender_user_id === user.id) return
       if (typeof document !== 'undefined' && !document.hidden && row.conversation_id === activeIdRef.current) return
+      setConversations(cs => {
+        const i = cs.findIndex(c => c.id === row.conversation_id)
+        if (i === -1) return cs // a new conversation — the conv INSERT event reloads the list
+        const next = [...cs]
+        next[i] = { ...next[i], unread: next[i].unread + 1, last_message_at: row.created_at }
+        return sortConvs(next)
+      })
       if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
         try { new Notification('New message', { body: String(row.body || '').slice(0, 120) || 'Attachment', tag: row.conversation_id }) } catch {}
       }
@@ -98,21 +258,21 @@ export default function ChatApp({ user, onUnreadChange }: { user: SSRUser; onUnr
     return () => off()
   }, [user.id])
 
-  // Open a conversation: load history, mark read, subscribe live (main + thread).
+  // Open a conversation: cached history shows instantly (refreshed quietly),
+  // mark read, then live events patch state in place — no refetch per event.
   useEffect(() => {
     if (!activeId) return
-    loadMessages(activeId); markRead(activeId)
-    let t: any
-    const reload = () => {
-      clearTimeout(t)
-      t = setTimeout(() => {
-        loadMessages(activeId, { quiet: true }); markRead(activeId)
-        setThreadParent(tp => { if (tp) loadThread(activeId, tp.id); return tp })
-      }, 150)
-    }
-    const off = subscribeToConversation(activeId, { onMessageInsert: reload, onMessageUpdate: reload, onReaction: reload })
-    return () => { clearTimeout(t); off() }
-  }, [activeId, loadMessages, loadThread, markRead])
+    const cached = msgCache.current[activeId]
+    if (cached) { setMessages(cached); loadMessages(activeId, { quiet: true }) }
+    else { setMessages([]); loadMessages(activeId) }
+    markRead(activeId)
+    const off = subscribeToConversation(activeId, {
+      onMessageInsert: handleMessageInsert,
+      onMessageUpdate: handleMessageUpdate,
+      onReaction: handleReaction,
+    })
+    return () => off()
+  }, [activeId, loadMessages, markRead, handleMessageInsert, handleMessageUpdate, handleReaction])
 
   // Typing channel.
   const typingRef = useRef<TypingChannel | null>(null)
@@ -134,31 +294,62 @@ export default function ChatApp({ user, onUnreadChange }: { user: SSRUser; onUnr
     return () => clearTimeout(t)
   }, [search])
 
-  // ── Actions ───────────────────────────────────────────────────────
+  // ── Actions (optimistic — patch local state, then call the API) ────
+  // Patch a message everywhere it can be visible (timeline, thread, thread parent).
+  const patchEverywhere = useCallback((conversationId: string | null, apply: (m: Message) => Message) => {
+    if (conversationId) setConvMessages(conversationId, ms => ms.map(apply))
+    setThreadMessages(ms => ms.map(apply))
+    setThreadParent(tp => tp ? apply(tp) : tp)
+  }, [setConvMessages])
+
   const sendMessage = useCallback(async (body: string, mentionIds: string[], attachments: any[], parentMessageId?: string) => {
-    if (!activeId) return
-    const r = await fetch('/api/messages', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ conversationId: activeId, body, mentionIds, attachments, parentMessageId }) })
+    const convId = activeIdRef.current
+    if (!convId) return
+    const r = await fetch('/api/messages', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ conversationId: convId, body, mentionIds, attachments, parentMessageId }) })
     if (r.ok) {
-      if (parentMessageId) loadThread(activeId, parentMessageId)
-      else { const d = await r.json(); if (d.message) setMessages(m => m.some(x => x.id === d.message.id) ? m : [...m, { ...d.message, reactions: [], replyCount: 0 }]) }
+      const d = await r.json()
+      if (!d.message) return
+      markSeen(d.message.id)
+      // API echoes attachments in camelCase — normalise for rendering.
+      const msg: Message = {
+        ...d.message, reactions: [], replyCount: 0, mentions: d.message.mentions || [],
+        attachments: (d.message.attachments || []).map((a: any) => ({ storage_path: a.storagePath, filename: a.filename, content_type: a.contentType, size_bytes: a.sizeBytes })),
+      }
+      if (parentMessageId) {
+        setThreadMessages(ms => ms.some(x => x.id === msg.id) ? ms : [...ms, msg])
+        setConvMessages(convId, ms => ms.map(m => m.id === parentMessageId ? { ...m, replyCount: (m.replyCount || 0) + 1 } : m))
+      } else {
+        setConvMessages(convId, ms => ms.some(x => x.id === msg.id) ? ms : [...ms, msg])
+      }
     } else { const d = await r.json().catch(() => ({})); alert(d.error || 'Could not send') }
-  }, [activeId, loadThread])
+  }, [markSeen, setConvMessages])
 
   const toggleReaction = useCallback(async (messageId: string, emoji: string) => {
-    await fetch(`/api/messages/${messageId}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ emoji }) })
-    if (activeId) { loadMessages(activeId, { quiet: true }); if (threadParent) loadThread(activeId, threadParent.id) }
-  }, [activeId, threadParent, loadMessages, loadThread])
+    patchEverywhere(activeIdRef.current, (m) => {
+      if (m.id !== messageId) return m
+      const rs = [...(m.reactions || [])]
+      const i = rs.findIndex(r => r.emoji === emoji)
+      if (i === -1) rs.push({ emoji, count: 1, mine: true })
+      else if (rs[i].mine) { const c = rs[i].count - 1; if (c <= 0) rs.splice(i, 1); else rs[i] = { ...rs[i], count: c, mine: false } }
+      else rs[i] = { ...rs[i], count: rs[i].count + 1, mine: true }
+      return { ...m, reactions: rs }
+    })
+    const r = await fetch(`/api/messages/${messageId}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ emoji }) }).catch(() => null)
+    if (!r?.ok && activeIdRef.current) loadMessages(activeIdRef.current, { quiet: true })
+  }, [patchEverywhere, loadMessages])
 
   const editMessage = useCallback(async (messageId: string, body: string) => {
-    await fetch(`/api/messages/${messageId}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ body }) })
-    if (activeId) { loadMessages(activeId, { quiet: true }); if (threadParent) loadThread(activeId, threadParent.id) }
-  }, [activeId, threadParent, loadMessages, loadThread])
+    patchEverywhere(activeIdRef.current, (m) => m.id === messageId ? { ...m, body, edited_at: new Date().toISOString() } : m)
+    const r = await fetch(`/api/messages/${messageId}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ body }) }).catch(() => null)
+    if (!r?.ok && activeIdRef.current) loadMessages(activeIdRef.current, { quiet: true })
+  }, [patchEverywhere, loadMessages])
 
   const deleteMessage = useCallback(async (messageId: string) => {
     if (!confirm('Delete this message?')) return
-    await fetch(`/api/messages/${messageId}`, { method: 'DELETE' })
-    if (activeId) { loadMessages(activeId, { quiet: true }); if (threadParent) loadThread(activeId, threadParent.id) }
-  }, [activeId, threadParent, loadMessages, loadThread])
+    patchEverywhere(activeIdRef.current, (m) => m.id === messageId ? { ...m, body: '', deleted_at: new Date().toISOString() } : m)
+    const r = await fetch(`/api/messages/${messageId}`, { method: 'DELETE' }).catch(() => null)
+    if (!r?.ok && activeIdRef.current) loadMessages(activeIdRef.current, { quiet: true })
+  }, [patchEverywhere, loadMessages])
 
   const openThread = useCallback((m: Message) => { setThreadParent(m); if (activeId) loadThread(activeId, m.id) }, [activeId, loadThread])
 

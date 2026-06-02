@@ -16,11 +16,13 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
     const q = String(req.query.q || '').trim()
     if (q.length < 2) return res.status(200).json({ results: [] })
 
-    // Conversations the user can see.
-    const { data: myParts } = await sb.from('conversation_participants').select('conversation_id').eq('user_id', me.id)
+    // Conversations the user can see (memberships + public, in parallel).
     const orParts = ['and(type.eq.channel,is_private.eq.false)']
     if (INBOX_ROLES.includes(me.role)) orParts.push('type.eq.customer')
-    const { data: extra } = await sb.from('conversations').select('id').or(orParts.join(',')).is('archived_at', null)
+    const [{ data: myParts }, { data: extra }] = await Promise.all([
+      sb.from('conversation_participants').select('conversation_id').eq('user_id', me.id),
+      sb.from('conversations').select('id').or(orParts.join(',')).is('archived_at', null),
+    ])
     const convIds = Array.from(new Set((myParts || []).map(p => p.conversation_id).concat((extra || []).map(c => c.id))))
     if (convIds.length === 0) return res.status(200).json({ results: [] })
 
@@ -34,9 +36,11 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
       .limit(40)
 
     const convNames: Record<string, string> = {}
-    const { data: convs } = await sb.from('conversations').select('id, type, name').in('id', Array.from(new Set((rows || []).map(r => r.conversation_id))))
+    const [{ data: convs }, dir] = await Promise.all([
+      sb.from('conversations').select('id, type, name').in('id', Array.from(new Set((rows || []).map(r => r.conversation_id)))),
+      userDirectory((rows || []).map(r => r.sender_user_id).filter(Boolean) as string[]),
+    ])
     for (const c of convs || []) convNames[c.id] = c.name || (c.type === 'dm' ? 'Direct message' : c.type === 'customer' ? 'Customer' : 'Conversation')
-    const dir = await userDirectory((rows || []).map(r => r.sender_user_id).filter(Boolean) as string[])
 
     return res.status(200).json({
       results: (rows || []).map(r => ({
