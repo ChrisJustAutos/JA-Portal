@@ -12,7 +12,7 @@ import { withAuth } from '../../../../lib/authServer'
 import { applyPricing } from '../../../../lib/b2b-pricing'
 import { createCheckoutSession, StripeLineItem } from '../../../../lib/stripe'
 import { assertCheckoutConfigured } from '../../../../lib/b2b-settings'
-import { getLiveQuote, type LiveQuoteCartItem } from '../../../../lib/b2b-freight'
+import { getLiveQuote, getSatchelRates, type LiveQuoteCartItem } from '../../../../lib/b2b-freight'
 
 const GST_RATE = 0.10
 const round2 = (n: number) => Math.round(n * 100) / 100
@@ -118,31 +118,26 @@ export default withAuth('admin:b2b', async (req: NextApiRequest, res: NextApiRes
     freightLabel = `${zone.name} — ${rate.label}`
     freightZoneId = zone.id
   } else if (chosenSatchelId) {
-    const { data: satchel, error: sErr } = await c
-      .from('b2b_freight_satchels')
-      .select('id, name, max_weight_g, cost_ex_gst, sell_ex_gst, is_active')
-      .eq('id', chosenSatchelId)
-      .maybeSingle()
-    if (sErr) return res.status(500).json({ error: sErr.message })
-    if (!satchel || !satchel.is_active) return res.status(400).json({ error: 'Selected satchel is not available — re-quote and pick again.' })
-    let totalWeightG = 0, hasPallet = false, missingWeight = false
-    for (const v of validated) {
+    const eligItems = validated.map(v => {
       const cat: any = catById.get(v.catalogueId) || {}
-      const w = Number(cat.freight_weight_g || 0)
-      if (cat.freight_packaging === 'pallet') hasPallet = true
-      if (w <= 0) missingWeight = true
-      totalWeightG += w * v.qty
-    }
-    if (hasPallet || missingWeight || totalWeightG <= 0 || totalWeightG > Number(satchel.max_weight_g || 0)) {
-      return res.status(400).json({ error: 'This order does not fit the selected satchel (too heavy / pallet / missing weight).' })
-    }
-    freightExGst = round2(Number(satchel.sell_ex_gst) || 0)
-    freightLabel = satchel.name
-    freightSatchelId = satchel.id
+      return {
+        qty: v.qty,
+        weight_g: cat.freight_weight_g ?? null,
+        length_mm: cat.freight_length_mm ?? null,
+        width_mm: cat.freight_width_mm ?? null,
+        height_mm: cat.freight_height_mm ?? null,
+        packaging: cat.freight_packaging ?? null,
+      }
+    })
+    const eligible = await getSatchelRates(eligItems)
+    const match = eligible.find(e => e.satchel_id === chosenSatchelId)
+    if (!match) return res.status(400).json({ error: 'This order does not fit the selected satchel (too heavy / too big / pallet / missing weight).' })
+    freightExGst = round2(match.price_ex_gst)
+    freightLabel = match.label
+    freightSatchelId = match.satchel_id
     freightChosenQuoteSnapshot = {
-      type: 'satchel', satchel_id: satchel.id, name: satchel.name,
-      sell_ex_gst: round2(Number(satchel.sell_ex_gst) || 0), cost_ex_gst: round2(Number(satchel.cost_ex_gst) || 0),
-      total_weight_g: totalWeightG,
+      type: 'satchel', satchel_id: match.satchel_id, name: match.label,
+      sell_ex_gst: round2(match.price_ex_gst), cost_ex_gst: round2(match.cost_ex_gst),
     }
   } else if (chosenMachShipRoute) {
     const postcode = shipPostcodeIn || String((dist as any).ship_postcode || (dist as any).bill_postcode || '').trim()

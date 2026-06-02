@@ -442,19 +442,31 @@ export interface SatchelEligItem {
   packaging: 'box' | 'pallet' | 'other' | null
 }
 
-// Does every item fit inside the satchel's optional max dimensions? A satchel
-// with no max dims set (the common case — AusPost satchels are squishy bags
-// gated by weight) skips the size check entirely. Rotation allowed (compare
-// sorted dims). Missing item dims fail the check when the satchel has caps.
+// Satchels are flexible bags, but they still have a finite capacity — weight
+// alone isn't enough (10 light parts can be under 5kg yet not physically fit).
+// So when a satchel has all three dimensions set we apply a real size check:
+//   1. every item, rotated, must fit inside the satchel (longest dim can't
+//      exceed the satchel's longest), and
+//   2. the COMBINED volume of all items (× qty) must fit the satchel's volume,
+//      derated by a fill factor (bags don't pack perfectly).
+// A satchel with no dims set falls back to weight-only. Missing item dims fail
+// the check when the satchel has dimensions (we can't verify the fit).
+const SATCHEL_FILL = 0.80
+
 function itemsFitSatchel(items: SatchelEligItem[], s: { max_length_mm: number | null; max_width_mm: number | null; max_height_mm: number | null }): boolean {
-  const caps = [s.max_length_mm, s.max_width_mm, s.max_height_mm].filter(v => v != null && v > 0) as number[]
-  if (caps.length === 0) return true   // weight-only satchel
-  const sortedCap = [s.max_length_mm || Infinity, s.max_width_mm || Infinity, s.max_height_mm || Infinity].sort((a, b) => a - b)
+  const L = s.max_length_mm, W = s.max_width_mm, H = s.max_height_mm
+  const hasDims = (L != null && L > 0) && (W != null && W > 0) && (H != null && H > 0)
+  if (!hasDims) return true   // weight-only satchel
+  const sortedCap = [L!, W!, H!].sort((a, b) => a - b)
+  const satchelVol = L! * W! * H!
+  let totalVol = 0
   for (const it of items) {
     if (it.length_mm == null || it.width_mm == null || it.height_mm == null) return false
     const d = [it.length_mm, it.width_mm, it.height_mm].sort((a, b) => a - b)
-    if (d[0] > sortedCap[0] || d[1] > sortedCap[1] || d[2] > sortedCap[2]) return false
+    if (d[0] > sortedCap[0] || d[1] > sortedCap[1] || d[2] > sortedCap[2]) return false   // one item too big for the bag
+    totalVol += (it.length_mm * it.width_mm * it.height_mm) * Math.max(0, Number(it.qty || 0))
   }
+  if (totalVol > satchelVol * SATCHEL_FILL) return false   // everything won't fit together
   return true
 }
 

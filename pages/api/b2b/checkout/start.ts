@@ -19,7 +19,7 @@ import { getStockForItems, stockState, getCommittedQtyByCatalogue, availableQty 
 import { applyPricing, effectiveQtyCap } from '../../../../lib/b2b-pricing'
 import { createCheckoutSession, StripeLineItem } from '../../../../lib/stripe'
 import { assertCheckoutConfigured } from '../../../../lib/b2b-settings'
-import { getLiveQuote, type LiveQuoteCartItem } from '../../../../lib/b2b-freight'
+import { getLiveQuote, getSatchelRates, type LiveQuoteCartItem } from '../../../../lib/b2b-freight'
 
 const GST_RATE = 0.10
 
@@ -269,46 +269,40 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, use
     subtotalEx += freightExGst
     gst += freightExGst * GST_RATE  // freight is taxable
   } else if (chosenSatchelId) {
-    // Flat-rate satchel. Re-validate server-side: the satchel must be active and
-    // the cart's total weight under its cap (no pallet items). The distributor
-    // pays the satchel's sell price; ships manually (no MachShip consignment).
-    const { data: satchel, error: sErr } = await c
-      .from('b2b_freight_satchels')
-      .select('id, name, max_weight_g, cost_ex_gst, sell_ex_gst, is_active')
-      .eq('id', chosenSatchelId)
-      .maybeSingle()
-    if (sErr) return res.status(500).json({ error: sErr.message })
-    if (!satchel || !satchel.is_active) {
-      return res.status(400).json({ error: 'Selected satchel is not available — refresh the cart and pick again.' })
-    }
-    const { data: wRows, error: wErr } = await c
+    // Flat-rate satchel. Re-run the exact same eligibility gate the quote used
+    // (active + weight under cap + items fit the satchel size) so a stale or
+    // tampered selection can't slip through. The distributor pays the satchel's
+    // sell price; ships manually (no MachShip consignment).
+    const { data: sRows, error: sErr } = await c
       .from('b2b_cart_items')
-      .select(`qty, catalogue:b2b_catalogue!b2b_cart_items_catalogue_id_fkey ( freight_weight_g, freight_packaging )`)
+      .select(`qty, catalogue:b2b_catalogue!b2b_cart_items_catalogue_id_fkey ( freight_weight_g, freight_length_mm, freight_width_mm, freight_height_mm, freight_packaging )`)
       .eq('cart_id', cart.id)
-    if (wErr) return res.status(500).json({ error: wErr.message })
-    let totalWeightG = 0
-    let hasPallet = false
-    let missingWeight = false
-    for (const r of (wRows || []) as any[]) {
+    if (sErr) return res.status(500).json({ error: sErr.message })
+    const eligItems = (sRows || []).map((r: any) => {
       const cat = Array.isArray(r.catalogue) ? r.catalogue[0] : r.catalogue
-      const w = Number(cat?.freight_weight_g || 0)
-      if (cat?.freight_packaging === 'pallet') hasPallet = true
-      if (w <= 0) missingWeight = true
-      totalWeightG += w * Number(r.qty || 0)
-    }
-    if (hasPallet || missingWeight || totalWeightG <= 0 || totalWeightG > Number(satchel.max_weight_g || 0)) {
+      return {
+        qty: Number(r.qty || 0),
+        weight_g: cat?.freight_weight_g ?? null,
+        length_mm: cat?.freight_length_mm ?? null,
+        width_mm: cat?.freight_width_mm ?? null,
+        height_mm: cat?.freight_height_mm ?? null,
+        packaging: cat?.freight_packaging ?? null,
+      }
+    })
+    const eligible = await getSatchelRates(eligItems)
+    const match = eligible.find(e => e.satchel_id === chosenSatchelId)
+    if (!match) {
       return res.status(400).json({ error: 'This order no longer fits the selected satchel — refresh the cart and pick again.' })
     }
-    freightExGst = round2(Number(satchel.sell_ex_gst) || 0)
-    freightLabel = satchel.name
-    freightSatchelId = satchel.id
+    freightExGst = round2(match.price_ex_gst)
+    freightLabel = match.label
+    freightSatchelId = match.satchel_id
     freightChosenQuoteSnapshot = {
       type: 'satchel',
-      satchel_id: satchel.id,
-      name: satchel.name,
-      sell_ex_gst: round2(Number(satchel.sell_ex_gst) || 0),
-      cost_ex_gst: round2(Number(satchel.cost_ex_gst) || 0),
-      total_weight_g: totalWeightG,
+      satchel_id: match.satchel_id,
+      name: match.label,
+      sell_ex_gst: round2(match.price_ex_gst),
+      cost_ex_gst: round2(match.cost_ex_gst),
     }
     subtotalEx += freightExGst
     gst += freightExGst * GST_RATE
