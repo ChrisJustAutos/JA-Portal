@@ -1184,8 +1184,10 @@ function EditDrawer({
             />
           </Section>
 
-          {/* Freight & packaging */}
-          {(() => {
+          {/* Freight & packaging — hidden for drop-ship items (they ship from the
+              supplier, so warehouse dims / handling / inbound freight don't apply;
+              their freight is set per-zone in the Drop ship section above). */}
+          {!item.is_drop_ship && (() => {
             const missingDims = !item.freight_length_mm || !item.freight_width_mm || !item.freight_height_mm || !item.freight_weight_g
             const blocksLiveQuote = missingDims && item.b2b_visible
             return (
