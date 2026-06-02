@@ -99,43 +99,53 @@ export default function DropshipCalibrationPage({ user }: Props) {
     finally { setLoading(false) }
   }
 
-  // Estimate the zone-default for any zone WITHOUT a rate, from the zones that
-  // have one, scaled by distance-from-WA (MPI dispatches from WA).
+  // Estimate the zone-default for any zone WITHOUT a rate (scaled by distance-from-WA,
+  // since MPI dispatches from WA), THEN fill every empty product cell from those
+  // defaults — one click fills the whole matrix.
   function autoEstimate() {
     if (!data) return
     const known = data.zones
       .map(z => ({ rate: Number(zoneDefaults[z.id]), index: waIndex(z.name) }))
       .filter(k => Number.isFinite(k.rate) && k.rate > 0 && k.index != null) as { rate: number; index: number }[]
-    if (known.length === 0) { setFlash('Need at least one zone with a rate to estimate the rest.'); return }
-    setZoneDefaults(prev => {
-      const next = { ...prev }
-      let filled = 0
-      for (const z of data.zones) {
-        if (next[z.id] != null && next[z.id].trim() !== '') continue   // keep what we have
-        const gi = waIndex(z.name); if (gi == null) continue
-        const est = known.reduce((s, k) => s + k.rate * (gi / k.index), 0) / known.length
-        next[z.id] = String(Math.round(est * 2) / 2)   // nearest $0.50
-        filled++
-      }
-      setFlash(`Estimated ${filled} zone${filled === 1 ? '' : 's'} from similar zones (MPI in WA).`)
-      return next
-    })
+    if (known.length === 0) {
+      setFlash('Add at least one zone rate first (pull history, or type one in the blue row), then auto-estimate.')
+      return
+    }
+    // 1) Estimate gap zone defaults.
+    const nextZD: Record<string, string> = { ...zoneDefaults }
+    let estimated = 0
+    for (const z of data.zones) {
+      if (nextZD[z.id] != null && nextZD[z.id].trim() !== '') continue
+      const gi = waIndex(z.name); if (gi == null) continue
+      const est = known.reduce((s, k) => s + k.rate * (gi / k.index), 0) / known.length
+      nextZD[z.id] = String(Math.round(est * 2) / 2)   // nearest $0.50
+      estimated++
+    }
+    // 2) Fill empty product cells from the (now complete) zone defaults.
+    const nextEdits: Record<string, string> = { ...edits }
+    let filled = 0
+    for (const p of data.products) for (const z of data.zones) {
+      const key = `${p.catalogue_id}|${z.id}`
+      const def = nextZD[z.id]
+      if ((nextEdits[key] == null || nextEdits[key] === '') && def != null && def.trim() !== '') { nextEdits[key] = def; filled++ }
+    }
+    setZoneDefaults(nextZD)
+    setEdits(nextEdits)
+    setFlash(`Estimated ${estimated} zone${estimated === 1 ? '' : 's'} (MPI in WA) · filled ${filled} cell${filled === 1 ? '' : 's'}.`)
   }
 
   // Fill any empty product×zone cell with that zone's default figure.
   function fillEmpty() {
     if (!data) return
-    setEdits(prev => {
-      const next = { ...prev }
-      let filled = 0
-      for (const p of data.products) for (const z of data.zones) {
-        const key = `${p.catalogue_id}|${z.id}`
-        const def = zoneDefaults[z.id]
-        if ((next[key] == null || next[key] === '') && def != null && def.trim() !== '') { next[key] = def; filled++ }
-      }
-      setFlash(`Filled ${filled} empty cell${filled === 1 ? '' : 's'} from zone defaults.`)
-      return next
-    })
+    const next: Record<string, string> = { ...edits }
+    let filled = 0
+    for (const p of data.products) for (const z of data.zones) {
+      const key = `${p.catalogue_id}|${z.id}`
+      const def = zoneDefaults[z.id]
+      if ((next[key] == null || next[key] === '') && def != null && def.trim() !== '') { next[key] = def; filled++ }
+    }
+    setEdits(next)
+    setFlash(`Filled ${filled} empty cell${filled === 1 ? '' : 's'} from zone defaults.`)
   }
 
   async function apply() {
