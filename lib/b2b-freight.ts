@@ -20,7 +20,9 @@ import {
   MachShipApiError,
   MachShipNotConfiguredError,
   type RouteOption,
+  type MachShipItem,
 } from './b2b-machship'
+import { packItems, type FreightBox, type PalletSpec, type PackMode } from './b2b-cartonizer'
 
 let _sb: SupabaseClient | null = null
 function sb(): SupabaseClient {
@@ -215,22 +217,103 @@ interface FreightSettings {
   freight_markup_percent: number
   machship_from_suburb:   string | null
   machship_from_postcode: string | null
+  freight_pallet_length_mm:     number | null
+  freight_pallet_width_mm:      number | null
+  freight_pallet_max_height_mm: number | null
+  freight_pallet_max_weight_g:  number | null
+  freight_pallet_threshold_g:   number | null
 }
 
 async function loadFreightSettings(): Promise<FreightSettings | null> {
   const c = sb()
   const { data, error } = await c
     .from('b2b_settings')
-    .select('freight_markup_percent, machship_from_suburb, machship_from_postcode')
+    .select('freight_markup_percent, machship_from_suburb, machship_from_postcode, freight_pallet_length_mm, freight_pallet_width_mm, freight_pallet_max_height_mm, freight_pallet_max_weight_g, freight_pallet_threshold_g')
     .eq('id', 'singleton')
     .maybeSingle()
   if (error) throw new Error('freight settings load failed: ' + error.message)
   return (data as any) || null
 }
 
+// The admin-configured standard cartons used by the cartonizer.
+async function loadFreightBoxes(): Promise<FreightBox[]> {
+  const c = sb()
+  const { data } = await c
+    .from('b2b_freight_boxes')
+    .select('name, length_mm, width_mm, height_mm, max_weight_g')
+    .eq('is_active', true)
+    .order('sort_order', { ascending: true })
+  return (data || []) as FreightBox[]
+}
+
+export interface PackForMachShipItem {
+  sku: string
+  name: string
+  qty: number
+  weight_g: number | null
+  length_mm: number | null
+  width_mm: number | null
+  height_mm: number | null
+  packaging: 'box' | 'pallet' | 'other' | null
+  manual_handling?: boolean | null
+}
+
+// Pack items into MachShip shipping units (cartons/pallets) using the configured
+// boxes + pallet spec. Falls back to one-carton-per-line when no boxes are set so
+// quoting/booking never breaks. Shared by getLiveQuote and the booking path so a
+// booked consignment matches its quote. manualHandling is flagged on every unit
+// when ANY item needs it (the carrier handles the whole consignment).
+export async function packForMachShip(
+  items: PackForMachShipItem[],
+  opts: { packMode?: PackMode } = {},
+): Promise<MachShipItem[]> {
+  const anyManualHandling = items.some(i => i.manual_handling)
+  const [boxes, settings] = await Promise.all([loadFreightBoxes(), loadFreightSettings()])
+  const pallet: PalletSpec = {
+    length_mm:     settings?.freight_pallet_length_mm ?? null,
+    width_mm:      settings?.freight_pallet_width_mm ?? null,
+    max_height_mm: settings?.freight_pallet_max_height_mm ?? null,
+    max_weight_g:  settings?.freight_pallet_max_weight_g ?? null,
+    threshold_g:   settings?.freight_pallet_threshold_g ?? null,
+  }
+  const packed = packItems(
+    items.map(it => ({
+      sku: it.sku, name: it.name, qty: it.qty,
+      weight_g: it.weight_g, length_mm: it.length_mm, width_mm: it.width_mm, height_mm: it.height_mm,
+      packaging: it.packaging,
+    })),
+    boxes, pallet, { mode: opts.packMode },
+  )
+  if (packed) {
+    return packed.units.map(u => ({
+      itemType: u.itemType as any,
+      name:     u.name,
+      quantity: u.quantity,
+      weight:   round3(u.weight_g / 1000),
+      length:   round1(u.length_mm / 10),
+      width:    round1(u.width_mm / 10),
+      height:   round1(u.height_mm / 10),
+      ...(anyManualHandling ? { manualHandling: true } : {}),
+    }))
+  }
+  // Fallback: one carton per line (pre-cartonizer behaviour).
+  return items.map(it => ({
+    itemType: packagingForMachShip(it.packaging),
+    name:     it.name.slice(0, 80) || it.sku,
+    sku:      it.sku,
+    quantity: it.qty,
+    weight:   round3(Number(it.weight_g || 0) / 1000),
+    length:   round1(Number(it.length_mm || 0) / 10),
+    width:    round1(Number(it.width_mm || 0) / 10),
+    height:   round1(Number(it.height_mm || 0) / 10),
+    ...(it.manual_handling ? { manualHandling: true } : {}),
+  }))
+}
+
 export async function getLiveQuote(
   items: LiveQuoteCartItem[],
   dest: LiveQuoteDestination,
+  opts: { packMode?: PackMode } = {},
 ): Promise<LiveQuoteResult> {
   if (items.length === 0) {
     return { mode: 'unavailable', reason: 'Cart is empty' }
@@ -269,20 +352,14 @@ export async function getLiveQuote(
     return { mode: 'unavailable', reason: 'MachShip sender address not configured in B2B Settings' }
   }
 
-  // Build the MachShip request. We treat each cart line as N x carton
-  // boxes of (weight, l/w/h). Convert g→kg and mm→cm. Packaging type
-  // defaults to 'Carton' when not set.
-  const machshipItems = items.map(it => ({
-    itemType: packagingForMachShip(it.freight_packaging),
-    name:     it.name.slice(0, 80) || it.sku,
-    sku:      it.sku,
-    quantity: it.qty,
-    weight:   round3(Number(it.freight_weight_g!)  / 1000),
-    length:   round1(Number(it.freight_length_mm!) / 10),
-    width:    round1(Number(it.freight_width_mm!)  / 10),
-    height:   round1(Number(it.freight_height_mm!) / 10),
-    ...(it.manual_handling ? { manualHandling: true } : {}),
-  }))
+  // Pack the items into real shipping units (cartons/pallets). Shared with the
+  // booking path so the consignment matches the quote.
+  const machshipItems = await packForMachShip(items.map(it => ({
+    sku: it.sku, name: it.name, qty: it.qty,
+    weight_g: it.freight_weight_g, length_mm: it.freight_length_mm,
+    width_mm: it.freight_width_mm, height_mm: it.freight_height_mm,
+    packaging: it.freight_packaging, manual_handling: it.manual_handling,
+  })), { packMode: opts.packMode })
 
   let routes: RouteOption[]
   try {

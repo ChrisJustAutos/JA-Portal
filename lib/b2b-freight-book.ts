@@ -10,6 +10,7 @@
 
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
 import { createConsignment, getLabelPdfBase64, MachShipApiError, MachShipNotConfiguredError, type CreateConsignmentRequest } from './b2b-machship'
+import { packForMachShip, type PackForMachShipItem } from './b2b-freight'
 import { sendDistributorShippedEmail } from './b2b-order-notify'
 
 const LABELS_BUCKET = 'b2b-shipping-labels'
@@ -89,24 +90,25 @@ export async function bookFreightForOrder(orderId: string, opts: { actorId?: str
   const { data: lineRows, error: lErr } = await c.from('b2b_order_lines').select(`
       qty, sku, name, catalogue_id,
       catalogue:b2b_catalogue!b2b_order_lines_catalogue_id_fkey (
-        freight_weight_g, freight_length_mm, freight_width_mm, freight_height_mm, freight_packaging
+        freight_weight_g, freight_length_mm, freight_width_mm, freight_height_mm, freight_packaging, manual_handling
       )`).eq('order_id', orderId)
   if (lErr) return fail(500, lErr.message)
   if (!lineRows || lineRows.length === 0) return fail(400, 'Order has no lines to ship.')
-  const items: CreateConsignmentRequest['items'] = []
+  const packInput: PackForMachShipItem[] = []
   const missing: string[] = []
   for (const r of lineRows as any[]) {
     const cat = Array.isArray(r.catalogue) ? r.catalogue[0] : r.catalogue
     const wg = cat?.freight_weight_g, lmm = cat?.freight_length_mm, wmm = cat?.freight_width_mm, hmm = cat?.freight_height_mm
     if (!wg || !lmm || !wmm || !hmm) { missing.push(`${r.sku} — ${r.name}`); continue }
-    items.push({
-      itemType: cat?.freight_packaging === 'pallet' ? 'Pallet' : 'Carton',
-      name: String(r.name || r.sku).slice(0, 80), sku: r.sku || undefined, quantity: Number(r.qty),
-      weight: Math.round(Number(wg) / 10) / 100,
-      length: Math.round(Number(lmm) / 10) * 10 / 100, width: Math.round(Number(wmm) / 10) * 10 / 100, height: Math.round(Number(hmm) / 10) * 10 / 100,
+    packInput.push({
+      sku: r.sku || '', name: String(r.name || r.sku), qty: Number(r.qty),
+      weight_g: Number(wg), length_mm: Number(lmm), width_mm: Number(wmm), height_mm: Number(hmm),
+      packaging: cat?.freight_packaging ?? null, manual_handling: cat?.manual_handling === true,
     })
   }
   if (missing.length > 0) return fail(400, 'Some line items are missing freight dimensions — fix the catalogue before booking.', missing)
+  // Cartonize the same way the quote did, so the booked consignment matches.
+  const items: CreateConsignmentRequest['items'] = await packForMachShip(packInput)
 
   const reference = order.order_number + (order.customer_po ? ` / ${order.customer_po}` : '')
   const chosen: any = order.freight_chosen_quote || {}
