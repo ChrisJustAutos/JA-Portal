@@ -136,28 +136,48 @@ export function packItems(
     })
   }
 
-  const boxable = units.filter(u => boxes.some(b => fitsBox(u.item, b)))
-  if (boxable.length > 0) {
-    // Smallest box (by volume) that fits the largest boxable item.
-    const byVol = [...boxes].sort((a, b) => boxVolume(a) - boxVolume(b))
-    const chosen = byVol.find(b => boxable.every(u => fitsBox(u.item, b))) || byVol[byVol.length - 1]
+  // Weight + VOLUME first-fit-decreasing packer. Each box (bin) is capped by its
+  // max weight AND its usable volume (× FILL — you can't pack irregular parts to
+  // 100%). Pack biggest items first; a new bin uses the smallest box the item
+  // fits in. A bin always accepts its first item (so an item that nearly fills a
+  // box still goes in); the FILL/volume check only gates ADDING more to a bin.
+  const FILL = 0.85
+  const itemVol = (u: { item: PackInputItem }) =>
+    (u.item.length_mm || 0) * (u.item.width_mm || 0) * (u.item.height_mm || 0)
 
-    // First-fit-decreasing by weight.
-    const desc = [...boxable].sort((a, b) => b.weight_g - a.weight_g)
-    const filled: number[] = []   // running weight of each open box
-    for (const u of desc) {
-      let placed = false
-      for (let i = 0; i < filled.length; i++) {
-        if (filled[i] + u.weight_g <= chosen.max_weight_g) { filled[i] += u.weight_g; placed = true; break }
+  const boxable = units.filter(u => boxes.some(b => fitsBox(u.item, b)))
+  const byVolAsc = [...boxes].sort((a, b) => boxVolume(a) - boxVolume(b))
+  type Bin = { box: FreightBox; usedW: number; usedV: number }
+  const bins: Bin[] = []
+  const desc = [...boxable].sort((a, b) => itemVol(b) - itemVol(a))
+  for (const u of desc) {
+    const uV = itemVol(u)
+    let placed = false
+    for (const bin of bins) {
+      if (fitsBox(u.item, bin.box)
+        && bin.usedW + u.weight_g <= bin.box.max_weight_g
+        && bin.usedV + uV <= boxVolume(bin.box) * FILL) {
+        bin.usedW += u.weight_g; bin.usedV += uV; placed = true; break
       }
-      if (!placed) filled.push(u.weight_g)
     }
-    for (const w of filled) {
-      out.push({
-        itemType: 'Carton', name: chosen.name, quantity: 1, weight_g: Math.max(1, Math.round(w)),
-        length_mm: chosen.length_mm, width_mm: chosen.width_mm, height_mm: chosen.height_mm,
-      })
+    if (!placed) {
+      const cand = byVolAsc.find(b => fitsBox(u.item, b) && b.max_weight_g >= u.weight_g)
+      if (cand) bins.push({ box: cand, usedW: u.weight_g, usedV: uV })
+      else {
+        // Fits a box dimensionally but too heavy for any box's weight limit →
+        // ship on its own at its own dims.
+        out.push({
+          itemType: 'Carton', name: u.item.name.slice(0, 60) || u.item.sku, quantity: 1, weight_g: u.weight_g,
+          length_mm: u.item.length_mm || 200, width_mm: u.item.width_mm || 200, height_mm: u.item.height_mm || 200,
+        })
+      }
     }
+  }
+  for (const bin of bins) {
+    out.push({
+      itemType: 'Carton', name: bin.box.name, quantity: 1, weight_g: Math.max(1, Math.round(bin.usedW)),
+      length_mm: bin.box.length_mm, width_mm: bin.box.width_mm, height_mm: bin.box.height_mm,
+    })
   }
 
   if (out.length === 0) return null
