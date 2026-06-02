@@ -1146,8 +1146,8 @@ function EditDrawer({
                 title={blocksLiveQuote ? 'Freight & packaging ⚠️' : 'Freight & packaging'}
                 subtitle={
                   blocksLiveQuote
-                    ? 'Required for MachShip live quoting. Carts containing this product cannot check out until all four values are filled in.'
-                    : 'Used by MachShip live freight quoting (weight in kg, dimensions in cm).'
+                    ? 'Required for live freight quoting. Enter the ITEM’s own size + weight — carts containing this product can’t check out until all four are filled in.'
+                    : 'Enter the ITEM’s own dimensions + weight (the part itself, not a box). Orders are auto-packed into your configured cartons (Settings → Freight packaging). Weight in kg, dimensions in cm.'
                 }
               >
                 {/* Stored as mm/g; shown + edited in cm/kg. */}
@@ -1983,21 +1983,23 @@ function PackagingSelect({
   value: FreightPackaging | null
   onChange: (v: FreightPackaging | null) => void
 }) {
+  // Only the Pallet vs not-Pallet distinction affects the cartonizer, so the
+  // dropdown is just those two. Anything non-pallet stores 'box' (= cartonised).
+  const display: FreightPackaging = value === 'pallet' ? 'pallet' : 'box'
   return (
     <label style={{display:'flex',flexDirection:'column',gap:4}}>
-      <span style={{fontSize:11,color:T.text2,fontWeight:500}}>Packaging</span>
+      <span style={{fontSize:11,color:T.text2,fontWeight:500}}>Freight handling</span>
       <select
-        value={value || ''}
-        onChange={e => onChange((e.target.value || null) as FreightPackaging | null)}
+        value={display}
+        onChange={e => onChange(e.target.value as FreightPackaging)}
         style={{
           background:T.bg3,border:`1px solid ${T.border2}`,color:T.text,
           borderRadius:5,padding:'8px 10px',fontSize:13,outline:'none',fontFamily:'inherit',
         }}>
-        <option value="">— Not specified —</option>
-        <option value="box">Box</option>
-        <option value="pallet">Pallet</option>
-        <option value="other">Other</option>
+        <option value="box">Standard — packs into a carton</option>
+        <option value="pallet">Pallet — ships on its own pallet</option>
       </select>
+      <span style={{fontSize:10,color:T.text3}}>Only “Pallet” changes quoting; standard items are auto-packed into your cartons by weight + size.</span>
     </label>
   )
 }
