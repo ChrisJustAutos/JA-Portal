@@ -1631,32 +1631,33 @@ function PricingSection({
   const taxable = item.is_taxable !== false
   const inc = (ex: number | null): number | null => ex == null ? null : Math.round((taxable ? ex * 1.1 : ex) * 100) / 100
 
+  const colHead: React.CSSProperties = { fontSize:10, color:T.text3, textTransform:'uppercase', letterSpacing:'0.06em', textAlign:'right' }
+  const rowLabel: React.CSSProperties = { fontSize:13, color:T.text2 }
+  const incCell: React.CSSProperties = { fontFamily:'monospace', fontSize:13, color:T.text, textAlign:'right', padding:'7px 2px' }
+
+  const rows: { label: string; ex: number | null; required?: boolean; save: (v: number | null) => void | Promise<void> }[] = [
+    { label: 'Cost',  ex: item.cost_price_ex_gst,  save: v => onPatch({ cost_price_ex_gst: v }) },
+    { label: 'RRP',   ex: item.rrp_ex_gst,         save: v => onPatch({ rrp_ex_gst: v }) },
+    { label: 'Trade', ex: item.trade_price_ex_gst, required: true, save: v => { if (v != null) onPatch({ trade_price_ex_gst: v }) } },
+  ]
+
   return (
     <Section title="Pricing" subtitle="Cost is admin-only. Trade price applies to all distributors.">
-      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10,marginBottom:8}}>
-        <FieldNumber
-          label="Cost (ex GST)"
-          prefix="$"
-          value={item.cost_price_ex_gst}
-          onSave={v => onPatch({ cost_price_ex_gst: v })}
-        />
-        <FieldNumber
-          label="Trade (ex GST)"
-          prefix="$"
-          value={item.trade_price_ex_gst}
-          required
-          onSave={v => { if (v != null) onPatch({ trade_price_ex_gst: v }) }}
-        />
+      <div style={{display:'grid',gridTemplateColumns:'62px 1fr 1fr',gap:'8px 14px',alignItems:'center'}}>
+        <span/>
+        <span style={colHead}>Ex GST</span>
+        <span style={colHead}>Inc GST</span>
+        {rows.map(r => (
+          <Fragment key={r.label}>
+            <span style={rowLabel}>{r.label}</span>
+            <PriceCell value={r.ex} required={r.required} onSave={r.save} />
+            <span style={incCell}>{fmtMoney(inc(r.ex))}</span>
+          </Fragment>
+        ))}
       </div>
 
-      {/* Retail + derive distributor (trade) price as a % off retail */}
-      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10,marginBottom:8}}>
-        <FieldNumber
-          label="RRP / retail (ex GST)"
-          prefix="$"
-          value={item.rrp_ex_gst}
-          onSave={v => onPatch({ rrp_ex_gst: v })}
-        />
+      {/* Distributor discount % off retail → sets the trade (distributor) price. */}
+      <div style={{marginTop:14}}>
         <RetailDiscountField
           rrp={item.rrp_ex_gst}
           trade={item.trade_price_ex_gst}
@@ -1664,30 +1665,50 @@ function PricingSection({
         />
       </div>
 
-      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'5px 0',borderBottom:`1px solid ${T.border}`,fontSize:13}}>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'8px 0 2px',marginTop:8,borderTop:`1px solid ${T.border}`,fontSize:12.5}}>
         <span style={{color:T.text3}}>Margin (on cost)</span>
         <span style={{color: margin == null ? T.text3 : (margin > 30 ? T.green : margin > 10 ? T.amber : T.red),fontFamily:'monospace',fontSize:12}}>
           {margin == null ? '—' : `${margin.toFixed(1)}%`}
         </span>
       </div>
-
-      {/* Inc-GST readout */}
-      <div style={{marginTop:12,padding:'10px 12px',background:T.bg3,border:`1px solid ${T.border}`,borderRadius:7,marginBottom:14}}>
-        <div style={{fontSize:10,color:T.text3,textTransform:'uppercase',letterSpacing:'0.06em',marginBottom:6}}>
-          Inc GST {taxable ? '' : '(item is GST-free)'}
-        </div>
-        {([
-          ['Trade (inc GST)', inc(item.trade_price_ex_gst)],
-          ['RRP (inc GST)',   inc(item.rrp_ex_gst)],
-        ] as [string, number | null][]).map(([label, v]) => (
-          <div key={label} style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'3px 0',fontSize:13}}>
-            <span style={{color:T.text3}}>{label}</span>
-            <span style={{color:T.text,fontFamily:'monospace',fontSize:12}}>{fmtMoney(v)}</span>
-          </div>
-        ))}
-      </div>
+      {!taxable && <div style={{fontSize:10,color:T.text3,marginTop:4}}>Item is GST-free — inc = ex.</div>}
 
     </Section>
+  )
+}
+
+// Compact $ input for the Pricing grid — auto-saves on blur; null when blank.
+function PriceCell({ value, required, onSave }: {
+  value: number | null
+  required?: boolean
+  onSave: (v: number | null) => void | Promise<void>
+}) {
+  const [draft, setDraft] = useState<string>(value != null ? value.toFixed(2) : '')
+  const [saving, setSaving] = useState(false)
+  useEffect(() => { setDraft(value != null ? value.toFixed(2) : '') }, [value])
+  async function commit() {
+    const t = draft.trim()
+    let next: number | null = null
+    if (t !== '') {
+      const n = Number(t)
+      if (!isFinite(n) || n < 0) { setDraft(value != null ? value.toFixed(2) : ''); return }
+      next = Math.round(n * 100) / 100
+    } else if (required) { setDraft(value != null ? value.toFixed(2) : ''); return }
+    if (next === value) return
+    setSaving(true)
+    try { await onSave(next) } finally { setSaving(false) }
+  }
+  return (
+    <div style={{display:'flex',alignItems:'center',gap:4}}>
+      <span style={{fontSize:12,color:T.text3}}>$</span>
+      <input
+        inputMode="decimal" value={draft} disabled={saving}
+        onChange={e => setDraft(e.target.value)}
+        onBlur={commit}
+        onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
+        style={{width:'100%',background:T.bg3,border:`1px solid ${T.border2}`,color:T.text,borderRadius:5,padding:'7px 8px',fontSize:13,outline:'none',fontFamily:'monospace',textAlign:'right',opacity:saving?0.5:1,boxSizing:'border-box'}}
+      />
+    </div>
   )
 }
 
@@ -1719,7 +1740,7 @@ function RetailDiscountField({ rrp, trade, onApply }: {
   const disabled = rrp == null || rrp <= 0
   return (
     <label style={{display:'flex',flexDirection:'column',gap:4}}>
-      <span style={{fontSize:11,color:T.text2,fontWeight:500}}>Discount off retail</span>
+      <span style={{fontSize:11,color:T.text2,fontWeight:500}}>Distributor discount % (off RRP → sets Trade)</span>
       <div style={{display:'flex',alignItems:'center',gap:6}}>
         <input
           inputMode="decimal"
