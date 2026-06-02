@@ -105,7 +105,18 @@ export default withAuth('edit:b2b_catalogue', async (req: NextApiRequest, res: N
     }
   }
 
-  if (Object.keys(update).length === 0) {
+  // Multi-model fitment (b2b_catalogue_models join). model_ids is authoritative
+  // when supplied; otherwise a legacy single model_id edit keeps the join in
+  // sync. newModelIds === null means "don't touch the join".
+  let newModelIds: string[] | null = null
+  if (Array.isArray((body as any).model_ids)) {
+    newModelIds = ((body as any).model_ids as any[]).filter(x => typeof x === 'string' && x)
+    update.model_id = newModelIds[0] || null   // keep the primary in sync
+  } else if ('model_id' in body) {
+    newModelIds = update.model_id ? [String(update.model_id)] : []
+  }
+
+  if (Object.keys(update).length === 0 && newModelIds === null) {
     return res.status(400).json({ error: 'No editable fields supplied' })
   }
 
@@ -237,5 +248,15 @@ export default withAuth('edit:b2b_catalogue', async (req: NextApiRequest, res: N
     return res.status(404).json({ error: 'Catalogue item not found' })
   }
 
-  return res.status(200).json({ item: data })
+  // Replace the model-fitment join rows if model_ids (or a single model_id) changed.
+  if (newModelIds !== null) {
+    await c.from('b2b_catalogue_models').delete().eq('catalogue_id', id)
+    if (newModelIds.length > 0) {
+      const { error: jErr } = await c.from('b2b_catalogue_models')
+        .insert(newModelIds.map(m => ({ catalogue_id: id, model_id: m })))
+      if (jErr) return res.status(400).json({ error: 'Model link failed: ' + jErr.message })
+    }
+  }
+
+  return res.status(200).json({ item: data, model_ids: newModelIds !== null ? newModelIds : undefined })
 })

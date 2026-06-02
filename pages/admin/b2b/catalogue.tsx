@@ -49,6 +49,8 @@ interface CatalogueItem {
   name: string
   description: string | null
   model_id: string | null
+  models?: { id: string; name: string }[]   // all models this product fits (read)
+  model_ids?: string[]                       // write-only: sets the fitment list via PATCH
   product_type_id: string | null
   trade_price_ex_gst: number
   rrp_ex_gst: number | null
@@ -747,19 +749,21 @@ function CatalogueRow({
         )}
       </td>
 
-      {/* Model (inline editable, only when item is visible) */}
+      {/* Models — a product can fit several; edit the full list in the drawer. */}
       <td style={td()}>
-        {item.b2b_visible ? (
-          <InlineTaxonomySelect
-            value={item.model_id}
-            options={models}
-            saving={savingField === 'model'}
-            addLabel="+ Add model…"
-            onChange={handleModelChange}
-          />
-        ) : (
-          <span style={{color:T.text3,fontSize:11}}>—</span>
-        )}
+        {(() => {
+          const ms = item.models && item.models.length
+            ? item.models
+            : (item.model_id ? [{ id: item.model_id, name: models.find(m => m.id === item.model_id)?.name || '—' }] : [])
+          if (ms.length === 0) return <span style={{color:T.text3,fontSize:11}}>—</span>
+          return (
+            <button onClick={onOpenDrawer} title="Edit models in the product editor"
+              style={{background:'none',border:'none',padding:0,textAlign:'left',cursor:'pointer',fontFamily:'inherit',color:T.text2,fontSize:11.5,lineHeight:1.35}}>
+              {ms.map(m => m.name).join(', ')}
+              {ms.length > 1 && <span style={{color:T.text3}}> ({ms.length})</span>}
+            </button>
+          )
+        })()}
       </td>
 
       {/* Product type (inline editable, only when item is visible) */}
@@ -1044,13 +1048,18 @@ function EditDrawer({
           {/* Pricing */}
           <PricingSection item={item} onPatch={async p => { try { await patch(p) } catch {} }}/>
 
-          {/* Tags (model + product type) */}
+          {/* Tags (models + product type) */}
           <Section title="Tags" subtitle="Used to group products on the distributor catalogue">
-            <TaxonomySelect
-              label="Model"
-              value={item.model_id}
+            <MultiModelSelect
               options={models}
-              onChange={async (v) => { try { await patch({ model_id: v }) } catch {} }}
+              selectedIds={(item.models && item.models.length ? item.models.map(m => m.id) : (item.model_id ? [item.model_id] : []))}
+              onChange={async (ids) => {
+                try {
+                  await patch({ model_ids: ids })
+                  const resolved = ids.map(id => models.find(m => m.id === id)).filter(Boolean).map((m: any) => ({ id: m.id, name: m.name }))
+                  onPatch(item.id, { models: resolved, model_id: ids[0] || null })
+                } catch {}
+              }}
             />
             <div style={{height:10}}/>
             <TaxonomySelect
@@ -2072,6 +2081,44 @@ function TaxonomySelect({
         ))}
       </select>
     </label>
+  )
+}
+
+// Multi-select for the models a product fits. Selected models show as removable
+// chips; a dropdown adds more. A product appears under EVERY selected model on
+// the distributor catalogue (e.g. a part fitting 200- and 70-series).
+function MultiModelSelect({
+  options, selectedIds, onChange,
+}: {
+  options: TaxonomyOption[]
+  selectedIds: string[]
+  onChange: (ids: string[]) => void
+}) {
+  const byId = new Map(options.map(o => [o.id, o]))
+  const selected = selectedIds.map(id => byId.get(id)).filter(Boolean) as TaxonomyOption[]
+  const unselected = options.filter(o => !selectedIds.includes(o.id) && o.is_active !== false)
+    .sort((a, b) => a.name.localeCompare(b.name))
+  return (
+    <div style={{display:'flex',flexDirection:'column',gap:6}}>
+      <span style={{fontSize:11,color:T.text2,fontWeight:500}}>Models (fitment)</span>
+      <div style={{display:'flex',flexWrap:'wrap',gap:6}}>
+        {selected.length === 0 && <span style={{fontSize:12,color:T.text3}}>No models set — this product won’t appear under any model tile.</span>}
+        {selected.map(m => (
+          <span key={m.id} style={{display:'inline-flex',alignItems:'center',gap:6,padding:'4px 9px',borderRadius:14,background:T.bg3,border:`1px solid ${T.border2}`,fontSize:12,color:T.text}}>
+            {m.name}{!m.is_active ? ' (inactive)' : ''}
+            <button onClick={() => onChange(selectedIds.filter(id => id !== m.id))} title="Remove" style={{background:'none',border:'none',color:T.text3,cursor:'pointer',fontSize:14,lineHeight:1,padding:0}}>×</button>
+          </span>
+        ))}
+      </div>
+      <select
+        value=""
+        onChange={e => { const v = e.target.value; if (v) onChange([...selectedIds, v]) }}
+        style={{background:T.bg3,border:`1px solid ${T.border2}`,color:T.text,borderRadius:5,padding:'8px 10px',fontSize:13,outline:'none',fontFamily:'inherit',width:'100%'}}>
+        <option value="">+ Add a model…</option>
+        {unselected.map(o => <option key={o.id} value={o.id}>{o.name}</option>)}
+      </select>
+      <div style={{fontSize:10,color:T.text3}}>Manage the list of models under <a href="/admin/b2b/settings" style={{color:T.text2}}>B2B Settings</a>.</div>
+    </div>
   )
 }
 

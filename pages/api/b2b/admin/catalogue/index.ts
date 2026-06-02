@@ -66,7 +66,8 @@ export default withAuth('view:b2b', async (req: NextApiRequest, res: NextApiResp
       instructions_url,
       last_synced_from_myob_at,
       created_at,
-      updated_at
+      updated_at,
+      model_links:b2b_catalogue_models ( b2b_models ( id, name ) )
     `)
     .order('sku', { ascending: true })
 
@@ -74,5 +75,15 @@ export default withAuth('view:b2b', async (req: NextApiRequest, res: NextApiResp
     return res.status(500).json({ error: error.message })
   }
 
-  return res.status(200).json({ items: data || [] })
+  // Flatten the model-fitment join into a models[] array per item.
+  const items = (data || []).map((it: any) => {
+    const models = (Array.isArray(it.model_links) ? it.model_links : [])
+      .map((l: any) => l.b2b_models)
+      .filter((m: any) => m && m.id)
+      .map((m: any) => ({ id: m.id, name: m.name }))
+    const { model_links, ...rest } = it
+    return { ...rest, models }
+  })
+
+  return res.status(200).json({ items })
 })

@@ -50,6 +50,7 @@ interface CatalogueItem {
   is_taxable: boolean
   primary_image_url: string | null
   model: TaxonomyRef | null
+  models?: TaxonomyRef[]
   product_type: TaxonomyRef | null
   unit_price_ex_gst: number
   promo_active: boolean
@@ -129,10 +130,15 @@ export default function B2BCataloguePage({ b2bUser }: Props) {
 
   const cartItemCount = useMemo(() => cartLines.reduce((s, l) => s + l.qty, 0), [cartLines])
 
+  // A product can fit multiple models. Use the models[] array (fall back to the
+  // single primary model for safety if the array is absent).
+  const modelsOf = (i: CatalogueItem): TaxonomyRef[] =>
+    (i.models && i.models.length ? i.models : (i.model ? [i.model] : []))
+
   // Build option lists from the loaded items (de-duped, sorted)
   const modelOptions = useMemo(() => {
     const m = new Map<string, string>()
-    for (const it of items) if (it.model) m.set(it.model.id, it.model.name)
+    for (const it of items) for (const md of modelsOf(it)) m.set(md.id, md.name)
     return Array.from(m.entries()).map(([id, name]) => ({ id, name })).sort((a, b) => a.name.localeCompare(b.name))
   }, [items])
   const productTypeOptions = useMemo(() => {
@@ -144,17 +150,17 @@ export default function B2BCataloguePage({ b2bUser }: Props) {
   // Items in scope for the type-step / browse-step (after model has been chosen).
   const itemsAfterModel = useMemo(() => {
     if (modelFilter === 'all')  return items
-    if (modelFilter === 'none') return items.filter(i => !i.model)
-    return items.filter(i => i.model?.id === modelFilter)
+    if (modelFilter === 'none') return items.filter(i => modelsOf(i).length === 0)
+    return items.filter(i => modelsOf(i).some(m => m.id === modelFilter))
   }, [items, modelFilter])
 
   // Tile data for the model step
   const modelTiles = useMemo(() => modelOptions.map(o => ({
     id: o.id,
     name: o.name,
-    count: items.filter(i => i.model?.id === o.id).length,
+    count: items.filter(i => modelsOf(i).some(m => m.id === o.id)).length,
   })), [modelOptions, items])
-  const noModelCount = useMemo(() => items.filter(i => !i.model).length, [items])
+  const noModelCount = useMemo(() => items.filter(i => modelsOf(i).length === 0).length, [items])
 
   // Tile data for the type step (scoped to chosen model)
   const typeTiles = useMemo(() => {
@@ -204,8 +210,9 @@ export default function B2BCataloguePage({ b2bUser }: Props) {
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase()
     return items.filter(i => {
-      if (modelFilter === 'none' && i.model) return false
-      if (modelFilter !== 'all' && modelFilter !== 'none' && i.model?.id !== modelFilter) return false
+      const ms = modelsOf(i)
+      if (modelFilter === 'none' && ms.length > 0) return false
+      if (modelFilter !== 'all' && modelFilter !== 'none' && !ms.some(m => m.id === modelFilter)) return false
       if (productTypeFilter === 'none' && i.product_type) return false
       if (productTypeFilter !== 'all' && productTypeFilter !== 'none' && i.product_type?.id !== productTypeFilter) return false
       if (q) {
@@ -220,12 +227,19 @@ export default function B2BCataloguePage({ b2bUser }: Props) {
     if (groupBy === 'none') return null
     const groups = new Map<string, { key: string; label: string; items: CatalogueItem[] }>()
     const UNCAT = '__uncategorised__'
-    for (const it of filtered) {
-      const ref = groupBy === 'model' ? it.model : it.product_type
-      const key = ref?.id || UNCAT
-      const label = ref?.name || (groupBy === 'model' ? 'Other models' : 'Other')
+    const push = (key: string, label: string, it: CatalogueItem) => {
       if (!groups.has(key)) groups.set(key, { key, label, items: [] })
       groups.get(key)!.items.push(it)
+    }
+    for (const it of filtered) {
+      if (groupBy === 'model') {
+        const ms = modelsOf(it)
+        if (ms.length === 0) push(UNCAT, 'Other models', it)
+        else for (const md of ms) push(md.id, md.name, it)  // appears under each model it fits
+      } else {
+        const ref = it.product_type
+        push(ref?.id || UNCAT, ref?.name || 'Other', it)
+      }
     }
     // Sort: named groups by label asc, "Other"/uncategorised last
     return Array.from(groups.values()).sort((a, b) => {
@@ -555,14 +569,18 @@ function CatalogueCard({
         <div style={{fontSize:13,color:T.text,fontWeight:500,lineHeight:1.3,minHeight:34}}>{item.name}</div>
 
         {/* Tags + ordering badges */}
-        {(item.model || item.product_type || item.is_special_order || item.is_drop_ship) && (
-          <div style={{display:'flex',gap:5,flexWrap:'wrap'}}>
-            {item.model && <TagChip color={T.teal}>{item.model.name}</TagChip>}
-            {item.product_type && <TagChip color={T.blue}>{item.product_type.name}</TagChip>}
-            {item.is_special_order && <TagChip color={T.amber}>Special order</TagChip>}
-            {item.is_drop_ship && <TagChip color={T.purple}>Drop ship</TagChip>}
-          </div>
-        )}
+        {(() => {
+          const cardModels = item.models && item.models.length ? item.models : (item.model ? [item.model] : [])
+          if (!(cardModels.length || item.product_type || item.is_special_order || item.is_drop_ship)) return null
+          return (
+            <div style={{display:'flex',gap:5,flexWrap:'wrap'}}>
+              {cardModels.map(m => <TagChip key={m.id} color={T.teal}>{m.name}</TagChip>)}
+              {item.product_type && <TagChip color={T.blue}>{item.product_type.name}</TagChip>}
+              {item.is_special_order && <TagChip color={T.amber}>Special order</TagChip>}
+              {item.is_drop_ship && <TagChip color={T.purple}>Drop ship</TagChip>}
+            </div>
+          )
+        })()}
 
         {/* Stock + price */}
         <div style={{display:'flex',alignItems:'baseline',justifyContent:'space-between',marginTop:4,gap:8}}>

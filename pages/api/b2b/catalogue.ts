@@ -38,7 +38,8 @@ interface PublicCatalogueItem {
   rrp_ex_gst: number | null
   is_taxable: boolean
   primary_image_url: string | null
-  model: TaxonomyRef | null
+  model: TaxonomyRef | null          // primary (back-compat)
+  models: TaxonomyRef[]              // all models this product fits
   product_type: TaxonomyRef | null
   // Effective unit price at qty=1, after promo + volume-break rules
   unit_price_ex_gst: number
@@ -80,6 +81,7 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, _us
       is_special_order, is_drop_ship, instructions_url, max_order_qty,
       call_for_availability_below_qty, call_for_availability_when_zero,
       model:b2b_models!b2b_catalogue_model_id_fkey ( id, name ),
+      model_links:b2b_catalogue_models ( b2b_models ( id, name ) ),
       product_type:b2b_product_types!b2b_catalogue_product_type_id_fkey ( id, name )
     `)
     .eq('b2b_visible', true)
@@ -147,6 +149,9 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, _us
       is_taxable:         it.is_taxable !== false,
       primary_image_url:  it.primary_image_url,
       model:              pickRef(it.model),
+      models:             (Array.isArray(it.model_links) ? it.model_links : [])
+                            .map((l: any) => l.b2b_models).filter((m: any) => m && m.id)
+                            .map((m: any) => ({ id: m.id, name: m.name })),
       product_type:       pickRef(it.product_type),
       unit_price_ex_gst:  px.unit_price_ex_gst,
       promo_active:       px.promo_active,
