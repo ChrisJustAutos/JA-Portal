@@ -35,7 +35,11 @@ async function md(client: MdClient, path: string, init: { method?: string; body?
     'X-Requested-With': 'XMLHttpRequest',
   }
   if (init.body !== undefined) headers['Content-Type'] = 'application/json'
-  if (init.method && init.method !== 'GET' && client.csrfToken) headers['X-CSRF-Token'] = client.csrfToken
+  if (init.method && init.method !== 'GET') {
+    if (client.csrfToken) headers['X-CSRF-Token'] = client.csrfToken
+    const xsrf = (globalThis as any).__xsrf
+    if (xsrf) headers['X-XSRF-TOKEN'] = xsrf   // Angular-style — the likely unlock
+  }
   const r = await fetch(MD_BASE + path, {
     method: init.method || 'GET',
     headers,
@@ -104,6 +108,16 @@ async function main() {
   const stockId = (stock.stock as any).id
   const qtyBefore = await stockQty(client)
   console.log(`Test stock id=${stockId} qtyBefore=${qtyBefore}\n`)
+
+  // Round 6: GET works but POST 401s "Please login" with the same cookies →
+  // Rails/Angular CSRF. The SPA reads the XSRF-TOKEN cookie and echoes it as
+  // an X-XSRF-TOKEN header on writes. Dump cookie names and extract it.
+  console.log(`COOKIE NAMES: ${client.cookieHeader.split(';').map(s => s.trim().split('=')[0]).join(', ')}`)
+  const xsrfPair = client.cookieHeader.split(';').map(s => s.trim()).find(s => /^XSRF-TOKEN=/i.test(s))
+  const xsrfToken = xsrfPair ? decodeURIComponent(xsrfPair.split('=').slice(1).join('=')) : null
+  console.log(`XSRF-TOKEN cookie: ${xsrfToken ? `FOUND (${xsrfToken.slice(0, 16)}…)` : 'none'}`)
+  if (xsrfToken && !client.csrfToken) client.csrfToken = xsrfToken
+  ;(globalThis as any).__xsrf = xsrfToken
 
   // ── 2. CREATE attempts ────────────────────────────────────────────────
   const itemFlat = {
