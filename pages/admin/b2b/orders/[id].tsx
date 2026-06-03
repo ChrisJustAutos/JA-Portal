@@ -842,6 +842,8 @@ function ShippingCard({ order, onEdit, onReloaded, onFlash }: {
   const [actionError,  setActionError]  = useState<string | null>(null)
   const [dispatchAt,   setDispatchAt]   = useState('')   // datetime-local; blank = collect ASAP
   const [packMode,     setPackMode]     = useState<string>(order.freight_pack_mode || 'auto')
+  const [laterOpen,    setLaterOpen]    = useState(false) // mobile "book later" sheet
+  const [laterTime,    setLaterTime]    = useState('')
 
   async function openLabel() {
     try {
@@ -854,16 +856,19 @@ function ShippingCard({ order, onEdit, onReloaded, onFlash }: {
     }
   }
 
-  async function bookViaMachShip(force = false) {
+  async function bookViaMachShip(force = false, dispatchOverride?: string | null) {
     if (bookingBusy) return
     if (hasConsignment && !force && !confirm('A consignment is already booked. Re-book?')) return
+    // dispatchOverride: '' = collect ASAP (now), a value = scheduled (later);
+    // undefined = use whatever's in the inline picker.
+    const dispatch = dispatchOverride !== undefined ? dispatchOverride : dispatchAt
     setBookingBusy(true); setActionError(null)
     try {
       const r = await fetch(`/api/b2b/admin/orders/${order.id}/book-freight${force ? '?force=1' : ''}`, {
         method: 'POST', credentials: 'same-origin',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          ...(dispatchAt ? { dispatch_at: new Date(dispatchAt).toISOString() } : {}),
+          ...(dispatch ? { dispatch_at: new Date(dispatch).toISOString() } : {}),
           pack_mode: packMode || 'auto',
         }),
       })
@@ -1007,20 +1012,54 @@ function ShippingCard({ order, onEdit, onReloaded, onFlash }: {
         </div>
       )}
 
-      {/* Native-style pinned primary action on mobile: land here from the
-          notification and the Book button is right under your thumb. */}
+      {/* Native-style pinned primary action on mobile: Book now (ASAP) or
+          Later (pick a collection time). Lifted clear of the bottom edge. */}
       {isMobile && hasLiveQuote && !hasConsignment && !isShipped && (
         <div style={{
           position: 'fixed', left: 0, right: 0, bottom: 0, zIndex: 60,
           background: T.bg2, borderTop: `1px solid ${T.border2}`,
-          padding: `10px 14px calc(10px + env(safe-area-inset-bottom))`,
-          boxShadow: '0 -4px 16px rgba(0,0,0,0.4)',
+          padding: `12px 14px calc(22px + env(safe-area-inset-bottom))`,
+          boxShadow: '0 -4px 16px rgba(0,0,0,0.4)', display: 'flex', gap: 10,
         }}>
-          <button onClick={() => bookViaMachShip(false)} disabled={bookingBusy}
-            style={{ width: '100%', minHeight: 50, borderRadius: 12, border: 'none', background: bookingBusy ? T.bg4 : T.teal, color: bookingBusy ? T.text3 : '#08110d', fontWeight: 700, fontSize: 15.5, cursor: bookingBusy ? 'wait' : 'pointer', fontFamily: 'inherit' }}>
-            {bookingBusy ? 'Booking…' : '⚡ Book freight'}
+          <button onClick={() => bookViaMachShip(false, '')} disabled={bookingBusy}
+            style={{ flex: 2, minHeight: 50, borderRadius: 12, border: 'none', background: bookingBusy ? T.bg4 : T.teal, color: bookingBusy ? T.text3 : '#08110d', fontWeight: 700, fontSize: 15.5, cursor: bookingBusy ? 'wait' : 'pointer', fontFamily: 'inherit' }}>
+            {bookingBusy ? 'Booking…' : '⚡ Book now'}
+          </button>
+          <button onClick={() => { setLaterTime(''); setLaterOpen(true) }} disabled={bookingBusy}
+            style={{ flex: 1, minHeight: 50, borderRadius: 12, border: `1px solid ${T.border2}`, background: 'transparent', color: T.text, fontWeight: 600, fontSize: 14, cursor: 'pointer', fontFamily: 'inherit' }}>
+            Later…
           </button>
         </div>
+      )}
+
+      {/* "Book later" bottom sheet — pick the collection time. */}
+      {isMobile && laterOpen && (
+        <>
+          <div onClick={() => setLaterOpen(false)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', zIndex: 1000 }}/>
+          <div style={{
+            position: 'fixed', left: 0, right: 0, bottom: 0, zIndex: 1001,
+            background: T.bg2, borderTop: `1px solid ${T.border2}`, borderRadius: '14px 14px 0 0',
+            padding: `18px 16px calc(18px + env(safe-area-inset-bottom))`, boxShadow: '0 -10px 40px rgba(0,0,0,0.5)',
+          }}>
+            <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 4 }}>Schedule collection</div>
+            <div style={{ fontSize: 12, color: T.text3, marginBottom: 14 }}>Books the consignment now; the carrier collects at the time you choose.</div>
+            <label style={{ fontSize: 11, color: T.text3, display: 'block', marginBottom: 4 }}>Collection time</label>
+            <input type="datetime-local" value={laterTime} min={localNow()} onChange={e => setLaterTime(e.target.value)}
+              style={{ width: '100%', boxSizing: 'border-box', background: T.bg3, border: `1px solid ${T.border2}`, color: T.text, borderRadius: 8, padding: '11px 12px', fontSize: 16, outline: 'none', fontFamily: 'inherit', colorScheme: 'dark', marginBottom: 12 }}/>
+            <label style={{ fontSize: 11, color: T.text3, display: 'block', marginBottom: 4 }}>Pack as</label>
+            <select value={packMode} onChange={e => setPackMode(e.target.value)}
+              style={{ width: '100%', boxSizing: 'border-box', background: T.bg3, border: `1px solid ${T.border2}`, color: T.text, borderRadius: 8, padding: '11px 12px', fontSize: 16, outline: 'none', fontFamily: 'inherit', marginBottom: 16 }}>
+              <option value="auto">Auto (weight/volume)</option>
+              <option value="cartons">Cartons</option>
+              <option value="pallet">Pallet</option>
+            </select>
+            <button disabled={!laterTime || bookingBusy} onClick={() => { setLaterOpen(false); bookViaMachShip(false, laterTime) }}
+              style={{ width: '100%', minHeight: 50, borderRadius: 12, border: 'none', background: (!laterTime || bookingBusy) ? T.bg4 : T.teal, color: (!laterTime || bookingBusy) ? T.text3 : '#08110d', fontWeight: 700, fontSize: 15.5, cursor: (!laterTime || bookingBusy) ? 'not-allowed' : 'pointer', fontFamily: 'inherit', marginBottom: 8 }}>
+              Book for this time
+            </button>
+            <button onClick={() => setLaterOpen(false)} style={{ width: '100%', background: 'none', border: 'none', color: T.text3, fontSize: 13, cursor: 'pointer', fontFamily: 'inherit', padding: 6 }}>Cancel</button>
+          </div>
+        </>
       )}
     </Card>
   )
