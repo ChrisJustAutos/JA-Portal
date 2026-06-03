@@ -82,20 +82,25 @@ export function subscribeToAllMessages(onInsert: (row: any) => void): () => void
   return () => { if (ch) sb.removeChannel(ch) }
 }
 
-// Workspace presence — who's online right now. One shared channel; each client
-// tracks itself under its user id. onChange receives the set of online user ids.
-// No DB writes — presence state lives in the Realtime socket. (No "last seen"
-// persistence yet; offline users simply drop out of the set.)
+// Workspace presence — who's online right now, and whether they've marked
+// themselves away. One shared channel; each client tracks itself under its user
+// id. onChange receives one entry per online user. No DB writes — presence state
+// lives in the Realtime socket. (No "last seen" persistence; offline users
+// simply drop out.)
 export interface PresenceChannel { leave: () => void }
-export function joinPresence(me: { id: string; name: string }, onChange: (onlineIds: string[]) => void): PresenceChannel {
+export interface PresenceEntry { id: string; away?: boolean }
+export function joinPresence(me: { id: string; name: string; away?: boolean }, onChange: (entries: PresenceEntry[]) => void): PresenceChannel {
   const sb = getSupabase()
   let ch: RealtimeChannel | null = null
   ensureRealtimeAuth().then(() => {
     ch = sb.channel('presence:workspace', { config: { presence: { key: me.id } } })
     ch.on('presence', { event: 'sync' }, () => {
-      try { onChange(Object.keys(ch!.presenceState())) } catch {}
+      try {
+        const state = ch!.presenceState() as Record<string, any[]>
+        onChange(Object.keys(state).map(id => ({ id, away: !!(state[id]?.[0]?.away) })))
+      } catch {}
     }).subscribe(async (status) => {
-      if (status === 'SUBSCRIBED') { try { await ch!.track({ id: me.id, name: me.name, at: Date.now() }) } catch {} }
+      if (status === 'SUBSCRIBED') { try { await ch!.track({ id: me.id, name: me.name, at: Date.now(), away: !!me.away }) } catch {} }
     })
   })
   return { leave: () => { if (ch) sb.removeChannel(ch) } }

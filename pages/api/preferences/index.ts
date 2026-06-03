@@ -34,7 +34,21 @@ const PATCHABLE_KEYS = new Set([
   'launcher_order',
   'order_status_groups',
   'muted_notif_modules',
+  'messages_away',
+  'messages_quiet_enabled',
+  'messages_work_start',
+  'messages_work_end',
+  'messages_work_days',
 ])
+
+// 'HH:MM' 24h time, else null.
+function sanitizeHHMM(input: any): string | null {
+  const m = /^(\d{1,2}):(\d{2})$/.exec(String(input ?? ''))
+  if (!m) return null
+  const h = +m[1], min = +m[2]
+  if (h > 23 || min > 59) return null
+  return `${String(h).padStart(2, '0')}:${String(min).padStart(2, '0')}`
+}
 
 const VALID_ORDER_STATUSES = new Set(['pending_payment','paid','picking','packed','shipped','delivered','cancelled','refunded'])
 
@@ -191,6 +205,25 @@ async function handler(req: NextApiRequest, res: NextApiResponse, user: any) {
       patch.muted_notif_modules = Array.from(new Set(
         arr.filter((m: any) => typeof m === 'string').map((m: string) => m.trim().slice(0, 64)).filter(Boolean),
       )).slice(0, 100)
+    }
+
+    if ('messages_away' in patch) patch.messages_away = !!patch.messages_away
+    if ('messages_quiet_enabled' in patch) patch.messages_quiet_enabled = !!patch.messages_quiet_enabled
+    if ('messages_work_start' in patch) {
+      const v = sanitizeHHMM(patch.messages_work_start)
+      if (!v) return res.status(400).json({ error: 'messages_work_start must be HH:MM' })
+      patch.messages_work_start = v
+    }
+    if ('messages_work_end' in patch) {
+      const v = sanitizeHHMM(patch.messages_work_end)
+      if (!v) return res.status(400).json({ error: 'messages_work_end must be HH:MM' })
+      patch.messages_work_end = v
+    }
+    if ('messages_work_days' in patch) {
+      const arr = Array.isArray(patch.messages_work_days) ? patch.messages_work_days : []
+      patch.messages_work_days = Array.from(new Set(
+        arr.map((n: any) => parseInt(n, 10)).filter((n: number) => Number.isInteger(n) && n >= 0 && n <= 6),
+      )).sort((a: number, b: number) => a - b)
     }
 
     // Ensure row exists first (in case GET was never called)

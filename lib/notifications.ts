@@ -14,6 +14,7 @@
 
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
 import { visibleNavSections } from './permissions'
+import { messageNotificationsMuted } from './preferences'
 
 let _sb: SupabaseClient | null = null
 export function notifSvc(): SupabaseClient {
@@ -54,10 +55,11 @@ export async function notify(opts: NotifyOpts): Promise<void> {
     const idList = Array.from(ids)
     const [{ data: profiles }, { data: prefRows }] = await Promise.all([
       c.from('user_profiles').select('id, role, visible_tabs').in('id', idList),
-      c.from('user_preferences').select('user_id, muted_notif_modules').in('user_id', idList),
+      c.from('user_preferences').select('user_id, muted_notif_modules, timezone, messages_away, messages_quiet_enabled, messages_work_start, messages_work_end, messages_work_days').in('user_id', idList),
     ])
     const profById = new Map<string, any>((profiles || []).map((p: any) => [p.id, p]))
     const mutedById = new Map<string, Set<string>>((prefRows || []).map((r: any) => [r.user_id, new Set<string>(Array.isArray(r.muted_notif_modules) ? r.muted_notif_modules.map(String) : [])]))
+    const prefsById = new Map<string, any>((prefRows || []).map((r: any) => [r.user_id, r]))
     const eligible = idList.filter(id => {
       const p = profById.get(id)
       if (!p) return false
@@ -89,8 +91,14 @@ export async function notify(opts: NotifyOpts): Promise<void> {
     // users who can see + haven't muted the module.)
     const freshIds = Array.from(new Set((inserted || []).map((r: any) => r.user_id)))
     if (freshIds.length) {
-      {
-        const pushIds = freshIds
+      // For the Messages module, honour each recipient's "away" / working-hours
+      // setting: skip the background push (and the in-app alert it would trigger)
+      // while they're away or outside hours. The bell row above is still kept, so
+      // nothing is lost — only the active interruption is suppressed.
+      const pushIds = opts.module === 'messages'
+        ? freshIds.filter(id => !messageNotificationsMuted(prefsById.get(id)))
+        : freshIds
+      if (pushIds.length) {
         const { sendPushToUsers } = await import('./push')
         await sendPushToUsers(pushIds, { title: opts.title, body: opts.body || null, href: opts.href || null, tag: opts.dedupeKey })
       }

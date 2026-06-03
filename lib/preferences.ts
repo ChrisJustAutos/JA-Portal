@@ -53,6 +53,15 @@ export interface UserPreferences {
   // Notification modules the user has switched OFF (DEFAULT_NAV ids). Muted
   // modules are hidden from the bell/badges and don't push.
   muted_notif_modules: string[]
+  // ── Message notification controls (migration 075) ──
+  // Manual "away" — silences message alerts (push/sound/desktop) while set.
+  messages_away: boolean
+  // Only alert during working hours; outside the window, message alerts are
+  // silenced (the bell entry/badge is still recorded). Evaluated in `timezone`.
+  messages_quiet_enabled: boolean
+  messages_work_start: string   // 'HH:MM'
+  messages_work_end: string     // 'HH:MM'
+  messages_work_days: number[]  // 0=Sun … 6=Sat
 }
 
 export const DEFAULT_PREFERENCES: UserPreferences = {
@@ -71,6 +80,53 @@ export const DEFAULT_PREFERENCES: UserPreferences = {
   launcher_order: [],
   order_status_groups: [],
   muted_notif_modules: [],
+  messages_away: false,
+  messages_quiet_enabled: false,
+  messages_work_start: '08:00',
+  messages_work_end: '17:00',
+  messages_work_days: [1, 2, 3, 4, 5],
+}
+
+// ── Message notification quiet logic (shared client + server) ────────────
+// `away` or "outside working hours" silences message alerts. Evaluated against
+// the user's timezone. Accepts either a full UserPreferences or a raw
+// user_preferences DB row (same snake_case field names).
+export interface MessageQuietPrefs {
+  timezone?: string | null
+  messages_away?: boolean | null
+  messages_quiet_enabled?: boolean | null
+  messages_work_start?: string | null
+  messages_work_end?: string | null
+  messages_work_days?: number[] | null
+}
+const WEEKDAY_IDX: Record<string, number> = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 }
+export function isWithinWorkHours(p: MessageQuietPrefs, now: Date = new Date()): boolean {
+  const tz = p.timezone || 'Australia/Brisbane'
+  let day: number, cur: number
+  try {
+    const parts = new Intl.DateTimeFormat('en-GB', { timeZone: tz, weekday: 'short', hour: '2-digit', minute: '2-digit', hour12: false }).formatToParts(now)
+    const get = (t: string) => parts.find(x => x.type === t)?.value || ''
+    day = WEEKDAY_IDX[get('weekday')] ?? now.getDay()
+    let h = parseInt(get('hour') || '0', 10); if (h >= 24) h = 0
+    cur = h * 60 + parseInt(get('minute') || '0', 10)
+  } catch {
+    day = now.getDay(); cur = now.getHours() * 60 + now.getMinutes()
+  }
+  const days = (p.messages_work_days && p.messages_work_days.length) ? p.messages_work_days : [1, 2, 3, 4, 5]
+  if (!days.includes(day)) return false
+  const toMin = (s: string | null | undefined, fb: number) => { const m = /^(\d{1,2}):(\d{2})$/.exec(String(s || '')); return m ? (+m[1]) * 60 + (+m[2]) : fb }
+  const start = toMin(p.messages_work_start, 8 * 60)
+  const end = toMin(p.messages_work_end, 17 * 60)
+  if (start === end) return true                 // 24h window
+  if (start < end) return cur >= start && cur < end
+  return cur >= start || cur < end               // overnight window (e.g. 22:00–06:00)
+}
+// True when message ALERTS should be silenced for this user right now.
+export function messageNotificationsMuted(p: MessageQuietPrefs | null | undefined, now: Date = new Date()): boolean {
+  if (!p) return false
+  if (p.messages_away) return true
+  if (p.messages_quiet_enabled && !isWithinWorkHours(p, now)) return true
+  return false
 }
 
 // Hex values for each accent option (used both for swatches in the picker and

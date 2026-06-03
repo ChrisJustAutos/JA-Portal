@@ -15,6 +15,7 @@ import { subscribeToConversation, subscribeToConversationList, subscribeToAllMes
 import type { UserRole } from '../../lib/permissions'
 import { playSound } from '../../lib/notificationSounds'
 import { useIsMobile } from '../../lib/useIsMobile'
+import { usePreferences, messageNotificationsMuted, type UserPreferences } from '../../lib/preferences'
 
 const useIsoEffect = typeof window !== 'undefined' ? useLayoutEffect : useEffect
 
@@ -49,6 +50,8 @@ const ATTACH_BUCKET = 'chat-attachments'
 export default function ChatApp({ user, onUnreadChange }: { user: SSRUser; onUnreadChange?: (n: number) => void }) {
   const isMobile = useIsMobile()
   const meName = user.displayName || user.email
+  const { prefs, update: updatePrefs } = usePreferences()
+  const prefsRef = useRef<UserPreferences>(prefs); prefsRef.current = prefs
   const [conversations, setConversations] = useState<Conversation[]>([])
   const [activeId, setActiveId] = useState<string | null>(null)
   const [messages, setMessages] = useState<Message[]>([])
@@ -64,6 +67,7 @@ export default function ChatApp({ user, onUnreadChange }: { user: SSRUser; onUnr
   const [search, setSearch] = useState('')
   const [searchResults, setSearchResults] = useState<any[] | null>(null)
   const [online, setOnline] = useState<Set<string>>(new Set())
+  const [awayIds, setAwayIds] = useState<Set<string>>(new Set())
   const [dividerTs, setDividerTs] = useState<string | null>(null)
 
   const activeIdRef = useRef<string | null>(null); activeIdRef.current = activeId
@@ -160,11 +164,15 @@ export default function ChatApp({ user, onUnreadChange }: { user: SSRUser; onUnr
 
   useEffect(() => { loadConversations(); fetch('/api/messages/directory').then(r => r.ok ? r.json() : { users: [] }).then(d => setDir(d.users || [])) }, [loadConversations])
 
-  // Workspace presence — who's online right now.
+  // Workspace presence — who's online, and who's away. Re-tracks when my own
+  // away status changes so others see it live.
   useEffect(() => {
-    const p = joinPresence({ id: user.id, name: meName }, ids => setOnline(new Set(ids)))
+    const p = joinPresence({ id: user.id, name: meName, away: !!prefs.messages_away }, entries => {
+      setOnline(new Set(entries.map(e => e.id)))
+      setAwayIds(new Set(entries.filter(e => e.away).map(e => e.id)))
+    })
     return () => p.leave()
-  }, [user.id, meName])
+  }, [user.id, meName, prefs.messages_away])
 
   // Tab regained focus: reconcile quietly in case realtime events were missed
   // while asleep (incremental updates below otherwise never refetch).
@@ -327,6 +335,9 @@ export default function ChatApp({ user, onUnreadChange }: { user: SSRUser; onUnr
         next[i] = { ...next[i], unread: next[i].unread + 1, last_message_at: row.created_at }
         return sortConvs(next)
       })
+      // Away / outside working hours → keep the unread badge but silence the
+      // active alert (sound + desktop pop-up).
+      if (messageNotificationsMuted(prefsRef.current)) return
       try { playSound() } catch {}
       if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
         try { new Notification('New message', { body: String(row.body || '').slice(0, 120) || 'Attachment', tag: row.conversation_id }) } catch {}
@@ -505,6 +516,7 @@ export default function ChatApp({ user, onUnreadChange }: { user: SSRUser; onUnr
             <span style={{ fontSize: 14, fontWeight: 600 }}>Messages</span>
             {totalUnread > 0 && <span style={{ fontSize: 11, fontFamily: 'monospace', background: T.red, color: '#fff', borderRadius: 10, padding: '1px 7px' }}>{totalUnread}</span>}
           </div>
+          <StatusControl prefs={prefs} onUpdate={updatePrefs} />
           <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search messages…"
             style={{ width: '100%', padding: '6px 9px', background: T.bg3, border: `1px solid ${T.border}`, borderRadius: 6, color: T.text, fontSize: 12, fontFamily: 'inherit', outline: 'none', boxSizing: 'border-box' }} />
         </div>
@@ -523,15 +535,15 @@ export default function ChatApp({ user, onUnreadChange }: { user: SSRUser; onUnr
             <>
               <SidebarSection title="Channels" onAdd={() => setModal('channel')}>
                 {channels.length === 0 && <Hint>No channels yet</Hint>}
-                {channels.map(c => <ConvRow key={c.id} c={c} meId={user.id} online={online} active={c.id === activeId} onClick={() => setActiveId(c.id)} />)}
+                {channels.map(c => <ConvRow key={c.id} c={c} meId={user.id} online={online} awayIds={awayIds} active={c.id === activeId} onClick={() => setActiveId(c.id)} />)}
               </SidebarSection>
               <SidebarSection title="Direct messages" onAdd={() => setModal('dm')}>
                 {dms.length === 0 && <Hint>No direct messages</Hint>}
-                {dms.map(c => <ConvRow key={c.id} c={c} meId={user.id} online={online} active={c.id === activeId} onClick={() => setActiveId(c.id)} />)}
+                {dms.map(c => <ConvRow key={c.id} c={c} meId={user.id} online={online} awayIds={awayIds} active={c.id === activeId} onClick={() => setActiveId(c.id)} />)}
               </SidebarSection>
               {inbox.length > 0 && (
                 <SidebarSection title="Customer inbox">
-                  {inbox.map(c => <ConvRow key={c.id} c={c} meId={user.id} online={online} active={c.id === activeId} onClick={() => setActiveId(c.id)} />)}
+                  {inbox.map(c => <ConvRow key={c.id} c={c} meId={user.id} online={online} awayIds={awayIds} active={c.id === activeId} onClick={() => setActiveId(c.id)} />)}
                 </SidebarSection>
               )}
             </>
@@ -553,12 +565,12 @@ export default function ChatApp({ user, onUnreadChange }: { user: SSRUser; onUnr
                 )}
                 <span style={{ color: T.text3 }}>{convGlyph(active)}</span>
                 <span style={{ fontSize: 14, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{convTitle(active)}</span>
-                {headerPresence(active, user.id, online)}
+                {headerPresence(active, user.id, online, awayIds)}
                 {active.topic && <span style={{ fontSize: 12, color: T.text3, marginLeft: 8, borderLeft: `1px solid ${T.border}`, paddingLeft: 8, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{active.topic}</span>}
                 {active.type !== 'dm' && <span style={{ marginLeft: 'auto', fontSize: 11, color: T.text3, flexShrink: 0 }}>{active.memberIds.length} member{active.memberIds.length === 1 ? '' : 's'}</span>}
               </div>
               <MessageList key={active.id} messages={messages} loading={loadingMsgs} meId={user.id} nameById={nameById}
-                conv={active} online={online} dividerTs={dividerTs} hasMore={hasMore} loadingOlder={loadingOlder}
+                conv={active} online={online} awayIds={awayIds} dividerTs={dividerTs} hasMore={hasMore} loadingOlder={loadingOlder}
                 onLoadOlder={() => loadOlder(active.id)} onRetry={retrySend}
                 onReact={toggleReaction} onEdit={editMessage} onDelete={deleteMessage} onOpenThread={openThread} />
               {typers.length > 0 && <TypingLine names={typers.map(t => t.name)} />}
@@ -577,9 +589,9 @@ export default function ChatApp({ user, onUnreadChange }: { user: SSRUser; onUnr
               <button onClick={() => setThreadParent(null)} style={{ background: 'none', border: 'none', color: T.text2, fontSize: 18, cursor: 'pointer' }}>×</button>
             </div>
             <div style={{ flex: 1, overflowY: 'auto', padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 12 }}>
-              <MessageRow m={threadParent} mine={threadParent.sender_user_id === user.id} meId={user.id} nameById={nameById} online={online} onReact={toggleReaction} onEdit={editMessage} onDelete={deleteMessage} onRetry={retrySend} compact />
+              <MessageRow m={threadParent} mine={threadParent.sender_user_id === user.id} meId={user.id} nameById={nameById} online={online} awayIds={awayIds} onReact={toggleReaction} onEdit={editMessage} onDelete={deleteMessage} onRetry={retrySend} compact />
               <div style={{ borderTop: `1px solid ${T.border}`, paddingTop: 8, fontSize: 10, color: T.text3 }}>{threadMessages.length} repl{threadMessages.length === 1 ? 'y' : 'ies'}</div>
-              {threadMessages.map(m => <MessageRow key={m.id} m={m} mine={m.sender_user_id === user.id} meId={user.id} nameById={nameById} online={online} onReact={toggleReaction} onEdit={editMessage} onDelete={deleteMessage} onRetry={retrySend} compact />)}
+              {threadMessages.map(m => <MessageRow key={m.id} m={m} mine={m.sender_user_id === user.id} meId={user.id} nameById={nameById} online={online} awayIds={awayIds} onReact={toggleReaction} onEdit={editMessage} onDelete={deleteMessage} onRetry={retrySend} compact />)}
             </div>
             <Composer key={'thread-' + threadParent.id} draftKey={'thread:' + threadParent.id} dir={dir.filter(u => u.id !== user.id)} onSend={(b, m, f) => sendMessage(b, m, f, threadParent.id)} onTyping={() => {}} placeholder="Reply…" />
           </div>
@@ -608,24 +620,95 @@ function convGlyph(c: Conversation) { return c.type === 'dm' ? '@' : c.type === 
 function convTitle(c: Conversation) { return c.displayName || c.name || (c.type === 'dm' ? 'Direct message' : 'Untitled') }
 // The other member of a 1:1 DM (for presence dots / "Active now").
 function dmOtherId(c: Conversation, meId: string): string | null { return c.type === 'dm' ? (c.memberIds.find(id => id !== meId) || null) : null }
-function headerPresence(c: Conversation, meId: string, online: Set<string>) {
+function headerPresence(c: Conversation, meId: string, online: Set<string>, awayIds: Set<string>) {
   const other = dmOtherId(c, meId)
-  if (other && online.has(other)) return <span style={{ fontSize: 11, color: T.green, marginLeft: 8, display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 }}><Dot on /> Active now</span>
+  if (other && online.has(other)) {
+    const away = awayIds.has(other)
+    return <span style={{ fontSize: 11, color: away ? T.amber : T.green, marginLeft: 8, display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 }}><Dot on away={away} /> {away ? 'Away' : 'Active now'}</span>
+  }
   return null
 }
-function Dot({ on }: { on?: boolean }) { return <span style={{ width: 7, height: 7, borderRadius: '50%', background: on ? T.green : T.text3, display: 'inline-block', flexShrink: 0 }} /> }
+function Dot({ on, away }: { on?: boolean; away?: boolean }) { return <span style={{ width: 7, height: 7, borderRadius: '50%', background: on ? (away ? T.amber : T.green) : T.text3, display: 'inline-block', flexShrink: 0 }} /> }
 
-function ConvRow({ c, active, meId, online, onClick }: { c: Conversation; active: boolean; meId: string; online: Set<string>; onClick: () => void }) {
+function ConvRow({ c, active, meId, online, awayIds, onClick }: { c: Conversation; active: boolean; meId: string; online: Set<string>; awayIds: Set<string>; onClick: () => void }) {
   const other = dmOtherId(c, meId)
   const isOnline = !!other && online.has(other)
+  const isAway = !!other && awayIds.has(other)
   return (
     <button onClick={onClick} style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%', textAlign: 'left', padding: '6px 16px', border: 'none', cursor: 'pointer', fontFamily: 'inherit', background: active ? 'rgba(79,142,247,0.12)' : 'transparent', color: active ? T.text : (c.unread ? T.text : T.text2) }}>
       {c.type === 'dm'
-        ? <span style={{ position: 'relative', width: 12, display: 'flex', justifyContent: 'center', flexShrink: 0 }}><Dot on={isOnline} /></span>
+        ? <span style={{ position: 'relative', width: 12, display: 'flex', justifyContent: 'center', flexShrink: 0 }}><Dot on={isOnline} away={isAway} /></span>
         : <span style={{ color: T.text3, width: 12, textAlign: 'center', fontSize: 12, flexShrink: 0 }}>{convGlyph(c)}</span>}
       <span style={{ flex: 1, fontSize: 13, fontWeight: c.unread ? 600 : 400, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{convTitle(c)}</span>
       {c.unread > 0 && <span style={{ fontSize: 10, fontFamily: 'monospace', background: T.red, color: '#fff', borderRadius: 10, padding: '0 6px' }}>{c.unread}</span>}
     </button>
+  )
+}
+
+// Availability + working-hours control. Sets your "away" status (which others
+// see as an amber dot) and an optional working-hours window; outside it, message
+// alerts are silenced — you still get the bell badge, just no push/sound/pop-up.
+const DAY_CHIPS: { d: number; label: string }[] = [
+  { d: 1, label: 'M' }, { d: 2, label: 'T' }, { d: 3, label: 'W' }, { d: 4, label: 'T' }, { d: 5, label: 'F' }, { d: 6, label: 'S' }, { d: 0, label: 'S' },
+]
+function StatusControl({ prefs, onUpdate }: { prefs: UserPreferences; onUpdate: (patch: Partial<UserPreferences>) => Promise<void> }) {
+  const [open, setOpen] = useState(false)
+  const away = !!prefs.messages_away
+  const quiet = !!prefs.messages_quiet_enabled
+  const days = prefs.messages_work_days || [1, 2, 3, 4, 5]
+  const set = (patch: Partial<UserPreferences>) => { onUpdate(patch).catch(() => {}) }
+  const toggleDay = (d: number) => set({ messages_work_days: days.includes(d) ? days.filter(x => x !== d) : [...days, d].sort((a, b) => a - b) })
+  const tInp: React.CSSProperties = { background: T.bg2, border: `1px solid ${T.border2}`, borderRadius: 6, color: T.text, fontSize: 12, fontFamily: 'inherit', padding: '5px 7px', outline: 'none', colorScheme: 'dark' }
+
+  return (
+    <div style={{ position: 'relative', marginBottom: 8 }}>
+      <button onClick={() => setOpen(o => !o)} style={{ display: 'flex', alignItems: 'center', gap: 7, width: '100%', padding: '6px 9px', background: T.bg3, border: `1px solid ${T.border}`, borderRadius: 6, color: T.text2, fontSize: 12, fontFamily: 'inherit', cursor: 'pointer' }}>
+        <Dot on away={away} />
+        <span style={{ color: T.text }}>{away ? 'Away' : 'Active'}</span>
+        {quiet && !away && <span style={{ fontSize: 10, color: T.text3 }}>· work hours only</span>}
+        <span style={{ marginLeft: 'auto', color: T.text3, fontSize: 10 }}>▾</span>
+      </button>
+      {open && (
+        <>
+          <div onClick={() => setOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 40 }} />
+          <div style={{ position: 'absolute', top: 'calc(100% + 4px)', left: 0, right: 0, zIndex: 41, background: T.bg4, border: `1px solid ${T.border2}`, borderRadius: 10, padding: 12, boxShadow: '0 12px 34px rgba(0,0,0,0.5)' }}>
+            <div style={{ fontSize: 10, color: T.text3, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 8 }}>Availability</div>
+            <div style={{ display: 'flex', gap: 6, marginBottom: 12 }}>
+              {[{ k: false, label: 'Active', c: T.green }, { k: true, label: 'Away', c: T.amber }].map(o => (
+                <button key={String(o.k)} onClick={() => set({ messages_away: o.k })}
+                  style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, padding: '7px 0', borderRadius: 7, cursor: 'pointer', fontSize: 12, fontFamily: 'inherit', fontWeight: 600, border: `1px solid ${away === o.k ? o.c : T.border2}`, background: away === o.k ? `${o.c}22` : 'transparent', color: away === o.k ? o.c : T.text2 }}>
+                  <span style={{ width: 7, height: 7, borderRadius: '50%', background: o.c }} />{o.label}
+                </button>
+              ))}
+            </div>
+            {away && <div style={{ fontSize: 11, color: T.text3, marginBottom: 10, lineHeight: 1.5 }}>You won’t get message pop-ups, sounds or push while away. Messages still arrive — you’ll see the unread badge.</div>}
+
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: T.text, cursor: 'pointer', marginBottom: quiet ? 10 : 0 }}>
+              <input type="checkbox" checked={quiet} onChange={e => set({ messages_quiet_enabled: e.target.checked })} />
+              Only notify during work hours
+            </label>
+            {quiet && (
+              <div style={{ paddingLeft: 2 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+                  <span style={{ fontSize: 11, color: T.text3 }}>From</span>
+                  <input type="time" value={prefs.messages_work_start} onChange={e => set({ messages_work_start: e.target.value })} style={tInp} />
+                  <span style={{ fontSize: 11, color: T.text3 }}>to</span>
+                  <input type="time" value={prefs.messages_work_end} onChange={e => set({ messages_work_end: e.target.value })} style={tInp} />
+                </div>
+                <div style={{ display: 'flex', gap: 4, marginBottom: 8 }}>
+                  {DAY_CHIPS.map(c => {
+                    const on = days.includes(c.d)
+                    return <button key={c.d} onClick={() => toggleDay(c.d)} title={['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][c.d]}
+                      style={{ flex: 1, padding: '6px 0', borderRadius: 6, cursor: 'pointer', fontSize: 11, fontWeight: 600, fontFamily: 'inherit', border: `1px solid ${on ? T.blue : T.border2}`, background: on ? 'rgba(79,142,247,0.18)' : 'transparent', color: on ? T.blue : T.text3 }}>{c.label}</button>
+                  })}
+                </div>
+                <div style={{ fontSize: 11, color: T.text3, lineHeight: 1.5 }}>Outside these hours, message alerts are silenced (using your {prefs.timezone} time). You’ll still see unread badges.</div>
+              </div>
+            )}
+          </div>
+        </>
+      )}
+    </div>
   )
 }
 
@@ -650,11 +733,11 @@ function colorFor(id: string | null): string {
   let h = 0; for (const ch of (id || 'x')) h = (h * 31 + ch.charCodeAt(0)) >>> 0
   return AVATAR_COLORS[h % AVATAR_COLORS.length]
 }
-function Avatar({ id, name, online, size = 28 }: { id: string | null; name: string; online?: boolean; size?: number }) {
+function Avatar({ id, name, online, away, size = 28 }: { id: string | null; name: string; online?: boolean; away?: boolean; size?: number }) {
   return (
     <span style={{ position: 'relative', flexShrink: 0, width: size, height: size }}>
       <span style={{ width: size, height: size, borderRadius: '50%', background: colorFor(id), color: '#fff', fontSize: size * 0.38, fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{initials(name)}</span>
-      {online && <span style={{ position: 'absolute', bottom: -1, right: -1, width: 9, height: 9, borderRadius: '50%', background: T.green, border: `2px solid ${T.bg}` }} />}
+      {online && <span style={{ position: 'absolute', bottom: -1, right: -1, width: 9, height: 9, borderRadius: '50%', background: away ? T.amber : T.green, border: `2px solid ${T.bg}` }} />}
     </span>
   )
 }
@@ -677,7 +760,7 @@ function dayLabel(iso: string) {
   return d.toLocaleDateString('en-AU', { weekday: 'short', day: 'numeric', month: 'short', year: d.getFullYear() === now.getFullYear() ? undefined : 'numeric' })
 }
 
-function MessageList({ messages, loading, meId, nameById, conv, online, dividerTs, hasMore, loadingOlder, onLoadOlder, onReact, onEdit, onDelete, onRetry, onOpenThread }: { messages: Message[]; loading: boolean; meId: string; nameById: Record<string, string>; conv: Conversation; online: Set<string>; dividerTs: string | null; hasMore: boolean; loadingOlder: boolean; onLoadOlder: () => void } & RowActions) {
+function MessageList({ messages, loading, meId, nameById, conv, online, awayIds, dividerTs, hasMore, loadingOlder, onLoadOlder, onReact, onEdit, onDelete, onRetry, onOpenThread }: { messages: Message[]; loading: boolean; meId: string; nameById: Record<string, string>; conv: Conversation; online: Set<string>; awayIds: Set<string>; dividerTs: string | null; hasMore: boolean; loadingOlder: boolean; onLoadOlder: () => void } & RowActions) {
   const ref = useRef<HTMLDivElement | null>(null)
   const atBottom = useRef(true)
   const meta = useRef<{ firstId?: string; lastId?: string; len: number }>({ len: 0 })
@@ -745,7 +828,7 @@ function MessageList({ messages, loading, meId, nameById, conv, online, dividerT
             <div key={m.id}>
               {showDay && <DayDivider label={dayLabel(m.created_at)} />}
               {showNew && <NewDivider />}
-              <MessageRow m={m} mine={m.sender_user_id === meId} meId={meId} nameById={nameById} online={online} grouped={continued}
+              <MessageRow m={m} mine={m.sender_user_id === meId} meId={meId} nameById={nameById} online={online} awayIds={awayIds} grouped={continued}
                 receipt={receipt && receipt.id === m.id ? receipt.text : undefined}
                 onReact={onReact} onEdit={onEdit} onDelete={onDelete} onRetry={onRetry} onOpenThread={onOpenThread} />
             </div>
@@ -781,7 +864,7 @@ function NewDivider() {
   )
 }
 
-function MessageRow({ m, mine, meId, nameById, online, grouped, receipt, onReact, onEdit, onDelete, onRetry, onOpenThread, compact }: { m: Message; mine: boolean; meId: string; nameById: Record<string, string>; online: Set<string>; grouped?: boolean; receipt?: string; compact?: boolean } & RowActions) {
+function MessageRow({ m, mine, meId, nameById, online, awayIds, grouped, receipt, onReact, onEdit, onDelete, onRetry, onOpenThread, compact }: { m: Message; mine: boolean; meId: string; nameById: Record<string, string>; online: Set<string>; awayIds?: Set<string>; grouped?: boolean; receipt?: string; compact?: boolean } & RowActions) {
   const isMobile = useIsMobile()
   const [hover, setHover] = useState(false)
   const [picker, setPicker] = useState<false | 'quick' | 'full'>(false)
@@ -790,6 +873,7 @@ function MessageRow({ m, mine, meId, nameById, online, grouped, receipt, onReact
   useEffect(() => { setDraft(m.body) }, [m.body])
   const deleted = !!m.deleted_at
   const isOnline = !!m.sender_user_id && online.has(m.sender_user_id)
+  const isAway = !!m.sender_user_id && !!awayIds?.has(m.sender_user_id)
   const showHeader = !grouped && !compact
   const time = new Date(m.created_at).toLocaleString('en-AU', { hour: '2-digit', minute: '2-digit' })
 
@@ -800,7 +884,7 @@ function MessageRow({ m, mine, meId, nameById, online, grouped, receipt, onReact
       style={{ display: 'flex', flexDirection: mine ? 'row-reverse' : 'row', gap: 8, alignItems: 'flex-end', marginTop: grouped ? 1 : (compact ? 0 : 8), opacity: m.status === 'sending' ? 0.7 : 1 }}>
       {/* Avatar gutter — only for others, only on the first of a group */}
       {!mine && !compact && (showHeader
-        ? <Avatar id={m.sender_user_id} name={m.senderName} online={isOnline} />
+        ? <Avatar id={m.sender_user_id} name={m.senderName} online={isOnline} away={isAway} />
         : <span style={{ width: 28, flexShrink: 0 }} />)}
 
       <div style={{ position: 'relative', maxWidth: compact ? '100%' : '78%', display: 'flex', flexDirection: 'column', alignItems: mine ? 'flex-end' : 'flex-start' }}>
