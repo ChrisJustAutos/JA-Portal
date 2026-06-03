@@ -13,7 +13,7 @@
 //
 // Bump VERSION whenever this file or offline.html changes, to evict old caches.
 
-const VERSION = 'v3'
+const VERSION = 'v4'
 const CACHE = `ja-portal-static-${VERSION}`
 const PRECACHE = ['/offline.html', '/icons/icon-192.png']
 
@@ -38,11 +38,14 @@ self.addEventListener('fetch', (event) => {
   if (url.origin !== self.location.origin) return  // skip Supabase/MYOB/etc.
   if (url.pathname.startsWith('/api/')) return     // never cache API/auth
 
+  // The manifest must always be fresh so start_url / icon changes propagate
+  // to installed apps without a reinstall — never cache it.
+  if (url.pathname === '/manifest.json') return
+
   // Immutable static assets → cache-first (fast loads, safe to keep).
   const isStatic =
     url.pathname.startsWith('/_next/static/') ||
-    url.pathname.startsWith('/icons/') ||
-    url.pathname === '/manifest.json'
+    url.pathname.startsWith('/icons/')
   if (isStatic) {
     event.respondWith(
       caches.match(req).then((hit) =>
