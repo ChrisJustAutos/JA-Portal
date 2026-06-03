@@ -18,7 +18,8 @@ import { DEFAULT_NAV, PortalNavItem } from './PortalSidebar'
 import { AppIcon } from './AppIcons'
 import { usePreferences } from './preferences'
 import { useIsMobile } from './useIsMobile'
-import { useNotificationSummary, timeAgo, NotificationRow } from './useNotifications'
+import { useNotificationSummary } from './useNotifications'
+import NotificationBell from '../components/NotificationBell'
 
 // Per-module unread badge counts, keyed by app/module id (plus the legacy
 // 'invoices'/'payables'/'messages' alert keys, which equal their module ids).
@@ -199,46 +200,17 @@ export default function PortalTopBar({
     ...Object.fromEntries(Object.entries(alertCounts).filter(([, v]) => typeof v === 'number')),
   }
 
-  // Bell dropdown state — list fetched on open.
-  const [bellOpen, setBellOpen] = useState(false)
-  const [notifs, setNotifs] = useState<NotificationRow[] | null>(null)
-  useEffect(() => {
-    if (!bellOpen) return
-    fetch('/api/notifications').then(r => r.ok ? r.json() : null)
-      .then(d => { if (d) setNotifs(d.notifications) }).catch(() => {})
-  }, [bellOpen])
-
-  const markRead = useCallback((body: { id?: string; all?: boolean }) => {
-    return fetch('/api/notifications', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
-      .then(() => refreshSummary()).catch(() => {})
-  }, [refreshSummary])
-
-  const deleteNotifs = useCallback((body: { id?: string; all?: boolean }) => {
-    setNotifs(list => body.all ? [] : (list || []).filter(x => x.id !== body.id))
-    return fetch('/api/notifications', { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
-      .then(() => refreshSummary()).catch(() => {})
-  }, [refreshSummary])
-
-  function openNotification(n: NotificationRow) {
-    setBellOpen(false)
-    if (!n.read_at) {
-      setNotifs(list => (list || []).map(x => x.id === n.id ? { ...x, read_at: new Date().toISOString() } : x))
-      markRead({ id: n.id })
-    }
-    if (n.href) router.push(n.href)
-  }
-
   // Esc closes the launcher / menu.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') { setLauncherOpen(false); setMenuOpen(false); setBellOpen(false) }
+      if (e.key === 'Escape') { setLauncherOpen(false); setMenuOpen(false) }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [])
   // Close launcher on navigation.
   useEffect(() => {
-    const close = () => { setLauncherOpen(false); setMenuOpen(false); setBellOpen(false) }
+    const close = () => { setLauncherOpen(false); setMenuOpen(false) }
     router.events.on('routeChangeStart', close)
     return () => router.events.off('routeChangeStart', close)
   }, [router])
@@ -310,97 +282,7 @@ export default function PortalTopBar({
         <span style={{ flex: 1 }}/>
 
         {/* Notification bell */}
-        <div style={{ position: 'relative', flexShrink: 0 }}>
-          <button onClick={() => setBellOpen(o => !o)} style={{ ...btn, padding: '7px 9px', position: 'relative' }} aria-label="Notifications" title="Notifications">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-              <path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/>
-              <path d="M13.7 21a2 2 0 0 1-3.4 0"/>
-            </svg>
-            {(summary?.total || 0) > 0 && (
-              <span style={{
-                position: 'absolute', top: -5, right: -5,
-                minWidth: 16, height: 16, padding: '0 4px', borderRadius: 8,
-                background: T.red, color: '#fff', fontSize: 9.5, fontWeight: 600,
-                display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'monospace',
-              }}>{summary!.total > 99 ? '99+' : summary!.total}</span>
-            )}
-          </button>
-          {bellOpen && (
-            <>
-              <div onClick={() => setBellOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 901 }}/>
-              <div style={{
-                position: 'absolute', top: 'calc(100% + 6px)', right: isMobile ? -60 : 0, zIndex: 902,
-                width: isMobile ? 'calc(100vw - 24px)' : 360, maxWidth: 'calc(100vw - 24px)',
-                maxHeight: '70vh', overflowY: 'auto',
-                background: T.bg2, border: `1px solid ${T.border2}`, borderRadius: 10,
-                boxShadow: '0 14px 40px rgba(0,0,0,0.45)', padding: 6,
-              }}>
-                <div style={{ display: 'flex', alignItems: 'center', padding: '6px 10px 8px', borderBottom: `1px solid ${T.border}`, marginBottom: 4 }}>
-                  <span style={{ fontSize: 12.5, fontWeight: 600, color: T.text }}>Notifications</span>
-                  <button
-                    onClick={() => fetch('/api/notifications/test', { method: 'POST', credentials: 'same-origin' }).then(() => setTimeout(refreshSummary, 800)).catch(() => {})}
-                    title="Send yourself a test notification"
-                    style={{ background: 'none', border: 'none', color: T.text3, fontSize: 11.5, fontFamily: 'inherit', cursor: 'pointer', padding: 0, marginLeft: 10 }}>
-                    Send test
-                  </button>
-                  <span style={{ flex: 1 }}/>
-                  {(summary?.total || 0) > 0 && (
-                    <button
-                      onClick={() => { markRead({ all: true }); setNotifs(list => (list || []).map(x => ({ ...x, read_at: x.read_at || new Date().toISOString() }))) }}
-                      style={{ background: 'none', border: 'none', color: T.blue, fontSize: 11.5, fontFamily: 'inherit', cursor: 'pointer', padding: 0 }}>
-                      Mark all read
-                    </button>
-                  )}
-                  {(notifs?.length || 0) > 0 && (
-                    <button
-                      onClick={() => { if (confirm('Delete all notifications?')) deleteNotifs({ all: true }) }}
-                      style={{ background: 'none', border: 'none', color: T.text3, fontSize: 11.5, fontFamily: 'inherit', cursor: 'pointer', padding: 0, marginLeft: 12 }}>
-                      Clear all
-                    </button>
-                  )}
-                </div>
-                {notifs === null && <div style={{ color: T.text3, fontSize: 12, padding: '14px 10px' }}>Loading…</div>}
-                {notifs !== null && notifs.length === 0 && <div style={{ color: T.text3, fontSize: 12, padding: '14px 10px' }}>No notifications yet.</div>}
-                {(notifs || []).map(n => {
-                  const app = apps.find(a => a.id === n.module)
-                  const unread = !n.read_at
-                  return (
-                    <div key={n.id} onClick={() => openNotification(n)} style={{
-                      display: 'flex', alignItems: 'flex-start', gap: 9, width: '100%', textAlign: 'left',
-                      background: unread ? 'rgba(79,142,247,0.07)' : 'none', borderRadius: 7,
-                      padding: '8px 10px', cursor: 'pointer', fontFamily: 'inherit', marginBottom: 1, boxSizing: 'border-box',
-                    }}>
-                      <span style={{
-                        width: 28, height: 28, borderRadius: 8, flexShrink: 0, marginTop: 1,
-                        display: 'flex', alignItems: 'center', justifyContent: 'center',
-                        background: `${app?.accent || T.blue}1f`, color: app?.accent || T.blue,
-                      }}>
-                        <AppIcon name={n.module} size={15}/>
-                      </span>
-                      <span style={{ flex: 1, minWidth: 0 }}>
-                        <span style={{ display: 'block', fontSize: 12.5, fontWeight: unread ? 600 : 500, color: T.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{n.title}</span>
-                        {n.body && <span style={{ display: 'block', fontSize: 11.5, color: T.text2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginTop: 1 }}>{n.body}</span>}
-                      </span>
-                      <span style={{ fontSize: 10, color: T.text3, fontFamily: 'monospace', flexShrink: 0, marginTop: 2 }}>{timeAgo(n.created_at)}</span>
-                      {unread && <span style={{ width: 7, height: 7, borderRadius: '50%', background: T.red, flexShrink: 0, marginTop: 6 }}/>}
-                      <button
-                        onClick={(e) => { e.stopPropagation(); deleteNotifs({ id: n.id }) }}
-                        title="Delete notification"
-                        aria-label="Delete notification"
-                        style={{
-                          background: 'none', border: 'none', color: T.text3, fontSize: 14, lineHeight: 1,
-                          cursor: 'pointer', padding: '2px 3px', marginTop: 1, flexShrink: 0, borderRadius: 4,
-                        }}
-                        onMouseEnter={e => { e.currentTarget.style.color = T.red }}
-                        onMouseLeave={e => { e.currentTarget.style.color = T.text3 }}
-                      >×</button>
-                    </div>
-                  )
-                })}
-              </div>
-            </>
-          )}
-        </div>
+        <NotificationBell apps={apps} summary={summary} refresh={refreshSummary}/>
 
         {onRefresh && (
           <button onClick={onRefresh} disabled={refreshing} style={{ ...btn, opacity: refreshing ? 0.6 : 1, ...(isMobile ? { padding: '7px 9px' } : {}) }}

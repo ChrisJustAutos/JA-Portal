@@ -13,6 +13,7 @@
 
 import { useEffect, useRef } from 'react'
 import { useRouter } from 'next/router'
+import { playSound, primeAudio } from '../lib/notificationSounds'
 
 const LAST_SEEN_KEY = 'ja-notif-last-seen'
 const POLL_MS = 45000
@@ -71,9 +72,15 @@ export default function DesktopNotifier() {
       ensurePushSubscription()
     }
 
+    // Unlock audio on the first user interaction (browsers block sound until
+    // the user has interacted with the page).
+    const prime = () => { primeAudio() }
+    window.addEventListener('pointerdown', prime, { once: true })
+    window.addEventListener('keydown', prime, { once: true })
+
     let live = true
     async function poll() {
-      if (!live || Notification.permission !== 'granted') return
+      if (!live) return
       const path = routerRef.current.pathname || ''
       if (SKIP_PATHS.some((p) => path.startsWith(p))) return
       try {
@@ -84,21 +91,27 @@ export default function DesktopNotifier() {
           .filter((n: any) => !n.read_at && Date.parse(n.created_at) > lastSeen.current)
           .sort((a: any, b: any) => Date.parse(a.created_at) - Date.parse(b.created_at))
         if (!fresh.length) return
-        // Cap the burst so a backlog can't flood the OS tray.
-        for (const n of fresh.slice(-4)) {
-          try {
-            const toast = new Notification(n.title || 'Just Autos Portal', {
-              body: n.body || '',
-              tag: n.id,                 // dedupes if the same one fires twice
-              icon: '/icons/icon-192.png',
-              badge: '/icons/icon-192.png',
-            })
-            toast.onclick = () => {
-              window.focus()
-              if (n.href) routerRef.current.push(n.href)
-              toast.close()
-            }
-          } catch { /* ignore individual toast failures */ }
+
+        // Play the chosen sound once per batch (independent of OS permission).
+        try { playSound() } catch { /* sound optional */ }
+
+        // OS toasts only if the user granted notification permission.
+        if (Notification.permission === 'granted') {
+          for (const n of fresh.slice(-4)) {  // cap so a backlog can't flood the tray
+            try {
+              const toast = new Notification(n.title || 'Just Autos Portal', {
+                body: n.body || '',
+                tag: n.id,
+                icon: '/icons/icon-192.png',
+                badge: '/icons/icon-192.png',
+              })
+              toast.onclick = () => {
+                window.focus()
+                if (n.href) routerRef.current.push(n.href)
+                toast.close()
+              }
+            } catch { /* ignore individual toast failures */ }
+          }
         }
         const maxTs = Math.max(...fresh.map((n: any) => Date.parse(n.created_at)))
         lastSeen.current = Math.max(lastSeen.current, maxTs)
@@ -108,7 +121,12 @@ export default function DesktopNotifier() {
 
     poll()
     const timer = setInterval(poll, POLL_MS)
-    return () => { live = false; clearInterval(timer) }
+    return () => {
+      live = false
+      clearInterval(timer)
+      window.removeEventListener('pointerdown', prime)
+      window.removeEventListener('keydown', prime)
+    }
   }, [])
 
   return null

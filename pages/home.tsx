@@ -18,6 +18,7 @@ import { AppIcon } from '../lib/AppIcons'
 import { usePreferences, NavGroup } from '../lib/preferences'
 import { getSupabase } from '../lib/supabaseClient'
 import { useNotificationSummary } from '../lib/useNotifications'
+import NotificationBell from '../components/NotificationBell'
 
 const T = {
   bg: '#0d0f12', bg2: '#131519', bg3: '#1a1d23', bg4: '#21252d',
@@ -48,7 +49,7 @@ export default function HomePage({ user }: Props) {
   const router = useRouter()
   const apps = useVisibleApps(user.role, user.visibleTabs)
   // Per-module unread badges (notifications + chat messages), 30s poll.
-  const { summary } = useNotificationSummary()
+  const { summary, refresh: refreshSummary } = useNotificationSummary()
   const badgeFor = useCallback((appId: string): number => {
     if (appId === 'messages') return summary?.messages || 0
     return summary?.byModule?.[appId] || 0
@@ -231,6 +232,7 @@ export default function HomePage({ user }: Props) {
           <span style={{ fontSize: 14, fontWeight: 600 }}>Just Autos</span>
           <span style={{ fontSize: 12, color: T.text3 }}>Management Portal</span>
           <span style={{ flex: 1 }}/>
+          <NotificationBell apps={apps} summary={summary} refresh={refreshSummary}/>
           <span style={{ fontSize: 12.5, color: T.text2 }}>{user.displayName || user.email}</span>
           <button onClick={handleSignOut}
             style={{ background: 'transparent', border: `1px solid ${T.border}`, color: T.text2, borderRadius: 8, padding: '6px 11px', fontSize: 12.5, fontFamily: 'inherit', cursor: 'pointer' }}>
