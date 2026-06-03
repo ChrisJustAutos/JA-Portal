@@ -361,7 +361,7 @@ export default function AdminOrderDetailPage({ user }: Props) {
           currentUserName={user.displayName}
           currentUserEmail={user.email}
         />
-        <main style={{flex:1,padding: isMobile ? '16px 14px' : '28px 32px',maxWidth:1500}}>
+        <main style={{flex:1,padding: isMobile ? '16px 14px' : '28px 32px', paddingBottom: isMobile ? 'calc(96px + env(safe-area-inset-bottom))' : undefined, maxWidth:1500}}>
           <B2BAdminTabs active="orders"/>
 
           <header style={{marginBottom:18}}>
@@ -1004,6 +1004,22 @@ function ShippingCard({ order, onEdit, onReloaded, onFlash }: {
           <KV label="Status"      value={prettyFreightStatus(order.freight_status)}/>
           <KV label="ETA"         value={order.freight_eta_at ? fullDate(order.freight_eta_at) : '—'}/>
           <KV label="Last poll"   value={order.last_freight_poll_at ? fullDate(order.last_freight_poll_at) : 'never'}/>
+        </div>
+      )}
+
+      {/* Native-style pinned primary action on mobile: land here from the
+          notification and the Book button is right under your thumb. */}
+      {isMobile && hasLiveQuote && !hasConsignment && !isShipped && (
+        <div style={{
+          position: 'fixed', left: 0, right: 0, bottom: 0, zIndex: 60,
+          background: T.bg2, borderTop: `1px solid ${T.border2}`,
+          padding: `10px 14px calc(10px + env(safe-area-inset-bottom))`,
+          boxShadow: '0 -4px 16px rgba(0,0,0,0.4)',
+        }}>
+          <button onClick={() => bookViaMachShip(false)} disabled={bookingBusy}
+            style={{ width: '100%', minHeight: 50, borderRadius: 12, border: 'none', background: bookingBusy ? T.bg4 : T.teal, color: bookingBusy ? T.text3 : '#08110d', fontWeight: 700, fontSize: 15.5, cursor: bookingBusy ? 'wait' : 'pointer', fontFamily: 'inherit' }}>
+            {bookingBusy ? 'Booking…' : '⚡ Book freight'}
+          </button>
         </div>
       )}
     </Card>
