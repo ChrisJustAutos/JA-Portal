@@ -1,0 +1,39 @@
+name: MechanicDesk purchase order (stock transfer)
+
+# Triggered by repository_dispatch from /api/b2b/admin/stock-transfer when a
+# JAWS → VPS internal stock transfer completes. Raises the matching purchase
+# order in MechanicDesk (workshop inventory).
+#
+# Payload: { event_type: "md-purchase-order",
+#            client_payload: { transfer_id: "<uuid>" } }
+
+on:
+  repository_dispatch:
+    types:
+      - md-purchase-order
+  workflow_dispatch:
+    inputs:
+      transfer_id:
+        description: 'Stock transfer ID (uuid)'
+        required: true
+
+jobs:
+  run:
+    name: MD PO · ${{ github.event.client_payload.transfer_id || github.event.inputs.transfer_id }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    container:
+      image: mcr.microsoft.com/playwright:v1.59.1-noble
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: npm ci || npm install
+      - name: Run worker
+        env:
+          TRANSFER_ID:              ${{ github.event.client_payload.transfer_id || github.event.inputs.transfer_id }}
+          MECHANICDESK_WORKSHOP_ID: ${{ secrets.MECHANICDESK_WORKSHOP_ID }}
+          MECHANICDESK_USERNAME:    ${{ secrets.MECHANICDESK_USERNAME }}
+          MECHANICDESK_PASSWORD:    ${{ secrets.MECHANICDESK_PASSWORD }}
+          JA_PORTAL_BASE_URL:       ${{ secrets.JA_PORTAL_BASE_URL }}
+          JA_PORTAL_API_KEY:        ${{ secrets.JA_PORTAL_API_KEY }}
+        run: npx tsx scripts/run-md-purchase-order.ts

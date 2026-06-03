@@ -59,7 +59,13 @@
       "Bash(grep *)",
       "PowerShell(npx next build 2>&1 | Select-Object -Last 30)",
       "PowerShell(Get-ChildItem pages\\\\api\\\\b2b\\\\admin -Recurse -File | Select-Object FullName | ForEach-Object { $_.FullName.Replace\\('C:\\\\Users\\\\cjrus\\\\OneDrive\\\\Documents\\\\GitHub\\\\JA-Portal\\\\',''\\) }; ''; Get-ChildItem pages\\\\admin\\\\b2b -Recurse -File | ForEach-Object { $_.FullName.Replace\\('C:\\\\Users\\\\cjrus\\\\OneDrive\\\\Documents\\\\GitHub\\\\JA-Portal\\\\',''\\) })",
-      "PowerShell(npx tsc --noEmit 2>$null; \"tsc: $LASTEXITCODE\")"
+      "PowerShell(npx tsc --noEmit 2>$null; \"tsc: $LASTEXITCODE\")",
+      "PowerShell(gh auth *)",
+      "PowerShell(gh run view 26855910536 --json status,conclusion 2>$null)",
+      "PowerShell(gh run *)",
+      "PowerShell(git rm *)",
+      "Bash(git checkout *)",
+      "PowerShell(git *)"
     ]
   }
 }

@@ -506,3 +506,30 @@ export async function deleteMdPurchase(client: MdClient, purchaseId: number, rea
     body: JSON.stringify({ deleted_reason: reason }),
   })
 }
+
+/**
+ * PROCESS (receive) a purchase into MD stock — increments on-hand qty.
+ * Endpoint + body shape captured from the MD UI's "Process" action:
+ *   PUT /purchases/{id}/processes  { id, purchase_items: [<full items>] }
+ * The items echo the purchase's own purchase_items (each carrying its line
+ * `id`); MD receives the full ordered quantity. We GET the purchase first to
+ * get the line ids, then PUT them back. Idempotent-ish: re-processing an
+ * already-processed PO is a no-op on stock. Returns the post-process status.
+ */
+export async function processMdPurchase(
+  client: MdClient,
+  purchaseId: number,
+): Promise<{ status: string | null; processed: boolean }> {
+  const detail = await mdFetch<any>(client, `/purchases/${purchaseId}.json`)
+  if (detail?.processed === true || detail?.status === 'processed') {
+    return { status: detail.status ?? 'processed', processed: true }
+  }
+  const items = Array.isArray(detail?.purchase_items) ? detail.purchase_items : []
+  if (items.length === 0) throw new Error(`Purchase ${purchaseId} has no items to process`)
+  await mdFetch<any>(client, `/purchases/${purchaseId}/processes`, {
+    method: 'PUT',
+    body: JSON.stringify({ id: purchaseId, purchase_items: items }),
+  })
+  const after = await mdFetch<any>(client, `/purchases/${purchaseId}.json`)
+  return { status: after?.status ?? null, processed: after?.processed === true }
+}

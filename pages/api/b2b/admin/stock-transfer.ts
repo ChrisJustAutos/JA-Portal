@@ -1,23 +1,24 @@
 // pages/api/b2b/admin/stock-transfer.ts
 // Staff endpoint for internal JAWS → VPS stock transfers.
 //
-// GET  ?view=items     — catalogue items + live JAWS average cost / on-hand
-// GET  ?view=history   — past transfers (with lines)
-// GET  ?lookup=customers|suppliers|accounts&q=… — MYOB typeahead for setup:
-//        customers → JAWS Contact/Customer (the "VPS" card the invoice bills)
-//        suppliers → VPS Contact/Supplier (the "JAWS" card the bill comes from)
-//        accounts  → VPS GeneralLedger/Account (postable, where the bill lands)
-// GET  (default)       — transfer config (the three picked references)
-// POST {action:'save-settings', …}  — persist the three MYOB references
-// POST {action:'execute', lines:[{catalogue_id, qty}], note} — run a transfer
-// POST {action:'retry', transferId} — re-attempt the VPS bill of a partial
+// GET  ?view=items&direction=… — catalogue items + live JAWS costs.
+//        JAWS_TO_VPS: only items with stock on hand (capped); VPS_TO_JAWS:
+//        all catalogue items (VPS stock is untracked), avg-cost falling
+//        back to standard cost.
+// GET  ?view=history   — past transfers
+// GET  ?lookup=customers|suppliers|accounts&file=JAWS|VPS&q=… — MYOB
+//        typeahead for setup (accounts are always VPS).
+// GET  (default)       — transfer config
+// POST {action:'save-settings', …}  — persist the MYOB references
+// POST {action:'execute', direction, lines, note, po_reference} — run a transfer
+// POST {action:'retry', transferId} — re-attempt the purchase side of a partial
 
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
 import { withAuth } from '../../../../lib/authServer'
 import { getConnection, myobFetch } from '../../../../lib/myob'
 import {
-  loadTransferConfig, fetchJawsItemCosts, executeStockTransfer, retryVpsBill,
+  loadTransferConfig, fetchJawsItemCosts, executeStockTransfer, retryPurchaseSide,
 } from '../../../../lib/b2b-stock-transfer'
 
 // Big transfers = one MYOB invoice with hundreds of item lines + a bill +
@@ -35,6 +36,37 @@ function sb(): SupabaseClient {
 }
 
 function escapeOData(s: string): string { return s.replace(/'/g, "''") }
+
+// Trigger the GH Actions worker that creates + receives the matching
+// MechanicDesk purchase order (MD has no public API — the worker drives it
+// with the same Playwright session the stocktake system uses). Mirrors the
+// stocktake dispatch pattern. Best-effort: the MYOB side of the transfer is
+// already complete; MD status is tracked on the transfer row.
+async function dispatchMdPurchaseOrder(transferId: string): Promise<void> {
+  const ghToken = process.env.GH_DISPATCH_TOKEN
+  const ghOwner = process.env.GH_REPO_OWNER || 'ChrisJustAutos'
+  const ghRepo = process.env.GH_REPO_NAME || 'JA-Portal'
+  if (!ghToken) throw new Error('GH_DISPATCH_TOKEN missing')
+  const r = await fetch(`https://api.github.com/repos/${ghOwner}/${ghRepo}/dispatches`, {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${ghToken}`,
+      'Accept': 'application/vnd.github+json',
+      'X-GitHub-Api-Version': '2022-11-28',
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ event_type: 'md-purchase-order', client_payload: { transfer_id: transferId } }),
+  })
+  if (!r.ok) {
+    const t = await r.text().catch(() => '')
+    await sb().from('b2b_stock_transfers').update({
+      md_po_status: 'failed',
+      md_po_error: `Dispatch failed: ${r.status} ${t.slice(0, 200)}`,
+      md_po_updated_at: new Date().toISOString(),
+    }).eq('id', transferId)
+    throw new Error(`GH dispatch ${r.status}`)
+  }
+}
 
 function contactName(c: any): string {
   const company = (c.CompanyName || '').trim()
@@ -54,7 +86,9 @@ export default withAuth('edit:b2b_distributors', async (req: NextApiRequest, res
         const q = String(req.query.q || '').trim().toLowerCase()
         const top = 20
         if (lookup === 'customers' || lookup === 'suppliers') {
-          const label = lookup === 'customers' ? 'JAWS' : 'VPS'
+          // Default files match the forward direction; reverse passes ?file=.
+          const file = String(req.query.file || '').toUpperCase()
+          const label = file === 'VPS' || file === 'JAWS' ? file : (lookup === 'customers' ? 'JAWS' : 'VPS')
           const entity = lookup === 'customers' ? 'Customer' : 'Supplier'
           const conn = await getConnection(label)
           if (!conn) return res.status(500).json({ error: `${label} MYOB connection not configured` })
@@ -90,6 +124,7 @@ export default withAuth('edit:b2b_distributors', async (req: NextApiRequest, res
 
       // ── Items: catalogue + live JAWS cost / on-hand ───────────────────
       if (view === 'items') {
+        const reverse = String(req.query.direction || '') === 'VPS_TO_JAWS'
         const [{ data: rows, error }, costs] = await Promise.all([
           c.from('b2b_catalogue')
             .select('id, sku, name, myob_item_uid, is_taxable')
@@ -102,19 +137,23 @@ export default withAuth('edit:b2b_distributors', async (req: NextApiRequest, res
         const items = (rows || [])
           .map((r: any) => {
             const cost = r.myob_item_uid ? costs[r.myob_item_uid] : null
+            // 2dp to match exactly what the invoice line will charge
+            // (see the LineTotalUnbalanced note in lib/b2b-stock-transfer.ts).
+            // Reverse falls back to standard cost when average reads 0.
+            const raw = reverse
+              ? (Number(cost?.avgCost) || Number(cost?.standardCost) || 0)
+              : Number(cost?.avgCost || 0)
             return {
               catalogue_id: r.id,
               sku: r.sku,
               name: r.name,
               is_taxable: r.is_taxable !== false,
               on_hand: cost?.isInventoried ? Number(cost.onHand) : 0,
-              // 2dp to match exactly what the invoice line will charge
-              // (see the LineTotalUnbalanced note in lib/b2b-stock-transfer.ts)
-              avg_cost: cost ? Math.round(Number(cost.avgCost) * 100) / 100 : 0,
+              avg_cost: Math.round(raw * 100) / 100,
               is_inventoried: cost?.isInventoried === true,
             }
           })
-          .filter(i => i.is_inventoried && i.on_hand > 0)
+          .filter(i => reverse ? i.is_inventoried : (i.is_inventoried && i.on_hand > 0))
         return res.status(200).json({ items })
       }
 
@@ -146,9 +185,16 @@ export default withAuth('edit:b2b_distributors', async (req: NextApiRequest, res
           ['customer_uid', 'myob_transfer_customer_uid'], ['customer_name', 'myob_transfer_customer_name'],
           ['supplier_uid', 'myob_transfer_supplier_uid'], ['supplier_name', 'myob_transfer_supplier_name'],
           ['account_uid', 'myob_transfer_account_uid'],   ['account_name', 'myob_transfer_account_name'],
+          ['customer_uid_vps', 'myob_transfer_customer_uid_vps'], ['customer_name_vps', 'myob_transfer_customer_name_vps'],
+          ['supplier_uid_jaws', 'myob_transfer_supplier_uid_jaws'], ['supplier_name_jaws', 'myob_transfer_supplier_name_jaws'],
         ]
         for (const [from, to] of FIELDS) {
           if (from in body) update[to] = String(body[from] || '').trim() || null
+        }
+        // MechanicDesk supplier id (numeric) the workshop PO is raised on.
+        if ('md_purchase_supplier_id' in body) {
+          const v = parseInt(String(body.md_purchase_supplier_id), 10)
+          update.md_purchase_supplier_id = Number.isFinite(v) && v > 0 ? v : null
         }
         const { error } = await c.from('b2b_settings').update(update).eq('id', 'singleton')
         if (error) return res.status(500).json({ error: error.message })
@@ -160,17 +206,24 @@ export default withAuth('edit:b2b_distributors', async (req: NextApiRequest, res
         if (!lines.length) return res.status(400).json({ error: 'No lines supplied' })
         const result = await executeStockTransfer({
           lines: lines.map((l: any) => ({ catalogue_id: String(l.catalogue_id || ''), qty: Number(l.qty) })),
+          direction: body.direction === 'VPS_TO_JAWS' ? 'VPS_TO_JAWS' : 'JAWS_TO_VPS',
           note: body.note ? String(body.note) : null,
           poReference: body.po_reference ? String(body.po_reference) : null,
           userId: user.id,
         })
+        // Forward transfers also raise + receive the matching MechanicDesk
+        // purchase order via a GH Actions worker (best-effort dispatch).
+        if (result.direction === 'JAWS_TO_VPS') {
+          await dispatchMdPurchaseOrder(result.transferId).catch(e =>
+            console.error('MD PO dispatch failed (non-fatal):', e?.message || e))
+        }
         return res.status(200).json({ ok: true, result })
       }
 
       if (action === 'retry') {
         const transferId = String(body.transferId || '').trim()
         if (!transferId) return res.status(400).json({ error: 'transferId required' })
-        const result = await retryVpsBill(transferId, user.id)
+        const result = await retryPurchaseSide(transferId, user.id)
         return res.status(200).json({ ok: true, result })
       }
 
