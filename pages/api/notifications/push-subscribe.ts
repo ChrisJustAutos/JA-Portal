@@ -1,5 +1,7 @@
 // pages/api/notifications/push-subscribe.ts
-// Store / remove this browser's Web Push subscription for the current user.
+// Store / remove / list this user's Web Push subscriptions.
+//   GET                                          — { count, devices:[{ua, created_at}] }
+//          (diagnostic: confirm which devices registered for push)
 //   POST   { endpoint, keys:{ p256dh, auth } }  — upsert (called after the
 //          browser grants permission and pushManager.subscribe succeeds)
 //   DELETE { endpoint }                          — remove (on unsubscribe)
@@ -14,6 +16,15 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
   return requireAuth(req, res, async () => {
     const me = (await getSessionUser(req))!
     const sb = notifSvc()
+    if (req.method === 'GET') {
+      const { data } = await sb.from('push_subscriptions')
+        .select('user_agent, created_at').eq('user_id', me.id).order('created_at', { ascending: false })
+      return res.status(200).json({
+        count: (data || []).length,
+        devices: (data || []).map((d: any) => ({ ua: (d.user_agent || '').slice(0, 120), created_at: d.created_at })),
+      })
+    }
+
     let body: any = {}
     try { body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : (req.body || {}) }
     catch { return res.status(400).json({ error: 'Bad JSON body' }) }
@@ -42,7 +53,7 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
       return res.status(200).json({ ok: true })
     }
 
-    res.setHeader('Allow', 'POST, DELETE')
-    return res.status(405).json({ error: 'POST or DELETE only' })
+    res.setHeader('Allow', 'GET, POST, DELETE')
+    return res.status(405).json({ error: 'GET, POST or DELETE only' })
   })
 }

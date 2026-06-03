@@ -34,14 +34,20 @@ export default function NotificationBell({ apps, summary, refresh }: {
   const [notifs, setNotifs] = useState<NotificationRow[] | null>(null)
   const [sound, setSoundState] = useState('chime')
   const [perm, setPerm] = useState<NotificationPermission | 'unsupported'>('default')
+  const [pushCount, setPushCount] = useState<number | null>(null)
 
   useEffect(() => {
     setSoundState(getSound())
     if (typeof Notification === 'undefined') setPerm('unsupported')
     else setPerm(Notification.permission)
   }, [])
-  // Re-check permission each time the dropdown opens (it can change in settings).
-  useEffect(() => { if (open && typeof Notification !== 'undefined') setPerm(Notification.permission) }, [open])
+  // Re-check permission + registered-device count each time the dropdown opens.
+  useEffect(() => {
+    if (!open) return
+    if (typeof Notification !== 'undefined') setPerm(Notification.permission)
+    fetch('/api/notifications/push-subscribe', { credentials: 'same-origin' })
+      .then(r => r.ok ? r.json() : null).then(d => { if (d) setPushCount(d.count) }).catch(() => {})
+  }, [open])
 
   async function enable() {
     primeAudio()  // this click also unlocks sound
@@ -198,6 +204,11 @@ export default function NotificationBell({ apps, summary, refresh }: {
               <button onClick={() => playSound(sound)} title="Preview"
                 style={{ background: 'none', border: `1px solid ${T.border2}`, color: T.text2, borderRadius: 6, padding: '4px 8px', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit' }}>▶</button>
             </div>
+            {perm === 'granted' && (
+              <div style={{ fontSize: 10.5, color: T.text3, padding: '4px 10px 2px' }}>
+                Background push: {pushCount === null ? '…' : pushCount > 0 ? `on · ${pushCount} device${pushCount === 1 ? '' : 's'}` : 'this device not registered yet — reopen the app'}
+              </div>
+            )}
           </div>
         </>
       )}
