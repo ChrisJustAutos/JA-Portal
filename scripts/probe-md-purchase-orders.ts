@@ -1,67 +1,47 @@
 // scripts/probe-md-purchase-orders.ts
 //
-// One-off diagnostic: log into MD and map the PURCHASE ORDER surface so we
-// can automate "create PO + receive stock" for JAWS → VPS internal
-// transfers. Three passes:
-//   1. Endpoint guesses — Rails-style .json variants for purchase orders /
-//      suppliers.
-//   2. UI recon — load the app shell + likely PO pages in Playwright, dump
-//      every nav link whose href/text mentions order/purchase/supplier/
-//      stock, and log every XHR the pages fire.
-//   3. Form recon — if a "new purchase order" page exists, dump its <form>
-//      action/method and every input/select name so we know the POST shape.
+// Round 3. Round 2 found the surface: MD calls them PURCHASES —
+//   GET /purchases.json            → { purchases: [{id, number, status,
+//        total_amount, stock_names, reference, ...}], meta }
+//   GET /suppliers/{id}/purchase_orders.json → same shape per supplier
+// Round 2's UI pass 403'd (fresh context lacked the spoofed user-agent).
+//
+// This round maps the CREATE + RECEIVE shape:
+//   1. Full JSON of one known purchase (id 6830348 — created manually
+//      today) → line item field names, status values, supplier linkage.
+//   2. /purchases/new + .json (form/template shape).
+//   3. UI recon WITH the spoofed UA on /purchases/new — dump forms,
+//      field names, selects, and all XHRs the page fires.
 
 import { loginToMechanicDesk, type MdClient } from '../lib/mechanicdesk-stocktake'
 
 const MD_BASE = 'https://www.mechanicdesk.com.au'
+const USER_AGENT =
+  'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+const KNOWN_PURCHASE_ID = 6830348
 
-const GUESS_PATHS = [
-  // Round 2 — /purchase_orders & friends all 404'd; /suppliers.json works.
-  '/purchases.json',
-  '/purchases',
-  '/stock_purchases.json',
-  '/purchase_invoices.json',
-  '/supplier_invoices.json',
-  '/stock_purchase_orders.json',
-  '/restock_orders.json',
-  '/spos.json',
-  '/pos.json',
-  '/stock_ins.json',
-  '/stock_arrivals.json',
-  '/suppliers/1487503.json',          // known supplier id from round 1
-  '/suppliers/1487503/orders.json',
-  '/suppliers/1487503/purchase_orders.json',
-]
-
-async function probe(client: MdClient, path: string): Promise<void> {
-  const url = MD_BASE + path
+async function dump(client: MdClient, path: string, maxLen = 4000): Promise<void> {
   try {
-    const r = await fetch(url, {
+    const r = await fetch(MD_BASE + path, {
       headers: {
         'Cookie': client.cookieHeader,
         'Accept': 'application/json, text/html',
-        'User-Agent': 'Mozilla/5.0 (compatible; ja-portal probe)',
+        'User-Agent': USER_AGENT,
         'X-Requested-With': 'XMLHttpRequest',
       },
       redirect: 'manual',
     })
-    const ct = r.headers.get('content-type') || ''
-    const loc = r.headers.get('location') || ''
-    let bodyPreview = ''
-    if (r.status >= 200 && r.status < 300) {
-      const text = await r.text()
+    const text = r.status < 300 ? await r.text() : ''
+    console.log(`\n### ${r.status} ${path} ct=${r.headers.get('content-type') || ''}`)
+    if (text) {
       const trimmed = text.trim()
       if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
-        try {
-          const j = JSON.parse(trimmed)
-          if (Array.isArray(j)) bodyPreview = `JSON ARRAY len=${j.length}; keys[0]=${j[0] ? Object.keys(j[0]).join(',') : '(empty)'}`
-          else bodyPreview = `JSON OBJ keys=${Object.keys(j).join(',')}; sample=${JSON.stringify(j).slice(0, 300)}`
-        } catch { bodyPreview = trimmed.slice(0, 200).replace(/\s+/g, ' ') }
+        try { console.log(JSON.stringify(JSON.parse(trimmed), null, 1).slice(0, maxLen)) }
+        catch { console.log(trimmed.slice(0, maxLen)) }
       } else {
-        bodyPreview = `HTML len=${text.length}; title=${(text.match(/<title>([^<]*)<\/title>/i) || [])[1] || ''}`
+        console.log(`HTML len=${text.length} preview=${trimmed.replace(/\s+/g, ' ').slice(0, 600)}`)
       }
     }
-    console.log(`${r.status.toString().padEnd(3)} ${path.padEnd(42)} ct=${ct.slice(0, 30).padEnd(31)} loc=${loc.slice(0, 50).padEnd(50)} ${bodyPreview}`)
   } catch (e: any) {
     console.log(`ERR ${path}: ${e?.message || e}`)
   }
@@ -77,16 +57,21 @@ async function main() {
   const { chromium } = await import('playwright')
   const browser = await chromium.launch({ headless: true })
   const { client, cookies } = await loginToMechanicDesk(browser, wsId, user, pass)
+  console.log(`Logged in · csrf=${client.csrfToken ? 'yes' : 'no'}`)
 
-  console.log(`Logged in · ${client.cookieHeader.split(';').length} cookies · csrf=${client.csrfToken ? 'yes' : 'no'}\n`)
+  // ── Pass 1: purchase detail + create-template shapes ──────────────────
+  await dump(client, `/purchases/${KNOWN_PURCHASE_ID}.json`, 6000)
+  await dump(client, `/purchases/${KNOWN_PURCHASE_ID}`, 2500)
+  await dump(client, '/purchases/new.json', 3000)
+  await dump(client, '/purchases/new', 2500)
+  await dump(client, '/purchases.json?page=1', 1500)
 
-  console.log('=== Pass 1: endpoint guesses ===')
-  for (const p of GUESS_PATHS) await probe(client, p)
-
-  // ── Pass 2: UI recon with XHR logging ────────────────────────────────
-  // Login closed its own context; open a fresh one seeded with the cookies.
-  console.log('\n=== Pass 2: UI recon ===')
-  const context = await browser.newContext({ viewport: { width: 1280, height: 900 } })
+  // ── Pass 2: UI recon with the spoofed UA ──────────────────────────────
+  console.log('\n=== UI recon (/purchases/new) ===')
+  const context = await browser.newContext({
+    userAgent: USER_AGENT,
+    viewport: { width: 1280, height: 900 },
+  })
   await context.addCookies((cookies as any[]).map(c => ({ ...c, domain: 'www.mechanicdesk.com.au', path: '/' })))
   const page = await context.newPage()
 
@@ -94,43 +79,47 @@ async function main() {
   page.on('request', (req: any) => {
     const u: string = req.url()
     if (!u.startsWith(MD_BASE)) return
-    if (/\.(png|jpe?g|gif|svg|css|woff2?|js|ico)(\?|$)/i.test(u)) return
+    if (/\.(png|jpe?g|gif|svg|css|woff2?|ico)(\?|$)/i.test(u)) return
+    if (/\.js(\?|$)/i.test(u)) return
     const key = `${req.method()} ${u.replace(MD_BASE, '')}`
     if (!seenXhr.has(key)) { seenXhr.add(key); console.log(`  XHR ${key.slice(0, 160)}`) }
   })
 
-  // Round 1's link dump came back EMPTY on every page — the app shell
-  // renders late or links live in nested components. This time: wait for
-  // networkidle + 8s, dump title + body text preview + ALL anchors
-  // (unfiltered, capped), on the dashboard and the stocks screen.
-  for (const target of ['/', '/stocks', '/suppliers']) {
+  for (const target of ['/purchases/new', `/purchases/${KNOWN_PURCHASE_ID}`]) {
     try {
       console.log(`\n-- navigate ${target}`)
       await page.goto(MD_BASE + target, { waitUntil: 'networkidle', timeout: 45000 }).catch(() => {})
-      await page.waitForTimeout(8000)
-      console.log(`   url now: ${page.url()}`)
+      await page.waitForTimeout(6000)
+      console.log(`   url now: ${page.url()}  title: ${await page.title()}`)
       const info = await page.evaluate(() => {
-        const links: string[] = []
-        document.querySelectorAll('a[href]').forEach(a => {
-          const href = a.getAttribute('href') || ''
-          const text = (a.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 40)
-          if (href && href !== '#' && !href.startsWith('javascript')) links.push(`${href} «${text}»`)
+        const forms: string[] = []
+        document.querySelectorAll('form').forEach(f => {
+          const fields: string[] = []
+          f.querySelectorAll('input,select,textarea').forEach((el: any) => {
+            const nm = el.name || el.id
+            if (nm) fields.push(`${el.tagName.toLowerCase()}:${nm}${el.type ? `(${el.type})` : ''}`)
+          })
+          forms.push(`FORM action=${f.getAttribute('action')} method=${f.getAttribute('method')} fields=[${fields.join(', ')}]`)
+        })
+        const named: string[] = []
+        document.querySelectorAll('input[name],select[name],textarea[name]').forEach((el: any) => {
+          named.push(`${el.tagName.toLowerCase()}:${el.name}${el.type ? `(${el.type})` : ''}`)
         })
         const buttons: string[] = []
-        document.querySelectorAll('button, [role=button], input[type=button], input[type=submit]').forEach((b: any) => {
+        document.querySelectorAll('button, [role=button], input[type=submit], a.btn, .btn').forEach((b: any) => {
           const t = (b.textContent || b.value || '').trim().replace(/\s+/g, ' ').slice(0, 40)
           if (t) buttons.push(t)
         })
         return {
-          title: document.title,
-          bodyPreview: (document.body?.innerText || '').replace(/\s+/g, ' ').slice(0, 600),
-          links: Array.from(new Set(links)).slice(0, 120),
-          buttons: Array.from(new Set(buttons)).slice(0, 60),
+          bodyPreview: (document.body?.innerText || '').replace(/\s+/g, ' ').slice(0, 500),
+          forms: forms.slice(0, 12),
+          named: Array.from(new Set(named)).slice(0, 80),
+          buttons: Array.from(new Set(buttons)).slice(0, 50),
         }
       })
-      console.log(`   title: ${info.title}`)
       console.log(`   body: ${info.bodyPreview}`)
-      for (const l of info.links) console.log(`   link ${l}`)
+      for (const f of info.forms) console.log(`   ${f.slice(0, 500)}`)
+      console.log(`   named fields: ${info.named.join(', ')}`)
       console.log(`   buttons: ${info.buttons.join(' | ')}`)
     } catch (e: any) {
       console.log(`   nav failed: ${e?.message || e}`)
