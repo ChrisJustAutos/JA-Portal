@@ -623,6 +623,7 @@ function AttachmentView({ att }: { att: { storage_path: string; filename: string
 
 // ── Composer ─────────────────────────────────────────────────────────
 function Composer({ dir, onSend, onTyping, placeholder }: { dir: DirUser[]; onSend: (body: string, mentionIds: string[], attachments: any[]) => Promise<void> | void; onTyping: () => void; placeholder?: string }) {
+  const isMobile = useIsMobile()
   const [text, setText] = useState('')
   const [files, setFiles] = useState<File[]>([])
   const [busy, setBusy] = useState(false)
@@ -661,7 +662,7 @@ function Composer({ dir, onSend, onTyping, placeholder }: { dir: DirUser[]; onSe
   const matches = mentionPick ? dir.filter(u => u.name.toLowerCase().includes(mentionPick.query)).slice(0, 6) : []
 
   return (
-    <div style={{ flexShrink: 0, borderTop: `1px solid ${T.border}`, padding: 12, position: 'relative' }}>
+    <div style={{ flexShrink: 0, borderTop: `1px solid ${T.border}`, padding: 12, paddingBottom: isMobile ? 'calc(12px + env(safe-area-inset-bottom))' : 12, position: 'relative', background: T.bg }}>
       {matches.length > 0 && (
         <div style={{ position: 'absolute', bottom: '100%', left: 12, background: T.bg3, border: `1px solid ${T.border2}`, borderRadius: 8, marginBottom: 6, minWidth: 200, overflow: 'hidden', zIndex: 5 }}>
           {matches.map(u => <div key={u.id} onMouseDown={e => { e.preventDefault(); pickMention(u) }} style={{ padding: '7px 12px', fontSize: 13, cursor: 'pointer', color: T.text }}>@{u.name}</div>)}
@@ -673,13 +674,18 @@ function Composer({ dir, onSend, onTyping, placeholder }: { dir: DirUser[]; onSe
         </div>
       )}
       <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
-        <label style={{ cursor: 'pointer', color: T.text3, fontSize: 18, padding: '6px 4px' }} title="Attach files">
+        <label title="Attach files" style={{
+          cursor: 'pointer', color: T.text3, fontSize: 20, flexShrink: 0,
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          width: isMobile ? 42 : 36, height: isMobile ? 42 : 36, borderRadius: 8,
+          border: isMobile ? `1px solid ${T.border2}` : 'none', background: isMobile ? T.bg3 : 'transparent',
+        }}>
           📎<input type="file" multiple style={{ display: 'none' }} onChange={e => { setFiles(fs => [...fs, ...Array.from(e.target.files || [])]); e.target.value = '' }} />
         </label>
         <textarea ref={taRef} value={text} onChange={e => onChange(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); doSend() } }}
           placeholder={placeholder || 'Write a message…'} rows={1}
-          style={{ flex: 1, resize: 'none', maxHeight: 140, background: T.bg3, border: `1px solid ${T.border2}`, borderRadius: 8, color: T.text, fontSize: 13, fontFamily: 'inherit', padding: '9px 12px', outline: 'none', lineHeight: 1.5 }} />
-        <button onClick={doSend} disabled={busy} style={{ padding: '9px 16px', borderRadius: 8, border: 'none', background: busy ? T.bg4 : T.blue, color: busy ? T.text3 : '#fff', fontSize: 13, fontWeight: 600, cursor: busy ? 'wait' : 'pointer', fontFamily: 'inherit' }}>{busy ? '…' : 'Send'}</button>
+          style={{ flex: 1, minWidth: 0, resize: 'none', maxHeight: 140, background: T.bg3, border: `1px solid ${T.border2}`, borderRadius: 8, color: T.text, fontSize: isMobile ? 16 : 13, fontFamily: 'inherit', padding: isMobile ? '11px 12px' : '9px 12px', outline: 'none', lineHeight: 1.5, boxSizing: 'border-box' }} />
+        <button onClick={doSend} disabled={busy} style={{ flexShrink: 0, padding: isMobile ? '11px 16px' : '9px 16px', minHeight: isMobile ? 42 : undefined, borderRadius: 8, border: 'none', background: busy ? T.bg4 : T.blue, color: busy ? T.text3 : '#fff', fontSize: isMobile ? 14 : 13, fontWeight: 600, cursor: busy ? 'wait' : 'pointer', fontFamily: 'inherit' }}>{busy ? '…' : 'Send'}</button>
       </div>
     </div>
   )

@@ -139,9 +139,15 @@ export default function NotificationBell({ apps, summary, refresh }: {
       {open && (
         <>
           <div onClick={() => setOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 901 }}/>
-          <div style={{
-            position: 'absolute', top: 'calc(100% + 6px)', right: isMobile ? -60 : 0, zIndex: 902,
-            width: isMobile ? 'calc(100vw - 24px)' : 360, maxWidth: 'calc(100vw - 24px)',
+          <div style={isMobile ? {
+            // Anchor to the viewport so it can't run off the edge on a phone.
+            position: 'fixed', top: 62, left: 8, right: 8, zIndex: 902,
+            maxHeight: '78vh', overflowY: 'auto',
+            background: T.bg2, border: `1px solid ${T.border2}`, borderRadius: 10,
+            boxShadow: '0 14px 40px rgba(0,0,0,0.45)', padding: 6,
+          } : {
+            position: 'absolute', top: 'calc(100% + 6px)', right: 0, zIndex: 902,
+            width: 360, maxWidth: 'calc(100vw - 24px)',
             maxHeight: '74vh', overflowY: 'auto',
             background: T.bg2, border: `1px solid ${T.border2}`, borderRadius: 10,
             boxShadow: '0 14px 40px rgba(0,0,0,0.45)', padding: 6,

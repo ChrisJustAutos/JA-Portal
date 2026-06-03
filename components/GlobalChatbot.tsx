@@ -73,7 +73,9 @@ export function useChatContext() {
 }
 
 // ── Pages where the chat is hidden ─────────────────────────────────────
-const HIDDEN_ROUTES = ['/login', '/reset-password']
+// /messages is its own chat workspace — the floating button would sit on top
+// of the message composer's Send button, so keep it out of there.
+const HIDDEN_ROUTES = ['/login', '/reset-password', '/messages']
 
 // ── Main component ─────────────────────────────────────────────────────
 
