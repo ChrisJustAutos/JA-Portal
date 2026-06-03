@@ -361,7 +361,7 @@ export default function AdminOrderDetailPage({ user }: Props) {
           currentUserName={user.displayName}
           currentUserEmail={user.email}
         />
-        <main style={{flex:1,padding: isMobile ? '16px 14px' : '28px 32px', paddingBottom: isMobile ? 'calc(96px + env(safe-area-inset-bottom))' : undefined, maxWidth:1500}}>
+        <main style={{flex:1,padding: isMobile ? '16px 14px' : '28px 32px', paddingBottom: isMobile ? 'calc(96px + env(safe-area-inset-bottom))' : undefined, maxWidth:1500, width:'100%', boxSizing:'border-box', overflowX: isMobile ? 'hidden' : undefined}}>
           <B2BAdminTabs active="orders"/>
 
           <header style={{marginBottom:18}}>
@@ -406,10 +406,10 @@ export default function AdminOrderDetailPage({ user }: Props) {
           )}
 
           {data && (
-            <div style={{display:'grid',gridTemplateColumns: isMobile ? '1fr' : '1fr 360px',gap: isMobile ? 14 : 18,alignItems:'start'}}>
+            <div style={{display:'grid',gridTemplateColumns: isMobile ? '1fr' : '1fr 360px',gap: isMobile ? 14 : 18,alignItems:'start',minWidth:0}}>
 
               {/* ── LEFT COLUMN ── */}
-              <div style={{display:'flex',flexDirection:'column',gap:14}}>
+              <div style={{display:'flex',flexDirection:'column',gap:14,minWidth:0}}>
 
                 {/* Order summary header */}
                 <Card title="Summary">
@@ -496,7 +496,7 @@ export default function AdminOrderDetailPage({ user }: Props) {
                 </Card>
 
                 {/* Stripe + MYOB info */}
-                <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:14}}>
+                <div style={{display:'grid',gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr',gap:14,minWidth:0}}>
                   <Card title="Stripe">
                     <KV label="Status" value={data.paid_at ? 'Paid' : 'Pending'} valueColor={data.paid_at ? T.green : T.amber}/>
                     <KV label="Payment Intent" value={data.stripe.payment_intent_id || '—'} mono small/>
@@ -559,7 +559,7 @@ export default function AdminOrderDetailPage({ user }: Props) {
               </div>
 
               {/* ── RIGHT COLUMN ── */}
-              <div style={{display:'flex',flexDirection:'column',gap:14,position: isMobile ? 'static' : 'sticky',top:18}}>
+              <div style={{display:'flex',flexDirection:'column',gap:14,position: isMobile ? 'static' : 'sticky',top:18,minWidth:0}}>
 
                 {/* Status timeline */}
                 <Card title="Timeline">
@@ -977,7 +977,7 @@ function ShippingCard({ order, onEdit, onReloaded, onFlash }: {
             value={dispatchAt}
             min={localNow()}
             onChange={e => setDispatchAt(e.target.value)}
-            style={{flex:1, minWidth:160, background:T.bg3, border:`1px solid ${T.border2}`, color:T.text, borderRadius:5, padding: isMobile ? '9px 10px' : '5px 8px', fontSize: isMobile ? 16 : 12, outline:'none', fontFamily:'inherit', colorScheme:'dark'}}
+            style={{flex:1, minWidth: isMobile ? 0 : 160, background:T.bg3, border:`1px solid ${T.border2}`, color:T.text, borderRadius:5, padding: isMobile ? '9px 10px' : '5px 8px', fontSize: isMobile ? 16 : 12, outline:'none', fontFamily:'inherit', colorScheme:'dark'}}
           />
           {dispatchAt
             ? <button onClick={() => setDispatchAt('')} style={{background:'none', border:'none', color:T.text3, fontSize:11, cursor:'pointer', fontFamily:'inherit'}}>clear (ASAP)</button>
