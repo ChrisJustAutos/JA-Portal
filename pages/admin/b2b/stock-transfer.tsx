@@ -130,7 +130,12 @@ export default function StockTransferPage({ user }: Props) {
   }, [items, filter])
 
   const qtyOf = (id: string) => Number(selected[id]) || 0
-  const picked = useMemo(() => (items || []).filter(i => i.catalogue_id in selected), [items, selected])
+  // Selection order, not alphabetical — Object keys keep insertion order, so
+  // the picked summary lists items in the order they were ticked.
+  const picked = useMemo(() => {
+    const byId = new Map((items || []).map(i => [i.catalogue_id, i]))
+    return Object.keys(selected).map(id => byId.get(id)).filter((i): i is Item => !!i)
+  }, [items, selected])
   // Every picked line needs a quantity > 0 before the transfer can run.
   const allHaveQty = picked.length > 0 && picked.every(i => qtyOf(i.catalogue_id) > 0)
   const totalUnits = picked.reduce((s, i) => s + qtyOf(i.catalogue_id), 0)
