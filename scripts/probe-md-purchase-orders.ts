@@ -16,23 +16,21 @@ import { loginToMechanicDesk, type MdClient } from '../lib/mechanicdesk-stocktak
 const MD_BASE = 'https://www.mechanicdesk.com.au'
 
 const GUESS_PATHS = [
-  '/purchase_orders',
-  '/purchase_orders.json',
-  '/purchase_orders.json?page=1',
-  '/purchase_orders/new',
-  '/auto_workshop/purchase_orders',
-  '/auto_workshop/purchase_orders.json',
-  '/stock_orders',
-  '/stock_orders.json',
-  '/supplier_orders',
-  '/supplier_orders.json',
-  '/orders.json',
-  '/suppliers',
-  '/suppliers.json',
-  '/auto_workshop/suppliers.json',
-  '/vendors.json',
-  '/stock_receipts.json',
-  '/goods_received.json',
+  // Round 2 — /purchase_orders & friends all 404'd; /suppliers.json works.
+  '/purchases.json',
+  '/purchases',
+  '/stock_purchases.json',
+  '/purchase_invoices.json',
+  '/supplier_invoices.json',
+  '/stock_purchase_orders.json',
+  '/restock_orders.json',
+  '/spos.json',
+  '/pos.json',
+  '/stock_ins.json',
+  '/stock_arrivals.json',
+  '/suppliers/1487503.json',          // known supplier id from round 1
+  '/suppliers/1487503/orders.json',
+  '/suppliers/1487503/purchase_orders.json',
 ]
 
 async function probe(client: MdClient, path: string): Promise<void> {
@@ -101,37 +99,39 @@ async function main() {
     if (!seenXhr.has(key)) { seenXhr.add(key); console.log(`  XHR ${key.slice(0, 160)}`) }
   })
 
-  for (const target of ['/', '/purchase_orders', '/purchase_orders/new', '/stock_orders']) {
+  // Round 1's link dump came back EMPTY on every page — the app shell
+  // renders late or links live in nested components. This time: wait for
+  // networkidle + 8s, dump title + body text preview + ALL anchors
+  // (unfiltered, capped), on the dashboard and the stocks screen.
+  for (const target of ['/', '/stocks', '/suppliers']) {
     try {
       console.log(`\n-- navigate ${target}`)
-      await page.goto(MD_BASE + target, { waitUntil: 'domcontentloaded', timeout: 30000 })
-      await page.waitForTimeout(4000)  // let SPA panels fire their XHRs
+      await page.goto(MD_BASE + target, { waitUntil: 'networkidle', timeout: 45000 }).catch(() => {})
+      await page.waitForTimeout(8000)
       console.log(`   url now: ${page.url()}`)
-      // Dump links mentioning order/purchase/supplier/stock
-      const links = await page.evaluate(() => {
-        const out: string[] = []
+      const info = await page.evaluate(() => {
+        const links: string[] = []
         document.querySelectorAll('a[href]').forEach(a => {
           const href = a.getAttribute('href') || ''
-          const text = (a.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 50)
-          if (/order|purchase|supplier|stock|receiv/i.test(href + ' ' + text)) out.push(`${href}  «${text}»`)
+          const text = (a.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 40)
+          if (href && href !== '#' && !href.startsWith('javascript')) links.push(`${href} «${text}»`)
         })
-        return Array.from(new Set(out)).slice(0, 60)
-      })
-      for (const l of links) console.log(`   link ${l}`)
-
-      // Dump forms + their fields
-      const forms = await page.evaluate(() => {
-        const out: string[] = []
-        document.querySelectorAll('form').forEach(f => {
-          const fields: string[] = []
-          f.querySelectorAll('input,select,textarea').forEach((el: any) => {
-            if (el.name) fields.push(`${el.tagName.toLowerCase()}:${el.name}${el.type ? `(${el.type})` : ''}`)
-          })
-          out.push(`FORM action=${f.getAttribute('action')} method=${f.getAttribute('method')} fields=[${fields.join(', ')}]`)
+        const buttons: string[] = []
+        document.querySelectorAll('button, [role=button], input[type=button], input[type=submit]').forEach((b: any) => {
+          const t = (b.textContent || b.value || '').trim().replace(/\s+/g, ' ').slice(0, 40)
+          if (t) buttons.push(t)
         })
-        return out.slice(0, 20)
+        return {
+          title: document.title,
+          bodyPreview: (document.body?.innerText || '').replace(/\s+/g, ' ').slice(0, 600),
+          links: Array.from(new Set(links)).slice(0, 120),
+          buttons: Array.from(new Set(buttons)).slice(0, 60),
+        }
       })
-      for (const f of forms) console.log(`   ${f.slice(0, 400)}`)
+      console.log(`   title: ${info.title}`)
+      console.log(`   body: ${info.bodyPreview}`)
+      for (const l of info.links) console.log(`   link ${l}`)
+      console.log(`   buttons: ${info.buttons.join(' | ')}`)
     } catch (e: any) {
       console.log(`   nav failed: ${e?.message || e}`)
     }
