@@ -69,7 +69,10 @@
       "PowerShell(gh api *)",
       "PowerShell(npx tsc --noEmit 2>$null; \"tsc: $LASTEXITCODE\"; if \\($LASTEXITCODE -eq 0\\) { git add scripts/probe-md-purchase-orders.ts .github/workflows/probe-md-purchase-orders.yml; git commit -m \"Probe v11: confirm MD PO numbering \\(create vs process; reference override\\)\" -m \"Co-Authored-By: Claude Opus 4.8 \\(1M context\\) <noreply@anthropic.com>\"; if \\($?\\) { git push origin main; gh workflow run 'probe-md-purchase-orders.yml' } })",
       "Bash(Get-ChildItem -Path \"C:\\\\Users\\\\cjrus\\\\OneDrive\\\\Documents\\\\GitHub\\\\JA-Portal\" -Filter \"*.sql\" -Recurse)",
-      "Bash(Select-Object -ExpandProperty FullName)"
+      "Bash(Select-Object -ExpandProperty FullName)",
+      "PowerShell(npx tsc --noEmit 2>$null; \"tsc: $LASTEXITCODE\"; if \\($LASTEXITCODE -eq 0\\) { git add pages/admin/b2b/stock-transfer.tsx; git commit -m \"Stock transfer: picked items list in selection order, not alphabetical\" -m \"Co-Authored-By: Claude Opus 4.8 \\(1M context\\) <noreply@anthropic.com>\"; if \\($?\\) { git push origin main } })",
+      "PowerShell(npx tsc --noEmit 2>$null; \"tsc: $LASTEXITCODE\"; if \\($LASTEXITCODE -eq 0\\) { git add pages/admin/b2b/stock-transfer.tsx pages/api/b2b/admin/stock-transfer.ts; git commit -m \"Stock transfer: delete \\(x\\) button to clear a transfer from history\" -m \"Removes only the portal record \\(lines cascade\\); posted MYOB docs / MD PO are untouched.\" -m \"Co-Authored-By: Claude Opus 4.8 \\(1M context\\) <noreply@anthropic.com>\"; if \\($?\\) { git push origin main } })",
+      "PowerShell(npx tsc --noEmit 2>$null; \"tsc: $LASTEXITCODE\"; if \\($LASTEXITCODE -eq 0\\) { git add pages/api/notifications/summary.ts pages/api/notifications/index.ts; git commit -m \"Notifications: only show modules the user can access\" -m \"Both the summary \\(badges/bell total\\) and the bell list now filter notifications to the user's visible modules via visibleNavSections\\(role, visibleTabs\\); messages count gated on the messages module too. Read-side enforcement so it respects per-user tab overrides.\" -m \"Co-Authored-By: Claude Opus 4.8 \\(1M context\\) <noreply@anthropic.com>\"; if \\($?\\) { git push origin main } })"
     ]
   }
 }

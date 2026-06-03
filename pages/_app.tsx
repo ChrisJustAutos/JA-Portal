@@ -31,6 +31,18 @@ function ThemeVarsBridge() {
   return null
 }
 
+// Registers the PWA service worker (public/sw.js) so the portal is
+// installable as a desktop/mobile app. Production only — keeps `next dev`
+// free of stale-cache surprises during development.
+function ServiceWorkerRegister() {
+  useEffect(() => {
+    if (process.env.NODE_ENV !== 'production') return
+    if (typeof navigator === 'undefined' || !('serviceWorker' in navigator)) return
+    navigator.serviceWorker.register('/sw.js').catch(() => { /* non-fatal */ })
+  }, [])
+  return null
+}
+
 export default function App({ Component, pageProps }: AppProps) {
   return (
     <PreferencesProvider>
@@ -123,6 +135,7 @@ export default function App({ Component, pageProps }: AppProps) {
           `}</style>
         </Head>
         <ThemeVarsBridge/>
+        <ServiceWorkerRegister/>
         <Component {...pageProps} />
         <GlobalChatbot />
       </ChatContextProvider>
