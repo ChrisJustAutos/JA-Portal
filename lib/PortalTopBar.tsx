@@ -337,6 +337,12 @@ export default function PortalTopBar({
               }}>
                 <div style={{ display: 'flex', alignItems: 'center', padding: '6px 10px 8px', borderBottom: `1px solid ${T.border}`, marginBottom: 4 }}>
                   <span style={{ fontSize: 12.5, fontWeight: 600, color: T.text }}>Notifications</span>
+                  <button
+                    onClick={() => fetch('/api/notifications/test', { method: 'POST', credentials: 'same-origin' }).then(() => setTimeout(refreshSummary, 800)).catch(() => {})}
+                    title="Send yourself a test notification"
+                    style={{ background: 'none', border: 'none', color: T.text3, fontSize: 11.5, fontFamily: 'inherit', cursor: 'pointer', padding: 0, marginLeft: 10 }}>
+                    Send test
+                  </button>
                   <span style={{ flex: 1 }}/>
                   {(summary?.total || 0) > 0 && (
                     <button
