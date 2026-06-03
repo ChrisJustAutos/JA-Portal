@@ -27,6 +27,7 @@ export default function LoginPage() {
   const [info, setInfo] = useState('')
   const [mfaCode, setMfaCode] = useState('')
   const [mfaFactorId, setMfaFactorId] = useState('')
+  const [trustDevice, setTrustDevice] = useState(true)  // remember this device for 24h
 
   // Safety net: if a Supabase password-recovery link lands here (e.g. the
   // project's Site URL fell back to the root → index redirects to /login,
@@ -73,10 +74,18 @@ export default function LoginPage() {
         const { data: factors } = await supabase.auth.mfa.listFactors()
         const totp = factors?.totp?.[0]
         if (totp) {
-          setMfaFactorId(totp.id)
-          setMfaCode('')
-          setMode('mfa')
-          return
+          // Skip the authenticator step if this device was trusted in the
+          // last 24 hours (the AAL1 session is fully valid for the portal).
+          const trusted = await fetch('/api/auth/mfa-device', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'check', access_token: data.session.access_token }),
+          }).then(r => r.ok ? r.json() : null).then(d => !!d?.trusted).catch(() => false)
+          if (!trusted) {
+            setMfaFactorId(totp.id)
+            setMfaCode('')
+            setMode('mfa')
+            return
+          }
         }
       }
 
@@ -115,6 +124,13 @@ export default function LoginPage() {
       if (vErr) throw vErr
       const { data: sess } = await supabase.auth.getSession()
       if (!sess.session) throw new Error('No session after verification')
+      // Trust this device for 24h so the authenticator isn't asked again.
+      if (trustDevice) {
+        await fetch('/api/auth/mfa-device', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'trust', access_token: sess.session.access_token }),
+        }).catch(() => {})
+      }
       await establishSession(sess.session.access_token, sess.session.refresh_token)
       setMode('done')
       router.push('/')
@@ -286,6 +302,10 @@ export default function LoginPage() {
                     style={{...inputStyle(), letterSpacing:'0.3em', textAlign:'center', fontSize:22}}
                   />
                 </Field>
+                <label style={{display:'flex',alignItems:'center',gap:8,fontSize:12.5,color:T.text2,cursor:'pointer',margin:'2px 0 4px'}}>
+                  <input type="checkbox" checked={trustDevice} onChange={e=>setTrustDevice(e.target.checked)} style={{cursor:'pointer'}}/>
+                  Trust this device for 24 hours
+                </label>
                 {error && <Alert color={T.red}>{error}</Alert>}
                 <button type="submit" disabled={busy || mfaCode.length !== 6} style={btnPrimary(busy || mfaCode.length !== 6)}>
                   {busy ? 'Verifying…' : 'Verify & sign in'}
