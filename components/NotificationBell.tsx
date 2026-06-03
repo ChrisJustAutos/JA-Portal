@@ -11,7 +11,8 @@ import { useRouter } from 'next/router'
 import { AppIcon } from '../lib/AppIcons'
 import { useIsMobile } from '../lib/useIsMobile'
 import { timeAgo, NotificationRow, NotificationSummary } from '../lib/useNotifications'
-import { NOTIFICATION_SOUNDS, getSound, setSound, playSound } from '../lib/notificationSounds'
+import { NOTIFICATION_SOUNDS, getSound, setSound, playSound, primeAudio } from '../lib/notificationSounds'
+import { enableNotifications } from '../lib/pushClient'
 
 const T = {
   bg2: '#131519', bg3: '#1a1d23', bg4: '#21252d',
@@ -32,8 +33,21 @@ export default function NotificationBell({ apps, summary, refresh }: {
   const [open, setOpen] = useState(false)
   const [notifs, setNotifs] = useState<NotificationRow[] | null>(null)
   const [sound, setSoundState] = useState('chime')
+  const [perm, setPerm] = useState<NotificationPermission | 'unsupported'>('default')
 
-  useEffect(() => { setSoundState(getSound()) }, [])
+  useEffect(() => {
+    setSoundState(getSound())
+    if (typeof Notification === 'undefined') setPerm('unsupported')
+    else setPerm(Notification.permission)
+  }, [])
+  // Re-check permission each time the dropdown opens (it can change in settings).
+  useEffect(() => { if (open && typeof Notification !== 'undefined') setPerm(Notification.permission) }, [open])
+
+  async function enable() {
+    primeAudio()  // this click also unlocks sound
+    const p = await enableNotifications()
+    setPerm(p)
+  }
 
   useEffect(() => {
     if (!open) return
@@ -123,6 +137,20 @@ export default function NotificationBell({ apps, summary, refresh }: {
                 </button>
               )}
             </div>
+
+            {/* Permission banner — pop-ups need the browser's go-ahead */}
+            {perm === 'default' && (
+              <button onClick={enable}
+                style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%', textAlign: 'left', background: 'rgba(79,142,247,0.12)', border: `1px solid ${T.blue}55`, color: T.text, borderRadius: 8, padding: '9px 11px', margin: '2px 0 6px', fontSize: 12.5, fontFamily: 'inherit', cursor: 'pointer' }}>
+                🔔 <span style={{ flex: 1 }}>Enable desktop notifications</span>
+                <span style={{ color: T.blue, fontWeight: 600 }}>Turn on →</span>
+              </button>
+            )}
+            {perm === 'denied' && (
+              <div style={{ background: 'rgba(245,166,35,0.12)', border: `1px solid #f5a62355`, color: '#f5a623', borderRadius: 8, padding: '9px 11px', margin: '2px 0 6px', fontSize: 11.5, lineHeight: 1.4 }}>
+                Notifications are blocked for this site. Turn them on in your browser’s site settings (the 🔒 icon in the address bar → Notifications → Allow), then reopen the app.
+              </div>
+            )}
 
             {notifs === null && <div style={{ color: T.text3, fontSize: 12, padding: '14px 10px' }}>Loading…</div>}
             {notifs !== null && notifs.length === 0 && <div style={{ color: T.text3, fontSize: 12, padding: '14px 10px' }}>No notifications yet.</div>}
