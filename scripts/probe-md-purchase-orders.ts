@@ -1,61 +1,21 @@
 // scripts/probe-md-purchase-orders.ts
 //
-// Round 4 — LIVE round-trip test. Rounds 2–3 mapped the read surface:
-//   GET /purchases.json           → list (statuses seen: sent, processed)
-//   GET /purchases/{id}.json      → full detail incl. purchase_items
-//     [{stock_id, quantity, unit_price, included_gst, gst_free, name,
-//       description, ...}], supplier_id, reference, number (MD-assigned)
-//   Supplier "Just Autos Wholesale" = id 1091329 (#1653)
-//   MD's API takes FLAT JSON (no Rails wrapper — see POST /stocktakes).
+// Round 8 — capture the PROCESS/RECEIVE network call from the real SPA UI.
+// The UI lives at /mdweb/workshops/purchases/{id} (not the API /purchases/{id}
+// which returns JSON). Create/delete + XSRF auth already confirmed; this finds
+// how "Process" receives a PO into stock so the worker can replay it directly.
 //
-// This round discovers CREATE + PROCESS (receive) + DELETE by doing them
-// for real with a $1 × qty 1 test line, then cleaning up:
-//   1. snapshot stock qty for the test SKU
-//   2. POST /purchases (try flat body, then variants) — log result
-//   3. discover the process endpoint on the created PO
-//   4. DELETE the test PO (try variants)
-//   5. re-snapshot stock qty — verify the delete reversed any receipt
-//
-// If cleanup fails, the test PO is reference JA-PORTAL-PROBE (delete it
-// manually in MD) and the log says exactly what stock moved.
+// Self-cleaning: create a $1 qty-1 test PO, open its UI, log every XHR, click
+// the Process/Receive button, capture the resulting request (method/url/body),
+// check the stock delta, then delete and re-check stock. Marked JA-PORTAL-PROBE.
 
-import { loginToMechanicDesk, findStockBySku, type MdClient } from '../lib/mechanicdesk-stocktake'
+import { loginToMechanicDesk, findStockBySku, createMdPurchase, deleteMdPurchase, type MdClient } from '../lib/mechanicdesk-stocktake'
 
 const MD_BASE = 'https://www.mechanicdesk.com.au'
 const USER_AGENT =
   'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-const SUPPLIER_ID = 1091329          // Just Autos Wholesale
-const TEST_SKU = 'SSMBC697-DPF'      // known stock 28812487
-
-async function md(client: MdClient, path: string, init: { method?: string; body?: any } = {}) {
-  const headers: Record<string, string> = {
-    'Cookie': client.cookieHeader,
-    'User-Agent': USER_AGENT,
-    'Accept': 'application/json',
-    'X-Requested-With': 'XMLHttpRequest',
-  }
-  if (init.body !== undefined) headers['Content-Type'] = 'application/json'
-  if (init.method && init.method !== 'GET') {
-    if (client.csrfToken) headers['X-CSRF-Token'] = client.csrfToken
-    const xsrf = (globalThis as any).__xsrf
-    if (xsrf) headers['X-XSRF-TOKEN'] = xsrf   // Angular-style — the likely unlock
-  }
-  const r = await fetch(MD_BASE + path, {
-    method: init.method || 'GET',
-    headers,
-    body: init.body !== undefined ? JSON.stringify(init.body) : undefined,
-    redirect: 'manual',
-  })
-  const text = await r.text().catch(() => '')
-  let json: any = null
-  try { json = JSON.parse(text) } catch { /* not JSON */ }
-  return { status: r.status, json, text }
-}
-
-function log(label: string, r: { status: number; json: any; text: string }, maxLen = 1200) {
-  const body = r.json ? JSON.stringify(r.json).slice(0, maxLen) : r.text.replace(/\s+/g, ' ').slice(0, 300)
-  console.log(`${label} → ${r.status} ${body}`)
-}
+const SUPPLIER_ID = 1091329
+const TEST_SKU = 'SSMBC697-DPF'
 
 async function stockQty(client: MdClient): Promise<number | null> {
   try {
@@ -77,134 +37,96 @@ async function main() {
   const { client, cookies } = await loginToMechanicDesk(browser, wsId, user, pass)
   console.log(`Logged in · csrf=${client.csrfToken ? 'yes' : 'no'}`)
 
-  // Round 4: POSTs 401'd ("Please login") — Rails CSRF. The login page
-  // doesn't carry the csrf meta; harvest it from the app shell, plus any
-  // rotated session cookies, before attempting writes.
-  if (!client.csrfToken) {
-    const ctx = await browser.newContext({ userAgent: USER_AGENT, viewport: { width: 1280, height: 900 } })
-    await ctx.addCookies((cookies as any[]).map(c => ({ ...c, domain: 'www.mechanicdesk.com.au', path: '/' })))
-    const page = await ctx.newPage()
-    for (const target of ['/', '/auto_workshop', '/stocktakes_page', '/stocks_page']) {
-      try {
-        await page.goto(MD_BASE + target, { waitUntil: 'domcontentloaded', timeout: 30000 })
-        await page.waitForTimeout(3000)
-        const meta = await page.evaluate(() => document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || null)
-        console.log(`csrf hunt ${target}: title="${await page.title()}" meta=${meta ? 'FOUND' : 'none'}`)
-        if (meta) { client.csrfToken = meta; break }
-      } catch (e: any) {
-        console.log(`csrf hunt ${target}: ${e?.message || e}`)
-      }
-    }
-    // Refresh cookie header from the browsing context (session may rotate).
-    const fresh = await ctx.cookies(MD_BASE)
-    if (fresh.length) client.cookieHeader = fresh.map((c: any) => `${c.name}=${c.value}`).join('; ')
-    await ctx.close()
-  }
-  await browser.close().catch(() => {})
-  console.log(`csrf token: ${client.csrfToken ? `yes (${String(client.csrfToken).slice(0, 12)}…)` : 'STILL MISSING'}\n`)
-
-  const stock = await findStockBySku(client, TEST_SKU)
-  if (stock.kind !== 'matched') { console.log(`Test SKU ${TEST_SKU} not matched (${stock.kind}) — abort`); return }
-  const stockId = (stock.stock as any).id
+  const match = await findStockBySku(client, TEST_SKU)
+  if (match.kind !== 'matched') { console.log(`Test SKU not matched (${match.kind})`); return }
+  const stockId = (match.stock as any).id
   const qtyBefore = await stockQty(client)
-  console.log(`Test stock id=${stockId} qtyBefore=${qtyBefore}\n`)
 
-  // Round 6: GET works but POST 401s "Please login" with the same cookies →
-  // Rails/Angular CSRF. The SPA reads the XSRF-TOKEN cookie and echoes it as
-  // an X-XSRF-TOKEN header on writes. Dump cookie names and extract it.
-  console.log(`COOKIE NAMES: ${client.cookieHeader.split(';').map(s => s.trim().split('=')[0]).join(', ')}`)
-  const xsrfPair = client.cookieHeader.split(';').map(s => s.trim()).find(s => /^XSRF-TOKEN=/i.test(s))
-  const xsrfToken = xsrfPair ? decodeURIComponent(xsrfPair.split('=').slice(1).join('=')) : null
-  console.log(`XSRF-TOKEN cookie: ${xsrfToken ? `FOUND (${xsrfToken.slice(0, 16)}…)` : 'none'}`)
-  if (xsrfToken && !client.csrfToken) client.csrfToken = xsrfToken
-  ;(globalThis as any).__xsrf = xsrfToken
-
-  // ── 2. CREATE attempts ────────────────────────────────────────────────
-  const itemFlat = {
-    stock_id: stockId,
-    quantity: 1,
-    unit_price: 1,
-    included_gst: false,
-    gst_free: false,
-    name: `${TEST_SKU} — probe`,
-    description: 'JA Portal automation probe — will be deleted',
-    note: '',
-  }
-  const baseBody = {
-    date: new Date().toISOString(),
-    supplier_id: SUPPLIER_ID,
+  const po = await createMdPurchase(client, {
+    supplierId: SUPPLIER_ID,
     reference: 'JA-PORTAL-PROBE',
     description: 'JA Portal automation probe — will be deleted',
-  }
+    lines: [{ stock_id: stockId, quantity: 1, unit_price: 1, gst_free: false, name: `${TEST_SKU} — probe` }],
+  })
+  console.log(`Created test PO id=${po.id} number=${po.number} status=${po.status} · stock before=${qtyBefore}\n`)
 
-  let createdId: number | null = null
-  const attempts: Array<[string, any]> = [
-    ['flat purchase_items', { ...baseBody, purchase_items: [itemFlat] }],
-    ['purchase_items_attributes', { ...baseBody, purchase_items_attributes: [itemFlat] }],
-    ['wrapped purchase', { purchase: { ...baseBody, purchase_items_attributes: [itemFlat] } }],
-  ]
-  for (const [label, body] of attempts) {
-    const r = await md(client, '/purchases', { method: 'POST', body })
-    log(`CREATE (${label})`, r, 2000)
-    if (r.status >= 200 && r.status < 300 && r.json?.id) { createdId = r.json.id; break }
-  }
-  if (!createdId) { console.log('\nNo create variant worked — see responses above.'); return }
-  console.log(`\nCreated test purchase id=${createdId}`)
+  // ── Open the SPA UI and capture network around the Process click ──────
+  const ctx = await browser.newContext({ userAgent: USER_AGENT, viewport: { width: 1400, height: 1000 } })
+  await ctx.addCookies((cookies as any[]).map(c => ({ ...c, domain: 'www.mechanicdesk.com.au', path: '/' })))
+  const page = await ctx.newPage()
 
-  // Read back — status + items
-  const detail = await md(client, `/purchases/${createdId}.json`)
-  console.log(`Readback status=${detail.json?.status} number=${detail.json?.number} total=${detail.json?.total_amount} items=${(detail.json?.purchase_items || []).length}`)
+  const writes: string[] = []
+  page.on('request', (req: any) => {
+    const u: string = req.url()
+    if (!u.startsWith(MD_BASE)) return
+    const m = req.method()
+    if (m === 'GET' || m === 'OPTIONS') return
+    let body = ''
+    try { body = req.postData() || '' } catch { /* ignore */ }
+    writes.push(`${m} ${u.replace(MD_BASE, '')}  body=${body.slice(0, 300)}`)
+  })
 
-  // ── 3. PROCESS (receive) endpoint discovery ───────────────────────────
-  // Round 6: /process & /receive 404'd; PUT {status:'processed'} didn't flip
-  // it. Round 7 sweep — incl. the `processed` boolean and more action names.
-  const id = createdId
-  const processAttempts: Array<[string, string, string, any]> = [
-    ['PUT {processed:true}',        'PUT',  `/purchases/${id}`, { processed: true }],
-    ['POST /process_purchase',      'POST', `/purchases/${id}/process_purchase`, {}],
-    ['POST /mark_processed',        'POST', `/purchases/${id}/mark_processed`, {}],
-    ['POST /mark_as_processed',     'POST', `/purchases/${id}/mark_as_processed`, {}],
-    ['POST /complete',              'POST', `/purchases/${id}/complete`, {}],
-    ['POST /receive_all',           'POST', `/purchases/${id}/receive_all`, {}],
-    ['POST /receive_stock',         'POST', `/purchases/${id}/receive_stock`, {}],
-    ['POST /process.json',          'POST', `/purchases/${id}/process.json`, {}],
-    ['PUT  /process',               'PUT',  `/purchases/${id}/process`, { status: 'processed' }],
-    ['POST /purchase_receivals',    'POST', `/purchase_receivals`, { purchase_id: id }],
-    ['POST /stock_receivals',       'POST', `/stock_receivals`, { purchase_id: id }],
-  ]
-  let processed = false
-  for (const [label, method, path, body] of processAttempts) {
-    const r = await md(client, path, { method, body })
-    const check = await md(client, `/purchases/${id}.json`)
-    const ok2 = check.json?.processed === true || check.json?.status === 'processed'
-    log(`PROCESS (${label}) [now: ${check.json?.status}/proc=${check.json?.processed}]`, r, 300)
-    if (r.status >= 200 && r.status < 300 && ok2) { processed = true; console.log(`  ✓ PROCESSED via ${label}`); break }
-  }
-  const qtyAfterProcess = await stockQty(client)
-  console.log(`processed=${processed} qtyAfterProcess=${qtyAfterProcess} (before=${qtyBefore})\n`)
+  const uiUrl = `${MD_BASE}/mdweb/workshops/purchases/${po.id}`
+  console.log(`Navigate ${uiUrl}`)
+  await page.goto(uiUrl, { waitUntil: 'networkidle', timeout: 45000 }).catch(() => {})
+  await page.waitForTimeout(6000)
+  console.log(`   title="${await page.title()}"`)
 
-  // ── 4. DELETE / cleanup ───────────────────────────────────────────────
-  const deleteAttempts: Array<[string, string, any]> = [
-    ['DELETE w/ reason', 'DELETE', { deleted_reason: 'JA Portal probe cleanup' }],
-    ['DELETE plain', 'DELETE', undefined],
-  ]
-  let deleted = false
-  for (const [label, method, body] of deleteAttempts) {
-    const r = await md(client, `/purchases/${createdId}`, { method, body })
-    log(`DELETE (${label})`, r)
-    if (r.status >= 200 && r.status < 300) { deleted = true; break }
+  // Dump candidate buttons.
+  const buttons = await page.evaluate(() => {
+    const out: string[] = []
+    document.querySelectorAll('button, a.btn, .btn, [role=button], md-button, [ng-click], [ng-reflect-message]').forEach((b: any) => {
+      const t = (b.textContent || b.value || '').trim().replace(/\s+/g, ' ').slice(0, 40)
+      const click = b.getAttribute('ng-click') || b.getAttribute('data-action') || ''
+      if (t || click) out.push(`«${t}»${click ? ` ng-click=${click}` : ''}`)
+    })
+    return Array.from(new Set(out)).slice(0, 80)
+  })
+  console.log(`   buttons: ${buttons.join(' | ')}`)
+
+  // Click the Process / Receive button.
+  let clicked = ''
+  for (const rx of [/^process$/i, /process/i, /receive/i, /mark.*processed/i, /complete/i]) {
+    const btn = page.locator('button, a, [role=button], md-button', { hasText: rx }).first()
+    if (await btn.count().catch(() => 0)) {
+      try {
+        await btn.scrollIntoViewIfNeeded({ timeout: 3000 }).catch(() => {})
+        await btn.click({ timeout: 5000 })
+        clicked = rx.toString()
+        console.log(`   clicked button matching ${clicked}`)
+        break
+      } catch (e: any) { console.log(`   click ${rx} failed: ${e?.message || e}`) }
+    }
   }
-  const check = await md(client, `/purchases/${createdId}.json`)
-  console.log(`After delete: status=${check.status} deleted=${check.json?.deleted}`)
+  if (!clicked) console.log('   no Process/Receive button found')
+
+  // A confirm dialog may appear — accept it.
+  await page.waitForTimeout(1500)
+  for (const rx of [/^(yes|confirm|ok|process|receive)$/i]) {
+    const cbtn = page.locator('button, a, [role=button]', { hasText: rx }).first()
+    if (await cbtn.count().catch(() => 0)) { try { await cbtn.click({ timeout: 3000 }); console.log(`   confirmed via ${rx}`) } catch {} }
+  }
+  await page.waitForTimeout(5000)
+
+  console.log('\n=== WRITE REQUESTS captured ===')
+  for (const w of Array.from(new Set(writes))) console.log(`  ${w}`)
+
+  // Read back + stock delta.
+  const detailR = await fetch(`${MD_BASE}/purchases/${po.id}.json`, {
+    headers: { 'Cookie': client.cookieHeader, 'User-Agent': USER_AGENT, 'Accept': 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
+  })
+  const detail = await detailR.json().catch(() => ({}))
+  const qtyAfter = await stockQty(client)
+  console.log(`\nAfter process: status=${detail?.status} processed=${detail?.processed} · stock ${qtyBefore} → ${qtyAfter}`)
+
+  // Cleanup.
+  await deleteMdPurchase(client, po.id, 'JA Portal probe cleanup').catch(e => console.log(`delete failed: ${e?.message || e}`))
   const qtyFinal = await stockQty(client)
-  console.log(`\nFINAL: created=${createdId} processed=${processed} deleted=${deleted}`)
-  console.log(`STOCK ${TEST_SKU}: before=${qtyBefore} afterProcess=${qtyAfterProcess} final=${qtyFinal}`)
-  if (qtyFinal !== qtyBefore) {
-    console.log(`⚠ STOCK NOT RESTORED — adjust ${TEST_SKU} by ${(qtyBefore ?? 0) - (qtyFinal ?? 0)} in MD or delete PO JA-PORTAL-PROBE manually.`)
-  }
+  console.log(`After delete: stock=${qtyFinal} (before=${qtyBefore})`)
+  if (qtyFinal !== qtyBefore) console.log(`⚠ STOCK NOT RESTORED — adjust ${TEST_SKU} by ${(qtyBefore ?? 0) - (qtyFinal ?? 0)} in MD (PO ${po.number}).`)
+
+  await browser.close().catch(() => {})
+  console.log('\nProbe complete.')
 }
 
-main().catch(e => {
-  console.error('FATAL', e)
-  process.exit(1)
-})
+main().catch(e => { console.error('FATAL', e); process.exit(1) })
