@@ -12,7 +12,10 @@ import { AppIcon } from '../lib/AppIcons'
 import { useIsMobile } from '../lib/useIsMobile'
 import { timeAgo, NotificationRow, NotificationSummary } from '../lib/useNotifications'
 import { NOTIFICATION_SOUNDS, getSound, setSound, playSound, primeAudio } from '../lib/notificationSounds'
-import { enableNotifications } from '../lib/pushClient'
+import { enableNotifications, ensurePushSubscription } from '../lib/pushClient'
+
+// Inlined at build time — tells us whether server push is configured in THIS build.
+const VAPID_CONFIGURED = !!process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY
 
 const T = {
   bg2: '#131519', bg3: '#1a1d23', bg4: '#21252d',
@@ -35,6 +38,17 @@ export default function NotificationBell({ apps, summary, refresh }: {
   const [sound, setSoundState] = useState('chime')
   const [perm, setPerm] = useState<NotificationPermission | 'unsupported'>('default')
   const [pushCount, setPushCount] = useState<number | null>(null)
+  const [registering, setRegistering] = useState(false)
+
+  function loadPushCount() {
+    fetch('/api/notifications/push-subscribe', { credentials: 'same-origin' })
+      .then(r => r.ok ? r.json() : null).then(d => { if (d) setPushCount(d.count) }).catch(() => {})
+  }
+  async function registerDevice() {
+    setRegistering(true)
+    try { await ensurePushSubscription(); loadPushCount() }
+    finally { setRegistering(false) }
+  }
 
   useEffect(() => {
     setSoundState(getSound())
@@ -45,8 +59,7 @@ export default function NotificationBell({ apps, summary, refresh }: {
   useEffect(() => {
     if (!open) return
     if (typeof Notification !== 'undefined') setPerm(Notification.permission)
-    fetch('/api/notifications/push-subscribe', { credentials: 'same-origin' })
-      .then(r => r.ok ? r.json() : null).then(d => { if (d) setPushCount(d.count) }).catch(() => {})
+    loadPushCount()
   }, [open])
 
   async function enable() {
@@ -162,6 +175,19 @@ export default function NotificationBell({ apps, summary, refresh }: {
                 Notifications aren’t available here. On iPhone: open the app from the <b>Home Screen icon</b> (not Safari) on <b>iOS 16.4+</b>. If you just updated, fully close the app (swipe it away) and reopen it.
               </div>
             )}
+            {/* Permission granted but background push not yet registered on this device */}
+            {perm === 'granted' && !VAPID_CONFIGURED && (
+              <div style={{ background: 'rgba(245,166,35,0.12)', border: `1px solid #f5a62355`, color: '#f5a623', borderRadius: 8, padding: '9px 11px', margin: '2px 0 6px', fontSize: 11.5, lineHeight: 1.45 }}>
+                On-screen pop-ups work, but <b>background push isn’t set up in this build</b> (server key missing). It’ll switch on after the next deploy with the VAPID keys.
+              </div>
+            )}
+            {perm === 'granted' && VAPID_CONFIGURED && pushCount === 0 && (
+              <button onClick={registerDevice} disabled={registering}
+                style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%', textAlign: 'left', background: 'rgba(79,142,247,0.12)', border: `1px solid ${T.blue}55`, color: T.text, borderRadius: 8, padding: '9px 11px', margin: '2px 0 6px', fontSize: 12.5, fontFamily: 'inherit', cursor: 'pointer' }}>
+                🔔 <span style={{ flex: 1 }}>This device isn’t registered for background push</span>
+                <span style={{ color: T.blue, fontWeight: 600 }}>{registering ? '…' : 'Register →'}</span>
+              </button>
+            )}
 
             {notifs === null && <div style={{ color: T.text3, fontSize: 12, padding: '14px 10px' }}>Loading…</div>}
             {notifs !== null && notifs.length === 0 && <div style={{ color: T.text3, fontSize: 12, padding: '14px 10px' }}>No notifications yet.</div>}
@@ -209,9 +235,9 @@ export default function NotificationBell({ apps, summary, refresh }: {
               <button onClick={() => playSound(sound)} title="Preview"
                 style={{ background: 'none', border: `1px solid ${T.border2}`, color: T.text2, borderRadius: 6, padding: '4px 8px', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit' }}>▶</button>
             </div>
-            {perm === 'granted' && (
+            {perm === 'granted' && VAPID_CONFIGURED && (pushCount || 0) > 0 && (
               <div style={{ fontSize: 10.5, color: T.text3, padding: '4px 10px 2px' }}>
-                Background push: {pushCount === null ? '…' : pushCount > 0 ? `on · ${pushCount} device${pushCount === 1 ? '' : 's'}` : 'this device not registered yet — reopen the app'}
+                Background push: on · {pushCount} device{pushCount === 1 ? '' : 's'}
               </div>
             )}
           </div>
