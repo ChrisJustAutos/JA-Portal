@@ -55,14 +55,14 @@ export default function NotificationBell({ apps, summary, refresh }: {
     fetch('/api/notifications/push-subscribe', { credentials: 'same-origin' })
       .then(r => r.ok ? r.json() : null).then(d => { if (d) setPushCount(d.count) }).catch(() => {})
   }
+  // Force a fresh subscription (drops any stale/dead one) — this is the recovery
+  // when a device silently stops receiving push (common on iOS).
   async function registerDevice() {
     setRegistering(true); setRegMsg(null)
     try {
-      const res = await ensurePushSubscription()
-      const d = await fetch('/api/notifications/push-subscribe', { credentials: 'same-origin' }).then(r => r.ok ? r.json() : null).catch(() => null)
-      const c = d?.count ?? 0
-      setPushCount(c)
-      setRegMsg(c > 0 ? '✓ Registered on this device' : `Couldn’t register — ${res.reason || 'try fully closing and reopening the app'}`)
+      const res = await ensurePushSubscription(undefined, { force: true })
+      loadPushCount()
+      setRegMsg(res.ok ? '✓ Re-registered this device — try “Send test”' : `Couldn’t register — ${res.reason || 'fully close and reopen the app'}`)
     } finally { setRegistering(false) }
   }
 
@@ -217,6 +217,18 @@ export default function NotificationBell({ apps, summary, refresh }: {
                 🔔 <span style={{ flex: 1 }}>This device isn’t registered for background push</span>
                 <span style={{ color: T.blue, fontWeight: 600 }}>{registering ? '…' : 'Register →'}</span>
               </button>
+            )}
+            {/* Always-available recovery: re-arm push on THIS device even when
+                other devices keep the count > 0 (e.g. phone stopped but desktop
+                still works). */}
+            {perm === 'granted' && VAPID_CONFIGURED && (pushCount ?? 0) > 0 && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '0 11px 6px', fontSize: 10.5, color: T.text3 }}>
+                <span>Background push on {pushCount} device{pushCount === 1 ? '' : 's'}</span>
+                <button onClick={registerDevice} disabled={registering}
+                  style={{ marginLeft: 'auto', background: 'none', border: 'none', color: T.blue, fontSize: 10.5, fontFamily: 'inherit', cursor: 'pointer', padding: 0 }}>
+                  {registering ? '…' : 'Re-register this device'}
+                </button>
+              </div>
             )}
             {regMsg && (
               <div style={{ fontSize: 11, color: regMsg.startsWith('✓') ? '#34c77b' : '#f5a623', padding: '0 11px 6px' }}>{regMsg}</div>

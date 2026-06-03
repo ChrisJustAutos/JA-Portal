@@ -174,7 +174,8 @@ function NotificationsCard() {
   }
   async function register() {
     setBusy(true); setMsg(null)
-    try { const r = await ensurePushSubscription(B2B_SUBSCRIBE_URL); loadCount(); if (!r.ok) setMsg(`Couldn’t register — ${r.reason || 'try reopening the app'}`) }
+    // Force a fresh subscription so a dead/stale endpoint (common on iOS) is replaced.
+    try { const r = await ensurePushSubscription(B2B_SUBSCRIBE_URL, { force: true }); loadCount(); setMsg(r.ok ? 'Re-registered this device — try “Send test”.' : `Couldn’t register — ${r.reason || 'try reopening the app'}`) }
     finally { setBusy(false) }
   }
   async function sendTest() {

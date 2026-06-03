@@ -21,7 +21,7 @@ export interface PushResult { ok: boolean; reason?: string }
 // Subscribe this browser to Web Push (idempotent). Returns a reason on failure
 // so the UI can show why it didn't register. `subscribeUrl` lets the B2B
 // distributor portal store the subscription against its own user table.
-export async function ensurePushSubscription(subscribeUrl = '/api/notifications/push-subscribe'): Promise<PushResult> {
+export async function ensurePushSubscription(subscribeUrl = '/api/notifications/push-subscribe', opts: { force?: boolean } = {}): Promise<PushResult> {
   const vapid = (process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY || '').replace(/\s+/g, '')
   if (!vapid) return { ok: false, reason: 'server push key missing in this build' }
   if (typeof navigator === 'undefined' || !('serviceWorker' in navigator)) return { ok: false, reason: 'service workers not supported' }
@@ -34,6 +34,11 @@ export async function ensurePushSubscription(subscribeUrl = '/api/notifications/
     ])
     if (!reg) return { ok: false, reason: 'service worker not active — reopen the app' }
     let sub = await reg.pushManager.getSubscription()
+    // Recovery path: iOS can silently invalidate a subscription server-side while
+    // getSubscription() still returns the old (dead) object — so re-saving it
+    // never heals delivery. `force` drops the existing one and mints a fresh
+    // endpoint, which is what the "Re-register this device" button needs.
+    if (sub && opts.force) { try { await sub.unsubscribe() } catch {} sub = null }
     if (!sub) {
       sub = await reg.pushManager.subscribe({
         userVisibleOnly: true,
