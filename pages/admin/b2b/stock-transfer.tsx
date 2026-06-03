@@ -94,6 +94,7 @@ export default function StockTransferPage({ user }: Props) {
   const [running, setRunning] = useState(false)
   const [result, setResult] = useState<{ kind: 'ok' | 'partial' | 'error'; text: string } | null>(null)
   const [retrying, setRetrying] = useState<string | null>(null)
+  const [mdFiring, setMdFiring] = useState<string | null>(null)
 
   function loadConfig() {
     fetch('/api/b2b/admin/stock-transfer', { credentials: 'same-origin' })
@@ -179,6 +180,25 @@ export default function StockTransferPage({ user }: Props) {
       setResult({ kind: 'error', text: e?.message || String(e) })
     } finally {
       setRunning(false); setConfirming(false)
+    }
+  }
+
+  async function dispatchMdPo(id: string) {
+    setMdFiring(id)
+    try {
+      const r = await fetch('/api/b2b/admin/stock-transfer', {
+        method: 'POST', credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'dispatch-md-po', transferId: id }),
+      })
+      const j = await r.json().catch(() => null)
+      if (!r.ok) throw new Error(j?.error || `HTTP ${r.status}`)
+      setResult({ kind: 'ok', text: 'MechanicDesk purchase-order worker triggered — refresh in ~1 minute to see the result.' })
+      setTimeout(loadHistory, 2000)
+    } catch (e: any) {
+      setResult({ kind: 'error', text: `MD PO trigger failed: ${e?.message || String(e)}` })
+    } finally {
+      setMdFiring(null)
     }
   }
 
@@ -447,14 +467,24 @@ export default function StockTransferPage({ user }: Props) {
                           <td style={{padding:'7px 8px',fontFamily:'monospace',fontSize:12}}>{(fwd ? t.jaws_invoice_number : t.vps_invoice_number) || '—'}</td>
                           <td style={{padding:'7px 8px',fontSize:12,color:billDone?T.green:T.text3}}>{billDone ? '✓ written' : '—'}</td>
                           <td style={{padding:'7px 8px',fontSize:12}}>
-                            {!fwd ? <span style={{color:T.text3}}>n/a</span>
-                              : t.md_po_status === 'done'
-                                ? <span style={{color:T.green}} title={t.md_po_error || 'PO entered and received into MechanicDesk stock'}>✓ {t.md_po_ref || 'received'}</span>
-                              : t.md_po_status === 'created'
-                                ? <span style={{color:T.amber}} title={t.md_po_error || 'PO entered but not received — receive it in the MD UI'}>{t.md_po_ref || 'entered'} (receive in MD)</span>
-                              : t.md_po_status === 'failed' ? <span style={{color:T.red}} title={t.md_po_error || ''}>failed</span>
-                              : t.md_po_status === 'queued' ? <span style={{color:T.amber}}>queued…</span>
-                              : <span style={{color:T.text3}}>—</span>}
+                            {!fwd ? <span style={{color:T.text3}}>n/a</span> : (
+                              <div style={{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap'}}>
+                                {t.md_po_status === 'done'
+                                  ? <span style={{color:T.green}} title={t.md_po_error || 'PO entered and received into MechanicDesk stock'}>✓ {t.md_po_ref || 'received'}</span>
+                                : t.md_po_status === 'created'
+                                  ? <span style={{color:T.amber}} title={t.md_po_error || 'PO entered but not received — receive it in the MD UI'}>{t.md_po_ref || 'entered'} (receive in MD)</span>
+                                : t.md_po_status === 'failed' ? <span style={{color:T.red}} title={t.md_po_error || ''}>failed</span>
+                                : t.md_po_status === 'queued' ? <span style={{color:T.amber}}>queued…</span>
+                                : <span style={{color:T.text3}}>not raised</span>}
+                                {t.md_po_status !== 'done' && t.md_po_status !== 'queued' && (
+                                  <button onClick={()=>dispatchMdPo(t.id)} disabled={mdFiring===t.id}
+                                    title="Create + receive the purchase order in MechanicDesk"
+                                    style={{...inp,cursor:'pointer',padding:'3px 9px',fontSize:11,color:T.blue}}>
+                                    {mdFiring===t.id ? '…' : (t.md_po_status === 'failed' ? 'Retry MD PO' : 'Raise MD PO')}
+                                  </button>
+                                )}
+                              </div>
+                            )}
                           </td>
                           <td style={{padding:'7px 8px'}}>
                             <span style={{

@@ -65,7 +65,8 @@
       "PowerShell(gh run *)",
       "PowerShell(git rm *)",
       "Bash(git checkout *)",
-      "PowerShell(git *)"
+      "PowerShell(git *)",
+      "PowerShell(gh api *)"
     ]
   }
 }

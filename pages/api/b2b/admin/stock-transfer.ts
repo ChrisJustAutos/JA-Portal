@@ -46,7 +46,15 @@ async function dispatchMdPurchaseOrder(transferId: string): Promise<void> {
   const ghToken = process.env.GH_DISPATCH_TOKEN
   const ghOwner = process.env.GH_REPO_OWNER || 'ChrisJustAutos'
   const ghRepo = process.env.GH_REPO_NAME || 'JA-Portal'
-  if (!ghToken) throw new Error('GH_DISPATCH_TOKEN missing')
+  if (!ghToken) {
+    // Record the failure so it's visible in the UI rather than silently stuck.
+    await sb().from('b2b_stock_transfers').update({
+      md_po_status: 'failed',
+      md_po_error: 'GH_DISPATCH_TOKEN not set in Vercel — cannot trigger the MD purchase-order worker',
+      md_po_updated_at: new Date().toISOString(),
+    }).eq('id', transferId)
+    throw new Error('GH_DISPATCH_TOKEN missing')
+  }
   const r = await fetch(`https://api.github.com/repos/${ghOwner}/${ghRepo}/dispatches`, {
     method: 'POST',
     headers: {
@@ -225,6 +233,28 @@ export default withAuth('edit:b2b_distributors', async (req: NextApiRequest, res
         if (!transferId) return res.status(400).json({ error: 'transferId required' })
         const result = await retryPurchaseSide(transferId, user.id)
         return res.status(200).json({ ok: true, result })
+      }
+
+      // Re-fire (or first-fire) the MechanicDesk purchase-order worker for an
+      // existing forward transfer — e.g. one created before the MD-PO feature,
+      // or one whose dispatch failed.
+      if (action === 'dispatch-md-po') {
+        const transferId = String(body.transferId || '').trim()
+        if (!transferId) return res.status(400).json({ error: 'transferId required' })
+        const { data: t } = await c.from('b2b_stock_transfers').select('direction').eq('id', transferId).maybeSingle()
+        if (!t) return res.status(404).json({ error: 'Transfer not found' })
+        if ((t.direction || 'JAWS_TO_VPS') !== 'JAWS_TO_VPS') {
+          return res.status(400).json({ error: 'MD purchase orders only apply to JAWS → VPS transfers' })
+        }
+        await c.from('b2b_stock_transfers').update({
+          md_po_status: 'queued', md_po_error: null, md_po_updated_at: new Date().toISOString(),
+        }).eq('id', transferId)
+        try {
+          await dispatchMdPurchaseOrder(transferId)
+        } catch (e: any) {
+          return res.status(502).json({ error: `Dispatch failed: ${e?.message || e}` })
+        }
+        return res.status(200).json({ ok: true, message: 'MD purchase-order worker triggered — updates in ~1 minute.' })
       }
 
       return res.status(400).json({ error: 'action must be save-settings, execute or retry' })
