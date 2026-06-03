@@ -66,20 +66,13 @@ export async function sendPushToUsers(userIds: string[], payload: PushPayload): 
   }
 }
 
-/**
- * Push to every device of every ACTIVE user of a B2B distributor (order
- * confirmations, shipping, status updates). Best-effort; never throws.
- */
-export async function sendPushToDistributor(distributorId: string, payload: PushPayload): Promise<void> {
+/** Push to specific B2B distributor users (by b2b_distributor_users.id). */
+export async function sendPushToB2BUsers(b2bUserIds: string[], payload: PushPayload): Promise<void> {
   try {
-    if (!configured() || !distributorId) return
+    if (!configured() || !b2bUserIds.length) return
     const c = sb()
-    const { data: users } = await c.from('b2b_distributor_users')
-      .select('id').eq('distributor_id', distributorId).eq('is_active', true)
-    const userIds = (users || []).map((u: any) => u.id)
-    if (!userIds.length) return
     const { data: subs } = await c.from('b2b_push_subscriptions')
-      .select('id, endpoint, p256dh, auth').in('b2b_user_id', userIds)
+      .select('id, endpoint, p256dh, auth').in('b2b_user_id', b2bUserIds)
     if (!subs?.length) return
     const body = JSON.stringify({ title: payload.title, body: payload.body || '', href: payload.href || '/b2b', tag: payload.tag })
     await Promise.all(subs.map(async (s) => {
@@ -91,6 +84,22 @@ export async function sendPushToDistributor(distributorId: string, payload: Push
         else console.error('b2b push send failed:', code || e?.message || e)
       }
     }))
+  } catch (e: any) {
+    console.error('sendPushToB2BUsers failed (non-fatal):', e?.message || e)
+  }
+}
+
+/**
+ * Push to every device of every ACTIVE user of a B2B distributor (order
+ * confirmations, shipping, status updates). Best-effort; never throws.
+ */
+export async function sendPushToDistributor(distributorId: string, payload: PushPayload): Promise<void> {
+  try {
+    if (!configured() || !distributorId) return
+    const { data: users } = await sb().from('b2b_distributor_users')
+      .select('id').eq('distributor_id', distributorId).eq('is_active', true)
+    const userIds = (users || []).map((u: any) => u.id)
+    if (userIds.length) await sendPushToB2BUsers(userIds, payload)
   } catch (e: any) {
     console.error('sendPushToDistributor failed (non-fatal):', e?.message || e)
   }

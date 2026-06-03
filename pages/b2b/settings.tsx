@@ -7,6 +7,9 @@ import { useEffect, useState } from 'react'
 import type { GetServerSideProps } from 'next'
 import B2BLayout from '../../components/b2b/B2BLayout'
 import { requireB2BPageAuth } from '../../lib/b2bAuthServer'
+import { enableNotifications, ensurePushSubscription } from '../../lib/pushClient'
+
+const B2B_SUBSCRIBE_URL = '/api/b2b/notifications/push-subscribe'
 
 const T = {
   bg:'#0d0f12', bg2:'#131519', bg3:'#1a1d23', bg4:'#21252d',
@@ -123,6 +126,12 @@ export default function B2BSettingsPage({ b2bUser }: Props) {
               </div>
             )}
 
+            {/* Notifications */}
+            <div style={card}>
+              <div style={cardTitle}>Notifications</div>
+              <NotificationsCard />
+            </div>
+
             {/* Your profile */}
             <div style={card}>
               <div style={cardTitle}>Your profile</div>
@@ -137,6 +146,68 @@ export default function B2BSettingsPage({ b2bUser }: Props) {
         )}
       </div>
     </B2BLayout>
+  )
+}
+
+// Distributor notification controls: enable push, show device count, send test.
+function NotificationsCard() {
+  const [perm, setPerm] = useState<NotificationPermission | 'unsupported' | 'loading'>('loading')
+  const [count, setCount] = useState<number | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [msg, setMsg] = useState<string | null>(null)
+
+  function loadCount() {
+    fetch(B2B_SUBSCRIBE_URL, { credentials: 'same-origin' })
+      .then(r => r.ok ? r.json() : null).then(d => { if (d) setCount(d.count) }).catch(() => {})
+  }
+  useEffect(() => {
+    if (typeof Notification === 'undefined') { setPerm('unsupported'); return }
+    setPerm(Notification.permission)
+    loadCount()
+    if (Notification.permission === 'granted') ensurePushSubscription(B2B_SUBSCRIBE_URL).then(loadCount)
+  }, [])
+
+  async function enable() {
+    setBusy(true); setMsg(null)
+    try { const p = await enableNotifications(B2B_SUBSCRIBE_URL); setPerm(p); loadCount(); if (p !== 'granted') setMsg('Permission was not granted.') }
+    finally { setBusy(false) }
+  }
+  async function register() {
+    setBusy(true); setMsg(null)
+    try { const r = await ensurePushSubscription(B2B_SUBSCRIBE_URL); loadCount(); if (!r.ok) setMsg(`Couldn’t register — ${r.reason || 'try reopening the app'}`) }
+    finally { setBusy(false) }
+  }
+  async function sendTest() {
+    setBusy(true); setMsg(null)
+    try {
+      const r = await fetch('/api/b2b/notifications/test', { method: 'POST', credentials: 'same-origin' })
+      setMsg(r.ok ? 'Test sent — you should see a notification shortly.' : 'Could not send test.')
+    } finally { setBusy(false) }
+  }
+
+  const T2 = { text: '#e8eaf0', text2: '#aab0c0', text3: '#8d93a4', blue: '#4f8ef7', green: '#34c77b', amber: '#f5a623', border2: 'rgba(255,255,255,0.12)' }
+  const btn: React.CSSProperties = { background: T2.blue, border: 'none', color: '#fff', borderRadius: 7, padding: '8px 14px', fontSize: 12.5, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }
+  const ghost: React.CSSProperties = { background: 'none', border: `1px solid ${T2.border2}`, color: T2.text2, borderRadius: 7, padding: '8px 14px', fontSize: 12.5, cursor: 'pointer', fontFamily: 'inherit' }
+
+  return (
+    <div style={{ fontSize: 13, color: T2.text2, lineHeight: 1.6 }}>
+      Get order confirmations and shipping updates as pop-up notifications on this device.
+      <div style={{ display: 'flex', gap: 8, marginTop: 12, flexWrap: 'wrap', alignItems: 'center' }}>
+        {perm === 'unsupported' && (
+          <span style={{ color: T2.amber, fontSize: 12 }}>On iPhone, add this app to your Home Screen (Share → Add to Home Screen) on iOS 16.4+, then open it from the icon.</span>
+        )}
+        {perm === 'default' && <button onClick={enable} disabled={busy} style={btn}>{busy ? '…' : 'Enable notifications'}</button>}
+        {perm === 'denied' && <span style={{ color: T2.amber, fontSize: 12 }}>Blocked — allow notifications for this site in your browser settings, then reopen the app.</span>}
+        {perm === 'granted' && (count || 0) === 0 && <button onClick={register} disabled={busy} style={btn}>{busy ? '…' : 'Register this device'}</button>}
+        {perm === 'granted' && (count || 0) > 0 && (
+          <>
+            <span style={{ color: T2.green, fontSize: 12.5 }}>✓ On · {count} device{count === 1 ? '' : 's'}</span>
+            <button onClick={sendTest} disabled={busy} style={ghost}>{busy ? '…' : 'Send test'}</button>
+          </>
+        )}
+      </div>
+      {msg && <div style={{ marginTop: 8, fontSize: 12, color: msg.startsWith('✓') || msg.startsWith('Test') ? T2.green : T2.amber }}>{msg}</div>}
+    </div>
   )
 }
 
