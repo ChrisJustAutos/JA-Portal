@@ -18,6 +18,38 @@ const LAST_SEEN_KEY = 'ja-notif-last-seen'
 const POLL_MS = 45000
 const SKIP_PATHS = ['/login', '/reset-password', '/b2b']  // not staff-notification pages
 
+function urlBase64ToUint8Array(base64: string): Uint8Array {
+  const padding = '='.repeat((4 - (base64.length % 4)) % 4)
+  const b64 = (base64 + padding).replace(/-/g, '+').replace(/_/g, '/')
+  const raw = atob(b64)
+  const arr = new Uint8Array(raw.length)
+  for (let i = 0; i < raw.length; i++) arr[i] = raw.charCodeAt(i)
+  return arr
+}
+
+// Subscribe this browser to Web Push so notifications arrive even when the app
+// is closed. Safe no-op without a configured VAPID key or SW support. Idempotent.
+async function ensurePushSubscription() {
+  try {
+    const vapid = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY
+    if (!vapid) return
+    if (!('serviceWorker' in navigator) || !('PushManager' in window)) return
+    const reg = await navigator.serviceWorker.ready
+    let sub = await reg.pushManager.getSubscription()
+    if (!sub) {
+      sub = await reg.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToUint8Array(vapid),
+      })
+    }
+    await fetch('/api/notifications/push-subscribe', {
+      method: 'POST', credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(sub.toJSON()),
+    }).catch(() => {})
+  } catch { /* push optional — ignore */ }
+}
+
 export default function DesktopNotifier() {
   const router = useRouter()
   const routerRef = useRef(router)
@@ -31,8 +63,13 @@ export default function DesktopNotifier() {
     lastSeen.current = stored > 0 ? stored : Date.now()
     if (!stored) window.localStorage.setItem(LAST_SEEN_KEY, String(lastSeen.current))
 
-    // Ask once, best-effort (matches the messaging permission prompt).
-    if (Notification.permission === 'default') { try { Notification.requestPermission() } catch {} }
+    // Ask once, best-effort (matches the messaging permission prompt), then
+    // register for background Web Push if it's granted.
+    if (Notification.permission === 'default') {
+      try { Notification.requestPermission().then((p) => { if (p === 'granted') ensurePushSubscription() }) } catch {}
+    } else if (Notification.permission === 'granted') {
+      ensurePushSubscription()
+    }
 
     let live = true
     async function poll() {

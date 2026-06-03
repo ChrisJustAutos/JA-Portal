@@ -13,7 +13,7 @@
 //
 // Bump VERSION whenever this file or offline.html changes, to evict old caches.
 
-const VERSION = 'v2'
+const VERSION = 'v3'
 const CACHE = `ja-portal-static-${VERSION}`
 const PRECACHE = ['/offline.html', '/icons/icon-192.png']
 
@@ -73,4 +73,38 @@ self.addEventListener('fetch', (event) => {
 // Allow the page to tell a freshly-installed SW to take over immediately.
 self.addEventListener('message', (event) => {
   if (event.data === 'skipWaiting') self.skipWaiting()
+})
+
+// ── Web Push (fires even when the app is closed) ───────────────────────────
+self.addEventListener('push', (event) => {
+  let data = {}
+  try { data = event.data ? event.data.json() : {} } catch { data = {} }
+  const title = data.title || 'Just Autos Portal'
+  event.waitUntil(
+    self.registration.showNotification(title, {
+      body: data.body || '',
+      tag: data.tag || undefined,
+      icon: '/icons/icon-192.png',
+      badge: '/icons/icon-192.png',
+      data: { href: data.href || '/' },
+    })
+  )
+})
+
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close()
+  const href = (event.notification.data && event.notification.data.href) || '/'
+  event.waitUntil(
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((wins) => {
+      // Focus an existing window and navigate it; else open a new one.
+      for (const w of wins) {
+        if ('focus' in w) {
+          w.focus()
+          if ('navigate' in w) { try { w.navigate(href) } catch {} }
+          return
+        }
+      }
+      return self.clients.openWindow(href)
+    })
+  )
 })

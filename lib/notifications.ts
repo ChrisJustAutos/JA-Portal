@@ -56,9 +56,21 @@ export async function notify(opts: NotifyOpts): Promise<void> {
       href: opts.href || null,
       ...(opts.dedupeKey ? { dedupe_key: opts.dedupeKey } : {}),
     }))
-    const { error } = await c.from('notifications')
+    // ignoreDuplicates + .select() returns ONLY the rows actually inserted —
+    // so re-fired events (webhook retries) don't re-push to users who already
+    // had this notification.
+    const { data: inserted, error } = await c.from('notifications')
       .upsert(rows, { onConflict: 'user_id,dedupe_key', ignoreDuplicates: true })
-    if (error) console.error('notify: insert failed:', error.message)
+      .select('user_id')
+    if (error) { console.error('notify: insert failed:', error.message); return }
+
+    // Web Push (best-effort) to the newly-notified users — fires even when the
+    // PWA is closed. No-ops if VAPID isn't configured.
+    const freshIds = Array.from(new Set((inserted || []).map((r: any) => r.user_id)))
+    if (freshIds.length) {
+      const { sendPushToUsers } = await import('./push')
+      await sendPushToUsers(freshIds, { title: opts.title, body: opts.body || null, href: opts.href || null, tag: opts.dedupeKey })
+    }
   } catch (e: any) {
     console.error('notify failed (non-fatal):', e?.message || e)
   }
