@@ -5,8 +5,11 @@
 // bell's "Enable notifications" button calls enableNotifications().
 
 function urlBase64ToUint8Array(base64: string): Uint8Array {
-  const padding = '='.repeat((4 - (base64.length % 4)) % 4)
-  const b64 = (base64 + padding).replace(/-/g, '+').replace(/_/g, '/')
+  // Strip any whitespace/newlines that may have been pasted into the env var —
+  // a stray char makes atob throw "The string contains invalid characters".
+  const clean = String(base64).replace(/\s+/g, '')
+  const padding = '='.repeat((4 - (clean.length % 4)) % 4)
+  const b64 = (clean + padding).replace(/-/g, '+').replace(/_/g, '/')
   const raw = atob(b64)
   const arr = new Uint8Array(raw.length)
   for (let i = 0; i < raw.length; i++) arr[i] = raw.charCodeAt(i)
@@ -18,7 +21,7 @@ export interface PushResult { ok: boolean; reason?: string }
 // Subscribe this browser to Web Push (idempotent). Returns a reason on failure
 // so the UI can show why it didn't register.
 export async function ensurePushSubscription(): Promise<PushResult> {
-  const vapid = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY
+  const vapid = (process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY || '').replace(/\s+/g, '')
   if (!vapid) return { ok: false, reason: 'server push key missing in this build' }
   if (typeof navigator === 'undefined' || !('serviceWorker' in navigator)) return { ok: false, reason: 'service workers not supported' }
   if (typeof window === 'undefined' || !('PushManager' in window)) return { ok: false, reason: 'push not supported on this browser' }

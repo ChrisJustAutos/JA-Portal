@@ -21,11 +21,11 @@ function sb(): SupabaseClient {
 let _configured: boolean | null = null
 function configured(): boolean {
   if (_configured !== null) return _configured
-  const pub = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY
-  const priv = process.env.VAPID_PRIVATE_KEY
+  const pub = (process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY || '').replace(/\s+/g, '')
+  const priv = (process.env.VAPID_PRIVATE_KEY || '').replace(/\s+/g, '')
   if (!pub || !priv) { _configured = false; return false }
   try {
-    webpush.setVapidDetails(process.env.VAPID_SUBJECT || 'mailto:portal@justautosmechanical.com.au', pub, priv)
+    webpush.setVapidDetails((process.env.VAPID_SUBJECT || 'mailto:portal@justautosmechanical.com.au').trim(), pub, priv)
     _configured = true
   } catch { _configured = false }
   return _configured
