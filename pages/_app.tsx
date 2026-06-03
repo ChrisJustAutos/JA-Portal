@@ -12,6 +12,7 @@ import type { AppProps } from 'next/app'
 import Head from 'next/head'
 import { PreferencesProvider, usePreferences, ACCENT_HEX, THEME_PRESETS } from '../lib/preferences'
 import GlobalChatbot, { ChatContextProvider } from '../components/GlobalChatbot'
+import DesktopNotifier from '../components/DesktopNotifier'
 
 // Reads the user's accent_color + theme_preset and exposes them as CSS
 // custom properties on <html>. Components can opt in to the live values via
@@ -136,6 +137,7 @@ export default function App({ Component, pageProps }: AppProps) {
         </Head>
         <ThemeVarsBridge/>
         <ServiceWorkerRegister/>
+        <DesktopNotifier/>
         <Component {...pageProps} />
         <GlobalChatbot />
       </ChatContextProvider>
