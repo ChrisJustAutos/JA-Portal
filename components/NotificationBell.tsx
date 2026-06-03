@@ -157,6 +157,11 @@ export default function NotificationBell({ apps, summary, refresh }: {
                 Notifications are blocked for this site. Turn them on in your browser’s site settings (the 🔒 icon in the address bar → Notifications → Allow), then reopen the app.
               </div>
             )}
+            {perm === 'unsupported' && (
+              <div style={{ background: 'rgba(245,166,35,0.12)', border: `1px solid #f5a62355`, color: '#f5a623', borderRadius: 8, padding: '9px 11px', margin: '2px 0 6px', fontSize: 11.5, lineHeight: 1.45 }}>
+                Notifications aren’t available here. On iPhone: open the app from the <b>Home Screen icon</b> (not Safari) on <b>iOS 16.4+</b>. If you just updated, fully close the app (swipe it away) and reopen it.
+              </div>
+            )}
 
             {notifs === null && <div style={{ color: T.text3, fontSize: 12, padding: '14px 10px' }}>Loading…</div>}
             {notifs !== null && notifs.length === 0 && <div style={{ color: T.text3, fontSize: 12, padding: '14px 10px' }}>No notifications yet.</div>}
