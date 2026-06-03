@@ -10,6 +10,7 @@ import { getSupabase } from '../../lib/supabaseClient'
 import { subscribeToConversation, subscribeToConversationList, subscribeToAllMessages, joinTyping, type TypingChannel } from '../../lib/realtime'
 import type { UserRole } from '../../lib/permissions'
 import { playSound } from '../../lib/notificationSounds'
+import { useIsMobile } from '../../lib/useIsMobile'
 
 const T = {
   bg: '#0d0f12', bg2: '#131519', bg3: '#1a1d23', bg4: '#21252d',
@@ -37,6 +38,7 @@ interface DirUser { id: string; name: string; email: string; role: string }
 const ATTACH_BUCKET = 'chat-attachments'
 
 export default function ChatApp({ user, onUnreadChange }: { user: SSRUser; onUnreadChange?: (n: number) => void }) {
+  const isMobile = useIsMobile()
   const [conversations, setConversations] = useState<Conversation[]>([])
   const [activeId, setActiveId] = useState<string | null>(null)
   const [messages, setMessages] = useState<Message[]>([])
@@ -378,8 +380,8 @@ export default function ChatApp({ user, onUnreadChange }: { user: SSRUser; onUnr
 
   return (
     <div style={{ flex: 1, display: 'flex', overflow: 'hidden', background: T.bg }}>
-      {/* Sidebar */}
-      <div style={{ width: 270, flexShrink: 0, background: T.bg2, borderRight: `1px solid ${T.border}`, display: 'flex', flexDirection: 'column' }}>
+      {/* Sidebar — full-width on mobile, hidden once a conversation is open */}
+      <div style={{ width: isMobile ? '100%' : 270, flexShrink: 0, background: T.bg2, borderRight: isMobile ? 'none' : `1px solid ${T.border}`, display: (isMobile && active) ? 'none' : 'flex', flexDirection: 'column' }}>
         <div style={{ padding: '12px 14px', borderBottom: `1px solid ${T.border}` }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
             <span style={{ fontSize: 14, fontWeight: 600 }}>Messages</span>
@@ -419,16 +421,20 @@ export default function ChatApp({ user, onUnreadChange }: { user: SSRUser; onUnr
         </div>
       </div>
 
-      {/* Thread/main */}
-      <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
+      {/* Thread/main — on mobile shown only when a conversation is open */}
+      <div style={{ flex: 1, display: (isMobile && !active) ? 'none' : 'flex', overflow: 'hidden' }}>
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
           {!active ? (
             <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: T.text3, fontSize: 13 }}>Select a conversation, or start a new one.</div>
           ) : (
             <>
-              <div style={{ height: 52, flexShrink: 0, borderBottom: `1px solid ${T.border}`, display: 'flex', alignItems: 'center', padding: '0 18px', gap: 8 }}>
+              <div style={{ height: 52, flexShrink: 0, borderBottom: `1px solid ${T.border}`, display: 'flex', alignItems: 'center', padding: isMobile ? '0 12px' : '0 18px', gap: 8 }}>
+                {isMobile && (
+                  <button onClick={() => setActiveId(null)} aria-label="Back to conversations"
+                    style={{ background: 'none', border: 'none', color: T.text2, fontSize: 22, lineHeight: 1, cursor: 'pointer', padding: '4px 6px 4px 0', marginLeft: -2 }}>‹</button>
+                )}
                 <span style={{ color: T.text3 }}>{convGlyph(active)}</span>
-                <span style={{ fontSize: 14, fontWeight: 600 }}>{convTitle(active)}</span>
+                <span style={{ fontSize: 14, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{convTitle(active)}</span>
                 {active.topic && <span style={{ fontSize: 12, color: T.text3, marginLeft: 8, borderLeft: `1px solid ${T.border}`, paddingLeft: 8 }}>{active.topic}</span>}
                 {active.type !== 'dm' && <span style={{ marginLeft: 'auto', fontSize: 11, color: T.text3 }}>{active.memberIds.length} member{active.memberIds.length === 1 ? '' : 's'}</span>}
               </div>
@@ -440,9 +446,11 @@ export default function ChatApp({ user, onUnreadChange }: { user: SSRUser; onUnr
           )}
         </div>
 
-        {/* Thread panel */}
+        {/* Thread panel — side panel on desktop, full-screen overlay on mobile */}
         {threadParent && active && (
-          <div style={{ width: 380, flexShrink: 0, borderLeft: `1px solid ${T.border}`, background: T.bg2, display: 'flex', flexDirection: 'column' }}>
+          <div style={isMobile
+            ? { position: 'fixed', inset: 0, zIndex: 950, background: T.bg2, display: 'flex', flexDirection: 'column' }
+            : { width: 380, flexShrink: 0, borderLeft: `1px solid ${T.border}`, background: T.bg2, display: 'flex', flexDirection: 'column' }}>
             <div style={{ height: 52, flexShrink: 0, borderBottom: `1px solid ${T.border}`, display: 'flex', alignItems: 'center', padding: '0 14px', justifyContent: 'space-between' }}>
               <span style={{ fontSize: 13, fontWeight: 600 }}>Thread</span>
               <button onClick={() => setThreadParent(null)} style={{ background: 'none', border: 'none', color: T.text2, fontSize: 18, cursor: 'pointer' }}>×</button>
@@ -507,6 +515,7 @@ function MessageList({ messages, loading, meId, nameById, onReact, onEdit, onDel
 }
 
 function MessageRow({ m, mine, meId, nameById, onReact, onEdit, onDelete, onOpenThread, compact }: { m: Message; mine: boolean; meId: string; nameById: Record<string, string>; compact?: boolean } & RowActions) {
+  const isMobile = useIsMobile()
   const [hover, setHover] = useState(false)
   const [picker, setPicker] = useState(false)
   const [editing, setEditing] = useState(false)
@@ -515,7 +524,9 @@ function MessageRow({ m, mine, meId, nameById, onReact, onEdit, onDelete, onOpen
   const deleted = !!m.deleted_at
 
   return (
-    <div onMouseEnter={() => setHover(true)} onMouseLeave={() => { setHover(false); setPicker(false) }}
+    <div
+      onMouseEnter={() => { if (!isMobile) setHover(true) }}
+      onMouseLeave={() => { if (!isMobile) { setHover(false); setPicker(false) } }}
       style={{ display: 'flex', flexDirection: 'column', alignItems: mine ? 'flex-end' : 'flex-start', position: 'relative' }}>
       <div style={{ fontSize: 10, color: T.text3, marginBottom: 3 }}>
         <span style={{ color: mine ? T.blue : T.teal, fontWeight: 600 }}>{mine ? 'You' : m.senderName}</span>
@@ -539,7 +550,9 @@ function MessageRow({ m, mine, meId, nameById, onReact, onEdit, onDelete, onOpen
           </div>
         )}
 
-        <div style={{ background: mine ? 'rgba(79,142,247,0.16)' : T.bg3, border: `1px solid ${mine ? 'rgba(79,142,247,0.3)' : T.border}`, borderRadius: 10, padding: '8px 12px', fontSize: 13, lineHeight: 1.5, color: T.text, wordBreak: 'break-word' }}>
+        <div
+          onClick={() => { if (isMobile && !editing && !deleted) setHover(h => !h) }}
+          style={{ background: mine ? 'rgba(79,142,247,0.16)' : T.bg3, border: `1px solid ${mine ? 'rgba(79,142,247,0.3)' : T.border}`, borderRadius: 10, padding: '8px 12px', fontSize: 13, lineHeight: 1.5, color: T.text, wordBreak: 'break-word', cursor: isMobile && !editing && !deleted ? 'pointer' : 'default' }}>
           {deleted ? <span style={{ color: T.text3, fontStyle: 'italic' }}>message deleted</span> : editing ? (
             <div>
               <textarea value={draft} onChange={e => setDraft(e.target.value)} rows={2} style={{ width: 260, background: T.bg2, border: `1px solid ${T.border2}`, borderRadius: 6, color: T.text, fontSize: 13, fontFamily: 'inherit', padding: 6 }} />
