@@ -156,22 +156,29 @@ async function main() {
   console.log(`Readback status=${detail.json?.status} number=${detail.json?.number} total=${detail.json?.total_amount} items=${(detail.json?.purchase_items || []).length}`)
 
   // ── 3. PROCESS (receive) endpoint discovery ───────────────────────────
-  const processAttempts: Array<[string, string, any]> = [
-    ['POST /process', `POST`, `/purchases/${createdId}/process`],
-    ['PUT /process', `PUT`, `/purchases/${createdId}/process`],
-    ['POST /receive', `POST`, `/purchases/${createdId}/receive`],
-    ['PUT status=processed', `PUT`, `/purchases/${createdId}`],
+  // Round 6: /process & /receive 404'd; PUT {status:'processed'} didn't flip
+  // it. Round 7 sweep — incl. the `processed` boolean and more action names.
+  const id = createdId
+  const processAttempts: Array<[string, string, string, any]> = [
+    ['PUT {processed:true}',        'PUT',  `/purchases/${id}`, { processed: true }],
+    ['POST /process_purchase',      'POST', `/purchases/${id}/process_purchase`, {}],
+    ['POST /mark_processed',        'POST', `/purchases/${id}/mark_processed`, {}],
+    ['POST /mark_as_processed',     'POST', `/purchases/${id}/mark_as_processed`, {}],
+    ['POST /complete',              'POST', `/purchases/${id}/complete`, {}],
+    ['POST /receive_all',           'POST', `/purchases/${id}/receive_all`, {}],
+    ['POST /receive_stock',         'POST', `/purchases/${id}/receive_stock`, {}],
+    ['POST /process.json',          'POST', `/purchases/${id}/process.json`, {}],
+    ['PUT  /process',               'PUT',  `/purchases/${id}/process`, { status: 'processed' }],
+    ['POST /purchase_receivals',    'POST', `/purchase_receivals`, { purchase_id: id }],
+    ['POST /stock_receivals',       'POST', `/stock_receivals`, { purchase_id: id }],
   ]
   let processed = false
-  for (const [label, method, path] of processAttempts) {
-    const body = path.endsWith(String(createdId)) ? { status: 'processed' } : {}
+  for (const [label, method, path, body] of processAttempts) {
     const r = await md(client, path, { method, body })
-    log(`PROCESS (${label})`, r)
-    if (r.status >= 200 && r.status < 300) {
-      const check = await md(client, `/purchases/${createdId}.json`)
-      console.log(`  → status now: ${check.json?.status} processed=${check.json?.processed}`)
-      if (check.json?.processed || check.json?.status === 'processed') { processed = true; break }
-    }
+    const check = await md(client, `/purchases/${id}.json`)
+    const ok2 = check.json?.processed === true || check.json?.status === 'processed'
+    log(`PROCESS (${label}) [now: ${check.json?.status}/proc=${check.json?.processed}]`, r, 300)
+    if (r.status >= 200 && r.status < 300 && ok2) { processed = true; console.log(`  ✓ PROCESSED via ${label}`); break }
   }
   const qtyAfterProcess = await stockQty(client)
   console.log(`processed=${processed} qtyAfterProcess=${qtyAfterProcess} (before=${qtyBefore})\n`)
