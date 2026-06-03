@@ -271,11 +271,11 @@ export default function PortalTopBar({
           )}
         </button>
 
-        {/* Current app title (icon-only on mobile to save room) */}
+        {/* Current app title — name shown on mobile too (truncated) for context */}
         {activeApp && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: T.text, fontSize: 14, fontWeight: 600, minWidth: 0 }}>
-            <span style={{ color: activeApp.accent, display: 'flex' }}><AppIcon name={activeApp.id} size={18}/></span>
-            {!isMobile && <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{activeApp.label}</span>}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: T.text, fontSize: 14, fontWeight: 600, minWidth: 0, flexShrink: 1 }}>
+            <span style={{ color: activeApp.accent, display: 'flex', flexShrink: 0 }}><AppIcon name={activeApp.id} size={18}/></span>
+            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: isMobile ? 140 : undefined }}>{activeApp.label}</span>
           </div>
         )}
 
@@ -284,10 +284,12 @@ export default function PortalTopBar({
         {/* Notification bell */}
         <NotificationBell apps={apps} summary={summary} refresh={refreshSummary}/>
 
-        {onRefresh && (
-          <button onClick={onRefresh} disabled={refreshing} style={{ ...btn, opacity: refreshing ? 0.6 : 1, ...(isMobile ? { padding: '7px 9px' } : {}) }}
+        {/* Refresh — full button on desktop; folded into the account menu on
+            mobile to keep the bar uncluttered. */}
+        {onRefresh && !isMobile && (
+          <button onClick={onRefresh} disabled={refreshing} style={{ ...btn, opacity: refreshing ? 0.6 : 1 }}
             title={lastRefresh ? `Updated ${lastRefresh.toLocaleTimeString('en-AU', { hour: '2-digit', minute: '2-digit' })}` : 'Refresh'}>
-            {isMobile ? '↻' : (refreshing ? 'Refreshing…' : '↻ Refresh')}
+            {refreshing ? 'Refreshing…' : '↻ Refresh'}
           </button>
         )}
 
@@ -315,6 +317,9 @@ export default function PortalTopBar({
                     <div style={{ fontSize: 12.5, color: T.text, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{currentUserName || currentUserEmail}</div>
                     {currentUserRole && <div style={{ fontSize: 10, color: T.text3, textTransform: 'capitalize', marginTop: 2 }}>{currentUserRole}</div>}
                   </div>
+                )}
+                {isMobile && onRefresh && (
+                  <button onClick={() => { setMenuOpen(false); onRefresh() }} style={menuItemStyle()}>↻ Refresh data</button>
                 )}
                 {apps.some(a => a.id === 'settings') && (
                   <button onClick={() => { setMenuOpen(false); router.push('/settings') }} style={menuItemStyle()}>⚙ Settings</button>

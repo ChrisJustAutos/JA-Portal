@@ -7,7 +7,7 @@
 
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { requireAuth, getSessionUser } from '../../../lib/auth'
-import { notifSvc } from '../../../lib/notifications'
+import { notifSvc, mutedModulesForUser } from '../../../lib/notifications'
 import { visibleNavSections } from '../../../lib/permissions'
 
 export const config = { maxDuration: 10 }
@@ -22,20 +22,22 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
     // match DEFAULT_NAV ids.
     const allowed = new Set(visibleNavSections(me.role, me.visibleTabs))
 
-    const [{ data: notifRows, error: nErr }, { data: msgRows }] = await Promise.all([
+    const [{ data: notifRows, error: nErr }, { data: msgRows }, muted] = await Promise.all([
       sb.from('notifications').select('module').eq('user_id', me.id).is('read_at', null).limit(2000),
       sb.rpc('messaging_unread_counts', { p_user_id: me.id }),
+      mutedModulesForUser(me.id),
     ])
     if (nErr) return res.status(500).json({ error: nErr.message })
 
+    const show = (m: string) => allowed.has(m) && !muted.has(m)
     const byModule: Record<string, number> = {}
     let total = 0
     for (const r of notifRows || []) {
-      if (!allowed.has(r.module)) continue
+      if (!show(r.module)) continue
       byModule[r.module] = (byModule[r.module] || 0) + 1
       total++
     }
-    const messages = allowed.has('messages')
+    const messages = show('messages')
       ? (msgRows || []).filter((r: any) => !r.muted).reduce((s: number, r: any) => s + Number(r.unread || 0), 0)
       : 0
 

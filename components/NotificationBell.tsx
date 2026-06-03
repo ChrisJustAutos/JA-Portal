@@ -13,6 +13,7 @@ import { useIsMobile } from '../lib/useIsMobile'
 import { timeAgo, NotificationRow, NotificationSummary } from '../lib/useNotifications'
 import { NOTIFICATION_SOUNDS, getSound, setSound, playSound, primeAudio } from '../lib/notificationSounds'
 import { enableNotifications, ensurePushSubscription } from '../lib/pushClient'
+import { usePreferences } from '../lib/preferences'
 
 // Inlined at build time — tells us whether server push is configured in THIS build.
 const VAPID_CONFIGURED = !!process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY
@@ -24,7 +25,7 @@ const T = {
   blue: '#4f8ef7', red: '#f04e4e',
 }
 
-interface AppLite { id: string; accent: string }
+interface AppLite { id: string; accent: string; label: string }
 
 export default function NotificationBell({ apps, summary, refresh }: {
   apps: AppLite[]
@@ -33,7 +34,16 @@ export default function NotificationBell({ apps, summary, refresh }: {
 }) {
   const router = useRouter()
   const isMobile = useIsMobile()
+  const { prefs, update } = usePreferences()
+  const muted = new Set(prefs.muted_notif_modules || [])
+  const [showSettings, setShowSettings] = useState(false)
   const [open, setOpen] = useState(false)
+
+  function toggleModule(id: string) {
+    const next = new Set(prefs.muted_notif_modules || [])
+    if (next.has(id)) next.delete(id); else next.add(id)
+    update({ muted_notif_modules: Array.from(next) }).then(() => refresh()).catch(() => {})
+  }
   const [notifs, setNotifs] = useState<NotificationRow[] | null>(null)
   const [sound, setSoundState] = useState('chime')
   const [perm, setPerm] = useState<NotificationPermission | 'unsupported'>('default')
@@ -261,6 +271,33 @@ export default function NotificationBell({ apps, summary, refresh }: {
             {perm === 'granted' && VAPID_CONFIGURED && (pushCount || 0) > 0 && (
               <div style={{ fontSize: 10.5, color: T.text3, padding: '4px 10px 2px' }}>
                 Background push: on · {pushCount} device{pushCount === 1 ? '' : 's'}
+              </div>
+            )}
+
+            {/* Per-module on/off */}
+            <button onClick={() => setShowSettings(s => !s)}
+              style={{ display: 'flex', alignItems: 'center', gap: 6, width: '100%', textAlign: 'left', background: 'none', border: 'none', borderTop: `1px solid ${T.border}`, color: T.text3, padding: '8px 10px 6px', marginTop: 2, fontSize: 11.5, fontFamily: 'inherit', cursor: 'pointer' }}>
+              ⚙ <span style={{ flex: 1 }}>Which notifications</span>
+              <span>{showSettings ? '▴' : '▾'}</span>
+            </button>
+            {showSettings && (
+              <div style={{ padding: '0 10px 6px' }}>
+                {apps.filter(a => a.id !== 'settings').map(a => {
+                  const on = !muted.has(a.id)
+                  return (
+                    <div key={a.id} onClick={() => toggleModule(a.id)}
+                      style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '6px 4px', cursor: 'pointer', borderRadius: 6 }}>
+                      <span style={{ width: 22, height: 22, borderRadius: 6, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: `${a.accent}1f`, color: a.accent }}>
+                        <AppIcon name={a.id} size={13}/>
+                      </span>
+                      <span style={{ flex: 1, fontSize: 12.5, color: on ? T.text : T.text3 }}>{a.label}</span>
+                      {/* mini toggle */}
+                      <span style={{ width: 34, height: 18, borderRadius: 10, background: on ? T.blue : T.bg4, position: 'relative', transition: 'background 0.15s', flexShrink: 0 }}>
+                        <span style={{ position: 'absolute', top: 2, left: on ? 18 : 2, width: 14, height: 14, borderRadius: '50%', background: '#fff', transition: 'left 0.15s' }}/>
+                      </span>
+                    </div>
+                  )
+                })}
               </div>
             )}
           </div>

@@ -65,15 +65,31 @@ export async function notify(opts: NotifyOpts): Promise<void> {
     if (error) { console.error('notify: insert failed:', error.message); return }
 
     // Web Push (best-effort) to the newly-notified users — fires even when the
-    // PWA is closed. No-ops if VAPID isn't configured.
+    // PWA is closed. No-ops if VAPID isn't configured. Skip users who muted
+    // this module (the row is still inserted but stays silent + hidden).
     const freshIds = Array.from(new Set((inserted || []).map((r: any) => r.user_id)))
     if (freshIds.length) {
-      const { sendPushToUsers } = await import('./push')
-      await sendPushToUsers(freshIds, { title: opts.title, body: opts.body || null, href: opts.href || null, tag: opts.dedupeKey })
+      const muteChecks = await Promise.all(freshIds.map(async id => ({ id, muted: (await mutedModulesForUser(id)).has(opts.module) })))
+      const pushIds = muteChecks.filter(x => !x.muted).map(x => x.id)
+      if (pushIds.length) {
+        const { sendPushToUsers } = await import('./push')
+        await sendPushToUsers(pushIds, { title: opts.title, body: opts.body || null, href: opts.href || null, tag: opts.dedupeKey })
+      }
     }
   } catch (e: any) {
     console.error('notify failed (non-fatal):', e?.message || e)
   }
+}
+
+// Returns the set of module ids a user has muted (from user_preferences).
+// Empty set on any error. Used to suppress bell entries / badges / push.
+export async function mutedModulesForUser(userId: string): Promise<Set<string>> {
+  try {
+    const { data } = await notifSvc().from('user_preferences')
+      .select('muted_notif_modules').eq('user_id', userId).maybeSingle()
+    const arr = (data as any)?.muted_notif_modules
+    return new Set(Array.isArray(arr) ? arr.map((m: any) => String(m)) : [])
+  } catch { return new Set() }
 }
 
 // Best-effort match of a free-text person name (task assignee, Monday board

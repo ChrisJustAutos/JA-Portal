@@ -33,6 +33,7 @@ const PATCHABLE_KEYS = new Set([
   'app_labels',
   'launcher_order',
   'order_status_groups',
+  'muted_notif_modules',
 ])
 
 const VALID_ORDER_STATUSES = new Set(['pending_payment','paid','picking','packed','shipped','delivered','cancelled','refunded'])
@@ -183,6 +184,13 @@ async function handler(req: NextApiRequest, res: NextApiResponse, user: any) {
       const result = sanitizeOrderStatusGroups(patch.order_status_groups)
       if (!result.ok) return res.status(400).json({ error: `order_status_groups: ${result.error}` })
       patch.order_status_groups = result.value
+    }
+
+    if ('muted_notif_modules' in patch) {
+      const arr = Array.isArray(patch.muted_notif_modules) ? patch.muted_notif_modules : []
+      patch.muted_notif_modules = Array.from(new Set(
+        arr.filter((m: any) => typeof m === 'string').map((m: string) => m.trim().slice(0, 64)).filter(Boolean),
+      )).slice(0, 100)
     }
 
     // Ensure row exists first (in case GET was never called)

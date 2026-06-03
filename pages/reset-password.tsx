@@ -104,7 +104,6 @@ export default function ResetPasswordPage() {
             <div style={{width:44,height:44,borderRadius:11,background:T.blue,display:'flex',alignItems:'center',justifyContent:'center',fontSize:17,fontWeight:700,color:'#fff'}}>JA</div>
             <div>
               <div style={{fontSize:18,fontWeight:600}}>Just Autos</div>
-              <div style={{fontSize:12,color:T.text3}}>Management Portal</div>
             </div>
           </div>
 

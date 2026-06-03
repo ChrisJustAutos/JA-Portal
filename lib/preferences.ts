@@ -50,6 +50,9 @@ export interface UserPreferences {
   launcher_order: string[]
   // Per-user combined status buckets on the B2B orders page.
   order_status_groups: Array<{ id: string; name: string; statuses: string[] }>
+  // Notification modules the user has switched OFF (DEFAULT_NAV ids). Muted
+  // modules are hidden from the bell/badges and don't push.
+  muted_notif_modules: string[]
 }
 
 export const DEFAULT_PREFERENCES: UserPreferences = {
@@ -67,6 +70,7 @@ export const DEFAULT_PREFERENCES: UserPreferences = {
   app_labels: {},
   launcher_order: [],
   order_status_groups: [],
+  muted_notif_modules: [],
 }
 
 // Hex values for each accent option (used both for swatches in the picker and

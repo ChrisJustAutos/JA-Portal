@@ -213,7 +213,6 @@ export default function LoginPage() {
             <div style={{width:42,height:42,borderRadius:10,background:T.blue,display:'flex',alignItems:'center',justifyContent:'center',fontSize:16,fontWeight:700,color:'#fff'}}>JA</div>
             <div>
               <div style={{fontSize:18,fontWeight:600}}>Just Autos</div>
-              <div style={{fontSize:12,color:T.text3}}>Management Portal</div>
             </div>
           </div>
 

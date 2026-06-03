@@ -230,7 +230,6 @@ export default function HomePage({ user }: Props) {
         <header style={{ height: 56, display: 'flex', alignItems: 'center', gap: 10, padding: '0 18px', borderBottom: `1px solid ${T.border}`, background: T.bg2 }}>
           <div style={{ width: 30, height: 30, borderRadius: 8, background: T.blue, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 13, fontWeight: 600, color: '#fff' }}>JA</div>
           <span style={{ fontSize: 14, fontWeight: 600 }}>Just Autos</span>
-          <span style={{ fontSize: 12, color: T.text3 }}>Management Portal</span>
           <span style={{ flex: 1 }}/>
           <NotificationBell apps={apps} summary={summary} refresh={refreshSummary}/>
           <span style={{ fontSize: 12.5, color: T.text2 }}>{user.displayName || user.email}</span>

@@ -387,7 +387,6 @@ export default function PortalSidebar({
             </div>
           )}
         </div>
-        <div style={{fontSize:11, color:T.text3, marginLeft:40}}>Management Portal</div>
       </div>
 
       <div style={{padding:'14px 10px 4px', flex:1}}>

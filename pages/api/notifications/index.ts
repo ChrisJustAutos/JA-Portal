@@ -5,7 +5,7 @@
 
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { requireAuth, getSessionUser } from '../../../lib/auth'
-import { notifSvc } from '../../../lib/notifications'
+import { notifSvc, mutedModulesForUser } from '../../../lib/notifications'
 import { visibleNavSections } from '../../../lib/permissions'
 
 export const config = { maxDuration: 10 }
@@ -16,15 +16,18 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
     const sb = notifSvc()
 
     if (req.method === 'GET') {
-      // Only list notifications for modules this user can access.
+      // Only list notifications for modules this user can access AND hasn't muted.
       const allowed = new Set(visibleNavSections(me.role, me.visibleTabs))
-      const { data, error } = await sb.from('notifications')
-        .select('id, module, title, body, href, created_at, read_at')
-        .eq('user_id', me.id)
-        .order('created_at', { ascending: false })
-        .limit(80)
+      const [{ data, error }, muted] = await Promise.all([
+        sb.from('notifications')
+          .select('id, module, title, body, href, created_at, read_at')
+          .eq('user_id', me.id)
+          .order('created_at', { ascending: false })
+          .limit(80),
+        mutedModulesForUser(me.id),
+      ])
       if (error) return res.status(500).json({ error: error.message })
-      const notifications = (data || []).filter(n => allowed.has(n.module)).slice(0, 50)
+      const notifications = (data || []).filter(n => allowed.has(n.module) && !muted.has(n.module)).slice(0, 50)
       return res.status(200).json({ notifications })
     }
 

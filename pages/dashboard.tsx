@@ -967,7 +967,7 @@ export default function Portal({ user }: { user: PortalUserSSR }) {
   return (
     <>
       <Head>
-        <title>Just Autos — Management Portal</title>
+        <title>Just Autos</title>
         <meta name="viewport" content="width=device-width,initial-scale=1"/>
         <meta name="robots" content="noindex,nofollow"/>
       </Head>
