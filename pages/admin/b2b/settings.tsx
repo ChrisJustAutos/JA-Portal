@@ -252,7 +252,7 @@ export default function B2BSettingsPage({ user }: Props) {
           currentUserName={user.displayName}
           currentUserEmail={user.email}
         />
-        <main style={{flex:1,padding:'28px 32px',maxWidth:1100}}>
+        <main className="b2b-admin-main" style={{flex:1,padding:'28px 32px',maxWidth:1100,width:'100%',boxSizing:'border-box'}}>
           <B2BAdminTabs active="settings"/>
 
           {/* Breadcrumb header — same pattern as catalogue.tsx */}
@@ -336,7 +336,7 @@ export default function B2BSettingsPage({ user }: Props) {
               <Section id="invoice-numbering" activeId={openSectionId} onClose={closeSection} title="MYOB Invoice Numbering"
                 description="Each B2B order writes a Sale.Invoice to MYOB JAWS. The invoice number is portal-controlled (prefix + zero-padded sequence). MYOB caps the field at 13 characters total.">
 
-                <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:14,marginBottom:14}}>
+                <div className="b2b-col2" style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:14,marginBottom:14}}>
                   <Field label="Prefix" hint="Letters/digits, no spaces. Max 8 chars.">
                     <input
                       type="text"
@@ -403,7 +403,7 @@ export default function B2BSettingsPage({ user }: Props) {
               <Section id="credit-numbering" activeId={openSectionId} onClose={closeSection} title="MYOB Credit Note Numbering"
                 description="Refund credit notes are written to MYOB JAWS as a separate stream from order invoices. Same 13-character MYOB cap applies.">
 
-                <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:14,marginBottom:14}}>
+                <div className="b2b-col2" style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:14,marginBottom:14}}>
                   <Field label="Prefix" hint="Letters/digits, no spaces. Max 8 chars.">
                     <input
                       type="text"
@@ -470,7 +470,7 @@ export default function B2BSettingsPage({ user }: Props) {
               <Section id="card-surcharge" activeId={openSectionId} onClose={closeSection} title="Card Surcharge"
                 description="Pass-through Stripe processing fee. Applied to each order during checkout to make the JAWS payout equal the goods subtotal (inc GST) after Stripe takes its cut.">
 
-                <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:14,marginBottom:14}}>
+                <div className="b2b-col2" style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:14,marginBottom:14}}>
                   <Field label="Percent" hint="Stripe AU domestic card rate (1.7% = 0.017)">
                     <input
                       type="number"
@@ -533,7 +533,7 @@ export default function B2BSettingsPage({ user }: Props) {
                 <div style={{height:24}}/>
 
                 <div style={{fontSize:13,color:T.text2,fontWeight:500,marginBottom:8}}>Sender (pickup) address</div>
-                <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}}>
+                <div className="b2b-col2" style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}}>
                   <Field label="Contact name">
                     <input type="text" value={msFromName} onChange={e => setMsFromName(e.target.value)} style={inputStyle()} placeholder="Workshop staff name"/>
                   </Field>

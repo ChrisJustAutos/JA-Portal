@@ -115,10 +115,10 @@ export default function B2BHubPage({ user }: Props) {
           currentUserName={user.displayName}
           currentUserEmail={user.email}
         />
-        <main style={{flex:1,padding:'28px 32px',maxWidth:1200}}>
+        <main className="b2b-admin-main" style={{flex:1,padding:'28px 32px',maxWidth:1200,width:'100%',boxSizing:'border-box'}}>
           <B2BAdminTabs active="dashboard"/>
 
-          <header style={{marginBottom:24,display:'flex',alignItems:'flex-start',justifyContent:'space-between',gap:16}}>
+          <header style={{marginBottom:24,display:'flex',alignItems:'flex-start',justifyContent:'space-between',gap:16,flexWrap:'wrap'}}>
             <div>
               <div style={{fontSize:12,color:T.text3,textTransform:'uppercase',letterSpacing:'0.08em',marginBottom:4}}>
                 <span style={{color:T.text2}}>B2B Portal</span>
@@ -177,13 +177,13 @@ export default function B2BHubPage({ user }: Props) {
             ) : (
               orders.orders.map((o, i) => (
                 <a key={o.id} href={`/admin/b2b/orders/${o.id}`}
-                  style={{display:'flex',alignItems:'center',gap:12,padding:'12px 18px',borderTop:i>0?`1px solid ${T.border}`:'none',textDecoration:'none',color:T.text}}>
-                  <span style={{fontFamily:'monospace',fontSize:13,minWidth:120}}>{o.order_number}</span>
-                  <span style={{flex:1,fontSize:13,color:T.text2,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{o.distributor?.display_name || '—'}</span>
-                  {o.myob_write_error && <span title={o.myob_write_error} style={{fontSize:11,color:T.red}}>⚠ MYOB</span>}
+                  style={{display:'flex',alignItems:'center',gap:10,padding:'12px 16px',borderTop:i>0?`1px solid ${T.border}`:'none',textDecoration:'none',color:T.text}}>
+                  <span style={{fontFamily:'monospace',fontSize:12.5,minWidth:0,flexShrink:0}}>{o.order_number}</span>
+                  <span style={{flex:1,minWidth:40,fontSize:13,color:T.text2,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{o.distributor?.display_name || '—'}</span>
+                  {o.myob_write_error && <span title={o.myob_write_error} style={{fontSize:11,color:T.red,flexShrink:0}}>⚠</span>}
                   <StatusChip status={o.status}/>
-                  <span style={{fontFamily:'monospace',fontSize:13,minWidth:84,textAlign:'right'}}>${money(Number(o.total_inc))}</span>
-                  <span style={{fontSize:11,color:T.text3,minWidth:74,textAlign:'right'}}>{formatRel(o.created_at)}</span>
+                  <span style={{fontFamily:'monospace',fontSize:12.5,textAlign:'right',flexShrink:0}}>${money(Number(o.total_inc))}</span>
+                  <span style={{fontSize:11,color:T.text3,textAlign:'right',flexShrink:0,whiteSpace:'nowrap'}}>{formatRel(o.created_at)}</span>
                 </a>
               ))
             )}

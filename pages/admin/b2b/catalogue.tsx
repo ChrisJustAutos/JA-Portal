@@ -416,7 +416,7 @@ export default function CatalogueAdminPage({ user }: Props) {
           currentUserName={user.displayName}
           currentUserEmail={user.email}
         />
-        <main style={{flex:1,padding:'28px 32px',maxWidth:1400}}>
+        <main className="b2b-admin-main" style={{flex:1,padding:'28px 32px',maxWidth:1400,width:'100%',boxSizing:'border-box'}}>
           <B2BAdminTabs active="catalogue"/>
 
           {/* Header */}
@@ -1200,7 +1200,7 @@ function EditDrawer({
                 }
               >
                 {/* Stored as mm/g; shown + edited in cm/kg. */}
-                <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:8}}>
+                <div className="b2b-col2" style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:8}}>
                   <FieldNumber
                     label="Length (cm)"
                     value={item.freight_length_mm == null ? null : item.freight_length_mm / 10}

@@ -151,7 +151,7 @@ export default function DistributorDetailPage({ user }: Props) {
           currentUserName={user.displayName}
           currentUserEmail={user.email}
         />
-        <main style={{flex:1,padding:'28px 32px',maxWidth:1100}}>
+        <main className="b2b-admin-main" style={{flex:1,padding:'28px 32px',maxWidth:1100,width:'100%',boxSizing:'border-box'}}>
           <B2BAdminTabs active="distributors"/>
 
           {/* Header */}
@@ -964,7 +964,7 @@ function Section({ title, subtitle, flash, children }: { title: string; subtitle
 }
 
 function FormGrid({ children }: { children: React.ReactNode }) {
-  return <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12,marginBottom:0}}>{children}</div>
+  return <div className="b2b-col2" style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12,marginBottom:0}}>{children}</div>
 }
 
 function FormRow({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {

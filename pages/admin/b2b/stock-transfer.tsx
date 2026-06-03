@@ -277,7 +277,7 @@ export default function StockTransferPage({ user }: Props) {
           currentUserName={user.displayName}
           currentUserEmail={user.email}
         />
-        <main style={{flex:1,padding:'28px 32px',maxWidth:1200,width:'100%',boxSizing:'border-box'}}>
+        <main className="b2b-admin-main" style={{flex:1,padding:'28px 32px',maxWidth:1200,width:'100%',boxSizing:'border-box'}}>
           <B2BAdminTabs active="stock-transfer"/>
 
           <div style={{display:'flex',alignItems:'center',gap:14,marginBottom:4,flexWrap:'wrap'}}>
