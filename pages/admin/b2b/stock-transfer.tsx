@@ -87,7 +87,9 @@ export default function StockTransferPage({ user }: Props) {
   const [itemsError, setItemsError] = useState<string | null>(null)
   const [history, setHistory] = useState<TransferRow[] | null>(null)
   const [filter, setFilter] = useState('')
-  const [selected, setSelected] = useState<Record<string, number>>({})  // catalogue_id → qty
+  // catalogue_id → qty as a string ('' = selected but no qty entered yet).
+  // Presence of the key means selected; the value is what the user types.
+  const [selected, setSelected] = useState<Record<string, string>>({})
   const [note, setNote] = useState('')
   const [poRef, setPoRef] = useState('')
   const [confirming, setConfirming] = useState(false)
@@ -127,11 +129,15 @@ export default function StockTransferPage({ user }: Props) {
     return (items || []).filter(i => i.sku.toLowerCase().includes(q) || i.name.toLowerCase().includes(q))
   }, [items, filter])
 
-  const picked = useMemo(() => (items || []).filter(i => selected[i.catalogue_id] != null), [items, selected])
+  const qtyOf = (id: string) => Number(selected[id]) || 0
+  const picked = useMemo(() => (items || []).filter(i => i.catalogue_id in selected), [items, selected])
+  // Every picked line needs a quantity > 0 before the transfer can run.
+  const allHaveQty = picked.length > 0 && picked.every(i => qtyOf(i.catalogue_id) > 0)
+  const totalUnits = picked.reduce((s, i) => s + qtyOf(i.catalogue_id), 0)
   const totals = useMemo(() => {
     let ex = 0, gst = 0
     for (const i of picked) {
-      const lineEx = (selected[i.catalogue_id] || 0) * i.avg_cost
+      const lineEx = qtyOf(i.catalogue_id) * i.avg_cost
       ex += lineEx
       if (i.is_taxable) gst += lineEx * 0.10
     }
@@ -141,23 +147,24 @@ export default function StockTransferPage({ user }: Props) {
   function toggle(i: Item) {
     setSelected(s => {
       const next = { ...s }
-      if (next[i.catalogue_id] != null) delete next[i.catalogue_id]
-      // Forward defaults to the full on-hand; reverse has no MD-side count
-      // to default from, so start at 1.
-      else next[i.catalogue_id] = forward ? i.on_hand : 1
+      // Toggling on leaves the qty BLANK for the user to type a value.
+      if (i.catalogue_id in next) delete next[i.catalogue_id]
+      else next[i.catalogue_id] = ''
       return next
     })
   }
   function setQty(i: Item, raw: string) {
-    const v = Math.max(0, forward ? Math.min(i.on_hand, Number(raw) || 0) : (Number(raw) || 0))
-    setSelected(s => ({ ...s, [i.catalogue_id]: v }))
+    // Keep only digits; cap at on-hand for forward. Empty stays empty.
+    let clean = raw.replace(/[^0-9]/g, '')
+    if (clean !== '' && forward) clean = String(Math.min(i.on_hand, Number(clean)))
+    setSelected(s => ({ ...s, [i.catalogue_id]: clean }))
   }
 
   async function execute() {
     setRunning(true); setResult(null)
     try {
       const lines = picked
-        .map(i => ({ catalogue_id: i.catalogue_id, qty: selected[i.catalogue_id] }))
+        .map(i => ({ catalogue_id: i.catalogue_id, qty: qtyOf(i.catalogue_id) }))
         .filter(l => l.qty > 0)
       const r = await fetch('/api/b2b/admin/stock-transfer', {
         method: 'POST', credentials: 'same-origin',
@@ -232,7 +239,7 @@ export default function StockTransferPage({ user }: Props) {
   }
   // Forward is MD-first — MD assigns the PO number, so no PO ref needed.
   // Reverse still requires a PO reference.
-  const blocked = !configured || picked.length === 0 || running || (!forward && !poRef.trim())
+  const blocked = !configured || picked.length === 0 || running || !allHaveQty || (!forward && !poRef.trim())
 
   return (
     <>
@@ -368,20 +375,23 @@ export default function StockTransferPage({ user }: Props) {
                     </thead>
                     <tbody>
                       {picked.map(i => {
-                        const qty = selected[i.catalogue_id] ?? 0
+                        const qtyStr = selected[i.catalogue_id] ?? ''
+                        const qtyN = Number(qtyStr) || 0
+                        const empty = qtyStr === ''
                         return (
                           <tr key={i.catalogue_id} style={{borderTop:`1px solid ${T.border}`}}>
                             <td style={{padding:'7px 8px',fontFamily:'monospace',fontSize:12}}>{i.sku}</td>
                             <td style={{padding:'7px 8px',color:T.text2}}>{i.name}</td>
                             <td style={{padding:'7px 8px',textAlign:'right'}}>
                               <input
-                                type="number" min={0} max={forward ? i.on_hand : undefined} value={qty}
+                                type="number" min={0} max={forward ? i.on_hand : undefined} value={qtyStr}
                                 onChange={e=>setQty(i, e.target.value)}
-                                style={{...inp,width:72,padding:'4px 8px',textAlign:'right',fontFamily:'monospace'}}
+                                placeholder="qty"
+                                style={{...inp,width:72,padding:'4px 8px',textAlign:'right',fontFamily:'monospace',borderColor: empty ? T.amber+'88' : T.border2}}
                               />
-                              {forward && <div style={{fontSize:10,color:T.text3,marginTop:2}}>/ {i.on_hand}</div>}
+                              {forward && <div style={{fontSize:10,color:T.text3,marginTop:2}}>of {i.on_hand}</div>}
                             </td>
-                            <td style={{padding:'7px 8px',textAlign:'right',fontFamily:'monospace',color:T.text}}>{fmt$(qty * i.avg_cost)}</td>
+                            <td style={{padding:'7px 8px',textAlign:'right',fontFamily:'monospace',color:empty?T.text3:T.text}}>{empty ? '—' : fmt$(qtyN * i.avg_cost)}</td>
                             <td style={{padding:'7px 8px',textAlign:'center'}}>
                               <button onClick={()=>toggle(i)} title="Remove"
                                 style={{background:'none',border:'none',color:T.text3,fontSize:15,cursor:'pointer',lineHeight:1,padding:'0 3px'}}
@@ -412,7 +422,7 @@ export default function StockTransferPage({ user }: Props) {
               <div style={{fontSize:13,color:T.text2}}>
                 {picked.length === 0
                   ? 'Select items to transfer'
-                  : <>Transferring <b style={{color:T.text}}>{picked.length}</b> item{picked.length===1?'':'s'} — <b style={{color:T.text}}>{fmt$(totals.inc)}</b> inc GST</>}
+                  : <>Transferring <b style={{color:T.text}}>{picked.length}</b> item{picked.length===1?'':'s'} · <b style={{color:T.text}}>{totalUnits}</b> unit{totalUnits===1?'':'s'} — <b style={{color:T.text}}>{fmt$(totals.inc)}</b> inc GST{!allHaveQty && <span style={{color:T.amber}}> · enter a qty for each item</span>}</>}
               </div>
               <span style={{flex:1}}/>
               {forward ? (
@@ -429,7 +439,7 @@ export default function StockTransferPage({ user }: Props) {
               <button
                 disabled={blocked}
                 onClick={()=>setConfirming(true)}
-                title={!configured ? 'Complete the MYOB setup above first' : (!forward && !poRef.trim()) ? 'Enter a PO reference first' : picked.length===0 ? 'Pick at least one item' : undefined}
+                title={!configured ? 'Complete the MYOB setup above first' : picked.length===0 ? 'Pick at least one item' : !allHaveQty ? 'Enter a quantity for every picked item' : (!forward && !poRef.trim()) ? 'Enter a PO reference first' : undefined}
                 style={{
                   ...inp, cursor: blocked?'not-allowed':'pointer',
                   background: blocked && !running ? T.bg3 : T.blue, border:'none',
@@ -529,12 +539,43 @@ export default function StockTransferPage({ user }: Props) {
         <div onClick={()=>!running && setConfirming(false)}
           style={{position:'fixed',inset:0,zIndex:950,background:'rgba(8,10,13,0.8)',backdropFilter:'blur(4px)',display:'flex',alignItems:'center',justifyContent:'center',padding:24}}>
           <div onClick={e=>e.stopPropagation()}
-            style={{width:'100%',maxWidth:480,background:T.bg2,border:`1px solid ${T.border2}`,borderRadius:14,padding:22,fontFamily:'inherit',color:T.text}}>
-            <h3 style={{margin:'0 0 10px',fontSize:16,fontWeight:600}}>Confirm stock transfer — {forward ? 'JAWS → VPS' : 'VPS → JAWS'}</h3>
+            style={{width:'100%',maxWidth:560,background:T.bg2,border:`1px solid ${T.border2}`,borderRadius:14,padding:22,fontFamily:'inherit',color:T.text}}>
+            <h3 style={{margin:'0 0 12px',fontSize:16,fontWeight:600}}>Confirm stock transfer — {forward ? 'JAWS → VPS' : 'VPS → JAWS'}</h3>
+
+            {/* Summary of stock being transferred */}
+            <div style={{maxHeight:240,overflowY:'auto',border:`1px solid ${T.border}`,borderRadius:8,marginBottom:12}}>
+              <table style={{width:'100%',borderCollapse:'collapse',fontSize:12.5}}>
+                <thead style={{position:'sticky',top:0,background:T.bg2}}>
+                  <tr style={{color:T.text3,fontSize:11,textTransform:'uppercase',letterSpacing:'0.06em'}}>
+                    <th style={{textAlign:'left',padding:'6px 8px'}}>SKU</th>
+                    <th style={{textAlign:'left',padding:'6px 8px'}}>Item</th>
+                    <th style={{textAlign:'right',padding:'6px 8px'}}>Qty</th>
+                    <th style={{textAlign:'right',padding:'6px 8px'}}>Line total</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {picked.map(i => (
+                    <tr key={i.catalogue_id} style={{borderTop:`1px solid ${T.border}`}}>
+                      <td style={{padding:'6px 8px',fontFamily:'monospace',fontSize:11.5}}>{i.sku}</td>
+                      <td style={{padding:'6px 8px',color:T.text2,maxWidth:220,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{i.name}</td>
+                      <td style={{padding:'6px 8px',textAlign:'right',fontFamily:'monospace'}}>{qtyOf(i.catalogue_id)}</td>
+                      <td style={{padding:'6px 8px',textAlign:'right',fontFamily:'monospace'}}>{fmt$(qtyOf(i.catalogue_id) * i.avg_cost)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+                <tfoot>
+                  <tr style={{borderTop:`1px solid ${T.border2}`,fontWeight:600}}>
+                    <td style={{padding:'6px 8px'}} colSpan={2}>{picked.length} item{picked.length===1?'':'s'} · {totalUnits} unit{totalUnits===1?'':'s'}</td>
+                    <td style={{padding:'6px 8px',textAlign:'right',fontFamily:'monospace'}}>{totalUnits}</td>
+                    <td style={{padding:'6px 8px',textAlign:'right',fontFamily:'monospace'}}>{fmt$(totals.ex)}</td>
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
+
             <div style={{fontSize:13,color:T.text2,lineHeight:1.6,marginBottom:16}}>
-              <b style={{color:T.text}}>{picked.length} item{picked.length===1?'':'s'}</b> at cost
-              {forward ? <> (PO number assigned by MechanicDesk)</> : <> under PO <b style={{color:T.text,fontFamily:'monospace'}}>{poRef.trim()}</b></>}:<br/>
-              {fmt$(totals.ex)} ex GST + {fmt$(totals.gst)} GST = <b style={{color:T.text}}>{fmt$(totals.inc)}</b><br/><br/>
+              At cost{forward ? <> · PO number assigned by MechanicDesk</> : <> · PO <b style={{color:T.text,fontFamily:'monospace'}}>{poRef.trim()}</b></>}:
+              {' '}{fmt$(totals.ex)} ex GST + {fmt$(totals.gst)} GST = <b style={{color:T.text}}>{fmt$(totals.inc)}</b><br/><br/>
               {forward ? (
                 <>MechanicDesk raises the PO (and receives the stock), then the <b style={{color:T.text}}>JAWS Sale Invoice</b>
                 {' '}and <b style={{color:T.text}}>VPS Purchase Bill</b> post in MYOB referencing that PO number — all within ~1 minute.</>
