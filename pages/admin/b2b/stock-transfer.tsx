@@ -97,6 +97,7 @@ export default function StockTransferPage({ user }: Props) {
   const [result, setResult] = useState<{ kind: 'ok' | 'partial' | 'error'; text: string } | null>(null)
   const [retrying, setRetrying] = useState<string | null>(null)
   const [mdFiring, setMdFiring] = useState<string | null>(null)
+  const [deleting, setDeleting] = useState<string | null>(null)
 
   function loadConfig() {
     fetch('/api/b2b/admin/stock-transfer', { credentials: 'same-origin' })
@@ -197,6 +198,25 @@ export default function StockTransferPage({ user }: Props) {
       setResult({ kind: 'error', text: e?.message || String(e) })
     } finally {
       setRunning(false); setConfirming(false)
+    }
+  }
+
+  async function removeTransfer(id: string) {
+    if (!confirm('Remove this transfer from the portal history?\n\nThis only clears the portal record — any MYOB invoice/bill or MechanicDesk PO already posted stays put.')) return
+    setDeleting(id)
+    try {
+      const r = await fetch('/api/b2b/admin/stock-transfer', {
+        method: 'POST', credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'delete', transferId: id }),
+      })
+      const j = await r.json().catch(() => null)
+      if (!r.ok) throw new Error(j?.error || `HTTP ${r.status}`)
+      setHistory(h => (h || []).filter(t => t.id !== id))
+    } catch (e: any) {
+      setResult({ kind: 'error', text: `Delete failed: ${e?.message || String(e)}` })
+    } finally {
+      setDeleting(null)
     }
   }
 
@@ -521,12 +541,21 @@ export default function StockTransferPage({ user }: Props) {
                             {t.error && <div style={{fontSize:11,color:T.red,marginTop:3,maxWidth:300}}>{t.error}</div>}
                           </td>
                           <td style={{padding:'7px 8px'}}>
-                            {t.status === 'partial' && (
-                              <button onClick={()=>retry(t.id)} disabled={retrying===t.id}
-                                style={{...inp,cursor:'pointer',padding:'4px 10px',fontSize:12,color:T.amber}}>
-                                {retrying===t.id ? 'Retrying…' : 'Retry bill'}
+                            <div style={{display:'flex',alignItems:'center',gap:8}}>
+                              {t.status === 'partial' && (
+                                <button onClick={()=>retry(t.id)} disabled={retrying===t.id}
+                                  style={{...inp,cursor:'pointer',padding:'4px 10px',fontSize:12,color:T.amber}}>
+                                  {retrying===t.id ? 'Retrying…' : 'Retry bill'}
+                                </button>
+                              )}
+                              <button onClick={()=>removeTransfer(t.id)} disabled={deleting===t.id}
+                                title="Remove from history"
+                                style={{background:'none',border:'none',color:T.text3,fontSize:15,cursor:'pointer',lineHeight:1,padding:'0 3px'}}
+                                onMouseEnter={e=>{e.currentTarget.style.color=T.red}}
+                                onMouseLeave={e=>{e.currentTarget.style.color=T.text3}}>
+                                {deleting===t.id ? '…' : '×'}
                               </button>
-                            )}
+                            </div>
                           </td>
                         </tr>
                       )

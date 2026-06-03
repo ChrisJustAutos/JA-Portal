@@ -257,7 +257,17 @@ export default withAuth('edit:b2b_distributors', async (req: NextApiRequest, res
         return res.status(200).json({ ok: true, message: 'MD purchase-order worker triggered — updates in ~1 minute.' })
       }
 
-      return res.status(400).json({ error: 'action must be save-settings, execute or retry' })
+      // Delete a transfer's portal record (lines cascade). Does NOT touch any
+      // MYOB docs or MechanicDesk PO already posted — just clears the row.
+      if (action === 'delete') {
+        const transferId = String(body.transferId || '').trim()
+        if (!transferId) return res.status(400).json({ error: 'transferId required' })
+        const { error } = await c.from('b2b_stock_transfers').delete().eq('id', transferId)
+        if (error) return res.status(500).json({ error: error.message })
+        return res.status(200).json({ ok: true })
+      }
+
+      return res.status(400).json({ error: 'action must be save-settings, execute, retry, dispatch-md-po or delete' })
     }
 
     res.setHeader('Allow', 'GET, POST')
