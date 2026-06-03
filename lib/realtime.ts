@@ -82,6 +82,25 @@ export function subscribeToAllMessages(onInsert: (row: any) => void): () => void
   return () => { if (ch) sb.removeChannel(ch) }
 }
 
+// Workspace presence — who's online right now. One shared channel; each client
+// tracks itself under its user id. onChange receives the set of online user ids.
+// No DB writes — presence state lives in the Realtime socket. (No "last seen"
+// persistence yet; offline users simply drop out of the set.)
+export interface PresenceChannel { leave: () => void }
+export function joinPresence(me: { id: string; name: string }, onChange: (onlineIds: string[]) => void): PresenceChannel {
+  const sb = getSupabase()
+  let ch: RealtimeChannel | null = null
+  ensureRealtimeAuth().then(() => {
+    ch = sb.channel('presence:workspace', { config: { presence: { key: me.id } } })
+    ch.on('presence', { event: 'sync' }, () => {
+      try { onChange(Object.keys(ch!.presenceState())) } catch {}
+    }).subscribe(async (status) => {
+      if (status === 'SUBSCRIBED') { try { await ch!.track({ id: me.id, name: me.name, at: Date.now() }) } catch {} }
+    })
+  })
+  return { leave: () => { if (ch) sb.removeChannel(ch) } }
+}
+
 // Lightweight typing indicator over a Realtime broadcast channel (no DB writes).
 export interface TypingChannel {
   setTyping: (isTyping: boolean) => void

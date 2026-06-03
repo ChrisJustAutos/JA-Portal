@@ -21,12 +21,13 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
       const orParts = ['and(type.eq.channel,is_private.eq.false)']
       if (INBOX_ROLES.includes(me.role)) orParts.push('type.eq.customer')
       const [{ data: myParts }, { data: visibleExtra }] = await Promise.all([
-        sb.from('conversation_participants').select('conversation_id, muted').eq('user_id', me.id),
+        sb.from('conversation_participants').select('conversation_id, muted, last_read_at').eq('user_id', me.id),
         sb.from('conversations').select('id').or(orParts.join(',')).is('archived_at', null),
       ])
       const myConvIds = new Set((myParts || []).map(p => p.conversation_id))
       const mutedByConv: Record<string, boolean> = {}
-      for (const p of myParts || []) mutedByConv[p.conversation_id] = p.muted
+      const myReadByConv: Record<string, string | null> = {}
+      for (const p of myParts || []) { mutedByConv[p.conversation_id] = p.muted; myReadByConv[p.conversation_id] = p.last_read_at }
       const allIds = Array.from(new Set(Array.from(myConvIds).concat((visibleExtra || []).map(c => c.id))))
       if (allIds.length === 0) return res.status(200).json({ conversations: [] })
 
@@ -37,11 +38,17 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
           .select('id, type, name, topic, is_private, source, customer_id, assigned_user_id, status, last_message_at, created_by')
           .in('id', allIds).is('archived_at', null).order('last_message_at', { ascending: false, nullsFirst: false }),
         sb.from('conversation_participants')
-          .select('conversation_id, user_id').in('conversation_id', allIds),
+          .select('conversation_id, user_id, last_read_at').in('conversation_id', allIds),
         sb.rpc('messaging_unread_counts', { p_user_id: me.id }),
       ])
       const partsByConv: Record<string, string[]> = {}
-      for (const p of parts || []) (partsByConv[p.conversation_id] ||= []).push(p.user_id)
+      // readState: per conversation, each OTHER participant's last_read_at — used
+      // to render 'Seen' / read receipts on the client (my own messages).
+      const readByConv: Record<string, Record<string, string | null>> = {}
+      for (const p of parts || []) {
+        (partsByConv[p.conversation_id] ||= []).push(p.user_id)
+        if (p.user_id !== me.id) (readByConv[p.conversation_id] ||= {})[p.user_id] = p.last_read_at
+      }
       const dir = await userDirectory((parts || []).map(p => p.user_id))
 
       const unreadByConv: Record<string, number> = {}
@@ -61,6 +68,8 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
           isMember: myConvIds.has(c.id),
           muted: !!mutedByConv[c.id],
           unread: unreadByConv[c.id] || 0,
+          myLastReadAt: myReadByConv[c.id] || null,
+          readState: readByConv[c.id] || {},
           memberIds: members,
           memberNames: members.map(uid => dir[uid]?.name).filter(Boolean),
         }

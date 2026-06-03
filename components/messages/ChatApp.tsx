@@ -2,15 +2,21 @@
 // Realtime chat experience. Phase 1: channels/DMs, live thread, composer with
 // @mentions + attachments, typing, unread. Phase 2 (Slack parity): emoji
 // reactions, edit/delete, threaded replies, message search, markdown rendering,
-// and desktop notifications. Reads live via Supabase Realtime (lib/realtime.ts);
-// writes via /api/conversations + /api/messages.
+// desktop notifications. Phase 2.5 (fluency): optimistic send w/ sending/failed
+// ticks + smart scroll (no yank-to-bottom, "new messages" pill, load-older on
+// scroll-up), presence (online dots / "Active now"), read receipts ("Seen"),
+// avatars + message grouping + date separators + a "new messages" divider, and
+// composer polish (draft persistence, emoji picker, paste/drag-drop, ↑-to-edit).
+// Reads live via Supabase Realtime (lib/realtime.ts); writes via /api routes.
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { getSupabase } from '../../lib/supabaseClient'
-import { subscribeToConversation, subscribeToConversationList, subscribeToAllMessages, joinTyping, type TypingChannel } from '../../lib/realtime'
+import { subscribeToConversation, subscribeToConversationList, subscribeToAllMessages, joinTyping, joinPresence, type TypingChannel } from '../../lib/realtime'
 import type { UserRole } from '../../lib/permissions'
 import { playSound } from '../../lib/notificationSounds'
 import { useIsMobile } from '../../lib/useIsMobile'
+
+const useIsoEffect = typeof window !== 'undefined' ? useLayoutEffect : useEffect
 
 const T = {
   bg: '#0d0f12', bg2: '#131519', bg3: '#1a1d23', bg4: '#21252d',
@@ -19,19 +25,22 @@ const T = {
   blue: '#4f8ef7', teal: '#2dd4bf', green: '#34c77b', amber: '#f5a623', red: '#f04e4e', purple: '#a78bfa', accent: '#4f8ef7',
 }
 const QUICK_EMOJI = ['👍', '❤️', '😂', '🎉', '✅', '👀', '🙏', '🔥']
+const AVATAR_COLORS = ['#4f8ef7', '#2dd4bf', '#34c77b', '#f5a623', '#a78bfa', '#f04e4e', '#e879a6', '#38bdf8', '#fb923c', '#a3e635']
 
 interface SSRUser { id: string; email: string; displayName: string | null; role: UserRole }
 interface Conversation {
   id: string; type: 'channel' | 'dm' | 'group' | 'customer'; name: string | null; displayName: string | null
   topic: string | null; is_private: boolean; source: string | null; status: string
   last_message_at: string | null; isMember: boolean; muted: boolean; unread: number; memberIds: string[]; memberNames: string[]
+  myLastReadAt: string | null; readState: Record<string, string | null>
 }
 interface Reaction { emoji: string; count: number; mine: boolean }
+interface Attachment { id?: string; storage_path: string; filename: string | null; content_type: string | null; size_bytes: number | null; localUrl?: string }
 interface Message {
   id: string; conversation_id: string; sender_user_id: string | null; senderName: string; body: string
   message_type: string; created_at: string; edited_at?: string | null; deleted_at?: string | null
-  attachments: { id?: string; storage_path: string; filename: string | null; content_type: string | null; size_bytes: number | null }[]
-  mentions: string[]; reactions: Reaction[]; replyCount: number
+  attachments: Attachment[]; mentions: string[]; reactions: Reaction[]; replyCount: number
+  clientId?: string; status?: 'sending' | 'failed'   // optimistic state; absent = confirmed
 }
 interface DirUser { id: string; name: string; email: string; role: string }
 
@@ -39,18 +48,23 @@ const ATTACH_BUCKET = 'chat-attachments'
 
 export default function ChatApp({ user, onUnreadChange }: { user: SSRUser; onUnreadChange?: (n: number) => void }) {
   const isMobile = useIsMobile()
+  const meName = user.displayName || user.email
   const [conversations, setConversations] = useState<Conversation[]>([])
   const [activeId, setActiveId] = useState<string | null>(null)
   const [messages, setMessages] = useState<Message[]>([])
   const [dir, setDir] = useState<DirUser[]>([])
   const [loadingConvs, setLoadingConvs] = useState(true)
   const [loadingMsgs, setLoadingMsgs] = useState(false)
+  const [loadingOlder, setLoadingOlder] = useState(false)
+  const [hasMore, setHasMore] = useState(false)
   const [modal, setModal] = useState<null | 'channel' | 'dm'>(null)
   const [typers, setTypers] = useState<{ id: string; name: string }[]>([])
   const [threadParent, setThreadParent] = useState<Message | null>(null)
   const [threadMessages, setThreadMessages] = useState<Message[]>([])
   const [search, setSearch] = useState('')
   const [searchResults, setSearchResults] = useState<any[] | null>(null)
+  const [online, setOnline] = useState<Set<string>>(new Set())
+  const [dividerTs, setDividerTs] = useState<string | null>(null)
 
   const activeIdRef = useRef<string | null>(null); activeIdRef.current = activeId
   const dirRef = useRef<DirUser[]>([]); dirRef.current = dir
@@ -61,6 +75,9 @@ export default function ChatApp({ user, onUnreadChange }: { user: SSRUser; onUnr
   const seenMsgIds = useRef<Set<string>>(new Set())
   // Per-conversation message cache — switching back to a channel is instant.
   const msgCache = useRef<Record<string, Message[]>>({})
+  // hasMore per conversation (for load-older); pending sends keyed by clientId.
+  const hasMoreRef = useRef<Record<string, boolean>>({})
+  const pending = useRef<Record<string, { body: string; mentionIds: string[]; files: File[]; parentMessageId?: string }>>({})
   const active = useMemo(() => conversations.find(c => c.id === activeId) || null, [conversations, activeId])
 
   // Deep-link: a notification (or push) opens /messages?c=<id> — select that
@@ -96,19 +113,58 @@ export default function ChatApp({ user, onUnreadChange }: { user: SSRUser; onUnr
   const loadMessages = useCallback(async (conversationId: string, opts: { quiet?: boolean } = {}) => {
     if (!opts.quiet) setLoadingMsgs(true)
     const r = await fetch(`/api/messages?conversationId=${conversationId}`)
-    if (r.ok) { const d = await r.json(); setConvMessages(conversationId, () => d.messages || []) }
+    if (r.ok) {
+      const d = await r.json()
+      // Preserve any optimistic (sending/failed) messages not yet persisted.
+      setConvMessages(conversationId, prev => {
+        const pendingMsgs = prev.filter(m => m.status)
+        const server: Message[] = d.messages || []
+        const ids = new Set(server.map(m => m.id))
+        return [...server, ...pendingMsgs.filter(m => !ids.has(m.id))]
+      })
+      hasMoreRef.current[conversationId] = !!d.hasMore
+      if (activeIdRef.current === conversationId) setHasMore(!!d.hasMore)
+    }
     setLoadingMsgs(false)
   }, [setConvMessages])
+  // Reverse pagination — prepend older messages, preserving scroll (the list
+  // records its scrollHeight just before calling this).
+  const loadOlder = useCallback(async (conversationId: string) => {
+    const cur = msgCache.current[conversationId] || []
+    const oldest = cur.find(m => !m.status)   // skip optimistic rows
+    if (!oldest || loadingOlder) return
+    setLoadingOlder(true)
+    try {
+      const r = await fetch(`/api/messages?conversationId=${conversationId}&before=${encodeURIComponent(oldest.created_at)}`)
+      if (r.ok) {
+        const d = await r.json()
+        const older: Message[] = d.messages || []
+        setConvMessages(conversationId, prev => {
+          const have = new Set(prev.map(m => m.id))
+          return [...older.filter(m => !have.has(m.id)), ...prev]
+        })
+        hasMoreRef.current[conversationId] = !!d.hasMore
+        if (activeIdRef.current === conversationId) setHasMore(!!d.hasMore)
+      }
+    } finally { setLoadingOlder(false) }
+  }, [loadingOlder, setConvMessages])
   const loadThread = useCallback(async (conversationId: string, parentId: string) => {
     const r = await fetch(`/api/messages?conversationId=${conversationId}&parentId=${parentId}`)
     if (r.ok) { const d = await r.json(); setThreadMessages(d.messages || []) }
   }, [])
   const markRead = useCallback(async (conversationId: string) => {
-    setConversations(cs => cs.map(c => c.id === conversationId ? { ...c, unread: 0 } : c))
+    const nowIso = new Date().toISOString()
+    setConversations(cs => cs.map(c => c.id === conversationId ? { ...c, unread: 0, myLastReadAt: nowIso } : c))
     await fetch(`/api/conversations/${conversationId}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'read' }) }).catch(() => {})
   }, [])
 
   useEffect(() => { loadConversations(); fetch('/api/messages/directory').then(r => r.ok ? r.json() : { users: [] }).then(d => setDir(d.users || [])) }, [loadConversations])
+
+  // Workspace presence — who's online right now.
+  useEffect(() => {
+    const p = joinPresence({ id: user.id, name: meName }, ids => setOnline(new Set(ids)))
+    return () => p.leave()
+  }, [user.id, meName])
 
   // Tab regained focus: reconcile quietly in case realtime events were missed
   // while asleep (incremental updates below otherwise never refetch).
@@ -125,14 +181,14 @@ export default function ChatApp({ user, onUnreadChange }: { user: SSRUser; onUnr
   // ── Incremental realtime appliers (no refetch per event) ──────────
   const enrichRow = useCallback((row: any): Message => {
     const sender = row.sender_user_id === user.id
-      ? { name: user.displayName || user.email }
+      ? { name: meName }
       : dirRef.current.find(u => u.id === row.sender_user_id)
     return {
       ...row,
       senderName: row.sender_user_id ? (sender?.name || 'Unknown') : (row.message_type === 'external' ? 'Customer' : 'System'),
       attachments: [], mentions: [], reactions: [], replyCount: 0,
     }
-  }, [user.id, user.displayName, user.email])
+  }, [user.id, meName])
 
   // Realtime message rows don't carry attachments (separate table, inserted
   // just after) — reconcile with one cheap RLS-scoped lookup shortly after.
@@ -150,7 +206,11 @@ export default function ChatApp({ user, onUnreadChange }: { user: SSRUser; onUnr
   }, [setConvMessages])
 
   const handleMessageInsert = useCallback((row: any) => {
-    if (!row?.id || seenMsgIds.current.has(row.id)) return
+    // Own messages are applied via the POST response (optimistic path), so we
+    // ignore their realtime echo — this also prevents a duplicate bubble racing
+    // the POST. (Trade-off: a message you send on another device appears here
+    // on the next quiet refetch rather than instantly.)
+    if (!row?.id || row.sender_user_id === user.id || seenMsgIds.current.has(row.id)) return
     markSeen(row.id)
     const convId = row.conversation_id
     if (row.parent_message_id) {
@@ -165,7 +225,7 @@ export default function ChatApp({ user, onUnreadChange }: { user: SSRUser; onUnr
       setConvMessages(convId, ms => ms.some(m => m.id === row.id) ? ms : [...ms, msg])
     }
     reconcileAttachments(convId, row.id)
-    if (activeIdRef.current === convId && typeof document !== 'undefined' && !document.hidden && row.sender_user_id !== user.id) markRead(convId)
+    if (activeIdRef.current === convId && typeof document !== 'undefined' && !document.hidden) markRead(convId)
   }, [enrichRow, markSeen, markRead, reconcileAttachments, setConvMessages, user.id])
 
   const handleMessageUpdate = useCallback((row: any) => {
@@ -207,8 +267,6 @@ export default function ChatApp({ user, onUnreadChange }: { user: SSRUser; onUnr
 
   // Live conversation-list updates — patch the list in place; only refetch for
   // events we can't apply locally (new conversation, my membership changed).
-  // Previously ANY change here (including every message's last_message_at bump
-  // and every user's read-marker) refetched the whole list for everyone.
   useEffect(() => {
     let t: any
     const scheduleReload = () => { clearTimeout(t); t = setTimeout(loadConversations, 400) }
@@ -230,14 +288,19 @@ export default function ChatApp({ user, onUnreadChange }: { user: SSRUser; onUnr
           if (type === 'UPDATE') {
             // My read/mute state changed (e.g. read in another tab) — patch.
             setConversations(cs => cs.map(c => c.id === row.conversation_id
-              ? { ...c, muted: !!row.muted, unread: row.last_read_at && (!c.last_message_at || row.last_read_at >= c.last_message_at) ? 0 : c.unread }
+              ? { ...c, muted: !!row.muted, myLastReadAt: row.last_read_at, unread: row.last_read_at && (!c.last_message_at || row.last_read_at >= c.last_message_at) ? 0 : c.unread }
               : c))
           } else scheduleReload() // joined/left a conversation
           return
         }
-        // Someone else's read-state is irrelevant; membership changes patch
-        // the member lists locally.
-        if (type === 'UPDATE') return
+        // Another participant read the conversation → update their read marker
+        // so 'Seen' receipts go live.
+        if (type === 'UPDATE') {
+          setConversations(cs => cs.map(c => c.id === row.conversation_id
+            ? { ...c, readState: { ...c.readState, [row.user_id]: row.last_read_at } } : c))
+          return
+        }
+        // Membership change — patch the member lists locally.
         setConversations(cs => cs.map(c => {
           if (c.id !== row.conversation_id) return c
           const ids = type === 'INSERT'
@@ -276,6 +339,9 @@ export default function ChatApp({ user, onUnreadChange }: { user: SSRUser; onUnr
   // mark read, then live events patch state in place — no refetch per event.
   useEffect(() => {
     if (!activeId) return
+    const conv = conversationsRef.current.find(c => c.id === activeId)
+    setDividerTs(conv?.myLastReadAt || null)   // snapshot for the "new messages" line
+    setHasMore(!!hasMoreRef.current[activeId])
     const cached = msgCache.current[activeId]
     if (cached) { setMessages(cached); loadMessages(activeId, { quiet: true }) }
     else { setMessages([]); loadMessages(activeId) }
@@ -293,10 +359,10 @@ export default function ChatApp({ user, onUnreadChange }: { user: SSRUser; onUnr
   useEffect(() => {
     setTypers([]); setThreadParent(null)
     if (!activeId) return
-    const ch = joinTyping(activeId, { id: user.id, name: user.displayName || user.email }, setTypers)
+    const ch = joinTyping(activeId, { id: user.id, name: meName }, setTypers)
     typingRef.current = ch
     return () => { ch.leave(); typingRef.current = null }
-  }, [activeId, user.id, user.displayName, user.email])
+  }, [activeId, user.id, meName])
 
   // Search (debounced).
   useEffect(() => {
@@ -309,36 +375,82 @@ export default function ChatApp({ user, onUnreadChange }: { user: SSRUser; onUnr
   }, [search])
 
   // ── Actions (optimistic — patch local state, then call the API) ────
-  // Patch a message everywhere it can be visible (timeline, thread, thread parent).
   const patchEverywhere = useCallback((conversationId: string | null, apply: (m: Message) => Message) => {
     if (conversationId) setConvMessages(conversationId, ms => ms.map(apply))
     setThreadMessages(ms => ms.map(apply))
     setThreadParent(tp => tp ? apply(tp) : tp)
   }, [setConvMessages])
 
-  const sendMessage = useCallback(async (body: string, mentionIds: string[], attachments: any[], parentMessageId?: string) => {
+  // Optimistic send: show the bubble instantly (status 'sending'), upload any
+  // files, POST, then swap in the real message — or mark it 'failed' for retry.
+  const doSendInternal = useCallback(async (clientId: string, body: string, mentionIds: string[], files: File[], parentMessageId?: string) => {
     const convId = activeIdRef.current
     if (!convId) return
-    const r = await fetch('/api/messages', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ conversationId: convId, body, mentionIds, attachments, parentMessageId }) })
-    if (r.ok) {
+    const tempId = 'temp-' + clientId
+    const localAtts: Attachment[] = files.map(f => ({
+      storage_path: '', filename: f.name, content_type: f.type, size_bytes: f.size,
+      localUrl: f.type.startsWith('image/') ? URL.createObjectURL(f) : undefined,
+    }))
+    const temp: Message = {
+      id: tempId, clientId, conversation_id: convId, sender_user_id: user.id, senderName: meName,
+      body, message_type: 'user', created_at: new Date().toISOString(),
+      attachments: localAtts, mentions: mentionIds, reactions: [], replyCount: 0, status: 'sending',
+    }
+    markSeen(tempId)
+    if (parentMessageId) {
+      setThreadMessages(ms => [...ms, temp])
+      setConvMessages(convId, ms => ms.map(m => m.id === parentMessageId ? { ...m, replyCount: (m.replyCount || 0) + 1 } : m))
+    } else {
+      setConvMessages(convId, ms => [...ms, temp])
+    }
+    pending.current[clientId] = { body, mentionIds, files, parentMessageId }
+    try {
+      const sb = getSupabase()
+      const attachments: any[] = []
+      for (const f of files) {
+        const path = `${crypto.randomUUID()}-${f.name.replace(/[^\w.-]/g, '_')}`
+        const { error } = await sb.storage.from(ATTACH_BUCKET).upload(path, f, { contentType: f.type, upsert: false })
+        if (error) throw error
+        attachments.push({ storagePath: path, filename: f.name, contentType: f.type, sizeBytes: f.size })
+      }
+      const r = await fetch('/api/messages', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ conversationId: convId, body, mentionIds, attachments, parentMessageId }) })
+      if (!r.ok) { const d = await r.json().catch(() => ({})); throw new Error(d.error || 'Could not send') }
       const d = await r.json()
-      if (!d.message) return
+      if (!d.message) throw new Error('No message returned')
       markSeen(d.message.id)
-      // API echoes attachments in camelCase — normalise for rendering.
-      const msg: Message = {
-        ...d.message, reactions: [], replyCount: 0, mentions: d.message.mentions || [],
+      const real: Message = {
+        ...d.message, status: undefined, clientId, reactions: [], replyCount: 0,
+        mentions: d.message.mentions || mentionIds,
         attachments: (d.message.attachments || []).map((a: any) => ({ storage_path: a.storagePath, filename: a.filename, content_type: a.contentType, size_bytes: a.sizeBytes })),
       }
-      if (parentMessageId) {
-        setThreadMessages(ms => ms.some(x => x.id === msg.id) ? ms : [...ms, msg])
-        setConvMessages(convId, ms => ms.map(m => m.id === parentMessageId ? { ...m, replyCount: (m.replyCount || 0) + 1 } : m))
-      } else {
-        setConvMessages(convId, ms => ms.some(x => x.id === msg.id) ? ms : [...ms, msg])
-      }
-    } else { const d = await r.json().catch(() => ({})); alert(d.error || 'Could not send') }
-  }, [markSeen, setConvMessages])
+      const swap = (m: Message) => (m.clientId === clientId || m.id === tempId) ? { ...real, replyCount: m.replyCount, reactions: m.reactions } : m
+      if (parentMessageId) setThreadMessages(ms => ms.map(swap))
+      setConvMessages(convId, ms => ms.map(swap))
+      delete pending.current[clientId]
+      localAtts.forEach(a => a.localUrl && URL.revokeObjectURL(a.localUrl))
+    } catch (e: any) {
+      const fail = (m: Message) => (m.clientId === clientId || m.id === tempId) ? { ...m, status: 'failed' as const } : m
+      if (parentMessageId) setThreadMessages(ms => ms.map(fail))
+      setConvMessages(convId, ms => ms.map(fail))
+    }
+  }, [user.id, meName, markSeen, setConvMessages])
+
+  const sendMessage = useCallback((body: string, mentionIds: string[], files: File[], parentMessageId?: string) => {
+    doSendInternal(crypto.randomUUID(), body, mentionIds, files, parentMessageId)
+  }, [doSendInternal])
+
+  const retrySend = useCallback((clientId: string) => {
+    const p = pending.current[clientId]
+    if (!p) return
+    const drop = (ms: Message[]) => ms.filter(m => m.clientId !== clientId)
+    if (activeIdRef.current) setConvMessages(activeIdRef.current, drop)
+    setThreadMessages(drop)
+    delete pending.current[clientId]
+    doSendInternal(crypto.randomUUID(), p.body, p.mentionIds, p.files, p.parentMessageId)
+  }, [doSendInternal, setConvMessages])
 
   const toggleReaction = useCallback(async (messageId: string, emoji: string) => {
+    if (messageId.startsWith('temp-')) return // not yet persisted
     patchEverywhere(activeIdRef.current, (m) => {
       if (m.id !== messageId) return m
       const rs = [...(m.reactions || [])]
@@ -353,6 +465,7 @@ export default function ChatApp({ user, onUnreadChange }: { user: SSRUser; onUnr
   }, [patchEverywhere, loadMessages])
 
   const editMessage = useCallback(async (messageId: string, body: string) => {
+    if (!body || messageId.startsWith('temp-')) return
     patchEverywhere(activeIdRef.current, (m) => m.id === messageId ? { ...m, body, edited_at: new Date().toISOString() } : m)
     const r = await fetch(`/api/messages/${messageId}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ body }) }).catch(() => null)
     if (!r?.ok && activeIdRef.current) loadMessages(activeIdRef.current, { quiet: true })
@@ -377,6 +490,11 @@ export default function ChatApp({ user, onUnreadChange }: { user: SSRUser; onUnr
   const dms = conversations.filter(c => c.type === 'dm')
   const inbox = conversations.filter(c => c.type === 'customer')
   const nameById = useMemo(() => Object.fromEntries(dir.map(u => [u.id, u.name])), [dir])
+  // Last own message in the open conversation — used by ↑-to-edit in the composer.
+  const lastOwnMessage = useMemo(() => {
+    for (let i = messages.length - 1; i >= 0; i--) { const m = messages[i]; if (m.sender_user_id === user.id && !m.deleted_at && !m.status) return { id: m.id, body: m.body } }
+    return null
+  }, [messages, user.id])
 
   return (
     <div style={{ flex: 1, display: 'flex', overflow: 'hidden', background: T.bg }}>
@@ -405,15 +523,15 @@ export default function ChatApp({ user, onUnreadChange }: { user: SSRUser; onUnr
             <>
               <SidebarSection title="Channels" onAdd={() => setModal('channel')}>
                 {channels.length === 0 && <Hint>No channels yet</Hint>}
-                {channels.map(c => <ConvRow key={c.id} c={c} active={c.id === activeId} onClick={() => setActiveId(c.id)} />)}
+                {channels.map(c => <ConvRow key={c.id} c={c} meId={user.id} online={online} active={c.id === activeId} onClick={() => setActiveId(c.id)} />)}
               </SidebarSection>
               <SidebarSection title="Direct messages" onAdd={() => setModal('dm')}>
                 {dms.length === 0 && <Hint>No direct messages</Hint>}
-                {dms.map(c => <ConvRow key={c.id} c={c} active={c.id === activeId} onClick={() => setActiveId(c.id)} />)}
+                {dms.map(c => <ConvRow key={c.id} c={c} meId={user.id} online={online} active={c.id === activeId} onClick={() => setActiveId(c.id)} />)}
               </SidebarSection>
               {inbox.length > 0 && (
                 <SidebarSection title="Customer inbox">
-                  {inbox.map(c => <ConvRow key={c.id} c={c} active={c.id === activeId} onClick={() => setActiveId(c.id)} />)}
+                  {inbox.map(c => <ConvRow key={c.id} c={c} meId={user.id} online={online} active={c.id === activeId} onClick={() => setActiveId(c.id)} />)}
                 </SidebarSection>
               )}
             </>
@@ -435,13 +553,16 @@ export default function ChatApp({ user, onUnreadChange }: { user: SSRUser; onUnr
                 )}
                 <span style={{ color: T.text3 }}>{convGlyph(active)}</span>
                 <span style={{ fontSize: 14, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{convTitle(active)}</span>
-                {active.topic && <span style={{ fontSize: 12, color: T.text3, marginLeft: 8, borderLeft: `1px solid ${T.border}`, paddingLeft: 8 }}>{active.topic}</span>}
-                {active.type !== 'dm' && <span style={{ marginLeft: 'auto', fontSize: 11, color: T.text3 }}>{active.memberIds.length} member{active.memberIds.length === 1 ? '' : 's'}</span>}
+                {headerPresence(active, user.id, online)}
+                {active.topic && <span style={{ fontSize: 12, color: T.text3, marginLeft: 8, borderLeft: `1px solid ${T.border}`, paddingLeft: 8, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{active.topic}</span>}
+                {active.type !== 'dm' && <span style={{ marginLeft: 'auto', fontSize: 11, color: T.text3, flexShrink: 0 }}>{active.memberIds.length} member{active.memberIds.length === 1 ? '' : 's'}</span>}
               </div>
-              <MessageList messages={messages} loading={loadingMsgs} meId={user.id} nameById={nameById}
+              <MessageList key={active.id} messages={messages} loading={loadingMsgs} meId={user.id} nameById={nameById}
+                conv={active} online={online} dividerTs={dividerTs} hasMore={hasMore} loadingOlder={loadingOlder}
+                onLoadOlder={() => loadOlder(active.id)} onRetry={retrySend}
                 onReact={toggleReaction} onEdit={editMessage} onDelete={deleteMessage} onOpenThread={openThread} />
-              {typers.length > 0 && <div style={{ padding: '2px 18px', fontSize: 11, color: T.text3, fontStyle: 'italic' }}>{typers.map(t => t.name).join(', ')} {typers.length === 1 ? 'is' : 'are'} typing…</div>}
-              <Composer key={active.id} dir={dir.filter(u => u.id !== user.id)} onSend={(b, m, a) => sendMessage(b, m, a)} onTyping={() => typingRef.current?.setTyping(true)} placeholder={`Message ${convTitle(active)}`} />
+              {typers.length > 0 && <TypingLine names={typers.map(t => t.name)} />}
+              <Composer key={active.id} draftKey={active.id} dir={dir.filter(u => u.id !== user.id)} onSend={(b, m, f) => sendMessage(b, m, f)} onTyping={() => typingRef.current?.setTyping(true)} placeholder={`Message ${convTitle(active)}`} lastOwnMessage={lastOwnMessage} onEditSubmit={editMessage} />
             </>
           )}
         </div>
@@ -456,11 +577,11 @@ export default function ChatApp({ user, onUnreadChange }: { user: SSRUser; onUnr
               <button onClick={() => setThreadParent(null)} style={{ background: 'none', border: 'none', color: T.text2, fontSize: 18, cursor: 'pointer' }}>×</button>
             </div>
             <div style={{ flex: 1, overflowY: 'auto', padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 12 }}>
-              <MessageRow m={threadParent} mine={threadParent.sender_user_id === user.id} meId={user.id} nameById={nameById} onReact={toggleReaction} onEdit={editMessage} onDelete={deleteMessage} compact />
+              <MessageRow m={threadParent} mine={threadParent.sender_user_id === user.id} meId={user.id} nameById={nameById} online={online} onReact={toggleReaction} onEdit={editMessage} onDelete={deleteMessage} onRetry={retrySend} compact />
               <div style={{ borderTop: `1px solid ${T.border}`, paddingTop: 8, fontSize: 10, color: T.text3 }}>{threadMessages.length} repl{threadMessages.length === 1 ? 'y' : 'ies'}</div>
-              {threadMessages.map(m => <MessageRow key={m.id} m={m} mine={m.sender_user_id === user.id} meId={user.id} nameById={nameById} onReact={toggleReaction} onEdit={editMessage} onDelete={deleteMessage} compact />)}
+              {threadMessages.map(m => <MessageRow key={m.id} m={m} mine={m.sender_user_id === user.id} meId={user.id} nameById={nameById} online={online} onReact={toggleReaction} onEdit={editMessage} onDelete={deleteMessage} onRetry={retrySend} compact />)}
             </div>
-            <Composer key={'thread-' + threadParent.id} dir={dir.filter(u => u.id !== user.id)} onSend={(b, m, a) => sendMessage(b, m, a, threadParent.id)} onTyping={() => {}} placeholder="Reply…" />
+            <Composer key={'thread-' + threadParent.id} draftKey={'thread:' + threadParent.id} dir={dir.filter(u => u.id !== user.id)} onSend={(b, m, f) => sendMessage(b, m, f, threadParent.id)} onTyping={() => {}} placeholder="Reply…" />
           </div>
         )}
       </div>
@@ -485,13 +606,56 @@ function SidebarSection({ title, onAdd, children }: { title: string; onAdd?: () 
 function Hint({ children }: { children: React.ReactNode }) { return <div style={{ padding: '4px 16px', fontSize: 11, color: T.text3, fontStyle: 'italic' }}>{children}</div> }
 function convGlyph(c: Conversation) { return c.type === 'dm' ? '@' : c.type === 'customer' ? '☎' : c.is_private || c.type === 'group' ? '🔒' : '#' }
 function convTitle(c: Conversation) { return c.displayName || c.name || (c.type === 'dm' ? 'Direct message' : 'Untitled') }
-function ConvRow({ c, active, onClick }: { c: Conversation; active: boolean; onClick: () => void }) {
+// The other member of a 1:1 DM (for presence dots / "Active now").
+function dmOtherId(c: Conversation, meId: string): string | null { return c.type === 'dm' ? (c.memberIds.find(id => id !== meId) || null) : null }
+function headerPresence(c: Conversation, meId: string, online: Set<string>) {
+  const other = dmOtherId(c, meId)
+  if (other && online.has(other)) return <span style={{ fontSize: 11, color: T.green, marginLeft: 8, display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 }}><Dot on /> Active now</span>
+  return null
+}
+function Dot({ on }: { on?: boolean }) { return <span style={{ width: 7, height: 7, borderRadius: '50%', background: on ? T.green : T.text3, display: 'inline-block', flexShrink: 0 }} /> }
+
+function ConvRow({ c, active, meId, online, onClick }: { c: Conversation; active: boolean; meId: string; online: Set<string>; onClick: () => void }) {
+  const other = dmOtherId(c, meId)
+  const isOnline = !!other && online.has(other)
   return (
     <button onClick={onClick} style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%', textAlign: 'left', padding: '6px 16px', border: 'none', cursor: 'pointer', fontFamily: 'inherit', background: active ? 'rgba(79,142,247,0.12)' : 'transparent', color: active ? T.text : (c.unread ? T.text : T.text2) }}>
-      <span style={{ color: T.text3, width: 12, textAlign: 'center', fontSize: 12 }}>{convGlyph(c)}</span>
+      {c.type === 'dm'
+        ? <span style={{ position: 'relative', width: 12, display: 'flex', justifyContent: 'center', flexShrink: 0 }}><Dot on={isOnline} /></span>
+        : <span style={{ color: T.text3, width: 12, textAlign: 'center', fontSize: 12, flexShrink: 0 }}>{convGlyph(c)}</span>}
       <span style={{ flex: 1, fontSize: 13, fontWeight: c.unread ? 600 : 400, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{convTitle(c)}</span>
       {c.unread > 0 && <span style={{ fontSize: 10, fontFamily: 'monospace', background: T.red, color: '#fff', borderRadius: 10, padding: '0 6px' }}>{c.unread}</span>}
     </button>
+  )
+}
+
+function TypingLine({ names }: { names: string[] }) {
+  return (
+    <div style={{ padding: '2px 18px 4px', fontSize: 11, color: T.text3, fontStyle: 'italic', display: 'flex', alignItems: 'center', gap: 6 }}>
+      <span style={{ display: 'inline-flex', gap: 2 }}>
+        {[0, 1, 2].map(i => <span key={i} style={{ width: 4, height: 4, borderRadius: '50%', background: T.text3, animation: `chatDot 1s ${i * 0.15}s infinite ease-in-out` }} />)}
+      </span>
+      {names.join(', ')} {names.length === 1 ? 'is' : 'are'} typing…
+      <style>{`@keyframes chatDot{0%,80%,100%{opacity:.25;transform:translateY(0)}40%{opacity:1;transform:translateY(-2px)}}`}</style>
+    </div>
+  )
+}
+
+// ── Avatars ─────────────────────────────────────────────────────────
+function initials(name: string): string {
+  const parts = (name || '?').trim().split(/\s+/)
+  return ((parts[0]?.[0] || '') + (parts.length > 1 ? parts[parts.length - 1][0] : '')).toUpperCase() || '?'
+}
+function colorFor(id: string | null): string {
+  let h = 0; for (const ch of (id || 'x')) h = (h * 31 + ch.charCodeAt(0)) >>> 0
+  return AVATAR_COLORS[h % AVATAR_COLORS.length]
+}
+function Avatar({ id, name, online, size = 28 }: { id: string | null; name: string; online?: boolean; size?: number }) {
+  return (
+    <span style={{ position: 'relative', flexShrink: 0, width: size, height: size }}>
+      <span style={{ width: size, height: size, borderRadius: '50%', background: colorFor(id), color: '#fff', fontSize: size * 0.38, fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{initials(name)}</span>
+      {online && <span style={{ position: 'absolute', bottom: -1, right: -1, width: 9, height: 9, borderRadius: '50%', background: T.green, border: `2px solid ${T.bg}` }} />}
+    </span>
   )
 }
 
@@ -500,88 +664,220 @@ interface RowActions {
   onReact: (id: string, emoji: string) => void
   onEdit: (id: string, body: string) => void
   onDelete: (id: string) => void
+  onRetry?: (clientId: string) => void
   onOpenThread?: (m: Message) => void
 }
-function MessageList({ messages, loading, meId, nameById, onReact, onEdit, onDelete, onOpenThread }: { messages: Message[]; loading: boolean; meId: string; nameById: Record<string, string> } & RowActions) {
+function dayKey(iso: string) { const d = new Date(iso); return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}` }
+function dayLabel(iso: string) {
+  const d = new Date(iso); const now = new Date()
+  const ymd = (x: Date) => `${x.getFullYear()}-${x.getMonth()}-${x.getDate()}`
+  const yest = new Date(now); yest.setDate(now.getDate() - 1)
+  if (ymd(d) === ymd(now)) return 'Today'
+  if (ymd(d) === ymd(yest)) return 'Yesterday'
+  return d.toLocaleDateString('en-AU', { weekday: 'short', day: 'numeric', month: 'short', year: d.getFullYear() === now.getFullYear() ? undefined : 'numeric' })
+}
+
+function MessageList({ messages, loading, meId, nameById, conv, online, dividerTs, hasMore, loadingOlder, onLoadOlder, onReact, onEdit, onDelete, onRetry, onOpenThread }: { messages: Message[]; loading: boolean; meId: string; nameById: Record<string, string>; conv: Conversation; online: Set<string>; dividerTs: string | null; hasMore: boolean; loadingOlder: boolean; onLoadOlder: () => void } & RowActions) {
   const ref = useRef<HTMLDivElement | null>(null)
-  useEffect(() => { if (ref.current) ref.current.scrollTop = ref.current.scrollHeight }, [messages])
-  if (loading) return <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: T.text3, fontSize: 12 }}>Loading messages…</div>
+  const atBottom = useRef(true)
+  const meta = useRef<{ firstId?: string; lastId?: string; len: number }>({ len: 0 })
+  const prependFrom = useRef<number | null>(null)   // scrollHeight captured before load-older
+  const [newCount, setNewCount] = useState(0)
+
+  const onScroll = useCallback(() => {
+    const el = ref.current; if (!el) return
+    atBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80
+    if (atBottom.current && newCount) setNewCount(0)
+    if (el.scrollTop < 80 && hasMore && !loadingOlder) { prependFrom.current = el.scrollHeight; onLoadOlder() }
+  }, [hasMore, loadingOlder, onLoadOlder, newCount])
+
+  useIsoEffect(() => {
+    const el = ref.current; if (!el) return
+    const firstId = messages[0]?.id
+    const lastMsg = messages[messages.length - 1]
+    const prev = meta.current
+    meta.current = { firstId, lastId: lastMsg?.id, len: messages.length }
+    if (prev.len === 0) { el.scrollTop = el.scrollHeight; return }  // first paint
+    // Older messages prepended → keep the viewport anchored where it was.
+    if (prependFrom.current != null && prev.firstId !== firstId && messages.length > prev.len) {
+      el.scrollTop = el.scrollHeight - prependFrom.current; prependFrom.current = null; return
+    }
+    // New message at the bottom.
+    if (lastMsg && lastMsg.id !== prev.lastId) {
+      if (lastMsg.sender_user_id === meId || atBottom.current) { el.scrollTop = el.scrollHeight; setNewCount(0) }
+      else setNewCount(c => c + 1)
+    } else if (atBottom.current) {
+      el.scrollTop = el.scrollHeight   // height grew while pinned (e.g. image loaded / edit)
+    }
+  }, [messages, meId])
+
+  // Read receipt on my last confirmed message.
+  const receipt = useMemo(() => {
+    let last: Message | null = null
+    for (let i = messages.length - 1; i >= 0; i--) { const m = messages[i]; if (m.sender_user_id === meId && !m.deleted_at && !m.status) { last = m; break } }
+    if (!last) return null
+    const others = conv.memberIds.filter(id => id !== meId)
+    const seenBy = others.filter(id => { const r = conv.readState[id]; return r && r >= last!.created_at })
+    if (conv.type === 'dm') return { id: last.id, text: seenBy.length ? 'Seen' : 'Sent' }
+    if (seenBy.length) return { id: last.id, text: `Seen by ${seenBy.length}` }
+    return { id: last.id, text: 'Sent' }
+  }, [messages, meId, conv])
+
+  if (loading && messages.length === 0) return <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: T.text3, fontSize: 12 }}>Loading messages…</div>
+
+  let lastDay = ''
+  let newLineShown = false
+  let prev: Message | null = null
   return (
-    <div ref={ref} style={{ flex: 1, overflowY: 'auto', padding: '14px 18px', display: 'flex', flexDirection: 'column', gap: 10 }}>
-      {messages.length === 0 && <div style={{ color: T.text3, fontSize: 12, textAlign: 'center', marginTop: 30 }}>No messages yet — say hello.</div>}
-      {messages.map(m => <MessageRow key={m.id} m={m} mine={m.sender_user_id === meId} meId={meId} nameById={nameById} onReact={onReact} onEdit={onEdit} onDelete={onDelete} onOpenThread={onOpenThread} />)}
+    <div style={{ position: 'relative', flex: 1, overflow: 'hidden', display: 'flex' }}>
+      <div ref={ref} onScroll={onScroll} style={{ flex: 1, overflowY: 'auto', padding: '14px 18px', display: 'flex', flexDirection: 'column', gap: 2 }}>
+        {loadingOlder && <div style={{ textAlign: 'center', fontSize: 11, color: T.text3, padding: 6 }}>Loading earlier messages…</div>}
+        {messages.length === 0 && <div style={{ color: T.text3, fontSize: 12, textAlign: 'center', marginTop: 30 }}>No messages yet — say hello.</div>}
+        {messages.map(m => {
+          const dk = dayKey(m.created_at)
+          const showDay = dk !== lastDay; lastDay = dk
+          const showNew = !newLineShown && !!dividerTs && m.created_at > dividerTs && m.sender_user_id !== meId
+          if (showNew) newLineShown = true
+          const continued = !showDay && !showNew && !!prev && prev.sender_user_id === m.sender_user_id && !!m.sender_user_id
+            && (new Date(m.created_at).getTime() - new Date(prev.created_at).getTime() < 5 * 60 * 1000)
+          prev = m
+          return (
+            <div key={m.id}>
+              {showDay && <DayDivider label={dayLabel(m.created_at)} />}
+              {showNew && <NewDivider />}
+              <MessageRow m={m} mine={m.sender_user_id === meId} meId={meId} nameById={nameById} online={online} grouped={continued}
+                receipt={receipt && receipt.id === m.id ? receipt.text : undefined}
+                onReact={onReact} onEdit={onEdit} onDelete={onDelete} onRetry={onRetry} onOpenThread={onOpenThread} />
+            </div>
+          )
+        })}
+      </div>
+      {newCount > 0 && (
+        <button onClick={() => { const el = ref.current; if (el) el.scrollTop = el.scrollHeight; setNewCount(0) }}
+          style={{ position: 'absolute', bottom: 12, left: '50%', transform: 'translateX(-50%)', background: T.blue, color: '#fff', border: 'none', borderRadius: 16, padding: '6px 14px', fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit', boxShadow: '0 4px 14px rgba(0,0,0,0.4)', zIndex: 5 }}>
+          ↓ {newCount} new message{newCount === 1 ? '' : 's'}
+        </button>
+      )}
     </div>
   )
 }
 
-function MessageRow({ m, mine, meId, nameById, onReact, onEdit, onDelete, onOpenThread, compact }: { m: Message; mine: boolean; meId: string; nameById: Record<string, string>; compact?: boolean } & RowActions) {
+function DayDivider({ label }: { label: string }) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 10, margin: '12px 0 8px' }}>
+      <span style={{ flex: 1, height: 1, background: T.border }} />
+      <span style={{ fontSize: 10.5, color: T.text3, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em' }}>{label}</span>
+      <span style={{ flex: 1, height: 1, background: T.border }} />
+    </div>
+  )
+}
+function NewDivider() {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 10, margin: '8px 0' }}>
+      <span style={{ flex: 1, height: 1, background: `${T.red}66` }} />
+      <span style={{ fontSize: 10, color: T.red, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em' }}>New</span>
+      <span style={{ flex: 1, height: 1, background: `${T.red}66` }} />
+    </div>
+  )
+}
+
+function MessageRow({ m, mine, meId, nameById, online, grouped, receipt, onReact, onEdit, onDelete, onRetry, onOpenThread, compact }: { m: Message; mine: boolean; meId: string; nameById: Record<string, string>; online: Set<string>; grouped?: boolean; receipt?: string; compact?: boolean } & RowActions) {
   const isMobile = useIsMobile()
   const [hover, setHover] = useState(false)
-  const [picker, setPicker] = useState(false)
+  const [picker, setPicker] = useState<false | 'quick' | 'full'>(false)
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(m.body)
   useEffect(() => { setDraft(m.body) }, [m.body])
   const deleted = !!m.deleted_at
+  const isOnline = !!m.sender_user_id && online.has(m.sender_user_id)
+  const showHeader = !grouped && !compact
+  const time = new Date(m.created_at).toLocaleString('en-AU', { hour: '2-digit', minute: '2-digit' })
 
   return (
     <div
       onMouseEnter={() => { if (!isMobile) setHover(true) }}
       onMouseLeave={() => { if (!isMobile) { setHover(false); setPicker(false) } }}
-      style={{ display: 'flex', flexDirection: 'column', alignItems: mine ? 'flex-end' : 'flex-start', position: 'relative' }}>
-      <div style={{ fontSize: 10, color: T.text3, marginBottom: 3 }}>
-        <span style={{ color: mine ? T.blue : T.teal, fontWeight: 600 }}>{mine ? 'You' : m.senderName}</span>
-        <span style={{ marginLeft: 6 }}>{new Date(m.created_at).toLocaleString('en-AU', { hour: '2-digit', minute: '2-digit', day: 'numeric', month: 'short' })}</span>
-        {m.edited_at && !deleted && <span style={{ marginLeft: 6, fontStyle: 'italic' }}>(edited)</span>}
-      </div>
+      style={{ display: 'flex', flexDirection: mine ? 'row-reverse' : 'row', gap: 8, alignItems: 'flex-end', marginTop: grouped ? 1 : (compact ? 0 : 8), opacity: m.status === 'sending' ? 0.7 : 1 }}>
+      {/* Avatar gutter — only for others, only on the first of a group */}
+      {!mine && !compact && (showHeader
+        ? <Avatar id={m.sender_user_id} name={m.senderName} online={isOnline} />
+        : <span style={{ width: 28, flexShrink: 0 }} />)}
 
-      <div style={{ position: 'relative', maxWidth: compact ? '100%' : '70%' }}>
-        {/* Hover toolbar */}
-        {hover && !deleted && !editing && (
-          <div style={{ position: 'absolute', top: -14, [mine ? 'left' : 'right']: 0, display: 'flex', gap: 2, background: T.bg4, border: `1px solid ${T.border2}`, borderRadius: 6, padding: 2, zIndex: 3 } as any}>
-            <IconBtn title="React" onClick={() => setPicker(p => !p)}>🙂</IconBtn>
-            {onOpenThread && <IconBtn title="Reply in thread" onClick={() => onOpenThread(m)}>↳</IconBtn>}
-            {mine && <IconBtn title="Edit" onClick={() => setEditing(true)}>✎</IconBtn>}
-            {mine && <IconBtn title="Delete" onClick={() => onDelete(m.id)}>🗑</IconBtn>}
-          </div>
-        )}
-        {picker && (
-          <div style={{ position: 'absolute', top: -40, [mine ? 'left' : 'right']: 0, display: 'flex', gap: 2, background: T.bg4, border: `1px solid ${T.border2}`, borderRadius: 8, padding: 4, zIndex: 4 } as any}>
-            {QUICK_EMOJI.map(e => <button key={e} onClick={() => { onReact(m.id, e); setPicker(false) }} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 16, padding: 2 }}>{e}</button>)}
+      <div style={{ position: 'relative', maxWidth: compact ? '100%' : '78%', display: 'flex', flexDirection: 'column', alignItems: mine ? 'flex-end' : 'flex-start' }}>
+        {showHeader && (
+          <div style={{ fontSize: 10, color: T.text3, marginBottom: 3 }}>
+            <span style={{ color: mine ? T.blue : T.teal, fontWeight: 600 }}>{mine ? 'You' : m.senderName}</span>
+            <span style={{ marginLeft: 6 }}>{time}</span>
+            {m.edited_at && !deleted && <span style={{ marginLeft: 6, fontStyle: 'italic' }}>(edited)</span>}
           </div>
         )}
 
-        <div
-          onClick={() => { if (isMobile && !editing && !deleted) setHover(h => !h) }}
-          style={{ background: mine ? 'rgba(79,142,247,0.16)' : T.bg3, border: `1px solid ${mine ? 'rgba(79,142,247,0.3)' : T.border}`, borderRadius: 10, padding: '8px 12px', fontSize: 13, lineHeight: 1.5, color: T.text, wordBreak: 'break-word', cursor: isMobile && !editing && !deleted ? 'pointer' : 'default' }}>
-          {deleted ? <span style={{ color: T.text3, fontStyle: 'italic' }}>message deleted</span> : editing ? (
-            <div>
-              <textarea value={draft} onChange={e => setDraft(e.target.value)} rows={2} style={{ width: 260, background: T.bg2, border: `1px solid ${T.border2}`, borderRadius: 6, color: T.text, fontSize: 13, fontFamily: 'inherit', padding: 6 }} />
-              <div style={{ display: 'flex', gap: 6, marginTop: 4 }}>
-                <button onClick={() => { onEdit(m.id, draft.trim()); setEditing(false) }} style={miniBtn(T.blue, true)}>Save</button>
-                <button onClick={() => { setEditing(false); setDraft(m.body) }} style={miniBtn(T.text3)}>Cancel</button>
-              </div>
+        <div style={{ position: 'relative' }}>
+          {/* Hover toolbar */}
+          {hover && !deleted && !editing && !m.status && (
+            <div style={{ position: 'absolute', top: -14, [mine ? 'left' : 'right']: 0, display: 'flex', gap: 2, background: T.bg4, border: `1px solid ${T.border2}`, borderRadius: 6, padding: 2, zIndex: 3 } as any}>
+              <IconBtn title="React" onClick={() => setPicker(p => p ? false : 'quick')}>🙂</IconBtn>
+              {onOpenThread && <IconBtn title="Reply in thread" onClick={() => onOpenThread(m)}>↳</IconBtn>}
+              {mine && <IconBtn title="Edit" onClick={() => setEditing(true)}>✎</IconBtn>}
+              {mine && <IconBtn title="Delete" onClick={() => onDelete(m.id)}>🗑</IconBtn>}
             </div>
-          ) : <span dangerouslySetInnerHTML={{ __html: mdToHtml(m.body, nameById) }} />}
-          {m.attachments?.map((a, i) => <AttachmentView key={a.id || i} att={a} />)}
-        </div>
+          )}
+          {picker === 'quick' && (
+            <div style={{ position: 'absolute', top: -40, [mine ? 'left' : 'right']: 0, display: 'flex', gap: 2, background: T.bg4, border: `1px solid ${T.border2}`, borderRadius: 8, padding: 4, zIndex: 4, alignItems: 'center' } as any}>
+              {QUICK_EMOJI.map(e => <button key={e} onClick={() => { onReact(m.id, e); setPicker(false) }} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 16, padding: 2 }}>{e}</button>)}
+              <button onClick={() => setPicker('full')} title="More…" style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 14, padding: '2px 4px', color: T.text2 }}>＋</button>
+            </div>
+          )}
+          {picker === 'full' && (
+            <div style={{ position: 'absolute', top: -8, [mine ? 'left' : 'right']: 0, transform: 'translateY(-100%)', zIndex: 6 } as any}>
+              <EmojiPicker onPick={(e) => { onReact(m.id, e); setPicker(false) }} onClose={() => setPicker(false)} />
+            </div>
+          )}
 
-        {/* Reactions */}
-        {m.reactions?.length > 0 && (
-          <div style={{ display: 'flex', gap: 4, marginTop: 4, flexWrap: 'wrap', justifyContent: mine ? 'flex-end' : 'flex-start' }}>
-            {m.reactions.map(r => (
-              <button key={r.emoji} onClick={() => onReact(m.id, r.emoji)} style={{ display: 'flex', alignItems: 'center', gap: 3, fontSize: 11, padding: '1px 7px', borderRadius: 10, cursor: 'pointer', fontFamily: 'inherit', background: r.mine ? 'rgba(79,142,247,0.18)' : T.bg3, border: `1px solid ${r.mine ? T.blue : T.border}`, color: T.text2 }}>
-                <span>{r.emoji}</span><span style={{ fontFamily: 'monospace' }}>{r.count}</span>
-              </button>
-            ))}
+          <div
+            onClick={() => { if (isMobile && !editing && !deleted && !m.status) setHover(h => !h) }}
+            style={{ background: mine ? 'rgba(79,142,247,0.16)' : T.bg3, border: `1px solid ${mine ? 'rgba(79,142,247,0.3)' : T.border}`, borderRadius: 10, padding: '8px 12px', fontSize: 13, lineHeight: 1.5, color: T.text, wordBreak: 'break-word', cursor: isMobile && !editing && !deleted ? 'pointer' : 'default' }}>
+            {deleted ? <span style={{ color: T.text3, fontStyle: 'italic' }}>message deleted</span> : editing ? (
+              <div>
+                <textarea value={draft} onChange={e => setDraft(e.target.value)} rows={2} autoFocus
+                  onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); onEdit(m.id, draft.trim()); setEditing(false) } if (e.key === 'Escape') { setEditing(false); setDraft(m.body) } }}
+                  style={{ width: 260, maxWidth: '100%', background: T.bg2, border: `1px solid ${T.border2}`, borderRadius: 6, color: T.text, fontSize: 13, fontFamily: 'inherit', padding: 6, boxSizing: 'border-box' }} />
+                <div style={{ display: 'flex', gap: 6, marginTop: 4 }}>
+                  <button onClick={() => { onEdit(m.id, draft.trim()); setEditing(false) }} style={miniBtn(T.blue, true)}>Save</button>
+                  <button onClick={() => { setEditing(false); setDraft(m.body) }} style={miniBtn(T.text3)}>Cancel</button>
+                </div>
+              </div>
+            ) : <span dangerouslySetInnerHTML={{ __html: mdToHtml(m.body, nameById) }} />}
+            {m.attachments?.map((a, i) => <AttachmentView key={a.id || a.storage_path || i} att={a} sending={m.status === 'sending'} />)}
           </div>
-        )}
 
-        {/* Thread affordance */}
-        {!compact && onOpenThread && m.replyCount > 0 && (
-          <button onClick={() => onOpenThread(m)} style={{ marginTop: 4, background: 'none', border: 'none', color: T.blue, fontSize: 11, cursor: 'pointer', fontFamily: 'inherit', alignSelf: mine ? 'flex-end' : 'flex-start' }}>
-            ↳ {m.replyCount} repl{m.replyCount === 1 ? 'y' : 'ies'}
-          </button>
-        )}
+          {/* Reactions */}
+          {m.reactions?.length > 0 && (
+            <div style={{ display: 'flex', gap: 4, marginTop: 4, flexWrap: 'wrap', justifyContent: mine ? 'flex-end' : 'flex-start' }}>
+              {m.reactions.map(r => (
+                <button key={r.emoji} onClick={() => onReact(m.id, r.emoji)} style={{ display: 'flex', alignItems: 'center', gap: 3, fontSize: 11, padding: '1px 7px', borderRadius: 10, cursor: 'pointer', fontFamily: 'inherit', background: r.mine ? 'rgba(79,142,247,0.18)' : T.bg3, border: `1px solid ${r.mine ? T.blue : T.border}`, color: T.text2 }}>
+                  <span>{r.emoji}</span><span style={{ fontFamily: 'monospace' }}>{r.count}</span>
+                </button>
+              ))}
+            </div>
+          )}
+
+          {/* Thread affordance */}
+          {!compact && onOpenThread && m.replyCount > 0 && (
+            <button onClick={() => onOpenThread(m)} style={{ marginTop: 4, background: 'none', border: 'none', color: T.blue, fontSize: 11, cursor: 'pointer', fontFamily: 'inherit', alignSelf: mine ? 'flex-end' : 'flex-start' }}>
+              ↳ {m.replyCount} repl{m.replyCount === 1 ? 'y' : 'ies'}
+            </button>
+          )}
+
+          {/* Status / receipt (own messages) */}
+          {mine && m.status === 'sending' && <span style={{ fontSize: 9.5, color: T.text3, marginTop: 2, alignSelf: 'flex-end' }}>Sending…</span>}
+          {mine && m.status === 'failed' && (
+            <span style={{ fontSize: 9.5, color: T.red, marginTop: 2, alignSelf: 'flex-end' }}>
+              Failed · {onRetry && m.clientId ? <button onClick={() => onRetry(m.clientId!)} style={{ background: 'none', border: 'none', color: T.red, textDecoration: 'underline', cursor: 'pointer', fontSize: 9.5, padding: 0, fontFamily: 'inherit' }}>Retry</button> : 'tap to retry'}
+            </span>
+          )}
+          {mine && !m.status && receipt && <span style={{ fontSize: 9.5, color: receipt.startsWith('Seen') ? T.blue : T.text3, marginTop: 2, alignSelf: 'flex-end' }}>{receipt}</span>}
+        </div>
       </div>
     </div>
   )
@@ -608,29 +904,80 @@ function mdToHtml(text: string, nameById: Record<string, string>): string {
   return s.replace(/\n/g, '<br/>')
 }
 
-function AttachmentView({ att }: { att: { storage_path: string; filename: string | null; content_type: string | null } }) {
-  const [url, setUrl] = useState<string | null>(null)
+function AttachmentView({ att, sending }: { att: Attachment; sending?: boolean }) {
+  const [url, setUrl] = useState<string | null>(att.localUrl || null)
   useEffect(() => {
+    if (att.localUrl || !att.storage_path) return
     let live = true
     getSupabase().storage.from(ATTACH_BUCKET).createSignedUrl(att.storage_path, 3600).then(({ data }) => { if (live && data?.signedUrl) setUrl(data.signedUrl) })
     return () => { live = false }
-  }, [att.storage_path])
+  }, [att.storage_path, att.localUrl])
   const isImage = (att.content_type || '').startsWith('image/')
-  if (!url) return <div style={{ marginTop: 6, fontSize: 11, color: T.text3 }}>📎 {att.filename || 'attachment'}</div>
-  if (isImage) return <a href={url} target="_blank" rel="noreferrer"><img src={url} alt={att.filename || ''} style={{ marginTop: 6, maxWidth: 280, maxHeight: 240, borderRadius: 6, display: 'block' }} /></a>
+  if (!url) return <div style={{ marginTop: 6, fontSize: 11, color: T.text3 }}>📎 {att.filename || 'attachment'}{sending ? ' · uploading…' : ''}</div>
+  if (isImage) return <a href={sending ? undefined : url} target="_blank" rel="noreferrer"><img src={url} alt={att.filename || ''} style={{ marginTop: 6, maxWidth: 280, maxHeight: 240, borderRadius: 6, display: 'block', opacity: sending ? 0.6 : 1 }} /></a>
   return <a href={url} target="_blank" rel="noreferrer" style={{ marginTop: 6, display: 'inline-block', fontSize: 12, color: T.blue }}>📎 {att.filename || 'Download attachment'}</a>
 }
 
+// ── Emoji picker ─────────────────────────────────────────────────────
+// Curated set with keywords for search — enough for everyday reactions and
+// composing without pulling in a heavyweight emoji dependency.
+const EMOJI: { e: string; k: string }[] = [
+  { e: '👍', k: 'thumbs up yes like approve' }, { e: '👎', k: 'thumbs down no dislike' }, { e: '❤️', k: 'heart love red' }, { e: '🔥', k: 'fire lit hot' },
+  { e: '🎉', k: 'party tada celebrate' }, { e: '✅', k: 'check tick done yes' }, { e: '❌', k: 'cross no wrong' }, { e: '👀', k: 'eyes looking watch' },
+  { e: '🙏', k: 'pray thanks please' }, { e: '💯', k: 'hundred perfect' }, { e: '😂', k: 'laugh joy lol haha' }, { e: '🤣', k: 'rofl laughing' },
+  { e: '😅', k: 'sweat smile nervous' }, { e: '😊', k: 'smile happy blush' }, { e: '😍', k: 'love heart eyes' }, { e: '😎', k: 'cool sunglasses' },
+  { e: '🤔', k: 'thinking hmm' }, { e: '😐', k: 'neutral meh' }, { e: '😬', k: 'grimace yikes' }, { e: '😢', k: 'cry sad tear' },
+  { e: '😭', k: 'sob crying' }, { e: '😤', k: 'frustrated angry steam' }, { e: '😡', k: 'angry mad rage' }, { e: '🥳', k: 'party celebrate' },
+  { e: '🤯', k: 'mind blown' }, { e: '😴', k: 'sleep tired zzz' }, { e: '🤝', k: 'handshake deal agree' }, { e: '👏', k: 'clap applause' },
+  { e: '🙌', k: 'raised hands praise' }, { e: '💪', k: 'muscle strong flex' }, { e: '🤞', k: 'fingers crossed luck' }, { e: '👌', k: 'ok perfect' },
+  { e: '✌️', k: 'peace victory' }, { e: '🫡', k: 'salute yes sir' }, { e: '🙋', k: 'raising hand question' }, { e: '👋', k: 'wave hello hi bye' },
+  { e: '💔', k: 'broken heart' }, { e: '💙', k: 'blue heart' }, { e: '💚', k: 'green heart' }, { e: '💛', k: 'yellow heart' },
+  { e: '🧡', k: 'orange heart' }, { e: '💜', k: 'purple heart' }, { e: '⭐', k: 'star favourite' }, { e: '🌟', k: 'star glowing' },
+  { e: '⚡', k: 'lightning fast bolt' }, { e: '💡', k: 'idea bulb light' }, { e: '✨', k: 'sparkles shiny' }, { e: '🚀', k: 'rocket launch ship' },
+  { e: '🎯', k: 'target bullseye goal' }, { e: '📌', k: 'pin important' }, { e: '📎', k: 'paperclip attach' }, { e: '📝', k: 'memo note write' },
+  { e: '✔️', k: 'check done' }, { e: '⏰', k: 'alarm clock time' }, { e: '⏳', k: 'hourglass wait' }, { e: '🔔', k: 'bell notify alert' },
+  { e: '💰', k: 'money bag cash' }, { e: '💸', k: 'money flying spend' }, { e: '🛠️', k: 'tools fix workshop' }, { e: '🔧', k: 'wrench fix' },
+  { e: '🚗', k: 'car auto' }, { e: '🚙', k: 'suv car' }, { e: '🛻', k: 'ute truck pickup' }, { e: '📦', k: 'box package parcel ship' },
+  { e: '☕', k: 'coffee break' }, { e: '🍺', k: 'beer drink' }, { e: '🎂', k: 'cake birthday' },
+  { e: '🥲', k: 'tear smile' }, { e: '😉', k: 'wink' }, { e: '😇', k: 'angel innocent' }, { e: '🤩', k: 'star struck wow' },
+  { e: '😏', k: 'smirk' }, { e: '🙄', k: 'eye roll' }, { e: '😱', k: 'scream shock' }, { e: '🤗', k: 'hug' },
+  { e: '🤷', k: 'shrug dunno' }, { e: '🫶', k: 'heart hands love' }, { e: '👑', k: 'crown king best' }, { e: '🏆', k: 'trophy win' },
+].filter(x => x.k !== '')
+
+function EmojiPicker({ onPick, onClose }: { onPick: (e: string) => void; onClose: () => void }) {
+  const [q, setQ] = useState('')
+  const list = q.trim() ? EMOJI.filter(x => x.k.includes(q.trim().toLowerCase())) : EMOJI
+  return (
+    <>
+      <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 1 }} />
+      <div onClick={e => e.stopPropagation()} style={{ position: 'relative', zIndex: 2, width: 256, background: T.bg4, border: `1px solid ${T.border2}`, borderRadius: 10, padding: 8, boxShadow: '0 10px 30px rgba(0,0,0,0.5)' }}>
+        <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search emoji…" autoFocus
+          style={{ width: '100%', boxSizing: 'border-box', padding: '6px 8px', marginBottom: 6, background: T.bg2, border: `1px solid ${T.border2}`, borderRadius: 6, color: T.text, fontSize: 12, fontFamily: 'inherit', outline: 'none' }} />
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 2, maxHeight: 168, overflowY: 'auto' }}>
+          {list.map(x => <button key={x.e} title={x.k} onClick={() => onPick(x.e)} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 18, padding: 3, borderRadius: 6 }}>{x.e}</button>)}
+          {list.length === 0 && <span style={{ gridColumn: '1 / -1', fontSize: 11, color: T.text3, padding: 8 }}>No matches.</span>}
+        </div>
+      </div>
+    </>
+  )
+}
+
 // ── Composer ─────────────────────────────────────────────────────────
-function Composer({ dir, onSend, onTyping, placeholder }: { dir: DirUser[]; onSend: (body: string, mentionIds: string[], attachments: any[]) => Promise<void> | void; onTyping: () => void; placeholder?: string }) {
+function Composer({ dir, onSend, onTyping, placeholder, draftKey, lastOwnMessage, onEditSubmit }: { dir: DirUser[]; onSend: (body: string, mentionIds: string[], files: File[]) => void; onTyping: () => void; placeholder?: string; draftKey?: string; lastOwnMessage?: { id: string; body: string } | null; onEditSubmit?: (id: string, body: string) => void }) {
   const isMobile = useIsMobile()
-  const [text, setText] = useState('')
+  const draftLS = draftKey ? `chatdraft:${draftKey}` : null
+  const [text, setText] = useState(() => { try { return draftLS && typeof localStorage !== 'undefined' ? (localStorage.getItem(draftLS) || '') : '' } catch { return '' } })
   const [files, setFiles] = useState<File[]>([])
-  const [busy, setBusy] = useState(false)
   const [mentionPick, setMentionPick] = useState<{ query: string } | null>(null)
   const [picked, setPicked] = useState<DirUser[]>([])
+  const [emoji, setEmoji] = useState(false)
+  const [editingId, setEditingId] = useState<string | null>(null)   // ↑-to-edit
   const taRef = useRef<HTMLTextAreaElement | null>(null)
   const lastTyping = useRef(0)
+
+  // Persist the draft (debounced via effect) and auto-grow the textarea.
+  useEffect(() => { try { if (draftLS) { if (text) localStorage.setItem(draftLS, text); else localStorage.removeItem(draftLS) } } catch {} }, [text, draftLS])
+  useEffect(() => { const ta = taRef.current; if (ta) { ta.style.height = 'auto'; ta.style.height = Math.min(ta.scrollHeight, 140) + 'px' } }, [text])
 
   function onChange(v: string) {
     setText(v)
@@ -642,30 +989,51 @@ function Composer({ dir, onSend, onTyping, placeholder }: { dir: DirUser[]; onSe
     setText(t => t.replace(/@([\w' .-]*)$/, `@${u.name} `))
     setPicked(p => p.some(x => x.id === u.id) ? p : [...p, u]); setMentionPick(null); taRef.current?.focus()
   }
-  async function doSend() {
-    const body = text.trim()
-    if ((!body && files.length === 0) || busy) return
-    setBusy(true)
-    try {
-      const sb = getSupabase()
-      const attachments: any[] = []
-      for (const f of files) {
-        const path = `${crypto.randomUUID()}-${f.name.replace(/[^\w.-]/g, '_')}`
-        const { error } = await sb.storage.from(ATTACH_BUCKET).upload(path, f, { contentType: f.type, upsert: false })
-        if (!error) attachments.push({ storagePath: path, filename: f.name, contentType: f.type, sizeBytes: f.size })
-      }
-      const mentionIds = picked.filter(u => body.includes(`@${u.name}`)).map(u => u.id)
-      await onSend(body, mentionIds, attachments)
-      setText(''); setFiles([]); setPicked([])
-    } finally { setBusy(false) }
+  function insertEmoji(e: string) { setText(t => t + e); taRef.current?.focus() }
+  function startEditLast() {
+    if (!lastOwnMessage || !onEditSubmit) return
+    setEditingId(lastOwnMessage.id); setText(lastOwnMessage.body); setTimeout(() => taRef.current?.focus(), 0)
   }
+  function cancelEdit() { setEditingId(null); setText('') }
+
+  function submit() {
+    const body = text.trim()
+    if (editingId) {
+      if (body && onEditSubmit) onEditSubmit(editingId, body)
+      setEditingId(null); setText(''); return
+    }
+    if (!body && files.length === 0) return
+    const mentionIds = picked.filter(u => body.includes(`@${u.name}`)).map(u => u.id)
+    onSend(body, mentionIds, files)       // optimistic — don't await; clear instantly
+    setText(''); setFiles([]); setPicked([])
+  }
+
+  function addFiles(list: FileList | File[] | null) { if (list) setFiles(fs => [...fs, ...Array.from(list)]) }
+  function onPaste(e: React.ClipboardEvent) {
+    const imgs = Array.from(e.clipboardData?.items || []).filter(i => i.kind === 'file').map(i => i.getAsFile()).filter(Boolean) as File[]
+    if (imgs.length) { e.preventDefault(); addFiles(imgs) }
+  }
+
   const matches = mentionPick ? dir.filter(u => u.name.toLowerCase().includes(mentionPick.query)).slice(0, 6) : []
 
   return (
-    <div style={{ flexShrink: 0, borderTop: `1px solid ${T.border}`, padding: 12, paddingBottom: isMobile ? 'calc(12px + env(safe-area-inset-bottom))' : 12, position: 'relative', background: T.bg }}>
+    <div
+      onDragOver={e => { e.preventDefault() }}
+      onDrop={e => { e.preventDefault(); addFiles(e.dataTransfer?.files || null) }}
+      style={{ flexShrink: 0, borderTop: `1px solid ${T.border}`, padding: 12, paddingBottom: isMobile ? 'calc(12px + env(safe-area-inset-bottom))' : 12, position: 'relative', background: T.bg }}>
+      {editingId && (
+        <div style={{ fontSize: 11, color: T.amber, marginBottom: 6, display: 'flex', alignItems: 'center', gap: 8 }}>
+          ✎ Editing message <button onClick={cancelEdit} style={{ background: 'none', border: 'none', color: T.text3, cursor: 'pointer', fontSize: 11, fontFamily: 'inherit', textDecoration: 'underline', padding: 0 }}>cancel (esc)</button>
+        </div>
+      )}
       {matches.length > 0 && (
         <div style={{ position: 'absolute', bottom: '100%', left: 12, background: T.bg3, border: `1px solid ${T.border2}`, borderRadius: 8, marginBottom: 6, minWidth: 200, overflow: 'hidden', zIndex: 5 }}>
           {matches.map(u => <div key={u.id} onMouseDown={e => { e.preventDefault(); pickMention(u) }} style={{ padding: '7px 12px', fontSize: 13, cursor: 'pointer', color: T.text }}>@{u.name}</div>)}
+        </div>
+      )}
+      {emoji && (
+        <div style={{ position: 'absolute', bottom: '100%', left: 12, marginBottom: 6, zIndex: 6 }}>
+          <EmojiPicker onPick={insertEmoji} onClose={() => setEmoji(false)} />
         </div>
       )}
       {files.length > 0 && (
@@ -680,12 +1048,22 @@ function Composer({ dir, onSend, onTyping, placeholder }: { dir: DirUser[]; onSe
           width: isMobile ? 42 : 36, height: isMobile ? 42 : 36, borderRadius: 8,
           border: isMobile ? `1px solid ${T.border2}` : 'none', background: isMobile ? T.bg3 : 'transparent',
         }}>
-          📎<input type="file" multiple style={{ display: 'none' }} onChange={e => { setFiles(fs => [...fs, ...Array.from(e.target.files || [])]); e.target.value = '' }} />
+          📎<input type="file" multiple style={{ display: 'none' }} onChange={e => { addFiles(e.target.files); e.target.value = '' }} />
         </label>
-        <textarea ref={taRef} value={text} onChange={e => onChange(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); doSend() } }}
+        <button title="Emoji" onClick={() => setEmoji(v => !v)} style={{
+          cursor: 'pointer', color: T.text3, fontSize: 18, flexShrink: 0, background: isMobile ? T.bg3 : 'transparent',
+          border: isMobile ? `1px solid ${T.border2}` : 'none', borderRadius: 8,
+          width: isMobile ? 42 : 36, height: isMobile ? 42 : 36, display: 'flex', alignItems: 'center', justifyContent: 'center',
+        }}>🙂</button>
+        <textarea ref={taRef} value={text} onChange={e => onChange(e.target.value)} onPaste={onPaste}
+          onKeyDown={e => {
+            if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submit() }
+            else if (e.key === 'Escape' && editingId) { e.preventDefault(); cancelEdit() }
+            else if (e.key === 'ArrowUp' && !text && !editingId && lastOwnMessage) { e.preventDefault(); startEditLast() }
+          }}
           placeholder={placeholder || 'Write a message…'} rows={1}
-          style={{ flex: 1, minWidth: 0, resize: 'none', maxHeight: 140, background: T.bg3, border: `1px solid ${T.border2}`, borderRadius: 8, color: T.text, fontSize: isMobile ? 16 : 13, fontFamily: 'inherit', padding: isMobile ? '11px 12px' : '9px 12px', outline: 'none', lineHeight: 1.5, boxSizing: 'border-box' }} />
-        <button onClick={doSend} disabled={busy} style={{ flexShrink: 0, padding: isMobile ? '11px 16px' : '9px 16px', minHeight: isMobile ? 42 : undefined, borderRadius: 8, border: 'none', background: busy ? T.bg4 : T.blue, color: busy ? T.text3 : '#fff', fontSize: isMobile ? 14 : 13, fontWeight: 600, cursor: busy ? 'wait' : 'pointer', fontFamily: 'inherit' }}>{busy ? '…' : 'Send'}</button>
+          style={{ flex: 1, minWidth: 0, resize: 'none', maxHeight: 140, background: T.bg3, border: `1px solid ${editingId ? T.amber : T.border2}`, borderRadius: 8, color: T.text, fontSize: isMobile ? 16 : 13, fontFamily: 'inherit', padding: isMobile ? '11px 12px' : '9px 12px', outline: 'none', lineHeight: 1.5, boxSizing: 'border-box' }} />
+        <button onClick={submit} style={{ flexShrink: 0, padding: isMobile ? '11px 16px' : '9px 16px', minHeight: isMobile ? 42 : undefined, borderRadius: 8, border: 'none', background: T.blue, color: '#fff', fontSize: isMobile ? 14 : 13, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>{editingId ? 'Save' : 'Send'}</button>
       </div>
     </div>
   )
@@ -721,6 +1099,7 @@ function NewConversationModal({ kind, dir, onClose, onCreate }: { kind: 'channel
           {filtered.map(u => (
             <label key={u.id} style={{ display: 'flex', gap: 10, alignItems: 'center', padding: '8px 12px', cursor: 'pointer', fontSize: 13, borderBottom: `1px solid ${T.border}` }}>
               <input type="checkbox" checked={selected.includes(u.id)} onChange={() => toggle(u.id)} />
+              <Avatar id={u.id} name={u.name} size={22} />
               <span style={{ color: T.text }}>{u.name}</span>
               <span style={{ marginLeft: 'auto', fontSize: 10, color: T.text3 }}>{u.role}</span>
             </label>
