@@ -110,12 +110,35 @@ async function main() {
   }
   if (!clicked) console.log('   no Process/Receive button found')
 
-  // Native confirm() is handled by the dialog handler above. A custom modal
-  // (Angular) might instead need a DOM confirm click — try, harmlessly.
-  await page.waitForTimeout(1500)
-  for (const rx of [/^(yes|confirm|ok)$/i]) {
-    const cbtn = page.locator('.modal button, [role=dialog] button, md-dialog button', { hasText: rx }).first()
-    if (await cbtn.count().catch(() => 0)) { try { await cbtn.click({ timeout: 3000 }); console.log(`   confirmed modal via ${rx}`) } catch {} }
+  // Dump whatever appeared after the Process click — modal/dialog HTML +
+  // every now-visible button — so the real submit control is identified.
+  await page.waitForTimeout(2500)
+  const modal = await page.evaluate(() => {
+    const sels = ['md-dialog', '[role=dialog]', '.modal', '.mat-dialog-container', '.ui-dialog', '.ng-modal', '.popup', '.confirm']
+    const found: string[] = []
+    for (const s of sels) {
+      document.querySelectorAll(s).forEach((el: any) => {
+        const vis = el.offsetParent !== null || (el.getBoundingClientRect().height > 0)
+        if (vis) found.push(`[${s}] ${el.outerHTML.replace(/\s+/g, ' ').slice(0, 900)}`)
+      })
+    }
+    // Also: every visible button on the page right now (post-click).
+    const btns: string[] = []
+    document.querySelectorAll('button, a.btn, [role=button], md-button').forEach((b: any) => {
+      if (b.offsetParent === null && b.getBoundingClientRect().height === 0) return
+      const t = (b.textContent || b.value || '').trim().replace(/\s+/g, ' ').slice(0, 30)
+      if (t) btns.push(t)
+    })
+    return { found, btns: Array.from(new Set(btns)) }
+  })
+  console.log(`\n   MODAL elements (${modal.found.length}):`)
+  for (const m of modal.found) console.log(`     ${m}`)
+  console.log(`   visible buttons now: ${modal.btns.join(' | ')}`)
+
+  // Try clicking a likely submit inside the modal.
+  for (const rx of [/^(process|receive|confirm|yes|ok|save|submit)$/i]) {
+    const cbtn = page.locator('md-dialog button, [role=dialog] button, .modal button, .mat-dialog-container button, button', { hasText: rx }).last()
+    if (await cbtn.count().catch(() => 0)) { try { await cbtn.click({ timeout: 3000 }); console.log(`   clicked modal submit ${rx}`); break } catch {} }
   }
   await page.waitForTimeout(5000)
 
