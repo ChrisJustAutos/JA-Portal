@@ -70,9 +70,34 @@ async function main() {
   console.log('Loading Playwright...')
   const { chromium } = await import('playwright')
   const browser = await chromium.launch({ headless: true })
-  const { client } = await loginToMechanicDesk(browser, wsId, user, pass)
+  const { client, cookies } = await loginToMechanicDesk(browser, wsId, user, pass)
+  console.log(`Logged in · csrf=${client.csrfToken ? 'yes' : 'no'}`)
+
+  // Round 4: POSTs 401'd ("Please login") — Rails CSRF. The login page
+  // doesn't carry the csrf meta; harvest it from the app shell, plus any
+  // rotated session cookies, before attempting writes.
+  if (!client.csrfToken) {
+    const ctx = await browser.newContext({ userAgent: USER_AGENT, viewport: { width: 1280, height: 900 } })
+    await ctx.addCookies((cookies as any[]).map(c => ({ ...c, domain: 'www.mechanicdesk.com.au', path: '/' })))
+    const page = await ctx.newPage()
+    for (const target of ['/', '/auto_workshop', '/stocktakes_page', '/stocks_page']) {
+      try {
+        await page.goto(MD_BASE + target, { waitUntil: 'domcontentloaded', timeout: 30000 })
+        await page.waitForTimeout(3000)
+        const meta = await page.evaluate(() => document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || null)
+        console.log(`csrf hunt ${target}: title="${await page.title()}" meta=${meta ? 'FOUND' : 'none'}`)
+        if (meta) { client.csrfToken = meta; break }
+      } catch (e: any) {
+        console.log(`csrf hunt ${target}: ${e?.message || e}`)
+      }
+    }
+    // Refresh cookie header from the browsing context (session may rotate).
+    const fresh = await ctx.cookies(MD_BASE)
+    if (fresh.length) client.cookieHeader = fresh.map((c: any) => `${c.name}=${c.value}`).join('; ')
+    await ctx.close()
+  }
   await browser.close().catch(() => {})
-  console.log(`Logged in · csrf=${client.csrfToken ? 'yes' : 'no'}\n`)
+  console.log(`csrf token: ${client.csrfToken ? `yes (${String(client.csrfToken).slice(0, 12)}…)` : 'STILL MISSING'}\n`)
 
   const stock = await findStockBySku(client, TEST_SKU)
   if (stock.kind !== 'matched') { console.log(`Test SKU ${TEST_SKU} not matched (${stock.kind}) — abort`); return }
