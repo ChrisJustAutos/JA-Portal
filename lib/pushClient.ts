@@ -13,14 +13,22 @@ function urlBase64ToUint8Array(base64: string): Uint8Array {
   return arr
 }
 
-// Subscribe this browser to Web Push (idempotent). No-op without a configured
-// VAPID key or service-worker/push support.
-export async function ensurePushSubscription(): Promise<void> {
+export interface PushResult { ok: boolean; reason?: string }
+
+// Subscribe this browser to Web Push (idempotent). Returns a reason on failure
+// so the UI can show why it didn't register.
+export async function ensurePushSubscription(): Promise<PushResult> {
+  const vapid = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY
+  if (!vapid) return { ok: false, reason: 'server push key missing in this build' }
+  if (typeof navigator === 'undefined' || !('serviceWorker' in navigator)) return { ok: false, reason: 'service workers not supported' }
+  if (typeof window === 'undefined' || !('PushManager' in window)) return { ok: false, reason: 'push not supported on this browser' }
   try {
-    const vapid = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY
-    if (!vapid) return
-    if (typeof navigator === 'undefined' || !('serviceWorker' in navigator) || !('PushManager' in window)) return
-    const reg = await navigator.serviceWorker.ready
+    // Don't wait forever if the SW never activates.
+    const reg = await Promise.race([
+      navigator.serviceWorker.ready,
+      new Promise<null>((res) => setTimeout(() => res(null), 8000)),
+    ])
+    if (!reg) return { ok: false, reason: 'service worker not active — reopen the app' }
     let sub = await reg.pushManager.getSubscription()
     if (!sub) {
       sub = await reg.pushManager.subscribe({
@@ -28,12 +36,16 @@ export async function ensurePushSubscription(): Promise<void> {
         applicationServerKey: urlBase64ToUint8Array(vapid),
       })
     }
-    await fetch('/api/notifications/push-subscribe', {
+    const r = await fetch('/api/notifications/push-subscribe', {
       method: 'POST', credentials: 'same-origin',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(sub.toJSON()),
-    }).catch(() => {})
-  } catch { /* push optional — ignore */ }
+    })
+    if (!r.ok) return { ok: false, reason: `couldn’t save subscription (HTTP ${r.status})` }
+    return { ok: true }
+  } catch (e: any) {
+    return { ok: false, reason: e?.message ? String(e.message).slice(0, 100) : 'subscribe failed' }
+  }
 }
 
 // Ask for notification permission (call from a click) and subscribe if granted.

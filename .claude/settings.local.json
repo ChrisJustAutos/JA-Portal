@@ -76,7 +76,8 @@
       "PowerShell(npx tsc --noEmit 2>$null; \"tsc: $LASTEXITCODE\"; if \\($LASTEXITCODE -eq 0\\) { npx next build 2>&1 | Select-String -Pattern 'error|Failed|Compiled successfully' | Select-Object -First 5 })",
       "PowerShell(npx web-push generate-vapid-keys --json 2>$null)",
       "PowerShell(npx tsc --noEmit 2>$null; \"tsc: $LASTEXITCODE\"; if \\($LASTEXITCODE -eq 0\\) { npx next build 2>&1 | Select-String -Pattern 'error|Failed|Compiled successfully' | Select-Object -First 4 })",
-      "PowerShell(npx tsc --noEmit 2>$null; \"tsc: $LASTEXITCODE\"; if \\($LASTEXITCODE -eq 0\\) { git add components/NotificationBell.tsx; git commit -m \"Notifications: show explicit 'unsupported' state in the bell with iOS guidance\" -m \"Co-Authored-By: Claude Opus 4.8 \\(1M context\\) <noreply@anthropic.com>\"; if \\($?\\) { git push origin main } })"
+      "PowerShell(npx tsc --noEmit 2>$null; \"tsc: $LASTEXITCODE\"; if \\($LASTEXITCODE -eq 0\\) { git add components/NotificationBell.tsx; git commit -m \"Notifications: show explicit 'unsupported' state in the bell with iOS guidance\" -m \"Co-Authored-By: Claude Opus 4.8 \\(1M context\\) <noreply@anthropic.com>\"; if \\($?\\) { git push origin main } })",
+      "PowerShell(npx tsc --noEmit 2>$null; \"tsc: $LASTEXITCODE\"; if \\($LASTEXITCODE -eq 0\\) { git add components/NotificationBell.tsx; git commit -m \"Notifications: Register button now confirms success/failure\" -m \"Co-Authored-By: Claude Opus 4.8 \\(1M context\\) <noreply@anthropic.com>\"; if \\($?\\) { git push origin main } })"
     ]
   }
 }

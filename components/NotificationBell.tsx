@@ -48,11 +48,11 @@ export default function NotificationBell({ apps, summary, refresh }: {
   async function registerDevice() {
     setRegistering(true); setRegMsg(null)
     try {
-      await ensurePushSubscription()
+      const res = await ensurePushSubscription()
       const d = await fetch('/api/notifications/push-subscribe', { credentials: 'same-origin' }).then(r => r.ok ? r.json() : null).catch(() => null)
       const c = d?.count ?? 0
       setPushCount(c)
-      setRegMsg(c > 0 ? '✓ Registered on this device' : 'Couldn’t register — fully close the app and reopen, then try again')
+      setRegMsg(c > 0 ? '✓ Registered on this device' : `Couldn’t register — ${res.reason || 'try fully closing and reopening the app'}`)
     } finally { setRegistering(false) }
   }
 
@@ -74,11 +74,19 @@ export default function NotificationBell({ apps, summary, refresh }: {
     setPerm(p)
   }
 
-  useEffect(() => {
-    if (!open) return
+  function loadList() {
     fetch('/api/notifications').then(r => r.ok ? r.json() : null)
       .then(d => { if (d) setNotifs(d.notifications) }).catch(() => {})
+  }
+  // While the dropdown is open, keep the list live (load on open + every 10s).
+  useEffect(() => {
+    if (!open) return
+    loadList()
+    const i = setInterval(loadList, 10000)
+    return () => clearInterval(i)
   }, [open])
+  // Also refresh the list the moment the polled summary count changes.
+  useEffect(() => { if (open) loadList() }, [summary?.total])
 
   // Esc closes the dropdown.
   useEffect(() => {
