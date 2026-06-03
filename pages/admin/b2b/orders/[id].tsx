@@ -806,7 +806,8 @@ function Backdrop({ children, onClose }: { children: React.ReactNode; onClose: (
       <div style={{
         position:'fixed',top:'50%',left:'50%',transform:'translate(-50%,-50%)',
         background:T.bg2,border:`1px solid ${T.border2}`,borderRadius:10,
-        padding:24,minWidth:400,maxWidth:500,zIndex:1001,
+        padding:20, width:'calc(100vw - 24px)', maxWidth:500, boxSizing:'border-box',
+        maxHeight:'calc(100vh - 32px)', overflowY:'auto', zIndex:1001,
         boxShadow:'0 20px 50px rgba(0,0,0,0.5)',
       }}>
         {children}
@@ -832,6 +833,7 @@ function ShippingCard({ order, onEdit, onReloaded, onFlash }: {
   onReloaded: () => void
   onFlash: (msg: string) => void
 }) {
+  const isMobile        = useIsMobile()
   const isShipped       = !!order.shipped_at
   const hasLiveQuote    = !!order.machship_carrier_id && !!order.machship_carrier_service_id
   const hasConsignment  = !!order.machship_consignment_id
@@ -904,52 +906,59 @@ function ShippingCard({ order, onEdit, onReloaded, onFlash }: {
 
   return (
     <Card title="Shipping">
-      <div style={{display:'flex', alignItems:'center', gap:8, marginBottom:10, flexWrap:'wrap'}}>
-        {isShipped ? (
-          <span style={{fontSize:11, padding:'2px 8px', borderRadius:3, background:`${T.teal}20`, color:T.teal, border:`1px solid ${T.teal}40`}}>
-            ✓ Shipped {order.shipped_at ? fullDate(order.shipped_at) : ''}
-          </span>
-        ) : (
-          <span style={{fontSize:11, color:T.text3}}>Not shipped yet</span>
-        )}
-        <span style={{flex:1}}/>
-        {hasLiveQuote && !hasConsignment && (
-          <button
-            onClick={() => bookViaMachShip(false)}
-            disabled={bookingBusy}
-            style={{padding:'5px 12px', borderRadius:5, border:`1px solid ${T.teal}60`, background:`${T.teal}15`, color: T.teal, fontSize:11, cursor: bookingBusy ? 'wait' : 'pointer', fontFamily:'inherit', fontWeight:600}}>
-            {bookingBusy ? 'Booking…' : '⚡ Book via MachShip'}
-          </button>
-        )}
-        {hasConsignment && (
-          <button
-            onClick={refreshFromMachShip}
-            disabled={refreshBusy}
-            style={{padding:'5px 12px', borderRadius:5, border:`1px solid ${T.border2}`, background:'transparent', color: T.blue, fontSize:11, cursor: refreshBusy ? 'wait' : 'pointer', fontFamily:'inherit'}}>
-            {refreshBusy ? 'Refreshing…' : '↻ Refresh from MachShip'}
-          </button>
-        )}
-        <button onClick={onEdit} style={{padding:'5px 12px', borderRadius:5, border:`1px solid ${T.border2}`, background:'transparent', color: T.blue, fontSize:11, cursor:'pointer', fontFamily:'inherit'}}>
-          {isShipped ? 'Edit shipping' : '+ Manual book'}
-        </button>
-        {order.label_pdf_path && (
-          <button onClick={openLabel} style={{padding:'5px 12px', borderRadius:5, border:`1px solid ${T.teal}40`, background:'transparent', color: T.teal, fontSize:11, cursor:'pointer', fontFamily:'inherit'}}>
-            🖨 Print label
-          </button>
-        )}
-      </div>
+      {(() => {
+        const mb = (extra: React.CSSProperties = {}): React.CSSProperties => ({
+          borderRadius: 6, fontFamily: 'inherit', cursor: 'pointer', fontWeight: 600,
+          ...(isMobile ? { width: '100%', padding: '11px 14px', fontSize: 13, minHeight: 44 } : { padding: '5px 12px', fontSize: 11 }),
+          ...extra,
+        })
+        return (
+          <div style={{ display: 'flex', gap: 8, marginBottom: 10, flexWrap: 'wrap', flexDirection: isMobile ? 'column' : 'row', alignItems: isMobile ? 'stretch' : 'center' }}>
+            <div style={{ display: 'flex', alignItems: 'center' }}>
+              {isShipped ? (
+                <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 3, background: `${T.teal}20`, color: T.teal, border: `1px solid ${T.teal}40` }}>
+                  ✓ Shipped {order.shipped_at ? fullDate(order.shipped_at) : ''}
+                </span>
+              ) : (
+                <span style={{ fontSize: 11, color: T.text3 }}>Not shipped yet</span>
+              )}
+            </div>
+            {!isMobile && <span style={{ flex: 1 }}/>}
+            {hasLiveQuote && !hasConsignment && (
+              <button onClick={() => bookViaMachShip(false)} disabled={bookingBusy}
+                style={mb({ border: `1px solid ${T.teal}60`, background: `${T.teal}15`, color: T.teal, cursor: bookingBusy ? 'wait' : 'pointer' })}>
+                {bookingBusy ? 'Booking…' : '⚡ Book via MachShip'}
+              </button>
+            )}
+            {hasConsignment && (
+              <button onClick={refreshFromMachShip} disabled={refreshBusy}
+                style={mb({ border: `1px solid ${T.border2}`, background: 'transparent', color: T.blue, fontWeight: 500, cursor: refreshBusy ? 'wait' : 'pointer' })}>
+                {refreshBusy ? 'Refreshing…' : '↻ Refresh from MachShip'}
+              </button>
+            )}
+            <button onClick={onEdit} style={mb({ border: `1px solid ${T.border2}`, background: 'transparent', color: T.blue, fontWeight: 500 })}>
+              {isShipped ? 'Edit shipping' : '+ Manual book'}
+            </button>
+            {order.label_pdf_path && (
+              <button onClick={openLabel} style={mb({ border: `1px solid ${T.teal}40`, background: 'transparent', color: T.teal, fontWeight: 500 })}>
+                🖨 Print label
+              </button>
+            )}
+          </div>
+        )
+      })()}
 
       {/* Pack mode — override the cartonizer for this order before booking. */}
       {hasLiveQuote && !hasConsignment && (
         <div style={{display:'flex', alignItems:'center', gap:8, marginBottom:10, flexWrap:'wrap'}}>
           <span style={{fontSize:11, color:T.text3, whiteSpace:'nowrap'}}>Pack as</span>
           <select value={packMode} onChange={e => setPackMode(e.target.value)}
-            style={{background:T.bg3, border:`1px solid ${T.border2}`, color:T.text, borderRadius:5, padding:'5px 8px', fontSize:12, outline:'none', fontFamily:'inherit'}}>
+            style={{flex: isMobile ? 1 : undefined, minWidth: isMobile ? 0 : undefined, background:T.bg3, border:`1px solid ${T.border2}`, color:T.text, borderRadius:5, padding: isMobile ? '9px 10px' : '5px 8px', fontSize: isMobile ? 16 : 12, outline:'none', fontFamily:'inherit'}}>
             <option value="auto">Auto (weight/volume)</option>
             <option value="cartons">Cartons</option>
             <option value="pallet">Pallet</option>
           </select>
-          <span style={{fontSize:10, color:T.text3}}>used when you book below</span>
+          {!isMobile && <span style={{fontSize:10, color:T.text3}}>used when you book below</span>}
         </div>
       )}
 
@@ -963,7 +972,7 @@ function ShippingCard({ order, onEdit, onReloaded, onFlash }: {
             value={dispatchAt}
             min={localNow()}
             onChange={e => setDispatchAt(e.target.value)}
-            style={{flex:1, minWidth:180, background:T.bg3, border:`1px solid ${T.border2}`, color:T.text, borderRadius:5, padding:'5px 8px', fontSize:12, outline:'none', fontFamily:'inherit', colorScheme:'dark'}}
+            style={{flex:1, minWidth:160, background:T.bg3, border:`1px solid ${T.border2}`, color:T.text, borderRadius:5, padding: isMobile ? '9px 10px' : '5px 8px', fontSize: isMobile ? 16 : 12, outline:'none', fontFamily:'inherit', colorScheme:'dark'}}
           />
           {dispatchAt
             ? <button onClick={() => setDispatchAt('')} style={{background:'none', border:'none', color:T.text3, fontSize:11, cursor:'pointer', fontFamily:'inherit'}}>clear (ASAP)</button>
