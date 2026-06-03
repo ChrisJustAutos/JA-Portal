@@ -258,71 +258,134 @@ export default function StockTransferPage({ user }: Props) {
 
           <SetupPanel cfg={cfg} onSaved={c => setCfg(c)} configured={configured}/>
 
-          {/* ── Item picker ─────────────────────────────────────────── */}
-          <section style={{background:T.bg2,border:`1px solid ${T.border}`,borderRadius:12,padding:18,marginBottom:20}}>
-            <div style={{display:'flex',alignItems:'center',gap:12,marginBottom:12,flexWrap:'wrap'}}>
-              <h2 style={{fontSize:15,fontWeight:600,margin:0}}>Pick items to transfer {forward ? 'to VPS' : 'back to JAWS'}</h2>
-              <span style={{flex:1}}/>
-              <input value={filter} onChange={e=>setFilter(e.target.value)} placeholder="Filter by SKU or name…" style={{...inp,width:240}}/>
-              <button onClick={()=>loadItems(direction)} style={{...inp,cursor:'pointer',color:T.text2}}>↻ Refresh</button>
-            </div>
+          {/* ── Pick items (browser) + Picked items (summary) ─────────── */}
+          <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit, minmax(380px, 1fr))',gap:20,marginBottom:20,alignItems:'start'}}>
 
-            {items === null && !itemsError && <div style={{color:T.text3,fontSize:13,padding:'18px 0'}}>Loading items + live JAWS costs…</div>}
-            {itemsError && <div style={{color:T.red,fontSize:13,padding:'12px 0'}}>Failed to load items: {itemsError}</div>}
-            {items !== null && items.length === 0 && <div style={{color:T.text3,fontSize:13,padding:'12px 0'}}>{forward ? 'No inventoried items with stock on hand.' : 'No inventoried catalogue items.'}</div>}
+            {/* Left: available items to pick from */}
+            <section style={{background:T.bg2,border:`1px solid ${T.border}`,borderRadius:12,padding:18}}>
+              <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:12,flexWrap:'wrap'}}>
+                <h2 style={{fontSize:15,fontWeight:600,margin:0}}>Pick items</h2>
+                <span style={{flex:1}}/>
+                <input value={filter} onChange={e=>setFilter(e.target.value)} placeholder="Filter SKU or name…" style={{...inp,width:200}}/>
+                <button onClick={()=>loadItems(direction)} style={{...inp,cursor:'pointer',color:T.text2}}>↻</button>
+              </div>
 
-            {items !== null && items.length > 0 && (
-              <div style={{overflowX:'auto'}}>
-                <table style={{width:'100%',borderCollapse:'collapse',fontSize:13}}>
-                  <thead>
-                    <tr style={{color:T.text3,fontSize:11,textTransform:'uppercase',letterSpacing:'0.06em'}}>
-                      <th style={{textAlign:'left',padding:'6px 8px'}}></th>
-                      <th style={{textAlign:'left',padding:'6px 8px'}}>SKU</th>
-                      <th style={{textAlign:'left',padding:'6px 8px'}}>Item</th>
-                      <th style={{textAlign:'right',padding:'6px 8px'}}>JAWS on hand</th>
-                      <th style={{textAlign:'right',padding:'6px 8px'}}>Cost (ex)</th>
-                      <th style={{textAlign:'right',padding:'6px 8px'}}>Transfer qty</th>
-                      <th style={{textAlign:'right',padding:'6px 8px'}}>Line total (ex)</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {visible.map(i => {
-                      const on = selected[i.catalogue_id] != null
-                      const qty = selected[i.catalogue_id] ?? 0
-                      return (
-                        <tr key={i.catalogue_id} style={{borderTop:`1px solid ${T.border}`,background:on?'rgba(79,142,247,0.06)':'transparent'}}>
-                          <td style={{padding:'7px 8px'}}>
-                            <input type="checkbox" checked={on} onChange={()=>toggle(i)} style={{cursor:'pointer'}}/>
-                          </td>
-                          <td style={{padding:'7px 8px',fontFamily:'monospace',fontSize:12}}>{i.sku}</td>
-                          <td style={{padding:'7px 8px',color:T.text2}}>{i.name}{!i.is_taxable && <span style={{color:T.text3,fontSize:10,marginLeft:6}}>FRE</span>}</td>
-                          <td style={{padding:'7px 8px',textAlign:'right',fontFamily:'monospace'}}>{i.on_hand}</td>
-                          <td style={{padding:'7px 8px',textAlign:'right',fontFamily:'monospace'}}>{fmt$(i.avg_cost)}</td>
-                          <td style={{padding:'7px 8px',textAlign:'right'}}>
-                            {on ? (
+              {items === null && !itemsError && <div style={{color:T.text3,fontSize:13,padding:'18px 0'}}>Loading items + live JAWS costs…</div>}
+              {itemsError && <div style={{color:T.red,fontSize:13,padding:'12px 0'}}>Failed to load items: {itemsError}</div>}
+              {items !== null && items.length === 0 && <div style={{color:T.text3,fontSize:13,padding:'12px 0'}}>{forward ? 'No inventoried items with stock on hand.' : 'No inventoried catalogue items.'}</div>}
+
+              {items !== null && items.length > 0 && (
+                <div style={{maxHeight:460,overflowY:'auto',border:`1px solid ${T.border}`,borderRadius:8}}>
+                  <table style={{width:'100%',borderCollapse:'collapse',fontSize:13}}>
+                    <thead style={{position:'sticky',top:0,background:T.bg2,zIndex:1}}>
+                      <tr style={{color:T.text3,fontSize:11,textTransform:'uppercase',letterSpacing:'0.06em'}}>
+                        <th style={{textAlign:'left',padding:'7px 8px'}}></th>
+                        <th style={{textAlign:'left',padding:'7px 8px'}}>SKU</th>
+                        <th style={{textAlign:'left',padding:'7px 8px'}}>Item</th>
+                        <th style={{textAlign:'right',padding:'7px 8px'}}>On hand</th>
+                        <th style={{textAlign:'right',padding:'7px 8px'}}>Cost</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {visible.map(i => {
+                        const on = selected[i.catalogue_id] != null
+                        return (
+                          <tr key={i.catalogue_id}
+                            onClick={()=>toggle(i)}
+                            style={{borderTop:`1px solid ${T.border}`,background:on?'rgba(79,142,247,0.08)':'transparent',cursor:'pointer'}}>
+                            <td style={{padding:'7px 8px'}}>
+                              <input type="checkbox" checked={on} readOnly style={{cursor:'pointer',pointerEvents:'none'}}/>
+                            </td>
+                            <td style={{padding:'7px 8px',fontFamily:'monospace',fontSize:12}}>{i.sku}</td>
+                            <td style={{padding:'7px 8px',color:T.text2}}>{i.name}{!i.is_taxable && <span style={{color:T.text3,fontSize:10,marginLeft:6}}>FRE</span>}</td>
+                            <td style={{padding:'7px 8px',textAlign:'right',fontFamily:'monospace'}}>{i.on_hand}</td>
+                            <td style={{padding:'7px 8px',textAlign:'right',fontFamily:'monospace'}}>{fmt$(i.avg_cost)}</td>
+                          </tr>
+                        )
+                      })}
+                      {visible.length === 0 && (
+                        <tr><td colSpan={5} style={{padding:'14px 8px',color:T.text3,fontSize:12,textAlign:'center'}}>No items match “{filter}”.</td></tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </section>
+
+            {/* Right: picked items summary */}
+            <section style={{background:T.bg2,border:`1px solid ${T.border}`,borderRadius:12,padding:18}}>
+              <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:12}}>
+                <h2 style={{fontSize:15,fontWeight:600,margin:0}}>Picked items</h2>
+                <span style={{fontSize:12,color:T.text3}}>({picked.length})</span>
+                <span style={{flex:1}}/>
+                {picked.length > 0 && (
+                  <button onClick={()=>setSelected({})} style={{...inp,cursor:'pointer',color:T.text2,padding:'5px 10px',fontSize:12}}>Clear all</button>
+                )}
+              </div>
+
+              {picked.length === 0 ? (
+                <div style={{color:T.text3,fontSize:13,padding:'28px 8px',textAlign:'center',border:`1px dashed ${T.border2}`,borderRadius:8}}>
+                  Nothing selected yet — tick items on the left to build the transfer.
+                </div>
+              ) : (
+                <div style={{maxHeight:460,overflowY:'auto',border:`1px solid ${T.border}`,borderRadius:8}}>
+                  <table style={{width:'100%',borderCollapse:'collapse',fontSize:13}}>
+                    <thead style={{position:'sticky',top:0,background:T.bg2,zIndex:1}}>
+                      <tr style={{color:T.text3,fontSize:11,textTransform:'uppercase',letterSpacing:'0.06em'}}>
+                        <th style={{textAlign:'left',padding:'7px 8px'}}>SKU</th>
+                        <th style={{textAlign:'left',padding:'7px 8px'}}>Item</th>
+                        <th style={{textAlign:'right',padding:'7px 8px'}}>Qty</th>
+                        <th style={{textAlign:'right',padding:'7px 8px'}}>Line total</th>
+                        <th style={{padding:'7px 8px'}}></th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {picked.map(i => {
+                        const qty = selected[i.catalogue_id] ?? 0
+                        return (
+                          <tr key={i.catalogue_id} style={{borderTop:`1px solid ${T.border}`}}>
+                            <td style={{padding:'7px 8px',fontFamily:'monospace',fontSize:12}}>{i.sku}</td>
+                            <td style={{padding:'7px 8px',color:T.text2}}>{i.name}</td>
+                            <td style={{padding:'7px 8px',textAlign:'right'}}>
                               <input
                                 type="number" min={0} max={forward ? i.on_hand : undefined} value={qty}
                                 onChange={e=>setQty(i, e.target.value)}
-                                style={{...inp,width:80,padding:'4px 8px',textAlign:'right',fontFamily:'monospace'}}
+                                style={{...inp,width:72,padding:'4px 8px',textAlign:'right',fontFamily:'monospace'}}
                               />
-                            ) : <span style={{color:T.text3}}>—</span>}
-                          </td>
-                          <td style={{padding:'7px 8px',textAlign:'right',fontFamily:'monospace',color:on?T.text:T.text3}}>
-                            {on ? fmt$(qty * i.avg_cost) : '—'}
-                          </td>
-                        </tr>
-                      )
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            )}
+                              {forward && <div style={{fontSize:10,color:T.text3,marginTop:2}}>/ {i.on_hand}</div>}
+                            </td>
+                            <td style={{padding:'7px 8px',textAlign:'right',fontFamily:'monospace',color:T.text}}>{fmt$(qty * i.avg_cost)}</td>
+                            <td style={{padding:'7px 8px',textAlign:'center'}}>
+                              <button onClick={()=>toggle(i)} title="Remove"
+                                style={{background:'none',border:'none',color:T.text3,fontSize:15,cursor:'pointer',lineHeight:1,padding:'0 3px'}}
+                                onMouseEnter={e=>{e.currentTarget.style.color=T.red}}
+                                onMouseLeave={e=>{e.currentTarget.style.color=T.text3}}>×</button>
+                            </td>
+                          </tr>
+                        )
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
 
-            {/* Footer: totals + execute */}
-            <div style={{display:'flex',alignItems:'center',gap:16,marginTop:14,paddingTop:14,borderTop:`1px solid ${T.border}`,flexWrap:'wrap'}}>
+              {/* Totals */}
+              {picked.length > 0 && (
+                <div style={{marginTop:12,paddingTop:12,borderTop:`1px solid ${T.border}`,fontSize:13,color:T.text2,display:'flex',justifyContent:'space-between'}}>
+                  <span>{picked.length} item{picked.length===1?'':'s'}</span>
+                  <span><b style={{color:T.text}}>{fmt$(totals.ex)}</b> ex · GST {fmt$(totals.gst)} · <b style={{color:T.text}}>{fmt$(totals.inc)}</b> inc</span>
+                </div>
+              )}
+            </section>
+          </div>
+
+          {/* ── Execute footer ──────────────────────────────────────── */}
+          <section style={{background:T.bg2,border:`1px solid ${T.border}`,borderRadius:12,padding:18,marginBottom:20}}>
+            <div style={{display:'flex',alignItems:'center',gap:16,flexWrap:'wrap'}}>
               <div style={{fontSize:13,color:T.text2}}>
-                {picked.length} item{picked.length===1?'':'s'} selected
-                {picked.length > 0 && <> — <b style={{color:T.text}}>{fmt$(totals.ex)}</b> ex GST · GST {fmt$(totals.gst)} · <b style={{color:T.text}}>{fmt$(totals.inc)}</b> inc</>}
+                {picked.length === 0
+                  ? 'Select items to transfer'
+                  : <>Transferring <b style={{color:T.text}}>{picked.length}</b> item{picked.length===1?'':'s'} — <b style={{color:T.text}}>{fmt$(totals.inc)}</b> inc GST</>}
               </div>
               <span style={{flex:1}}/>
               <input
@@ -335,7 +398,7 @@ export default function StockTransferPage({ user }: Props) {
               <button
                 disabled={blocked}
                 onClick={()=>setConfirming(true)}
-                title={!configured ? 'Complete the MYOB setup above first' : !poRef.trim() ? 'Enter a PO reference first' : undefined}
+                title={!configured ? 'Complete the MYOB setup above first' : !poRef.trim() ? 'Enter a PO reference first' : picked.length===0 ? 'Pick at least one item' : undefined}
                 style={{
                   ...inp, cursor: blocked?'not-allowed':'pointer',
                   background: blocked && !running ? T.bg3 : T.blue, border:'none',
