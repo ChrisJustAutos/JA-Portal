@@ -19,8 +19,9 @@ function urlBase64ToUint8Array(base64: string): Uint8Array {
 export interface PushResult { ok: boolean; reason?: string }
 
 // Subscribe this browser to Web Push (idempotent). Returns a reason on failure
-// so the UI can show why it didn't register.
-export async function ensurePushSubscription(): Promise<PushResult> {
+// so the UI can show why it didn't register. `subscribeUrl` lets the B2B
+// distributor portal store the subscription against its own user table.
+export async function ensurePushSubscription(subscribeUrl = '/api/notifications/push-subscribe'): Promise<PushResult> {
   const vapid = (process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY || '').replace(/\s+/g, '')
   if (!vapid) return { ok: false, reason: 'server push key missing in this build' }
   if (typeof navigator === 'undefined' || !('serviceWorker' in navigator)) return { ok: false, reason: 'service workers not supported' }
@@ -39,7 +40,7 @@ export async function ensurePushSubscription(): Promise<PushResult> {
         applicationServerKey: urlBase64ToUint8Array(vapid),
       })
     }
-    const r = await fetch('/api/notifications/push-subscribe', {
+    const r = await fetch(subscribeUrl, {
       method: 'POST', credentials: 'same-origin',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(sub.toJSON()),
@@ -53,12 +54,12 @@ export async function ensurePushSubscription(): Promise<PushResult> {
 
 // Ask for notification permission (call from a click) and subscribe if granted.
 // Returns the resulting permission state.
-export async function enableNotifications(): Promise<NotificationPermission> {
+export async function enableNotifications(subscribeUrl = '/api/notifications/push-subscribe'): Promise<NotificationPermission> {
   if (typeof Notification === 'undefined') return 'denied'
   let perm = Notification.permission
   if (perm === 'default') {
     try { perm = await Notification.requestPermission() } catch { /* ignore */ }
   }
-  if (perm === 'granted') await ensurePushSubscription()
+  if (perm === 'granted') await ensurePushSubscription(subscribeUrl)
   return perm
 }

@@ -154,5 +154,19 @@ export default withAuth('admin:b2b', async (req: NextApiRequest, res: NextApiRes
     console.error('order_events insert failed (non-fatal):', e?.message)
   }
 
+  // Push the distributor when this marks the order shipped (not just a tweak).
+  if (update.status === 'shipped' && !order.shipped_at && updated?.distributor_id) {
+    try {
+      const { sendPushToDistributor } = await import('../../../../../../lib/push')
+      const tn = update.tracking_number || updated.tracking_number
+      await sendPushToDistributor(updated.distributor_id, {
+        title: `Order ${updated.order_number || ''} shipped`.trim(),
+        body: `On its way${update.carrier ? ` via ${update.carrier}` : ''}${tn ? ` — tracking ${tn}` : ''}.`,
+        href: `/b2b/orders/${id}`,
+        tag: `order-${id}`,
+      })
+    } catch (e: any) { console.error('distributor ship push failed (non-fatal):', e?.message) }
+  }
+
   return res.status(200).json({ ok: true, order: updated })
 })

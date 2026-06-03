@@ -65,3 +65,33 @@ export async function sendPushToUsers(userIds: string[], payload: PushPayload): 
     console.error('sendPushToUsers failed (non-fatal):', e?.message || e)
   }
 }
+
+/**
+ * Push to every device of every ACTIVE user of a B2B distributor (order
+ * confirmations, shipping, status updates). Best-effort; never throws.
+ */
+export async function sendPushToDistributor(distributorId: string, payload: PushPayload): Promise<void> {
+  try {
+    if (!configured() || !distributorId) return
+    const c = sb()
+    const { data: users } = await c.from('b2b_distributor_users')
+      .select('id').eq('distributor_id', distributorId).eq('is_active', true)
+    const userIds = (users || []).map((u: any) => u.id)
+    if (!userIds.length) return
+    const { data: subs } = await c.from('b2b_push_subscriptions')
+      .select('id, endpoint, p256dh, auth').in('b2b_user_id', userIds)
+    if (!subs?.length) return
+    const body = JSON.stringify({ title: payload.title, body: payload.body || '', href: payload.href || '/b2b', tag: payload.tag })
+    await Promise.all(subs.map(async (s) => {
+      try {
+        await webpush.sendNotification({ endpoint: s.endpoint, keys: { p256dh: s.p256dh, auth: s.auth } }, body)
+      } catch (e: any) {
+        const code = e?.statusCode
+        if (code === 404 || code === 410) await c.from('b2b_push_subscriptions').delete().eq('id', s.id)
+        else console.error('b2b push send failed:', code || e?.message || e)
+      }
+    }))
+  } catch (e: any) {
+    console.error('sendPushToDistributor failed (non-fatal):', e?.message || e)
+  }
+}

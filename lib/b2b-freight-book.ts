@@ -219,7 +219,7 @@ export async function bookFreightForOrder(orderId: string, opts: { actorId?: str
     }
   }
 
-  // Distributor "shipped + tax invoice" email on first booking (best-effort).
+  // Distributor "shipped + tax invoice" email + app push on first booking.
   if (firstBook) {
     try {
       await sendDistributorShippedEmail(orderId, {
@@ -230,6 +230,19 @@ export async function bookFreightForOrder(orderId: string, opts: { actorId?: str
         eta: consignment.etaUtc || consignment.etaLocal || null,
       })
     } catch (e: any) { console.error('distributor shipped email failed (non-fatal):', e?.message) }
+    try {
+      if (order.distributor_id) {
+        const carrier = order.freight_service_label || consignment.status?.name || 'courier'
+        const tn = consignment.carrierConsignmentId || consignment.consignmentNumber
+        const { sendPushToDistributor } = await import('./push')
+        await sendPushToDistributor(order.distributor_id, {
+          title: `Order ${order.order_number || ''} shipped`.trim(),
+          body: `On its way via ${carrier}${tn ? ` — tracking ${tn}` : ''}.`,
+          href: `/b2b/orders/${orderId}`,
+          tag: `order-${orderId}`,
+        })
+      }
+    } catch (e: any) { console.error('distributor shipped push failed (non-fatal):', e?.message) }
   }
 
   return {

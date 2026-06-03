@@ -178,5 +178,22 @@ export default withAuth('edit:b2b_orders', async (req: NextApiRequest, res: Next
     },
   })
 
+  // Push the distributor on forward status changes they care about.
+  // (Skip 'shipped' here — the ship/freight endpoints own that push with
+  // tracking detail — and skip "undo" transitions.)
+  const isUndo = !!(RANK[toStatus] && RANK[fromStatus] && RANK[toStatus] < RANK[fromStatus])
+  const DIST_LABEL: Record<string, string> = { picking: 'is being picked', packed: 'is packed and ready', delivered: 'has been delivered' }
+  if (!isUndo && DIST_LABEL[toStatus] && updated?.distributor_id) {
+    try {
+      const { sendPushToDistributor } = await import('../../../../../../lib/push')
+      await sendPushToDistributor(updated.distributor_id, {
+        title: `Order ${updated.order_number || ''}`.trim(),
+        body: `Your order ${DIST_LABEL[toStatus]}.`,
+        href: `/b2b/orders/${id}`,
+        tag: `order-${id}`,
+      })
+    } catch (e: any) { console.error('distributor transition push failed (non-fatal):', e?.message) }
+  }
+
   return res.status(200).json({ ok: true, order: updated })
 })

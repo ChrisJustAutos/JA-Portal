@@ -89,6 +89,21 @@ export async function runPostPaymentPipeline(orderId: string, opts: { paymentInt
   if (!order.distributor_notified_at) {
     try { await sendDistributorOrderEmails(orderId, { invoiceNumber: myobInvoiceNumber }) }
     catch (e: any) { console.error(`pipeline: distributor emails failed for order ${orderId}:`, e?.message || e) }
+
+    // Push to the distributor's installed app (once per order, guarded by the
+    // same distributor_notified_at flag the email uses).
+    try {
+      const { data: o } = await c.from('b2b_orders').select('distributor_id, order_number, total_inc').eq('id', orderId).maybeSingle()
+      if (o?.distributor_id) {
+        const { sendPushToDistributor } = await import('./push')
+        await sendPushToDistributor(o.distributor_id, {
+          title: `Order ${o.order_number} confirmed`,
+          body: `Payment received — $${Number(o.total_inc || 0).toFixed(2)} inc GST. We’ll let you know when it ships.`,
+          href: `/b2b/orders/${orderId}`,
+          tag: `order-${orderId}`,
+        })
+      }
+    } catch (e: any) { console.error(`pipeline: distributor push failed for order ${orderId}:`, e?.message || e) }
   }
 
   // Portal notification + optional Slack alert (best-effort, fire-and-forget).

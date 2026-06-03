@@ -10,11 +10,14 @@
 //     ...page content...
 //   </B2BLayout>
 
-import React from 'react'
+import React, { useEffect, useState } from 'react'
 import { useRouter } from 'next/router'
 import { getSupabase } from '../../lib/supabaseClient'
 import { useIsMobile } from '../../lib/useIsMobile'
 import { AppIcon } from '../../lib/AppIcons'
+import { enableNotifications, ensurePushSubscription } from '../../lib/pushClient'
+
+const B2B_SUBSCRIBE_URL = '/api/b2b/notifications/push-subscribe'
 
 const T = {
   bg:'#0d0f12', bg2:'#131519', bg3:'#1a1d23', bg4:'#21252d',
@@ -151,6 +154,9 @@ export default function B2BLayout({ user, active = null, children, cartCount }: 
         </div>
       </header>
 
+      {/* ── Notifications opt-in banner ───────────────────────── */}
+      <B2BNotifyBanner isMobile={isMobile} />
+
       {/* ── Main content ──────────────────────────────────────── */}
       <main style={{
         maxWidth:1280, margin:'0 auto',
@@ -215,6 +221,49 @@ export default function B2BLayout({ user, active = null, children, cartCount }: 
           </div>
         </nav>
       )}
+    </div>
+  )
+}
+
+// Slim opt-in banner for order/shipping push notifications. Auto-subscribes
+// if permission is already granted; prompts (on click — required by browsers)
+// when undecided; dismissible so it doesn't nag.
+function B2BNotifyBanner({ isMobile }: { isMobile: boolean }) {
+  const [perm, setPerm] = useState<NotificationPermission | 'unsupported' | 'loading'>('loading')
+  const [dismissed, setDismissed] = useState(true)
+  const [busy, setBusy] = useState(false)
+
+  useEffect(() => {
+    if (typeof Notification === 'undefined') { setPerm('unsupported'); return }
+    setPerm(Notification.permission)
+    setDismissed(localStorage.getItem('ja-b2b-notif-dismissed') === '1')
+    if (Notification.permission === 'granted') ensurePushSubscription(B2B_SUBSCRIBE_URL)
+  }, [])
+
+  if (perm !== 'default' || dismissed) return null
+  return (
+    <div style={{
+      maxWidth: 1280, margin: '0 auto',
+      padding: isMobile ? '10px 14px 0' : '14px 24px 0',
+    }}>
+      <div style={{
+        display: 'flex', alignItems: 'center', gap: 10,
+        background: 'rgba(79,142,247,0.12)', border: `1px solid ${T.blue}55`,
+        borderRadius: 10, padding: '10px 12px', fontSize: 13, color: T.text,
+      }}>
+        <span style={{ fontSize: 16 }}>🔔</span>
+        <span style={{ flex: 1 }}>Turn on notifications for order confirmations & shipping updates.</span>
+        <button
+          disabled={busy}
+          onClick={async () => { setBusy(true); try { const p = await enableNotifications(B2B_SUBSCRIBE_URL); setPerm(p) } finally { setBusy(false) } }}
+          style={{ background: T.blue, border: 'none', color: '#fff', borderRadius: 7, padding: '7px 14px', fontSize: 12.5, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit', whiteSpace: 'nowrap' }}>
+          {busy ? '…' : 'Enable'}
+        </button>
+        <button
+          onClick={() => { setDismissed(true); try { localStorage.setItem('ja-b2b-notif-dismissed', '1') } catch {} }}
+          aria-label="Dismiss"
+          style={{ background: 'none', border: 'none', color: T.text3, fontSize: 17, lineHeight: 1, cursor: 'pointer', padding: '0 2px' }}>×</button>
+      </div>
     </div>
   )
 }

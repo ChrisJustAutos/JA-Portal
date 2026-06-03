@@ -17,14 +17,18 @@
 // _app.tsx already sets the viewport meta tag, theme-color, and the global
 // dark CSS — those don't need to be duplicated here.
 
-import { Html, Head, Main, NextScript } from 'next/document'
+import { Html, Head, Main, NextScript, DocumentContext } from 'next/document'
 
-export default function Document() {
+// The distributor portal (/b2b) installs as its own app — own name + launch
+// page (/b2b/catalogue) — so serve a different manifest on those routes.
+export default function Document({ isB2B }: { isB2B?: boolean }) {
+  const manifestHref = isB2B ? '/manifest-b2b.json' : '/manifest.json'
+  const appTitle = isB2B ? 'JA Wholesale' : 'JA Portal'
   return (
     <Html lang="en">
       <Head>
-        {/* PWA manifest */}
-        <link rel="manifest" href="/manifest.json" />
+        {/* PWA manifest (staff vs distributor) */}
+        <link rel="manifest" href={manifestHref} />
 
         {/* Apple home-screen icon (180x180 PNG, opaque, no rounding —
             iOS adds the rounding/shine automatically) */}
@@ -40,11 +44,11 @@ export default function Document() {
             we want a solid dark bar so use "black" instead. */}
         <meta name="apple-mobile-web-app-capable" content="yes" />
         <meta name="apple-mobile-web-app-status-bar-style" content="black" />
-        <meta name="apple-mobile-web-app-title" content="JA Portal" />
+        <meta name="apple-mobile-web-app-title" content={appTitle} />
 
         {/* Generic mobile-web-app-capable for Android Chrome */}
         <meta name="mobile-web-app-capable" content="yes" />
-        <meta name="application-name" content="JA Portal" />
+        <meta name="application-name" content={appTitle} />
 
         {/* Disable phone-number auto-detection (would underline numbers
             in invoice metadata and turn them into tel: links) */}
@@ -56,4 +60,10 @@ export default function Document() {
       </body>
     </Html>
   )
+}
+
+Document.getInitialProps = async (ctx: DocumentContext) => {
+  const initialProps = await ctx.defaultGetInitialProps(ctx)
+  const url = ctx.req?.url || ctx.pathname || ''
+  return { ...initialProps, isB2B: url.startsWith('/b2b') }
 }
