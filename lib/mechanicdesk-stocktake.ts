@@ -194,8 +194,14 @@ async function mdFetch<T>(
     'X-Requested-With': 'XMLHttpRequest',
     ...((init.headers || {}) as Record<string, string>),
   }
-  if (init.method && init.method !== 'GET' && client.csrfToken) {
-    headers['X-CSRF-Token'] = client.csrfToken
+  if (init.method && init.method !== 'GET') {
+    if (client.csrfToken) headers['X-CSRF-Token'] = client.csrfToken
+    // MD's app is Angular-style: it echoes the XSRF-TOKEN cookie as an
+    // X-XSRF-TOKEN header on writes. Without this, POST/PUT/DELETE 401 with
+    // "Please login" even though the session cookies are valid. (Confirmed
+    // via probe — this is what unlocks purchase create/delete.)
+    const xsrf = client.cookieHeader.split(';').map(s => s.trim()).find(s => /^XSRF-TOKEN=/i.test(s))
+    if (xsrf) headers['X-XSRF-TOKEN'] = decodeURIComponent(xsrf.split('=').slice(1).join('='))
   }
   if (init.body && !headers['Content-Type']) {
     headers['Content-Type'] = 'application/json'
@@ -435,4 +441,68 @@ export async function fetchInStockUniverse(
   }
 
   return items
+}
+
+// ── Purchase orders ───────────────────────────────────────────────────────
+// MD calls them "purchases". Create + delete confirmed via probe; the write
+// auth is the XSRF-TOKEN echo handled in mdFetch. Receiving a PO into stock
+// ("process") is done in MD's UI — the endpoint isn't a guessable REST route,
+// so we create the PO and leave it for staff to receive (or wire the process
+// call once its request is captured from the MD UI's network tab).
+
+export interface MdPurchaseLineInput {
+  stock_id: number
+  quantity: number
+  unit_price: number       // ex-GST
+  gst_free: boolean
+  name: string
+  description?: string
+}
+
+export interface MdPurchaseResult {
+  id: number
+  number: string | null
+  status: string | null
+  total_amount: number | null
+}
+
+/**
+ * Create a purchase order in MechanicDesk. Flat body (no Rails wrapper), the
+ * shape confirmed by probe:
+ *   { date, supplier_id, reference, description,
+ *     purchase_items: [{ stock_id, quantity, unit_price,
+ *                        included_gst:false, gst_free, name, description }] }
+ * Returns the created purchase (status starts 'pending').
+ */
+export async function createMdPurchase(
+  client: MdClient,
+  input: { supplierId: number; reference: string; description?: string; lines: MdPurchaseLineInput[] },
+): Promise<MdPurchaseResult> {
+  const body = {
+    date: new Date().toISOString(),
+    supplier_id: input.supplierId,
+    reference: input.reference,
+    description: input.description || '',
+    purchase_items: input.lines.map(l => ({
+      stock_id: l.stock_id,
+      quantity: l.quantity,
+      unit_price: l.unit_price,
+      included_gst: false,
+      gst_free: l.gst_free,
+      name: l.name,
+      description: l.description || l.name,
+      note: '',
+    })),
+  }
+  const r = await mdFetch<any>(client, '/purchases', { method: 'POST', body: JSON.stringify(body) })
+  if (!r?.id) throw new Error(`MD purchase create returned no id: ${JSON.stringify(r).slice(0, 200)}`)
+  return { id: r.id, number: r.number ?? null, status: r.status ?? null, total_amount: r.total_amount ?? null }
+}
+
+/** Soft-delete a purchase (status → 'deleted'). Used to roll back a bad PO. */
+export async function deleteMdPurchase(client: MdClient, purchaseId: number, reason = 'JA Portal rollback'): Promise<void> {
+  await mdFetch<any>(client, `/purchases/${purchaseId}`, {
+    method: 'DELETE',
+    body: JSON.stringify({ deleted_reason: reason }),
+  })
 }
