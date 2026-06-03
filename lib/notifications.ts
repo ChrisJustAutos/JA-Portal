@@ -13,6 +13,7 @@
 // The (user_id, dedupe_key) unique constraint silently drops repeats.
 
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
+import { visibleNavSections } from './permissions'
 
 let _sb: SupabaseClient | null = null
 export function notifSvc(): SupabaseClient {
@@ -48,7 +49,26 @@ export async function notify(opts: NotifyOpts): Promise<void> {
     if (opts.excludeUserId) ids.delete(opts.excludeUserId)
     if (ids.size === 0) return
 
-    const rows = Array.from(ids).map(user_id => ({
+    // Only notify users who can actually SEE this module and haven't muted it.
+    // (A user without the Leads tab shouldn't get Leads notifications, etc.)
+    const idList = Array.from(ids)
+    const [{ data: profiles }, { data: prefRows }] = await Promise.all([
+      c.from('user_profiles').select('id, role, visible_tabs').in('id', idList),
+      c.from('user_preferences').select('user_id, muted_notif_modules').in('user_id', idList),
+    ])
+    const profById = new Map<string, any>((profiles || []).map((p: any) => [p.id, p]))
+    const mutedById = new Map<string, Set<string>>((prefRows || []).map((r: any) => [r.user_id, new Set<string>(Array.isArray(r.muted_notif_modules) ? r.muted_notif_modules.map(String) : [])]))
+    const eligible = idList.filter(id => {
+      const p = profById.get(id)
+      if (!p) return false
+      const visible = new Set(visibleNavSections(p.role, (p.visible_tabs as string[] | null) || null))
+      if (!visible.has(opts.module)) return false           // can't see this module
+      if ((mutedById.get(id) || new Set()).has(opts.module)) return false  // muted it
+      return true
+    })
+    if (eligible.length === 0) return
+
+    const rows = eligible.map(user_id => ({
       user_id,
       module: opts.module,
       title: opts.title.slice(0, 200),
@@ -65,13 +85,12 @@ export async function notify(opts: NotifyOpts): Promise<void> {
     if (error) { console.error('notify: insert failed:', error.message); return }
 
     // Web Push (best-effort) to the newly-notified users — fires even when the
-    // PWA is closed. No-ops if VAPID isn't configured. Skip users who muted
-    // this module (the row is still inserted but stays silent + hidden).
+    // PWA is closed. No-ops if VAPID isn't configured. (Already filtered to
+    // users who can see + haven't muted the module.)
     const freshIds = Array.from(new Set((inserted || []).map((r: any) => r.user_id)))
     if (freshIds.length) {
-      const muteChecks = await Promise.all(freshIds.map(async id => ({ id, muted: (await mutedModulesForUser(id)).has(opts.module) })))
-      const pushIds = muteChecks.filter(x => !x.muted).map(x => x.id)
-      if (pushIds.length) {
+      {
+        const pushIds = freshIds
         const { sendPushToUsers } = await import('./push')
         await sendPushToUsers(pushIds, { title: opts.title, body: opts.body || null, href: opts.href || null, tag: opts.dedupeKey })
       }
