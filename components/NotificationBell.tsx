@@ -39,15 +39,21 @@ export default function NotificationBell({ apps, summary, refresh }: {
   const [perm, setPerm] = useState<NotificationPermission | 'unsupported'>('default')
   const [pushCount, setPushCount] = useState<number | null>(null)
   const [registering, setRegistering] = useState(false)
+  const [regMsg, setRegMsg] = useState<string | null>(null)
 
   function loadPushCount() {
     fetch('/api/notifications/push-subscribe', { credentials: 'same-origin' })
       .then(r => r.ok ? r.json() : null).then(d => { if (d) setPushCount(d.count) }).catch(() => {})
   }
   async function registerDevice() {
-    setRegistering(true)
-    try { await ensurePushSubscription(); loadPushCount() }
-    finally { setRegistering(false) }
+    setRegistering(true); setRegMsg(null)
+    try {
+      await ensurePushSubscription()
+      const d = await fetch('/api/notifications/push-subscribe', { credentials: 'same-origin' }).then(r => r.ok ? r.json() : null).catch(() => null)
+      const c = d?.count ?? 0
+      setPushCount(c)
+      setRegMsg(c > 0 ? '✓ Registered on this device' : 'Couldn’t register — fully close the app and reopen, then try again')
+    } finally { setRegistering(false) }
   }
 
   useEffect(() => {
@@ -187,6 +193,9 @@ export default function NotificationBell({ apps, summary, refresh }: {
                 🔔 <span style={{ flex: 1 }}>This device isn’t registered for background push</span>
                 <span style={{ color: T.blue, fontWeight: 600 }}>{registering ? '…' : 'Register →'}</span>
               </button>
+            )}
+            {regMsg && (
+              <div style={{ fontSize: 11, color: regMsg.startsWith('✓') ? '#34c77b' : '#f5a623', padding: '0 11px 6px' }}>{regMsg}</div>
             )}
 
             {notifs === null && <div style={{ color: T.text3, fontSize: 12, padding: '14px 10px' }}>Loading…</div>}
