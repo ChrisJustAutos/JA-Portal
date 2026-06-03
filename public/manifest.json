@@ -2,7 +2,7 @@
   "name": "JA Portal",
   "short_name": "JA Portal",
   "description": "Just Autos management portal — invoices, calls, distributors, jobs.",
-  "start_url": "/overview",
+  "start_url": "/home",
   "scope": "/",
   "display": "standalone",
   "orientation": "any",

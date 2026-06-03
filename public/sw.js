@@ -13,7 +13,7 @@
 //
 // Bump VERSION whenever this file or offline.html changes, to evict old caches.
 
-const VERSION = 'v1'
+const VERSION = 'v2'
 const CACHE = `ja-portal-static-${VERSION}`
 const PRECACHE = ['/offline.html', '/icons/icon-192.png']
 
