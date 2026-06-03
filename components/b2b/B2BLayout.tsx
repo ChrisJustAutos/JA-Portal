@@ -16,6 +16,7 @@ import { getSupabase } from '../../lib/supabaseClient'
 import { useIsMobile } from '../../lib/useIsMobile'
 import { AppIcon } from '../../lib/AppIcons'
 import { enableNotifications, ensurePushSubscription } from '../../lib/pushClient'
+import B2BNotificationBell from './B2BNotificationBell'
 
 const B2B_SUBSCRIBE_URL = '/api/b2b/notifications/push-subscribe'
 
@@ -141,6 +142,7 @@ export default function B2BLayout({ user, active = null, children, cartCount }: 
               {user.distributor.displayName}
             </div>
           )}
+          <B2BNotificationBell isMobile={isMobile}/>
           <button onClick={signOut} title="Sign out"
             style={{
               padding: isMobile ? '8px 10px' : '6px 12px',

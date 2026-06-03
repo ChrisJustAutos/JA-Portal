@@ -90,17 +90,31 @@ export async function sendPushToB2BUsers(b2bUserIds: string[], payload: PushPayl
 }
 
 /**
- * Push to every device of every ACTIVE user of a B2B distributor (order
- * confirmations, shipping, status updates). Best-effort; never throws.
+ * Notify every ACTIVE user of a B2B distributor about an order event: persist
+ * a bell row (b2b_notifications) for each AND send a Web Push. Best-effort;
+ * never throws. Used for order confirmations, shipping, status updates.
  */
-export async function sendPushToDistributor(distributorId: string, payload: PushPayload): Promise<void> {
+export async function notifyDistributor(distributorId: string, payload: PushPayload): Promise<void> {
   try {
-    if (!configured() || !distributorId) return
-    const { data: users } = await sb().from('b2b_distributor_users')
+    if (!distributorId) return
+    const c = sb()
+    const { data: users } = await c.from('b2b_distributor_users')
       .select('id').eq('distributor_id', distributorId).eq('is_active', true)
     const userIds = (users || []).map((u: any) => u.id)
-    if (userIds.length) await sendPushToB2BUsers(userIds, payload)
+    if (!userIds.length) return
+    // Persist for the in-app bell.
+    await c.from('b2b_notifications').insert(userIds.map((uid: string) => ({
+      b2b_user_id: uid,
+      title: payload.title.slice(0, 200),
+      body: payload.body ? String(payload.body).slice(0, 500) : null,
+      href: payload.href || null,
+    }))).then(() => {}, (e: any) => console.error('b2b_notifications insert failed:', e?.message))
+    // Push (no-op if VAPID not configured / no subscriptions).
+    await sendPushToB2BUsers(userIds, payload)
   } catch (e: any) {
-    console.error('sendPushToDistributor failed (non-fatal):', e?.message || e)
+    console.error('notifyDistributor failed (non-fatal):', e?.message || e)
   }
 }
+
+/** @deprecated use notifyDistributor (persists a bell row + pushes). */
+export const sendPushToDistributor = notifyDistributor
