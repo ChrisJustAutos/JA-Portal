@@ -117,8 +117,9 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
       await sb.from('conversation_participants').update({ last_read_at: new Date().toISOString() })
         .eq('conversation_id', conversationId).eq('user_id', me.id)
 
-      // Background Web Push to the other (non-muted) participants — pops a
-      // desktop/mobile notification even when their app is closed. Best-effort.
+      // Notify the other (non-muted) participants: a bell entry + in-app toast
+      // + background Web Push (fires even when their app is closed). One row
+      // per message; cleared from the bell when they open the conversation.
       try {
         const { data: parts } = await sb.from('conversation_participants')
           .select('user_id, muted').eq('conversation_id', conversationId)
@@ -128,15 +129,16 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
         if (recipients.length) {
           const senderName = me.displayName || 'New message'
           const convLabel = conv.type === 'dm' ? senderName : `${conv.name || 'Channel'} · ${senderName}`
-          const { sendPushToUsers } = await import('../../../lib/push')
-          await sendPushToUsers(recipients, {
+          const { notify } = await import('../../../lib/notifications')
+          await notify({
+            module: 'messages',
             title: convLabel,
             body: text ? text.slice(0, 140) : 'Sent an attachment',
             href: `/messages?c=${conversationId}`,
-            tag: `conv-${conversationId}`,   // one rolling toast per conversation
+            userIds: recipients,
           })
         }
-      } catch (e: any) { console.error('message push failed (non-fatal):', e?.message || e) }
+      } catch (e: any) { console.error('message notify failed (non-fatal):', e?.message || e) }
 
       const dir = await userDirectory([me.id])
       return res.status(200).json({ message: { ...msg, senderName: dir[me.id]?.name || me.displayName, attachments: atts, mentions: mentionIds || [] } })

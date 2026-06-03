@@ -36,6 +36,11 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
         await sb.from('conversation_participants')
           .update({ last_read_at: new Date().toISOString() })
           .eq('conversation_id', id).eq('user_id', me.id)
+        // Clear this conversation's message notifications from the bell.
+        await sb.from('notifications')
+          .update({ read_at: new Date().toISOString() })
+          .eq('user_id', me.id).eq('module', 'messages').eq('href', `/messages?c=${id}`).is('read_at', null)
+          .then(() => {}, () => {})
         return res.status(200).json({ ok: true })
       }
 

@@ -9,6 +9,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { getSupabase } from '../../lib/supabaseClient'
 import { subscribeToConversation, subscribeToConversationList, subscribeToAllMessages, joinTyping, type TypingChannel } from '../../lib/realtime'
 import type { UserRole } from '../../lib/permissions'
+import { playSound } from '../../lib/notificationSounds'
 
 const T = {
   bg: '#0d0f12', bg2: '#131519', bg3: '#1a1d23', bg4: '#21252d',
@@ -261,6 +262,7 @@ export default function ChatApp({ user, onUnreadChange }: { user: SSRUser; onUnr
         next[i] = { ...next[i], unread: next[i].unread + 1, last_message_at: row.created_at }
         return sortConvs(next)
       })
+      try { playSound() } catch {}
       if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
         try { new Notification('New message', { body: String(row.body || '').slice(0, 120) || 'Attachment', tag: row.conversation_id }) } catch {}
       }

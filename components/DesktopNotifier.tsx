@@ -61,12 +61,22 @@ export default function DesktopNotifier() {
           .sort((a: any, b: any) => Date.parse(a.created_at) - Date.parse(b.created_at))
         if (!fresh.length) return
 
+        // Always advance the marker (incl. messages) so nothing re-fires.
+        const maxTs = Math.max(...fresh.map((n: any) => Date.parse(n.created_at)))
+        lastSeen.current = Math.max(lastSeen.current, maxTs)
+        window.localStorage.setItem(LAST_SEEN_KEY, String(lastSeen.current))
+
+        // Chat messages have their own instant toast (ChatApp) + background
+        // push, so skip them here to avoid a duplicate/laggy pop-up.
+        const toToast = fresh.filter((n: any) => n.module !== 'messages')
+        if (!toToast.length) return
+
         // Play the chosen sound once per batch (independent of OS permission).
         try { playSound() } catch { /* sound optional */ }
 
         // OS toasts only if the user granted notification permission.
         if (Notification.permission === 'granted') {
-          for (const n of fresh.slice(-4)) {  // cap so a backlog can't flood the tray
+          for (const n of toToast.slice(-4)) {  // cap so a backlog can't flood the tray
             try {
               const toast = new Notification(n.title || 'Just Autos Portal', {
                 body: n.body || '',
@@ -82,9 +92,6 @@ export default function DesktopNotifier() {
             } catch { /* ignore individual toast failures */ }
           }
         }
-        const maxTs = Math.max(...fresh.map((n: any) => Date.parse(n.created_at)))
-        lastSeen.current = Math.max(lastSeen.current, maxTs)
-        window.localStorage.setItem(LAST_SEEN_KEY, String(lastSeen.current))
       } catch { /* network blip — try next tick */ }
     }
 
