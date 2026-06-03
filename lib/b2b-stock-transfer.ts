@@ -126,7 +126,7 @@ export interface TransferLineInput { catalogue_id: string; qty: number }
 export interface TransferResult {
   transferId: string
   direction: TransferDirection
-  status: 'complete' | 'partial'
+  status: 'complete' | 'partial' | 'awaiting_md'
   saleDocUid: string
   saleDocNumber: string | null
   purchaseDocUid: string | null
@@ -145,7 +145,9 @@ export async function executeStockTransfer(opts: {
   lines: TransferLineInput[]
   direction?: TransferDirection
   note?: string | null
-  poReference?: string | null   // REQUIRED — lands on BOTH MYOB docs
+  poReference?: string | null   // REVERSE: required (lands on both MYOB docs).
+                                // FORWARD: ignored — MechanicDesk assigns the
+                                // PO number (MD-first), which becomes the ref.
   userId: string
 }): Promise<TransferResult> {
   const c = sb()
@@ -153,7 +155,8 @@ export async function executeStockTransfer(opts: {
   const forward = direction === 'JAWS_TO_VPS'
   if (!opts.lines.length) throw new Error('No lines to transfer')
   const poRef = (opts.poReference || '').trim()
-  if (!poRef) throw new Error('A PO reference is required for a stock transfer')
+  // Forward is MD-first: MD generates the PO number, so no ref needed up front.
+  if (!forward && !poRef) throw new Error('A PO reference is required for a VPS → JAWS transfer')
 
   // 1. Config + connections
   const cfgT = await loadTransferConfig()
@@ -161,6 +164,7 @@ export async function executeStockTransfer(opts: {
   if (forward) {
     if (!cfgT.customerUid) throw new Error('Transfer not configured: pick the VPS customer card (in JAWS) first')
     if (!cfgT.supplierUid) throw new Error('Transfer not configured: pick the JAWS supplier card (in VPS) first')
+    if (!cfgT.mdPurchaseSupplierId) throw new Error('Transfer not configured: set the MechanicDesk supplier id first')
   } else {
     if (!cfgT.customerUidVps) throw new Error('Transfer not configured: pick the JAWS customer card (in VPS) first')
     if (!cfgT.supplierUidJaws) throw new Error('Transfer not configured: pick the VPS supplier card (in JAWS) first')
@@ -253,25 +257,153 @@ export async function executeStockTransfer(opts: {
     sort_order: i,
   })))
 
-  const today = new Date().toISOString().substring(0, 10)
-  let saleDocUid: string
-  let saleDocNumber: string | null = null
-
+  // ── Forward (JAWS → VPS) is MD-FIRST ──────────────────────────────────
+  // MechanicDesk raises the PO and assigns its number; only THEN do the MYOB
+  // sale + bill post (finalizeForwardMyob, called back by the MD worker with
+  // the MD PO number as the reference). Here we just stage and hand off.
   if (forward) {
-    // ── 4a. JAWS Sale/Invoice/Item at average cost ────────────────────
-    const { data: rpcNumber, error: rpcErr } = await c.rpc('b2b_next_myob_invoice_number')
-    if (rpcErr) {
-      await c.from('b2b_stock_transfers').update({ status: 'failed', error: `Number allocation failed: ${rpcErr.message}` }).eq('id', transferId)
-      throw new Error(`Failed to allocate MYOB invoice number: ${rpcErr.message}`)
+    await c.from('b2b_stock_transfers')
+      .update({ status: 'awaiting_md', md_po_status: 'queued' })
+      .eq('id', transferId)
+    return {
+      transferId, direction, status: 'awaiting_md',
+      saleDocUid: '', saleDocNumber: null, purchaseDocUid: null,
+      error: null, subtotalEx, gst, totalInc,
     }
-    saleDocNumber = String(rpcNumber || '').trim()
+  }
 
-    const invoiceBody: Record<string, any> = {
+  // ── Reverse (VPS → JAWS): synchronous, no MechanicDesk ────────────────
+  const today = new Date().toISOString().substring(0, 10)
+  const vps = await getConnection('VPS')
+  if (!vps) {
+    await c.from('b2b_stock_transfers').update({ status: 'failed', error: 'VPS MYOB connection not configured' }).eq('id', transferId)
+    throw new Error('VPS MYOB connection not configured')
+  }
+  const vpsTax = await ensureTaxCodes('VPS')
+  const saleLines: any[] = []
+  if (taxableEx > 0) saleLines.push({
+    Type: 'Transaction',
+    Description: `Stock transfer to JAWS — PO ${poRef} (${built.length} items)`.substring(0, 255),
+    Account: { UID: cfgT.accountUid },
+    Total: taxableEx,
+    TaxCode: { UID: vpsTax.gstUid },
+  })
+  if (nonTaxableEx > 0) {
+    if (!vpsTax.freUid) throw new Error('VPS has no FRE tax code for GST-free transfer lines')
+    saleLines.push({
+      Type: 'Transaction',
+      Description: `Stock transfer to JAWS — PO ${poRef} (GST-free items)`.substring(0, 255),
+      Account: { UID: cfgT.accountUid },
+      Total: nonTaxableEx,
+      TaxCode: { UID: vpsTax.freUid },
+    })
+  }
+  const invoiceBody: Record<string, any> = {
+    Customer: { UID: cfgT.customerUidVps },
+    Date: today,
+    CustomerPurchaseOrderNumber: poRef.substring(0, 20),
+    Lines: saleLines,
+    IsTaxInclusive: false,
+    Subtotal: subtotalEx,
+    TotalTax: gst,
+    TotalAmount: totalInc,
+    Comment: `Internal stock transfer VPS → JAWS (${built.length} item${built.length === 1 ? '' : 's'} at cost)`,
+    JournalMemo: `Stock transfer ${transferId.substring(0, 8)} — PO ${poRef} — JA Portal`.substring(0, 255),
+  }
+  const invRes = await myobFetch(vps.id, `/accountright/${vps.company_file_id}/Sale/Invoice/Service`, {
+    method: 'POST', body: invoiceBody, performedBy: opts.userId,
+  })
+  if (invRes.status !== 201 && invRes.status !== 200) {
+    const errMsg = `VPS Sale.Invoice POST failed (HTTP ${invRes.status}): ${(invRes.raw || '').substring(0, 400)}`
+    await c.from('b2b_stock_transfers').update({ status: 'failed', error: errMsg.substring(0, 1000) }).eq('id', transferId)
+    throw new Error(errMsg)
+  }
+  const saleDocUid = uidFromLocation(invRes.headers, vps.company_file_id, 'invoice')
+  let saleDocNumber: string | null = null
+  try {
+    const detail = await myobFetch(vps.id, `/accountright/${vps.company_file_id}/Sale/Invoice/Service/${saleDocUid}`)
+    if (detail.status === 200 && detail.data?.Number) saleDocNumber = String(detail.data.Number)
+  } catch { /* keep null */ }
+  await c.from('b2b_stock_transfers')
+    .update({ vps_invoice_uid: saleDocUid, vps_invoice_number: saleDocNumber })
+    .eq('id', transferId)
+
+  // Purchase side: JAWS Item bill that receives the stock back into inventory.
+  let purchaseDocUid: string | null = null
+  let purchaseError: string | null = null
+  try {
+    purchaseDocUid = await writeJawsItemBill({ poReference: poRef, lines: built, gst, supplierUid: cfgT.supplierUidJaws!, jawsTax, userId: opts.userId })
+  } catch (e: any) {
+    purchaseError = e?.message || String(e)
+  }
+
+  const status: 'complete' | 'partial' = purchaseDocUid ? 'complete' : 'partial'
+  await c.from('b2b_stock_transfers').update({
+    status,
+    jaws_bill_uid: purchaseDocUid,
+    error: purchaseError ? purchaseError.substring(0, 1000) : null,
+    completed_at: purchaseDocUid ? new Date().toISOString() : null,
+  }).eq('id', transferId)
+
+  try { await refreshAllStock() } catch (e: any) { console.error('transfer: stock refresh failed (non-fatal):', e?.message || e) }
+
+  return {
+    transferId, direction, status,
+    saleDocUid, saleDocNumber, purchaseDocUid,
+    error: purchaseError, subtotalEx, gst, totalInc,
+  }
+}
+
+// ── Finalise the MYOB side of a forward (JAWS → VPS) transfer ──────────────
+// Called back by the MD worker once MechanicDesk has assigned the PO number.
+// Writes the JAWS Sale/Invoice/Item (at average cost, PO = the MD number) and
+// the VPS Purchase/Bill/Service. Rebuilds from the stored transfer lines.
+// Idempotent: skips the JAWS sale if already written; the VPS bill is guarded
+// separately so a partial can be retried.
+export async function finalizeForwardMyob(
+  transferId: string, poReference: string, userId: string,
+): Promise<{ status: 'complete' | 'partial'; jawsInvoiceNumber: string | null; error: string | null }> {
+  const c = sb()
+  const { data: t, error } = await c.from('b2b_stock_transfers').select('*').eq('id', transferId).maybeSingle()
+  if (error) throw new Error(error.message)
+  if (!t) throw new Error('Transfer not found')
+  if ((t.direction || 'JAWS_TO_VPS') !== 'JAWS_TO_VPS') throw new Error('finalizeForwardMyob is JAWS → VPS only')
+
+  const cfgT = await loadTransferConfig()
+  if (!cfgT.customerUid || !cfgT.supplierUid || !cfgT.accountUid) throw new Error('Forward transfer MYOB settings incomplete')
+  const jaws = await getConnection('JAWS')
+  if (!jaws) throw new Error('JAWS MYOB connection not configured')
+  const jawsTax = await ensureJawsTaxCodes()
+
+  const { data: lineRows } = await c.from('b2b_stock_transfer_lines')
+    .select('myob_item_uid, sku, name, qty, unit_cost_ex, total_ex, is_taxable')
+    .eq('transfer_id', transferId).order('sort_order', { ascending: true })
+  const lines: BuiltLine[] = (lineRows || []).map((l: any) => ({
+    catalogue_id: '', myob_item_uid: l.myob_item_uid, sku: l.sku, name: l.name,
+    qty: Number(l.qty), unit_cost_ex: Number(l.unit_cost_ex), total_ex: Number(l.total_ex),
+    is_taxable: l.is_taxable !== false,
+  }))
+  if (!lines.length) throw new Error('Transfer has no lines')
+
+  const taxableEx    = round2(lines.filter(l => l.is_taxable).reduce((s, l) => s + l.total_ex, 0))
+  const nonTaxableEx = round2(lines.filter(l => !l.is_taxable).reduce((s, l) => s + l.total_ex, 0))
+  const subtotalEx   = round2(taxableEx + nonTaxableEx)
+  const gst          = round2(taxableEx * 0.10)
+  const totalInc     = round2(subtotalEx + gst)
+  const poRef = (poReference || t.po_reference || '').trim()
+
+  // JAWS Sale/Invoice/Item (idempotent on jaws_invoice_uid).
+  let jawsInvoiceNumber: string | null = t.jaws_invoice_number || null
+  if (!t.jaws_invoice_uid) {
+    const { data: rpcNumber, error: rpcErr } = await c.rpc('b2b_next_myob_invoice_number')
+    if (rpcErr) throw new Error(`Failed to allocate MYOB invoice number: ${rpcErr.message}`)
+    jawsInvoiceNumber = String(rpcNumber || '').trim()
+    const body: Record<string, any> = {
       Customer: { UID: cfgT.customerUid },
-      Date: today,
-      Number: saleDocNumber,
+      Date: new Date().toISOString().substring(0, 10),
+      Number: jawsInvoiceNumber,
       CustomerPurchaseOrderNumber: poRef.substring(0, 20),
-      Lines: built.map(b => ({
+      Lines: lines.map(b => ({
         Type: 'Transaction',
         Description: `Stock transfer to VPS: ${b.name} — ${b.sku}`.substring(0, 255),
         Item: { UID: b.myob_item_uid },
@@ -286,110 +418,39 @@ export async function executeStockTransfer(opts: {
       Subtotal: subtotalEx,
       TotalTax: gst,
       TotalAmount: totalInc,
-      Comment: `Internal stock transfer JAWS → VPS (${built.length} item${built.length === 1 ? '' : 's'} at average cost)`,
-      JournalMemo: `Stock transfer ${transferId.substring(0, 8)} — PO ${poRef} — JA Portal`.substring(0, 255),
+      Comment: `Internal stock transfer JAWS → VPS — MD PO ${poRef}`,
+      JournalMemo: `Stock transfer ${transferId.substring(0, 8)} — MD PO ${poRef} — JA Portal`.substring(0, 255),
     }
-    const invRes = await myobFetch(jaws.id, `/accountright/${jaws.company_file_id}/Sale/Invoice/Item`, {
-      method: 'POST', body: invoiceBody, performedBy: opts.userId,
-    })
-    if (invRes.status !== 201 && invRes.status !== 200) {
-      const errMsg = `JAWS Sale.Invoice POST failed (HTTP ${invRes.status}): ${(invRes.raw || '').substring(0, 400)}`
-      await c.from('b2b_stock_transfers').update({ status: 'failed', error: errMsg.substring(0, 1000) }).eq('id', transferId)
-      throw new Error(errMsg)
-    }
-    saleDocUid = uidFromLocation(invRes.headers, jaws.company_file_id, 'invoice')
-    await c.from('b2b_stock_transfers')
-      .update({ jaws_invoice_uid: saleDocUid, jaws_invoice_number: saleDocNumber })
-      .eq('id', transferId)
-  } else {
-    // ── 4b. VPS Sale/Invoice/Service to the JAWS customer card ────────
-    const vps = await getConnection('VPS')
-    if (!vps) {
-      await c.from('b2b_stock_transfers').update({ status: 'failed', error: 'VPS MYOB connection not configured' }).eq('id', transferId)
-      throw new Error('VPS MYOB connection not configured')
-    }
-    const vpsTax = await ensureTaxCodes('VPS')
-    const saleLines: any[] = []
-    if (taxableEx > 0) saleLines.push({
-      Type: 'Transaction',
-      Description: `Stock transfer to JAWS — PO ${poRef} (${built.length} items)`.substring(0, 255),
-      Account: { UID: cfgT.accountUid },
-      Total: taxableEx,
-      TaxCode: { UID: vpsTax.gstUid },
-    })
-    if (nonTaxableEx > 0) {
-      if (!vpsTax.freUid) throw new Error('VPS has no FRE tax code for GST-free transfer lines')
-      saleLines.push({
-        Type: 'Transaction',
-        Description: `Stock transfer to JAWS — PO ${poRef} (GST-free items)`.substring(0, 255),
-        Account: { UID: cfgT.accountUid },
-        Total: nonTaxableEx,
-        TaxCode: { UID: vpsTax.freUid },
-      })
-    }
-    const invoiceBody: Record<string, any> = {
-      Customer: { UID: cfgT.customerUidVps },
-      Date: today,
-      CustomerPurchaseOrderNumber: poRef.substring(0, 20),
-      Lines: saleLines,
-      IsTaxInclusive: false,
-      Subtotal: subtotalEx,
-      TotalTax: gst,
-      TotalAmount: totalInc,
-      Comment: `Internal stock transfer VPS → JAWS (${built.length} item${built.length === 1 ? '' : 's'} at cost)`,
-      JournalMemo: `Stock transfer ${transferId.substring(0, 8)} — PO ${poRef} — JA Portal`.substring(0, 255),
-    }
-    const invRes = await myobFetch(vps.id, `/accountright/${vps.company_file_id}/Sale/Invoice/Service`, {
-      method: 'POST', body: invoiceBody, performedBy: opts.userId,
-    })
-    if (invRes.status !== 201 && invRes.status !== 200) {
-      const errMsg = `VPS Sale.Invoice POST failed (HTTP ${invRes.status}): ${(invRes.raw || '').substring(0, 400)}`
-      await c.from('b2b_stock_transfers').update({ status: 'failed', error: errMsg.substring(0, 1000) }).eq('id', transferId)
-      throw new Error(errMsg)
-    }
-    saleDocUid = uidFromLocation(invRes.headers, vps.company_file_id, 'invoice')
-    // MYOB auto-numbers Service invoices — fetch the assigned Number (best-effort).
-    try {
-      const detail = await myobFetch(vps.id, `/accountright/${vps.company_file_id}/Sale/Invoice/Service/${saleDocUid}`)
-      if (detail.status === 200 && detail.data?.Number) saleDocNumber = String(detail.data.Number)
-    } catch { /* keep null */ }
-    await c.from('b2b_stock_transfers')
-      .update({ vps_invoice_uid: saleDocUid, vps_invoice_number: saleDocNumber })
-      .eq('id', transferId)
+    const r = await myobFetch(jaws.id, `/accountright/${jaws.company_file_id}/Sale/Invoice/Item`, { method: 'POST', body, performedBy: userId })
+    if (r.status !== 201 && r.status !== 200) throw new Error(`JAWS Sale.Invoice POST failed (HTTP ${r.status}): ${(r.raw || '').substring(0, 400)}`)
+    const uid = uidFromLocation(r.headers, jaws.company_file_id, 'invoice')
+    await c.from('b2b_stock_transfers').update({ jaws_invoice_uid: uid, jaws_invoice_number: jawsInvoiceNumber }).eq('id', transferId)
   }
 
-  // 5. Purchase side
-  let purchaseDocUid: string | null = null
+  // VPS Purchase/Bill/Service (idempotent on vps_bill_uid).
   let purchaseError: string | null = null
-  try {
-    purchaseDocUid = forward
-      ? await writeVpsBill({ poReference: poRef, jawsInvoiceNumber: saleDocNumber!, taxableEx, nonTaxableEx, gst, accountUid: cfgT.accountUid!, supplierUid: cfgT.supplierUid!, lineCount: built.length, userId: opts.userId })
-      : await writeJawsItemBill({ poReference: poRef, lines: built, gst, supplierUid: cfgT.supplierUidJaws!, jawsTax, userId: opts.userId })
-  } catch (e: any) {
-    purchaseError = e?.message || String(e)
+  if (!t.vps_bill_uid) {
+    try {
+      const billUid = await writeVpsBill({
+        poReference: poRef, jawsInvoiceNumber: jawsInvoiceNumber || poRef,
+        taxableEx, nonTaxableEx, gst, accountUid: cfgT.accountUid, supplierUid: cfgT.supplierUid,
+        lineCount: lines.length, userId,
+      })
+      await c.from('b2b_stock_transfers').update({ vps_bill_uid: billUid }).eq('id', transferId)
+    } catch (e: any) {
+      purchaseError = e?.message || String(e)
+    }
   }
 
-  const status = purchaseDocUid ? 'complete' : 'partial'
+  const { data: now } = await c.from('b2b_stock_transfers').select('vps_bill_uid').eq('id', transferId).maybeSingle()
+  const status: 'complete' | 'partial' = now?.vps_bill_uid ? 'complete' : 'partial'
   await c.from('b2b_stock_transfers').update({
-    status,
-    ...(forward ? { vps_bill_uid: purchaseDocUid } : { jaws_bill_uid: purchaseDocUid }),
-    // Forward transfers also raise + receive a purchase order in
-    // MechanicDesk (workshop inventory) via the GH Actions worker.
-    ...(forward ? { md_po_status: 'queued' } : {}),
-    error: purchaseError ? purchaseError.substring(0, 1000) : null,
-    completed_at: purchaseDocUid ? new Date().toISOString() : null,
+    status, error: purchaseError ? purchaseError.substring(0, 1000) : null,
+    completed_at: now?.vps_bill_uid ? new Date().toISOString() : null,
   }).eq('id', transferId)
 
-  // 6. JAWS stock changed in both directions — refresh the cache (best-effort)
-  try { await refreshAllStock() } catch (e: any) { console.error('transfer: stock refresh failed (non-fatal):', e?.message || e) }
-
-  return {
-    transferId, direction, status,
-    saleDocUid, saleDocNumber,
-    purchaseDocUid,
-    error: purchaseError,
-    subtotalEx, gst, totalInc,
-  }
+  try { await refreshAllStock() } catch { /* non-fatal */ }
+  return { status, jawsInvoiceNumber, error: purchaseError }
 }
 
 // ── Purchase side: VPS Service bill (forward) ──────────────────────────

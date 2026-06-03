@@ -1,22 +1,19 @@
 // scripts/run-md-purchase-order.ts
 //
-// GH Actions worker — raises the MechanicDesk purchase order that matches a
-// JAWS → VPS internal stock transfer. Triggered by repository_dispatch
-// (event_type: 'md-purchase-order', client_payload: { transfer_id }) from
-// /api/b2b/admin/stock-transfer when a forward transfer completes.
+// GH Actions worker — MD-FIRST purchase order for a JAWS → VPS stock transfer.
+// Triggered by repository_dispatch ('md-purchase-order', { transfer_id }) from
+// /api/b2b/admin/stock-transfer when a forward transfer is staged.
 //
-// Flow:
+// MD owns the PO number (its 74xx sequence), so the order is:
 //   1. Read transfer + lines + MD supplier id from the portal (service token).
-//   2. Log into MD (Playwright), map each line SKU → MD stock_id via search.
-//   3. Create the purchase (status 'pending' in MD) at the transfer's costs.
-//   4. Report back: md_po_status 'created' (+ md_po_ref = MD PO number) or
-//      'failed' (+ error). Unmatched SKUs are reported, not fatal, unless
-//      NONE match.
-//
-//   5. PROCESS the PO (PUT /purchases/{id}/processes) — receives the stock
-//      into MD inventory, so the workshop's on-hand goes up. md_po_status
-//      'done' when received, 'created' if the PO entered but processing
-//      failed (staff can receive it in the MD UI).
+//   2. Log into MD, map each line SKU → MD stock id.
+//   3. Create the PO with NO reference → MD assigns its sequential number.
+//      (Idempotent: if the transfer already has md_po_id, reuse that PO.)
+//   4. Report md_po_ref (= MD number) + md_po_id back.
+//   5. finalize-myob: portal writes the JAWS sale + VPS bill using the MD
+//      number as the PO reference.
+//   6. Process the MD PO → receives the stock into the workshop's MD inventory.
+//   7. Report final md_po_status: 'done' (received) or 'created' (entered).
 
 import {
   loginToMechanicDesk, findStockBySku, createMdPurchase, processMdPurchase,
@@ -42,7 +39,6 @@ async function readTransfer(): Promise<any> {
   if (!r.ok) throw new Error(`Read transfer failed: ${r.status} ${await r.text().catch(() => '')}`)
   return r.json()
 }
-
 async function report(update: Record<string, any>): Promise<void> {
   const r = await fetch(API, {
     method: 'PATCH',
@@ -51,17 +47,24 @@ async function report(update: Record<string, any>): Promise<void> {
   })
   if (!r.ok) console.error(`Report-back failed: ${r.status} ${await r.text().catch(() => '')}`)
 }
+async function finalizeMyob(poNumber: string): Promise<{ ok: boolean; error?: string }> {
+  const r = await fetch(API, {
+    method: 'POST',
+    headers: { 'X-Service-Token': PORTAL_TOKEN, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action: 'finalize-myob', po_reference: poNumber }),
+  })
+  const j = await r.json().catch(() => null)
+  if (!r.ok) return { ok: false, error: j?.error || `HTTP ${r.status}` }
+  return { ok: true }
+}
 
 async function main() {
   const { transfer, lines, md_supplier_id } = await readTransfer()
-  console.log(`Transfer ${TRANSFER_ID} · direction=${transfer?.direction} · ${lines?.length || 0} lines`)
+  console.log(`Transfer ${TRANSFER_ID} · direction=${transfer?.direction} · ${lines?.length || 0} lines · existing md_po_id=${transfer?.md_po_id || 'none'}`)
 
-  if (transfer?.direction !== 'JAWS_TO_VPS') {
-    console.log('Not a JAWS→VPS transfer — no MD PO needed. Done.')
-    return
-  }
+  if (transfer?.direction !== 'JAWS_TO_VPS') { console.log('Not a JAWS→VPS transfer — no MD PO. Done.'); return }
   if (!md_supplier_id) {
-    await report({ md_po_status: 'failed', md_po_error: 'MechanicDesk supplier not configured (Settings → set the MD supplier id)' })
+    await report({ md_po_status: 'failed', md_po_error: 'MechanicDesk supplier not configured (Settings → MD supplier id)' })
     throw new Error('md_purchase_supplier_id not configured')
   }
   if (!Array.isArray(lines) || lines.length === 0) {
@@ -73,68 +76,71 @@ async function main() {
   const { chromium } = await import('playwright')
   const browser = await chromium.launch({ headless: true })
   let client: MdClient
-  try {
-    ;({ client } = await loginToMechanicDesk(browser, WS_ID, MD_USER, MD_PASS))
-  } finally {
-    await browser.close().catch(() => {})
-  }
+  try { ({ client } = await loginToMechanicDesk(browser, WS_ID, MD_USER, MD_PASS)) }
+  finally { await browser.close().catch(() => {}) }
 
-  // Map each SKU → MD stock id.
-  const poLines: MdPurchaseLineInput[] = []
-  const misses: string[] = []
-  for (const ln of lines) {
-    const sku = String(ln.sku || '').trim()
-    const match = await findStockBySku(client, sku)
-    if (match.kind !== 'matched') { misses.push(`${sku} (${match.kind})`); continue }
-    poLines.push({
-      stock_id: (match.stock as any).id,
-      quantity: Number(ln.qty),
-      unit_price: Number(ln.unit_cost_ex),
-      gst_free: ln.is_taxable === false,
-      name: `${sku} — ${ln.name}`.slice(0, 200),
-      description: String(ln.name || sku).slice(0, 200),
+  // ── Create the PO (or reuse an existing one for idempotent retries) ───
+  let poId: number
+  let poNumber: string
+  if (transfer.md_po_id) {
+    poId = Number(transfer.md_po_id)
+    poNumber = String(transfer.md_po_ref || poId)
+    console.log(`Reusing existing MD PO id=${poId} number=${poNumber}`)
+  } else {
+    const poLines: MdPurchaseLineInput[] = []
+    const misses: string[] = []
+    for (const ln of lines) {
+      const sku = String(ln.sku || '').trim()
+      const match = await findStockBySku(client, sku)
+      if (match.kind !== 'matched') { misses.push(`${sku} (${match.kind})`); continue }
+      poLines.push({
+        stock_id: (match.stock as any).id,
+        quantity: Number(ln.qty),
+        unit_price: Number(ln.unit_cost_ex),
+        gst_free: ln.is_taxable === false,
+        name: `${sku} — ${ln.name}`.slice(0, 200),
+        description: String(ln.name || sku).slice(0, 200),
+      })
+    }
+    if (poLines.length === 0) {
+      await report({ md_po_status: 'failed', md_po_error: `No SKUs matched in MD: ${misses.join('; ')}`.slice(0, 1000) })
+      throw new Error('No SKUs matched')
+    }
+    // NO reference — MD assigns its own sequential PO number at create.
+    const po = await createMdPurchase(client, {
+      supplierId: Number(md_supplier_id),
+      reference: '',
+      description: `Internal stock transfer JAWS → VPS${misses.length ? ` (unmatched: ${misses.join('; ')})` : ''}`.slice(0, 255),
+      lines: poLines,
     })
+    poId = po.id
+    poNumber = String(po.number || po.id)
+    console.log(`MD PO created: id=${poId} number=${poNumber}${misses.length ? ` (unmatched: ${misses.join('; ')})` : ''}`)
+    await report({ md_po_status: 'created', md_po_ref: poNumber, md_po_id: poId, md_po_error: misses.length ? `Unmatched SKUs (add manually): ${misses.join('; ')}` : null })
   }
 
-  if (poLines.length === 0) {
-    await report({ md_po_status: 'failed', md_po_error: `No SKUs matched in MD: ${misses.join('; ')}`.slice(0, 1000) })
-    throw new Error('No SKUs matched')
+  // ── Finalise the MYOB side using the MD PO number as the reference ────
+  console.log(`Finalising MYOB with PO reference ${poNumber}…`)
+  const fin = await finalizeMyob(poNumber)
+  if (!fin.ok) {
+    await report({ md_po_status: 'created', md_po_error: `MD PO ${poNumber} entered, but MYOB finalise failed: ${fin.error}` })
+    throw new Error(`finalize-myob failed: ${fin.error}`)
   }
+  console.log('MYOB sale + bill posted.')
 
-  const reference = String(transfer.po_reference || `TRANSFER-${String(TRANSFER_ID).slice(0, 8)}`).slice(0, 50)
-  console.log(`Creating MD purchase: ${poLines.length} lines, supplier ${md_supplier_id}, ref ${reference}${misses.length ? ` (${misses.length} unmatched: ${misses.join('; ')})` : ''}`)
-
-  const po = await createMdPurchase(client, {
-    supplierId: Number(md_supplier_id),
-    reference,
-    description: `Internal stock transfer JAWS → VPS${misses.length ? ` (NOTE: unmatched SKUs not on PO: ${misses.join('; ')})` : ''}`.slice(0, 255),
-    lines: poLines,
-  })
-  console.log(`MD purchase created: id=${po.id} number=${po.number} status=${po.status} total=${po.total_amount}`)
-
-  // Receive it into stock (process). Best-effort: if it fails, the PO is still
-  // entered and staff can receive it in the MD UI.
+  // ── Process the MD PO → receive the stock into MD inventory ───────────
   let received = false
   let processError: string | null = null
   try {
-    const r = await processMdPurchase(client, po.id)
+    const r = await processMdPurchase(client, poId)
     received = r.processed
-    console.log(`MD purchase processed: status=${r.status} processed=${r.processed}`)
-    if (!received) processError = `Process returned status=${r.status} (not received) — receive manually in MD`
+    if (!received) processError = `Process returned status=${r.status} — receive manually in MD`
   } catch (e: any) {
-    processError = `Entered OK but processing failed: ${e?.message || e}`
-    console.error(processError)
+    processError = `MYOB posted + PO entered, but MD receive failed: ${e?.message || e}`
   }
 
-  const unmatchedNote = misses.length ? ` Unmatched SKUs (add manually): ${misses.join('; ')}` : ''
-  await report({
-    md_po_status: received ? 'done' : 'created',
-    md_po_ref: po.number || String(po.id),
-    md_po_error: [processError, unmatchedNote].filter(Boolean).join('.').trim() || null,
-  })
-  console.log(received
-    ? 'Reported back. PO entered AND received into MechanicDesk stock.'
-    : 'Reported back. PO entered (receive it in the MD UI to add the stock).')
+  await report({ md_po_status: received ? 'done' : 'created', md_po_ref: poNumber, md_po_id: poId, md_po_error: processError })
+  console.log(received ? `Done — PO ${poNumber} entered, MYOB posted, stock received into MD.` : `PO ${poNumber} entered + MYOB posted; receive in MD UI.`)
 }
 
 main().catch(async e => {

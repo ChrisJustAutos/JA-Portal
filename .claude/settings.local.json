@@ -66,7 +66,8 @@
       "PowerShell(git rm *)",
       "Bash(git checkout *)",
       "PowerShell(git *)",
-      "PowerShell(gh api *)"
+      "PowerShell(gh api *)",
+      "PowerShell(npx tsc --noEmit 2>$null; \"tsc: $LASTEXITCODE\"; if \\($LASTEXITCODE -eq 0\\) { git add scripts/probe-md-purchase-orders.ts .github/workflows/probe-md-purchase-orders.yml; git commit -m \"Probe v11: confirm MD PO numbering \\(create vs process; reference override\\)\" -m \"Co-Authored-By: Claude Opus 4.8 \\(1M context\\) <noreply@anthropic.com>\"; if \\($?\\) { git push origin main; gh workflow run 'probe-md-purchase-orders.yml' } })"
     ]
   }
 }

@@ -58,7 +58,7 @@ interface TransferConfig {
 
 interface TransferRow {
   id: string
-  status: 'pending' | 'complete' | 'partial' | 'failed'
+  status: 'pending' | 'awaiting_md' | 'complete' | 'partial' | 'failed'
   direction: Direction | null
   note: string | null
   line_count: number
@@ -167,15 +167,20 @@ export default function StockTransferPage({ user }: Props) {
       const j = await r.json().catch(() => null)
       if (!r.ok) throw new Error(j?.error || `HTTP ${r.status}`)
       const tr = j.result
-      const saleSide = forward ? `JAWS invoice ${tr.saleDocNumber}` : `VPS invoice ${tr.saleDocNumber || ''}`.trim()
-      const billSide = forward ? 'VPS bill' : 'JAWS bill (stock received)'
-      if (tr.status === 'complete') {
-        setResult({ kind: 'ok', text: `Transfer complete — ${saleSide} + ${billSide} written (${fmt$(tr.totalInc)} inc GST).${forward ? ' MechanicDesk PO queued.' : ''}` })
+      if (tr.status === 'awaiting_md') {
+        // Forward (MD-first): MechanicDesk raises the PO + assigns its number,
+        // then the MYOB sale + bill post. All async via the worker.
+        setResult({ kind: 'ok', text: `Transfer staged (${fmt$(tr.totalInc)} inc GST). MechanicDesk is raising the PO and assigning its number, then the MYOB sale + bill post — refresh in ~1 min.` })
       } else {
-        setResult({ kind: 'partial', text: `${saleSide} written, but the ${billSide} failed: ${tr.error}. Use Retry in the history below.` })
+        const saleSide = `VPS invoice ${tr.saleDocNumber || ''}`.trim()
+        if (tr.status === 'complete') {
+          setResult({ kind: 'ok', text: `Transfer complete — ${saleSide} + JAWS bill (stock received) written (${fmt$(tr.totalInc)} inc GST).` })
+        } else {
+          setResult({ kind: 'partial', text: `${saleSide} written, but the JAWS bill failed: ${tr.error}. Use Retry in the history below.` })
+        }
       }
       setSelected({}); setNote(''); setPoRef('')
-      loadItems(direction); loadHistory()
+      loadItems(direction); setTimeout(loadHistory, 1500)
     } catch (e: any) {
       setResult({ kind: 'error', text: e?.message || String(e) })
     } finally {
@@ -225,7 +230,9 @@ export default function StockTransferPage({ user }: Props) {
     background: T.bg3, border: `1px solid ${T.border2}`, color: T.text,
     borderRadius: 8, padding: '8px 11px', fontSize: 13, fontFamily: 'inherit', outline: 'none',
   }
-  const blocked = !configured || picked.length === 0 || running || !poRef.trim()
+  // Forward is MD-first — MD assigns the PO number, so no PO ref needed.
+  // Reverse still requires a PO reference.
+  const blocked = !configured || picked.length === 0 || running || (!forward && !poRef.trim())
 
   return (
     <>
@@ -408,17 +415,21 @@ export default function StockTransferPage({ user }: Props) {
                   : <>Transferring <b style={{color:T.text}}>{picked.length}</b> item{picked.length===1?'':'s'} — <b style={{color:T.text}}>{fmt$(totals.inc)}</b> inc GST</>}
               </div>
               <span style={{flex:1}}/>
-              <input
-                value={poRef} onChange={e=>setPoRef(e.target.value)} maxLength={20}
-                placeholder="PO reference (required)"
-                title="Lands on both MYOB documents: Customer PO No. on the sale invoice and Supplier Invoice No. on the bill"
-                style={{...inp,width:180,fontFamily:'monospace',borderColor: poRef.trim() ? T.border2 : T.amber+'88'}}
-              />
+              {forward ? (
+                <span style={{fontSize:12,color:T.text3,maxWidth:200}}>MechanicDesk assigns the PO number</span>
+              ) : (
+                <input
+                  value={poRef} onChange={e=>setPoRef(e.target.value)} maxLength={20}
+                  placeholder="PO reference (required)"
+                  title="Lands on both MYOB documents: Customer PO No. on the sale invoice and Supplier Invoice No. on the bill"
+                  style={{...inp,width:180,fontFamily:'monospace',borderColor: poRef.trim() ? T.border2 : T.amber+'88'}}
+                />
+              )}
               <input value={note} onChange={e=>setNote(e.target.value)} placeholder="Note (optional)" style={{...inp,width:220}}/>
               <button
                 disabled={blocked}
                 onClick={()=>setConfirming(true)}
-                title={!configured ? 'Complete the MYOB setup above first' : !poRef.trim() ? 'Enter a PO reference first' : picked.length===0 ? 'Pick at least one item' : undefined}
+                title={!configured ? 'Complete the MYOB setup above first' : (!forward && !poRef.trim()) ? 'Enter a PO reference first' : picked.length===0 ? 'Pick at least one item' : undefined}
                 style={{
                   ...inp, cursor: blocked?'not-allowed':'pointer',
                   background: blocked && !running ? T.bg3 : T.blue, border:'none',
@@ -463,7 +474,7 @@ export default function StockTransferPage({ user }: Props) {
                           <td style={{padding:'7px 8px',fontSize:12,color:fwd?T.teal:T.purple,whiteSpace:'nowrap'}}>{fwd ? 'JAWS → VPS' : 'VPS → JAWS'}</td>
                           <td style={{padding:'7px 8px',textAlign:'right',fontFamily:'monospace'}}>{t.line_count}</td>
                           <td style={{padding:'7px 8px',textAlign:'right',fontFamily:'monospace'}}>{fmt$(t.total_inc)}</td>
-                          <td style={{padding:'7px 8px',fontFamily:'monospace',fontSize:12}}>{t.po_reference || '—'}</td>
+                          <td style={{padding:'7px 8px',fontFamily:'monospace',fontSize:12}}>{(fwd ? (t.md_po_ref || t.po_reference) : t.po_reference) || '—'}</td>
                           <td style={{padding:'7px 8px',fontFamily:'monospace',fontSize:12}}>{(fwd ? t.jaws_invoice_number : t.vps_invoice_number) || '—'}</td>
                           <td style={{padding:'7px 8px',fontSize:12,color:billDone?T.green:T.text3}}>{billDone ? '✓ written' : '—'}</td>
                           <td style={{padding:'7px 8px',fontSize:12}}>
@@ -489,9 +500,9 @@ export default function StockTransferPage({ user }: Props) {
                           <td style={{padding:'7px 8px'}}>
                             <span style={{
                               fontSize:11, fontWeight:600, padding:'2px 8px', borderRadius:10,
-                              color: t.status==='complete'?T.green:t.status==='partial'?T.amber:t.status==='failed'?T.red:T.text3,
-                              background: t.status==='complete'?'rgba(52,199,123,0.12)':t.status==='partial'?'rgba(245,166,35,0.12)':t.status==='failed'?'rgba(240,78,78,0.12)':T.bg3,
-                            }}>{t.status}</span>
+                              color: t.status==='complete'?T.green:(t.status==='partial'||t.status==='awaiting_md')?T.amber:t.status==='failed'?T.red:T.text3,
+                              background: t.status==='complete'?'rgba(52,199,123,0.12)':(t.status==='partial'||t.status==='awaiting_md')?'rgba(245,166,35,0.12)':t.status==='failed'?'rgba(240,78,78,0.12)':T.bg3,
+                            }}>{t.status==='awaiting_md'?'awaiting MD':t.status}</span>
                             {t.error && <div style={{fontSize:11,color:T.red,marginTop:3,maxWidth:300}}>{t.error}</div>}
                           </td>
                           <td style={{padding:'7px 8px'}}>
@@ -522,11 +533,11 @@ export default function StockTransferPage({ user }: Props) {
             <h3 style={{margin:'0 0 10px',fontSize:16,fontWeight:600}}>Confirm stock transfer — {forward ? 'JAWS → VPS' : 'VPS → JAWS'}</h3>
             <div style={{fontSize:13,color:T.text2,lineHeight:1.6,marginBottom:16}}>
               <b style={{color:T.text}}>{picked.length} item{picked.length===1?'':'s'}</b> at cost
-              {' '}under PO <b style={{color:T.text,fontFamily:'monospace'}}>{poRef.trim()}</b>:<br/>
+              {forward ? <> (PO number assigned by MechanicDesk)</> : <> under PO <b style={{color:T.text,fontFamily:'monospace'}}>{poRef.trim()}</b></>}:<br/>
               {fmt$(totals.ex)} ex GST + {fmt$(totals.gst)} GST = <b style={{color:T.text}}>{fmt$(totals.inc)}</b><br/><br/>
               {forward ? (
-                <>This writes a <b style={{color:T.text}}>Sale Invoice in JAWS</b> (relieves stock immediately), a
-                {' '}<b style={{color:T.text}}>Purchase Bill in VPS</b>, and queues the <b style={{color:T.text}}>MechanicDesk PO</b>.</>
+                <>MechanicDesk raises the PO (and receives the stock), then the <b style={{color:T.text}}>JAWS Sale Invoice</b>
+                {' '}and <b style={{color:T.text}}>VPS Purchase Bill</b> post in MYOB referencing that PO number — all within ~1 minute.</>
               ) : (
                 <>This writes a <b style={{color:T.text}}>Sale Invoice in VPS</b> and a <b style={{color:T.text}}>Purchase Bill in JAWS</b>
                 {' '}that receives the stock back into JAWS inventory.</>

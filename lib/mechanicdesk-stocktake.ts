@@ -476,12 +476,15 @@ export interface MdPurchaseResult {
  */
 export async function createMdPurchase(
   client: MdClient,
-  input: { supplierId: number; reference: string; description?: string; lines: MdPurchaseLineInput[] },
+  input: { supplierId: number; reference?: string; description?: string; lines: MdPurchaseLineInput[] },
 ): Promise<MdPurchaseResult> {
-  const body = {
+  const ref = (input.reference || '').trim()
+  const body: Record<string, any> = {
     date: new Date().toISOString(),
     supplier_id: input.supplierId,
-    reference: input.reference,
+    // Only set a reference when supplied — an empty/absent reference lets MD
+    // assign its own sequential PO number (confirmed via probe).
+    ...(ref ? { reference: ref } : {}),
     description: input.description || '',
     purchase_items: input.lines.map(l => ({
       stock_id: l.stock_id,

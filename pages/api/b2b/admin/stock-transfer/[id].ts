@@ -4,11 +4,16 @@
 // 'stocktake:write').
 //
 // GET   → transfer header + lines + the MD supplier id to raise the PO on.
-// PATCH → report MD PO outcome back: { md_po_status, md_po_ref, md_po_error }.
+// PATCH → report MD PO outcome back: { md_po_status, md_po_ref, md_po_id, md_po_error }.
+// POST  → { action: 'finalize-myob', po_reference } — MD-first callback: now
+//         that MD has assigned the PO number, write the MYOB sale + bill.
 
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { createClient } from '@supabase/supabase-js'
 import { validateServiceToken } from '../../../../../lib/service-auth'
+import { finalizeForwardMyob } from '../../../../../lib/b2b-stock-transfer'
+
+export const config = { maxDuration: 120 }
 
 function sb() {
   return createClient(
@@ -30,7 +35,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (req.method === 'GET') {
     const { data: transfer, error } = await c
       .from('b2b_stock_transfers')
-      .select('id, direction, status, po_reference, note, line_count, md_po_status')
+      .select('id, direction, status, po_reference, note, line_count, md_po_status, md_po_id, md_po_ref')
       .eq('id', id).maybeSingle()
     if (error) return res.status(500).json({ error: error.message })
     if (!transfer) return res.status(404).json({ error: 'Transfer not found' })
@@ -56,12 +61,28 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const update: Record<string, any> = { md_po_updated_at: new Date().toISOString() }
     if ('md_po_status' in body) update.md_po_status = body.md_po_status ? String(body.md_po_status) : null
     if ('md_po_ref' in body)    update.md_po_ref = body.md_po_ref ? String(body.md_po_ref) : null
+    if ('md_po_id' in body)     update.md_po_id = body.md_po_id ? Number(body.md_po_id) : null
     if ('md_po_error' in body)  update.md_po_error = body.md_po_error ? String(body.md_po_error).slice(0, 1000) : null
     const { error } = await c.from('b2b_stock_transfers').update(update).eq('id', id)
     if (error) return res.status(500).json({ error: error.message })
     return res.status(200).json({ ok: true })
   }
 
-  res.setHeader('Allow', 'GET, PATCH')
-  return res.status(405).json({ error: 'GET or PATCH only' })
+  if (req.method === 'POST') {
+    let body: any = {}
+    try { body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : (req.body || {}) }
+    catch { return res.status(400).json({ error: 'Bad JSON body' }) }
+    if (String(body.action || '') !== 'finalize-myob') return res.status(400).json({ error: 'Unknown action' })
+    const poRef = String(body.po_reference || '').trim()
+    if (!poRef) return res.status(400).json({ error: 'po_reference required' })
+    try {
+      const r = await finalizeForwardMyob(id, poRef, 'md-worker')
+      return res.status(200).json({ ok: true, ...r })
+    } catch (e: any) {
+      return res.status(500).json({ error: e?.message || String(e) })
+    }
+  }
+
+  res.setHeader('Allow', 'GET, PATCH, POST')
+  return res.status(405).json({ error: 'GET, PATCH or POST only' })
 }
