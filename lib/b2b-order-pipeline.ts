@@ -118,8 +118,8 @@ export async function runPostPaymentPipeline(orderId: string, opts: { paymentInt
     await notify({
       module: 'b2b',
       title: `${detail?.is_test ? '[TEST] ' : ''}New B2B order ${detail?.order_number || ''}`.trim(),
-      body: `${dist?.display_name || 'Unknown distributor'} — $${Number(detail?.total_inc || 0).toFixed(2)} inc GST`,
-      href: '/admin/b2b',
+      body: `${dist?.display_name || 'Unknown distributor'} — $${Number(detail?.total_inc || 0).toFixed(2)} inc GST · tap to book freight`,
+      href: `/admin/b2b/orders/${orderId}`,
       dedupeKey: `b2b-paid:${orderId}`,
       roles: ['admin', 'manager'],
     })
