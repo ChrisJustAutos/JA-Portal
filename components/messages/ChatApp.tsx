@@ -59,6 +59,16 @@ export default function ChatApp({ user, onUnreadChange }: { user: SSRUser; onUnr
   // Per-conversation message cache — switching back to a channel is instant.
   const msgCache = useRef<Record<string, Message[]>>({})
   const active = useMemo(() => conversations.find(c => c.id === activeId) || null, [conversations, activeId])
+
+  // Deep-link: a notification (or push) opens /messages?c=<id> — select that
+  // conversation once the list has loaded. Runs once.
+  const deepLinkApplied = useRef(false)
+  useEffect(() => {
+    if (deepLinkApplied.current || activeId || conversations.length === 0) return
+    if (typeof window === 'undefined') return
+    const c = new URLSearchParams(window.location.search).get('c')
+    if (c && conversations.some(cv => cv.id === c)) { deepLinkApplied.current = true; setActiveId(c) }
+  }, [conversations, activeId])
   const totalUnread = useMemo(() => conversations.reduce((s, c) => s + (c.muted ? 0 : c.unread), 0), [conversations])
   useEffect(() => { onUnreadChange?.(totalUnread) }, [totalUnread, onUnreadChange])
 

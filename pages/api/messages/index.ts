@@ -117,6 +117,27 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
       await sb.from('conversation_participants').update({ last_read_at: new Date().toISOString() })
         .eq('conversation_id', conversationId).eq('user_id', me.id)
 
+      // Background Web Push to the other (non-muted) participants — pops a
+      // desktop/mobile notification even when their app is closed. Best-effort.
+      try {
+        const { data: parts } = await sb.from('conversation_participants')
+          .select('user_id, muted').eq('conversation_id', conversationId)
+        const recipients = (parts || [])
+          .filter((p: any) => p.user_id && p.user_id !== me.id && !p.muted)
+          .map((p: any) => p.user_id)
+        if (recipients.length) {
+          const senderName = me.displayName || 'New message'
+          const convLabel = conv.type === 'dm' ? senderName : `${conv.name || 'Channel'} · ${senderName}`
+          const { sendPushToUsers } = await import('../../../lib/push')
+          await sendPushToUsers(recipients, {
+            title: convLabel,
+            body: text ? text.slice(0, 140) : 'Sent an attachment',
+            href: `/messages?c=${conversationId}`,
+            tag: `conv-${conversationId}`,   // one rolling toast per conversation
+          })
+        }
+      } catch (e: any) { console.error('message push failed (non-fatal):', e?.message || e) }
+
       const dir = await userDirectory([me.id])
       return res.status(200).json({ message: { ...msg, senderName: dir[me.id]?.name || me.displayName, attachments: atts, mentions: mentionIds || [] } })
     }
