@@ -55,15 +55,25 @@ async function main() {
   await ctx.addCookies((cookies as any[]).map(c => ({ ...c, domain: 'www.mechanicdesk.com.au', path: '/' })))
   const page = await ctx.newPage()
 
+  // MD likely uses a native confirm() for "Process this PO?" — Playwright
+  // auto-dismisses native dialogs unless we accept them here.
+  page.on('dialog', async (d: any) => {
+    console.log(`   DIALOG (${d.type()}): "${d.message()}" → accept`)
+    await d.accept().catch(() => {})
+  })
+
   const writes: string[] = []
   page.on('request', (req: any) => {
     const u: string = req.url()
     if (!u.startsWith(MD_BASE)) return
     const m = req.method()
-    if (m === 'GET' || m === 'OPTIONS') return
+    if (m === 'OPTIONS') return
+    // Capture all writes, plus any GET that looks like a state action.
+    const rel = u.replace(MD_BASE, '')
+    if (m === 'GET' && !/process|receive|complete|status/i.test(rel)) return
     let body = ''
     try { body = req.postData() || '' } catch { /* ignore */ }
-    writes.push(`${m} ${u.replace(MD_BASE, '')}  body=${body.slice(0, 300)}`)
+    writes.push(`${m} ${rel}  body=${body.slice(0, 300)}`)
   })
 
   const uiUrl = `${MD_BASE}/mdweb/workshops/purchases/${po.id}`
@@ -100,11 +110,12 @@ async function main() {
   }
   if (!clicked) console.log('   no Process/Receive button found')
 
-  // A confirm dialog may appear — accept it.
+  // Native confirm() is handled by the dialog handler above. A custom modal
+  // (Angular) might instead need a DOM confirm click — try, harmlessly.
   await page.waitForTimeout(1500)
-  for (const rx of [/^(yes|confirm|ok|process|receive)$/i]) {
-    const cbtn = page.locator('button, a, [role=button]', { hasText: rx }).first()
-    if (await cbtn.count().catch(() => 0)) { try { await cbtn.click({ timeout: 3000 }); console.log(`   confirmed via ${rx}`) } catch {} }
+  for (const rx of [/^(yes|confirm|ok)$/i]) {
+    const cbtn = page.locator('.modal button, [role=dialog] button, md-dialog button', { hasText: rx }).first()
+    if (await cbtn.count().catch(() => 0)) { try { await cbtn.click({ timeout: 3000 }); console.log(`   confirmed modal via ${rx}`) } catch {} }
   }
   await page.waitForTimeout(5000)
 
