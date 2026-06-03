@@ -506,6 +506,8 @@ export default function ChatApp({ user, onUnreadChange }: { user: SSRUser; onUnr
     for (let i = messages.length - 1; i >= 0; i--) { const m = messages[i]; if (m.sender_user_id === user.id && !m.deleted_at && !m.status) return { id: m.id, body: m.body } }
     return null
   }, [messages, user.id])
+  // Deleted thread replies vanish too.
+  const visibleThread = useMemo(() => threadMessages.filter(m => !m.deleted_at), [threadMessages])
 
   return (
     <div style={{ flex: 1, display: 'flex', overflow: 'hidden', background: T.bg }}>
@@ -590,8 +592,8 @@ export default function ChatApp({ user, onUnreadChange }: { user: SSRUser; onUnr
             </div>
             <div style={{ flex: 1, overflowY: 'auto', padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 12 }}>
               <MessageRow m={threadParent} mine={threadParent.sender_user_id === user.id} meId={user.id} nameById={nameById} online={online} awayIds={awayIds} onReact={toggleReaction} onEdit={editMessage} onDelete={deleteMessage} onRetry={retrySend} compact />
-              <div style={{ borderTop: `1px solid ${T.border}`, paddingTop: 8, fontSize: 10, color: T.text3 }}>{threadMessages.length} repl{threadMessages.length === 1 ? 'y' : 'ies'}</div>
-              {threadMessages.map(m => <MessageRow key={m.id} m={m} mine={m.sender_user_id === user.id} meId={user.id} nameById={nameById} online={online} awayIds={awayIds} onReact={toggleReaction} onEdit={editMessage} onDelete={deleteMessage} onRetry={retrySend} compact />)}
+              <div style={{ borderTop: `1px solid ${T.border}`, paddingTop: 8, fontSize: 10, color: T.text3 }}>{visibleThread.length} repl{visibleThread.length === 1 ? 'y' : 'ies'}</div>
+              {visibleThread.map(m => <MessageRow key={m.id} m={m} mine={m.sender_user_id === user.id} meId={user.id} nameById={nameById} online={online} awayIds={awayIds} onReact={toggleReaction} onEdit={editMessage} onDelete={deleteMessage} onRetry={retrySend} compact />)}
             </div>
             <Composer key={'thread-' + threadParent.id} draftKey={'thread:' + threadParent.id} dir={dir.filter(u => u.id !== user.id)} onSend={(b, m, f) => sendMessage(b, m, f, threadParent.id)} onTyping={() => {}} placeholder="Reply…" />
           </div>
@@ -760,7 +762,10 @@ function dayLabel(iso: string) {
   return d.toLocaleDateString('en-AU', { weekday: 'short', day: 'numeric', month: 'short', year: d.getFullYear() === now.getFullYear() ? undefined : 'numeric' })
 }
 
-function MessageList({ messages, loading, meId, nameById, conv, online, awayIds, dividerTs, hasMore, loadingOlder, onLoadOlder, onReact, onEdit, onDelete, onRetry, onOpenThread }: { messages: Message[]; loading: boolean; meId: string; nameById: Record<string, string>; conv: Conversation; online: Set<string>; awayIds: Set<string>; dividerTs: string | null; hasMore: boolean; loadingOlder: boolean; onLoadOlder: () => void } & RowActions) {
+function MessageList({ messages: messagesRaw, loading, meId, nameById, conv, online, awayIds, dividerTs, hasMore, loadingOlder, onLoadOlder, onReact, onEdit, onDelete, onRetry, onOpenThread }: { messages: Message[]; loading: boolean; meId: string; nameById: Record<string, string>; conv: Conversation; online: Set<string>; awayIds: Set<string>; dividerTs: string | null; hasMore: boolean; loadingOlder: boolean; onLoadOlder: () => void } & RowActions) {
+  // Deleted messages vanish entirely (no tombstone). Memoised so scroll/effects
+  // keep a stable array reference between unrelated renders.
+  const messages = useMemo(() => messagesRaw.filter(m => !m.deleted_at), [messagesRaw])
   const ref = useRef<HTMLDivElement | null>(null)
   const atBottom = useRef(true)
   const meta = useRef<{ firstId?: string; lastId?: string; len: number }>({ len: 0 })
@@ -899,7 +904,7 @@ function MessageRow({ m, mine, meId, nameById, online, awayIds, grouped, receipt
         <div style={{ position: 'relative' }}>
           {/* Hover toolbar */}
           {hover && !deleted && !editing && !m.status && (
-            <div style={{ position: 'absolute', top: -14, [mine ? 'left' : 'right']: 0, display: 'flex', gap: 2, background: T.bg4, border: `1px solid ${T.border2}`, borderRadius: 6, padding: 2, zIndex: 3 } as any}>
+            <div style={{ position: 'absolute', top: -14, [mine ? 'right' : 'left']: 0, display: 'flex', gap: 2, background: T.bg4, border: `1px solid ${T.border2}`, borderRadius: 6, padding: 2, zIndex: 3 } as any}>
               <IconBtn title="React" onClick={() => setPicker(p => p ? false : 'quick')}>🙂</IconBtn>
               {onOpenThread && <IconBtn title="Reply in thread" onClick={() => onOpenThread(m)}>↳</IconBtn>}
               {mine && <IconBtn title="Edit" onClick={() => setEditing(true)}>✎</IconBtn>}
@@ -907,13 +912,13 @@ function MessageRow({ m, mine, meId, nameById, online, awayIds, grouped, receipt
             </div>
           )}
           {picker === 'quick' && (
-            <div style={{ position: 'absolute', top: -40, [mine ? 'left' : 'right']: 0, display: 'flex', gap: 2, background: T.bg4, border: `1px solid ${T.border2}`, borderRadius: 8, padding: 4, zIndex: 4, alignItems: 'center' } as any}>
+            <div style={{ position: 'absolute', top: -40, [mine ? 'right' : 'left']: 0, display: 'flex', gap: 2, background: T.bg4, border: `1px solid ${T.border2}`, borderRadius: 8, padding: 4, zIndex: 4, alignItems: 'center' } as any}>
               {QUICK_EMOJI.map(e => <button key={e} onClick={() => { onReact(m.id, e); setPicker(false) }} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 16, padding: 2 }}>{e}</button>)}
               <button onClick={() => setPicker('full')} title="More…" style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 14, padding: '2px 4px', color: T.text2 }}>＋</button>
             </div>
           )}
           {picker === 'full' && (
-            <div style={{ position: 'absolute', top: -8, [mine ? 'left' : 'right']: 0, transform: 'translateY(-100%)', zIndex: 6 } as any}>
+            <div style={{ position: 'absolute', top: -8, [mine ? 'right' : 'left']: 0, transform: 'translateY(-100%)', zIndex: 6 } as any}>
               <EmojiPicker onPick={(e) => { onReact(m.id, e); setPicker(false) }} onClose={() => setPicker(false)} />
             </div>
           )}
