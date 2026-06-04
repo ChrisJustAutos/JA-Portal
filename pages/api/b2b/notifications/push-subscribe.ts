@@ -39,6 +39,10 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, use
       last_used_at: new Date().toISOString(),
     }, { onConflict: 'endpoint' })
     if (error) return res.status(500).json({ error: error.message })
+    // Prune this user's endpoints not seen in 30 days (live devices re-register
+    // on every app open) so retired/dead devices don't pile up.
+    const cutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString()
+    c.from('b2b_push_subscriptions').delete().eq('b2b_user_id', user.id).lt('last_used_at', cutoff).then(() => {}, () => {})
     return res.status(200).json({ ok: true })
   }
 

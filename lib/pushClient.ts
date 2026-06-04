@@ -60,31 +60,21 @@ export async function ensurePushSubscription(subscribeUrl = '/api/notifications/
   }
 }
 
-// Keep this device's push subscription alive WITHOUT manual re-registration.
-// iOS silently invalidates subscriptions (commonly across an app/SW update)
-// while getSubscription() keeps returning the dead object — so a plain ensure
-// re-saves a corpse and never heals. On the installed PWA we therefore force a
-// fresh endpoint on cold start, throttled to ~once / 6h per device (dead
-// endpoints are pruned server-side on the next send). In a normal desktop
-// browser tab subscriptions are stable, so there we just ensure (no force).
+// Keep the server's copy of this device's subscription current. Just a plain,
+// idempotent ensure (upsert on the SAME endpoint) — NO forcing. Blind forcing
+// minted a fresh endpoint on every call, leaving the same device showing up as
+// many "devices". Real rotations/expiry are now self-healed by the service
+// worker's pushsubscriptionchange handler; genuine recovery is the manual
+// "Re-register this device" button.
 export async function keepPushFresh(subscribeUrl = '/api/notifications/push-subscribe'): Promise<void> {
   if (typeof window === 'undefined' || typeof Notification === 'undefined') return
   if (Notification.permission !== 'granted') return
-  const standalone = (typeof window.matchMedia === 'function' && window.matchMedia('(display-mode: standalone)').matches)
-    || (navigator as any).standalone === true
-  let force = false
-  const KEY = 'ja-push-fresh:' + subscribeUrl
-  try {
-    const last = Number(localStorage.getItem(KEY) || '0')
-    if (standalone && Date.now() - last > 6 * 60 * 60 * 1000) force = true
-  } catch { /* ignore */ }
-  const res = await ensurePushSubscription(subscribeUrl, { force })
-  if (force && res.ok) { try { localStorage.setItem(KEY, String(Date.now())) } catch {} }
+  await ensurePushSubscription(subscribeUrl)
 }
 
-// Re-arm push the moment a new service worker takes control (the app updated) —
-// iOS frequently drops the subscription across an update. Idempotent; safe to
-// call on every mount.
+// Re-save the subscription when a new service worker takes control (app
+// updated). Non-forced — the push subscription survives SW version changes, so
+// we just re-register the existing endpoint (no new device row). Idempotent.
 let _autoHealInstalled = false
 export function installPushAutoHeal(subscribeUrl = '/api/notifications/push-subscribe'): void {
   if (_autoHealInstalled) return
@@ -92,7 +82,7 @@ export function installPushAutoHeal(subscribeUrl = '/api/notifications/push-subs
   _autoHealInstalled = true
   navigator.serviceWorker.addEventListener('controllerchange', () => {
     if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
-      ensurePushSubscription(subscribeUrl, { force: true }).catch(() => {})
+      ensurePushSubscription(subscribeUrl).catch(() => {})
     }
   })
 }
