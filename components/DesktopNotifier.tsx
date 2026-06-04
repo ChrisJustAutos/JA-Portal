@@ -14,7 +14,7 @@
 import { useEffect, useRef } from 'react'
 import { useRouter } from 'next/router'
 import { playSound, primeAudio } from '../lib/notificationSounds'
-import { ensurePushSubscription } from '../lib/pushClient'
+import { ensurePushSubscription, keepPushFresh, installPushAutoHeal } from '../lib/pushClient'
 
 const LAST_SEEN_KEY = 'ja-notif-last-seen'
 const POLL_MS = 45000
@@ -38,8 +38,9 @@ export default function DesktopNotifier() {
     if (Notification.permission === 'default') {
       try { Notification.requestPermission().then((p) => { if (p === 'granted') ensurePushSubscription() }) } catch {}
     } else if (Notification.permission === 'granted') {
-      ensurePushSubscription()
+      keepPushFresh()           // self-heals a stale iOS subscription on cold start
     }
+    installPushAutoHeal()       // re-arm when the app/service worker updates
 
     // Unlock audio on the first user interaction (browsers block sound until
     // the user has interacted with the page).

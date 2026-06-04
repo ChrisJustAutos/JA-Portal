@@ -15,7 +15,7 @@ import { useRouter } from 'next/router'
 import { getSupabase } from '../../lib/supabaseClient'
 import { useIsMobile } from '../../lib/useIsMobile'
 import { AppIcon } from '../../lib/AppIcons'
-import { enableNotifications, ensurePushSubscription } from '../../lib/pushClient'
+import { enableNotifications, keepPushFresh, installPushAutoHeal } from '../../lib/pushClient'
 import B2BNotificationBell from './B2BNotificationBell'
 
 const B2B_SUBSCRIBE_URL = '/api/b2b/notifications/push-subscribe'
@@ -239,7 +239,8 @@ function B2BNotifyBanner({ isMobile }: { isMobile: boolean }) {
     if (typeof Notification === 'undefined') { setPerm('unsupported'); return }
     setPerm(Notification.permission)
     setDismissed(localStorage.getItem('ja-b2b-notif-dismissed') === '1')
-    if (Notification.permission === 'granted') ensurePushSubscription(B2B_SUBSCRIBE_URL)
+    if (Notification.permission === 'granted') keepPushFresh(B2B_SUBSCRIBE_URL)  // self-heal stale iOS subs
+    installPushAutoHeal(B2B_SUBSCRIBE_URL)                                        // re-arm on app update
   }, [])
 
   if (perm !== 'default' || dismissed) return null
