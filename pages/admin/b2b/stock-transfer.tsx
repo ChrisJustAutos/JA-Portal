@@ -482,7 +482,7 @@ export default function StockTransferPage({ user }: Props) {
             {history !== null && history.length === 0 && <div style={{color:T.text3,fontSize:13}}>No transfers yet.</div>}
             {history !== null && history.length > 0 && (
               <div style={{overflowX:'auto'}}>
-                <table style={{width:'100%',borderCollapse:'collapse',fontSize:13}}>
+                <table className="b2b-cards" style={{width:'100%',borderCollapse:'collapse',fontSize:13}}>
                   <thead>
                     <tr style={{color:T.text3,fontSize:11,textTransform:'uppercase',letterSpacing:'0.06em'}}>
                       <th style={{textAlign:'left',padding:'6px 8px'}}>Date</th>
@@ -503,16 +503,16 @@ export default function StockTransferPage({ user }: Props) {
                       const billDone = fwd ? !!t.vps_bill_uid : !!t.jaws_bill_uid
                       return (
                         <tr key={t.id} style={{borderTop:`1px solid ${T.border}`}}>
-                          <td style={{padding:'7px 8px',color:T.text2,whiteSpace:'nowrap'}}>
+                          <td className="b2b-card-title" style={{padding:'7px 8px',color:T.text2,whiteSpace:'nowrap'}}>
                             {new Date(t.created_at).toLocaleString('en-AU',{day:'numeric',month:'short',hour:'numeric',minute:'2-digit'})}
                           </td>
-                          <td style={{padding:'7px 8px',fontSize:12,color:fwd?T.teal:T.purple,whiteSpace:'nowrap'}}>{fwd ? 'JAWS → VPS' : 'VPS → JAWS'}</td>
-                          <td style={{padding:'7px 8px',textAlign:'right',fontFamily:'monospace'}}>{t.line_count}</td>
-                          <td style={{padding:'7px 8px',textAlign:'right',fontFamily:'monospace'}}>{fmt$(t.total_inc)}</td>
-                          <td style={{padding:'7px 8px',fontFamily:'monospace',fontSize:12}}>{(fwd ? (t.md_po_ref || t.po_reference) : t.po_reference) || '—'}</td>
-                          <td style={{padding:'7px 8px',fontFamily:'monospace',fontSize:12}}>{(fwd ? t.jaws_invoice_number : t.vps_invoice_number) || '—'}</td>
-                          <td style={{padding:'7px 8px',fontSize:12,color:billDone?T.green:T.text3}}>{billDone ? '✓ written' : '—'}</td>
-                          <td style={{padding:'7px 8px',fontSize:12}}>
+                          <td data-label="Direction" style={{padding:'7px 8px',fontSize:12,color:fwd?T.teal:T.purple,whiteSpace:'nowrap'}}>{fwd ? 'JAWS → VPS' : 'VPS → JAWS'}</td>
+                          <td data-label="Items" style={{padding:'7px 8px',textAlign:'right',fontFamily:'monospace'}}>{t.line_count}</td>
+                          <td data-label="Total (inc)" style={{padding:'7px 8px',textAlign:'right',fontFamily:'monospace'}}>{fmt$(t.total_inc)}</td>
+                          <td data-label="PO ref" style={{padding:'7px 8px',fontFamily:'monospace',fontSize:12}}>{(fwd ? (t.md_po_ref || t.po_reference) : t.po_reference) || '—'}</td>
+                          <td data-label="Sale doc" style={{padding:'7px 8px',fontFamily:'monospace',fontSize:12}}>{(fwd ? t.jaws_invoice_number : t.vps_invoice_number) || '—'}</td>
+                          <td data-label="Bill" style={{padding:'7px 8px',fontSize:12,color:billDone?T.green:T.text3}}>{billDone ? '✓ written' : '—'}</td>
+                          <td data-label="MD PO" style={{padding:'7px 8px',fontSize:12}}>
                             {!fwd ? <span style={{color:T.text3}}>n/a</span> : (
                               <div style={{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap'}}>
                                 {t.md_po_status === 'done'
@@ -532,7 +532,7 @@ export default function StockTransferPage({ user }: Props) {
                               </div>
                             )}
                           </td>
-                          <td style={{padding:'7px 8px'}}>
+                          <td data-label="Status" style={{padding:'7px 8px'}}>
                             <span style={{
                               fontSize:11, fontWeight:600, padding:'2px 8px', borderRadius:10,
                               color: t.status==='complete'?T.green:(t.status==='partial'||t.status==='awaiting_md')?T.amber:t.status==='failed'?T.red:T.text3,
@@ -540,7 +540,7 @@ export default function StockTransferPage({ user }: Props) {
                             }}>{t.status==='awaiting_md'?'awaiting MD':t.status}</span>
                             {t.error && <div style={{fontSize:11,color:T.red,marginTop:3,maxWidth:300}}>{t.error}</div>}
                           </td>
-                          <td style={{padding:'7px 8px'}}>
+                          <td data-label="" style={{padding:'7px 8px',justifyContent:'flex-end'}}>
                             <div style={{display:'flex',alignItems:'center',gap:8}}>
                               {t.status === 'partial' && (
                                 <button onClick={()=>retry(t.id)} disabled={retrying===t.id}

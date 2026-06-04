@@ -49,6 +49,22 @@ export default function B2BAdminTabs({ active }: { active: B2BAdminSection }) {
           .b2b-admin-main{ padding:16px 14px !important; }
           .b2b-admin-main table{ display:block; overflow-x:auto; -webkit-overflow-scrolling:touch; max-width:100%; }
           .b2b-col2{ grid-template-columns:1fr !important; }
+
+          /* Responsive tables → stacked cards. Add class "b2b-cards" to a
+             <table> and a data-label to each <td>; on mobile each row becomes a
+             labelled card instead of a sideways-scrolling row. Helpers:
+             td.b2b-card-title = full-width bold header (no label),
+             td.b2b-card-hide = hidden on mobile. */
+          table.b2b-cards{ display:block !important; overflow:visible !important; border-collapse:collapse; }
+          table.b2b-cards thead{ display:none; }
+          table.b2b-cards tbody{ display:block; }
+          table.b2b-cards tr{ display:block; border:1px solid ${T.border}; border-radius:10px; background:${T.bg2}; margin-bottom:10px; padding:10px 12px; }
+          table.b2b-cards td{ display:flex !important; align-items:center; justify-content:space-between; gap:12px; width:auto !important; padding:5px 0 !important; border:none !important; text-align:right !important; }
+          table.b2b-cards td::before{ content:attr(data-label); color:${T.text3}; font-size:11px; font-weight:500; text-align:left; flex-shrink:0; white-space:nowrap; }
+          table.b2b-cards td:not([data-label])::before, table.b2b-cards td[data-label=""]::before{ content:none; }
+          table.b2b-cards td.b2b-card-title{ display:block !important; text-align:left !important; font-weight:600; font-size:14px; color:${T.text}; padding:0 0 8px !important; margin-bottom:4px; border-bottom:1px solid ${T.border} !important; }
+          table.b2b-cards td.b2b-card-title::before{ content:none; }
+          table.b2b-cards td.b2b-card-hide{ display:none !important; }
         }
       `}</style>
       {TABS.map(tab => {

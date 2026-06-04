@@ -529,7 +529,7 @@ export default function CatalogueAdminPage({ user }: Props) {
             overflow:'hidden',
           }}>
             <div style={{overflowX:'auto'}}>
-              <table style={{width:'100%',borderCollapse:'collapse',fontSize:13}}>
+              <table className="b2b-cards" style={{width:'100%',borderCollapse:'collapse',fontSize:13}}>
                 <thead>
                   <tr style={{borderBottom:`1px solid ${T.border2}`}}>
                     <th style={th(70)}></th>
@@ -718,8 +718,9 @@ function CatalogueRow({
       borderTop: index > 0 ? `1px solid ${T.border}` : 'none',
       background: error ? `${T.red}08` : 'transparent',
     }}>
-      {/* Image thumb — click to upload/replace; drawer reachable via SKU/Name/chevron */}
-      <td style={{...td(),padding:6}}>
+      {/* Image thumb — click to upload/replace; drawer reachable via SKU/Name/chevron.
+          Hidden in the mobile card view (upload via the product drawer there). */}
+      <td className="b2b-card-hide" style={{...td(),padding:6}}>
         <div
           onClick={() => !uploading && fileInputRef.current?.click()}
           title={item.primary_image_url ? 'Click to replace image' : 'Click to upload image'}
@@ -761,12 +762,12 @@ function CatalogueRow({
       </td>
 
       {/* SKU */}
-      <td style={{...td(),cursor:'pointer'}} onClick={onOpenDrawer}>
+      <td data-label="SKU" style={{...td(),cursor:'pointer'}} onClick={onOpenDrawer}>
         <div style={{fontFamily:'monospace',fontSize:12,color:T.text2}}>{item.sku}</div>
       </td>
 
-      {/* Name */}
-      <td style={{...td(),cursor:'pointer'}} onClick={onOpenDrawer}>
+      {/* Name — card title on mobile */}
+      <td className="b2b-card-title" style={{...td(),cursor:'pointer'}} onClick={onOpenDrawer}>
         <div style={{color:T.text}}>{item.name}</div>
         {(showWarning || showImageWarning) && (
           <div style={{fontSize:10,color:T.amber,marginTop:2,fontFamily:'monospace'}}>
@@ -779,7 +780,7 @@ function CatalogueRow({
       </td>
 
       {/* Models — a product can fit several; edit the full list in the drawer. */}
-      <td style={td()}>
+      <td data-label="Model" style={td()}>
         {(() => {
           const ms = item.models && item.models.length
             ? item.models
@@ -796,7 +797,7 @@ function CatalogueRow({
       </td>
 
       {/* Product type (inline editable, only when item is visible) */}
-      <td style={td()}>
+      <td data-label="Type" style={td()}>
         {item.b2b_visible ? (
           <InlineTaxonomySelect
             value={item.product_type_id}
@@ -811,12 +812,12 @@ function CatalogueRow({
       </td>
 
       {/* RRP */}
-      <td style={{...td(),textAlign:'right',color:T.text3,fontFamily:'monospace'}}>
+      <td data-label="RRP" style={{...td(),textAlign:'right',color:T.text3,fontFamily:'monospace'}}>
         {fmtMoney(item.rrp_ex_gst)}
       </td>
 
       {/* Trade price input */}
-      <td style={{...td(),textAlign:'right',padding:'6px 10px'}}>
+      <td data-label="Trade $ (ex GST)" style={{...td(),textAlign:'right',padding:'6px 10px'}}>
         <div style={{display:'flex',alignItems:'center',justifyContent:'flex-end',gap:4}}>
           <span style={{fontSize:12,color:T.text3}}>$</span>
           <input
@@ -845,7 +846,7 @@ function CatalogueRow({
       </td>
 
       {/* Stock (cached from MYOB) */}
-      <td style={{...td(),textAlign:'center'}}>
+      <td data-label="Stock" style={{...td(),textAlign:'center'}}>
         {(() => {
           if (item.is_drop_ship) return <span style={{fontSize:10.5,color:T.text3}} title="Ships direct from supplier — no warehouse stock">drop-ship</span>
           if (item.is_inventoried === false) return <span style={{color:T.text3,fontSize:14}} title="Not inventoried (unlimited)">∞</span>
@@ -862,7 +863,7 @@ function CatalogueRow({
       </td>
 
       {/* Visibility toggle */}
-      <td style={{...td(),textAlign:'center'}}>
+      <td data-label="Visible" style={{...td(),textAlign:'center'}}>
         <ToggleSwitch
           on={item.b2b_visible}
           disabled={savingField === 'visible'}
@@ -870,8 +871,8 @@ function CatalogueRow({
         />
       </td>
 
-      {/* Edit chevron */}
-      <td style={{...td(),textAlign:'right',cursor:'pointer'}} onClick={onOpenDrawer}>
+      {/* Edit chevron — hidden in mobile cards (tap the title to open the editor) */}
+      <td className="b2b-card-hide" style={{...td(),textAlign:'right',cursor:'pointer'}} onClick={onOpenDrawer}>
         <span style={{color:T.text3,fontSize:14}}>›</span>
       </td>
     </tr>

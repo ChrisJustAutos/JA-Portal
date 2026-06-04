@@ -375,7 +375,7 @@ export default function AdminOrdersListPage({ user }: Props) {
             background:T.bg2,border:`1px solid ${T.border}`,borderRadius:10,overflow:'hidden',
           }}>
             <div style={{overflowX:'auto'}}>
-              <table style={{width:'100%',borderCollapse:'collapse',fontSize:13}}>
+              <table className="b2b-cards" style={{width:'100%',borderCollapse:'collapse',fontSize:13}}>
                 <thead>
                   <tr style={{borderBottom:`1px solid ${T.border2}`}}>
                     <th style={th(140)}>Order</th>
@@ -453,23 +453,23 @@ function OrderRowDisplay({ order, isFirst }: { order: OrderRow; isFirst: boolean
     }}
       onClick={() => { window.location.href = `/admin/b2b/orders/${order.id}` }}>
 
-      <td style={td()}>
+      <td className="b2b-card-title" style={td()}>
         <div style={{fontFamily:'monospace',fontSize:13,color:T.text}}>{order.order_number}{order.is_test && <span style={{marginLeft:6,fontFamily:'inherit',fontSize:9,padding:'1px 6px',borderRadius:8,background:`${T.amber}22`,color:T.amber,border:`1px solid ${T.amber}55`,verticalAlign:'middle'}}>TEST</span>}</div>
         {order.customer_po && (
           <div style={{fontSize:10,color:T.text3,marginTop:2}}>PO: {order.customer_po}</div>
         )}
       </td>
 
-      <td style={td()}>
+      <td data-label="Distributor" style={td()}>
         <div style={{fontSize:13,color:T.text}}>{dist}</div>
       </td>
 
-      <td style={{...td(),fontSize:12,color:T.text3,fontFamily:'monospace',whiteSpace:'nowrap'}}>
+      <td data-label="Placed" style={{...td(),fontSize:12,color:T.text3,fontFamily:'monospace',whiteSpace:'nowrap'}}>
         {placedDate}
         <div style={{fontSize:10,color:T.text3,opacity:0.7}}>{placedTime}</div>
       </td>
 
-      <td style={td()}>
+      <td data-label="Status" style={td()}>
         <StatusPill status={order.status}/>
         {Number(order.refunded_total) > 0 && (
           <div style={{fontSize:10,color:T.purple,marginTop:3}}>
@@ -478,11 +478,11 @@ function OrderRowDisplay({ order, isFirst }: { order: OrderRow; isFirst: boolean
         )}
       </td>
 
-      <td style={{...td(),textAlign:'right',fontFamily:'monospace',fontVariantNumeric:'tabular-nums'}}>
+      <td data-label="Total (inc)" style={{...td(),textAlign:'right',fontFamily:'monospace',fontVariantNumeric:'tabular-nums'}}>
         ${money(Number(order.total_inc))}
       </td>
 
-      <td style={{...td(),fontSize:12}}>
+      <td data-label="MYOB #" style={{...td(),fontSize:12}}>
         {order.myob_invoice_number ? (
           <span style={{fontFamily:'monospace',color:T.text2}}>{order.myob_invoice_number}</span>
         ) : order.myob_write_error ? (
@@ -494,7 +494,7 @@ function OrderRowDisplay({ order, isFirst }: { order: OrderRow; isFirst: boolean
         )}
       </td>
 
-      <td style={{...td(),textAlign:'right'}}>
+      <td className="b2b-card-hide" style={{...td(),textAlign:'right'}}>
         <span style={{color:T.text3,fontSize:14}}>›</span>
       </td>
 

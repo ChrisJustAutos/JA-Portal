@@ -158,7 +158,7 @@ export default function DistributorsListPage({ user }: Props) {
           {/* Table */}
           <div style={{background:T.bg2,border:`1px solid ${T.border}`,borderRadius:10,overflow:'hidden'}}>
             <div style={{overflowX:'auto'}}>
-              <table style={{width:'100%',borderCollapse:'collapse',fontSize:13}}>
+              <table className="b2b-cards" style={{width:'100%',borderCollapse:'collapse',fontSize:13}}>
                 <thead>
                   <tr style={{borderBottom:`1px solid ${T.border2}`}}>
                     <th style={th()}>Distributor</th>
@@ -184,23 +184,23 @@ export default function DistributorsListPage({ user }: Props) {
                         borderTop: i > 0 ? `1px solid ${T.border}` : 'none',
                         cursor:'pointer',
                       }}>
-                      <td style={td()}>
+                      <td className="b2b-card-title" style={td()}>
                         <div style={{color:T.text,fontWeight:500}}>{d.display_name}</div>
                         {d.abn && <div style={{fontSize:10,color:T.text3,fontFamily:'monospace',marginTop:2}}>ABN {d.abn}</div>}
                       </td>
-                      <td style={{...td(),fontFamily:'monospace',fontSize:12,color:T.text2}}>
+                      <td data-label="MYOB ID" style={{...td(),fontFamily:'monospace',fontSize:12,color:T.text2}}>
                         {d.myob_primary_customer_display_id || '—'}
                       </td>
-                      <td style={{...td(),color:T.text3,fontSize:12}}>
+                      <td data-label="Linked" style={{...td(),color:T.text3,fontSize:12}}>
                         {d.myob_linked_customer_uids?.length
                           ? `+${d.myob_linked_customer_uids.length} linked`
                           : '—'}
                       </td>
-                      <td style={td()}>
+                      <td data-label="Contact" style={td()}>
                         <div style={{color:T.text2}}>{d.primary_contact_email || '—'}</div>
                         {d.primary_contact_phone && <div style={{fontSize:10,color:T.text3,marginTop:2}}>{d.primary_contact_phone}</div>}
                       </td>
-                      <td style={td()}>
+                      <td data-label="Tier" style={td()}>
                         {d.tier_name ? (
                           <span style={{
                             display:'inline-block',padding:'2px 8px',borderRadius:8,fontSize:10,fontWeight:500,
@@ -212,10 +212,10 @@ export default function DistributorsListPage({ user }: Props) {
                           <span style={{color:T.text3,fontSize:11}}>—</span>
                         )}
                       </td>
-                      <td style={{...td(),textAlign:'center',color:d.active_user_count > 0 ? T.text : T.text3,fontVariantNumeric:'tabular-nums'}}>
+                      <td data-label="Users" style={{...td(),textAlign:'center',color:d.active_user_count > 0 ? T.text : T.text3,fontVariantNumeric:'tabular-nums'}}>
                         {d.active_user_count}
                       </td>
-                      <td style={{...td(),textAlign:'center'}}>
+                      <td data-label="Active" style={{...td(),textAlign:'center'}}>
                         <span style={{
                           display:'inline-block',padding:'2px 8px',borderRadius:8,fontSize:10,
                           background: d.is_active ? `${T.green}20` : `${T.text3}15`,
@@ -224,7 +224,7 @@ export default function DistributorsListPage({ user }: Props) {
                           {d.is_active ? 'Active' : 'Inactive'}
                         </span>
                       </td>
-                      <td style={{...td(),textAlign:'right'}}>
+                      <td className="b2b-card-hide" style={{...td(),textAlign:'right'}}>
                         <span style={{color:T.text3}}>›</span>
                       </td>
                     </tr>
