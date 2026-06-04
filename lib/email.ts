@@ -11,6 +11,9 @@
 //                   Must be on a Resend-verified domain. Falls back to the
 //                   `mailbox` argument when unset (only works if that domain is
 //                   the one verified in Resend).
+//   RESEND_REPLY_TO Optional default reply-to (e.g. accounts@justautosmechanical.com.au)
+//                   so replies to a noreply@ sender land in a monitored inbox.
+//                   A per-call replyTo always wins. Applied to both paths.
 
 import { sendMail as graphSendMail } from './microsoft-graph'
 
@@ -26,8 +29,12 @@ export interface MailOptions {
 // `mailbox` is the intended sender. With Graph it's the M365 mailbox to send as;
 // with Resend it's the fallback "from" when RESEND_FROM isn't configured.
 export async function sendMail(mailbox: string, opts: MailOptions): Promise<void> {
+  // A per-call replyTo wins; otherwise fall back to the configured default so
+  // replies to a noreply@ sender reach a real inbox.
+  const replyTo = opts.replyTo || (process.env.RESEND_REPLY_TO || '').trim() || undefined
+
   const key = (process.env.RESEND_API_KEY || '').trim()
-  if (!key) { await graphSendMail(mailbox, opts); return }
+  if (!key) { await graphSendMail(mailbox, { ...opts, replyTo }); return }
 
   const from = (process.env.RESEND_FROM || '').trim() || mailbox
   const payload: Record<string, any> = {
@@ -37,7 +44,7 @@ export async function sendMail(mailbox: string, opts: MailOptions): Promise<void
     html: opts.html,
   }
   if (opts.cc && opts.cc.length) payload.cc = opts.cc
-  if (opts.replyTo) payload.reply_to = opts.replyTo
+  if (replyTo) payload.reply_to = replyTo
   if (opts.attachments && opts.attachments.length) {
     payload.attachments = opts.attachments.map(a => ({
       filename: a.name,
