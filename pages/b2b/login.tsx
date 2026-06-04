@@ -49,6 +49,12 @@ export default function B2BLoginPage() {
           setSent(true)
           return
         }
+        // Supabase auth email throttle — show a calm, actionable message rather
+        // than the raw "email rate limit exceeded".
+        if ((error as any).status === 429 || msg.includes('rate limit')) {
+          setError('Too many sign-in emails were just sent. Please wait a few minutes and try again, or contact your account manager for a direct sign-in link.')
+          return
+        }
         throw error
       }
       setSent(true)
