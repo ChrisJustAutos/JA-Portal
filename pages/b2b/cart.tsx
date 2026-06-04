@@ -120,6 +120,7 @@ export default function B2BCartPage({ b2bUser }: Props) {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [busyLineId, setBusyLineId] = useState<string | null>(null)
+  const [paymentMethod, setPaymentMethod] = useState<'card' | 'becs' | 'payto'>('card')
   const [checkoutBusy, setCheckoutBusy] = useState(false)
   const [checkoutError, setCheckoutError] = useState<string | null>(null)
   const [checkoutIssues, setCheckoutIssues] = useState<string[] | null>(null)
@@ -219,6 +220,7 @@ export default function B2BCartPage({ b2bUser }: Props) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           customer_po: customerPo.trim() || undefined,
+          payment_method: paymentMethod,
           freight_rate_id: chosenRate?.source === 'static' ? selectedFreightId : undefined,
           freight_satchel_id: chosenRate?.source === 'satchel' ? selectedFreightId : undefined,
           freight_machship_route: machshipRoute,
@@ -329,6 +331,8 @@ export default function B2BCartPage({ b2bUser }: Props) {
               cardFee={data.card_fee}
               customerPo={customerPo}
               onCustomerPoChange={setCustomerPo}
+              paymentMethod={paymentMethod}
+              onPaymentMethodChange={setPaymentMethod}
               onCheckout={startCheckout}
               checkoutBusy={checkoutBusy}
               blockedReason={
@@ -507,13 +511,15 @@ function qtyBtn(disabled?: boolean): React.CSSProperties {
 
 // ─── Totals panel ──────────────────────────────────────────────────────
 function TotalsPanel({
-  totals, cardFee, customerPo, onCustomerPoChange, onCheckout, checkoutBusy, blockedReason,
+  totals, cardFee, customerPo, onCustomerPoChange, paymentMethod, onPaymentMethodChange, onCheckout, checkoutBusy, blockedReason,
   freight, selectedFreightId, onSelectFreight,
 }: {
   totals: CartTotals
   cardFee: { pct: number; fixed: number; note: string }
   customerPo: string
   onCustomerPoChange: (v: string) => void
+  paymentMethod: 'card' | 'becs' | 'payto'
+  onPaymentMethodChange: (m: 'card' | 'becs' | 'payto') => void
   onCheckout: () => void
   checkoutBusy: boolean
   blockedReason: string | null
@@ -521,6 +527,7 @@ function TotalsPanel({
   selectedFreightId: string | null
   onSelectFreight: (id: string | null) => void
 }) {
+  const applySurcharge = paymentMethod === 'card'
   const selectedFreight = freight?.rates.find(r => r.id === selectedFreightId) || null
   const freightExGst = selectedFreight ? Number(selectedFreight.price_ex_gst) : 0
   const freightGst = freightExGst * 0.10
@@ -532,10 +539,10 @@ function TotalsPanel({
   const newSubtotalEx  = totals.subtotal_ex_gst + freightExGst
   const newGst         = totals.gst + freightGst
   const newSubtotalInc = newSubtotalEx + newGst
-  const charged        = newSubtotalInc > 0
+  const charged        = (applySurcharge && newSubtotalInc > 0)
     ? (newSubtotalInc + cardFee.fixed) / (1 - cardFee.pct)
-    : 0
-  const newCardFeeInc  = Math.max(0, charged - newSubtotalInc)
+    : newSubtotalInc
+  const newCardFeeInc  = applySurcharge ? Math.max(0, charged - newSubtotalInc) : 0
   const grandTotalInc  = newSubtotalInc + newCardFeeInc
 
   const canCheckout = grandTotalInc > 0 && !blockedReason
@@ -558,10 +565,31 @@ function TotalsPanel({
 
       <div style={{height:10}}/>
 
-      <Row label="Card surcharge" value={`+$${newCardFeeInc.toFixed(2)}`} muted/>
-      <div style={{fontSize:10,color:T.text3,marginTop:-4,marginBottom:8,lineHeight:1.5}}>
-        {cardFee.note}
+      {/* Payment method — bank options skip the card surcharge */}
+      <div style={{fontSize:10,color:T.text2,textTransform:'uppercase',letterSpacing:'0.06em',fontWeight:500,marginBottom:6}}>Payment method</div>
+      <div style={{display:'flex',gap:6,marginBottom:8,flexWrap:'wrap'}}>
+        {([['card','Card'],['becs','Bank Debit'],['payto','PayTo']] as const).map(([id,label]) => {
+          const on = paymentMethod === id
+          return (
+            <button key={id} type="button" onClick={() => onPaymentMethodChange(id)}
+              style={{flex:'1 1 0',minWidth:78,padding:'7px 8px',borderRadius:6,fontSize:11.5,fontWeight:600,fontFamily:'inherit',cursor:'pointer',
+                border:`1px solid ${on ? T.blue : T.border2}`, background:on ? 'rgba(79,142,247,0.15)' : 'transparent', color:on ? T.text : T.text2}}>
+              {label}
+            </button>
+          )
+        })}
       </div>
+
+      {applySurcharge ? (
+        <>
+          <Row label="Card surcharge" value={`+$${newCardFeeInc.toFixed(2)}`} muted/>
+          <div style={{fontSize:10,color:T.text3,marginTop:-4,marginBottom:8,lineHeight:1.5}}>{cardFee.note}</div>
+        </>
+      ) : (
+        <div style={{fontSize:10,color:T.green,marginTop:-2,marginBottom:8,lineHeight:1.5}}>
+          No card surcharge.{paymentMethod === 'becs' ? ' Bank Debit settles in 2–4 business days.' : ' Paid instantly from your bank.'}
+        </div>
+      )}
 
       <div style={{borderTop:`1px solid ${T.border2}`,paddingTop:10,marginTop:6}}/>
       <Row label="Total to pay (inc GST)" value={`$${grandTotalInc.toFixed(2)}`} large/>

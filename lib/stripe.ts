@@ -83,6 +83,9 @@ export interface CreateCheckoutSessionParams {
   cancel_url: string
   customer_email?: string
   metadata?: Record<string, string>
+  // Defaults to ['card']. Pass e.g. ['au_becs_debit'] or ['payto'] for the
+  // lower-fee bank methods (one per session so surcharge stays method-correct).
+  payment_method_types?: string[]
   payment_intent_data?: {
     metadata?: Record<string, string>
     description?: string
@@ -104,7 +107,7 @@ export interface StripeCheckoutSession {
 export async function createCheckoutSession(p: CreateCheckoutSessionParams): Promise<StripeCheckoutSession> {
   return stripeRequest('POST', '/checkout/sessions', {
     mode: 'payment',
-    payment_method_types: ['card'],
+    payment_method_types: (p.payment_method_types && p.payment_method_types.length) ? p.payment_method_types : ['card'],
     line_items: p.line_items,
     success_url: p.success_url,
     cancel_url: p.cancel_url,

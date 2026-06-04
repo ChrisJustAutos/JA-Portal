@@ -48,6 +48,7 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, use
   // live MachShip route. The two are mutually exclusive; freight_rate_id
   // is preserved for the static-fallback path.
   let customerPo: string | null = null
+  let paymentMethod: 'card' | 'becs' | 'payto' = 'card'
   let chosenFreightRateId: string | null = null
   let chosenSatchelId: string | null = null
   let chosenMachShipRoute: {
@@ -59,6 +60,9 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, use
     const body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : (req.body || {})
     if (typeof body.customer_po === 'string') {
       customerPo = body.customer_po.trim().substring(0, 20) || null
+    }
+    if (body.payment_method === 'becs' || body.payment_method === 'payto') {
+      paymentMethod = body.payment_method
     }
     if (typeof body.freight_rate_id === 'string' && body.freight_rate_id.trim()) {
       chosenFreightRateId = body.freight_rate_id.trim()
@@ -432,9 +436,11 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, use
   subtotalEx = round2(subtotalEx)
   gst = round2(gst)
   const subtotalInc = round2(subtotalEx + gst)
-  const charged = subtotalInc > 0
+  // Card surcharge only applies to card payments — bank methods (BECS/PayTo)
+  // carry no card-fee recovery (that's the point of offering them).
+  const charged = (paymentMethod === 'card' && subtotalInc > 0)
     ? (subtotalInc + cfg.cardFeeFixed) / (1 - cfg.cardFeePct)
-    : 0
+    : subtotalInc
   const cardFeeInc = round2(Math.max(0, charged - subtotalInc))
   const totalInc   = round2(subtotalInc + cardFeeInc)
 
@@ -445,6 +451,7 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, use
       distributor_id: user.distributor.id,
       placed_by_user_id: user.id,
       status: 'pending_payment',
+      payment_method: paymentMethod,
       subtotal_ex_gst: subtotalEx,
       gst: gst,
       card_fee_inc: cardFeeInc,
@@ -542,8 +549,10 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, use
   // 7. Create Stripe Checkout Session
   let session
   try {
+    const pmTypes = paymentMethod === 'becs' ? ['au_becs_debit'] : paymentMethod === 'payto' ? ['payto'] : ['card']
     session = await createCheckoutSession({
       line_items: stripeLineItems,
+      payment_method_types: pmTypes,
       success_url: `${baseUrl}/b2b/orders/${order.id}?session_id={CHECKOUT_SESSION_ID}`,
       cancel_url:  `${baseUrl}/b2b/cart?cancelled=${order.id}`,
       customer_email: user.email,

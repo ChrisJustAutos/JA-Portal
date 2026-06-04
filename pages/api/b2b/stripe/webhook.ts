@@ -79,7 +79,29 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const eventType = event.type as string
   const eventId = event.id as string
 
-  // 2. Route by event type. We currently only act on checkout.session.completed.
+  // BECS Direct Debit settles a few days AFTER the order is placed/fulfilled, so
+  // a debit can fail late. Flag the order + alert admins so it can be chased.
+  // (Requires 'checkout.session.async_payment_failed' to be enabled on the
+  // Stripe webhook.)
+  if (eventType === 'checkout.session.async_payment_failed') {
+    const s = event.data?.object || {}
+    const failedOrderId = s.metadata?.order_id as string | undefined
+    if (failedOrderId) {
+      const c2 = sb()
+      try {
+        await c2.from('b2b_order_events').insert({ order_id: failedOrderId, event_type: 'payment_failed', actor_type: 'stripe_webhook', actor_id: null, notes: `Bank payment failed (${s.payment_status || 'failed'}) — order was already fulfilled; chase payment.`, metadata: { stripe_event_id: eventId } })
+        const { data: o } = await c2.from('b2b_orders').select('order_number, distributor:b2b_distributors!b2b_orders_distributor_id_fkey ( display_name )').eq('id', failedOrderId).maybeSingle()
+        const dist: any = Array.isArray((o as any)?.distributor) ? (o as any).distributor[0] : (o as any)?.distributor
+        const { notify } = await import('../../../../lib/notifications')
+        await notify({ module: 'b2b', title: `⚠ Bank payment FAILED — ${(o as any)?.order_number || ''}`.trim(), body: `${dist?.display_name || 'A distributor'}'s bank payment failed. Order was already fulfilled — follow up.`, href: `/admin/b2b/orders/${failedOrderId}`, roles: ['admin', 'manager'] })
+      } catch (e: any) { console.error('webhook async_payment_failed handling error:', e?.message || e) }
+    }
+    return res.status(200).json({ received: true, handled: 'async_payment_failed' })
+  }
+
+  // 2. Otherwise we act on checkout.session.completed (fires when the session
+  // completes — for BECS that's when the mandate is accepted, i.e. immediately,
+  // even though funds settle later → fulfil-on-order as configured).
   // All other events get 200 OK (ignored, not an error).
   if (eventType !== 'checkout.session.completed') {
     return res.status(200).json({ received: true, ignored: eventType })
