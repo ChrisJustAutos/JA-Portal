@@ -83,6 +83,8 @@ interface OrderDetail {
   refunded_at: string | null
   currency: string
   customer_po: string | null
+  payment_method: 'card' | 'becs' | 'payto'
+  payment_settled_at: string | null
   subtotal_ex_gst: number
   gst: number
   card_fee_inc: number
@@ -415,6 +417,13 @@ export default function AdminOrderDetailPage({ user }: Props) {
                 <Card title="Summary">
                   <KV label="Distributor"    value={data.distributor?.display_name || '—'}/>
                   <KV label="Customer PO"    value={data.customer_po || '—'} mono/>
+                  {(() => {
+                    const m = data.payment_method || 'card'
+                    const label = m === 'becs' ? 'Bank Direct Debit' : m === 'payto' ? 'PayTo' : 'Card'
+                    const settled = !!data.payment_settled_at
+                    const state = settled ? 'Settled' : (m === 'becs' ? 'Awaiting settlement' : m === 'payto' ? 'Awaiting confirmation' : 'Unsettled')
+                    return <KV label="Payment" value={`${label} · ${state}`} valueColor={settled ? T.green : (m === 'card' ? undefined : T.amber)}/>
+                  })()}
                   <KV label="Placed"         value={fullDate(data.placed_at)} mono/>
                   {data.paid_at && <KV label="Paid"      value={fullDate(data.paid_at)}      mono valueColor={T.green}/>}
                   {data.shipped_at && <KV label="Shipped" value={fullDate(data.shipped_at)} mono valueColor={T.teal}/>}

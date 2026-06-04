@@ -83,6 +83,10 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, use
   } catch {
     // Bad JSON in body — ignore, treat as no PO / no freight
   }
+  // Purchase order is REQUIRED on every B2B order.
+  if (!customerPo) {
+    return res.status(400).json({ error: 'A purchase order number is required to place this order.' })
+  }
   if ([chosenFreightRateId, chosenSatchelId, chosenMachShipRoute].filter(Boolean).length > 1) {
     return res.status(400).json({ error: 'Pick a single freight option (rate, satchel, or carrier route).' })
   }

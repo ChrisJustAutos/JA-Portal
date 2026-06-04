@@ -78,6 +78,7 @@ async function getDetail(id: string, res: NextApiResponse) {
     .select(`
       id, order_number, status,
       distributor_id, placed_by_user_id, customer_po,
+      payment_method, payment_settled_at,
       subtotal_ex_gst, gst, card_fee_inc, total_inc, refunded_total, currency,
       created_at, paid_at, picked_at, packed_at, shipped_at, delivered_at,
       cancelled_at, refunded_at,
@@ -204,6 +205,8 @@ async function getDetail(id: string, res: NextApiResponse) {
       refunded_at: order.refunded_at,
       currency: order.currency,
       customer_po: order.customer_po,
+      payment_method: order.payment_method || 'card',
+      payment_settled_at: order.payment_settled_at || null,
       subtotal_ex_gst: Number(order.subtotal_ex_gst || 0),
       gst: Number(order.gst || 0),
       card_fee_inc: Number(order.card_fee_inc || 0),

@@ -28,7 +28,7 @@ export async function runPostPaymentPipeline(orderId: string, opts: { paymentInt
   const c = sb()
   const { data: order, error: oErr } = await c
     .from('b2b_orders')
-    .select('id, status, order_number, myob_invoice_uid, admin_notified_at, dropship_po_raised_at, distributor_notified_at')
+    .select('id, status, order_number, payment_method, myob_invoice_uid, admin_notified_at, dropship_po_raised_at, distributor_notified_at')
     .eq('id', orderId).maybeSingle()
   if (oErr) throw new Error(oErr.message)
   if (!order) return { ok: false, status: 'not_found' }
@@ -38,8 +38,12 @@ export async function runPostPaymentPipeline(orderId: string, opts: { paymentInt
 
   const nowIso = new Date().toISOString()
   if (order.status !== 'paid') {
+    // Card/PayTo settle at checkout, so confirm settlement now. BECS only
+    // completes the mandate here (funds land in 2–4 days) → leave unsettled
+    // until the MYOB payment poller (or Stripe async_payment_succeeded) confirms.
+    const settledAt = (order as any).payment_method === 'becs' ? null : nowIso
     const { error: updErr } = await c.from('b2b_orders')
-      .update({ status: 'paid', paid_at: nowIso, stripe_payment_intent_id: opts.paymentIntentId || null })
+      .update({ status: 'paid', paid_at: nowIso, payment_settled_at: settledAt, stripe_payment_intent_id: opts.paymentIntentId || null })
       .eq('id', orderId)
     if (updErr) throw new Error(updErr.message)
     await c.from('b2b_order_events').insert({

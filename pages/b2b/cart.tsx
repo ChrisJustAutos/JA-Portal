@@ -545,9 +545,10 @@ function TotalsPanel({
   const newCardFeeInc  = applySurcharge ? Math.max(0, charged - newSubtotalInc) : 0
   const grandTotalInc  = newSubtotalInc + newCardFeeInc
 
-  const canCheckout = grandTotalInc > 0 && !blockedReason
   const poTrimmed = customerPo.trim()
   const poTooLong = poTrimmed.length > 20
+  const poMissing = poTrimmed.length === 0
+  const canCheckout = grandTotalInc > 0 && !blockedReason && !poMissing
 
   return (
     <div style={{
@@ -664,7 +665,7 @@ function TotalsPanel({
       {/* Purchase Order */}
       <div style={{marginTop:14}}>
         <label style={{display:'block',fontSize:10,color:T.text2,textTransform:'uppercase',letterSpacing:'0.06em',marginBottom:4,fontWeight:500}}>
-          Your PO number <span style={{textTransform:'none',color:T.text3,fontWeight:400,letterSpacing:0}}>(optional)</span>
+          Your PO number <span style={{textTransform:'none',color:T.red,fontWeight:600,letterSpacing:0}}>*required</span>
         </label>
         <input
           type="text"
@@ -672,19 +673,20 @@ function TotalsPanel({
           onChange={e => onCustomerPoChange(e.target.value)}
           placeholder="e.g. PO-12345"
           maxLength={20}
+          required
           style={{
             width:'100%',boxSizing:'border-box',
             background:T.bg3,
-            border:`1px solid ${poTooLong ? T.red : T.border2}`,
+            border:`1px solid ${poTooLong ? T.red : (poMissing ? `${T.amber}88` : T.border2)}`,
             color:T.text,borderRadius:5,padding:'8px 10px',fontSize:13,outline:'none',
             fontFamily:'inherit',
           }}/>
-        <div style={{fontSize:10,color: poTooLong ? T.red : T.text3,marginTop:3}}>
+        <div style={{fontSize:10,color: poTooLong ? T.red : (poMissing ? T.amber : T.text3),marginTop:3}}>
           {poTooLong
             ? 'Maximum 20 characters'
-            : poTrimmed.length > 0
-              ? `${poTrimmed.length}/20 chars · written to MYOB`
-              : 'Will appear on the MYOB sales order'}
+            : poMissing
+              ? 'A PO number is required to check out'
+              : `${poTrimmed.length}/20 chars · written to MYOB`}
         </div>
       </div>
 
