@@ -50,8 +50,6 @@ export interface PortalNavItem {
 
 // Default nav order — same on every page. `settings` is appended for admins only (see rendering).
 export const DEFAULT_NAV: PortalNavItem[] = [
-  {id:'overview',     kind:'link',    label:'Overview',     href:'/overview',      dot:T.blue},
-  {id:'leads',        kind:'link',    label:'Leads/Orders', href:'/sales',         dot:'#a78bfa'},
   {id:'distributors', kind:'link',    label:'Distributors', href:'/distributors',  dot:T.blue},
   {id:'calls',        kind:'link',    label:'Phone Calls',  href:'/calls',         dot:T.teal},
   {id:'crm',          kind:'link',    label:'CRM',          href:'/crm',           dot:T.green, alertKey:'crm'},
@@ -61,15 +59,10 @@ export const DEFAULT_NAV: PortalNavItem[] = [
   {id:'workshop-quotes',kind:'link',  label:'Quotes',       href:'/workshop/quotes',dot:T.purple},
   {id:'workshop-invoices',kind:'link', label:'Invoices',    href:'/workshop/invoices',dot:T.amber},
   {id:'workshop-inventory',kind:'link',label:'Inventory',   href:'/workshop/inventory',dot:T.purple},
-  {id:'workshop-tasks', kind:'link',  label:'Tasks',        href:'/workshop/tasks', dot:T.amber},
   {id:'reports',      kind:'link',    label:'Reports',      href:'/reports',       dot:T.green},
-  {id:'todos',        kind:'link',    label:'To-Dos',       href:'/todos',         dot:T.amber},
-  {id:'jobs',         kind:'link',    label:'Jobs',         href:'/jobs',          dot:T.teal},
   {id:'vehicle-sales',kind:'link',    label:'Vehicle Sales',href:'/vehicle-sales', dot:'#34c77b'},
   {id:'ap',           kind:'link',    label:'AP Invoices',  href:'/ap',            dot:T.amber},
-  {id:'stripe-myob',  kind:'link',    label:'Stripe → MYOB',href:'/stripe-myob',   dot:T.teal},
   {id:'b2b',          kind:'link',    label:'B2B Portal',   href:'/admin/b2b',     dot:T.teal},
-  {id:'invoices',     kind:'section', label:'Invoices',          section:'invoices', dot:T.amber, alertKey:'invoices'},
   {id:'pnl',          kind:'section', label:'P&L — This Month',  section:'pnl',      dot:T.green},
   {id:'stock',        kind:'section', label:'Stock & Inventory', section:'stock',    dot:T.purple},
   {id:'payables',     kind:'section', label:'Payables',          section:'payables', dot:T.red,   alertKey:'payables'},
