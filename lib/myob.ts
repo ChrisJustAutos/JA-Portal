@@ -366,6 +366,36 @@ export async function myobFetch(
   return { status, data, raw, headers: responseHeaders }
 }
 
+// Binary GET for documents MYOB renders server-side — e.g. an invoice PDF via
+// `Accept: application/pdf` on /Sale/Invoice/Item/{UID}. Mirrors myobFetch's
+// auth but returns raw bytes (base64). Throws if the response isn't a PDF.
+export async function myobFetchPdf(connId: string, path: string): Promise<{ status: number; base64: string; contentType: string }> {
+  const { data: connData, error: connErr } = await sb().from('myob_connections').select('*').eq('id', connId).single()
+  if (connErr || !connData) throw new Error('MYOB connection not found for PDF fetch')
+  const conn = connData as MyobConnection
+  const accessToken = await getValidAccessToken(connId)
+  const headers: Record<string, string> = {
+    'Authorization': `Bearer ${accessToken}`,
+    'x-myobapi-key': clientId(),
+    'x-myobapi-version': 'v2',
+    'Accept': 'application/pdf',
+  }
+  if (conn.company_file_username !== null && conn.company_file_username !== undefined) {
+    const user = conn.company_file_username || 'Administrator'
+    const pw = conn.company_file_password || ''
+    headers['x-myobapi-cftoken'] = Buffer.from(`${user}:${pw}`, 'utf-8').toString('base64')
+  }
+  const res = await fetch(API_BASE + path, { method: 'GET', headers })
+  const status = res.status
+  const contentType = res.headers.get('content-type') || ''
+  if (!res.ok || !contentType.toLowerCase().includes('pdf')) {
+    const t = await res.text().catch(() => '')
+    throw new Error(`MYOB PDF fetch ${status} (${contentType || 'no content-type'}): ${t.slice(0, 200)}`)
+  }
+  const buf = Buffer.from(await res.arrayBuffer())
+  return { status, base64: buf.toString('base64'), contentType }
+}
+
 // ── Company file helpers ────────────────────────────────────────────────
 
 export async function listCompanyFiles(connId: string): Promise<CompanyFile[]> {

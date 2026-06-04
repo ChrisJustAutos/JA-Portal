@@ -26,7 +26,7 @@
 //  now hold an Order UID/Number rather than an Invoice UID/Number.)
 
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
-import { getConnection, myobFetch } from './myob'
+import { getConnection, myobFetch, myobFetchPdf } from './myob'
 import { assertCheckoutConfigured } from './b2b-settings'
 
 const UUID_REGEX_G = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi
@@ -583,5 +583,27 @@ export async function writeRefundCreditNoteToMyob(
     credit_note_number: creditNumber,
     amount:             round2(refundAmount),
     shape:              isFullMirror ? 'mirror_full' : 'single_line',
+  }
+}
+
+// Fetch the actual MYOB tax-invoice PDF for an order (the converted
+// Sale/Invoice/Item), rendered by MYOB with its default print template. Returns
+// null (never throws) if the order isn't an invoice yet, MYOB isn't connected,
+// or MYOB doesn't return a PDF — callers fall back to the system-generated PDF.
+export async function getMyobInvoicePdf(orderId: string): Promise<{ buffer: Buffer; filename: string } | null> {
+  try {
+    const { data: order } = await sb().from('b2b_orders')
+      .select('myob_sale_invoice_uid, myob_sale_invoice_number, myob_invoice_number, order_number')
+      .eq('id', orderId).maybeSingle()
+    const uid = (order as any)?.myob_sale_invoice_uid as string | null
+    if (!uid) return null   // only a converted INVOICE has a printable invoice PDF
+    const conn = await getConnection('JAWS')
+    if (!conn) return null
+    const num = String((order as any)?.myob_sale_invoice_number || (order as any)?.myob_invoice_number || (order as any)?.order_number || orderId)
+    const pdf = await myobFetchPdf(conn.id, `/accountright/${conn.company_file_id}/Sale/Invoice/Item/${uid}`)
+    return { buffer: Buffer.from(pdf.base64, 'base64'), filename: `Invoice-${num.replace(/[^\w.\-]/g, '_')}.pdf` }
+  } catch (e: any) {
+    console.error('getMyobInvoicePdf failed (will fall back to system PDF):', e?.message || e)
+    return null
   }
 }

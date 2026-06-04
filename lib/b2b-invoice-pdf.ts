@@ -25,6 +25,19 @@ export interface B2bInvoicePdf {
   invoiceNumber: string | null
 }
 
+// Best invoice PDF for outbound use (printing + email): the real MYOB tax
+// invoice when it's available, otherwise the system-generated copy. Always
+// returns something (only throws if even the system render fails).
+export async function getOutboundInvoicePdf(orderId: string): Promise<{ buffer: Buffer; filename: string; source: 'myob' | 'system' }> {
+  try {
+    const { getMyobInvoicePdf } = await import('./b2b-myob-invoice')
+    const myob = await getMyobInvoicePdf(orderId)
+    if (myob) return { buffer: myob.buffer, filename: myob.filename, source: 'myob' }
+  } catch (e: any) { console.error('MYOB invoice PDF unavailable, using system PDF:', e?.message || e) }
+  const sys = await renderB2bOrderInvoicePdf(orderId)
+  return { buffer: sys.buffer, filename: sys.filename, source: 'system' }
+}
+
 // Build + render the invoice PDF for an order. Throws on missing order.
 export async function renderB2bOrderInvoicePdf(orderId: string): Promise<B2bInvoicePdf> {
   const c = sb()

@@ -157,13 +157,14 @@ export async function sendDistributorShippedEmail(orderId: string, info: { carri
 
   const invoiceNumber = String(order.myob_sale_invoice_number || order.myob_invoice_number || order.order_number)
 
-  // Render the invoice PDF (best-effort — still send the email if it fails).
+  // Attach the invoice PDF (best-effort — still send the email if it fails).
+  // Prefer the real MYOB tax invoice; falls back to the system-generated copy.
   let attachments: { name: string; contentType: string; content: Buffer }[] | undefined
   try {
-    const { renderB2bOrderInvoicePdf } = await import('./b2b-invoice-pdf')
-    const pdf = await renderB2bOrderInvoicePdf(orderId)
+    const { getOutboundInvoicePdf } = await import('./b2b-invoice-pdf')
+    const pdf = await getOutboundInvoicePdf(orderId)
     attachments = [{ name: pdf.filename, contentType: 'application/pdf', content: pdf.buffer }]
-  } catch (e: any) { console.error('invoice PDF render failed (sending email without it):', e?.message) }
+  } catch (e: any) { console.error('invoice PDF attach failed (sending email without it):', e?.message) }
 
   const r = await renderEmail('distributor_shipped', {
     distributor_name: dist?.display_name || '', order_number: order.order_number,

@@ -219,6 +219,20 @@ export async function bookFreightForOrder(orderId: string, opts: { actorId?: str
     }
   }
 
+  // Also auto-print the tax invoice at the workshop alongside the label. Prefer
+  // the real MYOB invoice PDF (falls back to the system copy); the print agent
+  // routes kind:'invoice' to the A4 printer rather than the DYMO. Best-effort.
+  if (firstBook) {
+    try {
+      const { getOutboundInvoicePdf } = await import('./b2b-invoice-pdf')
+      const inv = await getOutboundInvoicePdf(orderId)
+      const invPath = `invoices/${orderId}.pdf`
+      const { error: upErr } = await c.storage.from(LABELS_BUCKET).upload(invPath, inv.buffer, { contentType: 'application/pdf', upsert: true })
+      if (upErr) throw new Error(upErr.message)
+      await c.from('label_print_jobs').insert({ order_id: orderId, storage_path: invPath, kind: 'invoice', consignment_number: consignment.consignmentNumber || null })
+    } catch (e: any) { console.error('invoice print enqueue failed (non-fatal):', e?.message || e) }
+  }
+
   // Distributor "shipped + tax invoice" email + app push on first booking.
   if (firstBook) {
     try {

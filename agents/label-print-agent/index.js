@@ -30,6 +30,10 @@ const MAX_ATTEMPTS = parseInt(process.env.MAX_ATTEMPTS || '3', 10)
 // then crashed/was switched off mid-print (multi-PC setups).
 const STALE_PRINTING_MS = parseInt(process.env.STALE_PRINTING_MS || '120000', 10)
 const SCALE = process.env.PRINT_SCALE || 'fit' // 'fit' | 'noscale' | 'shrink'
+// Invoices (kind='invoice') print to the office A4 printer, not the DYMO. If
+// INVOICE_PRINTER_NAME is unset they go to the Windows default printer.
+const INVOICE_PRINTER_NAME = process.env.INVOICE_PRINTER_NAME || ''
+const INVOICE_SCALE = process.env.INVOICE_SCALE || 'fit'
 
 if (!SUPABASE_URL || !SERVICE_ROLE_KEY) {
   console.error('FATAL: SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required (see .env.example)')
@@ -48,7 +52,7 @@ async function claim(jobId) {
   const { data } = await sb.from('label_print_jobs')
     .update({ status: 'printing', claimed_at: new Date().toISOString() })
     .eq('id', jobId).eq('status', 'pending')
-    .select('id, storage_path, consignment_number, attempts')
+    .select('id, storage_path, consignment_number, attempts, kind')
   return data && data.length ? data[0] : null
 }
 
@@ -72,10 +76,15 @@ async function printJob(job) {
   const buf = Buffer.from(await resp.arrayBuffer())
   if (buf.length === 0) throw new Error('empty label PDF')
 
-  const tmp = path.join(os.tmpdir(), `label-${job.id}.pdf`)
+  const isInvoice = job.kind === 'invoice'
+  const tmp = path.join(os.tmpdir(), `${isInvoice ? 'invoice' : 'label'}-${job.id}.pdf`)
   fs.writeFileSync(tmp, buf)
   try {
-    await printer.print(tmp, { printer: PRINTER_NAME, scale: SCALE })
+    // Labels → DYMO; invoices → A4 printer (or the Windows default if unset).
+    const opts = { scale: isInvoice ? INVOICE_SCALE : SCALE }
+    const target = isInvoice ? INVOICE_PRINTER_NAME : PRINTER_NAME
+    if (target) opts.printer = target
+    await printer.print(tmp, opts)
   } finally {
     fs.unlink(tmp, () => {})
   }
@@ -84,7 +93,8 @@ async function printJob(job) {
 async function handleJob(job) {
   const claimed = await claim(job.id)
   if (!claimed) return // already taken
-  log(`printing job ${claimed.id} (consignment ${claimed.consignment_number || '—'}) → ${PRINTER_NAME}`)
+  const dest = claimed.kind === 'invoice' ? (INVOICE_PRINTER_NAME || '(default printer)') : PRINTER_NAME
+  log(`printing ${claimed.kind || 'label'} job ${claimed.id} (consignment ${claimed.consignment_number || '—'}) → ${dest}`)
   try {
     await printJob(claimed)
     await sb.from('label_print_jobs').update({ status: 'done', printed_at: new Date().toISOString(), error: null, attempts: (claimed.attempts || 0) + 1 }).eq('id', claimed.id)
@@ -102,14 +112,14 @@ async function drainPending() {
   working = true
   try {
     await reclaimStale()
-    const { data, error } = await sb.from('label_print_jobs').select('id, storage_path, consignment_number, attempts').eq('status', 'pending').order('created_at', { ascending: true }).limit(20)
+    const { data, error } = await sb.from('label_print_jobs').select('id, storage_path, consignment_number, attempts, kind').eq('status', 'pending').order('created_at', { ascending: true }).limit(20)
     if (error) { log('poll error:', error.message); return }
     for (const job of data || []) await handleJob(job)
   } finally { working = false }
 }
 
 async function main() {
-  log(`Label print agent starting — printer="${PRINTER_NAME}", bucket="${BUCKET}"`)
+  log(`Print agent starting — labels→"${PRINTER_NAME}", invoices→"${INVOICE_PRINTER_NAME || '(default printer)'}", bucket="${BUCKET}"`)
   // Confirm the printer exists (best-effort; warn but keep running).
   try {
     const printers = await printer.getPrinters()
