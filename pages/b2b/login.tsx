@@ -30,6 +30,7 @@ export default function B2BLoginPage() {
   const [password, setPassword] = useState('')
   const [mfaCode, setMfaCode] = useState('')
   const [mfaFactorId, setMfaFactorId] = useState('')
+  const [trustDevice, setTrustDevice] = useState(true)  // remember this device for 24h
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -59,7 +60,14 @@ export default function B2BLoginPage() {
       if (aal && aal.nextLevel === 'aal2' && aal.nextLevel !== aal.currentLevel) {
         const { data: factors } = await supabase.auth.mfa.listFactors()
         const totp = factors?.totp?.[0]
-        if (totp) { setMfaFactorId(totp.id); setMfaCode(''); setMode('mfa'); return }
+        if (totp) {
+          // Skip the code if this device was trusted in the last 24h.
+          const trusted = await fetch('/api/b2b/auth/mfa-device', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'check', access_token: data.session.access_token }),
+          }).then(r => r.ok ? r.json() : null).then(d => !!d?.trusted).catch(() => false)
+          if (!trusted) { setMfaFactorId(totp.id); setMfaCode(''); setMode('mfa'); return }
+        }
       }
       await establish(data.session.access_token, data.session.refresh_token)
       setMode('done'); router.push('/b2b')
@@ -79,6 +87,13 @@ export default function B2BLoginPage() {
       if (vErr) throw vErr
       const { data: sess } = await supabase.auth.getSession()
       if (!sess.session) throw new Error('No session after verification')
+      // Trust this device for 24h so the code isn't asked again.
+      if (trustDevice) {
+        await fetch('/api/b2b/auth/mfa-device', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'trust', access_token: sess.session.access_token }),
+        }).catch(() => {})
+      }
       await establish(sess.session.access_token, sess.session.refresh_token)
       setMode('done'); router.push('/b2b')
     } catch (e: any) {
@@ -136,6 +151,10 @@ export default function B2BLoginPage() {
               <h1 style={{ fontSize: 20, fontWeight: 600, margin: '0 0 6px' }}>Two-factor authentication</h1>
               <div style={{ fontSize: 12.5, color: T.text2, marginBottom: 18, lineHeight: 1.5 }}>Enter the 6-digit code from your authenticator app.</div>
               <input type="text" inputMode="numeric" autoComplete="one-time-code" autoFocus value={mfaCode} onChange={e => setMfaCode(e.target.value.replace(/[^\d]/g, '').slice(0, 6))} placeholder="123456" style={{ ...inp, letterSpacing: '0.3em', textAlign: 'center', fontSize: 22 }} />
+              <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5, color: T.text2, cursor: 'pointer', margin: '10px 0 2px' }}>
+                <input type="checkbox" checked={trustDevice} onChange={e => setTrustDevice(e.target.checked)} style={{ cursor: 'pointer' }} />
+                Trust this device for 24 hours
+              </label>
               {error && <div style={{ marginTop: 10, padding: 10, background: `${T.red}15`, border: `1px solid ${T.red}40`, borderRadius: 6, color: T.red, fontSize: 13 }}>{error}</div>}
               <button type="submit" disabled={busy || mfaCode.length !== 6} style={primaryBtn(busy || mfaCode.length !== 6)}>{busy ? 'Verifying…' : 'Verify & sign in'}</button>
               <div style={{ textAlign: 'center', marginTop: 14 }}>
