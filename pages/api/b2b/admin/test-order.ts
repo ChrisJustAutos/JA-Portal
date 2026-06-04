@@ -35,6 +35,7 @@ export default withAuth('admin:b2b', async (req: NextApiRequest, res: NextApiRes
   const distributorId = String(body.distributorId || '').trim()
   const customerPo = typeof body.customer_po === 'string' || typeof body.customerPo === 'string'
     ? String(body.customer_po ?? body.customerPo).trim().slice(0, 20) || null : null
+  const paymentMethod: 'card' | 'becs' | 'payto' = (body.payment_method === 'becs' || body.payment_method === 'payto') ? body.payment_method : 'card'
   const items: Array<{ catalogueId: string; qty: number }> = Array.isArray(body.items)
     ? body.items.map((i: any) => ({ catalogueId: String(i.catalogueId || ''), qty: Math.max(1, Math.floor(Number(i.qty) || 0)) })).filter((i: any) => i.catalogueId && i.qty > 0)
     : []
@@ -196,7 +197,7 @@ export default withAuth('admin:b2b', async (req: NextApiRequest, res: NextApiRes
 
   subtotalEx = round2(subtotalEx); gst = round2(gst)
   const subtotalInc = round2(subtotalEx + gst)
-  const charged = subtotalInc > 0 ? (subtotalInc + cfg.cardFeeFixed) / (1 - cfg.cardFeePct) : 0
+  const charged = (paymentMethod === 'card' && subtotalInc > 0) ? (subtotalInc + cfg.cardFeeFixed) / (1 - cfg.cardFeePct) : subtotalInc
   const cardFeeInc = round2(Math.max(0, charged - subtotalInc))
   const totalInc = round2(subtotalInc + cardFeeInc)
 
@@ -204,6 +205,7 @@ export default withAuth('admin:b2b', async (req: NextApiRequest, res: NextApiRes
     // placed_by_user_id FKs b2b_distributor_users — an admin isn't one, so leave
     // it null (the test_order_created event records the admin actor instead).
     distributor_id: distributorId, placed_by_user_id: null, status: 'pending_payment',
+    payment_method: paymentMethod,
     subtotal_ex_gst: subtotalEx, gst, card_fee_inc: cardFeeInc, total_inc: totalInc,
     currency: 'AUD', myob_company_file: 'JAWS', customer_po: customerPo, is_test: true,
     freight_rate_id:             chosenFreightRateId,
@@ -240,8 +242,11 @@ export default withAuth('admin:b2b', async (req: NextApiRequest, res: NextApiRes
 
   let checkoutUrl: string | null = null
   try {
+    const pmTypes = paymentMethod === 'becs' ? ['au_becs_debit'] : paymentMethod === 'payto' ? ['payto'] : ['card']
     const session = await createCheckoutSession({
       line_items: stripeLineItems,
+      payment_method_types: pmTypes,
+      customer_creation: paymentMethod === 'card' ? undefined : 'always',
       success_url: `${baseUrl}/admin/b2b/orders/${order.id}?session_id={CHECKOUT_SESSION_ID}`,
       cancel_url: `${baseUrl}/admin/b2b/test-order?cancelled=${order.id}`,
       customer_email: user.email,

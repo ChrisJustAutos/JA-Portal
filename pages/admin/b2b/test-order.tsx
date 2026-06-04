@@ -51,6 +51,7 @@ export default function TestOrderPage({ user }: Props) {
   const [freightMsg, setFreightMsg] = useState('')
   const [selFreightId, setSelFreightId] = useState<string | null>(null)
   const [packMode, setPackMode] = useState<'auto' | 'cartons' | 'pallet'>('auto')
+  const [paymentMethod, setPaymentMethod] = useState<'card' | 'becs' | 'payto'>('card')
   const [creating, setCreating] = useState(false)
   const [result, setResult] = useState<{ orderId: string; orderNumber: string; checkoutUrl: string | null; total_inc: number; freight?: { label: string | null; cost_ex_gst: number } | null } | null>(null)
   const [markState, setMarkState] = useState<'idle' | 'busy' | 'done' | 'err'>('idle')
@@ -107,7 +108,7 @@ export default function TestOrderPage({ user }: Props) {
     if (!distId || lines.length === 0) return
     setCreating(true); setMsg('')
     try {
-      const r = await fetch('/api/b2b/admin/test-order', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ distributorId: distId, customerPo: po, packMode, items: lines.map(l => ({ catalogueId: l.cat.id, qty: l.qty })), ...freightPayload() }) })
+      const r = await fetch('/api/b2b/admin/test-order', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ distributorId: distId, customerPo: po, payment_method: paymentMethod, packMode, items: lines.map(l => ({ catalogueId: l.cat.id, qty: l.qty })), ...freightPayload() }) })
       const d = await r.json()
       if (!r.ok) { setMsg(d.error || 'Failed to create'); return }
       setResult(d); setMarkState('idle')
@@ -260,6 +261,16 @@ export default function TestOrderPage({ user }: Props) {
                 <label style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                   <span style={{ fontSize: 11, color: T.text3, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Customer PO (optional)</span>
                   <input style={inp} value={po} onChange={e => setPo(e.target.value)} placeholder="TEST-PO-001" maxLength={20} />
+                </label>
+
+                <label style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  <span style={{ fontSize: 11, color: T.text3, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Payment method</span>
+                  <select style={inp} value={paymentMethod} onChange={e => setPaymentMethod(e.target.value as any)}>
+                    <option value="card">Card / Apple Pay (with surcharge)</option>
+                    <option value="becs">Bank Debit (BECS) — no surcharge</option>
+                    <option value="payto">PayTo — no surcharge</option>
+                  </select>
+                  <span style={{ fontSize: 10.5, color: T.text3 }}>The Stripe test checkout shows only the method picked here.</span>
                 </label>
 
                 {msg && <div style={{ fontSize: 12, color: T.red }}>{msg}</div>}
