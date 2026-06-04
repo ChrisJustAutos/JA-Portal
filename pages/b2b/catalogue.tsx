@@ -367,7 +367,7 @@ export default function B2BCataloguePage({ b2bUser }: Props) {
           }}>
             <Tile index={0} accent={T.text2} name="View all models" subtitle={`${items.length} item${items.length===1?'':'s'}`} onClick={() => { setModelFilter('all'); setProductTypeFilter('all'); setTileStep('browse') }} />
             {modelTiles.map((m, i) => (
-              <Tile key={m.id} index={i + 1} name={m.name} subtitle={`${m.count} item${m.count===1?'':'s'}`} onClick={() => pickModel(m.id)} />
+              <Tile key={m.id} index={i + 1} name={m.name} subtitle={`${m.count} item${m.count===1?'':'s'}`} icon={taxonomyIcon('models', m.name)} onClick={() => pickModel(m.id)} />
             ))}
             {noModelCount > 0 && (
               <Tile index={modelTiles.length + 1} accent={T.text3} name="Other" subtitle={`${noModelCount} item${noModelCount===1?'':'s'}`} onClick={() => pickModel('none')} />
@@ -384,7 +384,7 @@ export default function B2BCataloguePage({ b2bUser }: Props) {
           }}>
             <Tile index={0} accent={T.text2} name={`All types in ${modelLabel}`} subtitle={`${itemsAfterModel.length} item${itemsAfterModel.length===1?'':'s'}`} onClick={() => pickType('all')} />
             {typeTiles.map((t, i) => (
-              <Tile key={t.id} index={i + 1} name={t.name} subtitle={`${t.count} item${t.count===1?'':'s'}`} onClick={() => pickType(t.id)} />
+              <Tile key={t.id} index={i + 1} name={t.name} subtitle={`${t.count} item${t.count===1?'':'s'}`} icon={taxonomyIcon('types', t.name)} onClick={() => pickType(t.id)} />
             ))}
             {noTypeCount > 0 && (
               <Tile index={typeTiles.length + 1} accent={T.text3} name="Other" subtitle={`${noTypeCount} item${noTypeCount===1?'':'s'}`} onClick={() => pickType('none')} />
@@ -700,13 +700,35 @@ function QtyStepper({ qty, max, onChange }: { qty: number; max?: number; onChang
   )
 }
 
+// Category icons live in /public/icons/b2b/{models,types}/<slug>.svg. The DB
+// model names are MYOB codes, so map the ones we have friendly art for; anything
+// else falls back to a slug of the name, then to the generic placeholder.
+const PLACEHOLDER_ICON = '/icons/b2b/placeholder.svg'
+const MODEL_ICON_SLUG: Record<string, string> = {
+  'VDJ200': '200-series',
+  'VDJ70*': '79-series', 'GDJ70*': '79-series',
+  'FJA300': '300-series',
+  'GDJ250': '250-series',
+  'GUN126r': 'hilux',
+  'OTHER': 'other',
+}
+const TYPE_ICON_SLUG: Record<string, string> = {
+  'Air Box': 'airbox', 'Cooling': 'cooling', 'Exhaust': 'exhaust', 'Induction': 'induction', 'Other': 'other',
+}
+function slugifyName(s: string): string { return s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') }
+function taxonomyIcon(kind: 'models' | 'types', name: string): string {
+  const map = kind === 'models' ? MODEL_ICON_SLUG : TYPE_ICON_SLUG
+  return `/icons/b2b/${kind}/${map[name] || slugifyName(name)}.svg`
+}
+
 function Tile({
-  index, name, subtitle, accent, onClick,
+  index, name, subtitle, accent, icon, onClick,
 }: {
   index: number
   name: string
   subtitle: string
   accent?: string
+  icon?: string
   onClick: () => void
 }) {
   const color = accent || TILE_COLORS[index % TILE_COLORS.length]
@@ -730,6 +752,11 @@ function Tile({
       }}>
       <div style={{height:5,background:color}}/>
       <div style={{padding:'18px 18px 16px',display:'flex',flexDirection:'column',gap:6,minHeight:90,justifyContent:'center'}}>
+        {icon && (
+          <img src={icon} alt="" width={40} height={40} loading="lazy"
+            onError={e => { const t = e.currentTarget; if (t.dataset.fb !== '1') { t.dataset.fb = '1'; t.src = PLACEHOLDER_ICON } else { t.style.display = 'none' } }}
+            style={{display:'block',marginBottom:4,opacity:0.92}}/>
+        )}
         <div style={{fontSize:15,fontWeight:600,color:T.text,lineHeight:1.25}}>{name}</div>
         <div style={{fontSize:11,color:T.text3}}>{subtitle}</div>
       </div>
