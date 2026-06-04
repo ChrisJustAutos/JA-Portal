@@ -7,6 +7,7 @@ import { createClient } from '@supabase/supabase-js'
 import { withAuth } from '../../../../lib/authServer'
 import { roleHasPermission } from '../../../../lib/permissions'
 import { LEAD_STAGES, LEAD_STAGE_LABELS, LeadStage, logActivity } from '../../../../lib/crm'
+import { enrolLead } from '../../../../lib/crm-automations'
 
 export const config = { maxDuration: 10 }
 
@@ -67,6 +68,7 @@ export default withAuth('view:crm', async (req, res, user) => {
         body: `${LEAD_STAGE_LABELS[before.stage as LeadStage] || before.stage} → ${LEAD_STAGE_LABELS[body.stage as LeadStage]}`,
         meta: { from: before.stage, to: body.stage }, actor_id: user.id,
       })
+      await enrolLead({ id, stage: body.stage, contact_id: before.contact_id }, 'stage_changed', db)
     } else {
       await logActivity(db, { lead_id: id, contact_id: before.contact_id, type: 'note', body: `Lead updated by ${user.displayName || user.email}`, actor_id: user.id })
     }

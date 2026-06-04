@@ -28,6 +28,7 @@
     "pages/api/admin/inspect-jaws-account.ts":      { "maxDuration": 30 },
     "pages/api/cron/workshop-reminders.ts":         { "maxDuration": 60 },
     "pages/api/cron/notifications-sweep.ts":        { "maxDuration": 120 },
+    "pages/api/cron/crm-automations.ts":            { "maxDuration": 120 },
     "pages/api/b2b/admin/stock-transfer.ts":        { "maxDuration": 300 }
   },
   "crons": [
@@ -62,6 +63,10 @@
     {
       "path": "/api/cron/b2b-payment-check",
       "schedule": "0 */6 * * *"
+    },
+    {
+      "path": "/api/cron/crm-automations",
+      "schedule": "0 * * * *"
     }
   ]
 }

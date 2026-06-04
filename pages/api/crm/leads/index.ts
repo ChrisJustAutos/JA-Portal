@@ -6,6 +6,7 @@ import { createClient } from '@supabase/supabase-js'
 import { withAuth } from '../../../../lib/authServer'
 import { roleHasPermission } from '../../../../lib/permissions'
 import { LEAD_STAGES, LeadStage, findContact, contactDisplayName, logActivity } from '../../../../lib/crm'
+import { enrolLead } from '../../../../lib/crm-automations'
 
 export const config = { maxDuration: 10 }
 
@@ -79,6 +80,7 @@ export default withAuth('view:crm', async (req, res, user) => {
     }).select('*').single()
     if (error) return res.status(500).json({ error: error.message })
     await logActivity(db, { lead_id: data.id, contact_id: contactId, type: 'lead_created', body: `Lead "${data.title}" created by ${user.displayName || user.email}`, actor_id: user.id })
+    await enrolLead({ id: data.id, stage: data.stage, contact_id: data.contact_id }, 'lead_created', db)
     return res.status(201).json({ ok: true, lead: data })
   }
 

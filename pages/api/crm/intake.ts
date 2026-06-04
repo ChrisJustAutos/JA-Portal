@@ -11,6 +11,7 @@
 import { createClient } from '@supabase/supabase-js'
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { contactDisplayName, findContact, logActivity } from '../../../lib/crm'
+import { enrolLead } from '../../../lib/crm-automations'
 import { notify } from '../../../lib/notifications'
 
 export const config = { maxDuration: 10 }
@@ -96,6 +97,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (lErr) throw lErr
 
     await logActivity(db, { lead_id: lead.id, contact_id: contactId, type: 'website_lead', body: message || 'New website enquiry', meta: { page: body.page || null } })
+    await enrolLead({ id: lead.id, stage: 'new', contact_id: contactId }, 'lead_created', db)
 
     await notify({
       module: 'crm',
