@@ -12,7 +12,7 @@ import { roleHasPermission } from '../../../lib/permissions'
 import { customerLabel, vehicleLabel } from '../../../lib/workshop'
 import { getWorkshopSettings } from '../../../lib/workshop-myob-invoice'
 import { renderWorkshopDocPdf, WorkshopDoc } from '../../../lib/workshop-pdf'
-import { sendMail } from '../../../lib/microsoft-graph'
+import { sendMail } from '../../../lib/email'
 
 export const config = { maxDuration: 30 }
 

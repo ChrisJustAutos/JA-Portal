@@ -11,7 +11,7 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
 import { assertCheckoutConfigured, getFromMailbox } from './b2b-settings'
 import { createDropShipPurchaseOrder, getSupplierContact, DropShipPOLine } from './b2b-myob-po'
-import { sendMail } from './microsoft-graph'
+import { sendMail } from './email'
 import { renderEmail, linesTableHtml, addressBlock } from './email-templates'
 
 export const PO_FROM_MAILBOX = process.env.B2B_PO_FROM_MAILBOX || process.env.AP_INBOX_MAILBOX || 'accounts@justautosmechanical.com.au'

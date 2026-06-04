@@ -5,7 +5,7 @@
 // admin rarely needs to log in to action an order.
 
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
-import { sendMail } from './microsoft-graph'
+import { sendMail } from './email'
 import { signOrderAction } from './order-action-token'
 import { type DropshipRaiseResult } from './b2b-dropship'
 import { getFromMailbox } from './b2b-settings'
