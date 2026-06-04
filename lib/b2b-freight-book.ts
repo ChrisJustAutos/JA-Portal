@@ -211,7 +211,10 @@ export async function bookFreightForOrder(orderId: string, opts: { actorId?: str
   if (firstBook) {
     try {
       const { convertOrderToInvoiceInMyob } = await import('./b2b-myob-invoice')
-      const conv = await convertOrderToInvoiceInMyob(orderId, { trackingNumber: consignment.carrierConsignmentId || consignment.consignmentNumber || null })
+      const conv = await convertOrderToInvoiceInMyob(orderId, {
+        trackingNumber: consignment.carrierConsignmentId || consignment.consignmentNumber || null,
+        carrier: order.freight_service_label || consignment.status?.name || null,
+      })
       await c.from('b2b_order_events').insert({ order_id: orderId, event_type: 'myob_invoice_converted', actor_type: 'system', actor_id: null, notes: `MYOB invoice ${conv.myob_sale_invoice_number || conv.myob_sale_invoice_uid} (${conv.status})`, metadata: { myob_sale_invoice_uid: conv.myob_sale_invoice_uid, myob_sale_invoice_number: conv.myob_sale_invoice_number, status: conv.status } })
     } catch (e: any) {
       console.error(`book-freight: MYOB order→invoice convert failed for ${orderId}:`, e?.message || e)

@@ -265,14 +265,30 @@ export interface MyobConvertResult {
  * duplicate). Keeps the SAME Number for continuity. Idempotent via
  * b2b_orders.myob_sale_invoice_uid. Throws on failure (caller logs best-effort).
  */
-export async function convertOrderToInvoiceInMyob(orderId: string, opts: { trackingNumber?: string | null } = {}): Promise<MyobConvertResult> {
+// Find a MYOB employee card UID by name (for the invoice Salesperson). Matches
+// Name/DisplayID/CompanyName/LastName case-insensitively. Best-effort: null on
+// any miss so it never blocks the invoice.
+async function findSalespersonUid(connId: string, cfId: string | null, name: string): Promise<string | null> {
+  const t = name.trim().toLowerCase()
+  if (!t || !cfId) return null
+  try {
+    const r = await myobFetch(connId, `/accountright/${cfId}/Contact/Employee`, { query: { '$top': 1000 } })
+    if (r.status !== 200) return null
+    const items: any[] = r.data?.Items || []
+    const m = items.find(e => [e.Name, e.DisplayID, e.CompanyName, e.LastName, `${e.FirstName || ''} ${e.LastName || ''}`.trim()]
+      .some(v => String(v || '').trim().toLowerCase() === t))
+    return m?.UID || null
+  } catch { return null }
+}
+
+export async function convertOrderToInvoiceInMyob(orderId: string, opts: { trackingNumber?: string | null; carrier?: string | null } = {}): Promise<MyobConvertResult> {
   const c = sb()
   const { data: order, error: oErr } = await c
     .from('b2b_orders')
     .select(`
       id, order_number, status,
       subtotal_ex_gst, gst, card_fee_inc, total_inc,
-      freight_cost_ex_gst, customer_po, tracking_number,
+      freight_cost_ex_gst, customer_po, tracking_number, carrier,
       myob_invoice_uid, myob_invoice_number,
       myob_sale_invoice_uid, myob_sale_invoice_number,
       stripe_payment_intent_id,
@@ -345,6 +361,8 @@ export async function convertOrderToInvoiceInMyob(orderId: string, opts: { track
   // put the carrier tracking number there. Falls back to the stored value, then
   // blank (rather than descriptive text, which would read oddly on the form).
   const tracking = String(opts.trackingNumber ?? (order as any).tracking_number ?? '').trim().substring(0, 255)
+  // "Ship Via" = the carrier the order shipped by (MYOB ShippingMethod, a string).
+  const shipVia = String(opts.carrier ?? (order as any).carrier ?? '').trim().substring(0, 36)
   const body: Record<string, any> = {
     Customer: { UID: dist.myob_primary_customer_uid },
     Date: today,
@@ -368,8 +386,23 @@ export async function convertOrderToInvoiceInMyob(orderId: string, opts: { track
   // written to MYOB (no UID), this is just a fresh invoice.
   if (order.myob_invoice_uid) body.Order = { UID: order.myob_invoice_uid }
 
+  // Optional, cosmetic form fields: "Ship Via" (carrier) and Salesperson. These
+  // are added best-effort — if MYOB rejects either, we retry the POST WITHOUT
+  // them so a cosmetic field can never block creating the GL invoice.
+  const optionalKeys: string[] = []
+  if (shipVia) { body.ShippingMethod = shipVia; optionalKeys.push('ShippingMethod') }
+  const spUid = await findSalespersonUid(conn.id, conn.company_file_id, (process.env.B2B_MYOB_SALESPERSON || 'B2B').trim())
+  if (spUid) { body.Salesperson = { UID: spUid }; optionalKeys.push('Salesperson') }
+
   // Create the invoice (hits the GL; converts the linked order).
-  const result = await myobFetch(conn.id, `/accountright/${conn.company_file_id}/Sale/Invoice/Item`, { method: 'POST', body })
+  const path = `/accountright/${conn.company_file_id}/Sale/Invoice/Item`
+  let result = await myobFetch(conn.id, path, { method: 'POST', body })
+  if (result.status === 400 && optionalKeys.length) {
+    // A validation error (nothing created) — strip the optional fields and retry once.
+    console.error(`convert: invoice POST 400, retrying without ${optionalKeys.join(', ')}: ${(result.raw || '').substring(0, 200)}`)
+    for (const k of optionalKeys) delete body[k]
+    result = await myobFetch(conn.id, path, { method: 'POST', body })
+  }
   if (result.status !== 201 && result.status !== 200) {
     throw new Error(`MYOB Sale.Invoice POST failed (HTTP ${result.status}): ${(result.raw || '').substring(0, 400)}`)
   }
