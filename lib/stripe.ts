@@ -86,6 +86,9 @@ export interface CreateCheckoutSessionParams {
   // Defaults to ['card']. Pass e.g. ['au_becs_debit'] or ['payto'] for the
   // lower-fee bank methods (one per session so surcharge stays method-correct).
   payment_method_types?: string[]
+  // BECS/PayTo create a mandate, which must attach to a customer — pass 'always'
+  // for those so Checkout always provisions one.
+  customer_creation?: 'always' | 'if_required'
   payment_intent_data?: {
     metadata?: Record<string, string>
     description?: string
@@ -108,6 +111,7 @@ export async function createCheckoutSession(p: CreateCheckoutSessionParams): Pro
   return stripeRequest('POST', '/checkout/sessions', {
     mode: 'payment',
     payment_method_types: (p.payment_method_types && p.payment_method_types.length) ? p.payment_method_types : ['card'],
+    ...(p.customer_creation ? { customer_creation: p.customer_creation } : {}),
     line_items: p.line_items,
     success_url: p.success_url,
     cancel_url: p.cancel_url,

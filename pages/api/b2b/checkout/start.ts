@@ -557,6 +557,7 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, use
     session = await createCheckoutSession({
       line_items: stripeLineItems,
       payment_method_types: pmTypes,
+      customer_creation: paymentMethod === 'card' ? undefined : 'always',
       success_url: `${baseUrl}/b2b/orders/${order.id}?session_id={CHECKOUT_SESSION_ID}`,
       cancel_url:  `${baseUrl}/b2b/cart?cancelled=${order.id}`,
       customer_email: user.email,

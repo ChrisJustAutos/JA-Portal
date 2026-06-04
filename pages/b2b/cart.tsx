@@ -568,8 +568,8 @@ function TotalsPanel({
 
       {/* Payment method — bank options skip the card surcharge */}
       <div style={{fontSize:10,color:T.text2,textTransform:'uppercase',letterSpacing:'0.06em',fontWeight:500,marginBottom:6}}>Payment method</div>
-      <div style={{display:'flex',gap:6,marginBottom:8,flexWrap:'wrap'}}>
-        {([['card','Card'],['becs','Bank Debit'],['payto','PayTo']] as const).map(([id,label]) => {
+      <div style={{display:'flex',gap:6,marginBottom:6,flexWrap:'wrap'}}>
+        {([['card','Card / Apple Pay'],['becs','Bank Debit'],['payto','PayTo']] as const).map(([id,label]) => {
           const on = paymentMethod === id
           return (
             <button key={id} type="button" onClick={() => onPaymentMethodChange(id)}
