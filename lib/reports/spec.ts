@@ -29,6 +29,11 @@ export type SectionId =
   | 'calls-objections'
   | 'calls-flagged'
   | 'calls-activity'
+  // CRM / workshop / B2B sections
+  | 'crm-pipeline'
+  | 'crm-campaigns'
+  | 'workshop-performance'
+  | 'b2b-sales'
 
 export interface SectionMeta {
   id: SectionId
@@ -65,35 +70,21 @@ export const SECTION_META: Record<SectionId, SectionMeta> = {
   'calls-objections':      { id: 'calls-objections',      label: 'Top Objections',        description: 'Most frequent objections & topics raised by callers',      entityScope: 'all' },
   'calls-flagged':         { id: 'calls-flagged',         label: 'Flagged Calls',         description: 'Calls with sales_score < 40 — needs coaching attention',   entityScope: 'all' },
   'calls-activity':        { id: 'calls-activity',        label: 'Call Activity',         description: 'Raw call counts and durations per rep',                    entityScope: 'all' },
+  // CRM / workshop / B2B
+  'crm-pipeline':        { id: 'crm-pipeline',        label: 'Lead Pipeline',        description: 'Open pipeline by stage + win/loss & conversion for the period', entityScope: 'all' },
+  'crm-campaigns':       { id: 'crm-campaigns',       label: 'Campaign Performance', description: 'Email campaigns sent in the period with open/click/unsub rates', entityScope: 'all' },
+  'workshop-performance':{ id: 'workshop-performance',label: 'Workshop Performance', description: 'Bookings, completed jobs, revenue and quote conversion',         entityScope: 'all' },
+  'b2b-sales':           { id: 'b2b-sales',           label: 'B2B Sales',            description: 'Distributor orders, revenue, freight, top distributors & products', entityScope: 'all' },
 }
 
 // Default section selection for each report type.
 // User can override these in the UI before generating.
 export const DEFAULT_SECTIONS: Record<ReportType, SectionId[]> = {
-  'monthly-management': [
-    'kpi-summary', 'pnl-summary', 'top-customers',
-    'receivables-aging', 'stock-summary', 'trend-charts', 'ai-narrative',
-  ],
-  'executive-summary': [
-    'kpi-summary', 'trend-charts', 'ai-narrative',
-  ],
   'distributor-performance': [
     'distributor-ranking', 'trend-charts', 'ai-narrative',
   ],
-  'cash-flow': [
-    'receivables-aging', 'payables-aging', 'ai-narrative',
-  ],
   'stock-health': [
     'stock-summary', 'stock-reorder', 'stock-dead', 'ai-narrative',
-  ],
-  'sales-pipeline': [
-    'sales-pipeline-combined',
-    'sales-funnel',
-    'sales-rep-scorecard-v2',
-    'sales-quote-aging',
-    'sales-month-trend',
-    'top-customers',
-    'ai-narrative',
   ],
   'call-analytics': [
     'calls-team-trend',
@@ -103,6 +94,18 @@ export const DEFAULT_SECTIONS: Record<ReportType, SectionId[]> = {
     'calls-flagged',
     'calls-activity',
     'ai-narrative',
+  ],
+  'crm-pipeline': [
+    'crm-pipeline', 'ai-narrative',
+  ],
+  'campaign-performance': [
+    'crm-campaigns', 'ai-narrative',
+  ],
+  'workshop-performance': [
+    'workshop-performance', 'ai-narrative',
+  ],
+  'b2b-sales': [
+    'b2b-sales', 'ai-narrative',
   ],
 }
 

@@ -16,6 +16,7 @@ import Head from 'next/head'
 import Script from 'next/script'
 import { useRouter } from 'next/router'
 import PortalTopBar from '../lib/PortalTopBar'
+import ReportsTabs from '../components/ReportsTabs'
 import { requirePageAuth } from '../lib/authServer'
 import { usePreferences, applyGstDisplay } from '../lib/preferences'
 import { useChatContext } from '../components/GlobalChatbot'
@@ -793,7 +794,7 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
       <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet"/>
 
       <PortalTopBar
-        activeId="distributors"
+        activeId="reports"
         lastRefresh={lastRefresh}
         onRefresh={()=>load(true)}
         refreshing={refreshing}
@@ -801,6 +802,7 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
         currentUserName={user.displayName}
         currentUserEmail={user.email}
       />
+      <ReportsTabs active="distributors" role={user.role} />
 
       <div style={{flex:1,display:'flex',flexDirection:'column',overflow:'hidden',background:T.bg}}>
         <div style={{height:52,background:T.bg2,borderBottom:`1px solid ${T.border}`,display:'flex',alignItems:'center',padding:'0 20px',gap:10,flexShrink:0}}>

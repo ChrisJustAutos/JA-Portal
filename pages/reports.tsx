@@ -5,6 +5,7 @@ import { useState, useEffect, useMemo, useCallback } from 'react'
 import Head from 'next/head'
 import { useRouter } from 'next/router'
 import PortalTopBar from '../lib/PortalTopBar'
+import ReportsTabs from '../components/ReportsTabs'
 import { requirePageAuth } from '../lib/authServer'
 import {
   REPORT_TYPE_LABELS, REPORT_TYPE_DESCRIPTIONS,
@@ -166,6 +167,7 @@ export default function ReportsPage({ user }: { user: PortalUserSSR }) {
         <Head><title>Reports — Just Autos</title></Head>
         <div style={{ display: 'flex', flexDirection: 'column', minHeight: '100vh', fontFamily: "'DM Sans', system-ui, sans-serif", background: T.bg, color: T.text }}>
           <PortalTopBar activeId="reports" currentUserRole={user.role} currentUserVisibleTabs={(user as any).visibleTabs} currentUserName={user.displayName} currentUserEmail={user.email}/>
+          <ReportsTabs active="reports" role={user.role} />
           <div style={{ flex: 1, padding: 40, overflowY: 'auto' }}>
             <h1 style={{ color: T.text, fontSize: 24 }}>Reports</h1>
             <p style={{ color: T.text2, maxWidth: 520 }}>Your role ({user.role}) doesn't have access to generate any report types. Contact an admin if you need access.</p>
@@ -180,6 +182,7 @@ export default function ReportsPage({ user }: { user: PortalUserSSR }) {
       <Head><title>Reports — Just Autos</title></Head>
       <div style={{ display: 'flex', flexDirection: 'column', minHeight: '100vh', fontFamily: "'DM Sans', system-ui, sans-serif", background: T.bg, color: T.text }}>
         <PortalTopBar activeId="reports" currentUserRole={user.role} currentUserVisibleTabs={(user as any).visibleTabs} currentUserName={user.displayName} currentUserEmail={user.email}/>
+        <ReportsTabs active="reports" role={user.role} />
         <div style={{ flex: 1, padding: '32px 40px', overflowY: 'auto' }}>
 
           {/* Header */}

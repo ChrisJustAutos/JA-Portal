@@ -1065,6 +1065,122 @@ function CallsObjections({ data }: { data: any }) {
   )
 }
 
+// ── CRM / Workshop / B2B renderers ─────────────────────────────────────
+function CrmPipeline({ data }: { data: any }) {
+  const stages = data?.stages || []
+  const owners = data?.owners || []
+  return (
+    <View>
+      <View style={styles.kpiGrid} wrap={false}>
+        <KpiBox label="Open pipeline" value={String(data?.openTotal?.count || 0)} sub={fmt(data?.openTotal?.value)}/>
+        <KpiBox label="New (period)" value={String(data?.created || 0)} sub="Leads created"/>
+        <KpiBox label="Won (period)" value={String(data?.won?.count || 0)} sub={fmt(data?.won?.value)} valueColor={COLORS.green}/>
+        <KpiBox label="Conversion" value={data?.conversionPct == null ? '—' : `${data.conversionPct}%`} sub={`${data?.won?.count || 0} won / ${data?.lost?.count || 0} lost`}/>
+      </View>
+      {stages.length > 0 && (
+        <View wrap={false}>
+          <Text style={{ fontSize: 9, fontWeight: 700, marginTop: 6, marginBottom: 3, color: COLORS.ink2 }}>Open pipeline by stage</Text>
+          <View style={styles.tableHeader}><Text style={[styles.col, { flex: 2 }]}>Stage</Text><Text style={styles.colNum}>Leads</Text><Text style={styles.colNum}>Value</Text></View>
+          {stages.map((s: any, i: number) => (
+            <View key={i} style={[styles.tableRow, i % 2 === 1 ? styles.tableRowAlt : {}]}><Text style={[styles.col, { flex: 2 }]}>{s.label}</Text><Text style={styles.colNum}>{s.count}</Text><Text style={styles.colNum}>{fmt(s.value)}</Text></View>
+          ))}
+        </View>
+      )}
+      {owners.length > 0 && (
+        <View wrap={false}>
+          <Text style={{ fontSize: 9, fontWeight: 700, marginTop: 8, marginBottom: 3, color: COLORS.ink2 }}>By owner</Text>
+          <View style={styles.tableHeader}><Text style={[styles.col, { flex: 2 }]}>Owner</Text><Text style={styles.colNum}>Open</Text><Text style={styles.colNum}>Won #</Text><Text style={styles.colNum}>Won value</Text></View>
+          {owners.map((o: any, i: number) => (
+            <View key={i} style={[styles.tableRow, i % 2 === 1 ? styles.tableRowAlt : {}]}><Text style={[styles.col, { flex: 2 }]}>{o.name}</Text><Text style={styles.colNum}>{o.openCount}</Text><Text style={styles.colNum}>{o.wonCount}</Text><Text style={[styles.colNum, { fontWeight: 700 }]}>{fmt(o.wonValue)}</Text></View>
+          ))}
+        </View>
+      )}
+    </View>
+  )
+}
+
+function CampaignPerformance({ data }: { data: any }) {
+  const camps = data?.campaigns || []
+  const t = data?.totals || {}
+  return (
+    <View>
+      <View style={styles.kpiGrid} wrap={false}>
+        <KpiBox label="Campaigns" value={String(t.campaigns || 0)} sub="Sent in period"/>
+        <KpiBox label="Emails sent" value={String(t.sent || 0)} sub="To recipients"/>
+        <KpiBox label="Open rate" value={`${t.openRate || 0}%`} sub={`${t.opened || 0} opens`}/>
+        <KpiBox label="Click rate" value={`${t.clickRate || 0}%`} sub={`${t.clicked || 0} clicks`}/>
+      </View>
+      {camps.length === 0 ? <Text style={{ fontSize: 9, color: COLORS.ink3, fontStyle: 'italic' }}>No campaigns sent in this period.</Text> : (
+        <>
+          <View style={styles.tableHeader}><Text style={[styles.col, { flex: 3 }]}>Campaign</Text><Text style={styles.colNum}>Sent</Text><Text style={styles.colNum}>Open%</Text><Text style={styles.colNum}>Click%</Text><Text style={styles.colNum}>Unsub</Text></View>
+          {camps.map((c: any, i: number) => (
+            <View key={i} style={[styles.tableRow, i % 2 === 1 ? styles.tableRowAlt : {}]}><Text style={[styles.col, { flex: 3 }]}>{c.name}</Text><Text style={styles.colNum}>{c.sent}</Text><Text style={styles.colNum}>{c.openRate}%</Text><Text style={styles.colNum}>{c.clickRate}%</Text><Text style={styles.colNum}>{c.unsub}</Text></View>
+          ))}
+        </>
+      )}
+    </View>
+  )
+}
+
+function WorkshopPerformance({ data }: { data: any }) {
+  const b = data?.bookings || {}
+  const q = data?.quotes || {}
+  const byStatus = b.byStatus || []
+  return (
+    <View>
+      <View style={styles.kpiGrid} wrap={false}>
+        <KpiBox label="Bookings made" value={String(b.created || 0)} sub="Created in period"/>
+        <KpiBox label="Jobs completed" value={String(b.completed || 0)} sub={fmt(b.revenueExGst)} valueColor={COLORS.green}/>
+        <KpiBox label="Quotes sent" value={String(q.created || 0)} sub={fmt(q.totalValue)}/>
+        <KpiBox label="Quote conv." value={q.conversionPct == null ? '—' : `${q.conversionPct}%`} sub={`${q.accepted || 0} accepted`}/>
+      </View>
+      {byStatus.length > 0 && (
+        <View wrap={false}>
+          <Text style={{ fontSize: 9, fontWeight: 700, marginTop: 6, marginBottom: 3, color: COLORS.ink2 }}>Bookings by status</Text>
+          <View style={styles.tableHeader}><Text style={[styles.col, { flex: 3 }]}>Status</Text><Text style={styles.colNum}>Count</Text></View>
+          {byStatus.map((s: any, i: number) => (
+            <View key={i} style={[styles.tableRow, i % 2 === 1 ? styles.tableRowAlt : {}]}><Text style={[styles.col, { flex: 3 }]}>{s.status}</Text><Text style={styles.colNum}>{s.count}</Text></View>
+          ))}
+        </View>
+      )}
+    </View>
+  )
+}
+
+function B2bSales({ data }: { data: any }) {
+  const t = data?.totals || {}
+  const dists = data?.topDistributors || []
+  const prods = data?.topProducts || []
+  return (
+    <View>
+      <View style={styles.kpiGrid} wrap={false}>
+        <KpiBox label="Orders" value={String(t.orderCount || 0)} sub={`${t.paidCount || 0} paid`}/>
+        <KpiBox label="Revenue" value={fmt(t.revenueExGst)} sub="Ex-GST"/>
+        <KpiBox label="Freight" value={fmt(t.freightExGst)} sub="Ex-GST"/>
+        <KpiBox label="Total inc GST" value={fmt(t.totalInc)} sub="Incl freight & GST"/>
+      </View>
+      {dists.length > 0 && (
+        <View wrap={false}>
+          <Text style={{ fontSize: 9, fontWeight: 700, marginTop: 6, marginBottom: 3, color: COLORS.ink2 }}>Top distributors</Text>
+          <View style={styles.tableHeader}><Text style={[styles.col, { flex: 3 }]}>Distributor</Text><Text style={styles.colNum}>Orders</Text><Text style={styles.colNum}>Value (inc)</Text></View>
+          {dists.map((d: any, i: number) => (
+            <View key={i} style={[styles.tableRow, i % 2 === 1 ? styles.tableRowAlt : {}]}><Text style={[styles.col, { flex: 3 }]}>{d.name}</Text><Text style={styles.colNum}>{d.count}</Text><Text style={[styles.colNum, { fontWeight: 700 }]}>{fmt(d.value)}</Text></View>
+          ))}
+        </View>
+      )}
+      {prods.length > 0 && (
+        <View wrap={false}>
+          <Text style={{ fontSize: 9, fontWeight: 700, marginTop: 8, marginBottom: 3, color: COLORS.ink2 }}>Top products</Text>
+          <View style={styles.tableHeader}><Text style={[styles.col, { flex: 3 }]}>Product</Text><Text style={{ width: 80, color: COLORS.ink3 }}>SKU</Text><Text style={styles.colNum}>Qty</Text><Text style={styles.colNum}>Value</Text></View>
+          {prods.map((p: any, i: number) => (
+            <View key={i} style={[styles.tableRow, i % 2 === 1 ? styles.tableRowAlt : {}]}><Text style={[styles.col, { flex: 3 }]}>{p.name}</Text><Text style={{ width: 80, color: COLORS.ink3 }}>{p.sku}</Text><Text style={styles.colNum}>{p.qty}</Text><Text style={styles.colNum}>{fmt(p.value)}</Text></View>
+          ))}
+        </View>
+      )}
+    </View>
+  )
+}
+
 // ── Section router ─────────────────────────────────────────────────────
 function RenderSection({ section }: { section: GeneratedSection }) {
   if (!section || !section.data || section.data.error) {
@@ -1103,6 +1219,10 @@ function RenderSection({ section }: { section: GeneratedSection }) {
           case 'calls-outcomes':      return <CallsOutcomes data={section.data}/>
           case 'calls-flagged':       return <CallsFlagged data={section.data}/>
           case 'calls-objections':    return <CallsObjections data={section.data}/>
+          case 'crm-pipeline':        return <CrmPipeline data={section.data}/>
+          case 'crm-campaigns':       return <CampaignPerformance data={section.data}/>
+          case 'workshop-performance': return <WorkshopPerformance data={section.data}/>
+          case 'b2b-sales':           return <B2bSales data={section.data}/>
           default:                    return null
         }
       })()}

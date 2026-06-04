@@ -1310,3 +1310,205 @@ export async function fetchCallsObjections(range: DateRange): Promise<CallsObjec
 
   return { total: totalMentions, callsWithObjections, objections }
 }
+
+// ──────────────────────────────────────────────────────────────────────
+// CRM / WORKSHOP / B2B FETCHERS (Supabase, service-role)
+// ──────────────────────────────────────────────────────────────────────
+
+function rangeIso(range: DateRange) {
+  return { startIso: `${range.periodStart}T00:00:00.000Z`, endIso: `${range.periodEnd}T23:59:59.999Z` }
+}
+function inRange(ts: string | null | undefined, startIso: string, endIso: string): boolean {
+  if (!ts) return false
+  return ts >= startIso && ts <= endIso
+}
+
+// ── CRM PIPELINE ──────────────────────────────────────────────────────
+const CRM_STAGE_LABELS: Record<string, string> = {
+  new: 'New', contacted: 'Contacted', quoted: 'Quoted', follow_up: 'Follow-up', won: 'Won', lost: 'Lost', on_hold: 'On hold',
+}
+const CRM_OPEN_STAGES = ['new', 'contacted', 'quoted', 'follow_up', 'on_hold']
+const CRM_PIPELINE_ORDER = ['new', 'contacted', 'quoted', 'follow_up', 'on_hold']
+
+export async function fetchCrmPipeline(range: DateRange): Promise<any> {
+  const sb = callsSupabase()
+  const { startIso, endIso } = rangeIso(range)
+  const { data, error } = await sb.from('crm_leads')
+    .select('stage, value, owner_id, created_at, won_at, lost_at, owner:user_profiles!crm_leads_owner_id_fkey(display_name)')
+    .is('deleted_at', null)
+  if (error) return { error: error.message }
+  const rows: any[] = data || []
+
+  const stageAgg = new Map<string, { count: number; value: number }>()
+  let openCount = 0, openValue = 0
+  const ownerAgg = new Map<string, { name: string; wonCount: number; wonValue: number; openCount: number }>()
+  const ownerName = (r: any) => (r.owner?.display_name || 'Unassigned')
+
+  for (const r of rows) {
+    if (CRM_OPEN_STAGES.includes(r.stage)) {
+      const a = stageAgg.get(r.stage) || { count: 0, value: 0 }
+      a.count++; a.value += Number(r.value) || 0
+      stageAgg.set(r.stage, a)
+      openCount++; openValue += Number(r.value) || 0
+      const o = ownerAgg.get(ownerName(r)) || { name: ownerName(r), wonCount: 0, wonValue: 0, openCount: 0 }
+      o.openCount++; ownerAgg.set(ownerName(r), o)
+    }
+  }
+
+  let created = 0
+  const wonRows = rows.filter(r => inRange(r.won_at, startIso, endIso))
+  const lostRows = rows.filter(r => inRange(r.lost_at, startIso, endIso))
+  for (const r of rows) if (inRange(r.created_at, startIso, endIso)) created++
+  for (const r of wonRows) {
+    const o = ownerAgg.get(ownerName(r)) || { name: ownerName(r), wonCount: 0, wonValue: 0, openCount: 0 }
+    o.wonCount++; o.wonValue += Number(r.value) || 0; ownerAgg.set(ownerName(r), o)
+  }
+  const wonValue = wonRows.reduce((s, r) => s + (Number(r.value) || 0), 0)
+  const decided = wonRows.length + lostRows.length
+
+  return {
+    stages: CRM_PIPELINE_ORDER.filter(s => stageAgg.has(s)).map(s => ({ stage: s, label: CRM_STAGE_LABELS[s] || s, count: stageAgg.get(s)!.count, value: stageAgg.get(s)!.value })),
+    openTotal: { count: openCount, value: openValue },
+    created,
+    won: { count: wonRows.length, value: wonValue },
+    lost: { count: lostRows.length },
+    conversionPct: decided > 0 ? Math.round((wonRows.length / decided) * 100) : null,
+    owners: Array.from(ownerAgg.values()).sort((a, b) => b.wonValue - a.wonValue || b.openCount - a.openCount).slice(0, 15),
+  }
+}
+
+// ── CAMPAIGN PERFORMANCE ──────────────────────────────────────────────
+export async function fetchCampaignPerformance(range: DateRange): Promise<any> {
+  const sb = callsSupabase()
+  const { startIso, endIso } = rangeIso(range)
+  const { data: camps, error } = await sb.from('crm_campaigns')
+    .select('id, name, subject, sent_at, total_recipients, sent_count')
+    .is('deleted_at', null).not('sent_at', 'is', null)
+    .gte('sent_at', startIso).lte('sent_at', endIso)
+    .order('sent_at', { ascending: false })
+  if (error) return { error: error.message }
+  const list: any[] = camps || []
+  const ids = list.map(c => c.id)
+  const tally = new Map<string, { opened: number; clicked: number; unsub: number }>()
+  if (ids.length) {
+    const { data: rs } = await sb.from('crm_campaign_recipients')
+      .select('campaign_id, opened_at, first_clicked_at, unsubscribed_at').in('campaign_id', ids).limit(50000)
+    for (const r of rs || []) {
+      const t = tally.get(r.campaign_id) || { opened: 0, clicked: 0, unsub: 0 }
+      if (r.opened_at) t.opened++; if (r.first_clicked_at) t.clicked++; if (r.unsubscribed_at) t.unsub++
+      tally.set(r.campaign_id, t)
+    }
+  }
+  const campaigns = list.map(c => {
+    const t = tally.get(c.id) || { opened: 0, clicked: 0, unsub: 0 }
+    const sent = c.sent_count || 0
+    return {
+      name: c.name, subject: c.subject, sentAt: c.sent_at,
+      recipients: c.total_recipients || 0, sent,
+      opened: t.opened, clicked: t.clicked, unsub: t.unsub,
+      openRate: sent > 0 ? Math.round((t.opened / sent) * 1000) / 10 : 0,
+      clickRate: sent > 0 ? Math.round((t.clicked / sent) * 1000) / 10 : 0,
+    }
+  })
+  const sum = (k: string) => campaigns.reduce((s, c: any) => s + (c[k] || 0), 0)
+  const totSent = sum('sent')
+  return {
+    campaigns,
+    totals: {
+      campaigns: campaigns.length, sent: totSent, opened: sum('opened'), clicked: sum('clicked'), unsub: sum('unsub'),
+      openRate: totSent > 0 ? Math.round((sum('opened') / totSent) * 1000) / 10 : 0,
+      clickRate: totSent > 0 ? Math.round((sum('clicked') / totSent) * 1000) / 10 : 0,
+    },
+  }
+}
+
+// ── WORKSHOP PERFORMANCE ──────────────────────────────────────────────
+const WS_COMPLETED_STATUSES = ['done', 'invoiced', 'paid']
+export async function fetchWorkshopPerformance(range: DateRange): Promise<any> {
+  const sb = callsSupabase()
+  const { startIso, endIso } = rangeIso(range)
+
+  const [{ data: createdB }, { data: completedB }, { data: quotes }] = await Promise.all([
+    sb.from('workshop_bookings').select('status, created_at').gte('created_at', startIso).lte('created_at', endIso),
+    sb.from('workshop_bookings').select('total_ex_gst, completed_at').gte('completed_at', startIso).lte('completed_at', endIso),
+    sb.from('workshop_quotes').select('status, total, created_at').is('deleted_at', null).gte('created_at', startIso).lte('created_at', endIso),
+  ])
+
+  const byStatusMap = new Map<string, number>()
+  for (const b of createdB || []) byStatusMap.set(b.status || 'unknown', (byStatusMap.get(b.status || 'unknown') || 0) + 1)
+  const completedRevenue = (completedB || []).reduce((s: number, b: any) => s + (Number(b.total_ex_gst) || 0), 0)
+
+  const qrows: any[] = quotes || []
+  const accepted = qrows.filter(q => ['accepted', 'converted'].includes(q.status)).length
+  const quoteValue = qrows.reduce((s, q) => s + (Number(q.total) || 0), 0)
+
+  return {
+    bookings: {
+      created: (createdB || []).length,
+      byStatus: Array.from(byStatusMap.entries()).map(([status, count]) => ({ status, count })).sort((a, b) => b.count - a.count),
+      completed: (completedB || []).length,
+      revenueExGst: completedRevenue,
+    },
+    quotes: {
+      created: qrows.length,
+      accepted,
+      conversionPct: qrows.length > 0 ? Math.round((accepted / qrows.length) * 100) : null,
+      totalValue: quoteValue,
+    },
+  }
+}
+
+// ── B2B SALES ─────────────────────────────────────────────────────────
+export async function fetchB2bSales(range: DateRange): Promise<any> {
+  const sb = callsSupabase()
+  const { startIso, endIso } = rangeIso(range)
+  const { data, error } = await sb.from('b2b_orders')
+    .select('id, order_number, status, subtotal_ex_gst, freight_cost_ex_gst, total_inc, paid_at, is_test, distributor_id, created_at, distributor:b2b_distributors(display_name, trading_name)')
+    .gte('created_at', startIso).lte('created_at', endIso)
+  if (error) return { error: error.message }
+  const rows: any[] = (data || []).filter(o => o.is_test !== true && o.status !== 'cancelled')
+
+  const num = (v: any) => Number(v) || 0
+  const totals = {
+    orderCount: rows.length,
+    revenueExGst: rows.reduce((s, o) => s + num(o.subtotal_ex_gst), 0),
+    freightExGst: rows.reduce((s, o) => s + num(o.freight_cost_ex_gst), 0),
+    totalInc: rows.reduce((s, o) => s + num(o.total_inc), 0),
+    paidCount: rows.filter(o => !!o.paid_at).length,
+  }
+  const statusMap = new Map<string, { count: number; value: number }>()
+  for (const o of rows) {
+    const a = statusMap.get(o.status || 'unknown') || { count: 0, value: 0 }
+    a.count++; a.value += num(o.total_inc); statusMap.set(o.status || 'unknown', a)
+  }
+  const distMap = new Map<string, { name: string; count: number; value: number }>()
+  for (const o of rows) {
+    const name = o.distributor?.display_name || o.distributor?.trading_name || 'Unknown'
+    const key = o.distributor_id || name
+    const a = distMap.get(key) || { name, count: 0, value: 0 }
+    a.count++; a.value += num(o.total_inc); distMap.set(key, a)
+  }
+
+  // Top products from order lines.
+  let topProducts: any[] = []
+  if (rows.length) {
+    const { data: lines } = await sb.from('b2b_order_lines')
+      .select('order_id, sku, name, qty, line_subtotal_ex_gst').in('order_id', rows.map(o => o.id)).limit(50000)
+    const prodMap = new Map<string, { sku: string; name: string; qty: number; value: number }>()
+    for (const l of lines || []) {
+      const key = l.sku || l.name || 'item'
+      const a = prodMap.get(key) || { sku: l.sku || '', name: l.name || key, qty: 0, value: 0 }
+      a.qty += num(l.qty); a.value += num(l.line_subtotal_ex_gst); prodMap.set(key, a)
+    }
+    topProducts = Array.from(prodMap.values()).sort((a, b) => b.value - a.value).slice(0, 10)
+  }
+
+  return {
+    totals,
+    byStatus: Array.from(statusMap.entries()).map(([status, v]) => ({ status, count: v.count, value: v.value })).sort((a, b) => b.value - a.value),
+    topDistributors: Array.from(distMap.values()).sort((a, b) => b.value - a.value).slice(0, 10),
+    topProducts,
+    topOrders: rows.slice().sort((a, b) => num(b.total_inc) - num(a.total_inc)).slice(0, 10)
+      .map(o => ({ orderNumber: o.order_number, status: o.status, totalInc: num(o.total_inc), createdAt: o.created_at })),
+  }
+}
