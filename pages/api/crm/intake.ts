@@ -41,9 +41,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   try { body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : (req.body || {}) }
   catch { return res.status(400).json({ error: 'Bad JSON body' }) }
 
-  // Auth: shared token.
+  // Auth: shared token. Accepted via the x-crm-token header, a `token` body
+  // field, or HTTP Basic auth (username OR password = the token) — the last
+  // lets WordPress/Formidable's "Basic Auth" box carry it server-side.
   const expected = process.env.CRM_INTAKE_TOKEN
-  const provided = String(req.headers['x-crm-token'] || body.token || '')
+  let provided = String(req.headers['x-crm-token'] || body.token || '')
+  const authz = String(req.headers.authorization || '')
+  if (!provided && authz.toLowerCase().startsWith('basic ')) {
+    try {
+      const [u, p] = Buffer.from(authz.slice(6).trim(), 'base64').toString('utf8').split(':')
+      provided = (p && expected && p === expected) ? p : (u || '')
+    } catch { /* ignore malformed header */ }
+  }
   if (!expected || provided !== expected) return res.status(401).json({ error: 'Unauthorized' })
 
   // Honeypot — bots fill hidden fields; humans leave them blank.
