@@ -443,18 +443,21 @@ function UsersTab({ currentUser }: { currentUser: PortalUserSSR }) {
               </td>
               <td style={{padding:'8px 12px'}}>
                 <input defaultValue={u.phone_extension || ''} placeholder="—"
+                  autoComplete="off" name={`phone-ext-${u.id}`} data-lpignore="true" data-1p-ignore="true" data-form-type="other"
                   title="Deskphone SIP extension — rings for &quot;Listen on Handset&quot;"
                   onBlur={e=>{ const v=e.target.value.trim(); if (v !== (u.phone_extension||'')) update(u.id,{phone_extension: v || null}) }}
                   style={{width:58,background:T.bg3,border:`1px solid ${T.border}`,color:T.text,borderRadius:3,padding:'3px 6px',fontSize:11,outline:'none',fontFamily:'monospace'}}/>
               </td>
               <td style={{padding:'8px 12px'}}>
                 <input defaultValue={u.webrtc_extension || ''} placeholder="—"
+                  autoComplete="off" name={`wrtc-ext-${u.id}`} data-lpignore="true" data-1p-ignore="true" data-form-type="other"
                   title="WebRTC softphone SIP extension — used for &quot;Listen on Device&quot;"
                   onBlur={e=>{ const v=e.target.value.trim(); if (v !== (u.webrtc_extension||'')) update(u.id,{webrtc_extension: v || null}) }}
                   style={{width:58,background:T.bg3,border:`1px solid ${T.border}`,color:T.text,borderRadius:3,padding:'3px 6px',fontSize:11,outline:'none',fontFamily:'monospace'}}/>
               </td>
               <td style={{padding:'8px 12px'}}>
                 <input type="password" defaultValue=""
+                  autoComplete="new-password" name={`wrtc-pwd-${u.id}`} data-lpignore="true" data-1p-ignore="true" data-form-type="other"
                   placeholder={u.webrtc_password_set ? '••••••' : '—'}
                   title={u.webrtc_password_set ? 'Set — leave blank to keep, type to replace' : 'WebRTC SIP digest password'}
                   onBlur={e=>{ const v=e.target.value; if (v) update(u.id,{webrtc_password: v}) }}
