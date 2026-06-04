@@ -265,14 +265,14 @@ export interface MyobConvertResult {
  * duplicate). Keeps the SAME Number for continuity. Idempotent via
  * b2b_orders.myob_sale_invoice_uid. Throws on failure (caller logs best-effort).
  */
-export async function convertOrderToInvoiceInMyob(orderId: string): Promise<MyobConvertResult> {
+export async function convertOrderToInvoiceInMyob(orderId: string, opts: { trackingNumber?: string | null } = {}): Promise<MyobConvertResult> {
   const c = sb()
   const { data: order, error: oErr } = await c
     .from('b2b_orders')
     .select(`
       id, order_number, status,
       subtotal_ex_gst, gst, card_fee_inc, total_inc,
-      freight_cost_ex_gst, customer_po,
+      freight_cost_ex_gst, customer_po, tracking_number,
       myob_invoice_uid, myob_invoice_number,
       myob_sale_invoice_uid, myob_sale_invoice_number,
       stripe_payment_intent_id,
@@ -341,6 +341,10 @@ export async function convertOrderToInvoiceInMyob(orderId: string): Promise<Myob
   const today = new Date().toISOString().substring(0, 10)
   const memo = `B2B Tax Invoice; Order ${order.order_number}; Stripe ${order.stripe_payment_intent_id || ''}`.substring(0, 255)
   const customerPo = (order.customer_po || '').trim().substring(0, 20)
+  // The invoice template's "Tracking No:" box is bound to the Comment field, so
+  // put the carrier tracking number there. Falls back to the stored value, then
+  // blank (rather than descriptive text, which would read oddly on the form).
+  const tracking = String(opts.trackingNumber ?? (order as any).tracking_number ?? '').trim().substring(0, 255)
   const body: Record<string, any> = {
     Customer: { UID: dist.myob_primary_customer_uid },
     Date: today,
@@ -352,7 +356,7 @@ export async function convertOrderToInvoiceInMyob(orderId: string): Promise<Myob
     Subtotal: subtotalEnv,
     TotalTax: totalTax,
     TotalAmount: totalAmount,
-    Comment: `Tax invoice for order ${order.order_number} — shipped`,
+    Comment: tracking,   // → prints in the template's "Tracking No:" box
     JournalMemo: memo,
   }
   if (customerPo) body.CustomerPurchaseOrderNumber = customerPo
