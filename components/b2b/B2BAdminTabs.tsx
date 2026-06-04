@@ -15,14 +15,13 @@ const T = {
   text: '#e8eaf0', text2: '#aab0c0', text3: '#8d93a4', blue: '#4f8ef7',
 }
 
-export type B2BAdminSection = 'dashboard' | 'catalogue' | 'distributors' | 'orders' | 'stock-transfer' | 'settings'
+export type B2BAdminSection = 'dashboard' | 'catalogue' | 'distributors' | 'orders' | 'settings'
 
 const TABS: Array<{ id: B2BAdminSection; label: string; href: string; icon: string }> = [
   { id: 'dashboard',      label: 'Dashboard',      href: '/admin/b2b',                icon: 'overview' },
   { id: 'catalogue',      label: 'Catalogue',      href: '/admin/b2b/catalogue',      icon: 'catalogue' },
   { id: 'distributors',   label: 'Distributors',   href: '/admin/b2b/distributors',   icon: 'distributors' },
   { id: 'orders',         label: 'Orders',         href: '/admin/b2b/orders',         icon: 'orders' },
-  { id: 'stock-transfer', label: 'Stock Transfer', href: '/admin/b2b/stock-transfer', icon: 'stocktake' },
   { id: 'settings',       label: 'Settings',       href: '/admin/b2b/settings',       icon: 'settings' },
 ]
 

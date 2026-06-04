@@ -14,6 +14,7 @@ import Head from 'next/head'
 import Link from 'next/link'
 import { useRouter } from 'next/router'
 import PortalTopBar from '../../lib/PortalTopBar'
+import InventoryTabs from '../../components/InventoryTabs'
 import { requirePageAuth } from '../../lib/authServer'
 import { UserRole, roleHasPermission } from '../../lib/permissions'
 
@@ -353,7 +354,8 @@ export default function StocktakeDetailPage({ user }: { user: SessionUser }) {
     <>
       <Head><title>Stocktake — {upload?.filename || ''}</title></Head>
       <div style={{display:'flex', flexDirection:'column', minHeight:'100vh', background:T.bg, color:T.text, fontFamily:'system-ui, -apple-system, sans-serif'}}>
-        <PortalTopBar activeId="stocktake" currentUserRole={user.role} currentUserVisibleTabs={user.visibleTabs} currentUserName={(user as any).displayName} currentUserEmail={(user as any).email}/>
+        <PortalTopBar activeId="workshop-inventory" currentUserRole={user.role} currentUserVisibleTabs={user.visibleTabs} currentUserName={(user as any).displayName} currentUserEmail={(user as any).email}/>
+        <InventoryTabs active="stocktake" role={user.role} />
         <main style={{flex:1, padding:'20px 32px 40px', overflow:'auto'}}>
 
           <div style={{marginBottom:16}}>

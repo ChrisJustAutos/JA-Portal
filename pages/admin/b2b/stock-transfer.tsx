@@ -16,7 +16,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import Head from 'next/head'
 import PortalTopBar from '../../../lib/PortalTopBar'
-import B2BAdminTabs from '../../../components/b2b/B2BAdminTabs'
+import InventoryTabs from '../../../components/InventoryTabs'
 import { requirePageAuth } from '../../../lib/authServer'
 import type { UserRole } from '../../../lib/permissions'
 
@@ -268,17 +268,17 @@ export default function StockTransferPage({ user }: Props) {
 
   return (
     <>
-      <Head><title>Stock Transfer · B2B · JA Portal</title></Head>
+      <Head><title>Stock Transfer · Inventory · JA Portal</title></Head>
       <div style={{display:'flex',flexDirection:'column',minHeight:'100vh',background:T.bg,color:T.text,fontFamily:'system-ui,-apple-system,sans-serif'}}>
         <PortalTopBar
-          activeId="b2b"
+          activeId="workshop-inventory"
           currentUserRole={user.role}
           currentUserVisibleTabs={user.visibleTabs}
           currentUserName={user.displayName}
           currentUserEmail={user.email}
         />
+        <InventoryTabs active="transfer" role={user.role} />
         <main className="b2b-admin-main" style={{flex:1,padding:'28px 32px',maxWidth:1200,width:'100%',boxSizing:'border-box'}}>
-          <B2BAdminTabs active="stock-transfer"/>
 
           <div style={{display:'flex',alignItems:'center',gap:14,marginBottom:4,flexWrap:'wrap'}}>
             <h1 style={{fontSize:20,fontWeight:600,margin:0}}>Internal stock transfer</h1>
