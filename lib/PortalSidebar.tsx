@@ -61,8 +61,6 @@ export const DEFAULT_NAV: PortalNavItem[] = [
   {id:'reports',      kind:'link',    label:'Reports',      href:'/reports',       dot:T.green},
   {id:'ap',           kind:'link',    label:'AP Invoices',  href:'/ap',            dot:T.amber},
   {id:'b2b',          kind:'link',    label:'B2B Portal',   href:'/admin/b2b',     dot:T.teal},
-  {id:'pnl',          kind:'section', label:'P&L — This Month',  section:'pnl',      dot:T.green},
-  {id:'payables',     kind:'section', label:'Payables',          section:'payables', dot:T.red,   alertKey:'payables'},
 ]
 
 const SETTINGS_NAV_ITEM: PortalNavItem = {

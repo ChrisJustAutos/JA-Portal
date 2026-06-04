@@ -236,8 +236,6 @@ export const PORTAL_TABS: PortalTab[] = [
   { id: 'workshop-invoices', label: 'Invoices (workshop)', permission: 'view:diary' },
   { id: 'workshop-inventory', label: 'Inventory',  permission: 'view:diary' },
   { id: 'reports',       label: 'Reports',         permission: 'view:reports' },
-  { id: 'pnl',           label: 'P&L',             permission: 'view:pnl' },
-  { id: 'payables',      label: 'Payables',        permission: 'view:payables' },
   { id: 'ap',            label: 'AP Invoices',     permission: 'view:supplier_invoices' },
   { id: 'b2b',           label: 'B2B Portal',      permission: 'view:b2b' },
 ]
