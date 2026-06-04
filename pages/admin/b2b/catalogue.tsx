@@ -242,6 +242,43 @@ export default function CatalogueAdminPage({ user }: Props) {
   const [previewError, setPreviewError] = useState<string | null>(null)
   const [syncing, setSyncing] = useState(false)
   const [syncMsg, setSyncMsg] = useState<string | null>(null)
+  const [importing, setImporting] = useState(false)
+  const [ioMsg, setIoMsg] = useState('')
+  const importInputRef = useRef<HTMLInputElement>(null)
+
+  function exportXlsx() { window.location.href = '/api/b2b/admin/catalogue/export' }
+
+  async function onImportFile(file: File) {
+    setImporting(true); setIoMsg('')
+    try {
+      const b64: string = await new Promise((resolve, reject) => {
+        const fr = new FileReader()
+        fr.onload = () => resolve(String(fr.result))
+        fr.onerror = () => reject(new Error('Could not read the file'))
+        fr.readAsDataURL(file)
+      })
+      const r = await fetch('/api/b2b/admin/catalogue/import', {
+        method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ file: b64 }),
+      })
+      const j = await r.json()
+      if (!r.ok) {
+        const detail = Array.isArray(j?.details) ? ` — ${j.details.slice(0, 3).join('; ')}${j.details.length > 3 ? '…' : ''}` : ''
+        throw new Error((j?.error || `HTTP ${r.status}`) + detail)
+      }
+      await load()
+      let msg = j.note || `Imported — ${j.updated} item${j.updated === 1 ? '' : 's'} updated`
+      if (j.failed) msg += `, ${j.failed} skipped (${(j.failures || []).slice(0, 3).map((f: any) => `row ${f.row}`).join(', ')}${j.failed > 3 ? '…' : ''})`
+      setIoMsg(msg)
+      setTimeout(() => setIoMsg(''), 9000)
+    } catch (e: any) {
+      setIoMsg(e?.message || 'Import failed')
+      setTimeout(() => setIoMsg(''), 12000)
+    } finally {
+      setImporting(false)
+      if (importInputRef.current) importInputRef.current.value = ''
+    }
+  }
 
   async function refreshStock() {
     setRefreshingStock(true); setStockMsg('')
@@ -499,6 +536,20 @@ export default function CatalogueAdminPage({ user }: Props) {
               style={{padding:'6px 12px',borderRadius:5,border:`1px solid ${T.purple}60`,background:`${T.purple}15`,color:T.purple,fontSize:12,fontWeight:600,cursor:filtered.length===0?'default':'pointer',fontFamily:'inherit',opacity:filtered.length===0?0.5:1}}>
               ✎ Bulk edit ({filtered.length})
             </button>
+            <button onClick={exportXlsx}
+              title="Download the whole catalogue as an Excel file to bulk-edit dimensions, weights, prices, visibility, etc."
+              style={{padding:'6px 12px',borderRadius:5,border:`1px solid ${T.border2}`,background:'transparent',color:T.text2,fontSize:12,cursor:'pointer',fontFamily:'inherit'}}>
+              ⬇ Export Excel
+            </button>
+            <button onClick={() => importInputRef.current?.click()} disabled={importing}
+              title="Re-import an edited catalogue Excel to bulk-update items. Rows match on the ID column; blank cells are left unchanged."
+              style={{padding:'6px 12px',borderRadius:5,border:`1px solid ${T.green}60`,background:`${T.green}15`,color:T.green,fontSize:12,fontWeight:600,cursor:importing?'wait':'pointer',fontFamily:'inherit'}}>
+              {importing ? 'Importing…' : '⬆ Import Excel'}
+            </button>
+            <input ref={importInputRef} type="file" style={{display:'none'}}
+              accept=".xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+              onChange={e => { const f = e.target.files?.[0]; if (f) onImportFile(f) }} />
+            {ioMsg && <span style={{fontSize:11,color:/fail|error|skipped/i.test(ioMsg)?T.amber:T.green}}>{ioMsg}</span>}
             <PreviewMenu
               distributors={distributors}
               tiers={tiers}
