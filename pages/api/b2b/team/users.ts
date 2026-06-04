@@ -72,8 +72,10 @@ async function handleInvite(user: B2BUser, req: NextApiRequest, res: NextApiResp
     })
   }
 
+  // Invited distributor users set a password on arrival (welcome flow), which
+  // signs them in and lands them on /b2b.
   const baseUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://justautos.app'
-  const redirectTo = `${baseUrl}/b2b/auth/callback`
+  const redirectTo = `${baseUrl}/reset-password?welcome=1&next=${encodeURIComponent('/b2b')}`
 
   let authUserId: string
   try {

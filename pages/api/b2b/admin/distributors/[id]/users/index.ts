@@ -71,9 +71,11 @@ export default withAuth('edit:b2b_distributors', async (req: NextApiRequest, res
     })
   }
 
-  // 3. Send the Supabase invite email
+  // 3. Send the Supabase invite email. Distributors now sign in with a
+  //    password, so the invite lands on the set-password page (welcome flow),
+  //    which establishes the distributor session and drops them on /b2b.
   const baseUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://justautos.app'
-  const redirectTo = `${baseUrl}/b2b/auth/callback`
+  const redirectTo = `${baseUrl}/reset-password?welcome=1&next=${encodeURIComponent('/b2b')}`
 
   let authUserId: string
   try {

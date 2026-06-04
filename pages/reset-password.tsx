@@ -71,16 +71,22 @@ export default function ResetPasswordPage() {
       const supabase = getSupabase()
       const { error: updErr } = await supabase.auth.updateUser({ password })
       if (updErr) throw updErr
+      // Where to go after setting the password. `next` lets the distributor
+      // portal route back to /b2b (with its own session cookie) instead of the
+      // staff home. Only same-origin paths are honoured (no open redirect).
+      const rawNext = router.query.next
+      const next = (typeof rawNext === 'string' && rawNext.startsWith('/') && !rawNext.startsWith('//')) ? rawNext : '/'
+      const sessionEndpoint = next.startsWith('/b2b') ? '/api/b2b/auth/session' : '/api/auth/session'
       const { data: sess } = await supabase.auth.getSession()
       if (sess.session) {
-        await fetch('/api/auth/session', {
+        await fetch(sessionEndpoint, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ access_token: sess.session.access_token, refresh_token: sess.session.refresh_token }),
-        })
+        }).catch(() => {})
       }
       setDone(true)
-      setTimeout(() => router.push('/'), 1400)
+      setTimeout(() => router.push(next), 1400)
     } catch (e: any) {
       setError(e.message || 'Could not set your password')
     } finally {
