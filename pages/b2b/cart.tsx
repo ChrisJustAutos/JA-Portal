@@ -566,10 +566,10 @@ function TotalsPanel({
 
       <div style={{height:10}}/>
 
-      {/* Payment method — bank options skip the card surcharge */}
+      {/* Payment method — PayTo (bank) skips the card surcharge */}
       <div style={{fontSize:10,color:T.text2,textTransform:'uppercase',letterSpacing:'0.06em',fontWeight:500,marginBottom:6}}>Payment method</div>
       <div style={{display:'flex',gap:6,marginBottom:6,flexWrap:'wrap'}}>
-        {([['card','Card / Apple Pay'],['becs','Bank Debit'],['payto','PayTo']] as const).map(([id,label]) => {
+        {([['card','Card / Apple Pay'],['payto','PayTo (bank)']] as const).map(([id,label]) => {
           const on = paymentMethod === id
           return (
             <button key={id} type="button" onClick={() => onPaymentMethodChange(id)}
@@ -587,9 +587,13 @@ function TotalsPanel({
           <div style={{fontSize:10,color:T.text3,marginTop:-4,marginBottom:8,lineHeight:1.5}}>{cardFee.note}</div>
         </>
       ) : (
-        <div style={{fontSize:10,color:T.green,marginTop:-2,marginBottom:8,lineHeight:1.5}}>
-          No card surcharge.{paymentMethod === 'becs' ? ' Bank Debit settles in 2–4 business days.' : ' Paid instantly from your bank.'}
-        </div>
+        <>
+          <div style={{fontSize:10,color:T.green,marginTop:-2,marginBottom:6,lineHeight:1.5}}>No card surcharge — paid instantly from your bank account.</div>
+          <div style={{fontSize:11,color:T.text2,background:T.bg3,border:`1px solid ${T.border}`,borderRadius:6,padding:'8px 10px',marginBottom:8,lineHeight:1.55}}>
+            <strong style={{color:T.text}}>New to PayTo?</strong> It pays securely straight from your bank account — instant, with no card fees.
+            <div style={{marginTop:5}}>At the next step you’ll enter your <strong>PayID</strong> (the email or mobile linked to your bank) or your <strong>BSB&nbsp;+ account number</strong>, then <strong>approve the request in your banking app</strong>. Most major Australian banks support it. <a href="https://payto.com.au/" target="_blank" rel="noreferrer" style={{color:T.blue,textDecoration:'none'}}>Learn more ↗</a></div>
+          </div>
+        </>
       )}
 
       <div style={{borderTop:`1px solid ${T.border2}`,paddingTop:10,marginTop:6}}/>

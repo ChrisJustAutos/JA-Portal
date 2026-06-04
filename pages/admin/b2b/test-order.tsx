@@ -267,8 +267,7 @@ export default function TestOrderPage({ user }: Props) {
                   <span style={{ fontSize: 11, color: T.text3, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Payment method</span>
                   <select style={inp} value={paymentMethod} onChange={e => setPaymentMethod(e.target.value as any)}>
                     <option value="card">Card / Apple Pay (with surcharge)</option>
-                    <option value="becs">Bank Debit (BECS) — no surcharge</option>
-                    <option value="payto">PayTo — no surcharge</option>
+                    <option value="payto">PayTo — bank, no surcharge</option>
                   </select>
                   <span style={{ fontSize: 10.5, color: T.text3 }}>The Stripe test checkout shows only the method picked here.</span>
                 </label>
