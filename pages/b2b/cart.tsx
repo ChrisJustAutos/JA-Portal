@@ -17,6 +17,7 @@ import type { GetServerSideProps } from 'next'
 import B2BLayout from '../../components/b2b/B2BLayout'
 import { requireB2BPageAuth } from '../../lib/b2bAuthServer'
 import { useIsMobile } from '../../lib/useIsMobile'
+import { paytoSurchargeInc } from '../../lib/b2b-payment'
 
 const T = {
   bg:'#0d0f12', bg2:'#131519', bg3:'#1a1d23', bg4:'#21252d',
@@ -543,7 +544,8 @@ function TotalsPanel({
     ? (newSubtotalInc + cardFee.fixed) / (1 - cardFee.pct)
     : newSubtotalInc
   const newCardFeeInc  = applySurcharge ? Math.max(0, charged - newSubtotalInc) : 0
-  const grandTotalInc  = newSubtotalInc + newCardFeeInc
+  const paytoFeeInc    = paymentMethod === 'payto' ? paytoSurchargeInc(newSubtotalInc) : 0
+  const grandTotalInc  = newSubtotalInc + newCardFeeInc + paytoFeeInc
 
   const poTrimmed = customerPo.trim()
   const poTooLong = poTrimmed.length > 20
@@ -588,9 +590,10 @@ function TotalsPanel({
         </>
       ) : (
         <>
-          <div style={{fontSize:10,color:T.green,marginTop:-2,marginBottom:6,lineHeight:1.5}}>No card surcharge — paid instantly from your bank account.</div>
+          <Row label="PayTo fee" value={`+$${paytoFeeInc.toFixed(2)}`} muted/>
+          <div style={{fontSize:10,color:T.green,marginTop:-4,marginBottom:6,lineHeight:1.5}}>Low bank fee (1% + 30c, capped at $3.50) — cheaper than card, paid instantly from your bank.</div>
           <div style={{fontSize:11,color:T.text2,background:T.bg3,border:`1px solid ${T.border}`,borderRadius:6,padding:'8px 10px',marginBottom:8,lineHeight:1.55}}>
-            <strong style={{color:T.text}}>New to PayTo?</strong> It pays securely straight from your bank account — instant, with no card fees.
+            <strong style={{color:T.text}}>New to PayTo?</strong> It pays securely straight from your bank account.
             <div style={{marginTop:5}}>At the next step you’ll enter your <strong>PayID</strong> (the email or mobile linked to your bank) or your <strong>BSB&nbsp;+ account number</strong>, then <strong>approve the request in your banking app</strong>. Most major Australian banks support it. <a href="https://payto.com.au/" target="_blank" rel="noreferrer" style={{color:T.blue,textDecoration:'none'}}>Learn more ↗</a></div>
           </div>
         </>

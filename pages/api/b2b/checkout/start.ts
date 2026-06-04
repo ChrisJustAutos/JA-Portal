@@ -18,6 +18,7 @@ import { withB2BAuth, B2BUser } from '../../../../lib/b2bAuthServer'
 import { getStockForItems, stockState, getCommittedQtyByCatalogue, availableQty } from '../../../../lib/b2b-stock'
 import { applyPricing, effectiveQtyCap } from '../../../../lib/b2b-pricing'
 import { createCheckoutSession, StripeLineItem } from '../../../../lib/stripe'
+import { paytoSurchargeInc } from '../../../../lib/b2b-payment'
 import { assertCheckoutConfigured } from '../../../../lib/b2b-settings'
 import { getLiveQuote, getSatchelRates, getDropshipFreight, type LiveQuoteCartItem } from '../../../../lib/b2b-freight'
 
@@ -440,12 +441,14 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, use
   subtotalEx = round2(subtotalEx)
   gst = round2(gst)
   const subtotalInc = round2(subtotalEx + gst)
-  // Card surcharge only applies to card payments — bank methods (BECS/PayTo)
-  // carry no card-fee recovery (that's the point of offering them).
-  const charged = (paymentMethod === 'card' && subtotalInc > 0)
-    ? (subtotalInc + cfg.cardFeeFixed) / (1 - cfg.cardFeePct)
-    : subtotalInc
-  const cardFeeInc = round2(Math.max(0, charged - subtotalInc))
+  // Payment surcharge by method: card grosses up the full card rate; PayTo
+  // recovers its cheaper fee (1% + $0.30, capped $3.50).
+  let cardFeeInc = 0
+  if (paymentMethod === 'card' && subtotalInc > 0) {
+    cardFeeInc = round2(Math.max(0, (subtotalInc + cfg.cardFeeFixed) / (1 - cfg.cardFeePct) - subtotalInc))
+  } else if (paymentMethod === 'payto') {
+    cardFeeInc = paytoSurchargeInc(subtotalInc)
+  }
   const totalInc   = round2(subtotalInc + cardFeeInc)
 
   // 4. Insert order header (status pending_payment, no Stripe ID yet)
@@ -541,7 +544,7 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, use
       price_data: {
         currency: 'aud',
         product_data: {
-          name: 'Card processing surcharge',
+          name: paymentMethod === 'payto' ? 'PayTo processing fee' : 'Card processing surcharge',
           description: 'Recovers Stripe transaction fees',
         },
         unit_amount: Math.round(cardFeeInc * 100),

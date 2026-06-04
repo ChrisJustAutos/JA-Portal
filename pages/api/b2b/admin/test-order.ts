@@ -11,6 +11,7 @@ import { createClient, SupabaseClient } from '@supabase/supabase-js'
 import { withAuth } from '../../../../lib/authServer'
 import { applyPricing } from '../../../../lib/b2b-pricing'
 import { createCheckoutSession, StripeLineItem } from '../../../../lib/stripe'
+import { paytoSurchargeInc } from '../../../../lib/b2b-payment'
 import { assertCheckoutConfigured } from '../../../../lib/b2b-settings'
 import { getLiveQuote, getSatchelRates, getDropshipFreight, type LiveQuoteCartItem } from '../../../../lib/b2b-freight'
 
@@ -197,8 +198,9 @@ export default withAuth('admin:b2b', async (req: NextApiRequest, res: NextApiRes
 
   subtotalEx = round2(subtotalEx); gst = round2(gst)
   const subtotalInc = round2(subtotalEx + gst)
-  const charged = (paymentMethod === 'card' && subtotalInc > 0) ? (subtotalInc + cfg.cardFeeFixed) / (1 - cfg.cardFeePct) : subtotalInc
-  const cardFeeInc = round2(Math.max(0, charged - subtotalInc))
+  let cardFeeInc = 0
+  if (paymentMethod === 'card' && subtotalInc > 0) cardFeeInc = round2(Math.max(0, (subtotalInc + cfg.cardFeeFixed) / (1 - cfg.cardFeePct) - subtotalInc))
+  else if (paymentMethod === 'payto') cardFeeInc = paytoSurchargeInc(subtotalInc)
   const totalInc = round2(subtotalInc + cardFeeInc)
 
   const { data: order, error: orderErr } = await c.from('b2b_orders').insert({
@@ -238,7 +240,7 @@ export default withAuth('admin:b2b', async (req: NextApiRequest, res: NextApiRes
     quantity: v.qty,
   }))
   if (hasFreight && totalFreightExGst > 0) stripeLineItems.push({ price_data: { currency: 'aud', product_data: { name: 'Freight', description: freightLabel || 'Shipping' }, unit_amount: Math.round(round2(totalFreightExGst * 1.10) * 100) }, quantity: 1 })
-  if (cardFeeInc > 0) stripeLineItems.push({ price_data: { currency: 'aud', product_data: { name: 'Card processing surcharge', description: 'Recovers Stripe transaction fees' }, unit_amount: Math.round(cardFeeInc * 100) }, quantity: 1 })
+  if (cardFeeInc > 0) stripeLineItems.push({ price_data: { currency: 'aud', product_data: { name: paymentMethod === 'payto' ? 'PayTo processing fee' : 'Card processing surcharge', description: 'Recovers Stripe transaction fees' }, unit_amount: Math.round(cardFeeInc * 100) }, quantity: 1 })
 
   let checkoutUrl: string | null = null
   try {
