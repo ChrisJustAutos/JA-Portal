@@ -38,6 +38,7 @@ const TABS = [
   { id: 'contacts', label: 'Contacts', href: '/crm/contacts' },
   { id: 'tasks', label: 'Tasks', href: '/crm/tasks' },
   { id: 'automations', label: 'Automations', href: '/crm/automations' },
+  { id: 'campaigns', label: 'Campaigns', href: '/crm/campaigns' },
 ]
 
 export function fmtMoney(n: number | null | undefined): string {
@@ -59,7 +60,7 @@ export default function CrmShell({
   user, active, children, title,
 }: {
   user: PortalUserSSR
-  active: 'pipeline' | 'contacts' | 'tasks' | 'automations'
+  active: 'pipeline' | 'contacts' | 'tasks' | 'automations' | 'campaigns'
   children: ReactNode
   title?: string
 }) {
