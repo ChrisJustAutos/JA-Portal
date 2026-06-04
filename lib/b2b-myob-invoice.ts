@@ -600,7 +600,12 @@ export async function getMyobInvoicePdf(orderId: string): Promise<{ buffer: Buff
     const conn = await getConnection('JAWS')
     if (!conn) return null
     const num = String((order as any)?.myob_sale_invoice_number || (order as any)?.myob_invoice_number || (order as any)?.order_number || orderId)
-    const pdf = await myobFetchPdf(conn.id, `/accountright/${conn.company_file_id}/Sale/Invoice/Item/${uid}`)
+    // Render with the configured MYOB form template (e.g. the JAWS item-invoice
+    // template) rather than MYOB's default. Set B2B_MYOB_INVOICE_TEMPLATE to the
+    // EXACT template name from MYOB → Setup → Customise Forms.
+    const tpl = (process.env.B2B_MYOB_INVOICE_TEMPLATE || '').trim()
+    const q = tpl ? `?templateName=${encodeURIComponent(tpl)}` : ''
+    const pdf = await myobFetchPdf(conn.id, `/accountright/${conn.company_file_id}/Sale/Invoice/Item/${uid}${q}`)
     return { buffer: Buffer.from(pdf.base64, 'base64'), filename: `Invoice-${num.replace(/[^\w.\-]/g, '_')}.pdf` }
   } catch (e: any) {
     console.error('getMyobInvoicePdf failed (will fall back to system PDF):', e?.message || e)
