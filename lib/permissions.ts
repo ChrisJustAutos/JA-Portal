@@ -226,8 +226,6 @@ export interface PortalTab {
 }
 
 export const PORTAL_TABS: PortalTab[] = [
-  { id: 'overview',      label: 'Overview',        permission: 'view:overview' },
-  { id: 'leads',         label: 'Leads/Orders',    permission: 'view:leads' },
   { id: 'distributors',  label: 'Distributors',    permission: 'view:distributors' },
   { id: 'calls',         label: 'Phone Calls',     permission: 'view:calls' },
   { id: 'crm',           label: 'CRM',             permission: 'view:crm' },
@@ -237,18 +235,13 @@ export const PORTAL_TABS: PortalTab[] = [
   { id: 'workshop-quotes', label: 'Quotes',        permission: 'view:diary' },
   { id: 'workshop-invoices', label: 'Invoices (workshop)', permission: 'view:diary' },
   { id: 'workshop-inventory', label: 'Inventory',  permission: 'view:diary' },
-  { id: 'workshop-tasks',  label: 'Tasks',          permission: 'view:diary' },
   { id: 'reports',       label: 'Reports',         permission: 'view:reports' },
-  { id: 'todos',         label: 'To-Dos',          permission: 'view:todos' },
-  { id: 'jobs',          label: 'Jobs',            permission: 'view:jobs' },
   { id: 'vehicle-sales', label: 'Vehicle Sales',   permission: 'view:vehicle_sales' },
-  { id: 'invoices',      label: 'Invoices',        permission: 'view:invoices' },
   { id: 'pnl',           label: 'P&L',             permission: 'view:pnl' },
   { id: 'stock',         label: 'Stock',           permission: 'view:stock' },
   { id: 'payables',      label: 'Payables',        permission: 'view:payables' },
   { id: 'ap',            label: 'AP Invoices',     permission: 'view:supplier_invoices' },
   { id: 'stocktake',     label: 'Stocktake',       permission: 'view:stocktakes' },
-  { id: 'stripe-myob',   label: 'Stripe → MYOB',   permission: 'view:stripe_myob' },
   { id: 'b2b',           label: 'B2B Portal',      permission: 'view:b2b' },
 ]
 
