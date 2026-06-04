@@ -59,11 +59,9 @@ export const DEFAULT_NAV: PortalNavItem[] = [
   {id:'workshop-invoices',kind:'link', label:'Invoices',    href:'/workshop/invoices',dot:T.amber},
   {id:'workshop-inventory',kind:'link',label:'Inventory',   href:'/workshop/inventory',dot:T.purple},
   {id:'reports',      kind:'link',    label:'Reports',      href:'/reports',       dot:T.green},
-  {id:'vehicle-sales',kind:'link',    label:'Vehicle Sales',href:'/vehicle-sales', dot:'#34c77b'},
   {id:'ap',           kind:'link',    label:'AP Invoices',  href:'/ap',            dot:T.amber},
   {id:'b2b',          kind:'link',    label:'B2B Portal',   href:'/admin/b2b',     dot:T.teal},
   {id:'pnl',          kind:'section', label:'P&L — This Month',  section:'pnl',      dot:T.green},
-  {id:'stock',        kind:'section', label:'Stock & Inventory', section:'stock',    dot:T.purple},
   {id:'payables',     kind:'section', label:'Payables',          section:'payables', dot:T.red,   alertKey:'payables'},
 ]
 
