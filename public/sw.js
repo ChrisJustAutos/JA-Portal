@@ -13,7 +13,7 @@
 //
 // Bump VERSION whenever this file or offline.html changes, to evict old caches.
 
-const VERSION = 'v4'
+const VERSION = 'v5'
 const CACHE = `ja-portal-static-${VERSION}`
 const PRECACHE = ['/offline.html', '/icons/icon-192.png']
 
@@ -73,9 +73,54 @@ self.addEventListener('fetch', (event) => {
   // Everything else: straight to the network.
 })
 
-// Allow the page to tell a freshly-installed SW to take over immediately.
+// Allow the page to tell a freshly-installed SW to take over immediately, and
+// to hand us the push config (VAPID key + subscribe URL) so we can re-subscribe
+// ourselves on `pushsubscriptionchange` even while the app is closed.
 self.addEventListener('message', (event) => {
-  if (event.data === 'skipWaiting') self.skipWaiting()
+  if (event.data === 'skipWaiting') { self.skipWaiting(); return }
+  if (event.data && event.data.type === 'push-config' && event.data.vapid) {
+    event.waitUntil(savePushConfig({ vapid: event.data.vapid, subscribeUrl: event.data.subscribeUrl || '/api/notifications/push-subscribe' }))
+  }
+})
+
+// ── Push subscription self-heal ────────────────────────────────────────────
+// Browsers (Chrome/FCM especially) rotate/expire push subscriptions; when that
+// happens the SW gets `pushsubscriptionchange`. If unhandled, the server's
+// endpoint goes dead and nothing re-registers until the user reopens the app —
+// which is why closed-app notifications "drop out". Here we re-subscribe and
+// re-register the fresh endpoint immediately, no app open required.
+const PUSH_CFG_CACHE = 'ja-push-config'
+async function savePushConfig(cfg) {
+  try { const c = await caches.open(PUSH_CFG_CACHE); await c.put('cfg', new Response(JSON.stringify(cfg))) } catch {}
+}
+async function loadPushConfig() {
+  try { const c = await caches.open(PUSH_CFG_CACHE); const r = await c.match('cfg'); return r ? await r.json() : null } catch { return null }
+}
+function urlBase64ToUint8Array(base64) {
+  const clean = String(base64).replace(/\s+/g, '')
+  const padding = '='.repeat((4 - (clean.length % 4)) % 4)
+  const b64 = (clean + padding).replace(/-/g, '+').replace(/_/g, '/')
+  const raw = atob(b64)
+  const arr = new Uint8Array(raw.length)
+  for (let i = 0; i < raw.length; i++) arr[i] = raw.charCodeAt(i)
+  return arr
+}
+self.addEventListener('pushsubscriptionchange', (event) => {
+  event.waitUntil((async () => {
+    const cfg = await loadPushConfig()
+    if (!cfg || !cfg.vapid) return
+    try {
+      const sub = await self.registration.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToUint8Array(cfg.vapid),
+      })
+      await fetch(cfg.subscribeUrl, {
+        method: 'POST', credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(sub.toJSON()),
+      })
+    } catch (e) { /* best-effort; the page-side ensure will recover on next open */ }
+  })())
 })
 
 // ── Web Push (fires even when the app is closed) ───────────────────────────

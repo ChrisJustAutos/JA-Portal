@@ -51,6 +51,9 @@ export async function ensurePushSubscription(subscribeUrl = '/api/notifications/
       body: JSON.stringify(sub.toJSON()),
     })
     if (!r.ok) return { ok: false, reason: `couldn’t save subscription (HTTP ${r.status})` }
+    // Hand the SW the config so it can re-subscribe itself if the browser
+    // rotates/expires the subscription while the app is closed.
+    try { (reg.active || navigator.serviceWorker.controller)?.postMessage({ type: 'push-config', vapid, subscribeUrl }) } catch {}
     return { ok: true }
   } catch (e: any) {
     return { ok: false, reason: e?.message ? String(e.message).slice(0, 100) : 'subscribe failed' }
