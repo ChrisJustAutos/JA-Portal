@@ -51,6 +51,12 @@ const ICONS: Record<string, (p: IconProps) => JSX.Element> = {
     <rect x="3" y="4" width="18" height="17" rx="2"/><path d="M8 2v4M16 2v4M3 10h18"/>
     <circle cx="12" cy="15.5" r="3"/><path d="M12 14.2V15.5l1 .9"/>
   </>, p),
+  crm: (p) => svg(<>
+    <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/>
+    <circle cx="9" cy="7" r="3.5"/>
+    <path d="M22 21v-2a4 4 0 0 0-3-3.85"/>
+    <path d="m16 3.5 1.4 1.4L20 2.3"/>
+  </>, p),
   'workshop-quotes': (p) => svg(<>
     <path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/>
     <path d="M14 3v5h5"/><path d="M9 13h6M9 17h6"/>

@@ -54,6 +54,7 @@ export const DEFAULT_NAV: PortalNavItem[] = [
   {id:'leads',        kind:'link',    label:'Leads/Orders', href:'/sales',         dot:'#a78bfa'},
   {id:'distributors', kind:'link',    label:'Distributors', href:'/distributors',  dot:T.blue},
   {id:'calls',        kind:'link',    label:'Phone Calls',  href:'/calls',         dot:T.teal},
+  {id:'crm',          kind:'link',    label:'CRM',          href:'/crm',           dot:T.green, alertKey:'crm'},
   {id:'messages',     kind:'link',    label:'Messages',     href:'/messages',      dot:T.purple, alertKey:'messages'},
   {id:'diary',        kind:'link',    label:'Workshop Diary',href:'/diary',        dot:T.blue},
   {id:'workshop-customers',kind:'link',label:'Customers',  href:'/workshop/customers',dot:T.blue},

@@ -44,6 +44,7 @@ export type Permission =
   | 'view:stripe_myob'
   | 'view:diary'
   | 'view:messages'
+  | 'view:crm'
   | 'manage:inbox'
   // Actions
   | 'edit:any'
@@ -57,6 +58,7 @@ export type Permission =
   | 'edit:b2b_orders'
   | 'edit:stripe_myob'
   | 'edit:bookings'
+  | 'edit:crm'
   | 'generate:reports'
   | 'monitor:calls'
   // Admin
@@ -75,6 +77,7 @@ const ROLE_PERMISSIONS: Record<UserRole, Permission[]> = {
     'monitor:calls',
     'view:diary','edit:bookings',
     'view:messages','manage:inbox',
+    'view:crm','edit:crm',
     'admin:users','admin:settings','admin:audit_log','admin:b2b',
   ],
   manager: [
@@ -86,6 +89,7 @@ const ROLE_PERMISSIONS: Record<UserRole, Permission[]> = {
     'monitor:calls',
     'view:diary','edit:bookings',
     'view:messages','manage:inbox',
+    'view:crm','edit:crm',
   ],
   sales: [
     'view:dashboards','view:overview','view:leads','view:distributors','view:calls','view:reports',
@@ -93,6 +97,7 @@ const ROLE_PERMISSIONS: Record<UserRole, Permission[]> = {
     'edit:leads','generate:reports',
     'view:diary','edit:bookings',
     'view:messages','manage:inbox',
+    'view:crm','edit:crm',
   ],
   // Least-privilege workshop login: only the workshop area (diary + jobs +
   // quotes + inventory + tasks all gate on view:diary). No financial/leads/
@@ -225,6 +230,7 @@ export const PORTAL_TABS: PortalTab[] = [
   { id: 'leads',         label: 'Leads/Orders',    permission: 'view:leads' },
   { id: 'distributors',  label: 'Distributors',    permission: 'view:distributors' },
   { id: 'calls',         label: 'Phone Calls',     permission: 'view:calls' },
+  { id: 'crm',           label: 'CRM',             permission: 'view:crm' },
   { id: 'messages',      label: 'Messages',        permission: 'view:messages' },
   { id: 'diary',         label: 'Workshop Diary',  permission: 'view:diary' },
   { id: 'workshop-customers', label: 'Customers',  permission: 'view:diary' },
