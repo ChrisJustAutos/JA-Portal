@@ -24,7 +24,7 @@ export default withAuth('view:diary', async (req, res, user) => {
   const db = sb()
 
   if (req.method === 'GET') {
-    const { data: types, error } = await db.from('workshop_job_types').select('*').order('sort_order', { ascending: true }).order('name', { ascending: true })
+    const { data: types, error } = await db.from('workshop_job_types').select('*').order('name', { ascending: true })
     if (error) return res.status(500).json({ error: error.message })
     const ids = (types || []).map((t: any) => t.id)
     let lines: any[] = []

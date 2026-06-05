@@ -15,7 +15,7 @@ import {
   BOOKING_STATUS_META, BOOKING_STATUSES, BookingStatus,
   vehicleLabel, customerLabel,
   ymdBrisbane, brisbaneDayBounds, addDaysYmd, weekStartYmd,
-  JOB_TYPES, jobTypeLabel,
+  jobTypeLabel,
 } from '../lib/workshop'
 
 interface PortalUserSSR { id: string; email: string; displayName: string | null; role: 'admin'|'manager'|'sales'|'accountant'|'viewer'; visibleTabs?: string[] | null }
@@ -667,7 +667,7 @@ function BookingModal({ initial, techs, canEdit, onClose, onSaved }: {
     let alive = true
     fetch('/api/workshop/job-types').then(r => r.json()).then(d => {
       if (!alive) return
-      setPresets((d.jobTypes || []).filter((t: any) => t.active).map((t: any) => ({ id: t.id, name: t.name, description: t.description, default_duration_min: t.default_duration_min })))
+      setPresets((d.jobTypes || []).filter((t: any) => t.active).map((t: any) => ({ id: t.id, name: t.name, description: t.description, default_duration_min: t.default_duration_min })).sort((a: any, b: any) => a.name.localeCompare(b.name)))
     }).catch(() => undefined)
     return () => { alive = false }
   }, [])
@@ -767,16 +767,9 @@ function BookingModal({ initial, techs, canEdit, onClose, onSaved }: {
             <Field label="Bay"><input value={bay} disabled={!canEdit} onChange={e => setBay(e.target.value)} placeholder="e.g. Hoist 1" style={inp} /></Field>
           </div>
 
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 120px', gap: 8 }}>
-            <Field label="Category">
-              <select value={jobType} disabled={!canEdit} onChange={e => setJobType(e.target.value)} style={inp} title="Diary category for colour-coding and reporting">
-                {JOB_TYPES.map(j => <option key={j.value} value={j.value}>{j.label}</option>)}
-              </select>
-            </Field>
-            <Field label="Est. value">
-              <input value={estValue} disabled={!canEdit} inputMode="decimal" onChange={e => setEstValue(e.target.value)} placeholder="$" style={inp} />
-            </Field>
-          </div>
+          <Field label="Est. value">
+            <input value={estValue} disabled={!canEdit} inputMode="decimal" onChange={e => setEstValue(e.target.value)} placeholder="$" style={{ ...inp, maxWidth: 160 }} />
+          </Field>
           {presets.length > 0 && (
             <Field label={`Apply job types (${applyPresetIds.length} added — fills description + lines)`}>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
