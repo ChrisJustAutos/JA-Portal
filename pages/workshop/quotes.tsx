@@ -7,6 +7,7 @@ import Head from 'next/head'
 import Link from 'next/link'
 import { useRouter } from 'next/router'
 import PortalTopBar from '../../lib/PortalTopBar'
+import WorkshopTabs from '../../components/WorkshopTabs'
 import { requirePageAuth } from '../../lib/authServer'
 import { roleHasPermission } from '../../lib/permissions'
 import { QUOTE_STATUS_META, QUOTE_STATUSES, QuoteStatus, vehicleLabel, customerLabel } from '../../lib/workshop'
@@ -80,8 +81,9 @@ export default function QuotesPage({ user }: { user: PortalUserSSR }) {
       <Head><title>Quotes — Just Autos</title><meta name="viewport" content="width=device-width,initial-scale=1"/><meta name="robots" content="noindex,nofollow"/></Head>
       <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', overflow: 'hidden', fontFamily: "'DM Sans',system-ui,sans-serif", color: T.text }}>
         <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet"/>
-        <PortalTopBar activeId="workshop-quotes" lastRefresh={lastRefresh} onRefresh={load} refreshing={loading}
+        <PortalTopBar activeId="diary" lastRefresh={lastRefresh} onRefresh={load} refreshing={loading}
           currentUserRole={user.role} currentUserVisibleTabs={user.visibleTabs} currentUserName={user.displayName} currentUserEmail={user.email} />
+        <WorkshopTabs active="quotes" role={user.role} />
 
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', background: T.bg }}>
           <div style={{ height: 52, background: T.bg2, borderBottom: `1px solid ${T.border}`, display: 'flex', alignItems: 'center', padding: '0 20px', gap: 10, flexShrink: 0 }}>

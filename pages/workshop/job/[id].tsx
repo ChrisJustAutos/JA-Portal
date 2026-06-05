@@ -10,6 +10,7 @@ import Head from 'next/head'
 import Link from 'next/link'
 import { useRouter } from 'next/router'
 import PortalTopBar from '../../../lib/PortalTopBar'
+import WorkshopTabs from '../../../components/WorkshopTabs'
 import { requirePageAuth } from '../../../lib/authServer'
 import { roleHasPermission } from '../../../lib/permissions'
 import {
@@ -221,6 +222,7 @@ export default function JobCardPage({ user }: { user: PortalUserSSR }) {
       <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', overflow: 'hidden', fontFamily: "'DM Sans',system-ui,sans-serif", color: T.text }}>
         <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet"/>
         <PortalTopBar activeId="diary" currentUserRole={user.role} currentUserVisibleTabs={user.visibleTabs} currentUserName={user.displayName} currentUserEmail={user.email} />
+        <WorkshopTabs active="diary" role={user.role} />
 
         <div style={{ flex: 1, overflow: 'auto', background: T.bg, padding: 20 }}>
           <div style={{ maxWidth: 1500, margin: '0 auto' }}>

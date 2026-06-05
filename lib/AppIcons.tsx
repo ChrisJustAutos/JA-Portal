@@ -47,10 +47,9 @@ const ICONS: Record<string, (p: IconProps) => JSX.Element> = {
     <path d="M21 11.5a8.4 8.4 0 0 1-9 8.4 9.5 9.5 0 0 1-3.3-.5L3 21l1.6-4.7A8 8 0 0 1 3.5 11.5 8.4 8.4 0 0 1 12 3a8.4 8.4 0 0 1 9 8.5Z"/>
     <path d="M8 11h.01M12 11h.01M16 11h.01"/>
   </>, p),
-  diary: (p) => svg(<>
-    <rect x="3" y="4" width="18" height="17" rx="2"/><path d="M8 2v4M16 2v4M3 10h18"/>
-    <circle cx="12" cy="15.5" r="3"/><path d="M12 14.2V15.5l1 .9"/>
-  </>, p),
+  diary: (p) => svg(
+    <path d="M14.7 6.3a4 4 0 0 0-5.2 5.2L3 18l3 3 6.5-6.5a4 4 0 0 0 5.2-5.2l-2.5 2.5-2.5-.7-.7-2.5 2.4-2.6Z"/>
+  , p),
   crm: (p) => svg(<>
     <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/>
     <circle cx="9" cy="7" r="3.5"/>

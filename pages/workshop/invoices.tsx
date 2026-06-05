@@ -7,6 +7,7 @@ import Head from 'next/head'
 import Link from 'next/link'
 import { useRouter } from 'next/router'
 import PortalTopBar from '../../lib/PortalTopBar'
+import WorkshopTabs from '../../components/WorkshopTabs'
 import { requirePageAuth } from '../../lib/authServer'
 import { roleHasPermission } from '../../lib/permissions'
 
@@ -74,8 +75,9 @@ export default function InvoicesPage({ user }: { user: PortalUserSSR }) {
     <>
       <Head><title>Invoices — Just Autos</title><meta name="robots" content="noindex,nofollow"/></Head>
       <div style={{ display:'flex', flexDirection:'column', height:'100vh', overflow:'hidden', fontFamily:"'DM Sans',system-ui,sans-serif", color:T.text }}>
-        <PortalTopBar activeId="workshop-invoices" lastRefresh={lastRefresh} onRefresh={load} refreshing={loading}
+        <PortalTopBar activeId="diary" lastRefresh={lastRefresh} onRefresh={load} refreshing={loading}
           currentUserRole={user.role} currentUserVisibleTabs={user.visibleTabs} currentUserName={user.displayName} currentUserEmail={user.email} />
+        <WorkshopTabs active="invoices" role={user.role} />
 
         <div style={{ flex:1, display:'flex', flexDirection:'column', overflow:'hidden', background:T.bg }}>
           <div style={{ background:T.bg2, borderBottom:`1px solid ${T.border}`, padding:'10px 20px', display:'flex', alignItems:'center', gap:10, flexWrap:'wrap', flexShrink:0 }}>

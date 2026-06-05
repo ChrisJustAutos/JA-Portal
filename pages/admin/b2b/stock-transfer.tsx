@@ -17,6 +17,7 @@ import { useEffect, useMemo, useState } from 'react'
 import Head from 'next/head'
 import PortalTopBar from '../../../lib/PortalTopBar'
 import InventoryTabs from '../../../components/InventoryTabs'
+import WorkshopTabs from '../../../components/WorkshopTabs'
 import { requirePageAuth } from '../../../lib/authServer'
 import type { UserRole } from '../../../lib/permissions'
 
@@ -271,12 +272,13 @@ export default function StockTransferPage({ user }: Props) {
       <Head><title>Stock Transfer · Inventory · JA Portal</title></Head>
       <div style={{display:'flex',flexDirection:'column',minHeight:'100vh',background:T.bg,color:T.text,fontFamily:'system-ui,-apple-system,sans-serif'}}>
         <PortalTopBar
-          activeId="workshop-inventory"
+          activeId="diary"
           currentUserRole={user.role}
           currentUserVisibleTabs={user.visibleTabs}
           currentUserName={user.displayName}
           currentUserEmail={user.email}
         />
+        <WorkshopTabs active="inventory" role={user.role} />
         <InventoryTabs active="transfer" role={user.role} />
         <main className="b2b-admin-main" style={{flex:1,padding:'28px 32px',maxWidth:1200,width:'100%',boxSizing:'border-box'}}>
 

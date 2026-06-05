@@ -8,6 +8,7 @@ import Head from 'next/head'
 import Link from 'next/link'
 import { useRouter } from 'next/router'
 import PortalTopBar from '../../../lib/PortalTopBar'
+import WorkshopTabs from '../../../components/WorkshopTabs'
 import { requirePageAuth } from '../../../lib/authServer'
 import { roleHasPermission } from '../../../lib/permissions'
 
@@ -69,7 +70,8 @@ export default function InvoiceDetailPage({ user }: { user: PortalUserSSR }) {
     <>
       <Head><title>{inv ? `Invoice ${inv.md_id || inv.id.slice(0,8)} — Just Autos` : 'Invoice — Just Autos'}</title></Head>
       <div style={{ display:'flex', flexDirection:'column', height:'100vh', overflow:'hidden', fontFamily:"'DM Sans',system-ui,sans-serif", color:T.text }}>
-        <PortalTopBar activeId="workshop-invoices" currentUserRole={user.role} currentUserVisibleTabs={user.visibleTabs} currentUserName={user.displayName} currentUserEmail={user.email} />
+        <PortalTopBar activeId="diary" currentUserRole={user.role} currentUserVisibleTabs={user.visibleTabs} currentUserName={user.displayName} currentUserEmail={user.email} />
+        <WorkshopTabs active="invoices" role={user.role} />
         <div style={{ flex:1, overflow:'auto', background:T.bg }}>
           <div style={{ maxWidth:1400, margin:'0 auto', padding:'24px 28px' }}>
             <Link href="/workshop/invoices" style={{ fontSize:11, color:T.text3, textDecoration:'none', fontFamily:'monospace' }}>← Invoices</Link>

@@ -7,6 +7,7 @@ import { useEffect, useState, useCallback } from 'react'
 import Head from 'next/head'
 import PortalTopBar from '../../lib/PortalTopBar'
 import InventoryTabs from '../../components/InventoryTabs'
+import WorkshopTabs from '../../components/WorkshopTabs'
 import { requirePageAuth } from '../../lib/authServer'
 import { roleHasPermission } from '../../lib/permissions'
 
@@ -61,8 +62,9 @@ export default function InventoryPage({ user }: { user: PortalUserSSR }) {
       <Head><title>Inventory — Just Autos</title><meta name="viewport" content="width=device-width,initial-scale=1"/><meta name="robots" content="noindex,nofollow"/></Head>
       <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', overflow: 'hidden', fontFamily: "'DM Sans',system-ui,sans-serif", color: T.text }}>
         <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet"/>
-        <PortalTopBar activeId="workshop-inventory" lastRefresh={lastRefresh} onRefresh={load} refreshing={loading}
+        <PortalTopBar activeId="diary" lastRefresh={lastRefresh} onRefresh={load} refreshing={loading}
           currentUserRole={user.role} currentUserVisibleTabs={user.visibleTabs} currentUserName={user.displayName} currentUserEmail={user.email} />
+        <WorkshopTabs active="inventory" role={user.role} />
         <InventoryTabs active="inventory" role={user.role} />
 
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', background: T.bg }}>

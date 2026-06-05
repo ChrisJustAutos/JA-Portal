@@ -6,6 +6,7 @@ import { useEffect, useState, useCallback, useRef } from 'react'
 import Head from 'next/head'
 import Link from 'next/link'
 import PortalTopBar from '../../lib/PortalTopBar'
+import WorkshopTabs from '../../components/WorkshopTabs'
 import { requirePageAuth } from '../../lib/authServer'
 
 interface PortalUserSSR { id: string; email: string; displayName: string | null; role: 'admin'|'manager'|'sales'|'accountant'|'viewer'|'workshop'; visibleTabs?: string[] | null }
@@ -63,7 +64,8 @@ export default function CustomersPage({ user }: { user: PortalUserSSR }) {
     <>
       <Head><title>Customers · JA Portal</title></Head>
       <div style={{ display:'flex', flexDirection:'column', height:'100vh', background:T.bg, color:T.text, fontFamily:'"DM Sans", system-ui, sans-serif' }}>
-        <PortalTopBar activeId="workshop-customers" currentUserRole={user.role} currentUserVisibleTabs={user.visibleTabs} currentUserName={user.displayName} currentUserEmail={user.email} />
+        <PortalTopBar activeId="diary" currentUserRole={user.role} currentUserVisibleTabs={user.visibleTabs} currentUserName={user.displayName} currentUserEmail={user.email} />
+        <WorkshopTabs active="customers" role={user.role} />
         <div style={{ flex:1, overflowY:'auto' }}>
           <div style={{ maxWidth:1600, margin:'0 auto', padding:'24px 28px' }}>
             <div style={{ display:'flex', alignItems:'baseline', justifyContent:'space-between', marginBottom:18, gap:16, flexWrap:'wrap' }}>

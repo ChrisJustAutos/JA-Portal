@@ -8,6 +8,7 @@ import { useEffect, useState, useCallback, useMemo } from 'react'
 import Head from 'next/head'
 import { useRouter } from 'next/router'
 import PortalTopBar from '../lib/PortalTopBar'
+import WorkshopTabs from '../components/WorkshopTabs'
 import { requirePageAuth } from '../lib/authServer'
 import { roleHasPermission } from '../lib/permissions'
 import {
@@ -299,6 +300,7 @@ export default function DiaryPage({ user }: { user: PortalUserSSR }) {
           currentUserName={user.displayName}
           currentUserEmail={user.email}
         />
+        <WorkshopTabs active="diary" role={user.role} />
 
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', background: T.bg }}>
           {/* Control bar */}
