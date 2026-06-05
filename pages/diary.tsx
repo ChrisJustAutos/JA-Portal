@@ -656,21 +656,33 @@ function BookingModal({ initial, techs, canEdit, onClose, onSaved }: {
   const [saving, setSaving] = useState(false)
   const [err, setErr] = useState('')
   const [showSplit, setShowSplit] = useState(false)
+  // Vehicle models + the selected vehicle's model — used to filter the job-type
+  // picker so only job types assigned to this vehicle's model are offered.
+  const [models, setModels] = useState<Array<{ id: string; name: string }>>([])
+  const [vehicleModelId, setVehicleModelId] = useState<string | null>(null)
 
   // Imported job-type presets. Booking can stack multiple — each one's
   // description appends to the booking's description, and on save the lines
   // from each picked preset get applied in sequence.
-  const [presets, setPresets] = useState<Array<{ id: string; name: string; description: string | null; default_duration_min: number | null }>>([])
+  const [presets, setPresets] = useState<Array<{ id: string; name: string; description: string | null; default_duration_min: number | null; model_ids: string[] }>>([])
   const [applyPresetIds, setApplyPresetIds] = useState<string[]>([])
   const [presetToAdd, setPresetToAdd] = useState<string>('')
   useEffect(() => {
     let alive = true
     fetch('/api/workshop/job-types').then(r => r.json()).then(d => {
       if (!alive) return
-      setPresets((d.jobTypes || []).filter((t: any) => t.active).map((t: any) => ({ id: t.id, name: t.name, description: t.description, default_duration_min: t.default_duration_min })).sort((a: any, b: any) => a.name.localeCompare(b.name)))
+      setPresets((d.jobTypes || []).filter((t: any) => t.active).map((t: any) => ({ id: t.id, name: t.name, description: t.description, default_duration_min: t.default_duration_min, model_ids: t.model_ids || [] })).sort((a: any, b: any) => a.name.localeCompare(b.name)))
     }).catch(() => undefined)
+    fetch('/api/workshop/vehicle-models').then(r => r.json()).then(d => { if (alive) setModels(d.models || []) }).catch(() => undefined)
     return () => { alive = false }
   }, [])
+  // Resolve the selected vehicle's model so the job-type list can filter to it.
+  useEffect(() => {
+    if (!vehicle?.id) { setVehicleModelId(null); return }
+    let alive = true
+    fetch(`/api/workshop/vehicles?id=${vehicle.id}`).then(r => r.json()).then(d => { if (alive) setVehicleModelId(d.vehicle?.model_id || null) }).catch(() => undefined)
+    return () => { alive = false }
+  }, [vehicle?.id])
   function addPreset(id: string) {
     if (!id) return
     if (applyPresetIds.includes(id)) { setPresetToAdd(''); return }  // already added
@@ -744,6 +756,18 @@ function BookingModal({ initial, techs, canEdit, onClose, onSaved }: {
             disabled={!canEdit} onPick={(v) => setCustomer(v ? { id: v.id, name: v.label } : null)} />
           <EntityPicker label="Vehicle" kind="vehicle" customerId={customer?.id || null} value={vehicle}
             disabled={!canEdit} onPick={(v) => setVehicle(v)} />
+          {vehicle?.id && models.length > 0 && (
+            <Field label="Model (filters the job types below)">
+              <select value={vehicleModelId || ''} disabled={!canEdit} onChange={async e => {
+                const mid = e.target.value || null
+                setVehicleModelId(mid)
+                try { await fetch(`/api/workshop/vehicles?id=${vehicle.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model_id: mid }) }) } catch { /* non-fatal */ }
+              }} style={inp} title="Tagging the vehicle's model limits the job-type list to jobs assigned to that model">
+                <option value="">— No model (shows all job types) —</option>
+                {models.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
+              </select>
+            </Field>
+          )}
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
             <Field label="Start date"><input type="date" value={ymd} disabled={!canEdit} onChange={e => { const v = e.target.value; setYmd(v); if (endYmd < v) setEndYmd(v) }} style={inp} /></Field>
@@ -788,7 +812,7 @@ function BookingModal({ initial, techs, canEdit, onClose, onSaved }: {
                 )}
                 <select value={presetToAdd} disabled={!canEdit} onChange={e => addPreset(e.target.value)} style={inp} title="Add a preset — its description appends to this booking and its lines get applied on save">
                   <option value="">+ Add job type…</option>
-                  {presets.filter(p => !applyPresetIds.includes(p.id)).map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                  {(vehicle?.id && vehicleModelId ? presets.filter(p => (p.model_ids || []).includes(vehicleModelId)) : presets).filter(p => !applyPresetIds.includes(p.id)).map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
                 </select>
               </div>
             </Field>

@@ -334,17 +334,42 @@ function AccountsSection({ settings, income, banks, categories, accountsError, o
 
 function JobTypesSection() {
   const [types, setTypes] = useState<any[]>([])
+  const [models, setModels] = useState<any[]>([])
   const [newName, setNewName] = useState('')
+  const [newModel, setNewModel] = useState('')
   const [openId, setOpenId] = useState<string | null>(null)
+  const loadModels = useCallback(async () => { try { const r = await fetch('/api/workshop/vehicle-models'); if (r.ok) setModels((await r.json()).models || []) } catch { /* */ } }, [])
   const load = useCallback(async () => { try { const r = await fetch('/api/workshop/job-types'); if (r.ok) setTypes((await r.json()).jobTypes || []) } catch { /* */ } }, [])
-  useEffect(() => { load() }, [load])
+  useEffect(() => { load(); loadModels() }, [load, loadModels])
   async function api(url: string, method: string, body?: any) {
     await fetch(url, { method, headers: body ? { 'Content-Type': 'application/json' } : undefined, body: body ? JSON.stringify(body) : undefined })
     await load()
   }
+  async function modelApi(url: string, method: string, body?: any) {
+    await fetch(url, { method, headers: body ? { 'Content-Type': 'application/json' } : undefined, body: body ? JSON.stringify(body) : undefined })
+    await loadModels(); await load()
+  }
   function addType() { const n = newName.trim(); if (!n) return; setNewName(''); api('/api/workshop/job-types', 'POST', { name: n, sort_order: (types.length + 1) * 10 }) }
+  function addModel() { const n = newModel.trim(); if (!n) return; setNewModel(''); modelApi('/api/workshop/vehicle-models', 'POST', { name: n, sort_order: (models.length + 1) * 10 }) }
+  function toggleModel(t: any, modelId: string) { const cur: string[] = t.model_ids || []; const next = cur.includes(modelId) ? cur.filter(x => x !== modelId) : [...cur, modelId]; api(`/api/workshop/job-types?id=${t.id}`, 'PATCH', { model_ids: next }) }
   return (
     <Card title="Job types (presets)" hint="A job type is a named job with preset labour + parts. Apply it on a job card to fill the lines in one click. Importable from your MechanicDesk job-type export.">
+      <div style={{ marginBottom: 12, paddingBottom: 12, borderBottom: `1px solid ${T.border}` }}>
+        <div style={{ fontSize: 11, color: T.text2, fontWeight: 600, marginBottom: 6 }}>Vehicle models <span style={{ color: T.text3, fontWeight: 400 }}>— tag job types with models below so the diary only offers the jobs relevant to a vehicle.</span></div>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 8 }}>
+          {models.map(m => (
+            <span key={m.id} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '4px 8px', background: T.bg3, border: `1px solid ${T.border2}`, borderRadius: 4, fontSize: 11 }}>
+              {m.name}
+              <button onClick={() => { if (confirm(`Delete model “${m.name}”? It’s removed from all job types and vehicles.`)) modelApi(`/api/workshop/vehicle-models/${m.id}`, 'DELETE') }} style={{ background: 'none', border: 'none', color: T.text3, cursor: 'pointer', fontSize: 12, padding: 0, lineHeight: 1 }}>×</button>
+            </span>
+          ))}
+          {models.length === 0 && <span style={{ fontSize: 11, color: T.text3, fontStyle: 'italic' }}>No models yet — add e.g. “200 Series”, “79 Series”, “300 Series”.</span>}
+        </div>
+        <div style={{ display: 'flex', gap: 6 }}>
+          <input value={newModel} onChange={e => setNewModel(e.target.value)} placeholder="New model (e.g. 300 Series)" style={{ ...inp, flex: 1, maxWidth: 260 }} onKeyDown={e => { if (e.key === 'Enter') addModel() }} />
+          <button onClick={addModel} style={pbtn(T.blue)}>+ Add model</button>
+        </div>
+      </div>
       {types.length === 0 && <div style={{ fontSize: 12, color: T.text3, padding: '4px 0 12px' }}>No job types yet — add one below, or import from MechanicDesk.</div>}
       {types.map(t => (
         <div key={t.id} style={{ border: `1px solid ${T.border}`, borderRadius: 8, marginBottom: 8, background: T.bg3, opacity: t.active ? 1 : 0.55 }}>
@@ -355,6 +380,14 @@ function JobTypesSection() {
             <button onClick={() => setOpenId(openId === t.id ? null : t.id)} style={pbtn(T.blue)}>{openId === t.id ? 'Close' : 'Edit lines'}</button>
             <button onClick={() => { if (confirm(`Delete job type “${t.name}”?`)) api(`/api/workshop/job-types?id=${t.id}`, 'DELETE') }} title="Delete" style={{ background: 'transparent', border: 'none', color: T.text3, cursor: 'pointer', fontSize: 16 }}>×</button>
           </div>
+          {models.length > 0 && (
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, padding: '0 10px 8px', alignItems: 'center' }}>
+              <span style={{ fontSize: 10, color: T.text3, marginRight: 2 }}>Models:</span>
+              {models.map(m => { const on = (t.model_ids || []).includes(m.id); return (
+                <button key={m.id} onClick={() => toggleModel(t, m.id)} title={on ? 'Click to unassign' : 'Click to assign'} style={{ fontSize: 10, padding: '3px 8px', borderRadius: 10, cursor: 'pointer', fontFamily: 'inherit', background: on ? `${T.blue}22` : 'transparent', color: on ? T.blue : T.text3, border: `1px solid ${on ? T.blue : T.border2}` }}>{m.name}</button>
+              )})}
+            </div>
+          )}
           {openId === t.id && (
             <div style={{ padding: '0 10px 10px' }}>
               <div style={{ display: 'grid', gridTemplateColumns: '64px 1fr 50px 80px 26px', gap: 6, padding: '4px 2px', fontSize: 9, color: T.text3, textTransform: 'uppercase', letterSpacing: '0.04em' }}><div>Type</div><div>Description</div><div style={{ textAlign: 'right' }}>Qty</div><div style={{ textAlign: 'right' }}>Unit ex</div><div /></div>

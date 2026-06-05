@@ -28,13 +28,19 @@ export default withAuth('view:diary', async (req, res, user) => {
     if (error) return res.status(500).json({ error: error.message })
     const ids = (types || []).map((t: any) => t.id)
     let lines: any[] = []
+    let typeModels: any[] = []
     if (ids.length) {
-      const { data: ld } = await db.from('workshop_job_type_lines').select('*').in('job_type_id', ids).order('sort_order', { ascending: true })
-      lines = ld || []
+      const [{ data: ld }, { data: tm }] = await Promise.all([
+        db.from('workshop_job_type_lines').select('*').in('job_type_id', ids).order('sort_order', { ascending: true }),
+        db.from('workshop_job_type_models').select('job_type_id, model_id').in('job_type_id', ids),
+      ])
+      lines = ld || []; typeModels = tm || []
     }
     const byType: Record<string, any[]> = {}
     for (const l of lines) (byType[l.job_type_id] ||= []).push(l)
-    return res.status(200).json({ jobTypes: (types || []).map((t: any) => ({ ...t, lines: byType[t.id] || [] })) })
+    const modelsByType: Record<string, string[]> = {}
+    for (const m of typeModels) (modelsByType[m.job_type_id] ||= []).push(m.model_id)
+    return res.status(200).json({ jobTypes: (types || []).map((t: any) => ({ ...t, lines: byType[t.id] || [], model_ids: modelsByType[t.id] || [] })) })
   }
 
   if (!roleHasPermission(user.role, 'edit:bookings')) return res.status(403).json({ error: 'Forbidden' })
@@ -53,7 +59,10 @@ export default withAuth('view:diary', async (req, res, user) => {
       sort_order: Number(body.sort_order) || 0,
     }).select('*').single()
     if (error) return res.status(error.code === '23505' ? 409 : 500).json({ error: error.code === '23505' ? 'Code already in use.' : error.message })
-    return res.status(201).json({ ok: true, jobType: { ...data, lines: [] } })
+    if (Array.isArray(body.model_ids) && body.model_ids.length) {
+      await db.from('workshop_job_type_models').insert(body.model_ids.map((m: string) => ({ job_type_id: data.id, model_id: m })))
+    }
+    return res.status(201).json({ ok: true, jobType: { ...data, lines: [], model_ids: body.model_ids || [] } })
   }
 
   if (req.method === 'PATCH') {
@@ -68,6 +77,10 @@ export default withAuth('view:diary', async (req, res, user) => {
     }
     const { error } = await db.from('workshop_job_types').update(patch).eq('id', id)
     if (error) return res.status(error.code === '23505' ? 409 : 500).json({ error: error.code === '23505' ? 'Code already in use.' : error.message })
+    if (Array.isArray(body.model_ids)) {
+      await db.from('workshop_job_type_models').delete().eq('job_type_id', id)
+      if (body.model_ids.length) await db.from('workshop_job_type_models').insert(body.model_ids.map((m: string) => ({ job_type_id: id, model_id: m })))
+    }
     return res.status(200).json({ ok: true })
   }
 
