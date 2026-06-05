@@ -306,6 +306,21 @@ function EntityPicker({ label, kind, value, customerId, disabled, onPick }: {
     return () => clearTimeout(t)
   }, [q, open, kind, customerId, value])
 
+  // Vehicle auto-populate: when a customer is chosen, pull their vehicles and
+  // auto-select if there's exactly one; otherwise pre-load the list.
+  useEffect(() => {
+    if (kind !== 'vehicle' || !customerId || value) return
+    let alive = true
+    fetch(`/api/workshop/vehicles?customer_id=${customerId}`).then(r => r.json()).then(d => {
+      if (!alive) return
+      const vs = d.vehicles || []
+      if (vs.length === 1) onPick({ id: vs[0].id, label: vehicleLabel(vs[0]) })
+      else setResults(vs.map((v: any) => ({ id: v.id, label: vehicleLabel(v) })))
+    }).catch(() => undefined)
+    return () => { alive = false }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [kind, customerId, value])
+
   async function create() {
     setBusy(true)
     try {
