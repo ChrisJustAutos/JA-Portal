@@ -452,6 +452,7 @@ function DayGrid({ bookings, techs, date, grid, capacity, canEdit, canEditCapaci
   const byLane = (ext: string) => bookings.filter(b => (b.technician_ext || '') === ext)
   // Live drop hint: which lane + the time the booking would land at.
   const [dropHint, setDropHint] = useState<{ ext: string; top: number; label: string } | null>(null)
+  const [hoverExt, setHoverExt] = useState<string | null>(null)
   // Reorder lanes: move the dragged lane to the drop target's position.
   function reorderLanes(draggedCode: string, targetCode: string) {
     if (!draggedCode || !targetCode || draggedCode === targetCode) return
@@ -480,6 +481,9 @@ function DayGrid({ bookings, techs, date, grid, capacity, canEdit, canEditCapaci
         const pct = cap > 0 ? Math.min(100, (booked / cap) * 100) : 0
         const over = cap > 0 && booked > cap
         const barColor = over ? T.red : pct > 80 ? T.amber : T.green
+        const laneKey = lane.ext || '__unassigned'
+        const hov = hoverExt === laneKey
+        const laneColor = lane.color || T.blue
         return (
           <div key={lane.ext || 'unassigned'} style={{ flex: 1, minWidth: 150, borderRight: `1px solid ${T.border}` }}>
             <div
@@ -506,9 +510,10 @@ function DayGrid({ bookings, techs, date, grid, capacity, canEdit, canEditCapaci
               ) : <div style={{ height: 13 }} />}
             </div>
             <div onClick={(e) => onLaneClick(e, date, lane.ext || null)}
+              onMouseEnter={() => setHoverExt(laneKey)} onMouseLeave={() => setHoverExt(h => h === laneKey ? null : h)}
               onDragOver={(e) => { e.preventDefault(); const rect = e.currentTarget.getBoundingClientRect(); const slot = Math.max(0, Math.floor((e.clientY - rect.top) / SLOT_PX)); setDropHint({ ext: lane.ext || '', top: slot * SLOT_PX, label: minsToHHMM(grid.startMin + slot * SLOT_MIN) }) }}
               onDrop={(e) => { setDropHint(null); onDropBooking(e, lane.ext || null) }}
-              style={{ position: 'relative', height: grid.gridPx, cursor: 'copy' }}>
+              style={{ position: 'relative', height: grid.gridPx, cursor: 'copy', borderLeft: `3px solid ${over ? T.red : hov ? laneColor : 'transparent'}`, background: over ? (hov ? 'rgba(240,78,78,0.10)' : 'rgba(240,78,78,0.04)') : (hov ? `${laneColor}14` : 'transparent'), transition: 'background 0.12s ease, border-color 0.12s ease' }}>
               {grid.hourMarks.map(m => (
                 <div key={m} style={{ position: 'absolute', top: (m - grid.startMin) / SLOT_MIN * SLOT_PX, left: 0, right: 0, borderTop: `1px solid ${T.border}` }} />
               ))}
