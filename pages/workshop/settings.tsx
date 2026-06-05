@@ -376,20 +376,32 @@ function JobTypesSection() {
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 10px' }}>
             <input defaultValue={t.name} onBlur={e => { const v = e.target.value.trim(); if (v && v !== t.name) api(`/api/workshop/job-types?id=${t.id}`, 'PATCH', { name: v }) }} style={{ ...cellInp, flex: 1, fontWeight: 600 }} />
             <label style={{ fontSize: 11, color: T.text2, display: 'flex', gap: 4, alignItems: 'center', cursor: 'pointer' }}><input type="checkbox" checked={!!t.active} onChange={e => api(`/api/workshop/job-types?id=${t.id}`, 'PATCH', { active: e.target.checked })} />Active</label>
-            <span style={{ fontSize: 11, color: T.text3, whiteSpace: 'nowrap' }}>{(t.lines || []).length} lines</span>
-            <button onClick={() => setOpenId(openId === t.id ? null : t.id)} style={pbtn(T.blue)}>{openId === t.id ? 'Close' : 'Edit lines'}</button>
+            <span style={{ fontSize: 11, color: T.text3, whiteSpace: 'nowrap' }}>{(t.lines || []).length} lines · {(t.model_ids || []).length} models</span>
+            <button onClick={() => setOpenId(openId === t.id ? null : t.id)} style={pbtn(T.blue)}>{openId === t.id ? 'Close' : 'Edit'}</button>
             <button onClick={() => { if (confirm(`Delete job type “${t.name}”?`)) api(`/api/workshop/job-types?id=${t.id}`, 'DELETE') }} title="Delete" style={{ background: 'transparent', border: 'none', color: T.text3, cursor: 'pointer', fontSize: 16 }}>×</button>
           </div>
-          {models.length > 0 && (
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, padding: '0 10px 8px', alignItems: 'center' }}>
-              <span style={{ fontSize: 10, color: T.text3, marginRight: 2 }}>Models:</span>
-              {models.map(m => { const on = (t.model_ids || []).includes(m.id); return (
-                <button key={m.id} onClick={() => toggleModel(t, m.id)} title={on ? 'Click to unassign' : 'Click to assign'} style={{ fontSize: 10, padding: '3px 8px', borderRadius: 10, cursor: 'pointer', fontFamily: 'inherit', background: on ? `${T.blue}22` : 'transparent', color: on ? T.blue : T.text3, border: `1px solid ${on ? T.blue : T.border2}` }}>{m.name}</button>
-              )})}
-            </div>
-          )}
           {openId === t.id && (
             <div style={{ padding: '0 10px 10px' }}>
+              {models.length > 0 && (
+                <>
+                  <div style={{ fontSize: 10, color: T.text3, textTransform: 'uppercase', letterSpacing: '0.04em', margin: '2px 0 4px' }}>Vehicle models this job applies to</div>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center', marginBottom: 12 }}>
+                    {(t.model_ids || []).map((mid: string) => { const m = models.find(x => x.id === mid); if (!m) return null; return (
+                      <span key={mid} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '3px 6px 3px 9px', background: `${T.blue}22`, border: `1px solid ${T.blue}`, color: T.blue, borderRadius: 10, fontSize: 11 }}>
+                        {m.name}
+                        <button onClick={() => toggleModel(t, mid)} title="Remove" style={{ background: 'none', border: 'none', color: T.blue, cursor: 'pointer', fontSize: 13, padding: 0, lineHeight: 1 }}>×</button>
+                      </span>
+                    )})}
+                    {(t.model_ids || []).length === 0 && <span style={{ fontSize: 11, color: T.text3, fontStyle: 'italic' }}>No models — won’t show in the diary under strict filtering.</span>}
+                    {models.filter(m => !(t.model_ids || []).includes(m.id)).length > 0 && (
+                      <select value="" onChange={e => { if (e.target.value) toggleModel(t, e.target.value) }} style={{ ...cellInp, width: 'auto' }}>
+                        <option value="">+ Add model…</option>
+                        {models.filter(m => !(t.model_ids || []).includes(m.id)).map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
+                      </select>
+                    )}
+                  </div>
+                </>
+              )}
               <div style={{ fontSize: 10, color: T.text3, textTransform: 'uppercase', letterSpacing: '0.04em', margin: '2px 0 4px' }}>Invoice description (work narrative on the invoice)</div>
               <textarea defaultValue={t.description || ''} onBlur={e => { const v = e.target.value; if (v !== (t.description || '')) api(`/api/workshop/job-types?id=${t.id}`, 'PATCH', { description: v }) }} rows={3} placeholder="e.g. Carry out 300 Series 100,000km logbook service per schedule…" style={{ ...inp, width: '100%', resize: 'vertical', marginBottom: 12, fontFamily: 'inherit' }} />
 
