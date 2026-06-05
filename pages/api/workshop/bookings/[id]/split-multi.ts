@@ -9,6 +9,7 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
 import { randomUUID } from 'crypto'
 import { withAuth } from '../../../../../lib/authServer'
+import { logWorkshopActivity } from '../../../../../lib/workshop-activity'
 
 export const config = { maxDuration: 10 }
 
@@ -73,6 +74,8 @@ export default withAuth('edit:bookings', async (req, res, user) => {
   }))
   const { data: created, error: insErr } = await db.from('workshop_bookings').insert(rows).select('id')
   if (insErr) return res.status(500).json({ error: insErr.message })
+
+  await logWorkshopActivity(db, { action: 'split', entity: 'booking', entity_id: id, detail: `Split job into ${segments.length} parts`, actor_id: user.id, actor_name: user.displayName || user.email })
 
   return res.status(200).json({ ok: true, split_group_id: groupId, segments: segments.length, created: (created || []).map((r: any) => r.id) })
 })

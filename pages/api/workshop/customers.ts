@@ -6,6 +6,7 @@
 import { createClient } from '@supabase/supabase-js'
 import { withAuth } from '../../../lib/authServer'
 import { roleHasPermission } from '../../../lib/permissions'
+import { logWorkshopActivity } from '../../../lib/workshop-activity'
 
 export const config = { maxDuration: 10 }
 
@@ -51,6 +52,7 @@ export default withAuth('view:diary', async (req, res, user) => {
       address: body.address ? String(body.address) : null,
     }).select('id, name, phone, mobile').single()
     if (error) return res.status(500).json({ error: error.message })
+    await logWorkshopActivity(db, { action: 'created', entity: 'customer', entity_id: data.id, entity_label: data.name, detail: `Customer "${data.name}" added`, actor_id: user.id, actor_name: user.displayName || user.email })
     return res.status(201).json({ ok: true, customer: data })
   }
 

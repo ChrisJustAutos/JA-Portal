@@ -313,7 +313,10 @@ export default function DiaryPage({ user }: { user: PortalUserSSR }) {
             </span>
             <div style={{ flex: 1 }} />
             {isAdmin && (
-              <button onClick={() => router.push('/settings?tab=workshop')} style={btn(false)} title="Workshop settings — technicians, MYOB, business details, SMS">⚙ Settings</button>
+              <>
+                <button onClick={() => router.push('/workshop/activity')} style={btn(false)} title="Workshop activity log — who did what, when">≡ Activity</button>
+                <button onClick={() => router.push('/settings?tab=workshop')} style={btn(false)} title="Workshop settings — technicians, MYOB, business details, SMS">⚙ Settings</button>
+              </>
             )}
             <div style={{ display: 'flex', gap: 4 }}>
               <button onClick={() => setView('day')} style={btn(view === 'day')}>Day</button>
