@@ -351,7 +351,14 @@ function JobTypesSection() {
   }
   function addType() { const n = newName.trim(); if (!n) return; setNewName(''); api('/api/workshop/job-types', 'POST', { name: n, sort_order: (types.length + 1) * 10 }) }
   function addModel() { const n = newModel.trim(); if (!n) return; setNewModel(''); modelApi('/api/workshop/vehicle-models', 'POST', { name: n, sort_order: (models.length + 1) * 10 }) }
-  function toggleModel(t: any, modelId: string) { const cur: string[] = t.model_ids || []; const next = cur.includes(modelId) ? cur.filter(x => x !== modelId) : [...cur, modelId]; api(`/api/workshop/job-types?id=${t.id}`, 'PATCH', { model_ids: next }) }
+  function toggleModel(t: any, modelId: string) {
+    const cur: string[] = t.model_ids || []
+    const next = cur.includes(modelId) ? cur.filter(x => x !== modelId) : [...cur, modelId]
+    // Optimistic: update just this job type's models in place (no full reload,
+    // so a single chip add/remove is instant and doesn't reset the list).
+    setTypes(prev => prev.map(x => x.id === t.id ? { ...x, model_ids: next } : x))
+    fetch(`/api/workshop/job-types?id=${t.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model_ids: next }) }).catch(() => { /* surfaced on next load */ })
+  }
   return (
     <Card title="Job types (presets)" hint="A job type is a named job with preset labour + parts. Apply it on a job card to fill the lines in one click. Importable from your MechanicDesk job-type export.">
       <div style={{ marginBottom: 12, paddingBottom: 12, borderBottom: `1px solid ${T.border}` }}>
