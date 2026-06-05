@@ -645,10 +645,7 @@ function BookingModal({ initial, techs, canEdit, onClose, onSaved }: {
   const [vehicle, setVehicle] = useState<{ id: string; label: string } | null>(initial.vehicle ? { id: initial.vehicle.id, label: vehicleLabel(initial.vehicle) } : null)
   const [saving, setSaving] = useState(false)
   const [err, setErr] = useState('')
-  const [splitTech, setSplitTech] = useState('')
-  const [splitStart, setSplitStart] = useState<string>(() => initial.ends_at ? bneTimeStr(initial.ends_at) : '10:00')
-  const [splitFinish, setSplitFinish] = useState<string>(() => hhmmPlus(initial.ends_at ? bneTimeStr(initial.ends_at) : '10:00', 60))
-  const [splitting, setSplitting] = useState(false)
+  const [showSplit, setShowSplit] = useState(false)
 
   // Imported job-type presets. Booking can stack multiple — each one's
   // description appends to the booking's description, and on save the lines
@@ -683,19 +680,6 @@ function BookingModal({ initial, techs, canEdit, onClose, onSaved }: {
     setApplyPresetIds(prev => prev.filter(x => x !== id))
     // We deliberately DON'T strip the description text — the user may have
     // edited it. If they want it gone they can do so manually.
-  }
-
-  async function doSplit() {
-    setSplitting(true); setErr('')
-    const sIso = isoFromBne(ymd, splitStart)
-    const eIso = isoFromBne(ymd, splitFinish)
-    if (new Date(eIso).getTime() <= new Date(sIso).getTime()) { setErr('Split finish must be after its start.'); setSplitting(false); return }
-    try {
-      const r = await fetch(`/api/workshop/bookings/${initial.id}/split`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ technician_ext: splitTech || null, starts_at: sIso, ends_at: eIso }) })
-      const d = await r.json()
-      if (!r.ok) { setErr(d.error || 'Split failed'); return }
-      onSaved(); onClose()
-    } catch (e: any) { setErr(e?.message || 'Split failed') } finally { setSplitting(false) }
   }
 
   async function save() {
@@ -818,22 +802,19 @@ function BookingModal({ initial, techs, canEdit, onClose, onSaved }: {
 
           <Field label="Notes"><textarea value={notes} disabled={!canEdit} onChange={e => setNotes(e.target.value)} rows={2} style={{ ...inp, resize: 'vertical' }} /></Field>
 
-          {!isNew && canEdit && (
+          {!isNew && canEdit && initial.starts_at && initial.ends_at && (
             <div style={{ paddingTop: 12, borderTop: `1px solid ${T.border}` }}>
               <div style={{ fontSize: 11, color: T.text3, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 6 }}>Split job</div>
-              <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', flexWrap: 'wrap' }}>
-                <div style={{ flex: 1, minWidth: 130 }}>
-                  <div style={{ fontSize: 10, color: T.text3, marginBottom: 4 }}>To technician</div>
-                  <select value={splitTech} onChange={e => setSplitTech(e.target.value)} style={inp}>
-                    <option value="">Unassigned</option>
-                    {techs.map(t => <option key={t.ext} value={t.ext}>{t.name}{t.role ? ` · ${t.role}` : ''}</option>)}
-                  </select>
-                </div>
-                <div><div style={{ fontSize: 10, color: T.text3, marginBottom: 4 }}>From</div><input type="time" step={900} value={splitStart} onChange={e => setSplitStart(e.target.value)} style={{ ...inp, width: 96 }} /></div>
-                <div><div style={{ fontSize: 10, color: T.text3, marginBottom: 4 }}>To</div><input type="time" step={900} value={splitFinish} onChange={e => setSplitFinish(e.target.value)} style={{ ...inp, width: 96 }} /></div>
-                <button onClick={doSplit} disabled={splitting} title="Create a linked second booking (same vehicle/job) at this time/technician" style={{ ...btn(false), padding: '7px 14px' }}>{splitting ? 'Splitting…' : 'Split'}</button>
-              </div>
+              <button onClick={() => setShowSplit(true)} style={{ ...btn(false), padding: '7px 14px' }} title="Split this job into parts across technicians / time">⑂ Split across techs…</button>
             </div>
+          )}
+          {showSplit && initial.id && initial.starts_at && initial.ends_at && (
+            <SplitJobModal
+              booking={{ id: initial.id, starts_at: initial.starts_at, ends_at: initial.ends_at, technician_ext: initial.technician_ext || null, description: initial.description || null }}
+              techs={techs}
+              onClose={() => setShowSplit(false)}
+              onSaved={() => { setShowSplit(false); onSaved(); onClose() }}
+            />
           )}
 
           {err && <div style={{ fontSize: 12, color: T.red }}>{err}</div>}
@@ -869,6 +850,110 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
       <div style={{ fontSize: 10, color: T.text3, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 4 }}>{label}</div>
       {children}
     </label>
+  )
+}
+
+// ── Split-job modal (multi-segment across technicians / time) ───────────
+function SplitJobModal({ booking, techs, onClose, onSaved }: {
+  booking: { id: string; starts_at: string; ends_at: string; technician_ext: string | null; description: string | null }
+  techs: Tech[]; onClose: () => void; onSaved: () => void
+}) {
+  const startMs = new Date(booking.starts_at).getTime()
+  const totalMins = Math.max(15, Math.round((new Date(booking.ends_at).getTime() - startMs) / 60000))
+  const COLORS = [T.blue, T.teal, T.green, T.amber, T.purple, T.red]
+  type Seg = { tech: string; mins: number; desc: string }
+  const [segs, setSegs] = useState<Seg[]>(() => {
+    const a = Math.min(Math.max(15, Math.round(totalMins / 2 / 15) * 15), totalMins - 15)
+    return [
+      { tech: booking.technician_ext || '', mins: a, desc: booking.description || '' },
+      { tech: booking.technician_ext || '', mins: totalMins - a, desc: booking.description || '' },
+    ]
+  })
+  const [saving, setSaving] = useState(false)
+  const [err, setErr] = useState('')
+
+  const allocated = segs.reduce((s, x) => s + x.mins, 0)
+  const remaining = totalMins - allocated
+  const balanced = remaining === 0
+
+  const fmtHrs = (m: number) => { const a = Math.abs(m); if (a < 60) return `${a}m`; const h = Math.floor(a / 60), mm = a % 60; return mm ? `${h}h ${mm}m` : `${h}h` }
+  const clock = (ms: number) => new Date(ms).toLocaleTimeString('en-AU', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'Australia/Brisbane' })
+  const segStartMs = (i: number) => { let t = startMs; for (let k = 0; k < i; k++) t += segs[k].mins * 60000; return t }
+  const setSeg = (i: number, patch: Partial<Seg>) => setSegs(prev => prev.map((s, idx) => idx === i ? { ...s, ...patch } : s))
+  function bump(i: number, delta: number) {
+    setSegs(prev => {
+      const a = prev.map(s => ({ ...s }))
+      if (delta < 0) { if (a[i].mins + delta < 15) return prev; a[i].mins += delta; if (i + 1 < a.length) a[i + 1].mins -= delta }
+      else { if (i + 1 < a.length && a[i + 1].mins - delta >= 15) { a[i].mins += delta; a[i + 1].mins -= delta } else if (totalMins - a.reduce((s, x) => s + x.mins, 0) >= delta) { a[i].mins += delta } else return prev }
+      return a
+    })
+  }
+  function addPart() { setSegs(prev => { if (prev.length >= 6) return prev; const a = prev.map(s => ({ ...s })); const last = a[a.length - 1]; const take = Math.max(15, Math.round(last.mins / 2 / 15) * 15); if (last.mins - take < 15) return prev; last.mins -= take; a.push({ tech: last.tech, mins: take, desc: last.desc }); return a }) }
+  function removePart(i: number) { setSegs(prev => { if (prev.length <= 2) return prev; const a = prev.map(s => ({ ...s })); const [rm] = a.splice(i, 1); const t = Math.min(i, a.length - 1); a[t].mins += rm.mins; return a }) }
+  function autoFill() { if (remaining === 0) return; setSegs(prev => { const a = prev.map(s => ({ ...s })); a[a.length - 1].mins += remaining; return a }) }
+
+  async function save() {
+    if (!balanced) { setErr(`Hours don't add up — ${remaining > 0 ? fmtHrs(remaining) + ' remaining' : fmtHrs(remaining) + ' over'}`); return }
+    setSaving(true); setErr('')
+    const segments = segs.map((s, i) => {
+      const sMs = segStartMs(i)
+      return { technician_ext: s.tech || null, starts_at: new Date(sMs).toISOString(), ends_at: new Date(sMs + s.mins * 60000).toISOString(), description: s.desc || null }
+    })
+    try {
+      const r = await fetch(`/api/workshop/bookings/${booking.id}/split-multi`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ segments }) })
+      const d = await r.json()
+      if (!r.ok) { setErr(d.error || 'Split failed'); return }
+      onSaved()
+    } catch (e: any) { setErr(e?.message || 'Split failed') } finally { setSaving(false) }
+  }
+
+  return (
+    <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 1100, background: 'rgba(8,10,13,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
+      <div onClick={e => e.stopPropagation()} style={{ width: 'min(560px,100%)', maxHeight: '90vh', overflowY: 'auto', background: T.bg2, border: `1px solid ${T.border2}`, borderRadius: 12 }}>
+        <div style={{ padding: '14px 18px', borderBottom: `1px solid ${T.border}`, display: 'flex', alignItems: 'center', gap: 8 }}>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontSize: 15, fontWeight: 700 }}>⑂ Split job</div>
+            <div style={{ fontSize: 11, color: T.text3 }}>{clock(startMs)} – {clock(startMs + totalMins * 60000)} · {fmtHrs(totalMins)} total</div>
+          </div>
+          <span style={{ fontSize: 10, fontWeight: 700, padding: '4px 9px', borderRadius: 6, background: balanced ? `${T.green}22` : `${T.red}22`, color: balanced ? T.green : T.red, border: `1px solid ${balanced ? T.green : T.red}55` }}>
+            {balanced ? '✓ Balanced' : remaining > 0 ? `+${fmtHrs(remaining)} left` : `-${fmtHrs(remaining)} over`}
+          </span>
+          {!balanced && remaining > 0 && <button onClick={autoFill} style={{ ...btn(false), padding: '4px 8px', fontSize: 10 }}>Auto-fill →</button>}
+          <button onClick={onClose} style={{ background: 'none', border: 'none', color: T.text3, fontSize: 16, cursor: 'pointer' }}>✕</button>
+        </div>
+        <div style={{ display: 'flex', height: 18, margin: '12px 18px 4px', borderRadius: 4, overflow: 'hidden', background: T.bg3 }}>
+          {segs.map((s, i) => <div key={i} style={{ flex: s.mins, background: COLORS[i % COLORS.length], display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontSize: 8, fontWeight: 700 }}>{s.mins / totalMins > 0.12 ? fmtHrs(s.mins) : ''}</div>)}
+        </div>
+        <div style={{ padding: '8px 18px 0' }}>
+          {segs.map((s, i) => { const sMs = segStartMs(i); const c = COLORS[i % COLORS.length]; return (
+            <div key={i} style={{ background: T.bg3, borderRadius: 8, padding: 12, marginBottom: 10, borderLeft: `3px solid ${c}` }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                <span style={{ fontSize: 9, fontWeight: 800, color: c, background: `${c}22`, padding: '2px 7px', borderRadius: 4 }}>PART {i + 1}</span>
+                <span style={{ fontSize: 11, fontFamily: 'monospace', color: T.text2 }}>{clock(sMs)} → {clock(sMs + s.mins * 60000)}</span>
+                <span style={{ flex: 1 }} />
+                {segs.length > 2 && <button onClick={() => removePart(i)} style={{ background: 'none', border: 'none', color: T.red, cursor: 'pointer', fontSize: 13 }}>✕</button>}
+              </div>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8 }}>
+                <select value={s.tech} onChange={e => setSeg(i, { tech: e.target.value })} style={{ ...inp, flex: 1 }}>
+                  <option value="">Unassigned</option>
+                  {techs.map(t => <option key={t.ext} value={t.ext}>{t.name}{t.role ? ` · ${t.role}` : ''}</option>)}
+                </select>
+                <button onClick={() => bump(i, -15)} style={{ ...btn(false), padding: '5px 10px' }}>−</button>
+                <span style={{ width: 56, textAlign: 'center', fontSize: 12, fontWeight: 700, color: c }}>{fmtHrs(s.mins)}</span>
+                <button onClick={() => bump(i, 15)} style={{ ...btn(false), padding: '5px 10px' }}>+</button>
+              </div>
+              <input value={s.desc} onChange={e => setSeg(i, { desc: e.target.value })} placeholder="Description" style={inp} />
+            </div>
+          )})}
+          {segs.length < 6 && <button onClick={addPart} style={{ ...btn(false), width: '100%', padding: 8, borderStyle: 'dashed' }}>+ Add part</button>}
+        </div>
+        {err && <div style={{ color: T.red, fontSize: 12, padding: '8px 18px' }}>{err}</div>}
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, padding: 14, borderTop: `1px solid ${T.border}` }}>
+          <button onClick={onClose} style={{ ...btn(false), padding: '7px 14px' }}>Cancel</button>
+          <button onClick={save} disabled={saving || !balanced} style={{ ...btn(true), padding: '7px 16px', background: balanced ? T.accent : T.bg3, color: '#fff', borderColor: balanced ? T.accent : T.border, opacity: saving ? 0.7 : 1, cursor: (saving || !balanced) ? 'default' : 'pointer' }}>{saving ? 'Splitting…' : 'Split job'}</button>
+        </div>
+      </div>
+    </div>
   )
 }
 
