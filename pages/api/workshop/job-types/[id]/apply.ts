@@ -32,11 +32,10 @@ export default withAuth('edit:bookings', async (req, res) => {
   const linesOnly = !!body.lines_only
 
   const db = sb()
-  const { data: jobType } = await db.from('workshop_job_types').select('id, code, name, description').eq('id', jobTypeId).maybeSingle()
+  const { data: jobType } = await db.from('workshop_job_types').select('id, code, name, description, checklist').eq('id', jobTypeId).maybeSingle()
   if (!jobType) return res.status(404).json({ error: 'job type not found' })
 
   const { data: tmplLines } = await db.from('workshop_job_type_lines').select('*').eq('job_type_id', jobTypeId).order('sort_order', { ascending: true })
-  if (!tmplLines || tmplLines.length === 0) return res.status(400).json({ error: 'This job type has no template lines.' })
 
   // Carry the job type's work-done description onto the booking so it shows on
   // the job-card checklist + the invoice. Skip if the caller's already set it.
@@ -52,24 +51,38 @@ export default withAuth('edit:bookings', async (req, res) => {
     }
   }
 
-  // Append after the booking's existing lines.
-  const { data: existing } = await db.from('workshop_booking_lines').select('sort_order').eq('booking_id', bookingId).order('sort_order', { ascending: false }).limit(1)
-  let nextSort = (existing && existing[0] ? Number(existing[0].sort_order) || 0 : 0) + 1
+  // Carry the job type's checklist items onto the booking's tickable checklist
+  // (skip any whose text is already present, so re-applying doesn't duplicate).
+  const jtChecklist: string[] = Array.isArray((jobType as any).checklist) ? (jobType as any).checklist : []
+  if (jtChecklist.length) {
+    const { data: bk2 } = await db.from('workshop_bookings').select('checklist').eq('id', bookingId).maybeSingle()
+    const cur: any[] = Array.isArray((bk2 as any)?.checklist) ? (bk2 as any).checklist : []
+    const have = new Set(cur.map((c: any) => String(c?.text || '').trim().toLowerCase()))
+    const adds = jtChecklist.map(t => String(t || '').trim()).filter(t => t && !have.has(t.toLowerCase())).map(t => ({ text: t, done: false }))
+    if (adds.length) await db.from('workshop_bookings').update({ checklist: [...cur, ...adds] }).eq('id', bookingId)
+  }
 
-  const rows = tmplLines.map((l: any) => ({
-    booking_id: bookingId,
-    line_type: l.line_type,
-    description: l.description,
-    part_number: l.part_number,
-    qty: l.qty,
-    unit_price_ex_gst: l.unit_price_ex_gst,
-    gst_rate: l.gst_rate,
-    inventory_id: l.inventory_id,
-    total_ex_gst: Math.round((Number(l.qty) || 0) * (Number(l.unit_price_ex_gst) || 0) * 100) / 100,
-    sort_order: nextSort++,
-  }))
-  const { error } = await db.from('workshop_booking_lines').insert(rows)
-  if (error) return res.status(500).json({ error: error.message })
+  // Append the template's priced lines after the booking's existing lines.
+  let added = 0
+  if (tmplLines && tmplLines.length) {
+    const { data: existing } = await db.from('workshop_booking_lines').select('sort_order').eq('booking_id', bookingId).order('sort_order', { ascending: false }).limit(1)
+    let nextSort = (existing && existing[0] ? Number(existing[0].sort_order) || 0 : 0) + 1
+    const rows = tmplLines.map((l: any) => ({
+      booking_id: bookingId,
+      line_type: l.line_type,
+      description: l.description,
+      part_number: l.part_number,
+      qty: l.qty,
+      unit_price_ex_gst: l.unit_price_ex_gst,
+      gst_rate: l.gst_rate,
+      inventory_id: l.inventory_id,
+      total_ex_gst: Math.round((Number(l.qty) || 0) * (Number(l.unit_price_ex_gst) || 0) * 100) / 100,
+      sort_order: nextSort++,
+    }))
+    const { error } = await db.from('workshop_booking_lines').insert(rows)
+    if (error) return res.status(500).json({ error: error.message })
+    added = rows.length
+  }
 
-  return res.status(200).json({ ok: true, added: rows.length, job_type: (jobType as any).code || (jobType as any).name })
+  return res.status(200).json({ ok: true, added, job_type: (jobType as any).code || (jobType as any).name })
 })

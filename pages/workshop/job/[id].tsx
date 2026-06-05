@@ -364,16 +364,15 @@ export default function JobCardPage({ user }: { user: PortalUserSSR }) {
                     </Panel>
 
                     {b.description && (
-                      <Panel title="Job checklist · also shows on invoice">
-                        <div style={{ fontSize: 13, color: T.text, whiteSpace: 'pre-wrap', lineHeight: 1.5 }}>
-                          {b.description.split(/\r?\n/).map((line: string, i: number) => {
-                            const trimmed = line.trim()
-                            if (!trimmed) return <div key={i} style={{ height: 4 }} />
-                            return <div key={i} style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}><span style={{ color: T.text3, marginTop: 1 }}>☐</span><span style={{ flex: 1 }}>{trimmed}</span></div>
-                          })}
-                        </div>
+                      <Panel title="Work description · shows on invoice">
+                        <div style={{ fontSize: 13, color: T.text, whiteSpace: 'pre-wrap', lineHeight: 1.5 }}>{b.description}</div>
                       </Panel>
                     )}
+
+                    <Panel title="Checklist">
+                      <JobChecklist items={Array.isArray((b as any).checklist) ? (b as any).checklist : []} canEdit={canEdit}
+                        onChange={async (items) => { await patchBooking({ checklist: items }); await load() }} />
+                    </Panel>
 
                     {canEdit && (
                       <Panel title="Internal notes · staff only">
@@ -500,6 +499,30 @@ function Panel({ title, children }: { title: string; children: React.ReactNode }
     <div style={{ background: T.bg2, border: `1px solid ${T.border}`, borderRadius: 10, overflow: 'hidden' }}>
       <div style={{ padding: '8px 14px', borderBottom: `1px solid ${T.border}`, fontSize: 10, fontWeight: 600, color: T.text2, textTransform: 'uppercase', letterSpacing: '0.08em', background: T.bg3 }}>{title}</div>
       <div style={{ padding: '10px 14px', display: 'flex', flexDirection: 'column', gap: 5 }}>{children}</div>
+    </div>
+  )
+}
+
+function JobChecklist({ items, canEdit, onChange }: { items: Array<{ text: string; done: boolean }>; canEdit: boolean; onChange: (items: Array<{ text: string; done: boolean }>) => void }) {
+  const [add, setAdd] = useState('')
+  const done = items.filter(c => c.done).length
+  function toggle(i: number) { onChange(items.map((c, idx) => idx === i ? { ...c, done: !c.done } : c)) }
+  function remove(i: number) { onChange(items.filter((_, idx) => idx !== i)) }
+  function addItem() { const t = add.trim(); if (!t) return; onChange([...items, { text: t, done: false }]); setAdd('') }
+  return (
+    <div>
+      {items.length > 0 && <div style={{ fontSize: 10, color: T.text3, marginBottom: 4 }}>{done}/{items.length} done</div>}
+      {items.map((c, i) => (
+        <label key={i} style={{ display: 'flex', gap: 8, alignItems: 'flex-start', padding: '3px 0', cursor: canEdit ? 'pointer' : 'default' }}>
+          <input type="checkbox" checked={!!c.done} disabled={!canEdit} onChange={() => toggle(i)} style={{ marginTop: 2 }} />
+          <span style={{ flex: 1, fontSize: 13, color: c.done ? T.text3 : T.text, textDecoration: c.done ? 'line-through' : 'none' }}>{c.text}</span>
+          {canEdit && <button onClick={e => { e.preventDefault(); remove(i) }} title="Remove" style={{ background: 'none', border: 'none', color: T.text3, cursor: 'pointer', fontSize: 13, lineHeight: 1 }}>×</button>}
+        </label>
+      ))}
+      {items.length === 0 && <div style={{ fontSize: 12, color: T.text3, fontStyle: 'italic', marginBottom: canEdit ? 6 : 0 }}>No checklist items — apply a job type or add one below.</div>}
+      {canEdit && (
+        <input value={add} onChange={e => setAdd(e.target.value)} placeholder="+ Add checklist item" onKeyDown={e => { if (e.key === 'Enter') addItem() }} style={{ ...inp, width: '100%', marginTop: 6 }} />
+      )}
     </div>
   )
 }

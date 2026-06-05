@@ -57,6 +57,7 @@ export default withAuth('view:diary', async (req, res, user) => {
       name, code: body.code || null, description: body.description || null,
       default_duration_min: body.default_duration_min != null ? (Number(body.default_duration_min) || null) : null,
       sort_order: Number(body.sort_order) || 0,
+      checklist: Array.isArray(body.checklist) ? body.checklist : [],
     }).select('*').single()
     if (error) return res.status(error.code === '23505' ? 409 : 500).json({ error: error.code === '23505' ? 'Code already in use.' : error.message })
     if (Array.isArray(body.model_ids) && body.model_ids.length) {
@@ -75,6 +76,7 @@ export default withAuth('view:diary', async (req, res, user) => {
       else if (f === 'default_duration_min' || f === 'sort_order') patch[f] = body[f] == null || body[f] === '' ? null : (Number(body[f]) || 0)
       else patch[f] = body[f] === '' ? null : body[f]
     }
+    if ('checklist' in body) patch.checklist = Array.isArray(body.checklist) ? body.checklist : []
     const { error } = await db.from('workshop_job_types').update(patch).eq('id', id)
     if (error) return res.status(error.code === '23505' ? 409 : 500).json({ error: error.code === '23505' ? 'Code already in use.' : error.message })
     if (Array.isArray(body.model_ids)) {

@@ -390,6 +390,12 @@ function JobTypesSection() {
           )}
           {openId === t.id && (
             <div style={{ padding: '0 10px 10px' }}>
+              <div style={{ fontSize: 10, color: T.text3, textTransform: 'uppercase', letterSpacing: '0.04em', margin: '2px 0 4px' }}>Invoice description (work narrative on the invoice)</div>
+              <textarea defaultValue={t.description || ''} onBlur={e => { const v = e.target.value; if (v !== (t.description || '')) api(`/api/workshop/job-types?id=${t.id}`, 'PATCH', { description: v }) }} rows={3} placeholder="e.g. Carry out 300 Series 100,000km logbook service per schedule…" style={{ ...inp, width: '100%', resize: 'vertical', marginBottom: 12, fontFamily: 'inherit' }} />
+
+              <JobTypeChecklist items={t.checklist || []} onSave={items => api(`/api/workshop/job-types?id=${t.id}`, 'PATCH', { checklist: items })} />
+
+              <div style={{ fontSize: 10, color: T.text3, textTransform: 'uppercase', letterSpacing: '0.04em', margin: '6px 0 4px' }}>Invoice line items</div>
               <div style={{ display: 'grid', gridTemplateColumns: '64px 1fr 50px 80px 26px', gap: 6, padding: '4px 2px', fontSize: 9, color: T.text3, textTransform: 'uppercase', letterSpacing: '0.04em' }}><div>Type</div><div>Description</div><div style={{ textAlign: 'right' }}>Qty</div><div style={{ textAlign: 'right' }}>Unit ex</div><div /></div>
               {(t.lines || []).map((l: any) => <JobTypeLineRow key={l.id} line={l} onPatch={(p: any) => api(`/api/workshop/job-type-lines?id=${l.id}`, 'PATCH', p)} onRemove={() => api(`/api/workshop/job-type-lines?id=${l.id}`, 'DELETE')} />)}
               <div style={{ display: 'flex', gap: 6, marginTop: 8 }}>
@@ -421,6 +427,26 @@ function JobTypeLineRow({ line, onPatch, onRemove }: { line: any; onPatch: (p: a
       <input value={qty} inputMode="decimal" onChange={e => setQty(e.target.value)} onBlur={() => Number(qty) !== Number(line.qty) && onPatch({ qty: Number(qty) || 0 })} style={{ ...cellInp, textAlign: 'right' }} />
       <input value={price} inputMode="decimal" onChange={e => setPrice(e.target.value)} onBlur={() => Number(price) !== Number(line.unit_price_ex_gst) && onPatch({ unit_price_ex_gst: Number(price) || 0 })} style={{ ...cellInp, textAlign: 'right' }} />
       <button onClick={onRemove} title="Remove" style={{ background: 'transparent', border: 'none', color: T.text3, cursor: 'pointer', fontSize: 14 }}>×</button>
+    </div>
+  )
+}
+
+function JobTypeChecklist({ items, onSave }: { items: string[]; onSave: (items: string[]) => void }) {
+  const [list, setList] = useState<string[]>(Array.isArray(items) ? items : [])
+  const [add, setAdd] = useState('')
+  useEffect(() => { setList(Array.isArray(items) ? items : []) }, [JSON.stringify(items)])
+  function commit(next: string[]) { setList(next); onSave(next) }
+  return (
+    <div style={{ marginBottom: 12 }}>
+      <div style={{ fontSize: 10, color: T.text3, textTransform: 'uppercase', letterSpacing: '0.04em', margin: '0 0 4px' }}>Checklist (copied onto the job card when applied)</div>
+      {list.map((it, i) => (
+        <div key={i} style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 4 }}>
+          <span style={{ color: T.text3, fontSize: 12 }}>☐</span>
+          <input defaultValue={it} onBlur={e => { const v = e.target.value.trim(); if (v !== it) { const next = [...list]; if (v) next[i] = v; else next.splice(i, 1); commit(next) } }} style={{ ...cellInp, flex: 1 }} />
+          <button onClick={() => commit(list.filter((_, idx) => idx !== i))} title="Remove" style={{ background: 'none', border: 'none', color: T.text3, cursor: 'pointer', fontSize: 14 }}>×</button>
+        </div>
+      ))}
+      <input value={add} onChange={e => setAdd(e.target.value)} placeholder="+ Add checklist item (press Enter)" onKeyDown={e => { if (e.key === 'Enter' && add.trim()) { commit([...list, add.trim()]); setAdd('') } }} style={{ ...cellInp, width: '100%' }} />
     </div>
   )
 }
