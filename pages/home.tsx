@@ -54,7 +54,7 @@ export default function HomePage({ user }: Props) {
     if (appId === 'messages') return summary?.messages || 0
     return summary?.byModule?.[appId] || 0
   }, [summary])
-  const { prefs, update } = usePreferences()
+  const { prefs, update, loading: prefsLoading } = usePreferences()
   const [query, setQuery] = useState('')
   const [drag, setDrag] = useState<Drag>(null)
   const [dragOver, setDragOver] = useState<{ id: string; mode: DropMode } | null>(null)
@@ -266,7 +266,11 @@ export default function HomePage({ user }: Props) {
           )}
 
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(132px, 1fr))', gap: 14 }}>
-            {searching
+            {prefsLoading
+              ? Array.from({ length: 10 }).map((_, i) => (
+                  <div key={`sk${i}`} aria-hidden style={{ height: 118, borderRadius: 14, background: T.bg2, border: `1px solid ${T.border}`, opacity: 0.45 }}/>
+                ))
+              : searching
               ? searchResults.map(app => (<AppTile key={app.id} app={app} badge={badgeFor(app.id)} onClick={() => launch(app)}/>))
               : orderedCells.map(cell => cell.kind === 'folder' ? (
                   <FolderTile
