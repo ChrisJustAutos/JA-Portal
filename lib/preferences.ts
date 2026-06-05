@@ -10,7 +10,14 @@
 // When the user's pref is 'inc', we multiply by 1.1 at DISPLAY time only.
 // This keeps the data layer clean and auditable.
 
-import { createContext, useCallback, useContext, useEffect, useMemo, useState, ReactNode, createElement } from 'react'
+import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useState, ReactNode, createElement } from 'react'
+
+// localStorage cache so a returning user's layout/theme paints from their last
+// known prefs the instant the app hydrates — no flash of the default layout
+// while /api/preferences is still in flight. useLayoutEffect on the client runs
+// before paint; fall back to useEffect on the server (it's a no-op there).
+const PREFS_CACHE_KEY = 'ja-prefs-v1'
+const useIsoLayoutEffect = typeof window !== 'undefined' ? useLayoutEffect : useEffect
 
 // ── Types ────────────────────────────────────────────────────────────────
 
@@ -355,7 +362,11 @@ export function PreferencesProvider({ children }: { children: ReactNode }) {
         return
       }
       const data = await res.json()
-      if (data.preferences) setPrefs({ ...DEFAULT_PREFERENCES, ...data.preferences })
+      if (data.preferences) {
+        const merged = { ...DEFAULT_PREFERENCES, ...data.preferences }
+        setPrefs(merged)
+        try { window.localStorage.setItem(PREFS_CACHE_KEY, JSON.stringify(merged)) } catch { /* ignore */ }
+      }
       setError(null)
     } catch (e: any) {
       setError(e?.message || 'Failed to load preferences')
@@ -379,7 +390,11 @@ export function PreferencesProvider({ children }: { children: ReactNode }) {
         throw new Error(err.error || 'Save failed')
       }
       const data = await res.json()
-      if (data.preferences) setPrefs({ ...DEFAULT_PREFERENCES, ...data.preferences })
+      if (data.preferences) {
+        const merged = { ...DEFAULT_PREFERENCES, ...data.preferences }
+        setPrefs(merged)
+        try { window.localStorage.setItem(PREFS_CACHE_KEY, JSON.stringify(merged)) } catch { /* ignore */ }
+      }
     } catch (e: any) {
       setError(e?.message || 'Could not save preferences')
       // Re-fetch to reset optimistic update on failure
@@ -388,6 +403,15 @@ export function PreferencesProvider({ children }: { children: ReactNode }) {
     }
   }, [refresh])
 
+  // Paint the user's last-known prefs immediately (before first paint, no
+  // network wait) so the correct layout/theme shows instead of the default,
+  // then refresh from the server to pick up any changes.
+  useIsoLayoutEffect(() => {
+    try {
+      const cached = window.localStorage.getItem(PREFS_CACHE_KEY)
+      if (cached) { setPrefs({ ...DEFAULT_PREFERENCES, ...JSON.parse(cached) }); setLoading(false) }
+    } catch { /* ignore */ }
+  }, [])
   useEffect(() => { refresh() }, [refresh])
 
   const value = useMemo<PreferencesContextValue>(() => ({
