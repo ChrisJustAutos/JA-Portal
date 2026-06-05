@@ -756,14 +756,14 @@ function BookingModal({ initial, techs, canEdit, onClose, onSaved }: {
             disabled={!canEdit} onPick={(v) => setCustomer(v ? { id: v.id, name: v.label } : null)} />
           <EntityPicker label="Vehicle" kind="vehicle" customerId={customer?.id || null} value={vehicle}
             disabled={!canEdit} onPick={(v) => setVehicle(v)} />
-          {vehicle?.id && models.length > 0 && (
-            <Field label="Model (filters the job types below)">
+          {models.length > 0 && (
+            <Field label="Vehicle model (filters the job types below)">
               <select value={vehicleModelId || ''} disabled={!canEdit} onChange={async e => {
                 const mid = e.target.value || null
                 setVehicleModelId(mid)
-                try { await fetch(`/api/workshop/vehicles?id=${vehicle.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model_id: mid }) }) } catch { /* non-fatal */ }
-              }} style={inp} title="Tagging the vehicle's model limits the job-type list to jobs assigned to that model">
-                <option value="">— No model (shows all job types) —</option>
+                if (vehicle?.id) { try { await fetch(`/api/workshop/vehicles?id=${vehicle.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model_id: mid }) }) } catch { /* non-fatal */ } }
+              }} style={inp} title="Pick the vehicle model to limit the job-type list to jobs for that model. If a vehicle is selected this also tags it.">
+                <option value="">— All job types —</option>
                 {models.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
               </select>
             </Field>
@@ -791,9 +791,6 @@ function BookingModal({ initial, techs, canEdit, onClose, onSaved }: {
             <Field label="Bay"><input value={bay} disabled={!canEdit} onChange={e => setBay(e.target.value)} placeholder="e.g. Hoist 1" style={inp} /></Field>
           </div>
 
-          <Field label="Est. value">
-            <input value={estValue} disabled={!canEdit} inputMode="decimal" onChange={e => setEstValue(e.target.value)} placeholder="$" style={{ ...inp, maxWidth: 160 }} />
-          </Field>
           {presets.length > 0 && (
             <Field label={`Apply job types (${applyPresetIds.length} added — fills description + lines)`}>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
@@ -812,7 +809,7 @@ function BookingModal({ initial, techs, canEdit, onClose, onSaved }: {
                 )}
                 <select value={presetToAdd} disabled={!canEdit} onChange={e => addPreset(e.target.value)} style={inp} title="Add a preset — its description appends to this booking and its lines get applied on save">
                   <option value="">+ Add job type…</option>
-                  {(vehicle?.id && vehicleModelId ? presets.filter(p => (p.model_ids || []).includes(vehicleModelId)) : presets).filter(p => !applyPresetIds.includes(p.id)).map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                  {(vehicleModelId ? presets.filter(p => (p.model_ids || []).includes(vehicleModelId)) : presets).filter(p => !applyPresetIds.includes(p.id)).map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
                 </select>
               </div>
             </Field>
