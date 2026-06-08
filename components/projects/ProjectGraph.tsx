@@ -81,7 +81,7 @@ export default function ProjectGraph({
   const pendingFit = useRef(false)
   const reorgInit = useRef(true)
 
-  const dragRef = useRef<{ id: string; offX: number; offY: number; moved: boolean } | null>(null)
+  const dragRef = useRef<{ id: string; offX: number; offY: number; sx: number; sy: number; moved: boolean } | null>(null)
   const panRef = useRef<{ x: number; y: number; ox: number; oy: number; moved: boolean } | null>(null)
 
   useEffect(() => { setPins(loadPins()) }, [])
@@ -195,17 +195,20 @@ export default function ProjectGraph({
     e.stopPropagation()
     const p = pos.get(id); if (!p) return
     const w = toWorld(e.clientX, e.clientY)
-    dragRef.current = { id, offX: p.x - w.x, offY: p.y - w.y, moved: false }
+    dragRef.current = { id, offX: p.x - w.x, offY: p.y - w.y, sx: e.clientX, sy: e.clientY, moved: false }
   }
   const onBackgroundDown = (e: React.MouseEvent) => { panRef.current = { x: e.clientX, y: e.clientY, ox: e.clientX, oy: e.clientY, moved: false } }
 
   useEffect(() => {
     const onMove = (e: MouseEvent) => {
       if (dragRef.current) {
-        const { id, offX, offY } = dragRef.current
+        const d = dragRef.current
+        // Only start moving once past a small threshold, so a click with a
+        // tiny wobble still opens the item instead of pinning it.
+        if (!d.moved && Math.abs(e.clientX - d.sx) + Math.abs(e.clientY - d.sy) <= 4) return
+        d.moved = true
         const w = toWorld(e.clientX, e.clientY)
-        dragRef.current.moved = true
-        setPins(prev => ({ ...prev, [id]: { x: w.x + offX, y: w.y + offY } }))
+        setPins(prev => ({ ...prev, [d.id]: { x: w.x + d.offX, y: w.y + d.offY } }))
       } else if (panRef.current) {
         const v = viewRef.current
         v.panX += e.clientX - panRef.current.x
@@ -299,8 +302,10 @@ export default function ProjectGraph({
               const R = PERSON_R + 4
               const C = 2 * Math.PI * R
               const prog = typeof n.progress === 'number' ? Math.max(0, Math.min(100, n.progress)) : null
+              const pHitW = Math.max(2 * (PERSON_R + 10), n.label.length * 9 + 24)
               return (
                 <g key={n.id} transform={`translate(${p.x},${p.y})`} onMouseDown={e => onNodeDown(e, n.id)} style={{ cursor: 'grab', opacity: isLit ? 1 : 0.2, transition: 'opacity 0.15s' }}>
+                  <rect x={-pHitW / 2} y={-(PERSON_R + 24)} width={pHitW} height={2 * PERSON_R + 52} fill="transparent" />
                   <circle r={PERSON_R} fill={`${n.color}ee`} stroke={sel ? '#e8eaf0' : n.color} strokeWidth={sel ? 2.5 : 2} />
                   {prog !== null && (
                     <>
@@ -318,8 +323,13 @@ export default function ProjectGraph({
             const r = n.type === 'project' ? PROJECT_R : SUB_R
             const showLabel = n.type === 'project' || v.zoom > 0.55 || sel || (neighbours && neighbours.has(n.id))
             const label = n.label.length > 32 ? n.label.slice(0, 31) + '…' : n.label
+            const fontPx = n.type === 'project' ? 12 : 10.5
+            const hitLeft = -(r + (n.type === 'project' && (n.childCount || 0) > 0 ? 22 : 8))
+            const hitRight = r + 10 + label.length * fontPx * 0.6
+            const hitH = n.type === 'project' ? 26 : 22
             return (
               <g key={n.id} transform={`translate(${p.x},${p.y})`} onMouseDown={e => onNodeDown(e, n.id)} style={{ cursor: 'grab', opacity: isLit ? 1 : 0.18, transition: 'opacity 0.15s' }}>
+                <rect x={hitLeft} y={-hitH / 2} width={hitRight - hitLeft} height={hitH} fill="transparent" />
                 {n.type === 'project' && n.critical && <circle r={r + 6} fill="none" stroke="#f04e4e" strokeWidth={2} />}
                 <circle r={r} fill={n.color} stroke={sel ? '#e8eaf0' : `${n.color}`} strokeWidth={sel ? 2.5 : 1.4} />
                 {/* per-project completion ring (subitem-based) */}
