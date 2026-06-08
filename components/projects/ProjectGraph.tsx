@@ -122,13 +122,13 @@ export default function ProjectGraph({
         if (!projPin) y += PROJ_ROW
         const subs = subsByProject[proj.id] || []
         if (subs.length) {
-          // Subitems stack directly below the project's EFFECTIVE position —
-          // so they follow a project that's been dragged elsewhere.
+          // Subitems ALWAYS stack directly below their project's effective
+          // position (they aren't individually pinnable) — so they follow a
+          // project wherever it's dragged and the connector always lands.
           let sy = projPin ? pp.y + SUB_ROW : y
           for (const s of subs) {
-            const sPin = pins[s.id]
-            m.set(s.id, sPin || { x: pp.x + SUB_INDENT, y: sy })
-            if (!sPin) sy += SUB_ROW
+            m.set(s.id, { x: pp.x + SUB_INDENT, y: sy })
+            sy += SUB_ROW
           }
           if (!projPin) y = sy + SUB_GAP   // in-flow projects reserve subitem space
         }
@@ -203,6 +203,8 @@ export default function ProjectGraph({
     const onMove = (e: MouseEvent) => {
       if (dragRef.current) {
         const d = dragRef.current
+        // Subitems auto-arrange under their project — not individually movable.
+        if (d.id.startsWith('subitem:')) return
         // Only start moving once past a small threshold, so a click with a
         // tiny wobble still opens the item instead of pinning it.
         if (!d.moved && Math.abs(e.clientX - d.sx) + Math.abs(e.clientY - d.sy) <= 4) return
@@ -288,7 +290,7 @@ export default function ProjectGraph({
             // connecting wherever a node has been dragged).
             return (
               <path key={`l${i}`} d={`M${a.x},${a.y} L${a.x},${b.y} L${b.x},${b.y}`} fill="none"
-                stroke="rgba(139,144,160,0.45)" strokeWidth={(l.kind === 'owns' ? 1.4 : 1.1) / v.zoom}
+                stroke="rgba(139,144,160,0.65)" strokeWidth={(l.kind === 'owns' ? 1.5 : 1.4) / v.zoom}
                 style={{ opacity: on ? 1 : 0.1, transition: 'opacity 0.15s' }} />
             )
           })}
@@ -328,7 +330,7 @@ export default function ProjectGraph({
             const hitRight = r + 10 + label.length * fontPx * 0.6
             const hitH = n.type === 'project' ? 26 : 22
             return (
-              <g key={n.id} transform={`translate(${p.x},${p.y})`} onMouseDown={e => onNodeDown(e, n.id)} style={{ cursor: 'grab', opacity: isLit ? 1 : 0.18, transition: 'opacity 0.15s' }}>
+              <g key={n.id} transform={`translate(${p.x},${p.y})`} onMouseDown={e => onNodeDown(e, n.id)} style={{ cursor: n.type === 'subitem' ? 'pointer' : 'grab', opacity: isLit ? 1 : 0.18, transition: 'opacity 0.15s' }}>
                 <rect x={hitLeft} y={-hitH / 2} width={hitRight - hitLeft} height={hitH} fill="transparent" />
                 {n.type === 'project' && n.critical && <circle r={r + 6} fill="none" stroke="#f04e4e" strokeWidth={2} />}
                 <circle r={r} fill={n.color} stroke={sel ? '#e8eaf0' : `${n.color}`} strokeWidth={sel ? 2.5 : 1.4} />
