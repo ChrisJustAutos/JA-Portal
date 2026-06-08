@@ -42,17 +42,18 @@ export interface GraphLink {
 interface XY { x: number; y: number }
 
 // ── Layout constants ────────────────────────────────────────────────────
-const MARGIN_X = 130
+const MARGIN_X = 150
 const TOP_Y = 64
-const COL_W = 310
+const COL_W = 340
 const PERSON_R = 22
 const PROJECT_R = 8
 const SUB_R = 4.5
-const HEADER_GAP = 66        // first project below the person name
-const PROJ_ROW = 30
-const SUB_ROW = 24
-const SUB_GAP = 10
-const SUB_INDENT = 26
+const HEADER_GAP = 72        // first project below the person name
+const PROJ_ROW = 34
+const SUB_ROW = 28
+const SUB_GAP = 12
+const SUB_INDENT = 30
+const LABEL_MAX = 26         // truncate so labels don't bleed into the next column
 
 const PIN_KEY = 'ja-projects-pins-v1'
 
@@ -77,6 +78,7 @@ export default function ProjectGraph({
   const pinsRef = useRef(pins); pinsRef.current = pins
   const viewRef = useRef({ panX: 0, panY: 0, zoom: 1 })
   const [, rerender] = useReducer((x: number) => x + 1, 0)
+  const [activeDrag, setActiveDrag] = useState<string | null>(null)  // node under the cursor — anchored while dragging
   const didFit = useRef(false)
   const pendingFit = useRef(false)
   const reorgInit = useRef(true)
@@ -102,40 +104,100 @@ export default function ProjectGraph({
 
   const persons = useMemo(() => nodes.filter(n => n.type === 'person'), [nodes])
 
-  // ── Deterministic, pin-aware layout ─────────────────────────────────
+  // ── Deterministic, pin-aware layout + overlap separation ────────────
   const pos = useMemo(() => {
     const projectsByPerson: Record<string, GraphNode[]> = {}
     const subsByProject: Record<string, GraphNode[]> = {}
+    const nodeById = new Map<string, GraphNode>()
     for (const n of nodes) {
+      nodeById.set(n.id, n)
       if (n.type === 'project' && n.parentId) (projectsByPerson[n.parentId] ||= []).push(n)
       if (n.type === 'subitem' && n.parentId) (subsByProject[n.parentId] ||= []).push(n)
     }
+    const allProjects = Object.values(projectsByPerson).flat()
     const m = new Map<string, XY>()
+
+    // Base column layout — persons + projects. Subitem space is reserved in the
+    // column flow; subitem positions are computed after separation (below).
     persons.forEach((person, idx) => {
       const base = pins[person.id] || { x: MARGIN_X + idx * COL_W, y: TOP_Y }
-      m.set(person.id, base)
+      m.set(person.id, { ...base })
       let y = base.y + HEADER_GAP
       for (const proj of (projectsByPerson[person.id] || [])) {
         const projPin = pins[proj.id]
         const pp = projPin || { x: base.x, y }
-        m.set(proj.id, pp)
-        if (!projPin) y += PROJ_ROW
-        const subs = subsByProject[proj.id] || []
-        if (subs.length) {
-          // Subitems ALWAYS stack directly below their project's effective
-          // position (they aren't individually pinnable) — so they follow a
-          // project wherever it's dragged and the connector always lands.
-          let sy = projPin ? pp.y + SUB_ROW : y
-          for (const s of subs) {
-            m.set(s.id, { x: pp.x + SUB_INDENT, y: sy })
-            sy += SUB_ROW
-          }
-          if (!projPin) y = sy + SUB_GAP   // in-flow projects reserve subitem space
+        m.set(proj.id, { ...pp })
+        if (!projPin) {
+          const nSubs = (subsByProject[proj.id] || []).length
+          y += PROJ_ROW + (nSubs ? nSubs * SUB_ROW + SUB_GAP : 0)
         }
       }
     })
+
+    // Bounding box for collision. Person hubs + pinned projects are anchors
+    // (immovable); un-pinned projects are pushed out of any overlap.
+    const labelW = (n: GraphNode) => Math.min((n.label || '').length, LABEL_MAX) * (n.type === 'person' ? 8 : 7)
+    const projectClusterH = (id: string) => {
+      const nSubs = (subsByProject[id] || []).length
+      return nSubs ? PROJ_ROW + nSubs * SUB_ROW + SUB_GAP : PROJ_ROW
+    }
+    interface Box { x: number; y: number; w: number; h: number }
+    const boxOf = (id: string): Box | null => {
+      const n = nodeById.get(id), p = m.get(id); if (!n || !p) return null
+      if (n.type === 'person') {
+        const w = Math.max(2 * (PERSON_R + 12), labelW(n) + 24)
+        return { x: p.x - w / 2, y: p.y - (PERSON_R + 24), w, h: 2 * PERSON_R + 48 }
+      }
+      // Height ≈ the reserved column slot minus a hair, so two stacked items in
+      // the same column never count as overlapping (no drift); width covers the
+      // node, subitem indent and label so nothing bleeds across.
+      return { x: p.x - (PROJECT_R + 18), y: p.y - 12, w: (PROJECT_R + 18) + 12 + SUB_INDENT + labelW(n), h: projectClusterH(id) - 2 }
+    }
+    const ids = [...persons.map(p => p.id), ...allProjects.map(p => p.id)]
+    // Each item has a hidden box; overlapping pairs are pushed apart. Heavier
+    // nodes move less: person hubs and the item under your cursor are anchors
+    // (immovable); dropped (pinned) items resist; auto-placed items yield first.
+    const IMMOVABLE = 1e6
+    const weight = (id: string) => {
+      const n = nodeById.get(id)
+      if (!n || n.type !== 'project') return IMMOVABLE   // person hubs
+      if (id === activeDrag) return IMMOVABLE             // the one you're dragging
+      return pins[id] ? 6 : 1
+    }
+    for (let iter = 0; iter < 40; iter++) {
+      let moved = false
+      for (let i = 0; i < ids.length; i++) {
+        for (let j = i + 1; j < ids.length; j++) {
+          const wa = weight(ids[i]), wb = weight(ids[j])
+          if (wa >= IMMOVABLE && wb >= IMMOVABLE) continue
+          const A = boxOf(ids[i]), B = boxOf(ids[j]); if (!A || !B) continue
+          const ox = Math.min(A.x + A.w, B.x + B.w) - Math.max(A.x, B.x)
+          const oy = Math.min(A.y + A.h, B.y + B.h) - Math.max(A.y, B.y)
+          if (ox <= 0 || oy <= 0) continue   // boxes clear — nothing to do
+          const pa = m.get(ids[i])!, pb = m.get(ids[j])!
+          const total = wa + wb, fa = wb / total, fb = wa / total  // lighter moves more
+          if (oy < ox) {                      // resolve on Y (keep columns tidy)
+            const push = oy + 1, dir = pa.y <= pb.y ? -1 : 1
+            pa.y += dir * push * fa; pb.y -= dir * push * fb
+          } else {                            // resolve on X
+            const push = ox + 1, dir = pa.x <= pb.x ? -1 : 1
+            pa.x += dir * push * fa; pb.x -= dir * push * fb
+          }
+          moved = true
+        }
+      }
+      if (!moved) break
+    }
+
+    // Place subitems beneath their project's final position (cluster moves
+    // together; subitems are never individually pinned).
+    for (const proj of allProjects) {
+      const pp = m.get(proj.id)!
+      let sy = pp.y + PROJ_ROW
+      for (const s of (subsByProject[proj.id] || [])) { m.set(s.id, { x: pp.x + SUB_INDENT, y: sy }); sy += SUB_ROW }
+    }
     return m
-  }, [nodes, persons, pins])
+  }, [nodes, persons, pins, activeDrag])
 
   // ── Fit everything into view ────────────────────────────────────────
   const fit = useCallback(() => {
@@ -207,8 +269,11 @@ export default function ProjectGraph({
         if (d.id.startsWith('subitem:')) return
         // Only start moving once past a small threshold, so a click with a
         // tiny wobble still opens the item instead of pinning it.
-        if (!d.moved && Math.abs(e.clientX - d.sx) + Math.abs(e.clientY - d.sy) <= 4) return
-        d.moved = true
+        if (!d.moved) {
+          if (Math.abs(e.clientX - d.sx) + Math.abs(e.clientY - d.sy) <= 4) return
+          d.moved = true
+          setActiveDrag(d.id)   // anchor it; everything else yields to its box
+        }
         const w = toWorld(e.clientX, e.clientY)
         setPins(prev => ({ ...prev, [d.id]: { x: w.x + d.offX, y: w.y + d.offY } }))
       } else if (panRef.current) {
@@ -221,6 +286,7 @@ export default function ProjectGraph({
       }
     }
     const onUp = () => {
+      setActiveDrag(null)
       if (dragRef.current) {
         const { id, moved } = dragRef.current
         if (moved) { try { localStorage.setItem(PIN_KEY, JSON.stringify(pinsRef.current)) } catch { /* quota */ } }
@@ -324,7 +390,7 @@ export default function ProjectGraph({
             }
             const r = n.type === 'project' ? PROJECT_R : SUB_R
             const showLabel = n.type === 'project' || v.zoom > 0.55 || sel || (neighbours && neighbours.has(n.id))
-            const label = n.label.length > 32 ? n.label.slice(0, 31) + '…' : n.label
+            const label = n.label.length > LABEL_MAX ? n.label.slice(0, LABEL_MAX - 1) + '…' : n.label
             const fontPx = n.type === 'project' ? 12 : 10.5
             const hitLeft = -(r + (n.type === 'project' && (n.childCount || 0) > 0 ? 22 : 8))
             const hitRight = r + 10 + label.length * fontPx * 0.6
