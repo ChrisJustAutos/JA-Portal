@@ -75,7 +75,7 @@ export default function ProjectGraph({
   const didFit = useRef(false)
 
   const dragRef = useRef<{ id: string; offX: number; offY: number; moved: boolean } | null>(null)
-  const panRef = useRef<{ x: number; y: number } | null>(null)
+  const panRef = useRef<{ x: number; y: number; ox: number; oy: number; moved: boolean } | null>(null)
 
   useEffect(() => { setPins(loadPins()) }, [])
 
@@ -166,7 +166,7 @@ export default function ProjectGraph({
     const w = toWorld(e.clientX, e.clientY)
     dragRef.current = { id, offX: p.x - w.x, offY: p.y - w.y, moved: false }
   }
-  const onBackgroundDown = (e: React.MouseEvent) => { panRef.current = { x: e.clientX, y: e.clientY } }
+  const onBackgroundDown = (e: React.MouseEvent) => { panRef.current = { x: e.clientX, y: e.clientY, ox: e.clientX, oy: e.clientY, moved: false } }
 
   useEffect(() => {
     const onMove = (e: MouseEvent) => {
@@ -179,7 +179,8 @@ export default function ProjectGraph({
         const v = viewRef.current
         v.panX += e.clientX - panRef.current.x
         v.panY += e.clientY - panRef.current.y
-        panRef.current = { x: e.clientX, y: e.clientY }
+        panRef.current.x = e.clientX; panRef.current.y = e.clientY
+        if (Math.abs(e.clientX - panRef.current.ox) + Math.abs(e.clientY - panRef.current.oy) > 4) panRef.current.moved = true
         rerender()
       }
     }
@@ -189,6 +190,9 @@ export default function ProjectGraph({
         if (moved) { try { localStorage.setItem(PIN_KEY, JSON.stringify(pinsRef.current)) } catch { /* quota */ } }
         else onSelect(id)
         dragRef.current = null
+      } else if (panRef.current && !panRef.current.moved) {
+        // A click on empty space (no drag) closes whatever was open.
+        onSelect(null)
       }
       panRef.current = null
     }
