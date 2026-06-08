@@ -141,19 +141,31 @@ export default function ProjectGraph({
       const nSubs = (subsByProject[id] || []).length
       return nSubs ? PROJ_ROW + nSubs * SUB_ROW + SUB_GAP : PROJ_ROW
     }
+    const ids = [...persons.map(p => p.id), ...allProjects.map(p => p.id)]
+
+    // Precompute each item's hidden box (offset from its centre + size). Left
+    // reaches just past the expand caret; right hugs the widest of the project's
+    // own label and its subitems' labels (+small pad) so it's not over-wide.
     interface Box { x: number; y: number; w: number; h: number }
-    const boxOf = (id: string): Box | null => {
-      const n = nodeById.get(id), p = m.get(id); if (!n || !p) return null
+    const dims = new Map<string, { dx: number; w: number; dy: number; h: number }>()
+    for (const id of ids) {
+      const n = nodeById.get(id); if (!n) continue
       if (n.type === 'person') {
         const w = Math.max(2 * (PERSON_R + 12), labelW(n) + 24)
-        return { x: p.x - w / 2, y: p.y - (PERSON_R + 24), w, h: 2 * PERSON_R + 48 }
+        dims.set(id, { dx: -w / 2, w, dy: -(PERSON_R + 24), h: 2 * PERSON_R + 48 })
+      } else {
+        const subs = subsByProject[id] || []
+        const ownRight = PROJECT_R + 8 + labelW(n)
+        const subRight = subs.length ? SUB_INDENT + SUB_R + 6 + Math.max(...subs.map(s => labelW(s))) : 0
+        const left = PROJECT_R + 24
+        const right = Math.max(ownRight, subRight) + 6
+        dims.set(id, { dx: -left, w: left + right, dy: -12, h: projectClusterH(id) - 2 })
       }
-      // Height ≈ the reserved column slot minus a hair, so two stacked items in
-      // the same column never count as overlapping (no drift); width covers the
-      // node, subitem indent and label so nothing bleeds across.
-      return { x: p.x - (PROJECT_R + 18), y: p.y - 12, w: (PROJECT_R + 18) + 12 + SUB_INDENT + labelW(n), h: projectClusterH(id) - 2 }
     }
-    const ids = [...persons.map(p => p.id), ...allProjects.map(p => p.id)]
+    const boxOf = (id: string): Box | null => {
+      const p = m.get(id), d = dims.get(id); if (!p || !d) return null
+      return { x: p.x + d.dx, y: p.y + d.dy, w: d.w, h: d.h }
+    }
     // Each item has a hidden box; overlapping pairs are pushed apart. Heavier
     // nodes move less: person hubs and the item under your cursor are anchors
     // (immovable); dropped (pinned) items resist; auto-placed items yield first.
