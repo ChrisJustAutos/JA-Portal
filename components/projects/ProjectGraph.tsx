@@ -280,9 +280,12 @@ export default function ProjectGraph({
                   style={{ opacity: on ? 0.7 : 0.06, transition: 'opacity 0.15s' }} />
               )
             }
+            // Tree elbow: drop from the parent, then branch across to the
+            // child — so the connector clearly lands on each subitem (and keeps
+            // connecting wherever a node has been dragged).
             return (
-              <line key={`l${i}`} x1={a.x} y1={a.y} x2={b.x} y2={b.y}
-                stroke="rgba(139,144,160,0.45)" strokeWidth={(l.kind === 'owns' ? 1.4 : 1) / v.zoom}
+              <path key={`l${i}`} d={`M${a.x},${a.y} L${a.x},${b.y} L${b.x},${b.y}`} fill="none"
+                stroke="rgba(139,144,160,0.45)" strokeWidth={(l.kind === 'owns' ? 1.4 : 1.1) / v.zoom}
                 style={{ opacity: on ? 1 : 0.1, transition: 'opacity 0.15s' }} />
             )
           })}
@@ -317,8 +320,16 @@ export default function ProjectGraph({
             const label = n.label.length > 32 ? n.label.slice(0, 31) + '…' : n.label
             return (
               <g key={n.id} transform={`translate(${p.x},${p.y})`} onMouseDown={e => onNodeDown(e, n.id)} style={{ cursor: 'grab', opacity: isLit ? 1 : 0.18, transition: 'opacity 0.15s' }}>
-                {n.type === 'project' && n.critical && <circle r={r + 3.5} fill="none" stroke="#f04e4e" strokeWidth={2} />}
+                {n.type === 'project' && n.critical && <circle r={r + 6} fill="none" stroke="#f04e4e" strokeWidth={2} />}
                 <circle r={r} fill={n.color} stroke={sel ? '#e8eaf0' : `${n.color}`} strokeWidth={sel ? 2.5 : 1.4} />
+                {/* per-project completion ring (subitem-based) */}
+                {n.type === 'project' && typeof n.progress === 'number' && (
+                  <>
+                    <circle r={r + 3} fill="none" stroke="rgba(255,255,255,0.12)" strokeWidth={2.5} />
+                    <circle r={r + 3} fill="none" stroke="#34c77b" strokeWidth={2.5} strokeLinecap="round"
+                      strokeDasharray={`${2 * Math.PI * (r + 3) * Math.max(0, Math.min(100, n.progress)) / 100} ${2 * Math.PI * (r + 3)}`} transform="rotate(-90)" />
+                  </>
+                )}
                 {n.hasUpdates && <circle cx={r * 0.85} cy={r * 0.85} r={3} fill="#e8eaf0" stroke={n.color} strokeWidth={1} />}
                 {n.type === 'project' && (n.taggedColors || []).map((c, k, arr) => (
                   <circle key={k} cx={(k - (arr.length - 1) / 2) * 7} cy={-(r + 7)} r={3} fill={c} />

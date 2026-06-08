@@ -58,6 +58,19 @@ function fmtDateTime(iso: string): string {
   return d.toLocaleString('en-AU', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })
 }
 
+// Subitems Done / total for a project.
+function subProgress(p: ProjectItem): { done: number; total: number } {
+  const subs = p.subitems || []
+  return { done: subs.filter(s => s.status === 'Done').length, total: subs.length }
+}
+// A project's completion fraction (0–1), driven by its subitems. Projects with
+// no subitems fall back to their own status (Done = complete).
+function projectCompletion(p: ProjectItem): number {
+  const { done, total } = subProgress(p)
+  if (total) return done / total
+  return p.status === 'Done' ? 1 : 0
+}
+
 export default function ProjectsBoard({ user }: { user: PortalUserSSR }) {
   const router = useRouter()
   const canEdit = roleHasPermission(user.role, 'edit:projects')
@@ -131,11 +144,13 @@ export default function ProjectsBoard({ user }: { user: PortalUserSSR }) {
       if (hiddenPeople.has(person.key)) continue
       const pid = `person:${person.key}`
       const total = person.projects.length
-      const done = person.projects.filter(p => p.status === 'Done').length
-      nodes.push({ id: pid, type: 'person', label: person.name, color: person.color, progress: total ? Math.round((done / total) * 100) : undefined })
+      // Person % = average of each project's subitem-based completion.
+      const personPct = total ? Math.round(person.projects.reduce((s, p) => s + projectCompletion(p), 0) / total * 100) : undefined
+      nodes.push({ id: pid, type: 'person', label: person.name, color: person.color, progress: personPct })
       for (const proj of person.projects) {
         const projId = `project:${proj.id}`
         const cached = commentsByItem[proj.id]
+        const sp = subProgress(proj)
         nodes.push({
           id: projId, type: 'project', label: proj.name,
           color: STATUS_COLOURS[proj.status] || NEUTRAL,
@@ -146,6 +161,8 @@ export default function ProjectsBoard({ user }: { user: PortalUserSSR }) {
           taggedColors: (proj.tagged || []).map(k => colorByKey[k]).filter(Boolean),
           childCount: (proj.subitems || []).length,
           expanded: expandedProjects.has(proj.id),
+          // Per-project completion ring (only when it has subitems).
+          progress: sp.total ? Math.round((sp.done / sp.total) * 100) : undefined,
         })
         links.push({ source: pid, target: projId, kind: 'owns' })
         // Cross-column links to other people tagged on this project.
@@ -507,7 +524,9 @@ function ProjectInspector({
       {/* Scrollable body: subitems + comment thread */}
       <div style={{ flex: 1, overflowY: 'auto', padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: 10 }}>
         <div style={{ marginBottom: 4 }}>
-          <div style={{ fontSize: 10, fontWeight: 600, color: T.text3, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 8 }}>Subitems ({proj.subitems.length})</div>
+          <div style={{ fontSize: 10, fontWeight: 600, color: T.text3, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 8 }}>
+            Subitems{proj.subitems.length > 0 ? ` — ${proj.subitems.filter(s => s.status === 'Done').length}/${proj.subitems.length} done` : ''}
+          </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
             {proj.subitems.map(s => {
               const sc = STATUS_COLOURS[s.status] || NEUTRAL
@@ -579,6 +598,8 @@ function ProjectInspector({
 function PersonInspector({ person, onClose }: { person: PersonProjects; onClose: () => void }) {
   const byStatus: Record<string, number> = {}
   for (const p of person.projects) byStatus[p.status || '—'] = (byStatus[p.status || '—'] || 0) + 1
+  const total = person.projects.length
+  const pct = total ? Math.round(person.projects.reduce((s, p) => s + projectCompletion(p), 0) / total * 100) : 0
   return (
     <>
       <div style={{ padding: '14px 16px', borderBottom: `1px solid ${T.border}`, flexShrink: 0, display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -588,8 +609,13 @@ function PersonInspector({ person, onClose }: { person: PersonProjects; onClose:
         <button onClick={onClose} style={{ background: 'none', border: 'none', color: T.text3, cursor: 'pointer', fontSize: 16, fontFamily: 'inherit', lineHeight: 1 }}>×</button>
       </div>
       <div style={{ padding: '14px 16px', overflowY: 'auto' }}>
-        <div style={{ fontSize: 26, fontWeight: 600, fontFamily: 'monospace', color: T.text }}>{person.projects.length}</div>
-        <div style={{ fontSize: 11, color: T.text3, marginBottom: 16 }}>projects in this channel</div>
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 12 }}>
+          <div><div style={{ fontSize: 26, fontWeight: 600, fontFamily: 'monospace', color: T.text }}>{person.projects.length}</div>
+            <div style={{ fontSize: 11, color: T.text3 }}>projects</div></div>
+          <div><div style={{ fontSize: 26, fontWeight: 600, fontFamily: 'monospace', color: T.green }}>{pct}%</div>
+            <div style={{ fontSize: 11, color: T.text3 }}>done (subitems)</div></div>
+        </div>
+        <div style={{ height: 16 }}/>
         <div style={{ fontSize: 10, fontWeight: 600, color: T.text3, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 8 }}>By status</div>
         {Object.entries(byStatus).sort((a, b) => b[1] - a[1]).map(([s, n]) => (
           <div key={s} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 0' }}>
