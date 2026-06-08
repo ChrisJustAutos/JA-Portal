@@ -36,6 +36,7 @@ export type Permission =
   | 'view:calls'
   | 'view:reports'
   | 'view:todos'
+  | 'view:projects'
   | 'view:supplier_invoices'
   | 'view:jobs'
   | 'view:vehicle_sales'
@@ -59,6 +60,7 @@ export type Permission =
   | 'edit:stripe_myob'
   | 'edit:bookings'
   | 'edit:crm'
+  | 'edit:projects'
   | 'generate:reports'
   | 'monitor:calls'
   // Admin
@@ -78,6 +80,7 @@ const ROLE_PERMISSIONS: Record<UserRole, Permission[]> = {
     'view:diary','edit:bookings',
     'view:messages','manage:inbox',
     'view:crm','edit:crm',
+    'view:projects','edit:projects',
     'admin:users','admin:settings','admin:audit_log','admin:b2b',
   ],
   manager: [
@@ -90,6 +93,7 @@ const ROLE_PERMISSIONS: Record<UserRole, Permission[]> = {
     'view:diary','edit:bookings',
     'view:messages','manage:inbox',
     'view:crm','edit:crm',
+    'view:projects','edit:projects',
   ],
   sales: [
     'view:dashboards','view:overview','view:leads','view:distributors','view:calls','view:reports',
@@ -229,6 +233,7 @@ export const PORTAL_TABS: PortalTab[] = [
   { id: 'distributors',  label: 'Distributors',    permission: 'view:distributors' },
   { id: 'calls',         label: 'Phone Calls',     permission: 'view:calls' },
   { id: 'crm',           label: 'CRM',             permission: 'view:crm' },
+  { id: 'projects',      label: 'Projects',        permission: 'view:projects' },
   { id: 'messages',      label: 'Messages',        permission: 'view:messages' },
   { id: 'diary',         label: 'Workshop',        permission: 'view:diary' },
   { id: 'reports',       label: 'Reports',         permission: 'view:reports' },
