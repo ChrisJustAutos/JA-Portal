@@ -33,9 +33,11 @@ const STATUS_COLOURS: Record<string, string> = {
   'Testing Phase': T.purple,
 }
 const NEUTRAL = '#6b7280'
+// Canonical status labels (shared across the boards + subitem boards).
+const STATUS_OPTIONS = ['Working on it', 'Stuck', 'On Hold', 'Testing Phase', 'Done']
 
 interface SubItem {
-  id: string; name: string; status: string; owner: string; url: string; hasUpdates: boolean
+  id: string; name: string; status: string; owner: string; url: string; boardId: number; hasUpdates: boolean
 }
 interface ProjectItem {
   id: string; name: string; status: string; priority: string | null
@@ -146,6 +148,8 @@ export default function ProjectsBoard({ user }: { user: PortalUserSSR }) {
           hasUpdates: proj.hasUpdates || (cached ? cached.length > 0 : false),
           parentId: pid,
           taggedColors: (proj.tagged || []).map(k => colorByKey[k]).filter(Boolean),
+          childCount: (proj.subitems || []).length,
+          expanded: expandedProjects.has(proj.id),
         })
         links.push({ source: pid, target: projId, kind: 'owns' })
         // Cross-column links to other people tagged on this project.
@@ -184,21 +188,64 @@ export default function ProjectsBoard({ user }: { user: PortalUserSSR }) {
       setSelectedId(id); setFocusId(id)
     } else if (id.startsWith('project:')) {
       const itemId = id.slice('project:'.length)
-      // Toggle subitem branch; load comments for the inspector either way.
-      setExpandedProjects(prev => { const n = new Set(prev); n.has(itemId) ? n.delete(itemId) : n.add(itemId); return n })
+      // Selecting a project reveals its subitems and loads its comment thread.
+      setExpandedProjects(prev => { const n = new Set(prev); n.add(itemId); return n })
       loadComments(itemId)
       setSelectedId(id); setFocusId(id)
     } else if (id.startsWith('subitem:')) {
-      // Select the parent project so the inspector shows its thread.
-      const l = linksRef.current.find(x => x.kind === 'sub' && x.target === id)
-      const projId = l ? l.source : null
-      if (projId) {
-        const itemId = projId.slice('project:'.length)
-        loadComments(itemId)
-        setSelectedId(projId); setFocusId(projId)
-      }
+      // Subitems are first-class: select the subitem itself + load its thread.
+      const subId = id.slice('subitem:'.length)
+      loadComments(subId)
+      setSelectedId(id); setFocusId(id)
     }
   }, [togglePerson, loadComments])
+
+  // Caret on a project node: expand/collapse its subitems, without selecting.
+  const toggleProjectExpand = useCallback((projNodeId: string) => {
+    const itemId = projNodeId.slice('project:'.length)
+    setExpandedProjects(prev => { const n = new Set(prev); n.has(itemId) ? n.delete(itemId) : n.add(itemId); return n })
+  }, [])
+
+  // ── Write helpers (optimistic local update) ─────────────────────────
+  const patchProject = useCallback((itemId: string, patch: Partial<ProjectItem>) => {
+    setPeople(prev => prev.map(p => ({ ...p, projects: p.projects.map(x => x.id === itemId ? { ...x, ...patch } : x) })))
+  }, [])
+  const patchSubitem = useCallback((subId: string, patch: Partial<SubItem>) => {
+    setPeople(prev => prev.map(p => ({ ...p, projects: p.projects.map(x => ({ ...x, subitems: x.subitems.map(s => s.id === subId ? { ...s, ...patch } : s) })) })))
+  }, [])
+
+  const setStatus = useCallback(async (itemId: string, boardId: number, label: string, target: 'project' | 'subitem') => {
+    const prevLabel = (() => {
+      for (const p of people) {
+        if (target === 'project') { const x = p.projects.find(x => x.id === itemId); if (x) return x.status }
+        else { for (const x of p.projects) { const s = x.subitems.find(s => s.id === itemId); if (s) return s.status } }
+      }
+      return ''
+    })()
+    if (target === 'project') patchProject(itemId, { status: label }); else patchSubitem(itemId, { status: label })
+    try {
+      const r = await fetch(`/api/projects/${itemId}/column`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ boardId, columnId: 'status', label }),
+      })
+      if (!r.ok) throw new Error((await r.json()).error || 'Failed')
+    } catch (e: any) {
+      // revert
+      if (target === 'project') patchProject(itemId, { status: prevLabel }); else patchSubitem(itemId, { status: prevLabel })
+      alert(`Couldn't update status: ${e.message || e}`)
+    }
+  }, [people, patchProject, patchSubitem])
+
+  const addSubitem = useCallback(async (projectId: string, name: string) => {
+    const r = await fetch(`/api/projects/${projectId}/subitems`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name }),
+    })
+    const d = await r.json()
+    if (!r.ok) throw new Error(d.error || 'Failed to add subitem')
+    setPeople(prev => prev.map(p => ({ ...p, projects: p.projects.map(x => x.id === projectId ? { ...x, subitems: [...x.subitems, d.subitem] } : x) })))
+    setExpandedProjects(prev => { const n = new Set(prev); n.add(projectId); return n })
+  }, [])
 
   // Chip click: focus + expand that person.
   const onChip = useCallback((key: string) => {
@@ -224,6 +271,19 @@ export default function ProjectsBoard({ user }: { user: PortalUserSSR }) {
     return people.find(p => p.key === key) || null
   }, [selectedId, people])
 
+  const selectedSubitem = useMemo(() => {
+    if (!selectedId?.startsWith('subitem:')) return null
+    const subId = selectedId.slice('subitem:'.length)
+    for (const p of people) for (const proj of p.projects) {
+      const s = proj.subitems.find(s => s.id === subId)
+      if (s) return { person: p, proj, sub: s }
+    }
+    return null
+  }, [selectedId, people])
+
+  // Reset the composer when switching what's selected.
+  useEffect(() => { setComposer(''); setPostError('') }, [selectedId])
+
   // ── Post a comment ──────────────────────────────────────────────────
   const postComment = useCallback(async (itemId: string) => {
     const body = composer.trim()
@@ -239,8 +299,12 @@ export default function ProjectsBoard({ user }: { user: PortalUserSSR }) {
       if (!r.ok) throw new Error(d.error || 'Failed to post')
       setCommentsByItem(prev => ({ ...prev, [itemId]: d.updates || [] }))
       setExpandedProjects(prev => { const n = new Set(prev); n.add(itemId); return n })
-      // Reflect hasUpdates locally so the node indicator lights up.
-      setPeople(prev => prev.map(p => ({ ...p, projects: p.projects.map(x => x.id === itemId ? { ...x, hasUpdates: true } : x) })))
+      // Reflect hasUpdates locally so the node indicator lights up (project or subitem).
+      setPeople(prev => prev.map(p => ({ ...p, projects: p.projects.map(x => ({
+        ...x,
+        hasUpdates: x.id === itemId ? true : x.hasUpdates,
+        subitems: x.subitems.map(s => s.id === itemId ? { ...s, hasUpdates: true } : s),
+      })) })))
       setComposer('')
     } catch (e: any) {
       setPostError(e.message || 'Failed to post comment')
@@ -318,7 +382,7 @@ export default function ProjectsBoard({ user }: { user: PortalUserSSR }) {
                   <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
                 </div>
               ) : (
-                <ProjectGraph nodes={nodes} links={links} selectedId={selectedId} onSelect={handleSelect} focusId={focusId}/>
+                <ProjectGraph nodes={nodes} links={links} selectedId={selectedId} onSelect={handleSelect} focusId={focusId} onToggleExpand={toggleProjectExpand}/>
               )}
 
               {/* Legend */}
@@ -335,7 +399,22 @@ export default function ProjectsBoard({ user }: { user: PortalUserSSR }) {
 
             {/* Inspector (docked, in-page — not a modal) */}
             <div style={{ width: 360, flexShrink: 0, borderLeft: `1px solid ${T.border}`, background: T.bg2, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-              {selectedProject ? (
+              {selectedSubitem ? (
+                <SubitemInspector
+                  person={selectedSubitem.person}
+                  proj={selectedSubitem.proj}
+                  sub={selectedSubitem.sub}
+                  comments={commentsByItem[selectedSubitem.sub.id]}
+                  loadingComments={loadingComments.has(selectedSubitem.sub.id)}
+                  canEdit={canEdit}
+                  onStatus={(label) => setStatus(selectedSubitem!.sub.id, selectedSubitem!.sub.boardId, label, 'subitem')}
+                  composer={composer} setComposer={setComposer}
+                  posting={posting} postError={postError}
+                  onPost={() => postComment(selectedSubitem!.sub.id)}
+                  onBack={() => handleSelect(`project:${selectedSubitem!.proj.id}`)}
+                  onClose={() => setSelectedId(null)}
+                />
+              ) : selectedProject ? (
                 <ProjectInspector
                   person={selectedProject.person}
                   proj={selectedProject.proj}
@@ -343,6 +422,9 @@ export default function ProjectsBoard({ user }: { user: PortalUserSSR }) {
                   comments={commentsByItem[selectedProject.proj.id]}
                   loadingComments={loadingComments.has(selectedProject.proj.id)}
                   canEdit={canEdit}
+                  onStatus={(label) => setStatus(selectedProject!.proj.id, selectedProject!.person.boardId, label, 'project')}
+                  onSelectSubitem={(subId) => handleSelect(`subitem:${subId}`)}
+                  onAddSubitem={(name) => addSubitem(selectedProject!.proj.id, name)}
                   composer={composer} setComposer={setComposer}
                   posting={posting} postError={postError}
                   onPost={() => postComment(selectedProject!.proj.id)}
@@ -366,7 +448,7 @@ export default function ProjectsBoard({ user }: { user: PortalUserSSR }) {
 
 // ── Inspector: a selected project + its comment thread + composer ───────
 function ProjectInspector({
-  person, proj, tagged, comments, loadingComments, canEdit, composer, setComposer, posting, postError, onPost, onClose,
+  person, proj, tagged, comments, loadingComments, canEdit, onStatus, onSelectSubitem, onAddSubitem, composer, setComposer, posting, postError, onPost, onClose,
 }: {
   person: PersonProjects
   proj: ProjectItem
@@ -374,6 +456,9 @@ function ProjectInspector({
   comments: ProjectComment[] | undefined
   loadingComments: boolean
   canEdit: boolean
+  onStatus: (label: string) => void
+  onSelectSubitem: (subId: string) => void
+  onAddSubitem: (name: string) => Promise<void>
   composer: string
   setComposer: (s: string) => void
   posting: boolean
@@ -381,7 +466,13 @@ function ProjectInspector({
   onPost: () => void
   onClose: () => void
 }) {
-  const statusColor = STATUS_COLOURS[proj.status] || NEUTRAL
+  const [newSub, setNewSub] = useState('')
+  const [addingSub, setAddingSub] = useState(false)
+  const submitSub = async () => {
+    const name = newSub.trim(); if (!name) return
+    setAddingSub(true)
+    try { await onAddSubitem(name); setNewSub('') } catch (e: any) { alert(e.message || 'Failed to add subitem') } finally { setAddingSub(false) }
+  }
   return (
     <>
       <div style={{ padding: '14px 16px', borderBottom: `1px solid ${T.border}`, flexShrink: 0 }}>
@@ -392,7 +483,7 @@ function ProjectInspector({
         </div>
         <div style={{ fontSize: 15, fontWeight: 600, color: T.text, lineHeight: 1.3 }}>{proj.name}</div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
-          <span style={{ padding: '2px 8px', borderRadius: 4, fontSize: 10, fontWeight: 500, background: `${statusColor}20`, color: statusColor, border: `1px solid ${statusColor}40` }}>{proj.status || '—'}</span>
+          <StatusSelect value={proj.status} canEdit={canEdit} onChange={onStatus} />
           {proj.priority && proj.priority.toLowerCase().startsWith('critical') && (
             <span style={{ padding: '2px 7px', borderRadius: 4, fontSize: 10, background: `${T.red}20`, color: T.red, border: `1px solid ${T.red}40` }}>⚠ Critical</span>
           )}
@@ -412,24 +503,35 @@ function ProjectInspector({
 
       {/* Scrollable body: subitems + comment thread */}
       <div style={{ flex: 1, overflowY: 'auto', padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: 10 }}>
-        {proj.subitems.length > 0 && (
-          <div style={{ marginBottom: 4 }}>
-            <div style={{ fontSize: 10, fontWeight: 600, color: T.text3, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 8 }}>Subitems ({proj.subitems.length})</div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-              {proj.subitems.map(s => {
-                const sc = STATUS_COLOURS[s.status] || NEUTRAL
-                return (
-                  <a key={s.id} href={s.url || proj.url} target="_blank" rel="noopener noreferrer" style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '5px 8px', background: T.bg3, border: `1px solid ${T.border}`, borderRadius: 6, textDecoration: 'none' }}>
-                    <span style={{ width: 7, height: 7, borderRadius: '50%', background: sc, flexShrink: 0 }}/>
-                    <span style={{ flex: 1, minWidth: 0, fontSize: 12, color: T.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={s.name}>{s.name}</span>
-                    {s.owner && <span style={{ fontSize: 10, color: T.text3, whiteSpace: 'nowrap' }}>{s.owner}</span>}
-                    {s.status && <span style={{ fontSize: 9.5, color: sc, whiteSpace: 'nowrap' }}>{s.status}</span>}
-                  </a>
-                )
-              })}
-            </div>
+        <div style={{ marginBottom: 4 }}>
+          <div style={{ fontSize: 10, fontWeight: 600, color: T.text3, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 8 }}>Subitems ({proj.subitems.length})</div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            {proj.subitems.map(s => {
+              const sc = STATUS_COLOURS[s.status] || NEUTRAL
+              return (
+                <div key={s.id} onClick={() => onSelectSubitem(s.id)}
+                  style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '5px 8px', background: T.bg3, border: `1px solid ${T.border}`, borderRadius: 6, cursor: 'pointer' }}>
+                  <span style={{ width: 7, height: 7, borderRadius: '50%', background: sc, flexShrink: 0 }}/>
+                  <span style={{ flex: 1, minWidth: 0, fontSize: 12, color: T.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={s.name}>{s.name}</span>
+                  {s.hasUpdates && <span title="Has comments" style={{ fontSize: 10, color: T.text3 }}>💬</span>}
+                  {s.status && <span style={{ fontSize: 9.5, color: sc, whiteSpace: 'nowrap' }}>{s.status}</span>}
+                </div>
+              )
+            })}
+            {proj.subitems.length === 0 && <div style={{ fontSize: 12, color: T.text3 }}>No subitems.</div>}
           </div>
-        )}
+          {canEdit && (
+            <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
+              <input value={newSub} onChange={e => setNewSub(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') submitSub() }}
+                placeholder="Add a subitem…"
+                style={{ flex: 1, background: T.bg3, border: `1px solid ${T.border2}`, color: T.text, borderRadius: 6, padding: '6px 8px', fontSize: 12, fontFamily: 'inherit', outline: 'none' }} />
+              <button onClick={submitSub} disabled={addingSub || !newSub.trim()}
+                style={{ padding: '6px 10px', borderRadius: 6, fontSize: 12, background: newSub.trim() && !addingSub ? T.bg4 : T.bg3, color: newSub.trim() ? T.text : T.text3, border: `1px solid ${T.border2}`, cursor: newSub.trim() && !addingSub ? 'pointer' : 'default', fontFamily: 'inherit' }}>
+                {addingSub ? '…' : '+'}
+              </button>
+            </div>
+          )}
+        </div>
         <div style={{ fontSize: 10, fontWeight: 600, color: T.text3, textTransform: 'uppercase', letterSpacing: '0.06em' }}>Comments</div>
         {loadingComments && !comments && <div style={{ color: T.text3, fontSize: 12 }}>Loading comments…</div>}
         {comments && comments.length === 0 && <div style={{ color: T.text3, fontSize: 12 }}>No comments yet.</div>}
@@ -495,6 +597,94 @@ function PersonInspector({ person, onClose }: { person: PersonProjects; onClose:
         ))}
         <div style={{ marginTop: 16, fontSize: 11, color: T.text3 }}>Click a project node to read and add comments.</div>
       </div>
+    </>
+  )
+}
+
+// ── Editable status pill (native select styled as a chip) ───────────────
+function StatusSelect({ value, canEdit, onChange }: { value: string; canEdit: boolean; onChange: (label: string) => void }) {
+  const color = STATUS_COLOURS[value] || NEUTRAL
+  if (!canEdit) {
+    return <span style={{ padding: '2px 8px', borderRadius: 4, fontSize: 10, fontWeight: 500, background: `${color}20`, color, border: `1px solid ${color}40` }}>{value || '—'}</span>
+  }
+  const opts = (value && !STATUS_OPTIONS.includes(value)) ? [value, ...STATUS_OPTIONS] : STATUS_OPTIONS
+  return (
+    <select value={value} onChange={e => onChange(e.target.value)}
+      style={{ padding: '3px 6px', borderRadius: 4, fontSize: 11, fontWeight: 500, background: `${color}20`, color, border: `1px solid ${color}55`, fontFamily: 'inherit', cursor: 'pointer', outline: 'none' }}>
+      {!value && <option value="" style={{ background: T.bg2, color: T.text }}>— set status —</option>}
+      {opts.map(o => <option key={o} value={o} style={{ background: T.bg2, color: T.text }}>{o}</option>)}
+    </select>
+  )
+}
+
+// ── Inspector: a selected subitem (own status + comment thread) ─────────
+function SubitemInspector({
+  person, proj, sub, comments, loadingComments, canEdit, onStatus, composer, setComposer, posting, postError, onPost, onBack, onClose,
+}: {
+  person: PersonProjects
+  proj: ProjectItem
+  sub: SubItem
+  comments: ProjectComment[] | undefined
+  loadingComments: boolean
+  canEdit: boolean
+  onStatus: (label: string) => void
+  composer: string
+  setComposer: (s: string) => void
+  posting: boolean
+  postError: string
+  onPost: () => void
+  onBack: () => void
+  onClose: () => void
+}) {
+  return (
+    <>
+      <div style={{ padding: '14px 16px', borderBottom: `1px solid ${T.border}`, flexShrink: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+          <button onClick={onBack} style={{ background: 'none', border: 'none', color: T.text2, cursor: 'pointer', fontSize: 11, fontFamily: 'inherit', padding: 0 }} title="Back to project">‹ {proj.name.length > 26 ? proj.name.slice(0, 25) + '…' : proj.name}</button>
+          <div style={{ flex: 1 }}/>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', color: T.text3, cursor: 'pointer', fontSize: 16, fontFamily: 'inherit', lineHeight: 1 }}>×</button>
+        </div>
+        <div style={{ fontSize: 10, color: person.color, fontWeight: 600, marginBottom: 4 }}>Subitem</div>
+        <div style={{ fontSize: 15, fontWeight: 600, color: T.text, lineHeight: 1.3 }}>{sub.name}</div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
+          <StatusSelect value={sub.status} canEdit={canEdit} onChange={onStatus} />
+          {sub.owner && <span style={{ fontSize: 11, color: T.text2 }}>{sub.owner}</span>}
+          {sub.url && <a href={sub.url} target="_blank" rel="noopener noreferrer" style={{ fontSize: 11, color: T.blue, textDecoration: 'none' }}>Open in Monday ↗</a>}
+        </div>
+      </div>
+
+      <div style={{ flex: 1, overflowY: 'auto', padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: 10 }}>
+        <div style={{ fontSize: 10, fontWeight: 600, color: T.text3, textTransform: 'uppercase', letterSpacing: '0.06em' }}>Comments</div>
+        {loadingComments && !comments && <div style={{ color: T.text3, fontSize: 12 }}>Loading comments…</div>}
+        {comments && comments.length === 0 && <div style={{ color: T.text3, fontSize: 12 }}>No comments yet.</div>}
+        {(comments || []).map(c => (
+          <div key={c.id} style={{ background: T.bg3, border: `1px solid ${T.border}`, borderRadius: 8, padding: '8px 10px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, marginBottom: 4 }}>
+              <span style={{ fontSize: 11, color: person.color, fontWeight: 600 }}>{c.author}</span>
+              <span style={{ fontSize: 10, color: T.text3, fontFamily: 'monospace', whiteSpace: 'nowrap' }}>{fmtDateTime(c.createdAt)}</span>
+            </div>
+            <div style={{ fontSize: 12.5, color: T.text, whiteSpace: 'pre-wrap', lineHeight: 1.45 }}>{c.body || <span style={{ color: T.text3 }}>(no text)</span>}</div>
+          </div>
+        ))}
+      </div>
+
+      {canEdit ? (
+        <div style={{ borderTop: `1px solid ${T.border}`, padding: 12, flexShrink: 0 }}>
+          {postError && <div style={{ color: T.red, fontSize: 11, marginBottom: 6 }}>{postError}</div>}
+          <textarea value={composer} onChange={e => setComposer(e.target.value)}
+            onKeyDown={e => { if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') onPost() }}
+            placeholder="Add a comment… (⌘/Ctrl+Enter)" rows={3}
+            style={{ width: '100%', boxSizing: 'border-box', background: T.bg3, border: `1px solid ${T.border2}`, color: T.text, borderRadius: 8, padding: '8px 10px', fontSize: 12.5, fontFamily: 'inherit', outline: 'none', resize: 'vertical' }} />
+          <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 8 }}>
+            <button onClick={onPost} disabled={posting || !composer.trim()}
+              style={{ padding: '7px 14px', borderRadius: 6, fontSize: 12, fontWeight: 600, background: composer.trim() && !posting ? T.blue : T.bg4, color: composer.trim() && !posting ? '#fff' : T.text3, border: 'none', cursor: composer.trim() && !posting ? 'pointer' : 'default', fontFamily: 'inherit' }}>
+              {posting ? 'Posting…' : 'Post to Monday'}
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div style={{ borderTop: `1px solid ${T.border}`, padding: 12, fontSize: 11, color: T.text3, flexShrink: 0 }}>Read-only — you don’t have permission to post comments.</div>
+      )}
     </>
   )
 }

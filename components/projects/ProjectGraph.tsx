@@ -25,6 +25,8 @@ export interface GraphNode {
   hasUpdates?: boolean
   parentId?: string        // project → person, subitem → project
   taggedColors?: string[]  // colours of other people tagged (project nodes)
+  childCount?: number      // # subitems (project nodes) — drives the caret
+  expanded?: boolean       // whether subitems are shown
 }
 export interface GraphLink {
   source: string
@@ -55,13 +57,14 @@ function loadPins(): Record<string, XY> {
 }
 
 export default function ProjectGraph({
-  nodes, links, selectedId, onSelect, focusId,
+  nodes, links, selectedId, onSelect, focusId, onToggleExpand,
 }: {
   nodes: GraphNode[]
   links: GraphLink[]
   selectedId: string | null
   onSelect: (id: string | null) => void
   focusId?: string | null
+  onToggleExpand?: (id: string) => void
 }) {
   const wrapRef = useRef<HTMLDivElement | null>(null)
   const [size, setSize] = useState({ w: 900, h: 640 })
@@ -272,11 +275,18 @@ export default function ProjectGraph({
               <g key={n.id} transform={`translate(${p.x},${p.y})`} onMouseDown={e => onNodeDown(e, n.id)} style={{ cursor: 'grab', opacity: isLit ? 1 : 0.18, transition: 'opacity 0.15s' }}>
                 {n.type === 'project' && n.critical && <circle r={r + 3.5} fill="none" stroke="#f04e4e" strokeWidth={2} />}
                 <circle r={r} fill={n.color} stroke={sel ? '#e8eaf0' : `${n.color}`} strokeWidth={sel ? 2.5 : 1.4} />
-                {n.type === 'project' && n.hasUpdates && <circle cx={r * 0.8} cy={-r * 0.8} r={3} fill="#e8eaf0" stroke={n.color} strokeWidth={1} />}
-                {/* tagged-people mini dots, stacked to the left of the node */}
-                {n.type === 'project' && (n.taggedColors || []).map((c, k) => (
-                  <circle key={k} cx={-(r + 6 + k * 7)} cy={0} r={3} fill={c} />
+                {(n.hasUpdates) && <circle cx={r * 0.85} cy={r * 0.85} r={3} fill="#e8eaf0" stroke={n.color} strokeWidth={1} />}
+                {/* tagged-people mini dots, clustered just above the node */}
+                {n.type === 'project' && (n.taggedColors || []).map((c, k, arr) => (
+                  <circle key={k} cx={(k - (arr.length - 1) / 2) * 7} cy={-(r + 7)} r={3} fill={c} />
                 ))}
+                {/* caret: expand/collapse subitems (independent of selection) */}
+                {n.type === 'project' && (n.childCount || 0) > 0 && (
+                  <g onMouseDown={e => { e.stopPropagation(); onToggleExpand?.(n.id) }} style={{ cursor: 'pointer' }}>
+                    <circle cx={-(r + 12)} cy={0} r={8} fill="#1a1d23" stroke="rgba(255,255,255,0.12)" strokeWidth={1} />
+                    <text x={-(r + 12)} y={3.5} textAnchor="middle" fontSize={10} fill="#b9bdc9" style={{ pointerEvents: 'none' }}>{n.expanded ? '−' : '+'}</text>
+                  </g>
+                )}
                 {showLabel && (
                   <text x={r + 8} y={n.type === 'project' ? 4 : 3.5} fontSize={n.type === 'project' ? 12 : 10.5}
                     fontWeight={n.type === 'project' ? 500 : 400} fill={n.type === 'project' ? '#e8eaf0' : '#b9bdc9'} style={{ pointerEvents: 'none' }}>

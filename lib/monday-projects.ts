@@ -54,7 +54,18 @@ export interface SubItem {
   status: string
   owner: string          // display string of owner name(s)
   url: string
+  boardId: number        // the subitems board (needed to write status back)
   hasUpdates: boolean
+}
+
+// Canonical status labels shared by all six boards + their subitem boards
+// (forked from one template — see pages/api/todos.ts). Used for the status
+// dropdowns and written back by label so we don't depend on per-board indices.
+export const STATUS_OPTIONS = ['Working on it', 'Stuck', 'On Hold', 'Testing Phase', 'Done']
+
+function parseBoardId(url: string | null | undefined): number {
+  const m = (url || '').match(/\/boards\/(\d+)\//)
+  return m ? Number(m[1]) : 0
 }
 
 export interface ProjectItem {
@@ -146,6 +157,7 @@ async function fetchBoardProjects(board: PersonBoard, groupId: string): Promise<
         status: sStatus,
         owner: sOwners.join(', '),
         url: s.url || '',
+        boardId: parseBoardId(s.url),
         hasUpdates: Array.isArray(s.updates) && s.updates.length > 0,
         // ownerNames kept transiently for tag computation below
         ownerNames: sOwners,
@@ -217,4 +229,38 @@ export async function fetchItemUpdates(itemId: string): Promise<ProjectComment[]
       createdAt: u.created_at || '',
     }))
     .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+}
+
+// ── Write actions (gated on edit:projects in the API layer) ─────────────
+
+// Set a status/label column by label text (works for both project status and
+// subitem status — same column id "status"). By-label avoids per-board index
+// differences. Throws if the label doesn't exist on that column.
+export async function setStatusLabel(itemId: string, boardId: number, columnId: string, label: string): Promise<void> {
+  await mondayQuery(
+    `mutation Set($b: ID!, $i: ID!, $c: String!, $v: JSON!) {
+      change_column_value(board_id: $b, item_id: $i, column_id: $c, value: $v) { id }
+    }`,
+    { b: String(boardId), i: itemId, c: columnId, v: JSON.stringify({ label }) },
+  )
+}
+
+// Create a subitem under a project; returns it in the same shape as the list.
+export async function createSubitem(parentItemId: string, name: string): Promise<SubItem> {
+  const data = await mondayQuery<{ create_subitem: { id: string; name: string; url: string } }>(
+    `mutation Sub($p: ID!, $n: String!) {
+      create_subitem(parent_item_id: $p, item_name: $n) { id name url }
+    }`,
+    { p: parentItemId, n: name },
+  )
+  const s = data.create_subitem
+  return {
+    id: String(s.id),
+    name: s.name || name,
+    status: '',
+    owner: '',
+    url: s.url || '',
+    boardId: parseBoardId(s.url),
+    hasUpdates: false,
+  }
 }
