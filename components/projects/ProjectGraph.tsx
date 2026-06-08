@@ -1,18 +1,19 @@
 // components/projects/ProjectGraph.tsx
-// Self-contained SVG force-directed graph (Obsidian-style) for the /projects
-// module. No external dependency — a small Verlet-ish spring simulation runs in
-// a requestAnimationFrame loop with alpha cooling so it settles and stops.
+// Project tracking graph for the /projects module. NOT a physics web — a tidy
+// deterministic layout: each person is a hub, their projects stack in a column
+// directly below the name, and subitems indent beneath their project. Cross-
+// column curves connect a project to any OTHER person tagged on it.
 //
-// Node types: 'person' (hub) → 'project' (orbits person) → 'comment' (branches
-// off a project). Links are drawn as gently bowed quadratic curves for the web
-// feel. Selecting a node dims everything outside its immediate neighbourhood.
+// Any node can be dragged and STAYS where you drop it (pinned, persisted to
+// localStorage). Dragging a person moves its whole column (un-pinned projects
+// follow). Pan = drag the background; zoom = wheel or the +/− buttons; Fit
+// recentres everything.
 //
-// Loaded via next/dynamic({ ssr:false }) from pages/projects.tsx — it touches
-// window/RAF and must only run client-side.
+// Loaded via next/dynamic({ ssr:false }) from pages/projects.tsx.
 
-import { useRef, useEffect, useReducer, useCallback, useState } from 'react'
+import { useRef, useEffect, useReducer, useState, useCallback } from 'react'
 
-export type NodeType = 'person' | 'project' | 'comment'
+export type NodeType = 'person' | 'project' | 'subitem'
 
 export interface GraphNode {
   id: string
@@ -22,31 +23,35 @@ export interface GraphNode {
   status?: string
   critical?: boolean
   hasUpdates?: boolean
-  parentId?: string   // used to spawn new nodes near their parent
+  parentId?: string        // project → person, subitem → project
+  taggedColors?: string[]  // colours of other people tagged (project nodes)
 }
 export interface GraphLink {
   source: string
   target: string
-  kind: 'owns' | 'comment'
+  kind: 'owns' | 'sub' | 'tag'
+  color?: string           // tag links carry the tagged person's colour
 }
 
-interface P { x: number; y: number; vx: number; vy: number; fixed?: boolean }
+interface XY { x: number; y: number }
 
-// ── Force / layout constants ───────────────────────────────────────────
-const REPULSION = 2600
-const MIN_DIST = 14
-const SPRING_K = 0.045
-const REST_OWNS = 150
-const REST_COMMENT = 60
-const CENTER_K = 0.012
-const DAMPING = 0.86
-const ALPHA_DECAY = 0.985
-const ALPHA_MIN = 0.004
+// ── Layout constants ────────────────────────────────────────────────────
+const MARGIN_X = 130
+const TOP_Y = 60
+const COL_W = 300
+const PERSON_R = 22
+const PROJECT_R = 8
+const SUB_R = 4.5
+const HEADER_GAP = 64       // first project below the person name
+const PROJ_ROW = 30
+const SUB_ROW = 24
+const SUB_GAP = 8
+const SUB_INDENT = 24
 
-const RADIUS: Record<NodeType, number> = { person: 24, project: 12, comment: 5 }
+const PIN_KEY = 'ja-projects-pins-v1'
 
-function radiusFor(n: GraphNode): number {
-  return RADIUS[n.type]
+function loadPins(): Record<string, XY> {
+  try { return JSON.parse(localStorage.getItem(PIN_KEY) || '{}') } catch { return {} }
 }
 
 export default function ProjectGraph({
@@ -59,19 +64,17 @@ export default function ProjectGraph({
   focusId?: string | null
 }) {
   const wrapRef = useRef<HTMLDivElement | null>(null)
-  const [size, setSize] = useState({ w: 800, h: 600 })
-
-  // Live refs so the rAF loop always sees the latest props without re-binding.
-  const nodesRef = useRef(nodes); nodesRef.current = nodes
-  const linksRef = useRef(links); linksRef.current = links
-
-  const posRef = useRef<Map<string, P>>(new Map())
-  const alphaRef = useRef(1)
-  const rafRef = useRef<number | null>(null)
-  const draggingRef = useRef<{ id: string; moved: boolean } | null>(null)
-  const panningRef = useRef<{ x: number; y: number } | null>(null)
+  const [size, setSize] = useState({ w: 900, h: 640 })
+  const [pins, setPins] = useState<Record<string, XY>>({})
+  const pinsRef = useRef(pins); pinsRef.current = pins
   const viewRef = useRef({ panX: 0, panY: 0, zoom: 1 })
   const [, rerender] = useReducer((x: number) => x + 1, 0)
+  const didFit = useRef(false)
+
+  const dragRef = useRef<{ id: string; offX: number; offY: number; moved: boolean } | null>(null)
+  const panRef = useRef<{ x: number; y: number } | null>(null)
+
+  useEffect(() => { setPins(loadPins()) }, [])
 
   // ── Container sizing ────────────────────────────────────────────────
   useEffect(() => {
@@ -87,160 +90,104 @@ export default function ProjectGraph({
     return () => ro.disconnect()
   }, [])
 
-  const ensureLoop = useCallback(() => {
-    if (rafRef.current != null) return
-    const step = () => {
-      const ns = nodesRef.current
-      const ls = linksRef.current
-      const pos = posRef.current
-      const cx = size.w / 2, cy = size.h / 2
-      const alpha = alphaRef.current
+  // ── Deterministic layout ────────────────────────────────────────────
+  const persons = nodes.filter(n => n.type === 'person')
+  const projectsByPerson: Record<string, GraphNode[]> = {}
+  const subsByProject: Record<string, GraphNode[]> = {}
+  for (const n of nodes) {
+    if (n.type === 'project' && n.parentId) (projectsByPerson[n.parentId] ||= []).push(n)
+    if (n.type === 'subitem' && n.parentId) (subsByProject[n.parentId] ||= []).push(n)
+  }
 
-      // Repulsion (O(n^2) — fine for a few hundred nodes).
-      for (let i = 0; i < ns.length; i++) {
-        const a = pos.get(ns[i].id); if (!a) continue
-        for (let j = i + 1; j < ns.length; j++) {
-          const b = pos.get(ns[j].id); if (!b) continue
-          let dx = a.x - b.x, dy = a.y - b.y
-          let d2 = dx * dx + dy * dy
-          if (d2 < MIN_DIST * MIN_DIST) d2 = MIN_DIST * MIN_DIST
-          const d = Math.sqrt(d2)
-          const f = (REPULSION / d2) * alpha
-          const fx = (dx / d) * f, fy = (dy / d) * f
-          if (!a.fixed) { a.vx += fx; a.vy += fy }
-          if (!b.fixed) { b.vx -= fx; b.vy -= fy }
-        }
-      }
-
-      // Springs along links.
-      for (const l of ls) {
-        const a = pos.get(l.source), b = pos.get(l.target)
-        if (!a || !b) continue
-        const rest = l.kind === 'owns' ? REST_OWNS : REST_COMMENT
-        let dx = b.x - a.x, dy = b.y - a.y
-        let d = Math.sqrt(dx * dx + dy * dy) || 0.01
-        const f = (d - rest) * SPRING_K * alpha
-        const fx = (dx / d) * f, fy = (dy / d) * f
-        if (!a.fixed) { a.vx += fx; a.vy += fy }
-        if (!b.fixed) { b.vx -= fx; b.vy -= fy }
-      }
-
-      // Weak centering + integrate.
-      for (const n of ns) {
-        const p = pos.get(n.id); if (!p || p.fixed) continue
-        // Comments cling to their parent more than to the canvas centre.
-        const ck = n.type === 'comment' ? CENTER_K * 0.3 : CENTER_K
-        p.vx += (cx - p.x) * ck * alpha
-        p.vy += (cy - p.y) * ck * alpha
-        p.vx *= DAMPING; p.vy *= DAMPING
-        p.x += p.vx; p.y += p.vy
-      }
-
-      alphaRef.current = alpha * ALPHA_DECAY
-      rerender()
-
-      if (alphaRef.current > ALPHA_MIN || draggingRef.current) {
-        rafRef.current = requestAnimationFrame(step)
-      } else {
-        rafRef.current = null
-      }
+  const pos = new Map<string, XY>()
+  persons.forEach((person, idx) => {
+    const base = pins[person.id] || { x: MARGIN_X + idx * COL_W, y: TOP_Y }
+    pos.set(person.id, base)
+    let y = base.y + HEADER_GAP
+    for (const proj of (projectsByPerson[person.id] || [])) {
+      pos.set(proj.id, pins[proj.id] || { x: base.x, y })
+      y += PROJ_ROW
+      const subs = subsByProject[proj.id] || []
+      for (const s of subs) { pos.set(s.id, pins[s.id] || { x: base.x + SUB_INDENT, y }); y += SUB_ROW }
+      if (subs.length) y += SUB_GAP
     }
-    rafRef.current = requestAnimationFrame(step)
+  })
+
+  // ── Fit everything into view ────────────────────────────────────────
+  const fit = useCallback(() => {
+    if (pos.size === 0) return
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
+    pos.forEach(p => {
+      minX = Math.min(minX, p.x); minY = Math.min(minY, p.y)
+      maxX = Math.max(maxX, p.x + 200); maxY = Math.max(maxY, p.y) // +label width estimate
+    })
+    minX -= 60; minY -= 60; maxY += 40
+    const w = maxX - minX, h = maxY - minY
+    const zoom = Math.min(1, Math.max(0.3, Math.min(size.w / w, size.h / h)))
+    const v = viewRef.current
+    v.zoom = zoom
+    v.panX = (size.w - w * zoom) / 2 - minX * zoom
+    v.panY = Math.max(16, (size.h - h * zoom) / 2 - minY * zoom)
+    rerender()
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [size.w, size.h])
 
-  const reheat = useCallback((a = 1) => {
-    alphaRef.current = Math.max(alphaRef.current, a)
-    ensureLoop()
-  }, [ensureLoop])
-
-  // ── Reconcile positions when the node set changes ───────────────────
+  // Fit once when the first data arrives.
   useEffect(() => {
-    const pos = posRef.current
-    const cx = size.w / 2, cy = size.h / 2
-    const present = new Set(nodes.map(n => n.id))
-    // Drop gone nodes.
-    Array.from(pos.keys()).forEach(id => { if (!present.has(id)) pos.delete(id) })
-    // Seed new ones.
-    const people = nodes.filter(n => n.type === 'person')
-    nodes.forEach((n, i) => {
-      if (pos.has(n.id)) return
-      if (n.type === 'person') {
-        const idx = people.findIndex(p => p.id === n.id)
-        const ang = (idx / Math.max(1, people.length)) * Math.PI * 2
-        const r = Math.min(size.w, size.h) * 0.28
-        pos.set(n.id, { x: cx + Math.cos(ang) * r, y: cy + Math.sin(ang) * r, vx: 0, vy: 0 })
-      } else if (n.parentId && pos.has(n.parentId)) {
-        const pp = pos.get(n.parentId)!
-        const jitter = () => (Math.sin((i + 1) * 12.9898) * 43758.5453 % 1) * 60 - 30
-        pos.set(n.id, { x: pp.x + jitter(), y: pp.y + jitter() + 18, vx: 0, vy: 0 })
-      } else {
-        pos.set(n.id, { x: cx + (i % 7) * 12 - 36, y: cy + (i % 5) * 12 - 24, vx: 0, vy: 0 })
-      }
-    })
-    reheat(0.9)
-  }, [nodes, size.w, size.h, reheat])
+    if (!didFit.current && persons.length > 0 && size.w > 0) { fit(); didFit.current = true }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [persons.length, size.w, fit])
 
-  useEffect(() => () => { if (rafRef.current != null) cancelAnimationFrame(rafRef.current) }, [])
-
-  // ── Focus: recentre the view on a node (chip click / selection) ─────
+  // ── Focus a node (chip click) ───────────────────────────────────────
   useEffect(() => {
     if (!focusId) return
-    const p = posRef.current.get(focusId)
+    const p = pos.get(focusId)
     if (!p) return
     const v = viewRef.current
     v.panX = size.w / 2 - p.x * v.zoom
-    v.panY = size.h / 2 - p.y * v.zoom
+    v.panY = size.h / 3 - p.y * v.zoom
     rerender()
-  }, [focusId, size.w, size.h])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusId])
 
   // ── Coordinate helpers ──────────────────────────────────────────────
-  const toWorld = (clientX: number, clientY: number) => {
+  const toWorld = (clientX: number, clientY: number): XY => {
     const rect = wrapRef.current!.getBoundingClientRect()
     const v = viewRef.current
-    return {
-      x: (clientX - rect.left - v.panX) / v.zoom,
-      y: (clientY - rect.top - v.panY) / v.zoom,
-    }
+    return { x: (clientX - rect.left - v.panX) / v.zoom, y: (clientY - rect.top - v.panY) / v.zoom }
   }
 
-  // ── Pointer interaction ─────────────────────────────────────────────
   const onNodeDown = (e: React.MouseEvent, id: string) => {
     e.stopPropagation()
-    const p = posRef.current.get(id); if (!p) return
-    p.fixed = true
-    draggingRef.current = { id, moved: false }
-    reheat(0.6)
+    const p = pos.get(id); if (!p) return
+    const w = toWorld(e.clientX, e.clientY)
+    dragRef.current = { id, offX: p.x - w.x, offY: p.y - w.y, moved: false }
   }
-  const onBackgroundDown = (e: React.MouseEvent) => {
-    panningRef.current = { x: e.clientX, y: e.clientY }
-  }
+  const onBackgroundDown = (e: React.MouseEvent) => { panRef.current = { x: e.clientX, y: e.clientY } }
 
   useEffect(() => {
     const onMove = (e: MouseEvent) => {
-      if (draggingRef.current) {
-        const { id } = draggingRef.current
-        const p = posRef.current.get(id); if (!p) return
+      if (dragRef.current) {
+        const { id, offX, offY } = dragRef.current
         const w = toWorld(e.clientX, e.clientY)
-        p.x = w.x; p.y = w.y; p.vx = 0; p.vy = 0
-        draggingRef.current.moved = true
-        reheat(0.5)
-      } else if (panningRef.current) {
+        dragRef.current.moved = true
+        setPins(prev => ({ ...prev, [id]: { x: w.x + offX, y: w.y + offY } }))
+      } else if (panRef.current) {
         const v = viewRef.current
-        v.panX += e.clientX - panningRef.current.x
-        v.panY += e.clientY - panningRef.current.y
-        panningRef.current = { x: e.clientX, y: e.clientY }
+        v.panX += e.clientX - panRef.current.x
+        v.panY += e.clientY - panRef.current.y
+        panRef.current = { x: e.clientX, y: e.clientY }
         rerender()
       }
     }
     const onUp = () => {
-      if (draggingRef.current) {
-        const { id, moved } = draggingRef.current
-        const p = posRef.current.get(id)
-        if (p) p.fixed = false
-        if (!moved) onSelect(id === selectedId ? null : id)
-        draggingRef.current = null
+      if (dragRef.current) {
+        const { id, moved } = dragRef.current
+        if (moved) { try { localStorage.setItem(PIN_KEY, JSON.stringify(pinsRef.current)) } catch { /* quota */ } }
+        else onSelect(id)
+        dragRef.current = null
       }
-      panningRef.current = null
+      panRef.current = null
     }
     window.addEventListener('mousemove', onMove)
     window.addEventListener('mouseup', onUp)
@@ -249,32 +196,22 @@ export default function ProjectGraph({
       window.removeEventListener('mouseup', onUp)
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedId, reheat, onSelect])
+  }, [selectedId, onSelect])
 
+  const zoomToward = (mx: number, my: number, factor: number) => {
+    const v = viewRef.current
+    const nz = Math.min(3, Math.max(0.25, v.zoom * factor))
+    v.panX = mx - ((mx - v.panX) * nz) / v.zoom
+    v.panY = my - ((my - v.panY) * nz) / v.zoom
+    v.zoom = nz
+    rerender()
+  }
   const onWheel = (e: React.WheelEvent) => {
-    const v = viewRef.current
     const rect = wrapRef.current!.getBoundingClientRect()
-    const mx = e.clientX - rect.left, my = e.clientY - rect.top
-    const factor = e.deltaY < 0 ? 1.12 : 1 / 1.12
-    const newZoom = Math.min(3, Math.max(0.25, v.zoom * factor))
-    // Zoom toward the cursor.
-    v.panX = mx - ((mx - v.panX) * newZoom) / v.zoom
-    v.panY = my - ((my - v.panY) * newZoom) / v.zoom
-    v.zoom = newZoom
-    rerender()
+    zoomToward(e.clientX - rect.left, e.clientY - rect.top, e.deltaY < 0 ? 1.12 : 1 / 1.12)
   }
 
-  const zoomBy = (factor: number) => {
-    const v = viewRef.current
-    const mx = size.w / 2, my = size.h / 2
-    const newZoom = Math.min(3, Math.max(0.25, v.zoom * factor))
-    v.panX = mx - ((mx - v.panX) * newZoom) / v.zoom
-    v.panY = my - ((my - v.panY) * newZoom) / v.zoom
-    v.zoom = newZoom
-    rerender()
-  }
-
-  // ── Derived highlight neighbourhood ─────────────────────────────────
+  // ── Selection neighbourhood ─────────────────────────────────────────
   const neighbours = (() => {
     if (!selectedId) return null
     const set = new Set<string>([selectedId])
@@ -284,80 +221,66 @@ export default function ProjectGraph({
     }
     return set
   })()
-  const isLit = (id: string) => !neighbours || neighbours.has(id)
+  const lit = (id: string) => !neighbours || neighbours.has(id)
 
-  const pos = posRef.current
   const v = viewRef.current
 
   return (
-    <div
-      ref={wrapRef}
-      style={{ position: 'relative', width: '100%', height: '100%', overflow: 'hidden', cursor: panningRef.current ? 'grabbing' : 'grab', touchAction: 'none' }}
-    >
-      <svg
-        width={size.w} height={size.h}
-        onMouseDown={onBackgroundDown}
-        onWheel={onWheel}
-        style={{ display: 'block', userSelect: 'none' }}
-      >
+    <div ref={wrapRef} style={{ position: 'relative', width: '100%', height: '100%', overflow: 'hidden', cursor: panRef.current ? 'grabbing' : 'grab', touchAction: 'none' }}>
+      <svg width={size.w} height={size.h} onMouseDown={onBackgroundDown} onWheel={onWheel} style={{ display: 'block', userSelect: 'none' }}>
         <g transform={`translate(${v.panX},${v.panY}) scale(${v.zoom})`}>
           {/* Links */}
           {links.map((l, i) => {
             const a = pos.get(l.source), b = pos.get(l.target)
             if (!a || !b) return null
-            const lit = isLit(l.source) && isLit(l.target)
-            const touchesSel = selectedId && (l.source === selectedId || l.target === selectedId)
-            // Bowed control point for the web feel.
-            const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2
-            const ox = -(b.y - a.y) * 0.12, oy = (b.x - a.x) * 0.12
-            const owns = l.kind === 'owns'
+            const on = lit(l.source) && lit(l.target)
+            if (l.kind === 'tag') {
+              const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2
+              const ox = -(b.y - a.y) * 0.18, oy = (b.x - a.x) * 0.18
+              return (
+                <path key={`l${i}`} d={`M${a.x},${a.y} Q${mx + ox},${my + oy} ${b.x},${b.y}`} fill="none"
+                  stroke={l.color || '#8b90a0'} strokeWidth={1.4 / v.zoom} strokeDasharray="5 4"
+                  style={{ opacity: on ? 0.7 : 0.06, transition: 'opacity 0.15s' }} />
+              )
+            }
+            // owns / sub — clean near-vertical connectors
             return (
-              <path
-                key={`l${i}`}
-                d={`M${a.x},${a.y} Q${mx + ox},${my + oy} ${b.x},${b.y}`}
-                fill="none"
-                stroke={touchesSel ? '#8b90a0' : owns ? 'rgba(139,144,160,0.5)' : 'rgba(139,144,160,0.28)'}
-                strokeWidth={(owns ? 1.4 : 0.9) / v.zoom + (touchesSel ? 0.6 : 0)}
-                style={{ opacity: lit ? 1 : 0.08, transition: 'opacity 0.15s' }}
-              />
+              <line key={`l${i}`} x1={a.x} y1={a.y} x2={b.x} y2={b.y}
+                stroke="rgba(139,144,160,0.45)" strokeWidth={(l.kind === 'owns' ? 1.4 : 1) / v.zoom}
+                style={{ opacity: on ? 1 : 0.1, transition: 'opacity 0.15s' }} />
             )
           })}
 
           {/* Nodes */}
           {nodes.map(n => {
             const p = pos.get(n.id); if (!p) return null
-            const r = radiusFor(n)
-            const lit = isLit(n.id)
+            const isLit = lit(n.id)
             const sel = n.id === selectedId
-            const stroke = sel ? '#e8eaf0' : `${n.color}`
+            if (n.type === 'person') {
+              return (
+                <g key={n.id} transform={`translate(${p.x},${p.y})`} onMouseDown={e => onNodeDown(e, n.id)} style={{ cursor: 'grab', opacity: isLit ? 1 : 0.2, transition: 'opacity 0.15s' }}>
+                  <circle r={PERSON_R} fill={`${n.color}ee`} stroke={sel ? '#e8eaf0' : n.color} strokeWidth={sel ? 2.5 : 2} />
+                  <text y={PERSON_R + 16} textAnchor="middle" fontSize={14} fontWeight={700} fill="#e8eaf0" style={{ pointerEvents: 'none' }}>{n.label}</text>
+                  <title>{n.label}</title>
+                </g>
+              )
+            }
+            const r = n.type === 'project' ? PROJECT_R : SUB_R
+            const showLabel = n.type === 'project' || v.zoom > 0.55 || sel || (neighbours && neighbours.has(n.id))
+            const label = n.label.length > 34 ? n.label.slice(0, 33) + '…' : n.label
             return (
-              <g
-                key={n.id}
-                transform={`translate(${p.x},${p.y})`}
-                onMouseDown={e => onNodeDown(e, n.id)}
-                style={{ cursor: 'pointer', opacity: lit ? 1 : 0.18, transition: 'opacity 0.15s' }}
-              >
-                {/* Critical ring on a project */}
-                {n.type === 'project' && n.critical && (
-                  <circle r={r + 3.5} fill="none" stroke="#f04e4e" strokeWidth={2} />
-                )}
-                <circle
-                  r={r}
-                  fill={n.type === 'comment' ? n.color : `${n.color}${n.type === 'person' ? 'ee' : 'cc'}`}
-                  stroke={stroke}
-                  strokeWidth={sel ? 2.5 : n.type === 'person' ? 2 : 1.4}
-                />
-                {/* Comment indicator dot on projects that have updates */}
-                {n.type === 'project' && n.hasUpdates && (
-                  <circle cx={r * 0.72} cy={-r * 0.72} r={3.2} fill="#e8eaf0" stroke={n.color} strokeWidth={1} />
-                )}
-                {/* Labels: people always; projects when zoomed in or in focus */}
-                {n.type === 'person' && (
-                  <text y={r + 14} textAnchor="middle" fontSize={13} fontWeight={600} fill="#e8eaf0" style={{ pointerEvents: 'none' }}>{n.label}</text>
-                )}
-                {n.type === 'project' && (v.zoom > 0.75 || sel || (neighbours && neighbours.has(n.id))) && (
-                  <text y={r + 12} textAnchor="middle" fontSize={10.5} fill="#b9bdc9" style={{ pointerEvents: 'none' }}>
-                    {n.label.length > 26 ? n.label.slice(0, 25) + '…' : n.label}
+              <g key={n.id} transform={`translate(${p.x},${p.y})`} onMouseDown={e => onNodeDown(e, n.id)} style={{ cursor: 'grab', opacity: isLit ? 1 : 0.18, transition: 'opacity 0.15s' }}>
+                {n.type === 'project' && n.critical && <circle r={r + 3.5} fill="none" stroke="#f04e4e" strokeWidth={2} />}
+                <circle r={r} fill={n.color} stroke={sel ? '#e8eaf0' : `${n.color}`} strokeWidth={sel ? 2.5 : 1.4} />
+                {n.type === 'project' && n.hasUpdates && <circle cx={r * 0.8} cy={-r * 0.8} r={3} fill="#e8eaf0" stroke={n.color} strokeWidth={1} />}
+                {/* tagged-people mini dots, stacked to the left of the node */}
+                {n.type === 'project' && (n.taggedColors || []).map((c, k) => (
+                  <circle key={k} cx={-(r + 6 + k * 7)} cy={0} r={3} fill={c} />
+                ))}
+                {showLabel && (
+                  <text x={r + 8} y={n.type === 'project' ? 4 : 3.5} fontSize={n.type === 'project' ? 12 : 10.5}
+                    fontWeight={n.type === 'project' ? 500 : 400} fill={n.type === 'project' ? '#e8eaf0' : '#b9bdc9'} style={{ pointerEvents: 'none' }}>
+                    {label}
                   </text>
                 )}
                 <title>{n.label}{n.status ? ` — ${n.status}` : ''}</title>
@@ -367,16 +290,17 @@ export default function ProjectGraph({
         </g>
       </svg>
 
-      {/* Zoom controls */}
+      {/* Controls */}
       <div style={{ position: 'absolute', right: 12, bottom: 12, display: 'flex', flexDirection: 'column', gap: 6 }}>
-        {[['+', 1.2], ['−', 1 / 1.2]].map(([lbl, f]) => (
-          <button
-            key={lbl as string}
-            onClick={() => zoomBy(f as number)}
-            style={{ width: 30, height: 30, borderRadius: 8, border: '1px solid rgba(255,255,255,0.12)', background: '#131519', color: '#e8eaf0', fontSize: 16, cursor: 'pointer', fontFamily: 'inherit', lineHeight: 1 }}
-          >{lbl}</button>
-        ))}
+        <button onClick={fit} title="Fit to view" style={ctrlBtn}>⤢</button>
+        <button onClick={() => zoomToward(size.w / 2, size.h / 2, 1.2)} style={ctrlBtn}>+</button>
+        <button onClick={() => zoomToward(size.w / 2, size.h / 2, 1 / 1.2)} style={ctrlBtn}>−</button>
       </div>
     </div>
   )
+}
+
+const ctrlBtn: React.CSSProperties = {
+  width: 30, height: 30, borderRadius: 8, border: '1px solid rgba(255,255,255,0.12)',
+  background: '#131519', color: '#e8eaf0', fontSize: 15, cursor: 'pointer', fontFamily: 'inherit', lineHeight: 1,
 }

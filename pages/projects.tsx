@@ -34,9 +34,13 @@ const STATUS_COLOURS: Record<string, string> = {
 }
 const NEUTRAL = '#6b7280'
 
+interface SubItem {
+  id: string; name: string; status: string; owner: string; url: string; hasUpdates: boolean
+}
 interface ProjectItem {
   id: string; name: string; status: string; priority: string | null
   url: string; createdAt: string; updatedAt: string; hasUpdates: boolean
+  subitems: SubItem[]; tagged: string[]
 }
 interface PersonProjects {
   key: string; name: string; color: string; boardId: number; projects: ProjectItem[]
@@ -112,6 +116,17 @@ export default function ProjectsBoard({ user }: { user: PortalUserSSR }) {
     }
   }, [commentsByItem])
 
+  const colorByKey = useMemo(() => {
+    const m: Record<string, string> = {}
+    for (const p of people) m[p.key] = p.color
+    return m
+  }, [people])
+  const peopleByKey = useMemo(() => {
+    const m: Record<string, { name: string; color: string }> = {}
+    for (const p of people) m[p.key] = { name: p.name, color: p.color }
+    return m
+  }, [people])
+
   // ── Build the graph from data + expansion state ─────────────────────
   const { nodes, links } = useMemo(() => {
     const nodes: GraphNode[] = []
@@ -130,19 +145,29 @@ export default function ProjectsBoard({ user }: { user: PortalUserSSR }) {
           critical: !!proj.priority && proj.priority.toLowerCase().startsWith('critical'),
           hasUpdates: proj.hasUpdates || (cached ? cached.length > 0 : false),
           parentId: pid,
+          taggedColors: (proj.tagged || []).map(k => colorByKey[k]).filter(Boolean),
         })
         links.push({ source: pid, target: projId, kind: 'owns' })
+        // Cross-column links to other people tagged on this project.
+        for (const k of (proj.tagged || [])) {
+          if (colorByKey[k]) links.push({ source: `person:${k}`, target: projId, kind: 'tag', color: colorByKey[k] })
+        }
+        // Subitems branch beneath the project when expanded.
         if (expandedProjects.has(proj.id)) {
-          for (const c of (cached || [])) {
-            const cid = `comment:${c.id}`
-            nodes.push({ id: cid, type: 'comment', label: c.body ? c.body.slice(0, 60) : 'comment', color: person.color, parentId: projId })
-            links.push({ source: projId, target: cid, kind: 'comment' })
+          for (const s of (proj.subitems || [])) {
+            const sid = `subitem:${s.id}`
+            nodes.push({
+              id: sid, type: 'subitem', label: s.name,
+              color: STATUS_COLOURS[s.status] || NEUTRAL,
+              status: s.status, hasUpdates: s.hasUpdates, parentId: projId,
+            })
+            links.push({ source: projId, target: sid, kind: 'sub' })
           }
         }
       }
     }
     return { nodes, links }
-  }, [people, expandedPeople, expandedProjects, commentsByItem])
+  }, [people, expandedPeople, expandedProjects, commentsByItem, colorByKey])
 
   // Ref so selection logic can resolve a comment → its project without staleness.
   const linksRef = useRef(links); linksRef.current = links
@@ -159,12 +184,19 @@ export default function ProjectsBoard({ user }: { user: PortalUserSSR }) {
       setSelectedId(id); setFocusId(id)
     } else if (id.startsWith('project:')) {
       const itemId = id.slice('project:'.length)
-      setExpandedProjects(prev => { const n = new Set(prev); n.add(itemId); return n })
+      // Toggle subitem branch; load comments for the inspector either way.
+      setExpandedProjects(prev => { const n = new Set(prev); n.has(itemId) ? n.delete(itemId) : n.add(itemId); return n })
       loadComments(itemId)
       setSelectedId(id); setFocusId(id)
-    } else if (id.startsWith('comment:')) {
-      const l = linksRef.current.find(x => x.kind === 'comment' && x.target === id)
-      setSelectedId(l ? l.source : id)
+    } else if (id.startsWith('subitem:')) {
+      // Select the parent project so the inspector shows its thread.
+      const l = linksRef.current.find(x => x.kind === 'sub' && x.target === id)
+      const projId = l ? l.source : null
+      if (projId) {
+        const itemId = projId.slice('project:'.length)
+        loadComments(itemId)
+        setSelectedId(projId); setFocusId(projId)
+      }
     }
   }, [togglePerson, loadComments])
 
@@ -307,6 +339,7 @@ export default function ProjectsBoard({ user }: { user: PortalUserSSR }) {
                 <ProjectInspector
                   person={selectedProject.person}
                   proj={selectedProject.proj}
+                  tagged={(selectedProject.proj.tagged || []).map(k => peopleByKey[k]).filter(Boolean)}
                   comments={commentsByItem[selectedProject.proj.id]}
                   loadingComments={loadingComments.has(selectedProject.proj.id)}
                   canEdit={canEdit}
@@ -320,7 +353,7 @@ export default function ProjectsBoard({ user }: { user: PortalUserSSR }) {
               ) : (
                 <div style={{ padding: 24, color: T.text3, fontSize: 13, lineHeight: 1.6 }}>
                   <div style={{ fontSize: 12, fontWeight: 600, color: T.text2, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 12 }}>Project web</div>
-                  Click a <strong style={{ color: T.text }}>person</strong> chip or hub to spring out their projects. Click a <strong style={{ color: T.text }}>project</strong> to branch out its comments and read the thread here. Drag nodes, scroll to zoom, drag the background to pan.
+                  Each <strong style={{ color: T.text }}>person</strong> column lists their projects below their name. Click a <strong style={{ color: T.text }}>project</strong> to branch out its subitems and read/post comments here. Dashed lines connect a project to anyone else tagged on it. Drag any node and it stays where you drop it; scroll to zoom, drag the background to pan.
                 </div>
               )}
             </div>
@@ -333,10 +366,11 @@ export default function ProjectsBoard({ user }: { user: PortalUserSSR }) {
 
 // ── Inspector: a selected project + its comment thread + composer ───────
 function ProjectInspector({
-  person, proj, comments, loadingComments, canEdit, composer, setComposer, posting, postError, onPost, onClose,
+  person, proj, tagged, comments, loadingComments, canEdit, composer, setComposer, posting, postError, onPost, onClose,
 }: {
   person: PersonProjects
   proj: ProjectItem
+  tagged: { name: string; color: string }[]
   comments: ProjectComment[] | undefined
   loadingComments: boolean
   canEdit: boolean
@@ -364,10 +398,38 @@ function ProjectInspector({
           )}
           <a href={proj.url} target="_blank" rel="noopener noreferrer" style={{ fontSize: 11, color: T.blue, textDecoration: 'none' }}>Open in Monday ↗</a>
         </div>
+        {tagged.length > 0 && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 8, flexWrap: 'wrap' }}>
+            <span style={{ fontSize: 10, color: T.text3 }}>Tagged:</span>
+            {tagged.map(t => (
+              <span key={t.name} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '2px 8px', borderRadius: 12, background: `${t.color}22`, border: `1px solid ${t.color}55`, fontSize: 10.5, color: T.text }}>
+                <span style={{ width: 6, height: 6, borderRadius: '50%', background: t.color }}/>{t.name}
+              </span>
+            ))}
+          </div>
+        )}
       </div>
 
-      {/* Comment thread */}
+      {/* Scrollable body: subitems + comment thread */}
       <div style={{ flex: 1, overflowY: 'auto', padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: 10 }}>
+        {proj.subitems.length > 0 && (
+          <div style={{ marginBottom: 4 }}>
+            <div style={{ fontSize: 10, fontWeight: 600, color: T.text3, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 8 }}>Subitems ({proj.subitems.length})</div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+              {proj.subitems.map(s => {
+                const sc = STATUS_COLOURS[s.status] || NEUTRAL
+                return (
+                  <a key={s.id} href={s.url || proj.url} target="_blank" rel="noopener noreferrer" style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '5px 8px', background: T.bg3, border: `1px solid ${T.border}`, borderRadius: 6, textDecoration: 'none' }}>
+                    <span style={{ width: 7, height: 7, borderRadius: '50%', background: sc, flexShrink: 0 }}/>
+                    <span style={{ flex: 1, minWidth: 0, fontSize: 12, color: T.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={s.name}>{s.name}</span>
+                    {s.owner && <span style={{ fontSize: 10, color: T.text3, whiteSpace: 'nowrap' }}>{s.owner}</span>}
+                    {s.status && <span style={{ fontSize: 9.5, color: sc, whiteSpace: 'nowrap' }}>{s.status}</span>}
+                  </a>
+                )
+              })}
+            </div>
+          </div>
+        )}
         <div style={{ fontSize: 10, fontWeight: 600, color: T.text3, textTransform: 'uppercase', letterSpacing: '0.06em' }}>Comments</div>
         {loadingComments && !comments && <div style={{ color: T.text3, fontSize: 12 }}>Loading comments…</div>}
         {comments && comments.length === 0 && <div style={{ color: T.text3, fontSize: 12 }}>No comments yet.</div>}
