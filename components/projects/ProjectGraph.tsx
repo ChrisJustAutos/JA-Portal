@@ -1,17 +1,20 @@
 // components/projects/ProjectGraph.tsx
-// Project tracking graph for the /projects module. NOT a physics web — a tidy
-// deterministic layout: each person is a hub, their projects stack in a column
-// directly below the name, and subitems indent beneath their project. Cross-
-// column curves connect a project to any OTHER person tagged on it.
+// Project tracking graph for the /projects module. A tidy deterministic
+// layout: each person is a hub, their projects stack in a column below the
+// name, and subitems indent directly beneath their project — wherever that
+// project has been moved to. Cross-column curves connect a project to any
+// OTHER person tagged on it.
 //
 // Any node can be dragged and STAYS where you drop it (pinned, persisted to
-// localStorage). Dragging a person moves its whole column (un-pinned projects
-// follow). Pan = drag the background; zoom = wheel or the +/− buttons; Fit
-// recentres everything.
+// localStorage). A pinned project/subitem leaves the auto column flow so it
+// never leaves a gap or overlaps; its subitems follow it. Dragging a person
+// moves its whole (un-pinned) column. Pan = drag background; a click on empty
+// space clears the selection; zoom = wheel / buttons; Auto-organise (driven by
+// reorganiseSignal) clears all pins and refits.
 //
 // Loaded via next/dynamic({ ssr:false }) from pages/projects.tsx.
 
-import { useRef, useEffect, useReducer, useState, useCallback } from 'react'
+import { useRef, useEffect, useReducer, useState, useCallback, useMemo } from 'react'
 
 export type NodeType = 'person' | 'project' | 'subitem'
 
@@ -27,6 +30,7 @@ export interface GraphNode {
   taggedColors?: string[]  // colours of other people tagged (project nodes)
   childCount?: number      // # subitems (project nodes) — drives the caret
   expanded?: boolean       // whether subitems are shown
+  progress?: number        // person nodes: % of projects done (0–100)
 }
 export interface GraphLink {
   source: string
@@ -39,16 +43,16 @@ interface XY { x: number; y: number }
 
 // ── Layout constants ────────────────────────────────────────────────────
 const MARGIN_X = 130
-const TOP_Y = 60
-const COL_W = 300
+const TOP_Y = 64
+const COL_W = 310
 const PERSON_R = 22
 const PROJECT_R = 8
 const SUB_R = 4.5
-const HEADER_GAP = 64       // first project below the person name
+const HEADER_GAP = 66        // first project below the person name
 const PROJ_ROW = 30
 const SUB_ROW = 24
-const SUB_GAP = 8
-const SUB_INDENT = 24
+const SUB_GAP = 10
+const SUB_INDENT = 26
 
 const PIN_KEY = 'ja-projects-pins-v1'
 
@@ -57,7 +61,7 @@ function loadPins(): Record<string, XY> {
 }
 
 export default function ProjectGraph({
-  nodes, links, selectedId, onSelect, focusId, onToggleExpand,
+  nodes, links, selectedId, onSelect, focusId, onToggleExpand, reorganiseSignal,
 }: {
   nodes: GraphNode[]
   links: GraphLink[]
@@ -65,6 +69,7 @@ export default function ProjectGraph({
   onSelect: (id: string | null) => void
   focusId?: string | null
   onToggleExpand?: (id: string) => void
+  reorganiseSignal?: number
 }) {
   const wrapRef = useRef<HTMLDivElement | null>(null)
   const [size, setSize] = useState({ w: 900, h: 640 })
@@ -73,6 +78,8 @@ export default function ProjectGraph({
   const viewRef = useRef({ panX: 0, panY: 0, zoom: 1 })
   const [, rerender] = useReducer((x: number) => x + 1, 0)
   const didFit = useRef(false)
+  const pendingFit = useRef(false)
+  const reorgInit = useRef(true)
 
   const dragRef = useRef<{ id: string; offX: number; offY: number; moved: boolean } | null>(null)
   const panRef = useRef<{ x: number; y: number; ox: number; oy: number; moved: boolean } | null>(null)
@@ -93,28 +100,42 @@ export default function ProjectGraph({
     return () => ro.disconnect()
   }, [])
 
-  // ── Deterministic layout ────────────────────────────────────────────
-  const persons = nodes.filter(n => n.type === 'person')
-  const projectsByPerson: Record<string, GraphNode[]> = {}
-  const subsByProject: Record<string, GraphNode[]> = {}
-  for (const n of nodes) {
-    if (n.type === 'project' && n.parentId) (projectsByPerson[n.parentId] ||= []).push(n)
-    if (n.type === 'subitem' && n.parentId) (subsByProject[n.parentId] ||= []).push(n)
-  }
+  const persons = useMemo(() => nodes.filter(n => n.type === 'person'), [nodes])
 
-  const pos = new Map<string, XY>()
-  persons.forEach((person, idx) => {
-    const base = pins[person.id] || { x: MARGIN_X + idx * COL_W, y: TOP_Y }
-    pos.set(person.id, base)
-    let y = base.y + HEADER_GAP
-    for (const proj of (projectsByPerson[person.id] || [])) {
-      pos.set(proj.id, pins[proj.id] || { x: base.x, y })
-      y += PROJ_ROW
-      const subs = subsByProject[proj.id] || []
-      for (const s of subs) { pos.set(s.id, pins[s.id] || { x: base.x + SUB_INDENT, y }); y += SUB_ROW }
-      if (subs.length) y += SUB_GAP
+  // ── Deterministic, pin-aware layout ─────────────────────────────────
+  const pos = useMemo(() => {
+    const projectsByPerson: Record<string, GraphNode[]> = {}
+    const subsByProject: Record<string, GraphNode[]> = {}
+    for (const n of nodes) {
+      if (n.type === 'project' && n.parentId) (projectsByPerson[n.parentId] ||= []).push(n)
+      if (n.type === 'subitem' && n.parentId) (subsByProject[n.parentId] ||= []).push(n)
     }
-  })
+    const m = new Map<string, XY>()
+    persons.forEach((person, idx) => {
+      const base = pins[person.id] || { x: MARGIN_X + idx * COL_W, y: TOP_Y }
+      m.set(person.id, base)
+      let y = base.y + HEADER_GAP
+      for (const proj of (projectsByPerson[person.id] || [])) {
+        const projPin = pins[proj.id]
+        const pp = projPin || { x: base.x, y }
+        m.set(proj.id, pp)
+        if (!projPin) y += PROJ_ROW
+        const subs = subsByProject[proj.id] || []
+        if (subs.length) {
+          // Subitems stack directly below the project's EFFECTIVE position —
+          // so they follow a project that's been dragged elsewhere.
+          let sy = projPin ? pp.y + SUB_ROW : y
+          for (const s of subs) {
+            const sPin = pins[s.id]
+            m.set(s.id, sPin || { x: pp.x + SUB_INDENT, y: sy })
+            if (!sPin) sy += SUB_ROW
+          }
+          if (!projPin) y = sy + SUB_GAP   // in-flow projects reserve subitem space
+        }
+      }
+    })
+    return m
+  }, [nodes, persons, pins])
 
   // ── Fit everything into view ────────────────────────────────────────
   const fit = useCallback(() => {
@@ -122,7 +143,7 @@ export default function ProjectGraph({
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
     pos.forEach(p => {
       minX = Math.min(minX, p.x); minY = Math.min(minY, p.y)
-      maxX = Math.max(maxX, p.x + 200); maxY = Math.max(maxY, p.y) // +label width estimate
+      maxX = Math.max(maxX, p.x + 200); maxY = Math.max(maxY, p.y)
     })
     minX -= 60; minY -= 60; maxY += 40
     const w = maxX - minX, h = maxY - minY
@@ -132,14 +153,24 @@ export default function ProjectGraph({
     v.panX = (size.w - w * zoom) / 2 - minX * zoom
     v.panY = Math.max(16, (size.h - h * zoom) / 2 - minY * zoom)
     rerender()
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [size.w, size.h])
+  }, [pos, size.w, size.h])
 
   // Fit once when the first data arrives.
   useEffect(() => {
     if (!didFit.current && persons.length > 0 && size.w > 0) { fit(); didFit.current = true }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [persons.length, size.w, fit])
+
+  // ── Auto-organise: clear pins + refit when the signal changes ───────
+  useEffect(() => {
+    if (reorgInit.current) { reorgInit.current = false; return }
+    pendingFit.current = true
+    setPins({})
+    try { localStorage.removeItem(PIN_KEY) } catch { /* ignore */ }
+  }, [reorganiseSignal])
+  useEffect(() => {
+    if (pendingFit.current) { pendingFit.current = false; fit() }
+  }, [pos, fit])
 
   // ── Focus a node (chip click) ───────────────────────────────────────
   useEffect(() => {
@@ -191,8 +222,7 @@ export default function ProjectGraph({
         else onSelect(id)
         dragRef.current = null
       } else if (panRef.current && !panRef.current.moved) {
-        // A click on empty space (no drag) closes whatever was open.
-        onSelect(null)
+        onSelect(null)   // click on empty space clears selection
       }
       panRef.current = null
     }
@@ -250,7 +280,6 @@ export default function ProjectGraph({
                   style={{ opacity: on ? 0.7 : 0.06, transition: 'opacity 0.15s' }} />
               )
             }
-            // owns / sub — clean near-vertical connectors
             return (
               <line key={`l${i}`} x1={a.x} y1={a.y} x2={b.x} y2={b.y}
                 stroke="rgba(139,144,160,0.45)" strokeWidth={(l.kind === 'owns' ? 1.4 : 1) / v.zoom}
@@ -264,27 +293,36 @@ export default function ProjectGraph({
             const isLit = lit(n.id)
             const sel = n.id === selectedId
             if (n.type === 'person') {
+              const R = PERSON_R + 4
+              const C = 2 * Math.PI * R
+              const prog = typeof n.progress === 'number' ? Math.max(0, Math.min(100, n.progress)) : null
               return (
                 <g key={n.id} transform={`translate(${p.x},${p.y})`} onMouseDown={e => onNodeDown(e, n.id)} style={{ cursor: 'grab', opacity: isLit ? 1 : 0.2, transition: 'opacity 0.15s' }}>
                   <circle r={PERSON_R} fill={`${n.color}ee`} stroke={sel ? '#e8eaf0' : n.color} strokeWidth={sel ? 2.5 : 2} />
-                  <text y={PERSON_R + 16} textAnchor="middle" fontSize={14} fontWeight={700} fill="#e8eaf0" style={{ pointerEvents: 'none' }}>{n.label}</text>
+                  {prog !== null && (
+                    <>
+                      <circle r={R} fill="none" stroke="rgba(255,255,255,0.12)" strokeWidth={3} />
+                      <circle r={R} fill="none" stroke="#34c77b" strokeWidth={3} strokeLinecap="round"
+                        strokeDasharray={`${(C * prog) / 100} ${C}`} transform="rotate(-90)" />
+                      <text y={-(PERSON_R + 13)} textAnchor="middle" fontSize={11} fontWeight={700} fill="#34c77b" style={{ pointerEvents: 'none' }}>{prog}% done</text>
+                    </>
+                  )}
+                  <text y={PERSON_R + 17} textAnchor="middle" fontSize={14} fontWeight={700} fill="#e8eaf0" style={{ pointerEvents: 'none' }}>{n.label}</text>
                   <title>{n.label}</title>
                 </g>
               )
             }
             const r = n.type === 'project' ? PROJECT_R : SUB_R
             const showLabel = n.type === 'project' || v.zoom > 0.55 || sel || (neighbours && neighbours.has(n.id))
-            const label = n.label.length > 34 ? n.label.slice(0, 33) + '…' : n.label
+            const label = n.label.length > 32 ? n.label.slice(0, 31) + '…' : n.label
             return (
               <g key={n.id} transform={`translate(${p.x},${p.y})`} onMouseDown={e => onNodeDown(e, n.id)} style={{ cursor: 'grab', opacity: isLit ? 1 : 0.18, transition: 'opacity 0.15s' }}>
                 {n.type === 'project' && n.critical && <circle r={r + 3.5} fill="none" stroke="#f04e4e" strokeWidth={2} />}
                 <circle r={r} fill={n.color} stroke={sel ? '#e8eaf0' : `${n.color}`} strokeWidth={sel ? 2.5 : 1.4} />
-                {(n.hasUpdates) && <circle cx={r * 0.85} cy={r * 0.85} r={3} fill="#e8eaf0" stroke={n.color} strokeWidth={1} />}
-                {/* tagged-people mini dots, clustered just above the node */}
+                {n.hasUpdates && <circle cx={r * 0.85} cy={r * 0.85} r={3} fill="#e8eaf0" stroke={n.color} strokeWidth={1} />}
                 {n.type === 'project' && (n.taggedColors || []).map((c, k, arr) => (
                   <circle key={k} cx={(k - (arr.length - 1) / 2) * 7} cy={-(r + 7)} r={3} fill={c} />
                 ))}
-                {/* caret: expand/collapse subitems (independent of selection) */}
                 {n.type === 'project' && (n.childCount || 0) > 0 && (
                   <g onMouseDown={e => { e.stopPropagation(); onToggleExpand?.(n.id) }} style={{ cursor: 'pointer' }}>
                     <circle cx={-(r + 12)} cy={0} r={8} fill="#1a1d23" stroke="rgba(255,255,255,0.12)" strokeWidth={1} />

@@ -67,19 +67,18 @@ export default function ProjectsBoard({ user }: { user: PortalUserSSR }) {
   const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState('')
 
-  const [expandedPeople, setExpandedPeople] = useState<Set<string>>(new Set())
+  const [hiddenPeople, setHiddenPeople] = useState<Set<string>>(new Set())
   const [expandedProjects, setExpandedProjects] = useState<Set<string>>(new Set())
   const [commentsByItem, setCommentsByItem] = useState<Record<string, ProjectComment[]>>({})
   const [loadingComments, setLoadingComments] = useState<Set<string>>(new Set())
 
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [focusId, setFocusId] = useState<string | null>(null)
+  const [reorgN, setReorgN] = useState(0)
 
   const [composer, setComposer] = useState('')
   const [posting, setPosting] = useState(false)
   const [postError, setPostError] = useState('')
-
-  const didInitExpand = useRef(false)
 
   const load = useCallback(async (isRefresh = false) => {
     if (isRefresh) setRefreshing(true)
@@ -90,11 +89,6 @@ export default function ProjectsBoard({ user }: { user: PortalUserSSR }) {
       const d = await r.json()
       setPeople(d.people || [])
       setError('')
-      // On first load, open every person so the full web shows; comments stay lazy.
-      if (!didInitExpand.current) {
-        setExpandedPeople(new Set((d.people || []).map((p: PersonProjects) => p.key)))
-        didInitExpand.current = true
-      }
     } catch (e: any) {
       setError(e.message || 'Failed to load')
     } finally {
@@ -134,9 +128,11 @@ export default function ProjectsBoard({ user }: { user: PortalUserSSR }) {
     const nodes: GraphNode[] = []
     const links: GraphLink[] = []
     for (const person of people) {
+      if (hiddenPeople.has(person.key)) continue
       const pid = `person:${person.key}`
-      nodes.push({ id: pid, type: 'person', label: person.name, color: person.color })
-      if (!expandedPeople.has(person.key)) continue
+      const total = person.projects.length
+      const done = person.projects.filter(p => p.status === 'Done').length
+      nodes.push({ id: pid, type: 'person', label: person.name, color: person.color, progress: total ? Math.round((done / total) * 100) : undefined })
       for (const proj of person.projects) {
         const projId = `project:${proj.id}`
         const cached = commentsByItem[proj.id]
@@ -171,20 +167,15 @@ export default function ProjectsBoard({ user }: { user: PortalUserSSR }) {
       }
     }
     return { nodes, links }
-  }, [people, expandedPeople, expandedProjects, commentsByItem, colorByKey])
+  }, [people, hiddenPeople, expandedProjects, commentsByItem, colorByKey])
 
   // Ref so selection logic can resolve a comment → its project without staleness.
   const linksRef = useRef(links); linksRef.current = links
 
   // ── Selection / expansion handlers ──────────────────────────────────
-  const togglePerson = useCallback((key: string) => {
-    setExpandedPeople(prev => { const n = new Set(prev); n.has(key) ? n.delete(key) : n.add(key); return n })
-  }, [])
-
   const handleSelect = useCallback((id: string | null) => {
     if (!id) { setSelectedId(null); return }
     if (id.startsWith('person:')) {
-      togglePerson(id.slice('person:'.length))
       setSelectedId(id); setFocusId(id)
     } else if (id.startsWith('project:')) {
       const itemId = id.slice('project:'.length)
@@ -198,7 +189,7 @@ export default function ProjectsBoard({ user }: { user: PortalUserSSR }) {
       loadComments(subId)
       setSelectedId(id); setFocusId(id)
     }
-  }, [togglePerson, loadComments])
+  }, [loadComments])
 
   // Caret on a project node: expand/collapse its subitems, without selecting.
   const toggleProjectExpand = useCallback((projNodeId: string) => {
@@ -247,11 +238,14 @@ export default function ProjectsBoard({ user }: { user: PortalUserSSR }) {
     setExpandedProjects(prev => { const n = new Set(prev); n.add(projectId); return n })
   }, [])
 
-  // Chip click: focus + expand that person.
+  // Chip click: toggle whether this person shows in the graph.
   const onChip = useCallback((key: string) => {
-    setExpandedPeople(prev => { const n = new Set(prev); n.add(key); return n })
-    const pid = `person:${key}`
-    setSelectedId(pid); setFocusId(pid)
+    setHiddenPeople(prev => {
+      const n = new Set(prev)
+      if (n.has(key)) { n.delete(key); const pid = `person:${key}`; setSelectedId(pid); setFocusId(pid) }
+      else n.add(key)
+      return n
+    })
   }, [])
 
   // ── Resolve the selected entity for the inspector ───────────────────
@@ -259,27 +253,32 @@ export default function ProjectsBoard({ user }: { user: PortalUserSSR }) {
     if (!selectedId?.startsWith('project:')) return null
     const itemId = selectedId.slice('project:'.length)
     for (const p of people) {
+      if (hiddenPeople.has(p.key)) continue
       const proj = p.projects.find(x => x.id === itemId)
       if (proj) return { person: p, proj }
     }
     return null
-  }, [selectedId, people])
+  }, [selectedId, people, hiddenPeople])
 
   const selectedPerson = useMemo(() => {
     if (!selectedId?.startsWith('person:')) return null
     const key = selectedId.slice('person:'.length)
+    if (hiddenPeople.has(key)) return null
     return people.find(p => p.key === key) || null
-  }, [selectedId, people])
+  }, [selectedId, people, hiddenPeople])
 
   const selectedSubitem = useMemo(() => {
     if (!selectedId?.startsWith('subitem:')) return null
     const subId = selectedId.slice('subitem:'.length)
-    for (const p of people) for (const proj of p.projects) {
-      const s = proj.subitems.find(s => s.id === subId)
-      if (s) return { person: p, proj, sub: s }
+    for (const p of people) {
+      if (hiddenPeople.has(p.key)) continue
+      for (const proj of p.projects) {
+        const s = proj.subitems.find(s => s.id === subId)
+        if (s) return { person: p, proj, sub: s }
+      }
     }
     return null
-  }, [selectedId, people])
+  }, [selectedId, people, hiddenPeople])
 
   // Reset the composer when switching what's selected.
   useEffect(() => { setComposer(''); setPostError('') }, [selectedId])
@@ -344,29 +343,33 @@ export default function ProjectsBoard({ user }: { user: PortalUserSSR }) {
             <span style={{ fontSize: 10, fontFamily: 'monospace', padding: '2px 8px', borderRadius: 4, background: 'rgba(245,166,35,0.12)', color: T.amber, border: `1px solid ${T.amber}40` }}>Monday</span>
             {!loading && <span style={{ fontSize: 11, color: T.text3 }}>{totalProjects} projects · {people.length} channels</span>}
             <div style={{ flex: 1 }}/>
+            <button onClick={() => setReorgN(n => n + 1)} title="Reset positions to the tidy auto layout"
+              style={{ padding: '5px 12px', borderRadius: 5, border: `1px solid ${T.border2}`, background: 'transparent', color: T.text2, fontSize: 11, cursor: 'pointer', fontFamily: 'inherit' }}>
+              ⤢ Auto-organise
+            </button>
             <button onClick={() => load(true)} disabled={refreshing}
               style={{ padding: '5px 12px', borderRadius: 5, border: `1px solid ${T.border2}`, background: 'transparent', color: T.text2, fontSize: 11, cursor: refreshing ? 'wait' : 'pointer', fontFamily: 'inherit' }}>
               {refreshing ? 'Refreshing…' : '↻ Refresh'}
             </button>
           </div>
 
-          {/* Person chips */}
+          {/* Person filter chips — click to show/hide a person */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 20px', background: T.bg2, borderBottom: `1px solid ${T.border}`, flexWrap: 'wrap', flexShrink: 0 }}>
             {people.map(p => {
-              const on = expandedPeople.has(p.key)
+              const on = !hiddenPeople.has(p.key)   // shown
               return (
-                <button key={p.key} onClick={() => onChip(p.key)}
-                  style={{ display: 'inline-flex', alignItems: 'center', gap: 7, padding: '5px 12px', borderRadius: 16, border: `1px solid ${on ? p.color : T.border2}`, fontSize: 12, background: on ? `${p.color}22` : 'transparent', color: on ? T.text : T.text2, cursor: 'pointer', fontFamily: 'inherit' }}>
-                  <span style={{ width: 8, height: 8, borderRadius: '50%', background: p.color, display: 'inline-block' }}/>
+                <button key={p.key} onClick={() => onChip(p.key)} title={on ? 'Hide' : 'Show'}
+                  style={{ display: 'inline-flex', alignItems: 'center', gap: 7, padding: '5px 12px', borderRadius: 16, border: `1px solid ${on ? p.color : T.border2}`, fontSize: 12, background: on ? `${p.color}22` : 'transparent', color: on ? T.text : T.text3, cursor: 'pointer', fontFamily: 'inherit', opacity: on ? 1 : 0.6 }}>
+                  <span style={{ width: 8, height: 8, borderRadius: '50%', background: on ? p.color : T.text3, display: 'inline-block' }}/>
                   {p.name}
                   <span style={{ fontSize: 10, color: T.text3, fontFamily: 'monospace' }}>{p.projects.length}</span>
                 </button>
               )
             })}
             {people.length > 0 && (
-              <button onClick={() => setExpandedPeople(new Set())}
+              <button onClick={() => setHiddenPeople(hiddenPeople.size > 0 ? new Set() : new Set(people.map(p => p.key)))}
                 style={{ padding: '5px 12px', borderRadius: 16, border: `1px solid ${T.border}`, fontSize: 11, background: 'transparent', color: T.text3, cursor: 'pointer', fontFamily: 'inherit', marginLeft: 4 }}>
-                Collapse all
+                {hiddenPeople.size > 0 ? 'Show all' : 'Hide all'}
               </button>
             )}
           </div>
@@ -382,7 +385,7 @@ export default function ProjectsBoard({ user }: { user: PortalUserSSR }) {
                   <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
                 </div>
               ) : (
-                <ProjectGraph nodes={nodes} links={links} selectedId={selectedId} onSelect={handleSelect} focusId={focusId} onToggleExpand={toggleProjectExpand}/>
+                <ProjectGraph nodes={nodes} links={links} selectedId={selectedId} onSelect={handleSelect} focusId={focusId} onToggleExpand={toggleProjectExpand} reorganiseSignal={reorgN}/>
               )}
 
               {/* Legend */}
