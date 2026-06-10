@@ -145,6 +145,20 @@ export async function listBankAccounts(): Promise<MyobAccount[]> {
     .sort((a, b) => a.displayId.localeCompare(b.displayId))
 }
 
+// Expense / cost-of-sales accounts — for the stocktake inventory-adjustment
+// account picker (shrinkage posts against one of these).
+export async function listExpenseAccounts(): Promise<MyobAccount[]> {
+  const conn = await getConnection(WORKSHOP_MYOB_LABEL)
+  if (!conn || !conn.company_file_id) throw new Error(`${WORKSHOP_MYOB_LABEL} MYOB connection not configured`)
+  const r = await myobFetch(conn.id, `/accountright/${conn.company_file_id}/GeneralLedger/Account`, { query: { '$top': 1000 } })
+  if (r.status !== 200) throw new Error(`MYOB Account fetch failed (HTTP ${r.status})`)
+  const items: any[] = Array.isArray(r.data?.Items) ? r.data.Items : []
+  return items
+    .filter(a => !a.IsHeader && (a.Type === 'Expense' || a.Type === 'CostOfSales' || a.Type === 'OtherExpense'))
+    .map(a => ({ uid: a.UID, displayId: a.DisplayID, name: a.Name, type: a.Type }))
+    .sort((a, b) => a.displayId.localeCompare(b.displayId))
+}
+
 // MYOB tracking categories (AccountRight "Categories"), e.g. "Performance".
 // Returns [] if categories aren't enabled on the file.
 export async function listTrackingCategories(): Promise<Array<{ uid: string; name: string; displayId: string }>> {

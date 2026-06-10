@@ -7,7 +7,7 @@
 
 import { withAuth } from '../../../lib/authServer'
 import { roleHasPermission } from '../../../lib/permissions'
-import { getWorkshopSettings, setWorkshopSettings, listIncomeAccounts, listBankAccounts, listTrackingCategories } from '../../../lib/workshop-myob-invoice'
+import { getWorkshopSettings, setWorkshopSettings, listIncomeAccounts, listBankAccounts, listTrackingCategories, listExpenseAccounts } from '../../../lib/workshop-myob-invoice'
 
 export const config = { maxDuration: 30 }
 
@@ -17,6 +17,7 @@ const TEXT_FIELDS = [
   'part_sale_account_uid', 'part_sale_account_name', 'discount_account_uid', 'discount_account_name',
   'refund_account_uid', 'refund_account_name', 'tracking_category_uid', 'tracking_category_name',
   'labour_item_uid', 'labour_item_name',
+  'inventory_adjust_account_uid', 'inventory_adjust_account_name',
 ] as const
 const BOOL_FIELDS = ['invoice_as_order', 'sms_enabled', 'myob_posting_enabled'] as const
 
@@ -28,16 +29,18 @@ export default withAuth('view:diary', async (req, res, user) => {
     let incomeAccounts: any[] = []
     let bankAccounts: any[] = []
     let trackingCategories: any[] = []
+    let expenseAccounts: any[] = []
     let accountsError: string | null = null
     try {
-      const [inc, bank, cats] = await Promise.all([
+      const [inc, bank, cats, exp] = await Promise.all([
         listIncomeAccounts().catch(() => { throw new Error('accounts') }),
         listBankAccounts().catch(() => []),
         listTrackingCategories().catch(() => []),
+        listExpenseAccounts().catch(() => []),
       ])
-      incomeAccounts = inc; bankAccounts = bank; trackingCategories = cats
+      incomeAccounts = inc; bankAccounts = bank; trackingCategories = cats; expenseAccounts = exp
     } catch (e: any) { accountsError = 'Could not load MYOB accounts (VPS connection may be down).' }
-    return res.status(200).json({ settings, incomeAccounts, bankAccounts, trackingCategories, accountsError })
+    return res.status(200).json({ settings, incomeAccounts, bankAccounts, trackingCategories, expenseAccounts, accountsError })
   }
 
   if (req.method === 'PATCH') {

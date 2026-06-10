@@ -52,6 +52,7 @@ export default function WorkshopSettingsPage({ user }: { user: PortalUserSSR }) 
   const [accounts, setAccounts] = useState<any[]>([])
   const [bankAccounts, setBankAccounts] = useState<any[]>([])
   const [trackingCategories, setTrackingCategories] = useState<any[]>([])
+  const [expenseAccounts, setExpenseAccounts] = useState<any[]>([])
   const [accountsError, setAccountsError] = useState('')
   const [techs, setTechs] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
@@ -71,7 +72,7 @@ export default function WorkshopSettingsPage({ user }: { user: PortalUserSSR }) 
 
   const loadSettings = useCallback(async () => {
     const r = await fetch('/api/workshop/settings')
-    if (r.ok) { const d = await r.json(); setSettings(d.settings); setAccounts(d.incomeAccounts || []); setBankAccounts(d.bankAccounts || []); setTrackingCategories(d.trackingCategories || []); setAccountsError(d.accountsError || '') }
+    if (r.ok) { const d = await r.json(); setSettings(d.settings); setAccounts(d.incomeAccounts || []); setBankAccounts(d.bankAccounts || []); setTrackingCategories(d.trackingCategories || []); setExpenseAccounts(d.expenseAccounts || []); setAccountsError(d.accountsError || '') }
   }, [])
   const loadTechs = useCallback(async () => {
     const r = await fetch('/api/workshop/technicians')
@@ -154,7 +155,7 @@ export default function WorkshopSettingsPage({ user }: { user: PortalUserSSR }) 
                 <div>
                   {tab === 'business' && settings && <BusinessSection settings={settings} onSave={saveSettings} register={registerSaver} />}
                   {tab === 'invoicing' && settings && <InvoicingSection settings={settings} accounts={accounts} accountsError={accountsError} onSave={saveSettings} register={registerSaver} />}
-                  {tab === 'accounts' && settings && <AccountsSection settings={settings} income={accounts} banks={bankAccounts} categories={trackingCategories} accountsError={accountsError} onSave={saveSettings} />}
+                  {tab === 'accounts' && settings && <AccountsSection settings={settings} income={accounts} banks={bankAccounts} categories={trackingCategories} expense={expenseAccounts} accountsError={accountsError} onSave={saveSettings} />}
                   {tab === 'job-types' && <JobTypesSection />}
                   {tab === 'sms' && settings && <SmsSection settings={settings} onSave={saveSettings} register={registerSaver} />}
                   {tab === 'techs' && <TechsSection techs={techs} onAdd={addTech} onPatch={patchTech} onRemove={removeTech} />}
@@ -263,7 +264,7 @@ function InvoicingSection({ settings, accounts, accountsError, onSave, register 
   )
 }
 
-function AccountsSection({ settings, income, banks, categories, accountsError, onSave }: { settings: any; income: any[]; banks: any[]; categories: any[]; accountsError: string; onSave: (p: any) => void }) {
+function AccountsSection({ settings, income, banks, categories, expense, accountsError, onSave }: { settings: any; income: any[]; banks: any[]; categories: any[]; expense: any[]; accountsError: string; onSave: (p: any) => void }) {
   const pa: Record<string, any> = settings.payment_accounts || {}
   const acctOpts = (list: any[]) => list.map((a: any) => <option key={a.uid} value={a.uid}>{a.displayId ? `${a.displayId} · ${a.name}` : a.name}</option>)
   function saveAcct(uidField: string, nameField: string, list: any[], uid: string) {
@@ -311,6 +312,10 @@ function AccountsSection({ settings, income, banks, categories, accountsError, o
         <Field label="Refund / credit account"><select style={inp} value={settings.refund_account_uid || ''} onChange={e => saveAcct('refund_account_uid', 'refund_account_name', income, e.target.value)}><option value="">— none —</option>{acctOpts(income)}</select></Field>
       </div>
       <Field label="Tracking category"><select style={inp} value={settings.tracking_category_uid || ''} onChange={e => saveAcct('tracking_category_uid', 'tracking_category_name', categories, e.target.value)}><option value="">— none —</option>{categories.map((c: any) => <option key={c.uid} value={c.uid}>{c.name}</option>)}</select></Field>
+      <Field label="Inventory adjustment account (stocktake)">
+        <select style={inp} value={settings.inventory_adjust_account_uid || ''} onChange={e => saveAcct('inventory_adjust_account_uid', 'inventory_adjust_account_name', expense, e.target.value)}><option value="">— none —</option>{acctOpts(expense)}</select>
+        <div style={{ fontSize: 10, color: T.text3, marginTop: 4, lineHeight: 1.5 }}>Expense / cost-of-sales account that stocktake quantity variances (shrinkage) post against in MYOB. Required before a portal stocktake can apply to MYOB.</div>
+      </Field>
 
       <Field label="Labour / sundry MYOB item">
         <LabourItemPicker value={settings.labour_item_name || null} onPick={(uid, name) => onSave({ labour_item_uid: uid, labour_item_name: name })} onClear={() => onSave({ labour_item_uid: null, labour_item_name: null })} />
