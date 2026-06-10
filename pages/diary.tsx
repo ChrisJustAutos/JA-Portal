@@ -222,20 +222,22 @@ export default function DiaryPage({ user }: { user: PortalUserSSR }) {
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      const [bRes, nRes, cRes] = await Promise.all([
+      const [bRes, nRes] = await Promise.all([
         fetch(`/api/workshop/bookings?from=${encodeURIComponent(range.fromIso)}&to=${encodeURIComponent(range.toIso)}`),
         fetch(`/api/workshop/diary-notes?from=${encodeURIComponent(range.fromIso)}&to=${encodeURIComponent(range.toIso)}`),
-        fetch('/api/workshop/tech-capacity'),
       ])
       const d = await bRes.json()
       if (bRes.ok) {
         setBookings(Array.isArray(d.bookings) ? d.bookings : [])
         setClockedOn(new Set<string>(Array.isArray(d.clocked_on) ? d.clocked_on : []))
-        setTechs(Array.isArray(d.technicians) ? d.technicians : [])
+        const techList = Array.isArray(d.technicians) ? d.technicians : []
+        setTechs(techList)
+        // Capacity lives on workshop_technicians.daily_hours — already in this
+        // payload, so no separate tech-capacity fetch.
+        setCapacity(Object.fromEntries(techList.map((t: any) => [String(t.ext), Number(t.daily_hours ?? 8)])))
         if (d.diary) setGrid(makeGrid(Number(d.diary.startMin), Number(d.diary.endMin)))
       }
       const nd = await nRes.json().catch(() => ({})); if (nRes.ok) setNotes(Array.isArray(nd.notes) ? nd.notes : [])
-      const cd = await cRes.json().catch(() => ({})); if (cRes.ok) setCapacity(cd.capacity || {})
       setLastRefresh(new Date())
     } catch { /* leave previous data */ } finally { setLoading(false) }
   }, [range])

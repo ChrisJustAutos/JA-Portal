@@ -1,6 +1,8 @@
 // pages/api/workshop/tech-capacity.ts
-// GET   — { capacity: { <ext>: dailyHours } } for the diary lane load bars.
-// PATCH — { technician_ext, daily_hours } upsert one lane's capacity (admin).
+// PATCH — { technician_ext, daily_hours } set one lane's capacity (admin).
+// Writes workshop_technicians.daily_hours (the diary reads capacity from the
+// bookings GET technicians payload; the old workshop_tech_capacity table was
+// dropped in migration 091).
 
 import { createClient } from '@supabase/supabase-js'
 import { withAuth } from '../../../lib/authServer'
@@ -18,15 +20,6 @@ function sb() {
 export default withAuth('view:diary', async (req, res, user) => {
   const db = sb()
 
-  if (req.method === 'GET') {
-    // Capacity now lives on workshop_technicians (per-lane daily_hours).
-    const { data, error } = await db.from('workshop_technicians').select('code, daily_hours')
-    if (error) return res.status(500).json({ error: error.message })
-    const capacity: Record<string, number> = {}
-    for (const r of data || []) capacity[String((r as any).code)] = Number((r as any).daily_hours)
-    return res.status(200).json({ capacity })
-  }
-
   if (req.method === 'PATCH') {
     if (!roleHasPermission(user.role, 'admin:settings')) return res.status(403).json({ error: 'Admin only' })
     let body: any = {}
@@ -40,6 +33,6 @@ export default withAuth('view:diary', async (req, res, user) => {
     return res.status(200).json({ ok: true })
   }
 
-  res.setHeader('Allow', 'GET, PATCH')
-  return res.status(405).json({ error: 'GET or PATCH only' })
+  res.setHeader('Allow', 'PATCH')
+  return res.status(405).json({ error: 'PATCH only' })
 })
