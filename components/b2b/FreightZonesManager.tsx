@@ -9,6 +9,8 @@
 // and /api/b2b/admin/freight-rates. Failures surface inline.
 
 import { useCallback, useEffect, useState } from 'react'
+import { useConfirm } from '../ui/Feedback'
+import { SkeletonRows } from '../ui'
 
 const T = {
   bg:'#0d0f12', bg2:'#131519', bg3:'#1a1d23', bg4:'#21252d',
@@ -43,6 +45,7 @@ function rangesToText(ranges: { start: string; end: string }[]): string {
 }
 
 export default function FreightZonesManager() {
+  const confirmDialog = useConfirm()
   const [zones, setZones] = useState<FreightZone[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -75,7 +78,7 @@ export default function FreightZonesManager() {
   }
 
   async function deleteZone(z: FreightZone) {
-    if (!confirm(`Delete freight zone "${z.name}" and its ${z.rates.length} rate${z.rates.length === 1 ? '' : 's'}?`)) return
+    if (!(await confirmDialog({ title: `Delete freight zone "${z.name}" and its ${z.rates.length} rate${z.rates.length === 1 ? '' : 's'}?`, danger: true }))) return
     setBusy(z.id); setError('')
     try {
       const r = await fetch(`/api/b2b/admin/freight-zones?id=${z.id}`, { method: 'DELETE' })
@@ -106,7 +109,7 @@ export default function FreightZonesManager() {
         <AddZoneForm onClose={() => setAddOpen(false)} onSaved={() => { setAddOpen(false); void load() }} />
       )}
 
-      {loading && <div style={{fontSize:12, color:T.text3, padding:'10px 0'}}>Loading…</div>}
+      {loading && <SkeletonRows rows={8}/>}
 
       {!loading && zones.length === 0 && !addOpen && (
         <div style={{fontSize:12, color:T.text3, padding:'10px 0'}}>
@@ -197,6 +200,7 @@ function ZoneRow({ zone, busy, onPatch, onDelete, onChange }: {
 // ── Rates within a zone ────────────────────────────────────────────────
 
 function RatesEditor({ zoneId, rates, onChange }: { zoneId: string; rates: FreightRate[]; onChange: () => void }) {
+  const confirmDialog = useConfirm()
   const [adding, setAdding] = useState(false)
   const [newLabel, setNewLabel] = useState('')
   const [newPrice, setNewPrice] = useState('')
@@ -239,7 +243,7 @@ function RatesEditor({ zoneId, rates, onChange }: { zoneId: string; rates: Freig
   }
 
   async function deleteRate(rate: FreightRate) {
-    if (!confirm(`Delete rate "${rate.label}"?`)) return
+    if (!(await confirmDialog({ title: `Delete rate "${rate.label}"?`, danger: true }))) return
     setBusy(true); setErr('')
     try {
       const r = await fetch(`/api/b2b/admin/freight-rates?id=${rate.id}`, { method: 'DELETE' })

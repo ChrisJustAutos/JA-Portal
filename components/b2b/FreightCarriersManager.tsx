@@ -9,6 +9,7 @@
 // fallback at checkout.
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useConfirm } from '../ui/Feedback'
 
 const T = {
   bg:'#0d0f12', bg2:'#131519', bg3:'#1a1d23', bg4:'#21252d',
@@ -202,6 +203,7 @@ function CarrierForm({ carrier, onChanged, onClose }: {
   onChanged: () => void
   onClose: () => void
 }) {
+  const confirmDialog = useConfirm()
   const [env, setEnv] = useState<'live' | 'sandbox'>(carrier.environment)
   const [isActive, setIsActive] = useState<boolean>(carrier.is_active || !carrier.connected)
   const [values, setValues] = useState<Record<string, string>>({ ...carrier.credentials })
@@ -255,7 +257,7 @@ function CarrierForm({ carrier, onChanged, onClose }: {
   }
 
   async function disconnect() {
-    if (!confirm(`Disconnect ${carrier.label}? Stored credentials will be deleted.`)) return
+    if (!(await confirmDialog({ title: `Disconnect ${carrier.label}?`, message: 'Stored credentials will be deleted.', danger: true }))) return
     setErr('')
     try {
       const r = await fetch(`/api/b2b/admin/freight-carriers/${carrier.provider}`, {

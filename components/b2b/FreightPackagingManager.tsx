@@ -4,13 +4,10 @@
 // Dims are entered in mm; weights in kg (stored as grams).
 
 import { useEffect, useState } from 'react'
+import { T } from '../../lib/ui/theme'
+import { SkeletonRows } from '../ui'
+import { useConfirm } from '../ui/Feedback'
 
-const T = {
-  bg2: '#131519', bg3: '#1a1d23', bg4: '#21252d',
-  border: 'rgba(255,255,255,0.07)', border2: 'rgba(255,255,255,0.12)',
-  text: '#e8eaf0', text2: '#8b90a0', text3: '#545968',
-  blue: '#4f8ef7', green: '#34c77b', amber: '#f5a623', red: '#f04e4e',
-}
 const inp: React.CSSProperties = { padding: '6px 8px', background: T.bg3, border: `1px solid ${T.border2}`, borderRadius: 5, color: T.text, fontSize: 12, fontFamily: 'inherit', outline: 'none', boxSizing: 'border-box', width: '100%' }
 const kg = (grams: any) => (grams == null ? '' : String(Math.round(Number(grams) / 100) / 10))
 const toG = (kgVal: string) => { const n = parseFloat(kgVal); return Number.isFinite(n) ? Math.round(n * 1000) : null }
@@ -27,6 +24,7 @@ interface Box { id: string; name: string; length_mm: number; width_mm: number; h
 interface Satchel { id: string; name: string; max_weight_g: number; max_length_mm: number | null; max_width_mm: number | null; max_height_mm: number | null; cost_ex_gst: number; sell_ex_gst: number; sort_order: number; is_active: boolean }
 
 export default function FreightPackagingManager() {
+  const confirmDialog = useConfirm()
   const [boxes, setBoxes] = useState<Box[]>([])
   const [satchels, setSatchels] = useState<Satchel[]>([])
   const [pallet, setPallet] = useState({ length_mm: '', width_mm: '', max_height_mm: '', max_weight_kg: '', threshold_kg: '' })
@@ -66,7 +64,7 @@ export default function FreightPackagingManager() {
   function updateBoxLocal(id: string, p: Partial<Box>) { setBoxes(bs => bs.map(b => b.id === id ? { ...b, ...p } : b)) }
 
   async function removeBox(id: string, name: string) {
-    if (!confirm(`Delete box "${name}"?`)) return
+    if (!(await confirmDialog({ title: `Delete box "${name}"?`, danger: true }))) return
     const r = await fetch(`/api/b2b/admin/freight-boxes?id=${id}`, { method: 'DELETE' })
     if (r.ok) { setBoxes(bs => bs.filter(b => b.id !== id)); flashMsg('Deleted') }
   }
@@ -88,7 +86,7 @@ export default function FreightPackagingManager() {
   }
   function updateSatLocal(id: string, p: Partial<Satchel>) { setSatchels(ss => ss.map(s => s.id === id ? { ...s, ...p } : s)) }
   async function removeSatchel(id: string, name: string) {
-    if (!confirm(`Delete satchel "${name}"?`)) return
+    if (!(await confirmDialog({ title: `Delete satchel "${name}"?`, danger: true }))) return
     const r = await fetch(`/api/b2b/admin/freight-satchels?id=${id}`, { method: 'DELETE' })
     if (r.ok) { setSatchels(ss => ss.filter(s => s.id !== id)); flashMsg('Deleted') }
   }
@@ -114,7 +112,7 @@ export default function FreightPackagingManager() {
     if (r.ok) flashMsg('Pallet settings saved'); else { const d = await r.json().catch(() => ({})); flashMsg(d.issues?.join('; ') || d.error || 'Save failed') }
   }
 
-  if (loading) return <div style={{ color: T.text3, fontSize: 13, padding: 12 }}>Loading…</div>
+  if (loading) return <SkeletonRows rows={8} />
 
   const cols = '1.4fr 70px 70px 70px 80px 56px 30px'
   const hdr: React.CSSProperties = { fontSize: 9, color: T.text3, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }

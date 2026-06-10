@@ -4,6 +4,7 @@
 
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/router'
+import { useConfirm } from '../ui/Feedback'
 
 const T = {
   bg2: '#131519', border: 'rgba(255,255,255,0.07)', border2: 'rgba(255,255,255,0.12)',
@@ -22,6 +23,7 @@ function ago(iso: string): string {
 
 export default function B2BNotificationBell({ isMobile }: { isMobile?: boolean }) {
   const router = useRouter()
+  const confirmDialog = useConfirm()
   const [unread, setUnread] = useState(0)
   const [open, setOpen] = useState(false)
   const [rows, setRows] = useState<Row[] | null>(null)
@@ -80,7 +82,7 @@ export default function B2BNotificationBell({ isMobile }: { isMobile?: boolean }
               <span style={{ fontSize: 12.5, fontWeight: 600, color: T.text }}>Notifications</span>
               <span style={{ flex: 1 }}/>
               {unread > 0 && <button onClick={() => patch({ all: true })} style={{ background: 'none', border: 'none', color: T.blue, fontSize: 11.5, cursor: 'pointer', fontFamily: 'inherit', padding: 0 }}>Mark all read</button>}
-              {(rows?.length || 0) > 0 && <button onClick={() => { if (confirm('Clear all notifications?')) remove({ all: true }) }} style={{ background: 'none', border: 'none', color: T.text3, fontSize: 11.5, cursor: 'pointer', fontFamily: 'inherit', padding: 0, marginLeft: 12 }}>Clear all</button>}
+              {(rows?.length || 0) > 0 && <button onClick={async () => { if (await confirmDialog({ title: 'Clear all notifications?', danger: true })) remove({ all: true }) }} style={{ background: 'none', border: 'none', color: T.text3, fontSize: 11.5, cursor: 'pointer', fontFamily: 'inherit', padding: 0, marginLeft: 12 }}>Clear all</button>}
             </div>
             {rows === null && <div style={{ color: T.text3, fontSize: 12, padding: '14px 10px' }}>Loading…</div>}
             {rows !== null && rows.length === 0 && <div style={{ color: T.text3, fontSize: 12, padding: '14px 10px' }}>No notifications yet.</div>}

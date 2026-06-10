@@ -20,6 +20,8 @@ import InventoryTabs from '../../../components/InventoryTabs'
 import WorkshopTabs from '../../../components/WorkshopTabs'
 import { requirePageAuth } from '../../../lib/authServer'
 import type { UserRole } from '../../../lib/permissions'
+import { money } from '../../../lib/ui/format'
+import { useConfirm } from '../../../components/ui/Feedback'
 
 const T = {
   bg:'#0d0f12', bg2:'#131519', bg3:'#1a1d23', bg4:'#21252d',
@@ -78,9 +80,10 @@ interface TransferRow {
   created_at: string
 }
 
-const fmt$ = (n: number) => `$${Number(n || 0).toLocaleString('en-AU', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+const fmt$ = money
 
 export default function StockTransferPage({ user }: Props) {
+  const confirmDialog = useConfirm()
   const [direction, setDirection] = useState<Direction>('JAWS_TO_VPS')
   const forward = direction === 'JAWS_TO_VPS'
   const [cfg, setCfg] = useState<TransferConfig | null>(null)
@@ -203,7 +206,7 @@ export default function StockTransferPage({ user }: Props) {
   }
 
   async function removeTransfer(id: string) {
-    if (!confirm('Remove this transfer from the portal history?\n\nThis only clears the portal record — any MYOB invoice/bill or MechanicDesk PO already posted stays put.')) return
+    if (!(await confirmDialog({ title: 'Remove this transfer from the portal history?', message: 'This only clears the portal record — any MYOB invoice/bill or MechanicDesk PO already posted stays put.', danger: true }))) return
     setDeleting(id)
     try {
       const r = await fetch('/api/b2b/admin/stock-transfer', {

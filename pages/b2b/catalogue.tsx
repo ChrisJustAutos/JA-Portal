@@ -11,6 +11,8 @@ import Head from 'next/head'
 import type { GetServerSideProps } from 'next'
 import B2BLayout from '../../components/b2b/B2BLayout'
 import { requireB2BPageAuth } from '../../lib/b2bAuthServer'
+import { useToast } from '../../components/ui/Feedback'
+import { SkeletonRows } from '../../components/ui'
 
 const T = {
   bg:'#0d0f12', bg2:'#131519', bg3:'#1a1d23', bg4:'#21252d',
@@ -80,6 +82,7 @@ interface CartLine {
 }
 
 export default function B2BCataloguePage({ b2bUser }: Props) {
+  const toast = useToast()
   const [items, setItems] = useState<CatalogueItem[]>([])
   const [cartLines, setCartLines] = useState<CartLine[]>([])
   const [loading, setLoading] = useState(true)
@@ -284,7 +287,7 @@ export default function B2BCataloguePage({ b2bUser }: Props) {
         const j = await cartRes.json()
         setCartLines((j.lines || []).map((l: any) => ({ id: l.id, catalogue_id: l.catalogue_id, qty: l.qty })))
       }
-      alert(e?.message || 'Could not update cart')
+      toast(e?.message || 'Could not update cart', 'error')
     }
   }
 
@@ -346,8 +349,8 @@ export default function B2BCataloguePage({ b2bUser }: Props) {
 
         {/* Loading shell while items haven't arrived yet */}
         {loading && items.length === 0 && (
-          <div style={{padding:36,textAlign:'center',color:T.text3,fontSize:13,background:T.bg2,border:`1px solid ${T.border}`,borderRadius:10}}>
-            Loading…
+          <div style={{background:T.bg2,border:`1px solid ${T.border}`,borderRadius:10,overflow:'hidden'}}>
+            <SkeletonRows rows={8}/>
           </div>
         )}
 

@@ -14,6 +14,7 @@ import PortalTopBar from '../../../../lib/PortalTopBar'
 import B2BAdminTabs from '../../../../components/b2b/B2BAdminTabs'
 import { requirePageAuth } from '../../../../lib/authServer'
 import type { UserRole } from '../../../../lib/permissions'
+import { useConfirm, useToast } from '../../../../components/ui/Feedback'
 
 const T = {
   bg:'#0d0f12', bg2:'#131519', bg3:'#1a1d23', bg4:'#21252d',
@@ -86,6 +87,8 @@ interface MyobCustomer {
 
 export default function DistributorDetailPage({ user }: Props) {
   const router = useRouter()
+  const toast = useToast()
+  const confirmDialog = useConfirm()
   const id = String(router.query.id || '')
 
   const [dist, setDist] = useState<Distributor | null>(null)
@@ -130,14 +133,14 @@ export default function DistributorDetailPage({ user }: Props) {
   const [deleting, setDeleting] = useState(false)
   async function deleteDist() {
     if (!dist) return
-    if (!confirm(`Delete distributor "${dist.display_name}"? This removes its users, carts and addresses. Blocked if it has any orders (deactivate instead). This can't be undone.`)) return
+    if (!(await confirmDialog({ title: `Delete distributor "${dist.display_name}"?`, message: "This removes its users, carts and addresses. Blocked if it has any orders (deactivate instead). This can't be undone.", danger: true }))) return
     setDeleting(true)
     try {
       const r = await fetch(`/api/b2b/admin/distributors/${id}`, { method: 'DELETE', credentials: 'same-origin' })
       const j = await r.json().catch(() => ({}))
       if (!r.ok) throw new Error(j?.error || `HTTP ${r.status}`)
       router.push('/admin/b2b/distributors')
-    } catch (e: any) { alert(e?.message || String(e)); setDeleting(false) }
+    } catch (e: any) { toast(e?.message || String(e), 'error'); setDeleting(false) }
   }
 
   return (
@@ -173,7 +176,7 @@ export default function DistributorDetailPage({ user }: Props) {
                     <span style={{fontSize:12,color:T.text3}}>Active</span>
                     <ToggleSwitch
                       on={dist.is_active}
-                      onChange={v => patchDist({ is_active: v }).catch(e => alert(e?.message || String(e)))}
+                      onChange={v => patchDist({ is_active: v }).catch(e => toast(e?.message || String(e), 'error'))}
                     />
                   </div>
                   <button onClick={deleteDist} disabled={deleting} title="Delete distributor (blocked if it has orders)"
@@ -213,7 +216,7 @@ export default function DistributorDetailPage({ user }: Props) {
               />
               <MyobLinksSection
                 dist={dist}
-                onChangeLinked={uids => patchDist({ myob_linked_customer_uids: uids }).catch(e => alert(e?.message || String(e)))}
+                onChangeLinked={uids => patchDist({ myob_linked_customer_uids: uids }).catch(e => toast(e?.message || String(e), 'error'))}
               />
               <UsersSection
                 distId={dist.id}
@@ -531,6 +534,8 @@ function MyobLinksSection({
   dist: Distributor
   onChangeLinked: (uids: string[]) => void
 }) {
+  const toast = useToast()
+  const confirmDialog = useConfirm()
   const [showAdd, setShowAdd] = useState(false)
   const [linkedDetails, setLinkedDetails] = useState<MyobCustomer[]>([])
   const [primaryDetail, setPrimaryDetail] = useState<MyobCustomer | null>(null)
@@ -556,19 +561,19 @@ function MyobLinksSection({
 
   function addLinked(c: MyobCustomer) {
     if (c.uid === dist.myob_primary_customer_uid) {
-      alert('That customer is already the primary — pick a different one.')
+      toast('That customer is already the primary — pick a different one.', 'error')
       return
     }
     if (dist.myob_linked_customer_uids.includes(c.uid)) {
-      alert('That customer is already linked.')
+      toast('That customer is already linked.', 'error')
       return
     }
     onChangeLinked([...dist.myob_linked_customer_uids, c.uid])
     setShowAdd(false)
   }
 
-  function removeLinked(uid: string) {
-    if (!confirm('Remove this linked MYOB customer?')) return
+  async function removeLinked(uid: string) {
+    if (!(await confirmDialog({ title: 'Remove this linked MYOB customer?', danger: true }))) return
     onChangeLinked(dist.myob_linked_customer_uids.filter(u => u !== uid))
   }
 
@@ -677,6 +682,7 @@ function UsersSection({
 }
 
 function UserRow({ distId, user, onChange }: { distId: string; user: DistributorUser; onChange: () => void }) {
+  const confirmDialog = useConfirm()
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [editingRole, setEditingRole] = useState(false)
@@ -705,7 +711,7 @@ function UserRow({ distId, user, onChange }: { distId: string; user: Distributor
   }
 
   async function remove() {
-    if (!confirm(`Remove ${user.email}? They'll lose access immediately.`)) return
+    if (!(await confirmDialog({ title: `Remove ${user.email}?`, message: "They'll lose access immediately.", danger: true }))) return
     setBusy(true)
     setError(null)
     try {

@@ -13,6 +13,7 @@ import B2BAdminTabs from '../../../components/b2b/B2BAdminTabs'
 import { AppIcon } from '../../../lib/AppIcons'
 import { requirePageAuth } from '../../../lib/authServer'
 import type { UserRole } from '../../../lib/permissions'
+import { SkeletonRows } from '../../../components/ui'
 
 const T = {
   bg:'#0d0f12', bg2:'#131519', bg3:'#1a1d23', bg4:'#21252d',
@@ -171,7 +172,7 @@ export default function B2BHubPage({ user }: Props) {
               <a href="/admin/b2b/orders" style={{fontSize:12,color:T.blue,textDecoration:'none'}}>View all →</a>
             </div>
             {!orders ? (
-              <div style={{padding:20,color:T.text3,fontSize:13}}>Loading…</div>
+              <SkeletonRows rows={8}/>
             ) : orders.orders.length === 0 ? (
               <div style={{padding:20,color:T.text3,fontSize:13}}>No orders yet.</div>
             ) : (

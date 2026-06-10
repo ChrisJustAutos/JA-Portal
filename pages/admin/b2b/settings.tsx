@@ -15,6 +15,7 @@ import FreightZonesManager from '../../../components/b2b/FreightZonesManager'
 import EmailTemplatesManager from '../../../components/b2b/EmailTemplatesManager'
 import FreightPackagingManager from '../../../components/b2b/FreightPackagingManager'
 import FreightCarriersManager from '../../../components/b2b/FreightCarriersManager'
+import { useConfirm } from '../../../components/ui/Feedback'
 
 const T = {
   bg:'#0d0f12', bg2:'#131519', bg3:'#1a1d23', bg4:'#21252d',
@@ -800,6 +801,7 @@ function TaxonomyEditor({
   itemKey: string         // 'model' | 'product_type'
   itemLabel: string       // 'model' | 'product type'
 }) {
+  const confirmDialog = useConfirm()
   const [items, setItems] = useState<TaxonomyItem[] | null>(null)
   const [loadErr, setLoadErr] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
@@ -865,7 +867,7 @@ function TaxonomyEditor({
     const msg = item.usage_count > 0
       ? `Delete ${itemLabel} ${noun}? It is currently linked to ${item.usage_count} product(s) — they will be un-tagged.`
       : `Delete ${itemLabel} ${noun}?`
-    if (!confirm(msg)) return
+    if (!(await confirmDialog({ title: msg, danger: true }))) return
     setBusy(true); setActionErr(null)
     try {
       const r = await fetch(`${endpoint}/${item.id}`, { method: 'DELETE', credentials: 'same-origin' })

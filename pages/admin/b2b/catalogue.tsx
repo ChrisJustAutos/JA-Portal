@@ -17,6 +17,7 @@ import B2BAdminTabs from '../../../components/b2b/B2BAdminTabs'
 import { requirePageAuth } from '../../../lib/authServer'
 import { getSupabase } from '../../../lib/supabaseClient'
 import type { UserRole } from '../../../lib/permissions'
+import { useConfirm, usePrompt, useToast } from '../../../components/ui/Feedback'
 
 const T = {
   bg:'#0d0f12', bg2:'#131519', bg3:'#1a1d23', bg4:'#21252d',
@@ -661,6 +662,7 @@ function CatalogueRow({
   onPatch: (id: string, patch: Partial<CatalogueItem>) => void
   onOpenDrawer: () => void
 }) {
+  const promptDialog = usePrompt()
   const [priceDraft, setPriceDraft] = useState<string>(item.trade_price_ex_gst.toFixed(2))
   const [savingField, setSavingField] = useState<'price'|'visible'|'model'|'type'|null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -693,7 +695,7 @@ function CatalogueRow({
 
   async function handleModelChange(v: string | null | '__add__') {
     if (v === '__add__') {
-      const name = window.prompt('New model name:')?.trim()
+      const name = (await promptDialog({ title: 'New model name:' }))?.trim()
       if (!name) return
       try {
         setSavingField('model')
@@ -711,7 +713,7 @@ function CatalogueRow({
 
   async function handleTypeChange(v: string | null | '__add__') {
     if (v === '__add__') {
-      const name = window.prompt('New product type name:')?.trim()
+      const name = (await promptDialog({ title: 'New product type name:' }))?.trim()
       if (!name) return
       try {
         setSavingField('type')
@@ -941,6 +943,8 @@ function EditDrawer({
   onPatch: (id: string, patch: Partial<CatalogueItem>) => void
   onDeleted: (id: string) => void
 }) {
+  const toast = useToast()
+  const confirmDialog = useConfirm()
   const [deleting, setDeleting] = useState(false)
   const [description, setDescription] = useState(item.description || '')
   const [savingDesc, setSavingDesc] = useState(false)
@@ -996,14 +1000,14 @@ function EditDrawer({
   }, [item.id])
 
   async function deleteSelf() {
-    if (!confirm(`Delete "${item.name}" (${item.sku}) from the B2B catalogue?\n\nIt's removed from any carts; past order lines keep their record. This can't be undone (a catalogue sync would re-add it from MYOB if still there — hide it with Visible off if you don't want that).`)) return
+    if (!(await confirmDialog({ title: `Delete "${item.name}" (${item.sku}) from the B2B catalogue?`, message: "It's removed from any carts; past order lines keep their record. This can't be undone (a catalogue sync would re-add it from MYOB if still there — hide it with Visible off if you don't want that).", danger: true }))) return
     setDeleting(true)
     try {
       const r = await fetch(`/api/b2b/admin/catalogue/${item.id}`, { method: 'DELETE', credentials: 'same-origin' })
       const j = await r.json().catch(() => ({}))
       if (!r.ok) throw new Error(j?.error || `HTTP ${r.status}`)
       onDeleted(item.id)
-    } catch (e: any) { alert(`Delete failed: ${e?.message || e}`); setDeleting(false) }
+    } catch (e: any) { toast(`Delete failed: ${e?.message || e}`, 'error'); setDeleting(false) }
   }
 
   async function removeImage() {

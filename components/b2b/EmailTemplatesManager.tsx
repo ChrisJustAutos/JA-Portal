@@ -4,13 +4,9 @@
 // toggle, subject, body (with {{placeholders}}), Save (PUT) + Reset (DELETE).
 
 import { useEffect, useState } from 'react'
-
-const T = {
-  bg2: '#131519', bg3: '#1a1d23', bg4: '#21252d',
-  border: 'rgba(255,255,255,0.07)', border2: 'rgba(255,255,255,0.12)',
-  text: '#e8eaf0', text2: '#8b90a0', text3: '#545968',
-  blue: '#4f8ef7', green: '#34c77b', amber: '#f5a623', red: '#f04e4e',
-}
+import { T } from '../../lib/ui/theme'
+import { SkeletonRows } from '../ui'
+import { useConfirm } from '../ui/Feedback'
 
 interface Tpl {
   key: string; label: string; direction: string; description: string
@@ -19,6 +15,7 @@ interface Tpl {
 }
 
 export default function EmailTemplatesManager() {
+  const confirmDialog = useConfirm()
   const [templates, setTemplates] = useState<Tpl[]>([])
   const [loading, setLoading] = useState(true)
   const [edits, setEdits] = useState<Record<string, { enabled: boolean; subject: string; body: string }>>({})
@@ -51,14 +48,14 @@ export default function EmailTemplatesManager() {
     else { const d = await r.json().catch(() => ({})); setFlash(d.error || 'Save failed'); setTimeout(() => setFlash(''), 3500) }
   }
   async function reset(key: string) {
-    if (!confirm('Reset this email to the built-in default? Your custom subject/body will be lost.')) return
+    if (!(await confirmDialog({ title: 'Reset this email to the built-in default?', message: 'Your custom subject/body will be lost.', danger: true }))) return
     setSavingKey(key)
     const r = await fetch(`/api/b2b/admin/email-templates?key=${encodeURIComponent(key)}`, { method: 'DELETE' })
     setSavingKey(null)
     if (r.ok) { setFlash(`Reset ${key}`); setTimeout(() => setFlash(''), 2000); load() }
   }
 
-  if (loading) return <div style={{ color: T.text3, fontSize: 13, padding: 12 }}>Loading templates…</div>
+  if (loading) return <SkeletonRows rows={8} />
 
   const groups = ['Supplier', 'Distributor', 'Internal']
   const inp: React.CSSProperties = { width: '100%', padding: '8px 11px', background: T.bg3, border: `1px solid ${T.border2}`, borderRadius: 7, color: T.text, fontSize: 13, fontFamily: 'inherit', outline: 'none', boxSizing: 'border-box' }

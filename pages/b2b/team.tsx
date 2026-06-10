@@ -13,6 +13,7 @@ import Head from 'next/head'
 import type { GetServerSideProps } from 'next'
 import B2BLayout from '../../components/b2b/B2BLayout'
 import { requireB2BPageAuth } from '../../lib/b2bAuthServer'
+import { useConfirm, useToast } from '../../components/ui/Feedback'
 
 const T = {
   bg:'#0d0f12', bg2:'#131519', bg3:'#1a1d23', bg4:'#21252d',
@@ -45,6 +46,8 @@ interface TeamUser {
 }
 
 export default function B2BTeamPage({ b2bUser }: Props) {
+  const toast = useToast()
+  const confirmDialog = useConfirm()
   const [users, setUsers] = useState<TeamUser[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -90,14 +93,14 @@ export default function B2BTeamPage({ b2bUser }: Props) {
       if (!r.ok) throw new Error(j?.error || `HTTP ${r.status}`)
       setUsers(prev => prev.map(u => u.id === id ? { ...u, ...(j.user || patch) } : u))
     } catch (e: any) {
-      alert(e?.message || 'Update failed')
+      toast(e?.message || 'Update failed', 'error')
     } finally {
       setBusyUserId(null)
     }
   }
 
   async function removeUser(u: TeamUser) {
-    if (!confirm(`Remove ${u.full_name || u.email} from your team? They'll lose access immediately.`)) return
+    if (!(await confirmDialog({ title: `Remove ${u.full_name || u.email} from your team?`, message: "They'll lose access immediately.", danger: true }))) return
     setBusyUserId(u.id)
     try {
       const r = await fetch(`/api/b2b/team/users/${u.id}`, { method: 'DELETE', credentials: 'same-origin' })
@@ -105,7 +108,7 @@ export default function B2BTeamPage({ b2bUser }: Props) {
       if (!r.ok) throw new Error(j?.error || `HTTP ${r.status}`)
       setUsers(prev => prev.filter(x => x.id !== u.id))
     } catch (e: any) {
-      alert(e?.message || 'Remove failed')
+      toast(e?.message || 'Remove failed', 'error')
     } finally {
       setBusyUserId(null)
     }

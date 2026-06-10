@@ -14,6 +14,7 @@ import { usePreferences } from '../../../../lib/preferences'
 import { useIsMobile } from '../../../../lib/useIsMobile'
 import { requirePageAuth } from '../../../../lib/authServer'
 import type { UserRole } from '../../../../lib/permissions'
+import { SkeletonRows } from '../../../../components/ui'
 
 const T = {
   bg:'#0d0f12', bg2:'#131519', bg3:'#1a1d23', bg4:'#21252d',
@@ -397,7 +398,7 @@ export default function AdminOrdersListPage({ user }: Props) {
                     <OrderRowDisplay key={o.id} order={o} isFirst={i === 0}/>
                   ))}
                   {loading && (
-                    <tr><td colSpan={7} style={{padding:30,textAlign:'center',color:T.text3,fontSize:13}}>Loading…</td></tr>
+                    <tr><td colSpan={7} style={{padding:0}}><SkeletonRows rows={8}/></td></tr>
                   )}
                 </tbody>
               </table>

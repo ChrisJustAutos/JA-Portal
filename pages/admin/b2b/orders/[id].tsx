@@ -14,6 +14,7 @@ import B2BAdminTabs from '../../../../components/b2b/B2BAdminTabs'
 import { requirePageAuth } from '../../../../lib/authServer'
 import { roleHasPermission, type UserRole } from '../../../../lib/permissions'
 import { useIsMobile } from '../../../../lib/useIsMobile'
+import { useConfirm, useToast } from '../../../../components/ui/Feedback'
 
 const T = {
   bg:'#0d0f12', bg2:'#131519', bg3:'#1a1d23', bg4:'#21252d',
@@ -157,6 +158,7 @@ const ALLOWED_TRANSITIONS: Record<string, { to: string; label: string; primary?:
 export default function AdminOrderDetailPage({ user }: Props) {
   const router = useRouter()
   const isMobile = useIsMobile()
+  const confirmDialog = useConfirm()
   const orderId = String(router.query.id || '')
   const canEdit   = roleHasPermission(user.role, 'edit:b2b_orders')
   const canRefund = roleHasPermission(user.role, 'admin:b2b')
@@ -313,7 +315,7 @@ export default function AdminOrderDetailPage({ user }: Props) {
   // ── Delete order (admin only) — permanent; removes lines/events/print jobs.
   const doDelete = useCallback(async () => {
     if (!data) return
-    if (!confirm(`Permanently delete order ${data.order_number}? This removes it and its lines/events from the portal. Any MYOB invoice is NOT affected — void that in MYOB separately. This cannot be undone.`)) return
+    if (!(await confirmDialog({ title: `Permanently delete order ${data.order_number}?`, message: 'This removes it and its lines/events from the portal. Any MYOB invoice is NOT affected — void that in MYOB separately. This cannot be undone.', danger: true }))) return
     setActionBusy(true); setActionError(null)
     try {
       const r = await fetch(`/api/b2b/admin/orders/${orderId}`, { method: 'DELETE', credentials: 'same-origin' })
@@ -323,7 +325,7 @@ export default function AdminOrderDetailPage({ user }: Props) {
     } catch (e: any) {
       setActionError(e?.message || String(e)); setActionBusy(false)
     }
-  }, [orderId, data, router])
+  }, [orderId, data, router, confirmDialog])
 
   // ── Internal notes save
   const saveNotes = useCallback(async () => {
@@ -843,6 +845,8 @@ function ShippingCard({ order, onEdit, onReloaded, onFlash }: {
   onFlash: (msg: string) => void
 }) {
   const isMobile        = useIsMobile()
+  const toast           = useToast()
+  const confirmDialog   = useConfirm()
   const isShipped       = !!order.shipped_at
   const hasLiveQuote    = !!order.machship_carrier_id && !!order.machship_carrier_service_id
   const hasConsignment  = !!order.machship_consignment_id
@@ -861,13 +865,13 @@ function ShippingCard({ order, onEdit, onReloaded, onFlash }: {
       if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`)
       window.open(j.url, '_blank', 'noopener,noreferrer')
     } catch (e: any) {
-      alert(`Could not open label: ${e?.message || e}`)
+      toast(`Could not open label: ${e?.message || e}`, 'error')
     }
   }
 
   async function bookViaMachShip(force = false, dispatchOverride?: string | null) {
     if (bookingBusy) return
-    if (hasConsignment && !force && !confirm('A consignment is already booked. Re-book?')) return
+    if (hasConsignment && !force && !(await confirmDialog({ title: 'A consignment is already booked. Re-book?' }))) return
     // dispatchOverride: '' = collect ASAP (now), a value = scheduled (later);
     // undefined = use whatever's in the inline picker.
     const dispatch = dispatchOverride !== undefined ? dispatchOverride : dispatchAt
@@ -1086,6 +1090,7 @@ function DropShipCard({ order, onReloaded, onFlash }: {
   onReloaded: () => void
   onFlash: (msg: string) => void
 }) {
+  const confirmDialog = useConfirm()
   const [busy, setBusy] = useState(false)
   const [resendingUid, setResendingUid] = useState<string | null>(null)
   const [err, setErr] = useState<string | null>(null)
@@ -1094,7 +1099,7 @@ function DropShipCard({ order, onReloaded, onFlash }: {
 
   async function raise(force = false) {
     if (busy) return
-    if (alreadyRaised && !force && !confirm('Drop-ship POs were already raised for this order. Raise again?')) return
+    if (alreadyRaised && !force && !(await confirmDialog({ title: 'Drop-ship POs were already raised for this order. Raise again?' }))) return
     setBusy(true); setErr(null)
     try {
       const r = await fetch(`/api/b2b/admin/orders/${order.id}/dropship-po${force ? '?force=1' : ''}`, {

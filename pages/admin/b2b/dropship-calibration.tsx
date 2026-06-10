@@ -8,8 +8,7 @@ import B2BAdminTabs from '../../../components/b2b/B2BAdminTabs'
 import DropshipCalibrationPanel from '../../../components/b2b/DropshipCalibrationPanel'
 import { requirePageAuth } from '../../../lib/authServer'
 import type { UserRole } from '../../../lib/permissions'
-
-const T = { bg: '#0d0f12', text: '#e8eaf0' }
+import { T } from '../../../lib/ui/theme'
 
 interface Props { user: { id: string; email: string; displayName: string | null; role: UserRole; visibleTabs: string[] | null } }
 

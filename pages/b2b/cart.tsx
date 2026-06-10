@@ -18,6 +18,8 @@ import B2BLayout from '../../components/b2b/B2BLayout'
 import { requireB2BPageAuth } from '../../lib/b2bAuthServer'
 import { useIsMobile } from '../../lib/useIsMobile'
 import { paytoSurchargeInc } from '../../lib/b2b-payment'
+import { useConfirm, useToast } from '../../components/ui/Feedback'
+import { SkeletonRows } from '../../components/ui'
 
 const T = {
   bg:'#0d0f12', bg2:'#131519', bg3:'#1a1d23', bg4:'#21252d',
@@ -117,6 +119,8 @@ interface CartResponse {
 export default function B2BCartPage({ b2bUser }: Props) {
   const router = useRouter()
   const isMobile = useIsMobile()
+  const toast = useToast()
+  const confirmDialog = useConfirm()
   const [data, setData] = useState<CartResponse | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -170,14 +174,14 @@ export default function B2BCartPage({ b2bUser }: Props) {
       if (!r.ok) throw new Error(j?.error || `HTTP ${r.status}`)
       await load()
     } catch (e: any) {
-      alert(e?.message || 'Could not update cart')
+      toast(e?.message || 'Could not update cart', 'error')
     } finally {
       setBusyLineId(null)
     }
   }
 
   async function removeLine(line: CartLine) {
-    if (!confirm(`Remove ${line.name} from your cart?`)) return
+    if (!(await confirmDialog({ title: `Remove ${line.name} from your cart?`, danger: true }))) return
     setBusyLineId(line.id)
     try {
       const r = await fetch(`/api/b2b/cart/items/${line.id}`, {
@@ -188,7 +192,7 @@ export default function B2BCartPage({ b2bUser }: Props) {
       if (!r.ok) throw new Error(j?.error || `HTTP ${r.status}`)
       await load()
     } catch (e: any) {
-      alert(e?.message || 'Could not remove item')
+      toast(e?.message || 'Could not remove item', 'error')
     } finally {
       setBusyLineId(null)
     }
@@ -288,8 +292,8 @@ export default function B2BCartPage({ b2bUser }: Props) {
         )}
 
         {loading && !data && (
-          <div style={{padding:36,textAlign:'center',color:T.text3,fontSize:13,background:T.bg2,border:`1px solid ${T.border}`,borderRadius:10}}>
-            Loading…
+          <div style={{background:T.bg2,border:`1px solid ${T.border}`,borderRadius:10,overflow:'hidden'}}>
+            <SkeletonRows rows={8}/>
           </div>
         )}
 

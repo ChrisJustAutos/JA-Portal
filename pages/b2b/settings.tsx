@@ -9,6 +9,7 @@ import B2BLayout from '../../components/b2b/B2BLayout'
 import { requireB2BPageAuth } from '../../lib/b2bAuthServer'
 import { enableNotifications, ensurePushSubscription } from '../../lib/pushClient'
 import { getSupabase } from '../../lib/supabaseClient'
+import { useConfirm } from '../../components/ui/Feedback'
 
 const B2B_SUBSCRIBE_URL = '/api/b2b/notifications/push-subscribe'
 
@@ -159,6 +160,7 @@ export default function B2BSettingsPage({ b2bUser }: Props) {
 // Optional authenticator (TOTP) — enrol/remove, same Supabase MFA as staff.
 // Once enrolled, the 6-digit code is requested at sign-in on /b2b/login.
 function TwoFactorCard() {
+  const confirmDialog = useConfirm()
   const [loading, setLoading] = useState(true)
   const [enrolled, setEnrolled] = useState(false)
   const [busy, setBusy] = useState(false)
@@ -208,7 +210,7 @@ function TwoFactorCard() {
   }
 
   async function removeAll() {
-    if (!confirm('Remove your authenticator? You will no longer be asked for a code at sign-in until you set one up again.')) return
+    if (!(await confirmDialog({ title: 'Remove your authenticator?', message: 'You will no longer be asked for a code at sign-in until you set one up again.', danger: true }))) return
     setBusy(true); setError(''); setInfo('')
     try {
       const supabase = getSupabase()
