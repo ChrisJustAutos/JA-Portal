@@ -11,6 +11,7 @@ import Link from 'next/link'
 import { useRouter } from 'next/router'
 import PortalTopBar from '../../../lib/PortalTopBar'
 import WorkshopTabs from '../../../components/WorkshopTabs'
+import FilesPanel from '../../../components/workshop/FilesPanel'
 import { requirePageAuth } from '../../../lib/authServer'
 import { roleHasPermission } from '../../../lib/permissions'
 import {
@@ -529,9 +530,7 @@ export default function JobCardPage({ user }: { user: PortalUserSSR }) {
                     )}
 
                     {tab === 'files' && (
-                      <div style={{ padding: 20, fontSize: 12, color: T.text3, lineHeight: 1.6 }}>
-                        Photos & document uploads land in the next batch — Supabase Storage with a thumbnail grid + downloadable docs list (job sheets, signed authorities, etc.).
-                      </div>
+                      <FilesPanel bookingId={id} vehicleId={b.vehicle_id} customerId={b.customer_id} canEdit={canEdit} />
                     )}
 
                     {tab === 'activity' && (
