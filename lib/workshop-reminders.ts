@@ -6,7 +6,7 @@
 
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
 import { sendSms } from './clicksend'
-import { vehicleLabel } from './workshop'
+import { vehicleLabel, ymdBrisbane, addDaysYmd } from './workshop'
 
 let _sb: SupabaseClient | null = null
 function sb(): SupabaseClient {
@@ -18,13 +18,14 @@ function sb(): SupabaseClient {
   return _sb
 }
 
-interface SmsSettings { sms_enabled: boolean; sms_from: string | null; booking_reminder_lead_hours: number }
+interface SmsSettings { sms_enabled: boolean; sms_from: string | null; booking_reminder_lead_hours: number; service_reminder_lead_days: number }
 async function smsSettings(): Promise<SmsSettings> {
-  const { data } = await sb().from('workshop_settings').select('sms_enabled, sms_from, booking_reminder_lead_hours').eq('id', 'singleton').maybeSingle()
+  const { data } = await sb().from('workshop_settings').select('sms_enabled, sms_from, booking_reminder_lead_hours, service_reminder_lead_days').eq('id', 'singleton').maybeSingle()
   return {
     sms_enabled: data?.sms_enabled ?? false,
     sms_from: data?.sms_from ?? null,
     booking_reminder_lead_hours: data?.booking_reminder_lead_hours ?? 24,
+    service_reminder_lead_days: data?.service_reminder_lead_days ?? 14,
   }
 }
 
@@ -61,6 +62,64 @@ export async function queueBookingReminder(bookingId: string): Promise<void> {
       type: 'booking', customer_id: b.customer_id || null, vehicle_id: b.vehicle_id || null, booking_id: bookingId,
       to_number: number, body, send_at: sendAt.toISOString(), status: 'pending',
     })
+  } catch { /* best-effort */ }
+}
+
+function bneDate(ymd: string): string {
+  return new Date(`${ymd}T00:00:00+10:00`).toLocaleDateString('en-AU', { timeZone: 'Australia/Brisbane', day: 'numeric', month: 'short', year: 'numeric' })
+}
+
+// Queue service-due / rego-due SMS for vehicles whose due date is inside the
+// lead window. Dedupe = the *_reminder_sent_for marker column: queue only when
+// it differs from the current due date, then stamp it — so editing a due date
+// re-arms the reminder and repeat cron runs are no-ops. sms_enabled gates the
+// actual send (in processDueReminders), not the queueing.
+export interface ServiceDueRunResult { service_queued: number; rego_queued: number }
+
+export async function queueServiceDueReminders(limit = 100): Promise<ServiceDueRunResult> {
+  const db = sb()
+  const cfg = await smsSettings()
+  const cutoff = addDaysYmd(ymdBrisbane(new Date()), cfg.service_reminder_lead_days)
+
+  const KINDS = [
+    { col: 'next_service_due_date', marker: 'service_reminder_sent_for', type: 'service_due', what: 'is due for a service' },
+    { col: 'rego_due_date',         marker: 'rego_reminder_sent_for',    type: 'rego_due',    what: 'is due for registration renewal' },
+  ] as const
+  const counts: Record<string, number> = { service_due: 0, rego_due: 0 }
+
+  for (const k of KINDS) {
+    const { data: vehicles } = await db.from('workshop_vehicles')
+      .select(`id, customer_id, rego, make, model, year, ${k.col}, ${k.marker}, customer:workshop_customers(name, first_name, mobile, phone)`)
+      .not(k.col, 'is', null)
+      .lte(k.col, cutoff)
+      .limit(limit)
+    for (const v of (vehicles as any[]) || []) {
+      const due = v[k.col]
+      if (!due || v[k.marker] === due) continue // already queued for this date
+      const cust = Array.isArray(v.customer) ? v.customer[0] : v.customer
+      const number = cust?.mobile || cust?.phone
+      if (!number) continue
+      const name = cust?.first_name || (cust?.name ? String(cust.name).split(' ')[0] : '') || 'there'
+      const kmNote = k.type === 'service_due' && v.next_service_due_km ? ` (or by ${Number(v.next_service_due_km).toLocaleString()} km)` : ''
+      const body = `Hi ${name}, your ${vehicleLabel(v)} ${k.what} on ${bneDate(due)}${kmNote}. Call Just Autos to book it in.`
+      const { error } = await db.from('workshop_reminders').insert({
+        type: k.type, customer_id: v.customer_id || null, vehicle_id: v.id, booking_id: null,
+        to_number: number, body, send_at: new Date().toISOString(), status: 'pending',
+      })
+      if (!error) {
+        await db.from('workshop_vehicles').update({ [k.marker]: due }).eq('id', v.id)
+        counts[k.type]++
+      }
+    }
+  }
+  return { service_queued: counts.service_due, rego_queued: counts.rego_due }
+}
+
+// Cancel pending due-reminders for a vehicle (called when a due date is cleared).
+export async function cancelVehicleDueReminders(vehicleId: string, type: 'service_due' | 'rego_due'): Promise<void> {
+  try {
+    await sb().from('workshop_reminders').update({ status: 'cancelled' })
+      .eq('vehicle_id', vehicleId).eq('type', type).eq('status', 'pending')
   } catch { /* best-effort */ }
 }
 

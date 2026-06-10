@@ -521,7 +521,8 @@ function SmsSection({ settings, onSave, register }: { settings: any; onSave: Sav
   const [enabled, setEnabled] = useState(!!settings.sms_enabled)
   const [from, setFrom] = useState(settings.sms_from || '')
   const [lead, setLead] = useState(String(settings.booking_reminder_lead_hours ?? 24))
-  const buildPatch = () => ({ sms_enabled: enabled, sms_from: from, booking_reminder_lead_hours: Number(lead) || 0 })
+  const [dueLead, setDueLead] = useState(String(settings.service_reminder_lead_days ?? 14))
+  const buildPatch = () => ({ sms_enabled: enabled, sms_from: from, booking_reminder_lead_hours: Number(lead) || 0, service_reminder_lead_days: Number(dueLead) || 0 })
   const patchRef = useRef(buildPatch()); patchRef.current = buildPatch()
   useEffect(() => {
     if (!register) return
@@ -534,11 +535,12 @@ function SmsSection({ settings, onSave, register }: { settings: any; onSave: Sav
         <input type="checkbox" checked={enabled} onChange={e => setEnabled(e.target.checked)} />
         Send automatic booking reminders
       </label>
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 160px', gap: 12 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 150px 150px', gap: 12 }}>
         <Field label="Sender ID / number (optional)"><input style={inp} value={from} onChange={e => setFrom(e.target.value)} placeholder="JustAutos" /></Field>
-        <Field label="Reminder lead (hours)"><input style={inp} inputMode="numeric" value={lead} onChange={e => setLead(e.target.value)} /></Field>
+        <Field label="Booking lead (hours)"><input style={inp} inputMode="numeric" value={lead} onChange={e => setLead(e.target.value)} /></Field>
+        <Field label="Service-due lead (days)"><input style={inp} inputMode="numeric" value={dueLead} onChange={e => setDueLead(e.target.value)} /></Field>
       </div>
-      <button onClick={() => onSave({ sms_enabled: enabled, sms_from: from, booking_reminder_lead_hours: Number(lead) || 0 })} style={pbtn(T.accent, true)}>Save SMS settings</button>
+      <button onClick={() => onSave(buildPatch())} style={pbtn(T.accent, true)}>Save SMS settings</button>
     </Card>
   )
 }

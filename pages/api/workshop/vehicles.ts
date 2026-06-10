@@ -6,6 +6,7 @@
 import { createClient } from '@supabase/supabase-js'
 import { withAuth } from '../../../lib/authServer'
 import { roleHasPermission } from '../../../lib/permissions'
+import { cancelVehicleDueReminders } from '../../../lib/workshop-reminders'
 
 export const config = { maxDuration: 10 }
 
@@ -23,14 +24,14 @@ export default withAuth('view:diary', async (req, res, user) => {
     const id = String(req.query.id || '').trim()
     if (id) {
       const { data, error } = await db.from('workshop_vehicles')
-        .select('id, customer_id, rego, make, model, year, vin, odometer, model_id').eq('id', id).maybeSingle()
+        .select('id, customer_id, rego, make, model, year, vin, odometer, model_id, next_service_due_date, next_service_due_km, rego_due_date').eq('id', id).maybeSingle()
       if (error) return res.status(500).json({ error: error.message })
       return res.status(200).json({ vehicle: data || null })
     }
     const customerId = String(req.query.customer_id || '').trim()
     const q = String(req.query.q || '').trim().replace(/[%,()*]/g, ' ').trim()
     let query = db.from('workshop_vehicles')
-      .select('id, customer_id, rego, make, model, year, vin, odometer, model_id')
+      .select('id, customer_id, rego, make, model, year, vin, odometer, model_id, next_service_due_date, next_service_due_km, rego_due_date')
       .order('rego', { ascending: true })
       .limit(20)
     if (customerId) query = query.eq('customer_id', customerId)
@@ -81,9 +82,21 @@ export default withAuth('view:diary', async (req, res, user) => {
     if ('model' in body) patch.model = body.model ? String(body.model) : null
     if ('year' in body) { const y = parseInt(String(body.year), 10); patch.year = isFinite(y) ? y : null }
     if ('odometer' in body) { const o = parseInt(String(body.odometer), 10); patch.odometer = isFinite(o) ? o : null }
+    if ('vin' in body) patch.vin = body.vin ? String(body.vin).trim() : null
+    if ('colour' in body) patch.colour = body.colour ? String(body.colour) : null
+    if ('notes' in body) patch.notes = body.notes ? String(body.notes) : null
+    if ('customer_id' in body) patch.customer_id = body.customer_id || null
+    // Service-due fields (086). Clearing a due date also cancels any pending
+    // queued SMS for it so a stale reminder can't fire.
+    const DATE_RE = /^\d{4}-\d{2}-\d{2}$/
+    if ('next_service_due_date' in body) patch.next_service_due_date = DATE_RE.test(String(body.next_service_due_date || '')) ? body.next_service_due_date : null
+    if ('rego_due_date' in body) patch.rego_due_date = DATE_RE.test(String(body.rego_due_date || '')) ? body.rego_due_date : null
+    if ('next_service_due_km' in body) { const k = parseInt(String(body.next_service_due_km), 10); patch.next_service_due_km = isFinite(k) && k > 0 ? k : null }
     if (!Object.keys(patch).length) return res.status(400).json({ error: 'No fields' })
     const { error } = await db.from('workshop_vehicles').update(patch).eq('id', id)
     if (error) return res.status(500).json({ error: error.message })
+    if ('next_service_due_date' in patch && !patch.next_service_due_date) await cancelVehicleDueReminders(id, 'service_due')
+    if ('rego_due_date' in patch && !patch.rego_due_date) await cancelVehicleDueReminders(id, 'rego_due')
     return res.status(200).json({ ok: true })
   }
 

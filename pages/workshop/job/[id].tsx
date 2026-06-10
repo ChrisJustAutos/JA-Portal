@@ -16,6 +16,7 @@ import { roleHasPermission } from '../../../lib/permissions'
 import {
   BOOKING_STATUS_META, BOOKING_STATUSES, BookingStatus,
   JOB_TYPES, jobTypeLabel, vehicleLabel, customerLabel, PAYMENT_TENDERS,
+  ymdBrisbane,
 } from '../../../lib/workshop'
 
 interface PortalUserSSR { id: string; email: string; displayName: string | null; role: 'admin'|'manager'|'sales'|'accountant'|'viewer'; visibleTabs?: string[] | null }
@@ -52,6 +53,17 @@ function fmtDateTime(iso: string | null): string {
   return new Date(iso).toLocaleString('en-AU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', hour12: false })
 }
 
+function fmtDueDate(ymd: string | null): string {
+  if (!ymd) return '—'
+  return new Date(`${ymd}T00:00:00+10:00`).toLocaleDateString('en-AU', { timeZone: 'Australia/Brisbane', day: 'numeric', month: 'short', year: 'numeric' })
+}
+
+function addMonthsYmd(ymd: string, months: number): string {
+  const d = new Date(`${ymd}T00:00:00+10:00`)
+  d.setUTCMonth(d.getUTCMonth() + months)
+  return ymdBrisbane(d)
+}
+
 export default function JobCardPage({ user }: { user: PortalUserSSR }) {
   const router = useRouter()
   const id = typeof router.query.id === 'string' ? router.query.id : ''
@@ -72,6 +84,7 @@ export default function JobCardPage({ user }: { user: PortalUserSSR }) {
   const [jobTypes, setJobTypes] = useState<any[]>([])
   const [applyJt, setApplyJt] = useState('')
   const [tab, setTab] = useState<'invoice' | 'notes' | 'files' | 'activity' | 'history'>('invoice')
+  const [dueSet, setDueSet] = useState<{ open: boolean; service: string; km: string; rego: string; busy: boolean; msg: string }>({ open: false, service: '', km: '', rego: '', busy: false, msg: '' })
   const [internalNotes, setInternalNotes] = useState('')
   useEffect(() => { if (data?.booking) setInternalNotes(data.booking.internal_notes || '') }, [data?.booking?.id])
 
@@ -113,8 +126,34 @@ export default function JobCardPage({ user }: { user: PortalUserSSR }) {
       patch.total_ex_gst = totals.ex
       patch.total_inc_gst = totals.inc
     }
-    if (await patchBooking(patch)) await load()
+    const ok = await patchBooking(patch)
+    if (ok) await load()
     setSavingStatus(false)
+    // On completion, prompt for the vehicle's next service / rego due dates
+    // (drives the automated SMS reminders).
+    const v = data?.booking?.vehicle
+    if (ok && v && (status === 'done' || status === 'invoiced' || status === 'paid')) openDueSet(v)
+  }
+
+  function openDueSet(v: any) {
+    setDueSet({
+      open: true, busy: false, msg: '',
+      service: v?.next_service_due_date || '',
+      km: v?.next_service_due_km ? String(v.next_service_due_km) : '',
+      rego: v?.rego_due_date || '',
+    })
+  }
+
+  async function saveDueSet() {
+    const v = data?.booking?.vehicle
+    if (!v) return
+    setDueSet(s => ({ ...s, busy: true, msg: '' }))
+    const r = await fetch(`/api/workshop/vehicles?id=${v.id}`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ next_service_due_date: dueSet.service || null, next_service_due_km: dueSet.km || null, rego_due_date: dueSet.rego || null }),
+    })
+    if (r.ok) { setDueSet(s => ({ ...s, open: false, busy: false })); await load() }
+    else setDueSet(s => ({ ...s, busy: false, msg: 'Save failed' }))
   }
 
   // ── Line mutations ──
@@ -298,6 +337,35 @@ export default function JobCardPage({ user }: { user: PortalUserSSR }) {
                   {emailMsg && <span style={{ fontSize: 11, color: T.text2 }}>{emailMsg}</span>}
                 </div>
 
+                {dueSet.open && veh && (
+                  <div style={{ marginTop: 10, padding: 12, background: T.bg2, border: `1px solid ${T.border2}`, borderRadius: 8 }}>
+                    <div style={{ fontSize: 11, color: T.text2, marginBottom: 8 }}>
+                      Next service / rego due for <strong>{vehicleLabel(veh)}</strong> — drives the automated SMS reminders.
+                    </div>
+                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+                      <div>
+                        <div style={{ fontSize: 10, color: T.text3, marginBottom: 4 }}>Next service due</div>
+                        <input type="date" value={dueSet.service} onChange={e => setDueSet(s => ({ ...s, service: e.target.value }))} style={{ ...inp, colorScheme: 'dark' }} />
+                      </div>
+                      <button onClick={() => setDueSet(s => ({ ...s, service: addMonthsYmd(ymdBrisbane(new Date()), 6) }))} style={qbtn(T.text2)}>+6 mo</button>
+                      <button onClick={() => setDueSet(s => ({ ...s, service: addMonthsYmd(ymdBrisbane(new Date()), 12) }))} style={qbtn(T.text2)}>+12 mo</button>
+                      <div>
+                        <div style={{ fontSize: 10, color: T.text3, marginBottom: 4 }}>or by (km)</div>
+                        <input value={dueSet.km} inputMode="numeric" placeholder="—" onChange={e => setDueSet(s => ({ ...s, km: e.target.value }))} style={{ ...inp, width: 100 }} />
+                      </div>
+                      <button onClick={() => setDueSet(s => ({ ...s, km: String((Number(b.odometer ?? veh.odometer) || 0) + 10000) }))} style={qbtn(T.text2)} title="Current odometer + 10,000 km">+10,000 km</button>
+                      <div>
+                        <div style={{ fontSize: 10, color: T.text3, marginBottom: 4 }}>Rego due</div>
+                        <input type="date" value={dueSet.rego} onChange={e => setDueSet(s => ({ ...s, rego: e.target.value }))} style={{ ...inp, colorScheme: 'dark' }} />
+                      </div>
+                      <div style={{ flex: 1 }} />
+                      {dueSet.msg && <span style={{ fontSize: 11, color: T.red }}>{dueSet.msg}</span>}
+                      <button onClick={() => setDueSet(s => ({ ...s, open: false }))} style={qbtn(T.text3)}>Not now</button>
+                      <button onClick={saveDueSet} disabled={dueSet.busy} style={{ ...qbtn(T.green), background: `${T.green}1e` }}>{dueSet.busy ? 'Saving…' : 'Save due dates'}</button>
+                    </div>
+                  </div>
+                )}
+
                 {pay.open && (
                   <div style={{ marginTop: 10, padding: 12, background: T.bg2, border: `1px solid ${T.border2}`, borderRadius: 8 }}>
                     <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'flex-end' }}>
@@ -335,6 +403,16 @@ export default function JobCardPage({ user }: { user: PortalUserSSR }) {
                           <FieldRow label="VIN" value={veh.vin || '—'} mono />
                           <FieldRow label="Colour" value={veh.colour || '—'} />
                           <FieldRow label="Odometer" value={veh.odometer ? `${Number(veh.odometer).toLocaleString()} km` : '—'} mono />
+                          <FieldRow label="Service due" mono
+                            value={veh.next_service_due_date ? `${fmtDueDate(veh.next_service_due_date)}${veh.next_service_due_km ? ` / ${Number(veh.next_service_due_km).toLocaleString()} km` : ''}` : '—'}
+                            accent={veh.next_service_due_date && veh.next_service_due_date < ymdBrisbane(new Date()) ? T.red : undefined} />
+                          <FieldRow label="Rego due" mono value={fmtDueDate(veh.rego_due_date)}
+                            accent={veh.rego_due_date && veh.rego_due_date < ymdBrisbane(new Date()) ? T.red : undefined} />
+                          {canEdit && (
+                            <div style={{ paddingTop: 6, marginTop: 4, borderTop: `1px solid ${T.border}` }}>
+                              <button onClick={() => openDueSet(veh)} style={{ background: 'none', border: 'none', padding: 0, fontSize: 11, color: T.blue, cursor: 'pointer', fontFamily: 'inherit' }}>Set service / rego due →</button>
+                            </div>
+                          )}
                         </>
                       ) : <div style={{ padding: '8px 0', fontSize: 12, color: T.text3 }}>No vehicle attached.</div>}
                     </Panel>

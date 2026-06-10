@@ -5,7 +5,7 @@
 // vercel-cron user-agent), mirroring the other crons.
 
 import { NextApiRequest, NextApiResponse } from 'next'
-import { processDueReminders } from '../../../lib/workshop-reminders'
+import { processDueReminders, queueServiceDueReminders } from '../../../lib/workshop-reminders'
 
 export const config = { maxDuration: 60 }
 
@@ -17,8 +17,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (!authorized) return res.status(401).json({ error: 'Unauthorised' })
 
   try {
+    const dueQueued = await queueServiceDueReminders(100).catch(() => ({ service_queued: 0, rego_queued: 0 }))
     const result = await processDueReminders(100)
-    return res.status(200).json({ ok: true, ...result })
+    return res.status(200).json({ ok: true, ...dueQueued, ...result })
   } catch (e: any) {
     return res.status(500).json({ ok: false, error: e?.message || String(e) })
   }
