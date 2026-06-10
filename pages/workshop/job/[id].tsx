@@ -12,6 +12,7 @@ import { useRouter } from 'next/router'
 import PortalTopBar from '../../../lib/PortalTopBar'
 import WorkshopTabs from '../../../components/WorkshopTabs'
 import FilesPanel from '../../../components/workshop/FilesPanel'
+import TimeClockPanel from '../../../components/workshop/TimeClockPanel'
 import { requirePageAuth } from '../../../lib/authServer'
 import { roleHasPermission } from '../../../lib/permissions'
 import {
@@ -534,9 +535,9 @@ export default function JobCardPage({ user }: { user: PortalUserSSR }) {
                     )}
 
                     {tab === 'activity' && (
-                      <div style={{ padding: 20, fontSize: 12, color: T.text3, lineHeight: 1.6 }}>
-                        Mechanic clock-on/off + per-job time totals land in the next batch.
-                      </div>
+                      <TimeClockPanel bookingId={id} defaultTech={b.technician_ext}
+                        quotedHours={lines.filter(l => l.line_type === 'labour').reduce((s, l) => s + (Number(l.qty) || 0), 0)}
+                        canEdit={canEdit} />
                     )}
 
                     {tab === 'history' && (

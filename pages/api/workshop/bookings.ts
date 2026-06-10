@@ -26,7 +26,7 @@ export default withAuth('view:diary', async (req, res, user) => {
     const from = String(req.query.from || '')
     const to = String(req.query.to || '')
     if (!from || !to) return res.status(400).json({ error: 'from and to (ISO) required' })
-    const [bRes, tRes, sRes] = await Promise.all([
+    const [bRes, tRes, sRes, cRes] = await Promise.all([
       db.from('workshop_bookings')
         .select(`id, customer_id, vehicle_id, starts_at, ends_at, technician_ext, bay, service_type, status, notes,
                  job_type, description, internal_notes, estimated_value, span_techs, is_overdue, pickup_at,
@@ -41,6 +41,8 @@ export default withAuth('view:diary', async (req, res, user) => {
         .eq('active', true).eq('show_in_diary', true)
         .order('sort_order', { ascending: true }).order('name', { ascending: true }),
       db.from('workshop_settings').select('diary_start_min, diary_end_min').eq('id', 'singleton').maybeSingle(),
+      // Jobs with someone on the time clock right now (⏱ badge on the diary).
+      db.from('workshop_time_entries').select('booking_id').is('ended_at', null),
     ])
     if (bRes.error) return res.status(500).json({ error: bRes.error.message })
     // Diary lanes are workshop-managed (workshop_technicians); ext = lane code.
@@ -50,7 +52,8 @@ export default withAuth('view:diary', async (req, res, user) => {
     }))
     const s: any = sRes.data || {}
     const diary = { startMin: Number(s.diary_start_min ?? 420), endMin: Number(s.diary_end_min ?? 1080) }
-    return res.status(200).json({ bookings: bRes.data || [], technicians, diary })
+    const clocked_on = Array.from(new Set((cRes.data || []).map((r: any) => r.booking_id)))
+    return res.status(200).json({ bookings: bRes.data || [], technicians, diary, clocked_on })
   }
 
   if (req.method === 'POST') {
