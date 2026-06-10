@@ -30,7 +30,7 @@ export default withAuth('view:diary', async (req, res, user) => {
         .select('id, name, first_name, last_name, phone, mobile, email, address, company, customer_type, customer_number, md_id, myob_uid, created_at, updated_at')
         .eq('id', id).maybeSingle(),
       db.from('workshop_vehicles')
-        .select('id, rego, make, model, year, vin, colour, engine, transmission, odometer, notes')
+        .select('id, rego, make, model, year, vin, colour, engine, transmission, odometer, notes, next_service_due_date, next_service_due_km, rego_due_date')
         .eq('customer_id', id).order('created_at', { ascending: false }),
       db.from('workshop_bookings')
         .select('id, starts_at, ends_at, status, job_type, description, estimated_value, vehicle_id, technician_ext')

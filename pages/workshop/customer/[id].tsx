@@ -68,16 +68,17 @@ export default function CustomerDetailPage({ user }: { user: PortalUserSSR }) {
                 {/* Vehicles */}
                 <Section title="Vehicles" count={data.vehicles.length}>
                   {data.vehicles.length === 0 ? <Empty>No vehicles on file</Empty> : (() => {
-                    const cols = '120px 1fr 90px 90px 90px'
+                    const cols = '120px 1fr 70px 90px 110px 70px'
                     return (
-                      <Table cols={cols} header={<><div>Rego</div><div>Make / Model</div><div style={{ textAlign:'right' }}>Year</div><div style={{ textAlign:'right' }}>KMs</div><div style={{ textAlign:'right' }}>Colour</div></>}>
+                      <Table cols={cols} header={<><div>Rego</div><div>Make / Model</div><div style={{ textAlign:'right' }}>Year</div><div style={{ textAlign:'right' }}>KMs</div><div style={{ textAlign:'right' }}>Service due</div><div /></>}>
                         {data.vehicles.map((v: any) => (
                           <Row key={v.id} cols={cols}>
                             <div style={{ fontFamily:'monospace', fontWeight:600 }}>{v.rego || '—'}</div>
                             <div>{[v.make, v.model].filter(Boolean).join(' ') || '—'}</div>
                             <div style={{ textAlign:'right', color:T.text3, fontVariantNumeric:'tabular-nums' }}>{v.year || '—'}</div>
                             <div style={{ textAlign:'right', color:T.text3, fontVariantNumeric:'tabular-nums' }}>{v.odometer ? v.odometer.toLocaleString() : '—'}</div>
-                            <div style={{ textAlign:'right', color:T.text3 }}>{v.colour || '—'}</div>
+                            <div style={{ textAlign:'right', fontFamily:'monospace', fontSize:11, color: v.next_service_due_date ? T.amber : T.text3 }}>{v.next_service_due_date ? fmtDate(`${v.next_service_due_date}T00:00:00+10:00`) : '—'}</div>
+                            <div style={{ textAlign:'right' }}><Link href={`/workshop/vehicle/${v.id}`} style={{ color:T.blue, fontSize:11, textDecoration:'none' }}>Open →</Link></div>
                           </Row>
                         ))}
                       </Table>

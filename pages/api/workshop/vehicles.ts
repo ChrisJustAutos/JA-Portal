@@ -1,12 +1,18 @@
 // pages/api/workshop/vehicles.ts
 // GET  ?customer_id=  — vehicles for a customer
-//      ?q=            — search by rego / make / model (max 20)
+//      ?q=            — search by rego / make / model (max 20, picker-style)
+//      ?list=1[&q=&due=soon|overdue&limit=&offset=&count=1]
+//                     — paginated Vehicles screen list w/ customer join;
+//                       q also matches VIN + customer name; due filters on
+//                       service/rego due dates (lead = service_reminder_lead_days)
 // POST                — quick-create a vehicle (edit:bookings).
+// PATCH ?id=          — edit (incl. service/rego due fields).
 
 import { createClient } from '@supabase/supabase-js'
 import { withAuth } from '../../../lib/authServer'
 import { roleHasPermission } from '../../../lib/permissions'
 import { cancelVehicleDueReminders } from '../../../lib/workshop-reminders'
+import { ymdBrisbane, addDaysYmd } from '../../../lib/workshop'
 
 export const config = { maxDuration: 10 }
 
@@ -28,6 +34,62 @@ export default withAuth('view:diary', async (req, res, user) => {
       if (error) return res.status(500).json({ error: error.message })
       return res.status(200).json({ vehicle: data || null })
     }
+    // ── Vehicles screen list mode ──
+    if (String(req.query.list || '') === '1') {
+      const limit = Math.min(200, Math.max(1, Number(req.query.limit) || 50))
+      const offset = Math.max(0, Number(req.query.offset) || 0)
+      const due = String(req.query.due || '')
+      const q2 = String(req.query.q || '').trim().replace(/[%,()*]/g, ' ').trim()
+      const SELECT = `id, customer_id, rego, make, model, year, vin, colour, odometer, model_id,
+                      next_service_due_date, next_service_due_km, rego_due_date,
+                      customer:workshop_customers(id, name, mobile, phone)`
+
+      let dueOr: string | null = null
+      const today = ymdBrisbane(new Date())
+      if (due === 'overdue') dueOr = `next_service_due_date.lt.${today},rego_due_date.lt.${today}`
+      else if (due === 'soon') {
+        const { data: s } = await db.from('workshop_settings').select('service_reminder_lead_days').eq('id', 'singleton').maybeSingle()
+        const cutoff = addDaysYmd(today, Number(s?.service_reminder_lead_days ?? 14))
+        dueOr = `next_service_due_date.lte.${cutoff},rego_due_date.lte.${cutoff}`
+      }
+
+      if (q2) {
+        // Two passes merged in JS: vehicle fields + owner-name match.
+        let vq = db.from('workshop_vehicles').select(SELECT)
+          .or(`rego.ilike.%${q2}%,vin.ilike.%${q2}%,make.ilike.%${q2}%,model.ilike.%${q2}%`)
+          .order('rego', { ascending: true }).limit(100)
+        if (dueOr) vq = vq.or(dueOr)
+        const { data: byVehicle, error: e1 } = await vq
+        if (e1) return res.status(500).json({ error: e1.message })
+        const { data: custs } = await db.from('workshop_customers').select('id').ilike('name', `%${q2}%`).limit(100)
+        let byOwner: any[] = []
+        if (custs && custs.length) {
+          let oq = db.from('workshop_vehicles').select(SELECT)
+            .in('customer_id', custs.map((c: any) => c.id))
+            .order('rego', { ascending: true }).limit(100)
+          if (dueOr) oq = oq.or(dueOr)
+          byOwner = (await oq).data || []
+        }
+        const seen = new Set<string>()
+        const merged = [...(byVehicle || []), ...byOwner].filter((v: any) => { if (seen.has(v.id)) return false; seen.add(v.id); return true })
+        if (String(req.query.count || '') === '1') return res.status(200).json({ total: merged.length })
+        return res.status(200).json({ vehicles: merged.slice(offset, offset + limit), total: merged.length })
+      }
+
+      let qy = db.from('workshop_vehicles').select(SELECT, { count: 'exact' })
+        .order('rego', { ascending: true, nullsFirst: false })
+        .range(offset, offset + limit - 1)
+      if (dueOr) qy = qy.or(dueOr)
+      if (String(req.query.count || '') === '1') {
+        const { count, error } = await db.from('workshop_vehicles').select('id', { count: 'exact', head: true }).or(dueOr || 'id.not.is.null')
+        if (error) return res.status(500).json({ error: error.message })
+        return res.status(200).json({ total: count || 0 })
+      }
+      const { data, count, error } = await qy
+      if (error) return res.status(500).json({ error: error.message })
+      return res.status(200).json({ vehicles: data || [], total: count || 0 })
+    }
+
     const customerId = String(req.query.customer_id || '').trim()
     const q = String(req.query.q || '').trim().replace(/[%,()*]/g, ' ').trim()
     let query = db.from('workshop_vehicles')
