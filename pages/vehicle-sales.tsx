@@ -10,15 +10,8 @@ import Head from 'next/head'
 import PortalTopBar from '../lib/PortalTopBar'
 import { requirePageAuth } from '../lib/authServer'
 import { UserRole } from '../lib/permissions'
-
-const T = {
-  bg:'#0d0f12', bg2:'#131519', bg3:'#1a1d23', bg4:'#21252d',
-  border:'rgba(255,255,255,0.07)', border2:'rgba(255,255,255,0.12)',
-  text:'#e8eaf0', text2:'#8b90a0', text3:'#545968',
-  blue:'#4f8ef7', teal:'#2dd4bf', green:'#34c77b',
-  amber:'#f5a623', red:'#f04e4e', purple:'#a78bfa',
-  accent:'#4f8ef7',
-}
+import { T } from '../lib/ui/theme'
+import { useConfirm } from '../components/ui/Feedback'
 
 const PLATFORM_COLOURS: Record<string, string> = {
   'VDJ79':'#4f8ef7', 'VDJ200':'#2dd4bf', 'VDJ76':'#60a5fa', 'VDJ70*':'#38bdf8',
@@ -91,6 +84,7 @@ function fmtRelative(iso: string | null | undefined): string {
 }
 
 export default function VehicleSalesPage({ user }: { user: { id: string; email: string; role: UserRole; name: string } }) {
+  const confirmDialog = useConfirm()
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [data, setData] = useState<Summary | null>(null)
@@ -213,7 +207,7 @@ export default function VehicleSalesPage({ user }: { user: { id: string; email: 
                   style={{padding:'7px 14px', background:T.bg3, border:`1px solid ${T.border2}`, color:T.text, borderRadius:6, fontSize:12, fontFamily:'inherit', cursor: syncing ? 'wait' : 'pointer'}}>
                   {syncing ? 'Syncing…' : 'Refresh from MYOB'}
                 </button>
-                <button onClick={() => { if (confirm('Re-classify ALL VPS invoices from scratch? This may take several minutes.')) runSync('full') }} disabled={syncing}
+                <button onClick={async () => { if (await confirmDialog({ title: 'Re-classify ALL VPS invoices from scratch?', message: 'This may take several minutes.' })) runSync('full') }} disabled={syncing}
                   style={{padding:'7px 14px', background:'transparent', border:`1px solid ${T.border2}`, color:T.text3, borderRadius:6, fontSize:12, fontFamily:'inherit', cursor: syncing ? 'wait' : 'pointer'}}>
                   Full reclassify
                 </button>

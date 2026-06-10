@@ -7,15 +7,7 @@ import Head from 'next/head'
 import PortalTopBar from '../lib/PortalTopBar'
 import { requirePageAuth } from '../lib/authServer'
 import { UserRole } from '../lib/permissions'
-
-const T = {
-  bg:'#0d0f12', bg2:'#131519', bg3:'#1a1d23', bg4:'#21252d',
-  border:'rgba(255,255,255,0.07)', border2:'rgba(255,255,255,0.12)',
-  text:'#e8eaf0', text2:'#8b90a0', text3:'#545968',
-  blue:'#4f8ef7', teal:'#2dd4bf', green:'#34c77b',
-  amber:'#f5a623', red:'#f04e4e', purple:'#a78bfa',
-  accent:'#4f8ef7',
-}
+import { T } from '../lib/ui/theme'
 
 export async function getServerSideProps(ctx: any) {
   return requirePageAuth(ctx, 'view:supplier_invoices')

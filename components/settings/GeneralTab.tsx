@@ -18,13 +18,7 @@ import {
   type ThemePreset,
 } from '../../lib/preferences'
 import LogoUpload from './LogoUpload'
-
-const T = {
-  bg:'#0d0f12', bg2:'#131519', bg3:'#1a1d23', bg4:'#21252d',
-  border:'rgba(255,255,255,0.07)', border2:'rgba(255,255,255,0.12)',
-  text:'#e8eaf0', text2:'#8b90a0', text3:'#545968',
-  blue:'#4f8ef7', green:'#34c77b', amber:'#f5a623', red:'#f04e4e', purple:'#a78bfa',
-}
+import { T } from '../../lib/ui/theme'
 
 export default function GeneralTab() {
   const { prefs, loading, update } = usePreferences()

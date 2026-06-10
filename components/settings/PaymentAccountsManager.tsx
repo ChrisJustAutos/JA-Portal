@@ -7,14 +7,8 @@
 // toggle, sort order, delete. Per-company-file (VPS / JAWS).
 
 import { useCallback, useEffect, useState } from 'react'
-
-const T = {
-  bg:'#0d0f12', bg2:'#131519', bg3:'#1a1d23', bg4:'#21252d',
-  border:'rgba(255,255,255,0.07)', border2:'rgba(255,255,255,0.12)',
-  text:'#e8eaf0', text2:'#8b90a0', text3:'#545968',
-  blue:'#4f8ef7', teal:'#2dd4bf', green:'#34c77b',
-  amber:'#f5a623', red:'#f04e4e', purple:'#a78bfa', accent:'#4f8ef7',
-}
+import { T } from '../../lib/ui/theme'
+import { useConfirm } from '../ui/Feedback'
 
 type CompanyFileLabel = 'VPS' | 'JAWS'
 
@@ -38,6 +32,7 @@ interface MyobAccount {
 }
 
 export default function PaymentAccountsManager() {
+  const confirmDialog = useConfirm()
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [accounts, setAccounts] = useState<PaymentAccount[]>([])
@@ -70,7 +65,7 @@ export default function PaymentAccountsManager() {
   }
 
   async function del(id: string, label: string) {
-    if (!confirm(`Delete payment account "${label}"?`)) return
+    if (!(await confirmDialog({ title: `Delete payment account "${label}"?`, danger: true }))) return
     setBusy(id); setError('')
     try {
       const r = await fetch(`/api/ap/payment-accounts?id=${id}`, { method: 'DELETE' })

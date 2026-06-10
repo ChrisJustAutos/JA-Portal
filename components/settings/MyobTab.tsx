@@ -8,14 +8,8 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useRouter } from 'next/router'
 import PaymentAccountsManager from './PaymentAccountsManager'
-
-const T = {
-  bg:'#0d0f12', bg2:'#131519', bg3:'#1a1d23', bg4:'#21252d',
-  border:'rgba(255,255,255,0.07)', border2:'rgba(255,255,255,0.12)',
-  text:'#e8eaf0', text2:'#8b90a0', text3:'#545968',
-  blue:'#4f8ef7', teal:'#2dd4bf', green:'#34c77b',
-  amber:'#f5a623', red:'#f04e4e', purple:'#a78bfa', accent:'#4f8ef7',
-}
+import { T } from '../../lib/ui/theme'
+import { useConfirm, usePrompt } from '../ui/Feedback'
 
 interface ConnectionSummary {
   id: string
@@ -42,6 +36,8 @@ interface CompanyFile {
 
 export default function MyobTab() {
   const router = useRouter()
+  const confirmDialog = useConfirm()
+  const promptDialog = usePrompt()
   const [loading, setLoading] = useState(true)
   const [connections, setConnections] = useState<ConnectionSummary[]>([])
   const [error, setError] = useState('')
@@ -79,8 +75,8 @@ export default function MyobTab() {
     }
   }, [router])
 
-  function connect() {
-    const label = prompt('Label for this MYOB connection (e.g. "JAWS" or "VPS"):', 'JAWS')
+  async function connect() {
+    const label = await promptDialog({ title: 'Connect MYOB', label: 'Label for this MYOB connection (e.g. "JAWS" or "VPS"):', defaultValue: 'JAWS' })
     if (!label) return
     window.location.href = `/api/myob/auth/connect?label=${encodeURIComponent(label)}`
   }
@@ -115,7 +111,7 @@ export default function MyobTab() {
   }
 
   async function disconnect(id: string, label: string) {
-    if (!confirm(`Disconnect MYOB connection "${label}"? Portal features that depend on it will stop working.`)) return
+    if (!(await confirmDialog({ title: `Disconnect MYOB connection "${label}"?`, message: 'Portal features that depend on it will stop working.', danger: true }))) return
     try {
       const r = await fetch(`/api/myob/connections?id=${id}`, { method: 'DELETE' })
       if (!r.ok) throw new Error((await r.json()).error || 'Disconnect failed')

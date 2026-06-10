@@ -18,14 +18,9 @@ import InventoryTabs from '../../components/InventoryTabs'
 import WorkshopTabs from '../../components/WorkshopTabs'
 import { requirePageAuth } from '../../lib/authServer'
 import { UserRole, roleHasPermission } from '../../lib/permissions'
-
-const T = {
-  bg:'#0d0f12', bg2:'#131519', bg3:'#1a1d23', bg4:'#21252d',
-  border:'rgba(255,255,255,0.07)', border2:'rgba(255,255,255,0.12)',
-  text:'#e8eaf0', text2:'#8b90a0', text3:'#545968',
-  blue:'#4f8ef7', teal:'#2dd4bf', green:'#34c77b',
-  amber:'#f5a623', red:'#f04e4e', purple:'#a78bfa',
-}
+import { T } from '../../lib/ui/theme'
+import { money } from '../../lib/ui/format'
+import { useConfirm } from '../../components/ui/Feedback'
 
 const MD_BASE = 'https://www.mechanicdesk.com.au'
 
@@ -131,6 +126,7 @@ function rowVariance(r: MatchEntry): number | null {
 
 export default function StocktakeDetailPage({ user }: { user: SessionUser }) {
   const router = useRouter()
+  const confirmDialog = useConfirm()
   const id = router.query.id as string | undefined
 
   const [upload, setUpload] = useState<Upload | null>(null)
@@ -187,7 +183,7 @@ export default function StocktakeDetailPage({ user }: { user: SessionUser }) {
   async function runPush() {
     if (!id || actionInFlight) return
     if (!upload?.matched_count) return
-    if (!confirm(`Push ${upload.matched_count} item(s) to Mechanics Desk?\n\nThis will add them to the active in-progress stocktake (or create a new one if none exists). The stocktake will NOT be finalised — you do that manually in MD.`)) return
+    if (!(await confirmDialog({ title: `Push ${upload.matched_count} item(s) to Mechanics Desk?`, message: 'This will add them to the active in-progress stocktake (or create a new one if none exists). The stocktake will NOT be finalised — you do that manually in MD.' }))) return
     setActionInFlight(true); setError('')
     try {
       const r = await fetch(`/api/stocktake/${id}/push`, { method: 'POST' })
@@ -262,13 +258,15 @@ export default function StocktakeDetailPage({ user }: { user: SessionUser }) {
     const isActive = upload.status === 'matching' || upload.status === 'pushing'
     const isStuck = isActive && activeMin !== null && activeMin > STUCK_THRESHOLD_MIN
 
-    let confirmMsg = `Delete portal record for "${upload.filename}"?\n\nThis cannot be undone.`
+    let confirmTitle = `Delete portal record for "${upload.filename}"?`
+    let confirmBody = 'This cannot be undone.'
     if (isStuck) {
-      confirmMsg = `"${upload.filename}" appears stuck in "${upload.status}" for ${Math.round(activeMin!)} minutes — the GitHub Action worker has likely crashed.\n\nDelete this orphan portal record?\n\nThis cannot be undone.`
+      confirmTitle = 'Delete this orphan portal record?'
+      confirmBody = `"${upload.filename}" appears stuck in "${upload.status}" for ${Math.round(activeMin!)} minutes — the GitHub Action worker has likely crashed.\n\nThis cannot be undone.`
     } else if (upload.mechanicdesk_stocktake_id) {
-      confirmMsg += `\n\nNote: The Mechanics Desk stocktake (${upload.mechanicdesk_stocktake_id}) will NOT be deleted — only the portal record. Delete it manually in MD if needed.`
+      confirmBody += `\n\nNote: The Mechanics Desk stocktake (${upload.mechanicdesk_stocktake_id}) will NOT be deleted — only the portal record. Delete it manually in MD if needed.`
     }
-    if (!confirm(confirmMsg)) return
+    if (!(await confirmDialog({ title: confirmTitle, message: confirmBody, danger: true }))) return
 
     setDeleting(true); setError('')
     try {
@@ -822,8 +820,6 @@ function Tile({ label, value, highlight }: { label: string; value: string; highl
     </div>
   )
 }
-
-const money = (n: number) => `$${(Number(n) || 0).toLocaleString('en-AU', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
 
 function downloadCoverageCsv(items: CoverageItem[], filename: string) {
   const esc = (v: any) => { const s = String(v ?? ''); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s }

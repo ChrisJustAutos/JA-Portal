@@ -20,14 +20,9 @@ import InventoryTabs from '../../components/InventoryTabs'
 import WorkshopTabs from '../../components/WorkshopTabs'
 import { requirePageAuth } from '../../lib/authServer'
 import { UserRole, roleHasPermission } from '../../lib/permissions'
-
-const T = {
-  bg:'#0d0f12', bg2:'#131519', bg3:'#1a1d23', bg4:'#21252d',
-  border:'rgba(255,255,255,0.07)', border2:'rgba(255,255,255,0.12)',
-  text:'#e8eaf0', text2:'#8b90a0', text3:'#545968',
-  blue:'#4f8ef7', teal:'#2dd4bf', green:'#34c77b',
-  amber:'#f5a623', red:'#f04e4e', purple:'#a78bfa',
-}
+import { T } from '../../lib/ui/theme'
+import { SkeletonRows } from '../../components/ui'
+import { useConfirm } from '../../components/ui/Feedback'
 
 // If a row stays in matching/pushing longer than this, we treat it as
 // stuck (the GH Action worker probably crashed before it could PATCH
@@ -98,6 +93,7 @@ function getActiveMinutes(u: UploadRow): number | null {
 
 export default function StocktakeIndexPage({ user }: { user: SessionUser }) {
   const router = useRouter()
+  const confirmDialog = useConfirm()
   const [uploads, setUploads] = useState<UploadRow[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -132,13 +128,15 @@ export default function StocktakeIndexPage({ user }: { user: SessionUser }) {
       return
     }
 
-    let confirmMsg = `Delete portal record for "${u.filename}"?\n\nThis cannot be undone.`
+    let confirmTitle = `Delete portal record for "${u.filename}"?`
+    let confirmBody = 'This cannot be undone.'
     if (isStuck) {
-      confirmMsg = `"${u.filename}" appears stuck in "${u.status}" for ${Math.round(activeMin!)} minutes — the GitHub Action worker has likely crashed.\n\nDelete this orphan portal record?\n\nThis cannot be undone.`
+      confirmTitle = 'Delete this orphan portal record?'
+      confirmBody = `"${u.filename}" appears stuck in "${u.status}" for ${Math.round(activeMin!)} minutes — the GitHub Action worker has likely crashed.\n\nThis cannot be undone.`
     } else if (u.mechanicdesk_stocktake_id) {
-      confirmMsg += `\n\nNote: The Mechanics Desk stocktake (${u.mechanicdesk_stocktake_id}) will NOT be deleted — only the portal record. Delete it manually in MD if needed.`
+      confirmBody += `\n\nNote: The Mechanics Desk stocktake (${u.mechanicdesk_stocktake_id}) will NOT be deleted — only the portal record. Delete it manually in MD if needed.`
     }
-    if (!confirm(confirmMsg)) return
+    if (!(await confirmDialog({ title: confirmTitle, message: confirmBody, danger: true }))) return
 
     setDeletingId(u.id); setError('')
     try {
@@ -199,7 +197,7 @@ export default function StocktakeIndexPage({ user }: { user: SessionUser }) {
               Recent uploads
             </h2>
             {loading ? (
-              <div style={{padding:20, textAlign:'center', color:T.text3}}>Loading…</div>
+              <SkeletonRows rows={8}/>
             ) : uploads.length === 0 ? (
               <div style={{padding:20, textAlign:'center', color:T.text3, fontSize:13, background:T.bg2, borderRadius:8, border:`1px dashed ${T.border2}`}}>
                 No uploads yet.

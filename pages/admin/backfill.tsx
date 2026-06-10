@@ -7,14 +7,8 @@ import Head from 'next/head'
 import { useRouter } from 'next/router'
 import PortalTopBar from '../../lib/PortalTopBar'
 import { requirePageAuth } from '../../lib/authServer'
-
-const T = {
-  bg:'#0d0f12', bg2:'#131519', bg3:'#1a1d23', bg4:'#21252d',
-  border:'rgba(255,255,255,0.07)', border2:'rgba(255,255,255,0.12)',
-  text:'#e8eaf0', text2:'#8b90a0', text3:'#545968',
-  blue:'#4f8ef7', teal:'#2dd4bf', green:'#34c77b',
-  amber:'#f5a623', red:'#f04e4e', purple:'#a78bfa', accent:'#4f8ef7',
-}
+import { T } from '../../lib/ui/theme'
+import { useConfirm } from '../../components/ui/Feedback'
 
 const STATUS_LABELS: Record<string, string> = {
   matched: 'Matched',
@@ -66,6 +60,7 @@ interface Match {
 
 export default function BackfillPage() {
   const router = useRouter()
+  const confirmDialog = useConfirm()
   const isEmbed = router.query.embed === '1'
   const [run, setRun] = useState<Run | null>(null)
   const [matches, setMatches] = useState<Match[]>([])
@@ -166,7 +161,7 @@ export default function BackfillPage() {
   // Execute loop — processes batches until remaining=0
   async function runExecute() {
     if (!run) return
-    if (!confirm(`This will link ${run.summary?.executeEligible || 0} orders to their matched quotes in Monday.com. Proceed?`)) return
+    if (!(await confirmDialog({ title: 'Link orders to matched quotes?', message: `This will link ${run.summary?.executeEligible || 0} orders to their matched quotes in Monday.com. Proceed?` }))) return
     setExecuting(true)
     setError('')
     try {

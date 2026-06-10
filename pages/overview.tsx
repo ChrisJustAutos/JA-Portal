@@ -12,15 +12,8 @@ import { RENDERERS } from '../components/dashboard/WidgetRenderers'
 import WidgetConfigPanel from '../components/dashboard/WidgetConfigPanel'
 import WidgetCatalogPicker from '../components/dashboard/WidgetCatalogPicker'
 import { useChatContext } from '../components/GlobalChatbot'
-
-const T = {
-  bg:'#0d0f12', bg2:'#131519', bg3:'#1a1d23', bg4:'#21252d',
-  border:'rgba(255,255,255,0.07)', border2:'rgba(255,255,255,0.12)',
-  text:'#e8eaf0', text2:'#8b90a0', text3:'#545968',
-  blue:'#4f8ef7', teal:'#2dd4bf', green:'#34c77b',
-  amber:'#f5a623', red:'#f04e4e', purple:'#a78bfa',
-  accent:'#4f8ef7',
-}
+import { T } from '../lib/ui/theme'
+import { useConfirm } from '../components/ui/Feedback'
 
 const GRID_COLS = 12
 const ROW_HEIGHT = 80
@@ -63,6 +56,7 @@ function findSpot(widgets: WidgetInstance[], w: number, h: number): { x: number,
 }
 
 export default function OverviewPage({ user }: { user: { id: string, email: string, role: UserRole, name: string } }) {
+  const confirmDialog = useConfirm()
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [info, setInfo] = useState('')
@@ -202,7 +196,7 @@ export default function OverviewPage({ user }: { user: { id: string, email: stri
   }
 
   async function switchLayout(id: string) {
-    if (dirty && !confirm('Discard unsaved changes and switch layout?')) return
+    if (dirty && !(await confirmDialog({ title: 'Discard unsaved changes and switch layout?' }))) return
     setLayoutsMenuOpen(false)
     setError(''); setInfo('')
     try {
@@ -232,7 +226,7 @@ export default function OverviewPage({ user }: { user: { id: string, email: stri
   }
 
   async function deleteLayout(id: string, name: string) {
-    if (!confirm(`Delete layout "${name}"? This cannot be undone.`)) return
+    if (!(await confirmDialog({ title: `Delete layout "${name}"?`, message: 'This cannot be undone.', danger: true }))) return
     try {
       const r = await fetch(`/api/dashboard/layout?key=overview&id=${id}`, { method: 'DELETE' })
       if (!r.ok) throw new Error((await r.json()).error || 'Delete failed')
@@ -244,7 +238,7 @@ export default function OverviewPage({ user }: { user: { id: string, email: stri
   }
 
   async function resetToDefault() {
-    if (!confirm('Delete ALL your saved layouts and revert to the shared default? This cannot be undone.')) return
+    if (!(await confirmDialog({ title: 'Delete ALL your saved layouts and revert to the shared default?', message: 'This cannot be undone.', danger: true }))) return
     try {
       const r = await fetch('/api/dashboard/layout?key=overview', { method: 'DELETE' })
       if (!r.ok) throw new Error((await r.json()).error || 'Reset failed')
@@ -484,7 +478,7 @@ export default function OverviewPage({ user }: { user: { id: string, email: stri
                   style={{padding:'7px 12px', borderRadius:6, border:`1px solid ${T.border2}`, background:'transparent', color:T.text2, fontSize:12, fontFamily:'inherit', cursor:'pointer'}}>
                   Save as…
                 </button>
-                <button onClick={() => { if (dirty && !confirm('Discard unsaved changes?')) return; setEditMode(false); loadLayout() }}
+                <button onClick={async () => { if (dirty && !(await confirmDialog({ title: 'Discard unsaved changes?' }))) return; setEditMode(false); loadLayout() }}
                   style={{padding:'7px 12px', borderRadius:6, border:`1px solid ${T.border2}`, background:'transparent', color:T.text2, fontSize:12, fontFamily:'inherit', cursor:'pointer'}}>
                   Done
                 </button>

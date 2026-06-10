@@ -20,16 +20,10 @@ import GeneralTab from '../components/settings/GeneralTab'
 import DistributorTab from '../components/settings/DistributorTab'
 import ConnectionsHubTab from '../components/settings/ConnectionsHubTab'
 import DataImportsTab from '../components/settings/DataImportsTab'
-
-const T = {
-  bg:'#0d0f12', bg2:'#131519', bg3:'#1a1d23', bg4:'#21252d',
-  border:'rgba(255,255,255,0.07)', border2:'rgba(255,255,255,0.12)',
-  text:'#e8eaf0', text2:'#8b90a0', text3:'#545968',
-  blue:'#4f8ef7', teal:'#2dd4bf', green:'#34c77b',
-  amber:'#f5a623', red:'#f04e4e', purple:'#a78bfa', accent:'#4f8ef7',
-}
-
-interface PortalUserSSR { id: string; email: string; displayName: string | null; role: UserRole }
+import type { PortalUserSSR } from '../lib/authServer'
+import { T } from '../lib/ui/theme'
+import { SkeletonRows } from '../components/ui'
+import { useToast, useConfirm } from '../components/ui/Feedback'
 type SettingsTab = 'general'|'vin-codes'|'backfill'|'dist-report'|'connections'|'data-imports'|'users'|'audit'|'profile'|'workshop'|'md-imports'
 
 export default function SettingsPage({ user }: { user: PortalUserSSR }) {
@@ -224,6 +218,8 @@ interface UserRow {
 }
 
 function UsersTab({ currentUser }: { currentUser: PortalUserSSR }) {
+  const toast = useToast()
+  const confirmDialog = useConfirm()
   const [users, setUsers] = useState<UserRow[]>([])
   const [loading, setLoading] = useState(true)
   const [err, setErr] = useState('')
@@ -299,7 +295,7 @@ function UsersTab({ currentUser }: { currentUser: PortalUserSSR }) {
       setInvite({ email:'', displayName:'', role:'viewer' })
       setInviteTabs(defaultTabsForRole('viewer'))
       await load()
-      alert(`Invited ${d.user.email}.\n${d.resetEmailSent ? 'Password setup email sent.' : 'Note: reset email failed to send — use "Resend invite" on the row.'}`)
+      toast(`Invited ${d.user.email}. ${d.resetEmailSent ? 'Password setup email sent.' : 'Note: reset email failed to send — use "Resend invite" on the row.'}`, d.resetEmailSent ? 'success' : 'error')
     } catch (e: any) { setErr(e.message) }
     finally { setInviting(false) }
   }
@@ -316,7 +312,7 @@ function UsersTab({ currentUser }: { currentUser: PortalUserSSR }) {
   }
 
   async function del(id: string, email: string) {
-    if (!confirm(`Permanently delete ${email}? They will lose all access immediately.`)) return
+    if (!(await confirmDialog({ title: `Permanently delete ${email}?`, message: 'They will lose all access immediately.', danger: true }))) return
     try {
       const r = await fetch(`/api/users/${id}`, { method:'DELETE' })
       if (!r.ok) throw new Error((await r.json()).error || 'Delete failed')
@@ -328,7 +324,7 @@ function UsersTab({ currentUser }: { currentUser: PortalUserSSR }) {
     try {
       const r = await fetch(`/api/users/${id}/resend-invite`, { method:'POST' })
       if (!r.ok) throw new Error((await r.json()).error || 'Resend failed')
-      alert(`Password reset email re-sent to ${email}.`)
+      toast(`Password reset email re-sent to ${email}.`, 'success')
     } catch (e: any) { setErr(e.message) }
   }
 
@@ -422,7 +418,7 @@ function UsersTab({ currentUser }: { currentUser: PortalUserSSR }) {
       <div style={{padding:'14px 16px',borderBottom:`1px solid ${T.border2}`,display:'flex',alignItems:'center'}}>
         <div style={{fontSize:13,fontWeight:600,color:T.text}}>Users ({users.length})</div>
       </div>
-      {loading && <div style={{padding:30,textAlign:'center',color:T.text3,fontSize:12}}>Loading…</div>}
+      {loading && <SkeletonRows rows={8}/>}
       {!loading && (
         <table style={{width:'100%',borderCollapse:'collapse'}}>
           <thead><tr style={{borderBottom:`1px solid ${T.border}`}}>
@@ -662,6 +658,7 @@ function ProfileTab({ user }: { user: PortalUserSSR }) {
 // TWO-FACTOR AUTHENTICATION (Supabase native TOTP) — lives in My Profile
 // ═══════════════════════════════════════════════════════════════════
 function TwoFactorCard() {
+  const confirmDialog = useConfirm()
   const [loading, setLoading] = useState(true)
   const [enrolled, setEnrolled] = useState(false)
   const [busy, setBusy] = useState(false)
@@ -711,7 +708,7 @@ function TwoFactorCard() {
   }
 
   async function removeAll() {
-    if (!confirm('Remove your authenticator? You will no longer be asked for a code at sign-in until you set one up again.')) return
+    if (!(await confirmDialog({ title: 'Remove your authenticator?', message: 'You will no longer be asked for a code at sign-in until you set one up again.', danger: true }))) return
     setBusy(true); setError(''); setInfo('')
     try {
       const supabase = getSupabase()
@@ -787,7 +784,7 @@ function AuditTab() {
       <div style={{fontSize:13,fontWeight:600}}>Audit Log</div>
       <div style={{fontSize:11,color:T.text3,marginTop:2}}>Recent user-management events</div>
     </div>
-    {loading && <div style={{padding:30,textAlign:'center',color:T.text3,fontSize:12}}>Loading…</div>}
+    {loading && <SkeletonRows rows={8}/>}
     {err && <div style={{padding:20,color:T.red,fontSize:12}}>{err}</div>}
     {!loading && !err && (
       <table style={{width:'100%',borderCollapse:'collapse'}}>

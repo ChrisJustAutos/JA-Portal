@@ -6,6 +6,7 @@ import { requirePageAuth } from '../../lib/authServer'
 import { roleHasPermission } from '../../lib/permissions'
 import CrmShell, { PortalUserSSR, T } from '../../components/crm/CrmShell'
 import { Overlay, Field, input, primaryBtn, ghostBtn, closeBtn } from '../../components/crm/ui'
+import { useConfirm } from '../../components/ui/Feedback'
 import { LEAD_STAGES, LEAD_STAGE_LABELS, LeadStage } from '../../lib/crm'
 
 interface Step { delay_value: number; delay_unit: 'days' | 'hours'; action: string; subject: string; body: string; task_priority: string }
@@ -25,6 +26,7 @@ function stepToHours(s: Step): number { return Math.max(0, Math.round(s.delay_va
 
 export default function CrmAutomations({ user }: { user: PortalUserSSR }) {
   const canEdit = roleHasPermission(user.role, 'edit:crm')
+  const confirmDialog = useConfirm()
   const [autos, setAutos] = useState<Automation[]>([])
   const [counts, setCounts] = useState<Record<string, any>>({})
   const [loading, setLoading] = useState(true)
@@ -45,7 +47,7 @@ export default function CrmAutomations({ user }: { user: PortalUserSSR }) {
     load()
   }
   async function remove(a: Automation) {
-    if (!confirm(`Delete automation "${a.name}"? Active enrolments will stop.`)) return
+    if (!(await confirmDialog({ title: `Delete automation "${a.name}"?`, message: 'Active enrolments will stop.', danger: true }))) return
     await fetch(`/api/crm/automations/${a.id}`, { method: 'DELETE' }); load()
   }
   function newAutomation() {

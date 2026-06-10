@@ -6,6 +6,7 @@ import { roleHasPermission } from '../../lib/permissions'
 import CrmShell, { PortalUserSSR, T, STAGE_COLOR, fmtMoney, fmtDate } from '../../components/crm/CrmShell'
 import { Overlay, Field, Timeline, input, primaryBtn, ghostBtn, closeBtn } from '../../components/crm/ui'
 import { PIPELINE_COLUMNS, LEAD_STAGE_LABELS, LEAD_STAGES, LeadStage } from '../../lib/crm'
+import { useToast } from '../../components/ui/Feedback'
 
 interface Lead {
   id: string; title: string; stage: string; value: number | null; source: string | null
@@ -144,6 +145,7 @@ function LeadDrawer({ id, canEdit, users, currentUserId, onClose, onChanged, onO
   id: string; canEdit: boolean; users: StaffUser[]; currentUserId: string
   onClose: () => void; onChanged: () => void; onOpenWorkshop: (quoteId: string) => void
 }) {
+  const toast = useToast()
   const [data, setData] = useState<any>(null)
   const [note, setNote] = useState('')
   const [busy, setBusy] = useState(false)
@@ -167,13 +169,13 @@ function LeadDrawer({ id, canEdit, users, currentUserId, onClose, onChanged, onO
     } finally { setBusy(false) }
   }
   async function startWorkshop() {
-    if (!lead?.contact_id) { alert('Link a contact first.'); return }
+    if (!lead?.contact_id) { toast('Link a contact first.', 'error'); return }
     setBusy(true)
     try {
       const r = await fetch(`/api/crm/contacts/${lead.contact_id}/to-workshop`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ lead_id: id, notes: lead.details || lead.title }) })
       const d = await r.json()
       if (r.ok) { onChanged(); onOpenWorkshop(d.quoteId) }
-      else alert(d.error || 'Could not start workshop quote')
+      else toast(d.error || 'Could not start workshop quote', 'error')
     } finally { setBusy(false) }
   }
 

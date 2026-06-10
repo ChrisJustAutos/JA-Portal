@@ -8,13 +8,8 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react'
 import Link from 'next/link'
-
-const T = {
-  bg2:'#131519', bg3:'#1a1d23', bg4:'#21252d',
-  border:'rgba(255,255,255,0.07)', border2:'rgba(255,255,255,0.12)',
-  text:'#e8eaf0', text2:'#8b90a0', text3:'#545968',
-  blue:'#4f8ef7', teal:'#2dd4bf', green:'#34c77b', amber:'#f5a623', red:'#f04e4e', purple:'#a78bfa',
-}
+import { T } from '../../lib/ui/theme'
+import { useConfirm } from '../../components/ui/Feedback'
 
 function fmtDate(iso: string | null | undefined) {
   if (!iso) return '—'
@@ -314,6 +309,7 @@ interface ServiceToken {
 }
 
 function ServiceTokensCard() {
+  const confirmDialog = useConfirm()
   const [tokens, setTokens] = useState<ServiceToken[]>([])
   const [loading, setLoading] = useState(true)
   const [creating, setCreating] = useState(false)
@@ -359,7 +355,7 @@ function ServiceTokensCard() {
   }
 
   async function revoke(id: string, name: string) {
-    if (!confirm(`Revoke token "${name}"? Any automation using this token will stop working immediately.`)) return
+    if (!(await confirmDialog({ title: `Revoke token "${name}"?`, message: 'Any automation using this token will stop working immediately.', danger: true }))) return
     try {
       const r = await fetch(`/api/admin/service-tokens?id=${id}`, { method: 'DELETE' })
       if (!r.ok) {

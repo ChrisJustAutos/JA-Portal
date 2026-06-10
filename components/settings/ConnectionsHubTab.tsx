@@ -11,13 +11,7 @@
 import { useState } from 'react'
 import ConnectionsTab from './ConnectionsTab'
 import MyobTab from './MyobTab'
-
-const T = {
-  bg:'#0d0f12', bg2:'#131519', bg3:'#1a1d23',
-  border:'rgba(255,255,255,0.07)', border2:'rgba(255,255,255,0.12)',
-  text:'#e8eaf0', text2:'#8b90a0', text3:'#545968',
-  accent:'#4f8ef7',
-}
+import { T } from '../../lib/ui/theme'
 
 type SubTab = 'health' | 'myob'
 

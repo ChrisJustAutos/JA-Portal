@@ -8,15 +8,9 @@ import Link from 'next/link'
 import PortalTopBar from '../lib/PortalTopBar'
 import { requirePageAuth } from '../lib/authServer'
 import { UserRole } from '../lib/permissions'
-
-const T = {
-  bg:'#0d0f12', bg2:'#131519', bg3:'#1a1d23', bg4:'#21252d',
-  border:'rgba(255,255,255,0.07)', border2:'rgba(255,255,255,0.12)',
-  text:'#e8eaf0', text2:'#8b90a0', text3:'#545968',
-  blue:'#4f8ef7', teal:'#2dd4bf', green:'#34c77b',
-  amber:'#f5a623', red:'#f04e4e', purple:'#a78bfa',
-  accent:'#4f8ef7',
-}
+import { T } from '../lib/ui/theme'
+import { SkeletonRows } from '../components/ui'
+import { useConfirm } from '../components/ui/Feedback'
 
 interface InvoiceRow {
   id: string
@@ -95,6 +89,7 @@ function StatusBadge({ status, compact=false }: { status: string, compact?: bool
 }
 
 export default function SupplierInvoicesPage({ user }: { user: { id: string, email: string, role: UserRole, name: string } }) {
+  const confirmDialog = useConfirm()
   const [invoices, setInvoices] = useState<InvoiceRow[]>([])
   const [kpis, setKpis] = useState<Kpis | null>(null)
   const [total, setTotal] = useState(0)
@@ -169,7 +164,7 @@ export default function SupplierInvoicesPage({ user }: { user: { id: string, ema
   }
 
   async function quickAction(id: string, action: 'approve' | 'reject') {
-    if (action === 'reject' && !confirm('Reject this invoice?')) return
+    if (action === 'reject' && !(await confirmDialog({ title: 'Reject this invoice?', danger: true }))) return
     try {
       const r = await fetch(`/api/supplier-invoices/${id}`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -278,7 +273,7 @@ export default function SupplierInvoicesPage({ user }: { user: { id: string, ema
             </div>
 
             {loading ? (
-              <div style={{padding:40, textAlign:'center', color:T.text3, fontSize:12}}>Loading…</div>
+              <SkeletonRows rows={8}/>
             ) : invoices.length === 0 ? (
               <div style={{padding:40, textAlign:'center', color:T.text3, fontSize:12}}>No invoices match your filters.</div>
             ) : (

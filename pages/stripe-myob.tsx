@@ -13,15 +13,8 @@ import Head from 'next/head'
 import PortalTopBar from '../lib/PortalTopBar'
 import { requirePageAuth } from '../lib/authServer'
 import { UserRole, roleHasPermission } from '../lib/permissions'
-
-const T = {
-  bg:'#0d0f12', bg2:'#131519', bg3:'#1a1d23', bg4:'#21252d',
-  border:'rgba(255,255,255,0.07)', border2:'rgba(255,255,255,0.12)',
-  text:'#e8eaf0', text2:'#8b90a0', text3:'#545968',
-  blue:'#4f8ef7', teal:'#2dd4bf', green:'#34c77b',
-  amber:'#f5a623', red:'#f04e4e', purple:'#a78bfa',
-  accent:'#4f8ef7',
-}
+import { T } from '../lib/ui/theme'
+import { useConfirm } from '../components/ui/Feedback'
 
 // Date the Make.com Stripe→MYOB automation broke. Pushes for invoices
 // dated before this are higher-risk for duplicates because Make almost
@@ -179,6 +172,7 @@ export async function getServerSideProps(ctx: any) {
 interface PageUser { id: string; email: string; role: UserRole; displayName: string | null }
 
 export default function StripeMyobPage({ user }: { user: PageUser }) {
+  const confirmDialog = useConfirm()
   const canPush = roleHasPermission(user.role, 'edit:stripe_myob')
 
   // ── Tab ─────────────────────────────────────────────────────────────
@@ -296,7 +290,7 @@ export default function StripeMyobPage({ user }: { user: PageUser }) {
 
   // Mark a single payout as already reconciled in MYOB (no MYOB write).
   const markPayoutReconciled = useCallback(async (payoutId: string) => {
-    if (!window.confirm('Mark this payout as already reconciled in MYOB? No MYOB write will happen — this only updates the local sync log so the row stops showing as Pending.')) return
+    if (!(await confirmDialog({ title: 'Mark this payout as already reconciled in MYOB?', message: 'No MYOB write will happen — this only updates the local sync log so the row stops showing as Pending.' }))) return
     setReconcilingPayoutIds(prev => new Set(prev).add(payoutId))
     setErr(null)
     try {
@@ -316,7 +310,7 @@ export default function StripeMyobPage({ user }: { user: PageUser }) {
         const next = new Set(prev); next.delete(payoutId); return next
       })
     }
-  }, [account, loadPayouts])
+  }, [account, loadPayouts, confirmDialog])
 
   // Reconcile a single payout from the UI
   const reconcilePayout = useCallback(async (payoutId: string) => {

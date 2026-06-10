@@ -6,6 +6,7 @@ import { requirePageAuth } from '../../lib/authServer'
 import { roleHasPermission } from '../../lib/permissions'
 import CrmShell, { PortalUserSSR, T, fmtDate, fmtDateTime } from '../../components/crm/CrmShell'
 import { Overlay, Field, input, primaryBtn, ghostBtn, closeBtn } from '../../components/crm/ui'
+import { useToast, useConfirm, usePrompt } from '../../components/ui/Feedback'
 
 interface Segment { id: string; name: string; description: string | null; definition: any }
 interface Campaign {
@@ -18,6 +19,8 @@ const VARS = ['first_name', 'contact_name', 'company']
 
 export default function CrmCampaigns({ user }: { user: PortalUserSSR }) {
   const canEdit = roleHasPermission(user.role, 'edit:crm')
+  const toast = useToast()
+  const promptDialog = usePrompt()
   const [campaigns, setCampaigns] = useState<Campaign[]>([])
   const [segments, setSegments] = useState<Segment[]>([])
   const [loading, setLoading] = useState(true)
@@ -34,11 +37,11 @@ export default function CrmCampaigns({ user }: { user: PortalUserSSR }) {
   useEffect(() => { load() }, [load])
 
   async function newCampaign() {
-    const name = prompt('Campaign name?')
+    const name = await promptDialog({ title: 'Campaign name?' })
     if (!name) return
     const r = await fetch('/api/crm/campaigns', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name }) })
     const d = await r.json()
-    if (r.ok) { await load(); setOpenId(d.id) } else alert(d.error || 'Failed')
+    if (r.ok) { await load(); setOpenId(d.id) } else toast(d.error || 'Failed', 'error')
   }
 
   function rate(n: number | undefined, total: number) { return total > 0 ? Math.round(((n || 0) / total) * 100) + '%' : '—' }
@@ -80,6 +83,8 @@ export default function CrmCampaigns({ user }: { user: PortalUserSSR }) {
 }
 
 function CampaignEditor({ id, canEdit, segments, onClose, onChanged }: { id: string; canEdit: boolean; segments: Segment[]; onClose: () => void; onChanged: () => void }) {
+  const confirmDialog = useConfirm()
+  const promptDialog = usePrompt()
   const [data, setData] = useState<any>(null)
   const [f, setF] = useState<any>(null)
   const [count, setCount] = useState<number | null>(null)
@@ -112,14 +117,14 @@ function CampaignEditor({ id, canEdit, segments, onClose, onChanged }: { id: str
     } finally { setBusy(false) }
   }
   async function sendTest() {
-    const email = prompt('Send a test to which email?')
+    const email = await promptDialog({ title: 'Send a test to which email?' })
     if (!email) return
     setBusy(true); setMsg('')
     try { await save(); const r = await fetch(`/api/crm/campaigns/${id}/test`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email }) }); const d = await r.json(); setMsg(r.ok ? `Test sent to ${email}` : (d.error || 'Failed')) }
     finally { setBusy(false) }
   }
   async function sendNow() {
-    if (!confirm(`Send "${f.name}" to ${count ?? '—'} contacts now?`)) return
+    if (!(await confirmDialog({ title: `Send "${f.name}" to ${count ?? '—'} contacts now?` }))) return
     setBusy(true); setMsg('')
     try { await save(); const r = await fetch(`/api/crm/campaigns/${id}/send`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}) }); const d = await r.json(); if (r.ok) { setMsg(`Sending to ${d.recipients} contacts…`); onChanged(); load() } else setMsg(d.error || 'Failed') }
     finally { setBusy(false) }
@@ -201,6 +206,7 @@ function CampaignEditor({ id, canEdit, segments, onClose, onChanged }: { id: str
 }
 
 function SegmentManager({ segments, canEdit, onClose, onChanged }: { segments: Segment[]; canEdit: boolean; onClose: () => void; onChanged: () => void }) {
+  const confirmDialog = useConfirm()
   const [editing, setEditing] = useState<any>(null)
   const [busy, setBusy] = useState(false)
 
@@ -221,7 +227,7 @@ function SegmentManager({ segments, canEdit, onClose, onChanged }: { segments: S
       setEditing(null); onChanged()
     } finally { setBusy(false) }
   }
-  async function remove(s: Segment) { if (!confirm(`Delete segment "${s.name}"?`)) return; await fetch(`/api/crm/segments/${s.id}`, { method: 'DELETE' }); onChanged() }
+  async function remove(s: Segment) { if (!(await confirmDialog({ title: `Delete segment "${s.name}"?`, danger: true }))) return; await fetch(`/api/crm/segments/${s.id}`, { method: 'DELETE' }); onChanged() }
 
   return (
     <Overlay onClose={onClose}>

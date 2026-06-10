@@ -17,11 +17,10 @@ import Script from 'next/script'
 import { useRouter } from 'next/router'
 import PortalTopBar from '../lib/PortalTopBar'
 import ReportsTabs from '../components/ReportsTabs'
-import { requirePageAuth } from '../lib/authServer'
+import { requirePageAuth, type PortalUserSSR } from '../lib/authServer'
 import { usePreferences, applyGstDisplay } from '../lib/preferences'
 import { useChatContext } from '../components/GlobalChatbot'
-
-interface PortalUserSSR { id: string; email: string; displayName: string | null; role: 'admin'|'manager'|'sales'|'accountant'|'viewer' }
+import { T } from '../lib/ui/theme'
 
 interface LineItem {
   CustomerName: string        // CANONICAL name after alias resolution
@@ -76,8 +75,6 @@ function vinToModel(vinOrPo: string, rules: VinRule[]): string {
 const fmtD=(n:number)=>n==null?'$0':'$'+Math.round(n).toLocaleString('en-AU')
 const fmtFull=(n:number)=>n==null?'$0':'$'+Number(n).toLocaleString('en-AU',{minimumFractionDigits:0,maximumFractionDigits:0})
 const fmt=(n:number)=>n>=1e6?'$'+(n/1e6).toFixed(2)+'M':n>=1000?'$'+Math.round(n/1000)+'k':'$'+Math.round(n)
-
-const T={bg:'#0d0f12',bg2:'#131519',bg3:'#1a1d23',bg4:'#21252d',border:'rgba(255,255,255,0.07)',border2:'rgba(255,255,255,0.12)',text:'#e8eaf0',text2:'#8b90a0',text3:'#545968',blue:'#4f8ef7',teal:'#2dd4bf',green:'#34c77b',amber:'#f5a623',red:'#f04e4e',purple:'#a78bfa',accent:'#4f8ef7'}
 
 // ── Sort helpers ─────────────────────────────────────────────────────
 type SortDir = 'asc' | 'desc' | null

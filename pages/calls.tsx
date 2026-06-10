@@ -13,8 +13,8 @@ import { roleHasPermission } from '../lib/permissions'
 import { useChatContext } from '../components/GlobalChatbot'
 import { groupCalls, type LiveChannel, type LiveCallCard, type SpyMode } from '../lib/live-calls'
 import CallInsights, { CallTabBar, type CallView } from '../components/calls/CallInsights'
-
-interface PortalUserSSR { id: string; email: string; displayName: string | null; role: 'admin'|'manager'|'sales'|'accountant'|'viewer' }
+import type { PortalUserSSR } from '../lib/authServer'
+import { T } from '../lib/ui/theme'
 
 interface CallRow {
   id: string
@@ -57,15 +57,6 @@ interface StatsPayload {
   week: { total: number; talk_seconds: number }
   agents: AgentStats[]
   sync: { last_synced_at: string | null; last_error: string | null; records_synced_total: number }
-}
-
-const T = {
-  bg: '#0d0f12', bg2: '#131519', bg3: '#1a1d23', bg4: '#21252d',
-  border: 'rgba(255,255,255,0.07)', border2: 'rgba(255,255,255,0.12)',
-  text: '#e8eaf0', text2: '#8b90a0', text3: '#545968',
-  blue: '#4f8ef7', teal: '#2dd4bf', green: '#34c77b',
-  amber: '#f5a623', red: '#f04e4e', purple: '#a78bfa',
-  accent: '#4f8ef7',
 }
 
 // ── Date helpers ───────────────────────────────────────────────────────────

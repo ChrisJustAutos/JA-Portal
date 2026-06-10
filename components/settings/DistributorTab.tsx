@@ -9,13 +9,7 @@
 
 import { useState } from 'react'
 import DistributorReportTab from './DistributorReportTab'
-
-const T = {
-  bg:'#0d0f12', bg2:'#131519', bg3:'#1a1d23',
-  border:'rgba(255,255,255,0.07)', border2:'rgba(255,255,255,0.12)',
-  text:'#e8eaf0', text2:'#8b90a0', text3:'#545968',
-  accent:'#4f8ef7',
-}
+import { T } from '../../lib/ui/theme'
 
 type SubTab = 'customers' | 'categories'
 

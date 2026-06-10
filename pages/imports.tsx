@@ -15,6 +15,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import Head from 'next/head'
 import Link from 'next/link'
 import * as XLSX from 'xlsx'
+import { useConfirm } from '../components/ui/Feedback'
 
 const T = {
   bg: '#0d0e10', bg2: '#16181c', bg3: '#1d2025',
@@ -588,9 +589,10 @@ function Stat({ label, value, accent, muted }: { label: string; value: any; acce
 
 // ── History row ───────────────────────────────────────────────────────────────
 function HistoryRow({ row, first, typeLabel, onOpen, onChange }: { row: ImportRow; first: boolean; typeLabel: string; onOpen: () => void; onChange: () => void }) {
+  const confirmDialog = useConfirm()
   async function del(e: React.MouseEvent) {
     e.stopPropagation()
-    if (!confirm(`Delete this import record (${row.filename})? It won't undo what was imported.`)) return
+    if (!(await confirmDialog({ title: `Delete this import record (${row.filename})?`, message: "It won't undo what was imported.", danger: true }))) return
     const r = await fetch(`/api/imports/${row.id}`, { method: 'DELETE' })
     if (r.ok) onChange()
   }
@@ -623,6 +625,7 @@ function summariseRun(s: any): string {
 
 // ── Import detail (inspect a history row) ─────────────────────────────────────
 function ImportDetail({ id, typeLabel, onClose, onChange }: { id: string; typeLabel: string; onClose: () => void; onChange: () => void }) {
+  const confirmDialog = useConfirm()
   const [row, setRow] = useState<ImportRow | null>(null)
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
@@ -648,7 +651,9 @@ function ImportDetail({ id, typeLabel, onClose, onChange }: { id: string; typeLa
   }
   async function cancelOrDelete() {
     if (!row) return
-    if (!confirm(row.status === 'uploading' ? `Cancel this upload? Any uploaded chunks will be discarded.` : `Delete this import record (${row.filename})? Won't undo what was imported.`)) return
+    if (!(await (row.status === 'uploading'
+      ? confirmDialog({ title: 'Cancel this upload?', message: 'Any uploaded chunks will be discarded.', danger: true })
+      : confirmDialog({ title: `Delete this import record (${row.filename})?`, message: "Won't undo what was imported.", danger: true })))) return
     setBusy(true); setErr('')
     try {
       const r = await fetch(`/api/imports/${id}`, { method: 'DELETE' })

@@ -9,15 +9,8 @@ import { useRouter } from 'next/router'
 import PortalTopBar from '../../lib/PortalTopBar'
 import { requirePageAuth } from '../../lib/authServer'
 import { UserRole } from '../../lib/permissions'
-
-const T = {
-  bg:'#0d0f12', bg2:'#131519', bg3:'#1a1d23', bg4:'#21252d',
-  border:'rgba(255,255,255,0.07)', border2:'rgba(255,255,255,0.12)',
-  text:'#e8eaf0', text2:'#8b90a0', text3:'#545968',
-  blue:'#4f8ef7', teal:'#2dd4bf', green:'#34c77b',
-  amber:'#f5a623', red:'#f04e4e', purple:'#a78bfa',
-  accent:'#4f8ef7',
-}
+import { T } from '../../lib/ui/theme'
+import { useConfirm } from '../../components/ui/Feedback'
 
 export async function getServerSideProps(ctx: any) {
   return requirePageAuth(ctx, 'view:supplier_invoices')
@@ -35,6 +28,7 @@ function fmtDate(s: string | null): string {
 
 export default function InvoiceDetailPage({ user }: { user: { id: string, email: string, role: UserRole, name: string } }) {
   const router = useRouter()
+  const confirmDialog = useConfirm()
   const id = router.query.id as string
   const [invoice, setInvoice] = useState<any | null>(null)
   const [lines, setLines] = useState<any[]>([])
@@ -65,7 +59,7 @@ export default function InvoiceDetailPage({ user }: { user: { id: string, email:
       push_to_myob: 'Queue for push to MYOB? (MYOB write currently stubbed — just flags status.)',
       undo_review: 'Reset review status back to "pending"?',
     }
-    if (confirmMsg[a] && !confirm(confirmMsg[a])) return
+    if (confirmMsg[a] && !(await confirmDialog({ title: confirmMsg[a], danger: a === 'reject' }))) return
     setActing(a); setError('')
     try {
       const r = await fetch(`/api/supplier-invoices/${id}`, {

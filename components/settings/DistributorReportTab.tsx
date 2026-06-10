@@ -4,6 +4,7 @@
 // the excluded-customer list.
 
 import { useState, useEffect, useCallback } from 'react'
+import { useConfirm } from '../ui/Feedback'
 
 const T = {
   bg:'#0d0f12', bg2:'#131519', bg3:'#1a1d23', bg4:'#21252d',
@@ -34,6 +35,7 @@ interface MyobAccount {
 const CAT_COLOURS = [T.blue, T.amber, T.green, T.purple, T.pink, T.teal, T.red]
 
 export default function DistributorReportTab() {
+  const confirmDialog = useConfirm()
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
@@ -86,8 +88,8 @@ export default function DistributorReportTab() {
     next[idx] = { ...next[idx], name: newName }
     setCategories(next); markDirty()
   }
-  function removeCategory(idx: number) {
-    if (!confirm(`Remove category "${categories[idx].name}"? Account codes in it will become un-categorised and won't appear in the report.`)) return
+  async function removeCategory(idx: number) {
+    if (!(await confirmDialog({ title: `Remove category "${categories[idx].name}"?`, message: "Account codes in it will become un-categorised and won't appear in the report.", danger: true }))) return
     const next = categories.filter((_, i) => i !== idx).map((c, i) => ({ ...c, sort_order: i + 1 }))
     setCategories(next); markDirty()
   }

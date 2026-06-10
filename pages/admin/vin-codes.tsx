@@ -4,14 +4,8 @@ import Head from 'next/head'
 import { useRouter } from 'next/router'
 import PortalTopBar from '../../lib/PortalTopBar'
 import { requirePageAuth } from '../../lib/authServer'
-
-const T = {
-  bg:'#0d0f12', bg2:'#131519', bg3:'#1a1d23', bg4:'#21252d',
-  border:'rgba(255,255,255,0.07)', border2:'rgba(255,255,255,0.12)',
-  text:'#e8eaf0', text2:'#8b90a0', text3:'#545968',
-  blue:'#4f8ef7', teal:'#2dd4bf', green:'#34c77b',
-  amber:'#f5a623', red:'#f04e4e', purple:'#a78bfa', accent:'#4f8ef7',
-}
+import { T } from '../../lib/ui/theme'
+import { useConfirm } from '../../components/ui/Feedback'
 
 interface VinRule { id: number; vin_prefix: string; model_code: string; friendly_name: string | null; notes: string | null }
 interface Observed { prefix: string; occurrences: number; sample_value: string }
@@ -281,6 +275,7 @@ function RuleRow({rule, uniqueModelCodes, onSave, onDelete}: {
   rule: VinRule; uniqueModelCodes: string[]
   onSave: (r: any) => void; onDelete: (id: number) => void
 }) {
+  const confirmDialog = useConfirm()
   const [editing, setEditing] = useState(false)
   const [model, setModel] = useState(rule.model_code)
   const [friendly, setFriendly] = useState(rule.friendly_name || '')
@@ -316,7 +311,7 @@ function RuleRow({rule, uniqueModelCodes, onSave, onDelete}: {
         style={{padding:'3px 8px',borderRadius:3,border:'none',background:'transparent',color:T.text2,fontSize:11,cursor:'pointer',fontFamily:'inherit'}}>
         Edit
       </button>
-      <button onClick={()=>{if(confirm(`Delete rule for "${rule.vin_prefix}"?`)) onDelete(rule.id)}}
+      <button onClick={async ()=>{if(await confirmDialog({ title: `Delete rule for "${rule.vin_prefix}"?`, danger: true })) onDelete(rule.id)}}
         style={{padding:'3px 8px',borderRadius:3,border:'none',background:'transparent',color:T.red,fontSize:11,cursor:'pointer',fontFamily:'inherit'}}>
         Delete
       </button>

@@ -18,13 +18,7 @@
 import { useState, useRef, useCallback } from 'react'
 import { getSupabase } from '../../lib/supabaseClient'
 import { usePreferences } from '../../lib/preferences'
-
-const T = {
-  bg3:'#1a1d23', bg4:'#21252d',
-  border:'rgba(255,255,255,0.07)', border2:'rgba(255,255,255,0.12)',
-  text:'#e8eaf0', text2:'#8b90a0', text3:'#545968',
-  blue:'#4f8ef7', green:'#34c77b', amber:'#f5a623', red:'#f04e4e',
-}
+import { T } from '../../lib/ui/theme'
 
 const ALLOWED_TYPES = ['image/png', 'image/jpeg', 'image/jpg', 'image/svg+xml']
 const ALLOWED_EXTENSIONS = ['png', 'jpg', 'jpeg', 'svg']

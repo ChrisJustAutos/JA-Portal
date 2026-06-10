@@ -6,6 +6,7 @@ import { requirePageAuth } from '../../lib/authServer'
 import { roleHasPermission } from '../../lib/permissions'
 import CrmShell, { PortalUserSSR, T, fmtDate } from '../../components/crm/CrmShell'
 import { Overlay, Field, Timeline, input, primaryBtn, ghostBtn, closeBtn } from '../../components/crm/ui'
+import { useToast } from '../../components/ui/Feedback'
 
 interface Contact {
   id: string; name: string; email: string | null; phone: string | null; mobile: string | null
@@ -75,6 +76,7 @@ export default function CrmContacts({ user }: { user: PortalUserSSR }) {
 
 function ContactDrawer({ id, canEdit, onClose, onChanged }: { id: string; canEdit: boolean; onClose: () => void; onChanged: () => void }) {
   const router = useRouter()
+  const toast = useToast()
   const [data, setData] = useState<any>(null)
   const [note, setNote] = useState('')
   const [busy, setBusy] = useState(false)
@@ -98,7 +100,7 @@ function ContactDrawer({ id, canEdit, onClose, onChanged }: { id: string; canEdi
     try {
       const r = await fetch(`/api/crm/contacts/${id}/to-workshop`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}) })
       const d = await r.json()
-      if (r.ok) router.push(`/workshop/quote/${d.quoteId}`); else alert(d.error || 'Could not start workshop quote')
+      if (r.ok) router.push(`/workshop/quote/${d.quoteId}`); else toast(d.error || 'Could not start workshop quote', 'error')
     } finally { setBusy(false) }
   }
 

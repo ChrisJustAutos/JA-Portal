@@ -12,14 +12,8 @@ import Head from 'next/head'
 import { useRouter } from 'next/router'
 import PortalTopBar from '../../lib/PortalTopBar'
 import { requirePageAuth } from '../../lib/authServer'
-
-const T = {
-  bg:'#0d0f12', bg2:'#131519', bg3:'#1a1d23', bg4:'#21252d',
-  border:'rgba(255,255,255,0.07)', border2:'rgba(255,255,255,0.12)',
-  text:'#e8eaf0', text2:'#8b90a0', text3:'#545968',
-  blue:'#4f8ef7', teal:'#2dd4bf', green:'#34c77b',
-  amber:'#f5a623', red:'#f04e4e', purple:'#a78bfa', accent:'#4f8ef7',
-}
+import { T } from '../../lib/ui/theme'
+import { useConfirm, usePrompt } from '../../components/ui/Feedback'
 
 interface Alias { myob_name: string; canonical_name: string }
 interface Group { id: number; dimension: string; name: string; sort_order: number; color: string | null }
@@ -239,6 +233,7 @@ function AliasRow({alias, canonicalNames, onSave, onDelete}: {
   onSave: (myob: string, canonical: string) => void
   onDelete: (myob: string) => void
 }) {
+  const confirmDialog = useConfirm()
   const [editing, setEditing] = useState(false)
   const [value, setValue] = useState(alias.canonical_name)
   return <tr style={{borderTop:`1px solid ${T.border}`}}>
@@ -257,7 +252,7 @@ function AliasRow({alias, canonicalNames, onSave, onDelete}: {
       )}
     </td>
     <td style={{padding:'8px 10px',textAlign:'right'}}>
-      <button onClick={()=>{if(confirm(`Delete alias for "${alias.myob_name}"?`)) onDelete(alias.myob_name)}}
+      <button onClick={async ()=>{if(await confirmDialog({ title: `Delete alias for "${alias.myob_name}"?`, danger: true })) onDelete(alias.myob_name)}}
         style={{padding:'3px 8px',borderRadius:4,border:'none',background:'transparent',color:T.text3,fontSize:11,cursor:'pointer',fontFamily:'inherit'}}>
         Remove
       </button>
@@ -272,6 +267,7 @@ function GroupsTab({byDimension, onCreate, onUpdate, onDelete}: {
   onUpdate: (id: number, patch: any) => void
   onDelete: (id: number) => void
 }) {
+  const promptDialog = usePrompt()
   const [newDim, setNewDim] = useState('')
   const [newName, setNewName] = useState('')
   const [newColor, setNewColor] = useState('#4f8ef7')
@@ -325,9 +321,9 @@ function GroupsTab({byDimension, onCreate, onUpdate, onDelete}: {
       <div style={{display:'flex',gap:8}}>
         <input placeholder="e.g. state, tier, account_manager" value={newDim} onChange={e=>setNewDim(e.target.value)}
           style={{flex:1,background:T.bg3,border:`1px solid ${T.border}`,color:T.text,borderRadius:4,padding:'5px 10px',fontSize:12,outline:'none'}}/>
-        <button onClick={()=>{
+        <button onClick={async ()=>{
           if(!newDim) return
-          const grp = prompt(`First group name in "${newDim}" dimension?`)
+          const grp = await promptDialog({ title: `First group name in "${newDim}" dimension?` })
           if(grp){ onCreate(newDim.toLowerCase().replace(/\s+/g,'_'), grp, '#4f8ef7'); setNewDim('') }
         }} disabled={!newDim}
           style={{padding:'5px 12px',borderRadius:4,border:'none',background:newDim?T.blue:T.bg4,color:newDim?'#fff':T.text3,fontSize:11,cursor:newDim?'pointer':'not-allowed',fontFamily:'inherit'}}>
@@ -339,6 +335,7 @@ function GroupsTab({byDimension, onCreate, onUpdate, onDelete}: {
 }
 
 function GroupRow({group, onUpdate, onDelete}: {group: Group; onUpdate: (id:number,patch:any)=>void; onDelete: (id:number)=>void}) {
+  const confirmDialog = useConfirm()
   const [editing, setEditing] = useState(false)
   const [name, setName] = useState(group.name)
   const [color, setColor] = useState(group.color || '#4f8ef7')
@@ -367,7 +364,7 @@ function GroupRow({group, onUpdate, onDelete}: {group: Group; onUpdate: (id:numb
           style={{padding:'3px 8px',borderRadius:3,border:'none',background:'transparent',color:T.text2,fontSize:11,cursor:'pointer',fontFamily:'inherit'}}>
           Edit
         </button>
-        <button onClick={()=>{if(confirm(`Delete group "${group.name}"?\nAll memberships in this group will also be removed.`)) onDelete(group.id)}}
+        <button onClick={async ()=>{if(await confirmDialog({ title: `Delete group "${group.name}"?`, message: 'All memberships in this group will also be removed.', danger: true })) onDelete(group.id)}}
           style={{padding:'3px 8px',borderRadius:3,border:'none',background:'transparent',color:T.red,fontSize:11,cursor:'pointer',fontFamily:'inherit'}}>
           Delete
         </button>

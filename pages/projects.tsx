@@ -9,8 +9,9 @@ import Head from 'next/head'
 import dynamic from 'next/dynamic'
 import { useRouter } from 'next/router'
 import PortalTopBar from '../lib/PortalTopBar'
-import { UserRole, roleHasPermission } from '../lib/permissions'
-import { requirePageAuth } from '../lib/authServer'
+import { roleHasPermission } from '../lib/permissions'
+import { requirePageAuth, type PortalUserSSR } from '../lib/authServer'
+import { useToast } from '../components/ui/Feedback'
 import { useChatContext } from '../components/GlobalChatbot'
 import type { GraphNode, GraphLink } from '../components/projects/ProjectGraph'
 
@@ -49,8 +50,6 @@ interface PersonProjects {
 }
 interface ProjectComment { id: string; body: string; author: string; createdAt: string }
 
-interface PortalUserSSR { id: string; email: string; displayName: string | null; role: UserRole; visibleTabs?: string[] | null }
-
 function fmtDateTime(iso: string): string {
   if (!iso) return ''
   const d = new Date(iso)
@@ -73,6 +72,7 @@ function projectCompletion(p: ProjectItem): number {
 
 export default function ProjectsBoard({ user }: { user: PortalUserSSR }) {
   const router = useRouter()
+  const toast = useToast()
   const canEdit = roleHasPermission(user.role, 'edit:projects')
 
   const [people, setPeople] = useState<PersonProjects[]>([])
@@ -240,9 +240,9 @@ export default function ProjectsBoard({ user }: { user: PortalUserSSR }) {
     } catch (e: any) {
       // revert
       if (target === 'project') patchProject(itemId, { status: prevLabel }); else patchSubitem(itemId, { status: prevLabel })
-      alert(`Couldn't update status: ${e.message || e}`)
+      toast(`Couldn't update status: ${e.message || e}`, 'error')
     }
-  }, [people, patchProject, patchSubitem])
+  }, [people, patchProject, patchSubitem, toast])
 
   const addSubitem = useCallback(async (projectId: string, name: string) => {
     const r = await fetch(`/api/projects/${projectId}/subitems`, {
@@ -486,12 +486,13 @@ function ProjectInspector({
   onPost: () => void
   onClose: () => void
 }) {
+  const toast = useToast()
   const [newSub, setNewSub] = useState('')
   const [addingSub, setAddingSub] = useState(false)
   const submitSub = async () => {
     const name = newSub.trim(); if (!name) return
     setAddingSub(true)
-    try { await onAddSubitem(name); setNewSub('') } catch (e: any) { alert(e.message || 'Failed to add subitem') } finally { setAddingSub(false) }
+    try { await onAddSubitem(name); setNewSub('') } catch (e: any) { toast(e.message || 'Failed to add subitem', 'error') } finally { setAddingSub(false) }
   }
   return (
     <>

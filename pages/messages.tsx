@@ -5,11 +5,8 @@
 import { useState } from 'react'
 import Head from 'next/head'
 import PortalTopBar from '../lib/PortalTopBar'
-import { requirePageAuth } from '../lib/authServer'
-import type { UserRole } from '../lib/permissions'
+import { requirePageAuth, type PortalUserSSR } from '../lib/authServer'
 import ChatApp from '../components/messages/ChatApp'
-
-interface PortalUserSSR { id: string; email: string; displayName: string | null; role: UserRole; visibleTabs?: string[] | null }
 
 const BG = '#0d0f12'
 

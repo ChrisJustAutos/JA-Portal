@@ -6,8 +6,7 @@ import { useState, useCallback, useEffect } from 'react'
 import Head from 'next/head'
 import { useRouter } from 'next/router'
 import PortalTopBar from '../lib/PortalTopBar'
-import { UserRole } from '../lib/permissions'
-import { requirePageAuth } from '../lib/authServer'
+import { requirePageAuth, type PortalUserSSR } from '../lib/authServer'
 import { useChatContext } from '../components/GlobalChatbot'
 
 const T = {
@@ -69,8 +68,6 @@ interface TodosData {
   openFeed: TodoItem[]
   completedFeed: TodoItem[]
 }
-
-interface PortalUserSSR { id: string; email: string; displayName: string | null; role: UserRole }
 
 function Card({children,style}:{children:React.ReactNode;style?:React.CSSProperties}){
   return <div style={{background:T.bg2,border:`1px solid ${T.border}`,borderRadius:12,padding:20,...style}}>{children}</div>
