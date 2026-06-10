@@ -83,6 +83,8 @@ export default function JobCardPage({ user }: { user: PortalUserSSR }) {
   const [payments, setPayments] = useState<any[]>([])
   const [paidTotal, setPaidTotal] = useState(0)
   const [pay, setPay] = useState<{ open: boolean; amount: string; tender: string; note: string; busy: boolean; msg: string }>({ open: false, amount: '', tender: 'card', note: '', busy: false, msg: '' })
+  const [creditNotes, setCreditNotes] = useState<any[]>([])
+  const [credit, setCredit] = useState<{ open: boolean; mode: 'lines' | 'amount'; sel: Record<string, boolean>; qty: Record<string, string>; amount: string; reason: string; restock: boolean; refund: boolean; tender: string; busy: boolean; msg: string }>({ open: false, mode: 'lines', sel: {}, qty: {}, amount: '', reason: '', restock: false, refund: false, tender: 'card', busy: false, msg: '' })
   const [jobTypes, setJobTypes] = useState<any[]>([])
   const [applyJt, setApplyJt] = useState('')
   const [tab, setTab] = useState<'invoice' | 'notes' | 'files' | 'activity' | 'history'>('invoice')
@@ -102,6 +104,7 @@ export default function JobCardPage({ user }: { user: PortalUserSSR }) {
   const loadPayments = useCallback(async () => {
     if (!id) return
     try { const r = await fetch(`/api/workshop/payment?booking_id=${id}`); if (r.ok) { const d = await r.json(); setPayments(d.payments || []); setPaidTotal(Number(d.paid_total) || 0) } } catch { /* ignore */ }
+    try { const r = await fetch(`/api/workshop/credit-notes?booking_id=${id}`); if (r.ok) setCreditNotes((await r.json()).creditNotes || []) } catch { /* ignore */ }
   }, [id])
 
   useEffect(() => { load(); loadPayments() }, [load, loadPayments])
@@ -156,6 +159,27 @@ export default function JobCardPage({ user }: { user: PortalUserSSR }) {
     })
     if (r.ok) { setDueSet(s => ({ ...s, open: false, busy: false })); await load() }
     else setDueSet(s => ({ ...s, busy: false, msg: 'Save failed' }))
+  }
+
+  async function submitCredit() {
+    setCredit(s => ({ ...s, busy: true, msg: '' }))
+    const lineIds = Object.keys(credit.sel).filter(k => credit.sel[k])
+    const qtyOverrides: Record<string, number> = {}
+    for (const lid of lineIds) { const v = Number(credit.qty[lid]); if (isFinite(v) && v > 0) qtyOverrides[lid] = v }
+    const r = await fetch('/api/workshop/credit-notes', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        booking_id: id, kind: credit.mode,
+        line_ids: lineIds, qty_overrides: qtyOverrides,
+        amount: Number(credit.amount) || 0,
+        reason: credit.reason, restock_parts: credit.restock,
+        refund: credit.refund ? { tender: credit.tender } : null,
+      }),
+    })
+    const d = await r.json()
+    if (!r.ok) { setCredit(s => ({ ...s, busy: false, msg: d.error || 'Credit failed' })); return }
+    setCredit(s => ({ ...s, open: false, busy: false, sel: {}, qty: {}, amount: '', reason: '', msg: d.myob_warning || `${d.cn_number} recorded` }))
+    await load(); await loadPayments()
   }
 
   // ── Line mutations ──
@@ -302,6 +326,9 @@ export default function JobCardPage({ user }: { user: PortalUserSSR }) {
                     <button onClick={createInvoice} disabled={inv.busy} style={qbtn(T.teal)}>{inv.busy ? '🧾 Sending…' : '🧾 Invoice → MYOB'}</button>
                     <button onClick={openPay} style={qbtn(T.teal)}>💳 Take payment</button>
                     <button onClick={() => changeStatus('paid')} style={qbtn(T.green)}>$ Paid</button>
+                    {(b.status === 'invoiced' || b.status === 'paid') && (
+                      <button onClick={() => setCredit(s => ({ ...s, open: !s.open, msg: '' }))} style={qbtn(T.red)}>↩ Credit / refund</button>
+                    )}
                     <button onClick={openSms} style={qbtn(T.blue)}>📱 Text customer</button>
                     {inv.msg && <span style={{ fontSize: 11, color: inv.needAccount ? T.amber : T.text2 }}>{inv.msg}</span>}
                     {sms.msg && !sms.open && <span style={{ fontSize: 11, color: T.text2 }}>{sms.msg}</span>}
@@ -392,6 +419,58 @@ export default function JobCardPage({ user }: { user: PortalUserSSR }) {
                     )}
                   </div>
                 )}
+
+                {credit.open && (
+                  <div style={{ marginTop: 10, padding: 12, background: T.bg2, border: `1px solid ${T.red}55`, borderRadius: 8 }}>
+                    <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 10 }}>
+                      <span style={{ fontSize: 12, fontWeight: 600, color: T.red }}>↩ Credit note</span>
+                      <button onClick={() => setCredit(s => ({ ...s, mode: 'lines' }))} style={{ ...qbtn(credit.mode === 'lines' ? T.red : T.text3) }}>Credit lines</button>
+                      <button onClick={() => setCredit(s => ({ ...s, mode: 'amount' }))} style={{ ...qbtn(credit.mode === 'amount' ? T.red : T.text3) }}>Fixed amount</button>
+                    </div>
+                    {credit.mode === 'lines' ? (
+                      <div style={{ marginBottom: 10 }}>
+                        {lines.map(l => {
+                          const on = !!credit.sel[l.id]
+                          const ex = l.total_ex_gst != null ? Number(l.total_ex_gst) : (Number(l.qty) || 0) * (Number(l.unit_price_ex_gst) || 0)
+                          return (
+                            <div key={l.id} style={{ display: 'flex', gap: 8, alignItems: 'center', padding: '4px 0', fontSize: 12 }}>
+                              <input type="checkbox" checked={on} onChange={e => setCredit(s => ({ ...s, sel: { ...s.sel, [l.id]: e.target.checked } }))} />
+                              <span style={{ flex: 1, color: on ? T.text : T.text3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{l.description || l.line_type}</span>
+                              <span style={{ fontSize: 10, color: T.text3 }}>qty</span>
+                              <input value={credit.qty[l.id] ?? String(l.qty)} disabled={!on}
+                                onChange={e => setCredit(s => ({ ...s, qty: { ...s.qty, [l.id]: e.target.value } }))}
+                                style={{ ...inp, width: 56, opacity: on ? 1 : 0.4 }} inputMode="decimal" />
+                              <span style={{ fontFamily: 'monospace', color: T.text3, minWidth: 70, textAlign: 'right' }}>{money(ex * 1.1)}</span>
+                            </div>
+                          )
+                        })}
+                      </div>
+                    ) : (
+                      <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 10 }}>
+                        <span style={{ fontSize: 11, color: T.text3 }}>Amount (inc GST)</span>
+                        <input value={credit.amount} inputMode="decimal" onChange={e => setCredit(s => ({ ...s, amount: e.target.value }))} style={{ ...inp, width: 120 }} />
+                      </div>
+                    )}
+                    <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                      <input value={credit.reason} onChange={e => setCredit(s => ({ ...s, reason: e.target.value }))} placeholder="Reason (shows in MYOB + activity log)…" style={{ ...inp, flex: 1, minWidth: 200 }} />
+                      {credit.mode === 'lines' && (
+                        <label style={{ display: 'flex', gap: 5, alignItems: 'center', fontSize: 11, color: T.text2, cursor: 'pointer' }}>
+                          <input type="checkbox" checked={credit.restock} onChange={e => setCredit(s => ({ ...s, restock: e.target.checked }))} /> restock parts
+                        </label>
+                      )}
+                      <label style={{ display: 'flex', gap: 5, alignItems: 'center', fontSize: 11, color: T.text2, cursor: 'pointer' }}>
+                        <input type="checkbox" checked={credit.refund} onChange={e => setCredit(s => ({ ...s, refund: e.target.checked }))} /> refund via
+                      </label>
+                      <select value={credit.tender} disabled={!credit.refund} onChange={e => setCredit(s => ({ ...s, tender: e.target.value }))} style={{ ...inp, opacity: credit.refund ? 1 : 0.4 }}>
+                        {PAYMENT_TENDERS.map(t => <option key={t.id} value={t.id}>{t.label}</option>)}
+                      </select>
+                      <button onClick={() => setCredit(s => ({ ...s, open: false }))} style={qbtn(T.text3)}>Cancel</button>
+                      <button onClick={submitCredit} disabled={credit.busy} style={{ ...qbtn(T.red), background: `${T.red}1e` }}>{credit.busy ? 'Saving…' : 'Issue credit'}</button>
+                    </div>
+                    {credit.msg && <div style={{ fontSize: 11, color: T.amber, marginTop: 8 }}>{credit.msg}</div>}
+                  </div>
+                )}
+                {credit.msg && !credit.open && <div style={{ fontSize: 11, color: T.text2, marginTop: 6 }}>{credit.msg}</div>}
 
                 <div style={{ display: 'grid', gridTemplateColumns: '360px 1fr', gap: 16, marginTop: 16, alignItems: 'start' }}>
                   {/* LEFT — Job details panel(s) */}
@@ -513,10 +592,26 @@ export default function JobCardPage({ user }: { user: PortalUserSSR }) {
                             <div style={{ fontSize: 9, color: T.text3, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 6 }}>Payments</div>
                             {payments.map((p: any) => (
                               <div key={p.id} style={{ display: 'flex', gap: 8, fontSize: 11, color: T.text3, padding: '4px 0' }}>
-                                <span style={{ fontFamily: 'monospace', color: T.text2, minWidth: 70 }}>{money(p.amount)}</span>
-                                <span>{p.tender}</span>
+                                <span style={{ fontFamily: 'monospace', color: Number(p.amount) < 0 ? T.red : T.text2, minWidth: 70 }}>{money(p.amount)}</span>
+                                <span>{p.tender}{p.kind === 'refund' ? ' · refund' : ''}</span>
                                 {p.posted_to_myob ? <span style={{ color: T.green }}>· MYOB</span> : <span>· local</span>}
                                 <span style={{ marginLeft: 'auto', fontFamily: 'monospace' }}>{new Date(p.created_at).toLocaleDateString('en-AU')}</span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+
+                        {creditNotes.length > 0 && (
+                          <div style={{ padding: '10px 16px', borderTop: `1px solid ${T.border}` }}>
+                            <div style={{ fontSize: 9, color: T.text3, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 6 }}>Credit notes</div>
+                            {creditNotes.map((cn: any) => (
+                              <div key={cn.id} style={{ display: 'flex', gap: 8, fontSize: 11, color: T.text3, padding: '4px 0' }}>
+                                <span style={{ fontFamily: 'monospace', color: T.red, minWidth: 70 }}>−{money(cn.total_inc)}</span>
+                                <span style={{ color: T.text2 }}>CN-{cn.cn_seq}</span>
+                                {cn.reason && <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 220 }}>{cn.reason}</span>}
+                                {cn.myob_credit_uid ? <span style={{ color: T.green }}>· MYOB{cn.myob_credit_number ? ` ${cn.myob_credit_number}` : ''}</span> : <span>· local</span>}
+                                {cn.refunded && <span style={{ color: T.amber }}>· refunded</span>}
+                                <span style={{ marginLeft: 'auto', fontFamily: 'monospace' }}>{new Date(cn.created_at).toLocaleDateString('en-AU')}</span>
                               </div>
                             ))}
                           </div>

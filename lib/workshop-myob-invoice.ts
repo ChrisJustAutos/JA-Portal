@@ -100,7 +100,8 @@ export async function setWorkshopSettings(patch: Partial<WorkshopSettings>): Pro
 }
 
 // Resolve the workshop (VPS) file's GST + FRE/N-T tax-code UIDs, fetched live.
-async function resolveTaxCodes(connId: string, cfId: string): Promise<{ gstUid: string; freUid: string }> {
+// Exported for reuse by the credit-note push (lib/workshop-credit-note.ts).
+export async function resolveTaxCodes(connId: string, cfId: string): Promise<{ gstUid: string; freUid: string }> {
   const r = await myobFetch(connId, `/accountright/${cfId}/GeneralLedger/TaxCode`, { query: { '$top': 200 } })
   if (r.status !== 200) throw new Error(`MYOB tax code fetch failed (HTTP ${r.status})`)
   const items: any[] = Array.isArray(r.data?.Items) ? r.data.Items : []
@@ -392,7 +393,7 @@ export async function recordJobPayment(
   }).select('id').single()
   if (insErr) throw new Error(`Payment save failed: ${insErr.message}`)
 
-  const { data: pays } = await c.from('workshop_payments').select('amount').eq('booking_id', bookingId)
+  const { data: pays } = await c.from('workshop_payments').select('amount').eq('booking_id', bookingId).is('deleted_at', null)
   const paidTotal = round2((pays || []).reduce((s: number, p: any) => s + (Number(p.amount) || 0), 0))
   const total = round2(Number(booking.total_inc_gst) || 0)
   const balance = round2(total - paidTotal)
@@ -407,7 +408,7 @@ export async function recordJobPayment(
 
 export async function listJobPayments(bookingId: string): Promise<{ payments: any[]; paid_total: number }> {
   const c = sb()
-  const { data } = await c.from('workshop_payments').select('*').eq('booking_id', bookingId).order('created_at', { ascending: true })
+  const { data } = await c.from('workshop_payments').select('*').eq('booking_id', bookingId).is('deleted_at', null).order('created_at', { ascending: true })
   const paid = round2((data || []).reduce((s: number, p: any) => s + (Number(p.amount) || 0), 0))
   return { payments: data || [], paid_total: paid }
 }

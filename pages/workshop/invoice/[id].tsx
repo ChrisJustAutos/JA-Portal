@@ -29,6 +29,8 @@ export default function InvoiceDetailPage({ user }: { user: PortalUserSSR }) {
   const canEdit = roleHasPermission(user.role, 'edit:bookings')
   const [data, setData] = useState<{ invoice: any; lines: any[]; payments: any[] } | null>(null)
   const [err, setErr] = useState('')
+  const [creditNotes, setCreditNotes] = useState<any[]>([])
+  const [credit, setCredit] = useState<{ open: boolean; mode: 'lines' | 'amount'; sel: Record<string, boolean>; qty: Record<string, string>; amount: string; reason: string; refund: boolean; tender: string; busy: boolean; msg: string }>({ open: false, mode: 'lines', sel: {}, qty: {}, amount: '', reason: '', refund: false, tender: 'card', busy: false, msg: '' })
 
   async function load() {
     if (!id) return
@@ -37,8 +39,28 @@ export default function InvoiceDetailPage({ user }: { user: PortalUserSSR }) {
       const d = await r.json()
       if (r.ok) setData(d); else setErr(d.error || 'Load failed')
     } catch (e: any) { setErr(e?.message || 'Load failed') }
+    try { const r = await fetch(`/api/workshop/credit-notes?invoice_id=${id}`); if (r.ok) setCreditNotes((await r.json()).creditNotes || []) } catch { /* ignore */ }
   }
   useEffect(() => { load() }, [id])
+
+  async function submitCredit() {
+    setCredit(s => ({ ...s, busy: true, msg: '' }))
+    const lineIds = Object.keys(credit.sel).filter(k => credit.sel[k])
+    const qtyOverrides: Record<string, number> = {}
+    for (const lid of lineIds) { const v = Number(credit.qty[lid]); if (isFinite(v) && v > 0) qtyOverrides[lid] = v }
+    const r = await fetch('/api/workshop/credit-notes', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        invoice_id: id, kind: credit.mode, line_ids: lineIds, qty_overrides: qtyOverrides,
+        amount: Number(credit.amount) || 0, reason: credit.reason,
+        refund: credit.refund ? { tender: credit.tender } : null,
+      }),
+    })
+    const d = await r.json()
+    if (!r.ok) { setCredit(s => ({ ...s, busy: false, msg: d.error || 'Credit failed' })); return }
+    setCredit(s => ({ ...s, open: false, busy: false, sel: {}, qty: {}, amount: '', reason: '', msg: d.myob_warning || `${d.cn_number} recorded` }))
+    await load()
+  }
 
   async function softDelete() {
     if (!confirm('Move this invoice to Trash? Restorable from the invoices Trash view.')) return
@@ -62,7 +84,8 @@ export default function InvoiceDetailPage({ user }: { user: PortalUserSSR }) {
 
   const inv = data?.invoice
   const totalPaid = (data?.payments || []).filter(p => !p.deleted_at).reduce((s, p) => s + (Number(p.amount) || 0), 0)
-  const outstanding = inv ? (Number(inv.total) || 0) - totalPaid : 0
+  const creditTotal = creditNotes.reduce((s, cn) => s + (Number(cn.total_inc) || 0), 0)
+  const outstanding = inv ? (Number(inv.total) || 0) - creditTotal - totalPaid : 0
   const isPaid = outstanding <= 0.01
   const isDeleted = !!inv?.deleted_at
 
@@ -105,6 +128,7 @@ export default function InvoiceDetailPage({ user }: { user: PortalUserSSR }) {
                   <Tile label="GST" value={money(inv.gst)} />
                   <Tile label="Total" value={money(inv.total)} accent={T.text} />
                   <Tile label="Paid" value={money(totalPaid)} accent={T.green} />
+                  {creditTotal > 0 && <Tile label="Credited" value={`−${money(creditTotal)}`} accent={T.red} />}
                   <Tile label="Outstanding" value={isPaid ? '—' : money(outstanding)} accent={isPaid ? T.green : T.amber} />
                 </div>
 
@@ -154,8 +178,72 @@ export default function InvoiceDetailPage({ user }: { user: PortalUserSSR }) {
                   )}
                 </Card>
 
+                {/* Credit notes */}
+                {creditNotes.length > 0 && (
+                  <Card title="Credit notes" count={creditNotes.length}>
+                    <Hdr cols="100px 90px 1fr 110px 90px" labels={['Date','CN #','Reason','Amount','MYOB']} />
+                    {creditNotes.map((cn: any) => (
+                      <Row key={cn.id} cols="100px 90px 1fr 110px 90px">
+                        <div style={{ fontSize:11, color:T.text2, fontFamily:'monospace' }}>{fmtDate(cn.created_at)}</div>
+                        <div style={{ fontSize:11, fontFamily:'monospace', color:T.red }}>CN-{cn.cn_seq}</div>
+                        <div style={{ overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', color:T.text2 }}>{cn.reason || '—'}{cn.refunded ? ' · refunded' : ''}</div>
+                        <div style={{ textAlign:'right', fontVariantNumeric:'tabular-nums', color:T.red, fontWeight:600 }}>−{money(cn.total_inc)}</div>
+                        <div style={{ textAlign:'right', fontSize:10, color: cn.myob_credit_uid ? T.green : T.text3 }}>{cn.myob_credit_uid ? (cn.myob_credit_number || 'posted') : 'local'}</div>
+                      </Row>
+                    ))}
+                  </Card>
+                )}
+
+                {/* Credit / refund panel */}
+                {credit.open && (
+                  <div style={{ marginBottom:18, padding:14, background:T.bg2, border:`1px solid ${T.red}55`, borderRadius:8 }}>
+                    <div style={{ display:'flex', gap:8, alignItems:'center', marginBottom:10 }}>
+                      <span style={{ fontSize:12, fontWeight:600, color:T.red }}>↩ Credit note</span>
+                      <button onClick={() => setCredit(s => ({ ...s, mode:'lines' }))} style={qbtn(credit.mode === 'lines' ? T.red : T.text3)}>Credit lines</button>
+                      <button onClick={() => setCredit(s => ({ ...s, mode:'amount' }))} style={qbtn(credit.mode === 'amount' ? T.red : T.text3)}>Fixed amount</button>
+                    </div>
+                    {credit.mode === 'lines' ? (
+                      <div style={{ marginBottom:10 }}>
+                        {(data.lines || []).map((l: any) => {
+                          const on = !!credit.sel[l.id]
+                          return (
+                            <div key={l.id} style={{ display:'flex', gap:8, alignItems:'center', padding:'4px 0', fontSize:12 }}>
+                              <input type="checkbox" checked={on} onChange={e => setCredit(s => ({ ...s, sel: { ...s.sel, [l.id]: e.target.checked } }))} />
+                              <span style={{ flex:1, color: on ? T.text : T.text3, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{l.description || l.line_type}</span>
+                              <span style={{ fontSize:10, color:T.text3 }}>qty</span>
+                              <input value={credit.qty[l.id] ?? String(l.qty)} disabled={!on}
+                                onChange={e => setCredit(s => ({ ...s, qty: { ...s.qty, [l.id]: e.target.value } }))}
+                                style={{ ...cinp, width:56, opacity: on ? 1 : 0.4 }} inputMode="decimal" />
+                              <span style={{ fontFamily:'monospace', color:T.text3, minWidth:70, textAlign:'right' }}>{money((Number(l.total_ex_gst) || 0) * 1.1)}</span>
+                            </div>
+                          )
+                        })}
+                      </div>
+                    ) : (
+                      <div style={{ display:'flex', gap:8, alignItems:'center', marginBottom:10 }}>
+                        <span style={{ fontSize:11, color:T.text3 }}>Amount (inc GST)</span>
+                        <input value={credit.amount} inputMode="decimal" onChange={e => setCredit(s => ({ ...s, amount: e.target.value }))} style={{ ...cinp, width:120 }} />
+                      </div>
+                    )}
+                    <div style={{ display:'flex', gap:8, alignItems:'center', flexWrap:'wrap' }}>
+                      <input value={credit.reason} onChange={e => setCredit(s => ({ ...s, reason: e.target.value }))} placeholder="Reason…" style={{ ...cinp, flex:1, minWidth:200 }} />
+                      <label style={{ display:'flex', gap:5, alignItems:'center', fontSize:11, color:T.text2, cursor:'pointer' }}>
+                        <input type="checkbox" checked={credit.refund} onChange={e => setCredit(s => ({ ...s, refund: e.target.checked }))} /> refund via
+                      </label>
+                      <select value={credit.tender} disabled={!credit.refund} onChange={e => setCredit(s => ({ ...s, tender: e.target.value }))} style={{ ...cinp, opacity: credit.refund ? 1 : 0.4 }}>
+                        {['cash','eftpos','card','bank_transfer','direct_deposit','direct_debit','paypal','other'].map(t => <option key={t} value={t}>{t.replace(/_/g,' ')}</option>)}
+                      </select>
+                      <button onClick={() => setCredit(s => ({ ...s, open:false }))} style={qbtn(T.text3)}>Cancel</button>
+                      <button onClick={submitCredit} disabled={credit.busy} style={{ ...qbtn(T.red), background:`${T.red}1e` }}>{credit.busy ? 'Saving…' : 'Issue credit'}</button>
+                    </div>
+                    {credit.msg && <div style={{ fontSize:11, color:T.amber, marginTop:8 }}>{credit.msg}</div>}
+                  </div>
+                )}
+                {credit.msg && !credit.open && <div style={{ fontSize:11, color:T.text2, marginBottom:10 }}>{credit.msg}</div>}
+
                 {/* Actions */}
                 <div style={{ marginTop:18, display:'flex', gap:8 }}>
+                  {canEdit && !isDeleted && <button onClick={() => setCredit(s => ({ ...s, open: !s.open, msg:'' }))} style={qbtn(T.red)}>↩ Credit / refund</button>}
                   {canEdit && !isDeleted && <button onClick={softDelete} style={qbtn(T.red)}>🗑 Move to Trash</button>}
                   {canEdit && isDeleted && <button onClick={restore} style={qbtn(T.green)}>↩ Restore</button>}
                 </div>
@@ -205,6 +293,10 @@ const miniBtn = (c: string): React.CSSProperties => ({
   padding:'3px 8px', borderRadius:4, fontSize:10, fontFamily:'inherit', fontWeight:600,
   background:'transparent', color: c, border: `1px solid ${c}55`, cursor:'pointer',
 })
+const cinp: React.CSSProperties = {
+  padding:'6px 9px', background:T.bg3, border:`1px solid ${T.border2}`, borderRadius:5,
+  color:T.text, fontSize:12, fontFamily:'inherit', outline:'none',
+}
 
 export async function getServerSideProps(context: any) {
   return requirePageAuth(context, 'view:diary')
