@@ -37,18 +37,13 @@ import { useRouter } from 'next/router'
 import { GetServerSideProps } from 'next'
 import PortalTopBar from '../../lib/PortalTopBar'
 import { requirePageAuth } from '../../lib/authServer'
-import { UserRole, roleHasPermission } from '../../lib/permissions'
+import type { PortalUserSSR } from '../../lib/authServer'
+import { roleHasPermission } from '../../lib/permissions'
 import { useIsMobile } from '../../lib/useIsMobile'
+import { T } from '../../lib/ui/theme'
+import { useToast, useConfirm } from '../../components/ui/Feedback'
 
 const BULK_BATCH_SIZE = 3
-
-const T = {
-  bg:'#0d0f12', bg2:'#131519', bg3:'#1a1d23', bg4:'#21252d',
-  border:'rgba(255,255,255,0.07)', border2:'rgba(255,255,255,0.12)',
-  text:'#e8eaf0', text2:'#8b90a0', text3:'#545968',
-  blue:'#4f8ef7', teal:'#2dd4bf', green:'#34c77b',
-  amber:'#f5a623', red:'#f04e4e', purple:'#a78bfa', accent:'#4f8ef7',
-}
 
 interface InvoiceRow {
   id: string
@@ -92,7 +87,7 @@ interface ListResponse {
 }
 
 interface PageProps {
-  user: { id: string; email: string; displayName: string | null; role: UserRole; visibleTabs: string[] | null }
+  user: PortalUserSSR
 }
 
 export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => {
@@ -130,6 +125,8 @@ interface PaymentAccount {
 export default function APListPage({ user }: PageProps) {
   const router = useRouter()
   const isMobile = useIsMobile()
+  const toast = useToast()
+  const confirmDialog = useConfirm()
   const [data, setData] = useState<ListResponse | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -348,7 +345,11 @@ export default function APListPage({ user }: PageProps) {
     e.stopPropagation()
     e.preventDefault()
     const label = `${inv.vendor_name_parsed || 'this invoice'} ${inv.invoice_number || ''}`.trim()
-    const ok = confirm(`Delete ${label}?\n\nThis permanently removes the invoice, its lines, and the PDF. This cannot be undone.`)
+    const ok = await confirmDialog({
+      title: `Delete ${label}?`,
+      message: 'This permanently removes the invoice, its lines, and the PDF. This cannot be undone.',
+      danger: true,
+    })
     if (!ok) return
     setDeletingId(inv.id)
     try {
@@ -363,7 +364,7 @@ export default function APListPage({ user }: PageProps) {
       }
       fetchData()
     } catch (err: any) {
-      alert('Delete failed: ' + (err?.message || err))
+      toast('Delete failed: ' + (err?.message || err), 'error')
     } finally {
       setDeletingId(null)
     }
@@ -403,7 +404,10 @@ export default function APListPage({ user }: PageProps) {
 
   async function handleBulkApprove() {
     if (selectedApprovableIds.length === 0) return
-    const ok = confirm(`Approve & post ${selectedApprovableIds.length} invoice(s) to MYOB?\n\nProcessed in batches of ${BULK_BATCH_SIZE} to stay within timeout limits. Progress shown as each batch completes.`)
+    const ok = await confirmDialog({
+      title: `Approve & post ${selectedApprovableIds.length} invoice(s) to MYOB?`,
+      message: `Processed in batches of ${BULK_BATCH_SIZE} to stay within timeout limits. Progress shown as each batch completes.`,
+    })
     if (!ok) return
 
     setBulkApproving(true)
