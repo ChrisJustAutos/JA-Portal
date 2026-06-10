@@ -17,16 +17,9 @@ import {
   ymdBrisbane, brisbaneDayBounds, addDaysYmd, weekStartYmd,
   jobTypeLabel,
 } from '../lib/workshop'
-
-interface PortalUserSSR { id: string; email: string; displayName: string | null; role: 'admin'|'manager'|'sales'|'accountant'|'viewer'; visibleTabs?: string[] | null }
-
-const T = {
-  bg: '#0d0f12', bg2: '#131519', bg3: '#1a1d23', bg4: '#21252d',
-  border: 'rgba(255,255,255,0.07)', border2: 'rgba(255,255,255,0.12)',
-  text: '#e8eaf0', text2: '#8b90a0', text3: '#545968',
-  blue: '#4f8ef7', teal: '#2dd4bf', green: '#34c77b',
-  amber: '#f5a623', red: '#f04e4e', purple: '#a78bfa', accent: '#4f8ef7',
-}
+import type { PortalUserSSR } from '../lib/authServer'
+import { T } from '../lib/ui/theme'
+import { usePrompt } from '../components/ui/Feedback'
 
 interface Tech { ext: string; name: string; color?: string | null; daily_hours?: number; role?: string | null }
 interface BookingRow {
@@ -208,6 +201,7 @@ export default function DiaryPage({ user }: { user: PortalUserSSR }) {
   const [loading, setLoading] = useState(true)
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null)
   const [editing, setEditing] = useState<Partial<BookingRow> | null>(null) // open modal when non-null
+  const promptDialog = usePrompt()
 
   const range = useMemo(() => {
     if (view === 'day') return brisbaneDayBounds(date)
@@ -283,8 +277,8 @@ export default function DiaryPage({ user }: { user: PortalUserSSR }) {
   async function delNote(id: string) { await fetch(`/api/workshop/diary-notes?id=${encodeURIComponent(id)}`, { method: 'DELETE' }); load() }
   async function setLaneCapacity(ext: string) {
     if (!isAdmin || !ext) return
-    const v = window.prompt(`Daily capacity (hours) for ext ${ext}:`, String(capacity[ext] ?? 8))
-    if (v == null) return
+    const v = await promptDialog({ title: `Daily capacity (hours) for ext ${ext}:`, defaultValue: String(capacity[ext] ?? 8), inputMode: 'numeric' })
+    if (v === null) return
     const hours = Number(v); if (!isFinite(hours)) return
     await fetch('/api/workshop/tech-capacity', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ technician_ext: ext, daily_hours: hours }) })
     load()

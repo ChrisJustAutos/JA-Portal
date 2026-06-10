@@ -8,15 +8,9 @@ import Link from 'next/link'
 import PortalTopBar from '../../lib/PortalTopBar'
 import WorkshopTabs from '../../components/WorkshopTabs'
 import { requirePageAuth } from '../../lib/authServer'
-
-interface PortalUserSSR { id: string; email: string; displayName: string | null; role: 'admin'|'manager'|'sales'|'accountant'|'viewer'|'workshop'; visibleTabs?: string[] | null }
-
-const T = {
-  bg: '#0d0f12', bg2: '#131519', bg3: '#1a1d23', bg4: '#21252d',
-  border: 'rgba(255,255,255,0.07)', border2: 'rgba(255,255,255,0.12)',
-  text: '#e8eaf0', text2: '#8b90a0', text3: '#545968',
-  blue: '#4f8ef7', teal: '#2dd4bf', green: '#34c77b', amber: '#f5a623', purple: '#a78bfa',
-}
+import type { PortalUserSSR } from '../../lib/authServer'
+import { T, pagerBtn, SkeletonRows } from '../../components/ui'
+import { useIsMobile } from '../../lib/useIsMobile'
 
 interface Customer {
   id: string; name: string; first_name: string | null; last_name: string | null
@@ -34,6 +28,7 @@ export default function CustomersPage({ user }: { user: PortalUserSSR }) {
   const [offset, setOffset] = useState(0)
   const [loading, setLoading] = useState(false)
   const timer = useRef<any>(null)
+  const isMobile = useIsMobile()
 
   // Debounce the search so typing doesn't fire a query per keystroke.
   useEffect(() => {
@@ -85,25 +80,49 @@ export default function CustomersPage({ user }: { user: PortalUserSSR }) {
               {loading && <span style={{ position:'absolute', right:14, top:'50%', transform:'translateY(-50%)', fontSize:11, color:T.text3 }}>Loading…</span>}
             </div>
 
-            <div style={{ background:T.bg2, border:`1px solid ${T.border}`, borderRadius:8, overflow:'hidden' }}>
-              <div style={{ display:'grid', gridTemplateColumns:'1.4fr 110px 130px 1.6fr 90px', gap:12, padding:'10px 14px', fontSize:10, fontWeight:600, color:T.text3, textTransform:'uppercase', letterSpacing:'0.05em', borderBottom:`1px solid ${T.border}`, background:T.bg3 }}>
-                <div>Name</div><div>Mobile</div><div>Phone</div><div>Email</div><div style={{ textAlign:'right' }}>Customer #</div>
+            {isMobile ? (
+              /* ─── MOBILE: card stack ─── */
+              <div style={{ display:'flex', flexDirection:'column', gap:10 }}>
+                {customers.length === 0 ? (
+                  loading ? (
+                    <div style={{ background:T.bg2, border:`1px solid ${T.border}`, borderRadius:8, overflow:'hidden' }}><SkeletonRows rows={8} /></div>
+                  ) : (
+                    <div style={{ padding:30, textAlign:'center', fontSize:13, color:T.text3, background:T.bg2, border:`1px solid ${T.border}`, borderRadius:8 }}>{debouncedQ ? `No customers match "${debouncedQ}"` : 'No customers'}</div>
+                  )
+                ) : customers.map(c => (
+                  <Link key={c.id} href={`/workshop/customer/${c.id}`} style={{ display:'block', background:T.bg2, border:`1px solid ${T.border}`, borderRadius:10, padding:'12px 14px', color:T.text, textDecoration:'none' }}>
+                    <div style={{ fontSize:14, fontWeight:600, marginBottom:2 }}>{c.name}</div>
+                    {c.company && c.company !== c.name && <div style={{ fontSize:11, color:T.text3, marginBottom:4 }}>{c.company}</div>}
+                    {(c.mobile || c.phone) && <div style={{ fontSize:12, color:T.text2, fontFamily:'monospace' }}>{c.mobile || c.phone}</div>}
+                    {c.email && <div style={{ fontSize:11, color:T.text2, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', marginTop:2 }}>{c.email}</div>}
+                    {c.customer_number && <div style={{ fontSize:10, color:T.text3, fontFamily:'monospace', marginTop:4 }}>#{c.customer_number}</div>}
+                  </Link>
+                ))}
               </div>
-              {customers.length === 0 ? (
-                <div style={{ padding:30, textAlign:'center', fontSize:13, color:T.text3 }}>{loading ? 'Loading…' : debouncedQ ? `No customers match "${debouncedQ}"` : 'No customers'}</div>
-              ) : customers.map(c => (
-                <Link key={c.id} href={`/workshop/customer/${c.id}`} style={{ display:'grid', gridTemplateColumns:'1.4fr 110px 130px 1.6fr 90px', gap:12, padding:'10px 14px', borderTop:`1px solid ${T.border}`, alignItems:'center', fontSize:12, color:T.text, textDecoration:'none' }}>
-                  <div style={{ overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
-                    {c.name}
-                    {c.company && c.company !== c.name && <span style={{ color:T.text3, marginLeft:6 }}>· {c.company}</span>}
-                  </div>
-                  <div style={{ color:T.text2, fontFamily:'monospace', fontSize:11 }}>{c.mobile || '—'}</div>
-                  <div style={{ color:T.text3, fontFamily:'monospace', fontSize:11 }}>{c.phone || '—'}</div>
-                  <div style={{ color:T.text2, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', fontSize:11 }}>{c.email || '—'}</div>
-                  <div style={{ color:T.text3, fontFamily:'monospace', fontSize:11, textAlign:'right' }}>{c.customer_number || ''}</div>
-                </Link>
-              ))}
-            </div>
+            ) : (
+              /* ─── DESKTOP: grid table ─── */
+              <div style={{ background:T.bg2, border:`1px solid ${T.border}`, borderRadius:8, overflow:'hidden' }}>
+                <div style={{ display:'grid', gridTemplateColumns:'1.4fr 110px 130px 1.6fr 90px', gap:12, padding:'10px 14px', fontSize:10, fontWeight:600, color:T.text3, textTransform:'uppercase', letterSpacing:'0.05em', borderBottom:`1px solid ${T.border}`, background:T.bg3 }}>
+                  <div>Name</div><div>Mobile</div><div>Phone</div><div>Email</div><div style={{ textAlign:'right' }}>Customer #</div>
+                </div>
+                {customers.length === 0 ? (
+                  loading ? <SkeletonRows rows={8} /> : (
+                    <div style={{ padding:30, textAlign:'center', fontSize:13, color:T.text3 }}>{debouncedQ ? `No customers match "${debouncedQ}"` : 'No customers'}</div>
+                  )
+                ) : customers.map(c => (
+                  <Link key={c.id} href={`/workshop/customer/${c.id}`} style={{ display:'grid', gridTemplateColumns:'1.4fr 110px 130px 1.6fr 90px', gap:12, padding:'10px 14px', borderTop:`1px solid ${T.border}`, alignItems:'center', fontSize:12, color:T.text, textDecoration:'none' }}>
+                    <div style={{ overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
+                      {c.name}
+                      {c.company && c.company !== c.name && <span style={{ color:T.text3, marginLeft:6 }}>· {c.company}</span>}
+                    </div>
+                    <div style={{ color:T.text2, fontFamily:'monospace', fontSize:11 }}>{c.mobile || '—'}</div>
+                    <div style={{ color:T.text3, fontFamily:'monospace', fontSize:11 }}>{c.phone || '—'}</div>
+                    <div style={{ color:T.text2, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', fontSize:11 }}>{c.email || '—'}</div>
+                    <div style={{ color:T.text3, fontFamily:'monospace', fontSize:11, textAlign:'right' }}>{c.customer_number || ''}</div>
+                  </Link>
+                ))}
+              </div>
+            )}
 
             {total > PAGE && (
               <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginTop:14, fontSize:12, color:T.text3 }}>
@@ -120,12 +139,6 @@ export default function CustomersPage({ user }: { user: PortalUserSSR }) {
     </>
   )
 }
-
-const pagerBtn = (disabled: boolean): React.CSSProperties => ({
-  padding:'6px 12px', borderRadius:5, fontSize:11, fontFamily:'inherit', fontWeight:600,
-  background:disabled ? 'transparent' : T.bg3, color:disabled ? T.text3 : T.text2,
-  border:`1px solid ${T.border2}`, cursor:disabled ? 'default' : 'pointer',
-})
 
 export async function getServerSideProps(context: any) {
   return requirePageAuth(context, 'view:diary')

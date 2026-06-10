@@ -9,22 +9,11 @@ import { useRouter } from 'next/router'
 import PortalTopBar from '../../lib/PortalTopBar'
 import WorkshopTabs from '../../components/WorkshopTabs'
 import { requirePageAuth } from '../../lib/authServer'
+import type { PortalUserSSR } from '../../lib/authServer'
 import { roleHasPermission } from '../../lib/permissions'
 import { QUOTE_STATUS_META, QUOTE_STATUSES, QuoteStatus, vehicleLabel, customerLabel } from '../../lib/workshop'
-
-interface PortalUserSSR { id: string; email: string; displayName: string | null; role: 'admin'|'manager'|'sales'|'accountant'|'viewer'; visibleTabs?: string[] | null }
-
-const T = {
-  bg: '#0d0f12', bg2: '#131519', bg3: '#1a1d23', bg4: '#21252d',
-  border: 'rgba(255,255,255,0.07)', border2: 'rgba(255,255,255,0.12)',
-  text: '#e8eaf0', text2: '#8b90a0', text3: '#545968',
-  blue: '#4f8ef7', teal: '#2dd4bf', green: '#34c77b', amber: '#f5a623', red: '#f04e4e', purple: '#a78bfa', accent: '#4f8ef7',
-}
-const money = (n: number) => `$${(Number(n) || 0).toFixed(2)}`
-function fmtDate(iso: string | null): string {
-  if (!iso) return '—'
-  return new Date(iso).toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: '2-digit' })
-}
+import { T, Chip, SkeletonRows } from '../../components/ui'
+import { money2 as money, fmtDate } from '../../lib/ui/format'
 
 function QuoteChip({ status }: { status: QuoteStatus }) {
   const m = QUOTE_STATUS_META[status] || { label: status, color: T.text3 }
@@ -89,8 +78,8 @@ export default function QuotesPage({ user }: { user: PortalUserSSR }) {
           <div style={{ height: 52, background: T.bg2, borderBottom: `1px solid ${T.border}`, display: 'flex', alignItems: 'center', padding: '0 20px', gap: 10, flexShrink: 0 }}>
             <span style={{ fontSize: 14, fontWeight: 600 }}>Quotes</span>
             <div style={{ display: 'flex', gap: 4 }}>
-              <FilterChip label="Active" active={view === 'active'} onClick={() => setView('active')} />
-              <FilterChip label="Trash" active={view === 'trash'} onClick={() => setView('trash')} accent={T.red} />
+              <Chip label="Active" active={view === 'active'} onClick={() => setView('active')} />
+              <Chip label="Trash" active={view === 'trash'} onClick={() => setView('trash')} c={T.red} />
             </div>
             <select value={filter} onChange={e => setFilter(e.target.value)} disabled={view === 'trash'} style={{ padding: '4px 8px', background: T.bg3, border: `1px solid ${T.border}`, borderRadius: 5, color: T.text2, fontSize: 12, fontFamily: 'inherit', cursor: 'pointer', opacity: view === 'trash' ? 0.5 : 1 }}>
               <option value="">All statuses</option>
@@ -110,7 +99,7 @@ export default function QuotesPage({ user }: { user: PortalUserSSR }) {
                 <div>Status</div><div>Customer</div><div>Vehicle</div><div style={{ textAlign: 'right' }}>Total</div><div style={{ textAlign: 'right' }}>Created</div>{view === 'trash' && <div style={{ textAlign: 'right' }}></div>}
               </div>
               {loading && quotes.length === 0 ? (
-                <div style={{ padding: 40, textAlign: 'center', color: T.text3, fontSize: 12 }}>Loading…</div>
+                <SkeletonRows rows={8} />
               ) : quotes.length === 0 ? (
                 <div style={{ padding: 40, textAlign: 'center', color: T.text3, fontSize: 12 }}>
                   {view === 'trash' ? 'Trash is empty.' : `No quotes${filter ? ' with that status' : ''}.${canEdit ? ' Create one with “+ New quote”.' : ''}`}
@@ -134,17 +123,6 @@ export default function QuotesPage({ user }: { user: PortalUserSSR }) {
         </div>
       </div>
     </>
-  )
-}
-
-function FilterChip({ label, active, onClick, accent }: { label: string; active: boolean; onClick: () => void; accent?: string }) {
-  const c = accent || '#4f8ef7'
-  return (
-    <button onClick={onClick} style={{
-      padding: '4px 10px', borderRadius: 4, fontSize: 11, fontFamily: 'inherit', fontWeight: 600,
-      background: active ? `${c}1f` : 'transparent', color: active ? c : '#8b90a0',
-      border: `1px solid ${active ? c + '55' : 'rgba(255,255,255,0.07)'}`, cursor: 'pointer',
-    }}>{label}</button>
   )
 }
 

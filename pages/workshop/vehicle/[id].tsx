@@ -10,20 +10,11 @@ import PortalTopBar from '../../../lib/PortalTopBar'
 import WorkshopTabs from '../../../components/WorkshopTabs'
 import FilesPanel from '../../../components/workshop/FilesPanel'
 import { requirePageAuth } from '../../../lib/authServer'
+import type { PortalUserSSR } from '../../../lib/authServer'
 import { roleHasPermission } from '../../../lib/permissions'
 import { BOOKING_STATUS_META, BookingStatus, jobTypeLabel, vehicleLabel, ymdBrisbane } from '../../../lib/workshop'
-
-interface PortalUserSSR { id: string; email: string; displayName: string | null; role: 'admin'|'manager'|'sales'|'accountant'|'viewer'|'workshop'; visibleTabs?: string[] | null }
-
-const T = {
-  bg: '#0d0f12', bg2: '#131519', bg3: '#1a1d23', bg4: '#21252d',
-  border: 'rgba(255,255,255,0.07)', border2: 'rgba(255,255,255,0.12)',
-  text: '#e8eaf0', text2: '#8b90a0', text3: '#545968',
-  blue: '#4f8ef7', teal: '#2dd4bf', green: '#34c77b', amber: '#f5a623', red: '#f04e4e', purple: '#a78bfa',
-}
-
-const money = (n: any) => `$${(Number(n) || 0).toFixed(2)}`
-const fmtDate = (iso: string | null) => iso ? new Date(iso).toLocaleDateString('en-AU', { day:'numeric', month:'short', year:'2-digit' }) : '—'
+import { T, Section, Table, Row, Empty, StatusPill, inp } from '../../../components/ui'
+import { money2 as money, fmtDate } from '../../../lib/ui/format'
 
 function addMonthsYmd(ymd: string, months: number): string {
   const d = new Date(`${ymd}T00:00:00+10:00`)
@@ -146,7 +137,7 @@ export default function VehicleDetailPage({ user }: { user: PortalUserSSR }) {
                               return (
                                 <Row key={b.id} cols={cols}>
                                   <div style={{ color:T.text2, fontFamily:'monospace', fontSize:11 }}>{fmtDate(b.completed_at || b.starts_at)}</div>
-                                  <div><span style={{ display:'inline-flex', padding:'2px 8px', borderRadius:3, background:`${meta.color}1e`, color:meta.color, fontSize:10, fontWeight:600 }}>{meta.label}</span></div>
+                                  <div><StatusPill label={meta.label} color={meta.color} uppercase={false} /></div>
                                   <div style={{ overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{(b.description || '').split('\n')[0] || jobTypeLabel(b.job_type) || '—'}</div>
                                   <div style={{ textAlign:'right', color:T.text3, fontVariantNumeric:'tabular-nums' }}>{b.odometer ? b.odometer.toLocaleString() : '—'}</div>
                                   <div style={{ textAlign:'right', color:T.text2, fontVariantNumeric:'tabular-nums' }}>{b.total_inc_gst ? money(b.total_inc_gst) : '—'}</div>
@@ -231,38 +222,6 @@ function DueRow({ label, ymd, today, extra }: { label: string; ymd: string | nul
   )
 }
 
-function Section({ title, count, children }: { title: string; count: number; children: any }) {
-  return (
-    <div style={{ marginBottom:22 }}>
-      <div style={{ display:'flex', alignItems:'baseline', justifyContent:'space-between', marginBottom:8 }}>
-        <h2 style={{ fontSize:14, fontWeight:600, margin:0 }}>{title}</h2>
-        <div style={{ fontSize:10, color:T.text3, fontFamily:'monospace' }}>{count}</div>
-      </div>
-      {children}
-    </div>
-  )
-}
-function Table({ cols, header, children }: { cols: string; header: any; children: any }) {
-  return (
-    <div style={{ background:T.bg2, border:`1px solid ${T.border}`, borderRadius:8, overflow:'hidden' }}>
-      <div style={{ display:'grid', gridTemplateColumns:cols, gap:12, padding:'9px 14px', fontSize:10, fontWeight:600, color:T.text3, textTransform:'uppercase', letterSpacing:'0.05em', borderBottom:`1px solid ${T.border}`, background:T.bg3 }}>
-        {header}
-      </div>
-      {children}
-    </div>
-  )
-}
-function Row({ cols, children }: { cols: string; children: any }) {
-  return <div style={{ display:'grid', gridTemplateColumns:cols, gap:12, padding:'9px 14px', borderTop:`1px solid ${T.border}`, alignItems:'center', fontSize:12 }}>{children}</div>
-}
-function Empty({ children }: { children: any }) {
-  return <div style={{ padding:24, textAlign:'center', fontSize:12, color:T.text3, background:T.bg2, border:`1px solid ${T.border}`, borderRadius:8 }}>{children}</div>
-}
-
-const inp: React.CSSProperties = {
-  padding:'6px 9px', background:T.bg3, border:`1px solid ${T.border2}`, borderRadius:5,
-  color:T.text, fontSize:12, fontFamily:'inherit', outline:'none',
-}
 const miniBtn: React.CSSProperties = {
   padding:'5px 9px', borderRadius:5, fontSize:11, fontFamily:'inherit', fontWeight:600,
   background:'transparent', color:T.text2, border:`1px solid ${T.border2}`, cursor:'pointer',

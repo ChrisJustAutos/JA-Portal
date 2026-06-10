@@ -8,13 +8,8 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { getSupabase } from '../../lib/supabaseClient'
-
-const T = {
-  bg2: '#131519', bg3: '#1a1d23', bg4: '#21252d',
-  border: 'rgba(255,255,255,0.07)', border2: 'rgba(255,255,255,0.12)',
-  text: '#e8eaf0', text2: '#8b90a0', text3: '#545968',
-  blue: '#4f8ef7', green: '#34c77b', amber: '#f5a623', red: '#f04e4e',
-}
+import { T } from '../../lib/ui/theme'
+import { useConfirm } from '../ui/Feedback'
 
 interface WorkshopFile {
   id: string
@@ -66,6 +61,7 @@ export default function FilesPanel({ bookingId, vehicleId, customerId, canEdit }
   const [busy, setBusy] = useState('')
   const [err, setErr] = useState('')
   const inputRef = useRef<HTMLInputElement>(null)
+  const confirmDialog = useConfirm()
 
   const anchor = bookingId ? `booking_id=${bookingId}` : vehicleId ? `vehicle_id=${vehicleId}` : customerId ? `customer_id=${customerId}` : ''
 
@@ -137,7 +133,7 @@ export default function FilesPanel({ bookingId, vehicleId, customerId, canEdit }
 
   async function deleteFile(f: WorkshopFile, e: React.MouseEvent) {
     e.stopPropagation()
-    if (!confirm(`Delete ${f.file_name}? This can't be undone.`)) return
+    if (!(await confirmDialog({ title: `Delete ${f.file_name}?`, message: "This can't be undone.", danger: true }))) return
     const r = await fetch(`/api/workshop/files?id=${f.id}`, { method: 'DELETE' })
     if (r.ok) await load()
   }

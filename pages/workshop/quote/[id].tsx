@@ -10,18 +10,12 @@ import { useRouter } from 'next/router'
 import PortalTopBar from '../../../lib/PortalTopBar'
 import WorkshopTabs from '../../../components/WorkshopTabs'
 import { requirePageAuth } from '../../../lib/authServer'
+import type { PortalUserSSR } from '../../../lib/authServer'
 import { roleHasPermission } from '../../../lib/permissions'
 import { QUOTE_STATUS_META, QUOTE_STATUSES, QuoteStatus, vehicleLabel, customerLabel } from '../../../lib/workshop'
-
-interface PortalUserSSR { id: string; email: string; displayName: string | null; role: 'admin'|'manager'|'sales'|'accountant'|'viewer'; visibleTabs?: string[] | null }
-
-const T = {
-  bg: '#0d0f12', bg2: '#131519', bg3: '#1a1d23', bg4: '#21252d',
-  border: 'rgba(255,255,255,0.07)', border2: 'rgba(255,255,255,0.12)',
-  text: '#e8eaf0', text2: '#8b90a0', text3: '#545968',
-  blue: '#4f8ef7', teal: '#2dd4bf', green: '#34c77b', amber: '#f5a623', red: '#f04e4e', purple: '#a78bfa', accent: '#4f8ef7',
-}
-const money = (n: number) => `$${(Number(n) || 0).toFixed(2)}`
+import { T } from '../../../lib/ui/theme'
+import { money2 as money } from '../../../lib/ui/format'
+import { useConfirm } from '../../../components/ui/Feedback'
 const inp: React.CSSProperties = { width: '100%', padding: '6px 8px', background: T.bg3, border: `1px solid ${T.border}`, borderRadius: 5, color: T.text, fontSize: 12, fontFamily: 'inherit', outline: 'none', boxSizing: 'border-box', colorScheme: 'dark' }
 const cellInp: React.CSSProperties = { ...inp, padding: '5px 7px', borderRadius: 4 }
 function qbtn(color: string): React.CSSProperties {
@@ -41,6 +35,7 @@ export default function QuoteBuilderPage({ user }: { user: PortalUserSSR }) {
   const [busy, setBusy] = useState(false)
   const [emailing, setEmailing] = useState(false)
   const [emailMsg, setEmailMsg] = useState('')
+  const confirmDialog = useConfirm()
   // Job-type presets — fills quote lines from a template.
   const [presets, setPresets] = useState<Array<{ id: string; name: string }>>([])
   const [applyJt, setApplyJt] = useState('')
@@ -97,7 +92,7 @@ export default function QuoteBuilderPage({ user }: { user: PortalUserSSR }) {
     } catch (e: any) { setErr(e?.message || 'Convert failed'); setBusy(false) }
   }
   async function removeQuote() {
-    if (!confirm('Delete this quote?')) return
+    if (!(await confirmDialog({ title: 'Delete this quote?', danger: true }))) return
     await fetch(`/api/workshop/quotes/${id}`, { method: 'DELETE' })
     router.push('/workshop/quotes')
   }
@@ -196,7 +191,7 @@ export default function QuoteBuilderPage({ user }: { user: PortalUserSSR }) {
                   <div style={{ flex: 1 }} />
                   {canEdit && (
                     <button onClick={async () => {
-                      if (!confirm('Move this quote to Trash? You can restore it later from the trash view.')) return
+                      if (!(await confirmDialog({ title: 'Move this quote to Trash?', message: 'You can restore it later from the trash view.', danger: true }))) return
                       const r = await fetch(`/api/workshop/quotes/${id}`, { method: 'DELETE' })
                       if (r.ok) router.push('/workshop/quotes')
                       else { const d = await r.json().catch(()=>({})); setErr(d.error || 'Delete failed') }

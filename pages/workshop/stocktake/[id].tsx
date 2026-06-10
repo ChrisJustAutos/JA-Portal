@@ -11,17 +11,10 @@ import { useRouter } from 'next/router'
 import PortalTopBar from '../../../lib/PortalTopBar'
 import InventoryTabs from '../../../components/InventoryTabs'
 import { requirePageAuth } from '../../../lib/authServer'
+import type { PortalUserSSR } from '../../../lib/authServer'
 import { roleHasPermission } from '../../../lib/permissions'
-
-interface PortalUserSSR { id: string; email: string; displayName: string | null; role: 'admin'|'manager'|'sales'|'accountant'|'viewer'|'workshop'; visibleTabs?: string[] | null }
-
-const T = {
-  bg: '#0d0f12', bg2: '#131519', bg3: '#1a1d23', bg4: '#21252d',
-  border: 'rgba(255,255,255,0.07)', border2: 'rgba(255,255,255,0.12)',
-  text: '#e8eaf0', text2: '#8b90a0', text3: '#545968',
-  blue: '#4f8ef7', teal: '#2dd4bf', green: '#34c77b', amber: '#f5a623', red: '#f04e4e',
-}
-const money = (n: any) => `$${(Number(n) || 0).toFixed(2)}`
+import { T, pbtn } from '../../../components/ui'
+import { money2 as money } from '../../../lib/ui/format'
 
 type Filter = 'all' | 'uncounted' | 'variance'
 
@@ -218,11 +211,6 @@ function Chip({ label, active, onClick, c }: { label: string; active: boolean; o
     }}>{label}</button>
   )
 }
-
-const pbtn = (c: string): React.CSSProperties => ({
-  padding:'8px 16px', borderRadius:6, fontSize:12, fontFamily:'inherit', fontWeight:600,
-  background:`${c}1e`, color:c, border:`1px solid ${c}55`, cursor:'pointer',
-})
 
 export async function getServerSideProps(context: any) {
   return requirePageAuth(context, 'view:stocktakes')

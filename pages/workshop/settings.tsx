@@ -14,16 +14,10 @@ import Link from 'next/link'
 import { useRouter } from 'next/router'
 import PortalTopBar from '../../lib/PortalTopBar'
 import { requirePageAuth } from '../../lib/authServer'
+import type { PortalUserSSR } from '../../lib/authServer'
 import { PAYMENT_TENDERS } from '../../lib/workshop'
-
-interface PortalUserSSR { id: string; email: string; displayName: string | null; role: 'admin'|'manager'|'sales'|'accountant'|'viewer'; visibleTabs?: string[] | null }
-
-const T = {
-  bg: '#0d0f12', bg2: '#131519', bg3: '#1a1d23', bg4: '#21252d',
-  border: 'rgba(255,255,255,0.07)', border2: 'rgba(255,255,255,0.12)',
-  text: '#e8eaf0', text2: '#8b90a0', text3: '#545968',
-  blue: '#4f8ef7', teal: '#2dd4bf', green: '#34c77b', amber: '#f5a623', red: '#f04e4e', purple: '#a78bfa', accent: '#4f8ef7',
-}
+import { T } from '../../lib/ui/theme'
+import { useConfirm } from '../../components/ui/Feedback'
 const inp: React.CSSProperties = { width: '100%', padding: '7px 9px', background: T.bg3, border: `1px solid ${T.border}`, borderRadius: 6, color: T.text, fontSize: 13, fontFamily: 'inherit', outline: 'none', boxSizing: 'border-box', colorScheme: 'dark' }
 const cellInp: React.CSSProperties = { ...inp, padding: '5px 7px', borderRadius: 4, fontSize: 12 }
 function pbtn(color: string, solid?: boolean): React.CSSProperties {
@@ -58,6 +52,7 @@ export default function WorkshopSettingsPage({ user }: { user: PortalUserSSR }) 
   const [loading, setLoading] = useState(true)
   const [flash, setFlash] = useState('')
   const [savingAll, setSavingAll] = useState(false)
+  const confirmDialog = useConfirm()
 
   // Save-all flush registry. Cards that buffer edits locally (Business,
   // Invoicing, SMS) register an async saver here so the page-level "Save all
@@ -116,7 +111,7 @@ export default function WorkshopSettingsPage({ user }: { user: PortalUserSSR }) 
     else { const d = await r.json().catch(() => ({})); setFlash(d.error || 'Save failed'); setTimeout(() => setFlash(''), 3000); await loadTechs() }
   }
   async function removeTech(id: string, name: string) {
-    if (!confirm(`Remove ${name}? If they have bookings they’ll be retired (hidden) instead of deleted.`)) return
+    if (!(await confirmDialog({ title: `Remove ${name}?`, message: 'If they have bookings they’ll be retired (hidden) instead of deleted.', danger: true }))) return
     const r = await fetch(`/api/workshop/technicians?id=${encodeURIComponent(id)}`, { method: 'DELETE' })
     const d = await r.json().catch(() => ({}))
     if (r.ok) { setFlash(d.retired ? `Retired (${d.bookings} bookings kept)` : 'Removed'); setTimeout(() => setFlash(''), 2500); await loadTechs() }
@@ -343,6 +338,7 @@ function JobTypesSection() {
   const [newName, setNewName] = useState('')
   const [newModel, setNewModel] = useState('')
   const [openId, setOpenId] = useState<string | null>(null)
+  const confirmDialog = useConfirm()
   const loadModels = useCallback(async () => { try { const r = await fetch('/api/workshop/vehicle-models'); if (r.ok) setModels((await r.json()).models || []) } catch { /* */ } }, [])
   const load = useCallback(async () => { try { const r = await fetch('/api/workshop/job-types'); if (r.ok) setTypes((await r.json()).jobTypes || []) } catch { /* */ } }, [])
   useEffect(() => { load(); loadModels() }, [load, loadModels])
@@ -372,7 +368,7 @@ function JobTypesSection() {
           {models.map(m => (
             <span key={m.id} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '4px 8px', background: T.bg3, border: `1px solid ${T.border2}`, borderRadius: 4, fontSize: 11 }}>
               {m.name}
-              <button onClick={() => { if (confirm(`Delete model “${m.name}”? It’s removed from all job types and vehicles.`)) modelApi(`/api/workshop/vehicle-models/${m.id}`, 'DELETE') }} style={{ background: 'none', border: 'none', color: T.text3, cursor: 'pointer', fontSize: 12, padding: 0, lineHeight: 1 }}>×</button>
+              <button onClick={async () => { if (await confirmDialog({ title: `Delete model “${m.name}”?`, message: 'It’s removed from all job types and vehicles.', danger: true })) modelApi(`/api/workshop/vehicle-models/${m.id}`, 'DELETE') }} style={{ background: 'none', border: 'none', color: T.text3, cursor: 'pointer', fontSize: 12, padding: 0, lineHeight: 1 }}>×</button>
             </span>
           ))}
           {models.length === 0 && <span style={{ fontSize: 11, color: T.text3, fontStyle: 'italic' }}>No models yet — add e.g. “200 Series”, “79 Series”, “300 Series”.</span>}
@@ -390,7 +386,7 @@ function JobTypesSection() {
             <label style={{ fontSize: 11, color: T.text2, display: 'flex', gap: 4, alignItems: 'center', cursor: 'pointer' }}><input type="checkbox" checked={!!t.active} onChange={e => api(`/api/workshop/job-types?id=${t.id}`, 'PATCH', { active: e.target.checked })} />Active</label>
             <span style={{ fontSize: 11, color: T.text3, whiteSpace: 'nowrap' }}>{(t.lines || []).length} lines · {(t.model_ids || []).length} models</span>
             <button onClick={() => setOpenId(openId === t.id ? null : t.id)} style={pbtn(T.blue)}>{openId === t.id ? 'Close' : 'Edit'}</button>
-            <button onClick={() => { if (confirm(`Delete job type “${t.name}”?`)) api(`/api/workshop/job-types?id=${t.id}`, 'DELETE') }} title="Delete" style={{ background: 'transparent', border: 'none', color: T.text3, cursor: 'pointer', fontSize: 16 }}>×</button>
+            <button onClick={async () => { if (await confirmDialog({ title: `Delete job type “${t.name}”?`, danger: true })) api(`/api/workshop/job-types?id=${t.id}`, 'DELETE') }} title="Delete" style={{ background: 'transparent', border: 'none', color: T.text3, cursor: 'pointer', fontSize: 16 }}>×</button>
           </div>
           {openId === t.id && (
             <div style={{ padding: '0 10px 10px' }}>

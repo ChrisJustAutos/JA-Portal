@@ -10,16 +10,10 @@ import { useRouter } from 'next/router'
 import PortalTopBar from '../../lib/PortalTopBar'
 import WorkshopTabs from '../../components/WorkshopTabs'
 import { requirePageAuth } from '../../lib/authServer'
+import type { PortalUserSSR } from '../../lib/authServer'
 import { ymdBrisbane } from '../../lib/workshop'
-
-interface PortalUserSSR { id: string; email: string; displayName: string | null; role: 'admin'|'manager'|'sales'|'accountant'|'viewer'|'workshop'; visibleTabs?: string[] | null }
-
-const T = {
-  bg: '#0d0f12', bg2: '#131519', bg3: '#1a1d23', bg4: '#21252d',
-  border: 'rgba(255,255,255,0.07)', border2: 'rgba(255,255,255,0.12)',
-  text: '#e8eaf0', text2: '#8b90a0', text3: '#545968',
-  blue: '#4f8ef7', teal: '#2dd4bf', green: '#34c77b', amber: '#f5a623', red: '#f04e4e',
-}
+import { T, pagerBtn, SkeletonRows } from '../../components/ui'
+import { useIsMobile } from '../../lib/useIsMobile'
 
 interface VehicleRow {
   id: string; rego: string | null; make: string | null; model: string | null; year: number | null
@@ -44,6 +38,7 @@ export default function VehiclesPage({ user }: { user: PortalUserSSR }) {
   const [loading, setLoading] = useState(false)
   const timer = useRef<any>(null)
   const today = ymdBrisbane(new Date())
+  const isMobile = useIsMobile()
 
   useEffect(() => {
     const d = router.query.due
@@ -104,24 +99,54 @@ export default function VehiclesPage({ user }: { user: PortalUserSSR }) {
               </div>
             </div>
 
-            <div style={{ background:T.bg2, border:`1px solid ${T.border}`, borderRadius:8, overflow:'hidden' }}>
-              <div style={{ display:'grid', gridTemplateColumns:'90px 1.4fr 1.2fr 150px 90px 110px 100px', gap:12, padding:'10px 14px', fontSize:10, fontWeight:600, color:T.text3, textTransform:'uppercase', letterSpacing:'0.05em', borderBottom:`1px solid ${T.border}`, background:T.bg3 }}>
-                <div>Rego</div><div>Vehicle</div><div>Owner</div><div>VIN</div><div style={{ textAlign:'right' }}>KMs</div><div style={{ textAlign:'right' }}>Service due</div><div style={{ textAlign:'right' }}>Rego due</div>
+            {isMobile ? (
+              /* ─── MOBILE: card stack ─── */
+              <div style={{ display:'flex', flexDirection:'column', gap:10 }}>
+                {vehicles.length === 0 ? (
+                  loading ? (
+                    <div style={{ background:T.bg2, border:`1px solid ${T.border}`, borderRadius:8, overflow:'hidden' }}><SkeletonRows rows={8} /></div>
+                  ) : (
+                    <div style={{ padding:30, textAlign:'center', fontSize:13, color:T.text3, background:T.bg2, border:`1px solid ${T.border}`, borderRadius:8 }}>{debouncedQ ? `No vehicles match "${debouncedQ}"` : due !== 'all' ? 'Nothing due. 🎉' : 'No vehicles'}</div>
+                  )
+                ) : vehicles.map(v => (
+                  <Link key={v.id} href={`/workshop/vehicle/${v.id}`} style={{ display:'block', background:T.bg2, border:`1px solid ${T.border}`, borderRadius:10, padding:'12px 14px', color:T.text, textDecoration:'none' }}>
+                    <div style={{ display:'flex', alignItems:'baseline', gap:8, marginBottom:2 }}>
+                      <span style={{ fontFamily:'monospace', fontWeight:600, fontSize:14 }}>{v.rego ? v.rego.toUpperCase() : '—'}</span>
+                      <span style={{ fontSize:12, color:T.text2, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{[v.year, v.make, v.model].filter(Boolean).join(' ') || '—'}</span>
+                    </div>
+                    <div style={{ fontSize:12, color:T.text2 }}>{v.customer?.name || <span style={{ color:T.text3 }}>no owner</span>}</div>
+                    {v.vin && <div style={{ fontSize:10, color:T.text3, fontFamily:'monospace', marginTop:2, overflow:'hidden', textOverflow:'ellipsis' }}>{v.vin}</div>}
+                    <div style={{ display:'flex', gap:14, marginTop:6, fontSize:11, fontFamily:'monospace' }}>
+                      <span style={{ color:T.text2 }}>{v.odometer ? `${Number(v.odometer).toLocaleString()} km` : '— km'}</span>
+                      <span style={{ color: dueColor(v.next_service_due_date) }}>Svc {fmtDue(v.next_service_due_date)}</span>
+                      <span style={{ color: dueColor(v.rego_due_date) }}>Rego {fmtDue(v.rego_due_date)}</span>
+                    </div>
+                  </Link>
+                ))}
               </div>
-              {vehicles.length === 0 ? (
-                <div style={{ padding:30, textAlign:'center', fontSize:13, color:T.text3 }}>{loading ? 'Loading…' : debouncedQ ? `No vehicles match "${debouncedQ}"` : due !== 'all' ? 'Nothing due. 🎉' : 'No vehicles'}</div>
-              ) : vehicles.map(v => (
-                <Link key={v.id} href={`/workshop/vehicle/${v.id}`} style={{ display:'grid', gridTemplateColumns:'90px 1.4fr 1.2fr 150px 90px 110px 100px', gap:12, padding:'10px 14px', borderTop:`1px solid ${T.border}`, alignItems:'center', fontSize:12, color:T.text, textDecoration:'none' }}>
-                  <div style={{ fontFamily:'monospace', fontWeight:600 }}>{v.rego ? v.rego.toUpperCase() : '—'}</div>
-                  <div style={{ overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{[v.year, v.make, v.model].filter(Boolean).join(' ') || '—'}</div>
-                  <div style={{ color:T.text2, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{v.customer?.name || <span style={{ color:T.text3 }}>no owner</span>}</div>
-                  <div style={{ color:T.text3, fontFamily:'monospace', fontSize:10, overflow:'hidden', textOverflow:'ellipsis' }}>{v.vin || '—'}</div>
-                  <div style={{ color:T.text2, fontFamily:'monospace', fontSize:11, textAlign:'right' }}>{v.odometer ? Number(v.odometer).toLocaleString() : '—'}</div>
-                  <div style={{ fontFamily:'monospace', fontSize:11, textAlign:'right', color: dueColor(v.next_service_due_date) }}>{fmtDue(v.next_service_due_date)}</div>
-                  <div style={{ fontFamily:'monospace', fontSize:11, textAlign:'right', color: dueColor(v.rego_due_date) }}>{fmtDue(v.rego_due_date)}</div>
-                </Link>
-              ))}
-            </div>
+            ) : (
+              /* ─── DESKTOP: grid table ─── */
+              <div style={{ background:T.bg2, border:`1px solid ${T.border}`, borderRadius:8, overflow:'hidden' }}>
+                <div style={{ display:'grid', gridTemplateColumns:'90px 1.4fr 1.2fr 150px 90px 110px 100px', gap:12, padding:'10px 14px', fontSize:10, fontWeight:600, color:T.text3, textTransform:'uppercase', letterSpacing:'0.05em', borderBottom:`1px solid ${T.border}`, background:T.bg3 }}>
+                  <div>Rego</div><div>Vehicle</div><div>Owner</div><div>VIN</div><div style={{ textAlign:'right' }}>KMs</div><div style={{ textAlign:'right' }}>Service due</div><div style={{ textAlign:'right' }}>Rego due</div>
+                </div>
+                {vehicles.length === 0 ? (
+                  loading ? <SkeletonRows rows={8} /> : (
+                    <div style={{ padding:30, textAlign:'center', fontSize:13, color:T.text3 }}>{debouncedQ ? `No vehicles match "${debouncedQ}"` : due !== 'all' ? 'Nothing due. 🎉' : 'No vehicles'}</div>
+                  )
+                ) : vehicles.map(v => (
+                  <Link key={v.id} href={`/workshop/vehicle/${v.id}`} style={{ display:'grid', gridTemplateColumns:'90px 1.4fr 1.2fr 150px 90px 110px 100px', gap:12, padding:'10px 14px', borderTop:`1px solid ${T.border}`, alignItems:'center', fontSize:12, color:T.text, textDecoration:'none' }}>
+                    <div style={{ fontFamily:'monospace', fontWeight:600 }}>{v.rego ? v.rego.toUpperCase() : '—'}</div>
+                    <div style={{ overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{[v.year, v.make, v.model].filter(Boolean).join(' ') || '—'}</div>
+                    <div style={{ color:T.text2, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{v.customer?.name || <span style={{ color:T.text3 }}>no owner</span>}</div>
+                    <div style={{ color:T.text3, fontFamily:'monospace', fontSize:10, overflow:'hidden', textOverflow:'ellipsis' }}>{v.vin || '—'}</div>
+                    <div style={{ color:T.text2, fontFamily:'monospace', fontSize:11, textAlign:'right' }}>{v.odometer ? Number(v.odometer).toLocaleString() : '—'}</div>
+                    <div style={{ fontFamily:'monospace', fontSize:11, textAlign:'right', color: dueColor(v.next_service_due_date) }}>{fmtDue(v.next_service_due_date)}</div>
+                    <div style={{ fontFamily:'monospace', fontSize:11, textAlign:'right', color: dueColor(v.rego_due_date) }}>{fmtDue(v.rego_due_date)}</div>
+                  </Link>
+                ))}
+              </div>
+            )}
 
             {total > PAGE && (
               <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginTop:14, fontSize:12, color:T.text3 }}>
@@ -149,12 +174,6 @@ function Chip({ label, active, onClick, c }: { label: string; active: boolean; o
     }}>{label}</button>
   )
 }
-
-const pagerBtn = (disabled: boolean): React.CSSProperties => ({
-  padding:'6px 12px', borderRadius:5, fontSize:11, fontFamily:'inherit', fontWeight:600,
-  background:disabled ? 'transparent' : T.bg3, color:disabled ? T.text3 : T.text2,
-  border:`1px solid ${T.border2}`, cursor:disabled ? 'default' : 'pointer',
-})
 
 export async function getServerSideProps(context: any) {
   return requirePageAuth(context, 'view:diary')

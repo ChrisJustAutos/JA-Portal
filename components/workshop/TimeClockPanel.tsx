@@ -4,13 +4,9 @@
 // the sum of labour-line qty, which the workshop quotes in hours).
 
 import { useCallback, useEffect, useState } from 'react'
-
-const T = {
-  bg2: '#131519', bg3: '#1a1d23',
-  border: 'rgba(255,255,255,0.07)', border2: 'rgba(255,255,255,0.12)',
-  text: '#e8eaf0', text2: '#8b90a0', text3: '#545968',
-  blue: '#4f8ef7', green: '#34c77b', amber: '#f5a623', red: '#f04e4e',
-}
+import { T } from '../../lib/ui/theme'
+import { fmtDateTime } from '../../lib/ui/format'
+import { useConfirm } from '../ui/Feedback'
 
 interface TimeEntry { id: string; technician_code: string; started_at: string; ended_at: string | null; minutes: number | null }
 interface Tech { code: string; name: string }
@@ -20,7 +16,6 @@ const fmtClock = (mins: number) => {
   const h = Math.floor(mins / 60), m = mins % 60
   return h ? `${h}h ${String(m).padStart(2, '0')}m` : `${m}m`
 }
-const fmtDT = (iso: string) => new Date(iso).toLocaleString('en-AU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', hour12: false })
 
 export default function TimeClockPanel({ bookingId, defaultTech, quotedHours, canEdit }: {
   bookingId: string; defaultTech?: string | null; quotedHours: number; canEdit: boolean
@@ -31,6 +26,7 @@ export default function TimeClockPanel({ bookingId, defaultTech, quotedHours, ca
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState('')
   const [, setTick] = useState(0) // re-render for the live timer
+  const confirmDialog = useConfirm()
 
   const load = useCallback(async () => {
     try {
@@ -79,7 +75,7 @@ export default function TimeClockPanel({ bookingId, defaultTech, quotedHours, ca
   }
 
   async function removeEntry(id: string) {
-    if (!confirm('Remove this time entry?')) return
+    if (!(await confirmDialog({ title: 'Remove this time entry?', danger: true }))) return
     await fetch(`/api/workshop/time-entries?id=${id}`, { method: 'DELETE' })
     await load()
   }
@@ -123,8 +119,8 @@ export default function TimeClockPanel({ bookingId, defaultTech, quotedHours, ca
           {entries.map(e => (
             <div key={e.id} style={{ display: 'grid', gridTemplateColumns: '1fr 130px 130px 90px 40px', gap: 8, padding: '8px 12px', borderTop: `1px solid ${T.border}`, fontSize: 12, alignItems: 'center' }}>
               <div style={{ color: T.text }}>{techName(e.technician_code)}</div>
-              <div style={{ color: T.text2, fontFamily: 'monospace', fontSize: 11 }}>{fmtDT(e.started_at)}</div>
-              <div style={{ color: e.ended_at ? T.text2 : T.amber, fontFamily: 'monospace', fontSize: 11 }}>{e.ended_at ? fmtDT(e.ended_at) : 'running…'}</div>
+              <div style={{ color: T.text2, fontFamily: 'monospace', fontSize: 11 }}>{fmtDateTime(e.started_at)}</div>
+              <div style={{ color: e.ended_at ? T.text2 : T.amber, fontFamily: 'monospace', fontSize: 11 }}>{e.ended_at ? fmtDateTime(e.ended_at) : 'running…'}</div>
               <div style={{ textAlign: 'right', fontFamily: 'monospace', color: e.ended_at ? T.text : T.amber }}>{fmtClock(entryMins(e))}</div>
               <div style={{ textAlign: 'right' }}>
                 {canEdit && <button onClick={() => removeEntry(e.id)} title="Remove entry" style={{ background: 'none', border: 'none', color: T.text3, cursor: 'pointer', fontSize: 12 }}>×</button>}

@@ -21,15 +21,9 @@ import {
   ymdBrisbane,
 } from '../../../lib/workshop'
 
-interface PortalUserSSR { id: string; email: string; displayName: string | null; role: 'admin'|'manager'|'sales'|'accountant'|'viewer'; visibleTabs?: string[] | null }
-
-const T = {
-  bg: '#0d0f12', bg2: '#131519', bg3: '#1a1d23', bg4: '#21252d',
-  border: 'rgba(255,255,255,0.07)', border2: 'rgba(255,255,255,0.12)',
-  text: '#e8eaf0', text2: '#8b90a0', text3: '#545968',
-  blue: '#4f8ef7', teal: '#2dd4bf', green: '#34c77b',
-  amber: '#f5a623', red: '#f04e4e', purple: '#a78bfa', accent: '#4f8ef7',
-}
+import type { PortalUserSSR } from '../../../lib/authServer'
+import { T } from '../../../lib/ui/theme'
+import { money2 as money, fmtDateTime, fmtYmd as fmtDueDate } from '../../../lib/ui/format'
 
 interface Line {
   id: string
@@ -47,18 +41,7 @@ interface JobData {
   history: any[]
 }
 
-const money = (n: number) => `$${(Number(n) || 0).toFixed(2)}`
 const LINE_TYPE_LABEL: Record<string, string> = { labour: 'Labour', part: 'Part', sublet: 'Sublet', fee: 'Fee' }
-
-function fmtDateTime(iso: string | null): string {
-  if (!iso) return '—'
-  return new Date(iso).toLocaleString('en-AU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', hour12: false })
-}
-
-function fmtDueDate(ymd: string | null): string {
-  if (!ymd) return '—'
-  return new Date(`${ymd}T00:00:00+10:00`).toLocaleDateString('en-AU', { timeZone: 'Australia/Brisbane', day: 'numeric', month: 'short', year: 'numeric' })
-}
 
 function addMonthsYmd(ymd: string, months: number): string {
   const d = new Date(`${ymd}T00:00:00+10:00`)

@@ -9,16 +9,10 @@ import PortalTopBar from '../../lib/PortalTopBar'
 import InventoryTabs from '../../components/InventoryTabs'
 import WorkshopTabs from '../../components/WorkshopTabs'
 import { requirePageAuth } from '../../lib/authServer'
+import type { PortalUserSSR } from '../../lib/authServer'
 import { roleHasPermission } from '../../lib/permissions'
+import { T, SkeletonRows } from '../../components/ui'
 
-interface PortalUserSSR { id: string; email: string; displayName: string | null; role: 'admin'|'manager'|'sales'|'accountant'|'viewer'; visibleTabs?: string[] | null }
-
-const T = {
-  bg: '#0d0f12', bg2: '#131519', bg3: '#1a1d23', bg4: '#21252d',
-  border: 'rgba(255,255,255,0.07)', border2: 'rgba(255,255,255,0.12)',
-  text: '#e8eaf0', text2: '#8b90a0', text3: '#545968',
-  blue: '#4f8ef7', teal: '#2dd4bf', green: '#34c77b', amber: '#f5a623', red: '#f04e4e', purple: '#a78bfa', accent: '#4f8ef7',
-}
 const money = (n: number | null) => (n == null ? '—' : `$${(Number(n) || 0).toFixed(2)}`)
 
 export default function InventoryPage({ user }: { user: PortalUserSSR }) {
@@ -92,7 +86,7 @@ export default function InventoryPage({ user }: { user: PortalUserSSR }) {
                 <div>SKU</div><div>Part</div><div style={{ textAlign: 'right' }}>On hand</div><div style={{ textAlign: 'right' }}>Avail</div><div style={{ textAlign: 'right' }}>Alert</div><div style={{ textAlign: 'right' }}>Buy</div><div style={{ textAlign: 'right' }}>Sell</div><div>Location</div>
               </div>
               {loading && items.length === 0 ? (
-                <div style={{ padding: 40, textAlign: 'center', color: T.text3, fontSize: 12 }}>Loading…</div>
+                <SkeletonRows rows={8} />
               ) : items.length === 0 ? (
                 <div style={{ padding: 40, textAlign: 'center', color: T.text3, fontSize: 12 }}>No parts{q ? ' match' : ' yet'}.{isAdmin ? ' Run “↻ Sync MYOB”.' : ''}</div>
               ) : items.map(it => {

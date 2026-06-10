@@ -9,18 +9,10 @@ import Head from 'next/head'
 import PortalTopBar from '../../lib/PortalTopBar'
 import WorkshopTabs from '../../components/WorkshopTabs'
 import { requirePageAuth } from '../../lib/authServer'
+import type { PortalUserSSR } from '../../lib/authServer'
 import { ymdBrisbane, addDaysYmd, weekStartYmd } from '../../lib/workshop'
-
-interface PortalUserSSR { id: string; email: string; displayName: string | null; role: 'admin'|'manager'|'sales'|'accountant'|'viewer'|'workshop'; visibleTabs?: string[] | null }
-
-const T = {
-  bg: '#0d0f12', bg2: '#131519', bg3: '#1a1d23', bg4: '#21252d',
-  border: 'rgba(255,255,255,0.07)', border2: 'rgba(255,255,255,0.12)',
-  text: '#e8eaf0', text2: '#8b90a0', text3: '#545968',
-  blue: '#4f8ef7', teal: '#2dd4bf', green: '#34c77b', amber: '#f5a623', red: '#f04e4e', purple: '#a78bfa', accent: '#4f8ef7',
-}
-const money = (n: any) => `$${(Number(n) || 0).toLocaleString('en-AU', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
-const ACCENTS: Record<string, string> = { green: T.green, amber: T.amber, red: T.red, blue: T.blue, teal: T.teal }
+import { T, Chip, KPI } from '../../components/ui'
+import { money } from '../../lib/ui/format'
 
 // Client-side mirror of WORKSHOP_REPORT_TYPES (lib/workshop-reports.ts is server-only).
 const REPORTS: { id: string; label: string; dateless?: boolean }[] = [
@@ -127,10 +119,7 @@ export default function WorkshopReportsPage({ user }: { user: PortalUserSSR }) {
               {data && data.kpis.length > 0 && (
                 <div style={{ display:'grid', gridTemplateColumns:`repeat(auto-fit, minmax(180px, 1fr))`, gap:12, marginBottom:16 }}>
                   {data.kpis.map((k, i) => (
-                    <div key={i} style={{ background:T.bg2, border:`1px solid ${T.border}`, borderRadius:10, padding:'14px 16px' }}>
-                      <div style={{ fontSize:10, color:T.text3, fontWeight:600, textTransform:'uppercase', letterSpacing:'0.05em', marginBottom:6 }}>{k.label}</div>
-                      <div style={{ fontSize:22, fontWeight:700, fontVariantNumeric:'tabular-nums', color: k.accent ? (ACCENTS[k.accent] || T.text) : T.text }}>{k.value}</div>
-                    </div>
+                    <KPI key={i} label={k.label} value={k.value} accent={k.accent} />
                   ))}
                 </div>
               )}
@@ -181,16 +170,6 @@ export default function WorkshopReportsPage({ user }: { user: PortalUserSSR }) {
         </div>
       </div>
     </>
-  )
-}
-
-function Chip({ label, active, onClick }: { label: string; active: boolean; onClick: () => void }) {
-  return (
-    <button onClick={onClick} style={{
-      padding:'4px 10px', borderRadius:4, fontSize:11, fontFamily:'inherit', fontWeight:600, whiteSpace:'nowrap',
-      background: active ? `${T.blue}1f` : 'transparent', color: active ? T.blue : T.text2,
-      border: `1px solid ${active ? T.blue + '55' : T.border}`, cursor:'pointer',
-    }}>{label}</button>
   )
 }
 

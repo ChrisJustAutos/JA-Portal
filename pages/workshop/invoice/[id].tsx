@@ -10,18 +10,11 @@ import { useRouter } from 'next/router'
 import PortalTopBar from '../../../lib/PortalTopBar'
 import WorkshopTabs from '../../../components/WorkshopTabs'
 import { requirePageAuth } from '../../../lib/authServer'
+import type { PortalUserSSR } from '../../../lib/authServer'
 import { roleHasPermission } from '../../../lib/permissions'
-
-interface PortalUserSSR { id: string; email: string; displayName: string | null; role: 'admin'|'manager'|'sales'|'accountant'|'viewer'|'workshop'; visibleTabs?: string[] | null }
-
-const T = {
-  bg: '#0d0f12', bg2: '#131519', bg3: '#1a1d23', bg4: '#21252d',
-  border: 'rgba(255,255,255,0.07)', border2: 'rgba(255,255,255,0.12)',
-  text: '#e8eaf0', text2: '#8b90a0', text3: '#545968',
-  blue: '#4f8ef7', teal: '#2dd4bf', green: '#34c77b', amber: '#f5a623', red: '#f04e4e', purple: '#a78bfa',
-}
-const money = (n: any) => `$${(Number(n) || 0).toFixed(2)}`
-const fmtDate = (iso: string | null) => iso ? new Date(iso).toLocaleDateString('en-AU', { day:'numeric', month:'short', year:'2-digit' }) : '—'
+import { T, Card, Row, qbtn, miniBtn, inp as cinp } from '../../../components/ui'
+import { useConfirm } from '../../../components/ui/Feedback'
+import { money2 as money, fmtDate } from '../../../lib/ui/format'
 
 export default function InvoiceDetailPage({ user }: { user: PortalUserSSR }) {
   const router = useRouter()
@@ -30,6 +23,7 @@ export default function InvoiceDetailPage({ user }: { user: PortalUserSSR }) {
   const [data, setData] = useState<{ invoice: any; lines: any[]; payments: any[] } | null>(null)
   const [err, setErr] = useState('')
   const [creditNotes, setCreditNotes] = useState<any[]>([])
+  const confirmDialog = useConfirm()
   const [credit, setCredit] = useState<{ open: boolean; mode: 'lines' | 'amount'; sel: Record<string, boolean>; qty: Record<string, string>; amount: string; reason: string; refund: boolean; tender: string; busy: boolean; msg: string }>({ open: false, mode: 'lines', sel: {}, qty: {}, amount: '', reason: '', refund: false, tender: 'card', busy: false, msg: '' })
 
   async function load() {
@@ -63,7 +57,7 @@ export default function InvoiceDetailPage({ user }: { user: PortalUserSSR }) {
   }
 
   async function softDelete() {
-    if (!confirm('Move this invoice to Trash? Restorable from the invoices Trash view.')) return
+    if (!(await confirmDialog({ title: 'Move this invoice to Trash?', message: 'Restorable from the invoices Trash view.', danger: true }))) return
     const r = await fetch(`/api/workshop/invoices/${id}`, { method: 'DELETE' })
     if (r.ok) router.push('/workshop/invoices')
     else { const d = await r.json().catch(()=>({})); setErr(d.error || 'Delete failed') }
@@ -73,7 +67,7 @@ export default function InvoiceDetailPage({ user }: { user: PortalUserSSR }) {
     if (r.ok) load()
   }
   async function deletePayment(pid: string) {
-    if (!confirm('Move this payment to Trash?')) return
+    if (!(await confirmDialog({ title: 'Move this payment to Trash?', danger: true }))) return
     const r = await fetch(`/api/workshop/payments/${pid}`, { method: 'DELETE' })
     if (r.ok) load()
   }
@@ -264,17 +258,6 @@ function Tile({ label, value, accent }: { label: string; value: string; accent?:
     </div>
   )
 }
-function Card({ title, count, children }: { title: string; count: number; children: any }) {
-  return (
-    <div style={{ marginBottom:18 }}>
-      <div style={{ display:'flex', alignItems:'baseline', justifyContent:'space-between', marginBottom:8 }}>
-        <h2 style={{ fontSize:14, fontWeight:600, margin:0 }}>{title}</h2>
-        <div style={{ fontSize:10, color:T.text3, fontFamily:'monospace' }}>{count}</div>
-      </div>
-      <div style={{ background:T.bg2, border:`1px solid ${T.border}`, borderRadius:8, overflow:'hidden' }}>{children}</div>
-    </div>
-  )
-}
 function Hdr({ cols, labels }: { cols: string; labels: string[] }) {
   return (
     <div style={{ display:'grid', gridTemplateColumns:cols, gap:12, padding:'8px 14px', fontSize:9, color:T.text3, fontWeight:600, textTransform:'uppercase', letterSpacing:'0.05em', borderBottom:`1px solid ${T.border}`, background:T.bg3 }}>
@@ -282,22 +265,6 @@ function Hdr({ cols, labels }: { cols: string; labels: string[] }) {
     </div>
   )
 }
-function Row({ cols, children }: { cols: string; children: any }) {
-  return <div style={{ display:'grid', gridTemplateColumns:cols, gap:12, padding:'9px 14px', borderTop:`1px solid ${T.border}`, alignItems:'center', fontSize:12 }}>{children}</div>
-}
-const qbtn = (c: string): React.CSSProperties => ({
-  padding:'7px 14px', borderRadius:5, fontSize:12, fontFamily:'inherit', fontWeight:600,
-  background:'transparent', color: c, border: `1px solid ${c}55`, cursor:'pointer',
-})
-const miniBtn = (c: string): React.CSSProperties => ({
-  padding:'3px 8px', borderRadius:4, fontSize:10, fontFamily:'inherit', fontWeight:600,
-  background:'transparent', color: c, border: `1px solid ${c}55`, cursor:'pointer',
-})
-const cinp: React.CSSProperties = {
-  padding:'6px 9px', background:T.bg3, border:`1px solid ${T.border2}`, borderRadius:5,
-  color:T.text, fontSize:12, fontFamily:'inherit', outline:'none',
-}
-
 export async function getServerSideProps(context: any) {
   return requirePageAuth(context, 'view:diary')
 }

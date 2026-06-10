@@ -5,22 +5,17 @@ import PortalTopBar from '../../lib/PortalTopBar'
 import InventoryTabs from '../../components/InventoryTabs'
 import WorkshopTabs from '../../components/WorkshopTabs'
 import { requirePageAuth } from '../../lib/authServer'
+import type { PortalUserSSR } from '../../lib/authServer'
 import { roleHasPermission } from '../../lib/permissions'
+import { T } from '../../lib/ui/theme'
+import { money } from '../../lib/ui/format'
+import { useConfirm } from '../../components/ui/Feedback'
 
-interface PortalUserSSR { id: string; email: string; displayName: string | null; role: 'admin'|'manager'|'sales'|'accountant'|'viewer'|'workshop'; visibleTabs?: string[] | null }
-
-const T = {
-  bg: '#0d0f12', bg2: '#131519', bg3: '#1a1d23', bg4: '#21252d',
-  border: 'rgba(255,255,255,0.07)', border2: 'rgba(255,255,255,0.12)',
-  text: '#e8eaf0', text2: '#8b90a0', text3: '#545968',
-  blue: '#4f8ef7', teal: '#2dd4bf', green: '#34c77b', amber: '#f5a623', red: '#f04e4e', purple: '#a78bfa', accent: '#4f8ef7',
-}
 const inp: React.CSSProperties = { width: '100%', boxSizing: 'border-box', background: T.bg3, border: `1px solid ${T.border2}`, color: T.text, borderRadius: 6, padding: '7px 10px', fontSize: 13, fontFamily: 'inherit', outline: 'none' }
 const pBtn: React.CSSProperties = { padding: '7px 14px', borderRadius: 6, fontSize: 12, fontWeight: 600, background: T.blue, color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'inherit', whiteSpace: 'nowrap' }
 const gBtn: React.CSSProperties = { padding: '7px 14px', borderRadius: 6, fontSize: 12, background: 'transparent', color: T.text2, border: `1px solid ${T.border2}`, cursor: 'pointer', fontFamily: 'inherit', whiteSpace: 'nowrap' }
 const STATUS_COLOR: Record<string, string> = { draft: T.text3, sent: T.blue, received: T.green, cancelled: T.red }
 const poNum = (seq: number) => `PO-${String(seq).padStart(4, '0')}`
-const money = (n: any) => `$${(Number(n) || 0).toLocaleString('en-AU', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
 
 function Overlay({ children, onClose, wide }: { children: React.ReactNode; onClose: () => void; wide?: boolean }) {
   return (<>
@@ -109,6 +104,7 @@ function PoEditor({ id, canEdit, suppliers, onClose, onChanged }: { id: string; 
   const [supplierId, setSupplierId] = useState('')
   const [notes, setNotes] = useState('')
   const [busy, setBusy] = useState(false); const [msg, setMsg] = useState('')
+  const confirmDialog = useConfirm()
 
   const load = useCallback(async () => {
     const r = await fetch(`/api/workshop/purchase-orders/${id}`); const d = await r.json()
@@ -134,7 +130,7 @@ function PoEditor({ id, canEdit, suppliers, onClose, onChanged }: { id: string; 
       await load(); onChanged()
     } finally { setBusy(false) }
   }
-  async function remove() { if (!confirm('Delete this PO?')) return; await fetch(`/api/workshop/purchase-orders/${id}`, { method: 'DELETE' }); onChanged(); onClose() }
+  async function remove() { if (!(await confirmDialog({ title: 'Delete this PO?', danger: true }))) return; await fetch(`/api/workshop/purchase-orders/${id}`, { method: 'DELETE' }); onChanged(); onClose() }
 
   if (!po) return <Overlay onClose={onClose}><div style={{ color: T.text3 }}>Loading…</div></Overlay>
   return (
@@ -191,6 +187,7 @@ function PoEditor({ id, canEdit, suppliers, onClose, onChanged }: { id: string; 
 function SuppliersModal({ suppliers, canEdit, onClose, onChanged }: { suppliers: any[]; canEdit: boolean; onClose: () => void; onChanged: () => void }) {
   const [editing, setEditing] = useState<any>(null)
   const [busy, setBusy] = useState(false)
+  const confirmDialog = useConfirm()
   function blank() { return { id: '', name: '', contact_name: '', phone: '', email: '', myob_supplier_uid: '' } }
   async function save() {
     setBusy(true)
@@ -201,7 +198,7 @@ function SuppliersModal({ suppliers, canEdit, onClose, onChanged }: { suppliers:
       setEditing(null); onChanged()
     } finally { setBusy(false) }
   }
-  async function remove(s: any) { if (!confirm(`Delete supplier "${s.name}"?`)) return; await fetch(`/api/workshop/suppliers/${s.id}`, { method: 'DELETE' }); onChanged() }
+  async function remove(s: any) { if (!(await confirmDialog({ title: `Delete supplier "${s.name}"?`, danger: true }))) return; await fetch(`/api/workshop/suppliers/${s.id}`, { method: 'DELETE' }); onChanged() }
 
   return (
     <Overlay onClose={onClose}>

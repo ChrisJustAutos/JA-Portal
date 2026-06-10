@@ -9,17 +9,11 @@ import Link from 'next/link'
 import PortalTopBar from '../../../lib/PortalTopBar'
 import InventoryTabs from '../../../components/InventoryTabs'
 import { requirePageAuth } from '../../../lib/authServer'
+import type { PortalUserSSR } from '../../../lib/authServer'
 import { roleHasPermission } from '../../../lib/permissions'
+import { T, pbtn, StatusPill, SkeletonRows } from '../../../components/ui'
+import { money2 as money } from '../../../lib/ui/format'
 
-interface PortalUserSSR { id: string; email: string; displayName: string | null; role: 'admin'|'manager'|'sales'|'accountant'|'viewer'|'workshop'; visibleTabs?: string[] | null }
-
-const T = {
-  bg: '#0d0f12', bg2: '#131519', bg3: '#1a1d23', bg4: '#21252d',
-  border: 'rgba(255,255,255,0.07)', border2: 'rgba(255,255,255,0.12)',
-  text: '#e8eaf0', text2: '#8b90a0', text3: '#545968',
-  blue: '#4f8ef7', teal: '#2dd4bf', green: '#34c77b', amber: '#f5a623', red: '#f04e4e',
-}
-const money = (n: any) => `$${(Number(n) || 0).toFixed(2)}`
 const STATUS_META: Record<string, { label: string; color: string }> = {
   counting: { label: 'Counting', color: T.amber },
   review:   { label: 'Review',   color: T.blue },
@@ -99,14 +93,16 @@ export default function WorkshopStocktakeListPage({ user }: { user: PortalUserSS
                 <div>#</div><div>Name</div><div>Status</div><div style={{ textAlign:'right' }}>Counted</div><div style={{ textAlign:'right' }}>Variance</div><div style={{ textAlign:'right' }}>Value</div><div style={{ textAlign:'right' }}>Started</div>
               </div>
               {sessions.length === 0 ? (
-                <div style={{ padding:30, textAlign:'center', fontSize:13, color:T.text3 }}>{loading ? 'Loading…' : 'No portal stocktakes yet. Start one to snapshot current stock and begin counting.'}</div>
+                loading ? <SkeletonRows rows={8} /> : (
+                  <div style={{ padding:30, textAlign:'center', fontSize:13, color:T.text3 }}>No portal stocktakes yet. Start one to snapshot current stock and begin counting.</div>
+                )
               ) : sessions.map(s => {
                 const meta = STATUS_META[s.status] || { label: s.status, color: T.text3 }
                 return (
                   <Link key={s.id} href={`/workshop/stocktake/${s.id}`} style={{ display:'grid', gridTemplateColumns:'80px 1fr 100px 130px 110px 130px 100px', gap:12, padding:'11px 14px', borderTop:`1px solid ${T.border}`, alignItems:'center', fontSize:12, color:T.text, textDecoration:'none' }}>
                     <div style={{ fontFamily:'monospace', color:T.text2 }}>ST-{s.st_seq}</div>
                     <div style={{ overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{s.name}{s.scope_filter?.location ? <span style={{ color:T.text3 }}> · {s.scope_filter.location}</span> : ''}</div>
-                    <div><span style={{ display:'inline-flex', padding:'2px 8px', borderRadius:3, background:`${meta.color}1e`, color:meta.color, fontSize:10, fontWeight:600 }}>{meta.label}</span></div>
+                    <div><StatusPill label={meta.label} color={meta.color} uppercase={false} /></div>
                     <div style={{ textAlign:'right', fontFamily:'monospace', color:T.text2 }}>{s.counted_count}/{s.item_count}</div>
                     <div style={{ textAlign:'right', fontFamily:'monospace', color: s.variance_qty ? (Number(s.variance_qty) < 0 ? T.red : T.amber) : T.text3 }}>{s.variance_qty != null ? Number(s.variance_qty).toLocaleString() : '—'}</div>
                     <div style={{ textAlign:'right', fontFamily:'monospace', color: s.variance_value ? (Number(s.variance_value) < 0 ? T.red : T.amber) : T.text3 }}>{s.variance_value != null ? money(s.variance_value) : '—'}</div>
@@ -127,10 +123,6 @@ const inp: React.CSSProperties = {
   color:T.text, fontSize:13, fontFamily:'inherit', outline:'none',
 }
 const lbl: React.CSSProperties = { fontSize:10, color:T.text3, marginBottom:4, fontWeight:600, textTransform:'uppercase', letterSpacing:'0.05em' }
-const pbtn = (c: string): React.CSSProperties => ({
-  padding:'8px 16px', borderRadius:6, fontSize:12, fontFamily:'inherit', fontWeight:600,
-  background:`${c}1e`, color:c, border:`1px solid ${c}55`, cursor:'pointer',
-})
 
 export async function getServerSideProps(context: any) {
   return requirePageAuth(context, 'view:stocktakes')

@@ -5,8 +5,7 @@
 
 import { useRouter } from 'next/router'
 import { UserRole, roleHasPermission, Permission } from '../lib/permissions'
-
-const T = { bg2: '#131519', border: 'rgba(255,255,255,0.07)', text: '#e8eaf0', text2: '#8b90a0', accent: '#4f8ef7' }
+import { T } from '../lib/ui/theme'
 
 const TABS: Array<{ id: string; label: string; href: string; perm: Permission }> = [
   { id: 'reports',      label: 'Reports',      href: '/reports',      perm: 'view:reports' },
