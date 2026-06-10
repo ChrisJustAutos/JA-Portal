@@ -9,9 +9,9 @@ import { useRouter } from 'next/router'
 import { getSupabase } from '../lib/supabaseClient'
 
 const T = {
-  bg:'#0d0f12', bg2:'#131519', bg3:'#1a1d23',
-  border:'rgba(255,255,255,0.08)', border2:'rgba(255,255,255,0.14)',
-  text:'#e8eaf0', text2:'#aab0c0', text3:'#6b7180',
+  bg:'var(--t-bg)', bg2:'var(--t-bg2)', bg3:'var(--t-bg3)',
+  border:'rgba(var(--t-ink),0.08)', border2:'rgba(var(--t-ink),0.14)',
+  text:'var(--t-text)', text2:'var(--t-text2)', text3:'#6b7180',
   blue:'#4f8ef7', green:'#34c77b', amber:'#f5a623', red:'#f04e4e',
 }
 

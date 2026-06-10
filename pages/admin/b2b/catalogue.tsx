@@ -18,11 +18,12 @@ import { requirePageAuth } from '../../../lib/authServer'
 import { getSupabase } from '../../../lib/supabaseClient'
 import type { UserRole } from '../../../lib/permissions'
 import { useConfirm, usePrompt, useToast } from '../../../components/ui/Feedback'
+import { alpha } from '../../../lib/ui/theme'
 
 const T = {
-  bg:'#0d0f12', bg2:'#131519', bg3:'#1a1d23', bg4:'#21252d',
-  border:'rgba(255,255,255,0.07)', border2:'rgba(255,255,255,0.12)',
-  text:'#e8eaf0', text2:'#aab0c0', text3:'#8d93a4',
+  bg:'var(--t-bg)', bg2:'var(--t-bg2)', bg3:'var(--t-bg3)', bg4:'var(--t-bg4)',
+  border:'var(--t-border)', border2:'var(--t-border2)',
+  text:'var(--t-text)', text2:'var(--t-text2)', text3:'var(--t-text3)',
   blue:'#4f8ef7', teal:'#2dd4bf', green:'#34c77b',
   amber:'#f5a623', red:'#f04e4e', purple:'#a78bfa', accent:'#4f8ef7',
 }
@@ -1292,7 +1293,7 @@ function EditDrawer({
                   onChange={v => { patch({ manual_handling: v }).catch(() => {}) }}
                 />
                 <div style={{height:10}}/>
-                <div style={{fontSize:11,color:'#8d93a4',marginBottom:6}}>Inbound freight (ex GST) — added to the distributor's freight, per unit × qty:</div>
+                <div style={{fontSize:11,color:'var(--t-text3)',marginBottom:6}}>Inbound freight (ex GST) — added to the distributor's freight, per unit × qty:</div>
                 <FieldNumber
                   label="Inbound freight $/unit"
                   value={item.inbound_freight_cost_ex_gst}
@@ -1539,7 +1540,7 @@ function FilterPill({ active, onClick, color, children }: { active: boolean; onC
       style={{
         padding:'6px 12px',borderRadius:5,
         border:`1px solid ${active ? (color || T.blue) : T.border2}`,
-        background: active ? `${color || T.blue}20` : 'transparent',
+        background: active ? alpha(color || T.blue, '20') : 'transparent',
         color: active ? (color || T.blue) : T.text2,
         fontSize:12,fontWeight: active ? 600 : 400,
         cursor:'pointer',fontFamily:'inherit',whiteSpace:'nowrap',
@@ -2247,7 +2248,7 @@ function DropshipFreightEditor({ catalogueId }: { catalogueId: string }) {
       {calOpen && (
         <>
           <div onClick={() => { setCalOpen(false); loadRates() }} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', zIndex: 1200 }} />
-          <div style={{ position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%,-50%)', width: '96vw', maxWidth: 1200, maxHeight: '92vh', overflowY: 'auto', background: '#131519', border: `1px solid ${T.border2}`, borderRadius: 12, padding: 20, zIndex: 1201, boxShadow: '0 20px 60px rgba(0,0,0,0.55)' }}>
+          <div style={{ position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%,-50%)', width: '96vw', maxWidth: 1200, maxHeight: '92vh', overflowY: 'auto', background: 'var(--t-bg2)', border: `1px solid ${T.border2}`, borderRadius: 12, padding: 20, zIndex: 1201, boxShadow: '0 20px 60px rgba(0,0,0,0.55)' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
               <h2 style={{ fontSize: 17, fontWeight: 600, margin: 0 }}>Drop-ship freight calibration</h2>
               <button onClick={() => { setCalOpen(false); loadRates() }} style={{ background: 'none', border: 'none', color: T.text3, fontSize: 22, cursor: 'pointer', lineHeight: 1 }}>×</button>

@@ -20,9 +20,9 @@ import { usePreferences, messageNotificationsMuted, type UserPreferences } from 
 const useIsoEffect = typeof window !== 'undefined' ? useLayoutEffect : useEffect
 
 const T = {
-  bg: '#0d0f12', bg2: '#131519', bg3: '#1a1d23', bg4: '#21252d',
-  border: 'rgba(255,255,255,0.07)', border2: 'rgba(255,255,255,0.12)',
-  text: '#e8eaf0', text2: '#8b90a0', text3: '#545968',
+  bg: 'var(--t-bg)', bg2: 'var(--t-bg2)', bg3: 'var(--t-bg3)', bg4: 'var(--t-bg4)',
+  border: 'var(--t-border)', border2: 'var(--t-border2)',
+  text: 'var(--t-text)', text2: 'var(--t-text2)', text3: 'var(--t-text3)',
   blue: '#4f8ef7', teal: '#2dd4bf', green: '#34c77b', amber: '#f5a623', red: '#f04e4e', purple: '#a78bfa', accent: '#4f8ef7',
 }
 const QUICK_EMOJI = ['👍', '❤️', '😂', '🎉', '✅', '👀', '🙏', '🔥']
@@ -981,7 +981,7 @@ function miniBtn(color: string, solid?: boolean): React.CSSProperties { return {
 function mdToHtml(text: string, nameById: Record<string, string>): string {
   let s = (text || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
   s = s.replace(/(https?:\/\/[^\s<]+)/g, '<a href="$1" target="_blank" rel="noreferrer" style="color:#4f8ef7">$1</a>')
-  s = s.replace(/`([^`]+)`/g, '<code style="background:#21252d;padding:1px 4px;border-radius:3px;font-family:monospace">$1</code>')
+  s = s.replace(/`([^`]+)`/g, '<code style="background:var(--t-bg4);padding:1px 4px;border-radius:3px;font-family:monospace">$1</code>')
   s = s.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
   s = s.replace(/(^|[\s(])\*([^*\n]+)\*/g, '$1<em>$2</em>')
   s = s.replace(/(^|[\s(])_([^_\n]+)_/g, '$1<em>$2</em>')

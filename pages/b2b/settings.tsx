@@ -14,9 +14,9 @@ import { useConfirm } from '../../components/ui/Feedback'
 const B2B_SUBSCRIBE_URL = '/api/b2b/notifications/push-subscribe'
 
 const T = {
-  bg:'#0d0f12', bg2:'#131519', bg3:'#1a1d23', bg4:'#21252d',
-  border:'rgba(255,255,255,0.07)', border2:'rgba(255,255,255,0.12)',
-  text:'#e8eaf0', text2:'#aab0c0', text3:'#8d93a4',
+  bg:'var(--t-bg)', bg2:'var(--t-bg2)', bg3:'var(--t-bg3)', bg4:'var(--t-bg4)',
+  border:'var(--t-border)', border2:'var(--t-border2)',
+  text:'var(--t-text)', text2:'var(--t-text2)', text3:'var(--t-text3)',
   blue:'#4f8ef7', teal:'#2dd4bf', green:'#34c77b', amber:'#f5a623', red:'#f04e4e',
 }
 
@@ -298,7 +298,7 @@ function NotificationsCard() {
     } finally { setBusy(false) }
   }
 
-  const T2 = { text: '#e8eaf0', text2: '#aab0c0', text3: '#8d93a4', blue: '#4f8ef7', green: '#34c77b', amber: '#f5a623', border2: 'rgba(255,255,255,0.12)' }
+  const T2 = { text: 'var(--t-text)', text2: 'var(--t-text2)', text3: 'var(--t-text3)', blue: '#4f8ef7', green: '#34c77b', amber: '#f5a623', border2: 'var(--t-border2)' }
   const btn: React.CSSProperties = { background: T2.blue, border: 'none', color: '#fff', borderRadius: 7, padding: '8px 14px', fontSize: 12.5, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }
   const ghost: React.CSSProperties = { background: 'none', border: `1px solid ${T2.border2}`, color: T2.text2, borderRadius: 7, padding: '8px 14px', fontSize: 12.5, cursor: 'pointer', fontFamily: 'inherit' }
 

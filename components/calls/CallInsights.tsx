@@ -10,9 +10,9 @@ import { AppIcon } from '../../lib/AppIcons'
 import type { CallsInsights } from '../../lib/calls-insights'
 
 const T = {
-  bg: '#0d0f12', bg2: '#131519', bg3: '#1a1d23', bg4: '#21252d',
-  border: 'rgba(255,255,255,0.07)', border2: 'rgba(255,255,255,0.12)',
-  text: '#e8eaf0', text2: '#8b90a0', text3: '#545968',
+  bg: 'var(--t-bg)', bg2: 'var(--t-bg2)', bg3: 'var(--t-bg3)', bg4: 'var(--t-bg4)',
+  border: 'var(--t-border)', border2: 'var(--t-border2)',
+  text: 'var(--t-text)', text2: 'var(--t-text2)', text3: 'var(--t-text3)',
   blue: '#4f8ef7', teal: '#2dd4bf', green: '#34c77b',
   amber: '#f5a623', red: '#f04e4e', purple: '#a78bfa', accent: '#4f8ef7',
 }
@@ -96,7 +96,7 @@ function Markdownish({ md }: { md: string }) {
       {lines.map((ln, i) => {
         const t = ln.trim()
         if (!t) return <div key={i} style={{ height: 6 }} />
-        const html = t.replace(/\*\*(.+?)\*\*/g, '<strong style="color:#e8eaf0">$1</strong>')
+        const html = t.replace(/\*\*(.+?)\*\*/g, '<strong style="color:var(--t-text)">$1</strong>')
         if (t.startsWith('### ')) return <div key={i} style={{ fontSize: 12, color: T.text, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em', margin: '12px 0 4px' }}>{t.slice(4)}</div>
         if (t.startsWith('## ')) return <div key={i} style={{ fontSize: 13, color: T.text, fontWeight: 600, margin: '12px 0 4px' }}>{t.slice(3)}</div>
         if (/^[-*]\s/.test(t)) return <div key={i} style={{ display: 'flex', gap: 8, marginBottom: 3 }}><span style={{ color: T.accent }}>•</span><span dangerouslySetInnerHTML={{ __html: html.replace(/^[-*]\s/, '') }} /></div>
@@ -496,7 +496,7 @@ function ConversionView({ data, onOpenCall }: { data: CallsInsights; onOpenCall?
             {c.missedOpportunities.map(m => (
               <div key={m.callId} onClick={() => onOpenCall?.(m.callId)}
                 style={{ display: 'grid', gridTemplateColumns: '1fr 140px 110px 50px', gap: 8, padding: '8px 6px', borderRadius: 5, alignItems: 'center', cursor: onOpenCall ? 'pointer' : 'default', fontSize: 12 }}
-                onMouseEnter={e => { if (onOpenCall) (e.currentTarget as HTMLElement).style.background = 'rgba(255,255,255,0.03)' }}
+                onMouseEnter={e => { if (onOpenCall) (e.currentTarget as HTMLElement).style.background = 'rgba(var(--t-ink),0.03)' }}
                 onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = 'transparent' }}>
                 <div style={{ color: T.text, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{m.externalLabel}</div>
                 <div style={{ color: T.text2 }}>{m.advisor}</div>

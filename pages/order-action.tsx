@@ -8,8 +8,8 @@ import Head from 'next/head'
 import { useRouter } from 'next/router'
 
 const T = {
-  bg: '#0d0f12', bg2: '#131519', bg3: '#1a1d23', border: 'rgba(255,255,255,0.12)',
-  text: '#e8eaf0', text2: '#8b90a0', text3: '#545968', green: '#34c77b', red: '#f04e4e', amber: '#f5a623', blue: '#4f8ef7',
+  bg: 'var(--t-bg)', bg2: 'var(--t-bg2)', bg3: 'var(--t-bg3)', border: 'var(--t-border2)',
+  text: 'var(--t-text)', text2: 'var(--t-text2)', text3: 'var(--t-text3)', green: '#34c77b', red: '#f04e4e', amber: '#f5a623', blue: '#4f8ef7',
 }
 
 export default function OrderActionPage() {

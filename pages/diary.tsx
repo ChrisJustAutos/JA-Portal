@@ -428,7 +428,7 @@ function btn(active: boolean): React.CSSProperties {
 }
 
 // ── Technician filter pills (avatar chips; click to focus one tech's lane) ──
-const PILL_COLORS = ['#4f8ef7', '#a78bfa', '#34c77b', '#f5a623', '#f04e4e', '#2dd4bf', '#ef7bd0', '#8b90a0']
+const PILL_COLORS = ['#4f8ef7', '#a78bfa', '#34c77b', '#f5a623', '#f04e4e', '#2dd4bf', '#ef7bd0', 'var(--t-text2)']
 function techInitials(name: string): string {
   const parts = name.replace(/^[A-Za-z]\s*-\s*/, '').trim().split(/\s+/).filter(Boolean)
   if (!parts.length) return '?'

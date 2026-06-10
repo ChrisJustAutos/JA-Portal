@@ -79,7 +79,7 @@ export default function PurchaseOrdersPage({ user }: { user: PortalUserSSR }) {
               </div>
               {pos.map(p => (
                 <div key={p.id} onClick={() => setOpenId(p.id)} style={{ display: 'grid', gridTemplateColumns: '90px 1.6fr 100px 110px 110px', gap: 10, padding: '11px 14px', borderTop: `1px solid ${T.border}`, fontSize: 13, cursor: 'pointer', alignItems: 'center' }}
-                  onMouseEnter={e => (e.currentTarget.style.background = 'rgba(255,255,255,0.03)')} onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
+                  onMouseEnter={e => (e.currentTarget.style.background = 'rgba(var(--t-ink),0.03)')} onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
                   <div style={{ fontFamily: 'monospace', color: T.text2 }}>{poNum(p.po_seq)}</div>
                   <div>{p.supplier_name || '—'}{p.source === 'low_stock' && <span style={{ fontSize: 9, color: T.amber, marginLeft: 6 }}>LOW STOCK</span>}{p.myob_bill_uid && <span style={{ fontSize: 9, color: T.green, marginLeft: 6 }}>MYOB ✓</span>}</div>
                   <div><span style={{ fontSize: 10, padding: '2px 8px', borderRadius: 10, background: `${STATUS_COLOR[p.status]}22`, color: STATUS_COLOR[p.status], textTransform: 'capitalize' }}>{p.status}</span></div>

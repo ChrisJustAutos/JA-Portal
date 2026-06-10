@@ -18,9 +18,9 @@ import FreightCarriersManager from '../../../components/b2b/FreightCarriersManag
 import { useConfirm } from '../../../components/ui/Feedback'
 
 const T = {
-  bg:'#0d0f12', bg2:'#131519', bg3:'#1a1d23', bg4:'#21252d',
-  border:'rgba(255,255,255,0.07)', border2:'rgba(255,255,255,0.12)',
-  text:'#e8eaf0', text2:'#aab0c0', text3:'#8d93a4',
+  bg:'var(--t-bg)', bg2:'var(--t-bg2)', bg3:'var(--t-bg3)', bg4:'var(--t-bg4)',
+  border:'var(--t-border)', border2:'var(--t-border2)',
+  text:'var(--t-text)', text2:'var(--t-text2)', text3:'var(--t-text3)',
   blue:'#4f8ef7', teal:'#2dd4bf', green:'#34c77b',
   amber:'#f5a623', red:'#f04e4e', purple:'#a78bfa', accent:'#4f8ef7',
 }
@@ -663,7 +663,7 @@ export default function B2BSettingsPage({ user }: Props) {
                     {saving ? 'Saving…' : 'Save logo'}
                   </button>
                   {logoUrl && (
-                    <button onClick={() => { setLogoUrl(''); save({ email_logo_url: '' }) }} disabled={saving} style={{padding:'9px 16px',borderRadius:7,border:'1px solid rgba(255,255,255,0.18)',background:'transparent',color:'#aab0c0',fontSize:13,fontFamily:'inherit',cursor: saving ? 'default':'pointer'}}>
+                    <button onClick={() => { setLogoUrl(''); save({ email_logo_url: '' }) }} disabled={saving} style={{padding:'9px 16px',borderRadius:7,border:'1px solid rgba(var(--t-ink),0.18)',background:'transparent',color:'var(--t-text2)',fontSize:13,fontFamily:'inherit',cursor: saving ? 'default':'pointer'}}>
                       Remove
                     </button>
                   )}

@@ -417,12 +417,12 @@ function ForecastChart({ months, activeMonth, setActiveMonth, axis, targetMonthl
             <line
               x1={plotX0} x2={plotX1}
               y1={y} y2={y}
-              stroke={T.border}
+              style={{ stroke: T.border }}
               strokeWidth={1}
               strokeDasharray={tick === 0 ? '0' : '2,3'}/>
             <text
               x={plotX0 - 8} y={y}
-              fill={T.text3}
+              style={{ fill: T.text3 }}
               fontSize={11}
               textAnchor="end"
               dominantBaseline="middle"
@@ -482,7 +482,7 @@ function ForecastChart({ months, activeMonth, setActiveMonth, axis, targetMonthl
             <text
               x={slotCenter}
               y={barY - 6}
-              fill={isActive ? T.text : T.text2}
+              style={{ fill: isActive ? T.text : T.text2 }}
               fontSize={11}
               fontWeight={isActive ? 600 : 400}
               textAnchor="middle"
@@ -493,7 +493,7 @@ function ForecastChart({ months, activeMonth, setActiveMonth, axis, targetMonthl
             <text
               x={slotCenter}
               y={plotY1 + 18}
-              fill={isActive ? T.text : T.text3}
+              style={{ fill: isActive ? T.text : T.text3 }}
               fontSize={11}
               fontWeight={isActive ? 600 : 400}
               textAnchor="middle"
@@ -503,7 +503,7 @@ function ForecastChart({ months, activeMonth, setActiveMonth, axis, targetMonthl
             <text
               x={slotCenter}
               y={plotY1 + 33}
-              fill={T.text3}
+              style={{ fill: T.text3 }}
               fontSize={10}
               textAnchor="middle"
               fontFamily="system-ui, -apple-system, sans-serif">

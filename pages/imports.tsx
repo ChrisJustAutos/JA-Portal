@@ -741,7 +741,7 @@ function Info({ label, value }: { label: string; value: any }) {
 
 const btn = (primary: boolean): React.CSSProperties => ({
   padding: '8px 16px', borderRadius: 6, fontSize: 12, fontFamily: 'inherit', fontWeight: 600,
-  background: primary ? T.amber : 'transparent', color: primary ? '#1a1d23' : T.text2,
+  background: primary ? T.amber : 'transparent', color: primary ? 'var(--t-bg3)' : T.text2,
   border: primary ? 'none' : `1px solid ${T.border2}`, cursor: 'pointer',
 })
 const inp: React.CSSProperties = {

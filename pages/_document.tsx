@@ -18,6 +18,23 @@
 // dark CSS — those don't need to be duplicated here.
 
 import { Html, Head, Main, NextScript, DocumentContext } from 'next/document'
+import { THEME_PRESETS } from '../lib/preferences'
+
+// Pre-paint theme bootstrap. Runs before first paint, reads the cached prefs
+// (same localStorage key the PreferencesProvider uses) and sets
+// data-theme + the dark preset surface tints on <html>, so the very first
+// frame is already in the user's theme — no dark→light flash.
+// ThemeVarsBridge in _app.tsx re-applies the same logic once React hydrates.
+const PRESET_BGS = Object.fromEntries(
+  Object.entries(THEME_PRESETS).map(([k, v]) => [k, [v.bg, v.bg2]])
+)
+const THEME_BOOT_SCRIPT = `(function(){try{
+var p=JSON.parse(localStorage.getItem('ja-prefs-v1')||'{}');
+var t=p.theme==='light'?'light':(p.theme==='auto'&&matchMedia('(prefers-color-scheme: light)').matches)?'light':'dark';
+document.documentElement.setAttribute('data-theme',t);
+if(t==='dark'){var m=${JSON.stringify(PRESET_BGS)}[p.theme_preset];
+if(m){var s=document.documentElement.style;s.setProperty('--t-bg',m[0]);s.setProperty('--t-bg2',m[1]);}}
+}catch(e){}})()`
 
 // The distributor portal (/b2b) installs as its own app — own name + launch
 // page (/b2b/catalogue) — so serve a different manifest on those routes.
@@ -27,6 +44,9 @@ export default function Document({ isB2B }: { isB2B?: boolean }) {
   return (
     <Html lang="en">
       <Head>
+        {/* Set data-theme before first paint — must be the first thing in head */}
+        <script dangerouslySetInnerHTML={{ __html: THEME_BOOT_SCRIPT }} />
+
         {/* PWA manifest (staff vs distributor) */}
         <link rel="manifest" href={manifestHref} />
 

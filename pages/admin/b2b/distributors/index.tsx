@@ -11,11 +11,12 @@ import PortalTopBar from '../../../../lib/PortalTopBar'
 import B2BAdminTabs from '../../../../components/b2b/B2BAdminTabs'
 import { requirePageAuth } from '../../../../lib/authServer'
 import type { UserRole } from '../../../../lib/permissions'
+import { alpha } from '../../../../lib/ui/theme'
 
 const T = {
-  bg:'#0d0f12', bg2:'#131519', bg3:'#1a1d23', bg4:'#21252d',
-  border:'rgba(255,255,255,0.07)', border2:'rgba(255,255,255,0.12)',
-  text:'#e8eaf0', text2:'#aab0c0', text3:'#8d93a4',
+  bg:'var(--t-bg)', bg2:'var(--t-bg2)', bg3:'var(--t-bg3)', bg4:'var(--t-bg4)',
+  border:'var(--t-border)', border2:'var(--t-border2)',
+  text:'var(--t-text)', text2:'var(--t-text2)', text3:'var(--t-text3)',
   blue:'#4f8ef7', teal:'#2dd4bf', green:'#34c77b',
   amber:'#f5a623', red:'#f04e4e', purple:'#a78bfa',
 }
@@ -218,7 +219,7 @@ export default function DistributorsListPage({ user }: Props) {
                       <td data-label="Active" style={{...td(),textAlign:'center'}}>
                         <span style={{
                           display:'inline-block',padding:'2px 8px',borderRadius:8,fontSize:10,
-                          background: d.is_active ? `${T.green}20` : `${T.text3}15`,
+                          background: d.is_active ? `${T.green}20` : alpha(T.text3, '15'),
                           color: d.is_active ? T.green : T.text3,
                         }}>
                           {d.is_active ? 'Active' : 'Inactive'}

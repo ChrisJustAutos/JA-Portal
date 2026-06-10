@@ -330,9 +330,9 @@ export default function ReportsPage({ user }: { user: PortalUserSSR }) {
                     </button>
                   </div>
 
-                  <div style={{ background: '#ffffff', color: '#1a1d23', borderRadius: 10, padding: 32, fontFamily: "'Helvetica', sans-serif" }}>
+                  <div style={{ background: '#ffffff', color: 'var(--t-bg3)', borderRadius: 10, padding: 32, fontFamily: "'Helvetica', sans-serif" }}>
                     <div style={{ borderBottom: '1px solid #d1d5db', paddingBottom: 14, marginBottom: 18 }}>
-                      <div style={{ fontSize: 22, fontWeight: 700, color: '#1a1d23' }}>{report.title}</div>
+                      <div style={{ fontSize: 22, fontWeight: 700, color: 'var(--t-bg3)' }}>{report.title}</div>
                       <div style={{ fontSize: 11, color: '#6b7280', marginTop: 2 }}>
                         Just Autos · {report.entities.join(' + ')} · {new Date(report.periodStart).toLocaleDateString('en-AU')} – {new Date(report.periodEnd).toLocaleDateString('en-AU')}
                       </div>
@@ -345,7 +345,7 @@ export default function ReportsPage({ user }: { user: PortalUserSSR }) {
                       <div style={{ background: '#f9fafb', padding: 14, borderLeft: '3px solid #2563eb', marginBottom: 16 }}>
                         <div style={{ fontSize: 10, color: '#2563eb', fontWeight: 700, textTransform: 'uppercase', marginBottom: 6, letterSpacing: '0.08em' }}>AI Commentary</div>
                         {report.narrative.split(/\n\n+/).map((p, i) => (
-                          <p key={i} style={{ fontSize: 12, lineHeight: 1.55, margin: '0 0 6px 0', color: '#1a1d23' }}>{p.trim()}</p>
+                          <p key={i} style={{ fontSize: 12, lineHeight: 1.55, margin: '0 0 6px 0', color: 'var(--t-bg3)' }}>{p.trim()}</p>
                         ))}
                       </div>
                     )}
@@ -416,9 +416,9 @@ function SectionBody({ section }: { section: any }) {
   }
 }
 
-const h3S: React.CSSProperties = { fontSize: 14, fontWeight: 700, margin: '14px 0 8px', color: '#1a1d23' }
+const h3S: React.CSSProperties = { fontSize: 14, fontWeight: 700, margin: '14px 0 8px', color: 'var(--t-bg3)' }
 const thS: React.CSSProperties = { background: '#f3f4f6', padding: '5px 8px', textAlign: 'left', fontSize: 10, fontWeight: 700, color: '#3a3f4a', borderBottom: '1px solid #d1d5db' }
-const tdS: React.CSSProperties = { padding: '4px 8px', fontSize: 11, color: '#1a1d23', borderBottom: '1px solid #e5e7eb' }
+const tdS: React.CSSProperties = { padding: '4px 8px', fontSize: 11, color: 'var(--t-bg3)', borderBottom: '1px solid #e5e7eb' }
 const inputS: React.CSSProperties = { flex: 1, background: T.bg3, border: `1px solid ${T.border2}`, borderRadius: 6, padding: '7px 9px', color: T.text, fontSize: 12, fontFamily: 'inherit' }
 
 function PvKpi({ data }: { data: any }) {
@@ -446,7 +446,7 @@ function KpiCell({ label, value, sub }: { label: string; value: string; sub?: st
   return (
     <div style={{ background: '#f9fafb', padding: 8, borderTop: '2px solid #2563eb' }}>
       <div style={{ fontSize: 8.5, color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.06em' }}>{label}</div>
-      <div style={{ fontSize: 14, fontWeight: 700, color: '#1a1d23', marginTop: 2 }}>{value}</div>
+      <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--t-bg3)', marginTop: 2 }}>{value}</div>
       {sub && <div style={{ fontSize: 8.5, color: '#6b7280', marginTop: 1 }}>{sub}</div>}
     </div>
   )
@@ -464,11 +464,11 @@ function PvPnl({ data }: { data: any }) {
               {e.income.slice(0, 8).map((r: any, ii: number) => (
                 <tr key={ii}><td style={tdS}>{r.account}</td><td style={{ ...tdS, color: '#6b7280' }}>{r.code}</td><td style={{ ...tdS, textAlign: 'right' }}>{fmtFull(r.amount)}</td></tr>
               ))}
-              <tr><td style={{ ...tdS, fontWeight: 700, borderTop: '1px solid #1a1d23' }}>Total Income</td><td style={{ ...tdS, borderTop: '1px solid #1a1d23' }}></td><td style={{ ...tdS, textAlign: 'right', fontWeight: 700, borderTop: '1px solid #1a1d23' }}>{fmtFull(e.totalIncome)}</td></tr>
+              <tr><td style={{ ...tdS, fontWeight: 700, borderTop: '1px solid var(--t-bg3)' }}>Total Income</td><td style={{ ...tdS, borderTop: '1px solid var(--t-bg3)' }}></td><td style={{ ...tdS, textAlign: 'right', fontWeight: 700, borderTop: '1px solid var(--t-bg3)' }}>{fmtFull(e.totalIncome)}</td></tr>
               {e.totalCos > 0 && <tr><td style={tdS}>– Cost of Sales</td><td style={tdS}></td><td style={{ ...tdS, textAlign: 'right' }}>{fmtFull(e.totalCos)}</td></tr>}
               <tr><td style={{ ...tdS, fontWeight: 700 }}>Gross Profit</td><td style={tdS}></td><td style={{ ...tdS, textAlign: 'right', fontWeight: 700, color: e.grossProfit >= 0 ? '#059669' : '#dc2626' }}>{fmtFull(e.grossProfit)}</td></tr>
               {e.totalOverheads > 0 && <tr><td style={tdS}>– Overheads</td><td style={tdS}></td><td style={{ ...tdS, textAlign: 'right' }}>{fmtFull(e.totalOverheads)}</td></tr>}
-              <tr><td style={{ ...tdS, fontWeight: 700, borderTop: '1px solid #1a1d23' }}>Net Profit</td><td style={{ ...tdS, borderTop: '1px solid #1a1d23' }}></td><td style={{ ...tdS, textAlign: 'right', fontWeight: 700, color: e.netProfit >= 0 ? '#059669' : '#dc2626', borderTop: '1px solid #1a1d23' }}>{fmtFull(e.netProfit)}</td></tr>
+              <tr><td style={{ ...tdS, fontWeight: 700, borderTop: '1px solid var(--t-bg3)' }}>Net Profit</td><td style={{ ...tdS, borderTop: '1px solid var(--t-bg3)' }}></td><td style={{ ...tdS, textAlign: 'right', fontWeight: 700, color: e.netProfit >= 0 ? '#059669' : '#dc2626', borderTop: '1px solid var(--t-bg3)' }}>{fmtFull(e.netProfit)}</td></tr>
             </tbody>
           </table>
         </div>
@@ -527,7 +527,7 @@ function PvAging({ data, title }: { data: any; title: string }) {
                     <td style={tdS}>{o.customerOrSupplier}</td>
                     <td style={{ ...tdS, color: '#6b7280' }}>{o.invoiceNumber}</td>
                     <td style={{ ...tdS, color: '#6b7280' }}>{o.date ? new Date(o.date).toLocaleDateString('en-AU', { day: '2-digit', month: 'short' }) : ''}</td>
-                    <td style={{ ...tdS, textAlign: 'right', color: o.daysOld > 90 ? '#dc2626' : '#1a1d23' }}>{o.daysOld}</td>
+                    <td style={{ ...tdS, textAlign: 'right', color: o.daysOld > 90 ? '#dc2626' : 'var(--t-bg3)' }}>{o.daysOld}</td>
                     <td style={{ ...tdS, textAlign: 'right' }}>{fmtFull(o.balanceExGst)}</td>
                   </tr>
                 ))}
@@ -629,7 +629,7 @@ function PvRepScorecardV2({ data }: { data: any }) {
 
       <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 10.5 }}>
         <thead>
-          <tr style={{ background: '#f9fafb', borderBottom: '2px solid #1a1d23' }}>
+          <tr style={{ background: '#f9fafb', borderBottom: '2px solid var(--t-bg3)' }}>
             <th style={{ ...thS, textAlign: 'left' }} colSpan={1}>Rep</th>
             <th style={{ ...thS, textAlign: 'center', background: '#dbeafe' }} colSpan={3}>Quote-month view</th>
             <th style={{ ...thS, textAlign: 'center', background: '#dcfce7' }} colSpan={3}>Order-month view</th>
@@ -658,7 +658,7 @@ function PvRepScorecardV2({ data }: { data: any }) {
               <td style={{ ...tdS, textAlign: 'right', color: '#6b7280' }}>{r.ordersLinkedFromPriorQuotes}</td>
             </tr>
           ))}
-          <tr style={{ borderTop: '2px solid #1a1d23' }}>
+          <tr style={{ borderTop: '2px solid var(--t-bg3)' }}>
             <td style={{ ...tdS, fontWeight: 700 }}>Team</td>
             <td style={{ ...tdS, textAlign: 'right', fontWeight: 700 }}>{teamTotals.quotesSentInPeriod}</td>
             <td style={{ ...tdS, textAlign: 'right', fontWeight: 700 }}>{teamTotals.quotesSentConverted}</td>
@@ -724,7 +724,7 @@ function PvQuoteAging({ data }: { data: any }) {
               </tr>
             )
           })}
-          <tr style={{ borderTop: '2px solid #1a1d23' }}>
+          <tr style={{ borderTop: '2px solid var(--t-bg3)' }}>
             <td style={{ ...tdS, fontWeight: 700 }}>Total</td>
             <td style={{ ...tdS, textAlign: 'right', fontWeight: 700 }}>{total}</td>
             <td style={{ ...tdS, textAlign: 'right', fontWeight: 700 }}>{fmt(totalValue)}</td>
@@ -891,7 +891,7 @@ function PvSalesRepScorecard({ data }: { data: any }) {
             </td>
           </tr>
         ))}
-        <tr style={{ borderTop: '2px solid #1a1d23' }}>
+        <tr style={{ borderTop: '2px solid var(--t-bg3)' }}>
           <td style={{ ...tdS, fontWeight: 700 }}>Team totals</td>
           <td style={{ ...tdS, textAlign: 'right', fontWeight: 700 }}>{totals.activeLeads || 0}</td>
           <td style={{ ...tdS, textAlign: 'right', fontWeight: 700 }}>{totals.quotesSent || 0}</td>
@@ -1018,15 +1018,15 @@ function PvCallsTeamTrend({ data }: { data: any }) {
       <div style={{ display: 'flex', gap: 12, marginBottom: 8 }}>
         <div style={{ background: '#f9fafb', padding: 8, borderTop: '2px solid #2563eb', flex: 1 }}>
           <div style={{ fontSize: 8.5, color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Team Avg</div>
-          <div style={{ fontSize: 16, fontWeight: 700, color: '#1a1d23', marginTop: 2 }}>{avg != null ? avg.toFixed(1) : '—'}</div>
+          <div style={{ fontSize: 16, fontWeight: 700, color: 'var(--t-bg3)', marginTop: 2 }}>{avg != null ? avg.toFixed(1) : '—'}</div>
         </div>
         <div style={{ background: '#f9fafb', padding: 8, borderTop: '2px solid #2563eb', flex: 1 }}>
           <div style={{ fontSize: 8.5, color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Scored Calls</div>
-          <div style={{ fontSize: 16, fontWeight: 700, color: '#1a1d23', marginTop: 2 }}>{data.totals.scoredCalls}</div>
+          <div style={{ fontSize: 16, fontWeight: 700, color: 'var(--t-bg3)', marginTop: 2 }}>{data.totals.scoredCalls}</div>
         </div>
         <div style={{ background: '#f9fafb', padding: 8, borderTop: '2px solid #2563eb', flex: 1 }}>
           <div style={{ fontSize: 8.5, color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Total Calls</div>
-          <div style={{ fontSize: 16, fontWeight: 700, color: '#1a1d23', marginTop: 2 }}>{data.totals.calls}</div>
+          <div style={{ fontSize: 16, fontWeight: 700, color: 'var(--t-bg3)', marginTop: 2 }}>{data.totals.calls}</div>
         </div>
       </div>
       <svg width={w} height={h} style={{ background: '#f9fafb', border: '1px solid #e5e7eb' }}>
@@ -1059,15 +1059,15 @@ function PvCallsActivity({ data }: { data: any }) {
       <div style={{ display: 'flex', gap: 12, marginBottom: 8 }}>
         <div style={{ background: '#f9fafb', padding: 8, borderTop: '2px solid #2563eb', flex: 1 }}>
           <div style={{ fontSize: 8.5, color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Team Calls</div>
-          <div style={{ fontSize: 16, fontWeight: 700, color: '#1a1d23', marginTop: 2 }}>{data.team.totalCalls}</div>
+          <div style={{ fontSize: 16, fontWeight: 700, color: 'var(--t-bg3)', marginTop: 2 }}>{data.team.totalCalls}</div>
         </div>
         <div style={{ background: '#f9fafb', padding: 8, borderTop: '2px solid #2563eb', flex: 1 }}>
           <div style={{ fontSize: 8.5, color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Total Talk Time</div>
-          <div style={{ fontSize: 16, fontWeight: 700, color: '#1a1d23', marginTop: 2 }}>{fmtSecs(data.team.totalBillSec)}</div>
+          <div style={{ fontSize: 16, fontWeight: 700, color: 'var(--t-bg3)', marginTop: 2 }}>{fmtSecs(data.team.totalBillSec)}</div>
         </div>
         <div style={{ background: '#f9fafb', padding: 8, borderTop: '2px solid #2563eb', flex: 1 }}>
           <div style={{ fontSize: 8.5, color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Avg Call</div>
-          <div style={{ fontSize: 16, fontWeight: 700, color: '#1a1d23', marginTop: 2 }}>{fmtSecs(data.team.avgBillSec)}</div>
+          <div style={{ fontSize: 16, fontWeight: 700, color: 'var(--t-bg3)', marginTop: 2 }}>{fmtSecs(data.team.avgBillSec)}</div>
         </div>
       </div>
       <table style={{ width: '100%', borderCollapse: 'collapse' }}>

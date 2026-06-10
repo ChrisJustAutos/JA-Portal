@@ -119,7 +119,7 @@ export default function ConnectionsPage() {
   return (
     <>
       <Head><title>Connections — JA Portal</title></Head>
-      <div className="min-h-screen bg-[#0d0f12] text-[#e8eaf0]">
+      <div className="min-h-screen bg-[var(--t-bg)] text-[var(--t-text)]">
         <div className="mx-auto max-w-6xl px-6 py-8">
 
           {/* Header */}

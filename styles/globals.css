@@ -1,16 +1,58 @@
 /* styles/globals.css */
 @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&family=DM+Mono:wght@400;500&display=swap');
 
+/*
+ * Theme palettes — the runtime source of truth for the `T` tokens in
+ * lib/ui/theme.ts (which are var(--t-*) references).
+ *
+ * Dark is the default on :root; light overrides under html[data-theme="light"].
+ * The data-theme attribute is set pre-paint by an inline script in
+ * _document.tsx and kept in sync with the user's preference (dark/light/auto)
+ * by ThemeVarsBridge in _app.tsx.
+ *
+ * --t-ink is an RGB TRIPLET (not a colour): the "foreground wash" base used
+ * as rgba(var(--t-ink), 0.05) for hovers/tints — white in dark, near-black
+ * in light. Keeps arbitrary alpha levels working across both themes.
+ */
 :root {
-  --bg:      #0d0f12;
-  --bg2:     #131519;
-  --bg3:     #1a1d23;
-  --bg4:     #21252d;
-  --border:  rgba(255,255,255,0.07);
-  --border2: rgba(255,255,255,0.12);
-  --text:    #e8eaf0;
-  --text2:   #8b90a0;
-  --text3:   #545968;
+  --t-bg:      #0d0f12;
+  --t-bg2:     #131519;
+  --t-bg3:     #1a1d23;
+  --t-bg4:     #21252d;
+  --t-border:  rgba(255,255,255,0.07);
+  --t-border2: rgba(255,255,255,0.12);
+  --t-text:    #e8eaf0;
+  --t-text2:   #8b90a0;
+  --t-text3:   #545968;
+  --t-ink:     255,255,255;
+  color-scheme: dark;
+}
+
+html[data-theme="light"] {
+  --t-bg:      #f3f4f6;
+  --t-bg2:     #ffffff;
+  --t-bg3:     #eceef2;
+  --t-bg4:     #e2e5ea;
+  --t-border:  rgba(16,24,40,0.10);
+  --t-border2: rgba(16,24,40,0.18);
+  --t-text:    #171a21;
+  --t-text2:   #5b6271;
+  --t-text3:   #9097a6;
+  --t-ink:     16,24,40;
+  color-scheme: light;
+}
+
+/* Legacy aliases — older CSS referenced these names directly */
+:root {
+  --bg:      var(--t-bg);
+  --bg2:     var(--t-bg2);
+  --bg3:     var(--t-bg3);
+  --bg4:     var(--t-bg4);
+  --border:  var(--t-border);
+  --border2: var(--t-border2);
+  --text:    var(--t-text);
+  --text2:   var(--t-text2);
+  --text3:   var(--t-text3);
   --accent:  #4f8ef7;
   --accent2: #3a6fd4;
   --green:   #34c77b;

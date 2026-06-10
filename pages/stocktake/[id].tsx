@@ -18,7 +18,7 @@ import InventoryTabs from '../../components/InventoryTabs'
 import WorkshopTabs from '../../components/WorkshopTabs'
 import { requirePageAuth } from '../../lib/authServer'
 import { UserRole, roleHasPermission } from '../../lib/permissions'
-import { T } from '../../lib/ui/theme'
+import { T, alpha } from '../../lib/ui/theme'
 import { money } from '../../lib/ui/format'
 import { useConfirm } from '../../components/ui/Feedback'
 
@@ -478,7 +478,7 @@ export default function StocktakeDetailPage({ user }: { user: SessionUser }) {
                       <button onClick={() => setFilter('variance')}
                         style={{padding:'4px 12px', borderRadius:4, fontSize:11, fontFamily:'inherit', fontWeight:600,
                           background: filter === 'variance' ? T.amber : 'transparent',
-                          color: filter === 'variance' ? '#1a1d23' : T.amber,
+                          color: filter === 'variance' ? 'var(--t-bg3)' : T.amber,
                           border:`1px solid ${T.amber}`, cursor:'pointer'}}>
                         Review {comparison.discrepancies} discrepanc{comparison.discrepancies === 1 ? 'y' : 'ies'}
                       </button>
@@ -728,7 +728,7 @@ function ActionPanel({ upload, canEdit, actionInFlight, onMatch, onPush }: {
     const matched = upload.matched_count || 0
     const unmatched = upload.unmatched_count || 0
     return (
-      <div style={{background:T.bg2, border:`1px solid ${matched > 0 ? T.amber : T.border2}40`, borderRadius:8, padding:'14px 16px', marginBottom:14, display:'flex', justifyContent:'space-between', alignItems:'center', gap:12, flexWrap:'wrap'}}>
+      <div style={{background:T.bg2, border:`1px solid ${matched > 0 ? `${T.amber}40` : T.border2}`, borderRadius:8, padding:'14px 16px', marginBottom:14, display:'flex', justifyContent:'space-between', alignItems:'center', gap:12, flexWrap:'wrap'}}>
         <div>
           <div style={{fontSize:13, color:T.text, fontWeight:600}}>
             Step 2 — Review &amp; push to MD
@@ -805,7 +805,7 @@ function MatchStatusBadge({ status }: { status: string }) {
 
 function Pill({ color, label }: { color: string; label: string }) {
   return (
-    <span style={{display:'inline-flex', alignItems:'center', gap:6, padding:'3px 9px', borderRadius:20, background:`${color}1a`, border:`1px solid ${color}40`, fontSize:11, fontWeight:600, color}}>
+    <span style={{display:'inline-flex', alignItems:'center', gap:6, padding:'3px 9px', borderRadius:20, background:alpha(color, '1a'), border:`1px solid ${alpha(color, '40')}`, fontSize:11, fontWeight:600, color}}>
       <span style={{width:6, height:6, borderRadius:'50%', background:color}}/>
       {label}
     </span>

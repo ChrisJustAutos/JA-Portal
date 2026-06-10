@@ -10,9 +10,9 @@
 import { AppIcon } from '../../lib/AppIcons'
 
 const T = {
-  bg2: '#131519', bg3: '#1a1d23',
-  border: 'rgba(255,255,255,0.07)', border2: 'rgba(255,255,255,0.12)',
-  text: '#e8eaf0', text2: '#aab0c0', text3: '#8d93a4', blue: '#4f8ef7',
+  bg2: 'var(--t-bg2)', bg3: 'var(--t-bg3)',
+  border: 'var(--t-border)', border2: 'var(--t-border2)',
+  text: 'var(--t-text)', text2: 'var(--t-text2)', text3: 'var(--t-text3)', blue: '#4f8ef7',
 }
 
 export type B2BAdminSection = 'dashboard' | 'catalogue' | 'distributors' | 'orders' | 'settings'

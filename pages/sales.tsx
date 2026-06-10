@@ -6,7 +6,7 @@ import PortalTopBar from '../lib/PortalTopBar'
 import { requirePageAuth, type PortalUserSSR } from '../lib/authServer'
 import { useChatContext } from '../components/GlobalChatbot'
 
-const T={bg:'#0d0f12',bg2:'#131519',bg3:'#1a1d23',bg4:'#21252d',border:'rgba(255,255,255,0.07)',border2:'rgba(255,255,255,0.12)',text:'#e8eaf0',text2:'#8b90a0',text3:'#545968',blue:'#4f8ef7',teal:'#2dd4bf',green:'#34c77b',amber:'#f5a623',red:'#f04e4e',purple:'#a78bfa',pink:'#ff5ac4',accent:'#4f8ef7'}
+const T={bg:'var(--t-bg)',bg2:'var(--t-bg2)',bg3:'var(--t-bg3)',bg4:'var(--t-bg4)',border:'var(--t-border)',border2:'var(--t-border2)',text:'var(--t-text)',text2:'var(--t-text2)',text3:'var(--t-text3)',blue:'#4f8ef7',teal:'#2dd4bf',green:'#34c77b',amber:'#f5a623',red:'#f04e4e',purple:'#a78bfa',pink:'#ff5ac4',accent:'#4f8ef7'}
 const fmt=(n:number)=>n>=1e6?'$'+(n/1e6).toFixed(2)+'M':n>=1000?'$'+Math.round(n/1000)+'k':'$'+Math.round(n)
 const fmtFull=(n:number)=>'$'+Number(n||0).toLocaleString('en-AU',{minimumFractionDigits:2,maximumFractionDigits:2})
 const fmtDate=(d:string)=>d?new Date(d+'T00:00').toLocaleDateString('en-AU',{day:'2-digit',month:'short'}):''
@@ -405,7 +405,7 @@ export default function SalesDashboard({ user }: { user: PortalUserSSR }) {
                     <tbody>{filteredLeads.map(l=>(
                       <tr key={l.id} style={{borderTop:`1px solid ${T.border}`,cursor:'pointer',transition:'background 0.1s'}}
                         onClick={()=>window.open(l.url,'_blank')}
-                        onMouseEnter={e=>{(e.currentTarget as HTMLElement).style.background='rgba(255,255,255,0.03)'}}
+                        onMouseEnter={e=>{(e.currentTarget as HTMLElement).style.background='rgba(var(--t-ink),0.03)'}}
                         onMouseLeave={e=>{(e.currentTarget as HTMLElement).style.background='transparent'}}>
                         <td style={{fontSize:13,color:T.text,padding:'10px 8px',fontWeight:500,maxWidth:200,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{l.name}</td>
                         <td style={{fontSize:11,padding:'10px 8px'}}><Tag color={RC[l.rep]||T.blue}>{l.rep}</Tag></td>

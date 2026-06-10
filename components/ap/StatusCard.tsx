@@ -5,7 +5,7 @@
 // message (extracted from pages/ap/[id].tsx). All behaviour lives in the
 // page — this renders state and calls back.
 
-import { T } from '../../lib/ui/theme'
+import { T, alpha } from '../../lib/ui/theme'
 import { InvoiceRow } from './shared'
 import { TriagePill, StatusPill } from './Primitives'
 
@@ -190,7 +190,7 @@ export function StatusCard({
             onClick={onClearErrors}
             disabled={clearingError}
             style={{
-              background:'transparent', border:`1px solid ${T.text3}40`, color:T.text3,
+              background:'transparent', border:`1px solid ${alpha(T.text3, '40')}`, color:T.text3,
               fontSize:11, cursor: clearingError ? 'wait' : 'pointer',
               padding:'4px 10px', borderRadius:4, fontFamily:'inherit',
               opacity: clearingError ? 0.5 : 1, flexShrink:0,

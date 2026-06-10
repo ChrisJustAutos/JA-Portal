@@ -349,7 +349,7 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
     barInst.current=new(window as any).Chart(barRef.current,{
       type:'bar',
       data:{labels:sorted.map(s=>s[0]),datasets:[{data:sorted.map(s=>Math.round(s[1].total)),backgroundColor:'#4f8ef7',borderRadius:4,borderSkipped:false}]},
-      options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false},tooltip:{callbacks:{label:(ctx:any)=>`$${ctx.raw.toLocaleString()}`,afterLabel:(ctx:any)=>{const m=sorted[ctx.dataIndex];if(!m)return '';const[,info]=m;return `${info.vins.size} unique VIN${info.vins.size===1?'':'s'} · ${info.jobs} job${info.jobs===1?'':'s'}`}}}},scales:{x:{grid:{color:'rgba(255,255,255,0.05)'},ticks:{color:T.text3,font:{size:11}}},y:{grid:{color:'rgba(255,255,255,0.05)'},ticks:{color:T.text3,font:{size:11},callback:(v:any)=>'$'+(v>=1000?Math.round(v/1000)+'k':v)}}}}
+      options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false},tooltip:{callbacks:{label:(ctx:any)=>`$${ctx.raw.toLocaleString()}`,afterLabel:(ctx:any)=>{const m=sorted[ctx.dataIndex];if(!m)return '';const[,info]=m;return `${info.vins.size} unique VIN${info.vins.size===1?'':'s'} · ${info.jobs} job${info.jobs===1?'':'s'}`}}}},scales:{x:{grid:{color:'rgba(var(--t-ink),0.05)'},ticks:{color:T.text3,font:{size:11}}},y:{grid:{color:'rgba(var(--t-ink),0.05)'},ticks:{color:T.text3,font:{size:11},callback:(v:any)=>'$'+(v>=1000?Math.round(v/1000)+'k':v)}}}}
     })
     return()=>{if(barInst.current)barInst.current.destroy()}
   },[filtered,tab,loading,vinRules])
@@ -358,7 +358,7 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
     if(tab!=='national-pm'||!lineRef.current||!(window as any).Chart||!trendLabels.length)return
     if(lineInst.current)lineInst.current.destroy()
     const vals=trendLabels.map(l=>Math.round(monthlyTotals[l]||0))
-    lineInst.current=new(window as any).Chart(lineRef.current,{type:'bar',data:{labels:trendLabels,datasets:[{label:'Revenue ex GST',data:vals,backgroundColor:'#4f8ef7',borderRadius:4,borderSkipped:false}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false},tooltip:{callbacks:{label:(ctx:any)=>`$${ctx.raw.toLocaleString()}`}}},scales:{x:{grid:{color:'rgba(255,255,255,0.05)'},ticks:{color:T.text3}},y:{grid:{color:'rgba(255,255,255,0.05)'},ticks:{color:T.text3,callback:(v:any)=>'$'+Math.round(v/1000)+'k'}}}}})
+    lineInst.current=new(window as any).Chart(lineRef.current,{type:'bar',data:{labels:trendLabels,datasets:[{label:'Revenue ex GST',data:vals,backgroundColor:'#4f8ef7',borderRadius:4,borderSkipped:false}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false},tooltip:{callbacks:{label:(ctx:any)=>`$${ctx.raw.toLocaleString()}`}}},scales:{x:{grid:{color:'rgba(var(--t-ink),0.05)'},ticks:{color:T.text3}},y:{grid:{color:'rgba(var(--t-ink),0.05)'},ticks:{color:T.text3,callback:(v:any)=>'$'+Math.round(v/1000)+'k'}}}}})
     return()=>{if(lineInst.current)lineInst.current.destroy()}
   },[tab,trendLabels,monthlyTotals])
 
@@ -366,7 +366,7 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
     if(tab!=='national-total'||!hBarRef.current||!(window as any).Chart||!distSummaries.length)return
     if(hBarInst.current)hBarInst.current.destroy()
     const sorted=[...distSummaries].sort((a,b)=>b.total-a.total)
-    hBarInst.current=new(window as any).Chart(hBarRef.current,{type:'bar',data:{labels:sorted.map(d=>d.name),datasets:[{label:'Revenue ex GST',data:sorted.map(d=>Math.round(d.total)),backgroundColor:'#4f8ef7',borderRadius:3,borderSkipped:false}]},options:{indexAxis:'y' as const,responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false},tooltip:{callbacks:{label:(ctx:any)=>`$${ctx.raw.toLocaleString()}`}}},scales:{x:{grid:{color:'rgba(255,255,255,0.05)'},ticks:{color:T.text3,callback:(v:any)=>'$'+Math.round(v/1000)+'k'}},y:{grid:{display:false},ticks:{color:T.text2,font:{size:11}}}}}})
+    hBarInst.current=new(window as any).Chart(hBarRef.current,{type:'bar',data:{labels:sorted.map(d=>d.name),datasets:[{label:'Revenue ex GST',data:sorted.map(d=>Math.round(d.total)),backgroundColor:'#4f8ef7',borderRadius:3,borderSkipped:false}]},options:{indexAxis:'y' as const,responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false},tooltip:{callbacks:{label:(ctx:any)=>`$${ctx.raw.toLocaleString()}`}}},scales:{x:{grid:{color:'rgba(var(--t-ink),0.05)'},ticks:{color:T.text3,callback:(v:any)=>'$'+Math.round(v/1000)+'k'}},y:{grid:{display:false},ticks:{color:T.text2,font:{size:11}}}}}})
     return()=>{if(hBarInst.current)hBarInst.current.destroy()}
   },[tab,distSummaries])
 
@@ -410,10 +410,10 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
     return (
       <tr key={d.name} className="dist-row" style={{borderTop:`1px solid ${T.border}`,background:selectedDist===d.name?'rgba(79,142,247,0.08)':'transparent'}}>
         <td style={{fontSize:12,color:T.text2,padding:'8px 12px',cursor:'pointer'}} onClick={()=>setSelectedDist(d.name===selectedDist?'ALL':d.name)} title="Click to filter other tabs to this distributor">{d.name}</td>
-        <td style={{fontSize:12,fontFamily:'monospace',color:d.oil>0?T.text:T.text3,padding:'8px 12px',textAlign:'right',cursor:d.oil>0?'pointer':'default',textDecoration:d.oil>0?'underline dotted rgba(255,255,255,0.15)':'none'}}
+        <td style={{fontSize:12,fontFamily:'monospace',color:d.oil>0?T.text:T.text3,padding:'8px 12px',textAlign:'right',cursor:d.oil>0?'pointer':'default',textDecoration:d.oil>0?'underline dotted rgba(var(--t-ink),0.15)':'none'}}
             onClick={d.oil>0?()=>setDrill({title:`${titlePrefix} — Oil`,subtitle:`${fmtFull(d.oil)} ex-GST`,filter:l=>l.CustomerName===d.name && l.bucket==='Oil'}):undefined}
             title={d.oil>0?'Click to see the invoices that make up this':''}>{d.oil>0?fmtFull(d.oil):'$0'}</td>
-        <td style={{fontSize:12,fontFamily:'monospace',color:d.parts>0?T.text:T.text3,padding:'8px 12px',textAlign:'right',cursor:d.parts>0?'pointer':'default',textDecoration:d.parts>0?'underline dotted rgba(255,255,255,0.15)':'none'}}
+        <td style={{fontSize:12,fontFamily:'monospace',color:d.parts>0?T.text:T.text3,padding:'8px 12px',textAlign:'right',cursor:d.parts>0?'pointer':'default',textDecoration:d.parts>0?'underline dotted rgba(var(--t-ink),0.15)':'none'}}
             onClick={d.parts>0?()=>setDrill({title:`${titlePrefix} — Parts`,subtitle:`${fmtFull(d.parts)} ex-GST`,filter:l=>l.CustomerName===d.name && l.bucket==='Parts'}):undefined}
             title={d.parts>0?'Click to see the invoices that make up this':''}>{d.parts>0?fmtFull(d.parts):'$0'}</td>
         <td style={{fontSize:12,fontFamily:'monospace',color:d.tuning>0?T.green:T.text3,padding:'8px 12px',textAlign:'right',cursor:d.tuning>0?'pointer':'default',textDecoration:d.tuning>0?'underline dotted rgba(52,199,123,0.3)':'none'}}
@@ -446,7 +446,7 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
       <style>{`
         tr.dist-row { transition: background-color 0.1s; }
         tr.dist-row:hover { background: rgba(79,142,247,0.08) !important; }
-        tr.dist-row:hover td { color: #e8eaf0; }
+        tr.dist-row:hover td { color: var(--t-text); }
       `}</style>
       <div style={{display:'flex',alignItems:'center',gap:10}}>
         <span style={{fontSize:11,color:T.text3,textTransform:'uppercase',letterSpacing:'0.05em'}}>Group by:</span>
@@ -628,7 +628,7 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
                   onMouseEnter={e=>((e.currentTarget as HTMLElement).style.background='rgba(79,142,247,0.04)')}
                   onMouseLeave={e=>((e.currentTarget as HTMLElement).style.background='transparent')}
                   title="Click to see invoices for this model">
-                <td style={{fontSize:12,color:T.text2,padding:'8px 12px',textDecoration:'underline dotted rgba(255,255,255,0.15)'}}>{m.model}</td>
+                <td style={{fontSize:12,color:T.text2,padding:'8px 12px',textDecoration:'underline dotted rgba(var(--t-ink),0.15)'}}>{m.model}</td>
                 <td style={{fontSize:12,fontFamily:'monospace',color:T.text3,padding:'8px 12px',textAlign:'right'}}>{m.vins}</td>
                 <td style={{fontSize:12,fontFamily:'monospace',color:m.jobs>m.vins?T.amber:T.text3,padding:'8px 12px',textAlign:'right'}}>{m.jobs}</td>
                 <td style={{fontSize:12,fontFamily:'monospace',color:T.green,padding:'8px 12px',textAlign:'right'}}>{fmtFull(m.total)}</td>
@@ -686,7 +686,7 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
               onMouseEnter={e=>((e.currentTarget as HTMLElement).style.background='rgba(79,142,247,0.04)')}
               onMouseLeave={e=>((e.currentTarget as HTMLElement).style.background='transparent')}
               title="Click to see invoices for this line">
-            <td style={{fontSize:12,color:T.text2,padding:'9px 16px',textDecoration:'underline dotted rgba(255,255,255,0.15)'}}>{desc?.substring(0,70)}</td>
+            <td style={{fontSize:12,color:T.text2,padding:'9px 16px',textDecoration:'underline dotted rgba(var(--t-ink),0.15)'}}>{desc?.substring(0,70)}</td>
             <td style={{fontSize:12,fontFamily:'monospace',color:T.text3,padding:'9px 16px',textAlign:'right'}}>{vals.qty>1?vals.qty:''}</td>
             <td style={{fontSize:12,fontFamily:'monospace',color:T.text,padding:'9px 16px',textAlign:'right'}}>{fmtFull(vals.total)}</td>
           </tr>

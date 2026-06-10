@@ -55,7 +55,7 @@ export default function CrmContacts({ user }: { user: PortalUserSSR }) {
           </div>
           {contacts.map(c => (
             <div key={c.id} onClick={() => setOpenId(c.id)} style={{ display: 'grid', gridTemplateColumns: '1.6fr 1.2fr 1.4fr 1fr 90px', gap: 12, padding: '11px 14px', borderTop: `1px solid ${T.border}`, fontSize: 13, cursor: 'pointer', alignItems: 'center' }}
-              onMouseEnter={e => (e.currentTarget.style.background = 'rgba(255,255,255,0.03)')}
+              onMouseEnter={e => (e.currentTarget.style.background = 'rgba(var(--t-ink),0.03)')}
               onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
               <div style={{ fontWeight: 500 }}>{c.name}</div>
               <div style={{ color: T.text2 }}>{c.company_name || '—'}</div>

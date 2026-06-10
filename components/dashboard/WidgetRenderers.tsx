@@ -4,11 +4,12 @@
 
 import React from 'react'
 import { METRICS } from '../../lib/dashboard/catalog'
+import { alpha } from '../../lib/ui/theme'
 
 const T = {
-  bg:'#0d0f12', bg2:'#131519', bg3:'#1a1d23', bg4:'#21252d',
-  border:'rgba(255,255,255,0.07)', border2:'rgba(255,255,255,0.12)',
-  text:'#e8eaf0', text2:'#8b90a0', text3:'#545968',
+  bg:'var(--t-bg)', bg2:'var(--t-bg2)', bg3:'var(--t-bg3)', bg4:'var(--t-bg4)',
+  border:'var(--t-border)', border2:'var(--t-border2)',
+  text:'var(--t-text)', text2:'var(--t-text2)', text3:'var(--t-text3)',
   blue:'#4f8ef7', teal:'#2dd4bf', green:'#34c77b',
   amber:'#f5a623', red:'#f04e4e', purple:'#a78bfa', pink:'#ff5ac4',
   accent:'#4f8ef7',
@@ -270,7 +271,7 @@ export function DonutChart({ config, data }: any) {
       <div style={{flex:1, display:'flex', gap:12, alignItems:'center'}}>
         <div style={{width:90, height:90, flexShrink:0}}>
           <svg viewBox="0 0 100 100">
-            <circle cx={cx} cy={cy} r={r} stroke={T.bg3} strokeWidth={strokeW} fill="none"/>
+            <circle cx={cx} cy={cy} r={r} style={{ stroke: T.bg3 }} strokeWidth={strokeW} fill="none"/>
             {segments.map((seg, i) => {
               const pct = seg.value / total
               const off = circ * cumulative
@@ -754,7 +755,7 @@ export function TopActiveLeads({ config, data }: any) {
           <div style={{color:T.text3, fontSize:11, textAlign:'center', padding:20}}>No open quotes in this period</div>
         ) : items.map((l, i) => {
           const Tag = (
-            <span style={{fontSize:9, padding:'1px 6px', borderRadius:3, background:`${STATUS_COLOURS[l.status] || T.text3}20`, color:STATUS_COLOURS[l.status] || T.text3, border:`1px solid ${STATUS_COLOURS[l.status] || T.text3}40`, fontFamily:'monospace', whiteSpace:'nowrap'}}>{l.status}</span>
+            <span style={{fontSize:9, padding:'1px 6px', borderRadius:3, background:alpha(STATUS_COLOURS[l.status] || T.text3, '20'), color:STATUS_COLOURS[l.status] || T.text3, border:`1px solid ${alpha(STATUS_COLOURS[l.status] || T.text3, '40')}`, fontFamily:'monospace', whiteSpace:'nowrap'}}>{l.status}</span>
           )
           const Row = (
             <div style={{padding:'6px 0', borderBottom:`1px solid ${T.border}`}}>

@@ -40,7 +40,7 @@ import { requirePageAuth } from '../../lib/authServer'
 import type { PortalUserSSR } from '../../lib/authServer'
 import { roleHasPermission } from '../../lib/permissions'
 import { useIsMobile } from '../../lib/useIsMobile'
-import { T } from '../../lib/ui/theme'
+import { T, alpha } from '../../lib/ui/theme'
 import { useToast, useConfirm } from '../../components/ui/Feedback'
 
 const BULK_BATCH_SIZE = 3
@@ -1291,7 +1291,7 @@ function Pill({ active, onClick, label, color }: { active: boolean; onClick: () 
     <button
       onClick={onClick}
       style={{
-        background: active ? (color ? `${color}25` : 'rgba(255,255,255,0.07)') : 'transparent',
+        background: active ? (color ? alpha(color, '25') : 'var(--t-border)') : 'transparent',
         border: `1px solid ${active ? (color || T.border2) : T.border}`,
         color: active ? (color || T.text) : T.text2,
         padding: '7px 12px',

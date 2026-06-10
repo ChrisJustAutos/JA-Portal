@@ -7,8 +7,8 @@ import { useRouter } from 'next/router'
 import { useConfirm } from '../ui/Feedback'
 
 const T = {
-  bg2: '#131519', border: 'rgba(255,255,255,0.07)', border2: 'rgba(255,255,255,0.12)',
-  text: '#e8eaf0', text2: '#aab0c0', text3: '#8d93a4', blue: '#4f8ef7', red: '#f04e4e',
+  bg2: 'var(--t-bg2)', border: 'var(--t-border)', border2: 'var(--t-border2)',
+  text: 'var(--t-text)', text2: 'var(--t-text2)', text3: 'var(--t-text3)', blue: '#4f8ef7', red: '#f04e4e',
 }
 
 interface Row { id: string; title: string; body: string | null; href: string | null; created_at: string; read_at: string | null }

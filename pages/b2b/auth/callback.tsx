@@ -20,9 +20,9 @@ import { useRouter } from 'next/router'
 import { getSupabase } from '../../../lib/supabaseClient'
 
 const T = {
-  bg:'#0d0f12', bg2:'#131519',
-  border:'rgba(255,255,255,0.07)',
-  text:'#e8eaf0', text2:'#aab0c0', text3:'#8d93a4',
+  bg:'var(--t-bg)', bg2:'var(--t-bg2)',
+  border:'var(--t-border)',
+  text:'var(--t-text)', text2:'var(--t-text2)', text3:'var(--t-text3)',
   blue:'#4f8ef7', green:'#34c77b', red:'#f04e4e',
 }
 

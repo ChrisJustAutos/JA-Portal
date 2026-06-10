@@ -18,7 +18,7 @@ const PLATFORM_COLOURS: Record<string, string> = {
   'FJA300':'#a78bfa', 'FJA250':'#c084fc',
   'GDJ70*':'#f59e0b', 'GDJ79':'#fbbf24', 'GDJ250':'#fb923c',
   'Hilux 1GD':'#34c77b', 'Hilux':'#10b981',
-  'Mixed':'#f5a623', 'Unclassified':'#545968',
+  'Mixed':'#f5a623', 'Unclassified':'var(--t-text3)',
 }
 
 export async function getServerSideProps(ctx: any) {

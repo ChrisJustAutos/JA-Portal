@@ -119,14 +119,16 @@ export default function GeneralTab() {
 
         <Field
           label="Theme mode"
-          help="Light mode is coming soon."
+          help="Auto follows your device's light/dark setting."
+          saving={saving === 'theme'}
+          saved={savedFlash === 'theme'}
         >
           <ButtonGroup
             value={prefs.theme}
             options={[
               { value: 'dark', label: 'Dark' },
-              { value: 'light', label: 'Light (soon)', disabled: true },
-              { value: 'auto', label: 'Auto (soon)', disabled: true },
+              { value: 'light', label: 'Light' },
+              { value: 'auto', label: 'Auto' },
             ]}
             onChange={v => save({ theme: v as Theme }, 'theme')}
           />
@@ -134,7 +136,7 @@ export default function GeneralTab() {
 
         <Field
           label="Theme preset"
-          help="Switches the page background tone. Picking a preset also sets a matching default accent — adjust the accent below to taste."
+          help="Switches the dark-mode background tone (light mode uses a single palette). Picking a preset also sets a matching default accent — adjust the accent below to taste."
           saving={saving === 'theme_preset'}
           saved={savedFlash === 'theme_preset'}
         >

@@ -19,9 +19,9 @@ import { useState, useEffect, useRef, useCallback, createContext, useContext, Re
 import { useRouter } from 'next/router'
 
 const T = {
-  bg:'#0d0f12', bg2:'#131519', bg3:'#1a1d23', bg4:'#21252d',
-  border:'rgba(255,255,255,0.07)', border2:'rgba(255,255,255,0.12)',
-  text:'#e8eaf0', text2:'#8b90a0', text3:'#545968',
+  bg:'var(--t-bg)', bg2:'var(--t-bg2)', bg3:'var(--t-bg3)', bg4:'var(--t-bg4)',
+  border:'var(--t-border)', border2:'var(--t-border2)',
+  text:'var(--t-text)', text2:'var(--t-text2)', text3:'var(--t-text3)',
   blue:'#4f8ef7', teal:'#2dd4bf', green:'#34c77b',
   amber:'#f5a623', red:'#f04e4e', purple:'#a78bfa',
   accent:'#4f8ef7',

@@ -9,7 +9,7 @@
 // shared T theme object, no Tailwind. Card-and-table layout per category.
 
 import { useEffect, useState } from 'react'
-import { T } from '../../lib/ui/theme'
+import { T, alpha } from '../../lib/ui/theme'
 
 interface Integration {
   name: string
@@ -61,7 +61,7 @@ function statusColor(status: Integration['status']): { dot: string; bg: string; 
     case 'green':   return { dot: T.green,  bg: `${T.green}15`,  text: T.green,  border: `${T.green}40`,  label: 'OK' }
     case 'yellow':  return { dot: T.amber,  bg: `${T.amber}15`,  text: T.amber,  border: `${T.amber}40`,  label: 'WARN' }
     case 'red':     return { dot: T.red,    bg: `${T.red}15`,    text: T.red,    border: `${T.red}40`,    label: 'DOWN' }
-    case 'unknown': return { dot: T.text3,  bg: `${T.text3}15`,  text: T.text3,  border: `${T.text3}40`,  label: 'UNKNOWN' }
+    case 'unknown': return { dot: T.text3,  bg: alpha(T.text3, '15'),  text: T.text3,  border: alpha(T.text3, '40'),  label: 'UNKNOWN' }
   }
 }
 

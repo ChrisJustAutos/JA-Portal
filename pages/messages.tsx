@@ -8,14 +8,14 @@ import PortalTopBar from '../lib/PortalTopBar'
 import { requirePageAuth, type PortalUserSSR } from '../lib/authServer'
 import ChatApp from '../components/messages/ChatApp'
 
-const BG = '#0d0f12'
+const BG = 'var(--t-bg)'
 
 export default function MessagesPage({ user }: { user: PortalUserSSR }) {
   const [unread, setUnread] = useState(0)
   return (
     <>
       <Head><title>{unread > 0 ? `(${unread}) ` : ''}Messages — Just Autos</title><meta name="viewport" content="width=device-width,initial-scale=1"/><meta name="robots" content="noindex,nofollow"/></Head>
-      <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', overflow: 'hidden', fontFamily: "'DM Sans',system-ui,sans-serif", color: '#e8eaf0', background: BG }}>
+      <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', overflow: 'hidden', fontFamily: "'DM Sans',system-ui,sans-serif", color: 'var(--t-text)', background: BG }}>
         <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet"/>
         <PortalTopBar
           activeId="messages"

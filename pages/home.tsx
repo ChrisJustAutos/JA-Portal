@@ -488,7 +488,7 @@ function FolderTile({
           </div>
         ))}
         {Array.from({ length: Math.max(0, 4 - preview.length) }).map((_, i) => (
-          <div key={`e${i}`} style={{ borderRadius: 5, background: 'rgba(255,255,255,0.03)' }}/>
+          <div key={`e${i}`} style={{ borderRadius: 5, background: 'rgba(var(--t-ink),0.03)' }}/>
         ))}
       </div>
       <span style={{ fontSize: 12.5, fontWeight: 500, color: T.text, textAlign: 'center', lineHeight: 1.25, pointerEvents: 'none' }}>

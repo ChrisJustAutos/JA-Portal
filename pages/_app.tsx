@@ -11,25 +11,50 @@ import { useEffect } from 'react'
 import type { AppProps } from 'next/app'
 import Head from 'next/head'
 import { PreferencesProvider, usePreferences, ACCENT_HEX, THEME_PRESETS } from '../lib/preferences'
+import { LIGHT_PALETTE } from '../lib/ui/theme'
 import GlobalChatbot, { ChatContextProvider } from '../components/GlobalChatbot'
 import DesktopNotifier from '../components/DesktopNotifier'
 import { FeedbackProvider } from '../components/ui/Feedback'
 
-// Reads the user's accent_color + theme_preset and exposes them as CSS
-// custom properties on <html>. Components can opt in to the live values via
-// var(--accent) / var(--theme-bg) — existing inline palettes (the local `T = {…}`
-// blocks) keep working unchanged.
+// Applies the user's theme prefs to <html>:
+//   - data-theme="dark" | "light" — drives the --t-* palette in globals.css,
+//     which every page consumes via the shared T tokens (lib/ui/theme.ts)
+//   - 'auto' follows the OS (prefers-color-scheme) live
+//   - theme presets (midnight/ocean/forest/slate) tint the dark surfaces only;
+//     light mode uses the single light palette
+//   - keeps the PWA theme-color meta in sync so the title bar matches
+// A pre-paint inline script in _document.tsx applies the same logic from the
+// localStorage prefs cache so the first paint has no theme flash.
 function ThemeVarsBridge() {
   const { prefs, loading } = usePreferences()
   useEffect(() => {
     if (loading || typeof document === 'undefined') return
-    const accent = ACCENT_HEX[prefs.accent_color] || ACCENT_HEX.blue
-    const preset = THEME_PRESETS[prefs.theme_preset] || THEME_PRESETS.midnight
     const root = document.documentElement
-    root.style.setProperty('--accent', accent)
-    root.style.setProperty('--theme-bg', preset.bg)
-    root.style.setProperty('--theme-bg2', preset.bg2)
-  }, [prefs.accent_color, prefs.theme_preset, loading])
+    const apply = () => {
+      const resolved: 'dark' | 'light' =
+        prefs.theme === 'light' ? 'light'
+        : prefs.theme === 'auto' ? (window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark')
+        : 'dark'
+      root.setAttribute('data-theme', resolved)
+      root.style.setProperty('--accent', ACCENT_HEX[prefs.accent_color] || ACCENT_HEX.blue)
+      const preset = THEME_PRESETS[prefs.theme_preset] || THEME_PRESETS.midnight
+      if (resolved === 'dark') {
+        root.style.setProperty('--t-bg', preset.bg)
+        root.style.setProperty('--t-bg2', preset.bg2)
+      } else {
+        root.style.removeProperty('--t-bg')
+        root.style.removeProperty('--t-bg2')
+      }
+      document.querySelector('meta[name="theme-color"]')
+        ?.setAttribute('content', resolved === 'dark' ? preset.bg : LIGHT_PALETTE.bg)
+    }
+    apply()
+    if (prefs.theme === 'auto') {
+      const mq = window.matchMedia('(prefers-color-scheme: light)')
+      mq.addEventListener('change', apply)
+      return () => mq.removeEventListener('change', apply)
+    }
+  }, [prefs.accent_color, prefs.theme_preset, prefs.theme, loading])
   return null
 }
 
@@ -54,14 +79,16 @@ export default function App({ Component, pageProps }: AppProps) {
               virtual width and zooms out, making the portal unreadable on a phone. */}
           <meta name="viewport" content="width=device-width,initial-scale=1"/>
           <meta name="theme-color" content="#0d0f12"/>
-          {/* Global dark background — prevents any white flash/leak.
+          {/* Global background — prevents any flash/leak of the wrong theme.
               Every portal page draws on top of this, so even if a component
-              fails to render a background, the user still sees the dark portal.
-              `--theme-bg` is overridden per user by ThemeVarsBridge once prefs load. */}
+              fails to render a background, the user still sees the portal
+              surface. The --t-* palette lives in styles/globals.css (dark on
+              :root, light under html[data-theme="light"]); ThemeVarsBridge
+              overlays dark preset tints per user once prefs load. */}
           <style>{`
             :root {
-              --theme-bg: #0d0f12;
-              --theme-bg2: #131519;
+              --theme-bg: var(--t-bg);
+              --theme-bg2: var(--t-bg2);
               --accent: #4f8ef7;
               /* Safe-area insets for iOS notch / home indicator. Pages can
                  use env(safe-area-inset-bottom) directly, or the
@@ -73,7 +100,7 @@ export default function App({ Component, pageProps }: AppProps) {
             }
             html, body {
               background: var(--theme-bg);
-              color: #e8eaf0;
+              color: var(--t-text);
               margin: 0;
               padding: 0;
               -webkit-text-size-adjust: 100%;
@@ -87,9 +114,6 @@ export default function App({ Component, pageProps }: AppProps) {
               background: var(--theme-bg);
               min-height: 100vh;
               min-height: 100dvh;  /* dynamic viewport — accounts for mobile URL bar */
-            }
-            input[type="date"] {
-              color-scheme: dark;
             }
             /* iOS Safari zooms in on focused inputs whose font-size is < 16px.
                Force 16px+ on every text-like control to suppress the zoom
@@ -117,16 +141,16 @@ export default function App({ Component, pageProps }: AppProps) {
                admin pages that link to sections) — feels less jarring */
             html { scroll-behavior: smooth; }
             /* Custom scrollbar — desktop only (mobile uses native). Keeps
-               the dark theme consistent in tables / overflow areas. */
+               the theme consistent in tables / overflow areas. */
             @media (min-width: 768px) {
               ::-webkit-scrollbar { width: 10px; height: 10px; }
               ::-webkit-scrollbar-track { background: transparent; }
               ::-webkit-scrollbar-thumb {
-                background: rgba(255,255,255,0.08);
+                background: rgba(var(--t-ink),0.08);
                 border-radius: 8px;
               }
               ::-webkit-scrollbar-thumb:hover {
-                background: rgba(255,255,255,0.15);
+                background: rgba(var(--t-ink),0.15);
               }
             }
             /* Disable the iOS tap-flash on interactive elements but keep

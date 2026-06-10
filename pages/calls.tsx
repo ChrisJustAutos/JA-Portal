@@ -1152,8 +1152,8 @@ function LiveCallsBoard({ canMonitor }: { canMonitor: boolean }) {
 function modeBtn(color: string, disabled: boolean, monitorable: boolean): React.CSSProperties {
   return {
     padding: '4px 9px', borderRadius: 4, fontSize: 10, fontFamily: 'inherit', fontWeight: 600,
-    background: 'transparent', color: disabled ? '#545968' : color,
-    border: `1px solid ${disabled ? 'rgba(255,255,255,0.12)' : `${color}55`}`,
+    background: 'transparent', color: disabled ? 'var(--t-text3)' : color,
+    border: `1px solid ${disabled ? 'var(--t-border2)' : `${color}55`}`,
     cursor: disabled ? 'default' : 'pointer', opacity: monitorable ? 1 : 0.5,
     whiteSpace: 'nowrap',
   }
@@ -1626,7 +1626,7 @@ export default function CallsPage({ user }: { user: PortalUserSSR }) {
                             alignItems: 'center',
                             transition: 'background 0.1s',
                           }}
-                          onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = 'rgba(255,255,255,0.02)' }}
+                          onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = 'rgba(var(--t-ink),0.02)' }}
                           onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = 'transparent' }}>
                           <DirectionBadge direction={c.direction} disposition={c.disposition} />
                           <div style={{ minWidth: 0 }}>

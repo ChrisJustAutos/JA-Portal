@@ -4,7 +4,7 @@ import Head from 'next/head'
 import PortalTopBar from '../../lib/PortalTopBar'
 import { requirePageAuth } from '../../lib/authServer'
 import type { PortalUserSSR } from '../../lib/authServer'
-import { T } from '../../lib/ui/theme'
+import { T, alpha } from '../../lib/ui/theme'
 const ACTION_COLOR: Record<string, string> = { created: T.green, updated: T.blue, deleted: T.red, split: T.purple, converted: T.teal, payment: T.amber, status: T.amber }
 const FILTERS: { id: string; label: string }[] = [
   { id: '', label: 'All' }, { id: 'booking', label: 'Bookings' }, { id: 'quote', label: 'Quotes' },
@@ -65,7 +65,7 @@ export default function WorkshopActivityPage({ user }: { user: PortalUserSSR }) 
                   {g.items.map((a, i) => (
                     <div key={a.id} style={{ display: 'flex', gap: 12, padding: '10px 14px', borderTop: i ? `1px solid ${T.border}` : 'none', alignItems: 'baseline' }}>
                       <span style={{ fontSize: 11, color: T.text3, fontFamily: 'monospace', width: 48, flexShrink: 0 }}>{time(a.created_at)}</span>
-                      <span style={{ fontSize: 9, fontWeight: 700, textTransform: 'uppercase', color: ACTION_COLOR[a.action] || T.text2, background: `${ACTION_COLOR[a.action] || T.text2}1f`, padding: '2px 7px', borderRadius: 4, flexShrink: 0 }}>{a.action}</span>
+                      <span style={{ fontSize: 9, fontWeight: 700, textTransform: 'uppercase', color: ACTION_COLOR[a.action] || T.text2, background: alpha(ACTION_COLOR[a.action] || T.text2, '1f'), padding: '2px 7px', borderRadius: 4, flexShrink: 0 }}>{a.action}</span>
                       <div style={{ flex: 1, minWidth: 0 }}>
                         <span style={{ fontSize: 13 }}>{a.detail || `${a.entity} ${a.entity_label || ''}`}</span>
                         {a.entity_label && a.detail && <span style={{ fontSize: 12, color: T.text2 }}> · {a.entity_label}</span>}

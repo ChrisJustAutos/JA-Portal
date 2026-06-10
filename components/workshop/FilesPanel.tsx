@@ -8,7 +8,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { getSupabase } from '../../lib/supabaseClient'
-import { T } from '../../lib/ui/theme'
+import { T, alpha } from '../../lib/ui/theme'
 import { useConfirm } from '../ui/Feedback'
 
 interface WorkshopFile {
@@ -195,7 +195,7 @@ export default function FilesPanel({ bookingId, vehicleId, customerId, canEdit }
               {canEdit && (
                 <button onClick={e => deleteFile(f, e)} title="Delete" style={{
                   padding: '3px 8px', borderRadius: 4, fontSize: 10, fontWeight: 600, fontFamily: 'inherit',
-                  background: 'transparent', color: T.text3, border: `1px solid ${T.text3}55`, cursor: 'pointer',
+                  background: 'transparent', color: T.text3, border: `1px solid ${alpha(T.text3, '55')}`, cursor: 'pointer',
                 }}>×</button>
               )}
             </div>

@@ -359,8 +359,8 @@ export default function ProjectGraph({
               const ox = -(b.y - a.y) * 0.18, oy = (b.x - a.x) * 0.18
               return (
                 <path key={`l${i}`} d={`M${a.x},${a.y} Q${mx + ox},${my + oy} ${b.x},${b.y}`} fill="none"
-                  stroke={l.color || '#8b90a0'} strokeWidth={1.4 / v.zoom} strokeDasharray="5 4"
-                  style={{ opacity: on ? 0.7 : 0.06, transition: 'opacity 0.15s' }} />
+                  strokeWidth={1.4 / v.zoom} strokeDasharray="5 4"
+                  style={{ stroke: l.color || 'var(--t-text2)', opacity: on ? 0.7 : 0.06, transition: 'opacity 0.15s' }} />
               )
             }
             // Tree elbow: drop from the parent, then branch across to the
@@ -386,16 +386,16 @@ export default function ProjectGraph({
               return (
                 <g key={n.id} transform={`translate(${p.x},${p.y})`} onMouseDown={e => onNodeDown(e, n.id)} style={{ cursor: 'grab', opacity: isLit ? 1 : 0.2, transition: 'opacity 0.15s' }}>
                   <rect x={-pHitW / 2} y={-(PERSON_R + 24)} width={pHitW} height={2 * PERSON_R + 52} fill="transparent" />
-                  <circle r={PERSON_R} fill={`${n.color}ee`} stroke={sel ? '#e8eaf0' : n.color} strokeWidth={sel ? 2.5 : 2} />
+                  <circle r={PERSON_R} fill={`${n.color}ee`} style={{ stroke: sel ? 'var(--t-text)' : n.color }} strokeWidth={sel ? 2.5 : 2} />
                   {prog !== null && (
                     <>
-                      <circle r={R} fill="none" stroke="rgba(255,255,255,0.12)" strokeWidth={3} />
+                      <circle r={R} fill="none" style={{ stroke: 'var(--t-border2)' }} strokeWidth={3} />
                       <circle r={R} fill="none" stroke="#34c77b" strokeWidth={3} strokeLinecap="round"
                         strokeDasharray={`${(C * prog) / 100} ${C}`} transform="rotate(-90)" />
                       <text y={-(PERSON_R + 13)} textAnchor="middle" fontSize={11} fontWeight={700} fill="#34c77b" style={{ pointerEvents: 'none' }}>{prog}% done</text>
                     </>
                   )}
-                  <text y={PERSON_R + 17} textAnchor="middle" fontSize={14} fontWeight={700} fill="#e8eaf0" style={{ pointerEvents: 'none' }}>{n.label}</text>
+                  <text y={PERSON_R + 17} textAnchor="middle" fontSize={14} fontWeight={700} style={{ fill: 'var(--t-text)', pointerEvents: 'none' }}>{n.label}</text>
                   <title>{n.label}</title>
                 </g>
               )
@@ -411,28 +411,28 @@ export default function ProjectGraph({
               <g key={n.id} transform={`translate(${p.x},${p.y})`} onMouseDown={e => onNodeDown(e, n.id)} style={{ cursor: n.type === 'subitem' ? 'pointer' : 'grab', opacity: isLit ? 1 : 0.18, transition: 'opacity 0.15s' }}>
                 <rect x={hitLeft} y={-hitH / 2} width={hitRight - hitLeft} height={hitH} fill="transparent" />
                 {n.type === 'project' && n.critical && <circle r={r + 6} fill="none" stroke="#f04e4e" strokeWidth={2} />}
-                <circle r={r} fill={n.color} stroke={sel ? '#e8eaf0' : `${n.color}`} strokeWidth={sel ? 2.5 : 1.4} />
+                <circle r={r} fill={n.color} style={{ stroke: sel ? 'var(--t-text)' : n.color }} strokeWidth={sel ? 2.5 : 1.4} />
                 {/* per-project completion ring (subitem-based) */}
                 {n.type === 'project' && typeof n.progress === 'number' && (
                   <>
-                    <circle r={r + 3} fill="none" stroke="rgba(255,255,255,0.12)" strokeWidth={2.5} />
+                    <circle r={r + 3} fill="none" style={{ stroke: 'var(--t-border2)' }} strokeWidth={2.5} />
                     <circle r={r + 3} fill="none" stroke="#34c77b" strokeWidth={2.5} strokeLinecap="round"
                       strokeDasharray={`${2 * Math.PI * (r + 3) * Math.max(0, Math.min(100, n.progress)) / 100} ${2 * Math.PI * (r + 3)}`} transform="rotate(-90)" />
                   </>
                 )}
-                {n.hasUpdates && <circle cx={r * 0.85} cy={r * 0.85} r={3} fill="#e8eaf0" stroke={n.color} strokeWidth={1} />}
+                {n.hasUpdates && <circle cx={r * 0.85} cy={r * 0.85} r={3} style={{ fill: 'var(--t-text)' }} stroke={n.color} strokeWidth={1} />}
                 {n.type === 'project' && (n.taggedColors || []).map((c, k, arr) => (
                   <circle key={k} cx={(k - (arr.length - 1) / 2) * 7} cy={-(r + 7)} r={3} fill={c} />
                 ))}
                 {n.type === 'project' && (n.childCount || 0) > 0 && (
                   <g onMouseDown={e => { e.stopPropagation(); onToggleExpand?.(n.id) }} style={{ cursor: 'pointer' }}>
-                    <circle cx={-(r + 12)} cy={0} r={8} fill="#1a1d23" stroke="rgba(255,255,255,0.12)" strokeWidth={1} />
-                    <text x={-(r + 12)} y={3.5} textAnchor="middle" fontSize={10} fill="#b9bdc9" style={{ pointerEvents: 'none' }}>{n.expanded ? '−' : '+'}</text>
+                    <circle cx={-(r + 12)} cy={0} r={8} style={{ fill: 'var(--t-bg3)', stroke: 'var(--t-border2)' }} strokeWidth={1} />
+                    <text x={-(r + 12)} y={3.5} textAnchor="middle" fontSize={10} style={{ fill: 'var(--t-text2)', pointerEvents: 'none' }}>{n.expanded ? '−' : '+'}</text>
                   </g>
                 )}
                 {showLabel && (
                   <text x={r + 8} y={n.type === 'project' ? 4 : 3.5} fontSize={n.type === 'project' ? 12 : 10.5}
-                    fontWeight={n.type === 'project' ? 500 : 400} fill={n.type === 'project' ? '#e8eaf0' : '#b9bdc9'} style={{ pointerEvents: 'none' }}>
+                    fontWeight={n.type === 'project' ? 500 : 400} style={{ fill: n.type === 'project' ? 'var(--t-text)' : 'var(--t-text2)', pointerEvents: 'none' }}>
                     {label}
                   </text>
                 )}
@@ -454,6 +454,6 @@ export default function ProjectGraph({
 }
 
 const ctrlBtn: React.CSSProperties = {
-  width: 30, height: 30, borderRadius: 8, border: '1px solid rgba(255,255,255,0.12)',
-  background: '#131519', color: '#e8eaf0', fontSize: 15, cursor: 'pointer', fontFamily: 'inherit', lineHeight: 1,
+  width: 30, height: 30, borderRadius: 8, border: '1px solid var(--t-border2)',
+  background: 'var(--t-bg2)', color: 'var(--t-text)', fontSize: 15, cursor: 'pointer', fontFamily: 'inherit', lineHeight: 1,
 }

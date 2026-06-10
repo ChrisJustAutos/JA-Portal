@@ -63,7 +63,7 @@ export default function CrmCampaigns({ user }: { user: PortalUserSSR }) {
           </div>
           {campaigns.map(c => (
             <div key={c.id} onClick={() => setOpenId(c.id)} style={{ display: 'grid', gridTemplateColumns: '1.8fr 90px 90px 80px 80px 90px', gap: 10, padding: '11px 14px', borderTop: `1px solid ${T.border}`, fontSize: 13, cursor: 'pointer', alignItems: 'center' }}
-              onMouseEnter={e => (e.currentTarget.style.background = 'rgba(255,255,255,0.03)')} onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
+              onMouseEnter={e => (e.currentTarget.style.background = 'rgba(var(--t-ink),0.03)')} onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
               <div><div style={{ fontWeight: 500 }}>{c.name}</div><div style={{ fontSize: 11, color: T.text3 }}>{c.subject || 'No subject'}</div></div>
               <div><span style={{ fontSize: 10, padding: '2px 8px', borderRadius: 10, background: `${STATUS_COLOR[c.status]}22`, color: STATUS_COLOR[c.status], textTransform: 'capitalize' }}>{c.status}</span></div>
               <div style={{ textAlign: 'right', fontFamily: 'monospace', fontSize: 12 }}>{c.sent_count}/{c.total_recipients}</div>

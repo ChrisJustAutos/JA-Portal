@@ -48,7 +48,7 @@ interface InventoryPayload {
   monthly:{month:string;label:string;units:number;revenue:number}[]
   meta:{company:string;generatedAt:string;forecastWindowDays:number;invoiceCount:number;lineCount:number}
 }
-const INV_STATUS_COLOR:Record<InventoryItem['stockoutStatus'],string>={out:'#f04e4e',critical:'#f04e4e',low:'#f5a623',ok:'#34c77b',dead:'#a78bfa',noSales:'#545968'}
+const INV_STATUS_COLOR:Record<InventoryItem['stockoutStatus'],string>={out:'#f04e4e',critical:'#f04e4e',low:'#f5a623',ok:'#34c77b',dead:'#a78bfa',noSales:'var(--t-text3)'}
 const INV_STATUS_LABEL:Record<InventoryItem['stockoutStatus'],string>={out:'OUT',critical:'≤14d',low:'≤30d',ok:'OK',dead:'DEAD',noSales:'—'}
 const fmtDays=(n:number|null)=>n==null?'—':Math.round(n)+'d'
 const fmtPct =(n:number|null)=>n==null?'—':(n*100).toFixed(1)+'%'
@@ -153,7 +153,7 @@ function InvoiceTable({rows,accent,entity,onInvoiceClick}:{rows:Invoice[];accent
       <tbody>{rows.map((r,i)=>(
         <tr key={i} style={{borderTop:`1px solid ${T.border}`,cursor:onInvoiceClick?'pointer':'default',transition:'background 0.1s'}}
           onClick={()=>onInvoiceClick?.(r,entity||'JAWS')}
-          onMouseEnter={e=>{(e.currentTarget as HTMLElement).style.background='rgba(255,255,255,0.03)'}}
+          onMouseEnter={e=>{(e.currentTarget as HTMLElement).style.background='rgba(var(--t-ink),0.03)'}}
           onMouseLeave={e=>{(e.currentTarget as HTMLElement).style.background='transparent'}}
         >
           <td style={{fontSize:12,color:r.Status==='Open'?T.amber:accent,fontFamily:'monospace',padding:'7px 8px',fontWeight:r.Status==='Open'?500:400}}>{r.Number}</td>
@@ -266,7 +266,7 @@ function InvoiceDetailModal({invoice,entity,onClose}:{invoice:Invoice;entity:str
                   const isNarrative = li.Total == null
                   if (isNarrative) {
                     return (
-                      <tr key={i} style={{borderTop:`1px solid ${T.border}`,background:'rgba(255,255,255,0.015)'}}>
+                      <tr key={i} style={{borderTop:`1px solid ${T.border}`,background:'rgba(var(--t-ink),0.015)'}}>
                         <td colSpan={5} style={{fontSize:12,color:T.text,padding:'9px 8px',fontWeight:500,whiteSpace:'pre-wrap',lineHeight:1.5}}>
                           {li.Description||'—'}
                         </td>
@@ -374,8 +374,8 @@ function TrendChart({labels,jawsData,vpsData,chartId,entity='all'}:{labels:strin
         options:{responsive:true,maintainAspectRatio:false,
           plugins:{legend:{display:false},tooltip:{callbacks:{label:(ctx:any)=>`${ctx.dataset.label}: $${ctx.raw}k`}}},
           scales:{
-            x:{grid:{color:'rgba(255,255,255,0.05)'},ticks:{color:T.text3,font:{size:11},autoSkip:false,maxRotation:45}},
-            y:{grid:{color:'rgba(255,255,255,0.05)'},ticks:{color:T.text3,font:{size:11},callback:(v:any)=>'$'+v+'k'}},
+            x:{grid:{color:'rgba(var(--t-ink),0.05)'},ticks:{color:T.text3,font:{size:11},autoSkip:false,maxRotation:45}},
+            y:{grid:{color:'rgba(var(--t-ink),0.05)'},ticks:{color:T.text3,font:{size:11},callback:(v:any)=>'$'+v+'k'}},
           }}
       })
     }
@@ -412,8 +412,8 @@ function LineChart({labels,jawsData,vpsData,chartId,entity='all'}:{labels:string
         options:{responsive:true,maintainAspectRatio:false,
           plugins:{legend:{display:false},tooltip:{callbacks:{label:(ctx:any)=>`${ctx.dataset.label}: $${ctx.raw}k`}}},
           scales:{
-            x:{grid:{color:'rgba(255,255,255,0.05)'},ticks:{color:T.text3,font:{size:11}}},
-            y:{grid:{color:'rgba(255,255,255,0.05)'},ticks:{color:T.text3,font:{size:11},callback:(v:any)=>'$'+v+'k'}},
+            x:{grid:{color:'rgba(var(--t-ink),0.05)'},ticks:{color:T.text3,font:{size:11}}},
+            y:{grid:{color:'rgba(var(--t-ink),0.05)'},ticks:{color:T.text3,font:{size:11},callback:(v:any)=>'$'+v+'k'}},
           }}
       })
     }

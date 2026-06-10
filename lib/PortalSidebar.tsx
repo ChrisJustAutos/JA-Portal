@@ -13,9 +13,9 @@ import { useNotificationSummary } from './useNotifications'
 
 // ── Design tokens (kept in sync with portal) ─────────────────
 const T = {
-  bg2: '#131519', bg3: '#1a1d23',
-  border: 'rgba(255,255,255,0.07)',
-  text: '#e8eaf0', text2: '#8b90a0', text3: '#545968',
+  bg2: 'var(--t-bg2)', bg3: 'var(--t-bg3)',
+  border: 'var(--t-border)',
+  text: 'var(--t-text)', text2: 'var(--t-text2)', text3: 'var(--t-text3)',
   blue: '#4f8ef7', teal: '#2dd4bf', green: '#34c77b',
   amber: '#f5a623', red: '#f04e4e', purple: '#a78bfa',
   accent: '#4f8ef7',
@@ -306,7 +306,7 @@ export default function PortalSidebar({
     const isDragging = drag?.kind === 'item' && drag.id === it.id
     const isDropTarget = drag?.kind === 'item' && dragOverItemId === it.id && drag.id !== it.id
     const alertCount = (mergedAlerts[it.id] ?? (it.alertKey ? mergedAlerts[it.alertKey] : 0)) || 0
-    const bg = isActive ? 'rgba(255,255,255,0.04)' : 'transparent'
+    const bg = isActive ? 'rgba(var(--t-ink),0.04)' : 'transparent'
     const color = isActive ? T.text : T.text2
     const containerKey = containerId ?? '__ungrouped__'
 

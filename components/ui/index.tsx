@@ -9,7 +9,7 @@
 //            Skeleton, qbtn, miniBtn, pagerBtn, pbtn, inp } from '../components/ui'
 
 import React from 'react'
-import { T, ACCENTS } from '../../lib/ui/theme'
+import { T, ACCENTS, alpha } from '../../lib/ui/theme'
 
 // ── Filter chip (pill button with active state) ─────────────────────────
 export function Chip({ label, active, onClick, c, size = 'sm' }: {
@@ -21,8 +21,8 @@ export function Chip({ label, active, onClick, c, size = 'sm' }: {
   return (
     <button onClick={onClick} style={{
       padding: pad, borderRadius: size === 'md' ? 6 : 4, fontSize: fs, fontFamily: 'inherit', fontWeight: 600, whiteSpace: 'nowrap',
-      background: active ? `${accent}1f` : 'transparent', color: active ? accent : T.text2,
-      border: `1px solid ${active ? accent + '55' : T.border}`, cursor: 'pointer',
+      background: active ? alpha(accent, '1f') : 'transparent', color: active ? accent : T.text2,
+      border: `1px solid ${active ? alpha(accent, '55') : T.border}`, cursor: 'pointer',
     }}>{label}</button>
   )
 }
@@ -31,7 +31,7 @@ export function Chip({ label, active, onClick, c, size = 'sm' }: {
 export function StatusPill({ label, color, uppercase = true }: { label: string; color: string; uppercase?: boolean }) {
   return (
     <span style={{
-      display: 'inline-flex', padding: '2px 8px', borderRadius: 3, background: `${color}1e`, color,
+      display: 'inline-flex', padding: '2px 8px', borderRadius: 3, background: alpha(color, '1e'), color,
       fontSize: 10, fontWeight: 600, textTransform: uppercase ? 'uppercase' : undefined, whiteSpace: 'nowrap',
     }}>{label}</span>
   )
@@ -113,7 +113,7 @@ export function Skeleton({ width = '100%', height = 14, radius = 4, style }: {
 }) {
   return (
     <>
-      <span style={{ display: 'inline-block', width, height, borderRadius: radius, background: 'rgba(255,255,255,0.06)', animation: 'ja-skeleton 1.4s ease-in-out infinite', ...style }} />
+      <span style={{ display: 'inline-block', width, height, borderRadius: radius, background: 'rgba(var(--t-ink),0.06)', animation: 'ja-skeleton 1.4s ease-in-out infinite', ...style }} />
       <style>{`@keyframes ja-skeleton { 0%,100% { opacity: 0.5 } 50% { opacity: 1 } }`}</style>
     </>
   )
@@ -135,19 +135,19 @@ export function SkeletonRows({ rows = 6, height = 38 }: { rows?: number; height?
 /** Quick-action button: outlined, coloured text. */
 export const qbtn = (c: string): React.CSSProperties => ({
   padding: '7px 14px', borderRadius: 5, fontSize: 12, fontFamily: 'inherit', fontWeight: 600,
-  background: 'transparent', color: c, border: `1px solid ${c}55`, cursor: 'pointer',
+  background: 'transparent', color: c, border: `1px solid ${alpha(c, '55')}`, cursor: 'pointer',
 })
 
 /** Primary button: tinted background. */
 export const pbtn = (c: string): React.CSSProperties => ({
   padding: '8px 16px', borderRadius: 6, fontSize: 12, fontFamily: 'inherit', fontWeight: 600,
-  background: `${c}1e`, color: c, border: `1px solid ${c}55`, cursor: 'pointer',
+  background: alpha(c, '1e'), color: c, border: `1px solid ${alpha(c, '55')}`, cursor: 'pointer',
 })
 
 /** Tiny inline row-action button. */
 export const miniBtn = (c: string): React.CSSProperties => ({
   padding: '3px 8px', borderRadius: 4, fontSize: 10, fontFamily: 'inherit', fontWeight: 600,
-  background: 'transparent', color: c, border: `1px solid ${c}55`, cursor: 'pointer',
+  background: 'transparent', color: c, border: `1px solid ${alpha(c, '55')}`, cursor: 'pointer',
 })
 
 /** Pager (prev/next) button. */
