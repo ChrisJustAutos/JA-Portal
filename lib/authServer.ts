@@ -8,8 +8,10 @@ import { createClient, SupabaseClient } from '@supabase/supabase-js'
 import { Permission, roleHasPermission, UserRole } from './permissions'
 
 // Service-role client — bypasses RLS. Only use from server-side code.
+// Exported so API routes can import it instead of re-declaring a local sb()
+// factory (91 copies audited 2026-06-10 — adopt this incrementally).
 let _serviceClient: SupabaseClient | null = null
-function getServiceClient(): SupabaseClient {
+export function getServiceClient(): SupabaseClient {
   if (_serviceClient) return _serviceClient
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY
@@ -25,6 +27,17 @@ export interface PortalUser {
   role: UserRole
   isActive: boolean
   visibleTabs: string[] | null  // null = use role defaults
+}
+
+// The SSR page-prop shape produced by requirePageAuth — import this instead of
+// re-declaring a per-page `interface PortalUserSSR` (15+ pages had drifting
+// copies, several missing the 'workshop' role from the union).
+export interface PortalUserSSR {
+  id: string
+  email: string
+  displayName: string | null
+  role: UserRole
+  visibleTabs?: string[] | null
 }
 
 // Extract the JWT from either the Authorization header or our session cookie.
