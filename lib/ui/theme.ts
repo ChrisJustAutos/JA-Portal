@@ -6,7 +6,8 @@
 //   import { T } from '../lib/ui/theme'
 //
 // Light/dark mode (2026-06-11): surface, text and border tokens are now CSS
-// variables. The actual colour values live in styles/globals.css — dark on
+// variables. The actual colour values live in the global <style> block in
+// pages/_app.tsx (NOT styles/globals.css, which is not imported) — dark on
 // :root (default) and light under html[data-theme="light"] — so every page
 // that uses `T` switches theme automatically with zero code changes.
 //
@@ -40,9 +41,10 @@ export const T = {
 
 export type ThemeTokens = typeof T
 
-// The raw palette values, keyed by theme. globals.css is the runtime source
-// of truth — these exist for places that need a literal colour (PDF/print
-// generation, canvas, emails, theme-color meta) and for the settings preview.
+// The raw palette values, keyed by theme. The _app.tsx global <style> block
+// is the runtime source of truth — these exist for places that need a literal
+// colour (PDF/print generation, canvas, emails, theme-color meta) and for the
+// settings preview.
 export const DARK_PALETTE = {
   bg: '#0d0f12', bg2: '#131519', bg3: '#1a1d23', bg4: '#21252d',
   border: 'rgba(255,255,255,0.07)', border2: 'rgba(255,255,255,0.12)',

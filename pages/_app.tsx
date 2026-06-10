@@ -82,10 +82,48 @@ export default function App({ Component, pageProps }: AppProps) {
           {/* Global background — prevents any flash/leak of the wrong theme.
               Every portal page draws on top of this, so even if a component
               fails to render a background, the user still sees the portal
-              surface. The --t-* palette lives in styles/globals.css (dark on
-              :root, light under html[data-theme="light"]); ThemeVarsBridge
-              overlays dark preset tints per user once prefs load. */}
-          <style>{`
+              surface.
+
+              THE THEME PALETTES LIVE HERE (this is the app's only global
+              stylesheet — styles/globals.css is NOT imported). The shared T
+              tokens in lib/ui/theme.ts are var(--t-*) references that resolve
+              against these blocks. Dark is the default on :root; light
+              overrides under html[data-theme="light"] (attribute set pre-paint
+              by _document.tsx and kept in sync by ThemeVarsBridge, which also
+              overlays the dark preset tints per user). --t-ink is an RGB
+              TRIPLET for theme-aware washes: rgba(var(--t-ink), 0.05).
+
+              dangerouslySetInnerHTML is REQUIRED here: React HTML-escapes
+              plain string children of <style>, turning quoted selectors like
+              html[data-theme="light"] into html[data-theme=&quot;light&quot;]
+              — an invalid selector the browser drops. */}
+          <style dangerouslySetInnerHTML={{ __html: `
+            :root {
+              --t-bg:      #0d0f12;
+              --t-bg2:     #131519;
+              --t-bg3:     #1a1d23;
+              --t-bg4:     #21252d;
+              --t-border:  rgba(255,255,255,0.07);
+              --t-border2: rgba(255,255,255,0.12);
+              --t-text:    #e8eaf0;
+              --t-text2:   #8b90a0;
+              --t-text3:   #545968;
+              --t-ink:     255,255,255;
+              color-scheme: dark;
+            }
+            html[data-theme="light"] {
+              --t-bg:      #f3f4f6;
+              --t-bg2:     #ffffff;
+              --t-bg3:     #eceef2;
+              --t-bg4:     #e2e5ea;
+              --t-border:  rgba(16,24,40,0.10);
+              --t-border2: rgba(16,24,40,0.18);
+              --t-text:    #171a21;
+              --t-text2:   #5b6271;
+              --t-text3:   #9097a6;
+              --t-ink:     16,24,40;
+              color-scheme: light;
+            }
             :root {
               --theme-bg: var(--t-bg);
               --theme-bg2: var(--t-bg2);
@@ -158,7 +196,7 @@ export default function App({ Component, pageProps }: AppProps) {
             button, a, input, select, textarea, [role="button"] {
               -webkit-tap-highlight-color: transparent;
             }
-          `}</style>
+          ` }} />
         </Head>
         <ThemeVarsBridge/>
         <ServiceWorkerRegister/>
