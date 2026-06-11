@@ -44,6 +44,7 @@ export default function CustomersPage({ user }: { user: PortalUserSSR }) {
       if (debouncedQ) params.set('q', debouncedQ)
       params.set('limit', String(PAGE))
       params.set('offset', String(offset))
+      params.set('count', '1')   // pagination needs the total (pickers skip it)
       const r = await fetch(`/api/workshop/customers?${params}`)
       const d = await r.json()
       if (r.ok) { setCustomers(d.customers || []); setTotal(d.total || 0) }

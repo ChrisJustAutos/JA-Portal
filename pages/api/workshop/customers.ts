@@ -24,8 +24,12 @@ export default withAuth('view:diary', async (req, res, user) => {
     const q = String(req.query.q || '').trim().replace(/[%,()*]/g, ' ').trim()
     const limit = Math.min(200, Math.max(1, Number(req.query.limit) || 20))
     const offset = Math.max(0, Number(req.query.offset) || 0)
+    // Exact counts scan every matching row — only the paginated Customers
+    // screen needs the total (it passes count=1). The entity pickers fire a
+    // query per keystroke and skip it.
+    const wantCount = String(req.query.count || '') === '1'
     let query = db.from('workshop_customers')
-      .select('id, name, first_name, last_name, phone, mobile, email, company, customer_number', { count: 'exact' })
+      .select('id, name, first_name, last_name, phone, mobile, email, company, customer_number', wantCount ? { count: 'exact' } : undefined)
       .order('name', { ascending: true })
       .range(offset, offset + limit - 1)
     if (q) query = query.or(`name.ilike.%${q}%,phone.ilike.%${q}%,mobile.ilike.%${q}%,email.ilike.%${q}%`)

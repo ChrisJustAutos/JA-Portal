@@ -3,7 +3,7 @@
 // inventory picker), set status, and convert an accepted quote into a diary job.
 // Reads/writes via /api/workshop/* (service-role, gated view:diary/edit:bookings).
 
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useRef } from 'react'
 import Head from 'next/head'
 import Link from 'next/link'
 import { useRouter } from 'next/router'
@@ -289,6 +289,7 @@ function EntityPicker({ label, kind, value, customerId, disabled, onPick }: {
   const [adding, setAdding] = useState(false)
   const [form, setForm] = useState<Record<string, string>>({})
   const [busy, setBusy] = useState(false)
+  const boxRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     if (!open || value) return
@@ -299,9 +300,19 @@ function EntityPicker({ label, kind, value, customerId, disabled, onPick }: {
         if (kind === 'customer') setResults((d.customers || []).map((c: any) => ({ id: c.id, label: customerLabel(c) + (c.mobile || c.phone ? ` · ${c.mobile || c.phone}` : '') })))
         else setResults((d.vehicles || []).map((v: any) => ({ id: v.id, label: vehicleLabel(v) })))
       } catch { /* ignore */ }
-    }, 250)
+    }, 120)
     return () => clearTimeout(t)
   }, [q, open, kind, customerId, value])
+
+  // Close the dropdown when clicking anywhere outside the picker.
+  useEffect(() => {
+    if (!open) return
+    const onDown = (e: MouseEvent) => {
+      if (boxRef.current && !boxRef.current.contains(e.target as Node)) setOpen(false)
+    }
+    document.addEventListener('mousedown', onDown)
+    return () => document.removeEventListener('mousedown', onDown)
+  }, [open])
 
   // Vehicle auto-populate: when a customer is chosen, pull their vehicles and
   // auto-select if there's exactly one; otherwise pre-load the list.
@@ -345,8 +356,10 @@ function EntityPicker({ label, kind, value, customerId, disabled, onPick }: {
   return (
     <Field label={label}>
       {!adding ? (
-        <div style={{ position: 'relative' }}>
-          <input value={q} disabled={disabled} onFocus={() => setOpen(true)} onChange={e => { setQ(e.target.value); setOpen(true) }}
+        <div ref={boxRef} style={{ position: 'relative' }}>
+          <input value={q} disabled={disabled} onFocus={() => setOpen(true)}
+            onKeyDown={e => { if (e.key === 'Escape') setOpen(false) }}
+            onChange={e => { setQ(e.target.value); setOpen(true) }}
             placeholder={kind === 'customer' ? 'Search name / phone…' : (customerId ? 'Pick or add vehicle' : 'Search rego / make…')} style={inp} />
           {open && !disabled && (
             <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 5, background: T.bg3, border: `1px solid ${T.border2}`, borderRadius: 6, marginTop: 2, maxHeight: 200, overflowY: 'auto' }}>
