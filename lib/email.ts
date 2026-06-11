@@ -16,6 +16,7 @@
 //                   A per-call replyTo always wins. Applied to both paths.
 
 import { sendMail as graphSendMail } from './microsoft-graph'
+import { getIntegrations } from './integration-config'
 
 export interface MailOptions {
   to: string[]
@@ -29,14 +30,18 @@ export interface MailOptions {
 // `mailbox` is the intended sender. With Graph it's the M365 mailbox to send as;
 // with Resend it's the fallback "from" when RESEND_FROM isn't configured.
 export async function sendMail(mailbox: string, opts: MailOptions): Promise<void> {
+  // Credentials resolve via integration_settings (Settings → Connections →
+  // Integrations) with env fallback.
+  const cfg = await getIntegrations(['RESEND_API_KEY', 'RESEND_FROM', 'RESEND_REPLY_TO'])
+
   // A per-call replyTo wins; otherwise fall back to the configured default so
   // replies to a noreply@ sender reach a real inbox.
-  const replyTo = opts.replyTo || (process.env.RESEND_REPLY_TO || '').trim() || undefined
+  const replyTo = opts.replyTo || cfg.RESEND_REPLY_TO || undefined
 
-  const key = (process.env.RESEND_API_KEY || '').trim()
+  const key = cfg.RESEND_API_KEY
   if (!key) { await graphSendMail(mailbox, { ...opts, replyTo }); return }
 
-  const from = (process.env.RESEND_FROM || '').trim() || mailbox
+  const from = cfg.RESEND_FROM || mailbox
   const payload: Record<string, any> = {
     from,
     to: opts.to,

@@ -6,6 +6,7 @@
 
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
 import { contactDisplayName } from './crm'
+import { getIntegration, getIntegrations } from './integration-config'
 
 export function campaignSvc(): SupabaseClient {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL
@@ -17,8 +18,9 @@ export function campaignSvc(): SupabaseClient {
 export function appBaseUrl(): string {
   return (process.env.NEXT_PUBLIC_APP_URL || process.env.APP_BASE_URL || 'https://justautos.app').replace(/\/+$/, '')
 }
-function campaignFromAddress(): string {
-  return (process.env.RESEND_CAMPAIGN_FROM || process.env.RESEND_FROM || 'Just Autos <noreply@mail.justautos.app>').trim()
+async function campaignFromAddress(): Promise<string> {
+  const cfg = await getIntegrations(['RESEND_CAMPAIGN_FROM', 'RESEND_FROM'])
+  return cfg.RESEND_CAMPAIGN_FROM || cfg.RESEND_FROM || 'Just Autos <noreply@mail.justautos.app>'
 }
 
 export interface SegmentDef {
@@ -118,7 +120,7 @@ export async function materializeRecipients(db: SupabaseClient, campaign: any): 
 
 // ── Sending ───────────────────────────────────────────────────────────
 async function resendBatch(items: any[]): Promise<{ ids: (string | null)[]; error?: string }> {
-  const key = (process.env.RESEND_API_KEY || '').trim()
+  const key = await getIntegration('RESEND_API_KEY')
   if (!key) return { ids: items.map(() => null), error: 'resend_not_configured' }
   try {
     const r = await fetch('https://api.resend.com/emails/batch', {
@@ -144,8 +146,9 @@ export async function sendCampaignBatch(db: SupabaseClient, campaign: any, limit
     return { sent: 0, failed: 0, done: true }
   }
 
-  const from = campaign.from_name ? `${campaign.from_name} <${campaignFromAddress().replace(/^.*<|>.*$/g, '')}>` : campaignFromAddress()
-  const replyTo = campaign.reply_to || (process.env.RESEND_REPLY_TO || '').trim() || undefined
+  const fromAddr = await campaignFromAddress()
+  const from = campaign.from_name ? `${campaign.from_name} <${fromAddr.replace(/^.*<|>.*$/g, '')}>` : fromAddr
+  const replyTo = campaign.reply_to || (await getIntegration('RESEND_REPLY_TO')) || undefined
   const base = appBaseUrl()
 
   // Build a contact lookup for personalisation.

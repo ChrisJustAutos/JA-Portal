@@ -11,6 +11,7 @@
 import { createClient } from '@supabase/supabase-js'
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { contactDisplayName, findContact, logActivity, pickRoundRobinOwner } from '../../../lib/crm'
+import { getIntegration } from '../../../lib/integration-config'
 import { enrolLead } from '../../../lib/crm-automations'
 import { notify } from '../../../lib/notifications'
 
@@ -45,7 +46,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   // Auth: shared token. Accepted via the x-crm-token header, a `token` body
   // field, or HTTP Basic auth (username OR password = the token) — the last
   // lets WordPress/Formidable's "Basic Auth" box carry it server-side.
-  const expected = process.env.CRM_INTAKE_TOKEN
+  const expected = await getIntegration('CRM_INTAKE_TOKEN')
   let provided = String(req.headers['x-crm-token'] || body.token || '')
   const authz = String(req.headers.authorization || '')
   if (!provided && authz.toLowerCase().startsWith('basic ')) {

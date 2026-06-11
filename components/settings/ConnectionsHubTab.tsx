@@ -11,14 +11,16 @@
 import { useState } from 'react'
 import ConnectionsTab from './ConnectionsTab'
 import MyobTab from './MyobTab'
+import IntegrationsTab from './IntegrationsTab'
 import { T } from '../../lib/ui/theme'
 
-type SubTab = 'health' | 'myob'
+type SubTab = 'integrations' | 'health' | 'myob'
 
-export default function ConnectionsHubTab({ initialSubTab = 'health' }: { initialSubTab?: SubTab }) {
+export default function ConnectionsHubTab({ initialSubTab = 'integrations' }: { initialSubTab?: SubTab }) {
   const [sub, setSub] = useState<SubTab>(initialSubTab)
 
   const subTabs: { id: SubTab; label: string; hint: string }[] = [
+    { id: 'integrations', label: 'Integrations', hint: 'Self-service credentials — SMS, mail-outs, website intake. Paste keys, hit test, connected.' },
     { id: 'health', label: 'Health',          hint: 'Live status across every integration · auto-refreshes every 30s' },
     { id: 'myob',   label: 'MYOB Connection', hint: 'OAuth, company file selection, test, and clearing accounts for AP payments' },
   ]
@@ -47,6 +49,7 @@ export default function ConnectionsHubTab({ initialSubTab = 'health' }: { initia
 
       <div style={{fontSize:11,color:T.text3,marginTop:-6}}>{active.hint}</div>
 
+      {sub === 'integrations' && <IntegrationsTab/>}
       {sub === 'health' && <ConnectionsTab/>}
       {sub === 'myob'   && <MyobTab/>}
     </div>

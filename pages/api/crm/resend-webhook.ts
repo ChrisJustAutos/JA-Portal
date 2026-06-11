@@ -15,7 +15,8 @@ function sb() {
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') { res.setHeader('Allow', 'POST'); return res.status(405).json({ error: 'POST only' }) }
-  const secret = process.env.RESEND_WEBHOOK_SECRET
+  const { getIntegration } = await import('../../../lib/integration-config')
+  const secret = await getIntegration('RESEND_WEBHOOK_SECRET')
   if (!secret) return res.status(200).json({ ok: true, skipped: 'not_configured' })
   if (String(req.query.key || '') !== secret) return res.status(401).json({ error: 'Unauthorized' })
 
