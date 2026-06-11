@@ -7,7 +7,8 @@ import { roleHasPermission } from '../../lib/permissions'
 import CrmShell, { PortalUserSSR, T } from '../../components/crm/CrmShell'
 import { Overlay, Field, input, primaryBtn, ghostBtn, closeBtn } from '../../components/crm/ui'
 import { useConfirm } from '../../components/ui/Feedback'
-import { LEAD_STAGES, LEAD_STAGE_LABELS, LeadStage } from '../../lib/crm'
+
+interface StageOpt { key: string; label: string; archived_at: string | null }
 
 interface Step { delay_value: number; delay_unit: 'days' | 'hours'; action: string; subject: string; body: string; task_priority: string }
 interface Automation {
@@ -31,6 +32,11 @@ export default function CrmAutomations({ user }: { user: PortalUserSSR }) {
   const [counts, setCounts] = useState<Record<string, any>>({})
   const [loading, setLoading] = useState(true)
   const [editing, setEditing] = useState<Automation | null>(null)
+  const [stages, setStages] = useState<StageOpt[]>([])
+  useEffect(() => {
+    fetch('/api/crm/stages').then(r => r.json()).then(d => setStages((d.stages || []).filter((s: StageOpt) => !s.archived_at))).catch(() => {})
+  }, [])
+  const stageLabel = (key: string | null) => stages.find(s => s.key === key)?.label || key || ''
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -55,8 +61,8 @@ export default function CrmAutomations({ user }: { user: PortalUserSSR }) {
   }
 
   function triggerSummary(a: Automation) {
-    if (a.trigger_event === 'lead_created') return a.trigger_stage ? `When a lead is created at "${LEAD_STAGE_LABELS[a.trigger_stage as LeadStage] || a.trigger_stage}"` : 'When any lead is created'
-    return `When a lead moves to "${LEAD_STAGE_LABELS[a.trigger_stage as LeadStage] || a.trigger_stage || 'a stage'}"`
+    if (a.trigger_event === 'lead_created') return a.trigger_stage ? `When a lead is created at "${stageLabel(a.trigger_stage)}"` : 'When any lead is created'
+    return `When a lead moves to "${stageLabel(a.trigger_stage) || 'a stage'}"`
   }
 
   return (
@@ -104,12 +110,12 @@ export default function CrmAutomations({ user }: { user: PortalUserSSR }) {
         </div>
       </div>
 
-      {editing && <Editor automation={editing} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load() }} />}
+      {editing && <Editor automation={editing} stages={stages} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load() }} />}
     </CrmShell>
   )
 }
 
-function Editor({ automation, onClose, onSaved }: { automation: Automation; onClose: () => void; onSaved: () => void }) {
+function Editor({ automation, stages, onClose, onSaved }: { automation: Automation; stages: StageOpt[]; onClose: () => void; onSaved: () => void }) {
   const [name, setName] = useState(automation.name)
   const [description, setDescription] = useState(automation.description || '')
   const [triggerEvent, setTriggerEvent] = useState(automation.trigger_event)
@@ -160,18 +166,18 @@ function Editor({ automation, onClose, onSaved }: { automation: Automation; onCl
         </select>
         <select value={triggerStage} onChange={e => setTriggerStage(e.target.value)} style={input}>
           <option value="">{triggerEvent === 'lead_created' ? 'Any stage' : 'Choose a stage…'}</option>
-          {LEAD_STAGES.map(s => <option key={s} value={s}>{LEAD_STAGE_LABELS[s as LeadStage]}</option>)}
+          {stages.map(s => <option key={s.key} value={s.key}>{s.label}</option>)}
         </select>
       </Field>
 
       <Field label="Stop the sequence if the lead reaches">
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-          {LEAD_STAGES.map(s => (
-            <button key={s} onClick={() => toggleCancel(s)} style={{
+          {stages.map(s => (
+            <button key={s.key} onClick={() => toggleCancel(s.key)} style={{
               fontSize: 11, padding: '4px 9px', borderRadius: 6, cursor: 'pointer', fontFamily: 'inherit',
-              background: cancelStages.includes(s) ? 'rgba(240,78,78,0.16)' : 'transparent',
-              color: cancelStages.includes(s) ? T.red : T.text3, border: `1px solid ${cancelStages.includes(s) ? T.red + '55' : T.border2}`,
-            }}>{LEAD_STAGE_LABELS[s as LeadStage]}</button>
+              background: cancelStages.includes(s.key) ? 'rgba(240,78,78,0.16)' : 'transparent',
+              color: cancelStages.includes(s.key) ? T.red : T.text3, border: `1px solid ${cancelStages.includes(s.key) ? T.red + '55' : T.border2}`,
+            }}>{s.label}</button>
           ))}
         </div>
       </Field>

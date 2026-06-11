@@ -3,19 +3,28 @@ import { useState, useEffect, useCallback, useMemo } from 'react'
 import { useRouter } from 'next/router'
 import { requirePageAuth } from '../../lib/authServer'
 import { roleHasPermission } from '../../lib/permissions'
-import CrmShell, { PortalUserSSR, T, STAGE_COLOR, fmtMoney, fmtDate } from '../../components/crm/CrmShell'
+import CrmShell, { PortalUserSSR, T, fmtMoney, fmtDate } from '../../components/crm/CrmShell'
 import { Overlay, Field, Timeline, input, primaryBtn, ghostBtn, closeBtn } from '../../components/crm/ui'
-import { PIPELINE_COLUMNS, LEAD_STAGE_LABELS, LEAD_STAGES, LeadStage } from '../../lib/crm'
+import StageEditor, { StageRow } from '../../components/crm/StageEditor'
+import { QUOTE_STATUS_META, QuoteStatus } from '../../lib/workshop'
 import { useToast } from '../../components/ui/Feedback'
 
 interface Lead {
   id: string; title: string; stage: string; value: number | null; source: string | null
   vehicle: string | null; owner_id: string | null; contact_id: string | null
-  contact_attempts: number; next_follow_up_at: string | null; created_at: string
+  contact_attempts: number; next_follow_up_at: string | null; last_activity_at?: string | null; created_at: string
+  workshop_quote_id?: string | null
+  quote?: { id: string; status: QuoteStatus; total: number | null } | null
   contact?: { id: string; name: string; email: string | null; phone: string | null; mobile: string | null; company_name: string | null } | null
   owner?: { id: string; display_name: string | null } | null
 }
 interface StaffUser { id: string; display_name: string | null; email: string }
+
+function overdueDays(l: Lead): number {
+  if (!l.next_follow_up_at) return 0
+  const d = Math.floor((Date.now() - new Date(l.next_follow_up_at).getTime()) / 86400000)
+  return d > 0 ? d : 0
+}
 
 export default function CrmPipeline({ user }: { user: PortalUserSSR }) {
   const router = useRouter()
@@ -28,7 +37,12 @@ export default function CrmPipeline({ user }: { user: PortalUserSSR }) {
   const [showNew, setShowNew] = useState(false)
   const [dragId, setDragId] = useState<string | null>(null)
   const [dragOver, setDragOver] = useState<string | null>(null)
+  const [stages, setStages] = useState<StageRow[]>([])
+  const [showStageEditor, setShowStageEditor] = useState(false)
 
+  const loadStages = useCallback(async () => {
+    try { const r = await fetch('/api/crm/stages'); const d = await r.json(); if (r.ok) setStages(d.stages || []) } catch { /* keep */ }
+  }, [])
   const load = useCallback(async () => {
     setLoading(true)
     try {
@@ -38,14 +52,30 @@ export default function CrmPipeline({ user }: { user: PortalUserSSR }) {
     } catch { /* keep */ } finally { setLoading(false) }
   }, [owner])
   useEffect(() => { load() }, [load])
+  useEffect(() => { loadStages() }, [loadStages])
   useEffect(() => { fetch('/api/crm/users').then(r => r.json()).then(d => setUsers(d.users || [])).catch(() => {}) }, [])
+
+  const columns = useMemo(() => stages.filter(s => s.on_board && !s.archived_at), [stages])
+  const liveStages = useMemo(() => stages.filter(s => !s.archived_at), [stages])
+  const overdueCount = useMemo(() => leads.filter(l => {
+    const st = stages.find(s => s.key === l.stage)
+    return overdueDays(l) > 0 && st && !st.is_won && !st.is_lost
+  }).length, [leads, stages])
 
   const byStage = useMemo(() => {
     const m: Record<string, Lead[]> = {}
-    for (const s of PIPELINE_COLUMNS) m[s] = []
+    for (const s of columns) m[s.key] = []
     for (const l of leads) (m[l.stage] = m[l.stage] || []).push(l)
+    // Overdue follow-ups first, then stalest activity — the "work this next" sort.
+    for (const k of Object.keys(m)) {
+      m[k].sort((a, b) => {
+        const od = overdueDays(b) - overdueDays(a)
+        if (od !== 0) return od
+        return new Date(a.last_activity_at || a.created_at).getTime() - new Date(b.last_activity_at || b.created_at).getTime()
+      })
+    }
     return m
-  }, [leads])
+  }, [leads, columns])
 
   async function moveStage(id: string, stage: string) {
     setLeads(prev => prev.map(l => l.id === id ? { ...l, stage } : l))  // optimistic
@@ -71,7 +101,11 @@ export default function CrmPipeline({ user }: { user: PortalUserSSR }) {
             ))}
           </div>
           <span style={{ flex: 1 }} />
+          {overdueCount > 0 && <span style={{ fontSize: 11, color: T.red, fontWeight: 600 }}>⏰ {overdueCount} overdue follow-up{overdueCount === 1 ? '' : 's'}</span>}
           {loading && <span style={{ color: T.text3, fontSize: 12, fontStyle: 'italic' }}>Loading…</span>}
+          {canEdit && (
+            <button onClick={() => setShowStageEditor(true)} title="Edit pipeline stages + workshop quote sync" style={{ ...ghostBtn, padding: '7px 10px' }}>⚙</button>
+          )}
           {canEdit && (
             <button onClick={() => setShowNew(true)} style={primaryBtn}>+ New lead</button>
           )}
@@ -79,7 +113,8 @@ export default function CrmPipeline({ user }: { user: PortalUserSSR }) {
 
         {/* Board */}
         <div style={{ display: 'flex', gap: 12, flex: 1, overflowX: 'auto', minHeight: 0 }}>
-          {PIPELINE_COLUMNS.map(stage => {
+          {columns.map(st => {
+            const stage = st.key
             const items = byStage[stage] || []
             const sum = items.reduce((a, l) => a + (Number(l.value) || 0), 0)
             return (
@@ -93,37 +128,53 @@ export default function CrmPipeline({ user }: { user: PortalUserSSR }) {
                   border: `1px solid ${dragOver === stage ? T.accent : T.border}`, borderRadius: 10,
                 }}>
                 <div style={{ padding: '10px 12px', borderBottom: `1px solid ${T.border}`, display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <span style={{ width: 8, height: 8, borderRadius: '50%', background: STAGE_COLOR[stage] }} />
-                  <span style={{ fontSize: 12, fontWeight: 600 }}>{LEAD_STAGE_LABELS[stage]}</span>
+                  <span style={{ width: 8, height: 8, borderRadius: '50%', background: st.color }} />
+                  <span style={{ fontSize: 12, fontWeight: 600 }}>{st.label}</span>
                   <span style={{ fontSize: 10, color: T.text3, fontFamily: 'monospace' }}>{items.length}</span>
                   <span style={{ flex: 1 }} />
                   {sum > 0 && <span style={{ fontSize: 10, color: T.text3, fontFamily: 'monospace' }}>{fmtMoney(sum)}</span>}
                 </div>
                 <div style={{ flex: 1, overflowY: 'auto', padding: 8, display: 'flex', flexDirection: 'column', gap: 8 }}>
-                  {items.map(l => (
-                    <div key={l.id}
-                      draggable={canEdit}
-                      onDragStart={() => setDragId(l.id)}
-                      onDragEnd={() => { setDragId(null); setDragOver(null) }}
-                      onClick={() => setOpenId(l.id)}
-                      style={{
-                        background: T.bg3, border: `1px solid ${T.border}`, borderRadius: 8, padding: 10,
-                        cursor: 'pointer', opacity: dragId === l.id ? 0.4 : 1,
-                      }}>
-                      <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 4, lineHeight: 1.3 }}>{l.title}</div>
-                      {l.contact && <div style={{ fontSize: 11, color: T.text2, marginBottom: 6 }}>{l.contact.name}{l.contact.company_name ? ` · ${l.contact.company_name}` : ''}</div>}
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                        {l.value != null && <span style={{ fontSize: 11, color: T.green, fontFamily: 'monospace' }}>{fmtMoney(l.value)}</span>}
-                        <span style={{ flex: 1 }} />
-                        {l.next_follow_up_at && <span title="Follow-up due" style={{ fontSize: 10, color: T.amber }}>⏰ {fmtDate(l.next_follow_up_at)}</span>}
-                        {l.owner?.display_name && (
-                          <span title={l.owner.display_name} style={{ width: 20, height: 20, borderRadius: '50%', background: T.bg4, color: T.text2, fontSize: 10, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                            {l.owner.display_name.charAt(0).toUpperCase()}
-                          </span>
+                  {items.map(l => {
+                    const od = overdueDays(l)
+                    const qMeta = l.quote ? QUOTE_STATUS_META[l.quote.status] : null
+                    return (
+                      <div key={l.id}
+                        draggable={canEdit}
+                        onDragStart={() => setDragId(l.id)}
+                        onDragEnd={() => { setDragId(null); setDragOver(null) }}
+                        onClick={() => setOpenId(l.id)}
+                        style={{
+                          background: T.bg3, border: `1px solid ${od > 0 && !st.is_won && !st.is_lost ? `${T.red}66` : T.border}`, borderRadius: 8, padding: 10,
+                          cursor: 'pointer', opacity: dragId === l.id ? 0.4 : 1,
+                        }}>
+                        <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 4, lineHeight: 1.3 }}>{l.title}</div>
+                        {l.contact && <div style={{ fontSize: 11, color: T.text2, marginBottom: 6 }}>{l.contact.name}{l.contact.company_name ? ` · ${l.contact.company_name}` : ''}</div>}
+                        {qMeta && l.quote && (
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
+                            <span style={{ fontSize: 9, fontWeight: 700, textTransform: 'uppercase', color: qMeta.color, background: `${qMeta.color}1e`, padding: '2px 6px', borderRadius: 4 }}>
+                              Quote · {qMeta.label}
+                            </span>
+                            {l.quote.total != null && Number(l.quote.total) > 0 && <span style={{ fontSize: 10, color: T.text3, fontFamily: 'monospace' }}>{fmtMoney(l.quote.total)}</span>}
+                          </div>
                         )}
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                          {l.value != null && <span style={{ fontSize: 11, color: T.green, fontFamily: 'monospace' }}>{fmtMoney(l.value)}</span>}
+                          <span style={{ flex: 1 }} />
+                          {l.next_follow_up_at && (
+                            od > 0 && !st.is_won && !st.is_lost
+                              ? <span title="Follow-up overdue" style={{ fontSize: 10, color: T.red, fontWeight: 700 }}>⏰ {od}d overdue</span>
+                              : <span title="Follow-up due" style={{ fontSize: 10, color: T.amber }}>⏰ {fmtDate(l.next_follow_up_at)}</span>
+                          )}
+                          {l.owner?.display_name && (
+                            <span title={l.owner.display_name} style={{ width: 20, height: 20, borderRadius: '50%', background: T.bg4, color: T.text2, fontSize: 10, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                              {l.owner.display_name.charAt(0).toUpperCase()}
+                            </span>
+                          )}
+                        </div>
                       </div>
-                    </div>
-                  ))}
+                    )
+                  })}
                   {items.length === 0 && <div style={{ fontSize: 11, color: T.text3, textAlign: 'center', padding: '12px 0', fontStyle: 'italic' }}>—</div>}
                 </div>
               </div>
@@ -132,17 +183,18 @@ export default function CrmPipeline({ user }: { user: PortalUserSSR }) {
         </div>
       </div>
 
-      {openId && <LeadDrawer id={openId} canEdit={canEdit} users={users} currentUserId={user.id}
+      {openId && <LeadDrawer id={openId} canEdit={canEdit} users={users} currentUserId={user.id} stages={liveStages}
         onClose={() => setOpenId(null)} onChanged={load}
         onOpenWorkshop={(quoteId: string) => router.push(`/workshop/quote/${quoteId}`)} />}
       {showNew && <NewLeadModal users={users} currentUserId={user.id} onClose={() => setShowNew(false)} onCreated={() => { setShowNew(false); load() }} />}
+      {showStageEditor && <StageEditor onClose={() => setShowStageEditor(false)} onChanged={() => { loadStages(); load() }} />}
     </CrmShell>
   )
 }
 
 // ── Lead drawer ──────────────────────────────────────────────────────
-function LeadDrawer({ id, canEdit, users, currentUserId, onClose, onChanged, onOpenWorkshop }: {
-  id: string; canEdit: boolean; users: StaffUser[]; currentUserId: string
+function LeadDrawer({ id, canEdit, users, currentUserId, stages, onClose, onChanged, onOpenWorkshop }: {
+  id: string; canEdit: boolean; users: StaffUser[]; currentUserId: string; stages: StageRow[]
   onClose: () => void; onChanged: () => void; onOpenWorkshop: (quoteId: string) => void
 }) {
   const toast = useToast()
@@ -200,14 +252,14 @@ function LeadDrawer({ id, canEdit, users, currentUserId, onClose, onChanged, onO
           {/* Stage */}
           <Field label="Stage">
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-              {LEAD_STAGES.map(s => (
-                <button key={s} disabled={!canEdit} onClick={() => patch({ stage: s })} style={{
+              {stages.map(s => (
+                <button key={s.key} disabled={!canEdit} onClick={() => patch({ stage: s.key })} style={{
                   fontSize: 11, padding: '5px 10px', borderRadius: 6, cursor: canEdit ? 'pointer' : 'default',
                   fontFamily: 'inherit',
-                  background: lead.stage === s ? `${STAGE_COLOR[s]}26` : 'transparent',
-                  color: lead.stage === s ? STAGE_COLOR[s] : T.text2,
-                  border: `1px solid ${lead.stage === s ? STAGE_COLOR[s] : T.border2}`,
-                }}>{LEAD_STAGE_LABELS[s as LeadStage]}</button>
+                  background: lead.stage === s.key ? `${s.color}26` : 'transparent',
+                  color: lead.stage === s.key ? s.color : T.text2,
+                  border: `1px solid ${lead.stage === s.key ? s.color : T.border2}`,
+                }}>{s.label}</button>
               ))}
             </div>
           </Field>

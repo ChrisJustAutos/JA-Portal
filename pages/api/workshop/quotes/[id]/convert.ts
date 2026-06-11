@@ -7,6 +7,7 @@
 import { createClient } from '@supabase/supabase-js'
 import { withAuth } from '../../../../../lib/authServer'
 import { roleHasPermission } from '../../../../../lib/permissions'
+import { onQuoteConverted } from '../../../../../lib/crm-bridge'
 
 export const config = { maxDuration: 10 }
 
@@ -74,6 +75,9 @@ export default withAuth('view:diary', async (req, res, user) => {
   }
 
   await db.from('workshop_quotes').update({ status: 'converted', updated_at: new Date().toISOString() }).eq('id', id)
+
+  // Reflect on the linked CRM lead: booking activity + configured stage move.
+  await onQuoteConverted(db, { id, customer_id: quote.customer_id, total: quote.total }, booking.id, start.toISOString(), user.id)
 
   return res.status(200).json({ ok: true, booking_id: booking.id })
 })

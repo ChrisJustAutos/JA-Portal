@@ -8,6 +8,7 @@ import { withAuth } from '../../../../lib/authServer'
 import { roleHasPermission } from '../../../../lib/permissions'
 import { QUOTE_STATUSES } from '../../../../lib/workshop'
 import { notify } from '../../../../lib/notifications'
+import { onQuoteStatusChanged } from '../../../../lib/crm-bridge'
 
 export const config = { maxDuration: 10 }
 
@@ -55,6 +56,13 @@ export default withAuth('view:diary', async (req, res, user) => {
     }
     const { error } = await db.from('workshop_quotes').update(patch).eq('id', id)
     if (error) return res.status(500).json({ error: error.message })
+
+    // Any real status transition → reflect on the linked CRM lead (timeline
+    // activity + configurable stage move + automations).
+    if (patch.status && patch.status !== prevStatus) {
+      const { data: qq } = await db.from('workshop_quotes').select('id, customer_id, total').eq('id', id).maybeSingle()
+      if (qq) await onQuoteStatusChanged(db, qq, prevStatus, patch.status, user.id)
+    }
 
     // Quote accepted/declined → badge the Quotes tile for the team.
     if (patch.status && patch.status !== prevStatus && ['accepted', 'declined'].includes(patch.status)) {

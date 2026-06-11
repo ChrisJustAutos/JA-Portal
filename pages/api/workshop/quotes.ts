@@ -33,7 +33,17 @@ export default withAuth('view:diary', async (req, res, user) => {
     if (status) q = q.eq('status', status)
     const { data, error } = await q
     if (error) return res.status(500).json({ error: error.message })
-    return res.status(200).json({ quotes: data || [] })
+    const quotes = data || []
+    // ?with_leads=1 — attach the linked CRM lead (CRM quote board chips).
+    if (String(req.query.with_leads || '') === '1' && quotes.length) {
+      const ids = quotes.map((qt: any) => qt.id)
+      const { data: leads } = await db.from('crm_leads')
+        .select('id, title, stage, contact_id, workshop_quote_id').in('workshop_quote_id', ids).is('deleted_at', null)
+      const byQuote: Record<string, any> = {}
+      for (const l of leads || []) byQuote[l.workshop_quote_id] = l
+      for (const qt of quotes as any[]) qt.lead = byQuote[qt.id] || null
+    }
+    return res.status(200).json({ quotes })
   }
 
   if (req.method === 'POST') {

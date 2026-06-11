@@ -5,7 +5,7 @@
 import { createClient } from '@supabase/supabase-js'
 import { withAuth } from '../../../../lib/authServer'
 import { roleHasPermission } from '../../../../lib/permissions'
-import { LEAD_STAGES, LeadStage, findContact, contactDisplayName, logActivity } from '../../../../lib/crm'
+import { getPipelineStages, findContact, contactDisplayName, logActivity } from '../../../../lib/crm'
 import { enrolLead } from '../../../../lib/crm-automations'
 
 export const config = { maxDuration: 10 }
@@ -25,17 +25,26 @@ export default withAuth('view:crm', async (req, res, user) => {
     const stage = String(req.query.stage || '').trim()
     const q = String(req.query.q || '').trim().replace(/[%,()*]/g, ' ').trim()
     let query = db.from('crm_leads')
-      .select('id, title, stage, value, source, vehicle, owner_id, contact_id, contact_attempts, next_follow_up_at, last_activity_at, created_at, won_at, lost_at, contact:crm_contacts(id, name, email, phone, mobile, company_name), owner:user_profiles!crm_leads_owner_id_fkey(id, display_name)')
+      .select('id, title, stage, value, source, vehicle, owner_id, contact_id, contact_attempts, next_follow_up_at, last_activity_at, created_at, won_at, lost_at, workshop_quote_id, contact:crm_contacts(id, name, email, phone, mobile, company_name), owner:user_profiles!crm_leads_owner_id_fkey(id, display_name)')
       .is('deleted_at', null)
       .order('created_at', { ascending: false })
       .limit(600)
     if (owner === 'me') query = query.eq('owner_id', user.id)
     else if (owner) query = query.eq('owner_id', owner)
-    if (stage && (LEAD_STAGES as readonly string[]).includes(stage)) query = query.eq('stage', stage)
+    if (stage) query = query.eq('stage', stage)
     if (q) query = query.ilike('title', `%${q}%`)
     const { data, error } = await query
     if (error) return res.status(500).json({ error: error.message })
-    return res.status(200).json({ leads: data || [] })
+    // Surface the linked workshop quote (status chip + total on lead cards).
+    const leads = data || []
+    const quoteIds = leads.map((l: any) => l.workshop_quote_id).filter(Boolean)
+    if (quoteIds.length) {
+      const { data: quotes } = await db.from('workshop_quotes').select('id, status, total').in('id', quoteIds)
+      const byId: Record<string, any> = {}
+      for (const qt of quotes || []) byId[qt.id] = qt
+      for (const l of leads as any[]) if (l.workshop_quote_id) l.quote = byId[l.workshop_quote_id] || null
+    }
+    return res.status(200).json({ leads })
   }
 
   if (req.method === 'POST') {
@@ -65,7 +74,9 @@ export default withAuth('view:crm', async (req, res, user) => {
       }
     }
 
-    const stage: LeadStage = (LEAD_STAGES as readonly string[]).includes(body.stage) ? body.stage : 'new'
+    const stages = await getPipelineStages(db)
+    const firstOpen = stages.find(s => !s.is_won && !s.is_lost && !s.archived_at)?.key || 'new'
+    const stage: string = stages.some(s => s.key === body.stage && !s.archived_at) ? body.stage : firstOpen
     const { data, error } = await db.from('crm_leads').insert({
       contact_id: contactId,
       title: body.title ? String(body.title).slice(0, 200) : 'New lead',

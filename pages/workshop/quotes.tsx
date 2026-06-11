@@ -14,6 +14,7 @@ import { roleHasPermission } from '../../lib/permissions'
 import { QUOTE_STATUS_META, QUOTE_STATUSES, QuoteStatus, vehicleLabel, customerLabel } from '../../lib/workshop'
 import { T, Chip, SkeletonRows } from '../../components/ui'
 import { money2 as money, fmtDate } from '../../lib/ui/format'
+import QuoteBoard from '../../components/workshop/QuoteBoard'
 
 function QuoteChip({ status }: { status: QuoteStatus }) {
   const m = QUOTE_STATUS_META[status] || { label: status, color: T.text3 }
@@ -32,6 +33,7 @@ export default function QuotesPage({ user }: { user: PortalUserSSR }) {
   const [creating, setCreating] = useState(false)
   const [filter, setFilter] = useState<string>('')
   const [view, setView] = useState<'active'|'trash'>('active')
+  const [layout, setLayout] = useState<'board'|'list'>('board')
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null)
 
   const load = useCallback(async () => {
@@ -81,7 +83,13 @@ export default function QuotesPage({ user }: { user: PortalUserSSR }) {
               <Chip label="Active" active={view === 'active'} onClick={() => setView('active')} />
               <Chip label="Trash" active={view === 'trash'} onClick={() => setView('trash')} c={T.red} />
             </div>
-            <select value={filter} onChange={e => setFilter(e.target.value)} disabled={view === 'trash'} style={{ padding: '4px 8px', background: T.bg3, border: `1px solid ${T.border}`, borderRadius: 5, color: T.text2, fontSize: 12, fontFamily: 'inherit', cursor: 'pointer', opacity: view === 'trash' ? 0.5 : 1 }}>
+            {view === 'active' && (
+              <div style={{ display: 'flex', gap: 4 }}>
+                <Chip label="Board" active={layout === 'board'} onClick={() => setLayout('board')} />
+                <Chip label="List" active={layout === 'list'} onClick={() => setLayout('list')} />
+              </div>
+            )}
+            <select value={filter} onChange={e => setFilter(e.target.value)} disabled={view === 'trash' || layout === 'board'} style={{ padding: '4px 8px', background: T.bg3, border: `1px solid ${T.border}`, borderRadius: 5, color: T.text2, fontSize: 12, fontFamily: 'inherit', cursor: 'pointer', opacity: view === 'trash' || layout === 'board' ? 0.5 : 1 }}>
               <option value="">All statuses</option>
               {QUOTE_STATUSES.map(s => <option key={s} value={s}>{QUOTE_STATUS_META[s].label}</option>)}
             </select>
@@ -93,6 +101,11 @@ export default function QuotesPage({ user }: { user: PortalUserSSR }) {
             )}
           </div>
 
+          {view === 'active' && layout === 'board' ? (
+            <div style={{ flex: 1, display: 'flex', overflow: 'hidden', padding: 16 }}>
+              <QuoteBoard canEdit={canEdit} onChanged={() => setLastRefresh(new Date())} />
+            </div>
+          ) : (
           <div style={{ flex: 1, overflow: 'auto', padding: 20 }}>
             <div style={{ maxWidth: 1400, margin: '0 auto', background: T.bg2, border: `1px solid ${T.border}`, borderRadius: 10, overflow: 'hidden' }}>
               <div style={{ display: 'grid', gridTemplateColumns: view === 'trash' ? '90px 1fr 1fr 110px 90px 90px' : '90px 1fr 1fr 110px 90px', gap: 8, padding: '9px 16px', background: T.bg3, borderBottom: `1px solid ${T.border}`, fontSize: 9, color: T.text3, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
@@ -120,6 +133,7 @@ export default function QuotesPage({ user }: { user: PortalUserSSR }) {
               ))}
             </div>
           </div>
+          )}
         </div>
       </div>
     </>

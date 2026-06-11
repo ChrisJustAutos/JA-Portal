@@ -24,6 +24,7 @@ export const PRIORITY_COLOR: Record<string, string> = {
 
 const TABS = [
   { id: 'pipeline', label: 'Pipeline', href: '/crm' },
+  { id: 'quotes', label: 'Quotes', href: '/crm/quotes' },
   { id: 'contacts', label: 'Contacts', href: '/crm/contacts' },
   { id: 'tasks', label: 'Tasks', href: '/crm/tasks' },
   { id: 'automations', label: 'Automations', href: '/crm/automations' },
@@ -49,7 +50,7 @@ export default function CrmShell({
   user, active, children, title,
 }: {
   user: PortalUserSSR
-  active: 'pipeline' | 'contacts' | 'tasks' | 'automations' | 'campaigns'
+  active: 'pipeline' | 'quotes' | 'contacts' | 'tasks' | 'automations' | 'campaigns'
   children: ReactNode
   title?: string
 }) {

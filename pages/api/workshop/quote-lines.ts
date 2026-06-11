@@ -8,6 +8,7 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
 import { withAuth } from '../../../lib/authServer'
 import { roleHasPermission } from '../../../lib/permissions'
+import { onQuoteTotalChanged } from '../../../lib/crm-bridge'
 
 export const config = { maxDuration: 10 }
 
@@ -26,7 +27,9 @@ async function recompute(db: SupabaseClient, quoteId: string) {
   for (const l of lines || []) subtotal += Number((l as any).qty) * Number((l as any).unit_price)
   subtotal = round2(subtotal)
   const gst = round2(subtotal * 0.10)
-  await db.from('workshop_quotes').update({ subtotal, gst, total: round2(subtotal + gst), updated_at: new Date().toISOString() }).eq('id', quoteId)
+  const total = round2(subtotal + gst)
+  await db.from('workshop_quotes').update({ subtotal, gst, total, updated_at: new Date().toISOString() }).eq('id', quoteId)
+  await onQuoteTotalChanged(db, quoteId, total)   // value sync onto the linked CRM lead
 }
 
 export default withAuth('view:diary', async (req, res, user) => {

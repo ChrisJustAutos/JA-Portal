@@ -6,8 +6,7 @@
 import { createClient } from '@supabase/supabase-js'
 import { withAuth } from '../../../../lib/authServer'
 import { roleHasPermission } from '../../../../lib/permissions'
-import { LEAD_STAGES, LEAD_STAGE_LABELS, LeadStage, logActivity } from '../../../../lib/crm'
-import { enrolLead } from '../../../../lib/crm-automations'
+import { setLeadStage, logActivity } from '../../../../lib/crm'
 
 export const config = { maxDuration: 10 }
 
@@ -49,29 +48,24 @@ export default withAuth('view:crm', async (req, res, user) => {
     const patch: any = {}
     for (const k of PATCHABLE) if (k in body) patch[k] = body[k] === '' ? null : body[k]
 
-    let stageChanged = false
-    if ('stage' in body && (LEAD_STAGES as readonly string[]).includes(body.stage) && body.stage !== before.stage) {
-      patch.stage = body.stage as LeadStage
-      stageChanged = true
-      if (body.stage === 'won') { patch.won_at = new Date().toISOString(); patch.lost_at = null }
-      else if (body.stage === 'lost') { patch.lost_at = new Date().toISOString(); patch.won_at = null }
-      else { patch.won_at = null; patch.lost_at = null }
+    // Stage moves go through the shared setLeadStage (validation against
+    // crm_pipeline_stages, won/lost stamping, activity + automation enrolment)
+    // so the workshop bridge and this route behave identically.
+    const wantsStage = 'stage' in body && body.stage !== before.stage
+    if (wantsStage) {
+      const r = await setLeadStage(db, id, body.stage, user.id)
+      if (!r.ok) return res.status(400).json({ error: r.error })
     }
-    if (Object.keys(patch).length === 0) return res.status(400).json({ error: 'No patchable fields' })
+    if (Object.keys(patch).length === 0 && !wantsStage) return res.status(400).json({ error: 'No patchable fields' })
 
-    const { data, error } = await db.from('crm_leads').update(patch).eq('id', id).select('*').single()
-    if (error) return res.status(500).json({ error: error.message })
-
-    if (stageChanged) {
-      await logActivity(db, {
-        lead_id: id, contact_id: before.contact_id, type: 'stage_change',
-        body: `${LEAD_STAGE_LABELS[before.stage as LeadStage] || before.stage} → ${LEAD_STAGE_LABELS[body.stage as LeadStage]}`,
-        meta: { from: before.stage, to: body.stage }, actor_id: user.id,
-      })
-      await enrolLead({ id, stage: body.stage, contact_id: before.contact_id }, 'stage_changed', db)
-    } else {
-      await logActivity(db, { lead_id: id, contact_id: before.contact_id, type: 'note', body: `Lead updated by ${user.displayName || user.email}`, actor_id: user.id })
+    if (Object.keys(patch).length > 0) {
+      const { error } = await db.from('crm_leads').update(patch).eq('id', id)
+      if (error) return res.status(500).json({ error: error.message })
+      if (!wantsStage) {
+        await logActivity(db, { lead_id: id, contact_id: before.contact_id, type: 'note', body: `Lead updated by ${user.displayName || user.email}`, actor_id: user.id })
+      }
     }
+    const { data } = await db.from('crm_leads').select('*').eq('id', id).single()
     return res.status(200).json({ ok: true, lead: data })
   }
 

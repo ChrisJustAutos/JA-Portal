@@ -1324,20 +1324,33 @@ function inRange(ts: string | null | undefined, startIso: string, endIso: string
 }
 
 // ── CRM PIPELINE ──────────────────────────────────────────────────────
-const CRM_STAGE_LABELS: Record<string, string> = {
+// Stages are editable (crm_pipeline_stages, migration 097) — open stages and
+// pipeline order are derived from the table's flags, not hardcoded strings,
+// so new/renamed stages count correctly. Falls back to the legacy set.
+const CRM_FALLBACK_LABELS: Record<string, string> = {
   new: 'New', contacted: 'Contacted', quoted: 'Quoted', follow_up: 'Follow-up', won: 'Won', lost: 'Lost', on_hold: 'On hold',
 }
-const CRM_OPEN_STAGES = ['new', 'contacted', 'quoted', 'follow_up', 'on_hold']
-const CRM_PIPELINE_ORDER = ['new', 'contacted', 'quoted', 'follow_up', 'on_hold']
+const CRM_FALLBACK_OPEN = ['new', 'contacted', 'quoted', 'follow_up', 'on_hold']
 
 export async function fetchCrmPipeline(range: DateRange): Promise<any> {
   const sb = callsSupabase()
   const { startIso, endIso } = rangeIso(range)
-  const { data, error } = await sb.from('crm_leads')
-    .select('stage, value, owner_id, created_at, won_at, lost_at, owner:user_profiles!crm_leads_owner_id_fkey(display_name)')
-    .is('deleted_at', null)
+  const [{ data, error }, { data: stageRows }] = await Promise.all([
+    sb.from('crm_leads')
+      .select('stage, value, owner_id, created_at, won_at, lost_at, owner:user_profiles!crm_leads_owner_id_fkey(display_name)')
+      .is('deleted_at', null),
+    sb.from('crm_pipeline_stages').select('key, label, is_won, is_lost, archived_at, sort_order').order('sort_order'),
+  ])
   if (error) return { error: error.message }
   const rows: any[] = data || []
+
+  const stageDefs = (stageRows && stageRows.length)
+    ? stageRows
+    : CRM_FALLBACK_OPEN.concat('won', 'lost').map((k, i) => ({ key: k, label: CRM_FALLBACK_LABELS[k], is_won: k === 'won', is_lost: k === 'lost', archived_at: null, sort_order: i }))
+  const CRM_OPEN_STAGES = stageDefs.filter((s: any) => !s.is_won && !s.is_lost).map((s: any) => s.key)
+  const CRM_PIPELINE_ORDER = CRM_OPEN_STAGES
+  const CRM_STAGE_LABELS: Record<string, string> = {}
+  for (const s of stageDefs as any[]) CRM_STAGE_LABELS[s.key] = s.label
 
   const stageAgg = new Map<string, { count: number; value: number }>()
   let openCount = 0, openValue = 0
