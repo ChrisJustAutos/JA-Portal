@@ -4,6 +4,7 @@ import { requirePageAuth } from '../../lib/authServer'
 import { roleHasPermission } from '../../lib/permissions'
 import CrmShell, { PortalUserSSR, T, PRIORITY_COLOR, fmtDate } from '../../components/crm/CrmShell'
 import { Overlay, Field, input, primaryBtn, ghostBtn, closeBtn } from '../../components/crm/ui'
+import UserFilter from '../../components/crm/UserFilter'
 import { TASK_PRIORITIES } from '../../lib/crm'
 
 interface Task {
@@ -22,14 +23,14 @@ export default function CrmTasks({ user }: { user: PortalUserSSR }) {
   const canEdit = roleHasPermission(user.role, 'edit:crm')
   const [tasks, setTasks] = useState<Task[]>([])
   const [users, setUsers] = useState<StaffUser[]>([])
-  const [scope, setScope] = useState<'me' | 'all'>('me')
+  const [scope, setScope] = useState<string>('me')   // 'all' | 'me' | <user id>
   const [loading, setLoading] = useState(true)
   const [showNew, setShowNew] = useState(false)
 
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      const r = await fetch(`/api/crm/tasks?assignee=${scope === 'me' ? 'me' : ''}&view=all`)
+      const r = await fetch(`/api/crm/tasks?assignee=${encodeURIComponent(scope === 'all' ? '' : scope)}&view=all`)
       const d = await r.json()
       if (r.ok) setTasks(d.tasks || [])
     } catch { /* keep */ } finally { setLoading(false) }
@@ -53,11 +54,7 @@ export default function CrmTasks({ user }: { user: PortalUserSSR }) {
       <div style={{ padding: '16px 20px', height: '100%', display: 'flex', flexDirection: 'column', boxSizing: 'border-box' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 14 }}>
           <h1 style={{ fontSize: 18, fontWeight: 600, margin: 0 }}>Tasks</h1>
-          <div style={{ display: 'flex', background: T.bg3, borderRadius: 7, padding: 2 }}>
-            {(['me', 'all'] as const).map(o => (
-              <button key={o} onClick={() => setScope(o)} style={{ background: scope === o ? T.bg4 : 'transparent', border: 'none', cursor: 'pointer', color: scope === o ? T.text : T.text2, fontSize: 12, fontFamily: 'inherit', padding: '5px 12px', borderRadius: 6 }}>{o === 'me' ? 'My tasks' : 'Everyone'}</button>
-            ))}
-          </div>
+          <UserFilter users={users} value={scope} currentUserId={user.id} onChange={setScope} />
           <span style={{ flex: 1 }} />
           {loading && <span style={{ color: T.text3, fontSize: 12, fontStyle: 'italic' }}>Loading…</span>}
           {canEdit && <button onClick={() => setShowNew(true)} style={primaryBtn}>+ New task</button>}

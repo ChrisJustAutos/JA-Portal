@@ -30,7 +30,7 @@ export default withAuth('view:crm', async (req, res, user) => {
       .order('created_at', { ascending: false })
       .limit(600)
     if (owner === 'me') query = query.eq('owner_id', user.id)
-    else if (owner) query = query.eq('owner_id', owner)
+    else if (owner && owner !== 'all') query = query.eq('owner_id', owner)
     if (stage) query = query.eq('stage', stage)
     if (q) query = query.ilike('title', `%${q}%`)
     const { data, error } = await query

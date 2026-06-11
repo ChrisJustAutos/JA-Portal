@@ -8,6 +8,7 @@ import { Overlay, Field, Timeline, input, primaryBtn, ghostBtn, closeBtn } from 
 import StageEditor, { StageRow } from '../../components/crm/StageEditor'
 import CallButton from '../../components/crm/CallButton'
 import ComposeModal from '../../components/crm/ComposeModal'
+import UserFilter from '../../components/crm/UserFilter'
 import { QUOTE_STATUS_META, QuoteStatus } from '../../lib/workshop'
 import { useToast, useConfirm } from '../../components/ui/Feedback'
 
@@ -35,7 +36,7 @@ export default function CrmPipeline({ user }: { user: PortalUserSSR }) {
   const [leads, setLeads] = useState<Lead[]>([])
   const [users, setUsers] = useState<StaffUser[]>([])
   const [loading, setLoading] = useState(true)
-  const [owner, setOwner] = useState<'me' | 'all'>('all')
+  const [owner, setOwner] = useState<string>('all')   // 'all' | 'me' | <user id>
   const [openId, setOpenId] = useState<string | null>(null)
   const [showNew, setShowNew] = useState(false)
   const [dragId, setDragId] = useState<string | null>(null)
@@ -49,7 +50,7 @@ export default function CrmPipeline({ user }: { user: PortalUserSSR }) {
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      const r = await fetch(`/api/crm/leads?owner=${owner}`)
+      const r = await fetch(`/api/crm/leads?owner=${encodeURIComponent(owner)}`)
       const d = await r.json()
       if (r.ok) setLeads(d.leads || [])
     } catch { /* keep */ } finally { setLoading(false) }
@@ -93,16 +94,8 @@ export default function CrmPipeline({ user }: { user: PortalUserSSR }) {
       <div style={{ padding: '16px 20px', display: 'flex', flexDirection: 'column', height: '100%', boxSizing: 'border-box' }}>
         {/* Toolbar */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 14, flexShrink: 0 }}>
-          <h1 style={{ fontSize: 18, fontWeight: 600, margin: 0 }}>Pipeline</h1>
-          <div style={{ display: 'flex', background: T.bg3, borderRadius: 7, padding: 2 }}>
-            {(['all', 'me'] as const).map(o => (
-              <button key={o} onClick={() => setOwner(o)} style={{
-                background: owner === o ? T.bg4 : 'transparent', border: 'none', cursor: 'pointer',
-                color: owner === o ? T.text : T.text2, fontSize: 12, fontFamily: 'inherit',
-                padding: '5px 12px', borderRadius: 6,
-              }}>{o === 'all' ? 'Everyone' : 'My leads'}</button>
-            ))}
-          </div>
+          <h1 style={{ fontSize: 18, fontWeight: 600, margin: 0 }}>Leads</h1>
+          <UserFilter users={users} value={owner} currentUserId={user.id} onChange={setOwner} />
           <span style={{ flex: 1 }} />
           {overdueCount > 0 && <span style={{ fontSize: 11, color: T.red, fontWeight: 600 }}>⏰ {overdueCount} overdue follow-up{overdueCount === 1 ? '' : 's'}</span>}
           {loading && <span style={{ color: T.text3, fontSize: 12, fontStyle: 'italic' }}>Loading…</span>}
