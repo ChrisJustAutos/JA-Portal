@@ -6,6 +6,7 @@ import { roleHasPermission } from '../../lib/permissions'
 import CrmShell, { PortalUserSSR, T, fmtMoney, fmtDate } from '../../components/crm/CrmShell'
 import { Overlay, Field, Timeline, input, primaryBtn, ghostBtn, closeBtn } from '../../components/crm/ui'
 import StageEditor, { StageRow } from '../../components/crm/StageEditor'
+import CallButton from '../../components/crm/CallButton'
 import { QUOTE_STATUS_META, QuoteStatus } from '../../lib/workshop'
 import { useToast } from '../../components/ui/Feedback'
 
@@ -246,6 +247,11 @@ function LeadDrawer({ id, canEdit, users, currentUserId, stages, onClose, onChan
               <div style={{ fontSize: 12, color: T.text3, marginTop: 2 }}>
                 {[lead.contact.mobile, lead.contact.phone, lead.contact.email].filter(Boolean).join('  ·  ')}
               </div>
+              {canEdit && (lead.contact.mobile || lead.contact.phone) && (
+                <div style={{ marginTop: 8 }}>
+                  <CallButton contactId={lead.contact.id} leadId={lead.id} />
+                </div>
+              )}
             </div>
           )}
 

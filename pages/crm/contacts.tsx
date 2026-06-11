@@ -6,6 +6,7 @@ import { requirePageAuth } from '../../lib/authServer'
 import { roleHasPermission } from '../../lib/permissions'
 import CrmShell, { PortalUserSSR, T, fmtDate } from '../../components/crm/CrmShell'
 import { Overlay, Field, Timeline, input, primaryBtn, ghostBtn, closeBtn } from '../../components/crm/ui'
+import CallButton from '../../components/crm/CallButton'
 import { useToast } from '../../components/ui/Feedback'
 
 interface Contact {
@@ -121,8 +122,9 @@ function ContactDrawer({ id, canEdit, onClose, onChanged }: { id: string; canEdi
           <Field label="Notes"><textarea defaultValue={c.notes || ''} disabled={!canEdit} onBlur={e => patchField('notes', e.target.value, c.notes)} style={{ ...input, minHeight: 54, resize: 'vertical' }} /></Field>
 
           {canEdit && (
-            <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
+            <div style={{ display: 'flex', gap: 8, marginBottom: 16, alignItems: 'center', flexWrap: 'wrap' }}>
               <button onClick={startWorkshop} disabled={busy} style={{ ...primaryBtn, background: T.teal }} title={c.workshop_customer_id ? 'Linked to a workshop customer — opens a new quote' : 'Create the workshop customer + a quote'}>🔧 Start quote in Workshop</button>
+              {(c.mobile || c.phone) && <CallButton contactId={c.id} />}
             </div>
           )}
 

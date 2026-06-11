@@ -63,6 +63,7 @@ export type Permission =
   | 'edit:projects'
   | 'generate:reports'
   | 'monitor:calls'
+  | 'use:phone'
   // Admin
   | 'admin:users'
   | 'admin:settings'
@@ -76,7 +77,7 @@ const ROLE_PERMISSIONS: Record<UserRole, Permission[]> = {
     'view:jobs','view:vehicle_sales','view:stocktakes','view:b2b','view:stripe_myob',
     'edit:any','edit:distributors_groups','edit:vin_codes','edit:leads','edit:supplier_invoices','edit:stocktakes','generate:reports',
     'edit:b2b_catalogue','edit:b2b_distributors','edit:b2b_orders','edit:stripe_myob',
-    'monitor:calls',
+    'monitor:calls','use:phone',
     'view:diary','edit:bookings',
     'view:messages','manage:inbox',
     'view:crm','edit:crm',
@@ -89,7 +90,7 @@ const ROLE_PERMISSIONS: Record<UserRole, Permission[]> = {
     'view:jobs','view:vehicle_sales','view:stocktakes','view:b2b','view:stripe_myob',
     'edit:leads','edit:supplier_invoices','edit:stocktakes','generate:reports',
     'edit:b2b_catalogue','edit:b2b_distributors','edit:b2b_orders',
-    'monitor:calls',
+    'monitor:calls','use:phone',
     'view:diary','edit:bookings',
     'view:messages','manage:inbox',
     'view:crm','edit:crm',
@@ -102,6 +103,7 @@ const ROLE_PERMISSIONS: Record<UserRole, Permission[]> = {
     'view:diary','edit:bookings',
     'view:messages','manage:inbox',
     'view:crm','edit:crm',
+    'use:phone',
   ],
   // Least-privilege workshop login: only the workshop area (diary + jobs +
   // quotes + inventory + tasks all gate on view:diary). No financial/leads/
