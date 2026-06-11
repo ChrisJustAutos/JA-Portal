@@ -4,6 +4,7 @@ import { createClient } from '@supabase/supabase-js'
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { appBaseUrl } from '../../../../lib/crm-campaigns'
 import { enrolFromEvent } from '../../../../lib/crm-automation-triggers'
+import { logActivity } from '../../../../lib/crm'
 
 function sb() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL
@@ -26,8 +27,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       if (r) {
         await db.from('crm_campaign_recipients').update({ first_clicked_at: r.first_clicked_at || new Date().toISOString(), click_count: (r.click_count || 0) + 1 }).eq('id', r.id)
         await db.from('crm_email_events').insert({ recipient_id: r.id, campaign_id: r.campaign_id, type: 'click', url: target.slice(0, 500) })
-        // First click fires the campaign_email_clicked flow trigger.
+        // First click: timeline entry + the campaign_email_clicked flow trigger.
         if (!r.first_clicked_at && r.contact_id) {
+          await logActivity(db, { contact_id: r.contact_id, type: 'campaign_click', body: `Clicked a campaign link: ${target.slice(0, 120)}`, meta: { campaign_id: r.campaign_id, url: target.slice(0, 300) } })
           await enrolFromEvent(db, 'campaign_email_clicked', { contact_id: r.contact_id, campaign_id: r.campaign_id, dedupe_key: `click:${r.id}` })
         }
       }

@@ -102,7 +102,7 @@ export type TaskPriority = typeof TASK_PRIORITIES[number]
 export type ActivityType =
   | 'note' | 'call' | 'email' | 'sms' | 'stage_change'
   | 'lead_created' | 'contact_created' | 'task' | 'workshop_handoff' | 'website_lead'
-  | 'quote_status' | 'booking_created'
+  | 'quote_status' | 'booking_created' | 'campaign_open' | 'campaign_click'
 
 // ── Helpers ───────────────────────────────────────────────────────────
 

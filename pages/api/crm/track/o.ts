@@ -3,6 +3,7 @@
 import { createClient } from '@supabase/supabase-js'
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { enrolFromEvent } from '../../../../lib/crm-automation-triggers'
+import { logActivity } from '../../../../lib/crm'
 
 const PIXEL = Buffer.from('R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==', 'base64')
 
@@ -23,8 +24,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       if (r) {
         await db.from('crm_campaign_recipients').update({ opened_at: r.opened_at || new Date().toISOString(), open_count: (r.open_count || 0) + 1 }).eq('id', r.id)
         await db.from('crm_email_events').insert({ recipient_id: r.id, campaign_id: r.campaign_id, type: 'open' })
-        // First open fires the campaign_email_opened flow trigger.
+        // First open: timeline entry + the campaign_email_opened flow trigger.
         if (!r.opened_at && r.contact_id) {
+          await logActivity(db, { contact_id: r.contact_id, type: 'campaign_open', body: 'Opened a campaign email', meta: { campaign_id: r.campaign_id } })
           await enrolFromEvent(db, 'campaign_email_opened', { contact_id: r.contact_id, campaign_id: r.campaign_id, dedupe_key: `open:${r.id}` })
         }
       }

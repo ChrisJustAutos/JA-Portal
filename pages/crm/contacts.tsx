@@ -7,6 +7,7 @@ import { roleHasPermission } from '../../lib/permissions'
 import CrmShell, { PortalUserSSR, T, fmtDate } from '../../components/crm/CrmShell'
 import { Overlay, Field, Timeline, input, primaryBtn, ghostBtn, closeBtn } from '../../components/crm/ui'
 import CallButton from '../../components/crm/CallButton'
+import ComposeModal from '../../components/crm/ComposeModal'
 import { useToast } from '../../components/ui/Feedback'
 
 interface Contact {
@@ -23,6 +24,7 @@ export default function CrmContacts({ user }: { user: PortalUserSSR }) {
   const [loading, setLoading] = useState(true)
   const [openId, setOpenId] = useState<string | null>(null)
   const [showNew, setShowNew] = useState(false)
+  const [showImport, setShowImport] = useState(false)
   const debRef = useRef<any>(null)
 
   const load = useCallback(async (query: string) => {
@@ -47,6 +49,7 @@ export default function CrmContacts({ user }: { user: PortalUserSSR }) {
           <input value={q} onChange={e => onSearch(e.target.value)} placeholder="Search name, company, phone, email…" style={{ ...input, maxWidth: 380 }} />
           <span style={{ flex: 1 }} />
           {loading && <span style={{ color: T.text3, fontSize: 12, fontStyle: 'italic' }}>Loading…</span>}
+          {canEdit && <button onClick={() => setShowImport(true)} style={ghostBtn}>⬆ Import CSV</button>}
           {canEdit && <button onClick={() => setShowNew(true)} style={primaryBtn}>+ New contact</button>}
         </div>
 
@@ -71,7 +74,116 @@ export default function CrmContacts({ user }: { user: PortalUserSSR }) {
 
       {openId && <ContactDrawer id={openId} canEdit={canEdit} onClose={() => setOpenId(null)} onChanged={() => load(q)} />}
       {showNew && <NewContactModal onClose={() => setShowNew(false)} onCreated={() => { setShowNew(false); load(q) }} />}
+      {showImport && <ImportModal onClose={() => setShowImport(false)} onImported={() => { setShowImport(false); load(q) }} />}
     </CrmShell>
+  )
+}
+
+// ── CSV import (the ActiveCampaign cutover tool) ─────────────────────
+// Paste/upload the AC contact export; headers are auto-mapped (Email,
+// First Name, Last Name, Phone, Tags, Organization…). Dedupe + tag-merge
+// happen server-side (/api/crm/import-contacts).
+function parseCsv(text: string): string[][] {
+  const rows: string[][] = []
+  let row: string[] = [], cell = '', inQ = false
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i]
+    if (inQ) {
+      if (ch === '"') { if (text[i + 1] === '"') { cell += '"'; i++ } else inQ = false }
+      else cell += ch
+    } else if (ch === '"') inQ = true
+    else if (ch === ',') { row.push(cell); cell = '' }
+    else if (ch === '\n' || ch === '\r') {
+      if (ch === '\r' && text[i + 1] === '\n') i++
+      row.push(cell); cell = ''
+      if (row.some(c => c.trim() !== '')) rows.push(row)
+      row = []
+    } else cell += ch
+  }
+  row.push(cell)
+  if (row.some(c => c.trim() !== '')) rows.push(row)
+  return rows
+}
+
+const HEADER_MAP: Array<{ match: RegExp; key: string }> = [
+  { match: /^e-?mail/i, key: 'email' },
+  { match: /^first\s*_?name/i, key: 'first_name' },
+  { match: /^last\s*_?name/i, key: 'last_name' },
+  { match: /^(full\s*)?name$/i, key: 'name' },
+  { match: /^mobile/i, key: 'mobile' },
+  { match: /^phone|^number/i, key: 'phone' },
+  { match: /^tags?$/i, key: 'tags' },
+  { match: /^(organi[sz]ation|company|account)/i, key: 'company_name' },
+]
+
+function ImportModal({ onClose, onImported }: { onClose: () => void; onImported: () => void }) {
+  const toast = useToast()
+  const [raw, setRaw] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [result, setResult] = useState<string>('')
+
+  const parsed = (() => {
+    if (!raw.trim()) return null
+    const rows = parseCsv(raw)
+    if (rows.length < 2) return null
+    const headers = rows[0].map(h => {
+      const hit = HEADER_MAP.find(m => m.match.test(h.trim()))
+      return hit ? hit.key : null
+    })
+    if (!headers.some(Boolean)) return null
+    const out = rows.slice(1).map(r => {
+      const o: any = {}
+      headers.forEach((k, i) => { if (k && r[i] != null && String(r[i]).trim()) o[k] = String(r[i]).trim() })
+      return o
+    }).filter(o => Object.keys(o).length > 0)
+    return { mapped: headers.filter(Boolean) as string[], rows: out }
+  })()
+
+  async function run() {
+    if (!parsed) return
+    setBusy(true); setResult('')
+    let created = 0, mergedN = 0, skippedN = 0
+    try {
+      for (let i = 0; i < parsed.rows.length; i += 1000) {
+        const r = await fetch('/api/crm/import-contacts', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ rows: parsed.rows.slice(i, i + 1000) }) })
+        const d = await r.json()
+        if (!r.ok) { toast(d.error || 'Import failed', 'error'); setBusy(false); return }
+        created += d.created; mergedN += d.merged; skippedN += d.skipped
+        setResult(`Importing… ${Math.min(i + 1000, parsed.rows.length)}/${parsed.rows.length}`)
+      }
+      setResult(`Done — ${created} created, ${mergedN} merged, ${skippedN} skipped`)
+      toast(`${created} contacts created, ${mergedN} merged`, 'success')
+      onImported()
+    } catch (e: any) { toast(e?.message || 'Import failed', 'error') } finally { setBusy(false) }
+  }
+
+  return (
+    <Overlay onClose={onClose}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
+        <h2 style={{ fontSize: 17, fontWeight: 600, margin: 0, flex: 1 }}>Import contacts (CSV)</h2>
+        <button onClick={onClose} style={closeBtn}>✕</button>
+      </div>
+      <div style={{ fontSize: 12, color: T.text2, marginBottom: 10, lineHeight: 1.5 }}>
+        Paste the CSV (including the header row) from your ActiveCampaign contact export — or any CSV with Email / First Name / Last Name / Phone / Tags / Organization columns. Existing contacts are matched by email/phone: their tags merge and blanks fill, nothing gets overwritten.
+      </div>
+      <input type="file" accept=".csv,text/csv" onChange={e => {
+        const f = e.target.files?.[0]
+        if (!f) return
+        const rd = new FileReader()
+        rd.onload = () => setRaw(String(rd.result || ''))
+        rd.readAsText(f)
+      }} style={{ marginBottom: 8, fontSize: 12, color: T.text2 }} />
+      <textarea value={raw} onChange={e => setRaw(e.target.value)} rows={8} placeholder={'Email,First Name,Last Name,Phone,Tags\njane@example.com,Jane,Smith,0410 000 000,"vip, exhaust"'}
+        style={{ ...input, resize: 'vertical', fontFamily: 'monospace', fontSize: 11 }} />
+      <div style={{ fontSize: 11, color: parsed ? T.green : T.text3, margin: '8px 0' }}>
+        {raw.trim() ? (parsed ? `✓ ${parsed.rows.length} rows · columns mapped: ${parsed.mapped.join(', ')}` : 'Couldn’t map any columns — check the header row.') : ''}
+      </div>
+      {result && <div style={{ fontSize: 12, color: T.text2, marginBottom: 8 }}>{result}</div>}
+      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+        <button onClick={onClose} style={ghostBtn}>Close</button>
+        <button onClick={run} disabled={busy || !parsed} style={primaryBtn}>{busy ? 'Importing…' : `Import ${parsed?.rows.length || 0} rows`}</button>
+      </div>
+    </Overlay>
   )
 }
 
@@ -81,6 +193,7 @@ function ContactDrawer({ id, canEdit, onClose, onChanged }: { id: string; canEdi
   const [data, setData] = useState<any>(null)
   const [note, setNote] = useState('')
   const [busy, setBusy] = useState(false)
+  const [compose, setCompose] = useState<'sms' | 'email' | null>(null)
   const load = useCallback(async () => { const r = await fetch(`/api/crm/contacts/${id}`); const d = await r.json(); if (r.ok) setData(d) }, [id])
   useEffect(() => { load() }, [load])
 
@@ -125,7 +238,14 @@ function ContactDrawer({ id, canEdit, onClose, onChanged }: { id: string; canEdi
             <div style={{ display: 'flex', gap: 8, marginBottom: 16, alignItems: 'center', flexWrap: 'wrap' }}>
               <button onClick={startWorkshop} disabled={busy} style={{ ...primaryBtn, background: T.teal }} title={c.workshop_customer_id ? 'Linked to a workshop customer — opens a new quote' : 'Create the workshop customer + a quote'}>🔧 Start quote in Workshop</button>
               {(c.mobile || c.phone) && <CallButton contactId={c.id} />}
+              {(c.mobile || c.phone) && <button onClick={() => setCompose('sms')} style={{ ...ghostBtn, padding: '5px 12px', fontSize: 12 }}>💬 SMS</button>}
+              {c.email && <button onClick={() => setCompose('email')} style={{ ...ghostBtn, padding: '5px 12px', fontSize: 12 }}>✉️ Email</button>}
             </div>
+          )}
+          {compose && (
+            <ComposeModal contactId={c.id} channel={compose}
+              to={compose === 'sms' ? (c.mobile || c.phone) : c.email}
+              onClose={() => setCompose(null)} onSent={load} />
           )}
 
           {/* Linked leads */}
