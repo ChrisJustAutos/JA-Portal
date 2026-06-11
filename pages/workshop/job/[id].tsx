@@ -28,13 +28,14 @@ import { money2 as money, fmtDateTime, fmtYmd as fmtDueDate } from '../../../lib
 
 interface Line {
   id: string
-  line_type: 'labour' | 'part' | 'sublet' | 'fee'
+  line_type: 'labour' | 'part' | 'sublet' | 'fee' | 'description'
   description: string | null
   part_number: string | null
   qty: number
   unit_price_ex_gst: number
   gst_rate: number
   total_ex_gst: number | null
+  sort_order: number
 }
 interface JobData {
   booking: any
@@ -42,7 +43,7 @@ interface JobData {
   history: any[]
 }
 
-const LINE_TYPE_LABEL: Record<string, string> = { labour: 'Labour', part: 'Part', sublet: 'Sublet', fee: 'Fee' }
+const LINE_TYPE_LABEL: Record<string, string> = { labour: 'Labour', part: 'Part', sublet: 'Sublet', fee: 'Fee', description: 'Desc' }
 
 function addMonthsYmd(ymd: string, months: number): string {
   const d = new Date(`${ymd}T00:00:00+10:00`)
@@ -178,6 +179,18 @@ export default function JobCardPage({ user }: { user: PortalUserSSR }) {
   }
   async function deleteLine(lineId: string) {
     await fetch(`/api/workshop/booking-lines?id=${encodeURIComponent(lineId)}`, { method: 'DELETE' })
+    await load()
+  }
+  // Swap a line with its neighbour, then renumber sort_order = array index for
+  // any line that drifted (handles legacy duplicate sort_orders too).
+  async function moveLine(idx: number, dir: -1 | 1) {
+    const arr = [...lines]
+    const j = idx + dir
+    if (j < 0 || j >= arr.length) return
+    ;[arr[idx], arr[j]] = [arr[j], arr[idx]]
+    await Promise.all(arr.map((l, i) => Number(l.sort_order) !== i
+      ? fetch(`/api/workshop/booking-lines?id=${encodeURIComponent(l.id)}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sort_order: i }) })
+      : null))
     await load()
   }
 
@@ -444,7 +457,7 @@ export default function JobCardPage({ user }: { user: PortalUserSSR }) {
                     </div>
                     {credit.mode === 'lines' ? (
                       <div style={{ marginBottom: 10 }}>
-                        {lines.map(l => {
+                        {lines.filter(l => l.line_type !== 'description').map(l => {
                           const on = !!credit.sel[l.id]
                           const ex = l.total_ex_gst != null ? Number(l.total_ex_gst) : (Number(l.qty) || 0) * (Number(l.unit_price_ex_gst) || 0)
                           return (
@@ -570,16 +583,17 @@ export default function JobCardPage({ user }: { user: PortalUserSSR }) {
 
                     {tab === 'invoice' && (
                       <>
-                        <div style={{ display: 'grid', gridTemplateColumns: '70px 1fr 60px 90px 90px 28px', gap: 8, padding: '7px 14px', fontSize: 9, color: T.text3, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', background: T.bg3, borderBottom: `1px solid ${T.border}` }}>
+                        <div style={{ display: 'grid', gridTemplateColumns: '70px 1fr 60px 90px 90px 62px', gap: 8, padding: '7px 14px', fontSize: 9, color: T.text3, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', background: T.bg3, borderBottom: `1px solid ${T.border}` }}>
                           <div>Type</div><div>Description</div><div style={{ textAlign: 'right' }}>Qty</div><div style={{ textAlign: 'right' }}>Unit ex</div><div style={{ textAlign: 'right' }}>Total ex</div><div/>
                         </div>
                         {lines.length === 0 && <div style={{ padding: 20, textAlign: 'center', fontSize: 12, color: T.text3 }}>No lines yet.</div>}
-                        {lines.map(l => <LineRow key={l.id} line={l} canEdit={canEdit} onPatch={(p) => patchLine(l.id, p)} onDelete={() => deleteLine(l.id)} />)}
+                        {lines.map((l, i) => <LineRow key={l.id} line={l} canEdit={canEdit} onPatch={(p) => patchLine(l.id, p)} onDelete={() => deleteLine(l.id)} onMove={(dir) => moveLine(i, dir)} />)}
 
                         {canEdit && (
                           <div style={{ padding: 12, borderTop: `1px solid ${T.border}`, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
                             <button onClick={() => addLine({ line_type: 'labour', description: 'Labour', qty: 1, unit_price_ex_gst: 0 })} style={addBtn}>+ Labour</button>
                             <button onClick={() => addLine({ line_type: 'fee', description: '', qty: 1, unit_price_ex_gst: 0 })} style={addBtn}>+ Fee</button>
+                            <button onClick={() => addLine({ line_type: 'description', description: '', qty: 0, unit_price_ex_gst: 0 })} title="A text-only heading row — describe the job, then move the labour/parts that belong to it underneath" style={addBtn}>+ Description</button>
                             <PartPicker onPick={(it) => addLine({ line_type: 'part', description: it.part_name, part_number: it.sku, qty: 1, unit_price_ex_gst: Number(it.sell_price) || 0, inventory_id: it.id } as any)} />
                             {jobTypes.filter(t => t.active).length > 0 && (
                               <>
@@ -747,21 +761,38 @@ function StatusPill({ status }: { status: BookingStatus }) {
   )
 }
 
-function LineRow({ line, canEdit, onPatch, onDelete }: { line: Line; canEdit: boolean; onPatch: (p: any) => void; onDelete: () => void }) {
+function LineRow({ line, canEdit, onPatch, onDelete, onMove }: { line: Line; canEdit: boolean; onPatch: (p: any) => void; onDelete: () => void; onMove: (dir: -1 | 1) => void }) {
   const [desc, setDesc] = useState(line.description || '')
   const [qty, setQty] = useState(String(line.qty))
   const [price, setPrice] = useState(String(line.unit_price_ex_gst))
   useEffect(() => { setDesc(line.description || ''); setQty(String(line.qty)); setPrice(String(line.unit_price_ex_gst)) }, [line.id, line.description, line.qty, line.unit_price_ex_gst])
   const lineTotal = (Number(line.total_ex_gst) ?? 0) || (Number(line.qty) * Number(line.unit_price_ex_gst))
+  const controls = canEdit ? (
+    <span style={{ display: 'flex', gap: 0, justifyContent: 'flex-end', alignItems: 'center' }}>
+      <button onClick={() => onMove(-1)} title="Move up" style={mvBtn}>↑</button>
+      <button onClick={() => onMove(1)} title="Move down" style={mvBtn}>↓</button>
+      <button onClick={onDelete} title="Remove" style={{ ...mvBtn, fontSize: 15 }}>×</button>
+    </span>
+  ) : <span/>
+  if (line.line_type === 'description') {
+    return (
+      <div style={{ display: 'grid', gridTemplateColumns: '70px 1fr 62px', gap: 8, padding: '8px 14px', borderTop: `1px solid ${T.border}`, alignItems: 'center', background: T.bg3 }}>
+        <span style={{ fontSize: 10, color: T.text3, textTransform: 'uppercase' }}>Desc</span>
+        <input value={desc} disabled={!canEdit} onChange={e => setDesc(e.target.value)} onBlur={() => desc !== (line.description || '') && onPatch({ description: desc })}
+          placeholder="Description / heading — the items below belong to it" style={{ ...cellInp, fontWeight: 600, background: 'transparent', border: `1px solid transparent` }} />
+        {controls}
+      </div>
+    )
+  }
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: '70px 1fr 60px 90px 90px 28px', gap: 8, padding: '8px 14px', borderTop: `1px solid ${T.border}`, alignItems: 'center' }}>
+    <div style={{ display: 'grid', gridTemplateColumns: '70px 1fr 60px 90px 90px 62px', gap: 8, padding: '8px 14px', borderTop: `1px solid ${T.border}`, alignItems: 'center' }}>
       <span style={{ fontSize: 10, color: T.text3, textTransform: 'uppercase' }}>{LINE_TYPE_LABEL[line.line_type] || line.line_type}</span>
       <input value={desc} disabled={!canEdit} onChange={e => setDesc(e.target.value)} onBlur={() => desc !== (line.description || '') && onPatch({ description: desc })}
         placeholder={line.part_number || 'Description'} style={cellInp} />
       <input value={qty} disabled={!canEdit} inputMode="decimal" onChange={e => setQty(e.target.value)} onBlur={() => Number(qty) !== Number(line.qty) && onPatch({ qty: Number(qty) || 0 })} style={{ ...cellInp, textAlign: 'right' }} />
       <input value={price} disabled={!canEdit} inputMode="decimal" onChange={e => setPrice(e.target.value)} onBlur={() => Number(price) !== Number(line.unit_price_ex_gst) && onPatch({ unit_price_ex_gst: Number(price) || 0 })} style={{ ...cellInp, textAlign: 'right' }} />
       <span style={{ fontSize: 12, fontFamily: 'monospace', color: T.text2, textAlign: 'right' }}>{money(lineTotal)}</span>
-      {canEdit ? <button onClick={onDelete} title="Remove" style={{ background: 'transparent', border: 'none', color: T.text3, cursor: 'pointer', fontSize: 15 }}>×</button> : <span/>}
+      {controls}
     </div>
   )
 }
@@ -802,6 +833,7 @@ function qbtn(color: string): React.CSSProperties {
 }
 const addBtn: React.CSSProperties = { padding: '5px 11px', borderRadius: 5, fontSize: 11, fontFamily: 'inherit', fontWeight: 600, background: 'transparent', color: T.blue, border: `1px solid ${T.border2}`, cursor: 'pointer' }
 const xbtn: React.CSSProperties = { marginLeft: 'auto', background: 'none', border: 'none', color: T.text3, cursor: 'pointer', fontSize: 18, lineHeight: 1, padding: '0 2px' }
+const mvBtn: React.CSSProperties = { background: 'transparent', border: 'none', color: T.text3, cursor: 'pointer', fontSize: 12, lineHeight: 1, padding: '2px 3px' }
 
 export async function getServerSideProps(context: any) {
   return requirePageAuth(context, 'view:diary')

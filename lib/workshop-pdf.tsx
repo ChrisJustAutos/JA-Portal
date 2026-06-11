@@ -14,6 +14,7 @@ export interface WorkshopDocLine {
   qty: number
   unitPrice: number   // ex-GST
   total: number       // ex-GST (qty × unitPrice)
+  isHeading?: boolean // 'description' line — full-width text row, no amounts
 }
 export interface WorkshopDoc {
   kind: 'quote' | 'invoice' | 'jobcard'
@@ -54,6 +55,8 @@ const s = StyleSheet.create({
   thead: { flexDirection: 'row', backgroundColor: C.bg3, paddingVertical: 5, paddingHorizontal: 7, borderBottom: `0.5pt solid ${C.line}`, fontSize: 8, fontWeight: 700, color: C.ink2 },
   trow: { flexDirection: 'row', paddingVertical: 4.5, paddingHorizontal: 7, borderBottom: `0.5pt solid ${C.line2}`, fontSize: 9 },
   trowAlt: { backgroundColor: C.bg2 },
+  headingRow: { backgroundColor: C.bg3, marginTop: 4 },
+  headingText: { flex: 1, fontWeight: 700, color: C.ink },
   cDesc: { flex: 1 },
   cPart: { width: 90, color: C.ink3 },
   cQty: { width: 40, textAlign: 'right' },
@@ -128,13 +131,19 @@ function WorkshopDocPdf({ doc }: { doc: WorkshopDoc }) {
         {doc.lines.length === 0 ? (
           <View style={s.trow}><Text style={{ color: C.ink3 }}>No line items.</Text></View>
         ) : doc.lines.map((l, i) => (
-          <View key={i} style={[s.trow, i % 2 === 1 ? s.trowAlt : {}]} wrap={false}>
-            <Text style={s.cDesc}>{l.description || '—'}</Text>
-            <Text style={s.cPart}>{l.partNumber || ''}</Text>
-            <Text style={s.cQty}>{Number(l.qty) || 0}</Text>
-            <Text style={s.cUnit}>{money(l.unitPrice)}</Text>
-            <Text style={s.cTotal}>{money(l.total)}</Text>
-          </View>
+          l.isHeading ? (
+            <View key={i} style={[s.trow, s.headingRow]} wrap={false}>
+              <Text style={s.headingText}>{l.description || ''}</Text>
+            </View>
+          ) : (
+            <View key={i} style={[s.trow, i % 2 === 1 ? s.trowAlt : {}]} wrap={false}>
+              <Text style={s.cDesc}>{l.description || '—'}</Text>
+              <Text style={s.cPart}>{l.partNumber || ''}</Text>
+              <Text style={s.cQty}>{Number(l.qty) || 0}</Text>
+              <Text style={s.cUnit}>{money(l.unitPrice)}</Text>
+              <Text style={s.cTotal}>{money(l.total)}</Text>
+            </View>
+          )
         ))}
 
         {/* Totals */}

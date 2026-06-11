@@ -239,8 +239,15 @@ export async function createJobInvoiceInMyob(bookingId: string, performedBy: str
   const defaultAcct = settings.myob_sales_account_uid
   const partAcct = settings.part_sale_account_uid || defaultAcct
   const myobLines: any[] = []
-  let subtotal = 0, totalTax = 0
+  let subtotal = 0, totalTax = 0, txnCount = 0
   for (const ln of lines as any[]) {
+    // Description rows become MYOB Header lines — text only, no amounts —
+    // so the grouping ("Logbook service" then its labour/parts) survives
+    // onto the MYOB invoice. Valid in both Item and Service layouts.
+    if (ln.line_type === 'description') {
+      if (ln.description) myobLines.push({ Type: 'Header', Description: String(ln.description).substring(0, 255) })
+      continue
+    }
     const lineEx = round2((Number(ln.total_ex_gst) || 0) || (Number(ln.qty) * Number(ln.unit_price_ex_gst)))
     if (lineEx === 0 && !ln.description) continue
     const rate = Number(ln.gst_rate) || 0
@@ -257,12 +264,13 @@ export async function createJobInvoiceInMyob(bookingId: string, performedBy: str
       const acctUid = ln.line_type === 'part' ? partAcct : defaultAcct
       myobLines.push({ Type: 'Transaction', Description: desc, Account: { UID: acctUid }, Total: lineEx, TaxCode: { UID: taxUid } })
     }
+    txnCount++
     subtotal += lineEx
     if (taxable) totalTax += lineEx * rate
   }
   subtotal = round2(subtotal); totalTax = round2(totalTax)
   const totalAmount = round2(subtotal + totalTax)
-  if (myobLines.length === 0) throw new WorkshopInvoiceError('no_lines', 'No billable lines to invoice.')
+  if (txnCount === 0) throw new WorkshopInvoiceError('no_lines', 'No billable lines to invoice.')
 
   const mode: 'order' | 'invoice' = settings.invoice_as_order ? 'order' : 'invoice'
   const layout = useItems ? 'Item' : 'Service'

@@ -17,7 +17,7 @@ function sb() {
   return createClient(url, key, { auth: { persistSession: false } })
 }
 
-const LINE_TYPES = ['labour', 'part', 'sublet', 'fee']
+const LINE_TYPES = ['labour', 'part', 'sublet', 'fee', 'description']
 const round2 = (n: number) => Math.round(n * 100) / 100
 
 export default withAuth('view:diary', async (req, res, user) => {

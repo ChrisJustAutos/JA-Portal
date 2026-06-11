@@ -62,12 +62,19 @@ export default withAuth('edit:bookings', async (req, res) => {
     if (adds.length) await db.from('workshop_bookings').update({ checklist: [...cur, ...adds] }).eq('id', bookingId)
   }
 
-  // Append the template's priced lines after the booking's existing lines.
+  // Append the template's priced lines after the booking's existing lines,
+  // headed by a 'description' row with the job type's name — so the invoice
+  // groups as "Logbook Service" then the labour/parts that belong to it.
   let added = 0
   if (tmplLines && tmplLines.length) {
     const { data: existing } = await db.from('workshop_booking_lines').select('sort_order').eq('booking_id', bookingId).order('sort_order', { ascending: false }).limit(1)
     let nextSort = (existing && existing[0] ? Number(existing[0].sort_order) || 0 : 0) + 1
-    const rows = tmplLines.map((l: any) => ({
+    const heading = {
+      booking_id: bookingId, line_type: 'description', description: (jobType as any).name || null,
+      part_number: null, qty: 0, unit_price_ex_gst: 0, gst_rate: 0.10, inventory_id: null,
+      total_ex_gst: 0, sort_order: nextSort++,
+    }
+    const rows: any[] = tmplLines.map((l: any) => ({
       booking_id: bookingId,
       line_type: l.line_type,
       description: l.description,
@@ -79,6 +86,7 @@ export default withAuth('edit:bookings', async (req, res) => {
       total_ex_gst: Math.round((Number(l.qty) || 0) * (Number(l.unit_price_ex_gst) || 0) * 100) / 100,
       sort_order: nextSort++,
     }))
+    if ((jobType as any).name) rows.unshift(heading)
     const { error } = await db.from('workshop_booking_lines').insert(rows)
     if (error) return res.status(500).json({ error: error.message })
     added = rows.length

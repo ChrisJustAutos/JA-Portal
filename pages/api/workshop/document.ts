@@ -81,6 +81,9 @@ async function buildDoc(db: SupabaseClient, type: DocType, id: string): Promise<
   const { data: lines } = await db.from('workshop_booking_lines').select('*').eq('booking_id', id).order('sort_order', { ascending: true })
   let subtotal = 0, gst = 0
   const docLines = (lines || []).map((l: any) => {
+    if (l.line_type === 'description') {
+      return { description: l.description || '', partNumber: null, qty: 0, unitPrice: 0, total: 0, isHeading: true }
+    }
     const ex = round2((Number(l.total_ex_gst) ?? 0) || (Number(l.qty) * Number(l.unit_price_ex_gst)))
     subtotal += ex; gst += ex * (Number(l.gst_rate) || 0.10)
     return { description: l.description || l.part_number || l.line_type || '', partNumber: l.part_number, qty: Number(l.qty) || 0, unitPrice: Number(l.unit_price_ex_gst) || 0, total: ex }
