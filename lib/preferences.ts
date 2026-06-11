@@ -10,7 +10,7 @@
 // When the user's pref is 'inc', we multiply by 1.1 at DISPLAY time only.
 // This keeps the data layer clean and auditable.
 
-import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useState, ReactNode, createElement } from 'react'
+import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, ReactNode, createElement } from 'react'
 
 // localStorage cache so a returning user's layout/theme paints from their last
 // known prefs the instant the app hydrates — no flash of the default layout
@@ -351,13 +351,28 @@ export function PreferencesProvider({ children }: { children: ReactNode }) {
   const [prefs, setPrefs] = useState<UserPreferences>(DEFAULT_PREFERENCES)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  // True once we hold the user's REAL prefs (from the localStorage cache or a
+  // successful fetch). A failed /api/preferences call must never replace known
+  // prefs with the defaults — that's what made theme/layout appear to "forget"
+  // across sessions: a transient 401 while the auth cookie refreshes on cold
+  // start flipped the session back to the default dark theme even though the
+  // saved value was sitting in both the DB and the cache.
+  const haveRealPrefs = useRef(false)
+  const retried401 = useRef(false)
 
   const refresh = useCallback(async () => {
     try {
       const res = await fetch('/api/preferences')
       if (!res.ok) {
-        // 401 etc — silently fall back to defaults so public/login pages don't break
-        setPrefs(DEFAULT_PREFERENCES)
+        // Keep whatever we already have (cache / previous fetch). Only a user
+        // with NO known prefs falls back to defaults (e.g. the login page).
+        if (!haveRealPrefs.current) setPrefs(DEFAULT_PREFERENCES)
+        // Cold-start race: the session cookie can still be mid-refresh on the
+        // first request after reopening the app — retry once shortly after.
+        if (res.status === 401 && !retried401.current) {
+          retried401.current = true
+          setTimeout(() => { refresh() }, 2500)
+        }
         setError(null)
         return
       }
@@ -365,12 +380,14 @@ export function PreferencesProvider({ children }: { children: ReactNode }) {
       if (data.preferences) {
         const merged = { ...DEFAULT_PREFERENCES, ...data.preferences }
         setPrefs(merged)
+        haveRealPrefs.current = true
         try { window.localStorage.setItem(PREFS_CACHE_KEY, JSON.stringify(merged)) } catch { /* ignore */ }
       }
       setError(null)
     } catch (e: any) {
+      // Network failure — keep current prefs; only default when we have none.
       setError(e?.message || 'Failed to load preferences')
-      setPrefs(DEFAULT_PREFERENCES)
+      if (!haveRealPrefs.current) setPrefs(DEFAULT_PREFERENCES)
     } finally {
       setLoading(false)
     }
@@ -409,7 +426,11 @@ export function PreferencesProvider({ children }: { children: ReactNode }) {
   useIsoLayoutEffect(() => {
     try {
       const cached = window.localStorage.getItem(PREFS_CACHE_KEY)
-      if (cached) { setPrefs({ ...DEFAULT_PREFERENCES, ...JSON.parse(cached) }); setLoading(false) }
+      if (cached) {
+        setPrefs({ ...DEFAULT_PREFERENCES, ...JSON.parse(cached) })
+        haveRealPrefs.current = true
+        setLoading(false)
+      }
     } catch { /* ignore */ }
   }, [])
   useEffect(() => { refresh() }, [refresh])
