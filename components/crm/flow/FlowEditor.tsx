@@ -137,6 +137,7 @@ export default function FlowEditor({ automationId }: { automationId: string }) {
   const [counts, setCounts] = useState<{ active: number; done: number; cancelled: number } | null>(null)
   const [webhook, setWebhook] = useState<{ token: string | null; secret: string | null }>({ token: null, secret: null })
   const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
   const [dirty, setDirty] = useState(false)
   const seq = useRef(1)
@@ -154,7 +155,9 @@ export default function FlowEditor({ automationId }: { automationId: string }) {
       setWebhook({ token: a.webhook_token || null, secret: a.webhook_secret || null })
       const g = a.graph || { nodes: [{ id: 'trigger-1', type: 'trigger', position: { x: 120, y: 40 }, data: { kind: 'trigger', event: a.trigger_event || 'lead_created', config: { stage: a.trigger_stage || null } } }], edges: [] }
       setNodes((g.nodes || []).map((n: any) => ({ ...n, deletable: n.data?.kind !== 'trigger' })))
-      setEdges((g.edges || []).map((e: any) => ({ ...e, markerEnd: { type: MarkerType.ArrowClosed }, style: { strokeWidth: 1.5 } })))
+      // interactionWidth widens the invisible click target around the 1.5px
+      // line so connections are actually selectable/removable.
+      setEdges((g.edges || []).map((e: any) => ({ ...e, markerEnd: { type: MarkerType.ArrowClosed }, style: { strokeWidth: 1.5 }, interactionWidth: 24 })))
       const maxN = Math.max(0, ...((g.nodes || []) as any[]).map((n: any) => Number(String(n.id).split('-').pop()) || 0))
       seq.current = maxN + 1
     }).catch(() => {})
@@ -164,13 +167,27 @@ export default function FlowEditor({ automationId }: { automationId: string }) {
   const markDirty = useCallback(() => setDirty(true), [])
 
   // Single outgoing edge per (source, handle): a new connection replaces it.
+  // Self-loops are ignored (the validator would reject them at save anyway).
   const onConnect = useCallback((conn: Connection) => {
+    if (!conn.source || !conn.target || conn.source === conn.target) return
     setEdges(eds => addEdge(
-      { ...conn, markerEnd: { type: MarkerType.ArrowClosed }, style: { strokeWidth: 1.5 } },
+      { ...conn, markerEnd: { type: MarkerType.ArrowClosed }, style: { strokeWidth: 1.5 }, interactionWidth: 24 },
       eds.filter(e => !(e.source === conn.source && (e.sourceHandle || null) === (conn.sourceHandle || null))),
     ))
     markDirty()
   }, [setEdges, markDirty])
+
+  function removeEdge(edgeId: string) {
+    setEdges(eds => eds.filter(e => e.id !== edgeId))
+    setSelectedEdgeId(null)
+    markDirty()
+  }
+  function removeNode(nodeId: string) {
+    setNodes(nds => nds.filter(n => n.id !== nodeId))
+    setEdges(eds => eds.filter(e => e.source !== nodeId && e.target !== nodeId))
+    setSelectedId(null)
+    markDirty()
+  }
 
   function addNode(kind: 'action' | 'condition' | 'wait', action?: string) {
     const id = `${kind === 'action' ? 'step' : kind}-n${seq.current++}`
@@ -256,18 +273,21 @@ export default function FlowEditor({ automationId }: { automationId: string }) {
           <button onClick={() => addNode('condition')} style={paletteBtn(T.amber)}>⑂ Condition</button>
           <div style={{ flex: 1 }} />
           <div style={{ fontSize: 10, color: T.text3, lineHeight: 1.5 }}>
-            Drag from a node's bottom dot to connect. Select + Delete removes. Conditions branch yes/no.
+            Drag from a node's bottom dot to connect.<br /><br />
+            <strong>Remove a connection:</strong> click the line (or double-click it), then “Remove connection”.<br /><br />
+            <strong>Delete a node:</strong> select it and use the red button in the panel, or press Delete.
           </div>
         </div>
 
         {/* Canvas */}
-        <div style={{ flex: 1, minWidth: 0, background: T.bg }}>
+        <div style={{ flex: 1, minWidth: 0, background: T.bg, position: 'relative' }}>
           <ReactFlow
             nodes={nodes} edges={edges} nodeTypes={nodeTypes}
             onNodesChange={(c) => { onNodesChange(c); if (c.some(x => x.type !== 'select' && x.type !== 'dimensions')) markDirty() }}
             onEdgesChange={(c) => { onEdgesChange(c); if (c.some(x => x.type === 'remove')) markDirty() }}
             onConnect={onConnect}
-            onSelectionChange={(sel) => setSelectedId(sel.nodes[0]?.id || null)}
+            onSelectionChange={(sel) => { setSelectedId(sel.nodes[0]?.id || null); setSelectedEdgeId(sel.edges[0]?.id || null) }}
+            onEdgeDoubleClick={(_, edge) => removeEdge(edge.id)}
             fitView fitViewOptions={{ padding: 0.25, maxZoom: 1 }}
             proOptions={{ hideAttribution: true }}
             deleteKeyCode={['Backspace', 'Delete']}
@@ -275,12 +295,27 @@ export default function FlowEditor({ automationId }: { automationId: string }) {
             <Background variant={BackgroundVariant.Dots} gap={18} size={1} color={T.border2} />
             <Controls showInteractive={false} />
           </ReactFlow>
+          {/* Selected-connection toolbar — the visible way to disconnect
+              (double-clicking the line or pressing Delete also works). */}
+          {selectedEdgeId && !selected && (
+            <div style={{ position: 'absolute', top: 12, left: '50%', transform: 'translateX(-50%)', zIndex: 10, display: 'flex', alignItems: 'center', gap: 10, background: T.bg2, border: `1px solid ${T.border2}`, borderRadius: 8, padding: '7px 12px', boxShadow: '0 6px 20px rgba(0,0,0,0.35)' }}>
+              <span style={{ fontSize: 12, color: T.text2 }}>Connection selected</span>
+              <button onClick={() => removeEdge(selectedEdgeId)} style={{ padding: '4px 12px', borderRadius: 6, fontSize: 12, fontWeight: 600, fontFamily: 'inherit', cursor: 'pointer', background: `${T.red}1e`, color: T.red, border: `1px solid ${T.red}55` }}>
+                ✕ Remove connection
+              </button>
+            </div>
+          )}
         </div>
 
         {/* Config drawer */}
         {selected && (
           <div style={{ width: 320, borderLeft: `1px solid ${T.border}`, background: T.bg2, padding: 14, overflowY: 'auto', flexShrink: 0 }}>
             <NodeConfig node={selected} stages={stages} webhook={webhook} onChange={(patch) => updateNodeData(selected.id, patch)} />
+            {selected.data?.kind !== 'trigger' && (
+              <button onClick={() => removeNode(selected.id)} style={{ marginTop: 18, width: '100%', padding: '8px 12px', borderRadius: 7, fontSize: 12, fontWeight: 600, fontFamily: 'inherit', cursor: 'pointer', background: 'transparent', color: T.red, border: `1px solid ${T.red}55` }}>
+                🗑 Delete this node
+              </button>
+            )}
           </div>
         )}
       </div>

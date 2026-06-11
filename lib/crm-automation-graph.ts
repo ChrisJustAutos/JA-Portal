@@ -83,6 +83,12 @@ export interface FlowEdge {
 export interface FlowGraph { nodes: FlowNode[]; edges: FlowEdge[] }
 
 // ── Validation (client preview + server authoritative) ────────────────
+// Human label for a node in error messages ("Send email node", not "step-n3").
+function nodeLabel(n: FlowNode): string {
+  if (n.data?.kind === 'action') return `"${String(n.data.action || 'action').replace(/_/g, ' ')}" action`
+  return `${n.data?.kind || 'unknown'} node`
+}
+
 export function validateGraph(graph: any): { ok: boolean; errors: string[] } {
   const errors: string[] = []
   const nodes: FlowNode[] = Array.isArray(graph?.nodes) ? graph.nodes : []
@@ -93,9 +99,11 @@ export function validateGraph(graph: any): { ok: boolean; errors: string[] } {
   if (triggers.length !== 1) errors.push('The flow needs exactly one trigger node.')
 
   const ids = new Set(nodes.map(n => n.id))
+  const byId = new Map(nodes.map(n => [n.id, n]))
   if (ids.size !== nodes.length) errors.push('Duplicate node ids.')
   for (const e of edges) {
-    if (!ids.has(e.source) || !ids.has(e.target)) errors.push('An edge points at a missing node.')
+    if (!ids.has(e.source) || !ids.has(e.target)) errors.push('A connection points at a missing node.')
+    if (e.source === e.target) errors.push('A node is connected to itself — remove that connection.')
   }
 
   // ≤1 outgoing edge per (node, handle); condition nodes use yes/no handles.
@@ -104,12 +112,17 @@ export function validateGraph(graph: any): { ok: boolean; errors: string[] } {
     const key = `${e.source}:${e.sourceHandle || ''}`
     outBy.set(key, (outBy.get(key) || 0) + 1)
   }
-  outBy.forEach((n, key) => { if (n > 1) errors.push(`Node ${key.split(':')[0]} has more than one connection from the same output.`) })
+  outBy.forEach((n, key) => {
+    if (n > 1) {
+      const node = byId.get(key.split(':')[0])
+      errors.push(`The ${node ? nodeLabel(node) : 'node'} has more than one connection from the same output.`)
+    }
+  })
   for (const n of nodes) {
     if (n.data?.kind === 'condition') {
       const hasYes = edges.some(e => e.source === n.id && e.sourceHandle === 'yes')
-      if (!hasYes) errors.push('A condition node has no "yes" branch.')
-      if (!Array.isArray(n.data.rules) || n.data.rules.length === 0) errors.push('A condition node has no rules.')
+      if (!hasYes) errors.push('A condition node has no "yes" branch — connect its green output.')
+      if (!Array.isArray(n.data.rules) || n.data.rules.length === 0) errors.push('A condition node has no rules — click it and add at least one.')
     }
     if (n.data?.kind === 'wait' && !(Number(n.data.hours) > 0)) errors.push('A wait node needs a duration greater than zero.')
     if (n.data?.kind === 'action' && !n.data.action) errors.push('An action node has no action selected.')
@@ -127,7 +140,7 @@ export function validateGraph(graph: any): { ok: boolean; errors: string[] } {
       seen.add(id)
       for (const t of adj.get(id) || []) stack.push(t)
     }
-    for (const n of nodes) if (!seen.has(n.id)) errors.push(`Node "${n.id}" isn't connected to the trigger.`)
+    for (const n of nodes) if (!seen.has(n.id)) errors.push(`The ${nodeLabel(n)} isn't connected to the flow — link it up or delete it.`)
     // Cycle check (DFS colouring) on the directed graph.
     const colour = new Map<string, 1 | 2>()
     const dfs = (id: string): boolean => {
