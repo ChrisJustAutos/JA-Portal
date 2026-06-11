@@ -30,6 +30,12 @@ export default withAuth('view:crm', async (req, res, user) => {
       .select('*, contact:crm_contacts(id, name, email, phone, mobile, company_name, workshop_customer_id), owner:user_profiles!crm_leads_owner_id_fkey(id, display_name)')
       .eq('id', id).is('deleted_at', null).single()
     if (error || !lead) return res.status(404).json({ error: 'Not found' })
+    // Quote management lives on the lead drawer — attach the linked quote.
+    if ((lead as any).workshop_quote_id) {
+      const { data: quote } = await db.from('workshop_quotes')
+        .select('id, status, subtotal, gst, total, deleted_at').eq('id', (lead as any).workshop_quote_id).maybeSingle()
+      ;(lead as any).quote = quote && !quote.deleted_at ? quote : null
+    }
     const [{ data: tasks }, { data: activities }] = await Promise.all([
       db.from('crm_tasks').select('id, title, status, priority, due_at, assignee_id').eq('lead_id', id).is('deleted_at', null).order('due_at', { ascending: true, nullsFirst: false }),
       db.from('crm_activities').select('id, type, body, meta, actor_id, created_at, actor:user_profiles(id, display_name)').eq('lead_id', id).order('created_at', { ascending: false }).limit(200),

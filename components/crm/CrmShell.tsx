@@ -22,9 +22,12 @@ export const PRIORITY_COLOR: Record<string, string> = {
   low: T.text3, normal: T.blue, high: T.amber, urgent: T.red,
 }
 
+// Quotes deliberately have no tab of their own — a quote belongs to a lead,
+// so quoting is driven from the lead drawer on the Pipeline board (start /
+// open / mark sent-accepted-declined / convert to booking). The workshop's
+// own Quotes page keeps the full kanban for the floor.
 const TABS = [
-  { id: 'pipeline', label: 'Pipeline', href: '/crm' },
-  { id: 'quotes', label: 'Quotes', href: '/crm/quotes' },
+  { id: 'pipeline', label: 'Leads', href: '/crm' },
   { id: 'contacts', label: 'Contacts', href: '/crm/contacts' },
   { id: 'tasks', label: 'Tasks', href: '/crm/tasks' },
   { id: 'automations', label: 'Automations', href: '/crm/automations' },
@@ -50,7 +53,7 @@ export default function CrmShell({
   user, active, children, title,
 }: {
   user: PortalUserSSR
-  active: 'pipeline' | 'quotes' | 'contacts' | 'tasks' | 'automations' | 'campaigns'
+  active: 'pipeline' | 'contacts' | 'tasks' | 'automations' | 'campaigns'
   children: ReactNode
   title?: string
 }) {

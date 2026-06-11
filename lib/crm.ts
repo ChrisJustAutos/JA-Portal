@@ -51,13 +51,29 @@ export function invalidateStagesCache() { _stagesCache = null }
 export interface CrmSettings {
   quote_stage_map: Record<string, string>   // workshop quote status → stage key ('' = don't move)
   sync_lead_value: boolean
+  round_robin_user_ids: string[]            // rotation roster for website leads, in order
+  round_robin_pointer: number               // index of the NEXT assignee
 }
 export async function getCrmSettings(db: SupabaseClient): Promise<CrmSettings> {
   const { data } = await db.from('crm_settings').select('*').eq('id', 'singleton').maybeSingle()
   return {
     quote_stage_map: (data?.quote_stage_map as Record<string, string>) ?? { sent: 'quoted', accepted: 'won', declined: 'lost', converted: 'won' },
     sync_lead_value: data?.sync_lead_value ?? true,
+    round_robin_user_ids: Array.isArray(data?.round_robin_user_ids) ? data.round_robin_user_ids : [],
+    round_robin_pointer: Number(data?.round_robin_pointer) || 0,
   }
+}
+
+// Next owner in the website-lead rotation; advances the pointer. Returns null
+// when no roster is configured (lead stays unassigned, as before).
+export async function pickRoundRobinOwner(db: SupabaseClient): Promise<string | null> {
+  const settings = await getCrmSettings(db)
+  const roster = settings.round_robin_user_ids
+  if (!roster.length) return null
+  const idx = ((settings.round_robin_pointer % roster.length) + roster.length) % roster.length
+  const owner = roster[idx]
+  await db.from('crm_settings').update({ round_robin_pointer: idx + 1, updated_at: new Date().toISOString() }).eq('id', 'singleton')
+  return owner || null
 }
 
 // setLeadStage lives in lib/crm-server.ts — it pulls in the automation engine

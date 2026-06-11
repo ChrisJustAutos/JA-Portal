@@ -9,7 +9,7 @@ import StageEditor, { StageRow } from '../../components/crm/StageEditor'
 import CallButton from '../../components/crm/CallButton'
 import ComposeModal from '../../components/crm/ComposeModal'
 import { QUOTE_STATUS_META, QuoteStatus } from '../../lib/workshop'
-import { useToast } from '../../components/ui/Feedback'
+import { useToast, useConfirm } from '../../components/ui/Feedback'
 
 interface Lead {
   id: string; title: string; stage: string; value: number | null; source: string | null
@@ -31,6 +31,7 @@ function overdueDays(l: Lead): number {
 export default function CrmPipeline({ user }: { user: PortalUserSSR }) {
   const router = useRouter()
   const canEdit = roleHasPermission(user.role, 'edit:crm')
+  const canBookings = roleHasPermission(user.role, 'edit:bookings')
   const [leads, setLeads] = useState<Lead[]>([])
   const [users, setUsers] = useState<StaffUser[]>([])
   const [loading, setLoading] = useState(true)
@@ -185,9 +186,10 @@ export default function CrmPipeline({ user }: { user: PortalUserSSR }) {
         </div>
       </div>
 
-      {openId && <LeadDrawer id={openId} canEdit={canEdit} users={users} currentUserId={user.id} stages={liveStages}
+      {openId && <LeadDrawer id={openId} canEdit={canEdit} canBookings={canBookings} users={users} currentUserId={user.id} stages={liveStages}
         onClose={() => setOpenId(null)} onChanged={load}
-        onOpenWorkshop={(quoteId: string) => router.push(`/workshop/quote/${quoteId}`)} />}
+        onOpenWorkshop={(quoteId: string) => router.push(`/workshop/quote/${quoteId}`)}
+        onOpenJob={(bookingId: string) => router.push(`/workshop/job/${bookingId}`)} />}
       {showNew && <NewLeadModal users={users} currentUserId={user.id} onClose={() => setShowNew(false)} onCreated={() => { setShowNew(false); load() }} />}
       {showStageEditor && <StageEditor onClose={() => setShowStageEditor(false)} onChanged={() => { loadStages(); load() }} />}
     </CrmShell>
@@ -195,11 +197,12 @@ export default function CrmPipeline({ user }: { user: PortalUserSSR }) {
 }
 
 // ── Lead drawer ──────────────────────────────────────────────────────
-function LeadDrawer({ id, canEdit, users, currentUserId, stages, onClose, onChanged, onOpenWorkshop }: {
-  id: string; canEdit: boolean; users: StaffUser[]; currentUserId: string; stages: StageRow[]
-  onClose: () => void; onChanged: () => void; onOpenWorkshop: (quoteId: string) => void
+function LeadDrawer({ id, canEdit, canBookings, users, currentUserId, stages, onClose, onChanged, onOpenWorkshop, onOpenJob }: {
+  id: string; canEdit: boolean; canBookings: boolean; users: StaffUser[]; currentUserId: string; stages: StageRow[]
+  onClose: () => void; onChanged: () => void; onOpenWorkshop: (quoteId: string) => void; onOpenJob: (bookingId: string) => void
 }) {
   const toast = useToast()
+  const confirmDialog = useConfirm()
   const [data, setData] = useState<any>(null)
   const [note, setNote] = useState('')
   const [busy, setBusy] = useState(false)
@@ -231,6 +234,33 @@ function LeadDrawer({ id, canEdit, users, currentUserId, stages, onClose, onChan
       const d = await r.json()
       if (r.ok) { onChanged(); onOpenWorkshop(d.quoteId) }
       else toast(d.error || 'Could not start workshop quote', 'error')
+    } finally { setBusy(false) }
+  }
+  // Quote lifecycle from the lead drawer — the bridge syncs the lead's stage
+  // per the configured map and logs the timeline entry.
+  async function quoteStatus(status: string) {
+    if (!lead?.quote) return
+    setBusy(true)
+    try {
+      const r = await fetch(`/api/workshop/quotes/${lead.quote.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status }) })
+      if (!r.ok) toast((await r.json()).error || 'Update failed', 'error')
+      await load(); onChanged()
+    } finally { setBusy(false) }
+  }
+  async function convertQuote() {
+    if (!lead?.quote) return
+    const ok = await confirmDialog({
+      title: 'Convert quote to booking?',
+      message: 'Creates a diary job with the quote\'s lines and marks the quote converted.',
+      confirmLabel: 'Convert',
+    })
+    if (!ok) return
+    setBusy(true)
+    try {
+      const r = await fetch(`/api/workshop/quotes/${lead.quote.id}/convert`, { method: 'POST' })
+      const d = await r.json()
+      if (r.ok && d.booking_id) { toast('Converted — opening the job card', 'success'); onChanged(); onOpenJob(d.booking_id) }
+      else toast(d.error || 'Convert failed', 'error')
     } finally { setBusy(false) }
   }
 
@@ -309,11 +339,48 @@ function LeadDrawer({ id, canEdit, users, currentUserId, stages, onClose, onChan
 
           {lead.details && <div style={{ fontSize: 13, color: T.text2, background: T.bg3, borderRadius: 8, padding: 10, margin: '6px 0 12px', whiteSpace: 'pre-wrap' }}>{lead.details}</div>}
 
+          {/* Quote — the whole quote lifecycle drives from the lead. */}
+          {lead.quote ? (
+            <Field label="Workshop quote">
+              <div style={{ background: T.bg3, border: `1px solid ${T.border}`, borderRadius: 8, padding: 10 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                  {(() => { const m = QUOTE_STATUS_META[lead.quote.status as QuoteStatus] || { label: lead.quote.status, color: T.text2 }; return (
+                    <span style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', color: m.color, background: `${m.color}1e`, padding: '3px 8px', borderRadius: 4 }}>{m.label}</span>
+                  ) })()}
+                  {Number(lead.quote.total) > 0 && <span style={{ fontSize: 13, fontFamily: 'monospace', color: T.green }}>{fmtMoney(lead.quote.total)}</span>}
+                  <span style={{ flex: 1 }} />
+                  <button onClick={() => onOpenWorkshop(lead.quote.id)} style={{ ...ghostBtn, padding: '4px 10px', fontSize: 11 }}>Open quote →</button>
+                </div>
+                {canBookings && (
+                  <div style={{ display: 'flex', gap: 6, marginTop: 8, flexWrap: 'wrap' }}>
+                    {(['sent', 'accepted', 'declined'] as QuoteStatus[]).filter(s => s !== lead.quote.status && lead.quote.status !== 'converted').map(s => {
+                      const m = QUOTE_STATUS_META[s]
+                      return (
+                        <button key={s} disabled={busy} onClick={() => quoteStatus(s)} style={{
+                          fontSize: 11, padding: '4px 10px', borderRadius: 6, cursor: 'pointer', fontFamily: 'inherit', fontWeight: 600,
+                          background: 'transparent', color: m.color, border: `1px solid ${m.color}55`,
+                        }}>Mark {m.label.toLowerCase()}</button>
+                      )
+                    })}
+                    {lead.quote.status === 'accepted' && (
+                      <button disabled={busy} onClick={convertQuote} style={{
+                        fontSize: 11, padding: '4px 10px', borderRadius: 6, cursor: 'pointer', fontFamily: 'inherit', fontWeight: 600,
+                        background: `${T.green}1e`, color: T.green, border: `1px solid ${T.green}55`,
+                      }}>→ Convert to booking</button>
+                    )}
+                  </div>
+                )}
+              </div>
+            </Field>
+          ) : null}
+
           {canEdit && (
             <div style={{ display: 'flex', gap: 8, margin: '6px 0 16px', flexWrap: 'wrap', alignItems: 'center' }}>
-              <button onClick={startWorkshop} disabled={busy || !lead.contact_id} style={{ ...primaryBtn, background: T.teal }} title={lead.workshop_quote_id ? 'A workshop quote already exists — opens the board' : 'Create a workshop quote for this contact'}>
-                🔧 {lead.workshop_quote_id ? 'Open in Workshop' : 'Start quote in Workshop'}
-              </button>
+              {!lead.quote && (
+                <button onClick={startWorkshop} disabled={busy || !lead.contact_id} style={{ ...primaryBtn, background: T.teal }} title="Create a workshop quote for this contact">
+                  🔧 Start a quote
+                </button>
+              )}
               <RunFlow leadId={id} />
             </div>
           )}

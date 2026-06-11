@@ -13,7 +13,8 @@ export interface StageRow {
   id: string; key: string; label: string; color: string; sort_order: number
   on_board: boolean; is_won: boolean; is_lost: boolean; archived_at: string | null
 }
-interface Settings { quote_stage_map: Record<string, string>; sync_lead_value: boolean }
+interface Settings { quote_stage_map: Record<string, string>; sync_lead_value: boolean; round_robin_user_ids: string[] }
+interface StaffUser { id: string; display_name: string | null; email: string }
 
 const SWATCHES = ['#4f8ef7', '#2dd4bf', '#a78bfa', '#fbbf24', '#34c77b', '#f04e4e', '#38bdf8', '#f472b6', '#fb923c', '#8b90a0']
 const QUOTE_EVENTS: { key: string; label: string }[] = [
@@ -28,6 +29,7 @@ export default function StageEditor({ onClose, onChanged }: { onClose: () => voi
   const confirmDialog = useConfirm()
   const [stages, setStages] = useState<StageRow[]>([])
   const [settings, setSettings] = useState<Settings | null>(null)
+  const [users, setUsers] = useState<StaffUser[]>([])
   const [newLabel, setNewLabel] = useState('')
   const [busy, setBusy] = useState(false)
   const [dragId, setDragId] = useState<string | null>(null)
@@ -38,6 +40,7 @@ export default function StageEditor({ onClose, onChanged }: { onClose: () => voi
     if (r.ok) { setStages(d.stages || []); setSettings(d.settings || null) }
   }
   useEffect(() => { load() }, [])
+  useEffect(() => { fetch('/api/crm/users').then(r => r.json()).then(d => setUsers(d.users || [])).catch(() => {}) }, [])
 
   const live = stages.filter(s => !s.archived_at)
 
@@ -138,6 +141,29 @@ export default function StageEditor({ onClose, onChanged }: { onClose: () => voi
             <input type="checkbox" checked={settings.sync_lead_value} onChange={e => saveSettings({ sync_lead_value: e.target.checked })} />
             Keep the lead's value in sync with the quote total
           </label>
+
+          <div style={{ fontSize: 11, fontWeight: 600, color: T.text3, textTransform: 'uppercase', letterSpacing: '0.06em', margin: '20px 0 8px' }}>Website lead round-robin</div>
+          <div style={{ fontSize: 11, color: T.text3, marginBottom: 10, lineHeight: 1.5 }}>
+            New website leads are assigned to these people in turn (top to bottom, then back to the top). Untick everyone to leave leads unassigned. Changing the roster restarts the rotation.
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            {users.map(u => {
+              const roster = settings.round_robin_user_ids || []
+              const idx = roster.indexOf(u.id)
+              const on = idx >= 0
+              return (
+                <label key={u.id} style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 12, color: on ? T.text : T.text2, cursor: 'pointer', padding: '4px 6px', borderRadius: 6, background: on ? T.bg3 : 'transparent' }}>
+                  <input type="checkbox" checked={on} onChange={e => {
+                    const next = e.target.checked ? [...roster, u.id] : roster.filter(x => x !== u.id)
+                    saveSettings({ round_robin_user_ids: next })
+                  }} />
+                  <span style={{ flex: 1 }}>{u.display_name || u.email}</span>
+                  {on && <span style={{ fontSize: 10, color: T.text3, fontFamily: 'monospace' }}>#{idx + 1}</span>}
+                </label>
+              )
+            })}
+            {users.length === 0 && <div style={{ fontSize: 11, color: T.text3, fontStyle: 'italic' }}>No staff users found.</div>}
+          </div>
         </>
       )}
     </Overlay>

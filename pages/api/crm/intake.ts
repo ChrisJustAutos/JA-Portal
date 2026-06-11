@@ -10,7 +10,7 @@
 
 import { createClient } from '@supabase/supabase-js'
 import type { NextApiRequest, NextApiResponse } from 'next'
-import { contactDisplayName, findContact, logActivity } from '../../../lib/crm'
+import { contactDisplayName, findContact, logActivity, pickRoundRobinOwner } from '../../../lib/crm'
 import { enrolLead } from '../../../lib/crm-automations'
 import { notify } from '../../../lib/notifications'
 
@@ -83,6 +83,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       await logActivity(db, { contact_id: contactId, type: 'contact_created', body: 'Contact created from website lead' })
     }
 
+    // Round-robin: assign the next person in the configured rotation
+    // (Settings → pipeline gear → "Website lead round-robin"). Null roster =
+    // unassigned, as before.
+    const ownerId = await pickRoundRobinOwner(db)
+
     // Open the lead.
     const title = body.subject ? String(body.subject).slice(0, 200) : `Website enquiry${name ? ` — ${name}` : ''}`
     const { data: lead, error: lErr } = await db.from('crm_leads').insert({
@@ -90,21 +95,44 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       title,
       stage: 'new',
       source: 'website',
+      owner_id: ownerId,
       value: body.value != null && body.value !== '' ? Number(body.value) : null,
       vehicle: body.vehicle ? String(body.vehicle) : null,
       details: message,
     }).select('id, title').single()
     if (lErr) throw lErr
 
-    await logActivity(db, { lead_id: lead.id, contact_id: contactId, type: 'website_lead', body: message || 'New website enquiry', meta: { page: body.page || null } })
+    let ownerName: string | null = null
+    if (ownerId) {
+      const { data: owner } = await db.from('user_profiles').select('display_name, email').eq('id', ownerId).maybeSingle()
+      ownerName = owner?.display_name || owner?.email || null
+    }
+    await logActivity(db, {
+      lead_id: lead.id, contact_id: contactId, type: 'website_lead',
+      body: `${message || 'New website enquiry'}${ownerName ? `\nAssigned to ${ownerName} (round-robin)` : ''}`,
+      meta: { page: body.page || null, round_robin_owner: ownerId },
+    })
     await enrolLead({ id: lead.id, stage: 'new', contact_id: contactId }, 'lead_created', db)
 
+    // The assignee gets a direct "yours" notification; everyone else still
+    // sees the generic team alert.
+    if (ownerId) {
+      await notify({
+        module: 'crm',
+        title: 'New website lead — assigned to you',
+        body: `${name || email || phone || 'Someone'}${message ? ` — ${message.slice(0, 120)}` : ''}`,
+        href: '/crm',
+        userIds: [ownerId],
+        dedupeKey: `crm-weblead-owner:${lead.id}`,
+      })
+    }
     await notify({
       module: 'crm',
-      title: 'New website lead',
+      title: ownerName ? `New website lead → ${ownerName}` : 'New website lead',
       body: `${name || email || phone || 'Someone'}${message ? ` — ${message.slice(0, 120)}` : ''}`,
       href: '/crm',
       roles: ['admin', 'manager', 'sales'],
+      excludeUserId: ownerId || undefined,
       dedupeKey: `crm-weblead:${lead.id}`,
     })
 

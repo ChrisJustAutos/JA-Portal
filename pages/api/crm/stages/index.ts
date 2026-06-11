@@ -68,6 +68,11 @@ export default withAuth('view:crm', async (req, res, user) => {
       const patch: any = { updated_at: new Date().toISOString() }
       if ('quote_stage_map' in body.settings) patch.quote_stage_map = body.settings.quote_stage_map
       if ('sync_lead_value' in body.settings) patch.sync_lead_value = !!body.settings.sync_lead_value
+      if ('round_robin_user_ids' in body.settings) {
+        const arr = Array.isArray(body.settings.round_robin_user_ids) ? body.settings.round_robin_user_ids : []
+        patch.round_robin_user_ids = Array.from(new Set(arr.filter((u: any) => typeof u === 'string' && /^[0-9a-f-]{36}$/i.test(u)))).slice(0, 50)
+        patch.round_robin_pointer = 0   // roster change restarts the rotation
+      }
       await db.from('crm_settings').update(patch).eq('id', 'singleton')
     }
     invalidateStagesCache()
