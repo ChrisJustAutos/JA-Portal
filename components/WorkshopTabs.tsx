@@ -7,6 +7,7 @@
 import { useRouter } from 'next/router'
 import { Permission, UserRole, roleHasPermission } from '../lib/permissions'
 import { T } from '../lib/ui/theme'
+import WorkshopSearch from './WorkshopSearch'
 
 const TABS: { id: string; label: string; href: string; perm?: Permission }[] = [
   { id: 'diary', label: 'Diary', href: '/diary' },
@@ -35,6 +36,7 @@ export default function WorkshopTabs({ active, role }: { active: WorkshopTabId; 
           }}>{t.label}</button>
         )
       })}
+      <WorkshopSearch />
     </div>
   )
 }
