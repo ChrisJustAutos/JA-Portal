@@ -18,6 +18,7 @@ import { money } from '../../lib/ui/format'
 const REPORTS: { id: string; label: string; dateless?: boolean }[] = [
   { id: 'daily_sales',       label: 'Daily sales' },
   { id: 'received_payments', label: 'Received payments' },
+  { id: 'bookings_won',      label: 'Bookings won' },
   { id: 'wip',               label: 'Work in progress', dateless: true },
   { id: 'income_summary',    label: 'Income summary' },
   { id: 'stock',             label: 'Stock', dateless: true },
@@ -41,6 +42,7 @@ interface ReportData {
   kpis: { label: string; value: string; accent?: string }[]
   columns: { key: string; label: string; align?: string; money?: boolean }[]
   rows: Record<string, any>[]
+  chart?: { label: string; value: number }[]
 }
 
 export default function WorkshopReportsPage({ user }: { user: PortalUserSSR }) {
@@ -121,6 +123,35 @@ export default function WorkshopReportsPage({ user }: { user: PortalUserSSR }) {
                   {data.kpis.map((k, i) => (
                     <KPI key={i} label={k.label} value={k.value} accent={k.accent} />
                   ))}
+                </div>
+              )}
+
+              {/* Bar chart (reports that supply per-day values, e.g. Bookings won) */}
+              {data && data.chart && data.chart.length > 0 && data.chart.some(c => c.value > 0) && (
+                <div style={{ background:T.bg2, border:`1px solid ${T.border}`, borderRadius:10, padding:'16px 16px 8px', marginBottom:16 }}>
+                  <div style={{ display:'flex', alignItems:'flex-end', gap:3, height:150 }}>
+                    {data.chart.map((c, i) => {
+                      const max = Math.max(...data.chart!.map(x => x.value), 1)
+                      const h = c.value > 0 ? Math.max(4, (c.value / max) * 130) : 2
+                      return (
+                        <div key={i} title={c.label} style={{ flex:1, display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'flex-end', minWidth:0, height:'100%' }}>
+                          {data.chart!.length <= 45 && c.value > 0 && (
+                            <span style={{ fontSize:9, color:T.text3, fontFamily:'monospace', marginBottom:2 }}>{c.value}</span>
+                          )}
+                          <div style={{ width:'100%', maxWidth:34, height:h, background: c.value > 0 ? T.accent : T.border, borderRadius:'3px 3px 0 0', opacity: c.value > 0 ? 0.9 : 0.5 }} />
+                        </div>
+                      )
+                    })}
+                  </div>
+                  {data.chart.length <= 45 && (
+                    <div style={{ display:'flex', gap:3, marginTop:4 }}>
+                      {data.chart.map((c, i) => (
+                        <div key={i} style={{ flex:1, fontSize:8, color:T.text3, textAlign:'center', overflow:'hidden', whiteSpace:'nowrap', textOverflow:'ellipsis', minWidth:0 }}>
+                          {c.label.split(' — ')[0].replace(/^\w+ /, '')}
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               )}
 

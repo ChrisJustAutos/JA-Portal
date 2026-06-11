@@ -8,13 +8,14 @@
 // pages/api/workshop/invoices/index.ts.
 
 import { SupabaseClient } from '@supabase/supabase-js'
-import { brisbaneDayBounds, bookingDurationMin, ymdBrisbane, vehicleLabel, customerLabel, PAYMENT_TENDERS, PaymentTender, BOOKING_STATUS_META, BookingStatus } from './workshop'
+import { brisbaneDayBounds, bookingDurationMin, ymdBrisbane, addDaysYmd, vehicleLabel, customerLabel, PAYMENT_TENDERS, PaymentTender, BOOKING_STATUS_META, BookingStatus } from './workshop'
 
-export type WorkshopReportType = 'daily_sales' | 'received_payments' | 'wip' | 'income_summary' | 'stock' | 'tech_productivity'
+export type WorkshopReportType = 'daily_sales' | 'received_payments' | 'bookings_won' | 'wip' | 'income_summary' | 'stock' | 'tech_productivity'
 
 export const WORKSHOP_REPORT_TYPES: { id: WorkshopReportType; label: string; dateless?: boolean }[] = [
   { id: 'daily_sales',       label: 'Daily sales' },
   { id: 'received_payments', label: 'Received payments' },
+  { id: 'bookings_won',      label: 'Bookings won' },
   { id: 'wip',               label: 'Work in progress', dateless: true },
   { id: 'income_summary',    label: 'Income summary' },
   { id: 'stock',             label: 'Stock', dateless: true },
@@ -23,7 +24,9 @@ export const WORKSHOP_REPORT_TYPES: { id: WorkshopReportType; label: string; dat
 
 export interface ReportKpi { label: string; value: string; accent?: string }
 export interface ReportColumn { key: string; label: string; align?: 'left' | 'right'; money?: boolean }
-export interface ReportResult { kpis: ReportKpi[]; columns: ReportColumn[]; rows: Record<string, any>[] }
+// chart: optional per-row bar values the page renders as a bar graph above
+// the table (label shown on hover/axis, value = bar height).
+export interface ReportResult { kpis: ReportKpi[]; columns: ReportColumn[]; rows: Record<string, any>[]; chart?: { label: string; value: number }[] }
 
 const round2 = (n: number) => Math.round(n * 100) / 100
 const $ = (n: number) => `$${round2(n).toLocaleString('en-AU', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
@@ -52,11 +55,63 @@ export async function runWorkshopReport(db: SupabaseClient, type: WorkshopReport
   switch (type) {
     case 'daily_sales':       return dailySales(db, fromYmd, toYmd)
     case 'received_payments': return receivedPayments(db, fromYmd, toYmd)
+    case 'bookings_won':      return bookingsWon(db, fromYmd, toYmd)
     case 'wip':               return wip(db)
     case 'income_summary':    return incomeSummary(db, fromYmd, toYmd)
     case 'stock':             return stock(db)
     case 'tech_productivity': return techProductivity(db, fromYmd, toYmd)
     default: throw new Error('unknown report type')
+  }
+}
+
+// ── Bookings won — new bookings created per day (quotes won / work booked) ──
+// Counts by the day the booking was CREATED (not its diary slot), so it reads
+// as "how much work did we win each day". Cancelled / no-show excluded.
+async function bookingsWon(db: SupabaseClient, fromYmd: string, toYmd: string): Promise<ReportResult> {
+  const { fromIso, toIso } = rangeBounds(fromYmd, toYmd)
+  const bookings = await pageAll((a, b) => db.from('workshop_bookings')
+    .select('id, created_at, status, estimated_value, total_inc_gst')
+    .gte('created_at', fromIso).lt('created_at', toIso)
+    .not('status', 'in', '(cancelled,no_show)')
+    .order('created_at').range(a, b))
+
+  // Seed every day in the range so quiet days show as zero bars (cap ~1 year).
+  const byDay: Record<string, { count: number; value: number }> = {}
+  for (let ymd = fromYmd; ymd <= toYmd && Object.keys(byDay).length < 370; ymd = addDaysYmd(ymd, 1)) {
+    byDay[ymd] = { count: 0, value: 0 }
+  }
+  for (const bk of bookings as any[]) {
+    const ymd = ymdBrisbane(new Date(bk.created_at))
+    const d = (byDay[ymd] ||= { count: 0, value: 0 })
+    d.count++
+    d.value += Number(bk.estimated_value) || Number(bk.total_inc_gst) || 0
+  }
+
+  const days = Object.keys(byDay).sort()
+  const rows = days.map(ymd => ({
+    day: new Date(`${ymd}T00:00:00+10:00`).toLocaleDateString('en-AU', { weekday: 'short', day: '2-digit', month: 'short', timeZone: 'Australia/Brisbane' }),
+    bookings: byDay[ymd].count,
+    est_value: round2(byDay[ymd].value),
+  }))
+  const totalCount = days.reduce((s, d) => s + byDay[d].count, 0)
+  const totalValue = round2(days.reduce((s, d) => s + byDay[d].value, 0))
+  const activeDays = Math.max(1, days.length)
+  return {
+    kpis: [
+      { label: 'Bookings won', value: String(totalCount) },
+      { label: 'Est. value', value: $(totalValue) },
+      { label: 'Avg / day', value: (totalCount / activeDays).toFixed(1) },
+    ],
+    columns: [
+      { key: 'day', label: 'Day' },
+      { key: 'bookings', label: 'Bookings', align: 'right' },
+      { key: 'est_value', label: 'Est. value', align: 'right', money: true },
+    ],
+    rows,
+    chart: days.map(ymd => ({
+      label: `${new Date(`${ymd}T00:00:00+10:00`).toLocaleDateString('en-AU', { weekday: 'short', day: '2-digit', month: 'short', timeZone: 'Australia/Brisbane' })} — ${byDay[ymd].count} booking${byDay[ymd].count === 1 ? '' : 's'}`,
+      value: byDay[ymd].count,
+    })),
   }
 }
 
