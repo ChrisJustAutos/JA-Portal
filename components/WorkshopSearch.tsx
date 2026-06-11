@@ -159,7 +159,7 @@ export default function WorkshopSearch() {
         onKeyDown={onKeyDown}
         placeholder="Search name, phone, rego, VIN, invoice #…"
         style={{
-          width: '100%', padding: '6px 10px', background: T.bg3, color: T.text,
+          width: '100%', boxSizing: 'border-box', padding: '6px 10px', background: T.bg3, color: T.text,
           border: `1px solid ${T.border2}`, borderRadius: 6, fontSize: 12, fontFamily: 'inherit', outline: 'none',
         }}
       />
