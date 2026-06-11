@@ -19,7 +19,8 @@ function sb(): SupabaseClient {
   return createClient(url, key, { auth: { persistSession: false } })
 }
 
-const EDITABLE = ['name', 'code', 'role', 'color', 'phone_ext', 'daily_hours', 'show_in_diary', 'active', 'sort_order'] as const
+const EDITABLE = ['name', 'code', 'role', 'color', 'phone_ext', 'daily_hours', 'show_in_diary', 'active', 'sort_order', 'user_id'] as const
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 function slugCode(name: string): string {
   const base = String(name || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 16) || 'tech'
@@ -59,9 +60,10 @@ export default withAuth('view:diary', async (req, res, user) => {
       show_in_diary: body.show_in_diary != null ? !!body.show_in_diary : true,
       active: body.active != null ? !!body.active : true,
       sort_order: body.sort_order != null ? (Number(body.sort_order) || 0) : 0,
+      user_id: UUID_RE.test(String(body.user_id || '')) ? body.user_id : null,
     }
     const { data, error } = await db.from('workshop_technicians').insert(row).select('*').single()
-    if (error) return res.status(error.code === '23505' ? 409 : 500).json({ error: error.code === '23505' ? 'That code is already in use.' : error.message })
+    if (error) return res.status(error.code === '23505' ? 409 : 500).json({ error: error.code === '23505' ? 'That code is already in use (or that login is already linked to another lane).' : error.message })
     return res.status(201).json({ ok: true, technician: data })
   }
 
@@ -74,10 +76,11 @@ export default withAuth('view:diary', async (req, res, user) => {
       if (f === 'daily_hours') patch[f] = Math.max(0, Number(body[f]) || 0)
       else if (f === 'sort_order') patch[f] = Number(body[f]) || 0
       else if (f === 'show_in_diary' || f === 'active') patch[f] = !!body[f]
+      else if (f === 'user_id') patch[f] = UUID_RE.test(String(body[f] || '')) ? body[f] : null
       else patch[f] = body[f] === '' ? null : body[f]
     }
     const { error } = await db.from('workshop_technicians').update(patch).eq('id', id)
-    if (error) return res.status(error.code === '23505' ? 409 : 500).json({ error: error.code === '23505' ? 'That code is already in use.' : error.message })
+    if (error) return res.status(error.code === '23505' ? 409 : 500).json({ error: error.code === '23505' ? 'That code is already in use (or that login is already linked to another lane).' : error.message })
     return res.status(200).json({ ok: true })
   }
 

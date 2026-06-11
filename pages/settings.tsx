@@ -20,6 +20,7 @@ import GeneralTab from '../components/settings/GeneralTab'
 import DistributorTab from '../components/settings/DistributorTab'
 import ConnectionsHubTab from '../components/settings/ConnectionsHubTab'
 import DataImportsTab from '../components/settings/DataImportsTab'
+import StaffSection from '../components/settings/StaffSection'
 import type { PortalUserSSR } from '../lib/authServer'
 import { T } from '../lib/ui/theme'
 import { SkeletonRows } from '../components/ui'
@@ -73,7 +74,7 @@ export default function SettingsPage({ user }: { user: PortalUserSSR }) {
     { id: 'md-imports',  label: 'Imports',            adminOnly: true,  icon: 'stocktake',     accent: T.amber,  desc: 'Upload customers, job types, vehicles, inventory, quotes & invoices from a spreadsheet' },
     { id: 'vin-codes',   label: 'VIN Codes',          adminOnly: true,  icon: 'vehicle-sales', accent: T.amber,  desc: 'VIN prefix → model code rules' },
     { id: 'backfill',    label: 'Backfill',           adminOnly: true,  icon: 'jobs',          accent: T.teal,   desc: 'Orders ↔ quotes backfill' },
-    { id: 'users',       label: 'Users',              adminOnly: true,  icon: 'team',          accent: T.blue,   desc: 'Invite, roles & tab access' },
+    { id: 'users',       label: 'Users & Staff',      adminOnly: true,  icon: 'team',          accent: T.blue,   desc: 'Logins, roles, tabs + workshop diary lanes' },
     { id: 'audit',       label: 'Audit Log',          adminOnly: true,  icon: 'todos',         accent: T.text2,  desc: 'Recent user-management events' },
     { id: 'profile',     label: 'My Profile',         adminOnly: false, icon: 'distributors',  accent: T.purple, desc: 'Your name & password' },
   ]
@@ -498,6 +499,9 @@ function UsersTab({ currentUser }: { currentUser: PortalUserSSR }) {
         </table>
       )}
     </div>
+
+    {/* Workshop staff / diary lanes — same screen as logins, linked per person */}
+    <StaffSection users={users} />
 
     {/* Edit Tabs modal */}
     {editingTabsFor && (() => {

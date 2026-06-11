@@ -48,7 +48,6 @@ export default function WorkshopSettingsPage({ user }: { user: PortalUserSSR }) 
   const [trackingCategories, setTrackingCategories] = useState<any[]>([])
   const [expenseAccounts, setExpenseAccounts] = useState<any[]>([])
   const [accountsError, setAccountsError] = useState('')
-  const [techs, setTechs] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
   const [flash, setFlash] = useState('')
   const [savingAll, setSavingAll] = useState(false)
@@ -69,13 +68,7 @@ export default function WorkshopSettingsPage({ user }: { user: PortalUserSSR }) 
     const r = await fetch('/api/workshop/settings')
     if (r.ok) { const d = await r.json(); setSettings(d.settings); setAccounts(d.incomeAccounts || []); setBankAccounts(d.bankAccounts || []); setTrackingCategories(d.trackingCategories || []); setExpenseAccounts(d.expenseAccounts || []); setAccountsError(d.accountsError || '') }
   }, [])
-  const loadTechs = useCallback(async () => {
-    const r = await fetch('/api/workshop/technicians')
-    if (r.ok) { const d = await r.json(); setTechs(d.technicians || []) }
-  }, [])
-  useEffect(() => { Promise.all([loadSettings(), loadTechs()]).finally(() => setLoading(false)) }, [loadSettings, loadTechs])
-
-  function flashSaved() { setFlash('Saved ✓'); setTimeout(() => setFlash(''), 2000) }
+  useEffect(() => { loadSettings().finally(() => setLoading(false)) }, [loadSettings])
 
   // `silent` suppresses the per-save flash + throws on error, so the page-level
   // "Save all" can drive many saves and show a single combined confirmation.
@@ -98,24 +91,6 @@ export default function WorkshopSettingsPage({ user }: { user: PortalUserSSR }) 
     } catch (e: any) {
       setFlash(e?.message || 'Save failed'); setTimeout(() => setFlash(''), 3500)
     } finally { setSavingAll(false) }
-  }
-
-  async function addTech(name: string) {
-    const r = await fetch('/api/workshop/technicians', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, sort_order: (techs.length + 1) * 10 }) })
-    if (r.ok) await loadTechs()
-    else { const d = await r.json().catch(() => ({})); setFlash(d.error || 'Add failed'); setTimeout(() => setFlash(''), 3000) }
-  }
-  async function patchTech(id: string, patch: any) {
-    const r = await fetch(`/api/workshop/technicians?id=${encodeURIComponent(id)}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(patch) })
-    if (r.ok) { setTechs(ts => ts.map(t => t.id === id ? { ...t, ...patch } : t)); flashSaved() }
-    else { const d = await r.json().catch(() => ({})); setFlash(d.error || 'Save failed'); setTimeout(() => setFlash(''), 3000); await loadTechs() }
-  }
-  async function removeTech(id: string, name: string) {
-    if (!(await confirmDialog({ title: `Remove ${name}?`, message: 'If they have bookings they’ll be retired (hidden) instead of deleted.', danger: true }))) return
-    const r = await fetch(`/api/workshop/technicians?id=${encodeURIComponent(id)}`, { method: 'DELETE' })
-    const d = await r.json().catch(() => ({}))
-    if (r.ok) { setFlash(d.retired ? `Retired (${d.bookings} bookings kept)` : 'Removed'); setTimeout(() => setFlash(''), 2500); await loadTechs() }
-    else { setFlash(d.error || 'Remove failed'); setTimeout(() => setFlash(''), 3000) }
   }
 
   return (
@@ -153,7 +128,7 @@ export default function WorkshopSettingsPage({ user }: { user: PortalUserSSR }) 
                   {tab === 'accounts' && settings && <AccountsSection settings={settings} income={accounts} banks={bankAccounts} categories={trackingCategories} expense={expenseAccounts} accountsError={accountsError} onSave={saveSettings} />}
                   {tab === 'job-types' && <JobTypesSection />}
                   {tab === 'sms' && settings && <SmsSection settings={settings} onSave={saveSettings} register={registerSaver} />}
-                  {tab === 'techs' && <TechsSection techs={techs} onAdd={addTech} onPatch={patchTech} onRemove={removeTech} />}
+                  {tab === 'techs' && <TechsMovedCard />}
                 </div>
               </div>
             )}
@@ -546,39 +521,19 @@ function SmsSection({ settings, onSave, register }: { settings: any; onSave: Sav
   )
 }
 
-function TechsSection({ techs, onAdd, onPatch, onRemove }: { techs: any[]; onAdd: (name: string) => void; onPatch: (id: string, p: any) => void; onRemove: (id: string, name: string) => void }) {
-  const [newName, setNewName] = useState('')
+// Technicians moved to Settings → Users & Staff (one screen for logins +
+// diary lanes, linked per person). This card is a signpost for muscle memory.
+function TechsMovedCard() {
   return (
-    <Card title="Technicians & staff" hint="These are the diary lanes. Untick “Diary” to keep someone on staff but off the diary; “Active” off retires someone who has left. Daily hours sets the workload bar.">
-      <div style={{ display: 'grid', gridTemplateColumns: '1.4fr 1fr 64px 70px 56px 50px 28px', gap: 8, padding: '0 4px 6px', fontSize: 9, color: T.text3, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
-        <div>Name</div><div>Role</div><div style={{ textAlign: 'center' }}>Colour</div><div style={{ textAlign: 'right' }}>Hrs/day</div><div style={{ textAlign: 'center' }}>Diary</div><div style={{ textAlign: 'center' }}>Active</div><div/>
+    <Card title="Technicians & staff" hint="">
+      <div style={{ fontSize: 13, color: T.text2, lineHeight: 1.6, padding: '6px 0' }}>
+        Staff management has moved to <strong>Settings → Users &amp; Staff</strong>, where portal
+        logins and diary lanes are managed together (and linked per person).
       </div>
-      {techs.length === 0 && <div style={{ padding: 16, textAlign: 'center', fontSize: 12, color: T.text3 }}>No technicians yet — add one below.</div>}
-      {techs.map(t => <TechRow key={t.id} tech={t} onPatch={(p) => onPatch(t.id, p)} onRemove={() => onRemove(t.id, t.name)} />)}
-      <div style={{ display: 'flex', gap: 8, marginTop: 14, paddingTop: 14, borderTop: `1px solid ${T.border}` }}>
-        <input style={{ ...inp, flex: 1 }} value={newName} onChange={e => setNewName(e.target.value)} placeholder="New technician / staff name" onKeyDown={e => { if (e.key === 'Enter' && newName.trim()) { onAdd(newName.trim()); setNewName('') } }} />
-        <button onClick={() => { if (newName.trim()) { onAdd(newName.trim()); setNewName('') } }} style={pbtn(T.accent, true)}>+ Add</button>
-      </div>
+      <a href="/settings?tab=users" target="_top" style={{ display: 'inline-block', marginTop: 8, padding: '8px 16px', borderRadius: 6, fontSize: 12, fontWeight: 600, background: T.accent, color: '#fff', textDecoration: 'none' }}>
+        Open Users &amp; Staff →
+      </a>
     </Card>
-  )
-}
-
-function TechRow({ tech, onPatch, onRemove }: { tech: any; onPatch: (p: any) => void; onRemove: () => void }) {
-  const [name, setName] = useState(tech.name || '')
-  const [role, setRole] = useState(tech.role || '')
-  const [hours, setHours] = useState(String(tech.daily_hours ?? 8))
-  useEffect(() => { setName(tech.name || ''); setRole(tech.role || ''); setHours(String(tech.daily_hours ?? 8)) }, [tech.id, tech.name, tech.role, tech.daily_hours])
-  const dim = !tech.active ? 0.5 : 1
-  return (
-    <div style={{ display: 'grid', gridTemplateColumns: '1.4fr 1fr 64px 70px 56px 50px 28px', gap: 8, padding: '6px 4px', borderTop: `1px solid ${T.border}`, alignItems: 'center', opacity: dim }}>
-      <input style={cellInp} value={name} onChange={e => setName(e.target.value)} onBlur={() => name !== (tech.name || '') && name.trim() && onPatch({ name })} />
-      <input style={cellInp} value={role} onChange={e => setRole(e.target.value)} onBlur={() => role !== (tech.role || '') && onPatch({ role })} placeholder="Technician" />
-      <input type="color" value={tech.color || '#4f8ef7'} onChange={e => onPatch({ color: e.target.value })} style={{ width: 30, height: 26, padding: 0, border: `1px solid ${T.border}`, borderRadius: 4, background: T.bg3, cursor: 'pointer', justifySelf: 'center' }} />
-      <input style={{ ...cellInp, textAlign: 'right' }} inputMode="decimal" value={hours} onChange={e => setHours(e.target.value)} onBlur={() => Number(hours) !== Number(tech.daily_hours) && onPatch({ daily_hours: Number(hours) || 0 })} />
-      <input type="checkbox" checked={!!tech.show_in_diary} onChange={e => onPatch({ show_in_diary: e.target.checked })} style={{ justifySelf: 'center', cursor: 'pointer' }} />
-      <input type="checkbox" checked={!!tech.active} onChange={e => onPatch({ active: e.target.checked })} style={{ justifySelf: 'center', cursor: 'pointer' }} />
-      <button onClick={onRemove} title="Remove" style={{ background: 'transparent', border: 'none', color: T.text3, cursor: 'pointer', fontSize: 16, justifySelf: 'center' }}>×</button>
-    </div>
   )
 }
 
