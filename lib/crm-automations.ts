@@ -1,15 +1,28 @@
 // lib/crm-automations.ts
-// SERVER-ONLY. The CRM automation engine: enrol leads into matching sequences
-// and run due steps (email / SMS / task / owner notification). Driven by
-// /api/cron/crm-automations. All functions are best-effort and never throw into
-// their callers (enrolment must not break a lead create; the sweep must not die
-// on one bad enrolment).
+// SERVER-ONLY. The CRM automation engine, graph edition (migration 099).
+//
+// Automations are graphs (lib/crm-automation-graph.ts): trigger → action /
+// condition (yes|no) / wait nodes. The 5-min cron sweep claims due enrolments
+// atomically and WALKS the graph until it hits a wait, a retry backoff, or
+// the end — so several consecutive actions fire in one tick, and waits are
+// relative to when they're reached (not cumulative from enrolment).
+//
+// Legacy linear automations (graph IS NULL) are migrated lazily: first touch
+// converts steps → graph via linearStepsToGraph and maps any in-flight
+// enrolment's next_step_order onto the 'step-N' node id, keeping next_run_at
+// untouched so live sequences continue exactly on schedule.
+//
+// All functions are best-effort and never throw into their callers.
 
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
 import { sendMail } from './email'
 import { sendSms } from './clicksend'
 import { notify } from './notifications'
 import { logActivity, contactDisplayName } from './crm'
+import {
+  FlowGraph, FlowNode, ConditionRule,
+  linearStepsToGraph, entryNodeId, nextNodeId,
+} from './crm-automation-graph'
 
 function svc(): SupabaseClient {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL
@@ -18,15 +31,17 @@ function svc(): SupabaseClient {
   return createClient(url, key, { auth: { persistSession: false } })
 }
 
+const MAX_NODES_PER_TICK = 25
+const MAX_ATTEMPTS = 3
+const BACKOFF_MINUTES = [5, 30, 120]
+
 // ── Templating ────────────────────────────────────────────────────────
-// Supported placeholders: {{contact_name}} {{first_name}} {{last_name}}
-// {{vehicle}} {{lead_title}} {{value}} {{owner_name}} {{company}}
 export function renderTemplate(tpl: string | null | undefined, vars: Record<string, string>): string {
   if (!tpl) return ''
   return String(tpl).replace(/\{\{\s*(\w+)\s*\}\}/g, (_m, k) => (vars[k] ?? ''))
 }
 
-function buildVars(lead: any, contact: any): Record<string, string> {
+export function buildVars(lead: any, contact: any): Record<string, string> {
   const name = contact ? contactDisplayName(contact) : ''
   const first = (contact?.first_name || name.split(' ')[0] || 'there').trim()
   const value = lead?.value != null ? '$' + Number(lead.value).toLocaleString('en-AU', { maximumFractionDigits: 0 }) : ''
@@ -45,58 +60,176 @@ function buildVars(lead: any, contact: any): Record<string, string> {
 function escapeHtml(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 }
-function textToHtml(text: string): string {
+export function textToHtml(text: string): string {
   return `<div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#222;line-height:1.5">${escapeHtml(text).replace(/\n/g, '<br>')}</div>`
 }
 
+// ── Graph access (with lazy legacy migration) ─────────────────────────
+async function ensureGraph(c: SupabaseClient, automation: { id: string; trigger_event: string; trigger_stage: string | null; graph: any }): Promise<FlowGraph | null> {
+  if (automation.graph && Array.isArray(automation.graph.nodes)) return automation.graph as FlowGraph
+  const { data: steps } = await c.from('crm_automation_steps')
+    .select('step_order, delay_hours, action, subject, body, task_priority')
+    .eq('automation_id', automation.id).order('step_order', { ascending: true })
+  if (!steps || steps.length === 0) return null
+  const graph = linearStepsToGraph(automation, steps as any[])
+  await c.from('crm_automations').update({ graph, trigger_config: { stage: automation.trigger_stage || null } }).eq('id', automation.id)
+  return graph
+}
+
 // ── Enrolment ─────────────────────────────────────────────────────────
-// Called when a lead is created or changes stage. Enrols the lead into every
-// enabled automation whose trigger matches (and that it isn't already in).
+// Called when a lead is created or changes stage (and from the manual-enrol
+// API). Enrols into every enabled automation whose trigger matches, starting
+// the cursor at the trigger's first downstream node, due immediately — the
+// sweep walks waits itself.
 export async function enrolLead(
   lead: { id: string; stage: string; contact_id: string | null },
-  event: 'lead_created' | 'stage_changed',
+  event: 'lead_created' | 'stage_changed' | 'manual',
   db?: SupabaseClient,
+  onlyAutomationId?: string,
 ): Promise<void> {
   try {
     const c = db || svc()
-    const { data: autos } = await c.from('crm_automations')
-      .select('id, trigger_stage').eq('enabled', true).eq('trigger_event', event).is('deleted_at', null)
+    let q = c.from('crm_automations')
+      .select('id, trigger_event, trigger_stage, trigger_config, graph, graph_version')
+      .eq('enabled', true).is('deleted_at', null)
+    if (event !== 'manual') q = q.eq('trigger_event', event)
+    if (onlyAutomationId) q = q.eq('id', onlyAutomationId)
+    const { data: autos } = await q
     if (!autos || !autos.length) return
-    const matches = autos.filter((a: any) => !a.trigger_stage || a.trigger_stage === lead.stage)
-    for (const a of matches) {
-      const { data: first } = await c.from('crm_automation_steps')
-        .select('step_order, delay_hours').eq('automation_id', a.id)
-        .order('step_order', { ascending: true }).limit(1)
-      if (!first || !first.length) continue
-      const delayMs = Math.max(0, Number(first[0].delay_hours) || 0) * 3600 * 1000
-      const nextRun = new Date(Date.now() + delayMs).toISOString()
-      await c.from('crm_automation_enrolments').upsert({
+    for (const a of autos as any[]) {
+      const stageFilter = (a.trigger_config?.stage ?? a.trigger_stage) || null
+      if (event !== 'manual' && stageFilter && stageFilter !== lead.stage) continue
+      const graph = await ensureGraph(c, a)
+      if (!graph) continue
+      const entry = entryNodeId(graph)
+      if (!entry) continue
+      const { error } = await c.from('crm_automation_enrolments').insert({
         automation_id: a.id,
         lead_id: lead.id,
         contact_id: lead.contact_id,
         status: 'active',
-        next_step_order: first[0].step_order,
-        next_run_at: nextRun,
-      }, { onConflict: 'automation_id,lead_id', ignoreDuplicates: true })
+        next_step_order: 1,           // legacy column, unused by the graph engine
+        next_run_at: new Date().toISOString(),
+        current_node_id: entry,
+        graph_version: a.graph_version || 1,
+      })
+      // 23505 = already actively enrolled (partial unique) — that's the guard working.
+      if (error && error.code !== '23505') console.error('enrol insert failed:', error.message)
     }
   } catch (e: any) {
     console.error('enrolLead failed (non-fatal):', e?.message || e)
   }
 }
 
+// ── Condition evaluation ──────────────────────────────────────────────
+function resolveField(field: string, lead: any, contact: any): any {
+  switch (field) {
+    case 'lead.stage': return lead?.stage ?? null
+    case 'lead.value': return lead?.value != null ? Number(lead.value) : null
+    case 'lead.source': return lead?.source ?? null
+    case 'lead.owner_id': return lead?.owner_id ?? null
+    case 'contact.tags': return Array.isArray(contact?.tags) ? contact.tags : []
+    case 'contact.source': return contact?.source ?? null
+    case 'contact.has_email': return !!contact?.email
+    case 'contact.has_mobile': return !!(contact?.mobile || contact?.phone)
+    default: return null
+  }
+}
+
+function evalRule(rule: ConditionRule, lead: any, contact: any): boolean {
+  const v = resolveField(rule.field, lead, contact)
+  const want = rule.value
+  switch (rule.op) {
+    case 'eq': return String(v ?? '') === String(want ?? '') || v === want
+    case 'neq': return !(String(v ?? '') === String(want ?? '') || v === want)
+    case 'gt': return Number(v) > Number(want)
+    case 'gte': return Number(v) >= Number(want)
+    case 'lt': return Number(v) < Number(want)
+    case 'lte': return Number(v) <= Number(want)
+    case 'contains': return Array.isArray(v) ? v.includes(String(want)) : String(v ?? '').toLowerCase().includes(String(want ?? '').toLowerCase())
+    case 'not_contains': return !(Array.isArray(v) ? v.includes(String(want)) : String(v ?? '').toLowerCase().includes(String(want ?? '').toLowerCase()))
+    case 'is_set': return v !== null && v !== '' && v !== false && !(Array.isArray(v) && v.length === 0)
+    case 'not_set': return v === null || v === '' || v === false || (Array.isArray(v) && v.length === 0)
+    default: return false
+  }
+}
+
+export function evalCondition(node: FlowNode, lead: any, contact: any): boolean {
+  const rules = node.data.rules || []
+  if (!rules.length) return false
+  return node.data.match === 'any' ? rules.some(r => evalRule(r, lead, contact)) : rules.every(r => evalRule(r, lead, contact))
+}
+
+// ── Action execution (ported from the linear engine) ─────────────────
+async function executeAction(
+  c: SupabaseClient,
+  node: FlowNode,
+  ctx: { enrolmentId: string; autoName: string; lead: any; contact: any },
+): Promise<{ status: 'sent' | 'skipped' | 'failed'; detail: string }> {
+  const { lead, contact, autoName } = ctx
+  const d = node.data
+  const vars = buildVars(lead, contact)
+
+  if (d.action === 'email') {
+    const to = contact?.email
+    if (!to) return { status: 'skipped', detail: 'no email on contact' }
+    const subject = renderTemplate(d.subject, vars) || 'A quick follow-up'
+    try {
+      await sendMail(process.env.RESEND_FROM || 'noreply@mail.justautos.app', { to: [to], subject, html: textToHtml(renderTemplate(d.body, vars)) })
+      await logActivity(c, { lead_id: lead?.id, contact_id: contact?.id, type: 'email', body: `Automation "${autoName}": ${subject}` })
+      return { status: 'sent', detail: `email → ${to}` }
+    } catch (err: any) { return { status: 'failed', detail: String(err?.message || err).slice(0, 300) } }
+  }
+
+  if (d.action === 'sms') {
+    const to = contact?.mobile || contact?.phone
+    if (!to) return { status: 'skipped', detail: 'no phone on contact' }
+    const text = renderTemplate(d.body, vars)
+    const r = await sendSms(to, text)
+    if (!r.ok) return { status: 'failed', detail: r.error || 'sms failed' }
+    await logActivity(c, { lead_id: lead?.id, contact_id: contact?.id, type: 'sms', body: `Automation "${autoName}": ${text.slice(0, 160)}` })
+    return { status: 'sent', detail: `sms → ${to}` }
+  }
+
+  if (d.action === 'task') {
+    const title = renderTemplate(d.subject, vars) || 'Follow-up'
+    const { data: t } = await c.from('crm_tasks').insert({
+      title: title.slice(0, 200),
+      description: renderTemplate(d.body, vars) || null,
+      status: 'open',
+      priority: d.task_priority || 'normal',
+      assignee_id: lead?.owner_id || null,
+      lead_id: lead?.id || null,
+      contact_id: contact?.id || null,
+    }).select('id').single()
+    if (lead?.owner_id) await notify({ module: 'crm', title: 'Automated follow-up task', body: title, href: '/crm/tasks', userIds: [lead.owner_id], dedupeKey: `crm-auto-task:${t?.id}` })
+    await logActivity(c, { lead_id: lead?.id, contact_id: contact?.id, type: 'task', body: `Automation "${autoName}": ${title}` })
+    return { status: 'sent', detail: `task created${t ? ` ${t.id}` : ''}` }
+  }
+
+  if (d.action === 'notify_owner') {
+    const title = renderTemplate(d.subject, vars) || `Follow up on ${lead?.title || 'a lead'}`
+    if (!lead?.owner_id) return { status: 'skipped', detail: 'no owner' }
+    await notify({ module: 'crm', title, body: renderTemplate(d.body, vars), href: '/crm', userIds: [lead.owner_id], dedupeKey: `crm-auto-notify:${ctx.enrolmentId}:${node.id}` })
+    return { status: 'sent', detail: 'owner notified' }
+  }
+
+  return { status: 'skipped', detail: `unknown action ${d.action}` }
+}
+
 // ── The sweep ─────────────────────────────────────────────────────────
 export interface SweepResult { due: number; sent: number; skipped: number; failed: number; stopped: number; completed: number }
 
-export async function processDueAutomations(limit = 100): Promise<SweepResult> {
+export async function processDueAutomations(limit = 150): Promise<SweepResult> {
   const c = svc()
   const res: SweepResult = { due: 0, sent: 0, skipped: 0, failed: 0, stopped: 0, completed: 0 }
   const nowIso = new Date().toISOString()
 
   const { data: enrolments, error } = await c.from('crm_automation_enrolments')
-    .select(`id, automation_id, lead_id, contact_id, next_step_order, started_at,
-             automation:crm_automations(id, name, enabled, deleted_at, cancel_on_stages),
-             lead:crm_leads(id, title, stage, value, vehicle, owner_id, deleted_at, owner:user_profiles!crm_leads_owner_id_fkey(display_name)),
-             contact:crm_contacts(id, name, first_name, last_name, email, phone, mobile, company_name, do_not_contact, deleted_at)`)
+    .select(`id, automation_id, lead_id, contact_id, next_step_order, current_node_id, node_entered_at, graph_version, attempt_count, context, started_at, next_run_at,
+             automation:crm_automations(id, name, enabled, deleted_at, cancel_on_stages, trigger_event, trigger_stage, graph, graph_version),
+             lead:crm_leads(id, title, stage, value, source, vehicle, owner_id, deleted_at, owner:user_profiles!crm_leads_owner_id_fkey(display_name)),
+             contact:crm_contacts(id, name, first_name, last_name, email, phone, mobile, company_name, tags, source, do_not_contact, deleted_at)`)
     .eq('status', 'active').lte('next_run_at', nowIso)
     .order('next_run_at', { ascending: true }).limit(limit)
   if (error) { console.error('automations sweep query failed:', error.message); return res }
@@ -104,90 +237,127 @@ export async function processDueAutomations(limit = 100): Promise<SweepResult> {
 
   for (const e of (enrolments || []) as any[]) {
     try {
+      // Atomic claim: bump next_run_at so an overlapping cron invocation
+      // skips this row. If no row comes back, someone else claimed it.
+      const { data: claimed } = await c.from('crm_automation_enrolments')
+        .update({ next_run_at: new Date(Date.now() + 10 * 60000).toISOString() })
+        .eq('id', e.id).eq('status', 'active').lte('next_run_at', nowIso)
+        .select('id')
+      if (!claimed || claimed.length === 0) continue
+
       const auto = e.automation
       const lead = e.lead
       const contact = e.contact
 
-      // Guards that stop the sequence.
       const stop = async (reason: string, status: 'cancelled' | 'done' = 'cancelled') => {
-        await c.from('crm_automation_enrolments').update({ status, cancel_reason: reason, last_run_at: nowIso }).eq('id', e.id)
+        await c.from('crm_automation_enrolments').update({ status, cancel_reason: status === 'cancelled' ? reason : null, last_run_at: nowIso }).eq('id', e.id)
         if (status === 'cancelled') res.stopped++; else res.completed++
       }
+
+      // Guards (ported; lead guards skipped for contact-only enrolments).
       if (!auto || auto.deleted_at || !auto.enabled) { await stop('automation_disabled'); continue }
-      if (!lead || lead.deleted_at) { await stop('lead_gone'); continue }
-      const cancelStages: string[] = auto.cancel_on_stages || []
-      if (cancelStages.includes(lead.stage)) { await stop(`lead_${lead.stage}`); continue }
+      if (e.lead_id && (!lead || lead.deleted_at)) { await stop('lead_gone'); continue }
+      if (lead) {
+        const cancelStages: string[] = auto.cancel_on_stages || []
+        if (cancelStages.includes(lead.stage)) { await stop(`lead_${lead.stage}`); continue }
+      }
       if (contact?.do_not_contact) { await stop('do_not_contact'); continue }
 
-      // The step that's due.
-      const { data: stepRows } = await c.from('crm_automation_steps')
-        .select('*').eq('automation_id', auto.id).eq('step_order', e.next_step_order).limit(1)
-      const step = stepRows && stepRows[0]
-      if (!step) { await stop('no_more_steps', 'done'); continue }
+      const graph = await ensureGraph(c, auto)
+      if (!graph) { await stop('no_graph'); continue }
 
-      const vars = buildVars(lead, contact)
-      let runStatus: 'sent' | 'skipped' | 'failed' = 'sent'
-      let detail = ''
-
-      if (step.action === 'email') {
-        const to = contact?.email
-        if (!to) { runStatus = 'skipped'; detail = 'no email on contact' }
-        else {
-          const subject = renderTemplate(step.subject, vars) || 'A quick follow-up'
-          const html = textToHtml(renderTemplate(step.body, vars))
-          try {
-            await sendMail(process.env.RESEND_FROM || 'noreply@mail.justautos.app', { to: [to], subject, html })
-            detail = `email → ${to}`
-            await logActivity(c, { lead_id: lead.id, contact_id: contact?.id, type: 'email', body: `Automation "${auto.name}": ${subject}` })
-          } catch (err: any) { runStatus = 'failed'; detail = String(err?.message || err).slice(0, 300) }
-        }
-      } else if (step.action === 'sms') {
-        const to = contact?.mobile || contact?.phone
-        const text = renderTemplate(step.body, vars)
-        if (!to) { runStatus = 'skipped'; detail = 'no phone on contact' }
-        else {
-          const r = await sendSms(to, text)
-          if (r.ok) { detail = `sms → ${to}`; await logActivity(c, { lead_id: lead.id, contact_id: contact?.id, type: 'sms', body: `Automation "${auto.name}": ${text.slice(0, 160)}` }) }
-          else { runStatus = 'failed'; detail = r.error || 'sms failed' }
-        }
-      } else if (step.action === 'task') {
-        const title = renderTemplate(step.subject, vars) || 'Follow-up'
-        const { data: t } = await c.from('crm_tasks').insert({
-          title: title.slice(0, 200),
-          description: renderTemplate(step.body, vars) || null,
-          status: 'open',
-          priority: step.task_priority || 'normal',
-          assignee_id: lead.owner_id || null,
-          lead_id: lead.id,
-          contact_id: contact?.id || null,
-        }).select('id').single()
-        detail = `task created${t ? ` ${t.id}` : ''}`
-        if (lead.owner_id) await notify({ module: 'crm', title: 'Automated follow-up task', body: title, href: '/crm/tasks', userIds: [lead.owner_id], dedupeKey: `crm-auto-task:${t?.id}` })
-        await logActivity(c, { lead_id: lead.id, contact_id: contact?.id, type: 'task', body: `Automation "${auto.name}": ${title}` })
-      } else if (step.action === 'notify_owner') {
-        const title = renderTemplate(step.subject, vars) || `Follow up on ${lead.title}`
-        if (lead.owner_id) await notify({ module: 'crm', title, body: renderTemplate(step.body, vars), href: '/crm', userIds: [lead.owner_id], dedupeKey: `crm-auto-notify:${e.id}:${step.id}` })
-        detail = lead.owner_id ? 'owner notified' : 'no owner'
-        if (!lead.owner_id) runStatus = 'skipped'
-      } else {
-        runStatus = 'skipped'; detail = `unknown action ${step.action}`
+      // Cursor: legacy enrolments map next_step_order → 'step-N'.
+      let cursor: string | null = e.current_node_id
+      if (!cursor) {
+        const legacy = `step-${e.next_step_order}`
+        cursor = graph.nodes.some(n => n.id === legacy) ? legacy : entryNodeId(graph)
       }
 
-      // Log the run.
-      await c.from('crm_automation_runs').insert({ enrolment_id: e.id, step_id: step.id, action: step.action, status: runStatus, detail })
-      if (runStatus === 'sent') res.sent++; else if (runStatus === 'skipped') res.skipped++; else res.failed++
+      let context: any = e.context || {}
+      let attempts: number = Number(e.attempt_count) || 0
+      let walked = 0
+      let parked = false   // stopped at a wait / retry backoff
 
-      // Advance to the next step (if any), else complete.
-      const { data: nextRows } = await c.from('crm_automation_steps')
-        .select('step_order, delay_hours').eq('automation_id', auto.id).gt('step_order', e.next_step_order)
-        .order('step_order', { ascending: true }).limit(1)
-      const next = nextRows && nextRows[0]
-      if (next) {
-        const nextRun = new Date(new Date(e.started_at).getTime() + Math.max(0, Number(next.delay_hours) || 0) * 3600 * 1000).toISOString()
-        await c.from('crm_automation_enrolments').update({ next_step_order: next.step_order, next_run_at: nextRun, last_run_at: nowIso }).eq('id', e.id)
-      } else {
-        await c.from('crm_automation_enrolments').update({ status: 'done', last_run_at: nowIso }).eq('id', e.id)
-        res.completed++
+      const persist = async (patch: any) => {
+        await c.from('crm_automation_enrolments').update({ ...patch, last_run_at: new Date().toISOString() }).eq('id', e.id)
+      }
+
+      while (cursor && walked < MAX_NODES_PER_TICK) {
+        walked++
+        const node = graph.nodes.find(n => n.id === cursor)
+        if (!node) { await stop('node_removed'); parked = true; break }
+
+        if (node.data.kind === 'trigger') {
+          cursor = nextNodeId(graph, node.id)
+          continue
+        }
+
+        if (node.data.kind === 'wait') {
+          const hours = Math.max(0, Number(node.data.hours) || 0)
+          if (context.waiting_node === node.id) {
+            // Wait elapsed (we were parked here and next_run_at came due).
+            context = { ...context, waiting_node: null }
+            cursor = nextNodeId(graph, node.id)
+            if (!cursor) break
+            continue
+          }
+          // Arrived at the wait — park.
+          context = { ...context, waiting_node: node.id }
+          await persist({
+            current_node_id: node.id, node_entered_at: new Date().toISOString(),
+            next_run_at: new Date(Date.now() + hours * 3600_000).toISOString(),
+            attempt_count: 0, context,
+          })
+          parked = true
+          break
+        }
+
+        if (node.data.kind === 'condition') {
+          const yes = evalCondition(node, lead, contact)
+          await c.from('crm_automation_runs').insert({ enrolment_id: e.id, node_id: node.id, action: 'condition', status: 'skipped', detail: yes ? 'yes' : 'no', attempt: 1 })
+          cursor = nextNodeId(graph, node.id, yes ? 'yes' : 'no')
+          if (!cursor) break
+          continue
+        }
+
+        // Action node. Crash-replay backstop: if this (node, attempt) already
+        // ran with status sent, don't re-execute — just advance.
+        const attempt = attempts + 1
+        const { data: priorRuns } = await c.from('crm_automation_runs')
+          .select('id').eq('enrolment_id', e.id).eq('node_id', node.id).eq('attempt', attempt).eq('status', 'sent').limit(1)
+        let outcome: { status: 'sent' | 'skipped' | 'failed'; detail: string }
+        if (priorRuns && priorRuns.length) {
+          outcome = { status: 'sent', detail: 'already ran (crash replay guard)' }
+        } else {
+          outcome = await executeAction(c, node, { enrolmentId: e.id, autoName: auto.name, lead, contact })
+          await c.from('crm_automation_runs').insert({ enrolment_id: e.id, node_id: node.id, action: node.data.action, status: outcome.status, detail: outcome.detail, attempt })
+        }
+
+        if (outcome.status === 'failed') {
+          res.failed++
+          if (attempt < MAX_ATTEMPTS) {
+            const backoffMin = BACKOFF_MINUTES[Math.min(attempt - 1, BACKOFF_MINUTES.length - 1)]
+            await persist({ current_node_id: node.id, attempt_count: attempt, next_run_at: new Date(Date.now() + backoffMin * 60000).toISOString(), context })
+            parked = true
+            break
+          }
+          if ((node.data.on_failure || 'continue') === 'stop') { await stop('node_failed'); parked = true; break }
+          // fall through and advance past the failed node
+        } else if (outcome.status === 'sent') res.sent++
+        else res.skipped++
+
+        attempts = 0
+        cursor = nextNodeId(graph, node.id)
+        if (!cursor) break
+      }
+
+      if (!parked) {
+        if (cursor && walked >= MAX_NODES_PER_TICK) {
+          // Runaway protection: pick up where we left off next tick.
+          await persist({ current_node_id: cursor, attempt_count: 0, next_run_at: new Date().toISOString(), context })
+        } else {
+          await stop('', 'done')
+        }
       }
     } catch (err: any) {
       console.error('automation enrolment run failed:', err?.message || err)

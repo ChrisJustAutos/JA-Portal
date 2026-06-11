@@ -15,6 +15,9 @@ import { LIGHT_PALETTE } from '../lib/ui/theme'
 import GlobalChatbot, { ChatContextProvider } from '../components/GlobalChatbot'
 import DesktopNotifier from '../components/DesktopNotifier'
 import { FeedbackProvider } from '../components/ui/Feedback'
+// React Flow base styles (the CRM automation canvas) — node_modules CSS can
+// only be imported here in the pages router. ~2kb, used by /crm/automations/[id].
+import 'reactflow/dist/style.css'
 
 // Applies the user's theme prefs to <html>:
 //   - data-theme="dark" | "light" — drives the --t-* palette in globals.css,

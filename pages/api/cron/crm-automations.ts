@@ -1,11 +1,11 @@
 // pages/api/cron/crm-automations.ts
-// Vercel cron — runs due CRM automation steps (follow-up email/SMS/task/notify).
+// Vercel cron (5-min) — walks due CRM automation flows (graph engine).
 // Auth: CRON_SECRET bearer (or the vercel-cron user-agent), like the other crons.
 
 import { NextApiRequest, NextApiResponse } from 'next'
 import { processDueAutomations } from '../../../lib/crm-automations'
 
-export const config = { maxDuration: 120 }
+export const config = { maxDuration: 300 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   const cronSecret = process.env.CRON_SECRET

@@ -7,7 +7,8 @@
 // writes quote-side from here), so no sync loop is possible.
 
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { logActivity, setLeadStage, getCrmSettings } from './crm'
+import { logActivity, getCrmSettings } from './crm'
+import { setLeadStage } from './crm-server'
 
 const money = (n: number | null | undefined) =>
   n != null ? `$${Number(n).toLocaleString('en-AU', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : null

@@ -6,7 +6,8 @@
 import { createClient } from '@supabase/supabase-js'
 import { withAuth } from '../../../../lib/authServer'
 import { roleHasPermission } from '../../../../lib/permissions'
-import { setLeadStage, logActivity } from '../../../../lib/crm'
+import { logActivity } from '../../../../lib/crm'
+import { setLeadStage } from '../../../../lib/crm-server'
 
 export const config = { maxDuration: 10 }
 

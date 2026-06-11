@@ -1,11 +1,14 @@
 // pages/api/crm/automations/[id].ts
-// PATCH  — update fields and/or replace the step list (edit:crm)
+// GET    — one automation (graph + legacy steps) for the canvas editor
+// PATCH  — update fields, replace the graph (validated, bumps graph_version)
+//          and/or replace the legacy step list (edit:crm)
 // DELETE — soft-delete the automation (edit:crm). Active enrolments stop on
 //          their next sweep (the engine cancels when the automation is gone).
 
 import { createClient } from '@supabase/supabase-js'
 import { withAuth } from '../../../../lib/authServer'
 import { roleHasPermission } from '../../../../lib/permissions'
+import { validateGraph, linearStepsToGraph } from '../../../../lib/crm-automation-graph'
 
 export const config = { maxDuration: 10 }
 
@@ -34,6 +37,23 @@ export default withAuth('view:crm', async (req, res, user) => {
   const id = String(req.query.id || '')
   if (!id) return res.status(400).json({ error: 'id required' })
 
+  if (req.method === 'GET') {
+    const { data: auto, error } = await db.from('crm_automations')
+      .select('*, steps:crm_automation_steps(*)').eq('id', id).is('deleted_at', null).maybeSingle()
+    if (error || !auto) return res.status(404).json({ error: 'Not found' })
+    const steps = ((auto as any).steps || []).sort((x: any, y: any) => x.step_order - y.step_order)
+    // Legacy automations render via the converter until first save.
+    const graph = (auto as any).graph && Array.isArray((auto as any).graph.nodes)
+      ? (auto as any).graph
+      : (steps.length ? linearStepsToGraph(auto as any, steps) : null)
+    const { data: enr } = await db.from('crm_automation_enrolments').select('status').eq('automation_id', id)
+    const counts = { active: 0, done: 0, cancelled: 0 }
+    for (const e of enr || []) {
+      if (e.status === 'active') counts.active++; else if (e.status === 'done') counts.done++; else counts.cancelled++
+    }
+    return res.status(200).json({ automation: { ...auto, steps, graph }, counts })
+  }
+
   if (req.method === 'PATCH') {
     if (!roleHasPermission(user.role, 'edit:crm')) return res.status(403).json({ error: 'Forbidden' })
     let body: any = {}
@@ -47,6 +67,21 @@ export default withAuth('view:crm', async (req, res, user) => {
     if ('trigger_stage' in body) patch.trigger_stage = body.trigger_stage || null
     if ('enabled' in body) patch.enabled = !!body.enabled
     if ('cancel_on_stages' in body && Array.isArray(body.cancel_on_stages)) patch.cancel_on_stages = body.cancel_on_stages
+
+    // Graph replace (the canvas editor). Server-side validation is
+    // authoritative; saving bumps graph_version and syncs the legacy
+    // trigger columns from the trigger node so list summaries stay right.
+    if ('graph' in body) {
+      const v = validateGraph(body.graph)
+      if (!v.ok) return res.status(400).json({ error: v.errors.join(' ') })
+      const trigger = (body.graph.nodes as any[]).find(n => n.data?.kind === 'trigger')
+      patch.graph = body.graph
+      patch.trigger_event = trigger?.data?.event || 'lead_created'
+      patch.trigger_stage = trigger?.data?.config?.stage || null
+      patch.trigger_config = trigger?.data?.config || {}
+      const { data: cur } = await db.from('crm_automations').select('graph_version').eq('id', id).maybeSingle()
+      patch.graph_version = (Number(cur?.graph_version) || 1) + 1
+    }
 
     if (Object.keys(patch).length) {
       const { error } = await db.from('crm_automations').update(patch).eq('id', id)
@@ -71,6 +106,6 @@ export default withAuth('view:crm', async (req, res, user) => {
     return res.status(200).json({ ok: true })
   }
 
-  res.setHeader('Allow', 'PATCH, DELETE')
-  return res.status(405).json({ error: 'PATCH or DELETE only' })
+  res.setHeader('Allow', 'GET, PATCH, DELETE')
+  return res.status(405).json({ error: 'GET, PATCH or DELETE only' })
 })

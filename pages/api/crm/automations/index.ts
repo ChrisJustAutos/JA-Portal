@@ -54,7 +54,7 @@ export default withAuth('view:crm', async (req, res, user) => {
     const name = String(body.name || '').trim()
     if (!name) return res.status(400).json({ error: 'name required' })
 
-    const { data: auto, error } = await db.from('crm_automations').insert({
+    const insert: any = {
       name,
       description: body.description ? String(body.description) : null,
       trigger_event: body.trigger_event === 'stage_changed' ? 'stage_changed' : 'lead_created',
@@ -62,7 +62,9 @@ export default withAuth('view:crm', async (req, res, user) => {
       enabled: !!body.enabled,
       cancel_on_stages: Array.isArray(body.cancel_on_stages) ? body.cancel_on_stages : ['won', 'lost'],
       created_by: user.id,
-    }).select('id').single()
+    }
+    if (body.graph) insert.graph = body.graph   // new flows save their graph via PATCH after creation
+    const { data: auto, error } = await db.from('crm_automations').insert(insert).select('id').single()
     if (error) return res.status(500).json({ error: error.message })
 
     const rows = stepRows(auto.id, body.steps)
