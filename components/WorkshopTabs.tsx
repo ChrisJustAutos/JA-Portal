@@ -25,7 +25,13 @@ export default function WorkshopTabs({ active, role }: { active: WorkshopTabId; 
   const router = useRouter()
   if (!roleHasPermission(role, 'view:diary')) return null
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '0 16px', background: T.bg2, borderBottom: `1px solid ${T.border}`, flexShrink: 0, overflowX: 'auto' }}>
+    <div className="workshop-tabs" style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '0 16px', background: T.bg2, borderBottom: `1px solid ${T.border}`, flexShrink: 0, overflowX: 'auto' }}>
+      {/* Scrolls on overflow (narrow windows) but never shows a scrollbar —
+          same pattern as B2BAdminTabs. */}
+      <style>{`
+        .workshop-tabs{ scrollbar-width:none; -ms-overflow-style:none; }
+        .workshop-tabs::-webkit-scrollbar{ display:none; }
+      `}</style>
       {TABS.filter(t => !t.perm || roleHasPermission(role, t.perm)).map(t => {
         const on = t.id === active
         return (
