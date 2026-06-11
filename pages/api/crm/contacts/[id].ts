@@ -7,6 +7,7 @@ import { createClient } from '@supabase/supabase-js'
 import { withAuth } from '../../../../lib/authServer'
 import { roleHasPermission } from '../../../../lib/permissions'
 import { logActivity } from '../../../../lib/crm'
+import { enrolFromEvent } from '../../../../lib/crm-automation-triggers'
 
 export const config = { maxDuration: 10 }
 
@@ -46,8 +47,20 @@ export default withAuth('view:crm', async (req, res, user) => {
     const patch: any = {}
     for (const k of PATCHABLE) if (k in body) patch[k] = body[k]
     if (Object.keys(patch).length === 0) return res.status(400).json({ error: 'No patchable fields' })
+
+    // Diff tags so added ones fire the tag_added flow trigger.
+    let addedTags: string[] = []
+    if ('tags' in patch && Array.isArray(patch.tags)) {
+      const { data: prev } = await db.from('crm_contacts').select('tags').eq('id', id).maybeSingle()
+      const before = new Set(((prev?.tags as string[]) || []).map(t => t.toLowerCase()))
+      addedTags = patch.tags.filter((t: string) => t && !before.has(String(t).toLowerCase()))
+    }
+
     const { data, error } = await db.from('crm_contacts').update(patch).eq('id', id).select('*').single()
     if (error) return res.status(500).json({ error: error.message })
+    for (const tag of addedTags) {
+      await enrolFromEvent(db, 'tag_added', { contact_id: id, tag, dedupe_key: `tag:${id}:${tag.toLowerCase()}` })
+    }
     return res.status(200).json({ ok: true, contact: data })
   }
 

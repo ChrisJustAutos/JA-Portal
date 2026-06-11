@@ -14,11 +14,13 @@
 //
 // All functions are best-effort and never throw into their callers.
 
+import crypto from 'crypto'
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
 import { sendMail } from './email'
 import { sendSms } from './clicksend'
 import { notify } from './notifications'
-import { logActivity, contactDisplayName } from './crm'
+import { logActivity, contactDisplayName, applyLeadStage } from './crm'
+import { enrolFromEvent } from './crm-automation-triggers'
 import {
   FlowGraph, FlowNode, ConditionRule,
   linearStepsToGraph, entryNodeId, nextNodeId,
@@ -86,6 +88,7 @@ export async function enrolLead(
   event: 'lead_created' | 'stage_changed' | 'manual',
   db?: SupabaseClient,
   onlyAutomationId?: string,
+  excludeAutomationId?: string,
 ): Promise<void> {
   try {
     const c = db || svc()
@@ -97,6 +100,7 @@ export async function enrolLead(
     const { data: autos } = await q
     if (!autos || !autos.length) return
     for (const a of autos as any[]) {
+      if (excludeAutomationId && a.id === excludeAutomationId) continue
       const stageFilter = (a.trigger_config?.stage ?? a.trigger_stage) || null
       if (event !== 'manual' && stageFilter && stageFilter !== lead.stage) continue
       const graph = await ensureGraph(c, a)
@@ -136,6 +140,26 @@ function resolveField(field: string, lead: any, contact: any): any {
   }
 }
 
+// Async fields (engagement / time) resolved before the sync compare.
+async function resolveAsyncField(c: SupabaseClient, field: string, contact: any): Promise<any> {
+  if (field === 'engagement.opened' || field === 'engagement.clicked') {
+    if (!contact?.id) return false
+    const col = field === 'engagement.opened' ? 'opened_at' : 'first_clicked_at'
+    const { data } = await c.from('crm_campaign_recipients')
+      .select('id').eq('contact_id', contact.id).not(col, 'is', null).limit(1)
+    return !!(data && data.length)
+  }
+  if (field === 'time.is_business_hours') {
+    const bne = new Date(Date.now() + 10 * 3600_000)   // Australia/Brisbane, no DST
+    const dow = bne.getUTCDay(), hr = bne.getUTCHours()
+    return dow >= 1 && dow <= 5 && hr >= 8 && hr < 17
+  }
+  if (field === 'time.day_of_week') {
+    return ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'][new Date(Date.now() + 10 * 3600_000).getUTCDay()]
+  }
+  return undefined
+}
+
 function evalRule(rule: ConditionRule, lead: any, contact: any): boolean {
   const v = resolveField(rule.field, lead, contact)
   const want = rule.value
@@ -154,17 +178,39 @@ function evalRule(rule: ConditionRule, lead: any, contact: any): boolean {
   }
 }
 
-export function evalCondition(node: FlowNode, lead: any, contact: any): boolean {
+export async function evalCondition(c: SupabaseClient, node: FlowNode, lead: any, contact: any): Promise<boolean> {
   const rules = node.data.rules || []
   if (!rules.length) return false
-  return node.data.match === 'any' ? rules.some(r => evalRule(r, lead, contact)) : rules.every(r => evalRule(r, lead, contact))
+  const results: boolean[] = []
+  for (const r of rules) {
+    if (r.field.startsWith('engagement.') || r.field.startsWith('time.')) {
+      const v = await resolveAsyncField(c, r.field, contact)
+      if (typeof v === 'boolean') {
+        // boolean async fields honour is_set/not_set/eq semantics
+        results.push(r.op === 'not_set' || r.op === 'neq' ? !v : v)
+      } else {
+        results.push(evalRuleValue(v, r))
+      }
+    } else {
+      results.push(evalRule(r, lead, contact))
+    }
+  }
+  return node.data.match === 'any' ? results.some(Boolean) : results.every(Boolean)
+}
+
+function evalRuleValue(v: any, rule: ConditionRule): boolean {
+  switch (rule.op) {
+    case 'eq': return String(v ?? '') === String(rule.value ?? '')
+    case 'neq': return String(v ?? '') !== String(rule.value ?? '')
+    default: return false
+  }
 }
 
 // ── Action execution (ported from the linear engine) ─────────────────
 async function executeAction(
   c: SupabaseClient,
   node: FlowNode,
-  ctx: { enrolmentId: string; autoName: string; lead: any; contact: any },
+  ctx: { enrolmentId: string; automationId: string; autoName: string; lead: any; contact: any; context?: any },
 ): Promise<{ status: 'sent' | 'skipped' | 'failed'; detail: string }> {
   const { lead, contact, autoName } = ctx
   const d = node.data
@@ -214,22 +260,163 @@ async function executeAction(
     return { status: 'sent', detail: 'owner notified' }
   }
 
+  if (d.action === 'add_tag' || d.action === 'remove_tag') {
+    if (!contact?.id) return { status: 'skipped', detail: 'no contact' }
+    const tag = String(d.tag || '').trim()
+    if (!tag) return { status: 'skipped', detail: 'no tag configured' }
+    const tags: string[] = Array.isArray(contact.tags) ? contact.tags : []
+    const has = tags.some(t => t.toLowerCase() === tag.toLowerCase())
+    if (d.action === 'add_tag' && !has) {
+      await c.from('crm_contacts').update({ tags: [...tags, tag] }).eq('id', contact.id)
+      contact.tags = [...tags, tag]
+      // Tag-added trigger fires for OTHER automations (never this one).
+      await enrolFromEvent(c, 'tag_added', { contact_id: contact.id, tag, dedupe_key: `tag:${contact.id}:${tag.toLowerCase()}`, excludeAutomationId: ctx.automationId })
+      return { status: 'sent', detail: `tag "${tag}" added` }
+    }
+    if (d.action === 'remove_tag' && has) {
+      const next = tags.filter(t => t.toLowerCase() !== tag.toLowerCase())
+      await c.from('crm_contacts').update({ tags: next }).eq('id', contact.id)
+      contact.tags = next
+      return { status: 'sent', detail: `tag "${tag}" removed` }
+    }
+    return { status: 'skipped', detail: d.action === 'add_tag' ? 'tag already present' : 'tag not present' }
+  }
+
+  if (d.action === 'move_stage') {
+    if (!lead?.id) return { status: 'skipped', detail: 'no lead (contact-only enrolment)' }
+    const stage = String(d.stage || '').trim()
+    if (!stage) return { status: 'skipped', detail: 'no stage configured' }
+    const r = await applyLeadStage(c, lead.id, stage, null)
+    if (!r.ok) return { status: 'failed', detail: r.error || 'stage move failed' }
+    if (r.changed) {
+      lead.stage = stage
+      // Other automations may trigger on this move — never this one.
+      await enrolLead({ id: lead.id, stage, contact_id: r.contactId || null }, 'stage_changed', c, undefined, ctx.automationId)
+    }
+    return { status: 'sent', detail: `stage → ${stage}` }
+  }
+
+  if (d.action === 'update_field') {
+    if (!lead?.id) return { status: 'skipped', detail: 'no lead (contact-only enrolment)' }
+    const field = d.field
+    const raw = renderTemplate(d.field_value, vars)
+    const patch: any = {}
+    if (field === 'value') patch.value = raw === '' ? null : Number(raw) || 0
+    else if (field === 'owner_id') patch.owner_id = raw || null
+    else if (field === 'next_follow_up_in_days') patch.next_follow_up_at = new Date(Date.now() + (Number(raw) || 0) * 86400_000).toISOString()
+    else return { status: 'skipped', detail: 'no field configured' }
+    const { error } = await c.from('crm_leads').update(patch).eq('id', lead.id)
+    if (error) return { status: 'failed', detail: error.message }
+    return { status: 'sent', detail: `${field} updated` }
+  }
+
+  if (d.action === 'webhook_out') {
+    const url = String(d.url || '').trim()
+    if (!/^https?:\/\//i.test(url)) return { status: 'skipped', detail: 'no/invalid URL configured' }
+    const payload = JSON.stringify({
+      automation: ctx.autoName,
+      lead: lead ? { id: lead.id, title: lead.title, stage: lead.stage, value: lead.value, vehicle: lead.vehicle } : null,
+      contact: contact ? { id: contact.id, name: contact.name, email: contact.email, mobile: contact.mobile, phone: contact.phone, tags: contact.tags } : null,
+      context: ctx.context ?? null,
+      sent_at: new Date().toISOString(),
+    })
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+    if (d.secret) headers['X-Hook-Signature'] = crypto.createHmac('sha256', String(d.secret)).update(payload).digest('hex')
+    try {
+      const controller = new AbortController()
+      const t = setTimeout(() => controller.abort(), 10_000)
+      const r = await fetch(url, { method: 'POST', headers, body: payload, signal: controller.signal })
+      clearTimeout(t)
+      if (!r.ok) return { status: 'failed', detail: `webhook HTTP ${r.status}` }
+      return { status: 'sent', detail: `webhook → ${url.slice(0, 80)}` }
+    } catch (err: any) { return { status: 'failed', detail: `webhook: ${String(err?.message || err).slice(0, 200)}` } }
+  }
+
+  if (d.action === 'create_quote_draft') {
+    if (!contact?.id) return { status: 'skipped', detail: 'no contact' }
+    if (lead?.workshop_quote_id) return { status: 'skipped', detail: 'lead already has a quote' }
+    // Resolve / create the workshop customer (mirrors contacts/[id]/to-workshop).
+    let customerId: string | null = contact.workshop_customer_id || null
+    if (!customerId && contact.email) {
+      const { data: m } = await c.from('workshop_customers').select('id').ilike('email', String(contact.email).trim()).limit(1)
+      customerId = m?.[0]?.id || null
+    }
+    if (!customerId) {
+      const { data: created, error } = await c.from('workshop_customers').insert({
+        name: contact.name, email: contact.email || null, phone: contact.phone || null, mobile: contact.mobile || null,
+      }).select('id').single()
+      if (error) return { status: 'failed', detail: error.message }
+      customerId = created.id
+    }
+    await c.from('crm_contacts').update({ workshop_customer_id: customerId }).eq('id', contact.id)
+    const { data: quote, error: qErr } = await c.from('workshop_quotes').insert({
+      customer_id: customerId, notes: lead ? (lead.details || lead.title || null) : null,
+    }).select('id').single()
+    if (qErr) return { status: 'failed', detail: qErr.message }
+    if (lead?.id) await c.from('crm_leads').update({ workshop_quote_id: quote.id }).eq('id', lead.id)
+    await logActivity(c, { lead_id: lead?.id || null, contact_id: contact.id, type: 'workshop_handoff', body: `Automation "${ctx.autoName}" created a draft workshop quote`, meta: { workshop_quote_id: quote.id } })
+    return { status: 'sent', detail: `quote draft ${quote.id}` }
+  }
+
   return { status: 'skipped', detail: `unknown action ${d.action}` }
 }
 
 // ── The sweep ─────────────────────────────────────────────────────────
 export interface SweepResult { due: number; sent: number; skipped: number; failed: number; stopped: number; completed: number }
 
+// Hourly (checkpoint-gated) scan for 'no_activity' triggers: leads whose
+// last_activity_at went stale past each automation's configured threshold.
+// The dedupe key includes the stale timestamp, so a lead re-fires only after
+// fresh activity goes stale again.
+async function scanNoActivityTriggers(c: SupabaseClient): Promise<void> {
+  try {
+    const { data: cp } = await c.from('crm_automation_checkpoints').select('value, updated_at').eq('key', 'no_activity_scan').maybeSingle()
+    if (cp && Date.now() - new Date(cp.updated_at).getTime() < 55 * 60000) return
+    await c.from('crm_automation_checkpoints').upsert({ key: 'no_activity_scan', value: { ran_at: new Date().toISOString() }, updated_at: new Date().toISOString() })
+
+    const { data: autos } = await c.from('crm_automations')
+      .select('id, trigger_config, graph, graph_version')
+      .eq('enabled', true).eq('trigger_event', 'no_activity').is('deleted_at', null)
+    for (const a of (autos || []) as any[]) {
+      const days = Math.max(1, Number(a.trigger_config?.days) || 7)
+      const stage = a.trigger_config?.stage || null
+      const cutoff = new Date(Date.now() - days * 86400_000).toISOString()
+      let q = c.from('crm_leads')
+        .select('id, stage, contact_id, last_activity_at')
+        .is('deleted_at', null).is('won_at', null).is('lost_at', null)
+        .lt('last_activity_at', cutoff).limit(100)
+      if (stage) q = q.eq('stage', stage)
+      const { data: leads } = await q
+      const graph = (a.graph && Array.isArray(a.graph.nodes)) ? a.graph : null
+      const entry = graph ? entryNodeId(graph) : null
+      if (!entry) continue
+      for (const l of (leads || []) as any[]) {
+        const { error } = await c.from('crm_automation_enrolments').insert({
+          automation_id: a.id, lead_id: l.id, contact_id: l.contact_id,
+          status: 'active', next_step_order: 1, next_run_at: new Date().toISOString(),
+          current_node_id: entry, graph_version: a.graph_version || 1,
+          dedupe_key: `noact:${l.id}:${l.last_activity_at || 'never'}`,
+        })
+        if (error && error.code !== '23505') console.error('no_activity enrol failed:', error.message)
+      }
+    }
+  } catch (e: any) {
+    console.error('scanNoActivityTriggers failed (non-fatal):', e?.message || e)
+  }
+}
+
 export async function processDueAutomations(limit = 150): Promise<SweepResult> {
   const c = svc()
   const res: SweepResult = { due: 0, sent: 0, skipped: 0, failed: 0, stopped: 0, completed: 0 }
   const nowIso = new Date().toISOString()
 
+  await scanNoActivityTriggers(c)
+
   const { data: enrolments, error } = await c.from('crm_automation_enrolments')
     .select(`id, automation_id, lead_id, contact_id, next_step_order, current_node_id, node_entered_at, graph_version, attempt_count, context, started_at, next_run_at,
              automation:crm_automations(id, name, enabled, deleted_at, cancel_on_stages, trigger_event, trigger_stage, graph, graph_version),
-             lead:crm_leads(id, title, stage, value, source, vehicle, owner_id, deleted_at, owner:user_profiles!crm_leads_owner_id_fkey(display_name)),
-             contact:crm_contacts(id, name, first_name, last_name, email, phone, mobile, company_name, tags, source, do_not_contact, deleted_at)`)
+             lead:crm_leads(id, title, stage, value, source, vehicle, details, owner_id, workshop_quote_id, deleted_at, owner:user_profiles!crm_leads_owner_id_fkey(display_name)),
+             contact:crm_contacts(id, name, first_name, last_name, email, phone, mobile, company_name, tags, source, workshop_customer_id, do_not_contact, deleted_at)`)
     .eq('status', 'active').lte('next_run_at', nowIso)
     .order('next_run_at', { ascending: true }).limit(limit)
   if (error) { console.error('automations sweep query failed:', error.message); return res }
@@ -313,7 +500,7 @@ export async function processDueAutomations(limit = 150): Promise<SweepResult> {
         }
 
         if (node.data.kind === 'condition') {
-          const yes = evalCondition(node, lead, contact)
+          const yes = await evalCondition(c, node, lead, contact)
           await c.from('crm_automation_runs').insert({ enrolment_id: e.id, node_id: node.id, action: 'condition', status: 'skipped', detail: yes ? 'yes' : 'no', attempt: 1 })
           cursor = nextNodeId(graph, node.id, yes ? 'yes' : 'no')
           if (!cursor) break
@@ -329,7 +516,7 @@ export async function processDueAutomations(limit = 150): Promise<SweepResult> {
         if (priorRuns && priorRuns.length) {
           outcome = { status: 'sent', detail: 'already ran (crash replay guard)' }
         } else {
-          outcome = await executeAction(c, node, { enrolmentId: e.id, autoName: auto.name, lead, contact })
+          outcome = await executeAction(c, node, { enrolmentId: e.id, automationId: auto.id, autoName: auto.name, lead, contact, context })
           await c.from('crm_automation_runs').insert({ enrolment_id: e.id, node_id: node.id, action: node.data.action, status: outcome.status, detail: outcome.detail, attempt })
         }
 

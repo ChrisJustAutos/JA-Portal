@@ -8,6 +8,7 @@ import { createClient } from '@supabase/supabase-js'
 import { withAuth } from '../../../../../lib/authServer'
 import { roleHasPermission } from '../../../../../lib/permissions'
 import { onQuoteConverted } from '../../../../../lib/crm-bridge'
+import { enrolFromEvent } from '../../../../../lib/crm-automation-triggers'
 
 export const config = { maxDuration: 10 }
 
@@ -78,6 +79,12 @@ export default withAuth('view:diary', async (req, res, user) => {
 
   // Reflect on the linked CRM lead: booking activity + configured stage move.
   await onQuoteConverted(db, { id, customer_id: quote.customer_id, total: quote.total }, booking.id, start.toISOString(), user.id)
+
+  // booking_created flow trigger (this insert path bypasses /api/workshop/bookings).
+  if (quote.customer_id) {
+    const { data: ct } = await db.from('crm_contacts').select('id').eq('workshop_customer_id', quote.customer_id).is('deleted_at', null).maybeSingle()
+    if (ct) await enrolFromEvent(db, 'booking_created', { contact_id: ct.id, booking_id: booking.id, dedupe_key: `booking:${booking.id}` })
+  }
 
   return res.status(200).json({ ok: true, booking_id: booking.id })
 })

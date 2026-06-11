@@ -9,6 +9,7 @@ import { roleHasPermission } from '../../../lib/permissions'
 import { BOOKING_STATUSES, BookingStatus } from '../../../lib/workshop'
 import { queueBookingReminder } from '../../../lib/workshop-reminders'
 import { notify } from '../../../lib/notifications'
+import { enrolFromEvent } from '../../../lib/crm-automation-triggers'
 
 export const config = { maxDuration: 10 }
 
@@ -88,6 +89,12 @@ export default withAuth('view:diary', async (req, res, user) => {
     }).select('id').single()
     if (error) return res.status(500).json({ error: error.message })
     await queueBookingReminder(data.id)  // best-effort SMS reminder (gated by sms_enabled at send time)
+
+    // booking_created flow trigger (CRM contact resolved via workshop customer).
+    if (body.customer_id) {
+      const { data: ct } = await db.from('crm_contacts').select('id').eq('workshop_customer_id', body.customer_id).is('deleted_at', null).maybeSingle()
+      if (ct) await enrolFromEvent(db, 'booking_created', { contact_id: ct.id, booking_id: data.id, dedupe_key: `booking:${data.id}` })
+    }
 
     // Badge the Diary tile for the rest of the team (not the creator).
     const when = new Date(starts_at).toLocaleString('en-AU', {

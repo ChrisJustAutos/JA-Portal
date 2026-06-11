@@ -9,6 +9,7 @@ import { roleHasPermission } from '../../../../lib/permissions'
 import { QUOTE_STATUSES } from '../../../../lib/workshop'
 import { notify } from '../../../../lib/notifications'
 import { onQuoteStatusChanged } from '../../../../lib/crm-bridge'
+import { enrolFromEvent } from '../../../../lib/crm-automation-triggers'
 
 export const config = { maxDuration: 10 }
 
@@ -58,10 +59,23 @@ export default withAuth('view:diary', async (req, res, user) => {
     if (error) return res.status(500).json({ error: error.message })
 
     // Any real status transition → reflect on the linked CRM lead (timeline
-    // activity + configurable stage move + automations).
+    // activity + configurable stage move + automations), and fire the
+    // quote_accepted/declined flow triggers.
     if (patch.status && patch.status !== prevStatus) {
       const { data: qq } = await db.from('workshop_quotes').select('id, customer_id, total').eq('id', id).maybeSingle()
-      if (qq) await onQuoteStatusChanged(db, qq, prevStatus, patch.status, user.id)
+      if (qq) {
+        await onQuoteStatusChanged(db, qq, prevStatus, patch.status, user.id)
+        if (patch.status === 'accepted' || patch.status === 'declined') {
+          const { data: lead } = await db.from('crm_leads').select('id, contact_id').eq('workshop_quote_id', id).is('deleted_at', null).maybeSingle()
+          const { data: ct } = !lead && qq.customer_id
+            ? await db.from('crm_contacts').select('id').eq('workshop_customer_id', qq.customer_id).is('deleted_at', null).maybeSingle()
+            : { data: null as any }
+          await enrolFromEvent(db, patch.status === 'accepted' ? 'quote_accepted' : 'quote_declined', {
+            lead_id: lead?.id || null, contact_id: lead?.contact_id || ct?.id || null,
+            quote_id: id, dedupe_key: `quote:${id}:${patch.status}`,
+          })
+        }
+      }
     }
 
     // Quote accepted/declined → badge the Quotes tile for the team.

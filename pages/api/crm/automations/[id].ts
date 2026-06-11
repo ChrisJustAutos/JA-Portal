@@ -5,6 +5,7 @@
 // DELETE — soft-delete the automation (edit:crm). Active enrolments stop on
 //          their next sweep (the engine cancels when the automation is gone).
 
+import crypto from 'crypto'
 import { createClient } from '@supabase/supabase-js'
 import { withAuth } from '../../../../lib/authServer'
 import { roleHasPermission } from '../../../../lib/permissions'
@@ -79,8 +80,17 @@ export default withAuth('view:crm', async (req, res, user) => {
       patch.trigger_event = trigger?.data?.event || 'lead_created'
       patch.trigger_stage = trigger?.data?.config?.stage || null
       patch.trigger_config = trigger?.data?.config || {}
-      const { data: cur } = await db.from('crm_automations').select('graph_version').eq('id', id).maybeSingle()
+      const { data: cur } = await db.from('crm_automations').select('graph_version, webhook_token, webhook_secret').eq('id', id).maybeSingle()
       patch.graph_version = (Number(cur?.graph_version) || 1) + 1
+      // Webhook trigger gets its token + secret minted on first save.
+      if (patch.trigger_event === 'webhook' && !cur?.webhook_token) {
+        patch.webhook_token = crypto.randomBytes(24).toString('base64url')
+        patch.webhook_secret = crypto.randomBytes(24).toString('base64url')
+      }
+    }
+    if (body.regenerate_webhook === true) {
+      patch.webhook_token = crypto.randomBytes(24).toString('base64url')
+      patch.webhook_secret = crypto.randomBytes(24).toString('base64url')
     }
 
     if (Object.keys(patch).length) {

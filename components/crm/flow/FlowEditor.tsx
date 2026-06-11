@@ -16,7 +16,7 @@ import ReactFlow, {
 import { T } from '../CrmShell'
 import { input, primaryBtn, ghostBtn } from '../ui'
 import { useToast, useConfirm } from '../../ui/Feedback'
-import { validateGraph, type FlowNodeData, type ConditionRule } from '../../../lib/crm-automation-graph'
+import { validateGraph, TRIGGER_LABELS, type FlowNodeData, type ConditionRule, type TriggerEvent } from '../../../lib/crm-automation-graph'
 
 // ── Node visuals (defined at module level — React Flow needs stable refs) ──
 const NODE_W = 230
@@ -26,6 +26,12 @@ const ACTION_META: Record<string, { icon: string; label: string; color: string }
   sms: { icon: '💬', label: 'Send SMS', color: '#2dd4bf' },
   task: { icon: '✅', label: 'Create task', color: '#fbbf24' },
   notify_owner: { icon: '🔔', label: 'Notify owner', color: '#a78bfa' },
+  add_tag: { icon: '🏷', label: 'Add tag', color: '#38bdf8' },
+  remove_tag: { icon: '🏷', label: 'Remove tag', color: '#8b90a0' },
+  move_stage: { icon: '➡️', label: 'Move stage', color: '#34c77b' },
+  update_field: { icon: '✏️', label: 'Update field', color: '#f472b6' },
+  webhook_out: { icon: '🌐', label: 'Send webhook', color: '#fb923c' },
+  create_quote_draft: { icon: '🔧', label: 'Create quote draft', color: '#2dd4bf' },
 }
 
 function cardStyle(color: string, selected?: boolean): React.CSSProperties {
@@ -42,11 +48,14 @@ const bodyStyle: React.CSSProperties = { padding: '8px 11px', fontSize: 12, colo
 const dot = (color: string): React.CSSProperties => ({ width: 10, height: 10, background: color, border: `2px solid ${T.bg}` })
 
 function TriggerNode({ data, selected }: NodeProps<FlowNodeData>) {
-  const label = data.event === 'stage_changed' ? 'Lead moves to a stage' : data.event === 'manual' ? 'Manual enrolment only' : 'Lead is created'
+  const label = TRIGGER_LABELS[(data.event || 'lead_created') as TriggerEvent] || data.event
+  const extra = data.config?.stage ? ` · "${data.config.stage}"`
+    : data.config?.tag ? ` · "${data.config.tag}"`
+    : data.event === 'no_activity' ? ` · ${data.config?.days || 7}d` : ''
   return (
     <div style={cardStyle(T.green, selected)}>
       <div style={headStyle(T.green)}>⚡ Trigger</div>
-      <div style={bodyStyle}>{label}{data.config?.stage ? ` · "${data.config.stage}"` : ''}</div>
+      <div style={bodyStyle}>{label}{extra}</div>
       <Handle type="source" position={Position.Bottom} style={dot(T.green)} />
     </div>
   )
@@ -101,6 +110,10 @@ const RULE_FIELDS: { value: string; label: string }[] = [
   { value: 'contact.has_email', label: 'Contact has email' },
   { value: 'contact.has_mobile', label: 'Contact has mobile' },
   { value: 'contact.source', label: 'Contact source' },
+  { value: 'engagement.opened', label: 'Opened a campaign email' },
+  { value: 'engagement.clicked', label: 'Clicked a campaign email' },
+  { value: 'time.is_business_hours', label: 'Is business hours (Bris)' },
+  { value: 'time.day_of_week', label: 'Day of week (mon…sun)' },
 ]
 const RULE_OPS: { value: ConditionRule['op']; label: string }[] = [
   { value: 'eq', label: 'is' }, { value: 'neq', label: 'is not' },
@@ -122,6 +135,7 @@ export default function FlowEditor({ automationId }: { automationId: string }) {
   const [cancelStages, setCancelStages] = useState<string[]>(['won', 'lost'])
   const [stages, setStages] = useState<StageOpt[]>([])
   const [counts, setCounts] = useState<{ active: number; done: number; cancelled: number } | null>(null)
+  const [webhook, setWebhook] = useState<{ token: string | null; secret: string | null }>({ token: null, secret: null })
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
   const [dirty, setDirty] = useState(false)
@@ -137,6 +151,7 @@ export default function FlowEditor({ automationId }: { automationId: string }) {
       const a = d.automation
       setName(a.name || ''); setEnabled(!!a.enabled); setCancelStages(a.cancel_on_stages || ['won', 'lost'])
       setCounts(d.counts || null)
+      setWebhook({ token: a.webhook_token || null, secret: a.webhook_secret || null })
       const g = a.graph || { nodes: [{ id: 'trigger-1', type: 'trigger', position: { x: 120, y: 40 }, data: { kind: 'trigger', event: a.trigger_event || 'lead_created', config: { stage: a.trigger_stage || null } } }], edges: [] }
       setNodes((g.nodes || []).map((n: any) => ({ ...n, deletable: n.data?.kind !== 'trigger' })))
       setEdges((g.edges || []).map((e: any) => ({ ...e, markerEnd: { type: MarkerType.ArrowClosed }, style: { strokeWidth: 1.5 } })))
@@ -192,7 +207,13 @@ export default function FlowEditor({ automationId }: { automationId: string }) {
         body: JSON.stringify({ name, enabled, cancel_on_stages: cancelStages, graph }),
       })
       const d = await r.json()
-      if (r.ok) { toast('Flow saved', 'success'); setDirty(false) }
+      if (r.ok) {
+        toast('Flow saved', 'success'); setDirty(false)
+        // Webhook token/secret are minted server-side on first save — refresh.
+        const rr = await fetch(`/api/crm/automations/${automationId}`)
+        const dd = await rr.json()
+        if (rr.ok && dd.automation) setWebhook({ token: dd.automation.webhook_token || null, secret: dd.automation.webhook_secret || null })
+      }
       else toast(d.error || 'Save failed', 'error')
     } catch (e: any) { toast(e?.message || 'Save failed', 'error') } finally { setSaving(false) }
   }
@@ -259,7 +280,7 @@ export default function FlowEditor({ automationId }: { automationId: string }) {
         {/* Config drawer */}
         {selected && (
           <div style={{ width: 320, borderLeft: `1px solid ${T.border}`, background: T.bg2, padding: 14, overflowY: 'auto', flexShrink: 0 }}>
-            <NodeConfig node={selected} stages={stages} onChange={(patch) => updateNodeData(selected.id, patch)} />
+            <NodeConfig node={selected} stages={stages} webhook={webhook} onChange={(patch) => updateNodeData(selected.id, patch)} />
           </div>
         )}
       </div>
@@ -275,30 +296,61 @@ function paletteBtn(color: string): React.CSSProperties {
 }
 
 // ── Per-node config forms ──────────────────────────────────────────────
-function NodeConfig({ node, stages, onChange }: { node: Node; stages: StageOpt[]; onChange: (patch: Partial<FlowNodeData>) => void }) {
+function NodeConfig({ node, stages, webhook, onChange }: { node: Node; stages: StageOpt[]; webhook: { token: string | null; secret: string | null }; onChange: (patch: Partial<FlowNodeData>) => void }) {
   const d = node.data as FlowNodeData
   const label = (txt: string) => <div style={{ fontSize: 10, fontWeight: 600, color: T.text3, textTransform: 'uppercase', letterSpacing: '0.06em', margin: '10px 0 5px' }}>{txt}</div>
 
   if (d.kind === 'trigger') {
+    const ev = d.event || 'lead_created'
+    const showStage = ev === 'lead_created' || ev === 'stage_changed' || ev === 'no_activity'
     return (
       <>
         <div style={{ fontSize: 13, fontWeight: 700, color: T.green }}>⚡ Trigger</div>
         {label('When')}
-        <select value={d.event || 'lead_created'} onChange={e => onChange({ event: e.target.value as any })} style={input}>
-          <option value="lead_created">A lead is created</option>
-          <option value="stage_changed">A lead moves to a stage</option>
-          <option value="manual">Manual enrolment only</option>
+        <select value={ev} onChange={e => onChange({ event: e.target.value as any })} style={input}>
+          {Object.entries(TRIGGER_LABELS).map(([k, l]) => <option key={k} value={k}>{l}</option>)}
         </select>
-        {d.event !== 'manual' && (
+        {showStage && (
           <>
             {label('Stage filter')}
             <select value={d.config?.stage || ''} onChange={e => onChange({ config: { ...(d.config || {}), stage: e.target.value || null } })} style={input}>
-              <option value="">{d.event === 'lead_created' ? 'Any stage' : 'Choose a stage…'}</option>
+              <option value="">{ev === 'stage_changed' ? 'Choose a stage…' : 'Any stage'}</option>
               {stages.map(s => <option key={s.key} value={s.key}>{s.label}</option>)}
             </select>
           </>
         )}
-        <div style={{ fontSize: 11, color: T.text3, marginTop: 12, lineHeight: 1.5 }}>More triggers (quote accepted, booking created, email opened, webhooks…) land in the next phase.</div>
+        {ev === 'tag_added' && (
+          <>
+            {label('Tag (blank = any tag)')}
+            <input value={d.config?.tag || ''} onChange={e => onChange({ config: { ...(d.config || {}), tag: e.target.value || null } })} style={input} placeholder="e.g. hot-lead" />
+          </>
+        )}
+        {ev === 'no_activity' && (
+          <>
+            {label('Days without activity')}
+            <input type="number" min={1} value={d.config?.days || 7} onChange={e => onChange({ config: { ...(d.config || {}), days: Math.max(1, Number(e.target.value) || 7) } })} style={{ ...input, width: 100 }} />
+          </>
+        )}
+        {ev === 'webhook' && (
+          <>
+            {label('Webhook URL')}
+            {webhook.token ? (
+              <>
+                <div style={{ fontSize: 11, fontFamily: 'monospace', color: T.text2, background: T.bg3, padding: 8, borderRadius: 6, wordBreak: 'break-all', userSelect: 'all' }}>
+                  {`${typeof window !== 'undefined' ? window.location.origin : ''}/api/crm/automation-hooks/${webhook.token}`}
+                </div>
+                {label('Secret header  ·  X-Hook-Secret')}
+                <div style={{ fontSize: 11, fontFamily: 'monospace', color: T.text2, background: T.bg3, padding: 8, borderRadius: 6, wordBreak: 'break-all', userSelect: 'all' }}>{webhook.secret}</div>
+                <div style={{ fontSize: 10, color: T.text3, marginTop: 6 }}>POST JSON with email / mobile / name to match-or-create the contact; the whole body is available to "Send webhook" actions downstream.</div>
+              </>
+            ) : (
+              <div style={{ fontSize: 11, color: T.amber }}>Save the flow once — the URL + secret are generated on save.</div>
+            )}
+          </>
+        )}
+        {(ev === 'campaign_email_opened' || ev === 'campaign_email_clicked') && (
+          <div style={{ fontSize: 11, color: T.text3, marginTop: 10, lineHeight: 1.5 }}>Fires on the FIRST open/click of any campaign email per recipient.</div>
+        )}
       </>
     )
   }
@@ -375,22 +427,29 @@ function NodeConfig({ node, stages, onChange }: { node: Node; stages: StageOpt[]
 
   // action
   const meta = ACTION_META[d.action || 'email'] || ACTION_META.email
+  const a = d.action || 'email'
+  const hasSubject = a === 'email' || a === 'task' || a === 'notify_owner'
+  const hasBody = a === 'email' || a === 'sms' || a === 'task' || a === 'notify_owner'
   return (
     <>
       <div style={{ fontSize: 13, fontWeight: 700, color: meta.color }}>{meta.icon} {meta.label}</div>
       {label('Action')}
-      <select value={d.action || 'email'} onChange={e => onChange({ action: e.target.value as any })} style={input}>
+      <select value={a} onChange={e => onChange({ action: e.target.value as any })} style={input}>
         {Object.entries(ACTION_META).map(([k, m]) => <option key={k} value={k}>{m.label}</option>)}
       </select>
-      {(d.action === 'email' || d.action === 'task' || d.action === 'notify_owner') && (
+      {hasSubject && (
         <>
-          {label(d.action === 'email' ? 'Subject' : 'Title')}
+          {label(a === 'email' ? 'Subject' : 'Title')}
           <input value={d.subject || ''} onChange={e => onChange({ subject: e.target.value })} style={input} />
         </>
       )}
-      {label(d.action === 'sms' ? 'Message' : d.action === 'task' ? 'Description' : 'Body')}
-      <textarea value={d.body || ''} onChange={e => onChange({ body: e.target.value })} rows={6} style={{ ...input, resize: 'vertical', fontFamily: 'inherit' }} />
-      {d.action === 'task' && (
+      {hasBody && (
+        <>
+          {label(a === 'sms' ? 'Message' : a === 'task' ? 'Description' : 'Body')}
+          <textarea value={d.body || ''} onChange={e => onChange({ body: e.target.value })} rows={6} style={{ ...input, resize: 'vertical', fontFamily: 'inherit' }} />
+        </>
+      )}
+      {a === 'task' && (
         <>
           {label('Priority')}
           <select value={d.task_priority || 'normal'} onChange={e => onChange({ task_priority: e.target.value })} style={input}>
@@ -398,14 +457,55 @@ function NodeConfig({ node, stages, onChange }: { node: Node; stages: StageOpt[]
           </select>
         </>
       )}
+      {(a === 'add_tag' || a === 'remove_tag') && (
+        <>
+          {label('Tag')}
+          <input value={d.tag || ''} onChange={e => onChange({ tag: e.target.value })} style={input} placeholder="e.g. hot-lead" />
+        </>
+      )}
+      {a === 'move_stage' && (
+        <>
+          {label('Move the lead to')}
+          <select value={d.stage || ''} onChange={e => onChange({ stage: e.target.value })} style={input}>
+            <option value="">Choose a stage…</option>
+            {stages.map(s => <option key={s.key} value={s.key}>{s.label}</option>)}
+          </select>
+        </>
+      )}
+      {a === 'update_field' && (
+        <>
+          {label('Field')}
+          <select value={d.field || 'value'} onChange={e => onChange({ field: e.target.value as any })} style={input}>
+            <option value="value">Lead value ($)</option>
+            <option value="next_follow_up_in_days">Follow-up date (days from now)</option>
+            <option value="owner_id">Owner (user id)</option>
+          </select>
+          {label('Value')}
+          <input value={d.field_value || ''} onChange={e => onChange({ field_value: e.target.value })} style={input} placeholder={d.field === 'next_follow_up_in_days' ? 'e.g. 3' : ''} />
+        </>
+      )}
+      {a === 'webhook_out' && (
+        <>
+          {label('POST to URL')}
+          <input value={d.url || ''} onChange={e => onChange({ url: e.target.value })} style={input} placeholder="https://…" />
+          {label('HMAC secret (optional — sent as X-Hook-Signature)')}
+          <input value={d.secret || ''} onChange={e => onChange({ secret: e.target.value })} style={input} />
+          <div style={{ fontSize: 10, color: T.text3, marginTop: 6 }}>Sends lead + contact + the trigger's webhook context as JSON.</div>
+        </>
+      )}
+      {a === 'create_quote_draft' && (
+        <div style={{ fontSize: 11, color: T.text3, marginTop: 10, lineHeight: 1.5 }}>Creates the workshop customer (if needed) and a draft quote, and links it to the lead — same as "Start quote in Workshop".</div>
+      )}
       {label('If this action fails (after 3 retries)')}
       <select value={d.on_failure || 'continue'} onChange={e => onChange({ on_failure: e.target.value as any })} style={input}>
         <option value="continue">Continue to the next node</option>
         <option value="stop">Stop the flow</option>
       </select>
-      <div style={{ fontSize: 10, color: T.text3, marginTop: 12 }}>
-        Placeholders: {VARS.map(v => <code key={v} style={{ background: T.bg3, padding: '1px 5px', borderRadius: 4, marginRight: 4, fontSize: 10 }}>{`{{${v}}}`}</code>)}
-      </div>
+      {hasBody && (
+        <div style={{ fontSize: 10, color: T.text3, marginTop: 12 }}>
+          Placeholders: {VARS.map(v => <code key={v} style={{ background: T.bg3, padding: '1px 5px', borderRadius: 4, marginRight: 4, fontSize: 10 }}>{`{{${v}}}`}</code>)}
+        </div>
+      )}
     </>
   )
 }

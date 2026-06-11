@@ -62,6 +62,37 @@ export async function getCrmSettings(db: SupabaseClient): Promise<CrmSettings> {
 
 // setLeadStage lives in lib/crm-server.ts — it pulls in the automation engine
 // (web-push etc.), and this module must stay importable from client pages.
+// applyLeadStage below is the engine-free core both it and the automation
+// engine's move_stage action share (validation + stamping + activity, NO
+// automation enrolment — callers fire that themselves).
+export async function applyLeadStage(
+  db: SupabaseClient,
+  leadId: string,
+  stageKey: string,
+  actorId: string | null,
+): Promise<{ ok: boolean; changed?: boolean; contactId?: string | null; error?: string }> {
+  const stages = await getPipelineStages(db)
+  const stage = stages.find(s => s.key === stageKey && !s.archived_at)
+  if (!stage) return { ok: false, error: `Unknown stage "${stageKey}"` }
+  const { data: before } = await db.from('crm_leads').select('id, stage, contact_id').eq('id', leadId).is('deleted_at', null).maybeSingle()
+  if (!before) return { ok: false, error: 'Lead not found' }
+  if (before.stage === stageKey) return { ok: true, changed: false, contactId: before.contact_id }
+
+  const patch: any = { stage: stageKey }
+  if (stage.is_won) { patch.won_at = new Date().toISOString(); patch.lost_at = null }
+  else if (stage.is_lost) { patch.lost_at = new Date().toISOString(); patch.won_at = null }
+  else { patch.won_at = null; patch.lost_at = null }
+  const { error } = await db.from('crm_leads').update(patch).eq('id', leadId)
+  if (error) return { ok: false, error: error.message }
+
+  const fromLabel = stages.find(s => s.key === before.stage)?.label || before.stage
+  await logActivity(db, {
+    lead_id: leadId, contact_id: before.contact_id, type: 'stage_change',
+    body: `${fromLabel} → ${stage.label}`,
+    meta: { from: before.stage, to: stageKey }, actor_id: actorId,
+  })
+  return { ok: true, changed: true, contactId: before.contact_id }
+}
 
 export const TASK_STATUSES = ['open', 'in_progress', 'done'] as const
 export type TaskStatus = typeof TASK_STATUSES[number]

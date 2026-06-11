@@ -6,31 +6,61 @@
 
 export type TriggerEvent =
   | 'lead_created' | 'stage_changed' | 'manual'
-  // P4: 'tag_added' | 'quote_accepted' | 'quote_declined' | 'booking_created'
-  //     | 'campaign_email_opened' | 'campaign_email_clicked'
-  //     | 'no_activity' | 'webhook'
+  | 'tag_added' | 'quote_accepted' | 'quote_declined' | 'booking_created'
+  | 'campaign_email_opened' | 'campaign_email_clicked'
+  | 'no_activity' | 'webhook'
 
-export type ActionKind = 'email' | 'sms' | 'task' | 'notify_owner'
-  // P4: 'add_tag' | 'remove_tag' | 'move_stage' | 'update_field' | 'webhook_out' | 'create_quote_draft'
+export const TRIGGER_LABELS: Record<TriggerEvent, string> = {
+  lead_created: 'A lead is created',
+  stage_changed: 'A lead moves to a stage',
+  manual: 'Manual enrolment only',
+  tag_added: 'A tag is added to a contact',
+  quote_accepted: 'A workshop quote is accepted',
+  quote_declined: 'A workshop quote is declined',
+  booking_created: 'A workshop booking is created',
+  campaign_email_opened: 'A campaign email is opened',
+  campaign_email_clicked: 'A campaign email is clicked',
+  no_activity: 'No activity on a lead for N days',
+  webhook: 'Incoming webhook',
+}
+
+export type ActionKind =
+  | 'email' | 'sms' | 'task' | 'notify_owner'
+  | 'add_tag' | 'remove_tag' | 'move_stage' | 'update_field' | 'webhook_out' | 'create_quote_draft'
 
 export interface ConditionRule {
   field: string            // 'lead.stage' | 'lead.value' | 'lead.source' | 'lead.owner_id'
                            // | 'contact.tags' | 'contact.has_email' | 'contact.has_mobile' | 'contact.source'
+                           // | 'engagement.opened' | 'engagement.clicked' (any campaign)
+                           // | 'time.is_business_hours' | 'time.day_of_week'
   op: 'eq' | 'neq' | 'gt' | 'gte' | 'lt' | 'lte' | 'contains' | 'not_contains' | 'is_set' | 'not_set'
   value?: string | number
+}
+
+export interface TriggerConfig {
+  stage?: string | null       // lead_created / stage_changed filter
+  tag?: string | null         // tag_added filter ('' = any tag)
+  days?: number | null        // no_activity threshold
+  campaign_id?: string | null // engagement triggers ('' = any campaign)
 }
 
 export interface FlowNodeData {
   kind: 'trigger' | 'action' | 'condition' | 'wait'
   // trigger
   event?: TriggerEvent
-  config?: { stage?: string | null }
+  config?: TriggerConfig
   // action
   action?: ActionKind
   subject?: string
   body?: string
   task_priority?: string
   on_failure?: 'continue' | 'stop'
+  tag?: string                // add_tag / remove_tag
+  stage?: string              // move_stage
+  field?: 'value' | 'owner_id' | 'next_follow_up_in_days'   // update_field
+  field_value?: string        // update_field value
+  url?: string                // webhook_out
+  secret?: string             // webhook_out HMAC secret (optional)
   // condition
   match?: 'all' | 'any'
   rules?: ConditionRule[]

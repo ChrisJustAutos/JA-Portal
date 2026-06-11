@@ -297,10 +297,11 @@ function LeadDrawer({ id, canEdit, users, currentUserId, stages, onClose, onChan
           {lead.details && <div style={{ fontSize: 13, color: T.text2, background: T.bg3, borderRadius: 8, padding: 10, margin: '6px 0 12px', whiteSpace: 'pre-wrap' }}>{lead.details}</div>}
 
           {canEdit && (
-            <div style={{ display: 'flex', gap: 8, margin: '6px 0 16px' }}>
+            <div style={{ display: 'flex', gap: 8, margin: '6px 0 16px', flexWrap: 'wrap', alignItems: 'center' }}>
               <button onClick={startWorkshop} disabled={busy || !lead.contact_id} style={{ ...primaryBtn, background: T.teal }} title={lead.workshop_quote_id ? 'A workshop quote already exists — opens the board' : 'Create a workshop quote for this contact'}>
                 🔧 {lead.workshop_quote_id ? 'Open in Workshop' : 'Start quote in Workshop'}
               </button>
+              <RunFlow leadId={id} />
             </div>
           )}
 
@@ -316,6 +317,38 @@ function LeadDrawer({ id, canEdit, users, currentUserId, stages, onClose, onChan
         </>
       )}
     </Overlay>
+  )
+}
+
+// Manual flow enrolment — the test harness for any automation, and the way
+// to run a flow on one lead on demand.
+function RunFlow({ leadId }: { leadId: string }) {
+  const toast = useToast()
+  const [autos, setAutos] = useState<Array<{ id: string; name: string; enabled: boolean }>>([])
+  const [sel, setSel] = useState('')
+  const [busy, setBusy] = useState(false)
+  useEffect(() => {
+    fetch('/api/crm/automations').then(r => r.json()).then(d => setAutos((d.automations || []).map((a: any) => ({ id: a.id, name: a.name, enabled: a.enabled })))).catch(() => {})
+  }, [])
+  if (!autos.length) return null
+  async function run() {
+    if (!sel) return
+    setBusy(true)
+    try {
+      const r = await fetch(`/api/crm/automations/${sel}/enrol`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ lead_id: leadId }) })
+      const d = await r.json()
+      if (r.ok) toast(d.enrolment ? 'Enrolled — first step runs within 5 minutes' : 'Already enrolled in that flow', 'success')
+      else toast(d.error || 'Enrol failed', 'error')
+    } finally { setBusy(false); setSel('') }
+  }
+  return (
+    <span style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
+      <select value={sel} onChange={e => setSel(e.target.value)} style={{ ...input, width: 180, padding: '6px 8px', fontSize: 12 }}>
+        <option value="">▶ Run a flow…</option>
+        {autos.map(a => <option key={a.id} value={a.id} disabled={!a.enabled}>{a.name}{a.enabled ? '' : ' (off)'}</option>)}
+      </select>
+      {sel && <button onClick={run} disabled={busy} style={{ ...primaryBtn, padding: '6px 12px' }}>{busy ? '…' : 'Run'}</button>}
+    </span>
   )
 }
 
