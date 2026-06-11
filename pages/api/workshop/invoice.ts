@@ -1,14 +1,16 @@
 // pages/api/workshop/invoice.ts
-// POST  { booking_id }  — create a MYOB Service sale for the job (edit:bookings)
-// GET                   — workshop settings + VPS income-account candidates
-//                         for the sales-account picker (admin)
+// POST   { booking_id }  — finalise: create the MYOB sale + deduct part stock (edit:bookings)
+// DELETE ?booking_id=    — un-finalise: delete the MYOB sale, restock parts,
+//                          return the job to 'done' (edit:bookings)
+// GET                    — workshop settings + VPS income-account candidates
+//                          for the sales-account picker (admin)
 // PATCH { myob_sales_account_uid, myob_sales_account_name, invoice_as_order }
-//                       — set workshop invoice settings (admin)
+//                        — set workshop invoice settings (admin)
 
 import { withAuth } from '../../../lib/authServer'
 import { roleHasPermission } from '../../../lib/permissions'
 import {
-  createJobInvoiceInMyob, getWorkshopSettings, setWorkshopSettings,
+  createJobInvoiceInMyob, unfinaliseJob, getWorkshopSettings, setWorkshopSettings,
   listIncomeAccounts, WorkshopInvoiceError,
 } from '../../../lib/workshop-myob-invoice'
 
@@ -54,6 +56,19 @@ export default withAuth('view:diary', async (req, res, user) => {
     }
   }
 
-  res.setHeader('Allow', 'GET, POST, PATCH')
-  return res.status(405).json({ error: 'GET, POST or PATCH only' })
+  if (req.method === 'DELETE') {
+    if (!roleHasPermission(user.role, 'edit:bookings')) return res.status(403).json({ error: 'Forbidden' })
+    const bookingId = String(req.query.booking_id || '').trim()
+    if (!bookingId) return res.status(400).json({ error: 'booking_id required' })
+    try {
+      const result = await unfinaliseJob(bookingId, user.id)
+      return res.status(200).json({ ok: true, ...result })
+    } catch (e: any) {
+      if (e instanceof WorkshopInvoiceError) return res.status(409).json({ ok: false, code: e.code, error: e.message })
+      return res.status(500).json({ ok: false, error: e?.message || 'Un-finalise failed' })
+    }
+  }
+
+  res.setHeader('Allow', 'GET, POST, PATCH, DELETE')
+  return res.status(405).json({ error: 'GET, POST, PATCH or DELETE only' })
 })

@@ -77,7 +77,22 @@
       "PowerShell(npx web-push generate-vapid-keys --json 2>$null)",
       "PowerShell(npx tsc --noEmit 2>$null; \"tsc: $LASTEXITCODE\"; if \\($LASTEXITCODE -eq 0\\) { npx next build 2>&1 | Select-String -Pattern 'error|Failed|Compiled successfully' | Select-Object -First 4 })",
       "PowerShell(npx tsc --noEmit 2>$null; \"tsc: $LASTEXITCODE\"; if \\($LASTEXITCODE -eq 0\\) { git add components/NotificationBell.tsx; git commit -m \"Notifications: show explicit 'unsupported' state in the bell with iOS guidance\" -m \"Co-Authored-By: Claude Opus 4.8 \\(1M context\\) <noreply@anthropic.com>\"; if \\($?\\) { git push origin main } })",
-      "PowerShell(npx tsc --noEmit 2>$null; \"tsc: $LASTEXITCODE\"; if \\($LASTEXITCODE -eq 0\\) { git add components/NotificationBell.tsx; git commit -m \"Notifications: Register button now confirms success/failure\" -m \"Co-Authored-By: Claude Opus 4.8 \\(1M context\\) <noreply@anthropic.com>\"; if \\($?\\) { git push origin main } })"
+      "PowerShell(npx tsc --noEmit 2>$null; \"tsc: $LASTEXITCODE\"; if \\($LASTEXITCODE -eq 0\\) { git add components/NotificationBell.tsx; git commit -m \"Notifications: Register button now confirms success/failure\" -m \"Co-Authored-By: Claude Opus 4.8 \\(1M context\\) <noreply@anthropic.com>\"; if \\($?\\) { git push origin main } })",
+      "Bash(Get-ChildItem *)",
+      "mcp__claude_ai_monday_com__get_user_context",
+      "mcp__claude_ai_monday_com__search",
+      "mcp__claude_ai_monday_com__get_board_info",
+      "PowerShell(npx tsc --noEmit 2>$null; \"tsc exit: $LASTEXITCODE\")",
+      "PowerShell(try { Remove-Item -Recurse -Force .next -ErrorAction Stop } catch { \"remove failed: $_\" }; if \\(Test-Path .next\\) { \".next still present\" } else { \".next removed\" })",
+      "PowerShell($p = Start-Process -FilePath \"npx.cmd\" -ArgumentList \"next\",\"start\",\"-p\",\"3177\" -WorkingDirectory \\(Get-Location\\) -PassThru -WindowStyle Hidden; $p.Id)",
+      "PowerShell(\"queued\")",
+      "PowerShell(try { Remove-Item -Recurse -Force .next -ErrorAction Stop } catch { \"remove failed: $_\" }; if \\(Test-Path .next\\) { \"still present\" } else { \"removed\" })",
+      "PowerShell(\"waiting for build biknjj21e\")",
+      "PowerShell(Stop-Process *)",
+      "PowerShell(\"waiting\")",
+      "PowerShell(\"waiting for build\")",
+      "PowerShell(\\(Get-Content \"pages\\\\workshop\\\\job\\\\[id].tsx\" | Measure-Object -Line\\).Lines)",
+      "PowerShell(\\(Get-Content -LiteralPath \"pages\\\\workshop\\\\job\\\\[id].tsx\" | Measure-Object -Line\\).Lines)"
     ]
   }
 }

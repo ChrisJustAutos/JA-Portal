@@ -23,6 +23,7 @@ import {
 
 import type { PortalUserSSR } from '../../../lib/authServer'
 import { T } from '../../../lib/ui/theme'
+import { useConfirm } from '../../../components/ui/Feedback'
 import { money2 as money, fmtDateTime, fmtYmd as fmtDueDate } from '../../../lib/ui/format'
 
 interface Line {
@@ -58,6 +59,7 @@ export default function JobCardPage({ user }: { user: PortalUserSSR }) {
   const [err, setErr] = useState('')
   const [savingStatus, setSavingStatus] = useState(false)
   const isAdmin = roleHasPermission(user.role, 'admin:settings')
+  const confirmDialog = useConfirm()
   const [inv, setInv] = useState<{ busy: boolean; msg: string; needAccount: boolean }>({ busy: false, msg: '', needAccount: false })
   const [acct, setAcct] = useState<{ candidates: any[]; sel: string; saving: boolean } | null>(null)
   const [sms, setSms] = useState<{ open: boolean; body: string; busy: boolean; msg: string }>({ open: false, body: '', busy: false, msg: '' })
@@ -185,7 +187,7 @@ export default function JobCardPage({ user }: { user: PortalUserSSR }) {
       const r = await fetch('/api/workshop/invoice', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ booking_id: id }) })
       const d = await r.json()
       if (r.ok && d.ok) {
-        setInv({ busy: false, msg: `Sent to MYOB${d.myob_number ? ` #${d.myob_number}` : ''} (${d.mode})${d.status === 'already_written' ? ' — already linked' : ''}`, needAccount: false })
+        setInv({ busy: false, msg: `Finalised — MYOB${d.myob_number ? ` #${d.myob_number}` : ''} (${d.mode})${d.status === 'already_written' ? ' — already linked' : ''}${d.stock_warning ? ` · ${d.stock_warning}` : ''}`, needAccount: false })
         await load(); return
       }
       if (d.code === 'sales_account_not_set' && isAdmin) {
@@ -204,6 +206,24 @@ export default function JobCardPage({ user }: { user: PortalUserSSR }) {
     await fetch('/api/workshop/invoice', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ myob_sales_account_uid: acct.sel, myob_sales_account_name: chosen?.name || null }) })
     setAcct(null)
     await createInvoice()
+  }
+
+  async function unfinalise() {
+    const ok = await confirmDialog({
+      title: 'Un-finalise this job?',
+      message: 'This deletes the invoice in MYOB, puts the deducted parts back into stock, and returns the job to Done.',
+      confirmLabel: 'Un-finalise', danger: true,
+    })
+    if (!ok) return
+    setInv({ busy: true, msg: 'Un-finalising…', needAccount: false })
+    try {
+      const r = await fetch(`/api/workshop/invoice?booking_id=${encodeURIComponent(id)}`, { method: 'DELETE' })
+      const d = await r.json()
+      if (r.ok && d.ok) {
+        setInv({ busy: false, msg: `Un-finalised ✓${d.restocked ? ` — ${d.restocked} part line${d.restocked === 1 ? '' : 's'} restocked` : ''}`, needAccount: false })
+        await Promise.all([load(), loadPayments()])
+      } else setInv({ busy: false, msg: d.error || 'Un-finalise failed', needAccount: false })
+    } catch (e: any) { setInv({ busy: false, msg: e?.message || 'Un-finalise failed', needAccount: false }) }
   }
 
   function openSms() {
@@ -305,20 +325,28 @@ export default function JobCardPage({ user }: { user: PortalUserSSR }) {
                   <div style={{ display: 'flex', gap: 8, marginTop: 12, flexWrap: 'wrap', alignItems: 'center' }}>
                     <button onClick={() => changeStatus('in_progress')} style={qbtn(T.amber)}>▶ Start job</button>
                     <button onClick={() => changeStatus('awaiting_parts')} style={qbtn(T.purple)}>⏸ Awaiting parts</button>
-                    <button onClick={() => changeStatus('done')} style={qbtn(T.green)}>✓ Done</button>
-                    <button onClick={createInvoice} disabled={inv.busy} style={qbtn(T.teal)}>{inv.busy ? '🧾 Sending…' : '🧾 Invoice → MYOB'}</button>
-                    <button onClick={openPay} style={qbtn(T.teal)}>💳 Take payment</button>
+                    <button onClick={() => changeStatus('done')} style={qbtn(T.green)}>✓ Finish job</button>
+                    {!b.myob_invoice_uid ? (
+                      <button onClick={createInvoice} disabled={inv.busy} style={qbtn(T.teal)}>{inv.busy ? '🧾 Finalising…' : '🧾 Finalise → MYOB'}</button>
+                    ) : (
+                      <button onClick={unfinalise} disabled={inv.busy} style={qbtn(T.amber)}>{inv.busy ? '↺ Un-finalising…' : '↺ Un-finalise'}</button>
+                    )}
+                    <button onClick={() => pay.open ? setPay(p => ({ ...p, open: false })) : openPay()} style={qbtn(T.teal)}>💳 Take payment</button>
                     <button onClick={() => changeStatus('paid')} style={qbtn(T.green)}>$ Paid</button>
                     {(b.status === 'invoiced' || b.status === 'paid') && (
                       <button onClick={() => setCredit(s => ({ ...s, open: !s.open, msg: '' }))} style={qbtn(T.red)}>↩ Credit / refund</button>
                     )}
-                    <button onClick={openSms} style={qbtn(T.blue)}>📱 Text customer</button>
+                    <button onClick={() => sms.open ? setSms(s => ({ ...s, open: false })) : openSms()} style={qbtn(T.blue)}>📱 Text customer</button>
                     {inv.msg && <span style={{ fontSize: 11, color: inv.needAccount ? T.amber : T.text2 }}>{inv.msg}</span>}
                     {sms.msg && !sms.open && <span style={{ fontSize: 11, color: T.text2 }}>{sms.msg}</span>}
                   </div>
                 )}
                 {sms.open && (
                   <div style={{ marginTop: 10, padding: 12, background: T.bg2, border: `1px solid ${T.border2}`, borderRadius: 8 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', marginBottom: 8 }}>
+                      <span style={{ fontSize: 12, fontWeight: 600, color: T.blue }}>📱 Text customer</span>
+                      <button onClick={() => setSms(s => ({ ...s, open: false }))} title="Close" style={xbtn}>×</button>
+                    </div>
                     <textarea value={sms.body} onChange={e => setSms(s => ({ ...s, body: e.target.value }))} rows={3} style={{ ...inp, width: '100%', resize: 'vertical' }} />
                     <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 8, alignItems: 'center' }}>
                       {sms.msg && <span style={{ fontSize: 11, color: T.amber, marginRight: 'auto' }}>{sms.msg}</span>}
@@ -380,6 +408,10 @@ export default function JobCardPage({ user }: { user: PortalUserSSR }) {
 
                 {pay.open && (
                   <div style={{ marginTop: 10, padding: 12, background: T.bg2, border: `1px solid ${T.border2}`, borderRadius: 8 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', marginBottom: 8 }}>
+                      <span style={{ fontSize: 12, fontWeight: 600, color: T.teal }}>💳 Take payment</span>
+                      <button onClick={() => setPay(p => ({ ...p, open: false }))} title="Close" style={xbtn}>×</button>
+                    </div>
                     <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'flex-end' }}>
                       <div><div style={{ fontSize: 10, color: T.text3, marginBottom: 4 }}>Amount</div><input value={pay.amount} inputMode="decimal" onChange={e => setPay(p => ({ ...p, amount: e.target.value }))} style={{ ...inp, width: 120 }} /></div>
                       <div><div style={{ fontSize: 10, color: T.text3, marginBottom: 4 }}>Tender</div><select value={pay.tender} onChange={e => setPay(p => ({ ...p, tender: e.target.value }))} style={inp}>{PAYMENT_TENDERS.map(t => <option key={t.id} value={t.id}>{t.label}</option>)}</select></div>
@@ -769,6 +801,7 @@ function qbtn(color: string): React.CSSProperties {
   return { padding: '6px 12px', borderRadius: 6, fontSize: 12, fontFamily: 'inherit', fontWeight: 600, background: 'transparent', color, border: `1px solid ${color}55`, cursor: 'pointer' }
 }
 const addBtn: React.CSSProperties = { padding: '5px 11px', borderRadius: 5, fontSize: 11, fontFamily: 'inherit', fontWeight: 600, background: 'transparent', color: T.blue, border: `1px solid ${T.border2}`, cursor: 'pointer' }
+const xbtn: React.CSSProperties = { marginLeft: 'auto', background: 'none', border: 'none', color: T.text3, cursor: 'pointer', fontSize: 18, lineHeight: 1, padding: '0 2px' }
 
 export async function getServerSideProps(context: any) {
   return requirePageAuth(context, 'view:diary')

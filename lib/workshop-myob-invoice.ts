@@ -16,6 +16,7 @@
 
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
 import { getConnection, myobFetch } from './myob'
+import { logWorkshopActivity } from './workshop-activity'
 import { WORKSHOP_MYOB_LABEL, PaymentAccounts, PaymentTender } from './workshop'
 
 const UUID_REGEX_G = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi
@@ -178,11 +179,12 @@ export interface JobInvoiceResult {
   myob_number: string | null
   mode: 'order' | 'invoice'
   status: 'created' | 'already_written'
+  stock_warning?: string | null
 }
 
 // Sentinel error codes the API surfaces to the UI.
 export class WorkshopInvoiceError extends Error {
-  code: 'customer_not_synced' | 'sales_account_not_set' | 'no_lines' | 'myob_error' | 'posting_disabled'
+  code: 'customer_not_synced' | 'sales_account_not_set' | 'no_lines' | 'myob_error' | 'posting_disabled' | 'not_finalised' | 'payment_posted'
   constructor(code: WorkshopInvoiceError['code'], message: string) { super(message); this.code = code }
 }
 
@@ -316,7 +318,148 @@ export async function createJobInvoiceInMyob(bookingId: string, performedBy: str
     subtotal, gst: totalTax, total: totalAmount,
   })
 
-  return { myob_uid: uid, myob_number: number, mode, status: 'created' }
+  // Deduct part stock locally (movement-ledger backed; idempotent). MYOB
+  // already decremented its own stock when the sale used Item lines — this
+  // keeps the portal's quantities right between syncs (and is the only
+  // deduction when posting as an Order / Service layout).
+  let stockWarning: string | null = null
+  try { stockWarning = await deductJobStock(bookingId, performedBy) }
+  catch (e: any) { stockWarning = `Stock deduction failed: ${e?.message || e}` }
+
+  await logWorkshopActivity(c, {
+    action: 'finalised', entity: 'booking', entity_id: bookingId,
+    detail: `Pushed to MYOB as ${mode}${number ? ` #${number}` : ''} (${money(totalAmount)} inc)${stockWarning ? ` — ${stockWarning}` : ''}`,
+    actor_id: performedBy,
+  })
+
+  return { myob_uid: uid, myob_number: number, mode, status: 'created', stock_warning: stockWarning }
+}
+
+const money = (n: number) => `$${round2(n).toFixed(2)}`
+
+// ── Finalise stock deduction + un-finalise ──────────────────────────────
+
+// Deduct each part line's qty from workshop_inventory and record movement
+// rows so un-finalise can restore exactly what was taken. Idempotent: skips
+// if the booking already has unreversed movements. Returns a warning string
+// when some items couldn't be deducted (never throws for per-item failures).
+async function deductJobStock(bookingId: string, performedBy: string | null): Promise<string | null> {
+  const c = sb()
+  const { data: existing } = await c.from('workshop_stock_movements')
+    .select('id').eq('booking_id', bookingId).is('reversed_at', null).limit(1)
+  if (existing && existing.length > 0) return null
+
+  const { data: lines } = await c.from('workshop_booking_lines')
+    .select('id, line_type, qty, inventory_id, part_number, inventory:workshop_inventory(id, quantity, available, is_non_stock)')
+    .eq('booking_id', bookingId)
+
+  const failures: string[] = []
+  for (const ln of (lines || []) as any[]) {
+    if (ln.line_type !== 'part' || !ln.inventory_id) continue
+    const inv: any = Array.isArray(ln.inventory) ? ln.inventory[0] : ln.inventory
+    if (!inv || inv.is_non_stock) continue
+    const qty = Number(ln.qty) || 0
+    if (!(qty > 0)) continue
+    const { error: uErr } = await c.from('workshop_inventory').update({
+      quantity: round2((Number(inv.quantity) || 0) - qty),
+      available: round2((Number(inv.available) || 0) - qty),
+    }).eq('id', inv.id)
+    if (uErr) { failures.push(ln.part_number || inv.id); continue }
+    await c.from('workshop_stock_movements').insert({
+      booking_id: bookingId, inventory_id: inv.id, line_id: ln.id, qty, created_by: performedBy,
+    })
+  }
+  return failures.length ? `Stock not deducted for: ${failures.join(', ')}` : null
+}
+
+export interface UnfinaliseResult {
+  myob_deleted: boolean
+  restocked: number
+  status: string
+}
+
+/**
+ * Reverse a finalised job: delete the sale in MYOB, add the deducted parts
+ * back into stock, drop the portal invoice record and return the booking to
+ * 'done'. Refuses when a payment has been posted to MYOB (MYOB won't delete
+ * a sale with payments applied — delete the payment in MYOB first).
+ */
+export async function unfinaliseJob(bookingId: string, performedBy: string | null = null): Promise<UnfinaliseResult> {
+  const c = sb()
+  const { data: booking, error } = await c.from('workshop_bookings')
+    .select('id, status, myob_invoice_uid').eq('id', bookingId).maybeSingle()
+  if (error) throw new Error(`Job load failed: ${error.message}`)
+  if (!booking) throw new Error('Job not found')
+
+  const { data: moves } = await c.from('workshop_stock_movements')
+    .select('id, inventory_id, qty').eq('booking_id', bookingId).is('reversed_at', null)
+  if (!booking.myob_invoice_uid && (!moves || moves.length === 0)) {
+    throw new WorkshopInvoiceError('not_finalised', 'This job hasn’t been finalised — nothing to reverse.')
+  }
+
+  const { data: myobPays } = await c.from('workshop_payments')
+    .select('id').eq('booking_id', bookingId).eq('posted_to_myob', true).is('deleted_at', null).limit(1)
+  if (myobPays && myobPays.length > 0) {
+    throw new WorkshopInvoiceError('payment_posted', 'A payment has been posted to MYOB against this invoice. Delete the customer payment in MYOB first, then un-finalise.')
+  }
+
+  // Delete the sale in MYOB. The endpoint is typed by register (Order/Invoice)
+  // and layout (Item/Service); we don't persist which was used, so probe the
+  // four combos — current settings first. All-404 means it was already
+  // deleted in MYOB, which is fine; any other failure aborts before we touch
+  // local state.
+  let myobDeleted = false
+  if (booking.myob_invoice_uid) {
+    const conn = await getConnection(WORKSHOP_MYOB_LABEL)
+    if (!conn || !conn.company_file_id) throw new Error(`${WORKSHOP_MYOB_LABEL} MYOB connection not configured`)
+    const settings = await getWorkshopSettings()
+    const registers = settings.invoice_as_order ? ['Order', 'Invoice'] : ['Invoice', 'Order']
+    const layouts = settings.labour_item_uid ? ['Item', 'Service'] : ['Service', 'Item']
+    let lastErr = ''
+    for (const reg of registers) {
+      for (const lay of layouts) {
+        const r = await myobFetch(conn.id, `/accountright/${conn.company_file_id}/Sale/${reg}/${lay}/${booking.myob_invoice_uid}`, { method: 'DELETE', performedBy })
+        if (r.status === 200 || r.status === 204) { myobDeleted = true; break }
+        if (r.status !== 404) lastErr = `HTTP ${r.status}: ${(r.raw || '').substring(0, 200)}`
+      }
+      if (myobDeleted) break
+    }
+    if (!myobDeleted && lastErr) {
+      throw new WorkshopInvoiceError('myob_error', `MYOB wouldn’t delete the sale — ${lastErr}`)
+    }
+    // !myobDeleted with no error = 404 everywhere: already gone in MYOB.
+  }
+
+  // Restore stock from the movement ledger.
+  let restocked = 0
+  for (const m of (moves || []) as any[]) {
+    const { data: inv } = await c.from('workshop_inventory').select('quantity, available').eq('id', m.inventory_id).maybeSingle()
+    if (inv) {
+      await c.from('workshop_inventory').update({
+        quantity: round2((Number(inv.quantity) || 0) + (Number(m.qty) || 0)),
+        available: round2((Number(inv.available) || 0) + (Number(m.qty) || 0)),
+      }).eq('id', m.inventory_id)
+    }
+    await c.from('workshop_stock_movements').update({ reversed_at: new Date().toISOString() }).eq('id', m.id)
+    restocked++
+  }
+
+  if (booking.myob_invoice_uid) {
+    await c.from('workshop_invoices').delete().eq('booking_id', bookingId).eq('myob_invoice_uid', booking.myob_invoice_uid)
+  }
+  await c.from('workshop_bookings').update({
+    myob_invoice_uid: null,
+    status: 'done',
+    updated_at: new Date().toISOString(),
+  }).eq('id', bookingId)
+
+  await logWorkshopActivity(c, {
+    action: 'unfinalised', entity: 'booking', entity_id: bookingId,
+    detail: `MYOB sale ${myobDeleted ? 'deleted' : 'already gone'}; ${restocked} part line${restocked === 1 ? '' : 's'} restocked; status → done`,
+    actor_id: performedBy,
+  })
+
+  return { myob_deleted: myobDeleted, restocked, status: 'done' }
 }
 
 // ── Customer payments ────────────────────────────────────────────────────
