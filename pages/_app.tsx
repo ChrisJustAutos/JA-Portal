@@ -7,9 +7,10 @@
 // style + <GlobalChatbot /> into your existing return statement rather than
 // replacing the whole file.
 
-import { useEffect } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { AppProps } from 'next/app'
 import Head from 'next/head'
+import { useRouter } from 'next/router'
 import { PreferencesProvider, usePreferences, ACCENT_HEX, THEME_PRESETS } from '../lib/preferences'
 import { LIGHT_PALETTE } from '../lib/ui/theme'
 import GlobalChatbot, { ChatContextProvider } from '../components/GlobalChatbot'
@@ -59,6 +60,68 @@ function ThemeVarsBridge() {
     }
   }, [prefs.accent_color, prefs.theme_preset, prefs.theme, loading])
   return null
+}
+
+// Top route-change progress bar. Every page is SSR'd behind an auth check,
+// so navigation has real latency — without feedback a click feels like a
+// stall. Shows after a 150ms grace (instant navs stay flicker-free), creeps
+// to ~85% while the server renders, then snaps to 100% and fades out.
+function RouteProgress() {
+  const router = useRouter()
+  const [phase, setPhase] = useState<'idle' | 'loading' | 'done'>('idle')
+  const graceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const doneRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  useEffect(() => {
+    const start = (_url: string, opts?: { shallow?: boolean }) => {
+      if (opts?.shallow) return
+      if (doneRef.current) { clearTimeout(doneRef.current); doneRef.current = null }
+      if (graceRef.current) clearTimeout(graceRef.current)
+      graceRef.current = setTimeout(() => setPhase('loading'), 150)
+    }
+    const finish = () => {
+      if (graceRef.current) { clearTimeout(graceRef.current); graceRef.current = null }
+      setPhase(p => (p === 'loading' ? 'done' : 'idle'))
+      doneRef.current = setTimeout(() => setPhase('idle'), 350)
+    }
+    router.events.on('routeChangeStart', start)
+    router.events.on('routeChangeComplete', finish)
+    router.events.on('routeChangeError', finish)
+    return () => {
+      router.events.off('routeChangeStart', start)
+      router.events.off('routeChangeComplete', finish)
+      router.events.off('routeChangeError', finish)
+      if (graceRef.current) clearTimeout(graceRef.current)
+      if (doneRef.current) clearTimeout(doneRef.current)
+    }
+  }, [router])
+
+  if (phase === 'idle') return null
+  return (
+    <>
+      <style dangerouslySetInnerHTML={{ __html: `
+        @keyframes ja-route-creep { 0% { width: 0%; } 12% { width: 38%; } 35% { width: 62%; } 70% { width: 78%; } 100% { width: 86%; } }
+        @keyframes ja-route-glow { 0%,100% { opacity: 0.65; } 50% { opacity: 1; } }
+      ` }} />
+      <div aria-hidden style={{
+        position: 'fixed', top: 0, left: 0, right: 0, height: 2.5, zIndex: 99999,
+        pointerEvents: 'none', background: 'transparent',
+      }}>
+        <div style={{
+          height: '100%',
+          background: 'var(--accent, #4f8ef7)',
+          boxShadow: '0 0 8px var(--accent, #4f8ef7)',
+          borderRadius: '0 2px 2px 0',
+          width: phase === 'done' ? '100%' : undefined,
+          animation: phase === 'loading'
+            ? 'ja-route-creep 8s cubic-bezier(0.15,0.6,0.3,1) forwards, ja-route-glow 1.2s ease-in-out infinite'
+            : undefined,
+          transition: phase === 'done' ? 'width 180ms ease-out, opacity 250ms ease 120ms' : undefined,
+          opacity: phase === 'done' ? 0 : 1,
+        }} />
+      </div>
+    </>
+  )
 }
 
 // Registers the PWA service worker (public/sw.js) so the portal is
@@ -202,6 +265,7 @@ export default function App({ Component, pageProps }: AppProps) {
           ` }} />
         </Head>
         <ThemeVarsBridge/>
+        <RouteProgress/>
         <ServiceWorkerRegister/>
         <DesktopNotifier/>
         <FeedbackProvider>
