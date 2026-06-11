@@ -382,8 +382,10 @@ function EntityPicker({ label, kind, value, customerId, disabled, onPick }: {
   )
 }
 
+// A <div>, NOT a <label> — labels re-dispatch clicks to their form control,
+// which undid EntityPicker selections (see the matching comment in diary.tsx).
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
-  return <label style={{ display: 'block' }}><div style={{ fontSize: 10, color: T.text3, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 4 }}>{label}</div>{children}</label>
+  return <div style={{ display: 'block' }}><div style={{ fontSize: 10, color: T.text3, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 4 }}>{label}</div>{children}</div>
 }
 
 export async function getServerSideProps(context: any) {

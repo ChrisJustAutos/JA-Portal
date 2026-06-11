@@ -959,12 +959,17 @@ const inp: React.CSSProperties = {
   width: '100%', padding: '7px 9px', background: T.bg3, border: `1px solid ${T.border}`, borderRadius: 5,
   color: T.text, fontSize: 12, fontFamily: 'inherit', outline: 'none', colorScheme: 'dark', boxSizing: 'border-box',
 }
+// A <div>, NOT a <label>: Fields here wrap composite widgets (EntityPicker
+// dropdowns, preset chips, stage buttons). A <label> re-dispatches clicks to
+// its first form control — clicking a picker result selected the customer and
+// the synthetic click then hit the freshly-rendered "Change" button, undoing
+// it instantly ("selecting does nothing").
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <label style={{ display: 'block' }}>
+    <div style={{ display: 'block' }}>
       <div style={{ fontSize: 10, color: T.text3, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 4 }}>{label}</div>
       {children}
-    </label>
+    </div>
   )
 }
 
