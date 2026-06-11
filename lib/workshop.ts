@@ -33,6 +33,7 @@ export type BookingStatus =
   | 'prebooked'
   | 'booking'
   | 'confirmed'
+  | 'prepared'
   | 'in_progress'
   | 'awaiting_parts'
   | 'ready'
@@ -43,7 +44,7 @@ export type BookingStatus =
   | 'no_show'
 
 export const BOOKING_STATUSES: BookingStatus[] = [
-  'prebooked', 'booking', 'confirmed', 'in_progress', 'awaiting_parts', 'ready', 'done', 'invoiced', 'paid', 'cancelled', 'no_show',
+  'prebooked', 'booking', 'confirmed', 'prepared', 'in_progress', 'awaiting_parts', 'ready', 'done', 'invoiced', 'paid', 'cancelled', 'no_show',
 ]
 
 // Label + colour for diary chips. Colours mirror the portal's T theme palette.
@@ -51,14 +52,38 @@ export const BOOKING_STATUS_META: Record<BookingStatus, { label: string; color: 
   prebooked:      { label: 'Pre-booked',     color: '#8b90a0' },
   booking:        { label: 'Booked',         color: '#8b90a0' },
   confirmed:      { label: 'Confirmed',      color: '#4f8ef7' },
-  in_progress:    { label: 'In progress',    color: '#f5a623' },
+  prepared:       { label: 'Prepared',       color: '#38bdf8' },
+  in_progress:    { label: 'Started',        color: '#f5a623' },
   awaiting_parts: { label: 'Awaiting parts', color: '#a78bfa' },
   ready:          { label: 'Ready',          color: '#2dd4bf' },
-  done:           { label: 'Done',           color: '#34c77b' },
+  done:           { label: 'Finished',       color: '#34c77b' },
   invoiced:       { label: 'Invoiced',       color: '#2dd4bf' },
   paid:           { label: 'Paid',           color: '#34c77b' },
   cancelled:      { label: 'Cancelled',      color: '#545968' },
   no_show:        { label: 'No show',        color: '#f04e4e' },
+}
+
+// The four floor stages staff flip through during the day — Booked →
+// Prepared → Started → Finished — each recolouring the diary chip. The other
+// statuses (awaiting parts, invoiced, paid…) still exist; this is just the
+// quick-toggle subset.
+export const JOB_STAGES: { status: BookingStatus; label: string }[] = [
+  { status: 'booking',     label: 'Booked' },
+  { status: 'prepared',    label: 'Prepared' },
+  { status: 'in_progress', label: 'Started' },
+  { status: 'done',        label: 'Finished' },
+]
+
+// Statuses that count as "finished" for the diary's overdue flash — a job
+// past its end time in any OTHER status flashes red.
+export const JOB_DONE_STATUSES: BookingStatus[] = ['ready', 'done', 'invoiced', 'paid', 'cancelled', 'no_show']
+
+// Click-to-advance: where the chip's stage dot goes next from any status.
+export function nextJobStage(s: BookingStatus): BookingStatus {
+  if (s === 'prebooked' || s === 'booking' || s === 'confirmed') return 'prepared'
+  if (s === 'prepared') return 'in_progress'
+  if (s === 'in_progress' || s === 'awaiting_parts') return 'done'
+  return 'booking'  // finished states cycle back, so a misclick is recoverable
 }
 
 // Job types — curated common set. The prototype shipped a large job-type

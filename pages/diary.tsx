@@ -13,6 +13,7 @@ import { requirePageAuth } from '../lib/authServer'
 import { roleHasPermission } from '../lib/permissions'
 import {
   BOOKING_STATUS_META, BOOKING_STATUSES, BookingStatus,
+  JOB_STAGES, JOB_DONE_STATUSES, nextJobStage,
   vehicleLabel, customerLabel,
   ymdBrisbane, brisbaneDayBounds, addDaysYmd, weekStartYmd,
   jobTypeLabel,
@@ -117,14 +118,24 @@ function segmentHours(b: { starts_at: string; ends_at: string }, ymd: string, gr
 // Resize: pointer events on a bottom handle (HTML5 drag stays owned by the
 // move gesture). While resizing the block is non-draggable, and a just-resized
 // flag swallows the click that follows pointerup so the editor doesn't open.
-function BookingBlock({ b, seg, onClick, showTech, draggable, onDragEnd, resizable, onResize, clocked }: { b: BookingRow; seg: { top: number; height: number; clipTop?: boolean; clipBottom?: boolean }; onClick: () => void; showTech?: boolean; draggable?: boolean; onDragEnd?: () => void; resizable?: boolean; onResize?: (newEndIso: string) => void; clocked?: boolean }) {
+function BookingBlock({ b, seg, onClick, showTech, draggable, onDragEnd, resizable, onResize, clocked, onStatus }: { b: BookingRow; seg: { top: number; height: number; clipTop?: boolean; clipBottom?: boolean }; onClick: () => void; showTech?: boolean; draggable?: boolean; onDragEnd?: () => void; resizable?: boolean; onResize?: (newEndIso: string) => void; clocked?: boolean; onStatus?: (b: BookingRow, status: BookingStatus) => void }) {
   const { top, height } = seg
-  const c = BOOKING_STATUS_META[b.status].color
+  const c = (BOOKING_STATUS_META[b.status] || BOOKING_STATUS_META.booking).color
   const veh = b.vehicle ? vehicleLabel(b.vehicle) : ''
   const cust = b.customer ? customerLabel(b.customer) : ''
   const spans = seg.clipTop || seg.clipBottom
   const [resizing, setResizing] = useState<{ startY: number; delta: number } | null>(null)
   const justResized = useRef(false)
+
+  // Re-render every 30s so a job starts flashing the moment it runs overdue
+  // (past its end time and not yet finished) without anyone reloading.
+  const [, setNowTick] = useState(0)
+  useEffect(() => { const t = setInterval(() => setNowTick(x => x + 1), 30000); return () => clearInterval(t) }, [])
+  const overdue = !JOB_DONE_STATUSES.includes(b.status) && Date.now() > new Date(b.ends_at).getTime()
+
+  const next = nextJobStage(b.status)
+  const nextLabel = JOB_STAGES.find(s => s.status === next)?.label || (BOOKING_STATUS_META[next] || {}).label || next
+  const curLabel = (BOOKING_STATUS_META[b.status] || {}).label || b.status
 
   const durMin = Math.max(SLOT_MIN, Math.round((new Date(b.ends_at).getTime() - new Date(b.starts_at).getTime()) / 60000))
   const deltaSlots = resizing ? Math.round(resizing.delta / SLOT_PX) : 0
@@ -138,16 +149,24 @@ function BookingBlock({ b, seg, onClick, showTech, draggable, onDragEnd, resizab
       onDragStart={draggable ? (e) => { e.dataTransfer.setData('text/plain', b.id); e.dataTransfer.effectAllowed = 'move' } : undefined}
       onDragEnd={onDragEnd}
       onClick={(e) => { e.stopPropagation(); if (justResized.current) { justResized.current = false; return } onClick() }}
-      title={`${fmtDateTimeShort(b.starts_at)} – ${fmtDateTimeShort(b.ends_at)} · ${cust} · ${veh}`}
+      title={`${fmtDateTimeShort(b.starts_at)} – ${fmtDateTimeShort(b.ends_at)} · ${cust} · ${veh}${overdue ? ' · OVERDUE' : ''}`}
+      className={overdue ? 'bk-overdue' : undefined}
       style={{
         position: 'absolute', top, left: 2, right: 2, height: dispHeight, overflow: 'hidden',
-        background: `${c}1c`, borderLeft: `3px solid ${c}`, border: `1px solid ${c}44`,
+        background: `${c}1c`, borderLeft: `3px solid ${overdue ? '#f04e4e' : c}`, border: `1px solid ${overdue ? '#f04e4e88' : `${c}44`}`,
         borderTopLeftRadius: seg.clipTop ? 0 : 4, borderTopRightRadius: seg.clipTop ? 0 : 4,
         borderBottomLeftRadius: seg.clipBottom ? 0 : 4, borderBottomRightRadius: seg.clipBottom ? 0 : 4,
         padding: '3px 6px', cursor: draggable ? 'grab' : 'pointer', fontSize: 11, lineHeight: 1.25,
         zIndex: resizing ? 8 : undefined,
       }}>
-      <div style={{ color: T.text, fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+      {onStatus && (
+        <button
+          onClick={(e) => { e.stopPropagation(); onStatus(b, next) }}
+          title={`${curLabel} — click to mark ${nextLabel}`}
+          style={{ position: 'absolute', top: 3, right: 3, width: 13, height: 13, borderRadius: '50%', background: c, border: `2px solid ${T.bg2}`, boxShadow: `0 0 0 1px ${c}`, cursor: 'pointer', padding: 0, zIndex: 3 }}
+        />
+      )}
+      <div style={{ color: T.text, fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', paddingRight: onStatus ? 14 : 0 }}>
         {clocked ? '⏱ ' : ''}{seg.clipTop ? '↑ ' : ''}{veh || cust || 'Booking'}{spans ? ' ⇕' : ''}
       </div>
       <div style={{ color: T.text2, fontSize: 10, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
@@ -307,6 +326,14 @@ export default function DiaryPage({ user }: { user: PortalUserSSR }) {
     fetch(`/api/workshop/bookings/${b.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ends_at: endIso }) }).then(load)
   }
 
+  // Stage dot on a chip clicked → flip the booking to the next floor stage
+  // (Booked → Prepared → Started → Finished) with an optimistic recolour.
+  function quickStatus(b: BookingRow, status: BookingStatus) {
+    if (!canEdit) return
+    setBookings(prev => prev.map(x => x.id === b.id ? { ...x, status } : x))
+    fetch(`/api/workshop/bookings/${b.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status }) }).then(load)
+  }
+
   // Persist a new lane order (drag-reorder in the diary day view).
   function reorderTechs(codes: string[]) {
     setTechs(prev => { const by: Record<string, Tech> = {}; prev.forEach(t => { by[t.ext] = t }); return codes.map(c => by[c]).filter(Boolean).concat(prev.filter(t => !codes.includes(t.ext))) })
@@ -328,6 +355,14 @@ export default function DiaryPage({ user }: { user: PortalUserSSR }) {
       <Head><title>Workshop Diary — Just Autos</title><meta name="viewport" content="width=device-width,initial-scale=1"/><meta name="robots" content="noindex,nofollow"/></Head>
       <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', overflow: 'hidden', fontFamily: "'DM Sans',system-ui,sans-serif", color: T.text }}>
         <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet"/>
+        {/* Overdue jobs (past end time, not finished) flash red on the grid. */}
+        <style>{`
+          @keyframes bkOverdueFlash {
+            0%, 100% { background-color: rgba(240,78,78,0.10); box-shadow: none; }
+            50%      { background-color: rgba(240,78,78,0.38); box-shadow: 0 0 8px rgba(240,78,78,0.55); }
+          }
+          .bk-overdue { animation: bkOverdueFlash 1.1s ease-in-out infinite; }
+        `}</style>
         <PortalTopBar
           activeId="diary"
           lastRefresh={lastRefresh}
@@ -387,13 +422,13 @@ export default function DiaryPage({ user }: { user: PortalUserSSR }) {
                 onLaneClick={laneClick} onBooking={(b) => canEdit && setEditing(b)}
                 onDropBooking={(e, techExt) => dropMove(e, date, techExt, true)}
                 canReorder={canEdit && !techFilter && !deptFilter} onReorder={reorderTechs}
-                onResize={resizeBooking} clockedOn={clockedOn} />
+                onResize={resizeBooking} clockedOn={clockedOn} onStatus={canEdit ? quickStatus : undefined} />
             ) : view === 'week' ? (
               <WeekGrid bookings={displayBookings} days={weekDays} grid={grid} canEdit={canEdit}
                 onDayClick={(ymd) => { setDate(ymd); setView('day') }}
                 onSlotClick={(ymd, e) => laneClick(e, ymd, null)}
                 onBooking={(b) => canEdit && setEditing(b)}
-                onDropBooking={(e, ymd) => dropMove(e, ymd, null, false)} clockedOn={clockedOn} />
+                onDropBooking={(e, ymd) => dropMove(e, ymd, null, false)} clockedOn={clockedOn} onStatus={canEdit ? quickStatus : undefined} />
             ) : (
               <MonthGrid date={date} bookings={displayBookings} notes={notes} onDayClick={(ymd) => { setDate(ymd); setView('day') }} />
             )}
@@ -476,7 +511,7 @@ function TechPills({ techs, active, onPick }: { techs: Tech[]; active: string | 
 
 // ── Day grid: time axis + one lane per technician (with workload bar) ────
 const LANE_HEADER_PX = 46
-function DayGrid({ bookings, techs, date, grid, capacity, canEdit, canEditCapacity, onSetCapacity, onLaneClick, onBooking, onDropBooking, showUnassigned, canReorder, onReorder, onResize, clockedOn }: {
+function DayGrid({ bookings, techs, date, grid, capacity, canEdit, canEditCapacity, onSetCapacity, onLaneClick, onBooking, onDropBooking, showUnassigned, canReorder, onReorder, onResize, clockedOn, onStatus }: {
   bookings: BookingRow[]; techs: Tech[]; date: string; grid: GridCfg
   capacity: Record<string, number>; canEdit: boolean; canEditCapacity: boolean; onSetCapacity: (ext: string) => void
   onLaneClick: (e: React.MouseEvent<HTMLDivElement>, ymd: string, techExt: string | null) => void
@@ -487,6 +522,7 @@ function DayGrid({ bookings, techs, date, grid, capacity, canEdit, canEditCapaci
   onReorder: (codes: string[]) => void
   onResize: (b: BookingRow, endIso: string) => void
   clockedOn: Set<string>
+  onStatus?: (b: BookingRow, status: BookingStatus) => void
 }) {
   // "Unassigned" lane catches bookings with no technician (hidden when filtered to a tech).
   const lanes: Tech[] = showUnassigned ? [{ ext: '', name: 'Unassigned' }, ...techs] : [...techs]
@@ -558,7 +594,7 @@ function DayGrid({ bookings, techs, date, grid, capacity, canEdit, canEditCapaci
               {grid.hourMarks.map(m => (
                 <div key={m} style={{ position: 'absolute', top: (m - grid.startMin) / SLOT_MIN * SLOT_PX, left: 0, right: 0, borderTop: `1px solid ${T.border}` }} />
               ))}
-              {laneBookings.map(b => { const seg = daySegment(b, date, grid); return seg ? <BookingBlock key={b.id} b={b} seg={seg} draggable={canEdit} onClick={() => onBooking(b)} onDragEnd={() => setDropHint(null)} resizable={canEdit} onResize={(iso) => onResize(b, iso)} clocked={clockedOn.has(b.id)} /> : null })}
+              {laneBookings.map(b => { const seg = daySegment(b, date, grid); return seg ? <BookingBlock key={b.id} b={b} seg={seg} draggable={canEdit} onClick={() => onBooking(b)} onDragEnd={() => setDropHint(null)} resizable={canEdit} onResize={(iso) => onResize(b, iso)} clocked={clockedOn.has(b.id)} onStatus={onStatus} /> : null })}
               {dropHint && dropHint.ext === (lane.ext || '') && (
                 <div style={{ position: 'absolute', top: dropHint.top, left: 0, right: 0, borderTop: `2px solid ${T.accent}`, pointerEvents: 'none', zIndex: 6 }}>
                   <span style={{ position: 'absolute', top: -9, left: 2, background: T.accent, color: '#fff', fontSize: 10, fontWeight: 700, padding: '1px 5px', borderRadius: 3, fontFamily: 'monospace' }}>{dropHint.label}</span>
@@ -628,13 +664,14 @@ function DayNotes({ date, notes, canEdit, onAdd, onDelete }: { date: string; not
 }
 
 // ── Week grid: 7 day columns ────────────────────────────────────────────
-function WeekGrid({ bookings, days, grid, canEdit, onDayClick, onSlotClick, onBooking, onDropBooking, clockedOn }: {
+function WeekGrid({ bookings, days, grid, canEdit, onDayClick, onSlotClick, onBooking, onDropBooking, clockedOn, onStatus }: {
   bookings: BookingRow[]; days: string[]; grid: GridCfg; canEdit: boolean
   onDayClick: (ymd: string) => void
   onSlotClick: (ymd: string, e: React.MouseEvent<HTMLDivElement>) => void
   onBooking: (b: BookingRow) => void
   onDropBooking: (e: React.DragEvent<HTMLDivElement>, ymd: string) => void
   clockedOn: Set<string>
+  onStatus?: (b: BookingRow, status: BookingStatus) => void
 }) {
   const today = ymdBrisbane(new Date())
   const [dropHint, setDropHint] = useState<{ ymd: string; top: number; label: string } | null>(null)
@@ -661,7 +698,7 @@ function WeekGrid({ bookings, days, grid, canEdit, onDayClick, onSlotClick, onBo
             {grid.hourMarks.map(m => (
               <div key={m} style={{ position: 'absolute', top: (m - grid.startMin) / SLOT_MIN * SLOT_PX, left: 0, right: 0, borderTop: `1px solid ${T.border}` }} />
             ))}
-            {bookings.map(b => { const seg = daySegment(b, ymd, grid); return seg ? <BookingBlock key={b.id} b={b} seg={seg} draggable={canEdit} onClick={() => onBooking(b)} onDragEnd={() => setDropHint(null)} showTech clocked={clockedOn.has(b.id)} /> : null })}
+            {bookings.map(b => { const seg = daySegment(b, ymd, grid); return seg ? <BookingBlock key={b.id} b={b} seg={seg} draggable={canEdit} onClick={() => onBooking(b)} onDragEnd={() => setDropHint(null)} showTech clocked={clockedOn.has(b.id)} onStatus={onStatus} /> : null })}
             {dropHint && dropHint.ymd === ymd && (
               <div style={{ position: 'absolute', top: dropHint.top, left: 0, right: 0, borderTop: `2px solid ${T.accent}`, pointerEvents: 'none', zIndex: 6 }}>
                 <span style={{ position: 'absolute', top: -9, left: 2, background: T.accent, color: '#fff', fontSize: 10, fontWeight: 700, padding: '1px 5px', borderRadius: 3, fontFamily: 'monospace' }}>{dropHint.label}</span>
@@ -861,6 +898,18 @@ function BookingModal({ initial, techs, canEdit, onClose, onSaved }: {
           </Field>
 
           <Field label="Status">
+            <div style={{ display: 'flex', gap: 6, marginBottom: 6 }}>
+              {JOB_STAGES.map(st => {
+                const on = status === st.status
+                const c = BOOKING_STATUS_META[st.status].color
+                return (
+                  <button key={st.status} disabled={!canEdit} onClick={() => setStatus(st.status)}
+                    style={{ flex: 1, padding: '7px 4px', borderRadius: 6, border: `1px solid ${on ? c : T.border}`, background: on ? `${c}26` : T.bg3, color: on ? c : T.text2, fontWeight: 600, fontSize: 12, cursor: 'pointer', fontFamily: 'inherit' }}>
+                    {st.label}
+                  </button>
+                )
+              })}
+            </div>
             <select value={status} disabled={!canEdit} onChange={e => setStatus(e.target.value as BookingStatus)} style={inp}>
               {BOOKING_STATUSES.map(s => <option key={s} value={s}>{BOOKING_STATUS_META[s].label}</option>)}
             </select>

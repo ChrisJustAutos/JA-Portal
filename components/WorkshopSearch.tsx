@@ -22,7 +22,7 @@ const EMPTY: Results = { customers: [], vehicles: [], jobs: [], invoices: [] }
 interface FlatRow { key: string; href: string; title: string; sub: string; badge?: string; badgeColor?: string }
 
 const JOB_STATUS_COLORS: Record<string, string> = {
-  prebooked: T.text2, booking: T.text2, confirmed: T.blue, in_progress: T.amber,
+  prebooked: T.text2, booking: T.text2, confirmed: T.blue, prepared: '#38bdf8', in_progress: T.amber,
   awaiting_parts: T.purple, ready: T.teal, done: T.green, invoiced: T.green,
   paid: T.green, cancelled: T.red, no_show: T.red,
 }

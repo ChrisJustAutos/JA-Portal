@@ -336,6 +336,7 @@ export default function JobCardPage({ user }: { user: PortalUserSSR }) {
                 {/* Quick status actions */}
                 {canEdit && (
                   <div style={{ display: 'flex', gap: 8, marginTop: 12, flexWrap: 'wrap', alignItems: 'center' }}>
+                    <button onClick={() => changeStatus('prepared')} style={qbtn(BOOKING_STATUS_META.prepared.color)}>📦 Prepared</button>
                     <button onClick={() => changeStatus('in_progress')} style={qbtn(T.amber)}>▶ Start job</button>
                     <button onClick={() => changeStatus('awaiting_parts')} style={qbtn(T.purple)}>⏸ Awaiting parts</button>
                     <button onClick={() => changeStatus('done')} style={qbtn(T.green)}>✓ Finish job</button>
