@@ -72,7 +72,7 @@ export default function JobCardPage({ user }: { user: PortalUserSSR }) {
   const [creditNotes, setCreditNotes] = useState<any[]>([])
   const [credit, setCredit] = useState<{ open: boolean; mode: 'lines' | 'amount'; sel: Record<string, boolean>; qty: Record<string, string>; amount: string; reason: string; restock: boolean; refund: boolean; tender: string; busy: boolean; msg: string }>({ open: false, mode: 'lines', sel: {}, qty: {}, amount: '', reason: '', restock: false, refund: false, tender: 'card', busy: false, msg: '' })
   const [jobTypes, setJobTypes] = useState<any[]>([])
-  const [applyJt, setApplyJt] = useState('')
+  const [applyingJt, setApplyingJt] = useState(false)
   const [tab, setTab] = useState<'invoice' | 'notes' | 'files' | 'activity' | 'history'>('invoice')
   const [dueSet, setDueSet] = useState<{ open: boolean; service: string; km: string; rego: string; busy: boolean; msg: string }>({ open: false, service: '', km: '', rego: '', busy: false, msg: '' })
   const [internalNotes, setInternalNotes] = useState('')
@@ -96,11 +96,11 @@ export default function JobCardPage({ user }: { user: PortalUserSSR }) {
   useEffect(() => { load(); loadPayments() }, [load, loadPayments])
   useEffect(() => { (async () => { try { const r = await fetch('/api/workshop/job-types'); if (r.ok) setJobTypes((await r.json()).jobTypes || []) } catch { /* */ } })() }, [])
 
-  async function applyJobType() {
-    if (!applyJt) return
-    await fetch(`/api/workshop/job-types/${applyJt}/apply`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ booking_id: id }) })
-    setApplyJt('')
+  async function applyJobType(jobTypeId: string) {
+    setApplyingJt(true)
+    await fetch(`/api/workshop/job-types/${jobTypeId}/apply`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ booking_id: id }) })
     await load()
+    setApplyingJt(false)
   }
 
   async function patchBooking(patch: any) {
@@ -591,20 +591,11 @@ export default function JobCardPage({ user }: { user: PortalUserSSR }) {
 
                         {canEdit && (
                           <div style={{ padding: 12, borderTop: `1px solid ${T.border}`, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                            <JobTypePicker jobTypes={jobTypes} busy={applyingJt} onPick={(jt) => applyJobType(jt.id)} />
                             <button onClick={() => addLine({ line_type: 'labour', description: 'Labour', qty: 1, unit_price_ex_gst: 0 })} style={addBtn}>+ Labour</button>
                             <button onClick={() => addLine({ line_type: 'fee', description: '', qty: 1, unit_price_ex_gst: 0 })} style={addBtn}>+ Fee</button>
                             <button onClick={() => addLine({ line_type: 'description', description: '', qty: 0, unit_price_ex_gst: 0 })} title="A text-only heading row — describe the job, then move the labour/parts that belong to it underneath" style={addBtn}>+ Description</button>
                             <PartPicker onPick={(it) => addLine({ line_type: 'part', description: it.part_name, part_number: it.sku, qty: 1, unit_price_ex_gst: Number(it.sell_price) || 0, inventory_id: it.id } as any)} />
-                            {jobTypes.filter(t => t.active).length > 0 && (
-                              <>
-                                <div style={{ flex: 1 }} />
-                                <select value={applyJt} onChange={e => setApplyJt(e.target.value)} style={{ ...inp, maxWidth: 200 }} title="Fill the job from a preset job type">
-                                  <option value="">Apply job type…</option>
-                                  {jobTypes.filter(t => t.active).map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
-                                </select>
-                                <button onClick={applyJobType} disabled={!applyJt} style={addBtn}>Apply</button>
-                              </>
-                            )}
                           </div>
                         )}
 
@@ -793,6 +784,44 @@ function LineRow({ line, canEdit, onPatch, onDelete, onMove }: { line: Line; can
       <input value={price} disabled={!canEdit} inputMode="decimal" onChange={e => setPrice(e.target.value)} onBlur={() => Number(price) !== Number(line.unit_price_ex_gst) && onPatch({ unit_price_ex_gst: Number(price) || 0 })} style={{ ...cellInp, textAlign: 'right' }} />
       <span style={{ fontSize: 12, fontFamily: 'monospace', color: T.text2, textAlign: 'right' }}>{money(lineTotal)}</span>
       {controls}
+    </div>
+  )
+}
+
+// Searchable job-type picker — picking one appends the job type's name as a
+// description heading plus its template labour/parts (via the apply endpoint).
+function JobTypePicker({ jobTypes, busy, onPick }: { jobTypes: any[]; busy: boolean; onPick: (jt: any) => void }) {
+  const [open, setOpen] = useState(false)
+  const [q, setQ] = useState('')
+  const active = jobTypes.filter(t => t.active !== false)
+  const needle = q.trim().toLowerCase()
+  const results = (needle
+    ? active.filter(t => `${t.name || ''} ${t.code || ''}`.toLowerCase().includes(needle))
+    : active
+  ).slice(0, 60)
+  if (!open) return <button onClick={() => setOpen(true)} disabled={busy} style={{ ...addBtn, color: T.teal }} title="Add a preset job — its description heading + labour/parts">{busy ? 'Adding job…' : '+ Job type'}</button>
+  return (
+    <div style={{ position: 'relative' }}>
+      <input autoFocus value={q} onChange={e => setQ(e.target.value)} placeholder="Search job types…" onBlur={() => setTimeout(() => setOpen(false), 200)} style={{ ...cellInp, width: 220, padding: '6px 8px' }} />
+      <div style={{ position: 'absolute', bottom: '100%', left: 0, width: 320, background: T.bg3, border: `1px solid ${T.border2}`, borderRadius: 6, marginBottom: 4, maxHeight: 260, overflowY: 'auto', zIndex: 10 }}>
+        {results.length === 0 && (
+          <div style={{ padding: '10px 12px', fontSize: 11, color: T.text3 }}>
+            {active.length === 0 ? 'No job types yet — create them in Settings → Workshop → Job types.' : 'No matches.'}
+          </div>
+        )}
+        {results.map(jt => {
+          const lineCount = Array.isArray(jt.lines) ? jt.lines.length : 0
+          const est = (jt.lines || []).reduce((s: number, l: any) => s + (Number(l.qty) || 0) * (Number(l.unit_price_ex_gst) || 0), 0)
+          return (
+            <div key={jt.id} onMouseDown={() => { onPick(jt); setOpen(false); setQ('') }} style={{ padding: '7px 10px', fontSize: 12, cursor: 'pointer', borderBottom: `1px solid ${T.border}` }}>
+              <div style={{ color: T.text }}>{jt.name}</div>
+              <div style={{ fontSize: 10, color: T.text3, fontFamily: 'monospace' }}>
+                {jt.code ? `${jt.code} · ` : ''}{lineCount} line{lineCount === 1 ? '' : 's'}{est > 0 ? ` · ${money(est * 1.1)} inc` : ''}
+              </div>
+            </div>
+          )
+        })}
+      </div>
     </div>
   )
 }
