@@ -77,6 +77,12 @@ export default function JobCardPage({ user }: { user: PortalUserSSR }) {
   const [dueSet, setDueSet] = useState<{ open: boolean; service: string; km: string; rego: string; busy: boolean; msg: string }>({ open: false, service: '', km: '', rego: '', busy: false, msg: '' })
   const [internalNotes, setInternalNotes] = useState('')
   useEffect(() => { if (data?.booking) setInternalNotes(data.booking.internal_notes || '') }, [data?.booking?.id])
+  // Work description — editable on the invoice tab; pushes to the MYOB invoice Comment.
+  const [workDesc, setWorkDesc] = useState('')
+  useEffect(() => { if (data?.booking) setWorkDesc(data.booking.description || '') }, [data?.booking?.id])
+  // Drag-to-reorder line items (alongside the ↑/↓ buttons).
+  const [dragIdx, setDragIdx] = useState<number | null>(null)
+  const [overIdx, setOverIdx] = useState<number | null>(null)
 
   const load = useCallback(async () => {
     if (!id) return
@@ -184,10 +190,17 @@ export default function JobCardPage({ user }: { user: PortalUserSSR }) {
   // Swap a line with its neighbour, then renumber sort_order = array index for
   // any line that drifted (handles legacy duplicate sort_orders too).
   async function moveLine(idx: number, dir: -1 | 1) {
+    await reorderLines(idx, idx + dir)
+  }
+  // Move a line from one index to another (drag-drop and ↑/↓), renumbering
+  // sort_order = array index. Optimistic so the row jumps immediately.
+  async function reorderLines(from: number, to: number) {
+    if (from == null || to == null || from === to) return
     const arr = [...lines]
-    const j = idx + dir
-    if (j < 0 || j >= arr.length) return
-    ;[arr[idx], arr[j]] = [arr[j], arr[idx]]
+    if (to < 0 || to >= arr.length || from < 0 || from >= arr.length) return
+    const [moved] = arr.splice(from, 1)
+    arr.splice(to, 0, moved)
+    setData(d => d ? { ...d, lines: arr.map((l, i) => ({ ...l, sort_order: i })) } : d)  // optimistic
     await Promise.all(arr.map((l, i) => Number(l.sort_order) !== i
       ? fetch(`/api/workshop/booking-lines?id=${encodeURIComponent(l.id)}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sort_order: i }) })
       : null))
@@ -551,12 +564,6 @@ export default function JobCardPage({ user }: { user: PortalUserSSR }) {
                       <FieldRow label="Category" value={jobTypeLabel(b.job_type) || '—'} />
                     </Panel>
 
-                    {b.description && (
-                      <Panel title="Work description · shows on invoice">
-                        <div style={{ fontSize: 13, color: T.text, whiteSpace: 'pre-wrap', lineHeight: 1.5 }}>{b.description}</div>
-                      </Panel>
-                    )}
-
                     <Panel title="Checklist">
                       <JobChecklist items={Array.isArray((b as any).checklist) ? (b as any).checklist : []} canEdit={canEdit}
                         onChange={async (items) => { await patchBooking({ checklist: items }); await load() }} />
@@ -584,11 +591,27 @@ export default function JobCardPage({ user }: { user: PortalUserSSR }) {
 
                     {tab === 'invoice' && (
                       <>
-                        <div style={{ display: 'grid', gridTemplateColumns: '70px 1fr 60px 90px 90px 62px', gap: 8, padding: '7px 14px', fontSize: 9, color: T.text3, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', background: T.bg3, borderBottom: `1px solid ${T.border}` }}>
+                        {/* Work description — shows on the customer's invoice (MYOB Comment). */}
+                        <div style={{ padding: '12px 14px', borderBottom: `1px solid ${T.border}` }}>
+                          <div style={{ fontSize: 9, color: T.text3, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 5 }}>Work description · shows on invoice</div>
+                          <textarea value={workDesc} disabled={!canEdit} onChange={e => setWorkDesc(e.target.value)}
+                            onBlur={async () => { if (workDesc !== (b.description || '')) { await patchBooking({ description: workDesc || null }); await load() } }}
+                            rows={3} placeholder="Work carried out, summary for the customer…"
+                            style={{ ...inp, width: '100%', resize: 'vertical', minHeight: 56, fontFamily: 'inherit', whiteSpace: 'pre-wrap' }} />
+                        </div>
+                        <div style={{ display: 'grid', gridTemplateColumns: '70px 1fr 60px 90px 90px 84px', gap: 8, padding: '7px 14px', fontSize: 9, color: T.text3, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', background: T.bg3, borderBottom: `1px solid ${T.border}` }}>
                           <div>Type</div><div>Description</div><div style={{ textAlign: 'right' }}>Qty</div><div style={{ textAlign: 'right' }}>Unit ex</div><div style={{ textAlign: 'right' }}>Total ex</div><div/>
                         </div>
                         {lines.length === 0 && <div style={{ padding: 20, textAlign: 'center', fontSize: 12, color: T.text3 }}>No lines yet.</div>}
-                        {lines.map((l, i) => <LineRow key={l.id} line={l} canEdit={canEdit} onPatch={(p) => patchLine(l.id, p)} onDelete={() => deleteLine(l.id)} onMove={(dir) => moveLine(i, dir)} />)}
+                        {lines.map((l, i) => (
+                          <LineRow key={l.id} line={l} canEdit={canEdit} index={i}
+                            onPatch={(p) => patchLine(l.id, p)} onDelete={() => deleteLine(l.id)} onMove={(dir) => moveLine(i, dir)}
+                            dragOver={overIdx === i && dragIdx !== null && dragIdx !== i}
+                            onDragStart={() => setDragIdx(i)}
+                            onDragOver={() => setOverIdx(i)}
+                            onDrop={() => { if (dragIdx !== null) reorderLines(dragIdx, i); setDragIdx(null); setOverIdx(null) }}
+                            onDragEnd={() => { setDragIdx(null); setOverIdx(null) }} />
+                        ))}
 
                         {canEdit && (
                           <div style={{ padding: 12, borderTop: `1px solid ${T.border}`, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
@@ -753,22 +776,41 @@ function StatusPill({ status }: { status: BookingStatus }) {
   )
 }
 
-function LineRow({ line, canEdit, onPatch, onDelete, onMove }: { line: Line; canEdit: boolean; onPatch: (p: any) => void; onDelete: () => void; onMove: (dir: -1 | 1) => void }) {
+function LineRow({ line, canEdit, index, onPatch, onDelete, onMove, dragOver, onDragStart, onDragOver, onDrop, onDragEnd }: {
+  line: Line; canEdit: boolean; index: number
+  onPatch: (p: any) => void; onDelete: () => void; onMove: (dir: -1 | 1) => void
+  dragOver?: boolean
+  onDragStart?: () => void; onDragOver?: () => void; onDrop?: () => void; onDragEnd?: () => void
+}) {
   const [desc, setDesc] = useState(line.description || '')
   const [qty, setQty] = useState(String(line.qty))
   const [price, setPrice] = useState(String(line.unit_price_ex_gst))
+  const [grabbing, setGrabbing] = useState(false)
   useEffect(() => { setDesc(line.description || ''); setQty(String(line.qty)); setPrice(String(line.unit_price_ex_gst)) }, [line.id, line.description, line.qty, line.unit_price_ex_gst])
   const lineTotal = (Number(line.total_ex_gst) ?? 0) || (Number(line.qty) * Number(line.unit_price_ex_gst))
   const controls = canEdit ? (
     <span style={{ display: 'flex', gap: 0, justifyContent: 'flex-end', alignItems: 'center' }}>
+      {/* Grip is the only draggable element so the text inputs stay selectable. */}
+      <span draggable
+        onMouseDown={() => setGrabbing(true)}
+        onDragStart={(e) => { e.dataTransfer.effectAllowed = 'move'; onDragStart?.() }}
+        onDragEnd={() => { setGrabbing(false); onDragEnd?.() }}
+        title="Drag to reorder" style={{ cursor: 'grab', color: T.text3, fontSize: 13, padding: '0 3px', lineHeight: 1, userSelect: 'none' }}>⠿</span>
       <button onClick={() => onMove(-1)} title="Move up" style={mvBtn}>↑</button>
       <button onClick={() => onMove(1)} title="Move down" style={mvBtn}>↓</button>
       <button onClick={onDelete} title="Remove" style={{ ...mvBtn, fontSize: 15 }}>×</button>
     </span>
   ) : <span/>
+  // Row-level drag-drop wiring: the grip starts the drag, any row is a drop
+  // target. A top border marks where the dragged line will land.
+  const dragProps = canEdit ? {
+    onDragOver: (e: React.DragEvent) => { e.preventDefault(); onDragOver?.() },
+    onDrop: (e: React.DragEvent) => { e.preventDefault(); onDrop?.() },
+  } : {}
+  const dropEdge = dragOver ? { boxShadow: `inset 0 2px 0 0 ${T.accent}` } : {}
   if (line.line_type === 'description') {
     return (
-      <div style={{ display: 'grid', gridTemplateColumns: '70px 1fr 62px', gap: 8, padding: '8px 14px', borderTop: `1px solid ${T.border}`, alignItems: 'center', background: T.bg3 }}>
+      <div {...dragProps} style={{ display: 'grid', gridTemplateColumns: '70px 1fr 84px', gap: 8, padding: '8px 14px', borderTop: `1px solid ${T.border}`, alignItems: 'center', background: T.bg3, ...dropEdge }}>
         <span style={{ fontSize: 10, color: T.text3, textTransform: 'uppercase' }}>Desc</span>
         <input value={desc} disabled={!canEdit} onChange={e => setDesc(e.target.value)} onBlur={() => desc !== (line.description || '') && onPatch({ description: desc })}
           placeholder="Description / heading — the items below belong to it" style={{ ...cellInp, fontWeight: 600, background: 'transparent', border: `1px solid transparent` }} />
@@ -777,7 +819,7 @@ function LineRow({ line, canEdit, onPatch, onDelete, onMove }: { line: Line; can
     )
   }
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: '70px 1fr 60px 90px 90px 62px', gap: 8, padding: '8px 14px', borderTop: `1px solid ${T.border}`, alignItems: 'center' }}>
+    <div {...dragProps} style={{ display: 'grid', gridTemplateColumns: '70px 1fr 60px 90px 90px 84px', gap: 8, padding: '8px 14px', borderTop: `1px solid ${T.border}`, alignItems: 'center', opacity: grabbing ? 0.5 : 1, ...dropEdge }}>
       <span style={{ fontSize: 10, color: T.text3, textTransform: 'uppercase' }}>{LINE_TYPE_LABEL[line.line_type] || line.line_type}</span>
       <input value={desc} disabled={!canEdit} onChange={e => setDesc(e.target.value)} onBlur={() => desc !== (line.description || '') && onPatch({ description: desc })}
         placeholder={line.part_number || 'Description'} style={cellInp} />
