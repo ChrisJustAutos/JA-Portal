@@ -146,6 +146,16 @@ export default function JobCardPage({ user }: { user: PortalUserSSR }) {
     if (ok && v && (status === 'done' || status === 'invoiced' || status === 'paid')) openDueSet(v)
   }
 
+  // Finish job → mark done, then offer to push straight to MYOB when there
+  // are billable lines and it isn't already finalised.
+  async function finishJob() {
+    await changeStatus('done')
+    if (!data?.booking?.myob_invoice_uid && (data?.lines || []).some(l => l.line_type !== 'description')) {
+      const ok = await confirmDialog({ title: 'Finalise to MYOB now?', message: 'Push this finished job to MYOB as an invoice and deduct part stock. You can also do it later with the Finalise button.', confirmLabel: 'Finalise' })
+      if (ok) await createInvoice()
+    }
+  }
+
   function openDueSet(v: any) {
     setDueSet({
       open: true, busy: false, msg: '',
@@ -426,15 +436,13 @@ export default function JobCardPage({ user }: { user: PortalUserSSR }) {
                   <div style={{ display: 'flex', gap: 8, marginTop: 12, flexWrap: 'wrap', alignItems: 'center' }}>
                     <StageBtn cur={b.status} status="prepared" color={BOOKING_STATUS_META.prepared.color} label="📦 Prepared" busy={savingStatus} onClick={() => changeStatus('prepared')} />
                     <StageBtn cur={b.status} status="in_progress" color={T.amber} label="▶ Start job" busy={savingStatus} onClick={() => changeStatus('in_progress')} />
-                    <StageBtn cur={b.status} status="awaiting_parts" color={T.purple} label="⏸ Awaiting parts" busy={savingStatus} onClick={() => changeStatus('awaiting_parts')} />
-                    <StageBtn cur={b.status} status="done" color={T.green} label="✓ Finish job" busy={savingStatus} onClick={() => changeStatus('done')} />
+                    <StageBtn cur={b.status} status="done" color={T.green} label="✓ Finish job" busy={savingStatus} onClick={finishJob} />
                     {!b.myob_invoice_uid ? (
                       <button onClick={createInvoice} disabled={inv.busy} style={qbtn(T.teal)}>{inv.busy ? '🧾 Finalising…' : '🧾 Finalise → MYOB'}</button>
                     ) : (
                       <button onClick={unfinalise} disabled={inv.busy} style={qbtn(T.amber)}>{inv.busy ? '↺ Un-finalising…' : '↺ Un-finalise'}</button>
                     )}
                     <button onClick={() => pay.open ? setPay(p => ({ ...p, open: false })) : openPay()} style={qbtn(T.teal)}>💳 Take payment</button>
-                    <button onClick={() => changeStatus('paid')} style={qbtn(T.green)}>$ Paid</button>
                     {(b.status === 'invoiced' || b.status === 'paid') && (
                       <button onClick={() => setCredit(s => ({ ...s, open: !s.open, msg: '' }))} style={qbtn(T.red)}>↩ Credit / refund</button>
                     )}
