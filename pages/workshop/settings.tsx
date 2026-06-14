@@ -15,9 +15,10 @@ import { useRouter } from 'next/router'
 import PortalTopBar from '../../lib/PortalTopBar'
 import { requirePageAuth } from '../../lib/authServer'
 import type { PortalUserSSR } from '../../lib/authServer'
-import { PAYMENT_TENDERS } from '../../lib/workshop'
+import { PAYMENT_TENDERS, JOB_TYPES } from '../../lib/workshop'
+import { COMM_TRIGGERS, COMM_VARS, CommTemplate } from '../../lib/workshop-comm-templates'
 import { T } from '../../lib/ui/theme'
-import { useConfirm } from '../../components/ui/Feedback'
+import { useConfirm, useToast } from '../../components/ui/Feedback'
 const inp: React.CSSProperties = { width: '100%', padding: '7px 9px', background: T.bg3, border: `1px solid ${T.border}`, borderRadius: 6, color: T.text, fontSize: 13, fontFamily: 'inherit', outline: 'none', boxSizing: 'border-box', colorScheme: 'dark' }
 const cellInp: React.CSSProperties = { ...inp, padding: '5px 7px', borderRadius: 4, fontSize: 12 }
 function pbtn(color: string, solid?: boolean): React.CSSProperties {
@@ -34,7 +35,7 @@ const TABS: { id: Tab; label: string }[] = [
   { id: 'invoicing', label: 'Invoicing (MYOB)' },
   { id: 'accounts', label: 'MYOB accounts' },
   { id: 'job-types', label: 'Job types' },
-  { id: 'sms', label: 'SMS reminders' },
+  { id: 'sms', label: 'Communications' },
   { id: 'techs', label: 'Technicians & staff' },
 ]
 
@@ -127,7 +128,7 @@ export default function WorkshopSettingsPage({ user }: { user: PortalUserSSR }) 
                   {tab === 'invoicing' && settings && <InvoicingSection settings={settings} accounts={accounts} accountsError={accountsError} onSave={saveSettings} register={registerSaver} />}
                   {tab === 'accounts' && settings && <AccountsSection settings={settings} income={accounts} banks={bankAccounts} categories={trackingCategories} expense={expenseAccounts} accountsError={accountsError} onSave={saveSettings} />}
                   {tab === 'job-types' && <JobTypesSection />}
-                  {tab === 'sms' && settings && <SmsSection settings={settings} onSave={saveSettings} register={registerSaver} />}
+                  {tab === 'sms' && settings && <><SmsSection settings={settings} onSave={saveSettings} register={registerSaver} /><div style={{ height: 14 }} /><CommTemplatesManager /></>}
                   {tab === 'techs' && <TechsMovedCard />}
                 </div>
               </div>
@@ -534,6 +535,134 @@ function TechsMovedCard() {
         Open Users &amp; Staff →
       </a>
     </Card>
+  )
+}
+
+// ── Communication templates (SMS + email) ───────────────────────────────
+function CommTemplatesManager() {
+  const toast = useToast()
+  const confirmDialog = useConfirm()
+  const [tmpls, setTmpls] = useState<CommTemplate[]>([])
+  const [loading, setLoading] = useState(true)
+  const [openId, setOpenId] = useState<string | null>(null)
+
+  const load = useCallback(async () => {
+    try { const r = await fetch('/api/workshop/comm-templates'); if (r.ok) setTmpls((await r.json()).templates || []) }
+    catch { /* keep */ } finally { setLoading(false) }
+  }, [])
+  useEffect(() => { load() }, [load])
+
+  async function patch(id: string, p: any) {
+    setTmpls(ts => ts.map(t => t.id === id ? { ...t, ...p } : t))   // optimistic
+    const r = await fetch(`/api/workshop/comm-templates?id=${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(p) })
+    if (!r.ok) { toast((await r.json()).error || 'Save failed', 'error'); load() }
+  }
+  async function addTemplate() {
+    const r = await fetch('/api/workshop/comm-templates', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ trigger: 'follow_up', name: 'New template', channel: 'sms', body: 'Hi {{first_name}}, ', offset_value: 1, offset_unit: 'days', offset_dir: 'after', sort_order: tmpls.length + 1 }) })
+    const d = await r.json()
+    if (r.ok) { await load(); setOpenId(d.template?.id || null) } else toast(d.error || 'Add failed', 'error')
+  }
+  async function remove(t: CommTemplate) {
+    if (!(await confirmDialog({ title: `Delete “${t.name}”?`, danger: true }))) return
+    const r = await fetch(`/api/workshop/comm-templates?id=${t.id}`, { method: 'DELETE' })
+    if (r.ok) { setOpenId(null); load() } else toast((await r.json()).error || 'Delete failed', 'error')
+  }
+
+  return (
+    <Card title="Communication templates" hint="Editable SMS + email the workshop sends customers. Each template fires on a trigger, with its own timing and (optionally) only for certain job types. Sends still require the master toggle above to be on.">
+      {loading && <div style={{ fontSize: 12, color: T.text3 }}>Loading…</div>}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+        {tmpls.map(t => {
+          const trig = COMM_TRIGGERS.find(x => x.value === t.trigger)
+          const timing = t.trigger === 'booking_reminder' || t.trigger === 'follow_up'
+            ? `${t.offset_value} ${t.offset_unit} ${t.offset_dir} ${t.trigger === 'follow_up' ? 'completion' : 'booking'}`
+            : trig?.anchor || ''
+          const on = openId === t.id
+          return (
+            <div key={t.id} style={{ border: `1px solid ${T.border}`, borderRadius: 8, background: T.bg3 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 12px', cursor: 'pointer' }} onClick={() => setOpenId(on ? null : t.id)}>
+                <span style={{ fontSize: 13 }}>{t.channel === 'email' ? '✉️' : '📱'}</span>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: T.text }}>{t.name}</div>
+                  <div style={{ fontSize: 11, color: T.text3 }}>{trig?.label} · {timing}{t.job_types.length ? ` · ${t.job_types.length} job type${t.job_types.length === 1 ? '' : 's'}` : ''}</div>
+                </div>
+                <span onClick={e => { e.stopPropagation(); patch(t.id, { enabled: !t.enabled }) }}
+                  style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', padding: '3px 9px', borderRadius: 12, cursor: 'pointer', background: t.enabled ? `${T.green}22` : T.bg4, color: t.enabled ? T.green : T.text3, border: `1px solid ${t.enabled ? T.green + '55' : T.border2}` }}>
+                  {t.enabled ? 'On' : 'Off'}
+                </span>
+                <span style={{ color: T.text3, fontSize: 11 }}>{on ? '▲' : '▼'}</span>
+              </div>
+              {on && <CommTemplateEditor t={t} onPatch={(p) => patch(t.id, p)} onRemove={() => remove(t)} />}
+            </div>
+          )
+        })}
+      </div>
+      <button onClick={addTemplate} style={{ ...pbtn(T.accent), marginTop: 12 }}>+ New template</button>
+    </Card>
+  )
+}
+
+function CommTemplateEditor({ t, onPatch, onRemove }: { t: CommTemplate; onPatch: (p: any) => void; onRemove: () => void }) {
+  const [name, setName] = useState(t.name)
+  const [subject, setSubject] = useState(t.subject || '')
+  const [body, setBody] = useState(t.body)
+  useEffect(() => { setName(t.name); setSubject(t.subject || ''); setBody(t.body) }, [t.id])
+  const showTiming = t.trigger === 'booking_reminder' || t.trigger === 'follow_up'
+  const anchorWord = t.trigger === 'follow_up' ? 'after completion' : (t.offset_dir === 'before' ? 'before booking' : 'after booking')
+  return (
+    <div style={{ padding: '4px 12px 14px', borderTop: `1px solid ${T.border}` }}>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 130px 130px', gap: 10, marginBottom: 10 }}>
+        <Field label="Name"><input style={inp} value={name} onChange={e => setName(e.target.value)} onBlur={() => name !== t.name && onPatch({ name })} /></Field>
+        <Field label="Trigger">
+          <select style={inp} value={t.trigger} onChange={e => onPatch({ trigger: e.target.value })}>
+            {COMM_TRIGGERS.map(x => <option key={x.value} value={x.value}>{x.label}</option>)}
+          </select>
+        </Field>
+        <Field label="Channel">
+          <select style={inp} value={t.channel} onChange={e => onPatch({ channel: e.target.value })}>
+            <option value="sms">SMS</option><option value="email">Email</option>
+          </select>
+        </Field>
+      </div>
+
+      {showTiming && (
+        <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', marginBottom: 10 }}>
+          <Field label="Send"><input style={{ ...inp, width: 80 }} inputMode="numeric" value={t.offset_value} onChange={e => onPatch({ offset_value: Math.max(0, Number(e.target.value) || 0) })} /></Field>
+          <Field label="Unit"><select style={{ ...inp, width: 100 }} value={t.offset_unit} onChange={e => onPatch({ offset_unit: e.target.value })}><option value="hours">hours</option><option value="days">days</option></select></Field>
+          {t.trigger === 'booking_reminder'
+            ? <Field label="When"><select style={{ ...inp, width: 130 }} value={t.offset_dir} onChange={e => onPatch({ offset_dir: e.target.value })}><option value="before">before booking</option><option value="after">after booking</option></select></Field>
+            : <div style={{ fontSize: 12, color: T.text3, paddingBottom: 8 }}>{anchorWord}</div>}
+        </div>
+      )}
+
+      {t.channel === 'email' && (
+        <Field label="Subject"><input style={inp} value={subject} onChange={e => setSubject(e.target.value)} onBlur={() => subject !== (t.subject || '') && onPatch({ subject })} placeholder="e.g. Your {{vehicle}} is ready" /></Field>
+      )}
+      <Field label="Message">
+        <textarea style={{ ...inp, minHeight: 90, resize: 'vertical', fontFamily: 'inherit', lineHeight: 1.5 }} value={body} onChange={e => setBody(e.target.value)} onBlur={() => body !== t.body && onPatch({ body })} />
+      </Field>
+      <div style={{ fontSize: 10, color: T.text3, marginBottom: 12 }}>
+        Placeholders: {COMM_VARS.map(v => <code key={v} style={{ background: T.bg4, padding: '1px 5px', borderRadius: 4, marginRight: 4, fontSize: 10 }}>{`{{${v}}}`}</code>)}
+      </div>
+
+      <Field label="Only these job types (none = all)">
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+          {JOB_TYPES.map(jt => {
+            const on = t.job_types.includes(jt.value)
+            return (
+              <button key={jt.value} onClick={() => onPatch({ job_types: on ? t.job_types.filter(x => x !== jt.value) : [...t.job_types, jt.value] })}
+                style={{ fontSize: 11, padding: '4px 9px', borderRadius: 5, cursor: 'pointer', fontFamily: 'inherit', background: on ? `${T.accent}22` : 'transparent', color: on ? T.accent : T.text3, border: `1px solid ${on ? T.accent : T.border2}` }}>
+                {jt.label}
+              </button>
+            )
+          })}
+        </div>
+      </Field>
+
+      <div style={{ marginTop: 10 }}>
+        <button onClick={onRemove} style={pbtn(T.red)}>Delete template</button>
+      </div>
+    </div>
   )
 }
 

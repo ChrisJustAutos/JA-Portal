@@ -72,12 +72,25 @@ export default withAuth('view:diary', async (req, res, user) => {
   for (const f of EDITABLE) {
     if (f in body) patch[f] = body[f] === '' ? null : body[f]
   }
+  // Capture the prior status so we can fire follow-ups on the transition into
+  // a completed state (rather than every save while already completed).
+  let prevStatus: string | null = null
   if ('status' in body) {
     if (!BOOKING_STATUSES.includes(body.status)) return res.status(400).json({ error: 'invalid status' })
     patch.status = body.status
+    const { data: prev } = await db.from('workshop_bookings').select('status, completed_at').eq('id', id).maybeSingle()
+    prevStatus = prev?.status || null
+    // Stamp completed_at the first time it's marked done (drives follow-up timing).
+    if (body.status === 'done' && !(prev as any)?.completed_at) patch.completed_at = new Date().toISOString()
   }
 
   const { error } = await db.from('workshop_bookings').update(patch).eq('id', id)
   if (error) return res.status(500).json({ error: error.message })
+
+  // Job just completed → schedule post-job follow-up comms (best-effort).
+  const COMPLETE = ['done', 'invoiced', 'paid']
+  if (patch.status && patch.status !== prevStatus && COMPLETE.includes(patch.status) && !COMPLETE.includes(prevStatus || '')) {
+    try { const { queueFollowUps } = await import('../../../../lib/workshop-reminders'); await queueFollowUps(id) } catch { /* non-fatal */ }
+  }
   return res.status(200).json({ ok: true })
 })

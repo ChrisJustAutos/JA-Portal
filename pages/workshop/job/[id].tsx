@@ -24,6 +24,7 @@ import {
 import type { PortalUserSSR } from '../../../lib/authServer'
 import { T } from '../../../lib/ui/theme'
 import { useConfirm, useToast } from '../../../components/ui/Feedback'
+import { renderTemplate } from '../../../lib/workshop-comm-templates'
 import { money2 as money, fmtDateTime, fmtYmd as fmtDueDate } from '../../../lib/ui/format'
 
 interface Line {
@@ -337,11 +338,21 @@ export default function JobCardPage({ user }: { user: PortalUserSSR }) {
     } catch (e: any) { setInv({ busy: false, msg: e?.message || 'Un-finalise failed', needAccount: false }) }
   }
 
-  function openSms() {
+  async function openSms() {
     const bk = data?.booking
     const name = bk?.customer?.name ? String(bk.customer.name).split(' ')[0] : 'there'
     const v = bk?.vehicle ? vehicleLabel(bk.vehicle) : 'your vehicle'
-    setSms({ open: true, body: `Hi ${name}, your ${v} is ready for collection at Just Autos.`, busy: false, msg: '' })
+    let body = `Hi ${name}, your ${v} is ready for collection at Just Autos.`
+    // Prefill from the editable "Ready for collection" template if one exists.
+    try {
+      const r = await fetch('/api/workshop/comm-templates')
+      if (r.ok) {
+        const tmpls = (await r.json()).templates || []
+        const t = tmpls.find((x: any) => x.trigger === 'ready' && x.channel === 'sms')
+        if (t?.body) body = renderTemplate(t.body, { first_name: name, customer_name: bk?.customer?.name || '', vehicle: v, rego: bk?.vehicle?.rego || '', business_name: 'Just Autos' })
+      }
+    } catch { /* fall back to the default text */ }
+    setSms({ open: true, body, busy: false, msg: '' })
   }
   async function sendSmsNow() {
     setSms(s => ({ ...s, busy: true, msg: '' }))
