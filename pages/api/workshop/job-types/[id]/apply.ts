@@ -37,19 +37,12 @@ export default withAuth('edit:bookings', async (req, res) => {
 
   const { data: tmplLines } = await db.from('workshop_job_type_lines').select('*').eq('job_type_id', jobTypeId).order('sort_order', { ascending: true })
 
-  // Carry the job type's work-done description onto the booking so it shows on
-  // the job-card checklist + the invoice. Skip if the caller's already set it.
-  if (!linesOnly && (jobType as any).description) {
-    const jtDesc = String((jobType as any).description).trim()
-    const { data: bk } = await db.from('workshop_bookings').select('description').eq('id', bookingId).maybeSingle()
-    const existing = String((bk as any)?.description || '').trim()
-    let next = existing
-    if (!existing) next = jtDesc
-    else if (!existing.includes(jtDesc)) next = `${existing}\n\n${jtDesc}`
-    if (next !== existing) {
-      await db.from('workshop_bookings').update({ description: next }).eq('id', bookingId)
-    }
-  }
+  // NOTE: the job type's work-done description is inserted as a 'description'
+  // LINE in the invoice (below), grouping the parts that belong to it — it is
+  // deliberately NOT appended to the booking's top work-description box, so a
+  // multi-job invoice reads as: [description] parts, [description] parts, …
+  // (linesOnly retained for callers that only want the lines.)
+  void linesOnly
 
   // Carry the job type's checklist items onto the booking's tickable checklist
   // (skip any whose text is already present, so re-applying doesn't duplicate).
@@ -62,19 +55,24 @@ export default withAuth('edit:bookings', async (req, res) => {
     if (adds.length) await db.from('workshop_bookings').update({ checklist: [...cur, ...adds] }).eq('id', bookingId)
   }
 
-  // Append the template's priced lines after the booking's existing lines,
-  // headed by a 'description' row with the job type's name — so the invoice
-  // groups as "Logbook Service" then the labour/parts that belong to it.
+  // Append, after the booking's existing lines: a 'description' line carrying
+  // the job type's FULL work-done description (its name if it has none), then
+  // the template labour/parts. So each applied job type adds its own block —
+  // [full description] then its parts — below whatever's already on the
+  // invoice, in the order they were added.
+  const headingText = String((jobType as any).description || '').trim() || String((jobType as any).name || '').trim() || null
+  const tmpl = tmplLines || []
   let added = 0
-  if (tmplLines && tmplLines.length) {
+  if (headingText || tmpl.length) {
     const { data: existing } = await db.from('workshop_booking_lines').select('sort_order').eq('booking_id', bookingId).order('sort_order', { ascending: false }).limit(1)
     let nextSort = (existing && existing[0] ? Number(existing[0].sort_order) || 0 : 0) + 1
-    const heading = {
-      booking_id: bookingId, line_type: 'description', description: (jobType as any).name || null,
+    const rows: any[] = []
+    if (headingText) rows.push({
+      booking_id: bookingId, line_type: 'description', description: headingText,
       part_number: null, qty: 0, unit_price_ex_gst: 0, gst_rate: 0.10, inventory_id: null,
       total_ex_gst: 0, sort_order: nextSort++,
-    }
-    const rows: any[] = tmplLines.map((l: any) => ({
+    })
+    for (const l of tmpl as any[]) rows.push({
       booking_id: bookingId,
       line_type: l.line_type,
       description: l.description,
@@ -85,11 +83,12 @@ export default withAuth('edit:bookings', async (req, res) => {
       inventory_id: l.inventory_id,
       total_ex_gst: Math.round((Number(l.qty) || 0) * (Number(l.unit_price_ex_gst) || 0) * 100) / 100,
       sort_order: nextSort++,
-    }))
-    if ((jobType as any).name) rows.unshift(heading)
-    const { error } = await db.from('workshop_booking_lines').insert(rows)
-    if (error) return res.status(500).json({ error: error.message })
-    added = rows.length
+    })
+    if (rows.length) {
+      const { error } = await db.from('workshop_booking_lines').insert(rows)
+      if (error) return res.status(500).json({ error: error.message })
+      added = rows.length
+    }
   }
 
   return res.status(200).json({ ok: true, added, job_type: (jobType as any).code || (jobType as any).name })

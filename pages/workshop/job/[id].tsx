@@ -855,10 +855,11 @@ function LineRow({ line, canEdit, index, onPatch, onDelete, onMove, dragOver, on
   const dropEdge = dragOver ? { boxShadow: `inset 0 2px 0 0 ${T.accent}` } : {}
   if (line.line_type === 'description') {
     return (
-      <div {...dragProps} style={{ display: 'grid', gridTemplateColumns: '70px 1fr 84px', gap: 8, padding: '8px 14px', borderTop: `1px solid ${T.border}`, alignItems: 'center', background: T.bg3, ...dropEdge }}>
-        <span style={{ fontSize: 10, color: T.text3, textTransform: 'uppercase' }}>Desc</span>
-        <input value={desc} disabled={!canEdit} onChange={e => setDesc(e.target.value)} onBlur={() => desc !== (line.description || '') && onPatch({ description: desc })}
-          placeholder="Description / heading — the items below belong to it" style={{ ...cellInp, fontWeight: 600, background: 'transparent', border: `1px solid transparent` }} />
+      <div {...dragProps} style={{ display: 'grid', gridTemplateColumns: '70px 1fr 84px', gap: 8, padding: '8px 14px', borderTop: `1px solid ${T.border}`, alignItems: 'start', background: T.bg3, ...dropEdge }}>
+        <span style={{ fontSize: 10, color: T.text3, textTransform: 'uppercase', paddingTop: 6 }}>Desc</span>
+        <textarea value={desc} disabled={!canEdit} rows={2} onChange={e => setDesc(e.target.value)} onBlur={() => desc !== (line.description || '') && onPatch({ description: desc })}
+          placeholder="Job description — the parts/labour below belong to it"
+          style={{ ...cellInp, fontWeight: 600, lineHeight: 1.4, resize: 'vertical', minHeight: 36, fontFamily: 'inherit', whiteSpace: 'pre-wrap' }} />
         {controls}
       </div>
     )

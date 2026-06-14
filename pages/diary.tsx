@@ -740,9 +740,9 @@ function BookingModal({ initial, techs, canEdit, onClose, onSaved }: {
   const [models, setModels] = useState<Array<{ id: string; name: string }>>([])
   const [vehicleModelId, setVehicleModelId] = useState<string | null>(null)
 
-  // Imported job-type presets. Booking can stack multiple — each one's
-  // description appends to the booking's description, and on save the lines
-  // from each picked preset get applied in sequence.
+  // Imported job-type presets. Booking can stack multiple — on save, each
+  // picked preset's full description + its labour/parts are appended to the
+  // invoice as its own block (apply endpoint), in the order added.
   const [presets, setPresets] = useState<Array<{ id: string; name: string; description: string | null; default_duration_min: number | null; model_ids: string[] }>>([])
   const [applyPresetIds, setApplyPresetIds] = useState<string[]>([])
   const [presetToAdd, setPresetToAdd] = useState<string>('')
@@ -767,20 +767,12 @@ function BookingModal({ initial, techs, canEdit, onClose, onSaved }: {
     if (applyPresetIds.includes(id)) { setPresetToAdd(''); return }  // already added
     setApplyPresetIds(prev => [...prev, id])
     setPresetToAdd('')
-    const p = presets.find(x => x.id === id)
-    if (!p?.description) return
-    const jt = String(p.description).trim()
-    setDescription(prev => {
-      const cur = (prev || '').trim()
-      if (!cur) return jt
-      if (cur.includes(jt)) return cur
-      return `${cur}\n\n${jt}`
-    })
+    // The job type's full description is inserted as a 'description' LINE on
+    // the invoice (apply endpoint), grouping its parts — not folded into the
+    // top work-description box, so each job type keeps its own block.
   }
   function removePreset(id: string) {
     setApplyPresetIds(prev => prev.filter(x => x !== id))
-    // We deliberately DON'T strip the description text — the user may have
-    // edited it. If they want it gone they can do so manually.
   }
 
   async function save() {
