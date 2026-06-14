@@ -5,7 +5,7 @@
 // inventory picker), live totals, and the vehicle's prior service history.
 // Reads/writes via /api/workshop/* (service-role, gated view:diary/edit:bookings).
 
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useRef } from 'react'
 import Head from 'next/head'
 import Link from 'next/link'
 import { useRouter } from 'next/router'
@@ -80,9 +80,15 @@ export default function JobCardPage({ user }: { user: PortalUserSSR }) {
   // Work description — editable on the invoice tab; pushes to the MYOB invoice Comment.
   const [workDesc, setWorkDesc] = useState('')
   useEffect(() => { if (data?.booking) setWorkDesc(data.booking.description || '') }, [data?.booking?.id])
-  // Drag-to-reorder line items (alongside the ↑/↓ buttons).
+  // Drag-to-reorder line items (alongside the ↑/↓ buttons). Refs mirror the
+  // state so the touch pointer-up handler (captured once at grab time) reads
+  // the latest indices rather than a stale closure.
   const [dragIdx, setDragIdx] = useState<number | null>(null)
   const [overIdx, setOverIdx] = useState<number | null>(null)
+  const dragIdxRef = useRef<number | null>(null)
+  const overIdxRef = useRef<number | null>(null)
+  const setDrag = (i: number | null) => { dragIdxRef.current = i; setDragIdx(i) }
+  const setOver = (i: number | null) => { overIdxRef.current = i; setOverIdx(i) }
 
   const load = useCallback(async () => {
     if (!id) return
@@ -191,6 +197,13 @@ export default function JobCardPage({ user }: { user: PortalUserSSR }) {
   // any line that drifted (handles legacy duplicate sort_orders too).
   async function moveLine(idx: number, dir: -1 | 1) {
     await reorderLines(idx, idx + dir)
+  }
+  // Commit the current drag (reads refs so the touch pointer-up sees fresh
+  // indices) then clear it.
+  function dropLine() {
+    const from = dragIdxRef.current, to = overIdxRef.current
+    setDrag(null); setOver(null)
+    if (from !== null && to !== null) reorderLines(from, to)
   }
   // Move a line from one index to another (drag-drop and ↑/↓), renumbering
   // sort_order = array index. Optimistic so the row jumps immediately.
@@ -607,10 +620,10 @@ export default function JobCardPage({ user }: { user: PortalUserSSR }) {
                           <LineRow key={l.id} line={l} canEdit={canEdit} index={i}
                             onPatch={(p) => patchLine(l.id, p)} onDelete={() => deleteLine(l.id)} onMove={(dir) => moveLine(i, dir)}
                             dragOver={overIdx === i && dragIdx !== null && dragIdx !== i}
-                            onDragStart={() => setDragIdx(i)}
-                            onDragOver={() => setOverIdx(i)}
-                            onDrop={() => { if (dragIdx !== null) reorderLines(dragIdx, i); setDragIdx(null); setOverIdx(null) }}
-                            onDragEnd={() => { setDragIdx(null); setOverIdx(null) }} />
+                            onGrab={() => setDrag(i)}
+                            onHover={(idx) => setOver(idx)}
+                            onDropLine={dropLine}
+                            onCancel={() => { setDrag(null); setOver(null) }} />
                         ))}
 
                         {canEdit && (
@@ -776,11 +789,11 @@ function StatusPill({ status }: { status: BookingStatus }) {
   )
 }
 
-function LineRow({ line, canEdit, index, onPatch, onDelete, onMove, dragOver, onDragStart, onDragOver, onDrop, onDragEnd }: {
+function LineRow({ line, canEdit, index, onPatch, onDelete, onMove, dragOver, onGrab, onHover, onDropLine, onCancel }: {
   line: Line; canEdit: boolean; index: number
   onPatch: (p: any) => void; onDelete: () => void; onMove: (dir: -1 | 1) => void
   dragOver?: boolean
-  onDragStart?: () => void; onDragOver?: () => void; onDrop?: () => void; onDragEnd?: () => void
+  onGrab?: () => void; onHover?: (idx: number) => void; onDropLine?: () => void; onCancel?: () => void
 }) {
   const [desc, setDesc] = useState(line.description || '')
   const [qty, setQty] = useState(String(line.qty))
@@ -788,25 +801,57 @@ function LineRow({ line, canEdit, index, onPatch, onDelete, onMove, dragOver, on
   const [grabbing, setGrabbing] = useState(false)
   useEffect(() => { setDesc(line.description || ''); setQty(String(line.qty)); setPrice(String(line.unit_price_ex_gst)) }, [line.id, line.description, line.qty, line.unit_price_ex_gst])
   const lineTotal = (Number(line.total_ex_gst) ?? 0) || (Number(line.qty) * Number(line.unit_price_ex_gst))
+
+  // Touch / pen reordering: HTML5 drag never fires on touch, so for those
+  // pointer types we track the finger, find the row under it via
+  // elementFromPoint (rows carry data-line-index), and drop on pointer-up.
+  // Mouse keeps using native HTML5 drag (the draggable grip below).
+  function gripPointerDown(e: React.PointerEvent) {
+    if (!canEdit || e.pointerType === 'mouse') return
+    e.preventDefault()
+    setGrabbing(true)
+    onGrab?.()
+    const move = (ev: PointerEvent) => {
+      const el = document.elementFromPoint(ev.clientX, ev.clientY) as HTMLElement | null
+      const row = el?.closest('[data-line-index]') as HTMLElement | null
+      if (row) { const idx = Number(row.dataset.lineIndex); if (!Number.isNaN(idx)) onHover?.(idx) }
+    }
+    const end = (drop: boolean) => () => {
+      document.removeEventListener('pointermove', move)
+      document.removeEventListener('pointerup', up)
+      document.removeEventListener('pointercancel', cancel)
+      setGrabbing(false)
+      drop ? onDropLine?.() : onCancel?.()
+    }
+    const up = end(true), cancel = end(false)
+    document.addEventListener('pointermove', move, { passive: false })
+    document.addEventListener('pointerup', up)
+    document.addEventListener('pointercancel', cancel)
+  }
+
   const controls = canEdit ? (
     <span style={{ display: 'flex', gap: 0, justifyContent: 'flex-end', alignItems: 'center' }}>
-      {/* Grip is the only draggable element so the text inputs stay selectable. */}
+      {/* Grip is the only draggable element so the text inputs stay selectable.
+          touchAction:none lets a touch-drag start without scrolling the page. */}
       <span draggable
         onMouseDown={() => setGrabbing(true)}
-        onDragStart={(e) => { e.dataTransfer.effectAllowed = 'move'; onDragStart?.() }}
-        onDragEnd={() => { setGrabbing(false); onDragEnd?.() }}
-        title="Drag to reorder" style={{ cursor: 'grab', color: T.text3, fontSize: 13, padding: '0 3px', lineHeight: 1, userSelect: 'none' }}>⠿</span>
+        onDragStart={(e) => { e.dataTransfer.effectAllowed = 'move'; onGrab?.() }}
+        onDragEnd={() => { setGrabbing(false); onCancel?.() }}
+        onPointerDown={gripPointerDown}
+        title="Drag to reorder" style={{ cursor: 'grab', color: T.text3, fontSize: 15, padding: '0 4px', lineHeight: 1, userSelect: 'none', touchAction: 'none' }}>⠿</span>
       <button onClick={() => onMove(-1)} title="Move up" style={mvBtn}>↑</button>
       <button onClick={() => onMove(1)} title="Move down" style={mvBtn}>↓</button>
       <button onClick={onDelete} title="Remove" style={{ ...mvBtn, fontSize: 15 }}>×</button>
     </span>
   ) : <span/>
   // Row-level drag-drop wiring: the grip starts the drag, any row is a drop
-  // target. A top border marks where the dragged line will land.
-  const dragProps = canEdit ? {
-    onDragOver: (e: React.DragEvent) => { e.preventDefault(); onDragOver?.() },
-    onDrop: (e: React.DragEvent) => { e.preventDefault(); onDrop?.() },
-  } : {}
+  // target (mouse via HTML5, touch via elementFromPoint). A top border marks
+  // where the dragged line will land. data-line-index is the touch lookup key.
+  const dragProps: any = { 'data-line-index': index }
+  if (canEdit) {
+    dragProps.onDragOver = (e: React.DragEvent) => { e.preventDefault(); onHover?.(index) }
+    dragProps.onDrop = (e: React.DragEvent) => { e.preventDefault(); onDropLine?.() }
+  }
   const dropEdge = dragOver ? { boxShadow: `inset 0 2px 0 0 ${T.accent}` } : {}
   if (line.line_type === 'description') {
     return (
@@ -898,7 +943,7 @@ function PartPicker({ onPick }: { onPick: (item: any) => void }) {
   )
 }
 
-const inp: React.CSSProperties = { padding: '5px 8px', background: T.bg3, border: `1px solid ${T.border}`, borderRadius: 5, color: T.text, fontSize: 12, fontFamily: 'inherit', outline: 'none', colorScheme: 'dark' }
+const inp: React.CSSProperties = { padding: '5px 8px', background: T.bg3, border: `1px solid ${T.border}`, borderRadius: 5, color: T.text, fontSize: 12, fontFamily: 'inherit', outline: 'none', colorScheme: 'dark', boxSizing: 'border-box' }
 const cellInp: React.CSSProperties = { width: '100%', padding: '5px 7px', background: T.bg3, border: `1px solid ${T.border}`, borderRadius: 4, color: T.text, fontSize: 12, fontFamily: 'inherit', outline: 'none', boxSizing: 'border-box' }
 function qbtn(color: string): React.CSSProperties {
   return { padding: '6px 12px', borderRadius: 6, fontSize: 12, fontFamily: 'inherit', fontWeight: 600, background: 'transparent', color, border: `1px solid ${color}55`, cursor: 'pointer' }
