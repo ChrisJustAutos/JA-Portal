@@ -23,7 +23,7 @@ import {
 
 import type { PortalUserSSR } from '../../../lib/authServer'
 import { T } from '../../../lib/ui/theme'
-import { useConfirm } from '../../../components/ui/Feedback'
+import { useConfirm, useToast } from '../../../components/ui/Feedback'
 import { money2 as money, fmtDateTime, fmtYmd as fmtDueDate } from '../../../lib/ui/format'
 
 interface Line {
@@ -61,6 +61,7 @@ export default function JobCardPage({ user }: { user: PortalUserSSR }) {
   const [savingStatus, setSavingStatus] = useState(false)
   const isAdmin = roleHasPermission(user.role, 'admin:settings')
   const confirmDialog = useConfirm()
+  const toast = useToast()
   const [inv, setInv] = useState<{ busy: boolean; msg: string; needAccount: boolean }>({ busy: false, msg: '', needAccount: false })
   const [acct, setAcct] = useState<{ candidates: any[]; sel: string; saving: boolean } | null>(null)
   const [sms, setSms] = useState<{ open: boolean; body: string; busy: boolean; msg: string }>({ open: false, body: '', busy: false, msg: '' })
@@ -137,7 +138,7 @@ export default function JobCardPage({ user }: { user: PortalUserSSR }) {
       patch.total_inc_gst = totals.inc
     }
     const ok = await patchBooking(patch)
-    if (ok) await load()
+    if (ok) { await load(); toast(`Marked “${BOOKING_STATUS_META[status]?.label || status}”`, 'success') }
     setSavingStatus(false)
     // On completion, prompt for the vehicle's next service / rego due dates
     // (drives the automated SMS reminders).
@@ -420,13 +421,13 @@ export default function JobCardPage({ user }: { user: PortalUserSSR }) {
                   </div>
                 </div>
 
-                {/* Quick status actions */}
+                {/* Quick status actions — the active stage is filled in. */}
                 {canEdit && (
                   <div style={{ display: 'flex', gap: 8, marginTop: 12, flexWrap: 'wrap', alignItems: 'center' }}>
-                    <button onClick={() => changeStatus('prepared')} style={qbtn(BOOKING_STATUS_META.prepared.color)}>📦 Prepared</button>
-                    <button onClick={() => changeStatus('in_progress')} style={qbtn(T.amber)}>▶ Start job</button>
-                    <button onClick={() => changeStatus('awaiting_parts')} style={qbtn(T.purple)}>⏸ Awaiting parts</button>
-                    <button onClick={() => changeStatus('done')} style={qbtn(T.green)}>✓ Finish job</button>
+                    <StageBtn cur={b.status} status="prepared" color={BOOKING_STATUS_META.prepared.color} label="📦 Prepared" busy={savingStatus} onClick={() => changeStatus('prepared')} />
+                    <StageBtn cur={b.status} status="in_progress" color={T.amber} label="▶ Start job" busy={savingStatus} onClick={() => changeStatus('in_progress')} />
+                    <StageBtn cur={b.status} status="awaiting_parts" color={T.purple} label="⏸ Awaiting parts" busy={savingStatus} onClick={() => changeStatus('awaiting_parts')} />
+                    <StageBtn cur={b.status} status="done" color={T.green} label="✓ Finish job" busy={savingStatus} onClick={() => changeStatus('done')} />
                     {!b.myob_invoice_uid ? (
                       <button onClick={createInvoice} disabled={inv.busy} style={qbtn(T.teal)}>{inv.busy ? '🧾 Finalising…' : '🧾 Finalise → MYOB'}</button>
                     ) : (
@@ -865,6 +866,18 @@ function StatusPill({ status }: { status: BookingStatus }) {
     <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '3px 10px', borderRadius: 4, background: `${m.color}1e`, border: `1px solid ${m.color}55`, color: m.color, fontSize: 11, fontWeight: 700 }}>
       <span style={{ width: 6, height: 6, borderRadius: '50%', background: m.color }} />{m.label}
     </span>
+  )
+}
+
+// A status quick-action — fills solid when it's the booking's current stage,
+// so it's obvious which one is active and that clicking did something.
+function StageBtn({ cur, status, color, label, busy, onClick }: { cur: BookingStatus; status: BookingStatus; color: string; label: string; busy: boolean; onClick: () => void }) {
+  const on = cur === status
+  return (
+    <button onClick={onClick} disabled={busy} style={{
+      padding: '6px 12px', borderRadius: 6, fontSize: 12, fontFamily: 'inherit', fontWeight: 600, cursor: busy ? 'wait' : 'pointer',
+      background: on ? color : 'transparent', color: on ? '#fff' : color, border: `1px solid ${on ? color : `${color}55`}`, opacity: busy ? 0.6 : 1,
+    }}>{on ? `✓ ${label.replace(/^[^ ]+ /, '')}` : label}</button>
   )
 }
 
