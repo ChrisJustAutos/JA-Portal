@@ -89,6 +89,9 @@ export default function JobCardPage({ user }: { user: PortalUserSSR }) {
   const overIdxRef = useRef<number | null>(null)
   const setDrag = (i: number | null) => { dragIdxRef.current = i; setDragIdx(i) }
   const setOver = (i: number | null) => { overIdxRef.current = i; setOverIdx(i) }
+  // Multi-select line items (bulk delete / move; ticking a job-type heading
+  // grabs its whole section down to the next heading).
+  const [selected, setSelected] = useState<Set<string>>(new Set())
 
   const load = useCallback(async () => {
     if (!id) return
@@ -198,6 +201,60 @@ export default function JobCardPage({ user }: { user: PortalUserSSR }) {
   async function moveLine(idx: number, dir: -1 | 1) {
     await reorderLines(idx, idx + dir)
   }
+  // ── Multi-select ──
+  // A job-type heading + every line beneath it until the next heading.
+  function sectionIds(startIdx: number): string[] {
+    const ids = [lines[startIdx].id]
+    for (let i = startIdx + 1; i < lines.length; i++) {
+      if (lines[i].line_type === 'description') break
+      ids.push(lines[i].id)
+    }
+    return ids
+  }
+  function toggleSelect(index: number) {
+    const line = lines[index]
+    if (!line) return
+    const ids = line.line_type === 'description' ? sectionIds(index) : [line.id]
+    setSelected(prev => {
+      const next = new Set(prev)
+      const allOn = ids.every(id => next.has(id))
+      for (const id of ids) { if (allOn) next.delete(id); else next.add(id) }
+      return next
+    })
+  }
+  function toggleSelectAll() {
+    setSelected(prev => prev.size === lines.length && lines.length > 0 ? new Set() : new Set(lines.map(l => l.id)))
+  }
+  async function deleteSelected() {
+    const ids = lines.filter(l => selected.has(l.id)).map(l => l.id)
+    if (!ids.length) return
+    const headings = lines.filter(l => selected.has(l.id) && l.line_type === 'description').length
+    if (!(await confirmDialog({
+      title: `Delete ${ids.length} line${ids.length === 1 ? '' : 's'}?`,
+      message: headings ? 'This includes job-type heading(s) and their items.' : undefined,
+      confirmLabel: 'Delete', danger: true,
+    }))) return
+    const idset = new Set(ids)
+    setData(d => d ? { ...d, lines: d.lines.filter(l => !idset.has(l.id)) } : d)  // optimistic
+    setSelected(new Set())
+    await Promise.all(ids.map(id => fetch(`/api/workshop/booking-lines?id=${encodeURIComponent(id)}`, { method: 'DELETE' })))
+    await load()
+  }
+  // Shift every selected line one step, preserving relative order + gaps.
+  async function moveSelected(dir: -1 | 1) {
+    const arr = [...lines]
+    if (dir === -1) {
+      for (let i = 1; i < arr.length; i++) if (selected.has(arr[i].id) && !selected.has(arr[i - 1].id)) [arr[i - 1], arr[i]] = [arr[i], arr[i - 1]]
+    } else {
+      for (let i = arr.length - 2; i >= 0; i--) if (selected.has(arr[i].id) && !selected.has(arr[i + 1].id)) [arr[i], arr[i + 1]] = [arr[i + 1], arr[i]]
+    }
+    setData(d => d ? { ...d, lines: arr.map((l, i) => ({ ...l, sort_order: i })) } : d)  // optimistic
+    await Promise.all(arr.map((l, i) => Number(l.sort_order) !== i
+      ? fetch(`/api/workshop/booking-lines?id=${encodeURIComponent(l.id)}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sort_order: i }) })
+      : null))
+    await load()
+  }
+
   // Commit the current drag (reads refs so the touch pointer-up sees fresh
   // indices) then clear it.
   function dropLine() {
@@ -612,12 +669,27 @@ export default function JobCardPage({ user }: { user: PortalUserSSR }) {
                             rows={3} placeholder="Work carried out, summary for the customer…"
                             style={{ ...inp, width: '100%', resize: 'vertical', minHeight: 56, fontFamily: 'inherit', whiteSpace: 'pre-wrap' }} />
                         </div>
-                        <div style={{ display: 'grid', gridTemplateColumns: '70px 1fr 60px 90px 90px 84px', gap: 8, padding: '7px 14px', fontSize: 9, color: T.text3, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', background: T.bg3, borderBottom: `1px solid ${T.border}` }}>
+                        {/* Bulk-select action bar — appears when ≥1 line ticked. */}
+                        {canEdit && selected.size > 0 && (
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 14px', background: `${T.accent}14`, borderBottom: `1px solid ${T.border}`, flexWrap: 'wrap' }}>
+                            <span style={{ fontSize: 12, fontWeight: 600, color: T.text }}>{selected.size} selected</span>
+                            <span style={{ flex: 1 }} />
+                            <button onClick={() => moveSelected(-1)} style={qbtn(T.text2)}>↑ Move up</button>
+                            <button onClick={() => moveSelected(1)} style={qbtn(T.text2)}>↓ Move down</button>
+                            <button onClick={deleteSelected} style={qbtn(T.red)}>🗑 Delete selected</button>
+                            <button onClick={() => setSelected(new Set())} style={qbtn(T.text3)}>Clear</button>
+                          </div>
+                        )}
+                        <div style={{ display: 'grid', gridTemplateColumns: '28px 70px 1fr 60px 90px 90px 84px', gap: 8, padding: '7px 14px', fontSize: 9, color: T.text3, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', background: T.bg3, borderBottom: `1px solid ${T.border}`, alignItems: 'center' }}>
+                          {canEdit
+                            ? <input type="checkbox" title="Select all" checked={lines.length > 0 && selected.size === lines.length} onChange={toggleSelectAll} style={{ cursor: 'pointer' }} />
+                            : <div />}
                           <div>Type</div><div>Description</div><div style={{ textAlign: 'right' }}>Qty</div><div style={{ textAlign: 'right' }}>Unit ex</div><div style={{ textAlign: 'right' }}>Total ex</div><div/>
                         </div>
                         {lines.length === 0 && <div style={{ padding: 20, textAlign: 'center', fontSize: 12, color: T.text3 }}>No lines yet.</div>}
                         {lines.map((l, i) => (
                           <LineRow key={l.id} line={l} canEdit={canEdit} index={i}
+                            selected={selected.has(l.id)} onToggleSelect={() => toggleSelect(i)}
                             onPatch={(p) => patchLine(l.id, p)} onDelete={() => deleteLine(l.id)} onMove={(dir) => moveLine(i, dir)}
                             dragOver={overIdx === i && dragIdx !== null && dragIdx !== i}
                             onGrab={() => setDrag(i)}
@@ -789,8 +861,9 @@ function StatusPill({ status }: { status: BookingStatus }) {
   )
 }
 
-function LineRow({ line, canEdit, index, onPatch, onDelete, onMove, dragOver, onGrab, onHover, onDropLine, onCancel }: {
+function LineRow({ line, canEdit, index, selected, onToggleSelect, onPatch, onDelete, onMove, dragOver, onGrab, onHover, onDropLine, onCancel }: {
   line: Line; canEdit: boolean; index: number
+  selected?: boolean; onToggleSelect?: () => void
   onPatch: (p: any) => void; onDelete: () => void; onMove: (dir: -1 | 1) => void
   dragOver?: boolean
   onGrab?: () => void; onHover?: (idx: number) => void; onDropLine?: () => void; onCancel?: () => void
@@ -853,9 +926,14 @@ function LineRow({ line, canEdit, index, onPatch, onDelete, onMove, dragOver, on
     dragProps.onDrop = (e: React.DragEvent) => { e.preventDefault(); onDropLine?.() }
   }
   const dropEdge = dragOver ? { boxShadow: `inset 0 2px 0 0 ${T.accent}` } : {}
+  const selBg = selected ? { background: `${T.accent}1a` } : {}
+  const checkbox = canEdit
+    ? <input type="checkbox" checked={!!selected} onChange={onToggleSelect} style={{ cursor: 'pointer' }} title={line.line_type === 'description' ? 'Select this job type + its items' : 'Select line'} />
+    : <span />
   if (line.line_type === 'description') {
     return (
-      <div {...dragProps} style={{ display: 'grid', gridTemplateColumns: '70px 1fr 84px', gap: 8, padding: '8px 14px', borderTop: `1px solid ${T.border}`, alignItems: 'start', background: T.bg3, ...dropEdge }}>
+      <div {...dragProps} style={{ display: 'grid', gridTemplateColumns: '28px 70px 1fr 84px', gap: 8, padding: '8px 14px', borderTop: `1px solid ${T.border}`, alignItems: 'start', background: T.bg3, ...selBg, ...dropEdge }}>
+        <span style={{ paddingTop: 5 }}>{checkbox}</span>
         <span style={{ fontSize: 10, color: T.text3, textTransform: 'uppercase', paddingTop: 6 }}>Desc</span>
         <textarea value={desc} disabled={!canEdit} rows={2} onChange={e => setDesc(e.target.value)} onBlur={() => desc !== (line.description || '') && onPatch({ description: desc })}
           placeholder="Job description — the parts/labour below belong to it"
@@ -865,7 +943,8 @@ function LineRow({ line, canEdit, index, onPatch, onDelete, onMove, dragOver, on
     )
   }
   return (
-    <div {...dragProps} style={{ display: 'grid', gridTemplateColumns: '70px 1fr 60px 90px 90px 84px', gap: 8, padding: '8px 14px', borderTop: `1px solid ${T.border}`, alignItems: 'center', opacity: grabbing ? 0.5 : 1, ...dropEdge }}>
+    <div {...dragProps} style={{ display: 'grid', gridTemplateColumns: '28px 70px 1fr 60px 90px 90px 84px', gap: 8, padding: '8px 14px', borderTop: `1px solid ${T.border}`, alignItems: 'center', opacity: grabbing ? 0.5 : 1, ...selBg, ...dropEdge }}>
+      {checkbox}
       <span style={{ fontSize: 10, color: T.text3, textTransform: 'uppercase' }}>{LINE_TYPE_LABEL[line.line_type] || line.line_type}</span>
       <input value={desc} disabled={!canEdit} onChange={e => setDesc(e.target.value)} onBlur={() => desc !== (line.description || '') && onPatch({ description: desc })}
         placeholder={line.part_number || 'Description'} style={cellInp} />
