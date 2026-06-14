@@ -73,7 +73,7 @@ export default function JobCardPage({ user }: { user: PortalUserSSR }) {
   const [credit, setCredit] = useState<{ open: boolean; mode: 'lines' | 'amount'; sel: Record<string, boolean>; qty: Record<string, string>; amount: string; reason: string; restock: boolean; refund: boolean; tender: string; busy: boolean; msg: string }>({ open: false, mode: 'lines', sel: {}, qty: {}, amount: '', reason: '', restock: false, refund: false, tender: 'card', busy: false, msg: '' })
   const [jobTypes, setJobTypes] = useState<any[]>([])
   const [applyingJt, setApplyingJt] = useState(false)
-  const [tab, setTab] = useState<'invoice' | 'notes' | 'files' | 'activity' | 'history'>('invoice')
+  const [tab, setTab] = useState<'invoice' | 'checklist' | 'notes' | 'files' | 'activity' | 'history'>('invoice')
   const [dueSet, setDueSet] = useState<{ open: boolean; service: string; km: string; rego: string; busy: boolean; msg: string }>({ open: false, service: '', km: '', rego: '', busy: false, msg: '' })
   const [internalNotes, setInternalNotes] = useState('')
   useEffect(() => { if (data?.booking) setInternalNotes(data.booking.internal_notes || '') }, [data?.booking?.id])
@@ -110,6 +110,10 @@ export default function JobCardPage({ user }: { user: PortalUserSSR }) {
 
   useEffect(() => { load(); loadPayments() }, [load, loadPayments])
   useEffect(() => { (async () => { try { const r = await fetch('/api/workshop/job-types'); if (r.ok) setJobTypes((await r.json()).jobTypes || []) } catch { /* */ } })() }, [])
+  // Technicians — to show the lane name instead of its code (e.g. "Jye" not "jye-l2l6").
+  const [techs, setTechs] = useState<any[]>([])
+  useEffect(() => { (async () => { try { const r = await fetch('/api/workshop/technicians'); if (r.ok) setTechs((await r.json()).technicians || []) } catch { /* */ } })() }, [])
+  const techName = (code: string | null | undefined) => { if (!code) return '—'; return techs.find((t: any) => t.code === code)?.name || code }
 
   async function applyJobType(jobTypeId: string) {
     setApplyingJt(true)
@@ -628,15 +632,10 @@ export default function JobCardPage({ user }: { user: PortalUserSSR }) {
                       <FieldRow label="Start" value={fmtDateTime(b.starts_at)} mono />
                       <FieldRow label="End" value={fmtDateTime(b.ends_at)} mono />
                       {b.pickup_at && <FieldRow label="Collection" value={fmtDateTime(b.pickup_at)} mono accent={T.amber} />}
-                      <FieldRow label="Technician" value={b.technician_ext || '—'} />
+                      <FieldRow label="Technician" value={techName(b.technician_ext)} />
                       <FieldRow label="Bay" value={b.bay || '—'} />
                       <FieldRow label="Est. value" value={b.estimated_value ? money(b.estimated_value) : '—'} mono />
                       <FieldRow label="Category" value={jobTypeLabel(b.job_type) || '—'} />
-                    </Panel>
-
-                    <Panel title="Checklist">
-                      <JobChecklist items={Array.isArray((b as any).checklist) ? (b as any).checklist : []} canEdit={canEdit}
-                        onChange={async (items) => { await patchBooking({ checklist: items }); await load() }} />
                     </Panel>
 
                     {canEdit && (
@@ -653,6 +652,7 @@ export default function JobCardPage({ user }: { user: PortalUserSSR }) {
                   <div style={{ background: T.bg2, border: `1px solid ${T.border}`, borderRadius: 10, overflow: 'hidden' }}>
                     <div style={{ display: 'flex', borderBottom: `1px solid ${T.border}`, background: T.bg3 }}>
                       <TabBtn active={tab==='invoice'} onClick={() => setTab('invoice')} label="Invoice" badge={lines.length || undefined} />
+                      <TabBtn active={tab==='checklist'} onClick={() => setTab('checklist')} label="Checklist" badge={(Array.isArray((b as any).checklist) ? (b as any).checklist.length : 0) || undefined} />
                       <TabBtn active={tab==='notes'} onClick={() => setTab('notes')} label="Notes" />
                       <TabBtn active={tab==='files'} onClick={() => setTab('files')} label="Files & photos" />
                       <TabBtn active={tab==='activity'} onClick={() => setTab('activity')} label="Activity / time" />
@@ -748,9 +748,16 @@ export default function JobCardPage({ user }: { user: PortalUserSSR }) {
                       </>
                     )}
 
+                    {tab === 'checklist' && (
+                      <div style={{ padding: 16 }}>
+                        <JobChecklist items={Array.isArray((b as any).checklist) ? (b as any).checklist : []} canEdit={canEdit}
+                          onChange={async (items) => { await patchBooking({ checklist: items }); await load() }} />
+                      </div>
+                    )}
+
                     {tab === 'notes' && (
                       <div style={{ padding: 20, fontSize: 12, color: T.text3, lineHeight: 1.6 }}>
-                        Per-note timeline (timestamped, with author) lands in the next batch. For now, the "Internal notes" panel on the left holds staff-only notes, and "Job checklist" holds the work narrative that appears on the invoice.
+                        Per-note timeline (timestamped, with author) lands in the next batch. For now, the "Internal notes" panel on the left holds staff-only notes, and the Checklist tab holds the work steps.
                       </div>
                     )}
 
