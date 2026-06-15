@@ -92,7 +92,7 @@ export default function VehiclesPage({ user }: { user: PortalUserSSR }) {
                 />
                 {loading && <span style={{ position:'absolute', right:14, top:'50%', transform:'translateY(-50%)', fontSize:11, color:T.text3 }}>Loading…</span>}
               </div>
-              <div style={{ display:'flex', gap:4 }}>
+              <div style={{ display:'flex', gap:4, flexShrink:0 }}>
                 <Chip label="All" active={due==='all'} onClick={() => { setDue('all'); setOffset(0) }} />
                 <Chip label="Due soon" active={due==='soon'} onClick={() => { setDue('soon'); setOffset(0) }} c={T.amber} />
                 <Chip label="Overdue" active={due==='overdue'} onClick={() => { setDue('overdue'); setOffset(0) }} c={T.red} />
