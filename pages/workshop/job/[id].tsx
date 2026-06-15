@@ -415,7 +415,7 @@ export default function JobCardPage({ user }: { user: PortalUserSSR }) {
         <WorkshopTabs active="diary" role={user.role} />
 
         <div style={{ flex: 1, overflow: 'auto', background: T.bg, padding: 20 }}>
-          <div style={{ maxWidth: 1500, margin: '0 auto' }}>
+          <div style={{ margin: '0 auto' }}>
             <Link href="/diary" style={{ fontSize: 12, color: T.text2, textDecoration: 'none' }}>‹ Back to diary</Link>
 
             {loading ? (

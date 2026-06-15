@@ -62,7 +62,7 @@ export default function PurchaseOrdersPage({ user }: { user: PortalUserSSR }) {
         <WorkshopTabs active="inventory" role={user.role} />
         <InventoryTabs active="po" role={user.role} />
         <div style={{ flex: 1, overflowY: 'auto' }}>
-          <div style={{ maxWidth: 1000, margin: '0 auto', padding: '18px 22px' }}>
+          <div style={{ margin: '0 auto', padding: '18px 22px' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14, flexWrap: 'wrap' }}>
               <h1 style={{ fontSize: 19, fontWeight: 600, margin: 0 }}>Purchase Orders</h1>
               <span style={{ flex: 1 }} />

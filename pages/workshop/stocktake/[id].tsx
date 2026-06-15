@@ -88,7 +88,7 @@ export default function WorkshopStocktakeCountPage({ user }: { user: PortalUserS
         <PortalTopBar activeId="inventory" currentUserRole={user.role} currentUserVisibleTabs={user.visibleTabs} currentUserName={user.displayName} currentUserEmail={user.email} />
         <InventoryTabs active="stocktake2" role={user.role} />
         <div style={{ flex:1, overflowY:'auto' }}>
-          <div style={{ maxWidth:1200, margin:'0 auto', padding:'20px 28px' }}>
+          <div style={{ margin:'0 auto', padding:'20px 28px' }}>
             <Link href="/workshop/stocktake" style={{ fontSize:11, color:T.text3, textDecoration:'none', fontFamily:'monospace' }}>← Stocktakes</Link>
             {!st && <div style={{ marginTop:14, fontSize:13, color:T.text3 }}>Loading…</div>}
 

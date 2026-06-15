@@ -101,7 +101,7 @@ export default function WorkshopSettingsPage({ user }: { user: PortalUserSSR }) 
         {!embed && <PortalTopBar activeId="settings" currentUserRole={user.role} currentUserVisibleTabs={user.visibleTabs} currentUserName={user.displayName} currentUserEmail={user.email} />}
 
         <div style={{ flex: embed ? undefined : 1, overflow: embed ? 'visible' : 'auto', background: T.bg, padding: embed ? 4 : 20 }}>
-          <div style={{ maxWidth: 1200, margin: '0 auto' }}>
+          <div style={{ margin: '0 auto' }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: embed ? 'flex-end' : 'space-between', marginBottom: 6, minHeight: 18 }}>
               {!embed && <Link href="/diary" style={{ fontSize: 12, color: T.text2, textDecoration: 'none' }}>‹ Back to diary</Link>}
               {flash && <span style={{ fontSize: 12, color: flash.includes('✓') || flash.startsWith('Saved') || flash.startsWith('Retired') || flash.startsWith('Removed') ? T.green : T.amber }}>{flash}</span>}

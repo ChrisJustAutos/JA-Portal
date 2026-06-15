@@ -64,7 +64,7 @@ export default function WorkshopStocktakeListPage({ user }: { user: PortalUserSS
           currentUserRole={user.role} currentUserVisibleTabs={user.visibleTabs} currentUserName={user.displayName} currentUserEmail={user.email} />
         <InventoryTabs active="stocktake2" role={user.role} />
         <div style={{ flex:1, overflowY:'auto' }}>
-          <div style={{ maxWidth:1200, margin:'0 auto', padding:'24px 28px' }}>
+          <div style={{ margin:'0 auto', padding:'24px 28px' }}>
             <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:16, gap:12, flexWrap:'wrap' }}>
               <div>
                 <h1 style={{ fontSize:22, fontWeight:600, margin:0 }}>Stocktake — portal</h1>

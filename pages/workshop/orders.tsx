@@ -126,7 +126,7 @@ export default function WorkshopOrdersPage({ user }: { user: PortalUserSSR }) {
         <WorkshopTabs active="orders" role={user.role} />
 
         <div style={{ flex: 1, overflow: 'auto', background: T.bg }}>
-          <div style={{ maxWidth: 1100, margin: '0 auto', padding: '20px 24px' }}>
+          <div style={{ margin: '0 auto', padding: '20px 24px' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginBottom: 16 }}>
               <span style={{ fontSize: 15, fontWeight: 600 }}>Parts orders</span>
               <div style={{ display: 'flex', gap: 4, marginLeft: 8 }}>

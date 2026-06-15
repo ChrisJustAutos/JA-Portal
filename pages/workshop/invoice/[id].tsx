@@ -90,7 +90,7 @@ export default function InvoiceDetailPage({ user }: { user: PortalUserSSR }) {
         <PortalTopBar activeId="diary" currentUserRole={user.role} currentUserVisibleTabs={user.visibleTabs} currentUserName={user.displayName} currentUserEmail={user.email} />
         <WorkshopTabs active="invoices" role={user.role} />
         <div style={{ flex:1, overflow:'auto', background:T.bg }}>
-          <div style={{ maxWidth:1400, margin:'0 auto', padding:'24px 28px' }}>
+          <div style={{ margin:'0 auto', padding:'24px 28px' }}>
             <Link href="/workshop/invoices" style={{ fontSize:11, color:T.text3, textDecoration:'none', fontFamily:'monospace' }}>← Invoices</Link>
             {err && <div style={{ marginTop:14, padding:12, background:'#3a1d1d', border:`1px solid ${T.red}`, borderRadius:6, color:T.red, fontSize:13 }}>{err}</div>}
             {!data && !err && <div style={{ marginTop:14, fontSize:13, color:T.text3 }}>Loading…</div>}

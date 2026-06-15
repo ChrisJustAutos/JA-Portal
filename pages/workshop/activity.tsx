@@ -41,7 +41,7 @@ export default function WorkshopActivityPage({ user }: { user: PortalUserSSR }) 
       <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', background: T.bg, color: T.text, fontFamily: '"DM Sans", system-ui, sans-serif' }}>
         <PortalTopBar activeId="diary" currentUserRole={user.role} currentUserVisibleTabs={user.visibleTabs} currentUserName={user.displayName} currentUserEmail={user.email} />
         <div style={{ flex: 1, overflowY: 'auto' }}>
-          <div style={{ maxWidth: 900, margin: '0 auto', padding: '20px 24px' }}>
+          <div style={{ maxWidth: 1300, margin: '0 auto', padding: '20px 24px' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 14 }}>
               <h1 style={{ fontSize: 20, fontWeight: 600, margin: 0 }}>Workshop activity</h1>
               <span style={{ flex: 1 }} />

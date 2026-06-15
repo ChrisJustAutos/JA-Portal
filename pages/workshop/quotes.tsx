@@ -107,7 +107,7 @@ export default function QuotesPage({ user }: { user: PortalUserSSR }) {
             </div>
           ) : (
           <div style={{ flex: 1, overflow: 'auto', padding: 20 }}>
-            <div style={{ maxWidth: 1400, margin: '0 auto', background: T.bg2, border: `1px solid ${T.border}`, borderRadius: 10, overflow: 'hidden' }}>
+            <div style={{ margin: '0 auto', background: T.bg2, border: `1px solid ${T.border}`, borderRadius: 10, overflow: 'hidden' }}>
               <div style={{ display: 'grid', gridTemplateColumns: view === 'trash' ? '90px 1fr 1fr 110px 90px 90px' : '90px 1fr 1fr 110px 90px', gap: 8, padding: '9px 16px', background: T.bg3, borderBottom: `1px solid ${T.border}`, fontSize: 9, color: T.text3, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
                 <div>Status</div><div>Customer</div><div>Vehicle</div><div style={{ textAlign: 'right' }}>Total</div><div style={{ textAlign: 'right' }}>Created</div>{view === 'trash' && <div style={{ textAlign: 'right' }}></div>}
               </div>

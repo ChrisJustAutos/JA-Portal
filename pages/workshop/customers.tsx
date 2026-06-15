@@ -63,7 +63,7 @@ export default function CustomersPage({ user }: { user: PortalUserSSR }) {
         <PortalTopBar activeId="diary" currentUserRole={user.role} currentUserVisibleTabs={user.visibleTabs} currentUserName={user.displayName} currentUserEmail={user.email} />
         <WorkshopTabs active="customers" role={user.role} />
         <div style={{ flex:1, overflowY:'auto' }}>
-          <div style={{ maxWidth:1600, margin:'0 auto', padding:'24px 28px' }}>
+          <div style={{ margin:'0 auto', padding:'24px 28px' }}>
             <div style={{ display:'flex', alignItems:'baseline', justifyContent:'space-between', marginBottom:18, gap:16, flexWrap:'wrap' }}>
               <h1 style={{ fontSize:22, fontWeight:600, margin:0 }}>Customers</h1>
               <div style={{ fontSize:11, color:T.text3 }}>{total.toLocaleString()} total{debouncedQ ? ` matching "${debouncedQ}"` : ''}</div>

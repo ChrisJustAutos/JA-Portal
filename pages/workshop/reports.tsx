@@ -114,7 +114,7 @@ export default function WorkshopReportsPage({ user }: { user: PortalUserSSR }) {
           </div>
 
           <div style={{ flex:1, overflow:'auto', padding:20 }}>
-            <div style={{ maxWidth:1400, margin:'0 auto' }}>
+            <div style={{ margin:'0 auto' }}>
               {error && <div style={{ padding:'10px 14px', marginBottom:14, background:`${T.red}14`, border:`1px solid ${T.red}44`, borderRadius:8, color:T.red, fontSize:12 }}>{error}</div>}
 
               {/* KPI tiles */}

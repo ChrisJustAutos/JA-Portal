@@ -155,7 +155,7 @@ export default function InvoicesPage({ user }: { user: PortalUserSSR }) {
               </div>
             ) : (
               /* ─── DESKTOP: grid table ─── */
-              <div style={{ maxWidth:1600, margin:'0 auto', background:T.bg2, border:`1px solid ${T.border}`, borderRadius:10, overflow:'hidden' }}>
+              <div style={{ margin:'0 auto', background:T.bg2, border:`1px solid ${T.border}`, borderRadius:10, overflow:'hidden' }}>
                 <div style={{ display:'grid', gridTemplateColumns:'100px 1fr 90px 110px 110px 110px 110px 70px', gap:8, padding:'9px 16px', background:T.bg3, borderBottom:`1px solid ${T.border}`, fontSize:9, color:T.text3, fontWeight:600, textTransform:'uppercase', letterSpacing:'0.05em' }}>
                   <div>Date</div><div>Customer</div><div>Status</div><div style={{ textAlign:'right' }}>Total</div><div style={{ textAlign:'right' }}>Paid</div><div style={{ textAlign:'right' }}>Outstanding</div><div style={{ textAlign:'right' }}>Ext / MYOB</div><div style={{ textAlign:'right' }}></div>
                 </div>
