@@ -17,7 +17,6 @@ import { requirePageAuth } from '../../lib/authServer'
 import type { PortalUserSSR } from '../../lib/authServer'
 import { PAYMENT_TENDERS, JOB_TYPES } from '../../lib/workshop'
 import { COMM_TRIGGERS, COMM_VARS, CommTemplate } from '../../lib/workshop-comm-templates'
-import JobTypesManager from '../../components/workshop/JobTypesManager'
 import { T } from '../../lib/ui/theme'
 import { useConfirm, useToast } from '../../components/ui/Feedback'
 const inp: React.CSSProperties = { width: '100%', padding: '7px 9px', background: T.bg3, border: `1px solid ${T.border}`, borderRadius: 6, color: T.text, fontSize: 13, fontFamily: 'inherit', outline: 'none', boxSizing: 'border-box', colorScheme: 'dark' }
@@ -26,7 +25,7 @@ function pbtn(color: string, solid?: boolean): React.CSSProperties {
   return { padding: '7px 14px', borderRadius: 6, fontSize: 12, fontFamily: 'inherit', fontWeight: 600, cursor: 'pointer', background: solid ? color : 'transparent', color: solid ? '#fff' : color, border: `1px solid ${solid ? color : color + '55'}` }
 }
 
-type Tab = 'business' | 'invoicing' | 'accounts' | 'sms' | 'techs' | 'job-types'
+type Tab = 'business' | 'invoicing' | 'accounts' | 'sms' | 'techs'
 // A settings saver. `silent` (used by "Save all") suppresses the per-card flash
 // and throws on failure so the page can show one combined confirmation.
 type SaveFn = (patch: any, opts?: { silent?: boolean }) => void | Promise<void>
@@ -35,7 +34,6 @@ const TABS: { id: Tab; label: string }[] = [
   { id: 'business', label: 'Business & documents' },
   { id: 'invoicing', label: 'Invoicing (MYOB)' },
   { id: 'accounts', label: 'MYOB accounts' },
-  { id: 'job-types', label: 'Job types' },
   { id: 'sms', label: 'Communications' },
   { id: 'techs', label: 'Technicians & staff' },
 ]
@@ -128,7 +126,6 @@ export default function WorkshopSettingsPage({ user }: { user: PortalUserSSR }) 
                   {tab === 'business' && settings && <BusinessSection settings={settings} onSave={saveSettings} register={registerSaver} />}
                   {tab === 'invoicing' && settings && <InvoicingSection settings={settings} accounts={accounts} accountsError={accountsError} onSave={saveSettings} register={registerSaver} />}
                   {tab === 'accounts' && settings && <AccountsSection settings={settings} income={accounts} banks={bankAccounts} categories={trackingCategories} expense={expenseAccounts} accountsError={accountsError} onSave={saveSettings} />}
-                  {tab === 'job-types' && <JobTypesManager />}
                   {tab === 'sms' && settings && <><SmsSection settings={settings} onSave={saveSettings} register={registerSaver} /><div style={{ height: 14 }} /><CommTemplatesManager /></>}
                   {tab === 'techs' && <TechsMovedCard />}
                 </div>

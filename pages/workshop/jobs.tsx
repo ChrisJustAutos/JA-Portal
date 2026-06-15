@@ -63,9 +63,9 @@ export default function WorkshopJobsPage({ user }: { user: PortalUserSSR }) {
 
         <div style={{ flex: 1, overflow: 'auto', background: T.bg }}>
           {sub === 'types' ? (
-            <div style={{ maxWidth: 1100, margin: '0 auto', padding: '20px 24px' }}><JobTypesManager /></div>
+            <div style={{ maxWidth: 1700, margin: '0 auto', padding: '20px 28px' }}><JobTypesManager /></div>
           ) : (
-            <div style={{ maxWidth: 1300, margin: '0 auto', padding: '18px 24px' }}>
+            <div style={{ maxWidth: 1700, margin: '0 auto', padding: '18px 28px' }}>
               {/* Toolbar */}
               <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginBottom: 14 }}>
                 <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search customer, rego, vehicle, job type…"

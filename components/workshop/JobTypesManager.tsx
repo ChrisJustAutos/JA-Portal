@@ -63,7 +63,7 @@ export default function JobTypesManager() {
   return (
     <div style={{ display: 'flex', gap: 16, alignItems: 'flex-start', flexWrap: 'wrap' }}>
       {/* ── Left: list ── */}
-      <div style={{ flex: '0 0 290px', maxWidth: '100%', background: T.bg2, border: `1px solid ${T.border}`, borderRadius: 10, padding: 12, boxSizing: 'border-box' }}>
+      <div style={{ flex: '0 0 360px', maxWidth: '100%', background: T.bg2, border: `1px solid ${T.border}`, borderRadius: 10, padding: 14, boxSizing: 'border-box' }}>
         <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search job types…" style={{ ...inp, marginBottom: 10 }} />
         <div style={{ maxHeight: 520, overflowY: 'auto', margin: '0 -4px', padding: '0 4px' }}>
           {shown.length === 0 && <div style={{ fontSize: 12, color: T.text3, padding: '8px 4px' }}>{types.length === 0 ? 'No job types yet — add one below.' : `No matches for “${q}”.`}</div>}
@@ -88,7 +88,7 @@ export default function JobTypesManager() {
       </div>
 
       {/* ── Right: editor ── */}
-      <div style={{ flex: '1 1 380px', minWidth: 320, background: T.bg2, border: `1px solid ${T.border}`, borderRadius: 10, padding: 18, boxSizing: 'border-box' }}>
+      <div style={{ flex: '1 1 560px', minWidth: 420, background: T.bg2, border: `1px solid ${T.border}`, borderRadius: 10, padding: 20, boxSizing: 'border-box' }}>
         {view === 'models' ? (
           <ModelsEditor models={models} newModel={newModel} setNewModel={setNewModel} addModel={addModel}
             onDelete={async (m) => { if (await confirmDialog({ title: `Delete model “${m.name}”?`, message: 'It’s removed from all job types and vehicles.', danger: true })) modelApi(`/api/workshop/vehicle-models/${m.id}`, 'DELETE') }} />
