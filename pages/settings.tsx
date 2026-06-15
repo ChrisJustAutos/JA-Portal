@@ -233,7 +233,7 @@ function UsersTab({ currentUser }: { currentUser: PortalUserSSR }) {
   const [err, setErr] = useState('')
   const [q, setQ] = useState('')
   const [sel, setSel] = useState<{ kind: 'user' | 'tech' | 'invite'; id?: string } | null>(null)
-  const [newLane, setNewLane] = useState('')
+  const [crmRoster, setCrmRoster] = useState<string[]>([])
   const [invite, setInvite] = useState({ email: '', displayName: '', role: 'viewer' as UserRole })
   const [inviteTabs, setInviteTabs] = useState<string[]>(() => defaultTabsForRole('viewer'))
   const [inviting, setInviting] = useState(false)
@@ -246,10 +246,11 @@ function UsersTab({ currentUser }: { currentUser: PortalUserSSR }) {
 
   const load = useCallback(async () => {
     try {
-      const [ur, tr] = await Promise.all([fetch('/api/users'), fetch('/api/workshop/technicians')])
+      const [ur, tr, cr] = await Promise.all([fetch('/api/users'), fetch('/api/workshop/technicians'), fetch('/api/crm/stages').catch(() => null)])
       if (!ur.ok) throw new Error((await ur.json()).error || 'Failed to load users')
       setUsers((await ur.json()).users || [])
       if (tr.ok) setTechs((await tr.json()).technicians || [])
+      if (cr && cr.ok) { const d = await cr.json(); setCrmRoster(Array.isArray(d.settings?.round_robin_user_ids) ? d.settings.round_robin_user_ids : []) }
       setErr('')
     } catch (e: any) { setErr(e.message) } finally { setLoading(false) }
   }, [])
@@ -299,14 +300,12 @@ function UsersTab({ currentUser }: { currentUser: PortalUserSSR }) {
     if (!r.ok) toast((await r.json()).error || 'Failed', 'error')
     await load()
   }
-  async function addLaneNoLogin() {
-    const name = newLane.trim(); if (!name) return
-    setNewLane('')
-    const r = await fetch('/api/workshop/technicians', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name }) })
-    const d = await r.json().catch(() => ({}))
-    if (!r.ok) { toast(d.error || 'Failed', 'error'); return }
-    await load()
-    if (d.technician?.id) setSel({ kind: 'tech', id: d.technician.id })
+  // ── CRM round-robin membership (crm_settings.round_robin_user_ids) ──
+  async function toggleRoundRobin(userId: string, on: boolean) {
+    const next = on ? Array.from(new Set([...crmRoster, userId])) : crmRoster.filter(x => x !== userId)
+    setCrmRoster(next)   // optimistic
+    const r = await fetch('/api/crm/stages', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ settings: { round_robin_user_ids: next } }) })
+    if (!r.ok) { toast((await r.json()).error || 'Failed to update round-robin', 'error'); await load() }
   }
   async function removeTech(t: TechRow) {
     if (!(await confirmDialog({ title: `Remove ${t.name} from the diary?`, message: 'With bookings it’s retired (history kept); otherwise deleted. Any portal login is unaffected.', confirmLabel: 'Remove', danger: true }))) return
@@ -369,24 +368,24 @@ function UsersTab({ currentUser }: { currentUser: PortalUserSSR }) {
             )
           })}
 
-          <div style={{ fontSize: 10, color: T.text3, textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 700, margin: '14px 0 6px' }}>Diary lanes (no login)</div>
-          {laneOnly.map(t => {
-            const on = sel?.kind === 'tech' && sel.id === t.id
-            return (
-              <button key={t.id} onClick={() => setSel({ kind: 'tech', id: t.id })} style={{ ...rowBtn(on), opacity: t.active ? 1 : 0.5 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <span style={{ width: 8, height: 8, borderRadius: '50%', background: t.color || T.teal, flexShrink: 0 }} />
-                  <span style={{ fontSize: 13, fontWeight: 600, color: T.text }}>{t.name}</span>
-                </div>
-                <div style={{ fontSize: 10.5, color: T.text3 }}>{t.role || 'Diary lane'}{t.active ? '' : ' · retired'}</div>
-              </button>
-            )
-          })}
-          {laneOnly.length === 0 && <div style={{ fontSize: 11, color: T.text3, padding: '2px 4px 6px' }}>None — staff who never log in can be added here.</div>}
-          <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
-            <input value={newLane} onChange={e => setNewLane(e.target.value)} placeholder="New lane name…" style={{ ...fld, flex: 1 }} onKeyDown={e => { if (e.key === 'Enter') addLaneNoLogin() }} />
-            <button onClick={addLaneNoLogin} style={btn(T.text2)}>Add</button>
-          </div>
+          {laneOnly.length > 0 && (
+            <>
+              <div style={{ fontSize: 10, color: T.text3, textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 700, margin: '14px 0 6px' }}>Legacy lanes (no login)</div>
+              {laneOnly.map(t => {
+                const on = sel?.kind === 'tech' && sel.id === t.id
+                return (
+                  <button key={t.id} onClick={() => setSel({ kind: 'tech', id: t.id })} style={{ ...rowBtn(on), opacity: t.active ? 1 : 0.5 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <span style={{ width: 8, height: 8, borderRadius: '50%', background: t.color || T.teal, flexShrink: 0 }} />
+                      <span style={{ fontSize: 13, fontWeight: 600, color: T.text }}>{t.name}</span>
+                    </div>
+                    <div style={{ fontSize: 10.5, color: T.text3 }}>{t.role || 'Diary lane'}{t.active ? '' : ' · retired'}</div>
+                  </button>
+                )
+              })}
+              <div style={{ fontSize: 10, color: T.text3, padding: '4px 4px 0' }}>Link each to a login, or remove. New staff get a login + “Add to diary”.</div>
+            </>
+          )}
         </div>
       </div>
 
@@ -460,11 +459,19 @@ function UsersTab({ currentUser }: { currentUser: PortalUserSSR }) {
               </div>
               <TabPicker role={u.role} value={tabs} onChange={next => updateUser(u.id, { visible_tabs: next })} />
 
-              <div style={sectionLbl}>Workshop diary lane</div>
+              <div style={sectionLbl}>CRM lead assignment</div>
+              <label style={{ display: 'inline-flex', alignItems: 'center', gap: 8, cursor: 'pointer', fontSize: 12.5, color: T.text }}>
+                <input type="checkbox" checked={crmRoster.includes(u.id)} onChange={e => toggleRoundRobin(u.id, e.target.checked)} />
+                Include in website-lead round-robin
+                {crmRoster.includes(u.id) && <span style={{ fontSize: 11, color: T.text3, fontFamily: 'monospace' }}>turn #{crmRoster.indexOf(u.id) + 1}</span>}
+              </label>
+              <div style={{ fontSize: 10.5, color: T.text3, marginTop: 6 }}>New website leads are auto-assigned to round-robin members in turn. Untick to take this person out of the rotation.</div>
+
+              <div style={sectionLbl}>Workshop diary assignment</div>
               {selUserTech ? (
                 <LaneEditor tech={selUserTech} fld={fld} lbl={lbl} btn={btn} onPatch={patchTech} onRemove={() => removeTech(selUserTech)} />
               ) : (
-                <div style={{ fontSize: 12, color: T.text3 }}>Not on the workshop diary. <button onClick={() => addTechForUser(u)} style={{ ...btn(T.teal), marginLeft: 8 }}>+ Add diary lane</button></div>
+                <div style={{ fontSize: 12, color: T.text3 }}>Not assigned on the workshop diary. <button onClick={() => addTechForUser(u)} style={{ ...btn(T.teal), marginLeft: 8 }}>+ Add to diary</button></div>
               )}
             </div>
           )
