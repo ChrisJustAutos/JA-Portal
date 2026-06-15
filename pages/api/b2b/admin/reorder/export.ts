@@ -1,15 +1,16 @@
 // pages/api/b2b/admin/reorder/export.ts
-// GET — download the reorder sheet as .xlsx with LIVE FORMULAS (mirrors the JAWS
-// Stock Order master): editable Growth %, Cover months, Months-in-range and
-// per-row MOQ / Morgan's Judgment all recalculate in Excel.
+// GET — styled .xlsx export of the reorder sheet with LIVE FORMULAS (mirrors the
+// JAWS Stock Order master). Editable Growth % / Cover months / Months-in-range
+// param cells + per-row formulas; built with ExcelJS so it carries header fills,
+// borders, banding, frozen header, autofilter and number formats.
 // Permission: edit:b2b_catalogue.
 
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
-import * as XLSX from 'xlsx'
+import ExcelJS from 'exceljs'
 import { withAuth } from '../../../../../lib/authServer'
 import { monthsInRange, computeReorder, ReorderSettings } from '../../../../../lib/b2b-reorder'
 
-export const config = { maxDuration: 20 }
+export const config = { maxDuration: 30 }
 
 let _sb: SupabaseClient | null = null
 function sb(): SupabaseClient {
@@ -18,6 +19,11 @@ function sb(): SupabaseClient {
   return _sb
 }
 const num = (v: any) => Number(v) || 0
+const r2 = (n: number) => Math.round(n * 100) / 100
+
+// Palette
+const NAVY = 'FF1F3A5F', NAVY_TXT = 'FFFFFFFF', BAND = 'FFF4F7FB', BORDER = 'FFD1D5DB'
+const GREEN_FILL = 'FFE3F6E9', AMBER_FILL = 'FFFCEFD6', PARAM_FILL = 'FFEAF1FB'
 
 export default withAuth('edit:b2b_catalogue', async (req, res) => {
   if (req.method !== 'GET') { res.setHeader('Allow', 'GET'); return res.status(405).json({ error: 'GET only' }) }
@@ -30,54 +36,114 @@ export default withAuth('edit:b2b_catalogue', async (req, res) => {
   const coverMonths = Number(s?.forecast_months) || 0
   const months = monthsInRange(s?.from_date, s?.to_date)
   const settings: ReorderSettings = { from_date: s?.from_date || null, to_date: s?.to_date || null, growth_pct: growth, forecast_months: coverMonths }
-  const r2 = (n: number) => Math.round(n * 100) / 100
+  const list = items || []
 
-  const ws: XLSX.WorkSheet = {}
-  const set = (addr: string, cell: XLSX.CellObject) => { ws[addr] = cell }
+  const wb = new ExcelJS.Workbook()
+  const ws = wb.addWorksheet('Stock Order', { views: [{ state: 'frozen', ySplit: 6 }] })
 
-  // ── Editable parameters block (top-left) ──
-  set('A1', { t: 's', v: 'JAWS Stock Order' })
-  set('C1', { t: 's', v: s?.from_date && s?.to_date ? `Sales ${s.from_date} → ${s.to_date}` : 'Sales range not set' })
-  set('A2', { t: 's', v: 'Growth %' }); set('B2', { t: 'n', v: growth, z: '0%' })
-  set('A3', { t: 's', v: 'Cover months' }); set('B3', { t: 'n', v: coverMonths })
-  set('A4', { t: 's', v: 'Months in range' }); set('B4', { t: 'n', v: months })
+  // ── Title + editable parameter block (rows 1–4) ──
+  ws.getCell('A1').value = 'JAWS Stock Order'
+  ws.getCell('A1').font = { bold: true, size: 14 }
+  ws.getCell('C1').value = s?.from_date && s?.to_date ? `Sales ${s.from_date} → ${s.to_date}` : 'Sales range not set'
+  ws.getCell('C1').font = { italic: true, color: { argb: 'FF6B7280' } }
+  const params: Array<[string, string, any, string?]> = [
+    ['A2', 'Growth %', growth, '0%'],
+    ['A3', 'Cover months', coverMonths],
+    ['A4', 'Months in range', months],
+  ]
+  for (const [addr, label, val, fmt] of params) {
+    ws.getCell(addr).value = label
+    ws.getCell(addr).font = { bold: true, color: { argb: 'FF374151' } }
+    const valCell = ws.getCell(addr.replace('A', 'B'))
+    valCell.value = val
+    if (fmt) valCell.numFmt = fmt
+    for (const c of [ws.getCell(addr), valCell]) {
+      c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: PARAM_FILL } }
+      c.border = { top: { style: 'thin', color: { argb: BORDER } }, bottom: { style: 'thin', color: { argb: BORDER } }, left: { style: 'thin', color: { argb: BORDER } }, right: { style: 'thin', color: { argb: BORDER } } }
+    }
+  }
 
   // ── Header row (row 6) ──
-  const headers = ['Stock No.', 'Name', 'On Hand', 'Committed', 'Available', 'On Order', 'Total Sales', 'Monthly Avg', 'Monthly Round Up', '+Growth', 'Projected', 'Shortfall', 'Suggested', 'MOQ', "Morgan's Judgment", 'Final Order', 'Notes']
-  headers.forEach((h, c) => set(XLSX.utils.encode_cell({ r: 5, c }), { t: 's', v: h }))
+  const headers = [
+    'Stock No.', 'Name', 'On Hand', 'Committed', 'Available', 'On Order', 'Total Sales',
+    'Monthly Avg', 'Monthly Round Up', '+Growth', 'Projected',
+    'Estiamted On Hand After 3 Months', 'Adjusted Proposed New Order Volume', 'MOQ',
+    'Commited - New Order Volume', "Morgan's Judgment", 'Proposed New Order Volume', 'Notes',
+  ]
+  const HEAD_ROW = 6
+  headers.forEach((h, i) => {
+    const cell = ws.getCell(HEAD_ROW, i + 1)
+    cell.value = h
+    cell.font = { bold: true, color: { argb: NAVY_TXT }, size: 10 }
+    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: NAVY } }
+    cell.alignment = { vertical: 'middle', horizontal: i <= 1 ? 'left' : 'center', wrapText: true }
+    cell.border = { top: { style: 'thin', color: { argb: NAVY } }, bottom: { style: 'thin', color: { argb: NAVY } }, left: { style: 'thin', color: { argb: NAVY } }, right: { style: 'thin', color: { argb: NAVY } } }
+  })
+  ws.getRow(HEAD_ROW).height = 42
 
-  // ── Data rows (from row 7), with live formulas ──
-  const list = items || []
+  const thin = { style: 'thin' as const, color: { argb: BORDER } }
+  const allBorders = { top: thin, bottom: thin, left: thin, right: thin }
+
+  // ── Data rows (formulas + cached results) ──
   list.forEach((it: any, i: number) => {
-    const R = 7 + i  // 1-based Excel row
-    const c = computeReorder(it, settings, months)   // cached values so cells show without recalc
-    set(`A${R}`, { t: 's', v: String(it.sku || '') })
-    set(`B${R}`, { t: 's', v: String(it.name || '') })
-    set(`C${R}`, { t: 'n', v: num(it.on_hand) })                                      // On Hand
-    set(`D${R}`, { t: 'n', v: num(it.committed) })                                    // Committed
-    set(`E${R}`, { t: 'n', f: `C${R}-D${R}`, v: r2(c.available) })                    // Available
-    set(`F${R}`, { t: 'n', v: num(it.on_order) })                                     // On Order
-    set(`G${R}`, { t: 'n', v: num(it.sales_qty) })                                    // Total Sales
-    set(`H${R}`, { t: 'n', f: `IF($B$4=0,0,G${R}/$B$4)`, v: r2(c.monthlyAvg) })       // Monthly Avg
-    set(`I${R}`, { t: 'n', f: `ROUNDUP(H${R},0)`, v: c.monthlyRound })               // Monthly Round Up
-    set(`J${R}`, { t: 'n', f: `ROUNDUP(I${R}*(1+$B$2),0)`, v: c.withGrowth })         // +Growth
-    set(`K${R}`, { t: 'n', f: `J${R}*$B$3`, v: c.projected })                         // Projected
-    set(`L${R}`, { t: 'n', f: `K${R}-(E${R}+F${R})`, v: r2(c.shortfall) })            // Shortfall
-    set(`M${R}`, { t: 'n', f: `IF(MAX(L${R},0)=0,0,IF(N${R}>0,CEILING(MAX(L${R},0),N${R}),IF(MAX(L${R},0)<=5,CEILING(MAX(L${R},0),5),CEILING(MAX(L${R},0),15))))`, v: c.suggested }) // Suggested
-    if (it.moq != null) set(`N${R}`, { t: 'n', v: Number(it.moq) })                   // MOQ
-    if (it.morgans_judgment != null) set(`O${R}`, { t: 'n', v: Number(it.morgans_judgment) }) // Morgan's Judgment
-    set(`P${R}`, { t: 'n', f: `IF(O${R}="",M${R},O${R})`, v: c.finalOrder })          // Final Order
-    if (it.notes) set(`Q${R}`, { t: 's', v: String(it.notes) })
+    const R = HEAD_ROW + 1 + i
+    const c = computeReorder(it, settings, months)
+    const adjusted = Math.max(c.shortfall, 0)
+    const row = ws.getRow(R)
+    const cells: Record<string, any> = {
+      A: String(it.sku || ''),
+      B: String(it.name || ''),
+      C: num(it.on_hand),
+      D: num(it.committed),
+      E: { formula: `C${R}-D${R}`, result: r2(c.available) },
+      F: num(it.on_order),
+      G: num(it.sales_qty),
+      H: { formula: `IF($B$4=0,0,G${R}/$B$4)`, result: r2(c.monthlyAvg) },
+      I: { formula: `ROUNDUP(H${R},0)`, result: c.monthlyRound },
+      J: { formula: `ROUNDUP(I${R}*(1+$B$2),0)`, result: c.withGrowth },
+      K: { formula: `J${R}*$B$3`, result: c.projected },
+      L: { formula: `K${R}-(E${R}+F${R})`, result: r2(c.shortfall) },
+      M: { formula: `MAX(L${R},0)`, result: adjusted },
+      N: it.moq != null ? Number(it.moq) : null,
+      O: { formula: `IF(M${R}=0,0,IF(N${R}>0,CEILING(M${R},N${R}),IF(M${R}<=5,CEILING(M${R},5),CEILING(M${R},15))))`, result: c.suggested },
+      P: it.morgans_judgment != null ? Number(it.morgans_judgment) : null,
+      Q: { formula: `IF(P${R}="",O${R},P${R})`, result: c.finalOrder },
+      R: String(it.notes || ''),
+    }
+    for (const [col, val] of Object.entries(cells)) {
+      const cell = ws.getCell(`${col}${R}`)
+      if (val !== null) cell.value = val
+      cell.border = allBorders
+      cell.font = { size: 10 }
+      if (col === 'A') cell.font = { size: 10, name: 'Consolas' }
+      if (!['A', 'B', 'R'].includes(col)) cell.alignment = { horizontal: 'right' }
+      if (i % 2 === 1) cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: BAND } }
+    }
+    // Highlights
+    if (c.shortfall > 0) ws.getCell(`L${R}`).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: AMBER_FILL } }
+    const finalCell = ws.getCell(`Q${R}`)
+    finalCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: GREEN_FILL } }
+    finalCell.font = { size: 10, bold: true, color: { argb: 'FF1B7A3D' } }
+    if (it.morgans_judgment != null) ws.getCell(`P${R}`).font = { size: 10, bold: true, color: { argb: 'FFB7791F' } }
+    row.height = 16
   })
 
-  const lastRow = Math.max(6, 6 + list.length)
-  ws['!ref'] = XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: lastRow, c: 16 } })
-  ws['!cols'] = [{ wch: 16 }, { wch: 34 }, { wch: 9 }, { wch: 10 }, { wch: 9 }, { wch: 9 }, { wch: 11 }, { wch: 11 }, { wch: 13 }, { wch: 9 }, { wch: 10 }, { wch: 9 }, { wch: 10 }, { wch: 7 }, { wch: 16 }, { wch: 11 }, { wch: 30 }]
+  // Number format for the numeric columns
+  const lastRow = HEAD_ROW + list.length
+  for (let col = 3; col <= 17; col++) {
+    if (col === 14 || col === 16) continue // MOQ / Morgan's keep plain
+    ws.getColumn(col).numFmt = col === 8 ? '#,##0.0' : '#,##0'
+  }
 
-  const wb = XLSX.utils.book_new()
-  XLSX.utils.book_append_sheet(wb, ws, 'Stock Order')
-  const buf: Buffer = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' })
+  // Column widths
+  const widths = [16, 34, 9, 10, 9, 9, 11, 11, 13, 9, 10, 16, 16, 7, 16, 13, 16, 30]
+  widths.forEach((w, i) => { ws.getColumn(i + 1).width = w })
+
+  // Autofilter on the header row
+  if (list.length) ws.autoFilter = { from: { row: HEAD_ROW, column: 1 }, to: { row: lastRow, column: 18 } }
+
+  const buf = await wb.xlsx.writeBuffer()
   res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
   res.setHeader('Content-Disposition', `attachment; filename="JAWS-stock-order-${new Date().toISOString().slice(0, 10)}.xlsx"`)
-  return res.status(200).send(buf)
+  return res.status(200).send(Buffer.from(buf))
 })
