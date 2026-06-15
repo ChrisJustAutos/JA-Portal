@@ -7,7 +7,7 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
 import * as XLSX from 'xlsx'
 import { withAuth } from '../../../../../lib/authServer'
-import { monthsInRange } from '../../../../../lib/b2b-reorder'
+import { monthsInRange, computeReorder, ReorderSettings } from '../../../../../lib/b2b-reorder'
 
 export const config = { maxDuration: 20 }
 
@@ -29,6 +29,8 @@ export default withAuth('edit:b2b_catalogue', async (req, res) => {
   const growth = Number(s?.growth_pct) || 0
   const coverMonths = Number(s?.forecast_months) || 0
   const months = monthsInRange(s?.from_date, s?.to_date)
+  const settings: ReorderSettings = { from_date: s?.from_date || null, to_date: s?.to_date || null, growth_pct: growth, forecast_months: coverMonths }
+  const r2 = (n: number) => Math.round(n * 100) / 100
 
   const ws: XLSX.WorkSheet = {}
   const set = (addr: string, cell: XLSX.CellObject) => { ws[addr] = cell }
@@ -48,22 +50,23 @@ export default withAuth('edit:b2b_catalogue', async (req, res) => {
   const list = items || []
   list.forEach((it: any, i: number) => {
     const R = 7 + i  // 1-based Excel row
+    const c = computeReorder(it, settings, months)   // cached values so cells show without recalc
     set(`A${R}`, { t: 's', v: String(it.sku || '') })
     set(`B${R}`, { t: 's', v: String(it.name || '') })
-    set(`C${R}`, { t: 'n', v: num(it.on_hand) })          // On Hand
-    set(`D${R}`, { t: 'n', v: num(it.committed) })          // Committed
-    set(`E${R}`, { t: 'n', f: `C${R}-D${R}` })              // Available
-    set(`F${R}`, { t: 'n', v: num(it.on_order) })          // On Order
-    set(`G${R}`, { t: 'n', v: num(it.sales_qty) })          // Total Sales
-    set(`H${R}`, { t: 'n', f: `IF($B$4=0,0,G${R}/$B$4)` })  // Monthly Avg
-    set(`I${R}`, { t: 'n', f: `ROUNDUP(H${R},0)` })         // Monthly Round Up
-    set(`J${R}`, { t: 'n', f: `ROUNDUP(I${R}*(1+$B$2),0)` })// +Growth
-    set(`K${R}`, { t: 'n', f: `J${R}*$B$3` })               // Projected
-    set(`L${R}`, { t: 'n', f: `K${R}-(E${R}+F${R})` })      // Shortfall
-    set(`M${R}`, { t: 'n', f: `IF(MAX(L${R},0)=0,0,IF(N${R}>0,CEILING(MAX(L${R},0),N${R}),IF(MAX(L${R},0)<=5,CEILING(MAX(L${R},0),5),CEILING(MAX(L${R},0),15))))` }) // Suggested
-    if (it.moq != null) set(`N${R}`, { t: 'n', v: Number(it.moq) })                          // MOQ
-    if (it.morgans_judgment != null) set(`O${R}`, { t: 'n', v: Number(it.morgans_judgment) })// Morgan's Judgment
-    set(`P${R}`, { t: 'n', f: `IF(O${R}="",M${R},O${R})` }) // Final Order
+    set(`C${R}`, { t: 'n', v: num(it.on_hand) })                                      // On Hand
+    set(`D${R}`, { t: 'n', v: num(it.committed) })                                    // Committed
+    set(`E${R}`, { t: 'n', f: `C${R}-D${R}`, v: r2(c.available) })                    // Available
+    set(`F${R}`, { t: 'n', v: num(it.on_order) })                                     // On Order
+    set(`G${R}`, { t: 'n', v: num(it.sales_qty) })                                    // Total Sales
+    set(`H${R}`, { t: 'n', f: `IF($B$4=0,0,G${R}/$B$4)`, v: r2(c.monthlyAvg) })       // Monthly Avg
+    set(`I${R}`, { t: 'n', f: `ROUNDUP(H${R},0)`, v: c.monthlyRound })               // Monthly Round Up
+    set(`J${R}`, { t: 'n', f: `ROUNDUP(I${R}*(1+$B$2),0)`, v: c.withGrowth })         // +Growth
+    set(`K${R}`, { t: 'n', f: `J${R}*$B$3`, v: c.projected })                         // Projected
+    set(`L${R}`, { t: 'n', f: `K${R}-(E${R}+F${R})`, v: r2(c.shortfall) })            // Shortfall
+    set(`M${R}`, { t: 'n', f: `IF(MAX(L${R},0)=0,0,IF(N${R}>0,CEILING(MAX(L${R},0),N${R}),IF(MAX(L${R},0)<=5,CEILING(MAX(L${R},0),5),CEILING(MAX(L${R},0),15))))`, v: c.suggested }) // Suggested
+    if (it.moq != null) set(`N${R}`, { t: 'n', v: Number(it.moq) })                   // MOQ
+    if (it.morgans_judgment != null) set(`O${R}`, { t: 'n', v: Number(it.morgans_judgment) }) // Morgan's Judgment
+    set(`P${R}`, { t: 'n', f: `IF(O${R}="",M${R},O${R})`, v: c.finalOrder })          // Final Order
     if (it.notes) set(`Q${R}`, { t: 's', v: String(it.notes) })
   })
 
