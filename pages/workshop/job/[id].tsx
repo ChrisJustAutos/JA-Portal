@@ -392,6 +392,15 @@ export default function JobCardPage({ user }: { user: PortalUserSSR }) {
     ex = Math.round(ex * 100) / 100; gst = Math.round(gst * 100) / 100
     return { ex, gst, inc: Math.round((ex + gst) * 100) / 100 }
   })()
+  // Per-section subtotal (ex GST): a heading + its items until the next heading.
+  function sectionTotalAt(start: number): number {
+    let s = 0
+    for (let j = start + 1; j < lines.length; j++) {
+      if (lines[j].line_type === 'description') break
+      s += (Number(lines[j].total_ex_gst) ?? 0) || (Number(lines[j].qty) * Number(lines[j].unit_price_ex_gst)) || 0
+    }
+    return Math.round(s * 100) / 100
+  }
 
   const b = data?.booking
   const cust = b?.customer
@@ -700,6 +709,7 @@ export default function JobCardPage({ user }: { user: PortalUserSSR }) {
                         {lines.length === 0 && <div style={{ padding: 20, textAlign: 'center', fontSize: 12, color: T.text3 }}>No lines yet.</div>}
                         {lines.map((l, i) => (
                           <LineRow key={l.id} line={l} canEdit={canEdit} index={i}
+                            sectionTotal={l.line_type === 'description' ? sectionTotalAt(i) : undefined}
                             selected={selected.has(l.id)} onToggleSelect={() => toggleSelect(i)}
                             onPatch={(p) => patchLine(l.id, p)} onDelete={() => deleteLine(l.id)} onMove={(dir) => moveLine(i, dir)}
                             dragOver={overIdx === i && dragIdx !== null && dragIdx !== i}
@@ -891,8 +901,8 @@ function StageBtn({ cur, status, color, label, busy, onClick }: { cur: BookingSt
   )
 }
 
-function LineRow({ line, canEdit, index, selected, onToggleSelect, onPatch, onDelete, onMove, dragOver, onGrab, onHover, onDropLine, onCancel }: {
-  line: Line; canEdit: boolean; index: number
+function LineRow({ line, canEdit, index, sectionTotal, selected, onToggleSelect, onPatch, onDelete, onMove, dragOver, onGrab, onHover, onDropLine, onCancel }: {
+  line: Line; canEdit: boolean; index: number; sectionTotal?: number
   selected?: boolean; onToggleSelect?: () => void
   onPatch: (p: any) => void; onDelete: () => void; onMove: (dir: -1 | 1) => void
   dragOver?: boolean
@@ -962,12 +972,13 @@ function LineRow({ line, canEdit, index, selected, onToggleSelect, onPatch, onDe
     : <span />
   if (line.line_type === 'description') {
     return (
-      <div {...dragProps} style={{ display: 'grid', gridTemplateColumns: '28px 70px 1fr 84px', gap: 8, padding: '8px 14px', borderTop: `1px solid ${T.border}`, alignItems: 'start', background: T.bg3, ...selBg, ...dropEdge }}>
+      <div {...dragProps} style={{ display: 'grid', gridTemplateColumns: '28px 70px 1fr 90px 84px', gap: 8, padding: '8px 14px', borderTop: `1px solid ${T.border}`, alignItems: 'start', background: T.bg3, ...selBg, ...dropEdge }}>
         <span style={{ paddingTop: 5 }}>{checkbox}</span>
         <span style={{ fontSize: 10, color: T.text3, textTransform: 'uppercase', paddingTop: 6 }}>Desc</span>
         <textarea value={desc} disabled={!canEdit} rows={2} onChange={e => setDesc(e.target.value)} onBlur={() => desc !== (line.description || '') && onPatch({ description: desc })}
           placeholder="Job description — the parts/labour below belong to it"
           style={{ ...cellInp, fontWeight: 600, lineHeight: 1.4, resize: 'vertical', minHeight: 36, fontFamily: 'inherit', whiteSpace: 'pre-wrap' }} />
+        <span title="This job type's subtotal (ex GST)" style={{ fontSize: 12, fontFamily: 'monospace', color: T.text2, textAlign: 'right', paddingTop: 6, fontWeight: 700 }}>{sectionTotal != null && sectionTotal > 0 ? money(sectionTotal) : ''}</span>
         {controls}
       </div>
     )

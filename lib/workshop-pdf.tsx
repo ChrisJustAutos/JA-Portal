@@ -59,6 +59,7 @@ const s = StyleSheet.create({
   trowAlt: { backgroundColor: C.bg2 },
   headingRow: { backgroundColor: C.bg3, marginTop: 4 },
   headingText: { flex: 1, fontWeight: 700, color: C.ink },
+  headingAmount: { width: 90, textAlign: 'right', fontWeight: 700, color: C.ink },
   cDesc: { flex: 1 },
   cPart: { width: 90, color: C.ink3 },
   cQty: { width: 40, textAlign: 'right' },
@@ -79,6 +80,14 @@ function WorkshopDocPdf({ doc }: { doc: WorkshopDoc }) {
   const b = doc.business
   const v = doc.vehicle
   const vehicleLine = v ? [v.rego ? `Rego ${v.rego}` : null, v.odometer != null ? `${v.odometer.toLocaleString('en-AU')} km` : null].filter(Boolean).join(' · ') : ''
+  // Per-section subtotal: each heading sums its items until the next heading.
+  const sectionTotals: Record<number, number> = {}
+  doc.lines.forEach((l, i) => {
+    if (!l.isHeading) return
+    let sum = 0
+    for (let j = i + 1; j < doc.lines.length; j++) { if (doc.lines[j].isHeading) break; sum += Number(doc.lines[j].total) || 0 }
+    sectionTotals[i] = Math.round(sum * 100) / 100
+  })
   return (
     <Document>
       <Page size="A4" style={s.page}>
@@ -138,6 +147,7 @@ function WorkshopDocPdf({ doc }: { doc: WorkshopDoc }) {
           l.isHeading ? (
             <View key={i} style={[s.trow, s.headingRow]} wrap={false}>
               <Text style={s.headingText}>{l.description || ''}</Text>
+              {sectionTotals[i] > 0 ? <Text style={s.headingAmount}>{money(sectionTotals[i])}</Text> : null}
             </View>
           ) : (
             <View key={i} style={[s.trow, i % 2 === 1 ? s.trowAlt : {}]} wrap={false}>
