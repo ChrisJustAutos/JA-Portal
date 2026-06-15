@@ -16,6 +16,7 @@ import PortalTopBar from '../../../lib/PortalTopBar'
 import B2BAdminTabs from '../../../components/b2b/B2BAdminTabs'
 import { requirePageAuth } from '../../../lib/authServer'
 import { getSupabase } from '../../../lib/supabaseClient'
+import { compressImage, compressPdf } from '../../../lib/upload-compress'
 import type { UserRole } from '../../../lib/permissions'
 import { useConfirm, usePrompt, useToast } from '../../../components/ui/Feedback'
 import { alpha } from '../../../lib/ui/theme'
@@ -130,17 +131,7 @@ function nanoid(len: number = 12): string {
   return out
 }
 
-function fileExt(file: File): string {
-  const fromName = file.name.split('.').pop()?.toLowerCase()
-  if (fromName && ['png','jpg','jpeg','webp'].includes(fromName)) {
-    return fromName === 'jpeg' ? 'jpg' : fromName
-  }
-  if (file.type === 'image/png')  return 'png'
-  if (file.type === 'image/webp') return 'webp'
-  return 'jpg'
-}
-
-const PDF_MAX_BYTES = 10 * 1024 * 1024
+const PDF_MAX_BYTES = 25 * 1024 * 1024   // checked after compression
 
 // Validates + uploads an instructions PDF to the b2b-catalogue-pdfs bucket and
 // returns its public URL. Best-effort cleans the {itemId}/ folder so we don't
@@ -150,17 +141,19 @@ async function uploadCatalogueInstructionsPdf(itemId: string, file: File): Promi
   if (type !== 'application/pdf') {
     throw new Error(`File must be a PDF (got "${file.type || 'unknown'}").`)
   }
-  if (file.size > PDF_MAX_BYTES) {
-    throw new Error(`File is ${(file.size/1024/1024).toFixed(1)} MB — max 10 MB.`)
-  }
   if (file.size === 0) {
     throw new Error('File appears to be empty.')
+  }
+  // Compress (re-save) the PDF before upload.
+  const c = await compressPdf(file)
+  if (c.blob.size > PDF_MAX_BYTES) {
+    throw new Error(`File is ${(c.blob.size/1024/1024).toFixed(1)} MB after compression — max 25 MB. Try a smaller PDF.`)
   }
   const supabase = getSupabase()
   const path = `${itemId}/${nanoid()}.pdf`
   const { error: upErr } = await supabase.storage
     .from('b2b-catalogue-pdfs')
-    .upload(path, file, { cacheControl: '3600', upsert: false, contentType: 'application/pdf' })
+    .upload(path, c.blob, { cacheControl: '3600', upsert: false, contentType: 'application/pdf' })
   if (upErr) throw new Error(upErr.message || 'Upload failed')
   const { data: { publicUrl } } = supabase.storage.from('b2b-catalogue-pdfs').getPublicUrl(path)
   try {
@@ -192,19 +185,21 @@ async function uploadCatalogueImage(itemId: string, file: File): Promise<string>
   if (!ALLOWED_IMAGE_TYPES.includes(file.type.toLowerCase())) {
     throw new Error(`File type "${file.type || 'unknown'}" not allowed. Use PNG, JPG or WEBP.`)
   }
-  if (file.size > MAX_IMAGE_BYTES) {
-    throw new Error(`File is ${(file.size/1024/1024).toFixed(1)} MB — max 10 MB.`)
-  }
   if (file.size === 0) {
     throw new Error('File appears to be empty.')
   }
+  // Downscale + re-encode big images before upload.
+  const c = await compressImage(file)
+  if (c.blob.size > MAX_IMAGE_BYTES) {
+    throw new Error(`Image is ${(c.blob.size/1024/1024).toFixed(1)} MB after compression — max 10 MB.`)
+  }
 
   const supabase = getSupabase()
-  const ext = fileExt(file)
+  const ext = c.mime === 'image/png' ? 'png' : c.mime === 'image/webp' ? 'webp' : 'jpg'
   const path = `${itemId}/${nanoid()}.${ext}`
   const { error: upErr } = await supabase.storage
     .from('b2b-catalogue')
-    .upload(path, file, { cacheControl: '3600', upsert: false, contentType: file.type })
+    .upload(path, c.blob, { cacheControl: '3600', upsert: false, contentType: c.mime })
   if (upErr) throw new Error(upErr.message || 'Upload failed')
 
   const { data: { publicUrl } } = supabase.storage.from('b2b-catalogue').getPublicUrl(path)
