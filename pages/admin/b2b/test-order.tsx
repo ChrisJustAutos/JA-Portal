@@ -136,7 +136,7 @@ export default function TestOrderPage({ user }: Props) {
         <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet"/>
         <PortalTopBar activeId="b2b" currentUserRole={user.role} currentUserVisibleTabs={user.visibleTabs} currentUserName={user.displayName} currentUserEmail={user.email} />
         <div style={{ flex: 1, padding: 20 }}>
-          <div style={{ maxWidth: 820, margin: '0 auto' }}>
+          <div style={{ margin: '0 auto' }}>
             <B2BAdminTabs active="orders" />
             <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, margin: '18px 0' }}>
               <h1 style={{ fontSize: 20, fontWeight: 600, margin: 0 }}>Place test order</h1>

@@ -117,7 +117,7 @@ export default function SettingsPage({ user }: { user: PortalUserSSR }) {
 
           {/* Icon launcher — tap a tile to open that area in a floating window. */}
           <div style={{flex:1,overflowY:'auto',padding:'28px 20px'}}>
-            <div style={{maxWidth:1000,margin:'0 auto'}}>
+            <div style={{margin:'0 auto'}}>
               <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(200px,1fr))',gap:14}}>
                 {visibleSections.map(s => (
                   <button key={s.id} onClick={()=>openSection(s.id)}

@@ -365,7 +365,7 @@ export default function AdminOrderDetailPage({ user }: Props) {
           currentUserName={user.displayName}
           currentUserEmail={user.email}
         />
-        <main style={{flex:1,padding: isMobile ? '16px 14px' : '28px 32px', paddingBottom: isMobile ? 'calc(96px + env(safe-area-inset-bottom))' : undefined, maxWidth:1500, width:'100%', boxSizing:'border-box', overflowX: isMobile ? 'hidden' : undefined}}>
+        <main style={{flex:1,padding: isMobile ? '16px 14px' : '28px 32px', paddingBottom: isMobile ? 'calc(96px + env(safe-area-inset-bottom))' : undefined, width:'100%', boxSizing:'border-box', overflowX: isMobile ? 'hidden' : undefined}}>
           <B2BAdminTabs active="orders"/>
 
           <header style={{marginBottom:18}}>

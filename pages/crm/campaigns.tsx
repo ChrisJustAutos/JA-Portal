@@ -48,7 +48,7 @@ export default function CrmCampaigns({ user }: { user: PortalUserSSR }) {
 
   return (
     <CrmShell user={user} active="campaigns" title="Campaigns">
-      <div style={{ maxWidth: 1000, margin: '0 auto', padding: '18px 20px' }}>
+      <div style={{ margin: '0 auto', padding: '18px 20px' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16 }}>
           <h1 style={{ fontSize: 18, fontWeight: 600, margin: 0 }}>Campaigns</h1>
           <span style={{ flex: 1 }} />

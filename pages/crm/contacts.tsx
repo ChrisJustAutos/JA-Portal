@@ -44,7 +44,7 @@ export default function CrmContacts({ user }: { user: PortalUserSSR }) {
 
   return (
     <CrmShell user={user} active="contacts" title="Contacts">
-      <div style={{ maxWidth: 1100, margin: '0 auto', padding: '18px 20px' }}>
+      <div style={{ margin: '0 auto', padding: '18px 20px' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 14 }}>
           <input value={q} onChange={e => onSearch(e.target.value)} placeholder="Search name, company, phone, email…" style={{ ...input, maxWidth: 380 }} />
           <span style={{ flex: 1 }} />

@@ -233,7 +233,7 @@ export default function HomePage({ user }: Props) {
           </button>
         </header>
 
-        <main style={{ maxWidth: 980, margin: '0 auto', padding: '48px 24px 60px' }}>
+        <main style={{ margin: '0 auto', padding: '48px 24px 60px' }}>
           <h1 style={{ fontSize: 26, fontWeight: 600, margin: '0 0 4px' }}>
             {greetingName ? `Welcome back, ${greetingName}` : 'Welcome back'}
           </h1>

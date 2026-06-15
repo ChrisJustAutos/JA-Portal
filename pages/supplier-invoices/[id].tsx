@@ -106,7 +106,7 @@ export default function InvoiceDetailPage({ user }: { user: { id: string, email:
           {error && <div style={{background:'rgba(240,78,78,0.1)', border:`1px solid ${T.red}40`, borderRadius:8, padding:'10px 14px', color:T.red, fontSize:13, marginBottom:12}}>{error}</div>}
 
           {invoice && (
-            <div style={{maxWidth:1100}}>
+            <div style={{ width:'100%' }}>
               {/* Header card */}
               <div style={{background:T.bg2, border:`1px solid ${T.border}`, borderLeft:`4px solid ${statusColor[invoice.status] || T.text3}`, borderRadius:10, padding:20, marginBottom:16}}>
                 <div style={{display:'flex', alignItems:'center', gap:12, marginBottom:14}}>

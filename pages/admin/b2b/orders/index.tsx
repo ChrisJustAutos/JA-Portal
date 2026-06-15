@@ -234,7 +234,7 @@ export default function AdminOrdersListPage({ user }: Props) {
           currentUserName={user.displayName}
           currentUserEmail={user.email}
         />
-        <main className="b2b-admin-main" style={{flex:1,padding: isMobile ? '16px 14px' : '28px 32px',maxWidth:1500,width:'100%',boxSizing:'border-box'}}>
+        <main className="b2b-admin-main" style={{flex:1,padding: isMobile ? '16px 14px' : '28px 32px',width:'100%',boxSizing:'border-box'}}>
           <B2BAdminTabs active="orders"/>
 
           {/* Header */}

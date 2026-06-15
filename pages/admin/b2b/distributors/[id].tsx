@@ -154,7 +154,7 @@ export default function DistributorDetailPage({ user }: Props) {
           currentUserName={user.displayName}
           currentUserEmail={user.email}
         />
-        <main className="b2b-admin-main" style={{flex:1,padding:'28px 32px',maxWidth:1100,width:'100%',boxSizing:'border-box'}}>
+        <main className="b2b-admin-main" style={{flex:1,padding:'28px 32px',width:'100%',boxSizing:'border-box'}}>
           <B2BAdminTabs active="distributors"/>
 
           {/* Header */}

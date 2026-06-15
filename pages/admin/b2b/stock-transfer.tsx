@@ -283,7 +283,7 @@ export default function StockTransferPage({ user }: Props) {
         />
         <WorkshopTabs active="inventory" role={user.role} />
         <InventoryTabs active="transfer" role={user.role} />
-        <main className="b2b-admin-main" style={{flex:1,padding:'28px 32px',maxWidth:1200,width:'100%',boxSizing:'border-box'}}>
+        <main className="b2b-admin-main" style={{flex:1,padding:'28px 32px',width:'100%',boxSizing:'border-box'}}>
 
           <div style={{display:'flex',alignItems:'center',gap:14,marginBottom:4,flexWrap:'wrap'}}>
             <h1 style={{fontSize:20,fontWeight:600,margin:0}}>Internal stock transfer</h1>

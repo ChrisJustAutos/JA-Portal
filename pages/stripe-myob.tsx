@@ -434,7 +434,7 @@ export default function StripeMyobPage({ user }: { user: PageUser }) {
       <Head><title>Stripe → MYOB · JA Portal</title></Head>
       <div style={{ display:'flex', flexDirection:'column', minHeight:'100vh', background:T.bg, color:T.text }}>
         <PortalTopBar activeId="stripe-myob" />
-        <div style={{ flex:1, padding:'24px 32px', maxWidth:1400 }}>
+        <div style={{ flex:1, padding:'24px 32px' }}>
 
           {/* Header */}
           <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:16 }}>

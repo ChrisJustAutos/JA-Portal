@@ -70,7 +70,7 @@ export default function CrmAutomations({ user }: { user: PortalUserSSR }) {
 
   return (
     <CrmShell user={user} active="automations" title="Automations">
-      <div style={{ maxWidth: 900, margin: '0 auto', padding: '18px 20px' }}>
+      <div style={{ margin: '0 auto', padding: '18px 20px' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 8 }}>
           <h1 style={{ fontSize: 18, fontWeight: 600, margin: 0 }}>Automations</h1>
           <span style={{ flex: 1 }} />
