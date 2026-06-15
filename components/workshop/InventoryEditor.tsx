@@ -180,6 +180,17 @@ export default function InventoryEditor({ id, onClose, onSaved }: { id: string; 
               </button>
             </div>
 
+            {/* Live stock (read-only, from MYOB) */}
+            <div style={sectionTitle}>Live stock (MYOB)</div>
+            <div style={{ display: 'flex', gap: 8 }}>
+              {([['On hand', item?.quantity], ['Available', item?.available], ['Allocated', item?.allocated], ['On order', item?.on_order]] as const).map(([label, val]) => (
+                <div key={label} style={{ flex: 1, background: T.bg3, border: `1px solid ${T.border}`, borderRadius: 8, padding: '8px 6px', textAlign: 'center' }}>
+                  <div style={{ fontSize: 15, fontWeight: 700, fontFamily: 'monospace', color: label === 'Allocated' && Number(val) > 0 ? T.accent : T.text }}>{Number(val) || 0}</div>
+                  <div style={{ fontSize: 9, color: T.text3, textTransform: 'uppercase', letterSpacing: '0.04em', marginTop: 2 }}>{label}</div>
+                </div>
+              ))}
+            </div>
+
             {/* Stock */}
             <div style={sectionTitle}>Stock settings</div>
             <div style={{ display: 'flex', gap: 12 }}>

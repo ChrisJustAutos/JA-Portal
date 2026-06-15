@@ -35,5 +35,25 @@ export default withAuth('view:diary', async (req, res) => {
   // PostgREST can't compare two columns, so apply the available<=alert_qty
   // low-stock test here.
   const items = low ? (data || []).filter((r: any) => Number(r.available) <= Number(r.alert_qty)) : (data || [])
+
+  // Optional date range: how many of each part were allocated to jobs in the
+  // window (sum of part-line qty on bookings whose start falls in the range).
+  const from = String(req.query.from || '').trim()
+  const to = String(req.query.to || '').trim()
+  if (from && to && items.length) {
+    try {
+      const fromIso = new Date(`${from}T00:00:00+10:00`).toISOString()
+      const toIso = new Date(new Date(`${to}T00:00:00+10:00`).getTime() + 86400000).toISOString() // inclusive end day
+      const ids = items.map((i: any) => i.id)
+      const { data: lines } = await db.from('workshop_booking_lines')
+        .select('inventory_id, qty, booking:workshop_bookings!inner(starts_at)')
+        .in('inventory_id', ids).eq('line_type', 'part')
+        .gte('booking.starts_at', fromIso).lt('booking.starts_at', toIso)
+      const sums: Record<string, number> = {}
+      for (const l of (lines as any[]) || []) { if (!l.inventory_id) continue; sums[l.inventory_id] = (sums[l.inventory_id] || 0) + (Number(l.qty) || 0) }
+      for (const it of items as any[]) it.allocated_period = sums[it.id] || 0
+    } catch { /* range allocation is best-effort */ }
+  }
+
   return res.status(200).json({ items })
 })

@@ -25,7 +25,15 @@ const LABEL_PRESETS = [
   { key: 'L7651', label: 'Avery L7651 — 65/sheet (38 × 21 mm)' },
 ]
 
-const GRID_COLS = '28px 110px 1fr 70px 70px 70px 90px 90px 110px'
+const GRID_BASE = '28px 104px 1fr 64px 64px 64px 56px 80px 80px 110px'
+const GRID_PERIOD = '28px 104px 1fr 64px 64px 64px 80px 56px 80px 80px 110px'
+function thisMonthRange(): { from: string; to: string } {
+  const now = new Date()
+  const y = now.getFullYear(), m = now.getMonth()
+  const pad = (n: number) => String(n).padStart(2, '0')
+  const last = new Date(y, m + 1, 0).getDate()
+  return { from: `${y}-${pad(m + 1)}-01`, to: `${y}-${pad(m + 1)}-${pad(last)}` }
+}
 
 export default function InventoryPage({ user }: { user: PortalUserSSR }) {
   const isAdmin = roleHasPermission(user.role, 'admin:settings')
@@ -39,6 +47,10 @@ export default function InventoryPage({ user }: { user: PortalUserSSR }) {
   const [printOpen, setPrintOpen] = useState(false)
   const [printOpts, setPrintOpts] = useState({ layout: 'L7163', copies: 1, skip: 0 })
   const [editId, setEditId] = useState<string | null>(null)
+  const [from, setFrom] = useState('')
+  const [to, setTo] = useState('')
+  const rangeActive = !!(from && to)
+  const periodTotal = rangeActive ? items.reduce((s, i) => s + (Number(i.allocated_period) || 0), 0) : 0
 
   function toggleSelect(id: string) {
     setSelected(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n })
@@ -60,12 +72,13 @@ export default function InventoryPage({ user }: { user: PortalUserSSR }) {
       const params = new URLSearchParams({ limit: '300' })
       if (q.trim()) params.set('q', q.trim())
       if (low) params.set('low', '1')
+      if (from && to) { params.set('from', from); params.set('to', to) }
       const r = await fetch(`/api/workshop/inventory?${params.toString()}`)
       const d = await r.json()
       if (r.ok) setItems(Array.isArray(d.items) ? d.items : [])
       setLastRefresh(new Date())
     } catch { /* keep prior */ } finally { setLoading(false) }
-  }, [q, low])
+  }, [q, low, from, to])
 
   useEffect(() => { const t = setTimeout(load, 250); return () => clearTimeout(t) }, [load])
 
@@ -99,6 +112,13 @@ export default function InventoryPage({ user }: { user: PortalUserSSR }) {
             <button onClick={() => setLow(v => !v)} style={{ padding: '5px 12px', borderRadius: 5, fontSize: 12, fontWeight: 600, fontFamily: 'inherit', cursor: 'pointer', background: low ? 'rgba(240,78,78,0.12)' : 'transparent', color: low ? T.red : T.text2, border: `1px solid ${low ? T.red + '55' : T.border2}` }}>
               Low stock
             </button>
+            <div style={{ width: 1, height: 18, background: T.border }} />
+            <span style={{ fontSize: 11, color: T.text3 }}>Allocated in</span>
+            <input type="date" value={from} onChange={e => setFrom(e.target.value)} title="Allocated from" style={{ padding: '4px 6px', background: T.bg3, border: `1px solid ${T.border}`, borderRadius: 5, color: T.text, fontSize: 12, fontFamily: 'inherit', colorScheme: 'dark' }} />
+            <span style={{ fontSize: 11, color: T.text3 }}>→</span>
+            <input type="date" value={to} onChange={e => setTo(e.target.value)} title="Allocated to" style={{ padding: '4px 6px', background: T.bg3, border: `1px solid ${T.border}`, borderRadius: 5, color: T.text, fontSize: 12, fontFamily: 'inherit', colorScheme: 'dark' }} />
+            <button onClick={() => { const r = thisMonthRange(); setFrom(r.from); setTo(r.to) }} style={{ padding: '5px 10px', borderRadius: 5, fontSize: 11, fontWeight: 600, fontFamily: 'inherit', cursor: 'pointer', background: 'transparent', color: T.text2, border: `1px solid ${T.border2}` }}>This month</button>
+            {rangeActive && <button onClick={() => { setFrom(''); setTo('') }} style={{ padding: '5px 8px', borderRadius: 5, fontSize: 11, fontFamily: 'inherit', cursor: 'pointer', background: 'transparent', color: T.text3, border: `1px solid ${T.border2}` }}>Clear</button>}
             <div style={{ flex: 1 }} />
             {selected.size > 0 && (
               <button onClick={() => setPrintOpen(true)} style={{ padding: '5px 12px', borderRadius: 5, fontSize: 12, fontWeight: 600, fontFamily: 'inherit', cursor: 'pointer', background: T.accent, color: '#fff', border: 'none' }}>
@@ -117,9 +137,9 @@ export default function InventoryPage({ user }: { user: PortalUserSSR }) {
 
           <div style={{ flex: 1, overflow: 'auto', padding: 20 }}>
             <div style={{ background: T.bg2, border: `1px solid ${T.border}`, borderRadius: 10, overflow: 'hidden' }}>
-              <div style={{ display: 'grid', gridTemplateColumns: GRID_COLS, gap: 8, padding: '9px 14px', background: T.bg3, borderBottom: `1px solid ${T.border}`, fontSize: 9, color: T.text3, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', alignItems: 'center' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: rangeActive ? GRID_PERIOD : GRID_BASE, gap: 8, padding: '9px 14px', background: T.bg3, borderBottom: `1px solid ${T.border}`, fontSize: 9, color: T.text3, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', alignItems: 'center' }}>
                 <div><input type="checkbox" checked={items.length > 0 && selected.size === items.length} onChange={toggleAll} title="Select all" style={{ cursor: 'pointer' }} /></div>
-                <div>SKU</div><div>Part</div><div style={{ textAlign: 'right' }}>On hand</div><div style={{ textAlign: 'right' }}>Avail</div><div style={{ textAlign: 'right' }}>Alert</div><div style={{ textAlign: 'right' }}>Buy</div><div style={{ textAlign: 'right' }}>Sell</div><div>Location</div>
+                <div>SKU</div><div>Part</div><div style={{ textAlign: 'right' }}>On hand</div><div style={{ textAlign: 'right' }}>Avail</div><div style={{ textAlign: 'right' }}>Alloc</div>{rangeActive && <div style={{ textAlign: 'right', color: T.blue }}>In range</div>}<div style={{ textAlign: 'right' }}>Alert</div><div style={{ textAlign: 'right' }}>Buy</div><div style={{ textAlign: 'right' }}>Sell</div><div>Location</div>
               </div>
               {loading && items.length === 0 ? (
                 <SkeletonRows rows={8} />
@@ -128,12 +148,14 @@ export default function InventoryPage({ user }: { user: PortalUserSSR }) {
               ) : items.map(it => {
                 const lowStock = Number(it.alert_qty) > 0 && Number(it.available) <= Number(it.alert_qty)
                 return (
-                  <div key={it.id} onClick={() => isAdmin && setEditId(it.id)} style={{ display: 'grid', gridTemplateColumns: GRID_COLS, gap: 8, padding: '8px 14px', borderTop: `1px solid ${T.border}`, alignItems: 'center', background: selected.has(it.id) ? 'rgba(79,142,247,0.08)' : 'transparent', cursor: isAdmin ? 'pointer' : 'default' }}>
+                  <div key={it.id} onClick={() => isAdmin && setEditId(it.id)} style={{ display: 'grid', gridTemplateColumns: rangeActive ? GRID_PERIOD : GRID_BASE, gap: 8, padding: '8px 14px', borderTop: `1px solid ${T.border}`, alignItems: 'center', background: selected.has(it.id) ? 'rgba(79,142,247,0.08)' : 'transparent', cursor: isAdmin ? 'pointer' : 'default' }}>
                     <div onClick={e => e.stopPropagation()}><input type="checkbox" checked={selected.has(it.id)} onChange={() => toggleSelect(it.id)} style={{ cursor: 'pointer' }} /></div>
                     <div style={{ fontSize: 11, fontFamily: 'monospace', color: T.text2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{it.sku || '—'}</div>
                     <div style={{ fontSize: 12, color: T.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{it.part_name}{it.brand ? <span style={{ color: T.text3 }}> · {it.brand}</span> : null}</div>
                     <div style={{ fontSize: 12, fontFamily: 'monospace', textAlign: 'right', color: T.text2 }}>{Number(it.quantity)}</div>
                     <div style={{ fontSize: 12, fontFamily: 'monospace', textAlign: 'right', color: lowStock ? T.red : T.text2, fontWeight: lowStock ? 700 : 400 }}>{Number(it.available)}</div>
+                    <div style={{ fontSize: 12, fontFamily: 'monospace', textAlign: 'right', color: Number(it.allocated) > 0 ? T.amber : T.text3 }}>{Number(it.allocated) || '—'}</div>
+                    {rangeActive && <div style={{ fontSize: 12, fontFamily: 'monospace', textAlign: 'right', color: Number(it.allocated_period) > 0 ? T.blue : T.text3, fontWeight: Number(it.allocated_period) > 0 ? 700 : 400 }}>{Number(it.allocated_period) || '—'}</div>}
                     <div style={{ fontSize: 11, fontFamily: 'monospace', textAlign: 'right', color: T.text3 }}>{Number(it.alert_qty) || '—'}</div>
                     <div style={{ fontSize: 11, fontFamily: 'monospace', textAlign: 'right', color: T.text3 }}>{money(it.buy_price)}</div>
                     <div style={{ fontSize: 12, fontFamily: 'monospace', textAlign: 'right', color: T.text }}>{money(it.sell_price)}</div>
@@ -143,7 +165,8 @@ export default function InventoryPage({ user }: { user: PortalUserSSR }) {
               })}
             </div>
             <div style={{ fontSize: 11, color: T.text3, marginTop: 10 }}>
-              {isAdmin ? 'Click a part to edit pricing, supplier, barcode and the MYOB sale account — then “Push to MYOB”. ' : ''}Stock counts come from MYOB (VPS). Showing up to 300; search to narrow.
+              {rangeActive && <span style={{ color: T.blue, fontWeight: 600 }}>{periodTotal.toLocaleString()} unit{periodTotal === 1 ? '' : 's'} allocated to jobs {from} → {to}{q ? ` (matching "${q}")` : ''}. </span>}
+              {isAdmin ? 'Click a part to edit pricing, supplier, barcode and the MYOB sale account — then “Push to MYOB”. ' : ''}On-hand / Avail / Alloc come from MYOB (VPS); “In range” counts parts on jobs scheduled in the dates. Showing up to 300; search to narrow.
             </div>
           </div>
         </div>
