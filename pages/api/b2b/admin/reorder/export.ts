@@ -43,7 +43,7 @@ async function loadLogo(db: SupabaseClient): Promise<{ buffer: Buffer; extension
     const lower = url.toLowerCase()
     const ext: 'png' | 'jpeg' | 'gif' | null =
       ct.includes('png') || lower.endsWith('.png') ? 'png'
-      : ct.includes('jpeg') || ct.includes('jpg') || /\.jpe?g($|\?)/.test(lower) ? 'jpeg'
+      : ct.includes('jpeg') || ct.includes('jpg') || /\.jpe?g(\?|$)/.test(lower) ? 'jpeg'
       : ct.includes('gif') || lower.endsWith('.gif') ? 'gif'
       : null
     if (!ext) return null   // webp/svg not supported by ExcelJS images
@@ -65,47 +65,68 @@ export default withAuth('edit:b2b_catalogue', async (req, res) => {
   const list = items || []
 
   const wb = new ExcelJS.Workbook()
-  const ws = wb.addWorksheet('Stock Order', { views: [{ state: 'frozen', ySplit: 6 }] })
+  const ws = wb.addWorksheet('Stock Order', { views: [{ state: 'frozen', ySplit: 5 }] })
+  const HEAD_ROW = 5
+  const box = { top: { style: 'thin' as const, color: { argb: BORDER } }, bottom: { style: 'thin' as const, color: { argb: BORDER } }, left: { style: 'thin' as const, color: { argb: BORDER } }, right: { style: 'thin' as const, color: { argb: BORDER } } }
 
-  // ── Just Autos logo (top-right of the header area) ──
+  // ── Banner (rows 1–4): one unified block — logo + title + parameter cards ──
+  for (let r = 1; r <= 4; r++) {
+    ws.getRow(r).height = 18
+    for (let c = 1; c <= 18; c++) ws.getCell(r, c).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: PARAM_FILL } }
+  }
+  // Logo box (left)
+  ws.mergeCells('A1:C4')
+  const logoBox = ws.getCell('A1')
+  logoBox.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFFFFF' } }
+  logoBox.border = box
   const logo = await loadLogo(db)
   if (logo) {
     try {
       const imgId = wb.addImage({ buffer: logo.buffer as any, extension: logo.extension })
-      ws.addImage(imgId, { tl: { col: 11, row: 0 } as any, ext: { width: 220, height: 64 } })
+      ws.addImage(imgId, { tl: { col: 0.12, row: 0.25 } as any, ext: { width: 196, height: 58 } })
     } catch { /* logo is best-effort */ }
+  } else {
+    logoBox.value = 'Just Autos'
+    logoBox.font = { bold: true, size: 15, color: { argb: NAVY } }
+    logoBox.alignment = { vertical: 'middle', horizontal: 'center' }
   }
-
-  // ── Title + editable parameter block (rows 1–4) ──
-  ws.getCell('A1').value = 'JAWS Stock Order'
-  ws.getCell('A1').font = { bold: true, size: 14 }
-  ws.getCell('C1').value = s?.from_date && s?.to_date ? `Sales ${s.from_date} → ${s.to_date}` : 'Sales range not set'
-  ws.getCell('C1').font = { italic: true, color: { argb: 'FF6B7280' } }
-  const params: Array<[string, string, any, string?]> = [
-    ['A2', 'Growth %', growth, '0%'],
-    ['A3', 'Cover months', coverMonths],
-    ['A4', 'Months in range', months],
+  // Title + subtitle (centre)
+  ws.mergeCells('D1:L2')
+  const titleCell = ws.getCell('D1')
+  titleCell.value = 'JAWS Stock Order'
+  titleCell.font = { bold: true, size: 18, color: { argb: NAVY } }
+  titleCell.alignment = { vertical: 'middle', horizontal: 'left', indent: 1 }
+  ws.mergeCells('D3:L4')
+  const subCell = ws.getCell('D3')
+  subCell.value = s?.from_date && s?.to_date ? `Sales window   ${s.from_date}  →  ${s.to_date}` : 'Sales window not set'
+  subCell.font = { italic: true, size: 10, color: { argb: 'FF6B7280' } }
+  subCell.alignment = { vertical: 'top', horizontal: 'left', indent: 1 }
+  // Parameter cards (right): label over a big value, each boxed
+  const cards: Array<[string, string, string, string, any, string?]> = [
+    ['M1:N1', 'M2:N4', 'GROWTH %', 'M2', growth, '0%'],
+    ['O1:P1', 'O2:P4', 'COVER MONTHS', 'O2', coverMonths],
+    ['Q1:R1', 'Q2:R4', 'MONTHS IN RANGE', 'Q2', months],
   ]
-  for (const [addr, label, val, fmt] of params) {
-    ws.getCell(addr).value = label
-    ws.getCell(addr).font = { bold: true, color: { argb: 'FF374151' } }
-    const valCell = ws.getCell(addr.replace('A', 'B'))
-    valCell.value = val
-    if (fmt) valCell.numFmt = fmt
-    for (const c of [ws.getCell(addr), valCell]) {
-      c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: PARAM_FILL } }
-      c.border = { top: { style: 'thin', color: { argb: BORDER } }, bottom: { style: 'thin', color: { argb: BORDER } }, left: { style: 'thin', color: { argb: BORDER } }, right: { style: 'thin', color: { argb: BORDER } } }
-    }
+  for (const [labRange, valRange, label, valAddr, val, fmt] of cards) {
+    ws.mergeCells(labRange); ws.mergeCells(valRange)
+    const lc = ws.getCell(labRange.split(':')[0])
+    lc.value = label; lc.font = { bold: true, size: 8, color: { argb: 'FF6B7280' } }; lc.alignment = { horizontal: 'center', vertical: 'middle' }
+    lc.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFFFFF' } }; lc.border = box
+    const vc = ws.getCell(valAddr)
+    vc.value = val; if (fmt) vc.numFmt = fmt
+    vc.font = { bold: true, size: 16, color: { argb: NAVY } }; vc.alignment = { horizontal: 'center', vertical: 'middle' }
+    vc.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFFFFF' } }; vc.border = box
   }
+  // Rule under the banner
+  for (let c = 1; c <= 18; c++) ws.getCell(4, c).border = { ...(ws.getCell(4, c).border || {}), bottom: { style: 'medium', color: { argb: NAVY } } }
 
-  // ── Header row (row 6) ──
+  // ── Header row ──
   const headers = [
     'Stock No.', 'Name', 'On Hand', 'Committed', 'Available', 'On Order', 'Total Sales',
     'Monthly Avg', 'Monthly Round Up', '+Growth', 'Projected',
     'Estiamted On Hand After 3 Months', 'Adjusted Proposed New Order Volume', 'MOQ',
     'Commited - New Order Volume', "Morgan's Judgment", 'Proposed New Order Volume', 'Notes',
   ]
-  const HEAD_ROW = 6
   headers.forEach((h, i) => {
     const cell = ws.getCell(HEAD_ROW, i + 1)
     cell.value = h
@@ -133,10 +154,10 @@ export default withAuth('edit:b2b_catalogue', async (req, res) => {
       E: { formula: `C${R}-D${R}`, result: r2(c.available) },
       F: num(it.on_order),
       G: num(it.sales_qty),
-      H: { formula: `IF($B$4=0,0,G${R}/$B$4)`, result: r2(c.monthlyAvg) },
+      H: { formula: `IF($Q$2=0,0,G${R}/$Q$2)`, result: r2(c.monthlyAvg) },
       I: { formula: `ROUNDUP(H${R},0)`, result: c.monthlyRound },
-      J: { formula: `ROUNDUP(I${R}*(1+$B$2),0)`, result: c.withGrowth },
-      K: { formula: `J${R}*$B$3`, result: c.projected },
+      J: { formula: `ROUNDUP(I${R}*(1+$M$2),0)`, result: c.withGrowth },
+      K: { formula: `J${R}*$O$2`, result: c.projected },
       L: { formula: `K${R}-(E${R}+F${R})`, result: r2(c.shortfall) },
       M: { formula: `MAX(L${R},0)`, result: adjusted },
       N: it.moq != null ? Number(it.moq) : null,
