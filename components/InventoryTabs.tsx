@@ -10,6 +10,7 @@ import { T } from '../lib/ui/theme'
 
 const TABS: Array<{ id: string; label: string; href: string; perm: Permission }> = [
   { id: 'inventory', label: 'Inventory',      href: '/workshop/inventory',      perm: 'view:diary' },
+  { id: 'suppliers', label: 'Suppliers',       href: '/workshop/suppliers',      perm: 'view:diary' },
   { id: 'po',        label: 'Purchase Orders', href: '/workshop/purchase-orders', perm: 'view:diary' },
   { id: 'stocktake', label: 'Stocktake (MD)', href: '/stocktake',               perm: 'view:stocktakes' },
   // Portal-native stocktake (counts workshop_inventory / MYOB). At MD cutover,
@@ -18,7 +19,7 @@ const TABS: Array<{ id: string; label: string; href: string; perm: Permission }>
   { id: 'transfer',  label: 'Stock Transfer', href: '/admin/b2b/stock-transfer', perm: 'edit:b2b_distributors' },
 ]
 
-export default function InventoryTabs({ active, role }: { active: 'inventory' | 'po' | 'stocktake' | 'stocktake2' | 'transfer'; role: UserRole }) {
+export default function InventoryTabs({ active, role }: { active: 'inventory' | 'suppliers' | 'po' | 'stocktake' | 'stocktake2' | 'transfer'; role: UserRole }) {
   const router = useRouter()
   const tabs = TABS.filter(t => roleHasPermission(role, t.perm))
   if (tabs.length <= 1) return null   // nothing to switch between → no strip

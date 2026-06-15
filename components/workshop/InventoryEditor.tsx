@@ -125,8 +125,12 @@ export default function InventoryEditor({ id, onClose, onSaved }: { id: string; 
               <div style={{ flex: 1 }}><label style={lbl}>Category</label><input value={form.category} onChange={e => f('category', e.target.value)} style={inp} /></div>
               <div style={{ flex: 1 }}>
                 <label style={lbl}>Supplier</label>
-                <input list="inv-suppliers" value={form.supplier} onChange={e => f('supplier', e.target.value)} style={inp} placeholder="Type or pick…" />
-                <datalist id="inv-suppliers">{suppliers.map(s => <option key={s} value={s} />)}</datalist>
+                <select value={form.supplier || ''} onChange={e => f('supplier', e.target.value)} style={inp}>
+                  <option value="">— None —</option>
+                  {form.supplier && !suppliers.includes(form.supplier) && <option value={form.supplier}>{form.supplier} (unmanaged)</option>}
+                  {suppliers.map(s => <option key={s} value={s}>{s}</option>)}
+                </select>
+                <div style={{ fontSize: 10, color: T.text3, marginTop: 4 }}>Pick a managed supplier so its parts group onto a PO. Add suppliers in Inventory → Suppliers.</div>
               </div>
             </div>
             <div style={{ marginTop: 12 }}>
