@@ -64,13 +64,15 @@ export default withAuth('view:diary', async (req, res, user) => {
     const bookingId = String(req.query.booking_id || '').trim()
     const vehicleId = String(req.query.vehicle_id || '').trim()
     const customerId = String(req.query.customer_id || '').trim()
-    if (!bookingId && !vehicleId && !customerId) return res.status(400).json({ error: 'booking_id, vehicle_id or customer_id required' })
+    const jobTypeId = String(req.query.job_type_id || '').trim()
+    if (!bookingId && !vehicleId && !customerId && !jobTypeId) return res.status(400).json({ error: 'booking_id, vehicle_id, customer_id or job_type_id required' })
     let qy = db.from('workshop_files')
-      .select('id, booking_id, vehicle_id, customer_id, file_name, mime_type, size_bytes, uploaded_by_name, created_at')
+      .select('id, booking_id, vehicle_id, customer_id, job_type_id, file_name, mime_type, size_bytes, uploaded_by_name, created_at')
       .order('created_at', { ascending: false }).limit(300)
     if (bookingId) qy = qy.eq('booking_id', bookingId)
     else if (vehicleId) qy = qy.eq('vehicle_id', vehicleId)
-    else qy = qy.eq('customer_id', customerId)
+    else if (customerId) qy = qy.eq('customer_id', customerId)
+    else qy = qy.eq('job_type_id', jobTypeId)
     const { data, error } = await qy
     if (error) return res.status(500).json({ error: error.message })
     return res.status(200).json({ files: data || [] })
@@ -91,8 +93,8 @@ export default withAuth('view:diary', async (req, res, user) => {
       if (!fileName) return res.status(400).json({ error: 'file_name required' })
       if (!ALLOWED_MIME.has(mime)) return res.status(400).json({ error: `File type not allowed (${mime || 'unknown'})` })
       if (size > MAX_BYTES) return res.status(400).json({ error: 'File too large (max 25 MB)' })
-      const anchor = body.booking_id ? `booking/${body.booking_id}` : body.vehicle_id ? `vehicle/${body.vehicle_id}` : body.customer_id ? `customer/${body.customer_id}` : null
-      if (!anchor) return res.status(400).json({ error: 'booking_id, vehicle_id or customer_id required' })
+      const anchor = body.booking_id ? `booking/${body.booking_id}` : body.vehicle_id ? `vehicle/${body.vehicle_id}` : body.customer_id ? `customer/${body.customer_id}` : body.job_type_id ? `jobtype/${body.job_type_id}` : null
+      if (!anchor) return res.status(400).json({ error: 'booking_id, vehicle_id, customer_id or job_type_id required' })
       const path = `${anchor}/${crypto.randomUUID()}.${safeExt(fileName)}`
       const { data, error } = await db.storage.from(BUCKET).createSignedUploadUrl(path)
       if (error || !data) return res.status(500).json({ error: error?.message || 'Could not create upload token' })
@@ -111,10 +113,10 @@ export default withAuth('view:diary', async (req, res, user) => {
         customerId = customerId || b?.customer_id || null
       }
       const { data: row, error } = await db.from('workshop_files').insert({
-        booking_id: body.booking_id || null, vehicle_id: vehicleId, customer_id: customerId,
+        booking_id: body.booking_id || null, vehicle_id: vehicleId, customer_id: customerId, job_type_id: body.job_type_id || null,
         file_name: fileName.slice(0, 200), storage_path: path, mime_type: mime || null,
         size_bytes: size || null, uploaded_by: user.id, uploaded_by_name: user.displayName || user.email,
-      }).select('id, booking_id, vehicle_id, customer_id, file_name, mime_type, size_bytes, uploaded_by_name, created_at').single()
+      }).select('id, booking_id, vehicle_id, customer_id, job_type_id, file_name, mime_type, size_bytes, uploaded_by_name, created_at').single()
       if (error) return res.status(500).json({ error: error.message })
       await logWorkshopActivity(db, {
         action: 'created', entity: 'file', entity_id: row.id, entity_label: fileName.slice(0, 120),

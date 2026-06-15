@@ -13,6 +13,7 @@ import PortalTopBar from '../../../lib/PortalTopBar'
 import WorkshopTabs from '../../../components/WorkshopTabs'
 import FilesPanel from '../../../components/workshop/FilesPanel'
 import TimeClockPanel from '../../../components/workshop/TimeClockPanel'
+import SendEmailModal from '../../../components/workshop/SendEmailModal'
 import { requirePageAuth } from '../../../lib/authServer'
 import { roleHasPermission } from '../../../lib/permissions'
 import {
@@ -66,8 +67,7 @@ export default function JobCardPage({ user }: { user: PortalUserSSR }) {
   const [inv, setInv] = useState<{ busy: boolean; msg: string; needAccount: boolean }>({ busy: false, msg: '', needAccount: false })
   const [acct, setAcct] = useState<{ candidates: any[]; sel: string; saving: boolean } | null>(null)
   const [sms, setSms] = useState<{ open: boolean; body: string; busy: boolean; msg: string }>({ open: false, body: '', busy: false, msg: '' })
-  const [emailing, setEmailing] = useState(false)
-  const [emailMsg, setEmailMsg] = useState('')
+  const [showEmail, setShowEmail] = useState(false)
   const [payments, setPayments] = useState<any[]>([])
   const [paidTotal, setPaidTotal] = useState(0)
   const [pay, setPay] = useState<{ open: boolean; amount: string; tender: string; note: string; busy: boolean; msg: string }>({ open: false, amount: '', tender: 'card', note: '', busy: false, msg: '' })
@@ -365,16 +365,7 @@ export default function JobCardPage({ user }: { user: PortalUserSSR }) {
   }
 
   function openPdf(type: 'jobcard' | 'invoice') { window.open(`/api/workshop/document?type=${type}&id=${encodeURIComponent(id)}`, '_blank') }
-  async function emailDoc() {
-    const status = data?.booking?.status
-    const type = (status === 'invoiced' || status === 'paid') ? 'invoice' : 'jobcard'
-    setEmailing(true); setEmailMsg('')
-    try {
-      const r = await fetch('/api/workshop/document', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ type, id }) })
-      const d = await r.json()
-      setEmailMsg(r.ok && d.ok ? `Emailed to ${d.to} ✓` : (d.message || d.error || 'Email failed'))
-    } catch (e: any) { setEmailMsg(e?.message || 'Email failed') } finally { setEmailing(false) }
-  }
+  const emailDocType: 'jobcard' | 'invoice' = (data?.booking?.status === 'invoiced' || data?.booking?.status === 'paid') ? 'invoice' : 'jobcard'
 
   function openPay() {
     const bal = Math.max(0, Math.round((totals.inc - paidTotal) * 100) / 100)
@@ -494,9 +485,9 @@ export default function JobCardPage({ user }: { user: PortalUserSSR }) {
                 <div style={{ display: 'flex', gap: 8, marginTop: 12, flexWrap: 'wrap', alignItems: 'center' }}>
                   <button onClick={() => openPdf('jobcard')} style={qbtn(T.text2)}>🖨 Print job card</button>
                   {(b.status === 'invoiced' || b.status === 'paid') && <button onClick={() => openPdf('invoice')} style={qbtn(T.teal)}>🧾 Tax invoice PDF</button>}
-                  {canEdit && <button onClick={emailDoc} disabled={emailing} style={qbtn(T.blue)}>{emailing ? 'Sending…' : '✉ Email customer'}</button>}
-                  {emailMsg && <span style={{ fontSize: 11, color: T.text2 }}>{emailMsg}</span>}
+                  {canEdit && <button onClick={() => setShowEmail(true)} style={qbtn(T.blue)}>✉ Email customer</button>}
                 </div>
+                {showEmail && <SendEmailModal type={emailDocType} id={id} onClose={() => setShowEmail(false)} />}
 
                 {dueSet.open && veh && (
                   <div style={{ marginTop: 10, padding: 12, background: T.bg2, border: `1px solid ${T.border2}`, borderRadius: 8 }}>

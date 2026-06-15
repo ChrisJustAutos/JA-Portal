@@ -19,7 +19,7 @@ function sb(): SupabaseClient {
   return createClient(url, key, { auth: { persistSession: false } })
 }
 
-export default withAuth('edit:bookings', async (req, res) => {
+export default withAuth('edit:bookings', async (req, res, user) => {
   if (req.method !== 'POST') { res.setHeader('Allow', 'POST'); return res.status(405).json({ error: 'POST only' }) }
   const jobTypeId = String(req.query.id || '').trim()
   if (!jobTypeId) return res.status(400).json({ error: 'job type id required' })
@@ -90,6 +90,12 @@ export default withAuth('edit:bookings', async (req, res) => {
       added = rows.length
     }
   }
+
+  // Record that this job type was applied (drives optional email attachments).
+  try {
+    const { data: linked } = await db.from('workshop_doc_job_types').select('id').eq('booking_id', bookingId).eq('job_type_id', jobTypeId).maybeSingle()
+    if (!linked) await db.from('workshop_doc_job_types').insert({ booking_id: bookingId, job_type_id: jobTypeId, applied_by: user.displayName || user.email || user.id })
+  } catch { /* best-effort */ }
 
   return res.status(200).json({ ok: true, added, job_type: (jobType as any).code || (jobType as any).name })
 })

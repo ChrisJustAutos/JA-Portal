@@ -16,6 +16,7 @@ import { QUOTE_STATUS_META, QUOTE_STATUSES, QuoteStatus, vehicleLabel, customerL
 import { T } from '../../../lib/ui/theme'
 import { money2 as money } from '../../../lib/ui/format'
 import { useConfirm } from '../../../components/ui/Feedback'
+import SendEmailModal from '../../../components/workshop/SendEmailModal'
 const inp: React.CSSProperties = { width: '100%', padding: '6px 8px', background: T.bg3, border: `1px solid ${T.border}`, borderRadius: 5, color: T.text, fontSize: 12, fontFamily: 'inherit', outline: 'none', boxSizing: 'border-box', colorScheme: 'dark' }
 const cellInp: React.CSSProperties = { ...inp, padding: '5px 7px', borderRadius: 4 }
 function qbtn(color: string): React.CSSProperties {
@@ -33,8 +34,7 @@ export default function QuoteBuilderPage({ user }: { user: PortalUserSSR }) {
   const [loading, setLoading] = useState(true)
   const [err, setErr] = useState('')
   const [busy, setBusy] = useState(false)
-  const [emailing, setEmailing] = useState(false)
-  const [emailMsg, setEmailMsg] = useState('')
+  const [showEmail, setShowEmail] = useState(false)
   const confirmDialog = useConfirm()
   // Job-type presets — fills quote lines from a template.
   const [presets, setPresets] = useState<Array<{ id: string; name: string }>>([])
@@ -97,14 +97,6 @@ export default function QuoteBuilderPage({ user }: { user: PortalUserSSR }) {
     router.push('/workshop/quotes')
   }
   function openPdf() { window.open(`/api/workshop/document?type=quote&id=${encodeURIComponent(id)}`, '_blank') }
-  async function emailQuote() {
-    setEmailing(true); setEmailMsg('')
-    try {
-      const r = await fetch('/api/workshop/document', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ type: 'quote', id }) })
-      const d = await r.json()
-      setEmailMsg(r.ok && d.ok ? `Emailed to ${d.to} ✓` : (d.message || d.error || 'Email failed'))
-    } catch (e: any) { setEmailMsg(e?.message || 'Email failed') } finally { setEmailing(false) }
-  }
 
   const q = data?.quote
   const lines = data?.lines || []
@@ -186,8 +178,7 @@ export default function QuoteBuilderPage({ user }: { user: PortalUserSSR }) {
                 {/* Print / email / delete */}
                 <div style={{ display: 'flex', gap: 8, marginTop: 16, alignItems: 'center', flexWrap: 'wrap' }}>
                   <button onClick={openPdf} style={qbtn(T.text2)}>🖨 Print / PDF</button>
-                  {canEdit && <button onClick={emailQuote} disabled={emailing} style={qbtn(T.blue)}>{emailing ? 'Sending…' : '✉ Email to customer'}</button>}
-                  {emailMsg && <span style={{ fontSize: 11, color: T.text2 }}>{emailMsg}</span>}
+                  {canEdit && <button onClick={() => setShowEmail(true)} style={qbtn(T.blue)}>✉ Email to customer</button>}
                   <div style={{ flex: 1 }} />
                   {canEdit && (
                     <button onClick={async () => {
@@ -215,6 +206,7 @@ export default function QuoteBuilderPage({ user }: { user: PortalUserSSR }) {
           </div>
         </div>
       </div>
+      {showEmail && <SendEmailModal type="quote" id={id} onClose={() => setShowEmail(false)} />}
     </>
   )
 }

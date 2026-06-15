@@ -17,6 +17,7 @@ import { requirePageAuth } from '../../lib/authServer'
 import type { PortalUserSSR } from '../../lib/authServer'
 import { PAYMENT_TENDERS, JOB_TYPES } from '../../lib/workshop'
 import { COMM_TRIGGERS, COMM_VARS, CommTemplate } from '../../lib/workshop-comm-templates'
+import FilesPanel from '../../components/workshop/FilesPanel'
 import { T } from '../../lib/ui/theme'
 import { useConfirm, useToast } from '../../components/ui/Feedback'
 const inp: React.CSSProperties = { width: '100%', padding: '7px 9px', background: T.bg3, border: `1px solid ${T.border}`, borderRadius: 6, color: T.text, fontSize: 13, fontFamily: 'inherit', outline: 'none', boxSizing: 'border-box', colorScheme: 'dark' }
@@ -406,6 +407,9 @@ function JobTypesSection() {
                 <button onClick={() => api('/api/workshop/job-type-lines', 'POST', { job_type_id: t.id, line_type: 'fee', description: '', qty: 1, unit_price_ex_gst: 0, sort_order: (t.lines || []).length })} style={pbtn(T.blue)}>+ Fee</button>
                 <JTPartPicker onPick={(it: any) => api('/api/workshop/job-type-lines', 'POST', { job_type_id: t.id, line_type: 'part', description: it.part_name, part_number: it.sku, qty: 1, unit_price_ex_gst: Number(it.sell_price) || 0, inventory_id: it.id, sort_order: (t.lines || []).length })} />
               </div>
+
+              <div style={{ fontSize: 10, color: T.text3, textTransform: 'uppercase', letterSpacing: '0.04em', margin: '14px 0 0' }}>Attachments (PDFs offered when emailing this job type)</div>
+              <FilesPanel jobTypeId={t.id} canEdit={true} />
             </div>
           )}
         </div>

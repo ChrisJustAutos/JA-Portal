@@ -52,8 +52,8 @@ async function maybeDownscale(file: File): Promise<{ blob: Blob; name: string; m
   } catch { return asIs }
 }
 
-export default function FilesPanel({ bookingId, vehicleId, customerId, canEdit }: {
-  bookingId?: string | null; vehicleId?: string | null; customerId?: string | null; canEdit: boolean
+export default function FilesPanel({ bookingId, vehicleId, customerId, jobTypeId, canEdit }: {
+  bookingId?: string | null; vehicleId?: string | null; customerId?: string | null; jobTypeId?: string | null; canEdit: boolean
 }) {
   const [files, setFiles] = useState<WorkshopFile[]>([])
   const [thumbs, setThumbs] = useState<Record<string, string>>({})
@@ -63,7 +63,8 @@ export default function FilesPanel({ bookingId, vehicleId, customerId, canEdit }
   const inputRef = useRef<HTMLInputElement>(null)
   const confirmDialog = useConfirm()
 
-  const anchor = bookingId ? `booking_id=${bookingId}` : vehicleId ? `vehicle_id=${vehicleId}` : customerId ? `customer_id=${customerId}` : ''
+  const anchor = bookingId ? `booking_id=${bookingId}` : vehicleId ? `vehicle_id=${vehicleId}` : customerId ? `customer_id=${customerId}` : jobTypeId ? `job_type_id=${jobTypeId}` : ''
+  const anchorBody = { booking_id: bookingId || null, vehicle_id: vehicleId || null, customer_id: customerId || null, job_type_id: jobTypeId || null }
 
   const load = useCallback(async () => {
     if (!anchor) { setLoading(false); return }
@@ -102,7 +103,7 @@ export default function FilesPanel({ bookingId, vehicleId, customerId, canEdit }
         const { blob, name, mime } = await maybeDownscale(items[i])
         const signRes = await fetch('/api/workshop/files', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ mode: 'sign', file_name: name, mime_type: mime, size_bytes: blob.size, booking_id: bookingId || null, vehicle_id: vehicleId || null, customer_id: customerId || null }),
+          body: JSON.stringify({ mode: 'sign', file_name: name, mime_type: mime, size_bytes: blob.size, ...anchorBody }),
         })
         const sign = await signRes.json()
         if (!signRes.ok) throw new Error(sign.error || 'Could not start upload')
@@ -110,7 +111,7 @@ export default function FilesPanel({ bookingId, vehicleId, customerId, canEdit }
         if (up.error) throw new Error(up.error.message || 'Upload failed')
         const recRes = await fetch('/api/workshop/files', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ mode: 'record', path: sign.path, file_name: name, mime_type: mime, size_bytes: blob.size, booking_id: bookingId || null, vehicle_id: vehicleId || null, customer_id: customerId || null }),
+          body: JSON.stringify({ mode: 'record', path: sign.path, file_name: name, mime_type: mime, size_bytes: blob.size, ...anchorBody }),
         })
         if (!recRes.ok) throw new Error((await recRes.json()).error || 'Could not save file record')
       } catch (e: any) {

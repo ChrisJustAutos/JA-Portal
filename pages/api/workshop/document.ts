@@ -141,6 +141,41 @@ function parseType(raw: any): DocType | null {
   return t === 'quote' || t === 'jobcard' || t === 'invoice' || t === 'po' ? t : null
 }
 
+const FILES_BUCKET = 'workshop-files'
+
+interface AttachmentCandidate { id: string; file_name: string; mime_type: string | null; size_bytes: number | null; source: 'job' | 'jobtype' }
+
+// Optional PDFs an email can include: the booking's own uploaded files + the
+// files attached to any job type applied to this booking/quote (template docs
+// like checklists, warranty sheets).
+async function gatherAttachmentCandidates(db: SupabaseClient, type: DocType, id: string): Promise<AttachmentCandidate[]> {
+  const out: AttachmentCandidate[] = []
+  const jtIds = new Set<string>()
+
+  if (type === 'jobcard' || type === 'invoice') {
+    const { data: bf } = await db.from('workshop_files')
+      .select('id, file_name, mime_type, size_bytes').eq('booking_id', id).order('created_at', { ascending: false })
+    for (const f of bf || []) out.push({ ...(f as any), source: 'job' })
+    const { data: links } = await db.from('workshop_doc_job_types').select('job_type_id').eq('booking_id', id)
+    for (const l of links || []) jtIds.add((l as any).job_type_id)
+    const { data: bk } = await db.from('workshop_bookings').select('job_type').eq('id', id).maybeSingle()
+    if ((bk as any)?.job_type) {
+      const { data: jt } = await db.from('workshop_job_types').select('id').ilike('name', String((bk as any).job_type))
+      for (const j of jt || []) jtIds.add((j as any).id)
+    }
+  } else if (type === 'quote') {
+    const { data: links } = await db.from('workshop_doc_job_types').select('job_type_id').eq('quote_id', id)
+    for (const l of links || []) jtIds.add((l as any).job_type_id)
+  }
+
+  if (jtIds.size) {
+    const { data: jf } = await db.from('workshop_files')
+      .select('id, file_name, mime_type, size_bytes').in('job_type_id', Array.from(jtIds))
+    for (const f of jf || []) out.push({ ...(f as any), source: 'jobtype' })
+  }
+  return out
+}
+
 export default withAuth('view:diary', async (req: NextApiRequest, res: NextApiResponse, user) => {
   const db = sb()
 
@@ -148,6 +183,22 @@ export default withAuth('view:diary', async (req: NextApiRequest, res: NextApiRe
     const type = parseType(req.query.type)
     const id = String(req.query.id || '').trim()
     if (!type || !id) return res.status(400).json({ error: 'type (quote|jobcard|invoice) and id required' })
+
+    // ?meta=1 → JSON for the editable send-email preview (no PDF render).
+    if (req.query.meta) {
+      const built = await buildDoc(db, type, id)
+      if (!built) return res.status(404).json({ error: 'not_found' })
+      const attachments = await gatherAttachmentCandidates(db, type, id)
+      return res.status(200).json({
+        ok: true,
+        to: built.customerEmail || '',
+        subject: `${built.doc.title} ${built.doc.reference} — ${built.doc.business.name}`,
+        message: `Please find your ${built.doc.title.toLowerCase()} attached${built.doc.vehicle ? ` for your ${built.doc.vehicle.label}` : ''}.`,
+        doc: { title: built.doc.title, reference: built.doc.reference, filename: built.filename },
+        attachments,
+      })
+    }
+
     const built = await buildDoc(db, type, id)
     if (!built) return res.status(404).json({ error: 'not_found' })
     const pdf = await renderWorkshopDocPdf(built.doc)
@@ -181,15 +232,30 @@ export default withAuth('view:diary', async (req: NextApiRequest, res: NextApiRe
       + `<p>Total: <strong>$${built.doc.total.toLocaleString('en-AU', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong> (inc GST).</p>`
       + `<p>Thanks,<br/>${bizName}</p>`
 
+    const attachments: { name: string; contentType: string; content: Buffer }[] = [
+      { name: built.filename, contentType: 'application/pdf', content: pdf },
+    ]
+
+    // Extra attachments — booking files / applied job-type template docs the
+    // sender ticked. Restricted to this doc's candidate set.
+    const fileIds: string[] = Array.isArray(body.file_ids) ? body.file_ids.map(String) : []
+    if (fileIds.length) {
+      const allowed = new Set((await gatherAttachmentCandidates(db, type, id)).map(c => c.id))
+      for (const fid of fileIds.filter(f => allowed.has(f)).slice(0, 12)) {
+        const { data: row } = await db.from('workshop_files').select('storage_path, file_name, mime_type').eq('id', fid).maybeSingle()
+        if (!row) continue
+        const dl = await db.storage.from(FILES_BUCKET).download((row as any).storage_path)
+        if (dl.error || !dl.data) continue
+        attachments.push({ name: (row as any).file_name || 'attachment', contentType: (row as any).mime_type || 'application/octet-stream', content: Buffer.from(await dl.data.arrayBuffer()) })
+      }
+    }
+
     try {
-      await sendMail(FROM_MAILBOX, {
-        to: [to], subject, html, replyTo: built.doc.business.email || undefined,
-        attachments: [{ name: built.filename, contentType: 'application/pdf', content: pdf }],
-      })
+      await sendMail(FROM_MAILBOX, { to: [to], subject, html, replyTo: built.doc.business.email || undefined, attachments })
     } catch (e: any) {
       return res.status(502).json({ error: 'send_failed', message: e?.message || 'Email send failed' })
     }
-    return res.status(200).json({ ok: true, to })
+    return res.status(200).json({ ok: true, to, attached: attachments.length })
   }
 
   res.setHeader('Allow', 'GET, POST')
