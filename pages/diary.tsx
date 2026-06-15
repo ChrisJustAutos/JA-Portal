@@ -334,7 +334,9 @@ export default function DiaryPage({ user }: { user: PortalUserSSR }) {
     load()
   }
 
-  // Drag a booking to a new lane (day: reassign tech + retime) or day (week: move date + retime).
+  // Drag a booking: day view = retime (vertical) + reassign tech (horizontal),
+  // keeping the booking on its OWN start day so a multi-day job isn't dragged
+  // forward onto the day you grabbed its tail on. Week view = move to the column's day.
   function dropMove(e: React.DragEvent<HTMLDivElement>, ymd: string, techExt: string | null, setTech: boolean) {
     e.preventDefault()
     if (!canEdit) return
@@ -344,7 +346,10 @@ export default function DiaryPage({ user }: { user: PortalUserSSR }) {
     const slot = Math.max(0, Math.floor((e.clientY - rect.top) / SLOT_PX))
     const startMin = grid.startMin + slot * SLOT_MIN
     const durMin = Math.max(30, Math.round((new Date(b.ends_at).getTime() - new Date(b.starts_at).getTime()) / 60000))
-    const startIso = isoFromBne(ymd, minsToHHMM(startMin))
+    // Day view (setTech): keep the booking's existing start date; only the time
+    // of day changes. Week view: use the dropped day column.
+    const startDate = setTech ? bneYmd(b.starts_at) : ymd
+    const startIso = isoFromBne(startDate, minsToHHMM(startMin))
     const endIso = new Date(new Date(startIso).getTime() + durMin * 60000).toISOString()
     const patch: any = { starts_at: startIso, ends_at: endIso }
     if (setTech) patch.technician_ext = techExt
