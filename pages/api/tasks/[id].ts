@@ -2,6 +2,7 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
 import { withAuth } from '../../../lib/authServer'
 import { roleHasPermission } from '../../../lib/permissions'
+import { enrolTask } from '../../../lib/task-automations'
 
 export const config = { maxDuration: 10 }
 
@@ -38,8 +39,24 @@ export default withAuth('view:tasks', async (req, res, user) => {
       patch.status = body.status
       patch.completed_at = body.status === 'done' ? new Date().toISOString() : null
     }
-    const { error } = await db.from('tasks').update(patch).eq('id', id)
+    // Capture prior assignee/status so we can fire the right triggers.
+    const wantsStatus = 'status' in patch
+    const wantsAssignee = 'assignee_id' in patch
+    let prev: any = null
+    if (wantsStatus || wantsAssignee) {
+      const { data } = await db.from('tasks').select('status, assignee_id').eq('id', id).maybeSingle()
+      prev = data
+    }
+    const { data: updated, error } = await db.from('tasks')
+      .update(patch).eq('id', id)
+      .select('id, status, priority, group_id, assignee_id').maybeSingle()
     if (error) return res.status(500).json({ error: error.message })
+    if (updated) {
+      try {
+        if (wantsStatus && prev && prev.status !== updated.status) await enrolTask(updated as any, 'status_changed', db)
+        if (wantsAssignee && prev && prev.assignee_id !== updated.assignee_id && updated.assignee_id) await enrolTask(updated as any, 'assignee_changed', db)
+      } catch { /* best-effort */ }
+    }
     return res.status(200).json({ ok: true })
   }
 

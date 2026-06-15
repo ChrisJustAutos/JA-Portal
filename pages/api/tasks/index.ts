@@ -4,6 +4,7 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
 import { withAuth } from '../../../lib/authServer'
 import { roleHasPermission } from '../../../lib/permissions'
+import { enrolTask } from '../../../lib/task-automations'
 
 export const config = { maxDuration: 15 }
 
@@ -47,6 +48,7 @@ export default withAuth('view:tasks', async (req, res, user) => {
       created_by: user.id,
     }).select('*').single()
     if (error) return res.status(500).json({ error: error.message })
+    try { await enrolTask(data as any, 'task_created', db) } catch { /* best-effort */ }
     return res.status(201).json({ ok: true, task: data })
   }
 

@@ -4,6 +4,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import Head from 'next/head'
+import { useRouter } from 'next/router'
 import PortalTopBar from '../../lib/PortalTopBar'
 import { requirePageAuth } from '../../lib/authServer'
 import type { PortalUserSSR } from '../../lib/authServer'
@@ -32,6 +33,7 @@ interface Staff { id: string; display_name: string | null; email: string }
 
 export default function TasksPage({ user }: { user: PortalUserSSR }) {
   const canEdit = roleHasPermission(user.role, 'edit:tasks')
+  const router = useRouter()
   const toast = useToast()
   const confirmDialog = useConfirm()
   const [tasks, setTasks] = useState<Task[]>([])
@@ -109,6 +111,7 @@ export default function TasksPage({ user }: { user: PortalUserSSR }) {
               {users.map(u => <option key={u.id} value={u.id}>{u.display_name || u.email}</option>)}
             </select>
             <span style={{ flex: 1 }} />
+            <button onClick={() => router.push('/tasks/automations')} style={btn(T.amber)}>⚡ Automations</button>
             {canEdit && <button onClick={addGroup} style={btn(T.text2)}>+ Group</button>}
             {canEdit && <button onClick={() => setEdit({ status: 'todo', priority: 'normal', group_id: groups[0]?.id || null })} style={btn(T.accent, true)}>+ Task</button>}
           </div>
