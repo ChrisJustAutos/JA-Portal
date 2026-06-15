@@ -11,6 +11,7 @@ import WorkshopSearch from './WorkshopSearch'
 
 const TABS: { id: string; label: string; href: string; perm?: Permission }[] = [
   { id: 'diary', label: 'Diary', href: '/diary' },
+  { id: 'jobs', label: 'Jobs', href: '/workshop/jobs' },
   { id: 'customers', label: 'Customers', href: '/workshop/customers' },
   { id: 'vehicles', label: 'Vehicles', href: '/workshop/vehicles' },
   { id: 'quotes', label: 'Quotes', href: '/workshop/quotes' },
@@ -20,7 +21,7 @@ const TABS: { id: string; label: string; href: string; perm?: Permission }[] = [
   { id: 'reports', label: 'Reports', href: '/workshop/reports', perm: 'view:reports' },
 ]
 
-export type WorkshopTabId = 'diary' | 'customers' | 'vehicles' | 'quotes' | 'orders' | 'invoices' | 'inventory' | 'reports'
+export type WorkshopTabId = 'diary' | 'jobs' | 'customers' | 'vehicles' | 'quotes' | 'orders' | 'invoices' | 'inventory' | 'reports'
 
 export default function WorkshopTabs({ active, role }: { active: WorkshopTabId; role: UserRole }) {
   const router = useRouter()
