@@ -7,7 +7,7 @@ import { createClient } from '@supabase/supabase-js'
 import { withAuth } from '../../../lib/authServer'
 import { roleHasPermission } from '../../../lib/permissions'
 import { BOOKING_STATUSES, BookingStatus } from '../../../lib/workshop'
-import { queueBookingReminder } from '../../../lib/workshop-reminders'
+import { queueBookingReminder, processDueReminders } from '../../../lib/workshop-reminders'
 import { notify } from '../../../lib/notifications'
 import { enrolFromEvent } from '../../../lib/crm-automation-triggers'
 
@@ -89,6 +89,9 @@ export default withAuth('view:diary', async (req, res, user) => {
     }).select('id').single()
     if (error) return res.status(500).json({ error: error.message })
     await queueBookingReminder(data.id)  // best-effort SMS reminder (gated by sms_enabled at send time)
+    // Fire the booking confirmation now (don't wait ~15 min for the cron). Only
+    // this booking's due rows; future reminders still go via the cron.
+    try { await processDueReminders(10, { bookingId: data.id }) } catch { /* best-effort */ }
 
     // booking_created flow trigger (CRM contact resolved via workshop customer).
     if (body.customer_id) {

@@ -283,15 +283,17 @@ function bookingIcs(start: string, end: string | null, summary: string): string 
 
 export interface ReminderRunResult { processed: number; sent: number; failed: number; skipped: string | null }
 
-export async function processDueReminders(limit = 50): Promise<ReminderRunResult> {
+export async function processDueReminders(limit = 50, opts?: { bookingId?: string }): Promise<ReminderRunResult> {
   const db = sb()
   const cfg = await settings()
   if (!cfg.sms_enabled) return { processed: 0, sent: 0, failed: 0, skipped: 'comms_disabled' }
 
-  const { data: due } = await db.from('workshop_reminders')
+  let q = db.from('workshop_reminders')
     .select('id, type, channel, to_number, to_email, subject, body, customer_id, booking_id, quote_id')
     .eq('status', 'pending').lte('send_at', new Date().toISOString())
     .order('send_at', { ascending: true }).limit(limit)
+  if (opts?.bookingId) q = q.eq('booking_id', opts.bookingId)   // instant flush for one booking
+  const { data: due } = await q
 
   let sent = 0, failed = 0
   for (const r of (due as any[]) || []) {
