@@ -24,7 +24,8 @@ function qbtn(color: string): React.CSSProperties {
 }
 const addBtn: React.CSSProperties = { padding: '5px 11px', borderRadius: 5, fontSize: 11, fontFamily: 'inherit', fontWeight: 600, background: 'transparent', color: T.blue, border: `1px solid ${T.border2}`, cursor: 'pointer' }
 
-interface QuoteLine { id: string; description: string | null; part_number: string | null; qty: number; unit_price: number; sort_order: number }
+interface QuoteLine { id: string; line_type?: string | null; description: string | null; part_number: string | null; qty: number; unit_price: number; inventory_id?: string | null; sort_order: number }
+const mvBtn: React.CSSProperties = { background: 'transparent', border: 'none', color: T.text3, cursor: 'pointer', fontSize: 13, padding: '0 3px', lineHeight: 1 }
 
 export default function QuoteBuilderPage({ user }: { user: PortalUserSSR }) {
   const router = useRouter()
@@ -36,24 +37,35 @@ export default function QuoteBuilderPage({ user }: { user: PortalUserSSR }) {
   const [busy, setBusy] = useState(false)
   const [showEmail, setShowEmail] = useState(false)
   const confirmDialog = useConfirm()
-  // Job-type presets — fills quote lines from a template.
-  const [presets, setPresets] = useState<Array<{ id: string; name: string }>>([])
-  const [applyJt, setApplyJt] = useState('')
+  // Job-type presets — fills quote lines from a template (description + items).
+  const [jobTypes, setJobTypes] = useState<any[]>([])
+  const [applyingJt, setApplyingJt] = useState(false)
   useEffect(() => {
     fetch('/api/workshop/job-types').then(r => r.json())
-      .then(d => setPresets((d.jobTypes || []).filter((t: any) => t.active).map((t: any) => ({ id: t.id, name: t.name }))))
+      .then(d => setJobTypes(d.jobTypes || []))
       .catch(() => undefined)
   }, [])
-  async function applyJobType() {
-    if (!applyJt || !id) return
-    const r = await fetch(`/api/workshop/job-types/${applyJt}/apply-to-quote`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ quote_id: id }),
-    })
-    if (!r.ok) { setErr((await r.json()).error || 'Apply failed'); return }
-    setApplyJt('')
-    await load()
+  async function applyJobType(jobTypeId: string) {
+    if (!jobTypeId || !id) return
+    setApplyingJt(true)
+    try {
+      const r = await fetch(`/api/workshop/job-types/${jobTypeId}/apply-to-quote`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ quote_id: id }),
+      })
+      if (!r.ok) { setErr((await r.json()).error || 'Apply failed'); return }
+      await load()
+    } finally { setApplyingJt(false) }
   }
+
+  // ── Line selection + drag-reorder (mirrors the job card) ──
+  const [selected, setSelected] = useState<Set<string>>(new Set())
+  const [dragIdx, setDragIdx] = useState<number | null>(null)
+  const [overIdx, setOverIdx] = useState<number | null>(null)
+  const dragIdxRef = useRef<number | null>(null)
+  const overIdxRef = useRef<number | null>(null)
+  const setDrag = (i: number | null) => { dragIdxRef.current = i; setDragIdx(i) }
+  const setOver = (i: number | null) => { overIdxRef.current = i; setOverIdx(i) }
 
   const load = useCallback(async () => {
     if (!id) return
@@ -80,6 +92,69 @@ export default function QuoteBuilderPage({ user }: { user: PortalUserSSR }) {
   }
   async function deleteLine(lineId: string) {
     await fetch(`/api/workshop/quote-lines?id=${encodeURIComponent(lineId)}`, { method: 'DELETE' })
+    await load()
+  }
+  const qlines = data?.lines || []
+  function moveLine(idx: number, dir: -1 | 1) { reorderLines(idx, idx + dir) }
+  // A job-type heading + every line beneath it until the next heading.
+  function sectionIds(startIdx: number): string[] {
+    const ids = [qlines[startIdx].id]
+    for (let i = startIdx + 1; i < qlines.length; i++) {
+      if (qlines[i].line_type === 'description') break
+      ids.push(qlines[i].id)
+    }
+    return ids
+  }
+  function toggleSelect(index: number) {
+    const line = qlines[index]
+    if (!line) return
+    const ids = line.line_type === 'description' ? sectionIds(index) : [line.id]
+    setSelected(prev => {
+      const next = new Set(prev)
+      const allOn = ids.every(id => next.has(id))
+      for (const id of ids) { if (allOn) next.delete(id); else next.add(id) }
+      return next
+    })
+  }
+  function toggleSelectAll() {
+    setSelected(prev => prev.size === qlines.length && qlines.length > 0 ? new Set() : new Set(qlines.map(l => l.id)))
+  }
+  async function deleteSelected() {
+    const ids = qlines.filter(l => selected.has(l.id)).map(l => l.id)
+    if (!ids.length) return
+    const headings = qlines.filter(l => selected.has(l.id) && l.line_type === 'description').length
+    if (!(await confirmDialog({ title: `Delete ${ids.length} line${ids.length === 1 ? '' : 's'}?`, message: headings ? 'This includes job-type heading(s) and their items.' : undefined, confirmLabel: 'Delete', danger: true }))) return
+    const idset = new Set(ids)
+    setData(d => d ? { ...d, lines: d.lines.filter(l => !idset.has(l.id)) } : d)  // optimistic
+    setSelected(new Set())
+    await Promise.all(ids.map(lid => fetch(`/api/workshop/quote-lines?id=${encodeURIComponent(lid)}`, { method: 'DELETE' })))
+    await load()
+  }
+  async function moveSelected(dir: -1 | 1) {
+    const arr = [...qlines]
+    if (dir === -1) { for (let i = 1; i < arr.length; i++) if (selected.has(arr[i].id) && !selected.has(arr[i - 1].id)) [arr[i - 1], arr[i]] = [arr[i], arr[i - 1]] }
+    else { for (let i = arr.length - 2; i >= 0; i--) if (selected.has(arr[i].id) && !selected.has(arr[i + 1].id)) [arr[i], arr[i + 1]] = [arr[i + 1], arr[i]] }
+    setData(d => d ? { ...d, lines: arr.map((l, i) => ({ ...l, sort_order: i })) } : d)
+    await Promise.all(arr.map((l, i) => Number(l.sort_order) !== i
+      ? fetch(`/api/workshop/quote-lines?id=${encodeURIComponent(l.id)}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sort_order: i }) })
+      : null))
+    await load()
+  }
+  function dropLine() {
+    const from = dragIdxRef.current, to = overIdxRef.current
+    setDrag(null); setOver(null)
+    if (from !== null && to !== null) reorderLines(from, to)
+  }
+  async function reorderLines(from: number, to: number) {
+    if (from == null || to == null || from === to) return
+    const arr = [...qlines]
+    if (to < 0 || to >= arr.length || from < 0 || from >= arr.length) return
+    const [moved] = arr.splice(from, 1)
+    arr.splice(to, 0, moved)
+    setData(d => d ? { ...d, lines: arr.map((l, i) => ({ ...l, sort_order: i })) } : d)  // optimistic
+    await Promise.all(arr.map((l, i) => Number(l.sort_order) !== i
+      ? fetch(`/api/workshop/quote-lines?id=${encodeURIComponent(l.id)}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sort_order: i }) })
+      : null))
     await load()
   }
   async function convert() {
@@ -139,27 +214,36 @@ export default function QuoteBuilderPage({ user }: { user: PortalUserSSR }) {
                   </div>
                 </div>
 
-                {/* Lines */}
+                {/* Lines — same layout + selection as the job-card invoice */}
                 <div style={{ background: T.bg2, border: `1px solid ${T.border}`, borderRadius: 10, overflow: 'hidden', marginTop: 16 }}>
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 110px 60px 90px 90px 28px', gap: 8, padding: '8px 14px', background: T.bg3, borderBottom: `1px solid ${T.border}`, fontSize: 9, color: T.text3, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                    <div>Description</div><div>Part #</div><div style={{ textAlign: 'right' }}>Qty</div><div style={{ textAlign: 'right' }}>Unit</div><div style={{ textAlign: 'right' }}>Total</div><div/>
+                  {canEdit && selected.size > 0 && (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 14px', background: `${T.accent}14`, borderBottom: `1px solid ${T.border}`, flexWrap: 'wrap' }}>
+                      <span style={{ fontSize: 12, fontWeight: 600, color: T.text }}>{selected.size} selected</span>
+                      <span style={{ flex: 1 }} />
+                      <button onClick={() => moveSelected(-1)} style={qbtn(T.text2)}>↑ Move up</button>
+                      <button onClick={() => moveSelected(1)} style={qbtn(T.text2)}>↓ Move down</button>
+                      <button onClick={deleteSelected} style={qbtn(T.red)}>🗑 Delete selected</button>
+                      <button onClick={() => setSelected(new Set())} style={qbtn(T.text3)}>Clear</button>
+                    </div>
+                  )}
+                  <div style={{ display: 'grid', gridTemplateColumns: '28px 70px 1fr 60px 90px 90px 84px', gap: 8, padding: '8px 14px', background: T.bg3, borderBottom: `1px solid ${T.border}`, fontSize: 9, color: T.text3, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', alignItems: 'center' }}>
+                    {canEdit ? <input type="checkbox" title="Select all" checked={lines.length > 0 && selected.size === lines.length} onChange={toggleSelectAll} style={{ cursor: 'pointer' }} /> : <div />}
+                    <div>Type</div><div>Description</div><div style={{ textAlign: 'right' }}>Qty</div><div style={{ textAlign: 'right' }}>Unit</div><div style={{ textAlign: 'right' }}>Total</div><div/>
                   </div>
                   {lines.length === 0 && <div style={{ padding: 18, textAlign: 'center', fontSize: 12, color: T.text3 }}>No lines yet.</div>}
-                  {lines.map(l => <LineRow key={l.id} line={l} canEdit={canEdit} onPatch={(p) => patchLine(l.id, p)} onDelete={() => deleteLine(l.id)} />)}
+                  {lines.map((l, i) => (
+                    <LineRow key={l.id} line={l} canEdit={canEdit} index={i}
+                      selected={selected.has(l.id)} onToggleSelect={() => toggleSelect(i)}
+                      onPatch={(p) => patchLine(l.id, p)} onDelete={() => deleteLine(l.id)} onMove={(dir) => moveLine(i, dir)}
+                      dragOver={overIdx === i && dragIdx !== null && dragIdx !== i}
+                      onGrab={() => setDrag(i)} onHover={(idx) => setOver(idx)} onDropLine={dropLine} onCancel={() => { setDrag(null); setOver(null) }} />
+                  ))}
                   {canEdit && (
-                    <div style={{ padding: 12, borderTop: `1px solid ${T.border}`, display: 'flex', gap: 8, alignItems: 'center' }}>
-                      <button onClick={() => addLine({ description: 'Labour', qty: 1, unit_price: 0 })} style={addBtn}>+ Line</button>
-                      <PartPicker onPick={(it) => addLine({ description: it.part_name, part_number: it.sku, qty: 1, unit_price: Number(it.sell_price) || 0, inventory_id: it.id } as any)} />
-                      {presets.length > 0 && (
-                        <>
-                          <div style={{ flex: 1 }} />
-                          <select value={applyJt} onChange={e => setApplyJt(e.target.value)} title="Apply a job-type preset — adds its lines + appends its work narrative to the notes" style={{ padding: '5px 9px', background: T.bg3, color: T.text, border: `1px solid ${T.border2}`, borderRadius: 5, fontSize: 11, fontFamily: 'inherit', maxWidth: 220 }}>
-                            <option value="">Apply job type…</option>
-                            {presets.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-                          </select>
-                          <button onClick={applyJobType} disabled={!applyJt} style={addBtn}>Apply</button>
-                        </>
-                      )}
+                    <div style={{ padding: 12, borderTop: `1px solid ${T.border}`, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                      <JobTypePicker jobTypes={jobTypes} busy={applyingJt} onPick={(jt) => applyJobType(jt.id)} />
+                      <button onClick={() => addLine({ line_type: 'item', description: 'Labour', qty: 1, unit_price: 0 })} style={addBtn}>+ Line</button>
+                      <button onClick={() => addLine({ line_type: 'description', description: '', qty: 0, unit_price: 0 })} title="A text-only heading row — describe the job, then move the items that belong to it underneath" style={addBtn}>+ Description</button>
+                      <PartPicker onPick={(it) => addLine({ line_type: 'item', description: it.part_name, part_number: it.sku, qty: 1, unit_price: Number(it.sell_price) || 0, inventory_id: it.id } as any)} />
                     </div>
                   )}
                   <div style={{ padding: '12px 16px', borderTop: `1px solid ${T.border2}`, display: 'flex', flexDirection: 'column', gap: 4, alignItems: 'flex-end' }}>
@@ -225,21 +309,111 @@ function NotesField({ initial, disabled, onSave }: { initial: string; disabled: 
   return <textarea value={v} disabled={disabled} onChange={e => setV(e.target.value)} onBlur={() => v !== initial && onSave(v)} rows={2} style={{ ...inp, resize: 'vertical' }} placeholder="Quote notes / scope…" />
 }
 
-function LineRow({ line, canEdit, onPatch, onDelete }: { line: QuoteLine; canEdit: boolean; onPatch: (p: any) => void; onDelete: () => void }) {
+function LineRow({ line, canEdit, index, selected, onToggleSelect, onPatch, onDelete, onMove, dragOver, onGrab, onHover, onDropLine, onCancel }: {
+  line: QuoteLine; canEdit: boolean; index: number
+  selected?: boolean; onToggleSelect?: () => void
+  onPatch: (p: any) => void; onDelete: () => void; onMove: (dir: -1 | 1) => void
+  dragOver?: boolean; onGrab?: () => void; onHover?: (idx: number) => void; onDropLine?: () => void; onCancel?: () => void
+}) {
   const [desc, setDesc] = useState(line.description || '')
-  const [pn, setPn] = useState(line.part_number || '')
   const [qty, setQty] = useState(String(line.qty))
   const [price, setPrice] = useState(String(line.unit_price))
-  useEffect(() => { setDesc(line.description || ''); setPn(line.part_number || ''); setQty(String(line.qty)); setPrice(String(line.unit_price)) }, [line.id, line.description, line.part_number, line.qty, line.unit_price])
+  const [grabbing, setGrabbing] = useState(false)
+  useEffect(() => { setDesc(line.description || ''); setQty(String(line.qty)); setPrice(String(line.unit_price)) }, [line.id, line.description, line.qty, line.unit_price])
   const total = (Number(line.qty) || 0) * (Number(line.unit_price) || 0)
+  const isHeading = line.line_type === 'description'
+
+  // Touch / pen reordering (HTML5 drag never fires on touch): track the finger,
+  // find the row under it via elementFromPoint, drop on pointer-up.
+  function gripPointerDown(e: React.PointerEvent) {
+    if (!canEdit || e.pointerType === 'mouse') return
+    e.preventDefault(); setGrabbing(true); onGrab?.()
+    const move = (ev: PointerEvent) => {
+      const el = document.elementFromPoint(ev.clientX, ev.clientY) as HTMLElement | null
+      const row = el?.closest('[data-line-index]') as HTMLElement | null
+      if (row) { const idx = Number(row.dataset.lineIndex); if (!Number.isNaN(idx)) onHover?.(idx) }
+    }
+    const end = (drop: boolean) => () => {
+      document.removeEventListener('pointermove', move); document.removeEventListener('pointerup', up); document.removeEventListener('pointercancel', cancel)
+      setGrabbing(false); drop ? onDropLine?.() : onCancel?.()
+    }
+    const up = end(true), cancel = end(false)
+    document.addEventListener('pointermove', move, { passive: false })
+    document.addEventListener('pointerup', up); document.addEventListener('pointercancel', cancel)
+  }
+
+  const controls = canEdit ? (
+    <span style={{ display: 'flex', gap: 0, justifyContent: 'flex-end', alignItems: 'center' }}>
+      <span draggable onMouseDown={() => setGrabbing(true)}
+        onDragStart={(e) => { e.dataTransfer.effectAllowed = 'move'; onGrab?.() }}
+        onDragEnd={() => { setGrabbing(false); onCancel?.() }}
+        onPointerDown={gripPointerDown}
+        title="Drag to reorder" style={{ cursor: 'grab', color: T.text3, fontSize: 15, padding: '0 4px', lineHeight: 1, userSelect: 'none', touchAction: 'none' }}>⠿</span>
+      <button onClick={() => onMove(-1)} title="Move up" style={mvBtn}>↑</button>
+      <button onClick={() => onMove(1)} title="Move down" style={mvBtn}>↓</button>
+      <button onClick={onDelete} title="Remove" style={{ ...mvBtn, fontSize: 15 }}>×</button>
+    </span>
+  ) : <span />
+  const dragProps: any = { 'data-line-index': index }
+  if (canEdit) {
+    dragProps.onDragOver = (e: React.DragEvent) => { e.preventDefault(); onHover?.(index) }
+    dragProps.onDrop = (e: React.DragEvent) => { e.preventDefault(); onDropLine?.() }
+  }
+  const dropEdge = dragOver ? { boxShadow: `inset 0 2px 0 0 ${T.accent}` } : {}
+  const selBg = selected ? { background: `${T.accent}1a` } : {}
+  const checkbox = canEdit
+    ? <input type="checkbox" checked={!!selected} onChange={onToggleSelect} style={{ cursor: 'pointer' }} title={isHeading ? 'Select this job type + its items' : 'Select line'} />
+    : <span />
+
+  if (isHeading) {
+    return (
+      <div {...dragProps} style={{ display: 'grid', gridTemplateColumns: '28px 70px 1fr 84px', gap: 8, padding: '8px 14px', borderTop: `1px solid ${T.border}`, alignItems: 'start', background: T.bg3, ...selBg, ...dropEdge }}>
+        <span style={{ paddingTop: 5 }}>{checkbox}</span>
+        <span style={{ fontSize: 10, color: T.text3, textTransform: 'uppercase', paddingTop: 6 }}>Desc</span>
+        <textarea value={desc} disabled={!canEdit} rows={2} onChange={e => setDesc(e.target.value)} onBlur={() => desc !== (line.description || '') && onPatch({ description: desc })}
+          placeholder="Job description — the items below belong to it"
+          style={{ ...cellInp, fontWeight: 600, lineHeight: 1.4, resize: 'vertical', minHeight: 36, fontFamily: 'inherit', whiteSpace: 'pre-wrap' }} />
+        {controls}
+      </div>
+    )
+  }
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: '1fr 110px 60px 90px 90px 28px', gap: 8, padding: '8px 14px', borderTop: `1px solid ${T.border}`, alignItems: 'center' }}>
-      <input value={desc} disabled={!canEdit} onChange={e => setDesc(e.target.value)} onBlur={() => desc !== (line.description || '') && onPatch({ description: desc })} placeholder="Description" style={cellInp} />
-      <input value={pn} disabled={!canEdit} onChange={e => setPn(e.target.value)} onBlur={() => pn !== (line.part_number || '') && onPatch({ part_number: pn })} placeholder="—" style={cellInp} />
+    <div {...dragProps} style={{ display: 'grid', gridTemplateColumns: '28px 70px 1fr 60px 90px 90px 84px', gap: 8, padding: '8px 14px', borderTop: `1px solid ${T.border}`, alignItems: 'center', opacity: grabbing ? 0.5 : 1, ...selBg, ...dropEdge }}>
+      {checkbox}
+      <span style={{ fontSize: 10, color: T.text3, textTransform: 'uppercase' }}>{line.part_number || line.inventory_id ? 'Part' : 'Item'}</span>
+      <input value={desc} disabled={!canEdit} onChange={e => setDesc(e.target.value)} onBlur={() => desc !== (line.description || '') && onPatch({ description: desc })} placeholder={line.part_number || 'Description'} style={cellInp} />
       <input value={qty} disabled={!canEdit} inputMode="decimal" onChange={e => setQty(e.target.value)} onBlur={() => Number(qty) !== Number(line.qty) && onPatch({ qty: Number(qty) || 0 })} style={{ ...cellInp, textAlign: 'right' }} />
       <input value={price} disabled={!canEdit} inputMode="decimal" onChange={e => setPrice(e.target.value)} onBlur={() => Number(price) !== Number(line.unit_price) && onPatch({ unit_price: Number(price) || 0 })} style={{ ...cellInp, textAlign: 'right' }} />
       <span style={{ fontSize: 12, fontFamily: 'monospace', color: T.text2, textAlign: 'right' }}>{money(total)}</span>
-      {canEdit ? <button onClick={onDelete} style={{ background: 'transparent', border: 'none', color: T.text3, cursor: 'pointer', fontSize: 15 }}>×</button> : <span/>}
+      {controls}
+    </div>
+  )
+}
+
+// Searchable job-type picker — picking one appends its description heading +
+// template items to the quote (mirrors the job card).
+function JobTypePicker({ jobTypes, busy, onPick }: { jobTypes: any[]; busy: boolean; onPick: (jt: any) => void }) {
+  const [open, setOpen] = useState(false)
+  const [q, setQ] = useState('')
+  const active = jobTypes.filter(t => t.active !== false)
+  const needle = q.trim().toLowerCase()
+  const results = (needle ? active.filter(t => `${t.name || ''} ${t.code || ''}`.toLowerCase().includes(needle)) : active).slice(0, 60)
+  if (!open) return <button onClick={() => setOpen(true)} disabled={busy} style={{ ...addBtn, color: T.teal }} title="Add a preset job — its description heading + items">{busy ? 'Adding job…' : '+ Job type'}</button>
+  return (
+    <div style={{ position: 'relative' }}>
+      <input autoFocus value={q} onChange={e => setQ(e.target.value)} placeholder="Search job types…" onBlur={() => setTimeout(() => setOpen(false), 200)} style={{ ...cellInp, width: 220, padding: '6px 8px' }} />
+      <div style={{ position: 'absolute', bottom: '100%', left: 0, width: 320, background: T.bg3, border: `1px solid ${T.border2}`, borderRadius: 6, marginBottom: 4, maxHeight: 260, overflowY: 'auto', zIndex: 10 }}>
+        {results.length === 0 && <div style={{ padding: '10px 12px', fontSize: 11, color: T.text3 }}>{active.length === 0 ? 'No job types yet — create them in Settings → Workshop → Job types.' : 'No matches.'}</div>}
+        {results.map(jt => {
+          const lineCount = Array.isArray(jt.lines) ? jt.lines.length : 0
+          return (
+            <div key={jt.id} onMouseDown={() => { onPick(jt); setOpen(false); setQ('') }} style={{ padding: '7px 10px', fontSize: 12, cursor: 'pointer', borderBottom: `1px solid ${T.border}` }}>
+              <div style={{ color: T.text }}>{jt.name}{jt.code ? <span style={{ color: T.text3 }}> · {jt.code}</span> : null}</div>
+              <div style={{ fontSize: 10, color: T.text3 }}>{lineCount} line{lineCount === 1 ? '' : 's'}</div>
+            </div>
+          )
+        })}
+      </div>
     </div>
   )
 }

@@ -22,9 +22,12 @@ function sb(): SupabaseClient {
 const round2 = (n: number) => Math.round(n * 100) / 100
 
 async function recompute(db: SupabaseClient, quoteId: string) {
-  const { data: lines } = await db.from('workshop_quote_lines').select('qty, unit_price').eq('quote_id', quoteId)
+  const { data: lines } = await db.from('workshop_quote_lines').select('qty, unit_price, line_type').eq('quote_id', quoteId)
   let subtotal = 0
-  for (const l of lines || []) subtotal += Number((l as any).qty) * Number((l as any).unit_price)
+  for (const l of lines || []) {
+    if ((l as any).line_type === 'description') continue   // heading rows carry no value
+    subtotal += Number((l as any).qty) * Number((l as any).unit_price)
+  }
   subtotal = round2(subtotal)
   const gst = round2(subtotal * 0.10)
   const total = round2(subtotal + gst)
@@ -54,9 +57,10 @@ export default withAuth('view:diary', async (req, res, user) => {
     if (!quote_id) return res.status(400).json({ error: 'quote_id required' })
     const { data, error } = await db.from('workshop_quote_lines').insert({
       quote_id,
+      line_type: body.line_type ? String(body.line_type) : 'item',
       description: body.description ? String(body.description) : null,
       part_number: body.part_number ? String(body.part_number) : null,
-      qty: Number(body.qty) || 1,
+      qty: Number(body.qty) || (body.line_type === 'description' ? 0 : 1),
       unit_price: Number(body.unit_price) || 0,
       inventory_id: body.inventory_id || null,
       sort_order: Number(body.sort_order) || 0,
@@ -70,7 +74,7 @@ export default withAuth('view:diary', async (req, res, user) => {
     const id = String(req.query.id || '').trim()
     if (!id) return res.status(400).json({ error: 'id required' })
     const patch: Record<string, any> = {}
-    for (const f of ['description', 'part_number', 'qty', 'unit_price', 'inventory_id', 'sort_order']) {
+    for (const f of ['line_type', 'description', 'part_number', 'qty', 'unit_price', 'inventory_id', 'sort_order']) {
       if (f in body) patch[f] = body[f] === '' ? null : body[f]
     }
     const { data, error } = await db.from('workshop_quote_lines').update(patch).eq('id', id).select('quote_id').single()

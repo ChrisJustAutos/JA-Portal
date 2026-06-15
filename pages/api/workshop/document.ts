@@ -54,11 +54,15 @@ async function buildDoc(db: SupabaseClient, type: DocType, id: string): Promise<
       .select('*, customer:workshop_customers(*), vehicle:workshop_vehicles(*)').eq('id', id).maybeSingle()
     if (!quote) return null
     const { data: lines } = await db.from('workshop_quote_lines').select('*').eq('quote_id', id).order('sort_order', { ascending: true })
-    const docLines = (lines || []).map((l: any) => ({
-      description: l.description || '', partNumber: l.part_number,
-      qty: Number(l.qty) || 0, unitPrice: Number(l.unit_price) || 0,
-      total: round2((Number(l.qty) || 0) * (Number(l.unit_price) || 0)),
-    }))
+    const docLines = (lines || []).map((l: any) => (
+      l.line_type === 'description'
+        ? { description: l.description || '', partNumber: null, qty: 0, unitPrice: 0, total: 0, isHeading: true }
+        : {
+            description: l.description || '', partNumber: l.part_number,
+            qty: Number(l.qty) || 0, unitPrice: Number(l.unit_price) || 0,
+            total: round2((Number(l.qty) || 0) * (Number(l.unit_price) || 0)),
+          }
+    ))
     const cust: any = (quote as any).customer || {}
     const veh: any = (quote as any).vehicle
     const ref = `Q-${String(id).slice(0, 8).toUpperCase()}`

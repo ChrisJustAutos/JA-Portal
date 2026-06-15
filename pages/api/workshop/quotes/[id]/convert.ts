@@ -58,18 +58,21 @@ export default withAuth('view:diary', async (req, res, user) => {
   }).select('id').single()
   if (bErr) return res.status(500).json({ error: bErr.message })
 
-  const lines = (qLines || []).map((l: any, i: number) => ({
-    booking_id: booking.id,
-    line_type: (l.inventory_id || l.part_number) ? 'part' : 'labour',
-    description: l.description || null,
-    part_number: l.part_number || null,
-    qty: Number(l.qty) || 1,
-    unit_price_ex_gst: Number(l.unit_price) || 0,
-    gst_rate: 0.10,
-    inventory_id: l.inventory_id || null,
-    total_ex_gst: round2((Number(l.qty) || 1) * (Number(l.unit_price) || 0)),
-    sort_order: Number(l.sort_order) || i,
-  }))
+  const lines = (qLines || []).map((l: any, i: number) => {
+    const isHeading = l.line_type === 'description'
+    return {
+      booking_id: booking.id,
+      line_type: isHeading ? 'description' : ((l.inventory_id || l.part_number) ? 'part' : 'labour'),
+      description: l.description || null,
+      part_number: l.part_number || null,
+      qty: isHeading ? 0 : (Number(l.qty) || 1),
+      unit_price_ex_gst: isHeading ? 0 : (Number(l.unit_price) || 0),
+      gst_rate: 0.10,
+      inventory_id: l.inventory_id || null,
+      total_ex_gst: isHeading ? 0 : round2((Number(l.qty) || 1) * (Number(l.unit_price) || 0)),
+      sort_order: Number(l.sort_order) || i,
+    }
+  })
   if (lines.length > 0) {
     const { error: lErr } = await db.from('workshop_booking_lines').insert(lines)
     if (lErr) return res.status(500).json({ error: lErr.message })
