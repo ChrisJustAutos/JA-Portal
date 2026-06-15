@@ -3,7 +3,7 @@
 // Editable date range, growth %, forecast months; per-row Morgan's judgment,
 // MOQ + notes; Sync pulls stock + sales from MYOB (JAWS via CData); Export xlsx.
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import Head from 'next/head'
 import PortalTopBar from '../../../lib/PortalTopBar'
 import B2BAdminTabs from '../../../components/b2b/B2BAdminTabs'
@@ -24,6 +24,18 @@ const num = (n: number) => Number(n || 0).toLocaleString('en-AU', { maximumFract
 
 const GRID = '120px 1.4fr 56px 56px 56px 56px 70px 60px 70px 70px 64px 64px 80px 70px 90px 80px 1fr'
 
+const ymd = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+// Last N calendar months (1st of the month N-1 back → today) so the divisor = N.
+function lastNMonths(n: number): { from: string; to: string } {
+  const t = new Date()
+  return { from: ymd(new Date(t.getFullYear(), t.getMonth() - (n - 1), 1)), to: ymd(t) }
+}
+function thisFinancialYear(): { from: string; to: string } {
+  const t = new Date()
+  const y = t.getMonth() >= 6 ? t.getFullYear() : t.getFullYear() - 1   // AU FY starts 1 July
+  return { from: `${y}-07-01`, to: ymd(t) }
+}
+
 export default function StockReorderPage({ user }: { user: any }) {
   const [settings, setSettings] = useState<ReorderSettings>({ from_date: null, to_date: null, growth_pct: 0.2, forecast_months: 3 })
   const [items, setItems] = useState<ReorderItem[]>([])
@@ -34,6 +46,7 @@ export default function StockReorderPage({ user }: { user: any }) {
   const [adding, setAdding] = useState(false)
   const [addQ, setAddQ] = useState('')
   const [addResults, setAddResults] = useState<Array<{ sku: string; name: string }>>([])
+  const syncTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -54,6 +67,14 @@ export default function StockReorderPage({ user }: { user: any }) {
     const next = { ...settings, ...patch }
     setSettings(next)
     await fetch('/api/b2b/admin/reorder', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(patch) })
+  }
+  // Re-pull sales (+ stock) shortly after the range changes, so the Sales column
+  // always reflects the chosen window.
+  function scheduleSync() { if (syncTimer.current) clearTimeout(syncTimer.current); syncTimer.current = setTimeout(() => { sync() }, 700) }
+  async function applyRange(from: string | null, to: string | null) {
+    setSettings(s => ({ ...s, from_date: from, to_date: to }))
+    await fetch('/api/b2b/admin/reorder', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ from_date: from, to_date: to }) })
+    if (from && to) scheduleSync()
   }
   async function patchItem(id: string, patch: any) {
     setItems(prev => prev.map(i => i.id === id ? { ...i, ...patch } : i))
@@ -101,9 +122,15 @@ export default function StockReorderPage({ user }: { user: any }) {
           {/* Controls */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', marginBottom: 14 }}>
             <div style={{ fontSize: 18, fontWeight: 600, marginRight: 8 }}>Stock Order</div>
-            <label style={{ fontSize: 11, color: T.text3 }}>Sales from <input type="date" value={settings.from_date || ''} onChange={e => saveSettings({ from_date: e.target.value || null })} style={{ ...inp, marginLeft: 4 }} /></label>
-            <label style={{ fontSize: 11, color: T.text3 }}>to <input type="date" value={settings.to_date || ''} onChange={e => saveSettings({ to_date: e.target.value || null })} style={{ ...inp, marginLeft: 4 }} /></label>
+            <label style={{ fontSize: 11, color: T.text3 }}>Sales from <input type="date" value={settings.from_date || ''} onChange={e => applyRange(e.target.value || null, settings.to_date)} style={{ ...inp, marginLeft: 4 }} /></label>
+            <label style={{ fontSize: 11, color: T.text3 }}>to <input type="date" value={settings.to_date || ''} onChange={e => applyRange(settings.from_date, e.target.value || null)} style={{ ...inp, marginLeft: 4 }} /></label>
             <span style={{ fontSize: 11, color: T.text3 }}>= {months} mo</span>
+            <div style={{ display: 'flex', gap: 4 }}>
+              {([['3 mo', lastNMonths(3)], ['6 mo', lastNMonths(6)], ['9 mo', lastNMonths(9)], ['12 mo', lastNMonths(12)], ['This FY', thisFinancialYear()]] as const).map(([label, r]) => {
+                const on = settings.from_date === r.from && settings.to_date === r.to
+                return <button key={label} onClick={() => applyRange(r.from, r.to)} style={{ ...btn(on ? T.blue : T.text2), padding: '5px 9px', background: on ? `${T.blue}1a` : 'transparent' }}>{label}</button>
+              })}
+            </div>
             <label style={{ fontSize: 11, color: T.text3 }}>Growth % <input type="number" step="1" value={Math.round(settings.growth_pct * 100)} onChange={e => saveSettings({ growth_pct: (Number(e.target.value) || 0) / 100 })} style={{ ...inp, width: 64, marginLeft: 4, textAlign: 'right' }} /></label>
             <label style={{ fontSize: 11, color: T.text3 }}>Cover months <input type="number" step="1" min={1} value={settings.forecast_months} onChange={e => saveSettings({ forecast_months: Math.max(1, Number(e.target.value) || 1) })} style={{ ...inp, width: 56, marginLeft: 4, textAlign: 'right' }} /></label>
             <div style={{ flex: 1 }} />
