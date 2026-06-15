@@ -58,9 +58,24 @@ export default withAuth('view:diary', async (req, res, user) => {
     return res.status(200).json({ booking, lines: lines || [], history })
   }
 
+  // ── Delete a job (hard delete; lines/payments/time/stock cascade) ──
+  if (req.method === 'DELETE') {
+    if (!roleHasPermission(user.role, 'edit:bookings')) return res.status(403).json({ error: 'Forbidden — cannot delete jobs' })
+    const { data: bk } = await db.from('workshop_bookings').select('id, myob_invoice_uid').eq('id', id).maybeSingle()
+    if (!bk) return res.status(404).json({ error: 'not_found' })
+    if ((bk as any).myob_invoice_uid) return res.status(409).json({ error: 'This job is finalised to MYOB — un-finalise it first, then delete.', code: 'finalised' })
+    const { data: posted } = await db.from('workshop_payments').select('id').eq('booking_id', id).eq('posted_to_myob', true).limit(1)
+    if (posted && posted.length) return res.status(409).json({ error: 'This job has a payment posted to MYOB — delete that payment in MYOB first.', code: 'posted_payment' })
+    await db.from('workshop_invoices').delete().eq('booking_id', id)   // FK is SET NULL, so remove explicitly
+    const { error: delErr } = await db.from('workshop_bookings').delete().eq('id', id)
+    if (delErr) return res.status(500).json({ error: delErr.message })
+    try { const { logWorkshopActivity } = await import('../../../../lib/workshop-activity'); await logWorkshopActivity(db, { action: 'deleted', entity: 'booking', entity_id: id, detail: 'Job deleted', actor_id: user.id, actor_name: user.displayName || user.email }) } catch { /* non-fatal */ }
+    return res.status(200).json({ ok: true })
+  }
+
   if (req.method !== 'PATCH') {
-    res.setHeader('Allow', 'GET, PATCH')
-    return res.status(405).json({ error: 'GET or PATCH only' })
+    res.setHeader('Allow', 'GET, PATCH, DELETE')
+    return res.status(405).json({ error: 'GET, PATCH or DELETE only' })
   }
   if (!roleHasPermission(user.role, 'edit:bookings')) return res.status(403).json({ error: 'Forbidden — cannot edit bookings' })
 

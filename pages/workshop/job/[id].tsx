@@ -338,6 +338,19 @@ export default function JobCardPage({ user }: { user: PortalUserSSR }) {
     } catch (e: any) { setInv({ busy: false, msg: e?.message || 'Un-finalise failed', needAccount: false }) }
   }
 
+  async function deleteJob() {
+    const ok = await confirmDialog({
+      title: 'Delete this job?',
+      message: 'Permanently removes the job and its line items, payments, photos and time entries. This can’t be undone.',
+      confirmLabel: 'Delete job', danger: true,
+    })
+    if (!ok) return
+    const r = await fetch(`/api/workshop/bookings/${id}`, { method: 'DELETE' })
+    const d = await r.json().catch(() => ({}))
+    if (r.ok && d.ok) { toast('Job deleted', 'success'); router.push('/workshop/jobs') }
+    else toast(d.error || 'Delete failed', 'error')
+  }
+
   async function openSms() {
     const bk = data?.booking
     const name = bk?.customer?.name ? String(bk.customer.name).split(' ')[0] : 'there'
@@ -495,6 +508,7 @@ export default function JobCardPage({ user }: { user: PortalUserSSR }) {
                   <button onClick={() => openPdf('jobcard')} style={qbtn(T.text2)}>🖨 Print job card</button>
                   {(b.status === 'invoiced' || b.status === 'paid') && <button onClick={() => openPdf('invoice')} style={qbtn(T.teal)}>🧾 Tax invoice PDF</button>}
                   {canEdit && <button onClick={() => setShowEmail(true)} style={qbtn(T.blue)}>✉ Email customer</button>}
+                  {canEdit && <><span style={{ flex: 1 }} /><button onClick={deleteJob} title={b.myob_invoice_uid ? 'Un-finalise first to delete' : 'Delete this job'} style={qbtn(T.red)}>🗑 Delete job</button></>}
                 </div>
                 {showEmail && <SendEmailModal type={emailDocType} id={id} onClose={() => setShowEmail(false)} />}
 
