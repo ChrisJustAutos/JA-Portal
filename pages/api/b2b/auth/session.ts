@@ -11,6 +11,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { serialize } from 'cookie'
 import { getCurrentB2BUserFromToken, B2B_ACCESS_COOKIE, B2B_REFRESH_COOKIE } from '../../../../lib/b2bAuthServer'
+import { getCurrentSupplierUserFromToken } from '../../../../lib/b2bSupplierAuth'
 import { createClient } from '@supabase/supabase-js'
 
 const MAX_AGE = 60 * 60 * 24 * 30  // 30 days
@@ -20,9 +21,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const { access_token, refresh_token } = req.body || {}
     if (!access_token) return res.status(400).json({ error: 'access_token required' })
 
-    // Verify the token resolves to a valid B2B user
+    // The same auth user is EITHER a distributor user or a supplier user.
     const user = await getCurrentB2BUserFromToken(access_token)
-    if (!user) return res.status(401).json({ error: 'Token does not match an active distributor user' })
+    const supplier = user ? null : await getCurrentSupplierUserFromToken(access_token)
+    if (!user && !supplier) return res.status(401).json({ error: 'This account isn’t set up for the B2B portal.' })
 
     const cookieOpts = {
       httpOnly: true,
@@ -37,26 +39,29 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
     res.setHeader('Set-Cookie', cookies)
 
-    // Best-effort: bump last_login_at
+    // Best-effort: bump last_login_at on the right table.
     try {
       const sb = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!, { auth: { persistSession: false } })
-      await sb.from('b2b_distributor_users')
-        .update({ last_login_at: new Date().toISOString() })
-        .eq('id', user.id)
+      if (user) await sb.from('b2b_distributor_users').update({ last_login_at: new Date().toISOString() }).eq('id', user.id)
+      else if (supplier) await sb.from('b2b_supplier_users').update({ last_login_at: new Date().toISOString() }).eq('id', supplier.id)
     } catch (e) {
       console.error('last_login_at update failed:', e)
     }
 
+    if (supplier) {
+      return res.status(200).json({
+        kind: 'supplier',
+        user: { id: supplier.id, email: supplier.email, fullName: supplier.fullName, supplier: { id: supplier.supplier.id, name: supplier.supplier.name } },
+      })
+    }
     return res.status(200).json({
+      kind: 'distributor',
       user: {
-        id: user.id,
-        email: user.email,
-        fullName: user.fullName,
-        role: user.role,
-        distributor: {
-          id: user.distributor.id,
-          displayName: user.distributor.displayName,
-        },
+        id: user!.id,
+        email: user!.email,
+        fullName: user!.fullName,
+        role: user!.role,
+        distributor: { id: user!.distributor.id, displayName: user!.distributor.displayName },
       },
     })
   }

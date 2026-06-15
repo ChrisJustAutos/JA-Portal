@@ -34,15 +34,19 @@ export default function B2BLoginPage() {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  async function establish(accessToken: string, refreshToken: string) {
+  // Returns where to land: suppliers get the read-only Stock Wall, distributors
+  // get the full portal.
+  async function establish(accessToken: string, refreshToken: string): Promise<string> {
     const r = await fetch('/api/b2b/auth/session', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ access_token: accessToken, refresh_token: refreshToken }),
     })
     if (!r.ok) {
       const e = await r.json().catch(() => ({}))
-      throw new Error(e.error || 'This account isn’t set up for the distributor portal.')
+      throw new Error(e.error || 'This account isn’t set up for the B2B portal.')
     }
+    const d = await r.json().catch(() => ({}))
+    return d.kind === 'supplier' ? '/b2b/supplier' : '/b2b'
   }
 
   async function handleLogin(e: React.FormEvent) {
@@ -69,8 +73,8 @@ export default function B2BLoginPage() {
           if (!trusted) { setMfaFactorId(totp.id); setMfaCode(''); setMode('mfa'); return }
         }
       }
-      await establish(data.session.access_token, data.session.refresh_token)
-      setMode('done'); router.push('/b2b')
+      const dest = await establish(data.session.access_token, data.session.refresh_token)
+      setMode('done'); router.push(dest)
     } catch (e: any) {
       const msg = String(e?.message || '').toLowerCase()
       if (msg.includes('invalid login') || msg.includes('credentials')) setError('Wrong email or password. If you haven’t set a password yet, use “Set / forgot password”.')
@@ -94,8 +98,8 @@ export default function B2BLoginPage() {
           body: JSON.stringify({ action: 'trust', access_token: sess.session.access_token }),
         }).catch(() => {})
       }
-      await establish(sess.session.access_token, sess.session.refresh_token)
-      setMode('done'); router.push('/b2b')
+      const dest = await establish(sess.session.access_token, sess.session.refresh_token)
+      setMode('done'); router.push(dest)
     } catch (e: any) {
       setError(e?.message || 'Invalid code — try again')
     } finally { setBusy(false) }
@@ -129,7 +133,7 @@ export default function B2BLoginPage() {
       <Head><title>Sign in · Just Autos B2B</title><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1" /><meta name="robots" content="noindex,nofollow" /></Head>
       <div style={{ minHeight: '100vh', background: T.bg, color: T.text, fontFamily: 'system-ui,-apple-system,sans-serif', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
         <div style={{ maxWidth: 420, width: '100%', background: T.bg2, border: `1px solid ${T.border}`, borderRadius: 12, padding: '32px 28px' }}>
-          <div style={{ fontSize: 12, color: T.text3, textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 8 }}>Just Autos · Distributor Portal</div>
+          <div style={{ fontSize: 12, color: T.text3, textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 8 }}>Just Autos · B2B Portal</div>
 
           {mode === 'login' && (
             <form onSubmit={handleLogin}>
