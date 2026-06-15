@@ -351,10 +351,12 @@ function SmsSection({ settings, onSave, register }: { settings: any; onSave: Sav
   }, [register, onSave])
   return (
     <Card title="SMS reminders (ClickSend)" hint="Automated booking reminders + manual “ready for collection” texts. Needs ClickSend credentials set in the environment.">
-      <label style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 13, marginBottom: 14, cursor: 'pointer' }}>
-        <input type="checkbox" checked={enabled} onChange={e => setEnabled(e.target.checked)} />
-        Send automatic booking reminders
+      <label style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 13, marginBottom: 6, cursor: 'pointer' }}>
+        {/* Saves immediately — the master gate is too important to lose on an unsaved toggle. */}
+        <input type="checkbox" checked={enabled} onChange={e => { const v = e.target.checked; setEnabled(v); onSave({ sms_enabled: v }) }} />
+        <strong>Send automatic SMS</strong> {enabled ? <span style={{ color: T.green, fontSize: 11 }}>· ON</span> : <span style={{ color: T.text3, fontSize: 11 }}>· OFF — nothing sends</span>}
       </label>
+      <div style={{ fontSize: 11, color: T.text3, marginBottom: 14 }}>Master switch for all automated texts (booking confirmations, reminders, follow-ups). Saves instantly.</div>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 150px 150px', gap: 12 }}>
         <Field label="Sender ID / number (optional)"><input style={inp} value={from} onChange={e => setFrom(e.target.value)} placeholder="JustAutos" /></Field>
         <Field label="Booking lead (hours)"><input style={inp} inputMode="numeric" value={lead} onChange={e => setLead(e.target.value)} /></Field>
