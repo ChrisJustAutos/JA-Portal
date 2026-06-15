@@ -20,7 +20,7 @@ import {
 } from '../lib/workshop'
 import type { PortalUserSSR } from '../lib/authServer'
 import { T } from '../lib/ui/theme'
-import { usePrompt } from '../components/ui/Feedback'
+import { usePrompt, useConfirm } from '../components/ui/Feedback'
 
 interface Tech { ext: string; name: string; color?: string | null; daily_hours?: number; role?: string | null }
 interface BookingRow {
@@ -220,7 +220,11 @@ export default function DiaryPage({ user }: { user: PortalUserSSR }) {
   const [loading, setLoading] = useState(true)
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null)
   const [editing, setEditing] = useState<Partial<BookingRow> | null>(null) // open modal when non-null
+  // Per-day per-tech availability: avail[ymd][code] = { status, note }
+  const [availability, setAvailability] = useState<Record<string, Record<string, { status: string; note: string | null }>>>({})
+  const [availEdit, setAvailEdit] = useState<{ ext: string; name: string } | null>(null)
   const promptDialog = usePrompt()
+  const confirmDialog = useConfirm()
 
   const range = useMemo(() => {
     if (view === 'day') return brisbaneDayBounds(date)
@@ -235,9 +239,10 @@ export default function DiaryPage({ user }: { user: PortalUserSSR }) {
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      const [bRes, nRes] = await Promise.all([
+      const [bRes, nRes, aRes] = await Promise.all([
         fetch(`/api/workshop/bookings?from=${encodeURIComponent(range.fromIso)}&to=${encodeURIComponent(range.toIso)}`),
         fetch(`/api/workshop/diary-notes?from=${encodeURIComponent(range.fromIso)}&to=${encodeURIComponent(range.toIso)}`),
+        fetch(`/api/workshop/tech-availability?from=${encodeURIComponent(range.fromIso)}&to=${encodeURIComponent(range.toIso)}`),
       ])
       const d = await bRes.json()
       if (bRes.ok) {
@@ -251,6 +256,15 @@ export default function DiaryPage({ user }: { user: PortalUserSSR }) {
         if (d.diary) setGrid(makeGrid(Number(d.diary.startMin), Number(d.diary.endMin)))
       }
       const nd = await nRes.json().catch(() => ({})); if (nRes.ok) setNotes(Array.isArray(nd.notes) ? nd.notes : [])
+      const ad = await aRes.json().catch(() => ({}))
+      if (aRes.ok) {
+        const map: Record<string, Record<string, { status: string; note: string | null }>> = {}
+        for (const a of (Array.isArray(ad.availability) ? ad.availability : [])) {
+          const ymd = String(a.date).slice(0, 10)
+          ;(map[ymd] ||= {})[String(a.technician_code)] = { status: a.status, note: a.note || null }
+        }
+        setAvailability(map)
+      }
       setLastRefresh(new Date())
     } catch { /* leave previous data */ } finally { setLoading(false) }
   }, [range])
@@ -269,11 +283,17 @@ export default function DiaryPage({ user }: { user: PortalUserSSR }) {
     setEditing({ starts_at: startIso, ends_at: endIso, technician_ext: opts.techExt || null, status: 'booking', job_type: 'general_service' })
   }
 
-  function laneClick(e: React.MouseEvent<HTMLDivElement>, ymd: string, techExt: string | null) {
+  async function laneClick(e: React.MouseEvent<HTMLDivElement>, ymd: string, techExt: string | null) {
     if (!canEdit) return
     const rect = e.currentTarget.getBoundingClientRect()
     const y = e.clientY - rect.top
     const slot = Math.max(0, Math.floor(y / SLOT_PX))
+    const av = techExt ? availability[ymd]?.[techExt] : null
+    if (av) {
+      const tech = techs.find(t => t.ext === techExt)
+      const ok = await confirmDialog({ title: `${tech?.name || 'This technician'} is marked ${av.status === 'away' ? 'away' : 'fully booked'} on this day.`, message: 'Add a booking anyway?', confirmLabel: 'Add booking' })
+      if (!ok) return
+    }
     openNew({ ymd, startMin: grid.startMin + slot * SLOT_MIN, techExt })
   }
 
@@ -300,6 +320,17 @@ export default function DiaryPage({ user }: { user: PortalUserSSR }) {
     if (v === null) return
     const hours = Number(v); if (!isFinite(hours)) return
     await fetch('/api/workshop/tech-capacity', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ technician_ext: ext, daily_hours: hours }) })
+    load()
+  }
+
+  async function saveAvailability(ext: string, status: 'away' | 'full' | null, note?: string) {
+    if (!canEdit || !ext) return
+    if (status === null) {
+      await fetch(`/api/workshop/tech-availability?technician_code=${encodeURIComponent(ext)}&date=${encodeURIComponent(date)}`, { method: 'DELETE' })
+    } else {
+      await fetch('/api/workshop/tech-availability', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ technician_code: ext, date, status, note: note || null }) })
+    }
+    setAvailEdit(null)
     load()
   }
 
@@ -419,6 +450,7 @@ export default function DiaryPage({ user }: { user: PortalUserSSR }) {
             {view === 'day' ? (
               <DayGrid bookings={displayBookings} techs={techFilter ? deptTechs.filter(t => t.ext === techFilter) : deptTechs} showUnassigned={!techFilter && !deptFilter}
                 date={date} grid={grid} capacity={capacity} canEdit={canEdit} canEditCapacity={isAdmin} onSetCapacity={setLaneCapacity}
+                availability={availability[date] || {}} onSetAvailability={canEdit ? (ext, name) => setAvailEdit({ ext, name }) : undefined}
                 onLaneClick={laneClick} onBooking={(b) => canEdit && setEditing(b)}
                 onDropBooking={(e, techExt) => dropMove(e, date, techExt, true)}
                 canReorder={canEdit && !techFilter && !deptFilter} onReorder={reorderTechs}
@@ -450,6 +482,26 @@ export default function DiaryPage({ user }: { user: PortalUserSSR }) {
           onSaved={() => { setEditing(null); load() }}
         />
       )}
+
+      {availEdit && (() => {
+        const cur = availability[date]?.[availEdit.ext]
+        return (
+          <div onClick={() => setAvailEdit(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 140 }}>
+            <div onClick={e => e.stopPropagation()} style={{ width: 380, maxWidth: '92vw', background: T.bg2, border: `1px solid ${T.border2}`, borderRadius: 12, padding: 20, color: T.text }}>
+              <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 2 }}>{availEdit.name}</div>
+              <div style={{ fontSize: 12, color: T.text3, marginBottom: 16 }}>Availability for {dayLabel(date)}</div>
+              <div style={{ display: 'flex', gap: 8, marginBottom: 14 }}>
+                <button onClick={() => saveAvailability(availEdit.ext, 'away')} style={{ flex: 1, padding: '10px', borderRadius: 8, fontSize: 12.5, fontWeight: 600, fontFamily: 'inherit', cursor: 'pointer', background: cur?.status === 'away' ? `${T.amber}22` : T.bg3, color: cur?.status === 'away' ? T.amber : T.text2, border: `1px solid ${cur?.status === 'away' ? T.amber : T.border2}` }}>🚫 Away</button>
+                <button onClick={() => saveAvailability(availEdit.ext, 'full')} style={{ flex: 1, padding: '10px', borderRadius: 8, fontSize: 12.5, fontWeight: 600, fontFamily: 'inherit', cursor: 'pointer', background: cur?.status === 'full' ? `${T.red}22` : T.bg3, color: cur?.status === 'full' ? T.red : T.text2, border: `1px solid ${cur?.status === 'full' ? T.red : T.border2}` }}>🔒 Fully booked</button>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
+                {cur ? <button onClick={() => saveAvailability(availEdit.ext, null)} style={{ padding: '8px 14px', borderRadius: 6, fontSize: 12, fontWeight: 600, fontFamily: 'inherit', cursor: 'pointer', background: 'transparent', color: T.green, border: `1px solid ${T.green}55` }}>✓ Mark available</button> : <span />}
+                <button onClick={() => setAvailEdit(null)} style={{ padding: '8px 14px', borderRadius: 6, fontSize: 12, fontWeight: 600, fontFamily: 'inherit', cursor: 'pointer', background: 'transparent', color: T.text2, border: `1px solid ${T.border2}` }}>Close</button>
+              </div>
+            </div>
+          </div>
+        )
+      })()}
     </>
   )
 }
@@ -511,9 +563,11 @@ function TechPills({ techs, active, onPick }: { techs: Tech[]; active: string | 
 
 // ── Day grid: time axis + one lane per technician (with workload bar) ────
 const LANE_HEADER_PX = 46
-function DayGrid({ bookings, techs, date, grid, capacity, canEdit, canEditCapacity, onSetCapacity, onLaneClick, onBooking, onDropBooking, showUnassigned, canReorder, onReorder, onResize, clockedOn, onStatus }: {
+function DayGrid({ bookings, techs, date, grid, capacity, canEdit, canEditCapacity, onSetCapacity, availability, onSetAvailability, onLaneClick, onBooking, onDropBooking, showUnassigned, canReorder, onReorder, onResize, clockedOn, onStatus }: {
   bookings: BookingRow[]; techs: Tech[]; date: string; grid: GridCfg
   capacity: Record<string, number>; canEdit: boolean; canEditCapacity: boolean; onSetCapacity: (ext: string) => void
+  availability?: Record<string, { status: string; note: string | null }>
+  onSetAvailability?: (ext: string, name: string) => void
   onLaneClick: (e: React.MouseEvent<HTMLDivElement>, ymd: string, techExt: string | null) => void
   onBooking: (b: BookingRow) => void
   onDropBooking: (e: React.DragEvent<HTMLDivElement>, techExt: string | null) => void
@@ -561,6 +615,9 @@ function DayGrid({ bookings, techs, date, grid, capacity, canEdit, canEditCapaci
         const laneKey = lane.ext || '__unassigned'
         const hov = hoverExt === laneKey
         const laneColor = lane.color || T.blue
+        const av = lane.ext ? availability?.[lane.ext] : undefined
+        const avColor = av?.status === 'away' ? T.amber : av?.status === 'full' ? T.red : T.text3
+        const avLabel = av?.status === 'away' ? 'AWAY' : av?.status === 'full' ? 'FULL' : ''
         return (
           <div key={lane.ext || 'unassigned'} style={{ flex: 1, minWidth: 150, borderRight: `1px solid ${T.border}` }}>
             <div
@@ -575,6 +632,14 @@ function DayGrid({ bookings, techs, date, grid, capacity, canEdit, canEditCapaci
                     style={{ cursor: 'grab', color: T.text3, fontSize: 12, lineHeight: 1, flexShrink: 0, padding: '0 1px' }}>⠿</span>
                 )}
                 <span style={{ fontSize: 11, fontWeight: 600, color: lane.ext ? T.text2 : T.text3, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{lane.name}</span>
+                {lane.ext && av && (
+                  <span onClick={(e) => { e.stopPropagation(); onSetAvailability?.(lane.ext, lane.name) }} title={av.note || avLabel}
+                    style={{ fontSize: 8, fontWeight: 800, color: avColor, background: `${avColor}22`, border: `1px solid ${avColor}66`, borderRadius: 3, padding: '0 3px', cursor: onSetAvailability ? 'pointer' : 'default', flexShrink: 0 }}>{avLabel}</span>
+                )}
+                {lane.ext && !av && onSetAvailability && (
+                  <span onClick={(e) => { e.stopPropagation(); onSetAvailability(lane.ext, lane.name) }} title="Mark away / fully booked"
+                    style={{ fontSize: 10, color: T.text3, cursor: 'pointer', flexShrink: 0, lineHeight: 1 }}>⊘</span>
+                )}
               </div>
               {lane.ext ? (
                 <div onClick={() => canEditCapacity && onSetCapacity(lane.ext)} title={canEditCapacity ? 'Click to set this technician’s hours for the day' : `${booked.toFixed(1)} of ${cap}h booked`}
@@ -594,6 +659,11 @@ function DayGrid({ bookings, techs, date, grid, capacity, canEdit, canEditCapaci
               {grid.hourMarks.map(m => (
                 <div key={m} style={{ position: 'absolute', top: (m - grid.startMin) / SLOT_MIN * SLOT_PX, left: 0, right: 0, borderTop: `1px solid ${T.border}` }} />
               ))}
+              {av && (
+                <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none', zIndex: 1, background: `repeating-linear-gradient(45deg, ${avColor}14, ${avColor}14 8px, transparent 8px, transparent 16px)` }}>
+                  <div style={{ position: 'sticky', top: 0, textAlign: 'center', padding: '4px 0', fontSize: 10, fontWeight: 800, letterSpacing: '0.08em', color: avColor }}>{av.status === 'away' ? '🚫 AWAY' : '🔒 FULLY BOOKED'}{av.note ? ` · ${av.note}` : ''}</div>
+                </div>
+              )}
               {laneBookings.map(b => { const seg = daySegment(b, date, grid); return seg ? <BookingBlock key={b.id} b={b} seg={seg} draggable={canEdit} onClick={() => onBooking(b)} onDragEnd={() => setDropHint(null)} resizable={canEdit} onResize={(iso) => onResize(b, iso)} clocked={clockedOn.has(b.id)} onStatus={onStatus} /> : null })}
               {dropHint && dropHint.ext === (lane.ext || '') && (
                 <div style={{ position: 'absolute', top: dropHint.top, left: 0, right: 0, borderTop: `2px solid ${T.accent}`, pointerEvents: 'none', zIndex: 6 }}>
