@@ -1,14 +1,15 @@
 // pages/api/b2b/admin/reorder/sync.ts
-// POST — refresh every reorder row from MYOB (JAWS) via the CData PowerBI feed:
-//   • on-hand / committed / available / on-order  (Items)
-//   • total sales qty over the settings date range (SaleInvoices × SaleInvoiceItems)
+// POST — refresh every reorder row from MYOB (JAWS) over the portal's direct
+// OAuth connection (no CData):
+//   • on-hand / committed / available / on-order  — /Inventory/Item
+//   • total sales qty over the settings date range — /Sale/Invoice/Item lines
 // Permission: edit:b2b_catalogue.
 
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
 import { withAuth } from '../../../../../lib/authServer'
-import { cdataQuery } from '../../../../../lib/cdata'
+import { getConnection, myobFetch } from '../../../../../lib/myob'
 
-export const config = { maxDuration: 60 }
+export const config = { maxDuration: 120 }
 
 let _sb: SupabaseClient | null = null
 function sb(): SupabaseClient {
@@ -16,61 +17,61 @@ function sb(): SupabaseClient {
   _sb = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!, { auth: { persistSession: false } })
   return _sb
 }
-
-function rowsToObjects(raw: any): any[] {
-  if (!raw?.results?.[0]) return []
-  const cols: string[] = (raw.results[0].schema || []).map((c: any) => c.columnName)
-  const rows: any[][] = raw.results[0].rows || []
-  return rows.map(r => { const o: any = {}; cols.forEach((c, i) => { o[c] = r[i] }); return o })
-}
 const num = (v: any) => Number(v) || 0
-const sqlList = (vals: string[]) => vals.map(v => `'${String(v).replace(/'/g, "''")}'`).join(',')
 
-export default withAuth('edit:b2b_catalogue', async (req, res) => {
+export default withAuth('edit:b2b_catalogue', async (req, res, user) => {
   if (req.method !== 'POST') { res.setHeader('Allow', 'POST'); return res.status(405).json({ error: 'POST only' }) }
   const db = sb()
 
   const { data: settings } = await db.from('b2b_reorder_settings').select('*').eq('id', 'singleton').maybeSingle()
   const { data: items } = await db.from('b2b_reorder_items').select('id, sku')
-  const skus = (items || []).map((i: any) => String(i.sku)).filter(Boolean)
-  if (!skus.length) return res.status(200).json({ ok: true, updated: 0, message: 'No items on the sheet yet — add some first.' })
+  if (!items || !items.length) return res.status(200).json({ ok: true, updated: 0, message: 'No items on the sheet yet — add some first.' })
 
-  const inList = sqlList(skus)
+  const conn = await getConnection('JAWS')
+  if (!conn || !conn.company_file_id) return res.status(400).json({ error: 'No active JAWS MYOB connection. Connect via Settings → Connections.' })
+  const cf = `/accountright/${conn.company_file_id}`
+  const wantSku = new Set(items.map((i: any) => String(i.sku)))
   const warnings: string[] = []
 
-  // ── Stock levels ──
+  // ── Stock levels: page all Inventory/Item, keep the ones on the sheet ──
   const stockBySku: Record<string, { on_hand: number; committed: number; available: number; on_order: number }> = {}
   try {
-    let stockRows: any[] = []
-    try {
-      const r = await cdataQuery('JAWS', `SELECT [Number],[QuantityOnHand],[QuantityCommitted],[QuantityAvailable],[QuantityOnOrder] FROM [MYOB_POWERBI_JAWS].[MYOB].[Items] WHERE [Number] IN (${inList})`)
-      stockRows = rowsToObjects(r)
-    } catch {
-      // Some files don't expose QuantityOnOrder — retry without it.
-      const r = await cdataQuery('JAWS', `SELECT [Number],[QuantityOnHand],[QuantityCommitted],[QuantityAvailable] FROM [MYOB_POWERBI_JAWS].[MYOB].[Items] WHERE [Number] IN (${inList})`)
-      stockRows = rowsToObjects(r)
-    }
-    for (const s of stockRows) {
-      const sku = String(s.Number || '').trim(); if (!sku) continue
-      stockBySku[sku] = {
-        on_hand: num(s.QuantityOnHand), committed: num(s.QuantityCommitted),
-        available: s.QuantityAvailable != null ? num(s.QuantityAvailable) : num(s.QuantityOnHand) - num(s.QuantityCommitted),
-        on_order: num(s.QuantityOnOrder),
+    for (let skip = 0, page = 0; page < 80; page++, skip += 400) {
+      const r = await myobFetch(conn.id, `${cf}/Inventory/Item`, { query: { '$top': 400, '$skip': skip }, performedBy: user.id })
+      if (r.status !== 200) { warnings.push(`Stock pull HTTP ${r.status}`); break }
+      const rows: any[] = Array.isArray(r.data?.Items) ? r.data.Items : []
+      for (const it of rows) {
+        const sku = String(it.Number || '').trim()
+        if (!sku || !wantSku.has(sku)) continue
+        const onHand = num(it.QuantityOnHand)
+        const committed = num(it.QuantityCommitted)
+        stockBySku[sku] = {
+          on_hand: onHand, committed,
+          available: it.QuantityAvailable != null ? num(it.QuantityAvailable) : onHand - committed,
+          on_order: num(it.QuantityOnOrder),
+        }
       }
+      if (rows.length < 400) break
     }
   } catch (e: any) { warnings.push(`Stock pull failed: ${e?.message || e}`) }
 
-  // ── Sales qty over the range ──
+  // ── Sales qty over the range: page Item-layout invoices, sum line ShipQuantity ──
   const salesBySku: Record<string, number> = {}
   if (settings?.from_date && settings?.to_date) {
     try {
-      const inv = rowsToObjects(await cdataQuery('JAWS', `SELECT [SaleInvoiceId] FROM [MYOB_POWERBI_JAWS].[MYOB].[SaleInvoices] WHERE [Date] >= '${settings.from_date}' AND [Date] <= '${settings.to_date}'`))
-      const invIds = new Set(inv.map((r: any) => String(r.SaleInvoiceId)))
-      const lines = rowsToObjects(await cdataQuery('JAWS', `SELECT [SaleInvoiceId],[ItemNumber],[Quantity] FROM [MYOB_POWERBI_JAWS].[MYOB].[SaleInvoiceItems] WHERE [ItemNumber] IN (${inList})`))
-      for (const l of lines) {
-        if (!invIds.has(String(l.SaleInvoiceId))) continue
-        const sku = String(l.ItemNumber || '').trim(); if (!sku) continue
-        salesBySku[sku] = (salesBySku[sku] || 0) + num(l.Quantity)
+      const filter = `Date ge datetime'${settings.from_date}T00:00:00' and Date le datetime'${settings.to_date}T23:59:59'`
+      for (let skip = 0, page = 0; page < 120; page++, skip += 400) {
+        const r = await myobFetch(conn.id, `${cf}/Sale/Invoice/Item`, { query: { '$filter': filter, '$top': 400, '$skip': skip }, performedBy: user.id })
+        if (r.status !== 200) { warnings.push(`Sales pull HTTP ${r.status}: ${(r.raw || '').slice(0, 120)}`); break }
+        const invoices: any[] = Array.isArray(r.data?.Items) ? r.data.Items : []
+        for (const inv of invoices) {
+          for (const l of (inv.Lines || [])) {
+            const sku = String(l.Item?.Number || '').trim()
+            if (!sku || !wantSku.has(sku)) continue
+            salesBySku[sku] = (salesBySku[sku] || 0) + num(l.ShipQuantity)
+          }
+        }
+        if (invoices.length < 400) break
       }
     } catch (e: any) { warnings.push(`Sales pull failed: ${e?.message || e}`) }
   } else {
@@ -80,7 +81,7 @@ export default withAuth('edit:b2b_catalogue', async (req, res) => {
   // ── Write back ──
   const nowIso = new Date().toISOString()
   let updated = 0
-  for (const it of (items as any[]) || []) {
+  for (const it of (items as any[])) {
     const st = stockBySku[it.sku]
     const patch: any = { synced_at: nowIso, sales_qty: salesBySku[it.sku] || 0 }
     if (st) { patch.on_hand = st.on_hand; patch.committed = st.committed; patch.available = st.available; patch.on_order = st.on_order }
