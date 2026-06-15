@@ -25,6 +25,32 @@ const r2 = (n: number) => Math.round(n * 100) / 100
 const NAVY = 'FF1F3A5F', NAVY_TXT = 'FFFFFFFF', BAND = 'FFF4F7FB', BORDER = 'FFD1D5DB'
 const GREEN_FILL = 'FFE3F6E9', AMBER_FILL = 'FFFCEFD6', PARAM_FILL = 'FFEAF1FB'
 
+// Find a Just Autos logo (B2B email logo first, else any portal company logo)
+// and download it. Returns null on anything unsupported so the export never fails.
+async function loadLogo(db: SupabaseClient): Promise<{ buffer: Buffer; extension: 'png' | 'jpeg' | 'gif' } | null> {
+  try {
+    let url = ''
+    const { data: bs } = await db.from('b2b_settings').select('email_logo_url').eq('id', 'singleton').maybeSingle()
+    url = String((bs as any)?.email_logo_url || '').trim()
+    if (!url) {
+      const { data: pref } = await db.from('user_preferences').select('company_logo_url').not('company_logo_url', 'is', null).limit(1).maybeSingle()
+      url = String((pref as any)?.company_logo_url || '').trim()
+    }
+    if (!url) return null
+    const resp = await fetch(url)
+    if (!resp.ok) return null
+    const ct = (resp.headers.get('content-type') || '').toLowerCase()
+    const lower = url.toLowerCase()
+    const ext: 'png' | 'jpeg' | 'gif' | null =
+      ct.includes('png') || lower.endsWith('.png') ? 'png'
+      : ct.includes('jpeg') || ct.includes('jpg') || /\.jpe?g($|\?)/.test(lower) ? 'jpeg'
+      : ct.includes('gif') || lower.endsWith('.gif') ? 'gif'
+      : null
+    if (!ext) return null   // webp/svg not supported by ExcelJS images
+    return { buffer: Buffer.from(await resp.arrayBuffer()), extension: ext }
+  } catch { return null }
+}
+
 export default withAuth('edit:b2b_catalogue', async (req, res) => {
   if (req.method !== 'GET') { res.setHeader('Allow', 'GET'); return res.status(405).json({ error: 'GET only' }) }
   const db = sb()
@@ -40,6 +66,15 @@ export default withAuth('edit:b2b_catalogue', async (req, res) => {
 
   const wb = new ExcelJS.Workbook()
   const ws = wb.addWorksheet('Stock Order', { views: [{ state: 'frozen', ySplit: 6 }] })
+
+  // ── Just Autos logo (top-right of the header area) ──
+  const logo = await loadLogo(db)
+  if (logo) {
+    try {
+      const imgId = wb.addImage({ buffer: logo.buffer as any, extension: logo.extension })
+      ws.addImage(imgId, { tl: { col: 11, row: 0 } as any, ext: { width: 220, height: 64 } })
+    } catch { /* logo is best-effort */ }
+  }
 
   // ── Title + editable parameter block (rows 1–4) ──
   ws.getCell('A1').value = 'JAWS Stock Order'
