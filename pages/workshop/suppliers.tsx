@@ -128,10 +128,11 @@ export default function SuppliersPage({ user }: { user: PortalUserSSR }) {
                   <div style={{ marginTop: 12 }}><div style={lbl}>Address</div><textarea defaultValue={sel.address || ''} disabled={!canEdit} rows={2} onBlur={e => { const v = e.target.value.trim(); if (v !== (sel.address || '')) patch(sel.id, { address: v || null }) }} style={{ ...fld, resize: 'vertical' }} /></div>
                   <div style={{ marginTop: 12 }}><div style={lbl}>Notes</div><textarea defaultValue={sel.notes || ''} disabled={!canEdit} rows={2} onBlur={e => { const v = e.target.value.trim(); if (v !== (sel.notes || '')) patch(sel.id, { notes: v || null }) }} style={{ ...fld, resize: 'vertical' }} /></div>
 
-                  <div style={{ marginTop: 14, fontSize: 11, color: T.text3 }}>
-                    {sel.myob_supplier_uid ? <>MYOB card linked{sel.myob_supplier_name ? `: ${sel.myob_supplier_name}` : ''} ✓ — purchase bills can post to MYOB.</> : 'Not linked to a MYOB supplier card. POs still email fine; linking enables MYOB bill posting (set on a PO).'}
-                  </div>
-                  <div style={{ marginTop: 10, fontSize: 11, color: T.text3 }}>
+                  <div style={{ ...lbl, marginTop: 18 }}>MYOB supplier card</div>
+                  <MyobLinkPicker sel={sel} canEdit={canEdit}
+                    onLink={r => patch(sel.id, { myob_supplier_uid: r.uid, myob_supplier_name: r.name })}
+                    onUnlink={() => patch(sel.id, { myob_supplier_uid: null, myob_supplier_name: null })} />
+                  <div style={{ marginTop: 12, fontSize: 11, color: T.text3 }}>
                     Tip: set this supplier on inventory items (Inventory → click a part) so their parts group onto a PO automatically.
                   </div>
                 </div>
@@ -141,6 +142,54 @@ export default function SuppliersPage({ user }: { user: PortalUserSSR }) {
         </div>
       </div>
     </>
+  )
+}
+
+function MyobLinkPicker({ sel, canEdit, onLink, onUnlink }: {
+  sel: Supplier; canEdit: boolean; onLink: (r: { uid: string; name: string }) => void; onUnlink: () => void
+}) {
+  const [open, setOpen] = useState(false)
+  const [q, setQ] = useState('')
+  const [results, setResults] = useState<Array<{ uid: string; name: string; displayId: string | null }>>([])
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState('')
+
+  useEffect(() => {
+    if (!open) return
+    setBusy(true); setErr('')
+    const t = setTimeout(async () => {
+      try {
+        const r = await fetch(`/api/workshop/myob-suppliers?q=${encodeURIComponent(q)}`)
+        const d = await r.json()
+        setResults(d.suppliers || []); if (d.error) setErr(d.error)
+      } catch { setErr('MYOB lookup failed') } finally { setBusy(false) }
+    }, 300)
+    return () => clearTimeout(t)
+  }, [q, open])
+
+  if (sel.myob_supplier_uid) {
+    return (
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 12.5, color: T.text }}>
+        <span style={{ color: T.green }}>✓ Linked{sel.myob_supplier_name ? `: ${sel.myob_supplier_name}` : ''}</span>
+        {canEdit && <button onClick={onUnlink} style={btn(T.text3)}>Unlink</button>}
+      </div>
+    )
+  }
+  if (!canEdit) return <div style={{ fontSize: 12, color: T.text3 }}>Not linked to MYOB.</div>
+  if (!open) return <button onClick={() => setOpen(true)} style={btn(T.blue)}>Link to MYOB supplier…</button>
+  return (
+    <div>
+      <input autoFocus value={q} onChange={e => setQ(e.target.value)} placeholder="Search MYOB suppliers…" style={fld} />
+      <div style={{ fontSize: 11, color: err ? T.red : T.text3, margin: '6px 0' }}>{busy ? 'Searching…' : err || `${results.length} match${results.length === 1 ? '' : 'es'}`}</div>
+      <div style={{ maxHeight: 220, overflowY: 'auto', border: results.length ? `1px solid ${T.border}` : 'none', borderRadius: 6 }}>
+        {results.map(r => (
+          <div key={r.uid} onClick={() => { onLink(r); setOpen(false) }} style={{ padding: '8px 10px', fontSize: 12.5, cursor: 'pointer', borderBottom: `1px solid ${T.border}`, color: T.text }}>
+            {r.name}{r.displayId ? <span style={{ color: T.text3, fontFamily: 'monospace', marginLeft: 6 }}>{r.displayId}</span> : null}
+          </div>
+        ))}
+      </div>
+      <button onClick={() => { setOpen(false); setQ('') }} style={{ ...btn(T.text3), marginTop: 8 }}>Cancel</button>
+    </div>
   )
 }
 
