@@ -131,6 +131,16 @@ function PoEditor({ id, canEdit, suppliers, onClose, onChanged }: { id: string; 
     } finally { setBusy(false) }
   }
   async function remove() { if (!(await confirmDialog({ title: 'Delete this PO?', danger: true }))) return; await fetch(`/api/workshop/purchase-orders/${id}`, { method: 'DELETE' }); onChanged(); onClose() }
+  function openPdf() { window.open(`/api/workshop/document?type=po&id=${encodeURIComponent(id)}`, '_blank') }
+  async function emailSupplier() {
+    setBusy(true); setMsg('')
+    try {
+      const r = await fetch('/api/workshop/document', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ type: 'po', id }) })
+      const d = await r.json()
+      setMsg(r.ok && d.ok ? `Emailed to ${d.to} ✓` : (d.message || d.error || 'Email failed'))
+      if (r.ok && d.ok && po.status === 'draft') await save({ status: 'sent' })
+    } finally { setBusy(false) }
+  }
 
   if (!po) return <Overlay onClose={onClose}><div style={{ color: T.text3 }}>Loading…</div></Overlay>
   return (
@@ -175,6 +185,8 @@ function PoEditor({ id, canEdit, suppliers, onClose, onChanged }: { id: string; 
         <div style={{ display: 'flex', gap: 8, marginTop: 14, flexWrap: 'wrap' }}>
           {po.status !== 'cancelled' && po.status !== 'received' && <button onClick={() => save()} disabled={busy} style={gBtn}>Save draft</button>}
           {po.status === 'draft' && <button onClick={() => save({ status: 'sent' })} disabled={busy} style={gBtn}>Mark sent</button>}
+          <button onClick={openPdf} style={gBtn}>🖨 PDF</button>
+          <button onClick={emailSupplier} disabled={busy} style={gBtn} title="Email this PO to the supplier (marks it sent)">✉ Email supplier</button>
           {(po.status === 'draft' || po.status === 'sent') && <button onClick={() => save({ status: 'received' })} disabled={busy} style={pBtn} title="Mark received — pushes a Purchase Bill to MYOB if posting is on and the supplier/items are MYOB-linked">Receive → MYOB</button>}
           <span style={{ flex: 1 }} />
           <button onClick={remove} style={{ ...gBtn, color: T.red, borderColor: 'transparent' }}>Delete</button>

@@ -56,6 +56,9 @@ export interface WorkshopSettings {
   business_phone: string | null
   business_email: string | null
   document_footer: string | null
+  invoice_terms: string | null
+  quote_terms: string | null
+  po_terms: string | null
   // SMS reminders (migration 034).
   sms_enabled: boolean
   sms_from: string | null
@@ -78,6 +81,9 @@ export async function getWorkshopSettings(): Promise<WorkshopSettings> {
     business_phone: data?.business_phone ?? null,
     business_email: data?.business_email ?? null,
     document_footer: data?.document_footer ?? null,
+    invoice_terms: data?.invoice_terms ?? null,
+    quote_terms: data?.quote_terms ?? null,
+    po_terms: data?.po_terms ?? null,
     sms_enabled: data?.sms_enabled ?? false,
     sms_from: data?.sms_from ?? null,
     booking_reminder_lead_hours: Number(data?.booking_reminder_lead_hours ?? 24),

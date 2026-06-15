@@ -164,6 +164,46 @@ export async function queuePaymentReceipt(bookingId: string, amount: number): Pr
   } catch { /* best-effort */ }
 }
 
+// ── Quote follow-up (chase unaccepted quotes) ───────────────────────────
+async function quoteContext(db: SupabaseClient, quoteId: string, biz: string) {
+  const { data: q } = await db.from('workshop_quotes')
+    .select('id, status, total, customer_id, vehicle_id, customer:workshop_customers(name, first_name, email, mobile, phone), vehicle:workshop_vehicles(rego, make, model, year)')
+    .eq('id', quoteId).maybeSingle()
+  if (!q) return null
+  const cust: any = Array.isArray(q.customer) ? q.customer[0] : q.customer
+  const veh: any = Array.isArray(q.vehicle) ? q.vehicle[0] : q.vehicle
+  const vars: Record<string, string> = {
+    first_name: firstName(cust), customer_name: cust?.name || '',
+    vehicle: veh ? vehicleLabel(veh) : 'your vehicle', rego: veh?.rego || '',
+    date: '', time: '', due_date: '', business_name: biz,
+    total: Number(q.total) ? money(Number(q.total)) : '', balance: '', amount: '', review_link: '',
+  }
+  return { quote: q, vars, number: cust?.mobile || cust?.phone || null, email: cust?.email || null, customerId: q.customer_id || null, vehicleId: q.vehicle_id || null }
+}
+
+export async function queueQuoteFollowUp(quoteId: string): Promise<void> {
+  try {
+    const db = sb()
+    const cfg = await settings()
+    const ctx = await quoteContext(db, quoteId, cfg.business_name)
+    if (!ctx) return
+    const tmpls = await enabledTemplates(db, 'quote_follow_up')
+    for (const t of tmpls) {
+      const { data: ex } = await db.from('workshop_reminders').select('id').eq('quote_id', quoteId).eq('template_id', t.id).in('status', ['pending', 'sent']).limit(1)
+      if (ex && ex.length) continue
+      const to = t.channel === 'email' ? ctx.email : ctx.number
+      if (!to) continue
+      await db.from('workshop_reminders').insert({
+        type: 'quote_follow_up', channel: t.channel, template_id: t.id,
+        customer_id: ctx.customerId, vehicle_id: ctx.vehicleId, booking_id: null, quote_id: quoteId,
+        to_number: t.channel === 'sms' ? to : null, to_email: t.channel === 'email' ? to : null,
+        subject: t.channel === 'email' ? (renderTemplate(t.subject || '', ctx.vars) || `Just Autos — ${t.name}`) : null,
+        body: renderTemplate(t.body, ctx.vars), send_at: new Date(Date.now() + offsetMs(t)).toISOString(), status: 'pending',
+      })
+    }
+  } catch { /* best-effort */ }
+}
+
 // ── Service-due / rego-due ───────────────────────────────────────────────
 export interface ServiceDueRunResult { service_queued: number; rego_queued: number }
 
@@ -249,12 +289,21 @@ export async function processDueReminders(limit = 50): Promise<ReminderRunResult
   if (!cfg.sms_enabled) return { processed: 0, sent: 0, failed: 0, skipped: 'comms_disabled' }
 
   const { data: due } = await db.from('workshop_reminders')
-    .select('id, type, channel, to_number, to_email, subject, body, customer_id, booking_id')
+    .select('id, type, channel, to_number, to_email, subject, body, customer_id, booking_id, quote_id')
     .eq('status', 'pending').lte('send_at', new Date().toISOString())
     .order('send_at', { ascending: true }).limit(limit)
 
   let sent = 0, failed = 0
   for (const r of (due as any[]) || []) {
+    // Quote follow-ups only chase quotes still awaiting a decision; once the
+    // quote is accepted/declined/converted, cancel the pending chase.
+    if (r.type === 'quote_follow_up' && r.quote_id) {
+      const { data: q } = await db.from('workshop_quotes').select('status').eq('id', r.quote_id).maybeSingle()
+      if (!q || q.status !== 'sent') {
+        await db.from('workshop_reminders').update({ status: 'cancelled' }).eq('id', r.id)
+        continue
+      }
+    }
     let ok = false, errMsg: string | null = null, msgId: string | null = null
     try {
       if (r.channel === 'email') {

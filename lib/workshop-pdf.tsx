@@ -17,19 +17,21 @@ export interface WorkshopDocLine {
   isHeading?: boolean // 'description' line — full-width text row, no amounts
 }
 export interface WorkshopDoc {
-  kind: 'quote' | 'invoice' | 'jobcard'
-  title: string                 // "Quote" | "Tax Invoice" | "Job Card"
+  kind: 'quote' | 'invoice' | 'jobcard' | 'po'
+  title: string                 // "Quote" | "Tax Invoice" | "Job Card" | "Purchase Order"
   reference: string             // human-ish ref, e.g. Q-3F9A21
   date: string                  // ISO
   status?: string | null
   business: { name: string; abn?: string | null; address?: string | null; phone?: string | null; email?: string | null }
   customer: { name: string; company?: string | null; phone?: string | null; email?: string | null; address?: string | null }
+  partyLabel?: string           // "Bill to" (default) | "Supplier" for POs
   vehicle?: { label: string; rego?: string | null; vin?: string | null; odometer?: number | null } | null
   lines: WorkshopDocLine[]
   subtotal: number
   gst: number
   total: number
   notes?: string | null
+  terms?: string | null         // editable terms / payment-details block
   footer?: string | null
 }
 
@@ -98,16 +100,17 @@ function WorkshopDocPdf({ doc }: { doc: WorkshopDoc }) {
           </View>
         </View>
 
-        {/* Customer + vehicle */}
+        {/* Party + vehicle (vehicle box hidden for POs) */}
         <View style={s.partyRow}>
           <View style={s.partyBox}>
-            <Text style={s.partyLabel}>Bill to</Text>
+            <Text style={s.partyLabel}>{doc.partyLabel || 'Bill to'}</Text>
             <Text style={s.partyName}>{doc.customer.name || '—'}</Text>
             {doc.customer.company ? <Text style={s.partyLine}>{doc.customer.company}</Text> : null}
             {doc.customer.address ? <Text style={s.partyLine}>{doc.customer.address}</Text> : null}
             {doc.customer.phone ? <Text style={s.partyLine}>{doc.customer.phone}</Text> : null}
             {doc.customer.email ? <Text style={s.partyLine}>{doc.customer.email}</Text> : null}
           </View>
+          {doc.kind !== 'po' && (
           <View style={s.partyBox}>
             <Text style={s.partyLabel}>Vehicle</Text>
             {v ? (
@@ -118,6 +121,7 @@ function WorkshopDocPdf({ doc }: { doc: WorkshopDoc }) {
               </>
             ) : <Text style={s.partyLine}>—</Text>}
           </View>
+          )}
         </View>
 
         {/* Line items */}
@@ -158,6 +162,14 @@ function WorkshopDocPdf({ doc }: { doc: WorkshopDoc }) {
           <View wrap={false}>
             <Text style={s.notesLabel}>Notes</Text>
             <Text style={s.notesBox}>{doc.notes}</Text>
+          </View>
+        ) : null}
+
+        {/* Editable terms / payment-details block */}
+        {doc.terms ? (
+          <View wrap={false}>
+            <Text style={s.notesLabel}>{doc.kind === 'po' ? 'Terms' : doc.kind === 'quote' ? 'Quote terms' : 'Payment terms'}</Text>
+            <Text style={s.notesBox}>{doc.terms}</Text>
           </View>
         ) : null}
 

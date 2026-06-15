@@ -175,6 +175,7 @@ function BusinessSection({ settings, onSave, register }: { settings: any; onSave
     business_name: settings.business_name || '', business_abn: settings.business_abn || '',
     business_address: settings.business_address || '', business_phone: settings.business_phone || '',
     business_email: settings.business_email || '', document_footer: settings.document_footer || '',
+    invoice_terms: settings.invoice_terms || '', quote_terms: settings.quote_terms || '', po_terms: settings.po_terms || '',
   })
   const set = (k: string, v: string) => setF(s => ({ ...s, [k]: v }))
   const fRef = useRef(f); fRef.current = f
@@ -192,7 +193,13 @@ function BusinessSection({ settings, onSave, register }: { settings: any; onSave
       </div>
       <Field label="Email"><input style={inp} value={f.business_email} onChange={e => set('business_email', e.target.value)} placeholder="service@…" /></Field>
       <Field label="Address"><textarea style={{ ...inp, resize: 'vertical' }} rows={2} value={f.business_address} onChange={e => set('business_address', e.target.value)} placeholder="Street, suburb, state postcode" /></Field>
-      <Field label="Document footer (optional)"><textarea style={{ ...inp, resize: 'vertical' }} rows={2} value={f.document_footer} onChange={e => set('document_footer', e.target.value)} placeholder="Payment terms, bank details, thank-you note…" /></Field>
+      <Field label="Document footer (optional)"><textarea style={{ ...inp, resize: 'vertical' }} rows={2} value={f.document_footer} onChange={e => set('document_footer', e.target.value)} placeholder="One-line footer on every document — bank details, thank-you note…" /></Field>
+
+      <div style={{ fontSize: 11, color: T.text3, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', margin: '14px 0 4px' }}>Document terms</div>
+      <div style={{ fontSize: 11, color: T.text3, marginBottom: 10 }}>Editable terms / payment-details blocks printed above the footer on each document type.</div>
+      <Field label="Invoice terms / payment details"><textarea style={{ ...inp, resize: 'vertical' }} rows={3} value={f.invoice_terms} onChange={e => set('invoice_terms', e.target.value)} placeholder="e.g. Payment due on collection. EFT: BSB 000-000 Acc 00000000. Warranty: 12 months / 20,000km." /></Field>
+      <Field label="Quote terms"><textarea style={{ ...inp, resize: 'vertical' }} rows={3} value={f.quote_terms} onChange={e => set('quote_terms', e.target.value)} placeholder="e.g. Quote valid for 30 days. Prices may change subject to parts availability. A deposit may be required." /></Field>
+      <Field label="Purchase order terms"><textarea style={{ ...inp, resize: 'vertical' }} rows={3} value={f.po_terms} onChange={e => set('po_terms', e.target.value)} placeholder="e.g. Please confirm price + ETA. Deliver to … Quote our PO number on the invoice." /></Field>
       <button onClick={() => onSave(f)} style={pbtn(T.accent, true)}>Save business details</button>
 
       <div style={{ fontSize: 11, color: T.text3, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', margin: '22px 0 4px' }}>Diary hours</div>

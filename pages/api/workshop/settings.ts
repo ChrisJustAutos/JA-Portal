@@ -13,6 +13,7 @@ export const config = { maxDuration: 30 }
 
 const TEXT_FIELDS = [
   'business_name', 'business_abn', 'business_address', 'business_phone', 'business_email', 'document_footer', 'sms_from', 'review_url',
+  'invoice_terms', 'quote_terms', 'po_terms',
   'myob_sales_account_uid', 'myob_sales_account_name',
   'part_sale_account_uid', 'part_sale_account_name', 'discount_account_uid', 'discount_account_name',
   'refund_account_uid', 'refund_account_name', 'tracking_category_uid', 'tracking_category_name',

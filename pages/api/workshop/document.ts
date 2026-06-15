@@ -22,7 +22,7 @@ const FROM_MAILBOX =
   process.env.AP_INBOX_MAILBOX ||
   'accounts@justautosmechanical.com.au'
 
-type DocType = 'quote' | 'jobcard' | 'invoice'
+type DocType = 'quote' | 'jobcard' | 'invoice' | 'po'
 const round2 = (n: number) => Math.round(n * 100) / 100
 
 function sb(): SupabaseClient {
@@ -69,9 +69,36 @@ async function buildDoc(db: SupabaseClient, type: DocType, id: string): Promise<
       customer: { name: customerLabel(cust) || cust.name || '—', company: cust.company || null, phone: cust.mobile || cust.phone || null, email: cust.email || null, address: cust.address || null },
       vehicle: veh ? { label: vehicleLabel(veh), rego: veh.rego, vin: veh.vin, odometer: veh.odometer } : null,
       lines: docLines, subtotal: Number((quote as any).subtotal) || 0, gst: Number((quote as any).gst) || 0, total: Number((quote as any).total) || 0,
-      notes: (quote as any).notes || null, footer,
+      notes: (quote as any).notes || null, terms: settings.quote_terms || null, footer,
     }
     return { doc, customerEmail: cust.email || null, customerName: cust.name || 'customer', filename: `${ref}.pdf` }
+  }
+
+  if (type === 'po') {
+    const { data: po } = await db.from('workshop_purchase_orders')
+      .select('*, supplier:workshop_suppliers(id, name, email, phone, address)').eq('id', id).is('deleted_at', null).maybeSingle()
+    if (!po) return null
+    const { data: lines } = await db.from('workshop_po_lines').select('*').eq('po_id', id).order('sort_order', { ascending: true })
+    const sup: any = (po as any).supplier || {}
+    let sub = 0
+    const docLines = (lines || []).map((l: any) => {
+      const ex = round2((Number(l.line_total_ex_gst) ?? 0) || (Number(l.qty) * Number(l.unit_cost_ex_gst)))
+      sub += ex
+      return { description: l.name || l.sku || '', partNumber: l.sku, qty: Number(l.qty) || 0, unitPrice: Number(l.unit_cost_ex_gst) || 0, total: ex }
+    })
+    sub = round2(sub)
+    const poGst = round2(sub * 0.10)
+    const ref = `PO-${String((po as any).po_seq).padStart(4, '0')}`
+    const doc: WorkshopDoc = {
+      kind: 'po', title: 'Purchase Order', reference: ref,
+      date: (po as any).ordered_at || (po as any).created_at || new Date().toISOString(),
+      status: prettyStatus((po as any).status), business,
+      customer: { name: sup.name || (po as any).supplier_name || '—', phone: sup.phone || null, email: sup.email || null, address: sup.address || null },
+      partyLabel: 'Supplier', vehicle: null,
+      lines: docLines, subtotal: sub, gst: poGst, total: round2(sub + poGst),
+      notes: (po as any).notes || null, terms: settings.po_terms || null, footer,
+    }
+    return { doc, customerEmail: sup.email || null, customerName: sup.name || 'supplier', filename: `${ref}.pdf` }
   }
 
   // jobcard | invoice — both render from a booking
@@ -103,6 +130,7 @@ async function buildDoc(db: SupabaseClient, type: DocType, id: string): Promise<
     vehicle: veh ? { label: vehicleLabel(veh), rego: veh.rego, vin: veh.vin, odometer: (booking as any).odometer || veh.odometer } : null,
     lines: docLines, subtotal, gst, total: round2(subtotal + gst),
     notes: [(booking as any).description, (booking as any).summary, (booking as any).notes].filter(Boolean).join('\n\n') || null,
+    terms: isInvoice ? (settings.invoice_terms || null) : null,
     footer,
   }
   return { doc, customerEmail: cust.email || null, customerName: cust.name || 'customer', filename: `${ref}.pdf` }
@@ -110,7 +138,7 @@ async function buildDoc(db: SupabaseClient, type: DocType, id: string): Promise<
 
 function parseType(raw: any): DocType | null {
   const t = String(raw || '').toLowerCase()
-  return t === 'quote' || t === 'jobcard' || t === 'invoice' ? t : null
+  return t === 'quote' || t === 'jobcard' || t === 'invoice' || t === 'po' ? t : null
 }
 
 export default withAuth('view:diary', async (req: NextApiRequest, res: NextApiResponse, user) => {

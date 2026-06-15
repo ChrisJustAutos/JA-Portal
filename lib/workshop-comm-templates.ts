@@ -5,7 +5,7 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 
-export type CommTrigger = 'booking_confirmation' | 'booking_reminder' | 'ready' | 'follow_up' | 'review_request' | 'payment_receipt' | 'service_due' | 'rego_due'
+export type CommTrigger = 'booking_confirmation' | 'booking_reminder' | 'ready' | 'follow_up' | 'review_request' | 'payment_receipt' | 'quote_follow_up' | 'service_due' | 'rego_due'
 
 export interface CommTemplate {
   id: string
@@ -29,6 +29,7 @@ export const COMM_TRIGGERS: { value: CommTrigger; label: string; anchor: string;
   { value: 'follow_up',            label: 'Service follow-up',    anchor: 'job completion', dirFixed: 'after' },
   { value: 'review_request',       label: 'Review request',       anchor: 'job completion', dirFixed: 'after' },
   { value: 'payment_receipt',      label: 'Payment receipt',      anchor: 'when a payment is taken', dirFixed: 'after' },
+  { value: 'quote_follow_up',      label: 'Quote follow-up',      anchor: 'when a quote is sent', dirFixed: 'after' },
   { value: 'service_due',          label: 'Service due',          anchor: 'when due (within the lead window)', dirFixed: 'after' },
   { value: 'rego_due',             label: 'Registration due',     anchor: 'when due (within the lead window)', dirFixed: 'after' },
 ]

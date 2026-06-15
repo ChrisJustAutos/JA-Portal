@@ -10,6 +10,7 @@ import { QUOTE_STATUSES } from '../../../../lib/workshop'
 import { notify } from '../../../../lib/notifications'
 import { onQuoteStatusChanged } from '../../../../lib/crm-bridge'
 import { enrolFromEvent } from '../../../../lib/crm-automation-triggers'
+import { queueQuoteFollowUp } from '../../../../lib/workshop-reminders'
 
 export const config = { maxDuration: 10 }
 
@@ -65,6 +66,8 @@ export default withAuth('view:diary', async (req, res, user) => {
       const { data: qq } = await db.from('workshop_quotes').select('id, customer_id, total').eq('id', id).maybeSingle()
       if (qq) {
         await onQuoteStatusChanged(db, qq, prevStatus, patch.status, user.id)
+        // Quote sent → schedule template-driven follow-up chases.
+        if (patch.status === 'sent') await queueQuoteFollowUp(id)
         if (patch.status === 'accepted' || patch.status === 'declined') {
           const { data: lead } = await db.from('crm_leads').select('id, contact_id').eq('workshop_quote_id', id).is('deleted_at', null).maybeSingle()
           const { data: ct } = !lead && qq.customer_id
