@@ -21,7 +21,7 @@ function sb() {
   return createClient(url, key, { auth: { persistSession: false } })
 }
 
-const EDITABLE = ['notes', 'customer_id', 'vehicle_id'] as const
+const EDITABLE = ['notes', 'customer_id', 'vehicle_id', 'salesperson_id'] as const
 
 export default withAuth('view:diary', async (req, res, user) => {
   const id = String(req.query.id || '').trim()
@@ -34,6 +34,11 @@ export default withAuth('view:diary', async (req, res, user) => {
       .eq('id', id).maybeSingle()
     if (error) return res.status(500).json({ error: error.message })
     if (!quote) return res.status(404).json({ error: 'not_found' })
+    // Resolve the salesperson's name for display.
+    if ((quote as any).salesperson_id) {
+      const { data: sp } = await db.from('user_profiles').select('display_name, email').eq('id', (quote as any).salesperson_id).maybeSingle()
+      ;(quote as any).salesperson_name = sp ? (sp.display_name || sp.email) : null
+    }
     const { data: lines } = await db.from('workshop_quote_lines')
       .select('*').eq('quote_id', id).order('sort_order', { ascending: true })
     return res.status(200).json({ quote, lines: lines || [] })

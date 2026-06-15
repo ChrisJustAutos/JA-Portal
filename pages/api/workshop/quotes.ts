@@ -23,7 +23,7 @@ export default withAuth('view:diary', async (req, res, user) => {
     const status = String(req.query.status || '').trim()
     const view = String(req.query.view || 'active').trim()  // 'active' | 'trash'
     let q = db.from('workshop_quotes')
-      .select(`id, status, subtotal, gst, total, notes, created_at, deleted_at,
+      .select(`id, quote_seq, status, subtotal, gst, total, notes, created_at, deleted_at,
                customer:workshop_customers(id, name),
                vehicle:workshop_vehicles(id, rego, make, model, year)`)
       .order('created_at', { ascending: false })
@@ -56,6 +56,7 @@ export default withAuth('view:diary', async (req, res, user) => {
       vehicle_id: body.vehicle_id || null,
       notes: body.notes ? String(body.notes) : null,
       created_by: user.id,
+      salesperson_id: body.salesperson_id || user.id,
     }).select('id').single()
     if (error) return res.status(500).json({ error: error.message })
     await logWorkshopActivity(db, { action: 'created', entity: 'quote', entity_id: data.id, detail: 'Quote created', actor_id: user.id, actor_name: user.displayName || user.email })

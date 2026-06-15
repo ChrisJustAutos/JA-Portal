@@ -120,7 +120,7 @@ export default function QuotesPage({ user }: { user: PortalUserSSR }) {
               ) : quotes.map(q => (
                 <Link key={q.id} href={`/workshop/quote/${q.id}`} style={{ display: 'grid', gridTemplateColumns: view === 'trash' ? '90px 1fr 1fr 110px 90px 90px' : '90px 1fr 1fr 110px 90px', gap: 8, padding: '11px 16px', borderTop: `1px solid ${T.border}`, alignItems: 'center', textDecoration: 'none', color: 'inherit', opacity: view === 'trash' ? 0.7 : 1 }}>
                   <div><QuoteChip status={q.status} /></div>
-                  <div style={{ fontSize: 12, color: T.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{q.customer ? customerLabel(q.customer) : '—'}</div>
+                  <div style={{ fontSize: 12, color: T.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{q.quote_seq ? <span style={{ fontFamily: 'monospace', fontSize: 11, color: T.text3, marginRight: 6 }}>Q-{q.quote_seq}</span> : null}{q.customer ? customerLabel(q.customer) : '—'}</div>
                   <div style={{ fontSize: 12, color: T.text2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{q.vehicle ? vehicleLabel(q.vehicle) : '—'}</div>
                   <div style={{ fontSize: 12, fontFamily: 'monospace', color: T.text, textAlign: 'right' }}>{money(q.total)}</div>
                   <div style={{ fontSize: 11, color: T.text3, fontFamily: 'monospace', textAlign: 'right' }}>{fmtDate(q.created_at)}</div>

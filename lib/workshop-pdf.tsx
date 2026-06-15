@@ -33,6 +33,7 @@ export interface WorkshopDoc {
   notes?: string | null
   terms?: string | null         // editable terms / payment-details block
   footer?: string | null
+  salesperson?: string | null   // who prepared the doc (quotes)
 }
 
 // ── Palette / styles ───────────────────────────────────────────────────
@@ -106,6 +107,7 @@ function WorkshopDocPdf({ doc }: { doc: WorkshopDoc }) {
             <Text style={s.metaLabel}>Date</Text>
             <Text style={s.metaValue}>{fmtDate(doc.date)}</Text>
             {doc.status ? <><Text style={s.metaLabel}>Status</Text><Text style={s.metaValue}>{doc.status}</Text></> : null}
+            {doc.salesperson ? <><Text style={s.metaLabel}>Salesperson</Text><Text style={s.metaValue}>{doc.salesperson}</Text></> : null}
           </View>
         </View>
 

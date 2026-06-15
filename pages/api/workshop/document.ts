@@ -65,7 +65,12 @@ async function buildDoc(db: SupabaseClient, type: DocType, id: string): Promise<
     ))
     const cust: any = (quote as any).customer || {}
     const veh: any = (quote as any).vehicle
-    const ref = `Q-${String(id).slice(0, 8).toUpperCase()}`
+    const ref = (quote as any).quote_seq ? `Q-${(quote as any).quote_seq}` : `Q-${String(id).slice(0, 8).toUpperCase()}`
+    let salesperson: string | null = null
+    if ((quote as any).salesperson_id) {
+      const { data: sp } = await db.from('user_profiles').select('display_name, email').eq('id', (quote as any).salesperson_id).maybeSingle()
+      salesperson = sp ? (sp.display_name || sp.email) : null
+    }
     const doc: WorkshopDoc = {
       kind: 'quote', title: 'Quote', reference: ref,
       date: (quote as any).created_at || new Date().toISOString(),
@@ -73,7 +78,7 @@ async function buildDoc(db: SupabaseClient, type: DocType, id: string): Promise<
       customer: { name: customerLabel(cust) || cust.name || '—', company: cust.company || null, phone: cust.mobile || cust.phone || null, email: cust.email || null, address: cust.address || null },
       vehicle: veh ? { label: vehicleLabel(veh), rego: veh.rego, vin: veh.vin, odometer: veh.odometer } : null,
       lines: docLines, subtotal: Number((quote as any).subtotal) || 0, gst: Number((quote as any).gst) || 0, total: Number((quote as any).total) || 0,
-      notes: (quote as any).notes || null, terms: settings.quote_terms || null, footer,
+      notes: (quote as any).notes || null, terms: settings.quote_terms || null, footer, salesperson,
     }
     return { doc, customerEmail: cust.email || null, customerName: cust.name || 'customer', filename: `${ref}.pdf` }
   }

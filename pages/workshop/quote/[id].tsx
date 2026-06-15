@@ -36,6 +36,8 @@ export default function QuoteBuilderPage({ user }: { user: PortalUserSSR }) {
   const [err, setErr] = useState('')
   const [busy, setBusy] = useState(false)
   const [showEmail, setShowEmail] = useState(false)
+  const [staff, setStaff] = useState<Array<{ id: string; display_name: string | null; email: string }>>([])
+  useEffect(() => { fetch('/api/workshop/users-lite').then(r => r.json()).then(d => setStaff(d.users || [])).catch(() => undefined) }, [])
   const confirmDialog = useConfirm()
   // Job-type presets — fills quote lines from a template (description + items).
   const [jobTypes, setJobTypes] = useState<any[]>([])
@@ -202,8 +204,19 @@ export default function QuoteBuilderPage({ user }: { user: PortalUserSSR }) {
             : q ? (
               <>
                 <div style={{ background: T.bg2, border: `1px solid ${T.border}`, borderRadius: 10, padding: 18, marginTop: 12 }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
-                    <div style={{ fontSize: 16, fontWeight: 600 }}>Quote</div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 14, gap: 10, flexWrap: 'wrap' }}>
+                    <div>
+                      <div style={{ fontSize: 16, fontWeight: 600 }}>Quote{q.quote_seq ? ` #Q-${q.quote_seq}` : ''}</div>
+                      <div style={{ fontSize: 11, color: T.text3, marginTop: 4, display: 'flex', alignItems: 'center', gap: 6 }}>
+                        Salesperson:
+                        {canEdit ? (
+                          <select value={q.salesperson_id || ''} onChange={e => patchQuote({ salesperson_id: e.target.value || null })} style={{ ...inp, width: 'auto', padding: '3px 6px', fontSize: 11 }}>
+                            <option value="">— Unassigned —</option>
+                            {staff.map(s => <option key={s.id} value={s.id}>{s.display_name || s.email}</option>)}
+                          </select>
+                        ) : <span style={{ color: T.text2 }}>{q.salesperson_name || '—'}</span>}
+                      </div>
+                    </div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                       <StatusPill status={q.status} />
                       {canEdit && (
