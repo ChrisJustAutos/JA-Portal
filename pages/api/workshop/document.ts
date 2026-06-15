@@ -264,6 +264,21 @@ export default withAuth('view:diary', async (req: NextApiRequest, res: NextApiRe
     } catch (e: any) {
       return res.status(502).json({ error: 'send_failed', message: e?.message || 'Email send failed' })
     }
+
+    // Record in the comms history (best-effort).
+    try {
+      let customerId: string | null = null, bookingId: string | null = null, quoteId: string | null = null
+      if (type === 'jobcard' || type === 'invoice') { bookingId = id; const { data: bk } = await db.from('workshop_bookings').select('customer_id').eq('id', id).maybeSingle(); customerId = (bk as any)?.customer_id || null }
+      else if (type === 'quote') { quoteId = id; const { data: qq } = await db.from('workshop_quotes').select('customer_id').eq('id', id).maybeSingle(); customerId = (qq as any)?.customer_id || null }
+      const nowIso = new Date().toISOString()
+      await db.from('workshop_reminders').insert({
+        type: 'document', channel: 'email', to_email: to,
+        subject, body: `${built.doc.title} ${built.doc.reference}${attachments.length > 1 ? ` (+${attachments.length - 1} attachment${attachments.length > 2 ? 's' : ''})` : ''}${message ? `\n\n${message}` : ''}`,
+        customer_id: customerId, booking_id: bookingId, quote_id: quoteId,
+        status: 'sent', send_at: nowIso, sent_at: nowIso, created_by: user.id,
+      })
+    } catch { /* logging is best-effort */ }
+
     return res.status(200).json({ ok: true, to, attached: attachments.length })
   }
 

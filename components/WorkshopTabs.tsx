@@ -17,11 +17,12 @@ const TABS: { id: string; label: string; href: string; perm?: Permission }[] = [
   { id: 'quotes', label: 'Quotes', href: '/workshop/quotes' },
   { id: 'orders', label: 'Orders', href: '/workshop/orders' },
   { id: 'invoices', label: 'Invoices', href: '/workshop/invoices' },
+  { id: 'comms', label: 'Comms', href: '/workshop/comms' },
   { id: 'inventory', label: 'Inventory', href: '/workshop/inventory' },
   { id: 'reports', label: 'Reports', href: '/workshop/reports', perm: 'view:reports' },
 ]
 
-export type WorkshopTabId = 'diary' | 'jobs' | 'customers' | 'vehicles' | 'quotes' | 'orders' | 'invoices' | 'inventory' | 'reports'
+export type WorkshopTabId = 'diary' | 'jobs' | 'customers' | 'vehicles' | 'quotes' | 'orders' | 'invoices' | 'comms' | 'inventory' | 'reports'
 
 export default function WorkshopTabs({ active, role }: { active: WorkshopTabId; role: UserRole }) {
   const router = useRouter()

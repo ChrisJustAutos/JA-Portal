@@ -35,6 +35,22 @@ export default function InvoicesPage({ user }: { user: PortalUserSSR }) {
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null)
   const confirmDialog = useConfirm()
   const isMobile = useIsMobile()
+  const [sub, setSub] = useState<'invoices' | 'credit'>('invoices')
+  const [creditNotes, setCreditNotes] = useState<any[]>([])
+  const [cnLoading, setCnLoading] = useState(false)
+  const [cnQ, setCnQ] = useState('')
+
+  const loadCredit = useCallback(async () => {
+    setCnLoading(true)
+    try {
+      const p = new URLSearchParams({ limit: '200' })
+      if (cnQ.trim()) p.set('q', cnQ.trim())
+      const r = await fetch(`/api/workshop/credit-notes?${p}`)
+      const d = await r.json()
+      if (r.ok) setCreditNotes(d.creditNotes || [])
+    } catch { /* keep prior */ } finally { setCnLoading(false) }
+  }, [cnQ])
+  useEffect(() => { if (sub === 'credit') { const t = setTimeout(loadCredit, 200); return () => clearTimeout(t) } }, [sub, loadCredit])
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -75,6 +91,49 @@ export default function InvoicesPage({ user }: { user: PortalUserSSR }) {
           currentUserRole={user.role} currentUserVisibleTabs={user.visibleTabs} currentUserName={user.displayName} currentUserEmail={user.email} />
         <WorkshopTabs active="invoices" role={user.role} />
 
+        <div style={{ display: 'flex', gap: 4, padding: '0 20px', background: T.bg2, borderBottom: `1px solid ${T.border}`, flexShrink: 0 }}>
+          {([['invoices', 'Invoices'], ['credit', 'Credit notes']] as const).map(([id, label]) => {
+            const on = sub === id
+            return <button key={id} onClick={() => setSub(id)} style={{ background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'inherit', color: on ? T.text : T.text2, fontSize: 12.5, fontWeight: on ? 600 : 400, padding: '10px 12px', borderBottom: `2px solid ${on ? T.accent : 'transparent'}` }}>{label}</button>
+          })}
+        </div>
+
+        {sub === 'credit' ? (
+          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', background: T.bg }}>
+            <div style={{ background: T.bg2, borderBottom: `1px solid ${T.border}`, padding: '10px 20px', display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', flexShrink: 0 }}>
+              <span style={{ fontSize: 14, fontWeight: 600 }}>Credit notes</span>
+              <span style={{ fontSize: 11, color: T.text3 }}>· {creditNotes.length}</span>
+              <span style={{ flex: 1 }} />
+              <input value={cnQ} onChange={e => setCnQ(e.target.value)} placeholder="Search customer or reason…" style={{ padding: '5px 10px', background: T.bg3, border: `1px solid ${T.border2}`, borderRadius: 4, color: T.text, fontSize: 12, fontFamily: 'inherit', width: 240 }} />
+            </div>
+            <div style={{ flex: 1, overflow: 'auto', padding: 20 }}>
+              <div style={{ fontSize: 11, color: T.text3, marginBottom: 12 }}>To raise a credit note, open an invoice (Invoices tab → click a row) and select the items to credit.</div>
+              <div style={{ background: T.bg2, border: `1px solid ${T.border}`, borderRadius: 10, overflow: 'hidden' }}>
+                <div style={{ display: 'grid', gridTemplateColumns: '90px 110px 1fr 110px 1fr 120px', gap: 8, padding: '9px 16px', background: T.bg3, borderBottom: `1px solid ${T.border}`, fontSize: 9, color: T.text3, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                  <div>Credit #</div><div>Date</div><div>Customer</div><div style={{ textAlign: 'right' }}>Total</div><div>Reason</div><div style={{ textAlign: 'right' }}>MYOB / Refund</div>
+                </div>
+                {!cnLoading && creditNotes.length === 0 && <div style={{ padding: 40, textAlign: 'center', color: T.text3, fontSize: 12 }}>No credit notes{cnQ ? ' match' : ' yet'}.</div>}
+                {creditNotes.map(cn => {
+                  const cust = Array.isArray(cn.customer) ? cn.customer[0] : cn.customer
+                  const href = cn.booking_id ? `/workshop/job/${cn.booking_id}` : cn.invoice_id ? `/workshop/invoice/${cn.invoice_id}` : '#'
+                  return (
+                    <Link key={cn.id} href={href} style={{ display: 'grid', gridTemplateColumns: '90px 110px 1fr 110px 1fr 120px', gap: 8, padding: '10px 16px', borderTop: `1px solid ${T.border}`, alignItems: 'center', textDecoration: 'none', color: 'inherit' }}>
+                      <div style={{ fontSize: 12, fontFamily: 'monospace', color: T.text }}>CN-{cn.cn_seq}</div>
+                      <div style={{ fontSize: 11, fontFamily: 'monospace', color: T.text2 }}>{fmtDate(cn.created_at)}</div>
+                      <div style={{ fontSize: 12, color: T.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{cust?.name || '—'}</div>
+                      <div style={{ fontSize: 12, fontFamily: 'monospace', color: T.red, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>−{money(cn.total_inc)}</div>
+                      <div style={{ fontSize: 11.5, color: T.text3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{cn.reason || '—'}</div>
+                      <div style={{ textAlign: 'right', fontSize: 10, fontFamily: 'monospace' }}>
+                        {cn.myob_credit_number ? <span style={{ color: T.green }}>MYOB {cn.myob_credit_number}</span> : cn.myob_write_error ? <span style={{ color: T.red }}>MYOB ✗</span> : <span style={{ color: T.text3 }}>local</span>}
+                        {cn.refunded ? <span style={{ color: T.amber, marginLeft: 6 }}>refunded</span> : null}
+                      </div>
+                    </Link>
+                  )
+                })}
+              </div>
+            </div>
+          </div>
+        ) : (
         <div style={{ flex:1, display:'flex', flexDirection:'column', overflow:'hidden', background:T.bg }}>
           <div style={{ background:T.bg2, borderBottom:`1px solid ${T.border}`, padding:'10px 20px', display:'flex', alignItems:'center', gap:10, flexWrap:'wrap', flexShrink:0 }}>
             <span style={{ fontSize:14, fontWeight:600 }}>Invoices</span>
@@ -185,6 +244,7 @@ export default function InvoicesPage({ user }: { user: PortalUserSSR }) {
             )}
           </div>
         </div>
+        )}
       </div>
     </>
   )
