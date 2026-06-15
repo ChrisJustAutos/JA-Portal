@@ -25,15 +25,14 @@ function pbtn(color: string, solid?: boolean): React.CSSProperties {
   return { padding: '7px 14px', borderRadius: 6, fontSize: 12, fontFamily: 'inherit', fontWeight: 600, cursor: 'pointer', background: solid ? color : 'transparent', color: solid ? '#fff' : color, border: `1px solid ${solid ? color : color + '55'}` }
 }
 
-type Tab = 'business' | 'invoicing' | 'accounts' | 'sms' | 'techs'
+type Tab = 'business' | 'myob' | 'sms' | 'techs'
 // A settings saver. `silent` (used by "Save all") suppresses the per-card flash
 // and throws on failure so the page can show one combined confirmation.
 type SaveFn = (patch: any, opts?: { silent?: boolean }) => void | Promise<void>
 type RegisterFn = (key: string, fn: ((opts?: { silent?: boolean }) => Promise<void>) | null) => void
 const TABS: { id: Tab; label: string }[] = [
   { id: 'business', label: 'Business & documents' },
-  { id: 'invoicing', label: 'Invoicing (MYOB)' },
-  { id: 'accounts', label: 'MYOB accounts' },
+  { id: 'myob', label: 'MYOB' },
   { id: 'sms', label: 'Communications' },
   { id: 'techs', label: 'Technicians & staff' },
 ]
@@ -124,8 +123,10 @@ export default function WorkshopSettingsPage({ user }: { user: PortalUserSSR }) 
                 {/* Panel */}
                 <div>
                   {tab === 'business' && settings && <BusinessSection settings={settings} onSave={saveSettings} register={registerSaver} />}
-                  {tab === 'invoicing' && settings && <InvoicingSection settings={settings} accounts={accounts} accountsError={accountsError} onSave={saveSettings} register={registerSaver} />}
-                  {tab === 'accounts' && settings && <AccountsSection settings={settings} income={accounts} banks={bankAccounts} categories={trackingCategories} expense={expenseAccounts} accountsError={accountsError} onSave={saveSettings} />}
+                  {tab === 'myob' && settings && <>
+                    <InvoicingSection settings={settings} onSave={saveSettings} register={registerSaver} />
+                    <AccountsSection settings={settings} income={accounts} banks={bankAccounts} categories={trackingCategories} expense={expenseAccounts} accountsError={accountsError} onSave={saveSettings} />
+                  </>}
                   {tab === 'sms' && settings && <><SmsSection settings={settings} onSave={saveSettings} register={registerSaver} /><div style={{ height: 14 }} /><CommTemplatesManager /></>}
                   {tab === 'techs' && <TechsMovedCard />}
                 </div>
@@ -212,30 +213,21 @@ function BusinessSection({ settings, onSave, register }: { settings: any; onSave
 const minToHHMM = (m: number) => `${String(Math.floor((Number(m) || 0) / 60)).padStart(2, '0')}:${String((Number(m) || 0) % 60).padStart(2, '0')}`
 const hhmmToMin = (s: string) => { const [h, m] = String(s || '').split(':').map(Number); return (h || 0) * 60 + (m || 0) }
 
-function InvoicingSection({ settings, accounts, accountsError, onSave, register }: { settings: any; accounts: any[]; accountsError: string; onSave: SaveFn; register?: RegisterFn }) {
-  const [uid, setUid] = useState(settings.myob_sales_account_uid || '')
+function InvoicingSection({ settings, onSave, register }: { settings: any; onSave: SaveFn; register?: RegisterFn }) {
   const [asOrder, setAsOrder] = useState(!!settings.invoice_as_order)
-  const buildPatch = () => ({ myob_sales_account_uid: uid || null, myob_sales_account_name: accounts.find(a => a.uid === uid)?.name || null, invoice_as_order: asOrder })
-  const patchRef = useRef(buildPatch()); patchRef.current = buildPatch()
+  const patchRef = useRef({ invoice_as_order: asOrder }); patchRef.current = { invoice_as_order: asOrder }
   useEffect(() => {
     if (!register) return
     register('invoicing', (opts) => Promise.resolve(onSave(patchRef.current, opts)))
     return () => register('invoicing', null)
   }, [register, onSave])
   return (
-    <Card title="Invoicing (MYOB — VPS)" hint="Workshop jobs post to MYOB as a Service sale against this income account.">
-      <Field label="Sales income account">
-        <select style={inp} value={uid} onChange={e => setUid(e.target.value)}>
-          <option value="">— pick income account —</option>
-          {accounts.map(a => <option key={a.uid} value={a.uid}>{a.displayId} · {a.name}</option>)}
-        </select>
-      </Field>
-      {accountsError && <div style={{ fontSize: 12, color: T.amber, marginBottom: 12 }}>Could not load MYOB accounts: {accountsError}</div>}
+    <Card title="Invoicing mode (MYOB — VPS)" hint="How finalised workshop jobs post to MYOB. Sale accounts are set below.">
       <label style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 13, marginBottom: 14, cursor: 'pointer' }}>
         <input type="checkbox" checked={asOrder} onChange={e => setAsOrder(e.target.checked)} />
         Post as a Sale <strong>Order</strong> (no GL impact — staff convert to an invoice in MYOB). Uncheck to post a Sale <strong>Invoice</strong> directly.
       </label>
-      <button onClick={() => onSave({ myob_sales_account_uid: uid || null, myob_sales_account_name: accounts.find(a => a.uid === uid)?.name || null, invoice_as_order: asOrder })} style={pbtn(T.accent, true)}>Save invoicing</button>
+      <button onClick={() => onSave({ invoice_as_order: asOrder })} style={pbtn(T.accent, true)}>Save invoicing</button>
     </Card>
   )
 }

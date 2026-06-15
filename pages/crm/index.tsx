@@ -43,6 +43,9 @@ export default function CrmPipeline({ user }: { user: PortalUserSSR }) {
   const [dragOver, setDragOver] = useState<string | null>(null)
   const [stages, setStages] = useState<StageRow[]>([])
   const [showStageEditor, setShowStageEditor] = useState(false)
+  const [layout, setLayout] = useState<'board' | 'list'>('board')
+  useEffect(() => { try { const v = localStorage.getItem('crm_leads_layout'); if (v === 'list' || v === 'board') setLayout(v) } catch { /* */ } }, [])
+  function pickLayout(v: 'board' | 'list') { setLayout(v); try { localStorage.setItem('crm_leads_layout', v) } catch { /* */ } }
 
   const loadStages = useCallback(async () => {
     try { const r = await fetch('/api/crm/stages'); const d = await r.json(); if (r.ok) setStages(d.stages || []) } catch { /* keep */ }
@@ -96,6 +99,11 @@ export default function CrmPipeline({ user }: { user: PortalUserSSR }) {
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 14, flexShrink: 0 }}>
           <h1 style={{ fontSize: 18, fontWeight: 600, margin: 0 }}>Leads</h1>
           <UserFilter users={users} value={owner} currentUserId={user.id} onChange={setOwner} />
+          <div style={{ display: 'flex', gap: 0, border: `1px solid ${T.border2}`, borderRadius: 7, overflow: 'hidden' }}>
+            {(['board', 'list'] as const).map(v => (
+              <button key={v} onClick={() => pickLayout(v)} style={{ padding: '6px 12px', fontSize: 12, fontWeight: 600, fontFamily: 'inherit', cursor: 'pointer', border: 'none', background: layout === v ? T.accent : 'transparent', color: layout === v ? '#fff' : T.text2 }}>{v === 'board' ? '▦ Board' : '☰ List'}</button>
+            ))}
+          </div>
           <span style={{ flex: 1 }} />
           {overdueCount > 0 && <span style={{ fontSize: 11, color: T.red, fontWeight: 600 }}>⏰ {overdueCount} overdue follow-up{overdueCount === 1 ? '' : 's'}</span>}
           {loading && <span style={{ color: T.text3, fontSize: 12, fontStyle: 'italic' }}>Loading…</span>}
@@ -107,7 +115,8 @@ export default function CrmPipeline({ user }: { user: PortalUserSSR }) {
           )}
         </div>
 
-        {/* Board */}
+        {/* Board / List */}
+        {layout === 'board' ? (
         <div style={{ display: 'flex', gap: 12, flex: 1, overflowX: 'auto', minHeight: 0 }}>
           {columns.map(st => {
             const stage = st.key
@@ -177,6 +186,51 @@ export default function CrmPipeline({ user }: { user: PortalUserSSR }) {
             )
           })}
         </div>
+        ) : (
+        /* List grouped by stage */
+        <div style={{ flex: 1, overflowY: 'auto', minHeight: 0, display: 'flex', flexDirection: 'column', gap: 14 }}>
+          {liveStages.map(st => {
+            const items = leads.filter(l => l.stage === st.key).slice().sort((a, b) => { const od = overdueDays(b) - overdueDays(a); if (od !== 0) return od; return new Date(a.last_activity_at || a.created_at).getTime() - new Date(b.last_activity_at || b.created_at).getTime() })
+            if (!items.length) return null
+            const sum = items.reduce((a, l) => a + (Number(l.value) || 0), 0)
+            return (
+              <div key={st.key} style={{ border: `1px solid ${T.border}`, borderRadius: 10, overflow: 'hidden', background: T.bg2 }}>
+                <div style={{ padding: '8px 12px', background: T.bg3, borderBottom: `1px solid ${T.border}`, display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <span style={{ width: 8, height: 8, borderRadius: '50%', background: st.color }} />
+                  <span style={{ fontSize: 12, fontWeight: 600 }}>{st.label}</span>
+                  <span style={{ fontSize: 10, color: T.text3, fontFamily: 'monospace' }}>{items.length}</span>
+                  <span style={{ flex: 1 }} />
+                  {sum > 0 && <span style={{ fontSize: 10, color: T.text3, fontFamily: 'monospace' }}>{fmtMoney(sum)}</span>}
+                </div>
+                {items.map(l => {
+                  const od = overdueDays(l)
+                  const qMeta = l.quote ? QUOTE_STATUS_META[l.quote.status] : null
+                  return (
+                    <div key={l.id} onClick={() => setOpenId(l.id)} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 12px', borderTop: `1px solid ${T.border}`, cursor: 'pointer', fontSize: 12.5 }}>
+                      <div style={{ flex: '2 1 220px', minWidth: 0 }}>
+                        <div style={{ fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{l.title}</div>
+                        {l.contact && <div style={{ fontSize: 11, color: T.text2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{l.contact.name}{l.contact.company_name ? ` · ${l.contact.company_name}` : ''}</div>}
+                      </div>
+                      {qMeta && l.quote ? <span style={{ fontSize: 9, fontWeight: 700, textTransform: 'uppercase', color: qMeta.color, background: `${qMeta.color}1e`, padding: '2px 6px', borderRadius: 4, whiteSpace: 'nowrap' }}>Quote · {qMeta.label}</span> : null}
+                      <div style={{ width: 90, textAlign: 'right', color: T.green, fontFamily: 'monospace' }}>{l.value != null ? fmtMoney(l.value) : ''}</div>
+                      <div style={{ width: 120, textAlign: 'right', fontSize: 11 }}>
+                        {l.next_follow_up_at && (od > 0 && !st.is_won && !st.is_lost
+                          ? <span style={{ color: T.red, fontWeight: 700 }}>⏰ {od}d overdue</span>
+                          : <span style={{ color: T.amber }}>⏰ {fmtDate(l.next_follow_up_at)}</span>)}
+                      </div>
+                      {l.owner?.display_name ? <span title={l.owner.display_name} style={{ width: 20, height: 20, borderRadius: '50%', background: T.bg4, color: T.text2, fontSize: 10, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>{l.owner.display_name.charAt(0).toUpperCase()}</span> : <span style={{ width: 20, flexShrink: 0 }} />}
+                      {canEdit
+                        ? <select value={l.stage} onClick={e => e.stopPropagation()} onChange={e => moveStage(l.id, e.target.value)} style={{ ...input, width: 'auto', padding: '4px 6px', fontSize: 11 }}>{liveStages.map(s => <option key={s.key} value={s.key}>{s.label}</option>)}</select>
+                        : <span style={{ width: 110 }} />}
+                    </div>
+                  )
+                })}
+              </div>
+            )
+          })}
+          {leads.length === 0 && <div style={{ fontSize: 12, color: T.text3, textAlign: 'center', padding: 30 }}>No leads.</div>}
+        </div>
+        )}
       </div>
 
       {openId && <LeadDrawer id={openId} canEdit={canEdit} canBookings={canBookings} users={users} currentUserId={user.id} stages={liveStages}
