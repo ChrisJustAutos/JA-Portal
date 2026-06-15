@@ -127,35 +127,45 @@ export async function syncWorkshopInventory(performedBy: string | null = null): 
   const errors: string[] = []
   const items = await pageAll(connId, `${cfPath}/Inventory/Item`, performedBy)
 
-  const nowIso = new Date().toISOString()
-  const rows = items
-    .filter(it => it?.UID && it.Number && it.Name)
-    .map(it => {
-      const baseSell = Number(it.SellingDetails?.BaseSellingPrice || 0)
-      const inclusive = !!it.SellingDetails?.IsTaxInclusive
-      const sellEx = baseSell > 0 ? round2(inclusive ? baseSell / (1 + GST_RATE) : baseSell) : 0
-      const buy = Number(it.BuyingDetails?.StandardCost ?? it.AverageCost ?? 0) || 0
-      const supplier = it.BuyingDetails?.RestockingInformation?.Supplier?.Name || null
-      return {
-        myob_uid: it.UID,
-        sku: it.Number,
-        part_name: it.Name,
-        sale_description: it.Description || null,
-        category: null,
-        supplier,
-        buy_price: round2(buy),
-        sell_price: sellEx,
-        quantity: Number(it.QuantityOnHand ?? 0) || 0,
-        available: Number(it.QuantityAvailable ?? it.QuantityOnHand ?? 0) || 0,
-        allocated: Number(it.QuantityCommitted ?? 0) || 0,
-        on_order: Number(it.QuantityOnOrder ?? 0) || 0,
-        uom: it.BuyingDetails?.BuyingUnitOfMeasure || it.SellingDetails?.SellingUnitOfMeasure || null,
-        is_non_stock: it.IsInventoried === false,
-        deactivated: it.IsActive === false,
-        updated_at: nowIso,
-      }
-    })
+  // Items edited in the portal but not yet pushed to MYOB: don't overwrite the
+  // user's edited fields (still refresh live stock quantities for them).
+  const { data: dirtyRows } = await sb().from('workshop_inventory').select('myob_uid').eq('myob_dirty', true)
+  const dirty = new Set((dirtyRows || []).map((r: any) => r.myob_uid))
 
-  const upserted = await upsertChunked('workshop_inventory', rows, 'myob_uid', errors)
+  const nowIso = new Date().toISOString()
+  const fullRows: any[] = []
+  const stockRows: any[] = []
+  for (const it of items) {
+    if (!it?.UID || !it.Number || !it.Name) continue
+    const stock = {
+      myob_uid: it.UID,
+      quantity: Number(it.QuantityOnHand ?? 0) || 0,
+      available: Number(it.QuantityAvailable ?? it.QuantityOnHand ?? 0) || 0,
+      allocated: Number(it.QuantityCommitted ?? 0) || 0,
+      on_order: Number(it.QuantityOnOrder ?? 0) || 0,
+      updated_at: nowIso,
+    }
+    if (dirty.has(it.UID)) { stockRows.push(stock); continue }   // protect edits
+    const baseSell = Number(it.SellingDetails?.BaseSellingPrice || 0)
+    const inclusive = !!it.SellingDetails?.IsTaxInclusive
+    const sellEx = baseSell > 0 ? round2(inclusive ? baseSell / (1 + GST_RATE) : baseSell) : 0
+    const buy = Number(it.BuyingDetails?.StandardCost ?? it.AverageCost ?? 0) || 0
+    const supplier = it.BuyingDetails?.RestockingInformation?.Supplier?.Name || null
+    fullRows.push({
+      ...stock,
+      sku: it.Number,
+      part_name: it.Name,
+      sale_description: it.Description || null,
+      supplier,
+      buy_price: round2(buy),
+      sell_price: sellEx,
+      uom: it.BuyingDetails?.BuyingUnitOfMeasure || it.SellingDetails?.SellingUnitOfMeasure || null,
+      is_non_stock: it.IsInventoried === false,
+      deactivated: it.IsActive === false,
+    })
+  }
+
+  let upserted = await upsertChunked('workshop_inventory', fullRows, 'myob_uid', errors)
+  if (stockRows.length) upserted += await upsertChunked('workshop_inventory', stockRows, 'myob_uid', errors)
   return { kind: 'inventory', scanned: items.length, upserted, errors, durationMs: Date.now() - start }
 }

@@ -12,6 +12,7 @@ import { requirePageAuth } from '../../lib/authServer'
 import type { PortalUserSSR } from '../../lib/authServer'
 import { roleHasPermission } from '../../lib/permissions'
 import { T, SkeletonRows } from '../../components/ui'
+import InventoryEditor from '../../components/workshop/InventoryEditor'
 
 const money = (n: number | null) => (n == null ? '—' : `$${(Number(n) || 0).toFixed(2)}`)
 
@@ -37,6 +38,7 @@ export default function InventoryPage({ user }: { user: PortalUserSSR }) {
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [printOpen, setPrintOpen] = useState(false)
   const [printOpts, setPrintOpts] = useState({ layout: 'L7163', copies: 1, skip: 0 })
+  const [editId, setEditId] = useState<string | null>(null)
 
   function toggleSelect(id: string) {
     setSelected(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n })
@@ -126,8 +128,8 @@ export default function InventoryPage({ user }: { user: PortalUserSSR }) {
               ) : items.map(it => {
                 const lowStock = Number(it.alert_qty) > 0 && Number(it.available) <= Number(it.alert_qty)
                 return (
-                  <div key={it.id} style={{ display: 'grid', gridTemplateColumns: GRID_COLS, gap: 8, padding: '8px 14px', borderTop: `1px solid ${T.border}`, alignItems: 'center', background: selected.has(it.id) ? 'rgba(79,142,247,0.08)' : 'transparent' }}>
-                    <div><input type="checkbox" checked={selected.has(it.id)} onChange={() => toggleSelect(it.id)} style={{ cursor: 'pointer' }} /></div>
+                  <div key={it.id} onClick={() => isAdmin && setEditId(it.id)} style={{ display: 'grid', gridTemplateColumns: GRID_COLS, gap: 8, padding: '8px 14px', borderTop: `1px solid ${T.border}`, alignItems: 'center', background: selected.has(it.id) ? 'rgba(79,142,247,0.08)' : 'transparent', cursor: isAdmin ? 'pointer' : 'default' }}>
+                    <div onClick={e => e.stopPropagation()}><input type="checkbox" checked={selected.has(it.id)} onChange={() => toggleSelect(it.id)} style={{ cursor: 'pointer' }} /></div>
                     <div style={{ fontSize: 11, fontFamily: 'monospace', color: T.text2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{it.sku || '—'}</div>
                     <div style={{ fontSize: 12, color: T.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{it.part_name}{it.brand ? <span style={{ color: T.text3 }}> · {it.brand}</span> : null}</div>
                     <div style={{ fontSize: 12, fontFamily: 'monospace', textAlign: 'right', color: T.text2 }}>{Number(it.quantity)}</div>
@@ -141,11 +143,13 @@ export default function InventoryPage({ user }: { user: PortalUserSSR }) {
               })}
             </div>
             <div style={{ fontSize: 11, color: T.text3, marginTop: 10 }}>
-              Read-only — MYOB (VPS) is the master. Showing up to 300; search to narrow. Stock decrements happen via MYOB when jobs invoice.
+              {isAdmin ? 'Click a part to edit pricing, supplier, barcode and the MYOB sale account — then “Push to MYOB”. ' : ''}Stock counts come from MYOB (VPS). Showing up to 300; search to narrow.
             </div>
           </div>
         </div>
       </div>
+
+      {editId && <InventoryEditor id={editId} onClose={() => setEditId(null)} onSaved={load} />}
 
       {printOpen && (
         <div onClick={() => setPrintOpen(false)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100 }}>
