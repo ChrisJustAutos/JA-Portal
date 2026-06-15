@@ -29,7 +29,8 @@ interface OrderBooking {
   vehicle: { id: string; rego: string | null; make: string | null; model: string | null; year: number | null } | null
   part_lines: Array<{
     id: string; description: string | null; part_number: string | null; qty: number
-    inventory: { id: string; sku: string | null; part_name: string | null; available: number | null; on_order: number | null } | null
+    ordered_at: string | null; ordered_by: string | null; po_id: string | null
+    inventory: { id: string; sku: string | null; part_name: string | null; supplier: string | null; available: number | null; on_order: number | null } | null
   }>
 }
 
@@ -50,6 +51,39 @@ export default function WorkshopOrdersPage({ user }: { user: PortalUserSSR }) {
   const [loading, setLoading] = useState(true)
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null)
   const [busyId, setBusyId] = useState<string | null>(null)
+  const [sel, setSel] = useState<Set<string>>(new Set())
+  const [lineBusy, setLineBusy] = useState(false)
+
+  function toggleLine(id: string) {
+    setSel(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n })
+  }
+  function clearSel() { setSel(new Set()) }
+
+  async function markLines(ordered: boolean) {
+    const line_ids = Array.from(sel)
+    if (!line_ids.length) return
+    setLineBusy(true)
+    try {
+      const r = await fetch('/api/workshop/orders', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'mark_lines', line_ids, ordered }) })
+      if (r.ok) { toast(ordered ? `${line_ids.length} item(s) marked ordered ✓` : 'Items un-marked', 'success'); clearSel(); load() }
+      else toast((await r.json()).error || 'Failed', 'error')
+    } catch (e: any) { toast(e?.message || 'Failed', 'error') } finally { setLineBusy(false) }
+  }
+
+  async function createPo() {
+    const line_ids = Array.from(sel)
+    if (!line_ids.length) return
+    setLineBusy(true)
+    try {
+      const r = await fetch('/api/workshop/orders', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'create_po', line_ids }) })
+      const d = await r.json()
+      if (r.ok) {
+        const n = (d.created || []).length
+        toast(n ? `Created ${n} draft PO${n === 1 ? '' : 's'} — open Purchase orders to send` : 'No PO created', n ? 'success' : 'error')
+        clearSel(); load()
+      } else toast(d.error || 'Failed', 'error')
+    } catch (e: any) { toast(e?.message || 'Failed', 'error') } finally { setLineBusy(false) }
+  }
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -148,14 +182,21 @@ export default function WorkshopOrdersPage({ user }: { user: PortalUserSSR }) {
                             {b.part_lines.map(l => {
                               const avail = l.inventory?.available != null ? Number(l.inventory.available) : null
                               const short = avail != null && Number(l.qty) > avail
+                              const isOrdered = !!l.ordered_at
                               return (
-                                <div key={l.id} style={{ display: 'flex', gap: 10, fontSize: 12, padding: '3px 0', alignItems: 'baseline' }}>
-                                  <span style={{ fontFamily: 'monospace', color: T.text3, minWidth: 36, textAlign: 'right' }}>{Number(l.qty)}×</span>
-                                  <span style={{ color: T.text }}>{l.description || l.inventory?.part_name || l.part_number || 'Part'}</span>
+                                <div key={l.id} style={{ display: 'flex', gap: 8, fontSize: 12, padding: '3px 0', alignItems: 'baseline' }}>
+                                  {canEdit && (
+                                    isOrdered
+                                      ? <span title={l.po_id ? 'On a purchase order' : 'Marked ordered'} style={{ width: 16, textAlign: 'center', color: T.green, alignSelf: 'center' }}>{l.po_id ? '🛒' : '✓'}</span>
+                                      : <input type="checkbox" checked={sel.has(l.id)} onChange={() => toggleLine(l.id)} style={{ cursor: 'pointer', alignSelf: 'center' }} />
+                                  )}
+                                  <span style={{ fontFamily: 'monospace', color: T.text3, minWidth: 30, textAlign: 'right' }}>{Number(l.qty)}×</span>
+                                  <span style={{ color: isOrdered ? T.text3 : T.text, textDecoration: isOrdered ? 'line-through' : 'none' }}>{l.description || l.inventory?.part_name || l.part_number || 'Part'}</span>
                                   {(l.part_number || l.inventory?.sku) && <span style={{ fontFamily: 'monospace', fontSize: 11, color: T.text3 }}>{l.part_number || l.inventory?.sku}</span>}
-                                  <span style={{ marginLeft: 'auto', fontSize: 11, color: short ? T.red : T.text3, fontWeight: short ? 700 : 400 }}>
-                                    {avail != null ? `${avail} in stock${short ? ' — SHORT' : ''}` : 'not stocked'}
-                                    {l.inventory?.on_order ? ` · ${Number(l.inventory.on_order)} on order` : ''}
+                                  {l.inventory?.supplier && <span style={{ fontSize: 11, color: T.text3 }}>· {l.inventory.supplier.split(',')[0]}</span>}
+                                  <span style={{ marginLeft: 'auto', fontSize: 11, color: isOrdered ? T.green : short ? T.red : T.text3, fontWeight: short && !isOrdered ? 700 : 400 }}>
+                                    {isOrdered ? 'ordered' : (avail != null ? `${avail} in stock${short ? ' — SHORT' : ''}` : 'not stocked')}
+                                    {!isOrdered && l.inventory?.on_order ? ` · ${Number(l.inventory.on_order)} on order` : ''}
                                   </span>
                                 </div>
                               )
@@ -172,6 +213,15 @@ export default function WorkshopOrdersPage({ user }: { user: PortalUserSSR }) {
             ))}
           </div>
         </div>
+
+        {canEdit && sel.size > 0 && (
+          <div style={{ position: 'fixed', bottom: 20, left: '50%', transform: 'translateX(-50%)', zIndex: 50, display: 'flex', alignItems: 'center', gap: 10, background: T.bg2, border: `1px solid ${T.border}`, borderRadius: 12, padding: '10px 14px', boxShadow: '0 8px 28px rgba(0,0,0,0.35)' }}>
+            <span style={{ fontSize: 12, fontWeight: 600, color: T.text }}>{sel.size} item{sel.size === 1 ? '' : 's'} selected</span>
+            <button onClick={() => markLines(true)} disabled={lineBusy} style={{ padding: '7px 14px', borderRadius: 6, fontSize: 12, fontWeight: 600, fontFamily: 'inherit', cursor: 'pointer', background: `${T.green}22`, color: T.green, border: `1px solid ${T.green}55` }}>✓ Mark ordered</button>
+            <button onClick={createPo} disabled={lineBusy} style={{ padding: '7px 14px', borderRadius: 6, fontSize: 12, fontWeight: 600, fontFamily: 'inherit', cursor: 'pointer', background: T.accent, color: '#fff', border: 'none' }}>🛒 Create PO</button>
+            <button onClick={clearSel} style={{ padding: '7px 10px', borderRadius: 6, fontSize: 12, fontWeight: 600, fontFamily: 'inherit', cursor: 'pointer', background: 'transparent', color: T.text3, border: `1px solid ${T.border2}` }}>Clear</button>
+          </div>
+        )}
       </div>
     </>
   )
