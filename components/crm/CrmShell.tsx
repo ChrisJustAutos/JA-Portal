@@ -26,10 +26,11 @@ export const PRIORITY_COLOR: Record<string, string> = {
 // so quoting is driven from the lead drawer on the Pipeline board (start /
 // open / mark sent-accepted-declined / convert to booking). The workshop's
 // own Quotes page keeps the full kanban for the floor.
+// Tasks left the CRM in 2026-06: it's now a standalone module (/tasks) with
+// its own groups, board and (coming) automations.
 const TABS = [
   { id: 'pipeline', label: 'Leads', href: '/crm' },
   { id: 'contacts', label: 'Contacts', href: '/crm/contacts' },
-  { id: 'tasks', label: 'Tasks', href: '/crm/tasks' },
   { id: 'automations', label: 'Automations', href: '/crm/automations' },
   { id: 'campaigns', label: 'Campaigns', href: '/crm/campaigns' },
 ]
@@ -53,7 +54,7 @@ export default function CrmShell({
   user, active, children, title,
 }: {
   user: PortalUserSSR
-  active: 'pipeline' | 'contacts' | 'tasks' | 'automations' | 'campaigns'
+  active: 'pipeline' | 'contacts' | 'automations' | 'campaigns'
   children: ReactNode
   title?: string
 }) {

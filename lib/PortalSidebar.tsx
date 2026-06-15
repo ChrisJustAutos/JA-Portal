@@ -52,6 +52,7 @@ export interface PortalNavItem {
 export const DEFAULT_NAV: PortalNavItem[] = [
   {id:'calls',        kind:'link',    label:'Phone Calls',  href:'/calls',         dot:T.teal},
   {id:'crm',          kind:'link',    label:'CRM',          href:'/crm',           dot:T.green, alertKey:'crm'},
+  {id:'tasks',        kind:'link',    label:'Tasks',        href:'/tasks',         dot:T.amber},
   {id:'projects',     kind:'link',    label:'Projects',     href:'/projects',      dot:T.purple},
   {id:'messages',     kind:'link',    label:'Messages',     href:'/messages',      dot:T.purple, alertKey:'messages'},
   {id:'diary',        kind:'link',    label:'Workshop',     href:'/diary',         dot:T.blue},

@@ -46,6 +46,7 @@ export type Permission =
   | 'view:diary'
   | 'view:messages'
   | 'view:crm'
+  | 'view:tasks'
   | 'manage:inbox'
   // Actions
   | 'edit:any'
@@ -60,6 +61,7 @@ export type Permission =
   | 'edit:stripe_myob'
   | 'edit:bookings'
   | 'edit:crm'
+  | 'edit:tasks'
   | 'edit:projects'
   | 'generate:reports'
   | 'monitor:calls'
@@ -81,6 +83,7 @@ const ROLE_PERMISSIONS: Record<UserRole, Permission[]> = {
     'view:diary','edit:bookings',
     'view:messages','manage:inbox',
     'view:crm','edit:crm',
+    'view:tasks','edit:tasks',
     'view:projects','edit:projects',
     'admin:users','admin:settings','admin:audit_log','admin:b2b',
   ],
@@ -94,6 +97,7 @@ const ROLE_PERMISSIONS: Record<UserRole, Permission[]> = {
     'view:diary','edit:bookings',
     'view:messages','manage:inbox',
     'view:crm','edit:crm',
+    'view:tasks','edit:tasks',
     'view:projects','edit:projects',
   ],
   sales: [
@@ -103,6 +107,7 @@ const ROLE_PERMISSIONS: Record<UserRole, Permission[]> = {
     'view:diary','edit:bookings',
     'view:messages','manage:inbox',
     'view:crm','edit:crm',
+    'view:tasks','edit:tasks',
     'use:phone',
   ],
   // Least-privilege workshop login: only the workshop area (diary + jobs +
@@ -235,6 +240,7 @@ export const PORTAL_TABS: PortalTab[] = [
   { id: 'distributors',  label: 'Distributors',    permission: 'view:distributors' },
   { id: 'calls',         label: 'Phone Calls',     permission: 'view:calls' },
   { id: 'crm',           label: 'CRM',             permission: 'view:crm' },
+  { id: 'tasks',         label: 'Tasks',           permission: 'view:tasks' },
   { id: 'projects',      label: 'Projects',        permission: 'view:projects' },
   { id: 'messages',      label: 'Messages',        permission: 'view:messages' },
   { id: 'diary',         label: 'Workshop',        permission: 'view:diary' },
