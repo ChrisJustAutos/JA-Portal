@@ -4,9 +4,9 @@ name: Mechanics Desk auto-pull
 # Target schedule: 8 AM, 10 AM, 12 PM, 2 PM, 4 PM AEST
 #   → 22:00 (prev day), 00:00, 02:00, 04:00, 06:00 UTC
 #
-# Performance: uses official Playwright container so Chromium and all
-# OS deps are pre-installed, eliminating ~60-90s of install time per run.
-# When upgrading Playwright: bump image tag to match new version.
+# Installs Chromium via `npx playwright install` (Playwright CDN) rather than
+# running inside the mcr.microsoft.com/playwright container — anonymous MCR
+# pulls were intermittently failing with unauthorized / toomanyrequests.
 on:
   schedule:
     - cron: '0 22 * * *'   # 8  AM AEST
@@ -24,16 +24,22 @@ jobs:
   pull:
     name: Pull and ingest
     runs-on: ubuntu-latest
-    timeout-minutes: 5
-    container:
-      image: mcr.microsoft.com/playwright:v1.59.1-noble
+    timeout-minutes: 8
 
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
       - name: Install dependencies
         run: npm ci || npm install
+
+      - name: Install Playwright Chromium
+        run: npx playwright install --with-deps chromium
 
       - name: Run scraper
         env:

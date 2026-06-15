@@ -22,12 +22,16 @@ jobs:
     name: MD PO · ${{ github.event.client_payload.transfer_id || github.event.inputs.transfer_id }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    container:
-      image: mcr.microsoft.com/playwright:v1.59.1-noble
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
       - name: Install dependencies
         run: npm ci || npm install
+      - name: Install Playwright Chromium
+        run: npx playwright install --with-deps chromium
       - name: Run worker
         env:
           TRANSFER_ID:              ${{ github.event.client_payload.transfer_id || github.event.inputs.transfer_id }}
