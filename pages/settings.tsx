@@ -20,7 +20,6 @@ import GeneralTab from '../components/settings/GeneralTab'
 import DistributorTab from '../components/settings/DistributorTab'
 import ConnectionsHubTab from '../components/settings/ConnectionsHubTab'
 import DataImportsTab from '../components/settings/DataImportsTab'
-import StaffSection from '../components/settings/StaffSection'
 import type { PortalUserSSR } from '../lib/authServer'
 import { T } from '../lib/ui/theme'
 import { SkeletonRows } from '../components/ui'
@@ -218,379 +217,304 @@ interface UserRow {
   webrtc_password_set: boolean
 }
 
+interface TechRow {
+  id: string; name: string; code: string; role: string | null; color: string | null
+  phone_ext: string | null; daily_hours: number; show_in_diary: boolean; active: boolean; user_id: string | null
+}
+
+// One combined Users & Staff screen: every login on the left, the selected
+// person's full settings (role, tabs, telephony, diary lane) on the right.
 function UsersTab({ currentUser }: { currentUser: PortalUserSSR }) {
   const toast = useToast()
   const confirmDialog = useConfirm()
   const [users, setUsers] = useState<UserRow[]>([])
+  const [techs, setTechs] = useState<TechRow[]>([])
   const [loading, setLoading] = useState(true)
   const [err, setErr] = useState('')
+  const [q, setQ] = useState('')
+  const [sel, setSel] = useState<{ kind: 'user' | 'tech' | 'invite'; id?: string } | null>(null)
+  const [newLane, setNewLane] = useState('')
   const [invite, setInvite] = useState({ email: '', displayName: '', role: 'viewer' as UserRole })
-  // Which tabs the new invitee will see. Starts from role defaults; admin can
-  // tick/untick individual tabs before submitting.
   const [inviteTabs, setInviteTabs] = useState<string[]>(() => defaultTabsForRole('viewer'))
   const [inviting, setInviting] = useState(false)
 
-  // Edit-tabs modal state (null = closed; a user row = open for that user)
-  const [editingTabsFor, setEditingTabsFor] = useState<UserRow | null>(null)
-  const [editingTabs, setEditingTabs] = useState<string[]>([])
-  const [savingTabs, setSavingTabs] = useState(false)
-
-  // Whenever the role in the invite form changes, reset the tab selection to
-  // that role's defaults. Admin is still free to adjust after.
-  function changeInviteRole(role: UserRole) {
-    setInvite(v => ({ ...v, role }))
-    setInviteTabs(defaultTabsForRole(role))
-  }
-
-  function toggleInviteTab(tabId: string) {
-    setInviteTabs(prev => prev.includes(tabId) ? prev.filter(t => t !== tabId) : [...prev, tabId])
-  }
-
-  function openEditTabs(u: UserRow) {
-    setEditingTabsFor(u)
-    // If user has a custom list, use it; otherwise seed with their role defaults
-    setEditingTabs(u.visible_tabs ? [...u.visible_tabs] : defaultTabsForRole(u.role))
-  }
-
-  function toggleEditingTab(tabId: string) {
-    setEditingTabs(prev => prev.includes(tabId) ? prev.filter(t => t !== tabId) : [...prev, tabId])
-  }
-
-  async function saveEditingTabs(resetToDefault = false) {
-    if (!editingTabsFor) return
-    setSavingTabs(true); setErr('')
-    try {
-      const r = await fetch(`/api/users/${editingTabsFor.id}`, {
-        method:'PATCH', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({ visible_tabs: resetToDefault ? null : editingTabs }),
-      })
-      if (!r.ok) throw new Error((await r.json()).error || 'Save failed')
-      await load()
-      setEditingTabsFor(null)
-    } catch (e: any) { setErr(e.message) }
-    finally { setSavingTabs(false) }
-  }
+  const lbl: React.CSSProperties = { fontSize: 10, color: T.text3, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 5, fontWeight: 600 }
+  const fld: React.CSSProperties = { width: '100%', background: T.bg3, border: `1px solid ${T.border}`, color: T.text, borderRadius: 5, padding: '7px 10px', fontSize: 12.5, outline: 'none', boxSizing: 'border-box', fontFamily: 'inherit' }
+  const sectionLbl: React.CSSProperties = { fontSize: 10, color: T.text3, textTransform: 'uppercase', letterSpacing: '0.06em', fontWeight: 700, margin: '20px 0 8px' }
+  const panel: React.CSSProperties = { background: T.bg2, border: `1px solid ${T.border}`, borderRadius: 10, padding: 14, boxSizing: 'border-box' }
+  const btn = (c: string, solid?: boolean): React.CSSProperties => ({ padding: '7px 14px', borderRadius: 6, fontSize: 12, fontFamily: 'inherit', fontWeight: 600, cursor: 'pointer', background: solid ? c : 'transparent', color: solid ? '#fff' : c, border: `1px solid ${solid ? c : c + '55'}` })
 
   const load = useCallback(async () => {
     try {
-      const r = await fetch('/api/users')
-      if (!r.ok) throw new Error((await r.json()).error || 'Failed to load users')
-      const d = await r.json()
-      setUsers(d.users || [])
+      const [ur, tr] = await Promise.all([fetch('/api/users'), fetch('/api/workshop/technicians')])
+      if (!ur.ok) throw new Error((await ur.json()).error || 'Failed to load users')
+      setUsers((await ur.json()).users || [])
+      if (tr.ok) setTechs((await tr.json()).technicians || [])
       setErr('')
-    } catch (e: any) { setErr(e.message) }
-    finally { setLoading(false) }
+    } catch (e: any) { setErr(e.message) } finally { setLoading(false) }
   }, [])
   useEffect(() => { load() }, [load])
 
-  async function handleInvite(e: React.FormEvent) {
-    e.preventDefault()
-    setInviting(true); setErr('')
+  // ── User ops ──
+  async function updateUser(id: string, patch: any) {
+    setUsers(prev => prev.map(u => u.id === id ? { ...u, ...patch } : u))   // optimistic
     try {
-      const r = await fetch('/api/users', {
-        method:'POST', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({ ...invite, visible_tabs: inviteTabs }),
-      })
-      if (!r.ok) throw new Error((await r.json()).error || 'Invite failed')
-      const d = await r.json()
-      setInvite({ email:'', displayName:'', role:'viewer' })
-      setInviteTabs(defaultTabsForRole('viewer'))
-      await load()
-      toast(`Invited ${d.user.email}. ${d.resetEmailSent ? 'Password setup email sent.' : 'Note: reset email failed to send — use "Resend invite" on the row.'}`, d.resetEmailSent ? 'success' : 'error')
-    } catch (e: any) { setErr(e.message) }
-    finally { setInviting(false) }
-  }
-
-  async function update(id: string, patch: Partial<UserRow> & { webrtc_password?: string | null }) {
-    try {
-      const r = await fetch(`/api/users/${id}`, {
-        method:'PATCH', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify(patch),
-      })
+      const r = await fetch(`/api/users/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(patch) })
       if (!r.ok) throw new Error((await r.json()).error || 'Update failed')
       await load()
-    } catch (e: any) { setErr(e.message) }
+    } catch (e: any) { toast(e.message, 'error'); await load() }
   }
-
-  async function del(id: string, email: string) {
-    if (!(await confirmDialog({ title: `Permanently delete ${email}?`, message: 'They will lose all access immediately.', danger: true }))) return
+  async function delUser(u: UserRow) {
+    if (!(await confirmDialog({ title: `Permanently delete ${u.email}?`, message: 'They lose all access immediately. Their diary lane (if any) stays as history.', danger: true }))) return
+    const r = await fetch(`/api/users/${u.id}`, { method: 'DELETE' })
+    if (!r.ok) { toast((await r.json()).error || 'Delete failed', 'error'); return }
+    setSel(null); await load()
+  }
+  async function resendInvite(u: UserRow) {
+    const r = await fetch(`/api/users/${u.id}/resend-invite`, { method: 'POST' })
+    toast(r.ok ? `Password setup email re-sent to ${u.email}.` : ((await r.json()).error || 'Resend failed'), r.ok ? 'success' : 'error')
+  }
+  async function handleInvite(e: React.FormEvent) {
+    e.preventDefault(); setInviting(true); setErr('')
     try {
-      const r = await fetch(`/api/users/${id}`, { method:'DELETE' })
-      if (!r.ok) throw new Error((await r.json()).error || 'Delete failed')
+      const r = await fetch('/api/users', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...invite, visible_tabs: inviteTabs }) })
+      const d = await r.json()
+      if (!r.ok) throw new Error(d.error || 'Invite failed')
+      setInvite({ email: '', displayName: '', role: 'viewer' }); setInviteTabs(defaultTabsForRole('viewer'))
       await load()
-    } catch (e: any) { setErr(e.message) }
+      setSel({ kind: 'user', id: d.user?.id })
+      toast(`Invited ${d.user.email}. ${d.resetEmailSent ? 'Password setup email sent.' : 'Reset email failed — use Resend.'}`, d.resetEmailSent ? 'success' : 'error')
+    } catch (e: any) { setErr(e.message) } finally { setInviting(false) }
   }
 
-  async function resendInvite(id: string, email: string) {
-    try {
-      const r = await fetch(`/api/users/${id}/resend-invite`, { method:'POST' })
-      if (!r.ok) throw new Error((await r.json()).error || 'Resend failed')
-      toast(`Password reset email re-sent to ${email}.`, 'success')
-    } catch (e: any) { setErr(e.message) }
+  // ── Diary-lane (technician) ops ──
+  async function patchTech(id: string, p: any) {
+    setTechs(prev => prev.map(t => t.id === id ? { ...t, ...p } : t))   // optimistic
+    const r = await fetch(`/api/workshop/technicians?id=${encodeURIComponent(id)}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(p) })
+    if (!r.ok) toast((await r.json()).error || 'Save failed', 'error')
+    await load()
+  }
+  async function addTechForUser(u: UserRow) {
+    const r = await fetch('/api/workshop/technicians', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: u.display_name || u.email, user_id: u.id, phone_ext: u.phone_extension || null }) })
+    if (!r.ok) toast((await r.json()).error || 'Failed', 'error')
+    await load()
+  }
+  async function addLaneNoLogin() {
+    const name = newLane.trim(); if (!name) return
+    setNewLane('')
+    const r = await fetch('/api/workshop/technicians', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name }) })
+    const d = await r.json().catch(() => ({}))
+    if (!r.ok) { toast(d.error || 'Failed', 'error'); return }
+    await load()
+    if (d.technician?.id) setSel({ kind: 'tech', id: d.technician.id })
+  }
+  async function removeTech(t: TechRow) {
+    if (!(await confirmDialog({ title: `Remove ${t.name} from the diary?`, message: 'With bookings it’s retired (history kept); otherwise deleted. Any portal login is unaffected.', confirmLabel: 'Remove', danger: true }))) return
+    const r = await fetch(`/api/workshop/technicians?id=${encodeURIComponent(t.id)}`, { method: 'DELETE' })
+    if (!r.ok) toast((await r.json()).error || 'Remove failed', 'error')
+    if (sel?.kind === 'tech' && sel.id === t.id) setSel(null)
+    await load()
   }
 
-  return <div style={{display:'flex',flexDirection:'column',gap:16}}>
-    {/* Invite form */}
-    <div style={{background:T.bg2,border:`1px solid ${T.border}`,borderRadius:10,padding:16}}>
-      <div style={{fontSize:13,fontWeight:600,color:T.text,marginBottom:10}}>Invite a user</div>
-      <form onSubmit={handleInvite}>
-        <div style={{display:'flex',gap:8,alignItems:'flex-end',flexWrap:'wrap'}}>
-          <div style={{flex:1,minWidth:200}}>
-            <div style={{fontSize:10,color:T.text3,marginBottom:4,textTransform:'uppercase',letterSpacing:'0.05em'}}>Email</div>
-            <input type="email" required value={invite.email} onChange={e=>setInvite({...invite,email:e.target.value})}
-              placeholder="user@example.com"
-              style={{width:'100%',background:T.bg3,border:`1px solid ${T.border}`,color:T.text,borderRadius:4,padding:'6px 10px',fontSize:12,outline:'none',boxSizing:'border-box'}}/>
-          </div>
-          <div style={{flex:1,minWidth:180}}>
-            <div style={{fontSize:10,color:T.text3,marginBottom:4,textTransform:'uppercase',letterSpacing:'0.05em'}}>Display name</div>
-            <input value={invite.displayName} onChange={e=>setInvite({...invite,displayName:e.target.value})}
-              placeholder="Optional"
-              style={{width:'100%',background:T.bg3,border:`1px solid ${T.border}`,color:T.text,borderRadius:4,padding:'6px 10px',fontSize:12,outline:'none',boxSizing:'border-box'}}/>
-          </div>
-          <div style={{minWidth:140}}>
-            <div style={{fontSize:10,color:T.text3,marginBottom:4,textTransform:'uppercase',letterSpacing:'0.05em'}}>Role (template)</div>
-            <select value={invite.role} onChange={e=>changeInviteRole(e.target.value as UserRole)}
-              style={{background:T.bg3,border:`1px solid ${T.border}`,color:T.text,borderRadius:4,padding:'6px 10px',fontSize:12,outline:'none',width:'100%',boxSizing:'border-box'}}>
-              {Object.entries(ROLE_LABELS).map(([k,v])=><option key={k} value={k}>{v}</option>)}
-            </select>
-          </div>
-          <button type="submit" disabled={inviting}
-            style={{padding:'7px 16px',borderRadius:4,border:'none',background:inviting?T.bg4:T.blue,color:inviting?T.text3:'#fff',fontSize:12,cursor:inviting?'wait':'pointer',fontFamily:'inherit',fontWeight:600}}>
-            {inviting ? 'Inviting…' : 'Invite'}
-          </button>
-        </div>
-        <div style={{fontSize:10,color:T.text3,marginTop:8,lineHeight:1.5}}>
-          {ROLE_DESCRIPTIONS[invite.role]}
-        </div>
+  const techByUser = new Map(techs.filter(t => t.user_id).map(t => [t.user_id as string, t]))
+  const laneOnly = techs.filter(t => !t.user_id)
+  const needle = q.trim().toLowerCase()
+  const shownUsers = needle ? users.filter(u => `${u.display_name || ''} ${u.email} ${u.role}`.toLowerCase().includes(needle)) : users
+  const selUser = sel?.kind === 'user' ? users.find(u => u.id === sel.id) || null : null
+  const selUserTech = selUser ? techByUser.get(selUser.id) || null : null
+  const selTech = sel?.kind === 'tech' ? techs.find(t => t.id === sel.id) || null : null
 
-        {/* Tab allowlist — starts from role defaults, admin can tick/untick individual tabs */}
-        <div style={{marginTop:14,paddingTop:14,borderTop:`1px solid ${T.border}`}}>
-          <div style={{display:'flex',alignItems:'baseline',justifyContent:'space-between',marginBottom:8}}>
-            <div style={{fontSize:10,color:T.text3,textTransform:'uppercase',letterSpacing:'0.05em',fontWeight:600}}>Sidebar tabs</div>
-            <div style={{display:'flex',gap:10,fontSize:10}}>
-              <button type="button" onClick={()=>setInviteTabs(PORTAL_TABS.map(t=>t.id))}
-                style={{background:'none',border:'none',color:T.text3,cursor:'pointer',fontFamily:'inherit',padding:0}}>
-                Select all
-              </button>
-              <button type="button" onClick={()=>setInviteTabs([])}
-                style={{background:'none',border:'none',color:T.text3,cursor:'pointer',fontFamily:'inherit',padding:0}}>
-                Clear
-              </button>
-              <button type="button" onClick={()=>setInviteTabs(defaultTabsForRole(invite.role))}
-                style={{background:'none',border:'none',color:T.blue,cursor:'pointer',fontFamily:'inherit',padding:0}}>
-                Reset to role defaults
-              </button>
-            </div>
-          </div>
-          <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(170px,1fr))',gap:6}}>
-            {PORTAL_TABS.map(t => {
-              const roleHas = roleHasPermission(invite.role, t.permission)
-              const checked = inviteTabs.includes(t.id)
-              return (
-                <label key={t.id} style={{
-                  display:'flex',alignItems:'center',gap:7,
-                  padding:'6px 10px',
-                  background: checked ? T.bg3 : 'transparent',
-                  border:`1px solid ${checked ? T.border2 : T.border}`,
-                  borderRadius:4,
-                  cursor: roleHas ? 'pointer' : 'not-allowed',
-                  opacity: roleHas ? 1 : 0.4,
-                  fontSize:12,
-                }} title={roleHas ? '' : `The ${ROLE_LABELS[invite.role]} role doesn't have permission for this tab.`}>
-                  <input type="checkbox" checked={checked} disabled={!roleHas}
-                    onChange={()=>toggleInviteTab(t.id)}
-                    style={{margin:0}}/>
-                  <span style={{color: checked ? T.text : T.text2}}>{t.label}</span>
-                </label>
-              )
-            })}
-          </div>
-          <div style={{fontSize:10,color:T.text3,marginTop:8}}>
-            {inviteTabs.length} of {PORTAL_TABS.length} tabs selected. Greyed-out tabs aren't permitted by the selected role.
-          </div>
-        </div>
-      </form>
-    </div>
+  function rowBtn(active: boolean): React.CSSProperties {
+    return { display: 'block', width: '100%', textAlign: 'left', padding: '8px 10px', borderRadius: 8, marginBottom: 3, cursor: 'pointer', fontFamily: 'inherit', background: active ? `${T.blue}1f` : 'transparent', border: `1px solid ${active ? T.blue : 'transparent'}` }
+  }
 
-    {err && <div style={{background:`${T.red}15`,border:`1px solid ${T.red}40`,borderRadius:7,padding:10,color:T.red,fontSize:12}}>{err}</div>}
-
-    {/* Users list */}
-    <div style={{background:T.bg2,border:`1px solid ${T.border}`,borderRadius:10,overflowX:'auto'}}>
-      <div style={{padding:'14px 16px',borderBottom:`1px solid ${T.border2}`,display:'flex',alignItems:'center'}}>
-        <div style={{fontSize:13,fontWeight:600,color:T.text}}>Users ({users.length})</div>
+  // Inline tab allowlist editor (used by invite + user editor).
+  function TabPicker({ role, value, onChange }: { role: UserRole; value: string[]; onChange: (next: string[]) => void }) {
+    return (
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(160px,1fr))', gap: 6 }}>
+        {PORTAL_TABS.map(t => {
+          const roleHas = roleHasPermission(role, t.permission)
+          const checked = value.includes(t.id)
+          return (
+            <label key={t.id} title={roleHas ? '' : `The ${ROLE_LABELS[role]} role can't access this tab.`} style={{ display: 'flex', alignItems: 'center', gap: 7, padding: '6px 9px', background: checked ? T.bg3 : 'transparent', border: `1px solid ${checked ? T.border2 : T.border}`, borderRadius: 5, cursor: roleHas ? 'pointer' : 'not-allowed', opacity: roleHas ? 1 : 0.4, fontSize: 12 }}>
+              <input type="checkbox" checked={checked} disabled={!roleHas} onChange={() => onChange(value.includes(t.id) ? value.filter(x => x !== t.id) : [...value, t.id])} style={{ margin: 0 }} />
+              <span style={{ color: checked ? T.text : T.text2 }}>{t.label}</span>
+            </label>
+          )
+        })}
       </div>
-      {loading && <SkeletonRows rows={8}/>}
-      {!loading && (
-        <table style={{width:'100%',borderCollapse:'collapse'}}>
-          <thead><tr style={{borderBottom:`1px solid ${T.border}`}}>
-            {['Email','Name','Role','Phone Ext','Web Ext','Web Pwd','Tabs','Active','Last sign-in','Created',''].map(h =>
-              <th key={h} style={{fontSize:10,color:T.text3,padding:'10px 12px',textAlign:'left',fontWeight:500,textTransform:'uppercase',letterSpacing:'0.05em'}}>{h}</th>
-            )}
-          </tr></thead>
-          <tbody>{users.map(u => {
-            const isSelf = u.id === currentUser.id
-            return <tr key={u.id} style={{borderTop:`1px solid ${T.border}`,opacity:u.is_active?1:0.5}}>
-              <td style={{fontSize:12,color:T.text,padding:'8px 12px',fontFamily:'monospace'}}>{u.email}{isSelf && <span style={{color:T.blue,fontSize:10,marginLeft:6}}>(you)</span>}</td>
-              <td style={{fontSize:12,color:T.text2,padding:'8px 12px'}}>{u.display_name || '—'}</td>
-              <td style={{padding:'8px 12px'}}>
-                <select value={u.role} disabled={isSelf} onChange={e=>update(u.id,{role:e.target.value as UserRole})}
-                  style={{background:T.bg3,border:`1px solid ${T.border}`,color:isSelf?T.text3:T.text,borderRadius:3,padding:'3px 6px',fontSize:11,outline:'none',cursor:isSelf?'not-allowed':'pointer'}}>
-                  {Object.entries(ROLE_LABELS).map(([k,v])=><option key={k} value={k}>{v}</option>)}
-                </select>
-              </td>
-              <td style={{padding:'8px 12px'}}>
-                <input defaultValue={u.phone_extension || ''} placeholder="—"
-                  autoComplete="off" name={`phone-ext-${u.id}`} data-lpignore="true" data-1p-ignore="true" data-form-type="other"
-                  title="Deskphone SIP extension — rings for &quot;Listen on Handset&quot;"
-                  onBlur={e=>{ const v=e.target.value.trim(); if (v !== (u.phone_extension||'')) update(u.id,{phone_extension: v || null}) }}
-                  style={{width:58,background:T.bg3,border:`1px solid ${T.border}`,color:T.text,borderRadius:3,padding:'3px 6px',fontSize:11,outline:'none',fontFamily:'monospace'}}/>
-              </td>
-              <td style={{padding:'8px 12px'}}>
-                <input defaultValue={u.webrtc_extension || ''} placeholder="—"
-                  autoComplete="off" name={`wrtc-ext-${u.id}`} data-lpignore="true" data-1p-ignore="true" data-form-type="other"
-                  title="WebRTC softphone SIP extension — used for &quot;Listen on Device&quot;"
-                  onBlur={e=>{ const v=e.target.value.trim(); if (v !== (u.webrtc_extension||'')) update(u.id,{webrtc_extension: v || null}) }}
-                  style={{width:58,background:T.bg3,border:`1px solid ${T.border}`,color:T.text,borderRadius:3,padding:'3px 6px',fontSize:11,outline:'none',fontFamily:'monospace'}}/>
-              </td>
-              <td style={{padding:'8px 12px'}}>
-                <input type="password" defaultValue=""
-                  autoComplete="new-password" name={`wrtc-pwd-${u.id}`} data-lpignore="true" data-1p-ignore="true" data-form-type="other"
-                  placeholder={u.webrtc_password_set ? '••••••' : '—'}
-                  title={u.webrtc_password_set ? 'Set — leave blank to keep, type to replace' : 'WebRTC SIP digest password'}
-                  onBlur={e=>{ const v=e.target.value; if (v) update(u.id,{webrtc_password: v}) }}
-                  style={{width:90,background:T.bg3,border:`1px solid ${u.webrtc_password_set?T.border2:T.border}`,color:T.text,borderRadius:3,padding:'3px 6px',fontSize:11,outline:'none',fontFamily:'monospace'}}/>
-              </td>
-              <td style={{padding:'8px 12px',whiteSpace:'nowrap'}}>
-                <button onClick={()=>openEditTabs(u)}
-                  style={{padding:'3px 8px',borderRadius:3,border:`1px solid ${T.border2}`,background:'transparent',color:T.text2,fontSize:11,cursor:'pointer',fontFamily:'inherit'}}>
-                  {u.visible_tabs ? `${u.visible_tabs.length} custom` : 'Role default'}
-                </button>
-                {u.visible_tabs && (
-                  <span style={{marginLeft:6,fontSize:9,padding:'2px 5px',borderRadius:2,background:`${T.purple}22`,color:T.purple,fontWeight:500}}>CUSTOM</span>
-                )}
-              </td>
-              <td style={{padding:'8px 12px'}}>
-                <label style={{display:'inline-flex',alignItems:'center',gap:6,cursor:isSelf?'not-allowed':'pointer',opacity:isSelf?0.5:1}}>
-                  <input type="checkbox" checked={u.is_active} disabled={isSelf}
-                    onChange={e=>update(u.id,{is_active:e.target.checked})}/>
-                  <span style={{fontSize:11,color:u.is_active?T.green:T.text3}}>{u.is_active?'Active':'Inactive'}</span>
-                </label>
-              </td>
-              <td style={{fontSize:11,color:T.text3,padding:'8px 12px',fontFamily:'monospace'}}>
-                {u.last_sign_in_at ? new Date(u.last_sign_in_at).toLocaleDateString('en-AU',{day:'2-digit',month:'short',year:'2-digit'}) : '—'}
-              </td>
-              <td style={{fontSize:11,color:T.text3,padding:'8px 12px',fontFamily:'monospace'}}>
-                {new Date(u.created_at).toLocaleDateString('en-AU',{day:'2-digit',month:'short',year:'2-digit'})}
-              </td>
-              <td style={{padding:'8px 12px',textAlign:'right',whiteSpace:'nowrap'}}>
-                {!isSelf && <>
-                  <button onClick={()=>resendInvite(u.id,u.email)} title="Resend password setup email"
-                    style={{padding:'3px 8px',borderRadius:3,border:'none',background:'transparent',color:T.amber,fontSize:11,cursor:'pointer',fontFamily:'inherit'}}>
-                    Resend
-                  </button>
-                  <button onClick={()=>del(u.id,u.email)}
-                    style={{padding:'3px 8px',borderRadius:3,border:'none',background:'transparent',color:T.red,fontSize:11,cursor:'pointer',fontFamily:'inherit'}}>
-                    Delete
-                  </button>
-                </>}
-              </td>
-            </tr>
-          })}</tbody>
-        </table>
-      )}
-    </div>
+    )
+  }
 
-    {/* Workshop staff / diary lanes — same screen as logins, linked per person */}
-    <StaffSection users={users} />
+  return (
+    <div style={{ display: 'flex', gap: 16, alignItems: 'flex-start', flexWrap: 'wrap' }}>
+      {/* ── Left: people list ── */}
+      <div style={{ flex: '0 0 320px', maxWidth: '100%', ...panel }}>
+        <button onClick={() => setSel({ kind: 'invite' })} style={{ ...btn(T.blue, true), width: '100%', marginBottom: 10 }}>+ Invite user</button>
+        <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search users…" style={{ ...fld, marginBottom: 10 }} />
+        <div style={{ maxHeight: 520, overflowY: 'auto', margin: '0 -4px', padding: '0 4px' }}>
+          {loading && <SkeletonRows rows={6} />}
+          {!loading && shownUsers.map(u => {
+            const on = sel?.kind === 'user' && sel.id === u.id
+            const lane = techByUser.get(u.id)
+            return (
+              <button key={u.id} onClick={() => setSel({ kind: 'user', id: u.id })} style={{ ...rowBtn(on), opacity: u.is_active ? 1 : 0.5 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <span style={{ fontSize: 13, fontWeight: 600, color: T.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{u.display_name || u.email}</span>
+                  {u.id === currentUser.id && <span style={{ fontSize: 9, color: T.blue }}>(you)</span>}
+                  {lane && <span title="Has a diary lane" style={{ width: 8, height: 8, borderRadius: '50%', background: lane.color || T.teal, flexShrink: 0, marginLeft: 'auto' }} />}
+                </div>
+                <div style={{ fontSize: 10.5, color: T.text3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{ROLE_LABELS[u.role]}{u.is_active ? '' : ' · inactive'}</div>
+              </button>
+            )
+          })}
 
-    {/* Edit Tabs modal */}
-    {editingTabsFor && (() => {
-      const target = editingTabsFor
-      const roleDefaults = defaultTabsForRole(target.role)
-      return (
-        <div onClick={()=>!savingTabs && setEditingTabsFor(null)} style={{
-          position:'fixed',inset:0,background:'rgba(0,0,0,0.6)',zIndex:9999,
-          display:'flex',alignItems:'center',justifyContent:'center',padding:16,
-        }}>
-          <div onClick={e=>e.stopPropagation()} style={{
-            background:T.bg2,border:`1px solid ${T.border2}`,borderRadius:10,
-            padding:20,width:'100%',maxWidth:560,maxHeight:'85vh',display:'flex',flexDirection:'column',
-          }}>
-            <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:14}}>
-              <div>
-                <div style={{fontSize:14,fontWeight:600,color:T.text}}>Edit sidebar tabs</div>
-                <div style={{fontSize:11,color:T.text3,marginTop:3,fontFamily:'monospace'}}>{target.email}</div>
-                <div style={{fontSize:10,color:T.text3,marginTop:2}}>
-                  Role: <strong style={{color:T.text2}}>{ROLE_LABELS[target.role]}</strong> · {target.visible_tabs ? 'Currently: custom tab list' : 'Currently: using role defaults'}
+          <div style={{ fontSize: 10, color: T.text3, textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 700, margin: '14px 0 6px' }}>Diary lanes (no login)</div>
+          {laneOnly.map(t => {
+            const on = sel?.kind === 'tech' && sel.id === t.id
+            return (
+              <button key={t.id} onClick={() => setSel({ kind: 'tech', id: t.id })} style={{ ...rowBtn(on), opacity: t.active ? 1 : 0.5 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <span style={{ width: 8, height: 8, borderRadius: '50%', background: t.color || T.teal, flexShrink: 0 }} />
+                  <span style={{ fontSize: 13, fontWeight: 600, color: T.text }}>{t.name}</span>
+                </div>
+                <div style={{ fontSize: 10.5, color: T.text3 }}>{t.role || 'Diary lane'}{t.active ? '' : ' · retired'}</div>
+              </button>
+            )
+          })}
+          {laneOnly.length === 0 && <div style={{ fontSize: 11, color: T.text3, padding: '2px 4px 6px' }}>None — staff who never log in can be added here.</div>}
+          <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
+            <input value={newLane} onChange={e => setNewLane(e.target.value)} placeholder="New lane name…" style={{ ...fld, flex: 1 }} onKeyDown={e => { if (e.key === 'Enter') addLaneNoLogin() }} />
+            <button onClick={addLaneNoLogin} style={btn(T.text2)}>Add</button>
+          </div>
+        </div>
+      </div>
+
+      {/* ── Right: detail ── */}
+      <div style={{ flex: '1 1 560px', minWidth: 420, ...panel }}>
+        {err && <div style={{ background: `${T.red}15`, border: `1px solid ${T.red}40`, borderRadius: 7, padding: 10, color: T.red, fontSize: 12, marginBottom: 12 }}>{err}</div>}
+
+        {sel?.kind === 'invite' ? (
+          <form onSubmit={handleInvite}>
+            <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 14 }}>Invite a user</div>
+            <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+              <div style={{ flex: 1, minWidth: 200 }}><div style={lbl}>Email</div><input type="email" required value={invite.email} onChange={e => setInvite({ ...invite, email: e.target.value })} placeholder="user@example.com" style={fld} /></div>
+              <div style={{ flex: 1, minWidth: 180 }}><div style={lbl}>Display name</div><input value={invite.displayName} onChange={e => setInvite({ ...invite, displayName: e.target.value })} placeholder="Optional" style={fld} /></div>
+            </div>
+            <div style={{ marginTop: 12, maxWidth: 280 }}><div style={lbl}>Role</div>
+              <select value={invite.role} onChange={e => { const role = e.target.value as UserRole; setInvite(v => ({ ...v, role })); setInviteTabs(defaultTabsForRole(role)) }} style={fld}>
+                {Object.entries(ROLE_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+              </select>
+              <div style={{ fontSize: 10.5, color: T.text3, marginTop: 6, lineHeight: 1.5 }}>{ROLE_DESCRIPTIONS[invite.role]}</div>
+            </div>
+            <div style={{ ...sectionLbl, display: 'flex', justifyContent: 'space-between' }}>
+              <span>Sidebar tabs</span>
+              <button type="button" onClick={() => setInviteTabs(defaultTabsForRole(invite.role))} style={{ background: 'none', border: 'none', color: T.blue, cursor: 'pointer', fontFamily: 'inherit', fontSize: 10, textTransform: 'none', letterSpacing: 0 }}>Reset to role defaults</button>
+            </div>
+            <TabPicker role={invite.role} value={inviteTabs} onChange={setInviteTabs} />
+            <div style={{ display: 'flex', gap: 8, marginTop: 18 }}>
+              <button type="button" onClick={() => setSel(null)} style={btn(T.text2)}>Cancel</button>
+              <button type="submit" disabled={inviting} style={btn(T.blue, true)}>{inviting ? 'Inviting…' : 'Send invite'}</button>
+            </div>
+          </form>
+        ) : selUser ? (() => {
+          const u = selUser
+          const isSelf = u.id === currentUser.id
+          const tabs = u.visible_tabs ?? defaultTabsForRole(u.role)
+          return (
+            <div key={u.id}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 4 }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 16, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{u.display_name || u.email}</div>
+                  <div style={{ fontSize: 11, color: T.text3, fontFamily: 'monospace' }}>{u.email}{isSelf ? ' · this is you' : ''}</div>
+                </div>
+                {!isSelf && <button onClick={() => resendInvite(u)} style={btn(T.amber)}>Resend invite</button>}
+                {!isSelf && <button onClick={() => delUser(u)} style={btn(T.red)}>Delete</button>}
+              </div>
+
+              <div style={sectionLbl}>Identity & access</div>
+              <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+                <div style={{ flex: 1, minWidth: 180 }}><div style={lbl}>Display name</div><input defaultValue={u.display_name || ''} onBlur={e => { const v = e.target.value.trim(); if (v !== (u.display_name || '')) updateUser(u.id, { display_name: v || null }) }} style={fld} /></div>
+                <div style={{ flex: 1, minWidth: 160 }}><div style={lbl}>Role</div>
+                  <select value={u.role} disabled={isSelf} onChange={e => updateUser(u.id, { role: e.target.value as UserRole })} style={{ ...fld, cursor: isSelf ? 'not-allowed' : 'pointer' }}>
+                    {Object.entries(ROLE_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+                  </select>
                 </div>
               </div>
-              <button onClick={()=>setEditingTabsFor(null)} disabled={savingTabs}
-                style={{background:'none',border:'none',color:T.text3,fontSize:18,cursor:'pointer',padding:0,lineHeight:1}}>×</button>
-            </div>
+              <label style={{ display: 'inline-flex', alignItems: 'center', gap: 7, marginTop: 12, cursor: isSelf ? 'not-allowed' : 'pointer', opacity: isSelf ? 0.5 : 1, fontSize: 12.5, color: T.text }}>
+                <input type="checkbox" checked={u.is_active} disabled={isSelf} onChange={e => updateUser(u.id, { is_active: e.target.checked })} />
+                Active login {u.is_active ? '' : '— deactivated'}
+              </label>
+              <div style={{ fontSize: 10.5, color: T.text3, marginTop: 6 }}>{ROLE_DESCRIPTIONS[u.role]}</div>
 
-            <div style={{display:'flex',gap:10,marginBottom:10,fontSize:10}}>
-              <button type="button" onClick={()=>setEditingTabs(PORTAL_TABS.map(t=>t.id))}
-                style={{background:'none',border:'none',color:T.text3,cursor:'pointer',fontFamily:'inherit',padding:0}}>
-                Select all
-              </button>
-              <button type="button" onClick={()=>setEditingTabs([])}
-                style={{background:'none',border:'none',color:T.text3,cursor:'pointer',fontFamily:'inherit',padding:0}}>
-                Clear
-              </button>
-              <button type="button" onClick={()=>setEditingTabs(roleDefaults)}
-                style={{background:'none',border:'none',color:T.blue,cursor:'pointer',fontFamily:'inherit',padding:0}}>
-                Select role defaults
-              </button>
-              <div style={{marginLeft:'auto',color:T.text3}}>{editingTabs.length} of {PORTAL_TABS.length} selected</div>
-            </div>
-
-            <div style={{overflowY:'auto',flex:1,minHeight:0}}>
-              <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(170px,1fr))',gap:6}}>
-                {PORTAL_TABS.map(t => {
-                  const roleHas = roleHasPermission(target.role, t.permission)
-                  const checked = editingTabs.includes(t.id)
-                  return (
-                    <label key={t.id} style={{
-                      display:'flex',alignItems:'center',gap:7,padding:'6px 10px',
-                      background: checked ? T.bg3 : 'transparent',
-                      border:`1px solid ${checked ? T.border2 : T.border}`,
-                      borderRadius:4,
-                      cursor: roleHas ? 'pointer' : 'not-allowed',
-                      opacity: roleHas ? 1 : 0.4,
-                      fontSize:12,
-                    }} title={roleHas ? '' : `The ${ROLE_LABELS[target.role]} role doesn't have permission for this tab.`}>
-                      <input type="checkbox" checked={checked} disabled={!roleHas || savingTabs}
-                        onChange={()=>toggleEditingTab(t.id)}
-                        style={{margin:0}}/>
-                      <span style={{color: checked ? T.text : T.text2}}>{t.label}</span>
-                    </label>
-                  )
-                })}
+              <div style={sectionLbl}>Telephony</div>
+              <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+                <div style={{ width: 120 }}><div style={lbl}>Deskphone ext</div><input defaultValue={u.phone_extension || ''} placeholder="—" autoComplete="off" data-1p-ignore="true" onBlur={e => { const v = e.target.value.trim(); if (v !== (u.phone_extension || '')) updateUser(u.id, { phone_extension: v || null }) }} style={{ ...fld, fontFamily: 'monospace' }} /></div>
+                <div style={{ width: 120 }}><div style={lbl}>Softphone ext</div><input defaultValue={u.webrtc_extension || ''} placeholder="—" autoComplete="off" data-1p-ignore="true" onBlur={e => { const v = e.target.value.trim(); if (v !== (u.webrtc_extension || '')) updateUser(u.id, { webrtc_extension: v || null }) }} style={{ ...fld, fontFamily: 'monospace' }} /></div>
+                <div style={{ width: 150 }}><div style={lbl}>Softphone password</div><input type="password" defaultValue="" autoComplete="new-password" data-1p-ignore="true" placeholder={u.webrtc_password_set ? '•••••• (set)' : '—'} onBlur={e => { if (e.target.value) updateUser(u.id, { webrtc_password: e.target.value }) }} style={{ ...fld, fontFamily: 'monospace' }} /></div>
               </div>
-            </div>
 
-            <div style={{display:'flex',gap:8,marginTop:16,paddingTop:14,borderTop:`1px solid ${T.border}`,justifyContent:'space-between'}}>
-              <button onClick={()=>saveEditingTabs(true)} disabled={savingTabs}
-                style={{padding:'7px 14px',borderRadius:4,border:`1px solid ${T.border2}`,background:'transparent',color:T.text3,fontSize:12,cursor:savingTabs?'wait':'pointer',fontFamily:'inherit'}}>
-                Reset to role defaults
-              </button>
-              <div style={{display:'flex',gap:8}}>
-                <button onClick={()=>setEditingTabsFor(null)} disabled={savingTabs}
-                  style={{padding:'7px 14px',borderRadius:4,border:`1px solid ${T.border2}`,background:'transparent',color:T.text2,fontSize:12,cursor:savingTabs?'wait':'pointer',fontFamily:'inherit'}}>
-                  Cancel
-                </button>
-                <button onClick={()=>saveEditingTabs(false)} disabled={savingTabs}
-                  style={{padding:'7px 16px',borderRadius:4,border:'none',background:savingTabs?T.bg4:T.blue,color:savingTabs?T.text3:'#fff',fontSize:12,cursor:savingTabs?'wait':'pointer',fontFamily:'inherit',fontWeight:600}}>
-                  {savingTabs ? 'Saving…' : 'Save tabs'}
-                </button>
+              <div style={{ ...sectionLbl, display: 'flex', justifyContent: 'space-between' }}>
+                <span>Sidebar tabs {u.visible_tabs ? '(custom)' : '(role default)'}</span>
+                {u.visible_tabs && <button onClick={() => updateUser(u.id, { visible_tabs: null })} style={{ background: 'none', border: 'none', color: T.blue, cursor: 'pointer', fontFamily: 'inherit', fontSize: 10, textTransform: 'none', letterSpacing: 0 }}>Reset to role defaults</button>}
               </div>
+              <TabPicker role={u.role} value={tabs} onChange={next => updateUser(u.id, { visible_tabs: next })} />
+
+              <div style={sectionLbl}>Workshop diary lane</div>
+              {selUserTech ? (
+                <LaneEditor tech={selUserTech} fld={fld} lbl={lbl} btn={btn} onPatch={patchTech} onRemove={() => removeTech(selUserTech)} />
+              ) : (
+                <div style={{ fontSize: 12, color: T.text3 }}>Not on the workshop diary. <button onClick={() => addTechForUser(u)} style={{ ...btn(T.teal), marginLeft: 8 }}>+ Add diary lane</button></div>
+              )}
             </div>
+          )
+        })() : selTech ? (
+          <div key={selTech.id}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 4 }}>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 16, fontWeight: 600 }}>{selTech.name}</div>
+                <div style={{ fontSize: 11, color: T.text3 }}>Diary lane — no portal login</div>
+              </div>
+              <button onClick={() => removeTech(selTech)} style={btn(T.red)}>Remove</button>
+            </div>
+            <div style={sectionLbl}>Lane settings</div>
+            <LaneEditor tech={selTech} fld={fld} lbl={lbl} btn={btn} onPatch={patchTech} showName />
+            <div style={sectionLbl}>Link to a login</div>
+            <div style={{ fontSize: 12, color: T.text3, marginBottom: 6 }}>Connect this lane to a portal user so their diary lane is managed from their profile.</div>
+            <select value="" onChange={e => { if (e.target.value) { patchTech(selTech.id, { user_id: e.target.value }); setSel({ kind: 'user', id: e.target.value }) } }} style={{ ...fld, maxWidth: 320 }}>
+              <option value="">Link to user…</option>
+              {users.filter(u => !techByUser.has(u.id)).map(u => <option key={u.id} value={u.id}>{u.display_name || u.email}</option>)}
+            </select>
           </div>
-        </div>
-      )
-    })()}
-  </div>
+        ) : (
+          <div style={{ padding: '50px 8px', textAlign: 'center', color: T.text3, fontSize: 13 }}>Select a user on the left to edit their role, tabs, phone and diary lane — or invite a new one.</div>
+        )}
+      </div>
+    </div>
+  )
 }
+
+function LaneEditor({ tech, fld, lbl, btn, onPatch, onRemove, showName }: {
+  tech: TechRow; fld: React.CSSProperties; lbl: React.CSSProperties; btn: (c: string, solid?: boolean) => React.CSSProperties
+  onPatch: (id: string, p: any) => void; onRemove?: () => void; showName?: boolean
+}) {
+  return (
+    <div>
+      <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+        {showName && <div style={{ flex: 1, minWidth: 160 }}><div style={lbl}>Lane name</div><input defaultValue={tech.name} onBlur={e => { const v = e.target.value.trim(); if (v && v !== tech.name) onPatch(tech.id, { name: v }) }} style={fld} /></div>}
+        <div style={{ flex: 1, minWidth: 140 }}><div style={lbl}>Role</div><input defaultValue={tech.role || ''} placeholder="Technician / Advisor" onBlur={e => { const v = e.target.value.trim(); if (v !== (tech.role || '')) onPatch(tech.id, { role: v || null }) }} style={fld} /></div>
+        <div style={{ width: 70 }}><div style={lbl}>Colour</div><input type="color" defaultValue={tech.color || '#4f8ef7'} onBlur={e => { if (e.target.value !== tech.color) onPatch(tech.id, { color: e.target.value }) }} style={{ ...fld, padding: 2, height: 34, cursor: 'pointer' }} /></div>
+        <div style={{ width: 90 }}><div style={lbl}>Hrs/day</div><input type="number" min={0} step="0.5" defaultValue={tech.daily_hours} onBlur={e => { const v = Math.max(0, Number(e.target.value) || 0); if (v !== Number(tech.daily_hours)) onPatch(tech.id, { daily_hours: v }) }} style={fld} /></div>
+      </div>
+      <div style={{ display: 'flex', gap: 18, marginTop: 12, flexWrap: 'wrap' }}>
+        <label style={{ display: 'inline-flex', alignItems: 'center', gap: 7, cursor: 'pointer', fontSize: 12.5, color: T.text }}><input type="checkbox" checked={tech.show_in_diary} onChange={e => onPatch(tech.id, { show_in_diary: e.target.checked })} />Show in diary</label>
+        <label style={{ display: 'inline-flex', alignItems: 'center', gap: 7, cursor: 'pointer', fontSize: 12.5, color: T.text }}><input type="checkbox" checked={tech.active} onChange={e => onPatch(tech.id, { active: e.target.checked })} />Active{tech.active ? '' : ' (retired)'}</label>
+        {onRemove && <button onClick={onRemove} style={{ ...btn(T.red), marginLeft: 'auto' }}>Remove from diary</button>}
+      </div>
+    </div>
+  )
+}
+
 
 // ═══════════════════════════════════════════════════════════════════
 // PROFILE TAB
