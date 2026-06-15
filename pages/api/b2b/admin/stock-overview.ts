@@ -33,7 +33,7 @@ export default withAuth('view:b2b', async (req: NextApiRequest, res: NextApiResp
     const config = await readConfig(c)
     // Lightweight list for the picker — every catalogue row.
     const { data: all, error } = await c.from('b2b_catalogue')
-      .select('id, sku, name, qty_on_hand, is_inventoried, stock_cached_at, primary_image_url')
+      .select('id, sku, name, qty_on_hand, is_inventoried, stock_cached_at, primary_image_url, stock_red_below, stock_amber_below')
       .order('sku', { ascending: true })
     if (error) return res.status(500).json({ error: error.message })
     const byId = new Map((all || []).map((r: any) => [r.id, r]))
@@ -59,6 +59,24 @@ export default withAuth('view:b2b', async (req: NextApiRequest, res: NextApiResp
     return res.status(200).json({ ok: true, config: await readConfig(c) })
   }
 
-  res.setHeader('Allow', 'GET, PUT')
-  return res.status(405).json({ error: 'GET or PUT only' })
+  if (req.method === 'PATCH') {
+    // Per-item red/amber override (NULL clears it → falls back to the board default).
+    if (!roleHasPermission(user.role, 'edit:b2b_catalogue')) return res.status(403).json({ error: 'Forbidden' })
+    let body: any = {}
+    try { body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : (req.body || {}) }
+    catch { return res.status(400).json({ error: 'Bad JSON body' }) }
+    const id = String(body.item_id || '').trim()
+    if (!id) return res.status(400).json({ error: 'item_id required' })
+    const clean = (v: any) => v == null || v === '' ? null : Math.max(0, Math.round(Number(v) || 0))
+    const patch: any = {}
+    if ('red_below' in body) patch.stock_red_below = clean(body.red_below)
+    if ('amber_below' in body) patch.stock_amber_below = clean(body.amber_below)
+    if (!Object.keys(patch).length) return res.status(400).json({ error: 'nothing to update' })
+    const { error } = await c.from('b2b_catalogue').update(patch).eq('id', id)
+    if (error) return res.status(500).json({ error: error.message })
+    return res.status(200).json({ ok: true })
+  }
+
+  res.setHeader('Allow', 'GET, PUT, PATCH')
+  return res.status(405).json({ error: 'GET, PUT or PATCH only' })
 })

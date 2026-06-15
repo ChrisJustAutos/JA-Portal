@@ -19,7 +19,7 @@ function sb(): SupabaseClient {
   return _sb
 }
 
-const SELECT = 'id, sku, name, qty_on_hand, is_inventoried, stock_cached_at, primary_image_url'
+const SELECT = 'id, sku, name, qty_on_hand, is_inventoried, stock_cached_at, primary_image_url, stock_red_below, stock_amber_below'
 
 export default withSupplierAuth(async (req: NextApiRequest, res: NextApiResponse, user) => {
   if (req.method !== 'GET') { res.setHeader('Allow', 'GET'); return res.status(405).json({ error: 'GET only' }) }

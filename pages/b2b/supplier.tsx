@@ -17,7 +17,7 @@ const T = {
 }
 const COLUMN_OPTIONS = [2, 3, 4, 6, 8, 12]
 
-interface Item { id: string; sku: string; name: string; qty_on_hand: number; is_inventoried: boolean }
+interface Item { id: string; sku: string; name: string; qty_on_hand: number; is_inventoried: boolean; stock_red_below: number | null; stock_amber_below: number | null }
 interface Props { supplier: { userId: string; email: string; fullName: string | null; id: string; name: string } }
 
 export default function SupplierStockWall({ supplier }: Props) {
@@ -53,14 +53,17 @@ export default function SupplierStockWall({ supplier }: Props) {
     return s ? items.filter(i => i.sku?.toLowerCase().includes(s) || i.name?.toLowerCase().includes(s)) : items
   }, [items, q])
 
+  function redOf(it: Item) { return it.stock_red_below ?? thresholds.red_below }       // per-item override, else default
+  function amberOf(it: Item) { return it.stock_amber_below ?? thresholds.amber_below }
   function colour(it: Item): string {
     if (!it.is_inventoried) return T.text3
     const v = Number(it.qty_on_hand || 0)
-    if (v < thresholds.red_below) return T.red
-    if (thresholds.amber_below != null && v < thresholds.amber_below) return T.amber
+    const amber = amberOf(it)
+    if (v < redOf(it)) return T.red
+    if (amber != null && v < amber) return T.amber
     return T.green
   }
-  const lowCount = useMemo(() => items.filter(i => i.is_inventoried && Number(i.qty_on_hand || 0) < thresholds.red_below).length, [items, thresholds])
+  const lowCount = useMemo(() => items.filter(i => i.is_inventoried && Number(i.qty_on_hand || 0) < (i.stock_red_below ?? thresholds.red_below)).length, [items, thresholds])
 
   return (
     <>

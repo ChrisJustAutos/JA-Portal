@@ -20,7 +20,7 @@ const T = {
 }
 const COLUMN_OPTIONS = [2, 3, 4, 6, 8, 12]
 
-interface Item { id: string; sku: string; name: string; qty_on_hand: number; is_inventoried: boolean; stock_cached_at: string | null; primary_image_url: string | null }
+interface Item { id: string; sku: string; name: string; qty_on_hand: number; is_inventoried: boolean; stock_cached_at: string | null; primary_image_url: string | null; stock_red_below: number | null; stock_amber_below: number | null }
 interface Config { columns: number; red_below: number; amber_below: number | null; item_ids: string[] }
 interface Props { user: { id: string; email: string; displayName: string | null; role: UserRole; visibleTabs: string[] | null } }
 
@@ -73,9 +73,26 @@ export default function B2BStockOverview({ user }: Props) {
   function tileColour(t: Item): string {
     if (!t.is_inventoried) return T.text3
     const q = Number(t.qty_on_hand || 0)
-    if (q < config.red_below) return T.red
-    if (config.amber_below != null && q < config.amber_below) return T.amber
+    const red = t.stock_red_below ?? config.red_below                  // per-item override, else board default
+    const amber = t.stock_amber_below ?? config.amber_below
+    if (q < red) return T.red
+    if (amber != null && q < amber) return T.amber
     return T.green
+  }
+
+  // Per-item threshold override. Local edit is optimistic; blur persists.
+  function setItemThreshold(id: string, field: 'red' | 'amber', raw: string) {
+    const col = field === 'red' ? 'stock_red_below' : 'stock_amber_below'
+    const val = raw === '' ? null : Math.max(0, Number(raw) || 0)
+    setAll(prev => prev.map(i => i.id === id ? { ...i, [col]: val } : i))
+  }
+  function persistItemThreshold(id: string) {
+    if (!canEdit) return
+    setAll(prev => {
+      const it = prev.find(i => i.id === id)
+      if (it) fetch('/api/b2b/admin/stock-overview', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin', body: JSON.stringify({ item_id: id, red_below: it.stock_red_below, amber_below: it.stock_amber_below }) }).catch(() => {})
+      return prev   // read-only access to latest state
+    })
   }
 
   const addItem = (id: string) => mutate({ ...config, item_ids: [...config.item_ids, id] })
@@ -128,15 +145,15 @@ export default function B2BStockOverview({ user }: Props) {
             <section style={{ background: T.bg2, border: `1px solid ${T.border}`, borderRadius: 12, padding: 18, marginBottom: 20 }}>
               <div style={{ display: 'flex', gap: 22, flexWrap: 'wrap', alignItems: 'flex-end', marginBottom: 18 }}>
                 <label style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
-                  <span style={{ fontSize: 11, color: T.text3, fontWeight: 600 }}>🔴 Red when below</span>
+                  <span style={{ fontSize: 11, color: T.text3, fontWeight: 600 }}>🔴 Default red below</span>
                   <input type="number" min={0} value={config.red_below} onChange={e => mutate({ ...config, red_below: Math.max(0, Number(e.target.value) || 0) })} style={numInp} />
                 </label>
                 <label style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
-                  <span style={{ fontSize: 11, color: T.text3, fontWeight: 600 }}>🟠 Amber when below</span>
+                  <span style={{ fontSize: 11, color: T.text3, fontWeight: 600 }}>🟠 Default amber below</span>
                   <input type="number" min={0} placeholder="off" value={config.amber_below ?? ''} onChange={e => mutate({ ...config, amber_below: e.target.value === '' ? null : Math.max(0, Number(e.target.value) || 0) })} style={numInp} />
                 </label>
-                <div style={{ fontSize: 11.5, color: T.text3, lineHeight: 1.5, maxWidth: 320 }}>
-                  Tiles turn red below the red threshold, amber below the amber threshold (set amber higher than red for a warning band), otherwise green. Set amber to “off” to use red only.
+                <div style={{ fontSize: 11.5, color: T.text3, lineHeight: 1.5, maxWidth: 340 }}>
+                  These are the <strong>defaults</strong>. Tiles turn red below the red level, amber below the amber level (set amber higher than red for a warning band), otherwise green. Override either per product below — leave a product’s box blank to use the default.
                 </div>
               </div>
 
@@ -146,11 +163,26 @@ export default function B2BStockOverview({ user }: Props) {
                   <div style={{ fontSize: 11, color: T.text3, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 8 }}>On the wall ({tiles.length})</div>
                   {tiles.length === 0 && <div style={{ fontSize: 12.5, color: T.text3, fontStyle: 'italic' }}>Nothing pinned yet — add products from the right.</div>}
                   {tiles.map((t, i) => (
-                    <div key={t.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 8px', background: T.bg3, border: `1px solid ${T.border}`, borderRadius: 7, marginBottom: 6 }}>
-                      <span style={{ flex: 1, minWidth: 0, fontSize: 12.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}><strong style={{ fontFamily: 'monospace' }}>{t.sku}</strong> · {t.name}</span>
-                      <button onClick={() => moveItem(i, -1)} disabled={i === 0} style={arrowBtn(i === 0)}>↑</button>
-                      <button onClick={() => moveItem(i, 1)} disabled={i === tiles.length - 1} style={arrowBtn(i === tiles.length - 1)}>↓</button>
-                      <button onClick={() => removeItem(t.id)} style={{ ...arrowBtn(false), color: T.red }}>✕</button>
+                    <div key={t.id} style={{ padding: '7px 8px', background: T.bg3, border: `1px solid ${T.border}`, borderRadius: 7, marginBottom: 6 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                        <span style={{ flex: 1, minWidth: 0, fontSize: 12.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}><strong style={{ fontFamily: 'monospace' }}>{t.sku}</strong> · {t.name}</span>
+                        <button onClick={() => moveItem(i, -1)} disabled={i === 0} style={arrowBtn(i === 0)}>↑</button>
+                        <button onClick={() => moveItem(i, 1)} disabled={i === tiles.length - 1} style={arrowBtn(i === tiles.length - 1)}>↓</button>
+                        <button onClick={() => removeItem(t.id)} style={{ ...arrowBtn(false), color: T.red }}>✕</button>
+                      </div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 6 }}>
+                        <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 11, color: T.text3 }}>
+                          🔴 <input type="number" min={0} value={t.stock_red_below ?? ''} placeholder={`def ${config.red_below}`}
+                            onChange={e => setItemThreshold(t.id, 'red', e.target.value)} onBlur={() => persistItemThreshold(t.id)}
+                            style={{ ...numInp, width: 70 }} />
+                        </label>
+                        <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 11, color: T.text3 }}>
+                          🟠 <input type="number" min={0} value={t.stock_amber_below ?? ''} placeholder={config.amber_below != null ? `def ${config.amber_below}` : 'off'}
+                            onChange={e => setItemThreshold(t.id, 'amber', e.target.value)} onBlur={() => persistItemThreshold(t.id)}
+                            style={{ ...numInp, width: 70 }} />
+                        </label>
+                        <span style={{ fontSize: 10, color: T.text3 }}>blank = default</span>
+                      </div>
                     </div>
                   ))}
                 </div>
