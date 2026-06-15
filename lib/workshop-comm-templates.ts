@@ -5,7 +5,7 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 
-export type CommTrigger = 'booking_confirmation' | 'booking_reminder' | 'ready' | 'follow_up' | 'service_due' | 'rego_due'
+export type CommTrigger = 'booking_confirmation' | 'booking_reminder' | 'ready' | 'follow_up' | 'review_request' | 'payment_receipt' | 'service_due' | 'rego_due'
 
 export interface CommTemplate {
   id: string
@@ -27,6 +27,8 @@ export const COMM_TRIGGERS: { value: CommTrigger; label: string; anchor: string;
   { value: 'booking_reminder',     label: 'Booking reminder',     anchor: 'the booking start time' },
   { value: 'ready',                label: 'Ready for collection', anchor: 'sent manually from the job card', dirFixed: 'after' },
   { value: 'follow_up',            label: 'Service follow-up',    anchor: 'job completion', dirFixed: 'after' },
+  { value: 'review_request',       label: 'Review request',       anchor: 'job completion', dirFixed: 'after' },
+  { value: 'payment_receipt',      label: 'Payment receipt',      anchor: 'when a payment is taken', dirFixed: 'after' },
   { value: 'service_due',          label: 'Service due',          anchor: 'when due (within the lead window)', dirFixed: 'after' },
   { value: 'rego_due',             label: 'Registration due',     anchor: 'when due (within the lead window)', dirFixed: 'after' },
 ]
@@ -37,7 +39,7 @@ export function renderTemplate(tpl: string | null | undefined, vars: Record<stri
 }
 
 // Available placeholders, surfaced in the editor.
-export const COMM_VARS = ['first_name', 'customer_name', 'vehicle', 'rego', 'date', 'time', 'due_date', 'business_name', 'total', 'balance']
+export const COMM_VARS = ['first_name', 'customer_name', 'vehicle', 'rego', 'date', 'time', 'due_date', 'business_name', 'total', 'balance', 'amount', 'review_link']
 
 // Signed milliseconds offset (negative = before the anchor).
 export function offsetMs(t: Pick<CommTemplate, 'offset_value' | 'offset_unit' | 'offset_dir'>): number {

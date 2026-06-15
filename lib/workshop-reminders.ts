@@ -22,15 +22,16 @@ function sb(): SupabaseClient {
   return _sb
 }
 
-interface SmsSettings { sms_enabled: boolean; sms_from: string | null; booking_reminder_lead_hours: number; service_reminder_lead_days: number; business_name: string }
+interface SmsSettings { sms_enabled: boolean; sms_from: string | null; booking_reminder_lead_hours: number; service_reminder_lead_days: number; business_name: string; review_url: string | null }
 async function settings(): Promise<SmsSettings> {
-  const { data } = await sb().from('workshop_settings').select('sms_enabled, sms_from, booking_reminder_lead_hours, service_reminder_lead_days, business_name').eq('id', 'singleton').maybeSingle()
+  const { data } = await sb().from('workshop_settings').select('sms_enabled, sms_from, booking_reminder_lead_hours, service_reminder_lead_days, business_name, review_url').eq('id', 'singleton').maybeSingle()
   return {
     sms_enabled: data?.sms_enabled ?? false,
     sms_from: data?.sms_from ?? null,
     booking_reminder_lead_hours: data?.booking_reminder_lead_hours ?? 24,
     service_reminder_lead_days: data?.service_reminder_lead_days ?? 14,
     business_name: data?.business_name || 'Just Autos',
+    review_url: data?.review_url || null,
   }
 }
 
@@ -68,7 +69,7 @@ async function queueOne(db: SupabaseClient, t: CommTemplate, ctx: {
 }
 
 // Build the template variables + contact channels for a booking.
-async function bookingContext(db: SupabaseClient, bookingId: string, biz: string) {
+async function bookingContext(db: SupabaseClient, bookingId: string, biz: string, reviewUrl?: string | null) {
   const { data: b } = await db.from('workshop_bookings')
     .select('id, starts_at, completed_at, job_type, total_inc_gst, customer_id, vehicle_id, customer:workshop_customers(name, first_name, email, mobile, phone), vehicle:workshop_vehicles(rego, make, model, year)')
     .eq('id', bookingId).maybeSingle()
@@ -89,6 +90,8 @@ async function bookingContext(db: SupabaseClient, bookingId: string, biz: string
     business_name: biz,
     total: total ? money(total) : '',
     balance: total ? money(Math.max(0, total - paid)) : '',
+    amount: '',
+    review_link: reviewUrl || '',
   }
   return {
     booking: b, vars,
@@ -104,7 +107,7 @@ export async function queueBookingReminder(bookingId: string): Promise<void> {
   try {
     const db = sb()
     const cfg = await settings()
-    const ctx = await bookingContext(db, bookingId, cfg.business_name)
+    const ctx = await bookingContext(db, bookingId, cfg.business_name, cfg.review_url)
     if (!ctx) return
     const jobType = (ctx.booking as any).job_type as string | null
     const startMs = new Date((ctx.booking as any).starts_at).getTime()
@@ -122,20 +125,41 @@ export async function queueBookingReminder(bookingId: string): Promise<void> {
   } catch { /* best-effort */ }
 }
 
-// ── Post-job follow-ups (after completion, job-type gated) ───────────────
+// ── Post-job follow-ups + review requests (after completion, job-type gated) ──
 export async function queueFollowUps(bookingId: string): Promise<void> {
   try {
     const db = sb()
     const cfg = await settings()
-    const ctx = await bookingContext(db, bookingId, cfg.business_name)
+    const ctx = await bookingContext(db, bookingId, cfg.business_name, cfg.review_url)
     if (!ctx) return
     const jobType = (ctx.booking as any).job_type as string | null
     const anchor = new Date((ctx.booking as any).completed_at || Date.now()).getTime()
-    const tmpls = await enabledTemplates(db, 'follow_up')
+    for (const trigger of ['follow_up', 'review_request'] as CommTrigger[]) {
+      const tmpls = await enabledTemplates(db, trigger)
+      for (const t of tmpls) {
+        if (!templateMatchesJobType(t, jobType)) continue
+        if (await alreadyQueued(db, bookingId, t.id)) continue
+        await queueOne(db, t, { type: trigger, vars: ctx.vars, number: ctx.number, email: ctx.email, customerId: ctx.customerId, vehicleId: ctx.vehicleId, bookingId, sendAt: new Date(anchor + offsetMs(t)) })
+      }
+    }
+  } catch { /* best-effort */ }
+}
+
+// ── Payment receipt (immediate, when a payment is recorded) ──────────────
+export async function queuePaymentReceipt(bookingId: string, amount: number): Promise<void> {
+  try {
+    const db = sb()
+    const cfg = await settings()
+    const ctx = await bookingContext(db, bookingId, cfg.business_name, cfg.review_url)
+    if (!ctx) return
+    const jobType = (ctx.booking as any).job_type as string | null
+    const vars = { ...ctx.vars, amount: amount ? money(amount) : '' }
+    const tmpls = await enabledTemplates(db, 'payment_receipt')
     for (const t of tmpls) {
       if (!templateMatchesJobType(t, jobType)) continue
-      if (await alreadyQueued(db, bookingId, t.id)) continue
-      await queueOne(db, t, { type: 'follow_up', vars: ctx.vars, number: ctx.number, email: ctx.email, customerId: ctx.customerId, vehicleId: ctx.vehicleId, bookingId, sendAt: new Date(anchor + offsetMs(t)) })
+      // One receipt per payment: dedupe on (booking, template) won't allow
+      // repeats, so include the amount+time in a synthetic guard via send.
+      await queueOne(db, t, { type: 'payment_receipt', vars, number: ctx.number, email: ctx.email, customerId: ctx.customerId, vehicleId: ctx.vehicleId, bookingId, sendAt: new Date() })
     }
   } catch { /* best-effort */ }
 }
@@ -204,6 +228,19 @@ function textToHtml(text: string): string {
   return `<div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#222;line-height:1.6">${esc.replace(/\n/g, '<br>')}</div>`
 }
 
+// Minimal .ics for a booking confirmation email so it drops into the
+// customer's calendar. ESLint-safe basic VEVENT.
+function bookingIcs(start: string, end: string | null, summary: string): string {
+  const fmt = (d: Date) => d.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '')
+  const s = new Date(start)
+  const e = end ? new Date(end) : new Date(s.getTime() + 3600_000)
+  return [
+    'BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Just Autos//Workshop//EN', 'METHOD:PUBLISH',
+    'BEGIN:VEVENT', `UID:${fmt(s)}-${Math.abs(start.length)}@justautos.app`, `DTSTAMP:${fmt(new Date())}`,
+    `DTSTART:${fmt(s)}`, `DTEND:${fmt(e)}`, `SUMMARY:${summary}`, 'END:VEVENT', 'END:VCALENDAR',
+  ].join('\r\n')
+}
+
 export interface ReminderRunResult { processed: number; sent: number; failed: number; skipped: string | null }
 
 export async function processDueReminders(limit = 50): Promise<ReminderRunResult> {
@@ -212,7 +249,7 @@ export async function processDueReminders(limit = 50): Promise<ReminderRunResult
   if (!cfg.sms_enabled) return { processed: 0, sent: 0, failed: 0, skipped: 'comms_disabled' }
 
   const { data: due } = await db.from('workshop_reminders')
-    .select('id, channel, to_number, to_email, subject, body, customer_id')
+    .select('id, type, channel, to_number, to_email, subject, body, customer_id, booking_id')
     .eq('status', 'pending').lte('send_at', new Date().toISOString())
     .order('send_at', { ascending: true }).limit(limit)
 
@@ -223,7 +260,16 @@ export async function processDueReminders(limit = 50): Promise<ReminderRunResult
       if (r.channel === 'email') {
         const to = r.to_email
         if (!to) { errMsg = 'no_email' }
-        else { await sendMail('noreply@mail.justautos.app', { to: [to], subject: r.subject || 'A message from Just Autos', html: textToHtml(r.body) }); ok = true }
+        else {
+          // Attach a calendar invite to booking-confirmation emails.
+          let attachments: { name: string; contentType: string; content: Buffer }[] | undefined
+          if (r.type === 'booking_confirmation' && r.booking_id) {
+            const { data: bk } = await db.from('workshop_bookings').select('starts_at, ends_at').eq('id', r.booking_id).maybeSingle()
+            if (bk?.starts_at) attachments = [{ name: 'booking.ics', contentType: 'text/calendar', content: Buffer.from(bookingIcs(bk.starts_at, bk.ends_at, cfg.business_name + ' booking')) }]
+          }
+          await sendMail('noreply@mail.justautos.app', { to: [to], subject: r.subject || 'A message from Just Autos', html: textToHtml(r.body), attachments })
+          ok = true
+        }
       } else {
         let number = r.to_number
         if (!number && r.customer_id) {

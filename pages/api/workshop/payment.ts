@@ -34,6 +34,9 @@ export default withAuth('view:diary', async (req, res, user) => {
     if (!TENDER_IDS.includes(tender)) return res.status(400).json({ error: 'invalid tender' })
     try {
       const result = await recordJobPayment(bookingId, { amount: Number(body.amount), tender, note: body.note || null }, user.id)
+      // Fire the payment-receipt comm template (best-effort; gated by the
+      // template being enabled + the master comms toggle).
+      try { const { queuePaymentReceipt } = await import('../../../lib/workshop-reminders'); await queuePaymentReceipt(bookingId, Number(body.amount)) } catch { /* non-fatal */ }
       return res.status(200).json({ ok: true, ...result })
     } catch (e: any) {
       if (e instanceof WorkshopPaymentError) return res.status(409).json({ ok: false, code: e.code, error: e.message })

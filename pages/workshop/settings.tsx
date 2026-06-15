@@ -499,7 +499,8 @@ function SmsSection({ settings, onSave, register }: { settings: any; onSave: Sav
   const [from, setFrom] = useState(settings.sms_from || '')
   const [lead, setLead] = useState(String(settings.booking_reminder_lead_hours ?? 24))
   const [dueLead, setDueLead] = useState(String(settings.service_reminder_lead_days ?? 14))
-  const buildPatch = () => ({ sms_enabled: enabled, sms_from: from, booking_reminder_lead_hours: Number(lead) || 0, service_reminder_lead_days: Number(dueLead) || 0 })
+  const [reviewUrl, setReviewUrl] = useState(settings.review_url || '')
+  const buildPatch = () => ({ sms_enabled: enabled, sms_from: from, booking_reminder_lead_hours: Number(lead) || 0, service_reminder_lead_days: Number(dueLead) || 0, review_url: reviewUrl || null })
   const patchRef = useRef(buildPatch()); patchRef.current = buildPatch()
   useEffect(() => {
     if (!register) return
@@ -517,7 +518,10 @@ function SmsSection({ settings, onSave, register }: { settings: any; onSave: Sav
         <Field label="Booking lead (hours)"><input style={inp} inputMode="numeric" value={lead} onChange={e => setLead(e.target.value)} /></Field>
         <Field label="Service-due lead (days)"><input style={inp} inputMode="numeric" value={dueLead} onChange={e => setDueLead(e.target.value)} /></Field>
       </div>
-      <button onClick={() => onSave(buildPatch())} style={pbtn(T.accent, true)}>Save SMS settings</button>
+      <div style={{ marginTop: 12 }}>
+        <Field label="Google review link (for the {{review_link}} placeholder)"><input style={inp} value={reviewUrl} onChange={e => setReviewUrl(e.target.value)} placeholder="https://g.page/r/…/review" /></Field>
+      </div>
+      <button onClick={() => onSave(buildPatch())} style={{ ...pbtn(T.accent, true), marginTop: 12 }}>Save settings</button>
     </Card>
   )
 }
