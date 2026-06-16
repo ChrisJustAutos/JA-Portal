@@ -227,7 +227,7 @@ export default function StockReorderPage({ user }: { user: any }) {
             <div style={{ minWidth: 1280 }}>
               <div style={{ display: 'grid', gridTemplateColumns: GRID_SEL, gap: 6, padding: '8px 12px', background: T.bg3, borderBottom: `1px solid ${T.border}`, fontSize: 8.5, color: T.text3, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.03em', alignItems: 'end' }}>
                 <div><input type="checkbox" title="Select all" checked={allShownSelected} onChange={toggleAll} style={{ cursor: 'pointer' }} /></div>
-                {Th('Stock No.')}{Th('Name')}{Th('On hand', true)}{Th('Cmtd', true, 'Committed')}{Th('Avail', true, 'Available = on hand − committed')}{Th('On ord', true, 'On order')}{Th(`Sales ${months}mo`, true, 'Total units sold over the date range')}{Th('Avg/mo', true)}{Th('Round', true, 'Monthly round up')}{Th('+Grow', true, 'With growth %')}{Th('Proj', true, `Projected demand over ${settings.forecast_months} months`)}{Th('Short', true, 'Shortfall = projected − (available + on order)')}{Th('Suggested', true)}{Th('MOQ', true)}{Th("Morgan's", true, "Manual override")}{Th('Final', true)}{Th('Notes')}
+                {Th('Stock No.')}{Th('Name')}{Th('On hand', true)}{Th('Cmtd', true, 'Committed')}{Th('Avail', true, 'Available = on hand − committed')}{Th('On ord', true, 'On order')}{Th(`Sales ${months}mo`, true, 'Total units sold over the date range')}{Th('Avg/mo', true)}{Th('Round', true, 'Monthly round up')}{Th('+Grow', true, 'With growth %')}{Th('Proj', true, `Projected demand over ${settings.forecast_months} months`)}{Th('Order', true, `Order needed to keep a ${settings.forecast_months}-month buffer = max(0, 2×projected − (available + on order))`)}{Th('Suggested', true)}{Th('MOQ', true)}{Th("Morgan's", true, "Manual override")}{Th('Final', true)}{Th('Notes')}
               </div>
               {loading ? (
                 <div style={{ padding: 30, textAlign: 'center', color: T.text3, fontSize: 12 }}>Loading…</div>
@@ -250,7 +250,7 @@ export default function StockReorderPage({ user }: { user: any }) {
                     <div style={{ textAlign: 'right', fontFamily: 'monospace', color: T.text3 }}>{num(c.monthlyRound)}</div>
                     <div style={{ textAlign: 'right', fontFamily: 'monospace', color: T.text3 }}>{num(c.withGrowth)}</div>
                     <div style={{ textAlign: 'right', fontFamily: 'monospace', color: T.text3 }}>{num(c.projected)}</div>
-                    <div style={{ textAlign: 'right', fontFamily: 'monospace', color: c.shortfall > 0 ? T.amber : T.text3 }}>{num(c.shortfall)}</div>
+                    <div style={{ textAlign: 'right', fontFamily: 'monospace', color: c.orderNeed > 0 ? T.amber : T.text3 }}>{num(c.orderNeed)}</div>
                     <div style={{ textAlign: 'right', fontFamily: 'monospace', color: T.text2, fontWeight: 600 }}>{num(c.suggested)}</div>
                     <div><input defaultValue={it.moq ?? ''} inputMode="numeric" onBlur={e => { const v = e.target.value.trim(); if (v !== String(it.moq ?? '')) patchItem(it.id, { moq: v }) }} style={cellInp} /></div>
                     <div><input defaultValue={it.morgans_judgment ?? ''} inputMode="numeric" placeholder="—" onBlur={e => { const v = e.target.value.trim(); if (v !== String(it.morgans_judgment ?? '')) patchItem(it.id, { morgans_judgment: v }) }} style={{ ...cellInp, borderColor: it.morgans_judgment != null ? T.amber : T.border }} /></div>
@@ -265,7 +265,7 @@ export default function StockReorderPage({ user }: { user: any }) {
             </div>
           </div>
           <div style={{ fontSize: 11, color: T.text3, marginTop: 10 }}>
-            On hand / Committed / On order + sales come from MYOB (JAWS) on Sync. Suggested = monthly avg × (1+growth) × cover months, less stock on hand + on order, rounded to MOQ (or 5/15). Final = Morgan’s judgment if set, otherwise Suggested.
+            On hand / Committed / On order + sales come from MYOB (JAWS) on Sync. Projected = monthly avg × (1+growth) × cover months. Order keeps a cover-months buffer: Order = max(0, 2×Projected − (available + on order)). Suggested rounds that to MOQ (or 5/15). Final = Morgan’s judgment if set, otherwise Suggested.
           </div>
         </main>
       </div>

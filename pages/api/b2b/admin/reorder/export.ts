@@ -124,7 +124,7 @@ export default withAuth('edit:b2b_catalogue', async (req, res) => {
   const headers = [
     'Stock No.', 'Name', 'On Hand', 'Committed', 'Available', 'On Order', 'Total Sales',
     'Monthly Avg', 'Monthly Round Up', '+Growth', 'Projected',
-    'Estiamted On Hand After 3 Months', 'Adjusted Proposed New Order Volume', 'MOQ',
+    'Est. Stock On Hand After Cover', 'Order Needed to Maintain Buffer', 'MOQ',
     'Commited - New Order Volume', "Morgan's Judgment", 'Proposed New Order Volume', 'Notes',
   ]
   headers.forEach((h, i) => {
@@ -144,7 +144,6 @@ export default withAuth('edit:b2b_catalogue', async (req, res) => {
   list.forEach((it: any, i: number) => {
     const R = HEAD_ROW + 1 + i
     const c = computeReorder(it, settings, months)
-    const adjusted = Math.max(c.shortfall, 0)
     const row = ws.getRow(R)
     const cells: Record<string, any> = {
       A: String(it.sku || ''),
@@ -158,8 +157,8 @@ export default withAuth('edit:b2b_catalogue', async (req, res) => {
       I: { formula: `ROUNDUP(H${R},0)`, result: c.monthlyRound },
       J: { formula: `ROUNDUP(I${R}*(1+$M$2),0)`, result: c.withGrowth },
       K: { formula: `J${R}*$O$2`, result: c.projected },
-      L: { formula: `K${R}-(E${R}+F${R})`, result: r2(c.shortfall) },
-      M: { formula: `MAX(L${R},0)`, result: adjusted },
+      L: { formula: `(E${R}+F${R})-K${R}`, result: r2(c.coverPosition) },
+      M: { formula: `MAX(0,K${R}-L${R})`, result: c.orderNeed },
       N: it.moq != null ? Number(it.moq) : null,
       O: { formula: `IF(M${R}=0,0,IF(N${R}>0,CEILING(M${R},N${R}),IF(M${R}<=5,CEILING(M${R},5),CEILING(M${R},15))))`, result: c.suggested },
       P: it.morgans_judgment != null ? Number(it.morgans_judgment) : null,
@@ -175,8 +174,8 @@ export default withAuth('edit:b2b_catalogue', async (req, res) => {
       if (!['A', 'B', 'R'].includes(col)) cell.alignment = { horizontal: 'right' }
       if (i % 2 === 1) cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: BAND } }
     }
-    // Highlights
-    if (c.shortfall > 0) ws.getCell(`L${R}`).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: AMBER_FILL } }
+    // Highlights — amber on the order-needed cell when a reorder is required.
+    if (c.orderNeed > 0) ws.getCell(`M${R}`).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: AMBER_FILL } }
     const finalCell = ws.getCell(`Q${R}`)
     finalCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: GREEN_FILL } }
     finalCell.font = { size: 10, bold: true, color: { argb: 'FF1B7A3D' } }

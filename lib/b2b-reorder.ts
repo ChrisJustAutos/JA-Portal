@@ -39,10 +39,18 @@ const ceil = (n: number) => Math.ceil(n - 1e-9)
 
 export interface ReorderCalc {
   available: number; monthlyAvg: number; monthlyRound: number
-  withGrowth: number; projected: number; shortfall: number
+  withGrowth: number; projected: number
+  coverPosition: number   // L: est. stock on hand AFTER the cover period (avail + on order − projected)
+  orderNeed: number       // M: order needed to maintain a cover-months buffer (pre-MOQ rounding)
   suggested: number; finalOrder: number
 }
 
+// Mirrors the JAWS Stock Order MASTER template (corrected June 2026). The order
+// quantity must not just cover projected demand — it must leave a cover-months
+// BUFFER of stock on hand afterwards:
+//   L (est. stock after cover) = (available + on order) − projected
+//   M (order needed)           = MAX(0, projected − L)  = MAX(0, 2×projected − (available + on order))
+// The previous formula omitted the buffer term and therefore under-ordered.
 export function computeReorder(
   it: Pick<ReorderItem, 'on_hand' | 'committed' | 'on_order' | 'sales_qty' | 'moq' | 'morgans_judgment'>,
   s: ReorderSettings, months: number,
@@ -53,13 +61,13 @@ export function computeReorder(
   const growth = Number(s.growth_pct) || 0
   const withGrowth = ceil(monthlyRound * (1 + growth))
   const projected = withGrowth * (Number(s.forecast_months) || 0)
-  const shortfall = projected - (available + (Number(it.on_order) || 0))
-  const proposedRaw = Math.max(shortfall, 0)
+  const coverPosition = (available + (Number(it.on_order) || 0)) - projected
+  const orderNeed = Math.max(0, projected - coverPosition)
   const moq = Number(it.moq) || 0
   // Round up to MOQ if set; else the Excel rule (≤5 → 5, otherwise to 15s).
-  const suggested = proposedRaw <= 0 ? 0
-    : moq > 0 ? ceil(proposedRaw / moq) * moq
-    : proposedRaw <= 5 ? 5 : ceil(proposedRaw / 15) * 15
+  const suggested = orderNeed <= 0 ? 0
+    : moq > 0 ? ceil(orderNeed / moq) * moq
+    : orderNeed <= 5 ? 5 : ceil(orderNeed / 15) * 15
   const finalOrder = it.morgans_judgment != null ? Number(it.morgans_judgment) : suggested
-  return { available, monthlyAvg, monthlyRound, withGrowth, projected, shortfall, suggested, finalOrder }
+  return { available, monthlyAvg, monthlyRound, withGrowth, projected, coverPosition, orderNeed, suggested, finalOrder }
 }
