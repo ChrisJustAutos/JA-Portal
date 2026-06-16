@@ -9,20 +9,22 @@
 //      N days (listAllMessagesWithAttachments).
 //   2. Keeps those from MechanicDesk's sender that carry a
 //      `performance-estimate*` PDF.
-//   3. Skips any already processed (a quote_events row with the same
-//      graphMessageId — from the live webhook OR a previous backfill run).
-//   4. Feeds each PDF through the SAME pipeline the webhook uses by POSTing
+//   3. Dedupes on the QUOTE NUMBER (parsed from the subject / filename)
+//      against existing quote_events rows for this rep — so the live webhook's
+//      ingestions, MechanicDesk's duplicate sends, and earlier backfill runs
+//      are all skipped. (Message IDs are unreliable: Graph renumbers a message
+//      when an Outlook rule moves it.)
+//   4. Feeds each new PDF through the SAME pipeline the webhook uses by POSTing
 //      to the stub endpoint (parse → Active Campaign → Monday).
-//   5. Writes an 'A_backfill' marker row per message so re-runs are idempotent.
 //
 // Auth: GRAPH_ADMIN_SETUP_SECRET in ?key= (same secret as the setup endpoint).
 //
 // Query params:
 //   mailbox  — mailbox to backfill (default kaleb@justautosmechanical.com.au)
 //   days     — lookback window in days (default 14)
-//   limit    — max messages to actually process this run (default 20). Each
-//              quote takes ~7-12s through the pipeline, so this keeps us under
-//              the function time budget. Re-run to process the next batch.
+//   limit    — max NEW quotes to process this run (default 8). Each quote takes
+//              ~20s through the pipeline, so this keeps us under the 300s
+//              function budget. Re-run until `processed` is 0.
 //   dryRun   — '1' to list matches without processing (no AC/Monday writes)
 
 import type { NextApiRequest, NextApiResponse } from 'next'
@@ -36,8 +38,6 @@ import { getAgentByMailbox } from '../../../lib/agents'
 
 export const config = {
   api: { bodyParser: { sizeLimit: '64kb' } },
-  // Each quote runs the full parse + AC + Monday pipeline (~7-12s). Give the
-  // batch plenty of room; `limit` keeps the total bounded.
   maxDuration: 300,
 }
 
@@ -45,14 +45,27 @@ const FILENAME_PATTERN = /^performance-estimate/i
 const DEFAULT_MAILBOX = 'kaleb@justautosmechanical.com.au'
 const DEFAULT_FROM_FILTER = 'mechanicdesk'
 
+// Quote number lives in the subject ("...Performance Estimate #58127") and the
+// attachment filename ("performance-estimate-58127.pdf").
+function quoteNoFromSubject(subject: string | null): string | null {
+  if (!subject) return null
+  const m = subject.match(/performance estimate\s*#?\s*(\d{3,})/i)
+  return m ? m[1] : null
+}
+function quoteNoFromFilename(name: string): string | null {
+  const m = name.match(/(\d{3,})/)
+  return m ? m[1] : null
+}
+
 interface ItemResult {
   messageId: string
   subject: string | null
   receivedDateTime: string
+  quoteNo: string | null
   attachment: string | null
-  outcome: 'processed' | 'skipped_already_done' | 'skipped_no_match' | 'failed' | 'dry_run'
+  outcome: 'processed' | 'skipped_already_done' | 'skipped_no_match' | 'skipped_limit' | 'failed' | 'dry_run'
   reason?: string
-  stub?: any
+  monday?: any
 }
 
 function sb() {
@@ -62,35 +75,20 @@ function sb() {
   return createClient(url, key, { auth: { persistSession: false } })
 }
 
-async function alreadyProcessed(client: ReturnType<typeof sb>, messageId: string): Promise<boolean> {
+// Pull every quote number this rep already has a quote_events row for, so we
+// can dedup in-memory without a DB round-trip per candidate.
+async function loadProcessedQuoteNumbers(client: ReturnType<typeof sb>, mailbox: string): Promise<Set<string>> {
   const { data, error } = await client
     .from('quote_events')
-    .select('id')
-    .filter('details->>graphMessageId', 'eq', messageId)
-    .limit(1)
-  if (error) {
-    console.warn('[backfill-quotes] dedup check failed:', error.message)
-    return false
-  }
-  return (data?.length || 0) > 0
-}
-
-async function writeMarker(
-  client: ReturnType<typeof sb>,
-  mailbox: string,
-  messageId: string,
-  outcome: string,
-  extra: Record<string, any>,
-): Promise<void> {
-  await client.from('quote_events').insert({
-    pipeline: 'A_backfill',
-    agent_email: mailbox,
-    status: outcome === 'processed' ? 'success' : 'partial',
-    completed_at: new Date().toISOString(),
-    details: { graphMessageId: messageId, backfill: true, outcome, ...extra },
-  }).then(({ error }) => {
-    if (error) console.warn('[backfill-quotes] marker insert failed:', error.message)
-  })
+    .select('quote_number')
+    .eq('agent_email', mailbox)
+    .eq('pipeline', 'A_quote_ingestion')
+    .in('status', ['success', 'partial'])
+    .not('quote_number', 'is', null)
+  if (error) throw new Error(`quote_events preload failed: ${error.message}`)
+  const set = new Set<string>()
+  for (const r of data || []) if (r.quote_number) set.add(String(r.quote_number))
+  return set
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -107,7 +105,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   const mailbox = ((req.query.mailbox as string) || DEFAULT_MAILBOX).trim()
   const days = Math.min(Math.max(parseInt((req.query.days as string) || '14', 10) || 14, 1), 90)
-  const limit = Math.min(Math.max(parseInt((req.query.limit as string) || '20', 10) || 20, 1), 50)
+  const limit = Math.min(Math.max(parseInt((req.query.limit as string) || '8', 10) || 8, 1), 20)
   const dryRun = (req.query.dryRun as string) === '1'
   const fromFilter = ((req.query.fromFilter as string) || DEFAULT_FROM_FILTER).toLowerCase()
 
@@ -119,7 +117,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const sinceIso = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString()
 
   let client: ReturnType<typeof sb>
-  try { client = sb() } catch (e: any) { return res.status(500).json({ ok: false, error: e?.message || String(e) }) }
+  let processedNumbers: Set<string>
+  try {
+    client = sb()
+    processedNumbers = await loadProcessedQuoteNumbers(client, mailbox)
+  } catch (e: any) {
+    return res.status(500).json({ ok: false, error: e?.message || String(e) })
+  }
 
   // 1. List whole-mailbox messages with attachments since the cutoff.
   let messages
@@ -129,43 +133,53 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(502).json({ ok: false, error: `Graph list failed: ${e?.message || String(e)}` })
   }
 
-  // 2. Keep MechanicDesk-originated messages.
-  const candidates = messages.filter(m => (m.from || '').toLowerCase().includes(fromFilter))
+  // 2. Keep MechanicDesk-originated messages that look like quotes (subject).
+  const candidates = messages.filter(m =>
+    (m.from || '').toLowerCase().includes(fromFilter) && quoteNoFromSubject(m.subject) !== null,
+  )
 
   const results: ItemResult[] = []
   let processed = 0
 
   for (const m of candidates) {
+    const subjNo = quoteNoFromSubject(m.subject)
+
+    // 2a. Dedup by quote number (covers webhook ingestions, MD duplicate sends,
+    //     and previously-backfilled quotes).
+    if (subjNo && processedNumbers.has(subjNo)) {
+      results.push({ messageId: m.id, subject: m.subject, receivedDateTime: m.receivedDateTime, quoteNo: subjNo, attachment: null, outcome: 'skipped_already_done' })
+      continue
+    }
+
     if (processed >= limit) {
-      results.push({
-        messageId: m.id, subject: m.subject, receivedDateTime: m.receivedDateTime,
-        attachment: null, outcome: 'skipped_no_match', reason: 'batch limit reached — re-run to continue',
-      })
+      results.push({ messageId: m.id, subject: m.subject, receivedDateTime: m.receivedDateTime, quoteNo: subjNo, attachment: null, outcome: 'skipped_limit', reason: 'batch limit reached — re-run to continue' })
       continue
     }
 
-    // 2a. Already handled? (webhook or earlier backfill)
-    if (await alreadyProcessed(client, m.id)) {
-      results.push({ messageId: m.id, subject: m.subject, receivedDateTime: m.receivedDateTime, attachment: null, outcome: 'skipped_already_done' })
-      continue
-    }
-
-    // 2b. Find a performance-estimate attachment.
+    // 2b. Find the performance-estimate attachment.
     let atts
     try {
       atts = await listAttachmentMeta(mailbox, m.id)
     } catch (e: any) {
-      results.push({ messageId: m.id, subject: m.subject, receivedDateTime: m.receivedDateTime, attachment: null, outcome: 'failed', reason: `attachment list: ${e?.message || String(e)}` })
+      results.push({ messageId: m.id, subject: m.subject, receivedDateTime: m.receivedDateTime, quoteNo: subjNo, attachment: null, outcome: 'failed', reason: `attachment list: ${e?.message || String(e)}` })
       continue
     }
     const match = atts.find(a => FILENAME_PATTERN.test(a.name))
     if (!match) {
-      results.push({ messageId: m.id, subject: m.subject, receivedDateTime: m.receivedDateTime, attachment: null, outcome: 'skipped_no_match', reason: 'no performance-estimate attachment' })
+      results.push({ messageId: m.id, subject: m.subject, receivedDateTime: m.receivedDateTime, quoteNo: subjNo, attachment: null, outcome: 'skipped_no_match', reason: 'no performance-estimate attachment' })
+      continue
+    }
+
+    const quoteNo = subjNo || quoteNoFromFilename(match.name)
+    // Re-check against the filename number too (subject occasionally differs).
+    if (quoteNo && quoteNo !== subjNo && processedNumbers.has(quoteNo)) {
+      results.push({ messageId: m.id, subject: m.subject, receivedDateTime: m.receivedDateTime, quoteNo, attachment: match.name, outcome: 'skipped_already_done' })
       continue
     }
 
     if (dryRun) {
-      results.push({ messageId: m.id, subject: m.subject, receivedDateTime: m.receivedDateTime, attachment: match.name, outcome: 'dry_run' })
+      results.push({ messageId: m.id, subject: m.subject, receivedDateTime: m.receivedDateTime, quoteNo, attachment: match.name, outcome: 'dry_run' })
+      if (quoteNo) processedNumbers.add(quoteNo) // avoid double-counting MD dup sends in the preview
       continue
     }
 
@@ -179,32 +193,30 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       })
       const stubJson = await r.json().catch(() => null)
       const ok = r.ok && stubJson?.ok !== false
-      await writeMarker(client, mailbox, m.id, ok ? 'processed' : 'failed', {
-        attachmentName: match.name,
-        receivedDateTime: m.receivedDateTime,
-        stubStatus: r.status,
-        stubResult: stubJson ? { quoteNumber: stubJson?.parsed?.quoteNumber, monday: stubJson?.monday, error: stubJson?.error } : null,
-      })
+      // Mark the number done immediately so MD's duplicate send (same run) is skipped.
+      if (ok && quoteNo) processedNumbers.add(quoteNo)
       results.push({
         messageId: m.id, subject: m.subject, receivedDateTime: m.receivedDateTime,
-        attachment: match.name, outcome: ok ? 'processed' : 'failed',
+        quoteNo, attachment: match.name, outcome: ok ? 'processed' : 'failed',
         reason: ok ? undefined : (stubJson?.error || `stub HTTP ${r.status}`),
-        stub: stubJson ? { quoteNumber: stubJson?.parsed?.quoteNumber, monday: stubJson?.monday } : null,
+        monday: stubJson?.monday ?? null,
       })
       processed++
     } catch (e: any) {
-      results.push({ messageId: m.id, subject: m.subject, receivedDateTime: m.receivedDateTime, attachment: match.name, outcome: 'failed', reason: e?.message || String(e) })
+      results.push({ messageId: m.id, subject: m.subject, receivedDateTime: m.receivedDateTime, quoteNo, attachment: match.name, outcome: 'failed', reason: e?.message || String(e) })
     }
   }
 
   const summary = {
     mailbox, days, limit, dryRun,
+    alreadyHadNumbers: processedNumbers.size,
     messagesScanned: messages.length,
-    fromMechanicDesk: candidates.length,
+    quoteCandidates: candidates.length,
     processed: results.filter(r => r.outcome === 'processed').length,
     alreadyDone: results.filter(r => r.outcome === 'skipped_already_done').length,
     noMatch: results.filter(r => r.outcome === 'skipped_no_match').length,
     failed: results.filter(r => r.outcome === 'failed').length,
+    remaining: results.filter(r => r.outcome === 'skipped_limit').length,
     dryRunMatches: results.filter(r => r.outcome === 'dry_run').length,
   }
 
