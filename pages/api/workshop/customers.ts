@@ -54,12 +54,37 @@ export default withAuth('view:diary', async (req, res, user) => {
       mobile: body.mobile ? String(body.mobile) : null,
       email: body.email ? String(body.email) : null,
       address: body.address ? String(body.address) : null,
+      // MechanicDesk-parity owner fields (migration 121)
+      customer_type: body.customer_type === 'company' ? 'company' : (body.customer_type ? String(body.customer_type) : null),
+      company: body.company ? String(body.company) : null,
+      source_of_business: body.source_of_business ? String(body.source_of_business) : null,
+      address_suburb: body.address_suburb ? String(body.address_suburb) : null,
+      address_state: body.address_state ? String(body.address_state) : null,
+      address_postcode: body.address_postcode ? String(body.address_postcode) : null,
     }).select('id, name, phone, mobile').single()
     if (error) return res.status(500).json({ error: error.message })
     await logWorkshopActivity(db, { action: 'created', entity: 'customer', entity_id: data.id, entity_label: data.name, detail: `Customer "${data.name}" added`, actor_id: user.id, actor_name: user.displayName || user.email })
     return res.status(201).json({ ok: true, customer: data })
   }
 
-  res.setHeader('Allow', 'GET, POST')
-  return res.status(405).json({ error: 'GET or POST only' })
+  if (req.method === 'PATCH') {
+    if (!roleHasPermission(user.role, 'edit:bookings')) return res.status(403).json({ error: 'Forbidden' })
+    let body: any = {}
+    try { body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : (req.body || {}) }
+    catch { return res.status(400).json({ error: 'Bad JSON body' }) }
+    const id = String(req.query.id || body.id || '').trim()
+    if (!id) return res.status(400).json({ error: 'id required' })
+    const EDITABLE = ['name', 'first_name', 'last_name', 'phone', 'mobile', 'email', 'address',
+      'customer_type', 'company', 'source_of_business', 'address_suburb', 'address_state', 'address_postcode', 'notes']
+    const patch: Record<string, any> = { updated_at: new Date().toISOString() }
+    for (const f of EDITABLE) if (f in body) patch[f] = body[f] === '' ? null : body[f]
+    if ('name' in patch && !String(patch.name || '').trim()) return res.status(400).json({ error: 'name cannot be empty' })
+    if (Object.keys(patch).length <= 1) return res.status(400).json({ error: 'No fields' })
+    const { error } = await db.from('workshop_customers').update(patch).eq('id', id)
+    if (error) return res.status(500).json({ error: error.message })
+    return res.status(200).json({ ok: true })
+  }
+
+  res.setHeader('Allow', 'GET, POST, PATCH')
+  return res.status(405).json({ error: 'GET, POST or PATCH only' })
 })

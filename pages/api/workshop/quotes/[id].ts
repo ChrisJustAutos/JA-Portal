@@ -21,7 +21,13 @@ function sb() {
   return createClient(url, key, { auth: { persistSession: false } })
 }
 
-const EDITABLE = ['notes', 'customer_id', 'vehicle_id', 'salesperson_id'] as const
+const EDITABLE = [
+  'notes', 'customer_id', 'vehicle_id', 'salesperson_id',
+  // MechanicDesk-parity quote detail fields (migration 121)
+  'quote_type', 'third_party_customer_id', 'short_description', 'issue_date', 'due_date',
+  'job_types', 'assessed_by', 'estimated_hours', 'estimated_by', 'order_number',
+  'driver_name', 'driver_phone', 'odometer', 'tags',
+] as const
 
 export default withAuth('view:diary', async (req, res, user) => {
   const id = String(req.query.id || '').trim()
@@ -34,10 +40,20 @@ export default withAuth('view:diary', async (req, res, user) => {
       .eq('id', id).maybeSingle()
     if (error) return res.status(500).json({ error: error.message })
     if (!quote) return res.status(404).json({ error: 'not_found' })
-    // Resolve the salesperson's name for display.
-    if ((quote as any).salesperson_id) {
-      const { data: sp } = await db.from('user_profiles').select('display_name, email').eq('id', (quote as any).salesperson_id).maybeSingle()
-      ;(quote as any).salesperson_name = sp ? (sp.display_name || sp.email) : null
+    // Resolve staff names (salesperson / assessed by / estimated by) for display.
+    const staffIds = [ (quote as any).salesperson_id, (quote as any).assessed_by, (quote as any).estimated_by ].filter(Boolean)
+    if (staffIds.length) {
+      const { data: profs } = await db.from('user_profiles').select('id, display_name, email').in('id', staffIds)
+      const nameById: Record<string, string> = {}
+      for (const p of profs || []) nameById[p.id] = p.display_name || p.email
+      ;(quote as any).salesperson_name = (quote as any).salesperson_id ? (nameById[(quote as any).salesperson_id] || null) : null
+      ;(quote as any).assessed_by_name = (quote as any).assessed_by ? (nameById[(quote as any).assessed_by] || null) : null
+      ;(quote as any).estimated_by_name = (quote as any).estimated_by ? (nameById[(quote as any).estimated_by] || null) : null
+    }
+    // Resolve the "invoice to 3rd party" customer's name for display.
+    if ((quote as any).third_party_customer_id) {
+      const { data: tp } = await db.from('workshop_customers').select('id, name').eq('id', (quote as any).third_party_customer_id).maybeSingle()
+      ;(quote as any).third_party_customer = tp || null
     }
     const { data: lines } = await db.from('workshop_quote_lines')
       .select('*').eq('quote_id', id).order('sort_order', { ascending: true })

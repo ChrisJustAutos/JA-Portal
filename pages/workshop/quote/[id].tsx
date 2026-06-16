@@ -36,6 +36,7 @@ export default function QuoteBuilderPage({ user }: { user: PortalUserSSR }) {
   const [err, setErr] = useState('')
   const [busy, setBusy] = useState(false)
   const [showEmail, setShowEmail] = useState(false)
+  const [moreOpen, setMoreOpen] = useState(false)
   const [staff, setStaff] = useState<Array<{ id: string; display_name: string | null; email: string }>>([])
   useEffect(() => { fetch('/api/workshop/users-lite').then(r => r.json()).then(d => setStaff(d.users || [])).catch(() => undefined) }, [])
   const confirmDialog = useConfirm()
@@ -81,6 +82,20 @@ export default function QuoteBuilderPage({ user }: { user: PortalUserSSR }) {
 
   async function patchQuote(patch: any) {
     const r = await fetch(`/api/workshop/quotes/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(patch) })
+    if (!r.ok) { setErr((await r.json()).error || 'Save failed'); return }
+    await load()
+  }
+  async function patchCustomer(patch: any) {
+    const cid = data?.quote?.customer_id
+    if (!cid) return
+    const r = await fetch(`/api/workshop/customers?id=${encodeURIComponent(cid)}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(patch) })
+    if (!r.ok) { setErr((await r.json()).error || 'Save failed'); return }
+    await load()
+  }
+  async function patchVehicle(patch: any) {
+    const vid = data?.quote?.vehicle_id
+    if (!vid) return
+    const r = await fetch(`/api/workshop/vehicles?id=${encodeURIComponent(vid)}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(patch) })
     if (!r.ok) { setErr((await r.json()).error || 'Save failed'); return }
     await load()
   }
@@ -234,6 +249,27 @@ export default function QuoteBuilderPage({ user }: { user: PortalUserSSR }) {
                       value={q.vehicle ? { id: q.vehicle.id, label: vehicleLabel(q.vehicle) } : null}
                       onPick={(v) => patchQuote({ vehicle_id: v?.id || null })} />
                   </div>
+                </div>
+
+                {/* More fields — MechanicDesk-parity quote / owner / vehicle detail */}
+                <div style={{ background: T.bg2, border: `1px solid ${T.border}`, borderRadius: 10, marginTop: 16, overflow: 'hidden' }}>
+                  <button onClick={() => setMoreOpen(o => !o)} style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 8, padding: '12px 16px', background: 'transparent', border: 'none', color: T.text, fontSize: 13, fontWeight: 600, fontFamily: 'inherit', cursor: 'pointer' }}>
+                    <span style={{ color: T.text3, transform: moreOpen ? 'rotate(90deg)' : 'none', transition: 'transform .15s' }}>▸</span>
+                    More fields
+                    <span style={{ fontSize: 11, color: T.text3, fontWeight: 400 }}>— quote details, owner, vehicle</span>
+                    {!moreOpen && <DetailSummary q={q} />}
+                  </button>
+                  {moreOpen && (
+                    <div style={{ padding: '4px 16px 16px', display: 'flex', flexDirection: 'column', gap: 18 }}>
+                      <QuoteDetailFields q={q} canEdit={canEdit} staff={staff} jobTypes={jobTypes} onPatch={patchQuote} />
+                      {q.customer_id
+                        ? <OwnerDetailFields c={q.customer} canEdit={canEdit} onPatch={patchCustomer} />
+                        : <Hint>Pick a customer above to edit owner details.</Hint>}
+                      {q.vehicle_id
+                        ? <VehicleDetailFields v={q.vehicle} canEdit={canEdit} onPatch={patchVehicle} />
+                        : <Hint>Pick a vehicle above to edit vehicle details.</Hint>}
+                    </div>
+                  )}
                 </div>
 
                 {/* Lines — same layout + selection as the job-card invoice */}
@@ -589,6 +625,149 @@ function EntityPicker({ label, kind, value, customerId, disabled, onPick }: {
 // which undid EntityPicker selections (see the matching comment in diary.tsx).
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return <div style={{ display: 'block' }}><div style={{ fontSize: 10, color: T.text3, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 4 }}>{label}</div>{children}</div>
+}
+
+// ── "More fields" helper UI (MechanicDesk-parity detail capture) ──────────
+function Hint({ children }: { children: React.ReactNode }) {
+  return <div style={{ fontSize: 11, color: T.text3, fontStyle: 'italic' }}>{children}</div>
+}
+function SubHead({ children }: { children: React.ReactNode }) {
+  return <div style={{ fontSize: 10, color: T.text2, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: 8, borderBottom: `1px solid ${T.border}`, paddingBottom: 5 }}>{children}</div>
+}
+const fieldGrid: React.CSSProperties = { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: 10 }
+function FL({ label, children, span }: { label: string; children: React.ReactNode; span?: number }) {
+  return <div style={{ gridColumn: span ? `span ${span}` : undefined, minWidth: 0 }}><div style={{ fontSize: 10, color: T.text3, fontWeight: 600, marginBottom: 3 }}>{label}</div>{children}</div>
+}
+
+// Text/number/date input that saves on blur only if the value changed.
+function PInput({ value, disabled, onSave, type = 'text', placeholder }: { value: any; disabled?: boolean; onSave: (v: any) => void; type?: string; placeholder?: string }) {
+  const [v, setV] = useState(value ?? '')
+  useEffect(() => { setV(value ?? '') }, [value])
+  return <input type={type} value={v} disabled={disabled} placeholder={placeholder} inputMode={type === 'number' ? 'decimal' : undefined}
+    onChange={e => setV(e.target.value)}
+    onBlur={() => { const nv = v === '' ? null : (type === 'number' ? (Number(v) || null) : v); if (nv !== (value ?? null)) onSave(nv) }}
+    style={inp} />
+}
+function PArea({ value, disabled, onSave, placeholder }: { value: any; disabled?: boolean; onSave: (v: any) => void; placeholder?: string }) {
+  const [v, setV] = useState(value ?? '')
+  useEffect(() => { setV(value ?? '') }, [value])
+  return <textarea value={v} disabled={disabled} placeholder={placeholder} rows={2} onChange={e => setV(e.target.value)} onBlur={() => { const nv = v === '' ? null : v; if ((nv ?? '') !== (value ?? '')) onSave(nv) }} style={{ ...inp, resize: 'vertical' }} />
+}
+function PSelect({ value, disabled, onSave, options, placeholder }: { value: any; disabled?: boolean; onSave: (v: any) => void; options: Array<{ value: string; label: string }>; placeholder?: string }) {
+  return <select value={value || ''} disabled={disabled} onChange={e => onSave(e.target.value || null)} style={inp}>
+    <option value="">{placeholder || '—'}</option>
+    {options.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+  </select>
+}
+// Free-form tag chips.
+function Chips({ value, disabled, onSave, placeholder }: { value: string[] | null; disabled?: boolean; onSave: (v: string[]) => void; placeholder?: string }) {
+  const tags = Array.isArray(value) ? value : []
+  const [draft, setDraft] = useState('')
+  function add() { const t = draft.trim(); if (!t || tags.includes(t)) { setDraft(''); return } onSave([...tags, t]); setDraft('') }
+  return (
+    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, alignItems: 'center', ...inp, height: 'auto', minHeight: 30, padding: 5 }}>
+      {tags.map(t => <span key={t} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, background: `${T.accent}22`, color: T.text, borderRadius: 4, padding: '2px 6px', fontSize: 11 }}>{t}{!disabled && <span onClick={() => onSave(tags.filter(x => x !== t))} style={{ cursor: 'pointer', color: T.text3 }}>×</span>}</span>)}
+      {!disabled && <input value={draft} onChange={e => setDraft(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' || e.key === ',') { e.preventDefault(); add() } }} onBlur={add} placeholder={tags.length ? '' : (placeholder || 'Add…')} style={{ flex: 1, minWidth: 60, border: 'none', outline: 'none', background: 'transparent', color: T.text, fontSize: 12, fontFamily: 'inherit' }} />}
+    </div>
+  )
+}
+// Multi-select of job-type presets (stores their names).
+function JobTypesMulti({ value, disabled, jobTypes, onSave }: { value: string[] | null; disabled?: boolean; jobTypes: any[]; onSave: (v: string[]) => void }) {
+  const sel = Array.isArray(value) ? value : []
+  const active = jobTypes.filter(t => t.active !== false)
+  return (
+    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, alignItems: 'center', ...inp, height: 'auto', minHeight: 30, padding: 5 }}>
+      {sel.map(n => <span key={n} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, background: `${T.teal}22`, color: T.text, borderRadius: 4, padding: '2px 6px', fontSize: 11 }}>{n}{!disabled && <span onClick={() => onSave(sel.filter(x => x !== n))} style={{ cursor: 'pointer', color: T.text3 }}>×</span>}</span>)}
+      {!disabled && (
+        <select value="" onChange={e => { const n = e.target.value; if (n && !sel.includes(n)) onSave([...sel, n]) }} style={{ flex: 1, minWidth: 90, border: 'none', outline: 'none', background: 'transparent', color: T.text3, fontSize: 12, fontFamily: 'inherit', cursor: 'pointer' }}>
+          <option value="">+ Add job type…</option>
+          {active.filter(t => !sel.includes(t.name)).map(t => <option key={t.id} value={t.name}>{t.name}</option>)}
+        </select>
+      )}
+    </div>
+  )
+}
+
+function DetailSummary({ q }: { q: any }) {
+  const bits: string[] = []
+  if (q.order_number) bits.push(`PO ${q.order_number}`)
+  if (Array.isArray(q.job_types) && q.job_types.length) bits.push(`${q.job_types.length} job type${q.job_types.length === 1 ? '' : 's'}`)
+  if (q.due_date) bits.push(`due ${q.due_date}`)
+  if (Array.isArray(q.tags) && q.tags.length) bits.push(q.tags.join(', '))
+  if (!bits.length) return null
+  return <span style={{ marginLeft: 'auto', fontSize: 11, color: T.text3, fontWeight: 400, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 360 }}>{bits.join(' · ')}</span>
+}
+
+function QuoteDetailFields({ q, canEdit, staff, jobTypes, onPatch }: { q: any; canEdit: boolean; staff: Array<{ id: string; display_name: string | null; email: string }>; jobTypes: any[]; onPatch: (p: any) => void }) {
+  const staffOpts = staff.map(s => ({ value: s.id, label: s.display_name || s.email }))
+  return (
+    <div>
+      <SubHead>Quote details</SubHead>
+      <div style={fieldGrid}>
+        <FL label="Type"><PSelect value={q.quote_type || 'quote'} disabled={!canEdit} onSave={v => onPatch({ quote_type: v })} options={[{ value: 'quote', label: 'Quote' }, { value: 'estimate', label: 'Estimate' }]} /></FL>
+        <FL label="Order number"><PInput value={q.order_number} disabled={!canEdit} onSave={v => onPatch({ order_number: v })} placeholder="Customer PO" /></FL>
+        <FL label="Issue date"><PInput type="date" value={q.issue_date} disabled={!canEdit} onSave={v => onPatch({ issue_date: v })} /></FL>
+        <FL label="Due date"><PInput type="date" value={q.due_date} disabled={!canEdit} onSave={v => onPatch({ due_date: v })} /></FL>
+        <FL label="Assessed by"><PSelect value={q.assessed_by} disabled={!canEdit} onSave={v => onPatch({ assessed_by: v })} options={staffOpts} placeholder="—" /></FL>
+        <FL label="Estimated by"><PSelect value={q.estimated_by} disabled={!canEdit} onSave={v => onPatch({ estimated_by: v })} options={staffOpts} placeholder="—" /></FL>
+        <FL label="Estimated work hours"><PInput type="number" value={q.estimated_hours} disabled={!canEdit} onSave={v => onPatch({ estimated_hours: v })} /></FL>
+        <FL label="Odometer"><PInput type="number" value={q.odometer} disabled={!canEdit} onSave={v => onPatch({ odometer: v })} /></FL>
+        <FL label="Driver name"><PInput value={q.driver_name} disabled={!canEdit} onSave={v => onPatch({ driver_name: v })} /></FL>
+        <FL label="Driver phone"><PInput value={q.driver_phone} disabled={!canEdit} onSave={v => onPatch({ driver_phone: v })} /></FL>
+        <FL label="Job types" span={2}><JobTypesMulti value={q.job_types} disabled={!canEdit} jobTypes={jobTypes} onSave={v => onPatch({ job_types: v })} /></FL>
+        <div style={{ gridColumn: 'span 2', minWidth: 0 }}>
+          <EntityPicker label="Invoice to 3rd party" kind="customer" disabled={!canEdit}
+            value={q.third_party_customer ? { id: q.third_party_customer.id, label: q.third_party_customer.name } : null}
+            onPick={v => onPatch({ third_party_customer_id: v?.id || null })} />
+        </div>
+        <FL label="Tags" span={2}><Chips value={q.tags} disabled={!canEdit} onSave={v => onPatch({ tags: v })} placeholder="Add tag…" /></FL>
+        <FL label="Short description" span={4}><PArea value={q.short_description} disabled={!canEdit} onSave={v => onPatch({ short_description: v })} placeholder="One-line summary for the quote" /></FL>
+      </div>
+    </div>
+  )
+}
+
+function OwnerDetailFields({ c, canEdit, onPatch }: { c: any; canEdit: boolean; onPatch: (p: any) => void }) {
+  const isCompany = c?.customer_type === 'company'
+  return (
+    <div>
+      <SubHead>Owner details</SubHead>
+      <div style={fieldGrid}>
+        <FL label="Name" span={2}><PInput value={c?.name} disabled={!canEdit} onSave={v => onPatch({ name: v })} /></FL>
+        <FL label="Type"><PSelect value={c?.customer_type || 'individual'} disabled={!canEdit} onSave={v => onPatch({ customer_type: v })} options={[{ value: 'individual', label: 'Individual' }, { value: 'company', label: 'Company' }]} /></FL>
+        {isCompany && <FL label="Company name"><PInput value={c?.company} disabled={!canEdit} onSave={v => onPatch({ company: v })} /></FL>}
+        <FL label="Mobile"><PInput value={c?.mobile} disabled={!canEdit} onSave={v => onPatch({ mobile: v })} /></FL>
+        <FL label="Phone"><PInput value={c?.phone} disabled={!canEdit} onSave={v => onPatch({ phone: v })} /></FL>
+        <FL label="Email" span={2}><PInput value={c?.email} disabled={!canEdit} onSave={v => onPatch({ email: v })} /></FL>
+        <FL label="Source of business"><PInput value={c?.source_of_business} disabled={!canEdit} onSave={v => onPatch({ source_of_business: v })} placeholder="e.g. Google, referral" /></FL>
+        <FL label="Street address" span={2}><PInput value={c?.address} disabled={!canEdit} onSave={v => onPatch({ address: v })} /></FL>
+        <FL label="Suburb"><PInput value={c?.address_suburb} disabled={!canEdit} onSave={v => onPatch({ address_suburb: v })} /></FL>
+        <FL label="State"><PInput value={c?.address_state} disabled={!canEdit} onSave={v => onPatch({ address_state: v })} placeholder="QLD" /></FL>
+        <FL label="Postcode"><PInput value={c?.address_postcode} disabled={!canEdit} onSave={v => onPatch({ address_postcode: v })} /></FL>
+      </div>
+    </div>
+  )
+}
+
+function VehicleDetailFields({ v, canEdit, onPatch }: { v: any; canEdit: boolean; onPatch: (p: any) => void }) {
+  return (
+    <div>
+      <SubHead>Vehicle details</SubHead>
+      <div style={fieldGrid}>
+        <FL label="Registration"><PInput value={v?.rego} disabled={!canEdit} onSave={x => onPatch({ rego: x })} /></FL>
+        <FL label="Rego state"><PInput value={v?.rego_state} disabled={!canEdit} onSave={x => onPatch({ rego_state: x })} placeholder="QLD" /></FL>
+        <FL label="Make"><PInput value={v?.make} disabled={!canEdit} onSave={x => onPatch({ make: x })} /></FL>
+        <FL label="Series"><PInput value={v?.series} disabled={!canEdit} onSave={x => onPatch({ series: x })} /></FL>
+        <FL label="Model"><PInput value={v?.model} disabled={!canEdit} onSave={x => onPatch({ model: x })} /></FL>
+        <FL label="Year"><PInput type="number" value={v?.year} disabled={!canEdit} onSave={x => onPatch({ year: x })} /></FL>
+        <FL label="Model code"><PInput value={v?.model_code} disabled={!canEdit} onSave={x => onPatch({ model_code: x })} /></FL>
+        <FL label="VIN" span={2}><PInput value={v?.vin} disabled={!canEdit} onSave={x => onPatch({ vin: x })} /></FL>
+        <FL label="Colour"><PInput value={v?.colour} disabled={!canEdit} onSave={x => onPatch({ colour: x })} /></FL>
+        <FL label="Engine"><PInput value={v?.engine} disabled={!canEdit} onSave={x => onPatch({ engine: x })} /></FL>
+        <FL label="Transmission"><PInput value={v?.transmission} disabled={!canEdit} onSave={x => onPatch({ transmission: x })} /></FL>
+      </div>
+    </div>
+  )
 }
 
 export async function getServerSideProps(context: any) {

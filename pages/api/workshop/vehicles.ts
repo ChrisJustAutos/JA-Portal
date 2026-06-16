@@ -125,6 +125,12 @@ export default withAuth('view:diary', async (req, res, user) => {
       odometer: odoNum && isFinite(odoNum) ? odoNum : null,
       notes: body.notes ? String(body.notes) : null,
       model_id: body.model_id || null,
+      // MechanicDesk-parity vehicle fields (migration 121)
+      rego_state: body.rego_state ? String(body.rego_state).trim().toUpperCase() : null,
+      series: body.series ? String(body.series) : null,
+      model_code: body.model_code ? String(body.model_code) : null,
+      engine: body.engine ? String(body.engine) : null,
+      transmission: body.transmission ? String(body.transmission) : null,
     }).select('id, rego, make, model, year, model_id').single()
     if (error) return res.status(500).json({ error: error.message })
     return res.status(201).json({ ok: true, vehicle: data })
@@ -148,6 +154,12 @@ export default withAuth('view:diary', async (req, res, user) => {
     if ('colour' in body) patch.colour = body.colour ? String(body.colour) : null
     if ('notes' in body) patch.notes = body.notes ? String(body.notes) : null
     if ('customer_id' in body) patch.customer_id = body.customer_id || null
+    // MechanicDesk-parity vehicle fields (migration 121)
+    if ('rego_state' in body) patch.rego_state = body.rego_state ? String(body.rego_state).trim().toUpperCase() : null
+    if ('series' in body) patch.series = body.series ? String(body.series) : null
+    if ('model_code' in body) patch.model_code = body.model_code ? String(body.model_code) : null
+    if ('engine' in body) patch.engine = body.engine ? String(body.engine) : null
+    if ('transmission' in body) patch.transmission = body.transmission ? String(body.transmission) : null
     // Service-due fields (086). Clearing a due date also cancels any pending
     // queued SMS for it so a stale reminder can't fire.
     const DATE_RE = /^\d{4}-\d{2}-\d{2}$/
