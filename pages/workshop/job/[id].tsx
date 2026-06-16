@@ -14,6 +14,7 @@ import WorkshopTabs from '../../../components/WorkshopTabs'
 import FilesPanel from '../../../components/workshop/FilesPanel'
 import TimeClockPanel from '../../../components/workshop/TimeClockPanel'
 import SendEmailModal from '../../../components/workshop/SendEmailModal'
+import MoreFields from '../../../components/workshop/DetailFields'
 import { requirePageAuth } from '../../../lib/authServer'
 import { roleHasPermission } from '../../../lib/permissions'
 import {
@@ -75,6 +76,8 @@ export default function JobCardPage({ user }: { user: PortalUserSSR }) {
   const [credit, setCredit] = useState<{ open: boolean; mode: 'lines' | 'amount'; sel: Record<string, boolean>; qty: Record<string, string>; amount: string; reason: string; restock: boolean; refund: boolean; tender: string; busy: boolean; msg: string }>({ open: false, mode: 'lines', sel: {}, qty: {}, amount: '', reason: '', restock: false, refund: false, tender: 'card', busy: false, msg: '' })
   const [jobTypes, setJobTypes] = useState<any[]>([])
   const [applyingJt, setApplyingJt] = useState(false)
+  const [staff, setStaff] = useState<Array<{ id: string; display_name: string | null; email: string }>>([])
+  useEffect(() => { fetch('/api/workshop/users-lite').then(r => r.json()).then(d => setStaff(d.users || [])).catch(() => undefined) }, [])
   const [tab, setTab] = useState<'invoice' | 'checklist' | 'notes' | 'files' | 'activity' | 'history'>('invoice')
   const [dueSet, setDueSet] = useState<{ open: boolean; service: string; km: string; rego: string; busy: boolean; msg: string }>({ open: false, service: '', km: '', rego: '', busy: false, msg: '' })
   const [internalNotes, setInternalNotes] = useState('')
@@ -128,6 +131,22 @@ export default function JobCardPage({ user }: { user: PortalUserSSR }) {
     const r = await fetch(`/api/workshop/bookings/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(patch) })
     if (!r.ok) { const d = await r.json(); setErr(d.error || 'Save failed'); return false }
     return true
+  }
+  // Detail-panel patches: save then reload so the panel reflects stored values.
+  async function patchBookingDetail(patch: any) { if (await patchBooking(patch)) await load() }
+  async function patchCustomer(patch: any) {
+    const cid = data?.booking?.customer_id
+    if (!cid) return
+    const r = await fetch(`/api/workshop/customers?id=${encodeURIComponent(cid)}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(patch) })
+    if (!r.ok) { setErr((await r.json()).error || 'Save failed'); return }
+    await load()
+  }
+  async function patchVehicle(patch: any) {
+    const vid = data?.booking?.vehicle_id
+    if (!vid) return
+    const r = await fetch(`/api/workshop/vehicles?id=${encodeURIComponent(vid)}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(patch) })
+    if (!r.ok) { setErr((await r.json()).error || 'Save failed'); return }
+    await load()
   }
 
   async function changeStatus(status: BookingStatus) {
@@ -453,6 +472,12 @@ export default function JobCardPage({ user }: { user: PortalUserSSR }) {
                       </select>
                     )}
                   </div>
+                </div>
+
+                {/* More fields — MechanicDesk-parity job / owner / vehicle detail */}
+                <div style={{ marginTop: 12 }}>
+                  <MoreFields kind="booking" record={b} canEdit={canEdit} staff={staff} jobTypes={jobTypes}
+                    onPatchRecord={patchBookingDetail} onPatchCustomer={patchCustomer} onPatchVehicle={patchVehicle} />
                 </div>
 
                 {/* Quick status actions — the active stage is filled in. */}

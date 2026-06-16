@@ -21,6 +21,8 @@ function sb() {
 const EDITABLE = [
   'starts_at', 'ends_at', 'technician_ext', 'span_techs', 'bay', 'service_type', 'notes', 'customer_id', 'vehicle_id',
   'job_type', 'description', 'internal_notes', 'estimated_value', 'odometer', 'summary', 'is_overdue', 'pickup_at', 'checklist',
+  // MechanicDesk-parity job detail fields (migration 121)
+  'third_party_customer_id', 'job_types', 'assessed_by', 'estimated_hours', 'estimated_by', 'order_number', 'driver_name', 'driver_phone', 'tags',
 ] as const
 
 export default withAuth('view:diary', async (req, res, user) => {
@@ -36,6 +38,20 @@ export default withAuth('view:diary', async (req, res, user) => {
       .maybeSingle()
     if (error) return res.status(500).json({ error: error.message })
     if (!booking) return res.status(404).json({ error: 'not_found' })
+
+    // Resolve staff names (assessed by / estimated by) + 3rd-party payer for display.
+    const staffIds = [ (booking as any).assessed_by, (booking as any).estimated_by ].filter(Boolean)
+    if (staffIds.length) {
+      const { data: profs } = await db.from('user_profiles').select('id, display_name, email').in('id', staffIds)
+      const nameById: Record<string, string> = {}
+      for (const p of profs || []) nameById[p.id] = p.display_name || p.email
+      ;(booking as any).assessed_by_name = (booking as any).assessed_by ? (nameById[(booking as any).assessed_by] || null) : null
+      ;(booking as any).estimated_by_name = (booking as any).estimated_by ? (nameById[(booking as any).estimated_by] || null) : null
+    }
+    if ((booking as any).third_party_customer_id) {
+      const { data: tp } = await db.from('workshop_customers').select('id, name').eq('id', (booking as any).third_party_customer_id).maybeSingle()
+      ;(booking as any).third_party_customer = tp || null
+    }
 
     const { data: lines } = await db
       .from('workshop_booking_lines')
