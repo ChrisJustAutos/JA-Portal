@@ -105,7 +105,8 @@ export default function InvoiceDetailPage({ user }: { user: PortalUserSSR }) {
                       {[inv.customer?.mobile, inv.customer?.phone, inv.customer?.email].filter(Boolean).join(' · ') || '—'}
                     </div>
                     <div style={{ fontSize:11, color:T.text3, marginTop:8, fontFamily:'monospace' }}>
-                      Issued {fmtDate(inv.created_at)}{inv.due_date ? ` · Due ${fmtDate(inv.due_date)}` : ''}
+                      Issued {fmtDate(inv.issue_date || inv.created_at)}{inv.due_date ? ` · Due ${fmtDate(inv.due_date)}` : ''}
+                      {inv.order_number ? ` · PO ${inv.order_number}` : ''}
                       {inv.myob_invoice_uid && ' · MYOB linked'}
                     </div>
                   </div>

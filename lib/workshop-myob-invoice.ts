@@ -203,7 +203,7 @@ export async function createJobInvoiceInMyob(bookingId: string, performedBy: str
 
   const { data: booking, error: bErr } = await c
     .from('workshop_bookings')
-    .select('id, status, customer_id, description, myob_invoice_uid, customer:workshop_customers(id, name, myob_uid)')
+    .select('id, status, customer_id, description, myob_invoice_uid, order_number, third_party_customer_id, customer:workshop_customers(id, name, myob_uid)')
     .eq('id', bookingId)
     .maybeSingle()
   if (bErr) throw new Error(`Job load failed: ${bErr.message}`)
@@ -300,6 +300,8 @@ export async function createJobInvoiceInMyob(bookingId: string, performedBy: str
     Comment: String((booking as any).description || `Workshop job ${bookingId} — via JA Portal`).substring(0, 255),
     JournalMemo: `Workshop job ${bookingId}`.substring(0, 255),
   }
+  // Customer PO / order number → shows on the MYOB sale + the printed invoice.
+  if ((booking as any).order_number) body.CustomerPurchaseOrderNumber = String((booking as any).order_number).substring(0, 255)
   if (settings.tracking_category_uid) body.Category = { UID: settings.tracking_category_uid }
 
   const result = await myobFetch(conn.id, path, { method: 'POST', body, performedBy })
@@ -334,6 +336,10 @@ export async function createJobInvoiceInMyob(bookingId: string, performedBy: str
     myob_invoice_uid: uid,
     status: mode === 'order' ? 'pending' : 'sent',
     subtotal, gst: totalTax, total: totalAmount,
+    // MechanicDesk-parity invoice fields (migration 121) — carried from the job.
+    issue_date: today,
+    order_number: (booking as any).order_number || null,
+    third_party_customer_id: (booking as any).third_party_customer_id || null,
   })
 
   // Deduct part stock locally (movement-ledger backed; idempotent). MYOB

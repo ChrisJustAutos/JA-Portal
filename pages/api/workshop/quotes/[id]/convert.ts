@@ -33,7 +33,9 @@ export default withAuth('view:diary', async (req, res, user) => {
   const db = sb()
 
   const { data: quote, error: qErr } = await db.from('workshop_quotes')
-    .select('id, customer_id, vehicle_id, total, notes, status').eq('id', id).maybeSingle()
+    .select(`id, customer_id, vehicle_id, total, notes, status, short_description, odometer,
+             order_number, driver_name, driver_phone, job_types, assessed_by, estimated_by,
+             estimated_hours, third_party_customer_id, tags`).eq('id', id).maybeSingle()
   if (qErr) return res.status(500).json({ error: qErr.message })
   if (!quote) return res.status(404).json({ error: 'not_found' })
 
@@ -52,9 +54,20 @@ export default withAuth('view:diary', async (req, res, user) => {
     ends_at: end.toISOString(),
     status: 'booking',
     job_type: 'general_service',
-    description: quote.notes ? String(quote.notes) : 'From quote',
+    description: (quote as any).short_description || (quote.notes ? String(quote.notes) : 'From quote'),
     estimated_value: quote.total || null,
     created_by: user.id,
+    // Carry the MechanicDesk-parity detail fields through to the job.
+    odometer: (quote as any).odometer ?? null,
+    order_number: (quote as any).order_number ?? null,
+    driver_name: (quote as any).driver_name ?? null,
+    driver_phone: (quote as any).driver_phone ?? null,
+    job_types: (quote as any).job_types ?? null,
+    assessed_by: (quote as any).assessed_by ?? null,
+    estimated_by: (quote as any).estimated_by ?? null,
+    estimated_hours: (quote as any).estimated_hours ?? null,
+    third_party_customer_id: (quote as any).third_party_customer_id ?? null,
+    tags: (quote as any).tags ?? null,
   }).select('id').single()
   if (bErr) return res.status(500).json({ error: bErr.message })
 
