@@ -8,6 +8,7 @@ import Head from 'next/head'
 import PortalTopBar from '../../../lib/PortalTopBar'
 import B2BAdminTabs from '../../../components/b2b/B2BAdminTabs'
 import { requirePageAuth } from '../../../lib/authServer'
+import { useConfirm } from '../../../components/ui/Feedback'
 import { computeReorder, monthsInRange, ReorderItem, ReorderSettings } from '../../../lib/b2b-reorder'
 
 const T = {
@@ -47,6 +48,11 @@ export default function StockReorderPage({ user }: { user: any }) {
   const [addQ, setAddQ] = useState('')
   const [addResults, setAddResults] = useState<Array<{ sku: string; name: string }>>([])
   const syncTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const confirmDialog = useConfirm()
+  // Multi-select + bulk edit/delete.
+  const [selected, setSelected] = useState<Set<string>>(new Set())
+  const [bulk, setBulk] = useState<{ moq: string; morgans: string; notes: string }>({ moq: '', morgans: '', notes: '' })
+  const [bulkBusy, setBulkBusy] = useState(false)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -82,7 +88,41 @@ export default function StockReorderPage({ user }: { user: any }) {
   }
   async function removeItem(id: string) {
     setItems(prev => prev.filter(i => i.id !== id))
+    setSelected(prev => { const n = new Set(prev); n.delete(id); return n })
     await fetch(`/api/b2b/admin/reorder/${id}`, { method: 'DELETE' })
+  }
+  function toggleSel(id: string) { setSelected(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n }) }
+  async function bulkApply() {
+    const ids = Array.from(selected)
+    if (!ids.length) return
+    const patch: any = {}
+    if (bulk.moq.trim() !== '') patch.moq = bulk.moq.trim()
+    if (bulk.morgans.trim() !== '') patch.morgans_judgment = bulk.morgans.trim()
+    if (bulk.notes.trim() !== '') patch.notes = bulk.notes
+    if (!Object.keys(patch).length) { setMsg('Enter a value (MOQ, Morgan’s or Notes) to apply.'); return }
+    setBulkBusy(true)
+    try {
+      const r = await fetch('/api/b2b/admin/reorder/bulk', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'update', ids, patch }) })
+      const d = await r.json()
+      if (!r.ok) { setMsg(d.error || 'Bulk update failed'); return }
+      setMsg(`Updated ${d.updated} item(s).`)
+      setBulk({ moq: '', morgans: '', notes: '' })
+      await load()
+    } finally { setBulkBusy(false) }
+  }
+  async function bulkDelete() {
+    const ids = Array.from(selected)
+    if (!ids.length) return
+    if (!(await confirmDialog({ title: `Remove ${ids.length} item${ids.length === 1 ? '' : 's'} from the stock order sheet?`, confirmLabel: 'Remove', danger: true }))) return
+    setBulkBusy(true)
+    try {
+      const r = await fetch('/api/b2b/admin/reorder/bulk', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'delete', ids }) })
+      const d = await r.json()
+      if (!r.ok) { setMsg(d.error || 'Bulk delete failed'); return }
+      setMsg(`Removed ${d.deleted} item(s).`)
+      setSelected(new Set())
+      await load()
+    } finally { setBulkBusy(false) }
   }
   async function sync() {
     setSyncing(true); setMsg('Pulling stock + sales from MYOB…')
@@ -109,6 +149,16 @@ export default function StockReorderPage({ user }: { user: any }) {
 
   const needle = q.trim().toLowerCase()
   const shown = needle ? items.filter(i => `${i.sku} ${i.name || ''}`.toLowerCase().includes(needle)) : items
+  const allShownSelected = shown.length > 0 && shown.every(i => selected.has(i.id))
+  function toggleAll() {
+    setSelected(prev => {
+      const n = new Set(prev)
+      if (shown.length && shown.every(i => prev.has(i.id))) shown.forEach(i => n.delete(i.id))
+      else shown.forEach(i => n.add(i.id))
+      return n
+    })
+  }
+  const GRID_SEL = `30px ${GRID}`
   const Th = (label: string, right?: boolean, title?: string) => <div title={title} style={{ textAlign: right ? 'right' : 'left' }}>{label}</div>
 
   return (
@@ -156,10 +206,27 @@ export default function StockReorderPage({ user }: { user: any }) {
 
           {msg && <div style={{ fontSize: 12, color: T.text2, marginBottom: 10 }}>{msg}</div>}
 
+          {/* Bulk edit / delete bar — appears when rows are selected */}
+          {selected.size > 0 && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', background: `${T.blue}14`, border: `1px solid ${T.blue}44`, borderRadius: 8, padding: '10px 12px', marginBottom: 12 }}>
+              <span style={{ fontSize: 12, fontWeight: 700 }}>{selected.size} selected</span>
+              <span style={{ width: 1, height: 18, background: T.border }} />
+              <label style={{ fontSize: 11, color: T.text3 }}>MOQ <input value={bulk.moq} onChange={e => setBulk(b => ({ ...b, moq: e.target.value }))} inputMode="numeric" placeholder="—" style={{ ...inp, width: 60, marginLeft: 4, textAlign: 'right' }} /></label>
+              <label style={{ fontSize: 11, color: T.text3 }}>Morgan’s <input value={bulk.morgans} onChange={e => setBulk(b => ({ ...b, morgans: e.target.value }))} inputMode="numeric" placeholder="—" style={{ ...inp, width: 60, marginLeft: 4, textAlign: 'right' }} /></label>
+              <label style={{ fontSize: 11, color: T.text3 }}>Notes <input value={bulk.notes} onChange={e => setBulk(b => ({ ...b, notes: e.target.value }))} placeholder="—" style={{ ...inp, width: 200, marginLeft: 4 }} /></label>
+              <button onClick={bulkApply} disabled={bulkBusy} style={btn(T.blue, true)}>{bulkBusy ? 'Applying…' : 'Apply to selected'}</button>
+              <span style={{ fontSize: 10, color: T.text3 }}>blank = unchanged</span>
+              <div style={{ flex: 1 }} />
+              <button onClick={bulkDelete} disabled={bulkBusy} style={btn(T.red)}>🗑 Delete selected</button>
+              <button onClick={() => setSelected(new Set())} style={btn(T.text3)}>Clear</button>
+            </div>
+          )}
+
           {/* Sheet */}
           <div style={{ background: T.bg2, border: `1px solid ${T.border}`, borderRadius: 10, overflowX: 'auto' }}>
             <div style={{ minWidth: 1280 }}>
-              <div style={{ display: 'grid', gridTemplateColumns: GRID, gap: 6, padding: '8px 12px', background: T.bg3, borderBottom: `1px solid ${T.border}`, fontSize: 8.5, color: T.text3, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.03em', alignItems: 'end' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: GRID_SEL, gap: 6, padding: '8px 12px', background: T.bg3, borderBottom: `1px solid ${T.border}`, fontSize: 8.5, color: T.text3, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.03em', alignItems: 'end' }}>
+                <div><input type="checkbox" title="Select all" checked={allShownSelected} onChange={toggleAll} style={{ cursor: 'pointer' }} /></div>
                 {Th('Stock No.')}{Th('Name')}{Th('On hand', true)}{Th('Cmtd', true, 'Committed')}{Th('Avail', true, 'Available = on hand − committed')}{Th('On ord', true, 'On order')}{Th(`Sales ${months}mo`, true, 'Total units sold over the date range')}{Th('Avg/mo', true)}{Th('Round', true, 'Monthly round up')}{Th('+Grow', true, 'With growth %')}{Th('Proj', true, `Projected demand over ${settings.forecast_months} months`)}{Th('Short', true, 'Shortfall = projected − (available + on order)')}{Th('Suggested', true)}{Th('MOQ', true)}{Th("Morgan's", true, "Manual override")}{Th('Final', true)}{Th('Notes')}
               </div>
               {loading ? (
@@ -168,8 +235,10 @@ export default function StockReorderPage({ user }: { user: any }) {
                 <div style={{ padding: 30, textAlign: 'center', color: T.text3, fontSize: 12 }}>No items{q ? ' match' : ' yet — “+ Add item”, then “↻ Sync MYOB”'}.</div>
               ) : shown.map(it => {
                 const c = computeReorder(it, settings, months)
+                const sel = selected.has(it.id)
                 return (
-                  <div key={it.id} style={{ display: 'grid', gridTemplateColumns: GRID, gap: 6, padding: '6px 12px', borderTop: `1px solid ${T.border}`, alignItems: 'center', fontSize: 12 }}>
+                  <div key={it.id} style={{ display: 'grid', gridTemplateColumns: GRID_SEL, gap: 6, padding: '6px 12px', borderTop: `1px solid ${T.border}`, alignItems: 'center', fontSize: 12, background: sel ? `${T.blue}12` : 'transparent' }}>
+                    <div><input type="checkbox" checked={sel} onChange={() => toggleSel(it.id)} style={{ cursor: 'pointer' }} /></div>
                     <div style={{ fontFamily: 'monospace', color: T.text2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{it.sku}</div>
                     <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{it.name || '—'}</div>
                     <div style={{ textAlign: 'right', fontFamily: 'monospace', color: T.text2 }}>{num(it.on_hand)}</div>
