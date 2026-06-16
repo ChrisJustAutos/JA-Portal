@@ -293,6 +293,50 @@ export async function listMessagesWithAttachments(
   return all.filter(m => m.hasAttachments).slice(0, wanted)
 }
 
+/**
+ * List messages across the ENTIRE mailbox (all folders, not just Inbox)
+ * received on/after `sinceIsoDate`. Used by the quote backfill so we catch
+ * messages that an Outlook rule has filed into a subfolder (e.g. "Quotes
+ * Sent") and which therefore never appeared in the Inbox.
+ *
+ * Filters on a single indexed property (receivedDateTime) + sorts on the
+ * same property — the canonical pattern that avoids Graph's
+ * "InefficientFilter" error. hasAttachments is filtered client-side.
+ * Follows @odata.nextLink up to `maxPages` pages.
+ */
+export async function listAllMessagesWithAttachments(
+  mailbox: string,
+  opts: { sinceIsoDate: string; maxPages?: number },
+): Promise<GraphMessageSummary[]> {
+  const maxPages = Math.min(Math.max(opts.maxPages || 10, 1), 25)
+  const params = new URLSearchParams({
+    '$select':  'id,subject,from,receivedDateTime,hasAttachments',
+    '$filter':  `receivedDateTime ge ${opts.sinceIsoDate}`,
+    '$orderby': 'receivedDateTime desc',
+    '$top':     '100',
+  })
+  let next: string | null = `/users/${encodeURIComponent(mailbox)}/messages?${params.toString()}`
+
+  const out: GraphMessageSummary[] = []
+  let page = 0
+  while (next && page < maxPages) {
+    const data: { value: any[]; '@odata.nextLink'?: string } = await graphJson(next)
+    for (const m of data.value || []) {
+      if (!m.hasAttachments) continue
+      out.push({
+        id: m.id,
+        subject: m.subject || null,
+        from: m.from?.emailAddress?.address || null,
+        receivedDateTime: m.receivedDateTime,
+        hasAttachments: true,
+      })
+    }
+    next = data['@odata.nextLink'] || null
+    page++
+  }
+  return out
+}
+
 // ── Mailbox write operations ────────────────────────────────────────────
 
 /**

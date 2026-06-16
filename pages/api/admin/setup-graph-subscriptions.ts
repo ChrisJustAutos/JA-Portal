@@ -26,6 +26,8 @@ import {
   generateClientState,
   insertSubscriptionRow,
   listActiveSubscriptions,
+  deleteSubscription,
+  markSubscriptionDeleted,
 } from '../../../lib/microsoft-graph'
 
 export const config = {
@@ -80,11 +82,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const results: SetupResult[] = []
 
   // ── Pipeline A — rep mailboxes ──────────────────────────────────────
+  // Watches the WHOLE mailbox (all folders), not just the Inbox, so quote
+  // emails an Outlook rule files into a subfolder (e.g. "Quotes Sent") still
+  // trigger a notification. The performance-estimate filename filter in the
+  // webhook gates what actually gets processed.
   const repMailboxes = Object.keys(AGENTS_BY_MAILBOX)
   for (const mailbox of repMailboxes) {
     const result = await ensureSubscription({
       mailbox,
       notificationUrl: pipelineAUrl,
+      resource: wholeMailboxResource(mailbox),
       existingByKey,
       pipeline: 'A',
     })
@@ -92,10 +99,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   // ── Pipeline C — Chris's mailbox for WIP report ─────────────────────
+  // The nightly WIP report lands in the Inbox, so Inbox-only is fine here.
   if (pipelineCConfigured) {
     const result = await ensureSubscription({
       mailbox: jobReportMailbox!,
       notificationUrl: pipelineCUrl!,
+      resource: inboxResource(jobReportMailbox!),
       existingByKey,
       pipeline: 'C',
     })
@@ -124,9 +133,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   })
 }
 
+function wholeMailboxResource(mailbox: string): string {
+  return `users/${encodeURIComponent(mailbox)}/messages`
+}
+function inboxResource(mailbox: string): string {
+  return `users/${encodeURIComponent(mailbox)}/mailFolders('Inbox')/messages`
+}
+
 async function ensureSubscription(input: {
   mailbox: string
   notificationUrl: string
+  resource: string
   existingByKey: Map<string, any>
   pipeline: 'A' | 'C'
 }): Promise<SetupResult> {
@@ -134,18 +151,34 @@ async function ensureSubscription(input: {
   const existing = input.existingByKey.get(key)
 
   if (existing) {
-    return {
-      pipeline: input.pipeline,
-      mailbox: input.mailbox,
-      status: 'skipped',
-      subscriptionId: existing.subscription_id,
-      expiresAt: existing.expiration_date_time,
-      reason: 'active subscription already exists',
+    // Already pointed at the desired resource — nothing to do.
+    if (existing.resource === input.resource) {
+      return {
+        pipeline: input.pipeline,
+        mailbox: input.mailbox,
+        status: 'skipped',
+        subscriptionId: existing.subscription_id,
+        expiresAt: existing.expiration_date_time,
+        reason: 'active subscription already exists',
+      }
+    }
+    // Resource changed (e.g. Inbox-only → whole mailbox): tear down the old
+    // subscription on Graph + mark it deleted, then fall through to recreate.
+    try {
+      await deleteSubscription(existing.subscription_id)
+      await markSubscriptionDeleted(existing.id)
+    } catch (e: any) {
+      return {
+        pipeline: input.pipeline,
+        mailbox: input.mailbox,
+        status: 'failed',
+        reason: `failed to delete stale subscription (${existing.resource}): ${e?.message || String(e)}`,
+      }
     }
   }
 
   try {
-    const resource = `users/${encodeURIComponent(input.mailbox)}/mailFolders('Inbox')/messages`
+    const resource = input.resource
     const clientState = generateClientState()
 
     const sub = await createSubscription({
