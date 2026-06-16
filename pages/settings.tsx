@@ -586,6 +586,81 @@ function ProfileTab({ user }: { user: PortalUserSSR }) {
     </div>
 
     <TwoFactorCard/>
+    <ClaudeConnectorCard/>
+  </div>
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// CLAUDE CONNECTOR — per-user MCP tokens (Settings → My Profile)
+// ═══════════════════════════════════════════════════════════════════
+function ClaudeConnectorCard() {
+  const [tokens, setTokens] = useState<Array<{ id: string; label: string | null; token_prefix: string; created_at: string; last_used_at: string | null }>>([])
+  const [loading, setLoading] = useState(true)
+  const [label, setLabel] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [fresh, setFresh] = useState<string | null>(null)
+  const [err, setErr] = useState('')
+  const MCP_URL = 'https://justautos.app/api/mcp'
+
+  async function load() {
+    setLoading(true)
+    try { const r = await fetch('/api/mcp/tokens'); const d = await r.json(); if (r.ok) setTokens(d.tokens || []) } finally { setLoading(false) }
+  }
+  useEffect(() => { load() }, [])
+
+  async function create() {
+    setBusy(true); setErr(''); setFresh(null)
+    try {
+      const r = await fetch('/api/mcp/tokens', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ label: label.trim() || null }) })
+      const d = await r.json()
+      if (!r.ok) { setErr(d.error || 'Failed'); return }
+      setFresh(d.token); setLabel(''); await load()
+    } finally { setBusy(false) }
+  }
+  async function revoke(id: string) {
+    await fetch(`/api/mcp/tokens?id=${encodeURIComponent(id)}`, { method: 'DELETE' })
+    setTokens(prev => prev.filter(t => t.id !== id))
+  }
+  const cmd = (token: string) => `claude mcp add --transport http ja-portal ${MCP_URL} --header "Authorization: Bearer ${token}"`
+  const inpStyle: React.CSSProperties = { flex: 1, background: T.bg3, border: `1px solid ${T.border}`, color: T.text, borderRadius: 4, padding: '7px 10px', fontSize: 12, outline: 'none', boxSizing: 'border-box', fontFamily: 'inherit' }
+
+  return <div style={{ background: T.bg2, border: `1px solid ${T.border}`, borderRadius: 10, padding: 18 }}>
+    <div style={{ fontSize: 13, fontWeight: 600, color: T.text, marginBottom: 6 }}>Claude connector</div>
+    <div style={{ fontSize: 11, color: T.text3, marginBottom: 14, lineHeight: 1.5 }}>
+      Query the portal from Claude Desktop / Claude Code — calls &amp; coaching, customers &amp; vehicles, quotes, jobs and sales, scoped to your role. Generate a token, then add the connector in Claude (the token is shown once).
+    </div>
+
+    {fresh && (
+      <div style={{ background: `${T.green}14`, border: `1px solid ${T.green}55`, borderRadius: 8, padding: 12, marginBottom: 14 }}>
+        <div style={{ fontSize: 11, color: T.green, fontWeight: 700, marginBottom: 6 }}>New token — copy it now, it won’t be shown again</div>
+        <code style={{ display: 'block', fontSize: 11, wordBreak: 'break-all', color: T.text, background: T.bg3, padding: 8, borderRadius: 5, marginBottom: 8 }}>{fresh}</code>
+        <div style={{ fontSize: 10, color: T.text3, marginBottom: 4 }}>Add to Claude Code (terminal):</div>
+        <code style={{ display: 'block', fontSize: 11, wordBreak: 'break-all', color: T.text3, background: T.bg3, padding: 8, borderRadius: 5 }}>{cmd(fresh)}</code>
+        <button onClick={() => { navigator.clipboard?.writeText(cmd(fresh)).catch(() => {}) }} style={{ marginTop: 8, padding: '5px 12px', borderRadius: 5, border: `1px solid ${T.border}`, background: 'transparent', color: T.blue, fontSize: 11, cursor: 'pointer', fontFamily: 'inherit', fontWeight: 600 }}>Copy command</button>
+      </div>
+    )}
+
+    <div style={{ display: 'flex', gap: 8, marginBottom: 14 }}>
+      <input value={label} onChange={e => setLabel(e.target.value)} placeholder="Label (e.g. My laptop)" style={inpStyle} />
+      <button onClick={create} disabled={busy} style={{ padding: '7px 16px', borderRadius: 4, border: 'none', background: busy ? T.bg4 : T.blue, color: '#fff', fontSize: 12, cursor: busy ? 'wait' : 'pointer', fontFamily: 'inherit', fontWeight: 600 }}>{busy ? 'Generating…' : 'Generate token'}</button>
+    </div>
+    {err && <div style={{ color: T.red, fontSize: 12, marginBottom: 10 }}>{err}</div>}
+
+    {loading ? <div style={{ fontSize: 12, color: T.text3 }}>Loading…</div> : tokens.length === 0 ? (
+      <div style={{ fontSize: 12, color: T.text3 }}>No tokens yet.</div>
+    ) : (
+      <div style={{ display: 'flex', flexDirection: 'column' }}>
+        {tokens.map(t => (
+          <div key={t.id} style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 12, padding: '7px 0', borderTop: `1px solid ${T.border}` }}>
+            <code style={{ color: T.text3 }}>{t.token_prefix}…</code>
+            <span style={{ color: T.text }}>{t.label || '—'}</span>
+            <span style={{ color: T.text3, fontSize: 11 }}>{t.last_used_at ? `used ${new Date(t.last_used_at).toLocaleDateString()}` : 'never used'}</span>
+            <div style={{ flex: 1 }} />
+            <button onClick={() => revoke(t.id)} style={{ padding: '4px 10px', borderRadius: 4, border: `1px solid ${T.red}55`, background: 'transparent', color: T.red, fontSize: 11, cursor: 'pointer', fontFamily: 'inherit' }}>Revoke</button>
+          </div>
+        ))}
+      </div>
+    )}
   </div>
 }
 

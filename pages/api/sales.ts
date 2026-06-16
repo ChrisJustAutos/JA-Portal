@@ -288,29 +288,36 @@ async function getDistributorBookings(startDate: string, endDate: string) {
   return { byDistributor, byStatus, byPerson, mtdByDist, mtdByPerson, total, mtdTotal }
 }
 
+// Shared aggregation — used by this route AND the MCP connector's get_sales tool.
+export async function fetchSalesSummary(startDate: string, endDate: string, forceRefresh = false) {
+  if (!MONDAY_TOKEN) throw new Error('MONDAY_API_TOKEN not configured')
+  const cacheKey = `sales:v5:${startDate}:${endDate}`
+  if (!forceRefresh) { const cached = getCached(cacheKey); if (cached) return cached }
+
+  const [ordersData, distData, ...rest] = await Promise.all([
+    safe(() => getOrdersMonthly(startDate, endDate)),
+    safe(() => getDistributorBookings(startDate, endDate)),
+    ...QUOTE_BOARDS.map(b => safe(() => getQuoteBoardStats(b.id, startDate, endDate).then(stats => ({ rep: b.rep, full: b.full, id: b.id, ...stats })))),
+    ...QUOTE_BOARDS.map(b => safe(() => getActiveLeads(b))),
+  ])
+
+  // Split rest into quote stats and active leads
+  const quoteResults = rest.slice(0, QUOTE_BOARDS.length).filter(Boolean)
+  const leadsArrays = rest.slice(QUOTE_BOARDS.length).filter(Boolean)
+  const activeLeads = ([] as any[]).concat(...leadsArrays)
+
+  const result = { fetchedAt: new Date().toISOString(), period: { startDate, endDate }, orders: ordersData, distributors: distData, quotes: quoteResults, activeLeads }
+  setCache(cacheKey, result)
+  return result
+}
+
 export default function handler(req: NextApiRequest, res: NextApiResponse) {
   return requireAuth(req, res, async () => {
-    if (!MONDAY_TOKEN) return res.status(500).json({ error: 'MONDAY_API_TOKEN not configured' })
-    const startDate = (req.query.startDate as string) || '2025-07-01'
-    const endDate = (req.query.endDate as string) || '2026-06-30'
-    const forceRefresh = req.query.refresh === 'true'
-    const cacheKey = `sales:v5:${startDate}:${endDate}`
-    if (!forceRefresh) { const cached = getCached(cacheKey); if (cached) return res.status(200).json(cached) }
-
-    const [ordersData, distData, ...rest] = await Promise.all([
-      safe(() => getOrdersMonthly(startDate, endDate)),
-      safe(() => getDistributorBookings(startDate, endDate)),
-      ...QUOTE_BOARDS.map(b => safe(() => getQuoteBoardStats(b.id, startDate, endDate).then(stats => ({ rep: b.rep, full: b.full, id: b.id, ...stats })))),
-      ...QUOTE_BOARDS.map(b => safe(() => getActiveLeads(b))),
-    ])
-
-    // Split rest into quote stats and active leads
-    const quoteResults = rest.slice(0, QUOTE_BOARDS.length).filter(Boolean)
-    const leadsArrays = rest.slice(QUOTE_BOARDS.length).filter(Boolean)
-    const activeLeads = ([] as any[]).concat(...leadsArrays)
-
-    const result = { fetchedAt: new Date().toISOString(), period: { startDate, endDate }, orders: ordersData, distributors: distData, quotes: quoteResults, activeLeads }
-    setCache(cacheKey, result)
-    res.status(200).json(result)
+    try {
+      const startDate = (req.query.startDate as string) || '2025-07-01'
+      const endDate = (req.query.endDate as string) || '2026-06-30'
+      const result = await fetchSalesSummary(startDate, endDate, req.query.refresh === 'true')
+      res.status(200).json(result)
+    } catch (e: any) { res.status(500).json({ error: e?.message || 'Sales failed' }) }
   })
 }
