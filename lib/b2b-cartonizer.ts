@@ -14,6 +14,9 @@
 //   3. Pallets: ceil(totalWeight / pallet.max_weight_g) pallets, weight shared.
 //   4. Cartons: first-fit-decreasing by weight into the smallest box that fits
 //      the largest item; an item too big for any box ships on its own.
+//        - packaging='other' means the item is ALREADY BOXED — it ships at its
+//          own dimensions (one carton per unit) and is never packed into a
+//          standard box, regardless of whether it would fit.
 //
 // Returns null when there's no usable box config (caller should fall back to
 // its previous one-carton-per-line behaviour so quoting never breaks).
@@ -127,8 +130,10 @@ export function packItems(
 
   const out: PackedUnit[] = []
 
-  // Items that fit no box ship individually with their own dims.
-  const oversized = units.filter(u => !boxes.some(b => fitsBox(u.item, b)))
+  // Items that ship individually at their own dims: already-boxed items
+  // (packaging='other') always, plus anything that fits no configured box.
+  const shipsAlone = (u: Unit) => u.item.packaging === 'other' || !boxes.some(b => fitsBox(u.item, b))
+  const oversized = units.filter(shipsAlone)
   for (const u of oversized) {
     out.push({
       itemType: 'Carton', name: u.item.name.slice(0, 60) || u.item.sku, quantity: 1, weight_g: u.weight_g,
@@ -145,7 +150,7 @@ export function packItems(
   const itemVol = (u: { item: PackInputItem }) =>
     (u.item.length_mm || 0) * (u.item.width_mm || 0) * (u.item.height_mm || 0)
 
-  const boxable = units.filter(u => boxes.some(b => fitsBox(u.item, b)))
+  const boxable = units.filter(u => !shipsAlone(u))
   const byVolAsc = [...boxes].sort((a, b) => boxVolume(a) - boxVolume(b))
   type Bin = { box: FreightBox; usedW: number; usedV: number }
   const bins: Bin[] = []

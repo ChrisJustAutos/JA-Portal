@@ -24,13 +24,22 @@ export const config = { maxDuration: 60 }
 export default withAuth('edit:b2b_catalogue', async (req: NextApiRequest, res: NextApiResponse) => {
   if (req.method !== 'GET') { res.setHeader('Allow', 'GET'); return res.status(405).json({ error: 'GET only' }) }
   const c = sb()
-  // Page through so we get every item (Supabase caps a single select).
+  // Page through so we get every item (Supabase caps a single select). The
+  // Model column isn't a real catalogue field — embed the fitment join and
+  // flatten it into a models[] the shared exporter reads.
+  const SELECT = `${CATALOGUE_SELECT}, model_links:b2b_catalogue_models ( b2b_models ( name ) )`
   const all: any[] = []
   const PAGE = 1000
   for (let from = 0; ; from += PAGE) {
-    const { data, error } = await c.from('b2b_catalogue').select(CATALOGUE_SELECT).order('sku', { ascending: true }).range(from, from + PAGE - 1)
+    const { data, error } = await c.from('b2b_catalogue').select(SELECT).order('sku', { ascending: true }).range(from, from + PAGE - 1)
     if (error) return res.status(500).json({ error: error.message })
-    all.push(...(data || []))
+    for (const row of (data || [])) {
+      const it = row as any
+      const models = (Array.isArray(it.model_links) ? it.model_links : [])
+        .map((l: any) => l.b2b_models).filter((m: any) => m && m.name)
+      delete it.model_links
+      all.push({ ...it, models })
+    }
     if (!data || data.length < PAGE) break
   }
 

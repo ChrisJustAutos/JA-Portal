@@ -2262,9 +2262,11 @@ function PackagingSelect({
   value: FreightPackaging | null
   onChange: (v: FreightPackaging | null) => void
 }) {
-  // Only the Pallet vs not-Pallet distinction affects the cartonizer, so the
-  // dropdown is just those two. Anything non-pallet stores 'box' (= cartonised).
-  const display: FreightPackaging = value === 'pallet' ? 'pallet' : 'box'
+  // Three freight-handling modes drive the cartonizer:
+  //   box    → auto-packed into your configured cartons by weight + size
+  //   pallet → ships on its own pallet
+  //   other  → ALREADY BOXED: ships at its own dimensions (never re-packed)
+  const display: FreightPackaging = value === 'pallet' ? 'pallet' : value === 'other' ? 'other' : 'box'
   return (
     <label style={{display:'flex',flexDirection:'column',gap:4}}>
       <span style={{fontSize:11,color:T.text2,fontWeight:500}}>Freight handling</span>
@@ -2276,9 +2278,10 @@ function PackagingSelect({
           borderRadius:5,padding:'8px 10px',fontSize:13,outline:'none',fontFamily:'inherit',
         }}>
         <option value="box">Standard — packs into a carton</option>
+        <option value="other">Already boxed — ships at its own dimensions</option>
         <option value="pallet">Pallet — ships on its own pallet</option>
       </select>
-      <span style={{fontSize:10,color:T.text3}}>Only “Pallet” changes quoting; standard items are auto-packed into your cartons by weight + size.</span>
+      <span style={{fontSize:10,color:T.text3}}>Standard items are auto-packed into your cartons by weight + size. “Already boxed” ships at the dimensions above (use the box’s outer size); “Pallet” ships on its own pallet.</span>
     </label>
   )
 }

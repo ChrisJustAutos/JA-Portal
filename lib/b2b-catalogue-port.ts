@@ -4,28 +4,36 @@
 // (header → db field + parse/validate), so the two can never drift.
 //
 // Round-trip rules:
-//   - ID / SKU / Name are context only (read-only) — ID is the match key.
+//   - ID / SKU / Name / Model are context only (read-only) — ID is the match key.
 //   - A BLANK editable cell means "leave unchanged" (safe re-import), so an
 //     untouched export changes nothing. (Clearing a value isn't done via blank.)
 //   - Weight is shown/edited in kg but stored as grams.
+//   - Dimensions are shown/edited in cm but stored as mm (matching the portal).
 
 export interface CatColumn {
   header: string
   field: string
   readOnly?: boolean
-  kind?: 'text' | 'number' | 'int' | 'bool' | 'enum' | 'weightKg'
+  kind?: 'text' | 'number' | 'int' | 'bool' | 'enum' | 'weightKg' | 'lengthCm' | 'modelNames'
   enumValues?: string[]
+  // Derived/embedded columns (e.g. the model-fitment list) aren't real
+  // b2b_catalogue columns, so they're excluded from CATALOGUE_SELECT.
+  notAColumn?: boolean
 }
 
 export const CATALOGUE_COLUMNS: CatColumn[] = [
   { header: 'ID',                       field: 'id',                        readOnly: true },
   { header: 'SKU',                      field: 'sku',                       readOnly: true },
   { header: 'Name',                     field: 'name',                      readOnly: true },
+  { header: 'Model',                    field: 'models',                    readOnly: true, kind: 'modelNames', notAColumn: true },
   { header: 'Trade Price ex GST',       field: 'trade_price_ex_gst',        kind: 'number' },
   { header: 'Visible',                  field: 'b2b_visible',               kind: 'bool' },
-  { header: 'Length (mm)',              field: 'freight_length_mm',         kind: 'int' },
-  { header: 'Width (mm)',               field: 'freight_width_mm',          kind: 'int' },
-  { header: 'Height (mm)',              field: 'freight_height_mm',         kind: 'int' },
+  { header: 'Barcode',                  field: 'barcode',                   kind: 'text' },
+  { header: 'Below Stock Call For Order', field: 'call_for_availability_below_qty', kind: 'int' },
+  { header: 'Max Order QTY',            field: 'max_order_qty',             kind: 'int' },
+  { header: 'Length (cm)',              field: 'freight_length_mm',         kind: 'lengthCm' },
+  { header: 'Width (cm)',               field: 'freight_width_mm',          kind: 'lengthCm' },
+  { header: 'Height (cm)',              field: 'freight_height_mm',         kind: 'lengthCm' },
   { header: 'Weight (kg)',              field: 'freight_weight_g',          kind: 'weightKg' },
   { header: 'Packaging',                field: 'freight_packaging',         kind: 'enum', enumValues: ['box', 'pallet', 'other'] },
   { header: 'Drop Ship',                field: 'is_drop_ship',              kind: 'bool' },
@@ -33,8 +41,9 @@ export const CATALOGUE_COLUMNS: CatColumn[] = [
   { header: 'Inbound Freight Cost ex GST', field: 'inbound_freight_cost_ex_gst', kind: 'number' },
 ]
 
-// Columns to SELECT from b2b_catalogue for the export.
-export const CATALOGUE_SELECT = CATALOGUE_COLUMNS.map(c => c.field).join(', ')
+// Columns to SELECT from b2b_catalogue for the export (real DB columns only;
+// the Model column is embedded separately by the export route).
+export const CATALOGUE_SELECT = CATALOGUE_COLUMNS.filter(c => !c.notAColumn).map(c => c.field).join(', ')
 
 // A db row → flat object keyed by header (for SheetJS json_to_sheet).
 export function catalogueRowToExport(item: any): Record<string, any> {
@@ -42,6 +51,8 @@ export function catalogueRowToExport(item: any): Record<string, any> {
   for (const col of CATALOGUE_COLUMNS) {
     let v = item[col.field]
     if (col.kind === 'weightKg') v = (v == null ? '' : Math.round(Number(v)) / 1000)
+    else if (col.kind === 'lengthCm') v = (v == null ? '' : Math.round(Number(v)) / 10)
+    else if (col.kind === 'modelNames') v = (Array.isArray(v) ? v.map((m: any) => m?.name).filter(Boolean).join(', ') : '')
     else if (col.kind === 'bool') v = !!v
     else if (v == null) v = ''
     out[col.header] = v
@@ -70,10 +81,12 @@ export function catalogueRowToPatch(row: Record<string, any>): { id?: string; sk
       const s = String(cell).trim().toLowerCase()
       if (!col.enumValues!.includes(s)) return { error: `${col.header} must be one of ${col.enumValues!.join(' / ')}` }
       patch[col.field] = s
-    } else if (col.kind === 'int' || col.kind === 'weightKg' || col.kind === 'number') {
+    } else if (col.kind === 'int' || col.kind === 'weightKg' || col.kind === 'lengthCm' || col.kind === 'number') {
       const n = Number(cell)
       if (!isFinite(n) || n < 0) return { error: `${col.header} must be a non-negative number` }
-      patch[col.field] = col.kind === 'weightKg' ? Math.round(n * 1000) : (col.kind === 'int' ? Math.round(n) : n)
+      patch[col.field] = col.kind === 'weightKg' ? Math.round(n * 1000)
+        : col.kind === 'lengthCm' ? Math.round(n * 10)
+        : col.kind === 'int' ? Math.round(n) : n
     } else {
       patch[col.field] = String(cell)
     }
