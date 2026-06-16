@@ -11,13 +11,17 @@
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { resolveMcpUser, type McpUser } from '../../../lib/mcp/auth'
 import { listToolsFor, callTool } from '../../../lib/mcp/tools'
+import { cors } from '../../../lib/mcp/oauth'
 
 export const config = { maxDuration: 60 }
 
 const SERVER_INFO = { name: 'ja-portal', version: '1.0.0' }
 const DEFAULT_PROTOCOL = '2025-06-18'
+// Point unauthenticated clients at our OAuth discovery doc (RFC 9728).
+const WWW_AUTH = 'Bearer resource_metadata="https://justautos.app/.well-known/oauth-protected-resource"'
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+  if (cors(res, req)) return
   if (req.method !== 'POST') {
     res.setHeader('Allow', 'POST')
     return res.status(405).json({ error: 'This is an MCP Streamable HTTP endpoint — POST JSON-RPC only.' })
@@ -25,8 +29,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   const user = await resolveMcpUser(req)
   if (!user) {
-    res.setHeader('WWW-Authenticate', 'Bearer')
-    return res.status(401).json({ error: 'Invalid or missing token. Mint one in the portal (Settings → Claude connector).' })
+    res.setHeader('WWW-Authenticate', WWW_AUTH)
+    return res.status(401).json({ error: 'Invalid or missing token. Connect via OAuth, or mint a personal token (Settings → Claude connector).' })
   }
 
   let body: any

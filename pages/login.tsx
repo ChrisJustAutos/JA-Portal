@@ -9,6 +9,12 @@ import { T } from '../lib/ui/theme'
 
 type Mode = 'loading' | 'login' | 'bootstrap' | 'mfa' | 'done'
 
+// Safe post-login redirect target. Only allow same-origin relative paths
+// (e.g. the OAuth /authorize hand-off) — never an absolute/protocol-relative URL.
+function safeNext(next: unknown): string {
+  return (typeof next === 'string' && next.startsWith('/') && !next.startsWith('//')) ? next : '/'
+}
+
 export default function LoginPage() {
   const router = useRouter()
   const [mode, setMode] = useState<Mode>('loading')
@@ -85,7 +91,7 @@ export default function LoginPage() {
 
       await establishSession(data.session.access_token, data.session.refresh_token)
       setMode('done')
-      router.push('/')
+      router.push(safeNext(router.query.next))
     } catch (e: any) {
       setError(e.message || 'Login failed')
     } finally {
@@ -127,7 +133,7 @@ export default function LoginPage() {
       }
       await establishSession(sess.session.access_token, sess.session.refresh_token)
       setMode('done')
-      router.push('/')
+      router.push(safeNext(router.query.next))
     } catch (e: any) {
       setError(e.message || 'Invalid code — try again')
     } finally {
