@@ -80,9 +80,14 @@ export async function extractQuoteFromPdf(pdfBase64: string): Promise<Extraction
     || process.env.FOLLOWUP_MODEL                  // share model env with follow-up if set
     || DEFAULT_MODEL
 
+  // Big quotes (many line items) can exceed a small ceiling and get truncated
+  // mid-array, producing invalid JSON. 8192 gives ~60+ line items of headroom;
+  // override via env if a quote ever genuinely needs more.
+  const maxTokens = Number(process.env.QUOTE_EXTRACTION_MAX_TOKENS) || 8192
+
   const body = {
     model,
-    max_tokens: 2048,                              // line items can be long; give margin
+    max_tokens: maxTokens,
     system: buildSystemPrompt(),
     messages: [
       {
