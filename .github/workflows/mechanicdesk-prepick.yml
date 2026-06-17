@@ -50,8 +50,7 @@ jobs:
         run: npm ci || npm install
 
       # Cache the Chromium binary across runs so warm runs skip the ~30-40s
-      # download. The browser lives in ~/.cache/ms-playwright; system libs are
-      # NOT cached (fresh runner each time), so we still run install-deps.
+      # download (lives in ~/.cache/ms-playwright).
       - name: Cache Playwright browsers
         id: pw-cache
         uses: actions/cache@v4
@@ -59,13 +58,13 @@ jobs:
           path: ~/.cache/ms-playwright
           key: ${{ runner.os }}-playwright-chromium-${{ hashFiles('**/package-lock.json') }}
 
+      # Browser binary only — NO --with-deps. The ubuntu-24.04 runner already
+      # ships every shared lib Chromium needs (install-deps only added ~21MB of
+      # fonts we never use for a headless JSON scrape). Skipped entirely on a
+      # cache hit since the binary is already restored.
       - name: Install Playwright Chromium (cache miss)
         if: steps.pw-cache.outputs.cache-hit != 'true'
-        run: npx playwright install --with-deps chromium
-
-      - name: Install Playwright system deps (cache hit)
-        if: steps.pw-cache.outputs.cache-hit == 'true'
-        run: npx playwright install-deps chromium
+        run: npx playwright install chromium
 
       - name: Run worker
         env:
