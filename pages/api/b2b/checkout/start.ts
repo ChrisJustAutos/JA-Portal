@@ -21,6 +21,7 @@ import { createCheckoutSession, StripeLineItem } from '../../../../lib/stripe'
 import { paytoSurchargeInc } from '../../../../lib/b2b-payment'
 import { assertCheckoutConfigured } from '../../../../lib/b2b-settings'
 import { getLiveQuote, getSatchelRates, getDropshipFreight, type LiveQuoteCartItem } from '../../../../lib/b2b-freight'
+import { loadBundleChildren, bundleChildUnitPriceExGst } from '../../../../lib/b2b-bundles'
 
 const GST_RATE = 0.10
 
@@ -142,6 +143,10 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, use
     maxOrderQty: number | null
     isTaxable: boolean
     isDropShip: boolean
+    // Set when this line is an auto-included bundle component (child of a
+    // parent line). Null for normal parent / standalone lines. Persisted on
+    // the order line + used to exclude the line from the freight parcel build.
+    bundleParentCatalogueId: string | null
   }
   const validated: RawLine[] = []
   const issues: string[] = []
@@ -191,6 +196,7 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, use
       maxOrderQty,
       isTaxable:    cat.is_taxable !== false,
       isDropShip:   cat.is_drop_ship === true,
+      bundleParentCatalogueId: null,
     })
   }
 
@@ -199,6 +205,49 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, use
       error: 'No valid items in your cart',
       details: issues,
     })
+  }
+
+  // Explode "includes" bundles: each parent line auto-adds its child products
+  // as derived order lines (not stored in the cart). 'included' children post
+  // at $0 (value baked into the parent); 'added' children charge their own
+  // trade price. Children still get their own MYOB line so inventory
+  // decrements. They're excluded from the freight quote — the parent carries
+  // the combined-carton dims. One level only (children aren't re-exploded).
+  try {
+    const parentIds = validated.map(v => v.catalogueId)
+    const bundleMap = await loadBundleChildren(c, parentIds)
+    const components: RawLine[] = []
+    for (const parent of validated) {
+      const children = bundleMap.get(parent.catalogueId)
+      if (!children || children.length === 0) continue
+      for (const ch of children) {
+        if (!ch.child.myob_item_uid) {
+          issues.push(`"${parent.name}" includes "${ch.child.name || ch.child.sku || 'a part'}" which is missing a MYOB link — contact your account manager`)
+          continue
+        }
+        components.push({
+          cartItemId:   parent.cartItemId,   // provenance only; not a real cart row
+          catalogueId:  ch.child_catalogue_id,
+          myobItemUid:  ch.child.myob_item_uid,
+          sku:          ch.child.sku || '',
+          name:         ch.child.name || ch.child.sku || '(item)',
+          qty:          parent.qty * ch.qty,
+          unitPriceEx:  bundleChildUnitPriceExGst(ch),
+          tradePriceEx: Number(ch.child.trade_price_ex_gst || 0),
+          maxOrderQty:  null,
+          isTaxable:    ch.child.is_taxable !== false,
+          isDropShip:   ch.child.is_drop_ship === true,
+          bundleParentCatalogueId: parent.catalogueId,
+        })
+      }
+    }
+    if (issues.length > 0) {
+      return res.status(409).json({ error: 'Some items in your cart need attention', details: issues })
+    }
+    // Append components after their parents (sort_order keeps them grouped).
+    validated.push(...components)
+  } catch (e: any) {
+    return res.status(500).json({ error: `Bundle expansion failed: ${e?.message || e}` })
   }
 
   // Stock check (cached + auto-refresh) — and deduct in-flight commitments
@@ -499,6 +548,7 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, use
       line_total_inc: round2(lineEx + lineGst),
       is_taxable: v.isTaxable,
       sort_order: i,
+      bundle_parent_catalogue_id: v.bundleParentCatalogueId,
     }
   })
   const { error: olErr } = await c.from('b2b_order_lines').insert(orderLineRows)
@@ -509,7 +559,9 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, use
 
   // 6. Build Stripe line_items (one per cart line + surcharge)
   const baseUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://justautos.app'
-  const stripeLineItems: StripeLineItem[] = validated.map(v => {
+  // Skip $0 lines (e.g. "included" bundle components) — Stripe Checkout rejects
+  // zero-amount line items. They're still recorded as order lines for MYOB.
+  const stripeLineItems: StripeLineItem[] = validated.filter(v => v.unitPriceEx > 0).map(v => {
     const unitInc = v.isTaxable ? v.unitPriceEx * 1.10 : v.unitPriceEx
     return {
       price_data: {

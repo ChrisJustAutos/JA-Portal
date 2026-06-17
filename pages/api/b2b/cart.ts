@@ -12,6 +12,7 @@ import { withB2BAuth, B2BUser } from '../../../lib/b2bAuthServer'
 import { getStockForItems, stockState, getCommittedQtyByCatalogue, availableQty } from '../../../lib/b2b-stock'
 import { applyPricing, effectiveQtyCap } from '../../../lib/b2b-pricing'
 import { getFreightQuote, getLiveQuote, type LiveQuoteCartItem, type LiveQuoteRate } from '../../../lib/b2b-freight'
+import { loadBundleChildren, bundleChildUnitPriceExGst } from '../../../lib/b2b-bundles'
 
 let _sb: SupabaseClient | null = null
 function sb(): SupabaseClient {
@@ -79,7 +80,7 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, use
   }
 
   const now = new Date()
-  const lines = (items || []).map((it: any) => {
+  const baseLines = (items || []).map((it: any) => {
     const cat = Array.isArray(it.catalogue) ? it.catalogue[0] : it.catalogue
     const stock = cat?.myob_item_uid ? stockMap[cat.myob_item_uid] : null
     const cmt = cat?.id ? (committed[cat.id] || 0) : 0
@@ -142,8 +143,73 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, use
       is_special_order: cat?.is_special_order === true,
       is_drop_ship: cat?.is_drop_ship === true,
       instructions_url: cat?.instructions_url ?? null,
+      is_bundle_component: false,
+      bundle_parent_catalogue_id: null,
     }
   })
+
+  // Expand "includes" bundles: each parent line gets its child products shown
+  // as nested, non-editable sub-lines (derived from b2b_product_bundles, not
+  // stored in the cart). 'included' children show at $0; 'added' children add
+  // their trade price to the totals. Freight is unaffected — the parent's
+  // dimensions cover the combined carton (the freight quote below is built
+  // from the raw cart `items`, never from these derived lines).
+  const lines: any[] = []
+  try {
+    const parentIds = baseLines.map((l: any) => l.catalogue_id).filter(Boolean) as string[]
+    const bundleMap = await loadBundleChildren(c, parentIds)
+    for (const base of baseLines) {
+      lines.push(base)
+      const children = base.catalogue_id ? bundleMap.get(base.catalogue_id) : null
+      if (!children) continue
+      for (const ch of children) {
+        const qty = base.qty * ch.qty
+        const unitEx = bundleChildUnitPriceExGst(ch)
+        const taxable = ch.child.is_taxable !== false
+        const subEx = unitEx * qty
+        const gstAmt = taxable ? subEx * 0.10 : 0
+        lines.push({
+          id: `${base.id}:${ch.child_catalogue_id}`,
+          qty,
+          catalogue_id: ch.child_catalogue_id,
+          sku: ch.child.sku ?? '',
+          name: ch.child.name ?? '(item)',
+          image_url: ch.child.primary_image_url ?? null,
+          unit_price_ex_gst: unitEx,
+          trade_price_ex_gst: Number(ch.child.trade_price_ex_gst || 0),
+          promo_active: false,
+          volume_break_applied: false,
+          volume_break_min_qty: null,
+          is_taxable: taxable,
+          line_subtotal_ex_gst: subEx,
+          line_gst: gstAmt,
+          line_total_inc_gst: subEx + gstAmt,
+          currently_visible: true,
+          price_changed: false,
+          stock_state: null,
+          stock_qty_available: null,
+          available_qty: null,
+          max_order_qty: null,
+          effective_cap: null,
+          call_for_availability: false,
+          is_special_order: false,
+          is_drop_ship: ch.child.is_drop_ship === true,
+          instructions_url: null,
+          // Bundle-component markers — the client renders these nested under the
+          // parent with no qty editor / remove button.
+          is_bundle_component: true,
+          bundle_parent_catalogue_id: base.catalogue_id,
+          bundle_price_mode: ch.price_mode,
+        })
+      }
+    }
+  } catch (e: any) {
+    // Bundle expansion is display-only — never break the cart over it. Fall
+    // back to the plain (un-expanded) lines.
+    console.error('cart bundle expansion failed (non-fatal):', e?.message || e)
+    lines.length = 0
+    lines.push(...baseLines)
+  }
 
   // Totals
   const subtotal_ex_gst = lines.reduce((s: number, l: any) => s + l.line_subtotal_ex_gst, 0)
@@ -260,8 +326,10 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, use
       display_name: user.distributor.displayName,
     },
     lines,
-    line_count: lines.length,
-    item_count: lines.reduce((s: number, l: any) => s + l.qty, 0),
+    // Counts reflect the distributor's own (purchasable) lines — derived
+    // bundle components don't inflate them.
+    line_count: baseLines.length,
+    item_count: baseLines.reduce((s: number, l: any) => s + l.qty, 0),
     freight,
     totals: {
       subtotal_ex_gst:  round2(subtotal_ex_gst),

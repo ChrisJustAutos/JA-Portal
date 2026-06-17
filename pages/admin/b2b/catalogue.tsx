@@ -624,6 +624,7 @@ export default function CatalogueAdminPage({ user }: Props) {
             item={drawerItem}
             models={models}
             productTypes={productTypes}
+            allItems={items}
             onClose={() => setDrawerItemId(null)}
             onPatch={patchLocalItem}
             onDeleted={(id) => { removeLocalItem(id); setDrawerItemId(null) }}
@@ -930,11 +931,12 @@ function CatalogueRow({
 
 // ─── Drawer ─────────────────────────────────────────────────────────────
 function EditDrawer({
-  item, models, productTypes, onClose, onPatch, onDeleted,
+  item, models, productTypes, allItems, onClose, onPatch, onDeleted,
 }: {
   item: CatalogueItem
   models: TaxonomyOption[]
   productTypes: TaxonomyOption[]
+  allItems: CatalogueItem[]
   onClose: () => void
   onPatch: (id: string, patch: Partial<CatalogueItem>) => void
   onDeleted: (id: string) => void
@@ -1297,6 +1299,14 @@ function EditDrawer({
               </Section>
             )
           })()}
+
+          {/* Includes (bundled items) — child products that auto-ship with this one */}
+          <Section
+            title="Includes (bundled items)"
+            subtitle="Products that automatically ship with this one (e.g. a turbo + its TGFK kit)"
+          >
+            <BundleEditor parent={item} allItems={allItems} />
+          </Section>
 
           {/* Resources */}
           <Section title="Resources" subtitle="Installation / use instructions">
@@ -2252,6 +2262,138 @@ function DropshipFreightEditor({ catalogueId }: { catalogueId: string }) {
           </div>
         </>
       )}
+    </div>
+  )
+}
+
+// Edit the "includes" bundle for a parent product: which child products ship
+// with it, how many, and whether each is included (free, value baked into the
+// parent) or charged on top. Children are stored in b2b_product_bundles and
+// derived into order lines at checkout — see lib/b2b-bundles.ts.
+type BundleRow = { child_catalogue_id: string; qty: number; price_mode: 'included' | 'added' }
+function BundleEditor({ parent, allItems }: { parent: CatalogueItem; allItems: CatalogueItem[] }) {
+  const toast = useToast()
+  const [rows, setRows] = useState<BundleRow[]>([])
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
+  const [query, setQuery] = useState('')
+  const [pickOpen, setPickOpen] = useState(false)
+
+  useEffect(() => {
+    let live = true
+    setLoading(true)
+    fetch(`/api/b2b/admin/catalogue/${parent.id}/bundles`, { credentials: 'same-origin' })
+      .then(r => r.ok ? r.json() : null)
+      .then(j => { if (live && j) setRows((j.children || []).map((c: any) => ({ child_catalogue_id: c.child_catalogue_id, qty: c.qty, price_mode: c.price_mode }))) })
+      .catch(() => {})
+      .finally(() => { if (live) setLoading(false) })
+    return () => { live = false }
+  }, [parent.id])
+
+  async function persist(next: BundleRow[]) {
+    setRows(next)
+    setSaving(true)
+    try {
+      const r = await fetch(`/api/b2b/admin/catalogue/${parent.id}/bundles`, {
+        method: 'PUT', credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ children: next }),
+      })
+      const j = await r.json().catch(() => ({}))
+      if (!r.ok) throw new Error(j?.error || `HTTP ${r.status}`)
+    } catch (e: any) {
+      toast(`Bundle save failed: ${e?.message || e}`, 'error')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const byId = (id: string) => allItems.find(i => i.id === id)
+  const addChild = (id: string) => {
+    if (rows.some(r => r.child_catalogue_id === id)) return
+    persist([...rows, { child_catalogue_id: id, qty: 1, price_mode: 'included' }])
+    setQuery(''); setPickOpen(false)
+  }
+  const removeChild = (id: string) => persist(rows.filter(r => r.child_catalogue_id !== id))
+  const updateRow = (id: string, patch: Partial<BundleRow>) =>
+    persist(rows.map(r => r.child_catalogue_id === id ? { ...r, ...patch } : r))
+
+  const q = query.trim().toLowerCase()
+  const matches = q
+    ? allItems
+        .filter(i => i.id !== parent.id && !rows.some(r => r.child_catalogue_id === i.id))
+        .filter(i => (i.sku || '').toLowerCase().includes(q) || (i.name || '').toLowerCase().includes(q))
+        .slice(0, 12)
+    : []
+
+  if (loading) return <div style={{ fontSize: 11, color: T.text3 }}>Loading bundle…</div>
+
+  return (
+    <div>
+      {rows.length === 0 && (
+        <div style={{ fontSize: 12, color: T.text3, marginBottom: 8 }}>
+          No bundled items. Add a child product below — it’ll be added to the cart and shipped with this one automatically.
+        </div>
+      )}
+
+      {rows.map(r => {
+        const ch = byId(r.child_catalogue_id)
+        return (
+          <div key={r.child_catalogue_id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '7px 0', borderBottom: `1px solid ${T.border}` }}>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 12.5, color: T.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {ch?.name || '(unknown item)'}
+              </div>
+              <div style={{ fontSize: 10, color: T.text3, fontFamily: 'monospace' }}>{ch?.sku || r.child_catalogue_id.slice(0, 8)}</div>
+            </div>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 3, fontSize: 11, color: T.text3 }}>
+              ×
+              <input
+                type="text" inputMode="numeric" value={String(r.qty)}
+                onChange={e => { const v = Math.max(1, Math.floor(Number(e.target.value) || 1)); updateRow(r.child_catalogue_id, { qty: v }) }}
+                style={{ width: 38, textAlign: 'center', background: T.bg3, border: `1px solid ${T.border2}`, borderRadius: 4, color: T.text, fontSize: 12, padding: '4px 4px', fontFamily: 'monospace', outline: 'none' }}
+              />
+            </label>
+            <select
+              value={r.price_mode}
+              onChange={e => updateRow(r.child_catalogue_id, { price_mode: e.target.value as 'included' | 'added' })}
+              title={r.price_mode === 'included' ? 'Value baked into this product — child posts at $0' : `Charged on top at the child’s trade price (${fmtMoney(ch?.trade_price_ex_gst ?? 0)} ex GST)`}
+              style={{ background: T.bg3, border: `1px solid ${T.border2}`, borderRadius: 4, color: T.text, fontSize: 11.5, padding: '4px 6px', fontFamily: 'inherit', outline: 'none' }}>
+              <option value="included">Included (free)</option>
+              <option value="added">Charged extra</option>
+            </select>
+            <button onClick={() => removeChild(r.child_catalogue_id)} title="Remove from bundle"
+              style={{ background: 'transparent', border: 'none', color: T.red, fontSize: 16, cursor: 'pointer', lineHeight: 1, padding: '0 2px' }}>×</button>
+          </div>
+        )
+      })}
+
+      {/* Picker */}
+      <div style={{ position: 'relative', marginTop: 10 }}>
+        <input
+          value={query}
+          onChange={e => { setQuery(e.target.value); setPickOpen(true) }}
+          onFocus={() => setPickOpen(true)}
+          placeholder="Search a product to include (SKU or name)…"
+          style={{ width: '100%', boxSizing: 'border-box', background: T.bg3, border: `1px solid ${T.border2}`, borderRadius: 6, color: T.text, fontSize: 12.5, padding: '8px 10px', fontFamily: 'inherit', outline: 'none' }}
+        />
+        {pickOpen && matches.length > 0 && (
+          <div style={{ position: 'absolute', top: 'calc(100% + 2px)', left: 0, right: 0, maxHeight: 240, overflowY: 'auto', background: T.bg2, border: `1px solid ${T.border2}`, borderRadius: 6, boxShadow: '0 10px 28px rgba(0,0,0,0.4)', zIndex: 5 }}>
+            {matches.map(m => (
+              <button key={m.id} onClick={() => addChild(m.id)}
+                style={{ display: 'flex', width: '100%', textAlign: 'left', alignItems: 'center', gap: 8, padding: '8px 10px', background: 'transparent', border: 'none', color: T.text, fontSize: 12.5, cursor: 'pointer', fontFamily: 'inherit' }}
+                onMouseEnter={e => { e.currentTarget.style.background = T.bg3 }}
+                onMouseLeave={e => { e.currentTarget.style.background = 'transparent' }}>
+                <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{m.name}</span>
+                <span style={{ fontSize: 10, color: T.text3, fontFamily: 'monospace' }}>{m.sku}</span>
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+      <div style={{ fontSize: 10, color: T.text3, marginTop: 6 }}>
+        {saving ? 'Saving…' : 'Set this product’s freight to “Already boxed” at the combined carton size so the bundle ships as one parcel.'}
+      </div>
     </div>
   )
 }

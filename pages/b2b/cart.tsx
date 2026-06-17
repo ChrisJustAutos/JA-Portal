@@ -68,6 +68,11 @@ interface CartLine {
   is_special_order: boolean
   is_drop_ship: boolean
   instructions_url: string | null
+  // Auto-included bundle component (child of the line above). Rendered nested,
+  // with no qty stepper or remove button — its qty follows the parent.
+  is_bundle_component?: boolean
+  bundle_parent_catalogue_id?: string | null
+  bundle_price_mode?: 'included' | 'added'
 }
 
 interface CartTotals {
@@ -371,6 +376,41 @@ function CartLineRow({
   onRemove: () => void
 }) {
   const stockColor = line.stock_state === 'in_stock' ? T.green : line.stock_state === 'low_stock' ? T.amber : T.red
+
+  // Bundle component — a child product that ships with the line above it.
+  // Compact, indented, no qty stepper / remove (its qty follows the parent).
+  if (line.is_bundle_component) {
+    const added = line.bundle_price_mode === 'added' && line.unit_price_ex_gst > 0
+    return (
+      <div style={{
+        display:'flex',gap:10,padding:'8px 14px 8px 40px',
+        borderTop:`1px solid ${T.border}`,
+        background: T.bg3,
+        alignItems:'center',
+      }}>
+        <span style={{color:T.text3,fontSize:13,marginTop:-2}}>↳</span>
+        <div style={{flex:1,minWidth:0}}>
+          <div style={{fontSize:12.5,color:T.text2,fontWeight:500,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>
+            {line.name}
+          </div>
+          <div style={{display:'flex',alignItems:'center',gap:8,marginTop:2}}>
+            <span style={{fontSize:9,color:T.text3,fontFamily:'monospace',textTransform:'uppercase',letterSpacing:'0.04em'}}>{line.sku}</span>
+            <span style={{fontSize:11,color:T.text3}}>× {line.qty}</span>
+            <span style={{
+              fontSize:9,fontWeight:600,padding:'1px 6px',borderRadius:6,letterSpacing:'0.04em',
+              background: added ? `${T.blue}18` : `${T.green}20`,
+              color: added ? T.blue : T.green,
+            }}>
+              {added ? 'INCLUDED · CHARGED' : 'INCLUDED'}
+            </span>
+          </div>
+        </div>
+        <div style={{fontSize:12.5,color: added ? T.text : T.text3,fontWeight:600,fontVariantNumeric:'tabular-nums'}}>
+          {added ? `$${Number(line.line_total_inc_gst).toFixed(2)}` : 'Free'}
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div style={{
