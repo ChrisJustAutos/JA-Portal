@@ -55,7 +55,7 @@ export default withAuth('view:diary', async (req, res, user) => {
     const toIso = brisbaneDayBounds(addDaysYmd(today, days)).toIso
 
     let qy = db.from('workshop_bookings')
-      .select('id, starts_at, ends_at, status, job_type, description, technician_ext, estimated_value, parts_ordered_at, parts_ordered_by, customer:workshop_customers(id, name, mobile, phone), vehicle:workshop_vehicles(id, rego, make, model, year)')
+      .select('id, starts_at, ends_at, status, job_type, description, technician_ext, estimated_value, parts_ordered_at, parts_ordered_by, customer:workshop_customers!customer_id(id, name, mobile, phone), vehicle:workshop_vehicles(id, rego, make, model, year)')
       .in('status', ACTIVE_STATUSES)
       .gte('starts_at', fromIso).lt('starts_at', toIso)
       .order('starts_at', { ascending: true })

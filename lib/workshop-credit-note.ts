@@ -80,7 +80,7 @@ export async function createCreditNote(input: CreateCreditNoteInput, performedBy
 
   if (input.booking_id) {
     const { data: booking, error } = await c.from('workshop_bookings')
-      .select('id, customer_id, total_inc_gst, myob_invoice_uid, customer:workshop_customers(id, name, myob_uid)')
+      .select('id, customer_id, total_inc_gst, myob_invoice_uid, customer:workshop_customers!customer_id(id, name, myob_uid)')
       .eq('id', input.booking_id).maybeSingle()
     if (error || !booking) throw new WorkshopCreditNoteError('no_source', error?.message || 'Job not found')
     const cust: any = Array.isArray(booking.customer) ? booking.customer[0] : booking.customer
@@ -94,7 +94,7 @@ export async function createCreditNote(input: CreateCreditNoteInput, performedBy
     sourceLines = lines || []
   } else {
     const { data: invoice, error } = await c.from('workshop_invoices')
-      .select('id, customer_id, total, booking_id, md_id, customer:workshop_customers(id, name, myob_uid)')
+      .select('id, customer_id, total, booking_id, md_id, customer:workshop_customers!customer_id(id, name, myob_uid)')
       .eq('id', input.invoice_id!).maybeSingle()
     if (error || !invoice) throw new WorkshopCreditNoteError('no_source', error?.message || 'Invoice not found')
     const cust: any = Array.isArray(invoice.customer) ? invoice.customer[0] : invoice.customer

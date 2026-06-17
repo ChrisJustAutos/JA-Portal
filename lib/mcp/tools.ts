@@ -105,7 +105,7 @@ export const TOOLS: ToolDef[] = [
     run: async (args) => {
       const db = sb()
       let q = db.from('workshop_quotes')
-        .select('quote_seq, status, total, subtotal, gst, order_number, issue_date, due_date, created_at, customer:workshop_customers(name, mobile, phone), vehicle:workshop_vehicles(rego, make, model, year)')
+        .select('quote_seq, status, total, subtotal, gst, order_number, issue_date, due_date, created_at, customer:workshop_customers!customer_id(name, mobile, phone), vehicle:workshop_vehicles(rego, make, model, year)')
         .is('deleted_at', null)
         .order('created_at', { ascending: false })
         .limit(clampLimit(args.limit))
@@ -136,7 +136,7 @@ export const TOOLS: ToolDef[] = [
     run: async (args) => {
       const db = sb()
       let q = db.from('workshop_bookings')
-        .select('starts_at, status, job_type, description, order_number, total_inc_gst, estimated_value, customer:workshop_customers(name, mobile, phone), vehicle:workshop_vehicles(rego, make, model, year)')
+        .select('starts_at, status, job_type, description, order_number, total_inc_gst, estimated_value, customer:workshop_customers!customer_id(name, mobile, phone), vehicle:workshop_vehicles(rego, make, model, year)')
         .order('starts_at', { ascending: false })
         .limit(clampLimit(args.limit))
       if (args.status) q = q.eq('status', String(args.status))

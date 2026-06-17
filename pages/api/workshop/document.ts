@@ -52,7 +52,7 @@ async function buildDoc(db: SupabaseClient, type: DocType, id: string): Promise<
 
   if (type === 'quote') {
     const { data: quote } = await db.from('workshop_quotes')
-      .select('*, customer:workshop_customers(*), vehicle:workshop_vehicles(*)').eq('id', id).maybeSingle()
+      .select('*, customer:workshop_customers!customer_id(*), vehicle:workshop_vehicles(*)').eq('id', id).maybeSingle()
     if (!quote) return null
     const { data: lines } = await db.from('workshop_quote_lines').select('*').eq('quote_id', id).order('sort_order', { ascending: true })
     const docLines = (lines || []).map((l: any) => (
@@ -113,7 +113,7 @@ async function buildDoc(db: SupabaseClient, type: DocType, id: string): Promise<
 
   // jobcard | invoice — both render from a booking
   const { data: booking } = await db.from('workshop_bookings')
-    .select('*, customer:workshop_customers(*), vehicle:workshop_vehicles(*)').eq('id', id).maybeSingle()
+    .select('*, customer:workshop_customers!customer_id(*), vehicle:workshop_vehicles(*)').eq('id', id).maybeSingle()
   if (!booking) return null
   const { data: lines } = await db.from('workshop_booking_lines').select('*').eq('booking_id', id).order('sort_order', { ascending: true })
   let subtotal = 0, gst = 0

@@ -232,7 +232,7 @@ const WIP_STATUSES: BookingStatus[] = ['booking', 'confirmed', 'in_progress', 'a
 async function wip(db: SupabaseClient): Promise<ReportResult> {
   const bookings = await pageAll((a, b) => db.from('workshop_bookings')
     .select(`id, starts_at, status, job_type, estimated_value, technician_ext,
-             customer:workshop_customers(id, name, first_name, last_name),
+             customer:workshop_customers!customer_id(id, name, first_name, last_name),
              vehicle:workshop_vehicles(id, rego, make, model, year),
              lines:workshop_booking_lines(qty, unit_price_ex_gst, total_ex_gst)`)
     .in('status', WIP_STATUSES)

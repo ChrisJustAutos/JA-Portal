@@ -42,7 +42,7 @@ export default withAuth('view:diary', async (req, res, user) => {
       const q2 = String(req.query.q || '').trim().replace(/[%,()*]/g, ' ').trim()
       const SELECT = `id, customer_id, rego, make, model, year, vin, colour, odometer, model_id,
                       next_service_due_date, next_service_due_km, rego_due_date,
-                      customer:workshop_customers(id, name, mobile, phone)`
+                      customer:workshop_customers!customer_id(id, name, mobile, phone)`
 
       let dueOr: string | null = null
       const today = ymdBrisbane(new Date())

@@ -24,7 +24,7 @@ export default withAuth('view:diary', async (req, res, user) => {
     const view = String(req.query.view || 'active').trim()  // 'active' | 'trash'
     let q = db.from('workshop_quotes')
       .select(`id, quote_seq, status, subtotal, gst, total, notes, created_at, deleted_at,
-               customer:workshop_customers(id, name),
+               customer:workshop_customers!customer_id(id, name),
                vehicle:workshop_vehicles(id, rego, make, model, year)`)
       .order('created_at', { ascending: false })
       .limit(200)

@@ -33,7 +33,7 @@ export default withAuth('view:diary', async (req, res) => {
   let qy = db.from('workshop_invoices')
     .select(`id, status, subtotal, gst, total, due_date, created_at, deleted_at,
              booking_id, md_id, myob_invoice_uid,
-             customer:workshop_customers(id, name, mobile),
+             customer:workshop_customers!customer_id(id, name, mobile),
              payments:workshop_payments(amount, deleted_at)`, { count: 'exact' })
     .order('created_at', { ascending: false })
     .range(offset, offset + limit - 1)

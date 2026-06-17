@@ -24,7 +24,7 @@ export default withAuth('view:diary', async (req, res) => {
   const db = sb()
 
   const { data: vehicle, error } = await db.from('workshop_vehicles')
-    .select('*, customer:workshop_customers(id, name, mobile, phone, email)')
+    .select('*, customer:workshop_customers!customer_id(id, name, mobile, phone, email)')
     .eq('id', id).maybeSingle()
   if (error) return res.status(500).json({ error: error.message })
   if (!vehicle) return res.status(404).json({ error: 'Vehicle not found' })

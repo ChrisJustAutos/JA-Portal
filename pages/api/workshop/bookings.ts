@@ -31,7 +31,7 @@ export default withAuth('view:diary', async (req, res, user) => {
       db.from('workshop_bookings')
         .select(`id, customer_id, vehicle_id, starts_at, ends_at, technician_ext, bay, service_type, status, notes,
                  job_type, description, internal_notes, estimated_value, span_techs, is_overdue, pickup_at,
-                 customer:workshop_customers(id, name, phone, mobile),
+                 customer:workshop_customers!customer_id(id, name, phone, mobile),
                  vehicle:workshop_vehicles(id, rego, make, model, year)`)
         // Overlap the window (not just start in it) so multi-day bookings show
         // on every day they span.

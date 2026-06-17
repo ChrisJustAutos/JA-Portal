@@ -33,7 +33,7 @@ export default withAuth('view:diary', async (req, res, user) => {
   if (req.method === 'GET') {
     const { data: booking, error } = await db
       .from('workshop_bookings')
-      .select(`*, customer:workshop_customers(*), vehicle:workshop_vehicles(*)`)
+      .select(`*, customer:workshop_customers!customer_id(*), vehicle:workshop_vehicles(*)`)
       .eq('id', id)
       .maybeSingle()
     if (error) return res.status(500).json({ error: error.message })

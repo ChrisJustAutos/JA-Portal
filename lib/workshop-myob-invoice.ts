@@ -203,7 +203,7 @@ export async function createJobInvoiceInMyob(bookingId: string, performedBy: str
 
   const { data: booking, error: bErr } = await c
     .from('workshop_bookings')
-    .select('id, status, customer_id, description, myob_invoice_uid, order_number, third_party_customer_id, customer:workshop_customers(id, name, myob_uid)')
+    .select('id, status, customer_id, description, myob_invoice_uid, order_number, third_party_customer_id, customer:workshop_customers!customer_id(id, name, myob_uid)')
     .eq('id', bookingId)
     .maybeSingle()
   if (bErr) throw new Error(`Job load failed: ${bErr.message}`)
@@ -519,7 +519,7 @@ export async function recordJobPayment(
 
   const { data: booking, error } = await c
     .from('workshop_bookings')
-    .select('id, status, total_inc_gst, myob_invoice_uid, customer:workshop_customers(myob_uid)')
+    .select('id, status, total_inc_gst, myob_invoice_uid, customer:workshop_customers!customer_id(myob_uid)')
     .eq('id', bookingId).maybeSingle()
   if (error) throw new Error(`Job load failed: ${error.message}`)
   if (!booking) throw new Error('Job not found')

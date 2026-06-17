@@ -27,7 +27,7 @@ export default withAuth('view:diary', async (req, res) => {
   const limit = Math.min(500, Math.max(1, Number(req.query.limit) || 100))
 
   let query = db.from('workshop_bookings')
-    .select('id, starts_at, status, job_type, description, technician_ext, total_inc_gst, estimated_value, parts_ordered_at, customer:workshop_customers(id, name, mobile, phone), vehicle:workshop_vehicles(id, rego, make, model, year)')
+    .select('id, starts_at, status, job_type, description, technician_ext, total_inc_gst, estimated_value, parts_ordered_at, customer:workshop_customers!customer_id(id, name, mobile, phone), vehicle:workshop_vehicles(id, rego, make, model, year)')
     .order('starts_at', { ascending: false })
     .limit(limit)
 

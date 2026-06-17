@@ -25,7 +25,7 @@ export default withAuth('view:diary', async (req, res, user) => {
     const [iRes, lRes, pRes] = await Promise.all([
       db.from('workshop_invoices')
         .select(`id, status, subtotal, gst, total, due_date, issue_date, order_number, created_at, deleted_at, booking_id, md_id, myob_invoice_uid,
-                 customer:workshop_customers(id, name, mobile, phone, email)`)
+                 customer:workshop_customers!customer_id(id, name, mobile, phone, email)`)
         .eq('id', id).maybeSingle(),
       db.from('workshop_invoice_lines').select('*').eq('invoice_id', id).order('sort_order', { ascending: true }),
       db.from('workshop_payments').select('id, amount, tender, method, created_at, deleted_at, md_id').eq('invoice_id', id).order('created_at', { ascending: false }),

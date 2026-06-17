@@ -30,7 +30,7 @@ export default withAuth('view:diary', async (req, res) => {
   }
 
   let qy = db.from('workshop_reminders')
-    .select('id, type, channel, to_number, to_email, subject, body, status, send_at, sent_at, error, customer_id, booking_id, quote_id, created_at, customer:workshop_customers(name)')
+    .select('id, type, channel, to_number, to_email, subject, body, status, send_at, sent_at, error, customer_id, booking_id, quote_id, created_at, customer:workshop_customers!customer_id(name)')
     .order('created_at', { ascending: false }).limit(limit)
   if (channel) qy = qy.eq('channel', channel)
   if (status) qy = qy.eq('status', status)

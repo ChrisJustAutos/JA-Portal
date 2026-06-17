@@ -25,7 +25,7 @@ export default withAuth('view:diary', async (req, res, user) => {
 
   if (req.method === 'GET') {
     const { data: cn, error } = await db.from('workshop_credit_notes')
-      .select('*, customer:workshop_customers(id, name), lines:workshop_credit_note_lines(*)')
+      .select('*, customer:workshop_customers!customer_id(id, name), lines:workshop_credit_note_lines(*)')
       .eq('id', id).maybeSingle()
     if (error) return res.status(500).json({ error: error.message })
     if (!cn) return res.status(404).json({ error: 'Credit note not found' })

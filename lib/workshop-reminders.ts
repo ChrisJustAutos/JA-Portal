@@ -71,7 +71,7 @@ async function queueOne(db: SupabaseClient, t: CommTemplate, ctx: {
 // Build the template variables + contact channels for a booking.
 async function bookingContext(db: SupabaseClient, bookingId: string, biz: string, reviewUrl?: string | null) {
   const { data: b } = await db.from('workshop_bookings')
-    .select('id, starts_at, completed_at, job_type, total_inc_gst, customer_id, vehicle_id, customer:workshop_customers(name, first_name, email, mobile, phone), vehicle:workshop_vehicles(rego, make, model, year)')
+    .select('id, starts_at, completed_at, job_type, total_inc_gst, customer_id, vehicle_id, customer:workshop_customers!customer_id(name, first_name, email, mobile, phone), vehicle:workshop_vehicles(rego, make, model, year)')
     .eq('id', bookingId).maybeSingle()
   if (!b) return null
   const cust: any = Array.isArray(b.customer) ? b.customer[0] : b.customer
@@ -167,7 +167,7 @@ export async function queuePaymentReceipt(bookingId: string, amount: number): Pr
 // ── Quote follow-up (chase unaccepted quotes) ───────────────────────────
 async function quoteContext(db: SupabaseClient, quoteId: string, biz: string) {
   const { data: q } = await db.from('workshop_quotes')
-    .select('id, status, total, customer_id, vehicle_id, customer:workshop_customers(name, first_name, email, mobile, phone), vehicle:workshop_vehicles(rego, make, model, year)')
+    .select('id, status, total, customer_id, vehicle_id, customer:workshop_customers!customer_id(name, first_name, email, mobile, phone), vehicle:workshop_vehicles(rego, make, model, year)')
     .eq('id', quoteId).maybeSingle()
   if (!q) return null
   const cust: any = Array.isArray(q.customer) ? q.customer[0] : q.customer
@@ -221,7 +221,7 @@ export async function queueServiceDueReminders(limit = 100): Promise<ServiceDueR
     const tmpls = await enabledTemplates(db, k.trigger)
     if (!tmpls.length) continue
     const { data: vehicles } = await db.from('workshop_vehicles')
-      .select(`id, customer_id, rego, make, model, year, next_service_due_km, ${k.col}, ${k.marker}, customer:workshop_customers(name, first_name, email, mobile, phone)`)
+      .select(`id, customer_id, rego, make, model, year, next_service_due_km, ${k.col}, ${k.marker}, customer:workshop_customers!customer_id(name, first_name, email, mobile, phone)`)
       .not(k.col, 'is', null).lte(k.col, cutoff).limit(limit)
     for (const v of (vehicles as any[]) || []) {
       const due = v[k.col]

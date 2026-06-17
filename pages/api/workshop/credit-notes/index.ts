@@ -30,7 +30,7 @@ export default withAuth('view:diary', async (req, res, user) => {
         custIds = (c || []).map((x: any) => x.id)
       }
       let qy = db.from('workshop_credit_notes')
-        .select('id, cn_seq, booking_id, invoice_id, customer_id, reason, kind, total_inc, myob_credit_number, myob_write_error, refunded, created_at, customer:workshop_customers(name)')
+        .select('id, cn_seq, booking_id, invoice_id, customer_id, reason, kind, total_inc, myob_credit_number, myob_write_error, refunded, created_at, customer:workshop_customers!customer_id(name)')
         .is('deleted_at', null).order('created_at', { ascending: false }).limit(limit)
       if (q) {
         const ors = [`reason.ilike.%${q}%`]

@@ -92,7 +92,12 @@
       "PowerShell(\"waiting\")",
       "PowerShell(\"waiting for build\")",
       "PowerShell(\\(Get-Content \"pages\\\\workshop\\\\job\\\\[id].tsx\" | Measure-Object -Line\\).Lines)",
-      "PowerShell(\\(Get-Content -LiteralPath \"pages\\\\workshop\\\\job\\\\[id].tsx\" | Measure-Object -Line\\).Lines)"
+      "PowerShell(\\(Get-Content -LiteralPath \"pages\\\\workshop\\\\job\\\\[id].tsx\" | Measure-Object -Line\\).Lines)",
+      "Bash(gh --version)",
+      "Bash(gh auth *)",
+      "Bash(gh workflow *)",
+      "Bash(npm install *)",
+      "Bash(awk '{print $5, $9}')"
     ]
   }
 }

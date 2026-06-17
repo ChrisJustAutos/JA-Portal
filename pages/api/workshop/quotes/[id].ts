@@ -36,7 +36,7 @@ export default withAuth('view:diary', async (req, res, user) => {
 
   if (req.method === 'GET') {
     const { data: quote, error } = await db.from('workshop_quotes')
-      .select(`*, customer:workshop_customers(*), vehicle:workshop_vehicles(*)`)
+      .select(`*, customer:workshop_customers!customer_id(*), vehicle:workshop_vehicles(*)`)
       .eq('id', id).maybeSingle()
     if (error) return res.status(500).json({ error: error.message })
     if (!quote) return res.status(404).json({ error: 'not_found' })
@@ -105,7 +105,7 @@ export default withAuth('view:diary', async (req, res, user) => {
     // Quote accepted/declined → badge the Quotes tile for the team.
     if (patch.status && patch.status !== prevStatus && ['accepted', 'declined'].includes(patch.status)) {
       const { data: q } = await db.from('workshop_quotes')
-        .select('total, customer:workshop_customers(name)').eq('id', id).maybeSingle()
+        .select('total, customer:workshop_customers!customer_id(name)').eq('id', id).maybeSingle()
       const cust: any = Array.isArray(q?.customer) ? q!.customer[0] : q?.customer
       await notify({
         module: 'workshop-quotes',
