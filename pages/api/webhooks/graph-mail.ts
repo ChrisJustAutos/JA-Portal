@@ -267,36 +267,65 @@ async function processNotification(notification: GraphNotification): Promise<{
     return { messageId, status: 'skipped', reason: 'no matching attachment' }
   }
 
-  // ── 4e. Process each matching attachment through Pipeline A ────────
-  // Usually only one, but handle multiple defensively.
-  for (const att of matchingAttachments) {
-    let pdfBase64: string
-    try {
-      pdfBase64 = await getAttachmentBase64(mailbox, messageId, att.id)
-    } catch (e: any) {
-      await logGraphEvent({
-        subscriptionId: notification.subscriptionId,
-        messageId,
-        mailbox,
-        messageSubject: messageMeta.subject,
-        messageFrom: messageMeta.from,
-        attachmentName: att.name,
-        status: 'failed',
-        reason: `getAttachmentBase64 failed: ${e?.message || String(e)}`,
-        durationMs: Date.now() - tStart,
-      })
-      continue
-    }
-
-    await runPipelineA({
-      mailbox,
-      pdfBase64,
-      pdfFilename: att.name,
+  // ── 4d½. Claim this physical email so it's counted ONCE ────────────
+  // Keyed on internetMessageId (stable across folders/redelivery). Falls back
+  // to (subscriptionId:messageId) only if Graph didn't return one. A conflict
+  // means another notification already counted this email — skip.
+  const dedupKey = messageMeta.internetMessageId || `${notification.subscriptionId}:${messageId}`
+  const claimed = await claimQuoteEmail({
+    dedupKey, mailbox, subscriptionId: notification.subscriptionId, messageId,
+  })
+  if (!claimed) {
+    await logGraphEvent({
+      subscriptionId: notification.subscriptionId,
       messageId,
+      mailbox,
       messageSubject: messageMeta.subject,
       messageFrom: messageMeta.from,
-      subscriptionId: notification.subscriptionId,
+      status: 'skipped',
+      reason: 'duplicate email — already counted (internetMessageId claim)',
+      detailsExtra: { dedupKey, internetMessageId: messageMeta.internetMessageId, parentFolderId: messageMeta.parentFolderId },
+      durationMs: Date.now() - tStart,
     })
+    return { messageId, status: 'skipped', reason: 'duplicate (already counted)' }
+  }
+
+  // ── 4e. Process each matching attachment through Pipeline A ────────
+  // Usually only one, but handle multiple defensively. If the pipeline throws
+  // unexpectedly, release the claim so a genuine Graph retry can reprocess.
+  try {
+    for (const att of matchingAttachments) {
+      let pdfBase64: string
+      try {
+        pdfBase64 = await getAttachmentBase64(mailbox, messageId, att.id)
+      } catch (e: any) {
+        await logGraphEvent({
+          subscriptionId: notification.subscriptionId,
+          messageId,
+          mailbox,
+          messageSubject: messageMeta.subject,
+          messageFrom: messageMeta.from,
+          attachmentName: att.name,
+          status: 'failed',
+          reason: `getAttachmentBase64 failed: ${e?.message || String(e)}`,
+          durationMs: Date.now() - tStart,
+        })
+        continue
+      }
+
+      await runPipelineA({
+        mailbox,
+        pdfBase64,
+        pdfFilename: att.name,
+        messageId,
+        messageSubject: messageMeta.subject,
+        messageFrom: messageMeta.from,
+        subscriptionId: notification.subscriptionId,
+      })
+    }
+  } catch (e) {
+    await releaseQuoteClaim(dedupKey)
+    throw e
   }
 
   return { messageId, status: 'processed' }
@@ -549,6 +578,46 @@ async function runPipelineA(input: {
     },
     durationMs: Date.now() - tStart,
   })
+}
+
+// ── Cross-folder/-subscription dedup (atomic claim) ─────────────────────
+// The (subscriptionId, graphMessageId) check below can't catch a single
+// physical email arriving via two subscriptions, after a subfolder move (new
+// graph id), or redelivered within the pipeline window — each looked unique
+// and bumped contact attempts again. We claim the STABLE internetMessageId via
+// an insert-on-conflict BEFORE running the pipeline: the first notification
+// wins, every duplicate hits the PK and is skipped. Returns true to proceed.
+async function claimQuoteEmail(input: {
+  dedupKey: string
+  mailbox: string | null
+  subscriptionId: string
+  messageId: string
+}): Promise<boolean> {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY
+  if (!url || !key) return true   // can't dedup without Supabase — don't block
+  const sb = createClient(url, key, { auth: { persistSession: false } })
+  const { error } = await sb.from('graph_quote_dedup').insert({
+    dedup_key: input.dedupKey,
+    mailbox: input.mailbox,
+    subscription_id: input.subscriptionId,
+    graph_message_id: input.messageId,
+  })
+  if (!error) return true                       // claimed → first to see this email
+  if ((error as any).code === '23505') return false   // PK conflict → already counted
+  console.warn('[graph-mail] dedup claim error (proceeding):', error.message)
+  return true   // unexpected error — fail open so we don't drop a real quote
+}
+
+// Release a claim so a genuine retry can reprocess (only used when the pipeline
+// throws unexpectedly — internal logged failures keep the claim, matching the
+// pre-existing quote_events idempotency behaviour).
+async function releaseQuoteClaim(dedupKey: string): Promise<void> {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY
+  if (!url || !key) return
+  const sb = createClient(url, key, { auth: { persistSession: false } })
+  await sb.from('graph_quote_dedup').delete().eq('dedup_key', dedupKey)
 }
 
 // ── Idempotency check ──────────────────────────────────────────────────

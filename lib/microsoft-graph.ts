@@ -182,6 +182,10 @@ export interface GraphMessageMeta {
   receivedDateTime: string         // ISO
   hasAttachments: boolean
   parentFolderId: string | null
+  // RFC 5322 Message-ID header. STABLE across folder moves and identical for
+  // the Inbox copy + any subfolder copy of the same physical email — so it's
+  // the right key for deduping notifications (the Graph `id` changes on move).
+  internetMessageId: string | null
 }
 
 export interface GraphAttachmentMeta {
@@ -197,7 +201,7 @@ export interface GraphAttachmentMeta {
  */
 export async function getMessageMeta(mailbox: string, messageId: string): Promise<GraphMessageMeta> {
   const data = await graphJson<any>(
-    `/users/${encodeURIComponent(mailbox)}/messages/${messageId}?$select=id,subject,from,receivedDateTime,hasAttachments,parentFolderId`,
+    `/users/${encodeURIComponent(mailbox)}/messages/${messageId}?$select=id,subject,from,receivedDateTime,hasAttachments,parentFolderId,internetMessageId`,
   )
   return {
     id: data.id,
@@ -206,6 +210,7 @@ export async function getMessageMeta(mailbox: string, messageId: string): Promis
     receivedDateTime: data.receivedDateTime,
     hasAttachments: !!data.hasAttachments,
     parentFolderId: data.parentFolderId || null,
+    internetMessageId: data.internetMessageId || null,
   }
 }
 
