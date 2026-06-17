@@ -12,6 +12,7 @@ import { logActivity } from '../../../lib/crm'
 import { renderTemplate, buildVars, textToHtml } from '../../../lib/crm-automations'
 import { sendMail } from '../../../lib/email'
 import { sendSms } from '../../../lib/clicksend'
+import { getUserReplyTo } from '../../../lib/user-email'
 
 export const config = { maxDuration: 15 }
 
@@ -54,8 +55,11 @@ export default withAuth('view:crm', async (req, res, user) => {
   const to = contact.email
   if (!to) return res.status(400).json({ error: 'No email on the contact' })
   const subject = renderTemplate(String(body.subject || ''), vars) || 'A message from Just Autos'
+  // Reply-To = the sending staff member's configured shared inbox (falls back
+  // to the global RESEND_REPLY_TO default inside sendMail when unset).
+  const replyTo = (await getUserReplyTo(db, user.id)) || undefined
   try {
-    await sendMail(process.env.RESEND_FROM || 'noreply@mail.justautos.app', { to: [to], subject, html: textToHtml(renderTemplate(text, vars)) })
+    await sendMail(process.env.RESEND_FROM || 'noreply@mail.justautos.app', { to: [to], subject, html: textToHtml(renderTemplate(text, vars)), replyTo })
   } catch (e: any) { return res.status(502).json({ error: e?.message || 'Email failed' }) }
   await logActivity(db, { contact_id: contactId, lead_id: leadId, type: 'email', body: `Email: ${subject}`, actor_id: user.id })
   return res.status(200).json({ ok: true, to })

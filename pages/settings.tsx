@@ -215,6 +215,7 @@ interface UserRow {
   phone_extension: string | null
   webrtc_extension: string | null
   webrtc_password_set: boolean
+  reply_to_email: string | null
 }
 
 interface TechRow {
@@ -445,6 +446,19 @@ function UsersTab({ currentUser }: { currentUser: PortalUserSSR }) {
                 Active login {u.is_active ? '' : '— deactivated'}
               </label>
               <div style={{ fontSize: 10.5, color: T.text3, marginTop: 6 }}>{ROLE_DESCRIPTIONS[u.role]}</div>
+              <div style={{ marginTop: 12 }}>
+                <div style={lbl}>Reply-to email</div>
+                <input
+                  type="email"
+                  defaultValue={u.reply_to_email || ''}
+                  placeholder="e.g. orders@justautosmechanical.com.au"
+                  onBlur={e => { const v = e.target.value.trim(); if (v !== (u.reply_to_email || '')) updateUser(u.id, { reply_to_email: v || null }) }}
+                  style={fld}
+                />
+                <div style={{ fontSize: 10.5, color: T.text3, marginTop: 4 }}>
+                  Customer replies to this person’s quotes, purchase orders, invoices &amp; emails go here. Leave blank to use the business default.
+                </div>
+              </div>
 
               <div style={sectionLbl}>Telephony</div>
               <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>

@@ -13,6 +13,7 @@ import { customerLabel, vehicleLabel } from '../../../lib/workshop'
 import { getWorkshopSettings } from '../../../lib/workshop-myob-invoice'
 import { renderWorkshopDocPdf, WorkshopDoc } from '../../../lib/workshop-pdf'
 import { sendMail } from '../../../lib/email'
+import { getUserReplyTo } from '../../../lib/user-email'
 
 export const config = { maxDuration: 30 }
 
@@ -259,8 +260,11 @@ export default withAuth('view:diary', async (req: NextApiRequest, res: NextApiRe
       }
     }
 
+    // Reply-To = the sending staff member's configured shared inbox (e.g.
+    // Morgan → orders@), falling back to the business email.
+    const replyTo = (await getUserReplyTo(db, (user as any).id)) || built.doc.business.email || undefined
     try {
-      await sendMail(FROM_MAILBOX, { to: [to], subject, html, replyTo: built.doc.business.email || undefined, attachments })
+      await sendMail(FROM_MAILBOX, { to: [to], subject, html, replyTo, attachments })
     } catch (e: any) {
       return res.status(502).json({ error: 'send_failed', message: e?.message || 'Email send failed' })
     }

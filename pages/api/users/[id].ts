@@ -14,7 +14,7 @@ function getAdmin() {
 async function patch(req: NextApiRequest, res: NextApiResponse, actor: any) {
   const id = req.query.id as string
   if (!id) return res.status(400).json({ error: 'id required' })
-  const { role, display_name, is_active, visible_tabs, phone_extension, webrtc_extension, webrtc_password } = req.body || {}
+  const { role, display_name, is_active, visible_tabs, phone_extension, webrtc_extension, webrtc_password, reply_to_email } = req.body || {}
   const validRoles = ['admin','manager','sales','accountant','viewer','workshop']
   if (role !== undefined && !validRoles.includes(role)) return res.status(400).json({ error: 'Invalid role' })
 
@@ -54,6 +54,14 @@ async function patch(req: NextApiRequest, res: NextApiResponse, actor: any) {
     if (webrtc_password === null || webrtc_password === '') patch.webrtc_password = null
     else if (typeof webrtc_password === 'string') patch.webrtc_password = webrtc_password.slice(0, 200)
     else return res.status(400).json({ error: 'webrtc_password must be a string or null' })
+  }
+
+  // reply_to_email: the shared inbox this staff member's outbound emails reply
+  // to (quotes/POs/invoices/CRM). '' / null clears it.
+  if (reply_to_email !== undefined) {
+    if (reply_to_email === null || reply_to_email === '') patch.reply_to_email = null
+    else if (typeof reply_to_email === 'string' && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(reply_to_email.trim())) patch.reply_to_email = reply_to_email.trim()
+    else return res.status(400).json({ error: 'reply_to_email must be a valid email address or blank' })
   }
 
   // visible_tabs: null = reset to role defaults; array = explicit allowlist
