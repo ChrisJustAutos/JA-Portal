@@ -12,7 +12,7 @@
 //   - max_order_qty                       int >= 1 | null
 //   - freight_length_mm/width_mm/height_mm int >= 0 | null
 //   - freight_weight_g                    int >= 0 | null
-//   - freight_packaging                   'box' | 'pallet' | 'other' | null
+//   - freight_packaging                   'box' | 'pallet' | 'other' | 'unboxed' | null
 //   - is_special_order                    boolean
 //   - is_drop_ship                        boolean
 //   - call_for_availability_below_qty     int >= 0 | null
@@ -79,7 +79,7 @@ const OVER_LIMIT_ACTIONS = ['quote', 'dropship'] as const
 const NULLABLE_NUMERIC_FIELDS = ['cost_price_ex_gst', 'promo_price_ex_gst', 'inbound_freight_cost_ex_gst'] as const
 const NULLABLE_TIMESTAMP_FIELDS = ['promo_starts_at', 'promo_ends_at'] as const
 const BOOLEAN_FIELDS = ['b2b_visible', 'is_special_order', 'is_drop_ship', 'call_for_availability_when_zero', 'manual_handling'] as const
-const PACKAGING_VALUES = ['box', 'pallet', 'other'] as const
+const PACKAGING_VALUES = ['box', 'pallet', 'other', 'unboxed'] as const
 
 export default withAuth('edit:b2b_catalogue', async (req: NextApiRequest, res: NextApiResponse) => {
   const id = String(req.query.id || '').trim()

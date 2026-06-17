@@ -170,7 +170,7 @@ export interface LiveQuoteCartItem {
   freight_length_mm: number | null
   freight_width_mm:  number | null
   freight_height_mm: number | null
-  freight_packaging: 'box' | 'pallet' | 'other' | null
+  freight_packaging: 'box' | 'pallet' | 'other' | 'unboxed' | null
   // Manual handling: a tickbox that flags the item to MachShip so the carrier's
   // quote/booking price adjusts (no fixed portal fee).
   manual_handling?: boolean | null
@@ -254,7 +254,7 @@ export interface PackForMachShipItem {
   length_mm: number | null
   width_mm: number | null
   height_mm: number | null
-  packaging: 'box' | 'pallet' | 'other' | null
+  packaging: 'box' | 'pallet' | 'other' | 'unboxed' | null
   manual_handling?: boolean | null
 }
 
@@ -439,7 +439,7 @@ export interface SatchelEligItem {
   length_mm: number | null
   width_mm: number | null
   height_mm: number | null
-  packaging: 'box' | 'pallet' | 'other' | null
+  packaging: 'box' | 'pallet' | 'other' | 'unboxed' | null
 }
 
 // Satchels are flexible bags, but they still have a finite capacity — weight
@@ -584,8 +584,9 @@ export async function getDropshipFreight(items: DropshipFreightItem[], postcode:
 
 function packagingForMachShip(p: LiveQuoteCartItem['freight_packaging']): 'Carton' | 'Pallet' | 'Skid' {
   if (p === 'pallet') return 'Pallet'
-  // 'box' and 'other' both fall to Carton — MachShip's catch-all small
-  // package type that every carrier they aggregate supports.
+  // 'box', 'other' (already boxed) and 'unboxed' (wrapped) all fall to Carton —
+  // MachShip's catch-all small package type that every carrier they aggregate
+  // supports. ('unboxed' still ships at its own dims; the cartonizer handles that.)
   return 'Carton'
 }
 

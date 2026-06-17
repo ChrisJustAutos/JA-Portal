@@ -39,7 +39,7 @@ interface Props {
   }
 }
 
-type FreightPackaging = 'box' | 'pallet' | 'other'
+type FreightPackaging = 'box' | 'pallet' | 'other' | 'unboxed'
 
 interface VolumeBreak {
   min_qty: number
@@ -2475,7 +2475,7 @@ function PackagingSelect({
   //   box    → auto-packed into your configured cartons by weight + size
   //   pallet → ships on its own pallet
   //   other  → ALREADY BOXED: ships at its own dimensions (never re-packed)
-  const display: FreightPackaging = value === 'pallet' ? 'pallet' : value === 'other' ? 'other' : 'box'
+  const display: FreightPackaging = value === 'pallet' ? 'pallet' : value === 'other' ? 'other' : value === 'unboxed' ? 'unboxed' : 'box'
   return (
     <label style={{display:'flex',flexDirection:'column',gap:4}}>
       <span style={{fontSize:11,color:T.text2,fontWeight:500}}>Freight handling</span>
@@ -2488,9 +2488,10 @@ function PackagingSelect({
         }}>
         <option value="box">Standard — packs into a carton</option>
         <option value="other">Already boxed — ships at its own dimensions</option>
+        <option value="unboxed">Unboxed / wrapped — ships at its own dimensions (e.g. a wrapped exhaust)</option>
         <option value="pallet">Pallet — ships on its own pallet</option>
       </select>
-      <span style={{fontSize:10,color:T.text3}}>Standard items are auto-packed into your cartons by weight + size. “Already boxed” ships at the dimensions above (use the box’s outer size); “Pallet” ships on its own pallet.</span>
+      <span style={{fontSize:10,color:T.text3}}>Standard items are auto-packed into your cartons by weight + size. “Already boxed” and “Unboxed / wrapped” both ship at the dimensions above (its own size, not a carton); “Pallet” ships on its own pallet.</span>
     </label>
   )
 }
@@ -2767,7 +2768,8 @@ function BulkEditModal({ items, onClose, onApplied }: {
               <option value="none">No change</option>
               <option value="box">Box</option>
               <option value="pallet">Pallet</option>
-              <option value="other">Other</option>
+              <option value="other">Already boxed</option>
+              <option value="unboxed">Unboxed / wrapped</option>
             </select>
           </div>
         </div>

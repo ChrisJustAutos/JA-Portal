@@ -30,7 +30,7 @@ export interface PackInputItem {
   length_mm: number | null
   width_mm: number | null
   height_mm: number | null
-  packaging: 'box' | 'pallet' | 'other' | null
+  packaging: 'box' | 'pallet' | 'other' | 'unboxed' | null
 }
 
 export interface FreightBox {
@@ -131,8 +131,9 @@ export function packItems(
   const out: PackedUnit[] = []
 
   // Items that ship individually at their own dims: already-boxed items
-  // (packaging='other') always, plus anything that fits no configured box.
-  const shipsAlone = (u: Unit) => u.item.packaging === 'other' || !boxes.some(b => fitsBox(u.item, b))
+  // (packaging='other') and unboxed/wrapped items (packaging='unboxed') always,
+  // plus anything that fits no configured box.
+  const shipsAlone = (u: Unit) => u.item.packaging === 'other' || u.item.packaging === 'unboxed' || !boxes.some(b => fitsBox(u.item, b))
   const oversized = units.filter(shipsAlone)
   for (const u of oversized) {
     out.push({

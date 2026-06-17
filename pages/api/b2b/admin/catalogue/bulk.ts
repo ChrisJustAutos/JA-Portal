@@ -24,7 +24,7 @@ function sb(): SupabaseClient {
 }
 
 const NUMERIC_FIELDS = ['trade_price_ex_gst', 'inbound_freight_cost_ex_gst'] as const
-const PACKAGING_VALUES = ['box', 'pallet', 'other'] as const
+const PACKAGING_VALUES = ['box', 'pallet', 'other', 'unboxed'] as const
 // trade_price must be >= 0 and non-null; the surcharges are nullable (null clears).
 const REQUIRED_NUMERIC = new Set<string>(['trade_price_ex_gst'])
 
