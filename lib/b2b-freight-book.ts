@@ -88,7 +88,7 @@ export async function bookFreightForOrder(orderId: string, opts: { actorId?: str
   if (!recvName) return fail(400, 'Receiver has no name or company on file — set the distributor display name before booking.')
 
   const { data: lineRows, error: lErr } = await c.from('b2b_order_lines').select(`
-      qty, sku, name, catalogue_id, bundle_parent_catalogue_id,
+      qty, sku, name, catalogue_id, bundle_parent_catalogue_id, is_drop_ship,
       catalogue:b2b_catalogue!b2b_order_lines_catalogue_id_fkey (
         freight_weight_g, freight_length_mm, freight_width_mm, freight_height_mm, freight_packaging, manual_handling
       )`).eq('order_id', orderId)
@@ -100,6 +100,9 @@ export async function bookFreightForOrder(orderId: string, opts: { actorId?: str
     // Bundle component lines ship inside the parent's box — they carry no
     // freight of their own and must never add a phantom parcel here.
     if (r.bundle_parent_catalogue_id) continue
+    // Supplier-shipped lines (catalogue drop-ship or over-limit drop-ship)
+    // aren't in the carrier consignment — they ship direct from the supplier.
+    if (r.is_drop_ship === true) continue
     const cat = Array.isArray(r.catalogue) ? r.catalogue[0] : r.catalogue
     const wg = cat?.freight_weight_g, lmm = cat?.freight_length_mm, wmm = cat?.freight_width_mm, hmm = cat?.freight_height_mm
     if (!wg || !lmm || !wmm || !hmm) { missing.push(`${r.sku} — ${r.name}`); continue }

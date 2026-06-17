@@ -75,7 +75,7 @@ interface Grouped { supplierUid: string; supplierName: string; lines: DropShipPO
 
 async function gatherDropShip(c: SupabaseClient, orderId: string, gstTaxCodeUid: string) {
   const { data: lineRows, error } = await c.from('b2b_order_lines').select(`
-      qty, sku, name, myob_item_uid,
+      qty, sku, name, myob_item_uid, is_drop_ship,
       catalogue:b2b_catalogue!b2b_order_lines_catalogue_id_fkey (
         is_drop_ship, myob_supplier_uid, myob_supplier_name, supplier_item_number, cost_price_ex_gst, myob_item_uid
       )`).eq('order_id', orderId)
@@ -85,7 +85,9 @@ async function gatherDropShip(c: SupabaseClient, orderId: string, gstTaxCodeUid:
   const missingItem: string[] = []
   for (const r of (lineRows || []) as any[]) {
     const cat = Array.isArray(r.catalogue) ? r.catalogue[0] : r.catalogue
-    if (!cat || cat.is_drop_ship !== true) continue
+    // Drop-ship for THIS order = the line snapshot (covers over-limit
+    // drop-ship of a normally-stocked item) OR the catalogue flag.
+    if (!cat || !(r.is_drop_ship === true || cat.is_drop_ship === true)) continue
     const supplierUid = cat.myob_supplier_uid
     const itemUid = cat.myob_item_uid || r.myob_item_uid
     if (!supplierUid) { missingSupplier.push(`${r.sku} — ${r.name}`); continue }

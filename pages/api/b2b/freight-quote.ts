@@ -33,6 +33,7 @@ import {
   type LiveQuoteRate,
   type DropshipFreightItem,
 } from '../../../lib/b2b-freight'
+import { lineShipsFromSupplier } from '../../../lib/b2b-over-limit'
 
 let _sb: SupabaseClient | null = null
 function sb(): SupabaseClient {
@@ -98,7 +99,7 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, use
       .select(`
         qty,
         catalogue:b2b_catalogue!b2b_cart_items_catalogue_id_fkey (
-          id, sku, name, is_drop_ship,
+          id, sku, name, is_drop_ship, over_limit_qty, over_limit_action,
           freight_weight_g, freight_length_mm, freight_width_mm, freight_height_mm, freight_packaging,
           manual_handling, inbound_freight_cost_ex_gst
         )
@@ -109,7 +110,10 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, use
       const cat = Array.isArray(r.catalogue) ? r.catalogue[0] : r.catalogue
       if (!cat) continue
       const qty = Number(r.qty || 0)
-      if (cat.is_drop_ship === true) {
+      // Supplier-shipped lines (catalogue drop-ship OR over-limit drop-ship)
+      // are excluded from the warehouse carrier/satchel quote and priced via
+      // per-zone drop-ship freight instead.
+      if (lineShipsFromSupplier(cat, qty)) {
         dsItems.push({ catalogue_id: cat.id, sku: cat.sku || '', name: cat.name || cat.sku || '(item)', qty, is_drop_ship: true })
         continue
       }

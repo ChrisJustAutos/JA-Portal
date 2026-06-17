@@ -72,6 +72,8 @@ interface CatalogueItem {
   inbound_freight_cost_ex_gst: number | null
   is_special_order: boolean
   is_drop_ship: boolean
+  over_limit_qty: number | null
+  over_limit_action: 'quote' | 'dropship' | null
   qty_available: number | null
   qty_on_hand: number | null
   is_inventoried: boolean | null
@@ -1230,12 +1232,50 @@ function EditDrawer({
           <Section title="Order limits">
             <FieldInt
               label="Max qty per order"
-              hint="Leave blank for no cap"
+              hint="Hard cap — distributors can't order more than this. Leave blank for no cap."
               suffix="units"
               min={1}
               value={item.max_order_qty}
               onSave={async v => { try { await patch({ max_order_qty: v }) } catch {} }}
             />
+          </Section>
+
+          {/* Large-order handling — soft threshold that routes big lines to a
+              manual quote or a supplier drop-ship instead of normal checkout. */}
+          <Section
+            title="Large-order handling"
+            subtitle="What happens when a distributor orders more than a set quantity"
+          >
+            <FieldInt
+              label="Over this quantity…"
+              hint="Leave blank for normal handling at any qty (still subject to the hard cap above)"
+              suffix="units"
+              min={1}
+              value={item.over_limit_qty}
+              onSave={async v => { try { await patch({ over_limit_qty: v }) } catch {} }}
+            />
+            <div style={{height:10}}/>
+            <label style={{display:'flex',flexDirection:'column',gap:4}}>
+              <span style={{fontSize:11,color:T.text2,fontWeight:500}}>…do this</span>
+              <select
+                value={item.over_limit_action || ''}
+                onChange={async e => { const v = e.target.value || null; try { await patch({ over_limit_action: v as any }) } catch {} }}
+                style={{background:T.bg3,border:`1px solid ${T.border2}`,color:T.text,borderRadius:5,padding:'8px 10px',fontSize:13,outline:'none',fontFamily:'inherit'}}>
+                <option value="">No special handling</option>
+                <option value="quote">Require a manual quote (blocks checkout — distributor requests a quote)</option>
+                <option value="dropship">Drop-ship from supplier (whole line ships direct)</option>
+              </select>
+            </label>
+            {item.over_limit_action === 'dropship' && !item.is_drop_ship && (
+              <div style={{marginTop:8,fontSize:11,lineHeight:1.5,color:T.amber}}>
+                ⚠ For above-limit drop-ship to work this item needs a <strong>reorder supplier on its MYOB item</strong> and <strong>drop-ship freight set per zone</strong> (Drop ship section). Without them, those orders can’t check out.
+              </div>
+            )}
+            {item.over_limit_qty != null && !item.over_limit_action && (
+              <div style={{marginTop:8,fontSize:11,color:T.text3}}>
+                Set an action above, or the threshold has no effect.
+              </div>
+            )}
           </Section>
 
           {/* Freight & packaging — hidden for drop-ship items (they ship from the

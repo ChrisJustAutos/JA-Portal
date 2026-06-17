@@ -13,6 +13,7 @@ import { getStockForItems, stockState, getCommittedQtyByCatalogue, availableQty 
 import { applyPricing, effectiveQtyCap } from '../../../lib/b2b-pricing'
 import { getFreightQuote, getLiveQuote, type LiveQuoteCartItem, type LiveQuoteRate } from '../../../lib/b2b-freight'
 import { loadBundleChildren, bundleChildUnitPriceExGst } from '../../../lib/b2b-bundles'
+import { resolveOverLimit, lineShipsFromSupplier } from '../../../lib/b2b-over-limit'
 
 let _sb: SupabaseClient | null = null
 function sb(): SupabaseClient {
@@ -48,7 +49,7 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, use
         trade_price_ex_gst, is_taxable, b2b_visible,
         promo_price_ex_gst, promo_starts_at, promo_ends_at, volume_breaks,
         is_special_order, is_drop_ship, instructions_url,
-        max_order_qty,
+        max_order_qty, over_limit_qty, over_limit_action,
         call_for_availability_below_qty, call_for_availability_when_zero,
         freight_weight_g, freight_length_mm, freight_width_mm, freight_height_mm, freight_packaging,
         manual_handling, inbound_freight_cost_ex_gst
@@ -112,7 +113,16 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, use
     }
 
     const maxOrderQty = cat?.max_order_qty != null ? Number(cat.max_order_qty) : null
-    const effectiveCap = effectiveQtyCap(availIncludingMine, maxOrderQty)
+    // Large-order handling. A supplier-shipped line (catalogue drop-ship OR
+    // over-limit drop-ship) isn't bound by our stock, so it has no stock cap —
+    // only the hard max-order-qty still applies. A 'quote' line over its
+    // threshold blocks checkout until quoted.
+    const overLimit = cat ? resolveOverLimit(cat, it.qty) : { triggered: false, action: null, threshold: null }
+    const shipsFromSupplier = cat ? lineShipsFromSupplier(cat, it.qty) : false
+    const needsQuote = overLimit.triggered && overLimit.action === 'quote'
+    const effectiveCap = shipsFromSupplier
+      ? (maxOrderQty != null ? maxOrderQty : null)
+      : effectiveQtyCap(availIncludingMine, maxOrderQty)
 
     return {
       id: it.id,
@@ -143,6 +153,11 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, use
       is_special_order: cat?.is_special_order === true,
       is_drop_ship: cat?.is_drop_ship === true,
       instructions_url: cat?.instructions_url ?? null,
+      // Large-order handling (migration 125).
+      over_limit_qty: overLimit.threshold,
+      over_limit_action: overLimit.action,
+      needs_quote: needsQuote,
+      ships_from_supplier: shipsFromSupplier,
       is_bundle_component: false,
       bundle_parent_catalogue_id: null,
     }
@@ -264,7 +279,12 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, use
       // Build the live-quote input from cart items + their catalogue
       // freight columns. Empty cart → live returns 'unavailable' and
       // we fall through to static, mirroring the old behaviour.
-      const liveItems: LiveQuoteCartItem[] = (items || []).map((it: any) => {
+      const liveItems: LiveQuoteCartItem[] = (items || []).filter((it: any) => {
+        const cat = Array.isArray(it.catalogue) ? it.catalogue[0] : it.catalogue
+        // Supplier-shipped lines (catalogue drop-ship or over-limit drop-ship)
+        // aren't in the warehouse carrier quote.
+        return cat && !lineShipsFromSupplier(cat, Number(it.qty || 0))
+      }).map((it: any) => {
         const cat = Array.isArray(it.catalogue) ? it.catalogue[0] : it.catalogue
         return {
           sku:               cat?.sku || '',

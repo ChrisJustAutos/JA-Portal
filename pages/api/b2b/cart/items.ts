@@ -17,6 +17,7 @@ import { createClient, SupabaseClient } from '@supabase/supabase-js'
 import { withB2BAuth, B2BUser } from '../../../../lib/b2bAuthServer'
 import { getStockForItems, getCommittedQtyByCatalogue, availableQty } from '../../../../lib/b2b-stock'
 import { applyPricing, effectiveQtyCap } from '../../../../lib/b2b-pricing'
+import { resolveOverLimit } from '../../../../lib/b2b-over-limit'
 
 let _sb: SupabaseClient | null = null
 function sb(): SupabaseClient {
@@ -48,7 +49,7 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, use
     .from('b2b_catalogue')
     .select(`
       id, myob_item_uid, sku, name, trade_price_ex_gst, b2b_visible,
-      max_order_qty,
+      max_order_qty, over_limit_qty, over_limit_action,
       promo_price_ex_gst, promo_starts_at, promo_ends_at, volume_breaks
     `)
     .eq('id', catalogueId)
@@ -68,8 +69,12 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, use
   }
 
   // Stock cap: cannot commit more than (MYOB qty − in-flight commitments).
-  // Skipped for qty=0 (delete) and for non-inventoried items.
-  if (qty > 0 && cat.myob_item_uid) {
+  // Skipped for qty=0 (delete) and for non-inventoried items. Also skipped
+  // once the large-order rule fires — a 'dropship' line is filled by the
+  // supplier (beyond our stock) and a 'quote' line is meant to exceed stock so
+  // the distributor can request a quote.
+  const overLimit = resolveOverLimit(cat, qty)
+  if (qty > 0 && cat.myob_item_uid && !overLimit.triggered) {
     try {
       const [stockMap, committed] = await Promise.all([
         getStockForItems([cat.myob_item_uid]),

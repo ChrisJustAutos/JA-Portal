@@ -58,6 +58,8 @@ export default withAuth('view:b2b', async (req: NextApiRequest, res: NextApiResp
       inbound_freight_cost_ex_gst,
       is_special_order,
       is_drop_ship,
+      over_limit_qty,
+      over_limit_action,
       qty_available,
       qty_on_hand,
       is_inventoried,

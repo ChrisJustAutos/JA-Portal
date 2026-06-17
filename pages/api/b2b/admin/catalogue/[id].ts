@@ -54,6 +54,8 @@ const EDITABLE_FIELDS = [
   'freight_packaging',
   'is_special_order',
   'is_drop_ship',
+  'over_limit_qty',
+  'over_limit_action',
   'call_for_availability_below_qty',
   'call_for_availability_when_zero',
   'instructions_url',
@@ -71,7 +73,9 @@ const NULLABLE_INT_FIELDS = [
   'max_order_qty',
   'freight_length_mm', 'freight_width_mm', 'freight_height_mm', 'freight_weight_g',
   'call_for_availability_below_qty',
+  'over_limit_qty',
 ] as const
+const OVER_LIMIT_ACTIONS = ['quote', 'dropship'] as const
 const NULLABLE_NUMERIC_FIELDS = ['cost_price_ex_gst', 'promo_price_ex_gst', 'inbound_freight_cost_ex_gst'] as const
 const NULLABLE_TIMESTAMP_FIELDS = ['promo_starts_at', 'promo_ends_at'] as const
 const BOOLEAN_FIELDS = ['b2b_visible', 'is_special_order', 'is_drop_ship', 'call_for_availability_when_zero', 'manual_handling'] as const
@@ -159,8 +163,19 @@ export default withAuth('edit:b2b_catalogue', async (req: NextApiRequest, res: N
         if (k === 'max_order_qty' && v < 1) {
           return res.status(400).json({ error: 'max_order_qty must be >= 1 or null' })
         }
+        if (k === 'over_limit_qty' && v < 1) {
+          return res.status(400).json({ error: 'over_limit_qty must be >= 1 or null' })
+        }
         update[k] = v
       }
+    }
+  }
+  if ('over_limit_action' in update) {
+    const v = update.over_limit_action
+    if (v === null || v === '') {
+      update.over_limit_action = null
+    } else if (typeof v !== 'string' || !(OVER_LIMIT_ACTIONS as readonly string[]).includes(v)) {
+      return res.status(400).json({ error: `over_limit_action must be one of ${OVER_LIMIT_ACTIONS.join(', ')} or null` })
     }
   }
   if ('freight_packaging' in update) {

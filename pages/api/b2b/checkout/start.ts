@@ -22,6 +22,7 @@ import { paytoSurchargeInc } from '../../../../lib/b2b-payment'
 import { assertCheckoutConfigured } from '../../../../lib/b2b-settings'
 import { getLiveQuote, getSatchelRates, getDropshipFreight, type LiveQuoteCartItem } from '../../../../lib/b2b-freight'
 import { loadBundleChildren, bundleChildUnitPriceExGst } from '../../../../lib/b2b-bundles'
+import { resolveOverLimit, lineShipsFromSupplier } from '../../../../lib/b2b-over-limit'
 
 const GST_RATE = 0.10
 
@@ -122,7 +123,7 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, use
         id, myob_item_uid, sku, name,
         trade_price_ex_gst, is_taxable, b2b_visible, is_drop_ship,
         promo_price_ex_gst, promo_starts_at, promo_ends_at, volume_breaks,
-        max_order_qty
+        max_order_qty, over_limit_qty, over_limit_action
       )
     `)
     .eq('cart_id', cart.id)
@@ -177,6 +178,15 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, use
       issues.push(`"${cat.name}" — max ${maxOrderQty} per order (cart has ${ln.qty})`)
       continue
     }
+    // Large-order handling. Over the soft threshold, a 'quote' item can't
+    // self-checkout (blocks the whole order); a 'dropship' item is fulfilled
+    // from the supplier for this order.
+    const overLimit = resolveOverLimit(cat, ln.qty)
+    if (overLimit.triggered && overLimit.action === 'quote') {
+      issues.push(`"${cat.name}" — over ${overLimit.threshold} units needs a quote. Use “Request a quote” in your cart for this item.`)
+      continue
+    }
+    const shipsFromSupplier = lineShipsFromSupplier(cat, ln.qty)
     const px = applyPricing({
       trade_price_ex_gst: tradePrice,
       promo_price_ex_gst: cat.promo_price_ex_gst != null ? Number(cat.promo_price_ex_gst) : null,
@@ -195,7 +205,7 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, use
       tradePriceEx: tradePrice,
       maxOrderQty,
       isTaxable:    cat.is_taxable !== false,
-      isDropShip:   cat.is_drop_ship === true,
+      isDropShip:   shipsFromSupplier,
       bundleParentCatalogueId: null,
     })
   }
@@ -266,6 +276,9 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, use
     })
   }
   for (const v of validated) {
+    // Drop-ship lines (incl. over-limit drop-ship) are fulfilled by the
+    // supplier — they're not constrained by our warehouse stock.
+    if (v.isDropShip) continue
     const s = stockMap[v.myobItemUid!]
     const avail = availableQty(s, committed[v.catalogueId] || 0)
     if (avail !== null && v.qty > avail) {
@@ -335,7 +348,7 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, use
     // sell price; ships manually (no MachShip consignment).
     const { data: sRows, error: sErr } = await c
       .from('b2b_cart_items')
-      .select(`qty, catalogue:b2b_catalogue!b2b_cart_items_catalogue_id_fkey ( is_drop_ship, freight_weight_g, freight_length_mm, freight_width_mm, freight_height_mm, freight_packaging )`)
+      .select(`qty, catalogue:b2b_catalogue!b2b_cart_items_catalogue_id_fkey ( is_drop_ship, over_limit_qty, over_limit_action, freight_weight_g, freight_length_mm, freight_width_mm, freight_height_mm, freight_packaging )`)
       .eq('cart_id', cart.id)
     if (sErr) return res.status(500).json({ error: sErr.message })
     const eligItems = (sRows || []).map((r: any) => {
@@ -347,9 +360,10 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, use
         width_mm: cat?.freight_width_mm ?? null,
         height_mm: cat?.freight_height_mm ?? null,
         packaging: cat?.freight_packaging ?? null,
-        is_drop_ship: cat?.is_drop_ship === true,
+        // Supplier-shipped lines (incl. over-limit drop-ship) don't go in a satchel.
+        is_drop_ship: cat ? lineShipsFromSupplier(cat, Number(r.qty || 0)) : false,
       }
-    }).filter((i: any) => !i.is_drop_ship)   // drop-ship items ship from supplier, not in a satchel
+    }).filter((i: any) => !i.is_drop_ship)
     const eligible = await getSatchelRates(eligItems)
     const match = eligible.find(e => e.satchel_id === chosenSatchelId)
     if (!match) {
@@ -390,7 +404,7 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, use
       .select(`
         qty,
         catalogue:b2b_catalogue!b2b_cart_items_catalogue_id_fkey (
-          sku, name, is_drop_ship,
+          sku, name, is_drop_ship, over_limit_qty, over_limit_action,
           freight_weight_g, freight_length_mm, freight_width_mm, freight_height_mm, freight_packaging,
           manual_handling, inbound_freight_cost_ex_gst
         )
@@ -402,7 +416,9 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, use
         const cat = Array.isArray(r.catalogue) ? r.catalogue[0] : r.catalogue
         return { r, cat }
       })
-      .filter(({ cat }: any) => cat && cat.is_drop_ship !== true)   // drop-ship ships from supplier, not our warehouse
+      // Supplier-shipped lines (incl. over-limit drop-ship) aren't in the
+      // warehouse carrier quote — they're priced via drop-ship freight.
+      .filter(({ r, cat }: any) => cat && !lineShipsFromSupplier(cat, Number(r.qty || 0)))
       .map(({ r, cat }: any) => ({
         sku:               cat?.sku || '',
         name:              cat?.name || cat?.sku || '(item)',
@@ -549,6 +565,7 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, use
       is_taxable: v.isTaxable,
       sort_order: i,
       bundle_parent_catalogue_id: v.bundleParentCatalogueId,
+      is_drop_ship: v.isDropShip,
     }
   })
   const { error: olErr } = await c.from('b2b_order_lines').insert(orderLineRows)

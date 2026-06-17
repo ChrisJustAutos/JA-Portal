@@ -73,6 +73,11 @@ interface CartLine {
   is_bundle_component?: boolean
   bundle_parent_catalogue_id?: string | null
   bundle_price_mode?: 'included' | 'added'
+  // Large-order handling (migration 125).
+  over_limit_qty?: number | null
+  over_limit_action?: 'quote' | 'dropship' | null
+  needs_quote?: boolean          // qty over a 'quote' threshold → blocks checkout
+  ships_from_supplier?: boolean  // catalogue drop-ship OR over-limit drop-ship
 }
 
 interface CartTotals {
@@ -254,6 +259,28 @@ export default function B2BCartPage({ b2bUser }: Props) {
   const cartItemCount = data ? data.item_count : 0
   const isEmpty = !data || data.lines.length === 0
   const anyLineOverCap = data ? data.lines.some(l => l.effective_cap !== null && l.qty > l.effective_cap) : false
+  const anyLineNeedsQuote = data ? data.lines.some(l => l.needs_quote) : false
+
+  const [quoteBusy, setQuoteBusy] = useState(false)
+  const [quoteSent, setQuoteSent] = useState(false)
+  async function requestQuote() {
+    setQuoteBusy(true)
+    try {
+      const r = await fetch('/api/b2b/quote-request', {
+        method: 'POST', credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      })
+      const j = await r.json().catch(() => ({}))
+      if (!r.ok) throw new Error(j?.error || `HTTP ${r.status}`)
+      setQuoteSent(true)
+      toast('Quote request sent — your account manager will be in touch.', 'success')
+    } catch (e: any) {
+      toast(`Couldn’t send quote request: ${e?.message || e}`, 'error')
+    } finally {
+      setQuoteBusy(false)
+    }
+  }
 
   return (
     <>
@@ -321,6 +348,30 @@ export default function B2BCartPage({ b2bUser }: Props) {
             gap: isMobile ? 14 : 18, alignItems:'start',
           }}>
 
+            {/* Large-order quote banner — spans both columns */}
+            {anyLineNeedsQuote && (
+              <div style={{
+                gridColumn:'1 / -1',
+                background:`${T.amber}12`,border:`1px solid ${T.amber}55`,borderRadius:10,
+                padding:'12px 16px',display:'flex',alignItems:'center',gap:14,flexWrap:'wrap',
+              }}>
+                <div style={{flex:1,minWidth:200,fontSize:13,color:T.text,lineHeight:1.5}}>
+                  Some items are above the quantity we can sell online — these need a manual quote.
+                  Request one and we’ll get back to you with pricing and freight.
+                </div>
+                <button
+                  onClick={requestQuote}
+                  disabled={quoteBusy || quoteSent}
+                  style={{
+                    padding:'9px 16px',borderRadius:6,border:`1px solid ${T.amber}`,
+                    background: quoteSent ? 'transparent' : T.amber, color: quoteSent ? T.amber : '#1a1300',
+                    fontSize:13,fontWeight:600,cursor: quoteBusy||quoteSent ? 'default' : 'pointer',fontFamily:'inherit',whiteSpace:'nowrap',
+                  }}>
+                  {quoteSent ? '✓ Quote requested' : quoteBusy ? 'Sending…' : 'Request a quote'}
+                </button>
+              </div>
+            )}
+
             {/* Lines */}
             <div style={{background:T.bg2,border:`1px solid ${T.border}`,borderRadius:10,overflow:'hidden'}}>
               {data.lines.map((line, i) => (
@@ -346,7 +397,9 @@ export default function B2BCartPage({ b2bUser }: Props) {
               onCheckout={startCheckout}
               checkoutBusy={checkoutBusy}
               blockedReason={
-                anyLineOverCap
+                anyLineNeedsQuote
+                  ? 'One or more items need a manual quote for the quantity ordered — request a quote or reduce the qty to check out.'
+                  : anyLineOverCap
                   ? 'One or more items exceed the available qty or per-order max — adjust your cart to continue.'
                   : data.freight?.mode === 'blocked'
                     ? (data.freight.blocked?.reason || 'Freight quote unavailable for this cart — contact your account manager.')
@@ -478,6 +531,8 @@ function CartLineRow({
           </span>
           {line.is_special_order && <span style={{fontSize:9,fontWeight:500,padding:'1px 6px',borderRadius:6,background:`${T.amber}18`,color:T.amber}}>Special order</span>}
           {line.is_drop_ship && <span style={{fontSize:9,fontWeight:500,padding:'1px 6px',borderRadius:6,background:`${T.purple}18`,color:T.purple}}>Drop ship</span>}
+          {line.needs_quote && <span style={{fontSize:9,fontWeight:600,padding:'1px 7px',borderRadius:6,background:`${T.amber}20`,color:T.amber,letterSpacing:'0.03em'}}>QUOTE NEEDED{line.over_limit_qty != null ? ` · OVER ${line.over_limit_qty}` : ''}</span>}
+          {line.ships_from_supplier && !line.is_drop_ship && <span style={{fontSize:9,fontWeight:500,padding:'1px 6px',borderRadius:6,background:`${T.purple}18`,color:T.purple}} title="This quantity is sourced direct from the supplier">Supplier-sourced (large qty)</span>}
           {!line.currently_visible && <span style={{fontSize:10,color:T.amber}}>⚠ no longer in catalogue</span>}
           {line.price_changed && <span style={{fontSize:10,color:T.amber}}>⚠ price changed since added</span>}
         </div>
