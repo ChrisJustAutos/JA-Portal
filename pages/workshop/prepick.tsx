@@ -1,9 +1,11 @@
 // pages/workshop/prepick.tsx
-// Pre Pick — for all jobs in a date range, sum the parts they need, compare to
-// current stock, and show green/orange/red tiles (like the B2B stock wall) plus
-// a filterable, exportable list of what to pick / order. Gated view:diary.
+// Pre Pick — for all jobs in a date range (pulled LIVE from MechanicDesk), sum
+// the parts they need, compare to current MD stock, and show green/orange/red
+// tiles (like the B2B stock wall) plus a filterable, exportable list of what to
+// pick / order. The snapshot is built by a GitHub Action worker; this screen
+// reads the latest snapshot and can kick a fresh pull. Gated view:diary.
 
-import { useEffect, useState, useCallback, useMemo } from 'react'
+import { useEffect, useState, useCallback, useMemo, useRef } from 'react'
 import Head from 'next/head'
 import PortalTopBar from '../../lib/PortalTopBar'
 import InventoryTabs from '../../components/InventoryTabs'
@@ -11,6 +13,7 @@ import WorkshopTabs from '../../components/WorkshopTabs'
 import { requirePageAuth } from '../../lib/authServer'
 import type { PortalUserSSR } from '../../lib/authServer'
 import { T, SkeletonRows } from '../../components/ui'
+import { useToast } from '../../components/ui/Feedback'
 
 interface PrePickItem {
   id: string; sku: string; part_name: string; brand: string | null; supplier: string | null
@@ -19,34 +22,100 @@ interface PrePickItem {
 }
 type Status = 'green' | 'orange' | 'red'
 type Filter = 'all' | 'green' | 'orange' | 'red' | 'toorder'
+type RunStatus = 'none' | 'pending' | 'running' | 'done' | 'error'
 
 function ymd(d: Date): string { const p = (n: number) => String(n).padStart(2, '0'); return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}` }
 function addDays(d: Date, n: number): Date { const x = new Date(d); x.setDate(x.getDate() + n); return x }
 const money = (n: number | null) => (n == null ? '—' : `$${(Number(n) || 0).toFixed(2)}`)
+function ago(iso: string | null): string {
+  if (!iso) return 'never'
+  const t = new Date(iso).getTime(); if (!isFinite(t)) return 'never'
+  const mins = Math.round((Date.now() - t) / 60000)
+  if (mins < 1) return 'just now'
+  if (mins < 60) return `${mins} min ago`
+  const hrs = Math.round(mins / 60); if (hrs < 24) return `${hrs} hr${hrs === 1 ? '' : 's'} ago`
+  const days = Math.round(hrs / 24); return `${days} day${days === 1 ? '' : 's'} ago`
+}
 
 export default function PrePickPage({ user }: { user: PortalUserSSR }) {
+  const toast = useToast()
   const today = new Date()
+  // The picker range drives the NEXT pull from MechanicDesk.
   const [from, setFrom] = useState(ymd(today))
-  const [to, setTo] = useState(ymd(addDays(today, 7)))
+  const [to, setTo] = useState(ymd(addDays(today, 14)))
   const [lowThreshold, setLowThreshold] = useState(5)
   const [items, setItems] = useState<PrePickItem[]>([])
   const [jobsCount, setJobsCount] = useState(0)
   const [loading, setLoading] = useState(true)
-  const [lastRefresh, setLastRefresh] = useState<Date | null>(null)
+  const [refreshing, setRefreshing] = useState(false)
   const [q, setQ] = useState('')
   const [filter, setFilter] = useState<Filter>('all')
+  // Snapshot metadata (the range/time the displayed data was actually pulled for).
+  const [snapFrom, setSnapFrom] = useState<string | null>(null)
+  const [snapTo, setSnapTo] = useState<string | null>(null)
+  const [syncedAt, setSyncedAt] = useState<string | null>(null)
+  const [runStatus, setRunStatus] = useState<RunStatus>('none')
+  const [runError, setRunError] = useState<string | null>(null)
+  const didInitRange = useRef(false)
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   const load = useCallback(async () => {
-    if (!from || !to) return
-    setLoading(true)
     try {
-      const r = await fetch(`/api/workshop/prepick?from=${from}&to=${to}`)
+      const r = await fetch('/api/workshop/prepick')
       const d = await r.json()
-      if (r.ok) { setItems(Array.isArray(d.items) ? d.items : []); setJobsCount(Number(d.jobs_count) || 0) }
-      setLastRefresh(new Date())
+      if (r.ok) {
+        setItems(Array.isArray(d.items) ? d.items : [])
+        setJobsCount(Number(d.jobs_count) || 0)
+        setSnapFrom(d.from || null); setSnapTo(d.to || null)
+        setSyncedAt(d.synced_at || null)
+        setRunStatus((d.status as RunStatus) || 'none')
+        setRunError(d.error || null)
+        // On first load, default the picker to the last-pulled range.
+        if (!didInitRange.current && d.from && d.to) {
+          setFrom(d.from); setTo(d.to); didInitRange.current = true
+        }
+        return (d.status as RunStatus) || 'none'
+      }
     } catch { /* keep prior */ } finally { setLoading(false) }
-  }, [from, to])
-  useEffect(() => { const t = setTimeout(load, 200); return () => clearTimeout(t) }, [load])
+    return 'none' as RunStatus
+  }, [])
+  useEffect(() => { load() }, [load])
+
+  // Poll while a pull is in flight; stop when it lands on done/error.
+  useEffect(() => {
+    const inFlight = runStatus === 'pending' || runStatus === 'running' || refreshing
+    if (inFlight && !pollRef.current) {
+      pollRef.current = setInterval(async () => {
+        const s = await load()
+        if (s === 'done' || s === 'error') {
+          if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null }
+          setRefreshing(false)
+          if (s === 'done') toast('Pre Pick updated from MechanicDesk', 'success')
+          if (s === 'error') toast('MechanicDesk pull failed — see banner', 'error')
+        }
+      }, 5000)
+    }
+    if (!inFlight && pollRef.current) { clearInterval(pollRef.current); pollRef.current = null }
+    return () => { if (pollRef.current && !inFlight) { clearInterval(pollRef.current); pollRef.current = null } }
+  }, [runStatus, refreshing, load, toast])
+  useEffect(() => () => { if (pollRef.current) clearInterval(pollRef.current) }, [])
+
+  const refresh = useCallback(async () => {
+    if (!from || !to) return
+    if (from > to) { toast('"From" date must be on or before "To" date', 'error'); return }
+    setRefreshing(true)
+    try {
+      const r = await fetch('/api/workshop/prepick/refresh', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ from, to }),
+      })
+      const d = await r.json().catch(() => ({}))
+      if (!r.ok) { toast(d.error || 'Could not start the pull', 'error'); setRefreshing(false); return }
+      toast('Pulling from MechanicDesk — this takes ~1–2 minutes.', 'info')
+      setRunStatus('pending')
+      setTimeout(load, 3000)
+    } catch { toast('Could not start the pull', 'error'); setRefreshing(false) }
+  }, [from, to, load, toast])
 
   const remaining = (it: PrePickItem) => Math.round((it.current_stock - it.to_pick) * 100) / 100
   const toOrder = (it: PrePickItem) => Math.max(0, Math.round((it.to_pick - it.current_stock) * 100) / 100)
@@ -88,15 +157,15 @@ export default function PrePickPage({ user }: { user: PortalUserSSR }) {
   }
 
   function exportCsv() {
-    const head = ['SKU', 'Part', 'Brand', 'Supplier', 'To pick', 'On hand', 'Remaining', 'To order', 'Buy price', 'Location', 'Status']
+    const headRow = ['SKU', 'Part', 'Brand', 'Supplier', 'To pick', 'On hand', 'Remaining', 'To order', 'Buy price', 'Location', 'Status']
     const esc = (v: any) => { const s = String(v ?? ''); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s }
-    const lines = [head.join(',')]
+    const lines = [headRow.join(',')]
     for (const it of filtered) {
       lines.push([it.sku, it.part_name, it.brand || '', it.supplier || '', it.to_pick, it.current_stock, remaining(it), toOrder(it), it.buy_price ?? '', it.location || '', statusOf(it)].map(esc).join(','))
     }
     const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8' })
     const url = URL.createObjectURL(blob)
-    const a = document.createElement('a'); a.href = url; a.download = `pre-pick-${from}_to_${to}.csv`; a.click(); URL.revokeObjectURL(url)
+    const a = document.createElement('a'); a.href = url; a.download = `pre-pick-${snapFrom || from}_to_${snapTo || to}.csv`; a.click(); URL.revokeObjectURL(url)
   }
 
   const chip = (f: Filter, label: string, c?: string) => (
@@ -109,13 +178,14 @@ export default function PrePickPage({ user }: { user: PortalUserSSR }) {
   const inputStyle: React.CSSProperties = { background: T.bg3, border: `1px solid ${T.border}`, borderRadius: 6, color: T.text, fontSize: 13, padding: '6px 9px', fontFamily: 'inherit', outline: 'none', colorScheme: 'dark' }
   const GRID = '110px 1fr 120px 70px 70px 80px 80px 80px 110px'
   const head: React.CSSProperties = { fontSize: 9, color: T.text3, textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 600 }
+  const pulling = runStatus === 'pending' || runStatus === 'running' || refreshing
 
   return (
     <>
       <Head><title>Pre Pick — Just Autos</title><meta name="viewport" content="width=device-width,initial-scale=1"/><meta name="robots" content="noindex,nofollow"/></Head>
       <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', overflow: 'hidden', fontFamily: "'DM Sans',system-ui,sans-serif", color: T.text }}>
         <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet"/>
-        <PortalTopBar activeId="diary" lastRefresh={lastRefresh} onRefresh={load} refreshing={loading}
+        <PortalTopBar activeId="diary" lastRefresh={syncedAt ? new Date(syncedAt) : null} onRefresh={load} refreshing={loading}
           currentUserRole={user.role} currentUserVisibleTabs={user.visibleTabs} currentUserName={user.displayName} currentUserEmail={user.email} />
         <WorkshopTabs active="inventory" role={user.role} />
         <InventoryTabs active="prepick" role={user.role} />
@@ -134,6 +204,10 @@ export default function PrePickPage({ user }: { user: PortalUserSSR }) {
               <button onClick={() => preset('fortnight')} style={{ ...inputStyle, cursor: 'pointer', padding: '6px 10px' }}>14 days</button>
               <button onClick={() => preset('month')} style={{ ...inputStyle, cursor: 'pointer', padding: '6px 10px' }}>This month</button>
             </div>
+            <button onClick={refresh} disabled={pulling} style={{
+              background: pulling ? T.bg3 : T.accent, color: pulling ? T.text3 : '#fff', border: 'none', borderRadius: 6,
+              padding: '7px 14px', fontSize: 13, fontWeight: 600, cursor: pulling ? 'wait' : 'pointer', fontFamily: 'inherit',
+            }}>{pulling ? 'Pulling from MD…' : '↻ Refresh from MechanicDesk'}</button>
             <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: T.text2 }}>
               Low warning ≤
               <input type="number" min={0} value={lowThreshold} onChange={e => setLowThreshold(Math.max(0, Number(e.target.value) || 0))} style={{ ...inputStyle, width: 56, textAlign: 'right' }} />
@@ -144,6 +218,19 @@ export default function PrePickPage({ user }: { user: PortalUserSSR }) {
               {counts.orderCount > 0 && <span style={{ color: T.red, fontWeight: 600 }}> · {counts.orderCount} to order ({money(counts.orderValue)})</span>}
             </span>
             <button onClick={exportCsv} disabled={filtered.length === 0} style={{ ...inputStyle, cursor: filtered.length ? 'pointer' : 'not-allowed', opacity: filtered.length ? 1 : 0.5, fontWeight: 600 }}>⬇ Export CSV</button>
+          </div>
+
+          {/* Sync status line */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '7px 20px', background: T.bg, borderBottom: `1px solid ${T.border}`, flexShrink: 0, fontSize: 12, color: T.text3 }}>
+            {pulling ? (
+              <span style={{ color: T.accent, fontWeight: 600 }}>● Pulling jobs &amp; stock from MechanicDesk… (~1–2 min)</span>
+            ) : runStatus === 'error' ? (
+              <span style={{ color: T.red }}>⚠ Last pull failed{runError ? `: ${runError}` : ''}. Try Refresh again.</span>
+            ) : syncedAt ? (
+              <span>Live from MechanicDesk · pulled <strong style={{ color: T.text2 }}>{ago(syncedAt)}</strong> for jobs <strong style={{ color: T.text2 }}>{snapFrom}</strong> → <strong style={{ color: T.text2 }}>{snapTo}</strong></span>
+            ) : (
+              <span>No snapshot yet — pick a date range and hit <strong style={{ color: T.text2 }}>Refresh from MechanicDesk</strong>.</span>
+            )}
           </div>
 
           {/* Filters */}
@@ -162,7 +249,9 @@ export default function PrePickPage({ user }: { user: PortalUserSSR }) {
               <SkeletonRows rows={6} />
             ) : items.length === 0 ? (
               <div style={{ padding: 48, textAlign: 'center', color: T.text3, fontSize: 13 }}>
-                No stocked parts on jobs in this range. Try a wider date range — only parts linked to an inventory item are counted.
+                {pulling
+                  ? 'Pulling from MechanicDesk — parts will appear here shortly.'
+                  : 'No tracked parts on MechanicDesk jobs in the last pulled range. Pick a date range and hit “Refresh from MechanicDesk”. Only parts linked to a tracked MD stock item are counted (labour/freight excluded).'}
               </div>
             ) : (
               <>

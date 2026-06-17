@@ -1,0 +1,65 @@
+name: Pre Pick — Mechanics Desk worker
+
+# Pulls the workshop "Pre Pick" demand from MechanicDesk: lists diary jobs in a
+# date range, reads each job's invoice parts, sums tracked stock + records live
+# on-hand, and POSTs the snapshot to the portal (/api/workshop/prepick/ingest).
+#
+# Triggers:
+#   - repository_dispatch ('prepick-pull') from /api/workshop/prepick/refresh,
+#     client_payload { from, to, requested_by }
+#   - workflow_dispatch (manual, from/to inputs)
+#   - schedule (a few times each business day; worker defaults to today → +14d)
+#
+# Browsers: installs Chromium via the Playwright CDN (same approach as the
+# stocktake worker — reliable vs intermittent MCR image-pull failures).
+
+on:
+  repository_dispatch:
+    types:
+      - prepick-pull
+  workflow_dispatch:
+    inputs:
+      from:
+        description: 'From date (YYYY-MM-DD) — leave blank for today'
+        required: false
+      to:
+        description: 'To date (YYYY-MM-DD) — leave blank for today+14'
+        required: false
+  schedule:
+    # 06:00, 11:00, 15:00 AEST (UTC+10) on weekdays.
+    - cron: '0 20 * * 0-4'
+    - cron: '0 1 * * 1-5'
+    - cron: '0 5 * * 1-5'
+
+jobs:
+  run:
+    name: prepick ${{ github.event.client_payload.from || github.event.inputs.from || 'auto' }} … ${{ github.event.client_payload.to || github.event.inputs.to || 'auto' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci || npm install
+
+      - name: Install Playwright Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Run worker
+        env:
+          FROM:         ${{ github.event.client_payload.from || github.event.inputs.from }}
+          TO:           ${{ github.event.client_payload.to || github.event.inputs.to }}
+          REQUESTED_BY: ${{ github.event.client_payload.requested_by || 'scheduled' }}
+          MECHANICDESK_WORKSHOP_ID: ${{ secrets.MECHANICDESK_WORKSHOP_ID }}
+          MECHANICDESK_USERNAME:    ${{ secrets.MECHANICDESK_USERNAME }}
+          MECHANICDESK_PASSWORD:    ${{ secrets.MECHANICDESK_PASSWORD }}
+          JA_PORTAL_BASE_URL:       ${{ secrets.JA_PORTAL_BASE_URL }}
+          JA_PORTAL_API_KEY:        ${{ secrets.JA_PORTAL_API_KEY }}
+        run: npx tsx scripts/pull-md-prepick.ts

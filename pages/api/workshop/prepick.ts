@@ -1,17 +1,17 @@
 // pages/api/workshop/prepick.ts
-// GET ?from=YYYY-MM-DD&to=YYYY-MM-DD — "Pre Pick" stock demand for a date range.
-// Sums the parts (workshop_booking_lines, line_type='part', linked to inventory)
-// across all jobs whose starts_at falls in the range (excluding cancelled /
-// no-show / already-invoiced jobs), and returns each inventory item's demand
-// alongside its current on-hand stock. The client computes green/orange/red
-// status + the to-order shortfall (so the low-stock threshold is adjustable live).
+// GET — the latest MechanicDesk "Pre Pick" snapshot for the workshop screen.
+// Data is pulled LIVE from MechanicDesk by a GitHub Action worker (jobs in a
+// date range → invoice parts → live on-hand) and stored as md_prepick_runs +
+// md_prepick_items. This endpoint returns the most recent run's items in the
+// shape the page renders (client computes green/orange/red). To refresh, the
+// page calls /api/workshop/prepick/refresh which kicks the worker.
 //
 // Gated view:diary.
 
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
 import { withAuth } from '../../../lib/authServer'
 
-export const config = { maxDuration: 30 }
+export const config = { maxDuration: 15 }
 
 function sb(): SupabaseClient {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL
@@ -20,76 +20,45 @@ function sb(): SupabaseClient {
   return createClient(url, key, { auth: { persistSession: false } })
 }
 
-// Jobs in these states either won't be picked or have already consumed stock.
-const EXCLUDED_STATUSES = ['cancelled', 'no_show', 'invoiced', 'paid']
-
 export default withAuth('view:diary', async (req, res) => {
   if (req.method !== 'GET') { res.setHeader('Allow', 'GET'); return res.status(405).json({ error: 'GET only' }) }
-  const from = String(req.query.from || '').trim()
-  const to = String(req.query.to || '').trim()
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to)) {
-    return res.status(400).json({ error: 'from and to (YYYY-MM-DD) required' })
-  }
-  // Brisbane day bounds (AEST, no DST) → timestamptz comparison on starts_at.
-  const fromIso = `${from}T00:00:00+10:00`
-  const toIso = `${to}T23:59:59.999+10:00`
-
   const db = sb()
 
-  // 1. Jobs in the window we'd pick for.
-  const { data: bookings, error: bErr } = await db.from('workshop_bookings')
-    .select('id, status')
-    .gte('starts_at', fromIso).lte('starts_at', toIso)
-    .not('status', 'in', `(${EXCLUDED_STATUSES.join(',')})`)
-  if (bErr) return res.status(500).json({ error: bErr.message })
-  const bookingIds = (bookings || []).map((b: any) => b.id)
-  if (bookingIds.length === 0) {
-    return res.status(200).json({ items: [], jobs_count: 0, from, to, generated_at: new Date().toISOString() })
+  // Most recent run (any status — so the UI can show 'running'/'error' too).
+  const { data: run, error: rErr } = await db.from('md_prepick_runs')
+    .select('id, from_date, to_date, status, jobs_count, items_count, error, created_at, completed_at')
+    .order('created_at', { ascending: false }).limit(1).maybeSingle()
+  if (rErr) return res.status(500).json({ error: rErr.message })
+  if (!run) {
+    return res.status(200).json({ items: [], jobs_count: 0, from: null, to: null, status: 'none', synced_at: null, source: 'mechanicdesk' })
   }
 
-  // 2. Part lines on those jobs, linked to an inventory item. Page through in
-  //    case a busy range has many lines (the .in() list is the booking set).
-  const demand = new Map<string, number>()   // inventory_id → qty to pick
-  const PAGE = 1000
-  for (let offset = 0; ; offset += PAGE) {
-    const { data: lines, error: lErr } = await db.from('workshop_booking_lines')
-      .select('inventory_id, qty')
-      .in('booking_id', bookingIds)
-      .eq('line_type', 'part')
-      .not('inventory_id', 'is', null)
-      .range(offset, offset + PAGE - 1)
-    if (lErr) return res.status(500).json({ error: lErr.message })
-    for (const l of (lines || []) as any[]) {
-      demand.set(l.inventory_id, (demand.get(l.inventory_id) || 0) + (Number(l.qty) || 0))
-    }
-    if (!lines || lines.length < PAGE) break
-  }
-
-  if (demand.size === 0) {
-    return res.status(200).json({ items: [], jobs_count: bookingIds.length, from, to, generated_at: new Date().toISOString() })
-  }
-
-  // 3. Current stock + metadata for the demanded items.
-  const invIds = Array.from(demand.keys())
-  const { data: inv, error: iErr } = await db.from('workshop_inventory')
-    .select('id, sku, part_name, brand, supplier, location, bin, buy_price, quantity, alert_qty')
-    .in('id', invIds)
+  const { data: rows, error: iErr } = await db.from('md_prepick_items')
+    .select('id, md_stock_id, sku, name, to_pick, on_hand, alert_qty, reorder_point, buy_price, location')
+    .eq('run_id', run.id).order('to_pick', { ascending: false })
   if (iErr) return res.status(500).json({ error: iErr.message })
 
-  const items = (inv || []).map((it: any) => ({
+  const items = (rows || []).map((it: any) => ({
     id: it.id,
     sku: it.sku || '',
-    part_name: it.part_name || '',
-    brand: it.brand || null,
-    supplier: it.supplier || null,
-    location: it.location || it.bin || null,
+    part_name: it.name || '',
+    brand: null,
+    supplier: null,
+    location: it.location || null,
     buy_price: it.buy_price != null ? Number(it.buy_price) : null,
-    alert_qty: it.alert_qty != null ? Number(it.alert_qty) : null,
-    to_pick: Math.round((demand.get(it.id) || 0) * 100) / 100,
-    current_stock: it.quantity != null ? Number(it.quantity) : 0,
+    alert_qty: it.alert_qty != null ? Number(it.alert_qty) : (it.reorder_point != null ? Number(it.reorder_point) : null),
+    to_pick: Number(it.to_pick) || 0,
+    current_stock: Number(it.on_hand) || 0,
   }))
-  // Biggest demand first.
-  items.sort((a, b) => b.to_pick - a.to_pick)
 
-  return res.status(200).json({ items, jobs_count: bookingIds.length, from, to, generated_at: new Date().toISOString() })
+  return res.status(200).json({
+    items,
+    jobs_count: run.jobs_count || 0,
+    from: run.from_date,
+    to: run.to_date,
+    status: run.status,
+    error: run.error || null,
+    synced_at: run.completed_at || run.created_at,
+    source: 'mechanicdesk',
+  })
 })

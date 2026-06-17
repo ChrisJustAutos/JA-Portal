@@ -536,3 +536,101 @@ export async function processMdPurchase(
   const after = await mdFetch<any>(client, `/purchases/${purchaseId}.json`)
   return { status: after?.status ?? null, processed: after?.processed === true }
 }
+
+// ── Pre Pick: aggregate parts demand for jobs in a date range ─────────────
+// Walks the MD diary day-by-day to collect job ids, fetches each job's invoice
+// line-items, and sums the TRACKED parts (real stock — labour/freight/misc are
+// disable_tracking=true) by stock id, recording the live on-hand at pull time.
+// Endpoints (mdweb SPA, same session):
+//   GET /mdweb/workshops/diary?start=<iso>&end=<iso>  → { bookings:[{job_id}], jobs:[{job_id}] }
+//   GET /mdweb/workshops/jobs/{id}?id={id}            → { invoice:{ items:[{ stock_id, quantity, stock:{…} }] } }
+
+export interface MdPrePickItem {
+  md_stock_id: number
+  sku: string | null
+  name: string | null
+  to_pick: number
+  on_hand: number
+  alert_qty: number | null
+  reorder_point: number | null
+  buy_price: number | null
+  location: string | null
+}
+
+function ymdList(fromYmd: string, toYmd: string): string[] {
+  const out: string[] = []
+  const start = new Date(`${fromYmd}T00:00:00+10:00`)
+  const end = new Date(`${toYmd}T00:00:00+10:00`)
+  for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+    out.push(d.toISOString().slice(0, 10))
+    if (out.length > 120) break   // safety bound
+  }
+  return out
+}
+
+export async function collectPrePickDemand(
+  client: MdClient,
+  fromYmd: string,
+  toYmd: string,
+  log: (m: string) => void = () => {},
+): Promise<{ jobsCount: number; items: MdPrePickItem[] }> {
+  // 1. Collect unique job ids from the diary across each day in the range.
+  const jobIds = new Set<number>()
+  for (const ymd of ymdList(fromYmd, toYmd)) {
+    const start = `${ymd}T00:00:00+10:00`
+    const end = `${ymd}T23:59:59+10:00`
+    let diary: any
+    try {
+      diary = await mdFetch<any>(client, `/mdweb/workshops/diary?start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}`)
+    } catch (e: any) {
+      log(`  diary ${ymd} failed: ${String(e?.message).slice(0, 140)}`)
+      continue
+    }
+    for (const arr of [diary?.bookings, diary?.jobs]) {
+      for (const row of (Array.isArray(arr) ? arr : [])) {
+        const jid = Number(row?.job_id ?? row?.id)
+        if (jid && isFinite(jid)) jobIds.add(jid)
+      }
+    }
+  }
+  log(`  ${jobIds.size} unique job(s) in ${fromYmd}…${toYmd}`)
+
+  // 2. Fetch each job, aggregate tracked parts by stock id.
+  const agg = new Map<number, MdPrePickItem>()
+  for (const jid of Array.from(jobIds)) {
+    let job: any
+    try {
+      job = await mdFetch<any>(client, `/mdweb/workshops/jobs/${jid}?id=${jid}`)
+    } catch (e: any) {
+      log(`  job ${jid} failed: ${String(e?.message).slice(0, 140)}`)
+      continue
+    }
+    const items = Array.isArray(job?.invoice?.items) ? job.invoice.items : []
+    for (const it of items) {
+      const st = it?.stock
+      const qty = Number(it?.quantity) || 0
+      // Tracked physical stock only (skip labour/freight/misc/deposit + headings).
+      if (!st || st.disable_tracking === true || !it?.stock_id || qty <= 0) continue
+      const id = Number(it.stock_id)
+      const cur = agg.get(id)
+      if (cur) {
+        cur.to_pick += qty
+      } else {
+        agg.set(id, {
+          md_stock_id: id,
+          sku: it.stock_number || st.stock_number || null,
+          name: st.name || it.description || null,
+          to_pick: qty,
+          on_hand: Number(st.quantity) || 0,
+          alert_qty: st.alert_quantity != null ? Number(st.alert_quantity) : null,
+          reorder_point: st.reorder_point != null ? Number(st.reorder_point) : null,
+          buy_price: st.buy_price != null ? Number(st.buy_price) : null,
+          location: st.location || st.bin || null,
+        })
+      }
+    }
+  }
+  const items = Array.from(agg.values()).map(i => ({ ...i, to_pick: Math.round(i.to_pick * 100) / 100 }))
+  items.sort((a, b) => b.to_pick - a.to_pick)
+  return { jobsCount: jobIds.size, items }
+}
