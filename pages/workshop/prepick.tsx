@@ -49,6 +49,7 @@ export default function PrePickPage({ user }: { user: PortalUserSSR }) {
   const [loading, setLoading] = useState(true)
   const [q, setQ] = useState('')
   const [filter, setFilter] = useState<Filter>('all')
+  const [pdfBusy, setPdfBusy] = useState(false)
   // Snapshot metadata (the range/time the displayed data was actually pulled for).
   const [snapFrom, setSnapFrom] = useState<string | null>(null)
   const [snapTo, setSnapTo] = useState<string | null>(null)
@@ -183,6 +184,29 @@ export default function PrePickPage({ user }: { user: PortalUserSSR }) {
     const a = document.createElement('a'); a.href = url; a.download = `pre-pick-${snapFrom || from}_to_${snapTo || to}.csv`; a.click(); URL.revokeObjectURL(url)
   }
 
+  const filterLabel = (f: Filter) => f === 'green' ? 'OK' : f === 'orange' ? 'Low' : f === 'red' ? 'Out of stock' : f === 'toorder' ? 'To order' : 'All'
+
+  async function exportPdf() {
+    if (filtered.length === 0 || pdfBusy) return
+    setPdfBusy(true)
+    try {
+      const payload = {
+        from: snapFrom, to: snapTo, synced_at: syncedAt, jobs_count: jobsCount,
+        low_threshold: lowThreshold, filter_label: filterLabel(filter), counts,
+        items: filtered.map(it => ({
+          sku: it.sku, part_name: it.part_name, supplier: it.supplier, location: it.location,
+          buy_price: it.buy_price, to_pick: it.to_pick, current_stock: it.current_stock,
+          remaining: remaining(it), to_order: toOrder(it), status: statusOf(it),
+        })),
+      }
+      const r = await fetch('/api/workshop/prepick/pdf', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
+      if (!r.ok) { const d = await r.json().catch(() => ({})); toast(d.error || 'PDF export failed', 'error'); return }
+      const blob = await r.blob()
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a'); a.href = url; a.download = `pre-pick-${snapFrom || from}_to_${snapTo || to}.pdf`; a.click(); URL.revokeObjectURL(url)
+    } catch { toast('PDF export failed', 'error') } finally { setPdfBusy(false) }
+  }
+
   const chip = (f: Filter, label: string, c?: string) => (
     <button onClick={() => setFilter(f)} style={{
       padding: '5px 11px', borderRadius: 6, fontSize: 12, fontWeight: filter === f ? 600 : 400, cursor: 'pointer', fontFamily: 'inherit',
@@ -255,6 +279,7 @@ export default function PrePickPage({ user }: { user: PortalUserSSR }) {
               {counts.orderCount > 0 && <span style={{ color: T.red, fontWeight: 600 }}> · {counts.orderCount} to order ({money(counts.orderValue)})</span>}
             </span>
             <button onClick={exportCsv} disabled={filtered.length === 0} style={{ ...inputStyle, cursor: filtered.length ? 'pointer' : 'not-allowed', opacity: filtered.length ? 1 : 0.5, fontWeight: 600 }}>⬇ Export CSV</button>
+            <button onClick={exportPdf} disabled={filtered.length === 0 || pdfBusy} style={{ ...inputStyle, cursor: filtered.length && !pdfBusy ? 'pointer' : 'not-allowed', opacity: filtered.length && !pdfBusy ? 1 : 0.5, fontWeight: 600 }}>{pdfBusy ? 'Building PDF…' : '⬇ Export PDF'}</button>
           </div>
 
           {/* Sync status line */}
