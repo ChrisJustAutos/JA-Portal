@@ -568,49 +568,66 @@ function ymdList(fromYmd: string, toYmd: string): string[] {
   return out
 }
 
+// Run an async fn over items with a bounded concurrency pool. MD's old-app
+// endpoints handle this fine within one authenticated session, and it turns the
+// dozens of sequential job fetches (the worker's main cost) into a few seconds.
+async function mapPool<I, O>(items: I[], limit: number, fn: (item: I, idx: number) => Promise<O>): Promise<O[]> {
+  const out: O[] = new Array(items.length)
+  let next = 0
+  const worker = async () => {
+    while (next < items.length) {
+      const idx = next++
+      out[idx] = await fn(items[idx], idx)
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(Math.max(1, limit), items.length) }, () => worker()))
+  return out
+}
+
 export async function collectPrePickDemand(
   client: MdClient,
   fromYmd: string,
   toYmd: string,
   log: (m: string) => void = () => {},
 ): Promise<{ jobsCount: number; items: MdPrePickItem[] }> {
-  // 1. Collect unique job ids from the diary across each day in the range.
+  // 1. Collect unique job ids from the diary — days fetched concurrently.
+  // NOTE: /mdweb/workshops/diary is the SPA client-side route (serves the HTML
+  // app shell). The actual XHR data endpoint is the old-app /auto_workshop/diary
+  // — same cookie session, no bearer token.
   const jobIds = new Set<number>()
-  for (const ymd of ymdList(fromYmd, toYmd)) {
+  await mapPool(ymdList(fromYmd, toYmd), 6, async (ymd) => {
     const start = `${ymd}T00:00:00+10:00`
     const end = `${ymd}T23:59:59+10:00`
-    let diary: any
     try {
-      // NOTE: /mdweb/workshops/diary is the SPA client-side route (serves the
-      // HTML app shell). The actual XHR data endpoint the app calls is the
-      // old-app /auto_workshop/diary — same cookie session, no bearer token.
-      diary = await mdFetch<any>(client, `/auto_workshop/diary?start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}`)
+      const diary = await mdFetch<any>(client, `/auto_workshop/diary?start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}`)
+      for (const arr of [diary?.bookings, diary?.jobs]) {
+        for (const row of (Array.isArray(arr) ? arr : [])) {
+          const jid = Number(row?.job_id ?? row?.id)
+          if (jid && isFinite(jid)) jobIds.add(jid)
+        }
+      }
     } catch (e: any) {
       log(`  diary ${ymd} failed: ${String(e?.message).slice(0, 140)}`)
-      continue
     }
-    for (const arr of [diary?.bookings, diary?.jobs]) {
-      for (const row of (Array.isArray(arr) ? arr : [])) {
-        const jid = Number(row?.job_id ?? row?.id)
-        if (jid && isFinite(jid)) jobIds.add(jid)
-      }
-    }
-  }
+  })
   log(`  ${jobIds.size} unique job(s) in ${fromYmd}…${toYmd}`)
 
-  // 2. Fetch each job, aggregate tracked parts by stock id.
-  const agg = new Map<number, MdPrePickItem>()
-  for (const jid of Array.from(jobIds)) {
-    let job: any
+  // 2. Fetch each job concurrently. The job-detail data endpoint is root-level
+  // /jobs/{id}?id={id} (not under /auto_workshop/, not the SPA route). Returns
+  // application/json with invoice.items. Confirmed from captured request.
+  const jobs = await mapPool(Array.from(jobIds), 8, async (jid) => {
     try {
-      // The job-detail data endpoint is root-level /jobs/{id}?id={id} (not under
-      // /auto_workshop/, and not the /mdweb/workshops/jobs SPA route). Returns
-      // application/json with invoice.items. Confirmed from captured request.
-      job = await mdFetch<any>(client, `/jobs/${jid}?id=${jid}`)
+      return await mdFetch<any>(client, `/jobs/${jid}?id=${jid}`)
     } catch (e: any) {
       log(`  job ${jid} failed: ${String(e?.message).slice(0, 140)}`)
-      continue
+      return null
     }
+  })
+
+  // 3. Aggregate tracked parts by stock id (single-threaded over the results).
+  const agg = new Map<number, MdPrePickItem>()
+  for (const job of jobs) {
+    if (!job) continue
     const items = Array.isArray(job?.invoice?.items) ? job.invoice.items : []
     for (const it of items) {
       const st = it?.stock

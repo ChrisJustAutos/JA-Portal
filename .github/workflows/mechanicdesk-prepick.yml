@@ -49,8 +49,23 @@ jobs:
       - name: Install dependencies
         run: npm ci || npm install
 
-      - name: Install Playwright Chromium
+      # Cache the Chromium binary across runs so warm runs skip the ~30-40s
+      # download. The browser lives in ~/.cache/ms-playwright; system libs are
+      # NOT cached (fresh runner each time), so we still run install-deps.
+      - name: Cache Playwright browsers
+        id: pw-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-chromium-${{ hashFiles('**/package-lock.json') }}
+
+      - name: Install Playwright Chromium (cache miss)
+        if: steps.pw-cache.outputs.cache-hit != 'true'
         run: npx playwright install --with-deps chromium
+
+      - name: Install Playwright system deps (cache hit)
+        if: steps.pw-cache.outputs.cache-hit == 'true'
+        run: npx playwright install-deps chromium
 
       - name: Run worker
         env:
