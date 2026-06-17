@@ -240,22 +240,36 @@ export default function DiaryPage({ user }: { user: PortalUserSSR }) {
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      const [bRes, nRes, aRes] = await Promise.all([
+      const [bRes, nRes, aRes, tRes] = await Promise.all([
         fetch(`/api/workshop/bookings?from=${encodeURIComponent(range.fromIso)}&to=${encodeURIComponent(range.toIso)}`),
         fetch(`/api/workshop/diary-notes?from=${encodeURIComponent(range.fromIso)}&to=${encodeURIComponent(range.toIso)}`),
         fetch(`/api/workshop/tech-availability?from=${encodeURIComponent(range.fromIso)}&to=${encodeURIComponent(range.toIso)}`),
+        // Lanes load from their own endpoint so a hiccup on the bookings request
+        // can't blank every technician lane (it used to set techs only inside
+        // `if (bRes.ok)`).
+        fetch('/api/workshop/technicians?diary=1'),
       ])
       const d = await bRes.json()
       if (bRes.ok) {
         setBookings(Array.isArray(d.bookings) ? d.bookings : [])
         setClockedOn(new Set<string>(Array.isArray(d.clocked_on) ? d.clocked_on : []))
-        const techList = Array.isArray(d.technicians) ? d.technicians : []
-        setTechs(techList)
-        // Capacity lives on workshop_technicians.daily_hours — already in this
-        // payload, so no separate tech-capacity fetch.
-        setCapacity(Object.fromEntries(techList.map((t: any) => [String(t.ext), Number(t.daily_hours ?? 8)])))
         if (d.diary) setGrid(makeGrid(Number(d.diary.startMin), Number(d.diary.endMin)))
       }
+      // Technicians/capacity — independent of the bookings response. Falls back
+      // to the technicians embedded in the bookings payload if this fetch fails.
+      try {
+        const td = await tRes.json().catch(() => ({}))
+        const rawTechs = (tRes.ok && Array.isArray(td.technicians)) ? td.technicians
+          : (bRes.ok && Array.isArray(d.technicians)) ? d.technicians : null
+        if (rawTechs) {
+          const techList = rawTechs.map((t: any) => ({
+            ext: String(t.ext ?? t.code), name: t.name || `Ext ${t.ext ?? t.code}`,
+            color: t.color || null, daily_hours: Number(t.daily_hours ?? 8), role: t.role || null,
+          }))
+          setTechs(techList)
+          setCapacity(Object.fromEntries(techList.map((t: any) => [String(t.ext), Number(t.daily_hours ?? 8)])))
+        }
+      } catch { /* keep prior techs */ }
       const nd = await nRes.json().catch(() => ({})); if (nRes.ok) setNotes(Array.isArray(nd.notes) ? nd.notes : [])
       const ad = await aRes.json().catch(() => ({}))
       if (aRes.ok) {
