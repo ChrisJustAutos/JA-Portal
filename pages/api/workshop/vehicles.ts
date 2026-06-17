@@ -93,7 +93,7 @@ export default withAuth('view:diary', async (req, res, user) => {
     const customerId = String(req.query.customer_id || '').trim()
     const q = String(req.query.q || '').trim().replace(/[%,()*]/g, ' ').trim()
     let query = db.from('workshop_vehicles')
-      .select('id, customer_id, rego, make, model, year, vin, odometer, model_id, next_service_due_date, next_service_due_km, rego_due_date')
+      .select('id, customer_id, rego, make, model, year, vin, odometer, model_id, next_service_due_date, next_service_due_km, rego_due_date, customer:workshop_customers!customer_id ( id, name )')
       .order('rego', { ascending: true })
       .limit(20)
     if (customerId) query = query.eq('customer_id', customerId)

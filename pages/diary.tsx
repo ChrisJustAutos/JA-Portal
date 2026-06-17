@@ -21,6 +21,7 @@ import {
 import type { PortalUserSSR } from '../lib/authServer'
 import { T } from '../lib/ui/theme'
 import { usePrompt, useConfirm } from '../components/ui/Feedback'
+import AddressAutocomplete from '../components/workshop/AddressAutocomplete'
 
 interface Tech { ext: string; name: string; color?: string | null; daily_hours?: number; role?: string | null }
 interface BookingRow {
@@ -901,7 +902,8 @@ function BookingModal({ initial, techs, canEdit, onClose, onSaved }: {
           <EntityPicker label="Customer" kind="customer" value={customer ? { id: customer.id, label: customer.name } : null}
             disabled={!canEdit} onPick={(v) => setCustomer(v ? { id: v.id, name: v.label } : null)} />
           <EntityPicker label="Vehicle" kind="vehicle" customerId={customer?.id || null} value={vehicle}
-            disabled={!canEdit} onPick={(v) => setVehicle(v)} />
+            disabled={!canEdit} onPick={(v) => setVehicle(v)}
+            onImportCustomer={(c) => { if (!customer) setCustomer(c) }} />
           {models.length > 0 && (
             <Field label="Vehicle model (filters the job types below)">
               <select value={vehicleModelId || ''} disabled={!canEdit} onChange={async e => {
@@ -1145,13 +1147,16 @@ function SplitJobModal({ booking, techs, onClose, onSaved }: {
 }
 
 // ── Customer / vehicle typeahead with quick-add ─────────────────────────
-function EntityPicker({ label, kind, value, customerId, disabled, onPick }: {
+function EntityPicker({ label, kind, value, customerId, disabled, onPick, onImportCustomer }: {
   label: string; kind: 'customer' | 'vehicle'; value: { id: string; label: string } | null
   customerId?: string | null; disabled?: boolean
   onPick: (v: { id: string; label: string } | null) => void
+  // Vehicle picker only: when NO customer is selected and a vehicle is chosen,
+  // import that vehicle's owner so the booking links to the right customer.
+  onImportCustomer?: (c: { id: string; name: string }) => void
 }) {
   const [q, setQ] = useState('')
-  const [results, setResults] = useState<{ id: string; label: string }[]>([])
+  const [results, setResults] = useState<{ id: string; label: string; customer?: { id: string; name: string } | null }[]>([])
   const [open, setOpen] = useState(false)
   const [adding, setAdding] = useState(false)
   const [form, setForm] = useState<Record<string, string>>({})
@@ -1162,12 +1167,24 @@ function EntityPicker({ label, kind, value, customerId, disabled, onPick }: {
     if (!open || value) return
     const t = setTimeout(async () => {
       try {
+        // Vehicle search: ALWAYS scope to the selected customer when there is
+        // one (the bug was dropping customer_id once a query was typed, so
+        // other customers' vehicles showed up). With no customer selected we
+        // search all vehicles and surface the owner so it can be imported.
         const url = kind === 'customer'
           ? `/api/workshop/customers?q=${encodeURIComponent(q)}`
-          : `/api/workshop/vehicles?${customerId ? `customer_id=${customerId}` : `q=${encodeURIComponent(q)}`}`
+          : `/api/workshop/vehicles?${customerId ? `customer_id=${customerId}&` : ''}q=${encodeURIComponent(q)}`
         const r = await fetch(url); const d = await r.json()
         if (kind === 'customer') setResults((d.customers || []).map((c: any) => ({ id: c.id, label: customerLabel(c) + (c.mobile || c.phone ? ` · ${c.mobile || c.phone}` : '') })))
-        else setResults((d.vehicles || []).map((v: any) => ({ id: v.id, label: vehicleLabel(v) })))
+        else setResults((d.vehicles || []).map((v: any) => {
+          const cust = Array.isArray(v.customer) ? v.customer[0] : v.customer
+          const ownerName = cust?.name || null
+          return {
+            id: v.id,
+            label: vehicleLabel(v) + (!customerId && ownerName ? ` · ${ownerName}` : ''),
+            customer: cust?.id ? { id: cust.id, name: cust.name } : null,
+          }
+        }))
       } catch { /* ignore */ }
     }, 120)
     return () => clearTimeout(t)
@@ -1239,7 +1256,12 @@ function EntityPicker({ label, kind, value, customerId, disabled, onPick }: {
           {open && (results.length > 0 || !disabled) && (
             <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 5, background: T.bg3, border: `1px solid ${T.border2}`, borderRadius: 6, marginTop: 2, maxHeight: 200, overflowY: 'auto' }}>
               {results.map(r => (
-                <div key={r.id} onClick={() => { onPick(r); setOpen(false) }} style={{ padding: '7px 10px', fontSize: 12, cursor: 'pointer', borderBottom: `1px solid ${T.border}` }}>{r.label}</div>
+                <div key={r.id} onClick={() => {
+                  onPick({ id: r.id, label: r.label })
+                  // No customer chosen yet + this vehicle has an owner → import it.
+                  if (kind === 'vehicle' && !customerId && r.customer && onImportCustomer) onImportCustomer(r.customer)
+                  setOpen(false)
+                }} style={{ padding: '7px 10px', fontSize: 12, cursor: 'pointer', borderBottom: `1px solid ${T.border}` }}>{r.label}</div>
               ))}
               {!disabled && (
                 <div onClick={() => { setAdding(true); setOpen(false) }} style={{ padding: '7px 10px', fontSize: 12, color: T.blue, cursor: 'pointer', fontWeight: 600 }}>
@@ -1253,8 +1275,23 @@ function EntityPicker({ label, kind, value, customerId, disabled, onPick }: {
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6, padding: 8, background: T.bg3, border: `1px solid ${T.border}`, borderRadius: 6 }}>
           {kind === 'customer' ? (
             <>
-              <input autoFocus placeholder="Name *" style={inp} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} />
-              <input placeholder="Mobile" style={inp} onChange={e => setForm(f => ({ ...f, mobile: e.target.value }))} />
+              <input autoFocus placeholder="Name *" style={inp} value={form.name || ''} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} />
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
+                <input placeholder="Mobile" style={inp} value={form.mobile || ''} onChange={e => setForm(f => ({ ...f, mobile: e.target.value }))} />
+                <input placeholder="Phone" style={inp} value={form.phone || ''} onChange={e => setForm(f => ({ ...f, phone: e.target.value }))} />
+              </div>
+              <input placeholder="Email" style={inp} value={form.email || ''} onChange={e => setForm(f => ({ ...f, email: e.target.value }))} />
+              <AddressAutocomplete
+                value={form.address || ''}
+                style={inp}
+                onChange={(v) => setForm(f => ({ ...f, address: v }))}
+                onResolved={(a) => setForm(f => ({ ...f, address: a.line1, address_suburb: a.suburb, address_state: a.state, address_postcode: a.postcode }))}
+              />
+              <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr', gap: 6 }}>
+                <input placeholder="Suburb" style={inp} value={form.address_suburb || ''} onChange={e => setForm(f => ({ ...f, address_suburb: e.target.value }))} />
+                <input placeholder="State" style={inp} value={form.address_state || ''} onChange={e => setForm(f => ({ ...f, address_state: e.target.value }))} />
+                <input placeholder="Postcode" style={inp} value={form.address_postcode || ''} onChange={e => setForm(f => ({ ...f, address_postcode: e.target.value }))} />
+              </div>
             </>
           ) : (
             <>
