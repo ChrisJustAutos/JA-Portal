@@ -63,9 +63,6 @@ const EDITABLE_FIELDS = [
   'manual_handling',
   'inbound_freight_cost_ex_gst',
   'volume_breaks',
-  'promo_price_ex_gst',
-  'promo_starts_at',
-  'promo_ends_at',
 ] as const
 
 const NULLABLE_STRING_FIELDS = ['description', 'primary_image_url', 'barcode', 'instructions_url'] as const
@@ -76,8 +73,7 @@ const NULLABLE_INT_FIELDS = [
   'over_limit_qty',
 ] as const
 const OVER_LIMIT_ACTIONS = ['quote', 'dropship'] as const
-const NULLABLE_NUMERIC_FIELDS = ['cost_price_ex_gst', 'promo_price_ex_gst', 'inbound_freight_cost_ex_gst'] as const
-const NULLABLE_TIMESTAMP_FIELDS = ['promo_starts_at', 'promo_ends_at'] as const
+const NULLABLE_NUMERIC_FIELDS = ['cost_price_ex_gst', 'inbound_freight_cost_ex_gst'] as const
 const BOOLEAN_FIELDS = ['b2b_visible', 'is_special_order', 'is_drop_ship', 'call_for_availability_when_zero', 'manual_handling'] as const
 const PACKAGING_VALUES = ['box', 'pallet', 'other', 'unboxed'] as const
 
@@ -200,16 +196,6 @@ export default withAuth('edit:b2b_catalogue', async (req: NextApiRequest, res: N
       }
     }
   }
-  for (const k of NULLABLE_TIMESTAMP_FIELDS) {
-    if (k in update) {
-      const raw = update[k]
-      if (raw === null || raw === '') {
-        update[k] = null
-      } else if (typeof raw !== 'string' || isNaN(Date.parse(raw))) {
-        return res.status(400).json({ error: `${k} must be an ISO timestamp string or null` })
-      }
-    }
-  }
   if ('volume_breaks' in update) {
     const arr = update.volume_breaks
     if (!Array.isArray(arr)) {
@@ -238,14 +224,6 @@ export default withAuth('edit:b2b_catalogue', async (req: NextApiRequest, res: N
       }
     }
     update.volume_breaks = cleaned
-  }
-  // Cross-field check: promo window must be ordered if both ends supplied
-  if ('promo_starts_at' in update || 'promo_ends_at' in update) {
-    const s = update.promo_starts_at
-    const e = update.promo_ends_at
-    if (s && e && Date.parse(s) >= Date.parse(e)) {
-      return res.status(400).json({ error: 'promo_starts_at must be before promo_ends_at' })
-    }
   }
 
   const c = sb()

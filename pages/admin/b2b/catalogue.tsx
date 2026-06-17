@@ -86,9 +86,6 @@ interface CatalogueItem {
   instructions_url: string | null
   cost_price_ex_gst: number | null
   volume_breaks: VolumeBreak[]
-  promo_price_ex_gst: number | null
-  promo_starts_at: string | null
-  promo_ends_at: string | null
   last_synced_from_myob_at: string | null
   created_at: string
   updated_at: string

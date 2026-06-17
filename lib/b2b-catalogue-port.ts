@@ -17,9 +17,9 @@ export interface CatColumn {
   header: string
   field: string
   readOnly?: boolean
-  kind?: 'text' | 'number' | 'int' | 'bool' | 'enum' | 'date' | 'weightKg' | 'lengthCm' | 'modelNames'
+  kind?: 'text' | 'number' | 'int' | 'bool' | 'enum' | 'date' | 'weightKg' | 'lengthCm' | 'modelNames' | 'discountPct'
   enumValues?: string[]
-  // Derived/embedded columns (e.g. the model-fitment list, product-type name)
+  // Derived/embedded columns (model-fitment list, product-type name, discount %)
   // aren't real b2b_catalogue columns, so they're excluded from CATALOGUE_SELECT.
   notAColumn?: boolean
 }
@@ -31,10 +31,11 @@ export const CATALOGUE_COLUMNS: CatColumn[] = [
   { header: 'Name',                        field: 'name',                            readOnly: true },
   { header: 'Model',                       field: 'models',                          readOnly: true, kind: 'modelNames', notAColumn: true },
   { header: 'Product Type',                field: 'product_type_name',               readOnly: true, kind: 'text', notAColumn: true },
-  { header: 'RRP ex GST',                  field: 'rrp_ex_gst',                      readOnly: true, kind: 'number' },
   // ── Editable ──
   { header: 'Description',                 field: 'description',                     kind: 'text' },
+  { header: 'RRP ex GST',                  field: 'rrp_ex_gst',                      kind: 'number' },
   { header: 'Trade Price ex GST',          field: 'trade_price_ex_gst',              kind: 'number' },
+  { header: 'Discount % (off RRP)',        field: 'discount_pct',                    kind: 'discountPct', notAColumn: true },
   { header: 'Cost Price ex GST',           field: 'cost_price_ex_gst',               kind: 'number' },
   { header: 'Visible',                     field: 'b2b_visible',                     kind: 'bool' },
   { header: 'Special Order',               field: 'is_special_order',                kind: 'bool' },
@@ -52,9 +53,6 @@ export const CATALOGUE_COLUMNS: CatColumn[] = [
   { header: 'Max Order QTY',               field: 'max_order_qty',                   kind: 'int' },
   { header: 'Over Limit QTY',              field: 'over_limit_qty',                  kind: 'int' },
   { header: 'Over Limit Action',           field: 'over_limit_action',               kind: 'enum', enumValues: ['quote', 'dropship'] },
-  { header: 'Promo Price ex GST',          field: 'promo_price_ex_gst',              kind: 'number' },
-  { header: 'Promo Starts At',             field: 'promo_starts_at',                 kind: 'date' },
-  { header: 'Promo Ends At',               field: 'promo_ends_at',                   kind: 'date' },
   { header: 'Instructions URL',            field: 'instructions_url',                kind: 'text' },
   { header: 'Image URL',                   field: 'primary_image_url',               kind: 'text' },
 ]
@@ -73,6 +71,12 @@ export function catalogueRowToExport(item: any): Record<string, any> {
     else if (col.kind === 'modelNames') v = (Array.isArray(v) ? v.map((m: any) => m?.name).filter(Boolean).join(', ') : '')
     else if (col.kind === 'date') v = (v ? new Date(v).toISOString() : '')
     else if (col.kind === 'bool') v = !!v
+    else if (col.kind === 'discountPct') {
+      // Derived from RRP + trade price; 4 dp so an untouched round-trip
+      // reproduces the trade price to the cent. Blank when RRP is missing/0.
+      const rrp = Number(item.rrp_ex_gst); const trade = Number(item.trade_price_ex_gst)
+      v = (rrp > 0 && isFinite(trade)) ? Math.round((1 - trade / rrp) * 100 * 10000) / 10000 : ''
+    }
     else if (v == null) v = ''
     out[col.header] = v
   }
@@ -87,10 +91,17 @@ export function catalogueRowToPatch(row: Record<string, any>): { id?: string; sk
   const sku = String(row['SKU'] ?? '').trim()
   if (!id && !sku) return { error: 'row has neither ID nor SKU to match on' }
   const patch: Record<string, any> = {}
+  let discountPct: number | null = null
   for (const col of CATALOGUE_COLUMNS) {
     if (col.readOnly || !(col.header in row)) continue
     const cell = row[col.header]
     if (cell === '' || cell === null || cell === undefined) continue   // blank = leave unchanged
+    if (col.kind === 'discountPct') {
+      const n = Number(cell)
+      if (!isFinite(n) || n < 0 || n > 100) return { error: `${col.header} must be a number between 0 and 100` }
+      discountPct = n   // applied after the loop so it overrides the Trade Price cell
+      continue
+    }
     if (col.kind === 'bool') {
       const s = String(cell).trim().toLowerCase()
       if (cell === true || ['true', '1', 'yes', 'y'].includes(s)) patch[col.field] = true
@@ -113,6 +124,13 @@ export function catalogueRowToPatch(row: Record<string, any>): { id?: string; sk
     } else {
       patch[col.field] = String(cell)
     }
+  }
+  // Discount % wins: when set, it drives the trade price off RRP (the row's RRP
+  // cell), overriding any Trade Price value in the same row.
+  if (discountPct != null) {
+    const rrp = patch.rrp_ex_gst != null ? Number(patch.rrp_ex_gst) : null
+    if (rrp == null || !(rrp > 0)) return { error: 'Discount % needs an RRP ex GST value in the same row' }
+    patch.trade_price_ex_gst = Math.round(rrp * (1 - discountPct / 100) * 100) / 100
   }
   return { id: id || undefined, sku: sku || undefined, patch }
 }
