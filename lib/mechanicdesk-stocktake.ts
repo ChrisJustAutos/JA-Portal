@@ -603,9 +603,10 @@ export async function collectPrePickDemand(
   for (const jid of Array.from(jobIds)) {
     let job: any
     try {
-      // Same as diary: the data endpoint is /auto_workshop/jobs, not the
-      // /mdweb/workshops/jobs SPA route.
-      job = await mdFetch<any>(client, `/auto_workshop/jobs/${jid}?id=${jid}`)
+      // The job-detail data endpoint is root-level /jobs/{id}?id={id} (not under
+      // /auto_workshop/, and not the /mdweb/workshops/jobs SPA route). Returns
+      // application/json with invoice.items. Confirmed from captured request.
+      job = await mdFetch<any>(client, `/jobs/${jid}?id=${jid}`)
     } catch (e: any) {
       log(`  job ${jid} failed: ${String(e?.message).slice(0, 140)}`)
       continue
