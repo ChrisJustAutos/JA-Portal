@@ -57,6 +57,7 @@ jobs:
           FROM:         ${{ github.event.client_payload.from || github.event.inputs.from }}
           TO:           ${{ github.event.client_payload.to || github.event.inputs.to }}
           REQUESTED_BY: ${{ github.event.client_payload.requested_by || 'scheduled' }}
+          RUN_ID:       ${{ github.event.client_payload.run_id }}
           MECHANICDESK_WORKSHOP_ID: ${{ secrets.MECHANICDESK_WORKSHOP_ID }}
           MECHANICDESK_USERNAME:    ${{ secrets.MECHANICDESK_USERNAME }}
           MECHANICDESK_PASSWORD:    ${{ secrets.MECHANICDESK_PASSWORD }}

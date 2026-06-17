@@ -31,6 +31,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (action === 'start') {
     const from = String(body.from || ''); const to = String(body.to || '')
     if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to)) return res.status(400).json({ error: 'from/to (YYYY-MM-DD) required' })
+    // If the refresh endpoint already created a pending row, flip it to running
+    // instead of creating a second row. Otherwise (e.g. a scheduled run with no
+    // pre-created row), insert a fresh one.
+    const existingId = String(body.run_id || '')
+    if (existingId) {
+      const { data, error } = await db.from('md_prepick_runs')
+        .update({ status: 'running', from_date: from, to_date: to })
+        .eq('id', existingId).select('id').maybeSingle()
+      if (error) return res.status(500).json({ error: error.message })
+      if (data) return res.status(200).json({ run_id: data.id })
+      // Row vanished — fall through to insert a new one.
+    }
     const { data, error } = await db.from('md_prepick_runs')
       .insert({ from_date: from, to_date: to, status: 'running', requested_by: String(body.requested_by || 'worker').slice(0, 120) })
       .select('id').single()

@@ -32,6 +32,9 @@ function defaultRange(): { from: string; to: string } {
 const FROM = (process.env.FROM || '').trim() || defaultRange().from
 const TO = (process.env.TO || '').trim() || defaultRange().to
 const REQUESTED_BY = (process.env.REQUESTED_BY || 'scheduled').trim()
+// When the portal's refresh endpoint pre-created a pending run row, it passes
+// its id here so we update that row rather than creating a second one.
+const PRECREATED_RUN_ID = (process.env.RUN_ID || '').trim()
 
 async function ingest(body: Record<string, any>): Promise<any> {
   const r = await fetch(`${PORTAL_BASE}/api/workshop/prepick/ingest`, {
@@ -49,8 +52,9 @@ async function main() {
   }
   log(`Pre Pick pull for ${FROM} … ${TO}`)
 
-  // 1. Open a run row (status 'running') so the UI can show progress.
-  const started = await ingest({ action: 'start', from: FROM, to: TO, requested_by: REQUESTED_BY })
+  // 1. Open a run row (status 'running') so the UI can show progress. If the
+  // portal pre-created a pending row (manual refresh), this flips that same row.
+  const started = await ingest({ action: 'start', from: FROM, to: TO, requested_by: REQUESTED_BY, run_id: PRECREATED_RUN_ID || undefined })
   const runId = started.run_id as string
   log(`run ${runId} started`)
 

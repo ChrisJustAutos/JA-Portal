@@ -47,7 +47,6 @@ export default function PrePickPage({ user }: { user: PortalUserSSR }) {
   const [items, setItems] = useState<PrePickItem[]>([])
   const [jobsCount, setJobsCount] = useState(0)
   const [loading, setLoading] = useState(true)
-  const [refreshing, setRefreshing] = useState(false)
   const [q, setQ] = useState('')
   const [filter, setFilter] = useState<Filter>('all')
   // Snapshot metadata (the range/time the displayed data was actually pulled for).
@@ -56,7 +55,14 @@ export default function PrePickPage({ user }: { user: PortalUserSSR }) {
   const [syncedAt, setSyncedAt] = useState<string | null>(null)
   const [runStatus, setRunStatus] = useState<RunStatus>('none')
   const [runError, setRunError] = useState<string | null>(null)
+  // Live pull (in-flight) state — drives the loading overlay + polling.
+  const [inFlight, setInFlight] = useState(false)
+  const [pendingFrom, setPendingFrom] = useState<string | null>(null)
+  const [pendingTo, setPendingTo] = useState<string | null>(null)
+  const [startedAt, setStartedAt] = useState<number | null>(null)
+  const [elapsed, setElapsed] = useState(0)
   const didInitRange = useRef(false)
+  const prevInFlight = useRef(false)
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   const load = useCallback(async () => {
@@ -70,51 +76,60 @@ export default function PrePickPage({ user }: { user: PortalUserSSR }) {
         setSyncedAt(d.synced_at || null)
         setRunStatus((d.status as RunStatus) || 'none')
         setRunError(d.error || null)
+        const flying = !!d.in_flight
+        setInFlight(flying)
+        setPendingFrom(d.pending_from || null); setPendingTo(d.pending_to || null)
+        if (flying && d.started_at) { const t = new Date(d.started_at).getTime(); if (isFinite(t)) setStartedAt(t) }
         // On first load, default the picker to the last-pulled range.
         if (!didInitRange.current && d.from && d.to) {
           setFrom(d.from); setTo(d.to); didInitRange.current = true
         }
-        return (d.status as RunStatus) || 'none'
+        // Completion: a pull that was in flight just landed.
+        if (prevInFlight.current && !flying) {
+          if (d.status === 'done') toast('Pre Pick updated from MechanicDesk', 'success')
+          else if (d.status === 'error') toast('MechanicDesk pull failed — see banner', 'error')
+        }
+        prevInFlight.current = flying
+        return flying
       }
     } catch { /* keep prior */ } finally { setLoading(false) }
-    return 'none' as RunStatus
-  }, [])
+    return false
+  }, [toast])
   useEffect(() => { load() }, [load])
 
-  // Poll while a pull is in flight; stop when it lands on done/error.
+  // Poll the worker via the snapshot API while a pull is in flight.
   useEffect(() => {
-    const inFlight = runStatus === 'pending' || runStatus === 'running' || refreshing
-    if (inFlight && !pollRef.current) {
-      pollRef.current = setInterval(async () => {
-        const s = await load()
-        if (s === 'done' || s === 'error') {
-          if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null }
-          setRefreshing(false)
-          if (s === 'done') toast('Pre Pick updated from MechanicDesk', 'success')
-          if (s === 'error') toast('MechanicDesk pull failed — see banner', 'error')
-        }
-      }, 5000)
-    }
-    if (!inFlight && pollRef.current) { clearInterval(pollRef.current); pollRef.current = null }
-    return () => { if (pollRef.current && !inFlight) { clearInterval(pollRef.current); pollRef.current = null } }
-  }, [runStatus, refreshing, load, toast])
+    if (!inFlight) { if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null } return }
+    if (!pollRef.current) pollRef.current = setInterval(load, 4000)
+    return () => { if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null } }
+  }, [inFlight, load])
   useEffect(() => () => { if (pollRef.current) clearInterval(pollRef.current) }, [])
+
+  // Tick the elapsed-time readout while pulling.
+  useEffect(() => {
+    if (!inFlight || !startedAt) { setElapsed(0); return }
+    const tick = () => setElapsed(Math.max(0, Math.round((Date.now() - startedAt) / 1000)))
+    tick(); const id = setInterval(tick, 1000)
+    return () => clearInterval(id)
+  }, [inFlight, startedAt])
 
   const refresh = useCallback(async () => {
     if (!from || !to) return
     if (from > to) { toast('"From" date must be on or before "To" date', 'error'); return }
-    setRefreshing(true)
     try {
       const r = await fetch('/api/workshop/prepick/refresh', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ from, to }),
       })
       const d = await r.json().catch(() => ({}))
-      if (!r.ok) { toast(d.error || 'Could not start the pull', 'error'); setRefreshing(false); return }
+      if (!r.ok) { toast(d.error || 'Could not start the pull', 'error'); return }
       toast('Pulling from MechanicDesk — this takes ~1–2 minutes.', 'info')
-      setRunStatus('pending')
-      setTimeout(load, 3000)
-    } catch { toast('Could not start the pull', 'error'); setRefreshing(false) }
+      // The refresh endpoint already created the pending run row, so enter the
+      // loading state immediately; polling will track it through to done.
+      setInFlight(true); prevInFlight.current = true
+      setStartedAt(Date.now()); setPendingFrom(from); setPendingTo(to); setRunStatus('pending')
+      setTimeout(load, 1500)
+    } catch { toast('Could not start the pull', 'error') }
   }, [from, to, load, toast])
 
   const remaining = (it: PrePickItem) => Math.round((it.current_stock - it.to_pick) * 100) / 100
@@ -178,7 +193,8 @@ export default function PrePickPage({ user }: { user: PortalUserSSR }) {
   const inputStyle: React.CSSProperties = { background: T.bg3, border: `1px solid ${T.border}`, borderRadius: 6, color: T.text, fontSize: 13, padding: '6px 9px', fontFamily: 'inherit', outline: 'none', colorScheme: 'dark' }
   const GRID = '110px 1fr 120px 70px 70px 80px 80px 80px 110px'
   const head: React.CSSProperties = { fontSize: 9, color: T.text3, textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 600 }
-  const pulling = runStatus === 'pending' || runStatus === 'running' || refreshing
+  const pulling = inFlight
+  const fmtElapsed = (s: number) => { const m = Math.floor(s / 60), sec = s % 60; return m > 0 ? `${m}m ${sec}s` : `${sec}s` }
 
   return (
     <>
@@ -190,7 +206,28 @@ export default function PrePickPage({ user }: { user: PortalUserSSR }) {
         <WorkshopTabs active="inventory" role={user.role} />
         <InventoryTabs active="prepick" role={user.role} />
 
-        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', background: T.bg }}>
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', background: T.bg, position: 'relative' }}>
+          <style>{`@keyframes ppspin{to{transform:rotate(360deg)}}`}</style>
+
+          {/* Loading overlay while a MechanicDesk pull is in flight */}
+          {pulling && (
+            <div style={{ position: 'absolute', inset: 0, zIndex: 30, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <div style={{ position: 'absolute', inset: 0, background: T.bg, opacity: 0.84 }} />
+              <div style={{ position: 'relative', background: T.bg2, border: `1px solid ${T.border}`, borderRadius: 16, padding: '30px 40px', textAlign: 'center', boxShadow: '0 14px 44px rgba(0,0,0,0.32)', maxWidth: 380 }}>
+                <div style={{ width: 44, height: 44, margin: '0 auto 18px', border: `3px solid ${T.border}`, borderTopColor: T.accent, borderRadius: '50%', animation: 'ppspin 0.8s linear infinite' }} />
+                <div style={{ fontSize: 15, fontWeight: 600, color: T.text }}>Pulling from MechanicDesk</div>
+                <div style={{ fontSize: 12.5, color: T.text2, marginTop: 7, lineHeight: 1.5 }}>
+                  Reading jobs &amp; live stock{pendingFrom && pendingTo ? <> for <strong style={{ color: T.text }}>{pendingFrom}</strong> → <strong style={{ color: T.text }}>{pendingTo}</strong></> : null}.<br />
+                  This usually takes 1–2 minutes.
+                </div>
+                <div style={{ fontSize: 12, color: T.text3, marginTop: 14, fontVariantNumeric: 'tabular-nums' }}>
+                  {fmtElapsed(elapsed)} elapsed · checking every few seconds
+                </div>
+                <div style={{ fontSize: 11, color: T.text3, marginTop: 8 }}>The list updates automatically when it&apos;s done — you can leave this page.</div>
+              </div>
+            </div>
+          )}
+
           {/* Toolbar */}
           <div style={{ background: T.bg2, borderBottom: `1px solid ${T.border}`, display: 'flex', alignItems: 'center', padding: '10px 20px', gap: 12, flexWrap: 'wrap', flexShrink: 0 }}>
             <span style={{ fontSize: 14, fontWeight: 600 }}>Pre Pick</span>

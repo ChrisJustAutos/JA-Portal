@@ -24,41 +24,62 @@ export default withAuth('view:diary', async (req, res) => {
   if (req.method !== 'GET') { res.setHeader('Allow', 'GET'); return res.status(405).json({ error: 'GET only' }) }
   const db = sb()
 
-  // Most recent run (any status — so the UI can show 'running'/'error' too).
-  const { data: run, error: rErr } = await db.from('md_prepick_runs')
-    .select('id, from_date, to_date, status, jobs_count, items_count, error, created_at, completed_at')
+  // Newest run of any status — drives the live status / loading indicator.
+  const { data: latest, error: lErr } = await db.from('md_prepick_runs')
+    .select('id, from_date, to_date, status, jobs_count, error, created_at, completed_at')
     .order('created_at', { ascending: false }).limit(1).maybeSingle()
-  if (rErr) return res.status(500).json({ error: rErr.message })
-  if (!run) {
-    return res.status(200).json({ items: [], jobs_count: 0, from: null, to: null, status: 'none', synced_at: null, source: 'mechanicdesk' })
+  if (lErr) return res.status(500).json({ error: lErr.message })
+  if (!latest) {
+    return res.status(200).json({ items: [], jobs_count: 0, from: null, to: null, status: 'none', synced_at: null, in_flight: false, source: 'mechanicdesk' })
   }
 
-  const { data: rows, error: iErr } = await db.from('md_prepick_items')
-    .select('id, md_stock_id, sku, name, to_pick, on_hand, alert_qty, reorder_point, buy_price, location')
-    .eq('run_id', run.id).order('to_pick', { ascending: false })
-  if (iErr) return res.status(500).json({ error: iErr.message })
+  const inFlight = latest.status === 'pending' || latest.status === 'running'
 
-  const items = (rows || []).map((it: any) => ({
-    id: it.id,
-    sku: it.sku || '',
-    part_name: it.name || '',
-    brand: null,
-    supplier: null,
-    location: it.location || null,
-    buy_price: it.buy_price != null ? Number(it.buy_price) : null,
-    alert_qty: it.alert_qty != null ? Number(it.alert_qty) : (it.reorder_point != null ? Number(it.reorder_point) : null),
-    to_pick: Number(it.to_pick) || 0,
-    current_stock: Number(it.on_hand) || 0,
-  }))
+  // The snapshot we DISPLAY always comes from the newest *done* run, so an
+  // in-flight pull never blanks the current numbers. If the newest run is the
+  // done one, that's the same row.
+  let snapRun = latest
+  if (latest.status !== 'done') {
+    const { data: lastDone } = await db.from('md_prepick_runs')
+      .select('id, from_date, to_date, status, jobs_count, error, created_at, completed_at')
+      .eq('status', 'done').order('completed_at', { ascending: false }).limit(1).maybeSingle()
+    if (lastDone) snapRun = lastDone
+  }
+
+  let items: any[] = []
+  if (snapRun.status === 'done') {
+    const { data: rows, error: iErr } = await db.from('md_prepick_items')
+      .select('id, md_stock_id, sku, name, to_pick, on_hand, alert_qty, reorder_point, buy_price, location')
+      .eq('run_id', snapRun.id).order('to_pick', { ascending: false })
+    if (iErr) return res.status(500).json({ error: iErr.message })
+    items = (rows || []).map((it: any) => ({
+      id: it.id,
+      sku: it.sku || '',
+      part_name: it.name || '',
+      brand: null,
+      supplier: null,
+      location: it.location || null,
+      buy_price: it.buy_price != null ? Number(it.buy_price) : null,
+      alert_qty: it.alert_qty != null ? Number(it.alert_qty) : (it.reorder_point != null ? Number(it.reorder_point) : null),
+      to_pick: Number(it.to_pick) || 0,
+      current_stock: Number(it.on_hand) || 0,
+    }))
+  }
 
   return res.status(200).json({
     items,
-    jobs_count: run.jobs_count || 0,
-    from: run.from_date,
-    to: run.to_date,
-    status: run.status,
-    error: run.error || null,
-    synced_at: run.completed_at || run.created_at,
+    jobs_count: snapRun.status === 'done' ? (snapRun.jobs_count || 0) : 0,
+    from: snapRun.status === 'done' ? snapRun.from_date : null,
+    to: snapRun.status === 'done' ? snapRun.to_date : null,
+    synced_at: snapRun.status === 'done' ? (snapRun.completed_at || snapRun.created_at) : null,
+    // Live status of the newest run (may be a fresh pull over an old snapshot).
+    status: latest.status,
+    error: latest.error || null,
+    in_flight: inFlight,
+    run_id: latest.id,
+    pending_from: inFlight ? latest.from_date : null,
+    pending_to: inFlight ? latest.to_date : null,
+    started_at: inFlight ? latest.created_at : null,
     source: 'mechanicdesk',
   })
 })
