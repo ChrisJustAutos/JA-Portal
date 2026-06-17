@@ -581,7 +581,10 @@ export async function collectPrePickDemand(
     const end = `${ymd}T23:59:59+10:00`
     let diary: any
     try {
-      diary = await mdFetch<any>(client, `/mdweb/workshops/diary?start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}`)
+      // NOTE: /mdweb/workshops/diary is the SPA client-side route (serves the
+      // HTML app shell). The actual XHR data endpoint the app calls is the
+      // old-app /auto_workshop/diary — same cookie session, no bearer token.
+      diary = await mdFetch<any>(client, `/auto_workshop/diary?start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}`)
     } catch (e: any) {
       log(`  diary ${ymd} failed: ${String(e?.message).slice(0, 140)}`)
       continue
@@ -600,7 +603,9 @@ export async function collectPrePickDemand(
   for (const jid of Array.from(jobIds)) {
     let job: any
     try {
-      job = await mdFetch<any>(client, `/mdweb/workshops/jobs/${jid}?id=${jid}`)
+      // Same as diary: the data endpoint is /auto_workshop/jobs, not the
+      // /mdweb/workshops/jobs SPA route.
+      job = await mdFetch<any>(client, `/auto_workshop/jobs/${jid}?id=${jid}`)
     } catch (e: any) {
       log(`  job ${jid} failed: ${String(e?.message).slice(0, 140)}`)
       continue
