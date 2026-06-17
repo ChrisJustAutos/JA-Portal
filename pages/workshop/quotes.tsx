@@ -33,7 +33,7 @@ export default function QuotesPage({ user }: { user: PortalUserSSR }) {
   const [creating, setCreating] = useState(false)
   const [filter, setFilter] = useState<string>('')
   const [view, setView] = useState<'active'|'trash'>('active')
-  const [layout, setLayout] = useState<'board'|'list'>('board')
+  const [layout, setLayout] = useState<'board'|'list'>('list')
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null)
 
   const load = useCallback(async () => {

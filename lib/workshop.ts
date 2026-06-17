@@ -120,7 +120,7 @@ export const QUOTE_STATUS_META: Record<QuoteStatus, { label: string; color: stri
   accepted:  { label: 'Accepted',  color: '#34c77b' },
   declined:  { label: 'Declined',  color: '#f04e4e' },
   expired:   { label: 'Expired',   color: '#545968' },
-  converted: { label: 'Converted', color: '#2dd4bf' },
+  converted: { label: 'Booking created', color: '#2dd4bf' },
 }
 
 // ── Tasks ───────────────────────────────────────────────────────────────
