@@ -83,6 +83,10 @@ export default withAuth('view:diary', async (req, res, user) => {
     const { data: posted } = await db.from('workshop_payments').select('id').eq('booking_id', id).eq('posted_to_myob', true).limit(1)
     if (posted && posted.length) return res.status(409).json({ error: 'This job has a payment posted to MYOB — delete that payment in MYOB first.', code: 'posted_payment' })
     await db.from('workshop_invoices').delete().eq('booking_id', id)   // FK is SET NULL, so remove explicitly
+    // Cancel any queued comms (confirmation/reminder/ready/follow-up) for this
+    // job — the reminders FK is SET NULL, so a hard delete would otherwise leave
+    // them 'pending' and they'd still fire (booking reminder after delete).
+    await db.from('workshop_reminders').update({ status: 'cancelled', error: 'booking deleted' }).eq('booking_id', id).eq('status', 'pending')
     const { error: delErr } = await db.from('workshop_bookings').delete().eq('id', id)
     if (delErr) return res.status(500).json({ error: delErr.message })
     try { const { logWorkshopActivity } = await import('../../../../lib/workshop-activity'); await logWorkshopActivity(db, { action: 'deleted', entity: 'booking', entity_id: id, detail: 'Job deleted', actor_id: user.id, actor_name: user.displayName || user.email }) } catch { /* non-fatal */ }

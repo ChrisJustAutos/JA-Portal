@@ -306,6 +306,22 @@ export async function processDueReminders(limit = 50, opts?: { bookingId?: strin
         continue
       }
     }
+    // Booking-bound reminders must still have a live job. If it was deleted, the
+    // FK set booking_id to NULL (or the row is gone) — cancel instead of sending
+    // (this also cleans up any reminders orphaned by past deletions). Vehicle-
+    // bound types (service_due/rego_due) are intentionally excluded — they fire
+    // off the vehicle's due dates, not a live booking.
+    if (['booking', 'booking_confirmation', 'ready', 'follow_up', 'review_request', 'payment_receipt'].includes(r.type)) {
+      let bookingOk = false
+      if (r.booking_id) {
+        const { data: bk } = await db.from('workshop_bookings').select('id').eq('id', r.booking_id).maybeSingle()
+        bookingOk = !!bk
+      }
+      if (!bookingOk) {
+        await db.from('workshop_reminders').update({ status: 'cancelled', error: 'booking deleted' }).eq('id', r.id)
+        continue
+      }
+    }
     let ok = false, errMsg: string | null = null, msgId: string | null = null
     try {
       if (r.channel === 'email') {
