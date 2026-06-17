@@ -29,16 +29,75 @@ export async function compressImage(file: File, opts?: { maxEdge?: number; quali
   } catch { return asIs }
 }
 
-// Best-effort PDF shrink: re-save through pdf-lib with object streams, which
-// drops unused objects and compresses the object structure. It can't recompress
-// scanned/image-heavy PDFs much, so we keep the original if it doesn't help.
-export async function compressPdf(file: File): Promise<CompressedFile> {
-  const asIs: CompressedFile = { blob: file, name: file.name, mime: 'application/pdf' }
+// Best-effort PDF shrink. Two stages, escalating only as needed:
+//   1. Structural re-save through pdf-lib (object streams) — drops unused
+//      objects. Cheap, lossless, but can't recompress scanned/image PDFs.
+//   2. If still over `maxBytes`, RASTERISE: render each page with pdf.js and
+//      re-encode as JPEG into a fresh PDF. Lossy (text becomes an image) but
+//      shrinks 40 MB+ scans to a few MB. Only runs when stage 1 isn't enough.
+// Returns the smallest result; never larger than the original.
+export async function compressPdf(file: File, opts?: { maxBytes?: number; dpi?: number; quality?: number }): Promise<CompressedFile> {
+  const maxBytes = opts?.maxBytes ?? Infinity
+  let best: CompressedFile = { blob: file, name: file.name, mime: 'application/pdf' }
   try {
     const { PDFDocument } = await import('pdf-lib')
     const bytes = await file.arrayBuffer()
     const doc = await PDFDocument.load(bytes, { updateMetadata: false })
     const out = await doc.save({ useObjectStreams: true })
+    if (out.byteLength < best.blob.size) best = { blob: new Blob([out], { type: 'application/pdf' }), name: file.name, mime: 'application/pdf' }
+  } catch { /* keep original */ }
+
+  if (best.blob.size <= maxBytes) return best
+
+  // Still too big — rasterise the original and keep whichever is smaller.
+  const r = await rasterizePdf(file, opts)
+  return r.blob.size < best.blob.size ? r : best
+}
+
+// Render every page of a PDF to a JPEG via pdf.js and rebuild a (much smaller)
+// image-only PDF. Used as the fallback for scanned/image-heavy PDFs that the
+// structural re-save can't shrink. Falls back to the original on any error.
+// NOTE: the worker is self-hosted at /public/pdf.worker.min.js — if pdfjs-dist
+// is ever bumped, re-copy build/pdf.worker.min.js into public/ to match.
+export async function rasterizePdf(file: File, opts?: { dpi?: number; quality?: number }): Promise<CompressedFile> {
+  const asIs: CompressedFile = { blob: file, name: file.name, mime: 'application/pdf' }
+  if (typeof document === 'undefined') return asIs   // client-only
+  const dpi = opts?.dpi ?? 130
+  const quality = opts?.quality ?? 0.7
+  const scale = dpi / 72   // pdf.js viewport is 72 DPI at scale 1
+  try {
+    const pdfjs: any = await import('pdfjs-dist')
+    pdfjs.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.js'
+    const { PDFDocument } = await import('pdf-lib')
+
+    const data = new Uint8Array(await file.arrayBuffer())
+    const pdf = await pdfjs.getDocument({ data }).promise
+    const outDoc = await PDFDocument.create()
+
+    for (let i = 1; i <= pdf.numPages; i++) {
+      const page = await pdf.getPage(i)
+      const viewport = page.getViewport({ scale })
+      const canvas = document.createElement('canvas')
+      canvas.width = Math.max(1, Math.ceil(viewport.width))
+      canvas.height = Math.max(1, Math.ceil(viewport.height))
+      const ctx = canvas.getContext('2d')
+      if (!ctx) { canvas.width = 0; canvas.height = 0; continue }
+      ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, canvas.width, canvas.height)
+      await page.render({ canvasContext: ctx, viewport }).promise
+      const jpg: Blob | null = await new Promise(res => canvas.toBlob(b => res(b), 'image/jpeg', quality))
+      if (jpg) {
+        const img = await outDoc.embedJpg(new Uint8Array(await jpg.arrayBuffer()))
+        // Keep the original page size (points) so the doc reads the same.
+        const pw = canvas.width / scale
+        const ph = canvas.height / scale
+        outDoc.addPage([pw, ph]).drawImage(img, { x: 0, y: 0, width: pw, height: ph })
+      }
+      canvas.width = 0; canvas.height = 0   // release memory between pages
+      page.cleanup()
+    }
+
+    if (outDoc.getPageCount() === 0) return asIs
+    const out = await outDoc.save()
     if (out.byteLength >= file.size) return asIs
     return { blob: new Blob([out], { type: 'application/pdf' }), name: file.name, mime: 'application/pdf' }
   } catch { return asIs }

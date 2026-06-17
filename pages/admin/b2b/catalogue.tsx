@@ -133,7 +133,8 @@ function nanoid(len: number = 12): string {
   return out
 }
 
-const PDF_MAX_BYTES = 25 * 1024 * 1024   // checked after compression
+const PDF_MAX_BYTES = 25 * 1024 * 1024        // bucket cap — final (post-compress) size
+const PDF_INPUT_MAX_BYTES = 100 * 1024 * 1024 // raw input guard (rasterising in-browser)
 
 // Validates + uploads an instructions PDF to the b2b-catalogue-pdfs bucket and
 // returns its public URL. Best-effort cleans the {itemId}/ folder so we don't
@@ -146,10 +147,14 @@ async function uploadCatalogueInstructionsPdf(itemId: string, file: File): Promi
   if (file.size === 0) {
     throw new Error('File appears to be empty.')
   }
-  // Compress (re-save) the PDF before upload.
-  const c = await compressPdf(file)
+  if (file.size > PDF_INPUT_MAX_BYTES) {
+    throw new Error(`File is ${(file.size/1024/1024).toFixed(0)} MB — too large to process in the browser (max ${(PDF_INPUT_MAX_BYTES/1024/1024).toFixed(0)} MB). Please compress it first.`)
+  }
+  // Compress before upload: structural re-save, then rasterise if still over the
+  // 25 MB bucket cap (handles big scanned PDFs).
+  const c = await compressPdf(file, { maxBytes: PDF_MAX_BYTES })
   if (c.blob.size > PDF_MAX_BYTES) {
-    throw new Error(`File is ${(c.blob.size/1024/1024).toFixed(1)} MB after compression — max 25 MB. Try a smaller PDF.`)
+    throw new Error(`Still ${(c.blob.size/1024/1024).toFixed(1)} MB after compression — max 25 MB. This PDF is very large; try splitting it or reducing its image resolution.`)
   }
   const supabase = getSupabase()
   const path = `${itemId}/${nanoid()}.pdf`
@@ -1700,7 +1705,7 @@ function InstructionsPdfField({
             fontSize:13,fontWeight:500,fontFamily:'inherit',
             cursor: busy ? 'wait' : 'pointer',
           }}>
-          {busy === 'upload' ? 'Uploading…' : (value ? 'Replace PDF' : 'Upload PDF')}
+          {busy === 'upload' ? 'Processing…' : (value ? 'Replace PDF' : 'Upload PDF')}
         </button>
         {value && (
           <button
@@ -1727,7 +1732,7 @@ function InstructionsPdfField({
         style={{display:'none'}}
       />
       <div style={{fontSize:10,color:T.text3,marginTop:6}}>
-        PDF only · Max 25 MB · Stored at <code style={{fontFamily:'monospace'}}>b2b-catalogue-pdfs/{itemId}/...</code>
+        PDF only · stored at 25 MB max · large scanned PDFs are auto-compressed before upload · <code style={{fontFamily:'monospace'}}>b2b-catalogue-pdfs/{itemId}/...</code>
       </div>
       {error && (
         <div style={{marginTop:8,padding:8,background:`${T.red}15`,border:`1px solid ${T.red}40`,borderRadius:5,color:T.red,fontSize:12}}>
