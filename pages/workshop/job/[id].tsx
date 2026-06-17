@@ -15,6 +15,7 @@ import FilesPanel from '../../../components/workshop/FilesPanel'
 import TimeClockPanel from '../../../components/workshop/TimeClockPanel'
 import SendEmailModal from '../../../components/workshop/SendEmailModal'
 import MoreFields from '../../../components/workshop/DetailFields'
+import PackagePicker from '../../../components/workshop/PackagePicker'
 import { requirePageAuth } from '../../../lib/authServer'
 import { roleHasPermission } from '../../../lib/permissions'
 import {
@@ -123,6 +124,12 @@ export default function JobCardPage({ user }: { user: PortalUserSSR }) {
   async function applyJobType(jobTypeId: string) {
     setApplyingJt(true)
     await fetch(`/api/workshop/job-types/${jobTypeId}/apply`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ booking_id: id }) })
+    await load()
+    setApplyingJt(false)
+  }
+  async function applyPackage(packageId: string) {
+    setApplyingJt(true)
+    await fetch(`/api/workshop/job-type-packages/${packageId}/apply`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ booking_id: id }) })
     await load()
     setApplyingJt(false)
   }
@@ -761,6 +768,7 @@ export default function JobCardPage({ user }: { user: PortalUserSSR }) {
                         {canEdit && (
                           <div style={{ padding: 12, borderTop: `1px solid ${T.border}`, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
                             <JobTypePicker jobTypes={jobTypes} busy={applyingJt} onPick={(jt) => applyJobType(jt.id)} />
+                            <PackagePicker busy={applyingJt} onPick={(p) => applyPackage(p.id)} />
                             <button onClick={() => addLine({ line_type: 'labour', description: 'Labour', qty: 1, unit_price_ex_gst: 0 })} style={addBtn}>+ Labour</button>
                             <button onClick={() => addLine({ line_type: 'fee', description: '', qty: 1, unit_price_ex_gst: 0 })} style={addBtn}>+ Fee</button>
                             <button onClick={() => addLine({ line_type: 'description', description: '', qty: 0, unit_price_ex_gst: 0 })} title="A text-only heading row — describe the job, then move the labour/parts that belong to it underneath" style={addBtn}>+ Description</button>

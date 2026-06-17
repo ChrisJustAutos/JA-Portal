@@ -9,6 +9,7 @@ import { useRouter } from 'next/router'
 import PortalTopBar from '../../lib/PortalTopBar'
 import WorkshopTabs from '../../components/WorkshopTabs'
 import JobTypesManager from '../../components/workshop/JobTypesManager'
+import PackagesManager from '../../components/workshop/PackagesManager'
 import { requirePageAuth } from '../../lib/authServer'
 import type { PortalUserSSR } from '../../lib/authServer'
 import { BOOKING_STATUS_META, BookingStatus, vehicleLabel } from '../../lib/workshop'
@@ -24,7 +25,7 @@ const GRID = '150px 1fr 1fr 130px 120px 90px'
 
 export default function WorkshopJobsPage({ user }: { user: PortalUserSSR }) {
   const router = useRouter()
-  const [sub, setSub] = useState<'jobs' | 'types'>('jobs')
+  const [sub, setSub] = useState<'jobs' | 'types' | 'packages'>('jobs')
   const [q, setQ] = useState('')
   const [status, setStatus] = useState('all')
   const [jobs, setJobs] = useState<any[]>([])
@@ -55,7 +56,7 @@ export default function WorkshopJobsPage({ user }: { user: PortalUserSSR }) {
 
         {/* Sub-tabs */}
         <div style={{ display: 'flex', gap: 4, padding: '0 20px', background: T.bg2, borderBottom: `1px solid ${T.border}`, flexShrink: 0 }}>
-          {([['jobs', 'All jobs'], ['types', 'Job types']] as const).map(([id, label]) => {
+          {([['jobs', 'All jobs'], ['types', 'Job types'], ['packages', 'Packages']] as const).map(([id, label]) => {
             const on = sub === id
             return <button key={id} onClick={() => setSub(id)} style={{ background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'inherit', color: on ? T.text : T.text2, fontSize: 12.5, fontWeight: on ? 600 : 400, padding: '10px 12px', borderBottom: `2px solid ${on ? T.accent : 'transparent'}` }}>{label}</button>
           })}
@@ -64,6 +65,8 @@ export default function WorkshopJobsPage({ user }: { user: PortalUserSSR }) {
         <div style={{ flex: 1, overflow: 'auto', background: T.bg }}>
           {sub === 'types' ? (
             <div style={{ margin: '0 auto', padding: '20px 28px' }}><JobTypesManager /></div>
+          ) : sub === 'packages' ? (
+            <div style={{ margin: '0 auto', padding: '20px 28px' }}><PackagesManager /></div>
           ) : (
             <div style={{ margin: '0 auto', padding: '18px 28px' }}>
               {/* Toolbar */}

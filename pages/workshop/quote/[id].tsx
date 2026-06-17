@@ -18,6 +18,7 @@ import { money2 as money } from '../../../lib/ui/format'
 import { useConfirm } from '../../../components/ui/Feedback'
 import SendEmailModal from '../../../components/workshop/SendEmailModal'
 import MoreFields from '../../../components/workshop/DetailFields'
+import PackagePicker from '../../../components/workshop/PackagePicker'
 const inp: React.CSSProperties = { width: '100%', padding: '6px 8px', background: T.bg3, border: `1px solid ${T.border}`, borderRadius: 5, color: T.text, fontSize: 12, fontFamily: 'inherit', outline: 'none', boxSizing: 'border-box', colorScheme: 'dark' }
 const cellInp: React.CSSProperties = { ...inp, padding: '5px 7px', borderRadius: 4 }
 function qbtn(color: string): React.CSSProperties {
@@ -53,6 +54,18 @@ export default function QuoteBuilderPage({ user }: { user: PortalUserSSR }) {
     setApplyingJt(true)
     try {
       const r = await fetch(`/api/workshop/job-types/${jobTypeId}/apply-to-quote`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ quote_id: id }),
+      })
+      if (!r.ok) { setErr((await r.json()).error || 'Apply failed'); return }
+      await load()
+    } finally { setApplyingJt(false) }
+  }
+  async function applyPackage(packageId: string) {
+    if (!packageId || !id) return
+    setApplyingJt(true)
+    try {
+      const r = await fetch(`/api/workshop/job-type-packages/${packageId}/apply`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ quote_id: id }),
       })
@@ -285,6 +298,7 @@ export default function QuoteBuilderPage({ user }: { user: PortalUserSSR }) {
                   {canEdit && (
                     <div style={{ padding: 12, borderTop: `1px solid ${T.border}`, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
                       <JobTypePicker jobTypes={jobTypes} busy={applyingJt} onPick={(jt) => applyJobType(jt.id)} />
+                      <PackagePicker busy={applyingJt} onPick={(p) => applyPackage(p.id)} />
                       <button onClick={() => addLine({ line_type: 'item', description: 'Labour', qty: 1, unit_price: 0 })} style={addBtn}>+ Line</button>
                       <button onClick={() => addLine({ line_type: 'description', description: '', qty: 0, unit_price: 0 })} title="A text-only heading row — describe the job, then move the items that belong to it underneath" style={addBtn}>+ Description</button>
                       <PartPicker onPick={(it) => addLine({ line_type: 'item', description: it.part_name, part_number: it.sku, qty: 1, unit_price: Number(it.sell_price) || 0, inventory_id: it.id } as any)} />

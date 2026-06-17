@@ -9,6 +9,7 @@
 
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
 import { withAuth } from '../../../../../lib/authServer'
+import { applyJobTypeToBooking } from '../../../../../lib/workshop-job-type-apply'
 
 export const config = { maxDuration: 10 }
 
@@ -29,73 +30,7 @@ export default withAuth('edit:bookings', async (req, res, user) => {
   const bookingId = String(body.booking_id || '').trim()
   if (!bookingId) return res.status(400).json({ error: 'booking_id required' })
 
-  const linesOnly = !!body.lines_only
-
-  const db = sb()
-  const { data: jobType } = await db.from('workshop_job_types').select('id, code, name, description, checklist').eq('id', jobTypeId).maybeSingle()
-  if (!jobType) return res.status(404).json({ error: 'job type not found' })
-
-  const { data: tmplLines } = await db.from('workshop_job_type_lines').select('*').eq('job_type_id', jobTypeId).order('sort_order', { ascending: true })
-
-  // NOTE: the job type's work-done description is inserted as a 'description'
-  // LINE in the invoice (below), grouping the parts that belong to it — it is
-  // deliberately NOT appended to the booking's top work-description box, so a
-  // multi-job invoice reads as: [description] parts, [description] parts, …
-  // (linesOnly retained for callers that only want the lines.)
-  void linesOnly
-
-  // Carry the job type's checklist items onto the booking's tickable checklist
-  // (skip any whose text is already present, so re-applying doesn't duplicate).
-  const jtChecklist: string[] = Array.isArray((jobType as any).checklist) ? (jobType as any).checklist : []
-  if (jtChecklist.length) {
-    const { data: bk2 } = await db.from('workshop_bookings').select('checklist').eq('id', bookingId).maybeSingle()
-    const cur: any[] = Array.isArray((bk2 as any)?.checklist) ? (bk2 as any).checklist : []
-    const have = new Set(cur.map((c: any) => String(c?.text || '').trim().toLowerCase()))
-    const adds = jtChecklist.map(t => String(t || '').trim()).filter(t => t && !have.has(t.toLowerCase())).map(t => ({ text: t, done: false }))
-    if (adds.length) await db.from('workshop_bookings').update({ checklist: [...cur, ...adds] }).eq('id', bookingId)
-  }
-
-  // Append, after the booking's existing lines: a 'description' line carrying
-  // the job type's FULL work-done description (its name if it has none), then
-  // the template labour/parts. So each applied job type adds its own block —
-  // [full description] then its parts — below whatever's already on the
-  // invoice, in the order they were added.
-  const headingText = String((jobType as any).description || '').trim() || String((jobType as any).name || '').trim() || null
-  const tmpl = tmplLines || []
-  let added = 0
-  if (headingText || tmpl.length) {
-    const { data: existing } = await db.from('workshop_booking_lines').select('sort_order').eq('booking_id', bookingId).order('sort_order', { ascending: false }).limit(1)
-    let nextSort = (existing && existing[0] ? Number(existing[0].sort_order) || 0 : 0) + 1
-    const rows: any[] = []
-    if (headingText) rows.push({
-      booking_id: bookingId, line_type: 'description', description: headingText,
-      part_number: null, qty: 0, unit_price_ex_gst: 0, gst_rate: 0.10, inventory_id: null,
-      total_ex_gst: 0, sort_order: nextSort++,
-    })
-    for (const l of tmpl as any[]) rows.push({
-      booking_id: bookingId,
-      line_type: l.line_type,
-      description: l.description,
-      part_number: l.part_number,
-      qty: l.qty,
-      unit_price_ex_gst: l.unit_price_ex_gst,
-      gst_rate: l.gst_rate,
-      inventory_id: l.inventory_id,
-      total_ex_gst: Math.round((Number(l.qty) || 0) * (Number(l.unit_price_ex_gst) || 0) * 100) / 100,
-      sort_order: nextSort++,
-    })
-    if (rows.length) {
-      const { error } = await db.from('workshop_booking_lines').insert(rows)
-      if (error) return res.status(500).json({ error: error.message })
-      added = rows.length
-    }
-  }
-
-  // Record that this job type was applied (drives optional email attachments).
-  try {
-    const { data: linked } = await db.from('workshop_doc_job_types').select('id').eq('booking_id', bookingId).eq('job_type_id', jobTypeId).maybeSingle()
-    if (!linked) await db.from('workshop_doc_job_types').insert({ booking_id: bookingId, job_type_id: jobTypeId, applied_by: user.displayName || user.email || user.id })
-  } catch { /* best-effort */ }
-
-  return res.status(200).json({ ok: true, added, job_type: (jobType as any).code || (jobType as any).name })
+  const r = await applyJobTypeToBooking(sb(), jobTypeId, bookingId, user.displayName || user.email || user.id)
+  if (!r.ok) return res.status(r.error === 'job type not found' ? 404 : 500).json({ error: r.error })
+  return res.status(200).json({ ok: true, added: r.added, job_type: r.jobTypeLabel })
 })
