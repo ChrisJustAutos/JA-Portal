@@ -1373,6 +1373,26 @@ function EditDrawer({
           </Section>
 
         </div>
+
+        {/* Footer — every field already auto-saves on edit; this Save button
+            flushes any focused field, confirms, and closes. */}
+        <div style={{
+          padding:'12px 20px',borderTop:`1px solid ${T.border}`,
+          display:'flex',alignItems:'center',justifyContent:'space-between',gap:12,
+          background:T.bg2,
+        }}>
+          <span style={{fontSize:11,color:T.text3}}>Changes save automatically as you edit.</span>
+          <button
+            onClick={async () => { try { await saveDescription() } catch {}; toast('All changes saved', 'success'); onClose() }}
+            disabled={savingDesc}
+            style={{
+              padding:'9px 20px',borderRadius:6,border:`1px solid ${T.green}`,
+              background:T.green,color:'#08130b',fontSize:13,fontWeight:600,
+              cursor: savingDesc ? 'wait' : 'pointer',fontFamily:'inherit',
+            }}>
+            {savingDesc ? 'Saving…' : '✓ Save & close'}
+          </button>
+        </div>
       </div>
     </>
   )
@@ -1707,7 +1727,7 @@ function InstructionsPdfField({
         style={{display:'none'}}
       />
       <div style={{fontSize:10,color:T.text3,marginTop:6}}>
-        PDF only · Max 10 MB · Stored at <code style={{fontFamily:'monospace'}}>b2b-catalogue-pdfs/{itemId}/...</code>
+        PDF only · Max 25 MB · Stored at <code style={{fontFamily:'monospace'}}>b2b-catalogue-pdfs/{itemId}/...</code>
       </div>
       {error && (
         <div style={{marginTop:8,padding:8,background:`${T.red}15`,border:`1px solid ${T.red}40`,borderRadius:5,color:T.red,fontSize:12}}>
@@ -2351,7 +2371,9 @@ function BundleEditor({ parent, allItems }: { parent: CatalogueItem; allItems: C
   const byId = (id: string) => allItems.find(i => i.id === id)
   const addChild = (id: string) => {
     if (rows.some(r => r.child_catalogue_id === id)) return
-    persist([...rows, { child_catalogue_id: id, qty: 1, price_mode: 'included' }])
+    // Default to "Charged extra" — most bundled parts are paid for separately,
+    // not baked into the parent price. Switch to "Included (free)" per row.
+    persist([...rows, { child_catalogue_id: id, qty: 1, price_mode: 'added' }])
     setQuery(''); setPickOpen(false)
   }
   const removeChild = (id: string) => persist(rows.filter(r => r.child_catalogue_id !== id))
