@@ -58,6 +58,7 @@ export const CATALOGUE_COLUMNS: CatColumn[] = [
   { header: 'Over Limit QTY',              field: 'over_limit_qty',                  kind: 'int' },
   { header: 'Over Limit Action',           field: 'over_limit_action',               kind: 'enum', enumValues: ['quote', 'dropship'] },
   { header: 'Instructions URL',            field: 'instructions_url',                kind: 'text' },
+  { header: 'Instructions URL 2',          field: 'instructions_url_2',              kind: 'text' },
   { header: 'Image URL',                   field: 'primary_image_url',               kind: 'text' },
 ]
 

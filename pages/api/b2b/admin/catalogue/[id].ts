@@ -59,13 +59,14 @@ const EDITABLE_FIELDS = [
   'call_for_availability_below_qty',
   'call_for_availability_when_zero',
   'instructions_url',
+  'instructions_url_2',
   'cost_price_ex_gst',
   'manual_handling',
   'inbound_freight_cost_ex_gst',
   'volume_breaks',
 ] as const
 
-const NULLABLE_STRING_FIELDS = ['description', 'primary_image_url', 'barcode', 'instructions_url'] as const
+const NULLABLE_STRING_FIELDS = ['description', 'primary_image_url', 'barcode', 'instructions_url', 'instructions_url_2'] as const
 const NULLABLE_INT_FIELDS = [
   'max_order_qty',
   'freight_length_mm', 'freight_width_mm', 'freight_height_mm', 'freight_weight_g',

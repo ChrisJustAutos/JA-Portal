@@ -61,6 +61,7 @@ interface CatalogueItem {
   is_special_order: boolean
   is_drop_ship: boolean
   instructions_url: string | null
+  instructions_url_2: string | null
   max_order_qty: number | null
   stock: {
     state: 'in_stock' | 'low_stock' | 'out_of_stock'
@@ -554,20 +555,23 @@ function CatalogueCard({
       <div style={{padding:'12px 14px 14px',display:'flex',flexDirection:'column',gap:6,flex:1}}>
         <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:6}}>
           <div style={{fontSize:9,color:T.text3,fontFamily:'monospace',textTransform:'uppercase',letterSpacing:'0.04em'}}>{item.sku}</div>
-          {item.instructions_url && (
-            <a
-              href={item.instructions_url}
-              target="_blank"
-              rel="noopener noreferrer"
-              title="Download instructions PDF"
-              style={{
-                fontSize:10,color:T.blue,textDecoration:'none',
-                padding:'2px 6px',borderRadius:4,
-                background:`${T.blue}12`,border:`1px solid ${T.blue}30`,
-              }}>
-              📄 PDF
-            </a>
-          )}
+          <div style={{display:'flex',gap:4}}>
+            {[item.instructions_url, item.instructions_url_2].filter(Boolean).map((url, i, arr) => (
+              <a
+                key={i}
+                href={url as string}
+                target="_blank"
+                rel="noopener noreferrer"
+                title={`Download PDF${arr.length > 1 ? ` ${i + 1}` : ''}`}
+                style={{
+                  fontSize:10,color:T.blue,textDecoration:'none',
+                  padding:'2px 6px',borderRadius:4,
+                  background:`${T.blue}12`,border:`1px solid ${T.blue}30`,
+                }}>
+                📄 PDF{arr.length > 1 ? ` ${i + 1}` : ''}
+              </a>
+            ))}
+          </div>
         </div>
         <div style={{fontSize:13,color:T.text,fontWeight:500,lineHeight:1.3,minHeight:34}}>{item.name}</div>
 

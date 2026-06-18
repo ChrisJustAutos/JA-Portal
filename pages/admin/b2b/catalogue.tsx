@@ -84,6 +84,7 @@ interface CatalogueItem {
   call_for_availability_below_qty: number | null
   call_for_availability_when_zero: boolean
   instructions_url: string | null
+  instructions_url_2: string | null
   cost_price_ex_gst: number | null
   volume_breaks: VolumeBreak[]
   last_synced_from_myob_at: string | null
@@ -133,10 +134,18 @@ function nanoid(len: number = 12): string {
 const PDF_MAX_BYTES = 25 * 1024 * 1024        // bucket cap — final (post-compress) size
 const PDF_INPUT_MAX_BYTES = 100 * 1024 * 1024 // raw input guard (rasterising in-browser)
 
+// Each product can have two PDFs. Slot 'doc1' (the original) lives at the item
+// root b2b-catalogue-pdfs/{itemId}/...; slot 'doc2' lives in its own subfolder
+// b2b-catalogue-pdfs/{itemId}/doc2/... so the two never clobber each other.
+type PdfSlot = 'doc1' | 'doc2'
+function pdfFolder(itemId: string, slot: PdfSlot): string {
+  return slot === 'doc1' ? itemId : `${itemId}/${slot}`
+}
+
 // Validates + uploads an instructions PDF to the b2b-catalogue-pdfs bucket and
-// returns its public URL. Best-effort cleans the {itemId}/ folder so we don't
-// leak storage on re-uploads.
-async function uploadCatalogueInstructionsPdf(itemId: string, file: File): Promise<string> {
+// returns its public URL. Best-effort cleans the slot's folder so we don't leak
+// storage on re-uploads.
+async function uploadCatalogueInstructionsPdf(itemId: string, file: File, slot: PdfSlot = 'doc1'): Promise<string> {
   const type = (file.type || '').toLowerCase()
   if (type !== 'application/pdf') {
     throw new Error(`File must be a PDF (got "${file.type || 'unknown'}").`)
@@ -154,30 +163,33 @@ async function uploadCatalogueInstructionsPdf(itemId: string, file: File): Promi
     throw new Error(`Still ${(c.blob.size/1024/1024).toFixed(1)} MB after compression — max 25 MB. This PDF is very large; try splitting it or reducing its image resolution.`)
   }
   const supabase = getSupabase()
-  const path = `${itemId}/${nanoid()}.pdf`
+  const folder = pdfFolder(itemId, slot)
+  const path = `${folder}/${nanoid()}.pdf`
   const { error: upErr } = await supabase.storage
     .from('b2b-catalogue-pdfs')
     .upload(path, c.blob, { cacheControl: '3600', upsert: false, contentType: 'application/pdf' })
   if (upErr) throw new Error(upErr.message || 'Upload failed')
   const { data: { publicUrl } } = supabase.storage.from('b2b-catalogue-pdfs').getPublicUrl(path)
   try {
-    const { data: list } = await supabase.storage.from('b2b-catalogue-pdfs').list(itemId, { limit: 50 })
+    const { data: list } = await supabase.storage.from('b2b-catalogue-pdfs').list(folder, { limit: 50 })
     const newName = path.split('/').pop()
     if (list) {
-      const toDelete = list.filter(f => f.name !== newName).map(f => `${itemId}/${f.name}`)
+      // Only files (folder placeholders have a null id) — and never the file we
+      // just uploaded. This keeps doc1's cleanup from touching the doc2 subfolder.
+      const toDelete = list.filter(f => f.id && f.name !== newName).map(f => `${folder}/${f.name}`)
       if (toDelete.length > 0) await supabase.storage.from('b2b-catalogue-pdfs').remove(toDelete)
     }
   } catch { /* silent */ }
   return publicUrl
 }
 
-async function removeCatalogueInstructionsPdf(itemId: string): Promise<void> {
+async function removeCatalogueInstructionsPdf(itemId: string, slot: PdfSlot = 'doc1'): Promise<void> {
   const supabase = getSupabase()
+  const folder = pdfFolder(itemId, slot)
   try {
-    const { data: list } = await supabase.storage.from('b2b-catalogue-pdfs').list(itemId, { limit: 50 })
-    if (list && list.length > 0) {
-      await supabase.storage.from('b2b-catalogue-pdfs').remove(list.map(f => `${itemId}/${f.name}`))
-    }
+    const { data: list } = await supabase.storage.from('b2b-catalogue-pdfs').list(folder, { limit: 50 })
+    const files = (list || []).filter(f => f.id).map(f => `${folder}/${f.name}`)
+    if (files.length > 0) await supabase.storage.from('b2b-catalogue-pdfs').remove(files)
   } catch { /* silent */ }
 }
 
@@ -1351,11 +1363,20 @@ function EditDrawer({
           </Section>
 
           {/* Resources */}
-          <Section title="Resources" subtitle="Installation / use instructions">
+          <Section title="Resources" subtitle="Up to two PDFs (instructions, spec sheet, fitment guide, etc.)">
             <InstructionsPdfField
               itemId={item.id}
+              label="PDF 1 — instructions / use"
               value={item.instructions_url}
               onPatch={async v => { try { await patch({ instructions_url: v }) } catch {} }}
+            />
+            <div style={{height:14}} />
+            <InstructionsPdfField
+              itemId={item.id}
+              slot="doc2"
+              label="PDF 2 — additional document"
+              value={item.instructions_url_2}
+              onPatch={async v => { try { await patch({ instructions_url_2: v }) } catch {} }}
             />
           </Section>
 
@@ -1641,11 +1662,13 @@ function ToggleSwitch({ on, disabled, onChange }: { on: boolean; disabled?: bool
 
 // ─── Instructions PDF upload ───────────────────────────────────────────
 function InstructionsPdfField({
-  itemId, value, onPatch,
+  itemId, value, onPatch, slot = 'doc1', label,
 }: {
   itemId: string
   value: string | null
   onPatch: (v: string | null) => Promise<void>
+  slot?: PdfSlot
+  label?: string
 }) {
   const [busy, setBusy] = useState<'upload'|'remove'|null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -1654,7 +1677,7 @@ function InstructionsPdfField({
   async function handleFile(file: File) {
     setError(null); setBusy('upload')
     try {
-      const url = await uploadCatalogueInstructionsPdf(itemId, file)
+      const url = await uploadCatalogueInstructionsPdf(itemId, file, slot)
       await onPatch(url)
     } catch (e: any) {
       setError(e?.message || String(e))
@@ -1666,7 +1689,7 @@ function InstructionsPdfField({
     if (!value) return
     setError(null); setBusy('remove')
     try {
-      await removeCatalogueInstructionsPdf(itemId)
+      await removeCatalogueInstructionsPdf(itemId, slot)
       await onPatch(null)
     } catch (e: any) {
       setError(e?.message || String(e))
@@ -1676,6 +1699,7 @@ function InstructionsPdfField({
   }
   return (
     <div>
+      {label && <div style={{fontSize:12,color:T.text2,fontWeight:500,marginBottom:6}}>{label}</div>}
       {value && (
         <div style={{
           background:T.bg3,border:`1px solid ${T.border2}`,borderRadius:6,

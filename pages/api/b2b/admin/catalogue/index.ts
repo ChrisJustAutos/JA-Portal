@@ -70,6 +70,7 @@ export default withAuth('view:b2b', async (req: NextApiRequest, res: NextApiResp
       call_for_availability_below_qty,
       call_for_availability_when_zero,
       instructions_url,
+      instructions_url_2,
       last_synced_from_myob_at,
       created_at,
       updated_at,
