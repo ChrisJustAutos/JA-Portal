@@ -18,7 +18,7 @@ import { useToast } from '../../components/ui/Feedback'
 interface PrePickItem {
   id: string; md_stock_id: number | null; sku: string; part_name: string; brand: string | null; supplier: string | null
   location: string | null; buy_price: number | null; alert_qty: number | null
-  to_pick: number; current_stock: number
+  to_pick: number; current_stock: number; on_order: number; on_order_detail: any[] | null
 }
 interface PrePickJob {
   md_job_id: number; job_number: string | null; customer_name: string | null; phone: string | null
@@ -61,6 +61,7 @@ export default function PrePickPage({ user }: { user: PortalUserSSR }) {
   const [jobItems, setJobItems] = useState<JobItem[]>([])
   const [view, setView] = useState<BottomView>('parts')
   const [drillStock, setDrillStock] = useState<number | null>(null)
+  const [drillPO, setDrillPO] = useState<number | null>(null)
   const [expandedJobs, setExpandedJobs] = useState<Set<number>>(new Set())
   const [jobsCount, setJobsCount] = useState(0)
   const [loading, setLoading] = useState(true)
@@ -153,7 +154,8 @@ export default function PrePickPage({ user }: { user: PortalUserSSR }) {
   }, [from, to, load, toast])
 
   const remaining = (it: PrePickItem) => Math.round((it.current_stock - it.to_pick) * 100) / 100
-  const toOrder = (it: PrePickItem) => Math.max(0, Math.round((it.to_pick - it.current_stock) * 100) / 100)
+  // What to order nets off stock already incoming on open POs.
+  const toOrder = (it: PrePickItem) => Math.max(0, Math.round((it.to_pick - it.current_stock - (it.on_order || 0)) * 100) / 100)
   const statusOf = useCallback((it: PrePickItem): Status => {
     const rem = it.current_stock - it.to_pick
     if (rem <= 0) return 'red'
@@ -219,6 +221,17 @@ export default function PrePickPage({ user }: { user: PortalUserSSR }) {
   const drillItem = drillStock != null ? itemByStock.get(drillStock) : undefined
   const drillJobs = drillStock != null ? jobsForStock(drillStock) : []
 
+  // Open-PO lines for the on-order drill-down (current_purchase_items shape may
+  // vary, so pull common field names defensively).
+  const poItem = drillPO != null ? itemByStock.get(drillPO) : undefined
+  const poRows = (poItem?.on_order_detail || []).map((e: any) => ({
+    qty: e?.quantity ?? e?.qty ?? e?.ordered_quantity ?? e?.outstanding_quantity ?? e?.purchase_quantity ?? null,
+    number: e?.purchase_number ?? e?.number ?? e?.purchase?.number ?? e?.purchase_id ?? e?.purchase?.id ?? null,
+    supplier: e?.supplier?.name ?? e?.supplier_name ?? (typeof e?.supplier === 'string' ? e.supplier : null) ?? e?.purchase?.supplier?.name ?? null,
+    date: e?.expected_date ?? e?.eta ?? e?.due_date ?? e?.expected_delivery_date ?? e?.created_at ?? e?.purchase?.created_at ?? e?.date ?? null,
+    raw: e,
+  }))
+
   function preset(kind: 'week' | 'fortnight' | 'month') {
     const t = new Date()
     if (kind === 'week') { setFrom(ymd(t)); setTo(ymd(addDays(t, 7))) }
@@ -251,9 +264,9 @@ export default function PrePickPage({ user }: { user: PortalUserSSR }) {
       downloadCsv(lines, 'jobs')
       return
     }
-    const lines = [['SKU', 'Part', 'Brand', 'Supplier', 'To pick', 'On hand', 'Remaining', 'To order', 'Buy price', 'Location', 'Status'].join(',')]
+    const lines = [['SKU', 'Part', 'Brand', 'Supplier', 'To pick', 'On hand', 'On order', 'Remaining', 'To order', 'Buy price', 'Location', 'Status'].join(',')]
     for (const it of filtered) {
-      lines.push([it.sku, it.part_name, it.brand || '', it.supplier || '', it.to_pick, it.current_stock, remaining(it), toOrder(it), it.buy_price ?? '', it.location || '', statusOf(it)].map(esc).join(','))
+      lines.push([it.sku, it.part_name, it.brand || '', it.supplier || '', it.to_pick, it.current_stock, it.on_order || 0, remaining(it), toOrder(it), it.buy_price ?? '', it.location || '', statusOf(it)].map(esc).join(','))
     }
     downloadCsv(lines, 'parts')
   }
@@ -282,7 +295,7 @@ export default function PrePickPage({ user }: { user: PortalUserSSR }) {
             ...common, view: 'parts',
             items: filtered.map(it => ({
               sku: it.sku, part_name: it.part_name, supplier: it.supplier, location: it.location,
-              buy_price: it.buy_price, to_pick: it.to_pick, current_stock: it.current_stock,
+              buy_price: it.buy_price, to_pick: it.to_pick, current_stock: it.current_stock, on_order: it.on_order || 0,
               remaining: remaining(it), to_order: toOrder(it), status: statusOf(it),
             })),
           }
@@ -302,7 +315,7 @@ export default function PrePickPage({ user }: { user: PortalUserSSR }) {
     }}>{label}</button>
   )
   const inputStyle: React.CSSProperties = { background: T.bg3, border: `1px solid ${T.border}`, borderRadius: 6, color: T.text, fontSize: 13, padding: '6px 9px', fontFamily: 'inherit', outline: 'none', colorScheme: 'dark' }
-  const GRID = '110px 1fr 120px 70px 70px 80px 80px 80px 110px'
+  const GRID = '104px 1fr 96px 58px 58px 64px 62px 60px 60px 88px'
   const JOBGRID = '24px 90px 1.4fr 1.3fr 100px 120px 90px 60px'
   const head: React.CSSProperties = { fontSize: 9, color: T.text3, textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 600 }
   const pulling = inFlight
@@ -434,6 +447,10 @@ export default function PrePickPage({ user }: { user: PortalUserSSR }) {
                         <div style={{ fontSize: 11, color: T.text3, marginTop: 2 }}>
                           {it.current_stock} on hand · {rem < 0 ? <span style={{ color: T.red }}>{rem} short</span> : `${rem} left`}
                         </div>
+                        {it.on_order > 0 && (
+                          <div onClick={e => { if (it.md_stock_id != null) { e.stopPropagation(); setDrillPO(it.md_stock_id) } }} title="Click to see the purchase orders"
+                            style={{ fontSize: 11, color: T.accent, marginTop: 2, textDecoration: 'underline', cursor: 'pointer' }}>{it.on_order} on order</div>
+                        )}
                         {ord > 0 && <div style={{ fontSize: 11, fontWeight: 600, color: T.red, marginTop: 3 }}>Order {ord}</div>}
                       </div>
                     )
@@ -445,6 +462,7 @@ export default function PrePickPage({ user }: { user: PortalUserSSR }) {
                   <div style={{ display: 'grid', gridTemplateColumns: GRID, gap: 8, padding: '9px 14px', background: T.bg3, borderBottom: `1px solid ${T.border}` }}>
                     <div style={head}>SKU</div><div style={head}>Part</div><div style={head}>Supplier</div>
                     <div style={{ ...head, textAlign: 'right' }}>To pick</div><div style={{ ...head, textAlign: 'right' }}>On hand</div>
+                    <div style={{ ...head, textAlign: 'right' }}>On order</div>
                     <div style={{ ...head, textAlign: 'right' }}>Remaining</div><div style={{ ...head, textAlign: 'right' }}>To order</div>
                     <div style={{ ...head, textAlign: 'right' }}>Buy $</div><div style={head}>Location</div>
                   </div>
@@ -462,6 +480,9 @@ export default function PrePickPage({ user }: { user: PortalUserSSR }) {
                         <div style={{ color: T.text3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{it.supplier || '—'}</div>
                         <div style={{ textAlign: 'right', fontFamily: 'monospace', fontWeight: 600 }}>{it.to_pick}</div>
                         <div style={{ textAlign: 'right', fontFamily: 'monospace', color: T.text2 }}>{it.current_stock}</div>
+                        <div onClick={e => { if (it.on_order > 0 && it.md_stock_id != null) { e.stopPropagation(); setDrillPO(it.md_stock_id) } }}
+                          title={it.on_order > 0 ? 'Click to see the purchase orders' : undefined}
+                          style={{ textAlign: 'right', fontFamily: 'monospace', color: it.on_order > 0 ? T.accent : T.text3, fontWeight: it.on_order > 0 ? 600 : 400, textDecoration: it.on_order > 0 ? 'underline' : 'none', cursor: it.on_order > 0 ? 'pointer' : 'inherit' }}>{it.on_order > 0 ? it.on_order : '—'}</div>
                         <div style={{ textAlign: 'right', fontFamily: 'monospace', color: c, fontWeight: 600 }}>{rem}</div>
                         <div style={{ textAlign: 'right', fontFamily: 'monospace', color: ord > 0 ? T.red : T.text3, fontWeight: ord > 0 ? 600 : 400 }}>{ord || '—'}</div>
                         <div style={{ textAlign: 'right', fontFamily: 'monospace', color: T.text3 }}>{money(it.buy_price)}</div>
@@ -535,6 +556,7 @@ export default function PrePickPage({ user }: { user: PortalUserSSR }) {
                     {drillItem && (
                       <div style={{ fontSize: 12, color: T.text3, marginTop: 5 }}>
                         <strong style={{ color: colourOf(statusOf(drillItem)) }}>{drillItem.to_pick} to pick</strong> · {drillItem.current_stock} on hand · {remaining(drillItem) < 0 ? `${-remaining(drillItem)} short` : `${remaining(drillItem)} left`}
+                        {drillItem.on_order > 0 && <span> · {drillItem.on_order} on order</span>}
                         {toOrder(drillItem) > 0 && <span style={{ color: T.red, fontWeight: 600 }}> · order {toOrder(drillItem)}</span>}
                         {drillItem.location ? ` · ${drillItem.location}` : ''}
                       </div>
@@ -554,6 +576,37 @@ export default function PrePickPage({ user }: { user: PortalUserSSR }) {
                       <div style={{ fontFamily: 'monospace', color: T.text2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.job?.rego || '—'}</div>
                       <div style={{ color: T.text3 }}>{fmtJobDate(r.job?.scheduled_at || null)}</div>
                       <div style={{ textAlign: 'right', fontFamily: 'monospace', fontWeight: 700, color: T.text }}>×{num(r.qty)}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Drill-down: open purchase orders for the selected part (on order) */}
+          {drillPO != null && (
+            <div onClick={() => setDrillPO(null)} style={{ position: 'absolute', inset: 0, zIndex: 41, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
+              <div style={{ position: 'absolute', inset: 0, background: T.bg, opacity: 0.7 }} />
+              <div onClick={e => e.stopPropagation()} style={{ position: 'relative', background: T.bg2, border: `1px solid ${T.border}`, borderRadius: 14, width: 'min(640px, 100%)', maxHeight: '82vh', display: 'flex', flexDirection: 'column', boxShadow: '0 18px 50px rgba(0,0,0,0.35)' }}>
+                <div style={{ padding: '16px 20px', borderBottom: `1px solid ${T.border}`, display: 'flex', alignItems: 'flex-start', gap: 12 }}>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontSize: 11, fontFamily: 'monospace', color: T.text3 }}>{poItem?.sku || ''}</div>
+                    <div style={{ fontSize: 16, fontWeight: 600, color: T.text, marginTop: 2 }}>{poItem?.part_name || 'Part'}</div>
+                    <div style={{ fontSize: 12, color: T.text2, marginTop: 5 }}><strong style={{ color: T.accent }}>{poItem?.on_order || 0} on order</strong> across {poRows.length} purchase-order line{poRows.length === 1 ? '' : 's'}</div>
+                  </div>
+                  <button onClick={() => setDrillPO(null)} style={{ background: 'transparent', border: 'none', color: T.text3, fontSize: 22, cursor: 'pointer', lineHeight: 1, fontFamily: 'inherit' }}>×</button>
+                </div>
+                <div style={{ overflow: 'auto', padding: '6px 10px 14px' }}>
+                  {poRows.length === 0 ? (
+                    <div style={{ padding: 24, textAlign: 'center', color: T.text3, fontSize: 12 }}>
+                      {poItem && poItem.on_order > 0 ? 'On order, but MechanicDesk returned no purchase-order line detail.' : 'Nothing on order for this part.'}
+                    </div>
+                  ) : poRows.map((r, i) => (
+                    <div key={i} style={{ display: 'grid', gridTemplateColumns: '70px 1fr 120px 56px', gap: 8, alignItems: 'center', padding: '8px 10px', borderBottom: `1px solid ${T.border}`, fontSize: 12.5 }}>
+                      <div style={{ fontFamily: 'monospace', fontWeight: 600, color: T.text }}>{r.number != null ? `#${r.number}` : '—'}</div>
+                      <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={r.supplier || ''}>{r.supplier || '—'}</div>
+                      <div style={{ color: T.text3 }}>{r.date ? fmtJobDate(r.date) : '—'}</div>
+                      <div style={{ textAlign: 'right', fontFamily: 'monospace', fontWeight: 700, color: T.text }}>{r.qty != null ? `×${num(Number(r.qty))}` : '—'}</div>
                     </div>
                   ))}
                 </div>

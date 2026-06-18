@@ -83,6 +83,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         name: it.name ? String(it.name) : null,
         to_pick: Number(it.to_pick) || 0,
         on_hand: Number(it.on_hand) || 0,
+        on_order: Number(it.on_order) || 0,
+        on_order_detail: Array.isArray(it.on_order_detail) ? it.on_order_detail : null,
         alert_qty: it.alert_qty != null ? Number(it.alert_qty) : null,
         reorder_point: it.reorder_point != null ? Number(it.reorder_point) : null,
         buy_price: it.buy_price != null ? Number(it.buy_price) : null,

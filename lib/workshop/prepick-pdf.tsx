@@ -22,6 +22,7 @@ export interface PrePickPdfItem {
   buy_price: number | null
   to_pick: number
   current_stock: number
+  on_order: number
   remaining: number
   to_order: number
   status: 'green' | 'orange' | 'red'
@@ -65,7 +66,7 @@ const statusColor = (s: PrePickPdfItem['status']) => (s === 'red' ? C.red : s ==
 const num = (n: number) => (Math.round(n * 100) / 100).toString()
 
 // Column widths (A4 landscape content ≈ 770pt; Part column flexes).
-const COL = { dot: 12, sku: 92, supplier: 96, qty: 46, rem: 52, ord: 48, buy: 54, loc: 78 }
+const COL = { dot: 12, sku: 88, supplier: 90, qty: 44, ono: 48, rem: 50, ord: 46, buy: 50, loc: 72 }
 
 const s = StyleSheet.create({
   page: { paddingTop: 34, paddingBottom: 38, paddingHorizontal: 30, fontFamily: 'Helvetica', fontSize: 8.5, color: C.ink, backgroundColor: C.bg },
@@ -130,6 +131,7 @@ function PrePickDoc({ data }: { data: PrePickPdfPayload }) {
           <Text style={{ width: COL.supplier }}>Supplier</Text>
           <Text style={[s.right, { width: COL.qty }]}>To pick</Text>
           <Text style={[s.right, { width: COL.qty }]}>On hand</Text>
+          <Text style={[s.right, { width: COL.ono }]}>On order</Text>
           <Text style={[s.right, { width: COL.rem }]}>Remaining</Text>
           <Text style={[s.right, { width: COL.ord }]}>To order</Text>
           <Text style={[s.right, { width: COL.buy }]}>Buy $</Text>
@@ -149,6 +151,7 @@ function PrePickDoc({ data }: { data: PrePickPdfPayload }) {
               <Text style={{ width: COL.supplier, color: C.ink3 }}>{it.supplier || '—'}</Text>
               <Text style={[s.right, { width: COL.qty, fontWeight: 700 }]}>{num(it.to_pick)}</Text>
               <Text style={[s.right, { width: COL.qty, color: C.ink2 }]}>{num(it.current_stock)}</Text>
+              <Text style={[s.right, { width: COL.ono, color: it.on_order > 0 ? C.accent : C.ink3 }]}>{it.on_order > 0 ? num(it.on_order) : '—'}</Text>
               <Text style={[s.right, { width: COL.rem, color: col, fontWeight: 700 }]}>{num(it.remaining)}</Text>
               <Text style={[s.right, { width: COL.ord, color: it.to_order > 0 ? C.red : C.ink3, fontWeight: it.to_order > 0 ? 700 : 400 }]}>{it.to_order > 0 ? num(it.to_order) : '—'}</Text>
               <Text style={[s.right, { width: COL.buy, color: C.ink3 }]}>{money(it.buy_price)}</Text>

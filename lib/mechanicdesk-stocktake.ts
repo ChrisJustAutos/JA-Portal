@@ -551,6 +551,8 @@ export interface MdPrePickItem {
   name: string | null
   to_pick: number
   on_hand: number
+  on_order: number               // ordered_quantity = incoming on open MD purchase orders
+  on_order_detail: any[] | null  // raw current_purchase_items (open PO lines) for the drill-down
   alert_qty: number | null
   reorder_point: number | null
   buy_price: number | null
@@ -702,6 +704,7 @@ export async function collectPrePickDemand(
         agg.set(id, {
           md_stock_id: id, sku, name, to_pick: qty,
           on_hand: Number(st.quantity) || 0,
+          on_order: 0, on_order_detail: null,
           alert_qty: st.alert_quantity != null ? Number(st.alert_quantity) : null,
           reorder_point: st.reorder_point != null ? Number(st.reorder_point) : null,
           buy_price: st.buy_price != null ? Number(st.buy_price) : null,
@@ -722,6 +725,23 @@ export async function collectPrePickDemand(
     const meta = jobMeta.get(jid)
     if (meta) { meta.parts_count = perJob.size; meta.parts_qty = Math.round(jobQty * 100) / 100 }
   }
+
+  // 4. Per part, pull the stock-detail endpoint for "on order" (ordered_quantity)
+  // and the open-PO lines behind it (current_purchase_items). Concurrent so it
+  // adds little wall-clock. The job-embedded stock lacks these fields; only
+  // /stocks/{id} carries ordered_quantity/allocated_quantity/available_quantity.
+  const stockIds = Array.from(agg.keys())
+  await mapPool(stockIds, 8, async (sid) => {
+    try {
+      const detail = await mdFetch<any>(client, `/stocks/${sid}`)
+      const it = agg.get(sid)
+      if (!it) return
+      it.on_order = Number(detail?.ordered_quantity) || 0
+      it.on_order_detail = Array.isArray(detail?.current_purchase_items) ? detail.current_purchase_items : null
+    } catch (e: any) {
+      log(`  stock ${sid} detail failed: ${String(e?.message).slice(0, 120)}`)
+    }
+  })
 
   const items = Array.from(agg.values()).map(i => ({ ...i, to_pick: Math.round(i.to_pick * 100) / 100 }))
   items.sort((a, b) => b.to_pick - a.to_pick)
