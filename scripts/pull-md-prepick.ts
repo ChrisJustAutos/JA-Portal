@@ -70,9 +70,9 @@ async function main() {
     try {
       const { client } = await loginToMechanicDesk(browser, wsId, username, password)
       log('Logged in — collecting demand')
-      const { jobsCount, items } = await collectPrePickDemand(client, FROM, TO, log)
-      log(`Aggregated ${items.length} part(s) across ${jobsCount} job(s)`)
-      await ingest({ action: 'finish', run_id: runId, jobs_count: jobsCount, items })
+      const { jobsCount, items, jobs, jobItems } = await collectPrePickDemand(client, FROM, TO, log)
+      log(`Aggregated ${items.length} part(s) across ${jobsCount} job(s); ${jobItems.length} job-line link(s)`)
+      await ingest({ action: 'finish', run_id: runId, jobs_count: jobsCount, items, jobs, job_items: jobItems })
       log('Done')
     } finally {
       await browser.close().catch(() => undefined)

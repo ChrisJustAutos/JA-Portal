@@ -557,6 +557,30 @@ export interface MdPrePickItem {
   location: string | null
 }
 
+// One row per job in the range (metadata from the MD diary booking).
+export interface MdPrePickJob {
+  md_job_id: number
+  job_number: string | null
+  customer_name: string | null
+  phone: string | null
+  vehicle: string | null
+  rego: string | null
+  status: string | null
+  description: string | null
+  scheduled_at: string | null
+  parts_count: number
+  parts_qty: number
+}
+
+// One row per (job, stock) — the parts applied to a job (tracked stock only).
+export interface MdPrePickJobItem {
+  md_job_id: number
+  md_stock_id: number
+  sku: string | null
+  name: string | null
+  quantity: number
+}
+
 function ymdList(fromYmd: string, toYmd: string): string[] {
   const out: string[] = []
   const start = new Date(`${fromYmd}T00:00:00+10:00`)
@@ -584,17 +608,34 @@ async function mapPool<I, O>(items: I[], limit: number, fn: (item: I, idx: numbe
   return out
 }
 
+// Pull job metadata out of an MD diary booking/job row (field names confirmed
+// from a captured diary response).
+function extractJobMeta(row: any): Omit<MdPrePickJob, 'md_job_id' | 'parts_count' | 'parts_qty'> {
+  const vehicle = [row?.make, row?.model, row?.year].filter(Boolean).join(' ').trim() || null
+  return {
+    job_number: row?.job_number != null ? String(row.job_number) : null,
+    customer_name: row?.name || row?.customer?.name || null,
+    phone: row?.phone || row?.mobile || row?.customer?.phone || row?.customer?.mobile || null,
+    vehicle: vehicle || (row?.vehicle_title ? String(row.vehicle_title).split('\n')[0] : null),
+    rego: row?.registration_number || null,
+    status: row?.status || null,
+    description: row?.description || row?.job_types_title || null,
+    scheduled_at: row?.time || row?.start || null,
+  }
+}
+
 export async function collectPrePickDemand(
   client: MdClient,
   fromYmd: string,
   toYmd: string,
   log: (m: string) => void = () => {},
-): Promise<{ jobsCount: number; items: MdPrePickItem[] }> {
-  // 1. Collect unique job ids from the diary — days fetched concurrently.
-  // NOTE: /mdweb/workshops/diary is the SPA client-side route (serves the HTML
-  // app shell). The actual XHR data endpoint is the old-app /auto_workshop/diary
-  // — same cookie session, no bearer token.
+): Promise<{ jobsCount: number; items: MdPrePickItem[]; jobs: MdPrePickJob[]; jobItems: MdPrePickJobItem[] }> {
+  // 1. Collect unique job ids + their metadata from the diary — days fetched
+  // concurrently. NOTE: /mdweb/workshops/diary is the SPA client-side route
+  // (serves the HTML app shell). The actual XHR data endpoint is the old-app
+  // /auto_workshop/diary — same cookie session, no bearer token.
   const jobIds = new Set<number>()
+  const jobMeta = new Map<number, MdPrePickJob>()
   await mapPool(ymdList(fromYmd, toYmd), 6, async (ymd) => {
     const start = `${ymd}T00:00:00+10:00`
     const end = `${ymd}T23:59:59+10:00`
@@ -603,7 +644,18 @@ export async function collectPrePickDemand(
       for (const arr of [diary?.bookings, diary?.jobs]) {
         for (const row of (Array.isArray(arr) ? arr : [])) {
           const jid = Number(row?.job_id ?? row?.id)
-          if (jid && isFinite(jid)) jobIds.add(jid)
+          if (!jid || !isFinite(jid)) continue
+          jobIds.add(jid)
+          const meta = extractJobMeta(row)
+          const existing = jobMeta.get(jid)
+          if (!existing) {
+            jobMeta.set(jid, { md_job_id: jid, parts_count: 0, parts_qty: 0, ...meta })
+          } else {
+            // Fill any blanks from a later diary row for the same job.
+            for (const k of Object.keys(meta) as (keyof typeof meta)[]) {
+              if ((existing as any)[k] == null && meta[k] != null) (existing as any)[k] = meta[k]
+            }
+          }
         }
       }
     } catch (e: any) {
@@ -615,7 +667,8 @@ export async function collectPrePickDemand(
   // 2. Fetch each job concurrently. The job-detail data endpoint is root-level
   // /jobs/{id}?id={id} (not under /auto_workshop/, not the SPA route). Returns
   // application/json with invoice.items. Confirmed from captured request.
-  const jobs = await mapPool(Array.from(jobIds), 8, async (jid) => {
+  const ids = Array.from(jobIds)
+  const details = await mapPool(ids, 8, async (jid) => {
     try {
       return await mdFetch<any>(client, `/jobs/${jid}?id=${jid}`)
     } catch (e: any) {
@@ -624,26 +677,30 @@ export async function collectPrePickDemand(
     }
   })
 
-  // 3. Aggregate tracked parts by stock id (single-threaded over the results).
+  // 3. Aggregate tracked parts by stock id, and record per-job line items.
   const agg = new Map<number, MdPrePickItem>()
-  for (const job of jobs) {
+  const jobItems: MdPrePickJobItem[] = []
+  for (let k = 0; k < ids.length; k++) {
+    const jid = ids[k]
+    const job = details[k]
     if (!job) continue
-    const items = Array.isArray(job?.invoice?.items) ? job.invoice.items : []
-    for (const it of items) {
+    const lines = Array.isArray(job?.invoice?.items) ? job.invoice.items : []
+    const perJob = new Map<number, { sku: string | null; name: string | null; qty: number }>()
+    for (const it of lines) {
       const st = it?.stock
       const qty = Number(it?.quantity) || 0
       // Tracked physical stock only (skip labour/freight/misc/deposit + headings).
       if (!st || st.disable_tracking === true || !it?.stock_id || qty <= 0) continue
       const id = Number(it.stock_id)
+      const sku = it.stock_number || st.stock_number || null
+      const name = st.name || it.description || null
+      // Global aggregate.
       const cur = agg.get(id)
       if (cur) {
         cur.to_pick += qty
       } else {
         agg.set(id, {
-          md_stock_id: id,
-          sku: it.stock_number || st.stock_number || null,
-          name: st.name || it.description || null,
-          to_pick: qty,
+          md_stock_id: id, sku, name, to_pick: qty,
           on_hand: Number(st.quantity) || 0,
           alert_qty: st.alert_quantity != null ? Number(st.alert_quantity) : null,
           reorder_point: st.reorder_point != null ? Number(st.reorder_point) : null,
@@ -651,9 +708,23 @@ export async function collectPrePickDemand(
           location: st.location || st.bin || null,
         })
       }
+      // Per-job merge (a job may list the same part on two lines).
+      const pe = perJob.get(id)
+      if (pe) pe.qty += qty
+      else perJob.set(id, { sku, name, qty })
     }
+    let jobQty = 0
+    for (const [id, e] of Array.from(perJob.entries())) {
+      const q = Math.round(e.qty * 100) / 100
+      jobItems.push({ md_job_id: jid, md_stock_id: id, sku: e.sku, name: e.name, quantity: q })
+      jobQty += q
+    }
+    const meta = jobMeta.get(jid)
+    if (meta) { meta.parts_count = perJob.size; meta.parts_qty = Math.round(jobQty * 100) / 100 }
   }
+
   const items = Array.from(agg.values()).map(i => ({ ...i, to_pick: Math.round(i.to_pick * 100) / 100 }))
   items.sort((a, b) => b.to_pick - a.to_pick)
-  return { jobsCount: jobIds.size, items }
+  const jobs = Array.from(jobMeta.values()).sort((a, b) => (b.parts_count - a.parts_count) || String(a.scheduled_at || '').localeCompare(String(b.scheduled_at || '')))
+  return { jobsCount: jobIds.size, items, jobs, jobItems }
 }

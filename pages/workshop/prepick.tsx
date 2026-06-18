@@ -16,12 +16,19 @@ import { T, SkeletonRows } from '../../components/ui'
 import { useToast } from '../../components/ui/Feedback'
 
 interface PrePickItem {
-  id: string; sku: string; part_name: string; brand: string | null; supplier: string | null
+  id: string; md_stock_id: number | null; sku: string; part_name: string; brand: string | null; supplier: string | null
   location: string | null; buy_price: number | null; alert_qty: number | null
   to_pick: number; current_stock: number
 }
+interface PrePickJob {
+  md_job_id: number; job_number: string | null; customer_name: string | null; phone: string | null
+  vehicle: string | null; rego: string | null; status: string | null; description: string | null
+  scheduled_at: string | null; parts_count: number; parts_qty: number
+}
+interface JobItem { md_job_id: number; md_stock_id: number | null; sku: string; name: string; quantity: number }
 type Status = 'green' | 'orange' | 'red'
 type Filter = 'all' | 'green' | 'orange' | 'red' | 'toorder'
+type BottomView = 'parts' | 'jobs'
 type RunStatus = 'none' | 'pending' | 'running' | 'done' | 'error'
 
 function ymd(d: Date): string { const p = (n: number) => String(n).padStart(2, '0'); return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}` }
@@ -36,6 +43,11 @@ function ago(iso: string | null): string {
   const hrs = Math.round(mins / 60); if (hrs < 24) return `${hrs} hr${hrs === 1 ? '' : 's'} ago`
   const days = Math.round(hrs / 24); return `${days} day${days === 1 ? '' : 's'} ago`
 }
+function fmtJobDate(iso: string | null): string {
+  if (!iso) return '—'
+  try { return new Date(iso).toLocaleString('en-AU', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) } catch { return iso }
+}
+const num = (n: number) => String(Math.round(n * 100) / 100)
 
 export default function PrePickPage({ user }: { user: PortalUserSSR }) {
   const toast = useToast()
@@ -45,6 +57,11 @@ export default function PrePickPage({ user }: { user: PortalUserSSR }) {
   const [to, setTo] = useState(ymd(addDays(today, 14)))
   const [lowThreshold, setLowThreshold] = useState(5)
   const [items, setItems] = useState<PrePickItem[]>([])
+  const [jobs, setJobs] = useState<PrePickJob[]>([])
+  const [jobItems, setJobItems] = useState<JobItem[]>([])
+  const [view, setView] = useState<BottomView>('parts')
+  const [drillStock, setDrillStock] = useState<number | null>(null)
+  const [expandedJobs, setExpandedJobs] = useState<Set<number>>(new Set())
   const [jobsCount, setJobsCount] = useState(0)
   const [loading, setLoading] = useState(true)
   const [q, setQ] = useState('')
@@ -72,6 +89,8 @@ export default function PrePickPage({ user }: { user: PortalUserSSR }) {
       const d = await r.json()
       if (r.ok) {
         setItems(Array.isArray(d.items) ? d.items : [])
+        setJobs(Array.isArray(d.jobs) ? d.jobs : [])
+        setJobItems(Array.isArray(d.job_items) ? d.job_items : [])
         setJobsCount(Number(d.jobs_count) || 0)
         setSnapFrom(d.from || null); setSnapTo(d.to || null)
         setSyncedAt(d.synced_at || null)
@@ -165,6 +184,41 @@ export default function PrePickPage({ user }: { user: PortalUserSSR }) {
     return { green, orange, red, orderCount, orderValue: Math.round(orderValue * 100) / 100 }
   }, [items, statusOf])
 
+  // ── Job ↔ part lookups (for the Jobs view + drill-down) ──────────────
+  const itemByStock = useMemo(() => {
+    const m = new Map<number, PrePickItem>()
+    for (const it of items) if (it.md_stock_id != null) m.set(it.md_stock_id, it)
+    return m
+  }, [items])
+  const jobsById = useMemo(() => {
+    const m = new Map<number, PrePickJob>()
+    for (const j of jobs) m.set(j.md_job_id, j)
+    return m
+  }, [jobs])
+  const itemsByJob = useMemo(() => {
+    const m = new Map<number, JobItem[]>()
+    for (const ji of jobItems) { const a = m.get(ji.md_job_id) || []; a.push(ji); m.set(ji.md_job_id, a) }
+    for (const a of Array.from(m.values())) a.sort((x, y) => y.quantity - x.quantity)
+    return m
+  }, [jobItems])
+  // For a given stock id: the jobs needing it (+ qty on each).
+  const jobsForStock = useCallback((stockId: number) => {
+    const rows = jobItems.filter(ji => ji.md_stock_id === stockId)
+    return rows.map(ji => ({ qty: ji.quantity, job: jobsById.get(ji.md_job_id) || null, md_job_id: ji.md_job_id }))
+      .sort((a, b) => String(a.job?.scheduled_at || '').localeCompare(String(b.job?.scheduled_at || '')))
+  }, [jobItems, jobsById])
+
+  const filteredJobs = useMemo(() => {
+    const needle = q.trim().toLowerCase()
+    const list = needle
+      ? jobs.filter(j => `${j.job_number || ''} ${j.customer_name || ''} ${j.vehicle || ''} ${j.rego || ''} ${j.description || ''}`.toLowerCase().includes(needle))
+      : jobs
+    return list
+  }, [jobs, q])
+
+  const drillItem = drillStock != null ? itemByStock.get(drillStock) : undefined
+  const drillJobs = drillStock != null ? jobsForStock(drillStock) : []
+
   function preset(kind: 'week' | 'fortnight' | 'month') {
     const t = new Date()
     if (kind === 'week') { setFrom(ymd(t)); setTo(ymd(addDays(t, 7))) }
@@ -216,6 +270,7 @@ export default function PrePickPage({ user }: { user: PortalUserSSR }) {
   )
   const inputStyle: React.CSSProperties = { background: T.bg3, border: `1px solid ${T.border}`, borderRadius: 6, color: T.text, fontSize: 13, padding: '6px 9px', fontFamily: 'inherit', outline: 'none', colorScheme: 'dark' }
   const GRID = '110px 1fr 120px 70px 70px 80px 80px 80px 110px'
+  const JOBGRID = '24px 90px 1.4fr 1.3fr 100px 120px 90px 60px'
   const head: React.CSSProperties = { fontSize: 9, color: T.text3, textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 600 }
   const pulling = inFlight
   const fmtElapsed = (s: number) => { const m = Math.floor(s / 60), sec = s % 60; return m > 0 ? `${m}m ${sec}s` : `${sec}s` }
@@ -295,34 +350,47 @@ export default function PrePickPage({ user }: { user: PortalUserSSR }) {
             )}
           </div>
 
-          {/* Filters */}
+          {/* View toggle + filters */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 20px', flexWrap: 'wrap', flexShrink: 0 }}>
-            <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search SKU / part / supplier…" style={{ ...inputStyle, width: 260 }} />
+            {/* Parts / Jobs segmented toggle */}
+            <div style={{ display: 'flex', border: `1px solid ${T.border}`, borderRadius: 7, overflow: 'hidden' }}>
+              {(['parts', 'jobs'] as BottomView[]).map(v => (
+                <button key={v} onClick={() => setView(v)} style={{
+                  padding: '6px 14px', fontSize: 12.5, fontWeight: view === v ? 600 : 400, cursor: 'pointer', fontFamily: 'inherit', border: 'none',
+                  background: view === v ? T.accent : 'transparent', color: view === v ? '#fff' : T.text2,
+                }}>{v === 'parts' ? `Parts (${items.length})` : `Jobs (${jobs.length})`}</button>
+              ))}
+            </div>
+            <input value={q} onChange={e => setQ(e.target.value)} placeholder={view === 'parts' ? 'Search SKU / part / supplier…' : 'Search job # / customer / rego…'} style={{ ...inputStyle, width: 260 }} />
             <div style={{ flex: 1 }} />
-            {chip('all', `All (${items.length})`)}
-            {chip('green', `OK (${counts.green})`, T.green)}
-            {chip('orange', `Low (${counts.orange})`, T.amber)}
-            {chip('red', `Out (${counts.red})`, T.red)}
-            {chip('toorder', `To order (${counts.orderCount})`, T.red)}
+            {view === 'parts' && <>
+              {chip('all', `All (${items.length})`)}
+              {chip('green', `OK (${counts.green})`, T.green)}
+              {chip('orange', `Low (${counts.orange})`, T.amber)}
+              {chip('red', `Out (${counts.red})`, T.red)}
+              {chip('toorder', `To order (${counts.orderCount})`, T.red)}
+            </>}
           </div>
 
           <div style={{ flex: 1, overflow: 'auto', padding: '4px 20px 24px' }}>
-            {loading && items.length === 0 ? (
+            {loading && items.length === 0 && jobs.length === 0 ? (
               <SkeletonRows rows={6} />
-            ) : items.length === 0 ? (
+            ) : items.length === 0 && jobs.length === 0 ? (
               <div style={{ padding: 48, textAlign: 'center', color: T.text3, fontSize: 13 }}>
                 {pulling
                   ? 'Pulling from MechanicDesk — parts will appear here shortly.'
                   : 'No tracked parts on MechanicDesk jobs in the last pulled range. Pick a date range and hit “Refresh from MechanicDesk”. Only parts linked to a tracked MD stock item are counted (labour/freight excluded).'}
               </div>
-            ) : (
+            ) : view === 'parts' ? (
               <>
-                {/* Tiles */}
+                {/* Tiles — click to see the jobs needing this part */}
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(190px, 1fr))', gap: 12, marginBottom: 22 }}>
                   {filtered.map(it => {
                     const s = statusOf(it); const c = colourOf(s); const rem = remaining(it); const ord = toOrder(it)
+                    const clickable = it.md_stock_id != null
                     return (
-                      <div key={it.id} style={{ background: `${c}14`, border: `1.5px solid ${c}66`, borderRadius: 12, padding: '14px', display: 'flex', flexDirection: 'column', minHeight: 104 }}>
+                      <div key={it.id} onClick={() => clickable && setDrillStock(it.md_stock_id)} title={clickable ? 'Click to see the jobs needing this part' : undefined}
+                        style={{ background: `${c}14`, border: `1.5px solid ${c}66`, borderRadius: 12, padding: '14px', display: 'flex', flexDirection: 'column', minHeight: 104, cursor: clickable ? 'pointer' : 'default' }}>
                         <div style={{ fontSize: 10.5, color: T.text3, fontFamily: 'monospace', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{it.sku || '—'}</div>
                         <div title={it.part_name} style={{ fontSize: 12.5, color: T.text2, lineHeight: 1.3, marginTop: 2, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>{it.part_name}</div>
                         <div style={{ marginTop: 'auto', display: 'flex', alignItems: 'baseline', gap: 6, paddingTop: 8 }}>
@@ -338,7 +406,7 @@ export default function PrePickPage({ user }: { user: PortalUserSSR }) {
                   })}
                 </div>
 
-                {/* List */}
+                {/* Parts list — click a row to see the jobs needing it */}
                 <div style={{ background: T.bg2, border: `1px solid ${T.border}`, borderRadius: 10, overflow: 'hidden' }}>
                   <div style={{ display: 'grid', gridTemplateColumns: GRID, gap: 8, padding: '9px 14px', background: T.bg3, borderBottom: `1px solid ${T.border}` }}>
                     <div style={head}>SKU</div><div style={head}>Part</div><div style={head}>Supplier</div>
@@ -348,8 +416,10 @@ export default function PrePickPage({ user }: { user: PortalUserSSR }) {
                   </div>
                   {filtered.map(it => {
                     const s = statusOf(it); const c = colourOf(s); const rem = remaining(it); const ord = toOrder(it)
+                    const clickable = it.md_stock_id != null
                     return (
-                      <div key={it.id} style={{ display: 'grid', gridTemplateColumns: GRID, gap: 8, padding: '9px 14px', borderTop: `1px solid ${T.border}`, alignItems: 'center', fontSize: 12.5 }}>
+                      <div key={it.id} onClick={() => clickable && setDrillStock(it.md_stock_id)} title={clickable ? 'Click to see the jobs needing this part' : undefined}
+                        style={{ display: 'grid', gridTemplateColumns: GRID, gap: 8, padding: '9px 14px', borderTop: `1px solid ${T.border}`, alignItems: 'center', fontSize: 12.5, cursor: clickable ? 'pointer' : 'default' }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 7, fontFamily: 'monospace', fontSize: 11, color: T.text2, overflow: 'hidden' }}>
                           <span style={{ width: 8, height: 8, borderRadius: '50%', background: c, flexShrink: 0 }} />
                           <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{it.sku || '—'}</span>
@@ -368,8 +438,94 @@ export default function PrePickPage({ user }: { user: PortalUserSSR }) {
                   {filtered.length === 0 && <div style={{ padding: 28, textAlign: 'center', color: T.text3, fontSize: 12 }}>No parts match this filter.</div>}
                 </div>
               </>
+            ) : (
+              /* ── Jobs view — each job expands to the parts applied to it ── */
+              <div style={{ background: T.bg2, border: `1px solid ${T.border}`, borderRadius: 10, overflow: 'hidden' }}>
+                <div style={{ display: 'grid', gridTemplateColumns: JOBGRID, gap: 8, padding: '9px 14px', background: T.bg3, borderBottom: `1px solid ${T.border}` }}>
+                  <div style={head}></div><div style={head}>Job #</div><div style={head}>Customer</div><div style={head}>Vehicle</div>
+                  <div style={head}>Rego</div><div style={head}>Scheduled</div><div style={head}>Status</div><div style={{ ...head, textAlign: 'right' }}>Parts</div>
+                </div>
+                {filteredJobs.map(j => {
+                  const open = expandedJobs.has(j.md_job_id)
+                  const parts = itemsByJob.get(j.md_job_id) || []
+                  return (
+                    <div key={j.md_job_id} style={{ borderTop: `1px solid ${T.border}` }}>
+                      <div onClick={() => setExpandedJobs(prev => { const n = new Set(prev); n.has(j.md_job_id) ? n.delete(j.md_job_id) : n.add(j.md_job_id); return n })}
+                        style={{ display: 'grid', gridTemplateColumns: JOBGRID, gap: 8, padding: '9px 14px', alignItems: 'center', fontSize: 12.5, cursor: 'pointer', background: open ? T.bg3 : 'transparent' }}>
+                        <div style={{ color: T.text3, fontWeight: 700, fontSize: 14, textAlign: 'center', userSelect: 'none' }}>{open ? '−' : '+'}</div>
+                        <div style={{ fontFamily: 'monospace', color: T.text, fontWeight: 600 }}>{j.job_number || j.md_job_id}</div>
+                        <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={j.customer_name || ''}>{j.customer_name || '—'}</div>
+                        <div style={{ color: T.text2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={j.vehicle || ''}>{j.vehicle || '—'}</div>
+                        <div style={{ fontFamily: 'monospace', color: T.text2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{j.rego || '—'}</div>
+                        <div style={{ color: T.text3 }}>{fmtJobDate(j.scheduled_at)}</div>
+                        <div style={{ color: T.text3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{j.status || '—'}</div>
+                        <div style={{ textAlign: 'right', fontWeight: 600, color: j.parts_count > 0 ? T.text : T.text3 }}>{j.parts_count || '—'}</div>
+                      </div>
+                      {open && (
+                        <div style={{ padding: '4px 14px 12px 46px', background: T.bg }}>
+                          {parts.length === 0 ? (
+                            <div style={{ fontSize: 12, color: T.text3, padding: '6px 0' }}>No tracked parts on this job (labour/freight only).</div>
+                          ) : parts.map((p, i) => {
+                            const owner = p.md_stock_id != null ? itemByStock.get(p.md_stock_id) : undefined
+                            const c = owner ? colourOf(statusOf(owner)) : T.text3
+                            return (
+                              <div key={i} onClick={() => p.md_stock_id != null && setDrillStock(p.md_stock_id)} title={p.md_stock_id != null ? 'Click to see all jobs needing this part' : undefined}
+                                style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '5px 0', borderBottom: i < parts.length - 1 ? `1px solid ${T.border}` : 'none', fontSize: 12.5, cursor: p.md_stock_id != null ? 'pointer' : 'default' }}>
+                                <span style={{ width: 7, height: 7, borderRadius: '50%', background: c, flexShrink: 0 }} />
+                                <span style={{ fontFamily: 'monospace', fontSize: 11, color: T.text2, width: 120, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.sku || '—'}</span>
+                                <span style={{ flex: 1, color: T.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.name || '—'}</span>
+                                <span style={{ fontFamily: 'monospace', fontWeight: 600, color: T.text }}>×{num(p.quantity)}</span>
+                                {owner && <span style={{ fontFamily: 'monospace', fontSize: 11, color: T.text3, width: 90, textAlign: 'right' }}>{owner.current_stock} on hand</span>}
+                              </div>
+                            )
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  )
+                })}
+                {filteredJobs.length === 0 && <div style={{ padding: 28, textAlign: 'center', color: T.text3, fontSize: 12 }}>No jobs match this search.</div>}
+              </div>
             )}
           </div>
+
+          {/* Drill-down: all jobs needing the selected part */}
+          {drillStock != null && (
+            <div onClick={() => setDrillStock(null)} style={{ position: 'absolute', inset: 0, zIndex: 40, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
+              <div style={{ position: 'absolute', inset: 0, background: T.bg, opacity: 0.7 }} />
+              <div onClick={e => e.stopPropagation()} style={{ position: 'relative', background: T.bg2, border: `1px solid ${T.border}`, borderRadius: 14, width: 'min(720px, 100%)', maxHeight: '82vh', display: 'flex', flexDirection: 'column', boxShadow: '0 18px 50px rgba(0,0,0,0.35)' }}>
+                <div style={{ padding: '16px 20px', borderBottom: `1px solid ${T.border}`, display: 'flex', alignItems: 'flex-start', gap: 12 }}>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontSize: 11, fontFamily: 'monospace', color: T.text3 }}>{drillItem?.sku || ''}</div>
+                    <div style={{ fontSize: 16, fontWeight: 600, color: T.text, marginTop: 2 }}>{drillItem?.part_name || 'Part'}</div>
+                    {drillItem && (
+                      <div style={{ fontSize: 12, color: T.text3, marginTop: 5 }}>
+                        <strong style={{ color: colourOf(statusOf(drillItem)) }}>{drillItem.to_pick} to pick</strong> · {drillItem.current_stock} on hand · {remaining(drillItem) < 0 ? `${-remaining(drillItem)} short` : `${remaining(drillItem)} left`}
+                        {toOrder(drillItem) > 0 && <span style={{ color: T.red, fontWeight: 600 }}> · order {toOrder(drillItem)}</span>}
+                        {drillItem.location ? ` · ${drillItem.location}` : ''}
+                      </div>
+                    )}
+                    <div style={{ fontSize: 12, color: T.text2, marginTop: 6 }}>Needed by {drillJobs.length} job{drillJobs.length === 1 ? '' : 's'}:</div>
+                  </div>
+                  <button onClick={() => setDrillStock(null)} style={{ background: 'transparent', border: 'none', color: T.text3, fontSize: 22, cursor: 'pointer', lineHeight: 1, fontFamily: 'inherit' }}>×</button>
+                </div>
+                <div style={{ overflow: 'auto', padding: '6px 10px 14px' }}>
+                  {drillJobs.length === 0 ? (
+                    <div style={{ padding: 24, textAlign: 'center', color: T.text3, fontSize: 12 }}>No job breakdown available for this part.</div>
+                  ) : drillJobs.map((r, i) => (
+                    <div key={i} style={{ display: 'grid', gridTemplateColumns: '80px 1fr 150px 90px 110px 56px', gap: 8, alignItems: 'center', padding: '8px 10px', borderBottom: `1px solid ${T.border}`, fontSize: 12.5 }}>
+                      <div style={{ fontFamily: 'monospace', fontWeight: 600, color: T.text }}>{r.job?.job_number || r.md_job_id}</div>
+                      <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={r.job?.customer_name || ''}>{r.job?.customer_name || '—'}</div>
+                      <div style={{ color: T.text2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={r.job?.vehicle || ''}>{r.job?.vehicle || '—'}</div>
+                      <div style={{ fontFamily: 'monospace', color: T.text2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.job?.rego || '—'}</div>
+                      <div style={{ color: T.text3 }}>{fmtJobDate(r.job?.scheduled_at || null)}</div>
+                      <div style={{ textAlign: 'right', fontFamily: 'monospace', fontWeight: 700, color: T.text }}>×{num(r.qty)}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </>

@@ -47,13 +47,24 @@ export default withAuth('view:diary', async (req, res) => {
   }
 
   let items: any[] = []
+  let jobs: any[] = []
+  let jobItems: any[] = []
   if (snapRun.status === 'done') {
-    const { data: rows, error: iErr } = await db.from('md_prepick_items')
-      .select('id, md_stock_id, sku, name, to_pick, on_hand, alert_qty, reorder_point, buy_price, location')
-      .eq('run_id', snapRun.id).order('to_pick', { ascending: false })
-    if (iErr) return res.status(500).json({ error: iErr.message })
-    items = (rows || []).map((it: any) => ({
+    const [itemsRes, jobsRes, jiRes] = await Promise.all([
+      db.from('md_prepick_items')
+        .select('id, md_stock_id, sku, name, to_pick, on_hand, alert_qty, reorder_point, buy_price, location')
+        .eq('run_id', snapRun.id).order('to_pick', { ascending: false }),
+      db.from('md_prepick_jobs')
+        .select('md_job_id, job_number, customer_name, phone, vehicle, rego, status, description, scheduled_at, parts_count, parts_qty')
+        .eq('run_id', snapRun.id).order('parts_count', { ascending: false }),
+      db.from('md_prepick_job_items')
+        .select('md_job_id, md_stock_id, sku, name, quantity')
+        .eq('run_id', snapRun.id),
+    ])
+    if (itemsRes.error) return res.status(500).json({ error: itemsRes.error.message })
+    items = (itemsRes.data || []).map((it: any) => ({
       id: it.id,
+      md_stock_id: it.md_stock_id != null ? Number(it.md_stock_id) : null,
       sku: it.sku || '',
       part_name: it.name || '',
       brand: null,
@@ -64,10 +75,32 @@ export default withAuth('view:diary', async (req, res) => {
       to_pick: Number(it.to_pick) || 0,
       current_stock: Number(it.on_hand) || 0,
     }))
+    jobs = (jobsRes.data || []).map((j: any) => ({
+      md_job_id: Number(j.md_job_id),
+      job_number: j.job_number || null,
+      customer_name: j.customer_name || null,
+      phone: j.phone || null,
+      vehicle: j.vehicle || null,
+      rego: j.rego || null,
+      status: j.status || null,
+      description: j.description || null,
+      scheduled_at: j.scheduled_at || null,
+      parts_count: Number(j.parts_count) || 0,
+      parts_qty: Number(j.parts_qty) || 0,
+    }))
+    jobItems = (jiRes.data || []).map((ji: any) => ({
+      md_job_id: Number(ji.md_job_id),
+      md_stock_id: ji.md_stock_id != null ? Number(ji.md_stock_id) : null,
+      sku: ji.sku || '',
+      name: ji.name || '',
+      quantity: Number(ji.quantity) || 0,
+    }))
   }
 
   return res.status(200).json({
     items,
+    jobs,
+    job_items: jobItems,
     jobs_count: snapRun.status === 'done' ? (snapRun.jobs_count || 0) : 0,
     from: snapRun.status === 'done' ? snapRun.from_date : null,
     to: snapRun.status === 'done' ? snapRun.to_date : null,
