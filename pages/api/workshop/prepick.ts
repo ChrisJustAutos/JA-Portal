@@ -52,7 +52,7 @@ export default withAuth('view:diary', async (req, res) => {
   if (snapRun.status === 'done') {
     const [itemsRes, jobsRes, jiRes] = await Promise.all([
       db.from('md_prepick_items')
-        .select('id, md_stock_id, sku, name, to_pick, on_hand, on_order, on_order_detail, alert_qty, reorder_point, buy_price, location')
+        .select('id, md_stock_id, sku, name, to_pick, on_hand, allocated, on_order, on_order_detail, alert_qty, reorder_point, buy_price, location')
         .eq('run_id', snapRun.id).order('to_pick', { ascending: false }),
       db.from('md_prepick_jobs')
         .select('md_job_id, job_number, customer_name, phone, vehicle, rego, status, description, scheduled_at, parts_count, parts_qty')
@@ -74,6 +74,7 @@ export default withAuth('view:diary', async (req, res) => {
       alert_qty: it.alert_qty != null ? Number(it.alert_qty) : (it.reorder_point != null ? Number(it.reorder_point) : null),
       to_pick: Number(it.to_pick) || 0,
       current_stock: Number(it.on_hand) || 0,
+      allocated: Number(it.allocated) || 0,
       on_order: Number(it.on_order) || 0,
       on_order_detail: Array.isArray(it.on_order_detail) ? it.on_order_detail : null,
     }))

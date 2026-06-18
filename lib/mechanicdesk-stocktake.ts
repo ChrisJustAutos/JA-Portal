@@ -551,6 +551,7 @@ export interface MdPrePickItem {
   name: string | null
   to_pick: number
   on_hand: number
+  allocated: number              // allocated_quantity = on-hand already committed/reserved to jobs
   on_order: number               // ordered_quantity = incoming on open MD purchase orders
   on_order_detail: any[] | null  // raw current_purchase_items (open PO lines) for the drill-down
   alert_qty: number | null
@@ -704,6 +705,7 @@ export async function collectPrePickDemand(
         agg.set(id, {
           md_stock_id: id, sku, name, to_pick: qty,
           on_hand: Number(st.quantity) || 0,
+          allocated: 0,
           on_order: 0, on_order_detail: null,
           alert_qty: st.alert_quantity != null ? Number(st.alert_quantity) : null,
           reorder_point: st.reorder_point != null ? Number(st.reorder_point) : null,
@@ -737,6 +739,7 @@ export async function collectPrePickDemand(
       const it = agg.get(sid)
       if (!it) return
       it.on_order = Number(detail?.ordered_quantity) || 0
+      it.allocated = Number(detail?.allocated_quantity) || 0
       it.on_order_detail = Array.isArray(detail?.current_purchase_items) ? detail.current_purchase_items : null
     } catch (e: any) {
       log(`  stock ${sid} detail failed: ${String(e?.message).slice(0, 120)}`)

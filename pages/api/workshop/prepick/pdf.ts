@@ -31,6 +31,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       buy_price: it.buy_price != null ? n(it.buy_price) : null,
       to_pick: n(it.to_pick),
       current_stock: n(it.current_stock),
+      allocated: n(it.allocated),
       on_order: n(it.on_order),
       remaining: n(it.remaining),
       to_order: n(it.to_order),

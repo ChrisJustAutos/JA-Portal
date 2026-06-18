@@ -18,7 +18,7 @@ import { useToast } from '../../components/ui/Feedback'
 interface PrePickItem {
   id: string; md_stock_id: number | null; sku: string; part_name: string; brand: string | null; supplier: string | null
   location: string | null; buy_price: number | null; alert_qty: number | null
-  to_pick: number; current_stock: number; on_order: number; on_order_detail: any[] | null
+  to_pick: number; current_stock: number; allocated: number; on_order: number; on_order_detail: any[] | null
 }
 interface PrePickJob {
   md_job_id: number; job_number: string | null; customer_name: string | null; phone: string | null
@@ -268,9 +268,9 @@ export default function PrePickPage({ user }: { user: PortalUserSSR }) {
       downloadCsv(lines, 'jobs')
       return
     }
-    const lines = [['SKU', 'Part', 'Brand', 'Supplier', 'To pick', 'On hand', 'On order', 'Remaining', 'To order', 'Buy price', 'Location', 'Status'].join(',')]
+    const lines = [['SKU', 'Part', 'Brand', 'Supplier', 'To pick', 'On hand', 'Allocated', 'On order', 'Remaining', 'To order', 'Buy price', 'Location', 'Status'].join(',')]
     for (const it of filtered) {
-      lines.push([it.sku, it.part_name, it.brand || '', it.supplier || '', it.to_pick, it.current_stock, it.on_order || 0, remaining(it), toOrder(it), it.buy_price ?? '', it.location || '', statusOf(it)].map(esc).join(','))
+      lines.push([it.sku, it.part_name, it.brand || '', it.supplier || '', it.to_pick, it.current_stock, it.allocated || 0, it.on_order || 0, remaining(it), toOrder(it), it.buy_price ?? '', it.location || '', statusOf(it)].map(esc).join(','))
     }
     downloadCsv(lines, 'parts')
   }
@@ -303,7 +303,8 @@ export default function PrePickPage({ user }: { user: PortalUserSSR }) {
             ...common, view: 'parts',
             items: filtered.map(it => ({
               sku: it.sku, part_name: it.part_name, supplier: it.supplier, location: it.location,
-              buy_price: it.buy_price, to_pick: it.to_pick, current_stock: it.current_stock, on_order: it.on_order || 0,
+              buy_price: it.buy_price, to_pick: it.to_pick, current_stock: it.current_stock,
+              allocated: it.allocated || 0, on_order: it.on_order || 0,
               remaining: remaining(it), to_order: toOrder(it), status: statusOf(it),
             })),
           }
@@ -323,7 +324,7 @@ export default function PrePickPage({ user }: { user: PortalUserSSR }) {
     }}>{label}</button>
   )
   const inputStyle: React.CSSProperties = { background: T.bg3, border: `1px solid ${T.border}`, borderRadius: 6, color: T.text, fontSize: 13, padding: '6px 9px', fontFamily: 'inherit', outline: 'none', colorScheme: 'dark' }
-  const GRID = '104px 1fr 96px 58px 58px 64px 62px 60px 60px 88px'
+  const GRID = '100px 1fr 88px 54px 54px 62px 60px 62px 58px 58px 80px'
   const JOBGRID = '24px 90px 1.4fr 1.3fr 100px 120px 90px 60px'
   const head: React.CSSProperties = { fontSize: 9, color: T.text3, textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 600 }
   const pulling = inFlight
@@ -458,7 +459,7 @@ export default function PrePickPage({ user }: { user: PortalUserSSR }) {
                           <span style={{ fontSize: 11, color: T.text3 }}>to pick</span>
                         </div>
                         <div style={{ fontSize: 11, color: T.text3, marginTop: 2 }}>
-                          {it.current_stock} on hand · {rem < 0 ? <span style={{ color: T.red }}>{rem} short</span> : `${rem} left`}
+                          {it.current_stock} on hand{it.allocated > 0 ? ` · ${it.allocated} allocated` : ''} · {rem < 0 ? <span style={{ color: T.red }}>{rem} short</span> : `${rem} left`}
                         </div>
                         {it.on_order > 0 && (
                           <div onClick={e => { if (it.md_stock_id != null) { e.stopPropagation(); setDrillPO(it.md_stock_id) } }} title="Click to see the purchase orders"
@@ -475,6 +476,7 @@ export default function PrePickPage({ user }: { user: PortalUserSSR }) {
                   <div style={{ display: 'grid', gridTemplateColumns: GRID, gap: 8, padding: '9px 14px', background: T.bg3, borderBottom: `1px solid ${T.border}` }}>
                     <div style={head}>SKU</div><div style={head}>Part</div><div style={head}>Supplier</div>
                     <div style={{ ...head, textAlign: 'right' }}>To pick</div><div style={{ ...head, textAlign: 'right' }}>On hand</div>
+                    <div style={{ ...head, textAlign: 'right' }}>Allocated</div>
                     <div style={{ ...head, textAlign: 'right' }}>On order</div>
                     <div style={{ ...head, textAlign: 'right' }}>Remaining</div><div style={{ ...head, textAlign: 'right' }}>To order</div>
                     <div style={{ ...head, textAlign: 'right' }}>Buy $</div><div style={head}>Location</div>
@@ -493,6 +495,7 @@ export default function PrePickPage({ user }: { user: PortalUserSSR }) {
                         <div style={{ color: T.text3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{it.supplier || '—'}</div>
                         <div style={{ textAlign: 'right', fontFamily: 'monospace', fontWeight: 600 }}>{it.to_pick}</div>
                         <div style={{ textAlign: 'right', fontFamily: 'monospace', color: T.text2 }}>{it.current_stock}</div>
+                        <div style={{ textAlign: 'right', fontFamily: 'monospace', color: it.allocated > 0 ? T.text2 : T.text3 }}>{it.allocated > 0 ? it.allocated : '—'}</div>
                         <div onClick={e => { if (it.on_order > 0 && it.md_stock_id != null) { e.stopPropagation(); setDrillPO(it.md_stock_id) } }}
                           title={it.on_order > 0 ? 'Click to see the purchase orders' : undefined}
                           style={{ textAlign: 'right', fontFamily: 'monospace', color: it.on_order > 0 ? T.accent : T.text3, fontWeight: it.on_order > 0 ? 600 : 400, textDecoration: it.on_order > 0 ? 'underline' : 'none', cursor: it.on_order > 0 ? 'pointer' : 'inherit' }}>{it.on_order > 0 ? it.on_order : '—'}</div>
@@ -522,7 +525,10 @@ export default function PrePickPage({ user }: { user: PortalUserSSR }) {
                         style={{ display: 'grid', gridTemplateColumns: JOBGRID, gap: 8, padding: '9px 14px', alignItems: 'center', fontSize: 12.5, cursor: 'pointer', background: open ? T.bg3 : 'transparent' }}>
                         <div style={{ color: T.text3, fontWeight: 700, fontSize: 14, textAlign: 'center', userSelect: 'none' }}>{open ? '−' : '+'}</div>
                         <div style={{ fontFamily: 'monospace', color: T.text, fontWeight: 600 }}>{j.job_number || j.md_job_id}</div>
-                        <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={j.customer_name || ''}>{j.customer_name || '—'}</div>
+                        <div style={{ minWidth: 0 }}>
+                          <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={j.customer_name || ''}>{j.customer_name || '—'}</div>
+                          {j.description && <div title={j.description} style={{ fontSize: 11, color: T.text3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginTop: 1 }}>{j.description}</div>}
+                        </div>
                         <div style={{ color: T.text2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={j.vehicle || ''}>{j.vehicle || '—'}</div>
                         <div style={{ fontFamily: 'monospace', color: T.text2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{j.rego || '—'}</div>
                         <div style={{ color: T.text3 }}>{fmtJobDate(j.scheduled_at)}</div>
