@@ -51,6 +51,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     parts: Array.isArray(j.parts) ? j.parts.slice(0, 200).map((p: any) => ({
       sku: String(p.sku || ''), name: String(p.name || ''), quantity: n(p.quantity),
       on_hand: p.on_hand != null ? n(p.on_hand) : null,
+      status: p.status === 'red' || p.status === 'orange' || p.status === 'green' ? p.status : null,
     })) : [],
   })) : []
 

@@ -27,7 +27,7 @@ export interface PrePickPdfItem {
   to_order: number
   status: 'green' | 'orange' | 'red'
 }
-export interface PrePickPdfJobPart { sku: string; name: string; quantity: number; on_hand: number | null }
+export interface PrePickPdfJobPart { sku: string; name: string; quantity: number; on_hand: number | null; status?: 'green' | 'orange' | 'red' | null }
 export interface PrePickPdfJob {
   job_number: string | null
   customer_name: string | null
@@ -206,13 +206,17 @@ function JobsDoc({ data }: { data: PrePickPdfPayload }) {
             ) : (
               <>
                 <View style={{ flexDirection: 'row', paddingVertical: 2.5, paddingHorizontal: 8, borderBottom: `0.5pt solid ${C.line2}`, fontSize: 7, fontWeight: 700, color: C.ink3 }}>
+                  <Text style={{ width: 12 }}> </Text>
                   <Text style={{ width: 110 }}>SKU</Text>
                   <Text style={{ flex: 1 }}>Part</Text>
                   <Text style={{ width: 50, textAlign: 'right' }}>Qty</Text>
                   <Text style={{ width: 60, textAlign: 'right' }}>On hand</Text>
                 </View>
                 {j.parts.map((p, k) => (
-                  <View key={k} style={{ flexDirection: 'row', paddingVertical: 2.5, paddingHorizontal: 8, borderBottom: `0.4pt solid ${C.line2}`, fontSize: 8 }}>
+                  <View key={k} style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 2.5, paddingHorizontal: 8, borderBottom: `0.4pt solid ${C.line2}`, fontSize: 8 }}>
+                    <View style={{ width: 12, flexDirection: 'row', alignItems: 'center' }}>
+                      {p.status ? <View style={{ width: 5, height: 5, borderRadius: 2.5, backgroundColor: statusColor(p.status) }} /> : null}
+                    </View>
                     <Text style={{ width: 110, color: C.ink2 }}>{p.sku || '—'}</Text>
                     <Text style={{ flex: 1 }}>{p.name || '—'}</Text>
                     <Text style={{ width: 50, textAlign: 'right', fontWeight: 700 }}>{num(p.quantity)}</Text>

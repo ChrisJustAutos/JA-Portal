@@ -248,16 +248,18 @@ export default function PrePickPage({ user }: { user: PortalUserSSR }) {
 
   function exportCsv() {
     if (view === 'jobs') {
-      const lines = [['Job #', 'Customer', 'Phone', 'Vehicle', 'Rego', 'Scheduled', 'Status', 'SKU', 'Part', 'Qty', 'On hand'].join(',')]
+      const lines = [['Job #', 'Customer', 'Phone', 'Vehicle', 'Rego', 'Scheduled', 'Job status', 'SKU', 'Part', 'Qty', 'On hand', 'Stock status'].join(',')]
       for (const j of filteredJobs) {
         const parts = itemsByJob.get(j.md_job_id) || []
         const base = [j.job_number || j.md_job_id, j.customer_name || '', j.phone || '', j.vehicle || '', j.rego || '', j.scheduled_at || '', j.status || '']
         if (parts.length === 0) {
-          lines.push([...base, '', '(no tracked parts)', '', ''].map(esc).join(','))
+          lines.push([...base, '', '(no tracked parts)', '', '', ''].map(esc).join(','))
         } else {
           for (const p of parts) {
             const owner = p.md_stock_id != null ? itemByStock.get(p.md_stock_id) : undefined
-            lines.push([...base, p.sku || '', p.name || '', p.quantity, owner ? owner.current_stock : ''].map(esc).join(','))
+            const st = owner ? statusOf(owner) : ''
+            const stLabel = st === 'red' ? 'Out' : st === 'orange' ? 'Low' : st === 'green' ? 'OK' : ''
+            lines.push([...base, p.sku || '', p.name || '', p.quantity, owner ? owner.current_stock : '', stLabel].map(esc).join(','))
           }
         }
       }
@@ -285,10 +287,14 @@ export default function PrePickPage({ user }: { user: PortalUserSSR }) {
             jobs: filteredJobs.map(j => ({
               job_number: j.job_number, customer_name: j.customer_name, vehicle: j.vehicle, rego: j.rego,
               status: j.status, scheduled_at: j.scheduled_at, parts_count: j.parts_count, parts_qty: j.parts_qty,
-              parts: (itemsByJob.get(j.md_job_id) || []).map(p => ({
-                sku: p.sku, name: p.name, quantity: p.quantity,
-                on_hand: p.md_stock_id != null ? (itemByStock.get(p.md_stock_id)?.current_stock ?? null) : null,
-              })),
+              parts: (itemsByJob.get(j.md_job_id) || []).map(p => {
+                const owner = p.md_stock_id != null ? itemByStock.get(p.md_stock_id) : undefined
+                return {
+                  sku: p.sku, name: p.name, quantity: p.quantity,
+                  on_hand: owner ? owner.current_stock : null,
+                  status: owner ? statusOf(owner) : null,
+                }
+              }),
             })),
           }
         : {
