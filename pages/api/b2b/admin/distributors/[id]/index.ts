@@ -8,6 +8,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
 import { withAuth, PortalUser } from '../../../../../../lib/authServer'
+import { resyncDistributorMyob } from '../../../../../../lib/b2b-distributor-myob'
 
 let _sb: SupabaseClient | null = null
 function sb(): SupabaseClient {
@@ -120,12 +121,24 @@ async function handleGet(id: string, res: NextApiResponse) {
     .order('display_order', { ascending: true })
     .order('name',          { ascending: true })
 
+  // Re-sync the MYOB card info live (Card ID may have changed since creation)
+  // and resolve linked-card names. Best-effort — never blocks the page.
+  let linked_customers: { uid: string; display_id: string; name: string }[] = []
+  try {
+    const synced = await resyncDistributorMyob(c, data as any)
+    if (synced.primary_display_id !== data.myob_primary_customer_display_id) {
+      data.myob_primary_customer_display_id = synced.primary_display_id
+    }
+    linked_customers = synced.linked
+  } catch { /* best-effort */ }
+
   return res.status(200).json({
     item: data,
     users: users || [],
     dist_group_name,
     tier_name,
     tiers: tiers || [],
+    linked_customers,
   })
 }
 

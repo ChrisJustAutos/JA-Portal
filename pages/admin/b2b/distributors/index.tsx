@@ -190,7 +190,7 @@ export default function DistributorsListPage({ user }: Props) {
                         {d.abn && <div style={{fontSize:10,color:T.text3,fontFamily:'monospace',marginTop:2}}>ABN {d.abn}</div>}
                       </td>
                       <td data-label="MYOB ID" style={{...td(),fontFamily:'monospace',fontSize:12,color:T.text2}}>
-                        {d.myob_primary_customer_display_id || '—'}
+                        {displayId(d.myob_primary_customer_display_id)}
                       </td>
                       <td data-label="Linked" style={{...td(),color:T.text3,fontSize:12}}>
                         {d.myob_linked_customer_uids?.length
@@ -533,6 +533,12 @@ const input: React.CSSProperties = {
   width:'100%',boxSizing:'border-box',
   background:T.bg3,border:`1px solid ${T.border}`,color:T.text,
   borderRadius:5,padding:'8px 11px',fontSize:13,outline:'none',fontFamily:'inherit',
+}
+
+// MYOB uses "*None" as the DisplayID for a card with no Card ID — show "—".
+function displayId(v: string | null): string {
+  const s = String(v ?? '').trim()
+  return (s === '' || s.toLowerCase() === '*none') ? '—' : s
 }
 
 function th(width?: number): React.CSSProperties {

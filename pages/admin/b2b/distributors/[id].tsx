@@ -95,6 +95,7 @@ export default function DistributorDetailPage({ user }: Props) {
   const [users, setUsers] = useState<DistributorUser[]>([])
   const [distGroupName, setDistGroupName] = useState<string | null>(null)
   const [tiers, setTiers] = useState<{ id: string; name: string; is_active: boolean }[]>([])
+  const [linkedCustomers, setLinkedCustomers] = useState<{ uid: string; display_id: string; name: string }[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
@@ -109,6 +110,7 @@ export default function DistributorDetailPage({ user }: Props) {
       setUsers(j.users || [])
       setDistGroupName(j.dist_group_name || null)
       setTiers(j.tiers || [])
+      setLinkedCustomers(j.linked_customers || [])
       setError(null)
     } catch (e: any) {
       setError(e?.message || String(e))
@@ -216,6 +218,7 @@ export default function DistributorDetailPage({ user }: Props) {
               />
               <MyobLinksSection
                 dist={dist}
+                linkedCustomers={linkedCustomers}
                 onChangeLinked={uids => patchDist({ myob_linked_customer_uids: uids }).catch(e => toast(e?.message || String(e), 'error'))}
               />
               <UsersSection
@@ -529,9 +532,10 @@ function AddressSection({
 
 // ─── MYOB links section ────────────────────────────────────────────────
 function MyobLinksSection({
-  dist, onChangeLinked,
+  dist, linkedCustomers, onChangeLinked,
 }: {
   dist: Distributor
+  linkedCustomers: { uid: string; display_id: string; name: string }[]
   onChangeLinked: (uids: string[]) => void
 }) {
   const toast = useToast()
@@ -540,24 +544,27 @@ function MyobLinksSection({
   const [linkedDetails, setLinkedDetails] = useState<MyobCustomer[]>([])
   const [primaryDetail, setPrimaryDetail] = useState<MyobCustomer | null>(null)
 
-  // Resolve linked UIDs to names by hitting the search endpoint with the display_id.
-  // Cheap-and-cheerful: for V1 we just show UIDs if details aren't easily fetchable.
-  // Better resolution can come later via a dedicated /myob/customer/[uid] endpoint.
-  // For now: if we have the primary's display_id from the distributor record, we
-  // already show that. Linked customers show their UID until clicked.
+  // "*None" is MYOB's placeholder for a card with no Card ID — show a dash.
+  const cleanId = (v: string | null | undefined) => {
+    const s = String(v ?? '').trim()
+    return (s === '' || s.toLowerCase() === '*none') ? '—' : s
+  }
 
+  // Linked-card names/Card IDs are resolved live from MYOB by the detail API
+  // (linkedCustomers); fall back to the raw UID if a card couldn't be read.
   useEffect(() => {
     setPrimaryDetail({
       uid: dist.myob_primary_customer_uid,
-      display_id: dist.myob_primary_customer_display_id || '—',
+      display_id: cleanId(dist.myob_primary_customer_display_id),
       name: dist.display_name,
       is_individual: false,
     })
-    // Linked customers — for now show as UIDs.  TODO: lookup endpoint.
-    setLinkedDetails((dist.myob_linked_customer_uids || []).map(uid => ({
-      uid, display_id: '', name: '(MYOB UID)', is_individual: false,
-    })))
-  }, [dist.id, dist.myob_primary_customer_uid, dist.myob_linked_customer_uids])
+    const byUid = new Map(linkedCustomers.map(c => [c.uid, c]))
+    setLinkedDetails((dist.myob_linked_customer_uids || []).map(uid => {
+      const c = byUid.get(uid)
+      return { uid, display_id: c?.display_id || '', name: c?.name || '', is_individual: false }
+    }))
+  }, [dist.id, dist.myob_primary_customer_uid, dist.myob_linked_customer_uids, linkedCustomers])
 
   function addLinked(c: MyobCustomer) {
     if (c.uid === dist.myob_primary_customer_uid) {
@@ -604,7 +611,10 @@ function MyobLinksSection({
           <div style={{flex:1,minWidth:0}}>
             <div style={{display:'flex',alignItems:'center',gap:8}}>
               <span style={{fontSize:9,color:T.purple,textTransform:'uppercase',letterSpacing:'0.08em',fontWeight:600}}>Linked</span>
-              <span style={{fontFamily:'monospace',fontSize:12,color:T.text2}}>{c.uid}</span>
+              <span style={{fontSize:13,color:T.text}}>{c.name || '(unnamed MYOB card)'}</span>
+            </div>
+            <div style={{fontFamily:'monospace',fontSize:10,color:T.text3,marginTop:2}}>
+              {(c.display_id && c.display_id !== '—') ? `${c.display_id} · ` : ''}{c.uid}
             </div>
           </div>
           <button onClick={() => removeLinked(c.uid)}

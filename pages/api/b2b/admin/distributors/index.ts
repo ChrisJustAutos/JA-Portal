@@ -8,6 +8,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
 import { withAuth, PortalUser } from '../../../../../lib/authServer'
+import { fetchCardSummaries, displayIdMissing } from '../../../../../lib/b2b-distributor-myob'
 
 let _sb: SupabaseClient | null = null
 function sb(): SupabaseClient {
@@ -77,6 +78,25 @@ async function handleList(res: NextApiResponse) {
       active_user_count: userCounts[d.id] || 0,
     }
   })
+
+  // Self-heal stale MYOB Card IDs: any row whose stored DisplayID is missing or
+  // "*None" gets re-read live from MYOB (the card may have gained a Card ID
+  // after the distributor was created). Best-effort — failures leave it as-is.
+  const needSync = items.filter((d: any) => d.myob_primary_customer_uid && displayIdMissing(d.myob_primary_customer_display_id))
+  if (needSync.length > 0) {
+    try {
+      const summaries = await fetchCardSummaries(needSync.map((d: any) => d.myob_primary_customer_uid))
+      const updates: { id: string; display_id: string }[] = []
+      for (const d of needSync) {
+        const s = summaries.get(d.myob_primary_customer_uid)
+        if (s && s.display_id) { d.myob_primary_customer_display_id = s.display_id; updates.push({ id: d.id, display_id: s.display_id }) }
+      }
+      // Persist so subsequent loads are instant (no re-fetch).
+      await Promise.all(updates.map(u =>
+        c.from('b2b_distributors').update({ myob_primary_customer_display_id: u.display_id }).eq('id', u.id),
+      ))
+    } catch { /* best-effort heal */ }
+  }
 
   return res.status(200).json({ items })
 }
