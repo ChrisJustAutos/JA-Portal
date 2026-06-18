@@ -26,7 +26,20 @@ export interface PrePickPdfItem {
   to_order: number
   status: 'green' | 'orange' | 'red'
 }
+export interface PrePickPdfJobPart { sku: string; name: string; quantity: number; on_hand: number | null }
+export interface PrePickPdfJob {
+  job_number: string | null
+  customer_name: string | null
+  vehicle: string | null
+  rego: string | null
+  status: string | null
+  scheduled_at: string | null
+  parts_count: number
+  parts_qty: number
+  parts: PrePickPdfJobPart[]
+}
 export interface PrePickPdfPayload {
+  view?: 'parts' | 'jobs'
   from: string | null
   to: string | null
   synced_at: string | null
@@ -36,6 +49,7 @@ export interface PrePickPdfPayload {
   filter_label: string
   counts: { green: number; orange: number; red: number; orderCount: number; orderValue: number }
   items: PrePickPdfItem[]
+  jobs?: PrePickPdfJob[]
 }
 
 const money = (n: number | null | undefined) => (n == null || !isFinite(n) ? '—' : `$${(Number(n) || 0).toFixed(2)}`)
@@ -157,8 +171,70 @@ function PrePickDoc({ data }: { data: PrePickPdfPayload }) {
   )
 }
 
+function JobsDoc({ data }: { data: PrePickPdfPayload }) {
+  const jobs = data.jobs || []
+  const totalParts = jobs.reduce((sum, j) => sum + (j.parts_count || 0), 0)
+  return (
+    <Document title="Pre Pick — Jobs">
+      <Page size="A4" style={s.page} wrap>
+        <View style={s.header}>
+          <View style={s.titleRow}>
+            <Text style={s.title}>Pre Pick — Jobs &amp; their parts</Text>
+            <Text style={s.brand}>JUST AUTOS</Text>
+          </View>
+          <Text style={s.subtitle}>
+            {fmtDate(data.from)} → {fmtDate(data.to)} · {jobs.length} job{jobs.length === 1 ? '' : 's'} · {totalParts} part line{totalParts === 1 ? '' : 's'}
+            {`  ·  Live from MechanicDesk, synced ${fmtDateTime(data.synced_at)}`}
+          </Text>
+        </View>
+
+        {jobs.map((j, i) => (
+          <View key={i} style={{ marginBottom: 11 }} wrap={false}>
+            <View style={{ flexDirection: 'row', alignItems: 'baseline', backgroundColor: C.bg3, paddingVertical: 4, paddingHorizontal: 6, borderLeft: `2pt solid ${C.accent}` }}>
+              <Text style={{ fontSize: 10, fontWeight: 700, color: C.ink, width: 70 }}>#{j.job_number || '—'}</Text>
+              <Text style={{ fontSize: 9, color: C.ink, flex: 1 }}>{j.customer_name || '—'}</Text>
+              <Text style={{ fontSize: 8, color: C.ink3, flex: 1.4 }}>{[j.vehicle, j.rego].filter(Boolean).join(' · ') || '—'}</Text>
+              <Text style={{ fontSize: 8, color: C.ink3, width: 96 }}>{j.scheduled_at ? fmtDateTime(j.scheduled_at) : '—'}</Text>
+              <Text style={{ fontSize: 8, color: C.ink3, width: 56 }}>{j.status || ''}</Text>
+              <Text style={{ fontSize: 8, fontWeight: 700, color: C.ink2, width: 44, textAlign: 'right' }}>{j.parts_count} part{j.parts_count === 1 ? '' : 's'}</Text>
+            </View>
+            {j.parts.length === 0 ? (
+              <Text style={{ fontSize: 8, color: C.ink3, fontStyle: 'italic', paddingVertical: 3, paddingHorizontal: 8 }}>No tracked parts (labour/freight only).</Text>
+            ) : (
+              <>
+                <View style={{ flexDirection: 'row', paddingVertical: 2.5, paddingHorizontal: 8, borderBottom: `0.5pt solid ${C.line2}`, fontSize: 7, fontWeight: 700, color: C.ink3 }}>
+                  <Text style={{ width: 110 }}>SKU</Text>
+                  <Text style={{ flex: 1 }}>Part</Text>
+                  <Text style={{ width: 50, textAlign: 'right' }}>Qty</Text>
+                  <Text style={{ width: 60, textAlign: 'right' }}>On hand</Text>
+                </View>
+                {j.parts.map((p, k) => (
+                  <View key={k} style={{ flexDirection: 'row', paddingVertical: 2.5, paddingHorizontal: 8, borderBottom: `0.4pt solid ${C.line2}`, fontSize: 8 }}>
+                    <Text style={{ width: 110, color: C.ink2 }}>{p.sku || '—'}</Text>
+                    <Text style={{ flex: 1 }}>{p.name || '—'}</Text>
+                    <Text style={{ width: 50, textAlign: 'right', fontWeight: 700 }}>{num(p.quantity)}</Text>
+                    <Text style={{ width: 60, textAlign: 'right', color: C.ink3 }}>{p.on_hand == null ? '—' : num(p.on_hand)}</Text>
+                  </View>
+                ))}
+              </>
+            )}
+          </View>
+        ))}
+
+        {jobs.length === 0 ? <Text style={{ marginTop: 14, fontSize: 9, color: C.ink3, fontStyle: 'italic' }}>No jobs match this search.</Text> : null}
+
+        <View style={s.footer} fixed>
+          <Text>Just Autos — Pre Pick (jobs) · generated {fmtDateTime(data.generated_at)}</Text>
+          <Text render={({ pageNumber, totalPages }) => `Page ${pageNumber} of ${totalPages}`} />
+        </View>
+      </Page>
+    </Document>
+  )
+}
+
 export async function renderPrePickPdf(data: PrePickPdfPayload): Promise<Buffer> {
-  const instance = pdf(<PrePickDoc data={data} />)
+  const doc = data.view === 'jobs' ? <JobsDoc data={data} /> : <PrePickDoc data={data} />
+  const instance = pdf(doc)
   const blob = await instance.toBlob()
   const arrayBuffer = await blob.arrayBuffer()
   return Buffer.from(arrayBuffer)

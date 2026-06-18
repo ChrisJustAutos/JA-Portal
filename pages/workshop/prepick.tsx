@@ -226,38 +226,71 @@ export default function PrePickPage({ user }: { user: PortalUserSSR }) {
     else { const y = t.getFullYear(), m = t.getMonth(); const last = new Date(y, m + 1, 0); setFrom(ymd(new Date(y, m, 1))); setTo(ymd(last)) }
   }
 
+  const esc = (v: any) => { const s = String(v ?? ''); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s }
+  function downloadCsv(lines: string[], suffix: string) {
+    const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a'); a.href = url; a.download = `pre-pick-${suffix}-${snapFrom || from}_to_${snapTo || to}.csv`; a.click(); URL.revokeObjectURL(url)
+  }
+
   function exportCsv() {
-    const headRow = ['SKU', 'Part', 'Brand', 'Supplier', 'To pick', 'On hand', 'Remaining', 'To order', 'Buy price', 'Location', 'Status']
-    const esc = (v: any) => { const s = String(v ?? ''); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s }
-    const lines = [headRow.join(',')]
+    if (view === 'jobs') {
+      const lines = [['Job #', 'Customer', 'Phone', 'Vehicle', 'Rego', 'Scheduled', 'Status', 'SKU', 'Part', 'Qty', 'On hand'].join(',')]
+      for (const j of filteredJobs) {
+        const parts = itemsByJob.get(j.md_job_id) || []
+        const base = [j.job_number || j.md_job_id, j.customer_name || '', j.phone || '', j.vehicle || '', j.rego || '', j.scheduled_at || '', j.status || '']
+        if (parts.length === 0) {
+          lines.push([...base, '', '(no tracked parts)', '', ''].map(esc).join(','))
+        } else {
+          for (const p of parts) {
+            const owner = p.md_stock_id != null ? itemByStock.get(p.md_stock_id) : undefined
+            lines.push([...base, p.sku || '', p.name || '', p.quantity, owner ? owner.current_stock : ''].map(esc).join(','))
+          }
+        }
+      }
+      downloadCsv(lines, 'jobs')
+      return
+    }
+    const lines = [['SKU', 'Part', 'Brand', 'Supplier', 'To pick', 'On hand', 'Remaining', 'To order', 'Buy price', 'Location', 'Status'].join(',')]
     for (const it of filtered) {
       lines.push([it.sku, it.part_name, it.brand || '', it.supplier || '', it.to_pick, it.current_stock, remaining(it), toOrder(it), it.buy_price ?? '', it.location || '', statusOf(it)].map(esc).join(','))
     }
-    const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a'); a.href = url; a.download = `pre-pick-${snapFrom || from}_to_${snapTo || to}.csv`; a.click(); URL.revokeObjectURL(url)
+    downloadCsv(lines, 'parts')
   }
 
   const filterLabel = (f: Filter) => f === 'green' ? 'OK' : f === 'orange' ? 'Low' : f === 'red' ? 'Out of stock' : f === 'toorder' ? 'To order' : 'All'
 
   async function exportPdf() {
-    if (filtered.length === 0 || pdfBusy) return
+    const rowCount = view === 'jobs' ? filteredJobs.length : filtered.length
+    if (rowCount === 0 || pdfBusy) return
     setPdfBusy(true)
     try {
-      const payload = {
-        from: snapFrom, to: snapTo, synced_at: syncedAt, jobs_count: jobsCount,
-        low_threshold: lowThreshold, filter_label: filterLabel(filter), counts,
-        items: filtered.map(it => ({
-          sku: it.sku, part_name: it.part_name, supplier: it.supplier, location: it.location,
-          buy_price: it.buy_price, to_pick: it.to_pick, current_stock: it.current_stock,
-          remaining: remaining(it), to_order: toOrder(it), status: statusOf(it),
-        })),
-      }
+      const common = { from: snapFrom, to: snapTo, synced_at: syncedAt, jobs_count: jobsCount, low_threshold: lowThreshold, filter_label: filterLabel(filter), counts }
+      const payload = view === 'jobs'
+        ? {
+            ...common, view: 'jobs',
+            jobs: filteredJobs.map(j => ({
+              job_number: j.job_number, customer_name: j.customer_name, vehicle: j.vehicle, rego: j.rego,
+              status: j.status, scheduled_at: j.scheduled_at, parts_count: j.parts_count, parts_qty: j.parts_qty,
+              parts: (itemsByJob.get(j.md_job_id) || []).map(p => ({
+                sku: p.sku, name: p.name, quantity: p.quantity,
+                on_hand: p.md_stock_id != null ? (itemByStock.get(p.md_stock_id)?.current_stock ?? null) : null,
+              })),
+            })),
+          }
+        : {
+            ...common, view: 'parts',
+            items: filtered.map(it => ({
+              sku: it.sku, part_name: it.part_name, supplier: it.supplier, location: it.location,
+              buy_price: it.buy_price, to_pick: it.to_pick, current_stock: it.current_stock,
+              remaining: remaining(it), to_order: toOrder(it), status: statusOf(it),
+            })),
+          }
       const r = await fetch('/api/workshop/prepick/pdf', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
       if (!r.ok) { const d = await r.json().catch(() => ({})); toast(d.error || 'PDF export failed', 'error'); return }
       const blob = await r.blob()
       const url = URL.createObjectURL(blob)
-      const a = document.createElement('a'); a.href = url; a.download = `pre-pick-${snapFrom || from}_to_${snapTo || to}.pdf`; a.click(); URL.revokeObjectURL(url)
+      const a = document.createElement('a'); a.href = url; a.download = `pre-pick-${view === 'jobs' ? 'jobs-' : ''}${snapFrom || from}_to_${snapTo || to}.pdf`; a.click(); URL.revokeObjectURL(url)
     } catch { toast('PDF export failed', 'error') } finally { setPdfBusy(false) }
   }
 
@@ -273,6 +306,7 @@ export default function PrePickPage({ user }: { user: PortalUserSSR }) {
   const JOBGRID = '24px 90px 1.4fr 1.3fr 100px 120px 90px 60px'
   const head: React.CSSProperties = { fontSize: 9, color: T.text3, textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 600 }
   const pulling = inFlight
+  const exportCount = view === 'jobs' ? filteredJobs.length : filtered.length
   const fmtElapsed = (s: number) => { const m = Math.floor(s / 60), sec = s % 60; return m > 0 ? `${m}m ${sec}s` : `${sec}s` }
 
   return (
@@ -333,8 +367,8 @@ export default function PrePickPage({ user }: { user: PortalUserSSR }) {
               {jobsCount} job{jobsCount === 1 ? '' : 's'} · {items.length} part{items.length === 1 ? '' : 's'}
               {counts.orderCount > 0 && <span style={{ color: T.red, fontWeight: 600 }}> · {counts.orderCount} to order ({money(counts.orderValue)})</span>}
             </span>
-            <button onClick={exportCsv} disabled={filtered.length === 0} style={{ ...inputStyle, cursor: filtered.length ? 'pointer' : 'not-allowed', opacity: filtered.length ? 1 : 0.5, fontWeight: 600 }}>⬇ Export CSV</button>
-            <button onClick={exportPdf} disabled={filtered.length === 0 || pdfBusy} style={{ ...inputStyle, cursor: filtered.length && !pdfBusy ? 'pointer' : 'not-allowed', opacity: filtered.length && !pdfBusy ? 1 : 0.5, fontWeight: 600 }}>{pdfBusy ? 'Building PDF…' : '⬇ Export PDF'}</button>
+            <button onClick={exportCsv} disabled={exportCount === 0} style={{ ...inputStyle, cursor: exportCount ? 'pointer' : 'not-allowed', opacity: exportCount ? 1 : 0.5, fontWeight: 600 }}>⬇ Export CSV</button>
+            <button onClick={exportPdf} disabled={exportCount === 0 || pdfBusy} style={{ ...inputStyle, cursor: exportCount && !pdfBusy ? 'pointer' : 'not-allowed', opacity: exportCount && !pdfBusy ? 1 : 0.5, fontWeight: 600 }}>{pdfBusy ? 'Building PDF…' : `⬇ Export PDF`}</button>
           </div>
 
           {/* Sync status line */}

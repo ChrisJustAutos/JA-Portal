@@ -7,7 +7,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { withAuth } from '../../../../lib/authServer'
 import { renderPrePickPdf } from '../../../../lib/workshop/prepick-pdf'
-import type { PrePickPdfPayload, PrePickPdfItem } from '../../../../lib/workshop/prepick-pdf'
+import type { PrePickPdfPayload, PrePickPdfItem, PrePickPdfJob } from '../../../../lib/workshop/prepick-pdf'
 
 export const config = { maxDuration: 60, api: { bodyParser: { sizeLimit: '6mb' } } }
 
@@ -37,7 +37,24 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     }
   })
 
+  const view: 'parts' | 'jobs' = body.view === 'jobs' ? 'jobs' : 'parts'
+  const jobs: PrePickPdfJob[] = Array.isArray(body.jobs) ? body.jobs.slice(0, 2000).map((j: any) => ({
+    job_number: j.job_number != null ? String(j.job_number) : null,
+    customer_name: j.customer_name ? String(j.customer_name) : null,
+    vehicle: j.vehicle ? String(j.vehicle) : null,
+    rego: j.rego ? String(j.rego) : null,
+    status: j.status ? String(j.status) : null,
+    scheduled_at: j.scheduled_at || null,
+    parts_count: n(j.parts_count),
+    parts_qty: n(j.parts_qty),
+    parts: Array.isArray(j.parts) ? j.parts.slice(0, 200).map((p: any) => ({
+      sku: String(p.sku || ''), name: String(p.name || ''), quantity: n(p.quantity),
+      on_hand: p.on_hand != null ? n(p.on_hand) : null,
+    })) : [],
+  })) : []
+
   const payload: PrePickPdfPayload = {
+    view,
     from: body.from || null,
     to: body.to || null,
     synced_at: body.synced_at || null,
@@ -53,13 +70,14 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       orderValue: n(body.counts?.orderValue),
     },
     items,
+    jobs,
   }
 
   try {
     const buffer = await renderPrePickPdf(payload)
     const tag = `${(payload.from || '').replace(/-/g, '')}_${(payload.to || '').replace(/-/g, '')}`
     res.setHeader('Content-Type', 'application/pdf')
-    res.setHeader('Content-Disposition', `attachment; filename="pre-pick-${tag || 'list'}.pdf"`)
+    res.setHeader('Content-Disposition', `attachment; filename="pre-pick-${view === 'jobs' ? 'jobs-' : ''}${tag || 'list'}.pdf"`)
     res.setHeader('Content-Length', String(buffer.length))
     res.status(200).send(buffer)
   } catch (err: any) {
