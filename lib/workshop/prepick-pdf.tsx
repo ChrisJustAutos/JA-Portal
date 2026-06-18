@@ -113,6 +113,7 @@ function PrePickDoc({ data }: { data: PrePickPdfPayload }) {
             {data.filter_label && data.filter_label !== 'All' ? ` · filter: ${data.filter_label}` : ''}
             {`  ·  Live from MechanicDesk, synced ${fmtDateTime(data.synced_at)}`}
           </Text>
+          <Text style={{ fontSize: 8, color: C.amber, fontWeight: 700, marginTop: 3 }}>Note: in-stock items only — special-order / non-stocked parts are NOT included.</Text>
         </View>
 
         {/* Summary KPIs */}
@@ -189,6 +190,7 @@ function JobsDoc({ data }: { data: PrePickPdfPayload }) {
             {fmtDate(data.from)} → {fmtDate(data.to)} · {jobs.length} job{jobs.length === 1 ? '' : 's'} · {totalParts} part line{totalParts === 1 ? '' : 's'}
             {`  ·  Live from MechanicDesk, synced ${fmtDateTime(data.synced_at)}`}
           </Text>
+          <Text style={{ fontSize: 8, color: C.amber, fontWeight: 700, marginTop: 3 }}>Note: in-stock items only — special-order / non-stocked parts are NOT included.</Text>
         </View>
 
         {jobs.map((j, i) => (

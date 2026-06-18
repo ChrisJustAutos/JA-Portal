@@ -239,9 +239,11 @@ export default function PrePickPage({ user }: { user: PortalUserSSR }) {
     else { const y = t.getFullYear(), m = t.getMonth(); const last = new Date(y, m + 1, 0); setFrom(ymd(new Date(y, m, 1))); setTo(ymd(last)) }
   }
 
+  const STOCK_ONLY_NOTE = 'In-stock items only — special-order / non-stocked parts are NOT included.'
   const esc = (v: any) => { const s = String(v ?? ''); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s }
   function downloadCsv(lines: string[], suffix: string) {
-    const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8' })
+    const out = [esc(STOCK_ONLY_NOTE), '', ...lines]
+    const blob = new Blob([out.join('\n')], { type: 'text/csv;charset=utf-8' })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a'); a.href = url; a.download = `pre-pick-${suffix}-${snapFrom || from}_to_${snapTo || to}.csv`; a.click(); URL.revokeObjectURL(url)
   }
