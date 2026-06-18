@@ -401,6 +401,11 @@ export default function PrePickPage({ user }: { user: PortalUserSSR }) {
             ) : (
               <span>No snapshot yet — pick a date range and hit <strong style={{ color: T.text2 }}>Refresh from MechanicDesk</strong>.</span>
             )}
+            <div style={{ flex: 1 }} />
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '3px 10px', borderRadius: 999, background: `${T.amber}1f`, border: `1px solid ${T.amber}59`, color: T.amber, fontSize: 11.5, fontWeight: 600, whiteSpace: 'nowrap' }}
+              title="Pre Pick only counts items held in stock. Special-order / non-stocked parts are not included — order those separately.">
+              ⚠ In-stock items only — no special-order parts
+            </span>
           </div>
 
           {/* View toggle + filters */}
