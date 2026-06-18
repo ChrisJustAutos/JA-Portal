@@ -79,6 +79,15 @@ export default withAuth('edit:b2b_catalogue', async (req: NextApiRequest, res: N
     })
   }
 
+  // Reference sheet: the valid model names, so the (now editable) Model column
+  // uses exact spellings — anything unknown is rejected on import.
+  const { data: modelRows } = await c.from('b2b_models').select('name').order('name', { ascending: true })
+  const refs = wb.addWorksheet('Valid models')
+  refs.columns = [{ header: 'Model name — use these (comma-separated) in the Model column', key: 'name', width: 56 }]
+  refs.getRow(1).font = { bold: true }
+  refs.views = [{ state: 'frozen', ySplit: 1 }]
+  for (const m of (modelRows || [])) refs.addRow({ name: m.name })
+
   const buf = await wb.xlsx.writeBuffer()
   const today = new Date().toISOString().slice(0, 10)
   res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')

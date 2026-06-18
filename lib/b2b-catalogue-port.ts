@@ -4,8 +4,12 @@
 // import (header → db field + parse/validate), so the two can never drift.
 //
 // Round-trip rules:
-//   - ID / SKU / Name / Model / Product Type / RRP are context only (read-only);
+//   - ID / SKU / Name / Product Type are context only (read-only);
 //     ID is the match key (SKU is the fallback).
+//   - Model IS editable: a comma-separated list of model names. On import the
+//     names are resolved to model ids and the fitment links are REPLACED. Blank
+//     = leave unchanged (so an untouched export doesn't wipe fitment). Names must
+//     already exist in Models (unknown names reject the file).
 //   - A BLANK editable cell means "leave unchanged" (safe re-import), so an
 //     untouched export changes nothing. (Clearing a value isn't done via blank.)
 //   - Weight is shown/edited in kg but stored as grams.
@@ -29,7 +33,7 @@ export const CATALOGUE_COLUMNS: CatColumn[] = [
   { header: 'ID',                          field: 'id',                              readOnly: true },
   { header: 'SKU',                         field: 'sku',                             readOnly: true },
   { header: 'Name',                        field: 'name',                            readOnly: true },
-  { header: 'Model',                       field: 'models',                          readOnly: true, kind: 'modelNames', notAColumn: true },
+  { header: 'Model',                       field: 'models',                          kind: 'modelNames', notAColumn: true },
   { header: 'Product Type',                field: 'product_type_name',               readOnly: true, kind: 'text', notAColumn: true },
   // ── Editable ──
   { header: 'Description',                 field: 'description',                     kind: 'text' },
@@ -86,16 +90,25 @@ export function catalogueRowToExport(item: any): Record<string, any> {
 // A spreadsheet row (keyed by header) → { id?, sku?, patch } or { error }.
 // Blank editable cells are skipped (no change). Returns an empty patch when the
 // row only carried context columns.
-export function catalogueRowToPatch(row: Record<string, any>): { id?: string; sku?: string; patch: Record<string, any> } | { error: string } {
+export function catalogueRowToPatch(row: Record<string, any>): { id?: string; sku?: string; patch: Record<string, any>; modelNames?: string[] } | { error: string } {
   const id = String(row['ID'] ?? '').trim()
   const sku = String(row['SKU'] ?? '').trim()
   if (!id && !sku) return { error: 'row has neither ID nor SKU to match on' }
   const patch: Record<string, any> = {}
   let discountPct: number | null = null
+  let modelNames: string[] | undefined
   for (const col of CATALOGUE_COLUMNS) {
     if (col.readOnly || !(col.header in row)) continue
     const cell = row[col.header]
     if (cell === '' || cell === null || cell === undefined) continue   // blank = leave unchanged
+    if (col.kind === 'modelNames') {
+      // Comma-separated model names → list (resolved to ids + applied by the
+      // importer, since fitment lives in a join table, not a catalogue column).
+      const names = String(cell).split(',').map(s => s.trim()).filter(Boolean)
+      const seen = new Set<string>(); modelNames = []
+      for (const n of names) { const k = n.toLowerCase(); if (!seen.has(k)) { seen.add(k); modelNames.push(n) } }
+      continue
+    }
     if (col.kind === 'discountPct') {
       const n = Number(cell)
       if (!isFinite(n) || n < 0 || n > 100) return { error: `${col.header} must be a number between 0 and 100` }
@@ -132,5 +145,5 @@ export function catalogueRowToPatch(row: Record<string, any>): { id?: string; sk
     if (rrp == null || !(rrp > 0)) return { error: 'Discount % needs an RRP ex GST value in the same row' }
     patch.trade_price_ex_gst = Math.round(rrp * (1 - discountPct / 100) * 100) / 100
   }
-  return { id: id || undefined, sku: sku || undefined, patch }
+  return { id: id || undefined, sku: sku || undefined, patch, modelNames }
 }
