@@ -43,6 +43,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   const jobs: PrePickPdfJob[] = Array.isArray(body.jobs) ? body.jobs.slice(0, 2000).map((j: any) => ({
     job_number: j.job_number != null ? String(j.job_number) : null,
     customer_name: j.customer_name ? String(j.customer_name) : null,
+    description: j.description ? String(j.description) : null,
     vehicle: j.vehicle ? String(j.vehicle) : null,
     rego: j.rego ? String(j.rego) : null,
     status: j.status ? String(j.status) : null,
@@ -52,6 +53,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     parts: Array.isArray(j.parts) ? j.parts.slice(0, 200).map((p: any) => ({
       sku: String(p.sku || ''), name: String(p.name || ''), quantity: n(p.quantity),
       on_hand: p.on_hand != null ? n(p.on_hand) : null,
+      allocated: p.allocated != null ? n(p.allocated) : null,
+      available: p.available != null ? n(p.available) : null,
       status: p.status === 'red' || p.status === 'orange' || p.status === 'green' ? p.status : null,
     })) : [],
   })) : []

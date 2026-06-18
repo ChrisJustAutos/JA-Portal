@@ -28,10 +28,11 @@ export interface PrePickPdfItem {
   to_order: number
   status: 'green' | 'orange' | 'red'
 }
-export interface PrePickPdfJobPart { sku: string; name: string; quantity: number; on_hand: number | null; status?: 'green' | 'orange' | 'red' | null }
+export interface PrePickPdfJobPart { sku: string; name: string; quantity: number; on_hand: number | null; allocated?: number | null; available?: number | null; status?: 'green' | 'orange' | 'red' | null }
 export interface PrePickPdfJob {
   job_number: string | null
   customer_name: string | null
+  description: string | null
   vehicle: string | null
   rego: string | null
   status: string | null
@@ -67,7 +68,7 @@ const statusColor = (s: PrePickPdfItem['status']) => (s === 'red' ? C.red : s ==
 const num = (n: number) => (Math.round(n * 100) / 100).toString()
 
 // Column widths (A4 landscape content ≈ 770pt; Part column flexes).
-const COL = { dot: 12, sku: 84, supplier: 84, qty: 42, alloc: 48, ono: 48, rem: 48, ord: 44, buy: 48, loc: 68 }
+const COL = { dot: 12, sku: 78, supplier: 76, qty: 40, alloc: 46, avail: 46, ono: 46, rem: 46, ord: 42, buy: 46, loc: 62 }
 
 const s = StyleSheet.create({
   page: { paddingTop: 34, paddingBottom: 38, paddingHorizontal: 30, fontFamily: 'Helvetica', fontSize: 8.5, color: C.ink, backgroundColor: C.bg },
@@ -134,6 +135,7 @@ function PrePickDoc({ data }: { data: PrePickPdfPayload }) {
           <Text style={[s.right, { width: COL.qty }]}>To pick</Text>
           <Text style={[s.right, { width: COL.qty }]}>On hand</Text>
           <Text style={[s.right, { width: COL.alloc }]}>Allocated</Text>
+          <Text style={[s.right, { width: COL.avail }]}>Available</Text>
           <Text style={[s.right, { width: COL.ono }]}>On order</Text>
           <Text style={[s.right, { width: COL.rem }]}>Remaining</Text>
           <Text style={[s.right, { width: COL.ord }]}>To order</Text>
@@ -155,6 +157,7 @@ function PrePickDoc({ data }: { data: PrePickPdfPayload }) {
               <Text style={[s.right, { width: COL.qty, fontWeight: 700 }]}>{num(it.to_pick)}</Text>
               <Text style={[s.right, { width: COL.qty, color: C.ink2 }]}>{num(it.current_stock)}</Text>
               <Text style={[s.right, { width: COL.alloc, color: it.allocated > 0 ? C.ink2 : C.ink3 }]}>{it.allocated > 0 ? num(it.allocated) : '—'}</Text>
+              <Text style={[s.right, { width: COL.avail, color: C.ink2 }]}>{num(it.current_stock - it.allocated)}</Text>
               <Text style={[s.right, { width: COL.ono, color: it.on_order > 0 ? C.accent : C.ink3 }]}>{it.on_order > 0 ? num(it.on_order) : '—'}</Text>
               <Text style={[s.right, { width: COL.rem, color: col, fontWeight: 700 }]}>{num(it.remaining)}</Text>
               <Text style={[s.right, { width: COL.ord, color: it.to_order > 0 ? C.red : C.ink3, fontWeight: it.to_order > 0 ? 700 : 400 }]}>{it.to_order > 0 ? num(it.to_order) : '—'}</Text>
@@ -206,26 +209,33 @@ function JobsDoc({ data }: { data: PrePickPdfPayload }) {
               <Text style={{ fontSize: 8, color: C.ink3, width: 56 }}>{j.status || ''}</Text>
               <Text style={{ fontSize: 8, fontWeight: 700, color: C.ink2, width: 44, textAlign: 'right' }}>{j.parts_count} part{j.parts_count === 1 ? '' : 's'}</Text>
             </View>
+            {j.description ? (
+              <Text style={{ fontSize: 8, color: C.ink2, paddingTop: 2, paddingHorizontal: 8 }}>{j.description}</Text>
+            ) : null}
             {j.parts.length === 0 ? (
               <Text style={{ fontSize: 8, color: C.ink3, fontStyle: 'italic', paddingVertical: 3, paddingHorizontal: 8 }}>No tracked parts (labour/freight only).</Text>
             ) : (
               <>
                 <View style={{ flexDirection: 'row', paddingVertical: 2.5, paddingHorizontal: 8, borderBottom: `0.5pt solid ${C.line2}`, fontSize: 7, fontWeight: 700, color: C.ink3 }}>
                   <Text style={{ width: 12 }}> </Text>
-                  <Text style={{ width: 110 }}>SKU</Text>
+                  <Text style={{ width: 96 }}>SKU</Text>
                   <Text style={{ flex: 1 }}>Part</Text>
-                  <Text style={{ width: 50, textAlign: 'right' }}>Qty</Text>
-                  <Text style={{ width: 60, textAlign: 'right' }}>On hand</Text>
+                  <Text style={{ width: 42, textAlign: 'right' }}>Qty</Text>
+                  <Text style={{ width: 52, textAlign: 'right' }}>On hand</Text>
+                  <Text style={{ width: 56, textAlign: 'right' }}>Allocated</Text>
+                  <Text style={{ width: 56, textAlign: 'right' }}>Available</Text>
                 </View>
                 {j.parts.map((p, k) => (
                   <View key={k} style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 2.5, paddingHorizontal: 8, borderBottom: `0.4pt solid ${C.line2}`, fontSize: 8 }}>
                     <View style={{ width: 12, flexDirection: 'row', alignItems: 'center' }}>
                       {p.status ? <View style={{ width: 5, height: 5, borderRadius: 2.5, backgroundColor: statusColor(p.status) }} /> : null}
                     </View>
-                    <Text style={{ width: 110, color: C.ink2 }}>{p.sku || '—'}</Text>
+                    <Text style={{ width: 96, color: C.ink2 }}>{p.sku || '—'}</Text>
                     <Text style={{ flex: 1 }}>{p.name || '—'}</Text>
-                    <Text style={{ width: 50, textAlign: 'right', fontWeight: 700 }}>{num(p.quantity)}</Text>
-                    <Text style={{ width: 60, textAlign: 'right', color: C.ink3 }}>{p.on_hand == null ? '—' : num(p.on_hand)}</Text>
+                    <Text style={{ width: 42, textAlign: 'right', fontWeight: 700 }}>{num(p.quantity)}</Text>
+                    <Text style={{ width: 52, textAlign: 'right', color: C.ink3 }}>{p.on_hand == null ? '—' : num(p.on_hand)}</Text>
+                    <Text style={{ width: 56, textAlign: 'right', color: C.ink3 }}>{p.allocated == null ? '—' : num(p.allocated)}</Text>
+                    <Text style={{ width: 56, textAlign: 'right', color: C.ink2 }}>{p.available == null ? '—' : num(p.available)}</Text>
                   </View>
                 ))}
               </>

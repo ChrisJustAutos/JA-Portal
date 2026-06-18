@@ -250,27 +250,30 @@ export default function PrePickPage({ user }: { user: PortalUserSSR }) {
 
   function exportCsv() {
     if (view === 'jobs') {
-      const lines = [['Job #', 'Customer', 'Phone', 'Vehicle', 'Rego', 'Scheduled', 'Job status', 'SKU', 'Part', 'Qty', 'On hand', 'Stock status'].join(',')]
+      const lines = [['Job #', 'Customer', 'Description', 'Phone', 'Vehicle', 'Rego', 'Scheduled', 'Job status', 'SKU', 'Part', 'Qty', 'On hand', 'Allocated', 'Available', 'Stock status'].join(',')]
       for (const j of filteredJobs) {
         const parts = itemsByJob.get(j.md_job_id) || []
-        const base = [j.job_number || j.md_job_id, j.customer_name || '', j.phone || '', j.vehicle || '', j.rego || '', j.scheduled_at || '', j.status || '']
+        const base = [j.job_number || j.md_job_id, j.customer_name || '', j.description || '', j.phone || '', j.vehicle || '', j.rego || '', j.scheduled_at || '', j.status || '']
         if (parts.length === 0) {
-          lines.push([...base, '', '(no tracked parts)', '', '', ''].map(esc).join(','))
+          lines.push([...base, '', '(no tracked parts)', '', '', '', '', ''].map(esc).join(','))
         } else {
           for (const p of parts) {
             const owner = p.md_stock_id != null ? itemByStock.get(p.md_stock_id) : undefined
             const st = owner ? statusOf(owner) : ''
             const stLabel = st === 'red' ? 'Out' : st === 'orange' ? 'Low' : st === 'green' ? 'OK' : ''
-            lines.push([...base, p.sku || '', p.name || '', p.quantity, owner ? owner.current_stock : '', stLabel].map(esc).join(','))
+            const onHand = owner ? owner.current_stock : ''
+            const alloc = owner ? owner.allocated : ''
+            const avail = owner ? owner.current_stock - owner.allocated : ''
+            lines.push([...base, p.sku || '', p.name || '', p.quantity, onHand, alloc, avail, stLabel].map(esc).join(','))
           }
         }
       }
       downloadCsv(lines, 'jobs')
       return
     }
-    const lines = [['SKU', 'Part', 'Brand', 'Supplier', 'To pick', 'On hand', 'Allocated', 'On order', 'Remaining', 'To order', 'Buy price', 'Location', 'Status'].join(',')]
+    const lines = [['SKU', 'Part', 'Brand', 'Supplier', 'To pick', 'On hand', 'Allocated', 'Available', 'On order', 'Remaining', 'To order', 'Buy price', 'Location', 'Status'].join(',')]
     for (const it of filtered) {
-      lines.push([it.sku, it.part_name, it.brand || '', it.supplier || '', it.to_pick, it.current_stock, it.allocated || 0, it.on_order || 0, remaining(it), toOrder(it), it.buy_price ?? '', it.location || '', statusOf(it)].map(esc).join(','))
+      lines.push([it.sku, it.part_name, it.brand || '', it.supplier || '', it.to_pick, it.current_stock, it.allocated || 0, (it.current_stock - (it.allocated || 0)), it.on_order || 0, remaining(it), toOrder(it), it.buy_price ?? '', it.location || '', statusOf(it)].map(esc).join(','))
     }
     downloadCsv(lines, 'parts')
   }
@@ -287,13 +290,15 @@ export default function PrePickPage({ user }: { user: PortalUserSSR }) {
         ? {
             ...common, view: 'jobs',
             jobs: filteredJobs.map(j => ({
-              job_number: j.job_number, customer_name: j.customer_name, vehicle: j.vehicle, rego: j.rego,
+              job_number: j.job_number, customer_name: j.customer_name, description: j.description, vehicle: j.vehicle, rego: j.rego,
               status: j.status, scheduled_at: j.scheduled_at, parts_count: j.parts_count, parts_qty: j.parts_qty,
               parts: (itemsByJob.get(j.md_job_id) || []).map(p => {
                 const owner = p.md_stock_id != null ? itemByStock.get(p.md_stock_id) : undefined
                 return {
                   sku: p.sku, name: p.name, quantity: p.quantity,
                   on_hand: owner ? owner.current_stock : null,
+                  allocated: owner ? owner.allocated : null,
+                  available: owner ? owner.current_stock - owner.allocated : null,
                   status: owner ? statusOf(owner) : null,
                 }
               }),
