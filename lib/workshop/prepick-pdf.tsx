@@ -5,7 +5,16 @@
 // palette as the reports PDF.
 
 import React from 'react'
-import { Document, Page, Text, View, StyleSheet, pdf } from '@react-pdf/renderer'
+import { Document, Page, Text, View, StyleSheet, pdf, Font } from '@react-pdf/renderer'
+
+// react-pdf won't break a long word with no spaces (e.g. a long SKU / part
+// code), so it overflows its fixed-width column and overlaps the next one. This
+// callback adds break opportunities inside long tokens so they wrap within the
+// cell instead — normal words (≤16 chars) are returned whole, so everyday text
+// keeps its natural line breaks.
+Font.registerHyphenationCallback((word) =>
+  word.length > 16 ? (word.match(/.{1,16}/g) || [word]) : [word],
+)
 
 const C = {
   ink: '#1a1d23', ink2: '#3a3f4a', ink3: '#6b7280',
