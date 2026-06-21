@@ -28,6 +28,16 @@ function isPreCutover(iso: string | null): boolean {
 
 type AccountLabel = 'JAWS_JMACX' | 'JAWS_ET'
 
+// JAWS sale-revenue accounts the Stripe sale can post to. UIDs mirror
+// JAWS_UIDS in lib/stripe-myob-sync.ts (kept here as a plain list so this
+// client page doesn't import the server-only sync lib). Default is Tuning.
+const SALE_ACCOUNTS: { uid: string; label: string }[] = [
+  { uid: 'c3e47c87-b04c-4eed-896f-0f5930beab45', label: '4-1920 · Tuning (default)' },
+  { uid: '76491034-2115-4faf-80f9-b052c6a6a420', label: '4-1910 · MultiMap' },
+  { uid: 'c8dbc437-cd2a-4daf-aed4-0076283dfde6', label: '4-1905 · Remap' },
+  { uid: 'fa2d1a03-ec24-4da9-9e63-044240df4157', label: '4-1915 · EasyLock' },
+]
+
 interface StripeInvoiceRow {
   id: string
   number: string | null
@@ -212,6 +222,9 @@ export default function StripeMyobPage({ user }: { user: PageUser }) {
   const [activeRowDate, setActiveRowDate] = useState<string | null>(null)
   const [previewLoading, setPreviewLoading] = useState(false)
   const [overrideCustomerUid, setOverrideCustomerUid] = useState<string | null>(null)
+  // Per-invoice sale-revenue account (null = API default = Tuning).
+  const [saleAccountUid, setSaleAccountUid] = useState<string | null>(null)
+  const [activeRow, setActiveRow] = useState<StripeInvoiceRow | null>(null)
   const [preCutoverAck, setPreCutoverAck] = useState(false)
   const [syncing, setSyncing] = useState(false)
   const [syncResult, setSyncResult] = useState<{ scanned: number; matched: number } | null>(null)
@@ -338,14 +351,16 @@ export default function StripeMyobPage({ user }: { user: PageUser }) {
   }, [account, loadPayouts])
 
   // ── Push handlers ───────────────────────────────────────────────────
-  const dryRun = useCallback(async (row: StripeInvoiceRow): Promise<PushPreview | null> => {
+  const dryRun = useCallback(async (row: StripeInvoiceRow, saleUid?: string | null): Promise<PushPreview | null> => {
     setPreviewLoading(true)
     try {
+      const reqBody: any = { account, stripeInvoiceIds: [row.id] }
+      if (saleUid) reqBody.saleAccountUid = saleUid
       const res = await fetch('/api/stripe-myob/push?dry=1', {
         method: 'POST',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ account, stripeInvoiceIds: [row.id] }),
+        body: JSON.stringify(reqBody),
       })
       const json: any = await res.json()
       if (!res.ok || !json.ok) throw new Error(json.error || `HTTP ${res.status}`)
@@ -362,10 +377,22 @@ export default function StripeMyobPage({ user }: { user: PageUser }) {
     setActivePreview(null)
     setOverrideCustomerUid(null)
     setPreCutoverAck(false)
+    setActiveRow(row)
+    setSaleAccountUid(null)
     setActiveRowDate(row.paid_at || row.created)
-    const preview = await dryRun(row)
+    const preview = await dryRun(row, null)
     if (preview) setActivePreview(preview)
   }, [dryRun])
+
+  // Change the sale account in the preview → re-run the dry-run so the shown
+  // payload (and the eventual push) posts to the chosen revenue account.
+  const onChangeSaleAccount = useCallback(async (uid: string | null) => {
+    setSaleAccountUid(uid)
+    if (activeRow) {
+      const preview = await dryRun(activeRow, uid)
+      if (preview) setActivePreview(preview)
+    }
+  }, [activeRow, dryRun])
 
   const onPushConfirm = useCallback(async () => {
     if (!activePreview) return
@@ -377,6 +404,7 @@ export default function StripeMyobPage({ user }: { user: PageUser }) {
         stripeInvoiceIds: [id],
       }
       if (overrideCustomerUid) body.customerOverrideUid = overrideCustomerUid
+      if (saleAccountUid) body.saleAccountUid = saleAccountUid
 
       const res = await fetch('/api/stripe-myob/push?dry=0', {
         method: 'POST',
@@ -400,7 +428,7 @@ export default function StripeMyobPage({ user }: { user: PageUser }) {
         const next = new Set(prev); next.delete(id); return next
       })
     }
-  }, [activePreview, account, overrideCustomerUid, load])
+  }, [activePreview, account, overrideCustomerUid, saleAccountUid, load])
 
   const syncFromMyob = useCallback(async () => {
     setSyncing(true)
@@ -588,9 +616,11 @@ export default function StripeMyobPage({ user }: { user: PageUser }) {
               rowDate={activeRowDate}
               overrideCustomerUid={overrideCustomerUid}
               setOverrideCustomerUid={setOverrideCustomerUid}
+              saleAccountUid={saleAccountUid}
+              onChangeSaleAccount={onChangeSaleAccount}
               preCutoverAck={preCutoverAck}
               setPreCutoverAck={setPreCutoverAck}
-              onClose={() => { setActivePreview(null); setOverrideCustomerUid(null); setPreCutoverAck(false) }}
+              onClose={() => { setActivePreview(null); setOverrideCustomerUid(null); setSaleAccountUid(null); setActiveRow(null); setPreCutoverAck(false) }}
               onConfirm={onPushConfirm}
               pushing={pushingIds.has(activePreview.stripeInvoiceId)}
             />
@@ -756,6 +786,8 @@ interface PreviewModalProps {
   rowDate: string | null
   overrideCustomerUid: string | null
   setOverrideCustomerUid: (s: string | null) => void
+  saleAccountUid: string | null
+  onChangeSaleAccount: (uid: string | null) => void
   preCutoverAck: boolean
   setPreCutoverAck: (b: boolean) => void
   onClose: () => void
@@ -807,6 +839,21 @@ function PreviewModal(p: PreviewModalProps) {
           <Kv label="Net"    value={fmtMoneyCents(pv.net_cents)} />
         </div>
         <div style={{ fontSize:11, color:T.text3, marginBottom:14 }}>Fee resolution: {pv.feeResolution}</div>
+
+        {/* Sale revenue account — which income account this sale posts to */}
+        {!isDuplicate && (
+          <div style={{ marginBottom:14 }}>
+            <div style={{ fontSize:11, color:T.text2, marginBottom:4, textTransform:'uppercase', letterSpacing:'0.05em' }}>Sale account</div>
+            <select
+              value={p.saleAccountUid || SALE_ACCOUNTS[0].uid}
+              onChange={e => p.onChangeSaleAccount(e.target.value === SALE_ACCOUNTS[0].uid ? null : e.target.value)}
+              style={{ ...inputStyle, width:'100%' }}
+            >
+              {SALE_ACCOUNTS.map(a => <option key={a.uid} value={a.uid}>{a.label}</option>)}
+            </select>
+            <div style={{ fontSize:11, color:T.text3, marginTop:4 }}>Pick the revenue account for this calibration (MultiMap / Remap / EasyLock). The preview below updates to match.</div>
+          </div>
+        )}
 
         {/* Customer */}
         <div style={{ marginBottom:14 }}>
