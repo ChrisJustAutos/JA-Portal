@@ -247,6 +247,7 @@ export const PORTAL_TABS: PortalTab[] = [
   { id: 'reports',       label: 'Reports',         permission: 'view:reports' },
   { id: 'ap',            label: 'AP Invoices',     permission: 'view:supplier_invoices' },
   { id: 'b2b',           label: 'B2B Portal',      permission: 'view:b2b' },
+  { id: 'stripe-myob',   label: 'Stripe → MYOB',   permission: 'view:stripe_myob' },
 ]
 
 export function defaultTabsForRole(role: UserRole): string[] {
