@@ -31,6 +31,7 @@
     "pages/api/cron/crm-automations.ts":            { "maxDuration": 300 },
     "pages/api/cron/task-automations.ts":           { "maxDuration": 300 },
     "pages/api/cron/crm-campaigns.ts":              { "maxDuration": 120 },
+    "pages/api/cron/ap-statement-watch.ts":         { "maxDuration": 300 },
     "pages/api/b2b/admin/stock-transfer.ts":        { "maxDuration": 300 }
   },
   "crons": [
@@ -77,6 +78,14 @@
     {
       "path": "/api/cron/crm-campaigns",
       "schedule": "*/5 * * * *"
+    },
+    {
+      "path": "/api/cron/ap-statement-watch",
+      "schedule": "0 20 * * *"
+    },
+    {
+      "path": "/api/cron/ap-statement-watch",
+      "schedule": "0 21 * * *"
     }
   ]
 }
