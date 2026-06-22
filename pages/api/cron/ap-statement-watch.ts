@@ -18,7 +18,7 @@ import { runStatementWatch, buildDigestHtml } from '../../../lib/ap-statement-wa
 import { sendMail } from '../../../lib/email'
 
 function recipients(): string[] {
-  const raw = (process.env.AP_STATEMENT_REPORT_TO || 'chris@justautosmechanical.com.au').trim()
+  const raw = (process.env.AP_STATEMENT_REPORT_TO || 'chris@justautosmechanical.com.au,jarred@justautosmechanical.com.au').trim()
   return raw.split(/[,;]+/).map(s => s.trim()).filter(Boolean)
 }
 
