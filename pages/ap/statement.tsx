@@ -35,6 +35,20 @@ interface MyobSupplier {
   isIndividual: boolean
 }
 
+interface AutoScanRow {
+  id: string
+  company_file: 'VPS' | 'JAWS'
+  supplier_name: string | null
+  supplier_uid: string | null
+  attachment_name: string | null
+  match_status: 'reconciled' | 'has_missing' | 'needs_review' | 'failed' | null
+  invoice_lines: number
+  missing_count: number
+  missing: { reference: string | null; date: string | null; amount: number | null }[] | null
+  error: string | null
+  scanned_at: string
+}
+
 type StatementLineType = 'invoice' | 'payment' | 'credit' | 'unknown'
 
 interface StatementLine {
@@ -148,6 +162,17 @@ export default function StatementReconcilePage({ user }: PageProps) {
   const [error, setError] = useState<string | null>(null)
   const [result, setResult] = useState<ReconcileResponse | null>(null)
   const [filter, setFilter] = useState<FilterKey>('issues')
+  const [scans, setScans] = useState<AutoScanRow[]>([])
+
+  // Automated statement-watch history (the hourly cron's results).
+  useEffect(() => {
+    let alive = true
+    fetch('/api/ap/statement/scans?limit=40', { credentials: 'same-origin' })
+      .then(r => r.ok ? r.json() : { scans: [] })
+      .then(j => { if (alive) setScans(Array.isArray(j.scans) ? j.scans : []) })
+      .catch(() => {})
+    return () => { alive = false }
+  }, [])
   const fileRef = useRef<HTMLInputElement>(null)
 
   const canRun = !!supplier && !!pdfFile && !running && canEdit
@@ -405,6 +430,13 @@ export default function StatementReconcilePage({ user }: PageProps) {
           )}
         </div>
 
+        {/* ─── Automated scan history (hourly inbox watcher) ─── */}
+        <AutoScanHistory
+          scans={scans}
+          isMobile={isMobile}
+          onUse={(file, sup) => { setCompanyFile(file); if (sup) setSupplier(sup); window.scrollTo({ top: 0, behavior: 'smooth' }) }}
+        />
+
         {error && (
           <div style={{
             background:`${T.red}15`, border:`1px solid ${T.red}40`, borderRadius:7,
@@ -424,6 +456,75 @@ export default function StatementReconcilePage({ user }: PageProps) {
           isMobile={isMobile}
         />}
       </div>
+    </div>
+  )
+}
+
+// ── Automated scan history ─────────────────────────────────────────────
+
+function AutoScanHistory({
+  scans, isMobile, onUse,
+}: {
+  scans: AutoScanRow[]
+  isMobile: boolean
+  onUse: (file: CompanyFile, sup: MyobSupplier | null) => void
+}) {
+  const [open, setOpen] = useState(true)
+  const fmtWhen = (iso: string) => { try { return new Date(iso).toLocaleString('en-AU', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) } catch { return iso } }
+  const money = (n: number | null | undefined) => (n == null ? '—' : `$${Number(n).toLocaleString('en-AU', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`)
+  const badge = (s: AutoScanRow['match_status']) => {
+    const map: Record<string, { c: string; label: string }> = {
+      reconciled:  { c: T.green, label: 'Reconciled' },
+      has_missing: { c: T.red,   label: 'Missing' },
+      needs_review:{ c: T.amber, label: 'Review' },
+      failed:      { c: T.text3, label: 'Failed' },
+    }
+    const m = map[s || 'failed'] || map.failed
+    return <span style={{ display:'inline-block', padding:'2px 8px', borderRadius:8, fontSize:10, fontWeight:600, background: alpha(m.c, '1f'), color: m.c }}>{m.label}</span>
+  }
+
+  return (
+    <div style={{ background:T.bg2, border:`1px solid ${T.border}`, borderRadius:10, padding: isMobile ? 14 : 16, marginBottom:14 }}>
+      <div onClick={() => setOpen(o => !o)} style={{ display:'flex', alignItems:'center', justifyContent:'space-between', cursor:'pointer' }}>
+        <div style={{ fontSize:13, fontWeight:600 }}>Automated scans <span style={{ color:T.text3, fontWeight:400 }}>· hourly inbox watcher</span></div>
+        <span style={{ color:T.text3, fontSize:12 }}>{scans.length} recent · {open ? '−' : '+'}</span>
+      </div>
+      {open && (
+        scans.length === 0 ? (
+          <div style={{ fontSize:12, color:T.text3, marginTop:10 }}>No automated scans yet — statements arriving in the accounts inboxes will appear here as they're reconciled.</div>
+        ) : (
+          <div style={{ marginTop:10, display:'flex', flexDirection:'column', gap:6 }}>
+            {scans.map(s => (
+              <div key={s.id} style={{ borderTop:`1px solid ${T.border}`, paddingTop:6 }}>
+                <div style={{ display:'flex', alignItems:'center', gap:10, flexWrap:'wrap', fontSize:12.5 }}>
+                  <span style={{ color:T.text3, width:96 }}>{fmtWhen(s.scanned_at)}</span>
+                  <span style={{ fontFamily:'monospace', fontSize:11, color:T.text2 }}>{s.company_file}</span>
+                  <span style={{ flex:1, minWidth:120, color:T.text, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }} title={s.supplier_name || s.attachment_name || ''}>{s.supplier_name || s.attachment_name || '—'}</span>
+                  {badge(s.match_status)}
+                  {s.match_status === 'has_missing' && <span style={{ color:T.red, fontWeight:600 }}>{s.missing_count} missing</span>}
+                  {s.supplier_uid && (
+                    <button
+                      onClick={() => onUse(s.company_file, { uid: s.supplier_uid!, name: s.supplier_name || '', displayId: null, abn: null, isIndividual: false })}
+                      style={{ background:'transparent', border:`1px solid ${T.border2}`, color:T.text2, borderRadius:5, padding:'3px 9px', fontSize:11, cursor:'pointer', fontFamily:'inherit' }}
+                    >Re-run ↑</button>
+                  )}
+                </div>
+                {s.match_status === 'has_missing' && Array.isArray(s.missing) && s.missing.length > 0 && (
+                  <div style={{ fontSize:11.5, color:T.text2, margin:'4px 0 2px 106px' }}>
+                    {s.missing.map((m, i) => <span key={i} style={{ marginRight:12 }}><span style={{ fontFamily:'monospace' }}>{m.reference || '—'}</span> {money(m.amount)}</span>)}
+                  </div>
+                )}
+                {s.match_status === 'needs_review' && (
+                  <div style={{ fontSize:11, color:T.amber, margin:'2px 0 2px 106px' }}>Couldn't auto-match the supplier — upload the PDF above and pick it manually.</div>
+                )}
+                {s.match_status === 'failed' && s.error && (
+                  <div style={{ fontSize:11, color:T.text3, margin:'2px 0 2px 106px' }}>{s.error}</div>
+                )}
+              </div>
+            ))}
+          </div>
+        )
+      )}
     </div>
   )
 }

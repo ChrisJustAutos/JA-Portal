@@ -81,11 +81,7 @@
     },
     {
       "path": "/api/cron/ap-statement-watch",
-      "schedule": "0 20 * * *"
-    },
-    {
-      "path": "/api/cron/ap-statement-watch",
-      "schedule": "0 21 * * *"
+      "schedule": "0 * * * *"
     }
   ]
 }
