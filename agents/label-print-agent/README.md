@@ -106,7 +106,11 @@ MYOB, the portal renders a thank-you letter (A4) + a DL envelope, stores them in
 the **`workshop-letters`** bucket, and queues `kind='letter'` / `kind='envelope'`
 jobs (each row names its own `bucket`, so this agent reads it automatically).
 
-Routing env vars (all optional — they fall back sensibly):
+**Printer routing is now portal-managed.** The agent reads `print_agent_settings`
+from the database (Settings → Workshop → **Letters → Automation → Printers**)
+and publishes the printers installed on this PC + a heartbeat, so the portal
+shows a dropdown. DB values win; the env vars below are the fallback when a DB
+value is blank:
 - `LETTER_PRINTER_NAME` — printer for A4 letters. Defaults to `INVOICE_PRINTER_NAME`, then the Windows default.
 - `ENVELOPE_PRINTER_NAME` — printer for DL envelopes. Defaults to `LETTER_PRINTER_NAME`.
 - `LETTER_SCALE` (default `fit`) / `ENVELOPE_SCALE` (default `noscale`) — `noscale` keeps the DL page at true size.

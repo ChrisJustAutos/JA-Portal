@@ -26,7 +26,7 @@ interface Automation {
   enabled: boolean; min_total: number; template_id: string | null; print_envelope: boolean
   letterhead_name: string; letterhead_abn: string | null; letterhead_address: string | null
   letterhead_phone: string | null; letterhead_email: string | null; letterhead_website: string | null
-  return_address: string | null; watch_since?: string | null
+  return_address: string | null; watch_since?: string | null; logo_path?: string | null
 }
 interface LetterJob {
   id: string; trigger: string; recipient_name: string | null; recipient_address: string | null
@@ -370,7 +370,8 @@ function Settings({ automation, templates, canAdmin, reload, toast }: { automati
 
       <div style={{ borderTop: `1px solid ${T.border}`, paddingTop: 14 }}>
         <h3 style={{ fontSize: 14, margin: '0 0 4px' }}>Letterhead</h3>
-        <p style={{ fontSize: 12, color: T.text3, margin: '0 0 12px' }}>Shown at the top of every letter. To add the logo, drop a <code>letterhead-logo.png</code> into the app's <code>/public</code> folder.</p>
+        <p style={{ fontSize: 12, color: T.text3, margin: '0 0 12px' }}>Shown at the top of every letter.</p>
+        <LogoUploader hasLogo={!!form.logo_path} canAdmin={canAdmin} reload={reload} toast={toast} />
         <div style={{ display: 'grid', gap: 12 }}>
           <Field label="Business name"><input value={form.letterhead_name} disabled={disabled} onChange={e => set('letterhead_name', e.target.value)} style={inp} /></Field>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
@@ -388,6 +389,8 @@ function Settings({ automation, templates, canAdmin, reload, toast }: { automati
         </div>
       </div>
 
+      <PrintersSection canAdmin={canAdmin} toast={toast} />
+
       {canAdmin ? (
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
           <button onClick={save} disabled={busy} style={pbtn(T.accent)}>{busy ? 'Saving…' : 'Save settings'}</button>
@@ -395,6 +398,93 @@ function Settings({ automation, templates, canAdmin, reload, toast }: { automati
           <button onClick={() => run(false)} disabled={running} style={qbtn(T.text2)} title="Scan MYOB now and queue any new job-invoice letters">Run now</button>
         </div>
       ) : <p style={{ fontSize: 12, color: T.text3 }}>Only admins can change these settings.</p>}
+    </div>
+  )
+}
+
+// ── Logo uploader ─────────────────────────────────────────────────────────
+function LogoUploader({ hasLogo, canAdmin, reload, toast }: { hasLogo: boolean; canAdmin: boolean; reload: () => void; toast: (m: string, k?: any) => void }) {
+  const [bust, setBust] = useState(0)
+  const [busy, setBusy] = useState(false)
+  const fileRef = useRef<HTMLInputElement>(null)
+
+  const onFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const f = e.target.files?.[0]; if (!f) return
+    if (f.size > 6_000_000) return toast('Logo too large (max ~6MB)', 'error')
+    setBusy(true)
+    try {
+      const dataUrl: string = await new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(String(r.result)); r.onerror = rej; r.readAsDataURL(f) })
+      const r = await fetch('/api/workshop/letters/logo', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ dataUrl }) })
+      const d = await r.json()
+      if (r.ok) { toast('Logo uploaded', 'success'); setBust(b => b + 1); reload() } else toast(d.error || 'Upload failed', 'error')
+    } finally { setBusy(false); if (fileRef.current) fileRef.current.value = '' }
+  }
+  const remove = async () => {
+    const r = await fetch('/api/workshop/letters/logo', { method: 'DELETE' })
+    if (r.ok) { toast('Logo removed', 'success'); setBust(b => b + 1); reload() } else toast('Remove failed', 'error')
+  }
+
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 14, padding: 12, border: `1px solid ${T.border}`, borderRadius: 8, background: T.bg2 }}>
+      <div style={{ width: 150, height: 56, display: 'flex', alignItems: 'center', justifyContent: 'center', background: T.bg, border: `1px solid ${T.border}`, borderRadius: 6, overflow: 'hidden' }}>
+        {hasLogo ? <img src={`/api/workshop/letters/logo?cb=${bust}`} alt="Logo" style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }} /> : <span style={{ fontSize: 11, color: T.text3 }}>No logo</span>}
+      </div>
+      <div style={{ flex: 1 }}>
+        <div style={{ fontSize: 12, color: T.text2, fontWeight: 500, marginBottom: 4 }}>Logo (top-right of the letter)</div>
+        <div style={{ fontSize: 11, color: T.text3, marginBottom: 8 }}>PNG or JPG, transparent background ideal.</div>
+        {canAdmin ? (
+          <div style={{ display: 'flex', gap: 8 }}>
+            <input ref={fileRef} type="file" accept="image/png,image/jpeg,image/gif" onChange={onFile} style={{ display: 'none' }} />
+            <button onClick={() => fileRef.current?.click()} disabled={busy} style={qbtn(T.accent)}>{busy ? 'Uploading…' : hasLogo ? 'Replace logo' : 'Upload logo'}</button>
+            {hasLogo ? <button onClick={remove} style={miniBtn(T.red)}>Remove</button> : null}
+          </div>
+        ) : null}
+      </div>
+    </div>
+  )
+}
+
+// ── Printers (portal-managed; agent reads these) ────────────────────────────
+interface PrinterCfg { letter_printer: string | null; envelope_printer: string | null; letter_scale: string; envelope_scale: string; available_printers: string[]; agent_host: string | null; agent_last_seen: string | null }
+function PrintersSection({ canAdmin, toast }: { canAdmin: boolean; toast: (m: string, k?: any) => void }) {
+  const [cfg, setCfg] = useState<PrinterCfg | null>(null)
+  const [busy, setBusy] = useState(false)
+  const load = useCallback(async () => { const r = await fetch('/api/workshop/letters/printers'); const d = await r.json(); if (r.ok) setCfg(d.printers) }, [])
+  useEffect(() => { load() }, [load])
+  if (!cfg) return null
+  const set = (k: keyof PrinterCfg, v: any) => setCfg({ ...cfg, [k]: v })
+  const online = cfg.agent_last_seen && (Date.now() - new Date(cfg.agent_last_seen).getTime() < 15 * 60 * 1000)
+  const opts = cfg.available_printers || []
+
+  const save = async () => {
+    setBusy(true)
+    try {
+      const r = await fetch('/api/workshop/letters/printers', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(cfg) })
+      const d = await r.json()
+      toast(r.ok ? 'Printers saved' : (d.error || 'Save failed'), r.ok ? 'success' : 'error')
+    } finally { setBusy(false) }
+  }
+
+  const picker = (k: 'letter_printer' | 'envelope_printer') => opts.length
+    ? <select value={cfg[k] || ''} disabled={!canAdmin} onChange={e => set(k, e.target.value)} style={inp as any}>
+        <option value="">— Windows default —</option>
+        {opts.map(p => <option key={p} value={p}>{p}</option>)}
+        {cfg[k] && !opts.includes(cfg[k]!) ? <option value={cfg[k]!}>{cfg[k]} (not detected)</option> : null}
+      </select>
+    : <input value={cfg[k] || ''} disabled={!canAdmin} onChange={e => set(k, e.target.value)} placeholder="Exact Windows printer name" style={inp} />
+
+  return (
+    <div style={{ borderTop: `1px solid ${T.border}`, paddingTop: 14, display: 'grid', gap: 12 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <h3 style={{ fontSize: 14, margin: 0 }}>Printers</h3>
+        <span style={{ fontSize: 11, color: online ? T.green : T.text3 }}>
+          {online ? `● Agent online${cfg.agent_host ? ` (${cfg.agent_host})` : ''}` : '○ Print agent offline'}
+        </span>
+      </div>
+      {!opts.length ? <p style={{ fontSize: 11, color: T.text3, margin: 0 }}>No printers reported yet — start the print agent on the workshop PC and it'll list them here. You can type a name meanwhile.</p> : null}
+      <Field label="Letter printer (A4)">{picker('letter_printer')}</Field>
+      <Field label="Envelope printer (DL)" hint="Load DL envelopes in this printer/tray. Prints at actual size.">{picker('envelope_printer')}</Field>
+      {canAdmin ? <button onClick={save} disabled={busy} style={qbtn(T.accent)}>{busy ? 'Saving…' : 'Save printers'}</button> : null}
     </div>
   )
 }

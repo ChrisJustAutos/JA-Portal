@@ -44,6 +44,7 @@ export interface LetterAutomation {
   letterhead_website: string | null
   return_address: string | null
   watch_since: string | null   // ISO; only invoices on/after this fire (set on enable)
+  logo_path: string | null     // uploaded letterhead logo in the workshop-letters bucket
 }
 
 export async function getLetterAutomation(): Promise<LetterAutomation> {
@@ -61,6 +62,7 @@ export async function getLetterAutomation(): Promise<LetterAutomation> {
     letterhead_website: data?.letterhead_website ?? null,
     return_address: data?.return_address ?? null,
     watch_since: data?.watch_since ?? null,
+    logo_path: data?.logo_path ?? null,
   }
 }
 
@@ -103,6 +105,39 @@ export async function upsertTemplate(t: Partial<LetterTemplate> & { id?: string 
 export async function deleteTemplate(id: string): Promise<void> {
   const { error } = await sb().from('workshop_letter_templates').delete().eq('id', id)
   if (error) throw new Error(error.message)
+}
+
+// ── Print-agent settings (printer routing the self-hosted agent reads) ──────
+export interface PrintAgentSettings {
+  label_printer: string | null
+  invoice_printer: string | null
+  letter_printer: string | null
+  envelope_printer: string | null
+  letter_scale: string
+  envelope_scale: string
+  available_printers: string[]
+  agent_host: string | null
+  agent_last_seen: string | null
+}
+
+export async function getPrintAgentSettings(): Promise<PrintAgentSettings> {
+  const { data } = await sb().from('print_agent_settings').select('*').eq('id', 'singleton').maybeSingle()
+  return {
+    label_printer: data?.label_printer ?? null,
+    invoice_printer: data?.invoice_printer ?? null,
+    letter_printer: data?.letter_printer ?? null,
+    envelope_printer: data?.envelope_printer ?? null,
+    letter_scale: data?.letter_scale ?? 'fit',
+    envelope_scale: data?.envelope_scale ?? 'noscale',
+    available_printers: Array.isArray(data?.available_printers) ? (data!.available_printers as string[]) : [],
+    agent_host: data?.agent_host ?? null,
+    agent_last_seen: data?.agent_last_seen ?? null,
+  }
+}
+
+export async function setPrintAgentSettings(patch: Partial<PrintAgentSettings>): Promise<PrintAgentSettings> {
+  await sb().from('print_agent_settings').update({ ...patch, updated_at: new Date().toISOString() }).eq('id', 'singleton')
+  return getPrintAgentSettings()
 }
 
 export async function setAutomation(patch: Partial<LetterAutomation>): Promise<LetterAutomation> {
@@ -156,26 +191,39 @@ export async function getCustomerForLetter(id: string): Promise<{ customer: any;
 }
 
 // ── Letterhead helpers ─────────────────────────────────────────────────────
-// Optional wordmark: drop a PNG/JPG at public/letterhead-logo.* and it gets
-// embedded on the letter. Cached after first read (incl. the "missing" result).
-let _logo: string | null | undefined
-function logoDataUrl(): string | null {
-  if (_logo !== undefined) return _logo
+// Logo precedence: the uploaded logo (workshop-letters bucket, cfg.logo_path) →
+// a /public/letterhead-logo.* file → none. Both cached by key (incl. misses).
+const LOGO_BUCKET = LETTER_BUCKET
+const _logoCache = new Map<string, string | null>()
+
+function publicLogoDataUrl(): string | null {
+  if (_logoCache.has('__public__')) return _logoCache.get('__public__')!
+  let out: string | null = null
   for (const ext of ['png', 'jpg', 'jpeg']) {
     const p = path.join(process.cwd(), 'public', `letterhead-logo.${ext}`)
-    try {
-      if (fs.existsSync(p)) {
-        const mime = ext === 'png' ? 'image/png' : 'image/jpeg'
-        _logo = `data:${mime};base64,${fs.readFileSync(p).toString('base64')}`
-        return _logo
-      }
-    } catch { /* ignore */ }
+    try { if (fs.existsSync(p)) { out = `data:${ext === 'png' ? 'image/png' : 'image/jpeg'};base64,${fs.readFileSync(p).toString('base64')}`; break } } catch { /* ignore */ }
   }
-  _logo = null
-  return _logo
+  _logoCache.set('__public__', out)
+  return out
 }
 
-function letterhead(cfg: LetterAutomation): LetterheadInfo {
+async function storageLogoDataUrl(storagePath: string): Promise<string | null> {
+  if (_logoCache.has(storagePath)) return _logoCache.get(storagePath)!
+  let out: string | null = null
+  try {
+    const { data } = await sb().storage.from(LOGO_BUCKET).download(storagePath)
+    if (data) {
+      const ext = (storagePath.split('.').pop() || 'png').toLowerCase()
+      const mime = ext === 'jpg' || ext === 'jpeg' ? 'image/jpeg' : ext === 'gif' ? 'image/gif' : 'image/png'
+      out = `data:${mime};base64,${Buffer.from(await data.arrayBuffer()).toString('base64')}`
+    }
+  } catch { /* fall through to null */ }
+  _logoCache.set(storagePath, out)
+  return out
+}
+
+async function buildLetterhead(cfg: LetterAutomation): Promise<LetterheadInfo> {
+  const logoDataUrl = cfg.logo_path ? await storageLogoDataUrl(cfg.logo_path) : publicLogoDataUrl()
   return {
     name: cfg.letterhead_name,
     abn: cfg.letterhead_abn,
@@ -183,7 +231,7 @@ function letterhead(cfg: LetterAutomation): LetterheadInfo {
     phone: cfg.letterhead_phone,
     email: cfg.letterhead_email,
     website: cfg.letterhead_website,
-    logoDataUrl: logoDataUrl(),
+    logoDataUrl,
   }
 }
 
@@ -244,7 +292,7 @@ export async function renderLetterPreview(input: EnqueueLetterInput, kind: 'lett
     return renderEnvelopePdf({ recipientName, recipientAddressLines, returnAddressLines: addressLines(cfg.return_address) })
   }
   return renderLetterPdf({
-    letterhead: letterhead(cfg), date: new Date().toISOString(),
+    letterhead: await buildLetterhead(cfg), date: new Date().toISOString(),
     recipientName, recipientAddressLines, body,
     signOffName: input.template.sign_off_name, signOffTitle: input.template.sign_off_title,
   })
@@ -282,7 +330,7 @@ export async function enqueueLetter(input: EnqueueLetterInput): Promise<EnqueueR
   try {
     // 2) Render PDFs.
     const letterPdf = await renderLetterPdf({
-      letterhead: letterhead(cfg),
+      letterhead: await buildLetterhead(cfg),
       date: new Date().toISOString(),
       recipientName,
       recipientAddressLines,

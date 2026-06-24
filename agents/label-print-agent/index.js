@@ -47,15 +47,38 @@ const LETTER_SCALE = process.env.LETTER_SCALE || 'fit'
 const ENVELOPE_PRINTER_NAME = process.env.ENVELOPE_PRINTER_NAME || LETTER_PRINTER_NAME || ''
 const ENVELOPE_SCALE = process.env.ENVELOPE_SCALE || 'noscale'
 
+// Portal-managed printer routing: the portal writes print_agent_settings; we
+// prefer those, then env vars, then the Windows default. Refreshed every ~30s.
+let dbCfg = {}
+let dbCfgAt = 0
+async function refreshDbCfg() {
+  if (Date.now() - dbCfgAt < 30000) return
+  try {
+    const { data } = await sb.from('print_agent_settings').select('*').eq('id', 'singleton').maybeSingle()
+    if (data) dbCfg = data
+    dbCfgAt = Date.now()
+  } catch (e) { /* keep last; env fallback still works */ }
+}
+
 // Per-kind print routing. Labels go to the DYMO; everything else to an office
-// printer (falling back to the Windows default when its env var is unset).
+// printer (falling back to the Windows default when nothing is configured).
 function routeForKind(kind) {
   switch (kind) {
-    case 'invoice':  return { printer: INVOICE_PRINTER_NAME,  scale: INVOICE_SCALE }
-    case 'letter':   return { printer: LETTER_PRINTER_NAME,   scale: LETTER_SCALE }
-    case 'envelope': return { printer: ENVELOPE_PRINTER_NAME, scale: ENVELOPE_SCALE }
-    default:         return { printer: PRINTER_NAME,          scale: SCALE } // label → DYMO
+    case 'invoice':  return { printer: dbCfg.invoice_printer  || INVOICE_PRINTER_NAME,  scale: INVOICE_SCALE }
+    case 'letter':   return { printer: dbCfg.letter_printer   || LETTER_PRINTER_NAME,   scale: dbCfg.letter_scale   || LETTER_SCALE }
+    case 'envelope': return { printer: dbCfg.envelope_printer || ENVELOPE_PRINTER_NAME, scale: dbCfg.envelope_scale || ENVELOPE_SCALE }
+    default:         return { printer: dbCfg.label_printer    || PRINTER_NAME,          scale: SCALE } // label → DYMO
   }
+}
+
+// Tell the portal which printers are installed on this PC (for the dropdown) +
+// a heartbeat. Best-effort.
+async function publishPrinters() {
+  try {
+    const printers = await printer.getPrinters()
+    const names = printers.map(p => p.name || p.deviceId).filter(Boolean)
+    await sb.from('print_agent_settings').update({ available_printers: names, agent_host: os.hostname(), agent_last_seen: new Date().toISOString() }).eq('id', 'singleton')
+  } catch (e) { log('could not publish printers:', e && e.message) }
 }
 const destLabel = (kind) => (!kind || kind === 'label') ? PRINTER_NAME : (routeForKind(kind).printer || '(default printer)')
 
@@ -135,6 +158,7 @@ async function drainPending() {
   if (working) return
   working = true
   try {
+    await refreshDbCfg()
     await reclaimStale()
     const { data, error } = await sb.from('label_print_jobs').select('id, storage_path, consignment_number, attempts, kind, bucket').eq('status', 'pending').order('created_at', { ascending: true }).limit(20)
     if (error) { log('poll error:', error.message); return }
@@ -150,6 +174,10 @@ async function main() {
     const found = printers.find(p => (p.name || p.deviceId || '').toLowerCase() === PRINTER_NAME.toLowerCase())
     if (!found) log(`WARNING: printer "${PRINTER_NAME}" not found. Installed: ${printers.map(p => p.name).join(', ') || 'none'}`)
   } catch (e) { log('Could not list printers (continuing):', e && e.message) }
+
+  // Publish installed printers + heartbeat so the portal can offer a dropdown.
+  await publishPrinters()
+  setInterval(() => publishPrinters().catch(() => {}), 300000)
 
   await drainPending()
 
