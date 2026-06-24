@@ -25,43 +25,45 @@ export default withAuth('view:diary', async (req, res, user) => {
   if (!roleHasPermission(user.role, 'admin:settings')) return res.status(403).json({ error: 'Admin only' })
 
   const days = Math.min(Number(req.query.days) || 90, 365)
-  const top = Math.min(Number(req.query.top) || 80, 400)
+  const top = Math.min(Number(req.query.top) || 60, 400)
+  const detail = Math.min(Number(req.query.detail) || 30, 80) // how many to fetch full lines for
+  const only = String(req.query.only || '').trim() // optional: comma-sep invoice numbers to detail
   const cutoff = new Date(Date.now() - days * 86400_000).toISOString().substring(0, 10)
 
   try {
     const conn = await getConnection(WORKSHOP_MYOB_LABEL)
     if (!conn || !conn.company_file_id) return res.status(400).json({ error: `${WORKSHOP_MYOB_LABEL} MYOB connection not configured` })
+    const base = `/accountright/${conn.company_file_id}/Sale/Invoice`
 
-    // Combined feed returns every invoice layout (Service/Item/…) with Lines.
-    const r = await myobFetch(conn.id, `/accountright/${conn.company_file_id}/Sale/Invoice`, {
+    // 1) Combined feed (no lines, but gives UID + summary for every layout).
+    const r = await myobFetch(conn.id, base, {
       query: { '$filter': `Date ge datetime'${cutoff}'`, '$orderby': 'Date desc', '$top': top },
       performedBy: (user as any).id || null,
     })
     if (r.status !== 200) return res.status(502).json({ error: `MYOB GET failed (HTTP ${r.status})`, raw: (r.raw || '').substring(0, 400) })
-
     const items: any[] = Array.isArray(r.data?.Items) ? r.data.Items : []
-    const invoices = items.map(inv => ({
-      number: inv.Number ?? null,
-      date: inv.Date ?? null,
-      type: inv.InvoiceType ?? null,
-      customer: inv.Customer?.Name ?? null,
-      total: inv.TotalAmount ?? null,
-      status: inv.Status ?? null,
-      comment: inv.Comment ?? null,
-      journalMemo: inv.JournalMemo ?? null,
-      lineCount: Array.isArray(inv.Lines) ? inv.Lines.length : null,
-      lines: Array.isArray(inv.Lines) ? inv.Lines.map((l: any) => ({ desc: l.Description ?? null, account: acct(l), total: l.Total ?? null })) : null,
-    }))
 
-    // Quick tallies to spot patterns at a glance.
-    const byType: Record<string, number> = {}
-    const accountTally: Record<string, number> = {}
-    for (const inv of invoices) {
-      byType[String(inv.type)] = (byType[String(inv.type)] || 0) + 1
-      for (const l of inv.lines || []) if (l.account) accountTally[l.account] = (accountTally[l.account] || 0) + 1
+    // 2) Fetch line detail for a subset (the `only` numbers if given, else first `detail`).
+    const wanted = only ? items.filter(i => only.split(',').map(s => s.trim()).includes(String(i.Number))) : items.slice(0, detail)
+    const detailed: any[] = []
+    for (const inv of wanted) {
+      const layout = inv.InvoiceType || 'Item'
+      const d = await myobFetch(conn.id, `${base}/${layout}/${inv.UID}`, { performedBy: (user as any).id || null })
+      const full = d.status === 200 ? d.data : null
+      detailed.push({
+        number: inv.Number ?? null, date: inv.Date ?? null, customer: inv.Customer?.Name ?? null,
+        total: inv.TotalAmount ?? null, status: inv.Status ?? null,
+        comment: full?.Comment ?? null, poNumber: full?.CustomerPurchaseOrderNumber ?? null,
+        lines: Array.isArray(full?.Lines) ? full.Lines.map((l: any) => ({ type: l.Type ?? null, desc: l.Description ?? null, account: acct(l), total: l.Total ?? null })) : null,
+      })
     }
 
-    return res.status(200).json({ cutoff, count: invoices.length, byType, accountTally, invoices })
+    // Tally line accounts + item-vs-account split across the detailed set.
+    const accountTally: Record<string, number> = {}
+    for (const inv of detailed) for (const l of inv.lines || []) if (l.account) accountTally[l.account] = (accountTally[l.account] || 0) + 1
+
+    const summary = items.map(i => ({ number: i.Number, customer: i.Customer?.Name, total: i.TotalAmount, status: i.Status }))
+    return res.status(200).json({ cutoff, listCount: items.length, detailedCount: detailed.length, accountTally, detailed, summary })
   } catch (e: any) {
     return res.status(500).json({ error: e?.message || 'Diagnostic failed' })
   }
