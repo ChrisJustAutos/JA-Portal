@@ -26,7 +26,7 @@ interface Automation {
   enabled: boolean; min_total: number; template_id: string | null; print_envelope: boolean
   letterhead_name: string; letterhead_abn: string | null; letterhead_address: string | null
   letterhead_phone: string | null; letterhead_email: string | null; letterhead_website: string | null
-  return_address: string | null
+  return_address: string | null; watch_since?: string | null
 }
 interface LetterJob {
   id: string; trigger: string; recipient_name: string | null; recipient_address: string | null
@@ -79,7 +79,7 @@ export default function LettersPage({ user }: { user: PortalUserSSR }) {
               ) : null}
             </div>
             <p style={{ fontSize: 12.5, color: T.text3, margin: '0 0 16px' }}>
-              When a finalised job invoice over the threshold is pushed to MYOB, the portal prints a thank-you letter + DL envelope to the office printer. Deposits never trigger a letter.
+              Jobs are finalised in MechanicDesk → pushed to MYOB. The portal checks MYOB hourly and prints a thank-you letter + DL envelope to the office printer for each new <b>job invoice</b> — a real sale (income line), never a booking deposit.
             </p>
 
             {/* In-page tabs */}
@@ -315,9 +315,11 @@ function Templates({ templates, canEdit, reload, toast }: { templates: Template[
 function Settings({ automation, templates, canAdmin, reload, toast }: { automation: Automation | null; templates: Template[]; canAdmin: boolean; reload: () => void; toast: (m: string, k?: any) => void }) {
   const [form, setForm] = useState<Automation | null>(automation)
   const [busy, setBusy] = useState(false)
+  const [running, setRunning] = useState(false)
   useEffect(() => { setForm(automation) }, [automation])
   if (!form) return <SkeletonRows rows={6} />
   const set = (k: keyof Automation, v: any) => setForm({ ...form, [k]: v })
+  const fmtD = (iso?: string | null) => { if (!iso) return ''; try { return new Date(iso).toLocaleString('en-AU', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }) } catch { return iso } }
 
   const save = async () => {
     setBusy(true)
@@ -328,12 +330,27 @@ function Settings({ automation, templates, canAdmin, reload, toast }: { automati
     } finally { setBusy(false) }
   }
 
+  const run = async (dry: boolean) => {
+    setRunning(true)
+    try {
+      const r = await fetch('/api/workshop/letters/automation', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'run', dry }) })
+      const d = await r.json()
+      if (!r.ok) return toast(d.error || 'Run failed', 'error')
+      const o = d.outcome || {}
+      if (!o.enabled) toast('Automation is off — turn it on and save first', 'error')
+      else { toast(`${dry ? 'Preview' : 'Done'}: ${o.printed} ${dry ? 'would print' : 'queued'}, ${o.skipped} skipped, ${o.scanned} scanned`, 'success'); if (!dry) reload() }
+    } finally { setRunning(false) }
+  }
+
   const disabled = !canAdmin
   return (
     <div style={{ display: 'grid', gap: 18, maxWidth: 560 }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-        <input type="checkbox" checked={form.enabled} disabled={disabled} onChange={e => set('enabled', e.target.checked)} id="en" />
-        <label htmlFor="en" style={{ fontWeight: 600 }}>Auto-print thank-you letters on finalise</label>
+      <div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <input type="checkbox" checked={form.enabled} disabled={disabled} onChange={e => set('enabled', e.target.checked)} id="en" />
+          <label htmlFor="en" style={{ fontWeight: 600 }}>Auto-print a thank-you letter when a job invoice lands in MYOB</label>
+        </div>
+        {form.enabled && form.watch_since ? <div style={{ fontSize: 11, color: T.text3, marginTop: 4, marginLeft: 26 }}>Watching invoices since {fmtD(form.watch_since)} · checked hourly</div> : null}
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
         <Field label="Minimum invoice total (inc GST)" hint="0 = every finalised job invoice. Deposits never trigger a letter regardless.">
@@ -371,9 +388,13 @@ function Settings({ automation, templates, canAdmin, reload, toast }: { automati
         </div>
       </div>
 
-      {canAdmin
-        ? <button onClick={save} disabled={busy} style={pbtn(T.accent)}>{busy ? 'Saving…' : 'Save settings'}</button>
-        : <p style={{ fontSize: 12, color: T.text3 }}>Only admins can change these settings.</p>}
+      {canAdmin ? (
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+          <button onClick={save} disabled={busy} style={pbtn(T.accent)}>{busy ? 'Saving…' : 'Save settings'}</button>
+          <button onClick={() => run(true)} disabled={running} style={qbtn(T.text2)} title="Scan MYOB now and report what would print, without queuing">{running ? 'Running…' : 'Preview scan'}</button>
+          <button onClick={() => run(false)} disabled={running} style={qbtn(T.text2)} title="Scan MYOB now and queue any new job-invoice letters">Run now</button>
+        </div>
+      ) : <p style={{ fontSize: 12, color: T.text3 }}>Only admins can change these settings.</p>}
     </div>
   )
 }

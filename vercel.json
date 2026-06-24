@@ -82,6 +82,10 @@
     {
       "path": "/api/cron/ap-statement-watch",
       "schedule": "0 * * * *"
+    },
+    {
+      "path": "/api/cron/letter-watch",
+      "schedule": "0 * * * *"
     }
   ]
 }

@@ -43,13 +43,14 @@ export interface LetterAutomation {
   letterhead_email: string | null
   letterhead_website: string | null
   return_address: string | null
+  watch_since: string | null   // ISO; only invoices on/after this fire (set on enable)
 }
 
 export async function getLetterAutomation(): Promise<LetterAutomation> {
   const { data } = await sb().from('workshop_letter_automation').select('*').eq('id', 'singleton').maybeSingle()
   return {
     enabled: data?.enabled ?? false,
-    min_total: Number(data?.min_total ?? 5000),
+    min_total: Number(data?.min_total ?? 0),
     template_id: data?.template_id ?? null,
     print_envelope: data?.print_envelope ?? true,
     letterhead_name: data?.letterhead_name ?? 'Just Autos',
@@ -59,6 +60,7 @@ export async function getLetterAutomation(): Promise<LetterAutomation> {
     letterhead_email: data?.letterhead_email ?? null,
     letterhead_website: data?.letterhead_website ?? null,
     return_address: data?.return_address ?? null,
+    watch_since: data?.watch_since ?? null,
   }
 }
 
@@ -104,15 +106,44 @@ export async function deleteTemplate(id: string): Promise<void> {
 }
 
 export async function setAutomation(patch: Partial<LetterAutomation>): Promise<LetterAutomation> {
-  await sb().from('workshop_letter_automation').update({ ...patch, updated_at: new Date().toISOString() }).eq('id', 'singleton')
+  const current = await getLetterAutomation()
+  const next: any = { ...patch, updated_at: new Date().toISOString() }
+  // Switching ON stamps watch_since=now so the poller doesn't backfill every
+  // recent MYOB invoice — only jobs finalised from here on get a letter.
+  if (patch.enabled === true && (!current.enabled || !current.watch_since)) {
+    next.watch_since = new Date().toISOString()
+  }
+  await sb().from('workshop_letter_automation').update(next).eq('id', 'singleton')
   return getLetterAutomation()
 }
 
-export async function listLetterJobs(limit = 100, offset = 0): Promise<any[]> {
-  const { data } = await sb().from('workshop_letter_jobs')
+export async function listLetterJobs(limit = 100, offset = 0, includeSkipped = false): Promise<any[]> {
+  let q = sb().from('workshop_letter_jobs')
     .select('*, template:workshop_letter_templates(name)')
-    .order('created_at', { ascending: false }).range(offset, offset + limit - 1)
+    .order('created_at', { ascending: false })
+  // 'skipped' rows are deposits / non-job invoices the poller examined and
+  // deliberately didn't print — noise in the history view by default.
+  if (!includeSkipped) q = q.neq('status', 'skipped')
+  const { data } = await q.range(offset, offset + limit - 1)
   return data || []
+}
+
+// Record an invoice the poller examined but did NOT print (deposit / non-job /
+// no-address) — so it's deduped and never re-examined. Idempotent on the MYOB
+// UID via the partial unique index.
+export async function recordLetterSkip(myobInvoiceUid: string, recipientName: string | null, invoiceTotal: number | null, reason: string): Promise<void> {
+  await sb().from('workshop_letter_jobs').insert({
+    trigger: 'auto', status: 'skipped', myob_invoice_uid: myobInvoiceUid,
+    recipient_name: recipientName, invoice_total: invoiceTotal, error: reason,
+  }).then(() => {}, () => {}) // unique-violation = already recorded; ignore
+}
+
+// UIDs already examined (printed or skipped) — lets the poller avoid re-fetching
+// line detail for invoices it has already handled.
+export async function lettersSeenUids(uids: string[]): Promise<Set<string>> {
+  if (!uids.length) return new Set()
+  const { data } = await sb().from('workshop_letter_jobs').select('myob_invoice_uid').in('myob_invoice_uid', uids)
+  return new Set((data || []).map((r: any) => r.myob_invoice_uid).filter(Boolean))
 }
 
 // Fetch a workshop customer (+ most recent vehicle) for the manual composer.
