@@ -35,16 +35,22 @@ export default withAuth('view:diary', async (req, res, user) => {
     if (!conn || !conn.company_file_id) return res.status(400).json({ error: `${WORKSHOP_MYOB_LABEL} MYOB connection not configured` })
     const base = `/accountright/${conn.company_file_id}/Sale/Invoice`
 
-    // 1) Combined feed (no lines, but gives UID + summary for every layout).
+    // 1) List feed (no lines, but gives UID + summary). With `only`, look the
+    //    specific invoice numbers up directly (ignores the date window); else
+    //    pull the recent window.
+    const onlyNums = only ? only.split(',').map(s => s.trim()).filter(Boolean) : []
+    const filter = onlyNums.length
+      ? onlyNums.map(n => `Number eq '${n.replace(/'/g, "''")}'`).join(' or ')
+      : `Date ge datetime'${cutoff}'`
     const r = await myobFetch(conn.id, base, {
-      query: { '$filter': `Date ge datetime'${cutoff}'`, '$orderby': 'Date desc', '$top': top },
+      query: { '$filter': filter, '$orderby': 'Date desc', '$top': onlyNums.length ? 50 : top },
       performedBy: (user as any).id || null,
     })
     if (r.status !== 200) return res.status(502).json({ error: `MYOB GET failed (HTTP ${r.status})`, raw: (r.raw || '').substring(0, 400) })
     const items: any[] = Array.isArray(r.data?.Items) ? r.data.Items : []
 
-    // 2) Fetch line detail for a subset (the `only` numbers if given, else first `detail`).
-    const wanted = only ? items.filter(i => only.split(',').map(s => s.trim()).includes(String(i.Number))) : items.slice(0, detail)
+    // 2) Fetch line detail for the wanted set.
+    const wanted = onlyNums.length ? items : items.slice(0, detail)
     const detailed: any[] = []
     for (const inv of wanted) {
       const layout = inv.InvoiceType || 'Item'
