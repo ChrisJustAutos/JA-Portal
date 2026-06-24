@@ -56,7 +56,10 @@ export async function runLetterWatch(opts: { dryRun?: boolean; lookbackDays?: nu
   const result: WatchResult = { enabled: false, scanned: 0, printed: 0, skipped: 0, errors: 0, details: [] }
 
   const cfg = await getLetterAutomation()
-  if (!cfg.enabled || !cfg.template_id) return result
+  // Live runs require it switched on; a dry preview works anytime so you can see
+  // what WOULD print before arming it.
+  if (!cfg.enabled && !dryRun) return result
+  if (!cfg.template_id) return result
   result.enabled = true
   const template = await getTemplate(cfg.template_id)
   if (!template) return result
