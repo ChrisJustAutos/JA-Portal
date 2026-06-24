@@ -74,7 +74,7 @@ export default function LettersPage({ user }: { user: PortalUserSSR }) {
                 <div style={{ fontSize: 12, color: T.text3 }}>
                   Auto thank-you: {automation.enabled
                     ? <span style={{ color: T.green }}>ON</span>
-                    : <span style={{ color: T.text3 }}>off</span>} · invoices over <b>{money(automation.min_total)}</b>
+                    : <span style={{ color: T.text3 }}>off</span>} · {automation.min_total > 0 ? <>invoices over <b>{money(automation.min_total)}</b></> : <>every finalised job invoice</>}
                 </div>
               ) : null}
             </div>
@@ -336,7 +336,7 @@ function Settings({ automation, templates, canAdmin, reload, toast }: { automati
         <label htmlFor="en" style={{ fontWeight: 600 }}>Auto-print thank-you letters on finalise</label>
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-        <Field label="Minimum invoice total (inc GST)">
+        <Field label="Minimum invoice total (inc GST)" hint="0 = every finalised job invoice. Deposits never trigger a letter regardless.">
           <input type="number" value={form.min_total} disabled={disabled} onChange={e => set('min_total', e.target.value)} style={inp} />
         </Field>
         <Field label="Template">

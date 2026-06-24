@@ -34,7 +34,7 @@ CREATE TABLE IF NOT EXISTS public.workshop_letter_templates (
 CREATE TABLE IF NOT EXISTS public.workshop_letter_automation (
   id                 TEXT PRIMARY KEY DEFAULT 'singleton',
   enabled            BOOLEAN NOT NULL DEFAULT false,  -- flip on from Settings once the printer + logo are set
-  min_total          NUMERIC(12,2) NOT NULL DEFAULT 5000,  -- inc-GST invoice total
+  min_total          NUMERIC(12,2) NOT NULL DEFAULT 0,  -- inc-GST floor; 0 = every finalised job invoice (the real gate is "job invoice, not a booking deposit" — guaranteed by the finalise hook)
   template_id        UUID REFERENCES public.workshop_letter_templates(id) ON DELETE SET NULL,
   print_envelope     BOOLEAN NOT NULL DEFAULT true,
   letterhead_name    TEXT NOT NULL DEFAULT 'Just Autos',
