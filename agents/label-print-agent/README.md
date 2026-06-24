@@ -115,6 +115,12 @@ value is blank:
 - `ENVELOPE_PRINTER_NAME` — printer for DL envelopes. Defaults to `LETTER_PRINTER_NAME`.
 - `LETTER_SCALE` (default `fit`) / `ENVELOPE_SCALE` (default `noscale`) — `noscale` keeps the DL page at true size.
 
+**Trays (same printer, different paper):** set per-kind trays in the portal
+(Letters → … → Printers & trays). The agent passes them to SumatraPDF as the
+`bin` option, so letters can pull from one tray and A4 invoices from another on
+the one printer. Use the tray name/number exactly as the printer driver shows it
+(e.g. `Tray 2`, `Manual`). Blank = the printer's default tray.
+
 Envelopes print at actual size, so the chosen printer/tray must hold **DL
 (110×220mm)** envelopes. If your office printer feeds envelopes from a manual
 tray, point `ENVELOPE_PRINTER_NAME` at that printer and load envelopes when the

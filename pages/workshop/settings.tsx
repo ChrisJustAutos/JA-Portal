@@ -17,6 +17,7 @@ import { requirePageAuth } from '../../lib/authServer'
 import type { PortalUserSSR } from '../../lib/authServer'
 import { PAYMENT_TENDERS, JOB_TYPES } from '../../lib/workshop'
 import { COMM_TRIGGERS, COMM_VARS, CommTemplate } from '../../lib/workshop-comm-templates'
+import LettersSettings from '../../components/workshop/LettersSettings'
 import { T } from '../../lib/ui/theme'
 import { useConfirm, useToast } from '../../components/ui/Feedback'
 const inp: React.CSSProperties = { width: '100%', padding: '7px 9px', background: T.bg3, border: `1px solid ${T.border}`, borderRadius: 6, color: T.text, fontSize: 13, fontFamily: 'inherit', outline: 'none', boxSizing: 'border-box', colorScheme: 'dark' }
@@ -25,7 +26,7 @@ function pbtn(color: string, solid?: boolean): React.CSSProperties {
   return { padding: '7px 14px', borderRadius: 6, fontSize: 12, fontFamily: 'inherit', fontWeight: 600, cursor: 'pointer', background: solid ? color : 'transparent', color: solid ? '#fff' : color, border: `1px solid ${solid ? color : color + '55'}` }
 }
 
-type Tab = 'business' | 'myob' | 'sms' | 'techs'
+type Tab = 'business' | 'myob' | 'sms' | 'letters' | 'techs'
 // A settings saver. `silent` (used by "Save all") suppresses the per-card flash
 // and throws on failure so the page can show one combined confirmation.
 type SaveFn = (patch: any, opts?: { silent?: boolean }) => void | Promise<void>
@@ -34,6 +35,7 @@ const TABS: { id: Tab; label: string }[] = [
   { id: 'business', label: 'Business & documents' },
   { id: 'myob', label: 'MYOB' },
   { id: 'sms', label: 'Communications' },
+  { id: 'letters', label: 'Thank-you letters' },
   { id: 'techs', label: 'Technicians & staff' },
 ]
 
@@ -41,6 +43,11 @@ export default function WorkshopSettingsPage({ user }: { user: PortalUserSSR }) 
   const router = useRouter()
   const embed = router.query.embed === '1'   // rendered inside the Settings hub window
   const [tab, setTab] = useState<Tab>('business')
+  // Deep-link: /workshop/settings?tab=letters opens that section.
+  useEffect(() => {
+    const q = router.query.tab
+    if (typeof q === 'string' && ['business', 'myob', 'sms', 'letters', 'techs'].includes(q)) setTab(q as Tab)
+  }, [router.query.tab])
   const [settings, setSettings] = useState<any | null>(null)
   const [accounts, setAccounts] = useState<any[]>([])
   const [bankAccounts, setBankAccounts] = useState<any[]>([])
@@ -128,6 +135,7 @@ export default function WorkshopSettingsPage({ user }: { user: PortalUserSSR }) 
                     <AccountsSection settings={settings} income={accounts} banks={bankAccounts} categories={trackingCategories} expense={expenseAccounts} accountsError={accountsError} onSave={saveSettings} />
                   </>}
                   {tab === 'sms' && settings && <><SmsSection settings={settings} onSave={saveSettings} register={registerSaver} /><div style={{ height: 14 }} /><CommTemplatesManager /></>}
+                  {tab === 'letters' && <LettersSettings role={user.role} />}
                   {tab === 'techs' && <TechsMovedCard />}
                 </div>
               </div>

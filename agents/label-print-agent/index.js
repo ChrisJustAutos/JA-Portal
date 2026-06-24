@@ -64,10 +64,10 @@ async function refreshDbCfg() {
 // printer (falling back to the Windows default when nothing is configured).
 function routeForKind(kind) {
   switch (kind) {
-    case 'invoice':  return { printer: dbCfg.invoice_printer  || INVOICE_PRINTER_NAME,  scale: INVOICE_SCALE }
-    case 'letter':   return { printer: dbCfg.letter_printer   || LETTER_PRINTER_NAME,   scale: dbCfg.letter_scale   || LETTER_SCALE }
-    case 'envelope': return { printer: dbCfg.envelope_printer || ENVELOPE_PRINTER_NAME, scale: dbCfg.envelope_scale || ENVELOPE_SCALE }
-    default:         return { printer: dbCfg.label_printer    || PRINTER_NAME,          scale: SCALE } // label → DYMO
+    case 'invoice':  return { printer: dbCfg.invoice_printer  || INVOICE_PRINTER_NAME,  scale: INVOICE_SCALE,                    bin: dbCfg.invoice_bin  || '' }
+    case 'letter':   return { printer: dbCfg.letter_printer   || LETTER_PRINTER_NAME,   scale: dbCfg.letter_scale   || LETTER_SCALE,   bin: dbCfg.letter_bin   || '' }
+    case 'envelope': return { printer: dbCfg.envelope_printer || ENVELOPE_PRINTER_NAME, scale: dbCfg.envelope_scale || ENVELOPE_SCALE, bin: dbCfg.envelope_bin || '' }
+    default:         return { printer: dbCfg.label_printer    || PRINTER_NAME,          scale: SCALE,                            bin: '' } // label → DYMO
   }
 }
 
@@ -132,6 +132,7 @@ async function printJob(job) {
   try {
     const opts = { scale: route.scale }
     if (route.printer) opts.printer = route.printer
+    if (route.bin) opts.bin = route.bin // paper tray (SumatraPDF -print-settings "bin=…")
     await printer.print(tmp, opts)
   } finally {
     fs.unlink(tmp, () => {})

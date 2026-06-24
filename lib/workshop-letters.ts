@@ -115,6 +115,9 @@ export interface PrintAgentSettings {
   envelope_printer: string | null
   letter_scale: string
   envelope_scale: string
+  letter_bin: string | null      // paper tray (pdf-to-printer `bin`); blank = default tray
+  envelope_bin: string | null
+  invoice_bin: string | null
   available_printers: string[]
   agent_host: string | null
   agent_last_seen: string | null
@@ -129,6 +132,9 @@ export async function getPrintAgentSettings(): Promise<PrintAgentSettings> {
     envelope_printer: data?.envelope_printer ?? null,
     letter_scale: data?.letter_scale ?? 'fit',
     envelope_scale: data?.envelope_scale ?? 'noscale',
+    letter_bin: data?.letter_bin ?? null,
+    envelope_bin: data?.envelope_bin ?? null,
+    invoice_bin: data?.invoice_bin ?? null,
     available_printers: Array.isArray(data?.available_printers) ? (data!.available_printers as string[]) : [],
     agent_host: data?.agent_host ?? null,
     agent_last_seen: data?.agent_last_seen ?? null,

@@ -7,7 +7,7 @@ import { withAuth } from '../../../../lib/authServer'
 import { roleHasPermission } from '../../../../lib/permissions'
 import { getPrintAgentSettings, setPrintAgentSettings, PrintAgentSettings } from '../../../../lib/workshop-letters'
 
-const TEXT = ['letter_printer', 'envelope_printer', 'letter_scale', 'envelope_scale'] as const
+const TEXT = ['letter_printer', 'envelope_printer', 'invoice_printer', 'letter_scale', 'envelope_scale', 'letter_bin', 'envelope_bin', 'invoice_bin'] as const
 
 export default withAuth('view:diary', async (req, res, user) => {
   if (req.method === 'GET') {
