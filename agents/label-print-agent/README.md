@@ -1,6 +1,10 @@
 # JA Label Print Agent
 
-Auto-prints B2B freight labels to the workshop **DYMO LabelWriter 4XL**.
+Auto-prints, from one `label_print_jobs` queue:
+- **B2B freight labels** → the workshop **DYMO LabelWriter 4XL** (`kind='label'`)
+- **B2B invoices** → an office A4 printer (`kind='invoice'`)
+- **Workshop thank-you letters** (A4) → an office printer (`kind='letter'`)
+- **DL envelopes** (110×220mm) → an office printer (`kind='envelope'`)
 
 When freight is booked in the portal (admin "Book via MachShip", the email
 Book-Freight action, or a test order), the portal stores the MachShip label PDF
@@ -95,6 +99,22 @@ wrong, change `PRINT_SCALE` in `.env`:
 - `fit` (default) — scale the 4×6 PDF to the label.
 - `noscale` — print 1:1 (use if MachShip already gives an exactly-4×6 PDF).
 Set the DYMO's default paper to **4″ × 6″** in Windows printer preferences.
+
+## Letters & envelopes (workshop thank-you automation)
+When a finalised workshop job invoice over the configured threshold is pushed to
+MYOB, the portal renders a thank-you letter (A4) + a DL envelope, stores them in
+the **`workshop-letters`** bucket, and queues `kind='letter'` / `kind='envelope'`
+jobs (each row names its own `bucket`, so this agent reads it automatically).
+
+Routing env vars (all optional — they fall back sensibly):
+- `LETTER_PRINTER_NAME` — printer for A4 letters. Defaults to `INVOICE_PRINTER_NAME`, then the Windows default.
+- `ENVELOPE_PRINTER_NAME` — printer for DL envelopes. Defaults to `LETTER_PRINTER_NAME`.
+- `LETTER_SCALE` (default `fit`) / `ENVELOPE_SCALE` (default `noscale`) — `noscale` keeps the DL page at true size.
+
+Envelopes print at actual size, so the chosen printer/tray must hold **DL
+(110×220mm)** envelopes. If your office printer feeds envelopes from a manual
+tray, point `ENVELOPE_PRINTER_NAME` at that printer and load envelopes when the
+letter prints.
 
 ## Statuses (`label_print_jobs.status`)
 `pending` → `printing` → `done` | `failed` (after `MAX_ATTEMPTS`). Re-queue a

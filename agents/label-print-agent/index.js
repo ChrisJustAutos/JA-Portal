@@ -1,14 +1,18 @@
 // agents/label-print-agent/index.js
 //
-// Self-hosted agent that auto-prints B2B freight labels to the workshop DYMO
-// LabelWriter 4XL. Runs on the workshop PC (the one the DYMO is attached to) —
-// the same pattern as the FreePBX agents.
+// Self-hosted agent that auto-prints from the label_print_jobs queue. Runs on a
+// workshop PC — the same pattern as the FreePBX agents. Handles four kinds:
+//   label    → DYMO LabelWriter 4XL (B2B freight labels)
+//   invoice  → office A4 printer (B2B invoices)
+//   letter   → office printer (workshop thank-you letters, A4)
+//   envelope → office printer (DL envelopes, printed at actual size)
 //
-// Flow: the portal inserts a row into label_print_jobs when a MachShip label is
-// stored. This agent subscribes to that table via Supabase Realtime (service
-// role), downloads the label PDF from the b2b-shipping-labels bucket, prints it
-// to the DYMO, and marks the job done/failed. It also polls on startup so any
-// jobs queued while it was offline get printed.
+// Flow: the portal inserts a row into label_print_jobs. This agent subscribes
+// to that table via Supabase Realtime (service role), downloads the PDF from the
+// row's bucket (b2b-shipping-labels for labels/invoices, workshop-letters for
+// letters/envelopes), prints it to the right printer, and marks the job
+// done/failed. It also polls on startup so jobs queued while it was offline get
+// printed.
 //
 // Setup: see README.md. Requires Node 18+ (built-in fetch) and the DYMO printer
 // installed in Windows with a known printer name.
@@ -34,6 +38,26 @@ const SCALE = process.env.PRINT_SCALE || 'fit' // 'fit' | 'noscale' | 'shrink'
 // INVOICE_PRINTER_NAME is unset they go to the Windows default printer.
 const INVOICE_PRINTER_NAME = process.env.INVOICE_PRINTER_NAME || ''
 const INVOICE_SCALE = process.env.INVOICE_SCALE || 'fit'
+// Thank-you letters (kind='letter', A4) + envelopes (kind='envelope', DL) print
+// to the office printer too. Letters default to the invoice printer; envelopes
+// default to the letter printer. Envelopes print at actual size ('noscale') so
+// the DL page isn't rescaled — make sure that printer/tray holds DL envelopes.
+const LETTER_PRINTER_NAME = process.env.LETTER_PRINTER_NAME || INVOICE_PRINTER_NAME || ''
+const LETTER_SCALE = process.env.LETTER_SCALE || 'fit'
+const ENVELOPE_PRINTER_NAME = process.env.ENVELOPE_PRINTER_NAME || LETTER_PRINTER_NAME || ''
+const ENVELOPE_SCALE = process.env.ENVELOPE_SCALE || 'noscale'
+
+// Per-kind print routing. Labels go to the DYMO; everything else to an office
+// printer (falling back to the Windows default when its env var is unset).
+function routeForKind(kind) {
+  switch (kind) {
+    case 'invoice':  return { printer: INVOICE_PRINTER_NAME,  scale: INVOICE_SCALE }
+    case 'letter':   return { printer: LETTER_PRINTER_NAME,   scale: LETTER_SCALE }
+    case 'envelope': return { printer: ENVELOPE_PRINTER_NAME, scale: ENVELOPE_SCALE }
+    default:         return { printer: PRINTER_NAME,          scale: SCALE } // label → DYMO
+  }
+}
+const destLabel = (kind) => (!kind || kind === 'label') ? PRINTER_NAME : (routeForKind(kind).printer || '(default printer)')
 
 if (!SUPABASE_URL || !SERVICE_ROLE_KEY) {
   console.error('FATAL: SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required (see .env.example)')
@@ -52,7 +76,7 @@ async function claim(jobId) {
   const { data } = await sb.from('label_print_jobs')
     .update({ status: 'printing', claimed_at: new Date().toISOString() })
     .eq('id', jobId).eq('status', 'pending')
-    .select('id, storage_path, consignment_number, attempts, kind')
+    .select('id, storage_path, consignment_number, attempts, kind, bucket')
   return data && data.length ? data[0] : null
 }
 
@@ -67,23 +91,24 @@ async function reclaimStale() {
 }
 
 async function printJob(job) {
-  // Short-lived signed URL → download the PDF → print → mark done.
-  const { data: signed, error: signErr } = await sb.storage.from(BUCKET).createSignedUrl(job.storage_path, 120)
+  // Short-lived signed URL → download the PDF → print → mark done. Letters and
+  // envelopes live in their own bucket (job.bucket); labels/invoices in BUCKET.
+  const bucket = job.bucket || BUCKET
+  const { data: signed, error: signErr } = await sb.storage.from(bucket).createSignedUrl(job.storage_path, 120)
   if (signErr || !signed?.signedUrl) throw new Error(`signed url failed: ${signErr?.message || 'none'}`)
 
   const resp = await fetch(signed.signedUrl)
   if (!resp.ok) throw new Error(`download failed: HTTP ${resp.status}`)
   const buf = Buffer.from(await resp.arrayBuffer())
-  if (buf.length === 0) throw new Error('empty label PDF')
+  if (buf.length === 0) throw new Error('empty PDF')
 
-  const isInvoice = job.kind === 'invoice'
-  const tmp = path.join(os.tmpdir(), `${isInvoice ? 'invoice' : 'label'}-${job.id}.pdf`)
+  const kind = job.kind || 'label'
+  const route = routeForKind(kind)
+  const tmp = path.join(os.tmpdir(), `${kind}-${job.id}.pdf`)
   fs.writeFileSync(tmp, buf)
   try {
-    // Labels → DYMO; invoices → A4 printer (or the Windows default if unset).
-    const opts = { scale: isInvoice ? INVOICE_SCALE : SCALE }
-    const target = isInvoice ? INVOICE_PRINTER_NAME : PRINTER_NAME
-    if (target) opts.printer = target
+    const opts = { scale: route.scale }
+    if (route.printer) opts.printer = route.printer
     await printer.print(tmp, opts)
   } finally {
     fs.unlink(tmp, () => {})
@@ -93,8 +118,7 @@ async function printJob(job) {
 async function handleJob(job) {
   const claimed = await claim(job.id)
   if (!claimed) return // already taken
-  const dest = claimed.kind === 'invoice' ? (INVOICE_PRINTER_NAME || '(default printer)') : PRINTER_NAME
-  log(`printing ${claimed.kind || 'label'} job ${claimed.id} (consignment ${claimed.consignment_number || '—'}) → ${dest}`)
+  log(`printing ${claimed.kind || 'label'} job ${claimed.id} (consignment ${claimed.consignment_number || '—'}) → ${destLabel(claimed.kind)}`)
   try {
     await printJob(claimed)
     await sb.from('label_print_jobs').update({ status: 'done', printed_at: new Date().toISOString(), error: null, attempts: (claimed.attempts || 0) + 1 }).eq('id', claimed.id)
@@ -112,14 +136,14 @@ async function drainPending() {
   working = true
   try {
     await reclaimStale()
-    const { data, error } = await sb.from('label_print_jobs').select('id, storage_path, consignment_number, attempts, kind').eq('status', 'pending').order('created_at', { ascending: true }).limit(20)
+    const { data, error } = await sb.from('label_print_jobs').select('id, storage_path, consignment_number, attempts, kind, bucket').eq('status', 'pending').order('created_at', { ascending: true }).limit(20)
     if (error) { log('poll error:', error.message); return }
     for (const job of data || []) await handleJob(job)
   } finally { working = false }
 }
 
 async function main() {
-  log(`Print agent starting — labels→"${PRINTER_NAME}", invoices→"${INVOICE_PRINTER_NAME || '(default printer)'}", bucket="${BUCKET}"`)
+  log(`Print agent starting — labels→"${PRINTER_NAME}", invoices→"${INVOICE_PRINTER_NAME || '(default printer)'}", letters→"${LETTER_PRINTER_NAME || '(default printer)'}", envelopes→"${ENVELOPE_PRINTER_NAME || '(default printer)'}", bucket="${BUCKET}"`)
   // Confirm the printer exists (best-effort; warn but keep running).
   try {
     const printers = await printer.getPrinters()

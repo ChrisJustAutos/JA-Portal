@@ -18,6 +18,7 @@ import { createClient, SupabaseClient } from '@supabase/supabase-js'
 import { getConnection, myobFetch } from './myob'
 import { logWorkshopActivity } from './workshop-activity'
 import { WORKSHOP_MYOB_LABEL, PaymentAccounts, PaymentTender } from './workshop'
+import { maybeAutoLetterForBooking } from './workshop-letters'
 
 const UUID_REGEX_G = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi
 const round2 = (n: number) => Math.round(n * 100) / 100
@@ -190,6 +191,7 @@ export interface JobInvoiceResult {
   mode: 'order' | 'invoice'
   status: 'created' | 'already_written'
   stock_warning?: string | null
+  letter?: { status: 'queued' | 'skipped' | 'failed'; jobId?: string; error?: string } | null
 }
 
 // Sentinel error codes the API surfaces to the UI.
@@ -356,7 +358,13 @@ export async function createJobInvoiceInMyob(bookingId: string, performedBy: str
     actor_id: performedBy,
   })
 
-  return { myob_uid: uid, myob_number: number, mode, status: 'created', stock_warning: stockWarning }
+  // Thank-you letter automation (migration 137): a finalised job invoice over
+  // the configured threshold queues a letter + DL envelope to the office
+  // printer. Deposits live in workshop_payments and never reach this code path,
+  // so this only ever fires for real finalised jobs. Never blocks invoicing.
+  const letter = await maybeAutoLetterForBooking(bookingId, totalAmount, uid)
+
+  return { myob_uid: uid, myob_number: number, mode, status: 'created', stock_warning: stockWarning, letter }
 }
 
 const money = (n: number) => `$${round2(n).toFixed(2)}`
