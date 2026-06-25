@@ -742,18 +742,26 @@ interface RunPushOpts {
   relogin: () => Promise<boolean>
   // Errors-only retry: push only the rows that failed last time, onto the SAME
   // MD sheet, without re-adding the rows that already landed (which would
-  // duplicate them in MD).
+  // duplicate them in MD). Keyed on md_stock_id (stable) — NOT row_number,
+  // which a recheck/refresh cycle can duplicate across the match_results.
   errorsOnly?: boolean
-  errorRowNumbers?: Set<number>
+  errorStockIds?: Set<number>
   priorPushed?: number
   forcedSheet?: { stocktakeId: number; sheetId: number } | null
 }
 
 async function runPush(client: MdClient, matchResults: MatchResultEntry[], opts: RunPushOpts): Promise<void> {
   let matched = matchResults.filter(r => r.status === 'matched' && r.md_stock_id != null)
-  if (opts.errorsOnly && opts.errorRowNumbers) {
-    matched = matched.filter(r => opts.errorRowNumbers!.has(r.row_number))
+  if (opts.errorsOnly && opts.errorStockIds) {
+    matched = matched.filter(r => opts.errorStockIds!.has(r.md_stock_id!))
   }
+  // Dedupe by stock id — match_results can hold the same stock on more than one
+  // row (a recheck appends "counted in MD" rows), and a stocktake sheet must
+  // have at most one line per stock or MD double-counts the variance.
+  const seen = new Set<number>()
+  const before = matched.length
+  matched = matched.filter(r => (seen.has(r.md_stock_id!) ? false : (seen.add(r.md_stock_id!), true)))
+  if (matched.length < before) log(`  Deduped ${before - matched.length} duplicate stock row(s) — ${matched.length} unique stock(s) to push`)
   if (matched.length === 0) throw new Error(opts.errorsOnly ? 'No failed rows to retry' : 'No matched items to push')
 
   const baselinePushed = opts.errorsOnly ? (opts.priorPushed || 0) : 0
@@ -922,15 +930,19 @@ async function main(): Promise<void> {
       if (errorsOnly) {
         const priorErrors = Array.isArray(upload.push_errors) ? upload.push_errors : []
         if (priorErrors.length === 0) throw new Error('Errors-only retry requested but the upload has no recorded push errors')
-        const errorRowNumbers = new Set<number>(priorErrors.map((e: any) => Number(e.row_number)).filter((n: number) => isFinite(n)))
+        // Key on md_stock_id (stable across recheck/refresh), NOT row_number —
+        // row_numbers can be duplicated by the recheck appending rows, which
+        // would over-match and re-push already-pushed stocks.
+        const errorStockIds = new Set<number>(priorErrors.map((e: any) => Number(e.md_stock_id)).filter((n: number) => isFinite(n) && n > 0))
+        if (errorStockIds.size === 0) throw new Error('Errors-only retry: no usable md_stock_id on the recorded push errors')
         const forcedSheet = upload.mechanicdesk_stocktake_id && upload.mechanicdesk_sheet_id
           ? { stocktakeId: Number(upload.mechanicdesk_stocktake_id), sheetId: Number(upload.mechanicdesk_sheet_id) }
           : null
-        log(`Errors-only retry: ${errorRowNumbers.size} failed row(s)${forcedSheet ? `, reusing sheet ${forcedSheet.sheetId}` : ', resolving a target sheet'}`)
+        log(`Errors-only retry: ${errorStockIds.size} failed stock(s)${forcedSheet ? `, reusing sheet ${forcedSheet.sheetId}` : ', resolving a target sheet'}`)
         await runPush(client, results, {
           relogin,
           errorsOnly: true,
-          errorRowNumbers,
+          errorStockIds,
           priorPushed: Number(upload.pushed_count) || 0,
           forcedSheet,
         })
