@@ -106,10 +106,10 @@ async function probeListShape(client: MdClient): Promise<void> {
 // have it when the list doesn't? This is the bin-not-pulling-through diagnosis.
 async function probeBinCoverage(client: MdClient): Promise<void> {
   console.log('\n=== Bin/location coverage across first pages ===')
-  let scanned = 0, withBin = 0, withLoc = 0
+  let scanned = 0, withBin = 0, withLoc = 0, inStock = 0, inStockWithBin = 0
   const examples: any[] = []
   const noBinSamples: any[] = []
-  for (let page = 1; page <= 10; page++) {
+  for (let page = 1; page <= 50; page++) {
     const r = await fetch(`${MD_BASE}/stocks.json?page=${page}`, { headers: { 'Cookie': client.cookieHeader, 'Accept': 'application/json' } })
     if (!r.ok) break
     const j: any = await r.json()
@@ -117,13 +117,18 @@ async function probeBinCoverage(client: MdClient): Promise<void> {
     if (!stocks.length) break
     for (const s of stocks) {
       scanned++
-      if (s.bin != null && String(s.bin).trim() !== '') { withBin++; if (examples.length < 8) examples.push({ stock_number: s.stock_number, name: s.name, bin: s.bin, location: s.location }) }
-      else if (noBinSamples.length < 3 && (s.available_quantity > 0 || s.quantity > 0)) noBinSamples.push(s)
+      const hasBin = s.bin != null && String(s.bin).trim() !== ''
+      const isInStock = (Number(s.quantity) || Number(s.available_quantity) || 0) > 0
+      if (isInStock) inStock++
+      if (hasBin) { withBin++; if (isInStock) inStockWithBin++; if (examples.length < 30) examples.push({ stock_number: s.stock_number, name: s.name, bin: s.bin, location: s.location, qty: s.quantity }) }
+      else if (noBinSamples.length < 3 && isInStock) noBinSamples.push(s)
       if (s.location != null && String(s.location).trim() !== '') withLoc++
     }
+    const totalPages = j.meta?.total_pages
+    if (totalPages && page >= totalPages) break
   }
-  console.log(`Scanned ${scanned} stocks · with bin=${withBin} · with location=${withLoc}`)
-  console.log(`Bin examples: ${JSON.stringify(examples, null, 2)}`)
+  console.log(`Scanned ${scanned} stocks · with bin=${withBin} · with location=${withLoc} · in-stock(qty>0)=${inStock} · in-stock with bin=${inStockWithBin}`)
+  console.log(`Bin examples (up to 30): ${JSON.stringify(examples, null, 2)}`)
 
   // For a few in-stock items whose LIST bin is null, fetch the DETAIL to see if
   // bin lives there instead.
