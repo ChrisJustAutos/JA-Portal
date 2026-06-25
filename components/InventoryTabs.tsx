@@ -17,10 +17,13 @@ const TABS: Array<{ id: string; label: string; href: string; perm: Permission }>
   // Portal-native stocktake (counts workshop_inventory / MYOB). At MD cutover,
   // delete the MD tab above and rename this one to just "Stocktake".
   { id: 'stocktake2', label: 'Stocktake (Portal)', href: '/workshop/stocktake',  perm: 'view:stocktakes' },
+  // JAWS stocktake: upload a count sheet, compare against MYOB (JAWS) on-hand.
+  // Report-only (no write-back). Mirrors the MD flow but reads MYOB directly.
+  { id: 'stocktake_jaws', label: 'Stocktake (JAWS)', href: '/jaws-stocktake',    perm: 'view:stocktakes' },
   { id: 'transfer',  label: 'Stock Transfer', href: '/admin/b2b/stock-transfer', perm: 'edit:b2b_distributors' },
 ]
 
-export default function InventoryTabs({ active, role }: { active: 'inventory' | 'prepick' | 'suppliers' | 'po' | 'stocktake' | 'stocktake2' | 'transfer'; role: UserRole }) {
+export default function InventoryTabs({ active, role }: { active: 'inventory' | 'prepick' | 'suppliers' | 'po' | 'stocktake' | 'stocktake2' | 'stocktake_jaws' | 'transfer'; role: UserRole }) {
   const router = useRouter()
   const tabs = TABS.filter(t => roleHasPermission(role, t.perm))
   if (tabs.length <= 1) return null   // nothing to switch between → no strip
