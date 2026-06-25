@@ -196,6 +196,24 @@ export default function StocktakeDetailPage({ user }: { user: SessionUser }) {
     finally { setActionInFlight(false) }
   }
 
+  // Retry ONLY the rows that failed last push, onto the same MD sheet (no new
+  // stocktake, no duplicate adds). Used to clean up a partial push — usually a
+  // mid-run MD session eviction that 401'd the remaining rows.
+  async function retryPushErrors() {
+    if (!id || actionInFlight) return
+    const n = upload?.push_errors?.length || 0
+    if (!n) return
+    if (!(await confirmDialog({ title: `Retry ${n} failed item(s)?`, message: 'Re-pushes only the rows that errored, onto the same Mechanics Desk stocktake sheet. Already-pushed items are not touched.' }))) return
+    setActionInFlight(true); setError('')
+    try {
+      const r = await fetch(`/api/stocktake/${id}/push?errors_only=1`, { method: 'POST' })
+      const d = await r.json()
+      if (!r.ok) throw new Error(d.error || 'Retry failed')
+      await load()
+    } catch (e: any) { setError(e.message) }
+    finally { setActionInFlight(false) }
+  }
+
   // Sync from the LIVE MD stocktake entry (after pushing, after editing counts
   // in MD, or after staff count directly in MD). The worker pulls each item's
   // counted qty + system qty back into our match results AND refreshes coverage
@@ -639,12 +657,24 @@ export default function StocktakeDetailPage({ user }: { user: SessionUser }) {
               {/* ── Push errors ──────────────────────────────────── */}
               {upload.push_errors && upload.push_errors.length > 0 && (
                 <div style={{marginTop:20, background:T.bg2, border:`1px solid ${T.red}40`, borderRadius:8, padding:'12px 14px'}}>
-                  <div style={{fontSize:11, color:T.red, fontWeight:600, marginBottom:6}}>{upload.push_errors.length} push error(s)</div>
+                  <div style={{display:'flex', alignItems:'center', justifyContent:'space-between', gap:12, marginBottom:6, flexWrap:'wrap'}}>
+                    <div style={{fontSize:11, color:T.red, fontWeight:600}}>{upload.push_errors.length} push error(s)</div>
+                    {canEdit && upload.status !== 'pushing' && (
+                      <button onClick={retryPushErrors} disabled={actionInFlight}
+                        title="Re-push only the failed rows onto the same MD sheet (no duplicates)"
+                        style={{padding:'4px 12px', borderRadius:4, fontSize:11, fontFamily:'inherit', fontWeight:600, background:'transparent', color: actionInFlight ? T.text3 : T.amber, border:`1px solid ${actionInFlight ? T.border2 : T.amber + '55'}`, cursor: actionInFlight ? 'default' : 'pointer'}}>
+                        {actionInFlight ? 'Starting…' : `↻ Retry ${upload.push_errors.length} failed`}
+                      </button>
+                    )}
+                  </div>
                   {upload.push_errors.slice(0, 10).map((e: any, i: number) => (
                     <div key={i} style={{fontSize:11, color:T.text3, marginTop:3, fontFamily:'monospace'}}>
                       {e.sheet_name ? `[${e.sheet_name}] ` : ''}Row {e.row_number} · SKU {e.sku} · {e.error}
                     </div>
                   ))}
+                  {upload.push_errors.length > 10 && (
+                    <div style={{fontSize:11, color:T.text3, marginTop:3}}>… and {upload.push_errors.length - 10} more</div>
+                  )}
                 </div>
               )}
             </>

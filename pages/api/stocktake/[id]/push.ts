@@ -23,22 +23,33 @@ export default withAuth('edit:stocktakes', async (req: NextApiRequest, res: Next
   const id = req.query.id as string
   if (!id) return res.status(400).json({ error: 'Missing upload id' })
 
+  // Errors-only retry: re-push just the rows that failed last time, onto the
+  // same MD sheet. Triggered from the push-errors panel after a partial push.
+  const errorsOnly = req.query.errors_only === '1' || req.body?.errors_only === true
+
   const supabase = sb()
 
   const { data: upload, error: uploadErr } = await supabase
     .from('stocktake_uploads')
-    .select('id, status, matched_count, match_results')
+    .select('id, status, matched_count, match_results, push_errors')
     .eq('id', id)
     .maybeSingle()
   if (uploadErr || !upload) return res.status(404).json({ error: 'Upload not found' })
 
-  if (upload.status !== 'matched') {
-    return res.status(400).json({
-      error: `Cannot push: upload is in status "${upload.status}". Run match first.`,
-    })
-  }
-  if (!upload.matched_count || upload.matched_count === 0) {
-    return res.status(400).json({ error: 'No matched items to push.' })
+  if (errorsOnly) {
+    const errCount = Array.isArray(upload.push_errors) ? upload.push_errors.length : 0
+    if (errCount === 0) {
+      return res.status(400).json({ error: 'No push errors to retry on this upload.' })
+    }
+  } else {
+    if (upload.status !== 'matched') {
+      return res.status(400).json({
+        error: `Cannot push: upload is in status "${upload.status}". Run match first.`,
+      })
+    }
+    if (!upload.matched_count || upload.matched_count === 0) {
+      return res.status(400).json({ error: 'No matched items to push.' })
+    }
   }
 
   const ghToken = process.env.GH_DISPATCH_TOKEN
@@ -58,7 +69,7 @@ export default withAuth('edit:stocktakes', async (req: NextApiRequest, res: Next
     },
     body: JSON.stringify({
       event_type: 'stocktake-push',
-      client_payload: { upload_id: id, mode: 'push' },
+      client_payload: { upload_id: id, mode: 'push', errors_only: errorsOnly ? '1' : '0' },
     }),
   })
 
@@ -69,13 +80,15 @@ export default withAuth('edit:stocktakes', async (req: NextApiRequest, res: Next
     })
   }
 
+  // A full push resets the counters; an errors-only retry keeps the prior
+  // pushed_count and push_errors (the worker adds to / replaces them) so the
+  // tally stays correct if the retry itself fails to dispatch-complete.
   await supabase
     .from('stocktake_uploads')
     .update({
       status: 'pushing',
       push_started_at: new Date().toISOString(),
-      pushed_count: 0,
-      push_errors: null,
+      ...(errorsOnly ? {} : { pushed_count: 0, push_errors: null }),
     })
     .eq('id', id)
 
@@ -83,6 +96,6 @@ export default withAuth('edit:stocktakes', async (req: NextApiRequest, res: Next
     ok: true,
     upload_id: id,
     status: 'pushing',
-    message: 'Push job dispatched.',
+    message: errorsOnly ? 'Errors-only retry dispatched.' : 'Push job dispatched.',
   })
 })

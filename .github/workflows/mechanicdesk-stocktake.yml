@@ -35,6 +35,10 @@ on:
           - push
           - recheck
           - refresh
+      errors_only:
+        description: "Push mode: retry only previously-failed rows ('1')"
+        required: false
+        default: ''
 
 jobs:
   run:
@@ -61,6 +65,9 @@ jobs:
         env:
           UPLOAD_ID: ${{ github.event.client_payload.upload_id || github.event.inputs.upload_id }}
           MODE:      ${{ github.event.client_payload.mode || github.event.inputs.mode }}
+          # Push mode only: '1' = retry just the previously-failed rows onto the
+          # same MD sheet (no new stocktake, no duplicate adds). Empty = full push.
+          ERRORS_ONLY: ${{ github.event.client_payload.errors_only || github.event.inputs.errors_only }}
           MECHANICDESK_WORKSHOP_ID: ${{ secrets.MECHANICDESK_WORKSHOP_ID }}
           MECHANICDESK_USERNAME:    ${{ secrets.MECHANICDESK_USERNAME }}
           MECHANICDESK_PASSWORD:    ${{ secrets.MECHANICDESK_PASSWORD }}

@@ -22,10 +22,16 @@
 //      with both the counted quantity AND the system on-hand snapshot
 //      (md_current_qty) so MD's QTY column shows the right baseline.
 //      — runs a parallel pool (default 3 workers, configurable via
-//      STOCKTAKE_PUSH_CONCURRENCY env var). Each row gets ONE retry on
-//      transient failure (429/5xx/network) before being marked as error.
+//      STOCKTAKE_PUSH_CONCURRENCY env var). A row retries on transient
+//      failure (429/5xx/network) AND recovers from a mid-run MD session
+//      eviction (401 "Please login") by re-logging in — otherwise one
+//      stray login elsewhere would 401 every remaining row.
 //   4. Update upload with pushed_count / status='completed'
 //   5. NEVER finishes/submits the stocktake — that's manual
+//
+//   ERRORS_ONLY=1 (push mode): re-push only the rows that failed last time,
+//   onto the SAME stored sheet — no new stocktake, no duplicate adds. Used
+//   to clean up a partial push.
 
 import {
   loginToMechanicDesk,
@@ -147,6 +153,61 @@ function isThrottleError(msg: string): boolean {
 function isTransientError(msg: string): boolean {
   if (isThrottleError(msg)) return true
   return /ECONNRESET|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|fetch failed|socket hang up|network/i.test(msg)
+}
+
+/**
+ * Detect a MechanicDesk session-eviction error: MD allows only ONE active
+ * session per employee account, so if another worker (prepick/recheck) or a
+ * human logs in with the same MD account mid-run, our cookies are invalidated
+ * and every subsequent write 401s with "Please login" (or the explicit
+ * "logged in from a different computer" on the first one). Recoverable by
+ * re-logging in — see reloginShared(). mdFetch's format is "MD <m> <p> → 401: …".
+ */
+function isAuthError(msg: string): boolean {
+  return /→\s*401\b/.test(msg) && /login|different computer/i.test(msg)
+}
+
+// ── Shared re-login (recover from mid-run session eviction) ─────────────
+// All workers in a pool share ONE MdClient. When the session is evicted we
+// re-login once and mutate that shared client in place, so every worker picks
+// up the fresh cookies on its next call. Concurrent callers coalesce onto a
+// single in-flight login (no thundering herd), and we cap total re-logins so a
+// genuine credential problem or a session "war" with another process can't
+// loop forever.
+interface MdCreds { wsId: string; username: string; password: string }
+
+let reloginPromise: Promise<boolean> | null = null
+let reloginCount = 0
+const MAX_RELOGINS = 4
+
+async function reloginShared(browser: any, client: MdClient, creds: MdCreds): Promise<boolean> {
+  if (!reloginPromise) {
+    if (reloginCount >= MAX_RELOGINS) {
+      log(`  Re-login cap (${MAX_RELOGINS}) reached — giving up on session recovery`)
+      return false
+    }
+    reloginCount++
+    const attempt = reloginCount
+    reloginPromise = (async () => {
+      // Back off (growing with each attempt) before re-logging in so we don't
+      // immediately collide again with whatever just evicted us.
+      await new Promise(r => setTimeout(r, 1500 * attempt))
+      log(`  Session evicted — re-logging in to MD (attempt ${attempt}/${MAX_RELOGINS})…`)
+      const { client: fresh } = await loginToMechanicDesk(browser, creds.wsId, creds.username, creds.password)
+      client.cookieHeader = fresh.cookieHeader
+      client.csrfToken = fresh.csrfToken
+      log('  Re-login OK — resuming')
+      return true
+    })()
+    // Release the slot once settled so a later genuine eviction can re-login again.
+    reloginPromise.catch(() => false).finally(() => { reloginPromise = null })
+  }
+  try {
+    return await reloginPromise
+  } catch (e: any) {
+    log(`  Re-login failed: ${e?.message || e}`)
+    return false
+  }
 }
 
 // ── Match mode ────────────────────────────────────────────────────────
@@ -622,18 +683,26 @@ interface PushAttemptResult {
 }
 
 /**
- * Push a single matched row to MD. On a transient failure (429/5xx/network),
- * waits 1s and retries ONCE. Returns success/failure plus whether a throttle
- * signal was seen (so the pool can halve concurrency).
+ * Push a single matched row to MD. Recovers from two failure classes before
+ * marking the row an error:
+ *   • Session eviction (401 "Please login" / "different computer") — triggers a
+ *     shared re-login, then retries with the fresh session. This is the common
+ *     cause of bulk push errors: another MD login kills our session mid-run and
+ *     without recovery EVERY remaining row 401s on the dead cookie.
+ *   • Transient failure (429/5xx/network) — waits 1s and retries.
+ * Returns success/failure plus whether a throttle signal was seen (so the pool
+ * can halve concurrency).
  */
 async function pushSingleRow(
   client: MdClient,
   sheetId: number,
   row: MatchResultEntry,
+  relogin: () => Promise<boolean>,
 ): Promise<PushAttemptResult> {
   let throttled = false
+  const MAX_ATTEMPTS = 4
 
-  for (let attempt = 1; attempt <= 2; attempt++) {
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
     try {
       await addItemToSheet(client, sheetId, {
         stockId: row.md_stock_id!,
@@ -647,10 +716,19 @@ async function pushSingleRow(
       const msg: string = e?.message || String(e)
       if (isThrottleError(msg)) throttled = true
 
-      if (attempt === 1 && isTransientError(msg)) {
-        log(`  Retry SKU "${row.sku}" after transient error: ${msg.slice(0, 120)}`)
-        await new Promise(r => setTimeout(r, 1000))
-        continue
+      if (attempt < MAX_ATTEMPTS) {
+        if (isAuthError(msg)) {
+          // Session was evicted — re-establish it (shared across the pool) and
+          // retry the same row immediately on the fresh session.
+          const recovered = await relogin()
+          if (recovered) continue
+          return { ok: false, throttled, error: msg }
+        }
+        if (isTransientError(msg)) {
+          log(`  Retry SKU "${row.sku}" after transient error: ${msg.slice(0, 120)}`)
+          await new Promise(r => setTimeout(r, 1000))
+          continue
+        }
       }
 
       return { ok: false, throttled, error: msg }
@@ -660,16 +738,32 @@ async function pushSingleRow(
   return { ok: false, throttled, error: 'Exhausted retry attempts' }
 }
 
-async function runPush(client: MdClient, matchResults: MatchResultEntry[]): Promise<void> {
-  const matched = matchResults.filter(r => r.status === 'matched' && r.md_stock_id != null)
-  if (matched.length === 0) throw new Error('No matched items to push')
+interface RunPushOpts {
+  relogin: () => Promise<boolean>
+  // Errors-only retry: push only the rows that failed last time, onto the SAME
+  // MD sheet, without re-adding the rows that already landed (which would
+  // duplicate them in MD).
+  errorsOnly?: boolean
+  errorRowNumbers?: Set<number>
+  priorPushed?: number
+  forcedSheet?: { stocktakeId: number; sheetId: number } | null
+}
+
+async function runPush(client: MdClient, matchResults: MatchResultEntry[], opts: RunPushOpts): Promise<void> {
+  let matched = matchResults.filter(r => r.status === 'matched' && r.md_stock_id != null)
+  if (opts.errorsOnly && opts.errorRowNumbers) {
+    matched = matched.filter(r => opts.errorRowNumbers!.has(r.row_number))
+  }
+  if (matched.length === 0) throw new Error(opts.errorsOnly ? 'No failed rows to retry' : 'No matched items to push')
+
+  const baselinePushed = opts.errorsOnly ? (opts.priorPushed || 0) : 0
 
   const concurrencyEnv = parseInt(process.env.STOCKTAKE_PUSH_CONCURRENCY || '', 10)
   const initialConcurrency = Number.isFinite(concurrencyEnv) && concurrencyEnv >= 1
     ? Math.min(concurrencyEnv, 8)
     : 3
 
-  log(`Push starting: ${matched.length} items to add · concurrency=${initialConcurrency}`)
+  log(`Push starting: ${matched.length} items to add${opts.errorsOnly ? ' (errors-only retry)' : ''} · concurrency=${initialConcurrency}`)
 
   // Diagnostic: how many rows have a known system QTY snapshot?
   const withQty = matched.filter(r => typeof r.md_current_qty === 'number').length
@@ -677,8 +771,15 @@ async function runPush(client: MdClient, matchResults: MatchResultEntry[]): Prom
     log(`  Note: ${matched.length - withQty}/${matched.length} matched rows have no md_current_qty — those will go in with QTY=0 (variance will appear large in MD)`)
   }
 
-  const { stocktakeId, sheetId, wasCreated } = await resolveTargetSheet(client)
-  log(`Target: stocktake_id=${stocktakeId}, sheet_id=${sheetId}, created_new=${wasCreated}`)
+  let stocktakeId: number, sheetId: number, wasCreated: boolean
+  if (opts.forcedSheet) {
+    ({ stocktakeId, sheetId } = opts.forcedSheet)
+    wasCreated = false
+    log(`Errors-only retry: reusing stored sheet ${sheetId} on stocktake ${stocktakeId} (no new stocktake created)`)
+  } else {
+    ({ stocktakeId, sheetId, wasCreated } = await resolveTargetSheet(client))
+    log(`Target: stocktake_id=${stocktakeId}, sheet_id=${sheetId}, created_new=${wasCreated}`)
+  }
 
   await patchUpload({
     mechanicdesk_stocktake_id: String(stocktakeId),
@@ -703,7 +804,7 @@ async function runPush(client: MdClient, matchResults: MatchResultEntry[]): Prom
       if (i >= total) return
 
       const row = matched[i]
-      const { ok, throttled, error } = await pushSingleRow(client, sheetId, row)
+      const { ok, throttled, error } = await pushSingleRow(client, sheetId, row, opts.relogin)
       completed++
 
       if (ok) {
@@ -733,7 +834,7 @@ async function runPush(client: MdClient, matchResults: MatchResultEntry[]): Prom
       if (tenth > lastLoggedTenth || (completed % 25 === 0 && completed > 0)) {
         lastLoggedTenth = tenth
         log(`  ${completed}/${total} done (pushed=${pushed}, errors=${errors.length}, conc=${activeConcurrency})`)
-        await patchUpload({ pushed_count: pushed }).catch(() => undefined)
+        await patchUpload({ pushed_count: baselinePushed + pushed }).catch(() => undefined)
       }
     }
   }
@@ -746,11 +847,14 @@ async function runPush(client: MdClient, matchResults: MatchResultEntry[]): Prom
   await Promise.all(workerPromises)
   const elapsedSec = ((Date.now() - startedAt) / 1000).toFixed(1)
 
-  log(`Push complete in ${elapsedSec}s: ${pushed} added, ${errors.length} errors (throttle events: ${throttleEvents})`)
+  const totalPushed = baselinePushed + pushed
+  log(`Push complete in ${elapsedSec}s: ${pushed} added${opts.errorsOnly ? ` (cumulative ${totalPushed})` : ''}, ${errors.length} errors (throttle events: ${throttleEvents})`)
 
   await patchUpload({
-    status: errors.length === matched.length ? 'failed' : 'completed',
-    pushed_count: pushed,
+    // On an errors-only retry the prior run already pushed rows, so the upload
+    // is never "failed" overall — at worst some retried rows still error.
+    status: (!opts.errorsOnly && errors.length === matched.length) ? 'failed' : 'completed',
+    pushed_count: totalPushed,
     push_completed_at: new Date().toISOString(),
     push_errors: errors.length > 0 ? errors : null,
     github_run_id: process.env.GITHUB_RUN_ID || null,
@@ -758,8 +862,9 @@ async function runPush(client: MdClient, matchResults: MatchResultEntry[]): Prom
 
   await notifySlack(
     `Push complete in ${elapsedSec}s: ${pushed}/${matched.length} items added` +
+    (opts.errorsOnly ? ` (errors-only retry · ${totalPushed} pushed in total)` : '') +
     (errors.length > 0 ? ` · ${errors.length} errors` : '') +
-    (wasCreated ? ` · created new stocktake ${stocktakeId}` : ` · used existing stocktake ${stocktakeId}`) +
+    (opts.forcedSheet ? ` · reused stocktake ${stocktakeId}` : wasCreated ? ` · created new stocktake ${stocktakeId}` : ` · used existing stocktake ${stocktakeId}`) +
     (throttleEvents > 0 ? ` · ${throttleEvents} throttle events, final concurrency ${activeConcurrency}` : ''),
     errors.length > 0,
   )
@@ -787,8 +892,13 @@ async function main(): Promise<void> {
   log('Launching headless Chromium for login')
   const browser = await chromium.launch({ headless: true })
   try {
+    const creds: MdCreds = { wsId, username, password }
     const { client } = await loginToMechanicDesk(browser, wsId, username, password)
     log(`Login OK · ${client.cookieHeader.split(';').length} cookies, csrf=${client.csrfToken ? 'yes' : 'no'}`)
+
+    // Bound recovery handler: re-establishes this shared client's session if MD
+    // evicts it mid-run (single-session-per-employee collision).
+    const relogin = () => reloginShared(browser, client, creds)
 
     if (MODE === 'match') {
       const rows = (upload.parsed_rows || []) as ParsedRow[]
@@ -808,7 +918,25 @@ async function main(): Promise<void> {
     } else if (MODE === 'push') {
       const results = (upload.match_results || []) as MatchResultEntry[]
       if (results.length === 0) throw new Error('No match_results in upload')
-      await runPush(client, results)
+      const errorsOnly = ['1', 'true'].includes((process.env.ERRORS_ONLY || '').toLowerCase())
+      if (errorsOnly) {
+        const priorErrors = Array.isArray(upload.push_errors) ? upload.push_errors : []
+        if (priorErrors.length === 0) throw new Error('Errors-only retry requested but the upload has no recorded push errors')
+        const errorRowNumbers = new Set<number>(priorErrors.map((e: any) => Number(e.row_number)).filter((n: number) => isFinite(n)))
+        const forcedSheet = upload.mechanicdesk_stocktake_id && upload.mechanicdesk_sheet_id
+          ? { stocktakeId: Number(upload.mechanicdesk_stocktake_id), sheetId: Number(upload.mechanicdesk_sheet_id) }
+          : null
+        log(`Errors-only retry: ${errorRowNumbers.size} failed row(s)${forcedSheet ? `, reusing sheet ${forcedSheet.sheetId}` : ', resolving a target sheet'}`)
+        await runPush(client, results, {
+          relogin,
+          errorsOnly: true,
+          errorRowNumbers,
+          priorPushed: Number(upload.pushed_count) || 0,
+          forcedSheet,
+        })
+      } else {
+        await runPush(client, results, { relogin })
+      }
     } else if (MODE === 'recheck') {
       if (!upload.mechanicdesk_stocktake_id) throw new Error('No MechanicDesk stocktake id on this upload — push to MD first.')
       const results = (upload.match_results || []) as MatchResultEntry[]
