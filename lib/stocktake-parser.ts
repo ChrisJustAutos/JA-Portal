@@ -21,6 +21,8 @@ export interface ParsedRow {
   sku: string
   qty: number
   raw_name?: string    // optional product name if the file has one
+  bin?: string         // optional bin from the count sheet (MD bins are sparse)
+  location?: string    // optional location from the count sheet
   sheet_name?: string  // name of the sheet this row came from (for multi-tab workbooks)
 }
 
@@ -35,6 +37,8 @@ export interface ParseResult {
     sku_col: string
     qty_col: string
     name_col?: string
+    bin_col?: string
+    location_col?: string
     header_row: number
     sheet_name?: string  // which sheet these columns were detected on
   } | null
@@ -84,6 +88,22 @@ const NAME_HEADER_PATTERNS = [
   /^item\s*name$/i,
 ]
 
+const BIN_HEADER_PATTERNS = [
+  /^bin$/i,
+  /^bin\s*(location|loc|no|number|#)?$/i,
+  /^shelf$/i,
+  /^shelf\s*(location|no|#)?$/i,
+  /^rack$/i,
+]
+
+const LOCATION_HEADER_PATTERNS = [
+  /^location$/i,
+  /^loc$/i,
+  /^store\s*location$/i,
+  /^aisle$/i,
+  /^area$/i,
+]
+
 function colLetter(idx: number): string {
   let n = idx
   let s = ''
@@ -124,12 +144,16 @@ export function parseStocktakeRows(rawRows: any[][]): ParseResult {
   let skuColIdx = -1
   let qtyColIdx = -1
   let nameColIdx = -1
+  let binColIdx = -1
+  let locColIdx = -1
 
   for (let r = 0; r < Math.min(rawRows.length, 5); r++) {
     const row = rawRows[r] || []
     let foundSku = -1
     let foundQty = -1
     let foundName = -1
+    let foundBin = -1
+    let foundLoc = -1
     for (let c = 0; c < row.length; c++) {
       const cell = row[c]
       if (cell == null) continue
@@ -137,12 +161,16 @@ export function parseStocktakeRows(rawRows: any[][]): ParseResult {
       if (foundSku === -1 && matchHeader(str, SKU_HEADER_PATTERNS)) foundSku = c
       if (foundQty === -1 && matchHeader(str, QTY_HEADER_PATTERNS)) foundQty = c
       if (foundName === -1 && matchHeader(str, NAME_HEADER_PATTERNS)) foundName = c
+      if (foundBin === -1 && matchHeader(str, BIN_HEADER_PATTERNS)) foundBin = c
+      if (foundLoc === -1 && matchHeader(str, LOCATION_HEADER_PATTERNS)) foundLoc = c
     }
     if (foundSku !== -1 && foundQty !== -1) {
       headerRowIdx = r
       skuColIdx = foundSku
       qtyColIdx = foundQty
       nameColIdx = foundName
+      binColIdx = foundBin
+      locColIdx = foundLoc
       break
     }
   }
@@ -160,6 +188,8 @@ export function parseStocktakeRows(rawRows: any[][]): ParseResult {
     sku_col: colLetter(skuColIdx),
     qty_col: colLetter(qtyColIdx),
     name_col: nameColIdx >= 0 ? colLetter(nameColIdx) : undefined,
+    bin_col: binColIdx >= 0 ? colLetter(binColIdx) : undefined,
+    location_col: locColIdx >= 0 ? colLetter(locColIdx) : undefined,
     header_row: headerRowIdx + 1,
   }
 
@@ -176,6 +206,8 @@ export function parseStocktakeRows(rawRows: any[][]): ParseResult {
     const skuRaw = row[skuColIdx]
     const qtyRaw = row[qtyColIdx]
     const nameRaw = nameColIdx >= 0 ? row[nameColIdx] : undefined
+    const binRaw = binColIdx >= 0 ? row[binColIdx] : undefined
+    const locRaw = locColIdx >= 0 ? row[locColIdx] : undefined
 
     const sku = skuRaw == null ? '' : String(skuRaw).trim()
     if (!sku) {
@@ -218,6 +250,8 @@ export function parseStocktakeRows(rawRows: any[][]): ParseResult {
       sku,
       qty,
       raw_name: nameRaw == null ? undefined : String(nameRaw).trim() || undefined,
+      bin: binRaw == null ? undefined : String(binRaw).trim() || undefined,
+      location: locRaw == null ? undefined : String(locRaw).trim() || undefined,
     })
   }
 
@@ -342,6 +376,8 @@ export function parseStocktakeWorkbook(
     if (hit) {
       hit.row.qty = Math.round((hit.row.qty + r.qty) * 1000) / 1000
       if (!hit.row.raw_name && r.raw_name) hit.row.raw_name = r.raw_name
+      if (!hit.row.bin && r.bin) hit.row.bin = r.bin
+      if (!hit.row.location && r.location) hit.row.location = r.location
       hit.locations++
     } else {
       combined.set(key, { row: { ...r }, locations: 1 })

@@ -45,6 +45,8 @@ interface ParsedRow {
   sku: string
   qty: number
   raw_name?: string
+  bin?: string         // from the count sheet (MD bins are sparse)
+  location?: string    // from the count sheet
   sheet_name?: string  // for multi-tab workbooks
 }
 
@@ -60,6 +62,8 @@ interface MatchResultEntry {
   md_current_qty?: number
   md_bin?: string
   md_location?: string
+  sheet_bin?: string       // bin from the uploaded count sheet (preferred over md_bin)
+  sheet_location?: string
   candidates?: Array<{ id: number; stock_number: string; name: string }>
   error?: string
   count_source?: 'md_stocktake'  // counted qty was pulled from the live MD stocktake entry
@@ -156,11 +160,13 @@ async function matchSingleRow(
   client: MdClient,
   row: ParsedRow,
 ): Promise<{ entry: MatchResultEntry; throttled: boolean }> {
-  const baseEntry: Pick<MatchResultEntry, 'row_number' | 'sku' | 'qty' | 'sheet_name'> = {
+  const baseEntry: Pick<MatchResultEntry, 'row_number' | 'sku' | 'qty' | 'sheet_name' | 'sheet_bin' | 'sheet_location'> = {
     row_number: row.row_number,
     sku: row.sku,
     qty: row.qty,
     sheet_name: row.sheet_name,
+    sheet_bin: row.bin,
+    sheet_location: row.location,
   }
 
   try {

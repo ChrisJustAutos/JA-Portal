@@ -45,6 +45,8 @@ interface MatchEntry {
   md_current_qty?: number
   md_bin?: string
   md_location?: string
+  sheet_bin?: string       // bin from the uploaded count sheet (preferred over md_bin)
+  sheet_location?: string
   candidates?: Array<{ id: number; stock_number: string; name: string }>
   error?: string
   count_source?: 'md_stocktake'  // Count came from the live MD stocktake entry (recheck)
@@ -318,7 +320,7 @@ export default function StocktakeDetailPage({ user }: { user: SessionUser }) {
     else if (filter === 'unmatched') rows = rows.filter(r => r.status !== 'matched')
     else if (filter === 'variance') rows = rows.filter(r => { const v = rowVariance(r); return v !== null && v !== 0 })
     const q = search.trim().toLowerCase()
-    if (q) rows = rows.filter(r => [r.sku, r.md_stock_number, r.md_stock_name, r.md_bin, r.md_location].some(v => String(v || '').toLowerCase().includes(q)))
+    if (q) rows = rows.filter(r => [r.sku, r.md_stock_number, r.md_stock_name, r.sheet_bin, r.md_bin, r.sheet_location, r.md_location].some(v => String(v || '').toLowerCase().includes(q)))
     return rows
   }, [upload, filter, sheetFilter, search])
 
@@ -842,8 +844,8 @@ const MATCH_COLS: { key: string; label: string; get: (r: MatchEntry) => any }[] 
   { key: 'sku', label: 'SKU', get: r => r.sku },
   { key: 'md_match', label: 'MD Match', get: r => r.md_stock_name || '' },
   { key: 'md_stock_number', label: 'MD Stock #', get: r => r.md_stock_number || '' },
-  { key: 'bin', label: 'Bin', get: r => r.md_bin || '' },
-  { key: 'location', label: 'Location', get: r => r.md_location || '' },
+  { key: 'bin', label: 'Bin', get: r => r.sheet_bin || r.md_bin || '' },
+  { key: 'location', label: 'Location', get: r => r.sheet_location || r.md_location || '' },
   { key: 'counted', label: 'Counted', get: r => r.qty },
   { key: 'system', label: 'System Qty', get: r => (r.md_current_qty != null ? r.md_current_qty : '') },
   { key: 'variance', label: 'Variance', get: r => { const v = rowVariance(r); return v != null ? v : '' } },
