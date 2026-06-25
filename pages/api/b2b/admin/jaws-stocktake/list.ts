@@ -1,12 +1,12 @@
-// pages/api/jaws-stocktake/list.ts
+// pages/api/b2b/admin/jaws-stocktake/list.ts
 //
 // List recent JAWS stocktake uploads. Includes matched_at so the UI can detect
-// a row "stuck" in matching (the in-process match function timed out / crashed
-// before flipping status to matched/failed) and offer a force-delete.
+// a row "stuck" in matching (the in-process match timed out / crashed before
+// flipping status) and offer a force-delete. Gated on view:b2b.
 
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { createClient } from '@supabase/supabase-js'
-import { withAuth } from '../../../lib/authServer'
+import { withAuth } from '../../../../../lib/authServer'
 
 function sb() {
   return createClient(
@@ -16,7 +16,7 @@ function sb() {
   )
 }
 
-export default withAuth('view:stocktakes', async (req: NextApiRequest, res: NextApiResponse) => {
+export default withAuth('view:b2b', async (req: NextApiRequest, res: NextApiResponse) => {
   if (req.method !== 'GET') {
     res.setHeader('Allow', 'GET')
     return res.status(405).json({ error: 'Method not allowed' })

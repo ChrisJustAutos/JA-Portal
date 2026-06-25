@@ -1,33 +1,30 @@
-// pages/jaws-stocktake/index.tsx
+// pages/admin/b2b/jaws-stocktake/index.tsx
 //
-// JAWS stocktake landing page:
+// JAWS stocktake landing page (B2B admin section):
 //   • Drag-and-drop XLSX upload card
 //   • List of past uploads with status — click into one to match & review
-//   • Per-row Delete (admin/manager) — DB only, never touches MYOB
+//   • Per-row Delete (edit:b2b_catalogue) — DB only, never touches MYOB
 //
 // Workflow:
-//   1. Drop XLSX → POST /api/jaws-stocktake/upload → redirect to /jaws-stocktake/{id}
+//   1. Drop XLSX → POST /api/b2b/admin/jaws-stocktake/upload → redirect to detail
 //   2. On the detail page, Run match → review variance + coverage → export CSV.
 //      Any adjustment is made by hand in MYOB (this feature is report-only).
 
 import { useState, useEffect, useRef, useCallback } from 'react'
 import Head from 'next/head'
 import { useRouter } from 'next/router'
-import PortalTopBar from '../../lib/PortalTopBar'
-import InventoryTabs from '../../components/InventoryTabs'
-import WorkshopTabs from '../../components/WorkshopTabs'
-import { requirePageAuth } from '../../lib/authServer'
-import { UserRole, roleHasPermission } from '../../lib/permissions'
-import { T } from '../../lib/ui/theme'
-import { SkeletonRows } from '../../components/ui'
-import { useConfirm } from '../../components/ui/Feedback'
+import PortalTopBar from '../../../../lib/PortalTopBar'
+import B2BAdminTabs from '../../../../components/b2b/B2BAdminTabs'
+import { requirePageAuth } from '../../../../lib/authServer'
+import { UserRole, roleHasPermission } from '../../../../lib/permissions'
+import { T } from '../../../../lib/ui/theme'
+import { SkeletonRows } from '../../../../components/ui'
+import { useConfirm } from '../../../../components/ui/Feedback'
 
-// If a row stays in 'matching' longer than this, the in-process match likely
-// crashed/timed out before flipping status — allow deletion with a warning.
 const STUCK_THRESHOLD_MIN = 5
 
 export async function getServerSideProps(ctx: any) {
-  return requirePageAuth(ctx, 'view:stocktakes')
+  return requirePageAuth(ctx, 'view:b2b')
 }
 
 interface UploadRow {
@@ -59,8 +56,6 @@ function arrayBufferToBase64(buf: ArrayBuffer): string {
   return btoa(binary)
 }
 
-// Minutes since 'matching' started (anchored on uploaded_at — match dispatches
-// within seconds of upload), or null when not matching.
 function getActiveMinutes(u: UploadRow): number | null {
   if (u.status !== 'matching') return null
   const t = new Date(u.uploaded_at).getTime()
@@ -77,12 +72,12 @@ export default function JawsStocktakeIndexPage({ user }: { user: SessionUser }) 
   const [deletingId, setDeletingId] = useState<string | null>(null)
   const [, setNow] = useState(0)
 
-  const canEdit = roleHasPermission(user.role, 'edit:stocktakes')
+  const canEdit = roleHasPermission(user.role, 'edit:b2b_catalogue')
 
   async function load() {
     setLoading(true); setError('')
     try {
-      const r = await fetch('/api/jaws-stocktake/list')
+      const r = await fetch('/api/b2b/admin/jaws-stocktake/list')
       const d = await r.json()
       if (!r.ok) throw new Error(d.error || 'Load failed')
       setUploads(d.uploads || [])
@@ -113,7 +108,7 @@ export default function JawsStocktakeIndexPage({ user }: { user: SessionUser }) 
 
     setDeletingId(u.id); setError('')
     try {
-      const r = await fetch(`/api/jaws-stocktake/${u.id}?force=${isStuck ? '1' : '0'}`, { method: 'DELETE' })
+      const r = await fetch(`/api/b2b/admin/jaws-stocktake/${u.id}?force=${isStuck ? '1' : '0'}`, { method: 'DELETE' })
       const d = await r.json()
       if (!r.ok) throw new Error(d.error || 'Delete failed')
       setUploads(prev => prev.filter(x => x.id !== u.id))
@@ -139,10 +134,9 @@ export default function JawsStocktakeIndexPage({ user }: { user: SessionUser }) 
     <>
       <Head><title>JAWS Stocktake — Just Autos</title></Head>
       <div style={{display:'flex', flexDirection:'column', minHeight:'100vh', background:T.bg, color:T.text, fontFamily:'system-ui, -apple-system, sans-serif'}}>
-        <PortalTopBar activeId="diary" currentUserRole={user.role} currentUserVisibleTabs={user.visibleTabs} currentUserName={(user as any).displayName} currentUserEmail={(user as any).email}/>
-        <WorkshopTabs active="inventory" role={user.role} />
-        <InventoryTabs active="stocktake_jaws" role={user.role} />
-        <main style={{flex:1, padding:'20px 32px 40px', overflow:'auto'}}>
+        <PortalTopBar activeId="b2b" currentUserRole={user.role} currentUserVisibleTabs={user.visibleTabs} currentUserName={(user as any).displayName} currentUserEmail={(user as any).email}/>
+        <main className="b2b-admin-main" style={{flex:1, padding:'28px 32px', width:'100%', boxSizing:'border-box', overflow:'auto'}}>
+          <B2BAdminTabs active="stocktake" />
 
           <div style={{display:'flex', alignItems:'baseline', gap:12, marginBottom:6}}>
             <h1 style={{margin:0, fontSize:22, fontWeight:600}}>JAWS Stocktake</h1>
@@ -158,7 +152,7 @@ export default function JawsStocktakeIndexPage({ user }: { user: SessionUser }) 
 
           {error && <div style={{background:'rgba(240,78,78,0.1)', border:`1px solid ${T.red}40`, borderRadius:8, padding:'10px 14px', color:T.red, fontSize:13, marginBottom:12}}>{error}</div>}
 
-          {canEdit && <UploadCard onUploaded={(id) => router.push(`/jaws-stocktake/${id}`)} />}
+          {canEdit && <UploadCard onUploaded={(id) => router.push(`/admin/b2b/jaws-stocktake/${id}`)} />}
 
           <div style={{marginTop:30}}>
             <h2 style={{margin:'0 0 12px 0', fontSize:14, fontWeight:600, color:T.text2, textTransform:'uppercase', letterSpacing:'0.05em'}}>
@@ -199,24 +193,24 @@ export default function JawsStocktakeIndexPage({ user }: { user: SessionUser }) 
 
                   return (
                     <div key={u.id} style={{display:'grid', gridTemplateColumns:gridCols, gap:12, padding:'10px 14px', borderBottom:`1px solid ${T.border}`, fontSize:12, alignItems:'center', opacity: isDeleting ? 0.4 : 1, transition:'opacity 0.15s'}}>
-                      <div onClick={() => router.push(`/jaws-stocktake/${u.id}`)} style={{overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', cursor:'pointer'}}>
+                      <div onClick={() => router.push(`/admin/b2b/jaws-stocktake/${u.id}`)} style={{overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', cursor:'pointer'}}>
                         <div style={{color:T.text}}>{u.filename}</div>
                         {u.uploaded_by_name && <div style={{fontSize:10, color:T.text3, marginTop:2}}>by {u.uploaded_by_name}</div>}
                       </div>
-                      <div onClick={() => router.push(`/jaws-stocktake/${u.id}`)} style={{cursor:'pointer'}}>
+                      <div onClick={() => router.push(`/admin/b2b/jaws-stocktake/${u.id}`)} style={{cursor:'pointer'}}>
                         <StatusBadge status={u.status}/>
                         {isStuck && (
                           <div style={{fontSize:9, color:T.amber, marginTop:3, fontWeight:600}}>⚠ stuck {Math.round(activeMin!)}m</div>
                         )}
                       </div>
-                      <div onClick={() => router.push(`/jaws-stocktake/${u.id}`)} style={{textAlign:'right', color:T.text2, fontVariantNumeric:'tabular-nums', cursor:'pointer'}}>{u.total_rows ?? '—'}</div>
-                      <div onClick={() => router.push(`/jaws-stocktake/${u.id}`)} style={{textAlign:'right', color:u.matched_count != null ? T.text2 : T.text3, fontVariantNumeric:'tabular-nums', cursor:'pointer'}}>
+                      <div onClick={() => router.push(`/admin/b2b/jaws-stocktake/${u.id}`)} style={{textAlign:'right', color:T.text2, fontVariantNumeric:'tabular-nums', cursor:'pointer'}}>{u.total_rows ?? '—'}</div>
+                      <div onClick={() => router.push(`/admin/b2b/jaws-stocktake/${u.id}`)} style={{textAlign:'right', color:u.matched_count != null ? T.text2 : T.text3, fontVariantNumeric:'tabular-nums', cursor:'pointer'}}>
                         {u.matched_count != null ? `${u.matched_count}/${(u.matched_count || 0) + (u.unmatched_count || 0)}` : '—'}
                       </div>
-                      <div onClick={() => router.push(`/jaws-stocktake/${u.id}`)} style={{textAlign:'right', color:u.in_stock_uncounted != null ? (u.in_stock_uncounted > 0 ? T.amber : T.green) : T.text3, fontVariantNumeric:'tabular-nums', cursor:'pointer'}}>
+                      <div onClick={() => router.push(`/admin/b2b/jaws-stocktake/${u.id}`)} style={{textAlign:'right', color:u.in_stock_uncounted != null ? (u.in_stock_uncounted > 0 ? T.amber : T.green) : T.text3, fontVariantNumeric:'tabular-nums', cursor:'pointer'}}>
                         {u.in_stock_uncounted != null ? u.in_stock_uncounted : '—'}
                       </div>
-                      <div onClick={() => router.push(`/jaws-stocktake/${u.id}`)} style={{color:T.text3, fontSize:11, cursor:'pointer'}}>{fmtRelative(u.uploaded_at)}</div>
+                      <div onClick={() => router.push(`/admin/b2b/jaws-stocktake/${u.id}`)} style={{color:T.text3, fontSize:11, cursor:'pointer'}}>{fmtRelative(u.uploaded_at)}</div>
                       {canEdit && (
                         <div style={{textAlign:'right'}}>
                           <button
@@ -274,7 +268,7 @@ function UploadCard({ onUploaded }: { onUploaded: (id: string) => void }) {
     try {
       const arrBuf = await file.arrayBuffer()
       const base64 = arrayBufferToBase64(arrBuf)
-      const r = await fetch('/api/jaws-stocktake/upload', {
+      const r = await fetch('/api/b2b/admin/jaws-stocktake/upload', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ filename: file.name, file_base64: base64 }),

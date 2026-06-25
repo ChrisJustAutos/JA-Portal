@@ -1,15 +1,14 @@
-// pages/api/jaws-stocktake/[id].ts
+// pages/api/b2b/admin/jaws-stocktake/[id].ts
 //
-// GET:    read upload state (users with view:stocktakes)
-// DELETE: delete the upload row (edit:stocktakes). DB only — nothing in MYOB is
-//         touched (this feature never writes to MYOB).
-//         Pass ?force=1 to delete a row stuck in 'matching' for > 5 minutes
-//         (the in-process match crashed before flipping status).
+// GET:    read upload state (view:b2b)
+// DELETE: delete the upload row (edit:b2b_catalogue). DB only — nothing in MYOB
+//         is touched (this feature never writes to MYOB).
+//         Pass ?force=1 to delete a row stuck in 'matching' for > 5 minutes.
 
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { createClient } from '@supabase/supabase-js'
-import { getCurrentUser } from '../../../lib/authServer'
-import { roleHasPermission } from '../../../lib/permissions'
+import { getCurrentUser } from '../../../../../lib/authServer'
+import { roleHasPermission } from '../../../../../lib/permissions'
 
 const STUCK_THRESHOLD_MIN = 5
 
@@ -34,7 +33,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 async function handleGet(req: NextApiRequest, res: NextApiResponse, id: string) {
   const user = await getCurrentUser(req)
   if (!user) return res.status(401).json({ error: 'Unauthorised' })
-  if (!roleHasPermission(user.role, 'view:stocktakes')) {
+  if (!roleHasPermission(user.role, 'view:b2b')) {
     return res.status(403).json({ error: 'Forbidden' })
   }
 
@@ -51,7 +50,7 @@ async function handleGet(req: NextApiRequest, res: NextApiResponse, id: string) 
 async function handleDelete(req: NextApiRequest, res: NextApiResponse, id: string) {
   const user = await getCurrentUser(req)
   if (!user) return res.status(401).json({ error: 'Unauthorised' })
-  if (!roleHasPermission(user.role, 'edit:stocktakes')) {
+  if (!roleHasPermission(user.role, 'edit:b2b_catalogue')) {
     return res.status(403).json({ error: 'Forbidden — manager or admin only' })
   }
 

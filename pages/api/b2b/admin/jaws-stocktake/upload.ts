@@ -1,16 +1,16 @@
-// pages/api/jaws-stocktake/upload.ts
+// pages/api/b2b/admin/jaws-stocktake/upload.ts
 //
 // Accept an XLSX upload (base64), parse ALL sheets in the workbook, store the
 // rows in a new jaws_stocktake_uploads row, return the upload id + preview.
 //
-// Identical parsing to the MD stocktake (shared lib/stocktake-parser) — only
-// the target table differs. Auth: admin/manager only.
+// Shared parsing with the MD stocktake (lib/stocktake-parser). Gated on
+// edit:b2b_catalogue (same as the JAWS Stock Order tool).
 
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { createClient } from '@supabase/supabase-js'
 import * as XLSX from 'xlsx'
-import { withAuth } from '../../../lib/authServer'
-import { parseStocktakeWorkbook } from '../../../lib/stocktake-parser'
+import { withAuth } from '../../../../../lib/authServer'
+import { parseStocktakeWorkbook } from '../../../../../lib/stocktake-parser'
 
 export const config = {
   api: {
@@ -34,7 +34,7 @@ interface UploadBody {
   notes?: string
 }
 
-export default withAuth('edit:stocktakes', async (req: NextApiRequest, res: NextApiResponse, user) => {
+export default withAuth('edit:b2b_catalogue', async (req: NextApiRequest, res: NextApiResponse, user) => {
   if (req.method !== 'POST') {
     res.setHeader('Allow', 'POST')
     return res.status(405).json({ error: 'Method not allowed' })

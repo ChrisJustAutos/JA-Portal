@@ -1,10 +1,10 @@
-// pages/jaws-stocktake/[id].tsx
+// pages/admin/b2b/jaws-stocktake/[id].tsx
 //
-// Detail page for a single JAWS stocktake upload:
+// Detail page for a single JAWS stocktake upload (B2B admin section):
 //   • Top-line counts + status
 //   • parsed/failed → "Run match" (resolves SKUs against MYOB JAWS, in-process)
-//   • matching → live progress (polls every 3s; if the synchronous match request
-//     is still open it returns the finished row directly)
+//   • matching → live progress (polls every 3s; the synchronous match request
+//     returns the finished row directly)
 //   • matched → variance table (counted vs MYOB on-hand) + coverage (in-stock
 //     MYOB items not counted) + CSV export
 //
@@ -14,19 +14,18 @@ import { useState, useEffect, useMemo, useCallback } from 'react'
 import Head from 'next/head'
 import Link from 'next/link'
 import { useRouter } from 'next/router'
-import PortalTopBar from '../../lib/PortalTopBar'
-import InventoryTabs from '../../components/InventoryTabs'
-import WorkshopTabs from '../../components/WorkshopTabs'
-import { requirePageAuth } from '../../lib/authServer'
-import { UserRole, roleHasPermission } from '../../lib/permissions'
-import { T, alpha } from '../../lib/ui/theme'
-import { money } from '../../lib/ui/format'
-import { useConfirm } from '../../components/ui/Feedback'
+import PortalTopBar from '../../../../lib/PortalTopBar'
+import B2BAdminTabs from '../../../../components/b2b/B2BAdminTabs'
+import { requirePageAuth } from '../../../../lib/authServer'
+import { UserRole, roleHasPermission } from '../../../../lib/permissions'
+import { T, alpha } from '../../../../lib/ui/theme'
+import { money } from '../../../../lib/ui/format'
+import { useConfirm } from '../../../../components/ui/Feedback'
 
 const STUCK_THRESHOLD_MIN = 5
 
 export async function getServerSideProps(ctx: any) {
-  return requirePageAuth(ctx, 'view:stocktakes')
+  return requirePageAuth(ctx, 'view:b2b')
 }
 
 interface MatchEntry {
@@ -108,13 +107,13 @@ export default function JawsStocktakeDetailPage({ user }: { user: SessionUser })
   const [exportCols, setExportCols] = useState<string[]>(MATCH_COLS.map(c => c.key))
   const [colsOpen, setColsOpen] = useState(false)
 
-  const canEdit = roleHasPermission(user.role, 'edit:stocktakes')
+  const canEdit = roleHasPermission(user.role, 'edit:b2b_catalogue')
   const isPolling = upload && upload.status === 'matching'
 
   const load = useCallback(async () => {
     if (!id) return
     try {
-      const r = await fetch(`/api/jaws-stocktake/${id}`)
+      const r = await fetch(`/api/b2b/admin/jaws-stocktake/${id}`)
       const d = await r.json()
       if (!r.ok) throw new Error(d.error || 'Load failed')
       setUpload(d)
@@ -135,7 +134,7 @@ export default function JawsStocktakeDetailPage({ user }: { user: SessionUser })
     if (!id || actionInFlight) return
     setActionInFlight(true); setError('')
     try {
-      const r = await fetch(`/api/jaws-stocktake/${id}/match`, { method: 'POST' })
+      const r = await fetch(`/api/b2b/admin/jaws-stocktake/${id}/match`, { method: 'POST' })
       const d = await r.json()
       if (!r.ok) throw new Error(d.error || 'Match failed')
       setUpload(d)   // the match request returns the finished row directly
@@ -160,10 +159,10 @@ export default function JawsStocktakeDetailPage({ user }: { user: SessionUser })
 
     setDeleting(true); setError('')
     try {
-      const r = await fetch(`/api/jaws-stocktake/${id}?force=${isStuck ? '1' : '0'}`, { method: 'DELETE' })
+      const r = await fetch(`/api/b2b/admin/jaws-stocktake/${id}?force=${isStuck ? '1' : '0'}`, { method: 'DELETE' })
       const d = await r.json()
       if (!r.ok) throw new Error(d.error || 'Delete failed')
-      router.push('/jaws-stocktake')
+      router.push('/admin/b2b/jaws-stocktake')
     } catch (e: any) {
       setError(e.message)
       setDeleting(false)
@@ -233,13 +232,12 @@ export default function JawsStocktakeDetailPage({ user }: { user: SessionUser })
     <>
       <Head><title>JAWS Stocktake — {upload?.filename || ''}</title></Head>
       <div style={{display:'flex', flexDirection:'column', minHeight:'100vh', background:T.bg, color:T.text, fontFamily:'system-ui, -apple-system, sans-serif'}}>
-        <PortalTopBar activeId="diary" currentUserRole={user.role} currentUserVisibleTabs={user.visibleTabs} currentUserName={(user as any).displayName} currentUserEmail={(user as any).email}/>
-        <WorkshopTabs active="inventory" role={user.role} />
-        <InventoryTabs active="stocktake_jaws" role={user.role} />
-        <main style={{flex:1, padding:'20px 32px 40px', overflow:'auto'}}>
+        <PortalTopBar activeId="b2b" currentUserRole={user.role} currentUserVisibleTabs={user.visibleTabs} currentUserName={(user as any).displayName} currentUserEmail={(user as any).email}/>
+        <main className="b2b-admin-main" style={{flex:1, padding:'28px 32px', width:'100%', boxSizing:'border-box', overflow:'auto'}}>
+          <B2BAdminTabs active="stocktake" />
 
           <div style={{marginBottom:16}}>
-            <Link href="/jaws-stocktake" style={{fontSize:11, color:T.blue, textDecoration:'none'}}>← Back to all uploads</Link>
+            <Link href="/admin/b2b/jaws-stocktake" style={{fontSize:11, color:T.blue, textDecoration:'none'}}>← Back to all uploads</Link>
           </div>
 
           {!upload ? (

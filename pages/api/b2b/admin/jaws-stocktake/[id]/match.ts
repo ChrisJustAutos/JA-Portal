@@ -1,17 +1,15 @@
-// pages/api/jaws-stocktake/[id]/match.ts
+// pages/api/b2b/admin/jaws-stocktake/[id]/match.ts
 //
 // Resolve every SKU in the uploaded sheet against MYOB (JAWS) inventory and
 // compute coverage — all in-process (no worker). MYOB is paged over the
 // existing AccountRight OAuth connection, so this can take ~10–120s for a large
-// catalogue; the request stays open until it's done, then returns the updated
-// upload row. Read-only against MYOB — nothing is written back.
-//
-// Auth: admin/manager (edit:stocktakes).
+// catalogue; the request stays open until done, then returns the updated row.
+// Read-only against MYOB — nothing is written back. Gated on edit:b2b_catalogue.
 
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { createClient } from '@supabase/supabase-js'
-import { withAuth } from '../../../../lib/authServer'
-import { loadJawsInventory, buildMatchAndCoverage } from '../../../../lib/jaws-stocktake'
+import { withAuth } from '../../../../../../lib/authServer'
+import { loadJawsInventory, buildMatchAndCoverage } from '../../../../../../lib/jaws-stocktake'
 
 export const config = { maxDuration: 300 }
 
@@ -23,7 +21,7 @@ function sb() {
   )
 }
 
-export default withAuth('edit:stocktakes', async (req: NextApiRequest, res: NextApiResponse, user) => {
+export default withAuth('edit:b2b_catalogue', async (req: NextApiRequest, res: NextApiResponse, user) => {
   if (req.method !== 'POST') {
     res.setHeader('Allow', 'POST')
     return res.status(405).json({ error: 'Method not allowed' })
