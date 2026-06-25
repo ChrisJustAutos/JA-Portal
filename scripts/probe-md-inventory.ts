@@ -102,6 +102,48 @@ async function probeListShape(client: MdClient): Promise<void> {
   }
 }
 
+// Does bin/location actually populate in the list — and does the DETAIL endpoint
+// have it when the list doesn't? This is the bin-not-pulling-through diagnosis.
+async function probeBinCoverage(client: MdClient): Promise<void> {
+  console.log('\n=== Bin/location coverage across first pages ===')
+  let scanned = 0, withBin = 0, withLoc = 0
+  const examples: any[] = []
+  const noBinSamples: any[] = []
+  for (let page = 1; page <= 10; page++) {
+    const r = await fetch(`${MD_BASE}/stocks.json?page=${page}`, { headers: { 'Cookie': client.cookieHeader, 'Accept': 'application/json' } })
+    if (!r.ok) break
+    const j: any = await r.json()
+    const stocks: any[] = Array.isArray(j.stocks) ? j.stocks : []
+    if (!stocks.length) break
+    for (const s of stocks) {
+      scanned++
+      if (s.bin != null && String(s.bin).trim() !== '') { withBin++; if (examples.length < 8) examples.push({ stock_number: s.stock_number, name: s.name, bin: s.bin, location: s.location }) }
+      else if (noBinSamples.length < 3 && (s.available_quantity > 0 || s.quantity > 0)) noBinSamples.push(s)
+      if (s.location != null && String(s.location).trim() !== '') withLoc++
+    }
+  }
+  console.log(`Scanned ${scanned} stocks · with bin=${withBin} · with location=${withLoc}`)
+  console.log(`Bin examples: ${JSON.stringify(examples, null, 2)}`)
+
+  // For a few in-stock items whose LIST bin is null, fetch the DETAIL to see if
+  // bin lives there instead.
+  for (const s of noBinSamples) {
+    for (const path of [`/stocks/${s.id}.json`, `/stocks/${s.id}`]) {
+      try {
+        const r = await fetch(MD_BASE + path, { headers: { 'Cookie': client.cookieHeader, 'Accept': 'application/json' } })
+        const ct = r.headers.get('content-type') || ''
+        if (r.ok && ct.includes('json')) {
+          const d: any = await r.json()
+          const obj = d.stock || d
+          console.log(`DETAIL ${path} (${s.stock_number}): bin=${JSON.stringify(obj?.bin)} location=${JSON.stringify(obj?.location)} keys=${Object.keys(obj || {}).join(',')}`)
+        } else {
+          console.log(`DETAIL ${path} (${s.stock_number}): HTTP ${r.status} ct=${ct}`)
+        }
+      } catch (e: any) { console.log(`DETAIL ${path} ERR ${e?.message || e}`) }
+    }
+  }
+}
+
 async function main() {
   const wsId = process.env.MECHANICDESK_WORKSHOP_ID
   const user = process.env.MECHANICDESK_USERNAME
@@ -116,6 +158,7 @@ async function main() {
   console.log(`Logged in · ${client.cookieHeader.split(';').length} cookies\n`)
 
   await probeListShape(client)
+  await probeBinCoverage(client)
 }
 
 main().catch(e => {
