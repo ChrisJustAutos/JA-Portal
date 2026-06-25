@@ -96,6 +96,15 @@ interface SessionUser {
   visibleTabs?: string[] | null;
 }
 
+// Re-sync progress shown in the polling modal.
+interface SyncState {
+  kind: 'recheck' | 'refresh'
+  title: string
+  phase: 'running' | 'done' | 'error'
+  detail: string
+  startedAt: number
+}
+
 /**
  * Returns minutes since the active phase started, or null if the row
  * isn't in an active phase. For matching: uses uploaded_at (match dispatches
@@ -140,13 +149,16 @@ export default function StocktakeDetailPage({ user }: { user: SessionUser }) {
   const [search, setSearch] = useState('')
   const [exportCols, setExportCols] = useState<string[]>(MATCH_COLS.map(c => c.key))
   const [colsOpen, setColsOpen] = useState(false)
-  const [rechecking, setRechecking] = useState(false)
-  const [recheckMsg, setRecheckMsg] = useState('')
-  const [refreshing, setRefreshing] = useState(false)
-  const [refreshMsg, setRefreshMsg] = useState('')
+  // Re-sync (recheck / refresh) shows a modal that polls until the worker
+  // finishes — instead of a silent background refresh. One sync at a time.
+  const [sync, setSync] = useState<SyncState | null>(null)
+  const [, setSyncTick] = useState(0)   // 1s ticker so the modal's elapsed counter advances
 
   const canEdit = roleHasPermission(user.role, 'edit:stocktakes')
   const isPolling = upload && (upload.status === 'matching' || upload.status === 'pushing')
+  const rechecking = sync?.kind === 'recheck' && sync.phase === 'running'
+  const refreshing = sync?.kind === 'refresh' && sync.phase === 'running'
+  const syncing = !!sync && sync.phase === 'running'
 
   const load = useCallback(async () => {
     if (!id) return
@@ -169,6 +181,21 @@ export default function StocktakeDetailPage({ user }: { user: SessionUser }) {
     const i = setInterval(load, 3000)
     return () => clearInterval(i)
   }, [isPolling, load])
+
+  // Advance the sync modal's elapsed-time counter once a second while running.
+  useEffect(() => {
+    if (!syncing) return
+    const i = setInterval(() => setSyncTick(t => t + 1), 1000)
+    return () => clearInterval(i)
+  }, [syncing])
+
+  // Auto-close the modal a beat after a successful sync (it "clears" itself).
+  // Errors stay open until the user closes them.
+  useEffect(() => {
+    if (sync?.phase !== 'done') return
+    const t = setTimeout(() => setSync(null), 1500)
+    return () => clearTimeout(t)
+  }, [sync?.phase])
 
   async function runMatch() {
     if (!id || actionInFlight) return
@@ -214,60 +241,72 @@ export default function StocktakeDetailPage({ user }: { user: SessionUser }) {
     finally { setActionInFlight(false) }
   }
 
-  // Sync from the LIVE MD stocktake entry (after pushing, after editing counts
-  // in MD, or after staff count directly in MD). The worker pulls each item's
-  // counted qty + system qty back into our match results AND refreshes coverage
-  // off the same read. Polls coverage_at to know when it's done.
-  async function runRecheck() {
-    if (!id || rechecking) return
-    setRecheckMsg('')
-    const prev = upload?.coverage_at || null
-    try {
-      const r = await fetch(`/api/stocktake/${id}/recheck`, { method: 'POST' })
-      const d = await r.json()
-      if (!r.ok) { setRecheckMsg(d.error || 'Sync failed'); return }
-    } catch (e: any) { setRecheckMsg(e.message || 'Sync failed'); return }
-    setRechecking(true); setRecheckMsg('Syncing counts + coverage from MD stocktake…')
-    let tries = 0
-    const iv = setInterval(async () => {
-      tries++
+  // Drive one of the two re-sync operations through the polling modal. The
+  // worker runs in a GitHub Action; we POST to kick it off, then poll the
+  // upload every 5s and watch `field` change from its pre-dispatch value to
+  // know it finished. The modal stays open (showing elapsed time) until then.
+  function startSync(opts: {
+    kind: SyncState['kind']
+    title: string
+    endpoint: string
+    watch: 'coverage_at' | 'matched_at'
+    runningDetail: string
+    doneDetail: string
+  }) {
+    if (!id || syncing) return
+    const prev = (upload as any)?.[opts.watch] || null
+    setSync({ kind: opts.kind, title: opts.title, phase: 'running', detail: 'Dispatching worker…', startedAt: Date.now() })
+    ;(async () => {
       try {
-        const rr = await fetch(`/api/stocktake/${id}`)
-        const dd = await rr.json()
-        if (rr.ok && dd.coverage_at && dd.coverage_at !== prev) {
-          clearInterval(iv); setRechecking(false); setUpload(dd); setRecheckMsg('Counts + coverage updated ✓')
-          setTimeout(() => setRecheckMsg(''), 4000); return
+        const r = await fetch(opts.endpoint, { method: 'POST' })
+        const d = await r.json()
+        if (!r.ok) { setSync(s => s && { ...s, phase: 'error', detail: d.error || 'Sync failed to start' }); return }
+      } catch (e: any) { setSync(s => s && { ...s, phase: 'error', detail: e.message || 'Sync failed to start' }); return }
+      setSync(s => s && { ...s, detail: opts.runningDetail })
+      let tries = 0
+      const iv = setInterval(async () => {
+        tries++
+        try {
+          const rr = await fetch(`/api/stocktake/${id}`)
+          const dd = await rr.json()
+          if (rr.ok && dd[opts.watch] && dd[opts.watch] !== prev) {
+            clearInterval(iv); setUpload(dd)
+            setSync(s => s && { ...s, phase: 'done', detail: opts.doneDetail })
+            return
+          }
+        } catch { /* keep polling */ }
+        if (tries >= 36) {   // ~3 min
+          clearInterval(iv)
+          setSync(s => s && { ...s, phase: 'error', detail: 'Still running after 3 minutes — close this and the page will pick up the result shortly.' })
         }
-      } catch { /* keep polling */ }
-      if (tries >= 30) { clearInterval(iv); setRechecking(false); setRecheckMsg('Still running — refresh in a moment.') }
-    }, 5000)
+      }, 5000)
+    })()
   }
 
-  // Re-read current MD system qty for matched rows (no re-match). Polls
-  // matched_at until the worker writes the updated match_results.
-  async function runRefreshSystem() {
-    if (!id || refreshing) return
-    setRefreshMsg('')
-    const prev = upload?.matched_at || null
-    try {
-      const r = await fetch(`/api/stocktake/${id}/refresh`, { method: 'POST' })
-      const d = await r.json()
-      if (!r.ok) { setRefreshMsg(d.error || 'Refresh failed'); return }
-    } catch (e: any) { setRefreshMsg(e.message || 'Refresh failed'); return }
-    setRefreshing(true); setRefreshMsg('Refreshing system quantities…')
-    let tries = 0
-    const iv = setInterval(async () => {
-      tries++
-      try {
-        const rr = await fetch(`/api/stocktake/${id}`)
-        const dd = await rr.json()
-        if (rr.ok && dd.matched_at && dd.matched_at !== prev) {
-          clearInterval(iv); setRefreshing(false); setUpload(dd); setRefreshMsg('System quantities updated ✓')
-          setTimeout(() => setRefreshMsg(''), 4000); return
-        }
-      } catch { /* keep polling */ }
-      if (tries >= 30) { clearInterval(iv); setRefreshing(false); setRefreshMsg('Still running — refresh shortly.') }
-    }, 5000)
+  // Sync from the LIVE MD stocktake entry (after pushing, after editing counts
+  // in MD, or after staff count directly in MD). Pulls counted qty + system qty
+  // back into our match results AND refreshes coverage off the same read.
+  function runRecheck() {
+    startSync({
+      kind: 'recheck',
+      title: 'Syncing counts + coverage from MD',
+      endpoint: `/api/stocktake/${id}/recheck`,
+      watch: 'coverage_at',
+      runningDetail: 'Reading the live MechanicDesk stocktake and recomputing coverage…',
+      doneDetail: 'Counts + coverage updated.',
+    })
+  }
+
+  // Re-read current MD system qty for matched rows (no re-match).
+  function runRefreshSystem() {
+    startSync({
+      kind: 'refresh',
+      title: 'Refreshing system quantities',
+      endpoint: `/api/stocktake/${id}/refresh`,
+      watch: 'matched_at',
+      runningDetail: 'Pulling current on-hand quantities from MD Stock Value…',
+      doneDetail: 'System quantities updated.',
+    })
   }
 
   async function runDelete() {
@@ -510,7 +549,7 @@ export default function StocktakeDetailPage({ user }: { user: SessionUser }) {
               {/* ── Coverage vs in-stock (MD Stock Value report) ── */}
               {upload.coverage && (
                 <CoverageSection coverage={upload.coverage} coverageAt={upload.coverage_at || null} filename={upload.filename}
-                  canRecheck={canEdit && !!upload.mechanicdesk_stocktake_id} onRecheck={runRecheck} rechecking={rechecking} recheckMsg={recheckMsg} />
+                  canRecheck={canEdit && !!upload.mechanicdesk_stocktake_id} onRecheck={runRecheck} rechecking={rechecking} busy={syncing} />
               )}
 
               {/* ── Match results table ──────────────────────────── */}
@@ -553,12 +592,11 @@ export default function StocktakeDetailPage({ user }: { user: SessionUser }) {
                         </button>
                       ))}
                       {canEdit && (
-                        <button onClick={runRefreshSystem} disabled={refreshing} title="Re-read current MD system quantities for the matched items"
-                          style={{ padding:'4px 10px', borderRadius:4, fontSize:11, fontFamily:'inherit', fontWeight:600, background:'transparent', color: refreshing ? T.text3 : T.amber, border:`1px solid ${refreshing ? T.border2 : T.amber + '55'}`, cursor: refreshing ? 'default' : 'pointer' }}>
+                        <button onClick={runRefreshSystem} disabled={syncing} title="Re-read current MD system quantities for the matched items"
+                          style={{ padding:'4px 10px', borderRadius:4, fontSize:11, fontFamily:'inherit', fontWeight:600, background:'transparent', color: syncing ? T.text3 : T.amber, border:`1px solid ${syncing ? T.border2 : T.amber + '55'}`, cursor: syncing ? 'default' : 'pointer' }}>
                           {refreshing ? '↻ Refreshing…' : '↻ Refresh system qty'}
                         </button>
                       )}
-                      {refreshMsg && <span style={{ fontSize:11, color: refreshMsg.includes('✓') ? T.green : T.text3, alignSelf:'center' }}>{refreshMsg}</span>}
                       <span style={{width:1, height:18, background:T.border2, margin:'0 2px'}}/>
                       <div style={{ position:'relative' }}>
                         <button onClick={() => setColsOpen(o => !o)} title="Choose which columns to export"
@@ -681,6 +719,57 @@ export default function StocktakeDetailPage({ user }: { user: SessionUser }) {
           )}
         </main>
       </div>
+
+      {sync && <SyncProgressModal state={sync} onClose={() => setSync(null)} />}
+    </>
+  )
+}
+
+// Re-sync progress modal: opens when a recheck/refresh is dispatched and polls
+// (driven by the parent) until the worker finishes, then auto-closes. While
+// running it can't be dismissed (the job keeps going regardless); on error it
+// stays open with a Close button.
+function SyncProgressModal({ state, onClose }: { state: SyncState; onClose: () => void }) {
+  const running = state.phase === 'running'
+  const elapsed = Math.max(0, Math.round((Date.now() - state.startedAt) / 1000))
+  return (
+    <div role="dialog" aria-modal="true"
+      onMouseDown={e => { if (e.target === e.currentTarget && !running) onClose() }}
+      style={{ position:'fixed', inset:0, zIndex:10001, display:'flex', alignItems:'center', justifyContent:'center', background:'rgba(0,0,0,0.55)', padding:16, fontFamily:"'DM Sans',system-ui,sans-serif" }}>
+      <div style={{ width:'100%', maxWidth:420, background:T.bg3, border:`1px solid ${T.border2}`, borderRadius:10, padding:'20px 22px', boxShadow:'0 12px 48px rgba(0,0,0,0.6)' }}>
+        <div style={{ display:'flex', alignItems:'center', gap:12, marginBottom:12 }}>
+          {running
+            ? <Spinner/>
+            : <span style={{ fontSize:20, lineHeight:1, color: state.phase === 'done' ? T.green : T.red }}>{state.phase === 'done' ? '✓' : '⚠'}</span>}
+          <div style={{ fontSize:15, fontWeight:600, color:T.text }}>{state.title}</div>
+        </div>
+        <div style={{ fontSize:12, color: state.phase === 'error' ? T.red : T.text2, lineHeight:1.55, marginBottom: running ? 12 : 16 }}>
+          {state.detail}
+        </div>
+        {running ? (
+          <div style={{ fontSize:11, color:T.text3 }}>
+            Polling every 5s · {elapsed}s elapsed. Runs in MD via a GitHub Action (usually 30–90s) — this window closes itself when it finishes.
+          </div>
+        ) : (
+          <div style={{ display:'flex', justifyContent:'flex-end' }}>
+            <button onClick={onClose} style={{
+              padding:'8px 16px', borderRadius:6, fontSize:12, fontFamily:'inherit', fontWeight:600, cursor:'pointer',
+              background: alpha(state.phase === 'done' ? T.green : T.blue, '1e'),
+              color: state.phase === 'done' ? T.green : T.blue,
+              border:`1px solid ${alpha(state.phase === 'done' ? T.green : T.blue, '55')}`,
+            }}>Close</button>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function Spinner() {
+  return (
+    <>
+      <span style={{ width:18, height:18, flex:'0 0 auto', borderRadius:'50%', border:`2px solid ${alpha(T.blue, '33')}`, borderTopColor:T.blue, display:'inline-block', animation:'ja-spin 0.8s linear infinite' }} />
+      <style>{`@keyframes ja-spin { to { transform: rotate(360deg) } }`}</style>
     </>
   )
 }
@@ -902,9 +991,9 @@ function downloadMatchCsv(rows: MatchEntry[], label: string, filename: string, c
 // Coverage: which in-stock MD items weren't in the counted sheet. The worker
 // pulls MD's in-stock universe (Stock Value report) during Run Match and diffs
 // it against the count. This surfaces the gap so nothing is missed.
-function CoverageSection({ coverage, coverageAt, filename, canRecheck, onRecheck, rechecking, recheckMsg }: {
+function CoverageSection({ coverage, coverageAt, filename, canRecheck, onRecheck, rechecking, busy }: {
   coverage: CoverageData; coverageAt: string | null; filename: string
-  canRecheck: boolean; onRecheck: () => void; rechecking: boolean; recheckMsg: string
+  canRecheck: boolean; onRecheck: () => void; rechecking: boolean; busy: boolean
 }) {
   const [open, setOpen] = useState(false)
   const [search, setSearch] = useState('')
@@ -923,10 +1012,9 @@ function CoverageSection({ coverage, coverageAt, filename, canRecheck, onRecheck
           Coverage vs in-stock
         </h2>
         <div style={{display:'flex', gap:8, alignItems:'center', flexWrap:'wrap'}}>
-          {recheckMsg && <span style={{fontSize:11, color: recheckMsg.includes('✓') ? T.green : T.text3}}>{recheckMsg}</span>}
           {canRecheck && (
-            <button onClick={onRecheck} disabled={rechecking} title="Read the live MechanicDesk stocktake — pulls counted qty + system qty back into the match results AND refreshes coverage"
-              style={{padding:'4px 12px', borderRadius:4, fontSize:11, fontFamily:'inherit', fontWeight:600, background:'transparent', color: rechecking ? T.text3 : T.amber, border:`1px solid ${rechecking ? T.border2 : T.amber + '55'}`, cursor: rechecking ? 'default' : 'pointer'}}>
+            <button onClick={onRecheck} disabled={busy} title="Read the live MechanicDesk stocktake — pulls counted qty + system qty back into the match results AND refreshes coverage"
+              style={{padding:'4px 12px', borderRadius:4, fontSize:11, fontFamily:'inherit', fontWeight:600, background:'transparent', color: busy ? T.text3 : T.amber, border:`1px solid ${busy ? T.border2 : T.amber + '55'}`, cursor: busy ? 'default' : 'pointer'}}>
               {rechecking ? '↻ Syncing…' : '↻ Sync counts + coverage from MD'}
             </button>
           )}
