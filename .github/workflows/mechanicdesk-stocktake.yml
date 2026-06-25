@@ -8,7 +8,7 @@ name: Stocktake — Mechanics Desk worker
 #     client_payload: { upload_id: "<uuid>", mode: "match" | "push" } }
 #
 # Browsers:
-#   Installs Chromium via `npx playwright install --with-deps chromium`
+#   Installs Chromium via `npx playwright install chromium`
 #   (downloaded from the Playwright CDN). We previously ran inside the
 #   mcr.microsoft.com/playwright container, but anonymous MCR image pulls
 #   started failing intermittently (unauthorized / toomanyrequests), which
@@ -55,7 +55,7 @@ jobs:
         run: npm ci || npm install
 
       - name: Install Playwright Chromium
-        run: npx playwright install --with-deps chromium
+        run: npx playwright install chromium
 
       - name: Run worker
         env:
