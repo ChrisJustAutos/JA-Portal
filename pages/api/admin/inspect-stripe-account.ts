@@ -34,13 +34,33 @@ function preview(k: string): string {
   return k.length > 16 ? `${k.slice(0, 16)}… (${k.length} chars)` : `(${k.length} chars)`
 }
 
-async function pingAccount(k: string): Promise<any> {
-  const res = await fetch(`${STRIPE_API}/account`, { headers: { Authorization: `Bearer ${k}` } })
+async function stripeGet(k: string, path: string): Promise<any> {
+  const res = await fetch(`${STRIPE_API}${path}`, { headers: { Authorization: `Bearer ${k}` } })
   const text = await res.text()
   let json: any = null
   try { json = JSON.parse(text) } catch { /* keep null */ }
   if (!res.ok) throw new Error(json?.error?.message || text || `HTTP ${res.status}`)
   return json
+}
+
+// List the webhook endpoints registered ON this account. If one points at an
+// Easy Tune URL, that's the routing culprit. (Note: this does NOT show a
+// parent platform's Connect webhook — those live on the platform account and
+// aren't visible to a connected account's key. If this list is clean but Easy
+// Tune still gets events, the account is connected under their Connect platform.)
+async function listWebhookEndpoints(k: string): Promise<any[]> {
+  const page = await stripeGet(k, '/webhook_endpoints?limit=100')
+  const data: any[] = Array.isArray(page?.data) ? page.data : []
+  return data.map(w => ({
+    url: w.url,
+    status: w.status,
+    api_version: w.api_version || null,
+    application: w.application || null,            // set if created by a Connect app
+    description: w.description || null,
+    enabled_events: Array.isArray(w.enabled_events)
+      ? (w.enabled_events.length > 12 ? `${w.enabled_events.length} events` : w.enabled_events)
+      : null,
+  }))
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -60,7 +80,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const mode = k.startsWith('sk_live_') || k.startsWith('rk_live_') ? 'live'
       : k.startsWith('sk_test_') || k.startsWith('rk_test_') ? 'test' : 'unknown'
     try {
-      const acct = await pingAccount(k)
+      const acct = await stripeGet(k, '/account')
+      // Webhook endpoints registered on this account (best-effort — restricted
+      // keys may lack permission, which is fine; we just note it).
+      let webhook_endpoints: any = undefined
+      try { webhook_endpoints = await listWebhookEndpoints(k) }
+      catch (e: any) { webhook_endpoints = { error: (e?.message || String(e)).slice(0, 200) } }
       return {
         env, role, set: true, key_preview: preview(k), mode,
         account_id: acct?.id || null,
@@ -70,6 +95,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         email: acct?.email || null,
         charges_enabled: acct?.charges_enabled ?? null,
         payouts_enabled: acct?.payouts_enabled ?? null,
+        webhook_endpoints,
       }
     } catch (e: any) {
       return { env, role, set: true, key_preview: preview(k), mode, error: (e?.message || String(e)).slice(0, 300) }
