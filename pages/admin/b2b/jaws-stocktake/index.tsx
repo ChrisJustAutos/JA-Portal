@@ -244,7 +244,8 @@ function StatusBadge({ status }: { status: string }) {
   const map: Record<string, { label: string; color: string }> = {
     parsed:    { label: 'Parsed',    color: T.text3 },
     matching:  { label: 'Matching…', color: T.blue },
-    matched:   { label: 'Matched',   color: T.green },
+    matched:   { label: 'Matched',   color: T.amber },
+    completed: { label: 'Completed', color: T.green },
     failed:    { label: 'Failed',    color: T.red },
   }
   const e = map[status] || { label: status, color: T.text3 }

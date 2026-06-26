@@ -1,6 +1,8 @@
 // pages/api/b2b/admin/jaws-stocktake/[id].ts
 //
 // GET:    read upload state (view:b2b)
+// PATCH:  complete / reopen the stocktake (edit:b2b_catalogue). Body
+//         { action: 'complete' | 'reopen' } flips status matched ↔ completed.
 // DELETE: delete the upload row (edit:b2b_catalogue). DB only — nothing in MYOB
 //         is touched (this feature never writes to MYOB).
 //         Pass ?force=1 to delete a row stuck in 'matching' for > 5 minutes.
@@ -25,8 +27,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (!id) return res.status(400).json({ error: 'Missing upload id' })
 
   if (req.method === 'GET') return handleGet(req, res, id)
+  if (req.method === 'PATCH') return handlePatch(req, res, id)
   if (req.method === 'DELETE') return handleDelete(req, res, id)
-  res.setHeader('Allow', 'GET, DELETE')
+  res.setHeader('Allow', 'GET, PATCH, DELETE')
   return res.status(405).json({ error: 'Method not allowed' })
 }
 
@@ -45,6 +48,47 @@ async function handleGet(req: NextApiRequest, res: NextApiResponse, id: string) 
   if (error) return res.status(500).json({ error: error.message })
   if (!data) return res.status(404).json({ error: 'Not found' })
   return res.status(200).json(data)
+}
+
+async function handlePatch(req: NextApiRequest, res: NextApiResponse, id: string) {
+  const user = await getCurrentUser(req)
+  if (!user) return res.status(401).json({ error: 'Unauthorised' })
+  if (!roleHasPermission(user.role, 'edit:b2b_catalogue')) {
+    return res.status(403).json({ error: 'Forbidden — manager or admin only' })
+  }
+
+  const action = (req.body || {}).action
+  if (action !== 'complete' && action !== 'reopen') {
+    return res.status(400).json({ error: "Body must be { action: 'complete' | 'reopen' }" })
+  }
+
+  const { data: row, error: loadErr } = await sb()
+    .from('jaws_stocktake_uploads')
+    .select('id, status')
+    .eq('id', id)
+    .maybeSingle()
+  if (loadErr) return res.status(500).json({ error: loadErr.message })
+  if (!row) return res.status(404).json({ error: 'Not found' })
+
+  if (action === 'complete' && row.status !== 'matched' && row.status !== 'completed') {
+    return res.status(409).json({ error: 'Run match and review the results before marking this complete.' })
+  }
+  if (action === 'reopen' && row.status !== 'completed') {
+    return res.status(409).json({ error: 'Only a completed stocktake can be reopened.' })
+  }
+
+  const patch = action === 'complete'
+    ? { status: 'completed', completed_at: new Date().toISOString(), completed_by: user.id }
+    : { status: 'matched', completed_at: null, completed_by: null }
+
+  const { data: updated, error } = await sb()
+    .from('jaws_stocktake_uploads')
+    .update(patch)
+    .eq('id', id)
+    .select('*')
+    .maybeSingle()
+  if (error) return res.status(500).json({ error: error.message })
+  return res.status(200).json(updated)
 }
 
 async function handleDelete(req: NextApiRequest, res: NextApiResponse, id: string) {

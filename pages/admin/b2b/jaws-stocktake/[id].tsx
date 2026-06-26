@@ -67,6 +67,8 @@ interface Upload {
   matched_count: number | null
   unmatched_count: number | null
   match_results: MatchEntry[] | null
+  completed_at?: string | null
+  completed_by?: string | null
   coverage_at?: string | null
   in_stock_total?: number | null
   in_stock_uncounted?: number | null
@@ -139,6 +141,22 @@ export default function JawsStocktakeDetailPage({ user }: { user: SessionUser })
       if (!r.ok) throw new Error(d.error || 'Match failed')
       setUpload(d)   // the match request returns the finished row directly
     } catch (e: any) { setError(e.message); await load() }
+    finally { setActionInFlight(false) }
+  }
+
+  async function setCompletion(action: 'complete' | 'reopen') {
+    if (!id || actionInFlight) return
+    setActionInFlight(true); setError('')
+    try {
+      const r = await fetch(`/api/b2b/admin/jaws-stocktake/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action }),
+      })
+      const d = await r.json()
+      if (!r.ok) throw new Error(d.error || 'Update failed')
+      setUpload(d)
+    } catch (e: any) { setError(e.message) }
     finally { setActionInFlight(false) }
   }
 
@@ -282,7 +300,8 @@ export default function JawsStocktakeDetailPage({ user }: { user: SessionUser })
               </div>
 
               {/* ── Action panel ─────────────────────────────────── */}
-              <ActionPanel upload={upload} canEdit={canEdit} actionInFlight={actionInFlight} onMatch={runMatch} />
+              <ActionPanel upload={upload} canEdit={canEdit} actionInFlight={actionInFlight}
+                onMatch={runMatch} onComplete={() => setCompletion('complete')} onReopen={() => setCompletion('reopen')} />
 
               {/* ── Per-sheet breakdown ──────────────────────────── */}
               {hasSheetNames && sheetSummary.length > 1 && (
@@ -453,10 +472,25 @@ export default function JawsStocktakeDetailPage({ user }: { user: SessionUser })
   )
 }
 
-function ActionPanel({ upload, canEdit, actionInFlight, onMatch }: {
-  upload: Upload; canEdit: boolean; actionInFlight: boolean; onMatch: () => void
+function ActionPanel({ upload, canEdit, actionInFlight, onMatch, onComplete, onReopen }: {
+  upload: Upload; canEdit: boolean; actionInFlight: boolean
+  onMatch: () => void; onComplete: () => void; onReopen: () => void
 }) {
   const status = upload.status
+
+  if (status === 'completed') {
+    return (
+      <div style={{background:`${T.green}10`, border:`1px solid ${T.green}40`, borderRadius:8, padding:'14px 16px', marginBottom:14, display:'flex', justifyContent:'space-between', alignItems:'center', gap:12, flexWrap:'wrap'}}>
+        <div>
+          <div style={{fontSize:13, color:T.green, fontWeight:600}}>✓ Stocktake complete</div>
+          <div style={{fontSize:11, color:T.text3, marginTop:4}}>
+            Closed out{upload.completed_at ? ` ${new Date(upload.completed_at).toLocaleString('en-AU')}` : ''}. The figures below are kept for reference.
+          </div>
+        </div>
+        {canEdit && (<button onClick={onReopen} disabled={actionInFlight} style={{...btnStyle(T.text3, actionInFlight), background:'transparent', border:`1px solid ${T.border2}`, color:T.text2}}>{actionInFlight ? 'Reopening…' : 'Reopen'}</button>)}
+      </div>
+    )
+  }
 
   if (status === 'matching') {
     return (
@@ -505,7 +539,12 @@ function ActionPanel({ upload, canEdit, actionInFlight, onMatch }: {
             . Check the count-vs-MYOB strip and coverage below, export CSV, then make any adjustment by hand in MYOB.
           </div>
         </div>
-        {canEdit && (<button onClick={onMatch} disabled={actionInFlight} style={{...btnStyle(T.text3, actionInFlight), background:'transparent', border:`1px solid ${T.border2}`, color:T.text2}}>Re-match</button>)}
+        {canEdit && (
+          <div style={{display:'flex', gap:8, flexShrink:0}}>
+            <button onClick={onMatch} disabled={actionInFlight} style={{...btnStyle(T.text3, actionInFlight), background:'transparent', border:`1px solid ${T.border2}`, color:T.text2}}>Re-match</button>
+            <button onClick={onComplete} disabled={actionInFlight} style={btnStyle(T.green, actionInFlight)}>{actionInFlight ? 'Saving…' : 'Mark complete'}</button>
+          </div>
+        )}
       </div>
     )
   }
@@ -533,10 +572,11 @@ function btnStyle(color: string, disabled: boolean): React.CSSProperties {
 
 function StatusBadge({ status }: { status: string }) {
   const map: Record<string, { label: string; color: string }> = {
-    parsed:   { label: 'Parsed',    color: T.text3 },
-    matching: { label: 'Matching…', color: T.blue },
-    matched:  { label: 'Matched',   color: T.green },
-    failed:   { label: 'Failed',    color: T.red },
+    parsed:    { label: 'Parsed',    color: T.text3 },
+    matching:  { label: 'Matching…', color: T.blue },
+    matched:   { label: 'Matched',   color: T.amber },
+    completed: { label: 'Completed', color: T.green },
+    failed:    { label: 'Failed',    color: T.red },
   }
   const e = map[status] || { label: status, color: T.text3 }
   return (
