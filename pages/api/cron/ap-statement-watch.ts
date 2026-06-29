@@ -16,6 +16,8 @@
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { runStatementWatch, buildDigestHtml } from '../../../lib/ap-statement-watch'
 import { sendMail } from '../../../lib/email'
+import { getCurrentUser } from '../../../lib/authServer'
+import { roleHasPermission } from '../../../lib/permissions'
 
 function recipients(): string[] {
   const raw = (process.env.AP_STATEMENT_REPORT_TO || 'chris@justautosmechanical.com.au,jarred@justautosmechanical.com.au').trim()
@@ -23,8 +25,15 @@ function recipients(): string[] {
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (process.env.CRON_SECRET && req.headers.authorization !== `Bearer ${process.env.CRON_SECRET}`) {
-    return res.status(401).json({ error: 'Unauthorized' })
+  // Auth: Vercel cron sends the CRON_SECRET bearer. Also allow a logged-in
+  // staffer with AP access to trigger a manual check from the browser
+  // (e.g. /api/cron/ap-statement-watch?dry=1&sinceDays=30).
+  const bearerOk = !!process.env.CRON_SECRET && req.headers.authorization === `Bearer ${process.env.CRON_SECRET}`
+  if (!bearerOk) {
+    const user = await getCurrentUser(req)
+    if (!user || !roleHasPermission(user.role, 'view:supplier_invoices')) {
+      return res.status(401).json({ error: 'Unauthorized' })
+    }
   }
 
   const dry = req.query.dry === '1'
