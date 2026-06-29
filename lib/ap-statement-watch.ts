@@ -55,7 +55,9 @@ function inboxes(): InboxConfig[] {
     } catch { /* fall through to defaults */ }
   }
   return [
-    { mailbox: 'accounts@justautoswholesale.com.au',  companyFile: 'JAWS' },
+    // NOTE: the wholesale mailbox is .com (NOT .com.au — that domain isn't a
+    // Microsoft 365 tenant, so Graph can't read it). Matches lib/b2b-settings.
+    { mailbox: 'accounts@justautoswholesale.com',     companyFile: 'JAWS' },
     { mailbox: 'accounts@justautosmechanical.com.au', companyFile: 'VPS'  },
   ]
 }
@@ -240,19 +242,36 @@ const esc = (s: any) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&l
 
 export function buildDigestHtml(outcome: StatementWatchOutcome, generatedAt: string): { subject: string; html: string } | null {
   const stmts = outcome.processed
-  if (stmts.length === 0) return null
+  const inboxErrors = (outcome.perInbox || []).filter(p => p.error)
+  if (stmts.length === 0 && inboxErrors.length === 0) return null
 
   const totalMissing = stmts.reduce((s, r) => s + r.missing.length, 0)
   const needsReview = stmts.filter(r => r.status === 'needs_review' || r.status === 'failed')
   const withMissing = stmts.filter(r => r.missing.length > 0)
   const clean = stmts.filter(r => r.status === 'reconciled')
 
-  const subject = `AP statement check — ${totalMissing} missing invoice${totalMissing === 1 ? '' : 's'} across ${withMissing.length} statement${withMissing.length === 1 ? '' : 's'}`
+  const subject = (stmts.length === 0 && inboxErrors.length > 0)
+    ? `AP statement check — ⚠ ${inboxErrors.length} inbox${inboxErrors.length === 1 ? '' : 'es'} could not be read`
+    : `AP statement check — ${totalMissing} missing invoice${totalMissing === 1 ? '' : 's'} across ${withMissing.length} statement${withMissing.length === 1 ? '' : 's'}${inboxErrors.length ? ` (+${inboxErrors.length} inbox error${inboxErrors.length === 1 ? '' : 's'})` : ''}`
 
   const card = (inner: string, accent: string) =>
     `<div style="border:1px solid #e5e7eb;border-left:3px solid ${accent};border-radius:8px;padding:12px 14px;margin:0 0 12px">${inner}</div>`
 
   let body = ''
+
+  // Inbox read failures — surface loudly so a mailbox the app can't read is
+  // never again mistaken for "nothing to reconcile" (this hid the wholesale
+  // inbox typo for over a week).
+  if (inboxErrors.length > 0) {
+    body += `<h2 style="font-size:15px;color:#dc2626;margin:18px 0 8px">⚠ Inbox(es) that couldn't be read (${inboxErrors.length})</h2>`
+    for (const p of inboxErrors) {
+      body += card(
+        `<div style="font-weight:600">${esc(p.mailbox)} <span style="color:#6b7280;font-weight:400">· ${esc(p.companyFile)}</span></div>` +
+        `<div style="font-size:12px;color:#6b7280;margin-top:3px">${esc(p.error)}</div>`,
+        '#dc2626',
+      )
+    }
+  }
 
   // Missing — the headline.
   if (withMissing.length > 0) {
