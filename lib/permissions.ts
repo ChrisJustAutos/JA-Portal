@@ -47,6 +47,7 @@ export type Permission =
   | 'view:messages'
   | 'view:crm'
   | 'view:tasks'
+  | 'view:agents'
   | 'manage:inbox'
   // Actions
   | 'edit:any'
@@ -85,6 +86,7 @@ const ROLE_PERMISSIONS: Record<UserRole, Permission[]> = {
     'view:crm','edit:crm',
     'view:tasks','edit:tasks',
     'view:projects','edit:projects',
+    'view:agents',
     'admin:users','admin:settings','admin:audit_log','admin:b2b',
   ],
   manager: [
@@ -99,6 +101,7 @@ const ROLE_PERMISSIONS: Record<UserRole, Permission[]> = {
     'view:crm','edit:crm',
     'view:tasks','edit:tasks',
     'view:projects','edit:projects',
+    'view:agents',
   ],
   sales: [
     'view:dashboards','view:overview','view:leads','view:distributors','view:calls','view:reports',
@@ -248,6 +251,7 @@ export const PORTAL_TABS: PortalTab[] = [
   { id: 'ap',            label: 'AP Invoices',     permission: 'view:supplier_invoices' },
   { id: 'b2b',           label: 'B2B Portal',      permission: 'view:b2b' },
   { id: 'stripe-myob',   label: 'Stripe → MYOB',   permission: 'view:stripe_myob' },
+  { id: 'agents',        label: 'Agents',          permission: 'view:agents' },
 ]
 
 export function defaultTabsForRole(role: UserRole): string[] {

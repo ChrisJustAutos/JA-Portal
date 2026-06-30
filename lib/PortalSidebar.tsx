@@ -60,6 +60,7 @@ export const DEFAULT_NAV: PortalNavItem[] = [
   {id:'ap',           kind:'link',    label:'AP Invoices',  href:'/ap',            dot:T.amber},
   {id:'b2b',          kind:'link',    label:'B2B Portal',   href:'/admin/b2b',     dot:T.teal},
   {id:'stripe-myob',  kind:'link',    label:'Stripe → MYOB', href:'/stripe-myob',  dot:T.green},
+  {id:'agents',       kind:'link',    label:'Agents',       href:'/agents',        dot:T.purple},
 ]
 
 const SETTINGS_NAV_ITEM: PortalNavItem = {
