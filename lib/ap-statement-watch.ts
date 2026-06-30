@@ -31,7 +31,8 @@ import {
 } from './microsoft-graph'
 import { extractStatementFromPdf } from './ap-statement-extraction'
 import { matchStatementAgainstMyob } from './ap-statement-match'
-import { searchSuppliers, type CompanyFileLabel } from './ap-myob-lookup'
+import { type CompanyFileLabel } from './ap-myob-lookup'
+import { tryAutoMatchSupplier } from './ap-myob-automatch'
 
 let _sb: SupabaseClient | null = null
 function sb(): SupabaseClient {
@@ -106,17 +107,20 @@ function periodLabel(s: { statementDate: string | null; periodFrom: string | nul
 // Resolve the statement's supplier to a single MYOB supplier card in the right
 // company file. Confident match only: exactly one search hit, or an exact
 // (case-insensitive) name match among several. Otherwise → needs review.
-async function resolveSupplier(companyFile: CompanyFileLabel, name: string | null):
+async function resolveSupplier(companyFile: CompanyFileLabel, name: string | null, abn: string | null):
   Promise<{ resolution: 'matched' | 'ambiguous' | 'none'; uid: string | null; matchedName: string | null }> {
   const q = (name || '').trim()
   if (!q) return { resolution: 'none', uid: null, matchedName: null }
-  let hits
-  try { hits = await searchSuppliers(companyFile, q, 8) } catch { return { resolution: 'none', uid: null, matchedName: null } }
-  if (hits.length === 0) return { resolution: 'none', uid: null, matchedName: null }
-  if (hits.length === 1) return { resolution: 'matched', uid: hits[0].uid, matchedName: hits[0].name }
-  const exact = hits.filter(h => h.name.trim().toLowerCase() === q.toLowerCase())
-  if (exact.length === 1) return { resolution: 'matched', uid: exact[0].uid, matchedName: exact[0].name }
-  return { resolution: 'ambiguous', uid: null, matchedName: null }
+  // Reuse the AP invoice auto-matcher: it searches MYOB on the first couple of
+  // name tokens and matches when either name contains the other, so a
+  // statement's full legal name ("CDI Motorsport Pty Ltd") still resolves to a
+  // short supplier card ("Cdi motorsport"). ABN (if the statement carries one)
+  // wins outright. Returns a confident single match or null (→ needs review).
+  try {
+    const m = await tryAutoMatchSupplier(q, abn, companyFile)
+    if (m) return { resolution: 'matched', uid: m.supplier.uid, matchedName: m.supplier.name }
+  } catch { /* fall through to needs-review */ }
+  return { resolution: 'none', uid: null, matchedName: null }
 }
 
 export interface WatchOptions { sinceDays?: number; maxStatements?: number; dryRun?: boolean }
@@ -196,14 +200,12 @@ export async function runStatementWatch(opts: WatchOptions = {}): Promise<Statem
           const period = periodLabel(statement)
           const invoiceLines = statement.lines.filter(l => l.type === 'invoice').length
 
-          const sup = await resolveSupplier(inbox.companyFile, supplierName)
+          const sup = await resolveSupplier(inbox.companyFile, supplierName, (statement.supplier as any)?.abn ?? null)
           if (sup.resolution !== 'matched' || !sup.uid) {
             await record({
               ...base, supplierName, supplierUid: null, supplierResolution: sup.resolution,
               status: 'needs_review', period, invoiceLines, missing: [], mismatches: [],
-              reviewReason: sup.resolution === 'ambiguous'
-                ? `Multiple MYOB suppliers match "${supplierName}" — reconcile manually`
-                : `No MYOB supplier matches "${supplierName || '(unknown)'}" — reconcile manually`,
+              reviewReason: `Couldn't confidently match "${supplierName || '(unknown)'}" to a MYOB supplier — reconcile manually`,
             })
             continue
           }
