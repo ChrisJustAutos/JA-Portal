@@ -220,6 +220,17 @@ export default function PortalTopBar({
     router.push(app.href)
   }, [router])
 
+  // Universal refresh: pages that wire onRefresh (e.g. the dashboard) get an
+  // in-place data refetch; everywhere else it's a hard reload — the reliable
+  // catch-all for stale info or wedged client state.
+  const [reloading, setReloading] = useState(false)
+  const doRefresh = useCallback(() => {
+    if (onRefresh) { onRefresh(); return }
+    setReloading(true)
+    if (typeof window !== 'undefined') window.location.reload()
+  }, [onRefresh])
+  const busyRefresh = !!refreshing || reloading
+
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase()
     if (!q) return apps
@@ -284,12 +295,13 @@ export default function PortalTopBar({
         {/* Notification bell */}
         <NotificationBell apps={apps} summary={summary} refresh={refreshSummary}/>
 
-        {/* Refresh — full button on desktop; folded into the account menu on
-            mobile to keep the bar uncluttered. */}
-        {onRefresh && !isMobile && (
-          <button onClick={onRefresh} disabled={refreshing} style={{ ...btn, opacity: refreshing ? 0.6 : 1 }}
-            title={lastRefresh ? `Updated ${lastRefresh.toLocaleTimeString('en-AU', { hour: '2-digit', minute: '2-digit' })}` : 'Refresh'}>
-            {refreshing ? 'Refreshing…' : '↻ Refresh'}
+        {/* Refresh — always available (full button on desktop, folded into the
+            account menu on mobile). onRefresh pages get an in-place refetch;
+            everywhere else it's a hard reload to clear stale / stuck state. */}
+        {!isMobile && (
+          <button onClick={doRefresh} disabled={busyRefresh} style={{ ...btn, opacity: busyRefresh ? 0.6 : 1 }}
+            title={lastRefresh ? `Updated ${lastRefresh.toLocaleTimeString('en-AU', { hour: '2-digit', minute: '2-digit' })} — click to refresh` : 'Refresh this page (clears stale / stuck data)'}>
+            {busyRefresh ? 'Refreshing…' : '↻ Refresh'}
           </button>
         )}
 
@@ -318,8 +330,8 @@ export default function PortalTopBar({
                     {currentUserRole && <div style={{ fontSize: 10, color: T.text3, textTransform: 'capitalize', marginTop: 2 }}>{currentUserRole}</div>}
                   </div>
                 )}
-                {isMobile && onRefresh && (
-                  <button onClick={() => { setMenuOpen(false); onRefresh() }} style={menuItemStyle()}>↻ Refresh data</button>
+                {isMobile && (
+                  <button onClick={() => { setMenuOpen(false); doRefresh() }} style={menuItemStyle()}>↻ Refresh page</button>
                 )}
                 {apps.some(a => a.id === 'settings') && (
                   <button onClick={() => { setMenuOpen(false); router.push('/settings') }} style={menuItemStyle()}>⚙ Settings</button>
