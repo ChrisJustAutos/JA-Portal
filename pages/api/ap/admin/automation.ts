@@ -41,7 +41,7 @@ import type { NextApiRequest, NextApiResponse } from 'next'
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
 import { checkBearer } from '../../../../lib/api-key-auth'
 import { createServiceBill } from '../../../../lib/ap-myob-bill'
-import { runInboxPull } from '../../../../lib/ap-inbox-pull'
+import { runInboxPullAll } from '../../../../lib/ap-inbox-pull'
 import { runContactBackfill } from '../../../../lib/ap-backfill-contact'
 
 // Synthetic actor — distinguishable from any real user in audit queries.
@@ -117,7 +117,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     if (action === 'pull_inbox') {
       try {
-        const result = await runInboxPull({ sinceDays: body.sinceDays })
+        const result = await runInboxPullAll({ sinceDays: body.sinceDays })
         if (!result.ok) {
           const { status, ...payload } = result
           console.error(`[ap-automation] pull_inbox failed: ${result.error}`)

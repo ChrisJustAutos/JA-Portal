@@ -62,6 +62,8 @@ export interface IngestResult {
 
 export interface PullInboxOptions {
   sinceDays?: number
+  mailbox?: string                 // override which inbox to scan
+  companyFile?: 'JAWS' | 'VPS'     // stamp invoices from this inbox to this MYOB file
 }
 
 export interface PullInboxOk {
@@ -112,11 +114,60 @@ function readMarkReadEnabled(): boolean {
   return raw !== 'false' && raw !== '0' && raw !== 'no'
 }
 
+// The mailboxes the AP intake scans, each mapped to its MYOB company file.
+// Mirrors lib/ap-statement-watch's inbox config (wholesale = .com, NOT .com.au).
+// Override with AP_INBOX_MAILBOXES (JSON [{mailbox,companyFile}]).
+function apInboxes(): Array<{ mailbox: string; companyFile: 'JAWS' | 'VPS' }> {
+  const raw = (process.env.AP_INBOX_MAILBOXES || '').trim()
+  if (raw) {
+    try {
+      const p = JSON.parse(raw)
+      if (Array.isArray(p) && p.every((x: any) => x.mailbox && (x.companyFile === 'JAWS' || x.companyFile === 'VPS'))) return p
+    } catch { /* fall through to defaults */ }
+  }
+  return [
+    { mailbox: 'accounts@justautoswholesale.com', companyFile: 'JAWS' },
+    { mailbox: process.env.AP_INBOX_MAILBOX || DEFAULT_MAILBOX, companyFile: 'VPS' },
+  ]
+}
+
+// Scan ALL configured inboxes (both MYOB files) and merge the results. Each
+// inbox runs the same pipeline with its company file stamped; dedupe is global
+// (graph message+attachment id), so this is safe to re-run. One inbox failing
+// (e.g. a Graph hiccup) doesn't sink the others.
+export async function runInboxPullAll(opts: PullInboxOptions = {}): Promise<PullInboxResponse> {
+  const inboxes = apInboxes()
+  let anyOk = false
+  let lastError: PullInboxError | null = null
+  const merged: PullInboxOk = {
+    ok: true,
+    mailbox: inboxes.map(i => i.mailbox).join(', '),
+    sinceDays: 0, concurrency: 0,
+    markRead: { enabled: false, disabledByPermission: false },
+    moveTo: { folderName: null, folderResolved: false, folderResolveError: null, disabledByPermission: false },
+    summary: { scanned: 0, ingested: 0, duplicates: 0, skipped: 0, failed: 0, markedRead: 0, moved: 0 },
+    results: [],
+  }
+  for (const ib of inboxes) {
+    const r = await runInboxPull({ ...opts, mailbox: ib.mailbox, companyFile: ib.companyFile })
+    if (!r.ok) { lastError = r; continue }
+    anyOk = true
+    merged.sinceDays = r.sinceDays
+    merged.concurrency = r.concurrency
+    merged.markRead = r.markRead
+    merged.moveTo = r.moveTo
+    for (const k of Object.keys(merged.summary) as (keyof PullInboxOk['summary'])[]) merged.summary[k] += r.summary[k]
+    merged.results.push(...r.results)
+  }
+  if (!anyOk && lastError) return lastError
+  return merged
+}
+
 export async function runInboxPull(opts: PullInboxOptions = {}): Promise<PullInboxResponse> {
   const days = Math.max(1, Math.min(Number(opts.sinceDays) || 30, 90))
   const sinceIso = new Date(Date.now() - days * 24 * 3600 * 1000).toISOString()
 
-  const mailbox = process.env.AP_INBOX_MAILBOX || DEFAULT_MAILBOX
+  const mailbox = opts.mailbox || process.env.AP_INBOX_MAILBOX || DEFAULT_MAILBOX
   const concurrency = readConcurrency()
   const markReadEnabled = readMarkReadEnabled()
   const processedFolderName = (process.env.AP_INBOX_PROCESSED_FOLDER || '').trim()
@@ -413,9 +464,14 @@ export async function runInboxPull(opts: PullInboxOptions = {}): Promise<PullInb
       }
 
       {
+        // Stamp the source mailbox's MYOB file BEFORE triage so it routes to
+        // the right company (otherwise applyTriageAndResolve defaults to VPS —
+        // the reason wholesale/JAWS invoices never flowed).
+        const tagPatch: Record<string, any> = { graph_message_id: msg.id, graph_attachment_id: att.id }
+        if (opts.companyFile) tagPatch.myob_company_file = opts.companyFile
         const { error: tagErr } = await c
           .from('ap_invoices')
-          .update({ graph_message_id: msg.id, graph_attachment_id: att.id })
+          .update(tagPatch)
           .eq('id', inserted.id)
         if (tagErr) {
           console.error(`Tag graph ids failed for ${inserted.id}: ${tagErr.message}`)

@@ -9,7 +9,7 @@
 
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { withAuth } from '../../../lib/authServer'
-import { runInboxPull } from '../../../lib/ap-inbox-pull'
+import { runInboxPullAll } from '../../../lib/ap-inbox-pull'
 
 export const config = {
   api: { bodyParser: { sizeLimit: '1mb' } },
@@ -22,7 +22,7 @@ export default withAuth('edit:supplier_invoices', async (req: NextApiRequest, re
   }
 
   const { sinceDays } = (req.body || {}) as { sinceDays?: number }
-  const result = await runInboxPull({ sinceDays })
+  const result = await runInboxPullAll({ sinceDays })
 
   if (!result.ok) {
     const { status, ...payload } = result
