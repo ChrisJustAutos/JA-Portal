@@ -788,6 +788,7 @@ export async function postFoundInvoiceToMyob(args: {
   if (!invoiceNumber) return { posted: false, reason: 'no invoice number parsed' }
   if (!extracted.invoiceDate) return { posted: false, reason: 'no invoice date parsed' }
   if (total == null) return { posted: false, reason: 'no invoice total parsed' }
+  if (!(total > 0)) return { posted: false, reason: `invoice total is ${total} — refusing to auto-post a zero/negative bill` }
   if (extracted.parseConfidence === 'low') return { posted: false, reason: 'low parse confidence' }
   if (extracted.isCreditNote) return { posted: false, reason: 'looks like a credit note — enter manually' }
   if (statementAmount != null && Math.abs(Math.abs(statementAmount) - total) > 0.05) {
