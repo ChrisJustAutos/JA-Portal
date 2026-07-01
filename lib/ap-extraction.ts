@@ -401,28 +401,43 @@ function nullableIsoDate(v: any): string | null {
   return null
 }
 
-// Repair the common extraction slip where lineTotalExGst captured the per-UNIT
-// price instead of the extended (qty × unit) amount — so the lines don't sum to
-// the subtotal even though the invoice is fine. If the current line totals don't
-// match the subtotal but qty × unitPrice does, swap in the extended amounts.
-// Conservative: only fires when it demonstrably fixes the reconciliation.
+// Repair the common extraction slips where lineTotalExGst isn't actually the
+// ex-GST extended total, so the lines don't sum to the subtotal even though the
+// invoice is fine. We test a few interpretations of what the model captured and,
+// if one reconciles to the subtotal (when the current values don't), swap it in:
+//   1. extended     — the model grabbed the per-UNIT price → use qty × unit
+//   2. inc→ex       — the model grabbed GST-INCLUSIVE line totals (they sum to
+//                     the invoice total, not the subtotal) → divide GST lines by 1.1
+//   3. both         — per-unit AND inc-GST
+// Conservative: only applies a candidate that demonstrably beats the current sum.
 function reconcileLineTotals(lines: ExtractedAPLineItem[], subtotalExGst: number | null): ExtractedAPLineItem[] {
   const TOL = 0.10
   if (subtotalExGst == null || lines.length === 0) return lines
   const r2 = (n: number) => Math.round(n * 100) / 100
+  const divisor = (l: ExtractedAPLineItem) => (l.taxCode === 'FRE' ? 1 : 1.1)  // default GST
 
   const lineSum = r2(lines.reduce((s, l) => s + (l.lineTotalExGst ?? 0), 0))
   if (Math.abs(lineSum - subtotalExGst) <= TOL) return lines   // already reconciles
 
-  // Candidate extended totals from qty × unit price where both are present.
-  const candidates = lines.map(l =>
-    l.qty != null && l.unitPriceExGst != null ? r2(l.qty * l.unitPriceExGst) : l.lineTotalExGst,
-  )
-  const candSum = r2(candidates.reduce((s: number, v) => s + (v ?? 0), 0))
+  const extended = lines.map(l =>
+    l.qty != null && l.unitPriceExGst != null ? r2(l.qty * l.unitPriceExGst) : l.lineTotalExGst)
+  const incToEx = lines.map(l => l.lineTotalExGst == null ? null : r2(l.lineTotalExGst / divisor(l)))
+  const bothFix = lines.map((l, i) => extended[i] == null ? null : r2(extended[i]! / divisor(l)))
 
-  if (Math.abs(candSum - subtotalExGst) <= TOL && Math.abs(candSum - subtotalExGst) < Math.abs(lineSum - subtotalExGst)) {
-    return lines.map((l, i) => ({ ...l, lineTotalExGst: candidates[i] ?? l.lineTotalExGst }))
+  const candidates: { name: string; vals: (number | null)[] }[] = [
+    { name: 'extended', vals: extended },
+    { name: 'inc->ex', vals: incToEx },
+    { name: 'extended+inc->ex', vals: bothFix },
+  ]
+
+  let best: { name: string; vals: (number | null)[] } | null = null
+  let bestErr = Math.abs(lineSum - subtotalExGst)
+  for (const cand of candidates) {
+    const sum = r2(cand.vals.reduce((s: number, v) => s + (v ?? 0), 0))
+    const err = Math.abs(sum - subtotalExGst)
+    if (err <= TOL && err < bestErr) { best = cand; bestErr = err }
   }
+  if (best) return lines.map((l, i) => ({ ...l, lineTotalExGst: best!.vals[i] ?? l.lineTotalExGst }))
   return lines
 }
 
