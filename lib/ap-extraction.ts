@@ -76,6 +76,14 @@ export interface ExtractedAPInvoice {
   isCreditNote: boolean
   lineItems: ExtractedAPLineItem[]
   parseConfidence: 'high' | 'medium' | 'low'
+  // EFT / direct-deposit bank details printed on the invoice (the "pay to"
+  // block). Used by the VPS auto-entry fact-check to compare against the
+  // supplier's MYOB card bank details (a BEC / changed-account guard).
+  bankDetails: {
+    bsb: string | null            // digits only where possible (e.g. "062000")
+    accountNumber: string | null  // digits only where possible
+    accountName: string | null
+  }
 }
 
 export interface ExtractionResult {
@@ -226,7 +234,12 @@ Output ONLY a JSON object with this exact shape:
       "taxCode":         "Best-effort resolved tax code: 'GST' (10% applicable), 'FRE' (no GST / free), or null if uncertain. Default to 'GST' if the line clearly shows a GST charge but no explicit code."
     }
   ],
-  "parseConfidence": "Your self-assessment of extraction accuracy. 'high' = clear scan, all key fields read confidently. 'medium' = some fields ambiguous or layout unusual. 'low' = significant uncertainty, manual review essential."
+  "parseConfidence": "Your self-assessment of extraction accuracy. 'high' = clear scan, all key fields read confidently. 'medium' = some fields ambiguous or layout unusual. 'low' = significant uncertainty, manual review essential.",
+  "bankDetails": {
+    "bsb":           "The supplier's BSB from the EFT / direct-deposit / 'pay to' payment block, digits only (6 digits, strip the dash). null if no bank details printed.",
+    "accountNumber": "The supplier's bank account number from the payment block, digits only. null if not shown.",
+    "accountName":   "The bank account name from the payment block (often the supplier's legal/trading name). null if not shown."
+  }
 }
 
 Rules:
@@ -313,7 +326,21 @@ function validateAndNormalise(raw: any): ExtractedAPInvoice {
     isCreditNote: raw.isCreditNote === true,
     lineItems: normaliseLineItems(raw.lineItems),
     parseConfidence: ['high', 'medium', 'low'].includes(raw.parseConfidence) ? raw.parseConfidence : 'medium',
+    bankDetails: {
+      bsb:           digitsOrNull((raw.bankDetails || {}).bsb),
+      accountNumber: digitsOrNull((raw.bankDetails || {}).accountNumber),
+      accountName:   nullableString((raw.bankDetails || {}).accountName),
+    },
   }
+}
+
+// BSB / account number → digits only, or null. Keeps comparison robust to
+// formatting ("062-000" vs "062000").
+function digitsOrNull(v: any): string | null {
+  const s = nullableString(v)
+  if (!s) return null
+  const digits = s.replace(/\D/g, '')
+  return digits.length >= 4 ? digits : null
 }
 
 function nullableString(v: any): string | null {

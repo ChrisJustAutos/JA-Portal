@@ -32,6 +32,7 @@
     "pages/api/cron/task-automations.ts":           { "maxDuration": 300 },
     "pages/api/cron/crm-campaigns.ts":              { "maxDuration": 120 },
     "pages/api/cron/ap-statement-watch.ts":         { "maxDuration": 300 },
+    "pages/api/cron/ap-auto-entry.ts":              { "maxDuration": 300 },
     "pages/api/cron/agents.ts":                     { "maxDuration": 300 },
     "pages/api/b2b/admin/stock-transfer.ts":        { "maxDuration": 300 }
   },
@@ -83,6 +84,10 @@
     {
       "path": "/api/cron/ap-statement-watch",
       "schedule": "*/10 * * * *"
+    },
+    {
+      "path": "/api/cron/ap-auto-entry",
+      "schedule": "*/15 * * * *"
     },
     {
       "path": "/api/cron/letter-watch",

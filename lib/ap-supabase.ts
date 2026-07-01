@@ -555,6 +555,9 @@ export async function applyTriageAndResolve(invoiceId: string): Promise<void> {
       taxCode: l.tax_code,
     })),
     parseConfidence: (inv.parse_confidence || 'medium') as 'high' | 'medium' | 'low',
+    // Not persisted on ap_invoices — only the VPS auto-entry path reads bank
+    // details (straight off the fresh extraction). Nulls here are fine.
+    bankDetails: { bsb: null, accountNumber: null, accountName: null },
   }
 
   const preset = await findSupplierMatch(extracted.vendor.name, extracted.vendor.abn)

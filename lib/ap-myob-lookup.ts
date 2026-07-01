@@ -37,6 +37,10 @@ export interface MyobSupplierLite {
   // Primary-address email off the card (Addresses[0].Email), when present.
   // Used by the statement automation to chase a supplier for a missing invoice.
   email: string | null
+  // Bank details off the card's Payment Details tab (BSB / account no / name),
+  // when populated. Used by the VPS auto-entry fact-check to compare against the
+  // bank details printed on the invoice. Null when the card has none on file.
+  bank: { bsb: string | null; accountNumber: string | null; accountName: string | null } | null
   // Default purchase/expense account on the MYOB supplier card. Used by
   // the auto-match flow to pre-fill the AP invoice's resolved_account_*.
   defaultExpenseAccount: MyobAccountRef | null
@@ -324,6 +328,21 @@ function mapSupplier(it: any): MyobSupplierLite {
   const addresses: any[] = Array.isArray(it?.Addresses) ? it.Addresses : []
   const email = (addresses.map(a => (a?.Email || '').trim()).find(Boolean)) || null
 
+  // Bank details live on the card's Payment Details tab. Field path varies by
+  // MYOB AccountRight version — read defensively from the likely locations and
+  // fall back to null (→ the auto-entry bank check treats it as "unverified").
+  const pd = it?.PaymentDetails || it?.BankingDetails || it?.BuyingDetails?.PaymentDetails || {}
+  const digits = (v: any): string | null => {
+    const s = (v == null ? '' : String(v)).replace(/\D/g, '')
+    return s.length >= 4 ? s : null
+  }
+  const bsb = digits(pd.BSBNumber ?? pd.BSB ?? pd.Bsb)
+  const acctNo = digits(pd.BankAccountNumber ?? pd.AccountNumber ?? pd.BankAccount)
+  const acctName = (pd.BankAccountName ?? pd.AccountName ?? null)
+  const bank = (bsb || acctNo || acctName)
+    ? { bsb, accountNumber: acctNo, accountName: acctName ? String(acctName).trim() || null : null }
+    : null
+
   const expenseAcc = it?.BuyingDetails?.ExpenseAccount
   const defaultExpenseAccount: MyobAccountRef | null = expenseAcc?.UID
     ? {
@@ -340,6 +359,7 @@ function mapSupplier(it: any): MyobSupplierLite {
     abn: abn ? String(abn).replace(/\s/g, '') : null,
     isIndividual: it.IsIndividual === true,
     email,
+    bank,
     defaultExpenseAccount,
   }
 }
