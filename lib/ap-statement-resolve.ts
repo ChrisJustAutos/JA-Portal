@@ -74,28 +74,45 @@ interface ApInvoiceRow {
   total_inc_gst: number | null
   triage_status: string | null
   triage_override: string | null
+  triage_reasons: string[] | null
   resolved_supplier_uid: string | null
   status: string | null
 }
 
 const AP_INVOICE_COLS =
-  'id, invoice_number, total_inc_gst, triage_status, triage_override, resolved_supplier_uid, status'
+  'id, invoice_number, total_inc_gst, triage_status, triage_override, triage_reasons, resolved_supplier_uid, status'
+
+// Portal-review flags that DON'T affect the bill's correctness, so they must not
+// block an autonomous post (the automation is separate from the AP portal/queue).
+// po-no-job-match = the invoice's PO didn't tie to a workshop job — irrelevant to
+// the bill, and always true for JAWS (wholesale, not job-based).
+const SOFT_TRIAGE_REASONS = new Set(['po-no-job-match'])
+function onlySoftReasons(reasons: string[] | null): boolean {
+  const flags = (reasons || []).filter(r => r.startsWith('RED:') || r.startsWith('YELLOW:'))
+  if (flags.length === 0) return true
+  return flags.every(r => SOFT_TRIAGE_REASONS.has(r.replace(/^(RED|YELLOW):/, '').split(':')[0]))
+}
 
 const now = () => new Date().toISOString()
 const money = (n: number | null | undefined) =>
   n == null || !isFinite(n) ? '—' : `$${Number(n).toLocaleString('en-AU', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
 const esc = (s: any) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 
-// A found invoice is safe to post automatically only when it's high-confidence:
-// triage green (or explicitly overridden green) + a resolved MYOB supplier +
-// its total matching the statement line within the same tolerance the matcher
-// uses. Everything else falls through to a human.
+// A found invoice is safe to post automatically when it has a resolved MYOB
+// supplier, its total matches the statement line, and it's either fully green or
+// only carries soft portal-review flags (e.g. po-no-job-match) that don't affect
+// the bill. Real problems (unmapped supplier, uncoded account, low confidence,
+// totals mismatch, duplicate, credit note) still make triage non-green with a
+// non-soft reason and hold it back.
 function canAutoPost(inv: ApInvoiceRow, amount: number | null): boolean {
-  const green = (inv.triage_status === 'green' || inv.triage_override === 'green') && !!inv.resolved_supplier_uid
+  const triageOk =
+    inv.triage_status === 'green' ||
+    inv.triage_override === 'green' ||
+    (inv.triage_status === 'yellow' && onlySoftReasons(inv.triage_reasons))
   const amountOk =
     amount != null && inv.total_inc_gst != null &&
     Math.abs(Number(inv.total_inc_gst) - Math.abs(amount)) <= AMOUNT_TOLERANCE
-  return green && amountOk && inv.status !== 'posted' && inv.status !== 'rejected'
+  return triageOk && !!inv.resolved_supplier_uid && amountOk && inv.status !== 'posted' && inv.status !== 'rejected'
 }
 
 interface GapWork {
