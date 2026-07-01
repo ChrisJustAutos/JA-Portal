@@ -22,9 +22,10 @@
 // duplicate SupplierInvoiceNumber links the existing bill instead of creating one.
 
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { normaliseInvoiceNumber, type StatementMatchOutcome } from './ap-statement-match'
+import { normaliseInvoiceNumber, type StatementMatchOutcome, type MatchResult } from './ap-statement-match'
 import { type CompanyFileLabel, getSupplierByUid } from './ap-myob-lookup'
 import { createServiceBill } from './ap-myob-bill'
+import { huntInvoicesInInbox } from './ap-inbox-pull'
 import { sendMail } from './email'
 import type { ExtractedStatement } from './ap-statement-extraction'
 
@@ -95,161 +96,165 @@ function canAutoPost(inv: ApInvoiceRow, amount: number | null): boolean {
   return green && amountOk && inv.status !== 'posted' && inv.status !== 'rejected'
 }
 
+interface GapWork {
+  r: MatchResult
+  ref: string | null
+  amount: number | null
+  date: string | null
+  norm: string
+  prior: { status: string; supplier_emailed_at: string | null } | null
+}
+
+const toIso = (s: string | null | undefined): string | null => {
+  if (!s) return null
+  const t = Date.parse(s)
+  return isFinite(t) ? new Date(t).toISOString() : null
+}
+const isoDaysAgo = (d: number) => new Date(Date.now() - d * 86400_000).toISOString()
+
 export async function resolveStatementGaps(
   c: SupabaseClient,
   args: ResolveArgs,
 ): Promise<ResolutionAction[]> {
   const { companyFile, supplierUid, supplierName, inboxMailbox, matchOutcome, dryRun } = args
   const actions: ResolutionAction[] = []
-  const toChase: { reference: string | null; amount: number | null; date: string | null; norm: string }[] = []
 
-  // Persist the per-invoice state (skipped on dry-run). Omit first_seen_at so
-  // the insert default sticks and re-runs don't reset it.
-  const persist = async (norm: string, ref: string | null, amount: number | null, date: string | null, patch: Record<string, any>) => {
+  // Supplier card once — the email drives BOTH the inbox-hunt sender filter and
+  // the chase fallback.
+  let supplierEmail: string | null = null
+  try { supplierEmail = (await getSupplierByUid(companyFile, supplierUid))?.email || null } catch { /* leave null */ }
+
+  // Persist per-invoice state (skipped on dry-run). Omit first_seen_at so the
+  // insert default sticks and re-runs don't reset it.
+  const persist = async (w: { norm: string; ref: string | null; amount: number | null; date: string | null }, patch: Record<string, any>) => {
     if (dryRun) return
     try {
       await c.from('ap_statement_missing_invoices').upsert({
-        company_file: companyFile,
-        supplier_uid: supplierUid,
-        invoice_number_norm: norm,
-        invoice_number: ref,
-        invoice_date: date,
-        amount,
-        supplier_name: supplierName,
-        last_seen_at: now(),
-        ...patch,
+        company_file: companyFile, supplier_uid: supplierUid, invoice_number_norm: w.norm,
+        invoice_number: w.ref, invoice_date: w.date, amount: w.amount, supplier_name: supplierName,
+        last_seen_at: now(), ...patch,
       }, { onConflict: 'company_file,supplier_uid,invoice_number_norm' })
     } catch (e: any) {
       console.error('[statement-resolve] persist failed:', e?.message || e)
     }
   }
 
-  const post = async (
-    norm: string, ref: string | null, amount: number | null, date: string | null,
-    invoiceId: string, source: 'portal' | 'inbox',
-  ): Promise<ResolutionAction> => {
-    if (dryRun) {
-      return { reference: ref, amount, date, outcome: 'posted', detail: `Would auto-post to MYOB (${companyFile}, from ${source})` }
+  // Post an invoice we've located (already in the portal, or just ingested from
+  // the inbox) — but only when it's high-confidence. Otherwise leave it in the
+  // AP queue for a human.
+  const postFound = async (w: GapWork, invoiceId: string, source: 'portal' | 'inbox'): Promise<ResolutionAction> => {
+    const { data } = await c.from('ap_invoices').select(AP_INVOICE_COLS).eq('id', invoiceId).maybeSingle()
+    const inv = (data as ApInvoiceRow | null)
+    const base = { reference: w.ref, amount: w.amount, date: w.date }
+    if (!inv) return { ...base, outcome: 'left_for_review', detail: 'Located an invoice but its row vanished — review manually' }
+    if (!canAutoPost(inv, w.amount)) {
+      await persist(w, { status: 'left_for_review', posted_invoice_id: invoiceId, last_action_at: now() })
+      return { ...base, outcome: 'left_for_review', detail: `${source === 'inbox' ? 'Found in the inbox' : 'In the AP queue'} but needs a human to code/post (${companyFile})` }
     }
+    if (dryRun) return { ...base, outcome: 'posted', detail: `Would auto-post to MYOB (${companyFile}, from ${source})` }
     try {
       const r = await createServiceBill(invoiceId, ACTOR)
       const resolution = r.adopted ? 'adopted' : (source === 'portal' ? 'posted_from_portal' : 'posted_from_inbox')
-      await persist(norm, ref, amount, date, {
-        status: 'posted', resolution, posted_bill_uid: r.myobBillUid, posted_invoice_id: invoiceId,
-        last_action_at: now(), error: null,
-      })
-      return {
-        reference: ref, amount, date, outcome: 'posted', billUid: r.myobBillUid,
-        detail: r.adopted ? `Linked existing MYOB bill #${r.adoptedBillNumber || '?'} (${companyFile})` : `Auto-posted to MYOB (${companyFile})`,
-      }
+      await persist(w, { status: 'posted', resolution, posted_bill_uid: r.myobBillUid, posted_invoice_id: invoiceId, last_action_at: now(), error: null })
+      return { ...base, outcome: 'posted', billUid: r.myobBillUid, detail: r.adopted ? `Linked existing MYOB bill #${r.adoptedBillNumber || '?'} (${companyFile})` : `Auto-posted to MYOB (${companyFile}, from ${source})` }
     } catch (e: any) {
       const msg = (e?.message || String(e)).slice(0, 300)
-      await persist(norm, ref, amount, date, { status: 'left_for_review', posted_invoice_id: invoiceId, last_action_at: now(), error: msg })
-      return { reference: ref, amount, date, outcome: 'left_for_review', detail: `Found in AP queue but post failed: ${msg}` }
+      await persist(w, { status: 'left_for_review', posted_invoice_id: invoiceId, last_action_at: now(), error: msg })
+      return { ...base, outcome: 'left_for_review', detail: `Located the invoice but post failed: ${msg}` }
     }
   }
 
-  for (const r of matchOutcome.results) {
-    if (r.status !== 'missing' && r.status !== 'in-portal-pending') continue
+  // ── Classify every gap; settle in-portal-pending immediately ──
+  const gaps = matchOutcome.results.filter(r => r.status === 'missing' || r.status === 'in-portal-pending')
+  const missing: GapWork[] = []
+  for (const r of gaps) {
     const ref = r.line.invoiceNumber || r.line.reference
     const amount = r.line.amount
     const date = r.line.date
     const norm = normaliseInvoiceNumber(ref)
     if (!norm) continue // can't dedupe an unnumbered line — leave it to the digest
-
-    // Prior state — a settled row means nothing to do.
     const { data: existing } = await c.from('ap_statement_missing_invoices')
-      .select('status, resolution, supplier_emailed_at')
+      .select('status, supplier_emailed_at')
       .eq('company_file', companyFile).eq('supplier_uid', supplierUid).eq('invoice_number_norm', norm)
       .maybeSingle()
-    const prior = (existing as any) || null
-    if (prior && (prior.status === 'posted' || prior.status === 'resolved')) {
-      await persist(norm, ref, amount, date, {}) // bump last_seen_at only
+    const w: GapWork = { r, ref, amount, date, norm, prior: (existing as any) || null }
+
+    if (w.prior && (w.prior.status === 'posted' || w.prior.status === 'resolved')) {
+      await persist(w, {}) // bump last_seen_at only
       actions.push({ reference: ref, amount, date, outcome: 'already_resolved', detail: 'Already resolved on an earlier run' })
       continue
     }
-
-    // Is there an invoice we can post? Either the matcher already tied it to the
-    // portal (in-portal-pending), or a broad lookup finds one the matcher's
-    // supplier/window scope missed.
-    let candidate: ApInvoiceRow | null = null
     if (r.status === 'in-portal-pending' && r.portalInvoice?.id) {
-      const { data } = await c.from('ap_invoices').select(AP_INVOICE_COLS).eq('id', r.portalInvoice.id).maybeSingle()
-      candidate = (data as any) || null
-    } else if (r.status === 'missing' && amount != null) {
-      candidate = await broadFindInvoice(c, companyFile, norm, amount)
-    }
-
-    if (candidate) {
-      const source: 'portal' | 'inbox' = r.status === 'in-portal-pending' ? 'portal' : 'inbox'
-      if (canAutoPost(candidate, amount)) {
-        actions.push(await post(norm, ref, amount, date, candidate.id, source))
-      } else {
-        await persist(norm, ref, amount, date, { status: 'left_for_review', posted_invoice_id: candidate.id, last_action_at: now() })
-        actions.push({ reference: ref, amount, date, outcome: 'left_for_review', detail: `In the AP queue but needs a human to code/post (${companyFile})` })
-      }
+      actions.push(await postFound(w, r.portalInvoice.id, 'portal'))
       continue
     }
-
-    // Nothing anywhere. Chase the supplier — but only once.
-    if (prior && prior.status === 'emailed_supplier') {
-      actions.push({ reference: ref, amount, date, outcome: 'already_resolved', detail: `Supplier already chased${prior.supplier_emailed_at ? ` on ${prior.supplier_emailed_at.slice(0, 10)}` : ''}` })
-      continue
-    }
-    toChase.push({ reference: ref, amount, date, norm })
+    missing.push(w) // truly missing — hunt the inbox next
   }
 
-  // One chase email per supplier covering all their outstanding invoices.
-  if (toChase.length > 0) {
-    let email: string | null = null
-    try { email = (await getSupplierByUid(companyFile, supplierUid))?.email || null } catch { /* leave null */ }
+  // ── Search the mailbox itself for the missing invoices ──
+  const toChase: GapWork[] = []
+  if (missing.length > 0) {
+    const sinceIso = toIso(matchOutcome.windowFrom) || isoDaysAgo(60)
+    let hits = new Map<string, { found: boolean; invoiceId?: string; attachmentName?: string }>()
+    try {
+      hits = await huntInvoicesInInbox({
+        mailbox: inboxMailbox, companyFile, supplierEmail, sinceIsoDate: sinceIso,
+        targets: missing.map(w => ({ norm: w.norm, raw: w.ref, amount: w.amount })),
+        dryRun,
+      })
+    } catch (e: any) {
+      console.error('[statement-resolve] inbox hunt failed:', e?.message || e)
+    }
 
-    if (!email) {
-      for (const g of toChase) {
-        await persist(g.norm, g.reference, g.amount, g.date, { status: 'no_supplier_email', last_action_at: now() })
-        actions.push({ reference: g.reference, amount: g.amount, date: g.date, outcome: 'no_supplier_email', detail: 'No supplier email on the MYOB card — chase manually' })
+    for (const w of missing) {
+      const hit = hits.get(w.norm)
+      if (hit?.found) {
+        if (dryRun) {
+          actions.push({ reference: w.ref, amount: w.amount, date: w.date, outcome: 'posted', detail: `Found in inbox (${hit.attachmentName || 'PDF'}) — would ingest & post` })
+        } else if (hit.invoiceId) {
+          actions.push(await postFound(w, hit.invoiceId, 'inbox'))
+        } else {
+          toChase.push(w) // found but couldn't ingest — fall back to chase
+        }
+        continue
+      }
+      // Not in the inbox — chase the supplier, once.
+      if (w.prior && w.prior.status === 'emailed_supplier') {
+        actions.push({ reference: w.ref, amount: w.amount, date: w.date, outcome: 'already_resolved', detail: `Supplier already chased${w.prior.supplier_emailed_at ? ` on ${w.prior.supplier_emailed_at.slice(0, 10)}` : ''}` })
+      } else {
+        toChase.push(w)
+      }
+    }
+  }
+
+  // ── One chase email per supplier covering all its still-missing invoices ──
+  if (toChase.length > 0) {
+    if (!supplierEmail) {
+      for (const w of toChase) {
+        await persist(w, { status: 'no_supplier_email', last_action_at: now() })
+        actions.push({ reference: w.ref, amount: w.amount, date: w.date, outcome: 'no_supplier_email', detail: 'Not in the inbox and no supplier email on the MYOB card — chase manually' })
       }
     } else if (dryRun) {
-      for (const g of toChase) actions.push({ reference: g.reference, amount: g.amount, date: g.date, outcome: 'emailed_supplier', emailedTo: email, detail: `Would email ${email} to request this invoice` })
+      for (const w of toChase) actions.push({ reference: w.ref, amount: w.amount, date: w.date, outcome: 'emailed_supplier', emailedTo: supplierEmail, detail: `Not in inbox — would email ${supplierEmail} to request it` })
     } else {
-      const { subject, html } = buildChaseEmail(supplierName, toChase)
+      const { subject, html } = buildChaseEmail(supplierName, toChase.map(w => ({ reference: w.ref, amount: w.amount, date: w.date })))
       try {
-        await sendMail(inboxMailbox, { to: [email], cc: [inboxMailbox], replyTo: inboxMailbox, subject, html })
-        for (const g of toChase) {
-          await persist(g.norm, g.reference, g.amount, g.date, { status: 'emailed_supplier', supplier_emailed_at: now(), supplier_email_to: email, last_action_at: now(), error: null })
-          actions.push({ reference: g.reference, amount: g.amount, date: g.date, outcome: 'emailed_supplier', emailedTo: email, detail: `Emailed ${email} to request this invoice` })
+        await sendMail(inboxMailbox, { to: [supplierEmail], cc: [inboxMailbox], replyTo: inboxMailbox, subject, html })
+        for (const w of toChase) {
+          await persist(w, { status: 'emailed_supplier', supplier_emailed_at: now(), supplier_email_to: supplierEmail, last_action_at: now(), error: null })
+          actions.push({ reference: w.ref, amount: w.amount, date: w.date, outcome: 'emailed_supplier', emailedTo: supplierEmail, detail: `Not in inbox — emailed ${supplierEmail} to request it` })
         }
       } catch (e: any) {
         const msg = (e?.message || String(e)).slice(0, 300)
-        for (const g of toChase) {
-          await persist(g.norm, g.reference, g.amount, g.date, { status: 'outstanding', last_action_at: now(), error: msg })
-          actions.push({ reference: g.reference, amount: g.amount, date: g.date, outcome: 'no_supplier_email', detail: `Supplier email send failed: ${msg}` })
+        for (const w of toChase) {
+          await persist(w, { status: 'outstanding', last_action_at: now(), error: msg })
+          actions.push({ reference: w.ref, amount: w.amount, date: w.date, outcome: 'no_supplier_email', detail: `Supplier email send failed: ${msg}` })
         }
       }
     }
   }
 
   return actions
-}
-
-// Broad hunt for an invoice already ingested into ap_invoices that the matcher's
-// supplier+window scope missed. Filter on company file + amount (± tolerance) in
-// SQL to keep the set tiny, then match the normalised invoice number in JS
-// (Postgres can't cheaply reproduce normaliseInvoiceNumber). Never returns a
-// posted/rejected row.
-async function broadFindInvoice(
-  c: SupabaseClient, companyFile: CompanyFileLabel, norm: string, amount: number,
-): Promise<ApInvoiceRow | null> {
-  const abs = Math.abs(amount)
-  const { data } = await c.from('ap_invoices')
-    .select(AP_INVOICE_COLS)
-    .eq('myob_company_file', companyFile)
-    .not('status', 'in', '("posted","rejected")')
-    .gte('total_inc_gst', abs - AMOUNT_TOLERANCE)
-    .lte('total_inc_gst', abs + AMOUNT_TOLERANCE)
-    .limit(50)
-  const rows = (data || []) as ApInvoiceRow[]
-  return rows.find(row => normaliseInvoiceNumber(row.invoice_number) === norm) || null
 }
 
 function buildChaseEmail(

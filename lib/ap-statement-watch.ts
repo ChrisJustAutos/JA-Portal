@@ -34,16 +34,13 @@ import { matchStatementAgainstMyob } from './ap-statement-match'
 import { type CompanyFileLabel } from './ap-myob-lookup'
 import { tryAutoMatchSupplier } from './ap-myob-automatch'
 import { resolveStatementGaps, type ResolutionAction } from './ap-statement-resolve'
-import { runInboxPullAll } from './ap-inbox-pull'
 
 // Phase 2 master switch. When on (default), the watcher doesn't just report
-// gaps — it auto-posts high-confidence finds to MYOB and emails suppliers to
-// chase true no-shows (see lib/ap-statement-resolve). Set to 'false' to fall
-// back to Phase-1 report-only behaviour.
+// gaps — for each missing invoice it SEARCHES THE MAILBOX for the actual
+// invoice email (auto-posting high-confidence finds to MYOB), and emails the
+// supplier to chase true no-shows (see lib/ap-statement-resolve). Set to
+// 'false' to fall back to Phase-1 report-only behaviour.
 const autoResolveEnabled = () => (process.env.AP_STATEMENT_AUTORESOLVE || 'true').toLowerCase().trim() !== 'false'
-// Drain both AP inboxes into ap_invoices once at the start of a run so a
-// just-arrived invoice is seen as "in the portal" rather than "missing".
-const drainInboxEnabled = () => (process.env.AP_STATEMENT_DRAIN_INBOX || 'true').toLowerCase().trim() !== 'false'
 
 let _sb: SupabaseClient | null = null
 function sb(): SupabaseClient {
@@ -153,15 +150,6 @@ export async function runStatementWatch(opts: WatchOptions = {}): Promise<Statem
   let skippedDuplicates = 0
 
   const autoResolve = autoResolveEnabled()
-
-  // Drain both AP inboxes into ap_invoices before reconciling, so an invoice
-  // the supplier emailed (but no-one entered) is already "in the portal" by the
-  // time we match — it then auto-posts instead of triggering a chase email.
-  // Skipped on dry-run (it writes rows) and when Phase 2 is off.
-  if (autoResolve && drainInboxEnabled() && !dryRun) {
-    try { await runInboxPullAll({ sinceDays: Math.max(sinceDays, 45) }) }
-    catch (e: any) { console.error('[ap-statement-watch] inbox drain failed (continuing):', e?.message || e) }
-  }
 
   for (const inbox of inboxes()) {
     let messages: GraphMessageSummary[] = []

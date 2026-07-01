@@ -342,6 +342,44 @@ export async function listAllMessagesWithAttachments(
   return out
 }
 
+/**
+ * Full-text search a mailbox (all folders) for messages matching `query`.
+ * Uses Graph's `$search` (KQL), which matches subject, body, sender AND —
+ * on Exchange Online — indexed attachment content, so a search for an
+ * invoice number can surface the email even when the number only appears
+ * inside the PDF. Used by the statement automation to hunt for a missing
+ * invoice's email.
+ *
+ * `$search` can't be combined with `$filter`/`$orderby` (results come back
+ * by relevance), so date-windowing is left to the caller. Returns only
+ * messages that have attachments.
+ */
+export async function searchMessagesWithAttachments(
+  mailbox: string,
+  query: string,
+  opts: { top?: number } = {},
+): Promise<GraphMessageSummary[]> {
+  const top = Math.min(Math.max(opts.top || 25, 1), 50)
+  const params = new URLSearchParams({
+    '$select': 'id,subject,from,receivedDateTime,hasAttachments',
+    '$search': `"${query.replace(/"/g, ' ')}"`,
+    '$top':    String(top),
+  })
+  const path = `/users/${encodeURIComponent(mailbox)}/messages?${params.toString()}`
+  // ConsistencyLevel:eventual is harmless here and required by Graph for some
+  // advanced query shapes — set it defensively.
+  const data = await graphJson<{ value: any[] }>(path, { headers: { ConsistencyLevel: 'eventual' } })
+  return (data.value || [])
+    .filter(m => m.hasAttachments)
+    .map(m => ({
+      id: m.id,
+      subject: m.subject || null,
+      from: m.from?.emailAddress?.address || null,
+      receivedDateTime: m.receivedDateTime,
+      hasAttachments: true,
+    }))
+}
+
 // ── Mailbox write operations ────────────────────────────────────────────
 
 /**
