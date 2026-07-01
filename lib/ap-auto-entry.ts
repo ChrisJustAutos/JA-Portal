@@ -190,11 +190,24 @@ export async function runAutoEntry(opts: { dryRun?: boolean; sinceDays?: number;
     // Invoice entered → file the email away (read + move out of Inbox). Only on
     // a real posting; flagged / left emails stay put for manual handling. Move
     // LAST (it invalidates the message id) and best-effort (needs Mail.ReadWrite).
+    // Record the outcome on the posted log row(s) so move failures are visible.
     if (anyPosted && !dryRun) {
-      try { await markMessageAsRead(mailbox, msg.id) } catch (e: any) { console.warn(`[ap-auto-entry] mark-read failed for ${msg.id}: ${e?.message || e}`) }
-      if (processedFolderId) {
-        try { await moveMessageToFolder(mailbox, msg.id, processedFolderId) } catch (e: any) { console.warn(`[ap-auto-entry] move failed for ${msg.id}: ${e?.message || e}`) }
+      let moved = false
+      const notes: string[] = []
+      try { await markMessageAsRead(mailbox, msg.id) } catch (e: any) { notes.push(`mark-read failed: ${e?.message || e}`) }
+      if (!processedFolderId) {
+        notes.push(`folder "${folderName}" not found in mailbox`)
+      } else {
+        try { await moveMessageToFolder(mailbox, msg.id, processedFolderId); moved = true; notes.push(`moved to "${folderName}"`) }
+        catch (e: any) { notes.push(`move failed: ${e?.message || e}`) }
       }
+      const moveNote = notes.join('; ').slice(0, 300)
+      if (notes.length) console.warn(`[ap-auto-entry] ${msg.id}: ${moveNote}`)
+      try {
+        await c.from('ap_auto_entry_log')
+          .update({ moved, move_note: moveNote })
+          .eq('graph_message_id', msg.id).eq('outcome', 'posted')
+      } catch { /* best effort */ }
     }
   }
 
