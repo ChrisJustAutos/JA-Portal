@@ -811,24 +811,22 @@ export async function postFoundInvoiceToMyob(args: {
     wlines = [{ description: `Invoice ${invoiceNumber}`, lineTotalExGst: sub, taxCode: 'GST', partNumber: null }]
   }
 
-  // ── Coding: supplier default → per-line smart → give up ──
-  let coding: 'supplier-default' | 'smart-lines'
-  let accountUids: string[]
+  // ── Coding: PER LINE — a line-account rule / strong history wins for that
+  // line (so a core-charge line goes to the core account, an Aramex/freight
+  // line to the freight account, etc.); anything a rule doesn't catch falls
+  // back to the supplier card's default expense account. Only give up if a line
+  // has neither a rule match nor a default to fall back on.
   const supplier = await getSupplierByUid(companyFile, supplierUid).catch(() => null)
   const defaultAcc = supplier?.defaultExpenseAccount?.uid || null
-  if (defaultAcc) {
-    coding = 'supplier-default'
-    accountUids = wlines.map(() => defaultAcc)
-  } else {
-    const resolved: string[] = []
-    for (const l of wlines) {
-      const r = await resolveLineAccount(c, { supplier_uid: supplierUid, myob_company_file: companyFile, description: l.description, part_number: l.partNumber })
-      if (!r.account_uid) return { posted: false, reason: 'no supplier default account and lines could not be auto-coded' }
-      resolved.push(r.account_uid)
-    }
-    coding = 'smart-lines'
-    accountUids = resolved
+  const accountUids: string[] = []
+  let usedRule = false
+  for (const l of wlines) {
+    const r = await resolveLineAccount(c, { supplier_uid: supplierUid, myob_company_file: companyFile, description: l.description, part_number: l.partNumber })
+    if (r.account_uid) { accountUids.push(r.account_uid); usedRule = true }
+    else if (defaultAcc) { accountUids.push(defaultAcc) }
+    else return { posted: false, reason: `line "${l.description.slice(0, 40)}" has no account rule and the supplier card has no default account` }
   }
+  const coding: 'supplier-default' | 'smart-lines' = usedRule ? 'smart-lines' : 'supplier-default'
 
   // ── Post to MYOB ──
   const { gstUid, freUid } = await ensureTaxCodes(companyFile)
