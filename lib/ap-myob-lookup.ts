@@ -34,6 +34,9 @@ export interface MyobSupplierLite {
   name: string                  // CompanyName or fallback
   abn: string | null
   isIndividual: boolean
+  // Primary-address email off the card (Addresses[0].Email), when present.
+  // Used by the statement automation to chase a supplier for a missing invoice.
+  email: string | null
   // Default purchase/expense account on the MYOB supplier card. Used by
   // the auto-match flow to pre-fill the AP invoice's resolved_account_*.
   defaultExpenseAccount: MyobAccountRef | null
@@ -315,6 +318,12 @@ function mapSupplier(it: any): MyobSupplierLite {
     it?.ABN ||
     null
 
+  // Email lives on the primary address card. On list/search responses MYOB
+  // returns Addresses inline (no $expand needed), and getSupplierByUid returns
+  // the full card, so both paths carry it. Take the first non-empty Email.
+  const addresses: any[] = Array.isArray(it?.Addresses) ? it.Addresses : []
+  const email = (addresses.map(a => (a?.Email || '').trim()).find(Boolean)) || null
+
   const expenseAcc = it?.BuyingDetails?.ExpenseAccount
   const defaultExpenseAccount: MyobAccountRef | null = expenseAcc?.UID
     ? {
@@ -330,6 +339,7 @@ function mapSupplier(it: any): MyobSupplierLite {
     name,
     abn: abn ? String(abn).replace(/\s/g, '') : null,
     isIndividual: it.IsIndividual === true,
+    email,
     defaultExpenseAccount,
   }
 }

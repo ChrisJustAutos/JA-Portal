@@ -33,6 +33,17 @@ import { extractStatementFromPdf } from './ap-statement-extraction'
 import { matchStatementAgainstMyob } from './ap-statement-match'
 import { type CompanyFileLabel } from './ap-myob-lookup'
 import { tryAutoMatchSupplier } from './ap-myob-automatch'
+import { resolveStatementGaps, type ResolutionAction } from './ap-statement-resolve'
+import { runInboxPullAll } from './ap-inbox-pull'
+
+// Phase 2 master switch. When on (default), the watcher doesn't just report
+// gaps — it auto-posts high-confidence finds to MYOB and emails suppliers to
+// chase true no-shows (see lib/ap-statement-resolve). Set to 'false' to fall
+// back to Phase-1 report-only behaviour.
+const autoResolveEnabled = () => (process.env.AP_STATEMENT_AUTORESOLVE || 'true').toLowerCase().trim() !== 'false'
+// Drain both AP inboxes into ap_invoices once at the start of a run so a
+// just-arrived invoice is seen as "in the portal" rather than "missing".
+const drainInboxEnabled = () => (process.env.AP_STATEMENT_DRAIN_INBOX || 'true').toLowerCase().trim() !== 'false'
 
 let _sb: SupabaseClient | null = null
 function sb(): SupabaseClient {
@@ -85,6 +96,7 @@ export interface StatementScanResult {
   invoiceLines: number
   missing: MissingInvoice[]
   mismatches: MismatchInvoice[]
+  resolution?: ResolutionAction[]   // Phase 2 actions taken for this statement's gaps
   reviewReason?: string
   error?: string
 }
@@ -139,6 +151,17 @@ export async function runStatementWatch(opts: WatchOptions = {}): Promise<Statem
   let scannedMessages = 0
   let statementsFound = 0
   let skippedDuplicates = 0
+
+  const autoResolve = autoResolveEnabled()
+
+  // Drain both AP inboxes into ap_invoices before reconciling, so an invoice
+  // the supplier emailed (but no-one entered) is already "in the portal" by the
+  // time we match — it then auto-posts instead of triggering a chase email.
+  // Skipped on dry-run (it writes rows) and when Phase 2 is off.
+  if (autoResolve && drainInboxEnabled() && !dryRun) {
+    try { await runInboxPullAll({ sinceDays: Math.max(sinceDays, 45) }) }
+    catch (e: any) { console.error('[ap-statement-watch] inbox drain failed (continuing):', e?.message || e) }
+  }
 
   for (const inbox of inboxes()) {
     let messages: GraphMessageSummary[] = []
@@ -218,10 +241,25 @@ export async function runStatementWatch(opts: WatchOptions = {}): Promise<Statem
             .filter(r => r.status === 'amount-mismatch')
             .map(r => ({ reference: r.line.invoiceNumber || r.line.reference, statementAmount: r.line.amount, myobAmount: r.myobBill?.totalAmount ?? null }))
 
+          // Phase 2: act on the gaps (auto-post high-confidence finds, chase the
+          // supplier for true no-shows). Non-fatal — a resolver error must not
+          // sink the scan/dedupe record.
+          let resolution: ResolutionAction[] | undefined
+          if (autoResolve) {
+            try {
+              resolution = await resolveStatementGaps(c, {
+                companyFile: inbox.companyFile, supplierUid: sup.uid, supplierName: sup.matchedName || supplierName,
+                inboxMailbox: inbox.mailbox, statement, matchOutcome: outcome, dryRun,
+              })
+            } catch (e: any) {
+              console.error('[ap-statement-watch] resolve failed:', e?.message || e)
+            }
+          }
+
           await record({
             ...base, supplierName: sup.matchedName || supplierName, supplierUid: sup.uid, supplierResolution: 'matched',
             status: missing.length > 0 ? 'has_missing' : 'reconciled',
-            period, invoiceLines, missing, mismatches,
+            period, invoiceLines, missing, mismatches, resolution,
           })
         } catch (e: any) {
           await record({
@@ -252,9 +290,20 @@ export function buildDigestHtml(outcome: StatementWatchOutcome, generatedAt: str
   const withMissing = stmts.filter(r => r.missing.length > 0)
   const clean = stmts.filter(r => r.status === 'reconciled')
 
+  // Phase 2 actions, flattened across statements (carry the supplier + file for display).
+  const acts = stmts.flatMap(r => (r.resolution || []).map(a => ({ ...a, supplier: r.supplierName, companyFile: r.companyFile })))
+  const posted = acts.filter(a => a.outcome === 'posted')
+  const emailed = acts.filter(a => a.outcome === 'emailed_supplier')
+  const forReview = acts.filter(a => a.outcome === 'left_for_review')
+  const noEmail = acts.filter(a => a.outcome === 'no_supplier_email')
+
+  const actionBits = [
+    posted.length ? `${posted.length} auto-posted` : '',
+    emailed.length ? `${emailed.length} supplier-chased` : '',
+  ].filter(Boolean).join(', ')
   const subject = (stmts.length === 0 && inboxErrors.length > 0)
     ? `AP statement check — ⚠ ${inboxErrors.length} inbox${inboxErrors.length === 1 ? '' : 'es'} could not be read`
-    : `AP statement check — ${totalMissing} missing invoice${totalMissing === 1 ? '' : 's'} across ${withMissing.length} statement${withMissing.length === 1 ? '' : 's'}${inboxErrors.length ? ` (+${inboxErrors.length} inbox error${inboxErrors.length === 1 ? '' : 's'})` : ''}`
+    : `AP statement check — ${totalMissing} missing invoice${totalMissing === 1 ? '' : 's'} across ${withMissing.length} statement${withMissing.length === 1 ? '' : 's'}${actionBits ? ` · ${actionBits}` : ''}${inboxErrors.length ? ` (+${inboxErrors.length} inbox error${inboxErrors.length === 1 ? '' : 's'})` : ''}`
 
   const card = (inner: string, accent: string) =>
     `<div style="border:1px solid #e5e7eb;border-left:3px solid ${accent};border-radius:8px;padding:12px 14px;margin:0 0 12px">${inner}</div>`
@@ -273,6 +322,28 @@ export function buildDigestHtml(outcome: StatementWatchOutcome, generatedAt: str
         '#dc2626',
       )
     }
+  }
+
+  // Actions taken this run (Phase 2). Shown above the raw reconciliation so the
+  // reader sees what was already handled before the "still missing" list.
+  const actLine = (a: (typeof acts)[number], right: string) =>
+    `<div style="font-size:13px;padding:2px 0">${esc(a.supplier || 'Unknown')} <span style="color:#6b7280">· ${esc(a.companyFile)}</span> — <span style="font-family:monospace">${esc(a.reference || '—')}</span> ${right}</div>`
+  if (posted.length > 0) {
+    body += `<h2 style="font-size:15px;color:#059669;margin:18px 0 8px">✅ Auto-posted to MYOB (${posted.length})</h2>`
+    body += posted.map(a => actLine(a, `<span style="font-weight:600">${money(a.amount)}</span>`)).join('')
+  }
+  if (emailed.length > 0) {
+    body += `<h2 style="font-size:15px;color:#2563eb;margin:18px 0 8px">📧 Chased supplier (${emailed.length})</h2>`
+    body += emailed.map(a => actLine(a, `${money(a.amount)} <span style="color:#6b7280">→ ${esc(a.emailedTo || '')}</span>`)).join('')
+  }
+  if (forReview.length > 0) {
+    body += `<h2 style="font-size:15px;color:#d97706;margin:18px 0 8px">🟡 Found — left for review (${forReview.length})</h2>`
+    body += forReview.map(a => actLine(a, `${money(a.amount)} <span style="color:#6b7280">· needs coding/posting</span>`)).join('')
+    body += `<div style="font-size:12px;color:#6b7280;margin-top:4px">Open <a href="https://justautos.app/ap">/ap</a> to code and post.</div>`
+  }
+  if (noEmail.length > 0) {
+    body += `<h2 style="font-size:15px;color:#dc2626;margin:18px 0 8px">⚠ Couldn't chase — no supplier email (${noEmail.length})</h2>`
+    body += noEmail.map(a => actLine(a, `${money(a.amount)} <span style="color:#6b7280">· add an email to the MYOB card or chase manually</span>`)).join('')
   }
 
   // Missing — the headline.
@@ -318,7 +389,7 @@ export function buildDigestHtml(outcome: StatementWatchOutcome, generatedAt: str
     `<h1 style="font-size:18px;margin:0 0 4px">Supplier statement reconciliation</h1>` +
     `<div style="font-size:12px;color:#6b7280;margin-bottom:6px">${esc(generatedAt)} · ${stmts.length} statement(s) checked · ${outcome.scannedMessages} email(s) scanned</div>` +
     body +
-    `<div style="font-size:11px;color:#9097a6;margin-top:20px;border-top:1px solid #e5e7eb;padding-top:8px">In-stock reconcile is read-only — nothing was written to MYOB. Enter the missing invoices in MYOB, or review at <a href="https://justautos.app/ap/statement">/ap/statement</a>.</div>` +
+    `<div style="font-size:11px;color:#9097a6;margin-top:20px;border-top:1px solid #e5e7eb;padding-top:8px">High-confidence finds are auto-posted to MYOB and suppliers are auto-chased for true no-shows; anything left in "still missing" or "for review" needs a human. Review at <a href="https://justautos.app/ap/statement">/ap/statement</a>.</div>` +
     `</div>`
 
   return { subject, html }
