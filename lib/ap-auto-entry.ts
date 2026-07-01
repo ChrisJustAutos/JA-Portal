@@ -323,7 +323,7 @@ async function processAttachment(
     return { ...base, supplierName, invoiceNumber: extracted.invoiceNumber, amount: total, outcome: 'error', bankCheck: bank, failReasons: reasons, error: posted.reason }
   }
 
-  const built = buildAutoEntryBlocks({ ...slackCommon, outcome: 'posted', adopted: posted.adopted, pdfUrl: staged?.url })
+  const built = buildAutoEntryBlocks({ ...slackCommon, codingSummary: posted.codingDetail || slackCommon.codingSummary, outcome: 'posted', adopted: posted.adopted, pdfUrl: staged?.url })
   const ts = await sendSlack(built)
   await logRow(c, { mailbox, companyFile, msg, att }, { outcome: 'posted', supplierName, supplierUid, invoiceNumber: extracted.invoiceNumber, invoiceDate: extracted.invoiceDate, amount: total, bankCheck: bank, myobBillUid: posted.billUid || null, pdfStoragePath: staged?.path || null, slackTs: ts })
   return { ...base, supplierName, invoiceNumber: extracted.invoiceNumber, amount: total, outcome: 'posted', bankCheck: bank, failReasons: [], billUid: posted.billUid, adopted: posted.adopted }

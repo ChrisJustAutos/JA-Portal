@@ -766,6 +766,7 @@ export interface FoundInvoicePostResult {
   adopted?: boolean
   adoptedBillNumber?: string | null
   coding?: 'supplier-default' | 'smart-lines'
+  codingDetail?: string      // distinct accounts used, e.g. "Injector Purchase ×2, Freight Inwards"
   reason?: string            // set when posted=false — why it couldn't auto-post
 }
 
@@ -818,15 +819,29 @@ export async function postFoundInvoiceToMyob(args: {
   // has neither a rule match nor a default to fall back on.
   const supplier = await getSupplierByUid(companyFile, supplierUid).catch(() => null)
   const defaultAcc = supplier?.defaultExpenseAccount?.uid || null
+  const defaultName = supplier?.defaultExpenseAccount?.name || 'supplier default'
   const accountUids: string[] = []
-  let usedRule = false
+  const accountNames: string[] = []
+  let usedSmart = false
   for (const l of wlines) {
     const r = await resolveLineAccount(c, { supplier_uid: supplierUid, myob_company_file: companyFile, description: l.description, part_number: l.partNumber })
-    if (r.account_uid) { accountUids.push(r.account_uid); usedRule = true }
-    else if (defaultAcc) { accountUids.push(defaultAcc) }
-    else return { posted: false, reason: `line "${l.description.slice(0, 40)}" has no account rule and the supplier card has no default account` }
+    if (r.account_uid) {
+      // Rule or strong history — confident, auto-applied.
+      accountUids.push(r.account_uid); accountNames.push(r.account_name || 'account'); usedSmart = true
+    } else if (r.suggested_account_uid) {
+      // Autonomous smart match — a keyword/name match against the chart, or a
+      // weak-history top pick — overrides the supplier default for this line.
+      accountUids.push(r.suggested_account_uid); accountNames.push(r.suggested_account_name || 'account'); usedSmart = true
+    } else if (defaultAcc) {
+      accountUids.push(defaultAcc); accountNames.push(defaultName)
+    } else {
+      return { posted: false, reason: `line "${l.description.slice(0, 40)}" couldn't be coded and the supplier card has no default account` }
+    }
   }
-  const coding: 'supplier-default' | 'smart-lines' = usedRule ? 'smart-lines' : 'supplier-default'
+  const coding: 'supplier-default' | 'smart-lines' = usedSmart ? 'smart-lines' : 'supplier-default'
+  const counts = new Map<string, number>()
+  for (const n of accountNames) counts.set(n, (counts.get(n) || 0) + 1)
+  const codingDetail = Array.from(counts.entries()).map(([n, ct]) => (ct > 1 ? `${n} ×${ct}` : n)).join(', ')
 
   // ── Post to MYOB ──
   const { gstUid, freUid } = await ensureTaxCodes(companyFile)
@@ -836,7 +851,7 @@ export async function postFoundInvoiceToMyob(args: {
   // Smart-adopt: if it's already in MYOB under this SupplierInvoiceNumber, link it.
   try {
     const existing = await findExistingMyobBill(conn.id, conn.company_file_id, String(invoiceNumber), supplierUid)
-    if (existing) return { posted: true, billUid: existing.uid, adopted: true, adoptedBillNumber: existing.number, coding }
+    if (existing) return { posted: true, billUid: existing.uid, adopted: true, adoptedBillNumber: existing.number, coding, codingDetail }
   } catch { /* fall through to create */ }
 
   let body: ServiceBillBody
@@ -891,7 +906,7 @@ export async function postFoundInvoiceToMyob(args: {
     })
   } catch (e: any) { console.error(`[stmt-post] recordPostedLineHistory failed: ${e?.message || e}`) }
 
-  return { posted: true, billUid: safeBillUid, adopted: false, coding }
+  return { posted: true, billUid: safeBillUid, adopted: false, coding, codingDetail }
 }
 
 // ── Spend Money path (no-supplier invoices) ────────────────────────────
