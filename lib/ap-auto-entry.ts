@@ -21,6 +21,9 @@ import {
   listMessagesWithAttachments,
   listAttachmentMeta,
   getAttachmentBase64,
+  markMessageAsRead,
+  findFolderByDisplayName,
+  moveMessageToFolder,
   GraphAttachmentMeta,
   GraphMessageSummary,
 } from './microsoft-graph'
@@ -58,6 +61,10 @@ function sb(): SupabaseClient {
 export const autoEntryEnabled = () => (process.env.AP_AUTO_ENTRY_ENABLED || 'false').toLowerCase().trim() === 'true'
 function vpsMailbox(): string { return (process.env.AP_AUTO_ENTRY_MAILBOX || 'accounts@justautosmechanical.com.au').trim() }
 function slackWebhook(): string | null { return (process.env.SLACK_WEBHOOK_AP_VPS || '').trim() || null }
+// Once an invoice is entered into MYOB, its email is marked read and moved out
+// of the Inbox into this folder so the inbox only shows what still needs a human.
+// Flagged / not-posted emails are left in place. Set to '' to disable the move.
+function processedFolder(): string { return (process.env.AP_AUTO_ENTRY_PROCESSED_FOLDER ?? 'Read /Printed').trim() }
 
 export type AutoEntryOutcomeKind = 'posted' | 'flagged' | 'skipped_not_invoice' | 'error'
 
@@ -143,9 +150,18 @@ export async function runAutoEntry(opts: { dryRun?: boolean; sinceDays?: number;
   }
   out.scannedMessages = messages.length
 
+  // Resolve the "filed" folder once (best-effort; null → we just mark read).
+  let processedFolderId: string | null = null
+  const folderName = processedFolder()
+  if (folderName && !dryRun) {
+    try { processedFolderId = await findFolderByDisplayName(mailbox, folderName) } catch { /* leave null */ }
+    if (!processedFolderId) console.warn(`[ap-auto-entry] folder "${folderName}" not found in ${mailbox} — posted emails will be marked read but not moved`)
+  }
+
   for (const msg of messages) {
     let atts: GraphAttachmentMeta[]
     try { atts = await listAttachmentMeta(mailbox, msg.id) } catch { continue }
+    let anyPosted = false
     for (const att of atts) {
       const kind = classify(att)
       if (!kind) continue
@@ -157,11 +173,24 @@ export async function runAutoEntry(opts: { dryRun?: boolean; sinceDays?: number;
 
       try {
         const item = await processAttachment(c, { mailbox, companyFile, msg, att, kind, dryRun })
-        if (item) out.processed.push(item)
+        if (item) {
+          out.processed.push(item)
+          if (item.outcome === 'posted') anyPosted = true
+        }
       } catch (e: any) {
         const error = (e?.message || String(e)).slice(0, 300)
         out.processed.push({ messageId: msg.id, attachmentId: att.id, attachmentName: att.name || '', supplierName: null, invoiceNumber: null, amount: null, outcome: 'error', bankCheck: 'skipped', failReasons: [], error })
         if (!dryRun) await logRow(c, { mailbox, companyFile, msg, att }, { outcome: 'error', error })
+      }
+    }
+
+    // Invoice entered → file the email away (read + move out of Inbox). Only on
+    // a real posting; flagged / left emails stay put for manual handling. Move
+    // LAST (it invalidates the message id) and best-effort (needs Mail.ReadWrite).
+    if (anyPosted && !dryRun) {
+      try { await markMessageAsRead(mailbox, msg.id) } catch (e: any) { console.warn(`[ap-auto-entry] mark-read failed for ${msg.id}: ${e?.message || e}`) }
+      if (processedFolderId) {
+        try { await moveMessageToFolder(mailbox, msg.id, processedFolderId) } catch (e: any) { console.warn(`[ap-auto-entry] move failed for ${msg.id}: ${e?.message || e}`) }
       }
     }
   }
