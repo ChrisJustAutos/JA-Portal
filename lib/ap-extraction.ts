@@ -227,8 +227,8 @@ Output ONLY a JSON object with this exact shape:
       "description":     "Line description as shown.",
       "qty":             "Quantity supplied as a number. null if not shown.",
       "uom":             "Unit of measure (e.g. 'EACH', 'KG', 'L'). null if not shown.",
-      "unitPriceExGst":  "Unit price ex-GST as a number. null if not shown.",
-      "lineTotalExGst":  "Line total ex-GST as a number. null if not shown.",
+      "unitPriceExGst":  "Price for ONE unit, ex-GST, as a number (the per-item rate). null if not shown.",
+      "lineTotalExGst":  "The EXTENDED line total ex-GST = quantity × unit price — i.e. the amount at the far RIGHT of the line, NOT the per-unit price. If the line shows qty > 1, this must be bigger than the unit price. If only a unit price column is shown, multiply it by the quantity. The sum of every line's lineTotalExGst must equal subtotalExGst. null only if genuinely not shown.",
       "gstAmount":       "GST charged on this line as a number. null if not shown.",
       "taxCodeRaw":      "The tax-code marker as printed on the line ('GST', 'FRE', '3', '0', '*', etc). null if no marker shown. Many supplier invoices include a code legend near the totals — if a numeric code maps to '10%' or 'GST' in the legend, set this to the raw code (e.g. '3') so we can map downstream.",
       "taxCode":         "Best-effort resolved tax code: 'GST' (10% applicable), 'FRE' (no GST / free), or null if uncertain. Default to 'GST' if the line clearly shows a GST charge but no explicit code."
@@ -324,7 +324,7 @@ function validateAndNormalise(raw: any): ExtractedAPInvoice {
     },
     notes: nullableString(raw.notes),
     isCreditNote: raw.isCreditNote === true,
-    lineItems: normaliseLineItems(raw.lineItems),
+    lineItems: reconcileLineTotals(normaliseLineItems(raw.lineItems), nullableNumber(totals.subtotalExGst)),
     parseConfidence: ['high', 'medium', 'low'].includes(raw.parseConfidence) ? raw.parseConfidence : 'medium',
     bankDetails: {
       bsb:           digitsOrNull((raw.bankDetails || {}).bsb),
@@ -399,6 +399,31 @@ function nullableIsoDate(v: any): string | null {
   const d = new Date(s)
   if (!isNaN(d.getTime())) return d.toISOString().substring(0, 10)
   return null
+}
+
+// Repair the common extraction slip where lineTotalExGst captured the per-UNIT
+// price instead of the extended (qty × unit) amount — so the lines don't sum to
+// the subtotal even though the invoice is fine. If the current line totals don't
+// match the subtotal but qty × unitPrice does, swap in the extended amounts.
+// Conservative: only fires when it demonstrably fixes the reconciliation.
+function reconcileLineTotals(lines: ExtractedAPLineItem[], subtotalExGst: number | null): ExtractedAPLineItem[] {
+  const TOL = 0.10
+  if (subtotalExGst == null || lines.length === 0) return lines
+  const r2 = (n: number) => Math.round(n * 100) / 100
+
+  const lineSum = r2(lines.reduce((s, l) => s + (l.lineTotalExGst ?? 0), 0))
+  if (Math.abs(lineSum - subtotalExGst) <= TOL) return lines   // already reconciles
+
+  // Candidate extended totals from qty × unit price where both are present.
+  const candidates = lines.map(l =>
+    l.qty != null && l.unitPriceExGst != null ? r2(l.qty * l.unitPriceExGst) : l.lineTotalExGst,
+  )
+  const candSum = r2(candidates.reduce((s: number, v) => s + (v ?? 0), 0))
+
+  if (Math.abs(candSum - subtotalExGst) <= TOL && Math.abs(candSum - subtotalExGst) < Math.abs(lineSum - subtotalExGst)) {
+    return lines.map((l, i) => ({ ...l, lineTotalExGst: candidates[i] ?? l.lineTotalExGst }))
+  }
+  return lines
 }
 
 function normaliseLineItems(raw: any): ExtractedAPLineItem[] {
