@@ -604,8 +604,9 @@ export async function runInboxPull(opts: PullInboxOptions = {}): Promise<PullInb
 // merged and deduped: a Graph `$search` per invoice number (matches subject /
 // body / indexed PDF text) and a sender-domain scan (all folders, windowed).
 // Each candidate PDF is parsed at most once and matched against every
-// outstanding target; on a hit the invoice is ingested into ap_invoices (same
-// insert → tag → upload → triage path the pull uses) so it can then be posted.
+// outstanding target; on a hit the parsed invoice + original PDF bytes are
+// returned so the caller can post STRAIGHT TO MYOB — nothing is written to
+// ap_invoices (the statement automation is fully background, no portal row).
 //
 // Bounded on purpose (each parse is a Claude call): caps on messages examined
 // and PDFs parsed, and it stops as soon as every target is found.
@@ -621,13 +622,15 @@ export interface HuntTarget {
 }
 export interface HuntHit {
   found: boolean
-  invoiceId?: string           // set when ingested (omitted on dryRun)
   messageId?: string
   attachmentName?: string
+  // Present on a non-dry hit — the parsed invoice + original bytes, so the
+  // caller posts it to MYOB directly without staging an ap_invoices row.
+  extraction?: Awaited<ReturnType<typeof extractInvoiceFromPdf>>
+  pdfBytes?: Buffer
 }
 export interface HuntInvoicesArgs {
   mailbox: string
-  companyFile: 'JAWS' | 'VPS'
   supplierEmail?: string | null   // MYOB-card email → sender-domain filter
   sinceIsoDate: string
   targets: HuntTarget[]
@@ -640,7 +643,7 @@ function domainOf(email: string | null | undefined): string | null {
 }
 
 export async function huntInvoicesInInbox(args: HuntInvoicesArgs): Promise<Map<string, HuntHit>> {
-  const { mailbox, companyFile, supplierEmail, sinceIsoDate, targets, dryRun } = args
+  const { mailbox, supplierEmail, sinceIsoDate, targets, dryRun } = args
   const out = new Map<string, HuntHit>()
   for (const t of targets) out.set(t.norm, { found: false })
   if (targets.length === 0) return out
@@ -704,57 +707,14 @@ export async function huntInvoicesInInbox(args: HuntInvoicesArgs): Promise<Map<s
       const total = extraction.invoice.totals?.totalIncGst ?? null
       if (target.amount != null && total != null && Math.abs(Math.abs(target.amount) - total) > HUNT_AMOUNT_TOLERANCE) continue
 
-      if (dryRun) {
-        out.set(target.norm, { found: true, messageId: msg.id, attachmentName: att.name })
-        continue
-      }
-      try {
-        const invoiceId = await ingestFoundAttachment(companyFile, mailbox, msg, att, bytes, extraction)
-        out.set(target.norm, { found: true, invoiceId, messageId: msg.id, attachmentName: att.name })
-      } catch (e: any) {
-        console.error('[hunt] ingest failed:', e?.message || e)
-      }
+      // Matched. Return the parsed invoice (+ bytes for the real post). On a
+      // dry run we don't carry the bytes — the caller only reports the find.
+      out.set(target.norm, {
+        found: true, messageId: msg.id, attachmentName: att.name,
+        extraction: dryRun ? undefined : extraction,
+        pdfBytes: dryRun ? undefined : bytes,
+      })
     }
   }
   return out
-}
-
-// Ingest one already-downloaded+parsed inbox PDF into ap_invoices, mirroring
-// runInboxPull's per-attachment path (insert → stamp graph ids + company file →
-// upload PDF → triage). If this (message,attachment) was already ingested, reuse
-// the existing row instead of duplicating. Returns the ap_invoices id.
-async function ingestFoundAttachment(
-  companyFile: 'JAWS' | 'VPS',
-  mailbox: string,
-  msg: GraphMessageSummary,
-  att: GraphAttachmentMeta,
-  bytes: Buffer,
-  extraction: Awaited<ReturnType<typeof extractInvoiceFromPdf>>,
-): Promise<string> {
-  const c = sb()
-  const { data: existing } = await c.from('ap_invoices')
-    .select('id').eq('graph_message_id', msg.id).eq('graph_attachment_id', att.id).maybeSingle()
-  if (existing?.id) return existing.id
-
-  const inserted = await insertInvoiceWithLines({
-    source: 'email',
-    emailMessageId: msg.id,
-    emailFrom: msg.from,
-    emailSubject: msg.subject,
-    pdfFilename: att.name,
-    fileExtension: 'pdf',
-    extracted: extraction.invoice,
-    rawExtraction: {
-      rawOutput: extraction.rawOutput, model: extraction.model,
-      inputTokens: extraction.inputTokens, outputTokens: extraction.outputTokens, costMicroUsd: extraction.costMicroUsd,
-    },
-  })
-  await c.from('ap_invoices')
-    .update({ graph_message_id: msg.id, graph_attachment_id: att.id, myob_company_file: companyFile })
-    .eq('id', inserted.id)
-  try { await uploadInvoicePdf(inserted.pdfStoragePath, bytes, 'application/pdf') }
-  catch (e: any) { console.error(`[hunt] file upload failed for ${inserted.id}: ${e?.message || e}`) }
-  try { await applyTriageAndResolve(inserted.id) }
-  catch (e: any) { console.error(`[hunt] triage failed for ${inserted.id}: ${e?.message || e}`) }
-  return inserted.id
 }

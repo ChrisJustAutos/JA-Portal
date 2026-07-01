@@ -87,9 +87,10 @@
 
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
 import { getConnection, myobFetch, MyobConnection } from './myob'
-import { CompanyFileLabel } from './ap-myob-lookup'
-import { recordPostedLineHistory } from './ap-line-resolver'
+import { CompanyFileLabel, getSupplierByUid } from './ap-myob-lookup'
+import { recordPostedLineHistory, resolveLineAccount } from './ap-line-resolver'
 import { applyBillPayment } from './ap-payment'
+import type { ExtractedAPInvoice } from './ap-extraction'
 
 const TAX_CODE_TTL_MS = 30 * 24 * 3600 * 1000
 const SETTINGS_ID = 'singleton'
@@ -233,6 +234,157 @@ export async function findExistingMyobBill(
   return null
 }
 
+// ── Shared bill-body builder (pure) ─────────────────────────────────────
+//
+// The strict GST reconciliation / line-nudge / credit-note math, factored out
+// so BOTH the portal path (createServiceBill, from an ap_invoices row) and the
+// headless statement-automation path (postFoundInvoiceToMyob, from a freshly
+// extracted invoice with no portal row) build an identical bill envelope. No
+// I/O — caller supplies resolved account UIDs, tax UIDs and header totals.
+
+export interface BuildBillLineInput {
+  description: string        // raw combined part+description (truncated here)
+  accountUid: string
+  lineTotalExGst: number
+  taxCode: string            // 'GST' | 'FRE' | raw supplier code
+}
+export interface BuildBillArgs {
+  label: string              // for log lines (invoice id / number)
+  invoiceNumber: string
+  invoiceDate: string
+  supplierUid: string
+  vendorName: string | null
+  viaCapricorn?: boolean
+  capricornReference?: string | null
+  linkedJobNumber?: string | null
+  isCreditNote: boolean
+  totalIncGst: number | null
+  gstAmount: number | null
+  subtotalExGst: number | null
+  lines: BuildBillLineInput[]
+  gstUid: string
+  freUid: string | null
+}
+
+export function buildServiceBillBody(a: BuildBillArgs): { body: ServiceBillBody; totalAmount: number } {
+  const label = a.label
+
+  function taxUidFor(taxCode: string): string {
+    const code = (taxCode || 'GST').toUpperCase()
+    if (code === 'GST') return a.gstUid
+    if (code === 'FRE') {
+      if (!a.freUid) throw new Error(`Line uses FRE but FRE tax code is not set up in MYOB`)
+      return a.freUid
+    }
+    throw new Error(`Unsupported tax code "${code}" — supported: GST, FRE`)
+  }
+  function rateFor(taxCode: string): number {
+    return (taxCode || 'GST').toUpperCase() === 'FRE' ? 0 : GST_RATE
+  }
+
+  // ── Build bill lines (each Total rounded to 2dp) ──
+  const billLines: ServiceBillLineBody[] = []
+  const lineRates: number[] = []
+  for (const l of a.lines) {
+    const description = (l.description || '').substring(0, 255)
+    const lineTotal = round2(Number(l.lineTotalExGst || 0))
+    billLines.push({
+      Type: 'Transaction',
+      Description: description || 'AP line',
+      Account: { UID: l.accountUid },
+      Total: lineTotal,
+      TaxCode: { UID: taxUidFor(l.taxCode) },
+    })
+    lineRates.push(rateFor(l.taxCode))
+  }
+
+  // ── Determine authoritative subtotal / GST / total (PDF header = truth) ──
+  const headerTotalRaw    = a.totalIncGst != null && Number.isFinite(Number(a.totalIncGst))    ? Number(a.totalIncGst)    : null
+  const headerGstRaw      = a.gstAmount != null && Number.isFinite(Number(a.gstAmount))        ? Number(a.gstAmount)      : null
+  const headerSubtotalRaw = a.subtotalExGst != null && Number.isFinite(Number(a.subtotalExGst)) ? Number(a.subtotalExGst) : null
+
+  const headerTotal    = headerTotalRaw    !== null ? round2(headerTotalRaw)    : null
+  let   headerGst      = headerGstRaw      !== null ? round2(headerGstRaw)      : null
+  let   headerSubtotal = headerSubtotalRaw !== null ? round2(headerSubtotalRaw) : null
+
+  if (headerTotal !== null && headerGst !== null && headerSubtotal !== null) {
+    const impliedTotal = round2(headerSubtotal + headerGst)
+    const internalDelta = round2(headerTotal - impliedTotal)
+    if (Math.abs(internalDelta) > HEADER_CONSISTENCY_TOLERANCE) {
+      console.warn(`AP ${label}: header values inconsistent — subtotal ${headerSubtotal.toFixed(2)} + gst ${headerGst.toFixed(2)} = ${impliedTotal.toFixed(2)}, but total says ${headerTotal.toFixed(2)} (delta ${internalDelta.toFixed(2)}). Trusting total + gst, re-deriving subtotal.`)
+      headerSubtotal = round2(headerTotal - headerGst)
+    }
+  } else if (headerTotal !== null && headerGst !== null && headerSubtotal === null) {
+    headerSubtotal = round2(headerTotal - headerGst)
+  } else if (headerTotal !== null && headerSubtotal !== null && headerGst === null) {
+    headerGst = round2(headerTotal - headerSubtotal)
+  }
+
+  let subtotal: number
+  let totalTax: number
+  let totalAmount: number
+
+  const initialLineSum = round2(billLines.reduce((s, l) => s + l.Total, 0))
+
+  if (headerTotal !== null && headerGst !== null && headerSubtotal !== null) {
+    const lineDelta = round2(headerSubtotal - initialLineSum)
+    if (lineDelta !== 0) {
+      if (Math.abs(lineDelta) > MAX_LINE_NUDGE) {
+        throw new Error(
+          `Cannot post: line items sum to $${initialLineSum.toFixed(2)} but PDF header subtotal is $${headerSubtotal.toFixed(2)} (delta $${lineDelta.toFixed(2)}). Edit the line items to match the invoice subtotal before approving.`
+        )
+      }
+      let maxIdx = 0
+      for (let i = 1; i < billLines.length; i++) {
+        if (Math.abs(billLines[i].Total) > Math.abs(billLines[maxIdx].Total)) maxIdx = i
+      }
+      billLines[maxIdx].Total = round2(billLines[maxIdx].Total + lineDelta)
+      const adjustedLineSum = round2(billLines.reduce((s, l) => s + l.Total, 0))
+      console.log(`AP ${label}: nudged line ${maxIdx} by ${lineDelta.toFixed(2)} — line sum now ${adjustedLineSum.toFixed(2)} matches header subtotal ${headerSubtotal.toFixed(2)}`)
+    }
+    subtotal    = headerSubtotal
+    totalTax    = round2(billLines.reduce((s, l, idx) => s + round2(l.Total * lineRates[idx]), 0))
+    totalAmount = round2(subtotal + totalTax)
+    if (Math.abs(totalAmount - headerTotal) >= 0.01) {
+      console.warn(`AP ${label}: MYOB-style total $${totalAmount.toFixed(2)} differs from PDF header total $${headerTotal.toFixed(2)} by $${(totalAmount - headerTotal).toFixed(2)}. Using MYOB-style.`)
+    }
+  } else {
+    const computedTax = round2(billLines.reduce((s, l, idx) => s + round2(l.Total * lineRates[idx]), 0))
+    subtotal    = initialLineSum
+    totalTax    = computedTax
+    totalAmount = round2(subtotal + totalTax)
+    console.log(`AP ${label}: no PDF header totals — using computed subtotal ${subtotal.toFixed(2)}, tax ${totalTax.toFixed(2)}, total ${totalAmount.toFixed(2)}.`)
+  }
+
+  if (a.isCreditNote) {
+    for (const l of billLines) l.Total = round2(-l.Total)
+    subtotal    = round2(-subtotal)
+    totalTax    = round2(-totalTax)
+    totalAmount = round2(-totalAmount)
+    console.log(`AP ${label}: credit note — posting bill with negative totals (subtotal ${subtotal.toFixed(2)}, total ${totalAmount.toFixed(2)})`)
+  }
+
+  const memoParts = [`${a.isCreditNote ? 'AP CREDIT' : 'AP'}: ${a.vendorName || 'Vendor'} — ${a.invoiceNumber}`]
+  if (a.viaCapricorn && a.capricornReference) memoParts.push(`Capricorn ${a.capricornReference}`)
+  if (a.linkedJobNumber) memoParts.push(`Job ${a.linkedJobNumber}`)
+  const journalMemo = memoParts.join(' — ').substring(0, 255)
+
+  const body: ServiceBillBody = {
+    Date: a.invoiceDate,
+    SupplierInvoiceNumber: String(a.invoiceNumber).substring(0, 13),
+    Supplier: { UID: a.supplierUid },
+    Lines: billLines,
+    JournalMemo: journalMemo,
+    IsTaxInclusive: false,
+    FreightAmount: 0,
+    FreightTaxCode: { UID: a.gstUid },
+    Subtotal: subtotal,
+    TotalTax: totalTax,
+    TotalAmount: totalAmount,
+  }
+  return { body, totalAmount }
+}
+
 // ── Bill creation ───────────────────────────────────────────────────────
 
 export interface CreateServiceBillResult {
@@ -357,161 +509,29 @@ export async function createServiceBill(
     }
   }
 
-  function taxUidFor(taxCode: string): string {
-    const code = (taxCode || 'GST').toUpperCase()
-    if (code === 'GST') return gstUid
-    if (code === 'FRE') {
-      if (!freUid) throw new Error(`Line uses FRE but FRE tax code is not set up in MYOB ${companyFile}`)
-      return freUid
-    }
-    throw new Error(`Unsupported tax code "${code}" — supported: GST, FRE`)
-  }
-
-  function rateFor(taxCode: string): number {
-    return (taxCode || 'GST').toUpperCase() === 'FRE' ? 0 : GST_RATE
-  }
-
-  // ── Build bill lines (each Total rounded to 2dp) ──
-  // Track per-line rates in a parallel array so tax math can use them
-  // without mutating the line body shape MYOB expects.
-  const billLines: ServiceBillLineBody[] = []
-  const lineRates: number[] = []
-  for (const l of lines) {
-    const description = [l.part_number, l.description].filter(Boolean).join(' — ').substring(0, 255)
-    const lineTotal = round2(Number(l.line_total_ex_gst || 0))
-    const accountUid: string = l.account_uid || inv.resolved_account_uid
-    billLines.push({
-      Type: 'Transaction',
-      Description: description || 'AP line',
-      Account: { UID: accountUid },
-      Total: lineTotal,
-      TaxCode: { UID: taxUidFor(l.tax_code) },
-    })
-    lineRates.push(rateFor(l.tax_code))
-  }
-
-  // ── Determine authoritative subtotal / GST / total ──
-  // STRICT MODE: PDF header is the source of truth. Bill envelope numbers
-  // exactly match what Amanda sees on the printed invoice.
-  const headerTotalRaw    = inv.total_inc_gst != null && Number.isFinite(Number(inv.total_inc_gst))    ? Number(inv.total_inc_gst)    : null
-  const headerGstRaw      = inv.gst_amount != null && Number.isFinite(Number(inv.gst_amount))          ? Number(inv.gst_amount)       : null
-  const headerSubtotalRaw = inv.subtotal_ex_gst != null && Number.isFinite(Number(inv.subtotal_ex_gst)) ? Number(inv.subtotal_ex_gst) : null
-
-  const headerTotal    = headerTotalRaw    !== null ? round2(headerTotalRaw)    : null
-  let   headerGst      = headerGstRaw      !== null ? round2(headerGstRaw)      : null
-  let   headerSubtotal = headerSubtotalRaw !== null ? round2(headerSubtotalRaw) : null
-
-  // Internal-consistency check on the header values themselves.
-  // If subtotal + gst != total within tolerance, trust the total (the
-  // most prominent number on the PDF) and re-derive the other two.
-  if (headerTotal !== null && headerGst !== null && headerSubtotal !== null) {
-    const impliedTotal = round2(headerSubtotal + headerGst)
-    const internalDelta = round2(headerTotal - impliedTotal)
-    if (Math.abs(internalDelta) > HEADER_CONSISTENCY_TOLERANCE) {
-      console.warn(`AP ${invoiceId}: header values inconsistent — subtotal ${headerSubtotal.toFixed(2)} + gst ${headerGst.toFixed(2)} = ${impliedTotal.toFixed(2)}, but total says ${headerTotal.toFixed(2)} (delta ${internalDelta.toFixed(2)}). Trusting total + gst, re-deriving subtotal.`)
-      headerSubtotal = round2(headerTotal - headerGst)
-    }
-  } else if (headerTotal !== null && headerGst !== null && headerSubtotal === null) {
-    headerSubtotal = round2(headerTotal - headerGst)
-  } else if (headerTotal !== null && headerSubtotal !== null && headerGst === null) {
-    headerGst = round2(headerTotal - headerSubtotal)
-  }
-
-  // ── Reconcile lines to header subtotal, OR fall back to per-line ──
-  let subtotal: number
-  let totalTax: number
-  let totalAmount: number
-
-  const initialLineSum = round2(billLines.reduce((s, l) => s + l.Total, 0))
-
-  if (headerTotal !== null && headerGst !== null && headerSubtotal !== null) {
-    // STRICT PATH — header values present and reconciled. Bill MUST match.
-    const lineDelta = round2(headerSubtotal - initialLineSum)
-
-    if (lineDelta !== 0) {
-      if (Math.abs(lineDelta) > MAX_LINE_NUDGE) {
-        // Genuine extraction error — refuse to post rather than silently
-        // dump $X onto the largest line.
-        throw new Error(
-          `Cannot post: line items sum to $${initialLineSum.toFixed(2)} but PDF header subtotal is $${headerSubtotal.toFixed(2)} (delta $${lineDelta.toFixed(2)}). Edit the line items to match the invoice subtotal before approving.`
-        )
-      }
-      // Within nudge tolerance — adjust largest line so the line sum
-      // exactly equals the header subtotal.
-      let maxIdx = 0
-      for (let i = 1; i < billLines.length; i++) {
-        if (Math.abs(billLines[i].Total) > Math.abs(billLines[maxIdx].Total)) maxIdx = i
-      }
-      billLines[maxIdx].Total = round2(billLines[maxIdx].Total + lineDelta)
-      const adjustedLineSum = round2(billLines.reduce((s, l) => s + l.Total, 0))
-      console.log(`AP ${invoiceId}: nudged line ${maxIdx} (${billLines[maxIdx].Description.substring(0, 40)}) by ${lineDelta.toFixed(2)} — line sum now ${adjustedLineSum.toFixed(2)} matches header subtotal ${headerSubtotal.toFixed(2)}`)
-    }
-
-    // Recompute tax MYOB-style: per-line round2(Total × rate) then sum.
-    // We were previously trusting headerGst here, but MYOB independently
-    // recalculates tax per line — if the PDF's gst line happened to use
-    // a different rounding (whole-bill 10% vs sum-of-rounded-lines), the
-    // submitted TotalTax/TotalAmount would disagree with MYOB's internal
-    // computation by 1c. Submitting MYOB's own calc keeps the envelope
-    // and the line-level GL entries consistent.
-    subtotal    = headerSubtotal
-    totalTax    = round2(billLines.reduce((s, l, idx) => s + round2(l.Total * lineRates[idx]), 0))
-    totalAmount = round2(subtotal + totalTax)
-    if (Math.abs(totalAmount - headerTotal) >= 0.01) {
-      console.warn(`AP ${invoiceId}: MYOB-style total $${totalAmount.toFixed(2)} differs from PDF header total $${headerTotal.toFixed(2)} by $${(totalAmount - headerTotal).toFixed(2)}. Using MYOB-style — this is the value MYOB will accept and store.`)
-    }
-  } else {
-    // FALLBACK — no header values to reconcile against. Compute totals
-    // using MYOB's own per-line round-then-sum method so our envelope
-    // matches what MYOB will recalc internally.
-    const computedTax = round2(billLines.reduce((s, l, idx) => {
-      return s + round2(l.Total * lineRates[idx])
-    }, 0))
-    subtotal    = initialLineSum
-    totalTax    = computedTax
-    totalAmount = round2(subtotal + totalTax)
-    console.log(`AP ${invoiceId}: no PDF header totals — using computed subtotal ${subtotal.toFixed(2)}, tax ${totalTax.toFixed(2)}, total ${totalAmount.toFixed(2)} (per-line method).`)
-  }
-
-  // Credit note → flip every line + envelope total to negative. Reconciliation
-  // above runs against the positive numbers from the PDF (those are what
-  // Amanda sees), so the negation happens once at the end and the line/header
-  // math stays consistent. MYOB UI does the same when you enter a bill with
-  // negative quantities/amounts as a supplier credit.
-  if (isCreditNote) {
-    for (const l of billLines) l.Total = round2(-l.Total)
-    subtotal    = round2(-subtotal)
-    totalTax    = round2(-totalTax)
-    totalAmount = round2(-totalAmount)
-    console.log(`AP ${invoiceId}: credit note — posting bill with negative totals (subtotal ${subtotal.toFixed(2)}, total ${totalAmount.toFixed(2)})`)
-  }
-
-  const freightAmount = 0
-
-  const memoParts = [
-    `${isCreditNote ? 'AP CREDIT' : 'AP'}: ${inv.vendor_name_parsed || 'Vendor'} — ${inv.invoice_number}`,
-  ]
-  if (inv.via_capricorn && inv.capricorn_reference) {
-    memoParts.push(`Capricorn ${inv.capricorn_reference}`)
-  }
-  if (inv.linked_job_number) {
-    memoParts.push(`Job ${inv.linked_job_number}`)
-  }
-  const journalMemo = memoParts.join(' — ').substring(0, 255)
-
-  const body: ServiceBillBody = {
-    Date: inv.invoice_date,
-    SupplierInvoiceNumber: String(inv.invoice_number).substring(0, 13),
-    Supplier: { UID: inv.resolved_supplier_uid },
-    Lines: billLines,
-    JournalMemo: journalMemo,
-    IsTaxInclusive: false,
-    FreightAmount: freightAmount,
-    FreightTaxCode: { UID: gstUid },
-    Subtotal: subtotal,
-    TotalTax: totalTax,
-    TotalAmount: totalAmount,
-  }
+  // Build the bill envelope via the shared, behaviour-preserving builder.
+  const { body, totalAmount } = buildServiceBillBody({
+    label: invoiceId,
+    invoiceNumber: String(inv.invoice_number),
+    invoiceDate: inv.invoice_date,
+    supplierUid: String(inv.resolved_supplier_uid),
+    vendorName: inv.vendor_name_parsed,
+    viaCapricorn: inv.via_capricorn,
+    capricornReference: inv.capricorn_reference,
+    linkedJobNumber: inv.linked_job_number,
+    isCreditNote,
+    totalIncGst: inv.total_inc_gst,
+    gstAmount: inv.gst_amount,
+    subtotalExGst: inv.subtotal_ex_gst,
+    lines: lines.map((l: any) => ({
+      description: [l.part_number, l.description].filter(Boolean).join(' — '),
+      accountUid: l.account_uid || inv.resolved_account_uid,
+      lineTotalExGst: Number(l.line_total_ex_gst || 0),
+      taxCode: l.tax_code,
+    })),
+    gstUid,
+    freUid,
+  })
 
   const path = `/accountright/${conn.company_file_id}/Purchase/Bill/Service`
   const attemptsSoFar = (inv.myob_post_attempts || 0) + 1
@@ -670,6 +690,148 @@ export async function createServiceBill(
     paymentUid,
     paymentError: paymentError || undefined,
   }
+}
+
+// ── Headless post (statement automation — no ap_invoices row) ───────────
+//
+// Posts a freshly-extracted supplier invoice straight to MYOB WITHOUT creating
+// a portal ap_invoices record. Used by the statement watcher when it finds a
+// missing invoice's email in the inbox: check it, and if it's safe, post it —
+// all in the background. Coding rule (Chris): the supplier card's default
+// expense account first; failing that, per-line smart coding (rules/history);
+// if neither can code the invoice confidently, DON'T post — the caller reports
+// it in the digest for manual entry. Never writes to ap_invoices.
+
+export interface FoundInvoicePostResult {
+  posted: boolean
+  billUid?: string | null
+  adopted?: boolean
+  adoptedBillNumber?: string | null
+  coding?: 'supplier-default' | 'smart-lines'
+  reason?: string            // set when posted=false — why it couldn't auto-post
+}
+
+export async function postFoundInvoiceToMyob(args: {
+  companyFile: CompanyFileLabel
+  supplierUid: string
+  supplierName: string | null
+  extracted: ExtractedAPInvoice
+  statementAmount: number | null   // statement line amount, for a final guard
+  pdfBytes: Buffer
+  pdfFilename: string
+  postedBy: string
+}): Promise<FoundInvoicePostResult> {
+  const c = sb()
+  const { companyFile, supplierUid, supplierName, extracted, statementAmount } = args
+  const invoiceNumber = extracted.invoiceNumber
+  const total = extracted.totals.totalIncGst
+
+  // ── Confidence gate ── (anything uncertain → don't post; caller reports it)
+  if (!invoiceNumber) return { posted: false, reason: 'no invoice number parsed' }
+  if (!extracted.invoiceDate) return { posted: false, reason: 'no invoice date parsed' }
+  if (total == null) return { posted: false, reason: 'no invoice total parsed' }
+  if (extracted.parseConfidence === 'low') return { posted: false, reason: 'low parse confidence' }
+  if (extracted.isCreditNote) return { posted: false, reason: 'looks like a credit note — enter manually' }
+  if (statementAmount != null && Math.abs(Math.abs(statementAmount) - total) > 0.05) {
+    return { posted: false, reason: `amount mismatch (statement $${Math.abs(statementAmount).toFixed(2)} vs invoice $${total.toFixed(2)})` }
+  }
+
+  // ── Working line list (synthesise one line if the invoice had no detail) ──
+  interface WLine { description: string; lineTotalExGst: number; taxCode: string; partNumber: string | null }
+  const rawLines = extracted.lineItems || []
+  let wlines: WLine[]
+  if (rawLines.length > 0) {
+    wlines = rawLines.map(li => ({
+      description: [li.partNumber, li.description].filter(Boolean).join(' — ') || 'AP line',
+      lineTotalExGst: li.lineTotalExGst ?? 0,
+      taxCode: li.taxCode || 'GST',
+      partNumber: li.partNumber,
+    }))
+  } else {
+    const sub = extracted.totals.subtotalExGst ?? round2(total / (1 + GST_RATE))
+    wlines = [{ description: `Invoice ${invoiceNumber}`, lineTotalExGst: sub, taxCode: 'GST', partNumber: null }]
+  }
+
+  // ── Coding: supplier default → per-line smart → give up ──
+  let coding: 'supplier-default' | 'smart-lines'
+  let accountUids: string[]
+  const supplier = await getSupplierByUid(companyFile, supplierUid).catch(() => null)
+  const defaultAcc = supplier?.defaultExpenseAccount?.uid || null
+  if (defaultAcc) {
+    coding = 'supplier-default'
+    accountUids = wlines.map(() => defaultAcc)
+  } else {
+    const resolved: string[] = []
+    for (const l of wlines) {
+      const r = await resolveLineAccount(c, { supplier_uid: supplierUid, myob_company_file: companyFile, description: l.description, part_number: l.partNumber })
+      if (!r.account_uid) return { posted: false, reason: 'no supplier default account and lines could not be auto-coded' }
+      resolved.push(r.account_uid)
+    }
+    coding = 'smart-lines'
+    accountUids = resolved
+  }
+
+  // ── Post to MYOB ──
+  const { gstUid, freUid } = await ensureTaxCodes(companyFile)
+  const conn = await getConnection(companyFile)
+  if (!conn?.company_file_id) return { posted: false, reason: `no active MYOB connection for ${companyFile}` }
+
+  // Smart-adopt: if it's already in MYOB under this SupplierInvoiceNumber, link it.
+  try {
+    const existing = await findExistingMyobBill(conn.id, conn.company_file_id, String(invoiceNumber), supplierUid)
+    if (existing) return { posted: true, billUid: existing.uid, adopted: true, adoptedBillNumber: existing.number, coding }
+  } catch { /* fall through to create */ }
+
+  let body: ServiceBillBody
+  try {
+    body = buildServiceBillBody({
+      label: `stmt:${invoiceNumber}`,
+      invoiceNumber: String(invoiceNumber),
+      invoiceDate: extracted.invoiceDate,
+      supplierUid,
+      vendorName: extracted.vendor?.name || supplierName,
+      viaCapricorn: extracted.capricorn?.via,
+      capricornReference: extracted.capricorn?.reference,
+      isCreditNote: false,
+      totalIncGst: total,
+      gstAmount: extracted.totals.gstAmount,
+      subtotalExGst: extracted.totals.subtotalExGst,
+      lines: wlines.map((l, i) => ({ description: l.description, accountUid: accountUids[i], lineTotalExGst: l.lineTotalExGst, taxCode: l.taxCode })),
+      gstUid, freUid,
+    }).body
+  } catch (e: any) {
+    return { posted: false, reason: (e?.message || String(e)).slice(0, 200) }
+  }
+
+  const path = `/accountright/${conn.company_file_id}/Purchase/Bill/Service`
+  let result: { status: number; data: any; raw: string; headers: Record<string, string> }
+  try {
+    result = await myobFetch(conn.id, path, { method: 'POST', body, performedBy: args.postedBy })
+  } catch (e: any) {
+    return { posted: false, reason: `MYOB post error: ${(e?.message || String(e)).slice(0, 200)}` }
+  }
+  if (result.status >= 400) return { posted: false, reason: `MYOB rejected the bill: ${extractMyobError(result)}`.slice(0, 300) }
+
+  const billUid = extractMyobUid(result)
+  const safeBillUid = (billUid && billUid !== conn.company_file_id) ? billUid : null
+
+  if (safeBillUid) {
+    try {
+      await attachPdfBytesToBill({ connId: conn.id, cfId: conn.company_file_id, billUid: safeBillUid, bytes: args.pdfBytes, filename: args.pdfFilename, postedBy: args.postedBy })
+    } catch (e: any) { console.error(`[stmt-post] PDF attach failed for ${safeBillUid}: ${e?.message || e}`) }
+  }
+
+  // Learn line→account history so future invoices smart-code even better.
+  try {
+    await recordPostedLineHistory(c, {
+      supplier_uid: supplierUid,
+      supplier_name: supplierName,
+      myob_company_file: companyFile,
+      lines: wlines.map((l, i) => ({ description: l.description, account_uid: accountUids[i], account_code: '', account_name: '' })).filter(l => l.account_uid && l.description),
+    })
+  } catch (e: any) { console.error(`[stmt-post] recordPostedLineHistory failed: ${e?.message || e}`) }
+
+  return { posted: true, billUid: safeBillUid, adopted: false, coding }
 }
 
 // ── Spend Money path (no-supplier invoices) ────────────────────────────
@@ -1043,16 +1205,28 @@ async function attachPdfToBill(opts: {
   if (dlErr || !blob) {
     throw new Error(`PDF fetch from Supabase storage failed: ${dlErr?.message || 'unknown'}`)
   }
+  const buffer = Buffer.from(await blob.arrayBuffer())
+  await attachPdfBytesToBill({ connId: opts.connId, cfId: opts.cfId, billUid: opts.billUid, bytes: buffer, filename: opts.filename, postedBy: opts.postedBy })
+}
 
-  const arrayBuf = await blob.arrayBuffer()
-  if (arrayBuf.byteLength > MAX_ATTACHMENT_BYTES) {
+// Attach an already-in-memory PDF to a posted Service Bill. Used by the headless
+// statement-automation poster, which has the inbox attachment bytes and never
+// stages the file in Supabase storage.
+async function attachPdfBytesToBill(opts: {
+  connId: string
+  cfId: string
+  billUid: string
+  bytes: Buffer
+  filename: string
+  postedBy: string
+}): Promise<void> {
+  if (opts.bytes.byteLength > MAX_ATTACHMENT_BYTES) {
     throw new Error(
-      `PDF too large (${Math.round(arrayBuf.byteLength / 1024)}KB) — MYOB limit ${Math.round(MAX_ATTACHMENT_BYTES / 1024)}KB`
+      `PDF too large (${Math.round(opts.bytes.byteLength / 1024)}KB) — MYOB limit ${Math.round(MAX_ATTACHMENT_BYTES / 1024)}KB`
     )
   }
 
-  const buffer = Buffer.from(arrayBuf)
-  const base64 = buffer.toString('base64')
+  const base64 = opts.bytes.toString('base64')
 
   const safeName = (opts.filename || 'invoice.pdf')
     .replace(/[^\x20-\x7E]/g, '_')

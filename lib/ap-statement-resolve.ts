@@ -24,8 +24,8 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { normaliseInvoiceNumber, type StatementMatchOutcome, type MatchResult } from './ap-statement-match'
 import { type CompanyFileLabel, getSupplierByUid } from './ap-myob-lookup'
-import { createServiceBill } from './ap-myob-bill'
-import { huntInvoicesInInbox } from './ap-inbox-pull'
+import { createServiceBill, postFoundInvoiceToMyob } from './ap-myob-bill'
+import { huntInvoicesInInbox, type HuntHit } from './ap-inbox-pull'
 import { sendMail } from './email'
 import type { ExtractedStatement } from './ap-statement-extraction'
 
@@ -38,7 +38,8 @@ const ACTOR = (process.env.AP_AUTOMATION_ACTOR_ID || '9d09018b-f60b-429d-81e9-cf
 
 export type ResolutionOutcome =
   | 'posted'            // created (or adopted) a MYOB bill
-  | 'left_for_review'   // found in the portal but not safe to auto-post
+  | 'left_for_review'   // ALREADY in the portal AP queue but not safe to auto-post
+  | 'found_not_posted'  // found the invoice in the inbox but couldn't safely auto-post — enter manually
   | 'emailed_supplier'  // chased the supplier
   | 'no_supplier_email' // found nowhere and no address to chase
   | 'already_resolved'  // a prior run already handled this one
@@ -195,10 +196,10 @@ export async function resolveStatementGaps(
   const toChase: GapWork[] = []
   if (missing.length > 0) {
     const sinceIso = toIso(matchOutcome.windowFrom) || isoDaysAgo(60)
-    let hits = new Map<string, { found: boolean; invoiceId?: string; attachmentName?: string }>()
+    let hits = new Map<string, HuntHit>()
     try {
       hits = await huntInvoicesInInbox({
-        mailbox: inboxMailbox, companyFile, supplierEmail, sinceIsoDate: sinceIso,
+        mailbox: inboxMailbox, supplierEmail, sinceIsoDate: sinceIso,
         targets: missing.map(w => ({ norm: w.norm, raw: w.ref, amount: w.amount })),
         dryRun,
       })
@@ -210,11 +211,24 @@ export async function resolveStatementGaps(
       const hit = hits.get(w.norm)
       if (hit?.found) {
         if (dryRun) {
-          actions.push({ reference: w.ref, amount: w.amount, date: w.date, outcome: 'posted', detail: `Found in inbox (${hit.attachmentName || 'PDF'}) — would ingest & post` })
-        } else if (hit.invoiceId) {
-          actions.push(await postFound(w, hit.invoiceId, 'inbox'))
+          actions.push({ reference: w.ref, amount: w.amount, date: w.date, outcome: 'posted', detail: `Found in inbox (${hit.attachmentName || 'PDF'}) — would post to MYOB` })
+        } else if (hit.extraction && hit.pdfBytes) {
+          // Post straight to MYOB from the inbox PDF — no portal row.
+          const r = await postFoundInvoiceToMyob({
+            companyFile, supplierUid, supplierName,
+            extracted: hit.extraction.invoice, statementAmount: w.amount,
+            pdfBytes: hit.pdfBytes, pdfFilename: hit.attachmentName || `${w.ref || 'invoice'}.pdf`,
+            postedBy: ACTOR,
+          })
+          if (r.posted) {
+            await persist(w, { status: 'posted', resolution: r.adopted ? 'adopted' : 'posted_from_inbox', posted_bill_uid: r.billUid || null, last_action_at: now(), error: null })
+            actions.push({ reference: w.ref, amount: w.amount, date: w.date, outcome: 'posted', billUid: r.billUid, detail: r.adopted ? `Found in inbox — linked existing MYOB bill #${r.adoptedBillNumber || '?'} (${companyFile})` : `Found in inbox — auto-posted to MYOB (${companyFile}, ${r.coding})` })
+          } else {
+            await persist(w, { status: 'left_for_review', last_action_at: now(), error: r.reason || null })
+            actions.push({ reference: w.ref, amount: w.amount, date: w.date, outcome: 'found_not_posted', detail: `Found in inbox but couldn't auto-post: ${r.reason || 'needs review'} — enter manually in MYOB` })
+          }
         } else {
-          toChase.push(w) // found but couldn't ingest — fall back to chase
+          toChase.push(w) // found but no payload (shouldn't happen live) — fall back to chase
         }
         continue
       }

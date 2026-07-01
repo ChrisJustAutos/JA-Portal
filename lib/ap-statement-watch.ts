@@ -283,6 +283,7 @@ export function buildDigestHtml(outcome: StatementWatchOutcome, generatedAt: str
   const posted = acts.filter(a => a.outcome === 'posted')
   const emailed = acts.filter(a => a.outcome === 'emailed_supplier')
   const forReview = acts.filter(a => a.outcome === 'left_for_review')
+  const foundNotPosted = acts.filter(a => a.outcome === 'found_not_posted')
   const noEmail = acts.filter(a => a.outcome === 'no_supplier_email')
 
   const actionBits = [
@@ -325,9 +326,14 @@ export function buildDigestHtml(outcome: StatementWatchOutcome, generatedAt: str
     body += emailed.map(a => actLine(a, `${money(a.amount)} <span style="color:#6b7280">→ ${esc(a.emailedTo || '')}</span>`)).join('')
   }
   if (forReview.length > 0) {
-    body += `<h2 style="font-size:15px;color:#d97706;margin:18px 0 8px">🟡 Found — left for review (${forReview.length})</h2>`
+    body += `<h2 style="font-size:15px;color:#d97706;margin:18px 0 8px">🟡 In the AP queue — left for review (${forReview.length})</h2>`
     body += forReview.map(a => actLine(a, `${money(a.amount)} <span style="color:#6b7280">· needs coding/posting</span>`)).join('')
     body += `<div style="font-size:12px;color:#6b7280;margin-top:4px">Open <a href="https://justautos.app/ap">/ap</a> to code and post.</div>`
+  }
+  if (foundNotPosted.length > 0) {
+    body += `<h2 style="font-size:15px;color:#d97706;margin:18px 0 8px">📄 Found in inbox — couldn't auto-post (${foundNotPosted.length})</h2>`
+    body += foundNotPosted.map(a => actLine(a, `${money(a.amount)} <span style="color:#6b7280">· ${esc((a.detail || '').replace(/^Found in inbox but couldn't auto-post: /, ''))}</span>`)).join('')
+    body += `<div style="font-size:12px;color:#6b7280;margin-top:4px">Nothing was written to the portal — enter these directly in MYOB.</div>`
   }
   if (noEmail.length > 0) {
     body += `<h2 style="font-size:15px;color:#dc2626;margin:18px 0 8px">⚠ Couldn't chase — no supplier email (${noEmail.length})</h2>`
