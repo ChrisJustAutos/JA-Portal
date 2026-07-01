@@ -27,6 +27,7 @@ import { type CompanyFileLabel, getSupplierByUid } from './ap-myob-lookup'
 import { createServiceBill, postFoundInvoiceToMyob } from './ap-myob-bill'
 import { huntInvoicesInInbox, type HuntHit } from './ap-inbox-pull'
 import { sendMail } from './email'
+import { sendMail as graphSendMail } from './microsoft-graph'
 import type { ExtractedStatement } from './ap-statement-extraction'
 
 const AMOUNT_TOLERANCE = 0.05
@@ -252,17 +253,35 @@ export async function resolveStatementGaps(
       for (const w of toChase) actions.push({ reference: w.ref, amount: w.amount, date: w.date, outcome: 'emailed_supplier', emailedTo: supplierEmail, detail: `Not in inbox — would email ${supplierEmail} to request it` })
     } else {
       const { subject, html } = buildChaseEmail(supplierName, toChase.map(w => ({ reference: w.ref, amount: w.amount, date: w.date })))
+      const mail = { to: [supplierEmail], cc: [inboxMailbox], replyTo: inboxMailbox, subject, html }
+      // Prefer sending AS the accounts mailbox itself (Graph): the message lands
+      // in that mailbox's Sent Items and inherits the tenant's established
+      // domain reputation, instead of the cold Resend/SES sender
+      // (mail.justautos.app) that supplier spam filters were scoring as junk
+      // (SCL 5). Fall back to Resend if Graph can't send — e.g. the Mail.Send
+      // app permission isn't consented yet — so a chase never silently stops.
+      let sentVia: 'accounts mailbox' | 'Resend' | null = null
+      let sendErr: string | null = null
       try {
-        await sendMail(inboxMailbox, { to: [supplierEmail], cc: [inboxMailbox], replyTo: inboxMailbox, subject, html })
+        await graphSendMail(inboxMailbox, mail)
+        sentVia = 'accounts mailbox'
+      } catch (ge: any) {
+        try {
+          await sendMail(inboxMailbox, mail)
+          sentVia = 'Resend'
+        } catch (re: any) {
+          sendErr = (re?.message || String(re)).slice(0, 300)
+        }
+      }
+      if (sentVia) {
         for (const w of toChase) {
           await persist(w, { status: 'emailed_supplier', supplier_emailed_at: now(), supplier_email_to: supplierEmail, last_action_at: now(), error: null })
-          actions.push({ reference: w.ref, amount: w.amount, date: w.date, outcome: 'emailed_supplier', emailedTo: supplierEmail, detail: `Not in inbox — emailed ${supplierEmail} to request it` })
+          actions.push({ reference: w.ref, amount: w.amount, date: w.date, outcome: 'emailed_supplier', emailedTo: supplierEmail, detail: `Not in inbox — emailed ${supplierEmail} to request it (via ${sentVia})` })
         }
-      } catch (e: any) {
-        const msg = (e?.message || String(e)).slice(0, 300)
+      } else {
         for (const w of toChase) {
-          await persist(w, { status: 'outstanding', last_action_at: now(), error: msg })
-          actions.push({ reference: w.ref, amount: w.amount, date: w.date, outcome: 'no_supplier_email', detail: `Supplier email send failed: ${msg}` })
+          await persist(w, { status: 'outstanding', last_action_at: now(), error: sendErr })
+          actions.push({ reference: w.ref, amount: w.amount, date: w.date, outcome: 'no_supplier_email', detail: `Supplier email send failed: ${sendErr}` })
         }
       }
     }
