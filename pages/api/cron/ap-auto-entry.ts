@@ -15,7 +15,7 @@
 // staffer with view:supplier_invoices (so a manual preview needs no secret).
 
 import type { NextApiRequest, NextApiResponse } from 'next'
-import { runAutoEntry } from '../../../lib/ap-auto-entry'
+import { runAutoEntry, sendTestSlack } from '../../../lib/ap-auto-entry'
 import { getCurrentUser } from '../../../lib/authServer'
 import { roleHasPermission } from '../../../lib/permissions'
 
@@ -27,6 +27,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const user = await getCurrentUser(req)
     if (!user || !roleHasPermission(user.role, 'view:supplier_invoices')) {
       return res.status(401).json({ error: 'Unauthorized' })
+    }
+  }
+
+  // Slack-only test: posts a sample card to SLACK_WEBHOOK_AP_VPS and returns.
+  // No inbox scan, no MYOB, no DB writes — just proves the webhook + channel.
+  if (req.query.test_slack === '1') {
+    try {
+      const r = await sendTestSlack()
+      if (!r.webhookConfigured) return res.status(400).json({ ok: false, error: 'SLACK_WEBHOOK_AP_VPS is not set in this environment' })
+      return res.status(r.ok ? 200 : 502).json({ ok: r.ok, note: r.ok ? 'Posted a test card — check the channel' : 'Slack rejected the post', slackStatus: r.status, slackBody: r.body })
+    } catch (e: any) {
+      return res.status(500).json({ ok: false, error: (e?.message || String(e)).slice(0, 300) })
     }
   }
 

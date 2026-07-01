@@ -284,6 +284,28 @@ async function processAttachment(
   return { ...base, supplierName, invoiceNumber: extracted.invoiceNumber, amount: total, outcome: 'posted', bankCheck: bank, failReasons: [], billUid: posted.billUid, adopted: posted.adopted }
 }
 
+// Post a sample card to the configured webhook — verifies the channel + format
+// without scanning the inbox or touching MYOB. Used by the cron's ?test_slack=1.
+export async function sendTestSlack(): Promise<{ webhookConfigured: boolean; ok: boolean; status?: number; body?: string }> {
+  const hook = slackWebhook()
+  if (!hook) return { webhookConfigured: false, ok: false }
+  const built = buildAutoEntryBlocks({
+    outcome: 'posted',
+    supplierName: 'Test Supplier Pty Ltd',
+    companyFile: 'VPS',
+    invoiceNumber: 'INV-TEST-001',
+    invoiceDate: new Date().toISOString().slice(0, 10),
+    totalIncGst: 1234.56,
+    gstAmount: 112.23,
+    codingSummary: 'Cost Of Goods - Parts',
+    bankCheck: 'match',
+    adopted: false,
+    pdfUrl: null,
+  })
+  const r = await postWebhook(hook, { text: `🧪 (test) ${built.text}`, blocks: built.blocks })
+  return { webhookConfigured: true, ok: r.ok, status: r.status, body: r.body }
+}
+
 // ── Slack ────────────────────────────────────────────────────────────────
 async function sendSlack(built: { text: string; blocks: any[] }): Promise<string | null> {
   const hook = slackWebhook()
