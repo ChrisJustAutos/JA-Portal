@@ -264,6 +264,11 @@ export interface BuildBillArgs {
   lines: BuildBillLineInput[]
   gstUid: string
   freUid: string | null
+  // Tax-INCLUSIVE entry (statement automation). When true, line Totals are the
+  // GST-inclusive amounts and the bill TotalAmount is simply their sum, so the
+  // bill total matches the invoice total to the cent — no ex-GST round-then-
+  // add-GST 1c drift. The portal path leaves this false (unchanged behaviour).
+  taxInclusive?: boolean
 }
 
 export function buildServiceBillBody(a: BuildBillArgs): { body: ServiceBillBody; totalAmount: number } {
@@ -280,6 +285,59 @@ export function buildServiceBillBody(a: BuildBillArgs): { body: ServiceBillBody;
   }
   function rateFor(taxCode: string): number {
     return (taxCode || 'GST').toUpperCase() === 'FRE' ? 0 : GST_RATE
+  }
+
+  // ── Tax-INCLUSIVE path (see taxInclusive doc above) ──
+  if (a.taxInclusive) {
+    const incLines: ServiceBillLineBody[] = []
+    const incRates: number[] = []
+    for (const l of a.lines) {
+      const description = (l.description || '').substring(0, 255)
+      const rate = rateFor(l.taxCode)
+      const inc = round2(Number(l.lineTotalExGst || 0) * (1 + rate))
+      incLines.push({ Type: 'Transaction', Description: description || 'AP line', Account: { UID: l.accountUid }, Total: inc, TaxCode: { UID: taxUidFor(l.taxCode) } })
+      incRates.push(rate)
+    }
+    const headerTotal = a.totalIncGst != null && Number.isFinite(Number(a.totalIncGst)) ? round2(Number(a.totalIncGst)) : null
+    let lineSum = round2(incLines.reduce((s, l) => s + l.Total, 0))
+    if (headerTotal !== null) {
+      const delta = round2(headerTotal - lineSum)
+      if (delta !== 0) {
+        if (Math.abs(delta) > MAX_LINE_NUDGE) {
+          throw new Error(`Cannot post: inc-GST line items sum to $${lineSum.toFixed(2)} but invoice total is $${headerTotal.toFixed(2)} (delta $${delta.toFixed(2)}).`)
+        }
+        let maxIdx = 0
+        for (let i = 1; i < incLines.length; i++) if (Math.abs(incLines[i].Total) > Math.abs(incLines[maxIdx].Total)) maxIdx = i
+        incLines[maxIdx].Total = round2(incLines[maxIdx].Total + delta)
+        lineSum = round2(incLines.reduce((s, l) => s + l.Total, 0))
+        console.log(`AP ${label}: [inc-GST] nudged line ${maxIdx} by ${delta.toFixed(2)} — line sum now ${lineSum.toFixed(2)} matches invoice total ${headerTotal.toFixed(2)}`)
+      }
+    }
+    let totalAmount = headerTotal !== null ? headerTotal : lineSum
+    // GST backed out of each inc-GST line (MYOB-style), FRE contributes 0.
+    let totalTax = round2(incLines.reduce((s, l, idx) => s + round2(l.Total * (incRates[idx] / (1 + incRates[idx]))), 0))
+    let subtotal = round2(totalAmount - totalTax)
+    if (a.isCreditNote) {
+      for (const l of incLines) l.Total = round2(-l.Total)
+      totalAmount = round2(-totalAmount); totalTax = round2(-totalTax); subtotal = round2(-subtotal)
+    }
+    const memoParts = [`${a.isCreditNote ? 'AP CREDIT' : 'AP'}: ${a.vendorName || 'Vendor'} — ${a.invoiceNumber}`]
+    if (a.viaCapricorn && a.capricornReference) memoParts.push(`Capricorn ${a.capricornReference}`)
+    if (a.linkedJobNumber) memoParts.push(`Job ${a.linkedJobNumber}`)
+    const body: ServiceBillBody = {
+      Date: a.invoiceDate,
+      SupplierInvoiceNumber: String(a.invoiceNumber).substring(0, 13),
+      Supplier: { UID: a.supplierUid },
+      Lines: incLines,
+      JournalMemo: memoParts.join(' — ').substring(0, 255),
+      IsTaxInclusive: true,
+      FreightAmount: 0,
+      FreightTaxCode: { UID: a.gstUid },
+      Subtotal: subtotal,
+      TotalTax: totalTax,
+      TotalAmount: totalAmount,
+    }
+    return { body, totalAmount }
   }
 
   // ── Build bill lines (each Total rounded to 2dp) ──
@@ -798,6 +856,9 @@ export async function postFoundInvoiceToMyob(args: {
       subtotalExGst: extracted.totals.subtotalExGst,
       lines: wlines.map((l, i) => ({ description: l.description, accountUid: accountUids[i], lineTotalExGst: l.lineTotalExGst, taxCode: l.taxCode })),
       gstUid, freUid,
+      // Enter statement-automation bills tax-inclusive so the bill total matches
+      // the invoice total exactly (no ex-GST 1c drift).
+      taxInclusive: true,
     }).body
   } catch (e: any) {
     return { posted: false, reason: (e?.message || String(e)).slice(0, 200) }
