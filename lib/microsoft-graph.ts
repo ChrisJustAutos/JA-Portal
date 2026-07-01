@@ -435,6 +435,30 @@ export async function findFolderByDisplayName(
 }
 
 /**
+ * Case/whitespace-insensitive folder lookup. "Read/Printed", "Read /Printed"
+ * and "read / printed" all resolve to the same folder — avoids silent no-moves
+ * when the configured name doesn't byte-match the mailbox folder. Searches
+ * Inbox children first, then top-level folders.
+ */
+export async function findFolderByDisplayNameLoose(
+  mailbox: string,
+  displayName: string,
+): Promise<string | null> {
+  const norm = (s: string) => (s || '').toLowerCase().replace(/\s+/g, '')
+  const target = norm(displayName)
+  const select = '$select=id,displayName&$top=200'
+  const tryList = async (path: string): Promise<string | null> => {
+    try {
+      const data = await graphJson<{ value: any[] }>(path)
+      const m = (data.value || []).find(f => norm(f.displayName) === target)
+      return m?.id || null
+    } catch { return null }
+  }
+  return (await tryList(`/users/${encodeURIComponent(mailbox)}/mailFolders/Inbox/childFolders?${select}`))
+      || (await tryList(`/users/${encodeURIComponent(mailbox)}/mailFolders?${select}`))
+}
+
+/**
  * Move a message to a folder. Requires Mail.ReadWrite. The Graph response
  * returns the message at its new location with a new ID — the original
  * message ID is no longer valid afterwards, so do all read-side work first

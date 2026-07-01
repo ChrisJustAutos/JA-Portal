@@ -22,7 +22,7 @@ import {
   listAttachmentMeta,
   getAttachmentBase64,
   markMessageAsRead,
-  findFolderByDisplayName,
+  findFolderByDisplayNameLoose,
   moveMessageToFolder,
   GraphAttachmentMeta,
   GraphMessageSummary,
@@ -91,6 +91,7 @@ export interface AutoEntryOutcome {
   mailbox: string
   scannedMessages: number
   skippedDuplicates: number
+  filedFolder: { name: string; resolved: boolean }   // where posted emails get moved
   processed: AutoEntryItem[]
 }
 
@@ -137,7 +138,7 @@ export async function runAutoEntry(opts: { dryRun?: boolean; sinceDays?: number;
   const sinceIso = new Date(Date.now() - sinceDays * 86400_000).toISOString()
   const c = sb()
 
-  const out: AutoEntryOutcome = { enabled, dryRun, mailbox, scannedMessages: 0, skippedDuplicates: 0, processed: [] }
+  const out: AutoEntryOutcome = { enabled, dryRun, mailbox, scannedMessages: 0, skippedDuplicates: 0, filedFolder: { name: processedFolder(), resolved: false }, processed: [] }
 
   // Master switch: do nothing (not even scan) unless enabled OR this is a dry-run preview.
   if (!enabled && !dryRun) return out
@@ -150,11 +151,13 @@ export async function runAutoEntry(opts: { dryRun?: boolean; sinceDays?: number;
   }
   out.scannedMessages = messages.length
 
-  // Resolve the "filed" folder once (best-effort; null → we just mark read).
+  // Resolve the "filed" folder once — read-only, so we do it on dry runs too
+  // (lets a preview report whether the move target exists).
   let processedFolderId: string | null = null
   const folderName = processedFolder()
-  if (folderName && !dryRun) {
-    try { processedFolderId = await findFolderByDisplayName(mailbox, folderName) } catch { /* leave null */ }
+  if (folderName) {
+    try { processedFolderId = await findFolderByDisplayNameLoose(mailbox, folderName) } catch { /* leave null */ }
+    out.filedFolder.resolved = !!processedFolderId
     if (!processedFolderId) console.warn(`[ap-auto-entry] folder "${folderName}" not found in ${mailbox} — posted emails will be marked read but not moved`)
   }
 
