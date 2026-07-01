@@ -38,6 +38,17 @@ const DEFAULT_MAILBOX = 'accounts@justautosmechanical.com.au'
 const DEFAULT_CONCURRENCY = 4
 const MAX_CONCURRENCY = 8
 
+// Kill-switch for the LEGACY portal AP-entry path (manual inbox pull into /ap +
+// the bulk push-to-MYOB). Default OFF — the portal's AP entry is being retired
+// in favour of the headless VPS auto-entry. Set AP_PORTAL_ENTRY_ENABLED=true to
+// turn the portal side back on temporarily. Does NOT affect the statement
+// automation or the VPS auto-entry (both run independently of the portal).
+export function apPortalEntryEnabled(): boolean {
+  return (process.env.AP_PORTAL_ENTRY_ENABLED || 'false').toLowerCase().trim() === 'true'
+}
+export const AP_PORTAL_ENTRY_OFF_MSG =
+  'The AP portal entry is turned off (set AP_PORTAL_ENTRY_ENABLED=true to re-enable). Invoices are handled by the automated entry now.'
+
 let _sb: SupabaseClient | null = null
 function sb(): SupabaseClient {
   if (_sb) return _sb

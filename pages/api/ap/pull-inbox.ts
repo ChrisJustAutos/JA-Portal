@@ -9,7 +9,7 @@
 
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { withAuth } from '../../../lib/authServer'
-import { runInboxPullAll } from '../../../lib/ap-inbox-pull'
+import { runInboxPullAll, apPortalEntryEnabled, AP_PORTAL_ENTRY_OFF_MSG } from '../../../lib/ap-inbox-pull'
 
 export const config = {
   api: { bodyParser: { sizeLimit: '1mb' } },
@@ -19,6 +19,10 @@ export const config = {
 export default withAuth('edit:supplier_invoices', async (req: NextApiRequest, res: NextApiResponse) => {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' })
+  }
+
+  if (!apPortalEntryEnabled()) {
+    return res.status(503).json({ error: AP_PORTAL_ENTRY_OFF_MSG })
   }
 
   const { sinceDays } = (req.body || {}) as { sinceDays?: number }

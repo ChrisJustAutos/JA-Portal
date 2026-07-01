@@ -41,7 +41,7 @@ import type { NextApiRequest, NextApiResponse } from 'next'
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
 import { checkBearer } from '../../../../lib/api-key-auth'
 import { createServiceBill } from '../../../../lib/ap-myob-bill'
-import { runInboxPullAll } from '../../../../lib/ap-inbox-pull'
+import { runInboxPullAll, apPortalEntryEnabled, AP_PORTAL_ENTRY_OFF_MSG } from '../../../../lib/ap-inbox-pull'
 import { runContactBackfill } from '../../../../lib/ap-backfill-contact'
 
 // Synthetic actor — distinguishable from any real user in audit queries.
@@ -116,6 +116,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const action = String(body.action || '').trim()
 
     if (action === 'pull_inbox') {
+      if (!apPortalEntryEnabled()) return res.status(503).json({ error: AP_PORTAL_ENTRY_OFF_MSG })
       try {
         const result = await runInboxPullAll({ sinceDays: body.sinceDays })
         if (!result.ok) {
@@ -148,6 +149,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (action !== 'push') {
       return res.status(400).json({ error: `Unknown action "${action}". Supported: push, pull_inbox, backfill_contact.` })
     }
+
+    // Bulk push-to-MYOB from the portal queue — part of the portal AP-entry path.
+    if (!apPortalEntryEnabled()) return res.status(503).json({ error: AP_PORTAL_ENTRY_OFF_MSG })
 
     const requestedIds = Array.isArray(body.ids) ? body.ids.filter((x: any) => typeof x === 'string') as string[] : null
     const dryRun = body.dry_run === true
