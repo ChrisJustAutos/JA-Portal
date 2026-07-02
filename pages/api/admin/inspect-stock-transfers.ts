@@ -61,6 +61,10 @@ async function probe(
       totalAmount: d.TotalAmount ?? null,
       balanceDue: d.BalanceDueAmount ?? null,
       status: d.Status ?? null,
+      // Reference fields we want matching across the two sides.
+      customerPO: d.CustomerPurchaseOrderNumber ?? null,   // sale side
+      supplierInvoiceNumber: d.SupplierInvoiceNumber ?? null, // bill side
+      journalMemo: d.JournalMemo ?? null,
     }
   } catch (e: any) {
     return { uid, present: false, error: (e?.message || String(e)).slice(0, 200) }
