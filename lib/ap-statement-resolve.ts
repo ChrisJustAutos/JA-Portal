@@ -86,6 +86,13 @@ const AP_INVOICE_COLS =
 // block an autonomous post (the automation is separate from the AP portal/queue).
 // po-no-job-match = the invoice's PO didn't tie to a workshop job — irrelevant to
 // the bill, and always true for JAWS (wholesale, not job-based).
+// Which MYOB company files the automation may AUTO-POST to. Chris: VPS only for
+// now — JAWS gaps are reconciled + reported for manual entry, never auto-posted.
+// Override with AP_AUTOPOST_COMPANY_FILES (comma list, e.g. "VPS,JAWS").
+function autoPostFiles(): Set<string> {
+  return new Set((process.env.AP_AUTOPOST_COMPANY_FILES || 'VPS').split(',').map(s => s.trim().toUpperCase()).filter(Boolean))
+}
+
 const SOFT_TRIAGE_REASONS = new Set(['po-no-job-match'])
 function onlySoftReasons(reasons: string[] | null): boolean {
   const flags = (reasons || []).filter(r => r.startsWith('RED:') || r.startsWith('YELLOW:'))
@@ -137,6 +144,7 @@ export async function resolveStatementGaps(
 ): Promise<ResolutionAction[]> {
   const { companyFile, supplierUid, supplierName, inboxMailbox, matchOutcome, dryRun } = args
   const actions: ResolutionAction[] = []
+  const mayPost = autoPostFiles().has(companyFile)   // VPS only by default — JAWS is report-only
 
   // Supplier card once — the email drives BOTH the inbox-hunt sender filter and
   // the chase fallback.
@@ -204,7 +212,12 @@ export async function resolveStatementGaps(
       continue
     }
     if (r.status === 'in-portal-pending' && r.portalInvoice?.id) {
-      actions.push(await postFound(w, r.portalInvoice.id, 'portal'))
+      if (mayPost) {
+        actions.push(await postFound(w, r.portalInvoice.id, 'portal'))
+      } else {
+        await persist(w, { status: 'left_for_review', posted_invoice_id: r.portalInvoice.id, last_action_at: now() })
+        actions.push({ reference: ref, amount, date, outcome: 'found_not_posted', detail: `${companyFile}: auto-post is off for this company file — enter manually` })
+      }
       continue
     }
     missing.push(w) // truly missing — hunt the inbox next
@@ -229,7 +242,11 @@ export async function resolveStatementGaps(
       const hit = hits.get(w.norm)
       if (hit?.found) {
         if (dryRun) {
-          actions.push({ reference: w.ref, amount: w.amount, date: w.date, outcome: 'posted', detail: `Found in inbox (${hit.attachmentName || 'PDF'}) — would post to MYOB` })
+          actions.push({ reference: w.ref, amount: w.amount, date: w.date, outcome: mayPost ? 'posted' : 'found_not_posted', detail: mayPost ? `Found in inbox (${hit.attachmentName || 'PDF'}) — would post to MYOB` : `Found in inbox (${hit.attachmentName || 'PDF'}) — ${companyFile} auto-post is off; would flag for manual entry` })
+        } else if (!mayPost) {
+          // Found, but this company file isn't allowed to auto-post → report it.
+          await persist(w, { status: 'left_for_review', last_action_at: now() })
+          actions.push({ reference: w.ref, amount: w.amount, date: w.date, outcome: 'found_not_posted', detail: `Found in inbox — ${companyFile} auto-post is off; enter manually in MYOB` })
         } else if (hit.extraction && hit.pdfBytes) {
           // Post straight to MYOB from the inbox PDF — no portal row.
           const r = await postFoundInvoiceToMyob({
