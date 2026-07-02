@@ -222,6 +222,8 @@ export async function getValidAccessToken(connId: string): Promise<string> {
 }
 
 // ── Logging ─────────────────────────────────────────────────────────────
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
 async function logApiCall(entry: {
   connectionId?: string
   method: string
@@ -237,6 +239,15 @@ async function logApiCall(entry: {
     const bodyHash = entry.requestBody
       ? createHash('sha256').update(entry.requestBody).digest('hex')
       : null
+    // performed_by is a uuid column. Non-uuid actor markers (e.g. the
+    // 'md-worker' service caller in finalizeForwardMyob) would make the
+    // insert throw and, because we swallow that below, silently drop the
+    // whole log row — which is exactly how the JAWS sale + VPS bill POSTs
+    // for stock transfers went unlogged. Coerce anything that isn't a uuid
+    // to null so the row still lands.
+    const performedBy = entry.performedBy && UUID_RE.test(entry.performedBy)
+      ? entry.performedBy
+      : null
     await sb().from('myob_api_log').insert({
       connection_id: entry.connectionId || null,
       method: entry.method,
@@ -246,7 +257,7 @@ async function logApiCall(entry: {
       error: entry.error || null,
       request_body_hash: bodyHash,
       response_snippet: entry.response ? entry.response.substring(0, 500) : null,
-      performed_by: entry.performedBy || null,
+      performed_by: performedBy,
     })
   } catch (e: any) {
     console.error('myob: failed to log API call:', e?.message)
