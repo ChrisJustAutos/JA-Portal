@@ -446,16 +446,36 @@ export async function findFolderByDisplayNameLoose(
 ): Promise<string | null> {
   const norm = (s: string) => (s || '').toLowerCase().replace(/\s+/g, '')
   const target = norm(displayName)
-  const select = '$select=id,displayName&$top=200'
-  const tryList = async (path: string): Promise<string | null> => {
-    try {
-      const data = await graphJson<{ value: any[] }>(path)
-      const m = (data.value || []).find(f => norm(f.displayName) === target)
-      return m?.id || null
-    } catch { return null }
+  const enc = encodeURIComponent(mailbox)
+  const select = '$select=id,displayName,childFolderCount&$top=200'
+
+  // BFS over the whole folder tree (top-level + nested children) so a folder
+  // buried under another folder is still found. Capped in breadth + depth.
+  let frontier: string[] = []
+  try {
+    const roots = await graphJson<{ value: any[] }>(`/users/${enc}/mailFolders?${select}`)
+    for (const f of roots.value || []) {
+      if (norm(f.displayName) === target) return f.id
+      if ((f.childFolderCount || 0) > 0) frontier.push(f.id)
+    }
+  } catch { return null }
+
+  let depth = 0
+  while (frontier.length && depth < 5) {
+    const next: string[] = []
+    for (const id of frontier.slice(0, 200)) {
+      try {
+        const kids = await graphJson<{ value: any[] }>(`/users/${enc}/mailFolders/${id}/childFolders?${select}`)
+        for (const f of kids.value || []) {
+          if (norm(f.displayName) === target) return f.id
+          if ((f.childFolderCount || 0) > 0) next.push(f.id)
+        }
+      } catch { /* skip this branch */ }
+    }
+    frontier = next
+    depth++
   }
-  return (await tryList(`/users/${encodeURIComponent(mailbox)}/mailFolders/Inbox/childFolders?${select}`))
-      || (await tryList(`/users/${encodeURIComponent(mailbox)}/mailFolders?${select}`))
+  return null
 }
 
 /**
