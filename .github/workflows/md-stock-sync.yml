@@ -1,0 +1,70 @@
+name: MD Stock Cache — parts-bot sync
+
+# Pages MechanicDesk's full catalogue (/stocks.json) and replaces the portal's
+# md_stock_cache table (/api/parts-bot/md-stock-ingest). The Slack bot's
+# search_md_stock tool reads that cache to answer front-counter parts queries
+# ("how many VDJ79 airboxes do we have?") instantly, without touching MD at
+# query time (MD is single-session-per-employee, so no live scrape at query).
+#
+# Triggers:
+#   - schedule (every 30 min during business hours, AEST)
+#   - workflow_dispatch (manual)
+#   - repository_dispatch ('md-stock-sync') for an on-demand refresh
+#
+# Browsers: Chromium via the Playwright CDN, cached across runs (same approach
+# as the stocktake / prepick workers).
+
+on:
+  workflow_dispatch:
+  repository_dispatch:
+    types:
+      - md-stock-sync
+  schedule:
+    # Every 30 min, 06:00–19:00 AEST (UTC+10) → 20:00–09:30 UTC, weekdays + Sat.
+    - cron: '0,30 20-23 * * 0-5'
+    - cron: '0,30 0-9 * * 1-6'
+
+# Never run two syncs at once — a second MD login would evict the first's
+# session mid-scrape (single-session-per-employee).
+concurrency:
+  group: md-stock-sync
+  cancel-in-progress: false
+
+jobs:
+  run:
+    name: MD stock cache sync
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci || npm install
+
+      - name: Cache Playwright browsers
+        id: pw-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-chromium-${{ hashFiles('**/package-lock.json') }}
+
+      - name: Install Playwright Chromium (cache miss)
+        if: steps.pw-cache.outputs.cache-hit != 'true'
+        run: npx playwright install chromium
+
+      - name: Run worker
+        env:
+          REQUESTED_BY:             ${{ github.event_name == 'schedule' && 'scheduled' || github.actor }}
+          MECHANICDESK_WORKSHOP_ID: ${{ secrets.MECHANICDESK_WORKSHOP_ID }}
+          MECHANICDESK_USERNAME:    ${{ secrets.MECHANICDESK_USERNAME }}
+          MECHANICDESK_PASSWORD:    ${{ secrets.MECHANICDESK_PASSWORD }}
+          JA_PORTAL_BASE_URL:       ${{ secrets.JA_PORTAL_BASE_URL }}
+          JA_PORTAL_API_KEY:        ${{ secrets.JA_PORTAL_API_KEY }}
+        run: npx tsx scripts/pull-md-stock.ts

@@ -443,6 +443,89 @@ export async function fetchInStockUniverse(
   return items
 }
 
+// ── Full catalogue (parts-bot cache) ───────────────────────────────────────
+
+export interface AllStockItem {
+  stock_id: number
+  stock_number: string
+  name: string
+  on_hand: number              // total on-hand (system QTY)
+  available: number            // free-to-sell = on-hand − allocated (best available)
+  allocated: number            // committed to jobs
+  on_order: number | null      // incoming on open POs (only if the list exposes it)
+  alert_qty: number | null     // MD reorder-alert threshold (only if exposed)
+  buy_price: number | null
+  sell_price: number | null
+  bin: string | null
+  location: string | null
+}
+
+/**
+ * Pull the ENTIRE MD catalogue by paging /stocks.json — every item, including
+ * zero-on-hand ones (so "we have none, call the supplier" is answerable). This
+ * differs from fetchInStockUniverse (in-stock-only, drops bin/allocated): the
+ * parts-bot cache needs the full list plus allocated / free-to-sell / bin.
+ *
+ * allocated / alert_qty / on_order come back only if the LIST endpoint exposes
+ * them (the per-item detail endpoint always has them, but fetching detail for
+ * thousands of rows every 30 min is too heavy). Missing → null / 0.
+ */
+export async function fetchAllStock(
+  client: MdClient,
+  opts: { log?: (...a: any[]) => void; maxPages?: number; onSample?: (raw: any) => void } = {},
+): Promise<AllStockItem[]> {
+  const log = opts.log || (() => {})
+  const maxPages = opts.maxPages || 1000
+  const items: AllStockItem[] = []
+
+  for (let page = 1; page <= maxPages; page++) {
+    let resp: { stocks?: any[]; meta?: any }
+    try {
+      resp = await mdFetch<{ stocks?: any[]; meta?: any }>(client, `/stocks.json?page=${page}`)
+    } catch (e: any) {
+      if (page === 1) throw e   // first-page failure is fatal
+      log(`  catalogue: /stocks.json page ${page} failed (${String(e?.message).slice(0, 120)}) — stopping at ${items.length}`)
+      break
+    }
+    const stocks = Array.isArray(resp?.stocks) ? resp.stocks : []
+    if (page === 1 && stocks[0]) { log(`  catalogue: /stocks.json item keys = ${Object.keys(stocks[0]).join(', ')}`); opts.onSample?.(stocks[0]) }
+    if (stocks.length === 0) break
+
+    for (const s of stocks) {
+      const stockNumber = String(s.stock_number || '').trim()
+      const name = String(s.name || '').trim()
+      if (!stockNumber && !name) continue   // skip junk rows with no identity
+
+      const onHand = pickNum(s, ['quantity', 'total_quantity', 'total_qty', 'on_hand', 'on_hand_quantity', 'quantity_on_hand', 'stock_on_hand', 'soh', 'current_quantity', 'qty']) ?? 0
+      const allocated = pickNum(s, ['allocated_quantity', 'allocated', 'reserved_quantity', 'reserved']) ?? 0
+      // Free-to-sell: prefer MD's own "available" if present, else on-hand − allocated.
+      const availField = pickNum(s, ['available_quantity', 'available'])
+      const available = availField != null ? availField : Math.max(0, onHand - allocated)
+
+      items.push({
+        stock_id: Number(s.id) || 0,
+        stock_number: stockNumber,
+        name,
+        on_hand: onHand,
+        available,
+        allocated,
+        on_order: pickNum(s, ['ordered_quantity', 'on_order', 'on_order_quantity', 'incoming_quantity']) ?? null,
+        alert_qty: pickNum(s, ['alert_quantity', 'reorder_point', 'minimum_quantity', 'min_quantity']) ?? null,
+        buy_price: pickNum(s, ['average_buy_price', 'buy_price', 'cost_price']) ?? null,
+        sell_price: pickNum(s, ['sell_price_included_gst', 'sell_price_excluded_gst', 'price', 'sell_price']) ?? null,
+        bin: pickStr(s, ['bin', 'bin_location', 'shelf']),
+        location: pickStr(s, ['location', 'location_name']),
+      })
+    }
+
+    const totalPages = pickNum(resp?.meta || {}, ['total_pages', 'last_page', 'pages'])
+    if (totalPages && page >= totalPages) break
+    log(`  catalogue: page ${page} → ${stocks.length} stocks (total so far: ${items.length})`)
+  }
+
+  return items
+}
+
 // ── Purchase orders ───────────────────────────────────────────────────────
 // MD calls them "purchases". Create + delete confirmed via probe; the write
 // auth is the XSRF-TOKEN echo handled in mdFetch. Receiving a PO into stock

@@ -12,7 +12,7 @@ const SYSTEM_PROMPT = `You are the JA Portal Assistant, an internal Slack bot fo
 Business context:
 - Two MYOB company files: **JAWS** (Just Autos Workshop Services, retail customers + workshop) and **VPS** (Vehicle Performance Specialists, B2B parts). Always default to JAWS unless the user specifies VPS.
 - Stripe accounts: JAWS-ET (retail e-commerce) and JAWS-JMACX (workshop card payments). Both feed into JAWS MYOB.
-- Mechanics Desk is the job-management system. Stock alerts from MD feed the Monday "Product Availability Delays" board.
+- Mechanics Desk (MD) is the job-management system and holds workshop parts stock that isn't in MYOB. For "how many X do we have / is X in stock?" use search_md_stock (a ~30-min cache of MD on-hand). The Monday "Product Availability Delays" board (search_stock_delays) is only for backorder/ETA questions.
 - Workshop specialises in Toyota Land Cruiser / Prado / Hilux parts. Common platforms: FJA300 (LC300), VDJ200 (LC200), VDJ70/GDJ70 (70 Series), GDJ250 (Prado), GUN126R (Hilux).
 
 How to answer:
