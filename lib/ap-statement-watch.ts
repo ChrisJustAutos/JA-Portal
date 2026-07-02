@@ -211,6 +211,19 @@ export async function runStatementWatch(opts: WatchOptions = {}): Promise<Statem
           const period = periodLabel(statement)
           const invoiceLines = statement.lines.filter(l => l.type === 'invoice').length
 
+          // Capricorn consolidated statement: you PAY Capricorn, but the lines are
+          // individual suppliers' invoices (Repco, BNT, …) billed through it — NOT
+          // invoices from "Capricorn". Never auto-reconcile/post/chase these as a
+          // single supplier; flag for manual handling.
+          if (supplierName && /capricorn/i.test(supplierName)) {
+            await record({
+              ...base, supplierName, supplierUid: null, supplierResolution: 'none',
+              status: 'needs_review', period, invoiceLines, missing: [], mismatches: [],
+              reviewReason: 'Capricorn consolidated statement — pay Capricorn, but the lines are individual suppliers billed through it. Automation will NOT auto-post or chase these; reconcile/enter manually.',
+            })
+            continue
+          }
+
           const sup = await resolveSupplier(inbox.companyFile, supplierName, (statement.supplier as any)?.abn ?? null)
           if (sup.resolution !== 'matched' || !sup.uid) {
             await record({
