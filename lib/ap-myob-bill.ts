@@ -257,6 +257,7 @@ export interface BuildBillArgs {
   viaCapricorn?: boolean
   capricornReference?: string | null
   linkedJobNumber?: string | null
+  poNumber?: string | null       // our PO number from the invoice → rides in the memo (MYOB bills have no PO field)
   isCreditNote: boolean
   totalIncGst: number | null
   gstAmount: number | null
@@ -322,6 +323,7 @@ export function buildServiceBillBody(a: BuildBillArgs): { body: ServiceBillBody;
       totalAmount = round2(-totalAmount); totalTax = round2(-totalTax); subtotal = round2(-subtotal)
     }
     const memoParts = [`${a.isCreditNote ? 'AP CREDIT' : 'AP'}: ${a.vendorName || 'Vendor'} — ${a.invoiceNumber}`]
+    if (a.poNumber) memoParts.push(`PO ${a.poNumber}`)
     if (a.viaCapricorn && a.capricornReference) memoParts.push(`Capricorn ${a.capricornReference}`)
     if (a.linkedJobNumber) memoParts.push(`Job ${a.linkedJobNumber}`)
     const body: ServiceBillBody = {
@@ -423,6 +425,7 @@ export function buildServiceBillBody(a: BuildBillArgs): { body: ServiceBillBody;
   }
 
   const memoParts = [`${a.isCreditNote ? 'AP CREDIT' : 'AP'}: ${a.vendorName || 'Vendor'} — ${a.invoiceNumber}`]
+  if (a.poNumber) memoParts.push(`PO ${a.poNumber}`)
   if (a.viaCapricorn && a.capricornReference) memoParts.push(`Capricorn ${a.capricornReference}`)
   if (a.linkedJobNumber) memoParts.push(`Job ${a.linkedJobNumber}`)
   const journalMemo = memoParts.join(' — ').substring(0, 255)
@@ -577,6 +580,7 @@ export async function createServiceBill(
     viaCapricorn: inv.via_capricorn,
     capricornReference: inv.capricorn_reference,
     linkedJobNumber: inv.linked_job_number,
+    poNumber: inv.po_number,
     isCreditNote,
     totalIncGst: inv.total_inc_gst,
     gstAmount: inv.gst_amount,
@@ -864,6 +868,7 @@ export async function postFoundInvoiceToMyob(args: {
       vendorName: extracted.vendor?.name || supplierName,
       viaCapricorn: extracted.capricorn?.via,
       capricornReference: extracted.capricorn?.reference,
+      poNumber: extracted.poNumber,
       isCreditNote: false,
       totalIncGst: total,
       gstAmount: extracted.totals.gstAmount,
