@@ -161,17 +161,6 @@ async function execSearchStockDelays(input: { query: string }): Promise<string> 
 
 const MD_STOCK_LIMIT = 8
 
-// Tokens for the PostgREST or-filter: strip the chars that are structural in
-// or() CSV syntax (comma / parens / percent), keep alphanumerics + - / . which
-// are common in part numbers.
-function stockTokens(q: string): string[] {
-  return String(q || '')
-    .split(/\s+/)
-    .map(t => t.replace(/[,()%]/g, '').trim())
-    .filter(t => t.length >= 2)
-    .slice(0, 5)
-}
-
 function verdict(r: any): string {
   const onHand = Number(r.on_hand) || 0
   const avail = Number(r.available) || 0
@@ -181,7 +170,7 @@ function verdict(r: any): string {
   const committed = Math.max(0, onHand - avail)
   const alert = r.alert_qty != null ? Number(r.alert_qty) : null
   const onOrder = r.on_order != null ? Number(r.on_order) : null
-  const orderNote = onOrder && onOrder > 0 ? ` · ${onOrder} on order` : ''
+  const orderNote = onOrder && onOrder > 0 ? ` · 📦 ${onOrder} on order` : ''
 
   if (onHand <= 0) return `🔴 none on hand — make a call${orderNote}`
   if (avail <= 0) return `🟠 ${onHand} on hand but all committed to jobs — none free to sell${orderNote}`
@@ -200,64 +189,30 @@ function relTime(iso: string | null): string {
 }
 
 async function execSearchMdStock(input: { query: string }): Promise<string> {
-  const tokens = stockTokens(input.query)
-  if (tokens.length === 0) return 'Give me a part name or number to search (e.g. "VDJ79 airbox").'
-
-  const db = sb()
-
-  // Require ALL tokens, each matching name OR SKU (AND-of-ORs). Chained .or()
-  // calls are ANDed together by PostgREST, so this is
-  //   (name~t1 OR sku~t1) AND (name~t2 OR sku~t2) ...
-  const applyTokens = (qb: any, toks: string[]) => {
-    for (const t of toks) {
-      const esc = t.replace(/\*/g, '')
-      qb = qb.or(`name.ilike.%${esc}%,stock_number.ilike.%${esc}%`)
-    }
-    return qb
+  const q = String(input.query || '').trim()
+  // Need at least 2 alphanumerics to search on (a bare "?" etc. is meaningless).
+  if (q.replace(/[^a-z0-9]/gi, '').length < 2) {
+    return 'Give me a part name or number to search — e.g. "AIR-300FFM-STD", "300ffm", or "airbox".'
   }
 
-  let { data, error } = await applyTokens(
-    db.from('md_stock_cache').select('stock_number,name,on_hand,available,allocated,on_order,alert_qty,bin,location,synced_at'),
-    tokens,
-  ).limit(40)
-  if (error) return `Couldn't read the stock cache: ${error.message}`
-
-  // Fallback: if requiring every token found nothing, loosen to ANY token.
-  if ((!data || data.length === 0) && tokens.length > 1) {
-    const orAll = tokens.map(t => `name.ilike.%${t.replace(/\*/g, '')}%,stock_number.ilike.%${t.replace(/\*/g, '')}%`).join(',')
-    const res = await db.from('md_stock_cache')
-      .select('stock_number,name,on_hand,available,allocated,on_order,alert_qty,bin,location,synced_at')
-      .or(orAll).limit(40)
-    data = res.data
+  // search_md_stock RPC (migration 148): normalized + trigram fuzzy match, so it
+  // handles bare part numbers, separator/spacing/case variants, small typos, and
+  // multi-word name queries. Returns rows ranked best-first.
+  const { data, error } = await sb().rpc('search_md_stock', { q, lim: 40 })
+  if (error) return `Couldn't search the stock cache: ${error.message}`
+  const rows: any[] = Array.isArray(data) ? data : []
+  if (rows.length === 0) {
+    return `Nothing in MechanicDesk stock matching "${q}". Double-check the part number, or it may not be a tracked stock item.`
   }
 
-  if (!data || data.length === 0) {
-    return `Nothing in MechanicDesk stock matching "${input.query}". Double-check the part number, or it may not be a tracked stock item.`
-  }
-
-  // Rank: exact SKU match, then rows whose name contains the most tokens, then
-  // most on-hand.
-  const ql = input.query.trim().toLowerCase()
-  const score = (r: any) => {
-    const sku = String(r.stock_number || '').toLowerCase()
-    const name = String(r.name || '').toLowerCase()
-    let s = 0
-    if (sku === ql) s += 1000
-    if (sku.includes(ql)) s += 200
-    for (const t of tokens) { const tl = t.toLowerCase(); if (name.includes(tl)) s += 20; if (sku.includes(tl)) s += 10 }
-    s += Math.min(Number(r.on_hand) || 0, 50) / 100   // gentle nudge toward in-stock
-    return s
-  }
-  const ranked = [...data].sort((a, b) => score(b) - score(a))
-  const top = ranked.slice(0, MD_STOCK_LIMIT)
-  const syncedAt = ranked[0]?.synced_at || null
-
-  const lines = top.map(r => {
+  const top = rows.slice(0, MD_STOCK_LIMIT)
+  const syncedAt = rows[0]?.synced_at || null
+  const lines = top.map((r: any) => {
     const where = r.bin || r.location ? ` · bin ${[r.bin, r.location].filter(Boolean).join('/')}` : ''
     return `• *${r.stock_number || '—'}* ${r.name || ''}\n   ${verdict(r)}${where}`
   })
-  const more = data.length > top.length ? `\n(+${data.length - top.length} more — narrow the search)` : ''
-  return `MechanicDesk stock for "${input.query}" (synced ${relTime(syncedAt)}):\n${lines.join('\n')}${more}`
+  const more = rows.length > top.length ? `\n(+${rows.length - top.length} more — narrow the search)` : ''
+  return `MechanicDesk stock for "${q}" (synced ${relTime(syncedAt)}):\n${lines.join('\n')}${more}`
 }
 
 // ── Registry ───────────────────────────────────────────────────────────
@@ -311,11 +266,11 @@ export const TOOLS: ToolDef[] = [
   },
   {
     name: 'search_md_stock',
-    description: 'Check how many of a part we have on hand in MechanicDesk (the live-ish stock cache, refreshed ~every 30 min). THIS is the tool for front-counter questions like "how many VDJ79 airboxes do we have?", "have we got X in stock?", "what\'s our on-hand on Y?". Returns matching items with on-hand qty, free-to-sell (on-hand minus what\'s committed to jobs), bin location, and an in-stock / low / none verdict. Prefer this over search_stock_delays for any "do we have / how many" question.',
+    description: 'Check how many of a part we have on hand in MechanicDesk (the live-ish stock cache, refreshed ~every 30 min). THIS is the tool for front-counter questions like "how many VDJ79 airboxes do we have?", "have we got X in stock?", "what\'s our on-hand on Y?", or "is anything on order for Z?". Search by a full part number, a fragment of it, or product-name words — it tolerates missing/extra dashes and spaces, case, and small typos in the part number. Returns matching items with on-hand qty, free-to-sell (on-hand minus what\'s committed to jobs), how many are on order (incoming POs), bin location, and an in-stock / low / none verdict. Prefer this over search_stock_delays for any "do we have / how many / on order" question. Pass the user\'s part number or search words through as-is.',
     input_schema: {
       type: 'object',
       properties: {
-        query: { type: 'string', description: 'Part number and/or product-name words, e.g. "VDJ79 airbox" or "1GD injector".' },
+        query: { type: 'string', description: 'A part number (full or partial, any format — e.g. "AIR-300FFM-STD", "300ffm"), and/or product-name words (e.g. "VDJ79 airbox", "1GD injector").' },
       },
       required: ['query'],
     },
