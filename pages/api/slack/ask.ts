@@ -151,6 +151,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(200).json({ ok: true })
   }
 
+  // Diagnostic — one line per inbound event so we can see channel + why it was
+  // (not) answered. Safe to leave on; no message content logged.
+  console.log('[slack/ask] event', JSON.stringify({
+    type: event.type,
+    channel: event.channel,
+    subtype: event.subtype || null,
+    bot: !!event.bot_id,
+    hasText: !!event.text,
+    allowed: isAllowedChannel(event.channel),
+    allowlist: (process.env.SLACK_ALLOWED_CHANNEL_IDS || '(unset→all)'),
+  }))
+
   // Ignore anything the bot itself said and non-plain messages (edits, deletes,
   // joins, bot posts, file-share subtypes) — only real human messages.
   if (event.bot_id || event.subtype) return res.status(200).json({ ok: true })
@@ -176,6 +188,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     try {
       const result = await askClaude(question, { gateSilent: !directlyAddressed })
       const answer = result.text.trim()
+      console.log('[slack/ask] answered', JSON.stringify({ directlyAddressed, tools: result.toolsUsed, noReply: /^NO_REPLY\b/i.test(answer), answerPrefix: answer.slice(0, 60) }))
       // Silent gate: for un-addressed channel chatter Claude returns NO_REPLY —
       // stay quiet rather than butting in.
       if (!directlyAddressed && /^NO_REPLY\b/i.test(answer)) return
