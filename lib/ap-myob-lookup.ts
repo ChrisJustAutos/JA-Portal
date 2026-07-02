@@ -324,9 +324,18 @@ function mapSupplier(it: any): MyobSupplierLite {
 
   // Email lives on the primary address card. On list/search responses MYOB
   // returns Addresses inline (no $expand needed), and getSupplierByUid returns
-  // the full card, so both paths carry it. Take the first non-empty Email.
+  // the full card, so both paths carry it. Take the first non-empty Email — and
+  // extract a CLEAN address: MYOB cards sometimes hold a display-name form like
+  // "Accounts Receivable <ar@x.com.au>" (occasionally with stray separators),
+  // which would make a chase email's `to` malformed / silently fail.
+  const cleanEmail = (raw: string): string | null => {
+    const angle = raw.match(/<([^>]+)>/)
+    const m = (angle ? angle[1] : raw).match(/[^\s;,<>]+@[^\s;,<>]+\.[^\s;,<>]+/)
+    return m ? m[0].trim() : null
+  }
   const addresses: any[] = Array.isArray(it?.Addresses) ? it.Addresses : []
-  const email = (addresses.map(a => (a?.Email || '').trim()).find(Boolean)) || null
+  const rawEmail = addresses.map(a => (a?.Email || '').trim()).find(Boolean) || ''
+  const email = rawEmail ? cleanEmail(rawEmail) : null
 
   // Bank details live on the card's Payment Details tab. Field path varies by
   // MYOB AccountRight version — read defensively from the likely locations and
