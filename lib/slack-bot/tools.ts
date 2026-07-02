@@ -175,15 +175,18 @@ function stockTokens(q: string): string[] {
 function verdict(r: any): string {
   const onHand = Number(r.on_hand) || 0
   const avail = Number(r.available) || 0
-  const alloc = Number(r.allocated) || 0
+  // MD populates `available` (free-to-sell) directly and often < on-hand even
+  // when the allocated_quantity field reads 0, so derive committed from the gap
+  // rather than trusting that field.
+  const committed = Math.max(0, onHand - avail)
   const alert = r.alert_qty != null ? Number(r.alert_qty) : null
   const onOrder = r.on_order != null ? Number(r.on_order) : null
   const orderNote = onOrder && onOrder > 0 ? ` · ${onOrder} on order` : ''
 
-  if (onHand <= 0) return `🔴 none on shelf — call the supplier${orderNote}`
-  if (avail <= 0) return `🟠 ${onHand} on hand but all allocated to jobs — none free to sell${orderNote}`
-  const free = alloc > 0 ? `${avail} free (${onHand} on hand, ${alloc} on jobs)` : `${avail} on hand`
-  if (alert != null && avail <= alert) return `🟠 low — ${free}, at/under reorder alert (${alert})${orderNote}`
+  if (onHand <= 0) return `🔴 none on hand — make a call${orderNote}`
+  if (avail <= 0) return `🟠 ${onHand} on hand but all committed to jobs — none free to sell${orderNote}`
+  const free = committed > 0 ? `${avail} free to sell (${onHand} on hand, ${committed} on jobs)` : `${onHand} on hand`
+  if (alert != null && alert > 0 && avail <= alert) return `🟠 low — ${free}, at/under reorder alert (${alert})${orderNote}`
   return `🟢 in stock — ${free}${orderNote}`
 }
 
