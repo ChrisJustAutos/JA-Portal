@@ -261,7 +261,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     try {
       const result = await askClaude(question, { gateSilent: !directlyAddressed })
       const answer = result.text.trim()
-      console.log('[slack/ask] answered', JSON.stringify({ directlyAddressed, tools: result.toolsUsed, noReply: /^NO_REPLY\b/i.test(answer), answerPrefix: answer.slice(0, 60) }))
+      console.log('[slack/ask] answered', JSON.stringify({ directlyAddressed, tools: result.toolsUsed, noReply: /^NO_REPLY\b/i.test(answer), contactConfigured: partsContactConfigured(), answerPrefix: answer.slice(0, 60) }))
       // Silent gate: for un-addressed channel chatter Claude returns NO_REPLY —
       // stay quiet rather than butting in.
       if (!directlyAddressed && /^NO_REPLY\b/i.test(answer)) return
