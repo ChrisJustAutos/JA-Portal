@@ -51,3 +51,50 @@ export async function updateMessage(args: {
   if (!j.ok) console.error('[slack.update] failed:', j)
   return !!j.ok
 }
+
+// Delete one of the bot's own messages. Treats an already-gone message as
+// success so the auto-delete sweeper doesn't retry it forever.
+export async function deleteMessage(args: { channel: string; ts: string }): Promise<boolean> {
+  const r = await fetch(`${SLACK_API}/chat.delete`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json; charset=utf-8',
+      Authorization: `Bearer ${botToken()}`,
+    },
+    body: JSON.stringify(args),
+  })
+  const j: any = await r.json()
+  if (!j.ok && j.error !== 'message_not_found') console.error('[slack.delete] failed:', j)
+  return !!j.ok || j.error === 'message_not_found'
+}
+
+// Open (or fetch) the bot's DM channel with a user. Needs the im:write scope.
+async function openDm(userId: string): Promise<string | null> {
+  const r = await fetch(`${SLACK_API}/conversations.open`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json; charset=utf-8',
+      Authorization: `Bearer ${botToken()}`,
+    },
+    body: JSON.stringify({ users: userId }),
+  })
+  const j: any = await r.json()
+  if (!j.ok) { console.error('[slack.openDm] failed:', j); return null }
+  return j.channel?.id || null
+}
+
+// Deliver a message to the configured parts contact (SLACK_PARTS_CONTACT):
+// a user id (U…/W… → DM the person, e.g. Terry) or a channel id (C…/G… → post
+// to that channel). Used by the "Ask about ETA/availability" button.
+export async function sendToPartsContact(text: string): Promise<{ ok: boolean; reason?: string }> {
+  const contact = (process.env.SLACK_PARTS_CONTACT || '').trim()
+  if (!contact) return { ok: false, reason: 'no contact configured (set SLACK_PARTS_CONTACT)' }
+  let channel = contact
+  if (/^[UW]/.test(contact)) {
+    const dm = await openDm(contact)
+    if (!dm) return { ok: false, reason: 'could not open a DM (bot may need the im:write scope)' }
+    channel = dm
+  }
+  const posted = await postMessage({ channel, text })
+  return posted ? { ok: true } : { ok: false, reason: 'Slack rejected the message' }
+}
