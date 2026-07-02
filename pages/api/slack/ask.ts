@@ -34,9 +34,22 @@ function partsContactConfigured(): boolean {
   return !!(process.env.SLACK_PARTS_CONTACT || '').trim()
 }
 
-// Blocks for a bot answer, optionally with the "Ask about ETA/availability"
-// button. The button carries the answer text so it can be forwarded verbatim.
-function answerBlocks(display: string, forwardText: string, withEtaButton: boolean): any[] | undefined {
+// Pull the bold part numbers out of a stock answer (the terse format bolds the
+// SKU on each line) so the availability request can name them.
+function extractSkus(text: string): string[] {
+  const out: string[] = []
+  const re = /\*([^*\n]+)\*/g
+  let m: RegExpExecArray | null
+  while ((m = re.exec(text)) !== null) {
+    const s = m[1].trim()
+    if (s && !out.includes(s)) out.push(s)
+  }
+  return out.slice(0, 20)
+}
+
+// Blocks for a bot answer, optionally with the "Ask about availability" button.
+// buttonValue is the JSON the click handler reads (the SKUs + the raw query).
+function answerBlocks(display: string, buttonValue: string, withEtaButton: boolean): any[] | undefined {
   if (!withEtaButton) return undefined
   return [
     { type: 'section', text: { type: 'mrkdwn', text: display.slice(0, 2900) } },
@@ -44,9 +57,9 @@ function answerBlocks(display: string, forwardText: string, withEtaButton: boole
       type: 'actions',
       elements: [{
         type: 'button',
-        text: { type: 'plain_text', text: '📣 Ask about ETA / availability', emoji: true },
+        text: { type: 'plain_text', text: '📣 Ask parts about availability', emoji: true },
         action_id: 'ask_eta',
-        value: JSON.stringify({ a: forwardText.slice(0, 1400) }),
+        value: buttonValue.slice(0, 1900),
       }],
     },
   ]
@@ -120,18 +133,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const action = (payload.actions || [])[0] || {}
         if (action.action_id === 'ask_eta') {
           const asker: string = payload.user?.id || ''
-          const srcChannel: string = payload.channel?.id || ''
           const responseUrl: string = payload.response_url || ''
-          let detail = ''
-          try { detail = String(JSON.parse(action.value || '{}').a || '') } catch { detail = '' }
+          let skus: string[] = []
+          let q = ''
+          try { const v = JSON.parse(action.value || '{}'); skus = Array.isArray(v.s) ? v.s : []; q = String(v.q || '') } catch { /* keep defaults */ }
+          const parts = skus.length ? skus.join(', ') : (q || 'a part')
 
           waitUntil((async () => {
-            const msg =
-              `:package: *ETA / availability request*\n` +
-              `From <@${asker}>${srcChannel ? ` in <#${srcChannel}>` : ''}:\n\n` +
-              (detail || '(no detail captured)')
+            const contact = (process.env.SLACK_PARTS_CONTACT || '').trim()
+            const greet = /^[UW]/.test(contact) ? `Hey <@${contact}>` : 'Hey'
+            // Simple one-liner, as requested: "Hey @Terry just checking on the
+            // availability on <part>. Thanks, @asker".
+            const msg = `${greet} just checking on the availability on *${parts}*. Thanks, <@${asker}>`
             const sent = await sendToPartsContact(msg)
-            console.log('[slack/ask] ask_eta', JSON.stringify({ contact: (process.env.SLACK_PARTS_CONTACT || '').slice(0, 24), asker, ok: sent.ok, reason: sent.reason || null }))
+            console.log('[slack/ask] ask_eta', JSON.stringify({ contact: contact.slice(0, 24), asker, parts, ok: sent.ok, reason: sent.reason || null }))
             if (responseUrl) {
               await fetch(responseUrl, {
                 method: 'POST',
@@ -139,9 +154,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                 body: JSON.stringify({
                   response_type: 'ephemeral',
                   replace_original: false,
-                  text: sent.ok
-                    ? ':white_check_mark: Sent your ETA / availability request.'
-                    : `:warning: Couldn't send it — ${sent.reason}`,
+                  text: sent.ok ? ':white_check_mark: Sent to parts 👍' : `:warning: Couldn't send it — ${sent.reason}`,
                 }),
               }).catch(() => undefined)
             }
@@ -266,15 +279,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       // Silent gate: for un-addressed channel chatter Claude returns NO_REPLY —
       // stay quiet rather than butting in.
       if (!directlyAddressed && /^NO_REPLY\b/i.test(answer)) return
-      const reply = (answer || '(no answer)') + (result.toolsUsed.length ? `\n\n_Used: ${result.toolsUsed.join(', ')}_` : '')
-      // Offer the "Ask about ETA/availability" button on stock answers (when a
-      // contact is configured); forward the answer itself, not the footer.
+      const reply = answer || '(no answer)'
+      // Offer the availability button on stock answers (when a contact is set).
       const withEta = partsContactConfigured() && result.toolsUsed.includes('search_md_stock')
+      const buttonValue = JSON.stringify({ s: extractSkus(answer), q: question.slice(0, 200) })
       const posted = await postMessage({
         channel,
         text: reply,
         thread_ts: threadTs,
-        blocks: answerBlocks(reply, answer, withEta),
+        blocks: answerBlocks(reply, buttonValue, withEta),
       })
       // Auto-delete the answer after the TTL so the channel stays clear.
       if (posted) await scheduleDeletion(posted.channel, posted.ts)

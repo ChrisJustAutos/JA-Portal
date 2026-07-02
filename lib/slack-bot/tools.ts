@@ -161,31 +161,21 @@ async function execSearchStockDelays(input: { query: string }): Promise<string> 
 
 const MD_STOCK_LIMIT = 8
 
+// Terse status for a stock row: In stock / Low stock / Out of stock, plus an
+// "on order" note when a PO is incoming. Deliberately noise-free.
 function verdict(r: any): string {
   const onHand = Number(r.on_hand) || 0
-  const avail = Number(r.available) || 0
-  // MD populates `available` (free-to-sell) directly and often < on-hand even
-  // when the allocated_quantity field reads 0, so derive committed from the gap
-  // rather than trusting that field.
-  const committed = Math.max(0, onHand - avail)
+  const avail = Number(r.available) || 0          // free-to-sell
   const alert = r.alert_qty != null ? Number(r.alert_qty) : null
   const onOrder = r.on_order != null ? Number(r.on_order) : null
   const orderNote = onOrder && onOrder > 0 ? ` · 📦 ${onOrder} on order` : ''
 
-  if (onHand <= 0) return `🔴 none on hand — make a call${orderNote}`
-  if (avail <= 0) return `🟠 ${onHand} on hand but all committed to jobs — none free to sell${orderNote}`
-  const free = committed > 0 ? `${avail} free to sell (${onHand} on hand, ${committed} on jobs)` : `${onHand} on hand`
-  if (alert != null && alert > 0 && avail <= alert) return `🟠 low — ${free}, at/under reorder alert (${alert})${orderNote}`
-  return `🟢 in stock — ${free}${orderNote}`
-}
-
-function relTime(iso: string | null): string {
-  if (!iso) return 'unknown'
-  const mins = Math.round((Date.now() - new Date(iso).getTime()) / 60000)
-  if (mins < 1) return 'just now'
-  if (mins < 60) return `${mins} min ago`
-  const hrs = Math.round(mins / 60)
-  return hrs < 24 ? `${hrs}h ago` : `${Math.round(hrs / 24)}d ago`
+  let status: string
+  if (onHand <= 0) status = '🔴 Out of stock'
+  else if (avail <= 0) status = '🟠 Low stock'
+  else if (alert != null && alert > 0 && avail <= alert) status = '🟠 Low stock'
+  else status = '🟢 In stock'
+  return `${status}${orderNote}`
 }
 
 async function execSearchMdStock(input: { query: string }): Promise<string> {
@@ -206,13 +196,10 @@ async function execSearchMdStock(input: { query: string }): Promise<string> {
   }
 
   const top = rows.slice(0, MD_STOCK_LIMIT)
-  const syncedAt = rows[0]?.synced_at || null
-  const lines = top.map((r: any) => {
-    const where = r.bin || r.location ? ` · bin ${[r.bin, r.location].filter(Boolean).join('/')}` : ''
-    return `• *${r.stock_number || '—'}* ${r.name || ''}\n   ${verdict(r)}${where}`
-  })
-  const more = rows.length > top.length ? `\n(+${rows.length - top.length} more — narrow the search)` : ''
-  return `MechanicDesk stock for "${q}" (synced ${relTime(syncedAt)}):\n${lines.join('\n')}${more}`
+  // One terse line per part: *SKU* — status · on order. No preamble.
+  const lines = top.map((r: any) => `*${r.stock_number || '—'}* — ${verdict(r)}`)
+  const more = rows.length > top.length ? `\n_(+${rows.length - top.length} more — narrow the search)_` : ''
+  return `${lines.join('\n')}${more}`
 }
 
 // ── Registry ───────────────────────────────────────────────────────────
