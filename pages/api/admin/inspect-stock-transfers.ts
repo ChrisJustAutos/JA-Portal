@@ -12,17 +12,20 @@
 // which card) so we can see if the missing VPS bills were deleted, or landed
 // on the wrong supplier card.
 //
-// Auth: bearer CRON_SECRET (same as the cron/inspect endpoints).
+// Auth: logged-in portal admin (view:b2b + admin:settings) — just open the URL
+// in a browser while signed in, no secret needed.
 //
 // Usage:
-//   curl -H "Authorization: Bearer $CRON_SECRET" \
-//     "https://justautos.app/api/admin/inspect-stock-transfers"
+//   open  https://justautos.app/api/admin/inspect-stock-transfers  (while logged in)
 //
 // Read-only. Safe to delete after we've reconciled.
 
-import type { NextApiRequest, NextApiResponse } from 'next'
 import { createClient } from '@supabase/supabase-js'
+import { withAuth } from '../../../lib/authServer'
+import { roleHasPermission } from '../../../lib/permissions'
 import { getConnection, myobFetch } from '../../../lib/myob'
+
+export const config = { maxDuration: 120 }
 
 function sb() {
   return createClient(
@@ -64,12 +67,8 @@ async function probe(
   }
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  const cronSecret = process.env.CRON_SECRET
-  const authHeader = req.headers.authorization || ''
-  if (!cronSecret || authHeader !== `Bearer ${cronSecret}`) {
-    return res.status(401).json({ error: 'Unauthorised' })
-  }
+export default withAuth('view:b2b', async (req, res, user) => {
+  if (!roleHasPermission(user.role, 'admin:settings')) return res.status(403).json({ error: 'Admin only' })
 
   try {
     const jaws = await getConnection('JAWS')
@@ -130,4 +129,4 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   } catch (e: any) {
     return res.status(500).json({ error: (e?.message || String(e)).slice(0, 500) })
   }
-}
+})
