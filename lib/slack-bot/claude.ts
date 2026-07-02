@@ -33,7 +33,7 @@ export interface AskResult {
 // Appended to the system prompt when the bot is reading a channel it wasn't
 // explicitly @mentioned in. It must stay quiet on chatter and only speak up for
 // a genuine request — otherwise it would reply to every message in the channel.
-const GATE_INSTRUCTION = `IMPORTANT — you are reading a channel WITHOUT being directly addressed. Only respond if this message is genuinely a request you can help with: a parts/stock availability question ("how many X do we have?", "got any Y?"), a customer/invoice lookup, or a portal how-to. If it is small talk, banter, a statement, an acknowledgement, or clearly not aimed at you, reply with exactly "NO_REPLY" and nothing else — and do NOT call any tool. When in doubt, prefer NO_REPLY.`
+const GATE_INSTRUCTION = `IMPORTANT — you are reading a channel WITHOUT being directly addressed. Only respond if this message is genuinely a request you can help with: a parts/stock availability question ("how many X do we have?", "got any Y?"), a customer/invoice lookup, or a portal how-to. A message that is just a part number or product code on its own (letters+digits, e.g. "SSMKTY0108", "AIR-300FFM-STD", "300ffm") IS a stock lookup — search it with search_md_stock, do not treat it as chatter. If it is small talk, banter, a general statement, an acknowledgement, or clearly not aimed at you, reply with exactly "NO_REPLY" and nothing else — and do NOT call any tool.`
 
 export async function askClaude(question: string, opts: { gateSilent?: boolean } = {}): Promise<AskResult> {
   const key = process.env.ANTHROPIC_API_KEY

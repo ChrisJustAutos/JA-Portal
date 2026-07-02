@@ -84,6 +84,21 @@ function stripBotMention(text: string): string {
   return text.replace(/<@[A-Z0-9]+>\s*/g, '').trim()
 }
 
+// A bare part number / product code (e.g. "SSMKTY0108", "AIR-300FFM-STD",
+// "300ffm") is always a stock lookup — but with no question words it looks like
+// a statement to the silent gate, which then stays quiet. So detect it and skip
+// the gate: a short message with a token that mixes letters + digits.
+function looksLikePartNumber(text: string): boolean {
+  const t = text.trim()
+  if (!t) return false
+  const words = t.split(/\s+/)
+  if (words.length > 5) return false
+  return words.some(w => {
+    const c = w.replace(/[^A-Za-z0-9]/g, '')
+    return c.length >= 4 && /[A-Za-z]/.test(c) && /[0-9]/.test(c)
+  })
+}
+
 // Restrict the bot to specific channel IDs via SLACK_ALLOWED_CHANNEL_IDS
 // (comma-separated). If unset, all channels are allowed.
 function isAllowedChannel(channelId: string): boolean {
@@ -272,10 +287,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (!question) return res.status(200).json({ ok: true })
   const threadTs: string | undefined = event.thread_ts || event.ts
 
+  // Gate un-addressed chatter, EXCEPT bare part numbers — always look those up.
+  const gateSilent = !directlyAddressed && !looksLikePartNumber(question)
+
   // Run Claude + post in background so we can ack Slack within 3s.
   waitUntil((async () => {
     try {
-      const result = await askClaude(question, { gateSilent: !directlyAddressed })
+      const result = await askClaude(question, { gateSilent })
       const answer = result.text.trim()
       console.log('[slack/ask] answered', JSON.stringify({ directlyAddressed, tools: result.toolsUsed, noReply: /^NO_REPLY\b/i.test(answer), contactConfigured: partsContactConfigured(), answerPrefix: answer.slice(0, 60) }))
       // Silent gate: for un-addressed channel chatter Claude returns NO_REPLY —
