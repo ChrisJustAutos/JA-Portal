@@ -204,7 +204,7 @@ Output ONLY a JSON object with this exact shape:
       "invoiceNumber": "Same as reference IF type === 'invoice', else null.",
       "supplierName":  "ONLY for a consolidated / buying-group statement (e.g. CAPRICORN) that lists invoices from MANY different suppliers: the name of the actual supplier that issued THIS row's invoice (e.g. 'Repco', 'BNT', 'GPC Asia Pacific') — usually shown in a supplier/vendor column or in the row description. On a normal single-supplier statement (every row is from the one company named in the header), set this to null.",
       "description":   "Free text from the row (e.g. 'INVOICE', 'Payment - thank you', 'CREDIT NOTE 1234'). null if empty.",
-      "amount":        "Transaction amount as a SIGNED NUMBER. Positive for charges TO US (invoices, debits). Negative for payments FROM US or credits. So an invoice for $150 ex-GST showing $165 inc-GST should be amount: 165. A payment of $1000 from us should be amount: -1000. A credit note of $50 in our favour should be amount: -50. The intent: positive = increases what we owe, negative = decreases.",
+      "amount":        "This ROW's OWN transaction amount (the Debit or Credit for THIS line), as a SIGNED NUMBER — NOT the running Balance. CRITICAL: statements have a rightmost running Balance / Balance Due / running-total column that accumulates down the page — DO NOT use that column. Use only the row's own Debit/Credit (charge/payment) amount. Positive for charges TO US (invoices, debits); negative for payments FROM US or credits. E.g. an invoice showing $165 inc-GST → amount: 165 (even if the balance column beside it reads $2,431.90). A $1000 payment from us → -1000. A $50 credit → -50.",
       "type":          "One of: 'invoice', 'payment', 'credit', 'unknown'. Use 'invoice' for charges/debits where the row clearly represents an invoice or tax-invoice issued by the supplier. Use 'payment' for payments-received entries. Use 'credit' for credit notes / adjustments in our favour. Use 'unknown' if you can't tell."
     }
   ],
@@ -218,6 +218,7 @@ Rules:
 - Dates: convert from DD/MM/YY or DD/MM/YYYY (Australian convention) to ISO YYYY-MM-DD. 28/04/26 = 2026-04-28.
 - Capture EVERY transaction row — do not skip rows even if they look like running-balance summaries.
 - Statements often have separate Debit and Credit columns. Combine them into a single signed amount: Debit positive, Credit negative.
+- NEVER put the running Balance / Balance Due / running-total column into "amount". That column grows down the page (each row = prior balance ± this row); "amount" must be ONLY this row's own charge or payment. If a row shows a charge of $165 and a balance of $2,431.90, amount is 165.
 - Skip aging summary rows (Current / 30 / 60 / 90+) and summary totals — those are NOT transaction lines, they're footers.
 - Skip rows that are only the brought-forward balance at the top — that's openingBalance, not a line.
 - If a row's amount column is blank or zero, still emit the line if it has a date and reference; set amount: 0.
