@@ -39,19 +39,27 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       `/accountright/${cf}/InTray/Document`,
       `/accountright/${cf}/InTray/Documents`,
     ]
+    const probes: { path: string; cfAuth: boolean }[] = [
+      { path: candidatePaths[0], cfAuth: true },
+      { path: candidatePaths[1], cfAuth: true },
+      { path: candidatePaths[2], cfAuth: true },
+      // Same In Tray path WITHOUT the company-file token header — some MYOB
+      // endpoints reject the cf-token; rules out a header issue vs a scope block.
+      { path: candidatePaths[1], cfAuth: false },
+    ]
     const attempts: any[] = []
-    for (const path of candidatePaths) {
+    for (const p of probes) {
       try {
-        const r = await myobFetch(conn.id, path, { query: { '$top': 5 } })
+        const r = await myobFetch(conn.id, p.path, { query: { '$top': 5 }, requiresCfAuth: p.cfAuth })
         attempts.push({
-          path,
+          path: p.path, cfAuth: p.cfAuth,
           status: r.status,
           count: Array.isArray(r.data?.Items) ? r.data.Items.length : (Array.isArray(r.data) ? r.data.length : null),
           sample: Array.isArray(r.data?.Items) ? r.data.Items.slice(0, 3) : (Array.isArray(r.data) ? r.data.slice(0, 3) : r.data),
           rawSnippet: !r.data ? (r.raw || '').slice(0, 400) : undefined,
         })
       } catch (e: any) {
-        attempts.push({ path, error: (e?.message || String(e)).slice(0, 300) })
+        attempts.push({ path: p.path, cfAuth: p.cfAuth, error: (e?.message || String(e)).slice(0, 300) })
       }
     }
 
