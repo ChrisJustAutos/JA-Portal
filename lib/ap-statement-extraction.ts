@@ -42,6 +42,11 @@ export interface ExtractedStatementLine {
   date: string | null              // ISO YYYY-MM-DD
   reference: string | null         // invoice/credit-note/payment number as printed
   invoiceNumber: string | null     // copy of reference when type='invoice'
+  // The INDIVIDUAL supplier that issued this line, when the statement is a
+  // consolidated/buying-group statement (e.g. Capricorn) that bundles many
+  // suppliers' invoices. null on a normal single-supplier statement (the header
+  // supplier applies). Used to reconcile Capricorn statements per real supplier.
+  supplierName: string | null
   description: string | null
   // Amount as a NUMBER. Positive = charge to us (invoice/debit), negative
   // = payment/credit. We normalise here so callers don't need to interpret
@@ -197,6 +202,7 @@ Output ONLY a JSON object with this exact shape:
       "date":          "Transaction date, ISO YYYY-MM-DD. null if absent.",
       "reference":     "The reference/document number printed on the row (invoice number, payment number, credit-note number). String. null if blank.",
       "invoiceNumber": "Same as reference IF type === 'invoice', else null.",
+      "supplierName":  "ONLY for a consolidated / buying-group statement (e.g. CAPRICORN) that lists invoices from MANY different suppliers: the name of the actual supplier that issued THIS row's invoice (e.g. 'Repco', 'BNT', 'GPC Asia Pacific') — usually shown in a supplier/vendor column or in the row description. On a normal single-supplier statement (every row is from the one company named in the header), set this to null.",
       "description":   "Free text from the row (e.g. 'INVOICE', 'Payment - thank you', 'CREDIT NOTE 1234'). null if empty.",
       "amount":        "Transaction amount as a SIGNED NUMBER. Positive for charges TO US (invoices, debits). Negative for payments FROM US or credits. So an invoice for $150 ex-GST showing $165 inc-GST should be amount: 165. A payment of $1000 from us should be amount: -1000. A credit note of $50 in our favour should be amount: -50. The intent: positive = increases what we owe, negative = decreases.",
       "type":          "One of: 'invoice', 'payment', 'credit', 'unknown'. Use 'invoice' for charges/debits where the row clearly represents an invoice or tax-invoice issued by the supplier. Use 'payment' for payments-received entries. Use 'credit' for credit notes / adjustments in our favour. Use 'unknown' if you can't tell."
@@ -217,7 +223,8 @@ Rules:
 - If a row's amount column is blank or zero, still emit the line if it has a date and reference; set amount: 0.
 - Be conservative with type classification: when unsure between invoice and unknown, prefer 'unknown' so the user can review.
 - For invoiceNumber: ONLY populate when type === 'invoice'. For payment rows or credits, set invoiceNumber: null even if reference is set.
-- Keep description text concise. Strip trailing whitespace. Avoid copying long auxiliary text — invoice numbers, dates, and the amount are the critical fields.`
+- Keep description text concise. Strip trailing whitespace. Avoid copying long auxiliary text — invoice numbers, dates, and the amount are the critical fields.
+- CONSOLIDATED / BUYING-GROUP STATEMENTS (Capricorn): the header supplier is the buying group (e.g. 'Capricorn Society Ltd'), but each invoice row is really from a DIFFERENT underlying supplier (Repco, BNT, etc.). For every invoice row on such a statement, put that row's actual issuing supplier in "supplierName". If you genuinely can't tell a row's supplier, use null.`
 }
 
 // ── Output parsing ──────────────────────────────────────────────────────
@@ -386,6 +393,7 @@ function normaliseLines(raw: any[]): ExtractedStatementLine[] {
       date:          nullableIsoDate(r.date),
       reference,
       invoiceNumber,
+      supplierName:  nullableString(r.supplierName),
       description:   nullableString(r.description),
       amount:        nullableNumber(r.amount),
       type,

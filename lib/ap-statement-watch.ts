@@ -29,7 +29,7 @@ import {
   GraphMessageSummary,
   GraphAttachmentMeta,
 } from './microsoft-graph'
-import { extractStatementFromPdf } from './ap-statement-extraction'
+import { extractStatementFromPdf, type ExtractedStatement } from './ap-statement-extraction'
 import { matchStatementAgainstMyob } from './ap-statement-match'
 import { type CompanyFileLabel } from './ap-myob-lookup'
 import { tryAutoMatchSupplier } from './ap-myob-automatch'
@@ -132,6 +132,80 @@ async function resolveSupplier(companyFile: CompanyFileLabel, name: string | nul
   return { resolution: 'none', uid: null, matchedName: null }
 }
 
+// Reconcile a Capricorn consolidated statement PER INDIVIDUAL SUPPLIER. Groups
+// the invoice lines by their issuing supplier (line.supplierName), resolves each
+// to a MYOB card, and runs the normal match + resolve (inbox hunt / VPS-only
+// post / chase) for each group — i.e. the single-supplier flow, once per supplier
+// on the statement. Lines whose supplier can't be resolved are reported for
+// manual handling. Returns the aggregated fields for the statement's scan record.
+async function reconcileCapricorn(
+  c: SupabaseClient,
+  companyFile: CompanyFileLabel,
+  inboxMailbox: string,
+  statement: ExtractedStatement,
+  autoResolve: boolean,
+  dryRun: boolean,
+): Promise<Pick<StatementScanResult, 'supplierName' | 'supplierUid' | 'supplierResolution' | 'status' | 'missing' | 'mismatches' | 'resolution' | 'reviewReason'>> {
+  const invoiceLines = statement.lines.filter(l => l.type === 'invoice')
+  const groups = new Map<string, typeof invoiceLines>()
+  for (const l of invoiceLines) {
+    const key = (l.supplierName || '').trim() || '(unnamed)'
+    const arr = groups.get(key) || []
+    arr.push(l); groups.set(key, arr)
+  }
+
+  const missing: MissingInvoice[] = []
+  const mismatches: MismatchInvoice[] = []
+  const actions: ResolutionAction[] = []
+  const unresolved: string[] = []
+  let anyResolved = false
+
+  for (const [name, lines] of Array.from(groups.entries())) {
+    const sup = name === '(unnamed)' ? null : await resolveSupplier(companyFile, name, null)
+    if (!sup || sup.resolution !== 'matched' || !sup.uid) {
+      unresolved.push(name)
+      for (const l of lines) missing.push({ reference: l.invoiceNumber || l.reference, date: l.date, amount: l.amount })
+      continue
+    }
+    anyResolved = true
+    const subStatement: ExtractedStatement = { ...statement, lines }
+    try {
+      const outcome = await matchStatementAgainstMyob(c, companyFile, sup.uid, subStatement)
+      for (const r of outcome.results) {
+        if (r.status === 'missing') missing.push({ reference: r.line.invoiceNumber || r.line.reference, date: r.line.date, amount: r.line.amount })
+        else if (r.status === 'amount-mismatch') mismatches.push({ reference: r.line.invoiceNumber || r.line.reference, statementAmount: r.line.amount, myobAmount: r.myobBill?.totalAmount ?? null })
+      }
+      if (autoResolve) {
+        const acts = await resolveStatementGaps(c, {
+          companyFile, supplierUid: sup.uid, supplierName: sup.matchedName || name,
+          inboxMailbox, statement: subStatement, matchOutcome: outcome, dryRun,
+        })
+        actions.push(...acts)
+      }
+    } catch (e: any) {
+      console.error(`[ap-statement-watch] capricorn group "${name}" failed:`, e?.message || e)
+      unresolved.push(`${name} (error)`)
+    }
+  }
+
+  const status: StatementScanStatus =
+    unresolved.length > 0 ? 'needs_review' : missing.length > 0 ? 'has_missing' : 'reconciled'
+  const reviewReason = unresolved.length
+    ? `Capricorn statement — ${unresolved.length} supplier(s) couldn't be matched to MYOB (${unresolved.slice(0, 6).join(', ')}${unresolved.length > 6 ? '…' : ''}); enter/reconcile those manually.`
+    : undefined
+
+  return {
+    supplierName: `Capricorn — ${groups.size} supplier${groups.size === 1 ? '' : 's'}`,
+    supplierUid: null,
+    supplierResolution: anyResolved ? 'matched' : 'none',
+    status,
+    missing,
+    mismatches,
+    resolution: actions.length ? actions : undefined,
+    reviewReason,
+  }
+}
+
 export interface WatchOptions { sinceDays?: number; maxStatements?: number; dryRun?: boolean }
 
 export async function runStatementWatch(opts: WatchOptions = {}): Promise<StatementWatchOutcome> {
@@ -212,15 +286,12 @@ export async function runStatementWatch(opts: WatchOptions = {}): Promise<Statem
           const invoiceLines = statement.lines.filter(l => l.type === 'invoice').length
 
           // Capricorn consolidated statement: you PAY Capricorn, but the lines are
-          // individual suppliers' invoices (Repco, BNT, …) billed through it — NOT
-          // invoices from "Capricorn". Never auto-reconcile/post/chase these as a
-          // single supplier; flag for manual handling.
+          // individual suppliers' invoices (Repco, BNT, …) billed through it. Reconcile
+          // it PER INDIVIDUAL SUPPLIER — group the lines by their issuing supplier and
+          // run the normal reconcile/hunt/(VPS-only)post for each group.
           if (supplierName && /capricorn/i.test(supplierName)) {
-            await record({
-              ...base, supplierName, supplierUid: null, supplierResolution: 'none',
-              status: 'needs_review', period, invoiceLines, missing: [], mismatches: [],
-              reviewReason: 'Capricorn consolidated statement — pay Capricorn, but the lines are individual suppliers billed through it. Automation will NOT auto-post or chase these; reconcile/enter manually.',
-            })
+            const cap = await reconcileCapricorn(c, inbox.companyFile, inbox.mailbox, statement, autoResolve, dryRun)
+            await record({ ...base, ...cap, period, invoiceLines })
             continue
           }
 
