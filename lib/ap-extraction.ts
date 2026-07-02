@@ -193,7 +193,7 @@ Output ONLY a JSON object with this exact shape:
 
 {
   "vendor": {
-    "name":     "The actual supplier issuing the invoice (e.g. 'Repco', 'GPC Asia Pacific Pty Ltd', 'BNT'). NOT Capricorn — Capricorn is the billing intermediary, not the vendor. Use the most prominent supplier branding/header. null if unclear.",
+    "name":     "The actual supplier's BUSINESS/TRADING name (e.g. 'Repco', 'GPC Asia Pacific Pty Ltd', 'BNT', 'Decarb'). IMPORTANT: the name is often ONLY inside a LOGO / graphic / letterhead image at the top — READ the text inside logos and letterheads. Do NOT use a slogan or tagline (e.g. 'Servicing the Sunshine Coast', 'Quality you can trust') as the name. If the logo text is unclear, DERIVE the name from the email-address domain, the website, or the bank-account name (e.g. accounts@decarb.com.au / www.decarb.com.au → 'Decarb'). NOT Capricorn — Capricorn is the billing intermediary, not the vendor. null only if you truly cannot determine it.",
     "abn":      "Supplier's ABN as shown (11 digits, may have spaces). Strip non-digits in output. null if not shown.",
     "email":    "Supplier's contact / accounts email if printed on the invoice (header or footer). null if not shown.",
     "phone":    "Supplier's primary phone number as printed. Keep formatting roughly as shown. null if not shown.",
