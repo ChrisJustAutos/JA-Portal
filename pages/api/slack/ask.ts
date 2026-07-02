@@ -12,8 +12,9 @@
 //      the parts contact (SLACK_PARTS_CONTACT). Needs Interactivity enabled with
 //      this same URL as the Request URL.
 //
-// Bot answers are auto-deleted after ~5 min (SLACK_EPHEMERAL_MINUTES) to keep
-// the channel clear — see lib/slack-bot/ephemeral.ts + /api/cron/slack-cleanup.
+// Bot answers post in-thread under the question, so the channel keeps a full
+// history. Optional ephemeral auto-delete is OFF by default; set
+// SLACK_EPHEMERAL_MINUTES>0 to bring it back (see lib/slack-bot/ephemeral.ts).
 //
 // Slack requires a response within 3 seconds. We:
 //   - For URL-verification handshake → respond synchronously with the challenge.

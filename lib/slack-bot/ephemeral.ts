@@ -1,14 +1,10 @@
 // lib/slack-bot/ephemeral.ts
 //
-// Auto-delete for parts-bot answers, so the channel stays clear. Bot replies
-// are enqueued with a delete_at (default now + 5 min); the /api/cron/slack-cleanup
-// cron sweeps due rows and chat.delete's them. Serverless functions can't be
-// held open for 5 minutes, hence the small queue + per-minute cron.
-//
-// Only the bot's OWN messages are deletable (Slack won't let a bot delete a
-// user's message without workspace-admin rights), so staff questions remain.
-//
-// TTL via SLACK_EPHEMERAL_MINUTES (default 5; set to 0 to disable auto-delete).
+// Optional auto-delete for parts-bot answers. OFF by default — we keep full
+// history (answers thread under each question). When SLACK_EPHEMERAL_MINUTES is
+// a positive number, replies are enqueued with a delete_at and the
+// /api/cron/slack-cleanup cron chat.delete's the due ones (serverless can't be
+// held open for minutes, hence a small queue + cron).
 
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
 import { deleteMessage } from './slack'
@@ -18,10 +14,13 @@ function sb(): SupabaseClient {
 }
 
 function ttlMinutes(): number {
+  // Auto-delete is OFF by default — we keep full history (answers thread under
+  // each question). Set SLACK_EPHEMERAL_MINUTES to a positive number to bring
+  // back ephemeral replies that self-delete after that many minutes.
   const raw = (process.env.SLACK_EPHEMERAL_MINUTES ?? '').trim()
-  if (raw === '') return 5
+  if (raw === '') return 0
   const n = Number(raw)
-  return Number.isFinite(n) ? n : 5
+  return Number.isFinite(n) && n > 0 ? n : 0
 }
 
 export function ephemeralEnabled(): boolean {
