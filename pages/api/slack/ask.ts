@@ -26,7 +26,7 @@ import type { NextApiRequest, NextApiResponse } from 'next'
 import { waitUntil } from '@vercel/functions'
 import { verifySlackSignature } from '../../../lib/slack-bot/verify'
 import { askClaude } from '../../../lib/slack-bot/claude'
-import { postMessage, sendToPartsContact } from '../../../lib/slack-bot/slack'
+import { postMessage } from '../../../lib/slack-bot/slack'
 import { scheduleDeletion } from '../../../lib/slack-bot/ephemeral'
 
 // The parts contact is only wired up when SLACK_PARTS_CONTACT is set; without it
@@ -134,6 +134,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const action = (payload.actions || [])[0] || {}
         if (action.action_id === 'ask_eta') {
           const asker: string = payload.user?.id || ''
+          const ch: string = payload.channel?.id || ''
+          // Post the request into the SAME thread as the answer, so the whole
+          // exchange (question → stock → asked parts → their reply) stays in one
+          // place as history. payload.message carries the thread root.
+          const threadTs: string | undefined = payload.message?.thread_ts || payload.message?.ts
           const responseUrl: string = payload.response_url || ''
           let skus: string[] = []
           let q = ''
@@ -143,20 +148,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           waitUntil((async () => {
             const contact = (process.env.SLACK_PARTS_CONTACT || '').trim()
             const greet = /^[UW]/.test(contact) ? `Hey <@${contact}>` : 'Hey'
-            // Simple one-liner, as requested: "Hey @Terry just checking on the
-            // availability on <part>. Thanks, @asker".
+            // "Hey @Terry just checking on the availability on <part>. Thanks, @asker"
             const msg = `${greet} just checking on the availability on *${parts}*. Thanks, <@${asker}>`
-            const sent = await sendToPartsContact(msg)
-            console.log('[slack/ask] ask_eta', JSON.stringify({ contact: contact.slice(0, 24), asker, parts, ok: sent.ok, reason: sent.reason || null }))
-            if (responseUrl) {
+            const posted = ch ? await postMessage({ channel: ch, text: msg, thread_ts: threadTs }) : null
+            console.log('[slack/ask] ask_eta', JSON.stringify({ contact: contact.slice(0, 24), asker, parts, posted: !!posted, threaded: !!threadTs }))
+            // Only fall back to a private note if the in-thread post failed.
+            if (!posted && responseUrl) {
               await fetch(responseUrl, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                  response_type: 'ephemeral',
-                  replace_original: false,
-                  text: sent.ok ? ':white_check_mark: Sent to parts 👍' : `:warning: Couldn't send it — ${sent.reason}`,
-                }),
+                body: JSON.stringify({ response_type: 'ephemeral', text: ":warning: Couldn't post the availability request." }),
               }).catch(() => undefined)
             }
           })())
