@@ -16,8 +16,13 @@
 //   on the reverse direction; cost = JAWS AverageCost, falling back to the
 //   item's StandardCost when average is 0 (e.g. JAWS holds none).
 //
-// The REQUIRED PO reference lands on both documents of either direction
-// (sale CustomerPurchaseOrderNumber + bill SupplierInvoiceNumber).
+// Cross-document references:
+//   FORWARD: both docs match on the JAWS invoice number — it's the sale's
+//     Number AND the bill's SupplierInvoiceNumber. The MD PO number is the
+//     sale's CustomerPurchaseOrderNumber and rides in the bill's JournalMemo
+//     (a MYOB bill has no PO-number field).
+//   REVERSE: both docs match on the supplied PO reference (sale
+//     CustomerPurchaseOrderNumber + bill SupplierInvoiceNumber).
 //
 // Failure model (both directions): sale-side fail → 'failed' (nothing
 // written). Sale landed but purchase-side failed → 'partial' —
@@ -494,9 +499,13 @@ async function writeVpsBill(opts: {
   const subtotal = round2(opts.taxableEx + opts.nonTaxableEx)
   const body: Record<string, any> = {
     Date: new Date().toISOString().substring(0, 10),
-    // The PO reference is the bill's visible reference; the JAWS invoice
-    // number always stays in the JournalMemo for matching.
-    SupplierInvoiceNumber: opts.poReference.substring(0, 30),
+    // Tie the two sides together on the JAWS invoice number: it goes in the
+    // bill's Supplier Invoice No. — the only editable reference field on a
+    // MYOB AccountRight bill (bills have no PO-number field) — so a VPS bill
+    // matches its JAWS sale invoice number-for-number. The PO number (the MD
+    // PO), which already lives in the JAWS invoice's PO field, rides along in
+    // the JournalMemo since there's no field for it on the purchase.
+    SupplierInvoiceNumber: opts.jawsInvoiceNumber.substring(0, 30),
     Supplier: { UID: opts.supplierUid },
     Lines: lines,
     IsTaxInclusive: false,
@@ -505,7 +514,7 @@ async function writeVpsBill(opts: {
     Subtotal: subtotal,
     TotalTax: opts.gst,
     TotalAmount: round2(subtotal + opts.gst),
-    JournalMemo: `Internal stock transfer from JAWS — inv ${opts.jawsInvoiceNumber} — JA Portal`.substring(0, 255),
+    JournalMemo: `Internal stock transfer from JAWS — inv ${opts.jawsInvoiceNumber} — PO ${opts.poReference} — JA Portal`.substring(0, 255),
   }
 
   const res = await myobFetch(vps.id, `/accountright/${vps.company_file_id}/Purchase/Bill/Service`, {
