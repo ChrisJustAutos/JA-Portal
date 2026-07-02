@@ -32,6 +32,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // Try the documented In Tray list endpoint(s); report status + a trimmed
     // sample of each so we can see the real shape without dumping everything.
     const candidatePaths = [
+      // Control: a known-good AccountRight resource. If THIS 401s too, the
+      // token/connection is broken (affects posting as well); if it's 200 but
+      // In Tray 401s, In Tray isn't accessible via this AccountRight connection.
+      `/accountright/${cf}/Contact/Supplier`,
       `/accountright/${cf}/InTray/Document`,
       `/accountright/${cf}/InTray/Documents`,
     ]
