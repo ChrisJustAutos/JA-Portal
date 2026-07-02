@@ -131,6 +131,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               `From <@${asker}>${srcChannel ? ` in <#${srcChannel}>` : ''}:\n\n` +
               (detail || '(no detail captured)')
             const sent = await sendToPartsContact(msg)
+            console.log('[slack/ask] ask_eta', JSON.stringify({ contact: (process.env.SLACK_PARTS_CONTACT || '').slice(0, 24), asker, ok: sent.ok, reason: sent.reason || null }))
             if (responseUrl) {
               await fetch(responseUrl, {
                 method: 'POST',
