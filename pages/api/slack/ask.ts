@@ -1,8 +1,12 @@
 // pages/api/slack/ask.ts
 //
-// Webhook for the JA Portal Slack bot. Handles two trigger types:
-//   1. app_mention events  — body.type === 'event_callback', event.type === 'app_mention'
-//   2. /ask slash commands — Content-Type application/x-www-form-urlencoded with command + text
+// Webhook for the JA Portal Slack bot. Handles three trigger types:
+//   1. message events      — any human post in an allowed channel; staff ask
+//      naturally with NO @mention. Un-addressed messages pass through a silent
+//      gate (Claude returns NO_REPLY on chatter) so the bot only speaks up for
+//      a real request. Requires the message.channels event + channels:history.
+//   2. app_mention events  — a direct @mention; always answered (no gate).
+//   3. /ask slash commands — Content-Type application/x-www-form-urlencoded with command + text
 //
 // Slack requires a response within 3 seconds. We:
 //   - For URL-verification handshake → respond synchronously with the challenge.
@@ -138,38 +142,56 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   const event = body.event
-  const eventId: string = body.event_id || `${event.channel}:${event.ts}`
 
-  // Ignore bot messages (including our own) and dedupe retries.
-  if (event.bot_id || event.subtype === 'bot_message') return res.status(200).json({ ok: true })
-  if (!rememberEvent(eventId)) return res.status(200).json({ ok: true })
-
-  if (event.type !== 'app_mention') {
+  // We handle two event types: app_mention (someone @mentions the bot) and
+  // message (any post in a channel the bot is in — so staff can just ask the
+  // question with no @mention). A single message can fire BOTH, so dedupe on
+  // the message identity (channel+ts), NOT the per-event id.
+  if (event.type !== 'app_mention' && event.type !== 'message') {
     return res.status(200).json({ ok: true })
   }
+
+  // Ignore anything the bot itself said and non-plain messages (edits, deletes,
+  // joins, bot posts, file-share subtypes) — only real human messages.
+  if (event.bot_id || event.subtype) return res.status(200).json({ ok: true })
 
   const channel: string = event.channel
-  if (!isAllowedChannel(channel)) {
-    // Silently drop mentions in non-allowed channels.
-    return res.status(200).json({ ok: true })
-  }
+  if (!isAllowedChannel(channel)) return res.status(200).json({ ok: true })
 
-  const question = stripBotMention(event.text || '')
+  const dedupeKey = `${event.channel}:${event.ts}`
+  if (!rememberEvent(dedupeKey)) return res.status(200).json({ ok: true })
+
+  // Treat it as "directly addressed" if it's an app_mention OR the text carries
+  // a bot mention (the message-event copy of a mention) — those are always
+  // answered. Un-addressed messages go through the silent gate.
+  const hasMention = /<@[A-Z0-9]+>/.test(event.text || '')
+  const directlyAddressed = event.type === 'app_mention' || hasMention
+
+  const question = stripBotMention(event.text || '').trim()
+  if (!question) return res.status(200).json({ ok: true })
   const threadTs: string | undefined = event.thread_ts || event.ts
 
   // Run Claude + post in background so we can ack Slack within 3s.
   waitUntil((async () => {
     try {
-      const result = await askClaude(question || 'Hi — what can you help me with?')
-      const reply = result.text + (result.toolsUsed.length ? `\n\n_Used: ${result.toolsUsed.join(', ')}_` : '')
+      const result = await askClaude(question, { gateSilent: !directlyAddressed })
+      const answer = result.text.trim()
+      // Silent gate: for un-addressed channel chatter Claude returns NO_REPLY —
+      // stay quiet rather than butting in.
+      if (!directlyAddressed && /^NO_REPLY\b/i.test(answer)) return
+      const reply = (answer || '(no answer)') + (result.toolsUsed.length ? `\n\n_Used: ${result.toolsUsed.join(', ')}_` : '')
       await postMessage({ channel, text: reply, thread_ts: threadTs })
     } catch (e: any) {
-      console.error('[slack/ask] mention error:', e)
-      await postMessage({
-        channel,
-        text: `:warning: I hit an error: ${e?.message || String(e)}`,
-        thread_ts: threadTs,
-      })
+      console.error('[slack/ask] event error:', e)
+      // Only surface errors when directly addressed — never spam an error into
+      // the channel over a message we weren't even asked to answer.
+      if (directlyAddressed) {
+        await postMessage({
+          channel,
+          text: `:warning: I hit an error: ${e?.message || String(e)}`,
+          thread_ts: threadTs,
+        })
+      }
     }
   })())
 

@@ -29,11 +29,17 @@ export interface AskResult {
   outputTokens: number
 }
 
-export async function askClaude(question: string): Promise<AskResult> {
+// Appended to the system prompt when the bot is reading a channel it wasn't
+// explicitly @mentioned in. It must stay quiet on chatter and only speak up for
+// a genuine request — otherwise it would reply to every message in the channel.
+const GATE_INSTRUCTION = `IMPORTANT — you are reading a channel WITHOUT being directly addressed. Only respond if this message is genuinely a request you can help with: a parts/stock availability question ("how many X do we have?", "got any Y?"), a customer/invoice lookup, or a portal how-to. If it is small talk, banter, a statement, an acknowledgement, or clearly not aimed at you, reply with exactly "NO_REPLY" and nothing else — and do NOT call any tool. When in doubt, prefer NO_REPLY.`
+
+export async function askClaude(question: string, opts: { gateSilent?: boolean } = {}): Promise<AskResult> {
   const key = process.env.ANTHROPIC_API_KEY
   if (!key) throw new Error('ANTHROPIC_API_KEY not set')
 
   const client = new Anthropic({ apiKey: key })
+  const system = opts.gateSilent ? `${SYSTEM_PROMPT}\n\n${GATE_INSTRUCTION}` : SYSTEM_PROMPT
 
   const messages: Anthropic.Messages.MessageParam[] = [
     { role: 'user', content: question },
@@ -53,7 +59,7 @@ export async function askClaude(question: string): Promise<AskResult> {
     const resp = await client.messages.create({
       model: 'claude-sonnet-4-6',
       max_tokens: 1500,
-      system: SYSTEM_PROMPT,
+      system,
       tools: toolDefs as any,
       messages,
     })
