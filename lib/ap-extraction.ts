@@ -296,6 +296,12 @@ function validateAndNormalise(raw: any): ExtractedAPInvoice {
     throw new Error('AP extraction: missing both invoice_number and total_inc_gst — no anchors to trust extraction')
   }
 
+  const normTotals = reconcileTotals({
+    subtotalExGst: nullableNumber(totals.subtotalExGst),
+    gstAmount:     nullableNumber(totals.gstAmount),
+    totalIncGst,
+  })
+
   return {
     vendor: {
       name:     nullableString(vendor.name),
@@ -313,11 +319,7 @@ function validateAndNormalise(raw: any): ExtractedAPInvoice {
     invoiceDate: nullableIsoDate(raw.invoiceDate),
     dueDate:     nullableIsoDate(raw.dueDate),
     poNumber:    nullableString(raw.poNumber),
-    totals: {
-      subtotalExGst: nullableNumber(totals.subtotalExGst),
-      gstAmount:     nullableNumber(totals.gstAmount),
-      totalIncGst,
-    },
+    totals: normTotals,
     capricorn: {
       via:          capricorn.via === true,
       reference:    nullableString(capricorn.reference),
@@ -325,7 +327,7 @@ function validateAndNormalise(raw: any): ExtractedAPInvoice {
     },
     notes: nullableString(raw.notes),
     isCreditNote: raw.isCreditNote === true,
-    lineItems: reconcileLineTotals(normaliseLineItems(raw.lineItems), nullableNumber(totals.subtotalExGst)),
+    lineItems: reconcileLineTotals(normaliseLineItems(raw.lineItems), normTotals.subtotalExGst),
     parseConfidence: ['high', 'medium', 'low'].includes(raw.parseConfidence) ? raw.parseConfidence : 'medium',
     bankDetails: {
       bsb:           digitsOrNull((raw.bankDetails || {}).bsb),
@@ -333,6 +335,22 @@ function validateAndNormalise(raw: any): ExtractedAPInvoice {
       accountName:   nullableString((raw.bankDetails || {}).accountName),
     },
   }
+}
+
+// Header-totals sanity fix. The MYOB-style "Total $X / includes GST $Y"
+// layout prints NO true ex-GST subtotal, and the model sometimes returns the
+// inc-GST total as subtotalExGst — an otherwise perfect parse then fails the
+// totals-reconcile triage (sub + gst ≠ total). When the inc-total-as-subtotal
+// slip exactly explains the gap, correct subtotal to total − gst. Any other
+// inconsistency is left alone for triage to flag.
+function reconcileTotals(t: { subtotalExGst: number | null; gstAmount: number | null; totalIncGst: number | null }) {
+  const { subtotalExGst: sub, gstAmount: gst, totalIncGst: total } = t
+  if (sub === null || gst === null || total === null) return t
+  if (Math.abs(sub + gst - total) <= 0.05) return t              // already reconciles
+  if (Math.abs(sub - total) <= 0.05 && gst > 0 && gst < total) {
+    return { ...t, subtotalExGst: Math.round((total - gst) * 100) / 100 }
+  }
+  return t
 }
 
 // BSB / account number → digits only, or null. Keeps comparison robust to
