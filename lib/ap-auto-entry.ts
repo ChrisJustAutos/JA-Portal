@@ -293,12 +293,14 @@ async function processAttachment(
     poCheckStatus: 'no-po-on-invoice',
   })
 
-  // A consolidated invoice's statement-style layout inherently reads as
-  // "medium" confidence — that alone shouldn't block posting. Everything else
-  // (line sums, totals reconciling, coding, bank details) must still be clean,
-  // so an ambiguous parse (e.g. lines that don't add up to the stated total)
-  // is still flagged rather than posted at a possibly-wrong amount.
-  const ignorable = consolidated ? ['YELLOW:medium-parse-confidence'] : []
+  // Consolidated invoices are posted at the STATED TOTAL (Chris 2026-07-06:
+  // "post with total amount on statement, disregard credits"), so the
+  // statement-style layout quirks — medium parse confidence, consignment rows
+  // that don't sum to the total because of credits/running balances — don't
+  // block posting. Supplier match, coding and bank checks still apply.
+  const ignorable = consolidated
+    ? ['YELLOW:medium-parse-confidence', 'YELLOW:line-sum-mismatch', 'YELLOW:totals-mismatch']
+    : []
   const failReasons: string[] = triage.triageReasons.filter(r => !ignorable.includes(r))
   if (bank === 'mismatch') failReasons.push('RED:bank-mismatch')
 
@@ -328,9 +330,27 @@ async function processAttachment(
     return { ...base, supplierName, invoiceNumber: extracted.invoiceNumber, amount: total, outcome: 'posted', bankCheck: bank, failReasons: [], slackText: built.text }
   }
 
+  // Consolidated invoice → bill the stated total as ONE line. The parsed
+  // consignment rows aren't trustworthy (running balances, credits netted into
+  // the total), so the total-due is the source of truth. Freight is GST-able,
+  // so ex-GST is derived as total/1.1 — the tax-inclusive poster then rebuilds
+  // a line that matches the stated total to the cent. Coding falls to a line
+  // rule on the description, else the supplier card's default expense account.
+  const toPost: ExtractedAPInvoice = consolidated ? {
+    ...extracted,
+    totals: { subtotalExGst: null, gstAmount: null, totalIncGst: total },
+    lineItems: [{
+      lineNo: 1, partNumber: null,
+      description: `Consolidated freight invoice ${extracted.invoiceNumber} — statement total (credits disregarded)`,
+      qty: 1, uom: null, unitPriceExGst: null,
+      lineTotalExGst: Math.round((total / 1.1) * 100) / 100,
+      gstAmount: null, taxCodeRaw: null, taxCode: 'GST',
+    }],
+  } : extracted
+
   const posted = await postFoundInvoiceToMyob({
     companyFile, supplierUid: supplierUid!, supplierName,
-    extracted, statementAmount: null,
+    extracted: toPost, statementAmount: null,
     pdfBytes: bytes, pdfFilename: att.name || `${extracted.invoiceNumber}.pdf`,
     postedBy: ACTOR,
   })

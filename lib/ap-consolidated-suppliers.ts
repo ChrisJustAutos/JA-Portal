@@ -7,9 +7,11 @@
 //     consignments on a single bill, not individual invoices that could be
 //     missing from MYOB (chasing them emails the supplier about invoice
 //     numbers that don't exist); and
-//   • AP auto-entry SHOULD treat the document as a normal invoice — its
-//     statement-style layout inherently parses at medium confidence, which
-//     alone shouldn't block posting.
+//   • AP auto-entry SHOULD enter the document as a normal invoice, billed at
+//     the STATED TOTAL as a single line ("post with total amount on statement,
+//     disregard credits" — Chris 2026-07-06): the statement-style layout
+//     parses at medium confidence and its rows needn't sum to the total, so
+//     neither blocks posting.
 //
 // Comma-separated name patterns via AP_CONSOLIDATED_INVOICE_SUPPLIERS override
 // the default list. Matching is case- and whitespace-insensitive and is tried
