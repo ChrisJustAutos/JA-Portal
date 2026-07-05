@@ -34,6 +34,7 @@ import { matchStatementAgainstMyob } from './ap-statement-match'
 import { type CompanyFileLabel } from './ap-myob-lookup'
 import { tryAutoMatchSupplier } from './ap-myob-automatch'
 import { resolveStatementGaps, type ResolutionAction } from './ap-statement-resolve'
+import { consolidatedInvoiceSupplier } from './ap-consolidated-suppliers'
 
 // Phase 2 master switch. When on (default), the watcher doesn't just report
 // gaps — for each missing invoice it SEARCHES THE MAILBOX for the actual
@@ -284,6 +285,21 @@ export async function runStatementWatch(opts: WatchOptions = {}): Promise<Statem
           const supplierName = statement.supplier?.name || null
           const period = periodLabel(statement)
           const invoiceLines = statement.lines.filter(l => l.type === 'invoice').length
+
+          // Consolidated-invoice supplier (e.g. Time Express): the "statement" IS a
+          // single tax invoice for the period's consignments. Its rows aren't
+          // individual invoices that could be missing from MYOB — reconciling here
+          // reports every row missing and chases the supplier for invoice numbers
+          // that don't exist. AP auto-entry enters the document itself; just record
+          // the scan (dedupe) and move on.
+          if (consolidatedInvoiceSupplier(supplierName, msg.from)) {
+            await record({
+              ...base, supplierName, supplierUid: null, supplierResolution: 'none',
+              status: 'reconciled', period, invoiceLines, missing: [], mismatches: [],
+              reviewReason: 'Consolidated-invoice supplier — this "statement" is a single invoice; AP auto-entry handles it. Not reconciled or chased.',
+            })
+            continue
+          }
 
           // Capricorn consolidated statement: you PAY Capricorn, but the lines are
           // individual suppliers' invoices (Repco, BNT, …) billed through it. Reconcile

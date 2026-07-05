@@ -252,7 +252,8 @@ Rules:
 - Capture every line item shown in order. Even single-line invoices need lineItems as an array.
 - "via Capricorn" matters: it changes downstream accounting. Look for explicit Capricorn branding/markers, not just any mention.
 - If GST appears to be charged on a line but no explicit tax code is shown, default taxCode to 'GST'.
-- If the line shows "FREE" / "NO GST" / 0% charged, taxCode is 'FRE'.`
+- If the line shows "FREE" / "NO GST" / 0% charged, taxCode is 'FRE'.
+- CONSOLIDATED / STATEMENT-STYLE INVOICES: some suppliers (couriers especially) issue a monthly consolidated tax invoice that LOOKS like a statement — one row per consignment/job/delivery, each with its own charge. Extract each row as a line item using the row's OWN charge amount, NEVER a running-balance or cumulative column. EXCLUDE opening/brought-forward balances, payments received and credit rows from lineItems. totals.totalIncGst is the amount payable for THIS document's charges — if both an aged/total balance and a current-period total are shown, use the one that equals the sum of the rows you extracted.`
 }
 
 // ── Output parsing ──────────────────────────────────────────────────────

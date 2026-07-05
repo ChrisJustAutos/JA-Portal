@@ -5,7 +5,10 @@
 //   • posts it straight to MYOB (tax-inclusive, no portal ap_invoices row) and
 //     drops a success card in Slack, OR
 //   • flags it in Slack with the reason and LEAVES the email for manual entry.
-// Not-an-invoice attachments are skipped silently.
+// Not-an-invoice attachments are skipped silently. Statement-named documents
+// are skipped too (the statement watcher owns those) — EXCEPT consolidated-
+// invoice suppliers (lib/ap-consolidated-suppliers, e.g. Time Express), whose
+// "statement" is a single tax invoice and is entered here like any other.
 //
 // Fact-check = the existing intake triage (pure triageInvoice) — supplier
 // matched, all lines coded, high confidence, totals reconcile, has number +
@@ -38,6 +41,7 @@ import { tryAutoMatchSupplier } from './ap-myob-automatch'
 import { getSupplierByUid, type CompanyFileLabel } from './ap-myob-lookup'
 import { resolveLineAccount } from './ap-line-resolver'
 import { triageInvoice } from './ap-supabase'
+import { consolidatedInvoiceSupplier } from './ap-consolidated-suppliers'
 import { postFoundInvoiceToMyob } from './ap-myob-bill'
 import { postWebhook } from './slack'
 import { buildAutoEntryBlocks, type BankCheck } from './ap-auto-entry-slack'
@@ -240,6 +244,18 @@ async function processAttachment(
     return { ...base, supplierName: null, invoiceNumber: null, amount: null, outcome: 'skipped_not_invoice', bankCheck: 'skipped', failReasons: [] }
   }
 
+  // Statement guard. Statement-named documents belong to the statement watcher
+  // (reconcile against MYOB), NOT here — parsing a statement as an "invoice"
+  // risks double-posting bills that are already entered. The exception is a
+  // consolidated-invoice supplier (e.g. Time Express), whose "statement" IS a
+  // single tax invoice for the period and is exactly what we should enter.
+  const looksLikeStatement = /statement/i.test(msg.subject || '') || /statement/i.test(att.name || '')
+  const consolidated = consolidatedInvoiceSupplier(extracted.vendor?.name, msg.from)
+  if (looksLikeStatement && !consolidated) {
+    if (!dryRun) await logRow(c, { mailbox, companyFile, msg, att }, { outcome: 'skipped_not_invoice' })
+    return { ...base, supplierName: extracted.vendor?.name || null, invoiceNumber: extracted.invoiceNumber, amount: extracted.totals.totalIncGst, outcome: 'skipped_not_invoice', bankCheck: 'skipped', failReasons: [] }
+  }
+
   const total = extracted.totals.totalIncGst
   if (!extracted.invoiceNumber || total == null) {
     if (!dryRun) await logRow(c, { mailbox, companyFile, msg, att }, { outcome: 'skipped_not_invoice' })
@@ -277,10 +293,16 @@ async function processAttachment(
     poCheckStatus: 'no-po-on-invoice',
   })
 
-  const failReasons: string[] = [...triage.triageReasons]
+  // A consolidated invoice's statement-style layout inherently reads as
+  // "medium" confidence — that alone shouldn't block posting. Everything else
+  // (line sums, totals reconciling, coding, bank details) must still be clean,
+  // so an ambiguous parse (e.g. lines that don't add up to the stated total)
+  // is still flagged rather than posted at a possibly-wrong amount.
+  const ignorable = consolidated ? ['YELLOW:medium-parse-confidence'] : []
+  const failReasons: string[] = triage.triageReasons.filter(r => !ignorable.includes(r))
   if (bank === 'mismatch') failReasons.push('RED:bank-mismatch')
 
-  const pass = triage.triageStatus === 'green' && bank !== 'mismatch'
+  const pass = failReasons.length === 0
 
   // Common Slack fields.
   const slackCommon = {
@@ -401,6 +423,7 @@ async function logRow(
     await c.from('ap_auto_entry_log').insert({
       mailbox: ctx.mailbox, company_file: ctx.companyFile,
       graph_message_id: ctx.msg.id, graph_attachment_id: ctx.att.id,
+      subject: ctx.msg.subject ?? null, from_address: ctx.msg.from ?? null, attachment_name: ctx.att.name || null,
       supplier_name: fields.supplierName ?? null, supplier_uid: fields.supplierUid ?? null,
       invoice_number: fields.invoiceNumber ?? null, invoice_date: fields.invoiceDate ?? null, amount: fields.amount ?? null,
       outcome: fields.outcome, fail_reasons: fields.failReasons ?? null, bank_check: fields.bankCheck ?? null,
