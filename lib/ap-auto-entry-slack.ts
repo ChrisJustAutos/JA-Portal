@@ -82,10 +82,15 @@ export function buildAutoEntryBlocks(i: AutoEntrySlackInput): { text: string; bl
   if (i.supplierTrust) fields.push(`*Supplier trust:*\n${i.supplierTrust}`)
   if (i.paidOnInvoice) fields.push(`*Already paid:*\n💳 ${i.paidOnInvoice} — don't pay again`)
 
+  // Slack caps a section at 10 fields — the card grew past that (trust +
+  // already-paid badges made 11 and Slack silently rejected the whole message,
+  // PSR150252) — so chunk into sections of 8.
   const blocks: SlackBlock[] = [
     { type: 'header', text: { type: 'plain_text', text: headline.slice(0, 150), emoji: true } },
-    { type: 'section', fields: fields.map(t => ({ type: 'mrkdwn', text: t.slice(0, 2000) })) },
   ]
+  for (let i = 0; i < fields.length; i += 8) {
+    blocks.push({ type: 'section', fields: fields.slice(i, i + 8).map(t => ({ type: 'mrkdwn', text: t.slice(0, 2000) })) })
+  }
 
   // Show BOTH sides of the bank comparison when it matters (mismatch /
   // unverified) so the reader can spot the differing digit — or a misread on
