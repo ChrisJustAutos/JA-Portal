@@ -308,10 +308,11 @@ async function processAttachment(
   return [await processInvoice(c, ctx, { bytes, b64, kind, attId: att.id, attName: att.name || '', isScan: isBatchSource(mailbox, msg.from) })]
 }
 
-// Scanned batch segments are photographed paper, not digital PDFs — the cheap
-// extraction model misreads names off them (MPI → "IMP", Engine → "Bearing").
-// Scans get a stronger model; digital email PDFs stay on the default.
-const scanExtractionModel = () => (process.env.AP_SCAN_EXTRACTION_MODEL || 'claude-sonnet-4-6').trim()
+// Scanned batch segments are photographed paper, not digital PDFs — weaker
+// models misread names off them (MPI → "IMP", Engine → "Bearing") and fall
+// for product-brand logos (a JAS Oceania invoice read as "Federal Batteries").
+// Scans get the strongest model; digital email PDFs stay on the default.
+const scanExtractionModel = () => (process.env.AP_SCAN_EXTRACTION_MODEL || 'claude-opus-4-8').trim()
 
 async function processInvoice(
   c: SupabaseClient,
