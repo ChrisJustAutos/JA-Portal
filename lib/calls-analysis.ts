@@ -213,13 +213,39 @@ async function getRoster(c: SupabaseClient): Promise<RosterRow[]> {
   return (data as RosterRow[]) || []
 }
 
+// Levenshtein distance — transcription mangles names ("Dom" → "Don",
+// "Kaleb" → "Caleb"), so an unambiguous one-edit match still counts.
+function editDistance(a: string, b: string): number {
+  const m = a.length, n = b.length
+  if (Math.abs(m - n) > 2) return 99
+  const row = Array.from({ length: n + 1 }, (_, j) => j)
+  for (let i = 1; i <= m; i++) {
+    let prev = row[0]; row[0] = i
+    for (let j = 1; j <= n; j++) {
+      const tmp = row[j]
+      row[j] = Math.min(row[j] + 1, row[j - 1] + 1, prev + (a[i - 1] === b[j - 1] ? 0 : 1))
+      prev = tmp
+    }
+  }
+  return row[n]
+}
+
 function matchRoster(roster: RosterRow[], name: string | null | undefined): RosterRow | null {
   if (!name) return null
   const n = String(name).trim().toLowerCase()
   if (!n) return null
-  return roster.find(r =>
+  // Exact name or alias first.
+  const exact = roster.find(r =>
     r.name.toLowerCase() === n || (r.aliases || []).some(a => a.toLowerCase() === n),
-  ) || null
+  )
+  if (exact) return exact
+  // Fuzzy: within one edit of exactly ONE roster name/alias (≥3 chars, so
+  // "Don"→Dom matches but short noise can't). Ambiguity → no match.
+  if (n.length < 3) return null
+  const fuzzy = roster.filter(r =>
+    [r.name, ...(r.aliases || [])].some(c => c.length >= 3 && editDistance(c.toLowerCase(), n) <= 1),
+  )
+  return fuzzy.length === 1 ? fuzzy[0] : null
 }
 
 // Confidence policy: 'high' (explicit self-introduction) always wins — the
@@ -420,9 +446,13 @@ export async function analyseCall(callId: string, opts: { dryRun?: boolean; rubr
 
   const advisor = await applyAdvisor(c, call, roster, advisorName, advisorConfidence)
 
+  // Use the CANONICAL roster name in Slack — a transcription slip ("Don" for
+  // Dom) must not read as a different person or a false ext-mismatch warning.
+  const canonicalName = matchRoster(roster, advisorName)?.name || advisorName
+
   const slacked = await postCoachingSlack({
     call, outcome: parsed.outcome, callTypeId: callType?.id ?? null, salesScore,
-    summary: parsed.summary || null, identifiedName: advisorName,
+    summary: parsed.summary || null, identifiedName: canonicalName,
   })
 
   // Close out any queued job rows for this call so the UI stops polling.
