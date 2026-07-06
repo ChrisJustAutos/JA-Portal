@@ -19,7 +19,7 @@ import { runAutoEntry, sendTestSlack } from '../../../lib/ap-auto-entry'
 import { getCurrentUser } from '../../../lib/authServer'
 import { roleHasPermission } from '../../../lib/permissions'
 
-export const config = { maxDuration: 300 }
+export const config = { maxDuration: 800 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   const bearerOk = !!process.env.CRON_SECRET && req.headers.authorization === `Bearer ${process.env.CRON_SECRET}`

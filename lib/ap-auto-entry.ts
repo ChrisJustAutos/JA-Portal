@@ -342,25 +342,49 @@ async function processAttachment(
         .in('graph_attachment_id', segments.map(segId))
       const prior = new Map((priorRows || []).map((p: any) => [p.graph_attachment_id, p]))
 
-      for (const r of segments) {
-        const attId = segId(r)
-        const attName = `${att.name || 'scan.pdf'} (p${r.from}${r.to > r.from ? `-${r.to}` : ''} of ${pages})`
+      // Phase A — split + EXTRACT in parallel (the ~40-60s Opus reads dominate
+      // batch wall-time). Posting stays sequential in phase B so the duplicate
+      // guard and MYOB smart-adopt keep their ordering guarantees.
+      const EXTRACT_CONCURRENCY = 4
+      type Pre = { r: PageRange; attId: string; attName: string; done?: any; segBytes?: Buffer; extracted?: ExtractedAPInvoice; failed?: boolean; error?: string }
+      const pres: Pre[] = segments.map(r => ({
+        r, attId: segId(r),
+        attName: `${att.name || 'scan.pdf'} (p${r.from}${r.to > r.from ? `-${r.to}` : ''} of ${pages})`,
+        done: prior.get(segId(r)),
+      }))
+      const todo = pres.filter(p => !p.done)
+      for (let i = 0; i < todo.length; i += EXTRACT_CONCURRENCY) {
+        await Promise.all(todo.slice(i, i + EXTRACT_CONCURRENCY).map(async p => {
+          try {
+            p.segBytes = await splitPdfRange(bytes, p.r.from, p.r.to)
+            p.extracted = (await extractInvoiceFromPdf(p.segBytes.toString('base64'), { model: scanExtractionModel() })).invoice
+          } catch (e: any) {
+            if (p.segBytes) { p.failed = true }                      // extraction failed → not-an-invoice skip
+            else { p.error = (e?.message || String(e)).slice(0, 300) } // split failed → error
+          }
+        }))
+      }
 
+      // Phase B — sequential fact-check + post per segment.
+      for (const p of pres) {
         // Already processed in an earlier (timed-out) run — carry its outcome
         // forward so the leftovers email still accounts for every segment.
-        const done: any = prior.get(attId)
-        if (done) {
-          items.push({ messageId: msg.id, attachmentId: attId, attachmentName: done.attachment_name || attName, pages: r, supplierName: done.supplier_name, invoiceNumber: done.invoice_number, amount: done.amount != null ? Number(done.amount) : null, outcome: done.outcome, bankCheck: 'skipped', failReasons: done.fail_reasons || [], error: done.error || undefined })
+        if (p.done) {
+          items.push({ messageId: msg.id, attachmentId: p.attId, attachmentName: p.done.attachment_name || p.attName, pages: p.r, supplierName: p.done.supplier_name, invoiceNumber: p.done.invoice_number, amount: p.done.amount != null ? Number(p.done.amount) : null, outcome: p.done.outcome, bankCheck: 'skipped', failReasons: p.done.fail_reasons || [], error: p.done.error || undefined })
           continue
         }
-
+        if (p.error || !p.segBytes) {
+          const error = p.error || 'page split failed'
+          items.push({ messageId: msg.id, attachmentId: p.attId, attachmentName: p.attName, pages: p.r, supplierName: null, invoiceNumber: null, amount: null, outcome: 'error', bankCheck: 'skipped', failReasons: [], error })
+          if (!ctx.dryRun) await logRow(c, { mailbox, companyFile: ctx.companyFile, msg, attId: p.attId, attName: p.attName }, { outcome: 'error', error })
+          continue
+        }
         try {
-          const segBytes = await splitPdfRange(bytes, r.from, r.to)
-          items.push({ ...(await processInvoice(c, ctx, { bytes: segBytes, b64: segBytes.toString('base64'), kind: 'pdf', attId, attName, isScan: true })), pages: r })
+          items.push({ ...(await processInvoice(c, ctx, { bytes: p.segBytes, b64: p.segBytes.toString('base64'), kind: 'pdf', attId: p.attId, attName: p.attName, isScan: true, preExtracted: p.failed ? 'failed' : p.extracted })), pages: p.r })
         } catch (e: any) {
           const error = (e?.message || String(e)).slice(0, 300)
-          items.push({ messageId: msg.id, attachmentId: attId, attachmentName: attName, pages: r, supplierName: null, invoiceNumber: null, amount: null, outcome: 'error', bankCheck: 'skipped', failReasons: [], error })
-          if (!ctx.dryRun) await logRow(c, { mailbox, companyFile: ctx.companyFile, msg, attId, attName }, { outcome: 'error', error })
+          items.push({ messageId: msg.id, attachmentId: p.attId, attachmentName: p.attName, pages: p.r, supplierName: null, invoiceNumber: null, amount: null, outcome: 'error', bankCheck: 'skipped', failReasons: [], error })
+          if (!ctx.dryRun) await logRow(c, { mailbox, companyFile: ctx.companyFile, msg, attId: p.attId, attName: p.attName }, { outcome: 'error', error })
         }
       }
 
@@ -390,7 +414,9 @@ const scanExtractionModel = () => (process.env.AP_SCAN_EXTRACTION_MODEL || 'clau
 async function processInvoice(
   c: SupabaseClient,
   ctx: { mailbox: string; companyFile: CompanyFileLabel; msg: GraphMessageSummary; dryRun: boolean },
-  inv: { bytes: Buffer; b64: string; kind: 'pdf' | SupportedImageMediaType; attId: string; attName: string; isScan?: boolean },
+  // preExtracted: batch segments extract in a parallel phase — the result (or
+  // 'failed') is handed in so this function doesn't re-extract.
+  inv: { bytes: Buffer; b64: string; kind: 'pdf' | SupportedImageMediaType; attId: string; attName: string; isScan?: boolean; preExtracted?: ExtractedAPInvoice | 'failed' },
 ): Promise<AutoEntryItem> {
   const { mailbox, companyFile, msg, dryRun } = ctx
   const { bytes, b64, kind, attId, attName } = inv
@@ -399,16 +425,23 @@ async function processInvoice(
   // Extract. A parse failure or a non-invoice (no number AND no total) is not
   // flagged — just logged as skipped so we don't spam Slack with random PDFs.
   let extracted: ExtractedAPInvoice
-  try {
-    if (kind === 'pdf') {
-      if (bytes.length < 100 || !bytes.subarray(0, 5).toString('ascii').startsWith('%PDF-')) throw new Error('not a PDF')
-      extracted = (await extractInvoiceFromPdf(b64, inv.isScan ? { model: scanExtractionModel() } : {})).invoice
-    } else {
-      extracted = (await extractInvoiceFromImage(b64, kind)).invoice
-    }
-  } catch {
+  if (inv.preExtracted && inv.preExtracted !== 'failed') {
+    extracted = inv.preExtracted
+  } else if (inv.preExtracted === 'failed') {
     if (!dryRun) await logRow(c, { mailbox, companyFile, msg, attId, attName }, { outcome: 'skipped_not_invoice' })
     return { ...base, supplierName: null, invoiceNumber: null, amount: null, outcome: 'skipped_not_invoice', bankCheck: 'skipped', failReasons: [] }
+  } else {
+    try {
+      if (kind === 'pdf') {
+        if (bytes.length < 100 || !bytes.subarray(0, 5).toString('ascii').startsWith('%PDF-')) throw new Error('not a PDF')
+        extracted = (await extractInvoiceFromPdf(b64, inv.isScan ? { model: scanExtractionModel() } : {})).invoice
+      } else {
+        extracted = (await extractInvoiceFromImage(b64, kind)).invoice
+      }
+    } catch {
+      if (!dryRun) await logRow(c, { mailbox, companyFile, msg, attId, attName }, { outcome: 'skipped_not_invoice' })
+      return { ...base, supplierName: null, invoiceNumber: null, amount: null, outcome: 'skipped_not_invoice', bankCheck: 'skipped', failReasons: [] }
+    }
   }
 
   // Statement guard. Statement-named documents belong to the statement watcher
