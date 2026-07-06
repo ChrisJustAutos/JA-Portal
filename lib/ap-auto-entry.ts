@@ -65,15 +65,15 @@ function sb(): SupabaseClient {
 }
 
 export const autoEntryEnabled = () => (process.env.AP_AUTO_ENTRY_ENABLED || 'false').toLowerCase().trim() === 'true'
-// Both the accounts inbox AND the office scanner's scan-to-email mailbox feed
-// VPS auto-entry. Override with AP_AUTO_ENTRY_MAILBOXES (comma-separated);
-// legacy AP_AUTO_ENTRY_MAILBOX still honoured as the first entry.
+// Mailboxes swept by auto-entry. The office scanner SENDS FROM scans@ INTO
+// the accounts inbox (it isn't a mailbox to read), so the default is just
+// accounts@ — add more via AP_AUTO_ENTRY_MAILBOXES (comma-separated);
+// legacy AP_AUTO_ENTRY_MAILBOX still honoured.
 function vpsMailboxes(): string[] {
   const multi = (process.env.AP_AUTO_ENTRY_MAILBOXES || '').trim()
   if (multi) return multi.split(/[,;]+/).map(s => s.trim()).filter(Boolean)
   const legacy = (process.env.AP_AUTO_ENTRY_MAILBOX || '').trim()
-  if (legacy) return [legacy, 'scans@justautosmechanical.com.au']
-  return ['accounts@justautosmechanical.com.au', 'scans@justautosmechanical.com.au']
+  return [legacy || 'accounts@justautosmechanical.com.au']
 }
 function slackWebhook(): string | null { return (process.env.SLACK_WEBHOOK_AP_VPS || '').trim() || null }
 // Once an invoice is entered into MYOB, its email is marked read and moved out
@@ -250,11 +250,14 @@ async function runMailbox(
   }
 }
 
-// Mailboxes whose PDFs are BATCHED scans (several paper invoices per file).
-// Their multi-page PDFs are segmented into individual documents first.
-function isBatchMailbox(mailbox: string): boolean {
+// BATCHED-scan sources (several paper invoices per PDF). The Epson scanner
+// SENDS FROM scans@ into the accounts inbox, so this matches the SENDER as
+// well as the receiving mailbox. Their multi-page PDFs are segmented into
+// individual documents first.
+function isBatchSource(mailbox: string, fromAddress: string | null | undefined): boolean {
   const raw = (process.env.AP_BATCH_SPLIT_MAILBOXES ?? 'scans@justautosmechanical.com.au').trim()
-  return raw.split(/[,;]+/).map(s => s.trim().toLowerCase()).filter(Boolean).includes(mailbox.toLowerCase())
+  const list = raw.split(/[,;]+/).map(s => s.trim().toLowerCase()).filter(Boolean)
+  return list.includes(mailbox.toLowerCase()) || (!!fromAddress && list.includes(String(fromAddress).toLowerCase()))
 }
 
 const MAX_BATCH_SEGMENTS = 15
@@ -270,7 +273,7 @@ async function processAttachment(
 
   // Batched scan? Segment the PDF into individual documents and process each
   // one as its own invoice (own fact-check, MYOB bill, Slack card, log row).
-  if (kind === 'pdf' && isBatchMailbox(mailbox)) {
+  if (kind === 'pdf' && isBatchSource(mailbox, msg.from)) {
     let pages = 0
     try { pages = await pdfPageCount(bytes) } catch { /* unreadable pdf — let the single path report it */ }
     if (pages > 1) {
