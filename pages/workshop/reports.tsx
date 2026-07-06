@@ -6,6 +6,7 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import Head from 'next/head'
+import dynamic from 'next/dynamic'
 import PortalTopBar from '../../lib/PortalTopBar'
 import WorkshopTabs from '../../components/WorkshopTabs'
 import { requirePageAuth } from '../../lib/authServer'
@@ -14,8 +15,12 @@ import { ymdBrisbane, addDaysYmd, weekStartYmd } from '../../lib/workshop'
 import { T, Chip, KPI } from '../../components/ui'
 import { money } from '../../lib/ui/format'
 
+// The Map & Conversion dashboard is a self-contained Leaflet view (client-only).
+const WorkshopMapDashboard = dynamic(() => import('../../components/workshop/WorkshopMapDashboard'), { ssr: false })
+
 // Client-side mirror of WORKSHOP_REPORT_TYPES (lib/workshop-reports.ts is server-only).
-const REPORTS: { id: string; label: string; dateless?: boolean }[] = [
+// `custom` = renders its own full-bleed view instead of the generic kpis/columns/rows table.
+const REPORTS: { id: string; label: string; dateless?: boolean; custom?: boolean }[] = [
   { id: 'daily_sales',       label: 'Daily sales' },
   { id: 'received_payments', label: 'Received payments' },
   { id: 'bookings_won',      label: 'Bookings won' },
@@ -23,6 +28,7 @@ const REPORTS: { id: string; label: string; dateless?: boolean }[] = [
   { id: 'income_summary',    label: 'Income summary' },
   { id: 'stock',             label: 'Stock', dateless: true },
   { id: 'tech_productivity', label: 'Technicians' },
+  { id: 'map',               label: 'Map & conversion', dateless: true, custom: true },
 ]
 
 type Preset = 'today' | 'week' | 'month' | 'last_month' | 'custom'
@@ -54,9 +60,12 @@ export default function WorkshopReportsPage({ user }: { user: PortalUserSSR }) {
   const [error, setError] = useState('')
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null)
 
-  const dateless = REPORTS.find(r => r.id === type)?.dateless
+  const report = REPORTS.find(r => r.id === type)
+  const dateless = report?.dateless
+  const custom = report?.custom
 
   const load = useCallback(async () => {
+    if (REPORTS.find(r => r.id === type)?.custom) { setLoading(false); setError(''); return }
     setLoading(true); setError('')
     try {
       const r = await fetch(`/api/workshop/reports?type=${type}&from=${range.from}&to=${range.to}`)
@@ -107,12 +116,19 @@ export default function WorkshopReportsPage({ user }: { user: PortalUserSSR }) {
               </>
             )}
 
-            <a href={`/api/workshop/reports?type=${type}&from=${range.from}&to=${range.to}&format=csv`}
-              style={{ padding:'5px 12px', borderRadius:4, fontSize:11, fontWeight:600, background:`${T.blue}1f`, color:T.blue, border:`1px solid ${T.blue}55`, textDecoration:'none' }}>
-              ⬇ CSV
-            </a>
+            {!custom && (
+              <a href={`/api/workshop/reports?type=${type}&from=${range.from}&to=${range.to}&format=csv`}
+                style={{ padding:'5px 12px', borderRadius:4, fontSize:11, fontWeight:600, background:`${T.blue}1f`, color:T.blue, border:`1px solid ${T.blue}55`, textDecoration:'none' }}>
+                ⬇ CSV
+              </a>
+            )}
           </div>
 
+          {custom ? (
+            <div style={{ flex:1, minHeight:0 }}>
+              {type === 'map' && <WorkshopMapDashboard />}
+            </div>
+          ) : (
           <div style={{ flex:1, overflow:'auto', padding:20 }}>
             <div style={{ margin:'0 auto' }}>
               {error && <div style={{ padding:'10px 14px', marginBottom:14, background:`${T.red}14`, border:`1px solid ${T.red}44`, borderRadius:8, color:T.red, fontSize:12 }}>{error}</div>}
@@ -198,6 +214,7 @@ export default function WorkshopReportsPage({ user }: { user: PortalUserSSR }) {
               </div>
             </div>
           </div>
+          )}
         </div>
       </div>
     </>
