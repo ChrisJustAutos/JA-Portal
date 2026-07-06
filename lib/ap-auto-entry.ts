@@ -498,7 +498,9 @@ async function processInvoice(
   ctx: { mailbox: string; companyFile: CompanyFileLabel; msg: GraphMessageSummary; dryRun: boolean },
   // preExtracted: batch segments extract in a parallel phase — the result (or
   // 'failed') is handed in so this function doesn't re-extract.
-  inv: { bytes: Buffer; b64: string; kind: 'pdf' | SupportedImageMediaType; attId: string; attName: string; isScan?: boolean; preExtracted?: ExtractedAPInvoice | 'failed' },
+  // escalated: this is the second-opinion pass on the strong model — never
+  // escalate again.
+  inv: { bytes: Buffer; b64: string; kind: 'pdf' | SupportedImageMediaType; attId: string; attName: string; isScan?: boolean; preExtracted?: ExtractedAPInvoice | 'failed'; escalated?: boolean },
 ): Promise<AutoEntryItem> {
   const { mailbox, companyFile, msg, dryRun } = ctx
   const { bytes, b64, kind, attId, attName } = inv
@@ -656,6 +658,21 @@ async function processInvoice(
   }
 
   const pass = failReasons.length === 0
+
+  // Second opinion: arithmetic that doesn't reconcile on the default (cheap)
+  // extraction is usually a MISREAD, not a bad invoice — payment/surcharge
+  // sections routinely confuse it (PSR: card-paid invoice flagged
+  // totals-mismatch on Haiku). Re-extract once with the strong scan model and
+  // re-run the checks before flagging; a persistent discrepancy still flags.
+  if (!pass && !inv.escalated && !inv.isScan && kind === 'pdf' &&
+      failReasons.some(r => r === 'YELLOW:totals-mismatch' || r === 'YELLOW:line-sum-mismatch')) {
+    try {
+      const second = (await extractInvoiceFromPdf(b64, { model: scanExtractionModel() })).invoice
+      return processInvoice(c, ctx, { ...inv, preExtracted: second, escalated: true })
+    } catch (e: any) {
+      console.warn(`[ap-auto-entry] escalation re-extract failed (${e?.message || e}) — flagging on the original parse`)
+    }
+  }
 
   // Common Slack fields.
   const slackCommon = {
