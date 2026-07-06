@@ -5,7 +5,7 @@
 
 import type { SlackBlock } from './slack'
 
-export type BankCheck = 'match' | 'mismatch' | 'mismatch-exempt' | 'unverified' | 'no-invoice-bank' | 'skipped'
+export type BankCheck = 'match' | 'mismatch' | 'mismatch-exempt' | 'capricorn' | 'unverified' | 'no-invoice-bank' | 'skipped'
 
 export interface AutoEntrySlackInput {
   outcome: 'posted' | 'flagged'
@@ -32,6 +32,7 @@ const BANK_BADGE: Record<BankCheck, string> = {
   match:            '✅ bank matches MYOB card',
   mismatch:         '🚨 bank details DIFFER from MYOB card',
   'mismatch-exempt':'⚠️ bank differs — statement account, reconciled at EOM',
+  capricorn:        '— paid via Capricorn (invoice bank details n/a)',
   unverified:       '⚠️ no bank details on MYOB card — unverified',
   'no-invoice-bank':'— no bank details on invoice',
   skipped:          '',

@@ -527,15 +527,34 @@ async function processInvoice(
   // neutral, not suspicious — parts counter dockets (Ken Mills) carry none
   // and could otherwise never pass. A mismatch or unverified card still
   // blocks the override, and low confidence is always a hard stop.
+  // Capricorn-routed invoices are PAID TO CAPRICORN — the bank details printed
+  // on the invoice are never used, so the bank check is moot (Chris 2026-07-06:
+  // "JAS is Capricorn so no need for bank details").
+  const viaCapricorn = !!extracted.capricorn?.via || /\(CAP\)/i.test(supplierName || '')
   // Statement-account suppliers (Ken Mills): invoices are reconciled against
   // the monthly statement before EOM payment, so a printed-bank mismatch is
   // expected and must not block — shown on the card, never paid off it.
   const bankExempt = bank === 'mismatch' && bankExemptSupplier(supplierName, msg.from)
-  const effectiveBank: BankCheck = bankExempt ? 'mismatch-exempt' : bank
+  const effectiveBank: BankCheck = viaCapricorn ? 'capricorn' : bankExempt ? 'mismatch-exempt' : bank
+  const bankTrusted = effectiveBank === 'match' || effectiveBank === 'no-invoice-bank' || effectiveBank === 'mismatch-exempt' || effectiveBank === 'capricorn'
+
+  // Scan whose LINE detail is unreadable but whose HEADER self-reconciles
+  // (no totals-mismatch: subtotal + GST = total) with trusted bank evidence:
+  // post at the stated total as a single line — bills are entered
+  // tax-inclusive at the header total anyway (Chris 2026-07-06, Sci-Fleet).
+  const scanTotalFallback = !!inv.isScan && !consolidated && bankTrusted &&
+    triage.triageReasons.includes('YELLOW:line-sum-mismatch') &&
+    !triage.triageReasons.includes('YELLOW:totals-mismatch')
 
   const ignorable: string[] = []
   if (consolidated) ignorable.push('YELLOW:medium-parse-confidence', 'YELLOW:line-sum-mismatch', 'YELLOW:totals-mismatch')
-  else if (effectiveBank === 'match' || effectiveBank === 'no-invoice-bank' || effectiveBank === 'mismatch-exempt') ignorable.push('YELLOW:medium-parse-confidence')
+  else if (bankTrusted) ignorable.push('YELLOW:medium-parse-confidence')
+  if (scanTotalFallback) ignorable.push('YELLOW:line-sum-mismatch')
+  // A low-confidence read whose printed bank details MATCH the supplier card
+  // is corroborated hard evidence — the scan read well enough to get 10+ bank
+  // digits right (Chris 2026-07-06: Batteries to Go, long-time supplier).
+  const lowConfidenceOverride = effectiveBank === 'match' && !!supplierUid
+  if (lowConfidenceOverride) ignorable.push('RED:low-parse-confidence')
   // A matched supplier can ALWAYS be coded now (line rules → smart match →
   // card default → 5-1000 fallback), so account-not-mapped only blocks when
   // the SUPPLIER couldn't be matched.
@@ -588,18 +607,21 @@ async function processInvoice(
     return { ...base, supplierName, invoiceNumber: extracted.invoiceNumber, amount: total, outcome: 'posted', bankCheck: effectiveBank, failReasons: [], slackText: built.text }
   }
 
-  // Consolidated invoice → bill the stated total as ONE line. The parsed
-  // consignment rows aren't trustworthy (running balances, credits netted into
-  // the total), so the total-due is the source of truth. Freight is GST-able,
-  // so ex-GST is derived as total/1.1 — the tax-inclusive poster then rebuilds
-  // a line that matches the stated total to the cent. Coding falls to a line
-  // rule on the description, else the supplier card's default expense account.
-  const toPost: ExtractedAPInvoice = consolidated ? {
+  // Collapse to ONE line at the STATED TOTAL when the line detail can't be
+  // trusted: consolidated invoices (running balances / netted credits) and
+  // scans whose line column was unreadable but whose header self-reconciled.
+  // Ex-GST derives as total/1.1 — the tax-inclusive poster then rebuilds a
+  // line matching the stated total to the cent. Coding falls to a line rule
+  // on the description, else the supplier default / 5-1000 fallback.
+  const collapseToTotal = consolidated || scanTotalFallback
+  const toPost: ExtractedAPInvoice = collapseToTotal ? {
     ...extracted,
     totals: { subtotalExGst: null, gstAmount: null, totalIncGst: total },
     lineItems: [{
       lineNo: 1, partNumber: null,
-      description: `Consolidated freight invoice ${extracted.invoiceNumber} — statement total (credits disregarded)`,
+      description: consolidated
+        ? `Consolidated freight invoice ${extracted.invoiceNumber} — statement total (credits disregarded)`
+        : `Invoice ${extracted.invoiceNumber} — scanned; posted at stated total (line detail unreadable)`,
       qty: 1, uom: null, unitPriceExGst: null,
       lineTotalExGst: Math.round((total / 1.1) * 100) / 100,
       gstAmount: null, taxCodeRaw: null, taxCode: 'GST',
@@ -609,6 +631,7 @@ async function processInvoice(
   const posted = await postFoundInvoiceToMyob({
     companyFile, supplierUid: supplierUid!, supplierName,
     extracted: toPost, statementAmount: null,
+    acceptLowConfidence: lowConfidenceOverride,
     // MYOB validates the attachment EXTENSION — batch segment names end in
     // "(p2 of 8)", so rebuild a clean *.pdf name or the attach 400s.
     pdfBytes: bytes,
