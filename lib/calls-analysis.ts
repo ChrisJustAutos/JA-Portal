@@ -26,6 +26,8 @@
 // showing "pending".
 
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
+import { postMessage } from './slack-bot/slack'
+import { callTypeLabel } from './calls-dimensions'
 
 const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages'
 const DEFAULT_MODEL = process.env.CALLS_ANALYSIS_MODEL || 'claude-sonnet-4-6'
@@ -37,6 +39,10 @@ const COST_OUTPUT_MICRO = Number(process.env.CALLS_ANALYSIS_COST_OUTPUT_MICRO ||
 
 export const callsAnalysisEnabled = () =>
   (process.env.CALLS_ANALYSIS_ENABLED || 'false').toLowerCase().trim() === 'true'
+
+// #sales-coaching — same channel the worker's "JA Coach Bot" posted to.
+// Set to '' to disable the per-call Slack ticker.
+const coachingChannel = () => (process.env.CALLS_COACHING_SLACK_CHANNEL ?? 'C0AU8QWT7QF').trim()
 
 let _sb: SupabaseClient | null = null
 function sb(): SupabaseClient {
@@ -79,6 +85,7 @@ export interface AnalyseResult {
   advisor?: { identified: string | null; confidence: string | null; applied: boolean; reason?: string }
   costMicroUsd?: number
   analysisId?: string
+  slacked?: boolean            // coaching line posted to #sales-coaching
   // dry-run payload
   parsed?: any
 }
@@ -243,6 +250,71 @@ async function applyAdvisor(
   return out
 }
 
+// ── Slack coaching ticker (#sales-coaching) ──────────────────────────────
+// One line per analysed call, same shape the worker's JA Coach Bot used:
+//   🟢 82/100 Quote given · New enquiry — Graham (Ext 203 — tagged as Tyronne) ⚠️ vs 0400 000 000
+// plus the 2-3 sentence coaching summary underneath. Unscored calls get a
+// "not scored" line. Best-effort — a Slack failure never fails the analysis.
+
+const OUTCOME_LABELS: Record<string, string> = {
+  sale: 'Sale', quote_given: 'Quote given', callback_scheduled: 'Callback scheduled',
+  information_only: 'Information only', no_outcome: 'No outcome', wrong_number: 'Wrong number', other: 'Other',
+}
+
+function scoreEmoji(score: number): string {
+  if (score >= 80) return ':large_green_circle:'
+  if (score >= 60) return ':large_yellow_circle:'
+  if (score >= 40) return ':large_orange_circle:'
+  return ':red_circle:'
+}
+
+async function postCoachingSlack(args: {
+  call: any
+  outcome: string
+  callTypeId: string | null
+  salesScore: number | null
+  summary: string | null
+  identifiedName: string | null
+}): Promise<boolean> {
+  const channel = coachingChannel()
+  if (!channel) return false
+  const { call, outcome, callTypeId, salesScore, summary, identifiedName } = args
+
+  const outcomeText = OUTCOME_LABELS[outcome] || outcome
+  const typeText = callTypeId ? ` · ${callTypeLabel(callTypeId)}` : ''
+  const number = call.external_number || 'unknown number'
+  const seconds = call.billsec_seconds || call.duration_seconds || 0
+  const duration = `${Math.floor(seconds / 60)}m ${seconds % 60}s`
+
+  let text: string
+  if (salesScore == null) {
+    const emoji = outcome === 'wrong_number' ? ':x:' : outcome === 'callback_scheduled' ? ':date:' : ':information_source:'
+    text = `${emoji} ${outcomeText}${typeText} — ${number} (${duration}) — not scored`
+  } else {
+    // Flag when the transcript says someone other than the extension tag.
+    const tagged = call.agent_name || null
+    const mismatch = identifiedName && tagged && identifiedName.toLowerCase() !== tagged.toLowerCase()
+    const who = identifiedName || tagged || `Ext ${call.agent_ext || '?'}`
+    const extBit = call.agent_ext ? ` (Ext ${call.agent_ext}${mismatch ? ` — tagged as ${tagged}` : ''})` : ''
+    const warn = mismatch ? ' :warning:' : ''
+    text = `${scoreEmoji(salesScore)} ${salesScore}/100 ${outcomeText}${typeText} — ${who}${extBit}${warn} vs ${number}`
+  }
+
+  try {
+    const blocks = summary && salesScore != null
+      ? [
+          { type: 'section', text: { type: 'mrkdwn', text } },
+          { type: 'context', elements: [{ type: 'mrkdwn', text: summary.slice(0, 2900) }] },
+        ]
+      : undefined
+    const posted = await postMessage({ channel, text, blocks })
+    return !!posted
+  } catch (e: any) {
+    console.error('[calls-analysis] slack post failed:', e?.message || e)
+    return false
+  }
+}
+
 // ── Prompt assembly ──────────────────────────────────────────────────────
 
 function buildPrompt(rubric: RubricRow, call: any, transcriptText: string, roster: RosterRow[]): string {
@@ -348,11 +420,16 @@ export async function analyseCall(callId: string, opts: { dryRun?: boolean; rubr
 
   const advisor = await applyAdvisor(c, call, roster, advisorName, advisorConfidence)
 
+  const slacked = await postCoachingSlack({
+    call, outcome: parsed.outcome, callTypeId: callType?.id ?? null, salesScore,
+    summary: parsed.summary || null, identifiedName: advisorName,
+  })
+
   // Close out any queued job rows for this call so the UI stops polling.
   await c.from('analysis_jobs').update({ status: 'done', completed_at: new Date().toISOString() })
     .eq('call_id', callId).in('status', ['pending', 'processing'])
 
-  return { callId, ok: true, callType: callType?.id ?? null, outcome: parsed.outcome, salesScore, advisor, costMicroUsd, analysisId: inserted.id }
+  return { callId, ok: true, callType: callType?.id ?? null, outcome: parsed.outcome, salesScore, advisor, costMicroUsd, analysisId: inserted.id, slacked }
 }
 
 // ── Sweep (cron) ─────────────────────────────────────────────────────────
