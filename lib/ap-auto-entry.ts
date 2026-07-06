@@ -45,7 +45,7 @@ import { getSupplierByUid, type CompanyFileLabel } from './ap-myob-lookup'
 import { resolveLineAccount } from './ap-line-resolver'
 import { triageInvoice } from './ap-supabase'
 import { consolidatedInvoiceSupplier } from './ap-consolidated-suppliers'
-import { postFoundInvoiceToMyob } from './ap-myob-bill'
+import { postFoundInvoiceToMyob, reattachStagedPdf } from './ap-myob-bill'
 import { postWebhook } from './slack'
 import { buildAutoEntryBlocks, type BankCheck } from './ap-auto-entry-slack'
 
@@ -767,6 +767,43 @@ export async function sendTestSlack(): Promise<{ webhookConfigured: boolean; ok:
   })
   const r = await postWebhook(hook, { text: `🧪 (test) ${built.text}`, blocks: built.blocks })
   return { webhookConfigured: true, ok: r.ok, status: r.status, body: r.body }
+}
+
+// ── One-off repair: backfill missing bill attachments ────────────────────
+// Bills posted before the attachment-filename fix (2026-07-06) landed in MYOB
+// without their source PDF — MYOB 400'd on "(p2 of 8)"-suffixed names. The
+// PDFs are still staged in Supabase storage; walk the affected log rows and
+// attach each with a clean *.pdf name. Idempotent via a move_note marker.
+export async function reattachMissingPdfs(): Promise<{ attempted: number; ok: string[]; failed: { invoice: string; error: string }[] }> {
+  const c = sb()
+  const { data: rows } = await c.from('ap_auto_entry_log')
+    .select('id, company_file, invoice_number, attachment_name, myob_bill_uid, pdf_storage_path, move_note')
+    .eq('outcome', 'posted')
+    .not('myob_bill_uid', 'is', null)
+    .not('pdf_storage_path', 'is', null)
+    .like('attachment_name', '%(p%')                 // the batch-segment cohort
+    .lt('created_at', '2026-07-06 12:00:00+00')      // fix deployed before anything after this
+  const targets = (rows || []).filter(r => !(r.move_note || '').includes('pdf reattached'))
+
+  const ok: string[] = []
+  const failed: { invoice: string; error: string }[] = []
+  for (const r of targets) {
+    const cleanName = `${String(r.attachment_name || r.invoice_number || 'AP').replace(/\.pdf/i, '').replace(/[^\w-]+/g, '_').replace(/^_+|_+$/g, '')}.pdf`
+    try {
+      await reattachStagedPdf({
+        companyFile: (r.company_file as CompanyFileLabel) || 'VPS',
+        billUid: r.myob_bill_uid, pdfStoragePath: r.pdf_storage_path,
+        filename: cleanName, postedBy: ACTOR,
+      })
+      ok.push(r.invoice_number || r.id)
+      await c.from('ap_auto_entry_log')
+        .update({ move_note: `${r.move_note ? r.move_note + '; ' : ''}pdf reattached` })
+        .eq('id', r.id)
+    } catch (e: any) {
+      failed.push({ invoice: r.invoice_number || r.id, error: (e?.message || String(e)).slice(0, 200) })
+    }
+  }
+  return { attempted: targets.length, ok, failed }
 }
 
 // ── Slack ────────────────────────────────────────────────────────────────

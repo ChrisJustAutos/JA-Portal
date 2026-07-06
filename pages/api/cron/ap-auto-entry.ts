@@ -15,7 +15,7 @@
 // staffer with view:supplier_invoices (so a manual preview needs no secret).
 
 import type { NextApiRequest, NextApiResponse } from 'next'
-import { runAutoEntry, sendTestSlack } from '../../../lib/ap-auto-entry'
+import { runAutoEntry, sendTestSlack, reattachMissingPdfs } from '../../../lib/ap-auto-entry'
 import { getCurrentUser } from '../../../lib/authServer'
 import { roleHasPermission } from '../../../lib/permissions'
 
@@ -39,6 +39,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(r.ok ? 200 : 502).json({ ok: r.ok, note: r.ok ? 'Posted a test card — check the channel' : 'Slack rejected the post', slackStatus: r.status, slackBody: r.body })
     } catch (e: any) {
       return res.status(500).json({ ok: false, error: (e?.message || String(e)).slice(0, 300) })
+    }
+  }
+
+  // One-off repair: backfill source PDFs onto bills posted before the
+  // attachment-filename fix. No inbox scan; idempotent.
+  if (req.query.reattach === '1') {
+    try {
+      const result = await reattachMissingPdfs()
+      return res.status(200).json({ ok: true, attempted: result.attempted, reattached: result.ok, failed: result.failed })
+    } catch (e: any) {
+      return res.status(500).json({ ok: false, error: (e?.message || String(e)).slice(0, 400) })
     }
   }
 

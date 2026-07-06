@@ -1291,6 +1291,24 @@ async function attachPdfToSpendMoney(opts: {
 
 // ── Attachment helper ───────────────────────────────────────────────────
 
+// Repair path: attach a staged PDF to an ALREADY-POSTED bill. Used to backfill
+// source PDFs onto bills posted before the attachment-filename fix (MYOB 400'd
+// on "(p2 of 8)"-suffixed names, so the bills landed without their paperclip).
+export async function reattachStagedPdf(args: {
+  companyFile: CompanyFileLabel
+  billUid: string
+  pdfStoragePath: string
+  filename: string
+  postedBy: string
+}): Promise<void> {
+  const conn = await getConnection(args.companyFile)
+  if (!conn?.company_file_id) throw new Error(`no active MYOB connection for ${args.companyFile}`)
+  await attachPdfToBill({
+    connId: conn.id, cfId: conn.company_file_id, billUid: args.billUid,
+    pdfStoragePath: args.pdfStoragePath, filename: args.filename, postedBy: args.postedBy,
+  })
+}
+
 async function attachPdfToBill(opts: {
   connId: string
   cfId: string
