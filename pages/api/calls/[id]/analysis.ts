@@ -28,7 +28,7 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
       // Latest analysis wins if, for some reason, there are multiple.
       const { data, error } = await sb
         .from('call_analysis')
-        .select('id, rubric_version, outcome, outcome_confidence, sales_score, dimension_scores, observations, summary, model, cost_micro_usd, analysed_at')
+        .select('id, rubric_version, outcome, outcome_confidence, sales_score, dimension_scores, observations, summary, model, cost_micro_usd, analysed_at, call_type, call_type_confidence')
         .eq('call_id', id)
         .order('analysed_at', { ascending: false })
         .limit(1)

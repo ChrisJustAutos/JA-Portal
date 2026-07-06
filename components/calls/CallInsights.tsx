@@ -7,6 +7,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { AppIcon } from '../../lib/AppIcons'
+import { dimensionLabel } from '../../lib/calls-dimensions'
 import type { CallsInsights } from '../../lib/calls-insights'
 
 const T = {
@@ -270,7 +271,8 @@ function SentimentView({ data, params }: { data: CallsInsights; params: any }) {
 
 // ── Coaching view ───────────────────────────────────────────────────────────
 
-const DIM_LABELS: Record<string, string> = { discovery: 'Discovery', product_knowledge: 'Product', objection_handling: 'Objections', closing: 'Closing', rapport: 'Rapport' }
+// Dimension keys vary by call type (v4 rubric) — render whatever averages
+// exist for the advisor and label them via the shared helper.
 
 function CoachingView({ data, params }: { data: CallsInsights; params: any }) {
   const sum = useSummary('coaching', params)
@@ -299,20 +301,20 @@ function CoachingView({ data, params }: { data: CallsInsights; params: any }) {
             <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 12 }}>
               <div style={{ fontSize: 14, fontWeight: 600, color: T.text }}>{a.advisor}</div>
               <div style={{ fontSize: 10, color: T.text3, fontFamily: 'monospace' }}>
-                {a.analysed} analysed · avg score {a.avgSalesScore ?? '—'}{a.weakestDimension ? ` · weakest: ${DIM_LABELS[a.weakestDimension] || a.weakestDimension}` : ''}
+                {a.analysed} analysed · avg score {a.avgSalesScore ?? '—'}{a.weakestDimension ? ` · weakest: ${dimensionLabel(a.weakestDimension)}` : ''}
               </div>
             </div>
 
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
               {/* Dimensions */}
               <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
-                {Object.keys(DIM_LABELS).map(d => {
+                {Object.keys(a.dimensionAvgs).map(d => {
                   const v = a.dimensionAvgs[d]
                   if (v == null) return null
                   const weak = d === a.weakestDimension
                   return (
-                    <div key={d} style={{ display: 'grid', gridTemplateColumns: '78px 1fr 30px', gap: 8, alignItems: 'center' }}>
-                      <div style={{ fontSize: 11, color: weak ? T.amber : T.text2 }}>{DIM_LABELS[d]}</div>
+                    <div key={d} style={{ display: 'grid', gridTemplateColumns: '110px 1fr 30px', gap: 8, alignItems: 'center' }}>
+                      <div style={{ fontSize: 11, color: weak ? T.amber : T.text2 }}>{dimensionLabel(d)}</div>
                       <Bar pct={v * 10} color={v * 10 >= 70 ? T.green : v * 10 >= 40 ? T.amber : T.red} />
                       <div style={{ fontSize: 10, fontFamily: 'monospace', color: T.text3, textAlign: 'right' }}>{v}</div>
                     </div>

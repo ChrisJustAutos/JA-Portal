@@ -34,6 +34,7 @@
     "pages/api/cron/ap-statement-watch.ts":         { "maxDuration": 300 },
     "pages/api/cron/ap-auto-entry.ts":              { "maxDuration": 300 },
     "pages/api/cron/agents.ts":                     { "maxDuration": 300 },
+    "pages/api/cron/calls-analyse.ts":              { "maxDuration": 300 },
     "pages/api/b2b/admin/stock-transfer.ts":        { "maxDuration": 300 }
   },
   "crons": [
@@ -43,6 +44,10 @@
     },
     {
       "path": "/api/cron/sync-followups",
+      "schedule": "*/5 * * * *"
+    },
+    {
+      "path": "/api/cron/calls-analyse",
       "schedule": "*/5 * * * *"
     },
     {

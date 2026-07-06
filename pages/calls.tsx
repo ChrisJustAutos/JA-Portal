@@ -14,6 +14,7 @@ import { useChatContext } from '../components/GlobalChatbot'
 import { groupCalls, type LiveChannel, type LiveCallCard, type SpyMode } from '../lib/live-calls'
 import CallInsights, { CallTabBar, type CallView } from '../components/calls/CallInsights'
 import type { PortalUserSSR } from '../lib/authServer'
+import { dimensionLabel, callTypeLabel } from '../lib/calls-dimensions'
 import { T } from '../lib/ui/theme'
 
 interface CallRow {
@@ -504,8 +505,11 @@ interface AnalysisData {
   rubric_version: string
   outcome: string
   outcome_confidence: number | null
-  sales_score: number
-  dimension_scores: { discovery: number; product_knowledge: number; objection_handling: number; closing: number; rapport: number }
+  sales_score: number | null
+  // Keys vary by call type since the v4 rubric — render whatever is present.
+  dimension_scores: Record<string, number> | null
+  call_type?: string | null
+  call_type_confidence?: number | null
   observations: {
     strengths: string[]
     improvements: string[]
@@ -591,17 +595,6 @@ function AnalysisPanel({ callId, hasTranscript, billsecSeconds }: { callId: stri
     return T.red
   }
 
-  const dimensionLabel = (key: string) => {
-    switch (key) {
-      case 'discovery': return 'Discovery'
-      case 'product_knowledge': return 'Product Knowledge'
-      case 'objection_handling': return 'Objection Handling'
-      case 'closing': return 'Closing'
-      case 'rapport': return 'Rapport'
-      default: return key
-    }
-  }
-
   const outcomeLabel = (key: string) => {
     switch (key) {
       case 'sale': return 'Sale'
@@ -620,7 +613,7 @@ function AnalysisPanel({ callId, hasTranscript, billsecSeconds }: { callId: stri
         <div style={{ fontSize: 10, color: T.text3, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.1em' }}>AI Coaching Analysis</div>
         {analysis && (
           <div style={{ fontSize: 9, color: T.text3, textTransform: 'uppercase', letterSpacing: '0.1em', fontFamily: 'monospace' }}>
-            {analysis.model.includes('opus') ? 'Opus' : 'Haiku'} · {new Date(analysis.analysed_at).toLocaleDateString('en-AU')}
+            {analysis.model.includes('opus') ? 'Opus' : analysis.model.includes('sonnet') ? 'Sonnet' : 'Haiku'} · {new Date(analysis.analysed_at).toLocaleDateString('en-AU')}
           </div>
         )}
       </div>
@@ -645,7 +638,7 @@ function AnalysisPanel({ callId, hasTranscript, billsecSeconds }: { callId: stri
       {!loading && !analysis && job && (job.status === 'pending' || job.status === 'processing') && (
         <div style={{ fontSize: 12, color: T.amber }}>
           <span style={{ display: 'inline-block', animation: 'spin 1.5s linear infinite', marginRight: 8 }}>⟳</span>
-          Analysis {job.status}. Worker runs every ~3 minutes. This panel will auto-refresh.
+          Analysis {job.status}. Runs every few minutes. This panel will auto-refresh.
         </div>
       )}
 
@@ -672,8 +665,19 @@ function AnalysisPanel({ callId, hasTranscript, billsecSeconds }: { callId: stri
             {analysis.summary}
           </div>
 
-          {/* Headline stats: outcome + overall score */}
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+          {/* Headline stats: call type + outcome + overall score */}
+          <div style={{ display: 'grid', gridTemplateColumns: analysis.call_type ? '1fr 1fr 1fr' : '1fr 1fr', gap: 10 }}>
+            {analysis.call_type && (
+              <div style={{ background: T.bg2, border: `1px solid ${T.border}`, borderRadius: 4, padding: 12 }}>
+                <div style={{ fontSize: 9, color: T.text3, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 6 }}>Call Type</div>
+                <div style={{ fontSize: 14, color: T.text, fontWeight: 400 }}>{callTypeLabel(analysis.call_type)}</div>
+                {analysis.call_type_confidence != null && (
+                  <div style={{ fontSize: 10, color: T.text3, fontFamily: 'monospace', marginTop: 3 }}>
+                    {Math.round(analysis.call_type_confidence * 100)}% confidence
+                  </div>
+                )}
+              </div>
+            )}
             <div style={{ background: T.bg2, border: `1px solid ${T.border}`, borderRadius: 4, padding: 12 }}>
               <div style={{ fontSize: 9, color: T.text3, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 6 }}>Outcome</div>
               <div style={{ fontSize: 14, color: T.text, fontWeight: 400 }}>{outcomeLabel(analysis.outcome)}</div>
@@ -685,31 +689,37 @@ function AnalysisPanel({ callId, hasTranscript, billsecSeconds }: { callId: stri
             </div>
             <div style={{ background: T.bg2, border: `1px solid ${T.border}`, borderRadius: 4, padding: 12 }}>
               <div style={{ fontSize: 9, color: T.text3, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 6 }}>Sales Score</div>
-              <div style={{ fontSize: 24, fontWeight: 300, color: scoreColor(analysis.sales_score), lineHeight: 1, fontFamily: "'DM Mono', monospace" }}>
-                {analysis.sales_score}<span style={{ fontSize: 12, color: T.text3 }}>/100</span>
-              </div>
+              {analysis.sales_score != null ? (
+                <div style={{ fontSize: 24, fontWeight: 300, color: scoreColor(analysis.sales_score), lineHeight: 1, fontFamily: "'DM Mono', monospace" }}>
+                  {analysis.sales_score}<span style={{ fontSize: 12, color: T.text3 }}>/100</span>
+                </div>
+              ) : (
+                <div style={{ fontSize: 14, color: T.text3, fontStyle: 'italic' }}>Not scored</div>
+              )}
             </div>
           </div>
 
-          {/* Dimension scores */}
-          <div>
-            <div style={{ fontSize: 9, color: T.text3, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 8 }}>Dimensions</div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-              {(['discovery','product_knowledge','objection_handling','closing','rapport'] as const).map(key => {
-                const score = analysis.dimension_scores[key]
-                const pct = Math.max(0, Math.min(10, score)) * 10
-                return (
-                  <div key={key} style={{ display: 'grid', gridTemplateColumns: '140px 1fr 30px', gap: 10, alignItems: 'center' }}>
-                    <div style={{ fontSize: 11, color: T.text2 }}>{dimensionLabel(key)}</div>
-                    <div style={{ height: 6, background: T.bg2, borderRadius: 3, overflow: 'hidden' }}>
-                      <div style={{ height: '100%', width: `${pct}%`, background: scoreColor(score * 10), transition: 'width 0.3s ease' }} />
+          {/* Dimension scores — keys vary per call type; render whatever is present */}
+          {analysis.dimension_scores && Object.keys(analysis.dimension_scores).length > 0 && (
+            <div>
+              <div style={{ fontSize: 9, color: T.text3, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 8 }}>Dimensions</div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                {Object.entries(analysis.dimension_scores).map(([key, score]) => {
+                  if (typeof score !== 'number') return null
+                  const pct = Math.max(0, Math.min(10, score)) * 10
+                  return (
+                    <div key={key} style={{ display: 'grid', gridTemplateColumns: '140px 1fr 30px', gap: 10, alignItems: 'center' }}>
+                      <div style={{ fontSize: 11, color: T.text2 }}>{dimensionLabel(key)}</div>
+                      <div style={{ height: 6, background: T.bg2, borderRadius: 3, overflow: 'hidden' }}>
+                        <div style={{ height: '100%', width: `${pct}%`, background: scoreColor(score * 10), transition: 'width 0.3s ease' }} />
+                      </div>
+                      <div style={{ fontSize: 10, color: T.text3, fontFamily: 'monospace', textAlign: 'right' }}>{score}/10</div>
                     </div>
-                    <div style={{ fontSize: 10, color: T.text3, fontFamily: 'monospace', textAlign: 'right' }}>{score}/10</div>
-                  </div>
-                )
-              })}
+                  )
+                })}
+              </div>
             </div>
-          </div>
+          )}
 
           {/* Observations — strengths & improvements */}
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>

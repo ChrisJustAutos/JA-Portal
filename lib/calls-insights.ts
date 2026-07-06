@@ -35,8 +35,9 @@ export interface InsightAnalysis {
   call_id: string
   outcome: string
   outcome_confidence: number | null
-  sales_score: number
-  dimension_scores: Record<string, number>
+  sales_score: number | null
+  dimension_scores: Record<string, number> | null
+  call_type?: string | null
   observations: {
     strengths?: string[]
     improvements?: string[]
@@ -285,8 +286,8 @@ export function computeSentiment(calls: InsightCall[], analyses: InsightAnalysis
 }
 
 // ── Coaching ────────────────────────────────────────────────────────────────
-
-const DIMENSIONS = ['discovery', 'product_knowledge', 'objection_handling', 'closing', 'rapport']
+// Dimension keys vary by call type since the v4 rubric — accumulate whatever
+// keys each analysis carries; a dimension only averages the calls it applied to.
 
 export function computeCoaching(calls: InsightCall[], analyses: InsightAnalysis[]): CoachingAdvisor[] {
   const callById = new Map(calls.map(c => [c.id, c]))
@@ -304,14 +305,14 @@ export function computeCoaching(calls: InsightCall[], analyses: InsightAnalysis[
     let m = map.get(adv)
     if (!m) {
       m = { n: 0, salesSum: 0, salesN: 0, dim: {}, improvements: [], impFreq: new Map() }
-      for (const d of DIMENSIONS) m.dim[d] = { sum: 0, n: 0 }
       map.set(adv, m)
     }
     m.n++
     if (typeof a.sales_score === 'number') { m.salesSum += a.sales_score; m.salesN++ }
-    for (const d of DIMENSIONS) {
-      const v = a.dimension_scores?.[d]
-      if (typeof v === 'number') { m.dim[d].sum += v; m.dim[d].n++ }
+    for (const [d, v] of Object.entries(a.dimension_scores || {})) {
+      if (typeof v !== 'number') continue
+      if (!m.dim[d]) m.dim[d] = { sum: 0, n: 0 }
+      m.dim[d].sum += v; m.dim[d].n++
     }
     for (const imp of a.observations?.improvements || []) {
       if (!imp || !imp.trim()) continue
@@ -326,9 +327,9 @@ export function computeCoaching(calls: InsightCall[], analyses: InsightAnalysis[
   return Array.from(map.entries()).map(([advisor, m]) => {
     const dimensionAvgs: Record<string, number> = {}
     let weakest: string | null = null, weakestVal = Infinity
-    for (const d of DIMENSIONS) {
-      if (m.dim[d].n > 0) {
-        const avg = m.dim[d].sum / m.dim[d].n
+    for (const [d, agg] of Object.entries(m.dim)) {
+      if (agg.n > 0) {
+        const avg = agg.sum / agg.n
         dimensionAvgs[d] = Math.round(avg * 10) / 10
         if (avg < weakestVal) { weakestVal = avg; weakest = d }
       }
@@ -481,7 +482,7 @@ export async function fetchInsightDataset(
   if (ids.length > 0) {
     analyses = await fetchInChunks(ids, async chunk => {
       const { data, error } = await sb.from('call_analysis')
-        .select('call_id, outcome, outcome_confidence, sales_score, dimension_scores, observations, summary, analysed_at')
+        .select('call_id, outcome, outcome_confidence, sales_score, dimension_scores, observations, summary, analysed_at, call_type')
         .in('call_id', chunk)
       if (error) throw error
       return (data || []) as InsightAnalysis[]
