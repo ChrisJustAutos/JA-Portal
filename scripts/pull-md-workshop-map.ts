@@ -49,10 +49,50 @@ const FROM = (process.env.FROM || '2025-07-01').trim()
 // workbook with the expected sheets wins; override via env if MD renames them.
 const INVOICE_PATHS = process.env.MD_INVOICE_REPORT_PATH
   ? [process.env.MD_INVOICE_REPORT_PATH]
-  : ['/reports/invoice/download', '/reports/invoices/download', '/reports/invoice_summary/download', '/reports/sales/download']
+  : ['/reports/invoice/download', '/reports/invoices/download', '/reports/invoice_summary/download', '/reports/invoice_listing/download']
 const QUOTE_PATHS = process.env.MD_QUOTE_REPORT_PATH
   ? [process.env.MD_QUOTE_REPORT_PATH]
-  : ['/reports/quote/download', '/reports/quotation/download', '/reports/quotes/download']
+  : ['/reports/quote/download', '/reports/quotation/download', '/reports/quotes/download', '/reports/quote_listing/download']
+
+// Scrape MD's report pages/bundles for /reports/<name> route names so the
+// worker can self-discover the export endpoints (candidates above are guesses;
+// MD's route names aren't documented anywhere).
+async function discoverReportNames(client: MdClient): Promise<string[]> {
+  const names = new Set<string>()
+  const sources = ['/reports', '/auto_workshop/app', '/']
+  for (const src of sources) {
+    try {
+      const r = await fetch(`${MD_BASE}${src}`, {
+        headers: { 'Cookie': client.cookieHeader, 'Accept': 'text/html,*/*' },
+        redirect: 'follow',
+      })
+      const text = await r.text()
+      for (const m of text.matchAll(/\breports\/([a-z0-9_]+)/gi)) {
+        const n = m[1].toLowerCase()
+        if (n !== 'download') names.add(n)
+      }
+      // Angular bundles carry the route strings — scan any referenced JS too.
+      if (src !== '/reports') {
+        const jsRefs = [...text.matchAll(/src="([^"]+\.js[^"]*)"/g)].map(x => x[1]).slice(0, 8)
+        for (const ref of jsRefs) {
+          try {
+            const jr = await fetch(ref.startsWith('http') ? ref : `${MD_BASE}${ref}`, { headers: { 'Cookie': client.cookieHeader } })
+            const js = await jr.text()
+            for (const m of js.matchAll(/\breports\/([a-z0-9_]+)/gi)) {
+              const n = m[1].toLowerCase()
+              if (n !== 'download') names.add(n)
+            }
+          } catch { /* skip bundle */ }
+        }
+      }
+    } catch (e: any) {
+      log(`discover: ${src} → ${e?.message || e}`)
+    }
+  }
+  const list = [...names].sort()
+  log(`discover: found ${list.length} report route name(s): ${list.join(', ') || '(none)'}`)
+  return list
+}
 
 // ── Portal ingest ───────────────────────────────────────────────────────
 
@@ -170,9 +210,13 @@ async function main() {
     let invWb: XLSX.WorkBook, qWb: XLSX.WorkBook
     try {
       const { client } = await loginToMechanicDesk(browser, wsId, username, password)
-      log('Logged in — downloading reports')
-      invWb = await downloadWorkbook(client, 'invoice', INVOICE_PATHS, FROM, to, /invoices summary/i)
-      qWb = await downloadWorkbook(client, 'quote', QUOTE_PATHS, FROM, to, /^quotes$/i)
+      log('Logged in — discovering report routes')
+      const discovered = await discoverReportNames(client)
+      const invPaths = [...INVOICE_PATHS, ...discovered.filter(n => /invoice|sale/.test(n)).map(n => `/reports/${n}/download`)]
+      const qPaths = [...QUOTE_PATHS, ...discovered.filter(n => /quot/.test(n)).map(n => `/reports/${n}/download`)]
+      log('Downloading reports')
+      invWb = await downloadWorkbook(client, 'invoice', [...new Set(invPaths)], FROM, to, /invoices summary/i)
+      qWb = await downloadWorkbook(client, 'quote', [...new Set(qPaths)], FROM, to, /^quotes$/i)
     } finally {
       await browser.close().catch(() => undefined)
     }
