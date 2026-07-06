@@ -116,11 +116,11 @@ export const SUPPORTED_IMAGE_MEDIA_TYPES: readonly SupportedImageMediaType[] = [
  * @throws           If the API call fails OR if both invoice_number and
  *                   total_inc_gst are missing (no anchor to trust the rest).
  */
-export async function extractInvoiceFromPdf(pdfBase64: string): Promise<ExtractionResult> {
+export async function extractInvoiceFromPdf(pdfBase64: string, opts: { model?: string } = {}): Promise<ExtractionResult> {
   return runExtraction([
     { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: pdfBase64 } },
     { type: 'text', text: 'Extract the supplier invoice details as JSON per the system instructions. Output ONLY the JSON object.' },
-  ])
+  ], opts.model)
 }
 
 /**
@@ -138,11 +138,11 @@ export async function extractInvoiceFromImage(
   ])
 }
 
-async function runExtraction(content: any[]): Promise<ExtractionResult> {
+async function runExtraction(content: any[], modelOverride?: string): Promise<ExtractionResult> {
   const apiKey = process.env.ANTHROPIC_API_KEY
   if (!apiKey) throw new Error('ANTHROPIC_API_KEY not configured')
 
-  const model = process.env.AP_EXTRACTION_MODEL || DEFAULT_MODEL
+  const model = modelOverride || process.env.AP_EXTRACTION_MODEL || DEFAULT_MODEL
 
   const body = {
     model,

@@ -294,7 +294,7 @@ async function processAttachment(
         const attName = `${att.name || 'scan.pdf'} (p${r.from}${r.to > r.from ? `-${r.to}` : ''} of ${pages})`
         try {
           const segBytes = await splitPdfRange(bytes, r.from, r.to)
-          items.push(await processInvoice(c, ctx, { bytes: segBytes, b64: segBytes.toString('base64'), kind: 'pdf', attId, attName }))
+          items.push(await processInvoice(c, ctx, { bytes: segBytes, b64: segBytes.toString('base64'), kind: 'pdf', attId, attName, isScan: true }))
         } catch (e: any) {
           const error = (e?.message || String(e)).slice(0, 300)
           items.push({ messageId: msg.id, attachmentId: attId, attachmentName: attName, supplierName: null, invoiceNumber: null, amount: null, outcome: 'error', bankCheck: 'skipped', failReasons: [], error })
@@ -305,13 +305,18 @@ async function processAttachment(
     }
   }
 
-  return [await processInvoice(c, ctx, { bytes, b64, kind, attId: att.id, attName: att.name || '' })]
+  return [await processInvoice(c, ctx, { bytes, b64, kind, attId: att.id, attName: att.name || '', isScan: isBatchSource(mailbox, msg.from) })]
 }
+
+// Scanned batch segments are photographed paper, not digital PDFs — the cheap
+// extraction model misreads names off them (MPI → "IMP", Engine → "Bearing").
+// Scans get a stronger model; digital email PDFs stay on the default.
+const scanExtractionModel = () => (process.env.AP_SCAN_EXTRACTION_MODEL || 'claude-sonnet-4-6').trim()
 
 async function processInvoice(
   c: SupabaseClient,
   ctx: { mailbox: string; companyFile: CompanyFileLabel; msg: GraphMessageSummary; dryRun: boolean },
-  inv: { bytes: Buffer; b64: string; kind: 'pdf' | SupportedImageMediaType; attId: string; attName: string },
+  inv: { bytes: Buffer; b64: string; kind: 'pdf' | SupportedImageMediaType; attId: string; attName: string; isScan?: boolean },
 ): Promise<AutoEntryItem> {
   const { mailbox, companyFile, msg, dryRun } = ctx
   const { bytes, b64, kind, attId, attName } = inv
@@ -323,7 +328,7 @@ async function processInvoice(
   try {
     if (kind === 'pdf') {
       if (bytes.length < 100 || !bytes.subarray(0, 5).toString('ascii').startsWith('%PDF-')) throw new Error('not a PDF')
-      extracted = (await extractInvoiceFromPdf(b64)).invoice
+      extracted = (await extractInvoiceFromPdf(b64, inv.isScan ? { model: scanExtractionModel() } : {})).invoice
     } else {
       extracted = (await extractInvoiceFromImage(b64, kind)).invoice
     }
@@ -389,14 +394,16 @@ async function processInvoice(
   //
   // For everything else, medium parse confidence is the extractor's subjective
   // hedge about an unfamiliar layout. When the objective evidence corroborates
-  // the read — supplier + coding resolved, totals/line-sums raise nothing, and
-  // most tellingly the invoice's printed bank details MATCH the MYOB card —
+  // the read — supplier + coding resolved, totals/line-sums raise nothing —
   // the hedge alone doesn't block posting (Chris 2026-07-06, Utemart N26747:
-  // every check passed yet it flagged on confidence alone). Any concrete
-  // mismatch still flags, and low confidence is always a hard stop.
+  // every check passed yet it flagged on confidence alone). Bank evidence:
+  // a MATCH is the strongest corroboration; NO printed bank details is
+  // neutral, not suspicious — parts counter dockets (Ken Mills) carry none
+  // and could otherwise never pass. A mismatch or unverified card still
+  // blocks the override, and low confidence is always a hard stop.
   const ignorable: string[] = []
   if (consolidated) ignorable.push('YELLOW:medium-parse-confidence', 'YELLOW:line-sum-mismatch', 'YELLOW:totals-mismatch')
-  else if (bank === 'match') ignorable.push('YELLOW:medium-parse-confidence')
+  else if (bank === 'match' || bank === 'no-invoice-bank') ignorable.push('YELLOW:medium-parse-confidence')
   const failReasons: string[] = triage.triageReasons.filter(r => !ignorable.includes(r))
   if (bank === 'mismatch') failReasons.push('RED:bank-mismatch')
 
