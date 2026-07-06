@@ -609,7 +609,10 @@ async function processInvoice(
   const posted = await postFoundInvoiceToMyob({
     companyFile, supplierUid: supplierUid!, supplierName,
     extracted: toPost, statementAmount: null,
-    pdfBytes: bytes, pdfFilename: attName || `${extracted.invoiceNumber}.pdf`,
+    // MYOB validates the attachment EXTENSION — batch segment names end in
+    // "(p2 of 8)", so rebuild a clean *.pdf name or the attach 400s.
+    pdfBytes: bytes,
+    pdfFilename: /\.pdf$/i.test(attName) ? attName : `${(attName || String(extracted.invoiceNumber || 'AP')).replace(/\.pdf/i, '').replace(/[^\w-]+/g, '_').replace(/^_+|_+$/g, '')}.pdf`,
     postedBy: ACTOR,
   })
 
