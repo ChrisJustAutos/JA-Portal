@@ -19,6 +19,7 @@ export interface AutoEntrySlackInput {
   bankCheck: BankCheck
   invoiceBank?: { bsb: string | null; accountNumber: string | null; accountName: string | null } | null
   cardBank?: { bsb: string | null; accountNumber: string | null; accountName: string | null } | null
+  sourceMailbox?: string | null
   failReasons?: string[]
   adopted?: boolean
   pdfUrl?: string | null
@@ -49,6 +50,7 @@ function prettyReason(code: string): string {
     'totals-mismatch': 'subtotal + GST ≠ total',
     'line-sum-mismatch': "lines don't sum to subtotal",
     'bank-mismatch': 'bank details differ from the MYOB card',
+    'possible-duplicate-of': 'possible duplicate — same supplier + amount recently posted under a different invoice number',
   }
   const bare = code.replace(/^(RED|YELLOW|INFO):/, '').split(':')[0]
   return map[bare] || bare
@@ -72,6 +74,7 @@ export function buildAutoEntryBlocks(i: AutoEntrySlackInput): { text: string; bl
   if (i.codingSummary) fields.push(`*Coded to:*\n${i.codingSummary}`)
   const bankBadge = BANK_BADGE[i.bankCheck]
   if (bankBadge) fields.push(`*Payment details:*\n${bankBadge}`)
+  if (i.sourceMailbox) fields.push(`*Source:*\n${i.sourceMailbox.split('@')[0]}@`)
 
   const blocks: SlackBlock[] = [
     { type: 'header', text: { type: 'plain_text', text: headline.slice(0, 150), emoji: true } },

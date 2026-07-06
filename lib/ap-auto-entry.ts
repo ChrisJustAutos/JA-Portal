@@ -1,7 +1,8 @@
 // lib/ap-auto-entry.ts
 //
 // Automated invoice entry (VPS only, background). Reads supplier invoices from
-// the VPS accounts inbox, FACT-CHECKS each one, and either:
+// the VPS accounts inbox AND the office scanner's scan-to-email mailbox
+// (scans@ — paper invoices), FACT-CHECKS each one, and either:
 //   • posts it straight to MYOB (tax-inclusive, no portal ap_invoices row) and
 //     drops a success card in Slack, OR
 //   • flags it in Slack with the reason and LEAVES the email for manual entry.
@@ -63,7 +64,16 @@ function sb(): SupabaseClient {
 }
 
 export const autoEntryEnabled = () => (process.env.AP_AUTO_ENTRY_ENABLED || 'false').toLowerCase().trim() === 'true'
-function vpsMailbox(): string { return (process.env.AP_AUTO_ENTRY_MAILBOX || 'accounts@justautosmechanical.com.au').trim() }
+// Both the accounts inbox AND the office scanner's scan-to-email mailbox feed
+// VPS auto-entry. Override with AP_AUTO_ENTRY_MAILBOXES (comma-separated);
+// legacy AP_AUTO_ENTRY_MAILBOX still honoured as the first entry.
+function vpsMailboxes(): string[] {
+  const multi = (process.env.AP_AUTO_ENTRY_MAILBOXES || '').trim()
+  if (multi) return multi.split(/[,;]+/).map(s => s.trim()).filter(Boolean)
+  const legacy = (process.env.AP_AUTO_ENTRY_MAILBOX || '').trim()
+  if (legacy) return [legacy, 'scans@justautosmechanical.com.au']
+  return ['accounts@justautosmechanical.com.au', 'scans@justautosmechanical.com.au']
+}
 function slackWebhook(): string | null { return (process.env.SLACK_WEBHOOK_AP_VPS || '').trim() || null }
 // Once an invoice is entered into MYOB, its email is marked read and moved out
 // of the Inbox into this folder so the inbox only shows what still needs a human.
@@ -92,10 +102,10 @@ export interface AutoEntryItem {
 export interface AutoEntryOutcome {
   enabled: boolean
   dryRun: boolean
-  mailbox: string
+  mailboxes: { mailbox: string; scanned: number; folderResolved: boolean; error?: string }[]
   scannedMessages: number
   skippedDuplicates: number
-  filedFolder: { name: string; resolved: boolean }   // where posted emails get moved
+  filedFolderName: string           // folder posted emails get moved to (per mailbox)
   processed: AutoEntryItem[]
 }
 
@@ -135,17 +145,42 @@ function bankCheck(
 export async function runAutoEntry(opts: { dryRun?: boolean; sinceDays?: number; maxMessages?: number } = {}): Promise<AutoEntryOutcome> {
   const dryRun = !!opts.dryRun
   const enabled = autoEntryEnabled()
-  const mailbox = vpsMailbox()
   const companyFile: CompanyFileLabel = 'VPS'
   const sinceDays = Math.max(1, Math.min(Number(opts.sinceDays) || 7, 60))
   const maxMessages = Math.max(1, Math.min(Number(opts.maxMessages) || 40, 100))
   const sinceIso = new Date(Date.now() - sinceDays * 86400_000).toISOString()
   const c = sb()
+  const folderName = processedFolder()
 
-  const out: AutoEntryOutcome = { enabled, dryRun, mailbox, scannedMessages: 0, skippedDuplicates: 0, filedFolder: { name: processedFolder(), resolved: false }, processed: [] }
+  const out: AutoEntryOutcome = { enabled, dryRun, mailboxes: [], scannedMessages: 0, skippedDuplicates: 0, filedFolderName: folderName, processed: [] }
 
   // Master switch: do nothing (not even scan) unless enabled OR this is a dry-run preview.
   if (!enabled && !dryRun) return out
+
+  for (const mailbox of vpsMailboxes()) {
+    const boxOut = { mailbox, scanned: 0, folderResolved: false, error: undefined as string | undefined }
+    out.mailboxes.push(boxOut)
+    try {
+      await runMailbox(c, { mailbox, companyFile, sinceIso, maxMessages, dryRun, folderName }, out, boxOut)
+    } catch (e: any) {
+      // One unreadable mailbox (e.g. scans@ not yet licensed for the Graph app)
+      // must not sink the other.
+      boxOut.error = (e?.message || String(e)).slice(0, 300)
+      console.error(`[ap-auto-entry] mailbox ${mailbox} failed:`, boxOut.error)
+    }
+  }
+
+  if (!dryRun) { try { await cleanupStaged(c) } catch { /* best effort */ } }
+  return out
+}
+
+async function runMailbox(
+  c: SupabaseClient,
+  ctx: { mailbox: string; companyFile: CompanyFileLabel; sinceIso: string; maxMessages: number; dryRun: boolean; folderName: string },
+  out: AutoEntryOutcome,
+  boxOut: { mailbox: string; scanned: number; folderResolved: boolean },
+): Promise<void> {
+  const { mailbox, companyFile, sinceIso, maxMessages, dryRun, folderName } = ctx
 
   let messages: GraphMessageSummary[] = []
   try {
@@ -153,15 +188,15 @@ export async function runAutoEntry(opts: { dryRun?: boolean; sinceDays?: number;
   } catch (e: any) {
     throw new Error(`Could not read ${mailbox}: ${e?.message || e}`)
   }
-  out.scannedMessages = messages.length
+  boxOut.scanned = messages.length
+  out.scannedMessages += messages.length
 
-  // Resolve the "filed" folder once — read-only, so we do it on dry runs too
-  // (lets a preview report whether the move target exists).
+  // Resolve the "filed" folder once per mailbox — read-only, so we do it on
+  // dry runs too (lets a preview report whether the move target exists).
   let processedFolderId: string | null = null
-  const folderName = processedFolder()
   if (folderName) {
     try { processedFolderId = await findFolderByDisplayNameLoose(mailbox, folderName) } catch { /* leave null */ }
-    out.filedFolder.resolved = !!processedFolderId
+    boxOut.folderResolved = !!processedFolderId
     if (!processedFolderId) console.warn(`[ap-auto-entry] folder "${folderName}" not found in ${mailbox} — posted emails will be marked read but not moved`)
   }
 
@@ -214,9 +249,6 @@ export async function runAutoEntry(opts: { dryRun?: boolean; sinceDays?: number;
       } catch { /* best effort */ }
     }
   }
-
-  if (!dryRun) { try { await cleanupStaged(c) } catch { /* best effort */ } }
-  return out
 }
 
 async function processAttachment(
@@ -312,13 +344,32 @@ async function processAttachment(
   const failReasons: string[] = triage.triageReasons.filter(r => !ignorable.includes(r))
   if (bank === 'mismatch') failReasons.push('RED:bank-mismatch')
 
+  // Cross-source duplicate guard. The same invoice can arrive twice — the
+  // supplier's email into accounts@ AND a paper copy scanned to scans@. An
+  // IDENTICAL invoice number is safe end-to-end (MYOB smart-adopt links the
+  // existing bill instead of re-posting), but a scan whose number OCR'd
+  // differently would slip past that — so a recent posted bill for the SAME
+  // supplier and SAME amount under a DIFFERENT number flags for a human.
+  if (supplierUid && failReasons.length === 0) {
+    const norm = (s: string | null | undefined) => String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, '')
+    const { data: prior } = await c.from('ap_auto_entry_log')
+      .select('invoice_number, amount, created_at, mailbox')
+      .eq('outcome', 'posted').eq('supplier_uid', supplierUid)
+      .gte('created_at', new Date(Date.now() - 14 * 86400_000).toISOString())
+    const dup = (prior || []).find(p =>
+      p.amount != null && Math.abs(Number(p.amount) - total) < 0.005 &&
+      norm(p.invoice_number) !== norm(extracted.invoiceNumber),
+    )
+    if (dup) failReasons.push(`YELLOW:possible-duplicate-of:${dup.invoice_number || 'unknown'}`)
+  }
+
   const pass = failReasons.length === 0
 
   // Common Slack fields.
   const slackCommon = {
     supplierName, companyFile, invoiceNumber: extracted.invoiceNumber, invoiceDate: extracted.invoiceDate,
     totalIncGst: total, gstAmount: extracted.totals.gstAmount, codingSummary, bankCheck: bank,
-    invoiceBank: extracted.bankDetails, cardBank,
+    invoiceBank: extracted.bankDetails, cardBank, sourceMailbox: mailbox,
   }
 
   if (!pass) {
