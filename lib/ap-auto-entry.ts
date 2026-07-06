@@ -38,6 +38,7 @@ import {
   type SupportedImageMediaType,
   type ExtractedAPInvoice,
 } from './ap-extraction'
+import { pdfPageCount, splitPdfRange, segmentInvoicePdf, type PageRange } from './ap-batch-split'
 import { tryAutoMatchSupplier } from './ap-myob-automatch'
 import { getSupplierByUid, type CompanyFileLabel } from './ap-myob-lookup'
 import { resolveLineAccount } from './ap-line-resolver'
@@ -214,15 +215,13 @@ async function runMailbox(
       if (seen) { out.skippedDuplicates++; continue }
 
       try {
-        const item = await processAttachment(c, { mailbox, companyFile, msg, att, kind, dryRun })
-        if (item) {
-          out.processed.push(item)
-          if (item.outcome === 'posted') anyPosted = true
-        }
+        const items = await processAttachment(c, { mailbox, companyFile, msg, att, kind, dryRun })
+        out.processed.push(...items)
+        if (items.some(i => i.outcome === 'posted')) anyPosted = true
       } catch (e: any) {
         const error = (e?.message || String(e)).slice(0, 300)
         out.processed.push({ messageId: msg.id, attachmentId: att.id, attachmentName: att.name || '', supplierName: null, invoiceNumber: null, amount: null, outcome: 'error', bankCheck: 'skipped', failReasons: [], error })
-        if (!dryRun) await logRow(c, { mailbox, companyFile, msg, att }, { outcome: 'error', error })
+        if (!dryRun) await logRow(c, { mailbox, companyFile, msg, attId: att.id, attName: att.name || '' }, { outcome: 'error', error })
       }
     }
 
@@ -251,15 +250,69 @@ async function runMailbox(
   }
 }
 
+// Mailboxes whose PDFs are BATCHED scans (several paper invoices per file).
+// Their multi-page PDFs are segmented into individual documents first.
+function isBatchMailbox(mailbox: string): boolean {
+  const raw = (process.env.AP_BATCH_SPLIT_MAILBOXES ?? 'scans@justautosmechanical.com.au').trim()
+  return raw.split(/[,;]+/).map(s => s.trim().toLowerCase()).filter(Boolean).includes(mailbox.toLowerCase())
+}
+
+const MAX_BATCH_SEGMENTS = 15
+
 async function processAttachment(
   c: SupabaseClient,
   ctx: { mailbox: string; companyFile: CompanyFileLabel; msg: GraphMessageSummary; att: GraphAttachmentMeta; kind: 'pdf' | SupportedImageMediaType; dryRun: boolean },
-): Promise<AutoEntryItem | null> {
-  const { mailbox, companyFile, msg, att, kind, dryRun } = ctx
-  const base = { messageId: msg.id, attachmentId: att.id, attachmentName: att.name || '' }
+): Promise<AutoEntryItem[]> {
+  const { mailbox, msg, att, kind } = ctx
 
   const b64 = await getAttachmentBase64(mailbox, msg.id, att.id)
   const bytes = Buffer.from(b64, 'base64')
+
+  // Batched scan? Segment the PDF into individual documents and process each
+  // one as its own invoice (own fact-check, MYOB bill, Slack card, log row).
+  if (kind === 'pdf' && isBatchMailbox(mailbox)) {
+    let pages = 0
+    try { pages = await pdfPageCount(bytes) } catch { /* unreadable pdf — let the single path report it */ }
+    if (pages > 1) {
+      let ranges: PageRange[] | null = null
+      try { ranges = (await segmentInvoicePdf(b64, pages)).ranges } catch (e: any) {
+        console.warn(`[ap-auto-entry] batch segmentation failed (${e?.message || e}) — falling back to one invoice per page`)
+      }
+      if (!ranges?.length) ranges = Array.from({ length: pages }, (_, i) => ({ from: i + 1, to: i + 1 }))
+      if (ranges.length > MAX_BATCH_SEGMENTS) console.warn(`[ap-auto-entry] batch has ${ranges.length} documents — processing first ${MAX_BATCH_SEGMENTS}`)
+
+      const items: AutoEntryItem[] = []
+      const segments = ranges.slice(0, MAX_BATCH_SEGMENTS)
+      for (let idx = 0; idx < segments.length; idx++) {
+        const r = segments[idx]
+        // The FIRST segment logs under the raw attachment id so the seen-check
+        // dedups the whole attachment; later segments get a #p suffix (unique).
+        const attId = idx === 0 ? att.id : `${att.id}#p${r.from}-${r.to}`
+        const attName = `${att.name || 'scan.pdf'} (p${r.from}${r.to > r.from ? `-${r.to}` : ''} of ${pages})`
+        try {
+          const segBytes = await splitPdfRange(bytes, r.from, r.to)
+          items.push(await processInvoice(c, ctx, { bytes: segBytes, b64: segBytes.toString('base64'), kind: 'pdf', attId, attName }))
+        } catch (e: any) {
+          const error = (e?.message || String(e)).slice(0, 300)
+          items.push({ messageId: msg.id, attachmentId: attId, attachmentName: attName, supplierName: null, invoiceNumber: null, amount: null, outcome: 'error', bankCheck: 'skipped', failReasons: [], error })
+          if (!ctx.dryRun) await logRow(c, { mailbox, companyFile: ctx.companyFile, msg, attId, attName }, { outcome: 'error', error })
+        }
+      }
+      return items
+    }
+  }
+
+  return [await processInvoice(c, ctx, { bytes, b64, kind, attId: att.id, attName: att.name || '' })]
+}
+
+async function processInvoice(
+  c: SupabaseClient,
+  ctx: { mailbox: string; companyFile: CompanyFileLabel; msg: GraphMessageSummary; dryRun: boolean },
+  inv: { bytes: Buffer; b64: string; kind: 'pdf' | SupportedImageMediaType; attId: string; attName: string },
+): Promise<AutoEntryItem> {
+  const { mailbox, companyFile, msg, dryRun } = ctx
+  const { bytes, b64, kind, attId, attName } = inv
+  const base = { messageId: msg.id, attachmentId: attId, attachmentName: attName }
 
   // Extract. A parse failure or a non-invoice (no number AND no total) is not
   // flagged — just logged as skipped so we don't spam Slack with random PDFs.
@@ -272,7 +325,7 @@ async function processAttachment(
       extracted = (await extractInvoiceFromImage(b64, kind)).invoice
     }
   } catch {
-    if (!dryRun) await logRow(c, { mailbox, companyFile, msg, att }, { outcome: 'skipped_not_invoice' })
+    if (!dryRun) await logRow(c, { mailbox, companyFile, msg, attId, attName }, { outcome: 'skipped_not_invoice' })
     return { ...base, supplierName: null, invoiceNumber: null, amount: null, outcome: 'skipped_not_invoice', bankCheck: 'skipped', failReasons: [] }
   }
 
@@ -281,16 +334,16 @@ async function processAttachment(
   // risks double-posting bills that are already entered. The exception is a
   // consolidated-invoice supplier (e.g. Time Express), whose "statement" IS a
   // single tax invoice for the period and is exactly what we should enter.
-  const looksLikeStatement = /statement/i.test(msg.subject || '') || /statement/i.test(att.name || '')
+  const looksLikeStatement = /statement/i.test(msg.subject || '') || /statement/i.test(attName)
   const consolidated = consolidatedInvoiceSupplier(extracted.vendor?.name, msg.from)
   if (looksLikeStatement && !consolidated) {
-    if (!dryRun) await logRow(c, { mailbox, companyFile, msg, att }, { outcome: 'skipped_not_invoice' })
+    if (!dryRun) await logRow(c, { mailbox, companyFile, msg, attId, attName }, { outcome: 'skipped_not_invoice' })
     return { ...base, supplierName: extracted.vendor?.name || null, invoiceNumber: extracted.invoiceNumber, amount: extracted.totals.totalIncGst, outcome: 'skipped_not_invoice', bankCheck: 'skipped', failReasons: [] }
   }
 
   const total = extracted.totals.totalIncGst
   if (!extracted.invoiceNumber || total == null) {
-    if (!dryRun) await logRow(c, { mailbox, companyFile, msg, att }, { outcome: 'skipped_not_invoice' })
+    if (!dryRun) await logRow(c, { mailbox, companyFile, msg, attId, attName }, { outcome: 'skipped_not_invoice' })
     return { ...base, supplierName: extracted.vendor?.name || null, invoiceNumber: extracted.invoiceNumber, amount: total, outcome: 'skipped_not_invoice', bankCheck: 'skipped', failReasons: [] }
   }
 
@@ -375,10 +428,10 @@ async function processAttachment(
   if (!pass) {
     const built = buildAutoEntryBlocks({ ...slackCommon, outcome: 'flagged', failReasons })
     if (!dryRun) {
-      const staged = await stageAndSign(c, msg, att, bytes, kind).catch(() => null)
+      const staged = await stageAndSign(c, msg, attId, bytes, kind).catch(() => null)
       const withUrl = staged ? buildAutoEntryBlocks({ ...slackCommon, outcome: 'flagged', failReasons, pdfUrl: staged.url }) : built
       const ts = await sendSlack(withUrl)
-      await logRow(c, { mailbox, companyFile, msg, att }, { outcome: 'flagged', supplierName, supplierUid, invoiceNumber: extracted.invoiceNumber, invoiceDate: extracted.invoiceDate, amount: total, failReasons, bankCheck: bank, pdfStoragePath: staged?.path || null, slackTs: ts })
+      await logRow(c, { mailbox, companyFile, msg, attId, attName }, { outcome: 'flagged', supplierName, supplierUid, invoiceNumber: extracted.invoiceNumber, invoiceDate: extracted.invoiceDate, amount: total, failReasons, bankCheck: bank, pdfStoragePath: staged?.path || null, slackTs: ts })
     }
     return { ...base, supplierName, invoiceNumber: extracted.invoiceNumber, amount: total, outcome: 'flagged', bankCheck: bank, failReasons, slackText: built.text }
   }
@@ -410,23 +463,23 @@ async function processAttachment(
   const posted = await postFoundInvoiceToMyob({
     companyFile, supplierUid: supplierUid!, supplierName,
     extracted: toPost, statementAmount: null,
-    pdfBytes: bytes, pdfFilename: att.name || `${extracted.invoiceNumber}.pdf`,
+    pdfBytes: bytes, pdfFilename: attName || `${extracted.invoiceNumber}.pdf`,
     postedBy: ACTOR,
   })
 
-  const staged = await stageAndSign(c, msg, att, bytes, kind).catch(() => null)
+  const staged = await stageAndSign(c, msg, attId, bytes, kind).catch(() => null)
 
   if (!posted.posted) {
     const reasons = [...failReasons, `RED:post-failed:${posted.reason || 'unknown'}`]
     const built = buildAutoEntryBlocks({ ...slackCommon, outcome: 'flagged', failReasons: reasons, pdfUrl: staged?.url })
     const ts = await sendSlack(built)
-    await logRow(c, { mailbox, companyFile, msg, att }, { outcome: 'error', supplierName, supplierUid, invoiceNumber: extracted.invoiceNumber, invoiceDate: extracted.invoiceDate, amount: total, failReasons: reasons, bankCheck: bank, error: posted.reason || null, pdfStoragePath: staged?.path || null, slackTs: ts })
+    await logRow(c, { mailbox, companyFile, msg, attId, attName }, { outcome: 'error', supplierName, supplierUid, invoiceNumber: extracted.invoiceNumber, invoiceDate: extracted.invoiceDate, amount: total, failReasons: reasons, bankCheck: bank, error: posted.reason || null, pdfStoragePath: staged?.path || null, slackTs: ts })
     return { ...base, supplierName, invoiceNumber: extracted.invoiceNumber, amount: total, outcome: 'error', bankCheck: bank, failReasons: reasons, error: posted.reason }
   }
 
   const built = buildAutoEntryBlocks({ ...slackCommon, codingSummary: posted.codingDetail || slackCommon.codingSummary, outcome: 'posted', adopted: posted.adopted, pdfUrl: staged?.url })
   const ts = await sendSlack(built)
-  await logRow(c, { mailbox, companyFile, msg, att }, { outcome: 'posted', supplierName, supplierUid, invoiceNumber: extracted.invoiceNumber, invoiceDate: extracted.invoiceDate, amount: total, bankCheck: bank, myobBillUid: posted.billUid || null, pdfStoragePath: staged?.path || null, slackTs: ts })
+  await logRow(c, { mailbox, companyFile, msg, attId, attName }, { outcome: 'posted', supplierName, supplierUid, invoiceNumber: extracted.invoiceNumber, invoiceDate: extracted.invoiceDate, amount: total, bankCheck: bank, myobBillUid: posted.billUid || null, pdfStoragePath: staged?.path || null, slackTs: ts })
   return { ...base, supplierName, invoiceNumber: extracted.invoiceNumber, amount: total, outcome: 'posted', bankCheck: bank, failReasons: [], billUid: posted.billUid, adopted: posted.adopted }
 }
 
@@ -464,10 +517,10 @@ async function sendSlack(built: { text: string; blocks: any[] }): Promise<string
 
 // ── Staged PDF for the Slack link (no ap_invoices row exists) ────────────
 async function stageAndSign(
-  c: SupabaseClient, msg: GraphMessageSummary, att: GraphAttachmentMeta, bytes: Buffer, kind: 'pdf' | SupportedImageMediaType,
+  c: SupabaseClient, msg: GraphMessageSummary, attId: string, bytes: Buffer, kind: 'pdf' | SupportedImageMediaType,
 ): Promise<{ path: string; url: string } | null> {
   const ext = kind === 'pdf' ? 'pdf' : kind.split('/')[1] || 'bin'
-  const path = `auto-entry/${msg.id}_${att.id}.${ext}`.replace(/[^\w./-]/g, '_')
+  const path = `auto-entry/${msg.id}_${attId}.${ext}`.replace(/[^\w./-]/g, '_')
   const contentType = kind === 'pdf' ? 'application/pdf' : kind
   const up = await c.storage.from(AP_BUCKET).upload(path, bytes, { contentType, upsert: true })
   if (up.error) { console.error('[ap-auto-entry] stage upload failed:', up.error.message); return null }
@@ -489,7 +542,9 @@ async function cleanupStaged(c: SupabaseClient): Promise<void> {
 // ── Audit / dedup row ────────────────────────────────────────────────────
 async function logRow(
   c: SupabaseClient,
-  ctx: { mailbox: string; companyFile: CompanyFileLabel; msg: GraphMessageSummary; att: GraphAttachmentMeta },
+  // attId may carry a batch-segment suffix (`<graphAttId>#p2-3`) — the first
+  // segment uses the raw id so the seen-check dedups the whole attachment.
+  ctx: { mailbox: string; companyFile: CompanyFileLabel; msg: GraphMessageSummary; attId: string; attName: string },
   fields: {
     outcome: AutoEntryOutcomeKind
     supplierName?: string | null; supplierUid?: string | null
@@ -501,8 +556,8 @@ async function logRow(
   try {
     await c.from('ap_auto_entry_log').insert({
       mailbox: ctx.mailbox, company_file: ctx.companyFile,
-      graph_message_id: ctx.msg.id, graph_attachment_id: ctx.att.id,
-      subject: ctx.msg.subject ?? null, from_address: ctx.msg.from ?? null, attachment_name: ctx.att.name || null,
+      graph_message_id: ctx.msg.id, graph_attachment_id: ctx.attId,
+      subject: ctx.msg.subject ?? null, from_address: ctx.msg.from ?? null, attachment_name: ctx.attName || null,
       supplier_name: fields.supplierName ?? null, supplier_uid: fields.supplierUid ?? null,
       invoice_number: fields.invoiceNumber ?? null, invoice_date: fields.invoiceDate ?? null, amount: fields.amount ?? null,
       outcome: fields.outcome, fail_reasons: fields.failReasons ?? null, bank_check: fields.bankCheck ?? null,
