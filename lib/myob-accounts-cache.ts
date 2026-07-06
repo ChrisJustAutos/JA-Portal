@@ -87,6 +87,17 @@ export async function syncAccountsCache(label: CompanyFileLabel): Promise<SyncRe
       .upsert(rows, { onConflict: 'myob_company_file,uid' })
     if (error) throw new Error(`accounts cache upsert failed: ${error.message}`)
     upserted = rows.length
+
+    // PURGE accounts deleted from MYOB. Upsert alone leaves dead rows behind
+    // forever, and the line resolver then suggests account UIDs MYOB rejects
+    // ("The Account with UID … cannot be found" — hit after the MYOB chart
+    // cleanup). Anything not touched by THIS sync is gone from MYOB.
+    const { error: delErr } = await c
+      .from('myob_accounts_cache')
+      .delete()
+      .eq('myob_company_file', label)
+      .lt('last_synced_at', nowIso)
+    if (delErr) console.error(`[accounts-cache] stale purge failed for ${label}:`, delErr.message)
   } else {
     skipped = 1
   }
