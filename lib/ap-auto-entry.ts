@@ -298,9 +298,17 @@ async function processAttachment(
   // statement-style layout quirks — medium parse confidence, consignment rows
   // that don't sum to the total because of credits/running balances — don't
   // block posting. Supplier match, coding and bank checks still apply.
-  const ignorable = consolidated
-    ? ['YELLOW:medium-parse-confidence', 'YELLOW:line-sum-mismatch', 'YELLOW:totals-mismatch']
-    : []
+  //
+  // For everything else, medium parse confidence is the extractor's subjective
+  // hedge about an unfamiliar layout. When the objective evidence corroborates
+  // the read — supplier + coding resolved, totals/line-sums raise nothing, and
+  // most tellingly the invoice's printed bank details MATCH the MYOB card —
+  // the hedge alone doesn't block posting (Chris 2026-07-06, Utemart N26747:
+  // every check passed yet it flagged on confidence alone). Any concrete
+  // mismatch still flags, and low confidence is always a hard stop.
+  const ignorable: string[] = []
+  if (consolidated) ignorable.push('YELLOW:medium-parse-confidence', 'YELLOW:line-sum-mismatch', 'YELLOW:totals-mismatch')
+  else if (bank === 'match') ignorable.push('YELLOW:medium-parse-confidence')
   const failReasons: string[] = triage.triageReasons.filter(r => !ignorable.includes(r))
   if (bank === 'mismatch') failReasons.push('RED:bank-mismatch')
 
