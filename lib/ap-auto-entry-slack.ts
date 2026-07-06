@@ -21,6 +21,7 @@ export interface AutoEntrySlackInput {
   cardBank?: { bsb: string | null; accountNumber: string | null; accountName: string | null } | null
   sourceMailbox?: string | null
   supplierTrust?: string | null   // e.g. "✓ Verified — 14 posted · ABN match · known sender"
+  paidOnInvoice?: string | null   // payment method when the invoice is already settled ('card', 'EFT'…)
   failReasons?: string[]
   adopted?: boolean
   pdfUrl?: string | null
@@ -79,6 +80,7 @@ export function buildAutoEntryBlocks(i: AutoEntrySlackInput): { text: string; bl
   if (bankBadge) fields.push(`*Payment details:*\n${bankBadge}`)
   if (i.sourceMailbox) fields.push(`*Source:*\n${i.sourceMailbox.split('@')[0]}@`)
   if (i.supplierTrust) fields.push(`*Supplier trust:*\n${i.supplierTrust}`)
+  if (i.paidOnInvoice) fields.push(`*Already paid:*\n💳 ${i.paidOnInvoice} — don't pay again`)
 
   const blocks: SlackBlock[] = [
     { type: 'header', text: { type: 'plain_text', text: headline.slice(0, 150), emoji: true } },

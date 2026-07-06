@@ -69,6 +69,11 @@ export interface ExtractedAPInvoice {
     memberNumber: string | null      // our customer/member number on the invoice
   }
   notes: string | null               // free-text annotations on the PDF
+  // Invoice already settled on the invoice itself (balance due $0.00 with a
+  // card/EFT/cash payment row or PAID stamp). totalIncGst still carries the
+  // FULL invoice value — the bill must be entered regardless.
+  paidInFull: boolean
+  paymentMethod: string | null       // 'card' / 'Visa' / 'EFT' / … when paidInFull
   // True when the document is a supplier credit / credit note / adjustment
   // note / return rather than a regular invoice. Posting these as bills
   // would book a credit as a payable, so the portal blocks the Approve
@@ -193,7 +198,7 @@ Output ONLY a JSON object with this exact shape:
 
 {
   "vendor": {
-    "name":     "The actual supplier's BUSINESS/TRADING name (e.g. 'Repco', 'GPC Asia Pacific Pty Ltd', 'BNT', 'Decarb'). The supplier is the LEGAL ENTITY ISSUING the invoice — the name attached to the ABN, the remittance/'pay to' details, the tax-invoice header, or the footer legal text ('all goods remain the property of…'). BEWARE PRODUCT-BRAND LOGOS: distributor invoices often carry the big logo of a BRAND they sell (a battery, oil, or parts brand) while the issuing supplier (e.g. 'JAS Oceania') appears smaller near the ABN or remittance block — the brand logo is NOT the supplier. The name is sometimes ONLY inside a logo/letterhead image — read text inside logos, but cross-check it against the ABN entity and remittance name. Do NOT use a slogan or tagline (e.g. 'Servicing the Sunshine Coast') as the name. If unclear, DERIVE the name from the email-address domain, the website, or the bank-account name (e.g. accounts@decarb.com.au → 'Decarb'). NOT Capricorn — Capricorn is the billing intermediary, not the vendor. null only if you truly cannot determine it.",
+    "name":     "The supplier's TRADING NAME as presented on the invoice header/logo (e.g. 'Repco', 'BNT', 'Decarb', 'Performance Suspension Racing'). Priority order: (1) the trading name in the header/logo/letterhead — read text inside logo images; (2) the tax-invoice entity name next to the ABN; (3) the email-address domain or website; (4) LAST RESORT ONLY: the bank-account name — remittance accounts are often held under a DIFFERENT legal/holding entity (e.g. a 'Performance Suspension Racing' invoice paid into a 'Gold Coast Suspension Pty Ltd' account — the supplier is Performance Suspension Racing, NOT the account holder). BEWARE PRODUCT-BRAND LOGOS: distributor invoices often carry the big logo of a BRAND they sell (a battery or oil brand) while the issuing supplier appears smaller near the ABN or remittance block — the brand logo is NOT the supplier. Do NOT use a slogan or tagline as the name. NOT Capricorn — Capricorn is the billing intermediary, not the vendor. null only if you truly cannot determine it.",
     "abn":      "Supplier's ABN as shown (11 digits, may have spaces). Strip non-digits in output. null if not shown.",
     "email":    "Supplier's contact / accounts email if printed on the invoice (header or footer). null if not shown.",
     "phone":    "Supplier's primary phone number as printed. Keep formatting roughly as shown. null if not shown.",
@@ -211,8 +216,10 @@ Output ONLY a JSON object with this exact shape:
   "totals": {
     "subtotalExGst": "Subtotal before GST as a NUMBER (no $, no commas). null if only inc-GST shown.",
     "gstAmount":     "GST amount as a NUMBER. null if not shown.",
-    "totalIncGst":   "Total including GST as a NUMBER. The amount payable. null if genuinely missing."
+    "totalIncGst":   "The INVOICE TOTAL including GST as a NUMBER — the full value of the goods/services billed. NEVER the 'balance due' / 'amount owing': many invoices are already paid (card/EFT shown under a payment-method or payments section) and print balance due $0.00 — the invoice total is still the full charged amount. null only if genuinely missing."
   },
+  "paidInFull": "true if the invoice shows it has ALREADY BEEN PAID — balance due / amount owing of $0.00, a payment row (card/EFT/cash) in a payments or payment-method section, 'PAID' stamp, or receipt wording. false otherwise.",
+  "paymentMethod": "How it was paid when paidInFull is true, as printed ('card', 'Visa', 'EFT', 'cash', …). null if unpaid or not shown.",
   "capricorn": {
     "via":          "true if 'CAPRICORN' appears prominently as the billing channel (e.g. 'CHARGE TO: CAPRICORN SOCIETY LTD' or '** CAPRICORN <ref> **'), else false.",
     "reference":    "The Capricorn reference number if shown (e.g. '046766' from '** CAPRICORN 046766 **'). null otherwise.",
@@ -254,7 +261,8 @@ Rules:
 - If GST appears to be charged on a line but no explicit tax code is shown, default taxCode to 'GST'.
 - If the line shows "FREE" / "NO GST" / 0% charged, taxCode is 'FRE'.
 - CONSOLIDATED / STATEMENT-STYLE INVOICES: some suppliers (couriers especially) issue a monthly consolidated tax invoice that LOOKS like a statement — one row per consignment/job/delivery, each with its own charge. Extract each row as a line item using the row's OWN charge amount, NEVER a running-balance or cumulative column. EXCLUDE opening/brought-forward balances, payments received and credit rows from lineItems. totals.totalIncGst is the amount payable for THIS document's charges — if both an aged/total balance and a current-period total are shown, use the one that equals the sum of the rows you extracted.
-- SELF-CHECK ON SCANS: on scanned/photographed invoices, before finalising, ADD UP your lineTotalExGst values and compare to the printed subtotal. If they disagree, you almost certainly read the wrong column (unit price vs extended total, or an inc-GST column) or misread a digit — RE-READ the amounts until the sum reconciles, and only report parseConfidence "high" when it does.`
+- SELF-CHECK ON SCANS: on scanned/photographed invoices, before finalising, ADD UP your lineTotalExGst values and compare to the printed subtotal. If they disagree, you almost certainly read the wrong column (unit price vs extended total, or an inc-GST column) or misread a digit — RE-READ the amounts until the sum reconciles, and only report parseConfidence "high" when it does.
+- PAYMENT ROWS ARE NOT LINE ITEMS: rows in a payments/payment-method/receipts section (card, EFT, cash, deposits) must NOT appear in lineItems and must NOT be netted into totals.totalIncGst — set paidInFull/paymentMethod instead.`
 }
 
 // ── Output parsing ──────────────────────────────────────────────────────
@@ -327,6 +335,8 @@ function validateAndNormalise(raw: any): ExtractedAPInvoice {
       memberNumber: nullableString(capricorn.memberNumber),
     },
     notes: nullableString(raw.notes),
+    paidInFull: raw.paidInFull === true,
+    paymentMethod: nullableString(raw.paymentMethod),
     isCreditNote: raw.isCreditNote === true,
     lineItems: reconcileLineTotals(normaliseLineItems(raw.lineItems), normTotals.subtotalExGst),
     parseConfidence: ['high', 'medium', 'low'].includes(raw.parseConfidence) ? raw.parseConfidence : 'medium',

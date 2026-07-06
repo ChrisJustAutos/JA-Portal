@@ -662,6 +662,7 @@ async function processInvoice(
     supplierName, companyFile, invoiceNumber: extracted.invoiceNumber, invoiceDate: extracted.invoiceDate,
     totalIncGst: total, gstAmount: extracted.totals.gstAmount, codingSummary, bankCheck: effectiveBank,
     invoiceBank: extracted.bankDetails, cardBank, sourceMailbox: mailbox, supplierTrust: trust.summary,
+    paidOnInvoice: extracted.paidInFull ? (extracted.paymentMethod || 'paid') : null,
   }
 
   if (!pass) {

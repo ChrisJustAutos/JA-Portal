@@ -541,6 +541,8 @@ export async function applyTriageAndResolve(invoiceId: string): Promise<void> {
       memberNumber: inv.capricorn_member_number,
     },
     notes: inv.notes,
+    paidInFull: false,               // not tracked on legacy portal rows
+    paymentMethod: null,
     isCreditNote: inv.is_credit_note === true,
     lineItems: lines.map((l: any) => ({
       lineNo: l.line_no,
