@@ -37,6 +37,22 @@ export async function splitPdfRange(bytes: Buffer, from: number, to: number): Pr
   return Buffer.from(await out.save())
 }
 
+/** Copy several page ranges (1-indexed, inclusive) into one standalone PDF —
+ *  used to build the "leftovers" document of a partially-entered batch. */
+export async function extractPageRanges(bytes: Buffer, ranges: PageRange[]): Promise<Buffer> {
+  const src = await PDFDocument.load(bytes, { ignoreEncryption: true })
+  const n = src.getPageCount()
+  const indices: number[] = []
+  for (const r of ranges) {
+    for (let p = Math.max(1, r.from); p <= Math.min(n, r.to); p++) indices.push(p - 1)
+  }
+  if (!indices.length) throw new Error('no pages to extract')
+  const out = await PDFDocument.create()
+  const pages = await out.copyPages(src, indices)
+  for (const p of pages) out.addPage(p)
+  return Buffer.from(await out.save())
+}
+
 /**
  * Ask Claude which page ranges are distinct documents. Returns ranges sorted,
  * clamped to the document, non-overlapping. Throws on API/parse failure —

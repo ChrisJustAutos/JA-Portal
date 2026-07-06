@@ -38,7 +38,8 @@ import {
   type SupportedImageMediaType,
   type ExtractedAPInvoice,
 } from './ap-extraction'
-import { pdfPageCount, splitPdfRange, segmentInvoicePdf, type PageRange } from './ap-batch-split'
+import { pdfPageCount, splitPdfRange, segmentInvoicePdf, extractPageRanges, type PageRange } from './ap-batch-split'
+import { sendMail } from './email'
 import { tryAutoMatchSupplier } from './ap-myob-automatch'
 import { getSupplierByUid, type CompanyFileLabel } from './ap-myob-lookup'
 import { resolveLineAccount } from './ap-line-resolver'
@@ -87,6 +88,7 @@ export interface AutoEntryItem {
   messageId: string
   attachmentId: string
   attachmentName: string
+  pages?: PageRange           // batch segments only — original page range in the scanned PDF
   supplierName: string | null
   invoiceNumber: string | null
   amount: number | null
@@ -202,6 +204,9 @@ async function runMailbox(
   }
 
   for (const msg of messages) {
+    // Leftovers emails hold the invoices the scanner already couldn't handle —
+    // they exist FOR the human and are never re-processed.
+    if ((msg.subject || '').includes(LEFTOVER_PREFIX)) continue
     let atts: GraphAttachmentMeta[]
     try { atts = await listAttachmentMeta(mailbox, msg.id) } catch { continue }
     let anyPosted = false
@@ -250,6 +255,46 @@ async function runMailbox(
   }
 }
 
+// Subject marker for the residual "still needs a human" email of a partially
+// entered batch. The scanner must NEVER process these (they're by definition
+// the invoices it already couldn't handle) — matched in the message loop.
+const LEFTOVER_PREFIX = '[AP leftovers]'
+
+// A partially-entered batch: some pages posted to MYOB, some didn't. Email a
+// PDF of ONLY the un-entered pages back to the same inbox so the inbox ends up
+// holding exactly what still needs manual entry — the original full batch gets
+// filed away by the posted-message move. Fully-posted batches need no
+// leftovers; fully-failed batches keep their original in place (no move).
+async function sendBatchLeftovers(
+  ctx: { mailbox: string; dryRun: boolean },
+  attName: string,
+  bytes: Buffer,
+  items: AutoEntryItem[],
+): Promise<void> {
+  const posted = items.filter(i => i.outcome === 'posted')
+  const leftovers = items.filter(i => i.outcome !== 'posted' && i.pages)
+  if (!posted.length || !leftovers.length) return
+  const esc = (s: any) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+  try {
+    const residual = await extractPageRanges(bytes, leftovers.map(i => i.pages!))
+    const list = leftovers.map(i => {
+      const pg = i.pages!.from === i.pages!.to ? `p${i.pages!.from}` : `p${i.pages!.from}-${i.pages!.to}`
+      const why = i.outcome === 'skipped_not_invoice' ? 'not recognised as an invoice'
+        : i.error ? esc(i.error)
+        : esc(i.failReasons.map(r => r.replace(/^(RED|YELLOW):/, '')).join(', ') || i.outcome)
+      return `<li><strong>${pg}</strong>: ${esc(i.supplierName || 'Unrecognised supplier')}${i.invoiceNumber ? ` — ${esc(i.invoiceNumber)}` : ''}${i.amount != null ? ` — ${money(i.amount)}` : ''} <span style="color:#888">(${why})</span></li>`
+    }).join('')
+    await sendMail(ctx.mailbox, {
+      to: [ctx.mailbox],
+      subject: `${LEFTOVER_PREFIX} ${attName} — ${leftovers.length} of ${items.length} invoices need manual entry`,
+      html: `<p>${posted.length} of ${items.length} invoices in this scanned batch were entered into MYOB automatically. The attached PDF contains ONLY the ${leftovers.length} still needing manual entry:</p><ul>${list}</ul><p>The original full batch was marked processed and filed out of the inbox.</p>`,
+      attachments: [{ name: `LEFTOVERS ${attName}`, contentType: 'application/pdf', content: residual }],
+    })
+  } catch (e: any) {
+    console.error('[ap-auto-entry] leftovers email failed:', e?.message || e)
+  }
+}
+
 // BATCHED-scan sources (several paper invoices per PDF). The Epson scanner
 // SENDS FROM scans@ into the accounts inbox, so this matches the SENDER as
 // well as the receiving mailbox. Their multi-page PDFs are segmented into
@@ -294,13 +339,20 @@ async function processAttachment(
         const attName = `${att.name || 'scan.pdf'} (p${r.from}${r.to > r.from ? `-${r.to}` : ''} of ${pages})`
         try {
           const segBytes = await splitPdfRange(bytes, r.from, r.to)
-          items.push(await processInvoice(c, ctx, { bytes: segBytes, b64: segBytes.toString('base64'), kind: 'pdf', attId, attName, isScan: true }))
+          items.push({ ...(await processInvoice(c, ctx, { bytes: segBytes, b64: segBytes.toString('base64'), kind: 'pdf', attId, attName, isScan: true })), pages: r })
         } catch (e: any) {
           const error = (e?.message || String(e)).slice(0, 300)
-          items.push({ messageId: msg.id, attachmentId: attId, attachmentName: attName, supplierName: null, invoiceNumber: null, amount: null, outcome: 'error', bankCheck: 'skipped', failReasons: [], error })
+          items.push({ messageId: msg.id, attachmentId: attId, attachmentName: attName, pages: r, supplierName: null, invoiceNumber: null, amount: null, outcome: 'error', bankCheck: 'skipped', failReasons: [], error })
           if (!ctx.dryRun) await logRow(c, { mailbox, companyFile: ctx.companyFile, msg, attId, attName }, { outcome: 'error', error })
         }
       }
+
+      // Partially-entered batch → replace the inbox copy with a LEFTOVERS email
+      // containing only the un-entered pages, so what remains in the inbox is
+      // exactly what still needs a human (the original moves to the processed
+      // folder because at least one invoice posted).
+      if (!ctx.dryRun) await sendBatchLeftovers(ctx, att.name || 'scan.pdf', bytes, items)
+
       return items
     }
   }
