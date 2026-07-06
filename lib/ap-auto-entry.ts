@@ -318,7 +318,7 @@ async function processAttachment(
   const slackCommon = {
     supplierName, companyFile, invoiceNumber: extracted.invoiceNumber, invoiceDate: extracted.invoiceDate,
     totalIncGst: total, gstAmount: extracted.totals.gstAmount, codingSummary, bankCheck: bank,
-    invoiceBank: extracted.bankDetails,
+    invoiceBank: extracted.bankDetails, cardBank,
   }
 
   if (!pass) {

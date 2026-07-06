@@ -18,6 +18,7 @@ export interface AutoEntrySlackInput {
   codingSummary: string | null   // "Cost of Goods - Parts" or "4 lines coded"
   bankCheck: BankCheck
   invoiceBank?: { bsb: string | null; accountNumber: string | null; accountName: string | null } | null
+  cardBank?: { bsb: string | null; accountNumber: string | null; accountName: string | null } | null
   failReasons?: string[]
   adopted?: boolean
   pdfUrl?: string | null
@@ -77,12 +78,15 @@ export function buildAutoEntryBlocks(i: AutoEntrySlackInput): { text: string; bl
     { type: 'section', fields: fields.map(t => ({ type: 'mrkdwn', text: t.slice(0, 2000) })) },
   ]
 
-  // Show the invoice's bank details when they matter (mismatch / unverified).
+  // Show BOTH sides of the bank comparison when it matters (mismatch /
+  // unverified) so the reader can spot the differing digit — or a misread on
+  // a poor scan — without opening MYOB.
   if ((i.bankCheck === 'mismatch' || i.bankCheck === 'unverified') && i.invoiceBank && (i.invoiceBank.bsb || i.invoiceBank.accountNumber)) {
-    blocks.push({
-      type: 'section',
-      text: { type: 'mrkdwn', text: `*Bank details on invoice:* BSB ${i.invoiceBank.bsb || '—'} · Acct ${i.invoiceBank.accountNumber || '—'}${i.invoiceBank.accountName ? ` · ${i.invoiceBank.accountName}` : ''}` },
-    })
+    const fmt = (b: { bsb: string | null; accountNumber: string | null; accountName: string | null }) =>
+      `BSB ${b.bsb || '—'} · Acct ${b.accountNumber || '—'}${b.accountName ? ` · ${b.accountName}` : ''}`
+    const lines = [`*Bank details on invoice:* ${fmt(i.invoiceBank)}`]
+    if (i.cardBank && (i.cardBank.bsb || i.cardBank.accountNumber)) lines.push(`*Bank details on MYOB card:* ${fmt(i.cardBank)}`)
+    blocks.push({ type: 'section', text: { type: 'mrkdwn', text: lines.join('\n') } })
   }
 
   if (i.outcome === 'flagged' && i.failReasons && i.failReasons.length) {
