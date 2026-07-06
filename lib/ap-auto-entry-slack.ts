@@ -20,6 +20,7 @@ export interface AutoEntrySlackInput {
   invoiceBank?: { bsb: string | null; accountNumber: string | null; accountName: string | null } | null
   cardBank?: { bsb: string | null; accountNumber: string | null; accountName: string | null } | null
   sourceMailbox?: string | null
+  supplierTrust?: string | null   // e.g. "✓ Verified — 14 posted · ABN match · known sender"
   failReasons?: string[]
   adopted?: boolean
   pdfUrl?: string | null
@@ -77,6 +78,7 @@ export function buildAutoEntryBlocks(i: AutoEntrySlackInput): { text: string; bl
   const bankBadge = BANK_BADGE[i.bankCheck]
   if (bankBadge) fields.push(`*Payment details:*\n${bankBadge}`)
   if (i.sourceMailbox) fields.push(`*Source:*\n${i.sourceMailbox.split('@')[0]}@`)
+  if (i.supplierTrust) fields.push(`*Supplier trust:*\n${i.supplierTrust}`)
 
   const blocks: SlackBlock[] = [
     { type: 'header', text: { type: 'plain_text', text: headline.slice(0, 150), emoji: true } },

@@ -131,6 +131,69 @@ function classify(att: GraphAttachmentMeta): 'pdf' | SupportedImageMediaType | n
   return null
 }
 
+// ── Supplier trust ───────────────────────────────────────────────────────
+// How well do we KNOW this supplier? (Chris 2026-07-07: "supplier details
+// match, multiple invoices from supplier, high confidence".) Signals:
+//   • posted history — invoices already auto-posted for this card (180 days)
+//   • ABN match — invoice ABN equals the card ABN (deterministic identity)
+//   • known sender — previous posted invoices came from this email domain
+//   • email domain — card email domain matches the sender / invoice email
+// Tiers: 'verified' (≥3 posted AND an identity signal) relaxes the soft
+// confidence gates; 'known' (≥1 posted) behaves as before; 'new' is strict.
+
+export type SupplierTrustTier = 'verified' | 'known' | 'new'
+export interface SupplierTrust {
+  tier: SupplierTrustTier
+  postedCount: number
+  abnMatch: boolean
+  senderKnown: boolean
+  emailDomainMatch: boolean
+  summary: string
+}
+
+async function assessSupplierTrust(
+  c: SupabaseClient,
+  args: { supplierUid: string | null; cardAbn: string | null; cardEmail: string | null; matchedByAbn: boolean; extracted: ExtractedAPInvoice; fromAddress: string | null },
+): Promise<SupplierTrust> {
+  const none: SupplierTrust = { tier: 'new', postedCount: 0, abnMatch: false, senderKnown: false, emailDomainMatch: false, summary: 'first contact — supplier not matched' }
+  if (!args.supplierUid) return none
+
+  const sinceIso = new Date(Date.now() - 180 * 86400_000).toISOString()
+  const { count } = await c.from('ap_auto_entry_log')
+    .select('id', { count: 'exact', head: true })
+    .eq('outcome', 'posted').eq('supplier_uid', args.supplierUid)
+    .gte('created_at', sinceIso)
+  const postedCount = count || 0
+
+  const domainOf = (s: string | null | undefined) => (String(s || '').split('@')[1] || '').toLowerCase() || null
+  const senderDomain = domainOf(args.fromAddress)
+  let senderKnown = false
+  if (senderDomain) {
+    const { count: sc } = await c.from('ap_auto_entry_log')
+      .select('id', { count: 'exact', head: true })
+      .eq('outcome', 'posted').eq('supplier_uid', args.supplierUid)
+      .ilike('from_address', `%@${senderDomain}`)
+      .gte('created_at', sinceIso)
+    senderKnown = (sc || 0) > 0
+  }
+
+  const invoiceAbn = (args.extracted.vendor?.abn || '').replace(/\D/g, '')
+  const abnMatch = args.matchedByAbn || (!!invoiceAbn && invoiceAbn === (args.cardAbn || '').replace(/\D/g, ''))
+  const cardDomain = domainOf(args.cardEmail)
+  const emailDomainMatch = !!cardDomain && (cardDomain === senderDomain || cardDomain === domainOf(args.extracted.vendor?.email))
+
+  const identity = abnMatch || senderKnown || emailDomainMatch
+  const tier: SupplierTrustTier = postedCount >= 3 && identity ? 'verified' : postedCount >= 1 ? 'known' : 'new'
+  const bits = [
+    `${postedCount} posted`,
+    abnMatch ? 'ABN match' : null,
+    senderKnown ? 'known sender' : null,
+    !senderKnown && emailDomainMatch ? 'email domain match' : null,
+  ].filter(Boolean).join(' · ')
+  const summary = tier === 'verified' ? `✓ Verified — ${bits}` : tier === 'known' ? `Known — ${bits}` : `First invoice from this supplier${bits ? ` — ${bits}` : ''}`
+  return { tier, postedCount, abnMatch, senderKnown, emailDomainMatch, summary }
+}
+
 // Compare the invoice's printed bank details against the MYOB supplier card.
 function bankCheck(
   invoiceBank: ExtractedAPInvoice['bankDetails'],
@@ -538,6 +601,17 @@ async function processInvoice(
   const effectiveBank: BankCheck = viaCapricorn ? 'capricorn' : bankExempt ? 'mismatch-exempt' : bank
   const bankTrusted = effectiveBank === 'match' || effectiveBank === 'no-invoice-bank' || effectiveBank === 'mismatch-exempt' || effectiveBank === 'capricorn'
 
+  // Supplier trust: posting history + identity corroboration (ABN / sender /
+  // email domain). A VERIFIED supplier's paperwork earns the benefit of the
+  // doubt on subjective confidence; hard number checks are never relaxed.
+  const trust = await assessSupplierTrust(c, {
+    supplierUid,
+    cardAbn: match?.supplier.abn ?? null,
+    cardEmail: match?.supplier.email ?? null,
+    matchedByAbn: match?.matchedBy === 'abn',
+    extracted, fromAddress: msg.from,
+  })
+
   // Scan whose LINE detail is unreadable but whose HEADER self-reconciles
   // (no totals-mismatch: subtotal + GST = total) with trusted bank evidence:
   // post at the stated total as a single line — bills are entered
@@ -548,12 +622,12 @@ async function processInvoice(
 
   const ignorable: string[] = []
   if (consolidated) ignorable.push('YELLOW:medium-parse-confidence', 'YELLOW:line-sum-mismatch', 'YELLOW:totals-mismatch')
-  else if (bankTrusted) ignorable.push('YELLOW:medium-parse-confidence')
+  else if (bankTrusted || trust.tier === 'verified') ignorable.push('YELLOW:medium-parse-confidence')
   if (scanTotalFallback) ignorable.push('YELLOW:line-sum-mismatch')
-  // A low-confidence read whose printed bank details MATCH the supplier card
-  // is corroborated hard evidence — the scan read well enough to get 10+ bank
-  // digits right (Chris 2026-07-06: Batteries to Go, long-time supplier).
-  const lowConfidenceOverride = effectiveBank === 'match' && !!supplierUid
+  // A low-confidence read posts when corroborated by hard evidence: printed
+  // bank details matching the card (10+ digits read correctly — Batteries to
+  // Go), or a VERIFIED supplier (posting history + identity signals).
+  const lowConfidenceOverride = !!supplierUid && (effectiveBank === 'match' || trust.tier === 'verified')
   if (lowConfidenceOverride) ignorable.push('RED:low-parse-confidence')
   // A matched supplier can ALWAYS be coded now (line rules → smart match →
   // card default → 5-1000 fallback), so account-not-mapped only blocks when
@@ -587,7 +661,7 @@ async function processInvoice(
   const slackCommon = {
     supplierName, companyFile, invoiceNumber: extracted.invoiceNumber, invoiceDate: extracted.invoiceDate,
     totalIncGst: total, gstAmount: extracted.totals.gstAmount, codingSummary, bankCheck: effectiveBank,
-    invoiceBank: extracted.bankDetails, cardBank, sourceMailbox: mailbox,
+    invoiceBank: extracted.bankDetails, cardBank, sourceMailbox: mailbox, supplierTrust: trust.summary,
   }
 
   if (!pass) {
