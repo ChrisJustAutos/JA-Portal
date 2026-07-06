@@ -276,11 +276,12 @@ async function applyAdvisor(
   return out
 }
 
-// ── Slack coaching ticker (#sales-coaching) ──────────────────────────────
-// One line per analysed call, same shape the worker's JA Coach Bot used:
-//   🟢 82/100 Quote given · New enquiry — Graham (Ext 203 — tagged as Tyronne) ⚠️ vs 0400 000 000
-// plus the 2-3 sentence coaching summary underneath. Unscored calls get a
-// "not scored" line. Best-effort — a Slack failure never fails the analysis.
+// ── Slack coaching card (#sales-coaching) ────────────────────────────────
+// Full card per analysed call, matching the worker's JA Coach Bot format plus
+// the call type: advisor @-mention, score, outcome/type/direction/duration,
+// summary, dimension bars, strengths & improvements, and a portal link.
+// Unscored calls get a one-liner. Best-effort — a Slack failure never fails
+// the analysis.
 
 const OUTCOME_LABELS: Record<string, string> = {
   sale: 'Sale', quote_given: 'Quote given', callback_scheduled: 'Callback scheduled',
@@ -294,6 +295,21 @@ function scoreEmoji(score: number): string {
   return ':red_circle:'
 }
 
+// 5-square bar, coloured by the score band (matches the old bot's look).
+function dimBar(v: number): string {
+  const filled = Math.max(0, Math.min(5, Math.round(v / 2)))
+  const sq = v >= 7 ? ':large_green_square:' : v >= 4 ? ':large_yellow_square:' : ':large_red_square:'
+  return sq.repeat(filled) + ':white_large_square:'.repeat(5 - filled)
+}
+
+// Resolve any raw name (transcript OR extension tag — tags can be full names
+// like "Tyronne Wright" / "Dom S") to a roster member: full string first,
+// then the first token.
+function resolveAnyName(roster: RosterRow[], raw: string | null | undefined): RosterRow | null {
+  if (!raw) return null
+  return matchRoster(roster, raw) || matchRoster(roster, String(raw).trim().split(/\s+/)[0])
+}
+
 async function postCoachingSlack(args: {
   call: any
   outcome: string
@@ -301,10 +317,16 @@ async function postCoachingSlack(args: {
   salesScore: number | null
   summary: string | null
   identifiedName: string | null
+  roster: RosterRow[]
+  dimensionScores: Record<string, number> | null
+  dimensionLabels: Record<string, string>
+  observations: any
+  rubricVersion: string
+  costMicroUsd: number
 }): Promise<boolean> {
   const channel = coachingChannel()
   if (!channel) return false
-  const { call, outcome, callTypeId, salesScore, summary, identifiedName } = args
+  const { call, outcome, callTypeId, salesScore, summary, identifiedName, roster, dimensionScores, dimensionLabels, observations, rubricVersion, costMicroUsd } = args
 
   const outcomeText = OUTCOME_LABELS[outcome] || outcome
   const typeText = callTypeId ? ` · ${callTypeLabel(callTypeId)}` : ''
@@ -312,27 +334,58 @@ async function postCoachingSlack(args: {
   const seconds = call.billsec_seconds || call.duration_seconds || 0
   const duration = `${Math.floor(seconds / 60)}m ${seconds % 60}s`
 
-  let text: string
   if (salesScore == null) {
     const emoji = outcome === 'wrong_number' ? ':x:' : outcome === 'callback_scheduled' ? ':date:' : ':information_source:'
-    text = `${emoji} ${outcomeText}${typeText} — ${number} (${duration}) — not scored`
-  } else {
-    // Flag when the transcript says someone other than the extension tag.
-    const tagged = call.agent_name || null
-    const mismatch = identifiedName && tagged && identifiedName.toLowerCase() !== tagged.toLowerCase()
-    const who = identifiedName || tagged || `Ext ${call.agent_ext || '?'}`
-    const extBit = call.agent_ext ? ` (Ext ${call.agent_ext}${mismatch ? ` — tagged as ${tagged}` : ''})` : ''
-    const warn = mismatch ? ' :warning:' : ''
-    text = `${scoreEmoji(salesScore)} ${salesScore}/100 ${outcomeText}${typeText} — ${who}${extBit}${warn} vs ${number}`
+    const text = `${emoji} ${outcomeText}${typeText} — ${number} (${duration}) — not scored`
+    try { return !!(await postMessage({ channel, text })) }
+    catch (e: any) { console.error('[calls-analysis] slack post failed:', e?.message || e); return false }
   }
 
+  // Advisor line. A mismatch is only real when the transcript name and the
+  // extension tag resolve to DIFFERENT roster members — tags carry full names
+  // ("Tyronne Wright") which must not warn against "Tyronne".
+  const idMatch = resolveAnyName(roster, identifiedName)
+  const tagMatch = resolveAnyName(roster, call.agent_name)
+  const mismatch = !!(idMatch && tagMatch && idMatch.name !== tagMatch.name)
+  const who = idMatch?.name || identifiedName || call.agent_name || `Ext ${call.agent_ext || '?'}`
+  const extBit = call.agent_ext ? ` (Ext ${call.agent_ext}${mismatch ? ` — tagged as ${call.agent_name}` : ''})` : ''
+  const warn = mismatch ? ' :warning:' : ''
+
+  const text = `${scoreEmoji(salesScore)} ${salesScore}/100 ${outcomeText}${typeText} — ${who}${extBit}${warn} vs ${number}`
+  const mention = idMatch?.slack_user_id ? `<@${idMatch.slack_user_id}>` : `*${who}*`
+  const direction = call.direction === 'outbound' ? ':arrow_up_small: Outbound' : ':arrow_down_small: Inbound'
+
+  const dims = Object.entries(dimensionScores || {})
+    .filter(([, v]) => typeof v === 'number')
+    .map(([k, v]) => `*${dimensionLabels[k] || k}* ${dimBar(v as number)}  ${v}/10`)
+    .join('\n')
+  const bullets = (a: any): string => (Array.isArray(a) && a.length ? a.map((s: string) => `• ${s}`).join('\n') : '_None noted_')
+
+  const blocks: any[] = [
+    { type: 'section', text: { type: 'mrkdwn', text: `${mention} your call with *${number}* has been analysed.` } },
+    { type: 'section', fields: [
+      { type: 'mrkdwn', text: `*Score*\n${scoreEmoji(salesScore)} *${salesScore}/100*` },
+      { type: 'mrkdwn', text: `*Call type*\n${callTypeLabel(callTypeId) || '—'}` },
+      { type: 'mrkdwn', text: `*Outcome*\n${outcomeText}` },
+      { type: 'mrkdwn', text: `*Advisor*\n*${who}*${extBit}${warn}` },
+      { type: 'mrkdwn', text: `*Direction*\n${direction}` },
+      { type: 'mrkdwn', text: `*Duration*\n${duration}` },
+    ] },
+  ]
+  if (summary) blocks.push({ type: 'section', text: { type: 'mrkdwn', text: `*Summary*\n${summary.slice(0, 2900)}` } })
+  if (dims) blocks.push({ type: 'section', text: { type: 'mrkdwn', text: `*Dimensions*\n${dims}`.slice(0, 2900) } })
+  blocks.push({ type: 'section', fields: [
+    { type: 'mrkdwn', text: `*✓ Strengths*\n${bullets(observations?.strengths)}`.slice(0, 2000) },
+    { type: 'mrkdwn', text: `*△ Improvements*\n${bullets(observations?.improvements)}`.slice(0, 2000) },
+  ] })
+  const qa = typeof observations?.questions_asked === 'number' ? observations.questions_asked : '—'
+  const named = typeof observations?.name_used_count === 'number' ? observations.name_used_count : '—'
+  blocks.push({ type: 'context', elements: [{
+    type: 'mrkdwn',
+    text: `:question: Questions asked: *${qa}* · :bust_in_silhouette: Customer name used: *${named}* · <https://justautos.app/calls?selected=${call.id}|View in portal> · Rubric ${rubricVersion} · $${(costMicroUsd / 1_000_000).toFixed(4)}`,
+  }] })
+
   try {
-    const blocks = summary && salesScore != null
-      ? [
-          { type: 'section', text: { type: 'mrkdwn', text } },
-          { type: 'context', elements: [{ type: 'mrkdwn', text: summary.slice(0, 2900) }] },
-        ]
-      : undefined
     const posted = await postMessage({ channel, text, blocks })
     return !!posted
   } catch (e: any) {
@@ -446,13 +499,16 @@ export async function analyseCall(callId: string, opts: { dryRun?: boolean; rubr
 
   const advisor = await applyAdvisor(c, call, roster, advisorName, advisorConfidence)
 
-  // Use the CANONICAL roster name in Slack — a transcription slip ("Don" for
-  // Dom) must not read as a different person or a false ext-mismatch warning.
-  const canonicalName = matchRoster(roster, advisorName)?.name || advisorName
+  const dimensionLabels: Record<string, string> = {}
+  for (const d of (callType?.dimensions || (Array.isArray(rubric.dimensions) ? rubric.dimensions : []))) {
+    if (d?.id) dimensionLabels[d.id] = d.label || d.id
+  }
 
   const slacked = await postCoachingSlack({
     call, outcome: parsed.outcome, callTypeId: callType?.id ?? null, salesScore,
-    summary: parsed.summary || null, identifiedName: canonicalName,
+    summary: parsed.summary || null, identifiedName: advisorName, roster,
+    dimensionScores: salesScore == null ? null : parsed.dimension_scores,
+    dimensionLabels, rubricVersion: rubric.version, costMicroUsd, observations,
   })
 
   // Close out any queued job rows for this call so the UI stops polling.
