@@ -329,14 +329,31 @@ async function processAttachment(
       if (!ranges?.length) ranges = Array.from({ length: pages }, (_, i) => ({ from: i + 1, to: i + 1 }))
       if (ranges.length > MAX_BATCH_SEGMENTS) console.warn(`[ap-auto-entry] batch has ${ranges.length} documents — processing first ${MAX_BATCH_SEGMENTS}`)
 
+      // Segments log under suffixed ids (`#p2-3`); a MARKER row under the raw
+      // attachment id is written only when the WHOLE batch has been processed.
+      // A run that dies mid-batch (Opus reads are slow; maxDuration is 300s)
+      // therefore resumes on the next run: already-done segments are skipped
+      // via their log rows, the rest process, THEN the marker + leftovers land.
       const items: AutoEntryItem[] = []
       const segments = ranges.slice(0, MAX_BATCH_SEGMENTS)
-      for (let idx = 0; idx < segments.length; idx++) {
-        const r = segments[idx]
-        // The FIRST segment logs under the raw attachment id so the seen-check
-        // dedups the whole attachment; later segments get a #p suffix (unique).
-        const attId = idx === 0 ? att.id : `${att.id}#p${r.from}-${r.to}`
+      const segId = (r: PageRange) => `${att.id}#p${r.from}-${r.to}`
+      const { data: priorRows } = await c.from('ap_auto_entry_log')
+        .select('graph_attachment_id, attachment_name, supplier_name, invoice_number, amount, outcome, fail_reasons, error')
+        .in('graph_attachment_id', segments.map(segId))
+      const prior = new Map((priorRows || []).map((p: any) => [p.graph_attachment_id, p]))
+
+      for (const r of segments) {
+        const attId = segId(r)
         const attName = `${att.name || 'scan.pdf'} (p${r.from}${r.to > r.from ? `-${r.to}` : ''} of ${pages})`
+
+        // Already processed in an earlier (timed-out) run — carry its outcome
+        // forward so the leftovers email still accounts for every segment.
+        const done: any = prior.get(attId)
+        if (done) {
+          items.push({ messageId: msg.id, attachmentId: attId, attachmentName: done.attachment_name || attName, pages: r, supplierName: done.supplier_name, invoiceNumber: done.invoice_number, amount: done.amount != null ? Number(done.amount) : null, outcome: done.outcome, bankCheck: 'skipped', failReasons: done.fail_reasons || [], error: done.error || undefined })
+          continue
+        }
+
         try {
           const segBytes = await splitPdfRange(bytes, r.from, r.to)
           items.push({ ...(await processInvoice(c, ctx, { bytes: segBytes, b64: segBytes.toString('base64'), kind: 'pdf', attId, attName, isScan: true })), pages: r })
@@ -347,11 +364,15 @@ async function processAttachment(
         }
       }
 
-      // Partially-entered batch → replace the inbox copy with a LEFTOVERS email
-      // containing only the un-entered pages, so what remains in the inbox is
-      // exactly what still needs a human (the original moves to the processed
-      // folder because at least one invoice posted).
-      if (!ctx.dryRun) await sendBatchLeftovers(ctx, att.name || 'scan.pdf', bytes, items)
+      // Whole batch processed → leftovers email for a mixed result, then the
+      // completion marker (raw attachment id) that stops future re-processing.
+      if (!ctx.dryRun) {
+        await sendBatchLeftovers(ctx, att.name || 'scan.pdf', bytes, items)
+        await logRow(c, { mailbox, companyFile: ctx.companyFile, msg, attId: att.id, attName: `${att.name || 'scan.pdf'} (batch marker — ${segments.length} document${segments.length === 1 ? '' : 's'})` }, {
+          outcome: 'skipped_not_invoice',
+          error: ranges.length > MAX_BATCH_SEGMENTS ? `batch truncated: ${ranges.length} documents, processed first ${MAX_BATCH_SEGMENTS}` : null,
+        })
+      }
 
       return items
     }
