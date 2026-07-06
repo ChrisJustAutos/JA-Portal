@@ -295,6 +295,18 @@ async function sendBatchLeftovers(
   }
 }
 
+// Suppliers whose invoices are paid off a monthly STATEMENT reconciliation
+// (not by the bank details printed per-invoice), so a bank-details mismatch
+// is expected and must not block posting (Chris 2026-07-06: Ken Mills is a
+// statement account, reconciled before paying at EOM). Matching is the same
+// space-insensitive name/sender scheme as the consolidated list.
+function bankExemptSupplier(...candidates: (string | null | undefined)[]): boolean {
+  const raw = (process.env.AP_BANK_EXEMPT_SUPPLIERS ?? 'ken mills').trim()
+  const patterns = raw.split(/[,;]+/).map(p => p.trim().toLowerCase().replace(/\s+/g, '')).filter(Boolean)
+  const haystacks = candidates.filter(Boolean).map(s => String(s).toLowerCase().replace(/\s+/g, ''))
+  return haystacks.some(h => patterns.some(p => h.includes(p)))
+}
+
 // BATCHED-scan sources (several paper invoices per PDF). The Epson scanner
 // SENDS FROM scans@ into the accounts inbox, so this matches the SENDER as
 // well as the receiving mailbox. Their multi-page PDFs are segmented into
@@ -508,11 +520,21 @@ async function processInvoice(
   // neutral, not suspicious — parts counter dockets (Ken Mills) carry none
   // and could otherwise never pass. A mismatch or unverified card still
   // blocks the override, and low confidence is always a hard stop.
+  // Statement-account suppliers (Ken Mills): invoices are reconciled against
+  // the monthly statement before EOM payment, so a printed-bank mismatch is
+  // expected and must not block — shown on the card, never paid off it.
+  const bankExempt = bank === 'mismatch' && bankExemptSupplier(supplierName, msg.from)
+  const effectiveBank: BankCheck = bankExempt ? 'mismatch-exempt' : bank
+
   const ignorable: string[] = []
   if (consolidated) ignorable.push('YELLOW:medium-parse-confidence', 'YELLOW:line-sum-mismatch', 'YELLOW:totals-mismatch')
-  else if (bank === 'match' || bank === 'no-invoice-bank') ignorable.push('YELLOW:medium-parse-confidence')
+  else if (effectiveBank === 'match' || effectiveBank === 'no-invoice-bank' || effectiveBank === 'mismatch-exempt') ignorable.push('YELLOW:medium-parse-confidence')
+  // A matched supplier can ALWAYS be coded now (line rules → smart match →
+  // card default → 5-1000 fallback), so account-not-mapped only blocks when
+  // the SUPPLIER couldn't be matched.
+  if (supplierUid) ignorable.push('YELLOW:account-not-mapped')
   const failReasons: string[] = triage.triageReasons.filter(r => !ignorable.includes(r))
-  if (bank === 'mismatch') failReasons.push('RED:bank-mismatch')
+  if (effectiveBank === 'mismatch') failReasons.push('RED:bank-mismatch')
 
   // Cross-source duplicate guard. The same invoice can arrive twice — the
   // supplier's email into accounts@ AND a paper copy scanned to scans@. An
@@ -538,7 +560,7 @@ async function processInvoice(
   // Common Slack fields.
   const slackCommon = {
     supplierName, companyFile, invoiceNumber: extracted.invoiceNumber, invoiceDate: extracted.invoiceDate,
-    totalIncGst: total, gstAmount: extracted.totals.gstAmount, codingSummary, bankCheck: bank,
+    totalIncGst: total, gstAmount: extracted.totals.gstAmount, codingSummary, bankCheck: effectiveBank,
     invoiceBank: extracted.bankDetails, cardBank, sourceMailbox: mailbox,
   }
 
@@ -548,15 +570,15 @@ async function processInvoice(
       const staged = await stageAndSign(c, msg, attId, bytes, kind).catch(() => null)
       const withUrl = staged ? buildAutoEntryBlocks({ ...slackCommon, outcome: 'flagged', failReasons, pdfUrl: staged.url }) : built
       const ts = await sendSlack(withUrl)
-      await logRow(c, { mailbox, companyFile, msg, attId, attName }, { outcome: 'flagged', supplierName, supplierUid, invoiceNumber: extracted.invoiceNumber, invoiceDate: extracted.invoiceDate, amount: total, failReasons, bankCheck: bank, pdfStoragePath: staged?.path || null, slackTs: ts })
+      await logRow(c, { mailbox, companyFile, msg, attId, attName }, { outcome: 'flagged', supplierName, supplierUid, invoiceNumber: extracted.invoiceNumber, invoiceDate: extracted.invoiceDate, amount: total, failReasons, bankCheck: effectiveBank, pdfStoragePath: staged?.path || null, slackTs: ts })
     }
-    return { ...base, supplierName, invoiceNumber: extracted.invoiceNumber, amount: total, outcome: 'flagged', bankCheck: bank, failReasons, slackText: built.text }
+    return { ...base, supplierName, invoiceNumber: extracted.invoiceNumber, amount: total, outcome: 'flagged', bankCheck: effectiveBank, failReasons, slackText: built.text }
   }
 
   // PASS → post to MYOB (tax-inclusive, headless), then Slack success.
   if (dryRun) {
     const built = buildAutoEntryBlocks({ ...slackCommon, outcome: 'posted' })
-    return { ...base, supplierName, invoiceNumber: extracted.invoiceNumber, amount: total, outcome: 'posted', bankCheck: bank, failReasons: [], slackText: built.text }
+    return { ...base, supplierName, invoiceNumber: extracted.invoiceNumber, amount: total, outcome: 'posted', bankCheck: effectiveBank, failReasons: [], slackText: built.text }
   }
 
   // Consolidated invoice → bill the stated total as ONE line. The parsed
@@ -590,14 +612,14 @@ async function processInvoice(
     const reasons = [...failReasons, `RED:post-failed:${posted.reason || 'unknown'}`]
     const built = buildAutoEntryBlocks({ ...slackCommon, outcome: 'flagged', failReasons: reasons, pdfUrl: staged?.url })
     const ts = await sendSlack(built)
-    await logRow(c, { mailbox, companyFile, msg, attId, attName }, { outcome: 'error', supplierName, supplierUid, invoiceNumber: extracted.invoiceNumber, invoiceDate: extracted.invoiceDate, amount: total, failReasons: reasons, bankCheck: bank, error: posted.reason || null, pdfStoragePath: staged?.path || null, slackTs: ts })
-    return { ...base, supplierName, invoiceNumber: extracted.invoiceNumber, amount: total, outcome: 'error', bankCheck: bank, failReasons: reasons, error: posted.reason }
+    await logRow(c, { mailbox, companyFile, msg, attId, attName }, { outcome: 'error', supplierName, supplierUid, invoiceNumber: extracted.invoiceNumber, invoiceDate: extracted.invoiceDate, amount: total, failReasons: reasons, bankCheck: effectiveBank, error: posted.reason || null, pdfStoragePath: staged?.path || null, slackTs: ts })
+    return { ...base, supplierName, invoiceNumber: extracted.invoiceNumber, amount: total, outcome: 'error', bankCheck: effectiveBank, failReasons: reasons, error: posted.reason }
   }
 
   const built = buildAutoEntryBlocks({ ...slackCommon, codingSummary: posted.codingDetail || slackCommon.codingSummary, outcome: 'posted', adopted: posted.adopted, pdfUrl: staged?.url })
   const ts = await sendSlack(built)
-  await logRow(c, { mailbox, companyFile, msg, attId, attName }, { outcome: 'posted', supplierName, supplierUid, invoiceNumber: extracted.invoiceNumber, invoiceDate: extracted.invoiceDate, amount: total, bankCheck: bank, myobBillUid: posted.billUid || null, pdfStoragePath: staged?.path || null, slackTs: ts })
-  return { ...base, supplierName, invoiceNumber: extracted.invoiceNumber, amount: total, outcome: 'posted', bankCheck: bank, failReasons: [], billUid: posted.billUid, adopted: posted.adopted }
+  await logRow(c, { mailbox, companyFile, msg, attId, attName }, { outcome: 'posted', supplierName, supplierUid, invoiceNumber: extracted.invoiceNumber, invoiceDate: extracted.invoiceDate, amount: total, bankCheck: effectiveBank, myobBillUid: posted.billUid || null, pdfStoragePath: staged?.path || null, slackTs: ts })
+  return { ...base, supplierName, invoiceNumber: extracted.invoiceNumber, amount: total, outcome: 'posted', bankCheck: effectiveBank, failReasons: [], billUid: posted.billUid, adopted: posted.adopted }
 }
 
 // Post a sample card to the configured webhook — verifies the channel + format

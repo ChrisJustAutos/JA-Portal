@@ -5,7 +5,7 @@
 
 import type { SlackBlock } from './slack'
 
-export type BankCheck = 'match' | 'mismatch' | 'unverified' | 'no-invoice-bank' | 'skipped'
+export type BankCheck = 'match' | 'mismatch' | 'mismatch-exempt' | 'unverified' | 'no-invoice-bank' | 'skipped'
 
 export interface AutoEntrySlackInput {
   outcome: 'posted' | 'flagged'
@@ -31,6 +31,7 @@ const money = (n: number | null | undefined) =>
 const BANK_BADGE: Record<BankCheck, string> = {
   match:            '✅ bank matches MYOB card',
   mismatch:         '🚨 bank details DIFFER from MYOB card',
+  'mismatch-exempt':'⚠️ bank differs — statement account, reconciled at EOM',
   unverified:       '⚠️ no bank details on MYOB card — unverified',
   'no-invoice-bank':'— no bank details on invoice',
   skipped:          '',
@@ -84,7 +85,7 @@ export function buildAutoEntryBlocks(i: AutoEntrySlackInput): { text: string; bl
   // Show BOTH sides of the bank comparison when it matters (mismatch /
   // unverified) so the reader can spot the differing digit — or a misread on
   // a poor scan — without opening MYOB.
-  if ((i.bankCheck === 'mismatch' || i.bankCheck === 'unverified') && i.invoiceBank && (i.invoiceBank.bsb || i.invoiceBank.accountNumber)) {
+  if ((i.bankCheck === 'mismatch' || i.bankCheck === 'mismatch-exempt' || i.bankCheck === 'unverified') && i.invoiceBank && (i.invoiceBank.bsb || i.invoiceBank.accountNumber)) {
     const fmt = (b: { bsb: string | null; accountNumber: string | null; accountName: string | null }) =>
       `BSB ${b.bsb || '—'} · Acct ${b.accountNumber || '—'}${b.accountName ? ` · ${b.accountName}` : ''}`
     const lines = [`*Bank details on invoice:* ${fmt(i.invoiceBank)}`]

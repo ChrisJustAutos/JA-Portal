@@ -827,6 +827,21 @@ export async function postFoundInvoiceToMyob(args: {
   const accountUids: string[] = []
   const accountNames: string[] = []
   let usedSmart = false
+  // Final fallback for a MATCHED supplier with no card default and no rule /
+  // smart match: post to the catch-all purchases account (Chris 2026-07-06 —
+  // VPS 5-1000 "Parts & Acc Purchases") — the coding shows on the Slack card,
+  // so a miscode is visible and fixable.
+  let fallbackAcc: { uid: string; name: string } | null = null
+  async function fallbackAccount(): Promise<{ uid: string; name: string } | null> {
+    if (fallbackAcc) return fallbackAcc
+    const displayId = (process.env.AP_FALLBACK_EXPENSE_ACCOUNT || '5-1000').trim()
+    if (!displayId) return null
+    const { data } = await c.from('myob_accounts_cache')
+      .select('uid, display_id, name')
+      .eq('myob_company_file', companyFile).eq('display_id', displayId).maybeSingle()
+    if (data?.uid) fallbackAcc = { uid: data.uid, name: `${data.display_id} ${data.name || ''}`.trim() }
+    return fallbackAcc
+  }
   for (const l of wlines) {
     const r = await resolveLineAccount(c, { supplier_uid: supplierUid, myob_company_file: companyFile, description: l.description, part_number: l.partNumber })
     if (r.account_uid) {
@@ -839,7 +854,9 @@ export async function postFoundInvoiceToMyob(args: {
     } else if (defaultAcc) {
       accountUids.push(defaultAcc); accountNames.push(defaultName)
     } else {
-      return { posted: false, reason: `line "${l.description.slice(0, 40)}" couldn't be coded and the supplier card has no default account` }
+      const fb = await fallbackAccount()
+      if (!fb) return { posted: false, reason: `line "${l.description.slice(0, 40)}" couldn't be coded and the supplier card has no default account` }
+      accountUids.push(fb.uid); accountNames.push(`${fb.name} (fallback)`)
     }
   }
   const coding: 'supplier-default' | 'smart-lines' = usedSmart ? 'smart-lines' : 'supplier-default'
