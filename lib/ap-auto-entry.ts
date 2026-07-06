@@ -150,7 +150,7 @@ export async function runAutoEntry(opts: { dryRun?: boolean; sinceDays?: number;
   const enabled = autoEntryEnabled()
   const companyFile: CompanyFileLabel = 'VPS'
   const sinceDays = Math.max(1, Math.min(Number(opts.sinceDays) || 7, 60))
-  const maxMessages = Math.max(1, Math.min(Number(opts.maxMessages) || 40, 100))
+  const maxMessages = Math.max(1, Math.min(Number(opts.maxMessages) || 100, 100))
   const sinceIso = new Date(Date.now() - sinceDays * 86400_000).toISOString()
   const c = sb()
   const folderName = processedFolder()
@@ -204,9 +204,6 @@ async function runMailbox(
   }
 
   for (const msg of messages) {
-    // Leftovers emails hold the invoices the scanner already couldn't handle —
-    // they exist FOR the human and are never re-processed.
-    if ((msg.subject || '').includes(LEFTOVER_PREFIX)) continue
     let atts: GraphAttachmentMeta[]
     try { atts = await listAttachmentMeta(mailbox, msg.id) } catch { continue }
     let anyPosted = false
@@ -256,8 +253,9 @@ async function runMailbox(
 }
 
 // Subject marker for the residual "still needs a human" email of a partially
-// entered batch. The scanner must NEVER process these (they're by definition
-// the invoices it already couldn't handle) — matched in the message loop.
+// entered batch. Leftovers emails ARE re-processed (once each, via the normal
+// dedup) so improved rules/models retry the remaining invoices directly from
+// the leftovers PDF; the marker mainly drives batch treatment + naming.
 const LEFTOVER_PREFIX = '[AP leftovers]'
 
 // A partially-entered batch: some pages posted to MYOB, some didn't. Email a
@@ -274,6 +272,8 @@ async function sendBatchLeftovers(
   const posted = items.filter(i => i.outcome === 'posted')
   const leftovers = items.filter(i => i.outcome !== 'posted' && i.pages)
   if (!posted.length || !leftovers.length) return
+  // A leftovers email can itself be re-processed — don't stack the prefix.
+  attName = attName.replace(/^(LEFTOVERS )+/, '')
   const esc = (s: any) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
   try {
     const residual = await extractPageRanges(bytes, leftovers.map(i => i.pages!))
@@ -328,9 +328,16 @@ async function processAttachment(
   const b64 = await getAttachmentBase64(mailbox, msg.id, att.id)
   const bytes = Buffer.from(b64, 'base64')
 
+  // Leftovers emails are re-processable retry vehicles (Chris 2026-07-06):
+  // after a rule/model improvement the remaining invoices retry from the
+  // leftovers PDF itself. Safe from loops — each (message, attachment) only
+  // ever processes once via the dedup log, and a NEW leftovers generation is
+  // only born when at least one invoice posts, so the chain shrinks to zero.
+  const isLeftover = (msg.subject || '').includes(LEFTOVER_PREFIX)
+
   // Batched scan? Segment the PDF into individual documents and process each
   // one as its own invoice (own fact-check, MYOB bill, Slack card, log row).
-  if (kind === 'pdf' && isBatchSource(mailbox, msg.from)) {
+  if (kind === 'pdf' && (isBatchSource(mailbox, msg.from) || isLeftover)) {
     let pages = 0
     try { pages = await pdfPageCount(bytes) } catch { /* unreadable pdf — let the single path report it */ }
     if (pages > 1) {
@@ -414,7 +421,7 @@ async function processAttachment(
     }
   }
 
-  return [await processInvoice(c, ctx, { bytes, b64, kind, attId: att.id, attName: att.name || '', isScan: isBatchSource(mailbox, msg.from) })]
+  return [await processInvoice(c, ctx, { bytes, b64, kind, attId: att.id, attName: att.name || '', isScan: isBatchSource(mailbox, msg.from) || isLeftover })]
 }
 
 // Scanned batch segments are photographed paper, not digital PDFs — weaker
