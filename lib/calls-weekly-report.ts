@@ -89,6 +89,7 @@ export interface WeeklyReportResult {
   posted: boolean
   emailed?: boolean
   costMicroUsd: number
+  skipped?: string           // idempotency: already sent recently
   // dry-run payload
   narrative?: any
 }
@@ -383,8 +384,41 @@ function reportEmailHtml(advisors: AdvisorWeek[], narrative: any, weekLabel: str
   </div>`
 }
 
-export async function runWeeklyReport(opts: { dryRun?: boolean; days?: number } = {}): Promise<WeeklyReportResult> {
+// Pull a notable call's audio out of storage for direct playback from the
+// email. Size-capped — anything huge keeps the portal button instead.
+const MAX_AUDIO_ATTACHMENT_BYTES = 18 * 1024 * 1024
+async function recordingAttachment(call: NotableCall, label: string): Promise<{ name: string; contentType: string; content: Buffer } | null> {
+  try {
+    const c = sb()
+    const { data: row } = await c.from('calls').select('recording_url, recording_file, has_recording').eq('id', call.callId).maybeSingle()
+    if (!row?.has_recording || !row.recording_url || row.recording_url === 'MISSING') return null
+    const { data: blob, error } = await c.storage.from('call-recordings').download(row.recording_url)
+    if (error || !blob) return null
+    const bytes = Buffer.from(await blob.arrayBuffer())
+    if (bytes.byteLength > MAX_AUDIO_ATTACHMENT_BYTES) return null
+    const ext = (row.recording_file || row.recording_url).split('.').pop()?.toLowerCase() || 'wav'
+    const contentType = ext === 'mp3' ? 'audio/mpeg' : ext === 'ogg' ? 'audio/ogg' : 'audio/wav'
+    const safe = `${label} - ${call.advisor} (${call.score} of 100)`.replace(/[^\w ()-]/g, '')
+    return { name: `${safe}.${ext}`, contentType, content: bytes }
+  } catch (e: any) {
+    console.error('[weekly-report] recording fetch failed:', e?.message || e)
+    return null
+  }
+}
+
+export async function runWeeklyReport(opts: { dryRun?: boolean; days?: number; force?: boolean } = {}): Promise<WeeklyReportResult> {
   const days = Math.max(3, Math.min(Number(opts.days) || 7, 31))
+
+  // Idempotency: a browser prefetch / double-click / cron+manual overlap must
+  // not send the report twice. One send per ~20h unless ?force=1.
+  const c = sb()
+  if (!opts.dryRun && !opts.force) {
+    const { data: state } = await c.from('sync_state').select('last_synced_at').eq('id', 'calls_weekly_report').maybeSingle()
+    if (state?.last_synced_at && Date.now() - new Date(state.last_synced_at).getTime() < 20 * 3600_000) {
+      return { weekLabel: 'skipped', advisors: 0, callsAnalysed: 0, posted: false, emailed: false, costMicroUsd: 0, skipped: `already sent ${state.last_synced_at} — add ?force=1 to resend` }
+    }
+  }
+
   const { advisors, total, weekLabel, notable } = await fetchWeek(days)
   if (!advisors.length) return { weekLabel, advisors: 0, callsAnalysed: total, posted: false, costMicroUsd: 0 }
 
@@ -405,6 +439,16 @@ export async function runWeeklyReport(opts: { dryRun?: boolean; days?: number } 
         const n = (parsed.advisors || []).find((x: any) => x.name === week.name) || {}
         attachments.push({ name: `Weekly Coaching - ${week.name.replace(/[^\w -]/g, '')}.pdf`, contentType: 'application/pdf', content: await renderAdvisorReportPdf(week, n, weekLabel) })
       } catch (e: any) { console.error(`[weekly-report] pdf failed for ${week.name}:`, e?.message || e) }
+    }
+
+    // The two review recordings, playable straight from the email client.
+    if (notable.best) {
+      const att = await recordingAttachment(notable.best, 'Call of the week')
+      if (att) attachments.push(att)
+    }
+    if (notable.worst) {
+      const att = await recordingAttachment(notable.worst, 'Learning call')
+      if (att) attachments.push(att)
     }
 
     const { to, cc } = reportRecipients()
@@ -443,6 +487,11 @@ export async function runWeeklyReport(opts: { dryRun?: boolean; days?: number } 
       console.error(`[weekly-report] advisor post failed for ${week.name}:`, e?.message || e)
     }
   }
+
+  // Record the send for idempotency.
+  try {
+    await c.from('sync_state').upsert({ id: 'calls_weekly_report', last_synced_at: new Date().toISOString() })
+  } catch (e: any) { console.error('[weekly-report] sync_state upsert failed:', e?.message || e) }
 
   return { weekLabel, advisors: advisors.length, callsAnalysed: total, posted: true, emailed, costMicroUsd }
 }

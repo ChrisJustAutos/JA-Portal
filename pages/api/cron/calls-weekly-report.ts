@@ -31,6 +31,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const result = await runWeeklyReport({
       dryRun: req.query.dry === '1',
       days: req.query.days ? Number(req.query.days) : undefined,
+      force: req.query.force === '1',
     })
     return res.status(200).json({ ok: true, ...result })
   } catch (e: any) {
