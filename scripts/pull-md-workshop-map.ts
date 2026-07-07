@@ -273,7 +273,10 @@ async function main() {
       const a = c?.address
       if (a && typeof a === 'object') {
         const suburb = S(a.suburb) ?? S(a.city)
-        const state = S(a.state)
+        // MD's state field is free text ("Queensland", "Cairns"…) — normalise
+        // to the short code so QLD isn't split across three labels downstream.
+        const rawState = S(a.state)
+        const state = rawState ? (STATES[rawState.toUpperCase().replace(/\.$/, '')] ?? rawState) : null
         const postcode = S(a.postcode) ?? S(a.post_code)
         if (suburb || postcode) return { suburb, state, postcode }
       }
