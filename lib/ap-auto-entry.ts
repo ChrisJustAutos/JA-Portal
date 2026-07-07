@@ -746,9 +746,13 @@ async function processInvoice(
 
   if (!posted.posted) {
     const reasons = [...failReasons, `RED:post-failed:${posted.reason || 'unknown'}`]
-    const built = buildAutoEntryBlocks({ ...slackCommon, outcome: 'flagged', failReasons: reasons, pdfUrl: staged?.url })
+    // Post-failed cards carry the Approve button too (a staged PDF exists, so
+    // approveAndPost can re-extract + retry with a human vouching) — 160370266
+    // showed up buttonless because only the triage-flag branch passed one.
+    const rowId = randomUUID()
+    const built = buildAutoEntryBlocks({ ...slackCommon, outcome: 'flagged', failReasons: reasons, pdfUrl: staged?.url, approveValue: staged ? rowId : null })
     const ts = await sendSlack(built)
-    await logRow(c, { mailbox, companyFile, msg, attId, attName }, { outcome: 'error', supplierName, supplierUid, invoiceNumber: extracted.invoiceNumber, invoiceDate: extracted.invoiceDate, amount: total, failReasons: reasons, bankCheck: effectiveBank, error: posted.reason || null, pdfStoragePath: staged?.path || null, slackTs: ts })
+    await logRow(c, { mailbox, companyFile, msg, attId, attName }, { id: rowId, outcome: 'error', supplierName, supplierUid, invoiceNumber: extracted.invoiceNumber, invoiceDate: extracted.invoiceDate, amount: total, failReasons: reasons, bankCheck: effectiveBank, error: posted.reason || null, pdfStoragePath: staged?.path || null, slackTs: ts })
     return { ...base, supplierName, invoiceNumber: extracted.invoiceNumber, amount: total, outcome: 'error', bankCheck: effectiveBank, failReasons: reasons, error: posted.reason }
   }
 

@@ -790,33 +790,40 @@ export async function postFoundInvoiceToMyob(args: {
   const c = sb()
   const { companyFile, supplierUid, supplierName, extracted, statementAmount } = args
   const invoiceNumber = extracted.invoiceNumber
-  const total = extracted.totals.totalIncGst
+  // Credit notes post as bills with NEGATIVE totals (buildServiceBillBody
+  // negates everything when isCreditNote). The extractor's contract returns
+  // POSITIVE magnitudes with isCreditNote as the sign flag; abs() guards an
+  // extractor that printed the negatives anyway.
+  const isCredit = extracted.isCreditNote === true
+  const totalRaw = extracted.totals.totalIncGst
+  const total = totalRaw == null ? null : Math.abs(totalRaw)
 
   // ── Confidence gate ── (anything uncertain → don't post; caller reports it)
   if (!invoiceNumber) return { posted: false, reason: 'no invoice number parsed' }
   if (!extracted.invoiceDate) return { posted: false, reason: 'no invoice date parsed' }
   if (total == null) return { posted: false, reason: 'no invoice total parsed' }
-  if (!(total > 0)) return { posted: false, reason: `invoice total is ${total} — refusing to auto-post a zero/negative bill` }
+  if (!(total > 0)) return { posted: false, reason: `invoice total is ${total} — refusing to auto-post a zero-value bill` }
+  if (totalRaw != null && totalRaw < 0 && !isCredit) return { posted: false, reason: `negative total ($${totalRaw.toFixed(2)}) but not marked as a credit note — enter manually` }
   if (extracted.parseConfidence === 'low' && !args.acceptLowConfidence) return { posted: false, reason: 'low parse confidence' }
-  if (extracted.isCreditNote) return { posted: false, reason: 'looks like a credit note — enter manually' }
   if (statementAmount != null && Math.abs(Math.abs(statementAmount) - total) > 0.05) {
     return { posted: false, reason: `amount mismatch (statement $${Math.abs(statementAmount).toFixed(2)} vs invoice $${total.toFixed(2)})` }
   }
 
   // ── Working line list (synthesise one line if the invoice had no detail) ──
+  // Magnitudes only — the builder applies the credit-note sign flip.
   interface WLine { description: string; lineTotalExGst: number; taxCode: string; partNumber: string | null }
   const rawLines = extracted.lineItems || []
   let wlines: WLine[]
   if (rawLines.length > 0) {
     wlines = rawLines.map(li => ({
       description: [li.partNumber, li.description].filter(Boolean).join(' — ') || 'AP line',
-      lineTotalExGst: li.lineTotalExGst ?? 0,
+      lineTotalExGst: isCredit ? Math.abs(li.lineTotalExGst ?? 0) : (li.lineTotalExGst ?? 0),
       taxCode: li.taxCode || 'GST',
       partNumber: li.partNumber,
     }))
   } else {
-    const sub = extracted.totals.subtotalExGst ?? round2(total / (1 + GST_RATE))
-    wlines = [{ description: `Invoice ${invoiceNumber}`, lineTotalExGst: sub, taxCode: 'GST', partNumber: null }]
+    const subRaw = extracted.totals.subtotalExGst ?? round2(total / (1 + GST_RATE))
+    wlines = [{ description: `${isCredit ? 'Credit note' : 'Invoice'} ${invoiceNumber}`, lineTotalExGst: Math.abs(subRaw), taxCode: 'GST', partNumber: null }]
   }
 
   // ── Coding: PER LINE — a line-account rule / strong history wins for that
@@ -889,10 +896,10 @@ export async function postFoundInvoiceToMyob(args: {
       viaCapricorn: extracted.capricorn?.via,
       capricornReference: extracted.capricorn?.reference,
       poNumber: extracted.poNumber,
-      isCreditNote: false,
+      isCreditNote: isCredit,
       totalIncGst: total,
-      gstAmount: extracted.totals.gstAmount,
-      subtotalExGst: extracted.totals.subtotalExGst,
+      gstAmount: extracted.totals.gstAmount == null ? null : Math.abs(extracted.totals.gstAmount),
+      subtotalExGst: extracted.totals.subtotalExGst == null ? null : Math.abs(extracted.totals.subtotalExGst),
       lines: wlines.map((l, i) => ({ description: l.description, accountUid: accountUids[i], lineTotalExGst: l.lineTotalExGst, taxCode: l.taxCode })),
       gstUid, freUid,
       // Enter statement-automation bills tax-inclusive so the bill total matches
