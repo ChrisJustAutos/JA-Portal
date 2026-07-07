@@ -195,10 +195,28 @@ async function execSearchMdStock(input: { query: string }): Promise<string> {
     return `Nothing in MechanicDesk stock matching "${q}". Double-check the part number, or it may not be a tracked stock item.`
   }
 
-  const top = rows.slice(0, MD_STOCK_LIMIT)
+  // Precision over recall (Chris 2026-07-07): when someone asks for a SPECIFIC
+  // part number, answer with THAT part only — not a pile of similar SKUs.
+  //   1. Exact SKU (ignoring case/dashes/spaces)      → just those row(s).
+  //   2. Part-number fragment (digits, ≥4 chars) that
+  //      appears inside some SKUs (e.g. "300ffm")     → only the containing SKUs.
+  //   3. Otherwise (name-style query like "airbox")   → ranked fuzzy list.
+  const norm = (s: any) => String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, '')
+  const qNorm = norm(q)
+  let picked = rows
+  let fuzzy = true
+  const exact = rows.filter((r: any) => norm(r.stock_number) === qNorm)
+  if (exact.length) {
+    picked = exact; fuzzy = false
+  } else if (/\d/.test(qNorm) && qNorm.length >= 4) {
+    const containing = rows.filter((r: any) => norm(r.stock_number).includes(qNorm))
+    if (containing.length) { picked = containing.slice(0, 5); fuzzy = false }
+  }
+
+  const top = picked.slice(0, MD_STOCK_LIMIT)
   // One terse line per part: *SKU* — status · on order. No preamble.
   const lines = top.map((r: any) => `*${r.stock_number || '—'}* — ${verdict(r)}`)
-  const more = rows.length > top.length ? `\n_(+${rows.length - top.length} more — narrow the search)_` : ''
+  const more = fuzzy && rows.length > top.length ? `\n_(+${rows.length - top.length} more — narrow the search)_` : ''
   return `${lines.join('\n')}${more}`
 }
 
