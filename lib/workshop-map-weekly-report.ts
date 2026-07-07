@@ -4,24 +4,27 @@
 // morning a digest of where last week's quotes and booked jobs came from —
 // locations, vehicle mix by region, emerging hotspots, quote-heavy areas that
 // aren't booking — plus Claude's read on what it means and where to market.
-// Posts to Slack with a link to the live map (Reports → Workshop Map).
+// EMAILED to Matt (cc Ryan + Chris) with a link to the live map
+// (Reports → Workshop Map).
 //
 // Data: md_quotes / md_invoices fact tables (filled by the daily MechanicDesk
 // pull, scripts/pull-md-workshop-map.ts). Weekly counts are RAW rows (quotes
 // as issued; jobs = non-noise invoices) — the 1-per-customer-month dedup only
 // applies to the dashboard's conversion view, not this digest.
 //
-// Mirrors lib/calls-weekly-report.ts: aggregate → Claude narrative → Slack.
+// Mirrors lib/calls-weekly-report.ts: aggregate → Claude narrative → deliver.
 
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
-import { postMessage } from './slack-bot/slack'
+import { sendMail } from './email'
 import { VEHICLE_CATS } from './workshop-map/vehicle-classification'
 
 const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages'
 const MODEL = () => (process.env.WORKSHOP_MAP_REPORT_MODEL || 'claude-sonnet-4-6').trim()
-// Defaults to #sales-coaching; point WORKSHOP_MAP_REPORT_SLACK_CHANNEL at a
-// marketing channel to move it.
-const CHANNEL = () => (process.env.WORKSHOP_MAP_REPORT_SLACK_CHANNEL ?? process.env.CALLS_COACHING_SLACK_CHANNEL ?? 'C0AU8QWT7QF').trim()
+const splitEmails = (s: string) => s.split(/[,;\s]+/).map(x => x.trim()).filter(x => x.includes('@'))
+const TO = () => splitEmails(process.env.WORKSHOP_MAP_REPORT_TO || 'matt.h@justautosmechanical.com.au')
+const CC = () => splitEmails(process.env.WORKSHOP_MAP_REPORT_CC ?? 'ryan@justautosmechanical.com.au, chris@justautosmechanical.com.au')
+// sendMail's mailbox arg is the Graph sender / Resend fallback-from.
+const FROM_MAILBOX = () => (process.env.WORKSHOP_MAP_REPORT_FROM || process.env.AP_INBOX_MAILBOX || 'accounts@justautosmechanical.com.au').trim()
 const MAP_URL = () => `${(process.env.PORTAL_PUBLIC_URL || 'https://justautos.app').replace(/\/+$/, '')}/reports/map`
 
 let _sb: SupabaseClient | null = null
@@ -195,17 +198,60 @@ Rules: specific and numbers-first, never invent data not present, Slack-friendly
   return { parsed, costMicroUsd }
 }
 
-function statLine(a: SideAgg): string {
+// ── Email rendering (simple inline-styled HTML for mail clients) ────────
+
+const esc = (s: any) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+
+function statCell(label: string, a: SideAgg, color: string): string {
   const groups = Object.entries(a.byGroup).sort((x, y) => y[1].val - x[1].val).slice(0, 4)
-    .map(([g, v]) => `${GROUP_NAME[g] || g} ${v.n}`).join(' · ')
-  return `*${a.count}* (${fmtK(a.value)}) — ${groups || 'no rows'}`
+    .map(([g, v]) => `${esc(GROUP_NAME[g] || g)} ${v.n}`).join(' · ')
+  return `<td style="width:50%;padding:14px 16px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;vertical-align:top">
+    <div style="font-size:11px;color:#64748b;text-transform:uppercase;letter-spacing:1px">${esc(label)}</div>
+    <div style="font-size:24px;font-weight:700;color:${color};margin:4px 0 2px">${a.count} <span style="font-size:14px;color:#334155">(${esc(fmtK(a.value))})</span></div>
+    <div style="font-size:12px;color:#64748b">${groups || 'no rows'}</div>
+  </td>`
 }
 
-function locList(locs: LocAgg[], max = 8): string {
+function locListHtml(locs: LocAgg[], max = 8): string {
   return locs.slice(0, max).map(o => {
     const topG = Object.entries(o.groups).sort((x, y) => y[1] - x[1])[0]?.[0]
-    return `• ${o.l}${o.state ? ` ${o.state}` : ''} — ${o.n} @ ${fmtK(o.val)}${topG ? ` (${GROUP_NAME[topG] || topG})` : ''}`
-  }).join('\n')
+    return `<li style="margin:3px 0">${esc(o.l)}${o.state ? ` <span style="color:#64748b">${esc(o.state)}</span>` : ''} — <b>${o.n}</b> @ ${esc(fmtK(o.val))}${topG ? ` <span style="color:#64748b">(${esc(GROUP_NAME[topG] || topG)})</span>` : ''}</li>`
+  }).join('')
+}
+
+function bulletsHtml(items: string[] | undefined): string {
+  return (items || []).map(s => `<li style="margin:5px 0;line-height:1.5">${esc(s)}</li>`).join('')
+}
+
+function sectionHtml(title: string, inner: string): string {
+  if (!inner) return ''
+  return `<h3 style="font-size:14px;color:#0f172a;margin:22px 0 6px;border-bottom:1px solid #e2e8f0;padding-bottom:4px">${esc(title)}</h3>${inner}`
+}
+
+function renderEmail(data: any, parsed: any): string {
+  const ul = (inner: string) => inner ? `<ul style="margin:6px 0;padding-left:20px;font-size:13px;color:#0f172a">${inner}</ul>` : ''
+  const qnb = data.quotingNotBooking.slice(0, 8).map((o: any) =>
+    `<li style="margin:3px 0">${esc(o.l)}${o.state ? ` <span style="color:#64748b">${esc(o.state)}</span>` : ''} — <b>${o.n}</b> quotes @ ${esc(fmtK(o.val))}, no booked job in 90d</li>`).join('')
+  return `<div style="font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;max-width:640px;margin:0 auto;color:#0f172a">
+    <div style="padding:18px 0 10px">
+      <div style="font-size:19px;font-weight:800">Weekly Quotes &amp; Jobs Map Report</div>
+      <div style="font-size:12px;color:#64748b;margin-top:2px">${esc(data.weekLabel)} · <a href="${MAP_URL()}" style="color:#0284c7">open the live map</a> · quote values are gross inc GST · baseline ~${data.baselineWeeklyQuoteAvg} quotes/wk</div>
+    </div>
+    ${parsed.headline ? `<div style="font-size:15px;font-weight:600;background:#eff6ff;border-left:3px solid #0284c7;padding:10px 14px;border-radius:0 8px 8px 0;margin:8px 0 14px">${esc(parsed.headline)}</div>` : ''}
+    <table style="width:100%;border-collapse:separate;border-spacing:8px 0"><tr>
+      ${statCell('Quotes issued', data.quotes, '#b45309')}
+      ${statCell('Jobs booked', data.jobs, '#047857')}
+    </tr></table>
+    ${sectionHtml('Top quote locations', ul(locListHtml(data.quotes.topLocalities)))}
+    ${sectionHtml('Top job locations', ul(locListHtml(data.jobs.topLocalities, 6)))}
+    ${sectionHtml('What it means', ul(bulletsHtml(parsed.what_it_means)))}
+    ${sectionHtml('Where to market', ul(bulletsHtml(parsed.marketing_opportunities)))}
+    ${qnb ? sectionHtml('Quoting but not booking', ul(qnb)) : ''}
+    ${parsed.watchouts?.length ? `<div style="font-size:11.5px;color:#64748b;margin-top:18px">${(parsed.watchouts as string[]).map(s => `⚠️ ${esc(s)}`).join('<br/>')}</div>` : ''}
+    <div style="font-size:11px;color:#94a3b8;margin-top:22px;border-top:1px solid #e2e8f0;padding-top:8px">
+      Auto-generated every Monday from the MechanicDesk quotes/invoices pull · <a href="${MAP_URL()}" style="color:#0284c7">Reports → Workshop Map</a>
+    </div>
+  </div>`
 }
 
 export async function runMapWeeklyReport(opts: { dryRun?: boolean; days?: number } = {}): Promise<MapWeeklyResult> {
@@ -220,45 +266,12 @@ export async function runMapWeeklyReport(opts: { dryRun?: boolean; days?: number
     return { weekLabel: data.weekLabel, quotes: data.quotes.count, jobs: data.jobs.count, posted: false, costMicroUsd, narrative: parsed, data }
   }
 
-  const bullets = (items: string[] | undefined, icon: string) => (items || []).map(s => `${icon} ${s}`).join('\n')
-  const headerText = `🗺️ Weekly Quotes & Jobs Map Report — ${data.weekLabel}`
-  const blocks: any[] = [
-    { type: 'header', text: { type: 'plain_text', text: headerText, emoji: true } },
-    { type: 'context', elements: [{ type: 'mrkdwn', text: `<${MAP_URL()}|Open the live map> · quotes are raw counts inc GST · baseline ${data.baselineWeeklyQuoteAvg}/wk` }] },
-    { type: 'section', text: { type: 'mrkdwn', text: `*${parsed.headline || ''}*`.slice(0, 2900) } },
-    {
-      type: 'section', fields: [
-        { type: 'mrkdwn', text: `*Quotes issued*\n${statLine(data.quotes)}`.slice(0, 1900) },
-        { type: 'mrkdwn', text: `*Jobs booked*\n${statLine(data.jobs)}`.slice(0, 1900) },
-      ],
-    },
-  ]
-  if (data.quotes.topLocalities.length) {
-    blocks.push({ type: 'section', text: { type: 'mrkdwn', text: `*Top quote locations*\n${locList(data.quotes.topLocalities)}`.slice(0, 2900) } })
-  }
-  if (data.jobs.topLocalities.length) {
-    blocks.push({ type: 'section', text: { type: 'mrkdwn', text: `*Top job locations*\n${locList(data.jobs.topLocalities, 6)}`.slice(0, 2900) } })
-  }
-  if (parsed.what_it_means?.length) {
-    blocks.push({ type: 'section', text: { type: 'mrkdwn', text: `*What it means*\n${bullets(parsed.what_it_means, '🔍')}`.slice(0, 2900) } })
-  }
-  if (parsed.marketing_opportunities?.length) {
-    blocks.push({ type: 'section', text: { type: 'mrkdwn', text: `*Where to market*\n${bullets(parsed.marketing_opportunities, '🎯')}`.slice(0, 2900) } })
-  }
-  if (data.quotingNotBooking.length) {
-    blocks.push({
-      type: 'section', text: {
-        type: 'mrkdwn',
-        text: `*Quoting but not booking (90d)*\n${data.quotingNotBooking.slice(0, 6).map(o => `• ${o.l}${o.state ? ` ${o.state}` : ''} — ${o.n} quotes @ ${fmtK(o.val)}`).join('\n')}`.slice(0, 2900),
-      },
-    })
-  }
-  if (parsed.watchouts?.length) {
-    blocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: bullets(parsed.watchouts, '⚠️').slice(0, 2900) }] })
-  }
-
-  const main = await postMessage({ channel: CHANNEL(), text: headerText, blocks })
-  if (!main) throw new Error('Slack post failed (is the bot in the channel?)')
+  await sendMail(FROM_MAILBOX(), {
+    to: TO(),
+    cc: CC(),
+    subject: `Weekly Quotes & Jobs Map Report — ${data.weekLabel}`,
+    html: renderEmail(data, parsed),
+  })
 
   return { weekLabel: data.weekLabel, quotes: data.quotes.count, jobs: data.jobs.count, posted: true, costMicroUsd }
 }

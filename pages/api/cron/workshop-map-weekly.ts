@@ -3,7 +3,8 @@
 // Monday-morning quotes & jobs geography report (lib/workshop-map-weekly-report.ts):
 // aggregates last week's quote/job locations + vehicle mix from md_quotes /
 // md_invoices, has Claude write the "what it means / where to market" read,
-// and posts to Slack with a link to Reports → Workshop Map.
+// and EMAILS it to Matt (cc Ryan + Chris) with a link to Reports → Workshop Map.
+// Recipients via WORKSHOP_MAP_REPORT_TO / _CC env overrides.
 //
 // Schedule (vercel.json): Sunday 21:10 UTC = Monday 7:10am AEST (just after
 // the calls coaching report).
