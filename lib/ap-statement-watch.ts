@@ -75,7 +75,7 @@ function inboxes(): InboxConfig[] {
 export interface MissingInvoice { reference: string | null; date: string | null; amount: number | null }
 export interface MismatchInvoice { reference: string | null; statementAmount: number | null; myobAmount: number | null }
 
-export type StatementScanStatus = 'reconciled' | 'has_missing' | 'needs_review' | 'failed'
+export type StatementScanStatus = 'reconciled' | 'has_missing' | 'needs_review' | 'failed' | 'no_attachment'
 
 export interface StatementScanResult {
   mailbox: string
@@ -229,7 +229,10 @@ export async function runStatementWatch(opts: WatchOptions = {}): Promise<Statem
   for (const inbox of inboxes()) {
     let messages: GraphMessageSummary[] = []
     try {
-      messages = await listMessagesWithAttachments(inbox.mailbox, { sinceIsoDate: sinceIso, top: 100 })
+      // alsoSubjects: statement emails with inline-only PDFs (or a download
+      // link and no attachment) report hasAttachments=false and were invisible
+      // — GE Group's "monthly statement" sat unseen for a day (2026-07-08).
+      messages = await listMessagesWithAttachments(inbox.mailbox, { sinceIsoDate: sinceIso, top: 100, alsoSubjects: /statement/i })
     } catch (e: any) {
       perInbox.push({ mailbox: inbox.mailbox, companyFile: inbox.companyFile, scanned: 0, statements: 0, error: e?.message || String(e) })
       continue
@@ -246,7 +249,43 @@ export async function runStatementWatch(opts: WatchOptions = {}): Promise<Statem
         const isPdf = (a.contentType || '').toLowerCase() === 'application/pdf' || /\.pdf$/i.test(a.name || '')
         return isPdf && (subjIsStatement || hasStatementWord(a.name))
       })
-      if (pdfStatements.length === 0) continue
+      if (pdfStatements.length === 0) {
+        // A statement-subject email with NO readable PDF (link-only, or an
+        // unsupported format like xlsx) — surface it in the digest instead of
+        // silently ignoring it, so "the statement just sat there" can't recur.
+        if (subjIsStatement && processed.length < maxStatements) {
+          const { data: seen } = await c.from('ap_statement_scans')
+            .select('id').eq('graph_message_id', msg.id).eq('graph_attachment_id', 'none').maybeSingle()
+          if (seen) { skippedDuplicates++; continue }
+          statementsFound++; inboxStatements++
+          const kinds = atts.map(a => a.name || a.contentType || 'unnamed').join(', ')
+          const record = {
+            mailbox: inbox.mailbox, companyFile: inbox.companyFile,
+            messageId: msg.id, attachmentId: 'none', attachmentName: '',
+            subject: msg.subject, from: msg.from, receivedAt: msg.receivedDateTime,
+            supplierName: null, supplierUid: null, supplierResolution: 'none' as const,
+            status: 'no_attachment' as StatementScanStatus, period: null, invoiceLines: 0,
+            missing: [], mismatches: [],
+            reviewReason: `Statement email from ${msg.from || 'unknown sender'} has no readable PDF attachment` +
+              (atts.length ? ` (attachments: ${kinds.slice(0, 150)})` : ' (likely a download link in the body)') +
+              ' — open the email and handle manually.',
+          }
+          processed.push(record)
+          if (!dryRun) {
+            try {
+              await c.from('ap_statement_scans').insert({
+                mailbox: record.mailbox, company_file: record.companyFile,
+                graph_message_id: record.messageId, graph_attachment_id: 'none',
+                attachment_name: '', subject: record.subject, from_address: record.from,
+                supplier_name: null, supplier_uid: null,
+                match_status: 'no_attachment', invoice_lines: 0, missing_count: 0,
+                missing: [], error: null,
+              })
+            } catch { /* non-fatal; worst case re-reported next run */ }
+          }
+        }
+        continue
+      }
 
       for (const att of pdfStatements) {
         if (processed.length >= maxStatements) break
@@ -374,7 +413,7 @@ export function buildDigestHtml(outcome: StatementWatchOutcome, generatedAt: str
   if (stmts.length === 0 && inboxErrors.length === 0) return null
 
   const totalMissing = stmts.reduce((s, r) => s + r.missing.length, 0)
-  const needsReview = stmts.filter(r => r.status === 'needs_review' || r.status === 'failed')
+  const needsReview = stmts.filter(r => r.status === 'needs_review' || r.status === 'failed' || r.status === 'no_attachment')
   const withMissing = stmts.filter(r => r.missing.length > 0)
   const clean = stmts.filter(r => r.status === 'reconciled')
 
@@ -464,7 +503,7 @@ export function buildDigestHtml(outcome: StatementWatchOutcome, generatedAt: str
     body += `<h2 style="font-size:15px;color:#d97706;margin:18px 0 8px">Needs manual review (${needsReview.length})</h2>`
     for (const r of needsReview) {
       body += card(
-        `<div style="font-weight:600">${esc(r.supplierName || r.attachmentName || 'Statement')} <span style="color:#6b7280;font-weight:400">· ${esc(r.companyFile)}</span></div>` +
+        `<div style="font-weight:600">${esc(r.supplierName || r.subject || r.attachmentName || 'Statement')} <span style="color:#6b7280;font-weight:400">· ${esc(r.companyFile)}</span></div>` +
         `<div style="font-size:12px;color:#6b7280;margin-top:3px">${esc(r.reviewReason || r.error || 'Could not reconcile automatically')} — open <a href="https://justautos.app/ap/statement">/ap/statement</a></div>`,
         '#d97706',
       )

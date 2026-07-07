@@ -270,7 +270,11 @@ export interface GraphMessageSummary {
  */
 export async function listMessagesWithAttachments(
   mailbox: string,
-  opts: { sinceIsoDate?: string; top?: number } = {},
+  // alsoSubjects: keep messages whose subject matches even when Graph says
+  // hasAttachments=false — inline-attached PDFs (contentDisposition inline)
+  // and link-only mails report false and were invisible to the AP scanners
+  // (GE Group statements, 2026-07-08). Callers then probe /attachments.
+  opts: { sinceIsoDate?: string; top?: number; alsoSubjects?: RegExp } = {},
 ): Promise<GraphMessageSummary[]> {
   const wanted = Math.min(Math.max(opts.top || 50, 1), 100)
   const fetchTop = Math.min(wanted * 2, 200)
@@ -295,7 +299,9 @@ export async function listMessagesWithAttachments(
     hasAttachments: !!m.hasAttachments,
   }))
 
-  return all.filter(m => m.hasAttachments).slice(0, wanted)
+  return all
+    .filter(m => m.hasAttachments || (opts.alsoSubjects && m.subject && opts.alsoSubjects.test(m.subject)))
+    .slice(0, wanted)
 }
 
 /**
