@@ -274,6 +274,13 @@ async function main() {
       const cust = r.customer || null
       const custId = cust?.id != null ? String(cust.id) : null
       const addr = (custId && custAddr[custId]) || parseSuburbBlob(S(r.customer_suburb))
+      // "First Job Type" = the FIRST name in the job-type list — this is what
+      // the noise rules + classification step 1 key on. Feeding the FULL list
+      // here false-flagged ~85% of invoices as deposits/diagnostics (big jobs
+      // routinely carry a Deposit/Pre-Payment job type alongside the work).
+      // The full list still reaches the classifier via itemsText (step 5/7).
+      const jobTypesTitle = S(r.job?.booking?.job_types_title) || S(r.job?.job_types_title)
+      const firstJobType = jobTypesTitle ? S(jobTypesTitle.split(',')[0]) : null
       invoicesRaw.push({
         id: String(r.id),
         displayNumber: S(r.number) || String(r.id),
@@ -282,12 +289,12 @@ async function main() {
         suburb: addr.suburb, state: addr.state, postcode: addr.postcode,
         vehicleId: veh?.id != null ? String(veh.id) : null,
         rego: S(veh?.registration_number),
-        // job.full_description = every job-type name on the job (the chassis-
-        // code signal the handoff's "First Job Type" column came from).
-        jobTypeText: S(r.job?.full_description) || S(r.job?.job_types_title) || S(r.job?.booking?.job_types_title),
+        jobTypeText: firstJobType,
         model: [S(veh?.make), S(veh?.model), S(veh?.series)].filter(Boolean).join(' ') || null,
         descText: S(r.description),
-        itemsText: [S(r.job?.title), S(r.job?.description), S(r.job?.booking?.description)].filter(Boolean).join(' ').slice(0, 8000) || null,
+        // full_description = job description + EVERY job-type name — keeps all
+        // chassis codes + the clutch/1300NM tell visible to the classifier.
+        itemsText: [S(r.job?.title), S(r.job?.full_description), S(r.job?.booking?.description)].filter(Boolean).join(' ').slice(0, 8000) || null,
         issueYmd: isoYmd(r.issue_date),
         totalAmount: Number(r.total_amount) || 0,
       })
