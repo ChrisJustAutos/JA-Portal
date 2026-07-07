@@ -190,19 +190,32 @@ Return ONLY this JSON:
 
 Rules: be specific (cite scores, call types, customer situations from the data — never invent details not present), constructive not harsh, and keep every string Slack-friendly plain text (no markdown headers).`
 
-  const r = await fetch(ANTHROPIC_API_URL, {
-    method: 'POST',
-    headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
-    body: JSON.stringify({ model: MODEL(), max_tokens: 4000, messages: [{ role: 'user', content: prompt }] }),
-  })
-  if (!r.ok) throw new Error(`Anthropic API ${r.status}: ${(await r.text()).slice(0, 300)}`)
-  const data = await r.json()
-  const text = data.content?.[0]?.text || ''
-  const cleaned = text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```\s*$/i, '').trim()
-  const first = cleaned.indexOf('{'); const last = cleaned.lastIndexOf('}')
-  const parsed = JSON.parse(first >= 0 && last > first ? cleaned.slice(first, last + 1) : cleaned)
-  const costMicroUsd = Math.round(((data.usage?.input_tokens || 0) / 1e6) * 3_000_000 + ((data.usage?.output_tokens || 0) / 1e6) * 15_000_000)
-  return { parsed, costMicroUsd }
+  // Generous output budget — the report scales with advisor count and a
+  // truncated response is unparseable JSON (hit at 4k tokens with 6 advisors).
+  // One retry on a parse/truncation failure.
+  let costMicroUsd = 0
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    const r = await fetch(ANTHROPIC_API_URL, {
+      method: 'POST',
+      headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: MODEL(), max_tokens: 12000, messages: [{ role: 'user', content: prompt }] }),
+    })
+    if (!r.ok) throw new Error(`Anthropic API ${r.status}: ${(await r.text()).slice(0, 300)}`)
+    const data = await r.json()
+    costMicroUsd += Math.round(((data.usage?.input_tokens || 0) / 1e6) * 3_000_000 + ((data.usage?.output_tokens || 0) / 1e6) * 15_000_000)
+    try {
+      if (data.stop_reason === 'max_tokens') throw new Error('narrative truncated at max_tokens')
+      const text = data.content?.[0]?.text || ''
+      const cleaned = text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```\s*$/i, '').trim()
+      const first = cleaned.indexOf('{'); const last = cleaned.lastIndexOf('}')
+      const parsed = JSON.parse(first >= 0 && last > first ? cleaned.slice(first, last + 1) : cleaned)
+      return { parsed, costMicroUsd }
+    } catch (e: any) {
+      if (attempt === 2) throw new Error(`weekly-report narrative unparseable after retry: ${e?.message || e}`)
+      console.warn('[weekly-report] narrative parse failed, retrying:', e?.message || e)
+    }
+  }
+  throw new Error('unreachable')
 }
 
 function advisorBlocks(week: AdvisorWeek, n: any): any[] {
