@@ -22,6 +22,9 @@ export interface AutoEntrySlackInput {
   sourceMailbox?: string | null
   supplierTrust?: string | null   // e.g. "✓ Verified — 14 posted · ABN match · known sender"
   paidOnInvoice?: string | null   // payment method when the invoice is already settled ('card', 'EFT'…)
+  // ap_auto_entry_log row id — renders an "Approve & post to MYOB" button on
+  // flag cards (handled by /api/slack/ask → approveAndPost).
+  approveValue?: string | null
   failReasons?: string[]
   adopted?: boolean
   pdfUrl?: string | null
@@ -111,12 +114,23 @@ export function buildAutoEntryBlocks(i: AutoEntrySlackInput): { text: string; bl
     })
   }
 
+  const actions: any[] = []
   if (i.pdfUrl) {
-    blocks.push({
-      type: 'actions',
-      elements: [{ type: 'button', text: { type: 'plain_text', text: 'View invoice', emoji: true }, url: i.pdfUrl }],
+    actions.push({ type: 'button', text: { type: 'plain_text', text: 'View invoice', emoji: true }, url: i.pdfUrl })
+  }
+  if (i.outcome === 'flagged' && i.approveValue) {
+    actions.push({
+      type: 'button', style: 'primary', action_id: 'ap_approve_post', value: i.approveValue,
+      text: { type: 'plain_text', text: '✅ Approve & post to MYOB', emoji: true },
+      confirm: {
+        title: { type: 'plain_text', text: 'Post to MYOB?' },
+        text: { type: 'mrkdwn', text: `Post *${i.supplierName || 'this invoice'}* ${i.invoiceNumber || ''} for *${i.totalIncGst != null ? `$${Number(i.totalIncGst).toFixed(2)}` : '?'}* — you're vouching for the flagged checks.` },
+        confirm: { type: 'plain_text', text: 'Post it' },
+        deny: { type: 'plain_text', text: 'Cancel' },
+      },
     })
   }
+  if (actions.length) blocks.push({ type: 'actions', elements: actions })
 
   return { text: text.slice(0, 300), blocks }
 }

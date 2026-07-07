@@ -47,6 +47,8 @@ import { triageInvoice } from './ap-supabase'
 import { consolidatedInvoiceSupplier } from './ap-consolidated-suppliers'
 import { postFoundInvoiceToMyob, reattachStagedPdf } from './ap-myob-bill'
 import { postWebhook } from './slack'
+import { postMessage } from './slack-bot/slack'
+import { randomUUID } from 'crypto'
 import { buildAutoEntryBlocks, type BankCheck } from './ap-auto-entry-slack'
 
 const AP_BUCKET = 'ap-invoices'
@@ -77,6 +79,10 @@ function vpsMailboxes(): string[] {
   return [legacy || 'accounts@justautosmechanical.com.au']
 }
 function slackWebhook(): string | null { return (process.env.SLACK_WEBHOOK_AP_VPS || '').trim() || null }
+// #vps-invoices. Cards post via the Portal Assistant bot so the Approve
+// button's clicks route to the app's interactivity URL (/api/slack/ask);
+// falls back to the webhook if the bot can't post (e.g. not yet invited).
+function apSlackChannel(): string { return (process.env.AP_SLACK_CHANNEL ?? 'C0BEGPPMCBF').trim() }
 // Once an invoice is entered into MYOB, its email is marked read and moved out
 // of the Inbox into this folder so the inbox only shows what still needs a human.
 // Flagged / not-posted emails are left in place. Set to '' to disable the move.
@@ -222,6 +228,9 @@ export async function runAutoEntry(opts: { dryRun?: boolean; sinceDays?: number;
 
   // Master switch: do nothing (not even scan) unless enabled OR this is a dry-run preview.
   if (!enabled && !dryRun) return out
+
+  // Safety net for Slack-approved flags whose immediate post didn't complete.
+  if (!dryRun) { try { await processApprovedRows(c) } catch (e: any) { console.error('[ap-auto-entry] approved sweep failed:', e?.message || e) } }
 
   for (const mailbox of vpsMailboxes()) {
     const boxOut = { mailbox, scanned: 0, folderResolved: false, error: undefined as string | undefined }
@@ -685,10 +694,12 @@ async function processInvoice(
   if (!pass) {
     const built = buildAutoEntryBlocks({ ...slackCommon, outcome: 'flagged', failReasons })
     if (!dryRun) {
+      // Pre-generate the log row id so the card's Approve button can carry it.
+      const rowId = randomUUID()
       const staged = await stageAndSign(c, msg, attId, bytes, kind).catch(() => null)
-      const withUrl = staged ? buildAutoEntryBlocks({ ...slackCommon, outcome: 'flagged', failReasons, pdfUrl: staged.url }) : built
+      const withUrl = buildAutoEntryBlocks({ ...slackCommon, outcome: 'flagged', failReasons, pdfUrl: staged?.url, approveValue: staged ? rowId : null })
       const ts = await sendSlack(withUrl)
-      await logRow(c, { mailbox, companyFile, msg, attId, attName }, { outcome: 'flagged', supplierName, supplierUid, invoiceNumber: extracted.invoiceNumber, invoiceDate: extracted.invoiceDate, amount: total, failReasons, bankCheck: effectiveBank, pdfStoragePath: staged?.path || null, slackTs: ts })
+      await logRow(c, { mailbox, companyFile, msg, attId, attName }, { id: rowId, outcome: 'flagged', supplierName, supplierUid, invoiceNumber: extracted.invoiceNumber, invoiceDate: extracted.invoiceDate, amount: total, failReasons, bankCheck: effectiveBank, pdfStoragePath: staged?.path || null, slackTs: ts })
     }
     return { ...base, supplierName, invoiceNumber: extracted.invoiceNumber, amount: total, outcome: 'flagged', bankCheck: effectiveBank, failReasons, slackText: built.text }
   }
@@ -807,13 +818,114 @@ export async function reattachMissingPdfs(): Promise<{ attempted: number; ok: st
 }
 
 // ── Slack ────────────────────────────────────────────────────────────────
+// Bot-first (real ts back, buttons route to the app's interactivity URL),
+// webhook fallback.
 async function sendSlack(built: { text: string; blocks: any[] }): Promise<string | null> {
+  const channel = apSlackChannel()
+  if (channel) {
+    try {
+      const posted = await postMessage({ channel, text: built.text, blocks: built.blocks })
+      if (posted) return posted.ts
+    } catch (e: any) { console.error('[ap-auto-entry] bot post failed, falling back to webhook:', e?.message || e) }
+  }
   const hook = slackWebhook()
-  if (!hook) { console.warn('[ap-auto-entry] SLACK_WEBHOOK_AP_VPS not set — not posting'); return null }
+  if (!hook) { console.warn('[ap-auto-entry] no Slack channel or webhook configured — not posting'); return null }
   try {
     const r = await postWebhook(hook, { text: built.text, blocks: built.blocks })
     return r.ok ? 'sent' : null
   } catch (e: any) { console.error('[ap-auto-entry] slack post failed:', e?.message || e); return null }
+}
+
+// ── Human approval: "Approve & post to MYOB" button on flag cards ────────
+// The click (handled in /api/slack/ask) calls approveAndPost with the flag
+// row id. A human vouched, so soft checks are bypassed: re-extract the staged
+// PDF with the strong model, match the supplier, post with low-confidence
+// accepted; if the line detail won't reconcile, post at the stated total.
+// Hard requirements stay: supplier card must match, MYOB must accept.
+export async function approveAndPost(rowId: string, approvedBy: string): Promise<string> {
+  const c = sb()
+  const { data: row } = await c.from('ap_auto_entry_log').select('*').eq('id', rowId).maybeSingle()
+  if (!row) return '⚠️ Approval failed — this flag no longer exists.'
+  if (row.outcome === 'posted' || row.myob_bill_uid) return `Already in MYOB (${row.invoice_number || 'invoice'}) — nothing to do.`
+  if (!row.pdf_storage_path) return `⚠️ Can't post ${row.invoice_number || 'this invoice'} — no staged PDF on the flag. Enter manually.`
+  await c.from('ap_auto_entry_log')
+    .update({ approved_by: approvedBy, approved_at: new Date().toISOString() })
+    .eq('id', rowId)
+  return postApprovedRow(c, { ...row, approved_by: approvedBy })
+}
+
+async function postApprovedRow(c: SupabaseClient, row: any): Promise<string> {
+  const companyFile: CompanyFileLabel = (row.company_file as CompanyFileLabel) || 'VPS'
+  const { data: blob, error: dlErr } = await c.storage.from(AP_BUCKET).download(row.pdf_storage_path)
+  if (dlErr || !blob) return `⚠️ ${row.invoice_number || 'invoice'}: staged PDF unavailable (${dlErr?.message || 'gone'}) — enter manually.`
+  const bytes = Buffer.from(await blob.arrayBuffer())
+
+  let extracted: ExtractedAPInvoice
+  try {
+    extracted = (await extractInvoiceFromPdf(bytes.toString('base64'), { model: scanExtractionModel() })).invoice
+  } catch (e: any) {
+    return `⚠️ ${row.invoice_number || 'invoice'}: re-extraction failed (${(e?.message || e).toString().slice(0, 120)}) — enter manually.`
+  }
+  const total = extracted.totals.totalIncGst
+  if (!extracted.invoiceNumber || total == null || !extracted.invoiceDate) {
+    return `⚠️ ${row.invoice_number || 'invoice'}: number/date/total unreadable even on the strong model — enter manually.`
+  }
+
+  const match = await tryAutoMatchSupplier(extracted.vendor?.name || row.supplier_name, extracted.vendor?.abn || null, companyFile).catch(() => null)
+  if (!match) return `⚠️ ${extracted.invoiceNumber}: no MYOB supplier card matched "${extracted.vendor?.name || row.supplier_name || 'unknown'}" — create/rename the card, then re-approve.`
+
+  const cleanName = `${String(row.attachment_name || extracted.invoiceNumber).replace(/\.pdf/i, '').replace(/[^\w-]+/g, '_').replace(/^_+|_+$/g, '')}.pdf`
+  const postArgs = {
+    companyFile, supplierUid: match.supplier.uid, supplierName: match.supplier.name,
+    statementAmount: null, pdfBytes: bytes, pdfFilename: cleanName, postedBy: ACTOR,
+    acceptLowConfidence: true,
+  }
+  let posted = await postFoundInvoiceToMyob({ ...postArgs, extracted })
+  if (!posted.posted && /sum|total|nudge|cannot post/i.test(posted.reason || '')) {
+    // Line detail won't reconcile — human approved, post at the stated total.
+    const collapsed: ExtractedAPInvoice = {
+      ...extracted,
+      totals: { subtotalExGst: null, gstAmount: null, totalIncGst: total },
+      lineItems: [{
+        lineNo: 1, partNumber: null,
+        description: `Invoice ${extracted.invoiceNumber} — approved via Slack; posted at stated total`,
+        qty: 1, uom: null, unitPriceExGst: null,
+        lineTotalExGst: Math.round((total / 1.1) * 100) / 100,
+        gstAmount: null, taxCodeRaw: null, taxCode: 'GST',
+      }],
+    }
+    posted = await postFoundInvoiceToMyob({ ...postArgs, extracted: collapsed })
+  }
+  if (!posted.posted) {
+    await c.from('ap_auto_entry_log').update({ error: `approved post failed: ${(posted.reason || '').slice(0, 250)}` }).eq('id', row.id)
+    return `❌ ${extracted.invoiceNumber}: MYOB rejected the bill — ${(posted.reason || 'unknown').slice(0, 200)}`
+  }
+
+  await c.from('ap_auto_entry_log').update({
+    outcome: 'posted', myob_bill_uid: posted.billUid || null, error: null,
+    supplier_name: match.supplier.name, supplier_uid: match.supplier.uid,
+    invoice_number: extracted.invoiceNumber, amount: total,
+  }).eq('id', row.id)
+  return `✅ *${match.supplier.name}* — ${extracted.invoiceNumber} · ${money(total)} posted to MYOB${posted.adopted ? ' (already existed — linked)' : ''}. Approved by ${row.approved_by || 'staff'}.`
+}
+
+// Cron fallback: rows approved (via button or SQL) that didn't complete —
+// e.g. the click-handler function died mid-post. Idempotent per row.
+async function processApprovedRows(c: SupabaseClient): Promise<void> {
+  const { data: rows } = await c.from('ap_auto_entry_log')
+    .select('*')
+    .eq('outcome', 'flagged').not('approved_at', 'is', null).is('myob_bill_uid', null)
+    .not('pdf_storage_path', 'is', null)
+    .is('error', null)   // a failed approved-post sets error — no retry loop; re-click to retry
+    .limit(5)
+  for (const row of rows || []) {
+    try {
+      const result = await postApprovedRow(c, row)
+      await sendSlack({ text: result, blocks: [{ type: 'section', text: { type: 'mrkdwn', text: result } }] })
+    } catch (e: any) {
+      console.error('[ap-auto-entry] approved-row post failed:', e?.message || e)
+    }
+  }
 }
 
 // ── Staged PDF for the Slack link (no ap_invoices row exists) ────────────
@@ -847,6 +959,7 @@ async function logRow(
   // segment uses the raw id so the seen-check dedups the whole attachment.
   ctx: { mailbox: string; companyFile: CompanyFileLabel; msg: GraphMessageSummary; attId: string; attName: string },
   fields: {
+    id?: string                 // pre-generated when the Slack card carries an Approve button
     outcome: AutoEntryOutcomeKind
     supplierName?: string | null; supplierUid?: string | null
     invoiceNumber?: string | null; invoiceDate?: string | null; amount?: number | null
@@ -856,6 +969,7 @@ async function logRow(
 ): Promise<void> {
   try {
     await c.from('ap_auto_entry_log').insert({
+      ...(fields.id ? { id: fields.id } : {}),
       mailbox: ctx.mailbox, company_file: ctx.companyFile,
       graph_message_id: ctx.msg.id, graph_attachment_id: ctx.attId,
       subject: ctx.msg.subject ?? null, from_address: ctx.msg.from ?? null, attachment_name: ctx.attName || null,

@@ -147,6 +147,35 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       try { payload = JSON.parse(payloadRaw) } catch { return res.status(200).end() }
       if (payload.type === 'block_actions') {
         const action = (payload.actions || [])[0] || {}
+
+        // AP flag card: "Approve & post to MYOB". A human vouched for the
+        // flagged checks — post immediately (re-extract staged PDF, match
+        // supplier, MYOB post) and thread the result under the flag card.
+        if (action.action_id === 'ap_approve_post') {
+          const rowId = String(action.value || '')
+          const approver = payload.user?.username || payload.user?.name || payload.user?.id || 'staff'
+          const ch: string = payload.channel?.id || ''
+          const threadTs: string | undefined = payload.message?.ts
+          const responseUrl: string = payload.response_url || ''
+          waitUntil((async () => {
+            let result = ''
+            try {
+              const { approveAndPost } = await import('../../../lib/ap-auto-entry')
+              result = await approveAndPost(rowId, approver)
+            } catch (e: any) {
+              result = `❌ Approval failed: ${(e?.message || e).toString().slice(0, 200)}`
+            }
+            const posted = ch ? await postMessage({ channel: ch, text: result, thread_ts: threadTs }).catch(() => null) : null
+            if (!posted && responseUrl) {
+              await fetch(responseUrl, {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ response_type: 'in_channel', replace_original: false, text: result }),
+              }).catch(() => undefined)
+            }
+          })())
+          return res.status(200).end()
+        }
+
         if (action.action_id === 'ask_eta') {
           const asker: string = payload.user?.id || ''
           const ch: string = payload.channel?.id || ''
