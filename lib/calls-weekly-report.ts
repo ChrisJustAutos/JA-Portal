@@ -53,6 +53,20 @@ function sb(): SupabaseClient {
 const SALES_TYPES = ['new_sales_enquiry', 'quote_follow_up']
 const BOOKED = new Set(['sale', 'callback_scheduled'])
 
+// The week's standout recordings — best and worst substantive sales-team
+// calls, linked straight to the portal player for group review.
+export interface NotableCall {
+  callId: string
+  advisor: string
+  customer: string
+  type: string | null
+  outcome: string
+  score: number
+  durationSec: number
+  summary: string
+  url: string
+}
+
 interface AdvisorWeek {
   name: string
   slackId: string | null
@@ -79,12 +93,12 @@ export interface WeeklyReportResult {
   narrative?: any
 }
 
-async function fetchWeek(days: number): Promise<{ advisors: AdvisorWeek[]; total: number; weekLabel: string }> {
+async function fetchWeek(days: number): Promise<{ advisors: AdvisorWeek[]; total: number; weekLabel: string; notable: { best: NotableCall | null; worst: NotableCall | null } }> {
   const c = sb()
   const fromIso = new Date(Date.now() - days * 86400_000).toISOString()
 
   const { data: calls, error } = await c.from('calls')
-    .select('id, call_date, direction, external_number, caller_name, effective_advisor_name, effective_advisor_slack_user_id, agent_name, agent_ext')
+    .select('id, call_date, direction, external_number, caller_name, effective_advisor_name, effective_advisor_slack_user_id, agent_name, agent_ext, billsec_seconds, duration_seconds')
     .gte('call_date', fromIso)
     .order('call_date', { ascending: false })
     .limit(1500)
@@ -100,22 +114,55 @@ async function fetchWeek(days: number): Promise<{ advisors: AdvisorWeek[]; total
     analyses.push(...(data || []))
   }
 
+  // Canonicalise advisor names through the roster — "Dom S" and "Dom" are the
+  // same person, as are "Tyronne Wright" and "Tyronne". Exact name/alias match
+  // first, then first-token match; unmatched names stay as-is.
+  const { data: rosterRows } = await c.from('call_advisor_roster')
+    .select('name, aliases, slack_user_id').eq('active', true)
+  const roster = (rosterRows || []) as { name: string; aliases: string[]; slack_user_id: string | null }[]
+  const canonicalise = (raw: string): { name: string; slackId: string | null } => {
+    const n = raw.trim().toLowerCase()
+    const first = n.split(/\s+/)[0]
+    const hit = roster.find(r =>
+      r.name.toLowerCase() === n || (r.aliases || []).some(al => al.toLowerCase() === n) ||
+      r.name.toLowerCase() === first || (r.aliases || []).some(al => al.toLowerCase() === first),
+    )
+    return hit ? { name: hit.name, slackId: hit.slack_user_id } : { name: raw.trim(), slackId: null }
+  }
+
   const byAdvisor = new Map<string, { slackId: string | null; rows: { call: any; a: any }[] }>()
   for (const a of analyses) {
     const call = callById.get(a.call_id)
     if (!call) continue
     if (a.sales_score == null) continue                       // unscored (not coachable) — skip
-    const name = call.effective_advisor_name || call.agent_name || (call.agent_ext ? `Ext ${call.agent_ext}` : null)
-    if (!name) continue
-    const cur = byAdvisor.get(name) || { slackId: (call.effective_advisor_slack_user_id || null) as string | null, rows: [] as { call: any; a: any }[] }
-    cur.slackId = cur.slackId || call.effective_advisor_slack_user_id || null
+    const rawName = call.effective_advisor_name || call.agent_name || (call.agent_ext ? `Ext ${call.agent_ext}` : null)
+    if (!rawName) continue
+    const canon = canonicalise(rawName)
+    const cur = byAdvisor.get(canon.name) || { slackId: (canon.slackId || call.effective_advisor_slack_user_id || null) as string | null, rows: [] as { call: any; a: any }[] }
+    cur.slackId = cur.slackId || canon.slackId || call.effective_advisor_slack_user_id || null
     cur.rows.push({ call, a })
-    byAdvisor.set(name, cur)
+    byAdvisor.set(canon.name, cur)
   }
 
   const advisors: AdvisorWeek[] = []
+  const notableCandidates: NotableCall[] = []
   for (const [name, { slackId, rows }] of Array.from(byAdvisor.entries())) {
     if (!isSalesStaff(name)) continue                         // sales team only
+
+    // Candidates for call-of-the-week / learning call: substantive (≥2 min)
+    // scored sales-team calls, linked to the portal recording player.
+    for (const { call, a } of rows) {
+      const dur = call.billsec_seconds || call.duration_seconds || 0
+      if (dur < 120) continue
+      notableCandidates.push({
+        callId: call.id, advisor: name,
+        customer: call.caller_name || call.external_number || 'Unknown',
+        type: a.call_type, outcome: a.outcome, score: Number(a.sales_score), durationSec: dur,
+        summary: String(a.summary || '').slice(0, 450),
+        url: `https://justautos.app/calls?selected=${call.id}`,
+      })
+    }
+
     if (rows.length < 2) continue                             // not enough signal to coach on
     const scores = rows.map(r => Number(r.a.sales_score))
     const avg = Math.round(scores.reduce((s, v) => s + v, 0) / scores.length)
@@ -172,9 +219,14 @@ async function fetchWeek(days: number): Promise<{ advisors: AdvisorWeek[]; total
 
   const end = new Date()
   const weekLabel = `week ending ${end.toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'Australia/Brisbane' })}`
+  const sorted = [...notableCandidates].sort((a, b) => b.score - a.score)
+  const notable = {
+    best: sorted[0] || null,
+    worst: sorted.length > 1 ? sorted[sorted.length - 1] : null,
+  }
   // Total = the sales team's coached calls (the report's scope), not every
   // analysed call in the system.
-  return { advisors, total: advisors.reduce((s, a) => s + a.scored, 0), weekLabel }
+  return { advisors, total: advisors.reduce((s, a) => s + a.scored, 0), weekLabel, notable }
 }
 
 async function writeNarrative(advisors: AdvisorWeek[], weekLabel: string): Promise<{ parsed: any; costMicroUsd: number }> {
@@ -250,7 +302,19 @@ function advisorBlocks(week: AdvisorWeek, n: any): any[] {
 }
 
 // ── Polished HTML email (group report + per-advisor sections) ────────────
-function reportEmailHtml(advisors: AdvisorWeek[], narrative: any, weekLabel: string, totalCalls: number): string {
+function notableCallHtml(label: string, icon: string, accent: string, call: NotableCall | null): string {
+  if (!call) return ''
+  const esc = (s: any) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+  const mins = `${Math.floor(call.durationSec / 60)}m ${call.durationSec % 60}s`
+  return `<div style="border:1px solid #e5e7eb;border-left:4px solid ${accent};border-radius:10px;padding:14px 16px;margin:0 0 12px;background:#ffffff">
+    <div style="font-size:12px;font-weight:700;color:${accent};text-transform:uppercase;letter-spacing:.04em;margin-bottom:4px">${icon} ${esc(label)}</div>
+    <div style="font-size:14px;font-weight:700;color:#111827">${esc(call.advisor)} vs ${esc(call.customer)} — ${call.score}/100 <span style="color:#9ca3af;font-weight:400">· ${esc(callTypeLabel(call.type) || '')} · ${mins}</span></div>
+    <div style="font-size:13px;color:#374151;line-height:1.55;margin:6px 0 10px">${esc(call.summary)}</div>
+    <a href="${call.url}" style="display:inline-block;padding:7px 14px;background:${accent};color:#ffffff;border-radius:6px;font-size:12px;font-weight:700;text-decoration:none">🎧 Listen in the portal</a>
+  </div>`
+}
+
+function reportEmailHtml(advisors: AdvisorWeek[], narrative: any, weekLabel: string, totalCalls: number, notable?: { best: NotableCall | null; worst: NotableCall | null }): string {
   const esc = (s: any) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
   const scoreColor = (v: number | null) => v == null ? '#6b7280' : v >= 70 ? '#059669' : v >= 50 ? '#d97706' : '#dc2626'
   const card = (inner: string, accent = '#e5e7eb') =>
@@ -308,6 +372,10 @@ function reportEmailHtml(advisors: AdvisorWeek[], narrative: any, weekLabel: str
       ${narrative.team_focus ? `<div style="margin-top:12px;padding:10px 12px;background:#eff6ff;border-radius:8px;font-size:13px;color:#1e40af"><strong>This week's focus:</strong> ${esc(narrative.team_focus)}</div>` : ''}
     `, '#2563eb')}
 
+    ${(notable?.best || notable?.worst) ? `<div style="font-size:12px;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:.05em;margin:20px 0 10px">Listen of the week</div>` : ''}
+    ${notableCallHtml('Call of the week', '🏆', '#059669', notable?.best || null)}
+    ${notableCallHtml('Learning call — review as a group', '📚', '#d97706', notable?.worst || null)}
+
     <div style="font-size:12px;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:.05em;margin:20px 0 10px">Per advisor</div>
     ${advisorSections}
 
@@ -317,7 +385,7 @@ function reportEmailHtml(advisors: AdvisorWeek[], narrative: any, weekLabel: str
 
 export async function runWeeklyReport(opts: { dryRun?: boolean; days?: number } = {}): Promise<WeeklyReportResult> {
   const days = Math.max(3, Math.min(Number(opts.days) || 7, 31))
-  const { advisors, total, weekLabel } = await fetchWeek(days)
+  const { advisors, total, weekLabel, notable } = await fetchWeek(days)
   if (!advisors.length) return { weekLabel, advisors: 0, callsAnalysed: total, posted: false, costMicroUsd: 0 }
 
   const { parsed, costMicroUsd } = await writeNarrative(advisors, weekLabel)
@@ -343,7 +411,7 @@ export async function runWeeklyReport(opts: { dryRun?: boolean; days?: number } 
     await sendMail('accounts@justautosmechanical.com.au', {
       to, cc,
       subject: `Weekly Sales Coaching Report — ${weekLabel}`,
-      html: reportEmailHtml(advisors, parsed, weekLabel, total),
+      html: reportEmailHtml(advisors, parsed, weekLabel, total, notable),
       attachments,
     })
     emailed = true
@@ -353,15 +421,18 @@ export async function runWeeklyReport(opts: { dryRun?: boolean; days?: number } 
 
   const channel = CHANNEL()
   const headerText = `📊 Weekly Sales Coaching Report — ${weekLabel}`
-  const main = await postMessage({
-    channel,
-    text: headerText,
-    blocks: [
-      { type: 'header', text: { type: 'plain_text', text: headerText, emoji: true } },
-      { type: 'context', elements: [{ type: 'mrkdwn', text: `${total} calls coached across ${advisors.length} advisors · full breakdowns in this thread 🧵` }] },
-      { type: 'section', text: { type: 'mrkdwn', text: `*Team overview*\n${parsed.team_summary || ''}`.slice(0, 2900) } },
-    ],
-  })
+  const mainBlocks: any[] = [
+    { type: 'header', text: { type: 'plain_text', text: headerText, emoji: true } },
+    { type: 'context', elements: [{ type: 'mrkdwn', text: `${total} calls coached across ${advisors.length} advisors · full breakdowns in this thread 🧵` }] },
+    { type: 'section', text: { type: 'mrkdwn', text: `*Team overview*\n${parsed.team_summary || ''}`.slice(0, 2900) } },
+  ]
+  if (notable.best) {
+    mainBlocks.push({ type: 'section', text: { type: 'mrkdwn', text: `🏆 *Call of the week* — ${notable.best.advisor} vs ${notable.best.customer} (${notable.best.score}/100)\n<${notable.best.url}|🎧 Listen in the portal>`.slice(0, 2900) } })
+  }
+  if (notable.worst) {
+    mainBlocks.push({ type: 'section', text: { type: 'mrkdwn', text: `📚 *Learning call — review as a group* — ${notable.worst.advisor} vs ${notable.worst.customer} (${notable.worst.score}/100)\n<${notable.worst.url}|🎧 Listen in the portal>`.slice(0, 2900) } })
+  }
+  const main = await postMessage({ channel, text: headerText, blocks: mainBlocks })
   if (!main) throw new Error('Slack post failed (is the bot in the coaching channel?)')
 
   for (const week of advisors) {
