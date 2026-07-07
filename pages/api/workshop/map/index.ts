@@ -13,15 +13,22 @@ export default withAuth('view:reports', async (req: NextApiRequest, res: NextApi
   const db = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!, { auth: { persistSession: false } })
 
   const { data: fyRows, error: fyErr } = await db.from('md_workshop_map_cache')
-    .select('fy, synced_at').order('fy', { ascending: false })
+    .select('fy, synced_at, quote_count:payload->quotes->meta->total_quotes')
+    .order('fy', { ascending: false })
   if (fyErr) return res.status(500).json({ error: fyErr.message })
   const fys = (fyRows || []).map(r => r.fy)
   if (!fys.length) {
     return res.status(200).json({ fy: null, fys: [], payload: null, synced_at: null, last_run: await lastRun(db) })
   }
 
+  // Default FY: the newest one with a meaningful amount of data. Without this,
+  // the map flips to the new FY on 1 July with a week of quotes and looks
+  // broken/empty ("159 quotes all year"). A young FY takes over once it has
+  // accumulated ~a month of volume; the header FY buttons switch any time.
+  const MIN_QUOTES_FOR_DEFAULT = 500
+  const defaultFy = (fyRows || []).find(r => Number((r as any).quote_count) >= MIN_QUOTES_FOR_DEFAULT)?.fy ?? fys[fys.length - 1]
   const wanted = Number(req.query.fy)
-  const fy = fys.includes(wanted) ? wanted : fys[0]
+  const fy = fys.includes(wanted) ? wanted : defaultFy
 
   const { data: cache, error } = await db.from('md_workshop_map_cache')
     .select('fy, payload, synced_at').eq('fy', fy).single()
