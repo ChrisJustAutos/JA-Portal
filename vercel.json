@@ -111,10 +111,6 @@
     {
       "path": "/api/cron/agents",
       "schedule": "*/15 * * * *"
-    },
-    {
-      "path": "/api/cron/slack-cleanup",
-      "schedule": "* * * * *"
     }
   ]
 }

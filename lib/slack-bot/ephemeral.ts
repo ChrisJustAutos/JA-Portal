@@ -14,13 +14,11 @@ function sb(): SupabaseClient {
 }
 
 function ttlMinutes(): number {
-  // Auto-delete is OFF by default — we keep full history (answers thread under
-  // each question). Set SLACK_EPHEMERAL_MINUTES to a positive number to bring
-  // back ephemeral replies that self-delete after that many minutes.
-  const raw = (process.env.SLACK_EPHEMERAL_MINUTES ?? '').trim()
-  if (raw === '') return 0
-  const n = Number(raw)
-  return Number.isFinite(n) && n > 0 ? n : 0
+  // HARD OFF (Chris 2026-07-07: "no deleting at all" — bot answers in the
+  // parts channel were disappearing). Deliberately ignores
+  // SLACK_EPHEMERAL_MINUTES so no env setting can re-enable deletion; the
+  // queue/sweep machinery is kept only so old rows stay inert.
+  return 0
 }
 
 export function ephemeralEnabled(): boolean {
@@ -42,6 +40,9 @@ export async function scheduleDeletion(channel: string, ts: string): Promise<voi
 // Delete all messages whose delete_at has passed. A failed delete is left in the
 // queue to retry on the next sweep.
 export async function sweepDueDeletions(limit = 200): Promise<{ deleted: number; failed: number; scanned: number }> {
+  // Deletion is hard-off (see ttlMinutes) — never delete anything, even rows
+  // enqueued before the switch-off.
+  if (!ephemeralEnabled()) return { deleted: 0, failed: 0, scanned: 0 }
   const db = sb()
   const { data, error } = await db.from('slack_ephemeral_messages')
     .select('id, channel, ts')
