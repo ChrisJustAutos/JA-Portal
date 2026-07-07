@@ -211,21 +211,52 @@ async function main() {
     } finally {
       await browser.close().catch(() => undefined)
     }
-    log(`Fetched ${rawInvoices.length} invoices, ${rawQuotes.length} quotes, ${rawCustomers.length} customers`)
+    // A live feed shifts across pages while we pull (new quotes push rows
+    // down) so concurrent paging can capture a record twice — dedupe by id.
+    const uniqueById = (rows: any[]) => {
+      const seen = new Set<string>()
+      return rows.filter(r => {
+        const id = String(r?.id ?? '')
+        if (!id || seen.has(id)) return false
+        seen.add(id); return true
+      })
+    }
+    rawInvoices = uniqueById(rawInvoices)
+    rawQuotes = uniqueById(rawQuotes)
+    rawCustomers = uniqueById(rawCustomers)
+    log(`Fetched ${rawInvoices.length} invoices, ${rawQuotes.length} quotes, ${rawCustomers.length} customers (deduped)`)
 
-    // Customer id → address (quotes carry no address inline).
+    // Customer id → address (quotes carry no address inline). MD customers
+    // expose `address` (full formatted string, possibly an object) plus
+    // `street_address` (street line) — strip the street prefix and parse the
+    // "Suburb State 4213" remainder.
+    const customerAddr = (c: any): Addr => {
+      const a = c?.address
+      if (a && typeof a === 'object') {
+        const suburb = S(a.suburb) ?? S(a.city)
+        const state = S(a.state)
+        const postcode = S(a.postcode) ?? S(a.post_code)
+        if (suburb || postcode) return { suburb, state, postcode }
+      }
+      let s = typeof a === 'string' ? a.trim() : ''
+      const street = S(c?.street_address)
+      if (s && street && s.toUpperCase().startsWith(street.toUpperCase())) {
+        s = s.slice(street.length).replace(/^[\s,]+/, '')
+      }
+      // Even unstripped, parseSuburbBlob still extracts postcode + state —
+      // and postcode is what the geocoder tries first.
+      return s ? parseSuburbBlob(s) : { suburb: null, state: null, postcode: null }
+    }
     const custAddr: Record<string, Addr> = {}
     let custAddrHits = 0
     for (const c of rawCustomers) {
       if (!c?.id) continue
-      const suburb = S(c.suburb) ?? S(c.city) ?? S(c.town)
-      const state = S(c.state)
-      const postcode = S(c.postcode) ?? S(c.post_code) ?? S(c.zip)
-      if (suburb || postcode) { custAddr[String(c.id)] = { suburb, state, postcode }; custAddrHits++ }
+      const addr = customerAddr(c)
+      if (addr.suburb || addr.postcode) { custAddr[String(c.id)] = addr; custAddrHits++ }
     }
     log(`Customer address map: ${custAddrHits}/${rawCustomers.length} customers have suburb/postcode`)
     if (rawCustomers.length && !custAddrHits) {
-      log(`WARNING: no address fields found on customers.json — sample keys: ${Object.keys(rawCustomers[0] || {}).join(', ')}`)
+      log(`WARNING: no usable addresses on customers.json — sample: ${JSON.stringify(rawCustomers[0]?.address ?? null).slice(0, 200)}`)
     }
 
     // ── Normalise ───────────────────────────────────────────────────────

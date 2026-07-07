@@ -38,7 +38,10 @@ const QUOTE_COLS = new Set([
 
 function cleanRows(rows: any[], cols: Set<string>, keyCol: string): any[] {
   const now = new Date().toISOString()
-  const out: any[] = []
+  // Keyed map (last wins): duplicate keys inside one batch make Postgres
+  // reject the whole upsert ("ON CONFLICT DO UPDATE cannot affect row a
+  // second time").
+  const out = new Map<string, any>()
   for (const r of rows) {
     if (!r || typeof r !== 'object' || !String(r[keyCol] || '').trim()) continue
     const row: any = {}
@@ -47,9 +50,9 @@ function cleanRows(rows: any[], cols: Set<string>, keyCol: string): any[] {
     row.last_seen_at = now
     row.missing = false
     row.updated_at = now
-    out.push(row)
+    out.set(row[keyCol], row)
   }
-  return out
+  return Array.from(out.values())
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
