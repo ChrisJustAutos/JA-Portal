@@ -906,7 +906,37 @@ async function postApprovedRow(c: SupabaseClient, row: any): Promise<string> {
     supplier_name: match.supplier.name, supplier_uid: match.supplier.uid,
     invoice_number: extracted.invoiceNumber, amount: total,
   }).eq('id', row.id)
+
+  // Same as the normal auto-entry path: invoice entered → file the email away
+  // (mark read + move to the processed folder). Best-effort — a sibling
+  // approval may already have moved the email (Graph move changes the id).
+  const filed = await fileEmailAway(String(row.mailbox || ''), String(row.graph_message_id || ''))
+  try { await c.from('ap_auto_entry_log').update({ moved: filed.moved, move_note: filed.note }).eq('id', row.id) } catch { /* best effort */ }
+
   return `✅ *${match.supplier.name}* — ${extracted.invoiceNumber} · ${money(total)} posted to MYOB${posted.adopted ? ' (already existed — linked)' : ''}. Approved by ${row.approved_by || 'staff'}.`
+}
+
+// Mark an email read + move it to the processed folder ("Read /Printed") —
+// the same filing the scan loop does after a direct post. Best-effort.
+async function fileEmailAway(mailbox: string, messageId: string): Promise<{ moved: boolean; note: string }> {
+  if (!mailbox || !messageId) return { moved: false, note: 'no mailbox/message id on the log row' }
+  const folderName = processedFolder()
+  const notes: string[] = []
+  let moved = false
+  try { await markMessageAsRead(mailbox, messageId) } catch (e: any) { notes.push(`mark-read failed: ${e?.message || e}`) }
+  if (folderName) {
+    let folderId: string | null = null
+    try { folderId = await findFolderByDisplayNameLoose(mailbox, folderName) } catch { /* leave null */ }
+    if (!folderId) {
+      notes.push(`folder "${folderName}" not found in mailbox`)
+    } else {
+      try { await moveMessageToFolder(mailbox, messageId, folderId); moved = true; notes.push(`moved to "${folderName}"`) }
+      catch (e: any) { notes.push(`move failed: ${e?.message || e}`) }
+    }
+  }
+  const note = notes.join('; ').slice(0, 300)
+  if (notes.length && !moved) console.warn(`[ap-auto-entry] approve filing ${messageId}: ${note}`)
+  return { moved, note }
 }
 
 // Cron fallback: rows approved (via button or SQL) that didn't complete —
