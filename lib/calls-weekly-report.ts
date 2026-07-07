@@ -28,6 +28,18 @@ function reportRecipients(): { to: string[]; cc: string[] } {
   return { to, cc }
 }
 
+// SALES STAFF ONLY (Chris 2026-07-07) — the report covers the sales team, not
+// managers, workshop staff, or unattributed extensions. First-name match,
+// case-insensitive, so "Tyronne Wright" still counts as Tyronne.
+function salesStaff(): string[] {
+  return (process.env.CALLS_WEEKLY_REPORT_ADVISORS || 'Dom,Kaleb,James,Tyronne,Graham')
+    .split(/[,;]+/).map(x => x.trim().toLowerCase()).filter(Boolean)
+}
+function isSalesStaff(name: string): boolean {
+  const first = name.trim().split(/\s+/)[0].toLowerCase()
+  return salesStaff().includes(first)
+}
+
 let _sb: SupabaseClient | null = null
 function sb(): SupabaseClient {
   if (_sb) return _sb
@@ -103,6 +115,7 @@ async function fetchWeek(days: number): Promise<{ advisors: AdvisorWeek[]; total
 
   const advisors: AdvisorWeek[] = []
   for (const [name, { slackId, rows }] of Array.from(byAdvisor.entries())) {
+    if (!isSalesStaff(name)) continue                         // sales team only
     if (rows.length < 2) continue                             // not enough signal to coach on
     const scores = rows.map(r => Number(r.a.sales_score))
     const avg = Math.round(scores.reduce((s, v) => s + v, 0) / scores.length)
@@ -159,7 +172,9 @@ async function fetchWeek(days: number): Promise<{ advisors: AdvisorWeek[]; total
 
   const end = new Date()
   const weekLabel = `week ending ${end.toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'Australia/Brisbane' })}`
-  return { advisors, total: analyses.filter(a => a.sales_score != null).length, weekLabel }
+  // Total = the sales team's coached calls (the report's scope), not every
+  // analysed call in the system.
+  return { advisors, total: advisors.reduce((s, a) => s + a.scored, 0), weekLabel }
 }
 
 async function writeNarrative(advisors: AdvisorWeek[], weekLabel: string): Promise<{ parsed: any; costMicroUsd: number }> {
@@ -308,14 +323,28 @@ export async function runWeeklyReport(opts: { dryRun?: boolean; days?: number } 
   const { parsed, costMicroUsd } = await writeNarrative(advisors, weekLabel)
   if (opts.dryRun) return { weekLabel, advisors: advisors.length, callsAnalysed: total, posted: false, costMicroUsd, narrative: parsed }
 
-  // Email — the primary "polished report" delivery (Matt, cc Ryan + Chris).
+  // Email — the primary "polished report" delivery (Matt, cc Ryan + Chris),
+  // with INDIVIDUAL PDFs attached: one group report + one per advisor.
   let emailed = false
   try {
+    const { renderGroupReportPdf, renderAdvisorReportPdf } = await import('./calls-weekly-report-pdf')
+    const attachments: { name: string; contentType: string; content: Buffer }[] = []
+    try {
+      attachments.push({ name: 'Weekly Coaching - Group.pdf', contentType: 'application/pdf', content: await renderGroupReportPdf(advisors, parsed, weekLabel, total) })
+    } catch (e: any) { console.error('[weekly-report] group pdf failed:', e?.message || e) }
+    for (const week of advisors) {
+      try {
+        const n = (parsed.advisors || []).find((x: any) => x.name === week.name) || {}
+        attachments.push({ name: `Weekly Coaching - ${week.name.replace(/[^\w -]/g, '')}.pdf`, contentType: 'application/pdf', content: await renderAdvisorReportPdf(week, n, weekLabel) })
+      } catch (e: any) { console.error(`[weekly-report] pdf failed for ${week.name}:`, e?.message || e) }
+    }
+
     const { to, cc } = reportRecipients()
     await sendMail('accounts@justautosmechanical.com.au', {
       to, cc,
       subject: `Weekly Sales Coaching Report — ${weekLabel}`,
       html: reportEmailHtml(advisors, parsed, weekLabel, total),
+      attachments,
     })
     emailed = true
   } catch (e: any) {
