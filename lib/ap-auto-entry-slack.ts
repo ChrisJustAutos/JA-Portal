@@ -25,13 +25,15 @@ export interface AutoEntrySlackInput {
   // ap_auto_entry_log row id — renders an "Approve & post to MYOB" button on
   // flag cards (handled by /api/slack/ask → approveAndPost).
   approveValue?: string | null
+  // Credit note — amounts arrive already NEGATIVE; the card labels it.
+  isCreditNote?: boolean
   failReasons?: string[]
   adopted?: boolean
   pdfUrl?: string | null
 }
 
 const money = (n: number | null | undefined) =>
-  n == null || !isFinite(n) ? '—' : `$${Number(n).toLocaleString('en-AU', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+  n == null || !isFinite(n) ? '—' : `${Number(n) < 0 ? '-' : ''}$${Math.abs(Number(n)).toLocaleString('en-AU', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
 
 const BANK_BADGE: Record<BankCheck, string> = {
   match:            '✅ bank matches MYOB card',
@@ -65,9 +67,10 @@ function prettyReason(code: string): string {
 
 export function buildAutoEntryBlocks(i: AutoEntrySlackInput): { text: string; blocks: SlackBlock[] } {
   const supplier = i.supplierName || 'Unknown supplier'
+  const creditTag = i.isCreditNote ? ' (credit note)' : ''
   const headline = i.outcome === 'posted'
-    ? `✅ Posted to MYOB — ${supplier}${i.adopted ? ' (already in MYOB, linked)' : ''}`
-    : `🟠 Not auto-posted — ${supplier}`
+    ? `✅ Posted to MYOB${creditTag} — ${supplier}${i.adopted ? ' (already in MYOB, linked)' : ''}`
+    : `🟠 Not auto-posted${creditTag} — ${supplier}`
   const text = `${headline} · ${i.invoiceNumber || 'no #'} · ${money(i.totalIncGst)}`
 
   const fields = [
@@ -124,7 +127,7 @@ export function buildAutoEntryBlocks(i: AutoEntrySlackInput): { text: string; bl
       text: { type: 'plain_text', text: '✅ Approve & post to MYOB', emoji: true },
       confirm: {
         title: { type: 'plain_text', text: 'Post to MYOB?' },
-        text: { type: 'mrkdwn', text: `Post *${i.supplierName || 'this invoice'}* ${i.invoiceNumber || ''} for *${i.totalIncGst != null ? `$${Number(i.totalIncGst).toFixed(2)}` : '?'}* — you're vouching for the flagged checks.` },
+        text: { type: 'mrkdwn', text: `Post *${i.supplierName || 'this invoice'}* ${i.invoiceNumber || ''} for *${money(i.totalIncGst) === '—' ? '?' : money(i.totalIncGst)}*${i.isCreditNote ? ' (credit note — posts negative)' : ''} — you're vouching for the flagged checks.` },
         confirm: { type: 'plain_text', text: 'Post it' },
         deny: { type: 'plain_text', text: 'Cancel' },
       },

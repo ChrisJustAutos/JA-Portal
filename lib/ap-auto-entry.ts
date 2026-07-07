@@ -119,7 +119,7 @@ export interface AutoEntryOutcome {
 }
 
 const money = (n: number | null | undefined) =>
-  n == null || !isFinite(n) ? '—' : `$${Number(n).toLocaleString('en-AU', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+  n == null || !isFinite(n) ? '—' : `${Number(n) < 0 ? '-' : ''}$${Math.abs(Number(n)).toLocaleString('en-AU', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
 
 // PDF or supported image → how to parse it. null = not an ingestible attachment.
 function classify(att: GraphAttachmentMeta): 'pdf' | SupportedImageMediaType | null {
@@ -683,10 +683,16 @@ async function processInvoice(
     }
   }
 
-  // Common Slack fields.
+  // Common Slack fields. Credits display + log NEGATIVE (-$62.70) — extraction
+  // returns magnitudes with isCreditNote as the sign flag; posting keeps the
+  // magnitude (buildServiceBillBody applies the flip itself).
+  const isCredit = extracted.isCreditNote === true
+  const signed = (n: number | null | undefined) => n == null ? null : (isCredit ? -Math.abs(n) : n)
+  const signedTotal = signed(total)
   const slackCommon = {
     supplierName, companyFile, invoiceNumber: extracted.invoiceNumber, invoiceDate: extracted.invoiceDate,
-    totalIncGst: total, gstAmount: extracted.totals.gstAmount, codingSummary, bankCheck: effectiveBank,
+    totalIncGst: signedTotal, gstAmount: signed(extracted.totals.gstAmount), codingSummary, bankCheck: effectiveBank,
+    isCreditNote: isCredit,
     invoiceBank: extracted.bankDetails, cardBank, sourceMailbox: mailbox, supplierTrust: trust.summary,
     paidOnInvoice: extracted.paidInFull ? (extracted.paymentMethod || 'paid') : null,
   }
@@ -699,9 +705,9 @@ async function processInvoice(
       const staged = await stageAndSign(c, msg, attId, bytes, kind).catch(() => null)
       const withUrl = buildAutoEntryBlocks({ ...slackCommon, outcome: 'flagged', failReasons, pdfUrl: staged?.url, approveValue: staged ? rowId : null })
       const ts = await sendSlack(withUrl)
-      await logRow(c, { mailbox, companyFile, msg, attId, attName }, { id: rowId, outcome: 'flagged', supplierName, supplierUid, invoiceNumber: extracted.invoiceNumber, invoiceDate: extracted.invoiceDate, amount: total, failReasons, bankCheck: effectiveBank, pdfStoragePath: staged?.path || null, slackTs: ts })
+      await logRow(c, { mailbox, companyFile, msg, attId, attName }, { id: rowId, outcome: 'flagged', supplierName, supplierUid, invoiceNumber: extracted.invoiceNumber, invoiceDate: extracted.invoiceDate, amount: signedTotal, failReasons, bankCheck: effectiveBank, pdfStoragePath: staged?.path || null, slackTs: ts })
     }
-    return { ...base, supplierName, invoiceNumber: extracted.invoiceNumber, amount: total, outcome: 'flagged', bankCheck: effectiveBank, failReasons, slackText: built.text }
+    return { ...base, supplierName, invoiceNumber: extracted.invoiceNumber, amount: signedTotal, outcome: 'flagged', bankCheck: effectiveBank, failReasons, slackText: built.text }
   }
 
   // PASS → post to MYOB (tax-inclusive, headless), then Slack success.
@@ -752,14 +758,14 @@ async function processInvoice(
     const rowId = randomUUID()
     const built = buildAutoEntryBlocks({ ...slackCommon, outcome: 'flagged', failReasons: reasons, pdfUrl: staged?.url, approveValue: staged ? rowId : null })
     const ts = await sendSlack(built)
-    await logRow(c, { mailbox, companyFile, msg, attId, attName }, { id: rowId, outcome: 'error', supplierName, supplierUid, invoiceNumber: extracted.invoiceNumber, invoiceDate: extracted.invoiceDate, amount: total, failReasons: reasons, bankCheck: effectiveBank, error: posted.reason || null, pdfStoragePath: staged?.path || null, slackTs: ts })
-    return { ...base, supplierName, invoiceNumber: extracted.invoiceNumber, amount: total, outcome: 'error', bankCheck: effectiveBank, failReasons: reasons, error: posted.reason }
+    await logRow(c, { mailbox, companyFile, msg, attId, attName }, { id: rowId, outcome: 'error', supplierName, supplierUid, invoiceNumber: extracted.invoiceNumber, invoiceDate: extracted.invoiceDate, amount: signedTotal, failReasons: reasons, bankCheck: effectiveBank, error: posted.reason || null, pdfStoragePath: staged?.path || null, slackTs: ts })
+    return { ...base, supplierName, invoiceNumber: extracted.invoiceNumber, amount: signedTotal, outcome: 'error', bankCheck: effectiveBank, failReasons: reasons, error: posted.reason }
   }
 
   const built = buildAutoEntryBlocks({ ...slackCommon, codingSummary: posted.codingDetail || slackCommon.codingSummary, outcome: 'posted', adopted: posted.adopted, pdfUrl: staged?.url })
   const ts = await sendSlack(built)
-  await logRow(c, { mailbox, companyFile, msg, attId, attName }, { outcome: 'posted', supplierName, supplierUid, invoiceNumber: extracted.invoiceNumber, invoiceDate: extracted.invoiceDate, amount: total, bankCheck: effectiveBank, myobBillUid: posted.billUid || null, pdfStoragePath: staged?.path || null, slackTs: ts })
-  return { ...base, supplierName, invoiceNumber: extracted.invoiceNumber, amount: total, outcome: 'posted', bankCheck: effectiveBank, failReasons: [], billUid: posted.billUid, adopted: posted.adopted }
+  await logRow(c, { mailbox, companyFile, msg, attId, attName }, { outcome: 'posted', supplierName, supplierUid, invoiceNumber: extracted.invoiceNumber, invoiceDate: extracted.invoiceDate, amount: signedTotal, bankCheck: effectiveBank, myobBillUid: posted.billUid || null, pdfStoragePath: staged?.path || null, slackTs: ts })
+  return { ...base, supplierName, invoiceNumber: extracted.invoiceNumber, amount: signedTotal, outcome: 'posted', bankCheck: effectiveBank, failReasons: [], billUid: posted.billUid, adopted: posted.adopted }
 }
 
 // Post a sample card to the configured webhook — verifies the channel + format
@@ -905,10 +911,12 @@ async function postApprovedRow(c: SupabaseClient, row: any): Promise<string> {
     return `❌ ${extracted.invoiceNumber}: MYOB rejected the bill — ${(posted.reason || 'unknown').slice(0, 200)}`
   }
 
+  // Credits show + log negative (-$62.70); posting used the magnitude.
+  const signedTotal = extracted.isCreditNote === true ? -Math.abs(total) : total
   await c.from('ap_auto_entry_log').update({
     outcome: 'posted', myob_bill_uid: posted.billUid || null, error: null,
     supplier_name: match.supplier.name, supplier_uid: match.supplier.uid,
-    invoice_number: extracted.invoiceNumber, amount: total,
+    invoice_number: extracted.invoiceNumber, amount: signedTotal,
   }).eq('id', row.id)
 
   // Same as the normal auto-entry path: invoice entered → file the email away
@@ -917,7 +925,7 @@ async function postApprovedRow(c: SupabaseClient, row: any): Promise<string> {
   const filed = await fileEmailAway(String(row.mailbox || ''), String(row.graph_message_id || ''))
   try { await c.from('ap_auto_entry_log').update({ moved: filed.moved, move_note: filed.note }).eq('id', row.id) } catch { /* best effort */ }
 
-  return `✅ *${match.supplier.name}* — ${extracted.invoiceNumber} · ${money(total)} posted to MYOB${posted.adopted ? ' (already existed — linked)' : ''}. Approved by ${row.approved_by || 'staff'}.`
+  return `✅ *${match.supplier.name}* — ${extracted.invoiceNumber} · ${money(signedTotal)}${extracted.isCreditNote ? ' (credit note)' : ''} posted to MYOB${posted.adopted ? ' (already existed — linked)' : ''}. Approved by ${row.approved_by || 'staff'}.`
 }
 
 // Mark an email read + move it to the processed folder ("Read /Printed") —
