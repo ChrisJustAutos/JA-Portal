@@ -259,10 +259,13 @@ async function runMailbox(
 
   let messages: GraphMessageSummary[] = []
   try {
-    // alsoSubjects: invoice/statement emails whose PDF is attached INLINE
-    // report hasAttachments=false and were invisible — probe those too
-    // (link-only mails still yield no attachments and skip harmlessly).
-    messages = await listMessagesWithAttachments(mailbox, { sinceIsoDate: sinceIso, top: maxMessages, alsoSubjects: /invoice|statement|credit|remittance/i })
+    // alsoSubjects: emails whose PDF is attached INLINE report
+    // hasAttachments=false and were invisible — probe those too. The subject
+    // gate is deliberately broad (suppliers send invoices under "Order #12345"
+    // style subjects — Chris 2026-07-08); what the attachment actually IS is
+    // decided by classify() + extraction, and link-only mails yield no
+    // attachments and skip harmlessly.
+    messages = await listMessagesWithAttachments(mailbox, { sinceIsoDate: sinceIso, top: maxMessages, alsoSubjects: /invoice|inv[\s#-]?\d|statement|credit|remittance|order|receipt|bill|purchase|delivery|docket|consignment/i })
   } catch (e: any) {
     throw new Error(`Could not read ${mailbox}: ${e?.message || e}`)
   }
