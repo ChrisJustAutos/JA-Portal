@@ -58,12 +58,56 @@ async function ingest(body: Record<string, any>): Promise<any> {
   return r.json()
 }
 
+// ── MD session (with re-login on single-session kicks) ─────────────────
+//
+// MD enforces one session per employee login, and other workers (the 30-min
+// stock sync, prepick, …) share this account — a mid-pull login elsewhere
+// 401s every subsequent request ("logged in from a different computer").
+// Rather than dying 40 minutes in, re-login and resume, with a global cap.
+
+let mdSession: MdClient | null = null
+let reloginCount = 0
+let reloginInFlight: Promise<void> | null = null
+const MAX_RELOGINS = 8
+
+async function mdLogin(): Promise<void> {
+  const { chromium } = await import('playwright')
+  const browser = await chromium.launch({ headless: true })
+  try {
+    const { client } = await loginToMechanicDesk(
+      browser,
+      process.env.MECHANICDESK_WORKSHOP_ID!,
+      process.env.MECHANICDESK_USERNAME!,
+      process.env.MECHANICDESK_PASSWORD!,
+    )
+    mdSession = client
+  } finally {
+    await browser.close().catch(() => undefined)
+  }
+}
+
+// Single-flight: concurrent page fetches that all 401 share one re-login.
+function relogin(): Promise<void> {
+  if (!reloginInFlight) {
+    reloginInFlight = (async () => {
+      if (++reloginCount > MAX_RELOGINS) {
+        throw new Error(`MD session kicked ${MAX_RELOGINS}+ times this run (another worker shares this login) — giving up`)
+      }
+      log(`MD session kicked by another login — re-logging in (${reloginCount}/${MAX_RELOGINS})`)
+      await new Promise(r => setTimeout(r, 5000))
+      await mdLogin()
+    })().finally(() => { reloginInFlight = null })
+  }
+  return reloginInFlight
+}
+
 // ── MD JSON paging ──────────────────────────────────────────────────────
 
-async function mdJson(client: MdClient, path: string): Promise<any> {
+async function mdJson(path: string): Promise<any> {
+  if (!mdSession) throw new Error('not logged in')
   const r = await fetch(`${MD_BASE}${path}`, {
     headers: {
-      'Cookie': client.cookieHeader,
+      'Cookie': mdSession.cookieHeader,
       'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
       'Accept': 'application/json',
       'X-Requested-With': 'XMLHttpRequest',
@@ -76,17 +120,20 @@ async function mdJson(client: MdClient, path: string): Promise<any> {
   try { return JSON.parse(text) } catch { throw new Error(`MD GET ${path} → non-JSON (${text.slice(0, 120)})`) }
 }
 
-// Retry transient gateway errors (MD 502/503/504 under load) with backoff.
-async function mdJsonRetry(client: MdClient, path: string, tries = 3): Promise<any> {
-  for (let attempt = 1; ; attempt++) {
+// Retries: 401 session-kick → re-login and go again (global MAX_RELOGINS cap);
+// transient gateway errors (MD 502/503/504 under load) → backoff, per-request cap.
+async function mdJsonRetry(path: string, tries = 3): Promise<any> {
+  let transientAttempts = 0
+  for (;;) {
     try {
-      return await mdJson(client, path)
+      return await mdJson(path)
     } catch (e: any) {
       const msg = String(e?.message || e)
+      if (/→ 401:/.test(msg)) { await relogin(); continue }
       const transient = /→ 50[234]:/.test(msg)
-      if (!transient || attempt >= tries) throw e
-      log(`retrying (${attempt}/${tries - 1}) after: ${msg.slice(0, 100)}`)
-      await new Promise(r => setTimeout(r, 8000 * attempt))
+      if (!transient || ++transientAttempts >= tries) throw e
+      log(`retrying (${transientAttempts}/${tries - 1}) after: ${msg.slice(0, 100)}`)
+      await new Promise(r => setTimeout(r, 8000 * transientAttempts))
     }
   }
 }
@@ -98,7 +145,7 @@ async function mdJsonRetry(client: MdClient, path: string, tries = 3): Promise<a
  * once a whole batch sits more than 30 days below the cutoff, later pages
  * can't matter — backdated edits stay inside that safety margin.
  */
-async function fetchAll(client: MdClient, resource: string, opts: { perPage?: number; stopWhenOlderThan?: string } = {}): Promise<any[]> {
+async function fetchAll(resource: string, opts: { perPage?: number; stopWhenOlderThan?: string } = {}): Promise<any[]> {
   let perPage = opts.perPage ?? 200
   const cutoff = opts.stopWhenOlderThan ? new Date(opts.stopWhenOlderThan).getTime() - 30 * 86400_000 : null
   const pageUrl = (p: number) => `/${resource}.json?page=${p}&per_page=${perPage}`
@@ -106,7 +153,7 @@ async function fetchAll(client: MdClient, resource: string, opts: { perPage?: nu
   // Page 1 — with adaptive page-size shrink on persistent gateway timeouts.
   let first: any
   for (;;) {
-    try { first = await mdJsonRetry(client, pageUrl(1), 2); break }
+    try { first = await mdJsonRetry(pageUrl(1), 2); break }
     catch (e: any) {
       if (/→ 50[24]:/.test(String(e?.message || e)) && perPage > 25) {
         perPage = Math.max(25, Math.floor(perPage / 2))
@@ -123,7 +170,7 @@ async function fetchAll(client: MdClient, resource: string, opts: { perPage?: nu
 
   for (let start = 2; start <= totalPages; start += CONCURRENCY) {
     const pages = Array.from({ length: Math.min(CONCURRENCY, totalPages - start + 1) }, (_, i) => start + i)
-    const results = await Promise.all(pages.map(p => mdJsonRetry(client, pageUrl(p))))
+    const results = await Promise.all(pages.map(p => mdJsonRetry(pageUrl(p))))
     let batchNewest = 0
     for (const j of results) {
       const arr: any[] = Array.isArray(j[resource]) ? j[resource] : []
@@ -197,20 +244,12 @@ async function main() {
   log(`run ${runId} started (from ${FROM})`)
 
   try {
-    log('Launching headless Chromium for MD login')
-    const { chromium } = await import('playwright')
-    const browser = await chromium.launch({ headless: true })
-    let rawInvoices: any[], rawQuotes: any[], rawCustomers: any[]
-    try {
-      const { client } = await loginToMechanicDesk(browser, wsId, username, password)
-      await browser.close().catch(() => undefined) // cookies extracted — free the session's browser early
-      log('Logged in — paging MD JSON endpoints')
-      rawInvoices = await fetchAll(client, 'invoices')
-      rawQuotes = await fetchAll(client, 'quotes', { perPage: QUOTES_PER_PAGE, stopWhenOlderThan: FROM })
-      rawCustomers = await fetchAll(client, 'customers')
-    } finally {
-      await browser.close().catch(() => undefined)
-    }
+    log('Logging into MD (headless Chromium)')
+    await mdLogin()
+    log('Logged in — paging MD JSON endpoints')
+    let rawInvoices = await fetchAll('invoices')
+    let rawQuotes = await fetchAll('quotes', { perPage: QUOTES_PER_PAGE, stopWhenOlderThan: FROM })
+    let rawCustomers = await fetchAll('customers')
     // A live feed shifts across pages while we pull (new quotes push rows
     // down) so concurrent paging can capture a record twice — dedupe by id.
     const uniqueById = (rows: any[]) => {
