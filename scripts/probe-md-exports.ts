@@ -115,6 +115,33 @@ async function main() {
       } catch (e: any) { log(`PROBE ${c.split('?')[0]} → ERR ${e?.message || e}`) }
     }
 
+    // ── 3b. JSON APIs: /invoices.json + /quotes.json structure ─────────────
+    // (/invoices.xls turned out to be JSON — these are the old-app Angular
+    // endpoints, paginated like /stocks.json. Map the record + meta shape.)
+    for (const p of [
+      '/invoices.json?page=1',
+      '/invoices.json?page=1&per_page=200',
+      '/invoices.json?page=1&from=2026-07-01&to=2026-07-07',
+      '/invoices.json?page=1&start_date=2026-07-01&end_date=2026-07-07',
+      '/quotes.json?page=1',
+    ]) {
+      try {
+        const { status, ct, buf } = await get(client, `${MD_BASE}${p}`, 'application/json')
+        log(`JSON ${p} → ${status} ${ct} ${buf.length}B`)
+        if (status !== 200) continue
+        const j = JSON.parse(buf.toString('utf8'))
+        const arrKey = Object.keys(j).find(k => Array.isArray(j[k]))
+        const arr = arrKey ? j[arrKey] : []
+        const metaKeys = Object.keys(j).filter(k => k !== arrKey)
+        log(`  keys: [${Object.keys(j).join(', ')}] · ${arrKey}: ${arr.length} row(s) · meta: ${JSON.stringify(Object.fromEntries(metaKeys.map(k => [k, j[k]])))?.slice(0, 400)}`)
+        if (arr.length) {
+          const dates = arr.map((r: any) => String(r.issue_date || '').slice(0, 10)).filter(Boolean)
+          log(`  issue_date span: ${dates[0]} … ${dates[dates.length - 1]}`)
+          log(`  FIRST RECORD: ${JSON.stringify(arr[0]).slice(0, 4500)}`)
+        }
+      } catch (e: any) { log(`JSON ${p} → ERR ${e?.message || e}`) }
+    }
+
     // ── 3. The Export Data feature (async export queue) ────────────────────
     // /data_export is the form; /export_requests/ the queue. Past manual
     // exports show up here with their type names + download URLs.
