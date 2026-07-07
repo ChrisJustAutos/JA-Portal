@@ -29,7 +29,8 @@ import {
   GraphMessageSummary,
   GraphAttachmentMeta,
 } from './microsoft-graph'
-import { extractStatementFromPdf, type ExtractedStatement } from './ap-statement-extraction'
+import { extractStatementFromPdf, extractStatementFromText, type ExtractedStatement } from './ap-statement-extraction'
+import * as XLSX from 'xlsx'
 import { matchStatementAgainstMyob } from './ap-statement-match'
 import { type CompanyFileLabel } from './ap-myob-lookup'
 import { tryAutoMatchSupplier } from './ap-myob-automatch'
@@ -108,6 +109,21 @@ export interface StatementWatchOutcome {
 }
 
 const hasStatementWord = (s: string | null | undefined) => !!s && /statement/i.test(s)
+
+// Spreadsheet statement (.xlsx/.xls/.csv) → CSV text for the extractor, one
+// section per sheet. Capped so a monster workbook can't blow the token budget
+// (a monthly statement is a few hundred rows at most).
+function workbookToCsvText(bytes: Buffer, filename: string): string {
+  const wb = XLSX.read(bytes, { cellDates: false })
+  const parts: string[] = [`Source file: ${filename}`]
+  for (const sheetName of wb.SheetNames) {
+    const csv = XLSX.utils.sheet_to_csv(wb.Sheets[sheetName], { blankrows: false })
+    if (csv.trim()) parts.push(`--- Sheet: ${sheetName} ---\n${csv}`)
+  }
+  const text = parts.join('\n\n')
+  const CAP = 180_000
+  return text.length > CAP ? text.slice(0, CAP) + '\n[TRUNCATED — workbook larger than expected]' : text
+}
 
 function periodLabel(s: { statementDate: string | null; periodFrom: string | null; periodTo: string | null }): string | null {
   if (s.periodFrom && s.periodTo) return `${s.periodFrom} → ${s.periodTo}`
@@ -245,10 +261,13 @@ export async function runStatementWatch(opts: WatchOptions = {}): Promise<Statem
       let atts: GraphAttachmentMeta[]
       try { atts = await listAttachmentMeta(inbox.mailbox, msg.id) } catch { continue }
       const subjIsStatement = hasStatementWord(msg.subject)
-      const pdfStatements = atts.filter(a => {
-        const isPdf = (a.contentType || '').toLowerCase() === 'application/pdf' || /\.pdf$/i.test(a.name || '')
-        return isPdf && (subjIsStatement || hasStatementWord(a.name))
-      })
+      const isPdfAtt = (a: GraphAttachmentMeta) =>
+        (a.contentType || '').toLowerCase() === 'application/pdf' || /\.pdf$/i.test(a.name || '')
+      // Spreadsheet statements are real (GE Group emails .xlsx) — parsed via
+      // workbook→CSV→same extractor.
+      const isSheetAtt = (a: GraphAttachmentMeta) =>
+        /\.(xlsx|xls|csv)$/i.test(a.name || '') || /spreadsheetml|ms-excel|text\/csv/i.test(a.contentType || '')
+      const pdfStatements = atts.filter(a => (isPdfAtt(a) || isSheetAtt(a)) && (subjIsStatement || hasStatementWord(a.name)))
       if (pdfStatements.length === 0) {
         // A statement-subject email with NO readable PDF (link-only, or an
         // unsupported format like xlsx) — surface it in the digest instead of
@@ -266,7 +285,7 @@ export async function runStatementWatch(opts: WatchOptions = {}): Promise<Statem
             supplierName: null, supplierUid: null, supplierResolution: 'none' as const,
             status: 'no_attachment' as StatementScanStatus, period: null, invoiceLines: 0,
             missing: [], mismatches: [],
-            reviewReason: `Statement email from ${msg.from || 'unknown sender'} has no readable PDF attachment` +
+            reviewReason: `Statement email from ${msg.from || 'unknown sender'} has no readable attachment (PDF/Excel/CSV supported)` +
               (atts.length ? ` (attachments: ${kinds.slice(0, 150)})` : ' (likely a download link in the body)') +
               ' — open the email and handle manually.',
           }
@@ -320,7 +339,9 @@ export async function runStatementWatch(opts: WatchOptions = {}): Promise<Statem
 
         try {
           const b64 = await getAttachmentBase64(inbox.mailbox, msg.id, att.id)
-          const { statement } = await extractStatementFromPdf(b64)
+          const { statement } = isSheetAtt(att)
+            ? await extractStatementFromText(workbookToCsvText(Buffer.from(b64, 'base64'), att.name || ''))
+            : await extractStatementFromPdf(b64)
           const supplierName = statement.supplier?.name || null
           const period = periodLabel(statement)
           const invoiceLines = statement.lines.filter(l => l.type === 'invoice').length

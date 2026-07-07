@@ -90,6 +90,27 @@ export interface StatementExtractionResult {
  * @param pdfBase64  Base64-encoded PDF bytes (no `data:` prefix)
  */
 export async function extractStatementFromPdf(pdfBase64: string): Promise<StatementExtractionResult> {
+  return runStatementExtraction([
+    { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: pdfBase64 } },
+    { type: 'text', text: 'Extract the supplier statement details as JSON per the system instructions. Output ONLY the JSON object.' },
+  ])
+}
+
+/**
+ * Parse a supplier statement that arrived as a SPREADSHEET (.xlsx/.xls/.csv —
+ * GE Group sends these). Caller converts the workbook to CSV text first
+ * (one section per sheet); same prompt/schema as the PDF path.
+ */
+export async function extractStatementFromText(tableText: string): Promise<StatementExtractionResult> {
+  return runStatementExtraction([
+    {
+      type: 'text',
+      text: `The supplier statement below arrived as a spreadsheet and has been converted to CSV (one section per sheet):\n\n${tableText}\n\nExtract the supplier statement details as JSON per the system instructions. Output ONLY the JSON object.`,
+    },
+  ])
+}
+
+async function runStatementExtraction(content: any[]): Promise<StatementExtractionResult> {
   const apiKey = process.env.ANTHROPIC_API_KEY
   if (!apiKey) throw new Error('ANTHROPIC_API_KEY not configured')
 
@@ -99,15 +120,7 @@ export async function extractStatementFromPdf(pdfBase64: string): Promise<Statem
     model,
     max_tokens: MAX_OUTPUT_TOKENS,
     system: buildSystemPrompt(),
-    messages: [
-      {
-        role: 'user',
-        content: [
-          { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: pdfBase64 } },
-          { type: 'text', text: 'Extract the supplier statement details as JSON per the system instructions. Output ONLY the JSON object.' },
-        ],
-      },
-    ],
+    messages: [{ role: 'user', content }],
   }
 
   const r = await fetch(ANTHROPIC_API_URL, {
@@ -178,7 +191,7 @@ export async function extractStatementFromPdf(pdfBase64: string): Promise<Statem
 // ── Prompt ──────────────────────────────────────────────────────────────
 
 function buildSystemPrompt(): string {
-  return `You are extracting structured data from an Australian SUPPLIER STATEMENT PDF for Just Autos, an automotive workshop.
+  return `You are extracting structured data from an Australian SUPPLIER STATEMENT (a PDF, or a spreadsheet converted to CSV) for Just Autos, an automotive workshop.
 
 A supplier statement is a monthly summary the supplier sends listing every transaction in the period — invoices issued, payments received from us, credit notes, adjustments — usually with a running balance and an aging summary at the bottom.
 
