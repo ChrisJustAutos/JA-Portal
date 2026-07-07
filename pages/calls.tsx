@@ -34,6 +34,9 @@ interface CallRow {
   has_recording: boolean
   transcript_status: string | null
   sales_score: number | null
+  // Un-answered ring whose caller WAS answered on another extension within
+  // ±2 min (set by /api/calls) — shown as picked-up-elsewhere, not missed.
+  rescued?: boolean
 }
 
 interface AgentStats {
@@ -162,14 +165,17 @@ function StatCard({ label, value, sublabel, accent }: { label: string; value: st
   )
 }
 
-function DirectionBadge({ direction, disposition }: { direction: string; disposition: string }) {
-  const missed = disposition !== 'ANSWERED'
-  const icon = missed ? '✕' : (direction === 'inbound' ? '↓' : '↑')
-  const bg = missed ? 'rgba(240,78,78,0.12)' : (direction === 'inbound' ? 'rgba(52,199,123,0.12)' : 'rgba(79,142,247,0.12)')
-  const color = missed ? T.red : (direction === 'inbound' ? T.green : T.blue)
-  const border = missed ? 'rgba(240,78,78,0.25)' : (direction === 'inbound' ? 'rgba(52,199,123,0.25)' : 'rgba(79,142,247,0.25)')
+function DirectionBadge({ direction, disposition, rescued }: { direction: string; disposition: string; rescued?: boolean }) {
+  const missed = disposition !== 'ANSWERED' && !rescued
+  // Rescued = this ring wasn't answered but the caller WAS picked up on
+  // another extension moments later — amber "↷", not a red miss.
+  const icon = rescued ? '↷' : missed ? '✕' : (direction === 'inbound' ? '↓' : '↑')
+  const bg = rescued ? 'rgba(245,166,35,0.12)' : missed ? 'rgba(240,78,78,0.12)' : (direction === 'inbound' ? 'rgba(52,199,123,0.12)' : 'rgba(79,142,247,0.12)')
+  const color = rescued ? T.amber : missed ? T.red : (direction === 'inbound' ? T.green : T.blue)
+  const border = rescued ? 'rgba(245,166,35,0.25)' : missed ? 'rgba(240,78,78,0.25)' : (direction === 'inbound' ? 'rgba(52,199,123,0.25)' : 'rgba(79,142,247,0.25)')
   return (
-    <div style={{ width: 26, height: 26, borderRadius: 5, background: bg, border: `1px solid ${border}`, color, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 700, flexShrink: 0 }}>
+    <div title={rescued ? 'Rang here, picked up on another extension' : undefined}
+      style={{ width: 26, height: 26, borderRadius: 5, background: bg, border: `1px solid ${border}`, color, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 700, flexShrink: 0 }}>
       {icon}
     </div>
   )
@@ -1609,7 +1615,7 @@ export default function CallsPage({ user }: { user: PortalUserSSR }) {
                           key={c.id}
                           onClick={() => setSelectedCall(c)}
                           style={{ display: 'flex', gap: 10, alignItems: 'center', padding: '11px 14px', borderBottom: `1px solid ${T.border}`, cursor: 'pointer' }}>
-                          <DirectionBadge direction={c.direction} disposition={c.disposition} />
+                          <DirectionBadge direction={c.direction} disposition={c.disposition} rescued={c.rescued} />
                           <div style={{ flex: 1, minWidth: 0 }}>
                             <div style={{ fontSize: 13, color: T.text, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                               {c.caller_name || formatPhone(c.external_number)}
@@ -1638,7 +1644,7 @@ export default function CallsPage({ user }: { user: PortalUserSSR }) {
                           }}
                           onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = 'rgba(var(--t-ink),0.02)' }}
                           onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = 'transparent' }}>
-                          <DirectionBadge direction={c.direction} disposition={c.disposition} />
+                          <DirectionBadge direction={c.direction} disposition={c.disposition} rescued={c.rescued} />
                           <div style={{ minWidth: 0 }}>
                             <div style={{ fontSize: 12, color: T.text, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                               {c.caller_name || formatPhone(c.external_number)}
@@ -1718,7 +1724,7 @@ export default function CallsPage({ user }: { user: PortalUserSSR }) {
 
             <div style={{ padding: 24, display: 'flex', flexDirection: 'column', gap: 20 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
-                <DirectionBadge direction={selectedCall.direction} disposition={selectedCall.disposition} />
+                <DirectionBadge direction={selectedCall.direction} disposition={selectedCall.disposition} rescued={selectedCall.rescued} />
                 <div>
                   <div style={{ fontSize: 20, fontWeight: 300, color: T.text }}>
                     {selectedCall.caller_name || formatPhone(selectedCall.external_number)}

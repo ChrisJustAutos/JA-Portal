@@ -108,14 +108,14 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
       const agentKey = parseAgentKey(extensionParam)
 
       let kpiQuery = sb.from('calls')
-        .select('direction, disposition, billsec_seconds, agent_ext, effective_advisor_slack_user_id, call_date')
+        .select('direction, disposition, billsec_seconds, agent_ext, effective_advisor_slack_user_id, call_date, external_number')
         .gte('call_date', periodFromIso)
       if (periodToIso) kpiQuery = kpiQuery.lte('call_date', periodToIso)
       if (agentKey?.kind === 'slack') kpiQuery = kpiQuery.eq('effective_advisor_slack_user_id', agentKey.id)
       else if (agentKey?.kind === 'ext') kpiQuery = kpiQuery.eq('agent_ext', agentKey.ext).is('effective_advisor_slack_user_id', null)
 
       let agentBreakdownQuery = sb.from('calls')
-        .select('direction, disposition, billsec_seconds, agent_ext, agent_name, effective_advisor_name, effective_advisor_slack_user_id')
+        .select('direction, disposition, billsec_seconds, agent_ext, agent_name, effective_advisor_name, effective_advisor_slack_user_id, call_date, external_number')
         .gte('call_date', periodFromIso)
       if (periodToIso) agentBreakdownQuery = agentBreakdownQuery.lte('call_date', periodToIso)
 
@@ -145,15 +145,38 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
       const extensions = extensionsRes.data || []
       const sync = syncRes.data || { last_synced_at: null, last_error: null, records_synced_total: 0 }
 
+      // "Rescued" detection: a ring that shows NO ANSWER but whose caller was
+      // ANSWERED within ±120s is the un-answered leg of a pickup/second ring
+      // (ext A rings, ext B picks up → FreePBX logs A's leg as its own missed
+      // call). Those aren't missed calls — the customer was spoken to. Built
+      // from the FULL period dataset (agentCalls) so the answering leg is seen
+      // even when the KPI view is narrowed to one agent.
+      const answeredEpochs = new Map<string, number[]>()
+      for (const c of agentCalls) {
+        if (c.direction !== 'inbound' || c.disposition !== 'ANSWERED' || !c.external_number) continue
+        const arr = answeredEpochs.get(c.external_number) || []
+        arr.push(new Date(c.call_date).getTime())
+        answeredEpochs.set(c.external_number, arr)
+      }
+      const wasRescued = (c: { direction: string; disposition: string; external_number: string | null; call_date: string }): boolean => {
+        if (c.direction !== 'inbound' || c.disposition === 'ANSWERED' || !c.external_number) return false
+        const t = new Date(c.call_date).getTime()
+        return (answeredEpochs.get(c.external_number) || []).some(e => Math.abs(e - t) < 120_000)
+      }
+
       // Top-line KPI aggregates — scoped to extension if one is selected.
       const inbound = kpiCalls.filter(c => c.direction === 'inbound')
       const outbound = kpiCalls.filter(c => c.direction === 'outbound')
       const answered = kpiCalls.filter(c => c.disposition === 'ANSWERED')
-      const missedInbound = inbound.filter(c => c.disposition !== 'ANSWERED')
+      const rescuedCount = inbound.filter(c => wasRescued(c)).length
+      const missedInbound = inbound.filter(c => c.disposition !== 'ANSWERED' && !wasRescued(c))
       const totalTalk = kpiCalls.reduce((s, c) => s + (c.billsec_seconds || 0), 0)
       const avgCall = answered.length > 0 ? Math.round(totalTalk / answered.length) : 0
+      // Rescued legs drop out of the denominator too — the customer's call
+      // was answered, just on a different row.
+      const inboundEffective = Math.max(1, inbound.length - rescuedCount)
       const answerRate = inbound.length > 0
-        ? Math.round((inbound.filter(c => c.disposition === 'ANSWERED').length / inbound.length) * 100)
+        ? Math.round((inbound.filter(c => c.disposition === 'ANSWERED').length / inboundEffective) * 100)
         : 0
 
       // Per-agent aggregates — always full period, never narrowed by the

@@ -118,6 +118,36 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
 
       const calls: CallRow[] = (data || []) as CallRow[]
 
+      // Mark "rescued" rings: an un-answered inbound row whose caller WAS
+      // answered within ±120s (ext A rang, ext B picked up — FreePBX logs
+      // A's leg as its own missed call). One extra query scoped to just the
+      // page's missed callers; the UI shows these as picked-up-elsewhere
+      // rather than missed.
+      const missedRows = calls.filter(c => c.direction === 'inbound' && c.disposition !== 'ANSWERED' && c.external_number)
+      if (missedRows.length > 0) {
+        const numbers = Array.from(new Set(missedRows.map(c => c.external_number as string))).slice(0, 100)
+        const times = missedRows.map(c => new Date(c.call_date).getTime())
+        const windowFrom = new Date(Math.min(...times) - 120_000).toISOString()
+        const windowTo = new Date(Math.max(...times) + 120_000).toISOString()
+        const { data: siblings } = await sb.from('calls')
+          .select('external_number, call_date')
+          .eq('direction', 'inbound').eq('disposition', 'ANSWERED')
+          .in('external_number', numbers)
+          .gte('call_date', windowFrom).lte('call_date', windowTo)
+        const answeredEpochs = new Map<string, number[]>()
+        for (const s of siblings || []) {
+          const arr = answeredEpochs.get(s.external_number) || []
+          arr.push(new Date(s.call_date).getTime())
+          answeredEpochs.set(s.external_number, arr)
+        }
+        for (const c of missedRows) {
+          const t = new Date(c.call_date).getTime()
+          if ((answeredEpochs.get(c.external_number as string) || []).some(e => Math.abs(e - t) < 120_000)) {
+            (c as any).rescued = true
+          }
+        }
+      }
+
       return res.status(200).json({
         range: effectiveRange,
         startDate: startDateParam,
