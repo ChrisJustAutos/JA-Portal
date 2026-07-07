@@ -41,7 +41,10 @@ const REQUESTED_BY = (process.env.REQUESTED_BY || 'scheduled').trim()
 const PRECREATED_RUN_ID = (process.env.RUN_ID || '').trim()
 // Keep everything from FY2026 onward (full refresh, not incremental).
 const FROM = (process.env.FROM || '2025-07-01').trim()
-const PER_PAGE = 200
+// MD's server is slow (~10-15s per 200-row invoice page) and 504s on fat
+// pages — quote records embed huge vehicle objects, so they page smaller.
+const CONCURRENCY = Math.max(1, Number(process.env.MD_MAP_CONCURRENCY) || 3)
+const QUOTES_PER_PAGE = Math.max(25, Number(process.env.MD_MAP_QUOTES_PER_PAGE) || 50)
 
 // ── Portal ingest ───────────────────────────────────────────────────────
 
@@ -73,29 +76,67 @@ async function mdJson(client: MdClient, path: string): Promise<any> {
   try { return JSON.parse(text) } catch { throw new Error(`MD GET ${path} → non-JSON (${text.slice(0, 120)})`) }
 }
 
-/**
- * Page a /<resource>.json endpoint to completion. `stopWhenOlderThan` enables
- * an early stop for newest-first feeds (quotes): once a whole page sits more
- * than 90 days below the cutoff, later pages can't matter — even backdated
- * edits stay inside that safety margin.
- */
-async function fetchAll(client: MdClient, resource: string, opts: { stopWhenOlderThan?: string } = {}): Promise<any[]> {
-  const out: any[] = []
-  let totalPages = 1
-  const marginMs = 90 * 86400_000
-  const cutoff = opts.stopWhenOlderThan ? new Date(opts.stopWhenOlderThan).getTime() - marginMs : null
-  for (let page = 1; page <= totalPages; page++) {
-    const j = await mdJson(client, `/${resource}.json?page=${page}&per_page=${PER_PAGE}`)
-    const arr: any[] = Array.isArray(j[resource]) ? j[resource] : []
-    totalPages = Number(j?.meta?.total_pages) || totalPages
-    out.push(...arr)
-    if (page === 1 || page % 10 === 0 || page === totalPages) {
-      log(`${resource}: page ${page}/${totalPages} (+${arr.length}, total ${out.length})`)
+// Retry transient gateway errors (MD 502/503/504 under load) with backoff.
+async function mdJsonRetry(client: MdClient, path: string, tries = 3): Promise<any> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await mdJson(client, path)
+    } catch (e: any) {
+      const msg = String(e?.message || e)
+      const transient = /→ 50[234]:/.test(msg)
+      if (!transient || attempt >= tries) throw e
+      log(`retrying (${attempt}/${tries - 1}) after: ${msg.slice(0, 100)}`)
+      await new Promise(r => setTimeout(r, 8000 * attempt))
     }
-    if (!arr.length) break
-    if (cutoff != null) {
-      const newest = Math.max(...arr.map(r => new Date(r.issue_date || r.created_at || 0).getTime() || 0))
-      if (newest < cutoff) { log(`${resource}: early stop after page ${page} (page newest is >90d below ${opts.stopWhenOlderThan})`); break }
+  }
+}
+
+/**
+ * Page a /<resource>.json endpoint to completion, `concurrency` pages at a
+ * time. If page 1 persistently 504s the page size halves (fat resources).
+ * `stopWhenOlderThan` enables an early stop for newest-first feeds (quotes):
+ * once a whole batch sits more than 30 days below the cutoff, later pages
+ * can't matter — backdated edits stay inside that safety margin.
+ */
+async function fetchAll(client: MdClient, resource: string, opts: { perPage?: number; stopWhenOlderThan?: string } = {}): Promise<any[]> {
+  let perPage = opts.perPage ?? 200
+  const cutoff = opts.stopWhenOlderThan ? new Date(opts.stopWhenOlderThan).getTime() - 30 * 86400_000 : null
+  const pageUrl = (p: number) => `/${resource}.json?page=${p}&per_page=${perPage}`
+
+  // Page 1 — with adaptive page-size shrink on persistent gateway timeouts.
+  let first: any
+  for (;;) {
+    try { first = await mdJsonRetry(client, pageUrl(1), 2); break }
+    catch (e: any) {
+      if (/→ 50[24]:/.test(String(e?.message || e)) && perPage > 25) {
+        perPage = Math.max(25, Math.floor(perPage / 2))
+        log(`${resource}: page too heavy, shrinking to per_page=${perPage}`)
+      } else throw e
+    }
+  }
+  const out: any[] = [...(Array.isArray(first[resource]) ? first[resource] : [])]
+  const totalPages = Number(first?.meta?.total_pages) || 1
+  log(`${resource}: page 1/${totalPages} (+${out.length}, per_page=${perPage})`)
+
+  const newestOf = (arr: any[]) => arr.length ? Math.max(...arr.map(r => new Date(r.issue_date || r.created_at || 0).getTime() || 0)) : 0
+  if (cutoff != null && newestOf(out) < cutoff && out.length) return out
+
+  for (let start = 2; start <= totalPages; start += CONCURRENCY) {
+    const pages = Array.from({ length: Math.min(CONCURRENCY, totalPages - start + 1) }, (_, i) => start + i)
+    const results = await Promise.all(pages.map(p => mdJsonRetry(client, pageUrl(p))))
+    let batchNewest = 0
+    for (const j of results) {
+      const arr: any[] = Array.isArray(j[resource]) ? j[resource] : []
+      out.push(...arr)
+      batchNewest = Math.max(batchNewest, newestOf(arr))
+    }
+    const last = pages[pages.length - 1]
+    if (last % 10 < CONCURRENCY || last === totalPages) {
+      log(`${resource}: page ${last}/${totalPages} (total ${out.length})`)
+    }
+    if (cutoff != null && batchNewest < cutoff) {
+      log(`${resource}: early stop after page ${last} (batch is >30d below ${opts.stopWhenOlderThan})`)
+      break
     }
   }
   return out
@@ -165,7 +206,7 @@ async function main() {
       await browser.close().catch(() => undefined) // cookies extracted — free the session's browser early
       log('Logged in — paging MD JSON endpoints')
       rawInvoices = await fetchAll(client, 'invoices')
-      rawQuotes = await fetchAll(client, 'quotes', { stopWhenOlderThan: FROM })
+      rawQuotes = await fetchAll(client, 'quotes', { perPage: QUOTES_PER_PAGE, stopWhenOlderThan: FROM })
       rawCustomers = await fetchAll(client, 'customers')
     } finally {
       await browser.close().catch(() => undefined)
