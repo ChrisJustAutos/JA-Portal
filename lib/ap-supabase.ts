@@ -544,6 +544,7 @@ export async function applyTriageAndResolve(invoiceId: string): Promise<void> {
     paidInFull: false,               // not tracked on legacy portal rows
     paymentMethod: null,
     isCreditNote: inv.is_credit_note === true,
+    currency: inv.currency ?? null,  // not persisted on legacy rows → null (treated as domestic)
     lineItems: lines.map((l: any) => ({
       lineNo: l.line_no,
       partNumber: l.part_number,

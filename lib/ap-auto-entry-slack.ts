@@ -59,6 +59,7 @@ function prettyReason(code: string): string {
     'totals-mismatch': 'subtotal + GST ≠ total',
     'line-sum-mismatch': "lines don't sum to subtotal",
     'bank-mismatch': 'bank details differ from the MYOB card',
+    'foreign-currency': 'foreign currency — enter manually at the converted AUD rate',
     'possible-duplicate-of': 'possible duplicate — same supplier + amount recently posted under a different invoice number',
   }
   const bare = code.replace(/^(RED|YELLOW|INFO):/, '').split(':')[0]
@@ -136,4 +137,42 @@ export function buildAutoEntryBlocks(i: AutoEntrySlackInput): { text: string; bl
   if (actions.length) blocks.push({ type: 'actions', elements: actions })
 
   return { text: text.slice(0, 300), blocks }
+}
+
+// Transform an EXISTING flag card (its posted Slack blocks) into the
+// "approved & posted" state, for chat.update after the Approve button posts:
+//   • header 🟠 → ✅ "Approved & posted to MYOB"
+//   • drop the Approve button (keep View invoice); remove an emptied actions row
+//   • drop the "Why it wasn't auto-posted" section, add an approver context line
+// Returns new blocks + fallback text. Pure — safe to call on the raw payload
+// message blocks.
+export function markApprovedBlocks(
+  original: SlackBlock[],
+  opts: { approver: string; resultText: string },
+): { text: string; blocks: SlackBlock[] } {
+  const blocks: SlackBlock[] = []
+  for (const b of Array.isArray(original) ? original : []) {
+    if (b?.type === 'header') {
+      const t = String(b.text?.text || '')
+      const flipped = t.replace(/^🟠\s*Not auto-posted/i, '✅ Approved & posted to MYOB')
+      blocks.push({ ...b, text: { ...b.text, text: (flipped === t ? `✅ ${t}` : flipped).slice(0, 150) } })
+      continue
+    }
+    // Drop the "why it wasn't auto-posted" explanation — no longer true.
+    if (b?.type === 'section' && /why it wasn't auto-posted/i.test(String(b.text?.text || ''))) continue
+    // Rebuild the actions row without the approve button.
+    if (b?.type === 'actions') {
+      const kept = (b.elements || []).filter((e: any) => e?.action_id !== 'ap_approve_post')
+      if (kept.length) blocks.push({ ...b, elements: kept })
+      continue
+    }
+    blocks.push(b)
+  }
+  blocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: `✅ ${escOr(opts.resultText, `Approved by ${opts.approver}`)}`.slice(0, 2900) }] })
+  return { text: `✅ Approved & posted to MYOB — approved by ${opts.approver}`.slice(0, 300), blocks }
+}
+
+function escOr(s: string | null | undefined, fallback: string): string {
+  const t = String(s || '').trim()
+  return t || fallback
 }

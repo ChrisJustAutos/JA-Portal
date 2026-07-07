@@ -45,6 +45,7 @@ import { getSupplierByUid, type CompanyFileLabel } from './ap-myob-lookup'
 import { resolveLineAccount } from './ap-line-resolver'
 import { triageInvoice } from './ap-supabase'
 import { consolidatedInvoiceSupplier } from './ap-consolidated-suppliers'
+import { overseasSupplier } from './ap-overseas-suppliers'
 import { postFoundInvoiceToMyob, reattachStagedPdf } from './ap-myob-bill'
 import { postWebhook } from './slack'
 import { postMessage } from './slack-bot/slack'
@@ -567,6 +568,14 @@ async function processInvoice(
   const supplierName = match?.supplier.name || extracted.vendor?.name || null
   const cardBank = match?.supplier.bank || null
 
+  // Regular overseas suppliers (Partsouq): no AU GST + foreign layouts, so the
+  // standard totals check flags every time. Post GST-FREE at the stated total
+  // as a single line — but ONLY when the invoice is in AUD (a USD invoice
+  // entered at face value books the wrong amount, so foreign currency flags
+  // with a clear reason instead).
+  const overseas = overseasSupplier(extracted.vendor?.name, msg.from, supplierName)
+  const foreignCurrency = !!extracted.currency && extracted.currency !== 'AUD'
+
   let hasResolvedAccount = !!match?.supplier.defaultExpenseAccount?.uid
   let codingSummary: string | null = match?.supplier.defaultExpenseAccount?.name || null
   if (!hasResolvedAccount && supplierUid && extracted.lineItems.length > 0) {
@@ -639,6 +648,7 @@ async function processInvoice(
 
   const ignorable: string[] = []
   if (consolidated) ignorable.push('YELLOW:medium-parse-confidence', 'YELLOW:line-sum-mismatch', 'YELLOW:totals-mismatch')
+  else if (overseas && !foreignCurrency) ignorable.push('YELLOW:medium-parse-confidence', 'YELLOW:line-sum-mismatch', 'YELLOW:totals-mismatch')
   else if (bankTrusted || trust.tier === 'verified') ignorable.push('YELLOW:medium-parse-confidence')
   if (scanTotalFallback) ignorable.push('YELLOW:line-sum-mismatch')
   // A low-confidence read posts when corroborated by hard evidence: printed
@@ -652,6 +662,9 @@ async function processInvoice(
   if (supplierUid) ignorable.push('YELLOW:account-not-mapped')
   const failReasons: string[] = triage.triageReasons.filter(r => !ignorable.includes(r))
   if (effectiveBank === 'mismatch') failReasons.push('RED:bank-mismatch')
+  // Never auto-post a foreign-currency invoice at face value — the amount
+  // would be wrong in AUD. Flag it for a human to enter at the converted rate.
+  if (foreignCurrency) failReasons.push(`RED:foreign-currency:${extracted.currency}`)
 
   // Cross-source duplicate guard. The same invoice can arrive twice — the
   // supplier's email into accounts@ AND a paper copy scanned to scans@. An
@@ -728,7 +741,11 @@ async function processInvoice(
   // Ex-GST derives as total/1.1 — the tax-inclusive poster then rebuilds a
   // line matching the stated total to the cent. Coding falls to a line rule
   // on the description, else the supplier default / 5-1000 fallback.
-  const collapseToTotal = consolidated || scanTotalFallback
+  const collapseToTotal = consolidated || scanTotalFallback || overseas
+  // Overseas invoices carry no AU GST → post the whole total GST-FREE (FRE),
+  // so the single line total IS the stated total (no ÷1.1). Domestic collapses
+  // stay tax-inclusive GST (ex-GST derived as total/1.1; the poster rebuilds).
+  const overseasGstFree = overseas && !consolidated && !scanTotalFallback
   const toPost: ExtractedAPInvoice = collapseToTotal ? {
     ...extracted,
     totals: { subtotalExGst: null, gstAmount: null, totalIncGst: total },
@@ -736,10 +753,12 @@ async function processInvoice(
       lineNo: 1, partNumber: null,
       description: consolidated
         ? `Consolidated freight invoice ${extracted.invoiceNumber} — statement total (credits disregarded)`
-        : `Invoice ${extracted.invoiceNumber} — scanned; posted at stated total (line detail unreadable)`,
+        : overseasGstFree
+          ? `Invoice ${extracted.invoiceNumber} — overseas supplier, GST-free, posted at stated total`
+          : `Invoice ${extracted.invoiceNumber} — scanned; posted at stated total (line detail unreadable)`,
       qty: 1, uom: null, unitPriceExGst: null,
-      lineTotalExGst: Math.round((total / 1.1) * 100) / 100,
-      gstAmount: null, taxCodeRaw: null, taxCode: 'GST',
+      lineTotalExGst: overseasGstFree ? total : Math.round((total / 1.1) * 100) / 100,
+      gstAmount: overseasGstFree ? 0 : null, taxCodeRaw: null, taxCode: overseasGstFree ? 'FRE' : 'GST',
     }],
   } : extracted
 

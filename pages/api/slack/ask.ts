@@ -26,7 +26,7 @@ import type { NextApiRequest, NextApiResponse } from 'next'
 import { waitUntil } from '@vercel/functions'
 import { verifySlackSignature } from '../../../lib/slack-bot/verify'
 import { askClaude } from '../../../lib/slack-bot/claude'
-import { postMessage } from '../../../lib/slack-bot/slack'
+import { postMessage, updateMessage } from '../../../lib/slack-bot/slack'
 import { scheduleDeletion } from '../../../lib/slack-bot/ephemeral'
 
 // The parts contact is only wired up when SLACK_PARTS_CONTACT is set; without it
@@ -157,6 +157,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           const ch: string = payload.channel?.id || ''
           const threadTs: string | undefined = payload.message?.ts
           const responseUrl: string = payload.response_url || ''
+          const origBlocks = payload.message?.blocks || []
           waitUntil((async () => {
             let result = ''
             try {
@@ -165,6 +166,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             } catch (e: any) {
               result = `❌ Approval failed: ${(e?.message || e).toString().slice(0, 200)}`
             }
+            // On success, flip the ORIGINAL card to green "Approved & posted"
+            // (header + drop the Approve button) via chat.update, so the card
+            // itself shows the new state — not just a threaded reply. Only on a
+            // genuine post (✅); a failure keeps the card + button for a retry.
+            const succeeded = result.startsWith('✅')
+            if (succeeded && ch && threadTs) {
+              try {
+                const { markApprovedBlocks } = await import('../../../lib/ap-auto-entry-slack')
+                const updated = markApprovedBlocks(origBlocks, { approver, resultText: result })
+                await updateMessage({ channel: ch, ts: threadTs, text: updated.text, blocks: updated.blocks })
+              } catch (e: any) {
+                console.error('[ap-approve] card update failed:', e?.message || e)
+              }
+            }
+            // Always thread the detailed result under the card for history.
             const posted = ch ? await postMessage({ channel: ch, text: result, thread_ts: threadTs }).catch(() => null) : null
             if (!posted && responseUrl) {
               await fetch(responseUrl, {
