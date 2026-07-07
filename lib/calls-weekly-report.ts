@@ -14,11 +14,19 @@
 
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
 import { postMessage } from './slack-bot/slack'
+import { sendMail } from './email'
 import { callTypeLabel, dimensionLabel } from './calls-dimensions'
 
 const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages'
 const MODEL = () => (process.env.CALLS_WEEKLY_REPORT_MODEL || 'claude-sonnet-4-6').trim()
 const CHANNEL = () => (process.env.CALLS_COACHING_SLACK_CHANNEL ?? 'C0AU8QWT7QF').trim()
+
+// Email delivery (Chris 2026-07-07): to Matt, cc Ryan + Chris. Overridable.
+function reportRecipients(): { to: string[]; cc: string[] } {
+  const to = (process.env.CALLS_WEEKLY_REPORT_TO || 'matt.h@justautosmechanical.com.au').split(/[,;]+/).map(s => s.trim()).filter(Boolean)
+  const cc = (process.env.CALLS_WEEKLY_REPORT_CC || 'ryan@justautosmechanical.com.au,chris@justautosmechanical.com.au').split(/[,;]+/).map(s => s.trim()).filter(Boolean)
+  return { to, cc }
+}
 
 let _sb: SupabaseClient | null = null
 function sb(): SupabaseClient {
@@ -53,6 +61,7 @@ export interface WeeklyReportResult {
   advisors: number
   callsAnalysed: number
   posted: boolean
+  emailed?: boolean
   costMicroUsd: number
   // dry-run payload
   narrative?: any
@@ -165,6 +174,8 @@ ${JSON.stringify(advisors, null, 1)}
 Return ONLY this JSON:
 {
   "team_summary": "3-4 sentences: how the team performed this week — call volumes, standout performances, the one team-wide theme to work on. Specific, numbers included.",
+  "team_highlights": ["2-4 bullets: the group's best moments and wins this week — specific advisors and calls"],
+  "team_focus": "1-2 sentences: THE one team-wide focus for the coming week, phrased as a directive.",
   "advisors": [
     {
       "name": "<advisor name exactly as given>",
@@ -210,6 +221,72 @@ function advisorBlocks(week: AdvisorWeek, n: any): any[] {
   return blocks
 }
 
+// ── Polished HTML email (group report + per-advisor sections) ────────────
+function reportEmailHtml(advisors: AdvisorWeek[], narrative: any, weekLabel: string, totalCalls: number): string {
+  const esc = (s: any) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+  const scoreColor = (v: number | null) => v == null ? '#6b7280' : v >= 70 ? '#059669' : v >= 50 ? '#d97706' : '#dc2626'
+  const card = (inner: string, accent = '#e5e7eb') =>
+    `<div style="border:1px solid #e5e7eb;border-left:4px solid ${accent};border-radius:10px;padding:16px 18px;margin:0 0 16px;background:#ffffff">${inner}</div>`
+  const bullets = (items: string[] | undefined, icon: string) =>
+    (items && items.length)
+      ? `<ul style="margin:6px 0 0;padding-left:4px;list-style:none">${items.map(s => `<li style="margin:4px 0;font-size:13px;color:#374151;line-height:1.5">${icon} ${esc(s)}</li>`).join('')}</ul>`
+      : ''
+
+  const teamAvg = advisors.length
+    ? Math.round(advisors.reduce((s, a) => s + (a.avgScore || 0) * a.scored, 0) / advisors.reduce((s, a) => s + a.scored, 0))
+    : null
+  const typeTotals: Record<string, { n: number; sum: number }> = {}
+  for (const a of advisors) for (const [t, s] of Object.entries(a.byType)) {
+    typeTotals[t] = typeTotals[t] || { n: 0, sum: 0 }
+    typeTotals[t].n += s.n; typeTotals[t].sum += s.avg * s.n
+  }
+  const typeRow = Object.entries(typeTotals)
+    .sort((a, b) => b[1].n - a[1].n)
+    .map(([t, s]) => `<td style="padding:6px 14px 6px 0;font-size:12px;color:#6b7280">${esc(callTypeLabel(t) || t)}<br/><span style="font-size:16px;color:#111827;font-weight:600">${s.n}</span> <span style="color:#9ca3af">avg ${Math.round(s.sum / s.n)}</span></td>`)
+    .join('')
+
+  const advisorSections = advisors.map(week => {
+    const n = (narrative.advisors || []).find((x: any) => x.name === week.name) || {}
+    const dims = Object.entries(week.dimensionAvgs)
+      .map(([d, v]) => `<span style="display:inline-block;margin:2px 8px 2px 0;font-size:11px;color:${d === week.weakestDimension ? '#d97706' : '#6b7280'}">${esc(dimensionLabel(d))} <strong>${v}</strong></span>`)
+      .join('')
+    return card(`
+      <div style="display:flex;justify-content:space-between;align-items:baseline">
+        <div style="font-size:17px;font-weight:700;color:#111827">${esc(week.name)}</div>
+        <div style="font-size:13px;color:${scoreColor(week.avgScore)};font-weight:700">${week.avgScore ?? '—'}/100 <span style="color:#9ca3af;font-weight:400">· ${week.scored} calls</span></div>
+      </div>
+      <div style="margin:6px 0 10px">${dims}</div>
+      <div style="font-size:13px;color:#374151;line-height:1.55">${esc(n.coaching_notes || '')}</div>
+      ${n.quick_wins?.length ? `<div style="margin-top:12px;font-size:12px;font-weight:700;color:#059669;text-transform:uppercase;letter-spacing:.04em">Quick wins</div>${bullets(n.quick_wins, '🏆')}` : ''}
+      ${n.losses?.length ? `<div style="margin-top:12px;font-size:12px;font-weight:700;color:#d97706;text-transform:uppercase;letter-spacing:.04em">Missed opportunities</div>${bullets(n.losses, '⚠️')}` : ''}
+      ${n.action_items?.length ? `<div style="margin-top:12px;font-size:12px;font-weight:700;color:#2563eb;text-transform:uppercase;letter-spacing:.04em">This week's actions</div><ol style="margin:6px 0 0;padding-left:20px">${n.action_items.map((s: string) => `<li style="margin:4px 0;font-size:13px;color:#374151;line-height:1.5">${esc(s)}</li>`).join('')}</ol>` : ''}
+      ${n.feedback ? `<div style="margin-top:12px;padding:10px 12px;background:#f9fafb;border-radius:8px;font-size:13px;color:#4b5563;font-style:italic">💬 ${esc(n.feedback)}</div>` : ''}
+    `, scoreColor(week.avgScore))
+  }).join('')
+
+  return `
+  <div style="font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;max-width:680px;margin:0 auto;background:#f3f4f6;padding:24px">
+    <div style="font-size:22px;font-weight:800;color:#111827;margin-bottom:2px">📊 Weekly Sales Coaching Report</div>
+    <div style="font-size:13px;color:#6b7280;margin-bottom:18px">${esc(weekLabel)} · ${totalCalls} calls coached · ${advisors.length} advisors</div>
+
+    ${card(`
+      <div style="font-size:12px;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px">Group report</div>
+      <table style="border-collapse:collapse;margin-bottom:10px"><tr>
+        <td style="padding:6px 18px 6px 0;font-size:12px;color:#6b7280">Team avg<br/><span style="font-size:20px;font-weight:700;color:${scoreColor(teamAvg)}">${teamAvg ?? '—'}/100</span></td>
+        ${typeRow}
+      </tr></table>
+      <div style="font-size:13px;color:#374151;line-height:1.6">${esc(narrative.team_summary || '')}</div>
+      ${bullets(narrative.team_highlights, '⭐')}
+      ${narrative.team_focus ? `<div style="margin-top:12px;padding:10px 12px;background:#eff6ff;border-radius:8px;font-size:13px;color:#1e40af"><strong>This week's focus:</strong> ${esc(narrative.team_focus)}</div>` : ''}
+    `, '#2563eb')}
+
+    <div style="font-size:12px;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:.05em;margin:20px 0 10px">Per advisor</div>
+    ${advisorSections}
+
+    <div style="font-size:11px;color:#9ca3af;margin-top:16px">Generated automatically from last week's analysed calls · JA Portal</div>
+  </div>`
+}
+
 export async function runWeeklyReport(opts: { dryRun?: boolean; days?: number } = {}): Promise<WeeklyReportResult> {
   const days = Math.max(3, Math.min(Number(opts.days) || 7, 31))
   const { advisors, total, weekLabel } = await fetchWeek(days)
@@ -217,6 +294,20 @@ export async function runWeeklyReport(opts: { dryRun?: boolean; days?: number } 
 
   const { parsed, costMicroUsd } = await writeNarrative(advisors, weekLabel)
   if (opts.dryRun) return { weekLabel, advisors: advisors.length, callsAnalysed: total, posted: false, costMicroUsd, narrative: parsed }
+
+  // Email — the primary "polished report" delivery (Matt, cc Ryan + Chris).
+  let emailed = false
+  try {
+    const { to, cc } = reportRecipients()
+    await sendMail('accounts@justautosmechanical.com.au', {
+      to, cc,
+      subject: `Weekly Sales Coaching Report — ${weekLabel}`,
+      html: reportEmailHtml(advisors, parsed, weekLabel, total),
+    })
+    emailed = true
+  } catch (e: any) {
+    console.error('[weekly-report] email failed:', e?.message || e)
+  }
 
   const channel = CHANNEL()
   const headerText = `📊 Weekly Sales Coaching Report — ${weekLabel}`
@@ -240,5 +331,5 @@ export async function runWeeklyReport(opts: { dryRun?: boolean; days?: number } 
     }
   }
 
-  return { weekLabel, advisors: advisors.length, callsAnalysed: total, posted: true, costMicroUsd }
+  return { weekLabel, advisors: advisors.length, callsAnalysed: total, posted: true, emailed, costMicroUsd }
 }
