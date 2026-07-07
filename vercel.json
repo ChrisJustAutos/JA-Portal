@@ -35,6 +35,7 @@
     "pages/api/cron/ap-auto-entry.ts":              { "maxDuration": 800 },
     "pages/api/cron/agents.ts":                     { "maxDuration": 300 },
     "pages/api/cron/calls-analyse.ts":              { "maxDuration": 300 },
+    "pages/api/cron/calls-weekly-report.ts":        { "maxDuration": 300 },
     "pages/api/b2b/admin/stock-transfer.ts":        { "maxDuration": 300 }
   },
   "crons": [
@@ -49,6 +50,10 @@
     {
       "path": "/api/cron/calls-analyse",
       "schedule": "*/5 * * * *"
+    },
+    {
+      "path": "/api/cron/calls-weekly-report",
+      "schedule": "0 21 * * 0"
     },
     {
       "path": "/api/cron/renew-graph-subscriptions",
