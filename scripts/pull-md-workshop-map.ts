@@ -4,30 +4,28 @@
 // (Reports → Map & conversion). MD has no open API, so this:
 //
 //   1. Logs into MechanicDesk (Playwright — shared login helper)
-//   2. Downloads the FULL Invoices report + FULL Quotes report as legacy .xls
-//      (direct HTTP with the session cookies, same approach as the job-report
-//      worker) — complete dataset every run, not incremental, so status
-//      changes / late edits / back-dated records self-heal.
-//   3. Parses every sheet (xlsx/SheetJS reads CDFV2 .xls), joins line items,
-//      classifies each record's vehicle series + geocodes postcode→lat/lng
+//   2. Pages the old-app JSON endpoints for the COMPLETE datasets
+//      (/invoices.json, /quotes.json, /customers.json — same pattern as the
+//      stock sync; the "reports" xls exports turned out not to exist as
+//      routes, but these JSON records are richer anyway: vehicle.series,
+//      full job-type text, customer ids). Full refresh every run, not
+//      incremental, so status changes / late edits / back-dates self-heal.
+//   3. Classifies each record's vehicle series + geocodes postcode→lat/lng
 //      (lib/workshop-map — the authoritative business logic; do NOT re-derive)
-//   4. Validates (§7: zero First-Job-Type chassis mismatches)
+//   4. Validates (§7 of the handoff: zero job-type chassis mismatches)
 //   5. POSTs fact rows (batched upserts) + one prebuilt dashboard payload per
 //      FY to /api/workshop/map/ingest.
 //
 // Env: MECHANICDESK_WORKSHOP_ID / _USERNAME / _PASSWORD,
 //      JA_PORTAL_BASE_URL, JA_PORTAL_API_KEY (stocktake:write),
-//      FROM (default 2025-07-01), RUN_ID / REQUESTED_BY (from dispatch),
-//      MD_INVOICE_REPORT_PATH / MD_QUOTE_REPORT_PATH (optional overrides when
-//      MD's export routes differ from the candidates below).
+//      FROM (default 2025-07-01), RUN_ID / REQUESTED_BY (from dispatch).
 
 import { readFileSync } from 'fs'
 import { join } from 'path'
-import * as XLSX from 'xlsx'
 import { loginToMechanicDesk, MdClient } from '../lib/mechanicdesk-stocktake'
 import {
   classifyVehicle, buildIdSeriesMaps, isNoiseInvoice, isWon, geocode,
-  monthKey, fyOf, fyMonthIndex, LatLng,
+  LatLng, VehicleGroup,
 } from '../lib/workshop-map/vehicle-classification'
 import { buildFyPayload, chassisMismatches, MapInvoiceRow, MapQuoteRow } from '../lib/workshop-map/build-payload'
 
@@ -41,58 +39,9 @@ if (!PORTAL_TOKEN) throw new Error('JA_PORTAL_API_KEY required')
 
 const REQUESTED_BY = (process.env.REQUESTED_BY || 'scheduled').trim()
 const PRECREATED_RUN_ID = (process.env.RUN_ID || '').trim()
-// Pull everything from FY2026 onward by default (full refresh, not incremental).
+// Keep everything from FY2026 onward (full refresh, not incremental).
 const FROM = (process.env.FROM || '2025-07-01').trim()
-
-// MD's export endpoints follow the /reports/<name>/download pattern (the job
-// report worker uses /reports/job/download). First candidate that returns a
-// workbook with the expected sheets wins; override via env if MD renames them.
-const INVOICE_PATHS = process.env.MD_INVOICE_REPORT_PATH
-  ? [process.env.MD_INVOICE_REPORT_PATH]
-  : ['/reports/invoice/download', '/reports/invoices/download', '/reports/invoice_summary/download', '/reports/invoice_listing/download']
-const QUOTE_PATHS = process.env.MD_QUOTE_REPORT_PATH
-  ? [process.env.MD_QUOTE_REPORT_PATH]
-  : ['/reports/quote/download', '/reports/quotation/download', '/reports/quotes/download', '/reports/quote_listing/download']
-
-// Scrape MD's report pages/bundles for /reports/<name> route names so the
-// worker can self-discover the export endpoints (candidates above are guesses;
-// MD's route names aren't documented anywhere).
-async function discoverReportNames(client: MdClient): Promise<string[]> {
-  const names = new Set<string>()
-  const sources = ['/reports', '/auto_workshop/app', '/']
-  for (const src of sources) {
-    try {
-      const r = await fetch(`${MD_BASE}${src}`, {
-        headers: { 'Cookie': client.cookieHeader, 'Accept': 'text/html,*/*' },
-        redirect: 'follow',
-      })
-      const text = await r.text()
-      for (const m of text.matchAll(/\breports\/([a-z0-9_]+)/gi)) {
-        const n = m[1].toLowerCase()
-        if (n !== 'download') names.add(n)
-      }
-      // Angular bundles carry the route strings — scan any referenced JS too.
-      if (src !== '/reports') {
-        const jsRefs = [...text.matchAll(/src="([^"]+\.js[^"]*)"/g)].map(x => x[1]).slice(0, 8)
-        for (const ref of jsRefs) {
-          try {
-            const jr = await fetch(ref.startsWith('http') ? ref : `${MD_BASE}${ref}`, { headers: { 'Cookie': client.cookieHeader } })
-            const js = await jr.text()
-            for (const m of js.matchAll(/\breports\/([a-z0-9_]+)/gi)) {
-              const n = m[1].toLowerCase()
-              if (n !== 'download') names.add(n)
-            }
-          } catch { /* skip bundle */ }
-        }
-      }
-    } catch (e: any) {
-      log(`discover: ${src} → ${e?.message || e}`)
-    }
-  }
-  const list = [...names].sort()
-  log(`discover: found ${list.length} report route name(s): ${list.join(', ') || '(none)'}`)
-  return list
-}
+const PER_PAGE = 200
 
 // ── Portal ingest ───────────────────────────────────────────────────────
 
@@ -106,85 +55,92 @@ async function ingest(body: Record<string, any>): Promise<any> {
   return r.json()
 }
 
-// ── MD report download ──────────────────────────────────────────────────
+// ── MD JSON paging ──────────────────────────────────────────────────────
 
-// MD's report endpoints take JS-toString-style dates (same as the job report).
-function mdDateParam(ymd: string): string {
-  const [y, m, d] = ymd.split('-').map(Number)
-  const dt = new Date(Date.UTC(y, m - 1, d))
-  const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
-  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
-  return `${days[dt.getUTCDay()]} ${months[dt.getUTCMonth()]} ${String(dt.getUTCDate()).padStart(2, '0')} ${dt.getUTCFullYear()} 00:00:00 GMT+1000 (Australian Eastern Standard Time)`
+async function mdJson(client: MdClient, path: string): Promise<any> {
+  const r = await fetch(`${MD_BASE}${path}`, {
+    headers: {
+      'Cookie': client.cookieHeader,
+      'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      'Accept': 'application/json',
+      'X-Requested-With': 'XMLHttpRequest',
+      'Referer': `${MD_BASE}/auto_workshop/app`,
+    },
+    redirect: 'follow',
+  })
+  if (!r.ok) throw new Error(`MD GET ${path} → ${r.status}: ${(await r.text().catch(() => '')).slice(0, 200)}`)
+  const text = await r.text()
+  try { return JSON.parse(text) } catch { throw new Error(`MD GET ${path} → non-JSON (${text.slice(0, 120)})`) }
 }
 
-async function downloadWorkbook(
-  client: MdClient, label: string, paths: string[], from: string, to: string, expectSheet: RegExp,
-): Promise<XLSX.WorkBook> {
-  const params = new URLSearchParams({ from: mdDateParam(from), to: mdDateParam(to) })
-  let lastErr = ''
-  for (const path of paths) {
-    const url = `${MD_BASE}${path}?${params.toString()}`
-    log(`${label}: trying ${path}`)
-    try {
-      const r = await fetch(url, {
-        headers: {
-          'Cookie': client.cookieHeader,
-          'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-          'Accept': 'application/vnd.ms-excel, */*',
-          'Referer': `${MD_BASE}/auto_workshop/app`,
-        },
-        redirect: 'follow',
-      })
-      const buf = Buffer.from(await r.arrayBuffer())
-      log(`${label}: ${path} → ${r.status}, ${buf.length} bytes, ct=${r.headers.get('content-type')}`)
-      if (!r.ok) { lastErr = `${path} → HTTP ${r.status}`; continue }
-      const head = buf.slice(0, 200).toString('utf8').toLowerCase()
-      if (head.includes('<!doctype html') || head.includes('<html')) { lastErr = `${path} → HTML (wrong route or session)`; continue }
-      if (buf.length < 512) { lastErr = `${path} → too small (${buf.length}B): ${buf.toString('utf8').slice(0, 120)}`; continue }
-      const wb = XLSX.read(buf, { cellDates: true })
-      if (!wb.SheetNames.some(n => expectSheet.test(n))) {
-        lastErr = `${path} → sheets [${wb.SheetNames.join(', ')}] missing ${expectSheet}`
-        continue
-      }
-      log(`${label}: OK via ${path} — sheets: ${wb.SheetNames.join(', ')}`)
-      return wb
-    } catch (e: any) {
-      lastErr = `${path} → ${e?.message || e}`
+/**
+ * Page a /<resource>.json endpoint to completion. `stopWhenOlderThan` enables
+ * an early stop for newest-first feeds (quotes): once a whole page sits more
+ * than 90 days below the cutoff, later pages can't matter — even backdated
+ * edits stay inside that safety margin.
+ */
+async function fetchAll(client: MdClient, resource: string, opts: { stopWhenOlderThan?: string } = {}): Promise<any[]> {
+  const out: any[] = []
+  let totalPages = 1
+  const marginMs = 90 * 86400_000
+  const cutoff = opts.stopWhenOlderThan ? new Date(opts.stopWhenOlderThan).getTime() - marginMs : null
+  for (let page = 1; page <= totalPages; page++) {
+    const j = await mdJson(client, `/${resource}.json?page=${page}&per_page=${PER_PAGE}`)
+    const arr: any[] = Array.isArray(j[resource]) ? j[resource] : []
+    totalPages = Number(j?.meta?.total_pages) || totalPages
+    out.push(...arr)
+    if (page === 1 || page % 10 === 0 || page === totalPages) {
+      log(`${resource}: page ${page}/${totalPages} (+${arr.length}, total ${out.length})`)
+    }
+    if (!arr.length) break
+    if (cutoff != null) {
+      const newest = Math.max(...arr.map(r => new Date(r.issue_date || r.created_at || 0).getTime() || 0))
+      if (newest < cutoff) { log(`${resource}: early stop after page ${page} (page newest is >90d below ${opts.stopWhenOlderThan})`); break }
     }
   }
-  throw new Error(`${label}: no candidate export URL worked. Last error: ${lastErr}. ` +
-    `Set MD_${label.toUpperCase()}_REPORT_PATH to the correct /reports/<name>/download route.`)
+  return out
 }
 
-// ── Cell coercion ───────────────────────────────────────────────────────
+// ── Field helpers ───────────────────────────────────────────────────────
 
 const S = (v: any): string | null => {
   if (v == null) return null
   const s = String(v).trim()
-  return s && s.toLowerCase() !== 'nan' ? s : null
+  return s ? s : null
 }
-const N = (v: any): number => {
-  if (v == null) return 0
-  if (typeof v === 'number') return isFinite(v) ? v : 0
-  const n = parseFloat(String(v).replace(/[$,\s]/g, ''))
-  return isFinite(n) ? n : 0
+// MD emits +10:00 local ISO strings — the date part IS the Brisbane date.
+const isoYmd = (v: any): string | null => {
+  const s = String(v || '')
+  return /^\d{4}-\d{2}-\d{2}/.test(s) ? s.slice(0, 10) : null
 }
-// Dates arrive as Date (cellDates), 'DD/MM/YYYY' text, or an Excel serial.
-function D(v: any): Date | null {
-  if (v == null || v === '') return null
-  if (v instanceof Date) return isNaN(v.getTime()) ? null : v
-  if (typeof v === 'number' && v > 20000 && v < 60000) return new Date(Math.round((v - 25569) * 86400_000))
-  const m = String(v).trim().match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/)
-  if (m) return new Date(Number(m[3]), Number(m[2]) - 1, Number(m[1]))
-  const d = new Date(String(v))
-  return isNaN(d.getTime()) ? null : d
+const STATES: Record<string, string> = {
+  'QLD': 'QLD', 'QUEENSLAND': 'QLD', 'NSW': 'NSW', 'NEW SOUTH WALES': 'NSW',
+  'VIC': 'VIC', 'VICTORIA': 'VIC', 'SA': 'SA', 'SOUTH AUSTRALIA': 'SA',
+  'WA': 'WA', 'WESTERN AUSTRALIA': 'WA', 'TAS': 'TAS', 'TASMANIA': 'TAS',
+  'NT': 'NT', 'NORTHERN TERRITORY': 'NT', 'ACT': 'ACT', 'AUSTRALIAN CAPITAL TERRITORY': 'ACT',
 }
-const ymd = (d: Date | null): string | null =>
-  d ? `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}` : null
+/** "Tallai Queensland 4213" / "Croydon VIC 3136" → { suburb, state, postcode } */
+function parseSuburbBlob(blob: string | null): { suburb: string | null; state: string | null; postcode: string | null } {
+  if (!blob) return { suburb: null, state: null, postcode: null }
+  let s = blob.trim()
+  let postcode: string | null = null
+  const pm = s.match(/(\d{4})\s*$/)
+  if (pm) { postcode = pm[1]; s = s.slice(0, pm.index).trim() }
+  let state: string | null = null
+  for (const [k, v] of Object.entries(STATES)) {
+    const re = new RegExp(`\\b${k}\\.?$`, 'i')
+    if (re.test(s)) { state = v; s = s.replace(re, '').trim(); break }
+  }
+  return { suburb: s || null, state, postcode }
+}
 
-function sheetRows(wb: XLSX.WorkBook, name: string): any[] {
-  const ws = wb.Sheets[name]
-  return ws ? XLSX.utils.sheet_to_json(ws, { defval: null }) : []
+interface Addr { suburb: string | null; state: string | null; postcode: string | null }
+
+// ── Month/FY from a Brisbane-local YYYY-MM-DD ───────────────────────────
+function calParts(ymd: string | null): { month: string | null; monthIndex: number | null; fy: number | null } {
+  if (!ymd) return { month: null, monthIndex: null, fy: null }
+  const y = Number(ymd.slice(0, 4)), m = Number(ymd.slice(5, 7))
+  return { month: ymd.slice(0, 7), monthIndex: (m + 12 - 7) % 12, fy: m >= 7 ? y + 1 : y }
 }
 
 // ── Main ────────────────────────────────────────────────────────────────
@@ -197,119 +153,103 @@ async function main() {
 
   const started = await ingest({ action: 'start', requested_by: REQUESTED_BY, run_id: PRECREATED_RUN_ID || undefined })
   const runId = started.run_id as string
-  log(`run ${runId} started`)
+  log(`run ${runId} started (from ${FROM})`)
 
   try {
-    // Export window: FROM → tomorrow (full dataset).
-    const to = ymd(new Date(Date.now() + 86400_000))!
-    log(`Pulling MD invoices + quotes ${FROM} … ${to}`)
-
     log('Launching headless Chromium for MD login')
     const { chromium } = await import('playwright')
     const browser = await chromium.launch({ headless: true })
-    let invWb: XLSX.WorkBook, qWb: XLSX.WorkBook
+    let rawInvoices: any[], rawQuotes: any[], rawCustomers: any[]
     try {
       const { client } = await loginToMechanicDesk(browser, wsId, username, password)
-      log('Logged in — discovering report routes')
-      const discovered = await discoverReportNames(client)
-      const invPaths = [...INVOICE_PATHS, ...discovered.filter(n => /invoice|sale/.test(n)).map(n => `/reports/${n}/download`)]
-      const qPaths = [...QUOTE_PATHS, ...discovered.filter(n => /quot/.test(n)).map(n => `/reports/${n}/download`)]
-      log('Downloading reports')
-      invWb = await downloadWorkbook(client, 'invoice', [...new Set(invPaths)], FROM, to, /invoices summary/i)
-      qWb = await downloadWorkbook(client, 'quote', [...new Set(qPaths)], FROM, to, /^quotes$/i)
+      await browser.close().catch(() => undefined) // cookies extracted — free the session's browser early
+      log('Logged in — paging MD JSON endpoints')
+      rawInvoices = await fetchAll(client, 'invoices')
+      rawQuotes = await fetchAll(client, 'quotes', { stopWhenOlderThan: FROM })
+      rawCustomers = await fetchAll(client, 'customers')
     } finally {
       await browser.close().catch(() => undefined)
     }
+    log(`Fetched ${rawInvoices.length} invoices, ${rawQuotes.length} quotes, ${rawCustomers.length} customers`)
 
-    // ── Parse invoices ──────────────────────────────────────────────────
-    const invSummary = sheetRows(invWb, invWb.SheetNames.find(n => /invoices summary/i.test(n))!)
-    const invItemSheets = invWb.SheetNames.filter(n => /^invoice items/i.test(n))
-    const invItems = invItemSheets.flatMap(n => sheetRows(invWb, n))
-    log(`Invoices: ${invSummary.length} summary rows, ${invItems.length} item rows (${invItemSheets.length} sheet(s))`)
-
-    // Per-invoice itemsText + first non-empty Vehicle Model from line items.
-    const invItemsByNo: Record<string, string[]> = {}
-    const invModelByNo: Record<string, string> = {}
-    for (const it of invItems) {
-      const no = S(it['Invoice Number'])
-      if (!no) continue
-      const bits = [S(it['Description']), S(it['Details']), S(it['Stock Name']), S(it['Stock Number'])].filter(Boolean) as string[]
-      if (bits.length) (invItemsByNo[no] ||= []).push(bits.join(' '))
-      const model = S(it['Vehicle Model'])
-      if (model && !invModelByNo[no]) invModelByNo[no] = model
+    // Customer id → address (quotes carry no address inline).
+    const custAddr: Record<string, Addr> = {}
+    let custAddrHits = 0
+    for (const c of rawCustomers) {
+      if (!c?.id) continue
+      const suburb = S(c.suburb) ?? S(c.city) ?? S(c.town)
+      const state = S(c.state)
+      const postcode = S(c.postcode) ?? S(c.post_code) ?? S(c.zip)
+      if (suburb || postcode) { custAddr[String(c.id)] = { suburb, state, postcode }; custAddrHits++ }
+    }
+    log(`Customer address map: ${custAddrHits}/${rawCustomers.length} customers have suburb/postcode`)
+    if (rawCustomers.length && !custAddrHits) {
+      log(`WARNING: no address fields found on customers.json — sample keys: ${Object.keys(rawCustomers[0] || {}).join(', ')}`)
     }
 
+    // ── Normalise ───────────────────────────────────────────────────────
     interface RawInv {
-      invoiceNumber: string; customerId: string | null; customerName: string | null
+      id: string; displayNumber: string; customerId: string | null; customerName: string | null
       suburb: string | null; state: string | null; postcode: string | null
       vehicleId: string | null; rego: string | null; jobTypeText: string | null
       model: string | null; descText: string | null; itemsText: string | null
-      issueDate: Date | null; totalAmount: number
+      issueYmd: string | null; totalAmount: number
     }
-    const rawInvoices: RawInv[] = []
-    for (const r of invSummary) {
-      const no = S(r['Invoice Number'])
-      if (!no) continue
-      rawInvoices.push({
-        invoiceNumber: no,
-        customerId: S(r['Customer ID']),
-        customerName: S(r['Customer Name']),
-        suburb: S(r['Customer Suburb']),
-        state: S(r['Customer State']),
-        postcode: S(r['Customer Postcode']),
-        vehicleId: S(r['Vehicle ID']),
-        rego: S(r['Vehicle Registration Number']),
-        jobTypeText: S(r['First Job Type']),
-        model: invModelByNo[no] || null,
-        descText: S(r['Description']),
-        itemsText: (invItemsByNo[no] || []).join(' ').slice(0, 8000) || null,
-        issueDate: D(r['Issue Date']),
-        totalAmount: N(r['Total Amount']),
+    const invoicesRaw: RawInv[] = []
+    for (const r of rawInvoices) {
+      if (!r || r.deleted) continue
+      const veh = r.job?.vehicle || r.vehicle || null
+      const cust = r.customer || null
+      const custId = cust?.id != null ? String(cust.id) : null
+      const addr = (custId && custAddr[custId]) || parseSuburbBlob(S(r.customer_suburb))
+      invoicesRaw.push({
+        id: String(r.id),
+        displayNumber: S(r.number) || String(r.id),
+        customerId: custId,
+        customerName: S(r.customer_name) || S(cust?.name),
+        suburb: addr.suburb, state: addr.state, postcode: addr.postcode,
+        vehicleId: veh?.id != null ? String(veh.id) : null,
+        rego: S(veh?.registration_number),
+        // job.full_description = every job-type name on the job (the chassis-
+        // code signal the handoff's "First Job Type" column came from).
+        jobTypeText: S(r.job?.full_description) || S(r.job?.job_types_title) || S(r.job?.booking?.job_types_title),
+        model: [S(veh?.make), S(veh?.model), S(veh?.series)].filter(Boolean).join(' ') || null,
+        descText: S(r.description),
+        itemsText: [S(r.job?.title), S(r.job?.description), S(r.job?.booking?.description)].filter(Boolean).join(' ').slice(0, 8000) || null,
+        issueYmd: isoYmd(r.issue_date),
+        totalAmount: Number(r.total_amount) || 0,
       })
     }
 
-    // ── Parse quotes (line items span up to 6 paginated sheets) ────────
-    const quotesSheet = sheetRows(qWb, qWb.SheetNames.find(n => /^quotes$/i.test(n))!)
-    const qItemSheets = qWb.SheetNames.filter(n => /^quote items/i.test(n))
-    const qItems = qItemSheets.flatMap(n => sheetRows(qWb, n))
-    log(`Quotes: ${quotesSheet.length} rows, ${qItems.length} item rows (${qItemSheets.length} sheet(s))`)
-
-    const qItemsByNo: Record<string, string[]> = {}
-    const qRegoByNo: Record<string, string> = {}
-    for (const it of qItems) {
-      const no = S(it['Quote Number'])
-      if (!no) continue
-      const bits = [S(it['Description']), S(it['Details']), S(it['Stock Name']), S(it['Stock Number']), S(it['Category'])].filter(Boolean) as string[]
-      if (bits.length) (qItemsByNo[no] ||= []).push(bits.join(' '))
-      const rego = S(it['Vehicle Registration Number'])
-      if (rego && !qRegoByNo[no]) qRegoByNo[no] = rego
-    }
-
     interface RawQuote {
-      quoteNumber: string; customerId: string | null; customerName: string | null
+      id: string; displayNumber: string; customerId: string | null; customerName: string | null
       suburb: string | null; state: string | null; postcode: string | null
-      rego: string | null; model: string | null; descText: string | null
-      itemsText: string | null; quoteDate: Date | null; totalAmount: number; status: string | null
+      vehicleId: string | null; rego: string | null; jobTypeText: string | null
+      model: string | null; descText: string | null; itemsText: string | null
+      issueYmd: string | null; totalAmount: number; status: string | null
     }
-    const rawQuotes: RawQuote[] = []
-    for (const r of quotesSheet) {
-      const no = S(r['Quote Number'])
-      if (!no) continue
-      const make = S(r['Vehicle Make']), model = S(r['Vehicle Model'])
-      rawQuotes.push({
-        quoteNumber: no,
-        customerId: S(r['Customer ID']),
-        customerName: S(r['Customer Name']),
-        suburb: S(r['Suburb']),
-        state: S(r['State']),
-        postcode: S(r['Postcode']),
-        rego: qRegoByNo[no] || null,
-        model: [make, model].filter(Boolean).join(' ') || null,
-        descText: S(r['Description']),
-        itemsText: (qItemsByNo[no] || []).join(' ').slice(0, 8000) || null,
-        quoteDate: D(r['Date']),
-        totalAmount: N(r['Total Amount']),
-        status: S(r['Status']),
+    const quotesRaw: RawQuote[] = []
+    for (const r of rawQuotes) {
+      if (!r || r.deleted) continue
+      const veh = r.vehicle || null
+      const cust = r.customer || null
+      const custId = cust?.id != null ? String(cust.id) : null
+      const addr = (custId && custAddr[custId]) || { suburb: null, state: null, postcode: null }
+      quotesRaw.push({
+        id: String(r.id),
+        displayNumber: S(r.number) || String(r.id),
+        customerId: custId,
+        customerName: S(cust?.name),
+        suburb: addr.suburb, state: addr.state, postcode: addr.postcode,
+        vehicleId: veh?.id != null ? String(veh.id) : null,
+        rego: S(veh?.registration_number),
+        jobTypeText: S(r.job_types_title),
+        model: [S(veh?.make), S(veh?.model), S(veh?.series)].filter(Boolean).join(' ') || null,
+        descText: S(r.description),
+        itemsText: S(r.details)?.slice(0, 8000) || null,
+        issueYmd: isoYmd(r.issue_date),
+        totalAmount: Number(r.total_amount) || 0,
+        status: S(r.status),
       })
     }
 
@@ -319,72 +259,85 @@ async function main() {
     for (const [k, v] of Object.entries<any>(pcData.pc)) postcodeMap[k] = { lat: v[0], lng: v[1], locality: v[2] }
     for (const [k, v] of Object.entries<any>(pcData.sub)) suburbMap[k] = { lat: v[0], lng: v[1], locality: v[2] }
 
-    // vehicleId/rego → series maps come from the INVOICE set and backfill quotes too.
-    const { vehicleIdMap, regoMap } = buildIdSeriesMaps(rawInvoices)
+    // vehicleId/rego → series maps come from the INVOICE set (full history —
+    // better backfill than the FY-only prototype) and backfill quotes too.
+    const { vehicleIdMap, regoMap } = buildIdSeriesMaps(invoicesRaw)
     log(`Series maps: ${Object.keys(vehicleIdMap).length} vehicle ids, ${Object.keys(regoMap).length} regos`)
 
-    const invoices: MapInvoiceRow[] = rawInvoices.map(r => {
+    const toInvoiceRow = (r: RawInv): MapInvoiceRow => {
       const cls = classifyVehicle(r, vehicleIdMap, regoMap)
       const geo = geocode(r.postcode, r.suburb, postcodeMap, suburbMap)
-      const d = r.issueDate
+      const cal = calParts(r.issueYmd)
       return {
-        invoiceNumber: r.invoiceNumber,
+        invoiceNumber: r.id,
         customerId: r.customerId, customerName: r.customerName,
         suburb: r.suburb, state: r.state, postcode: r.postcode,
         vehicleId: r.vehicleId, rego: r.rego,
         jobTypeText: r.jobTypeText, descText: r.descText, itemsText: r.itemsText,
-        issueDate: ymd(d), totalAmount: r.totalAmount,
+        issueDate: r.issueYmd, totalAmount: r.totalAmount,
         group: cls.group, inferred: cls.inferred,
         isNoise: isNoiseInvoice(r),
         lat: geo?.lat ?? null, lng: geo?.lng ?? null, locality: geo?.locality ?? null,
-        month: d ? monthKey(d) : null,
-        monthIndex: d && !isNaN(d.getTime()) ? fyMonthIndex(d) : null,
-        fy: d ? fyOf(d) : null,
-      }
-    })
-
-    const quotes: MapQuoteRow[] = rawQuotes.map(r => {
-      const cls = classifyVehicle({ ...r, jobTypeText: null, vehicleId: null }, vehicleIdMap, regoMap)
+        ...cal,
+        displayNumber: r.displayNumber,
+      } as MapInvoiceRow & { displayNumber: string }
+    }
+    const toQuoteRow = (r: RawQuote): MapQuoteRow => {
+      const cls = classifyVehicle(r, vehicleIdMap, regoMap)
       const geo = geocode(r.postcode, r.suburb, postcodeMap, suburbMap)
-      const d = r.quoteDate
+      const cal = calParts(r.issueYmd)
       return {
-        quoteNumber: r.quoteNumber,
+        quoteNumber: r.id,
         customerId: r.customerId, customerName: r.customerName,
         suburb: r.suburb, state: r.state, postcode: r.postcode,
         rego: r.rego, model: r.model, descText: r.descText, itemsText: r.itemsText,
-        quoteDate: ymd(d), totalAmount: r.totalAmount,
+        quoteDate: r.issueYmd, totalAmount: r.totalAmount,
         status: r.status, won: isWon(r.status),
         group: cls.group, inferred: cls.inferred,
         lat: geo?.lat ?? null, lng: geo?.lng ?? null, locality: geo?.locality ?? null,
-        month: d ? monthKey(d) : null,
-        monthIndex: d && !isNaN(d.getTime()) ? fyMonthIndex(d) : null,
-        fy: d ? fyOf(d) : null,
-      }
-    })
+        ...cal,
+        displayNumber: r.displayNumber,
+      } as MapQuoteRow & { displayNumber: string }
+    }
 
-    // ── §7 validation: zero First-Job-Type chassis mismatches ──────────
+    // Only persist rows from FROM onward (we page full history for the series
+    // maps, but the dashboard + fact tables only cover FY2026+).
+    const invoices = invoicesRaw.filter(r => r.issueYmd && r.issueYmd >= FROM).map(toInvoiceRow)
+    const quotes = quotesRaw.filter(r => r.issueYmd && r.issueYmd >= FROM).map(toQuoteRow)
+
+    // ── §7 validation: zero job-type chassis mismatches ────────────────
     const bad = chassisMismatches(invoices.map(r => ({ jobTypeText: r.jobTypeText, group: r.group, ref: r.invoiceNumber })))
+      .concat(chassisMismatches(quotes.map(r => ({ jobTypeText: r.jobTypeText, group: r.group, ref: `Q${r.quoteNumber}` }))))
     if (bad.length) {
       throw new Error(`VALIDATION FAILED: ${bad.length} chassis mismatch(es), e.g. ` +
         bad.slice(0, 5).map(b => `#${b.ref} job-type says ${b.jobChassis} but classified ${b.group}`).join('; '))
     }
     const invGeo = invoices.filter(r => r.lat != null).length
     const qGeo = quotes.filter(r => r.lat != null).length
-    log(`Classified ${invoices.length} invoices / ${quotes.length} quotes. ` +
-      `Geocoded ${invGeo}/${invoices.length} (${(100 * invGeo / Math.max(1, invoices.length)).toFixed(1)}%) jobs, ` +
-      `${qGeo}/${quotes.length} (${(100 * qGeo / Math.max(1, quotes.length)).toFixed(1)}%) quotes. Chassis mismatches: 0`)
+    const groupShare = (rows: { group: VehicleGroup }[]) => {
+      const m: Record<string, number> = {}
+      rows.forEach(r => { m[r.group] = (m[r.group] || 0) + 1 })
+      return Object.entries(m).sort((a, b) => b[1] - a[1]).map(([k, n]) => `${k}:${n}`).join(' ')
+    }
+    log(`Kept ${invoices.length} invoices / ${quotes.length} quotes since ${FROM}. Chassis mismatches: 0`)
+    log(`Geocoded ${invGeo}/${invoices.length} (${(100 * invGeo / Math.max(1, invoices.length)).toFixed(1)}%) invoices, ` +
+      `${qGeo}/${quotes.length} (${(100 * qGeo / Math.max(1, quotes.length)).toFixed(1)}%) quotes`)
+    log(`Invoice groups: ${groupShare(invoices)}`)
+    log(`Quote groups:   ${groupShare(quotes)}`)
 
     // ── Upload fact rows ────────────────────────────────────────────────
-    const invDbRows = invoices.map(r => ({
-      invoice_number: r.invoiceNumber, customer_id: r.customerId, customer_name: r.customerName,
+    const invDbRows = invoices.map((r: any) => ({
+      invoice_number: r.invoiceNumber, display_number: r.displayNumber,
+      customer_id: r.customerId, customer_name: r.customerName,
       suburb: r.suburb, state: r.state, postcode: r.postcode, vehicle_id: r.vehicleId, rego: r.rego,
       first_job_type: r.jobTypeText, description: r.descText, items_text: r.itemsText,
       issue_date: r.issueDate, total_amount: r.totalAmount,
       vehicle_group: r.group, inferred: r.inferred, is_noise: r.isNoise,
       lat: r.lat, lng: r.lng, locality: r.locality, month: r.month, fy: r.fy,
     }))
-    const qDbRows = quotes.map(r => ({
-      quote_number: r.quoteNumber, customer_id: r.customerId, customer_name: r.customerName,
+    const qDbRows = quotes.map((r: any) => ({
+      quote_number: r.quoteNumber, display_number: r.displayNumber,
+      customer_id: r.customerId, customer_name: r.customerName,
       suburb: r.suburb, state: r.state, postcode: r.postcode, rego: r.rego,
       vehicle_model: r.model, description: r.descText, items_text: r.itemsText,
       quote_date: r.quoteDate, total_amount: r.totalAmount, status: r.status, won: r.won,
@@ -401,11 +354,12 @@ async function main() {
       log(`quotes ${Math.min(i + BATCH, qDbRows.length)}/${qDbRows.length}`)
     }
 
-    // ── Build + upload per-FY payloads ──────────────────────────────────
+    // ── Build + upload per-FY payloads (point `i` = human invoice/quote #) ─
     const fys = [...new Set([...invoices, ...quotes].map(r => r.fy).filter((f): f is number => f != null && f >= 2026))].sort()
+    const withDisplay = (rows: any[], key: string) => rows.map(r => ({ ...r, [key]: r.displayNumber || r[key] }))
     const fySummaries: Record<string, any> = {}
     for (const fy of fys) {
-      const payload = buildFyPayload(fy, invoices, quotes)
+      const payload = buildFyPayload(fy, withDisplay(invoices, 'invoiceNumber'), withDisplay(quotes, 'quoteNumber'))
       await ingest({ action: 'payload', run_id: runId, fy, payload })
       fySummaries[fy] = {
         clean_jobs: payload.jobs.meta.customers,
@@ -421,9 +375,10 @@ async function main() {
       action: 'finish', run_id: runId,
       invoice_count: invoices.length, quote_count: quotes.length,
       meta: {
-        from: FROM, to,
+        from: FROM,
         geocode: { invoices: invGeo, quotes: qGeo },
         chassis_mismatches: 0,
+        customers_with_address: custAddrHits,
         fys: fySummaries,
       },
     })

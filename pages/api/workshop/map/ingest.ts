@@ -26,12 +26,12 @@ function sb(): SupabaseClient {
 }
 
 const INVOICE_COLS = new Set([
-  'invoice_number', 'customer_id', 'customer_name', 'suburb', 'state', 'postcode',
+  'invoice_number', 'display_number', 'customer_id', 'customer_name', 'suburb', 'state', 'postcode',
   'vehicle_id', 'rego', 'first_job_type', 'description', 'items_text', 'issue_date',
   'total_amount', 'vehicle_group', 'inferred', 'is_noise', 'lat', 'lng', 'locality', 'month', 'fy',
 ])
 const QUOTE_COLS = new Set([
-  'quote_number', 'customer_id', 'customer_name', 'suburb', 'state', 'postcode',
+  'quote_number', 'display_number', 'customer_id', 'customer_name', 'suburb', 'state', 'postcode',
   'rego', 'vehicle_model', 'description', 'items_text', 'quote_date',
   'total_amount', 'status', 'won', 'vehicle_group', 'inferred', 'lat', 'lng', 'locality', 'month', 'fy',
 ])

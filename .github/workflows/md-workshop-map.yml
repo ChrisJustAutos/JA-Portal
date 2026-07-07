@@ -1,9 +1,9 @@
 name: Workshop Map — Mechanics Desk daily pull
 
-# Exports the FULL Invoices + Quotes reports from MechanicDesk once daily,
-# classifies + geocodes every record, and POSTs fact rows + prebuilt dashboard
-# payloads to the portal (/api/workshop/map/ingest). Feeds the
-# Reports → Map & conversion dashboard.
+# Pages the FULL /invoices.json + /quotes.json + /customers.json datasets from
+# MechanicDesk once daily, classifies + geocodes every record, and POSTs fact
+# rows + prebuilt dashboard payloads to the portal (/api/workshop/map/ingest).
+# Feeds the Reports → Map & conversion dashboard.
 #
 # Deliberately SEPARATE from the 2h WIP snapshot job (mechanicdesk-pull) —
 # this is a heavier full-dataset export, run off-peak.
@@ -29,7 +29,7 @@ jobs:
   run:
     name: workshop map pull
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 120
 
     steps:
       - name: Checkout repo
@@ -65,7 +65,4 @@ jobs:
           MECHANICDESK_PASSWORD:    ${{ secrets.MECHANICDESK_PASSWORD }}
           JA_PORTAL_BASE_URL:       ${{ secrets.JA_PORTAL_BASE_URL }}
           JA_PORTAL_API_KEY:        ${{ secrets.JA_PORTAL_API_KEY }}
-          # Optional overrides if MD's export routes differ from the built-in candidates:
-          MD_INVOICE_REPORT_PATH:   ${{ vars.MD_INVOICE_REPORT_PATH }}
-          MD_QUOTE_REPORT_PATH:     ${{ vars.MD_QUOTE_REPORT_PATH }}
         run: npx tsx scripts/pull-md-workshop-map.ts
