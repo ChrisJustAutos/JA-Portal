@@ -114,6 +114,58 @@ async function main() {
         log(`PROBE ${c.split('?')[0]} → ${status} ${ct} ${buf.length}B${sheets}`)
       } catch (e: any) { log(`PROBE ${c.split('?')[0]} → ERR ${e?.message || e}`) }
     }
+
+    // ── 3. The Export Data feature (async export queue) ────────────────────
+    // /data_export is the form; /export_requests/ the queue. Past manual
+    // exports show up here with their type names + download URLs.
+    for (const p of ['/data_export', '/data_export.json']) {
+      try {
+        const { status, ct, buf } = await get(client, `${MD_BASE}${p}`, 'text/html,application/json,*/*')
+        const text = buf.toString('utf8')
+        log(`EXPORT-PAGE ${p} → ${status} ${ct} ${buf.length}B`)
+        if (status === 200) {
+          for (const m of text.matchAll(/<form[^>]*action="([^"]+)"[^>]*>/gi)) log(`  form action: ${m[1]}`)
+          for (const m of text.matchAll(/<select[^>]*name="([^"]+)"[^>]*>([\s\S]*?)<\/select>/gi)) {
+            const opts = [...m[2].matchAll(/<option[^>]*value="([^"]*)"[^>]*>([^<]*)/gi)].map(o => `${o[1]}(${o[2].trim()})`)
+            log(`  select ${m[1]}: ${opts.join(', ')}`)
+          }
+          for (const m of text.matchAll(/<input[^>]*name="([^"]+)"[^>]*>/gi)) log(`  input: ${m[1]}`)
+          if (ct.includes('json')) log(`  body: ${text.slice(0, 2500)}`)
+        }
+      } catch (e: any) { log(`EXPORT-PAGE ${p} → ERR ${e?.message || e}`) }
+    }
+    for (const p of ['/export_requests.json', '/export_requests', '/export_requests/']) {
+      try {
+        const { status, ct, buf } = await get(client, `${MD_BASE}${p}`, 'application/json,text/html,*/*')
+        const text = buf.toString('utf8')
+        log(`EXPORT-REQS ${p} → ${status} ${ct} ${buf.length}B`)
+        if (status === 200) log(`  body: ${text.slice(0, 3000)}`)
+      } catch (e: any) { log(`EXPORT-REQS ${p} → ERR ${e?.message || e}`) }
+    }
+
+    // ── 4. Column-level detail on the workbooks we CAN get ────────────────
+    const detail = [
+      `/reports/income_by_invoice/download?${params}`,
+      `/invoices.xls?${params}`,
+      `/quotes.xls?${params}`,
+      '/invoices.xls',            // no params — does the date filter even apply?
+      '/invoices.xls?page=2',     // pagination?
+    ]
+    for (const c of detail) {
+      try {
+        const { status, ct, buf } = await get(client, `${MD_BASE}${c}`, 'application/vnd.ms-excel, */*')
+        if (status !== 200) { log(`DETAIL ${c.split('?')[0]}${c.includes('?') ? '?' + c.split('?')[1].slice(0, 20) : ''} → ${status}`); continue }
+        try {
+          const wb = XLSX.read(buf)
+          log(`DETAIL ${c.split('?')[0]}${c.includes('?') ? ' (' + c.split('?')[1].slice(0, 20) + '…)' : ''} → ${buf.length}B`)
+          for (const sn of wb.SheetNames) {
+            const rows: any[][] = XLSX.utils.sheet_to_json(wb.Sheets[sn], { header: 1 }) as any[][]
+            log(`  sheet "${sn}": ${rows.length} row(s); header: ${JSON.stringify((rows[0] || []).slice(0, 40))}`)
+            if (rows.length > 1) log(`    first data row: ${JSON.stringify((rows[1] || []).slice(0, 20))}`)
+          }
+        } catch (e: any) { log(`DETAIL ${c} → parse failed: ${e?.message}; first 300 chars: ${buf.toString('utf8').slice(0, 300)}`) }
+      } catch (e: any) { log(`DETAIL ${c} → ERR ${e?.message || e}`) }
+    }
     log('Probe complete')
   } finally {
     await browser.close().catch(() => undefined)
