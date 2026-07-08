@@ -351,11 +351,15 @@ async function slackApi(method, jsonBody, { query } = {}) {
 }
 
 // ── Event handler ───────────────────────────────────────────────────────
+// Alert on ARRIVAL, not on presence: every detection refreshes the activity
+// timer, so someone working in and out of the bay holds the alert closed.
+// The next alert fires only for activity after COOLDOWN_MS of quiet.
 async function onLineCross(evt) {
   const now = Date.now()
+  const quietFor = now - lastFired
+  lastFired = now // any matching event counts as activity, alerted or not
   if (!inBusinessHours()) { log(`event ${evt.eventType} ch ${evt.channelId} — outside business hours, ignored`); return }
-  if (now - lastFired < CFG.cooldownMs) { log('event within cooldown — ignored'); return }
-  lastFired = now
+  if (quietFor < CFG.cooldownMs) { log(`ongoing activity (quiet ${Math.round(quietFor / 1000)}s < ${CFG.cooldownMs / 1000}s) — no new alert`); return }
   log(`FREIGHT BAY ALERT — ${evt.eventType} ch ${evt.channelId}`)
   // Priority order: ring + text alert go out ASAP; the photo burst follows
   // as a thread reply under the alert.
