@@ -1,0 +1,16 @@
+; ── ja-freightbay ──────────────────────────────────────────────────────
+; Append to /etc/asterisk/extensions_custom.conf, then:
+;   asterisk -rx "dialplan reload"
+;
+; Plays the FreePBX system recording `freight-bay-alert` (created at
+; Admin -> System Recordings; produces custom/freight-bay-alert) twice.
+; The ja-freightbay service drops a call file that dials the Yealink into
+; this context.
+
+[freight-bay-alert]
+exten => s,1,Answer()
+ same => n,Wait(1)
+ same => n,Playback(custom/freight-bay-alert)
+ same => n,Wait(1)
+ same => n,Playback(custom/freight-bay-alert)
+ same => n,Hangup()

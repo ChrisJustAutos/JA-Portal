@@ -1,0 +1,19 @@
+[Unit]
+Description=JA Freight Bay alert bridge (NVR line-crossing -> Yealink + Slack)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/ja-freightbay
+EnvironmentFile=/opt/ja-freightbay/.env
+ExecStart=/usr/bin/node index.js
+Restart=always
+RestartSec=5
+# The service writes Asterisk call files into the spool dir; run as a user that
+# can write there (asterisk) so the files are picked up and owned correctly.
+User=asterisk
+Group=asterisk
+
+[Install]
+WantedBy=multi-user.target

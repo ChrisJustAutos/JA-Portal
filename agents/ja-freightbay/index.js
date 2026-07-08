@@ -1,0 +1,365 @@
+// agents/ja-freightbay/index.js
+//
+// Freight Bay alert bridge. Runs as a systemd service on the FreePBX sync host
+// (same box as ja-cdr-sync / ja-transcribe). Holds an open connection to the
+// Hikvision NVR's ISAPI alert stream and, when a person crosses the line at the
+// freight bay DURING BUSINESS HOURS, it:
+//   A) rings a dedicated Yealink handset and plays the "freight bay alert"
+//      recording (via an Asterisk call file — no AMI creds needed), and
+//   B) posts "📦 Parts dropped off at Freight Bay" to Slack with a JPEG
+//      snapshot grabbed from the NVR at event time.
+//
+// Zero external deps — everything is Node built-ins (http/https digest auth,
+// multipart stream parse, fetch for Slack). dotenv is loaded if present.
+//
+// CLI helpers (see README): --probe (log raw events, no actions),
+// --test-ring, --test-snapshot, --test-slack, --once.
+//
+// Setup + systemd unit: see README.md.
+
+try { require('dotenv').config() } catch { /* dotenv optional; systemd EnvironmentFile also works */ }
+
+const http = require('node:http')
+const crypto = require('node:crypto')
+const fs = require('node:fs')
+const path = require('node:path')
+const { spawnSync } = require('node:child_process')
+
+// ── Config ───────────────────────────────────────────────────────────────
+const CFG = {
+  nvr: {
+    host: process.env.NVR_HOST || '192.168.0.199',
+    port: parseInt(process.env.NVR_PORT || '80', 10),
+    user: process.env.NVR_USER || '',
+    pass: process.env.NVR_PASS || '',
+    // D24 → ISAPI channelID (D-number * 100 + 1). Override if --probe shows
+    // a different id. Compared loosely so "2401"/2401 both match.
+    channelId: String(process.env.NVR_CHANNEL_ID || '2401'),
+  },
+  alertExt: process.env.ALERT_EXTENSION || '',
+  callerId: process.env.ALERT_CALLERID || 'Freight Bay <8000>',
+  dialplanContext: process.env.DIALPLAN_CONTEXT || 'freight-bay-alert',
+  spoolDir: process.env.ASTERISK_SPOOL_DIR || '/var/spool/asterisk/outgoing',
+  slack: {
+    token: process.env.SLACK_BOT_TOKEN || '',
+    channel: process.env.SLACK_CHANNEL_ID || '',
+  },
+  tz: process.env.BUSINESS_TZ || 'Australia/Perth',
+  // Days: 0=Sun … 6=Sat. Default Mon–Fri.
+  days: (process.env.BUSINESS_DAYS || '1,2,3,4,5').split(',').map(s => parseInt(s.trim(), 10)).filter(n => !isNaN(n)),
+  startHhmm: process.env.BUSINESS_START || '07:00',
+  endHhmm: process.env.BUSINESS_END || '17:00',
+  cooldownMs: parseInt(process.env.COOLDOWN_MS || '120000', 10),
+  // Event types that count as "someone at the bay".
+  eventTypes: (process.env.EVENT_TYPES || 'linedetection,fielddetection').split(',').map(s => s.trim().toLowerCase()),
+  reconnectMs: parseInt(process.env.RECONNECT_MS || '5000', 10),
+}
+
+const ARGS = new Set(process.argv.slice(2))
+function log(...a) { console.log(new Date().toISOString(), ...a) }
+function warn(...a) { console.warn(new Date().toISOString(), 'WARN', ...a) }
+
+// ── HTTP Digest auth (Hikvision ISAPI uses Digest) ────────────────────────
+function md5(s) { return crypto.createHash('md5').update(s).digest('hex') }
+
+function parseChallenge(header) {
+  const out = {}
+  // strip leading "Digest "
+  const body = header.replace(/^Digest\s+/i, '')
+  for (const m of body.matchAll(/(\w+)=(?:"([^"]*)"|([^,]*))/g)) {
+    out[m[1]] = m[2] !== undefined ? m[2] : m[3]
+  }
+  return out
+}
+
+function buildDigestHeader(ch, { method, uri, user, pass }) {
+  const cnonce = crypto.randomBytes(8).toString('hex')
+  const nc = '00000001'
+  const qop = (ch.qop || '').split(',')[0] || undefined
+  const ha1 = md5(`${user}:${ch.realm}:${pass}`)
+  const ha2 = md5(`${method}:${uri}`)
+  const response = qop
+    ? md5(`${ha1}:${ch.nonce}:${nc}:${cnonce}:${qop}:${ha2}`)
+    : md5(`${ha1}:${ch.nonce}:${ha2}`)
+  let h = `Digest username="${user}", realm="${ch.realm}", nonce="${ch.nonce}", uri="${uri}", response="${response}"`
+  if (ch.opaque) h += `, opaque="${ch.opaque}"`
+  if (qop) h += `, qop=${qop}, nc=${nc}, cnonce="${cnonce}"`
+  return h
+}
+
+// One-shot digest GET → resolves { status, headers, body:Buffer }.
+function digestGet(uri, { binary = false } = {}) {
+  const { host, port, user, pass } = CFG.nvr
+  return new Promise((resolve, reject) => {
+    const first = http.request({ host, port, path: uri, method: 'GET' }, res1 => {
+      // Drain the 401 body.
+      res1.resume()
+      if (res1.statusCode !== 401) {
+        // No auth needed (rare) — collect directly.
+        return collect(res1, binary).then(body => resolve({ status: res1.statusCode, headers: res1.headers, body })).catch(reject)
+      }
+      const ch = parseChallenge(res1.headers['www-authenticate'] || '')
+      const auth = buildDigestHeader(ch, { method: 'GET', uri, user, pass })
+      const second = http.request({ host, port, path: uri, method: 'GET', headers: { Authorization: auth } }, res2 => {
+        collect(res2, binary).then(body => resolve({ status: res2.statusCode, headers: res2.headers, body })).catch(reject)
+      })
+      second.on('error', reject)
+      second.end()
+    })
+    first.on('error', reject)
+    first.setTimeout(15000, () => first.destroy(new Error('NVR request timeout')))
+    first.end()
+  })
+}
+
+function collect(res, binary) {
+  return new Promise((resolve, reject) => {
+    const chunks = []
+    res.on('data', d => chunks.push(d))
+    res.on('end', () => resolve(binary ? Buffer.concat(chunks) : Buffer.concat(chunks).toString('utf8')))
+    res.on('error', reject)
+  })
+}
+
+// ── Business hours + debounce ─────────────────────────────────────────────
+function hhmmToMinutes(s) { const [h, m] = s.split(':').map(Number); return h * 60 + (m || 0) }
+
+function inBusinessHours(d = new Date()) {
+  // Resolve weekday + HH:MM in the configured timezone.
+  const parts = new Intl.DateTimeFormat('en-AU', {
+    timeZone: CFG.tz, weekday: 'short', hour: '2-digit', minute: '2-digit', hour12: false,
+  }).formatToParts(d)
+  const map = Object.fromEntries(parts.map(p => [p.type, p.value]))
+  const dayIdx = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 }[map.weekday]
+  if (!CFG.days.includes(dayIdx)) return false
+  const mins = parseInt(map.hour, 10) * 60 + parseInt(map.minute, 10)
+  return mins >= hhmmToMinutes(CFG.startHhmm) && mins < hhmmToMinutes(CFG.endHhmm)
+}
+
+let lastFired = 0
+
+// ── Action A — ring the Yealink via an Asterisk call file ──────────────────
+function ringPhone() {
+  if (!CFG.alertExt) { warn('ALERT_EXTENSION not set — skipping phone ring'); return }
+  const callFile = [
+    `Channel: PJSIP/${CFG.alertExt}`,
+    `CallerID: ${CFG.callerId}`,
+    'MaxRetries: 2',
+    'RetryTime: 10',
+    'WaitTime: 30',
+    `Context: ${CFG.dialplanContext}`,
+    'Extension: s',
+    'Priority: 1',
+    '',
+  ].join('\n')
+  // Write to a temp path OUTSIDE the spool, then mv in so Asterisk only ever
+  // sees a complete file (atomic pickup).
+  const tmp = path.join('/tmp', `fb-${Date.now()}.call`)
+  try {
+    fs.writeFileSync(tmp, callFile)
+    // Asterisk requires the file to be owned/readable by it; mv preserves that
+    // better than a cross-device copy. chown to asterisk if we can.
+    const mv = spawnSync('mv', [tmp, path.join(CFG.spoolDir, path.basename(tmp))])
+    if (mv.status !== 0) throw new Error(`mv failed: ${mv.stderr?.toString() || mv.status}`)
+    log(`Ringing ${CFG.alertExt} via call file`)
+  } catch (e) {
+    warn('ringPhone failed:', e.message)
+    try { fs.existsSync(tmp) && fs.unlinkSync(tmp) } catch { /* ignore */ }
+  }
+}
+
+// ── Action B — NVR snapshot → Slack ────────────────────────────────────────
+async function snapshot() {
+  const uri = `/ISAPI/Streaming/channels/${CFG.nvr.channelId}/picture`
+  const r = await digestGet(uri, { binary: true })
+  if (r.status !== 200) throw new Error(`snapshot HTTP ${r.status}`)
+  if (!r.body || r.body.length < 1024) throw new Error(`snapshot too small (${r.body?.length || 0} bytes)`)
+  return r.body
+}
+
+function localTimeLabel() {
+  return new Intl.DateTimeFormat('en-AU', {
+    timeZone: CFG.tz, weekday: 'short', day: '2-digit', month: 'short',
+    hour: '2-digit', minute: '2-digit', hour12: true,
+  }).format(new Date())
+}
+
+async function postSlack(jpeg) {
+  const { token, channel } = CFG.slack
+  const comment = `📦 Parts dropped off at Freight Bay — ${localTimeLabel()}`
+  if (!token || !channel) { warn('Slack token/channel not set — skipping Slack'); return }
+  if (!jpeg) {
+    // Snapshot failed — still post the text so the alert isn't silent.
+    await slackApi('chat.postMessage', { channel, text: comment })
+    return
+  }
+  const filename = `freight-bay-${Date.now()}.jpg`
+  // 1. Reserve an upload URL.
+  const up = await slackApi('files.getUploadURLExternal', null, {
+    query: { filename, length: String(jpeg.length) },
+  })
+  if (!up.ok) throw new Error(`getUploadURLExternal: ${up.error}`)
+  // 2. PUT the bytes.
+  const put = await fetch(up.upload_url, { method: 'POST', body: jpeg, headers: { 'Content-Type': 'image/jpeg' } })
+  if (!put.ok) throw new Error(`upload PUT HTTP ${put.status}`)
+  // 3. Complete + share into the channel with the comment.
+  const done = await slackApi('files.completeUploadExternal', {
+    files: [{ id: up.file_id, title: 'Freight bay snapshot' }],
+    channel_id: channel,
+    initial_comment: comment,
+  })
+  if (!done.ok) throw new Error(`completeUploadExternal: ${done.error}`)
+  log('Slack posted with snapshot')
+}
+
+async function slackApi(method, jsonBody, { query } = {}) {
+  const isForm = method === 'files.getUploadURLExternal'
+  let url = `https://slack.com/api/${method}`
+  const headers = { Authorization: `Bearer ${CFG.slack.token}` }
+  let body
+  if (query) {
+    url += '?' + new URLSearchParams(query).toString()
+  }
+  if (jsonBody) {
+    headers['Content-Type'] = 'application/json; charset=utf-8'
+    body = JSON.stringify(jsonBody)
+  }
+  const r = await fetch(url, { method: 'POST', headers, body })
+  return r.json()
+}
+
+// ── Event handler ───────────────────────────────────────────────────────
+async function onLineCross(evt) {
+  const now = Date.now()
+  if (!inBusinessHours()) { log(`event ${evt.eventType} ch ${evt.channelId} — outside business hours, ignored`); return }
+  if (now - lastFired < CFG.cooldownMs) { log('event within cooldown — ignored'); return }
+  lastFired = now
+  log(`FREIGHT BAY ALERT — ${evt.eventType} ch ${evt.channelId}`)
+  ringPhone()
+  try { await postSlack(await snapshot().catch(e => { warn('snapshot:', e.message); return null })) }
+  catch (e) { warn('postSlack:', e.message) }
+}
+
+// ── Alert stream: long-lived multipart, digest auth, reconnect ────────────
+function matchesFreightBay(evt) {
+  if (!CFG.eventTypes.includes(String(evt.eventType || '').toLowerCase())) return false
+  // Some firmwares report channelID, some dynChannelID; compare loosely.
+  const ids = [evt.channelId, evt.dynChannelId].filter(Boolean).map(String)
+  return ids.includes(String(CFG.nvr.channelId))
+}
+
+function parseEventXml(text) {
+  const pick = (tag) => {
+    const m = text.match(new RegExp(`<${tag}>([^<]*)</${tag}>`, 'i'))
+    return m ? m[1].trim() : null
+  }
+  return {
+    eventType: pick('eventType'),
+    channelId: pick('channelID') || pick('channelId'),
+    dynChannelId: pick('dynChannelID'),
+    state: pick('eventState'),
+  }
+}
+
+let streamBuf = Buffer.alloc(0)
+function feedStream(chunk, onEvent) {
+  streamBuf = Buffer.concat([streamBuf, chunk])
+  // Events are XML/JSON documents inside multipart parts. Rather than track the
+  // MIME boundary precisely across firmwares, slice on the XML envelope, which
+  // is stable: <EventNotificationAlert …> … </EventNotificationAlert>.
+  let text = streamBuf.toString('utf8')
+  const closeTag = '</EventNotificationAlert>'
+  let idx
+  while ((idx = text.indexOf(closeTag)) !== -1) {
+    const end = idx + closeTag.length
+    const openIdx = text.lastIndexOf('<EventNotificationAlert', 0)
+    const startSearch = text.slice(0, end)
+    const open = startSearch.lastIndexOf('<EventNotificationAlert')
+    const doc = open !== -1 ? startSearch.slice(open, end) : startSearch.slice(0, end)
+    try {
+      const evt = parseEventXml(doc)
+      if (evt.eventType) onEvent(evt)
+    } catch (e) { /* skip malformed */ }
+    text = text.slice(end)
+  }
+  // Keep only the unconsumed tail (guard against unbounded growth).
+  streamBuf = Buffer.from(text, 'utf8')
+  if (streamBuf.length > 1_000_000) streamBuf = streamBuf.slice(-100_000)
+}
+
+function subscribeAlertStream(onEvent) {
+  const { host, port, user, pass } = CFG.nvr
+  const uri = '/ISAPI/Event/notification/alertStream'
+  const connect = () => {
+    log(`connecting to alertStream ${host}:${port}${uri}`)
+    // Digest handshake first (401 → challenge), then open the long-lived GET.
+    const probe = http.request({ host, port, path: uri, method: 'GET' }, res1 => {
+      if (res1.statusCode !== 401) {
+        // Some NVRs allow the stream without a fresh challenge — use directly.
+        return attach(res1)
+      }
+      res1.resume()
+      const ch = parseChallenge(res1.headers['www-authenticate'] || '')
+      const auth = buildDigestHeader(ch, { method: 'GET', uri, user, pass })
+      const streamReq = http.request({ host, port, path: uri, method: 'GET', headers: { Authorization: auth } }, attach)
+      streamReq.on('error', onErr)
+      streamReq.end()
+    })
+    probe.on('error', onErr)
+    probe.end()
+  }
+  const attach = (res) => {
+    if (res.statusCode !== 200) { onErr(new Error(`alertStream HTTP ${res.statusCode}`)); res.resume(); return }
+    log('alertStream connected')
+    streamBuf = Buffer.alloc(0)
+    res.on('data', d => { try { feedStream(d, onEvent) } catch (e) { warn('parse:', e.message) } })
+    res.on('end', () => onErr(new Error('alertStream ended')))
+    res.on('error', onErr)
+  }
+  let reconnecting = false
+  const onErr = (e) => {
+    if (reconnecting) return
+    reconnecting = true
+    warn('alertStream:', e.message, `— reconnecting in ${CFG.reconnectMs}ms`)
+    setTimeout(() => { reconnecting = false; connect() }, CFG.reconnectMs)
+  }
+  connect()
+}
+
+// ── CLI test helpers + main ────────────────────────────────────────────────
+async function main() {
+  if (ARGS.has('--test-ring')) { log('test: ringing phone'); ringPhone(); return }
+  if (ARGS.has('--test-snapshot')) {
+    const jpg = await snapshot(); const out = `/tmp/fb-test-${Date.now()}.jpg`
+    fs.writeFileSync(out, jpg); log(`snapshot OK (${jpg.length} bytes) → ${out}`); return
+  }
+  if (ARGS.has('--test-slack')) {
+    const jpg = await snapshot().catch(e => { warn('snapshot:', e.message); return null })
+    await postSlack(jpg); log('test-slack done'); return
+  }
+  if (ARGS.has('--once')) { await onLineCross({ eventType: 'manual', channelId: CFG.nvr.channelId }); return }
+
+  // Startup sanity.
+  for (const [k, v] of Object.entries({ NVR_USER: CFG.nvr.user, ALERT_EXTENSION: CFG.alertExt, SLACK_BOT_TOKEN: CFG.slack.token, SLACK_CHANNEL_ID: CFG.slack.channel })) {
+    if (!v) warn(`${k} is not set`)
+  }
+  log(`ja-freightbay up — NVR ${CFG.nvr.host} ch ${CFG.nvr.channelId}, ext ${CFG.alertExt || '(none)'}, ` +
+      `hours ${CFG.startHhmm}-${CFG.endHhmm} ${CFG.tz} days [${CFG.days}], cooldown ${CFG.cooldownMs}ms`)
+  if (ARGS.has('--probe')) log('PROBE MODE — logging every event, taking NO actions')
+
+  subscribeAlertStream((evt) => {
+    if (ARGS.has('--probe')) { log('event:', JSON.stringify(evt)); return }
+    if (matchesFreightBay(evt) && String(evt.state || '').toLowerCase() !== 'inactive') {
+      onLineCross(evt).catch(e => warn('onLineCross:', e.message))
+    }
+  })
+}
+
+// Only run the service when invoked directly; `require()` (tests) gets the
+// internals without starting the stream.
+if (require.main === module) {
+  main().catch(e => { console.error('FATAL', e); process.exit(1) })
+}
+
+module.exports = { buildDigestHeader, parseChallenge, inBusinessHours, parseEventXml, feedStream, matchesFreightBay, CFG }
+
