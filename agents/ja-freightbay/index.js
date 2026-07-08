@@ -285,7 +285,11 @@ function matchesFreightBay(evt) {
   if (!CFG.eventTypes.includes(String(evt.eventType || '').toLowerCase())) return false
   // Some firmwares report channelID, some dynChannelID; compare loosely.
   const ids = [evt.channelId, evt.dynChannelId].filter(Boolean).map(String)
-  return ids.includes(String(CFG.nvr.channelId))
+  // Events carry the bare input number (D24 -> "24") while streaming URIs use
+  // <input>01 ("2401") — accept the configured channel in either form.
+  const n = parseInt(CFG.nvr.channelId, 10)
+  const forms = new Set([String(n), String(Math.floor(n / 100)), `${n}01`])
+  return ids.some(id => forms.has(id))
 }
 
 function parseEventXml(text) {
