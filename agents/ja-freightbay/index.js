@@ -82,7 +82,7 @@ const CFG = {
   cooldownMs: parseInt(process.env.COOLDOWN_MS || '120000', 10),
   // Event types that count as "someone at the bay".
   eventTypes: (process.env.EVENT_TYPES || 'linedetection,fielddetection').split(',').map(s => s.trim().toLowerCase()),
-  reconnectMs: parseInt(process.env.RECONNECT_MS || '5000', 10),
+  reconnectMs: parseInt(process.env.RECONNECT_MS || '2000', 10),
 }
 
 const ARGS = new Set(process.argv.slice(2))
@@ -325,8 +325,13 @@ function subscribeAlertStream(onEvent) {
   const uri = '/ISAPI/Event/notification/alertStream'
   const connect = () => {
     log(`connecting to alertStream ${host}:${port}${uri}`)
+    // Keep the connection open: NVRs close the multipart stream when the
+    // client sends the default "Connection: close", so force keep-alive and
+    // no connection pooling (agent:false). No socket timeout — the stream is
+    // meant to stay open indefinitely between events/heartbeats.
+    const streamHeaders = { Connection: 'keep-alive', Accept: 'multipart/mixed, application/xml, */*' }
     // Digest handshake first (401 → challenge), then open the long-lived GET.
-    const probe = http.request({ host, port, path: uri, method: 'GET' }, res1 => {
+    const probe = http.request({ host, port, path: uri, method: 'GET', agent: false, headers: { Connection: 'keep-alive' } }, res1 => {
       if (res1.statusCode !== 401) {
         // Some NVRs allow the stream without a fresh challenge — use directly.
         return attach(res1)
@@ -334,7 +339,10 @@ function subscribeAlertStream(onEvent) {
       res1.resume()
       const ch = parseChallenge(res1.headers['www-authenticate'] || '')
       const auth = buildDigestHeader(ch, { method: 'GET', uri, user, pass })
-      const streamReq = http.request({ host, port, path: uri, method: 'GET', headers: { Authorization: auth } }, attach)
+      const streamReq = http.request(
+        { host, port, path: uri, method: 'GET', agent: false, headers: { ...streamHeaders, Authorization: auth } },
+        attach,
+      )
       streamReq.on('error', onErr)
       streamReq.end()
     })
@@ -345,6 +353,8 @@ function subscribeAlertStream(onEvent) {
     if (res.statusCode !== 200) { onErr(new Error(`alertStream HTTP ${res.statusCode}`)); res.resume(); return }
     log('alertStream connected')
     streamBuf = Buffer.alloc(0)
+    // Never let a socket idle-timeout kill the stream.
+    if (res.socket) res.socket.setTimeout(0)
     res.on('data', d => { try { feedStream(d, onEvent) } catch (e) { warn('parse:', e.message) } })
     res.on('end', () => onErr(new Error('alertStream ended')))
     res.on('error', onErr)
