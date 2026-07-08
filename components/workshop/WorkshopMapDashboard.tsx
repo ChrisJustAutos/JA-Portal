@@ -13,7 +13,7 @@ import Head from 'next/head'
 import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
 
-type ViewKey = 'jobs' | 'quotes' | 'conv'
+type ViewKey = 'jobs' | 'quotes' | 'conv' | 'state'
 
 interface Pt { la: number; ln: number; pc: string; l: string; m: number; g: string; c: string; a: number; j?: string; i?: string; x?: number; w?: number }
 interface Payload {
@@ -38,6 +38,21 @@ const esc = (s: any) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&l
 
 const CK = ['70', '200', '300', 'HILUX', 'PRADO']
 const convColor = (p: number) => p >= 12 ? '#47FFCF' : p >= 8 ? '#9be7c4' : p >= 5 ? '#FFB454' : '#e0707a'
+
+// AU postcode → state (standard ranges incl. PO-box blocks; payload points only carry postcode).
+function pcState(pc: string): string {
+  const n = parseInt(pc, 10)
+  if (!Number.isFinite(n)) return '?'
+  if ((n >= 200 && n <= 299) || (n >= 2600 && n <= 2618) || (n >= 2900 && n <= 2920)) return 'ACT'
+  if ((n >= 1000 && n <= 2599) || (n >= 2619 && n <= 2899) || (n >= 2921 && n <= 2999)) return 'NSW'
+  if ((n >= 3000 && n <= 3999) || (n >= 8000 && n <= 8999)) return 'VIC'
+  if ((n >= 4000 && n <= 4999) || (n >= 9000 && n <= 9999)) return 'QLD'
+  if (n >= 5000 && n <= 5999) return 'SA'
+  if (n >= 6000 && n <= 6999) return 'WA'
+  if (n >= 7000 && n <= 7999) return 'TAS'
+  if (n >= 800 && n <= 999) return 'NT'
+  return '?'
+}
 
 export default function WorkshopMapDashboard() {
   const [data, setData] = useState<ApiResp | null>(null)
@@ -98,12 +113,13 @@ export default function WorkshopMapDashboard() {
   }, [!!P])
 
   // ── Marker rendering ────────────────────────────────────────────────────
-  const points = view === 'conv' || !P ? [] : (view === 'jobs' ? P.jobs.points : P.quotes.points)
+  // State view uses jobs points for the month/vehicle strips (revenue-based).
+  const points = view === 'conv' || !P ? [] : (view === 'quotes' ? P.quotes.points : P.jobs.points)
   const selPoints = useMemo(() => points.filter(p => (month < 0 || p.m === month) && (cat === 'all' || p.g === cat)), [points, month, cat])
 
   useEffect(() => {
     const map = mapRef.current, layer = layerRef.current
-    if (!map || !layer || !P || view === 'conv') return
+    if (!map || !layer || !P || view === 'conv' || view === 'state') return
     const rad = view === 'jobs'
       ? (t: number) => Math.max(5, Math.min(30, Math.sqrt(t) / 18))
       : (t: number) => Math.max(5, Math.min(34, Math.sqrt(t) / 95))
@@ -137,9 +153,9 @@ export default function WorkshopMapDashboard() {
     })
   }, [selPoints, view, cat, P, COL, NAME])
 
-  // Fix tile layout when switching back from the conversion view.
+  // Fix tile layout when switching back from a non-map view.
   useEffect(() => {
-    if (view !== 'conv' && mapRef.current) setTimeout(() => mapRef.current?.invalidateSize(), 60)
+    if (view !== 'conv' && view !== 'state' && mapRef.current) setTimeout(() => mapRef.current?.invalidateSize(), 60)
   }, [view])
 
   // ── Refresh (manual re-pull via GH Action) ─────────────────────────────
@@ -198,7 +214,8 @@ export default function WorkshopMapDashboard() {
     )
   }
 
-  const isMapView = view !== 'conv'
+  const isMapView = view === 'jobs' || view === 'quotes'
+  const hasStrips = isMapView || view === 'state'
 
   return (
     <div className="wm-dash">
@@ -211,8 +228,8 @@ export default function WorkshopMapDashboard() {
         <div className="titlerow">
           <h1>Just Autos <span className="b">·</span> FY{P.fy} Workshop</h1>
           <span className="sub">
-            {view === 'conv' ? 'Quotes vs booked jobs' : (view === 'jobs' ? 'Booked jobs' : 'Quotes')}
-            {isMapView && <> · {month < 0 ? `${P.months[0]?.label} – ${P.months[11]?.label}` : P.months[month]?.label}{cat !== 'all' ? ` · ${NAME[cat]}` : ''}</>}
+            {view === 'conv' ? 'Quotes vs booked jobs' : view === 'state' ? 'State breakdown' : (view === 'jobs' ? 'Booked jobs' : 'Quotes')}
+            {hasStrips && <> · {month < 0 ? `${P.months[0]?.label} – ${P.months[11]?.label}` : P.months[month]?.label}{cat !== 'all' ? ` · ${NAME[cat]}` : ''}</>}
           </span>
           <span style={{ flex: 1 }} />
           {(data?.fys.length || 0) > 1 && (
@@ -231,6 +248,7 @@ export default function WorkshopMapDashboard() {
           <button className={'tab' + (view === 'jobs' ? ' active' : '')} onClick={() => setView('jobs')}>Jobs Map</button>
           <button className={'tab' + (view === 'quotes' ? ' active' : '')} onClick={() => setView('quotes')}>Quotes Map</button>
           <button className={'tab' + (view === 'conv' ? ' active' : '')} onClick={() => setView('conv')}>Conversion</button>
+          <button className={'tab' + (view === 'state' ? ' active' : '')} onClick={() => setView('state')}>By State</button>
         </div>
       </header>
 
@@ -245,7 +263,7 @@ export default function WorkshopMapDashboard() {
         </div>
       )}
 
-      {isMapView && (
+      {hasStrips && (
         <div className="strip months">
           <span className="striplabel">Month</span>
           <button className={'mbtn' + (month < 0 ? ' active' : '')} onClick={() => { setMonth(-1); if (boundsRef.current) mapRef.current?.fitBounds(boundsRef.current) }}>
@@ -259,7 +277,7 @@ export default function WorkshopMapDashboard() {
         </div>
       )}
 
-      {isMapView && (
+      {hasStrips && (
         <div className="strip vehs">
           <span className="striplabel">Vehicle</span>
           <button className={'chip' + (cat === 'all' ? ' active' : '')} style={{ color: 'var(--wm-blue)' }} onClick={() => setCat('all')}>
@@ -293,6 +311,7 @@ export default function WorkshopMapDashboard() {
           </div>
         )}
         {view === 'conv' && <ConversionView P={P} COL={COL} NAME={NAME} />}
+        {view === 'state' && <StateView P={P} month={month} cat={cat} />}
       </div>
     </div>
   )
@@ -371,6 +390,110 @@ function ConversionView({ P, COL, NAME }: { P: Payload; COL: Record<string, stri
       <p style={{ color: 'var(--wm-muted2)', fontSize: 11, marginTop: 12, lineHeight: 1.6 }}>
         Both sides are 1 per customer per month (largest kept). Quotes by quote date; booked jobs from invoices
         (deposits, diagnostics &amp; internal excluded). Counted independently — a quote may convert in a later month.
+      </p>
+    </div>
+  )
+}
+
+// ── State breakdown tab ────────────────────────────────────────────────────
+
+const STATE_LABEL: Record<string, string> = {
+  QLD: 'Queensland', NSW: 'New South Wales', VIC: 'Victoria', SA: 'South Australia',
+  WA: 'Western Australia', TAS: 'Tasmania', NT: 'Northern Territory', ACT: 'ACT', '?': 'Unknown',
+}
+
+function StateView({ P, month, cat }: { P: Payload; month: number; cat: string }) {
+  const pass = (p: Pt) => (month < 0 || p.m === month) && (cat === 'all' || p.g === cat)
+  const jobs = P.jobs.points.filter(pass)
+  const quotes = P.quotes.points.filter(pass)
+
+  const S: Record<string, { st: string; jn: number; jt: number; qn: number; qt: number; won: number; locs: Set<string> }> = {}
+  const row = (st: string) => (S[st] ||= { st, jn: 0, jt: 0, qn: 0, qt: 0, won: 0, locs: new Set() })
+  jobs.forEach(p => { const r = row(pcState(p.pc)); r.jn++; r.jt += p.a; r.locs.add(p.pc + '@' + p.la + ',' + p.ln) })
+  quotes.forEach(p => { const r = row(pcState(p.pc)); r.qn++; r.qt += p.a; r.won += (p.w || 0) })
+  const rows = Object.values(S).sort((a, b) => b.jt - a.jt || b.qt - a.qt)
+
+  const tr = jobs.reduce((s, p) => s + p.a, 0)
+  const tq = quotes.length, tv = quotes.reduce((s, p) => s + p.a, 0)
+  const twon = rows.reduce((s, r) => s + r.won, 0)
+  const qldShare = tr ? 100 * (S['QLD']?.jt || 0) / tr : 0
+
+  // Monthly revenue grid — full FY, vehicle filter only (month filter drives the table above).
+  const jobsFY = P.jobs.points.filter(p => cat === 'all' || p.g === cat)
+  const grid: Record<string, number[]> = {}
+  jobsFY.forEach(p => { const st = pcState(p.pc); (grid[st] ||= Array(12).fill(0))[p.m] += p.a })
+  const sum = (a: number[]) => a.reduce((x, y) => x + y, 0)
+  const gridStates = Object.keys(grid).sort((a, b) => sum(grid[b]) - sum(grid[a]))
+  const fyTotal = gridStates.reduce((s, st) => s + sum(grid[st]), 0)
+
+  return (
+    <div className="convView">
+      <div className="cards">
+        <div className="card"><div className="v">{fmtK(tr)}</div><div className="k">Revenue (inc GST)</div></div>
+        <div className="card"><div className="v" style={{ color: 'var(--wm-mint)' }}>{jobs.length.toLocaleString('en-AU')}</div><div className="k">Booked jobs</div></div>
+        <div className="card"><div className="v">{rows.length}</div><div className="k">States reached</div></div>
+        <div className="card"><div className="v" style={{ color: 'var(--wm-amber)' }}>{qldShare.toFixed(0)}%</div><div className="k">QLD share of revenue</div></div>
+      </div>
+
+      <h2>By state</h2>
+      <table>
+        <thead><tr><th>State</th><th>Jobs</th><th>Revenue</th><th>% rev</th><th>Avg / job</th><th>Locations</th><th>Quotes</th><th>Quoted $</th><th>Won</th><th>Win %</th></tr></thead>
+        <tbody>
+          {rows.map(r => (
+            <tr key={r.st}>
+              <td className="veh" title={STATE_LABEL[r.st] || r.st}>{r.st === '?' ? 'Unknown' : r.st}</td>
+              <td className="num">{r.jn.toLocaleString('en-AU')}</td>
+              <td className="num">{fmtK(r.jt)}</td>
+              <td className="num"><span className="sbar"><i style={{ width: `${tr ? Math.max(1.5, 100 * r.jt / tr) : 0}%` }} /></span>{tr ? (100 * r.jt / tr).toFixed(1) : '0'}%</td>
+              <td className="num">{fmtK(r.jn ? r.jt / r.jn : 0)}</td>
+              <td className="num">{r.locs.size}</td>
+              <td className="num">{r.qn.toLocaleString('en-AU')}</td>
+              <td className="num">{fmtK(r.qt)}</td>
+              <td className="num">{r.won}</td>
+              <td className="num" style={{ color: r.qn ? convColor(100 * r.won / r.qn) : '#3a4658' }}>{r.qn ? (100 * r.won / r.qn).toFixed(0) + '%' : '–'}</td>
+            </tr>
+          ))}
+          <tr className="tot">
+            <td>Total</td>
+            <td className="num">{jobs.length.toLocaleString('en-AU')}</td>
+            <td className="num">{fmtK(tr)}</td>
+            <td className="num">100%</td>
+            <td className="num">{fmtK(jobs.length ? tr / jobs.length : 0)}</td>
+            <td className="num">{rows.reduce((s, r) => s + r.locs.size, 0)}</td>
+            <td className="num">{tq.toLocaleString('en-AU')}</td>
+            <td className="num">{fmtK(tv)}</td>
+            <td className="num">{twon}</td>
+            <td className="num">{tq ? (100 * twon / tq).toFixed(0) + '%' : '–'}</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h2>Revenue by state per month <span style={{ color: 'var(--wm-muted2)', fontSize: 11, letterSpacing: 0, textTransform: 'none' }}>(full year{cat !== 'all' ? ', filtered by vehicle' : ''})</span></h2>
+      <div className="gridwrap">
+        <table className="grid">
+          <thead><tr><th>State</th>{P.months.map(m => <th key={m.k}>{m.label.split(' ')[0]}</th>)}<th>FY</th></tr></thead>
+          <tbody>
+            {gridStates.map(st => (
+              <tr key={st}>
+                <td className="veh" title={STATE_LABEL[st] || st}>{st === '?' ? 'Unknown' : st}</td>
+                {Array.from({ length: 12 }, (_, i) => {
+                  const v = grid[st][i]
+                  return <td key={i} className="cv" style={{ color: v ? 'var(--wm-txt)' : '#3a4658' }}>{v ? fmtK(v) : '–'}</td>
+                })}
+                <td className="cv" style={{ color: 'var(--wm-blue)' }}>{fmtK(sum(grid[st]))}</td>
+              </tr>
+            ))}
+            <tr className="tot">
+              <td>Total</td>
+              {Array.from({ length: 12 }, (_, i) => <td key={i} className="cv num">{fmtK(gridStates.reduce((s, st) => s + grid[st][i], 0))}</td>)}
+              <td className="cv num">{fmtK(fyTotal)}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p style={{ color: 'var(--wm-muted2)', fontSize: 11, marginTop: 12, lineHeight: 1.6 }}>
+        State is derived from the customer postcode. Jobs are booked jobs (1 per customer per month, deposits /
+        diagnostics / internal excluded); Won = quotes matched to a booked job. The month and vehicle filters above apply to the table.
       </p>
     </div>
   )
@@ -457,5 +580,7 @@ const CSS = `
 .wm-dash .convView tr.tot td{border-top:2px solid var(--wm-line);font-weight:700}
 .wm-dash .convView tr.tot td.num{color:var(--wm-blue)}
 .wm-dash .grid td.cv{font-family:'Space Mono';font-weight:700}.wm-dash .gridwrap{overflow-x:auto}
+.wm-dash .sbar{display:inline-block;vertical-align:middle;width:64px;height:7px;background:var(--wm-panel2);border:1px solid var(--wm-line);border-radius:4px;margin-right:8px;overflow:hidden}
+.wm-dash .sbar i{display:block;height:100%;background:var(--wm-blue);border-radius:4px}
 @media(max-width:600px){.wm-dash h1{font-size:18px}.wm-dash .card .v{font-size:19px}.wm-dash .convView th,.wm-dash .convView td{padding:6px 6px;font-size:11.5px}.wm-dash .stats{gap:14px}.wm-dash .stat .v{font-size:16px}}
 `
