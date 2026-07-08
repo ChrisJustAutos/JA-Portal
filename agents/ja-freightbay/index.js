@@ -216,7 +216,11 @@ function ringPhone() {
 
 // ── Action B — NVR snapshot → Slack ────────────────────────────────────────
 async function snapshot() {
-  const uri = `/ISAPI/Streaming/channels/${CFG.nvr.channelId}/picture`
+  // The bare picture endpoint serves a ~4s-stale cached frame on this NVR.
+  // Asking for an explicit resolution forces a fresh capture (and gives a
+  // sharper 720p image). NOTE: adding snapShotImageType alongside it re-caches.
+  const query = process.env.SNAPSHOT_QUERY || '?videoResolutionWidth=1280&videoResolutionHeight=720'
+  const uri = `/ISAPI/Streaming/channels/${CFG.nvr.channelId}/picture${query}`
   const r = await digestGet(uri, { binary: true })
   if (r.status !== 200) throw new Error(`snapshot HTTP ${r.status}`)
   if (!r.body || r.body.length < 1024) throw new Error(`snapshot too small (${r.body?.length || 0} bytes)`)
