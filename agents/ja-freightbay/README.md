@@ -29,7 +29,12 @@ NVR ISAPI alertStream ──subscribe──► ja-freightbay (this service)
 
 ## How it works
 
-- **Trigger** — subscribes to the NVR's long-lived multipart `alertStream`
+- **Trigger (two ways, both can run at once — the debounce dedupes):**
+  - **PUSH / Alarm Server (reliable, preferred on flaky NVRs)** — the service
+    runs an HTTP listener (`LISTEN_PORT`, default 8098); the camera's *Alarm
+    Server / HTTP host* POSTs each event to it. No long-lived connection to
+    drop. Set `USE_ALERTSTREAM=false` to run push-only.
+  - **PULL / alertStream** — subscribes to the NVR's long-lived multipart
   (`/ISAPI/Event/notification/alertStream`, HTTP Digest auth), parses each
   `EventNotificationAlert` document, and acts when `eventType` is
   `linedetection` (or `fielddetection` for intrusion) **and** the channel is the

@@ -83,6 +83,13 @@ const CFG = {
   // Event types that count as "someone at the bay".
   eventTypes: (process.env.EVENT_TYPES || 'linedetection,fielddetection').split(',').map(s => s.trim().toLowerCase()),
   reconnectMs: parseInt(process.env.RECONNECT_MS || '2000', 10),
+  // Two ways to receive events. PUSH (alarm server) is the reliable path on
+  // NVRs that drop the pull-stream: the camera/NVR POSTs events to this
+  // listener. Both can run at once — the debounce dedupes. Set
+  // USE_ALERTSTREAM=false on a flaky NVR to silence the reconnect churn.
+  useAlarmServer: (process.env.USE_ALARM_SERVER || 'true').toLowerCase() !== 'false',
+  useAlertStream: (process.env.USE_ALERTSTREAM || 'true').toLowerCase() !== 'false',
+  listenPort: parseInt(process.env.LISTEN_PORT || '8098', 10),
 }
 
 const ARGS = new Set(process.argv.slice(2))
@@ -320,6 +327,44 @@ function feedStream(chunk, onEvent) {
   if (streamBuf.length > 1_000_000) streamBuf = streamBuf.slice(-100_000)
 }
 
+// Extract every EventNotificationAlert envelope from a one-shot body (the
+// alarm-server POST delivers a complete document, sometimes multipart with an
+// image part — we only scan for the XML envelope so binary parts are ignored).
+function handleAlarmBody(body, onEvent) {
+  if (body.includes('<EventNotificationAlert')) {
+    for (const seg of body.split('</EventNotificationAlert>')) {
+      const open = seg.lastIndexOf('<EventNotificationAlert')
+      if (open === -1) continue
+      const evt = parseEventXml(seg.slice(open) + '</EventNotificationAlert>')
+      if (evt.eventType) onEvent(evt)
+    }
+  } else {
+    const evt = parseEventXml(body)
+    if (evt.eventType) onEvent(evt)
+  }
+}
+
+// PUSH model: the camera/NVR Alarm Server (HTTP host) POSTs events here. No
+// long-lived connection, so nothing to drop — the reliable path on NVRs whose
+// alertStream keeps closing.
+function startAlarmServer(onEvent) {
+  const server = http.createServer((req, res) => {
+    if (req.method !== 'POST') { res.writeHead(200); res.end('ja-freightbay ok'); return }
+    const chunks = []
+    let size = 0
+    req.on('data', d => { size += d.length; if (size < 5_000_000) chunks.push(d) })
+    req.on('end', () => {
+      res.writeHead(200); res.end('ok')
+      try { handleAlarmBody(Buffer.concat(chunks).toString('utf8'), onEvent) }
+      catch (e) { warn('alarm parse:', e.message) }
+    })
+    req.on('error', () => { try { res.writeHead(400); res.end() } catch { /* */ } })
+  })
+  server.on('error', e => warn(`alarm listener error: ${e.message}`))
+  server.listen(CFG.listenPort, () => log(`alarm HTTP listener on :${CFG.listenPort} (point the camera's Alarm Server here)`))
+  return server
+}
+
 function subscribeAlertStream(onEvent) {
   const { host, port, user, pass } = CFG.nvr
   const uri = '/ISAPI/Event/notification/alertStream'
@@ -382,20 +427,29 @@ async function main() {
   }
   if (ARGS.has('--once')) { await onLineCross({ eventType: 'manual', channelId: CFG.nvr.channelId }); return }
 
+  const probe = ARGS.has('--probe')
+  // --listen: only the push listener (skip the pull-stream), for testing the
+  // camera's Alarm Server config without the reconnect noise.
+  const listenOnly = ARGS.has('--listen')
+
   // Startup sanity.
   for (const [k, v] of Object.entries({ NVR_USER: CFG.nvr.user, ALERT_EXTENSION: CFG.alertExt, SLACK_BOT_TOKEN: CFG.slack.token, SLACK_CHANNEL_ID: CFG.slack.channel })) {
     if (!v) warn(`${k} is not set`)
   }
   log(`ja-freightbay up — NVR ${CFG.nvr.host} ch ${CFG.nvr.channelId}, ext ${CFG.alertExt || '(none)'}, ` +
       `hours ${CFG.startHhmm}-${CFG.endHhmm} ${CFG.tz} days [${CFG.days}], cooldown ${CFG.cooldownMs}ms`)
-  if (ARGS.has('--probe')) log('PROBE MODE — logging every event, taking NO actions')
+  if (probe) log('PROBE MODE — logging every event, taking NO actions')
 
-  subscribeAlertStream((evt) => {
-    if (ARGS.has('--probe')) { log('event:', JSON.stringify(evt)); return }
+  // Shared handler for events from EITHER source (stream or push listener).
+  const handle = (evt, src) => {
+    if (probe) { log(`event [${src}]:`, JSON.stringify(evt)); return }
     if (matchesFreightBay(evt) && String(evt.state || '').toLowerCase() !== 'inactive') {
       onLineCross(evt).catch(e => warn('onLineCross:', e.message))
     }
-  })
+  }
+
+  if (CFG.useAlarmServer || listenOnly) startAlarmServer(evt => handle(evt, 'push'))
+  if (CFG.useAlertStream && !listenOnly) subscribeAlertStream(evt => handle(evt, 'stream'))
 }
 
 // Only run the service when invoked directly; `require()` (tests) gets the
@@ -404,5 +458,5 @@ if (require.main === module) {
   main().catch(e => { console.error('FATAL', e); process.exit(1) })
 }
 
-module.exports = { buildDigestHeader, parseChallenge, inBusinessHours, parseEventXml, feedStream, matchesFreightBay, CFG }
+module.exports = { buildDigestHeader, parseChallenge, inBusinessHours, parseEventXml, feedStream, handleAlarmBody, matchesFreightBay, CFG }
 
