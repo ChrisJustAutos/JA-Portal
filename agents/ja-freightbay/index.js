@@ -213,28 +213,31 @@ async function postSlack(jpeg) {
   const { token, channel } = CFG.slack
   const comment = `📦 Parts dropped off at Freight Bay — ${localTimeLabel()}`
   if (!token || !channel) { warn('Slack token/channel not set — skipping Slack'); return }
-  if (!jpeg) {
-    // Snapshot failed — still post the text so the alert isn't silent.
-    await slackApi('chat.postMessage', { channel, text: comment })
-    return
+  // Try the snapshot upload; on ANY failure (missing files:write scope, upload
+  // error, snapshot missing) fall back to a text-only post so the alert is
+  // never silent. Only chat:write is required for the fallback.
+  if (jpeg) {
+    try {
+      const filename = `freight-bay-${Date.now()}.jpg`
+      const up = await slackApi('files.getUploadURLExternal', null, { query: { filename, length: String(jpeg.length) } })
+      if (!up.ok) throw new Error(`getUploadURLExternal: ${up.error}`)
+      const put = await httpsRequest(up.upload_url, { method: 'POST', body: jpeg, headers: { 'Content-Type': 'image/jpeg' } })
+      if (put.status < 200 || put.status >= 300) throw new Error(`upload POST HTTP ${put.status}`)
+      const done = await slackApi('files.completeUploadExternal', {
+        files: [{ id: up.file_id, title: 'Freight bay snapshot' }],
+        channel_id: channel,
+        initial_comment: comment,
+      })
+      if (!done.ok) throw new Error(`completeUploadExternal: ${done.error}`)
+      log('Slack posted with snapshot')
+      return
+    } catch (e) {
+      warn(`snapshot post failed (${e.message}) — posting text only. Add the bot's files:write scope for the photo.`)
+    }
   }
-  const filename = `freight-bay-${Date.now()}.jpg`
-  // 1. Reserve an upload URL.
-  const up = await slackApi('files.getUploadURLExternal', null, {
-    query: { filename, length: String(jpeg.length) },
-  })
-  if (!up.ok) throw new Error(`getUploadURLExternal: ${up.error}`)
-  // 2. POST the bytes to the reserved upload URL.
-  const put = await httpsRequest(up.upload_url, { method: 'POST', body: jpeg, headers: { 'Content-Type': 'image/jpeg' } })
-  if (put.status < 200 || put.status >= 300) throw new Error(`upload POST HTTP ${put.status}`)
-  // 3. Complete + share into the channel with the comment.
-  const done = await slackApi('files.completeUploadExternal', {
-    files: [{ id: up.file_id, title: 'Freight bay snapshot' }],
-    channel_id: channel,
-    initial_comment: comment,
-  })
-  if (!done.ok) throw new Error(`completeUploadExternal: ${done.error}`)
-  log('Slack posted with snapshot')
+  const msg = await slackApi('chat.postMessage', { channel, text: comment })
+  if (!msg.ok) throw new Error(`chat.postMessage: ${msg.error}`)
+  log('Slack posted (text only)')
 }
 
 async function slackApi(method, jsonBody, { query } = {}) {
