@@ -90,11 +90,14 @@ const CFG = {
   useAlarmServer: (process.env.USE_ALARM_SERVER || 'true').toLowerCase() !== 'false',
   useAlertStream: (process.env.USE_ALERTSTREAM || 'true').toLowerCase() !== 'false',
   listenPort: parseInt(process.env.LISTEN_PORT || '8098', 10),
-  // Snapshot burst posted to Slack after the instant text alert. The NVR only
-  // refreshes its snapshot frame ~1/s, so intervals below 1000ms just repeat
-  // the same frame (consecutive duplicates are skipped anyway).
-  burstCount: parseInt(process.env.BURST_COUNT || '5', 10),
+  // Snapshot burst posted to Slack after the instant text alert. Frames come
+  // from a continuously-running ring buffer (see startFrameBuffer) because the
+  // NVR's snapshot endpoint lags the live scene by ~3s — pulling only after
+  // the event means a quick visitor is already gone. Pre-roll fixes that.
+  burstCount: parseInt(process.env.BURST_COUNT || '6', 10),
   burstIntervalMs: parseInt(process.env.BURST_INTERVAL_MS || '1000', 10),
+  burstPreRollMs: parseInt(process.env.BURST_PREROLL_MS || '4000', 10),
+  burstPostRollMs: parseInt(process.env.BURST_POSTROLL_MS || '7000', 10),
 }
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms))
@@ -276,21 +279,45 @@ async function postSlackText() {
   log('Slack alert posted')
 }
 
-// Capture a burst of frames (the walk-in and walk-out) and post them as one
-// photo set right under the text alert. Consecutive identical frames (the
-// NVR serves a cached snapshot between ~1s refreshes) are skipped.
-async function postSlackBurst() {
+// ── Frame ring buffer ──────────────────────────────────────────────────────
+// The NVR's snapshot endpoint serves a frame ~3s behind live, so snapping
+// only AFTER an event misses quick visitors entirely. Instead we snapshot
+// continuously (business hours only) into a small in-memory ring, and the
+// burst picks frames spanning [event - preRoll, event + postRoll].
+const frameBuf = [] // { ts, jpg }
+function startFrameBuffer() {
+  const tick = async () => {
+    if (inBusinessHours()) {
+      try {
+        const jpg = await snapshot()
+        frameBuf.push({ ts: Date.now(), jpg })
+        while (frameBuf.length > 20) frameBuf.shift()
+      } catch { /* NVR hiccup — next tick will retry */ }
+    } else if (frameBuf.length) frameBuf.length = 0
+    setTimeout(tick, CFG.burstIntervalMs)
+  }
+  tick()
+}
+
+// Post the buffered frames around the event (walk-up, drop-off, walk-out) as
+// one photo set right under the text alert.
+async function postSlackBurst(eventTs = Date.now()) {
   const { token, channel } = CFG.slack
   if (!token || !channel) return
-  const frames = []
-  for (let i = 0; i < CFG.burstCount; i++) {
-    if (i > 0) await sleep(CFG.burstIntervalMs)
-    try {
-      const jpg = await snapshot()
-      if (!frames.length || !frames[frames.length - 1].equals(jpg)) frames.push(jpg)
-    } catch (e) { warn(`burst frame ${i + 1}:`, e.message) }
+  // Wait for the post-roll frames to land in the buffer.
+  const windowEnd = eventTs + CFG.burstPostRollMs
+  while (Date.now() < windowEnd + CFG.burstIntervalMs) await sleep(500)
+  let picked = frameBuf.filter(f => f.ts >= eventTs - CFG.burstPreRollMs && f.ts <= windowEnd)
+  // Cap at burstCount, evenly spaced across the window, skipping identical frames.
+  if (picked.length > CFG.burstCount) {
+    const step = (picked.length - 1) / (CFG.burstCount - 1)
+    picked = Array.from({ length: CFG.burstCount }, (_, i) => picked[Math.round(i * step)])
   }
-  if (!frames.length) { warn('burst: no frames captured'); return }
+  const frames = []
+  for (const f of picked) {
+    if (!frames.length || !frames[frames.length - 1].equals(f.jpg)) frames.push(f.jpg)
+  }
+  if (!frames.length) { warn('burst: no frames buffered around event'); return }
   const ids = []
   for (const [i, jpg] of frames.entries()) {
     const filename = `freight-bay-${Date.now()}-${i + 1}.jpg`
@@ -329,7 +356,7 @@ async function onLineCross(evt) {
   // Priority order: ring + text alert go out ASAP; the photo burst follows.
   ringPhone()
   try { await postSlackText() } catch (e) { warn('postSlackText:', e.message) }
-  try { await postSlackBurst() }
+  try { await postSlackBurst(now) }
   catch (e) {
     warn('burst:', e.message, '— falling back to single snapshot')
     try { await postSlack(await snapshot().catch(() => null)) } catch (e2) { warn('postSlack:', e2.message) }
@@ -485,7 +512,7 @@ async function main() {
     const jpg = await snapshot().catch(e => { warn('snapshot:', e.message); return null })
     await postSlack(jpg); log('test-slack done'); return
   }
-  if (ARGS.has('--test-burst')) { await postSlackText(); await postSlackBurst(); log('test-burst done'); return }
+  if (ARGS.has('--test-burst')) { startFrameBuffer(); await postSlackText(); await postSlackBurst(); log('test-burst done'); process.exit(0) }
   if (ARGS.has('--once')) { await onLineCross({ eventType: 'manual', channelId: CFG.nvr.channelId }); return }
 
   const probe = ARGS.has('--probe')
@@ -511,6 +538,7 @@ async function main() {
 
   if (CFG.useAlarmServer || listenOnly) startAlarmServer(evt => handle(evt, 'push'))
   if (CFG.useAlertStream && !listenOnly) subscribeAlertStream(evt => handle(evt, 'stream'))
+  if (!probe) startFrameBuffer()
 }
 
 // Only run the service when invoked directly; `require()` (tests) gets the
