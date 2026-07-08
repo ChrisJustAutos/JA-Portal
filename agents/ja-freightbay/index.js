@@ -65,6 +65,11 @@ const CFG = {
   callerId: process.env.ALERT_CALLERID || 'Freight Bay <8000>',
   dialplanContext: process.env.DIALPLAN_CONTEXT || 'freight-bay-alert',
   spoolDir: process.env.ASTERISK_SPOOL_DIR || '/var/spool/asterisk/outgoing',
+  // Ring ONCE: one attempt, no retries. WaitTime = seconds it rings unanswered
+  // before giving up. Raise CALL_MAX_RETRIES only if you want repeat rings.
+  callMaxRetries: process.env.CALL_MAX_RETRIES || '0',
+  callRetryTime: process.env.CALL_RETRY_TIME || '30',
+  callWaitTime: process.env.CALL_WAIT_TIME || '25',
   slack: {
     token: process.env.SLACK_BOT_TOKEN || '',
     channel: process.env.SLACK_CHANNEL_ID || '',
@@ -166,12 +171,14 @@ let lastFired = 0
 // ── Action A — ring the Yealink via an Asterisk call file ──────────────────
 function ringPhone() {
   if (!CFG.alertExt) { warn('ALERT_EXTENSION not set — skipping phone ring'); return }
+  // ONE attempt, NO retries (MaxRetries 0) — an alert must never runaway-ring
+  // when nobody answers. WaitTime = how long it rings before giving up.
   const callFile = [
     `Channel: PJSIP/${CFG.alertExt}`,
     `CallerID: ${CFG.callerId}`,
-    'MaxRetries: 2',
-    'RetryTime: 10',
-    'WaitTime: 30',
+    `MaxRetries: ${CFG.callMaxRetries}`,
+    `RetryTime: ${CFG.callRetryTime}`,
+    `WaitTime: ${CFG.callWaitTime}`,
     `Context: ${CFG.dialplanContext}`,
     'Extension: s',
     'Priority: 1',
