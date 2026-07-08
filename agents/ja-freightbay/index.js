@@ -90,7 +90,14 @@ const CFG = {
   useAlarmServer: (process.env.USE_ALARM_SERVER || 'true').toLowerCase() !== 'false',
   useAlertStream: (process.env.USE_ALERTSTREAM || 'true').toLowerCase() !== 'false',
   listenPort: parseInt(process.env.LISTEN_PORT || '8098', 10),
+  // Snapshot burst posted to Slack after the instant text alert. The NVR only
+  // refreshes its snapshot frame ~1/s, so intervals below 1000ms just repeat
+  // the same frame (consecutive duplicates are skipped anyway).
+  burstCount: parseInt(process.env.BURST_COUNT || '5', 10),
+  burstIntervalMs: parseInt(process.env.BURST_INTERVAL_MS || '1000', 10),
 }
+
+const sleep = (ms) => new Promise(r => setTimeout(r, ms))
 
 const ARGS = new Set(process.argv.slice(2))
 function log(...a) { console.log(new Date().toISOString(), ...a) }
@@ -254,6 +261,46 @@ async function postSlack(jpeg) {
   log('Slack posted (text only)')
 }
 
+// Instant text alert — no snapshot wait, so the notification lands ASAP.
+async function postSlackText() {
+  const { token, channel } = CFG.slack
+  if (!token || !channel) { warn('Slack token/channel not set — skipping Slack'); return }
+  const msg = await slackApi('chat.postMessage', {
+    channel, text: `📦 Parts dropped off at Freight Bay — ${localTimeLabel()}`,
+  })
+  if (!msg.ok) throw new Error(`chat.postMessage: ${msg.error}`)
+  log('Slack alert posted')
+}
+
+// Capture a burst of frames (the walk-in and walk-out) and post them as one
+// photo set right under the text alert. Consecutive identical frames (the
+// NVR serves a cached snapshot between ~1s refreshes) are skipped.
+async function postSlackBurst() {
+  const { token, channel } = CFG.slack
+  if (!token || !channel) return
+  const frames = []
+  for (let i = 0; i < CFG.burstCount; i++) {
+    if (i > 0) await sleep(CFG.burstIntervalMs)
+    try {
+      const jpg = await snapshot()
+      if (!frames.length || !frames[frames.length - 1].equals(jpg)) frames.push(jpg)
+    } catch (e) { warn(`burst frame ${i + 1}:`, e.message) }
+  }
+  if (!frames.length) { warn('burst: no frames captured'); return }
+  const ids = []
+  for (const [i, jpg] of frames.entries()) {
+    const filename = `freight-bay-${Date.now()}-${i + 1}.jpg`
+    const up = await slackApi('files.getUploadURLExternal', null, { query: { filename, length: String(jpg.length) } })
+    if (!up.ok) throw new Error(`getUploadURLExternal: ${up.error}`)
+    const put = await httpsRequest(up.upload_url, { method: 'POST', body: jpg, headers: { 'Content-Type': 'image/jpeg' } })
+    if (put.status < 200 || put.status >= 300) throw new Error(`upload POST HTTP ${put.status}`)
+    ids.push({ id: up.file_id, title: `Freight bay ${i + 1}/${frames.length}` })
+  }
+  const done = await slackApi('files.completeUploadExternal', { files: ids, channel_id: channel })
+  if (!done.ok) throw new Error(`completeUploadExternal: ${done.error}`)
+  log(`Slack burst posted (${frames.length} frames)`)
+}
+
 async function slackApi(method, jsonBody, { query } = {}) {
   let url = `https://slack.com/api/${method}`
   const headers = { Authorization: `Bearer ${CFG.slack.token}` }
@@ -275,9 +322,14 @@ async function onLineCross(evt) {
   if (now - lastFired < CFG.cooldownMs) { log('event within cooldown — ignored'); return }
   lastFired = now
   log(`FREIGHT BAY ALERT — ${evt.eventType} ch ${evt.channelId}`)
+  // Priority order: ring + text alert go out ASAP; the photo burst follows.
   ringPhone()
-  try { await postSlack(await snapshot().catch(e => { warn('snapshot:', e.message); return null })) }
-  catch (e) { warn('postSlack:', e.message) }
+  try { await postSlackText() } catch (e) { warn('postSlackText:', e.message) }
+  try { await postSlackBurst() }
+  catch (e) {
+    warn('burst:', e.message, '— falling back to single snapshot')
+    try { await postSlack(await snapshot().catch(() => null)) } catch (e2) { warn('postSlack:', e2.message) }
+  }
 }
 
 // ── Alert stream: long-lived multipart, digest auth, reconnect ────────────
@@ -429,6 +481,7 @@ async function main() {
     const jpg = await snapshot().catch(e => { warn('snapshot:', e.message); return null })
     await postSlack(jpg); log('test-slack done'); return
   }
+  if (ARGS.has('--test-burst')) { await postSlackText(); await postSlackBurst(); log('test-burst done'); return }
   if (ARGS.has('--once')) { await onLineCross({ eventType: 'manual', channelId: CFG.nvr.channelId }); return }
 
   const probe = ARGS.has('--probe')
