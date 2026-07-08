@@ -8,7 +8,15 @@ JPEG snapshot from the NVR.
 Runs as a systemd service on the **FreePBX sync host** (the box beside Asterisk
 that already runs `ja-cdr-sync` / `ja-transcribe`) — it's already on the LAN with
 the NVR and Asterisk. **Zero npm dependencies at runtime** (all Node built-ins;
-`dotenv` is optional convenience), so it runs with just Node 18+.
+`dotenv` is optional convenience).
+
+> **Node runtime.** Needs **Node 16+**. The FreePBX box is CentOS 7 (glibc
+> 2.17), whose system Node is far too old (v8) and where Node 18/20 won't run
+> (they need glibc 2.28). Install **Node 16** — the newest that runs on CentOS
+> 7 — into `/opt/node16` and point the service's `ExecStart` at
+> `/opt/node16/bin/node` (see Deploy). Always invoke with that full path, never
+> plain `node`. The Slack calls use the built-in `https` module (not global
+> `fetch`) precisely so Node 16 is enough.
 
 ```
 Freight Bay camera (NVR ch D24)
@@ -45,7 +53,13 @@ sudo mkdir -p /opt/ja-freightbay
 sudo cp -r index.js package.json /opt/ja-freightbay/
 cd /opt/ja-freightbay
 cp /path/to/.env.example .env && sudo nano .env    # fill in secrets (see below)
-npm install                                         # only pulls dotenv (optional)
+
+# Node 16 (CentOS 7 can't run 18/20). One-time:
+cd /opt
+sudo curl -L -o node16.tar.gz https://nodejs.org/dist/v16.20.2/node-v16.20.2-linux-x64.tar.gz
+sudo tar xzf node16.tar.gz && sudo mv node-v16.20.2-linux-x64 node16
+/opt/node16/bin/node -v                             # v16.20.2
+cd /opt/ja-freightbay && /opt/node16/bin/npm install # only pulls dotenv (optional)
 
 # Asterisk dialplan + recording (one-time):
 #  1. FreePBX → Admin → System Recordings → Add → name it "freight-bay-alert"

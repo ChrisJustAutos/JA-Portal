@@ -20,10 +20,35 @@
 try { require('dotenv').config() } catch { /* dotenv optional; systemd EnvironmentFile also works */ }
 
 const http = require('node:http')
+const https = require('node:https')
 const crypto = require('node:crypto')
 const fs = require('node:fs')
 const path = require('node:path')
 const { spawnSync } = require('node:child_process')
+
+// Minimal HTTPS request helper (Slack). Built-in so the service needs no
+// global fetch — it runs on Node 16 (the newest Node that supports CentOS 7's
+// glibc 2.17). Resolves { status, body: Buffer }.
+function httpsRequest(urlStr, { method = 'GET', headers = {}, body = null } = {}) {
+  return new Promise((resolve, reject) => {
+    const u = new URL(urlStr)
+    const h = { ...headers }
+    if (body != null && h['Content-Length'] == null) h['Content-Length'] = Buffer.byteLength(body)
+    const req = https.request(
+      { hostname: u.hostname, port: u.port || 443, path: u.pathname + u.search, method, headers: h },
+      res => {
+        const chunks = []
+        res.on('data', d => chunks.push(d))
+        res.on('end', () => resolve({ status: res.statusCode, body: Buffer.concat(chunks) }))
+        res.on('error', reject)
+      },
+    )
+    req.on('error', reject)
+    req.setTimeout(20000, () => req.destroy(new Error('https timeout')))
+    if (body != null) req.write(body)
+    req.end()
+  })
+}
 
 // ── Config ───────────────────────────────────────────────────────────────
 const CFG = {
@@ -199,9 +224,9 @@ async function postSlack(jpeg) {
     query: { filename, length: String(jpeg.length) },
   })
   if (!up.ok) throw new Error(`getUploadURLExternal: ${up.error}`)
-  // 2. PUT the bytes.
-  const put = await fetch(up.upload_url, { method: 'POST', body: jpeg, headers: { 'Content-Type': 'image/jpeg' } })
-  if (!put.ok) throw new Error(`upload PUT HTTP ${put.status}`)
+  // 2. POST the bytes to the reserved upload URL.
+  const put = await httpsRequest(up.upload_url, { method: 'POST', body: jpeg, headers: { 'Content-Type': 'image/jpeg' } })
+  if (put.status < 200 || put.status >= 300) throw new Error(`upload POST HTTP ${put.status}`)
   // 3. Complete + share into the channel with the comment.
   const done = await slackApi('files.completeUploadExternal', {
     files: [{ id: up.file_id, title: 'Freight bay snapshot' }],
@@ -213,19 +238,17 @@ async function postSlack(jpeg) {
 }
 
 async function slackApi(method, jsonBody, { query } = {}) {
-  const isForm = method === 'files.getUploadURLExternal'
   let url = `https://slack.com/api/${method}`
   const headers = { Authorization: `Bearer ${CFG.slack.token}` }
   let body
-  if (query) {
-    url += '?' + new URLSearchParams(query).toString()
-  }
+  if (query) url += '?' + new URLSearchParams(query).toString()
   if (jsonBody) {
     headers['Content-Type'] = 'application/json; charset=utf-8'
-    body = JSON.stringify(jsonBody)
+    body = Buffer.from(JSON.stringify(jsonBody))
   }
-  const r = await fetch(url, { method: 'POST', headers, body })
-  return r.json()
+  const r = await httpsRequest(url, { method: 'POST', headers, body })
+  try { return JSON.parse(r.body.toString('utf8')) }
+  catch { return { ok: false, error: `Slack ${method}: non-JSON reply (HTTP ${r.status})` } }
 }
 
 // ── Event handler ───────────────────────────────────────────────────────
