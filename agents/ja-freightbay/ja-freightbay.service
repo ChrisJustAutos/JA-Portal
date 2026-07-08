@@ -7,7 +7,8 @@ Wants=network-online.target
 Type=simple
 WorkingDirectory=/opt/ja-freightbay
 EnvironmentFile=/opt/ja-freightbay/.env
-ExecStart=/usr/bin/node index.js
+# CentOS 7 system node is v8; Node 16 lives in /opt/node16 (see README).
+ExecStart=/opt/node16/bin/node index.js
 Restart=always
 RestartSec=5
 # The service writes Asterisk call files into the spool dir; run as a user that
