@@ -61,6 +61,7 @@ export default function WorkshopMapDashboard() {
   const [view, setView] = useState<ViewKey>('jobs')
   const [month, setMonth] = useState(-1)          // -1 = all FY
   const [cat, setCat] = useState('all')
+  const [st, setSt] = useState('all')             // state pill — jobs/quotes maps + conversion
   const [refreshing, setRefreshing] = useState(false)
   const [refreshMsg, setRefreshMsg] = useState('')
 
@@ -115,7 +116,7 @@ export default function WorkshopMapDashboard() {
   // ── Marker rendering ────────────────────────────────────────────────────
   // State view uses jobs points for the month/vehicle strips (revenue-based).
   const points = view === 'conv' || !P ? [] : (view === 'quotes' ? P.quotes.points : P.jobs.points)
-  const selPoints = useMemo(() => points.filter(p => (month < 0 || p.m === month) && (cat === 'all' || p.g === cat)), [points, month, cat])
+  const selPoints = useMemo(() => points.filter(p => (month < 0 || p.m === month) && (cat === 'all' || p.g === cat) && (st === 'all' || pcState(p.pc) === st)), [points, month, cat, st])
 
   useEffect(() => {
     const map = mapRef.current, layer = layerRef.current
@@ -178,8 +179,8 @@ export default function WorkshopMapDashboard() {
     finally { setRefreshing(false) }
   }
 
-  // ── Derived stats ───────────────────────────────────────────────────────
-  const baseMonth = useMemo(() => points.filter(p => month < 0 || p.m === month), [points, month])
+  // ── Derived stats (each strip reflects the other active filters) ────────
+  const baseMonth = useMemo(() => points.filter(p => (month < 0 || p.m === month) && (st === 'all' || pcState(p.pc) === st)), [points, month, st])
   const tot = selPoints.reduce((s, p) => s + p.a, 0)
   const locCount = useMemo(() => new Set(selPoints.map(p => p.pc + '@' + p.la + ',' + p.ln)).size, [selPoints])
   const bygMonth = useMemo(() => {
@@ -189,9 +190,24 @@ export default function WorkshopMapDashboard() {
   }, [baseMonth])
   const monthTotals = useMemo(() => {
     const t = Array(12).fill(0)
-    points.forEach(p => { t[p.m] += p.a })
+    points.forEach(p => { if (st === 'all' || pcState(p.pc) === st) t[p.m] += p.a })
     return t
-  }, [points])
+  }, [points, st])
+  // State pills — every state present anywhere in the FY (so pills don't vanish when filtering),
+  // counts under the current month + vehicle selection. Conversion view counts quotes, full FY.
+  const allStates = useMemo(() => {
+    const s = new Set<string>()
+    if (P) { P.jobs.points.forEach(p => s.add(pcState(p.pc))); P.quotes.points.forEach(p => s.add(pcState(p.pc))) }
+    return ['QLD', 'NSW', 'VIC', 'SA', 'WA', 'TAS', 'NT', 'ACT', '?'].filter(k => s.has(k))
+  }, [P])
+  const byState = useMemo(() => {
+    const base = view === 'conv'
+      ? (P?.quotes.points || [])
+      : points.filter(p => (month < 0 || p.m === month) && (cat === 'all' || p.g === cat))
+    const m: Record<string, { n: number; t: number }> = {}
+    base.forEach(p => { const g = (m[pcState(p.pc)] ||= { n: 0, t: 0 }); g.n++; g.t += p.a })
+    return m
+  }, [P, view, points, month, cat])
 
   const syncedLbl = data?.synced_at ? new Date(data.synced_at).toLocaleString('en-AU', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : null
 
@@ -230,6 +246,7 @@ export default function WorkshopMapDashboard() {
           <span className="sub">
             {view === 'conv' ? 'Quotes vs booked jobs' : view === 'state' ? 'State breakdown' : (view === 'jobs' ? 'Booked jobs' : 'Quotes')}
             {hasStrips && <> · {month < 0 ? `${P.months[0]?.label} – ${P.months[11]?.label}` : P.months[month]?.label}{cat !== 'all' ? ` · ${NAME[cat]}` : ''}</>}
+            {view !== 'state' && st !== 'all' && <> · {st === '?' ? 'Unknown state' : st}</>}
           </span>
           <span style={{ flex: 1 }} />
           {(data?.fys.length || 0) > 1 && (
@@ -267,7 +284,7 @@ export default function WorkshopMapDashboard() {
         <div className="strip months">
           <span className="striplabel">Month</span>
           <button className={'mbtn' + (month < 0 ? ' active' : '')} onClick={() => { setMonth(-1); if (boundsRef.current) mapRef.current?.fitBounds(boundsRef.current) }}>
-            All FY<span className="mt">{fmtK(points.reduce((s, p) => s + p.a, 0))}</span>
+            All FY<span className="mt">{fmtK(monthTotals.reduce((s, v) => s + v, 0))}</span>
           </button>
           {P.months.map((mo, i) => (
             <button key={mo.k} className={'mbtn' + (month === i ? ' active' : '')} onClick={() => setMonth(i)}>
@@ -297,6 +314,24 @@ export default function WorkshopMapDashboard() {
         </div>
       )}
 
+      {view !== 'state' && (
+        <div className="strip vehs">
+          <span className="striplabel">State</span>
+          <button className={'mbtn' + (st === 'all' ? ' active' : '')} onClick={() => setSt('all')}>
+            All AU<span className="mt">{Object.values(byState).reduce((s, g) => s + g.n, 0)} · {fmtK(Object.values(byState).reduce((s, g) => s + g.t, 0))}</span>
+          </button>
+          {allStates.map(k => {
+            const g = byState[k] || { n: 0, t: 0 }
+            return (
+              <button key={k} className={'mbtn' + (st === k ? ' active' : '')} onClick={() => setSt(st === k ? 'all' : k)}>
+                {k === '?' ? 'Unknown' : k}<span className="mt">{g.n} · {fmtK(g.t)}</span>
+              </button>
+            )
+          })}
+          {view === 'conv' && <span style={{ fontSize: 10, color: 'var(--wm-muted2)', paddingLeft: 6, whiteSpace: 'nowrap' }}>pill counts = quotes, full FY</span>}
+        </div>
+      )}
+
       <div className="wrap">
         <div ref={mapDivRef} className="mapdiv" style={{ display: isMapView ? 'block' : 'none' }} />
         {isMapView && (
@@ -310,7 +345,7 @@ export default function WorkshopMapDashboard() {
             )}
           </div>
         )}
-        {view === 'conv' && <ConversionView P={P} COL={COL} NAME={NAME} />}
+        {view === 'conv' && <ConversionView P={P} COL={COL} NAME={NAME} st={st} />}
         {view === 'state' && <StateView P={P} month={month} cat={cat} />}
       </div>
     </div>
@@ -319,8 +354,20 @@ export default function WorkshopMapDashboard() {
 
 // ── Conversion tab ─────────────────────────────────────────────────────────
 
-function ConversionView({ P, COL, NAME }: { P: Payload; COL: Record<string, string>; NAME: Record<string, string> }) {
-  const C = P.conv
+function ConversionView({ P, COL, NAME, st }: { P: Payload; COL: Record<string, string>; NAME: Record<string, string>; st: string }) {
+  // 'all' uses the authoritative precomputed conv (covers unmapped quotes/jobs too);
+  // a state selection rebuilds the same structure from geocoded points only.
+  const C = useMemo(() => {
+    if (st === 'all') return P.conv
+    const qcount: Record<string, number[]> = {}, qval: Record<string, number[]> = {}, jcount: Record<string, number[]> = {}
+    P.quotes.points.forEach(p => {
+      if (pcState(p.pc) !== st) return
+      ;(qcount[p.g] ||= Array(12).fill(0))[p.m]++
+      ;(qval[p.g] ||= Array(12).fill(0))[p.m] += p.a
+    })
+    P.jobs.points.forEach(p => { if (pcState(p.pc) === st) (jcount[p.g] ||= Array(12).fill(0))[p.m]++ })
+    return { qcount, qval, jcount }
+  }, [P, st])
   const sum = (a: number[]) => a.reduce((x, y) => x + y, 0)
   let tq = 0, tj = 0, tv = 0
   CK.forEach(c => { tq += sum(C.qcount[c] || []); tj += sum(C.jcount[c] || []); tv += sum(C.qval[c] || []) })
@@ -390,6 +437,7 @@ function ConversionView({ P, COL, NAME }: { P: Payload; COL: Record<string, stri
       <p style={{ color: 'var(--wm-muted2)', fontSize: 11, marginTop: 12, lineHeight: 1.6 }}>
         Both sides are 1 per customer per month (largest kept). Quotes by quote date; booked jobs from invoices
         (deposits, diagnostics &amp; internal excluded). Counted independently — a quote may convert in a later month.
+        {st !== 'all' && <> <b style={{ color: 'var(--wm-amber)' }}>Filtered to {st === '?' ? 'unknown state' : st}</b> — state figures use geocoded quotes/jobs only, so they can differ slightly from the all-Australia view.</>}
       </p>
     </div>
   )
