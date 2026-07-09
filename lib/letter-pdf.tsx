@@ -61,7 +61,7 @@ const ls = StyleSheet.create({
   hCol: { flexDirection: 'column' },
   bizName: { fontSize: 13, fontWeight: 700, color: C.ink, marginBottom: 3 },
   hLine: { fontSize: 7.5, color: C.ink3, marginBottom: 1.5 },
-  logo: { width: 150, objectFit: 'contain' },
+  logo: { width: 130, objectFit: 'contain' },
   recipient: { marginTop: 44 },
   recipientLine: { fontSize: 10.5, color: C.ink, marginBottom: 7 },
   salutation: { marginTop: 34, fontSize: 10.5 },
@@ -81,15 +81,17 @@ function LetterPdf({ data }: { data: LetterData }) {
       <Page size="A4" style={ls.page}>
         {/* Letterhead */}
         <View style={ls.header}>
-          <View style={[ls.hCol, { flex: 1 }]}>
+          {/* Column widths must sum (with gaps) to ≤ ~507pt of content width —
+              the first column needs ~115pt or the ABN/website lines wrap. */}
+          <View style={[ls.hCol, { flex: 1, minWidth: 115, paddingRight: 8 }]}>
             <Text style={ls.bizName}>{lh.name}</Text>
             {lh.abn ? <Text style={ls.hLine}>ABN: {lh.abn}</Text> : null}
             {lh.website ? <Text style={ls.hLine}>Website: {lh.website}</Text> : null}
           </View>
-          <View style={[ls.hCol, { width: 150, marginTop: 2 }]}>
+          <View style={[ls.hCol, { width: 100, marginTop: 2 }]}>
             {addrLines.map((l, i) => <Text key={i} style={ls.hLine}>{l}</Text>)}
           </View>
-          <View style={[ls.hCol, { width: 165, marginTop: 2 }]}>
+          <View style={[ls.hCol, { width: 160, marginTop: 2 }]}>
             {contact.map((l, i) => <Text key={i} style={ls.hLine}>{l}</Text>)}
           </View>
           {lh.logoDataUrl ? <Image style={ls.logo} src={lh.logoDataUrl} /> : null}
