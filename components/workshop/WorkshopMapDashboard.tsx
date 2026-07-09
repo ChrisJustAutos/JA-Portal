@@ -89,7 +89,10 @@ export default function WorkshopMapDashboard() {
   // ── Map bootstrap (once the payload exists so the div is mounted) ──────
   useEffect(() => {
     if (!P || !mapDivRef.current || mapRef.current) return
-    const map = L.map(mapDivRef.current, { zoomControl: true, attributionControl: false, minZoom: 3 }).setView([-25.8, 134], 4)
+    // worldCopyJump: panning across the antimeridian snaps back to the canonical
+    // world copy — without it, scrolling "around the world" lands on a copy where
+    // tiles render but every marker/polygon is missing.
+    const map = L.map(mapDivRef.current, { zoomControl: true, attributionControl: false, minZoom: 3, worldCopyJump: true }).setView([-25.8, 134], 4)
     map.createPane('landPane'); map.getPane('landPane')!.style.zIndex = '250'
     map.createPane('lblPane'); map.getPane('lblPane')!.style.zIndex = '360'; map.getPane('lblPane')!.style.pointerEvents = 'none'
     L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', { maxZoom: 19, subdomains: 'abcd' }).addTo(map)
