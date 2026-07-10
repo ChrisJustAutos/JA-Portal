@@ -37,7 +37,12 @@ const NUDGE_GAP_HOURS = 20       // "daily" re-nudge guard
 const PORTAL_URL = process.env.NEXT_PUBLIC_PORTAL_URL || 'https://justautos.app'
 
 export function concernsEnabled(): boolean {
-  return (process.env.CALL_CONCERNS_ENABLED || 'true').toLowerCase() !== 'false'
+  // PAUSED 2026-07-10 (Chris): default OFF while the routing is reworked —
+  // general support queries were landing in #customer-feedback-negative,
+  // which is meant for genuine issues with work we've done. Next week: split
+  // routing (about_our_work → negative, support → new channel) then set
+  // CALL_CONCERNS_ENABLED=true (or flip this default back).
+  return (process.env.CALL_CONCERNS_ENABLED || 'false').toLowerCase() === 'true'
 }
 
 let _sb: SupabaseClient | null = null
