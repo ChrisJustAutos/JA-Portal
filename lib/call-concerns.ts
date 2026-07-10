@@ -201,18 +201,29 @@ export async function runConcernSweep(opts: { limit?: number; dryRun?: boolean }
   const out: ConcernSweepOutcome = { enabled: concernsEnabled(), checked: 0, flagged: [], errors: [] }
   if (!out.enabled && !opts.dryRun) return out
 
-  // Recent inbound transcribed calls not yet examined. The 3-day window keeps
+  // Recent inbound transcribed calls not yet examined. Transcripts live in
+  // call_transcripts (calls.transcript_text is a dead legacy mirror — 0 rows
+  // populated); join like the coaching sweep does. The 3-day window keeps
   // the first deploy from trawling history.
-  const { data: candidates } = await c.from('calls')
-    .select('id, call_date, direction, external_number, external_number_normalised, caller_name, agent_name, effective_advisor_name, effective_advisor_slack_user_id, billsec_seconds, duration_seconds, transcript_text')
+  const { data: candidateRows } = await c.from('calls')
+    .select('id, call_date, direction, external_number, external_number_normalised, caller_name, agent_name, effective_advisor_name, effective_advisor_slack_user_id, billsec_seconds, duration_seconds, call_transcripts!inner(full_text, segments)')
     .eq('direction', 'inbound')
     .is('concern_checked_at', null)
-    .not('transcript_text', 'is', null)
     .gte('call_date', new Date(Date.now() - 3 * 86400e3).toISOString())
     .order('call_date', { ascending: false })
     .limit(limit)
 
-  for (const call of candidates || []) {
+  const candidates = (candidateRows || []).map((r: any) => {
+    const t = Array.isArray(r.call_transcripts) ? r.call_transcripts[0] : r.call_transcripts
+    const segs = Array.isArray(t?.segments) ? t.segments : null
+    const lines = segs?.map((s: any) => {
+      const text = (s.text || s.transcript || '').trim()
+      return text ? `S${s.speaker ?? s.speaker_id ?? '?'}: ${text}` : null
+    }).filter(Boolean)
+    return { ...r, transcript_text: (lines?.length ? lines.join('\n') : t?.full_text) || null }
+  })
+
+  for (const call of candidates) {
     const secs = call.billsec_seconds || call.duration_seconds || 0
     try {
       if (secs < MIN_SECONDS || !(call.transcript_text || '').trim()) {
