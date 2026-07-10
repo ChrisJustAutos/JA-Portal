@@ -1267,6 +1267,26 @@ export default function CallsPage({ user }: { user: PortalUserSSR }) {
 
   useEffect(() => { load(false) }, [load])
 
+  // Deep link: /calls?call=<id>&date=<YYYY-MM-DD> (used by the concern Slack
+  // cards). Load that day, then auto-open the call once the list arrives.
+  const pendingFocusRef = useRef<string | null>(null)
+  useEffect(() => {
+    if (!router.isReady) return
+    const focusId = typeof router.query.call === 'string' ? router.query.call : null
+    const focusDate = typeof router.query.date === 'string' ? router.query.date : null
+    if (!focusId) return
+    pendingFocusRef.current = focusId
+    if (focusDate && /^\d{4}-\d{2}-\d{2}$/.test(focusDate)) {
+      setStartDate(focusDate); setEndDate(focusDate); setActivePreset('custom')
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [router.isReady])
+  useEffect(() => {
+    if (!pendingFocusRef.current || !calls.length) return
+    const hit = calls.find(c => c.id === pendingFocusRef.current)
+    if (hit) { setSelectedCall(hit); pendingFocusRef.current = null }
+  }, [calls])
+
   // Auto-refresh every 60 seconds when viewing "today"
   useEffect(() => {
     if (activePreset !== 'today') return

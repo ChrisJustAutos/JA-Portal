@@ -45,7 +45,22 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(200).json({ ok: true, enabled: callsAnalysisEnabled(), dryRun: dry, result })
     }
     const outcome = await runAnalysisSweep({ dryRun: dry, limit, rubricVersion })
-    return res.status(200).json({ ok: true, ...outcome })
+
+    // Negative-call automation (lib/call-concerns): flag complaint/concern/
+    // support calls into Slack, then chase un-actioned ones. Failures here
+    // must never break the coaching sweep.
+    let concerns: any = null
+    let followups: any = null
+    try {
+      const { runConcernSweep, runConcernFollowups } = await import('../../../lib/call-concerns')
+      concerns = await runConcernSweep({ dryRun: dry, limit })
+      if (!dry) followups = await runConcernFollowups()
+    } catch (e: any) {
+      concerns = { error: (e?.message || String(e)).slice(0, 300) }
+      console.error('[calls-analyse] concern sweep failed:', e?.message || e)
+    }
+
+    return res.status(200).json({ ok: true, ...outcome, concerns, followups })
   } catch (e: any) {
     console.error('[calls-analyse] failed:', e?.message || e)
     return res.status(500).json({ ok: false, error: (e?.message || String(e)).slice(0, 500) })

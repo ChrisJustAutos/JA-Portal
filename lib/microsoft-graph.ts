@@ -196,6 +196,30 @@ export interface GraphAttachmentMeta {
 }
 
 /**
+ * Did `mailbox` send any email to `toAddress` since `sinceIso`? Used by the
+ * call-concern follow-up sweep to detect that a customer has been contacted.
+ * Returns false on 403/404 (the app may not be able to read every staff
+ * mailbox) — callers treat that as "no signal", not proof of no contact.
+ */
+export async function sentMailToSince(mailbox: string, toAddress: string, sinceIso: string): Promise<boolean> {
+  const filter = encodeURIComponent(`sentDateTime ge ${sinceIso}`)
+  const r = await graphFetch(
+    `/users/${encodeURIComponent(mailbox)}/mailFolders/sentitems/messages?$filter=${filter}&$select=id,toRecipients,ccRecipients&$top=50&$orderby=sentDateTime desc`,
+  )
+  if (!r.ok) {
+    if (r.status === 403 || r.status === 404) return false
+    throw new Error(`sent-items check ${mailbox}: HTTP ${r.status}`)
+  }
+  const data = await r.json()
+  const want = toAddress.toLowerCase()
+  for (const m of data.value || []) {
+    const rcpts = [...(m.toRecipients || []), ...(m.ccRecipients || [])]
+    if (rcpts.some((x: any) => (x?.emailAddress?.address || '').toLowerCase() === want)) return true
+  }
+  return false
+}
+
+/**
  * Fetch message metadata by ID. Used by the webhook to check whether a
  * notification's message is even worth processing (has attachments).
  */
