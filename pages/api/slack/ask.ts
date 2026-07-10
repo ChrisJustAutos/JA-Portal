@@ -192,6 +192,26 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           return res.status(200).end()
         }
 
+        // Concern card: "Approve text to customer" — a human eyeballed the
+        // card; send the one-time acknowledgement SMS via ClickSend.
+        if (action.action_id === 'concern_send_sms') {
+          const concernId = String(action.value || '')
+          const by = payload.user?.username || payload.user?.name || payload.user?.id || 'staff'
+          const ch: string = payload.channel?.id || ''
+          const threadTs: string | undefined = payload.message?.ts
+          waitUntil((async () => {
+            let result = ''
+            try {
+              const { approveConcernSms } = await import('../../../lib/call-concerns')
+              result = await approveConcernSms(concernId, by)
+            } catch (e: any) {
+              result = `❌ SMS approval failed: ${(e?.message || e).toString().slice(0, 200)}`
+            }
+            if (ch) await postMessage({ channel: ch, text: result, thread_ts: threadTs }).catch(() => null)
+          })())
+          return res.status(200).end()
+        }
+
         // Concern card: "Mark actioned" — a human confirms the customer
         // complaint/concern has been handled; stops the follow-up nudges.
         if (action.action_id === 'concern_actioned') {

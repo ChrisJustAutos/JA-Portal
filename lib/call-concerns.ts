@@ -168,6 +168,7 @@ function concernBlocks(row: {
     {
       type: 'actions', elements: [
         { type: 'button', style: 'primary', text: { type: 'plain_text', text: '✓ Mark actioned' }, action_id: 'concern_actioned', value: row.id },
+        { type: 'button', text: { type: 'plain_text', text: '📱 Approve text to customer' }, action_id: 'concern_send_sms', value: row.id },
         { type: 'button', text: { type: 'plain_text', text: 'Open in Calls' }, url: `${PORTAL_URL}/calls?call=${row.callId}&date=${row.callYmd}` },
       ],
     },
@@ -393,6 +394,39 @@ ${items ? `<p><b>Action items:</b></p><ul>${items}</ul>` : ''}
     }
   }
   return out
+}
+
+// ── Slack button: Approve acknowledgement SMS ──────────────────────────────
+// Human-in-the-loop by design (Chris, 2026-07-10): the card is eyeballed
+// first, then the click sends ONE ClickSend text acknowledging the issue.
+
+const SMS_TEMPLATE = process.env.CONCERN_SMS_TEMPLATE ||
+  'Hi {first_name}, thanks for raising this with us today — it’s been logged with our team and we’ll be in touch shortly. — Just Autos'
+
+export async function approveConcernSms(concernId: string, by: string): Promise<string> {
+  const c = sb()
+  const { data: concern } = await c.from('call_concerns')
+    .select('id, customer_name, customer_phone, sms_sent_at, sms_approved_by')
+    .eq('id', concernId).maybeSingle()
+  if (!concern) return '❌ Concern not found.'
+  if (concern.sms_sent_at) return `Text already sent (approved by ${concern.sms_approved_by || 'someone'}) — not sending again.`
+  if (!concern.customer_phone) return '❌ No customer number on this concern — text not sent.'
+
+  const first = String(concern.customer_name || '').trim().split(/\s+/)[0] || 'there'
+  const body = SMS_TEMPLATE.replace(/\{first_name\}/g, first[0] ? first[0].toUpperCase() + first.slice(1) : 'there')
+
+  const { sendSms } = await import('./clicksend')
+  const r = await sendSms(concern.customer_phone, body)
+  if (!r.ok) {
+    if (r.error === 'invalid_number') return `❌ ${concern.customer_phone} doesn't look like a textable AU mobile — no SMS sent.`
+    return `❌ SMS failed: ${r.error}`
+  }
+  await c.from('call_concerns').update({
+    sms_sent_at: new Date().toISOString(),
+    sms_approved_by: by,
+    sms_message_id: r.messageId || null,
+  }).eq('id', concernId)
+  return `📱 Text sent to ${concern.customer_name || concern.customer_phone} (approved by ${by}):\n>${body}`
 }
 
 // ── Slack button: Mark actioned ────────────────────────────────────────────
