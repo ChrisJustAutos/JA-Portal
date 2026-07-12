@@ -286,6 +286,16 @@ async function runMailbox(
     let atts: GraphAttachmentMeta[]
     try { atts = await listAttachmentMeta(mailbox, msg.id) } catch { continue }
     let anyPosted = false
+
+    // Receipt + invoice in the SAME email: only post the invoice. Suppliers
+    // often attach a payment receipt alongside the tax invoice — extracting
+    // both double-enters the purchase (the receipt carries its own number and
+    // total). Receipt-named attachments are skipped whenever an invoice-named
+    // sibling exists; a receipt arriving ALONE still processes normally.
+    const isReceiptName = (n: string) => /receipt/i.test(n) && !/invoice|tax[\s_-]?inv/i.test(n)
+    const isInvoiceName = (n: string) => /invoice|inv[\s_#-]*\d|tax[\s_-]?inv/i.test(n)
+    const hasInvoiceSibling = atts.some(a => classify(a) && isInvoiceName(a.name || ''))
+
     for (const att of atts) {
       const kind = classify(att)
       if (!kind) continue
@@ -294,6 +304,12 @@ async function runMailbox(
       const { data: seen } = await c.from('ap_auto_entry_log')
         .select('id').eq('graph_message_id', msg.id).eq('graph_attachment_id', att.id).maybeSingle()
       if (seen) { out.skippedDuplicates++; continue }
+
+      if (hasInvoiceSibling && isReceiptName(att.name || '')) {
+        out.processed.push({ messageId: msg.id, attachmentId: att.id, attachmentName: att.name || '', supplierName: null, invoiceNumber: null, amount: null, outcome: 'skipped_not_invoice', bankCheck: 'skipped', failReasons: [], error: 'receipt skipped: invoice also attached to this email' })
+        if (!dryRun) await logRow(c, { mailbox, companyFile, msg, attId: att.id, attName: att.name || '' }, { outcome: 'skipped_not_invoice', error: 'receipt skipped: invoice also attached' })
+        continue
+      }
 
       try {
         const items = await processAttachment(c, { mailbox, companyFile, msg, att, kind, dryRun })
