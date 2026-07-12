@@ -37,12 +37,10 @@ const NUDGE_GAP_HOURS = 20       // "daily" re-nudge guard
 const PORTAL_URL = process.env.NEXT_PUBLIC_PORTAL_URL || 'https://justautos.app'
 
 export function concernsEnabled(): boolean {
-  // PAUSED 2026-07-10 (Chris): default OFF while the routing is reworked —
-  // general support queries were landing in #customer-feedback-negative,
-  // which is meant for genuine issues with work we've done. Next week: split
-  // routing (about_our_work → negative, support → new channel) then set
-  // CALL_CONCERNS_ENABLED=true (or flip this default back).
-  return (process.env.CALL_CONCERNS_ENABLED || 'false').toLowerCase() === 'true'
+  // Re-enabled 2026-07-13 after the genuine-issue rework: only faults
+  // attributable to Just Autos work post to Slack; near-misses are recorded
+  // in call_concerns (genuine=false) without posting.
+  return (process.env.CALL_CONCERNS_ENABLED || 'true').toLowerCase() !== 'false'
 }
 
 let _sb: SupabaseClient | null = null
@@ -58,15 +56,29 @@ function sb(): SupabaseClient {
 // ── Detection prompt ───────────────────────────────────────────────────────
 
 function concernPrompt(transcript: string, meta: { callerName: string | null; agentName: string | null; durationSec: number }): string {
-  return `You are reviewing a phone call to Just Autos, a 4x4 mechanical workshop on the Sunshine Coast. Decide whether the CUSTOMER raised a complaint, a concern, or a support issue that needs follow-up.
+  return `You are reviewing a phone call to Just Autos, a 4x4 mechanical workshop on the Sunshine Coast (engine builds, tunes, GVM upgrades, servicing on LandCruisers/Hiluxes etc.). Your job is to catch GENUINE ISSUES WITH WORK JUST AUTOS HAS DONE — and nothing else.
 
-Definitions:
-- "complaint": the customer is unhappy with work done, service received, pricing, delays, damage, or staff conduct.
-- "concern": the customer is worried something may be wrong (a noise after a service, a warning light, doubts about work performed) but isn't angry.
-- "support": the customer needs help with something already done or bought (how something works, warranty question, follow-up on a previous job) that requires someone to act.
-Routine calls are NONE of these: booking a job, asking for a quote, sales enquiries, parts availability, confirming appointment times, suppliers/telemarketers, wrong numbers.
+Flag the call ONLY if BOTH of these are true:
+  Q1. The customer reports something WRONG or UNRESOLVED — a fault, defect, recurring problem, damage, dissatisfaction, or a consequence they're facing. NOT a question, NOT a request for advice, NOT a status check, NOT a price/booking enquiry.
+  Q2. The problem is attributable to work Just Autos PERFORMED or a product Just Autos SUPPLIED/INSTALLED (engine, tune, parts, accessories — whenever it was done).
 
-Only flag a call when a reasonable workshop manager would want it tracked and followed up. If in doubt on a routine call, do not flag.
+Both yes → flag. Anything else → do not flag.
+
+Real examples of calls that MUST be flagged:
+- "200 Series puffing white smoke at speed ever since Just Autos installed the new engine and tune" → YES (fault, our work).
+- "Car is still playing up after the work; customer has video for the technician" → YES (unresolved fault, our work).
+- "Our tune/ECU update made the car run poorly and use more fuel" → YES even if partially resolved (fault, our work).
+- "Police flagged the vehicle over the DPF delete we performed; customer expects an inspection notice" → YES (serious consequence of our work).
+
+Real examples that must NOT be flagged:
+- "Toyota dealer recommends an injector clean on my tuned car — should I let them?" → NO (advice question; nothing wrong).
+- "How do I handle these Toyota recall notices on my tuned 300 Series?" → NO (advice question).
+- "Checking my car's ready for pickup tomorrow" → NO (status check).
+- "Toyota dismissed my warranty issue; I'm interested in one of your tunes" → NO (their problem is with ANOTHER company; to us it's a sales enquiry).
+- "Graham promised to send me photos of the job — can someone send them?" → NO (unmet promise, but nothing wrong with the work).
+- Bookings, quotes, parts availability, suppliers, telemarketers, wrong numbers → NO.
+
+Category (only when flagged): "complaint" if the customer is unhappy/frustrated with Just Autos; "concern" if something seems wrong but they're calm; "support" if they face external consequences of our work (like the police/DPF case).
 
 Call metadata: caller ${meta.callerName || 'unknown'}, staff member ${meta.agentName || 'unknown'}, duration ${Math.round(meta.durationSec)}s.
 
@@ -75,9 +87,11 @@ ${transcript.slice(0, 24000)}
 
 Respond with ONLY a JSON object:
 {
-  "is_concern": true|false,
+  "is_issue": true|false,          // Q1: something wrong/unresolved reported
+  "about_our_work": true|false,    // Q2: attributable to Just Autos work/product
   "category": "complaint"|"concern"|"support"|null,
   "severity": "low"|"medium"|"high"|null,
+  "confidence": "high"|"medium"|"low",   // how sure you are of the flag decision
   "customer_name": "name if stated in the call, else null",
   "summary": "2-3 sentences: what the customer's issue is and any commitments staff made",
   "action_items": ["specific actions someone must take, e.g. 'Call John back with the warranty claim outcome'"]
@@ -244,8 +258,16 @@ export async function runConcernSweep(opts: { limit?: number; dryRun?: boolean }
       if (!opts.dryRun) await c.from('calls').update({ concern_checked_at: new Date().toISOString() }).eq('id', call.id)
 
       const category = ['complaint', 'concern', 'support'].includes(parsed?.category) ? parsed.category : null
-      if (!parsed?.is_concern || !category) continue
-      if (opts.dryRun) { out.flagged.push({ callId: call.id, category, slackTs: null }); continue }
+      const confidence = ['high', 'medium', 'low'].includes(parsed?.confidence) ? parsed.confidence : 'medium'
+      const isIssue = !!parsed?.is_issue
+      const aboutOurWork = !!parsed?.about_our_work
+      // GENUINE = something is wrong AND it's about our work AND the model is
+      // reasonably sure. Only genuine issues post to Slack + get the chase;
+      // near-misses are recorded (genuine=false, dismissed) for later review.
+      const genuine = isIssue && aboutOurWork && !!category && confidence !== 'low'
+      const nearMiss = !genuine && (isIssue || aboutOurWork) && !!category
+      if (!genuine && !nearMiss) continue
+      if (opts.dryRun) { out.flagged.push({ callId: call.id, category: `${category}${genuine ? '' : ' (near-miss, not posted)'}`, slackTs: null }); continue }
 
       const severity = ['low', 'medium', 'high'].includes(parsed?.severity) ? parsed.severity : 'medium'
       const actionItems: string[] = Array.isArray(parsed?.action_items) ? parsed.action_items.map(String).slice(0, 8) : []
@@ -255,6 +277,7 @@ export async function runConcernSweep(opts: { limit?: number; dryRun?: boolean }
       const { data: ins, error: insErr } = await c.from('call_concerns').insert({
         call_id: call.id,
         category, severity,
+        genuine, confidence,
         summary: String(parsed.summary || '').slice(0, 2000),
         action_items: actionItems,
         customer_phone: call.external_number_normalised || call.external_number,
@@ -265,12 +288,14 @@ export async function runConcernSweep(opts: { limit?: number; dryRun?: boolean }
         advisor_name: call.effective_advisor_name || call.agent_name,
         advisor_slack_user_id: call.effective_advisor_slack_user_id,
         followup_due_at: new Date(Date.now() + FOLLOWUP_DAYS * 86400e3).toISOString(),
+        ...(genuine ? {} : { followup_status: 'dismissed', followup_note: 'near-miss: not a genuine our-work issue — recorded only' }),
       }).select('id').single()
       if (insErr) {
         // unique(call_id) — already flagged by an overlapping run
         if (!String(insErr.message).includes('duplicate')) out.errors.push(`${call.id}: ${insErr.message}`)
         continue
       }
+      if (!genuine) continue // near-miss recorded, no Slack, no chase
 
       const when = new Date(call.call_date).toLocaleString('en-AU', { timeZone: 'Australia/Brisbane', weekday: 'short', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })
       const post = await postMessage({
