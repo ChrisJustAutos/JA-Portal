@@ -98,6 +98,18 @@ const CFG = {
   burstIntervalMs: parseInt(process.env.BURST_INTERVAL_MS || '1000', 10),
   burstPreRollMs: parseInt(process.env.BURST_PREROLL_MS || '4000', 10),
   burstPostRollMs: parseInt(process.env.BURST_POSTROLL_MS || '7000', 10),
+  // Security mode: ALERT_OUTSIDE_HOURS=true inverts the arming window —
+  // alerts fire only OUTSIDE the configured business hours (nights + any
+  // day not in BUSINESS_DAYS). Used by the Parts Office instance.
+  alertOutsideHours: (process.env.ALERT_OUTSIDE_HOURS || 'false').toLowerCase() === 'true',
+  // Slack alert wording (per-instance).
+  alertMessage: process.env.ALERT_MESSAGE || '📦 Parts dropped off at Freight Bay',
+}
+
+// Is the alert system armed right now? Normal mode: inside business hours.
+// ALERT_OUTSIDE_HOURS mode: everything outside them.
+function armed(d = new Date()) {
+  return CFG.alertOutsideHours ? !inBusinessHours(d) : inBusinessHours(d)
 }
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms))
@@ -239,7 +251,7 @@ function localTimeLabel() {
 
 async function postSlack(jpeg) {
   const { token, channel } = CFG.slack
-  const comment = `📦 Parts dropped off at Freight Bay — ${localTimeLabel()}`
+  const comment = `${CFG.alertMessage} — ${localTimeLabel()}`
   if (!token || !channel) { warn('Slack token/channel not set — skipping Slack'); return }
   // Try the snapshot upload; on ANY failure (missing files:write scope, upload
   // error, snapshot missing) fall back to a text-only post so the alert is
@@ -274,7 +286,7 @@ async function postSlackText() {
   const { token, channel } = CFG.slack
   if (!token || !channel) { warn('Slack token/channel not set — skipping Slack'); return null }
   const msg = await slackApi('chat.postMessage', {
-    channel, text: `📦 Parts dropped off at Freight Bay — ${localTimeLabel()}`,
+    channel, text: `${CFG.alertMessage} — ${localTimeLabel()}`,
   })
   if (!msg.ok) throw new Error(`chat.postMessage: ${msg.error}`)
   log('Slack alert posted')
@@ -289,7 +301,7 @@ async function postSlackText() {
 const frameBuf = [] // { ts, jpg }
 function startFrameBuffer() {
   const tick = async () => {
-    if (inBusinessHours()) {
+    if (armed()) {
       try {
         const jpg = await snapshot()
         frameBuf.push({ ts: Date.now(), jpg })
@@ -358,7 +370,7 @@ async function onLineCross(evt) {
   const now = Date.now()
   const quietFor = now - lastFired
   lastFired = now // any matching event counts as activity, alerted or not
-  if (!inBusinessHours()) { log(`event ${evt.eventType} ch ${evt.channelId} — outside business hours, ignored`); return }
+  if (!armed()) { log(`event ${evt.eventType} ch ${evt.channelId} — outside the armed window, ignored`); return }
   if (quietFor < CFG.cooldownMs) { log(`ongoing activity (quiet ${Math.round(quietFor / 1000)}s < ${CFG.cooldownMs / 1000}s) — no new alert`); return }
   log(`FREIGHT BAY ALERT — ${evt.eventType} ch ${evt.channelId}`)
   // Priority order: ring + text alert go out ASAP; the photo burst follows

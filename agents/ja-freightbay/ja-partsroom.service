@@ -1,0 +1,20 @@
+[Unit]
+Description=JA Parts Office after-hours watch (NVR intrusion -> Slack #parts-room)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/ja-partsroom
+EnvironmentFile=/opt/ja-partsroom/.env
+# CentOS 7 system node is v8; Node 16 lives in /opt/node16 (see README).
+ExecStart=/opt/node16/bin/node index.js
+Restart=always
+RestartSec=5
+# Same binary as ja-freightbay, second instance: ALERT_OUTSIDE_HOURS=true,
+# no ALERT_EXTENSION (Slack only), camera 13 (Parts Office), port 8099.
+User=asterisk
+Group=asterisk
+
+[Install]
+WantedBy=multi-user.target
