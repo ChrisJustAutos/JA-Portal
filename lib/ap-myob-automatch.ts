@@ -67,7 +67,31 @@ export async function tryAutoMatchSupplier(
     if (nameMatches.length === 1) {
       return { matchedBy: 'name', supplier: nameMatches[0] }
     }
-    // 2+ matches = ambiguous, intentionally skip
+    if (nameMatches.length > 1) {
+      // Tie-breakers before declaring ambiguity:
+      // 1. A card whose name EXACTLY equals the vendor name (normalized) wins.
+      const exact = nameMatches.filter(c => normalizeName(c.name) === targetNorm)
+      if (exact.length === 1) return { matchedBy: 'name', supplier: exact[0] }
+      // 2. Among cards that PREFIX the vendor name, the most specific
+      //    (longest) unique one wins — resolves supplier families like
+      //    "Digital Nomads" vs "Digital Nomads HQ" for vendor
+      //    "Digital Nomads HQ Pty Ltd". Cards the vendor name doesn't start
+      //    with don't compete here.
+      const prefixes = nameMatches.filter(c => {
+        const n = normalizeName(c.name)
+        return n.length >= 3 && targetNorm.startsWith(n)
+      })
+      if (prefixes.length) {
+        const maxLen = Math.max(...prefixes.map(c => normalizeName(c.name).length))
+        const longest = prefixes.filter(c => normalizeName(c.name).length === maxLen)
+        if (longest.length === 1) return { matchedBy: 'name', supplier: longest[0] }
+      }
+      console.warn(`[automatch] ambiguous: "${vendorName}" matched ${nameMatches.length} cards: ${nameMatches.map(c => c.name).join(' | ')}`)
+      return null
+    }
+    // 0 matches — log the candidate pool so misses are diagnosable from
+    // runtime logs (names only, capped).
+    console.warn(`[automatch] no match for "${vendorName}" among ${candidates.length} candidates: ${candidates.slice(0, 12).map(c => c.name).join(' | ')}`)
   }
 
   return null
