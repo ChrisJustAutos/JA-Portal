@@ -128,20 +128,37 @@ function splitName(full: string): { first: string; last: string } {
   return { first: parts[0], last: parts.slice(1).join(' ') }
 }
 
-async function findExisting(client: MdClient, lead: Lead): Promise<{ id: number; via: string } | null> {
-  const ph = digits(lead.phone)
-  if (ph.length >= 8) {
-    const tail = ph.slice(-8)
-    for (const q of [lead.phone!, tail]) {
-      const hits = await searchMdCustomers(client, q)
-      const hit = hits.find(h => digits(h.mobile).endsWith(tail) || digits(h.phone).endsWith(tail))
-      if (hit) return { id: hit.id, via: `phone (${q === tail ? 'tail' : 'raw'})` }
+// MD's own search can't match phone numbers (probed 2026-07-13: query by a
+// known mobile returns customers:[]), so dedup is two-layered:
+//   1. Portal's workshop_customers mirror by phone tail / email — covers
+//      everyone MD has had for a while (mirror carries md_id).
+//   2. Live MD search by NAME (the one thing MD search does) — catches
+//      recent MD customers the mirror hasn't got yet.
+const normName = (s: string) => s.toLowerCase().replace(/\s+/g, ' ').trim()
+
+async function findExisting(client: MdClient, lead: Lead): Promise<{ id: number | string; via: string } | null> {
+  const tail = digits(lead.phone).slice(-8)
+  const params = new URLSearchParams({ check: '1' })
+  if (tail.length === 8) params.set('phone_tail', tail)
+  if (lead.email) params.set('email', lead.email)
+  if (params.has('phone_tail') || params.has('email')) {
+    const r = await fetch(`${PORTAL_BASE}/api/workshop/monday-md-import?${params.toString()}`, {
+      headers: { 'X-Service-Token': PORTAL_TOKEN },
+    })
+    if (r.ok) {
+      const { candidates } = await r.json()
+      const hit = (candidates || []).find((cand: any) =>
+        cand.md_id && (
+          (tail.length === 8 && (digits(cand.mobile).endsWith(tail) || digits(cand.phone).endsWith(tail))) ||
+          (lead.email && (cand.email || '').toLowerCase() === lead.email.toLowerCase())
+        ))
+      if (hit) return { id: hit.md_id, via: 'portal mirror' }
     }
   }
-  if (lead.email) {
-    const hits = await searchMdCustomers(client, lead.email)
-    const hit = hits.find(h => (h.email || '').toLowerCase() === lead.email!.toLowerCase())
-    if (hit) return { id: hit.id, via: 'email' }
+  if (lead.name.trim().length >= 5) {
+    const hits = await searchMdCustomers(client, lead.name.trim())
+    const hit = hits.find(h => normName(h.name) === normName(lead.name))
+    if (hit) return { id: hit.id, via: 'MD name search' }
   }
   return null
 }
