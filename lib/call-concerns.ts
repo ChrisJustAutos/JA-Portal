@@ -22,7 +22,7 @@
 // in pages/api/slack/ask.ts → markConcernActioned().
 
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
-import { postMessage } from './slack-bot/slack'
+import { postMessage, updateMessage } from './slack-bot/slack'
 import { sendMail } from './email'
 import { sentMailToSince } from './microsoft-graph'
 
@@ -474,7 +474,7 @@ export async function approveConcernSms(concernId: string, by: string): Promise<
 
 export async function markConcernActioned(concernId: string, by: string): Promise<string> {
   const c = sb()
-  const { data: concern } = await c.from('call_concerns').select('id, slack_channel, slack_ts, followup_status').eq('id', concernId).maybeSingle()
+  const { data: concern } = await c.from('call_concerns').select('*').eq('id', concernId).maybeSingle()
   if (!concern) return '❌ Concern not found.'
   if (concern.followup_status === 'actioned') return 'Already marked actioned.'
   await c.from('call_concerns').update({
@@ -482,5 +482,31 @@ export async function markConcernActioned(concernId: string, by: string): Promis
     actioned_by: by,
     actioned_at: new Date().toISOString(),
   }).eq('id', concernId)
+
+  // Keep the channel clean (Chris, 2026-07-13): condense the card to a
+  // one-liner and move the full details into the thread.
+  if (concern.slack_channel && concern.slack_ts) {
+    try {
+      const items = (Array.isArray(concern.action_items) ? concern.action_items : []).map((a: string) => `• ${a}`).join('\n')
+      const detail = [
+        `*Full details (card condensed when actioned)*`,
+        `*Category:* ${concern.category} · *severity:* ${concern.severity}`,
+        `*Customer:* ${concern.customer_name || 'Unknown'}${concern.customer_phone ? ` (${concern.customer_phone})` : ''}`,
+        `*Taken by:* ${concern.advisor_name || 'Unknown'} · *detected:* ${new Date(concern.detected_at).toLocaleString('en-AU', { timeZone: 'Australia/Brisbane', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}`,
+        `*What happened:* ${concern.summary}`,
+        items ? `*Action items:*\n${items}` : null,
+        concern.sms_sent_at ? `*Ack SMS:* sent ${new Date(concern.sms_sent_at).toLocaleDateString('en-AU')} (${concern.sms_approved_by})` : null,
+      ].filter(Boolean).join('\n')
+      await postMessage({ channel: concern.slack_channel, thread_ts: concern.slack_ts, text: detail })
+
+      const when = new Date().toLocaleDateString('en-AU', { timeZone: 'Australia/Brisbane', day: '2-digit', month: 'short' })
+      const line = `✅ *${concern.category[0].toUpperCase()}${concern.category.slice(1)}* — ${concern.customer_name || concern.customer_phone || 'customer'} · actioned by ${by} (${when}) · details in thread`
+      await updateMessage({
+        channel: concern.slack_channel, ts: concern.slack_ts,
+        text: line,
+        blocks: [{ type: 'section', text: { type: 'mrkdwn', text: line } }],
+      })
+    } catch (e) { /* card cosmetics must never fail the action */ }
+  }
   return `✅ Marked actioned by ${by}.`
 }

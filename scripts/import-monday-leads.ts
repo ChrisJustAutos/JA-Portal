@@ -122,8 +122,16 @@ async function portalReport(rows: any[]): Promise<void> {
   if (!r.ok) throw new Error(`portal report failed: ${r.status} ${await r.text().catch(() => '')}`)
 }
 
+// Monday lead names often carry a doubled surname ("Adam Boyd Boyd",
+// "Ben Lippett Lippett" — an intake-form quirk) — collapse consecutive
+// duplicate words before they pollute MD.
+function cleanName(full: string): string {
+  const words = full.trim().split(/\s+/)
+  return words.filter((w, i) => i === 0 || w.toLowerCase() !== words[i - 1].toLowerCase()).join(' ')
+}
+
 function splitName(full: string): { first: string; last: string } {
-  const parts = full.trim().split(/\s+/)
+  const parts = cleanName(full).split(/\s+/)
   if (parts.length === 1) return { first: parts[0], last: '' }
   return { first: parts[0], last: parts.slice(1).join(' ') }
 }
@@ -218,6 +226,7 @@ async function main() {
         const created = await createMdCustomer(client, {
           firstName: first, lastName: last, mobile: lead.phone, email: lead.email, postcode: lead.postcode,
         })
+        base.customer_name = cleanName(lead.name)
         rows.push({ ...base, outcome: 'created', md_customer_id: created.id })
         console.log(`- ${lead.channel}: "${lead.name}" CREATED in MD (#${created.id})`)
       } catch (e: any) {
