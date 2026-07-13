@@ -198,7 +198,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           const concernId = String(action.value || '')
           const by = payload.user?.username || payload.user?.name || payload.user?.id || 'staff'
           const ch: string = payload.channel?.id || ''
-          const threadTs: string | undefined = payload.message?.ts
+          // Button may sit on a thread reply — post the result into the parent thread.
+          const threadTs: string | undefined = payload.message?.thread_ts || payload.message?.ts
           waitUntil((async () => {
             let result = ''
             try {
@@ -219,6 +220,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           const by = payload.user?.username || payload.user?.name || payload.user?.id || 'staff'
           const ch: string = payload.channel?.id || ''
           const threadTs: string | undefined = payload.message?.ts
+          // Buttons live on a THREAD reply now — reply into the parent thread.
+          const rootTs: string | undefined = payload.message?.thread_ts || payload.message?.ts
           waitUntil((async () => {
             let result = ''
             try {
@@ -227,7 +230,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             } catch (e: any) {
               result = `❌ Could not mark actioned: ${(e?.message || e).toString().slice(0, 200)}`
             }
-            if (ch) await postMessage({ channel: ch, text: result, thread_ts: threadTs }).catch(() => null)
+            if (ch) await postMessage({ channel: ch, text: result, thread_ts: rootTs || threadTs }).catch(() => null)
           })())
           return res.status(200).end()
         }

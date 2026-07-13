@@ -93,8 +93,8 @@ Respond with ONLY a JSON object:
   "severity": "low"|"medium"|"high"|null,
   "confidence": "high"|"medium"|"low",   // how sure you are of the flag decision
   "customer_name": "name if stated in the call, else null",
-  "headline": "one short clause (max ~10 words) naming the issue, e.g. 'white smoke since engine install'",
   "summary": "2-3 sentences: what the customer's issue is and any commitments staff made",
+  "channel_post": "2-3 casual sentences written AS IF the staff member who took the call is recapping it for the team in Slack — name the customer, what's wrong, what was promised. Natural workshop tone ('Ross called about the 200 Series we re-engined — it's been puffing white smoke at highway speed. He's sending a video through, needs a call back once Jimmy's had a look.'). No labels, no corporate speak, no emoji.",
   "action_items": ["specific actions someone must take, e.g. 'Call John back with the warranty claim outcome'"]
 }`
 }
@@ -168,24 +168,26 @@ async function mdJobHistory(mdId: string | null, customerName: string | null): P
 
 const CAT_EMOJI: Record<string, string> = { complaint: '🔴', concern: '🟠', support: '🔵' }
 
-// Channel message = name & what happened, nothing else (Director's
-// requirement, 2026-07-13). Category shows only as the emoji colour;
-// advisor/time/severity all live in the thread.
-function rootLine(row: { category: string; caller: string; headline: string }): string {
-  return `${CAT_EMOJI[row.category] || '🟠'} *${row.caller}* — ${row.headline}`
+// Channel message reads like the advisor posted it themselves (Director's
+// requirement, 2026-07-13): "@Kaleb — Ross called about the 200 Series we
+// re-engined…". Real @mention when the advisor's Slack id is known; the
+// category survives only as the emoji colour.
+function rootLine(row: { category: string; advisorSlackId: string | null; advisorName: string; post: string }): string {
+  const who = row.advisorSlackId ? `<@${row.advisorSlackId}>` : `*${row.advisorName}*`
+  return `${CAT_EMOJI[row.category] || '🟠'} ${who} — ${row.post}`
 }
 
-// Thread reply 1: the full working detail + the action buttons.
+// Thread reply 1: action items + call meta + the action buttons.
 function detailBlocks(row: {
-  id: string; category: string; severity: string; summary: string; action_items: string[]
-  phone: string | null; advisor: string; when: string; durationSec: number; callId: string; callYmd: string
+  id: string; category: string; severity: string; action_items: string[]
+  phone: string | null; when: string; durationSec: number; callId: string; callYmd: string
 }): any[] {
   const items = row.action_items.length ? row.action_items.map(a => `• ${a}`).join('\n') : '_none extracted_'
   return [
     {
       type: 'section', text: {
         type: 'mrkdwn',
-        text: `*What happened*\n${row.summary}\n\n*Action items*\n${items}\n\n*${row.category}* · severity ${row.severity} · taken by ${row.advisor} · ${row.when} · ${Math.round(row.durationSec / 60)} min${row.phone ? ` · ${row.phone}` : ''}`,
+        text: `*Action items*\n${items}\n\n_${row.category} · severity ${row.severity} · ${row.when} · ${Math.round(row.durationSec / 60)} min call${row.phone ? ` · ${row.phone}` : ''}_`,
       },
     },
     {
@@ -282,6 +284,7 @@ export async function runConcernSweep(opts: { limit?: number; dryRun?: boolean }
         call_id: call.id,
         category, severity,
         genuine, confidence,
+        channel_post: String(parsed.channel_post || '').trim().slice(0, 600) || null,
         summary: String(parsed.summary || '').slice(0, 2000),
         action_items: actionItems,
         customer_phone: call.external_number_normalised || call.external_number,
@@ -302,21 +305,25 @@ export async function runConcernSweep(opts: { limit?: number; dryRun?: boolean }
       if (!genuine) continue // near-miss recorded, no Slack, no chase
 
       const when = new Date(call.call_date).toLocaleString('en-AU', { timeZone: 'Australia/Brisbane', weekday: 'short', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })
-      const headline = String(parsed.headline || parsed.summary || '').split(/[.!?]/)[0].slice(0, 90)
-      const line = rootLine({ category, caller: callerLabel, headline })
+      const humanPost = String(parsed.channel_post || parsed.summary || '').trim().slice(0, 600)
+        || `${callerLabel} called with a ${category} — details in thread.`
+      const line = rootLine({
+        category,
+        advisorSlackId: call.effective_advisor_slack_user_id || null,
+        advisorName: call.effective_advisor_name || call.agent_name || 'Team',
+        post: humanPost,
+      })
       const post = await postMessage({ channel: CHANNEL, text: line })
       if (post?.ts) {
         await c.from('call_concerns').update({ slack_channel: post.channel, slack_ts: post.ts }).eq('id', ins.id)
-        // Thread: full detail + buttons, then MD history.
+        // Thread: action items + buttons, then MD history.
         await postMessage({
           channel: post.channel, thread_ts: post.ts,
-          text: `Details: ${String(parsed.summary || '').slice(0, 140)}`,
+          text: `Action items: ${actionItems.join('; ') || 'none'}`,
           blocks: detailBlocks({
             id: ins.id, category, severity,
-            summary: String(parsed.summary || ''),
             action_items: actionItems,
-            phone: call.external_number || null,
-            advisor: call.effective_advisor_name || call.agent_name || 'Unknown', when,
+            phone: call.external_number || null, when,
             durationSec: secs, callId: call.id,
             callYmd: new Date(call.call_date).toLocaleDateString('en-CA', { timeZone: 'Australia/Brisbane' }),
           }),
@@ -508,7 +515,12 @@ export async function markConcernActioned(concernId: string, by: string): Promis
       await postMessage({ channel: concern.slack_channel, thread_ts: concern.slack_ts, text: detail })
 
       const when = new Date().toLocaleDateString('en-AU', { timeZone: 'Australia/Brisbane', day: '2-digit', month: 'short' })
-      const line = `✅ *${concern.category[0].toUpperCase()}${concern.category.slice(1)}* — ${concern.customer_name || concern.customer_phone || 'customer'} · actioned by ${by} (${when}) · details in thread`
+      // Human-style roots keep their wording — rebuilt from the stored
+      // channel_post with a ✅. Old card-style roots get a compact closure.
+      const who = concern.advisor_slack_user_id ? `<@${concern.advisor_slack_user_id}>` : `*${concern.advisor_name || 'Team'}*`
+      const line = concern.channel_post
+        ? `✅ ${CAT_EMOJI[concern.category] || '🟠'} ${who} — ${concern.channel_post}`
+        : `✅ *${concern.category[0].toUpperCase()}${concern.category.slice(1)}* — ${concern.customer_name || concern.customer_phone || 'customer'} · actioned by ${by} (${when}) · details in thread`
       await updateMessage({
         channel: concern.slack_channel, ts: concern.slack_ts,
         text: line,
