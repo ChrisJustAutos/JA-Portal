@@ -7,7 +7,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { createClient } from '@supabase/supabase-js'
 import { requireAuth, getSessionUser } from '../../../lib/auth'
-import { cdataQuery } from '../../../lib/cdata'
+import { fetchSaleInvoices } from '../../../lib/myob-reporting'
 import { resolveDateRange, resolveCompareRange, DateRange } from '../../../lib/dashboard/dates'
 import { DateRangeKey, CompareKey } from '../../../lib/dashboard/catalog'
 import { reportTypesForUser, REPORT_TYPE_LABELS, REPORT_TYPE_DESCRIPTIONS, UserRole } from '../../../lib/permissions'
@@ -18,17 +18,6 @@ function sb() {
   return createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!, { auth: { persistSession: false } })
 }
 
-// Convert a raw CData MCP response (with `results[0].schema` + `results[0].rows`
-// as positional arrays) into a plain array of row objects keyed by column name.
-function cdataRows(raw: any): any[] {
-  const cols: string[] = raw?.results?.[0]?.schema?.map((c: any) => c.columnName) || []
-  const rows: any[][] = raw?.results?.[0]?.rows || []
-  return rows.map(r => {
-    const o: any = {}
-    cols.forEach((c, i) => { o[c] = r[i] })
-    return o
-  })
-}
 
 // Brisbane "today" as YYYY-MM-DD (Brisbane is UTC+10, no DST)
 function brisbaneToday(): string {
@@ -80,59 +69,36 @@ async function getExcludedCustomers(): Promise<Map<string, string>> {
   }
 }
 
+// Direct MYOB OAuth (CData decommissioned 2026-07-14): fetch the range's
+// invoices once and aggregate in JS. range.to is inclusive.
+function endExclusiveOf(to: string): string {
+  const d = new Date(to + 'T00:00:00Z'); d.setUTCDate(d.getUTCDate() + 1)
+  return d.toISOString().slice(0, 10)
+}
+
 // ── Sales metric (single number) ──────────────────────────────────────────
 async function salesMetric(metric: string, range: DateRange): Promise<number> {
-  const from = `'${range.from}'`
-  const to   = `'${range.to} 23:59:59'`
-
-  if (metric === 'sales.revenue_ex_gst' || metric === 'sales.revenue_inc_gst') {
-    const raw: any = await cdataQuery('JAWS',
-      `SELECT SUM([TotalAmount]) AS total_inc, SUM([TotalTax]) AS total_tax
-       FROM [MYOB_POWERBI_JAWS].[MYOB].[SaleInvoices]
-       WHERE [Date] >= ${from} AND [Date] <= ${to}`)
-    const row = cdataRows(raw)[0] || {}
-    const incGst = Number(row.total_inc || 0)
-    const tax    = Number(row.total_tax || 0)
-    return metric === 'sales.revenue_ex_gst' ? (incGst - tax) : incGst
-  }
-  if (metric === 'sales.invoice_count') {
-    const raw: any = await cdataQuery('JAWS',
-      `SELECT COUNT(*) AS cnt FROM [MYOB_POWERBI_JAWS].[MYOB].[SaleInvoices]
-       WHERE [Date] >= ${from} AND [Date] <= ${to}`)
-    const row = cdataRows(raw)[0] || {}
-    return Number(row.cnt || 0)
-  }
-  if (metric === 'sales.avg_invoice') {
-    const raw: any = await cdataQuery('JAWS',
-      `SELECT COUNT(*) AS cnt, SUM([TotalAmount] - [TotalTax]) AS rev_ex
-       FROM [MYOB_POWERBI_JAWS].[MYOB].[SaleInvoices]
-       WHERE [Date] >= ${from} AND [Date] <= ${to}`)
-    const row = cdataRows(raw)[0] || {}
-    const cnt = Number(row.cnt || 0)
-    return cnt > 0 ? Number(row.rev_ex || 0) / cnt : 0
-  }
+  const invs = await fetchSaleInvoices('JAWS', { start: range.from, endExclusive: endExclusiveOf(range.to) })
+  const incGst = invs.reduce((s, i) => s + (i.TotalAmount || 0), 0)
+  const tax = invs.reduce((s, i) => s + (i.TotalTax || 0), 0)
+  if (metric === 'sales.revenue_ex_gst') return incGst - tax
+  if (metric === 'sales.revenue_inc_gst') return incGst
+  if (metric === 'sales.invoice_count') return invs.length
+  if (metric === 'sales.avg_invoice') return invs.length > 0 ? (incGst - tax) / invs.length : 0
   return 0
 }
 
-// ── Sales time-series with proper DATE() bucketing ────────────────────────
+// ── Sales time-series (per-day buckets) ───────────────────────────────────
 async function salesSeries(metric: string, range: DateRange): Promise<{ label: string, value: number }[]> {
-  const from = `'${range.from}'`
-  const to   = `'${range.to} 23:59:59'`
   try {
-    const raw: any = await cdataQuery('JAWS',
-      `SELECT DATE([Date]) AS day,
-              SUM([TotalAmount]) AS total_inc,
-              SUM([TotalTax])    AS total_tax,
-              COUNT(*)           AS cnt
-       FROM [MYOB_POWERBI_JAWS].[MYOB].[SaleInvoices]
-       WHERE [Date] >= ${from} AND [Date] <= ${to}
-       GROUP BY DATE([Date])
-       ORDER BY day`)
-    const arr = cdataRows(raw)
-    const byDay: Record<string, any> = {}
-    for (const r of arr) {
-      const day = String(r.day).substring(0, 10)
-      byDay[day] = r
+    const invs = await fetchSaleInvoices('JAWS', { start: range.from, endExclusive: endExclusiveOf(range.to) })
+    const byDay: Record<string, { total_inc: number; total_tax: number; cnt: number }> = {}
+    for (const i of invs) {
+      const day = String(i.Date || '').substring(0, 10)
+      if (!day) continue
+      const b = byDay[day] || { total_inc: 0, total_tax: 0, cnt: 0 }
+      b.total_inc += i.TotalAmount || 0; b.total_tax += i.TotalTax || 0; b.cnt += 1
+      byDay[day] = b
     }
     const out: { label: string, value: number }[] = []
     const cursor = new Date(range.from + 'T00:00:00Z')
@@ -156,23 +122,16 @@ async function salesSeries(metric: string, range: DateRange): Promise<{ label: s
   }
 }
 
-// ── Top distributors — direct aggregate with exclusions ───────────────────
+// ── Top distributors — aggregate with exclusions ─────────────────────────
 async function topDistributors(range: DateRange, limit: number): Promise<{ name: string, value: number }[]> {
-  const from = `'${range.from}'`
-  const to   = `'${range.to} 23:59:59'`
   try {
-    const raw: any = await cdataQuery('JAWS',
-      `SELECT [CustomerName],
-              SUM([TotalAmount] - [TotalTax]) AS revenue_ex,
-              COUNT(*) AS invoice_count
-       FROM [MYOB_POWERBI_JAWS].[MYOB].[SaleInvoices]
-       WHERE [Date] >= ${from} AND [Date] <= ${to}
-         AND [TotalAmount] > 0
-         AND [CustomerName] IS NOT NULL
-       GROUP BY [CustomerName]
-       ORDER BY revenue_ex DESC
-       LIMIT ${limit * 3}`)
-    const arr = cdataRows(raw)
+    const invs = await fetchSaleInvoices('JAWS', { start: range.from, endExclusive: endExclusiveOf(range.to) })
+    const byCust: Record<string, number> = {}
+    for (const i of invs) {
+      if ((i.TotalAmount || 0) <= 0 || !i.CustomerName) continue
+      byCust[i.CustomerName] = (byCust[i.CustomerName] || 0) + ((i.TotalAmount || 0) - (i.TotalTax || 0))
+    }
+    const arr = Object.entries(byCust).map(([CustomerName, revenue_ex]) => ({ CustomerName, revenue_ex }))
     const excluded = await getExcludedCustomers()
 
     const byName: Record<string, { name: string, value: number }> = {}
@@ -202,18 +161,12 @@ async function topDistributors(range: DateRange, limit: number): Promise<{ name:
 
 async function distributorTotal(distributor: string, range: DateRange): Promise<number> {
   if (!distributor) return 0
-  const from = `'${range.from}'`
-  const to   = `'${range.to} 23:59:59'`
-  const distEsc = distributor.replace(/'/g, "''").replace(/\s*\(Tuning.*\)\s*$/i, '').trim()
+  const prefix = distributor.replace(/\s*\(Tuning.*\)\s*$/i, '').trim().toLowerCase()
   try {
-    const raw: any = await cdataQuery('JAWS',
-      `SELECT SUM([TotalAmount] - [TotalTax]) AS revenue_ex
-       FROM [MYOB_POWERBI_JAWS].[MYOB].[SaleInvoices]
-       WHERE [Date] >= ${from} AND [Date] <= ${to}
-         AND [CustomerName] LIKE '${distEsc}%'
-         AND [TotalAmount] > 0`)
-    const row = cdataRows(raw)[0] || {}
-    return Number(row.revenue_ex || 0)
+    const invs = await fetchSaleInvoices('JAWS', { start: range.from, endExclusive: endExclusiveOf(range.to) })
+    return invs
+      .filter(i => (i.TotalAmount || 0) > 0 && String(i.CustomerName || '').toLowerCase().startsWith(prefix))
+      .reduce((s, i) => s + ((i.TotalAmount || 0) - (i.TotalTax || 0)), 0)
   } catch (e: any) {
     console.error('distributorTotal failed:', e?.message)
     return 0

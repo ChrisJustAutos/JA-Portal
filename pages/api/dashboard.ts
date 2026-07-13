@@ -10,10 +10,11 @@
 
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { requireAuth } from '../../lib/auth'
-import { cdataQuery, parseDateRange, endDateExclusive } from '../../lib/cdata'
+import { parseDateRange, endDateExclusive } from '../../lib/cdata'
+import { fetchSaleInvoices, fetchPurchaseBills, fetchInventoryItems } from '../../lib/myob-reporting'
 import { invoiceExGst, toNum } from '../../lib/gst'
 
-export const config = { maxDuration: 60 }
+export const config = { maxDuration: 300 }
 
 const CACHE_TTL = 3 * 60 * 1000
 const cache = new Map<string, { data: any; timestamp: number }>()
@@ -113,44 +114,40 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
       if (cached) return res.status(200).json(cached)
     }
 
-    const allQueries = await withTimeout(Promise.all([
-      // 0: JAWS recent invoices
-      safe(() => cdataQuery('JAWS', `SELECT TOP 20 [Number],[Date],[CustomerName],[TotalAmount],[TotalTax],[IsTaxInclusive],[BalanceDueAmount],[Status],[InvoiceType] FROM [MYOB_POWERBI_JAWS].[MYOB].[SaleInvoices] ORDER BY [Date] DESC`)),
-      // 1: JAWS open invoices
-      safe(() => cdataQuery('JAWS', `SELECT [Number],[Date],[CustomerName],[TotalAmount],[TotalTax],[IsTaxInclusive],[BalanceDueAmount],[Status] FROM [MYOB_POWERBI_JAWS].[MYOB].[SaleInvoices] WHERE [Status] = 'Open' ORDER BY [BalanceDueAmount] DESC`)),
-      // 2: JAWS invoices for top-customers compute (in-memory aggregation)
-      safe(() => cdataQuery('JAWS', `SELECT [CustomerName],[TotalAmount],[TotalTax],[IsTaxInclusive] FROM [MYOB_POWERBI_JAWS].[MYOB].[SaleInvoices] WHERE [Date] >= '${start}' AND [Date] < '${endDateExclusive(end)}' AND [TotalAmount] > 0`)),
-      // 3: VPS recent invoices
-      safe(() => cdataQuery('VPS', `SELECT TOP 20 [Number],[Date],[CustomerName],[TotalAmount],[TotalTax],[IsTaxInclusive],[BalanceDueAmount],[Status],[InvoiceType] FROM [MYOB_POWERBI_VPS].[MYOB].[SaleInvoices] ORDER BY [Date] DESC`)),
-      // 4: VPS open invoices
-      safe(() => cdataQuery('VPS', `SELECT [Number],[Date],[CustomerName],[TotalAmount],[TotalTax],[IsTaxInclusive],[BalanceDueAmount],[Status] FROM [MYOB_POWERBI_VPS].[MYOB].[SaleInvoices] WHERE [Status] = 'Open' ORDER BY [BalanceDueAmount] DESC`)),
-      // 5: VPS invoices for top-customers compute
-      safe(() => cdataQuery('VPS', `SELECT [CustomerName],[TotalAmount],[TotalTax],[IsTaxInclusive] FROM [MYOB_POWERBI_VPS].[MYOB].[SaleInvoices] WHERE [Date] >= '${start}' AND [Date] < '${endDateExclusive(end)}' AND [TotalAmount] > 0`)),
-      // 6: JAWS P&L (always ex-GST by MYOB convention)
-      safe(() => cdataQuery('JAWS', `SELECT [AccountName],[AccountDisplayID],[AccountTotal] FROM [MYOB_POWERBI_JAWS].[MYOB].[ProfitAndLossSummaryReport] WHERE [StartDate] = '${start}' AND [EndDate] = '${end}' ORDER BY [AccountDisplayID]`)),
-      // 7: VPS P&L
-      safe(() => cdataQuery('VPS', `SELECT [AccountName],[AccountDisplayID],[AccountTotal] FROM [MYOB_POWERBI_VPS].[MYOB].[ProfitAndLossSummaryReport] WHERE [StartDate] = '${start}' AND [EndDate] = '${end}' ORDER BY [AccountDisplayID]`)),
-      // 8: JAWS open bills
-      safe(() => cdataQuery('JAWS', `SELECT TOP 15 [Number],[Date],[SupplierName],[TotalAmount],[TotalTax],[IsTaxInclusive],[BalanceDueAmount],[Status] FROM [MYOB_POWERBI_JAWS].[MYOB].[PurchaseBills] WHERE [Status] = 'Open' ORDER BY [BalanceDueAmount] DESC`)),
-      // 9: VPS open bills
-      safe(() => cdataQuery('VPS', `SELECT TOP 10 [Number],[Date],[SupplierName],[TotalAmount],[TotalTax],[IsTaxInclusive],[BalanceDueAmount],[Status] FROM [MYOB_POWERBI_VPS].[MYOB].[PurchaseBills] WHERE [Status] = 'Open' ORDER BY [BalanceDueAmount] DESC`)),
-      // 10: JAWS stock summary (CurrentValue is always ex-GST)
-      safe(() => cdataQuery('JAWS', `SELECT SUM([CurrentValue]) AS TotalStockValue, COUNT(*) AS ItemCount FROM [MYOB_POWERBI_JAWS].[MYOB].[Items]`)),
-    ]), 50000)
+    // Direct MYOB OAuth (CData decommissioned 2026-07-14). P&L is dropped —
+    // AccountRight has no P&L endpoint; those panels now render empty.
+    const endEx = endDateExclusive(end)
+    const byBalanceDesc = (a: any, b: any) => (b.BalanceDueAmount || 0) - (a.BalanceDueAmount || 0)
+    const allQueries: any[] | null = await withTimeout(Promise.all([
+      safe(() => fetchSaleInvoices('JAWS', { top: 20 })),                                 // 0 JAWS recent
+      safe(() => fetchSaleInvoices('JAWS', { status: 'Open' })),                          // 1 JAWS open
+      safe(() => fetchSaleInvoices('JAWS', { start, endExclusive: endEx })),              // 2 JAWS range
+      safe(() => fetchSaleInvoices('VPS', { top: 20 })),                                  // 3 VPS recent
+      safe(() => fetchSaleInvoices('VPS', { status: 'Open' })),                           // 4 VPS open
+      safe(() => fetchSaleInvoices('VPS', { start, endExclusive: endEx })),               // 5 VPS range
+      safe(() => fetchPurchaseBills('JAWS', { openOnly: true, top: 15 })),                // 6 JAWS bills
+      safe(() => fetchPurchaseBills('VPS', { openOnly: true, top: 10 })),                 // 7 VPS bills
+      safe(() => fetchInventoryItems('JAWS')),                                            // 8 JAWS stock
+    ]), 250000)
 
     if (!allQueries) {
-      console.error('Dashboard queries timed out at 50s')
+      console.error('Dashboard queries timed out')
       return res.status(504).json({ error: 'MYOB data took too long to load. Please try again.' })
     }
 
-    const jawsRecent  = normaliseInvoiceRows(rowsToObjects(allQueries[0]))
-    const jawsOpen    = normaliseInvoiceRows(rowsToObjects(allQueries[1]))
-    const jawsInvAll  = rowsToObjects(allQueries[2])
-    const vpsRecent   = normaliseInvoiceRows(rowsToObjects(allQueries[3]))
-    const vpsOpen     = normaliseInvoiceRows(rowsToObjects(allQueries[4]))
-    const vpsInvAll   = rowsToObjects(allQueries[5])
-    const jawsBills   = normaliseInvoiceRows(rowsToObjects(allQueries[8]))
-    const vpsBills    = normaliseInvoiceRows(rowsToObjects(allQueries[9]))
+    const jawsRecent  = normaliseInvoiceRows(allQueries[0] || [])
+    const jawsOpen    = normaliseInvoiceRows((allQueries[1] || []).slice().sort(byBalanceDesc))
+    const jawsInvAll  = (allQueries[2] || []).filter((i: any) => (i.TotalAmount || 0) > 0)
+    const vpsRecent   = normaliseInvoiceRows(allQueries[3] || [])
+    const vpsOpen     = normaliseInvoiceRows((allQueries[4] || []).slice().sort(byBalanceDesc))
+    const vpsInvAll   = (allQueries[5] || []).filter((i: any) => (i.TotalAmount || 0) > 0)
+    const jawsBills   = normaliseInvoiceRows((allQueries[6] || []).slice().sort(byBalanceDesc))
+    const vpsBills    = normaliseInvoiceRows((allQueries[7] || []).slice().sort(byBalanceDesc))
+
+    // Stock summary in the shape the frontend reads (.results[0].rows[0]).
+    const stockItems: any[] = allQueries[8] || []
+    const stockValue = Math.round(stockItems.reduce((s, it) => s + (Number(it.CurrentValue) || 0), 0) * 100) / 100
+    const jawsStockSummary = { results: [{ schema: [{ columnName: 'TotalStockValue' }, { columnName: 'ItemCount' }], rows: [[stockValue, stockItems.length]] }] }
 
     const jawsTopCustomers = computeTopCustomers(jawsInvAll)
     const vpsTopCustomers  = computeTopCustomers(vpsInvAll)
@@ -168,16 +165,16 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
         recentInvoices: wrap(jawsRecent, invoiceKeys),
         openInvoices:   wrap(jawsOpen,   openInvKeys),
         topCustomers:   wrap(jawsTopCustomers, topKeys),
-        pnl: allQueries[6],
+        pnl: null,
         stockItems: null,
-        stockSummary: allQueries[10],
+        stockSummary: jawsStockSummary,
         openBills: wrap(jawsBills, billKeys),
       },
       vps: {
         recentInvoices: wrap(vpsRecent, invoiceKeys),
         openInvoices:   wrap(vpsOpen,   openInvKeys),
         topCustomers:   wrap(vpsTopCustomers, topKeys),
-        pnl: allQueries[7],
+        pnl: null,
         openBills: wrap(vpsBills, billKeys),
         stockSummary: null,
       },
