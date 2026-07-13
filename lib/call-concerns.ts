@@ -93,6 +93,8 @@ Respond with ONLY a JSON object:
   "severity": "low"|"medium"|"high"|null,
   "confidence": "high"|"medium"|"low",   // how sure you are of the flag decision
   "customer_name": "name if stated in the call, else null",
+  "issue_type": "tune"|"product"|"other",   // "tune" = tuning/ECU/engine/mechanical WORK Just Autos performed (incl. faults appearing after that work); "product" = a physical part/item Just Autos supplied or sold is faulty/wrong/missing; "other" = neither fits
+  "booked_in": true|false,                  // true ONLY if a booking was actually made during this call to bring the vehicle in about this issue (a promise to "get you booked in later" is false)
   "summary": "2-3 sentences: what the customer's issue is and any commitments staff made",
   "channel_post": "2-3 casual sentences written AS IF the staff member who took the call is recapping it for the team in Slack — name the customer, what's wrong, what was promised. Natural workshop tone ('Ross called about the 200 Series we re-engined — it's been puffing white smoke at highway speed. He's sending a video through, needs a call back once Jimmy's had a look.'). No labels, no corporate speak, no emoji.",
   "action_items": ["specific actions someone must take, e.g. 'Call John back with the warranty claim outcome'"]
@@ -273,7 +275,17 @@ export async function runConcernSweep(opts: { limit?: number; dryRun?: boolean }
       const genuine = isIssue && aboutOurWork && !!category && confidence !== 'low'
       const nearMiss = !genuine && (isIssue || aboutOurWork) && !!category
       if (!genuine && !nearMiss) continue
-      if (opts.dryRun) { out.flagged.push({ callId: call.id, category: `${category}${genuine ? '' : ' (near-miss, not posted)'}`, slackTs: null }); continue }
+      // Channel gates (Chris 2026-07-13): a booking made during the call
+      // means the issue is handled — record, don't post. And only
+      // tune/workshop-work issues post; product faults are recorded silently.
+      const issueType = ['tune', 'product', 'other'].includes(parsed?.issue_type) ? parsed.issue_type : 'other'
+      const bookedIn = !!parsed?.booked_in
+      const notPostedWhy = !genuine ? 'near-miss: not a genuine our-work issue — recorded only'
+        : bookedIn ? 'not posted: customer was booked in during the call'
+        : issueType !== 'tune' ? `not posted: ${issueType} issue, channel is tune-issues only`
+        : null
+      const postable = notPostedWhy === null
+      if (opts.dryRun) { out.flagged.push({ callId: call.id, category: `${category}${postable ? '' : ` (${notPostedWhy})`}`, slackTs: null }); continue }
 
       const severity = ['low', 'medium', 'high'].includes(parsed?.severity) ? parsed.severity : 'medium'
       const actionItems: string[] = Array.isArray(parsed?.action_items) ? parsed.action_items.map(String).slice(0, 8) : []
@@ -284,6 +296,8 @@ export async function runConcernSweep(opts: { limit?: number; dryRun?: boolean }
         call_id: call.id,
         category, severity,
         genuine, confidence,
+        issue_type: issueType,
+        booked_in: bookedIn,
         channel_post: String(parsed.channel_post || '').trim().slice(0, 600) || null,
         summary: String(parsed.summary || '').slice(0, 2000),
         action_items: actionItems,
@@ -295,14 +309,14 @@ export async function runConcernSweep(opts: { limit?: number; dryRun?: boolean }
         advisor_name: call.effective_advisor_name || call.agent_name,
         advisor_slack_user_id: call.effective_advisor_slack_user_id,
         followup_due_at: new Date(Date.now() + FOLLOWUP_DAYS * 86400e3).toISOString(),
-        ...(genuine ? {} : { followup_status: 'dismissed', followup_note: 'near-miss: not a genuine our-work issue — recorded only' }),
+        ...(postable ? {} : { followup_status: 'dismissed', followup_note: notPostedWhy }),
       }).select('id').single()
       if (insErr) {
         // unique(call_id) — already flagged by an overlapping run
         if (!String(insErr.message).includes('duplicate')) out.errors.push(`${call.id}: ${insErr.message}`)
         continue
       }
-      if (!genuine) continue // near-miss recorded, no Slack, no chase
+      if (!postable) continue // recorded (with reason), no Slack, no chase
 
       const when = new Date(call.call_date).toLocaleString('en-AU', { timeZone: 'Australia/Brisbane', weekday: 'short', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })
       const humanPost = String(parsed.channel_post || parsed.summary || '').trim().slice(0, 600)
