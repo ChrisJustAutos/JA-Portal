@@ -69,15 +69,34 @@ function sb(): SupabaseClient {
 }
 
 export const autoEntryEnabled = () => (process.env.AP_AUTO_ENTRY_ENABLED || 'false').toLowerCase().trim() === 'true'
-// Mailboxes swept by auto-entry. The office scanner SENDS FROM scans@ INTO
-// the accounts inbox (it isn't a mailbox to read), so the default is just
-// accounts@ — add more via AP_AUTO_ENTRY_MAILBOXES (comma-separated);
-// legacy AP_AUTO_ENTRY_MAILBOX still honoured.
-function vpsMailboxes(): string[] {
+// Inboxes swept by auto-entry, each mapped to the MYOB company file its
+// invoices post into (mirrors the statement watch's inbox mapping). The
+// office scanner SENDS FROM scans@ INTO the accounts inbox (it isn't a
+// mailbox to read). Config: AP_AUTO_ENTRY_INBOXES JSON
+// ([{"mailbox":"...","companyFile":"VPS"|"JAWS"}]) wins; else the legacy
+// VPS-only envs; JAWS intake (accounts@justautoswholesale.com — forward
+// eligible invoices there) joins when AP_AUTO_ENTRY_JAWS=true, and is
+// always included on DRY runs so it can be previewed before going live.
+interface AutoEntryInbox { mailbox: string; companyFile: CompanyFileLabel }
+function autoEntryInboxes(dryRun: boolean): AutoEntryInbox[] {
+  const raw = (process.env.AP_AUTO_ENTRY_INBOXES || '').trim()
+  if (raw) {
+    try {
+      const parsed = JSON.parse(raw)
+      if (Array.isArray(parsed) && parsed.every(x => x.mailbox && (x.companyFile === 'JAWS' || x.companyFile === 'VPS'))) return parsed
+    } catch { /* fall through to defaults */ }
+  }
+  const out: AutoEntryInbox[] = []
   const multi = (process.env.AP_AUTO_ENTRY_MAILBOXES || '').trim()
-  if (multi) return multi.split(/[,;]+/).map(s => s.trim()).filter(Boolean)
-  const legacy = (process.env.AP_AUTO_ENTRY_MAILBOX || '').trim()
-  return [legacy || 'accounts@justautosmechanical.com.au']
+  if (multi) {
+    for (const m of multi.split(/[,;]+/).map(s => s.trim()).filter(Boolean)) out.push({ mailbox: m, companyFile: 'VPS' })
+  } else {
+    const legacy = (process.env.AP_AUTO_ENTRY_MAILBOX || '').trim()
+    out.push({ mailbox: legacy || 'accounts@justautosmechanical.com.au', companyFile: 'VPS' })
+  }
+  const jawsLive = (process.env.AP_AUTO_ENTRY_JAWS || 'false').toLowerCase() === 'true'
+  if (jawsLive || dryRun) out.push({ mailbox: 'accounts@justautoswholesale.com', companyFile: 'JAWS' })
+  return out
 }
 function slackWebhook(): string | null { return (process.env.SLACK_WEBHOOK_AP_VPS || '').trim() || null }
 // #vps-invoices. Cards post via the Portal Assistant bot so the Approve
@@ -112,7 +131,7 @@ export interface AutoEntryItem {
 export interface AutoEntryOutcome {
   enabled: boolean
   dryRun: boolean
-  mailboxes: { mailbox: string; scanned: number; folderResolved: boolean; error?: string }[]
+  mailboxes: { mailbox: string; companyFile: string; scanned: number; folderResolved: boolean; error?: string }[]
   scannedMessages: number
   skippedDuplicates: number
   filedFolderName: string           // folder posted emails get moved to (per mailbox)
@@ -218,7 +237,6 @@ function bankCheck(
 export async function runAutoEntry(opts: { dryRun?: boolean; sinceDays?: number; maxMessages?: number } = {}): Promise<AutoEntryOutcome> {
   const dryRun = !!opts.dryRun
   const enabled = autoEntryEnabled()
-  const companyFile: CompanyFileLabel = 'VPS'
   const sinceDays = Math.max(1, Math.min(Number(opts.sinceDays) || 7, 60))
   const maxMessages = Math.max(1, Math.min(Number(opts.maxMessages) || 100, 100))
   const sinceIso = new Date(Date.now() - sinceDays * 86400_000).toISOString()
@@ -233,11 +251,12 @@ export async function runAutoEntry(opts: { dryRun?: boolean; sinceDays?: number;
   // Safety net for Slack-approved flags whose immediate post didn't complete.
   if (!dryRun) { try { await processApprovedRows(c) } catch (e: any) { console.error('[ap-auto-entry] approved sweep failed:', e?.message || e) } }
 
-  for (const mailbox of vpsMailboxes()) {
-    const boxOut = { mailbox, scanned: 0, folderResolved: false, error: undefined as string | undefined }
+  for (const inbox of autoEntryInboxes(dryRun)) {
+    const mailbox = inbox.mailbox
+    const boxOut = { mailbox, companyFile: inbox.companyFile, scanned: 0, folderResolved: false, error: undefined as string | undefined }
     out.mailboxes.push(boxOut)
     try {
-      await runMailbox(c, { mailbox, companyFile, sinceIso, maxMessages, dryRun, folderName }, out, boxOut)
+      await runMailbox(c, { mailbox, companyFile: inbox.companyFile, sinceIso, maxMessages, dryRun, folderName }, out, boxOut)
     } catch (e: any) {
       // One unreadable mailbox (e.g. scans@ not yet licensed for the Graph app)
       // must not sink the other.
