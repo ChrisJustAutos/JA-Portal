@@ -96,7 +96,7 @@ Respond with ONLY a JSON object:
   "issue_type": "tune"|"product"|"other",   // "tune" = tuning/ECU/engine/mechanical WORK Just Autos performed (incl. faults appearing after that work); "product" = a physical part/item Just Autos supplied or sold is faulty/wrong/missing; "other" = neither fits
   "booked_in": true|false,                  // true ONLY if a booking was actually made during this call to bring the vehicle in about this issue (a promise to "get you booked in later" is false)
   "summary": "2-3 sentences: what the customer's issue is and any commitments staff made",
-  "channel_post": "2-3 casual sentences written AS IF the staff member who took the call is recapping it for the team in Slack — name the customer, what's wrong, what was promised. Natural workshop tone ('Ross called about the 200 Series we re-engined — it's been puffing white smoke at highway speed. He's sending a video through, needs a call back once Jimmy's had a look.'). No labels, no corporate speak, no emoji.",
+  "channel_post": "2-3 casual sentences written AS IF the staff member who took the call is recapping it for the team in Slack — what's wrong, what was promised. ALWAYS open with the customer's actual name (from the call, or the caller metadata above) — NEVER 'Customer' or 'the customer'; if no name exists anywhere, use the phone number. Natural workshop tone ('Ross called about the 200 Series we re-engined — it's been puffing white smoke at highway speed. He's sending a video through, needs a call back once Jimmy's had a look.'). No labels, no corporate speak, no emoji.",
   "action_items": ["specific actions someone must take, e.g. 'Call John back with the warranty claim outcome'"]
 }`
 }
@@ -319,7 +319,11 @@ export async function runConcernSweep(opts: { limit?: number; dryRun?: boolean }
       if (!postable) continue // recorded (with reason), no Slack, no chase
 
       const when = new Date(call.call_date).toLocaleString('en-AU', { timeZone: 'Australia/Brisbane', weekday: 'short', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })
-      const humanPost = String(parsed.channel_post || parsed.summary || '').trim().slice(0, 600)
+      // Backstop the prompt rule: an opening "Customer called…" becomes the
+      // actual name (or number) we resolved for this caller.
+      const humanPost = (String(parsed.channel_post || parsed.summary || '').trim()
+        .replace(/^(the\s+)?customer\b/i, callerLabel)
+        .slice(0, 600))
         || `${callerLabel} called with a ${category} — details in thread.`
       const line = rootLine({
         category,
