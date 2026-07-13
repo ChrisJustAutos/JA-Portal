@@ -13,7 +13,7 @@
 
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { requireAuth } from '../../lib/auth'
-import { cdataQuery } from '../../lib/cdata'
+import { fetchInventoryItems, fetchSaleInvoicesWithLines } from '../../lib/myob-reporting'
 import { lineExGst } from '../../lib/gst'
 
 // ── types ────────────────────────────────────────────────────────────────
@@ -84,16 +84,6 @@ interface Agg {
 }
 
 // ── helpers ──────────────────────────────────────────────────────────────
-function rowsToObjects(result: any): Row[] {
-  if (!result?.results?.[0]) return []
-  const { schema, rows } = result.results[0]
-  if (!schema || !rows) return []
-  return rows.map((row: any[]) => {
-    const o: Row = {}
-    schema.forEach((c: any, i: number) => { o[c.columnName] = row[i] })
-    return o
-  })
-}
 
 function num(v: any): number {
   if (v === null || v === undefined) return 0
@@ -129,51 +119,25 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const d180 = addDays(today, -180)
       const d365 = addDays(today, -365)
 
-      // ── 1) Pull all active inventoried items ─────────────────────────
-      const itemsResult = await cdataQuery('JAWS', `
-        SELECT
-          Number, Name,
-          QuantityOnHand, QuantityAvailable, QuantityCommitted, QuantityOnOrder,
-          AverageCost, CurrentValue,
-          SellingBaseSellingPrice, SellingIsTaxInclusive, SellingTaxCodeCode,
-          RestockingMinimumLevelForRestockingAlert,
-          RestockingDefaultOrderQuantity,
-          RestockingSupplierName, RestockingSupplierDisplayID,
-          BuyingLastPurchasePrice
-        FROM [MYOB_POWERBI_JAWS].[MYOB].[Items]
-        WHERE IsActive = 1 AND IsInventoried = 1
-        ORDER BY CurrentValue DESC
-      `)
-      const items = rowsToObjects(itemsResult)
+      // Direct MYOB OAuth (CData decommissioned 2026-07-14).
+      // 1) Active inventoried items.
+      const items = await fetchInventoryItems('JAWS')
 
-      // ── 2) Pull last 12 months of sale invoices (for date lookups + GST flag) ───
-      // NOTE: SaleInvoices has no TaxCodeCode at header level — tax lives on lines.
-      // But IsTaxInclusive lives at header — we need it to correctly normalise line totals.
-      const invResult = await cdataQuery('JAWS', `
-        SELECT ID, Date, Status, IsTaxInclusive
-        FROM [MYOB_POWERBI_JAWS].[MYOB].[SaleInvoices]
-        WHERE Date >= '${d365.toISOString().slice(0, 10)}'
-      `)
-      const invoices = rowsToObjects(invResult)
+      // 2+3) Last 12 months of sale invoices WITH their lines (one pass). The
+      // header carries IsTaxInclusive (to normalise line totals) + Date; the
+      // flattened lines carry ItemNumber/ShipQuantity/Total/TaxCodeCode.
+      const { invoices, lines: allLines } = await fetchSaleInvoicesWithLines('JAWS', {
+        start: d365.toISOString().slice(0, 10),
+      })
 
       // Invoice lookup: id -> { date, isTaxInclusive }
       const invById: Record<string, { date: Date; isTaxInclusive: boolean }> = {}
-      for (let i = 0; i < invoices.length; i++) {
-        const inv = invoices[i]
+      for (const inv of invoices) {
         if (!inv.ID || !inv.Date) continue
-        invById[String(inv.ID)] = {
-          date: new Date(inv.Date),
-          isTaxInclusive: inv.IsTaxInclusive === true || inv.IsTaxInclusive === 1,
-        }
+        invById[String(inv.ID)] = { date: new Date(inv.Date), isTaxInclusive: inv.IsTaxInclusive }
       }
 
-      // ── 3) Pull all sale invoice items with a non-null ItemNumber ────
-      const siiResult = await cdataQuery('JAWS', `
-        SELECT SaleInvoiceId, ItemNumber, ShipQuantity, Total, TaxCodeCode
-        FROM [MYOB_POWERBI_JAWS].[MYOB].[SaleInvoiceItems]
-        WHERE ItemNumber IS NOT NULL
-      `)
-      const lines = rowsToObjects(siiResult)
+      const lines = allLines.filter(l => l.ItemNumber)
 
       // ── 4) Aggregate per-item velocity from lines ────────────────────
       const perItem: Record<string, Agg> = {}

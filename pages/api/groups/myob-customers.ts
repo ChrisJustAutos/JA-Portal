@@ -4,15 +4,14 @@
 
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { requireAuth } from '../../../lib/auth'
-import { cdataQuery } from '../../../lib/cdata'
+import { fetchCustomerNames } from '../../../lib/myob-reporting'
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   return requireAuth(req, res, async () => {
     try {
-      const result = await cdataQuery('JAWS',
-        `SELECT DISTINCT [CustomerName] FROM [MYOB_POWERBI_JAWS].[MYOB].[SaleInvoices] WHERE [CustomerName] IS NOT NULL ORDER BY [CustomerName]`)
-      const rows = result?.results?.[0]?.rows || []
-      const names: string[] = rows.map((r: any[]) => r[0]).filter(Boolean)
+      // Direct MYOB OAuth (CData decommissioned 2026-07-14) — customer card
+      // names from the JAWS company file.
+      const names = await fetchCustomerNames('JAWS')
       res.status(200).json({ customers: names, count: names.length })
     } catch (e: any) {
       console.error('myob-customers error:', e)

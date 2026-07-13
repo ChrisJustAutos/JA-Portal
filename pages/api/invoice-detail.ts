@@ -3,25 +3,10 @@
 
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { requireAuth } from '../../lib/auth'
-import { cdataQuery } from '../../lib/cdata'
+import { fetchSaleInvoiceByNumber } from '../../lib/myob-reporting'
 import { invoiceExGst, lineExGst, toNum, asBool } from '../../lib/gst'
 
 export const config = { maxDuration: 30 }
-
-async function safe(fn: () => Promise<any>) {
-  try { return await fn() } catch(e: any) { console.error('invoice-detail:', e.message?.substring(0,160)); return null }
-}
-
-function flatten(r: any): any[] {
-  if (!r?.results?.[0]) return []
-  const cols: string[] = r.results[0].schema.map((c: any) => c.columnName)
-  const rows: any[][] = r.results[0].rows || []
-  return rows.map((row) => {
-    const o: any = {}
-    cols.forEach((c, i) => { o[c] = row[i] })
-    return o
-  })
-}
 
 export default function handler(req: NextApiRequest, res: NextApiResponse) {
   return requireAuth(req, res, async () => {
@@ -31,23 +16,15 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
     if (!invoiceNumber || !entity) {
       return res.status(400).json({ error: 'number and entity params required' })
     }
+    if (entity !== 'JAWS' && entity !== 'VPS') {
+      return res.status(400).json({ error: 'entity must be JAWS or VPS' })
+    }
 
-    const catalog = entity === 'JAWS' ? 'MYOB_POWERBI_JAWS' : 'MYOB_POWERBI_VPS'
-    const safeNumber = invoiceNumber.replace(/'/g, "''")
-
-    // Step 1: fetch invoice header INCLUDING IsTaxInclusive (needed to normalise line items)
-    const invoiceHeaderRaw: any = await safe(() => cdataQuery(entity, `
-      SELECT [ID],[Number],[Date],[CustomerName],[TotalAmount],[BalanceDueAmount],[Status],
-             [Subtotal],[TotalTax],[IsTaxInclusive],[InvoiceType],[Comment],[ShipToAddress],
-             [CustomerPurchaseOrderNumber],[TermsDueDate],[TermsPaymentIsDue],
-             [SalespersonName],[JournalMemo],[Freight],[LastPaymentDate]
-      FROM [${catalog}].[MYOB].[SaleInvoices]
-      WHERE [Number] = '${safeNumber}'
-    `))
-
-    const invoiceRows = flatten(invoiceHeaderRaw)
-    const rawInvoice = invoiceRows[0] || null
-    const invoiceId = rawInvoice?.ID || null
+    // Direct MYOB OAuth (CData decommissioned 2026-07-14): header + lines in one pass.
+    const fetched = await fetchSaleInvoiceByNumber(entity, invoiceNumber).catch((e: any) => {
+      console.error('invoice-detail:', (e?.message || e).toString().slice(0, 160)); return { invoice: null, lines: [] }
+    })
+    const rawInvoice = fetched.invoice
 
     // Add ex-GST fields to header
     let invoice: any = null
@@ -67,16 +44,10 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
       }
     }
 
-    // Step 2: fetch line items — now includes parent's IsTaxInclusive for proper normalisation
+    // Line items — carry parent's IsTaxInclusive for proper normalisation.
     let lineItemsArr: any[] = []
-    if (invoiceId) {
-      const lineItemsRaw: any = await safe(() => cdataQuery(entity, `
-        SELECT [Description],[Total],[ShipQuantity],[UnitPrice],[TaxCodeCode],[AccountName],[AccountDisplayID],[ItemName],[RowID]
-        FROM [${catalog}].[MYOB].[SaleInvoiceItems]
-        WHERE [SaleInvoiceId] = '${invoiceId}'
-        ORDER BY [RowID]
-      `))
-      const rawLines = flatten(lineItemsRaw)
+    if (rawInvoice) {
+      const rawLines = fetched.lines
       const parentIsIncGst = asBool(rawInvoice?.IsTaxInclusive)
       lineItemsArr = rawLines.map(line => {
         const rawTotal = toNum(line.Total)

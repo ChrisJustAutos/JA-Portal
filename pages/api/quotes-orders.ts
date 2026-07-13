@@ -4,21 +4,8 @@
 
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { requireAuth } from '../../lib/auth'
-import { cdataQuery } from '../../lib/cdata'
+import { fetchSaleOrders, fetchSaleQuotes } from '../../lib/myob-reporting'
 import { invoiceExGst } from '../../lib/gst'
-
-type Row = Record<string, any>
-
-function rowsToObjects(result: any): Row[] {
-  if (!result?.results?.[0]) return []
-  const { schema, rows } = result.results[0]
-  if (!schema || !rows) return []
-  return rows.map((row: any[]) => {
-    const o: Row = {}
-    schema.forEach((c: any, i: number) => { o[c.columnName] = row[i] })
-    return o
-  })
-}
 
 function num(v: any): number {
   if (v === null || v === undefined) return 0
@@ -35,17 +22,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       d30.setDate(d30.getDate() - 30)
       const d30Str = d30.toISOString().slice(0, 10)
 
+      // Direct MYOB OAuth (CData decommissioned 2026-07-14). Fetch all sale
+      // orders/quotes once, filter by status client-side.
+      const allOrders = await fetchSaleOrders('JAWS')
+      const allQuotes = await fetchSaleQuotes('JAWS')
+
       // ── Open orders (pipeline — not yet invoiced/shipped) ────────────
-      const openOrdersResult = await cdataQuery('JAWS', `
-        SELECT Number, Date, CustomerName, CustomerDisplayID,
-               TotalAmount, BalanceDueAmount, Status,
-               Subtotal, TotalTax, IsTaxInclusive, Freight, SalespersonName,
-               CustomerPurchaseOrderNumber
-        FROM [MYOB_POWERBI_JAWS].[MYOB].[SaleOrders]
-        WHERE Status = 'Open'
-        ORDER BY Date DESC
-      `)
-      const openOrders = rowsToObjects(openOrdersResult).map(o => {
+      const openOrders = allOrders.filter(o => String(o.Status || '') === 'Open').map(o => {
         const total = num(o.TotalAmount)
         const tax = num(o.TotalTax)
         const balance = num(o.BalanceDueAmount)
@@ -72,13 +55,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       })
 
       // ── Recently converted orders (last 30 days) ─────────────────────
-      const convertedResult = await cdataQuery('JAWS', `
-        SELECT Number, Date, CustomerName, TotalAmount, TotalTax, SalespersonName
-        FROM [MYOB_POWERBI_JAWS].[MYOB].[SaleOrders]
-        WHERE Status = 'ConvertedToInvoice' AND Date >= '${d30Str}'
-        ORDER BY Date DESC
-      `)
-      const convertedOrders = rowsToObjects(convertedResult).map(o => {
+      const convertedOrders = allOrders
+        .filter(o => String(o.Status || '') === 'ConvertedToInvoice' && o.Date && String(o.Date) >= d30Str)
+        .map(o => {
         const total = num(o.TotalAmount)
         const tax = num(o.TotalTax)
         return {
@@ -92,12 +71,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       })
 
       // ── Quotes (currently empty in JAWS but kept for future use) ─────
-      const quotesResult = await cdataQuery('JAWS', `
-        SELECT Number, Date, CustomerName, TotalAmount, TotalTax, SalespersonName
-        FROM [MYOB_POWERBI_JAWS].[MYOB].[SaleQuotes]
-        ORDER BY Date DESC
-      `)
-      const quotes = rowsToObjects(quotesResult).map(q => {
+      const quotes = allQuotes.map(q => {
         const total = num(q.TotalAmount)
         const tax = num(q.TotalTax)
         return {
