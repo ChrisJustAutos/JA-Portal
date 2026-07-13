@@ -38,7 +38,7 @@ export async function cdataQuery(_catalog: string, sql: string) {
     try {
       const direct = JSON.parse(raw)
       const text = direct?.result?.content?.[0]?.text
-      if (text) return JSON.parse(text)
+      if (text) return parseCdataText(text)
     } catch { /* fall through */ }
     throw new Error('No data line in SSE response')
   }
@@ -47,11 +47,55 @@ export async function cdataQuery(_catalog: string, sql: string) {
  
   if (envelope.error) throw new Error(`CData error: ${JSON.stringify(envelope.error)}`)
  
-  // Result is nested: envelope.result.content[0].text = actual JSON string
+  // Result is nested: envelope.result.content[0].text = actual result.
   const textContent = envelope?.result?.content?.[0]?.text
   if (!textContent) throw new Error('No content in MCP response')
  
-  return JSON.parse(textContent)
+  // The queryData tool returns either a JSON string ({results:[{schema,rows}]})
+  // or — since ~2026-07 — CSV text ("ID,Number,Date,...\n<rows>"). Try JSON
+  // first; on failure, parse the CSV into the same {results:[{schema,rows}]}
+  // shape so every caller stays unchanged.
+  return parseCdataText(textContent)
+}
+
+// Parse the tool's text payload — JSON if it is JSON, else CSV → results shape.
+function parseCdataText(textContent: string): any {
+  try {
+    return JSON.parse(textContent)
+  } catch {
+    return csvToResults(textContent)
+  }
+}
+
+// Minimal RFC4180 CSV → { results:[{ schema:[{columnName}], rows:[[...]] }] }.
+// Handles double-quoted fields with embedded commas, quotes ("") and newlines.
+export function csvToResults(csv: string): { results: { schema: { columnName: string }[]; rows: any[][] }[] } {
+  const rows: string[][] = []
+  let field = ''
+  let row: string[] = []
+  let inQuotes = false
+  const text = csv.replace(/\r\n/g, '\n').replace(/\r/g, '\n')
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i]
+    if (inQuotes) {
+      if (ch === '"') {
+        if (text[i + 1] === '"') { field += '"'; i++ } else inQuotes = false
+      } else field += ch
+    } else if (ch === '"') inQuotes = true
+    else if (ch === ',') { row.push(field); field = '' }
+    else if (ch === '\n') { row.push(field); rows.push(row); field = ''; row = [] }
+    else field += ch
+  }
+  if (field.length || row.length) { row.push(field); rows.push(row) }
+  while (rows.length && rows[rows.length - 1].length === 1 && rows[rows.length - 1][0] === '') rows.pop()
+  if (!rows.length) return { results: [{ schema: [], rows: [] }] }
+  const header = rows[0]
+  const schema = header.map(columnName => ({ columnName }))
+  const dataRows = rows.slice(1).map(r => header.map((_, i) => {
+    const v = r[i] ?? ''
+    return v === '' ? null : v
+  }))
+  return { results: [{ schema, rows: dataRows }] }
 }
  
 // ── JAWS queries ─────────────────────────────────────────────
