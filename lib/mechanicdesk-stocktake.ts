@@ -834,3 +834,65 @@ export async function collectPrePickDemand(
   const jobs = Array.from(jobMeta.values()).sort((a, b) => (b.parts_count - a.parts_count) || String(a.scheduled_at || '').localeCompare(String(b.scheduled_at || '')))
   return { jobsCount: jobIds.size, items, jobs, jobItems }
 }
+
+// ── Customers (Monday → MD customer import, probe 2026-07-13) ─────────────
+// MD's customer search + object shape confirmed via probe-md-customers:
+// GET /customers.json?query=<term> → array of customer objects with
+// id/name/phone/mobile/email/first_name/last_name/is_company/address{...}.
+
+export interface MdCustomerLite {
+  id: number
+  name: string
+  phone: string | null
+  mobile: string | null
+  email: string | null
+  first_name: string | null
+  last_name: string | null
+  number: string | null
+}
+
+export async function searchMdCustomers(client: MdClient, query: string): Promise<MdCustomerLite[]> {
+  const q = String(query || '').trim()
+  if (!q) return []
+  const r = await mdFetch<any>(client, `/customers.json?query=${encodeURIComponent(q)}`)
+  const rows: any[] = Array.isArray(r) ? r : (Array.isArray(r?.customers) ? r.customers : [])
+  return rows.filter(c => !c.deleted).map(c => ({
+    id: c.id, name: c.name || '', phone: c.phone || null, mobile: c.mobile || null,
+    email: c.email || null, first_name: c.first_name || null, last_name: c.last_name || null,
+    number: c.number || null,
+  }))
+}
+
+export interface MdCustomerCreateInput {
+  firstName: string
+  lastName: string
+  mobile?: string | null
+  email?: string | null
+  postcode?: string | null
+}
+
+export async function createMdCustomer(client: MdClient, input: MdCustomerCreateInput): Promise<MdCustomerLite> {
+  const body: Record<string, any> = {
+    first_name: input.firstName,
+    last_name: input.lastName,
+    is_company: false,
+    ...(input.mobile ? { mobile: input.mobile } : {}),
+    ...(input.email ? { email: input.email } : {}),
+    ...(input.postcode ? { address: { postcode: String(input.postcode) } } : {}),
+  }
+  const r = await mdFetch<any>(client, '/customers', { method: 'POST', body: JSON.stringify(body) })
+  if (!r?.id) throw new Error(`MD customer create returned no id: ${JSON.stringify(r).slice(0, 200)}`)
+  return {
+    id: r.id, name: r.name || `${input.firstName} ${input.lastName}`, phone: r.phone || null,
+    mobile: r.mobile || null, email: r.email || null, first_name: r.first_name || null,
+    last_name: r.last_name || null, number: r.number || null,
+  }
+}
+
+/** Soft-delete a customer (used only by the import's --test-create self-check). */
+export async function deleteMdCustomer(client: MdClient, customerId: number, reason = 'JA Portal test cleanup'): Promise<void> {
+  await mdFetch<any>(client, `/customers/${customerId}`, {
+    method: 'DELETE',
+    body: JSON.stringify({ deleted_reason: reason }),
+  })
+}
