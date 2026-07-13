@@ -60,7 +60,12 @@ export interface SaleLineRow {
   ItemNumber: string | null; ItemName: string | null; ShipQuantity: number | null; UnitPrice: number | null; RowID: string | null
 }
 
-// Sale invoices (Item type — carries Lines) for a date range, with lines
+// Sale-invoice types that carry Lines. CData's SaleInvoices/SaleInvoiceItems
+// spanned ALL types, so we must too — querying only Sale/Invoice/Item
+// undercounts (JAWS raises some sales as Service invoices). Merge them.
+const INVOICE_TYPES = ['Item', 'Service', 'Professional', 'Miscellaneous']
+
+// Sale invoices for a date range, across all invoice types, with lines
 // flattened. Both shapes carry CData-compatible field names.
 export async function fetchSaleInvoicesWithLines(
   label: CompanyFileLabel, opts: { start?: string; endExclusive?: string } = {},
@@ -71,7 +76,15 @@ export async function fetchSaleInvoicesWithLines(
   const q: Record<string, string | number> = {}
   if (filters.length) q['$filter'] = filters.join(' and ')
 
-  const raw = await fetchAll(label, 'Sale/Invoice/Item', q)
+  const raw: any[] = []
+  for (const type of INVOICE_TYPES) {
+    try { raw.push(...await fetchAll(label, `Sale/Invoice/${type}`, q)) }
+    catch (e: any) {
+      // A company file may not have every invoice type enabled — a 400/404 on
+      // one type shouldn't sink the whole pull.
+      console.warn(`[myob-reporting] Sale/Invoice/${type} ${label}:`, e?.message)
+    }
+  }
   const invoices: SaleInvoiceRow[] = []
   const lines: SaleLineRow[] = []
   for (const inv of raw) {
@@ -82,7 +95,7 @@ export async function fetchSaleInvoicesWithLines(
       IsTaxInclusive: inv.IsTaxInclusive === true,
       TotalAmount: Number(inv.TotalAmount) || 0, TotalTax: Number(inv.TotalTax) || 0,
       BalanceDueAmount: Number(inv.BalanceDueAmount) || 0, Status: inv.Status ?? null,
-      InvoiceType: inv.InvoiceType ?? 'Item',
+      InvoiceType: inv.InvoiceType ?? inv.Type ?? null,
     })
     for (const l of Array.isArray(inv.Lines) ? inv.Lines : []) {
       lines.push({
