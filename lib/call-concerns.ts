@@ -22,7 +22,7 @@
 // in pages/api/slack/ask.ts → markConcernActioned().
 
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
-import { postMessage, updateMessage } from './slack-bot/slack'
+import { postMessage, updateMessage, messageExists } from './slack-bot/slack'
 import { sendMail } from './email'
 import { sentMailToSince } from './microsoft-graph'
 
@@ -411,6 +411,20 @@ export async function runConcernFollowups(): Promise<FollowupOutcome> {
   for (const concern of due || []) {
     out.due++
     try {
+      // Someone deleting the channel post is a human signal: dealt with /
+      // dismissed. Never thread nudges under a deleted root (Chris,
+      // 2026-07-13) — close the concern off instead.
+      if (concern.slack_channel && concern.slack_ts) {
+        const alive = await messageExists(concern.slack_channel, concern.slack_ts)
+        if (!alive) {
+          await c.from('call_concerns').update({
+            followup_status: 'dismissed',
+            followup_note: 'channel post was deleted — follow-up stopped',
+          }).eq('id', concern.id)
+          continue
+        }
+      }
+
       const contact = await detectContact(concern)
       if (contact) {
         await c.from('call_concerns').update({

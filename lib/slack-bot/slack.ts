@@ -98,3 +98,18 @@ export async function sendToPartsContact(text: string): Promise<{ ok: boolean; r
   const posted = await postMessage({ channel, text })
   return posted ? { ok: true } : { ok: false, reason: 'Slack rejected the message' }
 }
+
+// Does a message still exist (not deleted)? Used by the concern follow-up
+// sweep so nudges never thread under a deleted root. Fails OPEN on scope or
+// transport errors — a permissions hiccup must not silently kill follow-ups.
+export async function messageExists(channel: string, ts: string): Promise<boolean> {
+  try {
+    const r = await fetch(`${SLACK_API}/conversations.replies?channel=${encodeURIComponent(channel)}&ts=${encodeURIComponent(ts)}&limit=1`, {
+      headers: { Authorization: `Bearer ${botToken()}` },
+    })
+    const j: any = await r.json()
+    if (j.ok) return Array.isArray(j.messages) && j.messages.length > 0
+    if (['thread_not_found', 'message_not_found', 'channel_not_found'].includes(j.error)) return false
+    return true
+  } catch { return true }
+}
