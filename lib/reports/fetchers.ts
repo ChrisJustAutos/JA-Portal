@@ -4,7 +4,8 @@
 //
 // All $ values returned are EX-GST (the GST audit fix from phase 5 applies here too).
 
-import { cdataQuery, endDateExclusive } from '../cdata'
+import { endDateExclusive } from '../cdata'
+import { fetchSaleInvoices, fetchSaleInvoicesWithLines, fetchPurchaseBills, fetchInventoryItems, fetchSaleOrders, fetchSaleQuotes } from '../myob-reporting'
 import { invoiceExGst, lineExGst, toNum, asBool } from '../gst'
 
 // ── Helpers ──────────────────────────────────────────────────────────
@@ -53,30 +54,20 @@ export async function fetchKpiSummary(
   const results = await Promise.all(entities.map(async (entity) => {
     const cat = catalogFor(entity)
 
-    // All 5 queries in parallel — was sequential, saves 10-15s
-    const [invRes, openInvRes, openBillsRes, stockRes, pnlRes] = await Promise.all([
-      cdataQuery(entity,
-        `SELECT [TotalAmount],[TotalTax] FROM [${cat}].[MYOB].[SaleInvoices] WHERE [Date] >= '${range.periodStart}' AND [Date] < '${endDateExclusive(range.periodEnd)}' AND [TotalAmount] > 0`
-      ).catch(() => null),
-      cdataQuery(entity,
-        `SELECT [TotalAmount],[TotalTax],[BalanceDueAmount] FROM [${cat}].[MYOB].[SaleInvoices] WHERE [Status] = 'Open' AND [BalanceDueAmount] > 0`
-      ).catch(() => null),
-      cdataQuery(entity,
-        `SELECT [TotalAmount],[TotalTax],[BalanceDueAmount] FROM [${cat}].[MYOB].[PurchaseBills] WHERE [Status] = 'Open' AND [BalanceDueAmount] > 0`
-      ).catch(() => null),
-      entity === 'JAWS'
-        ? cdataQuery(entity, `SELECT SUM([CurrentValue]) AS v FROM [${cat}].[MYOB].[Items]`).catch(() => null)
-        : Promise.resolve(null),
-      cdataQuery(entity,
-        `SELECT [AccountDisplayID],[AccountTotal] FROM [${cat}].[MYOB].[ProfitAndLossSummaryReport] WHERE [StartDate] = '${range.periodStart}' AND [EndDate] = '${range.periodEnd}'`
-      ).catch(() => null),
+    // Direct MYOB OAuth (CData decommissioned 2026-07-14). P&L is dropped
+    // (no AccountRight P&L endpoint) → income/COS/overheads/net are 0.
+    const [invRows, openInvRows, openBillsRows, stockItems] = await Promise.all([
+      fetchSaleInvoices(entity, { start: range.periodStart, endExclusive: endDateExclusive(range.periodEnd) }).catch(() => []),
+      fetchSaleInvoices(entity, { status: 'Open' }).catch(() => []),
+      fetchPurchaseBills(entity, { openOnly: true }).catch(() => []),
+      entity === 'JAWS' ? fetchInventoryItems('JAWS').catch(() => []) : Promise.resolve([]),
     ])
 
-    const invRows = rowsToObjects(invRes)
-    const revenueExGst = invRows.reduce((s, r) => s + invoiceExGst(toNum(r.TotalAmount), toNum(r.TotalTax)), 0)
+    const revenueExGst = invRows
+      .filter(r => toNum(r.TotalAmount) > 0)
+      .reduce((s, r) => s + invoiceExGst(toNum(r.TotalAmount), toNum(r.TotalTax)), 0)
 
-    const openInvRows = rowsToObjects(openInvRes)
-    const receivablesExGst = openInvRows.reduce((s, r) => {
+    const receivablesExGst = openInvRows.filter(r => toNum(r.BalanceDueAmount) > 0).reduce((s, r) => {
       const total = toNum(r.TotalAmount)
       const tax = toNum(r.TotalTax)
       const bal = toNum(r.BalanceDueAmount)
@@ -84,8 +75,7 @@ export async function fetchKpiSummary(
       return s + (bal - balTax)
     }, 0)
 
-    const openBillsRows = rowsToObjects(openBillsRes)
-    const payablesExGst = openBillsRows.reduce((s, r) => {
+    const payablesExGst = openBillsRows.filter(r => toNum(r.BalanceDueAmount) > 0).reduce((s, r) => {
       const total = toNum(r.TotalAmount)
       const tax = toNum(r.TotalTax)
       const bal = toNum(r.BalanceDueAmount)
@@ -93,17 +83,16 @@ export async function fetchKpiSummary(
       return s + (bal - balTax)
     }, 0)
 
-    // Stock value (JAWS only — CurrentValue is always ex-GST)
+    // Stock value (JAWS only) — sum of CurrentValue (ex-GST).
     const stockValueExGst: number | null = entity === 'JAWS'
-      ? toNum(rowsToObjects(stockRes)[0]?.v)
+      ? Math.round(stockItems.reduce((s, it) => s + toNum(it.CurrentValue), 0) * 100) / 100
       : null
 
-    // P&L income, COS, overheads (always ex-GST)
-    const pnl = rowsToObjects(pnlRes)
-    const incomeFromPnlExGst = pnl.filter(r => String(r.AccountDisplayID || '').startsWith('4-') && toNum(r.AccountTotal) > 0).reduce((s, r) => s + toNum(r.AccountTotal), 0)
-    const cosFromPnlExGst    = pnl.filter(r => String(r.AccountDisplayID || '').startsWith('5-') && toNum(r.AccountTotal) > 0).reduce((s, r) => s + toNum(r.AccountTotal), 0)
-    const overheadsFromPnlExGst = pnl.filter(r => String(r.AccountDisplayID || '').startsWith('6-') && toNum(r.AccountTotal) > 0).reduce((s, r) => s + toNum(r.AccountTotal), 0)
-    const netExGst = incomeFromPnlExGst - cosFromPnlExGst - overheadsFromPnlExGst
+    // P&L KPIs retired with CData.
+    const incomeFromPnlExGst = 0
+    const cosFromPnlExGst = 0
+    const overheadsFromPnlExGst = 0
+    const netExGst = 0
 
     return {
       entity,
@@ -139,28 +128,15 @@ export interface PnLSummaryData {
   }>
 }
 
-export async function fetchPnlSummary(entities: Entity[], range: DateRange): Promise<PnLSummaryData> {
-  const results = await Promise.all(entities.map(async (entity) => {
-    const cat = catalogFor(entity)
-    const pnlRes = await cdataQuery(entity,
-      `SELECT [AccountName],[AccountDisplayID],[AccountTotal] FROM [${cat}].[MYOB].[ProfitAndLossSummaryReport] WHERE [StartDate] = '${range.periodStart}' AND [EndDate] = '${range.periodEnd}' ORDER BY [AccountDisplayID]`
-    ).catch(() => null)
-    const rows = rowsToObjects(pnlRes)
-    const mapRow = (r: any) => ({ account: String(r.AccountName || ''), code: String(r.AccountDisplayID || ''), amount: toNum(r.AccountTotal) })
-    const income = rows.filter(r => String(r.AccountDisplayID || '').startsWith('4-') && toNum(r.AccountTotal) > 0).map(mapRow).sort((a,b) => b.amount - a.amount)
-    const cos = rows.filter(r => String(r.AccountDisplayID || '').startsWith('5-') && toNum(r.AccountTotal) > 0).map(mapRow).sort((a,b) => b.amount - a.amount)
-    const overheads = rows.filter(r => String(r.AccountDisplayID || '').startsWith('6-') && toNum(r.AccountTotal) > 0).map(mapRow).sort((a,b) => b.amount - a.amount)
-    const totalIncome = income.reduce((s, r) => s + r.amount, 0)
-    const totalCos = cos.reduce((s, r) => s + r.amount, 0)
-    const totalOverheads = overheads.reduce((s, r) => s + r.amount, 0)
-    return {
-      entity, income, cos, overheads,
-      totalIncome, totalCos, totalOverheads,
-      grossProfit: totalIncome - totalCos,
-      netProfit: totalIncome - totalCos - totalOverheads,
-    }
-  }))
-  return { entities: results }
+// RETIRED 2026-07-14: P&L dropped with CData (no AccountRight P&L endpoint).
+// Returns empty breakdowns so the reports UI renders blank rather than erroring.
+export async function fetchPnlSummary(entities: Entity[], _range: DateRange): Promise<PnLSummaryData> {
+  return {
+    entities: entities.map(entity => ({
+      entity, income: [], cos: [], overheads: [],
+      totalIncome: 0, totalCos: 0, totalOverheads: 0, grossProfit: 0, netProfit: 0,
+    })),
+  }
 }
 
 // ── TOP CUSTOMERS ────────────────────────────────────────────────────
@@ -174,11 +150,9 @@ export interface TopCustomersData {
 
 export async function fetchTopCustomers(entities: Entity[], range: DateRange, limit = 10): Promise<TopCustomersData> {
   const results = await Promise.all(entities.map(async (entity) => {
-    const cat = catalogFor(entity)
-    const invRes = await cdataQuery(entity,
-      `SELECT [CustomerName],[TotalAmount],[TotalTax] FROM [${cat}].[MYOB].[SaleInvoices] WHERE [Date] >= '${range.periodStart}' AND [Date] < '${endDateExclusive(range.periodEnd)}' AND [TotalAmount] > 0`
-    ).catch(() => null)
-    const rows = rowsToObjects(invRes)
+    // Direct MYOB OAuth (CData decommissioned 2026-07-14).
+    const rows = (await fetchSaleInvoices(entity, { start: range.periodStart, endExclusive: endDateExclusive(range.periodEnd) }).catch(() => []))
+      .filter(r => toNum(r.TotalAmount) > 0)
     const byCustomer = new Map<string, { revenueExGst: number; invoiceCount: number }>()
     for (const r of rows) {
       const name = r.CustomerName
@@ -247,11 +221,8 @@ function bucketize(invoices: any[], asOf: Date, customerField: string) {
 export async function fetchReceivablesAging(entities: Entity[]): Promise<AgingData> {
   const asOf = new Date()
   const results = await Promise.all(entities.map(async (entity) => {
-    const cat = catalogFor(entity)
-    const res = await cdataQuery(entity,
-      `SELECT [Number],[Date],[CustomerName],[TotalAmount],[TotalTax],[BalanceDueAmount] FROM [${cat}].[MYOB].[SaleInvoices] WHERE [Status] = 'Open' AND [BalanceDueAmount] > 0`
-    ).catch(() => null)
-    const { buckets, total, oldest } = bucketize(rowsToObjects(res), asOf, 'CustomerName')
+    const rows = (await fetchSaleInvoices(entity, { status: 'Open' }).catch(() => [])).filter(r => toNum(r.BalanceDueAmount) > 0)
+    const { buckets, total, oldest } = bucketize(rows, asOf, 'CustomerName')
     return { entity, buckets, total, oldest }
   }))
   return { entities: results }
@@ -260,11 +231,8 @@ export async function fetchReceivablesAging(entities: Entity[]): Promise<AgingDa
 export async function fetchPayablesAging(entities: Entity[]): Promise<AgingData> {
   const asOf = new Date()
   const results = await Promise.all(entities.map(async (entity) => {
-    const cat = catalogFor(entity)
-    const res = await cdataQuery(entity,
-      `SELECT [Number],[Date],[SupplierName],[TotalAmount],[TotalTax],[BalanceDueAmount] FROM [${cat}].[MYOB].[PurchaseBills] WHERE [Status] = 'Open' AND [BalanceDueAmount] > 0`
-    ).catch(() => null)
-    const { buckets, total, oldest } = bucketize(rowsToObjects(res), asOf, 'SupplierName')
+    const rows = (await fetchPurchaseBills(entity, { openOnly: true }).catch(() => [])).filter(r => toNum(r.BalanceDueAmount) > 0)
+    const { buckets, total, oldest } = bucketize(rows, asOf, 'SupplierName')
     return { entity, buckets, total, oldest }
   }))
   return { entities: results }
@@ -280,12 +248,9 @@ export interface StockSummaryData {
 }
 
 export async function fetchStockSummary(): Promise<StockSummaryData> {
-  const res = await cdataQuery('JAWS',
-    `SELECT [Name],[CurrentValue],[QuantityOnHand],[MinimumLevel] FROM [MYOB_POWERBI_JAWS].[MYOB].[Items] WHERE [IsInventoried] = 1`
-  ).catch(() => null)
-  const rows = rowsToObjects(res)
+  const rows = await fetchInventoryItems('JAWS').catch(() => [])
   const totalValueExGst = rows.reduce((s, r) => s + toNum(r.CurrentValue), 0)
-  const itemsBelowReorder = rows.filter(r => toNum(r.MinimumLevel) > 0 && toNum(r.QuantityOnHand) < toNum(r.MinimumLevel)).length
+  const itemsBelowReorder = rows.filter(r => toNum(r.RestockingMinimumLevelForRestockingAlert) > 0 && toNum(r.QuantityOnHand) < toNum(r.RestockingMinimumLevelForRestockingAlert)).length
   // itemsWithNoSales90d is a rough estimate — set to 0 for now without more sales data
   return {
     totalValueExGst,
@@ -300,16 +265,14 @@ export interface StockReorderData {
 }
 
 export async function fetchStockReorder(): Promise<StockReorderData> {
-  const res = await cdataQuery('JAWS',
-    `SELECT [Name],[Number],[QuantityOnHand],[MinimumLevel],[AverageCost] FROM [MYOB_POWERBI_JAWS].[MYOB].[Items] WHERE [IsInventoried] = 1 AND [MinimumLevel] > 0`
-  ).catch(() => null)
-  const rows = rowsToObjects(res)
+  const rows = (await fetchInventoryItems('JAWS').catch(() => []))
+    .filter(r => toNum(r.RestockingMinimumLevelForRestockingAlert) > 0)
   const items = rows
     .map(r => ({
       name: String(r.Name || ''),
       sku: String(r.Number || ''),
       onHand: toNum(r.QuantityOnHand),
-      reorderLevel: toNum(r.MinimumLevel),
+      reorderLevel: toNum(r.RestockingMinimumLevelForRestockingAlert),
       avgCost: toNum(r.AverageCost),
     }))
     .filter(r => r.onHand < r.reorderLevel)
@@ -329,28 +292,14 @@ export async function fetchStockDead(): Promise<StockDeadData> {
   const d90 = new Date(); d90.setDate(d90.getDate() - 90)
   const d90Str = d90.toISOString().slice(0, 10)
 
-  const itemsRes = await cdataQuery('JAWS',
-    `SELECT [Name],[Number],[CurrentValue],[QuantityOnHand] FROM [MYOB_POWERBI_JAWS].[MYOB].[Items] WHERE [IsInventoried] = 1 AND [QuantityOnHand] > 0 AND [CurrentValue] > 0`
-  ).catch(() => null)
-  const allItems = rowsToObjects(itemsRes)
+  const allItems = (await fetchInventoryItems('JAWS').catch(() => []))
+    .filter(r => toNum(r.QuantityOnHand) > 0 && toNum(r.CurrentValue) > 0)
 
-  // Pull invoices from last 90 days to find which items DID sell
-  const invRes = await cdataQuery('JAWS',
-    `SELECT [ID] FROM [MYOB_POWERBI_JAWS].[MYOB].[SaleInvoices] WHERE [Date] >= '${d90Str}'`
-  ).catch(() => null)
-  const invIds = new Set(rowsToObjects(invRes).map(r => String(r.ID)))
-
-  let soldItemNumbers = new Set<string>()
-  if (invIds.size > 0) {
-    const linesRes = await cdataQuery('JAWS',
-      `SELECT [SaleInvoiceId],[ItemNumber] FROM [MYOB_POWERBI_JAWS].[MYOB].[SaleInvoiceItems] WHERE [ItemNumber] IS NOT NULL`
-    ).catch(() => null)
-    const lines = rowsToObjects(linesRes)
-    for (const l of lines) {
-      if (invIds.has(String(l.SaleInvoiceId)) && l.ItemNumber) {
-        soldItemNumbers.add(String(l.ItemNumber).trim())
-      }
-    }
+  // Last 90 days of invoices WITH lines — find which items DID sell.
+  const { lines } = await fetchSaleInvoicesWithLines('JAWS', { start: d90Str }).catch(() => ({ lines: [] as any[] }))
+  const soldItemNumbers = new Set<string>()
+  for (const l of lines) {
+    if (l.ItemNumber) soldItemNumbers.add(String(l.ItemNumber).trim())
   }
 
   const items = allItems
@@ -394,20 +343,18 @@ const DIST_EXCLUDED = new Set([
 ])
 
 export async function fetchDistributorRanking(range: DateRange): Promise<DistributorRankingData> {
-  const invRes = await cdataQuery('JAWS',
-    `SELECT [ID],[CustomerName],[IsTaxInclusive] FROM [MYOB_POWERBI_JAWS].[MYOB].[SaleInvoices] WHERE [Date] >= '${range.periodStart}' AND [Date] < '${endDateExclusive(range.periodEnd)}'`
-  ).catch(() => null)
-  const invRows = rowsToObjects(invRes)
+  // Direct MYOB OAuth (CData decommissioned 2026-07-14): invoices + lines in
+  // one pass; filter lines to the tuning/parts/oil income accounts.
+  const { invoices, lines: allLines } = await fetchSaleInvoicesWithLines('JAWS', {
+    start: range.periodStart, endExclusive: endDateExclusive(range.periodEnd),
+  }).catch(() => ({ invoices: [] as any[], lines: [] as any[] }))
   const invById = new Map<string, any>()
-  for (const r of invRows) {
-    invById.set(String(r.ID), { customerName: r.CustomerName, isTaxInclusive: asBool(r.IsTaxInclusive) })
+  for (const r of invoices) {
+    invById.set(String(r.ID), { customerName: r.CustomerName, isTaxInclusive: r.IsTaxInclusive })
   }
 
-  const accList = [...TUNING, ...PARTS, ...OIL].map(a => `'${a}'`).join(',')
-  const lineRes = await cdataQuery('JAWS',
-    `SELECT [SaleInvoiceId],[AccountDisplayID],[TaxCodeCode],[Total] FROM [MYOB_POWERBI_JAWS].[MYOB].[SaleInvoiceItems] WHERE [AccountDisplayID] IN (${accList})`
-  ).catch(() => null)
-  const lines = rowsToObjects(lineRes)
+  const accSet = new Set([...TUNING, ...PARTS, ...OIL])
+  const lines = allLines.filter(l => l.AccountDisplayID && accSet.has(l.AccountDisplayID))
 
   const byDist = new Map<string, { tuning: number; parts: number; oil: number; invoiceIds: Set<string> }>()
   for (const line of lines) {
@@ -464,10 +411,9 @@ export async function fetchPipeline(): Promise<PipelineData> {
   const d30 = new Date(); d30.setDate(d30.getDate() - 30)
   const d30Str = d30.toISOString().slice(0, 10)
 
-  const openRes = await cdataQuery('JAWS',
-    `SELECT Number, Date, CustomerName, TotalAmount, BalanceDueAmount, TotalTax FROM [MYOB_POWERBI_JAWS].[MYOB].[SaleOrders] WHERE Status = 'Open' ORDER BY Date DESC`
-  ).catch(() => null)
-  const openOrders = rowsToObjects(openRes).map(o => {
+  // Direct MYOB OAuth (CData decommissioned 2026-07-14).
+  const allOrders = await fetchSaleOrders('JAWS').catch(() => [])
+  const openOrders = allOrders.filter(o => String(o.Status || '') === 'Open').map(o => {
     const total = toNum(o.TotalAmount)
     const tax = toNum(o.TotalTax)
     const bal = toNum(o.BalanceDueAmount)
@@ -482,16 +428,10 @@ export async function fetchPipeline(): Promise<PipelineData> {
     }
   })
 
-  const convRes = await cdataQuery('JAWS',
-    `SELECT TotalAmount, TotalTax FROM [MYOB_POWERBI_JAWS].[MYOB].[SaleOrders] WHERE Status = 'ConvertedToInvoice' AND Date >= '${d30Str}'`
-  ).catch(() => null)
-  const converted = rowsToObjects(convRes)
+  const converted = allOrders.filter(o => String(o.Status || '') === 'ConvertedToInvoice' && o.Date && String(o.Date) >= d30Str)
   const convertedValue = converted.reduce((s, r) => s + invoiceExGst(toNum(r.TotalAmount), toNum(r.TotalTax)), 0)
 
-  const quotesRes = await cdataQuery('JAWS',
-    `SELECT TotalAmount, TotalTax FROM [MYOB_POWERBI_JAWS].[MYOB].[SaleQuotes]`
-  ).catch(() => null)
-  const quotes = rowsToObjects(quotesRes)
+  const quotes = await fetchSaleQuotes('JAWS').catch(() => [])
   const quotesValue = quotes.reduce((s, r) => s + invoiceExGst(toNum(r.TotalAmount), toNum(r.TotalTax)), 0)
 
   return {
@@ -534,33 +474,12 @@ export async function fetchTrendCharts(entities: Entity[]): Promise<TrendChartsD
     })
   }
 
-  const entityResults = await Promise.all(entities.map(async (entity) => {
-    const cat = catalogFor(entity)
-    // Fire ALL 12 queries (6 months × 2 metrics) in parallel — was sequential, now parallel.
-    // This turns a 30-60s wait into a single round-trip of ~3-5s.
-    const perMonthResults = await Promise.all(months.map(async (m) => {
-      const [incRes, expRes] = await Promise.all([
-        cdataQuery(entity,
-          `SELECT SUM([AccountTotal]) AS v FROM [${cat}].[MYOB].[ProfitAndLossSummaryReport] WHERE [AccountDisplayID] LIKE '4-%' AND [StartDate] = '${m.start}' AND [EndDate] = '${m.end}'`
-        ).catch(() => null),
-        cdataQuery(entity,
-          `SELECT SUM([AccountTotal]) AS v FROM [${cat}].[MYOB].[ProfitAndLossSummaryReport] WHERE ([AccountDisplayID] LIKE '5-%' OR [AccountDisplayID] LIKE '6-%') AND [StartDate] = '${m.start}' AND [EndDate] = '${m.end}'`
-        ).catch(() => null),
-      ])
-      return {
-        income: toNum(rowsToObjects(incRes)[0]?.v),
-        expenses: toNum(rowsToObjects(expRes)[0]?.v),
-      }
-    }))
-    const income = perMonthResults.map(r => r.income)
-    const expenses = perMonthResults.map(r => r.expenses)
-    const net = income.map((v, i) => v - (expenses[i] || 0))
-    return { entity, income, expenses, net }
-  }))
-
+  // RETIRED 2026-07-14: income/expense trends were P&L-report based; dropped
+  // with CData. Zeroed series so the chart renders flat.
+  const zeros = months.map(() => 0)
   return {
     months: months.map(m => m.label),
-    entities: entityResults,
+    entities: entities.map(entity => ({ entity, income: [...zeros], expenses: [...zeros], net: [...zeros] })),
   }
 }
 

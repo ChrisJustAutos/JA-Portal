@@ -15,6 +15,7 @@
 // endpoint and the portal P&L panels were retired in this migration.
 
 import { getConnection, myobFetch } from './myob'
+import { searchAccounts } from './ap-myob-lookup'
 
 // VPS | JAWS — matches the connection labels in myob_connections.
 type CompanyFileLabel = 'VPS' | 'JAWS'
@@ -112,15 +113,28 @@ export async function fetchSaleInvoicesWithLines(
 }
 
 // Header-only sale invoices (no lines) — cheaper for dashboard summaries.
+// A small `top` fetches a single API page (no full paging); `status` filters
+// server-side (e.g. 'Open'). The bare /Sale/Invoice endpoint spans all types.
 export async function fetchSaleInvoices(
-  label: CompanyFileLabel, opts: { start?: string; endExclusive?: string; top?: number } = {},
+  label: CompanyFileLabel, opts: { start?: string; endExclusive?: string; top?: number; status?: string } = {},
 ): Promise<SaleInvoiceRow[]> {
   const filters: string[] = []
   if (opts.start) filters.push(`Date ge ${dt(opts.start)}`)
   if (opts.endExclusive) filters.push(`Date lt ${dt(opts.endExclusive)}`)
+  if (opts.status) filters.push(`Status eq '${opts.status}'`)
   const q: Record<string, string | number> = { '$orderby': 'Date desc' }
   if (filters.length) q['$filter'] = filters.join(' and ')
-  const raw = await fetchAll(label, 'Sale/Invoice', q)
+
+  let raw: any[]
+  if (opts.top && opts.top <= PAGE) {
+    // Single page — avoid paging the whole ledger for a "recent N" list.
+    const c = await conn(label)
+    const r = await myobFetch(c.id, `/accountright/${c.company_file_id}/Sale/Invoice`, { query: { ...q, '$top': opts.top } })
+    if (r.status !== 200) throw new Error(`MYOB Sale/Invoice ${label}: HTTP ${r.status}`)
+    raw = Array.isArray(r.data?.Items) ? r.data.Items : []
+  } else {
+    raw = await fetchAll(label, 'Sale/Invoice', q)
+  }
   const rows = raw.map((inv): SaleInvoiceRow => ({
     ID: inv.UID, Number: inv.Number ?? null, Date: inv.Date ?? null,
     CustomerName: inv.Customer?.Name ?? null,
@@ -239,6 +253,17 @@ export async function fetchInventoryItems(label: CompanyFileLabel): Promise<any[
     }
   }).sort((a, b) => b.CurrentValue - a.CurrentValue)
 }
+// Income accounts (DisplayID 4-xxxx) from the chart of accounts — replaces the
+// old "distinct 4-% accounts seen on invoice lines" query. The chart is the
+// source of truth for selectable income accounts.
+export async function fetchIncomeAccounts(label: CompanyFileLabel): Promise<Array<{ code: string; name: string }>> {
+  const accts = await searchAccounts(label as any, '', 200, ['Income', 'OtherIncome'])
+  return accts
+    .filter(a => (a.displayId || '').startsWith('4-'))
+    .map(a => ({ code: a.displayId, name: a.name }))
+    .sort((a, b) => a.code.localeCompare(b.code))
+}
+
 // Distinct customer names seen on sale invoices (replaces the old DISTINCT
 // CustomerName query). Reads the customer card list — the source of truth.
 export async function fetchCustomerNames(label: CompanyFileLabel): Promise<string[]> {

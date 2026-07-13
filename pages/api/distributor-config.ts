@@ -9,7 +9,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { createClient } from '@supabase/supabase-js'
 import { requireAdmin, getSessionUser } from '../../lib/auth'
-import { cdataQuery } from '../../lib/cdata'
+import { fetchIncomeAccounts } from '../../lib/myob-reporting'
 
 export const config = { maxDuration: 30 }
 
@@ -45,11 +45,9 @@ async function fetchMyobAccounts(): Promise<Array<{ code: string; name: string }
   if (_accountsCache && Date.now() - _accountsCache.at < ACCOUNTS_TTL) {
     return _accountsCache.data
   }
-  const res: any = await cdataQuery('JAWS',
-    "SELECT DISTINCT [AccountDisplayID], [AccountName] FROM [MYOB_POWERBI_JAWS].[MYOB].[SaleInvoiceItems] WHERE [AccountDisplayID] LIKE '4-%' ORDER BY [AccountDisplayID]"
-  )
-  const rows: any[][] = res?.results?.[0]?.rows || []
-  const data = rows.map(r => ({ code: String(r[0]), name: String(r[1] || '') }))
+  // Direct MYOB OAuth (CData decommissioned 2026-07-14) — income accounts (4-)
+  // from the JAWS chart of accounts.
+  const data = await fetchIncomeAccounts('JAWS')
   _accountsCache = { data, at: Date.now() }
   return data
 }

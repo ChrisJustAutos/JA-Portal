@@ -4,28 +4,27 @@
 
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { requireAuth } from '../../../lib/auth'
-import { cdataQuery } from '../../../lib/cdata'
+import { fetchSaleInvoices } from '../../../lib/myob-reporting'
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   return requireAuth(req, res, async () => {
     try {
-      const result = await cdataQuery('JAWS', `
-        SELECT
-          LEFT([CustomerPurchaseOrderNumber], 4) AS prefix,
-          COUNT(*) AS occurrences,
-          MAX([CustomerPurchaseOrderNumber]) AS sample_value
-        FROM [MYOB_POWERBI_JAWS].[MYOB].[SaleInvoices]
-        WHERE [CustomerPurchaseOrderNumber] IS NOT NULL
-          AND LEN([CustomerPurchaseOrderNumber]) >= 8
-        GROUP BY LEFT([CustomerPurchaseOrderNumber], 4)
-        ORDER BY COUNT(*) DESC
-      `)
-      const rows = result?.results?.[0]?.rows || []
-      const observed = rows.map((r: any[]) => ({
-        prefix: r[0],
-        occurrences: Number(r[1]),
-        sample_value: r[2],
-      }))
+      // Direct MYOB OAuth (CData decommissioned 2026-07-14): aggregate the
+      // 4-char PO-number prefixes in JS. PO number carries the VIN prefix.
+      const invs = await fetchSaleInvoices('JAWS', {})
+      const agg = new Map<string, { occurrences: number; sample_value: string }>()
+      for (const inv of invs) {
+        const po = String(inv.CustomerPurchaseOrderNumber || '')
+        if (po.length < 8) continue
+        const prefix = po.slice(0, 4)
+        const e = agg.get(prefix) || { occurrences: 0, sample_value: po }
+        e.occurrences += 1
+        if (po > e.sample_value) e.sample_value = po
+        agg.set(prefix, e)
+      }
+      const observed = Array.from(agg.entries())
+        .map(([prefix, v]) => ({ prefix, occurrences: v.occurrences, sample_value: v.sample_value }))
+        .sort((a, b) => b.occurrences - a.occurrences)
       res.status(200).json({ observed, count: observed.length })
     } catch (e: any) {
       console.error('observed VINs error:', e)

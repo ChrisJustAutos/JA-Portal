@@ -26,7 +26,8 @@
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { createClient } from '@supabase/supabase-js'
 import { requireAdmin } from '../../../lib/auth'
-import { cdataQuery, endDateExclusive } from '../../../lib/cdata'
+import { endDateExclusive } from '../../../lib/cdata'
+import { fetchSaleInvoicesWithLines } from '../../../lib/myob-reporting'
 import { detectAllPlatformsFromTexts } from '../../../lib/vehiclePlatforms'
 
 const VPS_CATALOG = 'MYOB_POWERBI_VPS'
@@ -118,48 +119,29 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
         return
       }
 
-      // 1. Fetch invoice HEADERS in this window
-      const headersSql = `
-        SELECT [ID], [Number], [Date], [CustomerName], [TotalAmount], [TotalTax], [Status]
-        FROM [${VPS_CATALOG}].[MYOB].[SaleInvoices]
-        WHERE [Date] >= '${windowFrom}' AND [Date] < '${endDateExclusive(windowTo)}'
-          AND [TotalAmount] > 0
-      `.trim()
-      const hRes = await cdataQuery(VPS_CATALOG, headersSql)
-      const headers = (hRes.results?.[0]?.rows || []) as any[]
+      // 1+2. Direct MYOB OAuth (CData decommissioned 2026-07-14): invoice
+      // headers + lines for the window in one pass. Keep the positional
+      // header rows [ID,Number,Date,CustomerName,TotalAmount,TotalTax,Status]
+      // the classifier below expects.
+      const { invoices, lines: allLines } = await fetchSaleInvoicesWithLines('VPS', {
+        start: windowFrom, endExclusive: endDateExclusive(windowTo),
+      })
+      const headers = invoices
+        .filter(inv => (inv.TotalAmount || 0) > 0)
+        .map(inv => [inv.ID, inv.Number, inv.Date, inv.CustomerName, inv.TotalAmount, inv.TotalTax, inv.Status])
 
       let upserts: any[] = []
 
       if (headers.length > 0) {
-        // 2. Batched line-items query. Limit to 100 IDs per query to stay
-        //    well under CData's URL/SQL length limits. With windowDays=14 we
-        //    typically see 50-100 headers so usually a single lines query.
-        const ids = headers.map(r => r[0])
         const linesByInv = new Map<string, { description: string; acct: string }[]>()
-
-        const BATCH = 100
-        for (let i = 0; i < ids.length; i += BATCH) {
-          const chunk = ids.slice(i, i + BATCH)
-          const idList = chunk.map(id => `'${id}'`).join(',')
-          const linesSql = `
-            SELECT [SaleInvoiceId], [Description], [AccountDisplayID]
-            FROM [${VPS_CATALOG}].[MYOB].[SaleInvoiceItems]
-            WHERE [SaleInvoiceId] IN (${idList})
-          `.trim()
-          const lRes = await cdataQuery(VPS_CATALOG, linesSql)
-          for (const lr of (lRes.results?.[0]?.rows || []) as any[]) {
-            const invId = lr[0]
-            if (!linesByInv.has(invId)) linesByInv.set(invId, [])
-            linesByInv.get(invId)!.push({
-              description: String(lr[1] || ''),
-              acct:        String(lr[2] || ''),
-            })
-          }
+        for (const l of allLines) {
+          if (!linesByInv.has(l.SaleInvoiceId)) linesByInv.set(l.SaleInvoiceId, [])
+          linesByInv.get(l.SaleInvoiceId)!.push({ description: String(l.Description || ''), acct: String(l.AccountDisplayID || '') })
         }
 
         // 3. Classify
         for (const h of headers) {
-          const id           = h[0]
+          const id           = String(h[0] || '')
           const number       = String(h[1] || '')
           const date         = String(h[2] || '').substring(0, 10)
           const customer     = String(h[3] || '')
