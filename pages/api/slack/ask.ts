@@ -151,6 +151,28 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         // AP flag card: "Approve & post to MYOB". A human vouched for the
         // flagged checks — post immediately (re-extract staged PDF, match
         // supplier, MYOB post) and thread the result under the flag card.
+        // JAWS flag card: account-choice button — post the flagged invoice
+        // coded to the picked account. action_id is ap_post_account_<uid>;
+        // the account + row id ride in the value JSON.
+        if (String(action.action_id || '').startsWith('ap_post_account_')) {
+          const approver = payload.user?.username || payload.user?.name || payload.user?.id || 'staff'
+          const ch: string = payload.channel?.id || ''
+          const threadTs: string | undefined = payload.message?.ts
+          let v: any = {}
+          try { v = JSON.parse(action.value || '{}') } catch { /* */ }
+          waitUntil((async () => {
+            let result = ''
+            try {
+              const { postWithAccount } = await import('../../../lib/ap-auto-entry')
+              result = await postWithAccount(String(v.r || ''), String(v.a || ''), String(v.n || ''), approver)
+            } catch (e: any) {
+              result = `❌ Post failed: ${(e?.message || e).toString().slice(0, 200)}`
+            }
+            if (ch) await postMessage({ channel: ch, text: result, thread_ts: threadTs }).catch(() => null)
+          })())
+          return res.status(200).end()
+        }
+
         if (action.action_id === 'ap_approve_post') {
           const rowId = String(action.value || '')
           const approver = payload.user?.username || payload.user?.name || payload.user?.id || 'staff'

@@ -786,6 +786,9 @@ export async function postFoundInvoiceToMyob(args: {
   // Caller vouches for a low-confidence parse (e.g. scan whose printed bank
   // details matched the supplier card — corroborated hard evidence).
   acceptLowConfidence?: boolean
+  // Force EVERY line to this expense account, overriding rules/default/
+  // fallback. Set when a human picks the account on a JAWS flag card.
+  accountUidOverride?: { uid: string; name: string } | null
 }): Promise<FoundInvoicePostResult> {
   const c = sb()
   const { companyFile, supplierUid, supplierName, extracted, statementAmount } = args
@@ -852,7 +855,9 @@ export async function postFoundInvoiceToMyob(args: {
     if (data?.uid) fallbackAcc = { uid: data.uid, name: `${data.display_id} ${data.name || ''}`.trim() }
     return fallbackAcc
   }
+  const override = args.accountUidOverride || null
   for (const l of wlines) {
+    if (override) { accountUids.push(override.uid); accountNames.push(override.name); usedSmart = true; continue }
     const r = await resolveLineAccount(c, { supplier_uid: supplierUid, myob_company_file: companyFile, description: l.description, part_number: l.partNumber })
     if (r.account_uid) {
       // Rule or strong history — confident, auto-applied.

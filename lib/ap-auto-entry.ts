@@ -41,7 +41,7 @@ import {
 import { pdfPageCount, splitPdfRange, segmentInvoicePdf, extractPageRanges, type PageRange } from './ap-batch-split'
 import { sendMail } from './email'
 import { tryAutoMatchSupplier } from './ap-myob-automatch'
-import { getSupplierByUid, type CompanyFileLabel } from './ap-myob-lookup'
+import { getSupplierByUid, searchAccounts, type CompanyFileLabel } from './ap-myob-lookup'
 import { resolveLineAccount } from './ap-line-resolver'
 import { triageInvoice } from './ap-supabase'
 import { consolidatedInvoiceSupplier } from './ap-consolidated-suppliers'
@@ -77,7 +77,11 @@ export const autoEntryEnabled = () => (process.env.AP_AUTO_ENTRY_ENABLED || 'fal
 // VPS-only envs; JAWS intake (accounts@justautoswholesale.com — forward
 // eligible invoices there) joins when AP_AUTO_ENTRY_JAWS=true, and is
 // always included on DRY runs so it can be previewed before going live.
-interface AutoEntryInbox { mailbox: string; companyFile: CompanyFileLabel }
+// The JAWS intake deliberately watches ONLY a subfolder — the wholesale
+// Inbox itself carries invoices tied to active purchase orders / stock
+// receival which must NOT auto-post (Chris, 2026-07-14). Staff drag or
+// forward eligible invoices into "Portal Invoices".
+interface AutoEntryInbox { mailbox: string; companyFile: CompanyFileLabel; folder?: string }
 function autoEntryInboxes(dryRun: boolean): AutoEntryInbox[] {
   const raw = (process.env.AP_AUTO_ENTRY_INBOXES || '').trim()
   if (raw) {
@@ -95,14 +99,24 @@ function autoEntryInboxes(dryRun: boolean): AutoEntryInbox[] {
     out.push({ mailbox: legacy || 'accounts@justautosmechanical.com.au', companyFile: 'VPS' })
   }
   const jawsLive = (process.env.AP_AUTO_ENTRY_JAWS || 'false').toLowerCase() === 'true'
-  if (jawsLive || dryRun) out.push({ mailbox: 'accounts@justautoswholesale.com', companyFile: 'JAWS' })
+  if (jawsLive || dryRun) {
+    out.push({
+      mailbox: process.env.AP_AUTO_ENTRY_JAWS_MAILBOX || 'accounts@justautoswholesale.com',
+      companyFile: 'JAWS',
+      folder: process.env.AP_AUTO_ENTRY_JAWS_FOLDER ?? 'Portal Invoices',
+    })
+  }
   return out
 }
 function slackWebhook(): string | null { return (process.env.SLACK_WEBHOOK_AP_VPS || '').trim() || null }
-// #vps-invoices. Cards post via the Portal Assistant bot so the Approve
-// button's clicks route to the app's interactivity URL (/api/slack/ask);
-// falls back to the webhook if the bot can't post (e.g. not yet invited).
-function apSlackChannel(): string { return (process.env.AP_SLACK_CHANNEL ?? 'C0BEGPPMCBF').trim() }
+// VPS cards → #vps-invoices; JAWS cards → #jaws-invoices. Cards post via the
+// Portal Assistant bot so the Approve buttons' clicks route to the app's
+// interactivity URL (/api/slack/ask); VPS falls back to the webhook if the
+// bot can't post (e.g. not yet invited).
+function apSlackChannel(companyFile?: string): string {
+  if (companyFile === 'JAWS') return (process.env.AP_SLACK_CHANNEL_JAWS ?? 'C0BHX6BTCSC').trim()
+  return (process.env.AP_SLACK_CHANNEL ?? 'C0BEGPPMCBF').trim()
+}
 // Once an invoice is entered into MYOB, its email is marked read and moved out
 // of the Inbox into this folder so the inbox only shows what still needs a human.
 // Flagged / not-posted emails are left in place. Set to '' to disable the move.
@@ -256,7 +270,7 @@ export async function runAutoEntry(opts: { dryRun?: boolean; sinceDays?: number;
     const boxOut = { mailbox, companyFile: inbox.companyFile, scanned: 0, folderResolved: false, error: undefined as string | undefined }
     out.mailboxes.push(boxOut)
     try {
-      await runMailbox(c, { mailbox, companyFile: inbox.companyFile, sinceIso, maxMessages, dryRun, folderName }, out, boxOut)
+      await runMailbox(c, { mailbox, companyFile: inbox.companyFile, sourceFolder: inbox.folder, sinceIso, maxMessages, dryRun, folderName }, out, boxOut)
     } catch (e: any) {
       // One unreadable mailbox (e.g. scans@ not yet licensed for the Graph app)
       // must not sink the other.
@@ -271,11 +285,20 @@ export async function runAutoEntry(opts: { dryRun?: boolean; sinceDays?: number;
 
 async function runMailbox(
   c: SupabaseClient,
-  ctx: { mailbox: string; companyFile: CompanyFileLabel; sinceIso: string; maxMessages: number; dryRun: boolean; folderName: string },
+  ctx: { mailbox: string; companyFile: CompanyFileLabel; sourceFolder?: string; sinceIso: string; maxMessages: number; dryRun: boolean; folderName: string },
   out: AutoEntryOutcome,
   boxOut: { mailbox: string; scanned: number; folderResolved: boolean },
 ): Promise<void> {
-  const { mailbox, companyFile, sinceIso, maxMessages, dryRun, folderName } = ctx
+  const { mailbox, companyFile, sourceFolder, sinceIso, maxMessages, dryRun, folderName } = ctx
+
+  // Folder-scoped intake (JAWS "Portal Invoices"): only what staff drag or
+  // forward into the folder is processed — the wholesale Inbox itself holds
+  // PO/stock-receival invoices that must not auto-post.
+  let sourceFolderId: string | undefined
+  if (sourceFolder) {
+    sourceFolderId = (await findFolderByDisplayNameLoose(mailbox, sourceFolder)) || undefined
+    if (!sourceFolderId) throw new Error(`Intake folder "${sourceFolder}" not found in ${mailbox} — create it (a subfolder of the Inbox) and retry`)
+  }
 
   let messages: GraphMessageSummary[] = []
   try {
@@ -284,8 +307,9 @@ async function runMailbox(
     // gate is deliberately broad (suppliers send invoices under "Order #12345"
     // style subjects — Chris 2026-07-08); what the attachment actually IS is
     // decided by classify() + extraction, and link-only mails yield no
-    // attachments and skip harmlessly.
-    messages = await listMessagesWithAttachments(mailbox, { sinceIsoDate: sinceIso, top: maxMessages, alsoSubjects: /invoice|inv[\s#-]?\d|statement|credit|remittance|order|receipt|bill|purchase|delivery|docket|consignment/i })
+    // attachments and skip harmlessly. Folder-scoped intakes skip the subject
+    // gate: being IN the folder is the human signal that it's an invoice.
+    messages = await listMessagesWithAttachments(mailbox, { sinceIsoDate: sinceIso, top: maxMessages, folderId: sourceFolderId, alsoSubjects: sourceFolderId ? /./ : /invoice|inv[\s#-]?\d|statement|credit|remittance|order|receipt|bill|purchase|delivery|docket|consignment/i })
   } catch (e: any) {
     throw new Error(`Could not read ${mailbox}: ${e?.message || e}`)
   }
@@ -743,12 +767,19 @@ async function processInvoice(
   const isCredit = extracted.isCreditNote === true
   const signed = (n: number | null | undefined) => n == null ? null : (isCredit ? -Math.abs(n) : n)
   const signedTotal = signed(total)
+  // JAWS flag cards carry account-choice buttons (Chris 2026-07-14): a
+  // suggested account + alternates a human can post the invoice coded to.
+  const accountOptions = (!pass && companyFile === 'JAWS')
+    ? await jawsAccountOptions(companyFile, supplierUid, codingSummary).catch(() => null)
+    : null
+
   const slackCommon = {
     supplierName, companyFile, invoiceNumber: extracted.invoiceNumber, invoiceDate: extracted.invoiceDate,
     totalIncGst: signedTotal, gstAmount: signed(extracted.totals.gstAmount), codingSummary, bankCheck: effectiveBank,
     isCreditNote: isCredit,
     invoiceBank: extracted.bankDetails, cardBank, sourceMailbox: mailbox, supplierTrust: trust.summary,
     paidOnInvoice: extracted.paidInFull ? (extracted.paymentMethod || 'paid') : null,
+    accountOptions,
   }
 
   if (!pass) {
@@ -758,7 +789,7 @@ async function processInvoice(
       const rowId = randomUUID()
       const staged = await stageAndSign(c, msg, attId, bytes, kind).catch(() => null)
       const withUrl = buildAutoEntryBlocks({ ...slackCommon, outcome: 'flagged', failReasons, pdfUrl: staged?.url, approveValue: staged ? rowId : null })
-      const ts = await sendSlack(withUrl)
+      const ts = await sendSlack(withUrl, companyFile)
       await logRow(c, { mailbox, companyFile, msg, attId, attName }, { id: rowId, outcome: 'flagged', supplierName, supplierUid, invoiceNumber: extracted.invoiceNumber, invoiceDate: extracted.invoiceDate, amount: signedTotal, failReasons, bankCheck: effectiveBank, pdfStoragePath: staged?.path || null, slackTs: ts })
     }
     return { ...base, supplierName, invoiceNumber: extracted.invoiceNumber, amount: signedTotal, outcome: 'flagged', bankCheck: effectiveBank, failReasons, slackText: built.text }
@@ -817,13 +848,13 @@ async function processInvoice(
     // showed up buttonless because only the triage-flag branch passed one.
     const rowId = randomUUID()
     const built = buildAutoEntryBlocks({ ...slackCommon, outcome: 'flagged', failReasons: reasons, pdfUrl: staged?.url, approveValue: staged ? rowId : null })
-    const ts = await sendSlack(built)
+    const ts = await sendSlack(built, companyFile)
     await logRow(c, { mailbox, companyFile, msg, attId, attName }, { id: rowId, outcome: 'error', supplierName, supplierUid, invoiceNumber: extracted.invoiceNumber, invoiceDate: extracted.invoiceDate, amount: signedTotal, failReasons: reasons, bankCheck: effectiveBank, error: posted.reason || null, pdfStoragePath: staged?.path || null, slackTs: ts })
     return { ...base, supplierName, invoiceNumber: extracted.invoiceNumber, amount: signedTotal, outcome: 'error', bankCheck: effectiveBank, failReasons: reasons, error: posted.reason }
   }
 
   const built = buildAutoEntryBlocks({ ...slackCommon, codingSummary: posted.codingDetail || slackCommon.codingSummary, outcome: 'posted', adopted: posted.adopted, pdfUrl: staged?.url })
-  const ts = await sendSlack(built)
+  const ts = await sendSlack(built, companyFile)
   await logRow(c, { mailbox, companyFile, msg, attId, attName }, { outcome: 'posted', supplierName, supplierUid, invoiceNumber: extracted.invoiceNumber, invoiceDate: extracted.invoiceDate, amount: signedTotal, bankCheck: effectiveBank, myobBillUid: posted.billUid || null, pdfStoragePath: staged?.path || null, slackTs: ts })
   return { ...base, supplierName, invoiceNumber: extracted.invoiceNumber, amount: signedTotal, outcome: 'posted', bankCheck: effectiveBank, failReasons: [], billUid: posted.billUid, adopted: posted.adopted }
 }
@@ -890,8 +921,8 @@ export async function reattachMissingPdfs(): Promise<{ attempted: number; ok: st
 // ── Slack ────────────────────────────────────────────────────────────────
 // Bot-first (real ts back, buttons route to the app's interactivity URL),
 // webhook fallback.
-async function sendSlack(built: { text: string; blocks: any[] }): Promise<string | null> {
-  const channel = apSlackChannel()
+async function sendSlack(built: { text: string; blocks: any[] }, companyFile?: string): Promise<string | null> {
+  const channel = apSlackChannel(companyFile)
   if (channel) {
     try {
       const posted = await postMessage({ channel, text: built.text, blocks: built.blocks })
@@ -904,6 +935,45 @@ async function sendSlack(built: { text: string; blocks: any[] }): Promise<string
     const r = await postWebhook(hook, { text: built.text, blocks: built.blocks })
     return r.ok ? 'sent' : null
   } catch (e: any) { console.error('[ap-auto-entry] slack post failed:', e?.message || e); return null }
+}
+
+// Candidate expense accounts for a JAWS flag card's account-choice buttons:
+// the supplier card's default (if any) first as ⭐ suggested, then a handful
+// of common expense/COGS accounts. De-duped by uid, capped at 5.
+async function jawsAccountOptions(
+  companyFile: CompanyFileLabel, supplierUid: string | null, codingSummary: string | null,
+): Promise<{ uid: string; displayId: string; name: string; suggested?: boolean }[] | null> {
+  const seen = new Set<string>()
+  const opts: { uid: string; displayId: string; name: string; suggested?: boolean }[] = []
+  const push = (a: { uid: string; displayId: string; name: string }, suggested = false) => {
+    if (!a.uid || seen.has(a.uid)) return
+    seen.add(a.uid); opts.push({ ...a, ...(suggested ? { suggested: true } : {}) })
+  }
+  // 1. Supplier card default = the suggested pick.
+  if (supplierUid) {
+    const sup = await getSupplierByUid(companyFile, supplierUid).catch(() => null)
+    const d = sup?.defaultExpenseAccount
+    if (d?.uid) push({ uid: d.uid, displayId: d.displayId || '', name: d.name || '' }, true)
+  }
+  // 2. A shortlist of expense/COGS accounts to choose among.
+  try {
+    const accts = await searchAccounts(companyFile, '', 40, ['Expense', 'CostOfSales'])
+    for (const a of accts) { if (opts.length >= 6) break; push({ uid: a.uid, displayId: a.displayId, name: a.name }) }
+  } catch { /* card still useful with just the default */ }
+  return opts.length ? opts.slice(0, 5) : null
+}
+
+// ── Human approval: post a flagged invoice coded to a CHOSEN account ──────
+// The JAWS account-choice buttons (handled in /api/slack/ask) call this with
+// the flag row id + the picked account. Re-extracts the staged PDF, matches
+// the supplier, and posts with EVERY line forced to that account.
+export async function postWithAccount(rowId: string, accountUid: string, accountName: string, approvedBy: string): Promise<string> {
+  const c = sb()
+  const { data: row } = await c.from('ap_auto_entry_log').select('*').eq('id', rowId).maybeSingle()
+  if (!row) return '⚠️ Approval failed — this flag no longer exists.'
+  if (row.outcome === 'posted' || row.myob_bill_uid) return `Already in MYOB (${row.invoice_number || 'invoice'}) — nothing to do.`
+  await c.from('ap_auto_entry_log').update({ approved_by: approvedBy, approved_at: new Date().toISOString() }).eq('id', rowId)
+  return postApprovedRow(c, { ...row, approved_by: approvedBy }, { uid: accountUid, name: accountName })
 }
 
 // ── Human approval: "Approve & post to MYOB" button on flag cards ────────
@@ -924,7 +994,7 @@ export async function approveAndPost(rowId: string, approvedBy: string): Promise
   return postApprovedRow(c, { ...row, approved_by: approvedBy })
 }
 
-async function postApprovedRow(c: SupabaseClient, row: any): Promise<string> {
+async function postApprovedRow(c: SupabaseClient, row: any, accountOverride?: { uid: string; name: string } | null): Promise<string> {
   const companyFile: CompanyFileLabel = (row.company_file as CompanyFileLabel) || 'VPS'
   const { data: blob, error: dlErr } = await c.storage.from(AP_BUCKET).download(row.pdf_storage_path)
   if (dlErr || !blob) return `⚠️ ${row.invoice_number || 'invoice'}: staged PDF unavailable (${dlErr?.message || 'gone'}) — enter manually.`
@@ -949,6 +1019,7 @@ async function postApprovedRow(c: SupabaseClient, row: any): Promise<string> {
     companyFile, supplierUid: match.supplier.uid, supplierName: match.supplier.name,
     statementAmount: null, pdfBytes: bytes, pdfFilename: cleanName, postedBy: ACTOR,
     acceptLowConfidence: true,
+    accountUidOverride: accountOverride || null,
   }
   let posted = await postFoundInvoiceToMyob({ ...postArgs, extracted })
   if (!posted.posted && /sum|total|nudge|cannot post/i.test(posted.reason || '')) {
@@ -1023,7 +1094,7 @@ async function processApprovedRows(c: SupabaseClient): Promise<void> {
   for (const row of rows || []) {
     try {
       const result = await postApprovedRow(c, row)
-      await sendSlack({ text: result, blocks: [{ type: 'section', text: { type: 'mrkdwn', text: result } }] })
+      await sendSlack({ text: result, blocks: [{ type: 'section', text: { type: 'mrkdwn', text: result } }] }, row.company_file)
     } catch (e: any) {
       console.error('[ap-auto-entry] approved-row post failed:', e?.message || e)
     }

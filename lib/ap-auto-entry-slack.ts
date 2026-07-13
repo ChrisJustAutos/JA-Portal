@@ -25,6 +25,10 @@ export interface AutoEntrySlackInput {
   // ap_auto_entry_log row id — renders an "Approve & post to MYOB" button on
   // flag cards (handled by /api/slack/ask → approveAndPost).
   approveValue?: string | null
+  // JAWS account-choice buttons: post the flagged invoice coded to a chosen
+  // account. First option is the system's best guess (shown "suggested").
+  // Each → action_id ap_post_account, value {r:rowId,a:uid,n:name}.
+  accountOptions?: { uid: string; displayId: string; name: string; suggested?: boolean }[] | null
   // Credit note — amounts arrive already NEGATIVE; the card labels it.
   isCreditNote?: boolean
   failReasons?: string[]
@@ -135,6 +139,21 @@ export function buildAutoEntryBlocks(i: AutoEntrySlackInput): { text: string; bl
     })
   }
   if (actions.length) blocks.push({ type: 'actions', elements: actions })
+
+  // JAWS account-choice row: one button per candidate expense account. The
+  // suggested account is styled primary and labelled; picking any posts the
+  // invoice coded to that account (handled by /api/slack/ask → postWithAccount).
+  if (i.outcome === 'flagged' && i.approveValue && i.accountOptions?.length) {
+    blocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: '*Post coded to which account?*' }] })
+    const acctButtons = i.accountOptions.slice(0, 5).map(opt => ({
+      type: 'button',
+      ...(opt.suggested ? { style: 'primary' as const } : {}),
+      action_id: `ap_post_account_${opt.uid}`,
+      value: JSON.stringify({ r: i.approveValue, a: opt.uid, n: `${opt.displayId} ${opt.name}`.trim() }),
+      text: { type: 'plain_text', text: `${opt.suggested ? '⭐ ' : ''}${opt.displayId} ${opt.name}`.slice(0, 75), emoji: true },
+    }))
+    blocks.push({ type: 'actions', elements: acctButtons })
+  }
 
   return { text: text.slice(0, 300), blocks }
 }

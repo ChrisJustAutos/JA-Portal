@@ -298,7 +298,9 @@ export async function listMessagesWithAttachments(
   // hasAttachments=false — inline-attached PDFs (contentDisposition inline)
   // and link-only mails report false and were invisible to the AP scanners
   // (GE Group statements, 2026-07-08). Callers then probe /attachments.
-  opts: { sinceIsoDate?: string; top?: number; alsoSubjects?: RegExp } = {},
+  // folderId: scan a specific mail folder instead of the Inbox (e.g. the
+  // JAWS "Portal Invoices" intake folder — resolve via findFolderByDisplayName*).
+  opts: { sinceIsoDate?: string; top?: number; alsoSubjects?: RegExp; folderId?: string } = {},
 ): Promise<GraphMessageSummary[]> {
   const wanted = Math.min(Math.max(opts.top || 50, 1), 100)
   const fetchTop = Math.min(wanted * 2, 200)
@@ -312,7 +314,8 @@ export async function listMessagesWithAttachments(
     queryParams['$filter'] = `receivedDateTime ge ${opts.sinceIsoDate}`
   }
   const params = new URLSearchParams(queryParams)
-  const path = `/users/${encodeURIComponent(mailbox)}/mailFolders/Inbox/messages?${params.toString()}`
+  const folder = opts.folderId ? encodeURIComponent(opts.folderId) : 'Inbox'
+  const path = `/users/${encodeURIComponent(mailbox)}/mailFolders/${folder}/messages?${params.toString()}`
 
   const data = await graphJson<{ value: any[] }>(path)
   const all = (data.value || []).map(m => ({
