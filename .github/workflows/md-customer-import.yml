@@ -1,0 +1,51 @@
+name: Monday leads -> MD customers (nightly)
+
+# Nightly import of new sales quote-channel leads (Monday) into MechanicDesk
+# as customers — kills the daily double entry. See scripts/import-monday-leads.ts.
+# Manual runs support dry-run and the create/delete self-check.
+
+on:
+  schedule:
+    - cron: '0 16 * * *'   # 2am Brisbane
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Run mode
+        type: choice
+        options: [real, dry-run, test-create]
+        default: dry-run
+
+jobs:
+  run:
+    name: import monday leads
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci || npm install
+
+      - name: Install Playwright chromium
+        run: |
+          npm install --no-save playwright
+          npx playwright install --with-deps chromium
+
+      - name: Import
+        env:
+          MONDAY_API_TOKEN:         ${{ secrets.MONDAY_API_TOKEN }}
+          MECHANICDESK_WORKSHOP_ID: ${{ secrets.MECHANICDESK_WORKSHOP_ID }}
+          MECHANICDESK_USERNAME:    ${{ secrets.MECHANICDESK_USERNAME }}
+          MECHANICDESK_PASSWORD:    ${{ secrets.MECHANICDESK_PASSWORD }}
+          JA_PORTAL_BASE_URL:       ${{ secrets.JA_PORTAL_BASE_URL }}
+          JA_PORTAL_API_KEY:        ${{ secrets.JA_PORTAL_API_KEY }}
+          DRY_RUN:                  ${{ inputs.mode == 'dry-run' && '1' || '' }}
+          TEST_CREATE:              ${{ inputs.mode == 'test-create' && '1' || '' }}
+        run: npx tsx scripts/import-monday-leads.ts
