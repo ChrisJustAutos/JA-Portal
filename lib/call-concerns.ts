@@ -168,24 +168,24 @@ async function mdJobHistory(mdId: string | null, customerName: string | null): P
 
 const CAT_EMOJI: Record<string, string> = { complaint: '🔴', concern: '🟠', support: '🔵' }
 
-// Channel message = ONE scannable line (Director's requirement, 2026-07-13);
-// everything else lives in the thread.
-function rootLine(row: { category: string; caller: string; headline: string; advisor: string; when: string }): string {
-  const cat = `${CAT_EMOJI[row.category] || '🟠'} *${row.category[0].toUpperCase()}${row.category.slice(1)}*`
-  return `${cat} — ${row.caller} · _"${row.headline}"_ · ${row.advisor} · ${row.when}`
+// Channel message = name & what happened, nothing else (Director's
+// requirement, 2026-07-13). Category shows only as the emoji colour;
+// advisor/time/severity all live in the thread.
+function rootLine(row: { category: string; caller: string; headline: string }): string {
+  return `${CAT_EMOJI[row.category] || '🟠'} *${row.caller}* — ${row.headline}`
 }
 
 // Thread reply 1: the full working detail + the action buttons.
 function detailBlocks(row: {
-  id: string; severity: string; summary: string; action_items: string[]
-  phone: string | null; durationSec: number; callId: string; callYmd: string
+  id: string; category: string; severity: string; summary: string; action_items: string[]
+  phone: string | null; advisor: string; when: string; durationSec: number; callId: string; callYmd: string
 }): any[] {
   const items = row.action_items.length ? row.action_items.map(a => `• ${a}`).join('\n') : '_none extracted_'
   return [
     {
       type: 'section', text: {
         type: 'mrkdwn',
-        text: `*What happened*\n${row.summary}\n\n*Action items*\n${items}\n\n*Severity:* ${row.severity} · *call:* ${Math.round(row.durationSec / 60)} min${row.phone ? ` · *number:* ${row.phone}` : ''}`,
+        text: `*What happened*\n${row.summary}\n\n*Action items*\n${items}\n\n*${row.category}* · severity ${row.severity} · taken by ${row.advisor} · ${row.when} · ${Math.round(row.durationSec / 60)} min${row.phone ? ` · ${row.phone}` : ''}`,
       },
     },
     {
@@ -303,10 +303,7 @@ export async function runConcernSweep(opts: { limit?: number; dryRun?: boolean }
 
       const when = new Date(call.call_date).toLocaleString('en-AU', { timeZone: 'Australia/Brisbane', weekday: 'short', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })
       const headline = String(parsed.headline || parsed.summary || '').split(/[.!?]/)[0].slice(0, 90)
-      const line = rootLine({
-        category, caller: callerLabel, headline,
-        advisor: call.effective_advisor_name || call.agent_name || 'Unknown', when,
-      })
+      const line = rootLine({ category, caller: callerLabel, headline })
       const post = await postMessage({ channel: CHANNEL, text: line })
       if (post?.ts) {
         await c.from('call_concerns').update({ slack_channel: post.channel, slack_ts: post.ts }).eq('id', ins.id)
@@ -315,10 +312,11 @@ export async function runConcernSweep(opts: { limit?: number; dryRun?: boolean }
           channel: post.channel, thread_ts: post.ts,
           text: `Details: ${String(parsed.summary || '').slice(0, 140)}`,
           blocks: detailBlocks({
-            id: ins.id, severity,
+            id: ins.id, category, severity,
             summary: String(parsed.summary || ''),
             action_items: actionItems,
             phone: call.external_number || null,
+            advisor: call.effective_advisor_name || call.agent_name || 'Unknown', when,
             durationSec: secs, callId: call.id,
             callYmd: new Date(call.call_date).toLocaleDateString('en-CA', { timeZone: 'Australia/Brisbane' }),
           }),
