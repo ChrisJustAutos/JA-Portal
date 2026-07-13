@@ -871,12 +871,24 @@ export interface MdCustomerCreateInput {
   postcode?: string | null
 }
 
+// AU mobiles display as "0466 427 207" (Chris's preference); non-AU numbers
+// pass through untouched.
+export function formatAuMobile(raw: string | null | undefined): string | null {
+  if (!raw) return null
+  let d = String(raw).replace(/\D/g, '')
+  if (d.startsWith('61') && d.length === 11) d = '0' + d.slice(2)
+  if (d.length === 10 && d.startsWith('04')) return `${d.slice(0, 4)} ${d.slice(4, 7)} ${d.slice(7)}`
+  return String(raw).trim() || null
+}
+
 export async function createMdCustomer(client: MdClient, input: MdCustomerCreateInput): Promise<MdCustomerLite> {
+  // MD IGNORES first_name/last_name on writes and derives them by splitting
+  // the `name` field (discovered 2026-07-13 repairing the first import run —
+  // POST with first/last created nameless "Customer #NNNNN" records).
   const body: Record<string, any> = {
-    first_name: input.firstName,
-    last_name: input.lastName,
+    name: [input.firstName, input.lastName].filter(Boolean).join(' ').trim(),
     is_company: false,
-    ...(input.mobile ? { mobile: input.mobile } : {}),
+    ...(input.mobile ? { mobile: formatAuMobile(input.mobile) } : {}),
     ...(input.email ? { email: input.email } : {}),
     ...(input.postcode ? { address: { postcode: String(input.postcode) } } : {}),
   }

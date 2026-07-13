@@ -47,9 +47,9 @@ export function fmtMobile(raw: string | null): string | null {
   return String(raw).trim() || null
 }
 
-function nameParts(full: string): { first: string; last: string } {
-  const parts = titleIfCaps(full.trim()).split(/\s+/)
-  return { first: parts[0], last: parts.slice(1).join(' ') }
+// Customer #40462 leftovers from the first repair attempt must not survive.
+function cleanupNoise(s: string): string {
+  return s.replace(/Customer #\d+/gi, '').trim() || s
 }
 
 async function readNames(client: MdClient, id: number): Promise<{ first: string | null; last: string | null; mobile: string | null }> {
@@ -65,45 +65,18 @@ async function main() {
     const { client } = await loginToMechanicDesk(browser, WS_ID, MD_USER, MD_PASS)
     console.log('MD login ok')
 
-    const probeTarget = CUSTOMERS[0]
-    const { first, last } = nameParts(probeTarget.name)
-    const fields = { first_name: first, last_name: last, mobile: fmtMobile(probeTarget.mobile) }
-
-    console.log('current state:', JSON.stringify(await readNames(client, probeTarget.id)))
-
-    let winner: string | null = null
-    const attempts: [string, () => Promise<void>][] = [
-      ['flat', async () => { await mdRequest(client, `/customers/${probeTarget.id}`, { method: 'PUT', body: JSON.stringify(fields) }) }],
-      ['nested', async () => { await mdRequest(client, `/customers/${probeTarget.id}`, { method: 'PUT', body: JSON.stringify({ customer: fields }) }) }],
-      ['merged', async () => {
-        const full = await mdRequest<any>(client, `/customers/${probeTarget.id}.json`)
-        const cust = full?.customer ?? full
-        await mdRequest(client, `/customers/${probeTarget.id}`, { method: 'PUT', body: JSON.stringify({ ...cust, ...fields }) })
-      }],
-    ]
-    for (const [label, run] of attempts) {
-      try {
-        await run()
-        const after = await readNames(client, probeTarget.id)
-        console.log(`shape "${label}" → readback:`, JSON.stringify(after))
-        if (after.first === fields.first_name && after.last === fields.last_name) { winner = label; break }
-      } catch (e: any) {
-        console.log(`shape "${label}" errored: ${String(e?.message).slice(0, 150)}`)
-      }
-    }
-    if (!winner) throw new Error('no update shape stuck — needs manual investigation')
-    console.log(`WINNING SHAPE: ${winner}`)
-
-    for (const cust of CUSTOMERS.slice(1)) {
-      const p = nameParts(cust.name)
-      const f = { first_name: p.first, last_name: p.last, mobile: fmtMobile(cust.mobile) }
-      const body = winner === 'flat' ? f
-        : winner === 'nested' ? { customer: f }
-        : { ...((await mdRequest<any>(client, `/customers/${cust.id}.json`))?.customer ?? await mdRequest<any>(client, `/customers/${cust.id}.json`)), ...f }
+    // Discovery from the first repair attempt (run 29217622760): MD ignores
+    // first_name/last_name on writes and instead SPLITS the `name` field
+    // itself (the merged probe set name "Customer #40462" → first "Customer",
+    // last "#40462"). So: send { name, mobile } and let MD do the split.
+    for (const cust of CUSTOMERS) {
+      const display = titleIfCaps(cleanupNoise(cust.name))
+      const body = { name: display, mobile: fmtMobile(cust.mobile) }
       await mdRequest(client, `/customers/${cust.id}`, { method: 'PUT', body: JSON.stringify(body) })
       const after = await readNames(client, cust.id)
-      const ok = after.first === p.first && after.last === p.last
-      console.log(`${ok ? '✓' : '✗'} #${cust.id} ${p.first} ${p.last} — mobile ${after.mobile}`)
+      const gotName = [after.first, after.last].filter(Boolean).join(' ')
+      const ok = gotName.toLowerCase() === display.toLowerCase()
+      console.log(`${ok ? '✓' : '✗'} #${cust.id} want "${display}" got "${gotName}" — mobile ${after.mobile}`)
       if (!ok) process.exitCode = 1
     }
     console.log('repair complete')
