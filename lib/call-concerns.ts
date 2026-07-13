@@ -37,10 +37,11 @@ const NUDGE_GAP_HOURS = 20       // "daily" re-nudge guard
 const PORTAL_URL = process.env.NEXT_PUBLIC_PORTAL_URL || 'https://justautos.app'
 
 export function concernsEnabled(): boolean {
-  // Re-enabled 2026-07-13 after the genuine-issue rework: only faults
-  // attributable to Just Autos work post to Slack; near-misses are recorded
-  // in call_concerns (genuine=false) without posting.
-  return (process.env.CALL_CONCERNS_ENABLED || 'true').toLowerCase() !== 'false'
+  // SWITCHED OFF 2026-07-13 (Chris) after the day's iteration cycle —
+  // detection, posting, and the follow-up chase are all idle. Everything is
+  // preserved (prompt, gates, human-voice format, deletion check); set
+  // CALL_CONCERNS_ENABLED=true (or flip this default) to resume.
+  return (process.env.CALL_CONCERNS_ENABLED || 'false').toLowerCase() === 'true'
 }
 
 let _sb: SupabaseClient | null = null
