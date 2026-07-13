@@ -93,6 +93,7 @@ Respond with ONLY a JSON object:
   "severity": "low"|"medium"|"high"|null,
   "confidence": "high"|"medium"|"low",   // how sure you are of the flag decision
   "customer_name": "name if stated in the call, else null",
+  "headline": "one short clause (max ~10 words) naming the issue, e.g. 'white smoke since engine install'",
   "summary": "2-3 sentences: what the customer's issue is and any commitments staff made",
   "action_items": ["specific actions someone must take, e.g. 'Call John back with the warranty claim outcome'"]
 }`
@@ -167,23 +168,26 @@ async function mdJobHistory(mdId: string | null, customerName: string | null): P
 
 const CAT_EMOJI: Record<string, string> = { complaint: '🔴', concern: '🟠', support: '🔵' }
 
-function concernBlocks(row: {
-  id: string; category: string; severity: string; summary: string; action_items: string[]
-  caller: string; advisor: string; when: string; durationSec: number; callId: string; callYmd: string
+// Channel message = ONE scannable line (Director's requirement, 2026-07-13);
+// everything else lives in the thread.
+function rootLine(row: { category: string; caller: string; headline: string; advisor: string; when: string }): string {
+  const cat = `${CAT_EMOJI[row.category] || '🟠'} *${row.category[0].toUpperCase()}${row.category.slice(1)}*`
+  return `${cat} — ${row.caller} · _"${row.headline}"_ · ${row.advisor} · ${row.when}`
+}
+
+// Thread reply 1: the full working detail + the action buttons.
+function detailBlocks(row: {
+  id: string; severity: string; summary: string; action_items: string[]
+  phone: string | null; durationSec: number; callId: string; callYmd: string
 }): any[] {
   const items = row.action_items.length ? row.action_items.map(a => `• ${a}`).join('\n') : '_none extracted_'
   return [
-    { type: 'header', text: { type: 'plain_text', text: `${CAT_EMOJI[row.category] || '🟠'} ${row.category[0].toUpperCase()}${row.category.slice(1)} — ${row.caller}` } },
     {
-      type: 'section', fields: [
-        { type: 'mrkdwn', text: `*Caller:*\n${row.caller}` },
-        { type: 'mrkdwn', text: `*Taken by:*\n${row.advisor}` },
-        { type: 'mrkdwn', text: `*When:*\n${row.when}` },
-        { type: 'mrkdwn', text: `*Duration / severity:*\n${Math.round(row.durationSec / 60)} min · ${row.severity}` },
-      ],
+      type: 'section', text: {
+        type: 'mrkdwn',
+        text: `*What happened*\n${row.summary}\n\n*Action items*\n${items}\n\n*Severity:* ${row.severity} · *call:* ${Math.round(row.durationSec / 60)} min${row.phone ? ` · *number:* ${row.phone}` : ''}`,
+      },
     },
-    { type: 'section', text: { type: 'mrkdwn', text: `*What happened*\n${row.summary}` } },
-    { type: 'section', text: { type: 'mrkdwn', text: `*Action items*\n${items}` } },
     {
       type: 'actions', elements: [
         { type: 'button', style: 'primary', text: { type: 'plain_text', text: '✓ Mark actioned' }, action_id: 'concern_actioned', value: row.id },
@@ -298,21 +302,27 @@ export async function runConcernSweep(opts: { limit?: number; dryRun?: boolean }
       if (!genuine) continue // near-miss recorded, no Slack, no chase
 
       const when = new Date(call.call_date).toLocaleString('en-AU', { timeZone: 'Australia/Brisbane', weekday: 'short', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })
-      const post = await postMessage({
-        channel: CHANNEL,
-        text: `${CAT_EMOJI[category]} ${category}: ${callerLabel} — ${String(parsed.summary || '').slice(0, 140)}`,
-        blocks: concernBlocks({
-          id: ins.id, category, severity,
-          summary: String(parsed.summary || ''),
-          action_items: actionItems,
-          caller: `${callerLabel}${call.external_number ? ` (${call.external_number})` : ''}`,
-          advisor: call.effective_advisor_name || call.agent_name || 'Unknown',
-          when, durationSec: secs, callId: call.id,
-          callYmd: new Date(call.call_date).toLocaleDateString('en-CA', { timeZone: 'Australia/Brisbane' }),
-        }),
+      const headline = String(parsed.headline || parsed.summary || '').split(/[.!?]/)[0].slice(0, 90)
+      const line = rootLine({
+        category, caller: callerLabel, headline,
+        advisor: call.effective_advisor_name || call.agent_name || 'Unknown', when,
       })
+      const post = await postMessage({ channel: CHANNEL, text: line })
       if (post?.ts) {
         await c.from('call_concerns').update({ slack_channel: post.channel, slack_ts: post.ts }).eq('id', ins.id)
+        // Thread: full detail + buttons, then MD history.
+        await postMessage({
+          channel: post.channel, thread_ts: post.ts,
+          text: `Details: ${String(parsed.summary || '').slice(0, 140)}`,
+          blocks: detailBlocks({
+            id: ins.id, severity,
+            summary: String(parsed.summary || ''),
+            action_items: actionItems,
+            phone: call.external_number || null,
+            durationSec: secs, callId: call.id,
+            callYmd: new Date(call.call_date).toLocaleDateString('en-CA', { timeZone: 'Australia/Brisbane' }),
+          }),
+        })
         const jobs = await mdJobHistory(customer?.mdId || null, customer?.name || null)
         await postMessage({ channel: post.channel, thread_ts: post.ts, text: historyText(jobs, customer?.name || null) })
       }
