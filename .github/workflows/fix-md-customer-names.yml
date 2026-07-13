@@ -1,0 +1,37 @@
+name: Fix — MD customer names (one-off repair)
+
+# Repairs the 12 customers created 2026-07-13 whose names MD dropped on
+# create; also discovers the update shape for createMdCustomer. Manual only.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  run:
+    name: fix md customer names
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci || npm install
+
+      - name: Install Playwright chromium
+        run: |
+          npm install --no-save playwright
+          npx playwright install --with-deps chromium
+
+      - name: Repair
+        env:
+          MECHANICDESK_WORKSHOP_ID: ${{ secrets.MECHANICDESK_WORKSHOP_ID }}
+          MECHANICDESK_USERNAME:    ${{ secrets.MECHANICDESK_USERNAME }}
+          MECHANICDESK_PASSWORD:    ${{ secrets.MECHANICDESK_PASSWORD }}
+        run: npx tsx scripts/fix-md-customer-names.ts

@@ -896,3 +896,9 @@ export async function deleteMdCustomer(client: MdClient, customerId: number, rea
     body: JSON.stringify({ deleted_reason: reason }),
   })
 }
+
+// Generic escape hatch for one-off scripts (customer repair etc.) — same
+// cookie/CSRF handling as every other MD call in this lib.
+export function mdRequest<T = any>(client: MdClient, path: string, init: RequestInit = {}): Promise<T> {
+  return mdFetch<T>(client, path, init)
+}
