@@ -294,8 +294,11 @@ export async function computeDistributorsPayload(start: string, end: string) {
 
 // ── Range key classifier ────────────────────────────────────────────────
 export function classifyRangeKey(start: string, end: string): string {
-  if (start === '2024-07-01' && end === '2025-06-30') return 'FY2025'
-  if (start === '2025-07-01' && end === '2026-06-30') return 'FY2026'
+  // Any AU financial year (Jul 1 YYYY-1 → Jun 30 YYYY) → "FY<YYYY>", computed
+  // rather than hardcoded so each new FY works without a code change.
+  const fyStart = /^(\d{4})-07-01$/.exec(start)
+  const fyEnd = /^(\d{4})-06-30$/.exec(end)
+  if (fyStart && fyEnd && Number(fyEnd[1]) === Number(fyStart[1]) + 1) return `FY${fyEnd[1]}`
   const mStart = /^(\d{4})-(\d{2})-01$/.exec(start)
   if (mStart) {
     const year = Number(mStart[1])

@@ -98,7 +98,7 @@ function autoEntryInboxes(dryRun: boolean): AutoEntryInbox[] {
     const legacy = (process.env.AP_AUTO_ENTRY_MAILBOX || '').trim()
     out.push({ mailbox: legacy || 'accounts@justautosmechanical.com.au', companyFile: 'VPS' })
   }
-  const jawsLive = (process.env.AP_AUTO_ENTRY_JAWS || 'false').toLowerCase() === 'true'
+  const jawsLive = (process.env.AP_AUTO_ENTRY_JAWS || 'true').toLowerCase() === 'true'
   if (jawsLive || dryRun) {
     out.push({
       mailbox: process.env.AP_AUTO_ENTRY_JAWS_MAILBOX || 'accounts@justautoswholesale.com',

@@ -29,9 +29,13 @@ function lastDayOfMonth(year: number, monthOneBased: number): number {
 function getRangesToRefresh(now = new Date()): RangeSpec[] {
   const ranges: RangeSpec[] = []
 
-  // Financial years
-  ranges.push({ start: '2024-07-01', end: '2025-06-30', label: 'FY2025' })
-  ranges.push({ start: '2025-07-01', end: '2026-06-30', label: 'FY2026' })
+  // Financial years: FY2025 through the CURRENT FY, computed so a new FY is
+  // pre-warmed automatically each July (was hardcoded to FY2025/FY2026 — the
+  // current FY silently fell out of the cache, Chris 2026-07-14).
+  const curFY = now.getUTCMonth() >= 6 ? now.getUTCFullYear() + 1 : now.getUTCFullYear()
+  for (let fy = 2025; fy <= curFY; fy++) {
+    ranges.push({ start: `${fy - 1}-07-01`, end: `${fy}-06-30`, label: `FY${fy}` })
+  }
 
   // Last 13 months (including current)
   for (let i = 0; i < 13; i++) {

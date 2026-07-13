@@ -152,11 +152,15 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
   const pad=(n:number)=>String(n).padStart(2,'0')
   const monthStart=`${now.getFullYear()}-${pad(now.getMonth()+1)}-01`
   const monthEnd=`${now.getFullYear()}-${pad(now.getMonth()+1)}-${pad(new Date(now.getFullYear(),now.getMonth()+1,0).getDate())}`
+  // Default to the CURRENT financial year (Chris 2026-07-14) — was opening on
+  // the current month. FY range: Jul 1 (currentFY-1) → Jun 30 currentFY.
+  const fyDefaultStart=`${currentFY-1}-07-01`
+  const fyDefaultEnd=`${currentFY}-06-30`
   const [fyYear,setFyYear]=useState(currentFY)
-  const [isCustomRange,setIsCustomRange]=useState(true)
+  const [isCustomRange,setIsCustomRange]=useState(false)
   const [customStart,setCustomStart]=useState(monthStart)
   const [customEnd,setCustomEnd]=useState(monthEnd)
-  const [activeDateParams,setActiveDateParams]=useState(`startDate=${monthStart}&endDate=${monthEnd}`)
+  const [activeDateParams,setActiveDateParams]=useState(`startDate=${fyDefaultStart}&endDate=${fyDefaultEnd}`)
   const [dateLoading,setDateLoading]=useState(false)
   const [reloadCounter,setReloadCounter]=useState(0)
   const [nextLoadIsRefresh,setNextLoadIsRefresh]=useState(false)
