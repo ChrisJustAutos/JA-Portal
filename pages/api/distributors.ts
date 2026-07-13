@@ -29,7 +29,8 @@
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { createClient } from '@supabase/supabase-js'
 import { requireAuth } from '../../lib/auth'
-import { cdataQuery, parseDateRange, endDateExclusive } from '../../lib/cdata'
+import { parseDateRange, endDateExclusive } from '../../lib/cdata'
+import { fetchSaleInvoicesWithLines } from '../../lib/myob-reporting'
 import { lineExGst } from '../../lib/gst'
 import { getGrouping, groupNameFor, GroupingSnapshot } from '../../lib/distGroups'
 
@@ -140,17 +141,12 @@ export async function computeDistributorsPayload(start: string, end: string) {
     }
   }
 
-  const invRes: any = await cdataQuery('JAWS',
-    "SELECT [ID],[Number],[Date],[CustomerName],[CustomerPurchaseOrderNumber],[IsTaxInclusive] FROM [MYOB_POWERBI_JAWS].[MYOB].[SaleInvoices] WHERE [Date] >= '" + start + "' AND [Date] < '" + endDateExclusive(end) + "'"
-  )
-  const invCols: string[] = invRes?.results?.[0]?.schema?.map((c: any) => c.columnName) || []
-  const invRows: any[][] = invRes?.results?.[0]?.rows || []
+  // Direct MYOB OAuth (CData decommissioned 2026-07-14). One pass over the
+  // date range's Item invoices yields both the header map and the flattened
+  // lines; filter the lines to the income accounts in scope here.
+  const { invoices, lines: allLines } = await fetchSaleInvoicesWithLines('JAWS', { start, endExclusive: endDateExclusive(end) })
   const invById = new Map<string, any>()
-  for (const r of invRows) {
-    const o: any = {}
-    invCols.forEach((c, i) => { o[c] = r[i] })
-    invById.set(o.ID, o)
-  }
+  for (const inv of invoices) invById.set(inv.ID, inv)
 
   if (invById.size === 0) {
     return {
@@ -160,12 +156,8 @@ export async function computeDistributorsPayload(start: string, end: string) {
     }
   }
 
-  const accList = allAccounts.map(a => "'" + a + "'").join(',')
-  const lineRes: any = await cdataQuery('JAWS',
-    "SELECT [SaleInvoiceId],[AccountDisplayID],[TaxCodeCode],[Total],[Description] FROM [MYOB_POWERBI_JAWS].[MYOB].[SaleInvoiceItems] WHERE [AccountDisplayID] IN (" + accList + ")"
-  )
-  const lCols: string[] = lineRes?.results?.[0]?.schema?.map((c: any) => c.columnName) || []
-  const lRows: any[][] = lineRes?.results?.[0]?.rows || []
+  const accSet = new Set(allAccounts)
+  const lRows = allLines.filter(l => l.AccountDisplayID && accSet.has(l.AccountDisplayID))
 
   // Region detection: customers in the 'International' group in the region
   // dimension are tagged as such. Default for everyone else is National.
@@ -179,9 +171,7 @@ export async function computeDistributorsPayload(start: string, end: string) {
   }
 
   const byDist = new Map<string, any>()
-  for (const r of lRows) {
-    const line: any = {}
-    lCols.forEach((c, i) => { line[c] = r[i] })
+  for (const line of lRows) {
     const inv = invById.get(line.SaleInvoiceId)
     if (!inv) continue
     const raw: string = String(inv.CustomerName || '')
