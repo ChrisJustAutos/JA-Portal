@@ -1,0 +1,44 @@
+name: Probe — MD customer routes
+
+# One-shot reconnaissance for the Monday→MD customer import (manual only).
+# Discovers customer search/detail endpoints + field shape; read the logs,
+# then bake the winning routes into lib/mechanicdesk-stocktake.ts.
+
+on:
+  workflow_dispatch:
+    inputs:
+      query:
+        description: Customer search term to probe with
+        default: smith
+        required: false
+
+jobs:
+  run:
+    name: probe md customers
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci || npm install
+
+      - name: Install Playwright chromium
+        run: |
+          npm install --no-save playwright
+          npx playwright install --with-deps chromium
+
+      - name: Probe
+        env:
+          MECHANICDESK_WORKSHOP_ID: ${{ secrets.MECHANICDESK_WORKSHOP_ID }}
+          MECHANICDESK_USERNAME:    ${{ secrets.MECHANICDESK_USERNAME }}
+          MECHANICDESK_PASSWORD:    ${{ secrets.MECHANICDESK_PASSWORD }}
+          PROBE_QUERY:              ${{ inputs.query }}
+        run: npx tsx scripts/probe-md-customers.ts
