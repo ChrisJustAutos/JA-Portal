@@ -914,3 +914,76 @@ export async function deleteMdCustomer(client: MdClient, customerId: number, rea
 export function mdRequest<T = any>(client: MdClient, path: string, init: RequestInit = {}): Promise<T> {
   return mdFetch<T>(client, path, init)
 }
+
+// ── Weekly Sales Recap — MD diary notes + forward-booking forecast ─────────
+// Endpoints confirmed 2026-07-14 (probe-md-diary-jobs). Both use the proven
+// /auto_workshop/diary + /jobs/{id} data routes (NOT the /mdweb SPA shell).
+
+export interface MdDiaryNote {
+  content: string
+  start: string | null   // ISO — first day the note applies
+  end: string | null     // ISO — last day
+  officeOnly: boolean
+  workshopOnly: boolean
+}
+
+// Diary notes overlapping [fromYmd, toYmd] — the "diary view note section"
+// (staff/mechanics away etc). One /auto_workshop/diary call covers the range.
+export async function fetchDiaryNotes(client: MdClient, fromYmd: string, toYmd: string): Promise<MdDiaryNote[]> {
+  const start = `${fromYmd}T00:00:00+10:00`
+  const end = `${toYmd}T23:59:59+10:00`
+  const diary = await mdFetch<any>(client, `/auto_workshop/diary?start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}`)
+  const notes: any[] = Array.isArray(diary?.notes) ? diary.notes : []
+  const rangeStart = new Date(start).getTime()
+  const rangeEnd = new Date(end).getTime()
+  return notes
+    .filter(n => {
+      const ns = n.start ? new Date(n.start).getTime() : rangeStart
+      const ne = n.end ? new Date(n.end).getTime() : rangeStart
+      return ns <= rangeEnd && ne >= rangeStart // overlaps the window
+    })
+    .map(n => ({
+      content: String(n.content || '').trim(),
+      start: n.start || null, end: n.end || null,
+      officeOnly: n.office_only === true, workshopOnly: n.workshop_only === true,
+    }))
+    .filter(n => n.content)
+}
+
+export interface MdForecastMonth { month: string; value: number; jobCount: number }
+
+// Forward-booking forecast by month: walk the diary forward, then fetch each
+// job's value (invoice total, else job total, else 0) and group by the
+// SCHEDULED month. HQ bookings only (the diary is the HQ workshop diary).
+export async function fetchForwardBookingForecast(
+  client: MdClient, fromYmd: string, monthsAhead: number, log: (m: string) => void = () => {},
+): Promise<MdForecastMonth[]> {
+  const from = new Date(`${fromYmd}T00:00:00+10:00`)
+  const to = new Date(from); to.setMonth(to.getMonth() + monthsAhead)
+  const diary = await mdFetch<any>(client, `/auto_workshop/diary?start=${encodeURIComponent(from.toISOString())}&end=${encodeURIComponent(to.toISOString())}`)
+  const rows: any[] = [...(diary?.bookings || []), ...(diary?.jobs || [])]
+  // Unique jobs, scheduled date = time/start, skip deleted.
+  const byId = new Map<number, string>()
+  for (const r of rows) {
+    if (r?.deleted) continue
+    const jid = Number(r?.job_id ?? r?.id)
+    const sched = r?.time || r?.start
+    if (jid && isFinite(jid) && sched) byId.set(jid, String(sched).slice(0, 7)) // YYYY-MM
+  }
+  log(`  forecast: ${byId.size} forward job(s)`)
+  const ids = Array.from(byId.keys())
+  const months = new Map<string, { value: number; jobCount: number }>()
+  await mapPool(ids, 8, async (jid) => {
+    let value = 0
+    try {
+      const j = await mdFetch<any>(client, `/jobs/${jid}?id=${jid}`)
+      value = Number(j?.invoice?.total_amount) || Number(j?.total_amount) || 0
+    } catch { /* count with 0 value */ }
+    const m = byId.get(jid)!
+    const e = months.get(m) || { value: 0, jobCount: 0 }
+    e.value += value; e.jobCount += 1
+    months.set(m, e)
+  })
+  return Array.from(months.entries()).sort((a, b) => a[0].localeCompare(b[0]))
+    .map(([month, v]) => ({ month, value: Math.round(v.value * 100) / 100, jobCount: v.jobCount }))
+}
