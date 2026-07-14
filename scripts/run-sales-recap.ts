@@ -56,7 +56,16 @@ async function main() {
     })
     const out = await r.json().catch(() => ({}))
     if (!r.ok) throw new Error(`generate ${r.status}: ${JSON.stringify(out).slice(0, 300)}`)
-    log(`DONE: ${JSON.stringify(out).slice(0, 300)}`)
+    log(`DONE: ok=${out.ok} dryRun=${out.dryRun} week=${JSON.stringify(out.week)}`)
+
+    // On a dry run, dump the full assembled recap to the GH step summary so the
+    // numbers can be eyeballed against the source docs without emailing/storing.
+    if (DRY_RUN && out.recap && process.env.GITHUB_STEP_SUMMARY) {
+      const { writeFileSync } = await import('fs')
+      writeFileSync(process.env.GITHUB_STEP_SUMMARY,
+        '## Sales Recap — dry run\n\n```json\n' + JSON.stringify(out.recap, null, 2) + '\n```\n', { flag: 'a' })
+      log('full recap written to step summary')
+    }
   } finally {
     await browser.close()
   }
