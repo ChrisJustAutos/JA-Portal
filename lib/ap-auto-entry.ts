@@ -788,7 +788,9 @@ async function processInvoice(
       // Pre-generate the log row id so the card's Approve button can carry it.
       const rowId = randomUUID()
       const staged = await stageAndSign(c, msg, attId, bytes, kind).catch(() => null)
-      const withUrl = buildAutoEntryBlocks({ ...slackCommon, outcome: 'flagged', failReasons, pdfUrl: staged?.url, approveValue: staged ? rowId : null })
+      // Approve no longer needs the staged PDF (postApprovedRow falls back to
+      // re-reading the attachment from Graph), so the button always shows.
+      const withUrl = buildAutoEntryBlocks({ ...slackCommon, outcome: 'flagged', failReasons, pdfUrl: staged?.url, approveValue: rowId })
       const ts = await sendSlack(withUrl, companyFile)
       await logRow(c, { mailbox, companyFile, msg, attId, attName }, { id: rowId, outcome: 'flagged', supplierName, supplierUid, invoiceNumber: extracted.invoiceNumber, invoiceDate: extracted.invoiceDate, amount: signedTotal, failReasons, bankCheck: effectiveBank, pdfStoragePath: staged?.path || null, slackTs: ts })
     }
@@ -847,7 +849,7 @@ async function processInvoice(
     // approveAndPost can re-extract + retry with a human vouching) — 160370266
     // showed up buttonless because only the triage-flag branch passed one.
     const rowId = randomUUID()
-    const built = buildAutoEntryBlocks({ ...slackCommon, outcome: 'flagged', failReasons: reasons, pdfUrl: staged?.url, approveValue: staged ? rowId : null })
+    const built = buildAutoEntryBlocks({ ...slackCommon, outcome: 'flagged', failReasons: reasons, pdfUrl: staged?.url, approveValue: rowId })
     const ts = await sendSlack(built, companyFile)
     await logRow(c, { mailbox, companyFile, msg, attId, attName }, { id: rowId, outcome: 'error', supplierName, supplierUid, invoiceNumber: extracted.invoiceNumber, invoiceDate: extracted.invoiceDate, amount: signedTotal, failReasons: reasons, bankCheck: effectiveBank, error: posted.reason || null, pdfStoragePath: staged?.path || null, slackTs: ts })
     return { ...base, supplierName, invoiceNumber: extracted.invoiceNumber, amount: signedTotal, outcome: 'error', bankCheck: effectiveBank, failReasons: reasons, error: posted.reason }
@@ -987,7 +989,6 @@ export async function approveAndPost(rowId: string, approvedBy: string): Promise
   const { data: row } = await c.from('ap_auto_entry_log').select('*').eq('id', rowId).maybeSingle()
   if (!row) return '⚠️ Approval failed — this flag no longer exists.'
   if (row.outcome === 'posted' || row.myob_bill_uid) return `Already in MYOB (${row.invoice_number || 'invoice'}) — nothing to do.`
-  if (!row.pdf_storage_path) return `⚠️ Can't post ${row.invoice_number || 'this invoice'} — no staged PDF on the flag. Enter manually.`
   await c.from('ap_auto_entry_log')
     .update({ approved_by: approvedBy, approved_at: new Date().toISOString() })
     .eq('id', rowId)
@@ -996,9 +997,28 @@ export async function approveAndPost(rowId: string, approvedBy: string): Promise
 
 async function postApprovedRow(c: SupabaseClient, row: any, accountOverride?: { uid: string; name: string } | null): Promise<string> {
   const companyFile: CompanyFileLabel = (row.company_file as CompanyFileLabel) || 'VPS'
-  const { data: blob, error: dlErr } = await c.storage.from(AP_BUCKET).download(row.pdf_storage_path)
-  if (dlErr || !blob) return `⚠️ ${row.invoice_number || 'invoice'}: staged PDF unavailable (${dlErr?.message || 'gone'}) — enter manually.`
-  const bytes = Buffer.from(await blob.arrayBuffer())
+  let bytes: Buffer | null = null
+  if (row.pdf_storage_path) {
+    const { data: blob, error: dlErr } = await c.storage.from(AP_BUCKET).download(row.pdf_storage_path)
+    if (!dlErr && blob) bytes = Buffer.from(await blob.arrayBuffer())
+  }
+  if (!bytes) {
+    // Staging failed when the flag was raised (or the staged copy is gone).
+    // Flagged emails stay in the inbox, so re-read the attachment from Graph —
+    // but NOT for batch segments (`<attId>#p2-3`): the raw attachment holds
+    // the whole multi-invoice PDF, and re-extracting it would post the wrong
+    // invoice(s) for this row.
+    const rawAttId = String(row.graph_attachment_id || '')
+    if (rawAttId && !rawAttId.includes('#')) {
+      try {
+        const b64 = await getAttachmentBase64(String(row.mailbox || ''), String(row.graph_message_id || ''), rawAttId)
+        if (b64) bytes = Buffer.from(b64, 'base64')
+      } catch (e: any) {
+        console.warn(`[ap-auto-entry] approve graph re-read failed for ${row.id}:`, e?.message || e)
+      }
+    }
+  }
+  if (!bytes) return `⚠️ ${row.invoice_number || 'invoice'}: staged PDF unavailable and the source email couldn't be re-read — enter manually.`
 
   let extracted: ExtractedAPInvoice
   try {
@@ -1088,7 +1108,6 @@ async function processApprovedRows(c: SupabaseClient): Promise<void> {
   const { data: rows } = await c.from('ap_auto_entry_log')
     .select('*')
     .eq('outcome', 'flagged').not('approved_at', 'is', null).is('myob_bill_uid', null)
-    .not('pdf_storage_path', 'is', null)
     .is('error', null)   // a failed approved-post sets error — no retry loop; re-click to retry
     .limit(5)
   for (const row of rows || []) {
@@ -1108,7 +1127,11 @@ async function stageAndSign(
   const ext = kind === 'pdf' ? 'pdf' : kind.split('/')[1] || 'bin'
   const path = `auto-entry/${msg.id}_${attId}.${ext}`.replace(/[^\w./-]/g, '_')
   const contentType = kind === 'pdf' ? 'application/pdf' : kind
-  const up = await c.storage.from(AP_BUCKET).upload(path, bytes, { contentType, upsert: true })
+  let up = await c.storage.from(AP_BUCKET).upload(path, bytes, { contentType, upsert: true })
+  if (up.error) {
+    // Uploads fail transiently a few % of the time — one retry rescues most.
+    up = await c.storage.from(AP_BUCKET).upload(path, bytes, { contentType, upsert: true })
+  }
   if (up.error) { console.error('[ap-auto-entry] stage upload failed:', up.error.message); return null }
   const signed = await c.storage.from(AP_BUCKET).createSignedUrl(path, SIGNED_URL_TTL_SEC)
   if (signed.error || !signed.data?.signedUrl) return null
