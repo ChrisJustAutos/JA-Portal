@@ -457,6 +457,50 @@ function isBatchSource(mailbox: string, fromAddress: string | null | undefined):
 
 const MAX_BATCH_SEGMENTS = 15
 
+// Staff senders (photos of receipts/invoices forwarded from phones). Suffix
+// match on the sender address; domain list is env-tunable.
+function isStaffSender(fromAddress: string | null | undefined): boolean {
+  const raw = (process.env.AP_STAFF_SENDER_DOMAINS ?? 'justautosmechanical.com.au').trim()
+  const domains = raw.split(/[,;]+/).map(s => s.trim().toLowerCase().replace(/^@/, '')).filter(Boolean)
+  const from = String(fromAddress || '').toLowerCase()
+  return domains.some(d => from.endsWith(`@${d}`))
+}
+
+// A staff-forwarded photo the extractor couldn't anchor (parse failure, or no
+// invoice number + total even on the strong model). These are deliberate sends
+// — a fuel receipt snapped on a phone — so a silent skip loses real paperwork
+// (Chris 2026-07-15, EG Group fuel receipt). Stage the image and tell Slack to
+// enter it manually. The size floor keeps embedded signature logos and email
+// banners (small images, also often from staff forwards) silent as before.
+const STAFF_PHOTO_MIN_BYTES = 250_000
+
+async function maybeFlagStaffPhoto(
+  c: SupabaseClient,
+  ctx: { mailbox: string; companyFile: CompanyFileLabel; msg: GraphMessageSummary; dryRun: boolean },
+  inv: { bytes: Buffer; kind: 'pdf' | SupportedImageMediaType; attId: string; attName: string },
+  partial: ExtractedAPInvoice | null,
+): Promise<{ ts: string | null; stagedPath: string | null; note: string | null }> {
+  const silent = { ts: null, stagedPath: null, note: null }
+  if (ctx.dryRun) return silent
+  if (inv.kind === 'pdf' || inv.bytes.length < STAFF_PHOTO_MIN_BYTES || !isStaffSender(ctx.msg.from)) return silent
+
+  const staged = await stageAndSign(c, ctx.msg, inv.attId, inv.bytes, inv.kind).catch(() => null)
+  const lines = [
+    `📸 *Couldn't read a staff photo as an invoice*`,
+    `From *${ctx.msg.from || 'unknown'}* — “${ctx.msg.subject || '(no subject)'}” · ${inv.attName || 'photo'}`,
+    partial?.vendor?.name ? `Best-guess supplier: *${partial.vendor.name}*` : null,
+    partial?.totals?.totalIncGst != null ? `Total seen: ${money(partial.totals.totalIncGst)}` : null,
+    `No invoice number + total could be anchored, so nothing was entered. Enter it manually, or resend a clearer photo / PDF. The email is still in the ${ctx.mailbox} inbox.`,
+  ].filter(Boolean) as string[]
+  const text = lines.join('\n')
+  const blocks: any[] = [{ type: 'section', text: { type: 'mrkdwn', text } }]
+  if (staged?.url) {
+    blocks.push({ type: 'actions', elements: [{ type: 'button', text: { type: 'plain_text', text: 'View photo' }, url: staged.url }] })
+  }
+  const ts = await sendSlack({ text, blocks }, ctx.companyFile)
+  return { ts, stagedPath: staged?.path || null, note: 'unreadable staff photo — flagged to Slack' }
+}
+
 async function processAttachment(
   c: SupabaseClient,
   ctx: { mailbox: string; companyFile: CompanyFileLabel; msg: GraphMessageSummary; att: GraphAttachmentMeta; kind: 'pdf' | SupportedImageMediaType; dryRun: boolean },
@@ -595,10 +639,14 @@ async function processInvoice(
         if (bytes.length < 100 || !bytes.subarray(0, 5).toString('ascii').startsWith('%PDF-')) throw new Error('not a PDF')
         extracted = (await extractInvoiceFromPdf(b64, inv.isScan ? { model: scanExtractionModel() } : {})).invoice
       } else {
-        extracted = (await extractInvoiceFromImage(b64, kind)).invoice
+        // Phone photos are the hardest inputs in the pipeline — same strong
+        // model as scanned paper batches (Haiku missed a thermal fuel receipt
+        // outright, Chris 2026-07-15).
+        extracted = (await extractInvoiceFromImage(b64, kind, { model: scanExtractionModel() })).invoice
       }
     } catch {
-      if (!dryRun) await logRow(c, { mailbox, companyFile, msg, attId, attName }, { outcome: 'skipped_not_invoice' })
+      const flagged = await maybeFlagStaffPhoto(c, ctx, inv, null)
+      if (!dryRun) await logRow(c, { mailbox, companyFile, msg, attId, attName }, { outcome: 'skipped_not_invoice', error: flagged.note, slackTs: flagged.ts, pdfStoragePath: flagged.stagedPath })
       return { ...base, supplierName: null, invoiceNumber: null, amount: null, outcome: 'skipped_not_invoice', bankCheck: 'skipped', failReasons: [] }
     }
   }
@@ -617,7 +665,8 @@ async function processInvoice(
 
   const total = extracted.totals.totalIncGst
   if (!extracted.invoiceNumber || total == null) {
-    if (!dryRun) await logRow(c, { mailbox, companyFile, msg, attId, attName }, { outcome: 'skipped_not_invoice' })
+    const flagged = await maybeFlagStaffPhoto(c, ctx, inv, extracted)
+    if (!dryRun) await logRow(c, { mailbox, companyFile, msg, attId, attName }, { outcome: 'skipped_not_invoice', supplierName: extracted.vendor?.name || null, invoiceNumber: extracted.invoiceNumber, amount: total, error: flagged.note, slackTs: flagged.ts, pdfStoragePath: flagged.stagedPath })
     return { ...base, supplierName: extracted.vendor?.name || null, invoiceNumber: extracted.invoiceNumber, amount: total, outcome: 'skipped_not_invoice', bankCheck: 'skipped', failReasons: [] }
   }
 
@@ -1022,7 +1071,12 @@ async function postApprovedRow(c: SupabaseClient, row: any, accountOverride?: { 
 
   let extracted: ExtractedAPInvoice
   try {
-    extracted = (await extractInvoiceFromPdf(bytes.toString('base64'), { model: scanExtractionModel() })).invoice
+    // The bytes may be a photo, not a PDF (staged .jpeg or a Graph re-read of
+    // an image attachment) — sniff the magic bytes and extract accordingly.
+    const kind = sniffKind(bytes)
+    extracted = kind === 'pdf'
+      ? (await extractInvoiceFromPdf(bytes.toString('base64'), { model: scanExtractionModel() })).invoice
+      : (await extractInvoiceFromImage(bytes.toString('base64'), kind, { model: scanExtractionModel() })).invoice
   } catch (e: any) {
     return `⚠️ ${row.invoice_number || 'invoice'}: re-extraction failed (${(e?.message || e).toString().slice(0, 120)}) — enter manually.`
   }
@@ -1118,6 +1172,17 @@ async function processApprovedRows(c: SupabaseClient): Promise<void> {
       console.error('[ap-auto-entry] approved-row post failed:', e?.message || e)
     }
   }
+}
+
+// Magic-byte sniff for approve-time re-extraction, which receives raw bytes
+// from the staged copy or a Graph re-read with no content-type to hand.
+function sniffKind(bytes: Buffer): 'pdf' | SupportedImageMediaType {
+  if (bytes.subarray(0, 5).toString('ascii').startsWith('%PDF-')) return 'pdf'
+  if (bytes[0] === 0xff && bytes[1] === 0xd8) return 'image/jpeg'
+  if (bytes[0] === 0x89 && bytes[1] === 0x50) return 'image/png'
+  if (bytes.subarray(0, 4).toString('ascii') === 'GIF8') return 'image/gif'
+  if (bytes.subarray(0, 4).toString('ascii') === 'RIFF' && bytes.subarray(8, 12).toString('ascii') === 'WEBP') return 'image/webp'
+  return 'pdf'   // let the PDF extractor produce the error for exotic bytes
 }
 
 // ── Staged PDF for the Slack link (no ap_invoices row exists) ────────────

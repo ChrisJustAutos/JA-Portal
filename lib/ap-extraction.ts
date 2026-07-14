@@ -140,11 +140,12 @@ export async function extractInvoiceFromPdf(pdfBase64: string, opts: { model?: s
 export async function extractInvoiceFromImage(
   imageBase64: string,
   mediaType: SupportedImageMediaType,
+  opts: { model?: string } = {},
 ): Promise<ExtractionResult> {
   return runExtraction([
     { type: 'image', source: { type: 'base64', media_type: mediaType, data: imageBase64 } },
     { type: 'text', text: 'Extract the supplier invoice details as JSON per the system instructions. Output ONLY the JSON object.' },
-  ])
+  ], opts.model)
 }
 
 async function runExtraction(content: any[], modelOverride?: string): Promise<ExtractionResult> {
