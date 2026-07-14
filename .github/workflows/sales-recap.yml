@@ -1,0 +1,42 @@
+name: Weekly Sales Recap (Mon 7am)
+
+# Scrapes MechanicDesk (diary notes + forward forecast) via Playwright, then
+# POSTs to /api/reports/sales-recap/generate which pulls Monday, assembles,
+# renders, stores + emails the recap to Ryan/Matt/Chris.
+
+on:
+  schedule:
+    - cron: '0 21 * * 0'   # 21:00 UTC Sun = 07:00 Mon Brisbane (AEST, no DST)
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Run mode
+        type: choice
+        options: [real, dry-run]
+        default: dry-run
+
+jobs:
+  run:
+    name: weekly sales recap
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci || npm install
+      - name: Install Playwright chromium
+        run: |
+          npm install --no-save playwright
+          npx playwright install --with-deps chromium
+      - name: Run
+        env:
+          MECHANICDESK_WORKSHOP_ID: ${{ secrets.MECHANICDESK_WORKSHOP_ID }}
+          MECHANICDESK_USERNAME:    ${{ secrets.MECHANICDESK_USERNAME }}
+          MECHANICDESK_PASSWORD:    ${{ secrets.MECHANICDESK_PASSWORD }}
+          JA_PORTAL_BASE_URL:       ${{ secrets.JA_PORTAL_BASE_URL }}
+          JA_PORTAL_API_KEY:        ${{ secrets.JA_PORTAL_API_KEY }}
+          DRY_RUN:                  ${{ inputs.mode == 'dry-run' && '1' || '' }}
+        run: npx tsx scripts/run-sales-recap.ts

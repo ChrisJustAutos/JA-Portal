@@ -9,11 +9,12 @@ import { T } from '../lib/ui/theme'
 
 const TABS: Array<{ id: string; label: string; href: string; perm: Permission }> = [
   { id: 'reports',      label: 'Reports',      href: '/reports',      perm: 'view:reports' },
+  { id: 'sales-report', label: 'Sales Report', href: '/reports/sales-report', perm: 'view:reports' },
   { id: 'workshop-map', label: 'Workshop Map', href: '/reports/map',  perm: 'view:reports' },
   { id: 'distributors', label: 'Distributors', href: '/distributors', perm: 'view:distributors' },
 ]
 
-export default function ReportsTabs({ active, role }: { active: 'reports' | 'workshop-map' | 'distributors'; role: UserRole }) {
+export default function ReportsTabs({ active, role }: { active: 'reports' | 'sales-report' | 'workshop-map' | 'distributors'; role: UserRole }) {
   const router = useRouter()
   const tabs = TABS.filter(t => roleHasPermission(role, t.perm))
   if (tabs.length <= 1) return null
