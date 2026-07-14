@@ -28,6 +28,25 @@ export function renderRecapHtml(r: SalesRecap): string {
   parts.push(`<h1 style="font:700 22px Arial,sans-serif;color:${NAVY};margin:0 0 2px">Weekly Sales Recap</h1>`)
   parts.push(`<div style="color:#6b7280;font-size:13px;margin-bottom:8px">Week ${esc(wkLabel)} · generated ${new Date(r.generatedAt).toLocaleString('en-AU', { timeZone: 'Australia/Brisbane', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })} · daily target ${money(r.dailyTarget)}</div>`)
 
+  // Overnight leads panel (unnumbered — sits above the recap sections so the
+  // Monday 7am email leads with what came in since Friday close).
+  if (r.overnight) {
+    const o = r.overnight
+    parts.push(`<h2 style="font:700 16px Arial,sans-serif;color:${NAVY};margin:18px 0 2px">🌙 Overnight Leads — ${o.leads.length ? `<span style="color:#d92d20">${o.leads.length} new</span>` : 'none'}</h2>`)
+    parts.push(`<div style="color:#6b7280;font-size:12px;margin-bottom:4px">New quote-channel enquiries in Monday, ${esc(o.label)}</div>`)
+    if (o.leads.length) {
+      parts.push(table(
+        ['Came in', 'Channel', 'Name', 'Phone'],
+        o.leads.map(l => [
+          new Date(l.createdAt).toLocaleString('en-AU', { timeZone: 'Australia/Brisbane', weekday: 'short', hour: 'numeric', minute: '2-digit', hour12: true }),
+          esc(l.channel), esc(l.name), l.phone ? esc(l.phone) : '—',
+        ]),
+      ))
+    } else {
+      parts.push(`<p style="color:#6b7280;font-size:13px;margin:4px 0 14px">No new leads came in overnight.</p>`)
+    }
+  }
+
   // 1. Current week at a glance
   parts.push(h2(1, `Week at a Glance — ${wkLabel}`))
   parts.push(table(

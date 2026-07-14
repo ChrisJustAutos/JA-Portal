@@ -12,7 +12,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { createClient } from '@supabase/supabase-js'
 import { validateServiceToken } from '../../../../lib/service-auth'
-import { fetchOrders, fetchDistBookings } from '../../../../lib/sales-recap-monday'
+import { fetchOrders, fetchDistBookings, fetchQuoteLeads } from '../../../../lib/sales-recap-monday'
 import { assembleRecap, previousTradingWeek } from '../../../../lib/sales-recap'
 import { renderRecapHtml } from '../../../../lib/sales-recap-html'
 import { generateFlags } from '../../../../lib/sales-recap-flags'
@@ -51,13 +51,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // Pull year-to-date Monday data (covers daily, rolling 4-week, monthly).
     const yearStart = `${new Date(nowMs).getUTCFullYear()}-01-01`
     const today = new Date(nowMs).toISOString().slice(0, 10)
-    const [orders, dist] = await Promise.all([
+    const [orders, dist, quoteLeads] = await Promise.all([
       fetchOrders(token, yearStart, today),
       fetchDistBookings(token, yearStart, today),
+      // Overnight quote-channel leads — Mon 7am run reaches back to Fri 5:30pm.
+      fetchQuoteLeads(token, nowMs - 4 * 86400_000).catch(() => null),
     ])
 
     // Assemble (rule-based flags first), then upgrade to LLM flags if available.
-    let recap = assembleRecap({ nowMs, orders, dist, diaryNotes, forecast })
+    let recap = assembleRecap({ nowMs, orders, dist, diaryNotes, forecast, quoteLeads })
     const llm = await generateFlags(recap).catch(() => [])
     if (llm.length) recap = { ...recap, flags: llm }
 

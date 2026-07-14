@@ -84,6 +84,52 @@ export async function fetchOrders(token: string, since: string, until: string): 
   }).filter(r => !ORDERS_DEAD.has(String(r.status || '')))
 }
 
+// ── Quote-channel leads (overnight enquiries) ───────────────────────────
+// The five per-salesperson quote-channel boards (same set the nightly
+// Monday→MD customer import reads; column ids identical — template copies).
+export const QUOTE_CHANNEL_BOARDS: { id: string; channel: string }[] = [
+  { id: '5026840169', channel: 'Graham' },
+  { id: '5025942308', channel: 'Dom' },
+  { id: '5025942288', channel: 'Tyronne' },
+  { id: '5025942316', channel: 'Kaleb' },
+  { id: '5025942292', channel: 'James' },
+]
+const QUOTE_COL_PHONE = 'text_mkzbenay'
+
+export interface QuoteLeadRow { channel: string; name: string; phone: string | null; createdAt: string }
+
+// Items created since `sinceMs` across all quote-channel boards. Uses
+// created_at (no date column on these boards is reliable for lead-arrival
+// time). Two pages of 100 per board covers far more than a few nights.
+export async function fetchQuoteLeads(token: string, sinceMs: number): Promise<QuoteLeadRow[]> {
+  const out: QuoteLeadRow[] = []
+  for (const b of QUOTE_CHANNEL_BOARDS) {
+    let cursor: string | null = null
+    for (let page = 0; page < 2; page++) {
+      const cursorArg: string = cursor ? `, cursor: "${cursor}"` : ''
+      const data = await mondayQuery(token, `query { boards(ids: [${b.id}]) { items_page(limit: 100${cursorArg}) {
+        cursor
+        items { id name created_at column_values(ids: ["${QUOTE_COL_PHONE}"]) { id text } }
+      } } }`)
+      const pageData = data?.boards?.[0]?.items_page
+      const items: any[] = pageData?.items || []
+      for (const it of items) {
+        if (!(new Date(it.created_at).getTime() >= sinceMs)) continue
+        out.push({
+          channel: b.channel,
+          name: String(it.name || '').trim() || '(unnamed)',
+          phone: (it.column_values || []).find((c: any) => c.id === QUOTE_COL_PHONE)?.text?.trim() || null,
+          createdAt: it.created_at,
+        })
+      }
+      cursor = pageData?.cursor || null
+      if (!cursor || !items.length) break
+      if (!items.some((it: any) => new Date(it.created_at).getTime() >= sinceMs)) break
+    }
+  }
+  return out
+}
+
 export async function fetchDistBookings(token: string, since: string, until: string): Promise<DistRow[]> {
   const items = await pullBoard(token, DIST_BOOKING_BOARD, DB, { since, until })
   return items.map(it => ({

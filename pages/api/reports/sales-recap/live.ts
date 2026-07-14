@@ -14,7 +14,7 @@ import type { NextApiRequest, NextApiResponse } from 'next'
 import { createClient } from '@supabase/supabase-js'
 import { getCurrentUser } from '../../../../lib/authServer'
 import { roleHasPermission } from '../../../../lib/permissions'
-import { fetchOrders, fetchDistBookings } from '../../../../lib/sales-recap-monday'
+import { fetchOrders, fetchDistBookings, fetchQuoteLeads } from '../../../../lib/sales-recap-monday'
 import { assembleRecap, previousTradingWeek, currentTradingWeek } from '../../../../lib/sales-recap'
 import { renderRecapHtml } from '../../../../lib/sales-recap-html'
 import { generateFlags } from '../../../../lib/sales-recap-flags'
@@ -69,12 +69,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const fetchStart = rollingStart < yearStart ? rollingStart : yearStart
     const today = new Date(nowMs).toISOString().slice(0, 10)
     const fetchEnd = week.end > today ? week.end : today
-    const [orders, dist] = await Promise.all([
+    const [orders, dist, quoteLeads] = await Promise.all([
       fetchOrders(token, fetchStart, fetchEnd),
       fetchDistBookings(token, fetchStart, fetchEnd),
+      // 4 days back covers Monday morning's Fri-5:30pm window with margin.
+      fetchQuoteLeads(token, nowMs - 4 * 86400_000).catch(() => null),
     ])
 
-    let recap = assembleRecap({ nowMs, orders, dist, diaryNotes, forecast, week })
+    let recap = assembleRecap({ nowMs, orders, dist, diaryNotes, forecast, week, quoteLeads })
     const llm = await generateFlags(recap).catch(() => [])
     if (llm.length) recap = { ...recap, flags: llm }
 

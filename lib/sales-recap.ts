@@ -7,7 +7,7 @@
 
 import {
   dailyBreakdown, windowTotals, monthlyBreakdown,
-  type OrderRow, type DistRow, type DailyRow, type MonthRow,
+  type OrderRow, type DistRow, type DailyRow, type MonthRow, type QuoteLeadRow,
 } from './sales-recap-monday'
 
 export const DAILY_TARGET = 60000
@@ -22,6 +22,8 @@ export interface WeekComparisonRow {
 export interface DiaryNoteOut { content: string; start: string | null; end: string | null; scope: 'office' | 'workshop' | 'all' }
 export interface ForecastMonthOut { month: string; label: string; value: number; jobCount: number }
 export interface FlagOut { priority: 'HIGH' | 'MED' | 'INFO'; item: string }
+export interface OvernightLeadOut { channel: string; name: string; phone: string | null; createdAt: string }
+export interface OvernightOut { start: string; end: string; label: string; leads: OvernightLeadOut[] }
 
 export interface SalesRecap {
   week: RecapWeek
@@ -40,6 +42,9 @@ export interface SalesRecap {
   forecast: ForecastMonthOut[]
   // Section 6
   flags: FlagOut[]
+  // Overnight quote-channel leads (5:30pm last trading day → 7:00am). Null on
+  // reports assembled without a quote-lead pull (older stored recaps).
+  overnight: OvernightOut | null
 }
 
 const ymd = (d: Date) => d.toISOString().slice(0, 10)
@@ -58,6 +63,21 @@ export function previousTradingWeek(asOfMs: number): RecapWeek {
   const lastMon = new Date(thisMon); lastMon.setUTCDate(thisMon.getUTCDate() - 7)
   const lastFri = new Date(lastMon); lastFri.setUTCDate(lastMon.getUTCDate() + 4)
   return { start: ymd(lastMon), end: ymd(lastFri) }
+}
+
+// The "overnight" window (Brisbane): 17:30 on the last trading day (Mon–Fri)
+// strictly before the window's end, through 07:00 this morning — or "now" if
+// it's still before 7am. Monday morning's window therefore spans the whole
+// weekend (Fri 5:30pm → Mon 7:00am), which is what the Mon 7am email wants.
+export function overnightWindow(nowMs: number): { startMs: number; endMs: number } {
+  const b = brisbaneNow(nowMs)
+  const sevenToday = Date.UTC(b.getUTCFullYear(), b.getUTCMonth(), b.getUTCDate(), 7, 0) - AU_TZ_OFFSET_MS
+  const endMs = nowMs < sevenToday ? nowMs : sevenToday
+  const e = brisbaneNow(endMs)
+  const d = new Date(Date.UTC(e.getUTCFullYear(), e.getUTCMonth(), e.getUTCDate()))
+  do { d.setUTCDate(d.getUTCDate() - 1) } while (d.getUTCDay() === 0 || d.getUTCDay() === 6)
+  const startMs = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), 17, 30) - AU_TZ_OFFSET_MS
+  return { startMs, endMs }
 }
 
 // The CURRENT trading week so far: this week's Monday → Friday (the full
@@ -94,6 +114,7 @@ export interface AssembleInput {
   forecast: { month: string; value: number; jobCount: number }[]
   flags?: FlagOut[]           // LLM-supplied; falls back to rule-based
   week?: RecapWeek            // override the recap week (live "This week" view); defaults to the previous completed trading week
+  quoteLeads?: QuoteLeadRow[] | null  // recent quote-channel leads (created_at based); omit → no overnight section
 }
 
 export function assembleRecap(input: AssembleInput): SalesRecap {
@@ -143,9 +164,27 @@ export function assembleRecap(input: AssembleInput): SalesRecap {
   // Section 6 — flags (LLM if supplied, else rule-based fallback)
   const flags = input.flags?.length ? input.flags : ruleFlags(monthly, rolling, weekTotal)
 
+  // Overnight quote-channel leads (only when a lead pull was supplied)
+  let overnight: OvernightOut | null = null
+  if (input.quoteLeads) {
+    const { startMs, endMs } = overnightWindow(input.nowMs)
+    const fmt = (ms: number) => new Date(ms).toLocaleString('en-AU', {
+      timeZone: 'Australia/Brisbane', weekday: 'short', day: '2-digit', month: 'short',
+      hour: 'numeric', minute: '2-digit', hour12: true,
+    })
+    const leads = input.quoteLeads
+      .filter(l => { const t = Date.parse(l.createdAt); return Number.isFinite(t) && t >= startMs && t < endMs })
+      .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+      .map(l => ({ channel: l.channel, name: l.name, phone: l.phone, createdAt: l.createdAt }))
+    overnight = {
+      start: new Date(startMs).toISOString(), end: new Date(endMs).toISOString(),
+      label: `${fmt(startMs)} → ${fmt(endMs)}`, leads,
+    }
+  }
+
   return {
     week, generatedAt: new Date(input.nowMs).toISOString(), dailyTarget: DAILY_TARGET,
-    daily, weekTotal, rolling, monthly, diaryNotes, forecast, flags,
+    daily, weekTotal, rolling, monthly, diaryNotes, forecast, flags, overnight,
   }
 }
 
