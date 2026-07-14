@@ -58,8 +58,16 @@ export class Softphone {
   private micMuted = true
   private autoAnswerNext = false
   private statsTimer: any = null
+  private closing = false
+  private reconnectAttempts = 0
+  private reconnectTimer: any = null
 
   constructor(private cfg: SoftphoneConfig) {}
+
+  // Registered (or on a call) and usable right now?
+  isReady(): boolean {
+    return !!this.ua && this.registerer?.state === 'Registered'
+  }
 
   on(kind: 'status', cb: Listener<StatusEvt>): void
   on(kind: 'call', cb: Listener<CallEvt>): void
@@ -92,9 +100,14 @@ export class Softphone {
     const uri = UserAgent.makeURI(`sip:${this.cfg.extension}@${this.cfg.sipDomain}`)
     if (!uri) throw new Error('Invalid SIP URI')
 
+    this.closing = false
     this.ua = new UserAgent({
       uri,
-      transportOptions: { server: this.cfg.wssUrl },
+      // keepAliveInterval: CRLF pings over the WSS every 15s. Without them the
+      // socket is DEAD SILENT during a call (media is separate RTP), so NAT /
+      // proxy idle timeouts close it — and Asterisk tears down every dialog on
+      // a closed WebSocket, which is what dropped monitors mid-call.
+      transportOptions: { server: this.cfg.wssUrl, keepAliveInterval: 15 },
       authorizationUsername: this.cfg.extension,
       authorizationPassword: this.cfg.password,
       sessionDescriptionHandlerFactoryOptions: {
@@ -107,7 +120,10 @@ export class Softphone {
       },
       delegate: {
         onInvite: (invitation: any) => this.handleInvite(invitation),
-        onDisconnect: () => this.emitStatus('unregistered'),
+        onDisconnect: () => {
+          this.emitStatus('unregistered')
+          this.scheduleReconnect()
+        },
       },
     })
 
@@ -129,9 +145,37 @@ export class Softphone {
       this.emitStatus('failed', { reason: e?.message || 'register_failed' })
       throw e
     }
+    this.reconnectAttempts = 0
 
     // Stash a reference to Web for media attachment.
     ;(this as any)._sipWeb = Web
+  }
+
+  // The transport dropped without us asking (network blip, PBX restart, proxy
+  // idle-kill that slipped past the keepalive). Reconnect with backoff and
+  // re-register so the softphone recovers without a page refresh. An in-flight
+  // spy call is gone either way (Asterisk destroyed its dialog with the
+  // socket), but the next Listen click must Just Work.
+  private scheduleReconnect() {
+    if (this.closing || this.reconnectTimer || !this.ua) return
+    if (this.reconnectAttempts >= 6) {
+      this.emitStatus('failed', { reason: 'connection lost — reconnect attempts exhausted' })
+      return
+    }
+    const delay = Math.min(1000 * 2 ** this.reconnectAttempts, 10_000)
+    this.reconnectTimer = setTimeout(async () => {
+      this.reconnectTimer = null
+      if (this.closing || !this.ua) return
+      this.reconnectAttempts++
+      this.emitStatus('connecting')
+      try {
+        await this.ua.reconnect()
+        await this.registerer?.register()   // listener emits 'registered'
+        this.reconnectAttempts = 0
+      } catch {
+        this.scheduleReconnect()
+      }
+    }, delay)
   }
 
   setMicMuted(muted: boolean) {
@@ -182,6 +226,8 @@ export class Softphone {
   }
 
   async disconnect() {
+    this.closing = true
+    if (this.reconnectTimer) { clearTimeout(this.reconnectTimer); this.reconnectTimer = null }
     this.hangup()
     try { await this.registerer?.unregister() } catch {}
     try { await this.ua?.stop() } catch {}

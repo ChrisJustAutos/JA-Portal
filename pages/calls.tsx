@@ -829,6 +829,9 @@ function LiveCallsBoard({ canMonitor }: { canMonitor: boolean }) {
   const softphoneRef = useRef<any>(null)
   const audioElRef = useRef<HTMLMediaElement | null>(null)
   const [spStatus, setSpStatus] = useState<SoftphoneStatus>('idle')
+  // Ref mirror so connectSoftphone (a stable callback) sees the live status.
+  const spStatusRef = useRef<SoftphoneStatus>('idle')
+  useEffect(() => { spStatusRef.current = spStatus }, [spStatus])
   const [spReason, setSpReason] = useState<string>('')
   const [activeDeviceMode, setActiveDeviceMode] = useState<SpyMode | null>(null)
   const [mediaStat, setMediaStat] = useState<{ ice: string; rxBytes: number; level: number } | null>(null)
@@ -862,7 +865,25 @@ function LiveCallsBoard({ canMonitor }: { canMonitor: boolean }) {
   // Lazily set up the audio element and connect the softphone if the user has
   // WebRTC creds configured. Stays as 'idle' until something tries to use it.
   const connectSoftphone = useCallback(async (): Promise<boolean> => {
-    if (softphoneRef.current) return spStatus === 'registered' || spStatus === 'incall'
+    if (softphoneRef.current) {
+      const s = spStatusRef.current
+      if (s === 'registered' || s === 'incall') return true
+      if (s === 'unavailable') return false
+      if (s === 'connecting') {
+        // Another caller (e.g. the mount-time pre-connect) is mid-handshake —
+        // wait for it to settle instead of racing a second registration.
+        for (let i = 0; i < 24; i++) {
+          await new Promise(r => setTimeout(r, 250))
+          const now = spStatusRef.current
+          if (now === 'registered' || now === 'incall') return true
+          if (now !== 'connecting') break
+        }
+        if (spStatusRef.current === 'registered' || spStatusRef.current === 'incall') return true
+      }
+      // Stale/failed instance (e.g. reconnects exhausted) — rebuild fresh.
+      try { softphoneRef.current.disconnect() } catch {}
+      softphoneRef.current = null
+    }
     ensureAudioEl()
     setSpStatus('connecting'); setSpReason('')
     try {
@@ -900,7 +921,18 @@ function LiveCallsBoard({ canMonitor }: { canMonitor: boolean }) {
       setSpStatus('failed'); setSpReason(e?.message || 'Could not connect softphone')
       return false
     }
-  }, [spStatus])
+  }, [])
+
+  // Pre-register the softphone as soon as the board mounts. Registration needs
+  // no mic permission or user gesture, and doing it here means a Listen click
+  // only has to enqueue the spy request — previously the click paid for the
+  // creds fetch + sip.js import + WSS connect + REGISTER first (the "slow to
+  // open a live call" complaint). Users without a WebRTC extension just get
+  // status 'unavailable' and the handset buttons still work.
+  useEffect(() => {
+    if (!canMonitor) return
+    connectSoftphone().catch(() => {})
+  }, [canMonitor, connectSoftphone])
 
   // Cleanup on unmount.
   useEffect(() => () => {
@@ -1009,8 +1041,10 @@ function LiveCallsBoard({ canMonitor }: { canMonitor: boolean }) {
     setToast({ kind: 'ok', msg: `Requested ${mode} — your ${target} should connect shortly…` })
     const id = enq.request_id
     const deadline = Date.now() + 12000
+    let pollDelay = 500   // agent usually claims sub-second — check early, then ease off
     while (Date.now() < deadline) {
-      await new Promise(r => setTimeout(r, 1500))
+      await new Promise(r => setTimeout(r, pollDelay))
+      pollDelay = 1000
       let sd: any
       try {
         const sr = await fetch(`/api/calls/live/spy?id=${encodeURIComponent(id)}`)
@@ -1061,8 +1095,11 @@ function LiveCallsBoard({ canMonitor }: { canMonitor: boolean }) {
         {status === 'ready' && !stale && <span style={{ fontSize: 11, color: T.text3 }}>{cards.length} in progress</span>}
         {status === 'ready' && stale && <span style={{ fontSize: 11, color: T.amber }}>monitor agent offline?</span>}
 
-        {/* Softphone status pill */}
-        {spStatus !== 'idle' && (
+        {/* Softphone status pill. 'unavailable' is hidden: the mount-time
+            pre-connect discovers it for every handset-only user, and a
+            permanent red pill for a feature they don't use is just noise —
+            the Device buttons explain it in a toast if actually clicked. */}
+        {spStatus !== 'idle' && spStatus !== 'unavailable' && (
           <span title={spReason || ''} style={{
             fontSize: 10, padding: '2px 8px', borderRadius: 10, fontFamily: 'monospace', letterSpacing: '0.05em',
             background: spStatus === 'incall' ? `${T.green}22` : spStatus === 'registered' ? `${T.blue}22` : spStatus === 'connecting' ? `${T.amber}22` : `${T.red}22`,
