@@ -41,36 +41,61 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(400).json({ error: 'start and end (YYYY-MM-DD) required' })
   }
 
+  const focusAccount = req.query.account ? String(req.query.account) : null // e.g. 4-0902 for a monthly + rate detail
+
   try {
     const { invoices, lines } = await fetchSaleInvoicesWithLines(label, { start, endExclusive: addDay(end) })
     const invDate = new Map<string, string>()
     for (const inv of invoices) if (inv.Date) invDate.set(inv.ID, inv.Date.slice(0, 10))
 
-    const byAcct = new Map<string, { code: string; name: string; total: number; lineCount: number; minDate: string; maxDate: string }>()
+    const byAcct = new Map<string, { code: string; name: string; total: number; qty: number; lineCount: number; minDate: string; maxDate: string }>()
     let overallMin = '9999-99-99', overallMax = '0000-00-00', grand = 0
+
+    // Detail accumulators for the focus account.
+    const monthly = new Map<string, { total: number; qty: number; lines: number }>()
+    const unitPrices = new Map<number, { lines: number; qty: number; total: number }>()
+
     for (const l of lines) {
       const code = l.AccountDisplayID || '(none)'
       const d = invDate.get(l.SaleInvoiceId) || ''
-      const row = byAcct.get(code) || { code, name: l.AccountName || '', total: 0, lineCount: 0, minDate: '9999-99-99', maxDate: '0000-00-00' }
-      row.total += l.Total
-      row.lineCount += 1
+      const qty = l.ShipQuantity != null ? l.ShipQuantity : 0
+      const row = byAcct.get(code) || { code, name: l.AccountName || '', total: 0, qty: 0, lineCount: 0, minDate: '9999-99-99', maxDate: '0000-00-00' }
+      row.total += l.Total; row.qty += qty; row.lineCount += 1
       if (d) { if (d < row.minDate) row.minDate = d; if (d > row.maxDate) row.maxDate = d }
       byAcct.set(code, row)
       grand += l.Total
       if (d) { if (d < overallMin) overallMin = d; if (d > overallMax) overallMax = d }
+
+      if (focusAccount && code === focusAccount) {
+        const mk = d ? d.slice(0, 7) : 'unknown'
+        const m = monthly.get(mk) || { total: 0, qty: 0, lines: 0 }
+        m.total += l.Total; m.qty += qty; m.lines += 1; monthly.set(mk, m)
+        const up = l.UnitPrice != null ? Math.round(l.UnitPrice * 100) / 100 : 0
+        const u = unitPrices.get(up) || { lines: 0, qty: 0, total: 0 }
+        u.lines += 1; u.qty += qty; u.total += l.Total; unitPrices.set(up, u)
+      }
     }
 
     const accounts = Array.from(byAcct.values())
-      .map(r => ({ ...r, total: Math.round(r.total * 100) / 100 }))
+      .map(r => ({ ...r, total: Math.round(r.total * 100) / 100, qty: Math.round(r.qty * 100) / 100 }))
       .sort((a, b) => b.total - a.total)
+
+    const detail = focusAccount ? {
+      account: focusAccount,
+      monthly: Array.from(monthly.entries()).sort((a, b) => a[0].localeCompare(b[0]))
+        .map(([month, v]) => ({ month, total: Math.round(v.total * 100) / 100, qty: Math.round(v.qty * 100) / 100, lines: v.lines })),
+      unitPrices: Array.from(unitPrices.entries()).sort((a, b) => b[1].total - a[1].total)
+        .map(([unitPrice, v]) => ({ unitPrice, lines: v.lines, qty: Math.round(v.qty * 100) / 100, total: Math.round(v.total * 100) / 100 })),
+    } : null
 
     return res.status(200).json({
       ok: true, label, start, end,
       invoiceCount: invoices.length,
       coverage: { earliestInvoice: overallMin === '9999-99-99' ? null : overallMin, latestInvoice: overallMax === '0000-00-00' ? null : overallMax },
       grandTotal: Math.round(grand * 100) / 100,
-      note: 'Line totals are GST-exclusive where invoices are tax-exclusive; MYOB Line.Total is the ex-tax line amount.',
+      note: 'Line totals are GST-exclusive where invoices are tax-exclusive; MYOB Line.Total is the ex-tax line amount. qty = summed ShipQuantity (hours for labour lines, if entered that way).',
       accounts,
+      detail,
     })
   } catch (e: any) {
     console.error('[income-by-account] failed:', e?.message || e)
