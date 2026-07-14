@@ -35,12 +35,25 @@ export function renderRecapHtml(r: SalesRecap): string {
     parts.push(`<h2 style="font:700 16px Arial,sans-serif;color:${NAVY};margin:18px 0 2px">🌙 Overnight Leads — ${o.leads.length ? `<span style="color:#d92d20">${o.leads.length} new</span>` : 'none'}</h2>`)
     parts.push(`<div style="color:#6b7280;font-size:12px;margin-bottom:4px">New quote-channel enquiries in Monday, ${esc(o.label)}</div>`)
     if (o.leads.length) {
+      // Condensed to daily totals (Chris 2026-07-15) — bucket by the Brisbane
+      // calendar date the lead arrived (a 2am lead counts to that morning's day).
+      const byDay = new Map<string, Map<string, number>>()
+      for (const l of o.leads) {
+        const day = new Date(l.createdAt).toLocaleDateString('en-CA', { timeZone: 'Australia/Brisbane' })
+        const ch = byDay.get(day) || new Map<string, number>()
+        ch.set(l.channel, (ch.get(l.channel) || 0) + 1)
+        byDay.set(day, ch)
+      }
+      const days = Array.from(byDay.keys()).sort()
       parts.push(table(
-        ['Came in', 'Channel', 'Name', 'Phone'],
-        o.leads.map(l => [
-          new Date(l.createdAt).toLocaleString('en-AU', { timeZone: 'Australia/Brisbane', weekday: 'short', day: '2-digit', month: 'short', hour: 'numeric', minute: '2-digit', hour12: true }),
-          esc(l.channel), esc(l.name), l.phone ? esc(l.phone) : '—',
-        ]),
+        ['Day', 'Leads', 'By channel'],
+        days.map(day => {
+          const ch = byDay.get(day)!
+          const count = Array.from(ch.values()).reduce((a, b) => a + b, 0)
+          const split = Array.from(ch.entries()).sort((a, b) => b[1] - a[1]).map(([c, n]) => `${esc(c)} ${n}`).join(' · ')
+          return [dayLabel(day), `<b>${count}</b>`, `<span style="color:#6b7280">${split}</span>`]
+        }),
+        { footer: ['TOTAL', `<b>${o.leads.length}</b>`, ''] },
       ))
     } else {
       parts.push(`<p style="color:#6b7280;font-size:13px;margin:4px 0 14px">No overnight leads in this period.</p>`)
