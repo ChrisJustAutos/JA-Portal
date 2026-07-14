@@ -60,11 +60,13 @@ async function main() {
 
     // On a dry run, dump the full assembled recap to the GH step summary so the
     // numbers can be eyeballed against the source docs without emailing/storing.
-    if (DRY_RUN && out.recap && process.env.GITHUB_STEP_SUMMARY) {
-      const { writeFileSync } = await import('fs')
-      writeFileSync(process.env.GITHUB_STEP_SUMMARY,
-        '## Sales Recap — dry run\n\n```json\n' + JSON.stringify(out.recap, null, 2) + '\n```\n', { flag: 'a' })
-      log('full recap written to step summary')
+    if (DRY_RUN && out.recap) {
+      console.log('RECAP_JSON ' + JSON.stringify(out.recap))
+      if (process.env.GITHUB_STEP_SUMMARY) {
+        const { writeFileSync } = await import('fs')
+        writeFileSync(process.env.GITHUB_STEP_SUMMARY,
+          '## Sales Recap — dry run\n\n```json\n' + JSON.stringify(out.recap, null, 2) + '\n```\n', { flag: 'a' })
+      }
     }
   } finally {
     await browser.close()
