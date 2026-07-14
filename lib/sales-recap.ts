@@ -60,6 +60,17 @@ export function previousTradingWeek(asOfMs: number): RecapWeek {
   return { start: ymd(lastMon), end: ymd(lastFri) }
 }
 
+// The CURRENT trading week so far: this week's Monday → Friday (the full
+// Mon–Fri window). Daily rows past `asOfMs` simply carry no data yet, so the
+// live "This week" view fills in as the week progresses.
+export function currentTradingWeek(asOfMs: number): RecapWeek {
+  const b = brisbaneNow(asOfMs)
+  const dow = b.getUTCDay()
+  const thisMon = new Date(Date.UTC(b.getUTCFullYear(), b.getUTCMonth(), b.getUTCDate() - ((dow + 6) % 7)))
+  const fri = new Date(thisMon); fri.setUTCDate(thisMon.getUTCDate() + 4)
+  return { start: ymd(thisMon), end: ymd(fri) }
+}
+
 function tradingDays(startYmd: string, endYmd: string): string[] {
   const out: string[] = []
   const s = new Date(startYmd + 'T00:00:00Z'); const e = new Date(endYmd + 'T00:00:00Z')
@@ -82,10 +93,11 @@ export interface AssembleInput {
   diaryNotes: { content: string; start: string | null; end: string | null; officeOnly: boolean; workshopOnly: boolean }[]
   forecast: { month: string; value: number; jobCount: number }[]
   flags?: FlagOut[]           // LLM-supplied; falls back to rule-based
+  week?: RecapWeek            // override the recap week (live "This week" view); defaults to the previous completed trading week
 }
 
 export function assembleRecap(input: AssembleInput): SalesRecap {
-  const week = previousTradingWeek(input.nowMs)
+  const week = input.week ?? previousTradingWeek(input.nowMs)
   const days = tradingDays(week.start, week.end)
 
   // Section 1 — daily breakdown for the recap week

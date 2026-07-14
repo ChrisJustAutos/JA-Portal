@@ -17,6 +17,7 @@ const MD_PASS = process.env.MECHANICDESK_PASSWORD || ''
 const PORTAL = process.env.JA_PORTAL_BASE_URL || ''
 const TOKEN = process.env.JA_PORTAL_API_KEY || ''
 const DRY_RUN = process.env.DRY_RUN === '1'
+const SEND_EMAIL = process.env.SEND_EMAIL === '1' // false → store only ("refresh" dispatch)
 const FORECAST_MONTHS = Math.max(1, Number(process.env.FORECAST_MONTHS) || 6)
 
 if (!WS_ID || !MD_USER || !MD_PASS) throw new Error('MECHANICDESK_* env vars required')
@@ -52,7 +53,7 @@ async function main() {
     const r = await fetch(`${PORTAL}/api/reports/sales-recap/generate`, {
       method: 'POST',
       headers: { 'X-Service-Token': TOKEN, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ diaryNotes, forecast, dryRun: DRY_RUN }),
+      body: JSON.stringify({ diaryNotes, forecast, dryRun: DRY_RUN, email: SEND_EMAIL }),
     })
     const out = await r.json().catch(() => ({}))
     if (!r.ok) throw new Error(`generate ${r.status}: ${JSON.stringify(out).slice(0, 300)}`)

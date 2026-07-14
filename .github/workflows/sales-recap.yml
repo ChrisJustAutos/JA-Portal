@@ -10,9 +10,9 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: Run mode
+        description: 'Run mode — real: store + email team · refresh: store only (no email) · dry-run: build only'
         type: choice
-        options: [real, dry-run]
+        options: [real, refresh, dry-run]
         default: dry-run
 
 jobs:
@@ -39,4 +39,7 @@ jobs:
           JA_PORTAL_BASE_URL:       ${{ secrets.JA_PORTAL_BASE_URL }}
           JA_PORTAL_API_KEY:        ${{ secrets.JA_PORTAL_API_KEY }}
           DRY_RUN:                  ${{ inputs.mode == 'dry-run' && '1' || '' }}
+          # Email only on the scheduled Mon 7am run and explicit "real" dispatch;
+          # "refresh" stores without emailing. On schedule inputs.mode is empty → email.
+          SEND_EMAIL:               ${{ inputs.mode == 'refresh' && '' || '1' }}
         run: npx tsx scripts/run-sales-recap.ts

@@ -43,6 +43,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const diaryNotes = Array.isArray(body.diaryNotes) ? body.diaryNotes : []
   const forecast = Array.isArray(body.forecast) ? body.forecast : []
   const dryRun = body.dryRun === true
+  const sendEmail = body.email !== false // default: email the team; a portal "refresh workshop data" run passes email:false
   const nowMs = typeof body.nowMs === 'number' ? body.nowMs : Date.now()
 
   try {
@@ -68,23 +69,26 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const { error: upErr } = await c.from('sales_recap_reports').upsert({
       week_start: recap.week.start, week_end: recap.week.end,
       generated_at: new Date(nowMs).toISOString(), payload: recap, html,
-      emailed_to: RECIPIENTS.join(', '), is_current: true,
+      md_inputs: { diaryNotes, forecast }, // raw scrape → lets the live view re-assemble against fresh Monday data
+      emailed_to: sendEmail ? RECIPIENTS.join(', ') : null, is_current: true,
     }, { onConflict: 'week_start' })
     if (upErr) throw new Error(`store: ${upErr.message}`)
 
     let emailed = false
-    try {
-      await sendMail(await getFromMailbox(), {
-        to: RECIPIENTS,
-        subject: `Weekly Sales Recap — week of ${recap.week.start}`,
-        html,
-      })
-      emailed = true
-    } catch (e: any) {
-      console.error('[sales-recap] email failed:', e?.message || e)
+    if (sendEmail) {
+      try {
+        await sendMail(await getFromMailbox(), {
+          to: RECIPIENTS,
+          subject: `Weekly Sales Recap — week of ${recap.week.start}`,
+          html,
+        })
+        emailed = true
+      } catch (e: any) {
+        console.error('[sales-recap] email failed:', e?.message || e)
+      }
     }
 
-    return res.status(200).json({ ok: true, week: recap.week, emailed, recipients: RECIPIENTS, flags: recap.flags.length })
+    return res.status(200).json({ ok: true, week: recap.week, emailed, recipients: sendEmail ? RECIPIENTS : [], flags: recap.flags.length })
   } catch (e: any) {
     console.error('[sales-recap] generate failed:', e?.message || e)
     return res.status(500).json({ error: (e?.message || String(e)).slice(0, 400) })
