@@ -2,7 +2,7 @@ name: Weekly Sales Recap (Mon 7am)
 
 # Scrapes MechanicDesk (diary notes + forward forecast) via Playwright, then
 # POSTs to /api/reports/sales-recap/generate which pulls Monday, assembles,
-# renders, stores + emails the recap to Ryan/Matt/Chris.
+# renders, stores + emails the recap to Ryan.
 
 on:
   schedule:

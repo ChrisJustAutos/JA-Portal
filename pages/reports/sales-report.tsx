@@ -2,9 +2,9 @@
 // Reports → Sales Report — a LIVE Weekly Sales Recap. Order/booking figures
 // (sections 1-3 + flags) are pulled fresh from Monday on every load via
 // /api/reports/sales-recap/live; the workshop forecast + diary come from the
-// last scrape and show an "as of" time. Toggle This week / Last week, refresh
-// on demand, kick off a workshop-data refresh, or email the team now.
-// The same report auto-emails Ryan/Matt/Chris every Monday 7am.
+// last scrape and show an "as of" time. Toggle This week / Last week or pick a
+// custom date range, refresh on demand, kick off a workshop-data refresh, or
+// export the report as a PDF. The same report auto-emails Ryan every Mon 7am.
 
 import Head from 'next/head'
 import { useEffect, useState, useCallback } from 'react'
@@ -14,7 +14,7 @@ import { requirePageAuth } from '../../lib/authServer'
 import type { PortalUserSSR } from '../../lib/authServer'
 import { T } from '../../lib/ui/theme'
 
-type WeekMode = 'previous' | 'current'
+type WeekMode = 'previous' | 'current' | 'custom'
 
 function relTime(iso: string | null): string {
   if (!iso) return 'never'
@@ -30,21 +30,28 @@ function relTime(iso: string | null): string {
 
 export default function SalesReportPage({ user }: { user: PortalUserSSR }) {
   const [weekMode, setWeekMode] = useState<WeekMode>('previous')
+  const [rangeStart, setRangeStart] = useState('')
+  const [rangeEnd, setRangeEnd] = useState('')
   const [html, setHtml] = useState<string | null>(null)
+  const [reportWeek, setReportWeek] = useState<{ start: string; end: string } | null>(null)
   const [ordersAsOf, setOrdersAsOf] = useState<string | null>(null)
   const [workshopAsOf, setWorkshopAsOf] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [err, setErr] = useState<string | null>(null)
-  const [busy, setBusy] = useState<'refresh' | 'send' | null>(null)
+  const [busy, setBusy] = useState<'refresh' | null>(null)
   const [note, setNote] = useState<string | null>(null)
 
-  const load = useCallback(async (mode: WeekMode) => {
+  const load = useCallback(async (mode: WeekMode, range?: { start: string; end: string }) => {
     setLoading(true); setErr(null)
     try {
-      const r = await fetch(`/api/reports/sales-recap/live?week=${mode}`)
+      const qs = mode === 'custom' && range
+        ? `start=${encodeURIComponent(range.start)}&end=${encodeURIComponent(range.end)}`
+        : `week=${mode}`
+      const r = await fetch(`/api/reports/sales-recap/live?${qs}`)
       const d = await r.json()
       if (!r.ok || d.error) throw new Error(d.error || `HTTP ${r.status}`)
       setHtml(d.html)
+      setReportWeek(d.recap?.week || null)
       setOrdersAsOf(d.ordersAsOf || null)
       setWorkshopAsOf(d.workshopAsOf || null)
     } catch (e: any) {
@@ -54,25 +61,55 @@ export default function SalesReportPage({ user }: { user: PortalUserSSR }) {
     }
   }, [])
 
-  useEffect(() => { load(weekMode) }, [weekMode, load])
+  useEffect(() => {
+    if (weekMode !== 'custom') load(weekMode)
+  }, [weekMode, load])
 
-  async function runWorkshop(action: 'refresh' | 'send') {
-    setBusy(action); setNote(null)
+  const rangeValid = /^\d{4}-\d{2}-\d{2}$/.test(rangeStart) && /^\d{4}-\d{2}-\d{2}$/.test(rangeEnd) && rangeStart <= rangeEnd
+  function applyRange() {
+    if (!rangeValid) return
+    setWeekMode('custom')
+    load('custom', { start: rangeStart, end: rangeEnd })
+  }
+
+  function refresh() {
+    if (weekMode === 'custom') {
+      if (rangeValid) load('custom', { start: rangeStart, end: rangeEnd })
+    } else load(weekMode)
+  }
+
+  async function runWorkshop() {
+    setBusy('refresh'); setNote(null)
     try {
       const r = await fetch('/api/reports/sales-recap/run', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action }),
+        body: JSON.stringify({ action: 'refresh' }),
       })
       const d = await r.json()
       if (!r.ok || d.error) throw new Error(d.detail || d.error || `HTTP ${r.status}`)
-      setNote(action === 'send'
-        ? 'Report is generating and will email Ryan, Matt & Chris in ~4 min. Refresh the order data below anytime.'
-        : 'Workshop data refresh started (~4 min). Hit Refresh below once it finishes to pull the new forecast & diary.')
+      setNote('Workshop data refresh started (~4 min). Hit Refresh below once it finishes to pull the new forecast & diary.')
     } catch (e: any) {
       setNote(`Couldn’t start: ${String(e.message || e)}`)
     } finally {
       setBusy(null)
     }
+  }
+
+  // Open the current report in a print window — the browser's "Save as PDF"
+  // destination is the export. Keeps the exact email-grade styling with zero
+  // server-side PDF dependencies.
+  function exportPdf() {
+    if (!html) return
+    const title = reportWeek ? `Sales Report ${reportWeek.start} to ${reportWeek.end}` : 'Sales Report'
+    const w = window.open('', '_blank')
+    if (!w) { setNote('Pop-up blocked — allow pop-ups for the portal to export a PDF.'); return }
+    w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>${title}</title>
+<style>body{margin:24px;background:#fff} @media print{body{margin:0}}</style>
+</head><body>${html}</body></html>`)
+    w.document.close()
+    w.focus()
+    // Give the new window a beat to lay out before opening the print dialog.
+    setTimeout(() => { try { w.print() } catch { /* user can print manually */ } }, 400)
   }
 
   const btn = (active: boolean): React.CSSProperties => ({
@@ -84,6 +121,10 @@ export default function SalesReportPage({ user }: { user: PortalUserSSR }) {
     fontSize: 12, padding: '6px 12px', borderRadius: 6, cursor: disabled ? 'default' : 'pointer', fontFamily: 'inherit',
     border: `1px solid ${T.border}`, background: T.bg3, color: disabled ? T.text3 : T.text2, whiteSpace: 'nowrap', opacity: disabled ? 0.7 : 1,
   })
+  const dateInput: React.CSSProperties = {
+    fontSize: 12, padding: '5px 8px', borderRadius: 6, fontFamily: 'inherit',
+    border: `1px solid ${T.border}`, background: T.bg3, color: T.text2, colorScheme: 'dark',
+  }
 
   return (
     <>
@@ -100,14 +141,22 @@ export default function SalesReportPage({ user }: { user: PortalUserSSR }) {
 
           <div style={{ width: 1, height: 20, background: T.border, margin: '0 4px' }} />
 
-          <button style={actionBtn(loading)} disabled={loading} onClick={() => load(weekMode)}>
+          <span style={{ fontSize: 11, color: T.text3 }}>Range</span>
+          <input type="date" style={dateInput} value={rangeStart} max={rangeEnd || undefined} onChange={e => setRangeStart(e.target.value)} />
+          <span style={{ fontSize: 11, color: T.text3 }}>→</span>
+          <input type="date" style={dateInput} value={rangeEnd} min={rangeStart || undefined} onChange={e => setRangeEnd(e.target.value)} />
+          <button style={weekMode === 'custom' ? btn(true) : actionBtn(!rangeValid)} disabled={!rangeValid} onClick={applyRange}>Apply</button>
+
+          <div style={{ width: 1, height: 20, background: T.border, margin: '0 4px' }} />
+
+          <button style={actionBtn(loading)} disabled={loading} onClick={refresh}>
             {loading ? 'Loading…' : '↻ Refresh'}
           </button>
-          <button style={actionBtn(!!busy)} disabled={!!busy} onClick={() => runWorkshop('refresh')}>
+          <button style={actionBtn(!!busy)} disabled={!!busy} onClick={runWorkshop}>
             {busy === 'refresh' ? 'Starting…' : 'Update workshop data'}
           </button>
-          <button style={actionBtn(!!busy)} disabled={!!busy} onClick={() => runWorkshop('send')}>
-            {busy === 'send' ? 'Starting…' : 'Run & email team now'}
+          <button style={actionBtn(!html)} disabled={!html} onClick={exportPdf}>
+            ⬇ Export as PDF
           </button>
 
           <div style={{ flex: 1 }} />
@@ -128,7 +177,7 @@ export default function SalesReportPage({ user }: { user: PortalUserSSR }) {
           {err && (
             <div style={{ maxWidth: 640, background: 'rgba(240,78,78,0.1)', border: '1px solid rgba(240,78,78,0.2)', borderRadius: 10, padding: 16, color: T.red }}>
               <div style={{ marginBottom: 10 }}>Couldn’t load report: {err}</div>
-              <button onClick={() => load(weekMode)} style={{ padding: '6px 14px', borderRadius: 6, border: `1px solid ${T.blue}`, background: T.blue, color: '#fff', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit' }}>Retry</button>
+              <button onClick={refresh} style={{ padding: '6px 14px', borderRadius: 6, border: `1px solid ${T.blue}`, background: T.blue, color: '#fff', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit' }}>Retry</button>
             </div>
           )}
           {html && (

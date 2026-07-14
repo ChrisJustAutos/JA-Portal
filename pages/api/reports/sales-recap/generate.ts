@@ -21,8 +21,9 @@ import { getFromMailbox } from '../../../../lib/b2b-settings'
 
 export const config = { maxDuration: 120 }
 
+// Weekly delivery goes to Ryan only (Chris 2026-07-15; was Ryan/Matt/Chris).
 const RECIPIENTS = (process.env.SALES_RECAP_RECIPIENTS ||
-  'ryan@justautosmechanical.com.au,Matt.h@justautosmechanical.com.au,chris@justautosmechanical.com.au')
+  'ryan@justautosmechanical.com.au')
   .split(',').map(s => s.trim()).filter(Boolean)
 
 function sb() {

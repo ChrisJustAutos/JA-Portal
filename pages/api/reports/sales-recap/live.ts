@@ -6,7 +6,9 @@
 // notes + forward forecast) stored by the last full run — those sections are
 // "as of" that scrape. No storing, no email; this is a read-only live view.
 //
-// Auth: staff with view:reports. Query: ?week=current|previous (default previous).
+// Auth: staff with view:reports.
+// Query: ?week=current|previous (default previous), OR ?start=YYYY-MM-DD&end=YYYY-MM-DD
+// for an arbitrary date range (capped at ~3 months so the daily table stays sane).
 
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { createClient } from '@supabase/supabase-js'
@@ -32,7 +34,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   const wantCurrent = req.query.week === 'current'
   const nowMs = Date.now()
-  const week = wantCurrent ? currentTradingWeek(nowMs) : previousTradingWeek(nowMs)
+
+  // Custom range takes precedence over the week toggle when both dates parse.
+  const YMD = /^\d{4}-\d{2}-\d{2}$/
+  const startQ = typeof req.query.start === 'string' && YMD.test(req.query.start) ? req.query.start : null
+  const endQ = typeof req.query.end === 'string' && YMD.test(req.query.end) ? req.query.end : null
+  let week = wantCurrent ? currentTradingWeek(nowMs) : previousTradingWeek(nowMs)
+  let weekMode: string = wantCurrent ? 'current' : 'previous'
+  if (startQ && endQ) {
+    if (startQ > endQ) return res.status(400).json({ error: 'start must be on or before end' })
+    const spanDays = (Date.parse(endQ) - Date.parse(startQ)) / 86400_000
+    if (spanDays > 92) return res.status(400).json({ error: 'Date range too long — max ~3 months' })
+    week = { start: startQ, end: endQ }
+    weekMode = 'custom'
+  }
 
   try {
     // Latest stored report — source of the workshop (MD) sections + its scrape time.
@@ -47,11 +62,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const forecast = Array.isArray(stored?.md_inputs?.forecast) ? stored!.md_inputs.forecast : []
 
     // Fresh Monday pull (year-to-date covers daily, rolling 4-week and monthly).
+    // A custom range can reach back before Jan 1 — widen the pull so the daily
+    // table and the 3 weeks of rolling comparison before it still have data.
     const yearStart = `${new Date(nowMs).getUTCFullYear()}-01-01`
+    const rollingStart = new Date(Date.parse(week.start) - 28 * 86400_000).toISOString().slice(0, 10)
+    const fetchStart = rollingStart < yearStart ? rollingStart : yearStart
     const today = new Date(nowMs).toISOString().slice(0, 10)
+    const fetchEnd = week.end > today ? week.end : today
     const [orders, dist] = await Promise.all([
-      fetchOrders(token, yearStart, today),
-      fetchDistBookings(token, yearStart, today),
+      fetchOrders(token, fetchStart, fetchEnd),
+      fetchDistBookings(token, fetchStart, fetchEnd),
     ])
 
     let recap = assembleRecap({ nowMs, orders, dist, diaryNotes, forecast, week })
@@ -62,7 +82,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     return res.status(200).json({
       ok: true,
-      weekMode: wantCurrent ? 'current' : 'previous',
+      weekMode,
       recap,
       html,
       ordersAsOf: new Date(nowMs).toISOString(),
