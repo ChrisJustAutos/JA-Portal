@@ -332,20 +332,33 @@ async function postSlackBurst(eventTs = Date.now(), threadTs = null) {
     if (!frames.length || !frames[frames.length - 1].equals(f.jpg)) frames.push(f.jpg)
   }
   if (!frames.length) { warn('burst: no frames buffered around event'); return }
+  // Upload frames with per-frame tolerance: one stalled/failed upload must
+  // NOT kill the whole burst (live incident 2026-07-15: a single "https
+  // timeout" collapsed every 8-frame burst to the single-photo fallback).
+  // Each frame gets 2 attempts with a fresh upload URL; failures are dropped.
   const ids = []
   for (const [i, jpg] of frames.entries()) {
-    const filename = `freight-bay-${Date.now()}-${i + 1}.jpg`
-    const up = await slackApi('files.getUploadURLExternal', null, { query: { filename, length: String(jpg.length) } })
-    if (!up.ok) throw new Error(`getUploadURLExternal: ${up.error}`)
-    const put = await httpsRequest(up.upload_url, { method: 'POST', body: jpg, headers: { 'Content-Type': 'image/jpeg' } })
-    if (put.status < 200 || put.status >= 300) throw new Error(`upload POST HTTP ${put.status}`)
-    ids.push({ id: up.file_id, title: `Freight bay ${i + 1}/${frames.length}` })
+    const filename = `alert-${Date.now()}-${i + 1}.jpg`
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      try {
+        const up = await slackApi('files.getUploadURLExternal', null, { query: { filename, length: String(jpg.length) } })
+        if (!up.ok) throw new Error(`getUploadURLExternal: ${up.error}`)
+        const put = await httpsRequest(up.upload_url, { method: 'POST', body: jpg, headers: { 'Content-Type': 'image/jpeg' } })
+        if (put.status < 200 || put.status >= 300) throw new Error(`upload POST HTTP ${put.status}`)
+        ids.push({ id: up.file_id, title: `Frame ${i + 1}/${frames.length}` })
+        break
+      } catch (e) {
+        if (attempt === 2) warn(`burst: frame ${i + 1}/${frames.length} dropped (${e.message})`)
+      }
+    }
   }
+  if (!ids.length) throw new Error('every frame upload failed')
   const payload = { files: ids, channel_id: channel }
   if (threadTs) payload.thread_ts = threadTs
-  const done = await slackApi('files.completeUploadExternal', payload)
+  let done = await slackApi('files.completeUploadExternal', payload)
+  if (!done.ok) { await sleep(1000); done = await slackApi('files.completeUploadExternal', payload) }
   if (!done.ok) throw new Error(`completeUploadExternal: ${done.error}`)
-  log(`Slack burst posted (${frames.length} frames${threadTs ? ', threaded' : ''})`)
+  log(`Slack burst posted (${ids.length}/${frames.length} frames${threadTs ? ', threaded' : ''})`)
 }
 
 async function slackApi(method, jsonBody, { query } = {}) {
@@ -381,7 +394,12 @@ async function onLineCross(evt) {
   try { await postSlackBurst(now, alertTs) }
   catch (e) {
     warn('burst:', e.message, '— falling back to single snapshot')
-    try { await postSlack(await snapshot().catch(() => null)) } catch (e2) { warn('postSlack:', e2.message) }
+    // Prefer the buffered frame closest to the event over a fresh pull — the
+    // snapshot endpoint lags the scene ~3s, so a new grab misses the visitor.
+    const nearest = frameBuf.length
+      ? frameBuf.reduce((a, b) => Math.abs(b.ts - now) < Math.abs(a.ts - now) ? b : a).jpg
+      : null
+    try { await postSlack(nearest || await snapshot().catch(() => null)) } catch (e2) { warn('postSlack:', e2.message) }
   }
 }
 
