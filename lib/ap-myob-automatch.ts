@@ -147,6 +147,27 @@ async function collectCandidates(
           push(await searchFn(companyFile, stripped, 50))
         } catch (e: any) { /* ignore */ }
       }
+      // Reverse-drift bites: the stripped bite can't surface a card that has
+      // MORE punctuation than the invoice — "Steves" never substring-matches
+      // a card entered "Steve's". Two extra queries put such cards in the
+      // pool (the normalized name match then does the precise comparison):
+      //   a. a short prefix of the first word ("stev" hits both spellings)
+      if (stripped.length >= 5) {
+        try {
+          push(await searchFn(companyFile, stripped.slice(0, 4), 50))
+        } catch (e: any) { /* ignore */ }
+      }
+      //   b. the next distinctive word ("mobile") — catches drift anywhere
+      //      in the first word, skipping generic company-suffix tokens
+      const STOP_TOKENS = new Set(['pty', 'ltd', 'limited', 'the', 'and', 'group', 'aust', 'australia', 'trading'])
+      const nextWord = trimmed.split(/\s+/).slice(1)
+        .map(w => w.replace(/[^A-Za-z0-9]+/g, ''))
+        .find(w => w.length >= 4 && !STOP_TOKENS.has(w.toLowerCase()))
+      if (nextWord) {
+        try {
+          push(await searchFn(companyFile, nextWord, 50))
+        } catch (e: any) { /* ignore */ }
+      }
     }
   }
 
