@@ -38,12 +38,12 @@ export function renderRecapHtml(r: SalesRecap): string {
       parts.push(table(
         ['Came in', 'Channel', 'Name', 'Phone'],
         o.leads.map(l => [
-          new Date(l.createdAt).toLocaleString('en-AU', { timeZone: 'Australia/Brisbane', weekday: 'short', hour: 'numeric', minute: '2-digit', hour12: true }),
+          new Date(l.createdAt).toLocaleString('en-AU', { timeZone: 'Australia/Brisbane', weekday: 'short', day: '2-digit', month: 'short', hour: 'numeric', minute: '2-digit', hour12: true }),
           esc(l.channel), esc(l.name), l.phone ? esc(l.phone) : '—',
         ]),
       ))
     } else {
-      parts.push(`<p style="color:#6b7280;font-size:13px;margin:4px 0 14px">No new leads came in overnight.</p>`)
+      parts.push(`<p style="color:#6b7280;font-size:13px;margin:4px 0 14px">No overnight leads in this period.</p>`)
     }
   }
 

@@ -54,8 +54,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const [orders, dist, quoteLeads] = await Promise.all([
       fetchOrders(token, yearStart, today),
       fetchDistBookings(token, yearStart, today),
-      // Overnight quote-channel leads — Mon 7am run reaches back to Fri 5:30pm.
-      fetchQuoteLeads(token, nowMs - 4 * 86400_000).catch(() => null),
+      // Overnight leads span the recap week + its leading weekend/night.
+      fetchQuoteLeads(token, Date.parse(previousTradingWeek(nowMs).start + 'T00:00:00Z') - 5 * 86400_000).catch(() => null),
     ])
 
     // Assemble (rule-based flags first), then upgrade to LLM flags if available.

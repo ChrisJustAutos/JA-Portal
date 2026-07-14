@@ -72,8 +72,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const [orders, dist, quoteLeads] = await Promise.all([
       fetchOrders(token, fetchStart, fetchEnd),
       fetchDistBookings(token, fetchStart, fetchEnd),
-      // 4 days back covers Monday morning's Fri-5:30pm window with margin.
-      fetchQuoteLeads(token, nowMs - 4 * 86400_000).catch(() => null),
+      // Reach back to before the range starts (its overnight span opens 17:30
+      // on the trading day before week.start — 5 days covers any weekend).
+      fetchQuoteLeads(token, Date.parse(week.start + 'T00:00:00Z') - 5 * 86400_000).catch(() => null),
     ])
 
     let recap = assembleRecap({ nowMs, orders, dist, diaryNotes, forecast, week, quoteLeads })

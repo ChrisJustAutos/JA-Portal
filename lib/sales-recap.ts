@@ -65,19 +65,29 @@ export function previousTradingWeek(asOfMs: number): RecapWeek {
   return { start: ymd(lastMon), end: ymd(lastFri) }
 }
 
-// The "overnight" window (Brisbane): 17:30 on the last trading day (Mon–Fri)
-// strictly before the window's end, through 07:00 this morning — or "now" if
-// it's still before 7am. Monday morning's window therefore spans the whole
-// weekend (Fri 5:30pm → Mon 7:00am), which is what the Mon 7am email wants.
-export function overnightWindow(nowMs: number): { startMs: number; endMs: number } {
-  const b = brisbaneNow(nowMs)
-  const sevenToday = Date.UTC(b.getUTCFullYear(), b.getUTCMonth(), b.getUTCDate(), 7, 0) - AU_TZ_OFFSET_MS
-  const endMs = nowMs < sevenToday ? nowMs : sevenToday
-  const e = brisbaneNow(endMs)
-  const d = new Date(Date.UTC(e.getUTCFullYear(), e.getUTCMonth(), e.getUTCDate()))
-  do { d.setUTCDate(d.getUTCDate() - 1) } while (d.getUTCDay() === 0 || d.getUTCDay() === 6)
-  const startMs = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), 17, 30) - AU_TZ_OFFSET_MS
-  return { startMs, endMs }
+// Overnight-leads span for a report week/range (Brisbane): from 17:30 on the
+// last trading day BEFORE the range (the night leading into its first
+// morning) through 07:00 on the first trading day AFTER it, capped at `now`.
+// For a Mon–Fri week that's Fri-before 5:30pm → Mon-after 7:00am, so the
+// Monday 7am email of last week's recap carries the weekend just gone.
+export function overnightLeadsSpan(week: RecapWeek, nowMs: number): { startMs: number; endMs: number } {
+  const s = new Date(week.start + 'T00:00:00Z')
+  do { s.setUTCDate(s.getUTCDate() - 1) } while (s.getUTCDay() === 0 || s.getUTCDay() === 6)
+  const startMs = Date.UTC(s.getUTCFullYear(), s.getUTCMonth(), s.getUTCDate(), 17, 30) - AU_TZ_OFFSET_MS
+  const e = new Date(week.end + 'T00:00:00Z')
+  do { e.setUTCDate(e.getUTCDate() + 1) } while (e.getUTCDay() === 0 || e.getUTCDay() === 6)
+  const endMs = Math.min(nowMs, Date.UTC(e.getUTCFullYear(), e.getUTCMonth(), e.getUTCDate(), 7, 0) - AU_TZ_OFFSET_MS)
+  return { startMs, endMs: Math.max(startMs, endMs) }
+}
+
+// Out-of-office-hours in Brisbane: weekends, or weekdays before 7:00am /
+// from 5:30pm. This is the per-lead filter inside the span above.
+export function isOutOfHours(ms: number): boolean {
+  const b = brisbaneNow(ms)
+  const dow = b.getUTCDay()
+  if (dow === 0 || dow === 6) return true
+  const mins = b.getUTCHours() * 60 + b.getUTCMinutes()
+  return mins < 7 * 60 || mins >= 17 * 60 + 30
 }
 
 // The CURRENT trading week so far: this week's Monday → Friday (the full
@@ -164,21 +174,26 @@ export function assembleRecap(input: AssembleInput): SalesRecap {
   // Section 6 — flags (LLM if supplied, else rule-based fallback)
   const flags = input.flags?.length ? input.flags : ruleFlags(monthly, rolling, weekTotal)
 
-  // Overnight quote-channel leads (only when a lead pull was supplied)
+  // Overnight quote-channel leads for the report week/range (only when a
+  // lead pull was supplied): out-of-hours arrivals within the span from the
+  // night into the range's first day to 7am after its last day.
   let overnight: OvernightOut | null = null
   if (input.quoteLeads) {
-    const { startMs, endMs } = overnightWindow(input.nowMs)
+    const { startMs, endMs } = overnightLeadsSpan(week, input.nowMs)
     const fmt = (ms: number) => new Date(ms).toLocaleString('en-AU', {
       timeZone: 'Australia/Brisbane', weekday: 'short', day: '2-digit', month: 'short',
       hour: 'numeric', minute: '2-digit', hour12: true,
     })
     const leads = input.quoteLeads
-      .filter(l => { const t = Date.parse(l.createdAt); return Number.isFinite(t) && t >= startMs && t < endMs })
+      .filter(l => {
+        const t = Date.parse(l.createdAt)
+        return Number.isFinite(t) && t >= startMs && t < endMs && isOutOfHours(t)
+      })
       .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
       .map(l => ({ channel: l.channel, name: l.name, phone: l.phone, createdAt: l.createdAt }))
     overnight = {
       start: new Date(startMs).toISOString(), end: new Date(endMs).toISOString(),
-      label: `${fmt(startMs)} → ${fmt(endMs)}`, leads,
+      label: `${fmt(startMs)} → ${fmt(endMs)} · nights + weekends only`, leads,
     }
   }
 

@@ -100,14 +100,18 @@ export interface QuoteLeadRow { channel: string; name: string; phone: string | n
 
 // Items created since `sinceMs` across all quote-channel boards. Uses
 // created_at (no date column on these boards is reliable for lead-arrival
-// time). Two pages of 100 per board covers far more than a few nights.
+// time). Pages NEWEST-FIRST via order_by __creation_log__ (live-verified
+// 2026-07-15) and stops once a page has descended past `sinceMs`, so past
+// weeks/ranges are reachable without pulling whole boards.
 export async function fetchQuoteLeads(token: string, sinceMs: number): Promise<QuoteLeadRow[]> {
   const out: QuoteLeadRow[] = []
   for (const b of QUOTE_CHANNEL_BOARDS) {
     let cursor: string | null = null
-    for (let page = 0; page < 2; page++) {
-      const cursorArg: string = cursor ? `, cursor: "${cursor}"` : ''
-      const data = await mondayQuery(token, `query { boards(ids: [${b.id}]) { items_page(limit: 100${cursorArg}) {
+    for (let page = 0; page < 10; page++) {
+      const cursorArg: string = cursor
+        ? `cursor: "${cursor}"`
+        : `query_params: { order_by: [{ column_id: "__creation_log__", direction: desc }] }`
+      const data = await mondayQuery(token, `query { boards(ids: [${b.id}]) { items_page(limit: 200, ${cursorArg}) {
         cursor
         items { id name created_at column_values(ids: ["${QUOTE_COL_PHONE}"]) { id text } }
       } } }`)
@@ -124,7 +128,8 @@ export async function fetchQuoteLeads(token: string, sinceMs: number): Promise<Q
       }
       cursor = pageData?.cursor || null
       if (!cursor || !items.length) break
-      if (!items.some((it: any) => new Date(it.created_at).getTime() >= sinceMs)) break
+      // Descending order: once the whole page is older than the window, done.
+      if (items.every((it: any) => new Date(it.created_at).getTime() < sinceMs)) break
     }
   }
   return out
