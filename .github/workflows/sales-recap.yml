@@ -41,5 +41,7 @@ jobs:
           DRY_RUN:                  ${{ inputs.mode == 'dry-run' && '1' || '' }}
           # Email only on the scheduled Mon 7am run and explicit "real" dispatch;
           # "refresh" stores without emailing. On schedule inputs.mode is empty → email.
-          SEND_EMAIL:               ${{ inputs.mode == 'refresh' && '' || '1' }}
+          # NB: the truthy branch must hold the non-empty value ('1'); GH Actions
+          # treats '' as falsy so `x && '' || '1'` would always yield '1'.
+          SEND_EMAIL:               ${{ inputs.mode != 'refresh' && '1' || '' }}
         run: npx tsx scripts/run-sales-recap.ts
