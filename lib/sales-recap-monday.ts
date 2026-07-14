@@ -114,8 +114,9 @@ export function dailyBreakdown(orders: OrderRow[], dist: DistRow[], days: string
     const row = byDay.get(d.date); if (!row) continue
     row.distributor += d.value
   }
-  for (const row of byDay.values()) row.total = row.orders + row.distributor
-  return days.map(d => byDay.get(d)!)
+  const rows = days.map(d => byDay.get(d)!)
+  for (const row of rows) row.total = row.orders + row.distributor
+  return rows
 }
 
 export interface WeekRow { label: string; start: string; end: string; orders: number; distributor: number; total: number; tradingDays: number; dailyAvg: number }
