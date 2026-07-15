@@ -98,11 +98,24 @@ const QUOTE_COL_PHONE = 'text_mkzbenay'
 
 export interface QuoteLeadRow { channel: string; name: string; phone: string | null; createdAt: string }
 
+// Monday user ids whose item-creations count as INBOUND leads — the intake
+// account whose API token posts web enquiries onto the boards. Items created
+// by anyone else are staff workflow entries (e.g. Tyronne's "Performance
+// Estimate #59251" quote items, hand-typed follow-ups), not arrivals — they'd
+// pollute the overnight count whenever staff enter one after 5:30pm.
+const LEAD_INTAKE_USER_IDS = new Set(
+  (process.env.MONDAY_LEAD_INTAKE_USERS || '54504405').split(/[,;]+/).map(s => s.trim()).filter(Boolean),
+)
+// Quote-system item names ("Performance Estimate #59251", "58967 + 58966")
+// dropped belt-and-braces regardless of creator.
+const QUOTE_ITEM_NAME = /^(performance\s+estimate\b|\d{5}(\s*\+\s*\d{5})*$)/i
+
 // Items created since `sinceMs` across all quote-channel boards. Uses
-// created_at (no date column on these boards is reliable for lead-arrival
-// time). Pages NEWEST-FIRST via order_by __creation_log__ (live-verified
-// 2026-07-15) and stops once a page has descended past `sinceMs`, so past
-// weeks/ranges are reachable without pulling whole boards.
+// created_at (the boards' Date column is staff-edited — follow-up dates — so
+// it's unreliable for lead-arrival time). Pages NEWEST-FIRST via order_by
+// __creation_log__ (live-verified 2026-07-15) and stops once a page has
+// descended past `sinceMs`, so past weeks/ranges are reachable without
+// pulling whole boards.
 export async function fetchQuoteLeads(token: string, sinceMs: number): Promise<QuoteLeadRow[]> {
   const out: QuoteLeadRow[] = []
   for (const b of QUOTE_CHANNEL_BOARDS) {
@@ -113,15 +126,22 @@ export async function fetchQuoteLeads(token: string, sinceMs: number): Promise<Q
         : `query_params: { order_by: [{ column_id: "__creation_log__", direction: desc }] }`
       const data = await mondayQuery(token, `query { boards(ids: [${b.id}]) { items_page(limit: 200, ${cursorArg}) {
         cursor
-        items { id name created_at column_values(ids: ["${QUOTE_COL_PHONE}"]) { id text } }
+        items { id name created_at creator { id } column_values(ids: ["${QUOTE_COL_PHONE}"]) { id text } }
       } } }`)
       const pageData = data?.boards?.[0]?.items_page
       const items: any[] = pageData?.items || []
       for (const it of items) {
         if (!(new Date(it.created_at).getTime() >= sinceMs)) continue
+        // Staff-created / quote-system items aren't inbound leads. Unknown
+        // creator (deleted user) fails OPEN so a Monday hiccup can't blank
+        // the section.
+        const creatorId = it.creator?.id != null ? String(it.creator.id) : null
+        if (creatorId && !LEAD_INTAKE_USER_IDS.has(creatorId)) continue
+        const name = String(it.name || '').trim()
+        if (QUOTE_ITEM_NAME.test(name)) continue
         out.push({
           channel: b.channel,
-          name: String(it.name || '').trim() || '(unnamed)',
+          name: name || '(unnamed)',
           phone: (it.column_values || []).find((c: any) => c.id === QUOTE_COL_PHONE)?.text?.trim() || null,
           createdAt: it.created_at,
         })
