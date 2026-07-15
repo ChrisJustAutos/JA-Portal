@@ -11,7 +11,8 @@
 //   companyFile: 'VPS' | 'JAWS',
 //   billUid: '<myob bill uid>',
 //   recode: [{ match: 'rent', accountDisplayId: '6-3009' }, …],
-//   dryRun?: true   // report what WOULD change without PUTting
+//   dryRun?: true,    // report what WOULD change without PUTting
+//   inspect?: true,   // just return the bill's lines + current accounts
 // }
 // Each line's Description is tested against every recode entry
 // (case-insensitive substring); first match wins for that line.
@@ -35,14 +36,32 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const billUid = String(body.billUid || '').trim()
   const recode: { match: string; accountDisplayId: string }[] = Array.isArray(body.recode) ? body.recode : []
   const dryRun = body.dryRun === true
+  const inspect = body.inspect === true
   if (!billUid) return res.status(400).json({ error: 'billUid required' })
-  if (!recode.length || recode.some(r => !r?.match || !r?.accountDisplayId)) {
+  if (!inspect && (!recode.length || recode.some(r => !r?.match || !r?.accountDisplayId))) {
     return res.status(400).json({ error: 'recode must be [{ match, accountDisplayId }, …]' })
   }
 
   try {
     const conn = await getConnection(companyFile)
     if (!conn?.company_file_id) return res.status(500).json({ error: `no active MYOB connection for ${companyFile}` })
+
+    if (inspect) {
+      const got = await myobFetch(conn.id, `/accountright/${conn.company_file_id}/Purchase/Bill/Service/${billUid}`)
+      if (got.status !== 200 || !got.data?.UID) return res.status(404).json({ error: `bill not found (HTTP ${got.status})` })
+      return res.status(200).json({
+        ok: true,
+        billNumber: got.data.Number || null,
+        supplierInvoiceNumber: got.data.SupplierInvoiceNumber || null,
+        supplier: got.data.Supplier?.Name || null,
+        totalAmount: got.data.TotalAmount ?? null,
+        lines: (got.data.Lines || []).map((l: any) => ({
+          description: l.Description || '',
+          amount: l.Amount ?? null,
+          account: l.Account ? `${l.Account.DisplayID || ''} ${l.Account.Name || ''}`.trim() : null,
+        })),
+      })
+    }
 
     // Resolve each target DisplayID to a live account UID (exact match).
     const accounts = new Map<string, { uid: string; name: string }>()
