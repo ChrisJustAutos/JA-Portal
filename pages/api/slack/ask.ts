@@ -173,6 +173,62 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           return res.status(200).end()
         }
 
+        // AP flag card: "➕ Create supplier" — the supplier isn't in MYOB.
+        // Re-extract the invoice, lift the vendor's details (ABN, name,
+        // phone, email, address) and thread them under the flag card for a
+        // human to check, with a "Create supplier & post bill" button.
+        if (action.action_id === 'ap_create_supplier') {
+          const rowId = String(action.value || '')
+          const ch: string = payload.channel?.id || ''
+          const threadTs: string | undefined = payload.message?.ts
+          waitUntil((async () => {
+            let out: { text: string; blocks?: any[] }
+            try {
+              const { proposeSupplier } = await import('../../../lib/ap-auto-entry')
+              out = await proposeSupplier(rowId)
+            } catch (e: any) {
+              out = { text: `❌ Couldn't read the supplier's details: ${(e?.message || e).toString().slice(0, 200)}` }
+            }
+            if (ch) await postMessage({ channel: ch, text: out.text, blocks: out.blocks, thread_ts: threadTs }).catch(() => null)
+          })())
+          return res.status(200).end()
+        }
+
+        // Threaded proposal: "✅ Create supplier & post bill" — a human has
+        // checked the details. Create the MYOB card (never bank details) and
+        // post the bill; then strip the button off the proposal so it can't
+        // double-create, and thread the outcome.
+        if (action.action_id === 'ap_create_supplier_go') {
+          const rowId = String(action.value || '')
+          const approver = payload.user?.username || payload.user?.name || payload.user?.id || 'staff'
+          const ch: string = payload.channel?.id || ''
+          const msgTs: string | undefined = payload.message?.ts
+          const rootTs: string | undefined = payload.message?.thread_ts || payload.message?.ts
+          const origBlocks = payload.message?.blocks || []
+          waitUntil((async () => {
+            let result = ''
+            try {
+              const { approveCreateSupplierAndPost } = await import('../../../lib/ap-auto-entry')
+              result = await approveCreateSupplierAndPost(rowId, approver)
+            } catch (e: any) {
+              result = `❌ Create-supplier approval failed: ${(e?.message || e).toString().slice(0, 200)}`
+            }
+            // Genuine outcome (card created / matched / already posted) →
+            // freeze the proposal message. A ❌ keeps the button for a retry.
+            if (!result.startsWith('❌') && ch && msgTs) {
+              try {
+                const { markProposalDoneBlocks } = await import('../../../lib/ap-auto-entry-slack')
+                const updated = markProposalDoneBlocks(origBlocks, `Approved by ${approver}`)
+                await updateMessage({ channel: ch, ts: msgTs, text: updated.text, blocks: updated.blocks })
+              } catch (e: any) {
+                console.error('[ap-create-supplier] proposal update failed:', e?.message || e)
+              }
+            }
+            if (ch) await postMessage({ channel: ch, text: result, thread_ts: rootTs }).catch(() => null)
+          })())
+          return res.status(200).end()
+        }
+
         if (action.action_id === 'ap_approve_post') {
           const rowId = String(action.value || '')
           const approver = payload.user?.username || payload.user?.name || payload.user?.id || 'staff'

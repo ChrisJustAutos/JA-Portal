@@ -41,16 +41,16 @@ import {
 import { pdfPageCount, splitPdfRange, segmentInvoicePdf, extractPageRanges, type PageRange } from './ap-batch-split'
 import { sendMail } from './email'
 import { tryAutoMatchSupplier } from './ap-myob-automatch'
-import { getSupplierByUid, searchAccounts, type CompanyFileLabel } from './ap-myob-lookup'
+import { getSupplierByUid, searchAccounts, searchSuppliers, createSupplier, type CompanyFileLabel } from './ap-myob-lookup'
 import { resolveLineAccount } from './ap-line-resolver'
 import { triageInvoice } from './ap-supabase'
 import { consolidatedInvoiceSupplier } from './ap-consolidated-suppliers'
 import { overseasSupplier } from './ap-overseas-suppliers'
 import { postFoundInvoiceToMyob, reattachStagedPdf, sameInvoiceNumberLoose } from './ap-myob-bill'
-import { postWebhook } from './slack'
+import { postWebhook, type SlackBlock } from './slack'
 import { postMessage } from './slack-bot/slack'
 import { randomUUID } from 'crypto'
-import { buildAutoEntryBlocks, type BankCheck } from './ap-auto-entry-slack'
+import { buildAutoEntryBlocks, buildSupplierProposalBlocks, type SupplierProposal, type BankCheck } from './ap-auto-entry-slack'
 
 const AP_BUCKET = 'ap-invoices'
 const SIGNED_URL_TTL_SEC = 7 * 24 * 3600   // 7 days for the Slack "View invoice" link
@@ -906,7 +906,11 @@ async function processInvoice(
       const staged = await stageAndSign(c, msg, attId, bytes, kind).catch(() => null)
       // Approve no longer needs the staged PDF (postApprovedRow falls back to
       // re-reading the attachment from Graph), so the button always shows.
-      const withUrl = buildAutoEntryBlocks({ ...slackCommon, outcome: 'flagged', failReasons, pdfUrl: staged?.url, approveValue: rowId })
+      // Unknown supplier → offer the "Create supplier" thread flow: the click
+      // reads the vendor's details off the invoice for review, and approving
+      // in-thread creates the MYOB card and posts the bill in one go.
+      const offerCreateSupplier = failReasons.some(r => r.includes('supplier-not-mapped'))
+      const withUrl = buildAutoEntryBlocks({ ...slackCommon, outcome: 'flagged', failReasons, pdfUrl: staged?.url, approveValue: rowId, createSupplierValue: offerCreateSupplier ? rowId : null })
       const ts = await sendSlack(withUrl, companyFile)
       await logRow(c, { mailbox, companyFile, msg, attId, attName }, { id: rowId, outcome: 'flagged', supplierName, supplierUid, invoiceNumber: extracted.invoiceNumber, invoiceDate: extracted.invoiceDate, amount: signedTotal, failReasons, bankCheck: effectiveBank, pdfStoragePath: staged?.path || null, slackTs: ts })
     }
@@ -1111,8 +1115,114 @@ export async function approveAndPost(rowId: string, approvedBy: string): Promise
   return postApprovedRow(c, { ...row, approved_by: approvedBy })
 }
 
-async function postApprovedRow(c: SupabaseClient, row: any, accountOverride?: { uid: string; name: string } | null): Promise<string> {
+// ── "Create supplier" flow, step 1: propose ──────────────────────────────
+// The "➕ Create supplier" button on a supplier-not-mapped flag card calls
+// this (via /api/slack/ask). Re-extracts the invoice with the strong model,
+// lifts the vendor's details (name, ABN, email, phone, address), persists the
+// proposal on the log row, and returns a threaded review card with a
+// "Create supplier & post bill" button. No MYOB write happens here.
+export async function proposeSupplier(rowId: string): Promise<{ text: string; blocks?: SlackBlock[] }> {
+  const c = sb()
+  const { data: row } = await c.from('ap_auto_entry_log').select('*').eq('id', rowId).maybeSingle()
+  if (!row) return { text: '⚠️ This flag no longer exists — nothing to create.' }
+  if (row.outcome === 'posted' || row.myob_bill_uid) return { text: `Already in MYOB (${row.invoice_number || 'invoice'}) — nothing to create.` }
   const companyFile: CompanyFileLabel = (row.company_file as CompanyFileLabel) || 'VPS'
+
+  const re = await reExtractRow(c, row)
+  if (re.err !== undefined) return { text: re.err }
+  const { extracted } = re
+  const v = extracted.vendor
+  const name = (v?.name || row.supplier_name || '').trim()
+  if (!name) return { text: `⚠️ ${row.invoice_number || 'invoice'}: no supplier name readable on the invoice — create the card in MYOB manually.` }
+  if (isSelfEntityVendor(name)) return { text: `🪞 "${name}" is one of OUR entities — this is our own paperwork, not a supplier bill. Not creating a card.` }
+
+  // The card may exist by now (created since the flag, or under a name/ABN
+  // the strong re-extract surfaces) — then there's nothing to create.
+  const match = await tryAutoMatchSupplier(name, v?.abn || null, companyFile).catch(() => null)
+  if (match) {
+    return { text: `✋ "${name}" already matches MYOB ${companyFile} card *${match.supplier.name}* — no new card needed. Use *✅ Approve & post to MYOB* on the card above.` }
+  }
+
+  // Buying tax code: an overseas supplier (or an invoice explicitly showing
+  // $0 GST) starts FRE; everything else GST. Editable in MYOB afterwards.
+  const gst = extracted.totals.gstAmount
+  const taxCode: 'GST' | 'FRE' = (overseasSupplier(name) || gst === 0) ? 'FRE' : 'GST'
+  const proposal: SupplierProposal = {
+    name,
+    abn: v?.abn || null, email: v?.email || null, phone: v?.phone || null,
+    website: v?.website || null, street: v?.street || null, city: v?.city || null,
+    state: v?.state || null, postcode: v?.postcode || null, country: v?.country || null,
+    taxCode,
+  }
+  await c.from('ap_auto_entry_log').update({ proposed_supplier: proposal }).eq('id', rowId)
+
+  // Similar existing cards, for the reviewer to rule out a near-miss rename.
+  let nearMatches: { name: string; displayId?: string | null }[] | null = null
+  try {
+    const q = name.split(/\s+/)[0] || name
+    nearMatches = (await searchSuppliers(companyFile, q, 5)).map(s => ({ name: s.name, displayId: s.displayId }))
+  } catch { /* card still useful without them */ }
+
+  const total = extracted.totals.totalIncGst
+  const signedTotal = extracted.isCreditNote === true && total != null ? -Math.abs(total) : total
+  return buildSupplierProposalBlocks({
+    proposal, companyFile, rowId,
+    invoiceNumber: extracted.invoiceNumber || row.invoice_number,
+    totalIncGst: signedTotal ?? (row.amount != null ? Number(row.amount) : null),
+    nearMatches,
+  })
+}
+
+// ── "Create supplier" flow, step 2: approve ──────────────────────────────
+// The "✅ Create supplier & post bill" button on the threaded proposal calls
+// this. Creates the MYOB card from the REVIEWED proposal (never bank details)
+// and posts the bill against it via the normal approved-post path. If a card
+// matching the proposal appeared in the meantime, it's used instead of
+// creating a duplicate.
+export async function approveCreateSupplierAndPost(rowId: string, approvedBy: string): Promise<string> {
+  const c = sb()
+  const { data: row } = await c.from('ap_auto_entry_log').select('*').eq('id', rowId).maybeSingle()
+  if (!row) return '⚠️ Approval failed — this flag no longer exists.'
+  if (row.outcome === 'posted' || row.myob_bill_uid) return `Already in MYOB (${row.invoice_number || 'invoice'}) — nothing to do.`
+  const proposal = row.proposed_supplier as SupplierProposal | null
+  if (!proposal?.name) return '⚠️ No reviewed supplier details on this flag — click *➕ Create supplier* again.'
+  const companyFile: CompanyFileLabel = (row.company_file as CompanyFileLabel) || 'VPS'
+
+  let supplier: { uid: string; name: string }
+  let createdNote: string
+  const existing = await tryAutoMatchSupplier(proposal.name, proposal.abn, companyFile).catch(() => null)
+  if (existing) {
+    supplier = { uid: existing.supplier.uid, name: existing.supplier.name }
+    createdNote = `matched existing MYOB card *${existing.supplier.name}* (created since the flag — no new card)`
+  } else {
+    try {
+      const created = await createSupplier(companyFile, {
+        companyName: proposal.name, abn: proposal.abn, taxCode: proposal.taxCode,
+        email: proposal.email, phone: proposal.phone, website: proposal.website,
+        street: proposal.street, city: proposal.city, state: proposal.state,
+        postcode: proposal.postcode, country: proposal.country,
+      })
+      supplier = { uid: created.uid, name: created.name }
+      createdNote = `created MYOB ${companyFile} supplier card *${created.name}*${created.displayId ? ` (${created.displayId})` : ''}`
+    } catch (e: any) {
+      return `❌ Supplier creation failed: ${(e?.message || e).toString().slice(0, 250)}`
+    }
+  }
+
+  await c.from('ap_auto_entry_log')
+    .update({ approved_by: approvedBy, approved_at: new Date().toISOString(), supplier_uid: supplier.uid, supplier_name: supplier.name })
+    .eq('id', rowId)
+  const result = await postApprovedRow(c, { ...row, approved_by: approvedBy }, null, supplier)
+  return result.startsWith('✅') ? `${result}\n_(${createdNote})_` : `☑️ ${createdNote[0].toUpperCase()}${createdNote.slice(1)}, but the bill didn't post:\n${result}`
+}
+
+// Re-read a flag row's source document (staged copy first, else the original
+// Graph attachment) and re-extract it with the strong scan model. Shared by
+// the approve-post and create-supplier flows. Returns a user-facing error
+// string instead of throwing.
+async function reExtractRow(
+  c: SupabaseClient, row: any,
+): Promise<{ err: string; bytes?: undefined; extracted?: undefined } | { err?: undefined; bytes: Buffer; extracted: ExtractedAPInvoice }> {
   let bytes: Buffer | null = null
   if (row.pdf_storage_path) {
     const { data: blob, error: dlErr } = await c.storage.from(AP_BUCKET).download(row.pdf_storage_path)
@@ -1134,19 +1244,33 @@ async function postApprovedRow(c: SupabaseClient, row: any, accountOverride?: { 
       }
     }
   }
-  if (!bytes) return `⚠️ ${row.invoice_number || 'invoice'}: staged PDF unavailable and the source email couldn't be re-read — enter manually.`
+  if (!bytes) return { err: `⚠️ ${row.invoice_number || 'invoice'}: staged PDF unavailable and the source email couldn't be re-read — enter manually.` }
 
-  let extracted: ExtractedAPInvoice
   try {
     // The bytes may be a photo, not a PDF (staged .jpeg or a Graph re-read of
     // an image attachment) — sniff the magic bytes and extract accordingly.
     const kind = sniffKind(bytes)
-    extracted = kind === 'pdf'
+    const extracted = kind === 'pdf'
       ? (await extractInvoiceFromPdf(bytes.toString('base64'), { model: scanExtractionModel() })).invoice
       : (await extractInvoiceFromImage(bytes.toString('base64'), kind, { model: scanExtractionModel() })).invoice
+    return { bytes, extracted }
   } catch (e: any) {
-    return `⚠️ ${row.invoice_number || 'invoice'}: re-extraction failed (${(e?.message || e).toString().slice(0, 120)}) — enter manually.`
+    return { err: `⚠️ ${row.invoice_number || 'invoice'}: re-extraction failed (${(e?.message || e).toString().slice(0, 120)}) — enter manually.` }
   }
+}
+
+async function postApprovedRow(
+  c: SupabaseClient, row: any,
+  accountOverride?: { uid: string; name: string } | null,
+  // Skip supplier matching and post against THIS card — used by the
+  // create-supplier flow right after the card is created (a fuzzy re-match
+  // could land elsewhere; the human approved this exact card).
+  supplierOverride?: { uid: string; name: string } | null,
+): Promise<string> {
+  const companyFile: CompanyFileLabel = (row.company_file as CompanyFileLabel) || 'VPS'
+  const re = await reExtractRow(c, row)
+  if (re.err !== undefined) return re.err
+  const { bytes, extracted } = re
   const total = extracted.totals.totalIncGst
   if (!extracted.invoiceNumber || total == null || !extracted.invoiceDate) {
     return `⚠️ ${row.invoice_number || 'invoice'}: number/date/total unreadable even on the strong model — enter manually.`
@@ -1156,12 +1280,18 @@ async function postApprovedRow(c: SupabaseClient, row: any, accountOverride?: { 
     return `🪞 ${extracted.invoiceNumber}: this document is issued by ${extracted.vendor?.name || row.supplier_name} — it's OUR paperwork (customer credit/invoice), not a supplier bill. Not posting; handle in AR.`
   }
 
-  const match = await tryAutoMatchSupplier(extracted.vendor?.name || row.supplier_name, extracted.vendor?.abn || null, companyFile).catch(() => null)
-  if (!match) return `⚠️ ${extracted.invoiceNumber}: no MYOB supplier card matched "${extracted.vendor?.name || row.supplier_name || 'unknown'}" — create/rename the card, then re-approve.`
+  let supplier: { uid: string; name: string }
+  if (supplierOverride) {
+    supplier = supplierOverride
+  } else {
+    const match = await tryAutoMatchSupplier(extracted.vendor?.name || row.supplier_name, extracted.vendor?.abn || null, companyFile).catch(() => null)
+    if (!match) return `⚠️ ${extracted.invoiceNumber}: no MYOB supplier card matched "${extracted.vendor?.name || row.supplier_name || 'unknown'}" — create/rename the card, then re-approve.`
+    supplier = { uid: match.supplier.uid, name: match.supplier.name }
+  }
 
   const cleanName = `${String(row.attachment_name || extracted.invoiceNumber).replace(/\.pdf/i, '').replace(/[^\w-]+/g, '_').replace(/^_+|_+$/g, '')}.pdf`
   const postArgs = {
-    companyFile, supplierUid: match.supplier.uid, supplierName: match.supplier.name,
+    companyFile, supplierUid: supplier.uid, supplierName: supplier.name,
     statementAmount: null, pdfBytes: bytes, pdfFilename: cleanName, postedBy: ACTOR,
     acceptLowConfidence: true,
     accountUidOverride: accountOverride || null,
@@ -1191,7 +1321,7 @@ async function postApprovedRow(c: SupabaseClient, row: any, accountOverride?: { 
   const signedTotal = extracted.isCreditNote === true ? -Math.abs(total) : total
   await c.from('ap_auto_entry_log').update({
     outcome: 'posted', myob_bill_uid: posted.billUid || null, error: null,
-    supplier_name: match.supplier.name, supplier_uid: match.supplier.uid,
+    supplier_name: supplier.name, supplier_uid: supplier.uid,
     invoice_number: extracted.invoiceNumber, amount: signedTotal,
   }).eq('id', row.id)
 
@@ -1201,7 +1331,7 @@ async function postApprovedRow(c: SupabaseClient, row: any, accountOverride?: { 
   const filed = await fileEmailAway(String(row.mailbox || ''), String(row.graph_message_id || ''))
   try { await c.from('ap_auto_entry_log').update({ moved: filed.moved, move_note: filed.note }).eq('id', row.id) } catch { /* best effort */ }
 
-  return `✅ *${match.supplier.name}* — ${extracted.invoiceNumber} · ${money(signedTotal)}${extracted.isCreditNote ? ' (credit note)' : ''} posted to MYOB${posted.adopted ? ' (already existed — linked)' : ''}. Approved by ${row.approved_by || 'staff'}.`
+  return `✅ *${supplier.name}* — ${extracted.invoiceNumber} · ${money(signedTotal)}${extracted.isCreditNote ? ' (credit note)' : ''} posted to MYOB${posted.adopted ? ' (already existed — linked)' : ''}. Approved by ${row.approved_by || 'staff'}.`
 }
 
 // Mark an email read + move it to the processed folder ("Read /Printed") —

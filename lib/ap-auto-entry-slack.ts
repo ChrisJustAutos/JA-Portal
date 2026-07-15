@@ -25,6 +25,10 @@ export interface AutoEntrySlackInput {
   // ap_auto_entry_log row id — renders an "Approve & post to MYOB" button on
   // flag cards (handled by /api/slack/ask → approveAndPost).
   approveValue?: string | null
+  // Same row id — renders a "➕ Create supplier" button on supplier-not-mapped
+  // flag cards. Click extracts the vendor's details off the invoice and
+  // threads them for review (handled by /api/slack/ask → proposeSupplier).
+  createSupplierValue?: string | null
   // JAWS account-choice buttons: post the flagged invoice coded to a chosen
   // account. First option is the system's best guess (shown "suggested").
   // Each → action_id ap_post_account, value {r:rowId,a:uid,n:name}.
@@ -138,6 +142,12 @@ export function buildAutoEntryBlocks(i: AutoEntrySlackInput): { text: string; bl
       },
     })
   }
+  if (i.outcome === 'flagged' && i.createSupplierValue) {
+    actions.push({
+      type: 'button', action_id: 'ap_create_supplier', value: i.createSupplierValue,
+      text: { type: 'plain_text', text: '➕ Create supplier', emoji: true },
+    })
+  }
   if (actions.length) blocks.push({ type: 'actions', elements: actions })
 
   // JAWS account-choice row: one button per candidate expense account. The
@@ -181,7 +191,7 @@ export function markApprovedBlocks(
     if (b?.type === 'section' && /why it wasn't auto-posted/i.test(String(b.text?.text || ''))) continue
     // Rebuild the actions row without the approve button.
     if (b?.type === 'actions') {
-      const kept = (b.elements || []).filter((e: any) => e?.action_id !== 'ap_approve_post')
+      const kept = (b.elements || []).filter((e: any) => e?.action_id !== 'ap_approve_post' && e?.action_id !== 'ap_create_supplier')
       if (kept.length) blocks.push({ ...b, elements: kept })
       continue
     }
@@ -194,4 +204,84 @@ export function markApprovedBlocks(
 function escOr(s: string | null | undefined, fallback: string): string {
   const t = String(s || '').trim()
   return t || fallback
+}
+
+// ── "Create supplier" proposal (threaded under the flag card) ─────────────
+// Shows every detail lifted off the invoice so a human can eyeball it before
+// the card is created in MYOB. The approve button carries just the row id —
+// the reviewed details are persisted on the log row (proposed_supplier), so
+// what was approved is exactly what gets created.
+export interface SupplierProposal {
+  name: string
+  abn: string | null
+  email: string | null
+  phone: string | null
+  website: string | null
+  street: string | null
+  city: string | null
+  state: string | null
+  postcode: string | null
+  country: string | null
+  taxCode: 'GST' | 'FRE'
+}
+
+export function buildSupplierProposalBlocks(i: {
+  proposal: SupplierProposal
+  companyFile: string
+  rowId: string
+  invoiceNumber: string | null
+  totalIncGst: number | null
+  // Existing MYOB cards with similar names — shown so the reviewer can spot
+  // "this already exists under a slightly different name" before creating.
+  nearMatches?: { name: string; displayId?: string | null }[] | null
+}): { text: string; blocks: SlackBlock[] } {
+  const p = i.proposal
+  const text = `➕ New ${i.companyFile} supplier proposed: ${p.name}`
+  const dash = (v: string | null | undefined) => (v && v.trim()) || '—'
+  const address = [p.street, [p.city, p.state, p.postcode].filter(Boolean).join(' '), p.country]
+    .map(s => (s || '').trim()).filter(Boolean).join(', ')
+  const fields = [
+    `*Company name:*\n${dash(p.name)}`,
+    `*ABN:*\n${dash(p.abn)}`,
+    `*Email:*\n${dash(p.email)}`,
+    `*Phone:*\n${dash(p.phone)}`,
+    `*Website:*\n${dash(p.website)}`,
+    `*Address:*\n${dash(address)}`,
+    `*Tax code (buying):*\n${p.taxCode}`,
+    `*Company file:*\n${i.companyFile}`,
+  ]
+  const blocks: SlackBlock[] = [
+    { type: 'section', text: { type: 'mrkdwn', text: `*➕ Create this ${i.companyFile} supplier card?* Details read off the invoice — check them before approving.` } },
+    { type: 'section', fields: fields.map(t => ({ type: 'mrkdwn', text: t.slice(0, 2000) })) },
+  ]
+  if (i.nearMatches?.length) {
+    const lines = i.nearMatches.slice(0, 5).map(m => `• ${m.name}${m.displayId ? ` (${m.displayId})` : ''}`)
+    blocks.push({ type: 'section', text: { type: 'mrkdwn', text: `*⚠️ Similar existing cards — make sure none of these is the same supplier:*\n${lines.join('\n')}` } })
+  }
+  blocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: 'Bank/payment details are never auto-written — add them in MYOB manually if needed.' }] })
+  blocks.push({
+    type: 'actions',
+    elements: [{
+      type: 'button', style: 'primary', action_id: 'ap_create_supplier_go', value: i.rowId,
+      text: { type: 'plain_text', text: '✅ Create supplier & post bill', emoji: true },
+      confirm: {
+        title: { type: 'plain_text', text: 'Create supplier + post?' },
+        text: { type: 'mrkdwn', text: `Create *${p.name}* in MYOB ${i.companyFile} and post invoice ${i.invoiceNumber || ''} for *${money(i.totalIncGst)}*.` },
+        confirm: { type: 'plain_text', text: 'Create & post' },
+        deny: { type: 'plain_text', text: 'Cancel' },
+      },
+    }],
+  })
+  return { text: text.slice(0, 300), blocks }
+}
+
+// Flip a proposal message to its done state after the approve click — strip
+// the button (prevents double-creates) and append the outcome line.
+export function markProposalDoneBlocks(
+  original: SlackBlock[],
+  resultText: string,
+): { text: string; blocks: SlackBlock[] } {
+  const blocks = (Array.isArray(original) ? original : []).filter(b => b?.type !== 'actions')
+  blocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: resultText.slice(0, 2900) }] })
+  return { text: resultText.slice(0, 300), blocks }
 }
