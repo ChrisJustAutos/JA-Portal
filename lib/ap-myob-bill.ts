@@ -858,14 +858,31 @@ export async function postFoundInvoiceToMyob(args: {
   const override = args.accountUidOverride || null
   for (const l of wlines) {
     if (override) { accountUids.push(override.uid); accountNames.push(override.name); usedSmart = true; continue }
-    const r = await resolveLineAccount(c, { supplier_uid: supplierUid, myob_company_file: companyFile, description: l.description, part_number: l.partNumber })
+    const r = await resolveLineAccount(c, {
+      supplier_uid: supplierUid, myob_company_file: companyFile,
+      description: l.description, part_number: l.partNumber,
+      // Filename carries context the line text can't (e.g. FAL's tenant code)
+      // for match_field='context' rules.
+      attachment_name: args.pdfFilename || null,
+    })
+    // A weak-history pick must also be DOMINANT (≥80% of past bills agree).
+    // Split history means the same line text legitimately posts to different
+    // accounts — e.g. FAL "industrial rent" belongs to per-TENANCY accounts —
+    // and silently picking the popular side miscodes the books (both July
+    // rent invoices landed on Tenancy 8, 2026-07-15). Keyword suggestions
+    // (no history counts) keep working as before.
+    let pick: { uid: string; name: string } | null = null
     if (r.account_uid) {
       // Rule or strong history — confident, auto-applied.
-      accountUids.push(r.account_uid); accountNames.push(r.account_name || 'account'); usedSmart = true
+      pick = { uid: r.account_uid, name: r.account_name || 'account' }
     } else if (r.suggested_account_uid) {
-      // Autonomous smart match — a keyword/name match against the chart, or a
-      // weak-history top pick — overrides the supplier default for this line.
-      accountUids.push(r.suggested_account_uid); accountNames.push(r.suggested_account_name || 'account'); usedSmart = true
+      const dominant = r.source !== 'history-weak'
+        || !r.history_total_count
+        || (r.history_bill_count || 0) / r.history_total_count >= 0.8
+      if (dominant) pick = { uid: r.suggested_account_uid, name: r.suggested_account_name || 'account' }
+    }
+    if (pick) {
+      accountUids.push(pick.uid); accountNames.push(pick.name); usedSmart = true
     } else if (defaultAcc) {
       accountUids.push(defaultAcc); accountNames.push(defaultName)
     } else {

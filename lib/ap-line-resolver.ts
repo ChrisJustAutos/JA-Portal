@@ -85,6 +85,12 @@ export interface ResolverInput {
   myob_company_file: string             // 'VPS' | 'JAWS'
   description: string
   part_number: string | null
+  // Source attachment/file name — extra signal for match_field='context'
+  // rules, for suppliers whose line text alone can't distinguish the account
+  // (FAL rent: identical "industrial rent" lines for two tenancies; the
+  // tenant code only appears in the PDF filename). Optional — callers
+  // without a file in hand just never match context rules.
+  attachment_name?: string | null
 }
 
 export interface ResolverResult {
@@ -109,7 +115,8 @@ interface Rule {
   supplier_uid: string | null
   pattern: string
   match_type: 'contains' | 'starts_with' | 'exact' | 'regex'
-  match_field: 'description' | 'part_number' | 'both'
+  // 'context' = description + part number + attachment name in one blob
+  match_field: 'description' | 'part_number' | 'both' | 'context'
   case_sensitive: boolean
   account_uid: string
   account_code: string
@@ -413,18 +420,21 @@ async function tryRules(c: SupabaseClient, input: ResolverInput): Promise<Rule |
   })
 
   for (const rule of applicable) {
-    if (matchesRule(rule, input.description, input.part_number)) return rule
+    if (matchesRule(rule, input.description, input.part_number, input.attachment_name)) return rule
   }
   return null
 }
 
-function matchesRule(rule: Rule, description: string, partNumber: string | null): boolean {
+function matchesRule(rule: Rule, description: string, partNumber: string | null, attachmentName?: string | null): boolean {
   let candidate = ''
-  if (rule.match_field === 'description' || rule.match_field === 'both') {
+  if (rule.match_field === 'description' || rule.match_field === 'both' || rule.match_field === 'context') {
     candidate += ' ' + (description || '')
   }
-  if (rule.match_field === 'part_number' || rule.match_field === 'both') {
+  if (rule.match_field === 'part_number' || rule.match_field === 'both' || rule.match_field === 'context') {
     candidate += ' ' + (partNumber || '')
+  }
+  if (rule.match_field === 'context') {
+    candidate += ' ' + (attachmentName || '')
   }
   candidate = candidate.trim()
   if (!candidate) return false
