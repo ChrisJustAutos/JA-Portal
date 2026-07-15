@@ -110,6 +110,15 @@ const LEAD_INTAKE_USER_IDS = new Set(
 // dropped belt-and-braces regardless of creator.
 const QUOTE_ITEM_NAME = /^(performance\s+estimate\b|\d{5}(\s*\+\s*\d{5})*$)/i
 
+// Only the "Quote - Lead" group counts (Chris 2026-07-16) — the boards' other
+// groups (Pending / Follow Up / Won / RLMNA…) hold leads already being
+// worked, so an item quoted before the report runs drops out of the
+// overnight count. Titles compared case-insensitively; env override for
+// renames. Missing group info fails open.
+const LEAD_GROUP_TITLES = new Set(
+  (process.env.MONDAY_LEAD_GROUPS || 'Quote - Lead').split(/[,;]+/).map(s => s.trim().toLowerCase()).filter(Boolean),
+)
+
 // Items created since `sinceMs` across all quote-channel boards. Uses
 // created_at (the boards' Date column is staff-edited — follow-up dates — so
 // it's unreliable for lead-arrival time). Pages NEWEST-FIRST via order_by
@@ -126,7 +135,7 @@ export async function fetchQuoteLeads(token: string, sinceMs: number): Promise<Q
         : `query_params: { order_by: [{ column_id: "__creation_log__", direction: desc }] }`
       const data = await mondayQuery(token, `query { boards(ids: [${b.id}]) { items_page(limit: 200, ${cursorArg}) {
         cursor
-        items { id name created_at creator { id } column_values(ids: ["${QUOTE_COL_PHONE}"]) { id text } }
+        items { id name created_at creator { id } group { title } column_values(ids: ["${QUOTE_COL_PHONE}"]) { id text } }
       } } }`)
       const pageData = data?.boards?.[0]?.items_page
       const items: any[] = pageData?.items || []
@@ -137,6 +146,8 @@ export async function fetchQuoteLeads(token: string, sinceMs: number): Promise<Q
         // the section.
         const creatorId = it.creator?.id != null ? String(it.creator.id) : null
         if (creatorId && !LEAD_INTAKE_USER_IDS.has(creatorId)) continue
+        const groupTitle = String(it.group?.title || '').trim().toLowerCase()
+        if (groupTitle && !LEAD_GROUP_TITLES.has(groupTitle)) continue
         const name = String(it.name || '').trim()
         if (QUOTE_ITEM_NAME.test(name)) continue
         out.push({
