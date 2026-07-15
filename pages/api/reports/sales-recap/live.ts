@@ -14,7 +14,8 @@ import type { NextApiRequest, NextApiResponse } from 'next'
 import { createClient } from '@supabase/supabase-js'
 import { getCurrentUser } from '../../../../lib/authServer'
 import { roleHasPermission } from '../../../../lib/permissions'
-import { fetchOrders, fetchDistBookings, fetchQuoteLeads } from '../../../../lib/sales-recap-monday'
+import { fetchOrders, fetchDistBookings } from '../../../../lib/sales-recap-monday'
+import { captureAndLoadQuoteLeads } from '../../../../lib/sales-recap-leads-store'
 import { assembleRecap, previousTradingWeek, currentTradingWeek } from '../../../../lib/sales-recap'
 import { fetchNegativeFeedback, fetchPositiveFeedback } from '../../../../lib/sales-recap-slack'
 import { renderRecapHtml } from '../../../../lib/sales-recap-html'
@@ -75,7 +76,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       fetchDistBookings(token, fetchStart, fetchEnd),
       // Reach back to before the range starts (its overnight span opens 17:30
       // on the trading day before week.start — 5 days covers any weekend).
-      fetchQuoteLeads(token, Date.parse(week.start + 'T00:00:00Z') - 5 * 86400_000).catch(() => null),
+      // Store-backed: snapshots keep past ranges correct after leads move
+      // out of the Quote - Lead group.
+      captureAndLoadQuoteLeads(token, Date.parse(week.start + 'T00:00:00Z') - 5 * 86400_000).catch(() => null),
       fetchNegativeFeedback(week, nowMs).catch((e: any) => {
         console.error('[sales-recap/live] negative-feedback pull failed:', e?.message || e)
         return null

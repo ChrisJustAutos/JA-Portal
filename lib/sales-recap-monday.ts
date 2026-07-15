@@ -96,7 +96,7 @@ export const QUOTE_CHANNEL_BOARDS: { id: string; channel: string }[] = [
 ]
 const QUOTE_COL_PHONE = 'text_mkzbenay'
 
-export interface QuoteLeadRow { channel: string; name: string; phone: string | null; createdAt: string }
+export interface QuoteLeadRow { itemId: string; boardId: string; channel: string; name: string; phone: string | null; createdAt: string }
 
 // Monday user ids whose item-creations count as INBOUND leads — the intake
 // account whose API token posts web enquiries onto the boards. Items created
@@ -151,6 +151,8 @@ export async function fetchQuoteLeads(token: string, sinceMs: number): Promise<Q
         const name = String(it.name || '').trim()
         if (QUOTE_ITEM_NAME.test(name)) continue
         out.push({
+          itemId: String(it.id),
+          boardId: b.id,
           channel: b.channel,
           name: name || '(unnamed)',
           phone: (it.column_values || []).find((c: any) => c.id === QUOTE_COL_PHONE)?.text?.trim() || null,

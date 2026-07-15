@@ -105,6 +105,10 @@
       "schedule": "*/15 * * * *"
     },
     {
+      "path": "/api/cron/overnight-leads-snapshot",
+      "schedule": "*/30 * * * *"
+    },
+    {
       "path": "/api/cron/letter-watch",
       "schedule": "0 * * * *"
     },

@@ -12,7 +12,8 @@
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { createClient } from '@supabase/supabase-js'
 import { validateServiceToken } from '../../../../lib/service-auth'
-import { fetchOrders, fetchDistBookings, fetchQuoteLeads } from '../../../../lib/sales-recap-monday'
+import { fetchOrders, fetchDistBookings } from '../../../../lib/sales-recap-monday'
+import { captureAndLoadQuoteLeads } from '../../../../lib/sales-recap-leads-store'
 import { assembleRecap, previousTradingWeek } from '../../../../lib/sales-recap'
 import { fetchNegativeFeedback, fetchPositiveFeedback } from '../../../../lib/sales-recap-slack'
 import { renderRecapHtml } from '../../../../lib/sales-recap-html'
@@ -57,7 +58,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       fetchOrders(token, yearStart, today),
       fetchDistBookings(token, yearStart, today),
       // Overnight leads span the recap week + its leading weekend/night.
-      fetchQuoteLeads(token, Date.parse(week.start + 'T00:00:00Z') - 5 * 86400_000).catch(() => null),
+      // Store-backed (migration 164) so leads already moved out of the
+      // Quote - Lead group still count for the week they arrived.
+      captureAndLoadQuoteLeads(token, Date.parse(week.start + 'T00:00:00Z') - 5 * 86400_000).catch(() => null),
       fetchNegativeFeedback(week, nowMs).catch((e: any) => {
         console.error('[sales-recap] negative-feedback pull failed:', e?.message || e)
         return null
