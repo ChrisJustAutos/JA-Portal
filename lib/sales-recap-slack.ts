@@ -48,13 +48,15 @@ async function fetchChannelFeedback(channel: string, week: RecapWeek, nowMs: num
     })
   }
 
-  const fmt = (ms: number) => new Date(ms).toLocaleString('en-AU', {
+  // Plain date-range label ("Mon, 13 July → Fri, 17 July") — the span is
+  // whole Brisbane days now; endMs sits at midnight AFTER the last included
+  // day (or `now`), so step back 1ms for the display date.
+  const fmtDay = (ms: number) => new Date(ms).toLocaleDateString('en-AU', {
     timeZone: 'Australia/Brisbane', weekday: 'short', day: '2-digit', month: 'short',
-    hour: 'numeric', minute: '2-digit', hour12: true,
   })
   return {
     start: new Date(startMs).toISOString(), end: new Date(endMs).toISOString(),
-    label: `${fmt(startMs)} → ${fmt(endMs)}`, items,
+    label: `${fmtDay(startMs)} → ${fmtDay(Math.max(startMs, endMs - 1))}`, items,
   }
 }
 

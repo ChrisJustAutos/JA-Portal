@@ -218,13 +218,13 @@ export function assembleRecap(input: AssembleInput): SalesRecap {
   }
 }
 
-// Span the feedback-channel pulls cover: midnight Brisbane opening the
-// report range through 7:00am on the first trading day after it (same tail
-// as the overnight-leads span, so the Monday email includes weekend posts),
-// capped at `now`.
+// Span the feedback-channel pulls cover: the report's plain date range in
+// Brisbane — midnight opening week.start through the end of week.end (Chris
+// 2026-07-16: "all feedback in both channels between the date range"), capped
+// at `now`.
 export function feedbackSpan(week: RecapWeek, nowMs: number): { startMs: number; endMs: number } {
   const startMs = Date.parse(week.start + 'T00:00:00Z') - AU_TZ_OFFSET_MS
-  const { endMs } = overnightLeadsSpan(week, nowMs)
+  const endMs = Math.min(nowMs, Date.parse(week.end + 'T00:00:00Z') + 86400_000 - AU_TZ_OFFSET_MS)
   return { startMs, endMs: Math.max(startMs, endMs) }
 }
 
