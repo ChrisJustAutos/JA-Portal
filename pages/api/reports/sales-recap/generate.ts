@@ -14,7 +14,7 @@ import { createClient } from '@supabase/supabase-js'
 import { validateServiceToken } from '../../../../lib/service-auth'
 import { fetchOrders, fetchDistBookings, fetchQuoteLeads } from '../../../../lib/sales-recap-monday'
 import { assembleRecap, previousTradingWeek } from '../../../../lib/sales-recap'
-import { fetchNegativeFeedback } from '../../../../lib/sales-recap-slack'
+import { fetchNegativeFeedback, fetchPositiveFeedback } from '../../../../lib/sales-recap-slack'
 import { renderRecapHtml } from '../../../../lib/sales-recap-html'
 import { generateFlags } from '../../../../lib/sales-recap-flags'
 import { sendMail } from '../../../../lib/email'
@@ -53,7 +53,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const yearStart = `${new Date(nowMs).getUTCFullYear()}-01-01`
     const today = new Date(nowMs).toISOString().slice(0, 10)
     const week = previousTradingWeek(nowMs)
-    const [orders, dist, quoteLeads, negativeFeedback] = await Promise.all([
+    const [orders, dist, quoteLeads, negativeFeedback, positiveFeedback] = await Promise.all([
       fetchOrders(token, yearStart, today),
       fetchDistBookings(token, yearStart, today),
       // Overnight leads span the recap week + its leading weekend/night.
@@ -62,10 +62,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         console.error('[sales-recap] negative-feedback pull failed:', e?.message || e)
         return null
       }),
+      fetchPositiveFeedback(week, nowMs).catch((e: any) => {
+        console.error('[sales-recap] positive-feedback pull failed:', e?.message || e)
+        return null
+      }),
     ])
 
     // Assemble (rule-based flags first), then upgrade to LLM flags if available.
-    let recap = assembleRecap({ nowMs, orders, dist, diaryNotes, forecast, quoteLeads, negativeFeedback })
+    let recap = assembleRecap({ nowMs, orders, dist, diaryNotes, forecast, quoteLeads, negativeFeedback, positiveFeedback })
     const llm = await generateFlags(recap).catch(() => [])
     if (llm.length) recap = { ...recap, flags: llm }
 

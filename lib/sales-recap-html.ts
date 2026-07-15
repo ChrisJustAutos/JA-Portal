@@ -64,29 +64,39 @@ export function renderRecapHtml(r: SalesRecap): string {
     }
   }
 
-  // Negative customer feedback panel (unnumbered) — everything posted in
-  // #customer-feedback-negative over the period: concern-automation cards and
-  // manual staff posts alike. Omitted entirely when the pull wasn't supplied
-  // (older stored recaps / Slack unreachable).
-  if (r.negativeFeedback) {
-    const nf = r.negativeFeedback
-    parts.push(`<h2 style="font:700 16px Arial,sans-serif;color:${NAVY};margin:18px 0 2px">👎 Negative Customer Feedback — ${nf.items.length ? `<span style="color:#d92d20">${nf.items.length}</span>` : 'none'}</h2>`)
-    parts.push(`<div style="color:#6b7280;font-size:12px;margin-bottom:4px">Posts in #customer-feedback-negative, ${esc(nf.label)}</div>`)
-    if (nf.items.length) {
+  // Customer feedback panels (unnumbered) — everything posted in the
+  // positive / negative feedback Slack channels over the period: automation
+  // cards and manual staff posts alike. Each panel is omitted entirely when
+  // its pull wasn't supplied (older stored recaps / Slack unreachable).
+  const feedbackPanel = (
+    fb: NonNullable<SalesRecap['negativeFeedback']>,
+    o: { emoji: string; title: string; channel: string; countColor: string; emptyText: string },
+  ) => {
+    parts.push(`<h2 style="font:700 16px Arial,sans-serif;color:${NAVY};margin:18px 0 2px">${o.emoji} ${esc(o.title)} — ${fb.items.length ? `<span style="color:${o.countColor}">${fb.items.length}</span>` : 'none'}</h2>`)
+    parts.push(`<div style="color:#6b7280;font-size:12px;margin-bottom:4px">Posts in ${esc(o.channel)}, ${esc(fb.label)}</div>`)
+    if (fb.items.length) {
       const when = (iso: string) => new Date(iso).toLocaleString('en-AU', {
         timeZone: 'Australia/Brisbane', weekday: 'short', day: '2-digit', month: 'short', hour: 'numeric', minute: '2-digit', hour12: true,
       })
       parts.push(table(
         ['When', 'Feedback'],
-        nf.items.map(i => [
+        fb.items.map(i => [
           `<span style="white-space:nowrap">${esc(when(i.at))}</span>`,
           `${i.author ? `<b>${esc(i.author)}:</b> ` : ''}${esc(i.text)}`,
         ]),
       ))
     } else {
-      parts.push(`<p style="color:#6b7280;font-size:13px;margin:4px 0 14px">Nothing posted in the negative channel this period. 🎉</p>`)
+      parts.push(`<p style="color:#6b7280;font-size:13px;margin:4px 0 14px">${o.emptyText}</p>`)
     }
   }
+  if (r.positiveFeedback) feedbackPanel(r.positiveFeedback, {
+    emoji: '👍', title: 'Positive Customer Feedback', channel: '#customer-feedback-positive',
+    countColor: '#00875a', emptyText: 'Nothing posted in the positive channel this period.',
+  })
+  if (r.negativeFeedback) feedbackPanel(r.negativeFeedback, {
+    emoji: '👎', title: 'Negative Customer Feedback', channel: '#customer-feedback-negative',
+    countColor: '#d92d20', emptyText: 'Nothing posted in the negative channel this period. 🎉',
+  })
 
   // 1. Current week at a glance
   parts.push(h2(1, `Week at a Glance — ${wkLabel}`))
