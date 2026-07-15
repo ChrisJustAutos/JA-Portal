@@ -145,6 +145,22 @@ export async function getUserName(userId: string): Promise<string | null> {
   } catch { return null }
 }
 
+// Fetch a single message (text + blocks) by its ts — conversations.replies
+// with limit 1 returns the root itself. Used to flip a PARENT card after a
+// button on one of its thread replies fires (the click payload only carries
+// the reply's blocks). Null when the message is gone or unreadable.
+export async function getMessage(channel: string, ts: string): Promise<{ text: string; blocks: any[] } | null> {
+  try {
+    const r = await fetch(`${SLACK_API}/conversations.replies?channel=${encodeURIComponent(channel)}&ts=${encodeURIComponent(ts)}&limit=1`, {
+      headers: { Authorization: `Bearer ${botToken()}` },
+    })
+    const j: any = await r.json()
+    const m = j.ok ? (j.messages || [])[0] : null
+    if (!m) return null
+    return { text: String(m.text || ''), blocks: Array.isArray(m.blocks) ? m.blocks : [] }
+  } catch { return null }
+}
+
 // Does a message still exist (not deleted)? Used by the concern follow-up
 // sweep so nudges never thread under a deleted root. Fails OPEN on scope or
 // transport errors — a permissions hiccup must not silently kill follow-ups.

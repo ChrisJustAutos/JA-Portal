@@ -224,6 +224,24 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                 console.error('[ap-create-supplier] proposal update failed:', e?.message || e)
               }
             }
+            // Bill actually posted → flip the ORIGINAL flag card green too,
+            // same as the plain Approve flow. The proposal sits in the card's
+            // thread, so the parent's blocks aren't in this payload — fetch
+            // them first. Best-effort: a fetch/update failure still leaves
+            // the threaded ✅ result below.
+            if (result.startsWith('✅') && ch && rootTs && rootTs !== msgTs) {
+              try {
+                const { getMessage } = await import('../../../lib/slack-bot/slack')
+                const { markApprovedBlocks } = await import('../../../lib/ap-auto-entry-slack')
+                const parent = await getMessage(ch, rootTs)
+                if (parent?.blocks?.length) {
+                  const flipped = markApprovedBlocks(parent.blocks, { approver, resultText: result.split('\n')[0] })
+                  await updateMessage({ channel: ch, ts: rootTs, text: flipped.text, blocks: flipped.blocks })
+                }
+              } catch (e: any) {
+                console.error('[ap-create-supplier] flag-card update failed:', e?.message || e)
+              }
+            }
             if (ch) await postMessage({ channel: ch, text: result, thread_ts: rootTs }).catch(() => null)
           })())
           return res.status(200).end()
