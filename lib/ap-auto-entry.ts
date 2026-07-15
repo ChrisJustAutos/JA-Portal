@@ -612,6 +612,22 @@ async function processAttachment(
 // Scans get the strongest model; digital email PDFs stay on the default.
 const scanExtractionModel = () => (process.env.AP_SCAN_EXTRACTION_MODEL || 'claude-opus-4-8').trim()
 
+// OUR OWN paperwork forwarded inbound — customer credit notes / invoices
+// issued BY a Just Autos entity ("Just Autos Credit Note #CR1039", forwarded
+// by staff for the refund to be actioned) — must NEVER be entered as supplier
+// bills: the vendor on the document is us. Live incident 2026-07-15: CR1039
+// posted as a -$2,345.47 supplier credit against the "Just Autos" card.
+// Space-insensitive contains matching, same scheme as the other supplier
+// lists. Names env-tunable; inter-entity bills (e.g. JAWS→VPS stock transfer)
+// post via their own module, not this email pipeline, so they're unaffected.
+function isSelfEntityVendor(vendorName: string | null | undefined): boolean {
+  const raw = (process.env.AP_SELF_ENTITY_NAMES ?? 'just autos,vehicle performance solutions').trim()
+  const patterns = raw.split(/[,;]+/).map(p => p.trim().toLowerCase().replace(/\s+/g, '')).filter(Boolean)
+  const name = String(vendorName || '').toLowerCase().replace(/\s+/g, '')
+  if (!name) return false
+  return patterns.some(p => name.includes(p))
+}
+
 async function processInvoice(
   c: SupabaseClient,
   ctx: { mailbox: string; companyFile: CompanyFileLabel; msg: GraphMessageSummary; dryRun: boolean },
@@ -649,6 +665,25 @@ async function processInvoice(
       if (!dryRun) await logRow(c, { mailbox, companyFile, msg, attId, attName }, { outcome: 'skipped_not_invoice', error: flagged.note, slackTs: flagged.ts, pdfStoragePath: flagged.stagedPath })
       return { ...base, supplierName: null, invoiceNumber: null, amount: null, outcome: 'skipped_not_invoice', bankCheck: 'skipped', failReasons: [] }
     }
+  }
+
+  // Self-entity guard: the "vendor" on the document is one of OUR OWN trading
+  // names → it's outbound paperwork (customer credit note / invoice) forwarded
+  // internally, not a supplier bill. Skip with a Slack notice so accounts
+  // still sees it (usually a refund to action); email stays in the inbox.
+  if (isSelfEntityVendor(extracted.vendor?.name)) {
+    let ts: string | null = null
+    if (!dryRun) {
+      const text = [
+        `🪞 *Own document detected — NOT entered into MYOB*`,
+        `“${msg.subject || '(no subject)'}” from *${msg.from || 'unknown'}* · ${attName || 'attachment'}`,
+        `Reads as issued by *${extracted.vendor?.name}*${extracted.invoiceNumber ? ` — ${extracted.invoiceNumber}` : ''}${extracted.totals.totalIncGst != null ? ` — ${money(extracted.totals.totalIncGst)}` : ''}${extracted.isCreditNote ? ' (credit note)' : ''}.`,
+        `If this is a customer refund/credit, action it in AR — it doesn't belong in supplier bills. Email left in the ${mailbox} inbox.`,
+      ].join('\n')
+      ts = await sendSlack({ text, blocks: [{ type: 'section', text: { type: 'mrkdwn', text } }] }, companyFile)
+      await logRow(c, { mailbox, companyFile, msg, attId, attName }, { outcome: 'skipped_not_invoice', supplierName: extracted.vendor?.name || null, invoiceNumber: extracted.invoiceNumber, amount: extracted.totals.totalIncGst, error: 'self-entity vendor — own outbound document, not entered', slackTs: ts })
+    }
+    return { ...base, supplierName: extracted.vendor?.name || null, invoiceNumber: extracted.invoiceNumber, amount: extracted.totals.totalIncGst, outcome: 'skipped_not_invoice', bankCheck: 'skipped', failReasons: [] }
   }
 
   // Statement guard. Statement-named documents belong to the statement watcher
@@ -1083,6 +1118,10 @@ async function postApprovedRow(c: SupabaseClient, row: any, accountOverride?: { 
   const total = extracted.totals.totalIncGst
   if (!extracted.invoiceNumber || total == null || !extracted.invoiceDate) {
     return `⚠️ ${row.invoice_number || 'invoice'}: number/date/total unreadable even on the strong model — enter manually.`
+  }
+
+  if (isSelfEntityVendor(extracted.vendor?.name || row.supplier_name)) {
+    return `🪞 ${extracted.invoiceNumber}: this document is issued by ${extracted.vendor?.name || row.supplier_name} — it's OUR paperwork (customer credit/invoice), not a supplier bill. Not posting; handle in AR.`
   }
 
   const match = await tryAutoMatchSupplier(extracted.vendor?.name || row.supplier_name, extracted.vendor?.abn || null, companyFile).catch(() => null)
