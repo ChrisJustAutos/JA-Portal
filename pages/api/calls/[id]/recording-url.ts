@@ -1,6 +1,6 @@
 // pages/api/calls/[id]/recording-url.ts
-// Returns a short-lived signed URL for the call's recording file in Supabase Storage.
-// Gated behind view:calls permission. URL expires after 5 minutes.
+// Returns a signed URL for the call's recording file in Supabase Storage.
+// Gated behind view:calls permission.
 
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { createClient } from '@supabase/supabase-js'
@@ -8,7 +8,11 @@ import { requireAuth } from '../../../../lib/auth'
 
 export const config = { maxDuration: 10 }
 
-const URL_TTL_SECONDS = 300  // 5 minutes
+// 4 hours. The browser STREAMS the file with ranged requests while playing —
+// a 5-minute TTL meant any listen (or pause) crossing that mark had its next
+// chunk request rejected and playback died mid-call (Matt, 2026-07-15,
+// dropped at 6:17/9:46). The URL is only obtainable via an authed call.
+const URL_TTL_SECONDS = 4 * 3600
 
 export default function handler(req: NextApiRequest, res: NextApiResponse) {
   return requireAuth(req, res, async () => {

@@ -190,6 +190,39 @@ function RecordingPlayer({ callId, hasRecording }: { callId: string; hasRecordin
   const [state, setState] = useState<'idle'|'loading'|'ready'|'pending'|'missing'|'error'>('idle')
   const [audioUrl, setAudioUrl] = useState<string | null>(null)
   const [errorMsg, setErrorMsg] = useState<string>('')
+  const audioRef = useRef<HTMLAudioElement | null>(null)
+  const resumeRef = useRef<{ t: number; playing: boolean } | null>(null)
+  const lastRecoverRef = useRef(0)
+
+  // Mid-playback failure (expired signed URL, network blip): fetch a fresh
+  // URL and resume from where we were, instead of dying at 0:00/0:00.
+  // One recovery per 8s — a second failure straight after surfaces the error.
+  function handleAudioError() {
+    const el = audioRef.current
+    if (!el || !audioUrl) return
+    const now = Date.now()
+    if (now - lastRecoverRef.current < 8000) {
+      setState('error'); setErrorMsg('Playback failed — check your connection and Retry.')
+      return
+    }
+    lastRecoverRef.current = now
+    resumeRef.current = { t: el.currentTime || 0, playing: !el.paused && !el.ended }
+    loadUrl()
+  }
+
+  // After a recovery reload, restore position (and playback if it was playing).
+  useEffect(() => {
+    const r = resumeRef.current
+    const el = audioRef.current
+    if (!r || !el || !audioUrl || state !== 'ready') return
+    resumeRef.current = null
+    const onMeta = () => {
+      try { el.currentTime = r.t; if (r.playing) el.play().catch(() => {}) } catch { /* seek best-effort */ }
+    }
+    el.addEventListener('loadedmetadata', onMeta, { once: true })
+    el.load()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [audioUrl, state])
 
   async function loadUrl() {
     setState('loading'); setErrorMsg('')
@@ -259,7 +292,7 @@ function RecordingPlayer({ callId, hasRecording }: { callId: string; hasRecordin
       )}
 
       {state === 'ready' && audioUrl && (
-        <audio controls preload="none" src={audioUrl} style={{ width: '100%', height: 40 }}>
+        <audio ref={audioRef} controls preload="none" src={audioUrl} onError={handleAudioError} style={{ width: '100%', height: 40 }}>
           Your browser does not support the audio element.
         </audio>
       )}
