@@ -99,6 +99,52 @@ export async function sendToPartsContact(text: string): Promise<{ ok: boolean; r
   return posted ? { ok: true } : { ok: false, reason: 'Slack rejected the message' }
 }
 
+// Top-level messages in a channel between two times (Unix seconds), oldest
+// first. Thread replies don't appear (conversations.history returns parents
+// only); housekeeping subtypes (joins, topic changes…) are dropped, keeping
+// human posts (no subtype) and bot posts. Needs channels:history /
+// groups:history for the channel, same as messageExists below.
+export interface ChannelMessage { ts: string; user: string | null; bot: boolean; text: string }
+export async function listChannelHistory(channel: string, oldestSec: number, latestSec: number): Promise<ChannelMessage[]> {
+  const out: ChannelMessage[] = []
+  let cursor: string | null = null
+  for (let page = 0; page < 5; page++) {
+    const params = new URLSearchParams({
+      channel, oldest: String(oldestSec), latest: String(latestSec),
+      inclusive: 'true', limit: '200',
+    })
+    if (cursor) params.set('cursor', cursor)
+    const r = await fetch(`${SLACK_API}/conversations.history?${params}`, {
+      headers: { Authorization: `Bearer ${botToken()}` },
+    })
+    const j: any = await r.json()
+    if (!j.ok) throw new Error(`conversations.history failed: ${j.error || 'unknown'}`)
+    for (const m of j.messages || []) {
+      const subtype = m.subtype || null
+      if (subtype && subtype !== 'bot_message' && subtype !== 'thread_broadcast') continue
+      const text = String(m.text || '').trim()
+      if (!text) continue
+      out.push({ ts: String(m.ts), user: m.user || null, bot: !!m.bot_id || subtype === 'bot_message', text })
+    }
+    cursor = j.response_metadata?.next_cursor || null
+    if (!cursor) break
+  }
+  return out.sort((a, b) => Number(a.ts) - Number(b.ts))
+}
+
+// Resolve a Slack user id to a display name (users:read). Null when the scope
+// is missing or the lookup fails — callers fall back to a generic label.
+export async function getUserName(userId: string): Promise<string | null> {
+  try {
+    const r = await fetch(`${SLACK_API}/users.info?user=${encodeURIComponent(userId)}`, {
+      headers: { Authorization: `Bearer ${botToken()}` },
+    })
+    const j: any = await r.json()
+    if (!j.ok) return null
+    return j.user?.profile?.display_name || j.user?.real_name || j.user?.name || null
+  } catch { return null }
+}
+
 // Does a message still exist (not deleted)? Used by the concern follow-up
 // sweep so nudges never thread under a deleted root. Fails OPEN on scope or
 // transport errors — a permissions hiccup must not silently kill follow-ups.

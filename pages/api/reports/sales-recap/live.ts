@@ -16,6 +16,7 @@ import { getCurrentUser } from '../../../../lib/authServer'
 import { roleHasPermission } from '../../../../lib/permissions'
 import { fetchOrders, fetchDistBookings, fetchQuoteLeads } from '../../../../lib/sales-recap-monday'
 import { assembleRecap, previousTradingWeek, currentTradingWeek } from '../../../../lib/sales-recap'
+import { fetchNegativeFeedback } from '../../../../lib/sales-recap-slack'
 import { renderRecapHtml } from '../../../../lib/sales-recap-html'
 import { generateFlags } from '../../../../lib/sales-recap-flags'
 
@@ -69,15 +70,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const fetchStart = rollingStart < yearStart ? rollingStart : yearStart
     const today = new Date(nowMs).toISOString().slice(0, 10)
     const fetchEnd = week.end > today ? week.end : today
-    const [orders, dist, quoteLeads] = await Promise.all([
+    const [orders, dist, quoteLeads, negativeFeedback] = await Promise.all([
       fetchOrders(token, fetchStart, fetchEnd),
       fetchDistBookings(token, fetchStart, fetchEnd),
       // Reach back to before the range starts (its overnight span opens 17:30
       // on the trading day before week.start — 5 days covers any weekend).
       fetchQuoteLeads(token, Date.parse(week.start + 'T00:00:00Z') - 5 * 86400_000).catch(() => null),
+      fetchNegativeFeedback(week, nowMs).catch((e: any) => {
+        console.error('[sales-recap/live] negative-feedback pull failed:', e?.message || e)
+        return null
+      }),
     ])
 
-    let recap = assembleRecap({ nowMs, orders, dist, diaryNotes, forecast, week, quoteLeads })
+    let recap = assembleRecap({ nowMs, orders, dist, diaryNotes, forecast, week, quoteLeads, negativeFeedback })
     const llm = await generateFlags(recap).catch(() => [])
     if (llm.length) recap = { ...recap, flags: llm }
 

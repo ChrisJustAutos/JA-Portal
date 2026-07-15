@@ -24,6 +24,12 @@ export interface ForecastMonthOut { month: string; label: string; value: number;
 export interface FlagOut { priority: 'HIGH' | 'MED' | 'INFO'; item: string }
 export interface OvernightLeadOut { channel: string; name: string; phone: string | null; createdAt: string }
 export interface OvernightOut { start: string; end: string; label: string; leads: OvernightLeadOut[] }
+// Everything posted in the negative-feedback Slack channel over the report
+// period (#customer-feedback-negative — concern automation cards AND manual
+// staff posts alike). `author` is null for bot posts (the text carries the
+// advisor's voice already).
+export interface NegativeFeedbackItem { at: string; author: string | null; text: string }
+export interface NegativeFeedbackOut { start: string; end: string; label: string; items: NegativeFeedbackItem[] }
 
 export interface SalesRecap {
   week: RecapWeek
@@ -45,6 +51,9 @@ export interface SalesRecap {
   // Overnight quote-channel leads (5:30pm last trading day → 7:00am). Null on
   // reports assembled without a quote-lead pull (older stored recaps).
   overnight: OvernightOut | null
+  // Negative Slack-channel posts for the period. Null when the pull wasn't
+  // supplied / failed (older stored recaps render without the section).
+  negativeFeedback?: NegativeFeedbackOut | null
 }
 
 const ymd = (d: Date) => d.toISOString().slice(0, 10)
@@ -125,6 +134,7 @@ export interface AssembleInput {
   flags?: FlagOut[]           // LLM-supplied; falls back to rule-based
   week?: RecapWeek            // override the recap week (live "This week" view); defaults to the previous completed trading week
   quoteLeads?: QuoteLeadRow[] | null  // recent quote-channel leads (created_at based); omit → no overnight section
+  negativeFeedback?: NegativeFeedbackOut | null  // pre-fetched negative-channel posts (lib/sales-recap-slack); omit → no section
 }
 
 export function assembleRecap(input: AssembleInput): SalesRecap {
@@ -200,7 +210,18 @@ export function assembleRecap(input: AssembleInput): SalesRecap {
   return {
     week, generatedAt: new Date(input.nowMs).toISOString(), dailyTarget: DAILY_TARGET,
     daily, weekTotal, rolling, monthly, diaryNotes, forecast, flags, overnight,
+    negativeFeedback: input.negativeFeedback ?? null,
   }
+}
+
+// Span the negative-feedback pull covers: midnight Brisbane opening the
+// report range through 7:00am on the first trading day after it (same tail
+// as the overnight-leads span, so the Monday email includes weekend posts),
+// capped at `now`.
+export function negativeFeedbackSpan(week: RecapWeek, nowMs: number): { startMs: number; endMs: number } {
+  const startMs = Date.parse(week.start + 'T00:00:00Z') - AU_TZ_OFFSET_MS
+  const { endMs } = overnightLeadsSpan(week, nowMs)
+  return { startMs, endMs: Math.max(startMs, endMs) }
 }
 
 // Deterministic fallback flags when no LLM output is provided.

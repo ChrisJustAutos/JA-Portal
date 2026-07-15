@@ -14,6 +14,7 @@ import { createClient } from '@supabase/supabase-js'
 import { validateServiceToken } from '../../../../lib/service-auth'
 import { fetchOrders, fetchDistBookings, fetchQuoteLeads } from '../../../../lib/sales-recap-monday'
 import { assembleRecap, previousTradingWeek } from '../../../../lib/sales-recap'
+import { fetchNegativeFeedback } from '../../../../lib/sales-recap-slack'
 import { renderRecapHtml } from '../../../../lib/sales-recap-html'
 import { generateFlags } from '../../../../lib/sales-recap-flags'
 import { sendMail } from '../../../../lib/email'
@@ -51,15 +52,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // Pull year-to-date Monday data (covers daily, rolling 4-week, monthly).
     const yearStart = `${new Date(nowMs).getUTCFullYear()}-01-01`
     const today = new Date(nowMs).toISOString().slice(0, 10)
-    const [orders, dist, quoteLeads] = await Promise.all([
+    const week = previousTradingWeek(nowMs)
+    const [orders, dist, quoteLeads, negativeFeedback] = await Promise.all([
       fetchOrders(token, yearStart, today),
       fetchDistBookings(token, yearStart, today),
       // Overnight leads span the recap week + its leading weekend/night.
-      fetchQuoteLeads(token, Date.parse(previousTradingWeek(nowMs).start + 'T00:00:00Z') - 5 * 86400_000).catch(() => null),
+      fetchQuoteLeads(token, Date.parse(week.start + 'T00:00:00Z') - 5 * 86400_000).catch(() => null),
+      fetchNegativeFeedback(week, nowMs).catch((e: any) => {
+        console.error('[sales-recap] negative-feedback pull failed:', e?.message || e)
+        return null
+      }),
     ])
 
     // Assemble (rule-based flags first), then upgrade to LLM flags if available.
-    let recap = assembleRecap({ nowMs, orders, dist, diaryNotes, forecast, quoteLeads })
+    let recap = assembleRecap({ nowMs, orders, dist, diaryNotes, forecast, quoteLeads, negativeFeedback })
     const llm = await generateFlags(recap).catch(() => [])
     if (llm.length) recap = { ...recap, flags: llm }
 
