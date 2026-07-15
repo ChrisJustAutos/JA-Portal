@@ -200,11 +200,34 @@ export interface ExistingBillMatch {
   totalAmount: number | null
 }
 
+// OCR-tolerant invoice-number comparison. Scanned invoices misread confusable
+// glyphs — live examples from Ken Mills paper scans: "PI13080287" read as
+// "P113080287" (I→1) and "PI13080620" as "PI11308062O" (0→O + an inserted
+// digit) — so the same invoice can arrive under several spellings and slip
+// past exact matching into a double entry. Two numbers count as the same when
+// their confusable-canonical forms are equal, OR when one's digits-only tail
+// ends the other's (≥6 digits — the digit run survives OCR far better than
+// the letter prefix). Callers pair this with same-supplier (and usually
+// same-amount) context, which keeps the loose rules safe.
+export function sameInvoiceNumberLoose(a: string | null | undefined, b: string | null | undefined): boolean {
+  const canon = (s: string) => s.toUpperCase().replace(/[^A-Z0-9]/g, '')
+    .replace(/O/g, '0').replace(/[IL]/g, '1').replace(/S/g, '5').replace(/B/g, '8')
+  const A = canon(String(a || '')), B = canon(String(b || ''))
+  if (!A || !B) return false
+  if (A === B) return true
+  const dA = A.replace(/\D/g, ''), dB = B.replace(/\D/g, '')
+  return dA.length >= 6 && dB.length >= 6 && (dA.endsWith(dB) || dB.endsWith(dA))
+}
+
 export async function findExistingMyobBill(
   connId: string,
   cfId: string,
   supplierInvoiceNumber: string,
   supplierUid: string,
+  // When set, a second net catches OCR-VARIANT spellings: recent bills for
+  // the same supplier whose number loosely matches AND whose total agrees.
+  // Stops "PI13080287" posting again beside an existing "P113080287".
+  opts: { expectedTotal?: number | null } = {},
 ): Promise<ExistingBillMatch | null> {
   const escaped = String(supplierInvoiceNumber).replace(/'/g, "''")
   const filter = `SupplierInvoiceNumber eq '${escaped}'`
@@ -214,6 +237,13 @@ export async function findExistingMyobBill(
     `/accountright/${cfId}/Purchase/Bill/Item`,
   ]
 
+  const toMatch = (b: any): ExistingBillMatch => ({
+    uid: String(b.UID || ''),
+    number: b.Number || null,
+    date: b.Date || null,
+    totalAmount: typeof b.TotalAmount === 'number' ? b.TotalAmount : null,
+  })
+
   for (const path of paths) {
     const result = await myobFetch(connId, path, {
       query: { '$filter': filter, '$top': 10 },
@@ -222,15 +252,29 @@ export async function findExistingMyobBill(
 
     const items: any[] = Array.isArray(result.data?.Items) ? result.data.Items : []
     const match = items.find(b => b?.Supplier?.UID === supplierUid)
-    if (match) {
-      return {
-        uid: String(match.UID || ''),
-        number: match.Number || null,
-        date: match.Date || null,
-        totalAmount: typeof match.TotalAmount === 'number' ? match.TotalAmount : null,
-      }
+    if (match) return toMatch(match)
+  }
+
+  if (opts.expectedTotal != null && Number.isFinite(opts.expectedTotal)) {
+    const want = Math.abs(Number(opts.expectedTotal))
+    for (const path of paths) {
+      const result = await myobFetch(connId, path, {
+        query: {
+          '$filter': `Supplier/UID eq guid'${supplierUid}'`,
+          '$orderby': 'Date desc',
+          '$top': 50,
+        },
+      })
+      if (result.status !== 200) continue
+      const items: any[] = Array.isArray(result.data?.Items) ? result.data.Items : []
+      const match = items.find(b =>
+        sameInvoiceNumberLoose(b?.SupplierInvoiceNumber, supplierInvoiceNumber) &&
+        typeof b?.TotalAmount === 'number' && Math.abs(Math.abs(b.TotalAmount) - want) <= 0.05,
+      )
+      if (match) return toMatch(match)
     }
   }
+
   return null
 }
 
@@ -901,9 +945,10 @@ export async function postFoundInvoiceToMyob(args: {
   const conn = await getConnection(companyFile)
   if (!conn?.company_file_id) return { posted: false, reason: `no active MYOB connection for ${companyFile}` }
 
-  // Smart-adopt: if it's already in MYOB under this SupplierInvoiceNumber, link it.
+  // Smart-adopt: if it's already in MYOB under this SupplierInvoiceNumber —
+  // or under an OCR-variant spelling with the same total — link it.
   try {
-    const existing = await findExistingMyobBill(conn.id, conn.company_file_id, String(invoiceNumber), supplierUid)
+    const existing = await findExistingMyobBill(conn.id, conn.company_file_id, String(invoiceNumber), supplierUid, { expectedTotal: total })
     if (existing) return { posted: true, billUid: existing.uid, adopted: true, adoptedBillNumber: existing.number, coding, codingDetail }
   } catch { /* fall through to create */ }
 

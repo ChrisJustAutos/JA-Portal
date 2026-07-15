@@ -46,7 +46,7 @@ import { resolveLineAccount } from './ap-line-resolver'
 import { triageInvoice } from './ap-supabase'
 import { consolidatedInvoiceSupplier } from './ap-consolidated-suppliers'
 import { overseasSupplier } from './ap-overseas-suppliers'
-import { postFoundInvoiceToMyob, reattachStagedPdf } from './ap-myob-bill'
+import { postFoundInvoiceToMyob, reattachStagedPdf, sameInvoiceNumberLoose } from './ap-myob-bill'
 import { postWebhook } from './slack'
 import { postMessage } from './slack-bot/slack'
 import { randomUUID } from 'crypto'
@@ -620,6 +620,26 @@ const scanExtractionModel = () => (process.env.AP_SCAN_EXTRACTION_MODEL || 'clau
 // Space-insensitive contains matching, same scheme as the other supplier
 // lists. Names env-tunable; inter-entity bills (e.g. JAWS→VPS stock transfer)
 // post via their own module, not this email pipeline, so they're unaffected.
+// Scan OCR misreads confusable glyphs in invoice numbers (Ken Mills:
+// "PI13080287" read as "P113080287", trailing 0 as O) while the attachment
+// FILENAME often carries the machine-generated number verbatim
+// ("InvoicePI13080287_CustomerCopy.pdf"). When a filename token loosely
+// matches the extracted number but spells it differently, trust the file.
+function correctInvoiceNumberFromFilename(extracted: ExtractedAPInvoice, attName: string | null | undefined): ExtractedAPInvoice {
+  const current = extracted.invoiceNumber
+  if (!current || !attName) return extracted
+  const tokens = String(attName).replace(/\.[a-z0-9]{2,5}$/i, '').split(/[^A-Za-z0-9]+/)
+  // Stripped-of-word-prefix candidates FIRST ("InvoicePI13080287" → "PI13080287").
+  const candidates = tokens
+    .flatMap(t => [t.replace(/^(invoice|creditnote|credit|inv|cr)/i, ''), t])
+    .filter(t => t.length >= 6 && /\d{4,}/.test(t))
+  const fix = candidates.find(t =>
+    t.toUpperCase() !== String(current).toUpperCase() && sameInvoiceNumberLoose(t, current))
+  if (!fix) return extracted
+  console.log(`[ap-auto-entry] invoice number corrected from filename: "${current}" → "${fix}" (${attName})`)
+  return { ...extracted, invoiceNumber: fix }
+}
+
 function isSelfEntityVendor(vendorName: string | null | undefined): boolean {
   const raw = (process.env.AP_SELF_ENTITY_NAMES ?? 'just autos,vehicle performance solutions').trim()
   const patterns = raw.split(/[,;]+/).map(p => p.trim().toLowerCase().replace(/\s+/g, '')).filter(Boolean)
@@ -697,6 +717,8 @@ async function processInvoice(
     if (!dryRun) await logRow(c, { mailbox, companyFile, msg, attId, attName }, { outcome: 'skipped_not_invoice' })
     return { ...base, supplierName: extracted.vendor?.name || null, invoiceNumber: extracted.invoiceNumber, amount: extracted.totals.totalIncGst, outcome: 'skipped_not_invoice', bankCheck: 'skipped', failReasons: [] }
   }
+
+  extracted = correctInvoiceNumberFromFilename(extracted, attName)
 
   const total = extracted.totals.totalIncGst
   if (!extracted.invoiceNumber || total == null) {
@@ -821,11 +843,21 @@ async function processInvoice(
       .select('invoice_number, amount, created_at, mailbox')
       .eq('outcome', 'posted').eq('supplier_uid', supplierUid)
       .gte('created_at', new Date(Date.now() - 14 * 86400_000).toISOString())
-    const dup = (prior || []).find(p =>
-      p.amount != null && Math.abs(Number(p.amount) - total) < 0.005 &&
+    const sameAmount = (p: any) => p.amount != null && Math.abs(Number(p.amount) - total) < 0.005
+    // Same amount + the same number under OCR-tolerant comparison ("PI13…" vs
+    // "P113…", tail digits equal) = near-certain re-arrival of an invoice
+    // already posted → hard RED, not a soft maybe.
+    const ocrDup = (prior || []).find(p =>
+      sameAmount(p) &&
+      norm(p.invoice_number) !== norm(extracted.invoiceNumber) &&
+      sameInvoiceNumberLoose(p.invoice_number, extracted.invoiceNumber),
+    )
+    const dup = ocrDup ? null : (prior || []).find(p =>
+      sameAmount(p) &&
       norm(p.invoice_number) !== norm(extracted.invoiceNumber),
     )
-    if (dup) failReasons.push(`YELLOW:possible-duplicate-of:${dup.invoice_number || 'unknown'}`)
+    if (ocrDup) failReasons.push(`RED:duplicate-of:${ocrDup.invoice_number} (same number read differently off the scan)`)
+    else if (dup) failReasons.push(`YELLOW:possible-duplicate-of:${dup.invoice_number || 'unknown'}`)
   }
 
   const pass = failReasons.length === 0
