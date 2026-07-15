@@ -160,7 +160,7 @@ export async function resolveLineAccount(
 
   // ── B: history (only if we have a supplier_uid) ──
   if (input.supplier_uid) {
-    const hist = await tryHistory(c, input.supplier_uid, input.description)
+    const hist = await tryHistory(c, input.supplier_uid, input.description, input.myob_company_file as CompanyFileLabel)
     if (hist) {
       const top = hist.top
       const dominance = hist.total > 0 ? top.bill_count / hist.total : 0
@@ -522,10 +522,32 @@ async function tryKeywordMatch(
 
 // ── Internal: history ───────────────────────────────────────────────────
 
+// A history candidate is DEAD when it points at an Expense/CostOfSales
+// account (code 5-/6-, or no code recorded) that's no longer in the accounts
+// cache — i.e. it was deleted from the MYOB chart since the history was
+// learned. Posting a dead UID makes MYOB reject the whole bill (live
+// incident: Ken Mills PI13079592 → deleted vehicle account 6-2601).
+// Codes outside 5-/6- aren't cache-covered types, so we can't judge — keep.
+async function deadAccountUids(companyFile: CompanyFileLabel, rows: HistoryRow[]): Promise<Set<string>> {
+  const dead = new Set<string>()
+  const judgeable = rows.filter(r => {
+    const code = String(r.account_code || '')
+    return code === '' || code.startsWith('5-') || code.startsWith('6-')
+  })
+  if (!judgeable.length) return dead
+  try {
+    const cached = new Set((await getCachedAccounts(companyFile)).map(a => a.uid))
+    if (!cached.size) return dead // cache empty/unavailable — don't judge
+    for (const r of judgeable) if (!cached.has(r.account_uid)) dead.add(r.account_uid)
+  } catch { /* cache unavailable — don't judge */ }
+  return dead
+}
+
 async function tryHistory(
   c: SupabaseClient,
   supplierUid: string,
   description: string,
+  companyFile: CompanyFileLabel,
 ): Promise<{ top: HistoryRow; total: number } | null> {
   const norm = normaliseDescription(description)
   if (!norm) return null
@@ -561,6 +583,11 @@ async function tryHistory(
     rows = (fuzzy as HistoryRow[]) || []
   }
 
+  if (rows.length === 0) return null
+
+  // Drop candidates whose account has been deleted from the MYOB chart.
+  const dead = await deadAccountUids(companyFile, rows)
+  if (dead.size) rows = rows.filter(r => !dead.has(r.account_uid))
   if (rows.length === 0) return null
 
   // Aggregate across rows (fuzzy may return multiple rows per account)
