@@ -51,11 +51,19 @@ export default withAuth('monitor:calls', async (req, res, user) => {
 
   // Resolve the extension the agent will ring — handset (phone_extension) or
   // web softphone (webrtc_extension), depending on which button the user hit.
-  const { data: prof } = await sb
-    .from('user_profiles')
-    .select('phone_extension, webrtc_extension')
-    .eq('id', user.id)
-    .maybeSingle()
+  // The stale-pending sweep (agent claims/acks rows directly, so nothing else
+  // expires forgotten requests) runs in PARALLEL — every round trip here
+  // delays the handset ringing.
+  const [{ data: prof }] = await Promise.all([
+    sb.from('user_profiles')
+      .select('phone_extension, webrtc_extension')
+      .eq('id', user.id)
+      .maybeSingle(),
+    sb.from('call_monitor_events')
+      .update({ status: 'expired', completed_at: new Date().toISOString() })
+      .eq('status', 'pending')
+      .lt('created_at', new Date(Date.now() - REQUEST_TTL_MS).toISOString()),
+  ])
   const ext = actorKind === 'device'
     ? ((prof as any)?.webrtc_extension || '').trim()
     : ((prof as any)?.phone_extension  || '').trim()
@@ -67,14 +75,6 @@ export default withAuth('monitor:calls', async (req, res, user) => {
         : 'No phone extension is set on your profile. Ask an admin to map your extension in Settings → Users.',
     })
   }
-
-  // Sweep stale pendings to 'expired'. Under Option B the agent claims/acks
-  // rows directly, so nothing else expires forgotten requests; do it here on
-  // each enqueue to keep the queue clean and the polling UI honest.
-  await sb.from('call_monitor_events')
-    .update({ status: 'expired', completed_at: new Date().toISOString() })
-    .eq('status', 'pending')
-    .lt('created_at', new Date(Date.now() - REQUEST_TTL_MS).toISOString())
 
   const { data: row, error } = await sb.from('call_monitor_events').insert({
     actor_user_id: user.id,
