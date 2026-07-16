@@ -97,67 +97,12 @@ async function execListUnpaid(input: { customer_name?: string; company?: string;
   return `${items.length} open invoice(s) in MYOB ${label}${input.customer_name ? ` for "${input.customer_name}"` : ''} · total outstanding $${totalBalance.toFixed(2)}:\n${lines.join('\n')}`
 }
 
-// ── Tool: search_stock_delays (Monday board) ───────────────────────────
-
-const STOCK_DELAY_BOARD_ID = 2060835661
-
-async function execSearchStockDelays(input: { query: string }): Promise<string> {
-  const token = process.env.MONDAY_API_TOKEN
-  if (!token) return 'Monday API not configured (MONDAY_API_TOKEN missing).'
-  const q = (input.query || '').trim().toLowerCase()
-  if (!q) return 'No search term given.'
-
-  // Pull all items from the board (delay board is small — <300 items)
-  const items: any[] = []
-  let cursor: string | null = null
-  for (let p = 0; p < 10; p++) {
-    const gql = `query ($boardId: [ID!], $limit: Int!, $cursor: String) {
-      boards(ids: $boardId) {
-        items_page(limit: $limit, cursor: $cursor) {
-          cursor
-          items { id name column_values { id text } }
-        }
-      }
-    }`
-    const r = await fetch('https://api.monday.com/v2', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: token, 'API-Version': '2024-01' },
-      body: JSON.stringify({ query: gql, variables: { boardId: [STOCK_DELAY_BOARD_ID], limit: 100, cursor } }),
-    })
-    const j = await r.json() as any
-    if (j.errors) return `Monday API error: ${JSON.stringify(j.errors).slice(0, 200)}`
-    const page = j.data?.boards?.[0]?.items_page
-    items.push(...(page?.items || []))
-    cursor = page?.cursor || null
-    if (!cursor) break
-  }
-
-  // Filter by name/part-number containing query
-  const hits = items.filter(i => {
-    const name = String(i.name || '').toLowerCase()
-    if (name.includes(q)) return true
-    const cols: any[] = i.column_values || []
-    return cols.some(c => String(c.text || '').toLowerCase().includes(q))
-  })
-  if (hits.length === 0) return `No items on the Product Availability Delays board matching "${input.query}".`
-
-  const lines = hits.slice(0, 15).map(i => {
-    const cols: any[] = i.column_values || []
-    const part = cols.find(c => c.id === 'text_mkv0n9h7')?.text || ''
-    const avail = cols.find(c => c.id === 'status')?.text || '?'
-    const eta = cols.find(c => c.id === 'color_mkncj8ds')?.text || '?'
-    return `• ${i.name}${part ? ` (${part})` : ''} · Avail: ${avail} · ETA: ${eta}`
-  })
-  return `${hits.length} item(s) on the delay board matching "${input.query}":\n${lines.join('\n')}${hits.length > 15 ? `\n(+${hits.length - 15} more — refine the query for fewer)` : ''}`
-}
-
 // ── Tool: search_md_stock (MechanicDesk on-hand, cached) ───────────────
 //
 // Reads md_stock_cache — a ~30-min mirror of MechanicDesk's /stocks.json kept
 // fresh by the MD stock-cache worker. This is THE tool for front-counter "how
 // many X do we have?" questions: it has live-ish on-hand, free-to-sell (on-hand
-// minus what's committed to jobs), bin, and a reorder verdict. Prefer it over
-// search_stock_delays, which only lists below-alert items with ETAs.
+// minus what's committed to jobs), bin, and a reorder verdict.
 
 const MD_STOCK_LIMIT = 8
 
@@ -271,7 +216,7 @@ export const TOOLS: ToolDef[] = [
   },
   {
     name: 'search_md_stock',
-    description: 'Check how many of a part we have on hand in MechanicDesk (the live-ish stock cache, refreshed ~every 30 min). THIS is the tool for front-counter questions like "how many VDJ79 airboxes do we have?", "have we got X in stock?", "what\'s our on-hand on Y?", or "is anything on order for Z?". Search by a full part number, a fragment of it, or product-name words — it tolerates missing/extra dashes and spaces, case, and small typos in the part number. Returns matching items with on-hand qty, free-to-sell (on-hand minus what\'s committed to jobs), how many are on order (incoming POs), bin location, and an in-stock / low / none verdict. Prefer this over search_stock_delays for any "do we have / how many / on order" question. Pass the user\'s part number or search words through as-is.',
+    description: 'Check how many of a part we have on hand in MechanicDesk (the live-ish stock cache, refreshed ~every 30 min). THIS is the tool for front-counter questions like "how many VDJ79 airboxes do we have?", "have we got X in stock?", "what\'s our on-hand on Y?", or "is anything on order for Z?". Search by a full part number, a fragment of it, or product-name words — it tolerates missing/extra dashes and spaces, case, and small typos in the part number. Returns matching items with on-hand qty, free-to-sell (on-hand minus what\'s committed to jobs), how many are on order (incoming POs), bin location, and an in-stock / low / none verdict. Pass the user\'s part number or search words through as-is.',
     input_schema: {
       type: 'object',
       properties: {
@@ -280,18 +225,6 @@ export const TOOLS: ToolDef[] = [
       required: ['query'],
     },
     execute: execSearchMdStock,
-  },
-  {
-    name: 'search_stock_delays',
-    description: 'Search the Monday "Product Availability Delays" board (Morgan\'s board of below-alert items synced from Mechanics Desk, with supplier ETAs). Use this ONLY for "is X delayed / on backorder?" or "what\'s the ETA on X?" — NOT for how-many-in-stock questions (use search_md_stock for those).',
-    input_schema: {
-      type: 'object',
-      properties: {
-        query: { type: 'string', description: 'Part number or product-name fragment to search.' },
-      },
-      required: ['query'],
-    },
-    execute: execSearchStockDelays,
   },
 ]
 
