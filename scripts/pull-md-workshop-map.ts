@@ -122,6 +122,10 @@ async function mdJson(path: string): Promise<any> {
 
 // Retries: 401 session-kick → re-login and go again (global MAX_RELOGINS cap);
 // transient gateway errors (MD 502/503/504 under load) → backoff, per-request cap.
+// MD's nginx also throws intermittent bare 404s mid-pagination (seen on
+// /customers.json page 58 of 200, 2026-07-16) — the page exists, the upstream
+// just misrouted — so 404 gets the same bounded retry; a genuine 404 still
+// fails after `tries`.
 async function mdJsonRetry(path: string, tries = 3): Promise<any> {
   let transientAttempts = 0
   for (;;) {
@@ -130,7 +134,7 @@ async function mdJsonRetry(path: string, tries = 3): Promise<any> {
     } catch (e: any) {
       const msg = String(e?.message || e)
       if (/→ 401:/.test(msg)) { await relogin(); continue }
-      const transient = /→ 50[234]:/.test(msg)
+      const transient = /→ (?:50[234]|404):/.test(msg)
       if (!transient || ++transientAttempts >= tries) throw e
       log(`retrying (${transientAttempts}/${tries - 1}) after: ${msg.slice(0, 100)}`)
       await new Promise(r => setTimeout(r, 8000 * transientAttempts))
