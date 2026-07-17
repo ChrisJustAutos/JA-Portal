@@ -40,6 +40,8 @@ export default function SalesReportPage({ user }: { user: PortalUserSSR }) {
   const [err, setErr] = useState<string | null>(null)
   const [busy, setBusy] = useState<'refresh' | null>(null)
   const [note, setNote] = useState<string | null>(null)
+  const [exportOpen, setExportOpen] = useState(false)
+  const [exportHover, setExportHover] = useState<number | null>(null)
 
   const load = useCallback(async (mode: WeekMode, range?: { start: string; end: string }) => {
     setLoading(true); setErr(null)
@@ -95,22 +97,58 @@ export default function SalesReportPage({ user }: { user: PortalUserSSR }) {
     }
   }
 
-  // Open the current report in a print window — the browser's "Save as PDF"
-  // destination is the export. Keeps the exact email-grade styling with zero
-  // server-side PDF dependencies.
-  function exportPdf() {
-    if (!html) return
+  // Every export flavour wraps the SAME report HTML in a standalone document,
+  // so they all match the emailed report exactly. The Office namespaces are
+  // inert in browsers but let Word open the .doc download cleanly.
+  function reportDoc(): { title: string; doc: string } | null {
+    if (!html) return null
     const title = reportWeek ? `Sales Report ${reportWeek.start} to ${reportWeek.end}` : 'Sales Report'
+    const doc = `<!doctype html><html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:w="urn:schemas-microsoft-com:office:word"><head><meta charset="utf-8"><title>${title}</title>
+<style>body{margin:24px;background:#fff} @media print{body{margin:0}}</style>
+</head><body>${html}</body></html>`
+    return { title, doc }
+  }
+
+  // The BOM prefix keeps Word from mis-reading the UTF-8 (→ · en-dashes etc).
+  function downloadFile(content: string, mime: string, filename: string) {
+    const url = URL.createObjectURL(new Blob([String.fromCharCode(0xfeff), content], { type: mime }))
+    const a = document.createElement('a')
+    a.href = url; a.download = filename
+    document.body.appendChild(a); a.click(); a.remove()
+    setTimeout(() => URL.revokeObjectURL(url), 4000)
+  }
+
+  // PDF = open in a print window; the browser's "Save as PDF" destination is
+  // the export. Zero server-side PDF dependencies.
+  function exportPdf() {
+    const r = reportDoc()
+    if (!r) return
     const w = window.open('', '_blank')
     if (!w) { setNote('Pop-up blocked — allow pop-ups for the portal to export a PDF.'); return }
-    w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>${title}</title>
-<style>body{margin:24px;background:#fff} @media print{body{margin:0}}</style>
-</head><body>${html}</body></html>`)
+    w.document.write(r.doc)
     w.document.close()
     w.focus()
     // Give the new window a beat to lay out before opening the print dialog.
     setTimeout(() => { try { w.print() } catch { /* user can print manually */ } }, 400)
   }
+
+  // Word opens HTML served as application/msword natively (tables, colours and
+  // all) — no converter needed, and the file forwards/edits fine from there.
+  function exportWord() {
+    const r = reportDoc()
+    if (r) downloadFile(r.doc, 'application/msword', `${r.title}.doc`)
+  }
+
+  function exportHtml() {
+    const r = reportDoc()
+    if (r) downloadFile(r.doc, 'text/html', `${r.title}.html`)
+  }
+
+  const EXPORTS: { label: string; hint: string; run: () => void }[] = [
+    { label: 'PDF', hint: 'print window → Save as PDF', run: exportPdf },
+    { label: 'Word (.doc)', hint: 'editable, opens in Word', run: exportWord },
+    { label: 'HTML file', hint: 'self-contained web page', run: exportHtml },
+  ]
 
   const btn = (active: boolean): React.CSSProperties => ({
     fontSize: 12, padding: '6px 12px', borderRadius: 6, cursor: 'pointer', fontFamily: 'inherit',
@@ -155,9 +193,39 @@ export default function SalesReportPage({ user }: { user: PortalUserSSR }) {
           <button style={actionBtn(!!busy)} disabled={!!busy} onClick={runWorkshop}>
             {busy === 'refresh' ? 'Starting…' : 'Update workshop data'}
           </button>
-          <button style={actionBtn(!html)} disabled={!html} onClick={exportPdf}>
-            ⬇ Export as PDF
-          </button>
+          <div style={{ position: 'relative' }}>
+            <button style={actionBtn(!html)} disabled={!html} onClick={() => setExportOpen(o => !o)}>
+              ⬇ Export ▾
+            </button>
+            {exportOpen && (
+              <>
+                {/* click-away backdrop */}
+                <div style={{ position: 'fixed', inset: 0, zIndex: 40 }} onClick={() => setExportOpen(false)} />
+                <div style={{
+                  position: 'absolute', top: '100%', left: 0, marginTop: 4, zIndex: 41, minWidth: 210,
+                  background: T.bg2, border: `1px solid ${T.border2}`, borderRadius: 8,
+                  boxShadow: '0 8px 24px rgba(0,0,0,0.35)', overflow: 'hidden',
+                }}>
+                  {EXPORTS.map((x, i) => (
+                    <button
+                      key={x.label}
+                      style={{
+                        display: 'block', width: '100%', textAlign: 'left', padding: '8px 12px',
+                        fontSize: 12, fontFamily: 'inherit', cursor: 'pointer', border: 'none',
+                        background: exportHover === i ? T.bg3 : 'transparent', color: T.text,
+                      }}
+                      onMouseEnter={() => setExportHover(i)}
+                      onMouseLeave={() => setExportHover(null)}
+                      onClick={() => { setExportOpen(false); x.run() }}
+                    >
+                      {x.label}
+                      <span style={{ color: T.text3, marginLeft: 8, fontSize: 11 }}>{x.hint}</span>
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
 
           <div style={{ flex: 1 }} />
           <div style={{ fontSize: 11, color: T.text3, textAlign: 'right' }}>
