@@ -13,7 +13,7 @@
 
 import { createClient } from '@supabase/supabase-js'
 import { withAuth } from '../../../lib/authServer'
-import { fetchSaleInvoicesWithLines } from '../../../lib/myob-reporting'
+import { fetchSaleInvoicesWithLines, fetchSaleInvoices } from '../../../lib/myob-reporting'
 import { lineExGst } from '../../../lib/gst'
 import { getGrouping, groupNameFor } from '../../../lib/distGroups'
 
@@ -103,8 +103,23 @@ export default withAuth('view:reports', async (req, res) => {
     }
   }
 
+  // Cross-check: the bare /Sale/Invoice endpoint spans ALL invoice types
+  // (header-only). Anything it has that the typed pull lacks = an invoice
+  // type we aren't fetching lines for.
+  const headers = await fetchSaleInvoices(file, { start, endExclusive: endEx })
+  const typedIds = new Set(invoices.map(i => i.ID))
+  const missingFromTyped = headers.filter(h => !typedIds.has(h.ID))
+
   const out = {
     range: { start, end }, q, file,
+    crossCheck: {
+      headerEndpointCount: headers.length,
+      typedEndpointsCount: invoices.length,
+      missingFromTypedCount: missingFromTyped.length,
+      missingByType: missingFromTyped.reduce((m: Record<string, number>, h) => { const t = h.InvoiceType || '?'; m[t] = (m[t] || 0) + 1; return m }, {}),
+      missingSample: missingFromTyped.slice(0, 15).map(h => ({ number: h.Number, date: h.Date?.slice(0, 10), type: h.InvoiceType, customer: h.CustomerName, total: h.TotalAmount })),
+      missingMatchingQ: q ? missingFromTyped.filter(h => (h.CustomerName || '').toLowerCase().includes(q)).map(h => ({ number: h.Number, date: h.Date?.slice(0, 10), type: h.InvoiceType, total: h.TotalAmount })) : [],
+    },
     pull: {
       invoices: invoices.length, lines: lines.length,
       byType: invoices.reduce((m: Record<string, number>, i) => { const t = i.InvoiceType || '?'; m[t] = (m[t] || 0) + 1; return m }, {}),

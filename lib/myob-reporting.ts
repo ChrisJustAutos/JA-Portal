@@ -76,7 +76,9 @@ export interface SaleLineRow {
 // Sale-invoice types that carry Lines. CData's SaleInvoices/SaleInvoiceItems
 // spanned ALL types, so we must too — querying only Sale/Invoice/Item
 // undercounts (JAWS raises some sales as Service invoices). Merge them.
-const INVOICE_TYPES = ['Item', 'Service', 'Professional', 'Miscellaneous']
+// TimeBilling added 2026-07-21 (EOFY reconciliation) — AccountRight's fifth
+// type; a file with it disabled just 400/404s, which fetch handles.
+const INVOICE_TYPES = ['Item', 'Service', 'Professional', 'Miscellaneous', 'TimeBilling']
 
 // Sale invoices for a date range, across all invoice types, with lines
 // flattened. Both shapes carry CData-compatible field names.
@@ -94,7 +96,8 @@ export async function fetchSaleInvoicesWithLines(
 
   const raw: any[] = []
   for (const type of INVOICE_TYPES) {
-    try { raw.push(...await fetchAll(label, `Sale/Invoice/${type}`, q)) }
+    // Typed endpoints omit the InvoiceType field — stamp the endpoint's type.
+    try { raw.push(...(await fetchAll(label, `Sale/Invoice/${type}`, q)).map(x => ({ ...x, InvoiceType: x.InvoiceType ?? type }))) }
     catch (e: any) {
       // A company file may not have every invoice type enabled — a 400/404
       // (first page) shouldn't sink the whole pull. ANY other failure must
