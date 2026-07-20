@@ -110,8 +110,28 @@ export default withAuth('view:reports', async (req, res) => {
   const typedIds = new Set(invoices.map(i => i.ID))
   const missingFromTyped = headers.filter(h => !typedIds.has(h.ID))
 
+  // ?samples=1 — raw line samples for the matching customers, split
+  // tuning-vs-parts by the category config. For designing the per-vehicle
+  // breakdown: shows whether descriptions/items carry the vehicle type.
+  const wantSamples = String(req.query.samples || '') === '1'
+  const lineSamples: any = wantSamples ? { tuning: [], parts: [] } : undefined
+  if (wantSamples) {
+    const catByAcc = accToCat
+    const matchIds = new Set(matches.map(i => i.ID))
+    for (const l of lines) {
+      if (!matchIds.has(l.SaleInvoiceId)) continue
+      const cat = catByAcc.get(l.AccountDisplayID || '')
+      const bucket = cat === 'Tuning' ? lineSamples.tuning : cat === 'Parts' ? lineSamples.parts : null
+      if (bucket && bucket.length < 40) bucket.push({
+        account: l.AccountDisplayID, item: l.ItemNumber, itemName: l.ItemName,
+        description: (l.Description || '').slice(0, 120), total: l.Total,
+      })
+    }
+  }
+
   const out = {
     range: { start, end }, q, file,
+    lineSamples,
     crossCheck: {
       headerEndpointCount: headers.length,
       typedEndpointsCount: invoices.length,
