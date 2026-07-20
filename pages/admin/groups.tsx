@@ -29,7 +29,10 @@ export default function GroupsAdmin() {
   const [groups, setGroups] = useState<Group[]>([])
   const [members, setMembers] = useState<Member[]>([])
   const [myobCustomers, setMyobCustomers] = useState<string[]>([])
-  const [tab, setTab] = useState<'aliases'|'groups'|'members'>('members')
+  const [tab, setTab] = useState<'aliases'|'groups'|'members'|'items'>('members')
+  useEffect(() => {
+    if (router.isReady && router.query.tab === 'items') setTab('items')
+  }, [router.isReady, router.query.tab])
 
   const load = useCallback(async () => {
     try {
@@ -103,12 +106,13 @@ export default function GroupsAdmin() {
           )}
 
           <div style={{display:'flex',gap:2,padding:'0 20px',background:T.bg2,borderBottom:`1px solid ${T.border}`,flexShrink:0}}>
-            {(['members','aliases','groups'] as const).map(k => (
+            {(['members','aliases','groups','items'] as const).map(k => (
               <button key={k} onClick={()=>setTab(k)}
                 style={{fontSize:12,padding:'10px 16px',border:'none',borderBottom:tab===k?`2px solid ${T.accent}`:'2px solid transparent',background:'transparent',color:tab===k?T.accent:T.text2,cursor:'pointer',fontFamily:'inherit',textTransform:'capitalize'}}>
                 {k === 'members' ? `Membership (${members.length})`
                   : k === 'aliases' ? `Aliases & Merges (${aliases.length})`
-                  : `Groups (${groups.length})`}
+                  : k === 'groups' ? `Groups (${groups.length})`
+                  : 'Item → Vehicle'}
               </button>
             ))}
           </div>
@@ -139,6 +143,8 @@ export default function GroupsAdmin() {
                 onDelete={(id)=>mutate('deleteGroup',{id})}
               />
             )}
+
+            {tab === 'items' && <ItemVehicleTab/>}
           </div>
         </div>
       </div>
@@ -482,6 +488,123 @@ function MembersTab({groups, members, canonicalNames, onToggle}: {
           )})}</tbody>
         </table>
       </div>
+    </div>
+  </div>
+}
+
+// ─────────────────────────────────────────────────────────────
+// Item → Vehicle: tick which vehicle models each JAWS stock item fits.
+// Feeds the Distributors "Parts : Tunes" volume view — an item ticked for
+// N models splits its sold quantity evenly across them. Lists the WHOLE
+// JAWS item list (define up front; invoices match up as they come through);
+// sold-to-distributor units (recent report ranges) sort the busy items up top.
+function ItemVehicleTab() {
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+  const [models, setModels] = useState<string[]>([])
+  const [candidates, setCandidates] = useState<{ item_number: string; item_name: string | null; units: number }[]>([])
+  const [map, setMap] = useState<Record<string, string[]>>({})
+  const [edits, setEdits] = useState<Record<string, string[]>>({})
+  const [search, setSearch] = useState('')
+  const [onlyUnmapped, setOnlyUnmapped] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [note, setNote] = useState('')
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const r = await fetch('/api/distributor-item-map?items=1')
+        const d = await r.json()
+        if (!r.ok || d.error) throw new Error(d.error || `HTTP ${r.status}`)
+        setModels(d.models || [])
+        setCandidates(d.candidates || [])
+        const m: Record<string, string[]> = {}
+        for (const it of (d.items || [])) m[it.item_number] = it.models || []
+        setMap(m)
+        setError('')
+      } catch (e: any) { setError(e.message || String(e)) }
+      finally { setLoading(false) }
+    })()
+  }, [])
+
+  const ticksFor = (num: string) => edits[num] ?? map[num] ?? []
+  const q = search.trim().toLowerCase()
+  const rows = candidates
+    .filter(it => !q || it.item_number.toLowerCase().includes(q) || (it.item_name || '').toLowerCase().includes(q))
+    .filter(it => !onlyUnmapped || ticksFor(it.item_number).length === 0)
+
+  const toggle = (num: string, model: string) => {
+    setEdits(prev => {
+      const curr = prev[num] ?? map[num] ?? []
+      return { ...prev, [num]: curr.includes(model) ? curr.filter(m => m !== model) : [...curr, model] }
+    })
+  }
+  const dirty = Object.keys(edits).length > 0
+
+  const save = async () => {
+    setSaving(true); setNote('')
+    try {
+      const nameFor = (num: string) => candidates.find(c => c.item_number === num)?.item_name || null
+      const payload = Object.entries(edits).map(([num, ms]) => ({ item_number: num, item_name: nameFor(num), models: ms }))
+      const r = await fetch('/api/distributor-item-map', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ items: payload }),
+      })
+      const d = await r.json()
+      if (!r.ok || d.error) throw new Error(d.error || `HTTP ${r.status}`)
+      setMap(prev => ({ ...prev, ...edits }))
+      setEdits({})
+      setNote(`Saved ${payload.length} item${payload.length === 1 ? '' : 's'}.`)
+    } catch (e: any) { setNote(`Save failed: ${e.message || e}`) }
+    setSaving(false)
+  }
+
+  if (loading) return <div style={{ color: T.text3, textAlign: 'center', padding: 40 }}>Loading JAWS item list from MYOB…</div>
+  if (error) return <div style={{ background: 'rgba(240,78,78,0.1)', border: `1px solid ${T.red}40`, borderRadius: 8, padding: 12, color: T.red, fontSize: 12 }}>{error}</div>
+
+  const mappedCount = candidates.filter(it => ticksFor(it.item_number).length > 0).length
+
+  return <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+    <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+      <div style={{ fontSize: 12, color: T.text3, maxWidth: 560 }}>
+        Tick every vehicle model an item fits — multi-fit items split their volume evenly across ticks on the Distributors → Parts : Tunes view. Columns come from the VIN model rules.
+      </div>
+      <div style={{ flex: 1 }} />
+      <span style={{ fontSize: 11, color: T.text3 }}>{mappedCount}/{candidates.length} items mapped</span>
+      <label style={{ fontSize: 11, color: T.text2, display: 'flex', alignItems: 'center', gap: 5, cursor: 'pointer' }}>
+        <input type="checkbox" checked={onlyUnmapped} onChange={e => setOnlyUnmapped(e.target.checked)} /> unmapped only
+      </label>
+      <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search item / name…"
+        style={{ fontSize: 12, padding: '5px 10px', borderRadius: 6, border: `1px solid ${T.border}`, background: T.bg3, color: T.text, fontFamily: 'inherit' }} />
+      <button disabled={!dirty || saving} onClick={save}
+        style={{ fontSize: 12, padding: '6px 16px', borderRadius: 6, border: `1px solid ${dirty ? T.accent : T.border}`, background: dirty ? T.accent : T.bg3, color: dirty ? '#fff' : T.text3, cursor: dirty ? 'pointer' : 'default', fontFamily: 'inherit', fontWeight: 600 }}>
+        {saving ? 'Saving…' : dirty ? `Save ${Object.keys(edits).length} change${Object.keys(edits).length === 1 ? '' : 's'}` : 'Saved'}
+      </button>
+    </div>
+    {note && <div style={{ fontSize: 12, color: note.startsWith('Save failed') ? T.red : T.green }}>{note}</div>}
+    <div style={{ background: T.bg2, border: `1px solid ${T.border}`, borderRadius: 10, overflow: 'auto', maxHeight: 'calc(100vh - 240px)' }}>
+      <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+        <thead><tr style={{ borderBottom: `1px solid ${T.border2}`, position: 'sticky', top: 0, background: T.bg2, zIndex: 1 }}>
+          <th style={{ fontSize: 11, color: T.text3, padding: '8px 10px', textAlign: 'left', fontWeight: 500 }}>Item</th>
+          <th style={{ fontSize: 11, color: T.text3, padding: '8px 10px', textAlign: 'right', fontWeight: 500 }} title="Units sold to distributors in recent report ranges — sort hint only">Units</th>
+          {models.map(m => <th key={m} style={{ fontSize: 10, color: T.text3, padding: '8px 6px', textAlign: 'center', fontWeight: 500, whiteSpace: 'nowrap' }}>{m}</th>)}
+        </tr></thead>
+        <tbody>{rows.map(it => {
+          const ticks = ticksFor(it.item_number)
+          return <tr key={it.item_number} style={{ borderTop: `1px solid ${T.border}` }}>
+            <td style={{ fontSize: 11, padding: '6px 10px', color: T.text2 }}>
+              <span style={{ fontFamily: 'monospace', color: T.text }}>{it.item_number}</span>
+              <span style={{ color: T.text3, marginLeft: 8 }}>{(it.item_name || '').slice(0, 55)}</span>
+            </td>
+            <td style={{ fontSize: 11, fontFamily: 'monospace', color: it.units > 0 ? T.text2 : T.text3, padding: '6px 10px', textAlign: 'right' }}>{it.units || ''}</td>
+            {models.map(m => <td key={m} style={{ padding: '6px', textAlign: 'center' }}>
+              <input type="checkbox" checked={ticks.includes(m)} onChange={() => toggle(it.item_number, m)} style={{ cursor: 'pointer' }} />
+            </td>)}
+          </tr>
+        })}
+        {rows.length === 0 && <tr><td colSpan={2 + models.length} style={{ fontSize: 12, color: T.text3, fontStyle: 'italic', padding: 12 }}>No items match.</td></tr>}
+        </tbody>
+      </table>
     </div>
   </div>
 }

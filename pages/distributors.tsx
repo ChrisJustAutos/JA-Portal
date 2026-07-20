@@ -128,13 +128,9 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
   const [data,setData]=useState<DistData|null>(null)
   const [grouping,setGrouping]=useState<GroupingPayload|null>(null)
   const [vinRules,setVinRules]=useState<VinRule[]>([])
-  // item_number → ticked vehicle models (Parts:Tunes tab)
+  // item_number → ticked vehicle models (Parts:Tunes tab; managed in
+  // Groups Admin → Item → Vehicle, same home as the distributor grouping)
   const [itemMap,setItemMap]=useState<Record<string,string[]>>({})
-  const [mapOpen,setMapOpen]=useState(false)
-  const [mapEdits,setMapEdits]=useState<Record<string,string[]>>({})
-  const [mapSearch,setMapSearch]=useState('')
-  const [mapSaving,setMapSaving]=useState(false)
-  const [mapNote,setMapNote]=useState('')
   const [loading,setLoading]=useState(true)
   const [error,setError]=useState('')
   const [selectedDist,setSelectedDist]=useState('ALL')
@@ -660,8 +656,9 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
       <div style={{display:'flex',alignItems:'center',gap:12,flexWrap:'wrap'}}>
         <div style={{fontSize:18,fontWeight:500,color:T.text}}>{selectedDist==='ALL'?'All Distributors':selectedDist} — Parts : Tunes volume</div>
         <div style={{flex:1}}/>
-        <button onClick={()=>{setMapOpen(o=>!o);setMapEdits({});setMapNote('')}} style={{fontSize:12,padding:'6px 14px',borderRadius:6,border:`1px solid ${mapOpen?T.blue:T.border}`,background:mapOpen?'rgba(79,142,247,0.15)':T.bg3,color:mapOpen?T.blue:T.text2,cursor:'pointer',fontFamily:'inherit'}}>
-          {mapOpen?'Close mapping':'⚙ Map items to vehicles'}
+        <button onClick={()=>router.push('/admin/groups?tab=items')} style={{fontSize:12,padding:'6px 14px',borderRadius:6,border:`1px solid ${T.border}`,background:T.bg3,color:T.text2,cursor:'pointer',fontFamily:'inherit'}}
+          title="Item → vehicle mapping lives with the distributor grouping settings">
+          ⚙ Manage item mapping
         </button>
       </div>
       <div style={{fontSize:12,color:T.text3}}>
@@ -671,8 +668,6 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
       {!hasItemData && <div style={{background:'rgba(233,147,43,0.1)',border:'1px solid rgba(233,147,43,0.3)',borderRadius:10,padding:14,color:T.amber,fontSize:12}}>
         This date range was cached before item numbers were captured — hit ↻ Refresh (top right) to re-pull it with item data.
       </div>}
-
-      {mapOpen && renderItemMapping()}
 
       {/* Per-model table for the current selection */}
       <div style={{background:T.bg2,border:`1px solid ${T.border}`,borderRadius:10,overflowX:'auto'}}>
@@ -725,91 +720,6 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
     </div>
   }
 
-  // Tick-box editor: rows = parts items seen in the loaded range (all
-  // distributors), columns = VIN-rule vehicle models.
-  function renderItemMapping(){
-    const models = Array.from(new Set(vinRules.map(r => r.friendly_name || r.model_code))).sort()
-    const itemAgg = new Map<string, { name: string; units: number }>()
-    for (const l of visibleLines) {
-      if (l.bucket !== 'Parts' || !l.itemNumber) continue
-      const e = itemAgg.get(l.itemNumber) || { name: l.Description || '', units: 0 }
-      e.units += l.qty != null && l.qty > 0 ? l.qty : 1
-      if (!e.name && l.Description) e.name = l.Description
-      itemAgg.set(l.itemNumber, e)
-    }
-    const q = mapSearch.trim().toLowerCase()
-    const items = Array.from(itemAgg.entries())
-      .map(([num, v]) => ({ num, name: v.name, units: v.units, ticks: mapEdits[num] ?? itemMap[num] ?? [] }))
-      .filter(it => !q || it.num.toLowerCase().includes(q) || it.name.toLowerCase().includes(q))
-      .sort((a,b)=>b.units-a.units)
-
-    const toggle = (num: string, model: string) => {
-      setMapEdits(prev => {
-        const curr = prev[num] ?? itemMap[num] ?? []
-        const next = curr.includes(model) ? curr.filter(m => m !== model) : [...curr, model]
-        return { ...prev, [num]: next }
-      })
-    }
-    const dirty = Object.keys(mapEdits).length > 0
-
-    const save = async () => {
-      setMapSaving(true); setMapNote('')
-      try {
-        const payload = Object.entries(mapEdits).map(([num, ms]) => ({
-          item_number: num, item_name: itemAgg.get(num)?.name || null, models: ms,
-        }))
-        const r = await fetch('/api/distributor-item-map', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ items: payload }),
-        })
-        const d = await r.json()
-        if (!r.ok || d.error) throw new Error(d.error || `HTTP ${r.status}`)
-        setItemMap(prev => ({ ...prev, ...mapEdits }))
-        setMapEdits({})
-        setMapNote(`Saved ${payload.length} item${payload.length===1?'':'s'}.`)
-      } catch (e: any) { setMapNote(`Save failed: ${e.message || e}`) }
-      setMapSaving(false)
-    }
-
-    return <div style={{background:T.bg2,border:`1px solid ${T.blue}44`,borderRadius:10,padding:16,display:'flex',flexDirection:'column',gap:10}}>
-      <div style={{display:'flex',alignItems:'center',gap:10,flexWrap:'wrap'}}>
-        <div style={{fontSize:13,fontWeight:600,color:T.text}}>Item → vehicle mapping</div>
-        <div style={{fontSize:11,color:T.text3}}>Tick every model an item fits — multi-fit items split their volume evenly. Items listed are those sold to distributors in the loaded date range.</div>
-        <div style={{flex:1}}/>
-        <input value={mapSearch} onChange={e=>setMapSearch(e.target.value)} placeholder="Search item / name…"
-          style={{fontSize:12,padding:'5px 10px',borderRadius:6,border:`1px solid ${T.border}`,background:T.bg3,color:T.text,fontFamily:'inherit'}}/>
-        <button disabled={!dirty||mapSaving} onClick={save}
-          style={{fontSize:12,padding:'6px 16px',borderRadius:6,border:`1px solid ${dirty?T.blue:T.border}`,background:dirty?T.blue:T.bg3,color:dirty?'#fff':T.text3,cursor:dirty?'pointer':'default',fontFamily:'inherit',fontWeight:600}}>
-          {mapSaving?'Saving…':dirty?`Save ${Object.keys(mapEdits).length} change${Object.keys(mapEdits).length===1?'':'s'}`:'Saved'}
-        </button>
-      </div>
-      {mapNote&&<div style={{fontSize:12,color:mapNote.startsWith('Save failed')?T.red:T.green}}>{mapNote}</div>}
-      <div style={{overflowX:'auto',maxHeight:420,overflowY:'auto'}}>
-        <table style={{width:'100%',borderCollapse:'collapse'}}>
-          <thead><tr style={{borderBottom:`1px solid ${T.border2}`,position:'sticky',top:0,background:T.bg2,zIndex:1}}>
-            <th style={{fontSize:11,color:T.text3,padding:'8px 10px',textAlign:'left',fontWeight:500}}>Item</th>
-            <th style={{fontSize:11,color:T.text3,padding:'8px 10px',textAlign:'right',fontWeight:500}}>Units</th>
-            {models.map(m=><th key={m} style={{fontSize:10,color:T.text3,padding:'8px 6px',textAlign:'center',fontWeight:500,whiteSpace:'nowrap'}}>{m}</th>)}
-          </tr></thead>
-          <tbody>{items.map(it=><tr key={it.num} style={{borderTop:`1px solid ${T.border}`}}>
-            <td style={{fontSize:11,padding:'6px 10px',color:T.text2}}>
-              <span style={{fontFamily:'monospace',color:T.text}}>{it.num}</span>
-              <span style={{color:T.text3,marginLeft:8}}>{it.name.slice(0,50)}</span>
-            </td>
-            <td style={{fontSize:11,fontFamily:'monospace',color:T.text3,padding:'6px 10px',textAlign:'right'}}>{Math.round(it.units)}</td>
-            {models.map(m=><td key={m} style={{padding:'6px',textAlign:'center'}}>
-              <input type="checkbox" checked={it.ticks.includes(m)} onChange={()=>toggle(it.num,m)} style={{cursor:'pointer',accentColor:'var(--t-blue, #4f8ef7)'}}/>
-            </td>)}
-          </tr>)}
-          {items.length===0&&<tr><td colSpan={2+models.length} style={{fontSize:12,color:T.text3,fontStyle:'italic',padding:12}}>No part items with item numbers in the loaded range{hasNoItemsHint()}</td></tr>}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  }
-  function hasNoItemsHint(){
-    return visibleLines.some(l=>l.bucket==='Parts') ? ' — hit ↻ Refresh to re-pull with item data.' : '.'
-  }
 
   function renderContent(){
     if(loading)return <div style={{display:'flex',alignItems:'center',justifyContent:'center',height:400,flexDirection:'column',gap:12}}>

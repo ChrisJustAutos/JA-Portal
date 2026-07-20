@@ -11,6 +11,9 @@ import type { NextApiRequest, NextApiResponse } from 'next'
 import { createClient } from '@supabase/supabase-js'
 import { requireAuth } from '../../lib/auth'
 
+// ?items=1 pulls the whole JAWS item list from MYOB — allow time for it.
+export const config = { maxDuration: 60 }
+
 function getSb() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY
@@ -33,6 +36,44 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         if (!e.item_name && r.item_name) e.item_name = r.item_name
         byItem.set(r.item_number, e)
       }
+
+      // ?items=1 — the settings editor also needs: the FULL JAWS stock list
+      // (Chris 2026-07-21: define every item up front in settings, then
+      // invoices match up as they come through), distributor-sold units from
+      // the freshest cached report payloads as a sort hint, and the
+      // vehicle-model columns (VIN-rule model names).
+      if (String(req.query.items || '') === '1') {
+        const { data: cacheRows } = await sb.from('distributors_cache')
+          .select('payload, computed_at').order('computed_at', { ascending: false }).limit(3)
+        const unitsSold = new Map<string, number>()
+        for (const row of (cacheRows || []) as any[]) {
+          for (const d of row.payload?.distributors || []) {
+            for (const li of d.lineItems || []) {
+              if (li.bucket !== 'Parts' || !li.itemNumber) continue
+              unitsSold.set(li.itemNumber, (unitsSold.get(li.itemNumber) || 0) + (li.qty != null && Number(li.qty) > 0 ? Number(li.qty) : 1))
+            }
+          }
+        }
+
+        const [{ getVinRules }, { fetchItems }] = await Promise.all([
+          import('../../lib/vinCodes'), import('../../lib/myob-reporting'),
+        ])
+        const rules = (await getVinRules()).rules as any[]
+        const models = Array.from(new Set(rules.map(r => r.friendly_name || r.model_code))).filter(Boolean).sort()
+
+        // Whole JAWS item list — active items, sold-to-distributors first.
+        const rawItems = await fetchItems('JAWS')
+        const candidates = rawItems
+          .filter((it: any) => it.IsActive !== false && it.Number)
+          .map((it: any) => ({
+            item_number: String(it.Number), item_name: it.Name ?? null,
+            units: Math.round(unitsSold.get(String(it.Number)) || 0),
+          }))
+          .sort((a, b) => (b.units - a.units) || a.item_number.localeCompare(b.item_number))
+
+        return res.status(200).json({ items: Array.from(byItem.values()), candidates, models })
+      }
+
       return res.status(200).json({ items: Array.from(byItem.values()) })
     }
 
