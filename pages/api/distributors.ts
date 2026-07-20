@@ -213,6 +213,10 @@ export async function computeDistributorsPayload(start: string, end: string) {
     agg.lineItems.push({
       date: inv.Date, invoiceNumber: inv.Number, description: line.Description || '',
       amountExGst: amt, bucket: cat, category: cat, accountCode: acc,
+      // Item + quantity feed the Parts:Tunes vehicle-model breakdown
+      // (dist_item_model_map ticks split an item's qty across its models).
+      itemNumber: line.ItemNumber || null,
+      qty: line.ShipQuantity != null ? Number(line.ShipQuantity) : null,
       poNumber: inv.CustomerPurchaseOrderNumber || '',
       // sundryCustomer kept for legacy compatibility — equals customerBase
       // when isSundry, null otherwise. Frontend drill-down still reads it.

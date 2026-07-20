@@ -30,6 +30,10 @@ interface LineItem {
   Description: string
   Total: number
   bucket: 'Tuning' | 'Parts' | 'Oil'
+  // Item number + ship qty (null on old cached payloads — Parts:Tunes tab
+  // prompts a refresh when absent).
+  itemNumber?: string | null
+  qty?: number | null
   poNumber: string
   invoiceNumber: string
   // Legacy field — equals CustomerName when isSundry, null otherwise.
@@ -115,7 +119,7 @@ function SortableTh({
   )
 }
 
-type Tab='distributor-sales'|'detailed-sales'|'summary'|'national-pm'|'national-total'
+type Tab='distributor-sales'|'detailed-sales'|'summary'|'national-pm'|'national-total'|'parts-tunes'
 
 export default function DistributorReport({ user }: { user: PortalUserSSR }) {
   const router=useRouter()
@@ -124,6 +128,13 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
   const [data,setData]=useState<DistData|null>(null)
   const [grouping,setGrouping]=useState<GroupingPayload|null>(null)
   const [vinRules,setVinRules]=useState<VinRule[]>([])
+  // item_number → ticked vehicle models (Parts:Tunes tab)
+  const [itemMap,setItemMap]=useState<Record<string,string[]>>({})
+  const [mapOpen,setMapOpen]=useState(false)
+  const [mapEdits,setMapEdits]=useState<Record<string,string[]>>({})
+  const [mapSearch,setMapSearch]=useState('')
+  const [mapSaving,setMapSaving]=useState(false)
+  const [mapNote,setMapNote]=useState('')
   const [loading,setLoading]=useState(true)
   const [error,setError]=useState('')
   const [selectedDist,setSelectedDist]=useState('ALL')
@@ -173,10 +184,11 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
     if(isRefresh)setRefreshing(true)
     try{
       const rp=isRefresh?'&refresh=true':''
-      const [distRes, groupRes, vinRes] = await Promise.all([
+      const [distRes, groupRes, vinRes, mapRes] = await Promise.all([
         fetch(`/api/distributors?${activeDateParams}${rp}`),
         fetch(`/api/groups${isRefresh?'?refresh=true':''}`),
         fetch(`/api/vin-codes${isRefresh?'?refresh=true':''}`),
+        fetch('/api/distributor-item-map'),
       ])
       if(distRes.status===401){router.push('/login');return}
       if(!distRes.ok)throw new Error('Failed to load distributor data')
@@ -198,6 +210,13 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
       }
       setVinRules(vRules)
 
+      if (mapRes.ok) {
+        const mData = await mapRes.json()
+        const m: Record<string,string[]> = {}
+        for (const it of (mData.items || [])) m[it.item_number] = it.models || []
+        setItemMap(m)
+      }
+
       const gstPref = prefs.gst_display
       const flatLineItems: LineItem[] = (d.distributors || []).flatMap((dist: any) =>
         (dist.lineItems || []).map((li: any) => {
@@ -211,6 +230,8 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
             Description: li.description,
             Total: applyGstDisplay(Number(li.amountExGst) || 0, gstPref),
             bucket: li.bucket,
+            itemNumber: li.itemNumber ?? null,
+            qty: li.qty != null ? Number(li.qty) : null,
             poNumber: li.poNumber || '',
             invoiceNumber: li.invoiceNumber || '',
             sundryCustomer: li.sundryCustomer || null,
@@ -374,7 +395,7 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
     return()=>{if(hBarInst.current)hBarInst.current.destroy()}
   },[tab,distSummaries])
 
-  const tabs:[Tab,string][]=[['summary','Summary'],['distributor-sales','Distributor Sales'],['detailed-sales','Detailed Sales'],['national-pm','National P/M'],['national-total','National Total']]
+  const tabs:[Tab,string][]=[['summary','Summary'],['distributor-sales','Distributor Sales'],['detailed-sales','Detailed Sales'],['parts-tunes','Parts : Tunes'],['national-pm','National P/M'],['national-total','National Total']]
 
   function KPIBox({label,value,color}:{label:string;value:number;color?:string}){
     return <div style={{textAlign:'right',padding:'16px 20px',borderBottom:`1px solid ${T.border}`}}>
@@ -567,6 +588,229 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
     </div>
   }
 
+  // ── Parts : Tunes (volume % per vehicle model) ─────────────────────────
+  // Tune volume per model comes from tuning-line VINs (vinToModel, same as
+  // the Distributor Sales tab). Parts volume comes from the item→model tick
+  // map — an item ticked for N models contributes qty/N to each.
+  function renderPartsTunes(){
+    const hasItemData = filtered.some(l => l.bucket==='Parts' && l.itemNumber !== undefined)
+    const models = Array.from(new Set(vinRules.map(r => r.friendly_name || r.model_code))).sort()
+
+    // Tune jobs per model (count of VIN'd tuning lines), per current filter.
+    const tunesByModel = new Map<string, number>()
+    let tunesNoVin = 0
+    for (const l of filtered) {
+      if (l.bucket !== 'Tuning') continue
+      if (l.Total <= 0) continue // credits/zero lines aren't tune volume
+      const po = (l.poNumber || '').trim()
+      if (!po) { tunesNoVin++; continue }
+      const m = vinToModel(po, vinRules)
+      if (m.startsWith('Unmapped') || m === 'Unknown') { tunesNoVin++; continue }
+      tunesByModel.set(m, (tunesByModel.get(m) || 0) + 1)
+    }
+
+    // Parts units per model — split across the item's ticked models.
+    const partsByModel = new Map<string, number>()
+    let partsUnmappedUnits = 0
+    for (const l of filtered) {
+      if (l.bucket !== 'Parts') continue
+      const units = l.qty != null && l.qty > 0 ? l.qty : 1
+      const ticked = l.itemNumber ? (itemMap[l.itemNumber] || []) : []
+      if (!ticked.length) { partsUnmappedUnits += units; continue }
+      for (const m of ticked) partsByModel.set(m, (partsByModel.get(m) || 0) + units / ticked.length)
+    }
+
+    const rows = models.map(m => {
+      const tunes = tunesByModel.get(m) || 0
+      const parts = partsByModel.get(m) || 0
+      return { model: m, tunes, parts, pct: tunes > 0 ? (parts / tunes) * 100 : null }
+    }).filter(r => r.tunes > 0 || r.parts > 0)
+    const totTunes = rows.reduce((s,r)=>s+r.tunes,0)
+    const totParts = rows.reduce((s,r)=>s+r.parts,0)
+
+    // Per-distributor overview (volume % across all mapped models).
+    const distRows = allDists.map(name => {
+      const dl = visibleLines.filter(l => l.CustomerName === name)
+      let tunes = 0, parts = 0, unmapped = 0
+      for (const l of dl) {
+        if (l.bucket === 'Tuning') {
+          if (l.Total <= 0) continue
+          const po = (l.poNumber || '').trim()
+          const m = po ? vinToModel(po, vinRules) : 'Unknown'
+          if (po && !m.startsWith('Unmapped') && m !== 'Unknown') tunes++
+        } else if (l.bucket === 'Parts') {
+          const units = l.qty != null && l.qty > 0 ? l.qty : 1
+          if (l.itemNumber && (itemMap[l.itemNumber] || []).length) parts += units
+          else unmapped += units
+        }
+      }
+      return { name, tunes, parts, unmapped, pct: tunes > 0 ? (parts / tunes) * 100 : null }
+    }).filter(d => d.tunes > 0 || d.parts > 0 || d.unmapped > 0).sort((a,b)=>(b.tunes)-(a.tunes))
+
+    const pctColor = (pct: number | null) => pct == null ? T.text3 : pct < 50 ? T.red : pct < 100 ? T.amber : T.green
+    const fmtPct = (pct: number | null) => pct == null ? '—' : Math.round(pct) + '%'
+    const fmtU = (n: number) => Math.round(n * 10) / 10
+
+    const th: React.CSSProperties = { fontSize:11, color:T.text3, padding:'10px 12px', textAlign:'right', fontWeight:500 }
+    const thL: React.CSSProperties = { ...th, textAlign:'left' }
+    const td: React.CSSProperties = { fontSize:12, fontFamily:'monospace', color:T.text2, padding:'8px 12px', textAlign:'right' }
+    const tdL: React.CSSProperties = { fontSize:12, color:T.text2, padding:'8px 12px' }
+
+    return <div style={{padding:24,overflowY:'auto',display:'flex',flexDirection:'column',gap:16}}>
+      <div style={{display:'flex',alignItems:'center',gap:12,flexWrap:'wrap'}}>
+        <div style={{fontSize:18,fontWeight:500,color:T.text}}>{selectedDist==='ALL'?'All Distributors':selectedDist} — Parts : Tunes volume</div>
+        <div style={{flex:1}}/>
+        <button onClick={()=>{setMapOpen(o=>!o);setMapEdits({});setMapNote('')}} style={{fontSize:12,padding:'6px 14px',borderRadius:6,border:`1px solid ${mapOpen?T.blue:T.border}`,background:mapOpen?'rgba(79,142,247,0.15)':T.bg3,color:mapOpen?T.blue:T.text2,cursor:'pointer',fontFamily:'inherit'}}>
+          {mapOpen?'Close mapping':'⚙ Map items to vehicles'}
+        </button>
+      </div>
+      <div style={{fontSize:12,color:T.text3}}>
+        Volume check: units of parts bought per tune, by vehicle model. Tunes = VIN-matched tuning invoice lines; parts = item quantities, split evenly across each item's ticked models.
+      </div>
+
+      {!hasItemData && <div style={{background:'rgba(233,147,43,0.1)',border:'1px solid rgba(233,147,43,0.3)',borderRadius:10,padding:14,color:T.amber,fontSize:12}}>
+        This date range was cached before item numbers were captured — hit ↻ Refresh (top right) to re-pull it with item data.
+      </div>}
+
+      {mapOpen && renderItemMapping()}
+
+      {/* Per-model table for the current selection */}
+      <div style={{background:T.bg2,border:`1px solid ${T.border}`,borderRadius:10,overflowX:'auto'}}>
+        <table style={{width:'100%',borderCollapse:'collapse'}}>
+          <thead><tr style={{borderBottom:`1px solid ${T.border2}`}}>
+            <th style={thL}>Vehicle model</th><th style={th}>Tunes (jobs)</th><th style={th}>Parts (units)</th><th style={th}>Parts per tune</th>
+          </tr></thead>
+          <tbody>
+            {rows.map((r,i)=><tr key={i} style={{borderTop:`1px solid ${T.border}`}}>
+              <td style={tdL}>{r.model}</td>
+              <td style={td}>{r.tunes}</td>
+              <td style={td}>{fmtU(r.parts)}</td>
+              <td style={{...td,fontWeight:700,color:pctColor(r.pct)}}>{fmtPct(r.pct)}</td>
+            </tr>)}
+            {(tunesNoVin>0||partsUnmappedUnits>0)&&<tr style={{borderTop:`1px solid ${T.border}`}}>
+              <td style={{...tdL,color:T.text3,fontStyle:'italic'}}>Not attributable</td>
+              <td style={{...td,color:T.text3}}>{tunesNoVin>0?`${tunesNoVin} (no VIN)`:''}</td>
+              <td style={{...td,color:T.text3}}>{partsUnmappedUnits>0?`${fmtU(partsUnmappedUnits)} (unmapped items)`:''}</td>
+              <td style={td}>—</td>
+            </tr>}
+            <tr style={{borderTop:`2px solid ${T.border2}`,background:T.bg3}}>
+              <td style={{...tdL,fontWeight:600,color:T.text}}>Total (attributed)</td>
+              <td style={{...td,fontWeight:600,color:T.text}}>{totTunes}</td>
+              <td style={{...td,fontWeight:600,color:T.text}}>{fmtU(totParts)}</td>
+              <td style={{...td,fontWeight:700,color:pctColor(totTunes>0?(totParts/totTunes)*100:null)}}>{fmtPct(totTunes>0?(totParts/totTunes)*100:null)}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      {/* Every-distributor overview */}
+      {selectedDist==='ALL'&&<div style={{background:T.bg2,border:`1px solid ${T.border}`,borderRadius:10,overflowX:'auto'}}>
+        <table style={{width:'100%',borderCollapse:'collapse'}}>
+          <thead><tr style={{borderBottom:`1px solid ${T.border2}`}}>
+            <th style={thL}>Distributor</th><th style={th}>Tunes (jobs)</th><th style={th}>Parts (units, mapped)</th><th style={th}>Unmapped units</th><th style={th}>Parts per tune</th>
+          </tr></thead>
+          <tbody>{distRows.map((d,i)=><tr key={i} style={{borderTop:`1px solid ${T.border}`,cursor:'pointer'}}
+            onClick={()=>setSelectedDist(d.name)}
+            onMouseEnter={e=>((e.currentTarget as HTMLElement).style.background='rgba(79,142,247,0.04)')}
+            onMouseLeave={e=>((e.currentTarget as HTMLElement).style.background='transparent')}
+            title="Click for this distributor's per-model breakdown">
+            <td style={{...tdL,textDecoration:'underline dotted rgba(var(--t-ink),0.15)'}}>{d.name}</td>
+            <td style={td}>{d.tunes}</td>
+            <td style={td}>{fmtU(d.parts)}</td>
+            <td style={{...td,color:d.unmapped>0?T.amber:T.text3}}>{d.unmapped>0?fmtU(d.unmapped):''}</td>
+            <td style={{...td,fontWeight:700,color:pctColor(d.pct)}}>{fmtPct(d.pct)}</td>
+          </tr>)}</tbody>
+        </table>
+      </div>}
+    </div>
+  }
+
+  // Tick-box editor: rows = parts items seen in the loaded range (all
+  // distributors), columns = VIN-rule vehicle models.
+  function renderItemMapping(){
+    const models = Array.from(new Set(vinRules.map(r => r.friendly_name || r.model_code))).sort()
+    const itemAgg = new Map<string, { name: string; units: number }>()
+    for (const l of visibleLines) {
+      if (l.bucket !== 'Parts' || !l.itemNumber) continue
+      const e = itemAgg.get(l.itemNumber) || { name: l.Description || '', units: 0 }
+      e.units += l.qty != null && l.qty > 0 ? l.qty : 1
+      if (!e.name && l.Description) e.name = l.Description
+      itemAgg.set(l.itemNumber, e)
+    }
+    const q = mapSearch.trim().toLowerCase()
+    const items = Array.from(itemAgg.entries())
+      .map(([num, v]) => ({ num, name: v.name, units: v.units, ticks: mapEdits[num] ?? itemMap[num] ?? [] }))
+      .filter(it => !q || it.num.toLowerCase().includes(q) || it.name.toLowerCase().includes(q))
+      .sort((a,b)=>b.units-a.units)
+
+    const toggle = (num: string, model: string) => {
+      setMapEdits(prev => {
+        const curr = prev[num] ?? itemMap[num] ?? []
+        const next = curr.includes(model) ? curr.filter(m => m !== model) : [...curr, model]
+        return { ...prev, [num]: next }
+      })
+    }
+    const dirty = Object.keys(mapEdits).length > 0
+
+    const save = async () => {
+      setMapSaving(true); setMapNote('')
+      try {
+        const payload = Object.entries(mapEdits).map(([num, ms]) => ({
+          item_number: num, item_name: itemAgg.get(num)?.name || null, models: ms,
+        }))
+        const r = await fetch('/api/distributor-item-map', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ items: payload }),
+        })
+        const d = await r.json()
+        if (!r.ok || d.error) throw new Error(d.error || `HTTP ${r.status}`)
+        setItemMap(prev => ({ ...prev, ...mapEdits }))
+        setMapEdits({})
+        setMapNote(`Saved ${payload.length} item${payload.length===1?'':'s'}.`)
+      } catch (e: any) { setMapNote(`Save failed: ${e.message || e}`) }
+      setMapSaving(false)
+    }
+
+    return <div style={{background:T.bg2,border:`1px solid ${T.blue}44`,borderRadius:10,padding:16,display:'flex',flexDirection:'column',gap:10}}>
+      <div style={{display:'flex',alignItems:'center',gap:10,flexWrap:'wrap'}}>
+        <div style={{fontSize:13,fontWeight:600,color:T.text}}>Item → vehicle mapping</div>
+        <div style={{fontSize:11,color:T.text3}}>Tick every model an item fits — multi-fit items split their volume evenly. Items listed are those sold to distributors in the loaded date range.</div>
+        <div style={{flex:1}}/>
+        <input value={mapSearch} onChange={e=>setMapSearch(e.target.value)} placeholder="Search item / name…"
+          style={{fontSize:12,padding:'5px 10px',borderRadius:6,border:`1px solid ${T.border}`,background:T.bg3,color:T.text,fontFamily:'inherit'}}/>
+        <button disabled={!dirty||mapSaving} onClick={save}
+          style={{fontSize:12,padding:'6px 16px',borderRadius:6,border:`1px solid ${dirty?T.blue:T.border}`,background:dirty?T.blue:T.bg3,color:dirty?'#fff':T.text3,cursor:dirty?'pointer':'default',fontFamily:'inherit',fontWeight:600}}>
+          {mapSaving?'Saving…':dirty?`Save ${Object.keys(mapEdits).length} change${Object.keys(mapEdits).length===1?'':'s'}`:'Saved'}
+        </button>
+      </div>
+      {mapNote&&<div style={{fontSize:12,color:mapNote.startsWith('Save failed')?T.red:T.green}}>{mapNote}</div>}
+      <div style={{overflowX:'auto',maxHeight:420,overflowY:'auto'}}>
+        <table style={{width:'100%',borderCollapse:'collapse'}}>
+          <thead><tr style={{borderBottom:`1px solid ${T.border2}`,position:'sticky',top:0,background:T.bg2,zIndex:1}}>
+            <th style={{fontSize:11,color:T.text3,padding:'8px 10px',textAlign:'left',fontWeight:500}}>Item</th>
+            <th style={{fontSize:11,color:T.text3,padding:'8px 10px',textAlign:'right',fontWeight:500}}>Units</th>
+            {models.map(m=><th key={m} style={{fontSize:10,color:T.text3,padding:'8px 6px',textAlign:'center',fontWeight:500,whiteSpace:'nowrap'}}>{m}</th>)}
+          </tr></thead>
+          <tbody>{items.map(it=><tr key={it.num} style={{borderTop:`1px solid ${T.border}`}}>
+            <td style={{fontSize:11,padding:'6px 10px',color:T.text2}}>
+              <span style={{fontFamily:'monospace',color:T.text}}>{it.num}</span>
+              <span style={{color:T.text3,marginLeft:8}}>{it.name.slice(0,50)}</span>
+            </td>
+            <td style={{fontSize:11,fontFamily:'monospace',color:T.text3,padding:'6px 10px',textAlign:'right'}}>{Math.round(it.units)}</td>
+            {models.map(m=><td key={m} style={{padding:'6px',textAlign:'center'}}>
+              <input type="checkbox" checked={it.ticks.includes(m)} onChange={()=>toggle(it.num,m)} style={{cursor:'pointer',accentColor:'var(--t-blue, #4f8ef7)'}}/>
+            </td>)}
+          </tr>)}
+          {items.length===0&&<tr><td colSpan={2+models.length} style={{fontSize:12,color:T.text3,fontStyle:'italic',padding:12}}>No part items with item numbers in the loaded range{hasNoItemsHint()}</td></tr>}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  }
+  function hasNoItemsHint(){
+    return visibleLines.some(l=>l.bucket==='Parts') ? ' — hit ↻ Refresh to re-pull with item data.' : '.'
+  }
+
   function renderContent(){
     if(loading)return <div style={{display:'flex',alignItems:'center',justifyContent:'center',height:400,flexDirection:'column',gap:12}}>
       <div style={{fontSize:28,animation:'spin 1s linear infinite',color:T.text3}}>⟳</div><div style={{color:T.text3}}>Loading distributor data…</div>
@@ -578,6 +822,8 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
     </div></div>
 
     if (tab === 'summary') return renderGroupedSummary()
+
+    if (tab === 'parts-tunes') return renderPartsTunes()
 
     if(tab==='distributor-sales'){
       const models=modelRows()
@@ -728,7 +974,7 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
     return null
   }
 
-  const showSelector=tab==='distributor-sales'||tab==='detailed-sales'
+  const showSelector=tab==='distributor-sales'||tab==='detailed-sales'||tab==='parts-tunes'
 
   // ─── Feed distributor revenue summary to the global AI chatbot ──────────
   const { setPageContext: setChatContext } = useChatContext()
