@@ -28,6 +28,9 @@ export default withAuth('view:reports', async (req, res) => {
   const start = String(req.query.start || '2025-07-01')
   const end   = String(req.query.end   || '2026-06-30')
   const q     = String(req.query.q || '').trim().toLowerCase()
+  // The report reads JAWS only; ?file=VPS lets reconciliation check whether
+  // the "missing" revenue actually lives in the other company file.
+  const file  = String(req.query.file || 'JAWS').toUpperCase() === 'VPS' ? 'VPS' as const : 'JAWS' as const
 
   const catsRes = await sbAdmin().from('distributor_report_categories').select('name, account_codes')
   const accToCat = new Map<string, string>()
@@ -36,7 +39,7 @@ export default withAuth('view:reports', async (req, res) => {
   const grouping = await getGrouping()
   // endExclusive: day after `end`, matching the report's inclusive range.
   const endEx = new Date(Date.parse(end + 'T00:00:00Z') + 86400_000).toISOString().slice(0, 10)
-  const { invoices, lines } = await fetchSaleInvoicesWithLines('JAWS', { start, endExclusive: endEx })
+  const { invoices, lines } = await fetchSaleInvoicesWithLines(file, { start, endExclusive: endEx })
 
   const linesByInv = new Map<string, typeof lines>()
   for (const l of lines) {
@@ -91,7 +94,7 @@ export default withAuth('view:reports', async (req, res) => {
   }
 
   const out = {
-    range: { start, end }, q,
+    range: { start, end }, q, file,
     pull: { invoices: invoices.length, lines: lines.length },
     customers: Array.from(byCard.values()).map(c => ({ ...c, grossTotal: Math.round(c.grossTotal * 100) / 100 })),
     unconfiguredAccountsRangeWide: Array.from(unconfigured.entries())
