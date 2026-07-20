@@ -86,7 +86,10 @@ export async function fetchSaleInvoicesWithLines(
   const filters: string[] = []
   if (opts.start) filters.push(`Date ge ${dt(opts.start)}`)
   if (opts.endExclusive) filters.push(`Date lt ${dt(opts.endExclusive)}`)
-  const q: Record<string, string | number> = {}
+  // Explicit $orderby makes the paging order deterministic — without it,
+  // skip paging (including NextPageLink, which is skip-based) can drop the
+  // odd row at page boundaries when the server's implicit order shifts.
+  const q: Record<string, string | number> = { '$orderby': 'Number' }
   if (filters.length) q['$filter'] = filters.join(' and ')
 
   const raw: any[] = []
