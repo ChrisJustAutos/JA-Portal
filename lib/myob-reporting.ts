@@ -45,9 +45,15 @@ async function fetchAll(label: CompanyFileLabel, entity: string, query: Record<s
     if (r.status !== 200) throw new Error(`MYOB ${entity} ${label}: HTTP ${r.status} ${(r.raw || '').slice(0, 160)}`)
     const items: any[] = Array.isArray(r.data?.Items) ? r.data.Items : []
     out.push(...items)
-    const next: string | null = typeof r.data?.NextPageLink === 'string' ? r.data.NextPageLink : null
-    // NextPageLink is absolute and carries the full query string already.
-    path = next ? next.replace(/^https:\/\/api\.myob\.com/i, '') : null
+    const next: string | null = typeof r.data?.NextPageLink === 'string' && r.data.NextPageLink ? r.data.NextPageLink : null
+    if (next) {
+      // NextPageLink carries the full query string, but its HOST varies
+      // (arl*.api.myob.com regional hosts) — take only path+query and let
+      // myobFetch prepend the canonical base.
+      try { const u = new URL(next, 'https://api.myob.com'); path = u.pathname + u.search } catch { path = null }
+    } else {
+      path = null
+    }
     firstQuery = null
   }
   return out
@@ -87,9 +93,16 @@ export async function fetchSaleInvoicesWithLines(
   for (const type of INVOICE_TYPES) {
     try { raw.push(...await fetchAll(label, `Sale/Invoice/${type}`, q)) }
     catch (e: any) {
-      // A company file may not have every invoice type enabled — a 400/404 on
-      // one type shouldn't sink the whole pull.
-      console.warn(`[myob-reporting] Sale/Invoice/${type} ${label}:`, e?.message)
+      // A company file may not have every invoice type enabled — a 400/404
+      // (first page) shouldn't sink the whole pull. ANY other failure must
+      // propagate: swallowing a mid-pagination error silently undercounts
+      // the report (exactly the 2026-07-21 EOFY reconciliation bug).
+      const msg = String(e?.message || e)
+      if (/HTTP 40[04]\b/.test(msg)) {
+        console.warn(`[myob-reporting] Sale/Invoice/${type} ${label} unavailable:`, msg.slice(0, 200))
+        continue
+      }
+      throw e
     }
   }
   const invoices: SaleInvoiceRow[] = []
