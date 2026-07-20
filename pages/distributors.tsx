@@ -76,6 +76,10 @@ function vinToModel(vinOrPo: string, rules: VinRule[]): string {
   return `Unmapped (${v.substring(0, 4)})`
 }
 
+// Sentinel "model" in dist_item_model_map marking an item as deliberately
+// outside the Parts:Tunes volume check (merch, freight, consumables…).
+const EXCLUDED_MODEL = '__excluded__'
+
 const fmtD=(n:number)=>n==null?'$0':'$'+Math.round(n).toLocaleString('en-AU')
 const fmtFull=(n:number)=>n==null?'$0':'$'+Number(n).toLocaleString('en-AU',{minimumFractionDigits:0,maximumFractionDigits:0})
 const fmt=(n:number)=>n>=1e6?'$'+(n/1e6).toFixed(2)+'M':n>=1000?'$'+Math.round(n/1000)+'k':'$'+Math.round(n)
@@ -131,6 +135,9 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
   // item_number → ticked vehicle models (Parts:Tunes tab; managed in
   // Groups Admin → Item → Vehicle, same home as the distributor grouping)
   const [itemMap,setItemMap]=useState<Record<string,string[]>>({})
+  // Parts:Tunes lens — 'units' (raw part quantities; a full build reads ~600%)
+  // or 'cars' (1 invoice = 1 car: 6 VDJ79 parts on an invoice = 1 car per tune)
+  const [ptMode,setPtMode]=useState<'units'|'cars'>('cars')
   const [loading,setLoading]=useState(true)
   const [error,setError]=useState('')
   const [selectedDist,setSelectedDist]=useState('ALL')
@@ -605,15 +612,46 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
       tunesByModel.set(m, (tunesByModel.get(m) || 0) + 1)
     }
 
-    // Parts units per model — split across the item's ticked models.
+    // Parts volume per model, two lenses:
+    //   units — item quantities, split evenly across the item's ticked models
+    //   cars  — 1 invoice = 1 car: an invoice with ≥1 part mapped to a model
+    //           counts once for that model (6 VDJ79 parts = 1 car), so the %
+    //           reads as "cars parts-ordered per tune" and 100% is the target.
     const partsByModel = new Map<string, number>()
-    let partsUnmappedUnits = 0
-    for (const l of filtered) {
-      if (l.bucket !== 'Parts') continue
-      const units = l.qty != null && l.qty > 0 ? l.qty : 1
-      const ticked = l.itemNumber ? (itemMap[l.itemNumber] || []) : []
-      if (!ticked.length) { partsUnmappedUnits += units; continue }
-      for (const m of ticked) partsByModel.set(m, (partsByModel.get(m) || 0) + units / ticked.length)
+    let partsUnmapped = 0
+    let totPartsOverride: number | null = null
+    if (ptMode === 'units') {
+      for (const l of filtered) {
+        if (l.bucket !== 'Parts') continue
+        const raw = l.itemNumber ? (itemMap[l.itemNumber] || []) : []
+        if (raw.includes(EXCLUDED_MODEL)) continue // deliberately out of the volume check
+        const units = l.qty != null && l.qty > 0 ? l.qty : 1
+        const ticked = raw.filter(m => m !== EXCLUDED_MODEL)
+        if (!ticked.length) { partsUnmapped += units; continue }
+        for (const m of ticked) partsByModel.set(m, (partsByModel.get(m) || 0) + units / ticked.length)
+      }
+    } else {
+      const carSets = new Map<string, Set<string>>()
+      const mappedInv = new Set<string>(), allPartInv = new Set<string>()
+      for (const l of filtered) {
+        if (l.bucket !== 'Parts') continue
+        const raw = l.itemNumber ? (itemMap[l.itemNumber] || []) : []
+        if (raw.includes(EXCLUDED_MODEL)) continue
+        const inv = l.invoiceNumber || `${l.CustomerName}|${l.Date}`
+        allPartInv.add(inv)
+        const ticked = raw.filter(m => m !== EXCLUDED_MODEL)
+        if (!ticked.length) continue
+        mappedInv.add(inv)
+        for (const m of ticked) {
+          if (!carSets.has(m)) carSets.set(m, new Set())
+          carSets.get(m)!.add(inv)
+        }
+      }
+      carSets.forEach((s, m) => partsByModel.set(m, s.size))
+      partsUnmapped = allPartInv.size - mappedInv.size
+      // an invoice spanning models counts once per model above, but only
+      // once in the total — so the total row uses distinct invoices.
+      totPartsOverride = mappedInv.size
     }
 
     const rows = models.map(m => {
@@ -622,12 +660,13 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
       return { model: m, tunes, parts, pct: tunes > 0 ? (parts / tunes) * 100 : null }
     }).filter(r => r.tunes > 0 || r.parts > 0)
     const totTunes = rows.reduce((s,r)=>s+r.tunes,0)
-    const totParts = rows.reduce((s,r)=>s+r.parts,0)
+    const totParts = totPartsOverride ?? rows.reduce((s,r)=>s+r.parts,0)
 
     // Per-distributor overview (volume % across all mapped models).
     const distRows = allDists.map(name => {
       const dl = visibleLines.filter(l => l.CustomerName === name)
       let tunes = 0, parts = 0, unmapped = 0
+      const mappedInv = new Set<string>(), allInv = new Set<string>()
       for (const l of dl) {
         if (l.bucket === 'Tuning') {
           if (l.Total <= 0) continue
@@ -635,11 +674,19 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
           const m = po ? vinToModel(po, vinRules) : 'Unknown'
           if (po && !m.startsWith('Unmapped') && m !== 'Unknown') tunes++
         } else if (l.bucket === 'Parts') {
-          const units = l.qty != null && l.qty > 0 ? l.qty : 1
-          if (l.itemNumber && (itemMap[l.itemNumber] || []).length) parts += units
-          else unmapped += units
+          const raw = l.itemNumber ? (itemMap[l.itemNumber] || []) : []
+          if (raw.includes(EXCLUDED_MODEL)) continue
+          const isMapped = raw.some(m => m !== EXCLUDED_MODEL)
+          if (ptMode === 'units') {
+            const units = l.qty != null && l.qty > 0 ? l.qty : 1
+            if (isMapped) parts += units; else unmapped += units
+          } else {
+            const inv = l.invoiceNumber || `${l.CustomerName}|${l.Date}`
+            allInv.add(inv); if (isMapped) mappedInv.add(inv)
+          }
         }
       }
+      if (ptMode === 'cars') { parts = mappedInv.size; unmapped = allInv.size - mappedInv.size }
       return { name, tunes, parts, unmapped, pct: tunes > 0 ? (parts / tunes) * 100 : null }
     }).filter(d => d.tunes > 0 || d.parts > 0 || d.unmapped > 0).sort((a,b)=>(b.tunes)-(a.tunes))
 
@@ -655,6 +702,13 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
     return <div style={{padding:24,overflowY:'auto',display:'flex',flexDirection:'column',gap:16}}>
       <div style={{display:'flex',alignItems:'center',gap:12,flexWrap:'wrap'}}>
         <div style={{fontSize:18,fontWeight:500,color:T.text}}>{selectedDist==='ALL'?'All Distributors':selectedDist} — Parts : Tunes volume</div>
+        <div style={{display:'flex',gap:6}}>
+          {([['cars','Per car (1 invoice = 1 car)'],['units','Per part (raw units)']] as const).map(([m,label])=>
+            <button key={m} onClick={()=>setPtMode(m)} style={{fontSize:12,padding:'6px 12px',borderRadius:6,cursor:'pointer',fontFamily:'inherit',whiteSpace:'nowrap',
+              border:`1px solid ${ptMode===m?T.blue:T.border}`,background:ptMode===m?'rgba(79,142,247,0.15)':T.bg3,color:ptMode===m?T.blue:T.text2}}>
+              {label}
+            </button>)}
+        </div>
         <div style={{flex:1}}/>
         <button onClick={()=>router.push('/admin/groups?tab=items')} style={{fontSize:12,padding:'6px 14px',borderRadius:6,border:`1px solid ${T.border}`,background:T.bg3,color:T.text2,cursor:'pointer',fontFamily:'inherit'}}
           title="Item → vehicle mapping lives with the distributor grouping settings">
@@ -662,7 +716,9 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
         </button>
       </div>
       <div style={{fontSize:12,color:T.text3}}>
-        Volume check: units of parts bought per tune, by vehicle model. Tunes = VIN-matched tuning invoice lines; parts = item quantities, split evenly across each item's ticked models.
+        {ptMode==='cars'
+          ? 'Car check: one parts invoice = one car — a 6-part VDJ79 build counts once. 100% = a matching parts order for every tune. Tunes = VIN-matched tuning invoice lines; excluded items are left out entirely.'
+          : 'Raw volume: units of parts bought per tune (a full build reads well above 100%). Item quantities split evenly across each item’s ticked models; excluded items are left out entirely.'}
       </div>
 
       {!hasItemData && <div style={{background:'rgba(233,147,43,0.1)',border:'1px solid rgba(233,147,43,0.3)',borderRadius:10,padding:14,color:T.amber,fontSize:12}}>
@@ -673,7 +729,7 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
       <div style={{background:T.bg2,border:`1px solid ${T.border}`,borderRadius:10,overflowX:'auto'}}>
         <table style={{width:'100%',borderCollapse:'collapse'}}>
           <thead><tr style={{borderBottom:`1px solid ${T.border2}`}}>
-            <th style={thL}>Vehicle model</th><th style={th}>Tunes (jobs)</th><th style={th}>Parts (units)</th><th style={th}>Parts per tune</th>
+            <th style={thL}>Vehicle model</th><th style={th}>Tunes (jobs)</th><th style={th}>{ptMode==='cars'?'Cars with parts':'Parts (units)'}</th><th style={th}>{ptMode==='cars'?'Cars per tune':'Parts per tune'}</th>
           </tr></thead>
           <tbody>
             {rows.map((r,i)=><tr key={i} style={{borderTop:`1px solid ${T.border}`}}>
@@ -682,10 +738,10 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
               <td style={td}>{fmtU(r.parts)}</td>
               <td style={{...td,fontWeight:700,color:pctColor(r.pct)}}>{fmtPct(r.pct)}</td>
             </tr>)}
-            {(tunesNoVin>0||partsUnmappedUnits>0)&&<tr style={{borderTop:`1px solid ${T.border}`}}>
+            {(tunesNoVin>0||partsUnmapped>0)&&<tr style={{borderTop:`1px solid ${T.border}`}}>
               <td style={{...tdL,color:T.text3,fontStyle:'italic'}}>Not attributable</td>
               <td style={{...td,color:T.text3}}>{tunesNoVin>0?`${tunesNoVin} (no VIN)`:''}</td>
-              <td style={{...td,color:T.text3}}>{partsUnmappedUnits>0?`${fmtU(partsUnmappedUnits)} (unmapped items)`:''}</td>
+              <td style={{...td,color:T.text3}}>{partsUnmapped>0?`${fmtU(partsUnmapped)} (${ptMode==='cars'?'invoices with only unmapped items':'unmapped items'})`:''}</td>
               <td style={td}>—</td>
             </tr>}
             <tr style={{borderTop:`2px solid ${T.border2}`,background:T.bg3}}>
@@ -702,7 +758,7 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
       {selectedDist==='ALL'&&<div style={{background:T.bg2,border:`1px solid ${T.border}`,borderRadius:10,overflowX:'auto'}}>
         <table style={{width:'100%',borderCollapse:'collapse'}}>
           <thead><tr style={{borderBottom:`1px solid ${T.border2}`}}>
-            <th style={thL}>Distributor</th><th style={th}>Tunes (jobs)</th><th style={th}>Parts (units, mapped)</th><th style={th}>Unmapped units</th><th style={th}>Parts per tune</th>
+            <th style={thL}>Distributor</th><th style={th}>Tunes (jobs)</th><th style={th}>{ptMode==='cars'?'Cars with parts':'Parts (units, mapped)'}</th><th style={th}>{ptMode==='cars'?'Unmapped invoices':'Unmapped units'}</th><th style={th}>{ptMode==='cars'?'Cars per tune':'Parts per tune'}</th>
           </tr></thead>
           <tbody>{distRows.map((d,i)=><tr key={i} style={{borderTop:`1px solid ${T.border}`,cursor:'pointer'}}
             onClick={()=>setSelectedDist(d.name)}

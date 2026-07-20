@@ -492,6 +492,11 @@ function MembersTab({groups, members, canonicalNames, onToggle}: {
   </div>
 }
 
+// Sentinel "model" marking an item as deliberately outside the Parts:Tunes
+// volume check (merch, freight, consumables…). Mutually exclusive with
+// real model ticks. Must match EXCLUDED_MODEL in pages/distributors.tsx.
+const EXCLUDED = '__excluded__'
+
 // ─────────────────────────────────────────────────────────────
 // Item → Vehicle: tick which vehicle models each JAWS stock item fits.
 // Feeds the Distributors "Parts : Tunes" volume view — an item ticked for
@@ -536,7 +541,16 @@ function ItemVehicleTab() {
   const toggle = (num: string, model: string) => {
     setEdits(prev => {
       const curr = prev[num] ?? map[num] ?? []
-      return { ...prev, [num]: curr.includes(model) ? curr.filter(m => m !== model) : [...curr, model] }
+      let next: string[]
+      if (model === EXCLUDED) {
+        // Excluded is mutually exclusive with real model ticks.
+        next = curr.includes(EXCLUDED) ? [] : [EXCLUDED]
+      } else {
+        next = curr.includes(model)
+          ? curr.filter(m => m !== model)
+          : [...curr.filter(m => m !== EXCLUDED), model]
+      }
+      return { ...prev, [num]: next }
     })
   }
   const dirty = Object.keys(edits).length > 0
@@ -587,6 +601,7 @@ function ItemVehicleTab() {
         <thead><tr style={{ borderBottom: `1px solid ${T.border2}`, position: 'sticky', top: 0, background: T.bg2, zIndex: 1 }}>
           <th style={{ fontSize: 11, color: T.text3, padding: '8px 10px', textAlign: 'left', fontWeight: 500 }}>Item</th>
           <th style={{ fontSize: 11, color: T.text3, padding: '8px 10px', textAlign: 'right', fontWeight: 500 }} title="Units sold to distributors in recent report ranges — sort hint only">Units</th>
+          <th style={{ fontSize: 10, color: T.red, padding: '8px 6px', textAlign: 'center', fontWeight: 600, whiteSpace: 'nowrap' }} title="Deliberately outside the Parts:Tunes check (merch, freight, consumables). Clears any model ticks.">Excluded</th>
           {models.map(m => <th key={m} style={{ fontSize: 10, color: T.text3, padding: '8px 6px', textAlign: 'center', fontWeight: 500, whiteSpace: 'nowrap' }}>{m}</th>)}
         </tr></thead>
         <tbody>{rows.map(it => {
@@ -597,12 +612,15 @@ function ItemVehicleTab() {
               <span style={{ color: T.text3, marginLeft: 8 }}>{(it.item_name || '').slice(0, 55)}</span>
             </td>
             <td style={{ fontSize: 11, fontFamily: 'monospace', color: it.units > 0 ? T.text2 : T.text3, padding: '6px 10px', textAlign: 'right' }}>{it.units || ''}</td>
-            {models.map(m => <td key={m} style={{ padding: '6px', textAlign: 'center' }}>
+            <td style={{ padding: '6px', textAlign: 'center' }}>
+              <input type="checkbox" checked={ticks.includes(EXCLUDED)} onChange={() => toggle(it.item_number, EXCLUDED)} style={{ cursor: 'pointer', accentColor: '#e5484d' }} />
+            </td>
+            {models.map(m => <td key={m} style={{ padding: '6px', textAlign: 'center', opacity: ticks.includes(EXCLUDED) ? 0.35 : 1 }}>
               <input type="checkbox" checked={ticks.includes(m)} onChange={() => toggle(it.item_number, m)} style={{ cursor: 'pointer' }} />
             </td>)}
           </tr>
         })}
-        {rows.length === 0 && <tr><td colSpan={2 + models.length} style={{ fontSize: 12, color: T.text3, fontStyle: 'italic', padding: 12 }}>No items match.</td></tr>}
+        {rows.length === 0 && <tr><td colSpan={3 + models.length} style={{ fontSize: 12, color: T.text3, fontStyle: 'italic', padding: 12 }}>No items match.</td></tr>}
         </tbody>
       </table>
     </div>
