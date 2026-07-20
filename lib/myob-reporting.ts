@@ -29,20 +29,26 @@ async function conn(label: CompanyFileLabel) {
 }
 
 // GET an AccountRight entity, following NextPageLink until exhausted.
+//
+// IMPORTANT: do NOT page with bare $top/$skip — AccountRight gives no stable
+// ordering guarantee, so rows shift between pages and records get silently
+// skipped on multi-page pulls (found reconciling EOFY distributor figures,
+// 2026-07-21: full-FY pulls were missing invoices). NextPageLink is the
+// API's own cursor and is the documented paging mechanism.
 async function fetchAll(label: CompanyFileLabel, entity: string, query: Record<string, string | number> = {}): Promise<any[]> {
   const c = await conn(label)
-  const base = `/accountright/${c.company_file_id}/${entity}`
   const out: any[] = []
-  let skip = 0
-  // Use $top/$skip paging; AccountRight also returns NextPageLink but $skip is
-  // simpler and deterministic for our filtered pulls.
-  for (let page = 0; page < 200; page++) {
-    const r = await myobFetch(c.id, base, { query: { ...query, '$top': PAGE, '$skip': skip } })
+  let path: string | null = `/accountright/${c.company_file_id}/${entity}`
+  let firstQuery: Record<string, string | number> | null = { ...query, '$top': PAGE }
+  for (let page = 0; page < 500 && path; page++) {
+    const r = await myobFetch(c.id, path, firstQuery ? { query: firstQuery } : {})
     if (r.status !== 200) throw new Error(`MYOB ${entity} ${label}: HTTP ${r.status} ${(r.raw || '').slice(0, 160)}`)
     const items: any[] = Array.isArray(r.data?.Items) ? r.data.Items : []
     out.push(...items)
-    if (items.length < PAGE) break
-    skip += PAGE
+    const next: string | null = typeof r.data?.NextPageLink === 'string' ? r.data.NextPageLink : null
+    // NextPageLink is absolute and carries the full query string already.
+    path = next ? next.replace(/^https:\/\/api\.myob\.com/i, '') : null
+    firstQuery = null
   }
   return out
 }

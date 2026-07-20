@@ -95,7 +95,10 @@ export default withAuth('view:reports', async (req, res) => {
 
   const out = {
     range: { start, end }, q, file,
-    pull: { invoices: invoices.length, lines: lines.length },
+    pull: {
+      invoices: invoices.length, lines: lines.length,
+      byType: invoices.reduce((m: Record<string, number>, i) => { const t = i.InvoiceType || '?'; m[t] = (m[t] || 0) + 1; return m }, {}),
+    },
     customers: Array.from(byCard.values()).map(c => ({ ...c, grossTotal: Math.round(c.grossTotal * 100) / 100 })),
     unconfiguredAccountsRangeWide: Array.from(unconfigured.entries())
       .map(([code, v]) => ({ code, name: v.name, exGstTotal: Math.round(v.total * 100) / 100 }))

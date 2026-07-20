@@ -216,7 +216,17 @@
       "PowerShell(npx tsc --noEmit 2>&1 | Select-String -Pattern \"ap-auto-entry|ap-myob-bill\"; \"exit: $LASTEXITCODE\")",
       "PowerShell(npx tsc --noEmit)",
       "PowerShell(gh run list --limit 40 --json name,workflowName,status,conclusion,createdAt,displayTitle,databaseId | ConvertFrom-Json | ForEach-Object { \"$\\($_.createdAt\\)  $\\($_.conclusion\\)  $\\($_.workflowName\\)  #$\\($_.databaseId\\)\" })",
-      "PowerShell(gh run list --limit 200 --status failure --json workflowName,createdAt,databaseId,event | ConvertFrom-Json | ForEach-Object { \"{0}  {1}  {2}  {3}\" -f $_.createdAt, $_.workflowName, $_.event, $_.databaseId })"
+      "PowerShell(gh run list --limit 200 --status failure --json workflowName,createdAt,databaseId,event | ConvertFrom-Json | ForEach-Object { \"{0}  {1}  {2}  {3}\" -f $_.createdAt, $_.workflowName, $_.event, $_.databaseId })",
+      "WebFetch(domain:freedombroadband.com.au)",
+      "mcp__claude_ai_Microsoft_365__outlook_create_draft",
+      "Bash(perl -i -pe \"s/new Blob\\\\\\(\\\\['\\\\x{feff}', content\\\\]/new Blob\\(['\\\\\\\\\\\\\\\\ufeff', content]/\" pages/reports/sales-report.tsx)",
+      "Bash(perl -i -pe \"s/'\\\\xEF\\\\xBB\\\\xBF'/'\\\\\\\\\\\\\\\\ufeff'/\" pages/reports/sales-report.tsx)",
+      "Read(//c/Users/cjrus/Downloads/lockup_scan_v4_wifi/**)",
+      "Read(//c/Users/cjrus/Downloads/lockup_scan_v4_wifi//**)",
+      "Bash(nslookup i3zm2iyh.justautosmechanical.com.au)",
+      "Bash(nslookup i3zm2iyh.justautosmechanical.com.au 8.8.8.8)",
+      "Bash(nslookup i3zm2iyh.justautosmechanical.com.au 1.1.1.1)",
+      "Bash(PATH=/c/Users/cjrus/AppData/Local/Programs/Python/Python312:__TRACKED_VAR__ python scripts/retrieve.py 'MYOB client id API key developer app credentials' --top 3)"
     ]
   }
 }
