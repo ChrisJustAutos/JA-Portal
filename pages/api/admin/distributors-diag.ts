@@ -32,6 +32,16 @@ export default withAuth('view:reports', async (req, res) => {
   // the "missing" revenue actually lives in the other company file.
   const file  = String(req.query.file || 'JAWS').toUpperCase() === 'VPS' ? 'VPS' as const : 'JAWS' as const
 
+  // ?invoice=JAWS-1234 — trace one specific invoice number straight against
+  // MYOB (no date filter): which type endpoint has it, whose card, what date.
+  // Decisive for "I can see it in MYOB but not on the report".
+  const invoiceNo = String(req.query.invoice || '').trim()
+  if (invoiceNo) {
+    const { fetchSaleInvoiceByNumber } = await import('../../../lib/myob-reporting')
+    const hit = await fetchSaleInvoiceByNumber(file, invoiceNo)
+    return res.status(200).json({ file, invoice: invoiceNo, found: !!hit.invoice, detail: hit.invoice ? hit : null })
+  }
+
   const catsRes = await sbAdmin().from('distributor_report_categories').select('name, account_codes')
   const accToCat = new Map<string, string>()
   for (const c of catsRes.data || []) for (const a of (c.account_codes || [])) accToCat.set(String(a), String(c.name))
