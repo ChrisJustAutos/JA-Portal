@@ -309,6 +309,29 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
   const allDists=Array.from(new Set(visibleLines.map(l=>l.CustomerName))).filter(Boolean).sort()
   const filtered=selectedDist==='ALL'?visibleLines:visibleLines.filter(l=>l.CustomerName===selectedDist)
 
+  // ── Vehicle/tune resolution — shared by the Parts:Tunes tab AND the
+  // Excel export's drill-down sheets, so both always agree. ──────────────
+  const descModelOf = (desc: string): string | null => {
+    const D = (desc || '').toUpperCase()
+    if (!D) return null
+    for (const r of descRules) if (D.includes(r.keyword)) return r.model
+    return null
+  }
+  const partModelsOf = (l: LineItem): { excluded: boolean; models: string[] } => {
+    const raw = l.itemNumber ? (itemMap[l.itemNumber] || []) : []
+    if (raw.includes(EXCLUDED_MODEL)) return { excluded: true, models: [] }
+    const ticked = raw.filter(m => m !== EXCLUDED_MODEL)
+    if (ticked.length) return { excluded: false, models: ticked }
+    const viaDesc = descModelOf(l.Description)
+    return { excluded: false, models: viaDesc ? [viaDesc] : [] }
+  }
+  const isTuneJob = (l: LineItem) => l.bucket==='Tuning' && l.Total>0
+  const tuneModelOf = (l: LineItem): string|null => {
+    const po=(l.poNumber||'').trim(); if(!po) return null
+    const m=vinToModel(po,vinRules)
+    return (m.startsWith('Unmapped')||m==='Unknown') ? null : m
+  }
+
   interface DS{name:string;tuning:number;oil:number;parts:number;total:number;typeGroup:string|null;regionGroup:string|null;isSundry:boolean}
   const distSummaries:DS[]=allDists.map(name=>{
     const dl=visibleLines.filter(l=>l.CustomerName===name)
@@ -631,24 +654,8 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
     const partsByModel = new Map<string, number>()
     let partsUnmapped = 0
     let totPartsOverride: number | null = null
-    // Vehicle resolution for a parts line: item ticks first; a line with no
-    // item at all (SUP special orders, deleted one-off items) or an item
-    // nobody has mapped falls back to description keyword rules ("Hilux 1GD"
-    // → Hilux N80). Explicit Excluded ticks always win.
-    const descModelOf = (desc: string): string | null => {
-      const D = (desc || '').toUpperCase()
-      if (!D) return null
-      for (const r of descRules) if (D.includes(r.keyword)) return r.model
-      return null
-    }
-    const partModelsOf = (l: LineItem): { excluded: boolean; models: string[] } => {
-      const raw = l.itemNumber ? (itemMap[l.itemNumber] || []) : []
-      if (raw.includes(EXCLUDED_MODEL)) return { excluded: true, models: [] }
-      const ticked = raw.filter(m => m !== EXCLUDED_MODEL)
-      if (ticked.length) return { excluded: false, models: ticked }
-      const viaDesc = descModelOf(l.Description)
-      return { excluded: false, models: viaDesc ? [viaDesc] : [] }
-    }
+    // (Vehicle resolution — descModelOf / partModelsOf — lives at component
+    // scope, shared with the Excel export's drill-down sheets.)
 
     // Multi-fit items (a fan kit suits VDJ70 AND LC200) split by the TUNE MIX
     // across their ticked models within the current selection — if 70% of the
@@ -746,12 +753,6 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
     // Drill-down plumbing — every number opens the invoices behind it, for
     // cross-referencing against MYOB. Predicates mirror the aggregations above.
     const distOk = (l: LineItem, name?: string) => name ? l.CustomerName===name : (selectedDist==='ALL' || l.CustomerName===selectedDist)
-    const isTuneJob = (l: LineItem) => l.bucket==='Tuning' && l.Total>0
-    const tuneModelOf = (l: LineItem): string|null => {
-      const po=(l.poNumber||'').trim(); if(!po) return null
-      const m=vinToModel(po,vinRules)
-      return (m.startsWith('Unmapped')||m==='Unknown') ? null : m
-    }
     const partInfo = (l: LineItem) => {
       const r = partModelsOf(l)
       return { isPart: l.bucket==='Parts', excluded: r.excluded, models: r.models }
@@ -1062,7 +1063,7 @@ img{max-width:100%}
     setTimeout(() => URL.revokeObjectURL(url), 4000)
   }
 
-  function exportDoc(kind: 'pdf' | 'word' | 'excel') {
+  async function exportDoc(kind: 'pdf' | 'word' | 'excel') {
     const r = buildExportHtml()
     if (!r) return
     const safe = r.title.replace(/[^\w\s—-]+/g, '').replace(/\s+/g, ' ').trim()
@@ -1076,13 +1077,79 @@ img{max-width:100%}
       const doc = `<!doctype html><html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:w="urn:schemas-microsoft-com:office:word"><head><meta charset="utf-8"><title>${r.title}</title><style>${EXPORT_CSS}</style></head><body>${r.body}</body></html>`
       downloadExport(doc, 'application/msword', `${safe}.doc`)
     } else {
-      // Excel wants clean tables — strip the layout divs, keep table order.
-      const tmp = document.createElement('div')
-      tmp.innerHTML = r.body
-      const tables = Array.from(tmp.querySelectorAll('table')).map(t => t.outerHTML).join('<br/>')
-      const doc = `<!doctype html><html><head><meta charset="utf-8"><style>${EXPORT_CSS}</style></head><body><h2>${r.title}</h2>${tables || '<div>No tables on this tab.</div>'}</body></html>`
-      downloadExport(doc, 'application/vnd.ms-excel', `${safe}.xls`)
+      await exportXlsx(r.title, safe)
     }
+  }
+
+  // Real .xlsx workbook: sheet 1 = the on-screen report tables, then the
+  // drill-down detail as data sheets — every number on the report can be
+  // reproduced in Excel with a filter over the detail sheets.
+  async function exportXlsx(title: string, safe: string) {
+    const XLSX = await import('xlsx')
+    const wb = XLSX.utils.book_new()
+    const money = (n: number) => Math.round(n * 100) / 100
+
+    // Sheet 1 — the report as shown (DOM tables → cells, numerics parsed).
+    const cellVal = (s: string): string | number => {
+      const t = s.replace(/ /g, ' ').trim()
+      const m = t.replace(/[$,\s]/g, '')
+      return /^-?\d+(\.\d+)?$/.test(m) && m !== '' ? Number(m) : t
+    }
+    const reportAoa: (string | number)[][] = [[title], []]
+    Array.from(contentRef.current?.querySelectorAll('table') ?? []).forEach((t, i) => {
+      if (i > 0) reportAoa.push([])
+      Array.from(t.querySelectorAll('tr')).forEach(tr => {
+        reportAoa.push(Array.from(tr.querySelectorAll('th,td')).map(c => cellVal(c.textContent || '')))
+      })
+    })
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(reportAoa), 'Report')
+
+    if (tab === 'parts-tunes') {
+      // Tuned cars — one row per VIN (tune + Easy Lock lines roll up).
+      const cars = new Map<string, { model: string; customer: string; invs: Set<string>; date: string; lines: number; total: number }>()
+      const noVin: (string | number)[][] = []
+      for (const l of filtered) {
+        if (!isTuneJob(l)) continue
+        const m = tuneModelOf(l)
+        if (!m) { noVin.push([l.CustomerName, (l.Date || '').slice(0, 10), l.invoiceNumber, l.Description, l.poNumber || '', money(l.Total)]); continue }
+        const vin = (l.poNumber || '').trim().toUpperCase()
+        const e = cars.get(vin) || { model: m, customer: l.CustomerName, invs: new Set<string>(), date: l.Date || '', lines: 0, total: 0 }
+        if (l.invoiceNumber) e.invs.add(l.invoiceNumber)
+        if ((l.Date || '') > e.date) e.date = l.Date || ''
+        e.lines++; e.total += l.Total
+        cars.set(vin, e)
+      }
+      const tunesAoa: (string | number)[][] = [['Model', 'VIN', 'Distributor', 'Invoice(s)', 'Last date', 'Lines', 'Tuning $ ex-GST']]
+      Array.from(cars.entries())
+        .sort((a, b) => a[1].model.localeCompare(b[1].model) || a[1].customer.localeCompare(b[1].customer))
+        .forEach(([vin, e]) => tunesAoa.push([e.model, vin, e.customer, Array.from(e.invs).join(' + '), (e.date || '').slice(0, 10), e.lines, money(e.total)]))
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(tunesAoa), 'Tuned Cars')
+
+      // Parts lines — resolved model(s) + how they resolved.
+      const partsAoa: (string | number)[][] = [['Distributor', 'Date', 'Invoice', 'Item', 'Description', 'Qty', 'Model(s)', 'Status', 'Amount ex-GST']]
+      for (const l of filtered) {
+        if (l.bucket !== 'Parts') continue
+        const pm = partModelsOf(l)
+        const viaTicks = !!(l.itemNumber && (itemMap[l.itemNumber] || []).some(m => m !== EXCLUDED_MODEL))
+        const status = pm.excluded ? 'excluded' : pm.models.length ? (viaTicks ? 'mapped (item)' : 'mapped (description rule)') : 'unmapped'
+        partsAoa.push([l.CustomerName, (l.Date || '').slice(0, 10), l.invoiceNumber, l.itemNumber || '', l.Description, l.qty ?? '', pm.models.join(' + '), status, money(l.Total)])
+      }
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(partsAoa), 'Parts Lines')
+
+      if (noVin.length) {
+        XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(
+          [['Distributor', 'Date', 'Invoice', 'Description', 'PO field', 'Amount ex-GST'], ...noVin]), 'Tunes no VIN')
+      }
+    } else {
+      // Every other tab: the full line-level detail behind the figures.
+      const aoa: (string | number)[][] = [['Distributor', 'Date', 'Invoice', 'Account', 'Bucket', 'Item', 'Qty', 'Description', 'PO/VIN', 'Amount ex-GST']]
+      for (const l of filtered) {
+        aoa.push([l.CustomerName, (l.Date || '').slice(0, 10), l.invoiceNumber, l.AccountDisplayID || '', l.bucket, l.itemNumber || '', l.qty ?? '', l.Description, l.poNumber || '', money(l.Total)])
+      }
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(aoa), 'Line Detail')
+    }
+
+    XLSX.writeFile(wb, `${safe}.xlsx`)
   }
 
   // ─── Feed distributor revenue summary to the global AI chatbot ──────────
@@ -1183,7 +1250,7 @@ img{max-width:100%}
             {exportOpen&&<>
               <div style={{position:'fixed',inset:0,zIndex:40}} onClick={()=>setExportOpen(false)}/>
               <div style={{position:'absolute',top:'100%',right:0,marginTop:4,zIndex:41,minWidth:190,background:T.bg2,border:`1px solid ${T.border2}`,borderRadius:8,boxShadow:'0 8px 24px rgba(0,0,0,0.35)',overflow:'hidden'}}>
-                {([['pdf','PDF','print → Save as PDF'],['word','Word (.doc)','editable document'],['excel','Excel (.xls)','tables only']] as const).map(([k,label,hint])=>
+                {([['pdf','PDF','print → Save as PDF'],['word','Word (.doc)','editable document'],['excel','Excel (.xlsx)','report + drill-down sheets']] as const).map(([k,label,hint])=>
                   <button key={k} onClick={()=>{setExportOpen(false);exportDoc(k)}}
                     style={{display:'block',width:'100%',textAlign:'left',padding:'8px 12px',fontSize:12,fontFamily:'inherit',cursor:'pointer',border:'none',background:'transparent',color:T.text}}
                     onMouseEnter={e=>((e.currentTarget as HTMLElement).style.background=T.bg3)}
