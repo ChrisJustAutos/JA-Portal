@@ -773,7 +773,8 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
       return { name, tunes, parts, unmapped, pct: tunes > 0 ? (parts / tunes) * 100 : null }
     }).filter(d => d.tunes > 0 || d.parts > 0 || d.unmapped > 0).sort((a,b)=>(b.tunes)-(a.tunes))
 
-    const pctColor = (pct: number | null) => pct == null ? T.text3 : pct < 50 ? T.red : pct < 100 ? T.amber : T.green
+    // Thresholds per Chris (2026-07-22): <30% red, 30–50% yellow, >50% green.
+    const pctColor = (pct: number | null) => pct == null ? T.text3 : pct < 30 ? T.red : pct <= 50 ? T.amber : T.green
     const fmtPct = (pct: number | null) => pct == null ? '—' : Math.round(pct) + '%'
     const fmtU = (n: number) => Math.round(n * 10) / 10
 
