@@ -627,6 +627,16 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
     const partsByModel = new Map<string, number>()
     let partsUnmapped = 0
     let totPartsOverride: number | null = null
+    // Multi-fit items (a fan kit suits VDJ70 AND LC200) split by the TUNE MIX
+    // across their ticked models within the current selection — if 70% of the
+    // tunes here are VDJ70s, 70% of the fan kits are assumed to be for VDJ70s
+    // (Chris 2026-07-21). Even split only when there are no tunes at all
+    // across the ticked models.
+    const tuneWeights = (ms: string[]): number[] => {
+      const counts = ms.map(m => tunesByModel.get(m) || 0)
+      const sum = counts.reduce((a, b) => a + b, 0)
+      return sum > 0 ? counts.map(n => n / sum) : ms.map(() => 1 / ms.length)
+    }
     if (ptMode === 'units') {
       for (const l of filtered) {
         if (l.bucket !== 'Parts') continue
@@ -635,11 +645,15 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
         const units = l.qty != null && l.qty > 0 ? l.qty : 1
         const ticked = raw.filter(m => m !== EXCLUDED_MODEL)
         if (!ticked.length) { partsUnmapped += units; continue }
-        for (const m of ticked) partsByModel.set(m, (partsByModel.get(m) || 0) + units / ticked.length)
+        const w = tuneWeights(ticked)
+        ticked.forEach((m, i) => partsByModel.set(m, (partsByModel.get(m) || 0) + units * w[i]))
       }
     } else {
-      const carSets = new Map<string, Set<string>>()
-      const mappedInv = new Set<string>(), allPartInv = new Set<string>()
+      // 1 invoice = 1 car, distributed across the union of its lines' ticked
+      // models by tune mix — so per-model cars SUM to the distinct-invoice
+      // total (no double counting).
+      const invModels = new Map<string, Set<string>>()
+      const allPartInv = new Set<string>()
       for (const l of filtered) {
         if (l.bucket !== 'Parts') continue
         const raw = l.itemNumber ? (itemMap[l.itemNumber] || []) : []
@@ -648,17 +662,16 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
         allPartInv.add(inv)
         const ticked = raw.filter(m => m !== EXCLUDED_MODEL)
         if (!ticked.length) continue
-        mappedInv.add(inv)
-        for (const m of ticked) {
-          if (!carSets.has(m)) carSets.set(m, new Set())
-          carSets.get(m)!.add(inv)
-        }
+        if (!invModels.has(inv)) invModels.set(inv, new Set())
+        ticked.forEach(m => invModels.get(inv)!.add(m))
       }
-      carSets.forEach((s, m) => partsByModel.set(m, s.size))
-      partsUnmapped = allPartInv.size - mappedInv.size
-      // an invoice spanning models counts once per model above, but only
-      // once in the total — so the total row uses distinct invoices.
-      totPartsOverride = mappedInv.size
+      invModels.forEach(set => {
+        const ms = Array.from(set)
+        const w = tuneWeights(ms)
+        ms.forEach((m, i) => partsByModel.set(m, (partsByModel.get(m) || 0) + w[i]))
+      })
+      partsUnmapped = allPartInv.size - invModels.size
+      totPartsOverride = invModels.size
     }
 
     const rows = models.map(m => {
@@ -763,8 +776,8 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
       </div>
       <div style={{fontSize:12,color:T.text3}}>
         {ptMode==='cars'
-          ? 'Car check: one parts invoice = one car — a 6-part VDJ79 build counts once. 100% = a matching parts order for every tuned car. Tunes = distinct VINs (a tune + Easy Lock on the same car counts once); excluded items are left out entirely.'
-          : 'Raw volume: units of parts bought per tuned car (a full build reads well above 100%). Tunes = distinct VINs; item quantities split evenly across each item’s ticked models; excluded items are left out entirely.'}
+          ? 'Car check: one parts invoice = one car — a 6-part VDJ79 build counts once. 100% = a matching parts order for every tuned car. Tunes = distinct VINs (a tune + Easy Lock on the same car counts once); multi-fit items (fan kits) split by the tune mix across their ticked models; excluded items are left out entirely.'
+          : 'Raw volume: units of parts bought per tuned car (a full build reads well above 100%). Tunes = distinct VINs; multi-fit items (fan kits) split by the tune mix across their ticked models; excluded items are left out entirely.'}
       </div>
 
       {!hasItemData && <div style={{background:'rgba(233,147,43,0.1)',border:'1px solid rgba(233,147,43,0.3)',borderRadius:10,padding:14,color:T.amber,fontSize:12}}>
