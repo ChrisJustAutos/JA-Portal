@@ -698,6 +698,40 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
     const thL: React.CSSProperties = { ...th, textAlign:'left' }
     const td: React.CSSProperties = { fontSize:12, fontFamily:'monospace', color:T.text2, padding:'8px 12px', textAlign:'right' }
     const tdL: React.CSSProperties = { fontSize:12, color:T.text2, padding:'8px 12px' }
+    const clickTd: React.CSSProperties = { ...td, cursor:'pointer', textDecoration:'underline dotted rgba(var(--t-ink),0.25)' }
+
+    // Drill-down plumbing — every number opens the invoices behind it, for
+    // cross-referencing against MYOB. Predicates mirror the aggregations above.
+    const distOk = (l: LineItem, name?: string) => name ? l.CustomerName===name : (selectedDist==='ALL' || l.CustomerName===selectedDist)
+    const isTuneJob = (l: LineItem) => l.bucket==='Tuning' && l.Total>0
+    const tuneModelOf = (l: LineItem): string|null => {
+      const po=(l.poNumber||'').trim(); if(!po) return null
+      const m=vinToModel(po,vinRules)
+      return (m.startsWith('Unmapped')||m==='Unknown') ? null : m
+    }
+    const partInfo = (l: LineItem) => {
+      const raw = l.itemNumber ? (itemMap[l.itemNumber]||[]) : []
+      return { isPart: l.bucket==='Parts', excluded: raw.includes(EXCLUDED_MODEL), models: raw.filter(m=>m!==EXCLUDED_MODEL) }
+    }
+    const distLabel = (name?: string) => name || (selectedDist==='ALL'?'All distributors':selectedDist)
+    const drillTunes = (model: string|null, name?: string) => setDrill({
+      title: `Tuning jobs — ${model ?? 'no usable VIN'} — ${distLabel(name)}`,
+      subtitle: model ? 'VIN-matched tuning invoice lines' : 'Tuning lines whose PO/VIN didn’t match a model rule',
+      filter: l => distOk(l, name) && isTuneJob(l) && tuneModelOf(l)===model,
+    })
+    const drillParts = (model: string|null, name?: string) => setDrill({
+      title: model ? `Parts — ${model} — ${distLabel(name)}` : `Parts on unmapped items — ${distLabel(name)}`,
+      subtitle: model ? 'Lines whose item is ticked for this model (excluded items left out)' : 'Lines whose item has no vehicle ticks yet (excluded items left out)',
+      filter: l => { const p = partInfo(l); return distOk(l, name) && p.isPart && !p.excluded && (model ? p.models.includes(model) : p.models.length===0) },
+    })
+    const drillTunesAll = (name?: string) => setDrill({
+      title: `Tuning jobs — all models — ${distLabel(name)}`,
+      filter: l => distOk(l, name) && isTuneJob(l) && tuneModelOf(l)!==null,
+    })
+    const drillPartsAll = (name?: string) => setDrill({
+      title: `Parts on mapped items — ${distLabel(name)}`,
+      filter: l => { const p = partInfo(l); return distOk(l, name) && p.isPart && !p.excluded && p.models.length>0 },
+    })
 
     return <div style={{padding:24,overflowY:'auto',display:'flex',flexDirection:'column',gap:16}}>
       <div style={{display:'flex',alignItems:'center',gap:12,flexWrap:'wrap'}}>
@@ -734,20 +768,20 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
           <tbody>
             {rows.map((r,i)=><tr key={i} style={{borderTop:`1px solid ${T.border}`}}>
               <td style={tdL}>{r.model}</td>
-              <td style={td}>{r.tunes}</td>
-              <td style={td}>{fmtU(r.parts)}</td>
+              <td style={clickTd} title="Click for the tuning invoices behind this number" onClick={()=>drillTunes(r.model)}>{r.tunes}</td>
+              <td style={clickTd} title="Click for the parts invoices behind this number" onClick={()=>drillParts(r.model)}>{fmtU(r.parts)}</td>
               <td style={{...td,fontWeight:700,color:pctColor(r.pct)}}>{fmtPct(r.pct)}</td>
             </tr>)}
             {(tunesNoVin>0||partsUnmapped>0)&&<tr style={{borderTop:`1px solid ${T.border}`}}>
               <td style={{...tdL,color:T.text3,fontStyle:'italic'}}>Not attributable</td>
-              <td style={{...td,color:T.text3}}>{tunesNoVin>0?`${tunesNoVin} (no VIN)`:''}</td>
-              <td style={{...td,color:T.text3}}>{partsUnmapped>0?`${fmtU(partsUnmapped)} (${ptMode==='cars'?'invoices with only unmapped items':'unmapped items'})`:''}</td>
+              <td style={{...clickTd,color:T.text3}} title="Click for the tuning lines with no usable VIN" onClick={()=>tunesNoVin>0&&drillTunes(null)}>{tunesNoVin>0?`${tunesNoVin} (no VIN)`:''}</td>
+              <td style={{...clickTd,color:T.text3}} title="Click for the parts lines on unmapped items" onClick={()=>partsUnmapped>0&&drillParts(null)}>{partsUnmapped>0?`${fmtU(partsUnmapped)} (${ptMode==='cars'?'invoices with only unmapped items':'unmapped items'})`:''}</td>
               <td style={td}>—</td>
             </tr>}
             <tr style={{borderTop:`2px solid ${T.border2}`,background:T.bg3}}>
               <td style={{...tdL,fontWeight:600,color:T.text}}>Total (attributed)</td>
-              <td style={{...td,fontWeight:600,color:T.text}}>{totTunes}</td>
-              <td style={{...td,fontWeight:600,color:T.text}}>{fmtU(totParts)}</td>
+              <td style={{...clickTd,fontWeight:600,color:T.text}} title="Click for all VIN-matched tuning invoices" onClick={()=>drillTunesAll()}>{totTunes}</td>
+              <td style={{...clickTd,fontWeight:600,color:T.text}} title="Click for all mapped parts invoices" onClick={()=>drillPartsAll()}>{fmtU(totParts)}</td>
               <td style={{...td,fontWeight:700,color:pctColor(totTunes>0?(totParts/totTunes)*100:null)}}>{fmtPct(totTunes>0?(totParts/totTunes)*100:null)}</td>
             </tr>
           </tbody>
@@ -766,9 +800,9 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
             onMouseLeave={e=>((e.currentTarget as HTMLElement).style.background='transparent')}
             title="Click for this distributor's per-model breakdown">
             <td style={{...tdL,textDecoration:'underline dotted rgba(var(--t-ink),0.15)'}}>{d.name}</td>
-            <td style={td}>{d.tunes}</td>
-            <td style={td}>{fmtU(d.parts)}</td>
-            <td style={{...td,color:d.unmapped>0?T.amber:T.text3}}>{d.unmapped>0?fmtU(d.unmapped):''}</td>
+            <td style={clickTd} title="Click for this distributor's VIN-matched tuning invoices" onClick={e=>{e.stopPropagation();drillTunesAll(d.name)}}>{d.tunes}</td>
+            <td style={clickTd} title="Click for this distributor's mapped parts invoices" onClick={e=>{e.stopPropagation();drillPartsAll(d.name)}}>{fmtU(d.parts)}</td>
+            <td style={{...clickTd,color:d.unmapped>0?T.amber:T.text3}} title="Click for the parts lines on unmapped items" onClick={e=>{e.stopPropagation();if(d.unmapped>0)drillParts(null,d.name)}}>{d.unmapped>0?fmtU(d.unmapped):''}</td>
             <td style={{...td,fontWeight:700,color:pctColor(d.pct)}}>{fmtPct(d.pct)}</td>
           </tr>)}</tbody>
         </table>
