@@ -141,6 +141,9 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
   // Description keyword → model rules: vehicle fallback for parts lines with
   // no (or no longer existing) MYOB item, e.g. "SUP - " special orders.
   const [descRules,setDescRules]=useState<{keyword:string;model:string}[]>([])
+  // Product categories (Airbox/Exhaust/Fan Kit…) for the Per-part lens —
+  // account-code groups managed in Groups Admin → Part Categories.
+  const [partCats,setPartCats]=useState<{name:string;account_codes:string[]}[]>([])
   const [loading,setLoading]=useState(true)
   const [error,setError]=useState('')
   const [selectedDist,setSelectedDist]=useState('ALL')
@@ -225,6 +228,7 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
         for (const it of (mData.items || [])) m[it.item_number] = it.models || []
         setItemMap(m)
         setDescRules(mData.descRules || [])
+        setPartCats(mData.partCategories || [])
       }
 
       const gstPref = prefs.gst_display
@@ -779,6 +783,33 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
     }).filter(d => d.tunes > 0 || d.parts > 0 || d.unmapped > 0).sort((a,b)=>(b.tunes)-(a.tunes))
 
     // Thresholds per Chris (2026-07-22): <30% red, 30–50% yellow, >50% green.
+    // Per-category units matrix (units lens): account code → product
+    // category (Groups Admin → Part Categories); same model attribution +
+    // tune-mix weighting as the main table so both always agree.
+    let catMatrix: { cat: string; byModel: Map<string, number>; unmapped: number; total: number }[] = []
+    if (ptMode === 'units' && partCats.length) {
+      const accToPartCat = new Map<string, string>()
+      for (const c of partCats) for (const a of c.account_codes) accToPartCat.set(a, c.name)
+      const agg = new Map<string, { byModel: Map<string, number>; unmapped: number; total: number }>()
+      const slot = (cat: string) => {
+        if (!agg.has(cat)) agg.set(cat, { byModel: new Map(), unmapped: 0, total: 0 })
+        return agg.get(cat)!
+      }
+      for (const l of ptLines) {
+        if (l.bucket !== 'Parts') continue
+        const pm = partModelsOf(l)
+        if (pm.excluded) continue
+        const units = l.qty != null && l.qty > 0 ? l.qty : 1
+        const s = slot(accToPartCat.get(l.AccountDisplayID || '') || 'Uncategorised')
+        s.total += units
+        if (!pm.models.length) { s.unmapped += units; continue }
+        const w = tuneWeights(pm.models)
+        pm.models.forEach((m, i) => s.byModel.set(m, (s.byModel.get(m) || 0) + units * w[i]))
+      }
+      const order = [...partCats.map(c => c.name), 'Uncategorised'].filter(n => agg.has(n))
+      catMatrix = order.map(cat => ({ cat, ...agg.get(cat)! }))
+    }
+
     const pctColor = (pct: number | null) => pct == null ? T.text3 : pct < 30 ? T.red : pct <= 50 ? T.amber : T.green
     const fmtPct = (pct: number | null) => pct == null ? '—' : Math.round(pct) + '%'
     const fmtU = (n: number) => Math.round(n * 10) / 10
@@ -873,6 +904,44 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
           </tbody>
         </table>
       </div>
+
+      {/* Per-category units matrix (units lens only) */}
+      {ptMode==='units'&&catMatrix.length>0&&(()=>{
+        const matModels = rows.map(r=>r.model)
+        return <div style={{background:T.bg2,border:`1px solid ${T.border}`,borderRadius:10,overflowX:'auto'}}>
+          <div style={{display:'flex',alignItems:'center',gap:10,padding:'12px 12px 0'}}>
+            <div style={{fontSize:13,fontWeight:600,color:T.text}}>Units by product category</div>
+            <div style={{fontSize:11,color:T.text3}}>units, with (per tuned car) where the model has tunes — categories managed in Groups Admin → Part Categories</div>
+            <div style={{flex:1}}/>
+            <button onClick={()=>router.push('/admin/groups?tab=partcats')} style={{fontSize:11,padding:'4px 10px',borderRadius:5,border:`1px solid ${T.border}`,background:T.bg3,color:T.text2,cursor:'pointer',fontFamily:'inherit'}}>⚙ Edit categories</button>
+          </div>
+          <table style={{width:'100%',borderCollapse:'collapse',marginTop:8}}>
+            <thead><tr style={{borderBottom:`1px solid ${T.border2}`}}>
+              <th style={thL}>Category</th>
+              {matModels.map(m=><th key={m} style={th}>{m}</th>)}
+              <th style={th}>Unmapped</th><th style={th}>Total units</th><th style={th}>Per tuned car</th>
+            </tr></thead>
+            <tbody>
+              {catMatrix.map((r,i)=>{
+                const overall = totTunes>0 ? (r.total - r.unmapped) / totTunes : null
+                return <tr key={i} style={{borderTop:`1px solid ${T.border}`}}>
+                  <td style={tdL}>{r.cat}</td>
+                  {matModels.map(m=>{
+                    const u = r.byModel.get(m)||0
+                    const t = tunesByModel.get(m)||0
+                    return <td key={m} style={td} title={t>0?`${fmtU(u)} units across ${t} tuned cars`:undefined}>
+                      {u>0?<>{fmtU(u)}{t>0&&<span style={{color:T.text3,fontSize:10}}> ({(u/t).toFixed(1)})</span>}</>:''}
+                    </td>
+                  })}
+                  <td style={{...td,color:r.unmapped>0?T.amber:T.text3}}>{r.unmapped>0?fmtU(r.unmapped):''}</td>
+                  <td style={{...td,fontWeight:600}}>{fmtU(r.total)}</td>
+                  <td style={{...td,fontWeight:700,color:overall==null?T.text3:pctColor(overall*100)}}>{overall==null?'—':overall.toFixed(2)}</td>
+                </tr>
+              })}
+            </tbody>
+          </table>
+        </div>
+      })()}
 
       {/* Every-distributor overview */}
       {selectedDist==='ALL'&&<div style={{background:T.bg2,border:`1px solid ${T.border}`,borderRadius:10,overflowX:'auto'}}>

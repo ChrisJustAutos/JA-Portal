@@ -34,6 +34,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const rulesRes = await sb.from('dist_desc_model_rules')
         .select('keyword, model, sort_order').order('sort_order')
       const descRules = rulesRes.data || []
+      // Product categories for the "Per part" lens (account-code grouping).
+      const catRes = await sb.from('dist_part_categories')
+        .select('name, sort_order, account_codes').order('sort_order')
+      const partCategories = catRes.data || []
       const byItem = new Map<string, { item_number: string; item_name: string | null; models: string[] }>()
       for (const r of (data || []) as Array<{ item_number: string; item_name: string | null; model: string }>) {
         const e = byItem.get(r.item_number) || { item_number: r.item_number, item_name: r.item_name, models: [] }
@@ -76,10 +80,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           }))
           .sort((a, b) => (b.units - a.units) || a.item_number.localeCompare(b.item_number))
 
-        return res.status(200).json({ items: Array.from(byItem.values()), candidates, models, descRules })
+        // The Part Categories editor needs the parts-account list (code+name).
+        const { fetchIncomeAccounts } = await import('../../lib/myob-reporting')
+        const accounts = await fetchIncomeAccounts('JAWS').catch(() => [] as Array<{ code: string; name: string }>)
+        return res.status(200).json({ items: Array.from(byItem.values()), candidates, models, descRules, partCategories, accounts })
       }
 
-      return res.status(200).json({ items: Array.from(byItem.values()), descRules })
+      return res.status(200).json({ items: Array.from(byItem.values()), descRules, partCategories })
     }
 
     if (req.method === 'POST') {
@@ -96,6 +103,23 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           if (ins.error) return res.status(500).json({ error: ins.error.message })
         }
         return res.status(200).json({ ok: true, rules: rules.length })
+      }
+
+      // { partCategories: [{name, account_codes[]}] } — replace the whole set.
+      if (Array.isArray(req.body?.partCategories)) {
+        const cats = req.body.partCategories
+          .map((c: any, i: number) => ({
+            name: String(c.name || '').trim(), sort_order: (i + 1) * 10,
+            account_codes: Array.isArray(c.account_codes) ? Array.from(new Set(c.account_codes.map((s: any) => String(s).trim()).filter(Boolean))) : [],
+          }))
+          .filter((c: any) => c.name)
+        const del = await sb.from('dist_part_categories').delete().neq('id', -1)
+        if (del.error) return res.status(500).json({ error: del.error.message })
+        if (cats.length) {
+          const ins = await sb.from('dist_part_categories').insert(cats)
+          if (ins.error) return res.status(500).json({ error: ins.error.message })
+        }
+        return res.status(200).json({ ok: true, categories: cats.length })
       }
 
       const items: any[] = Array.isArray(req.body?.items) ? req.body.items : []

@@ -29,9 +29,9 @@ export default function GroupsAdmin() {
   const [groups, setGroups] = useState<Group[]>([])
   const [members, setMembers] = useState<Member[]>([])
   const [myobCustomers, setMyobCustomers] = useState<string[]>([])
-  const [tab, setTab] = useState<'aliases'|'groups'|'members'|'items'>('members')
+  const [tab, setTab] = useState<'aliases'|'groups'|'members'|'items'|'partcats'>('members')
   useEffect(() => {
-    if (router.isReady && router.query.tab === 'items') setTab('items')
+    if (router.isReady && (router.query.tab === 'items' || router.query.tab === 'partcats')) setTab(router.query.tab as any)
   }, [router.isReady, router.query.tab])
 
   const load = useCallback(async () => {
@@ -106,13 +106,14 @@ export default function GroupsAdmin() {
           )}
 
           <div style={{display:'flex',gap:2,padding:'0 20px',background:T.bg2,borderBottom:`1px solid ${T.border}`,flexShrink:0}}>
-            {(['members','aliases','groups','items'] as const).map(k => (
+            {(['members','aliases','groups','items','partcats'] as const).map(k => (
               <button key={k} onClick={()=>setTab(k)}
                 style={{fontSize:12,padding:'10px 16px',border:'none',borderBottom:tab===k?`2px solid ${T.accent}`:'2px solid transparent',background:'transparent',color:tab===k?T.accent:T.text2,cursor:'pointer',fontFamily:'inherit',textTransform:'capitalize'}}>
                 {k === 'members' ? `Membership (${members.length})`
                   : k === 'aliases' ? `Aliases & Merges (${aliases.length})`
                   : k === 'groups' ? `Groups (${groups.length})`
-                  : 'Item → Vehicle'}
+                  : k === 'items' ? 'Item → Vehicle'
+                  : 'Part Categories'}
               </button>
             ))}
           </div>
@@ -145,6 +146,8 @@ export default function GroupsAdmin() {
             )}
 
             {tab === 'items' && <ItemVehicleTab/>}
+
+            {tab === 'partcats' && <PartCategoriesTab/>}
           </div>
         </div>
       </div>
@@ -697,6 +700,117 @@ function ItemVehicleTab() {
         })}
         {rows.length === 0 && <tr><td colSpan={3 + models.length} style={{ fontSize: 12, color: T.text3, fontStyle: 'italic', padding: 12 }}>No items match.</td></tr>}
         </tbody>
+      </table>
+    </div>
+  </div>
+}
+
+// ─────────────────────────────────────────────────────────────
+// Part Categories: group parts ACCOUNT CODES into product categories
+// (Airbox, Exhaust, Fan Kit, Cooling…) for the Parts:Tunes "Per part" lens —
+// account-based so itemless SUP special-order lines categorise too. Each
+// account belongs to at most one category; whole set replaces on save.
+function PartCategoriesTab() {
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+  const [cats, setCats] = useState<{ name: string; account_codes: string[] }[]>([])
+  const [accounts, setAccounts] = useState<{ code: string; name: string }[]>([])
+  const [dirty, setDirty] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [note, setNote] = useState('')
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const r = await fetch('/api/distributor-item-map?items=1')
+        const d = await r.json()
+        if (!r.ok || d.error) throw new Error(d.error || `HTTP ${r.status}`)
+        setCats((d.partCategories || []).map((c: any) => ({ name: c.name, account_codes: c.account_codes || [] })))
+        setAccounts(d.accounts || [])
+        setError('')
+      } catch (e: any) { setError(e.message || String(e)) }
+      finally { setLoading(false) }
+    })()
+  }, [])
+
+  const catFor = (code: string) => cats.find(c => c.account_codes.includes(code))?.name || ''
+  const assign = (code: string, catName: string) => {
+    setCats(prev => prev.map(c => ({
+      ...c,
+      account_codes: c.name === catName
+        ? Array.from(new Set([...c.account_codes, code]))
+        : c.account_codes.filter(a => a !== code),
+    })))
+    setDirty(true)
+  }
+  const rename = (idx: number, name: string) => { setCats(p => p.map((c, i) => i === idx ? { ...c, name } : c)); setDirty(true) }
+  const remove = (idx: number) => { setCats(p => p.filter((_, i) => i !== idx)); setDirty(true) }
+  const add = () => {
+    let n = 1
+    while (cats.some(c => c.name.toLowerCase() === `new category ${n}`.toLowerCase())) n++
+    setCats(p => [...p, { name: `New Category ${n}`, account_codes: [] }]); setDirty(true)
+  }
+
+  const save = async () => {
+    setSaving(true); setNote('')
+    try {
+      const r = await fetch('/api/distributor-item-map', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ partCategories: cats }),
+      })
+      const d = await r.json()
+      if (!r.ok || d.error) throw new Error(d.error || `HTTP ${r.status}`)
+      setDirty(false); setNote('Part categories saved.')
+    } catch (e: any) { setNote(`Save failed: ${e.message || e}`) }
+    setSaving(false)
+  }
+
+  if (loading) return <div style={{ color: T.text3, textAlign: 'center', padding: 40 }}>Loading accounts from MYOB…</div>
+  if (error) return <div style={{ background: 'rgba(240,78,78,0.1)', border: `1px solid ${T.red}40`, borderRadius: 8, padding: 12, color: T.red, fontSize: 12 }}>{error}</div>
+
+  return <div style={{ display: 'flex', flexDirection: 'column', gap: 14, maxWidth: 860 }}>
+    <div style={{ fontSize: 12, color: T.text3 }}>
+      Product categories for the Distributors → Parts : Tunes “Per part” lens. Assign each MYOB parts account to a category to see units sold per tuned car by category. Account-based, so “SUP -” special-order lines categorise automatically.
+    </div>
+    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+      {cats.map((c, i) => (
+        <span key={i} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, background: T.bg3, border: `1px solid ${T.border}`, borderRadius: 6, padding: '3px 6px' }}>
+          <input value={c.name} onChange={e => rename(i, e.target.value)}
+            style={{ fontSize: 12, background: 'transparent', border: 'none', color: T.text, fontFamily: 'inherit', width: Math.max(70, c.name.length * 8), outline: 'none' }} />
+          <span style={{ fontSize: 10, color: T.text3, fontFamily: 'monospace' }}>{c.account_codes.length}</span>
+          <button onClick={() => remove(i)} title="Remove category (accounts become uncategorised)"
+            style={{ background: 'none', border: 'none', color: T.text3, cursor: 'pointer', fontSize: 12, padding: 0 }}>✕</button>
+        </span>
+      ))}
+      <button onClick={add} style={{ fontSize: 12, padding: '4px 12px', borderRadius: 6, border: `1px solid ${T.accent}`, background: 'transparent', color: T.accent, cursor: 'pointer', fontFamily: 'inherit' }}>+ Add category</button>
+      <div style={{ flex: 1 }} />
+      <button disabled={!dirty || saving} onClick={save}
+        style={{ fontSize: 12, padding: '6px 16px', borderRadius: 6, border: `1px solid ${dirty ? T.accent : T.border}`, background: dirty ? T.accent : T.bg3, color: dirty ? '#fff' : T.text3, cursor: dirty ? 'pointer' : 'default', fontFamily: 'inherit', fontWeight: 600 }}>
+        {saving ? 'Saving…' : dirty ? 'Save changes' : 'Saved'}
+      </button>
+    </div>
+    {note && <div style={{ fontSize: 12, color: note.startsWith('Save failed') ? T.red : T.green }}>{note}</div>}
+    <div style={{ background: T.bg2, border: `1px solid ${T.border}`, borderRadius: 10, overflow: 'auto', maxHeight: 'calc(100vh - 280px)' }}>
+      <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+        <thead><tr style={{ borderBottom: `1px solid ${T.border2}`, position: 'sticky', top: 0, background: T.bg2, zIndex: 1 }}>
+          <th style={{ fontSize: 11, color: T.text3, padding: '8px 12px', textAlign: 'left', fontWeight: 500 }}>MYOB account</th>
+          <th style={{ fontSize: 11, color: T.text3, padding: '8px 12px', textAlign: 'left', fontWeight: 500 }}>Category</th>
+        </tr></thead>
+        <tbody>{accounts.map(a => (
+          <tr key={a.code} style={{ borderTop: `1px solid ${T.border}` }}>
+            <td style={{ fontSize: 12, padding: '6px 12px', color: T.text2 }}>
+              <span style={{ fontFamily: 'monospace', color: T.text }}>{a.code}</span>
+              <span style={{ color: T.text3, marginLeft: 8 }}>{a.name}</span>
+            </td>
+            <td style={{ padding: '6px 12px' }}>
+              <select value={catFor(a.code)} onChange={e => assign(a.code, e.target.value)}
+                style={{ fontSize: 12, padding: '3px 8px', borderRadius: 5, border: `1px solid ${T.border}`, background: T.bg3, color: catFor(a.code) ? T.text : T.text3, fontFamily: 'inherit' }}>
+                <option value="">— none —</option>
+                {cats.map(c => <option key={c.name} value={c.name}>{c.name}</option>)}
+              </select>
+            </td>
+          </tr>
+        ))}</tbody>
       </table>
     </div>
   </div>
