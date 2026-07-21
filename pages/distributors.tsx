@@ -331,6 +331,10 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
     const m=vinToModel(po,vinRules)
     return (m.startsWith('Unmapped')||m==='Unknown') ? null : m
   }
+  // Parts:Tunes visibility — same classification as the Summary (dist_groups
+  // 'type' dimension, Groups Admin → Membership): Distributors + unclassified
+  // count; Sundry and Excluded are out (Chris 2026-07-22).
+  const typeOk = (name: string) => { const g = groupNameFor(name, 'type'); return !g || g === 'Distributors' }
 
   interface DS{name:string;tuning:number;oil:number;parts:number;total:number;typeGroup:string|null;regionGroup:string|null;isSundry:boolean}
   const distSummaries:DS[]=allDists.map(name=>{
@@ -626,14 +630,15 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
   // the Distributor Sales tab). Parts volume comes from the item→model tick
   // map — an item ticked for N models contributes qty/N to each.
   function renderPartsTunes(){
-    const hasItemData = filtered.some(l => l.bucket==='Parts' && l.itemNumber !== undefined)
+    const ptLines = filtered.filter(l => typeOk(l.CustomerName))
+    const hasItemData = ptLines.some(l => l.bucket==='Parts' && l.itemNumber !== undefined)
     const models = Array.from(new Set(vinRules.map(r => r.friendly_name || r.model_code))).sort()
 
     // Tune volume per model = DISTINCT VINs, not lines — a tune + Easy Lock
     // on the same car (same PO/VIN) is one car, one tune (Chris 2026-07-21).
     const tuneVinsByModel = new Map<string, Set<string>>()
     let tunesNoVin = 0
-    for (const l of filtered) {
+    for (const l of ptLines) {
       if (l.bucket !== 'Tuning') continue
       if (l.Total <= 0) continue // credits/zero lines aren't tune volume
       const po = (l.poNumber || '').trim().toUpperCase()
@@ -668,7 +673,7 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
       return sum > 0 ? counts.map(n => n / sum) : ms.map(() => 1 / ms.length)
     }
     if (ptMode === 'units') {
-      for (const l of filtered) {
+      for (const l of ptLines) {
         if (l.bucket !== 'Parts') continue
         const pm = partModelsOf(l)
         if (pm.excluded) continue // deliberately out of the volume check
@@ -688,7 +693,7 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
       const invSpecific = new Map<string, Set<string>>()
       const invAmbig = new Map<string, Set<string>>()
       const allPartInv = new Set<string>()
-      for (const l of filtered) {
+      for (const l of ptLines) {
         if (l.bucket !== 'Parts') continue
         const pm = partModelsOf(l)
         if (pm.excluded) continue
@@ -728,7 +733,7 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
     const totParts = totPartsOverride ?? rows.reduce((s,r)=>s+r.parts,0)
 
     // Per-distributor overview (volume % across all mapped models).
-    const distRows = allDists.map(name => {
+    const distRows = allDists.filter(typeOk).map(name => {
       const dl = visibleLines.filter(l => l.CustomerName === name)
       let parts = 0, unmapped = 0
       const tuneVins = new Set<string>()
@@ -786,7 +791,7 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
 
     // Drill-down plumbing — every number opens the invoices behind it, for
     // cross-referencing against MYOB. Predicates mirror the aggregations above.
-    const distOk = (l: LineItem, name?: string) => name ? l.CustomerName===name : (selectedDist==='ALL' || l.CustomerName===selectedDist)
+    const distOk = (l: LineItem, name?: string) => typeOk(l.CustomerName) && (name ? l.CustomerName===name : (selectedDist==='ALL' || l.CustomerName===selectedDist))
     const partInfo = (l: LineItem) => {
       const r = partModelsOf(l)
       return { isPart: l.bucket==='Parts', excluded: r.excluded, models: r.models }
@@ -1140,9 +1145,11 @@ img{max-width:100%}
 
     if (tab === 'parts-tunes') {
       // Tuned cars — one row per VIN (tune + Easy Lock lines roll up).
+      // Same classification filter as the on-screen tab.
+      const ptx = filtered.filter(l => typeOk(l.CustomerName))
       const cars = new Map<string, { model: string; customer: string; invs: Set<string>; date: string; lines: number; total: number }>()
       const noVin: (string | number)[][] = []
-      for (const l of filtered) {
+      for (const l of ptx) {
         if (!isTuneJob(l)) continue
         const m = tuneModelOf(l)
         if (!m) { noVin.push([l.CustomerName, (l.Date || '').slice(0, 10), l.invoiceNumber, l.Description, l.poNumber || '', money(l.Total)]); continue }
@@ -1161,7 +1168,7 @@ img{max-width:100%}
 
       // Parts lines — resolved model(s) + how they resolved.
       const partsAoa: (string | number)[][] = [['Distributor', 'Date', 'Invoice', 'Item', 'Description', 'Qty', 'Model(s)', 'Status', 'Amount ex-GST']]
-      for (const l of filtered) {
+      for (const l of ptx) {
         if (l.bucket !== 'Parts') continue
         const pm = partModelsOf(l)
         const viaTicks = !!(l.itemNumber && (itemMap[l.itemNumber] || []).some(m => m !== EXCLUDED_MODEL))
