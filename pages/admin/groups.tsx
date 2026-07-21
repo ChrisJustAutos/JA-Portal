@@ -516,6 +516,11 @@ function ItemVehicleTab() {
   const [openSections, setOpenSections] = useState<Record<string, boolean>>({ unmatched: true, matched: false, excluded: false })
   const [saving, setSaving] = useState(false)
   const [note, setNote] = useState('')
+  // Description keyword → model rules (vehicle fallback for itemless lines).
+  const [rules, setRules] = useState<{ keyword: string; model: string }[]>([])
+  const [rulesOpen, setRulesOpen] = useState(false)
+  const [rulesDirty, setRulesDirty] = useState(false)
+  const [rulesSaving, setRulesSaving] = useState(false)
 
   useEffect(() => {
     (async () => {
@@ -528,11 +533,27 @@ function ItemVehicleTab() {
         const m: Record<string, string[]> = {}
         for (const it of (d.items || [])) m[it.item_number] = it.models || []
         setMap(m)
+        setRules((d.descRules || []).map((x: any) => ({ keyword: x.keyword, model: x.model })))
         setError('')
       } catch (e: any) { setError(e.message || String(e)) }
       finally { setLoading(false) }
     })()
   }, [])
+
+  const saveRules = async () => {
+    setRulesSaving(true)
+    try {
+      const r = await fetch('/api/distributor-item-map', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ descRules: rules }),
+      })
+      const d = await r.json()
+      if (!r.ok || d.error) throw new Error(d.error || `HTTP ${r.status}`)
+      setRulesDirty(false)
+      setNote('Description rules saved.')
+    } catch (e: any) { setNote(`Save failed: ${e.message || e}`) }
+    setRulesSaving(false)
+  }
 
   const ticksFor = (num: string) => edits[num] ?? map[num] ?? []
   const savedTicks = (num: string) => map[num] ?? []
@@ -601,6 +622,43 @@ function ItemVehicleTab() {
       </button>
     </div>
     {note && <div style={{ fontSize: 12, color: note.startsWith('Save failed') ? T.red : T.green }}>{note}</div>}
+
+    {/* Description keyword rules — vehicle fallback for lines with no MYOB
+        item (SUP special orders, deleted one-off items). */}
+    <div style={{ background: T.bg2, border: `1px solid ${T.border}`, borderRadius: 10, padding: '10px 14px' }}>
+      <div onClick={() => setRulesOpen(o => !o)} style={{ cursor: 'pointer', fontSize: 12, fontWeight: 600, color: T.text }}>
+        {rulesOpen ? '▾' : '▸'} Description rules ({rules.length})
+        <span style={{ color: T.text3, fontWeight: 400, marginLeft: 8 }}>
+          fallback for invoice lines with no item (e.g. “SUP -” specials) — first keyword found in the description sets the vehicle
+        </span>
+      </div>
+      {rulesOpen && <div style={{ marginTop: 10, display: 'flex', flexDirection: 'column', gap: 6 }}>
+        {rules.map((r, i) => (
+          <div key={i} style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <input value={r.keyword} onChange={e => { const v = e.target.value.toUpperCase(); setRules(rs => rs.map((x, j) => j === i ? { ...x, keyword: v } : x)); setRulesDirty(true) }}
+              placeholder="Keyword (e.g. 1GD)" style={{ fontSize: 12, padding: '4px 8px', borderRadius: 5, border: `1px solid ${T.border}`, background: T.bg3, color: T.text, fontFamily: 'monospace', width: 160 }} />
+            <span style={{ fontSize: 11, color: T.text3 }}>→</span>
+            <select value={r.model} onChange={e => { const v = e.target.value; setRules(rs => rs.map((x, j) => j === i ? { ...x, model: v } : x)); setRulesDirty(true) }}
+              style={{ fontSize: 12, padding: '4px 8px', borderRadius: 5, border: `1px solid ${T.border}`, background: T.bg3, color: T.text, fontFamily: 'inherit' }}>
+              {!models.includes(r.model) && <option value={r.model}>{r.model}</option>}
+              {models.map(m => <option key={m} value={m}>{m}</option>)}
+            </select>
+            <button onClick={() => { setRules(rs => rs.filter((_, j) => j !== i)); setRulesDirty(true) }}
+              style={{ background: 'none', border: 'none', color: T.text3, fontSize: 14, cursor: 'pointer' }} title="Remove rule">✕</button>
+          </div>
+        ))}
+        <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
+          <button onClick={() => { setRules(rs => [...rs, { keyword: '', model: models[0] || '' }]); setRulesDirty(true) }}
+            style={{ fontSize: 12, padding: '5px 12px', borderRadius: 5, border: `1px solid ${T.border}`, background: T.bg3, color: T.text2, cursor: 'pointer', fontFamily: 'inherit' }}>+ Add rule</button>
+          <button disabled={!rulesDirty || rulesSaving} onClick={saveRules}
+            style={{ fontSize: 12, padding: '5px 14px', borderRadius: 5, border: `1px solid ${rulesDirty ? T.accent : T.border}`, background: rulesDirty ? T.accent : T.bg3, color: rulesDirty ? '#fff' : T.text3, cursor: rulesDirty ? 'pointer' : 'default', fontFamily: 'inherit', fontWeight: 600 }}>
+            {rulesSaving ? 'Saving…' : 'Save rules'}
+          </button>
+          <span style={{ fontSize: 11, color: T.text3, alignSelf: 'center' }}>Order matters — the first matching keyword wins. Rules only apply when an item can’t be ticked.</span>
+        </div>
+      </div>}
+    </div>
+
     <div style={{ background: T.bg2, border: `1px solid ${T.border}`, borderRadius: 10, overflow: 'auto', maxHeight: 'calc(100vh - 240px)' }}>
       <table style={{ width: '100%', borderCollapse: 'collapse' }}>
         <thead><tr style={{ borderBottom: `1px solid ${T.border2}`, position: 'sticky', top: 0, background: T.bg2, zIndex: 1 }}>

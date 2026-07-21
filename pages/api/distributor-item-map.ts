@@ -29,6 +29,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const { data, error } = await sb.from('dist_item_model_map')
         .select('item_number, item_name, model').order('item_number')
       if (error) return res.status(500).json({ error: error.message })
+      // Description keyword rules — fallback vehicle attribution for parts
+      // lines with no (or no longer existing) MYOB item.
+      const rulesRes = await sb.from('dist_desc_model_rules')
+        .select('keyword, model, sort_order').order('sort_order')
+      const descRules = rulesRes.data || []
       const byItem = new Map<string, { item_number: string; item_name: string | null; models: string[] }>()
       for (const r of (data || []) as Array<{ item_number: string; item_name: string | null; model: string }>) {
         const e = byItem.get(r.item_number) || { item_number: r.item_number, item_name: r.item_name, models: [] }
@@ -71,13 +76,28 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           }))
           .sort((a, b) => (b.units - a.units) || a.item_number.localeCompare(b.item_number))
 
-        return res.status(200).json({ items: Array.from(byItem.values()), candidates, models })
+        return res.status(200).json({ items: Array.from(byItem.values()), candidates, models, descRules })
       }
 
-      return res.status(200).json({ items: Array.from(byItem.values()) })
+      return res.status(200).json({ items: Array.from(byItem.values()), descRules })
     }
 
     if (req.method === 'POST') {
+      // { descRules: [{keyword, model}] } — replace the whole rule set (small
+      // table, whole-list editor in the UI).
+      if (Array.isArray(req.body?.descRules)) {
+        const rules = req.body.descRules
+          .map((r: any, i: number) => ({ keyword: String(r.keyword || '').trim().toUpperCase(), model: String(r.model || '').trim(), sort_order: (i + 1) * 10 }))
+          .filter((r: any) => r.keyword && r.model)
+        const del = await sb.from('dist_desc_model_rules').delete().neq('id', -1)
+        if (del.error) return res.status(500).json({ error: del.error.message })
+        if (rules.length) {
+          const ins = await sb.from('dist_desc_model_rules').insert(rules)
+          if (ins.error) return res.status(500).json({ error: ins.error.message })
+        }
+        return res.status(200).json({ ok: true, rules: rules.length })
+      }
+
       const items: any[] = Array.isArray(req.body?.items) ? req.body.items : []
       if (!items.length) return res.status(400).json({ error: 'items required' })
       for (const it of items) {

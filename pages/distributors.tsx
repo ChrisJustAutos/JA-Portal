@@ -138,6 +138,9 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
   // Parts:Tunes lens — 'units' (raw part quantities; a full build reads ~600%)
   // or 'cars' (1 invoice = 1 car: 6 VDJ79 parts on an invoice = 1 car per tune)
   const [ptMode,setPtMode]=useState<'units'|'cars'>('cars')
+  // Description keyword → model rules: vehicle fallback for parts lines with
+  // no (or no longer existing) MYOB item, e.g. "SUP - " special orders.
+  const [descRules,setDescRules]=useState<{keyword:string;model:string}[]>([])
   const [loading,setLoading]=useState(true)
   const [error,setError]=useState('')
   const [selectedDist,setSelectedDist]=useState('ALL')
@@ -221,6 +224,7 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
         const m: Record<string,string[]> = {}
         for (const it of (mData.items || [])) m[it.item_number] = it.models || []
         setItemMap(m)
+        setDescRules(mData.descRules || [])
       }
 
       const gstPref = prefs.gst_display
@@ -627,6 +631,25 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
     const partsByModel = new Map<string, number>()
     let partsUnmapped = 0
     let totPartsOverride: number | null = null
+    // Vehicle resolution for a parts line: item ticks first; a line with no
+    // item at all (SUP special orders, deleted one-off items) or an item
+    // nobody has mapped falls back to description keyword rules ("Hilux 1GD"
+    // → Hilux N80). Explicit Excluded ticks always win.
+    const descModelOf = (desc: string): string | null => {
+      const D = (desc || '').toUpperCase()
+      if (!D) return null
+      for (const r of descRules) if (D.includes(r.keyword)) return r.model
+      return null
+    }
+    const partModelsOf = (l: LineItem): { excluded: boolean; models: string[] } => {
+      const raw = l.itemNumber ? (itemMap[l.itemNumber] || []) : []
+      if (raw.includes(EXCLUDED_MODEL)) return { excluded: true, models: [] }
+      const ticked = raw.filter(m => m !== EXCLUDED_MODEL)
+      if (ticked.length) return { excluded: false, models: ticked }
+      const viaDesc = descModelOf(l.Description)
+      return { excluded: false, models: viaDesc ? [viaDesc] : [] }
+    }
+
     // Multi-fit items (a fan kit suits VDJ70 AND LC200) split by the TUNE MIX
     // across their ticked models within the current selection — if 70% of the
     // tunes here are VDJ70s, 70% of the fan kits are assumed to be for VDJ70s
@@ -640,13 +663,12 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
     if (ptMode === 'units') {
       for (const l of filtered) {
         if (l.bucket !== 'Parts') continue
-        const raw = l.itemNumber ? (itemMap[l.itemNumber] || []) : []
-        if (raw.includes(EXCLUDED_MODEL)) continue // deliberately out of the volume check
+        const pm = partModelsOf(l)
+        if (pm.excluded) continue // deliberately out of the volume check
         const units = l.qty != null && l.qty > 0 ? l.qty : 1
-        const ticked = raw.filter(m => m !== EXCLUDED_MODEL)
-        if (!ticked.length) { partsUnmapped += units; continue }
-        const w = tuneWeights(ticked)
-        ticked.forEach((m, i) => partsByModel.set(m, (partsByModel.get(m) || 0) + units * w[i]))
+        if (!pm.models.length) { partsUnmapped += units; continue }
+        const w = tuneWeights(pm.models)
+        pm.models.forEach((m, i) => partsByModel.set(m, (partsByModel.get(m) || 0) + units * w[i]))
       }
     } else {
       // 1 invoice = 1 car, distributed across the union of its lines' ticked
@@ -656,14 +678,13 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
       const allPartInv = new Set<string>()
       for (const l of filtered) {
         if (l.bucket !== 'Parts') continue
-        const raw = l.itemNumber ? (itemMap[l.itemNumber] || []) : []
-        if (raw.includes(EXCLUDED_MODEL)) continue
+        const pm = partModelsOf(l)
+        if (pm.excluded) continue
         const inv = l.invoiceNumber || `${l.CustomerName}|${l.Date}`
         allPartInv.add(inv)
-        const ticked = raw.filter(m => m !== EXCLUDED_MODEL)
-        if (!ticked.length) continue
+        if (!pm.models.length) continue
         if (!invModels.has(inv)) invModels.set(inv, new Set())
-        ticked.forEach(m => invModels.get(inv)!.add(m))
+        pm.models.forEach(m => invModels.get(inv)!.add(m))
       }
       invModels.forEach(set => {
         const ms = Array.from(set)
@@ -695,9 +716,9 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
           const m = po ? vinToModel(po, vinRules) : 'Unknown'
           if (po && !m.startsWith('Unmapped') && m !== 'Unknown') tuneVins.add(po)
         } else if (l.bucket === 'Parts') {
-          const raw = l.itemNumber ? (itemMap[l.itemNumber] || []) : []
-          if (raw.includes(EXCLUDED_MODEL)) continue
-          const isMapped = raw.some(m => m !== EXCLUDED_MODEL)
+          const pm = partModelsOf(l)
+          if (pm.excluded) continue
+          const isMapped = pm.models.length > 0
           if (ptMode === 'units') {
             const units = l.qty != null && l.qty > 0 ? l.qty : 1
             if (isMapped) parts += units; else unmapped += units
@@ -732,8 +753,8 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
       return (m.startsWith('Unmapped')||m==='Unknown') ? null : m
     }
     const partInfo = (l: LineItem) => {
-      const raw = l.itemNumber ? (itemMap[l.itemNumber]||[]) : []
-      return { isPart: l.bucket==='Parts', excluded: raw.includes(EXCLUDED_MODEL), models: raw.filter(m=>m!==EXCLUDED_MODEL) }
+      const r = partModelsOf(l)
+      return { isPart: l.bucket==='Parts', excluded: r.excluded, models: r.models }
     }
     const distLabel = (name?: string) => name || (selectedDist==='ALL'?'All distributors':selectedDist)
     const drillTunes = (model: string|null, name?: string) => setDrill({
