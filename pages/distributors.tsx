@@ -1022,6 +1022,69 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
 
   const showSelector=tab==='distributor-sales'||tab==='detailed-sales'||tab==='parts-tunes'
 
+  // ─── Export (PDF / Word / Excel) of the CURRENT tab ─────────────────────
+  // Serializes the rendered tab content: charts become PNG snapshots,
+  // interactive controls are stripped, theme CSS vars fall back to plain
+  // black-on-white so the document prints/imports cleanly.
+  const contentRef = useRef<HTMLDivElement|null>(null)
+  const [exportOpen,setExportOpen]=useState(false)
+  const EXPORT_CSS = `body{font-family:Arial,sans-serif;margin:24px;color:#111;background:#fff}
+table{border-collapse:collapse;width:100%;margin:10px 0}
+th,td{border:1px solid #bbb;padding:5px 8px;font-size:11px;color:#111 !important;background:#fff !important}
+h2{font-size:18px;margin:0 0 4px}
+img{max-width:100%}
+@media print{body{margin:0}}`
+
+  function buildExportHtml(): { title: string; body: string } | null {
+    const src = contentRef.current
+    if (!src) return null
+    const clone = src.cloneNode(true) as HTMLElement
+    const srcCanvases = Array.from(src.querySelectorAll('canvas'))
+    Array.from(clone.querySelectorAll('canvas')).forEach((c, i) => {
+      try {
+        const img = document.createElement('img')
+        img.src = (srcCanvases[i] as HTMLCanvasElement).toDataURL('image/png')
+        c.replaceWith(img)
+      } catch { c.remove() }
+    })
+    clone.querySelectorAll('button, input, select, style, canvas').forEach(el => el.remove())
+    const tabLabel = tabs.find(t => t[0] === tab)?.[1] || tab
+    const title = `Distributors — ${tabLabel} — ${fyLabel}${selectedDist !== 'ALL' && showSelector ? ` — ${selectedDist}` : ''}`
+    const meta = `Generated ${new Date().toLocaleString('en-AU')} · amounts ${prefs.gst_display === 'inc' ? 'inc' : 'ex'}-GST · source: MYOB JAWS`
+    return { title, body: `<h2>${title}</h2><div style="font-size:11px;color:#555">${meta}</div>${clone.innerHTML}` }
+  }
+
+  function downloadExport(content: string, mime: string, filename: string) {
+    const url = URL.createObjectURL(new Blob([String.fromCharCode(0xfeff), content], { type: mime }))
+    const a = document.createElement('a')
+    a.href = url; a.download = filename
+    document.body.appendChild(a); a.click(); a.remove()
+    setTimeout(() => URL.revokeObjectURL(url), 4000)
+  }
+
+  function exportDoc(kind: 'pdf' | 'word' | 'excel') {
+    const r = buildExportHtml()
+    if (!r) return
+    const safe = r.title.replace(/[^\w\s—-]+/g, '').replace(/\s+/g, ' ').trim()
+    if (kind === 'pdf') {
+      const w = window.open('', '_blank')
+      if (!w) return
+      w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>${r.title}</title><style>${EXPORT_CSS}</style></head><body>${r.body}</body></html>`)
+      w.document.close(); w.focus()
+      setTimeout(() => { try { w.print() } catch { /* user can print manually */ } }, 500)
+    } else if (kind === 'word') {
+      const doc = `<!doctype html><html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:w="urn:schemas-microsoft-com:office:word"><head><meta charset="utf-8"><title>${r.title}</title><style>${EXPORT_CSS}</style></head><body>${r.body}</body></html>`
+      downloadExport(doc, 'application/msword', `${safe}.doc`)
+    } else {
+      // Excel wants clean tables — strip the layout divs, keep table order.
+      const tmp = document.createElement('div')
+      tmp.innerHTML = r.body
+      const tables = Array.from(tmp.querySelectorAll('table')).map(t => t.outerHTML).join('<br/>')
+      const doc = `<!doctype html><html><head><meta charset="utf-8"><style>${EXPORT_CSS}</style></head><body><h2>${r.title}</h2>${tables || '<div>No tables on this tab.</div>'}</body></html>`
+      downloadExport(doc, 'application/vnd.ms-excel', `${safe}.xls`)
+    }
+  }
+
   // ─── Feed distributor revenue summary to the global AI chatbot ──────────
   const { setPageContext: setChatContext } = useChatContext()
   useEffect(() => {
@@ -1111,6 +1174,25 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
           <span style={{fontSize:11,color:T.text3}}>→</span>
           <input type="date" value={customEnd} onChange={e=>setCustomEnd(e.target.value)} style={{padding:'3px 6px',borderRadius:4,border:`1px solid ${isCustomRange?T.accent:T.border}`,fontSize:11,fontFamily:'monospace',background:'transparent',color:T.text2,outline:'none',colorScheme:'dark'}}/>
           <button onClick={applyCustomRange} style={{padding:'3px 10px',borderRadius:4,border:`1px solid ${T.accent}`,fontSize:11,fontFamily:'monospace',fontWeight:600,cursor:'pointer',background:isCustomRange?T.accent:'transparent',color:isCustomRange?'#fff':T.accent}}>Apply</button>
+          <div style={{width:1,height:18,background:T.border}}/>
+          <div style={{position:'relative'}}>
+            <button disabled={loading} onClick={()=>setExportOpen(o=>!o)}
+              style={{padding:'3px 10px',borderRadius:4,border:`1px solid ${T.border}`,fontSize:11,fontFamily:'monospace',fontWeight:600,cursor:loading?'default':'pointer',background:'transparent',color:loading?T.text3:T.text2}}>
+              ⬇ Export ▾
+            </button>
+            {exportOpen&&<>
+              <div style={{position:'fixed',inset:0,zIndex:40}} onClick={()=>setExportOpen(false)}/>
+              <div style={{position:'absolute',top:'100%',right:0,marginTop:4,zIndex:41,minWidth:190,background:T.bg2,border:`1px solid ${T.border2}`,borderRadius:8,boxShadow:'0 8px 24px rgba(0,0,0,0.35)',overflow:'hidden'}}>
+                {([['pdf','PDF','print → Save as PDF'],['word','Word (.doc)','editable document'],['excel','Excel (.xls)','tables only']] as const).map(([k,label,hint])=>
+                  <button key={k} onClick={()=>{setExportOpen(false);exportDoc(k)}}
+                    style={{display:'block',width:'100%',textAlign:'left',padding:'8px 12px',fontSize:12,fontFamily:'inherit',cursor:'pointer',border:'none',background:'transparent',color:T.text}}
+                    onMouseEnter={e=>((e.currentTarget as HTMLElement).style.background=T.bg3)}
+                    onMouseLeave={e=>((e.currentTarget as HTMLElement).style.background='transparent')}>
+                    {label}<span style={{color:T.text3,marginLeft:8,fontSize:11}}>{hint}</span>
+                  </button>)}
+              </div>
+            </>}
+          </div>
           {dateLoading&&<span style={{fontSize:14,animation:'spin 1s linear infinite',color:T.blue}}>⟳</span>}
         </div>
 
@@ -1120,7 +1202,7 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
 
         {showSelector&&!loading&&!error&&<DistSelector/>}
 
-        <div style={{flex:1,overflow:'hidden',display:'flex',flexDirection:'column',position:'relative'}}>
+        <div ref={contentRef} style={{flex:1,overflow:'hidden',display:'flex',flexDirection:'column',position:'relative'}}>
           <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
           {dateLoading&&<div style={{position:'absolute',inset:0,background:'rgba(13,15,18,0.75)',zIndex:10,display:'flex',alignItems:'center',justifyContent:'center',flexDirection:'column',gap:12}}>
             <div style={{fontSize:28,animation:'spin 1s linear infinite',color:T.blue}}>⟳</div><div style={{color:T.text2,fontSize:13}}>Updating distributor data for {fyLabel}…</div>
