@@ -37,9 +37,22 @@ export default withAuth('view:reports', async (req, res) => {
   // Decisive for "I can see it in MYOB but not on the report".
   const invoiceNo = String(req.query.invoice || '').trim()
   if (invoiceNo) {
-    const { fetchSaleInvoiceByNumber } = await import('../../../lib/myob-reporting')
+    const { fetchSaleInvoiceByNumber, fetchSaleInvoices } = await import('../../../lib/myob-reporting')
+    const { sameInvoiceNumberLoose } = await import('../../../lib/ap-myob-bill')
     const hit = await fetchSaleInvoiceByNumber(file, invoiceNo)
-    return res.status(200).json({ file, invoice: invoiceNo, found: !!hit.invoice, detail: hit.invoice ? hit : null })
+    if (hit.invoice) return res.status(200).json({ file, invoice: invoiceNo, found: true, detail: hit })
+
+    // Exact number missed — loose scan of recent headers (all types): catches
+    // suffix variants ("JAWS-1364 - S", "CR JAWS-1364S") and near-misses.
+    const sinceIso = new Date(Date.now() - 420 * 86400_000).toISOString().slice(0, 10)
+    const headers = await fetchSaleInvoices(file, { start: sinceIso })
+    const norm = (s: string) => s.toUpperCase().replace(/[^A-Z0-9]/g, '')
+    const target = norm(invoiceNo)
+    const candidates = headers
+      .filter(h => h.Number && (norm(h.Number).includes(target) || sameInvoiceNumberLoose(h.Number, invoiceNo)))
+      .slice(0, 10)
+      .map(h => ({ number: h.Number, date: h.Date?.slice(0, 10), type: h.InvoiceType, customer: h.CustomerName, total: h.TotalAmount, status: h.Status }))
+    return res.status(200).json({ file, invoice: invoiceNo, found: false, detail: null, looseMatches: candidates })
   }
 
   const catsRes = await sbAdmin().from('distributor_report_categories').select('name, account_codes')
