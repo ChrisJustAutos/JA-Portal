@@ -46,7 +46,8 @@ import { resolveLineAccount } from './ap-line-resolver'
 import { triageInvoice } from './ap-supabase'
 import { consolidatedInvoiceSupplier } from './ap-consolidated-suppliers'
 import { overseasSupplier } from './ap-overseas-suppliers'
-import { postFoundInvoiceToMyob, reattachStagedPdf, sameInvoiceNumberLoose } from './ap-myob-bill'
+import { postFoundInvoiceToMyob, reattachStagedPdf, sameInvoiceNumberLoose, findExistingMyobBill } from './ap-myob-bill'
+import { getConnection } from './myob'
 import { postWebhook, type SlackBlock } from './slack'
 import { postMessage } from './slack-bot/slack'
 import { randomUUID } from 'crypto'
@@ -122,7 +123,7 @@ function apSlackChannel(companyFile?: string): string {
 // Flagged / not-posted emails are left in place. Set to '' to disable the move.
 function processedFolder(): string { return (process.env.AP_AUTO_ENTRY_PROCESSED_FOLDER ?? 'Read /Printed').trim() }
 
-export type AutoEntryOutcomeKind = 'posted' | 'flagged' | 'skipped_not_invoice' | 'error'
+export type AutoEntryOutcomeKind = 'posted' | 'flagged' | 'skipped_not_invoice' | 'skipped_duplicate' | 'error'
 
 export interface AutoEntryItem {
   messageId: string
@@ -844,6 +845,28 @@ async function processInvoice(
       .eq('outcome', 'posted').eq('supplier_uid', supplierUid)
       .gte('created_at', new Date(Date.now() - 14 * 86400_000).toISOString())
     const sameAmount = (p: any) => p.amount != null && Math.abs(Number(p.amount) - total) < 0.005
+
+    // Exact re-arrival: same supplier + same number + same amount already
+    // POSTED per the log (forwarded copy, supplier re-send, paper re-scan —
+    // new message id, so the per-email dedup can't catch it). If the bill is
+    // still in MYOB there is nothing to do: skip SILENTLY, no Slack card.
+    // If it's GONE, someone deleted it in MYOB on purpose — re-posting would
+    // undo their delete and loop forever (Ken Mills credit PI113080771,
+    // 2026-07-21) — so flag for human approval instead of auto-posting.
+    const exactPrior = (prior || []).find(p =>
+      sameAmount(p) && norm(p.invoice_number) === norm(extracted.invoiceNumber))
+    if (exactPrior) {
+      const conn = await getConnection(companyFile).catch(() => null)
+      const existing = conn?.company_file_id
+        ? await findExistingMyobBill(conn.id, conn.company_file_id, String(extracted.invoiceNumber), supplierUid, { expectedTotal: total }).catch(() => null)
+        : null
+      if (existing) {
+        if (!dryRun) await logRow(c, { mailbox, companyFile, msg, attId, attName }, { outcome: 'skipped_duplicate', supplierName, invoiceNumber: extracted.invoiceNumber, amount: total, error: `copy of ${exactPrior.invoice_number} posted ${String(exactPrior.created_at).slice(0, 10)} — bill still in MYOB, nothing to do` })
+        return { ...base, supplierName, invoiceNumber: extracted.invoiceNumber, amount: total, outcome: 'skipped_duplicate', bankCheck: 'skipped', failReasons: [] }
+      }
+      failReasons.push(`RED:posted-${String(exactPrior.created_at).slice(0, 10)}-then-deleted-in-MYOB (approve only if it should be re-entered)`)
+    }
+
     // Same amount + the same number under OCR-tolerant comparison ("PI13…" vs
     // "P113…", tail digits equal) = near-certain re-arrival of an invoice
     // already posted → hard RED, not a soft maybe.
