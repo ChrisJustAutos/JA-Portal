@@ -511,7 +511,9 @@ function ItemVehicleTab() {
   const [map, setMap] = useState<Record<string, string[]>>({})
   const [edits, setEdits] = useState<Record<string, string[]>>({})
   const [search, setSearch] = useState('')
-  const [onlyUnmapped, setOnlyUnmapped] = useState(false)
+  // Sections group by SAVED state (not in-flight edits) so rows don't jump
+  // around mid-ticking — items move section after Save.
+  const [openSections, setOpenSections] = useState<Record<string, boolean>>({ unmatched: true, matched: false, excluded: false })
   const [saving, setSaving] = useState(false)
   const [note, setNote] = useState('')
 
@@ -533,10 +535,16 @@ function ItemVehicleTab() {
   }, [])
 
   const ticksFor = (num: string) => edits[num] ?? map[num] ?? []
+  const savedTicks = (num: string) => map[num] ?? []
   const q = search.trim().toLowerCase()
   const rows = candidates
     .filter(it => !q || it.item_number.toLowerCase().includes(q) || (it.item_name || '').toLowerCase().includes(q))
-    .filter(it => !onlyUnmapped || ticksFor(it.item_number).length === 0)
+
+  const sections = [
+    { key: 'unmatched', label: 'Unmatched — still to do', items: rows.filter(it => savedTicks(it.item_number).length === 0) },
+    { key: 'matched', label: 'Matched to vehicles', items: rows.filter(it => { const t = savedTicks(it.item_number); return t.length > 0 && !t.includes(EXCLUDED) }) },
+    { key: 'excluded', label: 'Excluded from the check', items: rows.filter(it => savedTicks(it.item_number).includes(EXCLUDED)) },
+  ] as const
 
   const toggle = (num: string, model: string) => {
     setEdits(prev => {
@@ -584,10 +592,7 @@ function ItemVehicleTab() {
         Tick every vehicle model an item fits — multi-fit items split their volume evenly across ticks on the Distributors → Parts : Tunes view. Columns come from the VIN model rules.
       </div>
       <div style={{ flex: 1 }} />
-      <span style={{ fontSize: 11, color: T.text3 }}>{mappedCount}/{candidates.length} items mapped</span>
-      <label style={{ fontSize: 11, color: T.text2, display: 'flex', alignItems: 'center', gap: 5, cursor: 'pointer' }}>
-        <input type="checkbox" checked={onlyUnmapped} onChange={e => setOnlyUnmapped(e.target.checked)} /> unmapped only
-      </label>
+      <span style={{ fontSize: 11, color: T.text3 }}>{mappedCount}/{candidates.length} items handled</span>
       <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search item / name…"
         style={{ fontSize: 12, padding: '5px 10px', borderRadius: 6, border: `1px solid ${T.border}`, background: T.bg3, color: T.text, fontFamily: 'inherit' }} />
       <button disabled={!dirty || saving} onClick={save}
@@ -604,21 +609,33 @@ function ItemVehicleTab() {
           <th style={{ fontSize: 10, color: T.red, padding: '8px 6px', textAlign: 'center', fontWeight: 600, whiteSpace: 'nowrap' }} title="Deliberately outside the Parts:Tunes check (merch, freight, consumables). Clears any model ticks.">Excluded</th>
           {models.map(m => <th key={m} style={{ fontSize: 10, color: T.text3, padding: '8px 6px', textAlign: 'center', fontWeight: 500, whiteSpace: 'nowrap' }}>{m}</th>)}
         </tr></thead>
-        <tbody>{rows.map(it => {
-          const ticks = ticksFor(it.item_number)
-          return <tr key={it.item_number} style={{ borderTop: `1px solid ${T.border}` }}>
-            <td style={{ fontSize: 11, padding: '6px 10px', color: T.text2 }}>
-              <span style={{ fontFamily: 'monospace', color: T.text }}>{it.item_number}</span>
-              <span style={{ color: T.text3, marginLeft: 8 }}>{(it.item_name || '').slice(0, 55)}</span>
-            </td>
-            <td style={{ fontSize: 11, fontFamily: 'monospace', color: it.units > 0 ? T.text2 : T.text3, padding: '6px 10px', textAlign: 'right' }}>{it.units || ''}</td>
-            <td style={{ padding: '6px', textAlign: 'center' }}>
-              <input type="checkbox" checked={ticks.includes(EXCLUDED)} onChange={() => toggle(it.item_number, EXCLUDED)} style={{ cursor: 'pointer', accentColor: '#e5484d' }} />
-            </td>
-            {models.map(m => <td key={m} style={{ padding: '6px', textAlign: 'center', opacity: ticks.includes(EXCLUDED) ? 0.35 : 1 }}>
-              <input type="checkbox" checked={ticks.includes(m)} onChange={() => toggle(it.item_number, m)} style={{ cursor: 'pointer' }} />
-            </td>)}
-          </tr>
+        <tbody>{sections.map(sec => {
+          const open = openSections[sec.key]
+          const header = (
+            <tr key={`h-${sec.key}`} onClick={() => setOpenSections(p => ({ ...p, [sec.key]: !p[sec.key] }))}
+              style={{ cursor: 'pointer', background: T.bg3, borderTop: `2px solid ${T.border2}` }}>
+              <td colSpan={3 + models.length} style={{ fontSize: 12, fontWeight: 600, padding: '9px 10px', color: sec.key === 'excluded' ? T.red : sec.key === 'matched' ? T.green : T.text }}>
+                {open ? '▾' : '▸'} {sec.label} ({sec.items.length})
+              </td>
+            </tr>
+          )
+          const body = open ? sec.items.map(it => {
+            const ticks = ticksFor(it.item_number)
+            return <tr key={it.item_number} style={{ borderTop: `1px solid ${T.border}` }}>
+              <td style={{ fontSize: 11, padding: '6px 10px', color: T.text2 }}>
+                <span style={{ fontFamily: 'monospace', color: T.text }}>{it.item_number}</span>
+                <span style={{ color: T.text3, marginLeft: 8 }}>{(it.item_name || '').slice(0, 55)}</span>
+              </td>
+              <td style={{ fontSize: 11, fontFamily: 'monospace', color: it.units > 0 ? T.text2 : T.text3, padding: '6px 10px', textAlign: 'right' }}>{it.units || ''}</td>
+              <td style={{ padding: '6px', textAlign: 'center' }}>
+                <input type="checkbox" checked={ticks.includes(EXCLUDED)} onChange={() => toggle(it.item_number, EXCLUDED)} style={{ cursor: 'pointer', accentColor: '#e5484d' }} />
+              </td>
+              {models.map(m => <td key={m} style={{ padding: '6px', textAlign: 'center', opacity: ticks.includes(EXCLUDED) ? 0.35 : 1 }}>
+                <input type="checkbox" checked={ticks.includes(m)} onChange={() => toggle(it.item_number, m)} style={{ cursor: 'pointer' }} />
+              </td>)}
+            </tr>
+          }) : []
+          return [header, ...body]
         })}
         {rows.length === 0 && <tr><td colSpan={3 + models.length} style={{ fontSize: 12, color: T.text3, fontStyle: 'italic', padding: 12 }}>No items match.</td></tr>}
         </tbody>
