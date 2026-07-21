@@ -1291,16 +1291,24 @@ async function postApprovedRow(
   supplierOverride?: { uid: string; name: string } | null,
 ): Promise<string> {
   const companyFile: CompanyFileLabel = (row.company_file as CompanyFileLabel) || 'VPS'
+  // Terminal bail-out: MUST set `error` on the row, or the approved-rows cron
+  // sweep (error IS NULL filter) retries it — and re-posts the same warning
+  // to Slack — every run forever (K's Sparkling Spaces #565, 2026-07-21).
+  // A re-click still retries explicitly; success sets myob_bill_uid.
+  const bail = async (msg: string): Promise<string> => {
+    await c.from('ap_auto_entry_log').update({ error: msg.slice(0, 250) }).eq('id', row.id).then(() => {}, () => {})
+    return msg
+  }
   const re = await reExtractRow(c, row)
-  if (re.err !== undefined) return re.err
+  if (re.err !== undefined) return bail(re.err)
   const { bytes, extracted } = re
   const total = extracted.totals.totalIncGst
   if (!extracted.invoiceNumber || total == null || !extracted.invoiceDate) {
-    return `⚠️ ${row.invoice_number || 'invoice'}: number/date/total unreadable even on the strong model — enter manually.`
+    return bail(`⚠️ ${row.invoice_number || 'invoice'}: number/date/total unreadable even on the strong model — enter manually.`)
   }
 
   if (isSelfEntityVendor(extracted.vendor?.name || row.supplier_name)) {
-    return `🪞 ${extracted.invoiceNumber}: this document is issued by ${extracted.vendor?.name || row.supplier_name} — it's OUR paperwork (customer credit/invoice), not a supplier bill. Not posting; handle in AR.`
+    return bail(`🪞 ${extracted.invoiceNumber}: this document is issued by ${extracted.vendor?.name || row.supplier_name} — it's OUR paperwork (customer credit/invoice), not a supplier bill. Not posting; handle in AR.`)
   }
 
   let supplier: { uid: string; name: string }
@@ -1308,7 +1316,7 @@ async function postApprovedRow(
     supplier = supplierOverride
   } else {
     const match = await tryAutoMatchSupplier(extracted.vendor?.name || row.supplier_name, extracted.vendor?.abn || null, companyFile).catch(() => null)
-    if (!match) return `⚠️ ${extracted.invoiceNumber}: no MYOB supplier card matched "${extracted.vendor?.name || row.supplier_name || 'unknown'}" — create/rename the card, then re-approve.`
+    if (!match) return bail(`⚠️ ${extracted.invoiceNumber}: no MYOB supplier card matched "${extracted.vendor?.name || row.supplier_name || 'unknown'}" — create/rename the card, then re-approve.`)
     supplier = { uid: match.supplier.uid, name: match.supplier.name }
   }
 
