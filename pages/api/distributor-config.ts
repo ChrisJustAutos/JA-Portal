@@ -54,19 +54,22 @@ async function fetchMyobAccounts(): Promise<Array<{ code: string; name: string }
 
 async function handleGet(res: NextApiResponse) {
   const sb = sbAdmin()
-  const [catsRes, exRes, accounts] = await Promise.all([
+  // NOTE: customer exclusions moved to the dist_groups system and the legacy
+  // distributor_report_excluded_customers table was DROPPED — querying it
+  // 500'd this whole endpoint and blanked the Revenue Categories screen
+  // (found 2026-07-21). excludedCustomers stays in the response shape as []
+  // for older clients.
+  const [catsRes, accounts] = await Promise.all([
     sb.from('distributor_report_categories').select('id, name, sort_order, account_codes, updated_at').order('sort_order'),
-    sb.from('distributor_report_excluded_customers').select('id, customer_name, note, created_at').order('customer_name'),
     fetchMyobAccounts().catch((e: any) => {
       console.error('distributor-config: MYOB accounts fetch failed —', e?.message)
       return []
     }),
   ])
   if (catsRes.error) { res.status(500).json({ error: 'Failed to load categories: ' + catsRes.error.message }); return }
-  if (exRes.error)   { res.status(500).json({ error: 'Failed to load excluded customers: ' + exRes.error.message }); return }
   res.status(200).json({
     categories: catsRes.data || [],
-    excludedCustomers: exRes.data || [],
+    excludedCustomers: [],
     myobAccounts: accounts,
   })
 }
@@ -111,41 +114,10 @@ async function handlePost(req: NextApiRequest, res: NextApiResponse) {
   const { error: insCatsErr } = await sb.from('distributor_report_categories').insert(catRows)
   if (insCatsErr) { res.status(500).json({ error: 'Failed to save categories: ' + insCatsErr.message }); return }
 
-  // Excluded customers: same full-replace approach
-  const { error: delExErr } = await sb.from('distributor_report_excluded_customers').delete().neq('customer_name', '___impossible_placeholder___')
-  if (delExErr) { res.status(500).json({ error: 'Failed to clear excluded customers: ' + delExErr.message }); return }
-
+  // Excluded customers: legacy — the table is gone (exclusions live in the
+  // dist_groups Membership system). Anything the client sends is ignored.
   if (excluded.length > 0) {
-    // Validate each row: note must be one of the allowed values.
-    for (const x of excluded) {
-      if (!x.customer_name?.trim()) continue   // skipped below
-      if (!VALID_NOTES.includes(x.note as ExclusionNote)) {
-        res.status(400).json({
-          error: `Invalid note for "${x.customer_name}". Must be one of: ${VALID_NOTES.join(', ')}. Got: ${JSON.stringify(x.note)}`,
-        })
-        return
-      }
-    }
-
-    const exRows = excluded
-      .filter(x => x.customer_name?.trim())
-      .map(x => ({
-        customer_name: x.customer_name.trim(),
-        note: x.note,   // validated above
-        created_by: user.id,
-      }))
-    // Dedupe by lowercased name
-    const seen = new Set<string>()
-    const deduped = exRows.filter(r => {
-      const k = r.customer_name.toLowerCase()
-      if (seen.has(k)) return false
-      seen.add(k)
-      return true
-    })
-    if (deduped.length > 0) {
-      const { error: insExErr } = await sb.from('distributor_report_excluded_customers').insert(deduped)
-      if (insExErr) { res.status(500).json({ error: 'Failed to save excluded customers: ' + insExErr.message }); return }
-    }
+    console.warn('distributor-config: ignoring legacy excludedCustomers payload —', excluded.length, 'rows (manage exclusions in Distributor Groups)')
   }
 
   // Bust the distributor-report cache so changes appear immediately
