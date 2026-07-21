@@ -157,6 +157,9 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
     title: string
     subtitle?: string
     filter: (l: LineItem) => boolean
+    // 'vin' groups the modal by PO/VIN instead of invoice — a car whose tune
+    // and Easy Lock sit on separate lines/invoices opens as ONE group.
+    groupBy?: 'invoice' | 'vin'
   }
   const [drill, setDrill] = useState<DrillSpec | null>(null)
 
@@ -599,18 +602,22 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
     const hasItemData = filtered.some(l => l.bucket==='Parts' && l.itemNumber !== undefined)
     const models = Array.from(new Set(vinRules.map(r => r.friendly_name || r.model_code))).sort()
 
-    // Tune jobs per model (count of VIN'd tuning lines), per current filter.
-    const tunesByModel = new Map<string, number>()
+    // Tune volume per model = DISTINCT VINs, not lines — a tune + Easy Lock
+    // on the same car (same PO/VIN) is one car, one tune (Chris 2026-07-21).
+    const tuneVinsByModel = new Map<string, Set<string>>()
     let tunesNoVin = 0
     for (const l of filtered) {
       if (l.bucket !== 'Tuning') continue
       if (l.Total <= 0) continue // credits/zero lines aren't tune volume
-      const po = (l.poNumber || '').trim()
+      const po = (l.poNumber || '').trim().toUpperCase()
       if (!po) { tunesNoVin++; continue }
       const m = vinToModel(po, vinRules)
       if (m.startsWith('Unmapped') || m === 'Unknown') { tunesNoVin++; continue }
-      tunesByModel.set(m, (tunesByModel.get(m) || 0) + 1)
+      if (!tuneVinsByModel.has(m)) tuneVinsByModel.set(m, new Set())
+      tuneVinsByModel.get(m)!.add(po)
     }
+    const tunesByModel = new Map<string, number>()
+    tuneVinsByModel.forEach((s, m) => tunesByModel.set(m, s.size))
 
     // Parts volume per model, two lenses:
     //   units — item quantities, split evenly across the item's ticked models
@@ -665,14 +672,15 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
     // Per-distributor overview (volume % across all mapped models).
     const distRows = allDists.map(name => {
       const dl = visibleLines.filter(l => l.CustomerName === name)
-      let tunes = 0, parts = 0, unmapped = 0
+      let parts = 0, unmapped = 0
+      const tuneVins = new Set<string>()
       const mappedInv = new Set<string>(), allInv = new Set<string>()
       for (const l of dl) {
         if (l.bucket === 'Tuning') {
           if (l.Total <= 0) continue
-          const po = (l.poNumber || '').trim()
+          const po = (l.poNumber || '').trim().toUpperCase()
           const m = po ? vinToModel(po, vinRules) : 'Unknown'
-          if (po && !m.startsWith('Unmapped') && m !== 'Unknown') tunes++
+          if (po && !m.startsWith('Unmapped') && m !== 'Unknown') tuneVins.add(po)
         } else if (l.bucket === 'Parts') {
           const raw = l.itemNumber ? (itemMap[l.itemNumber] || []) : []
           if (raw.includes(EXCLUDED_MODEL)) continue
@@ -687,6 +695,7 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
         }
       }
       if (ptMode === 'cars') { parts = mappedInv.size; unmapped = allInv.size - mappedInv.size }
+      const tunes = tuneVins.size
       return { name, tunes, parts, unmapped, pct: tunes > 0 ? (parts / tunes) * 100 : null }
     }).filter(d => d.tunes > 0 || d.parts > 0 || d.unmapped > 0).sort((a,b)=>(b.tunes)-(a.tunes))
 
@@ -715,9 +724,10 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
     }
     const distLabel = (name?: string) => name || (selectedDist==='ALL'?'All distributors':selectedDist)
     const drillTunes = (model: string|null, name?: string) => setDrill({
-      title: `Tuning jobs — ${model ?? 'no usable VIN'} — ${distLabel(name)}`,
-      subtitle: model ? 'VIN-matched tuning invoice lines' : 'Tuning lines whose PO/VIN didn’t match a model rule',
+      title: `Tuned cars — ${model ?? 'no usable VIN'} — ${distLabel(name)}`,
+      subtitle: model ? 'Grouped by VIN — a tune + Easy Lock on the same car shows as one group' : 'Tuning lines whose PO/VIN didn’t match a model rule',
       filter: l => distOk(l, name) && isTuneJob(l) && tuneModelOf(l)===model,
+      groupBy: model ? 'vin' : 'invoice',
     })
     const drillParts = (model: string|null, name?: string) => setDrill({
       title: model ? `Parts — ${model} — ${distLabel(name)}` : `Parts on unmapped items — ${distLabel(name)}`,
@@ -725,8 +735,10 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
       filter: l => { const p = partInfo(l); return distOk(l, name) && p.isPart && !p.excluded && (model ? p.models.includes(model) : p.models.length===0) },
     })
     const drillTunesAll = (name?: string) => setDrill({
-      title: `Tuning jobs — all models — ${distLabel(name)}`,
+      title: `Tuned cars — all models — ${distLabel(name)}`,
+      subtitle: 'Grouped by VIN — a tune + Easy Lock on the same car shows as one group',
       filter: l => distOk(l, name) && isTuneJob(l) && tuneModelOf(l)!==null,
+      groupBy: 'vin',
     })
     const drillPartsAll = (name?: string) => setDrill({
       title: `Parts on mapped items — ${distLabel(name)}`,
@@ -751,8 +763,8 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
       </div>
       <div style={{fontSize:12,color:T.text3}}>
         {ptMode==='cars'
-          ? 'Car check: one parts invoice = one car — a 6-part VDJ79 build counts once. 100% = a matching parts order for every tune. Tunes = VIN-matched tuning invoice lines; excluded items are left out entirely.'
-          : 'Raw volume: units of parts bought per tune (a full build reads well above 100%). Item quantities split evenly across each item’s ticked models; excluded items are left out entirely.'}
+          ? 'Car check: one parts invoice = one car — a 6-part VDJ79 build counts once. 100% = a matching parts order for every tuned car. Tunes = distinct VINs (a tune + Easy Lock on the same car counts once); excluded items are left out entirely.'
+          : 'Raw volume: units of parts bought per tuned car (a full build reads well above 100%). Tunes = distinct VINs; item quantities split evenly across each item’s ticked models; excluded items are left out entirely.'}
       </div>
 
       {!hasItemData && <div style={{background:'rgba(233,147,43,0.1)',border:'1px solid rgba(233,147,43,0.3)',borderRadius:10,padding:14,color:T.amber,fontSize:12}}>
@@ -763,7 +775,7 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
       <div style={{background:T.bg2,border:`1px solid ${T.border}`,borderRadius:10,overflowX:'auto'}}>
         <table style={{width:'100%',borderCollapse:'collapse'}}>
           <thead><tr style={{borderBottom:`1px solid ${T.border2}`}}>
-            <th style={thL}>Vehicle model</th><th style={th}>Tunes (jobs)</th><th style={th}>{ptMode==='cars'?'Cars with parts':'Parts (units)'}</th><th style={th}>{ptMode==='cars'?'Cars per tune':'Parts per tune'}</th>
+            <th style={thL}>Vehicle model</th><th style={th}>Tunes (cars)</th><th style={th}>{ptMode==='cars'?'Cars with parts':'Parts (units)'}</th><th style={th}>{ptMode==='cars'?'Cars per tune':'Parts per tune'}</th>
           </tr></thead>
           <tbody>
             {rows.map((r,i)=><tr key={i} style={{borderTop:`1px solid ${T.border}`}}>
@@ -792,7 +804,7 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
       {selectedDist==='ALL'&&<div style={{background:T.bg2,border:`1px solid ${T.border}`,borderRadius:10,overflowX:'auto'}}>
         <table style={{width:'100%',borderCollapse:'collapse'}}>
           <thead><tr style={{borderBottom:`1px solid ${T.border2}`}}>
-            <th style={thL}>Distributor</th><th style={th}>Tunes (jobs)</th><th style={th}>{ptMode==='cars'?'Cars with parts':'Parts (units, mapped)'}</th><th style={th}>{ptMode==='cars'?'Unmapped invoices':'Unmapped units'}</th><th style={th}>{ptMode==='cars'?'Cars per tune':'Parts per tune'}</th>
+            <th style={thL}>Distributor</th><th style={th}>Tunes (cars)</th><th style={th}>{ptMode==='cars'?'Cars with parts':'Parts (units, mapped)'}</th><th style={th}>{ptMode==='cars'?'Unmapped invoices':'Unmapped units'}</th><th style={th}>{ptMode==='cars'?'Cars per tune':'Parts per tune'}</th>
           </tr></thead>
           <tbody>{distRows.map((d,i)=><tr key={i} style={{borderTop:`1px solid ${T.border}`,cursor:'pointer'}}
             onClick={()=>setSelectedDist(d.name)}
@@ -1089,7 +1101,9 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
       const matching = (data?.lineItems || []).filter(drill.filter)
       const byInvoice = new Map<string, { invoiceNumber: string; customer: string; date: string; lines: LineItem[]; total: number }>()
       for (const l of matching) {
-        const k = l.invoiceNumber || '(no invoice #)'
+        const k = drill.groupBy === 'vin'
+          ? ((l.poNumber || '').trim() || l.invoiceNumber || '(no ref)')
+          : (l.invoiceNumber || '(no invoice #)')
         // For Sundry rows, customerBase IS the real name now (post-30 Apr).
         // For legacy cached payloads, sundryCustomer may be set instead.
         const displayCustomer = l.sundryCustomer || l.CustomerName
@@ -1100,6 +1114,14 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
         }
         grp.lines.push(l)
         grp.total += l.Total
+      }
+      // In VIN grouping the header shows the invoice number(s) the car's
+      // lines came from (tune + Easy Lock can sit on separate invoices).
+      if (drill.groupBy === 'vin') {
+        byInvoice.forEach(grp => {
+          const invNos = Array.from(new Set(grp.lines.map(l => l.invoiceNumber).filter(Boolean)))
+          grp.invoiceNumber = invNos.length ? invNos.join(' + ') : grp.invoiceNumber
+        })
       }
       const invoices = Array.from(byInvoice.values()).sort((a,b) => (b.date||'').localeCompare(a.date||''))
       const grandTotal = matching.reduce((s,l)=>s+l.Total, 0)
