@@ -678,10 +678,15 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
         pm.models.forEach((m, i) => partsByModel.set(m, (partsByModel.get(m) || 0) + units * w[i]))
       }
     } else {
-      // 1 invoice = 1 car, distributed across the union of its lines' ticked
-      // models by tune mix — so per-model cars SUM to the distinct-invoice
-      // total (no double counting).
-      const invModels = new Map<string, Set<string>>()
+      // Cars mode. A line SPECIFIC to one model pins a REAL car — the
+      // invoice counts as 1 full car for EACH model it has specific parts
+      // for (a distributor stock order with N80 + LC300 parts = one car of
+      // each; Penrith N80 read 2.6 instead of 7 when whole invoices were
+      // tune-mix diluted — Chris 2026-07-22). Multi-fit lines are absorbed
+      // into a specific build they overlap; an invoice with ONLY multi-fit
+      // parts adds one tune-mix-split fractional car across its union.
+      const invSpecific = new Map<string, Set<string>>()
+      const invAmbig = new Map<string, Set<string>>()
       const allPartInv = new Set<string>()
       for (const l of filtered) {
         if (l.bucket !== 'Parts') continue
@@ -690,16 +695,28 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
         const inv = l.invoiceNumber || `${l.CustomerName}|${l.Date}`
         allPartInv.add(inv)
         if (!pm.models.length) continue
-        if (!invModels.has(inv)) invModels.set(inv, new Set())
-        pm.models.forEach(m => invModels.get(inv)!.add(m))
+        const tgt = pm.models.length === 1 ? invSpecific : invAmbig
+        if (!tgt.has(inv)) tgt.set(inv, new Set())
+        pm.models.forEach(m => tgt.get(inv)!.add(m))
       }
-      invModels.forEach(set => {
-        const ms = Array.from(set)
-        const w = tuneWeights(ms)
-        ms.forEach((m, i) => partsByModel.set(m, (partsByModel.get(m) || 0) + w[i]))
+      const mappedInvs = new Set<string>([...Array.from(invSpecific.keys()), ...Array.from(invAmbig.keys())])
+      let mappedCars = 0
+      mappedInvs.forEach(inv => {
+        const spec = invSpecific.get(inv) || new Set<string>()
+        spec.forEach(m => { partsByModel.set(m, (partsByModel.get(m) || 0) + 1); mappedCars += 1 })
+        const amb = invAmbig.get(inv)
+        if (amb) {
+          const overlaps = Array.from(amb).some(m => spec.has(m))
+          const leftover = Array.from(amb).filter(m => !spec.has(m))
+          if (!overlaps && leftover.length) {
+            const w = tuneWeights(leftover)
+            leftover.forEach((m, i) => partsByModel.set(m, (partsByModel.get(m) || 0) + w[i]))
+            mappedCars += 1
+          }
+        }
       })
-      partsUnmapped = allPartInv.size - invModels.size
-      totPartsOverride = invModels.size
+      partsUnmapped = allPartInv.size - mappedInvs.size
+      totPartsOverride = Math.round(mappedCars * 10) / 10
     }
 
     const rows = models.map(m => {
@@ -715,7 +732,8 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
       const dl = visibleLines.filter(l => l.CustomerName === name)
       let parts = 0, unmapped = 0
       const tuneVins = new Set<string>()
-      const mappedInv = new Set<string>(), allInv = new Set<string>()
+      const invSpec = new Map<string, Set<string>>(), invAmb = new Map<string, Set<string>>()
+      const allInv = new Set<string>()
       for (const l of dl) {
         if (l.bucket === 'Tuning') {
           if (l.Total <= 0) continue
@@ -725,17 +743,32 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
         } else if (l.bucket === 'Parts') {
           const pm = partModelsOf(l)
           if (pm.excluded) continue
-          const isMapped = pm.models.length > 0
           if (ptMode === 'units') {
             const units = l.qty != null && l.qty > 0 ? l.qty : 1
-            if (isMapped) parts += units; else unmapped += units
+            if (pm.models.length) parts += units; else unmapped += units
           } else {
             const inv = l.invoiceNumber || `${l.CustomerName}|${l.Date}`
-            allInv.add(inv); if (isMapped) mappedInv.add(inv)
+            allInv.add(inv)
+            if (!pm.models.length) continue
+            const tgt = pm.models.length === 1 ? invSpec : invAmb
+            if (!tgt.has(inv)) tgt.set(inv, new Set())
+            pm.models.forEach(m => tgt.get(inv)!.add(m))
           }
         }
       }
-      if (ptMode === 'cars') { parts = mappedInv.size; unmapped = allInv.size - mappedInv.size }
+      if (ptMode === 'cars') {
+        // Same car semantics as the per-model table: 1 car per (invoice,
+        // specific model); ambiguous-only invoices count once.
+        const mappedInvs = new Set<string>([...Array.from(invSpec.keys()), ...Array.from(invAmb.keys())])
+        mappedInvs.forEach(inv => {
+          const spec = invSpec.get(inv) || new Set<string>()
+          parts += spec.size
+          const amb = invAmb.get(inv)
+          if (amb && spec.size === 0) parts += 1
+          else if (amb && !Array.from(amb).some(m => spec.has(m)) && Array.from(amb).some(m => !spec.has(m))) parts += 1
+        })
+        unmapped = allInv.size - mappedInvs.size
+      }
       const tunes = tuneVins.size
       return { name, tunes, parts, unmapped, pct: tunes > 0 ? (parts / tunes) * 100 : null }
     }).filter(d => d.tunes > 0 || d.parts > 0 || d.unmapped > 0).sort((a,b)=>(b.tunes)-(a.tunes))
@@ -798,7 +831,7 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
       </div>
       <div style={{fontSize:12,color:T.text3}}>
         {ptMode==='cars'
-          ? 'Car check: one parts invoice = one car — a 6-part VDJ79 build counts once. 100% = a matching parts order for every tuned car. Tunes = distinct VINs (a tune + Easy Lock on the same car counts once); multi-fit items (fan kits) split by the tune mix across their ticked models; excluded items are left out entirely.'
+          ? 'Car check: a model-specific part on an invoice = one car of that model (a stock order with N80 + LC300 parts counts one car of each; 6 parts for the same build still count once). Invoices with only multi-fit parts (fan kits) split one car by the tune mix. 100% = a matching parts order for every tuned car. Tunes = distinct VINs; excluded items are left out entirely.'
           : 'Raw volume: units of parts bought per tuned car (a full build reads well above 100%). Tunes = distinct VINs; multi-fit items (fan kits) split by the tune mix across their ticked models; excluded items are left out entirely.'}
       </div>
 
