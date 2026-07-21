@@ -10,6 +10,7 @@ import { T } from '../lib/ui/theme'
 
 const TABS: Array<{ id: string; label: string; href: string; perm: Permission }> = [
   { id: 'inventory', label: 'Inventory',      href: '/workshop/inventory',      perm: 'view:diary' },
+  { id: 'live-bins', label: 'Live Bins',      href: '/workshop/live-bins',      perm: 'view:diary' },
   { id: 'prepick',   label: 'Pre Pick',       href: '/workshop/prepick',        perm: 'view:diary' },
   { id: 'suppliers', label: 'Suppliers',       href: '/workshop/suppliers',      perm: 'view:diary' },
   { id: 'po',        label: 'Purchase Orders', href: '/workshop/purchase-orders', perm: 'view:diary' },
@@ -20,7 +21,7 @@ const TABS: Array<{ id: string; label: string; href: string; perm: Permission }>
   { id: 'transfer',  label: 'Stock Transfer', href: '/admin/b2b/stock-transfer', perm: 'edit:b2b_distributors' },
 ]
 
-export default function InventoryTabs({ active, role }: { active: 'inventory' | 'prepick' | 'suppliers' | 'po' | 'stocktake' | 'stocktake2' | 'transfer'; role: UserRole }) {
+export default function InventoryTabs({ active, role }: { active: 'inventory' | 'live-bins' | 'prepick' | 'suppliers' | 'po' | 'stocktake' | 'stocktake2' | 'transfer'; role: UserRole }) {
   const router = useRouter()
   const tabs = TABS.filter(t => roleHasPermission(role, t.perm))
   if (tabs.length <= 1) return null   // nothing to switch between → no strip

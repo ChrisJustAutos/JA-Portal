@@ -226,7 +226,8 @@
       "Bash(nslookup i3zm2iyh.justautosmechanical.com.au)",
       "Bash(nslookup i3zm2iyh.justautosmechanical.com.au 8.8.8.8)",
       "Bash(nslookup i3zm2iyh.justautosmechanical.com.au 1.1.1.1)",
-      "Bash(PATH=/c/Users/cjrus/AppData/Local/Programs/Python/Python312:__TRACKED_VAR__ python scripts/retrieve.py 'MYOB client id API key developer app credentials' --top 3)"
+      "Bash(PATH=/c/Users/cjrus/AppData/Local/Programs/Python/Python312:__TRACKED_VAR__ python scripts/retrieve.py 'MYOB client id API key developer app credentials' --top 3)",
+      "Bash(PATH=/c/Users/cjrus/AppData/Local/Programs/Python/Python312:__TRACKED_VAR__ python scripts/retrieve.py 'load cell HX711 ESP32 inventory weight tracking' --top 5)"
     ]
   }
 }
