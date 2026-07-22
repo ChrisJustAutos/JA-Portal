@@ -39,7 +39,7 @@ export default function LiveBinsPage({ user }: { user: any }) {
   }, [])
   useEffect(() => {
     load()
-    const t = setInterval(load, 10_000)
+    const t = setInterval(load, 4_000)
     return () => clearInterval(t)
   }, [load])
 

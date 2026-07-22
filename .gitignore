@@ -8,3 +8,4 @@ node_modules/
 
 # Claude Code internal files
 .claude/scheduled_tasks.lock
+hardware/ja-scale-node/secrets.h

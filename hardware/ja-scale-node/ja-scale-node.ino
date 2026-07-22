@@ -22,24 +22,34 @@
 #include "HX711.h"
 
 // ── CONFIG ──────────────────────────────────────────────────────────────
-const char* WIFI_SSID  = "CHANGE-ME";
-const char* WIFI_PASS  = "CHANGE-ME";
-const char* DEVICE_KEY = "PASTE-DEVICE-KEY-FROM-PORTAL";
+// WiFi + device key live in secrets.h (gitignored) — copy secrets.example.h
+// to secrets.h and fill in your values.
+#include "secrets.h"
 const char* INGEST_URL = "https://justautos.app/api/scales/ingest";
-const char* FIRMWARE   = "scale-node-1.0";
+const char* FIRMWARE   = "scale-node-1.1";
 
 // One entry per load cell / HX711 on this module: {DT pin, SCK pin}.
 // Channel numbers in the portal follow array order (0, 1, 2 …).
+#ifdef ARDUINO_NANO_ESP32
+// Arduino Nano ESP32 (USB 2341:0070): GPIO16/17 aren't on the headers —
+// wire HX711 DT→D2 and SCK→D3 (second cell: D4/D5).
+const int CELL_PINS[][2] = {
+  {D2, D3},        // channel 0
+  // {D4, D5},     // channel 1 — uncomment for a second cell
+};
+#else
+// Generic ESP32 WROOM dev board.
 const int CELL_PINS[][2] = {
   {16, 17},        // channel 0
   // {18, 19},     // channel 1 — uncomment for a second cell
 };
+#endif
 const int N_CELLS = sizeof(CELL_PINS) / sizeof(CELL_PINS[0]);
 
-const uint32_t SAMPLE_MS     = 2000;    // read cadence
+const uint32_t SAMPLE_MS     = 400;     // read cadence (HX711 delivers ~10 samples/s)
 const uint32_t REPORT_MS     = 30000;   // heartbeat post interval
-const long     DELTA_TRIGGER = 800;     // raw counts of change that post immediately
-const int      AVG_SAMPLES   = 10;      // HX711 averaging per read
+const long     DELTA_TRIGGER = 400;     // raw counts of change that post immediately (~1 g on a ~360 counts/g cell)
+const int      AVG_SAMPLES   = 8;       // HX711 averaging per read (~0.8 s per reading)
 
 // ── STATE ───────────────────────────────────────────────────────────────
 HX711 cells[8];
