@@ -777,6 +777,52 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
     // (Vehicle resolution — descModelOf / partModelsOf — lives at component
     // scope, shared with the Excel export's drill-down sheets.)
 
+    // Per-model tunes/parts stats for an arbitrary line subset — used by the
+    // per-distributor grid view. Mirrors the main table's semantics exactly:
+    // tunes = distinct VINs; parts = lens-dependent (weighted units, or
+    // specific-part-pins-a-car invoices), tune-mix weights from THIS subset.
+    const modelStatsFor=(lines:LineItem[]):{model:string;tunes:number;parts:number}[]=>{
+      const tSets=new Map<string,Set<string>>()
+      for(const l of lines){
+        if(!isTuneJob(l))continue
+        const m=tuneModelOf(l); if(!m)continue
+        if(!tSets.has(m))tSets.set(m,new Set())
+        tSets.get(m)!.add((l.poNumber||'').trim().toUpperCase())
+      }
+      const tCount=(m:string)=>tSets.get(m)?.size||0
+      const w=(ms:string[])=>{const c=ms.map(tCount);const s=c.reduce((a,b)=>a+b,0);return s>0?c.map(n=>n/s):ms.map(()=>1/ms.length)}
+      const parts=new Map<string,number>()
+      const addP=(m:string,v:number)=>parts.set(m,(parts.get(m)||0)+v)
+      if(ptMode==='units'){
+        for(const l of lines){
+          if(l.bucket!=='Parts')continue
+          const pm=partModelsOf(l); if(pm.excluded||!pm.models.length)continue
+          const units=l.qty!=null&&l.qty>0?l.qty:1
+          const ww=w(pm.models)
+          pm.models.forEach((m,i)=>addP(m,units*ww[i]))
+        }
+      }else{
+        const inv=new Map<string,{spec:Set<string>,amb:Set<string>}>()
+        for(const l of lines){
+          if(l.bucket!=='Parts')continue
+          const pm=partModelsOf(l); if(pm.excluded||!pm.models.length)continue
+          const k=l.invoiceNumber||`${l.CustomerName}|${l.Date}`
+          if(!inv.has(k))inv.set(k,{spec:new Set(),amb:new Set()})
+          const e=inv.get(k)!
+          if(pm.models.length===1)e.spec.add(pm.models[0])
+          else pm.models.forEach(m=>e.amb.add(m))
+        }
+        inv.forEach(e=>{
+          e.spec.forEach(m=>addP(m,1))
+          const overlaps=Array.from(e.amb).some(m=>e.spec.has(m))
+          const leftover=Array.from(e.amb).filter(m=>!e.spec.has(m))
+          if(!overlaps&&leftover.length){const ww=w(leftover);leftover.forEach((m,i)=>addP(m,leftover.length?ww[i]:0))}
+        })
+      }
+      const ms=Array.from(new Set([...Array.from(tSets.keys()),...Array.from(parts.keys())])).sort()
+      return ms.map(m=>({model:m,tunes:tCount(m),parts:Math.round((parts.get(m)||0)*10)/10}))
+    }
+
     // Multi-fit items (a fan kit suits VDJ70 AND LC200) split by the TUNE MIX
     // across their ticked models within the current selection — if 70% of the
     // tunes here are VDJ70s, 70% of the fan kits are assumed to be for VDJ70s
@@ -1001,12 +1047,52 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
           vehicle model, months across the X axis; measure toggles between
           tunes, parts and % coverage. */}
       <div style={{display:'flex',alignItems:'center',gap:10,flexWrap:'wrap'}}>
-        <div style={{fontSize:13,fontWeight:600,color:T.text2}}>By vehicle model{(chartKinds['pt-models']||'table')!=='table'&&(chartKinds['pt-models'])!=='pie'?' · per month':''}</div>
+        <div style={{fontSize:13,fontWeight:600,color:T.text2}}>By vehicle model{['line','bar'].includes(chartKinds['pt-models']||'table')?' · per month':''}</div>
         <div style={{flex:1}}/>
-        {(chartKinds['pt-models']||'table')!=='table'&&(chartKinds['pt-models'])!=='pie'&&kindPicker('pt-measure',['tunes','parts','%'])}
-        {kindPicker('pt-models',['table','line','bar','pie'])}
+        {(chartKinds['pt-models']||'table')==='grid'&&(()=>{
+          const months=monthKeysOf(ptLines)
+          const cur=chartKinds['pt-grid-month']||''
+          return <select value={cur} onChange={e=>setKind('pt-grid-month',e.target.value)}
+            style={{fontSize:11,padding:'4px 8px',borderRadius:5,border:`1px solid ${cur?T.blue:T.border}`,background:T.bg3,color:cur?T.blue:T.text2,fontFamily:'inherit'}}>
+            <option value="">All months</option>
+            {months.map(m=><option key={m} value={m}>{m}</option>)}
+          </select>
+        })()}
+        {['line','bar'].includes(chartKinds['pt-models']||'table')&&kindPicker('pt-measure',['tunes','parts','%'])}
+        {kindPicker('pt-models',['table','grid','line','bar','pie'])}
       </div>
-      {(chartKinds['pt-models']||'table')!=='table' && (()=>{
+      {(chartKinds['pt-models']||'table')==='grid'&&(()=>{
+        const gm=chartKinds['pt-grid-month']||''
+        const scope=(l:LineItem)=>(!gm||(l.Date||'').slice(0,7)===gm)
+        const names=selectedDist==='ALL'?distRows.map(d=>d.name):[selectedDist]
+        const partsLabel=ptMode==='cars'?'Cars with parts':'Parts (units)'
+        return <>
+          <div style={{display:'flex',gap:16,alignItems:'center',fontSize:11,color:T.text2}}>
+            <span style={{display:'inline-flex',alignItems:'center',gap:5}}><span style={{width:10,height:10,borderRadius:2,background:'#4f8ef7',display:'inline-block'}}/>Tunes (cars)</span>
+            <span style={{display:'inline-flex',alignItems:'center',gap:5}}><span style={{width:10,height:10,borderRadius:2,background:'#e9932b',display:'inline-block'}}/>{partsLabel}</span>
+            {gm&&<span style={{color:T.text3}}>· {gm} only</span>}
+          </div>
+          <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(440px,1fr))',gap:14}}>
+            {names.map(n=>{
+              const stats=modelStatsFor(ptLines.filter(l=>l.CustomerName===n&&scope(l))).filter(r=>r.tunes>0||r.parts>0)
+              if(!stats.length)return null
+              return <div key={n} style={{background:T.bg2,border:`1px solid ${T.border}`,borderRadius:10,padding:'10px 12px'}}>
+                <div style={{fontSize:13,fontWeight:600,color:T.text,marginBottom:6}}>{n}</div>
+                <ChartBox ckey={`grid-${n}-${gm}`} height={Math.max(140,stats.length*42+40)} config={{
+                  type:'bar',
+                  data:{labels:stats.map(s=>s.model),datasets:[
+                    {label:'Tunes (cars)',data:stats.map(s=>s.tunes),backgroundColor:'#4f8ef7',borderRadius:3},
+                    {label:partsLabel,data:stats.map(s=>s.parts),backgroundColor:'#e9932b',borderRadius:3},
+                  ]},
+                  options:{...baseOpts,indexAxis:'y' as const,plugins:{...baseOpts.plugins,legend:{display:false}},
+                    scales:{x:{grid:{color:'rgba(var(--t-ink),0.05)'},ticks:{color:T.text3,font:{size:10},precision:0}},y:{grid:{display:false},ticks:{color:T.text2,font:{size:10}}}}},
+                }}/>
+              </div>
+            })}
+          </div>
+        </>
+      })()}
+      {!['table','grid'].includes(chartKinds['pt-models']||'table') && (()=>{
         const kind=chartKinds['pt-models']
         if(kind==='pie'){
           const partsLabel=ptMode==='cars'?'Cars with parts':'Parts (units)'
