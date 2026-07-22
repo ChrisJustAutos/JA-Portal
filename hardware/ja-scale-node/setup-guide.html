@@ -42,13 +42,13 @@
       <h1>JA Scale Node — Wiring &amp; Setup</h1>
       <div class="sub">Live bin inventory · load cell → HX711 → ESP32 → JA Portal</div>
     </div>
-    <div class="tag">Just Autos Mechanical<br>Rev 1.0 · July 2026</div>
+    <div class="tag">Just Autos Mechanical<br>Rev 1.1 · July 2026</div>
   </header>
 
   <h2><span class="n">1</span> What you need</h2>
   <table>
     <tr><th>Part</th><th>Qty</th><th>Notes</th></tr>
-    <tr><td>ESP32 dev board</td><td>1</td><td>Any WROOM-32 board (same as the HiLux controller)</td></tr>
+    <tr><td>ESP32 board</td><td>1</td><td>Arduino Nano ESP32 (current build) or any WROOM-32 dev board</td></tr>
     <tr><td>HX711 amplifier board</td><td>1 per cell</td><td>Green breakout, 24-bit ADC</td></tr>
     <tr><td>Load cell</td><td>1 per bin</td><td>Rated above max bin weight (e.g. 20–50 kg bar cell)</td></tr>
     <tr><td>5V USB supply</td><td>1</td><td>Phone charger is fine — powered permanently</td></tr>
@@ -88,8 +88,8 @@
     <g font-size="10" font-weight="700" fill="#0d1b3d">
       <circle cx="608" cy="100" r="4" fill="#c0392b"/><text x="620" y="104">3V3</text>
       <circle cx="608" cy="130" r="4" fill="#222"/><text x="620" y="134">GND</text>
-      <circle cx="608" cy="160" r="4" fill="#1f5eff"/><text x="620" y="164">GPIO 16</text>
-      <circle cx="608" cy="190" r="4" fill="#e9932b"/><text x="620" y="194">GPIO 17</text>
+      <circle cx="608" cy="160" r="4" fill="#1f5eff"/><text x="620" y="164">D2 (GPIO16)</text>
+      <circle cx="608" cy="190" r="4" fill="#e9932b"/><text x="620" y="194">D3 (GPIO17)</text>
     </g>
     <text x="665" y="218" text-anchor="middle" font-size="9" fill="#5b6271">USB 5V power</text>
 
@@ -121,15 +121,15 @@
       <text x="530" y="183" text-anchor="middle" fill="#e9932b">clock</text>
     </g>
 
-    <text x="380" y="278" text-anchor="middle" font-size="10" fill="#5b6271">Second cell on the same module? Second HX711 → DT GPIO 18 / SCK GPIO 19 (uncomment in the sketch — it becomes channel 1).</text>
+    <text x="380" y="278" text-anchor="middle" font-size="10" fill="#5b6271">Second cell on the same module? Second HX711 → DT D4 / SCK D5 on the Nano ESP32 (GPIO 18/19 on a WROOM board) — uncomment in the sketch, it becomes channel 1.</text>
   </svg>
 
   <table>
     <tr><th>Load cell wire</th><th>HX711 pad</th><th></th><th>HX711 pin</th><th>ESP32 pin</th></tr>
     <tr><td><b style="color:#c0392b">Red</b></td><td>E+</td><td rowspan="4" style="text-align:center;color:#9097a6">→</td><td>VCC</td><td>3V3 <i>(not 5V — keeps the data pins 3.3 V safe)</i></td></tr>
     <tr><td><b>Black</b></td><td>E−</td><td>GND</td><td>GND</td></tr>
-    <tr><td><b style="color:#777">White</b></td><td>A−</td><td>DT</td><td>GPIO 16</td></tr>
-    <tr><td><b style="color:#27ae60">Green</b></td><td>A+</td><td>SCK</td><td>GPIO 17</td></tr>
+    <tr><td><b style="color:#777">White</b></td><td>A−</td><td>DT</td><td><b>D2</b> (Nano ESP32) / GPIO 16 (WROOM dev board)</td></tr>
+    <tr><td><b style="color:#27ae60">Green</b></td><td>A+</td><td>SCK</td><td><b>D3</b> (Nano ESP32) / GPIO 17 (WROOM dev board)</td></tr>
   </table>
   <div class="callout warn"><b>Reads negative when you add weight?</b> Swap the white and green wires (A+ / A−) — or just leave it: calibration handles the sign automatically.</div>
 
@@ -144,7 +144,7 @@
       <h1>Software setup &amp; calibration</h1>
       <div class="sub">Portal: Workshop → Inventory → Live Bins</div>
     </div>
-    <div class="tag">Just Autos Mechanical<br>Rev 1.0 · July 2026</div>
+    <div class="tag">Just Autos Mechanical<br>Rev 1.1 · July 2026</div>
   </header>
 
   <h2><span class="n">3</span> Register the module in the portal</h2>
@@ -159,7 +159,7 @@
     <li>Open <code>hardware/ja-scale-node/ja-scale-node.ino</code> in Arduino IDE.</li>
     <li>Library Manager → install <b>“HX711” by Bogdan Necula (bogde)</b>.</li>
     <li>Fill in the three constants at the top: <code>WIFI_SSID</code>, <code>WIFI_PASS</code>, <code>DEVICE_KEY</code>.</li>
-    <li>Board: <b>ESP32 Dev Module</b> → upload.</li>
+    <li>Board: <b>Arduino Nano ESP32</b> (install “Arduino ESP32 Boards” core + accept driver prompts). If upload fails with a DFU/LIBUSB error: double-tap RST (LED fades), reselect the port, upload again.</li>
     <li>Open Serial Monitor (115200) — you should see <code>[post] HTTP 200</code> lines; the portal card turns <b style="color:#27ae60">green</b> within ~30 s.</li>
   </ol>
 
