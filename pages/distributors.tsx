@@ -209,8 +209,37 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
   function selectFY(y:number){setFyYear(y);setIsCustomRange(false);setCustomStart(`${y-1}-07-01`);setCustomEnd(`${y}-06-30`);setDateLoading(true);setNextLoadIsRefresh(true);setActiveDateParams(`startDate=${y-1}-07-01&endDate=${y}-06-30`);setReloadCounter(c=>c+1)}
   function applyCustomRange(){if(customStart&&customEnd){setIsCustomRange(true);setDateLoading(true);setNextLoadIsRefresh(true);setActiveDateParams(`startDate=${customStart}&endDate=${customEnd}`);setReloadCounter(c=>c+1)}}
 
+  // Session cache: the normalised page bundle (line data + grouping + vin
+  // rules + item map) keyed by range+GST pref. Revisits render instantly
+  // from the cache, then a background fetch refreshes it (SWR-style).
+  const sessKey=`dist-bundle:${activeDateParams}:${prefs.gst_display}`
+  const hydrateBundle=(b:any)=>{
+    setGrouping(b.grouping)
+    setVinRules(b.vinRules||[])
+    setItemMap(b.itemMap||{})
+    setDescRules(b.descRules||[])
+    setPartCats(b.partCats||[])
+    setData(b.data)
+    setError('');setLoading(false);setDateLoading(false)
+    if(b.at)setLastRefresh(new Date(b.at))
+  }
+
   const load=useCallback(async(isRefresh=false)=>{
     if(isRefresh)setRefreshing(true)
+    // Serve from session cache first (instant), then revalidate below.
+    let servedFromCache=false
+    if(!isRefresh){
+      try{
+        const raw=sessionStorage.getItem(sessKey)
+        if(raw){
+          const b=JSON.parse(raw)
+          hydrateBundle(b)
+          servedFromCache=true
+          // Fresh enough (<5 min): skip the network round-trip entirely.
+          if(b.at&&Date.now()-b.at<5*60_000){if(isRefresh)setRefreshing(false);return}
+        }
+      }catch{}
+    }
     try{
       const rp=isRefresh?'&refresh=true':''
       const [distRes, groupRes, vinRes, mapRes] = await Promise.all([
@@ -239,13 +268,17 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
       }
       setVinRules(vRules)
 
+      let mMap: Record<string,string[]> = {}
+      let mDescRules: {keyword:string;model:string}[] = []
+      let mPartCats: {name:string;account_codes:string[]}[] = []
       if (mapRes.ok) {
         const mData = await mapRes.json()
-        const m: Record<string,string[]> = {}
-        for (const it of (mData.items || [])) m[it.item_number] = it.models || []
-        setItemMap(m)
-        setDescRules(mData.descRules || [])
-        setPartCats(mData.partCategories || [])
+        for (const it of (mData.items || [])) mMap[it.item_number] = it.models || []
+        mDescRules = mData.descRules || []
+        mPartCats = mData.partCategories || []
+        setItemMap(mMap)
+        setDescRules(mDescRules)
+        setPartCats(mPartCats)
       }
 
       const gstPref = prefs.gst_display
@@ -288,7 +321,20 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
       }
 
       setData(normalised);setError('');setLastRefresh(new Date());setDateLoading(false)
-    }catch(e:any){setError(e.message);setDateLoading(false)}
+      // Persist the whole render bundle for instant revisits (best effort —
+      // a full-FY payload can exceed the sessionStorage quota, that's fine).
+      try{
+        sessionStorage.setItem(sessKey, JSON.stringify({
+          at: Date.now(), data: normalised, grouping: g, vinRules: vRules,
+          itemMap: mMap, descRules: mDescRules, partCats: mPartCats,
+        }))
+      }catch{}
+    }catch(e:any){
+      // If we already rendered from the session cache, keep it — a failed
+      // background revalidate shouldn't blank a working page.
+      if(!servedFromCache){setError(e.message)}
+      setDateLoading(false)
+    }
     setLoading(false);setDateLoading(false);if(isRefresh)setRefreshing(false)
   },[router,activeDateParams,prefs.gst_display,reloadCounter])
   useEffect(()=>{

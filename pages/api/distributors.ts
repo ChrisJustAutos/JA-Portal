@@ -362,6 +362,9 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
       if (!forceRefresh) {
         const cached = await readCache(sb, start, end)
         if (cached && cached.payload) {
+          // Let the browser reuse the multi-MB payload for a few minutes
+          // instead of re-downloading it on every page visit.
+          res.setHeader('Cache-Control', 'private, max-age=300')
           return res.status(200).json({
             ...cached.payload,
             fromCache: true,
