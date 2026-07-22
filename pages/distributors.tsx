@@ -440,18 +440,43 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
     return()=>{if(barInst.current)barInst.current.destroy()}
   },[filtered,tab,loading,vinRules,chartKinds])
 
+  // Monthly trend: months present in the CURRENT selection's lines.
+  const monthKeysOf=(lines:LineItem[])=>Array.from(new Set(lines.map(l=>(l.Date||'').slice(0,7)).filter(Boolean))).sort()
+  const monthlySeries=(lines:LineItem[],months:string[])=>{
+    const m=new Map<string,number>()
+    lines.forEach(l=>{const ym=(l.Date||'').slice(0,7);if(ym)m.set(ym,(m.get(ym)||0)+l.Total)})
+    return months.map(k=>Math.round(m.get(k)||0))
+  }
+
   useEffect(()=>{
-    if(tab!=='national-pm'||!lineRef.current||!(window as any).Chart||!trendLabels.length)return
+    if(tab!=='national-pm'||!lineRef.current||!(window as any).Chart)return
     if(lineInst.current)lineInst.current.destroy()
-    const vals=trendLabels.map(l=>Math.round(monthlyTotals[l]||0))
     const kind=chartKinds['trend']||'bar'
-    const common={responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false},tooltip:{callbacks:{label:(ctx:any)=>`$${Number(ctx.raw).toLocaleString()}`}}},scales:{x:{grid:{color:'rgba(var(--t-ink),0.05)'},ticks:{color:T.text3}},y:{grid:{color:'rgba(var(--t-ink),0.05)'},ticks:{color:T.text3,callback:(v:any)=>'$'+Math.round(v/1000)+'k'}}}}
-    lineInst.current=new(window as any).Chart(lineRef.current,
-      kind==='line'
+    const split=selectedDist==='ALL'&&(chartKinds['trend-mode']||'total')==='split'
+    const common={responsive:true,maintainAspectRatio:false,plugins:{legend:{display:split,labels:{color:T.text2,font:{size:11}}},tooltip:{callbacks:{label:(ctx:any)=>`${ctx.dataset.label?ctx.dataset.label+': ':''}$${Number(ctx.raw).toLocaleString()}`}}},scales:{x:{grid:{color:'rgba(var(--t-ink),0.05)'},ticks:{color:T.text3}},y:{grid:{color:'rgba(var(--t-ink),0.05)'},ticks:{color:T.text3,callback:(v:any)=>'$'+Math.round(v/1000)+'k'}}}}
+    let cfg:any
+    if(split){
+      // One line per distributor (top 8 by total keeps it readable).
+      const months=monthKeysOf(visibleLines)
+      const top=[...distSummaries].sort((a,b)=>b.total-a.total).slice(0,8)
+      cfg={type:'line',data:{labels:months,datasets:top.map((d,i)=>({label:d.name,data:monthlySeries(visibleLines.filter(l=>l.CustomerName===d.name),months),borderColor:CHART_COLORS[i%CHART_COLORS.length],backgroundColor:'transparent',tension:0.3,pointRadius:3,pointBackgroundColor:CHART_COLORS[i%CHART_COLORS.length]}))},options:common}
+    }else if(selectedDist!=='ALL'){
+      // Individual distributor's own monthly revenue (all their lines).
+      const months=monthKeysOf(filtered)
+      const vals=monthlySeries(filtered,months)
+      cfg=kind==='line'
+        ? {type:'line',data:{labels:months,datasets:[{label:selectedDist,data:vals,borderColor:'#4f8ef7',backgroundColor:'rgba(79,142,247,0.15)',fill:true,tension:0.3,pointRadius:4,pointBackgroundColor:'#4f8ef7'}]},options:common}
+        : {type:'bar',data:{labels:months,datasets:[{label:selectedDist,data:vals,backgroundColor:'#4f8ef7',borderRadius:4,borderSkipped:false}]},options:common}
+    }else{
+      if(!trendLabels.length)return
+      const vals=trendLabels.map(l=>Math.round(monthlyTotals[l]||0))
+      cfg=kind==='line'
         ? {type:'line',data:{labels:trendLabels,datasets:[{label:'Revenue ex GST',data:vals,borderColor:'#4f8ef7',backgroundColor:'rgba(79,142,247,0.15)',fill:true,tension:0.3,pointRadius:4,pointBackgroundColor:'#4f8ef7'}]},options:common}
-        : {type:'bar',data:{labels:trendLabels,datasets:[{label:'Revenue ex GST',data:vals,backgroundColor:'#4f8ef7',borderRadius:4,borderSkipped:false}]},options:common})
+        : {type:'bar',data:{labels:trendLabels,datasets:[{label:'Revenue ex GST',data:vals,backgroundColor:'#4f8ef7',borderRadius:4,borderSkipped:false}]},options:common}
+    }
+    lineInst.current=new(window as any).Chart(lineRef.current,cfg)
     return()=>{if(lineInst.current)lineInst.current.destroy()}
-  },[tab,trendLabels,monthlyTotals,chartKinds])
+  },[tab,trendLabels,monthlyTotals,chartKinds,selectedDist,filtered,visibleLines,distSummaries])
 
   useEffect(()=>{
     if(tab!=='national-total'||!hBarRef.current||!(window as any).Chart||!distSummaries.length)return
@@ -1244,22 +1269,31 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
     </div>
     }
 
-    if(tab==='national-pm')return <div style={{padding:24,overflowY:'auto'}}>
-      <div style={{display:'flex',alignItems:'center',gap:12,marginBottom:20}}>
-        <div style={{fontSize:16,fontWeight:500,color:T.text}}>National Distributor Revenue ex GST by Month</div>
+    if(tab==='national-pm'){
+      const split=selectedDist==='ALL'&&(chartKinds['trend-mode']||'total')==='split'
+      const indMonths=selectedDist!=='ALL'?monthKeysOf(filtered):[]
+      const indVals=selectedDist!=='ALL'?monthlySeries(filtered,indMonths):[]
+      return <div style={{padding:24,overflowY:'auto'}}>
+      <div style={{display:'flex',alignItems:'center',gap:12,marginBottom:20,flexWrap:'wrap'}}>
+        <div style={{fontSize:16,fontWeight:500,color:T.text}}>
+          {selectedDist==='ALL'?'National Distributor Revenue ex GST by Month':`${selectedDist} — Revenue ex GST by Month`}
+        </div>
         <div style={{flex:1}}/>
-        {kindPicker('trend',['bar','line'])}
+        {selectedDist==='ALL'&&kindPicker('trend-mode',['total','split'])}
+        {!split&&kindPicker('trend',['bar','line'])}
       </div>
       <div style={{background:T.bg2,border:`1px solid ${T.border}`,borderRadius:10,padding:20}}>
         <div style={{position:'relative',height:380}}><canvas ref={lineRef} id="line-chart"/></div>
       </div>
+      {split&&<div style={{fontSize:11,color:T.text3,marginTop:8}}>Top 8 distributors by total revenue — pick a distributor above for anyone outside the top 8.</div>}
       <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:10,marginTop:16}}>
-        {trendLabels.map(l=><div key={l} style={{background:T.bg2,border:`1px solid ${T.border}`,borderRadius:8,padding:'10px 14px'}}>
+        {(selectedDist==='ALL'?trendLabels:indMonths).map((l,i)=><div key={l} style={{background:T.bg2,border:`1px solid ${T.border}`,borderRadius:8,padding:'10px 14px'}}>
           <div style={{fontSize:11,color:T.text3,marginBottom:4}}>{l}</div>
-          <div style={{fontSize:18,fontFamily:'monospace',fontWeight:500,color:T.blue}}>{fmtFull(monthlyTotals[l]||0)}</div>
+          <div style={{fontSize:18,fontFamily:'monospace',fontWeight:500,color:T.blue}}>{fmtFull(selectedDist==='ALL'?(monthlyTotals[l]||0):indVals[i]||0)}</div>
         </div>)}
       </div>
     </div>
+    }
 
     if(tab==='national-total')return <div style={{padding:24,overflowY:'auto'}}>
       <div style={{display:'flex',alignItems:'center',gap:12,marginBottom:20}}>
@@ -1275,7 +1309,7 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
     return null
   }
 
-  const showSelector=tab==='distributor-sales'||tab==='detailed-sales'||tab==='parts-tunes'
+  const showSelector=tab==='distributor-sales'||tab==='detailed-sales'||tab==='parts-tunes'||tab==='national-pm'
 
   // ─── Export (PDF / Word / Excel) of the CURRENT tab ─────────────────────
   // Serializes the rendered tab content: charts become PNG snapshots,
