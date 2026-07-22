@@ -469,6 +469,24 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
 
   const tabs:[Tab,string][]=[['summary','Summary'],['distributor-sales','Distributor Sales'],['detailed-sales','Detailed Sales'],['parts-tunes','Parts : Tunes'],['national-pm','National P/M'],['national-total','National Total']]
 
+  // Generic Chart.js box for table-section chart views — owns its canvas and
+  // instance, rebuilds when the config meaningfully changes.
+  function ChartBox({ckey,height=340,config}:{ckey:string;height?:number;config:any}){
+    const ref=useRef<HTMLCanvasElement>(null)
+    const inst=useRef<any>(null)
+    const sig=JSON.stringify({t:config.type,l:config.data?.labels,d:config.data?.datasets?.map((x:any)=>x.data)})
+    useEffect(()=>{
+      if(!ref.current||!(window as any).Chart)return
+      if(inst.current)inst.current.destroy()
+      inst.current=new (window as any).Chart(ref.current,config)
+      return ()=>{if(inst.current){inst.current.destroy();inst.current=null}}
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    },[sig,ckey])
+    return <div style={{position:'relative',height,background:T.bg2,border:`1px solid ${T.border}`,borderRadius:10,padding:12}}><canvas ref={ref}/></div>
+  }
+  const axisOpts={x:{grid:{color:'rgba(var(--t-ink),0.05)'},ticks:{color:T.text3,font:{size:11}}},y:{grid:{color:'rgba(var(--t-ink),0.05)'},ticks:{color:T.text3,font:{size:11}}}}
+  const baseOpts={responsive:true,maintainAspectRatio:false,plugins:{legend:{labels:{color:T.text2,font:{size:11}}}}}
+
   // Chart-style chips (bar / line / pie …) — choice persists per user.
   function kindPicker(chart:string,kinds:string[]){
     const current=chartKinds[chart]||kinds[0]
@@ -551,6 +569,26 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
   function renderGroupedSummary() {
     const allDimensions = grouping ? Array.from(new Set(grouping.groups.map(g=>g.dimension))) : ['type']
 
+    const summaryKind = chartKinds['summary'] || 'table'
+    const summaryChart = summaryKind !== 'table' && (() => {
+      const sorted = [...distSummaries].sort((a, b) => b.total - a.total)
+      if (summaryKind === 'pie') return <ChartBox ckey="summary" height={420} config={{
+        type: 'pie',
+        data: { labels: sorted.map(d => d.name), datasets: [{ data: sorted.map(d => Math.round(d.total)), backgroundColor: CHART_COLORS, borderWidth: 0 }] },
+        options: { ...baseOpts, plugins: { ...baseOpts.plugins, legend: { position: 'right', labels: { color: T.text2, font: { size: 11 } } }, tooltip: { callbacks: { label: (ctx: any) => `$${Number(ctx.raw).toLocaleString()}` } } } },
+      }}/>
+      // Stacked horizontal bar: tuning / parts / oil per distributor.
+      return <ChartBox ckey="summary" height={Math.max(300, sorted.length * 30 + 80)} config={{
+        type: 'bar',
+        data: { labels: sorted.map(d => d.name), datasets: [
+          { label: 'Tuning', data: sorted.map(d => Math.round(d.tuning)), backgroundColor: '#34c77b', borderRadius: 2 },
+          { label: 'Parts',  data: sorted.map(d => Math.round(d.parts)),  backgroundColor: '#4f8ef7', borderRadius: 2 },
+          { label: 'Oil',    data: sorted.map(d => Math.round(d.oil)),    backgroundColor: '#e9932b', borderRadius: 2 },
+        ]},
+        options: { ...baseOpts, indexAxis: 'y' as const, plugins: { ...baseOpts.plugins, tooltip: { callbacks: { label: (ctx: any) => `${ctx.dataset.label}: $${Number(ctx.raw).toLocaleString()}` } } }, scales: { x: { stacked: true, grid: { color: 'rgba(var(--t-ink),0.05)' }, ticks: { color: T.text3, callback: (v: any) => '$' + Math.round(v / 1000) + 'k' } }, y: { stacked: true, grid: { display: false }, ticks: { color: T.text2, font: { size: 11 } } } } },
+      }}/>
+    })()
+
     return <div style={{padding:24,overflowY:'auto',display:'flex',flexDirection:'column',gap:16}}>
       <style>{`
         tr.dist-row { transition: background-color 0.1s; }
@@ -565,10 +603,13 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
             {d}
           </button>
         ))}
+        {kindPicker('summary',['table','bar','pie'])}
         <div style={{flex:1}}/>
       </div>
 
-      {dimensionGroups.map(g => {
+      {summaryChart}
+
+      {summaryKind === 'table' && dimensionGroups.map(g => {
         const rawRows = summariesByGroup[g.name] || []
         if (rawRows.length === 0) return null
         const rows = applySummarySort(rawRows)
@@ -604,7 +645,7 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
         </div>
       })}
 
-      {unclassifiedSummaries.length > 0 && (() => {
+      {summaryKind === 'table' && unclassifiedSummaries.length > 0 && (() => {
         const rows = applySummarySort(unclassifiedSummaries)
         return (
           <div style={{background:T.bg2,border:`1px solid ${T.amber}40`,borderRadius:10,overflowX:'auto'}}>
@@ -632,7 +673,7 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
         )
       })()}
 
-      {sundrySummaries.length > 0 && (() => {
+      {summaryKind === 'table' && sundrySummaries.length > 0 && (() => {
         const rows = applySummarySort(sundrySummaries)
         const sundryColor = groupColorFor('type', 'Sundry') || T.amber
         const sundryTuning = sundrySummaries.reduce((s,r)=>s+r.tuning,0)
@@ -928,8 +969,27 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
         This date range was cached before item numbers were captured — hit ↻ Refresh (top right) to re-pull it with item data.
       </div>}
 
-      {/* Per-model table for the current selection */}
-      <div style={{background:T.bg2,border:`1px solid ${T.border}`,borderRadius:10,overflowX:'auto'}}>
+      {/* Per-model section — table or chart, your pick */}
+      <div style={{display:'flex',alignItems:'center',gap:10}}>
+        <div style={{fontSize:13,fontWeight:600,color:T.text2}}>By vehicle model</div>
+        <div style={{flex:1}}/>
+        {kindPicker('pt-models',['table','bar','line','pie'])}
+      </div>
+      {(chartKinds['pt-models']||'table')!=='table' && (()=>{
+        const kind=chartKinds['pt-models']
+        const labels=rows.map(r=>r.model)
+        const partsLabel=ptMode==='cars'?'Cars with parts':'Parts (units)'
+        if(kind==='pie')return <ChartBox ckey="pt-models" config={{type:'pie',data:{labels,datasets:[{data:rows.map(r=>Math.round(r.parts*10)/10),backgroundColor:CHART_COLORS,borderWidth:0}]},options:{...baseOpts,plugins:{...baseOpts.plugins,legend:{position:'right',labels:{color:T.text2,font:{size:11}}},title:{display:true,text:partsLabel,color:T.text3}}}}}/>
+        return <ChartBox ckey="pt-models" config={{
+          type:kind,
+          data:{labels,datasets:[
+            {label:'Tunes (cars)',data:rows.map(r=>r.tunes),backgroundColor:kind==='line'?'rgba(79,142,247,0.15)':'#4f8ef7',borderColor:'#4f8ef7',borderRadius:4,fill:kind==='line',tension:0.3,pointBackgroundColor:'#4f8ef7'},
+            {label:partsLabel,data:rows.map(r=>Math.round(r.parts*10)/10),backgroundColor:kind==='line'?'rgba(52,199,123,0.15)':'#34c77b',borderColor:'#34c77b',borderRadius:4,fill:kind==='line',tension:0.3,pointBackgroundColor:'#34c77b'},
+          ]},
+          options:{...baseOpts,scales:axisOpts},
+        }}/>
+      })()}
+      {(chartKinds['pt-models']||'table')==='table' && <div style={{background:T.bg2,border:`1px solid ${T.border}`,borderRadius:10,overflowX:'auto'}}>
         <table style={{width:'100%',borderCollapse:'collapse'}}>
           <thead><tr style={{borderBottom:`1px solid ${T.border2}`}}>
             <th style={thL}>Vehicle model</th><th style={th}>Tunes (cars)</th><th style={th}>{ptMode==='cars'?'Cars with parts':'Parts (units)'}</th><th style={th}>{ptMode==='cars'?'Cars per tune':'Parts per tune'}</th>
@@ -955,7 +1015,7 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
             </tr>
           </tbody>
         </table>
-      </div>
+      </div>}
 
       {/* Per-category units matrix (units lens only) */}
       {ptMode==='units'&&catMatrix.length>0&&(()=>{
@@ -995,8 +1055,21 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
         </div>
       })()}
 
-      {/* Every-distributor overview */}
-      {selectedDist==='ALL'&&<div style={{background:T.bg2,border:`1px solid ${T.border}`,borderRadius:10,overflowX:'auto'}}>
+      {/* Every-distributor overview — table or chart */}
+      {selectedDist==='ALL'&&<div style={{display:'flex',alignItems:'center',gap:10}}>
+        <div style={{fontSize:13,fontWeight:600,color:T.text2}}>By distributor</div>
+        <div style={{flex:1}}/>
+        {kindPicker('pt-overview',['table','bar'])}
+      </div>}
+      {selectedDist==='ALL'&&(chartKinds['pt-overview']||'table')==='bar'&&
+        <ChartBox ckey="pt-overview" height={Math.max(280,distRows.length*30+80)} config={{
+          type:'bar',
+          data:{labels:distRows.map(d=>d.name),datasets:[{label:ptShow==='ratio'?(ptMode==='cars'?'Cars per tune':'Parts per tune'):'% parts coverage',
+            data:distRows.map(d=>d.pct==null?0:ptShow==='ratio'?Math.round(d.pct)/100:Math.round(d.pct)),
+            backgroundColor:distRows.map(d=>d.pct==null?'#8b90a0':d.pct<30?'#f04e4e':d.pct<=50?'#e9932b':'#34c77b'),borderRadius:3}]},
+          options:{...baseOpts,indexAxis:'y' as const,plugins:{...baseOpts.plugins,legend:{display:false}},scales:{x:{grid:{color:'rgba(var(--t-ink),0.05)'},ticks:{color:T.text3,callback:(v:any)=>ptShow==='ratio'?v:v+'%'}},y:{grid:{display:false},ticks:{color:T.text2,font:{size:11}}}}},
+        }}/>}
+      {selectedDist==='ALL'&&(chartKinds['pt-overview']||'table')==='table'&&<div style={{background:T.bg2,border:`1px solid ${T.border}`,borderRadius:10,overflowX:'auto'}}>
         <table style={{width:'100%',borderCollapse:'collapse'}}>
           <thead><tr style={{borderBottom:`1px solid ${T.border2}`}}>
             <th style={thL}>Distributor</th><th style={th}>Tunes (cars)</th><th style={th}>{ptMode==='cars'?'Cars with parts':'Parts (units, mapped)'}</th><th style={th}>{ptMode==='cars'?'Unmapped invoices':'Unmapped units'}</th><th style={th}>{ptMode==='cars'?'Cars per tune':'Parts per tune'}</th>
@@ -1125,9 +1198,20 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
           return 0
         })
       })()
+      const detKind = chartKinds['detailed'] || 'table'
+      const topDetailed = [...detailedRows].sort((a,b)=>b[1].total-a[1].total).slice(0,20)
       return <div style={{padding:24,overflowY:'auto'}}>
-      <div style={{fontSize:18,fontWeight:500,color:T.text,marginBottom:16}}>{selectedDist==='ALL'?'All':selectedDist}</div>
-      <div style={{background:T.bg2,border:`1px solid ${T.border}`,borderRadius:10,overflowX:'auto'}}>
+      <div style={{display:'flex',alignItems:'center',gap:12,marginBottom:16}}>
+        <div style={{fontSize:18,fontWeight:500,color:T.text}}>{selectedDist==='ALL'?'All':selectedDist}</div>
+        <div style={{flex:1}}/>
+        {kindPicker('detailed',['table','bar','pie'])}
+      </div>
+      {detKind!=='table' && <ChartBox ckey="detailed" height={detKind==='pie'?440:Math.max(300,topDetailed.length*28+80)} config={
+        detKind==='pie'
+          ? {type:'pie',data:{labels:topDetailed.map(([d])=>String(d).slice(0,40)),datasets:[{data:topDetailed.map(([,v])=>Math.round(v.total)),backgroundColor:CHART_COLORS,borderWidth:0}]},options:{...baseOpts,plugins:{...baseOpts.plugins,legend:{position:'right',labels:{color:T.text2,font:{size:10}}},title:{display:true,text:'Top 20 lines by revenue',color:T.text3},tooltip:{callbacks:{label:(ctx:any)=>`$${Number(ctx.raw).toLocaleString()}`}}}}}
+          : {type:'bar',data:{labels:topDetailed.map(([d])=>String(d).slice(0,50)),datasets:[{label:'Revenue ex GST',data:topDetailed.map(([,v])=>Math.round(v.total)),backgroundColor:'#4f8ef7',borderRadius:3}]},options:{...baseOpts,indexAxis:'y' as const,plugins:{...baseOpts.plugins,legend:{display:false},title:{display:true,text:'Top 20 lines by revenue',color:T.text3},tooltip:{callbacks:{label:(ctx:any)=>`$${Number(ctx.raw).toLocaleString()}`}}},scales:{x:{grid:{color:'rgba(var(--t-ink),0.05)'},ticks:{color:T.text3,callback:(v:any)=>'$'+Math.round(v/1000)+'k'}},y:{grid:{display:false},ticks:{color:T.text2,font:{size:10}}}}}}
+      }/>}
+      {detKind==='table' && <div style={{background:T.bg2,border:`1px solid ${T.border}`,borderRadius:10,overflowX:'auto'}}>
         <table style={{width:'100%',borderCollapse:'collapse'}}>
           <thead><tr style={{borderBottom:`1px solid ${T.border}`}}>
             <SortableTh label="Description"   col="desc"  state={detailedSort} onSort={handleDetailedSort} align="left"/>
@@ -1156,7 +1240,7 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
             <td style={{fontSize:13,fontFamily:'monospace',fontWeight:500,color:T.blue,padding:'10px 16px',textAlign:'right'}}>{fmtFull(detailedRows.reduce((s,[,v])=>s+v.total,0))}</td>
           </tr></tbody>
         </table>
-      </div>
+      </div>}
     </div>
     }
 
