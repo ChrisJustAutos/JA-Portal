@@ -138,6 +138,21 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
   // Parts:Tunes lens — 'units' (raw part quantities; a full build reads ~600%)
   // or 'cars' (1 invoice = 1 car: 6 VDJ79 parts on an invoice = 1 car per tune)
   const [ptMode,setPtMode]=useState<'units'|'cars'>('cars')
+  // Display preferences (persisted): ratio figures as % or plain value
+  // ("150%" vs "1.50"), and chart style per chart (bar/line/pie…).
+  const [ptShow,setPtShow]=useState<'pct'|'ratio'>('pct')
+  const [chartKinds,setChartKinds]=useState<Record<string,string>>({})
+  useEffect(()=>{
+    try{
+      const s=JSON.parse(localStorage.getItem('dist-viz-prefs')||'{}')
+      if(s.chartKinds)setChartKinds(s.chartKinds)
+      if(s.ptShow==='pct'||s.ptShow==='ratio')setPtShow(s.ptShow)
+    }catch{}
+  },[])
+  const saveViz=(ck:Record<string,string>,ps:string)=>{try{localStorage.setItem('dist-viz-prefs',JSON.stringify({chartKinds:ck,ptShow:ps}))}catch{}}
+  const setKind=(chart:string,kind:string)=>setChartKinds(p=>{const n={...p,[chart]:kind};saveViz(n,ptShow);return n})
+  const setPtShowPref=(v:'pct'|'ratio')=>{setPtShow(v);saveViz(chartKinds,v)}
+  const CHART_COLORS=['#4f8ef7','#34c77b','#e9932b','#a78bfa','#f04e4e','#22c1d8','#f7c948','#8b90a0','#5ad1aa','#e06fae']
   // Description keyword → model rules: vehicle fallback for parts lines with
   // no (or no longer existing) MYOB item, e.g. "SUP - " special orders.
   const [descRules,setDescRules]=useState<{keyword:string;model:string}[]>([])
@@ -412,31 +427,59 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
       byModel[model].jobs+=1
     })
     const sorted=Object.entries(byModel).sort((a,b)=>b[1].total-a[1].total)
-    barInst.current=new(window as any).Chart(barRef.current,{
-      type:'bar',
-      data:{labels:sorted.map(s=>s[0]),datasets:[{data:sorted.map(s=>Math.round(s[1].total)),backgroundColor:'#4f8ef7',borderRadius:4,borderSkipped:false}]},
-      options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false},tooltip:{callbacks:{label:(ctx:any)=>`$${ctx.raw.toLocaleString()}`,afterLabel:(ctx:any)=>{const m=sorted[ctx.dataIndex];if(!m)return '';const[,info]=m;return `${info.vins.size} unique VIN${info.vins.size===1?'':'s'} · ${info.jobs} job${info.jobs===1?'':'s'}`}}}},scales:{x:{grid:{color:'rgba(var(--t-ink),0.05)'},ticks:{color:T.text3,font:{size:11}}},y:{grid:{color:'rgba(var(--t-ink),0.05)'},ticks:{color:T.text3,font:{size:11},callback:(v:any)=>'$'+(v>=1000?Math.round(v/1000)+'k':v)}}}}
-    })
+    const kind=chartKinds['models']||'bar'
+    const labels=sorted.map(s=>s[0]), vals=sorted.map(s=>Math.round(s[1].total))
+    const tooltip={callbacks:{label:(ctx:any)=>`$${Number(ctx.raw).toLocaleString()}`,afterLabel:(ctx:any)=>{const m=sorted[ctx.dataIndex];if(!m)return '';const[,info]=m;return `${info.vins.size} unique VIN${info.vins.size===1?'':'s'} · ${info.jobs} job${info.jobs===1?'':'s'}`}}}
+    const scales={x:{grid:{color:'rgba(var(--t-ink),0.05)'},ticks:{color:T.text3,font:{size:11}}},y:{grid:{color:'rgba(var(--t-ink),0.05)'},ticks:{color:T.text3,font:{size:11},callback:(v:any)=>'$'+(v>=1000?Math.round(v/1000)+'k':v)}}}
+    barInst.current=new(window as any).Chart(barRef.current,
+      kind==='pie'||kind==='doughnut'
+        ? {type:kind,data:{labels,datasets:[{data:vals,backgroundColor:CHART_COLORS,borderWidth:0}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{position:'right',labels:{color:T.text2,font:{size:11}}},tooltip}}}
+        : kind==='line'
+        ? {type:'line',data:{labels,datasets:[{data:vals,borderColor:'#4f8ef7',backgroundColor:'rgba(79,142,247,0.15)',fill:true,tension:0.3,pointRadius:4,pointBackgroundColor:'#4f8ef7'}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false},tooltip},scales}}
+        : {type:'bar',data:{labels,datasets:[{data:vals,backgroundColor:'#4f8ef7',borderRadius:4,borderSkipped:false}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false},tooltip},scales}})
     return()=>{if(barInst.current)barInst.current.destroy()}
-  },[filtered,tab,loading,vinRules])
+  },[filtered,tab,loading,vinRules,chartKinds])
 
   useEffect(()=>{
     if(tab!=='national-pm'||!lineRef.current||!(window as any).Chart||!trendLabels.length)return
     if(lineInst.current)lineInst.current.destroy()
     const vals=trendLabels.map(l=>Math.round(monthlyTotals[l]||0))
-    lineInst.current=new(window as any).Chart(lineRef.current,{type:'bar',data:{labels:trendLabels,datasets:[{label:'Revenue ex GST',data:vals,backgroundColor:'#4f8ef7',borderRadius:4,borderSkipped:false}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false},tooltip:{callbacks:{label:(ctx:any)=>`$${ctx.raw.toLocaleString()}`}}},scales:{x:{grid:{color:'rgba(var(--t-ink),0.05)'},ticks:{color:T.text3}},y:{grid:{color:'rgba(var(--t-ink),0.05)'},ticks:{color:T.text3,callback:(v:any)=>'$'+Math.round(v/1000)+'k'}}}}})
+    const kind=chartKinds['trend']||'bar'
+    const common={responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false},tooltip:{callbacks:{label:(ctx:any)=>`$${Number(ctx.raw).toLocaleString()}`}}},scales:{x:{grid:{color:'rgba(var(--t-ink),0.05)'},ticks:{color:T.text3}},y:{grid:{color:'rgba(var(--t-ink),0.05)'},ticks:{color:T.text3,callback:(v:any)=>'$'+Math.round(v/1000)+'k'}}}}
+    lineInst.current=new(window as any).Chart(lineRef.current,
+      kind==='line'
+        ? {type:'line',data:{labels:trendLabels,datasets:[{label:'Revenue ex GST',data:vals,borderColor:'#4f8ef7',backgroundColor:'rgba(79,142,247,0.15)',fill:true,tension:0.3,pointRadius:4,pointBackgroundColor:'#4f8ef7'}]},options:common}
+        : {type:'bar',data:{labels:trendLabels,datasets:[{label:'Revenue ex GST',data:vals,backgroundColor:'#4f8ef7',borderRadius:4,borderSkipped:false}]},options:common})
     return()=>{if(lineInst.current)lineInst.current.destroy()}
-  },[tab,trendLabels,monthlyTotals])
+  },[tab,trendLabels,monthlyTotals,chartKinds])
 
   useEffect(()=>{
     if(tab!=='national-total'||!hBarRef.current||!(window as any).Chart||!distSummaries.length)return
     if(hBarInst.current)hBarInst.current.destroy()
     const sorted=[...distSummaries].sort((a,b)=>b.total-a.total)
-    hBarInst.current=new(window as any).Chart(hBarRef.current,{type:'bar',data:{labels:sorted.map(d=>d.name),datasets:[{label:'Revenue ex GST',data:sorted.map(d=>Math.round(d.total)),backgroundColor:'#4f8ef7',borderRadius:3,borderSkipped:false}]},options:{indexAxis:'y' as const,responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false},tooltip:{callbacks:{label:(ctx:any)=>`$${ctx.raw.toLocaleString()}`}}},scales:{x:{grid:{color:'rgba(var(--t-ink),0.05)'},ticks:{color:T.text3,callback:(v:any)=>'$'+Math.round(v/1000)+'k'}},y:{grid:{display:false},ticks:{color:T.text2,font:{size:11}}}}}})
+    const kind=chartKinds['byCustomer']||'bar'
+    const labels=sorted.map(d=>d.name), vals=sorted.map(d=>Math.round(d.total))
+    const tooltip={callbacks:{label:(ctx:any)=>`$${Number(ctx.raw).toLocaleString()}`}}
+    hBarInst.current=new(window as any).Chart(hBarRef.current,
+      kind==='pie'||kind==='doughnut'
+        ? {type:kind,data:{labels,datasets:[{data:vals,backgroundColor:CHART_COLORS,borderWidth:0}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{position:'right',labels:{color:T.text2,font:{size:11}}},tooltip}}}
+        : {type:'bar',data:{labels,datasets:[{label:'Revenue ex GST',data:vals,backgroundColor:'#4f8ef7',borderRadius:3,borderSkipped:false}]},options:{indexAxis:'y' as const,responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false},tooltip},scales:{x:{grid:{color:'rgba(var(--t-ink),0.05)'},ticks:{color:T.text3,callback:(v:any)=>'$'+Math.round(v/1000)+'k'}},y:{grid:{display:false},ticks:{color:T.text2,font:{size:11}}}}}})
     return()=>{if(hBarInst.current)hBarInst.current.destroy()}
-  },[tab,distSummaries])
+  },[tab,distSummaries,chartKinds])
 
   const tabs:[Tab,string][]=[['summary','Summary'],['distributor-sales','Distributor Sales'],['detailed-sales','Detailed Sales'],['parts-tunes','Parts : Tunes'],['national-pm','National P/M'],['national-total','National Total']]
+
+  // Chart-style chips (bar / line / pie …) — choice persists per user.
+  function kindPicker(chart:string,kinds:string[]){
+    const current=chartKinds[chart]||kinds[0]
+    return <div style={{display:'flex',gap:4}}>
+      {kinds.map(k=><button key={k} onClick={()=>setKind(chart,k)}
+        style={{fontSize:10,padding:'3px 9px',borderRadius:4,cursor:'pointer',fontFamily:'inherit',textTransform:'capitalize',
+          border:`1px solid ${current===k?T.blue:T.border}`,background:current===k?'rgba(79,142,247,0.15)':'transparent',color:current===k?T.blue:T.text3}}>
+        {k}
+      </button>)}
+    </div>
+  }
 
   function KPIBox({label,value,color}:{label:string;value:number;color?:string}){
     return <div style={{textAlign:'right',padding:'16px 20px',borderBottom:`1px solid ${T.border}`}}>
@@ -811,7 +854,8 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
     }
 
     const pctColor = (pct: number | null) => pct == null ? T.text3 : pct < 30 ? T.red : pct <= 50 ? T.amber : T.green
-    const fmtPct = (pct: number | null) => pct == null ? '—' : Math.round(pct) + '%'
+    // Display pref: "41%" or the plain rate "0.41" (cars/parts per tune).
+    const fmtPct = (pct: number | null) => pct == null ? '—' : ptShow === 'ratio' ? (pct / 100).toFixed(2) : Math.round(pct) + '%'
     const fmtU = (n: number) => Math.round(n * 10) / 10
 
     const th: React.CSSProperties = { fontSize:11, color:T.text3, padding:'10px 12px', textAlign:'right', fontWeight:500 }
@@ -857,6 +901,14 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
           {([['cars','Per car (1 invoice = 1 car)'],['units','Per part (raw units)']] as const).map(([m,label])=>
             <button key={m} onClick={()=>setPtMode(m)} style={{fontSize:12,padding:'6px 12px',borderRadius:6,cursor:'pointer',fontFamily:'inherit',whiteSpace:'nowrap',
               border:`1px solid ${ptMode===m?T.blue:T.border}`,background:ptMode===m?'rgba(79,142,247,0.15)':T.bg3,color:ptMode===m?T.blue:T.text2}}>
+              {label}
+            </button>)}
+        </div>
+        <div style={{display:'flex',gap:6}}>
+          {([['pct','%'],['ratio','× per tune']] as const).map(([v,label])=>
+            <button key={v} onClick={()=>setPtShowPref(v)} title={v==='pct'?'Show as percentage (150%)':'Show as rate (1.50 per tune)'}
+              style={{fontSize:12,padding:'6px 12px',borderRadius:6,cursor:'pointer',fontFamily:'inherit',whiteSpace:'nowrap',
+              border:`1px solid ${ptShow===v?T.blue:T.border}`,background:ptShow===v?'rgba(79,142,247,0.15)':T.bg3,color:ptShow===v?T.blue:T.text2}}>
               {label}
             </button>)}
         </div>
@@ -989,6 +1041,8 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
           <div style={{display:'flex',alignItems:'center',gap:12}}>
             <div style={{fontSize:18,fontWeight:500,color:T.text}}>{selectedDist==='ALL'?'All Distributors':selectedDist}</div>
             <div style={{fontSize:11,fontFamily:'monospace',padding:'3px 8px',borderRadius:4,background:'rgba(79,142,247,0.12)',color:T.blue,border:'1px solid rgba(79,142,247,0.2)'}}>{totalVins} unique VIN{totalVins===1?'':'s'}</div>
+            <div style={{flex:1}}/>
+            {kindPicker('models',['bar','line','pie','doughnut'])}
           </div>
           <div style={{fontSize:12,color:T.text3}}>
             <span style={{display:'inline-flex',alignItems:'center',gap:5}}>
@@ -1107,7 +1161,11 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
     }
 
     if(tab==='national-pm')return <div style={{padding:24,overflowY:'auto'}}>
-      <div style={{fontSize:16,fontWeight:500,color:T.text,marginBottom:20}}>National Distributor Revenue ex GST by Month</div>
+      <div style={{display:'flex',alignItems:'center',gap:12,marginBottom:20}}>
+        <div style={{fontSize:16,fontWeight:500,color:T.text}}>National Distributor Revenue ex GST by Month</div>
+        <div style={{flex:1}}/>
+        {kindPicker('trend',['bar','line'])}
+      </div>
       <div style={{background:T.bg2,border:`1px solid ${T.border}`,borderRadius:10,padding:20}}>
         <div style={{position:'relative',height:380}}><canvas ref={lineRef} id="line-chart"/></div>
       </div>
@@ -1120,7 +1178,11 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
     </div>
 
     if(tab==='national-total')return <div style={{padding:24,overflowY:'auto'}}>
-      <div style={{fontSize:16,fontWeight:500,color:T.text,marginBottom:20}}>National Distributor Revenue ex GST by Customer</div>
+      <div style={{display:'flex',alignItems:'center',gap:12,marginBottom:20}}>
+        <div style={{fontSize:16,fontWeight:500,color:T.text}}>National Distributor Revenue ex GST by Customer</div>
+        <div style={{flex:1}}/>
+        {kindPicker('byCustomer',['bar','pie','doughnut'])}
+      </div>
       <div style={{background:T.bg2,border:`1px solid ${T.border}`,borderRadius:10,padding:20}}>
         <div style={{position:'relative',height:Math.max(300,distSummaries.length*36+60)}}><canvas ref={hBarRef} id="hbar-chart"/></div>
       </div>
