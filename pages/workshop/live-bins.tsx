@@ -66,6 +66,17 @@ export default function LiveBinsPage({ user }: { user: any }) {
     await act({ action: 'calibrate', id: bin.id, knownGrams: g }, 'Calibrated.')
   }
 
+  // Set g/unit straight off the live reading: count the parts on the scale,
+  // we divide the current grams by that count. No second scale needed.
+  async function unitFromCount(bin: Bin) {
+    if (bin.last_grams == null || bin.grams_per_raw == null) { setNote('⚠ Calibrate first — need a live grams reading.') ; return }
+    const v = await promptDialog({ title: 'Set unit weight from what’s on the scale', label: `How many parts are on it right now? (currently ${Math.round(Number(bin.last_grams))} g)`, inputMode: 'numeric' })
+    const n = Number(v)
+    if (!Number.isFinite(n) || n <= 0) return
+    const perUnit = Math.round((Number(bin.last_grams) / n) * 100) / 100
+    await act({ action: 'updateBin', id: bin.id, unit_weight_g: perUnit }, `Unit weight set: ${perUnit} g/unit (${Math.round(Number(bin.last_grams))} g ÷ ${n}).`)
+  }
+
   const online = (d: Device) => d.last_seen_at && Date.now() - Date.parse(d.last_seen_at) < STALE_MS
   const input: React.CSSProperties = { fontSize: 12, padding: '5px 8px', borderRadius: 6, border: `1px solid ${T.border}`, background: T.bg3, color: T.text, fontFamily: 'inherit' }
   const btn: React.CSSProperties = { ...input, cursor: 'pointer' }
@@ -151,6 +162,7 @@ export default function LiveBinsPage({ user }: { user: any }) {
                             <input defaultValue={b.alert_min_units != null ? String(b.alert_min_units) : ''} placeholder="Alert ≤" onBlur={e => act({ action: 'updateBin', id: b.id, alert_min_units: e.target.value })} style={{ ...input, width: 70 }} />
                             <button onClick={() => act({ action: 'tare', id: b.id }, 'Tared — zero set to the current reading.')} style={btn} title="Press with the bin EMPTY">Tare</button>
                             <button onClick={() => calibrate(b)} style={btn} title="Tare first, then put a known weight on and press">Calibrate</button>
+                            <button onClick={() => unitFromCount(b)} style={btn} title="Put a counted handful of parts on, press, enter the count — g/unit computed from the live reading">g/unit ÷</button>
                           </div>
                           <div style={{ fontSize: 10, color: T.text3, fontFamily: 'monospace' }}>
                             raw {b.last_raw ?? '—'} · zero {b.zero_offset_raw} · {b.grams_per_raw != null ? `${Number(b.grams_per_raw).toPrecision(4)} g/raw` : 'uncalibrated'}
