@@ -21,6 +21,7 @@ import { requirePageAuth, type PortalUserSSR } from '../lib/authServer'
 import { usePreferences, applyGstDisplay } from '../lib/preferences'
 import { useChatContext } from '../components/GlobalChatbot'
 import { T } from '../lib/ui/theme'
+import { usePrompt } from '../components/ui/Feedback'
 
 interface LineItem {
   CustomerName: string        // CANONICAL name after alias resolution
@@ -123,7 +124,21 @@ function SortableTh({
   )
 }
 
-type Tab='distributor-sales'|'detailed-sales'|'summary'|'national-pm'|'national-total'|'parts-tunes'
+type Tab='distributor-sales'|'detailed-sales'|'summary'|'national-pm'|'national-total'|'parts-tunes'|'custom'
+
+// Chart Builder config — everything the user can dial in.
+interface CustomCfg {
+  metric: 'revenue' | 'tunes' | 'punits'
+  groupBy: 'month' | 'distributor' | 'model' | 'bucket' | 'category'
+  splitBy: 'none' | 'distributor' | 'model' | 'bucket'
+  chart: 'bar' | 'stacked' | 'line' | 'pie'
+  dists: string[]      // empty = all
+  models: string[]     // empty = all
+  buckets: string[]    // empty = all
+  mFrom: string        // '' = from start of loaded range
+  mTo: string
+}
+const DEFAULT_CC: CustomCfg = { metric: 'revenue', groupBy: 'month', splitBy: 'none', chart: 'bar', dists: [], models: [], buckets: [], mFrom: '', mTo: '' }
 
 export default function DistributorReport({ user }: { user: PortalUserSSR }) {
   const router=useRouter()
@@ -153,6 +168,20 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
   const setKind=(chart:string,kind:string)=>setChartKinds(p=>{const n={...p,[chart]:kind};saveViz(n,ptShow);return n})
   const setPtShowPref=(v:'pct'|'ratio')=>{setPtShow(v);saveViz(chartKinds,v)}
   const CHART_COLORS=['#4f8ef7','#34c77b','#e9932b','#a78bfa','#f04e4e','#22c1d8','#f7c948','#8b90a0','#5ad1aa','#e06fae']
+
+  // Chart Builder state (current config + named saves, both persisted).
+  const promptDialog = usePrompt()
+  const [cc,setCc]=useState<CustomCfg>(DEFAULT_CC)
+  const [savedCharts,setSavedCharts]=useState<{name:string;cfg:CustomCfg}[]>([])
+  useEffect(()=>{
+    try{
+      const s=JSON.parse(localStorage.getItem('dist-custom-charts')||'{}')
+      if(s.current)setCc({...DEFAULT_CC,...s.current})
+      if(Array.isArray(s.saved))setSavedCharts(s.saved)
+    }catch{}
+  },[])
+  const persistCc=(next:CustomCfg,saved=savedCharts)=>{try{localStorage.setItem('dist-custom-charts',JSON.stringify({current:next,saved}))}catch{}}
+  const updCc=(patch:Partial<CustomCfg>)=>setCc(p=>{const n={...p,...patch};persistCc(n);return n})
   // Description keyword → model rules: vehicle fallback for parts lines with
   // no (or no longer existing) MYOB item, e.g. "SUP - " special orders.
   const [descRules,setDescRules]=useState<{keyword:string;model:string}[]>([])
@@ -492,7 +521,7 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
     return()=>{if(hBarInst.current)hBarInst.current.destroy()}
   },[tab,distSummaries,chartKinds])
 
-  const tabs:[Tab,string][]=[['summary','Summary'],['distributor-sales','Distributor Sales'],['detailed-sales','Detailed Sales'],['parts-tunes','Parts : Tunes'],['national-pm','National P/M'],['national-total','National Total']]
+  const tabs:[Tab,string][]=[['summary','Summary'],['distributor-sales','Distributor Sales'],['detailed-sales','Detailed Sales'],['parts-tunes','Parts : Tunes'],['national-pm','National P/M'],['national-total','National Total'],['custom','Chart Builder']]
 
   // Generic Chart.js box for table-section chart views — owns its canvas and
   // instance, rebuilds when the config meaningfully changes.
@@ -1116,6 +1145,171 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
   }
 
 
+  // ── Chart Builder: compose any chart from the loaded line data ──────────
+  function renderCustom(){
+    const promptName=promptDialog
+    const allModels=Array.from(new Set(vinRules.map(r=>r.friendly_name||r.model_code))).sort()
+    const months=monthKeysOf(visibleLines)
+    const accToCatB=new Map<string,string>()
+    for(const c of partCats)for(const a of c.account_codes)accToCatB.set(a,c.name)
+
+    // A line's model attribution (weight 1/n across multi-fit models).
+    const lineModels=(l:LineItem):string[]=>{
+      if(l.bucket==='Tuning'){const m=tuneModelOf(l);return [m||'No VIN']}
+      if(l.bucket==='Parts'){const pm=partModelsOf(l);return pm.excluded?[]:(pm.models.length?pm.models:['Unmapped'])}
+      return ['Other']
+    }
+    const catOf=(l:LineItem)=>l.bucket==='Parts'?(accToCatB.get(l.AccountDisplayID||'')||'Uncategorised'):'Non-parts'
+    const dimKeys=(l:LineItem,dim:string):Array<{key:string,w:number}>=>{
+      if(dim==='month')return [{key:(l.Date||'').slice(0,7)||'?',w:1}]
+      if(dim==='distributor')return [{key:l.CustomerName,w:1}]
+      if(dim==='bucket')return [{key:l.bucket,w:1}]
+      if(dim==='category')return [{key:catOf(l),w:1}]
+      if(dim==='model'){const ms=lineModels(l);return ms.map(m=>({key:m,w:1/ms.length}))}
+      return [{key:'All',w:1}]
+    }
+
+    // Filters
+    const inRange=(ym:string)=>(!cc.mFrom||ym>=cc.mFrom)&&(!cc.mTo||ym<=cc.mTo)
+    const lines=visibleLines.filter(l=>{
+      if(cc.dists.length&&!cc.dists.includes(l.CustomerName))return false
+      if(cc.buckets.length&&!cc.buckets.includes(l.bucket))return false
+      if(!inRange((l.Date||'').slice(0,7)))return false
+      if(cc.models.length&&!lineModels(l).some(m=>cc.models.includes(m)))return false
+      if(cc.metric==='tunes'&&!(l.bucket==='Tuning'&&l.Total>0))return false
+      if(cc.metric==='punits'&&l.bucket!=='Parts')return false
+      return true
+    })
+
+    // Aggregate: group → series → value (tunes use VIN sets for distinctness)
+    const agg=new Map<string,Map<string,number>>()
+    const vinSets=new Map<string,Set<string>>()
+    for(const l of lines){
+      for(const g of dimKeys(l,cc.groupBy)){
+        for(const s of (cc.splitBy==='none'?[{key:'Value',w:1}]:dimKeys(l,cc.splitBy))){
+          const w=g.w*s.w
+          if(cc.metric==='tunes'){
+            const vin=(l.poNumber||'').trim().toUpperCase()
+            if(!vin)continue
+            const k=`${g.key}¦${s.key}`
+            if(!vinSets.has(k))vinSets.set(k,new Set())
+            vinSets.get(k)!.add(vin)
+          }else{
+            const v=cc.metric==='revenue'?l.Total:(l.qty!=null&&l.qty>0?l.qty:1)
+            if(!agg.has(g.key))agg.set(g.key,new Map())
+            const row=agg.get(g.key)!
+            row.set(s.key,(row.get(s.key)||0)+v*w)
+          }
+        }
+      }
+    }
+    if(cc.metric==='tunes'){
+      vinSets.forEach((set,k)=>{
+        const [gk,sk]=k.split('¦')
+        if(!agg.has(gk))agg.set(gk,new Map())
+        agg.get(gk)!.set(sk,set.size)
+      })
+    }
+
+    const groupTotals=Array.from(agg.entries()).map(([k,m])=>({k,total:Array.from(m.values()).reduce((a,b)=>a+b,0)}))
+    let groupKeys=cc.groupBy==='month'
+      ? groupTotals.map(g=>g.k).sort()
+      : groupTotals.sort((a,b)=>b.total-a.total).map(g=>g.k)
+    const capped=groupKeys.length>25&&cc.groupBy!=='month'
+    if(capped)groupKeys=groupKeys.slice(0,25)
+    const seriesKeys=cc.splitBy==='none'?['Value']:Array.from(new Set(Array.from(agg.values()).flatMap(m=>Array.from(m.keys())))).sort((a,b)=>{
+      const tot=(k:string)=>groupKeys.reduce((s,g)=>s+(agg.get(g)?.get(k)||0),0)
+      return tot(b)-tot(a)
+    }).slice(0,10)
+
+    const metricLabel=cc.metric==='revenue'?'Revenue ex GST':cc.metric==='tunes'?'Tunes (distinct VINs)':'Parts units'
+    const money=cc.metric==='revenue'
+    const val=(g:string,s:string)=>Math.round((agg.get(g)?.get(s)||0)*10)/10
+    const datasets=seriesKeys.map((s,i)=>({
+      label:s,
+      data:groupKeys.map(g=>val(g,s)),
+      backgroundColor:cc.chart==='line'?'transparent':cc.splitBy==='none'&&cc.chart!=='pie'?'#4f8ef7':CHART_COLORS[i%CHART_COLORS.length],
+      borderColor:CHART_COLORS[i%CHART_COLORS.length],
+      borderRadius:3,tension:0.3,pointRadius:3,pointBackgroundColor:CHART_COLORS[i%CHART_COLORS.length],
+      fill:false,
+    }))
+    const chartCfg=cc.chart==='pie'
+      ? {type:'pie',data:{labels:groupKeys,datasets:[{data:groupKeys.map(g=>seriesKeys.reduce((s,sk)=>s+val(g,sk),0)),backgroundColor:CHART_COLORS,borderWidth:0}]},options:{...baseOpts,plugins:{...baseOpts.plugins,legend:{position:'right' as const,labels:{color:T.text2,font:{size:11}}},tooltip:{callbacks:{label:(ctx:any)=>money?`$${Number(ctx.raw).toLocaleString()}`:String(ctx.raw)}}}}}
+      : {type:cc.chart==='line'?'line':'bar',
+         data:{labels:groupKeys,datasets},
+         options:{...baseOpts,plugins:{...baseOpts.plugins,legend:{display:cc.splitBy!=='none',labels:{color:T.text2,font:{size:11}}},tooltip:{callbacks:{label:(ctx:any)=>`${ctx.dataset.label!=='Value'?ctx.dataset.label+': ':''}${money?'$'+Number(ctx.raw).toLocaleString():ctx.raw}`}}},
+           scales:{x:{stacked:cc.chart==='stacked',grid:{color:'rgba(var(--t-ink),0.05)'},ticks:{color:T.text3,font:{size:10}}},y:{stacked:cc.chart==='stacked',grid:{color:'rgba(var(--t-ink),0.05)'},ticks:{color:T.text3,callback:(v:any)=>money?'$'+(v>=1000?Math.round(v/1000)+'k':v):v}}}}}
+
+    const chip=(on:boolean):React.CSSProperties=>({fontSize:11,padding:'4px 10px',borderRadius:5,cursor:'pointer',fontFamily:'inherit',border:`1px solid ${on?T.blue:T.border}`,background:on?'rgba(79,142,247,0.15)':'transparent',color:on?T.blue:T.text2})
+    const sel:React.CSSProperties={fontSize:12,padding:'5px 9px',borderRadius:6,border:`1px solid ${T.border}`,background:T.bg3,color:T.text,fontFamily:'inherit'}
+    const lbl:React.CSSProperties={fontSize:10,color:T.text3,textTransform:'uppercase',letterSpacing:'0.06em',marginBottom:4}
+    const toggle=(arr:string[],v:string)=>arr.includes(v)?arr.filter(x=>x!==v):[...arr,v]
+
+    return <div style={{padding:24,overflowY:'auto',display:'flex',flexDirection:'column',gap:14}}>
+      {/* Saved charts */}
+      <div style={{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap'}}>
+        <div style={{fontSize:16,fontWeight:600}}>Chart builder</div>
+        <div style={{flex:1}}/>
+        {savedCharts.map((s,i)=><span key={i} style={{display:'inline-flex',alignItems:'center',gap:4}}>
+          <button onClick={()=>{setCc(s.cfg);persistCc(s.cfg)}} style={chip(false)}>{s.name}</button>
+          <button onClick={()=>{const next=savedCharts.filter((_,j)=>j!==i);setSavedCharts(next);persistCc(cc,next)}} title="Delete saved chart" style={{background:'none',border:'none',color:T.text3,cursor:'pointer',fontSize:11}}>✕</button>
+        </span>)}
+        <button onClick={async()=>{const n=await promptName({title:'Save this chart',label:'Name'});if(n?.trim()){const next=[...savedCharts,{name:n.trim(),cfg:cc}];setSavedCharts(next);persistCc(cc,next)}}} style={{...chip(false),borderColor:T.blue,color:T.blue}}>+ Save chart</button>
+        <button onClick={()=>{setCc(DEFAULT_CC);persistCc(DEFAULT_CC)}} style={chip(false)}>Reset</button>
+      </div>
+
+      {/* Controls */}
+      <div style={{background:T.bg2,border:`1px solid ${T.border}`,borderRadius:10,padding:14,display:'flex',gap:18,flexWrap:'wrap'}}>
+        <div><div style={lbl}>Measure</div>
+          <select value={cc.metric} onChange={e=>updCc({metric:e.target.value as any})} style={sel}>
+            <option value="revenue">Revenue ex GST ($)</option>
+            <option value="tunes">Tunes (distinct VINs)</option>
+            <option value="punits">Parts units</option>
+          </select></div>
+        <div><div style={lbl}>X axis (group by)</div>
+          <select value={cc.groupBy} onChange={e=>updCc({groupBy:e.target.value as any})} style={sel}>
+            <option value="month">Month</option><option value="distributor">Distributor</option>
+            <option value="model">Vehicle model</option><option value="bucket">Revenue bucket</option>
+            <option value="category">Part category</option>
+          </select></div>
+        <div><div style={lbl}>Split into series</div>
+          <select value={cc.splitBy} onChange={e=>updCc({splitBy:e.target.value as any})} style={sel}>
+            <option value="none">No split</option><option value="distributor">Per distributor</option>
+            <option value="model">Per model</option><option value="bucket">Per bucket</option>
+          </select></div>
+        <div><div style={lbl}>Chart</div>
+          <select value={cc.chart} onChange={e=>updCc({chart:e.target.value as any})} style={sel}>
+            <option value="bar">Bar</option><option value="stacked">Stacked bar</option>
+            <option value="line">Line</option><option value="pie">Pie</option>
+          </select></div>
+        <div><div style={lbl}>Months</div>
+          <div style={{display:'flex',gap:6,alignItems:'center'}}>
+            <select value={cc.mFrom} onChange={e=>updCc({mFrom:e.target.value})} style={sel}><option value="">start</option>{months.map(m=><option key={m} value={m}>{m}</option>)}</select>
+            <span style={{fontSize:11,color:T.text3}}>→</span>
+            <select value={cc.mTo} onChange={e=>updCc({mTo:e.target.value})} style={sel}><option value="">end</option>{months.map(m=><option key={m} value={m}>{m}</option>)}</select>
+          </div></div>
+      </div>
+
+      {/* Filters */}
+      <div style={{background:T.bg2,border:`1px solid ${T.border}`,borderRadius:10,padding:14,display:'flex',flexDirection:'column',gap:10}}>
+        <div><div style={lbl}>Buckets (none selected = all)</div>
+          <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>{['Tuning','Parts','Oil'].map(b=><button key={b} onClick={()=>updCc({buckets:toggle(cc.buckets,b)})} style={chip(cc.buckets.includes(b))}>{b}</button>)}</div></div>
+        <div><div style={lbl}>Vehicle models (none selected = all)</div>
+          <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>{allModels.map(m=><button key={m} onClick={()=>updCc({models:toggle(cc.models,m)})} style={chip(cc.models.includes(m))}>{m}</button>)}</div></div>
+        <div><div style={lbl}>Distributors (none selected = all)</div>
+          <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>{allDists.filter(typeOk).map(d=><button key={d} onClick={()=>updCc({dists:toggle(cc.dists,d)})} style={chip(cc.dists.includes(d))}>{d}</button>)}</div></div>
+      </div>
+
+      {/* The chart */}
+      {groupKeys.length===0
+        ? <div style={{color:T.text3,fontStyle:'italic',padding:30,textAlign:'center'}}>No data matches these inputs — loosen the filters.</div>
+        : <>
+          <div style={{fontSize:12,color:T.text3}}>{metricLabel} · {cc.groupBy} on the X axis{cc.splitBy!=='none'?` · one series per ${cc.splitBy}`:''}{capped?' · top 25 groups shown':''}{seriesKeys.length===10&&cc.splitBy!=='none'?' · top 10 series shown':''}</div>
+          <ChartBox ckey="custom" height={460} config={chartCfg}/>
+        </>}
+    </div>
+  }
+
   function renderContent(){
     if(loading)return <div style={{display:'flex',alignItems:'center',justifyContent:'center',height:400,flexDirection:'column',gap:12}}>
       <div style={{fontSize:28,animation:'spin 1s linear infinite',color:T.text3}}>⟳</div><div style={{color:T.text3}}>Loading distributor data…</div>
@@ -1127,6 +1321,8 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
     </div></div>
 
     if (tab === 'summary') return renderGroupedSummary()
+
+    if (tab === 'custom') return renderCustom()
 
     if (tab === 'parts-tunes') return renderPartsTunes()
 
