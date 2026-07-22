@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>JA Scale Node — Wiring & Setup</title>
+<style>
+  @page { size: A4; margin: 0; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Segoe UI', Arial, sans-serif; color: #171a21; background: #fff; }
+  .page { width: 210mm; min-height: 297mm; padding: 14mm 16mm; page-break-after: always; position: relative; }
+  .page:last-child { page-break-after: auto; }
+
+  header { display: flex; align-items: center; gap: 12px; border-bottom: 3px solid #0d1b3d; padding-bottom: 10px; margin-bottom: 18px; }
+  .logo { width: 40px; height: 40px; background: #0d1b3d; color: #fff; border-radius: 9px; display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 15px; letter-spacing: 0.5px; }
+  header h1 { font-size: 21px; color: #0d1b3d; }
+  header .sub { font-size: 11px; color: #5b6271; margin-top: 2px; }
+  header .tag { margin-left: auto; font-size: 10px; color: #5b6271; text-align: right; line-height: 1.5; }
+
+  h2 { font-size: 14px; color: #0d1b3d; text-transform: uppercase; letter-spacing: 0.08em; margin: 18px 0 8px; display: flex; align-items: center; gap: 8px; }
+  h2 .n { width: 22px; height: 22px; border-radius: 50%; background: #1f5eff; color: #fff; font-size: 12px; display: inline-flex; align-items: center; justify-content: center; }
+  p, li, td, th { font-size: 11.5px; line-height: 1.55; }
+  ol { padding-left: 20px; } ol li { margin-bottom: 6px; }
+  code { font-family: Consolas, monospace; font-size: 10.5px; background: #eef2fb; border: 1px solid #d6e0f5; padding: 1px 5px; border-radius: 4px; }
+  .callout { background: #eef2fb; border-left: 4px solid #1f5eff; border-radius: 6px; padding: 9px 12px; margin: 10px 0; font-size: 11px; }
+  .warn { background: #fdf2e7; border-left-color: #e9932b; }
+  table { border-collapse: collapse; width: 100%; margin: 8px 0; }
+  th, td { border: 1px solid #d8dce6; padding: 6px 9px; text-align: left; }
+  th { background: #0d1b3d; color: #fff; font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.05em; }
+  tr:nth-child(even) td { background: #f6f8fc; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  footer { position: absolute; bottom: 8mm; left: 16mm; right: 16mm; display: flex; justify-content: space-between; font-size: 9px; color: #9097a6; border-top: 1px solid #e2e5ea; padding-top: 5px; }
+  .wire-label { font-size: 10px; font-weight: 700; }
+</style>
+</head>
+<body>
+
+<!-- ── PAGE 1 : WIRING ─────────────────────────────────────────────── -->
+<div class="page">
+  <header>
+    <div class="logo">JA</div>
+    <div>
+      <h1>JA Scale Node — Wiring &amp; Setup</h1>
+      <div class="sub">Live bin inventory · load cell → HX711 → ESP32 → JA Portal</div>
+    </div>
+    <div class="tag">Just Autos Mechanical<br>Rev 1.0 · July 2026</div>
+  </header>
+
+  <h2><span class="n">1</span> What you need</h2>
+  <table>
+    <tr><th>Part</th><th>Qty</th><th>Notes</th></tr>
+    <tr><td>ESP32 dev board</td><td>1</td><td>Any WROOM-32 board (same as the HiLux controller)</td></tr>
+    <tr><td>HX711 amplifier board</td><td>1 per cell</td><td>Green breakout, 24-bit ADC</td></tr>
+    <tr><td>Load cell</td><td>1 per bin</td><td>Rated above max bin weight (e.g. 20–50 kg bar cell)</td></tr>
+    <tr><td>5V USB supply</td><td>1</td><td>Phone charger is fine — powered permanently</td></tr>
+    <tr><td>Platform / bin mount</td><td>1</td><td>Cell mounts between base plate and bin platform</td></tr>
+  </table>
+
+  <h2><span class="n">2</span> Wiring diagram</h2>
+  <svg viewBox="0 0 760 300" width="100%" style="border:1px solid #e2e5ea;border-radius:8px;background:#fafbfe">
+    <!-- LOAD CELL -->
+    <rect x="30" y="95" width="130" height="110" rx="8" fill="#e8ecf5" stroke="#0d1b3d" stroke-width="2"/>
+    <rect x="55" y="118" width="80" height="26" rx="4" fill="#c3cde4"/>
+    <rect x="55" y="156" width="80" height="26" rx="4" fill="#c3cde4"/>
+    <text x="95" y="85" text-anchor="middle" font-size="13" font-weight="700" fill="#0d1b3d">LOAD CELL</text>
+    <text x="95" y="226" text-anchor="middle" font-size="9" fill="#5b6271">bar cell under bin platform</text>
+
+    <!-- HX711 -->
+    <rect x="310" y="70" width="150" height="160" rx="8" fill="#e6f4ec" stroke="#0d1b3d" stroke-width="2"/>
+    <text x="385" y="60" text-anchor="middle" font-size="13" font-weight="700" fill="#0d1b3d">HX711</text>
+    <!-- left pads -->
+    <g font-size="10" font-weight="700" fill="#0d1b3d">
+      <circle cx="318" cy="100" r="4" fill="#c0392b"/><text x="330" y="104">E+</text>
+      <circle cx="318" cy="130" r="4" fill="#222"/><text x="330" y="134">E−</text>
+      <circle cx="318" cy="160" r="4" fill="#999"/><text x="330" y="164">A−</text>
+      <circle cx="318" cy="190" r="4" fill="#27ae60"/><text x="330" y="194">A+</text>
+    </g>
+    <!-- right pads -->
+    <g font-size="10" font-weight="700" fill="#0d1b3d" text-anchor="end">
+      <circle cx="452" cy="100" r="4" fill="#c0392b"/><text x="442" y="104">VCC</text>
+      <circle cx="452" cy="130" r="4" fill="#222"/><text x="442" y="134">GND</text>
+      <circle cx="452" cy="160" r="4" fill="#1f5eff"/><text x="442" y="164">DT</text>
+      <circle cx="452" cy="190" r="4" fill="#e9932b"/><text x="442" y="194">SCK</text>
+    </g>
+
+    <!-- ESP32 -->
+    <rect x="600" y="70" width="130" height="160" rx="8" fill="#eee9f7" stroke="#0d1b3d" stroke-width="2"/>
+    <text x="665" y="60" text-anchor="middle" font-size="13" font-weight="700" fill="#0d1b3d">ESP32</text>
+    <g font-size="10" font-weight="700" fill="#0d1b3d">
+      <circle cx="608" cy="100" r="4" fill="#c0392b"/><text x="620" y="104">3V3</text>
+      <circle cx="608" cy="130" r="4" fill="#222"/><text x="620" y="134">GND</text>
+      <circle cx="608" cy="160" r="4" fill="#1f5eff"/><text x="620" y="164">GPIO 16</text>
+      <circle cx="608" cy="190" r="4" fill="#e9932b"/><text x="620" y="194">GPIO 17</text>
+    </g>
+    <text x="665" y="218" text-anchor="middle" font-size="9" fill="#5b6271">USB 5V power</text>
+
+    <!-- load cell -> hx711 wires -->
+    <g stroke-width="3" fill="none">
+      <path d="M160 100 C 240 100, 240 100, 314 100" stroke="#c0392b"/>
+      <path d="M160 130 C 240 130, 240 130, 314 130" stroke="#222"/>
+      <path d="M160 160 C 240 160, 240 160, 314 160" stroke="#999"/>
+      <path d="M160 190 C 240 190, 240 190, 314 190" stroke="#27ae60"/>
+    </g>
+    <g class="wire-label">
+      <text x="237" y="93" text-anchor="middle" fill="#c0392b">red</text>
+      <text x="237" y="123" text-anchor="middle" fill="#222">black</text>
+      <text x="237" y="153" text-anchor="middle" fill="#777">white</text>
+      <text x="237" y="183" text-anchor="middle" fill="#27ae60">green</text>
+    </g>
+
+    <!-- hx711 -> esp32 wires -->
+    <g stroke-width="3" fill="none">
+      <path d="M456 100 C 530 100, 530 100, 604 100" stroke="#c0392b"/>
+      <path d="M456 130 C 530 130, 530 130, 604 130" stroke="#222"/>
+      <path d="M456 160 C 530 160, 530 160, 604 160" stroke="#1f5eff"/>
+      <path d="M456 190 C 530 190, 530 190, 604 190" stroke="#e9932b"/>
+    </g>
+    <g class="wire-label">
+      <text x="530" y="93" text-anchor="middle" fill="#c0392b">3.3 V</text>
+      <text x="530" y="123" text-anchor="middle" fill="#222">GND</text>
+      <text x="530" y="153" text-anchor="middle" fill="#1f5eff">data</text>
+      <text x="530" y="183" text-anchor="middle" fill="#e9932b">clock</text>
+    </g>
+
+    <text x="380" y="278" text-anchor="middle" font-size="10" fill="#5b6271">Second cell on the same module? Second HX711 → DT GPIO 18 / SCK GPIO 19 (uncomment in the sketch — it becomes channel 1).</text>
+  </svg>
+
+  <table>
+    <tr><th>Load cell wire</th><th>HX711 pad</th><th></th><th>HX711 pin</th><th>ESP32 pin</th></tr>
+    <tr><td><b style="color:#c0392b">Red</b></td><td>E+</td><td rowspan="4" style="text-align:center;color:#9097a6">→</td><td>VCC</td><td>3V3 <i>(not 5V — keeps the data pins 3.3 V safe)</i></td></tr>
+    <tr><td><b>Black</b></td><td>E−</td><td>GND</td><td>GND</td></tr>
+    <tr><td><b style="color:#777">White</b></td><td>A−</td><td>DT</td><td>GPIO 16</td></tr>
+    <tr><td><b style="color:#27ae60">Green</b></td><td>A+</td><td>SCK</td><td>GPIO 17</td></tr>
+  </table>
+  <div class="callout warn"><b>Reads negative when you add weight?</b> Swap the white and green wires (A+ / A−) — or just leave it: calibration handles the sign automatically.</div>
+
+  <footer><span>JA Scale Node · Wiring &amp; Setup</span><span>Page 1 of 2</span></footer>
+</div>
+
+<!-- ── PAGE 2 : SETUP ──────────────────────────────────────────────── -->
+<div class="page">
+  <header>
+    <div class="logo">JA</div>
+    <div>
+      <h1>Software setup &amp; calibration</h1>
+      <div class="sub">Portal: Workshop → Inventory → Live Bins</div>
+    </div>
+    <div class="tag">Just Autos Mechanical<br>Rev 1.0 · July 2026</div>
+  </header>
+
+  <h2><span class="n">3</span> Register the module in the portal</h2>
+  <ol>
+    <li>Open <b>Workshop → Inventory → Live Bins</b> → <b>⚙ Setup</b> → <b>+ Add module</b>.</li>
+    <li>Name it after its location (e.g. <i>“Bin rack A — shelf 2”</i>).</li>
+    <li>Copy the <b>device key</b> it shows (also available later via <b>Copy key</b> on the module card).</li>
+  </ol>
+
+  <h2><span class="n">4</span> Flash the ESP32</h2>
+  <ol>
+    <li>Open <code>hardware/ja-scale-node/ja-scale-node.ino</code> in Arduino IDE.</li>
+    <li>Library Manager → install <b>“HX711” by Bogdan Necula (bogde)</b>.</li>
+    <li>Fill in the three constants at the top: <code>WIFI_SSID</code>, <code>WIFI_PASS</code>, <code>DEVICE_KEY</code>.</li>
+    <li>Board: <b>ESP32 Dev Module</b> → upload.</li>
+    <li>Open Serial Monitor (115200) — you should see <code>[post] HTTP 200</code> lines; the portal card turns <b style="color:#27ae60">green</b> within ~30 s.</li>
+  </ol>
+
+  <h2><span class="n">5</span> Calibrate (all done from the portal — never reflash)</h2>
+  <ol>
+    <li><b>Tare</b> — with the bin platform <b>empty</b> (or the empty bin sitting on it, if it always stays), press <b>Tare</b> on the cell tile.</li>
+    <li><b>Calibrate</b> — put a <b>known weight</b> on (bathroom-scale-verified item, e.g. “2,040 g”), press <b>Calibrate</b>, type the grams.</li>
+    <li><b>Unit weight</b> — enter the part’s weight in <b>g / unit</b> (weigh 10 parts, divide by 10 for accuracy).</li>
+    <li>Assign the <b>bin #</b> and <b>part number</b>, and set <b>Alert ≤</b> for the low-stock red flag.</li>
+    <li>Check it: the big number should match a hand count. Add/remove a part and watch it move.</li>
+  </ol>
+  <div class="callout">Units = (live weight − tare) ÷ unit weight, rounded. Light parts (&lt;50 g) count more reliably on smaller-capacity cells — a 5 kg cell resolves single washers far better than a 50 kg one.</div>
+
+  <h2><span class="n">6</span> Troubleshooting</h2>
+  <table>
+    <tr><th>Symptom</th><th>Check</th></tr>
+    <tr><td>Card stays red / “never seen”</td><td>Serial Monitor: WiFi connect lines → SSID/password; <code>HTTP 401</code> → wrong device key; no post lines at all → power/USB.</td></tr>
+    <tr><td><code>[cell 0] not ready</code> in serial</td><td>DT/SCK swapped or loose — white/green load-cell wires on A−/A+, DT→16, SCK→17.</td></tr>
+    <tr><td>Count drifts ±1 unit</td><td>Raise <code>AVG_SAMPLES</code> in the sketch (10 → 25), check the platform isn’t touching anything, keep the cell out of direct fan draft.</td></tr>
+    <tr><td>“needs calibration” on the tile</td><td>Do step 5 in order — Tare first, then Calibrate with the known weight still on.</td></tr>
+    <tr><td>Tare/Calibrate refuses (“stale”)</td><td>Module hasn’t reported in &gt;5 min — check it’s online, wait one heartbeat (~30 s), retry.</td></tr>
+    <tr><td>Weight fine, units wrong</td><td>Unit weight g/unit is off — weigh 10 parts and divide.</td></tr>
+  </table>
+
+  <div class="callout"><b>Adding more bins:</b> every extra bin is just another module (or a second cell on a spare module) — register, flash, tare, calibrate, name. Config always lives in the portal.</div>
+
+  <footer><span>JA Scale Node · Wiring &amp; Setup</span><span>Page 2 of 2</span></footer>
+</div>
+
+</body>
+</html>
