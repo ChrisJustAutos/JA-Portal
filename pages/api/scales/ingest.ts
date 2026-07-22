@@ -48,9 +48,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (!bin) { out.push({ channel: r.channel ?? 0, error: 'no bin configured' }); continue }
 
     const grams = bin.grams_per_raw != null ? (raw - Number(bin.zero_offset_raw)) * Number(bin.grams_per_raw) : null
-    const units = grams != null && bin.unit_weight_g != null && Number(bin.unit_weight_g) > 0
-      ? Math.max(0, Math.round(grams / Number(bin.unit_weight_g)))
-      : null
+    let units: number | null = null
+    if (grams != null && bin.unit_weight_g != null && Number(bin.unit_weight_g) > 0) {
+      const unitsFloat = grams / Number(bin.unit_weight_g)
+      // Sticky rounding: with naturally varying parts the estimate hovers
+      // near unit boundaries (45.6 for a true 46) and the count flaps ±1.
+      // Keep the previous count unless the estimate moves clearly (>0.7
+      // units) away from it — a real one-part change always exceeds that.
+      const prev = bin.last_units != null ? Number(bin.last_units) : null
+      units = prev != null && Math.abs(unitsFloat - prev) < 0.7
+        ? prev
+        : Math.max(0, Math.round(unitsFloat))
+    }
 
     const lastAt = bin.last_reading_at ? Date.parse(bin.last_reading_at) : 0
     const gramsMoved = grams != null && bin.last_grams != null ? Math.abs(grams - Number(bin.last_grams)) : Infinity
