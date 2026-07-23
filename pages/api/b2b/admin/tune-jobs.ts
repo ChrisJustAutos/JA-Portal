@@ -16,7 +16,7 @@ import { createClient } from '@supabase/supabase-js'
 import { withAuth } from '../../../../lib/authServer'
 import { assignTuneJobDistributor, syncTuneJobDownstream, sendTuneJobReminders, ingestTuneJobEmails } from '../../../../lib/b2b-tune-jobs'
 
-export const config = { maxDuration: 120 }
+export const config = { maxDuration: 300 }
 
 function sb() {
   return createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!, { auth: { persistSession: false } })

@@ -152,7 +152,10 @@ export interface IngestResult {
   debug?: { mailbox: string; since: string; inboxSeen: number; paymentFolderFound: boolean; paymentSeen: number; sample: Array<{ from: string | null; subject: string | null; received: string; hasAttachments: boolean }> }
 }
 
-export async function ingestTuneJobEmails(opts: { lookbackDays?: number } = {}): Promise<IngestResult> {
+export async function ingestTuneJobEmails(opts: { lookbackDays?: number; maxNew?: number } = {}): Promise<IngestResult> {
+  // Cap the LLM/PDF work per invocation so a big backlog can't time the
+  // function out — repeated runs (hourly cron / scan-now) drain the rest.
+  const maxNew = Math.max(1, opts.maxNew ?? 15)
   const c = sb()
   const mailbox = tuneJobsMailbox()
   const out: IngestResult = { scanned: 0, created: 0, matched: 0, skipped: 0, errors: [] }
@@ -207,6 +210,7 @@ export async function ingestTuneJobEmails(opts: { lookbackDays?: number } = {}):
   // sender is kept as a fallback for any format drift.
   const JAWS_ATTACHMENT = /invoice[-_ ]?jaws/i
   for (const m of msgs) {
+    if (out.created >= maxNew) break
     try {
       const from = String(m.from || '').toLowerCase()
       let atts: Awaited<ReturnType<typeof listAttachmentMeta>> = []
@@ -270,6 +274,9 @@ export async function ingestTuneJobEmails(opts: { lookbackDays?: number } = {}):
       }).select('id').single()
       if (insErr) { out.errors.push(`insert: ${insErr.message}`); continue }
       out.created++
+      if (out.created >= maxNew) {
+        out.errors.push(`Stopped after ${maxNew} new jobs this run — scan again to pull in the rest.`)
+      }
 
       if (distributorId) {
         out.matched++

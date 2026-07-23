@@ -111,7 +111,11 @@ export default function TuneJobsAdmin({ user }: { user: any }) {
         errs ? 'error' : 'success',
       )
       await load()
-    } catch (e: any) { toast(e.message || 'Scan failed', 'error') }
+    } catch (e: any) {
+      toast(e.message || 'Scan failed', 'error')
+      // Jobs created before a timeout are real — show whatever landed.
+      await load().catch(() => {})
+    }
     setBusy('')
   }
 
