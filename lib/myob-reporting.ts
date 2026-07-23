@@ -172,6 +172,7 @@ export async function fetchSaleInvoices(
     TotalAmount: Number(inv.TotalAmount) || 0, TotalTax: Number(inv.TotalTax) || 0,
     BalanceDueAmount: Number(inv.BalanceDueAmount) || 0, Status: inv.Status ?? null,
     InvoiceType: inv.InvoiceType ?? 'Item',
+    Freight: Number(inv.Freight) || 0,
   }))
   return opts.top ? rows.slice(0, opts.top) : rows
 }
