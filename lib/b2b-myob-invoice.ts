@@ -15,7 +15,7 @@
 //       { Type:'Transaction', Description, Account:{UID}, Total, TaxCode:{UID} },   // surcharge
 //     ],
 //     IsTaxInclusive: false,
-//     FreightAmount: 0,
+//     Freight: 0,
 //     FreightTaxCode: { UID },
 //     Subtotal, TotalTax, TotalAmount,
 //     JournalMemo, Comment,
@@ -150,12 +150,12 @@ export async function writeOrderToMyob(orderId: string): Promise<MyobWriteResult
   // 4. Compute envelope totals.
   //
   // order.subtotal_ex_gst and order.gst already INCLUDE freight (checkout
-  // folds it in). MYOB models freight separately via FreightAmount, so we
+  // folds it in). MYOB models freight separately via its top-level Freight field (NOT 'FreightAmount' — MYOB silently ignores unknown attributes, which is how freight vanished from May-July 2026 orders), so we
   // back the freight out of the line subtotal and hand it to MYOB's native
   // freight field — otherwise the goods lines wouldn't reconcile and the
   // freight portion silently vanished from the posted invoice.
   //
-  //   MYOB: TotalAmount = Subtotal (sum of line Totals) + FreightAmount + TotalTax
+  //   MYOB: TotalAmount = Subtotal (sum of line Totals) + Freight + TotalTax
   const freightExGst  = round2(Number(order.freight_cost_ex_gst || 0))
   const subtotalExGst = round2(Number(order.subtotal_ex_gst || 0))   // goods + freight (ex GST)
   const goodsExGst    = round2(subtotalExGst - freightExGst)         // goods only (matches product lines)
@@ -182,7 +182,7 @@ export async function writeOrderToMyob(orderId: string): Promise<MyobWriteResult
     Number: myobOrderNumber,
     Lines: myobLines,
     IsTaxInclusive: false,
-    FreightAmount: freightExGst,
+    Freight: freightExGst,
     FreightTaxCode: { UID: freightTaxUid },
     Subtotal: subtotalEnv,
     TotalTax: totalTax,
@@ -369,7 +369,7 @@ export async function convertOrderToInvoiceInMyob(orderId: string, opts: { track
     Number: number,
     Lines: myobLines,
     IsTaxInclusive: false,
-    FreightAmount: freightExGst,
+    Freight: freightExGst,
     FreightTaxCode: { UID: freightTaxUid },
     Subtotal: subtotalEnv,
     TotalTax: totalTax,
@@ -502,7 +502,7 @@ export async function writeRefundCreditNoteToMyob(
   const myobLines: any[] = []
   let subtotalEnv = 0
   let totalTax    = 0
-  // Freight refunded via MYOB's native (negative) FreightAmount on a full
+  // Freight refunded via MYOB's native (negative) Freight field on a full
   // mirror. Partial refunds use a single catch-all line that already
   // absorbs any freight portion, so freight stays 0 there.
   let freightRefundEx = 0
@@ -587,7 +587,7 @@ export async function writeRefundCreditNoteToMyob(
     Number: creditNumber,
     Lines: myobLines,
     IsTaxInclusive: false,
-    FreightAmount: freightRefundEx,
+    Freight: freightRefundEx,
     FreightTaxCode: { UID: freightRefundEx !== 0 ? cfg.gstTaxCodeUid : cfg.freTaxCodeUid },
     Subtotal: subtotalEnv,
     TotalTax: totalTax,
