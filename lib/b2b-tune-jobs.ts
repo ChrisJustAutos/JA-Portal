@@ -468,7 +468,7 @@ export async function sendTuneJobReminders(): Promise<{ distributors: number; jo
   const c = sb()
   const weekAgo = new Date(Date.now() - 6.5 * 24 * 3600_000).toISOString()
   const { data: jobs } = await c.from('b2b_tune_jobs')
-    .select('id, distributor_id, vin, tune_details, last_reminder_at, created_at')
+    .select('id, distributor_id, vin, tune_details, last_reminder_at, first_reminded_at, created_at')
     .eq('status', 'awaiting_details')
     .not('distributor_id', 'is', null)
   const due = (jobs || []).filter(j => !j.last_reminder_at || j.last_reminder_at < weekAgo)
@@ -506,8 +506,97 @@ export async function sendTuneJobReminders(): Promise<{ distributors: number; jo
       }
       await c.from('b2b_tune_jobs').update({ last_reminder_at: new Date().toISOString() })
         .in('id', djobs.map(j => j.id))
+      // Stage 1 of the escalation ladder: stamp the FIRST email per job.
+      const firstIds = djobs.filter(j => !(j as any).first_reminded_at).map(j => j.id)
+      if (firstIds.length) {
+        await c.from('b2b_tune_jobs').update({ first_reminded_at: new Date().toISOString() }).in('id', firstIds)
+      }
       notified++
     } catch (e: any) { console.error(`tune-job reminder failed for ${distId}:`, e?.message) }
   }
   return { distributors: notified, jobs: due.length }
+}
+
+// ── Escalation ladder (Chris 2026-07-24) ────────────────────────────────
+// Email first (weekly reminder stamps first_reminded_at) →
+//   7 days unfilled → ONE SMS per distributor (business hours, Brisbane) →
+//   10 more days → ONE summary email to Ryan.
+// Runs every cron tick; stage stamps make each rung fire once per job.
+
+const ESCALATION_EMAIL = process.env.TUNE_JOBS_ESCALATION_EMAIL || 'ryan@justautosmechanical.com.au'
+
+export async function escalateTuneJobs(): Promise<{ smsDistributors: number; escalatedJobs: number }> {
+  const c = sb()
+  const now = Date.now()
+  const out = { smsDistributors: 0, escalatedJobs: 0 }
+
+  const { data: jobs } = await c.from('b2b_tune_jobs')
+    .select('id, distributor_id, vin, tune_details, created_at, first_reminded_at, sms_reminded_at, escalated_at')
+    .eq('status', 'awaiting_details')
+    .not('distributor_id', 'is', null)
+  const open = jobs || []
+
+  // ── Stage 2: SMS at 7 days after the first email ──
+  // Only during Brisbane business hours (Mon–Fri 9am–5pm) so nobody's phone
+  // buzzes at 2am; due jobs simply wait for the next in-hours cron tick.
+  const bris = new Date(now + 10 * 3600_000)
+  const inHours = bris.getUTCDay() >= 1 && bris.getUTCDay() <= 5 && bris.getUTCHours() >= 9 && bris.getUTCHours() < 17
+  if (inHours) {
+    const smsDue = open.filter(j =>
+      !j.sms_reminded_at && j.first_reminded_at && now - Date.parse(j.first_reminded_at) >= 7 * 86400_000)
+    const byDist = new Map<string, any[]>()
+    for (const j of smsDue) { const g = byDist.get(j.distributor_id) || []; g.push(j); byDist.set(j.distributor_id, g) }
+    for (const [distId, djobs] of Array.from(byDist.entries())) {
+      try {
+        const { data: dist } = await c.from('b2b_distributors')
+          .select('display_name, primary_contact_phone').eq('id', distId).maybeSingle()
+        if (!dist?.primary_contact_phone) {
+          // No mobile on file — skip the SMS rung, the Ryan rung still fires.
+          await c.from('b2b_tune_jobs').update({ sms_reminded_at: new Date().toISOString(), sync_error: null }).in('id', djobs.map(j => j.id))
+          continue
+        }
+        const { sendSms } = await import('./clicksend')
+        const { signOrderAction } = await import('./order-action-token')
+        const token = signOrderAction({ orderId: distId, scope: 'tune_jobs', ttlDays: 14 })
+        const link = `https://justautos.app/tune-jobs?token=${encodeURIComponent(token)}`
+        const r = await sendSms(dist.primary_contact_phone,
+          `Just Autos: ${djobs.length === 1 ? 'a tune job is' : `${djobs.length} tune jobs are`} still waiting on customer details. Fill them in here (no login needed): ${link}`)
+        if (r.ok) {
+          await c.from('b2b_tune_jobs').update({ sms_reminded_at: new Date().toISOString() }).in('id', djobs.map(j => j.id))
+          out.smsDistributors++
+        } else {
+          console.error(`tune-job SMS failed for ${dist.display_name}: ${r.error}`)
+          if (r.error === 'clicksend_not_configured' || r.error === 'invalid_number') {
+            // Permanent — don't retry every tick; move to the next rung.
+            await c.from('b2b_tune_jobs').update({ sms_reminded_at: new Date().toISOString() }).in('id', djobs.map(j => j.id))
+          }
+        }
+      } catch (e: any) { console.error(`tune-job SMS stage failed for ${distId}:`, e?.message) }
+    }
+  }
+
+  // ── Stage 3: email Ryan at 10 days after the SMS ──
+  const escDue = open.filter(j =>
+    !j.escalated_at && j.sms_reminded_at && now - Date.parse(j.sms_reminded_at) >= 10 * 86400_000)
+  if (escDue.length) {
+    try {
+      const distIds = Array.from(new Set(escDue.map(j => j.distributor_id)))
+      const { data: dists } = await c.from('b2b_distributors').select('id, display_name').in('id', distIds)
+      const nameOf = new Map((dists || []).map(d => [d.id, d.display_name]))
+      const rows = escDue.map(j => {
+        const age = Math.floor((now - Date.parse(j.created_at)) / 86400_000)
+        return `<tr><td style="padding:4px 10px">${nameOf.get(j.distributor_id) || '?'}</td><td style="padding:4px 10px">${j.tune_details || 'Tune'}</td><td style="padding:4px 10px;font-family:monospace">${j.vin || '—'}</td><td style="padding:4px 10px">${age} days</td></tr>`
+      }).join('')
+      const { getFromMailbox } = await import('./b2b-settings')
+      await sendMail(await getFromMailbox(), {
+        to: [ESCALATION_EMAIL],
+        subject: `Escalation: ${escDue.length} tune job${escDue.length === 1 ? '' : 's'} still missing customer details after email + SMS`,
+        html: `<p>These tune jobs have been chased by email and SMS and are still missing customer details — a phone call is probably next:</p><table style="border-collapse:collapse;font-size:13px"><tr><th style="text-align:left;padding:4px 10px">Distributor</th><th style="text-align:left;padding:4px 10px">Tune</th><th style="text-align:left;padding:4px 10px">VIN</th><th style="text-align:left;padding:4px 10px">Age</th></tr>${rows}</table><p><a href="https://justautos.app/admin/b2b/tune-jobs">Open Tune Jobs in the portal →</a></p>`,
+      })
+      await c.from('b2b_tune_jobs').update({ escalated_at: new Date().toISOString() }).in('id', escDue.map(j => j.id))
+      out.escalatedJobs = escDue.length
+    } catch (e: any) { console.error('tune-job escalation email failed:', e?.message) }
+  }
+
+  return out
 }

@@ -6,7 +6,7 @@
 // Auth: Bearer CRON_SECRET, with the vercel-cron user-agent fallback.
 
 import type { NextApiRequest, NextApiResponse } from 'next'
-import { ingestTuneJobEmails, sendTuneJobReminders } from '../../../lib/b2b-tune-jobs'
+import { ingestTuneJobEmails, sendTuneJobReminders, escalateTuneJobs } from '../../../lib/b2b-tune-jobs'
 
 export const config = { maxDuration: 300 }
 
@@ -28,5 +28,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     reminders = await sendTuneJobReminders()
   }
 
-  return res.status(200).json({ ok: true, ingest, reminders })
+  // Escalation ladder runs every tick — stage stamps + the Brisbane
+  // business-hours gate inside decide what actually fires.
+  const escalation = await escalateTuneJobs()
+
+  return res.status(200).json({ ok: true, ingest, reminders, escalation })
 }
