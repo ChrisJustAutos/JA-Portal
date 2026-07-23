@@ -146,7 +146,7 @@ export async function sendDistributorShippedEmail(orderId: string, info: { carri
   const c = svc()
   const { data: order } = await c.from('b2b_orders').select(`
       order_number, total_inc, distributor_invoice_sent_at,
-      myob_sale_invoice_number, myob_invoice_number,
+      myob_sale_invoice_number, myob_invoice_number, label_pdf_path,
       distributor:b2b_distributors!b2b_orders_distributor_id_fkey ( display_name, freight_email, invoice_email, primary_contact_email )
     `).eq('id', orderId).maybeSingle()
   if (!order) return
@@ -165,6 +165,22 @@ export async function sendDistributorShippedEmail(orderId: string, info: { carri
     const pdf = await getOutboundInvoicePdf(orderId)
     attachments = [{ name: pdf.filename, contentType: 'application/pdf', content: pdf.buffer }]
   } catch (e: any) { console.error('invoice PDF attach failed (sending email without it):', e?.message) }
+
+  // Attach the freight consignment note — the same PDF MachShip returned at
+  // booking (stored for the workshop label printer). Best-effort like the invoice.
+  try {
+    const labelPath = (order as any).label_pdf_path
+    if (labelPath) {
+      const { data: blob, error: dlErr } = await c.storage.from('b2b-shipping-labels').download(labelPath)
+      if (dlErr || !blob) throw new Error(dlErr?.message || 'empty download')
+      const buf = Buffer.from(await blob.arrayBuffer())
+      if (buf.length > 0) {
+        const conName = String(info.consignmentNumber || order.order_number).replace(/[^\w.\-]/g, '_')
+        attachments = attachments || []
+        attachments.push({ name: `Consignment-${conName}.pdf`, contentType: 'application/pdf', content: buf })
+      }
+    }
+  } catch (e: any) { console.error('consignment PDF attach failed (sending email without it):', e?.message) }
 
   const r = await renderEmail('distributor_shipped', {
     distributor_name: dist?.display_name || '', order_number: order.order_number,
