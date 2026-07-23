@@ -69,6 +69,14 @@ export default withAuth('edit:b2b_distributors', async (req: NextApiRequest, res
         const r = await sendTuneJobReminders()
         return res.status(200).json({ ok: true, ...r })
       }
+      if (action === 'fill_link') {
+        // Mint the same login-less fill link the reminder email carries —
+        // for testing or resending to a distributor out-of-band.
+        if (!body.distributor_id) return res.status(400).json({ error: 'distributor_id required' })
+        const { signOrderAction } = await import('../../../../lib/order-action-token')
+        const token = signOrderAction({ orderId: String(body.distributor_id), scope: 'tune_jobs', ttlDays: 14 })
+        return res.status(200).json({ ok: true, url: `https://justautos.app/tune-jobs?token=${encodeURIComponent(token)}` })
+      }
       if (action === 'ingest_now') {
         const r = await ingestTuneJobEmails({ lookbackDays: Number(body.lookback_days) || 14 })
         return res.status(200).json({ ok: true, ...r })

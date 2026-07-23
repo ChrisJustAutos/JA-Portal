@@ -254,6 +254,19 @@ export default function TuneJobsAdmin({ user }: { user: any }) {
                   <option key={d.id} value={d.id}>{d.display_name} ({distCounts.get(d.id)})</option>
                 ))}
               </select>
+              {distFilter !== 'all' && distFilter !== 'unmatched' && (
+                <button
+                  onClick={async () => {
+                    try {
+                      const d = await post({ action: 'fill_link', distributor_id: distFilter })
+                      await navigator.clipboard.writeText(d.url)
+                      toast('Fill link copied — valid 14 days, opens this distributor’s jobs only.', 'success')
+                    } catch (e: any) { toast(e.message || 'Link failed', 'error') }
+                  }}
+                  style={{ fontSize: 11.5, padding: '5px 11px', borderRadius: 14, border: `1px solid ${T.border2}`, background: 'transparent', color: T.text2, cursor: 'pointer', fontFamily: 'inherit', whiteSpace: 'nowrap' }}>
+                  🔗 Copy fill link
+                </button>
+              )}
             </div>
           </div>
 
