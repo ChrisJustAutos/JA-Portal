@@ -7,10 +7,12 @@
 // CANNOT match phone numbers), creates the MD customer, and reports outcomes
 // back so the portal marks the job 'synced'.
 //
-// After the customer, the worker ATTEMPTS the vehicle (VIN/rego/description)
-// via POST /vehicles — the endpoint is unproven, so a failure is recorded as
-// a non-fatal note on the job (customer still counts as synced) and the
-// response is logged for diagnosis. Job notes stay on the portal record.
+// After the customer, the worker ATTEMPTS (unproven endpoints, non-fatal —
+// failures land as a note on the job while the customer still counts):
+//   1. the vehicle: POST /vehicles (registration_number/vin/model), and
+//   2. a customer-file note describing the tune: tried through the three
+//      idiomatic Rails shapes (POST /notes, POST /customers/{id}/notes,
+//      PUT /customers/{id} notes_attributes) — first success wins.
 //
 // Env: MECHANICDESK_WORKSHOP_ID, MECHANICDESK_USERNAME, MECHANICDESK_PASSWORD,
 //      JA_PORTAL_BASE_URL, JA_PORTAL_API_KEY, DRY_RUN=1 for a no-write pass.
@@ -34,6 +36,8 @@ interface TuneJob {
   id: string
   vin: string | null
   tune_details: string | null
+  invoice_number: string | null
+  amount: number | null
   customer_name: string
   customer_first_name: string | null
   customer_phone: string | null
@@ -41,7 +45,45 @@ interface TuneJob {
   customer_postcode: string | null
   vehicle_rego: string | null
   vehicle_description: string | null
+  job_notes: string | null
   distributor_name: string | null
+}
+
+function composeCustomerNote(job: TuneJob): string {
+  const bits = [
+    `Distributor tune — ${new Date().toISOString().slice(0, 10)}: ${job.tune_details || 'tune'}`,
+    job.vin ? `VIN ${job.vin}` : '',
+    job.vehicle_rego ? `Rego ${job.vehicle_rego}` : '',
+    job.invoice_number ? `Stripe inv ${job.invoice_number}` : '',
+    job.amount ? `$${Number(job.amount).toFixed(2)}` : '',
+    job.distributor_name ? `by ${job.distributor_name}` : '',
+  ].filter(Boolean).join(' · ')
+  return job.job_notes ? `${bits}
+${job.job_notes}` : bits
+}
+
+// Unproven — MD is Rails, so try the three idiomatic note shapes in order.
+async function tryAddCustomerNote(client: MdClient, customerId: string | number, job: TuneJob): Promise<string | null> {
+  const content = composeCustomerNote(job)
+  const attempts: Array<{ label: string; path: string; body: any; method?: string }> = [
+    { label: 'POST /notes', path: '/notes', body: { note: { content, notable_id: customerId, notable_type: 'Customer' } } },
+    { label: 'POST /customers/{id}/notes', path: `/customers/${customerId}/notes`, body: { note: { content } } },
+    { label: 'PUT /customers/{id} notes_attributes', path: `/customers/${customerId}`, method: 'PUT', body: { notes_attributes: [{ content }] } },
+  ]
+  const errors: string[] = []
+  for (const a of attempts) {
+    try {
+      const r = await mdRequest<any>(client, a.path, { method: a.method || 'POST', body: JSON.stringify(a.body) })
+      if (r && (r.id || r.success === true || Array.isArray(r?.notes))) {
+        console.log(`  + customer note via ${a.label}`)
+        return null
+      }
+      errors.push(`${a.label}: unexpected response ${JSON.stringify(r).slice(0, 120)}`)
+    } catch (e: any) {
+      errors.push(`${a.label}: ${String(e?.message || e).slice(0, 120)}`)
+    }
+  }
+  return `customer note failed (${errors.join(' | ')})`.slice(0, 400)
 }
 
 // Unproven endpoint — attempted per job, non-fatal on failure. Field names
@@ -137,8 +179,12 @@ async function main() {
         const existing = await findExisting(client, job)
         if (existing) {
           console.log(`= ${job.customer_name}: already in MD (#${existing.id} via ${existing.via})`)
-          const note = DRY_RUN ? null : await tryCreateVehicle(client, existing.id, job)
-          outcomes.push({ job_id: job.id, md_customer_id: String(existing.id), ...(note ? { note } : {}) })
+          const notes: string[] = []
+          if (!DRY_RUN) {
+            const v = await tryCreateVehicle(client, existing.id, job); if (v) notes.push(v)
+            const n = await tryAddCustomerNote(client, existing.id, job); if (n) notes.push(n)
+          }
+          outcomes.push({ job_id: job.id, md_customer_id: String(existing.id), ...(notes.length ? { note: notes.join(' | ').slice(0, 800) } : {}) })
           continue
         }
         if (DRY_RUN) {
@@ -153,8 +199,10 @@ async function main() {
           postcode: job.customer_postcode || undefined,
         })
         console.log(`+ created MD customer #${created.id} for ${job.customer_name} (tune: ${job.tune_details || '—'}, VIN ${job.vin || '—'}, distributor ${job.distributor_name || '—'})`)
-        const note = await tryCreateVehicle(client, created.id, job)
-        outcomes.push({ job_id: job.id, md_customer_id: String(created.id), ...(note ? { note } : {}) })
+        const notes: string[] = []
+        const v = await tryCreateVehicle(client, created.id, job); if (v) notes.push(v)
+        const n = await tryAddCustomerNote(client, created.id, job); if (n) notes.push(n)
+        outcomes.push({ job_id: job.id, md_customer_id: String(created.id), ...(notes.length ? { note: notes.join(' | ').slice(0, 800) } : {}) })
       } catch (e: any) {
         console.error(`! ${job.customer_name}: ${e?.message || e}`)
         outcomes.push({ job_id: job.id, error: String(e?.message || e).slice(0, 400) })
