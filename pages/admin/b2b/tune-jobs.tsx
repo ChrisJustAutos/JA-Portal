@@ -228,6 +228,21 @@ export default function TuneJobsAdmin({ user }: { user: any }) {
 
           {/* Toolbar */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+            <button
+              onClick={async () => {
+                setBusy('testjob')
+                try {
+                  const d = await post({ action: 'create_test_job' })
+                  await navigator.clipboard.writeText(d.url)
+                  toast('Test job created — fill link copied. Enter made-up customer details there, then run the MD worker.', 'success')
+                  await load()
+                } catch (e: any) { toast(e.message || 'Test job failed', 'error') }
+                setBusy('')
+              }}
+              disabled={busy !== ''}
+              style={{ padding: '7px 14px', borderRadius: 6, border: `1px solid ${T.border}`, background: T.bg3, color: T.text2, fontSize: 12, cursor: 'pointer', fontFamily: 'inherit' }}>
+              {busy === 'testjob' ? 'Creating…' : '🧪 Create test job'}
+            </button>
             <button onClick={backfillSinceJan} disabled={busy !== ''}
               style={{ padding: '7px 14px', borderRadius: 6, border: `1px solid ${T.border}`, background: T.bg3, color: T.text2, fontSize: 12, cursor: 'pointer', fontFamily: 'inherit' }}>
               {busy === 'backfill' ? `Backfilling… ${backfillProgress}` : 'Backfill since 1 Jan'}

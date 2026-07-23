@@ -69,6 +69,35 @@ export default withAuth('edit:b2b_distributors', async (req: NextApiRequest, res
         const r = await sendTuneJobReminders()
         return res.status(200).json({ ok: true, ...r })
       }
+      if (action === 'create_test_job') {
+        // Self-contained MD-import test: a fabricated job under an internal
+        // "ZZ Portal Test" distributor (inactive — invisible to real B2B
+        // flows), returned with its fill link so made-up customer details can
+        // be entered and pushed through the full MechanicDesk pipeline.
+        let { data: testDist } = await c.from('b2b_distributors')
+          .select('id').eq('display_name', 'ZZ Portal Test').maybeSingle()
+        if (!testDist) {
+          const { data: created, error: cErr } = await c.from('b2b_distributors')
+            .insert({ display_name: 'ZZ Portal Test', is_active: false, myob_primary_customer_uid: '00000000-0000-0000-0000-000000000000' })
+            .select('id').single()
+          if (cErr) return res.status(500).json({ error: `test distributor create failed: ${cErr.message}` })
+          testDist = created
+        }
+        const stamp = new Date().toISOString().slice(5, 16).replace(/[-T:]/g, '')
+        const { data: job, error: jErr } = await c.from('b2b_tune_jobs').insert({
+          company_raw: 'JA PORTAL TEST',
+          distributor_id: testDist!.id,
+          vin: 'JTETEST0000000001',
+          tune_details: 'TEST — MD import check (delete me in MD)',
+          invoice_number: `TEST-${stamp}`,
+          amount: 0,
+          status: 'awaiting_details',
+        }).select('id').single()
+        if (jErr) return res.status(500).json({ error: jErr.message })
+        const { signOrderAction } = await import('../../../../lib/order-action-token')
+        const token = signOrderAction({ orderId: String(testDist!.id), scope: 'tune_jobs', ttlDays: 2 })
+        return res.status(200).json({ ok: true, job_id: job.id, url: `https://justautos.app/tune-jobs?token=${encodeURIComponent(token)}` })
+      }
       if (action === 'fill_link') {
         // Mint the same login-less fill link the reminder email carries —
         // for testing or resending to a distributor out-of-band.
