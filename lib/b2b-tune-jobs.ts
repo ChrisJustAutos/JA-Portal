@@ -171,24 +171,35 @@ export async function ingestTuneJobEmails(opts: { lookbackDays?: number } = {}):
   const inboxSeen = msgs.length
   let paymentFolderFound = false
   let paymentSeen = 0
+  let matchedFolder: string | null = null
+  let allFolders: string[] = []
   try {
-    const { findFolderByDisplayNameLoose } = await import('./microsoft-graph')
-    const folderId = await findFolderByDisplayNameLoose(mailbox, PAYMENT_FOLDER_NAME)
-    if (folderId) {
+    const { listMailFolders } = await import('./microsoft-graph')
+    const folders = await listMailFolders(mailbox)
+    allFolders = folders.map(f => f.displayName)
+    const norm = (x: string) => x.toLowerCase().replace(/\s+/g, '')
+    const want = norm(PAYMENT_FOLDER_NAME)
+    // Exact (space/case-insensitive) first, then contains — "Payments",
+    // "Stripe Payments" etc. all count.
+    const folder = folders.find(f => norm(f.displayName) === want)
+      || folders.find(f => norm(f.displayName).includes(want))
+    if (folder) {
       paymentFolderFound = true
-      const filed = await listMessagesWithAttachments(mailbox, { sinceIsoDate: sinceIso, top: 100, folderId, alsoSubjects: /./ })
+      matchedFolder = folder.displayName
+      const filed = await listMessagesWithAttachments(mailbox, { sinceIsoDate: sinceIso, top: 100, folderId: folder.id, alsoSubjects: /./ })
       paymentSeen = filed.length
       const have = new Set(msgs.map(m => m.id))
       for (const f of filed) if (!have.has(f.id)) msgs.push(f)
     } else {
-      out.errors.push(`"${PAYMENT_FOLDER_NAME}" folder not found in ${mailbox} — scanned Inbox only`)
+      out.errors.push(`No folder containing "${PAYMENT_FOLDER_NAME}" in ${mailbox} — scanned Inbox only. Folders: ${allFolders.join(', ').slice(0, 300)}`)
     }
   } catch (e: any) { out.errors.push(`payment-folder scan: ${e?.message}`) }
 
   out.debug = {
     mailbox, since: sinceIso, inboxSeen, paymentFolderFound, paymentSeen,
+    matchedFolder, folders: allFolders,
     sample: msgs.slice(0, 10).map(m => ({ from: m.from, subject: m.subject, received: m.receivedDateTime, hasAttachments: m.hasAttachments })),
-  }
+  } as any
   console.log('[tune-jobs ingest]', JSON.stringify(out.debug))
 
   // The reliable invariant (Chris 2026-07-24): every tune email carries an

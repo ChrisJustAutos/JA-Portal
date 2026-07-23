@@ -239,6 +239,38 @@ export async function getMessageMeta(mailbox: string, messageId: string): Promis
 }
 
 /**
+ * Enumerate the mailbox's folder tree (BFS, capped) as {id, displayName}.
+ * Used for diagnostics and contains-style folder matching.
+ */
+export async function listMailFolders(mailbox: string): Promise<Array<{ id: string; displayName: string }>> {
+  const enc = encodeURIComponent(mailbox)
+  const select = '$select=id,displayName,childFolderCount&$top=200'
+  const out: Array<{ id: string; displayName: string }> = []
+  let frontier: string[] = []
+  const roots = await graphJson<{ value: any[] }>(`/users/${enc}/mailFolders?${select}`)
+  for (const f of roots.value || []) {
+    out.push({ id: f.id, displayName: f.displayName || '' })
+    if (f.childFolderCount > 0) frontier.push(f.id)
+  }
+  let depth = 0
+  while (frontier.length && depth < 4 && out.length < 500) {
+    const next: string[] = []
+    for (const id of frontier.slice(0, 40)) {
+      try {
+        const kids = await graphJson<{ value: any[] }>(`/users/${enc}/mailFolders/${encodeURIComponent(id)}/childFolders?${select}`)
+        for (const f of kids.value || []) {
+          out.push({ id: f.id, displayName: f.displayName || '' })
+          if (f.childFolderCount > 0) next.push(f.id)
+        }
+      } catch { /* skip unreadable folder */ }
+    }
+    frontier = next
+    depth++
+  }
+  return out
+}
+
+/**
  * Fetch a message's body content (html or text) — e.g. for LLM extraction
  * from link-only receipt emails that carry no PDF attachment.
  */
