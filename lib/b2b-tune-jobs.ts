@@ -357,7 +357,7 @@ export interface TuneJobDetails {
   job_notes?: string | null
 }
 
-export async function submitTuneJobDetails(jobId: string, distributorId: string, userId: string, d: TuneJobDetails): Promise<void> {
+export async function submitTuneJobDetails(jobId: string, distributorId: string, userId: string | null, d: TuneJobDetails): Promise<void> {
   const c = sb()
   const { data: job } = await c.from('b2b_tune_jobs')
     .select('id, distributor_id, status').eq('id', jobId).maybeSingle()
@@ -492,11 +492,16 @@ export async function sendTuneJobReminders(): Promise<{ distributors: number; jo
       const to = (dist?.primary_contact_email || '').trim()
       if (to) {
         const { getFromMailbox } = await import('./b2b-settings')
+        // Login-less fill link, scoped to THIS distributor only (signed token,
+        // 14-day expiry — every weekly reminder mints a fresh one).
+        const { signOrderAction } = await import('./order-action-token')
+        const token = signOrderAction({ orderId: distId, scope: 'tune_jobs', ttlDays: 14 })
+        const fillUrl = `https://justautos.app/tune-jobs?token=${encodeURIComponent(token)}`
         const rows = djobs.map(j => `<li>${j.tune_details || 'Tune'}${j.vin ? ` — VIN ${j.vin}` : ''} (received ${String(j.created_at).slice(0, 10)})</li>`).join('')
         await sendMail(await getFromMailbox(), {
           to: [to],
           subject: `Action needed: ${djobs.length} tune job${djobs.length === 1 ? '' : 's'} waiting on customer details`,
-          html: `<p>Hi ${dist?.display_name || ''},</p><p>The following tune job${djobs.length === 1 ? ' is' : 's are'} waiting on customer details in your Just Autos portal:</p><ul>${rows}</ul><p><a href="https://justautos.app/b2b/jobs">Fill them in here</a> — it only takes a minute per job.</p><p>Thanks,<br/>Just Autos</p>`,
+          html: `<p>Hi ${dist?.display_name || ''},</p><p>The following tune job${djobs.length === 1 ? ' is' : 's are'} waiting on customer details:</p><ul>${rows}</ul><p style="margin:18px 0"><a href="${fillUrl}" style="background:#34c77b;color:#fff;padding:10px 18px;border-radius:6px;text-decoration:none;font-weight:600">Fill in your job details</a></p><p style="font-size:12px;color:#888">The link opens your jobs only — no login needed. You can also sign in to the portal and use the Jobs tab.</p><p>Thanks,<br/>Just Autos</p>`,
         })
       }
       await c.from('b2b_tune_jobs').update({ last_reminder_at: new Date().toISOString() })

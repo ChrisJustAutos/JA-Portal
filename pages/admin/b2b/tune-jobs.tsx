@@ -72,6 +72,7 @@ export default function TuneJobsAdmin({ user }: { user: any }) {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [filter, setFilter] = useState<Filter>('all')
+  const [distFilter, setDistFilter] = useState<string>('all')  // 'all' | 'unmatched' | distributor id
   const [busy, setBusy] = useState('')            // 'scan' | 'remind' | job id
   // Per-row assign state (unmatched rows)
   const [assignSel, setAssignSel] = useState<Record<string, string>>({})
@@ -187,7 +188,13 @@ export default function TuneJobsAdmin({ user }: { user: any }) {
     setBusy('')
   }
 
-  const visible = filter === 'all' ? jobs : jobs.filter(j => j.status === filter)
+  const byStatus = filter === 'all' ? jobs : jobs.filter(j => j.status === filter)
+  const visible = distFilter === 'all' ? byStatus
+    : distFilter === 'unmatched' ? byStatus.filter(j => !j.distributor_id)
+    : byStatus.filter(j => j.distributor_id === distFilter)
+  // Only offer distributors that actually have jobs, with their counts.
+  const distCounts = new Map<string, number>()
+  for (const j of jobs) if (j.distributor_id) distCounts.set(j.distributor_id, (distCounts.get(j.distributor_id) || 0) + 1)
 
   const btn: React.CSSProperties = {
     fontSize: 12, fontWeight: 600, padding: '7px 14px', borderRadius: 7,
@@ -234,6 +241,19 @@ export default function TuneJobsAdmin({ user }: { user: any }) {
                   </button>
                 )
               })}
+              <select value={distFilter} onChange={e => setDistFilter(e.target.value)}
+                title="Filter by distributor"
+                style={{
+                  fontSize: 11.5, fontWeight: distFilter === 'all' ? 500 : 700, padding: '4px 8px', borderRadius: 14,
+                  border: `1px solid ${distFilter === 'all' ? T.border2 : T.blue}`,
+                  background: distFilter === 'all' ? 'transparent' : `${T.blue}18`,
+                  color: distFilter === 'all' ? T.text2 : T.blue, cursor: 'pointer', fontFamily: 'inherit', maxWidth: 220,
+                }}>
+                <option value="all">All distributors</option>
+                {distributors.filter(d => distCounts.has(d.id)).map(d => (
+                  <option key={d.id} value={d.id}>{d.display_name} ({distCounts.get(d.id)})</option>
+                ))}
+              </select>
             </div>
           </div>
 
