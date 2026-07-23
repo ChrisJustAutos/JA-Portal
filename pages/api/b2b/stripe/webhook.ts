@@ -89,7 +89,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (failedOrderId) {
       const c2 = sb()
       try {
-        await c2.from('b2b_order_events').insert({ order_id: failedOrderId, event_type: 'payment_failed', actor_type: 'stripe_webhook', actor_id: null, notes: `Bank payment failed (${s.payment_status || 'failed'}) — order was already fulfilled; chase payment.`, metadata: { stripe_event_id: eventId } })
+        await c2.from('b2b_order_events').insert({ order_id: failedOrderId, event_type: 'payment_failed', actor_type: 'stripe', actor_id: null, notes: `Bank payment failed (${s.payment_status || 'failed'}) — order was already fulfilled; chase payment.`, metadata: { stripe_event_id: eventId } })
         const { data: o } = await c2.from('b2b_orders').select('order_number, distributor:b2b_distributors!b2b_orders_distributor_id_fkey ( display_name )').eq('id', failedOrderId).maybeSingle()
         const dist: any = Array.isArray((o as any)?.distributor) ? (o as any).distributor[0] : (o as any)?.distributor
         const { notify } = await import('../../../../lib/notifications')

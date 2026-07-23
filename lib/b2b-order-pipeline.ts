@@ -48,7 +48,7 @@ export async function runPostPaymentPipeline(orderId: string, opts: { paymentInt
     if (updErr) throw new Error(updErr.message)
     await c.from('b2b_order_events').insert({
       order_id: orderId, event_type: 'payment_succeeded', from_status: 'pending_payment', to_status: 'paid',
-      actor_type: 'stripe_webhook', actor_id: null,
+      actor_type: 'stripe', actor_id: null,
       notes: `${opts.eventId ? `Stripe ${opts.eventId}; ` : ''}PaymentIntent ${opts.paymentIntentId || 'n/a'}`,
       metadata: { stripe_event_id: opts.eventId, stripe_payment_intent_id: opts.paymentIntentId },
     })
