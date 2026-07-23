@@ -19,18 +19,23 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   const ingest = await ingestTuneJobEmails({ lookbackDays: 7 })
 
-  // Weekly reminders: Monday 8am-ish Brisbane (22:00 UTC Sunday). The cron
-  // fires hourly; gate on Brisbane local Monday 8-9am, or force via ?remind=1.
+  // Weekly reminders: Monday 8am-ish Brisbane (22:00 UTC Sunday). The whole
+  // outbound chase (weekly email + SMS/Ryan escalation ladder) is OFF until
+  // TUNE_JOBS_REMINDERS_AUTO=1 — Chris is testing the link/email by hand
+  // first (2026-07-24). Manual sends still work: ?remind=1 or the admin
+  // "Send reminders now" button.
+  const autoChase = process.env.TUNE_JOBS_REMINDERS_AUTO === '1'
   let reminders: { distributors: number; jobs: number } | null = null
   const bris = new Date(Date.now() + 10 * 3600_000)
   const isMondayMorning = bris.getUTCDay() === 1 && bris.getUTCHours() === 8
-  if (isMondayMorning || req.query.remind === '1') {
+  if ((autoChase && isMondayMorning) || req.query.remind === '1') {
     reminders = await sendTuneJobReminders()
   }
 
-  // Escalation ladder runs every tick — stage stamps + the Brisbane
-  // business-hours gate inside decide what actually fires.
-  const escalation = await escalateTuneJobs()
+  // Escalation ladder (SMS → Ryan) is gated behind the same flag — a manual
+  // reminder test shouldn't arm SMSes that fire 7 days later.
+  let escalation: { smsDistributors: number; escalatedJobs: number } | null = null
+  if (autoChase) escalation = await escalateTuneJobs()
 
-  return res.status(200).json({ ok: true, ingest, reminders, escalation })
+  return res.status(200).json({ ok: true, ingest, reminders, escalation, autoChase })
 }
