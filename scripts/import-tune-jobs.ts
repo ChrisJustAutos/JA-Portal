@@ -7,14 +7,16 @@
 // CANNOT match phone numbers), creates the MD customer, and reports outcomes
 // back so the portal marks the job 'synced'.
 //
-// Vehicle/VIN + job notes are NOT keyed into MD yet (same phase-2 status as
-// the Monday import) — they live on the job's Monday item + the portal record.
+// After the customer, the worker ATTEMPTS the vehicle (VIN/rego/description)
+// via POST /vehicles — the endpoint is unproven, so a failure is recorded as
+// a non-fatal note on the job (customer still counts as synced) and the
+// response is logged for diagnosis. Job notes stay on the portal record.
 //
 // Env: MECHANICDESK_WORKSHOP_ID, MECHANICDESK_USERNAME, MECHANICDESK_PASSWORD,
 //      JA_PORTAL_BASE_URL, JA_PORTAL_API_KEY, DRY_RUN=1 for a no-write pass.
 
 import {
-  loginToMechanicDesk, searchMdCustomers, createMdCustomer,
+  loginToMechanicDesk, searchMdCustomers, createMdCustomer, mdRequest,
   type MdClient,
 } from '../lib/mechanicdesk-stocktake'
 
@@ -37,7 +39,30 @@ interface TuneJob {
   customer_phone: string | null
   customer_email: string | null
   customer_postcode: string | null
+  vehicle_rego: string | null
+  vehicle_description: string | null
   distributor_name: string | null
+}
+
+// Unproven endpoint — attempted per job, non-fatal on failure. Field names
+// mirror MD's read side (registration_number / vin / model).
+async function tryCreateVehicle(client: MdClient, customerId: string | number, job: TuneJob): Promise<string | null> {
+  if (!job.vin && !job.vehicle_rego) return null
+  try {
+    const r = await mdRequest<any>(client, '/vehicles', {
+      method: 'POST',
+      body: JSON.stringify({
+        customer_id: customerId,
+        ...(job.vehicle_rego ? { registration_number: job.vehicle_rego } : {}),
+        ...(job.vin ? { vin: job.vin } : {}),
+        ...(job.vehicle_description ? { model: job.vehicle_description } : {}),
+      }),
+    })
+    if (r?.id) { console.log(`  + vehicle #${r.id} (${job.vehicle_rego || job.vin})`); return null }
+    return `vehicle create returned no id: ${JSON.stringify(r).slice(0, 200)}`
+  } catch (e: any) {
+    return `vehicle create failed: ${String(e?.message || e).slice(0, 200)}`
+  }
 }
 
 async function fetchPending(): Promise<TuneJob[]> {
@@ -112,7 +137,8 @@ async function main() {
         const existing = await findExisting(client, job)
         if (existing) {
           console.log(`= ${job.customer_name}: already in MD (#${existing.id} via ${existing.via})`)
-          outcomes.push({ job_id: job.id, md_customer_id: String(existing.id) })
+          const note = DRY_RUN ? null : await tryCreateVehicle(client, existing.id, job)
+          outcomes.push({ job_id: job.id, md_customer_id: String(existing.id), ...(note ? { note } : {}) })
           continue
         }
         if (DRY_RUN) {
@@ -127,7 +153,8 @@ async function main() {
           postcode: job.customer_postcode || undefined,
         })
         console.log(`+ created MD customer #${created.id} for ${job.customer_name} (tune: ${job.tune_details || '—'}, VIN ${job.vin || '—'}, distributor ${job.distributor_name || '—'})`)
-        outcomes.push({ job_id: job.id, md_customer_id: String(created.id) })
+        const note = await tryCreateVehicle(client, created.id, job)
+        outcomes.push({ job_id: job.id, md_customer_id: String(created.id), ...(note ? { note } : {}) })
       } catch (e: any) {
         console.error(`! ${job.customer_name}: ${e?.message || e}`)
         outcomes.push({ job_id: job.id, error: String(e?.message || e).slice(0, 400) })

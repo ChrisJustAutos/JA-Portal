@@ -5,7 +5,7 @@
 //
 // GET  → { jobs } — submitted tune jobs not yet created in MD (customer +
 //        vehicle + job details for the worker to key in).
-// POST { outcomes: [{ job_id, md_customer_id?, error? }] } — record results;
+// POST { outcomes: [{ job_id, md_customer_id?, error?, note? }] } — record results;
 //        successful jobs move to status 'synced'.
 
 import type { NextApiRequest, NextApiResponse } from 'next'
@@ -50,7 +50,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (!outcomes.length) return res.status(400).json({ error: 'outcomes required' })
     for (const o of outcomes.slice(0, 100)) {
       if (!o?.job_id) continue
-      await markTuneJobMdSynced(String(o.job_id), o.md_customer_id ? String(o.md_customer_id) : null, o.error ? String(o.error) : null)
+      await markTuneJobMdSynced(String(o.job_id), o.md_customer_id ? String(o.md_customer_id) : null, o.error ? String(o.error) : null, o.note ? String(o.note) : null)
     }
     return res.status(200).json({ ok: true, recorded: outcomes.length })
   }

@@ -9,16 +9,15 @@
 //   2. The distributor fills in the customer details at /b2b/jobs
 //      (submitTuneJobDetails), with weekly reminders until they do
 //      (sendTuneJobReminders).
-//   3. On submit: create a Monday item (board via integration_settings
-//      'tune_jobs_monday_board_id'), queue the MechanicDesk customer for the
-//      GH-Actions worker (status 'submitted' + md_synced_at null), and queue
-//      the customer thank-you letter carrying the DISTRIBUTOR's details.
+//   3. On submit: queue the MechanicDesk customer+vehicle for the GH-Actions
+//      worker (status 'submitted' + md_synced_at null) and queue the customer
+//      thank-you letter carrying the DISTRIBUTOR's details. (A Monday step
+//      existed at launch; Chris scrapped it 2026-07-24 — MD is the sole
+//      destination.)
 //
-// Config:
-//   TUNE_JOBS_MAILBOX          — inbox to scan (falls back to the first AP
-//                                auto-entry mailbox)
-//   tune_jobs_monday_board_id  — integration_settings key (or env); if unset,
-//                                Monday sync is skipped with a sync note.
+// Config: TUNE_JOBS_MAILBOX overrides the scanned inbox (default
+// accounts@justautoswholesale.com); TUNE_JOBS_FOLDER overrides the filed
+// subfolder name (default "payment").
 
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
 import {
@@ -307,8 +306,8 @@ export async function submitTuneJobDetails(jobId: string, distributorId: string,
     status: 'submitted', updated_at: new Date().toISOString(),
   }).eq('id', jobId)
 
-  // Fire Monday + letter now (best-effort, each logged into sync_error).
-  // MechanicDesk is created by the GH-Actions worker (status 'submitted').
+  // Queue the letter now (best-effort, logged into sync_error).
+  // MechanicDesk customer+vehicle are created by the GH-Actions worker.
   try { await syncTuneJobDownstream(jobId) } catch (e: any) { console.error('tune-job sync failed:', e?.message) }
 }
 
@@ -321,43 +320,7 @@ export async function syncTuneJobDownstream(jobId: string): Promise<void> {
     .eq('id', job.distributor_id).maybeSingle()
   const errs: string[] = []
 
-  // 1. Monday item (board configurable; skipped when unset)
-  if (!job.monday_item_id) {
-    try {
-      const { getIntegration } = await import('./integration-config')
-      const boardId = (await getIntegration('tune_jobs_monday_board_id').catch(() => '')) || process.env.TUNE_JOBS_MONDAY_BOARD_ID || ''
-      if (boardId) {
-        const token = process.env.MONDAY_API_TOKEN || ''
-        if (!token) throw new Error('MONDAY_API_TOKEN not set')
-        const q = `mutation ($board: ID!, $name: String!) { create_item (board_id: $board, item_name: $name) { id } }`
-        const r = await fetch('https://api.monday.com/v2', {
-          method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': token },
-          body: JSON.stringify({ query: q, variables: { board: boardId, name: `${job.customer_name} — ${job.tune_details || 'Tune'} (${dist?.display_name || 'distributor'})` } }),
-        })
-        const j = await r.json()
-        const itemId = j?.data?.create_item?.id
-        if (!itemId) throw new Error(`Monday create_item failed: ${JSON.stringify(j?.errors || j).slice(0, 300)}`)
-        // Job details as an update on the item
-        const detail = [
-          `Distributor: ${dist?.display_name || ''}`,
-          `Customer: ${job.customer_name}${job.customer_phone ? ` · ${job.customer_phone}` : ''}${job.customer_email ? ` · ${job.customer_email}` : ''}`,
-          job.customer_address_line1 ? `Address: ${[job.customer_address_line1, job.customer_suburb, job.customer_state, job.customer_postcode].filter(Boolean).join(' ')}` : '',
-          `VIN: ${job.vin || '—'}${job.vehicle_rego ? ` · Rego ${job.vehicle_rego}` : ''}${job.vehicle_description ? ` · ${job.vehicle_description}` : ''}`,
-          `Tune: ${job.tune_details || '—'}${job.invoice_number ? ` · Stripe inv ${job.invoice_number}` : ''}${job.amount ? ` · $${Number(job.amount).toFixed(2)}` : ''}`,
-          job.job_notes ? `Notes: ${job.job_notes}` : '',
-        ].filter(Boolean).join('\n')
-        await fetch('https://api.monday.com/v2', {
-          method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': token },
-          body: JSON.stringify({ query: `mutation ($item: ID!, $body: String!) { create_update (item_id: $item, body: $body) { id } }`, variables: { item: itemId, body: detail } }),
-        }).catch(() => {})
-        await c.from('b2b_tune_jobs').update({ monday_item_id: String(itemId), updated_at: new Date().toISOString() }).eq('id', jobId)
-      } else {
-        errs.push('Monday skipped: tune_jobs_monday_board_id not configured')
-      }
-    } catch (e: any) { errs.push(`Monday: ${e?.message}`) }
-  }
-
-  // 2. Customer letter with the DISTRIBUTOR's details (printed at JA on the
+  // Customer letter with the DISTRIBUTOR's details (printed at JA on the
   // existing letter agent). Uses the automation's default template body but
   // swaps the sign-off block for the distributor.
   if (!job.letter_queued_at && job.customer_address_line1) {
@@ -406,7 +369,7 @@ export async function syncTuneJobDownstream(jobId: string): Promise<void> {
 }
 
 /** Called by the MD worker when the MechanicDesk customer has been created. */
-export async function markTuneJobMdSynced(jobId: string, mdCustomerId: string | null, error?: string | null): Promise<void> {
+export async function markTuneJobMdSynced(jobId: string, mdCustomerId: string | null, error?: string | null, note?: string | null): Promise<void> {
   const c = sb()
   if (error) {
     await c.from('b2b_tune_jobs').update({ sync_error: `MD: ${error}`.slice(0, 1000), updated_at: new Date().toISOString() }).eq('id', jobId)
@@ -414,7 +377,10 @@ export async function markTuneJobMdSynced(jobId: string, mdCustomerId: string | 
   }
   await c.from('b2b_tune_jobs').update({
     md_customer_md_id: mdCustomerId, md_synced_at: new Date().toISOString(),
-    status: 'synced', synced_at: new Date().toISOString(), updated_at: new Date().toISOString(),
+    status: 'synced', synced_at: new Date().toISOString(),
+    // Non-fatal note (e.g. customer created but the vehicle attempt failed).
+    sync_error: note ? String(note).slice(0, 1000) : null,
+    updated_at: new Date().toISOString(),
   }).eq('id', jobId)
 }
 
