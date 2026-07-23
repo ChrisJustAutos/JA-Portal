@@ -66,6 +66,7 @@ export interface SaleInvoiceRow {
   ID: string; Number: string | null; Date: string | null; CustomerName: string | null
   CustomerPurchaseOrderNumber: string | null; IsTaxInclusive: boolean
   TotalAmount: number; TotalTax: number; BalanceDueAmount: number; Status: string | null; InvoiceType: string | null
+  Freight: number
 }
 export interface SaleLineRow {
   SaleInvoiceId: string; AccountDisplayID: string | null; AccountName: string | null
@@ -122,6 +123,9 @@ export async function fetchSaleInvoicesWithLines(
       TotalAmount: Number(inv.TotalAmount) || 0, TotalTax: Number(inv.TotalTax) || 0,
       BalanceDueAmount: Number(inv.BalanceDueAmount) || 0, Status: inv.Status ?? null,
       InvoiceType: inv.InvoiceType ?? inv.Type ?? null,
+      // Header freight — MYOB posts this to the linked freight income account
+      // but it NEVER appears in Lines[], so line-based reports can't see it.
+      Freight: Number(inv.Freight) || 0,
     })
     for (const l of Array.isArray(inv.Lines) ? inv.Lines : []) {
       lines.push({

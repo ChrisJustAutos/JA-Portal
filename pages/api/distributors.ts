@@ -148,6 +148,21 @@ export async function computeDistributorsPayload(start: string, end: string) {
   const invById = new Map<string, any>()
   for (const inv of invoices) invById.set(inv.ID, inv)
 
+  // MYOB keeps freight on the invoice HEADER (never in Lines[]), so a
+  // freight revenue category can't match anything from the line pull.
+  // Synthesize one line per invoice under the virtual account code FREIGHT —
+  // include that code in a category (Revenue Categories screen) to report it.
+  for (const inv of invoices) {
+    if (inv.Freight) {
+      allLines.push({
+        SaleInvoiceId: inv.ID,
+        AccountDisplayID: 'FREIGHT', AccountName: 'Freight (invoice header)',
+        TaxCodeCode: null, Total: inv.Freight, Description: 'Freight',
+        ItemNumber: null, ItemName: null, ShipQuantity: null, UnitPrice: null, RowID: null,
+      })
+    }
+  }
+
   if (invById.size === 0) {
     return {
       dateRange: { start, end }, configSource: cfg.source, categories: categoryNames,
