@@ -147,7 +147,11 @@ async function findExisting(client: MdClient, job: TuneJob): Promise<{ id: numbe
       if (hit) return { id: hit.md_id, via: 'portal mirror' }
     }
   }
-  if (job.customer_name.trim().length >= 5) {
+  // Name-search fallback ONLY for multi-word names: the first live run
+  // (2026-07-24) matched a test job's single name "Callum" onto an unrelated
+  // real MD customer — a first name alone is not identity.
+  const words = job.customer_name.trim().split(/\s+/)
+  if (job.customer_name.trim().length >= 5 && words.length >= 2) {
     const hits = await searchMdCustomers(client, job.customer_name.trim())
     const hit = hits.find(h => normName(h.name) === normName(job.customer_name))
     if (hit) return { id: hit.id, via: 'MD name search' }
