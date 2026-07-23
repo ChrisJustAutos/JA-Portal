@@ -7,12 +7,14 @@
 // CANNOT match phone numbers), creates the MD customer, and reports outcomes
 // back so the portal marks the job 'synced'.
 //
-// After the customer, the worker ATTEMPTS (unproven endpoints, non-fatal —
-// failures land as a note on the job while the customer still counts):
-//   1. the vehicle: POST /vehicles (registration_number/vin/model), and
-//   2. a customer-file note describing the tune: tried through the three
-//      idiomatic Rails shapes (POST /notes, POST /customers/{id}/notes,
-//      PUT /customers/{id} notes_attributes) — first success wins.
+// After the customer, the worker attempts (non-fatal — failures land as a
+// note on the job while the customer still counts):
+//   1. the vehicle: POST /vehicles (proven live 2026-07-24), and
+//   2. a customer-file note: several Rails shapes attempted, and success is
+//      VERIFIED by re-fetching the customer and checking the note text is
+//      present — MD silently ignores unknown payloads while returning 200,
+//      so response shape is never trusted (first live run's lesson).
+// Dedup guards: deleted customers never match; name search needs 2+ words.
 //
 // Env: MECHANICDESK_WORKSHOP_ID, MECHANICDESK_USERNAME, MECHANICDESK_PASSWORD,
 //      JA_PORTAL_BASE_URL, JA_PORTAL_API_KEY, DRY_RUN=1 for a no-write pass.
@@ -62,49 +64,43 @@ function composeCustomerNote(job: TuneJob): string {
 ${job.job_notes}` : bits
 }
 
-// Unproven — MD is Rails, so try the three idiomatic note shapes in order.
+// Customer-file note. The first live run proved MD silently IGNORES payloads
+// it doesn't recognise while echoing a 200 — so success here is NEVER inferred
+// from the response: after every attempt the customer is re-fetched and the
+// note text must actually be present. Attempts are ordered by Rails idiom
+// (attributes nested under the model key first).
 async function tryAddCustomerNote(client: MdClient, customerId: string | number, job: TuneJob): Promise<string | null> {
   const content = composeCustomerNote(job)
+  const marker = content.slice(0, 40)
+  const hasNote = (cust: any) => {
+    const notes = Array.isArray(cust?.notes) ? cust.notes : []
+    return notes.some((n: any) => String(n?.content || n?.body || n?.description || '').includes(marker))
+  }
   const attempts: Array<{ label: string; path: string; body: any; method?: string }> = [
-    { label: 'POST /notes', path: '/notes', body: { note: { content, notable_id: customerId, notable_type: 'Customer' } } },
+    { label: 'PUT /customers/{id} customer[notes_attributes]', path: `/customers/${customerId}`, method: 'PUT', body: { customer: { notes_attributes: [{ content }] } } },
+    { label: 'POST /notes note{}', path: '/notes', body: { note: { content, notable_id: customerId, notable_type: 'Customer' } } },
+    { label: 'POST /notes flat', path: '/notes', body: { content, notable_id: customerId, notable_type: 'Customer' } },
     { label: 'POST /customers/{id}/notes', path: `/customers/${customerId}/notes`, body: { note: { content } } },
-    { label: 'PUT /customers/{id} notes_attributes', path: `/customers/${customerId}`, method: 'PUT', body: { notes_attributes: [{ content }] } },
   ]
   const errors: string[] = []
   for (const a of attempts) {
+    let respNote = ''
     try {
       const r = await mdRequest<any>(client, a.path, { method: a.method || 'POST', body: JSON.stringify(a.body) })
-      if (r && (r.id || r.success === true || Array.isArray(r?.notes))) {
-        console.log(`  + customer note via ${a.label}`)
-        return null
-      }
-      errors.push(`${a.label}: unexpected response ${JSON.stringify(r).slice(0, 120)}`)
+      respNote = `resp ${JSON.stringify(r).slice(0, 150)}`
     } catch (e: any) {
-      errors.push(`${a.label}: ${String(e?.message || e).slice(0, 120)}`)
+      errors.push(`${a.label}: ${String(e?.message || e).slice(0, 150)}`)
+      continue
     }
+    // Authoritative check: is the note actually on the customer now?
+    const after = await getMdCustomer(client, customerId)
+    if (after && hasNote(after)) {
+      console.log(`  + customer note via ${a.label}`)
+      return null
+    }
+    errors.push(`${a.label}: accepted but note not present (${respNote})`)
   }
-  return `customer note failed (${errors.join(' | ')})`.slice(0, 400)
-}
-
-// Unproven endpoint — attempted per job, non-fatal on failure. Field names
-// mirror MD's read side (registration_number / vin / model).
-async function tryCreateVehicle(client: MdClient, customerId: string | number, job: TuneJob): Promise<string | null> {
-  if (!job.vin && !job.vehicle_rego) return null
-  try {
-    const r = await mdRequest<any>(client, '/vehicles', {
-      method: 'POST',
-      body: JSON.stringify({
-        customer_id: customerId,
-        ...(job.vehicle_rego ? { registration_number: job.vehicle_rego } : {}),
-        ...(job.vin ? { vin: job.vin } : {}),
-        ...(job.vehicle_description ? { model: job.vehicle_description } : {}),
-      }),
-    })
-    if (r?.id) { console.log(`  + vehicle #${r.id} (${job.vehicle_rego || job.vin})`); return null }
-    return `vehicle create returned no id: ${JSON.stringify(r).slice(0, 200)}`
-  } catch (e: any) {
-    return `vehicle create failed: ${String(e?.message || e).slice(0, 200)}`
-  }
+  return `customer note failed (${errors.join(' | ')})`.slice(0, 700)
 }
 
 async function fetchPending(): Promise<TuneJob[]> {
@@ -144,7 +140,10 @@ async function findExisting(client: MdClient, job: TuneJob): Promise<{ id: numbe
           (tail.length === 8 && (digits(cand.mobile).endsWith(tail) || digits(cand.phone).endsWith(tail))) ||
           (job.customer_email && (cand.email || '').toLowerCase() === job.customer_email.toLowerCase())
         ))
-      if (hit) return { id: hit.md_id, via: 'portal mirror' }
+      if (hit) {
+        const live = await getMdCustomer(client, hit.md_id)
+        if (live && !looksDeleted(live)) return { id: hit.md_id, via: 'portal mirror' }
+      }
     }
   }
   // Name-search fallback ONLY for multi-word names: the first live run
@@ -154,7 +153,10 @@ async function findExisting(client: MdClient, job: TuneJob): Promise<{ id: numbe
   if (job.customer_name.trim().length >= 5 && words.length >= 2) {
     const hits = await searchMdCustomers(client, job.customer_name.trim())
     const hit = hits.find(h => normName(h.name) === normName(job.customer_name))
-    if (hit) return { id: hit.id, via: 'MD name search' }
+    if (hit) {
+      const live = await getMdCustomer(client, hit.id)
+      if (live && !looksDeleted(live)) return { id: hit.id, via: 'MD name search' }
+    }
   }
   return null
 }
