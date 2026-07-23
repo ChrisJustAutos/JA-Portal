@@ -222,6 +222,19 @@ export async function bookFreightForOrder(orderId: string, opts: { actorId?: str
         carrier: order.freight_service_label || consignment.status?.name || null,
       })
       await c.from('b2b_order_events').insert({ order_id: orderId, event_type: 'myob_invoice_converted', actor_type: 'system', actor_id: null, notes: `MYOB invoice ${conv.myob_sale_invoice_number || conv.myob_sale_invoice_uid} (${conv.status})`, metadata: { myob_sale_invoice_uid: conv.myob_sale_invoice_uid, myob_sale_invoice_number: conv.myob_sale_invoice_number, status: conv.status } })
+      // Receipt the Stripe payment against the new invoice (→ Undeposited
+      // Funds) so it shows PAID in MYOB. Skips BECS until the debit clears
+      // (payment_settled_at gate inside). Best-effort — never blocks booking.
+      try {
+        const { applyCustomerPaymentInMyob } = await import('./b2b-myob-invoice')
+        const pay = await applyCustomerPaymentInMyob(orderId)
+        if (pay.status === 'created') {
+          await c.from('b2b_order_events').insert({ order_id: orderId, event_type: 'myob_payment_applied', actor_type: 'system', actor_id: null, notes: `Customer payment → Undeposited Funds (${pay.myob_payment_uid})`, metadata: { myob_payment_uid: pay.myob_payment_uid } })
+        }
+      } catch (e: any) {
+        console.error(`book-freight: MYOB customer payment failed for ${orderId}:`, e?.message || e)
+        try { await c.from('b2b_order_events').insert({ order_id: orderId, event_type: 'myob_payment_failed', actor_type: 'system', actor_id: null, notes: (e?.message || String(e)).slice(0, 500) }) } catch {}
+      }
     } catch (e: any) {
       console.error(`book-freight: MYOB order→invoice convert failed for ${orderId}:`, e?.message || e)
       try { await c.from('b2b_order_events').insert({ order_id: orderId, event_type: 'myob_invoice_convert_failed', actor_type: 'system', actor_id: null, notes: (e?.message || String(e)).slice(0, 500) }) } catch {}

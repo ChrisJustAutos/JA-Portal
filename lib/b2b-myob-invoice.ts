@@ -420,6 +420,85 @@ export async function convertOrderToInvoiceInMyob(orderId: string, opts: { track
   return { myob_sale_invoice_uid: invoiceUid, myob_sale_invoice_number: number, status: 'created' }
 }
 
+// ─── Customer payment (Stripe → Undeposited Funds) ─────────────────────
+
+export interface MyobPaymentResult {
+  myob_payment_uid: string | null
+  status: 'created' | 'already_applied' | 'invoice_already_paid' | 'not_settled' | 'no_invoice'
+}
+
+/**
+ * Records the Stripe payment against the order's MYOB sale invoice as a
+ * Customer Payment deposited to Undeposited Funds, so the invoice shows PAID
+ * in MYOB. Idempotent via b2b_orders.myob_payment_uid; also skips if the
+ * invoice balance is already 0 (e.g. someone receipted it manually).
+ *
+ * Only call once the money is actually settled — card/PayTo settle at
+ * checkout; BECS settles days later (payment_settled_at is the gate).
+ */
+export async function applyCustomerPaymentInMyob(orderId: string): Promise<MyobPaymentResult> {
+  const c = sb()
+  const { data: order, error: oErr } = await c
+    .from('b2b_orders')
+    .select(`
+      id, order_number, total_inc, paid_at, payment_settled_at, payment_method,
+      stripe_payment_intent_id, myob_sale_invoice_uid, myob_payment_uid,
+      distributor:b2b_distributors!b2b_orders_distributor_id_fkey ( id, display_name, myob_primary_customer_uid )
+    `)
+    .eq('id', orderId).maybeSingle()
+  if (oErr) throw new Error(`Order load failed: ${oErr.message}`)
+  if (!order) throw new Error(`Order ${orderId} not found`)
+
+  if (order.myob_payment_uid) return { myob_payment_uid: order.myob_payment_uid, status: 'already_applied' }
+  if (!order.myob_sale_invoice_uid) return { myob_payment_uid: null, status: 'no_invoice' }
+  if (!order.payment_settled_at) return { myob_payment_uid: null, status: 'not_settled' }
+
+  const dist: any = Array.isArray(order.distributor) ? order.distributor[0] : order.distributor
+  if (!dist?.myob_primary_customer_uid) throw new Error(`Distributor ${dist?.display_name || '?'} has no MYOB customer UID`)
+
+  const conn = await getConnection('JAWS')
+  if (!conn) throw new Error('JAWS MYOB connection not configured')
+
+  // Read the invoice's live balance and apply exactly that (never more) — so a
+  // manual receipt in MYOB, a rounding cent, or a partial doesn't double-pay.
+  const inv = await myobFetch(conn.id, `/accountright/${conn.company_file_id}/Sale/Invoice/Item/${order.myob_sale_invoice_uid}`)
+  if (inv.status !== 200 || !inv.data) throw new Error(`Invoice fetch failed (HTTP ${inv.status})`)
+  const balance = round2(Number(inv.data.BalanceDueAmount ?? 0))
+  if (balance <= 0) {
+    await c.from('b2b_orders').update({ myob_payment_at: new Date().toISOString() }).eq('id', orderId)
+    return { myob_payment_uid: null, status: 'invoice_already_paid' }
+  }
+  const amount = Math.min(balance, round2(Number(order.total_inc || 0)) || balance)
+
+  const payDate = String(order.payment_settled_at || order.paid_at || new Date().toISOString()).substring(0, 10)
+  const memo = `Stripe ${order.stripe_payment_intent_id || ''} — Order ${order.order_number} (${order.payment_method || 'card'})`.substring(0, 255)
+
+  const body: Record<string, any> = {
+    DepositTo: 'UndepositedFunds',
+    Customer: { UID: dist.myob_primary_customer_uid },
+    Date: payDate,
+    AmountReceived: amount,
+    Memo: memo,
+    Invoices: [{ UID: order.myob_sale_invoice_uid, Type: 'Invoice', AmountApplied: amount }],
+  }
+
+  const result = await myobFetch(conn.id, `/accountright/${conn.company_file_id}/Sale/CustomerPayment`, { method: 'POST', body })
+  if (result.status !== 201 && result.status !== 200) {
+    throw new Error(`MYOB CustomerPayment POST failed (HTTP ${result.status}): ${(result.raw || '').substring(0, 400)}`)
+  }
+  const location = (result.headers || {})['location'] || ''
+  const uuidMatches = String(location).match(UUID_REGEX_G) || []
+  const paymentUid = uuidMatches[uuidMatches.length - 1] || null
+  if (!paymentUid || paymentUid === conn.company_file_id) throw new Error(`MYOB returned 201 but no payment UID in Location: "${location}"`)
+
+  await c.from('b2b_orders').update({
+    myob_payment_uid: paymentUid,
+    myob_payment_at: new Date().toISOString(),
+  }).eq('id', orderId)
+
+  return { myob_payment_uid: paymentUid, status: 'created' }
+}
+
 // ─── Refund credit note ────────────────────────────────────────────────
 
 export interface MyobCreditNoteResult {
