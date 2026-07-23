@@ -324,6 +324,7 @@ export interface GraphMessageSummary {
   from: string | null
   receivedDateTime: string
   hasAttachments: boolean
+  internetMessageId?: string | null
 }
 
 /**
@@ -343,31 +344,42 @@ export async function listMessagesWithAttachments(
   // (GE Group statements, 2026-07-08). Callers then probe /attachments.
   // folderId: scan a specific mail folder instead of the Inbox (e.g. the
   // JAWS "Portal Invoices" intake folder — resolve via findFolderByDisplayName*).
+  // top may exceed 100 — the list follows @odata.nextLink until satisfied
+  // (page size 100), so long-lookback backfills see the whole window.
   opts: { sinceIsoDate?: string; top?: number; alsoSubjects?: RegExp; folderId?: string } = {},
 ): Promise<GraphMessageSummary[]> {
-  const wanted = Math.min(Math.max(opts.top || 50, 1), 100)
-  const fetchTop = Math.min(wanted * 2, 200)
+  const wanted = Math.min(Math.max(opts.top || 50, 1), 1000)
 
   const queryParams: Record<string, string> = {
-    '$select':  'id,subject,from,receivedDateTime,hasAttachments',
+    '$select':  'id,subject,from,receivedDateTime,hasAttachments,internetMessageId',
     '$orderby': 'receivedDateTime desc',
-    '$top':     String(fetchTop),
+    '$top':     '100',
   }
   if (opts.sinceIsoDate) {
     queryParams['$filter'] = `receivedDateTime ge ${opts.sinceIsoDate}`
   }
   const params = new URLSearchParams(queryParams)
   const folder = opts.folderId ? encodeURIComponent(opts.folderId) : 'Inbox'
-  const path = `/users/${encodeURIComponent(mailbox)}/mailFolders/${folder}/messages?${params.toString()}`
+  let path: string | null = `/users/${encodeURIComponent(mailbox)}/mailFolders/${folder}/messages?${params.toString()}`
 
-  const data = await graphJson<{ value: any[] }>(path)
-  const all = (data.value || []).map(m => ({
-    id: m.id,
-    subject: m.subject || null,
-    from: m.from?.emailAddress?.address || null,
-    receivedDateTime: m.receivedDateTime,
-    hasAttachments: !!m.hasAttachments,
-  }))
+  const all: GraphMessageSummary[] = []
+  let pages = 0
+  while (path && all.length < wanted * 2 && pages < 15) {
+    const data: any = await graphJson<{ value: any[] }>(path)
+    for (const m of data.value || []) {
+      all.push({
+        id: m.id,
+        subject: m.subject || null,
+        from: m.from?.emailAddress?.address || null,
+        receivedDateTime: m.receivedDateTime,
+        hasAttachments: !!m.hasAttachments,
+        internetMessageId: m.internetMessageId || null,
+      })
+    }
+    const next = data['@odata.nextLink'] as string | undefined
+    path = next ? next.replace(/^https:\/\/graph\.microsoft\.com\/v1\.0/, '') : null
+    pages++
+  }
 
   return all
     .filter(m => m.hasAttachments || (opts.alsoSubjects && m.subject && opts.alsoSubjects.test(m.subject)))

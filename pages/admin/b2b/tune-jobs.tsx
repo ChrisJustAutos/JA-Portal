@@ -101,6 +101,31 @@ export default function TuneJobsAdmin({ user }: { user: any }) {
     return d
   }
 
+  const [backfillProgress, setBackfillProgress] = useState('')
+  // Loop scans over the full window until a pass creates nothing new — each
+  // pass is capped (15 new jobs) so no single request can time out.
+  async function backfillSinceJan() {
+    setBusy('backfill')
+    const sinceJanDays = Math.ceil((Date.now() - new Date('2026-01-01').getTime()) / 86400_000) + 1
+    let total = 0, matched = 0, passes = 0
+    try {
+      for (; passes < 40; passes++) {
+        setBackfillProgress(`pass ${passes + 1} — ${total} jobs so far`)
+        const d = await post({ action: 'ingest_now', lookback_days: sinceJanDays })
+        total += d.created ?? 0
+        matched += d.matched ?? 0
+        if (!(d.created > 0)) break
+        await load().catch(() => {})
+      }
+      toast(`Backfill complete — ${total} tune job${total === 1 ? '' : 's'} ingested since 1 Jan (${matched} auto-matched) in ${passes + 1} pass${passes === 0 ? '' : 'es'}.`, 'success')
+    } catch (e: any) {
+      toast(`Backfill stopped after ${total} jobs: ${e.message || e}`, 'error')
+    }
+    setBackfillProgress('')
+    await load().catch(() => {})
+    setBusy('')
+  }
+
   async function scanNow() {
     setBusy('scan')
     try {
@@ -180,6 +205,10 @@ export default function TuneJobsAdmin({ user }: { user: any }) {
 
           {/* Toolbar */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+            <button onClick={backfillSinceJan} disabled={busy !== ''}
+              style={{ padding: '7px 14px', borderRadius: 6, border: `1px solid ${T.border}`, background: T.bg3, color: T.text2, fontSize: 12, cursor: 'pointer', fontFamily: 'inherit' }}>
+              {busy === 'backfill' ? `Backfilling… ${backfillProgress}` : 'Backfill since 1 Jan'}
+            </button>
             <button onClick={scanNow} disabled={busy === 'scan'}
               style={{ ...btn, border: `1px solid ${T.blue}`, background: T.blue, color: '#fff', opacity: busy === 'scan' ? 0.6 : 1 }}>
               {busy === 'scan' ? 'Scanning…' : 'Scan inbox now'}

@@ -21,7 +21,7 @@
 
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
 import {
-  listMessagesWithAttachments, getMessageMeta, getMessageBody,
+  listMessagesWithAttachments, getMessageBody,
   listAttachmentMeta, getAttachmentBase64, sendMail,
 } from './microsoft-graph'
 
@@ -170,7 +170,7 @@ export async function ingestTuneJobEmails(opts: { lookbackDays?: number; maxNew?
   // alsoSubjects /./ = keep EVERYTHING in the window (Stripe receipts are
   // often link-only with no attachment and subjects vary) — the sender check
   // below is the real filter.
-  const msgs = await listMessagesWithAttachments(mailbox, { sinceIsoDate: sinceIso, top: 100, alsoSubjects: /./ })
+  const msgs = await listMessagesWithAttachments(mailbox, { sinceIsoDate: sinceIso, top: 500, alsoSubjects: /./ })
   const inboxSeen = msgs.length
   let paymentFolderFound = false
   let paymentSeen = 0
@@ -189,7 +189,7 @@ export async function ingestTuneJobEmails(opts: { lookbackDays?: number; maxNew?
     if (folder) {
       paymentFolderFound = true
       matchedFolder = folder.displayName
-      const filed = await listMessagesWithAttachments(mailbox, { sinceIsoDate: sinceIso, top: 100, folderId: folder.id, alsoSubjects: /./ })
+      const filed = await listMessagesWithAttachments(mailbox, { sinceIsoDate: sinceIso, top: 500, folderId: folder.id, alsoSubjects: /./ })
       paymentSeen = filed.length
       const have = new Set(msgs.map(m => m.id))
       for (const f of filed) if (!have.has(f.id)) msgs.push(f)
@@ -205,6 +205,19 @@ export async function ingestTuneJobEmails(opts: { lookbackDays?: number; maxNew?
   } as any
   console.log('[tune-jobs ingest]', JSON.stringify(out.debug))
 
+  // Batch dedup up front: the list now carries internetMessageId, so already-
+  // ingested messages cost nothing (no attachment/meta calls) on re-runs —
+  // backfill clicks over the same window stay fast.
+  const seenSet = new Set<string>()
+  {
+    const keys = msgs.map(m => m.internetMessageId || `graph:${m.id}`)
+    for (let i = 0; i < keys.length; i += 200) {
+      const { data: seenRows } = await c.from('b2b_tune_jobs')
+        .select('internet_message_id').in('internet_message_id', keys.slice(i, i + 200))
+      for (const r of seenRows || []) seenSet.add(r.internet_message_id)
+    }
+  }
+
   // The reliable invariant (Chris 2026-07-24): every tune email carries an
   // attachment named "Invoice-JAWS…". That's the PRIMARY filter; a stripe.com
   // sender is kept as a fallback for any format drift.
@@ -212,6 +225,9 @@ export async function ingestTuneJobEmails(opts: { lookbackDays?: number; maxNew?
   for (const m of msgs) {
     if (out.created >= maxNew) break
     try {
+      const dedupKey = m.internetMessageId || `graph:${m.id}`
+      if (seenSet.has(dedupKey)) { out.skipped++; continue }
+
       const from = String(m.from || '').toLowerCase()
       let atts: Awaited<ReturnType<typeof listAttachmentMeta>> = []
       let jawsPdf: (typeof atts)[number] | undefined
@@ -221,11 +237,6 @@ export async function ingestTuneJobEmails(opts: { lookbackDays?: number; maxNew?
       }
       if (!jawsPdf && !from.includes('stripe.com')) continue
       out.scanned++
-
-      const meta = await getMessageMeta(mailbox, m.id)
-      const dedupKey = meta.internetMessageId || `graph:${m.id}`
-      const { data: seen } = await c.from('b2b_tune_jobs').select('id').eq('internet_message_id', dedupKey).maybeSingle()
-      if (seen) { out.skipped++; continue }
 
       // Prefer the Invoice-JAWS PDF (the invoice copy Chris wants stored);
       // then any PDF; fall back to the email body for extraction.
