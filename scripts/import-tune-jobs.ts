@@ -51,6 +51,40 @@ interface TuneJob {
   distributor_name: string | null
 }
 
+async function getMdCustomer(client: MdClient, id: string | number): Promise<any | null> {
+  try { return await mdRequest<any>(client, `/customers/${id}.json`) } catch { /* fall through */ }
+  try { return await mdRequest<any>(client, `/customers/${id}`) } catch { return null }
+}
+
+// MD soft-deletes customers in more ways than one flag — treat ANY deletion
+// signal as deleted (first live run matched a search hit whose page said
+// DELETED even though the search row didn't say so).
+function looksDeleted(c: any): boolean {
+  if (!c) return false
+  return c.deleted === true || c.is_deleted === true || !!c.deleted_at ||
+    String(c.status || '').toLowerCase() === 'deleted'
+}
+
+// Vehicle create — proven live 2026-07-24 (POST /vehicles, run 30053923797).
+async function tryCreateVehicle(client: MdClient, customerId: string | number, job: TuneJob): Promise<string | null> {
+  if (!job.vin && !job.vehicle_rego) return null
+  try {
+    const r = await mdRequest<any>(client, '/vehicles', {
+      method: 'POST',
+      body: JSON.stringify({
+        customer_id: customerId,
+        ...(job.vehicle_rego ? { registration_number: job.vehicle_rego } : {}),
+        ...(job.vin ? { vin: job.vin } : {}),
+        ...(job.vehicle_description ? { model: job.vehicle_description } : {}),
+      }),
+    })
+    if (r?.id) { console.log(`  + vehicle #${r.id} (${job.vehicle_rego || job.vin})`); return null }
+    return `vehicle create returned no id: ${JSON.stringify(r).slice(0, 200)}`
+  } catch (e: any) {
+    return `vehicle create failed: ${String(e?.message || e).slice(0, 200)}`
+  }
+}
+
 function composeCustomerNote(job: TuneJob): string {
   const bits = [
     `Distributor tune — ${new Date().toISOString().slice(0, 10)}: ${job.tune_details || 'tune'}`,
