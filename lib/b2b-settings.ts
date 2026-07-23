@@ -148,7 +148,9 @@ export async function assertCheckoutConfigured(): Promise<{
     cardFeeAccountUid: settings.myob_card_fee_account_uid,
     gstTaxCodeUid:     taxCodes.gstUid,
     freTaxCodeUid:     taxCodes.freUid,
-    cardFeePct:        Number(settings.card_fee_percent || 0.017),
-    cardFeeFixed:      Number(settings.card_fee_fixed   || 0.30),
+    // ?? not || — an admin must be able to set the surcharge to 0 (RBA rules
+    // require at-or-below cost; || silently reverted 0 to the default).
+    cardFeePct:        Number(settings.card_fee_percent ?? 0.017),
+    cardFeeFixed:      Number(settings.card_fee_fixed   ?? 0.30),
   }
 }

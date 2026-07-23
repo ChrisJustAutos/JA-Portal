@@ -94,7 +94,7 @@ export default withAuth('admin:b2b', async (req: NextApiRequest, res: NextApiRes
   for (const v of validated) {
     const lineEx = round2(v.unitPriceEx * v.qty)
     subtotalEx += lineEx
-    if (v.isTaxable) gst += lineEx * GST_RATE
+    if (v.isTaxable) gst += round2(lineEx * GST_RATE)
   }
   // ── Resolve freight (optional) — re-quote server-side, fold into totals ──
   let freightExGst = 0
@@ -180,7 +180,7 @@ export default withAuth('admin:b2b', async (req: NextApiRequest, res: NextApiRes
       route_snapshot: match.machship.routeSnapshot,
     }
   }
-  if (freightExGst > 0) { subtotalEx += freightExGst; gst += freightExGst * GST_RATE }
+  if (freightExGst > 0) { subtotalEx += freightExGst; gst += round2(freightExGst * GST_RATE) }
 
   // Drop-ship freight (supplier-shipped lines, priced by destination zone).
   let dropshipFreightExGst = 0
@@ -190,7 +190,7 @@ export default withAuth('admin:b2b', async (req: NextApiRequest, res: NextApiRes
     const ds = await getDropshipFreight(dsLines.map(v => ({ catalogue_id: v.catalogueId, sku: v.sku, name: v.name, qty: v.qty, is_drop_ship: true })), dsPostcode)
     if (ds.missing.length > 0) return res.status(400).json({ error: 'Drop-ship freight not set for some items to this destination.', details: ds.missing.map(m => `${m.sku} ${m.name} (${m.reason})`) })
     dropshipFreightExGst = ds.total_ex_gst
-    if (dropshipFreightExGst > 0) { subtotalEx += dropshipFreightExGst; gst += dropshipFreightExGst * GST_RATE }
+    if (dropshipFreightExGst > 0) { subtotalEx += dropshipFreightExGst; gst += round2(dropshipFreightExGst * GST_RATE) }
   }
   const hasFreight = !!(chosenFreightRateId || chosenSatchelId || chosenMachShipRoute) || dropshipFreightExGst > 0
   const totalFreightExGst = round2(freightExGst + dropshipFreightExGst)
@@ -235,11 +235,16 @@ export default withAuth('admin:b2b', async (req: NextApiRequest, res: NextApiRes
 
   // Stripe (test) checkout session.
   const baseUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://justautos.app'
-  const stripeLineItems: StripeLineItem[] = validated.map(v => ({
-    price_data: { currency: 'aud', product_data: { name: v.name, description: `SKU: ${v.sku}` }, unit_amount: Math.round((v.isTaxable ? v.unitPriceEx * 1.10 : v.unitPriceEx) * 100) },
-    quantity: v.qty,
-  }))
-  if (hasFreight && totalFreightExGst > 0) stripeLineItems.push({ price_data: { currency: 'aud', product_data: { name: 'Freight', description: freightLabel || 'Shipping' }, unit_amount: Math.round(round2(totalFreightExGst * 1.10) * 100) }, quantity: 1 })
+  // Quantity-1 line-total items, matching the real checkout's rounding exactly.
+  const stripeLineItems: StripeLineItem[] = validated.map(v => {
+    const lineEx = round2(v.unitPriceEx * v.qty)
+    const lineInc = v.isTaxable ? round2(lineEx + round2(lineEx * GST_RATE)) : lineEx
+    return {
+      price_data: { currency: 'aud', product_data: { name: v.qty > 1 ? `${v.name} × ${v.qty}` : v.name, description: `SKU: ${v.sku}` }, unit_amount: Math.round(lineInc * 100) },
+      quantity: 1,
+    }
+  })
+  if (hasFreight && totalFreightExGst > 0) stripeLineItems.push({ price_data: { currency: 'aud', product_data: { name: 'Freight', description: freightLabel || 'Shipping' }, unit_amount: Math.round(round2(totalFreightExGst + round2(totalFreightExGst * GST_RATE)) * 100) }, quantity: 1 })
   if (cardFeeInc > 0) stripeLineItems.push({ price_data: { currency: 'aud', product_data: { name: paymentMethod === 'payto' ? 'PayTo processing fee' : 'Card processing surcharge', description: 'Recovers Stripe transaction fees' }, unit_amount: Math.round(cardFeeInc * 100) }, quantity: 1 })
 
   let checkoutUrl: string | null = null

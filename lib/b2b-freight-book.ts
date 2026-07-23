@@ -53,11 +53,29 @@ export async function bookFreightForOrder(orderId: string, opts: { actorId?: str
   if (oErr) return fail(500, oErr.message)
   if (!order) return fail(404, 'Order not found')
   if (order.status === 'cancelled' || order.status === 'refunded') return fail(400, `Order is ${order.status} — cannot book freight.`)
+  if (order.status === 'pending_payment') return fail(400, 'Order has not been paid — cannot book freight for an unpaid order.')
   if (order.machship_consignment_id && !opts.force) {
     return { ok: false, httpStatus: 409, alreadyBooked: true, error: 'Consignment already booked for this order.', consignment_number: order.machship_consignment_number }
   }
   if (!order.machship_carrier_id || !order.machship_carrier_service_id) {
     return fail(400, 'Order has no MachShip carrier+service selected. Was it placed on a live quote?')
+  }
+
+  // Claim the booking stage: two concurrent calls (double-click, admin +
+  // email-token link) would otherwise BOTH create live MachShip consignments —
+  // the read-check above can't see a booking that hasn't persisted yet.
+  const { claimOrderStage, releaseOrderStage } = await import('./b2b-claims')
+  if (!(await claimOrderStage(c, orderId, 'freight_booking_at'))) {
+    return { ok: false, httpStatus: 409, error: 'A freight booking for this order is already in progress — wait a moment and refresh.' }
+  }
+  try {
+  // Re-read the consignment id under the claim — the racing call may have
+  // just booked (its persist lands before it releases the claim).
+  {
+    const { data: fresh } = await c.from('b2b_orders').select('machship_consignment_id, machship_consignment_number').eq('id', orderId).maybeSingle()
+    if (fresh?.machship_consignment_id && !opts.force) {
+      return { ok: false, httpStatus: 409, alreadyBooked: true, error: 'Consignment already booked for this order.', consignment_number: fresh.machship_consignment_number }
+    }
   }
 
   const { data: settings, error: sErr } = await c.from('b2b_settings').select(`
@@ -173,8 +191,18 @@ export async function bookFreightForOrder(orderId: string, opts: { actorId?: str
     update.status = 'shipped'
     update.carrier = order.freight_service_label || consignment.status?.name || 'MachShip'
   }
-  const { error: uErr } = await c.from('b2b_orders').update(update).eq('id', orderId)
-  if (uErr) return fail(500, `Persist consignment failed: ${uErr.message}`)
+  // The consignment now EXISTS in MachShip — losing this update means the
+  // idempotency guard can't see it and a retry books a second live consignment.
+  // Retry the persist hard before giving up, and if it still fails surface the
+  // consignment id in the error so it can be recorded/cancelled by hand.
+  let uErr: any = null
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const r = await c.from('b2b_orders').update(update).eq('id', orderId)
+    uErr = r.error
+    if (!uErr) break
+    await new Promise(r2 => setTimeout(r2, 1500 * (attempt + 1)))
+  }
+  if (uErr) return fail(500, `Persist consignment failed: ${uErr.message}. MachShip consignment ${consignment.id} (${consignment.consignmentNumber || 'no number'}) WAS created — do not rebook; attach or cancel it manually.`)
 
   let labelWarning: string | null = null
   let labelPath: string | null = null
@@ -286,5 +314,8 @@ export async function bookFreightForOrder(orderId: string, opts: { actorId?: str
     consignment_id: String(consignment.id), consignment_number: consignment.consignmentNumber,
     tracking_number: consignment.carrierConsignmentId, eta_utc: consignment.etaUtc || consignment.etaLocal || null,
     status: consignment.status?.name || null, label_path: labelPath, label_warning: labelWarning,
+  }
+  } finally {
+    await releaseOrderStage(c, orderId, 'freight_booking_at')
   }
 }

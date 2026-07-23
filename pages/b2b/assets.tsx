@@ -20,7 +20,7 @@ interface Section { name: string; assets: Asset[] }
 
 const FRESH_MS = 14 * 86400_000
 
-export default function B2BAssetsPage({ user }: { user: any }) {
+export default function B2BAssetsPage({ b2bUser: user }: { b2bUser: any }) {
   const [sections, setSections] = useState<Section[] | null>(null)
   const [error, setError] = useState('')
   const [busyId, setBusyId] = useState('')

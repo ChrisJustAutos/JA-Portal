@@ -17,7 +17,8 @@ import type { NextApiRequest, NextApiResponse } from 'next'
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
 import { withAuth } from '../../../../../../lib/authServer'
 import { createRefund } from '../../../../../../lib/stripe'
-import { writeRefundCreditNoteToMyob } from '../../../../../../lib/b2b-myob-invoice'
+import { writeRefundCreditNoteToMyob, deleteMyobSaleOrder } from '../../../../../../lib/b2b-myob-invoice'
+import { claimOrderStage, releaseOrderStage } from '../../../../../../lib/b2b-claims'
 
 let _sb: SupabaseClient | null = null
 function sb(): SupabaseClient {
@@ -65,11 +66,18 @@ export default withAuth('admin:b2b', async (req: NextApiRequest, res: NextApiRes
   // Load order
   const { data: order, error: oErr } = await c
     .from('b2b_orders')
-    .select('id, status, total_inc, refunded_total, stripe_payment_intent_id, paid_at, distributor_id')
+    .select('id, status, total_inc, refunded_total, stripe_payment_intent_id, paid_at, distributor_id, myob_invoice_uid, myob_sale_invoice_uid')
     .eq('id', id)
     .maybeSingle()
   if (oErr) return res.status(500).json({ error: oErr.message })
   if (!order) return res.status(404).json({ error: 'Order not found' })
+
+  // Serialize refunds per order — two concurrent refunds both reading the old
+  // refunded_total would under-record the cash out (lost update).
+  if (!(await claimOrderStage(c, id, 'refunding_at'))) {
+    return res.status(409).json({ error: 'Another refund for this order is already in progress — check the order events and retry shortly.' })
+  }
+  try {
 
   if (!order.stripe_payment_intent_id) {
     return res.status(400).json({ error: 'No Stripe payment intent — order has not been paid' })
@@ -177,6 +185,41 @@ export default withAuth('admin:b2b', async (req: NextApiRequest, res: NextApiRes
   // credit note in MYOB or retry. The failure is logged as its own event.
   let creditNote: { uid: string; number: string; amount: number; shape: string } | null = null
   let creditNoteError: string | null = null
+  if (!order.myob_sale_invoice_uid) {
+    // Pre-shipment: the sale exists in MYOB only as a Sale.ORDER (no GL
+    // impact) — a credit note here would post a credit with no matching sale.
+    // On a FULL refund, delete the open Sale.Order so it can't still be
+    // picked/shipped; on a partial, leave it and just record the event.
+    try {
+      if (fullyRefunded && order.myob_invoice_uid) {
+        const del = await deleteMyobSaleOrder(id)
+        await c.from('b2b_order_events').insert({
+          order_id: id, event_type: del.deleted ? 'myob_order_deleted' : 'myob_order_delete_skipped',
+          from_status: update.status || order.status, to_status: update.status || order.status,
+          actor_type: 'system', actor_id: null,
+          notes: del.deleted ? 'Open MYOB Sale.Order deleted after full pre-shipment refund (no credit note — no GL sale existed)' : `MYOB Sale.Order left in place: ${del.reason}`,
+          metadata: { stripe_refund_id: refund.id },
+        })
+      } else {
+        await c.from('b2b_order_events').insert({
+          order_id: id, event_type: 'myob_credit_note_skipped',
+          from_status: update.status || order.status, to_status: update.status || order.status,
+          actor_type: 'system', actor_id: null,
+          notes: 'No MYOB credit note: order not yet invoiced (pre-shipment). Reduce the eventual invoice or cancel the order instead.',
+          metadata: { amount: finalAmount, stripe_refund_id: refund.id },
+        })
+      }
+    } catch (e: any) {
+      creditNoteError = e?.message || String(e)
+      await c.from('b2b_order_events').insert({
+        order_id: id, event_type: 'myob_order_delete_failed',
+        from_status: update.status || order.status, to_status: update.status || order.status,
+        actor_type: 'system', actor_id: null,
+        notes: `MYOB Sale.Order delete failed after full refund — remove it in MYOB by hand: ${creditNoteError?.substring(0, 300)}`,
+        metadata: { stripe_refund_id: refund.id },
+      })
+    }
+  } else {
   try {
     const cn = await writeRefundCreditNoteToMyob(id, finalAmount, {
       stripeRefundId: refund.id,
@@ -220,6 +263,7 @@ export default withAuth('admin:b2b', async (req: NextApiRequest, res: NextApiRes
       },
     })
   }
+  }
 
   return res.status(200).json({
     ok: true,
@@ -233,4 +277,7 @@ export default withAuth('admin:b2b', async (req: NextApiRequest, res: NextApiRes
     myob_credit_note_error: creditNoteError,
     order: updated,
   })
+  } finally {
+    await releaseOrderStage(c, id, 'refunding_at')
+  }
 })

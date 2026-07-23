@@ -33,8 +33,8 @@ function sb(): SupabaseClient {
 // Refund-driven `refunded` is set by /refund endpoint, not here.
 const ALLOWED: Record<string, string[]> = {
   paid:      ['picking', 'cancelled'],
-  picking:   ['packed', 'paid'],          // 'paid' = undo
-  packed:    ['shipped', 'picking'],      // 'picking' = undo
+  picking:   ['packed', 'paid', 'cancelled'],    // 'paid' = undo
+  packed:    ['shipped', 'picking', 'cancelled'], // 'picking' = undo
   shipped:   ['delivered', 'packed'],     // 'packed' = undo
   delivered: ['shipped'],                 // 'shipped' = undo
   cancelled: [],                          // terminal (re-open requires manual DB intervention)

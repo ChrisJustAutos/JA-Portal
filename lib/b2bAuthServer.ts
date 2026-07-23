@@ -16,6 +16,7 @@
 
 import type { NextApiRequest, NextApiResponse, GetServerSidePropsContext } from 'next'
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
+import { createHash } from 'crypto'
 
 export const B2B_ACCESS_COOKIE  = 'ja-b2b-access-token'
 export const B2B_REFRESH_COOKIE = 'ja-b2b-refresh-token'
@@ -72,11 +73,60 @@ function getToken(req: NextApiRequest | { headers: Record<string, any> }): strin
   return cookies[B2B_ACCESS_COOKIE] || null
 }
 
+// ── Server-side MFA (AAL2) enforcement ─────────────────────────────────
+// The login page's TOTP gate is browser code — an attacker with a phished
+// password can call Supabase signInWithPassword directly and present the
+// resulting AAL1 token here. Rule: a user with a verified authenticator must
+// present an AAL2 token, UNLESS the request carries a valid trusted-device
+// cookie (the "skip the code for 24h" feature mints AAL1 sessions by design).
+const MFA_DEVICE_COOKIE = 'ja-b2b-mfa-device'
+const _totpCache = new Map<string, { has: boolean; at: number }>()
+
+export function b2bTokenAal(token: string): string | null {
+  try {
+    const payload = JSON.parse(Buffer.from(token.split('.')[1], 'base64url').toString())
+    return payload?.aal ? String(payload.aal) : null
+  } catch { return null }
+}
+
+export async function b2bHasVerifiedTotp(authUserId: string): Promise<boolean> {
+  const hit = _totpCache.get(authUserId)
+  if (hit && Date.now() - hit.at < 5 * 60_000) return hit.has
+  let has = false
+  try {
+    const { data, error } = await (getServiceClient().auth.admin as any).mfa.listFactors({ userId: authUserId })
+    if (!error) has = ((data as any)?.factors || []).some((f: any) => f?.status === 'verified')
+    else console.error('mfa listFactors error (treating as no factors):', error?.message)
+  } catch (e: any) { console.error('mfa listFactors failed (treating as no factors):', e?.message) }
+  _totpCache.set(authUserId, { has, at: Date.now() })
+  return has
+}
+
+export async function b2bMfaSatisfied(
+  req: { headers: Record<string, any> } | null,
+  token: string,
+  authUserId: string,
+): Promise<boolean> {
+  if (b2bTokenAal(token) === 'aal2') return true
+  if (!(await b2bHasVerifiedTotp(authUserId))) return true  // 2FA not enrolled
+  if (!req) return false
+  const deviceToken = parseCookies((req.headers as any).cookie)[MFA_DEVICE_COOKIE]
+  if (!deviceToken) return false
+  const hash = createHash('sha256').update(deviceToken).digest('hex')
+  const { data } = await getServiceClient().from('mfa_trusted_devices')
+    .select('id').eq('user_id', authUserId).eq('token_hash', hash)
+    .gt('expires_at', new Date().toISOString()).maybeSingle()
+  return !!data
+}
+
 // ── Core lookup ────────────────────────────────────────────────────────
 export async function getCurrentB2BUser(req: NextApiRequest | { headers: Record<string, any> }): Promise<B2BUser | null> {
   const token = getToken(req)
   if (!token) return null
-  return getCurrentB2BUserFromToken(token)
+  const user = await getCurrentB2BUserFromToken(token)
+  if (!user) return null
+  if (!(await b2bMfaSatisfied(req, token, user.authUserId))) return null
+  return user
 }
 
 export async function getCurrentB2BUserFromToken(token: string): Promise<B2BUser | null> {

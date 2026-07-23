@@ -631,7 +631,7 @@ function CatalogueCard({
         <div style={{marginTop:8}}>
           {item.stock.call_for_availability ? (
             <a
-              href={`mailto:?subject=${encodeURIComponent('Availability enquiry — ' + item.sku)}&body=${encodeURIComponent('Hi,\n\nCould you let me know availability and lead time for ' + item.name + ' (SKU ' + item.sku + ')?\n\nThanks')}`}
+              href={`mailto:orders@justautoswholesale.com?subject=${encodeURIComponent('Availability enquiry — ' + item.sku)}&body=${encodeURIComponent('Hi,\n\nCould you let me know availability and lead time for ' + item.name + ' (SKU ' + item.sku + ')?\n\nThanks')}`}
               style={{
                 display:'block',width:'100%',padding:'8px 12px',borderRadius:6,
                 border:`1px solid ${T.amber}`,background:`${T.amber}20`,color:T.amber,

@@ -83,6 +83,28 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   // a debit can fail late. Flag the order + alert admins so it can be chased.
   // (Requires 'checkout.session.async_payment_failed' to be enabled on the
   // Stripe webhook.)
+  // Abandoned checkout: Stripe expires unfinished sessions (~24h). Cancel the
+  // pending order so its lines stop counting against available stock — without
+  // this, every abandoned checkout shrinks availability forever.
+  if (eventType === 'checkout.session.expired') {
+    const s = event.data?.object || {}
+    const expiredOrderId = s.metadata?.order_id as string | undefined
+    if (expiredOrderId) {
+      const c2 = sb()
+      try {
+        const { data: rows } = await c2.from('b2b_orders')
+          .update({ status: 'cancelled', cancelled_at: new Date().toISOString() })
+          .eq('id', expiredOrderId).eq('status', 'pending_payment')
+          .eq('stripe_checkout_session_id', String(s.id || ''))
+          .select('id')
+        if (rows && rows.length > 0) {
+          await c2.from('b2b_order_events').insert({ order_id: expiredOrderId, event_type: 'checkout_expired', from_status: 'pending_payment', to_status: 'cancelled', actor_type: 'stripe', actor_id: null, notes: 'Stripe checkout session expired — order auto-cancelled, stock released.', metadata: { stripe_event_id: eventId, stripe_session_id: s.id } })
+        }
+      } catch (e: any) { console.error('webhook checkout.session.expired handling error:', e?.message || e) }
+    }
+    return res.status(200).json({ received: true, handled: 'checkout_expired' })
+  }
+
   // BECS settles days after checkout; this event confirms the funds landed.
   // Mark the order settled and receipt the payment in MYOB (→ Undeposited
   // Funds) if the sale invoice already exists (i.e. the order has shipped).

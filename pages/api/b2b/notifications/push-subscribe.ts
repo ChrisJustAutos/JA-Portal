@@ -32,6 +32,12 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, use
     const p256dh = String(body?.keys?.p256dh || '')
     const auth = String(body?.keys?.auth || '')
     if (!endpoint || !p256dh || !auth) return res.status(400).json({ error: 'endpoint + keys required' })
+    // A browser push endpoint belongs to ONE device/user — never silently
+    // re-assign another user's registration to the caller.
+    const { data: existing } = await c.from('b2b_push_subscriptions').select('b2b_user_id').eq('endpoint', endpoint).maybeSingle()
+    if (existing && existing.b2b_user_id !== user.id) {
+      return res.status(409).json({ error: 'This device is registered to a different user — sign out there first.' })
+    }
     const { error } = await c.from('b2b_push_subscriptions').upsert({
       b2b_user_id: user.id,
       endpoint, p256dh, auth,
@@ -49,7 +55,7 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, use
   if (req.method === 'DELETE') {
     const endpoint = String(body.endpoint || '')
     if (!endpoint) return res.status(400).json({ error: 'endpoint required' })
-    await c.from('b2b_push_subscriptions').delete().eq('endpoint', endpoint)
+    await c.from('b2b_push_subscriptions').delete().eq('endpoint', endpoint).eq('b2b_user_id', user.id)
     return res.status(200).json({ ok: true })
   }
 

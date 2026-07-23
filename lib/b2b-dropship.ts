@@ -124,14 +124,27 @@ export async function raiseDropShipPOsForOrder(orderId: string, opts: { actorId?
   if (oErr) throw new Error(oErr.message)
   if (!order) return { ok: false, raised: [], failures: [], missingSupplier: [], missingItem: [], error: 'Order not found' }
 
+  // One PO per supplier per order, EVER: suppliers already in dropship_pos are
+  // skipped on every run (including force), so a partial failure retries only
+  // the suppliers that never got their PO — never duplicating supplier A's.
   const existing = Array.isArray(order.dropship_pos) ? order.dropship_pos : []
-  if (existing.length > 0 && !opts.force) {
-    return { ok: false, alreadyRaised: true, raised: [], failures: [], missingSupplier: [], missingItem: [] }
+  const existingUids = new Set(existing.map((p: any) => String(p.supplier_uid || '')))
+
+  // Claim the stage — a webhook retry racing the admin button must not both
+  // reach MYOB/supplier email. Claims from crashed runs expire in 10 min.
+  const { claimOrderStage, releaseOrderStage } = await import('./b2b-claims')
+  if (!(await claimOrderStage(c, orderId, 'dropship_raising_at'))) {
+    return { ok: false, alreadyRaised: true, raised: [], failures: [], missingSupplier: [], missingItem: [], error: 'Another drop-ship raise is in progress' }
   }
+  try {
 
   const cfg = await assertCheckoutConfigured()
   const { bySupplier, missingSupplier, missingItem } = await gatherDropShip(c, orderId, cfg.gstTaxCodeUid)
+  for (const uid of Array.from(bySupplier.keys())) {
+    if (existingUids.has(String(uid))) bySupplier.delete(uid)
+  }
   if (bySupplier.size === 0) {
+    if (existing.length > 0) return { ok: false, alreadyRaised: true, raised: [], failures: [], missingSupplier, missingItem }
     return { ok: false, noDropShip: missingSupplier.length === 0, raised: [], failures: [], missingSupplier, missingItem }
   }
 
@@ -192,6 +205,9 @@ export async function raiseDropShipPOsForOrder(orderId: string, opts: { actorId?
   }
 
   return { ok: raised.length > 0, raised, failures, missingSupplier, missingItem }
+  } finally {
+    await releaseOrderStage(c, orderId, 'dropship_raising_at')
+  }
 }
 
 // Re-email an already-raised PO for one supplier (admin manual action). Returns

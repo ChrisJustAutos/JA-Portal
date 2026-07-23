@@ -96,7 +96,7 @@ export default withAuth('edit:b2b_distributors', async (req: NextApiRequest, res
     if ('myob_invoice_number_seq' in body) {
       const v = parseInt(String(body.myob_invoice_number_seq), 10)
       if (!isFinite(v) || v < 0) issues.push('Sequence must be a non-negative integer')
-      else update.myob_invoice_number_seq = v
+      else update.myob_invoice_number_seq = v  // no-decrease guard applied against current row below
     }
 
     if ('myob_credit_note_number_prefix' in body) {
@@ -252,9 +252,26 @@ export default withAuth('edit:b2b_distributors', async (req: NextApiRequest, res
       return res.status(400).json({ error: 'No editable fields supplied' })
     }
 
+    // The MYOB number sequences may only move FORWARD — winding one back makes
+    // the next order reuse a number MYOB already has, and every writeback after
+    // that fails as a duplicate.
+    if ('myob_invoice_number_seq' in update || 'myob_credit_note_number_seq' in update) {
+      const { data: cur } = await c.from('b2b_settings')
+        .select('myob_invoice_number_seq, myob_credit_note_number_seq').eq('id', 'singleton').maybeSingle()
+      if ('myob_invoice_number_seq' in update && cur && Number(update.myob_invoice_number_seq) < Number(cur.myob_invoice_number_seq || 0)) {
+        return res.status(400).json({ error: `Invoice sequence can't decrease (currently ${cur.myob_invoice_number_seq}) — MYOB would reject the duplicate numbers.` })
+      }
+      if ('myob_credit_note_number_seq' in update && cur && Number(update.myob_credit_note_number_seq) < Number(cur.myob_credit_note_number_seq || 0)) {
+        return res.status(400).json({ error: `Credit note sequence can't decrease (currently ${cur.myob_credit_note_number_seq}).` })
+      }
+    }
+
     update.updated_at = new Date().toISOString()
-    const { error } = await c.from('b2b_settings').update(update).eq('id', 'singleton')
+    const { error, data: updatedRows } = await c.from('b2b_settings').update(update).eq('id', 'singleton').select('id')
     if (error) return res.status(500).json({ error: error.message })
+    if (!updatedRows || updatedRows.length === 0) {
+      return res.status(500).json({ error: 'Settings row missing — nothing was saved. Contact the developer.' })
+    }
 
     return res.status(200).json({ ok: true, updated: update })
   }

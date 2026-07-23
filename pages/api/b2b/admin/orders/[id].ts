@@ -61,8 +61,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
 async function deleteOrder(id: string, res: NextApiResponse) {
   const c = sb()
-  const { data: existing } = await c.from('b2b_orders').select('order_number').eq('id', id).maybeSingle()
+  const { data: existing } = await c.from('b2b_orders').select('order_number, is_test, status, paid_at').eq('id', id).maybeSingle()
   if (!existing) return res.status(404).json({ error: 'Order not found' })
+  // Purging cascades away the lines AND the b2b_order_events audit trail while
+  // the Stripe charge / MYOB documents live on — so real transacted orders can
+  // never be deleted, only cancelled/refunded. Test orders and never-paid
+  // checkouts are fair game.
+  const purgeable = existing.is_test === true || (existing.status === 'pending_payment' && !existing.paid_at)
+  if (!purgeable) {
+    return res.status(400).json({ error: 'Real orders can’t be deleted — cancel or refund instead so the audit trail survives.' })
+  }
   // FK cascades remove order_lines, order_events and label_print_jobs. Any MYOB
   // invoice already written is NOT affected — void it in MYOB separately.
   const { error } = await c.from('b2b_orders').delete().eq('id', id)

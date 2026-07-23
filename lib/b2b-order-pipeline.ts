@@ -28,13 +28,23 @@ export async function runPostPaymentPipeline(orderId: string, opts: { paymentInt
   const c = sb()
   const { data: order, error: oErr } = await c
     .from('b2b_orders')
-    .select('id, status, order_number, payment_method, myob_invoice_uid, admin_notified_at, dropship_po_raised_at, distributor_notified_at')
+    .select('id, status, order_number, payment_method, is_test, myob_invoice_uid, admin_notified_at, dropship_po_raised_at, distributor_notified_at')
     .eq('id', orderId).maybeSingle()
   if (oErr) throw new Error(oErr.message)
   if (!order) return { ok: false, status: 'not_found' }
 
   // Full no-op only if both paid AND MYOB invoice written.
   if (order.status === 'paid' && order.myob_invoice_uid) return { ok: true, status: 'paid', alreadyComplete: true }
+
+  // Claim the pipeline: a Stripe webhook redelivery can overlap a still-running
+  // first invocation (MYOB + emails easily exceed Stripe's timeout), and the
+  // read-checks above can't see documents that haven't persisted yet. The loser
+  // simply returns — the retry that follows will no-op on the flags.
+  const { claimOrderStage, releaseOrderStage } = await import('./b2b-claims')
+  if (!(await claimOrderStage(c, orderId, 'myob_writing_at'))) {
+    return { ok: true, status: 'pipeline_already_running' }
+  }
+  try {
 
   const nowIso = new Date().toISOString()
   if (order.status !== 'paid') {
@@ -73,7 +83,9 @@ export async function runPostPaymentPipeline(orderId: string, opts: { paymentInt
 
   // Auto-raise drop-ship POs (best-effort, guarded).
   let dropshipResult: DropshipRaiseResult | undefined
-  if (!order.dropship_po_raised_at) {
+  // Test orders never auto-raise supplier POs — a PO is a REAL stock order and
+  // its email goes to a REAL supplier. (Admins can still raise manually.)
+  if (!order.dropship_po_raised_at && !(order as any).is_test) {
     try { dropshipResult = await raiseDropShipPOsForOrder(orderId, { actorId: null }) }
     catch (e: any) {
       console.error(`pipeline: auto drop-ship PO failed for order ${orderId}:`, e?.message || e)
@@ -138,4 +150,7 @@ export async function runPostPaymentPipeline(orderId: string, opts: { paymentInt
   } catch (e) { console.error('Order notify error (non-fatal):', e) }
 
   return { ok: true, status: 'paid' }
+  } finally {
+    await releaseOrderStage(c, orderId, 'myob_writing_at')
+  }
 }

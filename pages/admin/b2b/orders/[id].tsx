@@ -287,6 +287,12 @@ export default function AdminOrderDetailPage({ user }: Props) {
         })
         const j = await refundResp.json()
         if (!refundResp.ok) throw new Error(`Refund failed: ${j?.error || refundResp.status}`)
+        // A full refund already lands the order in the terminal 'refunded'
+        // status — a follow-up cancel transition would just 409.
+        flashMsg('Order refunded and closed')
+        setCancelModal(false)
+        await load()
+        return
       }
       // 2. Transition to cancelled
       const tResp = await fetch(`/api/b2b/admin/orders/${orderId}/transition`, {
@@ -351,7 +357,8 @@ export default function AdminOrderDetailPage({ user }: Props) {
   }, [orderId, data, notesDraft])
 
   const allowedTransitions = data ? (ALLOWED_TRANSITIONS[data.status] || []) : []
-  const canCancel  = data && canEdit && ['paid','picking','packed','shipped'].includes(data.status)
+  // Shipped orders can't be cancelled (goods are gone) — refund instead.
+  const canCancel  = data && canEdit && ['pending_payment','paid','picking','packed'].includes(data.status)
   const canDoRefund = data && canRefund && data.paid_at && (Number(data.refunded_total || 0) < Number(data.total_inc || 0) - 0.005)
 
   return (
@@ -530,6 +537,24 @@ export default function AdminOrderDetailPage({ user }: Props) {
                     {data.myob.write_error && (
                       <div style={{marginTop:8,padding:8,background:`${T.red}15`,border:`1px solid ${T.red}40`,borderRadius:5,color:T.red,fontSize:12}}>
                         ⚠ {data.myob.write_error}
+                        <div style={{marginTop:8}}>
+                          <button
+                            disabled={actionBusy}
+                            onClick={async () => {
+                              setActionBusy(true); setActionError(null)
+                              try {
+                                const r = await fetch(`/api/b2b/admin/orders/${orderId}/retry-myob`, { method: 'POST', credentials: 'same-origin' })
+                                const j = await r.json()
+                                if (!r.ok) throw new Error(j?.error || `HTTP ${r.status}`)
+                                flashMsg(j.myob_write_error ? 'Retry ran — MYOB failed again, see error' : 'MYOB write retried successfully')
+                                await load()
+                              } catch (e: any) { setActionError(e?.message || String(e)) }
+                              finally { setActionBusy(false) }
+                            }}
+                            style={{padding:'6px 12px',borderRadius:5,border:`1px solid ${T.red}60`,background:'transparent',color:T.red,fontSize:12,cursor:'pointer'}}>
+                            {actionBusy ? 'Retrying…' : '↻ Retry MYOB write'}
+                          </button>
+                        </div>
                       </div>
                     )}
                   </Card>

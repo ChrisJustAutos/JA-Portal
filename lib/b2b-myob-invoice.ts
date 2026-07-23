@@ -499,6 +499,29 @@ export async function applyCustomerPaymentInMyob(orderId: string): Promise<MyobP
   return { myob_payment_uid: paymentUid, status: 'created' }
 }
 
+/**
+ * Deletes the order's MYOB Sale.ORDER (pre-shipment, no GL impact). Used when
+ * a full refund lands before the order was ever converted to an invoice — a
+ * credit note would corrupt the GL (credit with no matching sale), and the
+ * open Sale.Order would otherwise sit in the register ready to be shipped.
+ */
+export async function deleteMyobSaleOrder(orderId: string): Promise<{ deleted: boolean; reason?: string }> {
+  const c = sb()
+  const { data: order } = await c.from('b2b_orders')
+    .select('myob_invoice_uid, myob_sale_invoice_uid').eq('id', orderId).maybeSingle()
+  if (!order?.myob_invoice_uid) return { deleted: false, reason: 'no MYOB order on file' }
+  if (order.myob_sale_invoice_uid) return { deleted: false, reason: 'order already converted to an invoice — credit note path applies' }
+
+  const conn = await getConnection('JAWS')
+  if (!conn) throw new Error('JAWS MYOB connection not configured')
+  const result = await myobFetch(conn.id, `/accountright/${conn.company_file_id}/Sale/Order/Item/${order.myob_invoice_uid}`, { method: 'DELETE' })
+  if (result.status === 404) return { deleted: false, reason: 'MYOB order not found (already deleted?)' }
+  if (result.status !== 200 && result.status !== 204) {
+    throw new Error(`MYOB Sale.Order DELETE failed (HTTP ${result.status}): ${(result.raw || '').substring(0, 300)}`)
+  }
+  return { deleted: true }
+}
+
 // ─── Refund credit note ────────────────────────────────────────────────
 
 export interface MyobCreditNoteResult {

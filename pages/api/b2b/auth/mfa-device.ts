@@ -12,7 +12,7 @@ import type { NextApiRequest, NextApiResponse } from 'next'
 import { serialize } from 'cookie'
 import { createClient } from '@supabase/supabase-js'
 import { randomBytes, createHash } from 'crypto'
-import { getCurrentB2BUserFromToken } from '../../../../lib/b2bAuthServer'
+import { getCurrentB2BUserFromToken, b2bTokenAal, b2bHasVerifiedTotp } from '../../../../lib/b2bAuthServer'
 
 const DEVICE_COOKIE = 'ja-b2b-mfa-device'
 const TRUST_HOURS = 24
@@ -45,6 +45,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   if (action === 'trust') {
+    // Trusting a device is what lets future logins skip the code — so it must
+    // itself be proven with the code (AAL2). Otherwise an AAL1 token from a
+    // phished password could self-trust and bypass 2FA permanently.
+    if (b2bTokenAal(access_token) !== 'aal2' && (await b2bHasVerifiedTotp(uid))) {
+      return res.status(401).json({ error: 'Enter the two-factor code before trusting this device.' })
+    }
     const token = randomBytes(32).toString('hex')
     const expiresAt = new Date(Date.now() + MAX_AGE * 1000).toISOString()
     const { error } = await c.from('mfa_trusted_devices').insert({

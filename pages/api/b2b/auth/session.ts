@@ -10,7 +10,7 @@
 
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { serialize } from 'cookie'
-import { getCurrentB2BUserFromToken, B2B_ACCESS_COOKIE, B2B_REFRESH_COOKIE } from '../../../../lib/b2bAuthServer'
+import { getCurrentB2BUserFromToken, b2bMfaSatisfied, B2B_ACCESS_COOKIE, B2B_REFRESH_COOKIE } from '../../../../lib/b2bAuthServer'
 import { getCurrentSupplierUserFromToken } from '../../../../lib/b2bSupplierAuth'
 import { createClient } from '@supabase/supabase-js'
 
@@ -25,6 +25,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const user = await getCurrentB2BUserFromToken(access_token)
     const supplier = user ? null : await getCurrentSupplierUserFromToken(access_token)
     if (!user && !supplier) return res.status(401).json({ error: 'This account isn’t set up for the B2B portal.' })
+
+    // Server-side 2FA: an account with a verified authenticator only gets a
+    // session cookie from an AAL2 token or a trusted device — the login page's
+    // client-side code gate is advisory, this is the enforcement.
+    if (user && !(await b2bMfaSatisfied(req as any, access_token, user.authUserId))) {
+      return res.status(401).json({ error: 'Two-factor code required for this account.', mfa_required: true })
+    }
 
     const cookieOpts = {
       httpOnly: true,

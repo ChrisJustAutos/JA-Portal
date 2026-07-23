@@ -79,10 +79,13 @@ export function applyPricing(
     }
   }
 
+  // All money downstream (order lines, Stripe, MYOB) rounds at 2dp — a 3dp
+  // promo/volume price here would make those three disagree by real cents.
+  const r2 = (n: number) => Math.round(n * 100) / 100
   let result: PricingResult
   if (volumePrice != null) {
     result = {
-      unit_price_ex_gst:    volumePrice,
+      unit_price_ex_gst:    r2(volumePrice),
       trade_price_ex_gst:   trade,
       promo_active:         false,  // volume break beat promo for this qty
       volume_break_applied: true,
@@ -90,7 +93,7 @@ export function applyPricing(
     }
   } else {
     result = {
-      unit_price_ex_gst:    base,
+      unit_price_ex_gst:    r2(base),
       trade_price_ex_gst:   trade,
       promo_active:         promoActive,
       volume_break_applied: false,

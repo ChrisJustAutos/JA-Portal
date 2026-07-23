@@ -114,7 +114,7 @@ export async function sendOrderPlacedAdminEmail(orderId: string, opts: { dropshi
 export async function sendDistributorOrderEmails(orderId: string, _opts: { invoiceNumber?: string | null } = {}): Promise<{ ok: boolean; sent: string[] }> {
   const c = svc()
   const { data: order } = await c.from('b2b_orders').select(`
-      id, order_number, customer_po, total_inc, shipping_address_snapshot,
+      id, order_number, customer_po, total_inc, is_test, shipping_address_snapshot,
       distributor:b2b_distributors!b2b_orders_distributor_id_fkey ( display_name, primary_contact_email, ship_line1, ship_line2, ship_suburb, ship_state, ship_postcode )
     `).eq('id', orderId).maybeSingle()
   if (!order) return { ok: false, sent: [] }
@@ -130,7 +130,10 @@ export async function sendDistributorOrderEmails(orderId: string, _opts: { invoi
       distributor_name: dist?.display_name || '', order_number: order.order_number,
       customer_po: order.customer_po ? ` (your PO ${order.customer_po})` : '', order_total: money(order.total_inc),
     }, { lines_table: linesBlock, ship_to: addressBlock(shipToText(order.shipping_address_snapshot, dist)) })
-    if (r.enabled) { try { await sendMail(await getFromMailbox(), { to: [primary], subject: r.subject, html: r.html }); sent.push('order_confirmed') } catch (e: any) { console.error('distributor order_confirmed email failed:', e?.message) } }
+    // A test order's confirmation still reaches the chosen distributor's real
+    // inbox — make sure nobody actions it as a genuine order.
+    const subj = (order as any).is_test ? `[TEST — please ignore] ${r.subject}` : r.subject
+    if (r.enabled) { try { await sendMail(await getFromMailbox(), { to: [primary], subject: subj, html: r.html }); sent.push('order_confirmed') } catch (e: any) { console.error('distributor order_confirmed email failed:', e?.message) } }
   }
 
   await c.from('b2b_orders').update({ distributor_notified_at: new Date().toISOString() }).eq('id', orderId)
@@ -145,7 +148,7 @@ export async function sendDistributorOrderEmails(orderId: string, _opts: { invoi
 export async function sendDistributorShippedEmail(orderId: string, info: { carrier?: string | null; consignmentNumber?: string | null; trackingNumber?: string | null; trackingUrl?: string | null; eta?: string | null }): Promise<void> {
   const c = svc()
   const { data: order } = await c.from('b2b_orders').select(`
-      order_number, total_inc, distributor_invoice_sent_at,
+      order_number, total_inc, is_test, distributor_invoice_sent_at,
       myob_sale_invoice_number, myob_invoice_number, label_pdf_path,
       distributor:b2b_distributors!b2b_orders_distributor_id_fkey ( display_name, freight_email, invoice_email, primary_contact_email )
     `).eq('id', orderId).maybeSingle()
@@ -190,7 +193,8 @@ export async function sendDistributorShippedEmail(orderId: string, info: { carri
   }, { tracking_link: info.trackingUrl ? buttonHtml('Track this shipment', info.trackingUrl, '#4f8ef7') : '' })
   if (!r.enabled) return
   try {
-    await sendMail(await getFromMailbox(), { to: [to], subject: r.subject, html: r.html, attachments })
+    const shipSubj = (order as any).is_test ? `[TEST — please ignore] ${r.subject}` : r.subject
+    await sendMail(await getFromMailbox(), { to: [to], subject: shipSubj, html: r.html, attachments })
     await c.from('b2b_orders').update({ distributor_invoice_sent_at: new Date().toISOString() }).eq('id', orderId)
   } catch (e: any) { console.error('distributor shipped+invoice email failed:', e?.message) }
 }

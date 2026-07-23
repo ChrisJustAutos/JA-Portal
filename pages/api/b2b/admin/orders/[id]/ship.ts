@@ -57,6 +57,12 @@ export default withAuth('admin:b2b', async (req: NextApiRequest, res: NextApiRes
     .maybeSingle()
   if (oErr) return res.status(500).json({ error: oErr.message })
   if (!order) return res.status(404).json({ error: 'Order not found' })
+  // Never flip an unpaid/cancelled/refunded order straight to shipped — that
+  // bypasses the transition state machine and tells the distributor a
+  // never-paid order is on its way.
+  if (['pending_payment', 'cancelled', 'refunded'].includes(order.status)) {
+    return res.status(400).json({ error: `Order is ${order.status} — it can't be marked shipped.` })
+  }
 
   const body = (req.body || {}) as Record<string, any>
 

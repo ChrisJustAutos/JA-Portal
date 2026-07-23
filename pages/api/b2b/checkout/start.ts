@@ -298,13 +298,15 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, use
     })
   }
 
-  // 3. Compute totals
+  // 3. Compute totals. Round at LINE level (2dp), exactly like the
+  // b2b_order_lines snapshots and the Stripe line items — header totals are
+  // the sum of the rounded lines, so portal = Stripe = MYOB to the cent.
   let subtotalEx = 0
   let gst = 0
   for (const v of validated) {
-    const lineEx = v.unitPriceEx * v.qty
+    const lineEx = round2(v.unitPriceEx * v.qty)
     subtotalEx += lineEx
-    if (v.isTaxable) gst += lineEx * GST_RATE
+    if (v.isTaxable) gst += round2(lineEx * GST_RATE)
   }
 
   // Resolve freight rate (if any) and fold its ex-GST cost into the
@@ -325,7 +327,7 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, use
   if (chosenFreightRateId) {
     const { data: rate, error: rErr } = await c
       .from('b2b_freight_rates')
-      .select('id, label, price_ex_gst, is_active, zone_id, b2b_freight_zones!inner(id, name, is_active)')
+      .select('id, label, price_ex_gst, is_active, zone_id, b2b_freight_zones!inner(id, name, is_active, postcode_ranges)')
       .eq('id', chosenFreightRateId)
       .maybeSingle()
     if (rErr) return res.status(500).json({ error: rErr.message })
@@ -336,11 +338,25 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, use
     if (!zone || !zone.is_active) {
       return res.status(400).json({ error: 'Freight zone for the selected rate is no longer active.' })
     }
+    // The rate's zone must actually cover the distributor's delivery postcode —
+    // otherwise a cheap zone's rate id could be replayed from another quote.
+    {
+      const { data: zDist } = await c
+        .from('b2b_distributors')
+        .select('ship_postcode, bill_postcode')
+        .eq('id', user.distributor.id)
+        .maybeSingle()
+      const zonePostcode = String(zDist?.ship_postcode || zDist?.bill_postcode || '').trim()
+      const { postcodeMatches } = await import('../../../../lib/b2b-freight')
+      const ranges = Array.isArray(zone.postcode_ranges) ? zone.postcode_ranges : []
+      if (!zonePostcode || !postcodeMatches(zonePostcode, ranges)) {
+        return res.status(400).json({ error: 'Selected freight rate doesn’t cover your delivery postcode — refresh the cart and pick again.' })
+      }
+    }
     freightExGst = round2(Number(rate.price_ex_gst) || 0)
     freightLabel = `${zone.name} — ${rate.label}`
     freightZoneId = zone.id
     subtotalEx += freightExGst
-    gst += freightExGst * GST_RATE  // freight is taxable
   } else if (chosenSatchelId) {
     // Flat-rate satchel. Re-run the exact same eligibility gate the quote used
     // (active + weight under cap + items fit the satchel size) so a stale or
@@ -380,7 +396,6 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, use
       cost_ex_gst: round2(match.cost_ex_gst),
     }
     subtotalEx += freightExGst
-    gst += freightExGst * GST_RATE
   } else if (chosenMachShipRoute) {
     // Re-quote server-side so the distributor pays the live price the
     // server computes — not whatever the cart UI submitted. If the
@@ -467,7 +482,6 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, use
     }
     freightQuoteMarkupPct = match.markup_pct
     subtotalEx += freightExGst
-    gst += freightExGst * GST_RATE
   }
 
   // Drop-ship freight: supplier-shipped lines priced by destination zone, added
@@ -495,11 +509,21 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, use
     dropshipFreightExGst = ds.total_ex_gst
     if (dropshipFreightExGst > 0) {
       subtotalEx += dropshipFreightExGst
-      gst += dropshipFreightExGst * GST_RATE
     }
   }
   const hasCarrierFreight = !!(chosenFreightRateId || chosenSatchelId || chosenMachShipRoute)
+  // Warehouse-shipped lines MUST carry a freight selection — without this, a
+  // request that simply omits every freight field checks out with $0 freight
+  // and JA ships at its own cost. All-drop-ship orders are the only carve-out
+  // (their freight is the per-zone drop-ship charge computed above).
+  if (!hasCarrierFreight && validated.some(v => !v.isDropShip)) {
+    return res.status(400).json({ error: 'Pick a freight option before checking out — refresh the cart if none are showing.' })
+  }
   const totalFreightExGst = round2(freightExGst + dropshipFreightExGst)
+  // Freight GST computed ONCE on the combined total — the identical figure
+  // the single Stripe "Freight" line charges, so the two can't drift.
+  const freightGst = round2(totalFreightExGst * GST_RATE)
+  gst += freightGst
   const hasAnyFreight = hasCarrierFreight || dropshipFreightExGst > 0
   if (!freightLabel && dropshipFreightExGst > 0) freightLabel = 'Drop-ship freight'
 
@@ -578,23 +602,29 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, use
   const baseUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://justautos.app'
   // Skip $0 lines (e.g. "included" bundle components) — Stripe Checkout rejects
   // zero-amount line items. They're still recorded as order lines for MYOB.
+  // Charge the LINE TOTAL as a quantity-1 item, not a per-unit price: rounding
+  // the inc-GST price per unit and multiplying by qty drifts from the invoice
+  // by up to qty × half a cent. This mirrors line_total_inc exactly.
   const stripeLineItems: StripeLineItem[] = validated.filter(v => v.unitPriceEx > 0).map(v => {
-    const unitInc = v.isTaxable ? v.unitPriceEx * 1.10 : v.unitPriceEx
+    const lineEx = round2(v.unitPriceEx * v.qty)
+    const lineInc = v.isTaxable ? round2(lineEx + round2(lineEx * GST_RATE)) : lineEx
     return {
       price_data: {
         currency: 'aud',
         product_data: {
-          name: v.name,
-          description: `SKU: ${v.sku}`,
+          name: v.qty > 1 ? `${v.name} × ${v.qty}` : v.name,
+          description: `SKU: ${v.sku}${v.qty > 1 ? ` — ${v.qty} @ $${v.unitPriceEx.toFixed(2)} ex GST` : ''}`,
         },
-        unit_amount: Math.round(unitInc * 100),
+        unit_amount: Math.round(lineInc * 100),
       },
-      quantity: v.qty,
+      quantity: 1,
     }
   })
 
   if (hasAnyFreight && totalFreightExGst > 0) {
-    const freightInc = round2(totalFreightExGst * 1.10)  // freight is GST-taxable
+    // Same ex + rounded-GST construction as the order header's freightGst —
+    // round2(x * 1.10) can differ from x + round2(x * 0.10) by a cent.
+    const freightInc = round2(totalFreightExGst + freightGst)
     stripeLineItems.push({
       price_data: {
         currency: 'aud',
@@ -652,6 +682,17 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, use
     await c.from('b2b_order_lines').delete().eq('order_id', order.id)
     await c.from('b2b_orders').delete().eq('id', order.id)
     return res.status(502).json({ error: `Stripe checkout failed: ${e?.message || String(e)}` })
+  }
+
+  // Regression tripwire: Stripe must be about to charge EXACTLY the order
+  // total. If the line construction ever drifts from the header math again,
+  // fail the checkout (with rollback) rather than take a mismatched payment.
+  const expectedCents = Math.round(totalInc * 100)
+  if (session.amount_total != null && Number(session.amount_total) !== expectedCents) {
+    console.error(`checkout: Stripe amount_total ${session.amount_total} != order total ${expectedCents} for ${order.order_number}`)
+    await c.from('b2b_order_lines').delete().eq('order_id', order.id)
+    await c.from('b2b_orders').delete().eq('id', order.id)
+    return res.status(500).json({ error: 'Checkout total mismatch — nothing was charged. Please try again or contact your account manager.' })
   }
 
   // 8. Save Stripe session id and emit a status event

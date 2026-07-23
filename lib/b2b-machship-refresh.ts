@@ -63,7 +63,9 @@ export async function refreshOrderFreight(c: SupabaseClient, orderId: string): P
     freight_status:        statusName || order.freight_status,
     freight_eta_at:        consignment.etaUtc || consignment.etaLocal || null,
     last_freight_poll_at:  nowIso,
-    tracking_number:       consignment.carrierConsignmentId || null,
+    // Keep the stored number when a poll transiently omits it — assigning
+    // null here erased real tracking numbers from the distributor UI.
+    tracking_number:       consignment.carrierConsignmentId || undefined,
   }
   // Status transitions that pull the order along — only forward, never
   // back. We don't overwrite a pre-existing delivered_at if MachShip
