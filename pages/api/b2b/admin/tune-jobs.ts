@@ -14,7 +14,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { createClient } from '@supabase/supabase-js'
 import { withAuth } from '../../../../lib/authServer'
-import { assignTuneJobDistributor, syncTuneJobDownstream, sendTuneJobReminders, ingestTuneJobEmails } from '../../../../lib/b2b-tune-jobs'
+import { assignTuneJobDistributor, dismissTuneJob, syncTuneJobDownstream, sendTuneJobReminders, ingestTuneJobEmails } from '../../../../lib/b2b-tune-jobs'
 
 export const config = { maxDuration: 300 }
 
@@ -57,8 +57,8 @@ export default withAuth('edit:b2b_distributors', async (req: NextApiRequest, res
       }
       if (action === 'dismiss') {
         if (!body.job_id) return res.status(400).json({ error: 'job_id required' })
-        await c.from('b2b_tune_jobs').update({ status: 'dismissed', updated_at: new Date().toISOString() }).eq('id', String(body.job_id))
-        return res.status(200).json({ ok: true })
+        const r = await dismissTuneJob(String(body.job_id))
+        return res.status(200).json({ ok: true, dismissed_jobs: r.dismissedJobs, excluded_name: r.excludedName })
       }
       if (action === 'retry_sync') {
         if (!body.job_id) return res.status(400).json({ error: 'job_id required' })

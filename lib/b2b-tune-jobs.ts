@@ -115,6 +115,31 @@ export async function assignTuneJobDistributor(jobId: string, distributorId: str
   return { matchedJobs }
 }
 
+/**
+ * Dismiss a job AND exclude its payer name: every other unmatched job with
+ * the same normalised name is dismissed in the same click, and future
+ * receipts from that payer are skipped at ingest (b2b_tune_company_exclusions).
+ */
+export async function dismissTuneJob(jobId: string): Promise<{ dismissedJobs: number; excludedName: string | null }> {
+  const c = sb()
+  const { data: job } = await c.from('b2b_tune_jobs').select('company_raw').eq('id', jobId).maybeSingle()
+  if (!job) throw new Error('Job not found')
+  await c.from('b2b_tune_jobs').update({ status: 'dismissed', updated_at: new Date().toISOString() }).eq('id', jobId)
+  let dismissedJobs = 1
+  const norm = normCompany(job.company_raw)
+  if (norm) {
+    await c.from('b2b_tune_company_exclusions').upsert({ company_raw: norm }, { onConflict: 'company_raw' })
+    const { data: siblings } = await c.from('b2b_tune_jobs')
+      .select('id, company_raw').eq('status', 'unmatched').neq('id', jobId)
+    const ids = (siblings || []).filter(x => normCompany(x.company_raw) === norm).map(x => x.id)
+    if (ids.length) {
+      await c.from('b2b_tune_jobs').update({ status: 'dismissed', updated_at: new Date().toISOString() }).in('id', ids)
+      dismissedJobs += ids.length
+    }
+  }
+  return { dismissedJobs, excludedName: norm || null }
+}
+
 // ── LLM extraction ──────────────────────────────────────────────────────
 
 interface TuneExtraction {
@@ -284,6 +309,13 @@ export async function ingestTuneJobEmails(opts: { lookbackDays?: number; maxNew?
 
       const x = await extractTuneDetails(content)
       if (!x || !x.is_tune_receipt) { out.skipped++; continue }
+
+      // Excluded payer (dismissed once in admin) — never create jobs again.
+      if (x.company) {
+        const { data: excl } = await c.from('b2b_tune_company_exclusions')
+          .select('company_raw').eq('company_raw', normCompany(x.company)).maybeSingle()
+        if (excl) { out.skipped++; continue }
+      }
 
       // Store the PDF copy (best-effort — the job row is still created without it).
       let pdfPath: string | null = null

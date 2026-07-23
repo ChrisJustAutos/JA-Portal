@@ -183,8 +183,11 @@ export default function TuneJobsAdmin({ user }: { user: any }) {
   async function dismiss(job: TuneJob) {
     setBusy(job.id)
     try {
-      await post({ action: 'dismiss', job_id: job.id })
-      toast('Dismissed.', 'success')
+      const d = await post({ action: 'dismiss', job_id: job.id })
+      const n = Number(d.dismissed_jobs || 1)
+      toast(d.excluded_name
+        ? `Dismissed${n > 1 ? ` ${n} jobs` : ''} — "${d.excluded_name}" is now excluded from future scans.`
+        : 'Dismissed.', 'success')
       await load()
     } catch (e: any) { toast(e.message || 'Dismiss failed', 'error') }
     setBusy('')
