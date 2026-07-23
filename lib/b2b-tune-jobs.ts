@@ -173,7 +173,7 @@ export interface IngestResult {
   debug?: { mailbox: string; since: string; inboxSeen: number; paymentFolderFound: boolean; paymentSeen: number; sample: Array<{ from: string | null; subject: string | null; received: string; hasAttachments: boolean }> }
 }
 
-export async function ingestTuneJobEmails(opts: { lookbackDays?: number; maxNew?: number } = {}): Promise<IngestResult> {
+export async function ingestTuneJobEmails(opts: { lookbackDays?: number; maxNew?: number; sinceIso?: string; untilIso?: string } = {}): Promise<IngestResult> {
   // Cap the LLM/PDF work per invocation so a big backlog can't time the
   // function out — repeated runs (hourly cron / scan-now) drain the rest.
   const maxNew = Math.max(1, opts.maxNew ?? 15)
@@ -182,7 +182,8 @@ export async function ingestTuneJobEmails(opts: { lookbackDays?: number; maxNew?
   const out: IngestResult = { scanned: 0, created: 0, matched: 0, skipped: 0, errors: [] }
   if (!mailbox) { out.errors.push('No mailbox configured (TUNE_JOBS_MAILBOX)'); return out }
 
-  const sinceIso = new Date(Date.now() - (opts.lookbackDays ?? 7) * 24 * 3600_000).toISOString()
+  const sinceIso = opts.sinceIso || new Date(Date.now() - (opts.lookbackDays ?? 7) * 24 * 3600_000).toISOString()
+  const untilIso = opts.untilIso || undefined
   // Stripe receipt emails frequently have NO attachment (link-only) — keep
   // anything whose subject smells like a receipt/invoice; sender is checked below.
   // Scan the Inbox AND the "payment" subfolder staff manually file these
@@ -191,7 +192,7 @@ export async function ingestTuneJobEmails(opts: { lookbackDays?: number; maxNew?
   // alsoSubjects /./ = keep EVERYTHING in the window (Stripe receipts are
   // often link-only with no attachment and subjects vary) — the sender check
   // below is the real filter.
-  const msgs = await listMessagesWithAttachments(mailbox, { sinceIsoDate: sinceIso, top: 500, alsoSubjects: /./ })
+  const msgs = await listMessagesWithAttachments(mailbox, { sinceIsoDate: sinceIso, untilIsoDate: untilIso, top: 500, alsoSubjects: /./ })
   const inboxSeen = msgs.length
   let paymentFolderFound = false
   let paymentSeen = 0
@@ -210,7 +211,7 @@ export async function ingestTuneJobEmails(opts: { lookbackDays?: number; maxNew?
     if (folder) {
       paymentFolderFound = true
       matchedFolder = folder.displayName
-      const filed = await listMessagesWithAttachments(mailbox, { sinceIsoDate: sinceIso, top: 500, folderId: folder.id, alsoSubjects: /./ })
+      const filed = await listMessagesWithAttachments(mailbox, { sinceIsoDate: sinceIso, untilIsoDate: untilIso, top: 500, folderId: folder.id, alsoSubjects: /./ })
       paymentSeen = filed.length
       const have = new Set(msgs.map(m => m.id))
       for (const f of filed) if (!have.has(f.id)) msgs.push(f)

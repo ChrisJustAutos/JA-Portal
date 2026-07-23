@@ -103,22 +103,34 @@ export default function TuneJobsAdmin({ user }: { user: any }) {
   }
 
   const [backfillProgress, setBackfillProgress] = useState('')
-  // Loop scans over the full window until a pass creates nothing new — each
-  // pass is capped (15 new jobs) so no single request can time out.
+  // Month-by-month backfill: the mailbox read is capped at the newest ~500
+  // messages per window, and the Payments folder holds far more than tune
+  // receipts — a single since-January window can never reach past that
+  // horizon. Explicit month windows guarantee full coverage; within each
+  // month, passes repeat (15 new jobs each) until the month is drained.
   async function backfillSinceJan() {
     setBusy('backfill')
-    const sinceJanDays = Math.ceil((Date.now() - new Date('2026-01-01').getTime()) / 86400_000) + 1
-    let total = 0, matched = 0, passes = 0
+    let total = 0, matched = 0
+    const now = new Date()
+    const months: Array<{ label: string; since: string; until: string }> = []
+    for (let m = 0; ; m++) {
+      const start = new Date(Date.UTC(2026, m, 1))
+      if (start.getTime() > now.getTime()) break
+      const end = new Date(Date.UTC(2026, m + 1, 1))
+      months.push({ label: start.toLocaleDateString('en-AU', { month: 'short', year: 'numeric', timeZone: 'UTC' }), since: start.toISOString(), until: end.toISOString() })
+    }
     try {
-      for (; passes < 40; passes++) {
-        setBackfillProgress(`pass ${passes + 1} — ${total} jobs so far`)
-        const d = await post({ action: 'ingest_now', lookback_days: sinceJanDays })
-        total += d.created ?? 0
-        matched += d.matched ?? 0
-        if (!(d.created > 0)) break
+      for (const mo of months) {
+        for (let pass = 0; pass < 15; pass++) {
+          setBackfillProgress(`${mo.label} — ${total} jobs so far`)
+          const d = await post({ action: 'ingest_now', since: mo.since, until: mo.until })
+          total += d.created ?? 0
+          matched += d.matched ?? 0
+          if (!(d.created > 0)) break
+        }
         await load().catch(() => {})
       }
-      toast(`Backfill complete — ${total} tune job${total === 1 ? '' : 's'} ingested since 1 Jan (${matched} auto-matched) in ${passes + 1} pass${passes === 0 ? '' : 'es'}.`, 'success')
+      toast(`Backfill complete — ${total} tune job${total === 1 ? '' : 's'} ingested since 1 Jan (${matched} auto-matched).`, 'success')
     } catch (e: any) {
       toast(`Backfill stopped after ${total} jobs: ${e.message || e}`, 'error')
     }

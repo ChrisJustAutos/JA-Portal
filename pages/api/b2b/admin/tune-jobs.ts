@@ -78,7 +78,9 @@ export default withAuth('edit:b2b_distributors', async (req: NextApiRequest, res
         return res.status(200).json({ ok: true, url: `https://justautos.app/tune-jobs?token=${encodeURIComponent(token)}` })
       }
       if (action === 'ingest_now') {
-        const r = await ingestTuneJobEmails({ lookbackDays: Number(body.lookback_days) || 14 })
+        const sinceIso = body.since ? new Date(String(body.since)).toISOString() : undefined
+        const untilIso = body.until ? new Date(String(body.until)).toISOString() : undefined
+        const r = await ingestTuneJobEmails({ lookbackDays: Number(body.lookback_days) || 14, sinceIso, untilIso })
         return res.status(200).json({ ok: true, ...r })
       }
       return res.status(400).json({ error: `Unknown action "${action}"` })

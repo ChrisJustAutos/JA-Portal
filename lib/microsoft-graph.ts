@@ -346,7 +346,7 @@ export async function listMessagesWithAttachments(
   // JAWS "Portal Invoices" intake folder — resolve via findFolderByDisplayName*).
   // top may exceed 100 — the list follows @odata.nextLink until satisfied
   // (page size 100), so long-lookback backfills see the whole window.
-  opts: { sinceIsoDate?: string; top?: number; alsoSubjects?: RegExp; folderId?: string } = {},
+  opts: { sinceIsoDate?: string; untilIsoDate?: string; top?: number; alsoSubjects?: RegExp; folderId?: string } = {},
 ): Promise<GraphMessageSummary[]> {
   const wanted = Math.min(Math.max(opts.top || 50, 1), 1000)
 
@@ -355,8 +355,11 @@ export async function listMessagesWithAttachments(
     '$orderby': 'receivedDateTime desc',
     '$top':     '100',
   }
-  if (opts.sinceIsoDate) {
-    queryParams['$filter'] = `receivedDateTime ge ${opts.sinceIsoDate}`
+  {
+    const parts: string[] = []
+    if (opts.sinceIsoDate) parts.push(`receivedDateTime ge ${opts.sinceIsoDate}`)
+    if (opts.untilIsoDate) parts.push(`receivedDateTime lt ${opts.untilIsoDate}`)
+    if (parts.length) queryParams['$filter'] = parts.join(' and ')
   }
   const params = new URLSearchParams(queryParams)
   const folder = opts.folderId ? encodeURIComponent(opts.folderId) : 'Inbox'
