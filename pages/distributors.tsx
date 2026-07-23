@@ -29,7 +29,7 @@ interface LineItem {
   AccountDisplayID: string
   Description: string
   Total: number
-  bucket: 'Tuning' | 'Parts' | 'Oil'
+  bucket: string  // category name from Revenue Categories (Tuning/Parts/Oil + custom, e.g. Freight)
   // Item number + ship qty (null on old cached payloads — Parts:Tunes tab
   // prompts a refresh when absent).
   itemNumber?: string | null
@@ -403,13 +403,19 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
   // count; Sundry and Excluded are out (Chris 2026-07-22).
   const typeOk = (name: string) => { const g = groupNameFor(name, 'type'); return !g || g === 'Distributors' }
 
-  interface DS{name:string;tuning:number;oil:number;parts:number;total:number;typeGroup:string|null;regionGroup:string|null;isSundry:boolean}
+  // Categories beyond the original trio (Revenue Categories screen) render as
+  // dynamic columns/tiles/datasets — e.g. the Freight category added 2026-07-23.
+  const extraCats: string[] = ((data as any)?.categories || []).filter((c: string) => !['Tuning','Parts','Oil'].includes(c))
+
+  interface DS{name:string;tuning:number;oil:number;parts:number;total:number;typeGroup:string|null;regionGroup:string|null;isSundry:boolean;[k:string]:any}
   const distSummaries:DS[]=allDists.map(name=>{
     const dl=visibleLines.filter(l=>l.CustomerName===name)
     const tuning=dl.filter(l=>l.bucket==='Tuning').reduce((s,l)=>s+l.Total,0)
     const oil=dl.filter(l=>l.bucket==='Oil').reduce((s,l)=>s+l.Total,0)
     const parts=dl.filter(l=>l.bucket==='Parts').reduce((s,l)=>s+l.Total,0)
-    return{name,tuning,oil,parts,total:tuning+oil+parts,typeGroup:groupNameFor(name,'type'),regionGroup:groupNameFor(name,'region'),isSundry:dl.some(l=>l.isSundry)}
+    const extras:Record<string,number>={}; let extraSum=0
+    for(const c of extraCats){ const v=dl.filter(l=>l.bucket===c).reduce((s,l)=>s+l.Total,0); extras[c]=v; extraSum+=v }
+    return{name,tuning,oil,parts,...extras,total:tuning+oil+parts+extraSum,typeGroup:groupNameFor(name,'type'),regionGroup:groupNameFor(name,'region'),isSundry:dl.some(l=>l.isSundry)}
   }).filter(d=>d.total>0).sort((a,b)=>b.total-a.total)
 
   // Partition summaries: Sundry customers go into their own section,
@@ -441,7 +447,9 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
   })
 
   const ss=selectedDist==='ALL'
-    ?{tuning:distSummaries.reduce((s,d)=>s+d.tuning,0),oil:distSummaries.reduce((s,d)=>s+d.oil,0),parts:distSummaries.reduce((s,d)=>s+d.parts,0),total:distSummaries.reduce((s,d)=>s+d.total,0)}
+    ?{tuning:distSummaries.reduce((s,d)=>s+d.tuning,0),oil:distSummaries.reduce((s,d)=>s+d.oil,0),parts:distSummaries.reduce((s,d)=>s+d.parts,0),
+      ...Object.fromEntries(extraCats.map(c=>[c,distSummaries.reduce((s,d)=>s+Number((d as any)[c]||0),0)])),
+      total:distSummaries.reduce((s,d)=>s+d.total,0)}
     :distSummaries.find(d=>d.name===selectedDist)||{tuning:0,oil:0,parts:0,total:0}
 
   const detailedByDesc:Record<string,{qty:number;total:number;invoices:Set<string>}>={}
@@ -619,6 +627,11 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
         <td style={{fontSize:12,fontFamily:'monospace',color:d.tuning>0?T.green:T.text3,padding:'8px 12px',textAlign:'right',cursor:d.tuning>0?'pointer':'default',textDecoration:d.tuning>0?'underline dotted rgba(52,199,123,0.3)':'none'}}
             onClick={d.tuning>0?()=>setDrill({title:`${titlePrefix} — Tuning`,subtitle:`${fmtFull(d.tuning)} ex-GST`,filter:l=>l.CustomerName===d.name && l.bucket==='Tuning'}):undefined}
             title={d.tuning>0?'Click to see the invoices that make up this':''}>{d.tuning>0?fmtFull(d.tuning):'$0'}</td>
+        {extraCats.map(c=>{ const v=Number((d as any)[c]||0); return (
+          <td key={c} style={{fontSize:12,fontFamily:'monospace',color:v>0?T.text:T.text3,padding:'8px 12px',textAlign:'right',cursor:v>0?'pointer':'default',textDecoration:v>0?'underline dotted rgba(var(--t-ink),0.15)':'none'}}
+              onClick={v>0?()=>setDrill({title:`${titlePrefix} — ${c}`,subtitle:`${fmtFull(v)} ex-GST`,filter:l=>l.CustomerName===d.name && l.bucket===c}):undefined}
+              title={v>0?'Click to see the invoices that make up this':''}>{v>0?fmtFull(v):'$0'}</td>
+        )})}
         <td style={{fontSize:12,fontFamily:'monospace',fontWeight:500,color:T.blue,padding:'8px 12px',textAlign:'right',cursor:'pointer',textDecoration:'underline dotted rgba(79,142,247,0.3)'}}
             onClick={()=>setDrill({title:`${titlePrefix} — All revenue`,subtitle:`${fmtFull(d.total)} ex-GST`,filter:l=>l.CustomerName===d.name})}
             title="Click to see the invoices that make up this">{fmtFull(d.total)}</td>
@@ -657,6 +670,7 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
           { label: 'Tuning', data: sorted.map(d => Math.round(d.tuning)), backgroundColor: '#34c77b', borderRadius: 2 },
           { label: 'Parts',  data: sorted.map(d => Math.round(d.parts)),  backgroundColor: '#4f8ef7', borderRadius: 2 },
           { label: 'Oil',    data: sorted.map(d => Math.round(d.oil)),    backgroundColor: '#e9932b', borderRadius: 2 },
+          ...extraCats.map((c, i) => ({ label: c, data: sorted.map(d => Math.round(Number((d as any)[c]||0))), backgroundColor: ['#a06ee0','#e05c7a','#5cc8d7','#c7b45c'][i % 4], borderRadius: 2 })),
         ]},
         options: { ...baseOpts, indexAxis: 'y' as const, plugins: { ...baseOpts.plugins, tooltip: { callbacks: { label: (ctx: any) => `${ctx.dataset.label}: $${Number(ctx.raw).toLocaleString()}` } } }, scales: { x: { stacked: true, grid: { color: 'rgba(var(--t-ink),0.05)' }, ticks: { color: T.text3, callback: (v: any) => '$' + Math.round(v / 1000) + 'k' } }, y: { stacked: true, grid: { display: false }, ticks: { color: T.text2, font: { size: 11 } } } } },
       }}/>
@@ -702,6 +716,7 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
               <SortableTh label="Oil"         col="oil"    state={summarySort} onSort={handleSummarySort}/>
               <SortableTh label="Parts"       col="parts"  state={summarySort} onSort={handleSummarySort}/>
               <SortableTh label="Tuning"      col="tuning" state={summarySort} onSort={handleSummarySort}/>
+              {extraCats.map(c=><SortableTh key={c} label={c} col={c} state={summarySort} onSort={handleSummarySort}/>)}
               <SortableTh label="Total"       col="total"  state={summarySort} onSort={handleSummarySort}/>
             </tr></thead>
             <tbody>
@@ -711,6 +726,7 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
                 <td style={{fontSize:13,fontFamily:'monospace',fontWeight:500,color:T.text,padding:'10px 12px',textAlign:'right'}}>{fmtFull(groupOil)}</td>
                 <td style={{fontSize:13,fontFamily:'monospace',fontWeight:500,color:T.text,padding:'10px 12px',textAlign:'right'}}>{fmtFull(groupParts)}</td>
                 <td style={{fontSize:13,fontFamily:'monospace',fontWeight:500,color:T.green,padding:'10px 12px',textAlign:'right'}}>{fmtFull(groupTuning)}</td>
+                {extraCats.map(c=><td key={c} style={{fontSize:13,fontFamily:'monospace',fontWeight:500,color:T.text,padding:'10px 12px',textAlign:'right'}}>{fmtFull(rawRows.reduce((s2,r)=>s2+Number((r as any)[c]||0),0))}</td>)}
                 <td style={{fontSize:13,fontFamily:'monospace',fontWeight:500,color:T.blue,padding:'10px 12px',textAlign:'right'}}>{fmtFull(groupTotal)}</td>
               </tr>
             </tbody>
@@ -738,6 +754,7 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
                 <SortableTh label="Oil"         col="oil"    state={summarySort} onSort={handleSummarySort}/>
                 <SortableTh label="Parts"       col="parts"  state={summarySort} onSort={handleSummarySort}/>
                 <SortableTh label="Tuning"      col="tuning" state={summarySort} onSort={handleSummarySort}/>
+                {extraCats.map(c=><SortableTh key={c} label={c} col={c} state={summarySort} onSort={handleSummarySort}/>)}
                 <SortableTh label="Total"       col="total"  state={summarySort} onSort={handleSummarySort}/>
               </tr></thead>
               <tbody>{rows.map(d => renderDistRow(d, 'Unclassified'))}</tbody>
@@ -767,6 +784,7 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
                 <SortableTh label="Oil"      col="oil"    state={summarySort} onSort={handleSummarySort}/>
                 <SortableTh label="Parts"    col="parts"  state={summarySort} onSort={handleSummarySort}/>
                 <SortableTh label="Tuning"   col="tuning" state={summarySort} onSort={handleSummarySort}/>
+                {extraCats.map(c=><SortableTh key={c} label={c} col={c} state={summarySort} onSort={handleSummarySort}/>)}
                 <SortableTh label="Total"    col="total"  state={summarySort} onSort={handleSummarySort}/>
               </tr></thead>
               <tbody>
@@ -776,6 +794,7 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
                   <td style={{fontSize:13,fontFamily:'monospace',fontWeight:500,color:T.text,padding:'10px 12px',textAlign:'right'}}>{fmtFull(sundryOil)}</td>
                   <td style={{fontSize:13,fontFamily:'monospace',fontWeight:500,color:T.text,padding:'10px 12px',textAlign:'right'}}>{fmtFull(sundryParts)}</td>
                   <td style={{fontSize:13,fontFamily:'monospace',fontWeight:500,color:T.green,padding:'10px 12px',textAlign:'right'}}>{fmtFull(sundryTuning)}</td>
+                  {extraCats.map(c=><td key={c} style={{fontSize:13,fontFamily:'monospace',fontWeight:500,color:T.text,padding:'10px 12px',textAlign:'right'}}>{fmtFull(sundrySummaries.reduce((s2,r)=>s2+Number((r as any)[c]||0),0))}</td>)}
                   <td style={{fontSize:13,fontFamily:'monospace',fontWeight:500,color:T.blue,padding:'10px 12px',textAlign:'right'}}>{fmtFull(sundryTotal)}</td>
                 </tr>
               </tbody>
@@ -1416,6 +1435,7 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
           <KPIBox label="Tuning Revenue ex GST" value={ss.tuning} color={T.green}/>
           <KPIBox label="Oil Revenue ex GST" value={ss.oil}/>
           <KPIBox label="Parts Revenue ex GST" value={ss.parts}/>
+          {extraCats.map(c=><KPIBox key={c} label={`${c} Revenue ex GST`} value={Number((ss as any)[c]||0)}/>)}
           <KPIBox label="Total Revenue ex GST" value={ss.total} color={T.blue}/>
         </div>
       </div>
@@ -1671,6 +1691,7 @@ img{max-width:100%}
         tuning: Math.round(distSummaries.reduce((s,d)=>s+d.tuning,0)),
         oil:    Math.round(distSummaries.reduce((s,d)=>s+d.oil,0)),
         parts:  Math.round(distSummaries.reduce((s,d)=>s+d.parts,0)),
+        ...Object.fromEntries(extraCats.map(c=>[c, Math.round(distSummaries.reduce((s,d)=>s+Number((d as any)[c]||0),0))])),
         total:  Math.round(distSummaries.reduce((s,d)=>s+d.total,0)),
       },
       distributorCount: distSummaries.length,
@@ -1682,6 +1703,7 @@ img{max-width:100%}
         tuning: Math.round(d.tuning),
         oil: Math.round(d.oil),
         parts: Math.round(d.parts),
+        ...Object.fromEntries(extraCats.map(c=>[c, Math.round(Number((d as any)[c]||0))])),
         typeGroup: d.typeGroup,
         regionGroup: d.regionGroup,
         isSundry: d.isSundry,
@@ -1694,6 +1716,7 @@ img{max-width:100%}
           tuning: Math.round(rows.reduce((s,r)=>s+r.tuning,0)),
           oil:    Math.round(rows.reduce((s,r)=>s+r.oil,0)),
           parts:  Math.round(rows.reduce((s,r)=>s+r.parts,0)),
+          ...Object.fromEntries(extraCats.map(c=>[c, Math.round(rows.reduce((s,r)=>s+Number((r as any)[c]||0),0))])),
           total:  Math.round(rows.reduce((s,r)=>s+r.total,0)),
         }
       }),
