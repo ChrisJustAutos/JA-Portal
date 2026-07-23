@@ -145,7 +145,12 @@ async function extractTuneDetails(content: any[]): Promise<TuneExtraction | null
 
 // ── Ingestion ───────────────────────────────────────────────────────────
 
-export interface IngestResult { scanned: number; created: number; matched: number; skipped: number; errors: string[] }
+export interface IngestResult {
+  scanned: number; created: number; matched: number; skipped: number; errors: string[]
+  // What the mailbox actually returned — surfaced in the admin toast/logs so a
+  // zero-result scan is diagnosable (wrong folder? no attachments? old mail?).
+  debug?: { mailbox: string; since: string; inboxSeen: number; paymentFolderFound: boolean; paymentSeen: number; sample: Array<{ from: string | null; subject: string | null; received: string; hasAttachments: boolean }> }
+}
 
 export async function ingestTuneJobEmails(opts: { lookbackDays?: number } = {}): Promise<IngestResult> {
   const c = sb()
@@ -159,18 +164,32 @@ export async function ingestTuneJobEmails(opts: { lookbackDays?: number } = {}):
   // Scan the Inbox AND the "payment" subfolder staff manually file these
   // into. internetMessageId dedup is stable across moves, so a receipt seen
   // in the Inbox and later moved never creates a second job.
-  const msgs = await listMessagesWithAttachments(mailbox, { sinceIsoDate: sinceIso, top: 100, alsoSubjects: /receipt|invoice|payment/i })
+  // alsoSubjects /./ = keep EVERYTHING in the window (Stripe receipts are
+  // often link-only with no attachment and subjects vary) — the sender check
+  // below is the real filter.
+  const msgs = await listMessagesWithAttachments(mailbox, { sinceIsoDate: sinceIso, top: 100, alsoSubjects: /./ })
+  const inboxSeen = msgs.length
+  let paymentFolderFound = false
+  let paymentSeen = 0
   try {
     const { findFolderByDisplayNameLoose } = await import('./microsoft-graph')
     const folderId = await findFolderByDisplayNameLoose(mailbox, PAYMENT_FOLDER_NAME)
     if (folderId) {
-      const filed = await listMessagesWithAttachments(mailbox, { sinceIsoDate: sinceIso, top: 100, folderId, alsoSubjects: /receipt|invoice|payment/i })
+      paymentFolderFound = true
+      const filed = await listMessagesWithAttachments(mailbox, { sinceIsoDate: sinceIso, top: 100, folderId, alsoSubjects: /./ })
+      paymentSeen = filed.length
       const have = new Set(msgs.map(m => m.id))
       for (const f of filed) if (!have.has(f.id)) msgs.push(f)
     } else {
       out.errors.push(`"${PAYMENT_FOLDER_NAME}" folder not found in ${mailbox} — scanned Inbox only`)
     }
   } catch (e: any) { out.errors.push(`payment-folder scan: ${e?.message}`) }
+
+  out.debug = {
+    mailbox, since: sinceIso, inboxSeen, paymentFolderFound, paymentSeen,
+    sample: msgs.slice(0, 10).map(m => ({ from: m.from, subject: m.subject, received: m.receivedDateTime, hasAttachments: m.hasAttachments })),
+  }
+  console.log('[tune-jobs ingest]', JSON.stringify(out.debug))
 
   for (const m of msgs) {
     try {
