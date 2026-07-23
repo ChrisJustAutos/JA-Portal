@@ -239,6 +239,17 @@ export async function getMessageMeta(mailbox: string, messageId: string): Promis
 }
 
 /**
+ * Fetch a message's body content (html or text) — e.g. for LLM extraction
+ * from link-only receipt emails that carry no PDF attachment.
+ */
+export async function getMessageBody(mailbox: string, messageId: string): Promise<{ contentType: string; content: string }> {
+  const data = await graphJson<any>(
+    `/users/${encodeURIComponent(mailbox)}/messages/${messageId}?$select=body`,
+  )
+  return { contentType: data.body?.contentType || 'text', content: data.body?.content || '' }
+}
+
+/**
  * List attachment metadata for a message.
  */
 export async function listAttachmentMeta(mailbox: string, messageId: string): Promise<GraphAttachmentMeta[]> {
