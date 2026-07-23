@@ -33,14 +33,14 @@
 //     Date, SupplierInvoiceNumber, Supplier:{UID},
 //     Lines: [{ Type:'Transaction', Description, Account:{UID}, Total, TaxCode:{UID} }],
 //     JournalMemo, IsTaxInclusive: false,
-//     FreightAmount: 0, FreightTaxCode: {UID},
+//     Freight: 0, FreightTaxCode: {UID},
 //     Subtotal, TotalTax, TotalAmount,
 //   }
 //
 // Field naming gotchas (every one of these silently fails):
 //   - Line tax field is `TaxCode` not `Tax`
 //   - Line amount field is `Total` not `Amount`
-//   - FreightTaxCode is required even when FreightAmount is 0
+//   - FreightTaxCode is required even when Freight is 0
 //   - Subtotal/TotalTax/TotalAmount must be sent on the body envelope
 //
 // **GST PRECISION — STRICT HEADER RECONCILIATION (May 2026)**:
@@ -377,7 +377,7 @@ export function buildServiceBillBody(a: BuildBillArgs): { body: ServiceBillBody;
       Lines: incLines,
       JournalMemo: memoParts.join(' — ').substring(0, 255),
       IsTaxInclusive: true,
-      FreightAmount: 0,
+      Freight: 0,
       FreightTaxCode: { UID: a.gstUid },
       Subtotal: subtotal,
       TotalTax: totalTax,
@@ -481,7 +481,7 @@ export function buildServiceBillBody(a: BuildBillArgs): { body: ServiceBillBody;
     Lines: billLines,
     JournalMemo: journalMemo,
     IsTaxInclusive: false,
-    FreightAmount: 0,
+    Freight: 0,
     FreightTaxCode: { UID: a.gstUid },
     Subtotal: subtotal,
     TotalTax: totalTax,
@@ -523,7 +523,7 @@ interface ServiceBillBody {
   Lines: ServiceBillLineBody[]
   JournalMemo: string
   IsTaxInclusive: boolean
-  FreightAmount: number
+  Freight: number
   FreightTaxCode: { UID: string }
   Subtotal: number
   TotalTax: number
