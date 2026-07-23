@@ -191,10 +191,20 @@ export async function ingestTuneJobEmails(opts: { lookbackDays?: number } = {}):
   }
   console.log('[tune-jobs ingest]', JSON.stringify(out.debug))
 
+  // The reliable invariant (Chris 2026-07-24): every tune email carries an
+  // attachment named "Invoice-JAWS…". That's the PRIMARY filter; a stripe.com
+  // sender is kept as a fallback for any format drift.
+  const JAWS_ATTACHMENT = /invoice[-_ ]?jaws/i
   for (const m of msgs) {
     try {
       const from = String(m.from || '').toLowerCase()
-      if (!from.includes('stripe.com')) continue
+      let atts: Awaited<ReturnType<typeof listAttachmentMeta>> = []
+      let jawsPdf: (typeof atts)[number] | undefined
+      if (m.hasAttachments) {
+        atts = await listAttachmentMeta(mailbox, m.id)
+        jawsPdf = atts.find(a => JAWS_ATTACHMENT.test(a.name || ''))
+      }
+      if (!jawsPdf && !from.includes('stripe.com')) continue
       out.scanned++
 
       const meta = await getMessageMeta(mailbox, m.id)
@@ -202,13 +212,12 @@ export async function ingestTuneJobEmails(opts: { lookbackDays?: number } = {}):
       const { data: seen } = await c.from('b2b_tune_jobs').select('id').eq('internet_message_id', dedupKey).maybeSingle()
       if (seen) { out.skipped++; continue }
 
-      // Prefer an attached PDF (the invoice copy Chris wants stored); fall
-      // back to the email body for extraction.
+      // Prefer the Invoice-JAWS PDF (the invoice copy Chris wants stored);
+      // then any PDF; fall back to the email body for extraction.
       let pdfBase64: string | null = null
       let pdfName = 'invoice.pdf'
-      if (m.hasAttachments) {
-        const atts = await listAttachmentMeta(mailbox, m.id)
-        const pdf = atts.find(a => /pdf/i.test(a.contentType) || /\.pdf$/i.test(a.name))
+      {
+        const pdf = jawsPdf || atts.find(a => /pdf/i.test(a.contentType) || /\.pdf$/i.test(a.name))
         if (pdf) {
           pdfBase64 = await getAttachmentBase64(mailbox, m.id, pdf.id)
           pdfName = pdf.name || pdfName
