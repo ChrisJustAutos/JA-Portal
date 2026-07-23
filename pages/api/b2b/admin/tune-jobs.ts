@@ -52,8 +52,8 @@ export default withAuth('edit:b2b_distributors', async (req: NextApiRequest, res
     try {
       if (action === 'assign') {
         if (!body.job_id || !body.distributor_id) return res.status(400).json({ error: 'job_id + distributor_id required' })
-        await assignTuneJobDistributor(String(body.job_id), String(body.distributor_id), body.save_alias !== false)
-        return res.status(200).json({ ok: true })
+        const r = await assignTuneJobDistributor(String(body.job_id), String(body.distributor_id), body.save_alias !== false)
+        return res.status(200).json({ ok: true, matched_jobs: r.matchedJobs })
       }
       if (action === 'dismiss') {
         if (!body.job_id) return res.status(400).json({ error: 'job_id required' })

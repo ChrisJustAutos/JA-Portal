@@ -69,8 +69,13 @@ export async function matchDistributorForCompany(companyRaw: string): Promise<st
   return null
 }
 
-/** Admin assigns an unmatched job's company to a distributor; the alias sticks. */
-export async function assignTuneJobDistributor(jobId: string, distributorId: string, saveAlias: boolean): Promise<void> {
+/**
+ * Admin assigns an unmatched job's company to a distributor. The alias sticks
+ * for future ingests AND every other unmatched job with the same payer name
+ * is matched in the same click (Chris 2026-07-24: "if I match one job it
+ * should match the rest"). Returns how many jobs were matched.
+ */
+export async function assignTuneJobDistributor(jobId: string, distributorId: string, saveAlias: boolean): Promise<{ matchedJobs: number }> {
   const c = sb()
   const { data: job } = await c.from('b2b_tune_jobs').select('company_raw, status').eq('id', jobId).maybeSingle()
   if (!job) throw new Error('Job not found')
@@ -79,19 +84,35 @@ export async function assignTuneJobDistributor(jobId: string, distributorId: str
     status: job.status === 'unmatched' ? 'awaiting_details' : job.status,
     updated_at: new Date().toISOString(),
   }).eq('id', jobId)
+  let matchedJobs = 1
   if (saveAlias && job.company_raw) {
     await c.from('b2b_tune_company_aliases')
       .upsert({ company_raw: normCompany(job.company_raw), distributor_id: distributorId }, { onConflict: 'company_raw' })
   }
+  // Sweep the SIBLINGS: every other unmatched job whose payer name normalises
+  // to the same value gets the same distributor, in this same click.
+  if (job.company_raw) {
+    const want = normCompany(job.company_raw)
+    const { data: siblings } = await c.from('b2b_tune_jobs')
+      .select('id, company_raw').eq('status', 'unmatched').neq('id', jobId)
+    const ids = (siblings || []).filter(s => normCompany(s.company_raw) === want).map(s => s.id)
+    if (ids.length) {
+      await c.from('b2b_tune_jobs').update({
+        distributor_id: distributorId, status: 'awaiting_details', updated_at: new Date().toISOString(),
+      }).in('id', ids)
+      matchedJobs += ids.length
+    }
+  }
   try {
     const { notifyDistributor } = await import('./push')
     await notifyDistributor(distributorId, {
-      title: 'New tune job — customer details needed',
-      body: 'A recent tune needs its customer details filled in.',
+      title: matchedJobs === 1 ? 'New tune job — customer details needed' : `${matchedJobs} tune jobs — customer details needed`,
+      body: matchedJobs === 1 ? 'A recent tune needs its customer details filled in.' : 'Recent tunes need their customer details filled in.',
       href: '/b2b/jobs',
       tag: `tune-job-${jobId}`,
     })
   } catch (e: any) { console.error('tune-job assign notify failed:', e?.message) }
+  return { matchedJobs }
 }
 
 // ── LLM extraction ──────────────────────────────────────────────────────

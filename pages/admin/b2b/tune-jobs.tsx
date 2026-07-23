@@ -159,8 +159,9 @@ export default function TuneJobsAdmin({ user }: { user: any }) {
     if (!distId) { toast('Pick a distributor first.', 'error'); return }
     setBusy(job.id)
     try {
-      await post({ action: 'assign', job_id: job.id, distributor_id: distId, save_alias: assignRemember[job.id] !== false })
-      toast('Assigned.', 'success')
+      const d = await post({ action: 'assign', job_id: job.id, distributor_id: distId, save_alias: assignRemember[job.id] !== false })
+      const n = Number(d.matched_jobs || 1)
+      toast(n > 1 ? `Assigned — matched ${n} jobs with this payer name.` : 'Assigned.', 'success')
       await load()
     } catch (e: any) { toast(e.message || 'Assign failed', 'error') }
     setBusy('')
