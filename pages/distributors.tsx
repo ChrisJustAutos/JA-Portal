@@ -49,6 +49,7 @@ interface DistData {
   trendLabels: string[]
   monthlyTotals: Record<string, number>
   period: { start: string; end: string }
+  categories?: string[]  // Revenue Categories order (Tuning/Parts/Oil + custom)
 }
 
 interface GroupingPayload {
@@ -314,6 +315,7 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
         lineItems: flatLineItems,
         trendLabels,
         monthlyTotals,
+        categories: Array.isArray(d.categories) ? d.categories : [],
         period: {
           start: activeDateParams.match(/startDate=([^&]+)/)?.[1] || '',
           end: activeDateParams.match(/endDate=([^&]+)/)?.[1] || '',
@@ -405,7 +407,13 @@ export default function DistributorReport({ user }: { user: PortalUserSSR }) {
 
   // Categories beyond the original trio (Revenue Categories screen) render as
   // dynamic columns/tiles/datasets — e.g. the Freight category added 2026-07-23.
-  const extraCats: string[] = ((data as any)?.categories || []).filter((c: string) => !['Tuning','Parts','Oil'].includes(c))
+  // Prefer the payload's category order; older cached bundles predate the
+  // field, so fall back to the distinct buckets present in the lines.
+  const extraCats: string[] = (
+    (data?.categories && data.categories.length > 0)
+      ? data.categories
+      : Array.from(new Set((data?.lineItems || []).map(l => l.bucket)))
+  ).filter((c: string) => c && !['Tuning','Parts','Oil'].includes(c))
 
   interface DS{name:string;tuning:number;oil:number;parts:number;total:number;typeGroup:string|null;regionGroup:string|null;isSundry:boolean;[k:string]:any}
   const distSummaries:DS[]=allDists.map(name=>{
