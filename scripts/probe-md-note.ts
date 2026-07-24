@@ -17,7 +17,10 @@ const MD_BASE = 'https://www.mechanicdesk.com.au'
 async function main() {
   const { chromium } = await import('playwright')
   const browser = await chromium.launch()
-  const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } })
+  const context = await browser.newContext({
+    userAgent: 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    viewport: { width: 1440, height: 1000 },
+  })
   const page = await context.newPage()
 
   // Capture every mutating request the UI fires.
@@ -44,6 +47,7 @@ async function main() {
     // Login — selectors copied VERBATIM from lib/mechanicdesk-stocktake's
     // proven loginToMechanicDesk (three-field form: workshop id, username, pw).
     await page.goto(`${MD_BASE}/auto_workshop/login`, { waitUntil: 'domcontentloaded', timeout: 30000 })
+    await page.waitForSelector('input[type="password"]', { timeout: 20000 })
     const workshopInput = await page.$('input[name*="workshop" i], input#workshop_id, input[placeholder*="Workshop" i]')
     if (workshopInput) await workshopInput.fill(WS_ID)
     else {
