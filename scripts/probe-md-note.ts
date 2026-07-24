@@ -41,16 +41,29 @@ async function main() {
   })
 
   try {
-    // Login (same flow as lib/mechanicdesk-stocktake, context kept open)
+    // Login — selectors copied VERBATIM from lib/mechanicdesk-stocktake's
+    // proven loginToMechanicDesk (three-field form: workshop id, username, pw).
     await page.goto(`${MD_BASE}/auto_workshop/login`, { waitUntil: 'domcontentloaded', timeout: 30000 })
-    const wsField = await page.$('input[name*="workshop"], input[placeholder*="orkshop"]')
-    if (wsField) await wsField.fill(WS_ID)
-    await page.fill('input[type="text"]:not([name*="workshop"]), input[name*="user"], input[type="email"]', MD_USER).catch(async () => {
-      const inputs = await page.$$('input[type="text"]')
-      if (inputs[1]) await inputs[1].fill(MD_USER)
-    })
-    await page.fill('input[type="password"]', MD_PASS)
-    await page.click('button:has-text("Login"), input[type="submit"], button[type="submit"]')
+    const workshopInput = await page.$('input[name*="workshop" i], input#workshop_id, input[placeholder*="Workshop" i]')
+    if (workshopInput) await workshopInput.fill(WS_ID)
+    else {
+      const fallback = await page.$('input[type="text"]:not([disabled])')
+      if (!fallback) throw new Error('Could not find workshop ID field')
+      await fallback.fill(WS_ID)
+    }
+    const usernameInput = await page.$('input[name="username"], input#username, input[name="user[username]"]')
+    if (usernameInput) await usernameInput.fill(MD_USER)
+    else {
+      const all = await page.$$('input[type="text"]:not([disabled])')
+      if (all.length < 2) throw new Error('Could not find username field')
+      await all[1].fill(MD_USER)
+    }
+    const passwordInput = await page.$('input[type="password"]')
+    if (!passwordInput) throw new Error('Could not find password field')
+    await passwordInput.fill(MD_PASS)
+    const submit = await page.$('button:has-text("Login"), input[type="submit"], button[type="submit"]')
+    if (!submit) throw new Error('Could not find submit button')
+    await submit.click()
     await page.waitForSelector('input[type="password"]', { state: 'detached', timeout: 30000 })
     console.log('LOGIN OK')
 
