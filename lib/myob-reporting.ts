@@ -128,21 +128,16 @@ export async function fetchSaleInvoicesWithLines(
       Freight: Number(inv.Freight) || 0,
     })
     for (const l of Array.isArray(inv.Lines) ? inv.Lines : []) {
-      // NORMALISE line totals to EX-GST. On IsTaxInclusive invoices MYOB
-      // returns line Totals (and header Freight) tax-INCLUSIVE — verified
-      // live 2026-07-24 (JAWS-1000: Σ lines inc + freight inc == TotalAmount
-      // exactly). Without this, inc-keyed invoices report ~10% high (the All
-      // 4 Mechanical $224 Parts discrepancy). GST-coded lines divide by 1.1;
-      // FRE/N-T/EXP lines are identical inc or ex.
-      const rawTotal = Number(l.Total) || 0
-      const taxCode = l.TaxCode?.Code ?? null
-      const exTotal = inv.IsTaxInclusive === true && taxCode === 'GST'
-        ? Math.round((rawTotal / 1.1) * 100) / 100
-        : rawTotal
+      // Line totals are passed through RAW. The IsTaxInclusive flag is NOT a
+      // reliable signal of what the API returns (2026-07-24: All 4 Mechanical
+      // invoices are flagged inclusive yet carry EX line totals, while
+      // JAWS-1000-series are flagged inclusive and genuinely INC) — consumers
+      // that need ex-GST must classify per invoice by which totals equation
+      // balances (see computeDistributorsPayload).
       lines.push({
         SaleInvoiceId: inv.UID,
         AccountDisplayID: l.Account?.DisplayID ?? null, AccountName: l.Account?.Name ?? null,
-        TaxCodeCode: taxCode, Total: exTotal, Description: l.Description ?? null,
+        TaxCodeCode: l.TaxCode?.Code ?? null, Total: Number(l.Total) || 0, Description: l.Description ?? null,
         ItemNumber: l.Item?.Number ?? null, ItemName: l.Item?.Name ?? null,
         ShipQuantity: l.ShipQuantity != null ? Number(l.ShipQuantity) : null,
         UnitPrice: l.UnitPrice != null ? Number(l.UnitPrice) : null, RowID: l.RowID ?? null,
