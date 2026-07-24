@@ -155,12 +155,27 @@ export async function computeDistributorsPayload(start: string, end: string) {
   // reports under whichever category the Revenue Categories screen puts
   // 4-1124 in, with no magic codes the screen would wipe on save.
   const HEADER_FREIGHT_ACCOUNT = '4-1124'
+  // Raw inv.Freight follows however the invoice was keyed (often INC gst —
+  // Chris caught the category tracking inc, 2026-07-24). Derive the ex-GST
+  // figure instead: MYOB guarantees TotalAmount = Σ(lines ex) + freight ex +
+  // TotalTax, and we hold all three, so freight ex falls out arithmetically
+  // whatever the entry style was.
+  const lineSumByInv = new Map<string, number>()
+  for (const l of allLines) {
+    lineSumByInv.set(l.SaleInvoiceId, (lineSumByInv.get(l.SaleInvoiceId) || 0) + (Number(l.Total) || 0))
+  }
+  const r2 = (n: number) => Math.round(n * 100) / 100
   for (const inv of invoices) {
     if (inv.Freight) {
+      const derived = r2((Number(inv.TotalAmount) || 0) - (Number(inv.TotalTax) || 0) - (lineSumByInv.get(inv.ID) || 0))
+      // Sanity: the derived figure should be freight-sized (between Freight/1.1
+      // and Freight, within a cent). Outside that, fall back to raw Freight.
+      const raw = Number(inv.Freight) || 0
+      const freightEx = derived > 0 && derived <= raw + 0.02 && derived >= raw / 1.1 - 0.02 ? derived : raw
       allLines.push({
         SaleInvoiceId: inv.ID,
         AccountDisplayID: HEADER_FREIGHT_ACCOUNT, AccountName: 'Freight (invoice header)',
-        TaxCodeCode: null, Total: inv.Freight, Description: 'Freight',
+        TaxCodeCode: null, Total: freightEx, Description: 'Freight',
         ItemNumber: null, ItemName: null, ShipQuantity: null, UnitPrice: null, RowID: null,
       })
     }
