@@ -98,6 +98,14 @@ export default withAuth('edit:b2b_distributors', async (req: NextApiRequest, res
         const token = signOrderAction({ orderId: String(testDist!.id), scope: 'tune_jobs', ttlDays: 2 })
         return res.status(200).json({ ok: true, job_id: job.id, url: `https://justautos.app/tune-jobs?token=${encodeURIComponent(token)}` })
       }
+      if (action === 'delete_test_jobs') {
+        // Hard-delete everything created via the "Create test job" tool
+        // (company_raw 'JA PORTAL TEST') — real ingested jobs are untouched.
+        const { data: gone, error: delErr } = await c.from('b2b_tune_jobs')
+          .delete().eq('company_raw', 'JA PORTAL TEST').select('id')
+        if (delErr) return res.status(500).json({ error: delErr.message })
+        return res.status(200).json({ ok: true, deleted: (gone || []).length })
+      }
       if (action === 'fill_link') {
         // Mint the same login-less fill link the reminder email carries —
         // for testing or resending to a distributor out-of-band.

@@ -243,6 +243,22 @@ export default function TuneJobsAdmin({ user }: { user: any }) {
               style={{ padding: '7px 14px', borderRadius: 6, border: `1px solid ${T.border}`, background: T.bg3, color: T.text2, fontSize: 12, cursor: 'pointer', fontFamily: 'inherit' }}>
               {busy === 'testjob' ? 'Creating…' : '🧪 Create test job'}
             </button>
+            {jobs.some(j => j.company_raw === 'JA PORTAL TEST') && (
+              <button
+                onClick={async () => {
+                  setBusy('deltest')
+                  try {
+                    const d = await post({ action: 'delete_test_jobs' })
+                    toast(`Deleted ${d.deleted ?? 0} test job${d.deleted === 1 ? '' : 's'}.`, 'success')
+                    await load()
+                  } catch (e: any) { toast(e.message || 'Delete failed', 'error') }
+                  setBusy('')
+                }}
+                disabled={busy !== ''}
+                style={{ padding: '7px 14px', borderRadius: 6, border: `1px solid ${T.red}50`, background: 'transparent', color: T.red, fontSize: 12, cursor: 'pointer', fontFamily: 'inherit' }}>
+                {busy === 'deltest' ? 'Deleting…' : '🗑 Delete test jobs'}
+              </button>
+            )}
             <button onClick={backfillSinceJan} disabled={busy !== ''}
               style={{ padding: '7px 14px', borderRadius: 6, border: `1px solid ${T.border}`, background: T.bg3, color: T.text2, fontSize: 12, cursor: 'pointer', fontFamily: 'inherit' }}>
               {busy === 'backfill' ? `Backfilling… ${backfillProgress}` : 'Backfill since 1 Jan'}
