@@ -78,34 +78,55 @@ async function main() {
     }, CUSTOMER_ID)
     console.log(`CUSTOMER JSON ${custJson.status}: ${custJson.body}`)
 
-    // Open the customer page and add a note through the UI
-    await page.goto(`${MD_BASE}/customers/${CUSTOMER_ID}`, { waitUntil: 'domcontentloaded', timeout: 30000 })
-    await page.waitForTimeout(2500)
-    const addNote = page.locator('text=Add note').first()
-    await addNote.click({ timeout: 10000 }).catch(async (e: any) => {
-      console.log(`add-note click failed: ${e?.message}`)
-    })
-    await page.waitForTimeout(1000)
-    // Whatever editor appeared: fill the first visible textarea / contenteditable
-    const ta = page.locator('textarea:visible').first()
-    if (await ta.count()) {
-      await ta.fill('PROBE NOTE — capture endpoint (delete me)')
-    } else {
-      const ce = page.locator('[contenteditable="true"]').first()
-      if (await ce.count()) await ce.fill('PROBE NOTE — capture endpoint (delete me)')
-      else console.log('NO NOTE EDITOR FOUND — dumping nearby HTML')
+    // GET-probe plausible notes read endpoints (statuses tell us the resource name)
+    for (const path of [`/customers/${CUSTOMER_ID}/notes.json`, `/notes.json?notable_id=${CUSTOMER_ID}&notable_type=Customer`, `/customer_notes.json?customer_id=${CUSTOMER_ID}`, `/crm_notes.json?customer_id=${CUSTOMER_ID}`, `/comments.json?customer_id=${CUSTOMER_ID}`]) {
+      const r = await page.evaluate(async (p2) => {
+        const rr = await fetch(p2, { headers: { Accept: 'application/json' } })
+        return { p: p2, status: rr.status, body: (await rr.text()).slice(0, 200) }
+      }, path)
+      console.log(`GETPROBE ${r.status} ${r.p}: ${r.body}`)
     }
-    await page.waitForTimeout(500)
-    // Save: try the likely buttons
-    for (const sel of ['button:has-text("Save")', 'button:has-text("Add")', 'button:has-text("Create")', 'input[type="submit"]']) {
-      const btn = page.locator(sel).first()
-      if (await btn.count() && await btn.isVisible().catch(() => false)) {
-        console.log(`clicking ${sel}`)
-        await btn.click().catch((e: any) => console.log(`save click failed: ${e?.message}`))
-        break
+
+    // Try BOTH UIs for the Add note button: old app page, then the mdweb SPA.
+    for (const url of [`${MD_BASE}/customers/${CUSTOMER_ID}`, `${MD_BASE}/mdweb#/customers/${CUSTOMER_ID}`]) {
+      console.log(`PAGE ${url}`)
+      await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 })
+      await page.waitForTimeout(8000)  // SPA hydration
+      console.log(`  landed on ${page.url()} title="${await page.title()}"`)
+      const htmlHits = await page.evaluate(() => {
+        const html = document.body ? document.body.innerHTML : ''
+        const out: string[] = []
+        const re = /add[\s_-]?note/gi
+        let m
+        while ((m = re.exec(html)) && out.length < 3) out.push(html.slice(Math.max(0, m.index - 120), m.index + 120).replace(/\s+/g, ' '))
+        return out
+      })
+      console.log(`  add-note HTML hits: ${htmlHits.length}`)
+      htmlHits.forEach(h => console.log(`  HIT: ${h}`))
+      const addNote2 = page.locator('text=Add note').first()
+      if (await addNote2.count()) {
+        await addNote2.click({ timeout: 8000 }).catch((e: any) => console.log(`  click failed: ${e?.message?.slice(0, 100)}`))
+        await page.waitForTimeout(1500)
+        const ta2 = page.locator('textarea:visible').first()
+        if (await ta2.count()) {
+          await ta2.fill('PROBE NOTE — capture endpoint (delete me)')
+          for (const sel of ['button:has-text("Save")', 'button:has-text("Add")', 'button:has-text("Create")', 'button:has-text("OK")']) {
+            const btn = page.locator(sel).first()
+            if (await btn.count() && await btn.isVisible().catch(() => false)) {
+              console.log(`  clicking ${sel}`)
+              await btn.click().catch((e: any) => console.log(`  save failed: ${e?.message?.slice(0, 100)}`))
+              break
+            }
+          }
+          await page.waitForTimeout(4000)
+          break  // note attempted — captured requests tell the story
+        } else {
+          console.log('  no textarea after click')
+        }
+      } else {
+        console.log('  no Add note element on this page')
       }
     }
-    await page.waitForTimeout(4000)  // let the XHR fire and get captured
     console.log('PROBE DONE')
   } catch (e: any) {
     console.error('PROBE ERROR:', e?.message || e)

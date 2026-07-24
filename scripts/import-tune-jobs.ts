@@ -45,6 +45,9 @@ interface TuneJob {
   customer_phone: string | null
   customer_email: string | null
   customer_postcode: string | null
+  customer_address_line1: string | null
+  customer_suburb: string | null
+  customer_state: string | null
   vehicle_rego: string | null
   vehicle_description: string | null
   job_notes: string | null
@@ -65,20 +68,45 @@ function looksDeleted(c: any): boolean {
     String(c.status || '').toLowerCase() === 'deleted'
 }
 
+// "2022 Toyota Hilux" → { year, make, model } — MD keeps Make/Model/Year as
+// separate fields (Chris 2026-07-24, screenshot: everything in Model reads
+// wrong). Two-word makes are matched from a known list.
+const TWO_WORD_MAKES = ['land rover', 'great wall', 'alfa romeo', 'aston martin', 'rolls royce']
+function splitVehicle(desc: string | null): { year?: string; make?: string; model?: string } {
+  const out: { year?: string; make?: string; model?: string } = {}
+  let words = String(desc || '').trim().split(/\s+/).filter(Boolean)
+  if (!words.length) return out
+  if (/^(19|20)\d{2}$/.test(words[0])) { out.year = words[0]; words = words.slice(1) }
+  if (!words.length) return out
+  const firstTwo = words.slice(0, 2).join(' ').toLowerCase()
+  if (words.length >= 2 && TWO_WORD_MAKES.includes(firstTwo)) {
+    out.make = words.slice(0, 2).join(' '); words = words.slice(2)
+  } else {
+    out.make = words[0]; words = words.slice(1)
+  }
+  if (words.length) out.model = words.join(' ')
+  else { out.model = out.make; delete out.make }  // single word: call it the model
+  return out
+}
+
 // Vehicle create — proven live 2026-07-24 (POST /vehicles, run 30053923797).
 async function tryCreateVehicle(client: MdClient, customerId: string | number, job: TuneJob): Promise<string | null> {
   if (!job.vin && !job.vehicle_rego) return null
   try {
+    const v = splitVehicle(job.vehicle_description)
     const r = await mdRequest<any>(client, '/vehicles', {
       method: 'POST',
       body: JSON.stringify({
         customer_id: customerId,
         ...(job.vehicle_rego ? { registration_number: job.vehicle_rego } : {}),
+        ...(job.customer_state ? { registration_state: job.customer_state } : {}),
         ...(job.vin ? { vin: job.vin } : {}),
-        ...(job.vehicle_description ? { model: job.vehicle_description } : {}),
+        ...(v.make ? { make: v.make } : {}),
+        ...(v.model ? { model: v.model } : {}),
+        ...(v.year ? { year: v.year } : {}),
       }),
     })
-    if (r?.id) { console.log(`  + vehicle #${r.id} (${job.vehicle_rego || job.vin})`); return null }
+    if (r?.id) { console.log(`  + vehicle #${r.id} (${job.vehicle_rego || job.vin}${v.make ? ` ${v.make}` : ''}${v.model ? ` ${v.model}` : ''})`); return null }
     return `vehicle create returned no id: ${JSON.stringify(r).slice(0, 200)}`
   } catch (e: any) {
     return `vehicle create failed: ${String(e?.message || e).slice(0, 200)}`
@@ -238,6 +266,21 @@ async function main() {
           email: job.customer_email || undefined,
           postcode: job.customer_postcode || undefined,
         })
+        // Full address via the CONFIRMED keys (probe 2026-07-24: address
+        // object = {street, suburb, state, postcode, ...}). Best-effort.
+        if (job.customer_address_line1 || job.customer_suburb || job.customer_state) {
+          try {
+            await mdRequest<any>(client, `/customers/${created.id}`, {
+              method: 'PUT',
+              body: JSON.stringify({ customer: { address: {
+                ...(job.customer_address_line1 ? { street: job.customer_address_line1 } : {}),
+                ...(job.customer_suburb ? { suburb: job.customer_suburb } : {}),
+                ...(job.customer_state ? { state: job.customer_state } : {}),
+                ...(job.customer_postcode ? { postcode: job.customer_postcode } : {}),
+              } } }),
+            })
+          } catch (e: any) { console.log(`  address update failed: ${String(e?.message || e).slice(0, 150)}`) }
+        }
         console.log(`+ created MD customer #${created.id} for ${job.customer_name} (tune: ${job.tune_details || '—'}, VIN ${job.vin || '—'}, distributor ${job.distributor_name || '—'})`)
         const notes: string[] = []
         const v = await tryCreateVehicle(client, created.id, job); if (v) notes.push(v)
