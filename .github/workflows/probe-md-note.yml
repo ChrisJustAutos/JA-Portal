@@ -1,0 +1,42 @@
+name: Probe MD customer note endpoint
+
+# One-off diagnostic: captures the network request MechanicDesk's own UI makes
+# when adding a customer note (+ the customer JSON's address/notes shape).
+
+on:
+  workflow_dispatch:
+    inputs:
+      customer_id:
+        description: MD customer id to probe against
+        default: "16244926"
+
+jobs:
+  run:
+    name: probe md note
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci || npm install
+
+      - name: Install Playwright chromium
+        run: |
+          npm install --no-save playwright
+          npx playwright install --with-deps chromium
+
+      - name: Probe
+        env:
+          MECHANICDESK_WORKSHOP_ID: ${{ secrets.MECHANICDESK_WORKSHOP_ID }}
+          MECHANICDESK_USERNAME:    ${{ secrets.MECHANICDESK_USERNAME }}
+          MECHANICDESK_PASSWORD:    ${{ secrets.MECHANICDESK_PASSWORD }}
+          PROBE_CUSTOMER_ID:        ${{ inputs.customer_id }}
+        run: npx tsx scripts/probe-md-note.ts
