@@ -90,9 +90,19 @@ function splitVehicle(desc: string | null): { year?: string; make?: string; mode
 }
 
 // Vehicle create — proven live 2026-07-24 (POST /vehicles, run 30053923797).
+// When the customer already exists their vehicles may too (a re-tune of the
+// same car): skip creation if any current vehicle matches the VIN or rego.
 async function tryCreateVehicle(client: MdClient, customerId: string | number, job: TuneJob): Promise<string | null> {
   if (!job.vin && !job.vehicle_rego) return null
   try {
+    const cust = await getMdCustomer(client, customerId)
+    const vehicles: any[] = Array.isArray(cust?.vehicles) ? cust.vehicles : []
+    const norm = (x: any) => String(x || '').replace(/\s/g, '').toUpperCase()
+    const dupe = vehicles.find(veh => !veh.deleted && (
+      (job.vin && norm(veh.vin) === norm(job.vin)) ||
+      (job.vehicle_rego && norm(veh.registration_number) === norm(job.vehicle_rego))
+    ))
+    if (dupe) { console.log(`  = vehicle already on customer (#${dupe.id} ${dupe.registration_number || dupe.vin})`); return null }
     const v = splitVehicle(job.vehicle_description)
     const r = await mdRequest<any>(client, '/vehicles', {
       method: 'POST',
