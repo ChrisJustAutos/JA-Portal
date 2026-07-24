@@ -26,13 +26,13 @@ async function main() {
   // Capture every mutating request the UI fires.
   page.on('request', r => {
     const m = r.method()
-    if (m === 'POST' || m === 'PUT' || m === 'PATCH' || m === 'DELETE') {
-      const url = r.url()
-      if (url.includes('mechanicdesk')) {
-        console.log(`REQ ${m} ${url}`)
-        const body = r.postData()
-        if (body) console.log(`  BODY ${body.slice(0, 800)}`)
-      }
+    const url = r.url()
+    if (!url.includes('mechanicdesk')) return
+    const mutating = m === 'POST' || m === 'PUT' || m === 'PATCH' || m === 'DELETE'
+    if (mutating || /note/i.test(url)) {
+      console.log(`REQ ${m} ${url}`)
+      const body = r.postData()
+      if (body) console.log(`  BODY ${body.slice(0, 800)}`)
     }
   })
   page.on('response', async r => {
@@ -87,45 +87,30 @@ async function main() {
       console.log(`GETPROBE ${r.status} ${r.p}: ${r.body}`)
     }
 
-    // Try BOTH UIs for the Add note button: old app page, then the mdweb SPA.
-    for (const url of [`${MD_BASE}/customers/${CUSTOMER_ID}`, `${MD_BASE}/mdweb#/customers/${CUSTOMER_ID}`]) {
-      console.log(`PAGE ${url}`)
-      await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 })
-      await page.waitForTimeout(8000)  // SPA hydration
-      console.log(`  landed on ${page.url()} title="${await page.title()}"`)
-      const htmlHits = await page.evaluate(() => {
-        const html = document.body ? document.body.innerHTML : ''
-        const out: string[] = []
-        const re = /add[\s_-]?note/gi
-        let m
-        while ((m = re.exec(html)) && out.length < 3) out.push(html.slice(Math.max(0, m.index - 120), m.index + 120).replace(/\s+/g, ' '))
-        return out
-      })
-      console.log(`  add-note HTML hits: ${htmlHits.length}`)
-      htmlHits.forEach(h => console.log(`  HIT: ${h}`))
-      const addNote2 = page.locator('text=Add note').first()
-      if (await addNote2.count()) {
-        await addNote2.click({ timeout: 8000 }).catch((e: any) => console.log(`  click failed: ${e?.message?.slice(0, 100)}`))
-        await page.waitForTimeout(1500)
-        const ta2 = page.locator('textarea:visible').first()
-        if (await ta2.count()) {
-          await ta2.fill('PROBE NOTE — capture endpoint (delete me)')
-          for (const sel of ['button:has-text("Save")', 'button:has-text("Add")', 'button:has-text("Create")', 'button:has-text("OK")']) {
-            const btn = page.locator(sel).first()
-            if (await btn.count() && await btn.isVisible().catch(() => false)) {
-              console.log(`  clicking ${sel}`)
-              await btn.click().catch((e: any) => console.log(`  save failed: ${e?.message?.slice(0, 100)}`))
-              break
+    // Extract note-related API paths straight from MD's frontend bundles —
+    // the endpoint is a string literal in their code, no UI interaction needed.
+    for (const appUrl of [`${MD_BASE}/mdweb`, `${MD_BASE}/customers/${CUSTOMER_ID}`]) {
+      console.log(`PAGE ${appUrl}`)
+      await page.goto(appUrl, { waitUntil: 'domcontentloaded', timeout: 30000 }).catch((e: any) => console.log(`  goto failed: ${e?.message?.slice(0, 80)}`))
+      await page.waitForTimeout(6000)
+      const found = await page.evaluate(async () => {
+        const srcs = Array.from(document.querySelectorAll('script[src]')).map(sc => (sc as HTMLScriptElement).src)
+        const hits = new Set<string>()
+        for (const src of srcs.slice(0, 15)) {
+          try {
+            const t = await (await fetch(src)).text()
+            // route-ish string literals mentioning note
+            for (const m of t.matchAll(/["'`](\/?[A-Za-z0-9_\/${}:.-]*notes?[A-Za-z0-9_\/${}:.-]*)["'`]/g)) {
+              const v = m[1]
+              if (v.length < 80 && /note/i.test(v)) hits.add(v)
             }
-          }
-          await page.waitForTimeout(4000)
-          break  // note attempted — captured requests tell the story
-        } else {
-          console.log('  no textarea after click')
+          } catch { /* skip asset */ }
         }
-      } else {
-        console.log('  no Add note element on this page')
-      }
+        return { scripts: srcs.length, hits: Array.from(hits).slice(0, 80) }
+      })
+      console.log(`  scripts=${found.scripts} note-strings=${found.hits.length}`)
+      for (const h of found.hits) console.log(`  NOTESTR ${h}`)
+      if (found.hits.length) break
     }
     console.log('PROBE DONE')
   } catch (e: any) {
