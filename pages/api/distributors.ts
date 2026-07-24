@@ -155,54 +155,23 @@ export async function computeDistributorsPayload(start: string, end: string) {
   // reports under whichever category the Revenue Categories screen puts
   // 4-1124 in, with no magic codes the screen would wipe on save.
   const HEADER_FREIGHT_ACCOUNT = '4-1124'
-  // ── Per-invoice inc/ex classification + freight synthesis ─────────────
-  // MYOB's IsTaxInclusive flag is UNRELIABLE (2026-07-24: All 4 Mechanical
-  // invoices are flagged inclusive but carry EX line totals; JAWS-1000-series
-  // are flagged inclusive and genuinely INC). The raw numbers always satisfy
-  // exactly one identity though:
-  //   INC:  Σ(raw lines) + raw freight            == TotalAmount
-  //   EX:   Σ(raw lines) + raw freight + TotalTax == TotalAmount
-  // Classify each invoice by which equation balances; divide GST-coded lines
-  // by 1.1 only on proven-INC invoices, and derive ex freight to match.
-  const r2 = (n: number) => Math.round(n * 100) / 100
-  const lineSumByInv = new Map<string, number>()
-  for (const l of allLines) {
-    lineSumByInv.set(l.SaleInvoiceId, (lineSumByInv.get(l.SaleInvoiceId) || 0) + (Number(l.Total) || 0))
-  }
-  const incInvoices = new Set<string>()
-  let clsDebug = 0
+  // The synthetic line is tagged GST so the payload build's EXISTING
+  // per-line normaliser (lineExGst — divides GST lines by 1.1 when the
+  // invoice IsTaxInclusive, inherited from the CData era and the reason the
+  // report always reconciled ex-GST) treats header freight exactly like any
+  // other line. 2026-07-24 lesson: do NOT normalise lines anywhere else —
+  // fetch-level or pre-payload division double-dips with lineExGst (that
+  // mistake put All 4 Mechanical $7.3k under GL for an hour; the original
+  // $224 overstatement was solely this line missing the GST tag).
   for (const inv of invoices) {
-    const rawSum = lineSumByInv.get(inv.ID) || 0
-    const rawF = Number(inv.Freight) || 0
-    const total = Number(inv.TotalAmount) || 0
-    const tax = Number(inv.TotalTax) || 0
-    const incMatch = Math.abs(rawSum + rawF - total) <= 0.05
-    const exMatch = Math.abs(rawSum + rawF + tax - total) <= 0.05
-    // Tax 0 → equations coincide → nothing to convert either way.
-    const isInc = incMatch && !exMatch && tax !== 0
-    if (isInc) incInvoices.add(inv.ID)
-    if (clsDebug < 8 && rawF) {
-      clsDebug++
-      console.log('[inv-class]', JSON.stringify({ num: inv.Number, flag: inv.IsTaxInclusive, incMatch, exMatch, isInc, rawSum: r2(rawSum), rawF, total, tax }))
+    if (inv.Freight) {
+      allLines.push({
+        SaleInvoiceId: inv.ID,
+        AccountDisplayID: HEADER_FREIGHT_ACCOUNT, AccountName: 'Freight (invoice header)',
+        TaxCodeCode: 'GST', Total: inv.Freight, Description: 'Freight',
+        ItemNumber: null, ItemName: null, ShipQuantity: null, UnitPrice: null, RowID: null,
+      })
     }
-  }
-  // Convert GST-coded lines on proven-INC invoices to ex.
-  for (const l of allLines) {
-    if (incInvoices.has(l.SaleInvoiceId) && l.TaxCodeCode === 'GST') {
-      l.Total = r2((Number(l.Total) || 0) / 1.1)
-    }
-  }
-  // Synthesize the freight line (ex) per invoice.
-  for (const inv of invoices) {
-    const rawF = Number(inv.Freight) || 0
-    if (!rawF) continue
-    const freightEx = incInvoices.has(inv.ID) ? r2(rawF / 1.1) : rawF
-    allLines.push({
-      SaleInvoiceId: inv.ID,
-      AccountDisplayID: HEADER_FREIGHT_ACCOUNT, AccountName: 'Freight (invoice header)',
-      TaxCodeCode: null, Total: freightEx, Description: 'Freight',
-      ItemNumber: null, ItemName: null, ShipQuantity: null, UnitPrice: null, RowID: null,
-    })
   }
 
   if (invById.size === 0) {
