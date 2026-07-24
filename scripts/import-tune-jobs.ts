@@ -124,16 +124,20 @@ async function tryCreateVehicle(client: MdClient, customerId: string | number, j
 }
 
 function composeCustomerNote(job: TuneJob): string {
-  const bits = [
-    `Distributor tune — ${new Date().toISOString().slice(0, 10)}: ${job.tune_details || 'tune'}`,
-    job.vin ? `VIN ${job.vin}` : '',
-    job.vehicle_rego ? `Rego ${job.vehicle_rego}` : '',
-    job.invoice_number ? `Stripe inv ${job.invoice_number}` : '',
-    job.amount ? `$${Number(job.amount).toFixed(2)}` : '',
-    job.distributor_name ? `by ${job.distributor_name}` : '',
-  ].filter(Boolean).join(' · ')
-  return job.job_notes ? `${bits}
-${job.job_notes}` : bits
+  // Distributor first — that's the key fact on the customer file
+  // (Chris 2026-07-24: "need to add in what Distributor did the job").
+  const lines = [
+    `Tune by ${job.distributor_name || 'distributor'} — ${new Date().toISOString().slice(0, 10)}`,
+    [
+      job.tune_details || 'Tune',
+      job.vin ? `VIN ${job.vin}` : '',
+      job.vehicle_rego ? `Rego ${job.vehicle_rego}` : '',
+      job.invoice_number ? `Inv ${job.invoice_number}` : '',
+      job.amount ? `$${Number(job.amount).toFixed(2)}` : '',
+    ].filter(Boolean).join(' · '),
+  ]
+  if (job.job_notes) lines.push(job.job_notes)
+  return lines.join('\n')
 }
 
 // Customer-file note — REAL endpoint captured from MD's own UI via devtools
