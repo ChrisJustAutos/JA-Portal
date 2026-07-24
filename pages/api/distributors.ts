@@ -176,11 +176,18 @@ export async function computeDistributorsPayload(start: string, end: string) {
           derived: r2((Number(inv.TotalAmount) || 0) - (Number(inv.TotalTax) || 0) - (lineSumByInv.get(inv.ID) || 0)),
         }))
       }
+      // Lines are already normalised to EX by fetchSaleInvoicesWithLines, so
+      // TotalAmount − TotalTax − Σ(ex lines) = freight ex for BOTH keying
+      // styles (verified: JAWS-1006 → 877.27 = 965/1.1 exactly).
       const derived = r2((Number(inv.TotalAmount) || 0) - (Number(inv.TotalTax) || 0) - (lineSumByInv.get(inv.ID) || 0))
-      // Sanity: the derived figure should be freight-sized (between Freight/1.1
-      // and Freight, within a cent). Outside that, fall back to raw Freight.
+      // Sanity band (sign-aware for credit notes): |derived| within
+      // [|raw|/1.1, |raw|] ± a couple of cents; otherwise trust the simple
+      // inc/ex conversion of the raw header figure.
       const raw = Number(inv.Freight) || 0
-      const freightEx = derived > 0 && derived <= raw + 0.02 && derived >= raw / 1.1 - 0.02 ? derived : raw
+      const rawEx = inv.IsTaxInclusive === true ? r2(raw / 1.1) : raw
+      const bandOk = raw !== 0 && Math.sign(derived) === Math.sign(raw)
+        && Math.abs(derived) <= Math.abs(raw) + 0.05 && Math.abs(derived) >= Math.abs(raw) / 1.1 - 0.05
+      const freightEx = bandOk ? derived : rawEx
       allLines.push({
         SaleInvoiceId: inv.ID,
         AccountDisplayID: HEADER_FREIGHT_ACCOUNT, AccountName: 'Freight (invoice header)',
