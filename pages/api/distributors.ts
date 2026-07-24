@@ -165,8 +165,17 @@ export async function computeDistributorsPayload(start: string, end: string) {
     lineSumByInv.set(l.SaleInvoiceId, (lineSumByInv.get(l.SaleInvoiceId) || 0) + (Number(l.Total) || 0))
   }
   const r2 = (n: number) => Math.round(n * 100) / 100
+  let freightDebugLogged = 0
   for (const inv of invoices) {
     if (inv.Freight) {
+      if (freightDebugLogged < 6) {
+        freightDebugLogged++
+        console.log('[freight-debug]', JSON.stringify({
+          num: inv.Number, incl: inv.IsTaxInclusive, freight: inv.Freight,
+          total: inv.TotalAmount, tax: inv.TotalTax, lineSum: r2(lineSumByInv.get(inv.ID) || 0),
+          derived: r2((Number(inv.TotalAmount) || 0) - (Number(inv.TotalTax) || 0) - (lineSumByInv.get(inv.ID) || 0)),
+        }))
+      }
       const derived = r2((Number(inv.TotalAmount) || 0) - (Number(inv.TotalTax) || 0) - (lineSumByInv.get(inv.ID) || 0))
       // Sanity: the derived figure should be freight-sized (between Freight/1.1
       // and Freight, within a cent). Outside that, fall back to raw Freight.
