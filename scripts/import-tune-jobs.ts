@@ -126,41 +126,29 @@ function composeCustomerNote(job: TuneJob): string {
 ${job.job_notes}` : bits
 }
 
-// Customer-file note. The first live run proved MD silently IGNORES payloads
-// it doesn't recognise while echoing a 200 — so success here is NEVER inferred
-// from the response: after every attempt the customer is re-fetched and the
-// note text must actually be present. Attempts are ordered by Rails idiom
-// (attributes nested under the model key first).
+// Customer-file note — REAL endpoint captured from MD's own UI via devtools
+// (Chris 2026-07-24): POST /customers/{id}/create_note. Body shape untested,
+// so a few candidates are tried; success = the response carries a note id.
+// (Read-back verification is impossible: the customer JSON has no notes.)
 async function tryAddCustomerNote(client: MdClient, customerId: string | number, job: TuneJob): Promise<string | null> {
   const content = composeCustomerNote(job)
-  const marker = content.slice(0, 40)
-  const hasNote = (cust: any) => {
-    const notes = Array.isArray(cust?.notes) ? cust.notes : []
-    return notes.some((n: any) => String(n?.content || n?.body || n?.description || '').includes(marker))
-  }
-  const attempts: Array<{ label: string; path: string; body: any; method?: string }> = [
-    { label: 'PUT /customers/{id} customer[notes_attributes]', path: `/customers/${customerId}`, method: 'PUT', body: { customer: { notes_attributes: [{ content }] } } },
-    { label: 'POST /notes note{}', path: '/notes', body: { note: { content, notable_id: customerId, notable_type: 'Customer' } } },
-    { label: 'POST /notes flat', path: '/notes', body: { content, notable_id: customerId, notable_type: 'Customer' } },
-    { label: 'POST /customers/{id}/notes', path: `/customers/${customerId}/notes`, body: { note: { content } } },
+  const bodies: Array<{ label: string; body: any }> = [
+    { label: 'note{content}', body: { note: { content } } },
+    { label: 'flat content', body: { content } },
+    { label: 'note string', body: { note: content } },
   ]
   const errors: string[] = []
-  for (const a of attempts) {
-    let respNote = ''
+  for (const b of bodies) {
     try {
-      const r = await mdRequest<any>(client, a.path, { method: a.method || 'POST', body: JSON.stringify(a.body) })
-      respNote = `resp ${JSON.stringify(r).slice(0, 150)}`
+      const r = await mdRequest<any>(client, `/customers/${customerId}/create_note`, {
+        method: 'POST', body: JSON.stringify(b.body),
+      })
+      const noteId = r?.id || r?.note?.id
+      if (noteId) { console.log(`  + customer note #${noteId} via create_note (${b.label})`); return null }
+      errors.push(`${b.label}: 200 but no note id (resp ${JSON.stringify(r).slice(0, 150)})`)
     } catch (e: any) {
-      errors.push(`${a.label}: ${String(e?.message || e).slice(0, 150)}`)
-      continue
+      errors.push(`${b.label}: ${String(e?.message || e).slice(0, 150)}`)
     }
-    // Authoritative check: is the note actually on the customer now?
-    const after = await getMdCustomer(client, customerId)
-    if (after && hasNote(after)) {
-      console.log(`  + customer note via ${a.label}`)
-      return null
-    }
-    errors.push(`${a.label}: accepted but note not present (${respNote})`)
   }
   return `customer note failed (${errors.join(' | ')})`.slice(0, 700)
 }
