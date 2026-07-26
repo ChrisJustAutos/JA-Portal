@@ -76,29 +76,37 @@ export function previousTradingWeek(asOfMs: number): RecapWeek {
   return { start: ymd(lastMon), end: ymd(lastFri) }
 }
 
-// Overnight-leads span for a report week/range (Brisbane): from 17:30 on the
+// Trading close, minutes-from-midnight Brisbane. FRIDAYS CLOSE AT NOON
+// (Chris 2026-07-27) — Mon–Thu close 17:30.
+function closeMinutes(dow: number): number {
+  return dow === 5 ? 12 * 60 : 17 * 60 + 30
+}
+
+// Overnight-leads span for a report week/range (Brisbane): from CLOSE on the
 // last trading day BEFORE the range (the night leading into its first
 // morning) through 07:00 on the first trading day AFTER it, capped at `now`.
-// For a Mon–Fri week that's Fri-before 5:30pm → Mon-after 7:00am, so the
-// Monday 7am email of last week's recap carries the weekend just gone.
+// For a Mon–Fri week that's Fri-before 12:00 (Friday noon close) →
+// Mon-after 7:00am, so the Monday 7am email of last week's recap carries
+// the whole weekend from Friday lunchtime.
 export function overnightLeadsSpan(week: RecapWeek, nowMs: number): { startMs: number; endMs: number } {
   const s = new Date(week.start + 'T00:00:00Z')
   do { s.setUTCDate(s.getUTCDate() - 1) } while (s.getUTCDay() === 0 || s.getUTCDay() === 6)
-  const startMs = Date.UTC(s.getUTCFullYear(), s.getUTCMonth(), s.getUTCDate(), 17, 30) - AU_TZ_OFFSET_MS
+  const closeMin = closeMinutes(s.getUTCDay())
+  const startMs = Date.UTC(s.getUTCFullYear(), s.getUTCMonth(), s.getUTCDate(), Math.floor(closeMin / 60), closeMin % 60) - AU_TZ_OFFSET_MS
   const e = new Date(week.end + 'T00:00:00Z')
   do { e.setUTCDate(e.getUTCDate() + 1) } while (e.getUTCDay() === 0 || e.getUTCDay() === 6)
   const endMs = Math.min(nowMs, Date.UTC(e.getUTCFullYear(), e.getUTCMonth(), e.getUTCDate(), 7, 0) - AU_TZ_OFFSET_MS)
   return { startMs, endMs: Math.max(startMs, endMs) }
 }
 
-// Out-of-office-hours in Brisbane: weekends, or weekdays before 7:00am /
-// from 5:30pm. This is the per-lead filter inside the span above.
+// Out-of-office-hours in Brisbane: weekends, weekdays before 7:00am, or
+// after close (17:30 Mon–Thu, NOON Friday). Per-lead filter inside the span.
 export function isOutOfHours(ms: number): boolean {
   const b = brisbaneNow(ms)
   const dow = b.getUTCDay()
   if (dow === 0 || dow === 6) return true
   const mins = b.getUTCHours() * 60 + b.getUTCMinutes()
-  return mins < 7 * 60 || mins >= 17 * 60 + 30
+  return mins < 7 * 60 || mins >= closeMinutes(dow)
 }
 
 // The CURRENT trading week so far: this week's Monday → Friday (the full
