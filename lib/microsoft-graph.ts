@@ -193,6 +193,8 @@ export interface GraphAttachmentMeta {
   name: string                     // The filename
   contentType: string
   size: number                     // bytes
+  // '#microsoft.graph.fileAttachment' | '#microsoft.graph.itemAttachment' | …
+  odataType?: string
 }
 
 /**
@@ -293,7 +295,29 @@ export async function listAttachmentMeta(mailbox: string, messageId: string): Pr
     name: a.name,
     contentType: a.contentType,
     size: a.size,
+    odataType: a['@odata.type'],
   }))
+}
+
+/**
+ * Expand an ITEM attachment (an email attached to an email — Outlook
+ * "forward as attachment") and return the FILE attachments nested inside it,
+ * bytes included. Invoice PDFs forwarded this way are invisible to the
+ * normal attachment listing (found 2026-07-27: two AP invoice emails skipped
+ * silently because their PDFs lived inside attached emails).
+ */
+export async function getNestedFileAttachments(
+  mailbox: string,
+  messageId: string,
+  attachmentId: string,
+): Promise<Array<{ name: string; contentType: string; contentBytes: string }>> {
+  const data = await graphJson<any>(
+    `/users/${encodeURIComponent(mailbox)}/messages/${messageId}/attachments/${attachmentId}?$expand=microsoft.graph.itemattachment/item($expand=attachments)`,
+  )
+  const nested: any[] = Array.isArray(data?.item?.attachments) ? data.item.attachments : []
+  return nested
+    .filter(a => a['@odata.type'] === '#microsoft.graph.fileAttachment' && typeof a.contentBytes === 'string')
+    .map(a => ({ name: a.name || 'attachment', contentType: a.contentType || '', contentBytes: a.contentBytes }))
 }
 
 /**

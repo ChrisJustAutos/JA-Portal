@@ -24,6 +24,7 @@ import { createClient, SupabaseClient } from '@supabase/supabase-js'
 import {
   listMessagesWithAttachments,
   listAttachmentMeta,
+  getNestedFileAttachments,
   getAttachmentBase64,
   markMessageAsRead,
   findFolderByDisplayNameLoose,
@@ -342,6 +343,41 @@ async function runMailbox(
     const thisMsgOutcomes: AutoEntryItem['outcome'][] = []
 
     for (const att of atts) {
+      // Forwarded-as-attachment email (Outlook itemAttachment): the real
+      // invoice PDFs live INSIDE it and never appear in the attachment list
+      // (2026-07-27: two staff invoice emails skipped silently this way).
+      // Expand it and process the nested files as if directly attached.
+      if ((att.odataType || '').includes('itemAttachment') || /message\/rfc822/i.test(att.contentType || '')) {
+        try {
+          const nested = await getNestedFileAttachments(mailbox, msg.id, att.id)
+          for (let ni = 0; ni < nested.length; ni++) {
+            const nf = nested[ni]
+            const nKind = classify({ id: '', name: nf.name, contentType: nf.contentType, size: 0 })
+            if (!nKind) continue
+            const nAttId = `${att.id}#nested${ni}`
+            const { data: nSeen } = await c.from('ap_auto_entry_log')
+              .select('id').eq('graph_message_id', msg.id).eq('graph_attachment_id', nAttId).maybeSingle()
+            if (nSeen) { out.skippedDuplicates++; continue }
+            try {
+              const nBytes = Buffer.from(nf.contentBytes, 'base64')
+              const item = await processInvoice(c, { mailbox, companyFile, msg, dryRun }, {
+                bytes: nBytes, b64: nf.contentBytes, kind: nKind, attId: nAttId, attName: `${nf.name} (in attached email)`,
+              })
+              out.processed.push(item)
+              thisMsgOutcomes.push(item.outcome)
+              if (item.outcome === 'posted') anyPosted = true
+            } catch (e: any) {
+              const error = (e?.message || String(e)).slice(0, 300)
+              out.processed.push({ messageId: msg.id, attachmentId: nAttId, attachmentName: nf.name, supplierName: null, invoiceNumber: null, amount: null, outcome: 'error', bankCheck: 'skipped', failReasons: [], error })
+              if (!dryRun) await logRow(c, { mailbox, companyFile, msg, attId: nAttId, attName: nf.name }, { outcome: 'error', error })
+            }
+          }
+        } catch (e: any) {
+          console.error(`[ap-auto-entry] itemAttachment expand failed for ${msg.id}:`, e?.message || e)
+        }
+        continue
+      }
+
       const kind = classify(att)
       if (!kind) continue
 
