@@ -330,14 +330,6 @@ async function runMailbox(
   for (const msg of messages) {
     let atts: GraphAttachmentMeta[]
     try { atts = await listAttachmentMeta(mailbox, msg.id) } catch { continue }
-    // DIAG (2026-07-27, Chris's PDF-attachment emails invisible to the list):
-    // log the raw attachment metadata for staff invoice-ish emails.
-    if (/invoice|receipt|bill/i.test(msg.subject || '') && isStaffSender(msg.from)) {
-      console.log('[ap-att-diag]', JSON.stringify({
-        subject: msg.subject, from: msg.from, received: msg.receivedDateTime, hasAtts: msg.hasAttachments,
-        atts: atts.map(a => ({ name: a.name, ct: a.contentType, type: a.odataType, size: a.size })),
-      }))
-    }
     let anyPosted = false
 
     // Receipt + invoice in the SAME email: only post the invoice. Suppliers
@@ -413,19 +405,24 @@ async function runMailbox(
       thisMsgOutcomes.push(...msgItems.map(i => i.outcome))
     }
 
-    // NEVER-SILENT GUARD (Chris 2026-07-27: two "Invoice" emails sat unentered
-    // since 7:30 with no trace). A STAFF email whose subject says invoice that
-    // yields nothing posted/flagged — every attachment skipped (signature
-    // logos, unreadable inline images) — gets a Slack notice instead of
-    // silence. Once per message (the outer dedup skip keeps it from repeating).
+    // NEVER-SILENT GUARD (Chris 2026-07-27). A STAFF email whose subject says
+    // invoice that produced NOTHING recognisable — no post, no flag, and not
+    // even an "already entered" duplicate — gets ONE honest Slack notice.
+    // skipped_duplicate is CORRECT handling (a re-sent invoice already in
+    // MYOB, e.g. INV-10702), so it does NOT trip the guard; and the message
+    // lists what the attachments resolved to rather than assuming a pasted
+    // picture (which cried wolf on real PDF re-sends).
     const invoiceySubject = /invoice|receipt|bill/i.test(msg.subject || '')
-    const anyActioned = thisMsgOutcomes.some(o => o === 'posted' || o === 'flagged')
+    const handled = thisMsgOutcomes.some(o => o === 'posted' || o === 'flagged' || o === 'skipped_duplicate')
     const anyFresh = thisMsgOutcomes.length > 0
-    if (!dryRun && anyFresh && !anyActioned && invoiceySubject && isStaffSender(msg.from)) {
+    if (!dryRun && anyFresh && !handled && invoiceySubject && isStaffSender(msg.from)) {
+      const skN = thisMsgOutcomes.filter(o => o === 'skipped_not_invoice').length
+      const errN = thisMsgOutcomes.filter(o => o === 'error').length
+      const detail = [skN ? `${skN} unreadable` : '', errN ? `${errN} errored` : ''].filter(Boolean).join(', ')
       const text = [
         `🕳 *Nothing entered from a staff invoice email*`,
-        `“${msg.subject || '(no subject)'}” from *${msg.from}* — ${thisMsgOutcomes.length} attachment${thisMsgOutcomes.length === 1 ? '' : 's'} looked at, none was readable as an invoice.`,
-        `If the invoice is pasted INTO the email body as a picture, please re-send it as an attached photo/PDF — inline images often arrive too degraded to read. The email is still in the ${mailbox} inbox.`,
+        `“${msg.subject || '(no subject)'}” from *${msg.from}* — ${thisMsgOutcomes.length} attachment${thisMsgOutcomes.length === 1 ? '' : 's'} processed (${detail || 'none recognised'}), no invoice entered.`,
+        `Likely a low-res invoice pasted into the email body (re-send as an attached PDF), or the only attachments were signature/logo images. The email is still in the ${mailbox} inbox.`,
       ].join('\n')
       try { await sendSlack({ text, blocks: [{ type: 'section', text: { type: 'mrkdwn', text } }] }, companyFile) } catch (e: any) { console.error('never-silent notice failed:', e?.message) }
     }
