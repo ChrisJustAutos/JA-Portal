@@ -330,6 +330,14 @@ async function runMailbox(
   for (const msg of messages) {
     let atts: GraphAttachmentMeta[]
     try { atts = await listAttachmentMeta(mailbox, msg.id) } catch { continue }
+    // DIAG (2026-07-27, Chris's PDF-attachment emails invisible to the list):
+    // log the raw attachment metadata for staff invoice-ish emails.
+    if (/invoice|receipt|bill/i.test(msg.subject || '') && isStaffSender(msg.from)) {
+      console.log('[ap-att-diag]', JSON.stringify({
+        subject: msg.subject, from: msg.from, received: msg.receivedDateTime, hasAtts: msg.hasAttachments,
+        atts: atts.map(a => ({ name: a.name, ct: a.contentType, type: a.odataType, size: a.size })),
+      }))
+    }
     let anyPosted = false
 
     // Receipt + invoice in the SAME email: only post the invoice. Suppliers
