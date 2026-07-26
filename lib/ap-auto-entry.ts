@@ -339,6 +339,7 @@ async function runMailbox(
     const isReceiptName = (n: string) => /receipt/i.test(n) && !/invoice|tax[\s_-]?inv/i.test(n)
     const isInvoiceName = (n: string) => /invoice|inv[\s_#-]*\d|tax[\s_-]?inv/i.test(n)
     const hasInvoiceSibling = atts.some(a => classify(a) && isInvoiceName(a.name || ''))
+    const thisMsgOutcomes: AutoEntryItem['outcome'][] = []
 
     for (const att of atts) {
       const kind = classify(att)
@@ -355,15 +356,34 @@ async function runMailbox(
         continue
       }
 
+      let msgItems: AutoEntryItem[] = []
       try {
-        const items = await processAttachment(c, { mailbox, companyFile, msg, att, kind, dryRun })
-        out.processed.push(...items)
-        if (items.some(i => i.outcome === 'posted')) anyPosted = true
+        msgItems = await processAttachment(c, { mailbox, companyFile, msg, att, kind, dryRun })
+        out.processed.push(...msgItems)
+        if (msgItems.some(i => i.outcome === 'posted')) anyPosted = true
       } catch (e: any) {
         const error = (e?.message || String(e)).slice(0, 300)
         out.processed.push({ messageId: msg.id, attachmentId: att.id, attachmentName: att.name || '', supplierName: null, invoiceNumber: null, amount: null, outcome: 'error', bankCheck: 'skipped', failReasons: [], error })
         if (!dryRun) await logRow(c, { mailbox, companyFile, msg, attId: att.id, attName: att.name || '' }, { outcome: 'error', error })
       }
+      thisMsgOutcomes.push(...msgItems.map(i => i.outcome))
+    }
+
+    // NEVER-SILENT GUARD (Chris 2026-07-27: two "Invoice" emails sat unentered
+    // since 7:30 with no trace). A STAFF email whose subject says invoice that
+    // yields nothing posted/flagged — every attachment skipped (signature
+    // logos, unreadable inline images) — gets a Slack notice instead of
+    // silence. Once per message (the outer dedup skip keeps it from repeating).
+    const invoiceySubject = /invoice|receipt|bill/i.test(msg.subject || '')
+    const anyActioned = thisMsgOutcomes.some(o => o === 'posted' || o === 'flagged')
+    const anyFresh = thisMsgOutcomes.length > 0
+    if (!dryRun && anyFresh && !anyActioned && invoiceySubject && isStaffSender(msg.from)) {
+      const text = [
+        `🕳 *Nothing entered from a staff invoice email*`,
+        `“${msg.subject || '(no subject)'}” from *${msg.from}* — ${thisMsgOutcomes.length} attachment${thisMsgOutcomes.length === 1 ? '' : 's'} looked at, none was readable as an invoice.`,
+        `If the invoice is pasted INTO the email body as a picture, please re-send it as an attached photo/PDF — inline images often arrive too degraded to read. The email is still in the ${mailbox} inbox.`,
+      ].join('\n')
+      try { await sendSlack({ text, blocks: [{ type: 'section', text: { type: 'mrkdwn', text } }] }, companyFile) } catch (e: any) { console.error('never-silent notice failed:', e?.message) }
     }
 
     // Invoice entered → file the email away (read + move out of Inbox). Only on
@@ -473,7 +493,7 @@ function isStaffSender(fromAddress: string | null | undefined): boolean {
 // (Chris 2026-07-15, EG Group fuel receipt). Stage the image and tell Slack to
 // enter it manually. The size floor keeps embedded signature logos and email
 // banners (small images, also often from staff forwards) silent as before.
-const STAFF_PHOTO_MIN_BYTES = 250_000
+const STAFF_PHOTO_MIN_BYTES = Number(process.env.AP_STAFF_PHOTO_MIN_BYTES || 80_000)
 
 async function maybeFlagStaffPhoto(
   c: SupabaseClient,
