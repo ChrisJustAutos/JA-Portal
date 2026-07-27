@@ -57,22 +57,46 @@ export interface B2BUser {
 
 export const B2B_PREVIEW_COOKIE = 'ja-b2b-preview'
 
-// Build a synthetic read-only B2BUser for a distributor from a signed preview
-// token (order-action-token scope 'b2b_preview', payload = distributor id).
-// No Supabase auth user involved — this is a documentation/screenshot session.
+// Marker email for the auth-less "Portal Preview" user seeded per distributor
+// so a demo session can own a real cart (b2b_carts FKs b2b_distributor_users).
+export const PREVIEW_USER_EMAIL = (distributorId: string) => `preview+${distributorId}@justautos.app`
+
+// Ensure the per-distributor preview user exists; returns its id. Called when
+// an admin mints a preview link (NOT in the hot auth path). auth_user_id stays
+// null (it's not a real login), is_active true so lookups pass.
+export async function ensurePreviewUser(distributorId: string): Promise<string | null> {
+  const sb = getServiceClient()
+  const email = PREVIEW_USER_EMAIL(distributorId)
+  const { data: existing } = await sb.from('b2b_distributor_users').select('id').eq('email', email).maybeSingle()
+  if (existing?.id) return existing.id
+  const { data: created, error } = await sb.from('b2b_distributor_users')
+    .insert({ distributor_id: distributorId, email, full_name: 'Portal Preview', role: 'member', is_active: true })
+    .select('id').single()
+  if (error) { console.error('ensurePreviewUser failed:', error.message); return null }
+  return created.id
+}
+
+// Build a read-only-ish B2BUser for a distributor from a signed preview token
+// (order-action-token scope 'b2b_preview', payload = distributor id). Uses the
+// seeded preview user's real id so the cart works; withB2BAuth still blocks the
+// final commit endpoints (place order, tune-job submit) in preview mode.
 export async function getPreviewB2BUser(req: NextApiRequest | { headers: Record<string, any> }): Promise<B2BUser | null> {
   const token = parseCookies((req.headers as any).cookie)[B2B_PREVIEW_COOKIE]
   if (!token) return null
   const { verifyOrderAction } = await import('./order-action-token')
   const v = verifyOrderAction(token, 'b2b_preview' as any)
   if (!v) return null
-  const { data: d } = await getServiceClient()
+  const sb = getServiceClient()
+  const { data: d } = await sb
     .from('b2b_distributors')
     .select('id, display_name, myob_primary_customer_uid, myob_primary_customer_display_id, myob_linked_customer_uids, dist_group_id, is_active')
     .eq('id', v.orderId).maybeSingle()
   if (!d) return null
+  // Preview user id (seeded at link generation); fall back to synthetic if
+  // somehow missing (nav still works, cart writes would fail gracefully).
+  const { data: pu } = await sb.from('b2b_distributor_users').select('id').eq('email', PREVIEW_USER_EMAIL(d.id)).maybeSingle()
   return {
-    id: 'preview', authUserId: 'preview', email: 'preview@justautos.app',
+    id: pu?.id || 'preview', authUserId: 'preview', email: 'preview@justautos.app',
     fullName: 'Portal Preview', role: 'member', isActive: true, preview: true,
     distributor: {
       id: d.id, displayName: d.display_name,
@@ -246,12 +270,19 @@ export function withB2BAuth<T = any>(
       res.status(401).json({ error: 'Not authenticated' })
       return
     }
-    // Read-only preview: allow reads, refuse anything that mutates. This is
-    // the single choke-point that keeps a Scribe/preview session from placing
-    // an order, editing the cart, submitting jobs, etc.
-    if (user.preview && req.method && req.method !== 'GET' && req.method !== 'HEAD' && req.method !== 'OPTIONS') {
-      res.status(403).json({ error: 'This is a read-only preview of the distributor portal — actions are disabled.' })
-      return
+    // Preview / "view as distributor" (Scribe demo): the purchasing WALK-
+    // THROUGH works — cart add/update/remove and freight quoting are allowed
+    // so the whole flow is demonstrable — but the final commits that create
+    // real records or fire externally are blocked: placing the order, tune-job
+    // submit, quote requests, team/account changes. So a demo can reach the
+    // checkout page and everything up to it, but never actually transacts.
+    if (user.preview && req.method && !['GET', 'HEAD', 'OPTIONS'].includes(req.method)) {
+      const path = String(req.url || '')
+      const demoAllowed = /\/api\/b2b\/(cart|freight-quote)/.test(path)
+      if (!demoAllowed) {
+        res.status(403).json({ error: 'Demo mode — this is the last step and it’s disabled in the preview, so nothing real is created.' })
+        return
+      }
     }
     try {
       await handler(req, res, user)

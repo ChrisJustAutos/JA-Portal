@@ -39,6 +39,7 @@ async function handleList(user: B2BUser, res: NextApiResponse) {
     .from('b2b_distributor_users')
     .select('id, auth_user_id, email, full_name, role, last_login_at, invited_at, is_active, created_at')
     .eq('distributor_id', user.distributor.id)
+    .not('email', 'like', 'preview+%@justautos.app')  // hide the demo/preview user
     .order('created_at', { ascending: true })
   if (error) return res.status(500).json({ error: error.message })
   return res.status(200).json({ users: data || [] })

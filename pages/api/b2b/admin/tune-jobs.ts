@@ -111,6 +111,8 @@ export default withAuth('edit:b2b_distributors', async (req: NextApiRequest, res
         // docs / demos). Lands on /b2b/preview which sets the preview cookie;
         // every mutation is blocked server-side. 1-day token.
         if (!body.distributor_id) return res.status(400).json({ error: 'distributor_id required' })
+        const { ensurePreviewUser } = await import('../../../../lib/b2bAuthServer')
+        await ensurePreviewUser(String(body.distributor_id))  // so the demo cart works
         const { signOrderAction } = await import('../../../../lib/order-action-token')
         const token = signOrderAction({ orderId: String(body.distributor_id), scope: 'b2b_preview' as any, ttlDays: 1 })
         return res.status(200).json({ ok: true, url: `https://justautos.app/b2b/preview?token=${encodeURIComponent(token)}` })
