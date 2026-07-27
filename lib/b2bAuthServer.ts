@@ -49,6 +49,39 @@ export interface B2BUser {
   role: 'owner' | 'member'
   isActive: boolean
   distributor: B2BDistributor
+  // Read-only preview session (admin "Preview portal" / Scribe link). When
+  // true, withB2BAuth blocks every non-GET request — the portal can be
+  // browsed and screenshotted but nothing can be created or changed.
+  preview?: boolean
+}
+
+export const B2B_PREVIEW_COOKIE = 'ja-b2b-preview'
+
+// Build a synthetic read-only B2BUser for a distributor from a signed preview
+// token (order-action-token scope 'b2b_preview', payload = distributor id).
+// No Supabase auth user involved — this is a documentation/screenshot session.
+export async function getPreviewB2BUser(req: NextApiRequest | { headers: Record<string, any> }): Promise<B2BUser | null> {
+  const token = parseCookies((req.headers as any).cookie)[B2B_PREVIEW_COOKIE]
+  if (!token) return null
+  const { verifyOrderAction } = await import('./order-action-token')
+  const v = verifyOrderAction(token, 'b2b_preview' as any)
+  if (!v) return null
+  const { data: d } = await getServiceClient()
+    .from('b2b_distributors')
+    .select('id, display_name, myob_primary_customer_uid, myob_primary_customer_display_id, myob_linked_customer_uids, dist_group_id, is_active')
+    .eq('id', v.orderId).maybeSingle()
+  if (!d) return null
+  return {
+    id: 'preview', authUserId: 'preview', email: 'preview@justautos.app',
+    fullName: 'Portal Preview', role: 'member', isActive: true, preview: true,
+    distributor: {
+      id: d.id, displayName: d.display_name,
+      myobPrimaryCustomerUid: d.myob_primary_customer_uid,
+      myobPrimaryCustomerDisplayId: d.myob_primary_customer_display_id,
+      myobLinkedCustomerUids: d.myob_linked_customer_uids || [],
+      distGroupId: d.dist_group_id, isActive: d.is_active,
+    },
+  }
 }
 
 // ── Cookie / header parsing ─────────────────────────────────────────────
@@ -122,7 +155,10 @@ export async function b2bMfaSatisfied(
 // ── Core lookup ────────────────────────────────────────────────────────
 export async function getCurrentB2BUser(req: NextApiRequest | { headers: Record<string, any> }): Promise<B2BUser | null> {
   const token = getToken(req)
-  if (!token) return null
+  if (!token) {
+    // No real session — fall back to a read-only preview session if present.
+    return getPreviewB2BUser(req)
+  }
   const user = await getCurrentB2BUserFromToken(token)
   if (!user) return null
   if (!(await b2bMfaSatisfied(req, token, user.authUserId))) return null
@@ -194,6 +230,7 @@ export async function requireB2BPageAuth(context: GetServerSidePropsContext) {
         fullName: b2bUser.fullName,
         role: b2bUser.role,
         distributor: b2bUser.distributor,
+        preview: b2bUser.preview || false,
       },
     },
   }
@@ -207,6 +244,13 @@ export function withB2BAuth<T = any>(
     const user = await getCurrentB2BUser(req)
     if (!user) {
       res.status(401).json({ error: 'Not authenticated' })
+      return
+    }
+    // Read-only preview: allow reads, refuse anything that mutates. This is
+    // the single choke-point that keeps a Scribe/preview session from placing
+    // an order, editing the cart, submitting jobs, etc.
+    if (user.preview && req.method && req.method !== 'GET' && req.method !== 'HEAD' && req.method !== 'OPTIONS') {
+      res.status(403).json({ error: 'This is a read-only preview of the distributor portal — actions are disabled.' })
       return
     }
     try {

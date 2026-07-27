@@ -313,6 +313,19 @@ export default function TuneJobsAdmin({ user }: { user: any }) {
                   🔗 Copy fill link
                 </button>
               )}
+              {distFilter !== 'all' && distFilter !== 'unmatched' && (
+                <button
+                  onClick={async () => {
+                    try {
+                      const d = await post({ action: 'preview_link', distributor_id: distFilter })
+                      await navigator.clipboard.writeText(d.url)
+                      toast('Portal preview link copied — read-only, valid 24h. Open in a private window for your Scribe.', 'success')
+                    } catch (e: any) { toast(e.message || 'Link failed', 'error') }
+                  }}
+                  style={{ fontSize: 11.5, padding: '5px 11px', borderRadius: 14, border: `1px solid ${T.border2}`, background: 'transparent', color: T.text2, cursor: 'pointer', fontFamily: 'inherit', whiteSpace: 'nowrap' }}>
+                  👁 Copy portal preview link
+                </button>
+              )}
             </div>
           </div>
 

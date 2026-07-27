@@ -8,7 +8,9 @@ import { createHmac, timingSafeEqual } from 'crypto'
 
 // 'tune_jobs' tokens carry a DISTRIBUTOR id (not an order id) — they gate
 // the login-less /tune-jobs page from the weekly reminder email.
-export type OrderActionScope = 'book_freight' | 'tune_jobs'
+// 'b2b_preview' tokens also carry a DISTRIBUTOR id — they grant a READ-ONLY
+// preview of that distributor's portal (admin "Preview portal" / Scribe link).
+export type OrderActionScope = 'book_freight' | 'tune_jobs' | 'b2b_preview'
 
 function secret(): string {
   const s = process.env.ADMIN_ACTION_SECRET

@@ -36,6 +36,7 @@ interface Props {
     email: string
     fullName: string | null
     role: 'owner' | 'member'
+    preview?: boolean
     distributor: {
       id: string
       displayName: string
@@ -79,6 +80,16 @@ export default function B2BLayout({ user, active = null, children, cartCount }: 
       // doesn't sit underneath it. 64px bar + safe-area inset.
       paddingBottom: isMobile ? `calc(64px + env(safe-area-inset-bottom))` : 0,
     }}>
+
+      {user.preview && (
+        <div style={{
+          position:'sticky', top:0, zIndex:50, background:T.amber, color:'#1a1205',
+          fontSize:12, fontWeight:700, textAlign:'center', padding:'6px 12px',
+          letterSpacing:0.3,
+        }}>
+          READ-ONLY PREVIEW · viewing {user.distributor.displayName}'s portal · actions are disabled
+        </div>
+      )}
 
       {/* ── Top header ─────────────────────────────────────────── */}
       <header style={{

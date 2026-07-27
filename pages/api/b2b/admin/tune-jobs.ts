@@ -106,6 +106,15 @@ export default withAuth('edit:b2b_distributors', async (req: NextApiRequest, res
         if (delErr) return res.status(500).json({ error: delErr.message })
         return res.status(200).json({ ok: true, deleted: (gone || []).length })
       }
+      if (action === 'preview_link') {
+        // Login-less READ-ONLY preview of a distributor's portal (for Scribe
+        // docs / demos). Lands on /b2b/preview which sets the preview cookie;
+        // every mutation is blocked server-side. 1-day token.
+        if (!body.distributor_id) return res.status(400).json({ error: 'distributor_id required' })
+        const { signOrderAction } = await import('../../../../lib/order-action-token')
+        const token = signOrderAction({ orderId: String(body.distributor_id), scope: 'b2b_preview' as any, ttlDays: 1 })
+        return res.status(200).json({ ok: true, url: `https://justautos.app/b2b/preview?token=${encodeURIComponent(token)}` })
+      }
       if (action === 'fill_link') {
         // Mint the same login-less fill link the reminder email carries —
         // for testing or resending to a distributor out-of-band.
