@@ -6,17 +6,24 @@
 // each NEW invoice that represents actual work, queues a thank-you letter +
 // envelope.
 //
-// "Job invoice, not a booking deposit" rule (confirmed against live data):
-//   • a booking deposit posts ONLY to 1-1230 Customer Deposits
-//   • a job invoice always has ≥1 line posting to an income account (4-xxxx),
-//     positive amount (it may ALSO carry a negative 1-1230 "deposit applied")
-// So: print iff the invoice has a positive income (4-xxxx) line.
+// "Job invoice, not a booking deposit" rule (confirmed against live data,
+// refined 2026-07-27 after a deposit invoice printed for Gary Winter):
+//   • a booking DEPOSIT invoice is paid at booking and holds a POSITIVE line
+//     to 1-1230 Customer Deposits; the deposit is later applied/removed on the
+//     final job invoice as a NEGATIVE 1-1230 line.
+//   • the "positive income (4-xxxx) line" test alone is NOT enough: a deposit
+//     invoice can carry a small positive 4-xxxx line for the EFTPOS surcharge
+//     FEE (Gary Winter) and wrongly pass. So a positive 1-1230 (held deposit)
+//     line vetoes it — that invoice is a booking, not a completed job.
+// Print iff: has a positive income (4-xxxx) line AND has no held (positive)
+// Customer-Deposit line.
 
 import { getConnection, myobFetch } from './myob'
 import { WORKSHOP_MYOB_LABEL } from './workshop'
 import { getLetterAutomation, getTemplate, enqueueLetter, recordLetterSkip, lettersSeenUids } from './workshop-letters'
 
 const INCOME_RE = /^4-/ // MYOB income accounts
+const DEPOSIT_RE = /^1-1230/ // Customer Deposits (liability)
 
 export interface WatchResult {
   enabled: boolean
@@ -30,6 +37,14 @@ export interface WatchResult {
 function isJobInvoice(lines: any[]): boolean {
   if (!Array.isArray(lines)) return false
   return lines.some(l => l && l.Type === 'Transaction' && INCOME_RE.test(String(l.Account?.DisplayID || '')) && Number(l.Total) > 0)
+}
+
+// A booking deposit invoice holds a POSITIVE Customer-Deposit line. Completed
+// jobs either have no 1-1230 line or a NEGATIVE one (deposit being applied),
+// so this vetoes only genuine deposit invoices.
+function holdsDeposit(lines: any[]): boolean {
+  if (!Array.isArray(lines)) return false
+  return lines.some(l => l && DEPOSIT_RE.test(String(l.Account?.DisplayID || '')) && Number(l.Total) > 0)
 }
 
 function customerNameFrom(card: any, fallback: string): string {
@@ -99,9 +114,10 @@ export async function runLetterWatch(opts: { dryRun?: boolean; lookbackDays?: nu
       lines = Array.isArray(d.data?.Lines) ? d.data.Lines : []
     } catch { result.errors++; result.details.push({ number, customer: custName0, total, action: 'error', reason: 'detail_fetch' }); continue }
 
-    if (!isJobInvoice(lines)) {
-      if (!dryRun) await recordLetterSkip(inv.UID, custName0, total, 'deposit_or_nonjob')
-      result.skipped++; result.details.push({ number, customer: custName0, total, action: 'skip', reason: 'deposit_or_nonjob' }); continue
+    if (!isJobInvoice(lines) || holdsDeposit(lines)) {
+      const reason = holdsDeposit(lines) ? 'booking_deposit' : 'deposit_or_nonjob'
+      if (!dryRun) await recordLetterSkip(inv.UID, custName0, total, reason)
+      result.skipped++; result.details.push({ number, customer: custName0, total, action: 'skip', reason }); continue
     }
 
     // Customer card → name + postal address for the letter/envelope.
