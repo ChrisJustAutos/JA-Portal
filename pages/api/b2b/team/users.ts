@@ -112,7 +112,10 @@ async function handleInvite(user: B2BUser, req: NextApiRequest, res: NextApiResp
       full_name,
       role,
       invited_at: new Date().toISOString(),
-      invited_by: user.id,
+      // invited_by FKs auth.users — user.id is the b2b_distributor_users ROW
+      // id, which violated the FK and failed EVERY owner self-service invite
+      // ("Failed to add user", Penrith 2026-07-28).
+      invited_by: user.authUserId,
       is_active: true,
     })
     .select()
