@@ -378,6 +378,8 @@ export async function ingestTuneJobEmails(opts: { lookbackDays?: number; maxNew?
 
 export interface TuneJobDetails {
   customer_name: string
+  // Legacy input — the forms now capture ONE "first & last" name field and
+  // the first name is derived from it; still accepted if a caller sends it.
   customer_first_name?: string | null
   customer_phone?: string | null
   customer_email?: string | null
@@ -386,6 +388,11 @@ export interface TuneJobDetails {
   customer_state?: string | null
   customer_postcode?: string | null
   vehicle_rego?: string | null
+  // MD-style vehicle fields (2026-07-28). vehicle_description still accepted
+  // from old clients; when make/model/year arrive it's composed from them.
+  vehicle_make?: string | null
+  vehicle_model?: string | null
+  vehicle_year?: string | null
   vehicle_description?: string | null
   job_notes?: string | null
 }
@@ -397,13 +404,22 @@ export async function submitTuneJobDetails(jobId: string, distributorId: string,
   if (!job) throw new Error('Job not found')
   if (job.distributor_id !== distributorId) throw new Error('Job belongs to a different distributor')
   if (job.status !== 'awaiting_details') throw new Error(`Job is ${job.status}`)
-  const name = String(d.customer_name || '').trim()
+  const name = String(d.customer_name || '').trim().replace(/\s+/g, ' ')
   if (!name) throw new Error('Customer name is required')
+  // One name field carries first AND last (Penrith submitted bare surnames
+  // 2026-07-28 — MD cards named just "Moore"). Business names pass naturally.
+  if (name.split(' ').length < 2) throw new Error('Please enter the customer’s first and last name')
 
   const s = (v: any, n: number) => { const t = String(v ?? '').trim(); return t ? t.slice(0, n) : null }
+  // MD-style vehicle fields; description composed for letters/back-compat.
+  const vMake = s(d.vehicle_make, 40)
+  const vModel = s(d.vehicle_model, 60)
+  const vYear = s(d.vehicle_year, 10)
+  const vDesc = s(d.vehicle_description, 120) ||
+    ([vYear, vMake, vModel].filter(Boolean).join(' ') || null)
   await c.from('b2b_tune_jobs').update({
     customer_name: name.slice(0, 200),
-    customer_first_name: s(d.customer_first_name, 80),
+    customer_first_name: s(d.customer_first_name, 80) || name.split(' ')[0].slice(0, 80),
     customer_phone: s(d.customer_phone, 40),
     customer_email: s(d.customer_email, 200),
     customer_address_line1: s(d.customer_address_line1, 200),
@@ -411,7 +427,8 @@ export async function submitTuneJobDetails(jobId: string, distributorId: string,
     customer_state: s(d.customer_state, 10),
     customer_postcode: s(d.customer_postcode, 10),
     vehicle_rego: s(d.vehicle_rego, 20),
-    vehicle_description: s(d.vehicle_description, 120),
+    vehicle_make: vMake, vehicle_model: vModel, vehicle_year: vYear,
+    vehicle_description: vDesc,
     job_notes: s(d.job_notes, 1000),
     filled_by_user_id: userId, filled_at: new Date().toISOString(),
     status: 'submitted', updated_at: new Date().toISOString(),

@@ -50,7 +50,6 @@ interface TuneJob {
 
 interface DetailsForm {
   customer_name: string
-  customer_first_name: string
   customer_phone: string
   customer_email: string
   customer_address_line1: string
@@ -58,14 +57,16 @@ interface DetailsForm {
   customer_state: string
   customer_postcode: string
   vehicle_rego: string
-  vehicle_description: string
+  vehicle_make: string
+  vehicle_model: string
+  vehicle_year: string
   job_notes: string
 }
 
 const EMPTY_FORM: DetailsForm = {
-  customer_name: '', customer_first_name: '', customer_phone: '', customer_email: '',
+  customer_name: '', customer_phone: '', customer_email: '',
   customer_address_line1: '', customer_suburb: '', customer_state: '', customer_postcode: '',
-  vehicle_rego: '', vehicle_description: '', job_notes: '',
+  vehicle_rego: '', vehicle_make: '', vehicle_model: '', vehicle_year: '', job_notes: '',
 }
 
 function formatDate(iso: string | null): string {
@@ -195,7 +196,6 @@ function OpenJobCard({ job, onSubmitted }: { job: TuneJob; onSubmitted: (id: str
   const [formOpen, setFormOpen] = useState(false)
   const [form, setForm] = useState<DetailsForm>({
     ...EMPTY_FORM,
-    vehicle_description: job.vehicle_description || '',
     vehicle_rego: job.vehicle_rego || '',
   })
   const [busy, setBusy] = useState(false)
@@ -205,7 +205,9 @@ function OpenJobCard({ job, onSubmitted }: { job: TuneJob; onSubmitted: (id: str
     setForm(f => ({ ...f, [k]: e.target.value }))
 
   async function submit() {
-    if (!form.customer_name.trim()) { setErr('Customer name is required.'); return }
+    const name = form.customer_name.trim().replace(/\s+/g, ' ')
+    if (!name) { setErr('Customer name is required.'); return }
+    if (name.split(' ').length < 2) { setErr('Please enter the customer’s first and last name.'); return }
     setBusy(true); setErr('')
     try {
       const r = await fetch('/api/b2b/jobs', {
@@ -214,8 +216,7 @@ function OpenJobCard({ job, onSubmitted }: { job: TuneJob; onSubmitted: (id: str
         body: JSON.stringify({
           job_id: job.id,
           details: {
-            customer_name: form.customer_name.trim(),
-            customer_first_name: form.customer_first_name.trim(),
+            customer_name: name,
             customer_phone: form.customer_phone.trim(),
             customer_email: form.customer_email.trim(),
             customer_address_line1: form.customer_address_line1.trim(),
@@ -223,7 +224,9 @@ function OpenJobCard({ job, onSubmitted }: { job: TuneJob; onSubmitted: (id: str
             customer_state: form.customer_state.trim(),
             customer_postcode: form.customer_postcode.trim(),
             vehicle_rego: form.vehicle_rego.trim(),
-            vehicle_description: form.vehicle_description.trim(),
+            vehicle_make: form.vehicle_make.trim(),
+            vehicle_model: form.vehicle_model.trim(),
+            vehicle_year: form.vehicle_year.trim(),
             job_notes: form.job_notes.trim(),
           },
         }),
@@ -266,8 +269,7 @@ function OpenJobCard({ job, onSubmitted }: { job: TuneJob; onSubmitted: (id: str
       {formOpen && (
         <div style={{ borderTop: `1px solid ${T.border}`, paddingTop: 12, display: 'flex', flexDirection: 'column', gap: 10 }}>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 10 }}>
-            <Field label="Customer name *"><input value={form.customer_name} onChange={set('customer_name')} style={inputStyle} placeholder="Full name" /></Field>
-            <Field label="First name"><input value={form.customer_first_name} onChange={set('customer_first_name')} style={inputStyle} /></Field>
+            <Field label="Customer name (first & last) *"><input value={form.customer_name} onChange={set('customer_name')} style={inputStyle} placeholder="e.g. John Smith" /></Field>
             <Field label="Phone"><input value={form.customer_phone} onChange={set('customer_phone')} style={inputStyle} inputMode="tel" /></Field>
             <Field label="Email"><input value={form.customer_email} onChange={set('customer_email')} style={inputStyle} inputMode="email" /></Field>
             <Field label="Address line"><input value={form.customer_address_line1} onChange={set('customer_address_line1')} style={inputStyle} /></Field>
@@ -275,7 +277,9 @@ function OpenJobCard({ job, onSubmitted }: { job: TuneJob; onSubmitted: (id: str
             <Field label="State"><input value={form.customer_state} onChange={set('customer_state')} style={inputStyle} placeholder="QLD" /></Field>
             <Field label="Postcode"><input value={form.customer_postcode} onChange={set('customer_postcode')} style={inputStyle} inputMode="numeric" /></Field>
             <Field label="Rego"><input value={form.vehicle_rego} onChange={set('vehicle_rego')} style={inputStyle} /></Field>
-            <Field label="Vehicle description"><input value={form.vehicle_description} onChange={set('vehicle_description')} style={inputStyle} placeholder="e.g. 2021 Hilux SR5" /></Field>
+            <Field label="Make"><input value={form.vehicle_make} onChange={set('vehicle_make')} style={inputStyle} placeholder="e.g. Toyota" /></Field>
+            <Field label="Model"><input value={form.vehicle_model} onChange={set('vehicle_model')} style={inputStyle} placeholder="e.g. Hilux SR5" /></Field>
+            <Field label="Year"><input value={form.vehicle_year} onChange={set('vehicle_year')} style={inputStyle} inputMode="numeric" placeholder="e.g. 2021" /></Field>
           </div>
           <Field label="Notes">
             <textarea value={form.job_notes} onChange={set('job_notes')} rows={3} style={{ ...inputStyle, resize: 'vertical' }} />

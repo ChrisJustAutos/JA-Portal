@@ -49,6 +49,9 @@ interface TuneJob {
   customer_suburb: string | null
   customer_state: string | null
   vehicle_rego: string | null
+  vehicle_make: string | null
+  vehicle_model: string | null
+  vehicle_year: string | null
   vehicle_description: string | null
   job_notes: string | null
   distributor_name: string | null
@@ -103,7 +106,11 @@ async function tryCreateVehicle(client: MdClient, customerId: string | number, j
       (job.vehicle_rego && norm(veh.registration_number) === norm(job.vehicle_rego))
     ))
     if (dupe) { console.log(`  = vehicle already on customer (#${dupe.id} ${dupe.registration_number || dupe.vin})`); return null }
-    const v = splitVehicle(job.vehicle_description)
+    // Explicit make/model/year from the form (2026-07-28) beats guessing them
+    // out of the free-text description; older rows fall back to the split.
+    const v = (job.vehicle_make || job.vehicle_model || job.vehicle_year)
+      ? { make: job.vehicle_make || undefined, model: job.vehicle_model || undefined, year: job.vehicle_year || undefined }
+      : splitVehicle(job.vehicle_description)
     const r = await mdRequest<any>(client, '/vehicles', {
       method: 'POST',
       body: JSON.stringify({

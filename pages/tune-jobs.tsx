@@ -60,8 +60,7 @@ export async function getServerSideProps(context: GetServerSidePropsContext): Pr
 }
 
 const FIELDS: Array<{ key: string; label: string; type?: string; required?: boolean; wide?: boolean }> = [
-  { key: 'customer_name', label: 'Customer name', required: true },
-  { key: 'customer_first_name', label: 'First name' },
+  { key: 'customer_name', label: 'Customer name (first & last)', required: true },
   { key: 'customer_phone', label: 'Phone' },
   { key: 'customer_email', label: 'Email', type: 'email' },
   { key: 'customer_address_line1', label: 'Address', wide: true },
@@ -69,7 +68,9 @@ const FIELDS: Array<{ key: string; label: string; type?: string; required?: bool
   { key: 'customer_state', label: 'State' },
   { key: 'customer_postcode', label: 'Postcode' },
   { key: 'vehicle_rego', label: 'Rego' },
-  { key: 'vehicle_description', label: 'Vehicle (e.g. 2022 LC79)' },
+  { key: 'vehicle_make', label: 'Make (e.g. Toyota)' },
+  { key: 'vehicle_model', label: 'Model (e.g. LC79)' },
+  { key: 'vehicle_year', label: 'Year (e.g. 2022)' },
 ]
 
 function JobCard({ job, token, onDone }: { job: OpenJob; token: string; onDone: (id: string) => void }) {
@@ -80,6 +81,8 @@ function JobCard({ job, token, onDone }: { job: OpenJob; token: string; onDone: 
 
   async function submit(e: React.FormEvent) {
     e.preventDefault()
+    const name = String(form.customer_name || '').trim().replace(/\s+/g, ' ')
+    if (name.split(' ').length < 2) { setErr('Please enter the customer’s first and last name.'); return }
     setBusy(true); setErr('')
     try {
       const r = await fetch('/api/tune-jobs-submit', {

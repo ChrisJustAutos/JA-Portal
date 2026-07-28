@@ -28,7 +28,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         id, vin, tune_details, invoice_number, amount,
         customer_name, customer_first_name, customer_phone, customer_email,
         customer_address_line1, customer_suburb, customer_state, customer_postcode,
-        vehicle_rego, vehicle_description, job_notes,
+        vehicle_rego, vehicle_make, vehicle_model, vehicle_year, vehicle_description, job_notes,
         distributor:b2b_distributors!b2b_tune_jobs_distributor_id_fkey(display_name)
       `)
       .eq('status', 'submitted')
