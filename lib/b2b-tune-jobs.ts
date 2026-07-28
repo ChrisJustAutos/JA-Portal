@@ -468,7 +468,12 @@ const TUNE_FOLLOWUP_COLS = {
   TUNE: 'text_mm5pnnpd',
   DATE: 'date_mm5pjrnt',
   PACKAGE: 'long_text_mm5pa57g',   // "Package Details" — the distributor's job_notes
-  ADDRESS: 'long_text_mm5p53tr',   // customer postal address — advisor fills it during the call if the distributor didn't
+  // Location column — advisor fills it (with autocomplete) during the call
+  // when the submission had no address. READ-ONLY for the portal: Monday's
+  // API only accepts lat/lng writes for location columns and we have no
+  // geocoder, so a submitted address goes in the item NOTE instead (the
+  // letter has already gone out at submit time in that case anyway).
+  ADDRESS: 'location_mm5pza6f',
 }
 
 export async function syncTuneJobDownstream(jobId: string): Promise<void> {
@@ -499,8 +504,7 @@ export async function syncTuneJobDownstream(jobId: string): Promise<void> {
       if (job.vehicle_rego) columnValues[TUNE_FOLLOWUP_COLS.REGO] = job.vehicle_rego
       if (job.tune_details) columnValues[TUNE_FOLLOWUP_COLS.TUNE] = String(job.tune_details).slice(0, 250)
       if (job.job_notes) columnValues[TUNE_FOLLOWUP_COLS.PACKAGE] = { text: String(job.job_notes).slice(0, 2000) }
-      const submittedAddress = [job.customer_address_line1, [job.customer_suburb, job.customer_state, job.customer_postcode].filter(Boolean).join(' ')].filter(Boolean).join('\n')
-      if (submittedAddress) columnValues[TUNE_FOLLOWUP_COLS.ADDRESS] = { text: submittedAddress }
+      const submittedAddress = [job.customer_address_line1, [job.customer_suburb, job.customer_state, job.customer_postcode].filter(Boolean).join(' ')].filter(Boolean).join(', ')
       const created = await mondayQuery<{ create_item: { id: string } }>(
         `mutation CreateTuneFollowUp($boardId: ID!, $groupId: String!, $itemName: String!, $columnValues: JSON!) {
           create_item(board_id: $boardId, group_id: $groupId, item_name: $itemName, column_values: $columnValues, create_labels_if_missing: false) { id }
@@ -520,6 +524,9 @@ export async function syncTuneJobDownstream(jobId: string): Promise<void> {
           job.vin ? `VIN ${job.vin}` : '',
           job.invoice_number ? `Stripe invoice ${job.invoice_number}${job.amount ? ` · $${Number(job.amount).toFixed(2)}` : ''}` : '',
           job.job_notes ? `Distributor notes: ${job.job_notes}` : '',
+          submittedAddress
+            ? `Address on file: ${submittedAddress}`
+            : '⚠ No address given — grab it on the call and put it in the Address column so the thank-you letter prints.',
         ].filter(Boolean).join('\n')
         await mondayQuery(
           `mutation Note($itemId: ID!, $body: String!) { create_update(item_id: $itemId, body: $body) { id } }`,
