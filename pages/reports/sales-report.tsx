@@ -59,7 +59,21 @@ export default function SalesReportPage({ user }: { user: PortalUserSSR }) {
   const [note, setNote] = useState<string | null>(null)
   const [exportOpen, setExportOpen] = useState(false)
   const [exportHover, setExportHover] = useState<number | null>(null)
+  // Export section ticks persist per browser (Chris 2026-07-29): the excluded
+  // set round-trips through localStorage so next week's export starts from
+  // the same selection.
+  const EXPORT_PREF_KEY = 'sales-report-export-excluded'
   const [excluded, setExcluded] = useState<Set<string>>(new Set())
+  useEffect(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem(EXPORT_PREF_KEY) || '[]')
+      if (Array.isArray(saved)) setExcluded(new Set(saved.filter(x => typeof x === 'string')))
+    } catch { /* fresh start */ }
+  }, [])
+  function persistExcluded(next: Set<string>) {
+    setExcluded(next)
+    try { localStorage.setItem(EXPORT_PREF_KEY, JSON.stringify(Array.from(next))) } catch { /* quota/private mode */ }
+  }
 
   const load = useCallback(async (mode: WeekMode, range?: { start: string; end: string }) => {
     setLoading(true); setErr(null)
@@ -141,11 +155,9 @@ export default function SalesReportPage({ user }: { user: PortalUserSSR }) {
   // Only offer tickboxes for sections actually present in this report.
   const availableSections = REPORT_SECTIONS.filter(s => html?.includes(`data-section="${s.id}"`))
   function toggleSection(id: string) {
-    setExcluded(prev => {
-      const next = new Set(prev)
-      if (next.has(id)) next.delete(id); else next.add(id)
-      return next
-    })
+    const next = new Set(excluded)
+    if (next.has(id)) next.delete(id); else next.add(id)
+    persistExcluded(next)
   }
 
   // The BOM prefix keeps Word from mis-reading the UTF-8 (→ · en-dashes etc).
@@ -250,7 +262,7 @@ export default function SalesReportPage({ user }: { user: PortalUserSSR }) {
                       <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 5 }}>
                         <span style={{ fontSize: 10, fontWeight: 700, color: T.text3, textTransform: 'uppercase', letterSpacing: '0.06em' }}>Include sections</span>
                         <button
-                          onClick={() => setExcluded(prev => prev.size ? new Set() : new Set(availableSections.map(s => s.id)))}
+                          onClick={() => persistExcluded(excluded.size ? new Set() : new Set(availableSections.map(s => s.id)))}
                           style={{ background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'inherit', fontSize: 10.5, color: T.blue, padding: 0 }}>
                           {excluded.size ? 'tick all' : 'untick all'}
                         </button>
