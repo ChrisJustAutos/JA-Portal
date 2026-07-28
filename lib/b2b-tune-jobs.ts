@@ -439,14 +439,79 @@ export async function submitTuneJobDetails(jobId: string, distributorId: string,
   try { await syncTuneJobDownstream(jobId) } catch (e: any) { console.error('tune-job sync failed:', e?.message) }
 }
 
+// Monday follow-up board: every submitted tune job becomes an item so staff
+// ring the customer about their distributor experience (Chris 2026-07-28).
+// Board "Distributor Tune Follow Ups" (workspace Just Autos), group "Tune
+// Customers", items land as Call Status "To Call".
+const TUNE_FOLLOWUP_BOARD = process.env.TUNE_FOLLOWUP_MONDAY_BOARD || '5030245210'
+const TUNE_FOLLOWUP_GROUP = process.env.TUNE_FOLLOWUP_MONDAY_GROUP || 'group_mm5ppym0'
+const TUNE_FOLLOWUP_COLS = {
+  STATUS: 'color_mm5pxxq',      // 0 = To Call
+  PHONE: 'text_mm5pwqtt',
+  EMAIL: 'text_mm5p40tz',
+  DISTRIBUTOR: 'text_mm5p6hs6',
+  VEHICLE: 'text_mm5p20fj',
+  REGO: 'text_mm5pvnz8',
+  TUNE: 'text_mm5pnnpd',
+  DATE: 'date_mm5pjrnt',
+}
+
 export async function syncTuneJobDownstream(jobId: string): Promise<void> {
   const c = sb()
   const { data: job } = await c.from('b2b_tune_jobs').select('*').eq('id', jobId).maybeSingle()
-  if (!job || job.status !== 'submitted') return
+  // 'synced' allowed so the admin retry button can backfill the Monday item /
+  // letter on jobs the MD worker has already completed.
+  if (!job || !['submitted', 'synced'].includes(job.status)) return
   const { data: dist } = await c.from('b2b_distributors')
     .select('display_name, trading_name, primary_contact_email, ship_line1, ship_suburb, ship_state, ship_postcode')
     .eq('id', job.distributor_id).maybeSingle()
   const errs: string[] = []
+
+  // Monday follow-up item (idempotent via monday_item_id).
+  if (!job.monday_item_id) {
+    try {
+      const { mondayQuery } = await import('./monday-followup')
+      const vehicle = [job.vehicle_year, job.vehicle_make, job.vehicle_model].filter(Boolean).join(' ')
+        || job.vehicle_description || ''
+      const columnValues: Record<string, any> = {
+        [TUNE_FOLLOWUP_COLS.STATUS]: { index: 0 },
+        [TUNE_FOLLOWUP_COLS.DATE]: { date: new Date(job.filled_at || Date.now()).toISOString().slice(0, 10) },
+      }
+      if (job.customer_phone) columnValues[TUNE_FOLLOWUP_COLS.PHONE] = job.customer_phone
+      if (job.customer_email) columnValues[TUNE_FOLLOWUP_COLS.EMAIL] = job.customer_email
+      if (dist?.display_name) columnValues[TUNE_FOLLOWUP_COLS.DISTRIBUTOR] = dist.display_name
+      if (vehicle) columnValues[TUNE_FOLLOWUP_COLS.VEHICLE] = vehicle
+      if (job.vehicle_rego) columnValues[TUNE_FOLLOWUP_COLS.REGO] = job.vehicle_rego
+      if (job.tune_details) columnValues[TUNE_FOLLOWUP_COLS.TUNE] = String(job.tune_details).slice(0, 250)
+      const created = await mondayQuery<{ create_item: { id: string } }>(
+        `mutation CreateTuneFollowUp($boardId: ID!, $groupId: String!, $itemName: String!, $columnValues: JSON!) {
+          create_item(board_id: $boardId, group_id: $groupId, item_name: $itemName, column_values: $columnValues, create_labels_if_missing: false) { id }
+        }`,
+        {
+          boardId: TUNE_FOLLOWUP_BOARD,
+          groupId: TUNE_FOLLOWUP_GROUP,
+          itemName: job.customer_name || 'Unknown customer',
+          columnValues: JSON.stringify(columnValues),
+        },
+      )
+      const itemId = created?.create_item?.id
+      if (itemId) {
+        await c.from('b2b_tune_jobs').update({ monday_item_id: String(itemId), updated_at: new Date().toISOString() }).eq('id', jobId)
+        const note = [
+          `Tuned by ${dist?.display_name || 'distributor'} — ring the customer about their experience.`,
+          job.vin ? `VIN ${job.vin}` : '',
+          job.invoice_number ? `Stripe invoice ${job.invoice_number}${job.amount ? ` · $${Number(job.amount).toFixed(2)}` : ''}` : '',
+          job.job_notes ? `Distributor notes: ${job.job_notes}` : '',
+        ].filter(Boolean).join('\n')
+        await mondayQuery(
+          `mutation Note($itemId: ID!, $body: String!) { create_update(item_id: $itemId, body: $body) { id } }`,
+          { itemId, body: note },
+        ).catch(() => { /* note is best-effort */ })
+      } else {
+        errs.push('Monday: create_item returned no id')
+      }
+    } catch (e: any) { errs.push(`Monday: ${String(e?.message || e).slice(0, 200)}`) }
+  }
 
   // Customer letter with the DISTRIBUTOR's details (printed at JA on the
   // existing letter agent). Uses the automation's default template body but
