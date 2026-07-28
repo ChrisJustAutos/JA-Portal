@@ -77,8 +77,12 @@ export function renderRecapHtml(r: SalesRecap): string {
   parts.push(`<div style="color:${GREY};font-size:13px;margin-bottom:12px">Week ${esc(wkLabel)} · generated ${new Date(r.generatedAt).toLocaleString('en-AU', { timeZone: 'Australia/Brisbane', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })} · daily target ${money(r.dailyTarget)}</div>`)
 
   // ── Headline KPI cards ─────────────────────────────────────────────────
+  // Every section is wrapped in <div data-section="…"> so the export flow can
+  // include/exclude sections by tickbox (Chris 2026-07-29) — the wrappers are
+  // inert in email clients.
   if (r.kpis) {
     const k = r.kpis
+    parts.push(`<div data-section="kpis">`)
     parts.push(`<table cellspacing="8" cellpadding="0" style="border-collapse:separate;width:100%;margin:0 0 8px"><tr>`)
     parts.push(kpiCard('This week', money(r.weekTotal.total),
       `<span style="color:${GREY};font:12px Arial">JA ${moneyK(r.weekTotal.orders)} · Dist ${moneyK(r.weekTotal.distributor)}</span>`))
@@ -91,11 +95,13 @@ export function renderRecapHtml(r: SalesRecap): string {
         ? `${pctPill(k.momPct)} <span style="color:${GREY};font:12px Arial">vs ${esc(k.prevMonthLabel.split(' ')[0])} ${moneyK(k.prevMonthTotal || 0)}</span>`
         : `<span style="color:${GREY};font:12px Arial">no previous month yet</span>`))
     parts.push(`</tr></table>`)
+    parts.push(`</div>`)
   }
 
   // ── Overnight leads (unnumbered, leads the Monday 7am email) ──────────
   if (r.overnight) {
     const o = r.overnight
+    parts.push(`<div data-section="overnight">`)
     parts.push(sectionTitle('🌙', `Overnight Leads — ${o.leads.length ? `${o.leads.length} new` : 'none'}`,
       `New quote-channel enquiries in Monday, ${o.label}`))
     if (o.leads.length) {
@@ -121,13 +127,15 @@ export function renderRecapHtml(r: SalesRecap): string {
     } else {
       parts.push(`<p style="color:${GREY};font-size:13px;margin:4px 0 14px">No overnight leads in this period.</p>`)
     }
+    parts.push(`</div>`)
   }
 
   // ── Customer feedback panels ──────────────────────────────────────────
   const feedbackPanel = (
     fb: NonNullable<SalesRecap['negativeFeedback']>,
-    o: { emoji: string; title: string; channel: string; countColor: string; emptyText: string },
+    o: { emoji: string; title: string; channel: string; countColor: string; emptyText: string; sectionId: string },
   ) => {
+    parts.push(`<div data-section="${o.sectionId}">`)
     parts.push(sectionTitle(o.emoji, `${o.title} — ${fb.items.length || 'none'}`, `Posts in ${o.channel}, ${fb.label}`))
     if (fb.items.length) {
       const when = (iso: string) => new Date(iso).toLocaleString('en-AU', {
@@ -143,19 +151,21 @@ export function renderRecapHtml(r: SalesRecap): string {
     } else {
       parts.push(`<p style="color:${GREY};font-size:13px;margin:4px 0 14px">${o.emptyText}</p>`)
     }
+    parts.push(`</div>`)
   }
   if (r.positiveFeedback) feedbackPanel(r.positiveFeedback, {
     emoji: '👍', title: 'Positive Customer Feedback', channel: '#customer-feedback-positive',
-    countColor: GREEN, emptyText: 'Nothing posted in the positive channel this period.',
+    countColor: GREEN, emptyText: 'Nothing posted in the positive channel this period.', sectionId: 'positive-feedback',
   })
   if (r.negativeFeedback) feedbackPanel(r.negativeFeedback, {
     emoji: '👎', title: 'Negative Customer Feedback', channel: '#customer-feedback-negative',
-    countColor: RED, emptyText: 'Nothing posted in the negative channel this period. 🎉',
+    countColor: RED, emptyText: 'Nothing posted in the negative channel this period. 🎉', sectionId: 'negative-feedback',
   })
 
   // ── 1. Week at a glance ───────────────────────────────────────────────
   // One row per day: big total, a bar sized against the best day (target
   // line implied by the pill), green/red tint by target hit.
+  parts.push(`<div data-section="week">`)
   parts.push(sectionTitle('📅', `Week at a Glance — ${wkLabel}`, `Green = hit the ${money(r.dailyTarget)} daily target, red = short`))
   {
     const maxDay = Math.max(r.dailyTarget, ...r.daily.map(d => d.total))
@@ -181,8 +191,10 @@ export function renderRecapHtml(r: SalesRecap): string {
       <tr>${['Day', 'Sales', '', 'vs target'].map(h => `<th style="background:${NAVY};color:#fff;font:600 13px Arial;padding:9px 12px;text-align:left;border:1px solid #ccd3dc">${h}</th>`).join('')}</tr>
       ${rows}${foot}</table>`)
   }
+  parts.push(`</div>`)
 
   // ── 2. Rolling 4-week comparison ──────────────────────────────────────
+  parts.push(`<div data-section="rolling">`)
   parts.push(sectionTitle('📊', 'Rolling 4-Week Comparison', 'Most recent week first — bar length = week total'))
   {
     const maxWk = Math.max(...r.rolling.map(w => w.total), 1)
@@ -197,7 +209,10 @@ export function renderRecapHtml(r: SalesRecap): string {
     ))
   }
 
+  parts.push(`</div>`)
+
   // ── 3. Monthly summary ────────────────────────────────────────────────
+  parts.push(`<div data-section="monthly">`)
   parts.push(sectionTitle('🗓️', 'Monthly Summary', 'Bar length = month total · pill = change vs the month before'))
   {
     const maxMo = Math.max(...r.monthly.map(m => m.total), 1)
@@ -218,9 +233,12 @@ export function renderRecapHtml(r: SalesRecap): string {
     ))
   }
 
+  parts.push(`</div>`)
+
   // ── Distributor Areas (quotes vs booked, recap week's month) ─────────
   if (r.distributorAreas && r.distributorAreas.rows.length) {
     const da = r.distributorAreas
+    parts.push(`<div data-section="distributor-areas">`)
     parts.push(sectionTitle('🗺️', `Distributor Areas — ${da.monthLabel}`,
       `JA quotes to customers within ${da.radiusKm} km of each distributor vs the jobs they booked (Monday, confirmed) · month granularity · full map: justautos.app/reports/distributor-map`))
     const maxQ = Math.max(...da.rows.map(x => x.quotes), 1)
@@ -243,9 +261,11 @@ export function renderRecapHtml(r: SalesRecap): string {
         x.located ? convPill(x.bookings, x.quotes) : `<span style="color:${GREY};font:600 12px Arial">—</span>`,
       ]),
     ))
+    parts.push(`</div>`)
   }
 
   // ── 4. Diary overview ─────────────────────────────────────────────────
+  parts.push(`<div data-section="diary">`)
   parts.push(sectionTitle('📔', 'Diary Overview'))
   if (r.diaryNotes.length) {
     parts.push(table(
@@ -257,8 +277,10 @@ export function renderRecapHtml(r: SalesRecap): string {
       ]),
     ))
   } else parts.push(`<p style="color:${GREY};font-size:13px">No diary notes for this week.</p>`)
+  parts.push(`</div>`)
 
   // ── 5. Forecast ───────────────────────────────────────────────────────
+  parts.push(`<div data-section="forecast">`)
   parts.push(sectionTitle('🔮', 'HQ Forecast Bookings — Future Months', 'Booked-in work by scheduled month, from the MechanicDesk job report'))
   if (r.forecast.length) {
     const maxF = Math.max(...r.forecast.map(f => f.value), 1)
@@ -274,14 +296,17 @@ export function renderRecapHtml(r: SalesRecap): string {
   } else {
     parts.push(`<p style="color:${GREY};font-size:13px">No forward bookings on record.</p>`)
   }
+  parts.push(`</div>`)
 
   // ── 6. Flags ──────────────────────────────────────────────────────────
+  parts.push(`<div data-section="flags">`)
   parts.push(sectionTitle('🚩', 'Key Flags & Watch Items'))
   const badge = (p: string) => {
     const c = p === 'HIGH' ? RED : p === 'MED' ? '#dc9a00' : '#0b7285'
     return `<span style="background:${c};color:#fff;font:700 11px Arial;padding:3px 9px;border-radius:10px">${p}</span>`
   }
   parts.push(table(['Priority', 'Item'], r.flags.map(f => [badge(f.priority), esc(f.item)])))
+  parts.push(`</div>`)
 
   parts.push(`<div style="color:#9aa0a6;font-size:11px;margin-top:20px">"Sales" = orders/bookings placed (Monday), not invoiced turnover. Distributor bookings count from the Booking - Confirmed group. Diary + forecast from MechanicDesk. Auto-generated by JA Portal.</div>`)
   parts.push(`</div>`)

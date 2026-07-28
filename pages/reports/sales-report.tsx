@@ -16,6 +16,23 @@ import { T } from '../../lib/ui/theme'
 
 type WeekMode = 'previous' | 'current' | 'custom'
 
+// Report sections (matching the data-section wrappers renderRecapHtml emits).
+// The export menu shows a tickbox per section present in the current report;
+// unticked sections are stripped from the exported copy only.
+const REPORT_SECTIONS: { id: string; label: string }[] = [
+  { id: 'kpis', label: 'Headline KPIs' },
+  { id: 'overnight', label: 'Overnight Leads' },
+  { id: 'positive-feedback', label: 'Positive Feedback' },
+  { id: 'negative-feedback', label: 'Negative Feedback' },
+  { id: 'week', label: 'Week at a Glance' },
+  { id: 'rolling', label: 'Rolling 4-Week Comparison' },
+  { id: 'monthly', label: 'Monthly Summary' },
+  { id: 'distributor-areas', label: 'Distributor Areas' },
+  { id: 'diary', label: 'Diary Overview' },
+  { id: 'forecast', label: 'Forecast Bookings' },
+  { id: 'flags', label: 'Key Flags' },
+]
+
 function relTime(iso: string | null): string {
   if (!iso) return 'never'
   const then = new Date(iso).getTime()
@@ -42,6 +59,7 @@ export default function SalesReportPage({ user }: { user: PortalUserSSR }) {
   const [note, setNote] = useState<string | null>(null)
   const [exportOpen, setExportOpen] = useState(false)
   const [exportHover, setExportHover] = useState<number | null>(null)
+  const [excluded, setExcluded] = useState<Set<string>>(new Set())
 
   const load = useCallback(async (mode: WeekMode, range?: { start: string; end: string }) => {
     setLoading(true); setErr(null)
@@ -99,14 +117,35 @@ export default function SalesReportPage({ user }: { user: PortalUserSSR }) {
 
   // Every export flavour wraps the SAME report HTML in a standalone document,
   // so they all match the emailed report exactly. The Office namespaces are
-  // inert in browsers but let Word open the .doc download cleanly.
+  // inert in browsers but let Word open the .doc download cleanly. Sections
+  // unticked in the export menu are stripped from the exported copy only —
+  // the on-screen report always shows everything.
   function reportDoc(): { title: string; doc: string } | null {
     if (!html) return null
+    let body = html
+    if (excluded.size) {
+      const holder = document.createElement('div')
+      holder.innerHTML = html
+      for (const id of Array.from(excluded)) {
+        holder.querySelectorAll(`[data-section="${id}"]`).forEach(n => n.remove())
+      }
+      body = holder.innerHTML
+    }
     const title = reportWeek ? `Sales Report ${reportWeek.start} to ${reportWeek.end}` : 'Sales Report'
     const doc = `<!doctype html><html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:w="urn:schemas-microsoft-com:office:word"><head><meta charset="utf-8"><title>${title}</title>
 <style>body{margin:24px;background:#fff} @media print{body{margin:0}}</style>
-</head><body>${html}</body></html>`
+</head><body>${body}</body></html>`
     return { title, doc }
+  }
+
+  // Only offer tickboxes for sections actually present in this report.
+  const availableSections = REPORT_SECTIONS.filter(s => html?.includes(`data-section="${s.id}"`))
+  function toggleSection(id: string) {
+    setExcluded(prev => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id); else next.add(id)
+      return next
+    })
   }
 
   // The BOM prefix keeps Word from mis-reading the UTF-8 (→ · en-dashes etc).
@@ -202,10 +241,28 @@ export default function SalesReportPage({ user }: { user: PortalUserSSR }) {
                 {/* click-away backdrop */}
                 <div style={{ position: 'fixed', inset: 0, zIndex: 40 }} onClick={() => setExportOpen(false)} />
                 <div style={{
-                  position: 'absolute', top: '100%', left: 0, marginTop: 4, zIndex: 41, minWidth: 210,
+                  position: 'absolute', top: '100%', left: 0, marginTop: 4, zIndex: 41, minWidth: 250,
                   background: T.bg2, border: `1px solid ${T.border2}`, borderRadius: 8,
                   boxShadow: '0 8px 24px rgba(0,0,0,0.35)', overflow: 'hidden',
                 }}>
+                  {availableSections.length > 0 && (
+                    <div style={{ padding: '8px 12px 6px', borderBottom: `1px solid ${T.border}` }}>
+                      <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 5 }}>
+                        <span style={{ fontSize: 10, fontWeight: 700, color: T.text3, textTransform: 'uppercase', letterSpacing: '0.06em' }}>Include sections</span>
+                        <button
+                          onClick={() => setExcluded(prev => prev.size ? new Set() : new Set(availableSections.map(s => s.id)))}
+                          style={{ background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'inherit', fontSize: 10.5, color: T.blue, padding: 0 }}>
+                          {excluded.size ? 'tick all' : 'untick all'}
+                        </button>
+                      </div>
+                      {availableSections.map(s => (
+                        <label key={s.id} style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 12, color: T.text2, cursor: 'pointer', padding: '2.5px 0' }}>
+                          <input type="checkbox" checked={!excluded.has(s.id)} onChange={() => toggleSection(s.id)} style={{ cursor: 'pointer' }} />
+                          {s.label}
+                        </label>
+                      ))}
+                    </div>
+                  )}
                   {EXPORTS.map((x, i) => (
                     <button
                       key={x.label}
