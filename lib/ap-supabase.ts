@@ -290,6 +290,7 @@ export function triageInvoice(input: TriageInput): TriageOutcome {
   const reasons: string[] = []
   const e = input.extracted
 
+  if (e.isQuote) reasons.push('RED:quote-not-invoice')
   if (!e.invoiceNumber) reasons.push('RED:missing-invoice-number')
   if (e.totals.totalIncGst === null) reasons.push('RED:missing-total')
   if (e.parseConfidence === 'low') reasons.push('RED:low-parse-confidence')
@@ -544,6 +545,7 @@ export async function applyTriageAndResolve(invoiceId: string): Promise<void> {
     paidInFull: false,               // not tracked on legacy portal rows
     paymentMethod: null,
     isCreditNote: inv.is_credit_note === true,
+    isQuote: false,                  // not persisted on portal rows; only fresh extractions carry it
     currency: inv.currency ?? null,  // not persisted on legacy rows → null (treated as domestic)
     lineItems: lines.map((l: any) => ({
       lineNo: l.line_no,

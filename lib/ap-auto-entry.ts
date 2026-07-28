@@ -768,6 +768,29 @@ async function processInvoice(
     return { ...base, supplierName: extracted.vendor?.name || null, invoiceNumber: extracted.invoiceNumber, amount: extracted.totals.totalIncGst, outcome: 'skipped_not_invoice', bankCheck: 'skipped', failReasons: [] }
   }
 
+  // Quote guard. A quote/quotation/estimate is an OFFER, not a bill — posting
+  // one books a payable for goods never supplied (SCAR Quote_206617.pdf went
+  // through as TWO bills, $16,703 + $17,945, 2026-07-28). Veto on the
+  // extractor's document-type read OR a quote-named attachment, with a Slack
+  // notice so accounts knows why nothing was entered. Deliberately NOT
+  // triggered by the email subject alone: reply chains titled "RE: quote"
+  // routinely carry the final tax invoice.
+  const looksLikeQuote = extracted.isQuote === true || /quote|quotation|estimate/i.test(attName)
+  if (looksLikeQuote) {
+    let ts: string | null = null
+    if (!dryRun) {
+      const text = [
+        `📄 *Quote/estimate detected — NOT entered into MYOB*`,
+        `“${msg.subject || '(no subject)'}” from *${msg.from || 'unknown'}* · ${attName || 'attachment'}`,
+        `Reads as a *${extracted.vendor?.name || 'unknown supplier'}* quote${extracted.invoiceNumber ? ` — ${extracted.invoiceNumber}` : ''}${extracted.totals.totalIncGst != null ? ` — ${money(extracted.totals.totalIncGst)}` : ''}.`,
+        `Quotes are never posted as bills. If the goods were actually supplied, ask the supplier for the tax invoice. Email left in the ${mailbox} inbox.`,
+      ].join('\n')
+      ts = await sendSlack({ text, blocks: [{ type: 'section', text: { type: 'mrkdwn', text } }] }, companyFile)
+      await logRow(c, { mailbox, companyFile, msg, attId, attName }, { outcome: 'skipped_not_invoice', supplierName: extracted.vendor?.name || null, invoiceNumber: extracted.invoiceNumber, amount: extracted.totals.totalIncGst, error: 'quote/estimate document — not an invoice, not entered', slackTs: ts })
+    }
+    return { ...base, supplierName: extracted.vendor?.name || null, invoiceNumber: extracted.invoiceNumber, amount: extracted.totals.totalIncGst, outcome: 'skipped_not_invoice', bankCheck: 'skipped', failReasons: [] }
+  }
+
   // Statement guard. Statement-named documents belong to the statement watcher
   // (reconcile against MYOB), NOT here — parsing a statement as an "invoice"
   // risks double-posting bills that are already entered. The exception is a

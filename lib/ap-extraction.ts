@@ -79,6 +79,11 @@ export interface ExtractedAPInvoice {
   // would book a credit as a payable, so the portal blocks the Approve
   // flow and surfaces a red "CREDIT NOTE" badge.
   isCreditNote: boolean
+  // True when the document is a QUOTE / quotation / estimate / pro-forma —
+  // an offer, not a bill for goods supplied. Quotes must never be entered
+  // as bills (SCAR Quote_206617 was posted as two bills, 2026-07-28); the
+  // VPS auto-entry vetoes on this flag.
+  isQuote: boolean
   // ISO 4217 currency of the invoice amounts (AUD, USD, AED, …). null when
   // the document doesn't make it determinable. Overseas suppliers
   // (lib/ap-overseas-suppliers) only auto-post when this is AUD.
@@ -233,6 +238,7 @@ Output ONLY a JSON object with this exact shape:
   "notes": "Any free-text annotations relevant to the order — names of staff who placed it ('N: MATTHEW'), delivery instructions ('T: REPCO TO DELIVER'), special remarks. Concatenate multiple into one string with semicolons. null if nothing notable.",
   "currency": "ISO 4217 code of the currency the invoice amounts are in (AUD, USD, NZD, AED, EUR...). Determine from explicit currency labels, symbols with country hints (A$, US$), the supplier's country, or GST vs VAT/sales-tax wording. Plain '$' with Australian GST → AUD. null ONLY if genuinely undeterminable.",
   "isCreditNote": "true if this document is a credit note / supplier credit / adjustment note / return rather than a regular invoice. Strong signals: header text says 'CREDIT NOTE', 'TAX CREDIT NOTE', 'ADJUSTMENT NOTE', 'CR', or 'RETURN'; the document number prefixed with 'CR'; total amount is shown as negative or in parentheses; line totals are negative; line description says 'refund' or 'return'. When true, totals.totalIncGst and lineTotalExGst should still be returned as POSITIVE numbers (the credit-note flag is the sign indicator). false for normal invoices.",
+  "isQuote": "true if this document is a QUOTE / QUOTATION / ESTIMATE / PRO-FORMA — an offer of prices for goods or services NOT yet supplied — rather than an invoice for goods actually provided. Strong signals: the document title says 'QUOTE', 'QUOTATION', 'ESTIMATE', 'PRO FORMA' or 'SALES QUOTE' (instead of 'TAX INVOICE' / 'INVOICE'); a 'Quote No' / 'Quotation Number' / 'Estimate #' field; validity wording like 'quote valid for 30 days' / 'prices valid until'; acceptance wording ('to accept this quote...'); explicit 'THIS IS NOT A TAX INVOICE'. A document titled 'TAX INVOICE' that merely REFERENCES an earlier quote number is an invoice, NOT a quote — set false. When true still extract all fields normally (number, totals, lines).",
   "lineItems": [
     {
       "lineNo":          "Line number as shown (often 0001, 0002...). Cast to integer. Use 1-based sequence if not shown.",
@@ -344,6 +350,7 @@ function validateAndNormalise(raw: any): ExtractedAPInvoice {
     paidInFull: raw.paidInFull === true,
     paymentMethod: nullableString(raw.paymentMethod),
     isCreditNote: raw.isCreditNote === true,
+    isQuote: raw.isQuote === true,
     currency: raw.currency ? String(raw.currency).toUpperCase().trim().slice(0, 3) : null,
     lineItems: reconcileLineTotals(normaliseLineItems(raw.lineItems), normTotals.subtotalExGst),
     parseConfidence: ['high', 'medium', 'low'].includes(raw.parseConfidence) ? raw.parseConfidence : 'medium',
