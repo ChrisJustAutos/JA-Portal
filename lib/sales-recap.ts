@@ -31,6 +31,20 @@ export interface OvernightOut { start: string; end: string; label: string; leads
 export interface FeedbackItem { at: string; author: string | null; text: string }
 export interface FeedbackOut { start: string; end: string; label: string; items: FeedbackItem[] }
 
+// Headline KPI strip (Chris 2026-07-28): % up/down vs the $60k daily target
+// on a rolling-4-week average, and month-to-date vs the previous month.
+export interface KpiOut {
+  weekDailyAvg: number
+  weekVsTargetPct: number | null       // recap week's daily avg vs target
+  rolling4AvgDaily: number             // mean daily avg across the 4 rolling weeks (weeks with data)
+  rolling4VsTargetPct: number | null   // that average vs the $60k target
+  monthLabel: string                   // current (possibly partial) month
+  monthToDate: number
+  prevMonthLabel: string | null
+  prevMonthTotal: number | null
+  momPct: number | null                // month-to-date vs previous month total
+}
+
 export interface SalesRecap {
   week: RecapWeek
   generatedAt: string
@@ -48,6 +62,8 @@ export interface SalesRecap {
   forecast: ForecastMonthOut[]
   // Section 6
   flags: FlagOut[]
+  // Headline KPIs (absent on recaps stored before 2026-07-28)
+  kpis?: KpiOut
   // Overnight quote-channel leads (5:30pm last trading day → 7:00am). Null on
   // reports assembled without a quote-lead pull (older stored recaps).
   overnight: OvernightOut | null
@@ -195,6 +211,32 @@ export function assembleRecap(input: AssembleInput): SalesRecap {
   // Section 6 — flags (LLM if supplied, else rule-based fallback)
   const flags = input.flags?.length ? input.flags : ruleFlags(monthly, rolling, weekTotal)
 
+  // Headline KPIs. Rolling-4 average = mean of the 4 comparison weeks' daily
+  // averages (weeks with data only). Month comparison = current calendar
+  // month TO DATE vs the previous month's full total.
+  const pctVs = (v: number, base: number): number | null =>
+    base > 0 && v > 0 ? Math.round(((v - base) / base) * 1000) / 10 : null
+  const rollingWithData = rolling.filter(w => w.tradingDays > 0)
+  const rolling4AvgDaily = rollingWithData.length
+    ? money(rollingWithData.reduce((s, w) => s + w.dailyAvg, 0) / rollingWithData.length)
+    : 0
+  const curMonthKey = ymd(brisbaneNow(input.nowMs)).slice(0, 7)
+  const prevMonthDate = new Date(curMonthKey + '-01T00:00:00Z'); prevMonthDate.setUTCMonth(prevMonthDate.getUTCMonth() - 1)
+  const prevMonthKey = ymd(prevMonthDate).slice(0, 7)
+  const curMonthRow = monthly.find(m => m.month === curMonthKey)
+  const prevMonthRow = monthly.find(m => m.month === prevMonthKey)
+  const kpis: KpiOut = {
+    weekDailyAvg: weekTotal.dailyAvg,
+    weekVsTargetPct: pctVs(weekTotal.dailyAvg, DAILY_TARGET),
+    rolling4AvgDaily,
+    rolling4VsTargetPct: pctVs(rolling4AvgDaily, DAILY_TARGET),
+    monthLabel: monthLabel(curMonthKey),
+    monthToDate: curMonthRow?.total ?? 0,
+    prevMonthLabel: prevMonthRow ? monthLabel(prevMonthKey) : null,
+    prevMonthTotal: prevMonthRow?.total ?? null,
+    momPct: prevMonthRow ? pctVs(curMonthRow?.total ?? 0, prevMonthRow.total) : null,
+  }
+
   // Overnight quote-channel leads for the report week/range (only when a
   // lead pull was supplied): out-of-hours arrivals within the span from the
   // night into the range's first day to 7am after its last day.
@@ -220,7 +262,7 @@ export function assembleRecap(input: AssembleInput): SalesRecap {
 
   return {
     week, generatedAt: new Date(input.nowMs).toISOString(), dailyTarget: DAILY_TARGET,
-    daily, weekTotal, rolling, monthly, diaryNotes, forecast, flags, overnight,
+    daily, weekTotal, rolling, monthly, diaryNotes, forecast, flags, kpis, overnight,
     negativeFeedback: input.negativeFeedback ?? null,
     positiveFeedback: input.positiveFeedback ?? null,
   }

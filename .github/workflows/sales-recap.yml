@@ -3,21 +3,28 @@ name: Weekly Sales Recap (Mon 7am)
 # Scrapes MechanicDesk (diary notes + forward forecast) via Playwright, then
 # POSTs to /api/reports/sales-recap/generate which pulls Monday, assembles,
 # renders, stores + emails the recap to Ryan.
+#
+# The intraday crons run the SAME scrape in MD-REFRESH mode — they POST to
+# /api/reports/sales-recap/md-refresh, which only updates the stored MD data
+# so the live Sales Report tracks same-day bookings. No report regen, no email.
 
 on:
   schedule:
-    - cron: '0 21 * * 0'   # 21:00 UTC Sun = 07:00 Mon Brisbane (AEST, no DST)
+    - cron: '0 21 * * 0'          # 21:00 UTC Sun = 07:00 Mon Brisbane — weekly full run (email)
+    # MD refresh, trading days ~every 2h Brisbane business hours (AEST = UTC+10):
+    - cron: '0 23 * * 0-4'        # 09:00 Bris Mon–Fri
+    - cron: '0 1,3,5,7 * * 1-5'   # 11:00 / 13:00 / 15:00 / 17:00 Bris Mon–Fri
   workflow_dispatch:
     inputs:
       mode:
-        description: 'Run mode — real: store + email team · refresh: store only (no email) · dry-run: build only'
+        description: 'Run mode — real: store + email team · refresh: store only (no email) · md-refresh: update MD data only · dry-run: build only'
         type: choice
-        options: [real, refresh, dry-run]
+        options: [real, refresh, md-refresh, dry-run]
         default: dry-run
 
 jobs:
   run:
-    name: weekly sales recap
+    name: sales recap
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -39,9 +46,13 @@ jobs:
           JA_PORTAL_BASE_URL:       ${{ secrets.JA_PORTAL_BASE_URL }}
           JA_PORTAL_API_KEY:        ${{ secrets.JA_PORTAL_API_KEY }}
           DRY_RUN:                  ${{ inputs.mode == 'dry-run' && '1' || '' }}
-          # Email only on the scheduled Mon 7am run and explicit "real" dispatch;
+          # Which scheduled cron fired decides the mode: the Sunday 21:00 UTC
+          # cron is the weekly emailed report; every other schedule is an MD
+          # refresh. Dispatches follow the chosen input.
+          MD_REFRESH:               ${{ (github.event_name == 'schedule' && github.event.schedule != '0 21 * * 0') && '1' || (inputs.mode == 'md-refresh' && '1' || '') }}
+          # Email only on the weekly scheduled run and explicit "real" dispatch;
           # "refresh" stores without emailing. On schedule inputs.mode is empty → email.
           # NB: the truthy branch must hold the non-empty value ('1'); GH Actions
           # treats '' as falsy so `x && '' || '1'` would always yield '1'.
-          SEND_EMAIL:               ${{ inputs.mode != 'refresh' && '1' || '' }}
+          SEND_EMAIL:               ${{ (github.event_name == 'schedule' && github.event.schedule == '0 21 * * 0' || inputs.mode == 'real') && '1' || '' }}
         run: npx tsx scripts/run-sales-recap.ts

@@ -27,6 +27,17 @@ const DB = { date: 'date4', value: 'numbers', status: 'status' }
 const ORDERS_DEAD = new Set(['Deleted', 'Canceled', 'Cancelled'])
 const DIST_DEAD = new Set(['Cancelled', 'Canceled'])
 
+// Distributor-Booking GROUPS that don't count as sales (Chris 2026-07-28:
+// "only pull from the confirmed group not pending"). Exclude-list rather than
+// include-only-Confirmed because bookings MOVE groups over their life
+// (Confirmed → Follow Up RLMNA → Follow up Done/Completed) — an include
+// filter would decay history the way the quote-lead group filter does by
+// design. Titles compared case-insensitively; env override for renames.
+const DIST_DEAD_GROUPS = new Set(
+  (process.env.SALES_DIST_EXCLUDE_GROUPS || 'Booking - Pending,Canceled,Cancelled,Postponed')
+    .split(/[,;]+/).map(s => s.trim().toLowerCase()).filter(Boolean),
+)
+
 export type SaleProcess = 'Normal Booking' | 'Upsell' | 'Additional Maintenance' | 'Unclassified'
 
 export interface OrderRow { date: string | null; value: number; process: SaleProcess; status: string | null }
@@ -57,7 +68,7 @@ async function pullBoard(
     const cursorArg: string = cursor ? `cursor: "${cursor}"` : `query_params: { rules: [{ column_id: "${cols.date}", compare_value: ["${opts.since || '1900-01-01'}", "${opts.until || '2999-12-31'}"], operator: between }] }`
     const data = await mondayQuery(token, `query { boards(ids: [${boardId}]) { items_page(limit: 500, ${cursorArg}) {
       cursor
-      items { id name column_values(ids: [${colIds}]) { id text } }
+      items { id name group { title } column_values(ids: [${colIds}]) { id text } }
     } } }`)
     const pageData = data?.boards?.[0]?.items_page
     const items: any[] = pageData?.items || []
@@ -170,10 +181,18 @@ export async function fetchQuoteLeads(token: string, sinceMs: number): Promise<Q
 
 export async function fetchDistBookings(token: string, since: string, until: string): Promise<DistRow[]> {
   const items = await pullBoard(token, DIST_BOOKING_BOARD, DB, { since, until })
-  return items.map(it => ({
-    date: colText(it, DB.date), value: num(colText(it, DB.value)),
-    status: colText(it, DB.status), distributor: colText(it, 'status_1'),
-  })).filter(r => !DIST_DEAD.has(String(r.status || '')))
+  return items
+    // Pending / cancelled / postponed GROUPS aren't sales yet — only bookings
+    // that reached Booking - Confirmed (or its follow-up stages) count.
+    // Missing group info fails open so a Monday hiccup can't zero the report.
+    .filter(it => {
+      const g = String(it.group?.title || '').trim().toLowerCase()
+      return !g || !DIST_DEAD_GROUPS.has(g)
+    })
+    .map(it => ({
+      date: colText(it, DB.date), value: num(colText(it, DB.value)),
+      status: colText(it, DB.status), distributor: colText(it, 'status_1'),
+    })).filter(r => !DIST_DEAD.has(String(r.status || '')))
 }
 
 // ── Aggregations ────────────────────────────────────────────────────────

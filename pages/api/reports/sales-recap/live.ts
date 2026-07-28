@@ -101,7 +101,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       recap,
       html,
       ordersAsOf: new Date(nowMs).toISOString(),
-      workshopAsOf: stored?.generated_at || null, // null = MD sections never scraped yet
+      // Intraday md-refresh runs stamp scrapedAt inside md_inputs; older rows
+      // only have the weekly run's generated_at.
+      workshopAsOf: stored?.md_inputs?.scrapedAt || stored?.generated_at || null, // null = MD sections never scraped yet
     })
   } catch (e: any) {
     console.error('[sales-recap/live] failed:', e?.message || e)

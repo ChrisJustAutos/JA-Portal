@@ -1,79 +1,134 @@
 // lib/sales-recap-html.ts
 // Renders a SalesRecap to email-safe inline-styled HTML (also used as the
-// portal Reports → Sales Report body). Mirrors the source doc's sections.
+// portal Reports → Sales Report body). Redesigned 2026-07-28 (Chris: "think
+// picture books type of person") — headline KPI cards, big numbers, colour
+// up/down pills and horizontal bars instead of dense numeric grids. Stays
+// email-safe: tables + inline styles + div bars only, no flex/grid/JS.
 
 import type { SalesRecap } from './sales-recap'
 
 const NAVY = '#1F4E79'
+const GREEN = '#00875a'
+const RED = '#d92d20'
+const GREEN_BG = '#e7f6ef'
+const RED_BG = '#fdeceb'
+const GREY = '#6b7280'
+
 const money = (n: number | null | undefined) =>
   n == null ? 'TBC' : `$${Math.round(Number(n)).toLocaleString('en-AU')}`
+const moneyK = (n: number) => n >= 1000 ? `$${Math.round(n / 1000)}k` : money(n)
 const esc = (s: string) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 const dayLabel = (ymd: string) => new Date(ymd + 'T00:00:00Z').toLocaleDateString('en-AU', { weekday: 'short', day: '2-digit', month: 'short' })
 
+// ▲ +12% / ▼ -8% pill. Green when up is good (default); flip for "lower is
+// better" metrics if ever needed.
+function pctPill(pct: number | null | undefined): string {
+  if (pct == null) return `<span style="color:${GREY};font:600 12px Arial">—</span>`
+  const up = pct >= 0
+  const col = up ? GREEN : RED
+  const bg = up ? GREEN_BG : RED_BG
+  const arrow = up ? '▲' : '▼'
+  return `<span style="background:${bg};color:${col};font:700 13px Arial;padding:3px 10px;border-radius:12px;white-space:nowrap">${arrow} ${up ? '+' : ''}${pct}%</span>`
+}
+
+// Simple ✓ hit / ✗ miss pill against the daily target.
+function targetPill(v: number, target: number): string {
+  const hit = v >= target
+  const col = hit ? GREEN : RED
+  const bg = hit ? GREEN_BG : RED_BG
+  const diff = v - target
+  return `<span style="background:${bg};color:${col};font:700 12px Arial;padding:3px 10px;border-radius:12px;white-space:nowrap">${hit ? '✓' : '✗'} ${diff >= 0 ? '+' : '−'}${moneyK(Math.abs(diff))}</span>`
+}
+
+// Email-safe horizontal bar: a coloured div inside a fixed-width track.
+function bar(value: number, max: number, color: string): string {
+  const pct = max > 0 ? Math.max(2, Math.round((value / max) * 100)) : 0
+  return `<div style="background:#eef1f5;border-radius:6px;height:16px;width:100%;min-width:120px"><div style="background:${color};border-radius:6px;height:16px;width:${pct}%"></div></div>`
+}
+
+function sectionTitle(emoji: string, t: string, sub?: string): string {
+  return `<h2 style="font:700 18px Arial,sans-serif;color:${NAVY};margin:26px 0 2px">${emoji} ${esc(t)}</h2>` +
+    (sub ? `<div style="color:${GREY};font-size:12px;margin-bottom:8px">${esc(sub)}</div>` : '')
+}
+
+// Plain content table with roomy cells (used for diary / feedback / flags).
 function table(headers: string[], rows: string[][], opts: { footer?: string[] } = {}): string {
-  const th = headers.map(h => `<th style="background:${NAVY};color:#fff;font:600 13px Arial,sans-serif;padding:8px 12px;text-align:left;border:1px solid #ccc">${esc(h)}</th>`).join('')
-  const trs = rows.map((r, i) => `<tr style="background:${i % 2 ? '#f5f7fa' : '#fff'}">${r.map(c => `<td style="font:13px Arial,sans-serif;padding:7px 12px;border:1px solid #e2e5e9;color:#1a1d23">${c}</td>`).join('')}</tr>`).join('')
-  const foot = opts.footer ? `<tr style="background:#eef2f7;font-weight:700">${opts.footer.map(c => `<td style="font:600 13px Arial,sans-serif;padding:7px 12px;border:1px solid #e2e5e9">${c}</td>`).join('')}</tr>` : ''
-  return `<table style="border-collapse:collapse;width:100%;margin:6px 0 18px">${`<tr>${th}</tr>`}${trs}${foot}</table>`
+  const th = headers.map(h => `<th style="background:${NAVY};color:#fff;font:600 13px Arial,sans-serif;padding:9px 12px;text-align:left;border:1px solid #ccd3dc">${esc(h)}</th>`).join('')
+  const trs = rows.map((r, i) => `<tr style="background:${i % 2 ? '#f5f7fa' : '#fff'}">${r.map(c => `<td style="font:14px Arial,sans-serif;padding:9px 12px;border:1px solid #e2e5e9;color:#1a1d23;vertical-align:top">${c}</td>`).join('')}</tr>`).join('')
+  const foot = opts.footer ? `<tr style="background:#eef2f7;font-weight:700">${opts.footer.map(c => `<td style="font:700 14px Arial,sans-serif;padding:9px 12px;border:1px solid #e2e5e9">${c}</td>`).join('')}</tr>` : ''
+  return `<table cellspacing="0" cellpadding="0" style="border-collapse:collapse;width:100%;margin:6px 0 18px">${`<tr>${th}</tr>`}${trs}${foot}</table>`
 }
-function h2(n: number, t: string): string {
-  return `<h2 style="font:700 16px Arial,sans-serif;color:${NAVY};margin:22px 0 4px">${n}. ${esc(t)}</h2>`
+
+// One big KPI card. Rendered inside a one-row table so email clients keep
+// them side by side.
+function kpiCard(label: string, value: string, extra: string): string {
+  return `<td style="background:#f7f9fc;border:1px solid #e2e5e9;border-radius:10px;padding:14px 16px;vertical-align:top">
+    <div style="font:600 11px Arial;color:${GREY};text-transform:uppercase;letter-spacing:0.05em">${esc(label)}</div>
+    <div style="font:800 26px Arial;color:#1a1d23;margin:4px 0 6px">${value}</div>
+    <div>${extra}</div>
+  </td>`
 }
-const tick = (v: number, target: number) => v >= target ? '<span style="color:#00875a">✓</span>' : '<span style="color:#d92d20">✗</span>'
 
 export function renderRecapHtml(r: SalesRecap): string {
   const wkLabel = `${dayLabel(r.week.start)} – ${dayLabel(r.week.end)}`
   const parts: string[] = []
-  parts.push(`<div style="max-width:820px;margin:0 auto;font-family:Arial,sans-serif;color:#1a1d23">`)
-  parts.push(`<h1 style="font:700 22px Arial,sans-serif;color:${NAVY};margin:0 0 2px">Weekly Sales Recap</h1>`)
-  parts.push(`<div style="color:#6b7280;font-size:13px;margin-bottom:8px">Week ${esc(wkLabel)} · generated ${new Date(r.generatedAt).toLocaleString('en-AU', { timeZone: 'Australia/Brisbane', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })} · daily target ${money(r.dailyTarget)}</div>`)
+  parts.push(`<div style="max-width:840px;margin:0 auto;font-family:Arial,sans-serif;color:#1a1d23">`)
+  parts.push(`<h1 style="font:800 24px Arial,sans-serif;color:${NAVY};margin:0 0 2px">Weekly Sales Recap</h1>`)
+  parts.push(`<div style="color:${GREY};font-size:13px;margin-bottom:12px">Week ${esc(wkLabel)} · generated ${new Date(r.generatedAt).toLocaleString('en-AU', { timeZone: 'Australia/Brisbane', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })} · daily target ${money(r.dailyTarget)}</div>`)
 
-  // Overnight leads panel (unnumbered — sits above the recap sections so the
-  // Monday 7am email leads with what came in since Friday close).
+  // ── Headline KPI cards ─────────────────────────────────────────────────
+  if (r.kpis) {
+    const k = r.kpis
+    parts.push(`<table cellspacing="8" cellpadding="0" style="border-collapse:separate;width:100%;margin:0 0 8px"><tr>`)
+    parts.push(kpiCard('This week', money(r.weekTotal.total),
+      `<span style="color:${GREY};font:12px Arial">JA ${moneyK(r.weekTotal.orders)} · Dist ${moneyK(r.weekTotal.distributor)}</span>`))
+    parts.push(kpiCard('Daily average', money(k.weekDailyAvg),
+      `${pctPill(k.weekVsTargetPct)} <span style="color:${GREY};font:12px Arial">vs ${moneyK(r.dailyTarget)} target</span>`))
+    parts.push(kpiCard('4-week daily average', money(k.rolling4AvgDaily),
+      `${pctPill(k.rolling4VsTargetPct)} <span style="color:${GREY};font:12px Arial">vs ${moneyK(r.dailyTarget)} target</span>`))
+    parts.push(kpiCard(`${k.monthLabel.split(' ')[0]} so far`, money(k.monthToDate),
+      k.prevMonthLabel
+        ? `${pctPill(k.momPct)} <span style="color:${GREY};font:12px Arial">vs ${esc(k.prevMonthLabel.split(' ')[0])} ${moneyK(k.prevMonthTotal || 0)}</span>`
+        : `<span style="color:${GREY};font:12px Arial">no previous month yet</span>`))
+    parts.push(`</tr></table>`)
+  }
+
+  // ── Overnight leads (unnumbered, leads the Monday 7am email) ──────────
   if (r.overnight) {
     const o = r.overnight
-    parts.push(`<h2 style="font:700 16px Arial,sans-serif;color:${NAVY};margin:18px 0 2px">🌙 Overnight Leads — ${o.leads.length ? `<span style="color:#d92d20">${o.leads.length} new</span>` : 'none'}</h2>`)
-    parts.push(`<div style="color:#6b7280;font-size:12px;margin-bottom:4px">New quote-channel enquiries in Monday, ${esc(o.label)}</div>`)
+    parts.push(sectionTitle('🌙', `Overnight Leads — ${o.leads.length ? `${o.leads.length} new` : 'none'}`,
+      `New quote-channel enquiries in Monday, ${o.label}`))
     if (o.leads.length) {
-      // Condensed to per-NIGHT totals (Chris 2026-07-15/16) — bucket by the
-      // morning the lead was waiting for: an evening lead (≥5:30pm) belongs to
-      // the NEXT day's row, an early-morning lead (<7am) to its own day, so
-      // "Thu 16" = the whole Wed-night→Thu-7am window. Shifting by 6h30m
-      // before taking the Brisbane date does exactly that (17:30 + 6:30 =
-      // midnight). Daytime weekend leads stay on their own calendar day.
-      const byDay = new Map<string, Map<string, number>>()
+      // Per-day totals only (Chris 2026-07-28) — bucket by the MORNING the
+      // lead was waiting for (evening leads roll to the next day: +6h30m
+      // shift makes 17:30 → midnight; <7am stays; weekend daytime stays).
+      const byDay = new Map<string, number>()
       for (const l of o.leads) {
         const day = new Date(Date.parse(l.createdAt) + 6.5 * 3600 * 1000).toLocaleDateString('en-CA', { timeZone: 'Australia/Brisbane' })
-        const ch = byDay.get(day) || new Map<string, number>()
-        ch.set(l.channel, (ch.get(l.channel) || 0) + 1)
-        byDay.set(day, ch)
+        byDay.set(day, (byDay.get(day) || 0) + 1)
       }
       const days = Array.from(byDay.keys()).sort()
+      const maxLeads = Math.max(...Array.from(byDay.values()))
       parts.push(table(
-        ['Overnight into', 'Leads', 'By channel'],
-        days.map(day => {
-          const ch = byDay.get(day)!
-          const count = Array.from(ch.values()).reduce((a, b) => a + b, 0)
-          const split = Array.from(ch.entries()).sort((a, b) => b[1] - a[1]).map(([c, n]) => `${esc(c)} ${n}`).join(' · ')
-          return [dayLabel(day), `<b>${count}</b>`, `<span style="color:#6b7280">${split}</span>`]
-        }),
-        { footer: ['TOTAL', `<b>${o.leads.length}</b>`, ''] },
+        ['Overnight into', 'Leads', ''],
+        days.map(day => [
+          `<span style="font:700 14px Arial">${dayLabel(day)}</span>`,
+          `<span style="font:800 18px Arial">${byDay.get(day)}</span>`,
+          bar(byDay.get(day)!, maxLeads, NAVY),
+        ]),
+        { footer: ['TOTAL', `<span style="font:800 18px Arial">${o.leads.length}</span>`, ''] },
       ))
     } else {
-      parts.push(`<p style="color:#6b7280;font-size:13px;margin:4px 0 14px">No overnight leads in this period.</p>`)
+      parts.push(`<p style="color:${GREY};font-size:13px;margin:4px 0 14px">No overnight leads in this period.</p>`)
     }
   }
 
-  // Customer feedback panels (unnumbered) — everything posted in the
-  // positive / negative feedback Slack channels over the period: automation
-  // cards and manual staff posts alike. Each panel is omitted entirely when
-  // its pull wasn't supplied (older stored recaps / Slack unreachable).
+  // ── Customer feedback panels ──────────────────────────────────────────
   const feedbackPanel = (
     fb: NonNullable<SalesRecap['negativeFeedback']>,
     o: { emoji: string; title: string; channel: string; countColor: string; emptyText: string },
   ) => {
-    parts.push(`<h2 style="font:700 16px Arial,sans-serif;color:${NAVY};margin:18px 0 2px">${o.emoji} ${esc(o.title)} — ${fb.items.length ? `<span style="color:${o.countColor}">${fb.items.length}</span>` : 'none'}</h2>`)
-    parts.push(`<div style="color:#6b7280;font-size:12px;margin-bottom:4px">Posts in ${esc(o.channel)}, ${esc(fb.label)}</div>`)
+    parts.push(sectionTitle(o.emoji, `${o.title} — ${fb.items.length || 'none'}`, `Posts in ${o.channel}, ${fb.label}`))
     if (fb.items.length) {
       const when = (iso: string) => new Date(iso).toLocaleString('en-AU', {
         timeZone: 'Australia/Brisbane', weekday: 'short', day: '2-digit', month: 'short', hour: 'numeric', minute: '2-digit', hour12: true,
@@ -86,52 +141,85 @@ export function renderRecapHtml(r: SalesRecap): string {
         ]),
       ))
     } else {
-      parts.push(`<p style="color:#6b7280;font-size:13px;margin:4px 0 14px">${o.emptyText}</p>`)
+      parts.push(`<p style="color:${GREY};font-size:13px;margin:4px 0 14px">${o.emptyText}</p>`)
     }
   }
   if (r.positiveFeedback) feedbackPanel(r.positiveFeedback, {
     emoji: '👍', title: 'Positive Customer Feedback', channel: '#customer-feedback-positive',
-    countColor: '#00875a', emptyText: 'Nothing posted in the positive channel this period.',
+    countColor: GREEN, emptyText: 'Nothing posted in the positive channel this period.',
   })
   if (r.negativeFeedback) feedbackPanel(r.negativeFeedback, {
     emoji: '👎', title: 'Negative Customer Feedback', channel: '#customer-feedback-negative',
-    countColor: '#d92d20', emptyText: 'Nothing posted in the negative channel this period. 🎉',
+    countColor: RED, emptyText: 'Nothing posted in the negative channel this period. 🎉',
   })
 
-  // 1. Current week at a glance
-  parts.push(h2(1, `Week at a Glance — ${wkLabel}`))
-  parts.push(table(
-    ['Day', 'JA Orders', 'Distributor', 'Daily Total', `vs ${money(r.dailyTarget)}`],
-    r.daily.map(d => [
-      dayLabel(d.date),
-      d.total ? `${money(d.orders)}<br><span style="color:#6b7280;font-size:11px">N ${money(d.ordersNormal)} · U ${money(d.ordersUpsell)} · AM ${money(d.ordersAddMaint)}</span>` : 'TBC',
-      d.total ? money(d.distributor) : 'TBC',
-      d.total ? `<b>${money(d.total)}</b>` : 'TBC',
-      d.total ? `${tick(d.total, r.dailyTarget)} ${money(d.total - r.dailyTarget)}` : 'TBC',
-    ]),
-    { footer: ['TOTAL', money(r.weekTotal.orders), money(r.weekTotal.distributor), money(r.weekTotal.total), `Avg ${money(r.weekTotal.dailyAvg)}/day`] },
-  ))
+  // ── 1. Week at a glance ───────────────────────────────────────────────
+  // One row per day: big total, a bar sized against the best day (target
+  // line implied by the pill), green/red tint by target hit.
+  parts.push(sectionTitle('📅', `Week at a Glance — ${wkLabel}`, `Green = hit the ${money(r.dailyTarget)} daily target, red = short`))
+  {
+    const maxDay = Math.max(r.dailyTarget, ...r.daily.map(d => d.total))
+    const rows = r.daily.map(d => {
+      const tint = !d.total ? '#fff' : d.total >= r.dailyTarget ? GREEN_BG : RED_BG
+      const cells = [
+        `<span style="font:700 15px Arial;white-space:nowrap">${dayLabel(d.date)}</span>`,
+        d.total
+          ? `<span style="font:800 20px Arial">${money(d.total)}</span><br><span style="color:${GREY};font:12px Arial">JA ${moneyK(d.orders)} · Dist ${moneyK(d.distributor)}</span>`
+          : `<span style="color:${GREY};font:14px Arial">TBC</span>`,
+        d.total ? bar(d.total, maxDay, d.total >= r.dailyTarget ? GREEN : RED) : '',
+        d.total ? targetPill(d.total, r.dailyTarget) : '',
+      ]
+      return `<tr style="background:${tint}">${cells.map(c => `<td style="font:14px Arial;padding:10px 12px;border:1px solid #e2e5e9;vertical-align:middle">${c}</td>`).join('')}</tr>`
+    }).join('')
+    const foot = `<tr style="background:#eef2f7">${[
+      `<span style="font:800 14px Arial">WEEK</span>`,
+      `<span style="font:800 20px Arial">${money(r.weekTotal.total)}</span><br><span style="color:${GREY};font:12px Arial">JA ${moneyK(r.weekTotal.orders)} · Dist ${moneyK(r.weekTotal.distributor)}</span>`,
+      `<span style="color:${GREY};font:13px Arial">avg <b>${money(r.weekTotal.dailyAvg)}</b>/day</span>`,
+      r.weekTotal.dailyAvg ? targetPill(r.weekTotal.dailyAvg, r.dailyTarget) : '',
+    ].map(c => `<td style="padding:10px 12px;border:1px solid #e2e5e9;vertical-align:middle">${c}</td>`).join('')}</tr>`
+    parts.push(`<table cellspacing="0" cellpadding="0" style="border-collapse:collapse;width:100%;margin:6px 0 18px">
+      <tr>${['Day', 'Sales', '', 'vs target'].map(h => `<th style="background:${NAVY};color:#fff;font:600 13px Arial;padding:9px 12px;text-align:left;border:1px solid #ccd3dc">${h}</th>`).join('')}</tr>
+      ${rows}${foot}</table>`)
+  }
 
-  // 2. Rolling 4-week comparison
-  parts.push(h2(2, 'Rolling 4-Week Comparison'))
-  parts.push(table(
-    ['Week', 'JA Orders', 'Distributor', 'Total', 'Days', 'Daily Avg'],
-    r.rolling.map(w => [esc(w.label), money(w.orders), money(w.distributor), `<b>${money(w.total)}</b>`, String(w.tradingDays), money(w.dailyAvg)]),
-  ))
+  // ── 2. Rolling 4-week comparison ──────────────────────────────────────
+  parts.push(sectionTitle('📊', 'Rolling 4-Week Comparison', 'Most recent week first — bar length = week total'))
+  {
+    const maxWk = Math.max(...r.rolling.map(w => w.total), 1)
+    parts.push(table(
+      ['Week', 'Total', '', 'Daily avg'],
+      r.rolling.map(w => [
+        `<span style="font:700 14px Arial;white-space:nowrap">${esc(w.label)}</span>`,
+        `<span style="font:800 18px Arial">${money(w.total)}</span><br><span style="color:${GREY};font:12px Arial">JA ${moneyK(w.orders)} · Dist ${moneyK(w.distributor)}</span>`,
+        bar(w.total, maxWk, NAVY),
+        w.dailyAvg ? `<span style="font:700 14px Arial">${money(w.dailyAvg)}</span><br>${targetPill(w.dailyAvg, r.dailyTarget)}` : `<span style="color:${GREY}">—</span>`,
+      ]),
+    ))
+  }
 
-  // 3. Monthly summary
-  parts.push(h2(3, 'Monthly Summary'))
-  parts.push(table(
-    ['Month', 'JA Orders', 'Distributor', 'Total'],
-    r.monthly.map(m => {
-      const [y, mo] = m.month.split('-')
-      const label = new Date(Date.UTC(Number(y), Number(mo) - 1, 1)).toLocaleDateString('en-AU', { month: 'long', year: 'numeric' })
-      return [esc(label), money(m.orders), money(m.distributor), `<b>${money(m.total)}</b>`]
-    }),
-  ))
+  // ── 3. Monthly summary ────────────────────────────────────────────────
+  parts.push(sectionTitle('🗓️', 'Monthly Summary', 'Bar length = month total · pill = change vs the month before'))
+  {
+    const maxMo = Math.max(...r.monthly.map(m => m.total), 1)
+    parts.push(table(
+      ['Month', 'Total', '', 'vs prior month'],
+      r.monthly.map((m, i) => {
+        const [y, mo] = m.month.split('-')
+        const label = new Date(Date.UTC(Number(y), Number(mo) - 1, 1)).toLocaleDateString('en-AU', { month: 'long', year: 'numeric' })
+        const prev = i > 0 ? r.monthly[i - 1] : null
+        const pct = prev && prev.total > 0 ? Math.round(((m.total - prev.total) / prev.total) * 1000) / 10 : null
+        return [
+          `<span style="font:700 14px Arial;white-space:nowrap">${esc(label)}</span>`,
+          `<span style="font:800 18px Arial">${money(m.total)}</span><br><span style="color:${GREY};font:12px Arial">JA ${moneyK(m.orders)} · Dist ${moneyK(m.distributor)}</span>`,
+          bar(m.total, maxMo, NAVY),
+          pct == null ? `<span style="color:${GREY}">—</span>` : pctPill(pct),
+        ]
+      }),
+    ))
+  }
 
-  // 4. Diary overview
-  parts.push(h2(4, 'Diary Overview'))
+  // ── 4. Diary overview ─────────────────────────────────────────────────
+  parts.push(sectionTitle('📔', 'Diary Overview'))
   if (r.diaryNotes.length) {
     parts.push(table(
       ['Applies', 'Scope', 'Note'],
@@ -141,24 +229,34 @@ export function renderRecapHtml(r: SalesRecap): string {
         esc(n.content),
       ]),
     ))
-  } else parts.push(`<p style="color:#6b7280;font-size:13px">No diary notes for this week.</p>`)
+  } else parts.push(`<p style="color:${GREY};font-size:13px">No diary notes for this week.</p>`)
 
-  // 5. Forecast
-  parts.push(h2(5, 'HQ Forecast Bookings — Future Months'))
-  parts.push(table(
-    ['Month', 'Forecast Bookings', 'Jobs'],
-    r.forecast.length ? r.forecast.map(f => [esc(f.label), `<b>${money(f.value)}</b>`, String(f.jobCount)]) : [['—', 'No forward bookings', '0']],
-  ))
+  // ── 5. Forecast ───────────────────────────────────────────────────────
+  parts.push(sectionTitle('🔮', 'HQ Forecast Bookings — Future Months', 'Booked-in work by scheduled month, from the MechanicDesk job report'))
+  if (r.forecast.length) {
+    const maxF = Math.max(...r.forecast.map(f => f.value), 1)
+    parts.push(table(
+      ['Month', 'Booked', '', 'Jobs'],
+      r.forecast.map(f => [
+        `<span style="font:700 14px Arial;white-space:nowrap">${esc(f.label)}</span>`,
+        `<span style="font:800 18px Arial">${money(f.value)}</span>`,
+        bar(f.value, maxF, NAVY),
+        `<span style="font:700 14px Arial">${f.jobCount}</span>`,
+      ]),
+    ))
+  } else {
+    parts.push(`<p style="color:${GREY};font-size:13px">No forward bookings on record.</p>`)
+  }
 
-  // 6. Flags
-  parts.push(h2(6, 'Key Flags & Watch Items'))
+  // ── 6. Flags ──────────────────────────────────────────────────────────
+  parts.push(sectionTitle('🚩', 'Key Flags & Watch Items'))
   const badge = (p: string) => {
-    const c = p === 'HIGH' ? '#d92d20' : p === 'MED' ? '#dc9a00' : '#0b7285'
-    return `<span style="background:${c};color:#fff;font:600 11px Arial;padding:2px 7px;border-radius:3px">${p}</span>`
+    const c = p === 'HIGH' ? RED : p === 'MED' ? '#dc9a00' : '#0b7285'
+    return `<span style="background:${c};color:#fff;font:700 11px Arial;padding:3px 9px;border-radius:10px">${p}</span>`
   }
   parts.push(table(['Priority', 'Item'], r.flags.map(f => [badge(f.priority), esc(f.item)])))
 
-  parts.push(`<div style="color:#9aa0a6;font-size:11px;margin-top:20px">"Sales" = orders/bookings placed (Monday), not invoiced turnover. Diary + forecast from MechanicDesk. Auto-generated by JA Portal.</div>`)
+  parts.push(`<div style="color:#9aa0a6;font-size:11px;margin-top:20px">"Sales" = orders/bookings placed (Monday), not invoiced turnover. Distributor bookings count from the Booking - Confirmed group. Diary + forecast from MechanicDesk. Auto-generated by JA Portal.</div>`)
   parts.push(`</div>`)
   return parts.join('\n')
 }

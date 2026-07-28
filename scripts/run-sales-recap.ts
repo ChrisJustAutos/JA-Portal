@@ -18,6 +18,10 @@ const PORTAL = process.env.JA_PORTAL_BASE_URL || ''
 const TOKEN = process.env.JA_PORTAL_API_KEY || ''
 const DRY_RUN = process.env.DRY_RUN === '1'
 const SEND_EMAIL = process.env.SEND_EMAIL === '1' // false → store only ("refresh" dispatch)
+// MD_REFRESH=1 → intraday mode: scrape MD, POST to md-refresh (updates the
+// stored md_inputs only — no report regeneration, no email). Runs every ~2h
+// on trading days so the live Sales Report tracks same-day bookings.
+const MD_REFRESH = process.env.MD_REFRESH === '1'
 const FORECAST_MONTHS = Math.max(1, Number(process.env.FORECAST_MONTHS) || 6)
 
 if (!WS_ID || !MD_USER || !MD_PASS) throw new Error('MECHANICDESK_* env vars required')
@@ -43,12 +47,29 @@ async function main() {
     log('MD login ok')
 
     const wk = prevWeek()
-    const diaryNotes = await fetchDiaryNotes(client, wk.start, wk.end)
+    // Refresh mode scrapes a two-week diary window (previous + current week)
+    // so both the "previous" and live "current" report views have notes.
+    const diaryEnd = MD_REFRESH
+      ? new Date(Date.parse(wk.end + 'T00:00:00Z') + 7 * 86400_000).toISOString().slice(0, 10)
+      : wk.end
+    const diaryNotes = await fetchDiaryNotes(client, wk.start, diaryEnd)
     log(`diary notes: ${diaryNotes.length}`)
 
     const todayYmd = new Date(Date.now() + 10 * 3600 * 1000).toISOString().slice(0, 10)
     const forecast = await fetchForwardBookingForecast(client, todayYmd, FORECAST_MONTHS, log)
     log(`forecast months: ${forecast.length}`)
+
+    if (MD_REFRESH) {
+      const r = await fetch(`${PORTAL}/api/reports/sales-recap/md-refresh`, {
+        method: 'POST',
+        headers: { 'X-Service-Token': TOKEN, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ diaryNotes, forecast }),
+      })
+      const out = await r.json().catch(() => ({}))
+      if (!r.ok) throw new Error(`md-refresh ${r.status}: ${JSON.stringify(out).slice(0, 300)}`)
+      log(`MD REFRESH DONE: ok=${out.ok} notes=${out.diaryNotes} months=${out.forecastMonths}${out.note ? ` note=${out.note}` : ''}`)
+      return
+    }
 
     const r = await fetch(`${PORTAL}/api/reports/sales-recap/generate`, {
       method: 'POST',
