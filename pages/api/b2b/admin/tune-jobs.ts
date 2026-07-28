@@ -26,23 +26,52 @@ export default withAuth('edit:b2b_distributors', async (req: NextApiRequest, res
   const c = sb()
 
   if (req.method === 'GET') {
-    const { data: jobs, error } = await c.from('b2b_tune_jobs')
-      .select('*, distributor:b2b_distributors!b2b_tune_jobs_distributor_id_fkey(display_name)')
-      .order('created_at', { ascending: false })
-      .limit(300)
-    if (error) return res.status(500).json({ error: error.message })
+    // ALL jobs, paged — a flat .limit(300) hid everything older than the
+    // newest 300 rows, so distributor counts undercounted (Penrith 4x4
+    // showed 56 of its 81, Chris 2026-07-28). extraction jsonb excluded —
+    // the admin page never reads it and it dominates payload size.
+    const jobs: any[] = []
+    for (let from = 0; from < 10_000; from += 1000) {
+      const { data, error } = await c.from('b2b_tune_jobs')
+        .select(`
+          id, internet_message_id, email_subject, email_from, email_received_at,
+          invoice_pdf_path, invoice_number, amount, company_raw, distributor_id,
+          vin, tune_details, status, customer_name, customer_first_name,
+          customer_phone, customer_email, customer_address_line1, customer_suburb,
+          customer_state, customer_postcode, vehicle_rego, vehicle_make,
+          vehicle_model, vehicle_year, vehicle_description, job_notes,
+          filled_by_user_id, filled_at, monday_item_id, md_customer_md_id,
+          md_synced_at, letter_job_id, letter_queued_at, sync_error, synced_at,
+          last_reminder_at, first_reminded_at, sms_reminded_at, escalated_at,
+          created_at, updated_at,
+          distributor:b2b_distributors!b2b_tune_jobs_distributor_id_fkey(display_name)
+        `)
+        .order('created_at', { ascending: false })
+        .range(from, from + 999)
+      if (error) return res.status(500).json({ error: error.message })
+      jobs.push(...(data || []))
+      if (!data || data.length < 1000) break
+    }
     const { data: dists } = await c.from('b2b_distributors')
       .select('id, display_name').eq('is_active', true).order('display_name')
 
-    const out = []
-    for (const j of jobs || []) {
-      let invoiceUrl: string | null = null
-      if (j.invoice_pdf_path) {
-        const { data: signed } = await c.storage.from('b2b-tune-invoices').createSignedUrl(j.invoice_pdf_path, 3600)
-        invoiceUrl = signed?.signedUrl || null
+    // Invoice links signed in batches — one storage call per 100 paths
+    // instead of one per row (474 sequential calls was the reason for the cap).
+    const paths = Array.from(new Set(jobs.map(j => j.invoice_pdf_path).filter(Boolean))) as string[]
+    const urlByPath = new Map<string, string>()
+    for (let i = 0; i < paths.length; i += 100) {
+      const { data: signed } = await c.storage.from('b2b-tune-invoices')
+        .createSignedUrls(paths.slice(i, i + 100), 3600)
+      for (const s of signed || []) {
+        if (s.path && s.signedUrl && !s.error) urlByPath.set(s.path, s.signedUrl)
       }
-      out.push({ ...j, invoice_url: invoiceUrl, distributor_name: (Array.isArray(j.distributor) ? j.distributor[0] : j.distributor)?.display_name || null })
     }
+
+    const out = jobs.map(j => ({
+      ...j,
+      invoice_url: j.invoice_pdf_path ? urlByPath.get(j.invoice_pdf_path) || null : null,
+      distributor_name: (Array.isArray(j.distributor) ? j.distributor[0] : j.distributor)?.display_name || null,
+    }))
     return res.status(200).json({ jobs: out, distributors: dists || [] })
   }
 

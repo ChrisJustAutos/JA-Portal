@@ -18,30 +18,41 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, use
   const c = sb()
 
   if (req.method === 'GET') {
-    const { data: jobs, error } = await c.from('b2b_tune_jobs')
-      .select(`
-        id, status, vin, tune_details, invoice_number, amount, email_received_at, created_at,
-        invoice_pdf_path, customer_name, customer_first_name, customer_phone, customer_email,
-        customer_address_line1, customer_suburb, customer_state, customer_postcode,
-        vehicle_rego, vehicle_description, job_notes, filled_at
-      `)
-      .eq('distributor_id', user.distributor.id)
-      .in('status', ['awaiting_details', 'submitted', 'synced'])
-      .order('created_at', { ascending: false })
-      .limit(200)
-    if (error) return res.status(500).json({ error: error.message })
-
-    const out = []
-    for (const j of jobs || []) {
-      let invoiceUrl: string | null = null
-      if (j.invoice_pdf_path) {
-        const { data: signed } = await c.storage.from('b2b-tune-invoices')
-          .createSignedUrl(j.invoice_pdf_path, 3600)
-        invoiceUrl = signed?.signedUrl || null
-      }
-      const { invoice_pdf_path: _p, ...rest } = j as any
-      out.push({ ...rest, invoice_url: invoiceUrl })
+    // All of this distributor's jobs, paged (Penrith 4x4 already carries 81 —
+    // a flat cap would silently hide the oldest). Invoice links signed in
+    // batches of 100 rather than one storage call per row.
+    const jobs: any[] = []
+    for (let from = 0; from < 5000; from += 1000) {
+      const { data, error } = await c.from('b2b_tune_jobs')
+        .select(`
+          id, status, vin, tune_details, invoice_number, amount, email_received_at, created_at,
+          invoice_pdf_path, customer_name, customer_first_name, customer_phone, customer_email,
+          customer_address_line1, customer_suburb, customer_state, customer_postcode,
+          vehicle_rego, vehicle_make, vehicle_model, vehicle_year, vehicle_description, job_notes, filled_at
+        `)
+        .eq('distributor_id', user.distributor.id)
+        .in('status', ['awaiting_details', 'submitted', 'synced'])
+        .order('created_at', { ascending: false })
+        .range(from, from + 999)
+      if (error) return res.status(500).json({ error: error.message })
+      jobs.push(...(data || []))
+      if (!data || data.length < 1000) break
     }
+
+    const paths = Array.from(new Set(jobs.map(j => j.invoice_pdf_path).filter(Boolean))) as string[]
+    const urlByPath = new Map<string, string>()
+    for (let i = 0; i < paths.length; i += 100) {
+      const { data: signed } = await c.storage.from('b2b-tune-invoices')
+        .createSignedUrls(paths.slice(i, i + 100), 3600)
+      for (const s of signed || []) {
+        if (s.path && s.signedUrl && !s.error) urlByPath.set(s.path, s.signedUrl)
+      }
+    }
+
+    const out = jobs.map(j => {
+      const { invoice_pdf_path: p, ...rest } = j as any
+      return { ...rest, invoice_url: p ? urlByPath.get(p) || null : null }
+    })
     return res.status(200).json({ jobs: out })
   }
 
