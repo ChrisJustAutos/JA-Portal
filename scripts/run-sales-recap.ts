@@ -45,6 +45,15 @@ async function main() {
   try {
     const { client } = await loginToMechanicDesk(browser, WS_ID, MD_USER, MD_PASS)
     log('MD login ok')
+    // MD is single-session-per-employee: another portal MD worker logging in
+    // mid-scrape kills our cookie and 401s the rest of the per-job fetches
+    // (this zeroed every future forecast month, 2026-07-29). The forecast
+    // fetcher calls this to grab a fresh session and retry.
+    const relogin = async () => {
+      const l = await loginToMechanicDesk(browser, WS_ID, MD_USER, MD_PASS)
+      client.cookieHeader = l.client.cookieHeader
+      client.csrfToken = l.client.csrfToken
+    }
 
     const wk = prevWeek()
     // Refresh mode scrapes a two-week diary window (previous + current week)
@@ -56,7 +65,7 @@ async function main() {
     log(`diary notes: ${diaryNotes.length}`)
 
     const todayYmd = new Date(Date.now() + 10 * 3600 * 1000).toISOString().slice(0, 10)
-    const forecast = await fetchForwardBookingForecast(client, todayYmd, FORECAST_MONTHS, log)
+    const forecast = await fetchForwardBookingForecast(client, todayYmd, FORECAST_MONTHS, log, relogin)
     log(`forecast months: ${forecast.length}`)
 
     if (MD_REFRESH) {

@@ -957,6 +957,12 @@ export interface MdForecastMonth { month: string; value: number; jobCount: numbe
 // SCHEDULED month. HQ bookings only (the diary is the HQ workshop diary).
 export async function fetchForwardBookingForecast(
   client: MdClient, fromYmd: string, monthsAhead: number, log: (m: string) => void = () => {},
+  // Refreshes client.cookieHeader in place after a re-login. MD allows ONE
+  // session per employee — any other MD worker logging in mid-scrape 401s
+  // every remaining /jobs/{id} fetch, which silently zeroed the whole future
+  // forecast (probe 2026-07-29). With this hook we re-login once (shared
+  // across the pool) and retry the job.
+  relogin?: () => Promise<void>,
 ): Promise<MdForecastMonth[]> {
   const from = new Date(`${fromYmd}T00:00:00+10:00`)
   const to = new Date(from); to.setMonth(to.getMonth() + monthsAhead)
@@ -973,17 +979,46 @@ export async function fetchForwardBookingForecast(
   log(`  forecast: ${byId.size} forward job(s)`)
   const ids = Array.from(byId.keys())
   const months = new Map<string, { value: number; jobCount: number }>()
+
+  let reloginInFlight: Promise<void> | null = null
+  const sharedRelogin = () => {
+    if (!reloginInFlight) {
+      log('  MD session rejected mid-scrape (another worker logged in?) — re-logging in')
+      reloginInFlight = relogin!().finally(() => { reloginInFlight = null })
+    }
+    return reloginInFlight
+  }
+  // Value priority: invoiced amount (actual) → job total → QUOTE total. The
+  // quote fallback carries uninvoiced future bookings — without it every
+  // forward month reads $0 once jobs stop being invoiced ahead of time.
+  const jobValue = (j: any) =>
+    Number(j?.invoice?.total_amount) || Number(j?.total_amount) || Number(j?.quote?.total_amount) || 0
+
+  let failed = 0
   await mapPool(ids, 8, async (jid) => {
     let value = 0
     try {
-      const j = await mdFetch<any>(client, `/jobs/${jid}?id=${jid}`)
-      value = Number(j?.invoice?.total_amount) || Number(j?.total_amount) || 0
-    } catch { /* count with 0 value */ }
+      value = jobValue(await mdFetch<any>(client, `/jobs/${jid}?id=${jid}`))
+    } catch {
+      if (relogin) {
+        try {
+          await sharedRelogin()
+          value = jobValue(await mdFetch<any>(client, `/jobs/${jid}?id=${jid}`))
+        } catch { failed++ }
+      } else failed++
+    }
     const m = byId.get(jid)!
     const e = months.get(m) || { value: 0, jobCount: 0 }
     e.value += value; e.jobCount += 1
     months.set(m, e)
   })
+  if (failed) log(`  forecast: ${failed}/${ids.length} job value fetch(es) FAILED — those jobs count with $0`)
+  // Never store a silently-gutted forecast: a mass failure means the session
+  // was lost for most of the run — fail the scrape so the previous good data
+  // stays in place and the GH run goes red.
+  if (failed > 5 && failed > ids.length * 0.3) {
+    throw new Error(`forecast value fetches failed for ${failed}/${ids.length} jobs — MD session unstable, aborting so stale-good data is kept`)
+  }
   return Array.from(months.entries()).sort((a, b) => a[0].localeCompare(b[0]))
     .map(([month, v]) => ({ month, value: Math.round(v.value * 100) / 100, jobCount: v.jobCount }))
 }
