@@ -468,6 +468,7 @@ const TUNE_FOLLOWUP_COLS = {
   TUNE: 'text_mm5pnnpd',
   DATE: 'date_mm5pjrnt',
   PACKAGE: 'long_text_mm5pa57g',   // "Package Details" — the distributor's job_notes
+  ADDRESS: 'long_text_mm5p53tr',   // customer postal address — advisor fills it during the call if the distributor didn't
 }
 
 export async function syncTuneJobDownstream(jobId: string): Promise<void> {
@@ -498,6 +499,8 @@ export async function syncTuneJobDownstream(jobId: string): Promise<void> {
       if (job.vehicle_rego) columnValues[TUNE_FOLLOWUP_COLS.REGO] = job.vehicle_rego
       if (job.tune_details) columnValues[TUNE_FOLLOWUP_COLS.TUNE] = String(job.tune_details).slice(0, 250)
       if (job.job_notes) columnValues[TUNE_FOLLOWUP_COLS.PACKAGE] = { text: String(job.job_notes).slice(0, 2000) }
+      const submittedAddress = [job.customer_address_line1, [job.customer_suburb, job.customer_state, job.customer_postcode].filter(Boolean).join(' ')].filter(Boolean).join('\n')
+      if (submittedAddress) columnValues[TUNE_FOLLOWUP_COLS.ADDRESS] = { text: submittedAddress }
       const created = await mondayQuery<{ create_item: { id: string } }>(
         `mutation CreateTuneFollowUp($boardId: ID!, $groupId: String!, $itemName: String!, $columnValues: JSON!) {
           create_item(board_id: $boardId, group_id: $groupId, item_name: $itemName, column_values: $columnValues, create_labels_if_missing: false) { id }
@@ -529,43 +532,11 @@ export async function syncTuneJobDownstream(jobId: string): Promise<void> {
   }
 
   // Customer letter with the DISTRIBUTOR's details (printed at JA on the
-  // existing letter agent). Uses the automation's default template body but
-  // swaps the sign-off block for the distributor.
+  // existing letter agent). Skipped when no address — the Monday follow-up
+  // sweep queues it later once the sales advisor collects one on the call.
   if (!job.letter_queued_at && job.customer_address_line1) {
-    try {
-      const { getLetterAutomation, getTemplate, enqueueLetter } = await import('./workshop-letters')
-      const auto = await getLetterAutomation()
-      const template = auto.template_id ? await getTemplate(auto.template_id) : null
-      if (template) {
-        const distBlock = [
-          dist?.display_name || '',
-          [dist?.ship_line1, dist?.ship_suburb, dist?.ship_state, dist?.ship_postcode].filter(Boolean).join(' '),
-          dist?.primary_contact_email || '',
-        ].filter(Boolean).join('\n')
-        const body = String(template.body || '')
-          .replace(/\{\{\s*first_name\s*\}\}/g, job.customer_first_name || (job.customer_name || '').split(' ')[0] || 'there')
-          .replace(/\{\{\s*vehicle\s*\}\}/g, job.vehicle_description || job.tune_details || 'your vehicle')
-          .replace(/\{\{\s*rego\s*\}\}/g, job.vehicle_rego || '')
-          + `\n\nYour local Just Autos distributor:\n${distBlock}`
-        const address = [job.customer_address_line1, [job.customer_suburb, job.customer_state, job.customer_postcode].filter(Boolean).join(' ')].filter(Boolean).join('\n')
-        const r = await enqueueLetter({
-          trigger: 'auto',
-          customer: { name: job.customer_name, first_name: job.customer_first_name, address },
-          vehicle: job.vehicle_rego ? { rego: job.vehicle_rego, description: job.vehicle_description } : null,
-          template,
-          bodyOverride: body,
-          recipientNameOverride: job.customer_name,
-          recipientAddressOverride: address,
-        })
-        if (r.status === 'queued') {
-          await c.from('b2b_tune_jobs').update({ letter_job_id: r.jobId || null, letter_queued_at: new Date().toISOString(), updated_at: new Date().toISOString() }).eq('id', jobId)
-        } else if (r.status === 'failed') {
-          errs.push(`Letter: ${r.error || 'enqueue failed'}`)
-        }
-      } else {
-        errs.push('Letter skipped: no default letter template configured')
-      }
-    } catch (e: any) { errs.push(`Letter: ${e?.message}`) }
+    const r = await queueTuneJobLetter(jobId, job, dist)
+    if (r.error) errs.push(r.error)
   } else if (!job.letter_queued_at) {
     errs.push('Letter skipped: no customer address')
   }
@@ -574,6 +545,132 @@ export async function syncTuneJobDownstream(jobId: string): Promise<void> {
     sync_error: errs.length ? errs.join(' | ').slice(0, 1000) : null,
     updated_at: new Date().toISOString(),
   }).eq('id', jobId)
+}
+
+// Queue the customer thank-you letter (default automation template with the
+// distributor's sign-off block). addressOverride carries an advisor-entered
+// address from the Monday board when the submission had none. Stamps
+// letter_queued_at on success; returns an error string on failure.
+async function queueTuneJobLetter(
+  jobId: string,
+  job: any,
+  dist: { display_name?: string | null; ship_line1?: string | null; ship_suburb?: string | null; ship_state?: string | null; ship_postcode?: string | null; primary_contact_email?: string | null } | null,
+  addressOverride?: string,
+): Promise<{ queued: boolean; error?: string }> {
+  const c = sb()
+  try {
+    const { getLetterAutomation, getTemplate, enqueueLetter } = await import('./workshop-letters')
+    const auto = await getLetterAutomation()
+    const template = auto.template_id ? await getTemplate(auto.template_id) : null
+    if (!template) return { queued: false, error: 'Letter skipped: no default letter template configured' }
+    const distBlock = [
+      dist?.display_name || '',
+      [dist?.ship_line1, dist?.ship_suburb, dist?.ship_state, dist?.ship_postcode].filter(Boolean).join(' '),
+      dist?.primary_contact_email || '',
+    ].filter(Boolean).join('\n')
+    const vehicle = [job.vehicle_year, job.vehicle_make, job.vehicle_model].filter(Boolean).join(' ')
+      || job.vehicle_description || job.tune_details || 'your vehicle'
+    const body = String(template.body || '')
+      .replace(/\{\{\s*first_name\s*\}\}/g, job.customer_first_name || (job.customer_name || '').split(' ')[0] || 'there')
+      .replace(/\{\{\s*vehicle\s*\}\}/g, vehicle)
+      .replace(/\{\{\s*rego\s*\}\}/g, job.vehicle_rego || '')
+      + `\n\nYour local Just Autos distributor:\n${distBlock}`
+    const address = addressOverride?.trim()
+      || [job.customer_address_line1, [job.customer_suburb, job.customer_state, job.customer_postcode].filter(Boolean).join(' ')].filter(Boolean).join('\n')
+    if (!address) return { queued: false, error: 'Letter skipped: no customer address' }
+    const r = await enqueueLetter({
+      trigger: 'auto',
+      customer: { name: job.customer_name, first_name: job.customer_first_name, address },
+      vehicle: job.vehicle_rego ? { rego: job.vehicle_rego, description: job.vehicle_description } : null,
+      template,
+      bodyOverride: body,
+      recipientNameOverride: job.customer_name,
+      recipientAddressOverride: address,
+    })
+    if (r.status === 'queued') {
+      await c.from('b2b_tune_jobs').update({ letter_job_id: r.jobId || null, letter_queued_at: new Date().toISOString(), updated_at: new Date().toISOString() }).eq('id', jobId)
+      return { queued: true }
+    }
+    return { queued: false, error: r.status === 'failed' ? `Letter: ${r.error || 'enqueue failed'}` : undefined }
+  } catch (e: any) {
+    return { queued: false, error: `Letter: ${e?.message}` }
+  }
+}
+
+// Hourly sweep (cron/tune-jobs): jobs whose letter never went because the
+// submission had no address. The sales advisor collects it on the follow-up
+// call and types it into the Monday item's Address column — once it's there
+// AND the call is done (Call Status "Called - …"), the letter/envelope
+// automation fires with that address ("upon completion if not done prior",
+// Chris 2026-07-28).
+export async function sweepTuneFollowupLetters(): Promise<{ checked: number; lettersQueued: number; errors: string[] }> {
+  const c = sb()
+  const out = { checked: 0, lettersQueued: 0, errors: [] as string[] }
+  const { data: jobs } = await c.from('b2b_tune_jobs')
+    .select('id, customer_name, customer_first_name, tune_details, vehicle_rego, vehicle_make, vehicle_model, vehicle_year, vehicle_description, monday_item_id, distributor_id')
+    .in('status', ['submitted', 'synced'])
+    .is('letter_queued_at', null)
+    .not('monday_item_id', 'is', null)
+    .limit(200)
+  if (!jobs?.length) return out
+  out.checked = jobs.length
+
+  const { mondayQuery } = await import('./monday-followup')
+  const itemInfo = new Map<string, { address: string; callStatus: string }>()
+  const ids = jobs.map(j => String(j.monday_item_id))
+  for (let i = 0; i < ids.length; i += 50) {
+    try {
+      const data = await mondayQuery<{ items: Array<{ id: string; column_values: Array<{ id: string; text: string | null }> }> }>(
+        `query TuneFollowups($ids: [ID!]) {
+          items(ids: $ids) {
+            id
+            column_values(ids: ["${TUNE_FOLLOWUP_COLS.ADDRESS}", "${TUNE_FOLLOWUP_COLS.STATUS}"]) { id text }
+          }
+        }`,
+        { ids: ids.slice(i, i + 50) },
+      )
+      for (const it of data.items || []) {
+        const col = (id: string) => it.column_values?.find(cv => cv.id === id)?.text || ''
+        itemInfo.set(String(it.id), { address: col(TUNE_FOLLOWUP_COLS.ADDRESS), callStatus: col(TUNE_FOLLOWUP_COLS.STATUS) })
+      }
+    } catch (e: any) {
+      out.errors.push(`Monday read: ${String(e?.message || e).slice(0, 200)}`)
+      return out   // can't see the board — try again next run
+    }
+  }
+
+  // Distributor details for the letter sign-off block, one fetch per distinct id.
+  const distIds = Array.from(new Set(jobs.map(j => j.distributor_id).filter(Boolean)))
+  const distById = new Map<string, any>()
+  if (distIds.length) {
+    const { data: dists } = await c.from('b2b_distributors')
+      .select('id, display_name, primary_contact_email, ship_line1, ship_suburb, ship_state, ship_postcode')
+      .in('id', distIds)
+    for (const d of dists || []) distById.set(d.id, d)
+  }
+
+  for (const job of jobs) {
+    const info = itemInfo.get(String(job.monday_item_id))
+    if (!info) continue
+    const address = info.address.trim()
+    // Fire only when the advisor has an address AND the call actually
+    // happened — "Called - Happy" / "Called - Issue". "To Call" / "No
+    // Answer" wait; "Skip" never triggers.
+    if (!address || !/^called/i.test(info.callStatus.trim())) continue
+    const r = await queueTuneJobLetter(job.id, job, distById.get(job.distributor_id) || null, address)
+    if (r.queued) {
+      out.lettersQueued++
+      // Best-effort: note it on the Monday item so the advisor sees it went.
+      await mondayQuery(
+        `mutation Note($itemId: ID!, $body: String!) { create_update(item_id: $itemId, body: $body) { id } }`,
+        { itemId: String(job.monday_item_id), body: `📮 Thank-you letter queued to:\n${address}` },
+      ).catch(() => {})
+    } else if (r.error) {
+      out.errors.push(`${job.customer_name || job.id}: ${r.error}`)
+      await c.from('b2b_tune_jobs').update({ sync_error: r.error, updated_at: new Date().toISOString() }).eq('id', job.id)
+    }
+  }
+  return out
 }
 
 /** Called by the MD worker when the MechanicDesk customer has been created. */

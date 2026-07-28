@@ -6,7 +6,7 @@
 // Auth: Bearer CRON_SECRET, with the vercel-cron user-agent fallback.
 
 import type { NextApiRequest, NextApiResponse } from 'next'
-import { ingestTuneJobEmails, sendTuneJobReminders, escalateTuneJobs } from '../../../lib/b2b-tune-jobs'
+import { ingestTuneJobEmails, sendTuneJobReminders, escalateTuneJobs, sweepTuneFollowupLetters } from '../../../lib/b2b-tune-jobs'
 
 export const config = { maxDuration: 300 }
 
@@ -37,5 +37,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   let escalation: { smsDistributors: number; escalatedJobs: number } | null = null
   if (autoChase) escalation = await escalateTuneJobs()
 
-  return res.status(200).json({ ok: true, ingest, reminders, escalation, autoChase })
+  // Address-less letters: once the sales advisor fills the Monday item's
+  // Address column and marks the call done, the letter automation fires.
+  const letterSweep = await sweepTuneFollowupLetters().catch(e => ({ checked: 0, lettersQueued: 0, errors: [String(e?.message || e)] }))
+
+  return res.status(200).json({ ok: true, ingest, reminders, escalation, autoChase, letterSweep })
 }
