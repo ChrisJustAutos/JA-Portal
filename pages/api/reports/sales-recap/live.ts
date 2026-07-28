@@ -18,6 +18,8 @@ import { fetchOrders, fetchDistBookings } from '../../../../lib/sales-recap-mond
 import { captureAndLoadQuoteLeads } from '../../../../lib/sales-recap-leads-store'
 import { assembleRecap, previousTradingWeek, currentTradingWeek } from '../../../../lib/sales-recap'
 import { fetchNegativeFeedback, fetchPositiveFeedback } from '../../../../lib/sales-recap-slack'
+import { computeDistributorMap, distributorAreasForMonth } from '../../../../lib/distributor-map'
+import { fyOf } from '../../../../lib/workshop-map/vehicle-classification'
 import { renderRecapHtml } from '../../../../lib/sales-recap-html'
 import { generateFlags } from '../../../../lib/sales-recap-flags'
 
@@ -71,7 +73,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const fetchStart = rollingStart < yearStart ? rollingStart : yearStart
     const today = new Date(nowMs).toISOString().slice(0, 10)
     const fetchEnd = week.end > today ? week.end : today
-    const [orders, dist, quoteLeads, negativeFeedback, positiveFeedback] = await Promise.all([
+    const [orders, dist, quoteLeads, negativeFeedback, positiveFeedback, distributorAreas] = await Promise.all([
       fetchOrders(token, fetchStart, fetchEnd),
       fetchDistBookings(token, fetchStart, fetchEnd),
       // Reach back to before the range starts (its overnight span opens 17:30
@@ -87,9 +89,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         console.error('[sales-recap/live] positive-feedback pull failed:', e?.message || e)
         return null
       }),
+      // Distributor Areas for the month the selected range ends in.
+      computeDistributorMap(sb(), token, { fy: fyOf(new Date(week.end + 'T00:00:00Z')) ?? undefined })
+        .then(m => m ? distributorAreasForMonth(m, week.end.slice(0, 7)) : null)
+        .catch((e: any) => {
+          console.error('[sales-recap/live] distributor-areas pull failed:', e?.message || e)
+          return null
+        }),
     ])
 
-    let recap = assembleRecap({ nowMs, orders, dist, diaryNotes, forecast, week, quoteLeads, negativeFeedback, positiveFeedback })
+    let recap = assembleRecap({ nowMs, orders, dist, diaryNotes, forecast, week, quoteLeads, negativeFeedback, positiveFeedback, distributorAreas })
     const llm = await generateFlags(recap).catch(() => [])
     if (llm.length) recap = { ...recap, flags: llm }
 

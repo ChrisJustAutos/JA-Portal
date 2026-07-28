@@ -31,6 +31,20 @@ export interface OvernightOut { start: string; end: string; label: string; leads
 export interface FeedbackItem { at: string; author: string | null; text: string }
 export interface FeedbackOut { start: string; end: string; label: string; items: FeedbackItem[] }
 
+// Distributor Areas section (Chris 2026-07-29): quotes near each distributor
+// vs jobs they booked, for the month the recap week falls in (quote points
+// carry month granularity only). Built by lib/distributor-map.
+export interface DistributorAreasOut {
+  monthKey: string
+  monthLabel: string
+  radiusKm: number
+  rows: {
+    name: string; located: boolean
+    quotes: number; quotesValue: number
+    bookings: number; bookingsValue: number
+  }[]
+}
+
 // Headline KPI strip (Chris 2026-07-28): % up/down vs the $60k daily target
 // on a rolling-4-week average, and month-to-date vs the previous month.
 export interface KpiOut {
@@ -72,6 +86,9 @@ export interface SalesRecap {
   // section).
   negativeFeedback?: FeedbackOut | null
   positiveFeedback?: FeedbackOut | null
+  // Distributor Areas (quotes near each distributor vs jobs booked) for the
+  // recap week's month. Null when the pull failed / wasn't supplied.
+  distributorAreas?: DistributorAreasOut | null
 }
 
 const ymd = (d: Date) => d.toISOString().slice(0, 10)
@@ -162,6 +179,7 @@ export interface AssembleInput {
   quoteLeads?: QuoteLeadRow[] | null  // recent quote-channel leads (created_at based); omit → no overnight section
   negativeFeedback?: FeedbackOut | null  // pre-fetched negative-channel posts (lib/sales-recap-slack); omit → no section
   positiveFeedback?: FeedbackOut | null  // ditto, positive channel
+  distributorAreas?: DistributorAreasOut | null  // pre-built by lib/distributor-map; omit → no section
 }
 
 export function assembleRecap(input: AssembleInput): SalesRecap {
@@ -265,6 +283,7 @@ export function assembleRecap(input: AssembleInput): SalesRecap {
     daily, weekTotal, rolling, monthly, diaryNotes, forecast, flags, kpis, overnight,
     negativeFeedback: input.negativeFeedback ?? null,
     positiveFeedback: input.positiveFeedback ?? null,
+    distributorAreas: input.distributorAreas ?? null,
   }
 }
 

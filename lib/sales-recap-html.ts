@@ -218,6 +218,33 @@ export function renderRecapHtml(r: SalesRecap): string {
     ))
   }
 
+  // ── Distributor Areas (quotes vs booked, recap week's month) ─────────
+  if (r.distributorAreas && r.distributorAreas.rows.length) {
+    const da = r.distributorAreas
+    parts.push(sectionTitle('🗺️', `Distributor Areas — ${da.monthLabel}`,
+      `JA quotes to customers within ${da.radiusKm} km of each distributor vs the jobs they booked (Monday, confirmed) · month granularity · full map: justautos.app/reports/distributor-map`))
+    const maxQ = Math.max(...da.rows.map(x => x.quotes), 1)
+    const convPill = (b: number, q: number) => {
+      if (!q) return `<span style="color:${GREY};font:600 12px Arial">—</span>`
+      const p = Math.round((b / q) * 100)
+      const col = p >= 30 ? GREEN : p >= 15 ? '#dc9a00' : RED
+      const bg = p >= 30 ? GREEN_BG : p >= 15 ? '#fdf3e0' : RED_BG
+      return `<span style="background:${bg};color:${col};font:700 13px Arial;padding:3px 10px;border-radius:12px;white-space:nowrap">${p}%</span>`
+    }
+    parts.push(table(
+      ['Distributor', 'Quotes in area', '', 'They booked', 'Booked / quotes'],
+      da.rows.map(x => [
+        `<span style="font:700 14px Arial">${esc(x.name)}${x.located ? '' : ' ⚠'}</span>`,
+        x.located
+          ? `<span style="font:800 18px Arial">${x.quotes}</span> <span style="color:${GREY};font:12px Arial">${x.quotes ? moneyK(x.quotesValue) : ''}</span>`
+          : `<span style="color:${GREY};font:12px Arial">no location on file</span>`,
+        x.located ? bar(x.quotes, maxQ, NAVY) : '',
+        `<span style="font:800 18px Arial">${x.bookings}</span> <span style="color:${GREY};font:12px Arial">${x.bookings ? moneyK(x.bookingsValue) : ''}</span>`,
+        x.located ? convPill(x.bookings, x.quotes) : `<span style="color:${GREY};font:600 12px Arial">—</span>`,
+      ]),
+    ))
+  }
+
   // ── 4. Diary overview ─────────────────────────────────────────────────
   parts.push(sectionTitle('📔', 'Diary Overview'))
   if (r.diaryNotes.length) {

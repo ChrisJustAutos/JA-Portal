@@ -16,6 +16,8 @@ import { fetchOrders, fetchDistBookings } from '../../../../lib/sales-recap-mond
 import { captureAndLoadQuoteLeads } from '../../../../lib/sales-recap-leads-store'
 import { assembleRecap, previousTradingWeek } from '../../../../lib/sales-recap'
 import { fetchNegativeFeedback, fetchPositiveFeedback } from '../../../../lib/sales-recap-slack'
+import { computeDistributorMap, distributorAreasForMonth } from '../../../../lib/distributor-map'
+import { fyOf } from '../../../../lib/workshop-map/vehicle-classification'
 import { renderRecapHtml } from '../../../../lib/sales-recap-html'
 import { generateFlags } from '../../../../lib/sales-recap-flags'
 import { sendMail } from '../../../../lib/email'
@@ -54,7 +56,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const yearStart = `${new Date(nowMs).getUTCFullYear()}-01-01`
     const today = new Date(nowMs).toISOString().slice(0, 10)
     const week = previousTradingWeek(nowMs)
-    const [orders, dist, quoteLeads, negativeFeedback, positiveFeedback] = await Promise.all([
+    const [orders, dist, quoteLeads, negativeFeedback, positiveFeedback, distributorAreas] = await Promise.all([
       fetchOrders(token, yearStart, today),
       fetchDistBookings(token, yearStart, today),
       // Overnight leads span the recap week + its leading weekend/night.
@@ -69,10 +71,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         console.error('[sales-recap] positive-feedback pull failed:', e?.message || e)
         return null
       }),
+      // Distributor Areas — quotes near each distributor vs jobs booked, for
+      // the month the recap week falls in (quote points are month-grained).
+      computeDistributorMap(sb(), token, { fy: fyOf(new Date(week.end + 'T00:00:00Z')) ?? undefined })
+        .then(m => m ? distributorAreasForMonth(m, week.end.slice(0, 7)) : null)
+        .catch((e: any) => {
+          console.error('[sales-recap] distributor-areas pull failed:', e?.message || e)
+          return null
+        }),
     ])
 
     // Assemble (rule-based flags first), then upgrade to LLM flags if available.
-    let recap = assembleRecap({ nowMs, orders, dist, diaryNotes, forecast, quoteLeads, negativeFeedback, positiveFeedback })
+    let recap = assembleRecap({ nowMs, orders, dist, diaryNotes, forecast, quoteLeads, negativeFeedback, positiveFeedback, distributorAreas })
     const llm = await generateFlags(recap).catch(() => [])
     if (llm.length) recap = { ...recap, flags: llm }
 
