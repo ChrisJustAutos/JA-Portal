@@ -1,0 +1,30 @@
+name: Probe MD forecast value fields
+
+# One-off diagnostic (2026-07-29): future bookings show $0 in the sales recap
+# forecast — dump the money fields on forward diary rows + their job JSON.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  run:
+    name: probe forecast values
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci || npm install
+      - name: Install Playwright chromium
+        run: |
+          npm install --no-save playwright
+          npx playwright install --with-deps chromium
+      - name: Probe
+        env:
+          MECHANICDESK_WORKSHOP_ID: ${{ secrets.MECHANICDESK_WORKSHOP_ID }}
+          MECHANICDESK_USERNAME:    ${{ secrets.MECHANICDESK_USERNAME }}
+          MECHANICDESK_PASSWORD:    ${{ secrets.MECHANICDESK_PASSWORD }}
+        run: npx tsx scripts/probe-md-forecast-value.ts
