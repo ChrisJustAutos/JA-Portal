@@ -281,8 +281,8 @@ function OpenJobCard({ job, onSubmitted }: { job: TuneJob; onSubmitted: (id: str
             <Field label="Model"><input value={form.vehicle_model} onChange={set('vehicle_model')} style={inputStyle} placeholder="e.g. Hilux SR5" /></Field>
             <Field label="Year"><input value={form.vehicle_year} onChange={set('vehicle_year')} style={inputStyle} inputMode="numeric" placeholder="e.g. 2021" /></Field>
           </div>
-          <Field label="Notes">
-            <textarea value={form.job_notes} onChange={set('job_notes')} rows={3} style={{ ...inputStyle, resize: 'vertical' }} />
+          <Field label="Package details (what was done)">
+            <textarea value={form.job_notes} onChange={set('job_notes')} rows={3} style={{ ...inputStyle, resize: 'vertical' }} placeholder="e.g. Stage 1 tune package — exhaust, intake, ECU calibration" />
           </Field>
           {err && <div style={{ fontSize: 12, color: T.red }}>{err}</div>}
           <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>

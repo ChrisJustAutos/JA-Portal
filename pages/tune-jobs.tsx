@@ -117,7 +117,7 @@ function JobCard({ job, token, onDone }: { job: OpenJob; token: string; onDone: 
           ))}
         </div>
         <label style={{ fontSize: 11, color: T.text3, display: 'flex', flexDirection: 'column', gap: 3, marginTop: 8 }}>
-          Notes about the job (what was done)
+          Package details (what was done)
           <textarea value={notes} onChange={e => setNotes(e.target.value)} rows={2}
             style={{ padding: '8px 10px', borderRadius: 6, border: `1px solid ${T.border}`, background: T.bg3, color: T.text, fontSize: 13, fontFamily: 'inherit', resize: 'vertical' }} />
         </label>

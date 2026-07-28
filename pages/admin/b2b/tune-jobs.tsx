@@ -4,7 +4,7 @@
 // dismiss non-jobs, retry failed Monday/letter syncs, and trigger the
 // inbox scan / distributor reminders on demand.
 
-import { useEffect, useState } from 'react'
+import { Fragment, useEffect, useState } from 'react'
 import Head from 'next/head'
 import PortalTopBar from '../../../lib/PortalTopBar'
 import B2BAdminTabs from '../../../components/b2b/B2BAdminTabs'
@@ -29,7 +29,31 @@ interface TuneJob {
   invoice_url: string | null
   customer_name: string | null
   sync_error: string | null
+  // Full submission (shown in the expanded row)
+  customer_first_name: string | null
+  customer_phone: string | null
+  customer_email: string | null
+  customer_address_line1: string | null
+  customer_suburb: string | null
+  customer_state: string | null
+  customer_postcode: string | null
+  vehicle_rego: string | null
+  vehicle_make: string | null
+  vehicle_model: string | null
+  vehicle_year: string | null
+  vehicle_description: string | null
+  job_notes: string | null
+  filled_at: string | null
+  monday_item_id: string | null
+  md_customer_md_id: string | null
+  md_synced_at: string | null
+  letter_queued_at: string | null
+  synced_at: string | null
 }
+
+// Monday follow-up board (lib/b2b-tune-jobs TUNE_FOLLOWUP_BOARD) — for the
+// "open in Monday" link on expanded rows.
+const MONDAY_FOLLOWUP_BOARD_URL = 'https://just-autos.monday.com/boards/5030245210/pulses'
 
 interface Distributor { id: string; display_name: string }
 
@@ -74,6 +98,7 @@ export default function TuneJobsAdmin({ user }: { user: any }) {
   const [filter, setFilter] = useState<Filter>('all')
   const [distFilter, setDistFilter] = useState<string>('all')  // 'all' | 'unmatched' | distributor id
   const [busy, setBusy] = useState('')            // 'scan' | 'remind' | job id
+  const [expanded, setExpanded] = useState<string | null>(null)  // job id with detail open
   // Per-row assign state (unmatched rows)
   const [assignSel, setAssignSel] = useState<Record<string, string>>({})
   const [assignRemember, setAssignRemember] = useState<Record<string, boolean>>({})
@@ -357,7 +382,15 @@ export default function TuneJobsAdmin({ user }: { user: any }) {
                 </thead>
                 <tbody>
                   {visible.map(j => (
-                    <tr key={j.id} style={{ borderBottom: `1px solid ${T.border}` }}>
+                    <Fragment key={j.id}>
+                    <tr
+                      onClick={e => {
+                        // Row click opens the detail — unless the click was on
+                        // an interactive element (links, assign controls, retry).
+                        if ((e.target as HTMLElement).closest('a,button,select,input,label')) return
+                        setExpanded(x => x === j.id ? null : j.id)
+                      }}
+                      style={{ borderBottom: `1px solid ${T.border}`, cursor: 'pointer', background: expanded === j.id ? T.bg3 : undefined }}>
                       <Td muted>{formatDate(j.email_received_at || j.created_at)}</Td>
                       <Td>{j.company_raw || '—'}</Td>
                       <Td>
@@ -416,6 +449,14 @@ export default function TuneJobsAdmin({ user }: { user: any }) {
                         )}
                       </Td>
                     </tr>
+                    {expanded === j.id && (
+                      <tr style={{ borderBottom: `1px solid ${T.border}` }}>
+                        <td colSpan={11} style={{ padding: '14px 16px', background: T.bg3 }}>
+                          <JobDetail job={j} />
+                        </td>
+                      </tr>
+                    )}
+                    </Fragment>
                   ))}
                 </tbody>
               </table>
@@ -424,6 +465,73 @@ export default function TuneJobsAdmin({ user }: { user: any }) {
         </div>
       </div>
     </>
+  )
+}
+
+// Full submission view — everything the distributor entered plus where the
+// job got to downstream (MD / Monday / letter).
+function JobDetail({ job }: { job: TuneJob }) {
+  const vehicle = [job.vehicle_year, job.vehicle_make, job.vehicle_model].filter(Boolean).join(' ')
+    || job.vehicle_description || null
+  const address = [job.customer_address_line1, [job.customer_suburb, job.customer_state, job.customer_postcode].filter(Boolean).join(' ')]
+    .filter(Boolean).join(', ') || null
+
+  const section: React.CSSProperties = { display: 'flex', flexDirection: 'column', gap: 6, minWidth: 200 }
+  const heading: React.CSSProperties = { fontSize: 10, fontWeight: 700, color: T.text3, textTransform: 'uppercase', letterSpacing: '0.07em' }
+
+  function Row({ label, children }: { label: string; children?: React.ReactNode }) {
+    return (
+      <div style={{ display: 'flex', gap: 8, fontSize: 12.5, lineHeight: 1.45 }}>
+        <span style={{ color: T.text3, minWidth: 86, flexShrink: 0 }}>{label}</span>
+        <span style={{ color: T.text }}>{children || <span style={{ color: T.text3 }}>—</span>}</span>
+      </div>
+    )
+  }
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+      <div style={{ display: 'flex', gap: 28, flexWrap: 'wrap' }}>
+        <div style={section}>
+          <div style={heading}>Customer</div>
+          <Row label="Name">{job.customer_name}</Row>
+          <Row label="Phone">{job.customer_phone && <a href={`tel:${job.customer_phone}`} style={{ color: T.blue, textDecoration: 'none' }}>{job.customer_phone}</a>}</Row>
+          <Row label="Email">{job.customer_email && <a href={`mailto:${job.customer_email}`} style={{ color: T.blue, textDecoration: 'none' }}>{job.customer_email}</a>}</Row>
+          <Row label="Address">{address}</Row>
+        </div>
+        <div style={section}>
+          <div style={heading}>Vehicle</div>
+          <Row label="Vehicle">{vehicle}</Row>
+          <Row label="Rego">{job.vehicle_rego}</Row>
+          <Row label="VIN">{job.vin && <span style={{ fontFamily: 'ui-monospace, monospace', fontSize: 12 }}>{job.vin}</span>}</Row>
+        </div>
+        <div style={section}>
+          <div style={heading}>Tune</div>
+          <Row label="Calibration">{job.tune_details}</Row>
+          <Row label="Invoice">{job.invoice_number}{job.amount != null ? ` · $${Number(job.amount).toFixed(2)}` : ''}</Row>
+          <Row label="Distributor">{job.distributor_name || job.company_raw}</Row>
+          <Row label="Filled">{job.filled_at ? formatDate(job.filled_at) : null}</Row>
+        </div>
+        <div style={section}>
+          <div style={heading}>Downstream</div>
+          <Row label="MechanicDesk">{job.md_customer_md_id
+            ? <>customer #{job.md_customer_md_id}{job.md_synced_at ? ` · ${formatDate(job.md_synced_at)}` : ''}</>
+            : job.status === 'submitted' ? <span style={{ color: T.amber }}>queued — nightly 2:30am worker</span> : null}</Row>
+          <Row label="Monday">{job.monday_item_id && (
+            <a href={`${MONDAY_FOLLOWUP_BOARD_URL}/${job.monday_item_id}`} target="_blank" rel="noreferrer" style={{ color: T.blue, textDecoration: 'none' }}>
+              Follow-up item ↗
+            </a>
+          )}</Row>
+          <Row label="Letter">{job.letter_queued_at ? `queued ${formatDate(job.letter_queued_at)}` : <span style={{ color: T.text3 }}>not queued{!address ? ' (no address)' : ''}</span>}</Row>
+          {job.sync_error && <Row label="Sync error"><span style={{ color: T.red }}>{job.sync_error}</span></Row>}
+        </div>
+      </div>
+      <div>
+        <div style={heading}>Package details</div>
+        <div style={{ fontSize: 12.5, color: job.job_notes ? T.text : T.text3, marginTop: 5, whiteSpace: 'pre-wrap', maxWidth: 900 }}>
+          {job.job_notes || 'None provided.'}
+        </div>
+      </div>
+    </div>
   )
 }
 
