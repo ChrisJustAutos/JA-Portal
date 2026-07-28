@@ -20,8 +20,11 @@ export const DIST_BOOKING_BOARD = '1923220718'
 
 // Orders board columns
 const ORD = { date: 'date', value: 'numbers', process: 'color_mks9wfk9', status: 'status' }
-// Distributor-Booking columns
-const DB = { date: 'date4', value: 'numbers', status: 'status' }
+// Distributor-Booking columns. `distributor` (status_1, the board's
+// "Distributor" label) must be in this map or pullBoard won't request it —
+// the distributor-map report groups bookings by it (everything showed as
+// "Unassigned" while it was missing, 2026-07-29).
+const DB = { date: 'date4', value: 'numbers', status: 'status', distributor: 'status_1' }
 
 // Statuses that mean "this didn't happen" — excluded from all totals.
 const ORDERS_DEAD = new Set(['Deleted', 'Canceled', 'Cancelled'])
