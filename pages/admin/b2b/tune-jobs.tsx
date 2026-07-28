@@ -12,7 +12,7 @@ import { requirePageAuth } from '../../../lib/authServer'
 import { T, alpha } from '../../../lib/ui/theme'
 import { useToast } from '../../../components/ui/Feedback'
 
-type JobStatus = 'unmatched' | 'awaiting_details' | 'submitted' | 'synced' | 'dismissed'
+type JobStatus = 'unmatched' | 'awaiting_details' | 'submitted' | 'synced' | 'dismissed' | 'merged'
 
 interface TuneJob {
   id: string
@@ -66,6 +66,7 @@ const FILTERS: Array<{ id: Filter; label: string }> = [
   { id: 'submitted', label: 'Submitted' },
   { id: 'synced', label: 'Synced' },
   { id: 'dismissed', label: 'Dismissed' },
+  { id: 'merged', label: 'Merged' },
 ]
 
 const STATUS_COLOR: Record<JobStatus, string> = {
@@ -74,6 +75,7 @@ const STATUS_COLOR: Record<JobStatus, string> = {
   submitted: T.teal,
   synced: T.green,
   dismissed: T.text3 as string,
+  merged: T.text3 as string,
 }
 
 const STATUS_LABEL: Record<JobStatus, string> = {
@@ -82,6 +84,7 @@ const STATUS_LABEL: Record<JobStatus, string> = {
   submitted: 'Submitted',
   synced: 'Synced',
   dismissed: 'Dismissed',
+  merged: 'Merged (same VIN)',
 }
 
 function formatDate(iso: string | null): string {

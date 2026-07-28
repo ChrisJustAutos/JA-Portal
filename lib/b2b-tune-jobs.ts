@@ -193,6 +193,8 @@ async function extractTuneDetails(content: any[]): Promise<TuneExtraction | null
 
 export interface IngestResult {
   scanned: number; created: number; matched: number; skipped: number; errors: string[]
+  // Receipts folded into an existing same-VIN job (remap + lockup = one car).
+  merged?: number
   // What the mailbox actually returned — surfaced in the admin toast/logs so a
   // zero-result scan is diagnosable (wrong folder? no attachments? old mail?).
   debug?: { mailbox: string; since: string; inboxSeen: number; paymentFolderFound: boolean; paymentSeen: number; sample: Array<{ from: string | null; subject: string | null; received: string; hasAttachments: boolean }> }
@@ -329,6 +331,55 @@ export async function ingestTuneJobEmails(opts: { lookbackDays?: number; maxNew?
       }
 
       const distributorId = x.company ? await matchDistributorForCompany(x.company) : null
+
+      // ONE JOB PER VIN (Chris 2026-07-29): a remap and a lockup kit are two
+      // Stripe receipts for the SAME car — merging means the distributor
+      // fills the customer details once. A second receipt merges into an
+      // existing job for the same VIN + same distributor when that job is
+      // still open, or completed within the last 45 days (older = a genuine
+      // re-tune → new job). The receipt keeps its own row (status 'merged',
+      // merged_into_job_id set) so email dedup + the PDF copy survive.
+      if (x.vin) {
+        const { data: existing } = await c.from('b2b_tune_jobs')
+          .select('id, status, distributor_id, company_raw, tune_details, amount, invoice_number, email_received_at, created_at')
+          .ilike('vin', String(x.vin).trim())
+          .in('status', ['unmatched', 'awaiting_details', 'submitted', 'synced'])
+          .order('created_at', { ascending: false }).limit(1).maybeSingle()
+        const sameOwner = existing && (
+          (distributorId && existing.distributor_id === distributorId) ||
+          (!distributorId && !existing.distributor_id && normCompany(existing.company_raw) === normCompany(x.company))
+        )
+        const ageDays = existing
+          ? (Date.now() - Date.parse(existing.email_received_at || existing.created_at)) / 86400_000
+          : Infinity
+        const mergeable = sameOwner && (
+          ['unmatched', 'awaiting_details'].includes(existing!.status) || ageDays <= 45
+        )
+        if (mergeable) {
+          const detail = String(x.tune_details || '').trim()
+          const mergedDetails = detail && !String(existing!.tune_details || '').includes(detail)
+            ? [existing!.tune_details, detail].filter(Boolean).join(' + ')
+            : existing!.tune_details
+          await c.from('b2b_tune_jobs').update({
+            tune_details: mergedDetails ? String(mergedDetails).slice(0, 1000) : existing!.tune_details,
+            amount: (Number(existing!.amount) || 0) + (Number(x.amount) || 0),
+            invoice_number: [existing!.invoice_number, x.invoice_number].filter(Boolean).join(' + ').slice(0, 200) || existing!.invoice_number,
+            updated_at: new Date().toISOString(),
+          }).eq('id', existing!.id)
+          const { error: mergeInsErr } = await c.from('b2b_tune_jobs').insert({
+            internet_message_id: dedupKey,
+            email_subject: m.subject, email_from: m.from, email_received_at: m.receivedDateTime,
+            invoice_pdf_path: pdfPath, invoice_number: x.invoice_number, amount: x.amount,
+            company_raw: x.company, distributor_id: distributorId,
+            vin: x.vin, tune_details: x.tune_details, extraction: x as any,
+            status: 'merged', merged_into_job_id: existing!.id,
+          })
+          if (mergeInsErr) out.errors.push(`merge insert: ${mergeInsErr.message}`)
+          out.merged = (out.merged || 0) + 1
+          continue
+        }
+      }
+
       const { data: row, error: insErr } = await c.from('b2b_tune_jobs').insert({
         internet_message_id: dedupKey,
         email_subject: m.subject, email_from: m.from, email_received_at: m.receivedDateTime,
