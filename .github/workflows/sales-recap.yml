@@ -11,9 +11,13 @@ name: Weekly Sales Recap (Mon 7am)
 on:
   schedule:
     - cron: '0 21 * * 0'          # 21:00 UTC Sun = 07:00 Mon Brisbane — weekly full run (email)
-    # MD refresh, trading days ~every 2h Brisbane business hours (AEST = UTC+10):
+    # MD refresh, trading days ~every 2h Brisbane business hours (AEST = UTC+10),
+    # plus a 6am run so the report is fresh before the morning check and a
+    # 5:30pm closer so end-of-day bookings are captured (Chris 2026-07-29):
+    - cron: '0 20 * * 0-4'        # 06:00 Bris Mon–Fri
     - cron: '0 23 * * 0-4'        # 09:00 Bris Mon–Fri
     - cron: '0 1,3,5,7 * * 1-5'   # 11:00 / 13:00 / 15:00 / 17:00 Bris Mon–Fri
+    - cron: '30 7 * * 1-5'        # 17:30 Bris Mon–Fri
   workflow_dispatch:
     inputs:
       mode:
