@@ -52,22 +52,37 @@ function haversineKm(aLat: number, aLng: number, bLat: number, bLng: number): nu
   return 2 * R * Math.asin(Math.sqrt(s))
 }
 
-// Match a Monday Distributor label to b2b_distributors by name tokens.
-// Returns the matched index ONLY when exactly one candidate matches.
+// Match a Monday Distributor label to b2b_distributors by name. Returns the
+// matched index ONLY when exactly one candidate matches — "Hunter Mechanical"
+// matches BOTH Hunter branches, so it deliberately stays unmatched. Rules
+// (checked against the real board labels 2026-07-29):
+//   1. contains either way on SPACE-STRIPPED names — "Bananacoast Diesel
+//      Performance" ↔ "Banana Coast Diesel Performance", "Diesel Gas" ↔
+//      "DieselGas Moree"
+//   2. token-subset either way — "Torrisi Motorsport - Yeppoon" ↔ "Torrisi
+//      Motorsport", "Morpowa" ↔ "Morpowa Auto & Dyno"
+//   3. unique first-token (≥4 chars) — "Weirys - Darwin" ↔ "Weirys Diesel &
+//      Mechanical Services", "Harrop Melbourne" ↔ "Harrop Engineering"
 function matchLabel(label: string, names: string[]): number | null {
   const l = norm(label)
   if (!l) return null
+  const lSquash = l.replace(/ /g, '')
   const lTokens = l.split(' ')
-  const hits: number[] = []
+  const hits = new Set<number>()
   for (let i = 0; i < names.length; i++) {
     const n = norm(names[i])
     if (!n) continue
-    if (n === l || n.includes(l) || l.includes(n)) { hits.push(i); continue }
-    // token-subset either way ("CP Performance" ⊆ "CP Performance Pty Ltd")
+    const nSquash = n.replace(/ /g, '')
+    if (nSquash === lSquash || nSquash.includes(lSquash) || lSquash.includes(nSquash)) { hits.add(i); continue }
     const nTokens = n.split(' ')
-    if (lTokens.every(t => nTokens.includes(t)) || nTokens.every(t => lTokens.includes(t))) hits.push(i)
+    if (lTokens.every(t => nTokens.includes(t)) || nTokens.every(t => lTokens.includes(t))) hits.add(i)
   }
-  return hits.length === 1 ? hits[0] : null
+  if (hits.size === 1) return Array.from(hits)[0]
+  if (hits.size === 0 && lTokens[0]?.length >= 4) {
+    const firstHits = names.map((n, i) => ({ n: norm(n), i })).filter(x => x.n.split(' ').includes(lTokens[0]))
+    if (firstHits.length === 1) return firstHits[0].i
+  }
+  return null
 }
 
 export default withAuth('view:reports', async (req: NextApiRequest, res: NextApiResponse) => {
