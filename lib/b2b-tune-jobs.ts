@@ -397,6 +397,14 @@ export interface TuneJobDetails {
   job_notes?: string | null
 }
 
+// A dialable AU number: 10 digits starting with 0, or the +61 form
+// (61 + 9 digits). Mirrored client-side on both fill forms.
+export function isFullAuPhone(v: string | null | undefined): boolean {
+  const digits = String(v || '').replace(/\D/g, '')
+  return (digits.length === 10 && digits.startsWith('0')) ||
+         (digits.length === 11 && digits.startsWith('61'))
+}
+
 export async function submitTuneJobDetails(jobId: string, distributorId: string, userId: string | null, d: TuneJobDetails): Promise<void> {
   const c = sb()
   const { data: job } = await c.from('b2b_tune_jobs')
@@ -409,6 +417,11 @@ export async function submitTuneJobDetails(jobId: string, distributorId: string,
   // One name field carries first AND last (Penrith submitted bare surnames
   // 2026-07-28 — MD cards named just "Moore"). Business names pass naturally.
   if (name.split(' ').length < 2) throw new Error('Please enter the customer’s first and last name')
+  // Full phone required — Penrith submitted a 9-digit number (048876088,
+  // 2026-07-28) that can't be dialled. 10 digits starting 0, or +61 form.
+  if (!isFullAuPhone(d.customer_phone)) {
+    throw new Error('Please enter the customer’s full phone number (10 digits, e.g. 0400 123 456)')
+  }
 
   const s = (v: any, n: number) => { const t = String(v ?? '').trim(); return t ? t.slice(0, n) : null }
   // MD-style vehicle fields; description composed for letters/back-compat.
@@ -454,6 +467,7 @@ const TUNE_FOLLOWUP_COLS = {
   REGO: 'text_mm5pvnz8',
   TUNE: 'text_mm5pnnpd',
   DATE: 'date_mm5pjrnt',
+  PACKAGE: 'long_text_mm5pa57g',   // "Package Details" — the distributor's job_notes
 }
 
 export async function syncTuneJobDownstream(jobId: string): Promise<void> {
@@ -483,6 +497,7 @@ export async function syncTuneJobDownstream(jobId: string): Promise<void> {
       if (vehicle) columnValues[TUNE_FOLLOWUP_COLS.VEHICLE] = vehicle
       if (job.vehicle_rego) columnValues[TUNE_FOLLOWUP_COLS.REGO] = job.vehicle_rego
       if (job.tune_details) columnValues[TUNE_FOLLOWUP_COLS.TUNE] = String(job.tune_details).slice(0, 250)
+      if (job.job_notes) columnValues[TUNE_FOLLOWUP_COLS.PACKAGE] = { text: String(job.job_notes).slice(0, 2000) }
       const created = await mondayQuery<{ create_item: { id: string } }>(
         `mutation CreateTuneFollowUp($boardId: ID!, $groupId: String!, $itemName: String!, $columnValues: JSON!) {
           create_item(board_id: $boardId, group_id: $groupId, item_name: $itemName, column_values: $columnValues, create_labels_if_missing: false) { id }

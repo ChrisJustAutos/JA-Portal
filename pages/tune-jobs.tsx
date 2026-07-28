@@ -61,7 +61,7 @@ export async function getServerSideProps(context: GetServerSidePropsContext): Pr
 
 const FIELDS: Array<{ key: string; label: string; type?: string; required?: boolean; wide?: boolean }> = [
   { key: 'customer_name', label: 'Customer name (first & last)', required: true },
-  { key: 'customer_phone', label: 'Phone' },
+  { key: 'customer_phone', label: 'Phone (e.g. 0400 123 456)', required: true },
   { key: 'customer_email', label: 'Email', type: 'email' },
   { key: 'customer_address_line1', label: 'Address', wide: true },
   { key: 'customer_suburb', label: 'Suburb' },
@@ -83,6 +83,10 @@ function JobCard({ job, token, onDone }: { job: OpenJob; token: string; onDone: 
     e.preventDefault()
     const name = String(form.customer_name || '').trim().replace(/\s+/g, ' ')
     if (name.split(' ').length < 2) { setErr('Please enter the customer’s first and last name.'); return }
+    const phoneDigits = String(form.customer_phone || '').replace(/\D/g, '')
+    if (!((phoneDigits.length === 10 && phoneDigits.startsWith('0')) || (phoneDigits.length === 11 && phoneDigits.startsWith('61')))) {
+      setErr('Please enter the customer’s full phone number (10 digits, e.g. 0400 123 456).'); return
+    }
     setBusy(true); setErr('')
     try {
       const r = await fetch('/api/tune-jobs-submit', {

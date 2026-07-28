@@ -208,6 +208,10 @@ function OpenJobCard({ job, onSubmitted }: { job: TuneJob; onSubmitted: (id: str
     const name = form.customer_name.trim().replace(/\s+/g, ' ')
     if (!name) { setErr('Customer name is required.'); return }
     if (name.split(' ').length < 2) { setErr('Please enter the customer’s first and last name.'); return }
+    const phoneDigits = form.customer_phone.replace(/\D/g, '')
+    if (!((phoneDigits.length === 10 && phoneDigits.startsWith('0')) || (phoneDigits.length === 11 && phoneDigits.startsWith('61')))) {
+      setErr('Please enter the customer’s full phone number (10 digits, e.g. 0400 123 456).'); return
+    }
     setBusy(true); setErr('')
     try {
       const r = await fetch('/api/b2b/jobs', {
@@ -270,7 +274,7 @@ function OpenJobCard({ job, onSubmitted }: { job: TuneJob; onSubmitted: (id: str
         <div style={{ borderTop: `1px solid ${T.border}`, paddingTop: 12, display: 'flex', flexDirection: 'column', gap: 10 }}>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 10 }}>
             <Field label="Customer name (first & last) *"><input value={form.customer_name} onChange={set('customer_name')} style={inputStyle} placeholder="e.g. John Smith" /></Field>
-            <Field label="Phone"><input value={form.customer_phone} onChange={set('customer_phone')} style={inputStyle} inputMode="tel" /></Field>
+            <Field label="Phone *"><input value={form.customer_phone} onChange={set('customer_phone')} style={inputStyle} inputMode="tel" placeholder="e.g. 0400 123 456" /></Field>
             <Field label="Email"><input value={form.customer_email} onChange={set('customer_email')} style={inputStyle} inputMode="email" /></Field>
             <Field label="Address line"><input value={form.customer_address_line1} onChange={set('customer_address_line1')} style={inputStyle} /></Field>
             <Field label="Suburb"><input value={form.customer_suburb} onChange={set('customer_suburb')} style={inputStyle} /></Field>
