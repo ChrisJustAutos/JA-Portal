@@ -12,23 +12,24 @@ CREATE TABLE cash_denominations (
   active         boolean NOT NULL DEFAULT true
 );
 
--- Coins: official Royal Australian Mint masses. Notes: ESTIMATES (2026-07-30
--- — no official masses published anywhere; derived from NGB dimensions ×
--- ~90 g/m² Guardian polymer substrate). Good enough to start; true them up
--- with the page's per-denomination "⚖ cal" against a counted stack — beyond
--- ~10 notes an estimate a few % off starts miscounting by 1.
+-- Coins: official Royal Australian Mint masses. Notes: anchored to the RBA's
+-- $100 = 1.006 g figure (Chris's source, 2026-07-30 — matches "$1M in
+-- hundreds ≈ 10 kg"), other denominations scaled by printed area (same
+-- polymer stock, 65 mm tall, widths 130→158 mm ⇒ ~98 g/m²). True up per
+-- denomination with the page's "⚖ cal" against a counted stack — circulated
+-- notes carry grime and a few % error miscounts stacks beyond ~15.
 INSERT INTO cash_denominations (id, label, value_cents, unit_weight_g, sort, is_note) VALUES
-  ('5c',      '5c',   5,     2.83,  1, false),
-  ('10c',     '10c',  10,    5.65,  2, false),
-  ('20c',     '20c',  20,    11.30, 3, false),
-  ('50c',     '50c',  50,    15.55, 4, false),
-  ('1d',      '$1',   100,   9.00,  5, false),
-  ('2d',      '$2',   200,   6.60,  6, false),
-  ('note5',   '$5',   500,   0.76,  7, true),
-  ('note10',  '$10',  1000,  0.80,  8, true),
-  ('note20',  '$20',  2000,  0.84,  9, true),
-  ('note50',  '$50',  5000,  0.88, 10, true),
-  ('note100', '$100', 10000, 0.92, 11, true);
+  ('5c',      '5c',   5,     2.83,   1, false),
+  ('10c',     '10c',  10,    5.65,   2, false),
+  ('20c',     '20c',  20,    11.30,  3, false),
+  ('50c',     '50c',  50,    15.55,  4, false),
+  ('1d',      '$1',   100,   9.00,   5, false),
+  ('2d',      '$2',   200,   6.60,   6, false),
+  ('note5',   '$5',   500,   0.828,  7, true),
+  ('note10',  '$10',  1000,  0.872,  8, true),
+  ('note20',  '$20',  2000,  0.917,  9, true),
+  ('note50',  '$50',  5000,  0.962, 10, true),
+  ('note100', '$100', 10000, 1.006, 11, true);
 
 CREATE TABLE cash_counts (
   id             uuid PRIMARY KEY DEFAULT gen_random_uuid(),
