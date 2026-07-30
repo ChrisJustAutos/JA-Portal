@@ -405,6 +405,24 @@ export async function ingestTuneJobEmails(opts: { lookbackDays?: number; maxNew?
             tag: `tune-job-${row.id}`,
           })
         } catch (e: any) { console.error('tune-job notify failed:', e?.message) }
+        // Per-tune email (Chris 2026-07-30) — gated on the distributor having
+        // logged into the portal at least once. Best-effort.
+        try {
+          const emails = await distributorNotifiableEmails(distributorId)
+          if (emails.length) {
+            const { getFromMailbox } = await import('./b2b-settings')
+            await sendMail(await getFromMailbox(), {
+              to: emails,
+              subject: `New tune job — customer details needed${x.vin ? ` (VIN ${x.vin})` : ''}`,
+              html: `<p>Hi,</p>
+<p>We've received the receipt for a tune you've completed:</p>
+<ul><li><b>${x.tune_details || 'Tune'}</b>${x.vin ? `<br/>VIN ${x.vin}` : ''}${x.invoice_number ? `<br/>Invoice ${x.invoice_number}` : ''}</li></ul>
+<p>Please fill in the customer and vehicle details so we can finish the paperwork — takes about a minute.</p>
+<p style="margin:18px 0"><a href="https://justautos.app/b2b/jobs" style="background:#34c77b;color:#fff;padding:10px 18px;border-radius:6px;text-decoration:none;font-weight:600">Fill in the details</a></p>
+<p>Thanks,<br/>Just Autos</p>`,
+            })
+          }
+        } catch (e: any) { console.error('tune-job email failed:', e?.message) }
       } else {
         try {
           const { notify } = await import('./notifications')
@@ -747,6 +765,22 @@ export async function markTuneJobMdSynced(jobId: string, mdCustomerId: string | 
   }).eq('id', jobId)
 }
 
+// ── Notification gate + recipients ──────────────────────────────────────
+// Tune-job emails only START once the distributor actually uses the portal
+// (Chris 2026-07-30): recipients = active portal users who have logged in at
+// least once. Empty array = distributor hasn't adopted the portal yet — no
+// emails (bell/push still fire; they're only visible in-portal anyway).
+export async function distributorNotifiableEmails(distributorId: string): Promise<string[]> {
+  const c = sb()
+  const { data } = await c.from('b2b_distributor_users')
+    .select('email')
+    .eq('distributor_id', distributorId)
+    .eq('is_active', true)
+    .not('last_login_at', 'is', null)
+    .not('email', 'like', 'preview+%@justautos.app')
+  return Array.from(new Set((data || []).map(u => String(u.email || '').trim().toLowerCase()).filter(Boolean)))
+}
+
 // ── Weekly reminders ────────────────────────────────────────────────────
 
 export async function sendTuneJobReminders(): Promise<{ distributors: number; jobs: number }> {
@@ -765,8 +799,14 @@ export async function sendTuneJobReminders(): Promise<{ distributors: number; jo
   let notified = 0
   for (const [distId, djobs] of Array.from(byDist.entries())) {
     try {
+      // Gate (Chris 2026-07-30): no summary until the distributor has logged
+      // in at least once. Deliberately skips the reminder stamps too, so the
+      // first Friday AFTER their first login carries the full backlog.
+      const emails = await distributorNotifiableEmails(distId)
+      if (emails.length === 0) continue
+
       const { data: dist } = await c.from('b2b_distributors')
-        .select('display_name, primary_contact_email').eq('id', distId).maybeSingle()
+        .select('display_name').eq('id', distId).maybeSingle()
       const { notifyDistributor } = await import('./push')
       await notifyDistributor(distId, {
         title: `${djobs.length} tune job${djobs.length === 1 ? '' : 's'} waiting on customer details`,
@@ -774,21 +814,13 @@ export async function sendTuneJobReminders(): Promise<{ distributors: number; jo
         href: '/b2b/jobs',
         tag: `tune-job-reminder-${distId}`,
       })
-      const to = (dist?.primary_contact_email || '').trim()
-      if (to) {
-        const { getFromMailbox } = await import('./b2b-settings')
-        // Login-less fill link, scoped to THIS distributor only (signed token,
-        // 14-day expiry — every weekly reminder mints a fresh one).
-        const { signOrderAction } = await import('./order-action-token')
-        const token = signOrderAction({ orderId: distId, scope: 'tune_jobs', ttlDays: 14 })
-        const fillUrl = `https://justautos.app/tune-jobs?token=${encodeURIComponent(token)}`
-        const rows = djobs.map(j => `<li>${j.tune_details || 'Tune'}${j.vin ? ` — VIN ${j.vin}` : ''} (received ${String(j.created_at).slice(0, 10)})</li>`).join('')
-        await sendMail(await getFromMailbox(), {
-          to: [to],
-          subject: `Action needed: ${djobs.length} tune job${djobs.length === 1 ? '' : 's'} waiting on customer details`,
-          html: `<p>Hi ${dist?.display_name || ''},</p><p>The following tune job${djobs.length === 1 ? ' is' : 's are'} waiting on customer details:</p><ul>${rows}</ul><p style="margin:18px 0"><a href="${fillUrl}" style="background:#34c77b;color:#fff;padding:10px 18px;border-radius:6px;text-decoration:none;font-weight:600">Fill in your job details</a></p><p style="font-size:12px;color:#888">The link opens your jobs only — no login needed. You can also sign in to the portal and use the Jobs tab.</p><p>Thanks,<br/>Just Autos</p>`,
-        })
-      }
+      const { getFromMailbox } = await import('./b2b-settings')
+      const rows = djobs.map(j => `<li>${j.tune_details || 'Tune'}${j.vin ? ` — VIN ${j.vin}` : ''} (received ${String(j.created_at).slice(0, 10)})</li>`).join('')
+      await sendMail(await getFromMailbox(), {
+        to: emails,
+        subject: `Weekly summary: ${djobs.length} tune job${djobs.length === 1 ? '' : 's'} still waiting on customer details`,
+        html: `<p>Hi ${dist?.display_name || ''},</p><p>End-of-week wrap-up — the following tune job${djobs.length === 1 ? ' is' : 's are'} still waiting on customer details:</p><ul>${rows}</ul><p style="margin:18px 0"><a href="https://justautos.app/b2b/jobs" style="background:#34c77b;color:#fff;padding:10px 18px;border-radius:6px;text-decoration:none;font-weight:600">Fill in the details</a></p><p style="font-size:12px;color:#888">Sign in to the portal and open the Jobs tab — each one takes about a minute.</p><p>Thanks,<br/>Just Autos</p>`,
+      })
       await c.from('b2b_tune_jobs').update({ last_reminder_at: new Date().toISOString() })
         .in('id', djobs.map(j => j.id))
       // Stage 1 of the escalation ladder: stamp the FIRST email per job.

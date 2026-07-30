@@ -19,21 +19,22 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   const ingest = await ingestTuneJobEmails({ lookbackDays: 7 })
 
-  // Weekly reminders: Monday 8am-ish Brisbane (22:00 UTC Sunday). The whole
-  // outbound chase (weekly email + SMS/Ryan escalation ladder) is OFF until
-  // TUNE_JOBS_REMINDERS_AUTO=1 — Chris is testing the link/email by hand
-  // first (2026-07-24). Manual sends still work: ?remind=1 or the admin
-  // "Send reminders now" button.
+  // End-of-week summary: Friday 8am-ish Brisbane (Chris 2026-07-30). No
+  // global kill-switch any more — per-distributor gating instead: emails only
+  // go to distributors with at least one logged-in portal user (see
+  // distributorNotifiableEmails), so nothing sends until a distributor has
+  // actually started using the portal. Manual sends still work: ?remind=1 or
+  // the admin "Send reminders now" button.
   const autoChase = process.env.TUNE_JOBS_REMINDERS_AUTO === '1'
   let reminders: { distributors: number; jobs: number } | null = null
   const bris = new Date(Date.now() + 10 * 3600_000)
-  const isMondayMorning = bris.getUTCDay() === 1 && bris.getUTCHours() === 8
-  if ((autoChase && isMondayMorning) || req.query.remind === '1') {
+  const isFridayMorning = bris.getUTCDay() === 5 && bris.getUTCHours() === 8
+  if (isFridayMorning || req.query.remind === '1') {
     reminders = await sendTuneJobReminders()
   }
 
-  // Escalation ladder (SMS → Ryan) is gated behind the same flag — a manual
-  // reminder test shouldn't arm SMSes that fire 7 days later.
+  // Escalation ladder (SMS → Ryan) stays behind TUNE_JOBS_REMINDERS_AUTO —
+  // a manual reminder test shouldn't arm SMSes that fire 7 days later.
   let escalation: { smsDistributors: number; escalatedJobs: number } | null = null
   if (autoChase) escalation = await escalateTuneJobs()
 
