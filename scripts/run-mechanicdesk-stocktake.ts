@@ -91,7 +91,7 @@ const MODE = process.env.MODE || ''
 if (!PORTAL_BASE) throw new Error('JA_PORTAL_BASE_URL required')
 if (!PORTAL_TOKEN) throw new Error('JA_PORTAL_API_KEY required')
 if (!UPLOAD_ID) throw new Error('UPLOAD_ID required')
-if (!['match', 'push', 'recheck', 'refresh'].includes(MODE)) throw new Error(`Invalid MODE: ${MODE}`)
+if (!['match', 'push', 'recheck', 'refresh', 'push-missing'].includes(MODE)) throw new Error(`Invalid MODE: ${MODE}`)
 
 async function readUpload(): Promise<any> {
   const r = await fetch(`${PORTAL_BASE}/api/stocktake/${UPLOAD_ID}`, {
@@ -572,19 +572,88 @@ async function runRefresh(client: MdClient, results: MatchResultEntry[]): Promis
     return
   }
 
-  const orphanSet = new Set<number>()
-  for (const r of matchedRows) {
-    if (!universeBySku.has(normSku(r.md_stock_number || r.sku))) orphanSet.add(r.row_number)
-  }
-  const kept = results.filter(r => !orphanSet.has(r.row_number))
+  // Remove ONLY rows that (a) fell out of the Stock Value universe AND
+  // (b) carry NO counted quantity. Two hard lessons from 2026-07-30:
+  //   • COUNTED rows are sacred — a paper count of 119 against a zero-on-hand
+  //     SKU is exactly what a stocktake exists to record (the variance IS the
+  //     signal); Stock Value excludes zero-on-hand items so dropping its
+  //     absentees deleted real counts before they were pushed.
+  //   • Never key removal on row_number — it restarts per SHEET, so removing
+  //     one sheet's orphan nuked its row-number twins on every other sheet
+  //     (25 orphans took out ~84 innocent rows on upload c76fd830).
+  const isOrphan = (r: MatchResultEntry) =>
+    r.status === 'matched' &&
+    !universeBySku.has(normSku(r.md_stock_number || r.sku)) &&
+    (r.qty == null)
+  const kept = results.filter(r => !isOrphan(r))
+  const removedCount = results.length - kept.length
+  const spared = orphans - removedCount
 
   await patchUpload({ match_results: kept, matched_at: new Date().toISOString() })
 
-  log(`Refresh: qty updated on ${updated} from Stock Value; removed ${orphans} matched rows no longer in Stock Value`)
+  log(`Refresh: qty updated on ${updated} from Stock Value; removed ${removedCount} uncounted rows no longer in Stock Value${spared > 0 ? ` (${spared} counted rows kept despite missing from Stock Value)` : ''}`)
   await notifySlack(
-    `Refresh: ${updated} qty updated · removed ${orphans} rows no longer in Stock Value`,
+    `Refresh: ${updated} qty updated · removed ${removedCount} uncounted rows no longer in Stock Value${spared > 0 ? ` · kept ${spared} counted rows` : ''}`,
     false,
   )
+}
+
+// ── Push-missing mode ─────────────────────────────────────────────────
+// Recovery path (2026-07-30): parsed count-sheet rows that are ABSENT from
+// match_results (they were matched once, then destroyed by the refresh
+// row_number bug above) are re-matched against MD and pushed onto the
+// upload's EXISTING stocktake sheet. Rows already on the MD sheet are never
+// re-added (no double-count); non-matching rows are appended as their match
+// status for visibility.
+async function runPushMissing(client: MdClient, upload: any, relogin: () => Promise<void>): Promise<void> {
+  if (!upload.mechanicdesk_stocktake_id || !upload.mechanicdesk_sheet_id) {
+    throw new Error('push-missing needs a stored MD stocktake/sheet — run a full push first.')
+  }
+  const results = (upload.match_results || []) as MatchResultEntry[]
+  const parsed = (upload.parsed_rows || []) as ParsedRow[]
+  const have = new Set(results.map(r => normSku(r.md_stock_number || r.sku)))
+  const missing = parsed.filter(p => p.sku && p.qty != null && !have.has(normSku(p.sku)))
+  log(`push-missing: ${missing.length} parsed counted rows absent from match_results`)
+  if (missing.length === 0) { log('Nothing to recover.'); return }
+
+  // Re-match each against MD (same matcher the match mode uses).
+  const appended: MatchResultEntry[] = []
+  for (const row of missing) {
+    const { entry } = await matchSingleRow(client, row)
+    appended.push(entry)
+    if (appended.length % 20 === 0) log(`  re-matched ${appended.length}/${missing.length}…`)
+  }
+  const matchedNew = appended.filter(e => e.status === 'matched' && e.md_stock_id != null)
+  log(`push-missing: ${matchedNew.length}/${missing.length} re-matched to MD stock`)
+
+  // Never re-add a stock that's already counted on the MD sheet.
+  const st = await fetchStocktakeWithSheet(client, Number(upload.mechanicdesk_stocktake_id))
+  const onSheet = new Set<number>()
+  for (const sheet of st.stocktake_sheets || []) {
+    if (!sheet || sheet.deleted) continue
+    for (const it of (sheet.stocktake_items || [])) {
+      const sid = Number(it.stock?.id ?? it.stock_id)
+      if (isFinite(sid) && sid > 0) onSheet.add(sid)
+    }
+  }
+  const toPush = matchedNew.filter(e => !onSheet.has(e.md_stock_id!))
+  log(`push-missing: ${toPush.length} to add (${matchedNew.length - toPush.length} already on the MD sheet)`)
+
+  results.push(...appended)
+  await patchUpload({
+    match_results: results,
+    matched_count: results.filter(r => r.status === 'matched').length,
+    matched_at: new Date().toISOString(),
+  })
+
+  if (toPush.length === 0) { log('All recovered rows were already on the sheet.'); return }
+  await runPush(client, results, {
+    relogin,
+    errorsOnly: true,
+    errorStockIds: new Set(toPush.map(e => e.md_stock_id!)),
+    priorPushed: Number(upload.pushed_count) || 0,
+    forcedSheet: { stocktakeId: Number(upload.mechanicdesk_stocktake_id), sheetId: Number(upload.mechanicdesk_sheet_id) },
+  })
 }
 
 // ── Push mode ─────────────────────────────────────────────────────────
@@ -957,6 +1026,8 @@ async function main(): Promise<void> {
       const results = (upload.match_results || []) as MatchResultEntry[]
       if (results.length === 0) throw new Error('No match_results to refresh')
       await runRefresh(client, results)
+    } else if (MODE === 'push-missing') {
+      await runPushMissing(client, upload, relogin)
     }
 
     log('Worker done')

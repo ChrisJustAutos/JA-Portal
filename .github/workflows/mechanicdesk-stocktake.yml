@@ -21,6 +21,7 @@ on:
       - stocktake-push
       - stocktake-recheck
       - stocktake-refresh
+      - stocktake-push-missing
   workflow_dispatch:
     inputs:
       upload_id:
@@ -35,6 +36,7 @@ on:
           - push
           - recheck
           - refresh
+          - push-missing
       errors_only:
         description: "Push mode: retry only previously-failed rows ('1')"
         required: false
