@@ -12,8 +12,11 @@ CREATE TABLE cash_denominations (
   active         boolean NOT NULL DEFAULT true
 );
 
--- Official Royal Australian Mint coin masses; notes ship UNCALIBRATED (null)
--- — weigh-counting notes only unlocks after a set-from-sample calibration.
+-- Coins: official Royal Australian Mint masses. Notes: ESTIMATES (2026-07-30
+-- — no official masses published anywhere; derived from NGB dimensions ×
+-- ~90 g/m² Guardian polymer substrate). Good enough to start; true them up
+-- with the page's per-denomination "⚖ cal" against a counted stack — beyond
+-- ~10 notes an estimate a few % off starts miscounting by 1.
 INSERT INTO cash_denominations (id, label, value_cents, unit_weight_g, sort, is_note) VALUES
   ('5c',      '5c',   5,     2.83,  1, false),
   ('10c',     '10c',  10,    5.65,  2, false),
@@ -21,11 +24,11 @@ INSERT INTO cash_denominations (id, label, value_cents, unit_weight_g, sort, is_
   ('50c',     '50c',  50,    15.55, 4, false),
   ('1d',      '$1',   100,   9.00,  5, false),
   ('2d',      '$2',   200,   6.60,  6, false),
-  ('note5',   '$5',   500,   NULL,  7, true),
-  ('note10',  '$10',  1000,  NULL,  8, true),
-  ('note20',  '$20',  2000,  NULL,  9, true),
-  ('note50',  '$50',  5000,  NULL, 10, true),
-  ('note100', '$100', 10000, NULL, 11, true);
+  ('note5',   '$5',   500,   0.76,  7, true),
+  ('note10',  '$10',  1000,  0.80,  8, true),
+  ('note20',  '$20',  2000,  0.84,  9, true),
+  ('note50',  '$50',  5000,  0.88, 10, true),
+  ('note100', '$100', 10000, 0.92, 11, true);
 
 CREATE TABLE cash_counts (
   id             uuid PRIMARY KEY DEFAULT gen_random_uuid(),
