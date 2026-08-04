@@ -18,7 +18,9 @@
 // against every candidate given (parsed supplier name, sender address …), so
 // the "time express" pattern also matches accounts@timeexpresscourier.com.
 
-const DEFAULT_PATTERNS = ['time express']
+// 'supagas': their monthly "INVOICE STATEMENT-…" PDF IS the EOM tax invoice
+// (confirmed Chris 2026-08-05 after the 31 JUL one was skipped_not_invoice).
+const DEFAULT_PATTERNS = ['time express', 'supagas']
 
 export function consolidatedInvoiceSupplier(...candidates: (string | null | undefined)[]): boolean {
   const raw = (process.env.AP_CONSOLIDATED_INVOICE_SUPPLIERS || '').trim()
