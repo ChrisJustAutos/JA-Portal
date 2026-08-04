@@ -42,7 +42,9 @@ interface Distributor {
   primary_contact_email: string | null
   primary_contact_phone: string | null
   is_active: boolean
+  checkout_enabled?: boolean
   active_user_count: number
+  last_sign_in_at: string | null
   tier_id: string | null
   tier_name: string | null
   created_at: string
@@ -168,13 +170,14 @@ export default function DistributorsListPage({ user }: Props) {
                     <th style={th(220)}>Primary contact</th>
                     <th style={th(110)}>Tier</th>
                     <th style={{...th(80),textAlign:'center'}}>Users</th>
+                    <th style={{...th(100),textAlign:'center'}}>Signed in</th>
                     <th style={{...th(80),textAlign:'center'}}>Active</th>
                     <th style={th(40)}></th>
                   </tr>
                 </thead>
                 <tbody>
                   {filtered.length === 0 && !loading && (
-                    <tr><td colSpan={7} style={{padding:24,textAlign:'center',color:T.text3,fontSize:13}}>
+                    <tr><td colSpan={9} style={{padding:24,textAlign:'center',color:T.text3,fontSize:13}}>
                       {items.length === 0 ? 'No distributors yet — click "Add distributor" to create your first one.' : 'No matches.'}
                     </td></tr>
                   )}
@@ -215,6 +218,23 @@ export default function DistributorsListPage({ user }: Props) {
                       </td>
                       <td data-label="Users" style={{...td(),textAlign:'center',color:d.active_user_count > 0 ? T.text : T.text3,fontVariantNumeric:'tabular-nums'}}>
                         {d.active_user_count}
+                      </td>
+                      <td data-label="Signed in" style={{...td(),textAlign:'center'}}>
+                        {d.last_sign_in_at ? (
+                          <span title={new Date(d.last_sign_in_at).toLocaleString('en-AU')} style={{
+                            display:'inline-block',padding:'2px 8px',borderRadius:8,fontSize:10,fontWeight:500,
+                            background:`${T.green}20`,color:T.green,
+                          }}>
+                            {new Date(d.last_sign_in_at).toLocaleDateString('en-AU',{day:'numeric',month:'short'})}
+                          </span>
+                        ) : (
+                          <span style={{
+                            display:'inline-block',padding:'2px 8px',borderRadius:8,fontSize:10,
+                            background:alpha(T.text3,'15'),color:T.text3,
+                          }}>
+                            Never
+                          </span>
+                        )}
                       </td>
                       <td data-label="Active" style={{...td(),textAlign:'center'}}>
                         <span style={{

@@ -43,6 +43,7 @@ async function handleList(res: NextApiResponse) {
       primary_contact_email,
       primary_contact_phone,
       is_active,
+      checkout_enabled,
       notes,
       created_at,
       updated_at,
@@ -52,18 +53,24 @@ async function handleList(res: NextApiResponse) {
 
   if (error) return res.status(500).json({ error: error.message })
 
-  // Tack on user counts in a single follow-up query
+  // Tack on user counts + sign-in activity in a single follow-up query.
+  // Preview users (seeded for the login-less demo link) don't count.
   const ids = (data || []).map((d: any) => d.id)
   let userCounts: Record<string, number> = {}
+  let lastSignIn: Record<string, string> = {}
   if (ids.length > 0) {
     const { data: users, error: uErr } = await c
       .from('b2b_distributor_users')
-      .select('distributor_id, is_active')
+      .select('distributor_id, is_active, email, last_login_at')
       .in('distributor_id', ids)
     if (!uErr && users) {
       for (const u of users) {
+        if (String(u.email || '').startsWith('preview+')) continue
         if (u.is_active) {
           userCounts[u.distributor_id] = (userCounts[u.distributor_id] || 0) + 1
+        }
+        if (u.last_login_at && (!lastSignIn[u.distributor_id] || u.last_login_at > lastSignIn[u.distributor_id])) {
+          lastSignIn[u.distributor_id] = u.last_login_at
         }
       }
     }
@@ -76,6 +83,7 @@ async function handleList(res: NextApiResponse) {
       tier: undefined,
       tier_name: tier?.name || null,
       active_user_count: userCounts[d.id] || 0,
+      last_sign_in_at: lastSignIn[d.id] || null,
     }
   })
 

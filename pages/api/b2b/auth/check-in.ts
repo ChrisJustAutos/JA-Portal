@@ -46,7 +46,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   // Find the matching distributor user
   const { data: distUser, error: lookupErr } = await c
     .from('b2b_distributor_users')
-    .select('id, distributor_id')
+    .select('id, distributor_id, email, full_name, last_login_at')
     .eq('auth_user_id', authUserId)
     .maybeSingle()
   if (lookupErr) return res.status(500).json({ error: lookupErr.message })
@@ -56,10 +56,31 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(200).json({ ok: true, linked: false })
   }
 
+  const firstLogin = !distUser.last_login_at
+
   await c
     .from('b2b_distributor_users')
     .update({ last_login_at: new Date().toISOString() })
     .eq('id', distUser.id)
+
+  // Bell-notify staff the first time each distributor user signs in (dedupe
+  // key makes this at-most-once per user even if check-in re-fires).
+  if (firstLogin) {
+    try {
+      const { data: dist } = await c.from('b2b_distributors')
+        .select('display_name').eq('id', distUser.distributor_id).maybeSingle()
+      const who = distUser.full_name ? `${distUser.full_name} (${distUser.email})` : distUser.email
+      const { notify } = await import('../../../../lib/notifications')
+      await notify({
+        module: 'b2b',
+        title: `First B2B sign-in — ${dist?.display_name || 'distributor'}`,
+        body: `${who} signed in to the portal for the first time.`,
+        href: `/admin/b2b/distributors/${distUser.distributor_id}`,
+        dedupeKey: `b2b-first-login:${distUser.id}`,
+        roles: ['admin', 'manager'],
+      })
+    } catch (e: any) { console.error('first-login notify failed:', e?.message || e) }
+  }
 
   return res.status(200).json({ ok: true, linked: true, distributor_id: distUser.distributor_id })
 }
