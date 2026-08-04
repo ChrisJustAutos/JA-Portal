@@ -687,15 +687,20 @@ const scanExtractionModel = () => (process.env.AP_SCAN_EXTRACTION_MODEL || 'clau
 // FILENAME often carries the machine-generated number verbatim
 // ("InvoicePI13080287_CustomerCopy.pdf"). When a filename token loosely
 // matches the extracted number but spells it differently, trust the file.
+// Invoice-number-looking tokens in an attachment filename, best first.
+// Stripped-of-word-prefix candidates FIRST ("InvoicePI13080287" → "PI13080287").
+function filenameNumberCandidates(attName: string | null | undefined): string[] {
+  if (!attName) return []
+  const tokens = String(attName).replace(/\.[a-z0-9]{2,5}$/i, '').split(/[^A-Za-z0-9]+/)
+  return tokens
+    .flatMap(t => [t.replace(/^(invoice|creditnote|credit|inv|cr)/i, ''), t])
+    .filter(t => t.length >= 6 && /\d{4,}/.test(t))
+}
+
 function correctInvoiceNumberFromFilename(extracted: ExtractedAPInvoice, attName: string | null | undefined): ExtractedAPInvoice {
   const current = extracted.invoiceNumber
   if (!current || !attName) return extracted
-  const tokens = String(attName).replace(/\.[a-z0-9]{2,5}$/i, '').split(/[^A-Za-z0-9]+/)
-  // Stripped-of-word-prefix candidates FIRST ("InvoicePI13080287" → "PI13080287").
-  const candidates = tokens
-    .flatMap(t => [t.replace(/^(invoice|creditnote|credit|inv|cr)/i, ''), t])
-    .filter(t => t.length >= 6 && /\d{4,}/.test(t))
-  const fix = candidates.find(t =>
+  const fix = filenameNumberCandidates(attName).find(t =>
     t.toUpperCase() !== String(current).toUpperCase() && sameInvoiceNumberLoose(t, current))
   if (!fix) return extracted
   console.log(`[ap-auto-entry] invoice number corrected from filename: "${current}" → "${fix}" (${attName})`)
@@ -804,6 +809,25 @@ async function processInvoice(
   }
 
   extracted = correctInvoiceNumberFromFilename(extracted, attName)
+
+  // A MISSING number is not a reason to vanish a real invoice (Jetstar
+  // $348.66 + Peninsula $23.6k silently skipped, Chris 2026-08-05). Fill it
+  // from the filename ("INV-2821229 …pdf" — Peninsula prints the number only
+  // there), else generate a reference — and in either case FLAG for human
+  // approval below rather than auto-posting a guessed number. Documents with
+  // no supplier or no total (random PDFs) still skip silently as before.
+  let numberFallback: 'filename' | 'generated' | null = null
+  if (!extracted.invoiceNumber && extracted.totals.totalIncGst != null && extracted.vendor?.name) {
+    const cand = filenameNumberCandidates(attName)[0]
+    if (cand) {
+      extracted = { ...extracted, invoiceNumber: cand.toUpperCase() }
+      numberFallback = 'filename'
+    } else {
+      const d = String(extracted.invoiceDate || msg.receivedDateTime || '').slice(2, 10).replace(/-/g, '')
+      extracted = { ...extracted, invoiceNumber: `NOINV${d || 'X'}` }
+      numberFallback = 'generated'
+    }
+  }
 
   const total = extracted.totals.totalIncGst
   if (!extracted.invoiceNumber || total == null) {
@@ -915,6 +939,9 @@ async function processInvoice(
   // Never auto-post a foreign-currency invoice at face value — the amount
   // would be wrong in AUD. Flag it for a human to enter at the converted rate.
   if (foreignCurrency) failReasons.push(`RED:foreign-currency:${extracted.currency}`)
+  // A number we filled in (filename / generated) is a guess — never ignorable,
+  // always a human Approve with the number visible on the card.
+  if (numberFallback) failReasons.push(`YELLOW:no-invoice-number-on-document — using ${extracted.invoiceNumber} (${numberFallback === 'filename' ? 'from the attachment filename' : 'generated from the date'}); check the PDF before approving`)
 
   // Cross-source duplicate guard. The same invoice can arrive twice — the
   // supplier's email into accounts@ AND a paper copy scanned to scans@. An
@@ -1385,7 +1412,14 @@ async function postApprovedRow(
   }
   const re = await reExtractRow(c, row)
   if (re.err !== undefined) return bail(re.err)
-  const { bytes, extracted } = re
+  let { extracted } = re
+  const { bytes } = re
+  // The document may genuinely carry no invoice number (Jetstar) — the flag
+  // card already showed the filename/generated fallback stored on the row;
+  // the approval is FOR that number, so adopt it rather than bailing.
+  if (!extracted.invoiceNumber && row.invoice_number) {
+    extracted = { ...extracted, invoiceNumber: String(row.invoice_number) }
+  }
   const total = extracted.totals.totalIncGst
   if (!extracted.invoiceNumber || total == null || !extracted.invoiceDate) {
     return bail(`⚠️ ${row.invoice_number || 'invoice'}: number/date/total unreadable even on the strong model — enter manually.`)
