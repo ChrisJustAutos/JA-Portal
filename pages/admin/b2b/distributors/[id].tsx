@@ -45,6 +45,7 @@ interface Distributor {
   primary_contact_email: string | null
   primary_contact_phone: string | null
   is_active: boolean
+  checkout_enabled: boolean
   notes: string | null
   freight_email: string | null
   invoice_email: string | null
@@ -179,6 +180,13 @@ export default function DistributorDetailPage({ user }: Props) {
                     <ToggleSwitch
                       on={dist.is_active}
                       onChange={v => patchDist({ is_active: v }).catch(e => toast(e?.message || String(e), 'error'))}
+                    />
+                  </div>
+                  <div style={{display:'flex',alignItems:'center',gap:10}} title="Off = browse-only: they can view the catalogue and fill a cart, but can't place orders">
+                    <span style={{fontSize:12,color:T.text3}}>Checkout</span>
+                    <ToggleSwitch
+                      on={dist.checkout_enabled !== false}
+                      onChange={v => patchDist({ checkout_enabled: v }).catch(e => toast(e?.message || String(e), 'error'))}
                     />
                   </div>
                   <button onClick={deleteDist} disabled={deleting} title="Delete distributor (blocked if it has orders)"

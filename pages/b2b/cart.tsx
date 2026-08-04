@@ -35,7 +35,7 @@ interface Props {
     email: string
     fullName: string | null
     role: 'owner' | 'member'
-    distributor: { id: string; displayName: string }
+    distributor: { id: string; displayName: string; checkoutEnabled?: boolean }
   }
 }
 
@@ -397,7 +397,9 @@ export default function B2BCartPage({ b2bUser }: Props) {
               onCheckout={startCheckout}
               checkoutBusy={checkoutBusy}
               blockedReason={
-                anyLineNeedsQuote
+                b2bUser.distributor.checkoutEnabled === false
+                  ? 'Ordering is not enabled for your account yet. Please contact Just Autos to place an order.'
+                  : anyLineNeedsQuote
                   ? 'One or more items need a manual quote for the quantity ordered — request a quote or reduce the qty to check out.'
                   : anyLineOverCap
                   ? 'One or more items exceed the available qty or per-order max — adjust your cart to continue.'

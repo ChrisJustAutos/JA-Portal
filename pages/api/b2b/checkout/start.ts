@@ -46,6 +46,12 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, use
     return res.status(405).json({ error: 'POST only' })
   }
 
+  // Admin kill-switch: browse-only distributors can fill a cart but never
+  // start a checkout. Authoritative block — the cart UI mirrors it.
+  if (!user.distributor.checkoutEnabled) {
+    return res.status(403).json({ error: 'Ordering is not enabled for your account yet. Please contact Just Autos to place an order.' })
+  }
+
   // Parse PO from request body. Optional, max 20 chars (MYOB limit).
   // Also parse freight selection — either a static-zone rate id or a
   // live MachShip route. The two are mutually exclusive; freight_rate_id

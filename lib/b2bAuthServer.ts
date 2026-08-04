@@ -39,6 +39,9 @@ export interface B2BDistributor {
   myobLinkedCustomerUids: string[]
   distGroupId: number | null
   isActive: boolean
+  // Admin-set kill-switch: false = browse-only (catalogue/cart usable,
+  // order placement blocked in /api/b2b/checkout/start + cart UI).
+  checkoutEnabled: boolean
 }
 
 export interface B2BUser {
@@ -89,7 +92,7 @@ export async function getPreviewB2BUser(req: NextApiRequest | { headers: Record<
   const sb = getServiceClient()
   const { data: d } = await sb
     .from('b2b_distributors')
-    .select('id, display_name, myob_primary_customer_uid, myob_primary_customer_display_id, myob_linked_customer_uids, dist_group_id, is_active')
+    .select('id, display_name, myob_primary_customer_uid, myob_primary_customer_display_id, myob_linked_customer_uids, dist_group_id, is_active, checkout_enabled')
     .eq('id', v.orderId).maybeSingle()
   if (!d) return null
   // Preview user id (seeded at link generation); fall back to synthetic if
@@ -104,6 +107,7 @@ export async function getPreviewB2BUser(req: NextApiRequest | { headers: Record<
       myobPrimaryCustomerDisplayId: d.myob_primary_customer_display_id,
       myobLinkedCustomerUids: d.myob_linked_customer_uids || [],
       distGroupId: d.dist_group_id, isActive: d.is_active,
+      checkoutEnabled: d.checkout_enabled !== false,
     },
   }
 }
@@ -201,7 +205,7 @@ export async function getCurrentB2BUserFromToken(token: string): Promise<B2BUser
       distributor:b2b_distributors!b2b_distributor_users_distributor_id_fkey (
         id, display_name,
         myob_primary_customer_uid, myob_primary_customer_display_id,
-        myob_linked_customer_uids, dist_group_id, is_active
+        myob_linked_customer_uids, dist_group_id, is_active, checkout_enabled
       )
     `)
     .eq('auth_user_id', authData.user.id)
@@ -234,6 +238,7 @@ export async function getCurrentB2BUserFromToken(token: string): Promise<B2BUser
       myobLinkedCustomerUids: distRaw.myob_linked_customer_uids || [],
       distGroupId: distRaw.dist_group_id,
       isActive: distRaw.is_active,
+      checkoutEnabled: distRaw.checkout_enabled !== false,
     },
   }
 }

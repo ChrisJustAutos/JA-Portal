@@ -30,6 +30,7 @@ const EDITABLE = [
   'primary_contact_email',
   'primary_contact_phone',
   'is_active',
+  'checkout_enabled',
   'notes',
   'tier_id',
   // Shipping address
@@ -187,6 +188,9 @@ async function handlePatch(id: string, req: NextApiRequest, res: NextApiResponse
   }
   if ('is_active' in update && typeof update.is_active !== 'boolean') {
     return res.status(400).json({ error: 'is_active must be boolean' })
+  }
+  if ('checkout_enabled' in update && typeof update.checkout_enabled !== 'boolean') {
+    return res.status(400).json({ error: 'checkout_enabled must be boolean' })
   }
   if ('tier_id' in update && update.tier_id !== null && typeof update.tier_id !== 'string') {
     return res.status(400).json({ error: 'tier_id must be uuid string or null' })
