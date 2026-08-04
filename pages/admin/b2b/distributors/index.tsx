@@ -45,6 +45,7 @@ interface Distributor {
   checkout_enabled?: boolean
   active_user_count: number
   last_sign_in_at: string | null
+  pending_invites: number
   tier_id: string | null
   tier_name: string | null
   created_at: string
@@ -228,12 +229,7 @@ export default function DistributorsListPage({ user }: Props) {
                             {new Date(d.last_sign_in_at).toLocaleDateString('en-AU',{day:'numeric',month:'short'})}
                           </span>
                         ) : (
-                          <span style={{
-                            display:'inline-block',padding:'2px 8px',borderRadius:8,fontSize:10,
-                            background:alpha(T.text3,'15'),color:T.text3,
-                          }}>
-                            Never
-                          </span>
+                          <ResendCell dist={d}/>
                         )}
                       </td>
                       <td data-label="Active" style={{...td(),textAlign:'center'}}>
@@ -556,6 +552,56 @@ const input: React.CSSProperties = {
 }
 
 // MYOB uses "*None" as the DisplayID for a card with no Card ID — show "—".
+// "Never signed in" cell with a one-click bulk resend of fresh invite links
+// (invite links are single-use and get eaten by corporate mail scanners).
+function ResendCell({ dist }: { dist: Distributor }) {
+  const [state, setState] = useState<'idle' | 'sending' | 'sent' | 'error'>('idle')
+  const [msg, setMsg] = useState<string | null>(null)
+  async function resend(e: React.MouseEvent) {
+    e.stopPropagation()
+    if (state === 'sending') return
+    setState('sending')
+    try {
+      const r = await fetch(`/api/b2b/admin/distributors/${dist.id}`, {
+        method: 'POST', credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'resend_invites' }),
+      })
+      const j = await r.json()
+      if (!r.ok) throw new Error(j?.error || `HTTP ${r.status}`)
+      setState('sent')
+      setMsg(`Sent to ${(j.sent || []).join(', ')}`)
+    } catch (e: any) {
+      setState('error')
+      setMsg(e?.message || String(e))
+      setTimeout(() => { setState('idle'); setMsg(null) }, 6000)
+    }
+  }
+  return (
+    <div style={{display:'flex',flexDirection:'column',alignItems:'center',gap:3}}>
+      <span style={{
+        display:'inline-block',padding:'2px 8px',borderRadius:8,fontSize:10,
+        background:alpha(T.text3,'15'),color:T.text3,
+      }}>
+        Never
+      </span>
+      {dist.pending_invites > 0 && state !== 'sent' && (
+        <button onClick={resend} disabled={state === 'sending'} title={msg || 'Email a fresh invite link to everyone on this account who hasn\'t signed in yet'}
+          style={{
+            padding:'2px 8px',borderRadius:6,fontSize:10,fontWeight:500,cursor:'pointer',fontFamily:'inherit',
+            border:`1px solid ${state === 'error' ? T.red : T.border2}`,
+            background:'transparent',color: state === 'error' ? T.red : T.blue,
+          }}>
+          {state === 'sending' ? 'Sending…' : state === 'error' ? 'Failed — retry' : 'Resend invite'}
+        </button>
+      )}
+      {state === 'sent' && (
+        <span title={msg || undefined} style={{fontSize:10,color:T.green,fontWeight:600}}>✓ Sent</span>
+      )}
+    </div>
+  )
+}
+
 function displayId(v: string | null): string {
   const s = String(v ?? '').trim()
   return (s === '' || s.toLowerCase() === '*none') ? '—' : s

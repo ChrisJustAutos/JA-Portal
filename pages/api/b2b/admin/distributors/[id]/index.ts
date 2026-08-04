@@ -58,9 +58,39 @@ export default withAuth('edit:b2b_distributors', async (req: NextApiRequest, res
   if (req.method === 'GET') return handleGet(id, res)
   if (req.method === 'PATCH') return handlePatch(id, req, res)
   if (req.method === 'DELETE') return handleDelete(id, res)
-  res.setHeader('Allow', 'GET, PATCH, DELETE')
-  return res.status(405).json({ error: 'GET, PATCH or DELETE only' })
+  if (req.method === 'POST' && (req.body || {}).action === 'resend_invites') {
+    return handleResendInvites(id, res)
+  }
+  res.setHeader('Allow', 'GET, PATCH, DELETE, POST')
+  return res.status(405).json({ error: 'GET, PATCH, DELETE, or POST {action:"resend_invites"} only' })
 })
+
+// Re-send fresh invite links to every active user on this distributor who
+// has never signed in (used from the distributors list "Resend" button).
+async function handleResendInvites(id: string, res: NextApiResponse) {
+  const c = sb()
+  const { data: pending, error } = await c
+    .from('b2b_distributor_users')
+    .select('id, email')
+    .eq('distributor_id', id)
+    .eq('is_active', true)
+    .is('last_login_at', null)
+    .not('email', 'like', 'preview+%@justautos.app')
+    .not('auth_user_id', 'is', null)
+  if (error) return res.status(500).json({ error: error.message })
+  if (!pending || pending.length === 0) {
+    return res.status(400).json({ error: 'No pending invites on this distributor — everyone has either signed in already or was never invited.' })
+  }
+  const { resendInviteEmail } = await import('../../../../../../lib/b2b-invites')
+  const results: { email: string; ok: boolean; error?: string }[] = []
+  for (const p of pending) {
+    const r = await resendInviteEmail(c, p.id)
+    results.push({ email: p.email, ok: r.ok, error: r.error })
+  }
+  const sent = results.filter(r => r.ok).map(r => r.email)
+  const failed = results.filter(r => !r.ok)
+  return res.status(failed.length && !sent.length ? 502 : 200).json({ ok: failed.length === 0, sent, failed })
+}
 
 async function handleDelete(id: string, res: NextApiResponse) {
   const c = sb()

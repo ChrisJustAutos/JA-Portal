@@ -44,59 +44,20 @@ export default withAuth('edit:b2b_distributors', async (req: NextApiRequest, res
 
 async function handleResendInvite(distId: string, userId: string, res: NextApiResponse) {
   const c = sb()
+  // Scope check: the user must belong to this distributor.
   const { data: u, error: fetchErr } = await c
     .from('b2b_distributor_users')
-    .select('id, auth_user_id, email, full_name, last_login_at, distributor:b2b_distributors!b2b_distributor_users_distributor_id_fkey ( display_name )')
+    .select('id')
     .eq('id', userId)
     .eq('distributor_id', distId)
     .maybeSingle()
   if (fetchErr) return res.status(500).json({ error: fetchErr.message })
   if (!u) return res.status(404).json({ error: 'User not found on this distributor' })
-  if (u.last_login_at) {
-    return res.status(400).json({ error: 'They have already signed in — no invite needed. If they forgot their password, "Forgot password" on the login page works.' })
-  }
 
-  const baseUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://justautos.app'
-  const redirectTo = `${baseUrl}/reset-password?welcome=1&next=${encodeURIComponent('/b2b')}`
-
-  // Mint a fresh single-use link. 'recovery' works for existing (invited)
-  // auth users; fall back to 'invite' for any edge case.
-  let link: string | null = null
-  let linkErr: string | null = null
-  for (const type of ['recovery', 'invite'] as const) {
-    try {
-      const { data, error } = await c.auth.admin.generateLink({ type, email: u.email, options: { redirectTo } })
-      if (!error && data?.properties?.action_link) { link = data.properties.action_link; break }
-      linkErr = error?.message || linkErr
-    } catch (e: any) { linkErr = e?.message || String(e) }
-  }
-  if (!link) return res.status(502).json({ error: 'Could not generate a fresh invite link', detail: linkErr })
-
-  const dist: any = Array.isArray(u.distributor) ? u.distributor[0] : u.distributor
-  const distName = dist?.display_name || 'your distributor'
-  const firstName = (u.full_name || '').trim().split(/\s+/)[0] || null
-  const [{ sendMail }, { buttonHtml }] = await Promise.all([import('../../../../../../../lib/email'), import('../../../../../../../lib/email-templates')])
-  const { getFromMailbox } = await import('../../../../../../../lib/b2b-settings')
-  const html = `
-    <div style="font-family:-apple-system,Segoe UI,Arial,sans-serif;max-width:560px;margin:0 auto;color:#1c2733">
-      <h2 style="font-size:20px;margin:18px 0 6px">Your fresh portal invite</h2>
-      <p>Hi${firstName ? ' ' + firstName : ''},</p>
-      <p>Here's a new sign-up link for the <b>Just Autos B2B Portal</b> (${distName}) — the previous one had already been used, which can happen when email security software checks links automatically.</p>
-      <p style="margin:18px 0">${buttonHtml('Set your password & sign in', link)}</p>
-      <p style="color:#5c6b7a;font-size:13px">This link is single-use. If the button doesn't work, it may have been consumed by your mail scanner again — reply to this email and we'll sort it another way.</p>
-    </div>`
-  try {
-    await sendMail(await getFromMailbox(), {
-      to: [u.email],
-      subject: 'Your Just Autos B2B Portal invite — fresh link',
-      html,
-    })
-  } catch (e: any) {
-    return res.status(502).json({ error: 'Link generated but the email failed to send', detail: e?.message || String(e) })
-  }
-
-  await c.from('b2b_distributor_users').update({ invited_at: new Date().toISOString() }).eq('id', u.id)
-  return res.status(200).json({ ok: true, sent_to: u.email })
+  const { resendInviteEmail } = await import('../../../../../../../lib/b2b-invites')
+  const result = await resendInviteEmail(c, userId)
+  if (!result.ok) return res.status(400).json({ error: result.error })
+  return res.status(200).json({ ok: true, sent_to: result.sent_to })
 }
 
 async function handlePatch(distId: string, userId: string, req: NextApiRequest, res: NextApiResponse) {

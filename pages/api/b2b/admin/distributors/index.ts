@@ -58,10 +58,11 @@ async function handleList(res: NextApiResponse) {
   const ids = (data || []).map((d: any) => d.id)
   let userCounts: Record<string, number> = {}
   let lastSignIn: Record<string, string> = {}
+  let pendingInvites: Record<string, number> = {}
   if (ids.length > 0) {
     const { data: users, error: uErr } = await c
       .from('b2b_distributor_users')
-      .select('distributor_id, is_active, email, last_login_at')
+      .select('distributor_id, is_active, email, last_login_at, auth_user_id')
       .in('distributor_id', ids)
     if (!uErr && users) {
       for (const u of users) {
@@ -71,6 +72,9 @@ async function handleList(res: NextApiResponse) {
         }
         if (u.last_login_at && (!lastSignIn[u.distributor_id] || u.last_login_at > lastSignIn[u.distributor_id])) {
           lastSignIn[u.distributor_id] = u.last_login_at
+        }
+        if (u.is_active && u.auth_user_id && !u.last_login_at) {
+          pendingInvites[u.distributor_id] = (pendingInvites[u.distributor_id] || 0) + 1
         }
       }
     }
@@ -84,6 +88,7 @@ async function handleList(res: NextApiResponse) {
       tier_name: tier?.name || null,
       active_user_count: userCounts[d.id] || 0,
       last_sign_in_at: lastSignIn[d.id] || null,
+      pending_invites: pendingInvites[d.id] || 0,
     }
   })
 
