@@ -43,44 +43,44 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
   const authUserId = authData.user.id
 
-  // Find the matching distributor user
-  const { data: distUser, error: lookupErr } = await c
+  // Find the matching distributor user rows (multi-site people have several).
+  const { data: distUsers, error: lookupErr } = await c
     .from('b2b_distributor_users')
     .select('id, distributor_id, email, full_name, last_login_at')
     .eq('auth_user_id', authUserId)
-    .maybeSingle()
+    .order('created_at', { ascending: true })
   if (lookupErr) return res.status(500).json({ error: lookupErr.message })
-  if (!distUser) {
+  if (!distUsers || distUsers.length === 0) {
     // Auth user exists but isn't linked to a distributor — likely a staff user
     // who shouldn't have ended up here. Don't error; just return ok.
     return res.status(200).json({ ok: true, linked: false })
   }
 
-  const firstLogin = !distUser.last_login_at
+  const firstLogins = distUsers.filter(u => !u.last_login_at)
 
   await c
     .from('b2b_distributor_users')
     .update({ last_login_at: new Date().toISOString() })
-    .eq('id', distUser.id)
+    .eq('auth_user_id', authUserId)
 
   // Bell-notify staff the first time each distributor user signs in (dedupe
-  // key makes this at-most-once per user even if check-in re-fires).
-  if (firstLogin) {
+  // key makes this at-most-once per membership even if check-in re-fires).
+  for (const du of firstLogins) {
     try {
       const { data: dist } = await c.from('b2b_distributors')
-        .select('display_name').eq('id', distUser.distributor_id).maybeSingle()
-      const who = distUser.full_name ? `${distUser.full_name} (${distUser.email})` : distUser.email
+        .select('display_name').eq('id', du.distributor_id).maybeSingle()
+      const who = du.full_name ? `${du.full_name} (${du.email})` : du.email
       const { notify } = await import('../../../../lib/notifications')
       await notify({
         module: 'b2b',
         title: `First B2B sign-in — ${dist?.display_name || 'distributor'}`,
         body: `${who} signed in to the portal for the first time.`,
-        href: `/admin/b2b/distributors/${distUser.distributor_id}`,
-        dedupeKey: `b2b-first-login:${distUser.id}`,
+        href: `/admin/b2b/distributors/${du.distributor_id}`,
+        dedupeKey: `b2b-first-login:${du.id}`,
         roles: ['admin', 'manager'],
       })
     } catch (e: any) { console.error('first-login notify failed:', e?.message || e) }
   }
 
-  return res.status(200).json({ ok: true, linked: true, distributor_id: distUser.distributor_id })
+  return res.status(200).json({ ok: true, linked: true, distributor_id: distUsers[0].distributor_id })
 }

@@ -22,7 +22,7 @@ export const B2B_ACCESS_COOKIE  = 'ja-b2b-access-token'
 export const B2B_REFRESH_COOKIE = 'ja-b2b-refresh-token'
 
 let _serviceClient: SupabaseClient | null = null
-function getServiceClient(): SupabaseClient {
+export function getServiceClient(): SupabaseClient {
   if (_serviceClient) return _serviceClient
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY
@@ -44,6 +44,15 @@ export interface B2BDistributor {
   checkoutEnabled: boolean
 }
 
+// One person can belong to several distributor accounts (multi-site owners,
+// e.g. Hunter Mechanical). memberships lists them all; distributor is the
+// currently-selected one (via the ja-b2b-dist cookie, else the oldest row).
+export interface B2BMembership {
+  distributorId: string
+  displayName: string
+  role: 'owner' | 'member'
+}
+
 export interface B2BUser {
   id: string                  // b2b_distributor_users.id
   authUserId: string          // auth.users.id
@@ -52,6 +61,7 @@ export interface B2BUser {
   role: 'owner' | 'member'
   isActive: boolean
   distributor: B2BDistributor
+  memberships?: B2BMembership[]
   // Read-only preview session (admin "Preview portal" / Scribe link). When
   // true, withB2BAuth blocks every non-GET request — the portal can be
   // browsed and screenshotted but nothing can be created or changed.
@@ -59,6 +69,10 @@ export interface B2BUser {
 }
 
 export const B2B_PREVIEW_COOKIE = 'ja-b2b-preview'
+
+// Selected-distributor cookie for multi-account users (set by
+// /api/b2b/session/switch; ignored unless it matches a live membership).
+export const B2B_DIST_COOKIE = 'ja-b2b-dist'
 
 // Marker email for the auth-less "Portal Preview" user seeded per distributor
 // so a demo session can own a real cart (b2b_carts FKs b2b_distributor_users).
@@ -187,21 +201,23 @@ export async function getCurrentB2BUser(req: NextApiRequest | { headers: Record<
     // No real session — fall back to a read-only preview session if present.
     return getPreviewB2BUser(req)
   }
-  const user = await getCurrentB2BUserFromToken(token)
+  const preferred = parseCookies((req.headers as any).cookie)[B2B_DIST_COOKIE] || null
+  const user = await getCurrentB2BUserFromToken(token, preferred)
   if (!user) return null
   if (!(await b2bMfaSatisfied(req, token, user.authUserId))) return null
   return user
 }
 
-export async function getCurrentB2BUserFromToken(token: string): Promise<B2BUser | null> {
+export async function getCurrentB2BUserFromToken(token: string, preferredDistributorId?: string | null): Promise<B2BUser | null> {
   const sb = getServiceClient()
   const { data: authData, error: authErr } = await sb.auth.getUser(token)
   if (authErr || !authData?.user) return null
 
-  const { data: row, error: rowErr } = await sb
+  // One row per distributor membership — multi-site owners have several.
+  const { data: rows, error: rowErr } = await sb
     .from('b2b_distributor_users')
     .select(`
-      id, auth_user_id, email, full_name, role, is_active,
+      id, auth_user_id, email, full_name, role, is_active, created_at,
       distributor:b2b_distributors!b2b_distributor_users_distributor_id_fkey (
         id, display_name,
         myob_primary_customer_uid, myob_primary_customer_display_id,
@@ -209,19 +225,22 @@ export async function getCurrentB2BUserFromToken(token: string): Promise<B2BUser
       )
     `)
     .eq('auth_user_id', authData.user.id)
-    .maybeSingle()
+    .order('created_at', { ascending: true })
 
   if (rowErr) {
     console.error('getCurrentB2BUser lookup error:', rowErr)
     return null
   }
-  if (!row) return null
-  if (row.is_active === false) return null
 
-  // Supabase types this as an array because of the implicit-many relationship
-  // direction; in practice the FK guarantees at most one. Normalise.
-  const distRaw: any = Array.isArray(row.distributor) ? row.distributor[0] : row.distributor
-  if (!distRaw || distRaw.is_active === false) return null
+  // Live memberships only: active user row + active distributor.
+  const live = (rows || [])
+    .map((r: any) => ({ row: r, dist: Array.isArray(r.distributor) ? r.distributor[0] : r.distributor }))
+    .filter(({ row, dist }) => row.is_active !== false && dist && dist.is_active !== false)
+  if (live.length === 0) return null
+
+  const picked = live.find(({ dist }) => preferredDistributorId && dist.id === preferredDistributorId) || live[0]
+  const row = picked.row
+  const distRaw = picked.dist
 
   return {
     id: row.id,
@@ -240,6 +259,11 @@ export async function getCurrentB2BUserFromToken(token: string): Promise<B2BUser
       isActive: distRaw.is_active,
       checkoutEnabled: distRaw.checkout_enabled !== false,
     },
+    memberships: live.map(({ row: r, dist: d }) => ({
+      distributorId: d.id,
+      displayName: d.display_name,
+      role: r.role as 'owner' | 'member',
+    })),
   }
 }
 
@@ -259,6 +283,7 @@ export async function requireB2BPageAuth(context: GetServerSidePropsContext) {
         fullName: b2bUser.fullName,
         role: b2bUser.role,
         distributor: b2bUser.distributor,
+        memberships: b2bUser.memberships || null,
         preview: b2bUser.preview || false,
       },
     },

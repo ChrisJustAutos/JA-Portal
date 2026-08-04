@@ -41,6 +41,7 @@ interface Props {
       id: string
       displayName: string
     }
+    memberships?: { distributorId: string; displayName: string; role: string }[] | null
   }
   active?: ActiveNav
   children: React.ReactNode
@@ -71,6 +72,37 @@ export default function B2BLayout({ user, active = null, children, cartCount }: 
     } catch {}
     router.replace('/b2b/login')
   }
+
+  // Multi-site people (one login, several distributor accounts) get a
+  // switcher where the distributor name normally sits.
+  const memberships = user.memberships || []
+  const multiAccount = memberships.length > 1
+  async function switchAccount(distributorId: string) {
+    if (distributorId === user.distributor.id) return
+    try {
+      const r = await fetch('/api/b2b/session/switch', {
+        method: 'POST', credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ distributor_id: distributorId }),
+      })
+      if (r.ok) window.location.href = '/b2b/catalogue'
+    } catch {}
+  }
+  const switcher = (
+    <select
+      value={user.distributor.id}
+      onChange={e => switchAccount(e.target.value)}
+      title="Switch distributor account"
+      style={{
+        background:T.bg3, color:T.text, border:`1px solid ${T.border2}`,
+        borderRadius:7, padding:'3px 6px', fontSize:12, fontWeight:500,
+        fontFamily:'inherit', cursor:'pointer', maxWidth:200,
+      }}>
+      {memberships.map(m => (
+        <option key={m.distributorId} value={m.distributorId}>{m.displayName}</option>
+      ))}
+    </select>
+  )
 
   return (
     <div style={{
@@ -135,9 +167,11 @@ export default function B2BLayout({ user, active = null, children, cartCount }: 
         }}>
           {!isMobile && (
             <div style={{textAlign:'right', minWidth:0}}>
-              <div style={{fontSize:13, color:T.text, fontWeight:500, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap'}}>
-                {user.distributor.displayName}
-              </div>
+              {multiAccount ? switcher : (
+                <div style={{fontSize:13, color:T.text, fontWeight:500, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap'}}>
+                  {user.distributor.displayName}
+                </div>
+              )}
               <div style={{fontSize:10, color:T.text3, marginTop:1}}>
                 {user.fullName || user.email}
                 {user.role === 'owner' && <span style={{marginLeft:6, color:T.blue}}>· owner</span>}
@@ -147,13 +181,15 @@ export default function B2BLayout({ user, active = null, children, cartCount }: 
           {isMobile && (
             // Mobile: just show distributor name (compact). No personal email
             // — keeps the bar uncluttered. Sign-out is still one tap away.
-            <div style={{
-              fontSize:12, color:T.text2, fontWeight:500,
-              overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap',
-              maxWidth:180,
-            }}>
-              {user.distributor.displayName}
-            </div>
+            multiAccount ? switcher : (
+              <div style={{
+                fontSize:12, color:T.text2, fontWeight:500,
+                overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap',
+                maxWidth:180,
+              }}>
+                {user.distributor.displayName}
+              </div>
+            )
           )}
           <B2BNotificationBell isMobile={isMobile}/>
           <button onClick={signOut} title="Sign out"

@@ -60,16 +60,40 @@ async function handleInvite(user: B2BUser, req: NextApiRequest, res: NextApiResp
 
   const c = sb()
 
-  const { data: existing } = await c
+  // One person can belong to several distributor accounts. Same-account
+  // duplicates are rejected; an existing account elsewhere gets LINKED as a
+  // new membership (no invite email — they sign in with their existing
+  // password and switch accounts in the portal header).
+  const { data: existingRows } = await c
     .from('b2b_distributor_users')
-    .select('id, distributor_id, is_active')
+    .select('id, distributor_id, auth_user_id, full_name, is_active')
     .eq('email', email)
-    .maybeSingle()
-  if (existing) {
-    return res.status(409).json({
-      error: existing.distributor_id === user.distributor.id
-        ? 'This email is already a user on your distributor.'
-        : 'This email is already linked to a different distributor — contact your account manager.',
+  const rowsHere = (existingRows || []).filter(r => r.distributor_id === user.distributor.id)
+  if (rowsHere.length > 0) {
+    return res.status(409).json({ error: 'This email is already a user on your distributor.' })
+  }
+  const linkable = (existingRows || []).find(r => r.auth_user_id)
+  if (linkable) {
+    const { data: distUser, error: linkErr } = await c
+      .from('b2b_distributor_users')
+      .insert({
+        distributor_id: user.distributor.id,
+        auth_user_id: linkable.auth_user_id,
+        email,
+        full_name: full_name || linkable.full_name,
+        role,
+        invited_at: new Date().toISOString(),
+        invited_by: user.authUserId,
+        is_active: true,
+      })
+      .select()
+      .single()
+    if (linkErr) return res.status(500).json({ error: 'Failed to add user', detail: linkErr.message })
+    return res.status(201).json({
+      user: distUser,
+      linked_existing: true,
+      invite_sent_to: null,
+      message: 'They already had a portal login, so no invite email was sent — they sign in as usual and pick this account from the switcher in the header.',
     })
   }
 

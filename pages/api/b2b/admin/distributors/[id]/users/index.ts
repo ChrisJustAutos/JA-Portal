@@ -57,17 +57,38 @@ export default withAuth('edit:b2b_distributors', async (req: NextApiRequest, res
   if (distErr) return res.status(500).json({ error: distErr.message })
   if (!dist) return res.status(404).json({ error: 'Distributor not found' })
 
-  // 2. Check email isn't already in b2b_distributor_users (anywhere)
-  const { data: existing } = await c
+  // 2. Same-distributor duplicate → reject. An existing account on ANOTHER
+  //    distributor gets LINKED as an extra membership (multi-site owners,
+  //    e.g. Hunter Mechanical) — no invite email needed.
+  const { data: existingRows } = await c
     .from('b2b_distributor_users')
-    .select('id, distributor_id, is_active')
+    .select('id, distributor_id, auth_user_id, full_name, is_active')
     .eq('email', email)  // already lowercase
-    .maybeSingle()
-  if (existing) {
-    return res.status(409).json({
-      error: existing.distributor_id === distributorId
-        ? 'This email is already a user on this distributor.'
-        : 'This email is already linked to a different distributor.',
+  if ((existingRows || []).some(r => r.distributor_id === distributorId)) {
+    return res.status(409).json({ error: 'This email is already a user on this distributor.' })
+  }
+  const linkable = (existingRows || []).find(r => r.auth_user_id)
+  if (linkable) {
+    const { data: distUser, error: linkErr } = await c
+      .from('b2b_distributor_users')
+      .insert({
+        distributor_id: distributorId,
+        auth_user_id: linkable.auth_user_id,
+        email,
+        full_name: full_name || linkable.full_name,
+        role,
+        invited_at: new Date().toISOString(),
+        invited_by: user.id,
+        is_active: true,
+      })
+      .select()
+      .single()
+    if (linkErr) return res.status(500).json({ error: 'Failed to link user', detail: linkErr.message })
+    return res.status(201).json({
+      user: distUser,
+      linked_existing: true,
+      invite_sent_to: null,
+      message: 'Existing portal login linked to this distributor — no invite email sent; they pick the account from the portal header switcher.',
     })
   }
 
