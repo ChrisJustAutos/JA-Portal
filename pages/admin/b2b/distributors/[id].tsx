@@ -728,6 +728,29 @@ function UserRow({ distId, user, onChange }: { distId: string; user: Distributor
     }
   }
 
+  const [resent, setResent] = useState(false)
+  async function resendInvite() {
+    setBusy(true)
+    setError(null)
+    try {
+      const r = await fetch(`/api/b2b/admin/distributors/${distId}/users/${user.id}`, {
+        method: 'POST', credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'resend_invite' }),
+      })
+      const j = await r.json()
+      if (!r.ok) throw new Error(j?.error || `HTTP ${r.status}`)
+      setResent(true)
+      setTimeout(() => setResent(false), 5000)
+      onChange()
+    } catch (e: any) {
+      setError(e?.message || String(e))
+      setTimeout(() => setError(null), 6000)
+    } finally {
+      setBusy(false)
+    }
+  }
+
   async function remove() {
     if (!(await confirmDialog({ title: `Remove ${user.email}?`, message: "They'll lose access immediately.", danger: true }))) return
     setBusy(true)
@@ -794,6 +817,13 @@ function UserRow({ distId, user, onChange }: { distId: string; user: Distributor
         </span>
 
         {/* Actions menu */}
+        {status === 'invited' && (
+          <button onClick={resendInvite} disabled={busy}
+            title="Email a fresh single-use sign-up link (the original gets consumed by mail scanners sometimes)"
+            style={{padding:'4px 10px',borderRadius:5,border:`1px solid ${resent ? T.green : T.border2}`,background:'transparent',color:resent ? T.green : T.blue,fontSize:10,cursor:'pointer',fontFamily:'inherit'}}>
+            {resent ? '✓ Sent' : busy ? 'Sending…' : 'Resend invite'}
+          </button>
+        )}
         <button onClick={() => patch({ is_active: !user.is_active })} disabled={busy}
           title={user.is_active ? 'Deactivate' : 'Reactivate'}
           style={{padding:'4px 10px',borderRadius:5,border:`1px solid ${T.border2}`,background:'transparent',color:T.text2,fontSize:10,cursor:'pointer',fontFamily:'inherit'}}>
