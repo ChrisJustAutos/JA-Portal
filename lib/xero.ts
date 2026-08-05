@@ -45,9 +45,18 @@ export const XERO_API_BASE = 'https://api.xero.com/api.xro/2.0'
 
 // Everything the portal will eventually need. offline_access is what makes
 // refresh tokens exist at all.
+// GRANULAR scopes only — apps created after 2 Mar 2026 (ours) get
+// invalid_scope for the old broad accounting.transactions /
+// accounting.reports.read. Xero bills/credit-notes live under
+// accounting.invoices (bills = ACCPAY invoices).
 export const XERO_SCOPES = [
-  'offline_access', 'accounting.transactions', 'accounting.contacts',
-  'accounting.settings', 'accounting.attachments', 'accounting.reports.read',
+  'offline_access',
+  'accounting.invoices',          // sales invoices + supplier bills + credit notes
+  'accounting.payments',          // payments incl. batch/over/prepayments
+  'accounting.banktransactions',  // bank txns + transfers (Stripe recs, bank digest)
+  'accounting.contacts',          // customers + suppliers (one Contacts model)
+  'accounting.settings',          // chart of accounts, tax rates, org, items
+  'accounting.attachments',       // invoice/bill PDF attachments
 ].join(' ')
 
 async function creds(): Promise<{ id: string; secret: string; redirect: string }> {
