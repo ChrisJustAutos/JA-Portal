@@ -21,6 +21,8 @@
 // ap_auto_entry_log (migration 145) so a run never re-posts / re-flags an email.
 
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
+import { supplierNumberRule, applySupplierNumberRule, huntPoNumber } from './ap-number-rules'
+import { extractPdfText } from './ap-pdf-text'
 import {
   listMessagesWithAttachments,
   listAttachmentMeta,
@@ -725,7 +727,10 @@ async function processInvoice(
   // escalate again.
   inv: { bytes: Buffer; b64: string; kind: 'pdf' | SupportedImageMediaType; attId: string; attName: string; isScan?: boolean; preExtracted?: ExtractedAPInvoice | 'failed'; escalated?: boolean },
 ): Promise<AutoEntryItem> {
-  const { mailbox, companyFile, msg, dryRun } = ctx
+  const { mailbox, msg, dryRun } = ctx
+  // let: the billed-to entity check below can REROUTE the posting target
+  // (a Just Autos Wholesale invoice in the VPS inbox posts to JAWS).
+  let companyFile = ctx.companyFile
   const { bytes, b64, kind, attId, attName } = inv
   const base = { messageId: msg.id, attachmentId: attId, attachmentName: attName }
 
@@ -810,6 +815,51 @@ async function processInvoice(
   }
 
   extracted = correctInvoiceNumberFromFilename(extracted, attName)
+
+  // Supplier number-format rules (Ken Mills = PI + 8 digits, Chris
+  // 2026-08-06): repair OCR confusables deterministically, corroborate
+  // against the PDF's own TEXT LAYER (which also recovers a missed PO
+  // number), and mark non-conforming reads suspect → flagged, never
+  // trusted. Scans without a text layer still get the repair pass.
+  // The PDF's own text layer (null for scans) — feeds the number rules, the
+  // PO hunt, and the billed-to entity check below.
+  const rawText = kind === 'pdf' ? await extractPdfText(bytes) : null
+
+  let numberSuspect: string | null = null
+  {
+    const rule = supplierNumberRule(extracted.vendor?.name, msg.from)
+    if (rule) {
+      const r = applySupplierNumberRule(rule, { number: extracted.invoiceNumber, rawText })
+      if (r.number && r.number !== extracted.invoiceNumber) {
+        console.log(`[ap-auto-entry] invoice number via ${r.source} (${rule.name}): "${extracted.invoiceNumber}" → "${r.number}" (${attName})`)
+        extracted = { ...extracted, invoiceNumber: r.number }
+      }
+      numberSuspect = r.suspect
+      if (!extracted.poNumber && rawText) {
+        const po = huntPoNumber(rawText, extracted.invoiceNumber)
+        if (po) {
+          console.log(`[ap-auto-entry] PO number from pdf text (${rule.name}): "${po}" (${attName})`)
+          extracted = { ...extracted, poNumber: po }
+        }
+      }
+    }
+  }
+
+  // Billed-to entity routing (Chris 2026-08-06: JAWS-billed invoices were
+  // landing in VPS because the mailbox decided the company file). When the
+  // document text names exactly ONE of our entities, post to THAT entity
+  // regardless of which inbox it arrived in. Ambiguous/absent → mailbox
+  // default as before. Everything downstream (supplier match, coding, dup
+  // guard, Slack channel, log row) follows the rerouted file.
+  if (rawText) {
+    const jaws = /JUST\s*AUTOS\s*WHOLESALE/i.test(rawText)
+    const vps = /VEHICLE\s*PERFORMANCE\s*SOLUTIONS/i.test(rawText)
+    const detected = jaws && !vps ? 'JAWS' : vps && !jaws ? 'VPS' : null
+    if (detected && detected !== companyFile) {
+      console.log(`[ap-auto-entry] billed-to reroute ${companyFile} → ${detected}: "${msg.subject}" / ${attName}`)
+      companyFile = detected
+    }
+  }
 
   // A MISSING number is not a reason to vanish a real invoice (Jetstar
   // $348.66 + Peninsula $23.6k silently skipped, Chris 2026-08-05). Fill it
@@ -943,6 +993,9 @@ async function processInvoice(
   // A number we filled in (filename / generated) is a guess — never ignorable,
   // always a human Approve with the number visible on the card.
   if (numberFallback) failReasons.push(`YELLOW:no-invoice-number-on-document — using ${extracted.invoiceNumber} (${numberFallback === 'filename' ? 'from the attachment filename' : 'generated from the date'}); check the PDF before approving`)
+  // A read that doesn't fit the supplier's known number format is never
+  // posted on trust — human verifies against the PDF.
+  if (numberSuspect) failReasons.push(`YELLOW:invoice-number-suspect — ${numberSuspect}; verify against the PDF before approving`)
 
   // Cross-source duplicate guard. The same invoice can arrive twice — the
   // supplier's email into accounts@ AND a paper copy scanned to scans@. An
