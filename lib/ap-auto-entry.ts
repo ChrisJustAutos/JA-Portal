@@ -951,10 +951,14 @@ async function processInvoice(
   // supplier and SAME amount under a DIFFERENT number flags for a human.
   if (supplierUid && failReasons.length === 0) {
     const norm = (s: string | null | undefined) => String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, '')
+    // 45-day window (was 14 — Ken Mills 2026-08-05: a monthly statement-cycle
+    // re-entry duplicated bills whose originals were posted 3-4 weeks earlier,
+    // outside the old window). The same-date rule below keeps the wider net
+    // from flagging legitimate repeat charges.
     const { data: prior } = await c.from('ap_auto_entry_log')
       .select('invoice_number, amount, created_at, mailbox, invoice_date')
       .eq('outcome', 'posted').eq('supplier_uid', supplierUid)
-      .gte('created_at', new Date(Date.now() - 14 * 86400_000).toISOString())
+      .gte('created_at', new Date(Date.now() - 45 * 86400_000).toISOString())
     const sameAmount = (p: any) => p.amount != null && Math.abs(Number(p.amount) - total) < 0.005
     // Date test (Chris 2026-08-05): a same-amount candidate only counts as a
     // duplicate when the invoice DATE matches too — a supplier billing the
@@ -989,11 +993,41 @@ async function processInvoice(
     // Same amount + the same number under OCR-tolerant comparison ("PI13…" vs
     // "P113…", tail digits equal) = near-certain re-arrival of an invoice
     // already posted → hard RED, not a soft maybe.
+    // Ken Mills 2026-08-05 hardening: two DIFFERENTLY-mangled reads of one
+    // number (S/5, O/0, l/1, truncated tails, an inserted digit) don't
+    // tail-match — so within the same-amount + same-date gate, also treat a
+    // truncated-prefix read or a single-digit slip (edit distance ≤ 1 on the
+    // confusable-canonical digits) as the same number. Flag-only tolerance —
+    // never used by the silent MYOB adopt path.
+    const confusableDigits = (s: string | null | undefined) => String(s || '').toUpperCase()
+      .replace(/[^A-Z0-9]/g, '')
+      .replace(/O/g, '0').replace(/[IL]/g, '1').replace(/S/g, '5').replace(/B/g, '8')
+      .replace(/[^0-9]/g, '')
+    const editDistanceLe1 = (a: string, b: string): boolean => {
+      if (Math.abs(a.length - b.length) > 1) return false
+      if (a === b) return true
+      const [s, l] = a.length <= b.length ? [a, b] : [b, a]
+      for (let i = 0, j = 0, used = false; i <= s.length && j < l.length; ) {
+        if (s[i] === l[j]) { i++; j++; continue }
+        if (used) return false
+        used = true
+        if (s.length === l.length) { i++; j++ } else { j++ }  // substitution vs insertion
+      }
+      return true
+    }
+    const ocrVariantNumber = (p: any): boolean => {
+      if (sameInvoiceNumberLoose(p.invoice_number, extracted.invoiceNumber)) return true
+      const dA = confusableDigits(p.invoice_number)
+      const dB = confusableDigits(extracted.invoiceNumber)
+      if (dA.length < 6 || dB.length < 6) return false
+      if (dA.startsWith(dB) || dB.startsWith(dA)) return true  // end-truncated read
+      return editDistanceLe1(dA, dB)
+    }
     const ocrDup = (prior || []).find(p =>
       sameAmount(p) &&
       !dateClearlyDiffers(p) &&
       norm(p.invoice_number) !== norm(extracted.invoiceNumber) &&
-      sameInvoiceNumberLoose(p.invoice_number, extracted.invoiceNumber),
+      ocrVariantNumber(p),
     )
     const dup = ocrDup ? null : (prior || []).find(p =>
       sameAmount(p) &&
