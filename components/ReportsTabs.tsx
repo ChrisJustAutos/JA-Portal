@@ -7,17 +7,18 @@ import { useRouter } from 'next/router'
 import { UserRole, roleHasPermission, Permission } from '../lib/permissions'
 import { T } from '../lib/ui/theme'
 
-const TABS: Array<{ id: string; label: string; href: string; perm: Permission }> = [
+const TABS: Array<{ id: string; label: string; href: string; perm: Permission; roles?: UserRole[] }> = [
   { id: 'reports',      label: 'Reports',      href: '/reports',      perm: 'view:reports' },
   { id: 'sales-report', label: 'Sales Report', href: '/reports/sales-report', perm: 'view:reports' },
+  { id: 'mgmt-dashboard', label: 'Management Dashboard', href: '/reports/mgmt-dashboard', perm: 'view:reports', roles: ['admin', 'manager'] },
   { id: 'workshop-map', label: 'Workshop Map', href: '/reports/map',  perm: 'view:reports' },
   { id: 'distributor-map', label: 'Distributor Map', href: '/reports/distributor-map', perm: 'view:reports' },
   { id: 'distributors', label: 'Distributors', href: '/distributors', perm: 'view:distributors' },
 ]
 
-export default function ReportsTabs({ active, role }: { active: 'reports' | 'sales-report' | 'workshop-map' | 'distributor-map' | 'distributors'; role: UserRole }) {
+export default function ReportsTabs({ active, role }: { active: 'reports' | 'sales-report' | 'mgmt-dashboard' | 'workshop-map' | 'distributor-map' | 'distributors'; role: UserRole }) {
   const router = useRouter()
-  const tabs = TABS.filter(t => roleHasPermission(role, t.perm))
+  const tabs = TABS.filter(t => roleHasPermission(role, t.perm) && (!t.roles || t.roles.includes(role)))
   if (tabs.length <= 1) return null
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '0 16px', background: T.bg2, borderBottom: `1px solid ${T.border}`, flexShrink: 0 }}>
