@@ -2,9 +2,10 @@
 // SERVER-ONLY. The real trigger for the thank-you letter automation.
 //
 // Jobs are finalised in MechanicDesk → MD pushes the invoice to MYOB (VPS).
-// This polls VPS Sale Invoices via the portal's MYOB OAuth connection and, for
-// each NEW invoice that represents actual work, queues a thank-you letter +
-// envelope.
+// This polls VPS Sale Invoices through the accounting read seam
+// (lib/accounting/read-docs.ts — provider-switched MYOB/Xero, module
+// 'LETTERS') and, for each NEW invoice that represents actual work, queues a
+// thank-you letter + envelope.
 //
 // "Job invoice, not a booking deposit" rule (confirmed against live data,
 // refined 2026-07-27 after a deposit invoice printed for Gary Winter):
@@ -17,8 +18,12 @@
 //     line vetoes it — that invoice is a booking, not a completed job.
 // Print iff: has a positive income (4-xxxx) line AND has no held (positive)
 // Customer-Deposit line.
+//
+// Account codes are MYOB DisplayIDs; on Xero the seam reverse-translates the
+// Xero account codes via xero_account_map, and unmapped lines come back with
+// accountDisplayId null (fails the income test → skipped, never mis-printed).
 
-import { getConnection, myobFetch } from './myob'
+import { openSaleInvoiceReader, type SaleInvoiceLineRow } from './accounting/read-docs'
 import { WORKSHOP_MYOB_LABEL } from './workshop'
 import { getLetterAutomation, getTemplate, enqueueLetter, recordLetterSkip, lettersSeenUids } from './workshop-letters'
 
@@ -34,35 +39,17 @@ export interface WatchResult {
   details: Array<{ number: string; customer: string; total: number; action: string; reason?: string }>
 }
 
-function isJobInvoice(lines: any[]): boolean {
+function isJobInvoice(lines: SaleInvoiceLineRow[]): boolean {
   if (!Array.isArray(lines)) return false
-  return lines.some(l => l && l.Type === 'Transaction' && INCOME_RE.test(String(l.Account?.DisplayID || '')) && Number(l.Total) > 0)
+  return lines.some(l => l && l.type === 'Transaction' && INCOME_RE.test(String(l.accountDisplayId || '')) && l.total > 0)
 }
 
 // A booking deposit invoice holds a POSITIVE Customer-Deposit line. Completed
 // jobs either have no 1-1230 line or a NEGATIVE one (deposit being applied),
 // so this vetoes only genuine deposit invoices.
-function holdsDeposit(lines: any[]): boolean {
+function holdsDeposit(lines: SaleInvoiceLineRow[]): boolean {
   if (!Array.isArray(lines)) return false
-  return lines.some(l => l && DEPOSIT_RE.test(String(l.Account?.DisplayID || '')) && Number(l.Total) > 0)
-}
-
-function customerNameFrom(card: any, fallback: string): string {
-  if (!card) return fallback
-  if (card.CompanyName) return String(card.CompanyName)
-  const n = [card.FirstName, card.LastName].filter(Boolean).join(' ').trim()
-  return n || fallback
-}
-
-function addressLinesFrom(card: any): string[] {
-  const addrs = Array.isArray(card?.Addresses) ? card.Addresses : []
-  const a = addrs.find((x: any) => x?.Location === 1) || addrs[0]
-  if (!a) return []
-  const lines: string[] = []
-  if (a.Street) String(a.Street).split(/\r?\n/).map((s: string) => s.trim()).filter(Boolean).forEach((s: string) => lines.push(s))
-  const cityLine = [a.City, a.State, a.PostCode].filter(Boolean).join(' ').trim()
-  if (cityLine) lines.push(cityLine)
-  return lines
+  return lines.some(l => l && DEPOSIT_RE.test(String(l.accountDisplayId || '')) && l.total > 0)
 }
 
 export async function runLetterWatch(opts: { dryRun?: boolean; lookbackDays?: number } = {}): Promise<WatchResult> {
@@ -79,10 +66,6 @@ export async function runLetterWatch(opts: { dryRun?: boolean; lookbackDays?: nu
   const template = await getTemplate(cfg.template_id)
   if (!template) return result
 
-  const conn = await getConnection(WORKSHOP_MYOB_LABEL)
-  if (!conn || !conn.company_file_id) throw new Error(`${WORKSHOP_MYOB_LABEL} MYOB connection not configured`)
-  const base = `/accountright/${conn.company_file_id}/Sale/Invoice`
-
   // Cutoff = later of (watch_since) and (today − lookback): watch_since prevents
   // a backfill flood the moment it's enabled; the rolling window keeps each
   // steady-state scan small.
@@ -90,43 +73,39 @@ export async function runLetterWatch(opts: { dryRun?: boolean; lookbackDays?: nu
   const since = cfg.watch_since ? new Date(cfg.watch_since) : rolling
   const cutoff = (since > rolling ? since : rolling).toISOString().substring(0, 10)
 
-  const list = await myobFetch(conn.id, base, { query: { '$filter': `Date ge datetime'${cutoff}'`, '$orderby': 'Date desc', '$top': 200 } })
-  if (list.status !== 200) throw new Error(`MYOB invoice list failed (HTTP ${list.status})`)
-  const items: any[] = Array.isArray(list.data?.Items) ? list.data.Items : []
+  const reader = await openSaleInvoiceReader(WORKSHOP_MYOB_LABEL, 'LETTERS', cutoff)
+  const items = reader.invoices
   result.scanned = items.length
 
-  const seen = await lettersSeenUids(items.map(i => i.UID).filter(Boolean))
+  const seen = await lettersSeenUids(items.map(i => i.uid).filter(Boolean))
 
   for (const inv of items) {
-    const number = String(inv.Number ?? '')
-    const custName0 = inv.Customer?.Name || ''
-    const total = Number(inv.TotalAmount) || 0
-    if (seen.has(inv.UID)) continue
+    const number = inv.number
+    const custName0 = inv.customerName
+    const total = inv.totalAmount
+    if (seen.has(inv.uid)) continue
     if (total < Number(cfg.min_total)) {
-      if (!dryRun) await recordLetterSkip(inv.UID, custName0, total, 'below_min')
+      if (!dryRun) await recordLetterSkip(inv.uid, custName0, total, 'below_min')
       result.skipped++; result.details.push({ number, customer: custName0, total, action: 'skip', reason: 'below_min' }); continue
     }
 
     // Fetch lines → real job/sale, or a pure deposit?
-    let lines: any[] = []
+    let lines: SaleInvoiceLineRow[] = []
     try {
-      const d = await myobFetch(conn.id, `${base}/${inv.InvoiceType || 'Item'}/${inv.UID}`)
-      lines = Array.isArray(d.data?.Lines) ? d.data.Lines : []
+      lines = await reader.fetchLines(inv)
     } catch { result.errors++; result.details.push({ number, customer: custName0, total, action: 'error', reason: 'detail_fetch' }); continue }
 
     if (!isJobInvoice(lines) || holdsDeposit(lines)) {
       const reason = holdsDeposit(lines) ? 'booking_deposit' : 'deposit_or_nonjob'
-      if (!dryRun) await recordLetterSkip(inv.UID, custName0, total, reason)
+      if (!dryRun) await recordLetterSkip(inv.uid, custName0, total, reason)
       result.skipped++; result.details.push({ number, customer: custName0, total, action: 'skip', reason }); continue
     }
 
     // Customer card → name + postal address for the letter/envelope.
     let name = custName0, addrLines: string[] = []
     try {
-      if (inv.Customer?.UID) {
-        const c = await myobFetch(conn.id, `/accountright/${conn.company_file_id}/Contact/Customer/${inv.Customer.UID}`)
-        if (c.status === 200) { name = customerNameFrom(c.data, custName0); addrLines = addressLinesFrom(c.data) }
-      }
+      const card = await reader.fetchCustomerCard(inv.customerUid, custName0)
+      if (card) { name = card.name || custName0; addrLines = card.addressLines }
     } catch { /* fall back to invoice name, no address */ }
 
     if (dryRun) { result.printed++; result.details.push({ number, customer: name, total, action: 'would_print' }); continue }
@@ -135,7 +114,7 @@ export async function runLetterWatch(opts: { dryRun?: boolean; lookbackDays?: nu
       trigger: 'auto', customer: { id: null, name }, template,
       recipientNameOverride: name,
       recipientAddressOverride: addrLines.join('\n') || null,
-      myobInvoiceUid: inv.UID, invoiceTotal: total,
+      myobInvoiceUid: inv.uid, invoiceTotal: total,
     })
     if (r.status === 'queued') { result.printed++; result.details.push({ number, customer: name, total, action: 'printed' }) }
     else if (r.status === 'skipped') { result.skipped++ }

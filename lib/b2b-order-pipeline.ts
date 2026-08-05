@@ -7,7 +7,7 @@
 // re-runs (Stripe retries, or webhook + shortcut) never double-fire.
 
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
-import { writeOrderToMyob } from './b2b-myob-invoice'
+import { writeOrderToMyob } from './accounting/post-b2b-doc'
 import { raiseDropShipPOsForOrder, type DropshipRaiseResult } from './b2b-dropship'
 import { sendOrderPlacedAdminEmail, sendDistributorOrderEmails } from './b2b-order-notify'
 import { notify } from './notifications'

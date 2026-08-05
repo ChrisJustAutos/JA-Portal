@@ -24,7 +24,8 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { normaliseInvoiceNumber, type StatementMatchOutcome, type MatchResult } from './ap-statement-match'
 import { type CompanyFileLabel, getSupplierByUid } from './ap-myob-lookup'
-import { createServiceBill, postFoundInvoiceToMyob } from './ap-myob-bill'
+import { createServiceBill } from './ap-myob-bill'
+import { postApInvoice } from './accounting/post-ap-invoice'
 import { huntInvoicesInInbox, type HuntHit } from './ap-inbox-pull'
 import { sendMail } from './email'
 import { sendMail as graphSendMail } from './microsoft-graph'
@@ -249,7 +250,7 @@ export async function resolveStatementGaps(
           actions.push({ reference: w.ref, amount: w.amount, date: w.date, outcome: 'found_not_posted', detail: `Found in inbox — ${companyFile} auto-post is off; enter manually in MYOB` })
         } else if (hit.extraction && hit.pdfBytes) {
           // Post straight to MYOB from the inbox PDF — no portal row.
-          const r = await postFoundInvoiceToMyob({
+          const r = await postApInvoice(companyFile, {
             companyFile, supplierUid, supplierName,
             extracted: hit.extraction.invoice, statementAmount: w.amount,
             pdfBytes: hit.pdfBytes, pdfFilename: hit.attachmentName || `${w.ref || 'invoice'}.pdf`,

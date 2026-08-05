@@ -244,7 +244,7 @@ export async function bookFreightForOrder(orderId: string, opts: { actorId?: str
   // BEFORE the email so the invoice number is on the order for the PDF/subject.
   if (firstBook) {
     try {
-      const { convertOrderToInvoiceInMyob } = await import('./b2b-myob-invoice')
+      const { convertOrderToInvoiceInMyob } = await import('./accounting/post-b2b-doc')
       const conv = await convertOrderToInvoiceInMyob(orderId, {
         trackingNumber: consignment.carrierConsignmentId || consignment.consignmentNumber || null,
         carrier: order.freight_service_label || consignment.status?.name || null,
@@ -254,7 +254,7 @@ export async function bookFreightForOrder(orderId: string, opts: { actorId?: str
       // Funds) so it shows PAID in MYOB. Skips BECS until the debit clears
       // (payment_settled_at gate inside). Best-effort — never blocks booking.
       try {
-        const { applyCustomerPaymentInMyob } = await import('./b2b-myob-invoice')
+        const { applyCustomerPaymentInMyob } = await import('./accounting/post-b2b-doc')
         const pay = await applyCustomerPaymentInMyob(orderId)
         if (pay.status === 'created') {
           await c.from('b2b_order_events').insert({ order_id: orderId, event_type: 'myob_payment_applied', actor_type: 'system', actor_id: null, notes: `Customer payment → Undeposited Funds (${pay.myob_payment_uid})`, metadata: { myob_payment_uid: pay.myob_payment_uid } })

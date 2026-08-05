@@ -10,9 +10,10 @@
 import { withAuth } from '../../../lib/authServer'
 import { roleHasPermission } from '../../../lib/permissions'
 import {
-  createJobInvoiceInMyob, unfinaliseJob, getWorkshopSettings, setWorkshopSettings,
+  getWorkshopSettings, setWorkshopSettings,
   listIncomeAccounts, WorkshopInvoiceError,
 } from '../../../lib/workshop-myob-invoice'
+import { pushWorkshopInvoice, voidWorkshopDoc } from '../../../lib/accounting/post-workshop-doc'
 
 export const config = { maxDuration: 60 }
 
@@ -48,7 +49,7 @@ export default withAuth('view:diary', async (req, res, user) => {
     const bookingId = String(body.booking_id || '').trim()
     if (!bookingId) return res.status(400).json({ error: 'booking_id required' })
     try {
-      const result = await createJobInvoiceInMyob(bookingId, user.id)
+      const result = await pushWorkshopInvoice(bookingId, user.id)
       return res.status(200).json({ ok: true, ...result })
     } catch (e: any) {
       if (e instanceof WorkshopInvoiceError) return res.status(409).json({ ok: false, code: e.code, error: e.message })
@@ -61,7 +62,7 @@ export default withAuth('view:diary', async (req, res, user) => {
     const bookingId = String(req.query.booking_id || '').trim()
     if (!bookingId) return res.status(400).json({ error: 'booking_id required' })
     try {
-      const result = await unfinaliseJob(bookingId, user.id)
+      const result = await voidWorkshopDoc(bookingId, user.id)
       return res.status(200).json({ ok: true, ...result })
     } catch (e: any) {
       if (e instanceof WorkshopInvoiceError) return res.status(409).json({ ok: false, code: e.code, error: e.message })

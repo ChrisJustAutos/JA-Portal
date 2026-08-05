@@ -10,7 +10,7 @@
 
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
 import { assertCheckoutConfigured, getFromMailbox } from './b2b-settings'
-import { createDropShipPurchaseOrder, getSupplierContact, DropShipPOLine } from './b2b-myob-po'
+import { createDropShipPurchaseOrder, getSupplierContact, DropShipPOLine } from './accounting/post-b2b-doc'
 import { sendMail } from './email'
 import { renderEmail, linesTableHtml, addressBlock } from './email-templates'
 

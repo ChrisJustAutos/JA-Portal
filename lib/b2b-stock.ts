@@ -9,10 +9,9 @@
 // everyone gets cached. Avoids partial refresh complexity.
 
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
-import { getConnection, myobFetch } from './myob'
+import { listInventoryItems } from './accounting/read-docs'
 
 const STOCK_TTL_MS = 5 * 60 * 1000  // 5 minutes
-const PAGE_SIZE = 400               // MYOB caps $top at 400
 
 let _sb: SupabaseClient | null = null
 function sb(): SupabaseClient {
@@ -176,25 +175,13 @@ export async function getStockForItems(uids: string[]): Promise<StockMap> {
  *   2. ONE bulk UPDATE via the b2b_bulk_update_stock SQL function
  */
 export async function refreshAllStock(): Promise<{ scanned: number; updated: number }> {
-  const conn = await getConnection('JAWS')
-  if (!conn) throw new Error('JAWS MYOB connection not configured')
-
-  // Phase 1: paginated MYOB fetch
+  // Phase 1: paginated inventory fetch via the accounting read seam
+  // (JAWS entity, module 'INVENTORY' — provider-switched MYOB/Xero; the
+  // MYOB path is the same paged Inventory/Item pull this ran inline).
+  // NOTE: on Xero, QuantityAvailable is null (no committed-qty concept)
+  // and the `?? QuantityOnHand` fallback below carries the number.
   const fetchStart = Date.now()
-  const allItems: any[] = []
-  let skip = 0
-  while (true) {
-    const result = await myobFetch(conn.id, `/accountright/${conn.company_file_id}/Inventory/Item`, {
-      query: { '$top': PAGE_SIZE, '$skip': skip },
-    })
-    if (result.status !== 200) {
-      throw new Error(`MYOB inventory fetch failed (HTTP ${result.status}): ${(result.raw || '').substring(0, 200)}`)
-    }
-    const items: any[] = Array.isArray(result.data?.Items) ? result.data.Items : []
-    allItems.push(...items)
-    if (items.length < PAGE_SIZE) break
-    skip += PAGE_SIZE
-  }
+  const allItems = await listInventoryItems('JAWS', 'INVENTORY')
   const fetchMs = Date.now() - fetchStart
 
   // Build the update payload. We trust QuantityAvailable as the canonical
@@ -226,6 +213,6 @@ export async function refreshAllStock(): Promise<{ scanned: number; updated: num
   }
   const writeMs = Date.now() - writeStart
 
-  console.log(`[b2b-stock] refreshAllStock: ${allItems.length} from MYOB in ${fetchMs}ms, ${updated} rows updated in ${writeMs}ms`)
+  console.log(`[b2b-stock] refreshAllStock: ${allItems.length} items fetched in ${fetchMs}ms, ${updated} rows updated in ${writeMs}ms`)
   return { scanned: allItems.length, updated }
 }

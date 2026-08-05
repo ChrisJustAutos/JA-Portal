@@ -120,7 +120,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         await c2.from('b2b_order_events').insert({ order_id: settledOrderId, event_type: 'payment_settled', actor_type: 'stripe', actor_id: null, notes: 'Bank payment cleared (async_payment_succeeded)', metadata: { stripe_event_id: eventId } })
         const { data: o } = await c2.from('b2b_orders').select('myob_sale_invoice_uid').eq('id', settledOrderId).maybeSingle()
         if (o?.myob_sale_invoice_uid) {
-          const { applyCustomerPaymentInMyob } = await import('../../../../lib/b2b-myob-invoice')
+          const { applyCustomerPaymentInMyob } = await import('../../../../lib/accounting/post-b2b-doc')
           const pay = await applyCustomerPaymentInMyob(settledOrderId)
           if (pay.status === 'created') {
             await c2.from('b2b_order_events').insert({ order_id: settledOrderId, event_type: 'myob_payment_applied', actor_type: 'system', actor_id: null, notes: `Customer payment → Undeposited Funds (${pay.myob_payment_uid})`, metadata: { myob_payment_uid: pay.myob_payment_uid } })

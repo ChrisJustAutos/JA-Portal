@@ -375,7 +375,9 @@ const money = (n: number) => `$${round2(n).toFixed(2)}`
 // rows so un-finalise can restore exactly what was taken. Idempotent: skips
 // if the booking already has unreversed movements. Returns a warning string
 // when some items couldn't be deducted (never throws for per-item failures).
-async function deductJobStock(bookingId: string, performedBy: string | null): Promise<string | null> {
+// Exported for the accounting seam (lib/accounting/post-workshop-doc.ts) so
+// the Xero path deducts portal stock exactly like the MYOB path.
+export async function deductJobStock(bookingId: string, performedBy: string | null): Promise<string | null> {
   const c = sb()
   const { data: existing } = await c.from('workshop_stock_movements')
     .select('id').eq('booking_id', bookingId).is('reversed_at', null).limit(1)

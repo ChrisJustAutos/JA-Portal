@@ -17,7 +17,7 @@ import type { NextApiRequest, NextApiResponse } from 'next'
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
 import { withAuth } from '../../../../../../lib/authServer'
 import { createRefund } from '../../../../../../lib/stripe'
-import { writeRefundCreditNoteToMyob, deleteMyobSaleOrder } from '../../../../../../lib/b2b-myob-invoice'
+import { writeRefundCreditNoteToMyob, deleteMyobSaleOrder } from '../../../../../../lib/accounting/post-b2b-doc'
 import { claimOrderStage, releaseOrderStage } from '../../../../../../lib/b2b-claims'
 
 let _sb: SupabaseClient | null = null

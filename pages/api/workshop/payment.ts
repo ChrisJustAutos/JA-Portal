@@ -7,7 +7,8 @@
 import { withAuth } from '../../../lib/authServer'
 import { roleHasPermission } from '../../../lib/permissions'
 import { PAYMENT_TENDERS, PaymentTender } from '../../../lib/workshop'
-import { recordJobPayment, listJobPayments, WorkshopPaymentError } from '../../../lib/workshop-myob-invoice'
+import { listJobPayments, WorkshopPaymentError } from '../../../lib/workshop-myob-invoice'
+import { applyWorkshopPayment } from '../../../lib/accounting/post-workshop-doc'
 
 export const config = { maxDuration: 30 }
 
@@ -33,7 +34,7 @@ export default withAuth('view:diary', async (req, res, user) => {
     if (!bookingId) return res.status(400).json({ error: 'booking_id required' })
     if (!TENDER_IDS.includes(tender)) return res.status(400).json({ error: 'invalid tender' })
     try {
-      const result = await recordJobPayment(bookingId, { amount: Number(body.amount), tender, note: body.note || null }, user.id)
+      const result = await applyWorkshopPayment(bookingId, { amount: Number(body.amount), tender, note: body.note || null }, user.id)
       // Fire the payment-receipt comm template (best-effort; gated by the
       // template being enabled + the master comms toggle).
       try { const { queuePaymentReceipt } = await import('../../../lib/workshop-reminders'); await queuePaymentReceipt(bookingId, Number(body.amount)) } catch { /* non-fatal */ }

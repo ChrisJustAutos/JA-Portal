@@ -30,7 +30,7 @@ export interface B2bInvoicePdf {
 // returns something (only throws if even the system render fails).
 export async function getOutboundInvoicePdf(orderId: string): Promise<{ buffer: Buffer; filename: string; source: 'myob' | 'system' }> {
   try {
-    const { getMyobInvoicePdf } = await import('./b2b-myob-invoice')
+    const { getMyobInvoicePdf } = await import('./accounting/post-b2b-doc')
     const myob = await getMyobInvoicePdf(orderId)
     if (myob) return { buffer: myob.buffer, filename: myob.filename, source: 'myob' }
   } catch (e: any) { console.error('MYOB invoice PDF unavailable, using system PDF:', e?.message || e) }

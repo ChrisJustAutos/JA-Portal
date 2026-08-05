@@ -1,11 +1,12 @@
 // lib/b2b-catalogue-sync.ts
-// Sync the b2b_catalogue table from MYOB JAWS Inventory.
+// Sync the b2b_catalogue table from JAWS Inventory.
 //
-// Pull strategy:
-//   GET /accountright/{cf_id}/Inventory/Item
-//     ?$filter=IsSelling eq true and IsActive eq true
-//     ?$top=1000&$skip=N
-//   Response shape: { Items: [...], NextPageLink, Count }
+// Pull strategy: lib/accounting/read-docs.ts listInventoryItems('JAWS',
+// 'INVENTORY') — the provider-switched (MYOB/Xero) read seam. On MYOB it is
+// the exact paged GET /accountright/{cf_id}/Inventory/Item pull this module
+// always ran; on Xero the adapter's /Items rows are mapped into the same
+// MYOB-shaped fields (see read-docs for the documented gaps: TaxCode and
+// supplier/restock info are null on Xero).
 //
 // Field ownership:
 //   MYOB-canonical (refreshed every sync):
@@ -28,9 +29,8 @@
 // the stocktake worker pattern.
 
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
-import { getConnection, myobFetch } from './myob'
+import { listInventoryItems, type AccountingInventoryItem } from './accounting/read-docs'
 
-const PAGE_SIZE = 400  // MYOB AccountRight caps $top at 400 per page
 const GST_RATE = 0.10
 
 let _sb: SupabaseClient | null = null
@@ -45,23 +45,6 @@ function sb(): SupabaseClient {
 
 function round2(n: number): number {
   return Math.round(n * 100) / 100
-}
-
-interface MyobItem {
-  UID: string
-  Number: string
-  Name: string
-  Description: string | null
-  IsActive: boolean
-  IsSold: boolean
-  IsBought: boolean
-  IsInventoried: boolean
-  SellingDetails?: {
-    BaseSellingPrice?: number
-    IsTaxInclusive?: boolean
-    TaxCode?: { UID: string; Code: string } | null
-  } | null
-  [k: string]: any
 }
 
 export interface CatalogueSyncResult {
@@ -82,16 +65,6 @@ export async function syncJawsCatalogue(
   const startedAt = new Date()
   const startMs = Date.now()
 
-  // ── 0. Resolve JAWS connection ─────────────────────────────────────────
-  const conn = await getConnection('JAWS')
-  if (!conn || !conn.is_active) {
-    throw new Error('No active JAWS MYOB connection. Connect via Settings → MYOB.')
-  }
-  if (!conn.company_file_id) {
-    throw new Error('JAWS MYOB connection has no company file selected.')
-  }
-
-  const cfPath = `/accountright/${conn.company_file_id}`
   const result: CatalogueSyncResult = {
     totalScanned: 0,
     added: 0,
@@ -104,36 +77,11 @@ export async function syncJawsCatalogue(
     finishedAt: '',
   }
 
-  // ── 1. Page through MYOB Inventory/Item ────────────────────────────────
-  // No OData $filter on the request — we filter IsActive/IsSold in JS.
-  // MYOB Item OData filters are fragile across tenants, and pulling the full
-  // catalogue then filtering locally is a few hundred KB extra per sync.
-  let skip = 0
-  const allItems: MyobItem[] = []
-  // Cap at 50 pages (20k items at 400/page) as a sanity bound
-  for (let page = 0; page < 50; page++) {
-    const { status, data, raw } = await myobFetch(conn.id, `${cfPath}/Inventory/Item`, {
-      method: 'GET',
-      query: {
-        '$top':  PAGE_SIZE,
-        '$skip': skip,
-      },
-      performedBy,
-    })
-    if (status !== 200) {
-      const myobMsg = data?.Errors?.[0]?.Message
-                   || data?.Message
-                   || (raw || '').substring(0, 400)
-      throw new Error(
-        `MYOB Inventory/Item fetch failed (skip=${skip}, HTTP ${status}): ${myobMsg}`
-      )
-    }
-    const items: MyobItem[] = Array.isArray(data?.Items) ? data.Items : []
-    allItems.push(...items)
-    result.totalScanned += items.length
-    if (items.length < PAGE_SIZE) break
-    skip += PAGE_SIZE
-  }
+  // ── 1. Pull every inventory item via the accounting read seam ──────────
+  // (JAWS entity, module 'INVENTORY'). No provider-side sellable/active
+  // filter — we filter IsActive/IsSold in JS, as this module always has.
+  const allItems: AccountingInventoryItem[] = await listInventoryItems('JAWS', 'INVENTORY', { performedBy })
+  result.totalScanned = allItems.length
 
   // ── 2. Load existing rows for diff ─────────────────────────────────────
   const c = sb()

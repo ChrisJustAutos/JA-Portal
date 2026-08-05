@@ -24,11 +24,13 @@
 
 import type { NextApiRequest, NextApiResponse } from 'next'
 import {
-  fetchBankTxnsSince,
   BankTxn,
   CompanyFileLabel,
   CompanyTxnsResult,
 } from '../../../lib/myob-bank'
+// Provider-switched (MYOB/Xero) read seam — module 'BANK'. MYOB path
+// delegates to lib/myob-bank's fetchBankTxnsSince unchanged.
+import { fetchBankTransactionsSince } from '../../../lib/accounting/read-docs'
 import { postWebhook, SlackBlock } from '../../../lib/slack'
 
 // ── Sydney-local helpers ────────────────────────────────────────────────
@@ -261,10 +263,10 @@ async function runHandler(req: NextApiRequest, res: NextApiResponse) {
 
   const { since, hours, label: windowLabel } = windowStart(now)
 
-  // Use allSettled so one company's MYOB fetch failing doesn't tank the other.
+  // Use allSettled so one company's fetch failing doesn't tank the other.
   const settled = await Promise.allSettled([
-    fetchBankTxnsSince('VPS',  since),
-    fetchBankTxnsSince('JAWS', since),
+    fetchBankTransactionsSince('VPS',  since),
+    fetchBankTransactionsSince('JAWS', since),
   ])
 
   const safeResult = (label: CompanyFileLabel, s: PromiseSettledResult<CompanyTxnsResult>): CompanyTxnsResult => {

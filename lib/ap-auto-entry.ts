@@ -47,7 +47,8 @@ import { resolveLineAccount } from './ap-line-resolver'
 import { triageInvoice } from './ap-supabase'
 import { consolidatedInvoiceSupplier } from './ap-consolidated-suppliers'
 import { overseasSupplier } from './ap-overseas-suppliers'
-import { postFoundInvoiceToMyob, reattachStagedPdf, sameInvoiceNumberLoose, findExistingMyobBill } from './ap-myob-bill'
+import { reattachStagedPdf, sameInvoiceNumberLoose, findExistingMyobBill } from './ap-myob-bill'
+import { postApInvoice } from './accounting/post-ap-invoice'
 import { getConnection } from './myob'
 import { postWebhook, type SlackBlock } from './slack'
 import { postMessage } from './slack-bot/slack'
@@ -1128,7 +1129,7 @@ async function processInvoice(
     }],
   } : extracted
 
-  const posted = await postFoundInvoiceToMyob({
+  const posted = await postApInvoice(companyFile, {
     companyFile, supplierUid: supplierUid!, supplierName,
     extracted: toPost, statementAmount: null,
     acceptLowConfidence: lowConfidenceOverride,
@@ -1489,7 +1490,7 @@ async function postApprovedRow(
     acceptLowConfidence: true,
     accountUidOverride: accountOverride || null,
   }
-  let posted = await postFoundInvoiceToMyob({ ...postArgs, extracted })
+  let posted = await postApInvoice(companyFile, { ...postArgs, extracted })
   if (!posted.posted && /sum|total|nudge|cannot post/i.test(posted.reason || '')) {
     // Line detail won't reconcile — human approved, post at the stated total.
     const collapsed: ExtractedAPInvoice = {
@@ -1503,7 +1504,7 @@ async function postApprovedRow(
         gstAmount: null, taxCodeRaw: null, taxCode: 'GST',
       }],
     }
-    posted = await postFoundInvoiceToMyob({ ...postArgs, extracted: collapsed })
+    posted = await postApInvoice(companyFile, { ...postArgs, extracted: collapsed })
   }
   if (!posted.posted) {
     await c.from('ap_auto_entry_log').update({ error: `approved post failed: ${(posted.reason || '').slice(0, 250)}` }).eq('id', row.id)

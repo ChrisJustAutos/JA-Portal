@@ -7,7 +7,8 @@
 import { createClient } from '@supabase/supabase-js'
 import { withAuth } from '../../../../lib/authServer'
 import { roleHasPermission } from '../../../../lib/permissions'
-import { createCreditNote, listCreditNotes, WorkshopCreditNoteError } from '../../../../lib/workshop-credit-note'
+import { listCreditNotes, WorkshopCreditNoteError } from '../../../../lib/workshop-credit-note'
+import { pushWorkshopCreditNote } from '../../../../lib/accounting/post-workshop-doc'
 
 export const config = { maxDuration: 30 }
 
@@ -52,7 +53,7 @@ export default withAuth('view:diary', async (req, res, user) => {
     catch { return res.status(400).json({ error: 'Bad JSON body' }) }
 
     try {
-      const result = await createCreditNote({
+      const result = await pushWorkshopCreditNote({
         booking_id: body.booking_id || null,
         invoice_id: body.invoice_id || null,
         kind: body.kind === 'amount' ? 'amount' : 'lines',
