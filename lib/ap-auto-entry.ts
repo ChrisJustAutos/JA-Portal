@@ -952,10 +952,18 @@ async function processInvoice(
   if (supplierUid && failReasons.length === 0) {
     const norm = (s: string | null | undefined) => String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, '')
     const { data: prior } = await c.from('ap_auto_entry_log')
-      .select('invoice_number, amount, created_at, mailbox')
+      .select('invoice_number, amount, created_at, mailbox, invoice_date')
       .eq('outcome', 'posted').eq('supplier_uid', supplierUid)
       .gte('created_at', new Date(Date.now() - 14 * 86400_000).toISOString())
     const sameAmount = (p: any) => p.amount != null && Math.abs(Number(p.amount) - total) < 0.005
+    // Date test (Chris 2026-08-05): a same-amount candidate only counts as a
+    // duplicate when the invoice DATE matches too — a supplier billing the
+    // same amount on a DIFFERENT date is a legitimate repeat charge, not a
+    // re-arrival. An unknown date on either side can't exonerate: it still
+    // counts (the flag is for a human to decide).
+    const dateClearlyDiffers = (p: any) =>
+      !!p.invoice_date && !!extracted.invoiceDate &&
+      String(p.invoice_date).slice(0, 10) !== String(extracted.invoiceDate).slice(0, 10)
 
     // Exact re-arrival: same supplier + same number + same amount already
     // POSTED per the log (forwarded copy, supplier re-send, paper re-scan —
@@ -983,11 +991,13 @@ async function processInvoice(
     // already posted → hard RED, not a soft maybe.
     const ocrDup = (prior || []).find(p =>
       sameAmount(p) &&
+      !dateClearlyDiffers(p) &&
       norm(p.invoice_number) !== norm(extracted.invoiceNumber) &&
       sameInvoiceNumberLoose(p.invoice_number, extracted.invoiceNumber),
     )
     const dup = ocrDup ? null : (prior || []).find(p =>
       sameAmount(p) &&
+      !dateClearlyDiffers(p) &&
       norm(p.invoice_number) !== norm(extracted.invoiceNumber),
     )
     if (ocrDup) failReasons.push(`RED:duplicate-of:${ocrDup.invoice_number} (same number read differently off the scan)`)
