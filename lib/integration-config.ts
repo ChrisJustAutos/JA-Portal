@@ -15,12 +15,17 @@ export const INTEGRATION_KEYS = [
   'RESEND_API_KEY', 'RESEND_FROM', 'RESEND_CAMPAIGN_FROM', 'RESEND_REPLY_TO', 'RESEND_WEBHOOK_SECRET',
   // Website lead intake shared token
   'CRM_INTAKE_TOKEN',
+  // Xero (MYOB→Xero migration): app credentials + the provider switch.
+  // ACCOUNTING_PROVIDER_* = 'myob' | 'xero' per entity (default myob).
+  'XERO_CLIENT_ID', 'XERO_CLIENT_SECRET', 'XERO_REDIRECT_URI',
+  'ACCOUNTING_PROVIDER_VPS', 'ACCOUNTING_PROVIDER_JAWS',
 ] as const
 export type IntegrationKey = typeof INTEGRATION_KEYS[number]
 
 // Keys whose values are secrets — masked in the admin API, never echoed fully.
 export const SECRET_KEYS: ReadonlySet<string> = new Set([
   'CLICKSEND_API_KEY', 'RESEND_API_KEY', 'RESEND_WEBHOOK_SECRET',
+  'XERO_CLIENT_SECRET',
 ])
 
 let _sb: SupabaseClient | null = null

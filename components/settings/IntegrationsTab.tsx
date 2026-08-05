@@ -209,6 +209,22 @@ export default function IntegrationsTab() {
         <Row k="CRM_INTAKE_TOKEN" label="Set a custom token" placeholder="paste the token the website already uses" />
       </Card>
 
+      {/* Xero (accounting migration) */}
+      <Card icon="🧾" title="Accounting — Xero" connected={!!(fields.XERO_CLIENT_ID?.source && fields.XERO_CLIENT_SECRET?.source)}
+        desc="MYOB→Xero migration. Create a WEB APP at developer.xero.com (redirect URI below), paste its credentials, save, then Connect — one consent authorises both organisations."
+        footer={<>
+          <button onClick={() => saveCard('xero', ['XERO_CLIENT_ID', 'XERO_CLIENT_SECRET', 'XERO_REDIRECT_URI', 'ACCOUNTING_PROVIDER_VPS', 'ACCOUNTING_PROVIDER_JAWS'])} disabled={savingCard === 'xero'} style={btn(T.accent)}>{savingCard === 'xero' ? 'Saving…' : 'Save'}</button>
+          <span style={{ flex: 1 }} />
+          <button onClick={() => copy(`${baseUrl}/api/xero/auth/callback`, 'Redirect URI')} style={btn(`${T.blue}22`, T.blue)}>Copy redirect URI</button>
+          <a href="/api/xero/auth/start" style={{ ...btn(`${T.teal}22`, T.teal), textDecoration: 'none', display: 'inline-flex', alignItems: 'center' }}>Connect Xero →</a>
+        </>}>
+        <Row k="XERO_CLIENT_ID" label="Client ID" placeholder="from developer.xero.com → your app" />
+        <Row k="XERO_CLIENT_SECRET" label="Client secret" secret placeholder="generate under the app's Configuration" />
+        <Row k="XERO_REDIRECT_URI" label="Redirect URI" placeholder={`${baseUrl}/api/xero/auth/callback (default — leave blank)`} hint="Must EXACTLY match the redirect URI on the Xero app." />
+        <Row k="ACCOUNTING_PROVIDER_VPS" label="VPS provider" placeholder="myob (default) — set to xero at cutover" hint="THE SWITCH: flips every VPS automation between MYOB and Xero. Leave blank until the accountant's changeover date." />
+        <Row k="ACCOUNTING_PROVIDER_JAWS" label="JAWS provider" placeholder="myob (default) — set to xero at cutover" hint="Same switch for the JAWS entity (B2B, stock, transfers)." />
+      </Card>
+
       {/* API endpoints reference */}
       <Card icon="🔌" title="API endpoints" desc="The URLs external systems connect to — click any to copy.">
         {[
