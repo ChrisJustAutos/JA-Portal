@@ -8,7 +8,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { createClient } from '@supabase/supabase-js'
 import { withB2BAuth, B2BUser } from '../../../lib/b2bAuthServer'
-import { submitTuneJobDetails, TuneJobDetails } from '../../../lib/b2b-tune-jobs'
+import { submitTuneJobDetails, TuneJobDetails, tuneJobVisible } from '../../../lib/b2b-tune-jobs'
 
 function sb() {
   return createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!, { auth: { persistSession: false } })
@@ -38,6 +38,12 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, use
       jobs.push(...(data || []))
       if (!data || data.length < 1000) break
     }
+
+    // Portal-visibility delay: a fresh tune only appears N days (default 3)
+    // after its receipt arrived. Admin sees everything immediately.
+    const visible = jobs.filter(j => tuneJobVisible(j))
+    jobs.length = 0
+    jobs.push(...visible)
 
     const paths = Array.from(new Set(jobs.map(j => j.invoice_pdf_path).filter(Boolean))) as string[]
     const urlByPath = new Map<string, string>()

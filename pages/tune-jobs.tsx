@@ -41,14 +41,18 @@ export async function getServerSideProps(context: GetServerSidePropsContext): Pr
   if (!dist) return { props: { ok: false, reason: 'This link is no longer valid.' } }
 
   const { data: jobs } = await c.from('b2b_tune_jobs')
-    .select('id, vin, tune_details, invoice_number, amount, created_at, invoice_pdf_path')
+    .select('id, vin, tune_details, invoice_number, amount, created_at, email_received_at, invoice_pdf_path')
     .eq('distributor_id', distributorId)
     .eq('status', 'awaiting_details')
     .order('created_at', { ascending: false })
     .limit(100)
 
+  // Same portal-visibility delay as /b2b/jobs (fresh tunes hidden for 3 days).
+  const { tuneJobVisible } = await import('../lib/b2b-tune-jobs')
+  const visibleJobs = (jobs || []).filter(j => tuneJobVisible(j))
+
   const out: OpenJob[] = []
-  for (const j of jobs || []) {
+  for (const j of visibleJobs) {
     let invoiceUrl: string | null = null
     if (j.invoice_pdf_path) {
       const { data: signed } = await c.storage.from('b2b-tune-invoices').createSignedUrl(j.invoice_pdf_path, 3600)

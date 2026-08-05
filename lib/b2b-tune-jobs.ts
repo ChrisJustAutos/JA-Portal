@@ -396,33 +396,9 @@ export async function ingestTuneJobEmails(opts: { lookbackDays?: number; maxNew?
 
       if (distributorId) {
         out.matched++
-        try {
-          const { notifyDistributor } = await import('./push')
-          await notifyDistributor(distributorId, {
-            title: 'New tune job — customer details needed',
-            body: `${x.tune_details || 'A recent tune'}${x.vin ? ` (VIN ${x.vin})` : ''} — tap to fill in the customer details.`,
-            href: '/b2b/jobs',
-            tag: `tune-job-${row.id}`,
-          })
-        } catch (e: any) { console.error('tune-job notify failed:', e?.message) }
-        // Per-tune email (Chris 2026-07-30) — gated on the distributor having
-        // logged into the portal at least once. Best-effort.
-        try {
-          const emails = await distributorNotifiableEmails(distributorId)
-          if (emails.length) {
-            const { getFromMailbox } = await import('./b2b-settings')
-            await sendMail(await getFromMailbox(), {
-              to: emails,
-              subject: `New tune job — customer details needed${x.vin ? ` (VIN ${x.vin})` : ''}`,
-              html: `<p>Hi,</p>
-<p>We've received the receipt for a tune you've completed:</p>
-<ul><li><b>${x.tune_details || 'Tune'}</b>${x.vin ? `<br/>VIN ${x.vin}` : ''}${x.invoice_number ? `<br/>Invoice ${x.invoice_number}` : ''}</li></ul>
-<p>Please fill in the customer and vehicle details so we can finish the paperwork — takes about a minute.</p>
-<p style="margin:18px 0"><a href="https://justautos.app/b2b/jobs" style="background:#34c77b;color:#fff;padding:10px 18px;border-radius:6px;text-decoration:none;font-weight:600">Fill in the details</a></p>
-<p>Thanks,<br/>Just Autos</p>`,
-            })
-          }
-        } catch (e: any) { console.error('tune-job email failed:', e?.message) }
+        // Per-tune email/push moved to sendDelayedTuneJobNotices() — the
+        // notice now fires when the job becomes VISIBLE on the portal
+        // (3-day delay, Chris 2026-08-05), not the moment the receipt lands.
       } else {
         try {
           const { notify } = await import('./notifications')
@@ -783,14 +759,86 @@ export async function distributorNotifiableEmails(distributorId: string): Promis
 
 // ── Weekly reminders ────────────────────────────────────────────────────
 
+// ── Distributor-portal visibility delay (Chris 2026-08-05) ─────────────
+// A completed tune appears on the distributor portal — and fires its "fill
+// in the details" email/push — only N days (default 3) after the receipt
+// arrived. Admin sees everything immediately. Anchor = email_received_at
+// (the Stripe receipt ≈ tune-completed time), falling back to created_at.
+export function tuneJobPortalDelayMs(): number {
+  const days = Number(process.env.TUNE_JOBS_PORTAL_DELAY_DAYS ?? 3)
+  return (Number.isFinite(days) ? Math.max(0, days) : 3) * 86400_000
+}
+
+export function tuneJobVisible(j: { email_received_at?: string | null; created_at?: string | null }): boolean {
+  const anchor = j.email_received_at || j.created_at
+  if (!anchor) return true
+  return Date.now() - new Date(anchor).getTime() >= tuneJobPortalDelayMs()
+}
+
+// The per-tune "fill in the details" notice, moved OUT of ingest so it fires
+// when the job becomes VISIBLE (post-delay), not the moment the receipt
+// lands. Runs every cron tick; notified_at marks it sent. Distributors who
+// have never logged in are skipped WITHOUT stamping (same gate as the Friday
+// summary) so their notice fires on the first tick after their first login.
+export async function sendDelayedTuneJobNotices(): Promise<{ notified: number }> {
+  const c = sb()
+  const { data: jobs } = await c.from('b2b_tune_jobs')
+    .select('id, distributor_id, vin, tune_details, invoice_number, email_received_at, created_at')
+    .eq('status', 'awaiting_details')
+    .is('notified_at', null)
+    .not('distributor_id', 'is', null)
+    .order('created_at', { ascending: true })
+    .limit(200)
+  const byDist = new Map<string, any[]>()
+  for (const j of jobs || []) {
+    if (!tuneJobVisible(j)) continue
+    const g = byDist.get(j.distributor_id) || []
+    g.push(j); byDist.set(j.distributor_id, g)
+  }
+  let notified = 0
+  for (const [distId, djobs] of Array.from(byDist.entries())) {
+    try {
+      const emails = await distributorNotifiableEmails(distId)
+      if (emails.length === 0) continue
+      const { notifyDistributor } = await import('./push')
+      const { getFromMailbox } = await import('./b2b-settings')
+      for (const j of djobs) {
+        try {
+          await notifyDistributor(distId, {
+            title: 'New tune job — customer details needed',
+            body: `${j.tune_details || 'A recent tune'}${j.vin ? ` (VIN ${j.vin})` : ''} — tap to fill in the customer details.`,
+            href: '/b2b/jobs',
+            tag: `tune-job-${j.id}`,
+          })
+        } catch (e: any) { console.error('tune-job notify failed:', e?.message) }
+        await sendMail(await getFromMailbox(), {
+          to: emails,
+          subject: `New tune job — customer details needed${j.vin ? ` (VIN ${j.vin})` : ''}`,
+          html: `<p>Hi,</p>
+<p>We've received the receipt for a tune you've completed:</p>
+<ul><li><b>${j.tune_details || 'Tune'}</b>${j.vin ? `<br/>VIN ${j.vin}` : ''}${j.invoice_number ? `<br/>Invoice ${j.invoice_number}` : ''}</li></ul>
+<p>Please fill in the customer and vehicle details so we can finish the paperwork — takes about a minute.</p>
+<p style="margin:18px 0"><a href="https://justautos.app/b2b/jobs" style="background:#34c77b;color:#fff;padding:10px 18px;border-radius:6px;text-decoration:none;font-weight:600">Fill in the details</a></p>
+<p>Thanks,<br/>Just Autos</p>`,
+        })
+        await c.from('b2b_tune_jobs').update({ notified_at: new Date().toISOString() }).eq('id', j.id)
+        notified++
+      }
+    } catch (e: any) { console.error(`delayed tune-job notice failed for ${distId}:`, e?.message) }
+  }
+  return { notified }
+}
+
 export async function sendTuneJobReminders(): Promise<{ distributors: number; jobs: number }> {
   const c = sb()
   const weekAgo = new Date(Date.now() - 6.5 * 24 * 3600_000).toISOString()
   const { data: jobs } = await c.from('b2b_tune_jobs')
-    .select('id, distributor_id, vin, tune_details, last_reminder_at, first_reminded_at, created_at')
+    .select('id, distributor_id, vin, tune_details, last_reminder_at, first_reminded_at, created_at, email_received_at')
     .eq('status', 'awaiting_details')
     .not('distributor_id', 'is', null)
-  const due = (jobs || []).filter(j => !j.last_reminder_at || j.last_reminder_at < weekAgo)
+  // Jobs still inside the portal-visibility delay don't count — the summary
+  // must never reference a job the distributor can't see yet.
+  const due = (jobs || []).filter(j => tuneJobVisible(j) && (!j.last_reminder_at || j.last_reminder_at < weekAgo))
   const byDist = new Map<string, any[]>()
   for (const j of due) {
     const g = byDist.get(j.distributor_id) || []

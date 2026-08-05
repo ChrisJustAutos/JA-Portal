@@ -6,7 +6,7 @@
 // Auth: Bearer CRON_SECRET, with the vercel-cron user-agent fallback.
 
 import type { NextApiRequest, NextApiResponse } from 'next'
-import { ingestTuneJobEmails, sendTuneJobReminders, escalateTuneJobs, sweepTuneFollowupLetters } from '../../../lib/b2b-tune-jobs'
+import { ingestTuneJobEmails, sendTuneJobReminders, escalateTuneJobs, sweepTuneFollowupLetters, sendDelayedTuneJobNotices } from '../../../lib/b2b-tune-jobs'
 
 export const config = { maxDuration: 300 }
 
@@ -18,6 +18,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (!authorized) return res.status(401).json({ error: 'Unauthorised' })
 
   const ingest = await ingestTuneJobEmails({ lookbackDays: 7 })
+
+  // Per-tune "fill in the details" notices fire once a job clears the 3-day
+  // portal-visibility delay (Chris 2026-08-05) — not at ingest.
+  const delayedNotices = await sendDelayedTuneJobNotices().catch(e => ({ notified: 0, error: String(e?.message || e) }))
 
   // End-of-week summary: Friday 8am-ish Brisbane (Chris 2026-07-30). No
   // global kill-switch any more — per-distributor gating instead: emails only
@@ -42,5 +46,5 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   // Address column and marks the call done, the letter automation fires.
   const letterSweep = await sweepTuneFollowupLetters().catch(e => ({ checked: 0, lettersQueued: 0, errors: [String(e?.message || e)] }))
 
-  return res.status(200).json({ ok: true, ingest, reminders, escalation, autoChase, letterSweep })
+  return res.status(200).json({ ok: true, ingest, delayedNotices, reminders, escalation, autoChase, letterSweep })
 }
