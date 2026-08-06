@@ -150,9 +150,48 @@ function matchOrder(candidates: CandidateOrder[], from: string | null, subject: 
   return { order: null, how: 'no PO/order/supplier match' }
 }
 
+// Paid + settled orders whose MYOB invoice exists but whose payment never
+// receipted (e.g. a transient MYOB rejection — "Account is required" on
+// B2B-2026-000040, 2026-08-06). applyCustomerPaymentInMyob is idempotent
+// (myob_payment_uid gate + live-balance check), so retrying is always safe.
+async function retryMissingPayments(c: SupabaseClient, errors: string[]): Promise<number> {
+  const sinceIso = new Date(Date.now() - 90 * 86400_000).toISOString()
+  const { data: rows } = await c.from('b2b_orders')
+    .select('id, order_number')
+    .not('myob_sale_invoice_uid', 'is', null)
+    .is('myob_payment_uid', null)
+    .not('payment_settled_at', 'is', null)
+    .neq('is_test', true)
+    .gte('created_at', sinceIso)
+    .limit(20)
+  if (!rows || rows.length === 0) return 0
+  const { applyCustomerPaymentInMyob } = await import('./accounting/post-b2b-doc')
+  let applied = 0
+  for (const o of rows) {
+    try {
+      const pay = await applyCustomerPaymentInMyob(o.id)
+      if (pay.status === 'created') {
+        applied++
+        await c.from('b2b_order_events').insert({
+          order_id: o.id, event_type: 'myob_payment_applied', actor_type: 'system', actor_id: null,
+          notes: `Customer payment → Undeposited Funds (${pay.myob_payment_uid}) — retry sweep`,
+          metadata: { myob_payment_uid: pay.myob_payment_uid },
+        })
+        await postB2bOrderSlack(c, `:white_check_mark: Payment for *${o.order_number}* receipted in MYOB → Undeposited Funds.`)
+      }
+    } catch (e: any) {
+      errors.push(`payment ${o.order_number}: ${String(e?.message || e).slice(0, 200)}`)
+    }
+  }
+  return applied
+}
+
 export async function scanDropShipConfirmations(opts: { lookbackDays?: number } = {}): Promise<ConfirmWatchResult> {
   const c = sb()
   const res: ConfirmWatchResult = { scanned: 0, confirmed: 0, healed: 0, skipped: 0, errors: [], openOrders: 0 }
+
+  // Catch-up pass: receipt any settled payment whose earlier attempt failed.
+  await retryMissingPayments(c, res.errors)
 
   const candidates = await loadOpenDropShipOrders(c)
   res.openOrders = candidates.length

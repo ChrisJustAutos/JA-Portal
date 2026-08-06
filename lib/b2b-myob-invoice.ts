@@ -28,6 +28,7 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
 import { getConnection, myobFetch, myobFetchPdf } from './myob'
 import { assertCheckoutConfigured } from './b2b-settings'
+import { JAWS_UIDS } from './stripe-myob-sync'
 
 const UUID_REGEX_G = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi
 
@@ -544,6 +545,10 @@ export async function applyCustomerPaymentInMyob(orderId: string): Promise<MyobP
 
   const body: Record<string, any> = {
     DepositTo: 'UndepositedFunds',
+    // MYOB rejects the payment with "Account is required" (ErrorCode 100)
+    // even for UndepositedFunds — same shape the proven Stripe→MYOB sync
+    // posts (JAWS 1-1210, seen live on B2B-2026-000040, 2026-08-06).
+    Account: { UID: JAWS_UIDS.ACCT_UNDEP_FUNDS },
     Customer: { UID: dist.myob_primary_customer_uid },
     Date: payDate,
     AmountReceived: amount,
