@@ -185,12 +185,36 @@ export async function sendDistributorShippedEmail(orderId: string, info: { carri
     }
   } catch (e: any) { console.error('consignment PDF attach failed (sending email without it):', e?.message) }
 
+  // Split what's in THIS consignment vs supplier drop-ship (Chris 2026-08-06:
+  // "shipped" was confusing when the MPI line comes separately).
+  let shipmentLines = ''
+  try {
+    const { data: lns } = await c.from('b2b_order_lines')
+      .select('name, sku, qty, is_drop_ship, bundle_parent_catalogue_id')
+      .eq('order_id', orderId).order('sort_order', { ascending: true })
+    const real = (lns || []).filter(l => !l.bundle_parent_catalogue_id)
+    const ours = real.filter(l => l.is_drop_ship !== true)
+    const ds = real.filter(l => l.is_drop_ship === true)
+    if (ours.length) {
+      shipmentLines += `<p style="margin:14px 0 2px"><strong>In this delivery:</strong></p>` +
+        linesTableHtml(ours.map(l => ({ description: `${l.name} — ${l.sku}`, qty: l.qty })))
+    }
+    if (ds.length) {
+      shipmentLines += `<p style="margin:14px 0 2px"><strong>Shipped separately, direct from our supplier:</strong></p>` +
+        linesTableHtml(ds.map(l => ({ description: `${l.name} — ${l.sku}`, qty: l.qty }))) +
+        `<p style="color:#5c6b7a;font-size:13px;margin:2px 0 0">These items don't travel with the consignment above — they arrive in their own delivery.</p>`
+    }
+  } catch (e: any) { console.error('shipment lines block failed (sending without it):', e?.message) }
+
   const r = await renderEmail('distributor_shipped', {
     distributor_name: dist?.display_name || '', order_number: order.order_number,
     invoice_number: invoiceNumber, order_total: money(order.total_inc),
     carrier: info.carrier || 'our carrier', consignment_number: info.consignmentNumber || '—',
     tracking_number: info.trackingNumber || '—', eta: info.eta || '',
-  }, { tracking_link: info.trackingUrl ? buttonHtml('Track this shipment', info.trackingUrl, '#4f8ef7') : '' })
+  }, {
+    tracking_link: info.trackingUrl ? buttonHtml('Track this shipment', info.trackingUrl, '#4f8ef7') : '',
+    shipment_lines: shipmentLines,
+  })
   if (!r.enabled) return
   try {
     const shipSubj = (order as any).is_test ? `[TEST — please ignore] ${r.subject}` : r.subject
