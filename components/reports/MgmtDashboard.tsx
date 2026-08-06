@@ -822,17 +822,20 @@ export default function MgmtDashboard() {
 
         {/* KPI cards — click for a history bar graph */}
         {tiles.length > 0 && (
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(190px, 1fr))', gap: 12, marginBottom: 20, opacity: refreshing ? 0.6 : 1, transition: 'opacity 0.15s' }}>
+          /* gridAutoRows 1fr + height:100% on tile AND card = every tile the
+             exact same size regardless of label wrap / sub-note length
+             (Chris 2026-08-07: GM / GP / projected GP / COGS MTD differed). */
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(190px, 1fr))', gridAutoRows: '1fr', gap: 12, marginBottom: 20, opacity: refreshing ? 0.6 : 1, transition: 'opacity 0.15s' }}>
             {tiles.map(k => (
               <div key={k.key} className="mgmt-kpi-tile" role="button" tabIndex={0} title="Show history"
                 onClick={() => setHistoryKpiKey(k.key)}
                 onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setHistoryKpiKey(k.key) } }}
-                style={{ position: 'relative', cursor: 'pointer', outline: 'none' }}>
+                style={{ position: 'relative', cursor: 'pointer', outline: 'none', height: '100%' }}>
                 <KPI label={k.label} value={fmtKpiValue(k)} sub={k.sub} />
                 <span className="mgmt-kpi-hist" aria-hidden style={{ position: 'absolute', top: 10, right: 12, fontSize: 11, pointerEvents: 'none' }}>📊</span>
               </div>
             ))}
-            <style>{`.mgmt-kpi-tile .mgmt-kpi-hist{opacity:0.3;transition:opacity 0.12s}.mgmt-kpi-tile:hover .mgmt-kpi-hist,.mgmt-kpi-tile:focus-visible .mgmt-kpi-hist{opacity:1}`}</style>
+            <style>{`.mgmt-kpi-tile .mgmt-kpi-hist{opacity:0.3;transition:opacity 0.12s}.mgmt-kpi-tile:hover .mgmt-kpi-hist,.mgmt-kpi-tile:focus-visible .mgmt-kpi-hist{opacity:1}.mgmt-kpi-tile>div{height:100%;box-sizing:border-box}`}</style>
           </div>
         )}
 
