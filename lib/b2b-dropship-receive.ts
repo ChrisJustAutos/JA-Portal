@@ -159,9 +159,16 @@ export async function receiveDropShipPo(orderId: string, opts: { actorId?: strin
         } catch (e: any) { console.error('order_events insert failed (non-fatal):', e?.message) }
       } catch (e: any) {
         const msg = (e?.message || String(e)).slice(0, 500)
-        steps.push({ step: 'convert_invoice', ok: false, detail: msg })
-        console.error(`receive-dropship: MYOB order→invoice convert failed for ${orderId}:`, msg)
-        try { await c.from('b2b_order_events').insert({ order_id: orderId, event_type: 'myob_invoice_convert_failed', actor_type: 'system', actor_id: null, notes: msg }) } catch {}
+        // 37001 OrderConvertedToInvoice = the sale order was converted
+        // manually in the desktop app — adopt that invoice instead of failing.
+        if (/OrderConvertedToInvoice|37001/i.test(msg)
+            && await adoptManualInvoiceConversion(c, orderId, order, o.myob_invoice_uid, steps, { skipProbe: true })) {
+          hasSaleInvoice = true
+        } else {
+          steps.push({ step: 'convert_invoice', ok: false, detail: msg })
+          console.error(`receive-dropship: MYOB order→invoice convert failed for ${orderId}:`, msg)
+          try { await c.from('b2b_order_events').insert({ order_id: orderId, event_type: 'myob_invoice_convert_failed', actor_type: 'system', actor_id: null, notes: msg }) } catch {}
+        }
       }
     }
 
@@ -205,12 +212,19 @@ export async function receiveDropShipPo(orderId: string, opts: { actorId?: strin
  * A missing/ambiguous match returns false → the normal convert path runs and
  * surfaces its own error.
  */
-async function adoptManualInvoiceConversion(c: SupabaseClient, orderId: string, order: any, saleOrderUid: string, steps: ReceiveStep[]): Promise<boolean> {
+async function adoptManualInvoiceConversion(c: SupabaseClient, orderId: string, order: any, saleOrderUid: string, steps: ReceiveStep[], opts: { skipProbe?: boolean } = {}): Promise<boolean> {
   try {
     const conn = await getConnection('JAWS')
     if (!conn?.company_file_id) return false
-    const probe = await myobFetch(conn.id, `/accountright/${conn.company_file_id}/Sale/Order/Item/${saleOrderUid}`)
-    if (probe.status !== 404) return false   // order still there (or transient) → normal conversion
+    if (!opts.skipProbe) {
+      const probe = await myobFetch(conn.id, `/accountright/${conn.company_file_id}/Sale/Order/Item/${saleOrderUid}`)
+      // Converted = 404 (API conversions delete the order) OR still-present
+      // with a non-Open Status (desktop conversions keep it). Anything else →
+      // let the normal conversion path run.
+      const probeStatus = probe.status === 200 ? String(probe.data?.Status || '') : ''
+      const converted = probe.status === 404 || (probe.status === 200 && !!probeStatus && probeStatus !== 'Open')
+      if (!converted) return false
+    }
 
     const custUid = (Array.isArray(order.distributor) ? order.distributor[0] : order.distributor)?.myob_primary_customer_uid
     const custPo = String(order.customer_po || order.order_number || '').substring(0, 20).replace(/'/g, "''")
