@@ -622,11 +622,19 @@ async function queueTuneJobLetter(
     ].filter(Boolean).join('\n')
     const vehicle = [job.vehicle_year, job.vehicle_make, job.vehicle_model].filter(Boolean).join(' ')
       || job.vehicle_description || job.tune_details || 'your vehicle'
-    const body = String(template.body || '')
-      .replace(/\{\{\s*first_name\s*\}\}/g, job.customer_first_name || (job.customer_name || '').split(' ')[0] || 'there')
-      .replace(/\{\{\s*vehicle\s*\}\}/g, vehicle)
-      .replace(/\{\{\s*rego\s*\}\}/g, job.vehicle_rego || '')
-      + `\n\nYour local Just Autos distributor:\n${distBlock}`
+    // Render with the FULL variable set the normal letter path uses — the
+    // hand-rolled replace chain only knew first_name/vehicle/rego, so tokens
+    // like {{business_name}} printed literally (Chris 2026-08-06).
+    const { renderTemplate } = await import('./crm-automations')
+    const body = renderTemplate(String(template.body || ''), {
+      first_name: job.customer_first_name || (job.customer_name || '').split(' ')[0] || 'there',
+      customer_name: job.customer_name || '',
+      vehicle,
+      rego: job.vehicle_rego ? String(job.vehicle_rego).toUpperCase() : '',
+      date: new Date().toLocaleDateString('en-AU', { day: '2-digit', month: 'long', year: 'numeric' }),
+      business_name: auto.letterhead_name || 'Just Autos',
+      total: '',
+    }) + `\n\nYour local Just Autos distributor:\n${distBlock}`
     const address = addressOverride?.trim()
       || [job.customer_address_line1, [job.customer_suburb, job.customer_state, job.customer_postcode].filter(Boolean).join(' ')].filter(Boolean).join('\n')
     if (!address) return { queued: false, error: 'Letter skipped: no customer address' }
@@ -647,6 +655,41 @@ async function queueTuneJobLetter(
   } catch (e: any) {
     return { queued: false, error: `Letter: ${e?.message}` }
   }
+}
+
+// ONE-SHOT repair (runs from the hourly cron, marker-guarded): letters queued
+// 2026-08-05 → 2026-08-06 rendered {{business_name}} literally (the tune path
+// hand-replaced only first_name/vehicle/rego — fixed above). Requeue them so
+// they reprint with the full variable set; the bad prints get binned.
+const LETTER_REQUEUE_MARKER = 'TUNE_LETTERS_REQUEUED_20260806'
+export async function requeueBrokenTuneLetters(): Promise<{ requeued: number; skipped: boolean; errors: string[] }> {
+  const c = sb()
+  const { data: done } = await c.from('integration_settings').select('key').eq('key', LETTER_REQUEUE_MARKER).maybeSingle()
+  if (done) return { requeued: 0, skipped: true, errors: [] }
+
+  const out = { requeued: 0, skipped: false, errors: [] as string[] }
+  const { data: jobs } = await c.from('b2b_tune_jobs')
+    .select('id, customer_name, customer_first_name, customer_address_line1, customer_suburb, customer_state, customer_postcode, tune_details, vehicle_rego, vehicle_make, vehicle_model, vehicle_year, vehicle_description, distributor_id, letter_queued_at')
+    .gte('letter_queued_at', '2026-08-05T00:00:00Z')
+    .lte('letter_queued_at', '2026-08-06T07:30:00Z')
+  const distIds = Array.from(new Set((jobs || []).map((j: any) => j.distributor_id).filter(Boolean)))
+  const distById = new Map<string, any>()
+  if (distIds.length > 0) {
+    const { data: dists } = await c.from('b2b_distributors')
+      .select('id, display_name, ship_line1, ship_suburb, ship_state, ship_postcode, primary_contact_email')
+      .in('id', distIds)
+    for (const d of dists || []) distById.set(d.id, d)
+  }
+  for (const job of jobs || []) {
+    // Clear the stamp so queueTuneJobLetter re-stamps; keep going on failure.
+    const { error: clrErr } = await c.from('b2b_tune_jobs').update({ letter_queued_at: null, letter_job_id: null }).eq('id', job.id)
+    if (clrErr) { out.errors.push(`${job.customer_name}: ${clrErr.message}`); continue }
+    const r = await queueTuneJobLetter(job.id, job, distById.get(job.distributor_id) || null)
+    if (r.queued) out.requeued++
+    else out.errors.push(`${job.customer_name}: ${r.error || 'requeue failed'}`)
+  }
+  await c.from('integration_settings').upsert({ key: LETTER_REQUEUE_MARKER, value: new Date().toISOString() })
+  return out
 }
 
 // Hourly sweep (cron/tune-jobs): jobs whose letter never went because the
