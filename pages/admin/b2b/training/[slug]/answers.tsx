@@ -1,15 +1,17 @@
-// pages/admin/b2b/training/[slug].tsx — READ-ONLY admin preview of a course:
+// pages/admin/b2b/training/[slug]/answers.tsx — READ-ONLY answer sheet:
 // every section with its slides, then the full quiz with the correct answer
 // highlighted and the explanation shown (the distributor player never reveals
 // answers pre-submit — this page is how staff vet a course before assigning).
+// The interactive "preview as distributor" player lives one level up at
+// /admin/b2b/training/<slug>.
 
 import { useEffect, useState } from 'react'
 import Head from 'next/head'
 import { useRouter } from 'next/router'
-import PortalTopBar from '../../../../lib/PortalTopBar'
-import B2BAdminTabs from '../../../../components/b2b/B2BAdminTabs'
-import { requirePageAuth } from '../../../../lib/authServer'
-import { T, alpha } from '../../../../lib/ui/theme'
+import PortalTopBar from '../../../../../lib/PortalTopBar'
+import B2BAdminTabs from '../../../../../components/b2b/B2BAdminTabs'
+import { requirePageAuth } from '../../../../../lib/authServer'
+import { T, alpha } from '../../../../../lib/ui/theme'
 
 interface PreviewSection { title: string; intro?: string; slides: number[] }
 interface PreviewQuestion { q: string; options: string[]; correct: number; explain?: string; slide?: number }

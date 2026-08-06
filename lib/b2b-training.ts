@@ -44,14 +44,17 @@ function svc(): SupabaseClient {
   return _sb
 }
 
-export async function loadModule(slug: string): Promise<TrainingModule | null> {
+// Disabled modules load as null by default (distributor-facing callers must
+// never see them); the admin "preview as distributor" endpoint passes
+// includeDisabled so staff can vet a course before enabling/assigning it.
+export async function loadModule(slug: string, opts?: { includeDisabled?: boolean }): Promise<TrainingModule | null> {
   const { data, error } = await svc()
     .from('b2b_training_modules')
     .select('id, slug, title, description, pass_pct, enabled, content')
     .eq('slug', slug)
     .maybeSingle()
   if (error) throw new Error(error.message)
-  if (!data || data.enabled === false) return null
+  if (!data || (data.enabled === false && !opts?.includeDisabled)) return null
   const content = (data.content || {}) as { sections?: TrainingSection[]; questions?: TrainingQuestion[] }
   return {
     id: data.id,

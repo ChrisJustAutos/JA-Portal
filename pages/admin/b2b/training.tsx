@@ -225,7 +225,7 @@ export default function B2BTrainingAdmin({ user }: { user: any }) {
                     fontSize: 12, fontWeight: 600, color: T.blue, textDecoration: 'none', whiteSpace: 'nowrap',
                     border: `1px solid ${alpha(T.blue, '55')}`, borderRadius: 7, padding: '5px 12px',
                   }}>
-                  👁 Preview course & quiz
+                  ▶ Preview as distributor
                 </a>
                 <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: m.enabled ? T.text2 : T.amber, cursor: 'pointer' }}>
                   <input type="checkbox" checked={m.enabled} onChange={e => toggleEnabled(m, e.target.checked)} />
