@@ -1,8 +1,8 @@
-// lib/b2b-catalogue-sync.ts
+﻿// lib/b2b-catalogue-sync.ts
 // Sync the b2b_catalogue table from JAWS Inventory.
 //
 // Pull strategy: lib/accounting/read-docs.ts listInventoryItems('JAWS',
-// 'INVENTORY') — the provider-switched (MYOB/Xero) read seam. On MYOB it is
+// 'INVENTORY') â€” the provider-switched (MYOB/Xero) read seam. On MYOB it is
 // the exact paged GET /accountright/{cf_id}/Inventory/Item pull this module
 // always ran; on Xero the adapter's /Items rows are mapped into the same
 // MYOB-shaped fields (see read-docs for the documented gaps: TaxCode and
@@ -20,10 +20,10 @@
 // First-time ingest:
 //   - description seeded from MYOB Description
 //   - trade_price_ex_gst seeded from rrp_ex_gst (admin overrides later)
-//   - b2b_visible defaults to false — admin reviews each item before going live
+//   - b2b_visible defaults to false â€” admin reviews each item before going live
 //
 // Run via /api/b2b/admin/catalogue/sync. Long-running for big catalogues
-// (~1 MYOB request per 1000 items + bulk upsert) — Vercel maxDuration set
+// (~1 MYOB request per 1000 items + bulk upsert) â€” Vercel maxDuration set
 // to 300s on the API route. If JAWS catalogue ever grows past ~10k items
 // or the sync routinely brushes the timeout, move to GH Actions following
 // the stocktake worker pattern.
@@ -77,13 +77,13 @@ export async function syncJawsCatalogue(
     finishedAt: '',
   }
 
-  // ── 1. Pull every inventory item via the accounting read seam ──────────
+  // â”€â”€ 1. Pull every inventory item via the accounting read seam â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   // (JAWS entity, module 'INVENTORY'). No provider-side sellable/active
-  // filter — we filter IsActive/IsSold in JS, as this module always has.
+  // filter â€” we filter IsActive/IsSold in JS, as this module always has.
   const allItems: AccountingInventoryItem[] = await listInventoryItems('JAWS', 'INVENTORY', { performedBy })
   result.totalScanned = allItems.length
 
-  // ── 2. Load existing rows for diff ─────────────────────────────────────
+  // â”€â”€ 2. Load existing rows for diff â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const c = sb()
   const uids = allItems.map(i => i.UID).filter(Boolean)
   const existingByUid = new Map<string, any>()
@@ -92,13 +92,13 @@ export async function syncJawsCatalogue(
     const slice = uids.slice(i, i + CHUNK)
     const { data, error } = await c
       .from('b2b_catalogue')
-      .select('id, myob_item_uid, sku, name, rrp_ex_gst, is_taxable')
+      .select('id, myob_item_uid, sku, name, rrp_ex_gst, is_taxable, cost_price_ex_gst')
       .in('myob_item_uid', slice)
     if (error) throw new Error(`Load existing catalogue failed: ${error.message}`)
     for (const row of data || []) existingByUid.set(row.myob_item_uid, row)
   }
 
-  // ── 3. Build insert + update payloads ──────────────────────────────────
+  // â”€â”€ 3. Build insert + update payloads â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   type SyncRow = {
     myob_item_uid: string
     myob_company_file: 'JAWS'
@@ -109,6 +109,7 @@ export async function syncJawsCatalogue(
     myob_supplier_uid: string | null
     myob_supplier_name: string | null
     supplier_item_number: string | null
+    cost_price_ex_gst?: number
     last_synced_from_myob_at: string
     myob_snapshot: any
     // Insert-only seed fields
@@ -125,7 +126,7 @@ export async function syncJawsCatalogue(
   for (const it of allItems) {
     if (!it.UID || !it.Number || !it.Name) {
       // Placeholder items in MYOB (e.g. "*Special* Snorkel Non-Stock") have
-      // no real Number/Name. They're not catalogue items — skip silently.
+      // no real Number/Name. They're not catalogue items â€” skip silently.
       result.skipped++
       continue
     }
@@ -148,6 +149,11 @@ export async function syncJawsCatalogue(
     // MYOB reorder/primary supplier lives on the item's buying details.
     const restock     = it.BuyingDetails?.RestockingInformation
     const supplier     = restock?.Supplier
+    // Buy price from MYOB (StandardCost, ex GST) â€” feeds drop-ship purchase
+    // orders (Chris 2026-08-06: MPI PO had no price because this was never
+    // synced). Only mirrored when MYOB actually has one, so a manually
+    // entered cost is never wiped by a zero.
+    const stdCost = Number(it.BuyingDetails?.StandardCost || 0)
 
     const base: SyncRow = {
       myob_item_uid: it.UID,
@@ -159,6 +165,7 @@ export async function syncJawsCatalogue(
       myob_supplier_uid:    supplier?.UID || null,
       myob_supplier_name:   supplier?.Name || null,
       supplier_item_number: restock?.SupplierItemNumber || null,
+      ...(stdCost > 0 ? { cost_price_ex_gst: round2(stdCost) } : {}),
       last_synced_from_myob_at: nowIso,
       myob_snapshot: it,
     }
@@ -176,6 +183,7 @@ export async function syncJawsCatalogue(
                    || existing.name       !== it.Name
                    || Number(existing.rrp_ex_gst || 0) !== Number(rrpExGst || 0)
                    || existing.is_taxable !== isTaxable
+                   || (stdCost > 0 && Number((existing as any).cost_price_ex_gst || 0) !== round2(stdCost))
       if (!changed) {
         result.unchanged++
         continue
@@ -184,7 +192,7 @@ export async function syncJawsCatalogue(
     }
   }
 
-  // ── 4. Apply ────────────────────────────────────────────────────────────
+  // â”€â”€ 4. Apply â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   // Bulk first; on error fall back per-row so one bad row doesn't kill the batch.
   if (inserts.length > 0) {
     for (let i = 0; i < inserts.length; i += CHUNK) {
@@ -239,7 +247,7 @@ export async function syncJawsCatalogue(
     }
   }
 
-  // ── 5. Record sync stats in b2b_settings ───────────────────────────────
+  // â”€â”€ 5. Record sync stats in b2b_settings â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const finishedAt = new Date()
   result.durationMs = Date.now() - startMs
   result.finishedAt = finishedAt.toISOString()

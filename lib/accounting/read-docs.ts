@@ -448,6 +448,8 @@ export interface AccountingInventoryItem {
     TaxCode?: { UID?: string; Code?: string } | null
   } | null
   BuyingDetails?: {
+    // Ex-GST buy price off the MYOB item card — feeds drop-ship PO pricing.
+    StandardCost?: number | null
     RestockingInformation?: {
       Supplier?: { UID?: string; Name?: string } | null
       SupplierItemNumber?: string | null
