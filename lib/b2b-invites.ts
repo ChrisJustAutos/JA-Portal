@@ -24,19 +24,13 @@ export async function resendInviteEmail(
   }
 
   const baseUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://justautos.app'
-  const redirectTo = `${baseUrl}/reset-password?welcome=1&next=${encodeURIComponent('/b2b')}`
 
-  // 'recovery' works for existing (invited) auth users; 'invite' as fallback.
-  let link: string | null = null
-  let linkErr: string | null = null
-  for (const type of ['recovery', 'invite'] as const) {
-    try {
-      const { data, error } = await c.auth.admin.generateLink({ type, email: u.email, options: { redirectTo } })
-      if (!error && data?.properties?.action_link) { link = data.properties.action_link; break }
-      linkErr = error?.message || linkErr
-    } catch (e: any) { linkErr = e?.message || String(e) }
-  }
-  if (!link) return { ok: false, error: `Could not generate a fresh invite link${linkErr ? `: ${linkErr}` : ''}` }
+  // SCANNER-PROOF link (Harrop 2026-08-06): corporate mail security
+  // pre-clicks links, burning Supabase's single-use invite URLs. This link
+  // is a portal page (/b2b/welcome) — opening it changes nothing; the
+  // account only activates when the human submits the set-password form.
+  const { signOrderAction } = await import('./order-action-token')
+  const link = `${baseUrl}/b2b/welcome?t=${encodeURIComponent(signOrderAction({ orderId: u.id, scope: 'b2b_welcome', ttlDays: 7 }))}`
 
   const dist: any = Array.isArray(u.distributor) ? u.distributor[0] : u.distributor
   const distName = dist?.display_name || 'your distributor'
@@ -48,9 +42,9 @@ export async function resendInviteEmail(
     <div style="font-family:-apple-system,Segoe UI,Arial,sans-serif;max-width:560px;margin:0 auto;color:#1c2733">
       <h2 style="font-size:20px;margin:18px 0 6px">Your fresh portal invite</h2>
       <p>Hi${firstName ? ' ' + firstName : ''},</p>
-      <p>Here's a new sign-up link for the <b>Just Autos B2B Portal</b> (${distName}) — the previous one had already been used, which can happen when email security software checks links automatically.</p>
+      <p>Here's a new sign-up link for the <b>Just Autos B2B Portal</b> (${distName}).</p>
       <p style="margin:18px 0">${buttonHtml('Set your password & sign in', link)}</p>
-      <p style="color:#5c6b7a;font-size:13px">This link is single-use. If the button doesn't work, it may have been consumed by your mail scanner again — reply to this email and we'll sort it another way.</p>
+      <p style="color:#5c6b7a;font-size:13px">The link opens a page where you choose your password — it stays valid for 7 days and isn't affected by email security scanners. Any trouble, just reply to this email.</p>
     </div>`
   try {
     await sendMail(await getFromMailbox(), {
