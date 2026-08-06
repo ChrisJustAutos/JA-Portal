@@ -99,7 +99,7 @@ export async function writeOrderToMyob(orderId: string): Promise<MyobWriteResult
   const { data: lines, error: lErr } = await c
     .from('b2b_order_lines')
     .select(`id, myob_item_uid, sku, name, qty, unit_trade_price_ex_gst, line_subtotal_ex_gst, line_gst, line_total_inc, is_taxable, sort_order, is_drop_ship,
-      catalogue:b2b_catalogue!b2b_order_lines_catalogue_id_fkey ( rrp_ex_gst, myob_supplier_name )`)
+      catalogue:b2b_catalogue!b2b_order_lines_catalogue_id_fkey ( rrp_ex_gst, myob_supplier_name, description )`)
     .eq('order_id', orderId)
     .order('sort_order', { ascending: true })
   if (lErr) throw new Error(`Order lines load failed: ${lErr.message}`)
@@ -149,9 +149,13 @@ export async function writeOrderToMyob(orderId: string): Promise<MyobWriteResult
     const rrpTxt = rrpEx && rrpEx > 0
       ? ` · RRP $${(ln.is_taxable !== false ? rrpEx * 1.1 : rrpEx).toFixed(2)}`
       : ''
+    // Description = the MYOB item's own description (Chris 2026-08-06), not
+    // our "name — sku" composite. The catalogue mirrors the item's sell
+    // description at sync; fall back to the name if it's blank.
+    const baseDesc = String(cat?.description || '').trim() || String(ln.name || ln.sku)
     const line: any = {
       Type: 'Transaction',
-      Description: `${ln.name} — ${ln.sku}${rrpTxt}`.substring(0, 255),
+      Description: `${baseDesc}${rrpTxt}`.substring(0, 255),
       Item: { UID: ln.myob_item_uid },
       ShipQuantity: ln.qty,
       UnitPrice: round2(Number(ln.unit_trade_price_ex_gst || 0)),
