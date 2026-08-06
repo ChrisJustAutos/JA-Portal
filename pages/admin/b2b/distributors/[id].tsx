@@ -234,6 +234,7 @@ export default function DistributorDetailPage({ user }: Props) {
                 users={users}
                 onChange={load}
               />
+              <TrainingSection distId={dist.id}/>
               <DistGroupSection distGroupName={distGroupName} distGroupId={dist.dist_group_id}/>
             </>
           )}
@@ -999,6 +1000,77 @@ function CustomerSearch({ onPick }: { onPick: (c: MyobCustomer) => void }) {
 }
 
 // ─── Small components ──────────────────────────────────────────────────
+// ─── Training section ──────────────────────────────────────────────────
+// Compact read-only view of each portal user's training results (per module).
+interface TrainingRow {
+  user_id: string
+  user_name: string | null
+  user_email: string
+  user_active: boolean
+  module_slug: string
+  module_title: string
+  pass_pct: number
+  attempts: number
+  passed: boolean
+  best_score_pct: number | null
+  passed_at: string | null
+  last_attempt_at: string | null
+}
+
+function TrainingSection({ distId }: { distId: string }) {
+  const [rows, setRows] = useState<TrainingRow[] | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!distId) return
+    fetch(`/api/b2b/admin/distributors/${distId}/training`, { credentials: 'same-origin' })
+      .then(r => r.json())
+      .then(j => { if (j.error) throw new Error(j.error); setRows(j.rows || []) })
+      .catch(e => setError(e?.message || String(e)))
+  }, [distId])
+
+  const fmt = (iso: string | null) =>
+    iso ? new Date(iso).toLocaleDateString('en-AU', { day: '2-digit', month: 'short', year: 'numeric' }) : ''
+
+  return (
+    <Section title="Training" subtitle="Per-user course results from the distributor portal (Training tab)">
+      {error && (
+        <div style={{padding:8,background:`${T.red}15`,border:`1px solid ${T.red}40`,borderRadius:5,color:T.red,fontSize:12}}>{error}</div>
+      )}
+      {rows === null && !error && <div style={{fontSize:12,color:T.text3,padding:'6px 0'}}>Loading…</div>}
+      {rows !== null && rows.length === 0 && (
+        <div style={{fontSize:12,color:T.text3,padding:'6px 0'}}>No portal users / no training modules published.</div>
+      )}
+      {(rows || []).map(r => (
+        <div key={`${r.user_id}:${r.module_slug}`} style={{
+          padding:'9px 12px',background:T.bg3,border:`1px solid ${T.border}`,borderRadius:7,
+          display:'flex',alignItems:'center',gap:12,flexWrap:'wrap',marginBottom:8,
+          opacity: r.user_active ? 1 : 0.55,
+        }}>
+          <div style={{flex:1,minWidth:170}}>
+            <div style={{fontSize:13,color:T.text}}>{r.user_name || r.user_email}{!r.user_active && <span style={{fontSize:10,color:T.text3}}> · inactive</span>}</div>
+            <div style={{fontSize:10,color:T.text3,marginTop:1}}>{r.module_title}</div>
+          </div>
+          {r.passed ? (
+            <span style={{fontSize:11,fontWeight:700,color:T.green,whiteSpace:'nowrap'}}>
+              ✓ Passed {r.best_score_pct != null ? `${Math.round(r.best_score_pct)}%` : ''}{r.passed_at ? ` on ${fmt(r.passed_at)}` : ''}
+            </span>
+          ) : r.attempts > 0 ? (
+            <span style={{fontSize:11,fontWeight:600,color:T.amber,whiteSpace:'nowrap'}}>
+              {r.attempts} attempt{r.attempts === 1 ? '' : 's'} · best {r.best_score_pct != null ? `${Math.round(r.best_score_pct)}%` : '—'} (needs {r.pass_pct}%)
+            </span>
+          ) : (
+            <span style={{fontSize:11,color:T.text3,whiteSpace:'nowrap'}}>never attempted</span>
+          )}
+          {r.attempts > 0 && r.last_attempt_at && (
+            <span style={{fontSize:10,color:T.text3,whiteSpace:'nowrap'}}>last {fmt(r.last_attempt_at)}</span>
+          )}
+        </div>
+      ))}
+    </Section>
+  )
+}
+
 function Section({ title, subtitle, flash, children }: { title: string; subtitle?: string; flash?: string | null; children: React.ReactNode }) {
   return (
     <section style={{

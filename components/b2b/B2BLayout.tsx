@@ -28,7 +28,7 @@ const T = {
   amber:'#f5a623', red:'#f04e4e',
 }
 
-type ActiveNav = 'catalogue' | 'cart' | 'orders' | 'jobs' | 'assets' | 'team' | 'account' | null
+type ActiveNav = 'catalogue' | 'cart' | 'orders' | 'jobs' | 'assets' | 'training' | 'team' | 'account' | null
 
 interface Props {
   user: {
@@ -57,6 +57,7 @@ const NAV_ITEMS: Array<{ id: ActiveNav; label: string; href: string; icon: strin
   { id: 'orders',    label: 'Orders', href: '/b2b/orders',    icon: 'orders' },
   { id: 'jobs',      label: 'Jobs',   href: '/b2b/jobs',      icon: 'jobs' },
   { id: 'assets',    label: 'Resources', href: '/b2b/assets', icon: 'reports' },
+  { id: 'training',  label: 'Training', href: '/b2b/training', icon: 'call-coaching' },
   { id: 'team',      label: 'Team',   href: '/b2b/team',      icon: 'team' },
   { id: 'account',   label: 'Settings', href: '/b2b/settings', icon: 'workshop-settings' },
 ]
