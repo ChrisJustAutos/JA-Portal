@@ -40,9 +40,9 @@ export async function resendInviteEmail(
   ])
   const html = `
     <div style="font-family:-apple-system,Segoe UI,Arial,sans-serif;max-width:560px;margin:0 auto;color:#1c2733">
-      <h2 style="font-size:20px;margin:18px 0 6px">Your fresh portal invite</h2>
+      <h2 style="font-size:20px;margin:18px 0 6px">Welcome to the Just Autos B2B Portal</h2>
       <p>Hi${firstName ? ' ' + firstName : ''},</p>
-      <p>Here's a new sign-up link for the <b>Just Autos B2B Portal</b> (${distName}).</p>
+      <p>Here's your sign-up link for the <b>Just Autos B2B Portal</b> (${distName}).</p>
       <p style="margin:18px 0">${buttonHtml('Set your password & sign in', link)}</p>
       <p style="color:#5c6b7a;font-size:13px">The link opens a page where you choose your password — it stays valid for 7 days and isn't affected by email security scanners. Any trouble, just reply to this email.</p>
     </div>`

@@ -97,29 +97,29 @@ async function handleInvite(user: B2BUser, req: NextApiRequest, res: NextApiResp
     })
   }
 
-  // Invited distributor users set a password on arrival (welcome flow), which
-  // signs them in and lands them on /b2b.
-  const baseUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://justautos.app'
-  const redirectTo = `${baseUrl}/reset-password?welcome=1&next=${encodeURIComponent('/b2b')}`
-
+  // Create the auth account WITHOUT Supabase's invite email — its one-click
+  // links get burned by corporate mail scanners (Harrop 2026-08-06, twice).
+  // The invite email comes from OUR mailer with a scanner-proof /b2b/welcome
+  // link (only consumed when the human submits the set-password form).
   let authUserId: string
   try {
-    const { data: authData, error: inviteErr } = await c.auth.admin.inviteUserByEmail(email, {
-      redirectTo,
-      data: {
+    const { data: authData, error: createErr } = await c.auth.admin.createUser({
+      email,
+      email_confirm: false,
+      user_metadata: {
         b2b_distributor_id: user.distributor.id,
         b2b_distributor_name: user.distributor.displayName,
       },
     })
-    if (inviteErr) {
-      const msg = String(inviteErr.message || '').toLowerCase()
-      if (msg.includes('already') || msg.includes('registered') || (inviteErr as any).status === 422) {
+    if (createErr) {
+      const msg = String(createErr.message || '').toLowerCase()
+      if (msg.includes('already') || msg.includes('registered') || (createErr as any).status === 422) {
         return res.status(409).json({
           error: 'This email already has a Supabase account. Contact your account manager to link it.',
-          detail: inviteErr.message,
+          detail: createErr.message,
         })
       }
-      return res.status(502).json({ error: 'Invite failed', detail: inviteErr.message })
+      return res.status(502).json({ error: 'Invite failed', detail: createErr.message })
     }
     if (!authData?.user?.id) return res.status(502).json({ error: 'Invite returned no user id' })
     authUserId = authData.user.id
@@ -149,8 +149,13 @@ async function handleInvite(user: B2BUser, req: NextApiRequest, res: NextApiResp
     return res.status(500).json({ error: 'Failed to add user', detail: insertErr.message })
   }
 
+  // Scanner-proof welcome email (same one the Resend-invite button sends).
+  const { resendInviteEmail } = await import('../../../../lib/b2b-invites')
+  const sent = await resendInviteEmail(c, distUser.id)
+
   return res.status(201).json({
     user: distUser,
-    invite_sent_to: email,
+    invite_sent_to: sent.ok ? email : null,
+    ...(sent.ok ? {} : { warning: `User created but the invite email failed (${sent.error}) — use Resend invite.` }),
   })
 }

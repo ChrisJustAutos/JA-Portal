@@ -92,36 +92,35 @@ export default withAuth('edit:b2b_distributors', async (req: NextApiRequest, res
     })
   }
 
-  // 3. Send the Supabase invite email. Distributors now sign in with a
-  //    password, so the invite lands on the set-password page (welcome flow),
-  //    which establishes the distributor session and drops them on /b2b.
-  const baseUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://justautos.app'
-  const redirectTo = `${baseUrl}/reset-password?welcome=1&next=${encodeURIComponent('/b2b')}`
-
+  // 3. Create the auth account WITHOUT Supabase's invite email — its
+  //    one-click links get burned by corporate mail scanners (Harrop
+  //    2026-08-06). Our own mailer sends a scanner-proof /b2b/welcome link
+  //    after the row insert below.
   let authUserId: string
   try {
-    const { data: authData, error: inviteErr } = await c.auth.admin.inviteUserByEmail(email, {
-      redirectTo,
-      data: {
+    const { data: authData, error: createErr } = await c.auth.admin.createUser({
+      email,
+      email_confirm: false,
+      user_metadata: {
         b2b_distributor_id: distributorId,
         b2b_distributor_name: dist.display_name,
       },
     })
-    if (inviteErr) {
-      const msg = String(inviteErr.message || '').toLowerCase()
-      if (msg.includes('already') || msg.includes('registered') || (inviteErr as any).status === 422) {
+    if (createErr) {
+      const msg = String(createErr.message || '').toLowerCase()
+      if (msg.includes('already') || msg.includes('registered') || (createErr as any).status === 422) {
         return res.status(409).json({
           error: 'This email already has a Supabase account. Contact support to link them manually.',
-          detail: inviteErr.message,
+          detail: createErr.message,
         })
       }
       return res.status(502).json({
-        error: 'Supabase invite failed',
-        detail: inviteErr.message,
+        error: 'Account creation failed',
+        detail: createErr.message,
       })
     }
     if (!authData?.user?.id) {
-      return res.status(502).json({ error: 'Supabase invite returned no user id' })
+      return res.status(502).json({ error: 'Account creation returned no user id' })
     }
     authUserId = authData.user.id
   } catch (e: any) {
@@ -151,9 +150,13 @@ export default withAuth('edit:b2b_distributors', async (req: NextApiRequest, res
     return res.status(500).json({ error: 'Failed to link user to distributor', detail: insertErr.message })
   }
 
+  // Scanner-proof welcome email (same as the Resend-invite button).
+  const { resendInviteEmail } = await import('../../../../../../../lib/b2b-invites')
+  const sent = await resendInviteEmail(c, distUser.id)
+
   return res.status(201).json({
     user: distUser,
-    invite_sent_to: email,
-    redirect_to: redirectTo,
+    invite_sent_to: sent.ok ? email : null,
+    ...(sent.ok ? {} : { warning: `User created but the invite email failed (${sent.error}) — use Resend invite.` }),
   })
 })
