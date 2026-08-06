@@ -16,9 +16,14 @@ const TABS: Array<{ id: string; label: string; href: string; perm: Permission; r
   { id: 'distributors', label: 'Distributors', href: '/distributors', perm: 'view:distributors' },
 ]
 
-export default function ReportsTabs({ active, role }: { active: 'reports' | 'sales-report' | 'mgmt-dashboard' | 'workshop-map' | 'distributor-map' | 'distributors'; role: UserRole }) {
+export default function ReportsTabs({ active, role, reportTabs }: { active: 'reports' | 'sales-report' | 'mgmt-dashboard' | 'workshop-map' | 'distributor-map' | 'distributors'; role: UserRole; reportTabs?: string[] | null }) {
   const router = useRouter()
-  const tabs = TABS.filter(t => roleHasPermission(role, t.perm) && (!t.roles || t.roles.includes(role)))
+  const tabs = TABS.filter(t =>
+    roleHasPermission(role, t.perm) &&
+    (!t.roles || t.roles.includes(role)) &&
+    // Per-user Reports allowlist (marketing → workshop-map only). The
+    // cross-module 'distributors' tab is governed by its own permission.
+    (!reportTabs || reportTabs.length === 0 || t.id === 'distributors' || reportTabs.includes(t.id)))
   if (tabs.length <= 1) return null
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '0 16px', background: T.bg2, borderBottom: `1px solid ${T.border}`, flexShrink: 0 }}>

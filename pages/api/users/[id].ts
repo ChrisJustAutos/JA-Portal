@@ -14,7 +14,7 @@ function getAdmin() {
 async function patch(req: NextApiRequest, res: NextApiResponse, actor: any) {
   const id = req.query.id as string
   if (!id) return res.status(400).json({ error: 'id required' })
-  const { role, display_name, is_active, visible_tabs, phone_extension, webrtc_extension, webrtc_password, reply_to_email } = req.body || {}
+  const { role, display_name, is_active, visible_tabs, visible_report_tabs, phone_extension, webrtc_extension, webrtc_password, reply_to_email } = req.body || {}
   const validRoles = ['admin','manager','sales','accountant','viewer','workshop']
   if (role !== undefined && !validRoles.includes(role)) return res.status(400).json({ error: 'Invalid role' })
 
@@ -62,6 +62,18 @@ async function patch(req: NextApiRequest, res: NextApiResponse, actor: any) {
     if (reply_to_email === null || reply_to_email === '') patch.reply_to_email = null
     else if (typeof reply_to_email === 'string' && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(reply_to_email.trim())) patch.reply_to_email = reply_to_email.trim()
     else return res.status(400).json({ error: 'reply_to_email must be a valid email address or blank' })
+  }
+
+  // visible_report_tabs: null = all Reports sub-tabs; array = allowlist
+  // (e.g. marketing → ['workshop-map'] only).
+  if (visible_report_tabs !== undefined) {
+    if (visible_report_tabs === null) {
+      patch.visible_report_tabs = null
+    } else if (Array.isArray(visible_report_tabs)) {
+      patch.visible_report_tabs = visible_report_tabs.filter((x: any) => typeof x === 'string' && x.length > 0)
+    } else {
+      return res.status(400).json({ error: 'visible_report_tabs must be an array or null' })
+    }
   }
 
   // visible_tabs: null = reset to role defaults; array = explicit allowlist

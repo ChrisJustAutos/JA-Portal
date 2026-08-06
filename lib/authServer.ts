@@ -27,6 +27,7 @@ export interface PortalUser {
   role: UserRole
   isActive: boolean
   visibleTabs: string[] | null  // null = use role defaults
+  visibleReportTabs: string[] | null  // null = all Reports sub-tabs
 }
 
 // The SSR page-prop shape produced by requirePageAuth — import this instead of
@@ -38,6 +39,7 @@ export interface PortalUserSSR {
   displayName: string | null
   role: UserRole
   visibleTabs?: string[] | null
+  visibleReportTabs?: string[] | null
 }
 
 // Extract the JWT from either the Authorization header or our session cookie.
@@ -62,7 +64,7 @@ export async function getCurrentUser(req: NextApiRequest): Promise<PortalUser | 
 
   const { data: profile, error: profileErr } = await sb
     .from('user_profiles')
-    .select('id, email, display_name, role, is_active, visible_tabs')
+    .select('id, email, display_name, role, is_active, visible_tabs, visible_report_tabs')
     .eq('id', authData.user.id)
     .single()
 
@@ -76,6 +78,7 @@ export async function getCurrentUser(req: NextApiRequest): Promise<PortalUser | 
     role: profile.role as UserRole,
     isActive: profile.is_active,
     visibleTabs: (profile as any).visible_tabs || null,
+    visibleReportTabs: (profile as any).visible_report_tabs || null,
   }
 }
 
@@ -143,7 +146,22 @@ export async function requirePageAuth(context: any, permission: Permission | nul
         displayName: user.displayName,
         role: user.role,
         visibleTabs: user.visibleTabs,
+        visibleReportTabs: user.visibleReportTabs,
       },
     },
   }
+}
+
+// Reports-page gate: requirePageAuth + the per-user report-tab allowlist.
+// Redirects a restricted user (marketing → workshop-map only) to their first
+// allowed report instead of showing a tab they can't have.
+export async function requireReportPageAuth(context: any, tabId: string, permission: Permission = 'view:reports') {
+  const { reportTabAllowed, firstAllowedReportHref } = await import('./permissions')
+  const auth: any = await requirePageAuth(context, permission)
+  if (auth.redirect) return auth
+  const list = auth.props?.user?.visibleReportTabs || null
+  if (!reportTabAllowed(list, tabId)) {
+    return { redirect: { destination: firstAllowedReportHref(list), permanent: false } }
+  }
+  return auth
 }

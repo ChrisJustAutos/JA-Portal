@@ -216,6 +216,7 @@ interface UserRow {
   id: string; email: string; display_name: string | null; role: UserRole
   is_active: boolean; created_at: string; last_sign_in_at: string | null
   visible_tabs: string[] | null
+  visible_report_tabs: string[] | null
   phone_extension: string | null
   webrtc_extension: string | null
   webrtc_password_set: boolean
@@ -333,6 +334,36 @@ function UsersTab({ currentUser }: { currentUser: PortalUserSSR }) {
   }
 
   // Inline tab allowlist editor (used by invite + user editor).
+  // Reports sub-tab allowlist (null = all): lets a user (e.g. marketing) see
+  // ONLY specific reports, like the Workshop Map, within the Reports section.
+  const REPORT_SUBTABS: Array<{ id: string; label: string }> = [
+    { id: 'reports', label: 'Reports home' },
+    { id: 'sales-report', label: 'Sales Report' },
+    { id: 'mgmt-dashboard', label: 'Management Dashboard' },
+    { id: 'workshop-map', label: 'Workshop Map' },
+    { id: 'distributor-map', label: 'Distributor Map' },
+  ]
+  function ReportTabPicker({ value, onChange }: { value: string[] | null; onChange: (next: string[] | null) => void }) {
+    const list = value || []
+    return (
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(160px,1fr))', gap: 6 }}>
+        {REPORT_SUBTABS.map(t => {
+          const checked = value === null ? true : list.includes(t.id)
+          return (
+            <label key={t.id} style={{ display: 'flex', alignItems: 'center', gap: 7, padding: '6px 9px', background: checked ? T.bg3 : 'transparent', border: `1px solid ${checked ? T.border2 : T.border}`, borderRadius: 5, cursor: 'pointer', fontSize: 12 }}>
+              <input type="checkbox" checked={checked} onChange={() => {
+                const cur = value === null ? REPORT_SUBTABS.map(x => x.id) : list
+                const next = cur.includes(t.id) ? cur.filter(x => x !== t.id) : [...cur, t.id]
+                onChange(next.length === REPORT_SUBTABS.length ? null : next)
+              }} style={{ margin: 0 }} />
+              <span style={{ color: checked ? T.text : T.text2 }}>{t.label}</span>
+            </label>
+          )
+        })}
+      </div>
+    )
+  }
+
   function TabPicker({ role, value, onChange }: { role: UserRole; value: string[]; onChange: (next: string[]) => void }) {
     return (
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(160px,1fr))', gap: 6 }}>
@@ -476,6 +507,16 @@ function UsersTab({ currentUser }: { currentUser: PortalUserSSR }) {
                 {u.visible_tabs && <button onClick={() => updateUser(u.id, { visible_tabs: null })} style={{ background: 'none', border: 'none', color: T.blue, cursor: 'pointer', fontFamily: 'inherit', fontSize: 10, textTransform: 'none', letterSpacing: 0 }}>Reset to role defaults</button>}
               </div>
               <TabPicker role={u.role} value={tabs} onChange={next => updateUser(u.id, { visible_tabs: next })} />
+
+              {tabs.includes('reports') && (
+                <>
+                  <div style={{ ...sectionLbl, display: 'flex', justifyContent: 'space-between', marginTop: 12 }}>
+                    <span>Report tabs {u.visible_report_tabs ? '(restricted)' : '(all)'}</span>
+                    {u.visible_report_tabs && <button onClick={() => updateUser(u.id, { visible_report_tabs: null })} style={{ background: 'none', border: 'none', color: T.blue, cursor: 'pointer', fontFamily: 'inherit', fontSize: 10, textTransform: 'none', letterSpacing: 0 }}>Allow all reports</button>}
+                  </div>
+                  <ReportTabPicker value={u.visible_report_tabs} onChange={next => updateUser(u.id, { visible_report_tabs: next })} />
+                </>
+              )}
 
               <div style={sectionLbl}>CRM lead assignment</div>
               <label style={{ display: 'inline-flex', alignItems: 'center', gap: 8, cursor: 'pointer', fontSize: 12.5, color: T.text }}>

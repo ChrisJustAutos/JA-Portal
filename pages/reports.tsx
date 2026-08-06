@@ -1,12 +1,12 @@
-// pages/reports.tsx
-// Reports page — pick report type, customise sections, preview, download PDF.
+﻿// pages/reports.tsx
+// Reports page â€” pick report type, customise sections, preview, download PDF.
 
 import { useState, useEffect, useMemo, useCallback } from 'react'
 import Head from 'next/head'
 import { useRouter } from 'next/router'
 import PortalTopBar from '../lib/PortalTopBar'
 import ReportsTabs from '../components/ReportsTabs'
-import { requirePageAuth } from '../lib/authServer'
+import { requirePageAuth, requireReportPageAuth } from '../lib/authServer'
 import {
   REPORT_TYPE_LABELS, REPORT_TYPE_DESCRIPTIONS,
   reportTypesForUser, type ReportType,
@@ -20,13 +20,13 @@ import type { PortalUserSSR } from '../lib/authServer'
 import { T } from '../lib/ui/theme'
 
 const fmt = (n: number | null | undefined): string => {
-  if (n == null || !isFinite(n)) return '—'
+  if (n == null || !isFinite(n)) return 'â€”'
   if (Math.abs(n) >= 1_000_000) return `$${(n / 1_000_000).toFixed(2)}M`
   if (Math.abs(n) >= 10_000) return `$${Math.round(n / 1000)}k`
   return `$${Math.round(n).toLocaleString('en-AU')}`
 }
 const fmtFull = (n: number | null | undefined): string => {
-  if (n == null || !isFinite(n)) return '—'
+  if (n == null || !isFinite(n)) return 'â€”'
   return `$${Math.round(n).toLocaleString('en-AU')}`
 }
 
@@ -151,15 +151,15 @@ export default function ReportsPage({ user }: { user: PortalUserSSR }) {
     return () => setPageContext(null)
   }, [report, setPageContext])
 
-  // ── Render ─────────────────────────────────────────────────────────
+  // â”€â”€ Render â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   if (availableTypes.length === 0) {
     return (
       <>
-        <Head><title>Reports — Just Autos</title></Head>
+        <Head><title>Reports â€” Just Autos</title></Head>
         <div style={{ display: 'flex', flexDirection: 'column', minHeight: '100vh', fontFamily: "'DM Sans', system-ui, sans-serif", background: T.bg, color: T.text }}>
           <PortalTopBar activeId="reports" currentUserRole={user.role} currentUserVisibleTabs={(user as any).visibleTabs} currentUserName={user.displayName} currentUserEmail={user.email}/>
-          <ReportsTabs active="reports" role={user.role} />
+          <ReportsTabs active="reports" role={user.role} reportTabs={user.visibleReportTabs} />
           <div style={{ flex: 1, padding: 40, overflowY: 'auto' }}>
             <h1 style={{ color: T.text, fontSize: 24 }}>Reports</h1>
             <p style={{ color: T.text2, maxWidth: 520 }}>Your role ({user.role}) doesn't have access to generate any report types. Contact an admin if you need access.</p>
@@ -171,10 +171,10 @@ export default function ReportsPage({ user }: { user: PortalUserSSR }) {
 
   return (
     <>
-      <Head><title>Reports — Just Autos</title></Head>
+      <Head><title>Reports â€” Just Autos</title></Head>
       <div style={{ display: 'flex', flexDirection: 'column', minHeight: '100vh', fontFamily: "'DM Sans', system-ui, sans-serif", background: T.bg, color: T.text }}>
         <PortalTopBar activeId="reports" currentUserRole={user.role} currentUserVisibleTabs={(user as any).visibleTabs} currentUserName={user.displayName} currentUserEmail={user.email}/>
-        <ReportsTabs active="reports" role={user.role} />
+        <ReportsTabs active="reports" role={user.role} reportTabs={user.visibleReportTabs} />
         <div style={{ flex: 1, padding: '32px 40px', overflowY: 'auto' }}>
 
           {/* Header */}
@@ -187,7 +187,7 @@ export default function ReportsPage({ user }: { user: PortalUserSSR }) {
 
           <div style={{ display: 'grid', gridTemplateColumns: '360px 1fr', gap: 24, alignItems: 'flex-start' }}>
 
-            {/* LEFT — configuration panel */}
+            {/* LEFT â€” configuration panel */}
             <div style={{ background: T.bg2, border: `1px solid ${T.border}`, borderRadius: 12, padding: 20, position: 'sticky', top: 20 }}>
               <div style={{ fontSize: 11, color: T.text3, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 8 }}>Report type</div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 16 }}>
@@ -275,7 +275,7 @@ export default function ReportsPage({ user }: { user: PortalUserSSR }) {
                       cursor: generating ? 'wait' : 'pointer', fontFamily: 'inherit',
                     }}
                   >
-                    {generating ? 'Generating…' : 'Generate Preview'}
+                    {generating ? 'Generatingâ€¦' : 'Generate Preview'}
                   </button>
                   {error && (
                     <div style={{ marginTop: 10, padding: 8, background: `${T.red}18`, border: `1px solid ${T.red}40`, borderRadius: 6, color: T.red, fontSize: 11 }}>
@@ -286,11 +286,11 @@ export default function ReportsPage({ user }: { user: PortalUserSSR }) {
               )}
             </div>
 
-            {/* RIGHT — preview */}
+            {/* RIGHT â€” preview */}
             <div>
               {!report && !generating && (
                 <div style={{ background: T.bg2, border: `1px dashed ${T.border2}`, borderRadius: 12, padding: '80px 40px', textAlign: 'center' }}>
-                  <div style={{ fontSize: 40, marginBottom: 12 }}>📄</div>
+                  <div style={{ fontSize: 40, marginBottom: 12 }}>ðŸ“„</div>
                   <div style={{ color: T.text, fontSize: 15, fontWeight: 600, marginBottom: 6 }}>No preview yet</div>
                   <div style={{ color: T.text2, fontSize: 12, maxWidth: 380, margin: '0 auto' }}>
                     Pick a report type, adjust the period and sections, then click Generate Preview. The report will render here before you download it as PDF.
@@ -300,8 +300,8 @@ export default function ReportsPage({ user }: { user: PortalUserSSR }) {
 
               {generating && (
                 <div style={{ background: T.bg2, border: `1px solid ${T.border}`, borderRadius: 12, padding: 40, textAlign: 'center' }}>
-                  <div style={{ fontSize: 13, color: T.text, marginBottom: 8 }}>Fetching data and generating AI commentary…</div>
-                  <div style={{ fontSize: 11, color: T.text3 }}>This can take 20–40 seconds depending on the sections included.</div>
+                  <div style={{ fontSize: 13, color: T.text, marginBottom: 8 }}>Fetching data and generating AI commentaryâ€¦</div>
+                  <div style={{ fontSize: 11, color: T.text3 }}>This can take 20â€“40 seconds depending on the sections included.</div>
                   <div style={{ margin: '18px auto 0', width: 36, height: 36, border: `3px solid ${T.border2}`, borderTopColor: T.blue, borderRadius: '50%', animation: 'spin 0.8s linear infinite' }}/>
                   <style>{`@keyframes spin { to { transform: rotate(360deg) } }`}</style>
                 </div>
@@ -313,7 +313,7 @@ export default function ReportsPage({ user }: { user: PortalUserSSR }) {
                     <div style={{ flex: 1 }}>
                       <div style={{ fontSize: 13, fontWeight: 600, color: T.text }}>{report.title}</div>
                       <div style={{ fontSize: 10.5, color: T.text3 }}>
-                        {report.entities.join(' + ')} · {new Date(report.periodStart).toLocaleDateString('en-AU', { day: '2-digit', month: 'short' })} – {new Date(report.periodEnd).toLocaleDateString('en-AU', { day: '2-digit', month: 'short', year: 'numeric' })} · {report.sections.length} sections
+                        {report.entities.join(' + ')} Â· {new Date(report.periodStart).toLocaleDateString('en-AU', { day: '2-digit', month: 'short' })} â€“ {new Date(report.periodEnd).toLocaleDateString('en-AU', { day: '2-digit', month: 'short', year: 'numeric' })} Â· {report.sections.length} sections
                       </div>
                     </div>
                     <button
@@ -326,7 +326,7 @@ export default function ReportsPage({ user }: { user: PortalUserSSR }) {
                         cursor: downloadingPdf ? 'wait' : 'pointer', fontFamily: 'inherit',
                       }}
                     >
-                      {downloadingPdf ? 'Building PDF…' : 'Download PDF'}
+                      {downloadingPdf ? 'Building PDFâ€¦' : 'Download PDF'}
                     </button>
                   </div>
 
@@ -334,10 +334,10 @@ export default function ReportsPage({ user }: { user: PortalUserSSR }) {
                     <div style={{ borderBottom: '1px solid #d1d5db', paddingBottom: 14, marginBottom: 18 }}>
                       <div style={{ fontSize: 22, fontWeight: 700, color: 'var(--t-bg3)' }}>{report.title}</div>
                       <div style={{ fontSize: 11, color: '#6b7280', marginTop: 2 }}>
-                        Just Autos · {report.entities.join(' + ')} · {new Date(report.periodStart).toLocaleDateString('en-AU')} – {new Date(report.periodEnd).toLocaleDateString('en-AU')}
+                        Just Autos Â· {report.entities.join(' + ')} Â· {new Date(report.periodStart).toLocaleDateString('en-AU')} â€“ {new Date(report.periodEnd).toLocaleDateString('en-AU')}
                       </div>
                       <div style={{ fontSize: 10, color: '#6b7280', marginTop: 2 }}>
-                        Generated {new Date(report.generatedAt).toLocaleString('en-AU')} · All amounts ex-GST
+                        Generated {new Date(report.generatedAt).toLocaleString('en-AU')} Â· All amounts ex-GST
                       </div>
                     </div>
 
@@ -362,7 +362,7 @@ export default function ReportsPage({ user }: { user: PortalUserSSR }) {
   )
 }
 
-// ── Preview section renderer ──────────────────────────────────────────
+// â”€â”€ Preview section renderer â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 function PreviewSection({ section }: { section: any }) {
   if (!section || !section.data || section.data.error) {
     return (
@@ -465,9 +465,9 @@ function PvPnl({ data }: { data: any }) {
                 <tr key={ii}><td style={tdS}>{r.account}</td><td style={{ ...tdS, color: '#6b7280' }}>{r.code}</td><td style={{ ...tdS, textAlign: 'right' }}>{fmtFull(r.amount)}</td></tr>
               ))}
               <tr><td style={{ ...tdS, fontWeight: 700, borderTop: '1px solid var(--t-bg3)' }}>Total Income</td><td style={{ ...tdS, borderTop: '1px solid var(--t-bg3)' }}></td><td style={{ ...tdS, textAlign: 'right', fontWeight: 700, borderTop: '1px solid var(--t-bg3)' }}>{fmtFull(e.totalIncome)}</td></tr>
-              {e.totalCos > 0 && <tr><td style={tdS}>– Cost of Sales</td><td style={tdS}></td><td style={{ ...tdS, textAlign: 'right' }}>{fmtFull(e.totalCos)}</td></tr>}
+              {e.totalCos > 0 && <tr><td style={tdS}>â€“ Cost of Sales</td><td style={tdS}></td><td style={{ ...tdS, textAlign: 'right' }}>{fmtFull(e.totalCos)}</td></tr>}
               <tr><td style={{ ...tdS, fontWeight: 700 }}>Gross Profit</td><td style={tdS}></td><td style={{ ...tdS, textAlign: 'right', fontWeight: 700, color: e.grossProfit >= 0 ? '#059669' : '#dc2626' }}>{fmtFull(e.grossProfit)}</td></tr>
-              {e.totalOverheads > 0 && <tr><td style={tdS}>– Overheads</td><td style={tdS}></td><td style={{ ...tdS, textAlign: 'right' }}>{fmtFull(e.totalOverheads)}</td></tr>}
+              {e.totalOverheads > 0 && <tr><td style={tdS}>â€“ Overheads</td><td style={tdS}></td><td style={{ ...tdS, textAlign: 'right' }}>{fmtFull(e.totalOverheads)}</td></tr>}
               <tr><td style={{ ...tdS, fontWeight: 700, borderTop: '1px solid var(--t-bg3)' }}>Net Profit</td><td style={{ ...tdS, borderTop: '1px solid var(--t-bg3)' }}></td><td style={{ ...tdS, textAlign: 'right', fontWeight: 700, color: e.netProfit >= 0 ? '#059669' : '#dc2626', borderTop: '1px solid var(--t-bg3)' }}>{fmtFull(e.netProfit)}</td></tr>
             </tbody>
           </table>
@@ -503,7 +503,7 @@ function PvAging({ data, title }: { data: any; title: string }) {
       {data.entities.map((e: any, idx: number) => (
         <div key={idx} style={{ marginBottom: 12 }}>
           <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 6, color: '#3a3f4a' }}>
-            {e.entity} — {title} total {fmtFull(e.total)}
+            {e.entity} â€” {title} total {fmtFull(e.total)}
           </div>
           <div style={{ display: 'flex', marginBottom: 6, borderRadius: 3, overflow: 'hidden' }}>
             {[
@@ -612,7 +612,7 @@ function PvRepScorecardV2({ data }: { data: any }) {
   const attr = data?.attribution
   if (!attr) {
     return <div style={{ fontSize: 11, color: '#6b7280', fontStyle: 'italic' }}>
-      Attribution data unavailable — Connect column may not be populated yet, or Monday API was unreachable.
+      Attribution data unavailable â€” Connect column may not be populated yet, or Monday API was unreachable.
     </div>
   }
   const { linkageCompleteness, repScorecard, teamTotals } = attr
@@ -622,9 +622,9 @@ function PvRepScorecardV2({ data }: { data: any }) {
       {/* Linkage completeness banner */}
       <div style={{ padding: '8px 12px', background: linkageCompleteness.pct < 50 ? '#fff7ed' : linkageCompleteness.pct < 80 ? '#fefce8' : '#f0fdf4', border: `1px solid ${linkageCompleteness.pct < 50 ? '#fed7aa' : linkageCompleteness.pct < 80 ? '#fde047' : '#bbf7d0'}`, borderRadius: 4, marginBottom: 10, fontSize: 11 }}>
         <strong>Tracking completeness: {linkageCompleteness.pct}%</strong>
-        {' '}— {linkageCompleteness.ordersWithLink} of {linkageCompleteness.ordersInPeriod} orders in period are linked to a quote.
+        {' '}â€” {linkageCompleteness.ordersWithLink} of {linkageCompleteness.ordersInPeriod} orders in period are linked to a quote.
         {linkageCompleteness.pct < 80 && <span style={{ color: '#92400e' }}> Numbers will improve as backfill completes.</span>}
-        {!linkageCompleteness.distBookingConnectEnabled && <span style={{ color: '#6b7280', display: 'block', marginTop: 2, fontSize: 10 }}>Distributor Booking → Quote Connect column not yet added; dist bookings all show as unlinked.</span>}
+        {!linkageCompleteness.distBookingConnectEnabled && <span style={{ color: '#6b7280', display: 'block', marginTop: 2, fontSize: 10 }}>Distributor Booking â†’ Quote Connect column not yet added; dist bookings all show as unlinked.</span>}
       </div>
 
       <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 10.5 }}>
@@ -651,7 +651,7 @@ function PvRepScorecardV2({ data }: { data: any }) {
               <td style={{ ...tdS, textAlign: 'right' }}>{r.quotesSentInPeriod}</td>
               <td style={{ ...tdS, textAlign: 'right' }}>{r.quotesSentConverted}</td>
               <td style={{ ...tdS, textAlign: 'right', fontWeight: 700, color: r.quoteMonthConversionPct == null ? '#6b7280' : r.quoteMonthConversionPct >= 50 ? '#059669' : r.quoteMonthConversionPct >= 25 ? '#d97706' : '#dc2626' }}>
-                {r.quoteMonthConversionPct == null ? '—' : `${r.quoteMonthConversionPct}%`}
+                {r.quoteMonthConversionPct == null ? 'â€”' : `${r.quoteMonthConversionPct}%`}
               </td>
               <td style={{ ...tdS, textAlign: 'right' }}>{r.ordersLinkedToRep}</td>
               <td style={{ ...tdS, textAlign: 'right', fontWeight: 700 }}>{fmt(r.ordersLinkedValue)}</td>
@@ -662,7 +662,7 @@ function PvRepScorecardV2({ data }: { data: any }) {
             <td style={{ ...tdS, fontWeight: 700 }}>Team</td>
             <td style={{ ...tdS, textAlign: 'right', fontWeight: 700 }}>{teamTotals.quotesSentInPeriod}</td>
             <td style={{ ...tdS, textAlign: 'right', fontWeight: 700 }}>{teamTotals.quotesSentConverted}</td>
-            <td style={{ ...tdS, textAlign: 'right', fontWeight: 700 }}>{teamTotals.quoteMonthConversionPct == null ? '—' : `${teamTotals.quoteMonthConversionPct}%`}</td>
+            <td style={{ ...tdS, textAlign: 'right', fontWeight: 700 }}>{teamTotals.quoteMonthConversionPct == null ? 'â€”' : `${teamTotals.quoteMonthConversionPct}%`}</td>
             <td style={{ ...tdS, textAlign: 'right', fontWeight: 700 }}>{teamTotals.ordersLinked}</td>
             <td style={{ ...tdS, textAlign: 'right', fontWeight: 700 }}>{fmt(teamTotals.ordersLinkedValue)}</td>
             <td style={tdS}></td>
@@ -671,8 +671,8 @@ function PvRepScorecardV2({ data }: { data: any }) {
       </table>
 
       <div style={{ fontSize: 9.5, color: '#6b7280', marginTop: 6, lineHeight: 1.4 }}>
-        <strong>Sent</strong> = quotes created this period · <strong>Conv.</strong> = of those, already linked to an order · <strong>QM %</strong> = quote-month conversion<br/>
-        <strong>Orders</strong> = orders this period linked to this rep's quotes · <strong>From prior</strong> = orders linked to quotes from earlier months
+        <strong>Sent</strong> = quotes created this period Â· <strong>Conv.</strong> = of those, already linked to an order Â· <strong>QM %</strong> = quote-month conversion<br/>
+        <strong>Orders</strong> = orders this period linked to this rep's quotes Â· <strong>From prior</strong> = orders linked to quotes from earlier months
       </div>
     </div>
   )
@@ -689,7 +689,7 @@ function PvQuoteAging({ data }: { data: any }) {
 
   const buckets = [
     { label: 'Same month', count: quoteAging.sameMonth.count, value: quoteAging.sameMonth.value, color: '#059669' },
-    { label: '≤ 30 days ago', count: quoteAging.last30d.count, value: quoteAging.last30d.value, color: '#0284c7' },
+    { label: 'â‰¤ 30 days ago', count: quoteAging.last30d.count, value: quoteAging.last30d.value, color: '#0284c7' },
     { label: '31-60 days ago', count: quoteAging.last60d.count, value: quoteAging.last60d.value, color: '#d97706' },
     { label: '60+ days ago', count: quoteAging.older.count, value: quoteAging.older.value, color: '#dc2626' },
     { label: 'Unlinked (walk-in or untracked)', count: quoteAging.unlinked.count, value: quoteAging.unlinked.value, color: '#6b7280' },
@@ -763,7 +763,7 @@ function PvMonthTrend({ data }: { data: any }) {
               <td style={{ ...tdS, textAlign: 'right' }}>{m.quotesSent}</td>
               <td style={{ ...tdS, textAlign: 'right' }}>{m.quotesConvertedToDate}</td>
               <td style={{ ...tdS, textAlign: 'right', fontWeight: 700, color: m.conversionPct == null ? '#6b7280' : m.conversionPct >= 50 ? '#059669' : m.conversionPct >= 25 ? '#d97706' : '#dc2626' }}>
-                {m.conversionPct == null ? '—' : `${m.conversionPct}%`}
+                {m.conversionPct == null ? 'â€”' : `${m.conversionPct}%`}
               </td>
             </tr>
           ))}
@@ -811,7 +811,7 @@ function PvSalesPipelineCombined({ data }: { data: any }) {
           )}
         </>
       ) : (
-        <div style={{ fontSize: 11, color: '#d97706', fontStyle: 'italic', marginTop: 6 }}>Monday.com data unavailable — showing MYOB only.</div>
+        <div style={{ fontSize: 11, color: '#d97706', fontStyle: 'italic', marginTop: 6 }}>Monday.com data unavailable â€” showing MYOB only.</div>
       )}
     </div>
   )
@@ -833,7 +833,7 @@ function PvSalesFunnel({ data }: { data: any }) {
           <div key={i} style={{ marginBottom: 8 }}>
             <div style={{ display: 'flex', alignItems: 'center', marginBottom: 3 }}>
               <div style={{ fontSize: 11, fontWeight: 700, flex: 2.5 }}>{s.label}</div>
-              <div style={{ fontSize: 9.5, color: '#6b7280', flex: 1.5 }}>{s.source}{s.note ? ` — ${s.note}` : ''}</div>
+              <div style={{ fontSize: 9.5, color: '#6b7280', flex: 1.5 }}>{s.source}{s.note ? ` â€” ${s.note}` : ''}</div>
               <div style={{ fontSize: 11, fontWeight: 700, flex: 1, textAlign: 'right' }}>{s.count}</div>
               <div style={{ fontSize: 11, flex: 1.2, textAlign: 'right', color: '#3a3f4a' }}>{fmt(s.value)}</div>
             </div>
@@ -848,7 +848,7 @@ function PvSalesFunnel({ data }: { data: any }) {
           <div style={{ fontSize: 11, fontWeight: 700, marginBottom: 4, color: '#3a3f4a' }}>Conversion rates</div>
           {conversions.map((c: any, i: number) => (
             <div key={i} style={{ display: 'flex', marginBottom: 2 }}>
-              <div style={{ fontSize: 10.5, flex: 3, color: '#3a3f4a' }}>{c.from} → {c.to}</div>
+              <div style={{ fontSize: 10.5, flex: 3, color: '#3a3f4a' }}>{c.from} â†’ {c.to}</div>
               <div style={{ fontSize: 10.5, fontWeight: 700, color: c.pct >= 50 ? '#059669' : c.pct >= 25 ? '#d97706' : '#dc2626' }}>{c.pct}%</div>
             </div>
           ))}
@@ -887,7 +887,7 @@ function PvSalesRepScorecard({ data }: { data: any }) {
             <td style={{ ...tdS, textAlign: 'right', fontWeight: 700 }}>{fmt(r.quotesWonValue)}</td>
             <td style={{ ...tdS, textAlign: 'right' }}>{r.quotesLost}</td>
             <td style={{ ...tdS, textAlign: 'right', fontWeight: 700, color: r.conversionPct == null ? '#6b7280' : r.conversionPct >= 50 ? '#059669' : r.conversionPct >= 25 ? '#d97706' : '#dc2626' }}>
-              {r.conversionPct == null ? '—' : `${r.conversionPct}%`}
+              {r.conversionPct == null ? 'â€”' : `${r.conversionPct}%`}
             </td>
           </tr>
         ))}
@@ -957,7 +957,7 @@ function PvTrends({ data }: { data: any }) {
         const expensePts = e.expenses.map((v: number, i: number) => `${pad.left + xStep * i},${yFor(v)}`).join(' ')
         return (
           <div key={idx} style={{ marginBottom: 12 }}>
-            <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 6, color: '#3a3f4a' }}>{e.entity} — 6-month trend</div>
+            <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 6, color: '#3a3f4a' }}>{e.entity} â€” 6-month trend</div>
             <svg width={w} height={h} style={{ maxWidth: '100%', height: 'auto' }}>
               <line x1={pad.left} y1={pad.top} x2={pad.left} y2={pad.top + plotH} stroke="#d1d5db" strokeWidth="0.5"/>
               <line x1={pad.left} y1={pad.top + plotH} x2={pad.left + plotW} y2={pad.top + plotH} stroke="#d1d5db" strokeWidth="0.5"/>
@@ -984,7 +984,7 @@ function PvTrends({ data }: { data: any }) {
   )
 }
 
-// ── Call Analytics preview components ─────────────────────────────────
+// â”€â”€ Call Analytics preview components â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function fmtSecs(s: number): string {
   if (s < 60) return `${s}s`
@@ -1018,7 +1018,7 @@ function PvCallsTeamTrend({ data }: { data: any }) {
       <div style={{ display: 'flex', gap: 12, marginBottom: 8 }}>
         <div style={{ background: '#f9fafb', padding: 8, borderTop: '2px solid #2563eb', flex: 1 }}>
           <div style={{ fontSize: 8.5, color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Team Avg</div>
-          <div style={{ fontSize: 16, fontWeight: 700, color: 'var(--t-bg3)', marginTop: 2 }}>{avg != null ? avg.toFixed(1) : '—'}</div>
+          <div style={{ fontSize: 16, fontWeight: 700, color: 'var(--t-bg3)', marginTop: 2 }}>{avg != null ? avg.toFixed(1) : 'â€”'}</div>
         </div>
         <div style={{ background: '#f9fafb', padding: 8, borderTop: '2px solid #2563eb', flex: 1 }}>
           <div style={{ fontSize: 8.5, color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Scored Calls</div>
@@ -1127,11 +1127,11 @@ function PvCallsRepLeaderboard({ data }: { data: any }) {
             <td style={{ ...tdS, color: '#9ca3af', width: 20 }}>{i + 1}</td>
             <td style={tdS}>{r.agentName || `Ext ${r.agentExt}`} <span style={{ color: '#9ca3af' }}>({r.agentExt})</span></td>
             <td style={{ ...tdS, textAlign: 'right' }}>{r.scoredCalls}</td>
-            <td style={{ ...tdS, textAlign: 'right', fontWeight: 700, color: scoreColour(r.avgScore) }}>{r.avgScore != null ? r.avgScore.toFixed(1) : '—'}</td>
-            <td style={{ ...tdS, textAlign: 'right', color: scoreColour(r.minScore) }}>{r.minScore ?? '—'}</td>
-            <td style={{ ...tdS, textAlign: 'right', color: scoreColour(r.maxScore) }}>{r.maxScore ?? '—'}</td>
+            <td style={{ ...tdS, textAlign: 'right', fontWeight: 700, color: scoreColour(r.avgScore) }}>{r.avgScore != null ? r.avgScore.toFixed(1) : 'â€”'}</td>
+            <td style={{ ...tdS, textAlign: 'right', color: scoreColour(r.minScore) }}>{r.minScore ?? 'â€”'}</td>
+            <td style={{ ...tdS, textAlign: 'right', color: scoreColour(r.maxScore) }}>{r.maxScore ?? 'â€”'}</td>
             <td style={{ ...tdS, textAlign: 'right', color: r.flaggedCount > 0 ? '#dc2626' : '#6b7280' }}>{r.flaggedCount}</td>
-            <td style={{ ...tdS, color: '#3a3f4a' }}>{r.topOutcome || '—'}</td>
+            <td style={{ ...tdS, color: '#3a3f4a' }}>{r.topOutcome || 'â€”'}</td>
           </tr>
         ))}
       </tbody>
@@ -1144,7 +1144,7 @@ function PvCallsOutcomes({ data }: { data: any }) {
   if (outcomes.length === 0) {
     return <div style={{ fontSize: 11, color: '#6b7280' }}>No classified outcomes in this period.</div>
   }
-  // Colour palette cycling — keep visually distinct
+  // Colour palette cycling â€” keep visually distinct
   const COL = ['#2563eb', '#059669', '#d97706', '#dc2626', '#a78bfa', '#0d9488', '#6b7280']
   const total = data.total || outcomes.reduce((s: number, o: any) => s + o.count, 0)
   return (
@@ -1178,12 +1178,12 @@ function PvCallsOutcomes({ data }: { data: any }) {
 function PvCallsFlagged({ data }: { data: any }) {
   const calls = data?.calls || []
   if (calls.length === 0) {
-    return <div style={{ fontSize: 11, color: '#059669' }}>No flagged calls (score &lt; {data?.threshold ?? 40}) in this period. ✓</div>
+    return <div style={{ fontSize: 11, color: '#059669' }}>No flagged calls (score &lt; {data?.threshold ?? 40}) in this period. âœ“</div>
   }
   return (
     <div>
       <div style={{ fontSize: 10, color: '#6b7280', marginBottom: 6 }}>
-        {calls.length} call{calls.length === 1 ? '' : 's'} scored below {data?.threshold ?? 40} — sorted worst first.
+        {calls.length} call{calls.length === 1 ? '' : 's'} scored below {data?.threshold ?? 40} â€” sorted worst first.
       </div>
       <table style={{ width: '100%', borderCollapse: 'collapse' }}>
         <thead>
@@ -1202,9 +1202,9 @@ function PvCallsFlagged({ data }: { data: any }) {
               <td style={{ ...tdS, textAlign: 'right', fontWeight: 700, color: '#dc2626' }}>{c.score}</td>
               <td style={tdS}>{new Date(c.callDate).toLocaleDateString('en-AU', { day: '2-digit', month: 'short' })}</td>
               <td style={tdS}>{c.agentName || `Ext ${c.agentExt}`}</td>
-              <td style={tdS}>{c.externalNumber || '—'}</td>
+              <td style={tdS}>{c.externalNumber || 'â€”'}</td>
               <td style={{ ...tdS, textAlign: 'right' }}>{fmtSecs(c.billSec)}</td>
-              <td style={{ ...tdS, color: '#3a3f4a' }}>{c.outcome || '—'}</td>
+              <td style={{ ...tdS, color: '#3a3f4a' }}>{c.outcome || 'â€”'}</td>
             </tr>
           ))}
         </tbody>
@@ -1218,7 +1218,7 @@ function PvCallsObjections({ data }: { data: any }) {
   if (objections.length === 0) {
     return (
       <div style={{ fontSize: 11, color: '#6b7280' }}>
-        No objection data captured for this period. (Analysis has to explicitly log objections — if this looks low, check the rubric.)
+        No objection data captured for this period. (Analysis has to explicitly log objections â€” if this looks low, check the rubric.)
       </div>
     )
   }
@@ -1244,5 +1244,5 @@ function PvCallsObjections({ data }: { data: any }) {
 }
 
 export async function getServerSideProps(context: any) {
-  return requirePageAuth(context, 'generate:reports')
+  return requireReportPageAuth(context, 'reports', 'generate:reports')
 }

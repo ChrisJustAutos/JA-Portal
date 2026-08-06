@@ -139,6 +139,29 @@ export function roleHasPermission(role: UserRole, permission: Permission): boole
   return ROLE_PERMISSIONS[role]?.includes(permission) ?? false
 }
 
+// ── Reports sub-tab allowlist (per-user, user_profiles.visible_report_tabs)
+// null/empty = every tab the role can see (default). A restricted user (e.g.
+// marketing → workshop-map only) gets redirected to their first allowed tab.
+export const REPORT_TAB_HREFS: Record<string, string> = {
+  'reports': '/reports',
+  'sales-report': '/reports/sales-report',
+  'mgmt-dashboard': '/reports/mgmt-dashboard',
+  'workshop-map': '/reports/map',
+  'distributor-map': '/reports/distributor-map',
+}
+
+export function reportTabAllowed(list: string[] | null | undefined, tab: string): boolean {
+  return !list || list.length === 0 || list.includes(tab)
+}
+
+export function firstAllowedReportHref(list: string[] | null | undefined): string {
+  if (!list || list.length === 0) return '/reports'
+  for (const id of Object.keys(REPORT_TAB_HREFS)) {
+    if (list.includes(id)) return REPORT_TAB_HREFS[id]
+  }
+  return '/?forbidden=1'
+}
+
 // ── Report type access ────────────────────────────────────────────────
 
 export type ReportType =
