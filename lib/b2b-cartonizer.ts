@@ -51,6 +51,14 @@ export interface PalletSpec {
 
 export type PackMode = 'auto' | 'pallet' | 'cartons'
 
+// What went into a packed unit — aggregated by SKU. Used by the pick list so
+// the packer sees the exact contents of each box; MachShip ignores it.
+export interface PackedContent {
+  sku: string
+  name: string
+  qty: number
+}
+
 // A packed shipping unit in mm/grams. `quantity` is how many identical units.
 export interface PackedUnit {
   itemType: 'Carton' | 'Pallet'
@@ -60,9 +68,23 @@ export interface PackedUnit {
   length_mm: number
   width_mm: number
   height_mm: number
+  // Contents of ONE unit (for quantity>1 pallets: contents of the whole group).
+  contents?: PackedContent[]
 }
 
 const sortedDims = (l: number, w: number, h: number) => [l, w, h].sort((a, b) => a - b)
+
+// Aggregate individual units back into per-SKU content lines.
+function aggregateContents(items: PackInputItem[]): PackedContent[] {
+  const bySku = new Map<string, PackedContent>()
+  for (const it of items) {
+    const key = it.sku || it.name
+    const cur = bySku.get(key)
+    if (cur) cur.qty += 1
+    else bySku.set(key, { sku: it.sku, name: it.name, qty: 1 })
+  }
+  return Array.from(bySku.values())
+}
 
 // Does a unit fit inside a box (compare sorted dimensions)? Missing dims → assume yes.
 function fitsBox(it: PackInputItem, box: FreightBox): boolean {
@@ -121,6 +143,8 @@ export function packItems(
         length_mm: Number(pallet!.length_mm),
         width_mm: Number(pallet!.width_mm),
         height_mm: Number(pallet!.max_height_mm || 1200),
+        // Everything ships on the pallet group (contents of the group, not per pallet).
+        contents: aggregateContents(units.map(u => u.item)),
       }],
     }
   }
@@ -139,6 +163,7 @@ export function packItems(
     out.push({
       itemType: 'Carton', name: u.item.name.slice(0, 60) || u.item.sku, quantity: 1, weight_g: u.weight_g,
       length_mm: u.item.length_mm || 200, width_mm: u.item.width_mm || 200, height_mm: u.item.height_mm || 200,
+      contents: [{ sku: u.item.sku, name: u.item.name, qty: 1 }],
     })
   }
 
@@ -153,7 +178,7 @@ export function packItems(
 
   const boxable = units.filter(u => !shipsAlone(u))
   const byVolAsc = [...boxes].sort((a, b) => boxVolume(a) - boxVolume(b))
-  type Bin = { box: FreightBox; usedW: number; usedV: number }
+  type Bin = { box: FreightBox; usedW: number; usedV: number; items: PackInputItem[] }
   const bins: Bin[] = []
   const desc = [...boxable].sort((a, b) => itemVol(b) - itemVol(a))
   for (const u of desc) {
@@ -163,18 +188,19 @@ export function packItems(
       if (fitsBox(u.item, bin.box)
         && bin.usedW + u.weight_g <= bin.box.max_weight_g
         && bin.usedV + uV <= boxVolume(bin.box) * FILL) {
-        bin.usedW += u.weight_g; bin.usedV += uV; placed = true; break
+        bin.usedW += u.weight_g; bin.usedV += uV; bin.items.push(u.item); placed = true; break
       }
     }
     if (!placed) {
       const cand = byVolAsc.find(b => fitsBox(u.item, b) && b.max_weight_g >= u.weight_g)
-      if (cand) bins.push({ box: cand, usedW: u.weight_g, usedV: uV })
+      if (cand) bins.push({ box: cand, usedW: u.weight_g, usedV: uV, items: [u.item] })
       else {
         // Fits a box dimensionally but too heavy for any box's weight limit →
         // ship on its own at its own dims.
         out.push({
           itemType: 'Carton', name: u.item.name.slice(0, 60) || u.item.sku, quantity: 1, weight_g: u.weight_g,
           length_mm: u.item.length_mm || 200, width_mm: u.item.width_mm || 200, height_mm: u.item.height_mm || 200,
+          contents: [{ sku: u.item.sku, name: u.item.name, qty: 1 }],
         })
       }
     }
@@ -183,6 +209,7 @@ export function packItems(
     out.push({
       itemType: 'Carton', name: bin.box.name, quantity: 1, weight_g: Math.max(1, Math.round(bin.usedW)),
       length_mm: bin.box.length_mm, width_mm: bin.box.width_mm, height_mm: bin.box.height_mm,
+      contents: aggregateContents(bin.items),
     })
   }
 

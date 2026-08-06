@@ -877,6 +877,23 @@ function ShippingCard({ order, onEdit, onReloaded, onFlash }: {
   const hasConsignment  = !!order.machship_consignment_id
   const [bookingBusy,  setBookingBusy]  = useState(false)
   const [refreshBusy,  setRefreshBusy]  = useState(false)
+  const [pickBusy,     setPickBusy]     = useState(false)
+  const [pickDone,     setPickDone]     = useState(false)
+  async function printPickList() {
+    setPickBusy(true)
+    setActionError(null)
+    try {
+      const r = await fetch(`/api/b2b/admin/orders/${order.id}/print-picklist`, { method: 'POST', credentials: 'same-origin' })
+      const j = await r.json()
+      if (!r.ok) throw new Error(j?.error || `HTTP ${r.status}`)
+      setPickDone(true)
+      setTimeout(() => setPickDone(false), 5000)
+    } catch (e: any) {
+      setActionError(e?.message || String(e))
+    } finally {
+      setPickBusy(false)
+    }
+  }
   const [actionError,  setActionError]  = useState<string | null>(null)
   const [dispatchAt,   setDispatchAt]   = useState('')   // datetime-local; blank = collect ASAP
   const [packMode,     setPackMode]     = useState<string>(order.freight_pack_mode || 'auto')
@@ -987,6 +1004,11 @@ function ShippingCard({ order, onEdit, onReloaded, onFlash }: {
                 🖨 Print label
               </button>
             )}
+            <button onClick={printPickList} disabled={pickBusy}
+              title="Prints the box-by-box pick list on the upstairs printer (auto-prints on payment; this is a reprint)"
+              style={mb({ border: `1px solid ${pickDone ? T.green : T.border2}`, background: 'transparent', color: pickDone ? T.green : T.blue, fontWeight: 500, cursor: pickBusy ? 'wait' : 'pointer' })}>
+              {pickDone ? '✓ Pick list queued' : pickBusy ? 'Queuing…' : '📋 Print pick list'}
+            </button>
           </div>
         )
       })()}

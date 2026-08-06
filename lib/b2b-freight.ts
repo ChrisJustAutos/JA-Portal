@@ -22,7 +22,7 @@ import {
   type RouteOption,
   type MachShipItem,
 } from './b2b-machship'
-import { packItems, type FreightBox, type PalletSpec, type PackMode } from './b2b-cartonizer'
+import { packItems, type FreightBox, type PalletSpec, type PackMode, type PackResult } from './b2b-cartonizer'
 
 let _sb: SupabaseClient | null = null
 function sb(): SupabaseClient {
@@ -263,11 +263,15 @@ export interface PackForMachShipItem {
 // quoting/booking never breaks. Shared by getLiveQuote and the booking path so a
 // booked consignment matches its quote. manualHandling is flagged on every unit
 // when ANY item needs it (the carrier handles the whole consignment).
-export async function packForMachShip(
+// The raw packed units (with per-box contents) for a set of order lines, using
+// the SAME configured boxes + pallet spec as quoting/booking. Returns null when
+// no usable box config exists (callers fall back to one-carton-per-line).
+// Shared by packForMachShip and the pick-list PDF so the printed box plan is
+// exactly the plan freight will book.
+export async function packOrderUnits(
   items: PackForMachShipItem[],
   opts: { packMode?: PackMode } = {},
-): Promise<MachShipItem[]> {
-  const anyManualHandling = items.some(i => i.manual_handling)
+): Promise<PackResult | null> {
   const [boxes, settings] = await Promise.all([loadFreightBoxes(), loadFreightSettings()])
   const pallet: PalletSpec = {
     length_mm:     settings?.freight_pallet_length_mm ?? null,
@@ -276,7 +280,7 @@ export async function packForMachShip(
     max_weight_g:  settings?.freight_pallet_max_weight_g ?? null,
     threshold_g:   settings?.freight_pallet_threshold_g ?? null,
   }
-  const packed = packItems(
+  return packItems(
     items.map(it => ({
       sku: it.sku, name: it.name, qty: it.qty,
       weight_g: it.weight_g, length_mm: it.length_mm, width_mm: it.width_mm, height_mm: it.height_mm,
@@ -284,6 +288,14 @@ export async function packForMachShip(
     })),
     boxes, pallet, { mode: opts.packMode },
   )
+}
+
+export async function packForMachShip(
+  items: PackForMachShipItem[],
+  opts: { packMode?: PackMode } = {},
+): Promise<MachShipItem[]> {
+  const anyManualHandling = items.some(i => i.manual_handling)
+  const packed = await packOrderUnits(items, opts)
   if (packed) {
     return packed.units.map(u => ({
       itemType: u.itemType as any,

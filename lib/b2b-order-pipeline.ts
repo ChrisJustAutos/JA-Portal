@@ -81,6 +81,17 @@ export async function runPostPaymentPipeline(orderId: string, opts: { paymentInt
     await c.from('b2b_order_events').insert({ order_id: orderId, event_type: 'myob_write_failed', to_status: 'paid', actor_type: 'system', actor_id: null, notes: errMsg.substring(0, 500), metadata: { error: errMsg } })
   }
 
+  // Warehouse pick list → workshop A4 printer (best-effort; idempotent inside
+  // via the deterministic storage path + existing-job check, so webhook retries
+  // never double-print). A pick-list failure must never break the pipeline.
+  try {
+    const { queuePickListPrint } = await import('./b2b-pick-list-print')
+    const pl = await queuePickListPrint(orderId)
+    if (pl.status === 'failed') console.error(`pipeline: pick-list print failed for order ${orderId}: ${pl.reason}`)
+  } catch (e: any) {
+    console.error(`pipeline: pick-list print failed for order ${orderId}:`, e?.message || e)
+  }
+
   // Auto-raise drop-ship POs (best-effort, guarded).
   let dropshipResult: DropshipRaiseResult | undefined
   // Test orders never auto-raise supplier POs — a PO is a REAL stock order and
