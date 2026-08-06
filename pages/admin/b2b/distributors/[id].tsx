@@ -1033,13 +1033,13 @@ function TrainingSection({ distId }: { distId: string }) {
     iso ? new Date(iso).toLocaleDateString('en-AU', { day: '2-digit', month: 'short', year: 'numeric' }) : ''
 
   return (
-    <Section title="Training" subtitle="Per-user course results from the distributor portal (Training tab)">
+    <Section title="Training" subtitle="Per-user results for courses assigned to this distributor (manage assignments under B2B → Training)">
       {error && (
         <div style={{padding:8,background:`${T.red}15`,border:`1px solid ${T.red}40`,borderRadius:5,color:T.red,fontSize:12}}>{error}</div>
       )}
       {rows === null && !error && <div style={{fontSize:12,color:T.text3,padding:'6px 0'}}>Loading…</div>}
       {rows !== null && rows.length === 0 && (
-        <div style={{fontSize:12,color:T.text3,padding:'6px 0'}}>No portal users / no training modules published.</div>
+        <div style={{fontSize:12,color:T.text3,padding:'6px 0'}}>No training assigned to this distributor (or no portal users). Assign courses under <a href="/admin/b2b/training" style={{color:T.blue}}>B2B → Training</a>.</div>
       )}
       {(rows || []).map(r => (
         <div key={`${r.user_id}:${r.module_slug}`} style={{

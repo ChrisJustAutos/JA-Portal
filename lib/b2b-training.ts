@@ -24,6 +24,7 @@ export interface TrainingQuestion {
 }
 
 export interface TrainingModule {
+  id: string
   slug: string
   title: string
   description: string | null
@@ -46,13 +47,14 @@ function svc(): SupabaseClient {
 export async function loadModule(slug: string): Promise<TrainingModule | null> {
   const { data, error } = await svc()
     .from('b2b_training_modules')
-    .select('slug, title, description, pass_pct, enabled, content')
+    .select('id, slug, title, description, pass_pct, enabled, content')
     .eq('slug', slug)
     .maybeSingle()
   if (error) throw new Error(error.message)
   if (!data || data.enabled === false) return null
   const content = (data.content || {}) as { sections?: TrainingSection[]; questions?: TrainingQuestion[] }
   return {
+    id: data.id,
     slug: data.slug,
     title: data.title,
     description: data.description || null,
@@ -65,6 +67,36 @@ export async function loadModule(slug: string): Promise<TrainingModule | null> {
 
 export function moduleSlideCount(sections: TrainingSection[]): number {
   return sections.reduce((n, s) => n + (Array.isArray(s.slides) ? s.slides.length : 0), 0)
+}
+
+// ── Assignment gating (migration 192) ───────────────────────────────────
+// Training is ASSIGNED coursework: a module is visible to a membership iff
+// it's enabled AND there's either a whole-distributor assignment row
+// (distributor_user_id null) for their distributor, or a per-user row for
+// their exact b2b_distributor_users row. Zero assignments = invisible.
+
+// The preview session's fallback user id is the literal string 'preview',
+// which would 22P02 on a uuid column — normalise to null (whole-distributor
+// assignments still apply; per-user ones can't).
+export function asMembershipId(userId: string): string | null {
+  return /^[0-9a-f-]{36}$/i.test(userId) ? userId : null
+}
+
+// Module ids assigned to this membership (whole-distributor + per-user rows).
+// NOT filtered on module.enabled — intersect with an enabled-modules query.
+export async function assignedModuleIds(distributorId: string, membershipId: string | null): Promise<Set<string>> {
+  const { data, error } = await svc()
+    .from('b2b_training_assignments')
+    .select('module_id, distributor_user_id')
+    .eq('distributor_id', distributorId)
+  if (error) throw new Error(error.message)
+  const ids = new Set<string>()
+  for (const r of (data || []) as Array<{ module_id: string; distributor_user_id: string | null }>) {
+    if (r.distributor_user_id === null || (membershipId !== null && r.distributor_user_id === membershipId)) {
+      ids.add(r.module_id)
+    }
+  }
+  return ids
 }
 
 // ── Exam build (client-safe) ────────────────────────────────────────────

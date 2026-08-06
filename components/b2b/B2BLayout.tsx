@@ -57,17 +57,35 @@ const NAV_ITEMS: Array<{ id: ActiveNav; label: string; href: string; icon: strin
   { id: 'orders',    label: 'Orders', href: '/b2b/orders',    icon: 'orders' },
   { id: 'jobs',      label: 'Jobs',   href: '/b2b/jobs',      icon: 'jobs' },
   { id: 'assets',    label: 'Resources', href: '/b2b/assets', icon: 'reports' },
-  // Training hidden for all distributors (Chris 2026-08-06) — modules also
-  // disabled in b2b_training_modules. Restore this line + flip enabled=true
-  // to bring it back.
-  // { id: 'training',  label: 'Training', href: '/b2b/training', icon: 'call-coaching' },
   { id: 'team',      label: 'Team',   href: '/b2b/team',      icon: 'team' },
   { id: 'account',   label: 'Settings', href: '/b2b/settings', icon: 'workshop-settings' },
 ]
 
+// Training is ASSIGNED coursework (migration 192) — the tab only renders when
+// the signed-in membership has ≥1 visible module (see nav-count fetch below).
+// It slots in between Resources and Team.
+const TRAINING_ITEM: { id: ActiveNav; label: string; href: string; icon: string } =
+  { id: 'training', label: 'Training', href: '/b2b/training', icon: 'call-coaching' }
+const TRAINING_NAV_POS = 5   // after Resources
+
 export default function B2BLayout({ user, active = null, children, cartCount }: Props) {
   const router = useRouter()
   const isMobile = useIsMobile()
+
+  // Assigned-training gate: one cheap fetch per mount; the Training tab only
+  // appears for memberships with ≥1 visible module.
+  const [trainingCount, setTrainingCount] = useState(0)
+  useEffect(() => {
+    let cancelled = false
+    fetch('/api/b2b/training/nav-count', { credentials: 'same-origin' })
+      .then(r => r.ok ? r.json() : null)
+      .then(d => { if (!cancelled && d) setTrainingCount(Number(d.count) || 0) })
+      .catch(() => {})
+    return () => { cancelled = true }
+  }, [])
+  const navItems = trainingCount > 0
+    ? [...NAV_ITEMS.slice(0, TRAINING_NAV_POS), TRAINING_ITEM, ...NAV_ITEMS.slice(TRAINING_NAV_POS)]
+    : NAV_ITEMS
 
   async function signOut() {
     try { await getSupabase().auth.signOut() } catch {}
@@ -151,7 +169,7 @@ export default function B2BLayout({ user, active = null, children, cartCount }: 
         {/* Desktop nav inline with header */}
         {!isMobile && (
           <nav style={{display:'flex', gap:4, marginLeft:16}}>
-            {NAV_ITEMS.map(item => (
+            {navItems.map(item => (
               <NavLink
                 key={item.id}
                 href={item.href}
@@ -230,10 +248,10 @@ export default function B2BLayout({ user, active = null, children, cartCount }: 
           boxShadow: '0 -4px 16px rgba(0,0,0,0.4)',
         }}>
           <div style={{
-            display:'grid', gridTemplateColumns: `repeat(${NAV_ITEMS.length}, 1fr)`,
+            display:'grid', gridTemplateColumns: `repeat(${navItems.length}, 1fr)`,
             height: 64,
           }}>
-            {NAV_ITEMS.map(item => {
+            {navItems.map(item => {
               const on = active === item.id
               const showBadge = item.id === 'cart' && cartCount != null && cartCount > 0
               return (

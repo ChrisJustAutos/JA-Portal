@@ -15,7 +15,7 @@ const T = {
   text: 'var(--t-text)', text2: 'var(--t-text2)', text3: 'var(--t-text3)', blue: '#4f8ef7',
 }
 
-export type B2BAdminSection = 'dashboard' | 'catalogue' | 'reorder' | 'stocktake' | 'stock_overview' | 'distributors' | 'suppliers' | 'orders' | 'tune_jobs' | 'assets' | 'settings'
+export type B2BAdminSection = 'dashboard' | 'catalogue' | 'reorder' | 'stocktake' | 'stock_overview' | 'distributors' | 'suppliers' | 'orders' | 'tune_jobs' | 'assets' | 'training' | 'settings'
 
 const TABS: Array<{ id: B2BAdminSection; label: string; href: string; icon: string }> = [
   { id: 'dashboard',      label: 'Dashboard',      href: '/admin/b2b',                icon: 'overview' },
@@ -28,6 +28,7 @@ const TABS: Array<{ id: B2BAdminSection; label: string; href: string; icon: stri
   { id: 'orders',         label: 'Orders',         href: '/admin/b2b/orders',         icon: 'orders' },
   { id: 'tune_jobs',      label: 'Tune Jobs',      href: '/admin/b2b/tune-jobs',      icon: 'jobs' },
   { id: 'assets',         label: 'Resources',      href: '/admin/b2b/assets',         icon: 'reports' },
+  { id: 'training',       label: 'Training',       href: '/admin/b2b/training',       icon: 'call-coaching' },
   { id: 'settings',       label: 'Settings',       href: '/admin/b2b/settings',       icon: 'settings' },
 ]
 

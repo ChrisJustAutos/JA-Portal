@@ -3,9 +3,11 @@
 //   GET → { rows: [{ user_id, user_name, user_email, user_active,
 //                    module_slug, module_title, pass_pct,
 //                    attempts, passed, best_score_pct, passed_at, last_attempt_at }] }
-// One row per (portal user × enabled module) — users with no attempts still
-// get a row (attempts: 0) so the admin page can show "never". The seeded
-// "Portal Preview" demo user is excluded.
+// One row per (portal user × module ASSIGNED to this distributor) — training
+// is assignment-gated (migration 192), so only modules with an assignment row
+// for this distributor (whole-distributor or any of its users) appear here.
+// Users with no attempts still get a row (attempts: 0) so the admin page can
+// show "never". The seeded "Portal Preview" demo user is excluded.
 
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { createClient } from '@supabase/supabase-js'
@@ -25,14 +27,21 @@ export default withAuth('edit:b2b_distributors', async (req: NextApiRequest, res
   if (!distributorId) return res.status(400).json({ error: 'Missing distributor id' })
 
   const c = sb()
-  const [{ data: mods, error: mErr }, { data: users, error: uErr }, { data: attempts, error: aErr }] = await Promise.all([
-    c.from('b2b_training_modules').select('slug, title, pass_pct').eq('enabled', true).order('created_at', { ascending: true }),
+  const [{ data: allMods, error: mErr }, { data: users, error: uErr }, { data: attempts, error: aErr }, { data: assigns, error: asErr }] = await Promise.all([
+    c.from('b2b_training_modules').select('id, slug, title, pass_pct').eq('enabled', true).order('created_at', { ascending: true }),
     c.from('b2b_distributor_users').select('id, email, full_name, is_active').eq('distributor_id', distributorId).order('created_at', { ascending: true }),
     c.from('b2b_training_attempts').select('module_slug, user_id, score_pct, passed, completed_at').eq('distributor_id', distributorId).order('completed_at', { ascending: false }),
+    c.from('b2b_training_assignments').select('module_id').eq('distributor_id', distributorId),
   ])
   if (mErr) return res.status(500).json({ error: mErr.message })
   if (uErr) return res.status(500).json({ error: uErr.message })
   if (aErr) return res.status(500).json({ error: aErr.message })
+  if (asErr) return res.status(500).json({ error: asErr.message })
+
+  // Any assignment row for this distributor (whole-distributor OR one of its
+  // users — user rows carry the distributor_id too) makes the module relevant.
+  const assignedIds = new Set((assigns || []).map(a => a.module_id))
+  const mods = (allMods || []).filter(m => assignedIds.has(m.id))
 
   // (user, module) → summary
   const key = (userId: string, slug: string) => `${userId}:${slug}`

@@ -17,7 +17,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { createClient } from '@supabase/supabase-js'
 import { withB2BAuth, B2BUser } from '../../../../lib/b2bAuthServer'
-import { loadModule, buildExam, markExam } from '../../../../lib/b2b-training'
+import { loadModule, buildExam, markExam, asMembershipId, assignedModuleIds } from '../../../../lib/b2b-training'
 import { notify } from '../../../../lib/notifications'
 
 function sb() {
@@ -30,6 +30,11 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, use
 
   const module_ = await loadModule(slug)
   if (!module_) return res.status(404).json({ error: 'Training module not found' })
+
+  // Assignment-gated (migration 192): unassigned modules 404 for both GET and
+  // POST — an assignment revoked mid-course blocks the exam submit too.
+  const assigned = await assignedModuleIds(user.distributor.id, asMembershipId(user.id))
+  if (!assigned.has(module_.id)) return res.status(404).json({ error: 'Training module not found' })
 
   if (req.method === 'GET') {
     const exam = buildExam(module_)   // new shuffle per request (fresh on every retake)

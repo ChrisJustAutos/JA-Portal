@@ -9,7 +9,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { createClient } from '@supabase/supabase-js'
 import { withB2BAuth, B2BUser } from '../../../../lib/b2bAuthServer'
-import { moduleSlideCount, TrainingSection } from '../../../../lib/b2b-training'
+import { asMembershipId, assignedModuleIds, moduleSlideCount, TrainingSection } from '../../../../lib/b2b-training'
 
 function sb() {
   return createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!, { auth: { persistSession: false } })
@@ -28,12 +28,17 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, use
   }
   const c = sb()
 
-  const { data: mods, error } = await c
+  const { data: allMods, error } = await c
     .from('b2b_training_modules')
-    .select('slug, title, description, pass_pct, content, created_at')
+    .select('id, slug, title, description, pass_pct, content, created_at')
     .eq('enabled', true)
     .order('created_at', { ascending: true })
   if (error) return res.status(500).json({ error: error.message })
+
+  // Assignment-gated (migration 192): only modules assigned to this
+  // membership (whole-distributor or per-user) are visible.
+  const assigned = await assignedModuleIds(user.distributor.id, asMembershipId(user.id))
+  const mods = (allMods || []).filter((m: any) => assigned.has(m.id))
 
   // The preview user's id isn't a real b2b_distributor_users row unless it was
   // seeded; either way the .eq() below just returns no attempts. ('preview'
@@ -59,7 +64,7 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, use
     bySlug.set(a.module_slug, cur)
   }
 
-  const modules = (mods || []).map((m: any) => {
+  const modules = mods.map((m: any) => {
     const sections = (m.content?.sections || []) as TrainingSection[]
     const questions = (m.content?.questions || []) as any[]
     const mine = bySlug.get(m.slug) || { count: 0, best: null, latest: null }
