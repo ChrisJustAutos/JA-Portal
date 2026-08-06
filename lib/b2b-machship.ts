@@ -253,6 +253,38 @@ export async function createConsignment(req: CreateConsignmentRequest): Promise<
   return machshipFetch<Consignment>('POST', '/apiv2/consignments/createConsignment', req)
 }
 
+// Manifest a booked consignment so the CARRIER actually receives the job —
+// createConsignment alone leaves it sitting "Unmanifested" in MachShip
+// (Chris 2026-08-06, first live order). Pickup window: if booked before 2pm
+// Brisbane, today from an hour ahead until 5pm; otherwise next weekday
+// 9am–5pm.
+export async function manifestConsignments(
+  consignmentIds: number[],
+  opts: { companyId?: number | null } = {},
+): Promise<any> {
+  const BRIS_OFFSET_MS = 10 * 3600_000
+  const nowBris = new Date(Date.now() + BRIS_OFFSET_MS)
+  let pickup = new Date(nowBris)
+  pickup.setUTCHours(pickup.getUTCHours() + 1, 0, 0, 0)
+  if (nowBris.getUTCHours() >= 14) {
+    pickup = new Date(nowBris)
+    pickup.setUTCDate(pickup.getUTCDate() + 1)
+    while ([0, 6].includes(pickup.getUTCDay())) pickup.setUTCDate(pickup.getUTCDate() + 1)
+    pickup.setUTCHours(9, 0, 0, 0)
+  }
+  const close = new Date(pickup)
+  close.setUTCHours(17, 0, 0, 0)
+  const toUtcIso = (d: Date) => new Date(d.getTime() - BRIS_OFFSET_MS).toISOString()
+  const body = [{
+    consignmentIds,
+    ...(opts.companyId ? { companyId: opts.companyId } : {}),
+    pickupDateTime: toUtcIso(pickup),
+    pickupClosingTime: toUtcIso(close),
+    pickupAlreadyBooked: false,
+  }]
+  return machshipFetch<any>('POST', '/apiv2/manifests/manifest', body)
+}
+
 export async function getConsignment(consignmentId: string | number): Promise<Consignment> {
   return machshipFetch<Consignment>('GET', `/apiv2/consignments/${encodeURIComponent(String(consignmentId))}`)
 }

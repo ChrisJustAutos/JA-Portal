@@ -14,7 +14,10 @@ import { createDropShipPurchaseOrder, getSupplierContact, DropShipPOLine } from 
 import { sendMail } from './email'
 import { renderEmail, linesTableHtml, addressBlock } from './email-templates'
 
-export const PO_FROM_MAILBOX = process.env.B2B_PO_FROM_MAILBOX || process.env.AP_INBOX_MAILBOX || 'accounts@justautosmechanical.com.au'
+// Supplier PO emails send FROM the wholesale orders mailbox (Chris
+// 2026-08-06) — and CC it, so a copy always lands in that inbox (Resend
+// sends don't appear in anyone's Sent folder).
+export const PO_FROM_MAILBOX = process.env.B2B_PO_FROM_MAILBOX || 'orders@justautoswholesale.com'
 
 let _sb: SupabaseClient | null = null
 function svc(): SupabaseClient {
@@ -171,11 +174,10 @@ export async function raiseDropShipPOsForOrder(orderId: string, opts: { actorId?
         else {
           const contact = await getSupplierContact(g.supplierUid)
           if (contact.email) {
-            // CC the sending mailbox so staff have a copy of every supplier
-            // PO email (Chris 2026-08-06: "where did the email get sent
-            // from? I haven't seen it").
-            const fromBox = await getFromMailbox()
-            await sendMail(fromBox, { to: [contact.email], cc: [fromBox], subject: rendered.subject, html: rendered.html })
+            // From + CC orders@justautoswholesale.com so the PO visibly comes
+            // from the ordering mailbox AND a copy lands in its inbox (Chris
+            // 2026-08-06 — Resend sends never appear in a Sent folder).
+            await sendMail(PO_FROM_MAILBOX, { from: PO_FROM_MAILBOX, to: [contact.email], cc: [PO_FROM_MAILBOX], subject: rendered.subject, html: rendered.html })
             emailStatus = 'sent'; emailedTo = contact.email
           }
         }

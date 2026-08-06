@@ -9,7 +9,7 @@
 // page can show a friendly message.
 
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
-import { createConsignment, getLabelPdfBase64, MachShipApiError, MachShipNotConfiguredError, type CreateConsignmentRequest } from './b2b-machship'
+import { createConsignment, manifestConsignments, getLabelPdfBase64, MachShipApiError, MachShipNotConfiguredError, type CreateConsignmentRequest } from './b2b-machship'
 import { packForMachShip, type PackForMachShipItem } from './b2b-freight'
 import { sendDistributorShippedEmail } from './b2b-order-notify'
 
@@ -204,7 +204,24 @@ export async function bookFreightForOrder(orderId: string, opts: { actorId?: str
   }
   if (uErr) return fail(500, `Persist consignment failed: ${uErr.message}. MachShip consignment ${consignment.id} (${consignment.consignmentNumber || 'no number'}) WAS created — do not rebook; attach or cancel it manually.`)
 
-  let labelWarning: string | null = null
+  // Manifest immediately — an unmanifested consignment never reaches the
+  // carrier (Chris 2026-08-06). Best-effort: a manifest failure leaves the
+  // booking intact and surfaces as a warning to manifest by hand in MachShip.
+  let manifestWarning: string | null = null
+  try {
+    const mRes: any = await manifestConsignments([Number(consignment.id)], { companyId: (consignment as any).companyId ?? null })
+    const m = Array.isArray(mRes) ? mRes[0] : mRes
+    const manifestId = m?.id ?? m?.manifestId ?? null
+    await c.from('b2b_orders').update({
+      freight_status: 'manifested',
+      ...(manifestId ? { machship_manifest_id: String(manifestId) } : {}),
+    }).eq('id', orderId)
+  } catch (e: any) {
+    manifestWarning = `Consignment booked but NOT manifested — manifest it in MachShip manually. (${String(e?.message || e).slice(0, 200)})`
+    console.error(`[book-freight] order ${orderId} manifest failed:`, e?.message || e)
+  }
+
+  let labelWarning: string | null = manifestWarning
   let labelPath: string | null = null
   try {
     const pdf = await getLabelPdfBase64(consignment.id)
@@ -214,12 +231,12 @@ export async function bookFreightForOrder(orderId: string, opts: { actorId?: str
         const filename = (pdf.fileName || `${consignment.consignmentNumber || consignment.id}.pdf`).replace(/[^\w.\-]/g, '_').slice(0, 80)
         const path = `${orderId}/${Date.now()}-${filename}`
         const { error: upErr } = await c.storage.from(LABELS_BUCKET).upload(path, bytes, { contentType: pdf.contentType || 'application/pdf', upsert: false })
-        if (upErr) labelWarning = `Label uploaded failed: ${upErr.message}`
+        if (upErr) labelWarning = [manifestWarning, `Label uploaded failed: ${upErr.message}`].filter(Boolean).join(' · ')
         else { labelPath = path; await c.from('b2b_orders').update({ label_pdf_path: path }).eq('id', orderId) }
-      } else labelWarning = 'Label PDF was empty'
-    } else labelWarning = 'MachShip did not return label content'
+      } else labelWarning = [manifestWarning, 'Label PDF was empty'].filter(Boolean).join(' · ')
+    } else labelWarning = [manifestWarning, 'MachShip did not return label content'].filter(Boolean).join(' · ')
   } catch (e: any) {
-    labelWarning = `Label fetch failed: ${e?.message || e}`
+    labelWarning = [manifestWarning, `Label fetch failed: ${e?.message || e}`].filter(Boolean).join(' · ')
     console.error(`book-freight: label fetch failed for order ${orderId}:`, e)
   }
 

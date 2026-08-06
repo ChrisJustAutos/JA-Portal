@@ -98,7 +98,8 @@ export async function writeOrderToMyob(orderId: string): Promise<MyobWriteResult
 
   const { data: lines, error: lErr } = await c
     .from('b2b_order_lines')
-    .select('id, myob_item_uid, sku, name, qty, unit_trade_price_ex_gst, line_subtotal_ex_gst, line_gst, line_total_inc, is_taxable, sort_order')
+    .select(`id, myob_item_uid, sku, name, qty, unit_trade_price_ex_gst, line_subtotal_ex_gst, line_gst, line_total_inc, is_taxable, sort_order, is_drop_ship,
+      catalogue:b2b_catalogue!b2b_order_lines_catalogue_id_fkey ( rrp_ex_gst, myob_supplier_name )`)
     .eq('order_id', orderId)
     .order('sort_order', { ascending: true })
   if (lErr) throw new Error(`Order lines load failed: ${lErr.message}`)
@@ -113,20 +114,55 @@ export async function writeOrderToMyob(orderId: string): Promise<MyobWriteResult
   // 3. Build MYOB Lines array
   const myobLines: any[] = []
 
+  // Drop-ship lines carry a MYOB inventory Location (e.g. "MPI DS") so
+  // supplier-shipped stock never moves through the main warehouse location
+  // (Chris 2026-08-06). Looked up once per supplier, best-effort.
+  const locationCache = new Map<string, string | null>()
+  async function dropShipLocationUid(supplierName: string | null | undefined): Promise<string | null> {
+    const key = String(supplierName || '').trim().toUpperCase()
+    if (!key) return null
+    if (locationCache.has(key)) return locationCache.get(key) ?? null
+    let uid: string | null = null
+    try {
+      const r = await myobFetch(conn!.id, `/accountright/${conn!.company_file_id}/Inventory/Location`, { query: { '$top': 400 } })
+      if (r.status === 200) {
+        const locs: any[] = r.data?.Items || []
+        const first = key.split(/\s+/)[0]
+        const hit = locs.find(l => String(l.Name || '').toUpperCase() === `${first} DS`)
+          || locs.find(l => String(l.Name || '').toUpperCase().startsWith(first) && /\bDS\b/i.test(String(l.Name || '')))
+        uid = hit?.UID || null
+      }
+    } catch { /* best-effort — line just posts without a location */ }
+    locationCache.set(key, uid)
+    return uid
+  }
+
   for (const ln of lines) {
     if (!ln.myob_item_uid) {
       throw new Error(`Order line ${ln.id} (${ln.sku}) has no MYOB item UID — cannot write to MYOB`)
     }
     const taxUid = ln.is_taxable !== false ? cfg.gstTaxCodeUid : cfg.freTaxCodeUid
-    myobLines.push({
+    const cat: any = Array.isArray((ln as any).catalogue) ? (ln as any).catalogue[0] : (ln as any).catalogue
+    // RRP on the line so the distributor sees retail next to their trade
+    // price (Chris 2026-08-06). Inc-GST for taxable items.
+    const rrpEx = cat?.rrp_ex_gst != null ? Number(cat.rrp_ex_gst) : null
+    const rrpTxt = rrpEx && rrpEx > 0
+      ? ` · RRP $${(ln.is_taxable !== false ? rrpEx * 1.1 : rrpEx).toFixed(2)}`
+      : ''
+    const line: any = {
       Type: 'Transaction',
-      Description: `${ln.name} — ${ln.sku}`.substring(0, 255),
+      Description: `${ln.name} — ${ln.sku}${rrpTxt}`.substring(0, 255),
       Item: { UID: ln.myob_item_uid },
       ShipQuantity: ln.qty,
       UnitPrice: round2(Number(ln.unit_trade_price_ex_gst || 0)),
       Total: round2(Number(ln.line_subtotal_ex_gst || 0)),
       TaxCode: { UID: taxUid },
-    })
+    }
+    if ((ln as any).is_drop_ship === true) {
+      const locUid = await dropShipLocationUid(cat?.myob_supplier_name)
+      if (locUid) line.Location = { UID: locUid }
+    }
+    myobLines.push(line)
   }
 
   // Card surcharge line — uses a MYOB Service Item (e.g. "Bank Fees") so

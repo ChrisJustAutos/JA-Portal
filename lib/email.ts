@@ -24,6 +24,9 @@ export interface MailOptions {
   html: string
   cc?: string[]
   replyTo?: string
+  // Per-call From override — wins over RESEND_FROM and the mailbox param.
+  // The address's domain must be verified in Resend.
+  from?: string
   attachments?: { name: string; contentType: string; content: Buffer }[]
 }
 
@@ -39,9 +42,9 @@ export async function sendMail(mailbox: string, opts: MailOptions): Promise<void
   const replyTo = opts.replyTo || cfg.RESEND_REPLY_TO || undefined
 
   const key = cfg.RESEND_API_KEY
-  if (!key) { await graphSendMail(mailbox, { ...opts, replyTo }); return }
+  if (!key) { await graphSendMail(opts.from || mailbox, { ...opts, replyTo }); return }
 
-  const from = cfg.RESEND_FROM || mailbox
+  const from = opts.from || cfg.RESEND_FROM || mailbox
   const payload: Record<string, any> = {
     from,
     to: opts.to,
