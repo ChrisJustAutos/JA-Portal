@@ -175,13 +175,8 @@ export async function runPostPaymentPipeline(orderId: string, opts: { paymentInt
       roles: ['admin', 'manager'],
     })
 
-    const { data: settings } = await c.from('b2b_settings').select('slack_new_order_webhook_url').eq('id', 'singleton').maybeSingle()
-    if (settings?.slack_new_order_webhook_url) {
-      await fetch(settings.slack_new_order_webhook_url, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: `:moneybag: ${detail?.is_test ? '[TEST] ' : ''}New B2B order *${detail?.order_number}* — ${dist?.display_name || 'unknown'} — $${Number(detail?.total_inc || 0).toFixed(2)} AUD` }),
-      }).catch(err => console.error('Slack notify failed:', err))
-    }
+    const { postB2bOrderSlack } = await import('./b2b-slack')
+    await postB2bOrderSlack(c, `:moneybag: ${detail?.is_test ? '[TEST] ' : ''}New B2B order *${detail?.order_number}* — ${dist?.display_name || 'unknown'} — $${Number(detail?.total_inc || 0).toFixed(2)} AUD`)
   } catch (e) { console.error('Order notify error (non-fatal):', e) }
 
   return { ok: true, status: 'paid' }

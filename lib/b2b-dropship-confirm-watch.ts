@@ -24,6 +24,7 @@ import { createClient, SupabaseClient } from '@supabase/supabase-js'
 import { listMessagesWithAttachments, getMessageBody, GraphMessageSummary } from './microsoft-graph'
 import { receiveDropShipPo } from './b2b-dropship-receive'
 import { purchaseOrderExists } from './b2b-myob-po'
+import { postB2bOrderSlack } from './b2b-slack'
 
 // The inbox supplier PO emails are Reply-To'd + CC'd to (lib/b2b-dropship.ts).
 const WATCH_MAILBOX = process.env.B2B_PO_CONFIRM_MAILBOX || 'orders@justautoswholesale.com'
@@ -177,13 +178,9 @@ export async function scanDropShipConfirmations(opts: { lookbackDays?: number } 
         res.errors.push(`heal ${order.order_number}: ${run.error || run.steps.filter(s => !s.ok).map(s => s.detail).join('; ')}`.slice(0, 300))
       }
       try {
-        const { data: settings } = await c.from('b2b_settings').select('slack_new_order_webhook_url').eq('id', 'singleton').maybeSingle()
-        if (settings?.slack_new_order_webhook_url) {
-          const text = run.ok
-            ? `:link: *${order.order_number}* was converted manually in MYOB — Portal caught up automatically (bill + invoice adopted, payment receipted).`
-            : `:warning: *${order.order_number}* looks manually converted in MYOB but the Portal couldn't finish catching up — check the order page.`
-          await fetch(settings.slack_new_order_webhook_url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text }) })
-        }
+        await postB2bOrderSlack(c, run.ok
+          ? `:link: *${order.order_number}* was converted manually in MYOB — Portal caught up automatically (bill + invoice adopted, payment receipted).`
+          : `:warning: *${order.order_number}* looks manually converted in MYOB but the Portal couldn't finish catching up — check the order page.`)
       } catch { /* best-effort */ }
     } catch (e: any) {
       res.errors.push(`heal probe ${order.order_number}: ${String(e?.message || e).slice(0, 200)}`)
@@ -259,18 +256,12 @@ export async function scanDropShipConfirmations(opts: { lookbackDays?: number } 
       if (run.ok) res.confirmed++
       else res.errors.push(`${order.order_number}: ${run.error || summary}`.slice(0, 300))
 
-      // Tell the team on the same Slack hook new orders use (best-effort).
+      // Tell the team (best-effort — #jaws-orders + the legacy webhook).
       try {
-        const { data: settings } = await c.from('b2b_settings').select('slack_new_order_webhook_url').eq('id', 'singleton').maybeSingle()
-        if (settings?.slack_new_order_webhook_url) {
-          const supplier = order.supplierNames[0] || emailDomain(msg.from)
-          const text = run.ok
-            ? `:package: ${supplier} confirmed the drop-ship for *${order.order_number}* — PO billed, MYOB invoice + payment done automatically.`
-            : `:warning: ${supplier} confirmed the drop-ship for *${order.order_number}* but the automatic receive hit a snag — check the order page. ${String(run.error || '').slice(0, 200)}`
-          await fetch(settings.slack_new_order_webhook_url, {
-            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text }),
-          })
-        }
+        const supplier = order.supplierNames[0] || emailDomain(msg.from)
+        await postB2bOrderSlack(c, run.ok
+          ? `:package: ${supplier} confirmed the drop-ship for *${order.order_number}* — PO billed, MYOB invoice + payment done automatically.`
+          : `:warning: ${supplier} confirmed the drop-ship for *${order.order_number}* but the automatic receive hit a snag — check the order page. ${String(run.error || '').slice(0, 200)}`)
       } catch (e: any) { console.error('dropship-confirm Slack notify failed:', e?.message || e) }
 
       // This order's POs are handled — stop matching further messages to it.
