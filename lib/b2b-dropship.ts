@@ -14,10 +14,13 @@ import { createDropShipPurchaseOrder, getSupplierContact, DropShipPOLine } from 
 import { sendMail } from './email'
 import { renderEmail, linesTableHtml, addressBlock } from './email-templates'
 
-// Supplier PO emails send FROM the wholesale orders mailbox (Chris
-// 2026-08-06) — and CC it, so a copy always lands in that inbox (Resend
-// sends don't appear in anyone's Sent folder).
-export const PO_FROM_MAILBOX = process.env.B2B_PO_FROM_MAILBOX || 'orders@justautoswholesale.com'
+// Supplier PO emails: only mail.justautos.app is verified in Resend
+// (2026-08-06), so the visible From uses it; replies AND the CC copy go to
+// the wholesale orders inbox. Once justautoswholesale.com is verified in
+// Resend, set B2B_PO_FROM_MAILBOX=orders@justautoswholesale.com to send
+// truly from it.
+export const PO_FROM_MAILBOX = process.env.B2B_PO_FROM_MAILBOX || 'Just Autos Orders <orders@mail.justautos.app>'
+export const PO_COPY_MAILBOX = process.env.B2B_PO_COPY_MAILBOX || 'orders@justautoswholesale.com'
 
 let _sb: SupabaseClient | null = null
 function svc(): SupabaseClient {
@@ -174,10 +177,10 @@ export async function raiseDropShipPOsForOrder(orderId: string, opts: { actorId?
         else {
           const contact = await getSupplierContact(g.supplierUid)
           if (contact.email) {
-            // From + CC orders@justautoswholesale.com so the PO visibly comes
-            // from the ordering mailbox AND a copy lands in its inbox (Chris
-            // 2026-08-06 — Resend sends never appear in a Sent folder).
-            await sendMail(PO_FROM_MAILBOX, { from: PO_FROM_MAILBOX, to: [contact.email], cc: [PO_FROM_MAILBOX], subject: rendered.subject, html: rendered.html })
+            // From = verified Resend domain; Reply-To + CC = the wholesale
+            // orders inbox, so replies land there and staff always have a
+            // copy (Resend sends never appear in a Sent folder).
+            await sendMail(PO_COPY_MAILBOX, { from: PO_FROM_MAILBOX, replyTo: PO_COPY_MAILBOX, to: [contact.email], cc: [PO_COPY_MAILBOX], subject: rendered.subject, html: rendered.html })
             emailStatus = 'sent'; emailedTo = contact.email
           }
         }
