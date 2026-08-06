@@ -23,6 +23,9 @@ interface ModuleData {
   description: string | null
   pass_pct: number
   sections: Section[]
+  /** Full URL prefix for slide images (generated modules — Supabase storage).
+   *  Absent/null on repo-baked modules → fall back to /training/<slug>. */
+  slide_base?: string | null
 }
 interface ExamQ { q: string; options: string[] }
 interface CourseData { module: ModuleData; examQuestions: ExamQ[]; question_order: number[] }
@@ -62,6 +65,10 @@ interface Props {
 const slideKey = (prefix: string | undefined, slug: string) =>
   `${prefix ? `${prefix}:` : ''}ja-b2b-training-slide:${slug}`
 const pad2 = (n: number) => String(n).padStart(2, '0')
+// Slide image URL: generated modules carry a slide_base (storage URL prefix);
+// repo-baked modules resolve to the hard-coded /public path, byte-identically.
+const slideSrc = (slideBase: string | null | undefined, slug: string, n: number) =>
+  `${slideBase || `/training/${slug}`}/${pad2(n)}.jpg`
 
 export default function TrainingPlayer({ slug, apiPath, backHref, backLabel, banner, storagePrefix, preview, titleSuffix }: Props) {
   const isMobile = useIsMobile()
@@ -138,9 +145,9 @@ export default function TrainingPlayer({ slug, apiPath, backHref, backLabel, ban
     const next = flatSlides[slideIdx + 1]
     if (next && typeof window !== 'undefined') {
       const img = new window.Image()
-      img.src = `/training/${slug}/${pad2(next.n)}.jpg`
+      img.src = slideSrc(data?.module.slide_base, slug, next.n)
     }
-  }, [slideIdx, flatSlides, slug])
+  }, [slideIdx, flatSlides, slug, data])
 
   function startExam() {
     startedAtRef.current = new Date().toISOString()
@@ -297,7 +304,7 @@ export default function TrainingPlayer({ slug, apiPath, backHref, backLabel, ban
               {/* Slide image */}
               <div style={{ background: T.bg2, border: `1px solid ${T.border}`, borderRadius: 12, overflow: 'hidden' }}>
                 <img
-                  src={`/training/${slug}/${pad2(current.n)}.jpg`}
+                  src={slideSrc(data.module.slide_base, slug, current.n)}
                   alt={`Slide ${current.n} — ${currentSection?.title || ''}`}
                   style={{ display: 'block', width: '100%', height: 'auto' }}
                 />

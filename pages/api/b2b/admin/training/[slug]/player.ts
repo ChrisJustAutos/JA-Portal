@@ -30,6 +30,7 @@ export default withAuth('edit:b2b_distributors', async (req: NextApiRequest, res
         description: module_.description,
         pass_pct: module_.passPct,
         sections: module_.sections,
+        slide_base: module_.slideBase,   // null → player falls back to /training/<slug>
       },
       examQuestions: exam.questions,
       question_order: exam.order,

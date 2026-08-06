@@ -12,7 +12,7 @@ import { createClient, SupabaseClient } from '@supabase/supabase-js'
 export interface TrainingSection {
   title: string
   intro?: string
-  slides: number[]           // 1-based slide numbers → /training/<slug>/<NN>.jpg
+  slides: number[]           // 1-based slide numbers → <slideBase>/<NN>.jpg
 }
 
 export interface TrainingQuestion {
@@ -32,6 +32,10 @@ export interface TrainingModule {
   enabled: boolean
   sections: TrainingSection[]
   questions: TrainingQuestion[]
+  // Full URL prefix for slide images (no trailing filename), e.g.
+  // https://<supabase>/storage/v1/object/public/b2b-training-slides/<slug>.
+  // null for repo-baked modules → clients fall back to /training/<slug>.
+  slideBase: string | null
 }
 
 let _sb: SupabaseClient | null = null
@@ -55,7 +59,7 @@ export async function loadModule(slug: string, opts?: { includeDisabled?: boolea
     .maybeSingle()
   if (error) throw new Error(error.message)
   if (!data || (data.enabled === false && !opts?.includeDisabled)) return null
-  const content = (data.content || {}) as { sections?: TrainingSection[]; questions?: TrainingQuestion[] }
+  const content = (data.content || {}) as { sections?: TrainingSection[]; questions?: TrainingQuestion[]; slide_base?: string }
   return {
     id: data.id,
     slug: data.slug,
@@ -65,6 +69,7 @@ export async function loadModule(slug: string, opts?: { includeDisabled?: boolea
     enabled: data.enabled !== false,
     sections: Array.isArray(content.sections) ? content.sections : [],
     questions: Array.isArray(content.questions) ? content.questions : [],
+    slideBase: typeof content.slide_base === 'string' && content.slide_base ? content.slide_base : null,
   }
 }
 

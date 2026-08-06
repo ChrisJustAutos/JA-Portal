@@ -45,6 +45,7 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, use
         description: module_.description,
         pass_pct: module_.passPct,
         sections: module_.sections,
+        slide_base: module_.slideBase,   // null → player falls back to /training/<slug>
       },
       examQuestions: exam.questions,
       question_order: exam.order,

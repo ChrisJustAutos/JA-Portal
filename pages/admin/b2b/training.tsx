@@ -5,8 +5,9 @@
 // Each assigned person shows their best-attempt status inline
 // (Passed / Attempted / Not started) from b2b_training_attempts.
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import Head from 'next/head'
+import { useRouter } from 'next/router'
 import PortalTopBar from '../../../lib/PortalTopBar'
 import B2BAdminTabs from '../../../components/b2b/B2BAdminTabs'
 import { requirePageAuth } from '../../../lib/authServer'
@@ -51,6 +52,7 @@ export default function B2BTrainingAdmin({ user }: { user: any }) {
   const [error, setError] = useState('')
   // `${moduleId}:${distId}` keys of expanded user lists
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
+  const [showUpload, setShowUpload] = useState(false)
 
   useEffect(() => {
     fetch('/api/b2b/admin/training', { credentials: 'same-origin' })
@@ -174,12 +176,24 @@ export default function B2BTrainingAdmin({ user }: { user: any }) {
         <B2BAdminTabs active="training" />
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16, maxWidth: 1100 }}>
 
-          <div>
-            <h1 style={{ margin: 0, fontSize: 20, fontWeight: 700 }}>Training assignments</h1>
-            <div style={{ fontSize: 13, color: T.text3, marginTop: 4 }}>
-              Courses only appear in a distributor's portal when assigned here — tick a whole distributor (covers every current and future team member) or individual people.
+          <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12, flexWrap: 'wrap' }}>
+            <div style={{ flex: 1, minWidth: 260 }}>
+              <h1 style={{ margin: 0, fontSize: 20, fontWeight: 700 }}>Training assignments</h1>
+              <div style={{ fontSize: 13, color: T.text3, marginTop: 4 }}>
+                Courses only appear in a distributor's portal when assigned here — tick a whole distributor (covers every current and future team member) or individual people.
+              </div>
             </div>
+            <button onClick={() => setShowUpload(s => !s)}
+              style={{
+                fontSize: 12.5, fontWeight: 700, padding: '9px 16px', borderRadius: 8, whiteSpace: 'nowrap',
+                border: `1px solid ${T.blue}`, background: showUpload ? 'transparent' : T.blue,
+                color: showUpload ? T.blue : '#fff', cursor: 'pointer', fontFamily: 'inherit',
+              }}>
+              {showUpload ? 'Close' : '＋ Upload document → course'}
+            </button>
           </div>
+
+          {showUpload && <UploadCoursePanel onClose={() => setShowUpload(false)} />}
 
           {error && <div style={{ background: alpha(T.red, '1a'), border: `1px solid ${alpha(T.red, '40')}`, borderRadius: 8, padding: 12, color: T.red, fontSize: 13 }}>{error}</div>}
           {loading && <div style={{ color: T.text3, textAlign: 'center', padding: 30 }}>Loading…</div>}
@@ -310,6 +324,169 @@ export default function B2BTrainingAdmin({ user }: { user: any }) {
         </main>
       </div>
     </>
+  )
+}
+
+// ─── Upload document → course ─────────────────────────────────────────────
+// PDF → signed direct upload to b2b-training-uploads → /generate renders
+// every page to slides + drafts a quiz → redirect to the answer sheet in
+// review mode. The course lands DISABLED; enabling/assigning happens here
+// afterwards.
+
+const suggestSlug = (t: string) =>
+  t.toLowerCase().replace(/['’]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60)
+
+function putWithProgress(url: string, file: File, onPct: (p: number) => void): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest()
+    xhr.open('PUT', url)
+    xhr.setRequestHeader('Content-Type', file.type || 'application/pdf')
+    xhr.upload.onprogress = e => { if (e.lengthComputable) onPct(Math.round((e.loaded / e.total) * 100)) }
+    xhr.onload = () => (xhr.status >= 200 && xhr.status < 300) ? resolve() : reject(new Error(`Upload failed: storage HTTP ${xhr.status}`))
+    xhr.onerror = () => reject(new Error('Upload failed — network error'))
+    xhr.send(file)
+  })
+}
+
+function UploadCoursePanel({ onClose }: { onClose: () => void }) {
+  const toast = useToast()
+  const router = useRouter()
+  const fileRef = useRef<HTMLInputElement | null>(null)
+  const [fileName, setFileName] = useState('')
+  const [title, setTitle] = useState('')
+  const [slug, setSlug] = useState('')
+  const [slugTouched, setSlugTouched] = useState(false)
+  const [passPct, setPassPct] = useState(90)
+  const [phase, setPhase] = useState<'idle' | 'uploading' | 'generating'>('idle')
+  const [uploadPct, setUploadPct] = useState(0)
+  const [err, setErr] = useState('')
+
+  const busy = phase !== 'idle'
+
+  function onTitle(v: string) {
+    setTitle(v)
+    if (!slugTouched) setSlug(suggestSlug(v))
+  }
+
+  async function start() {
+    const file = fileRef.current?.files?.[0]
+    if (!file) { setErr('Choose a PDF first.'); return }
+    if (!/\.pdf$/i.test(file.name)) { setErr('Only PDFs are supported — export Word/PowerPoint documents as PDF first.'); return }
+    if (!title.trim()) { setErr('Give the course a title.'); return }
+    if (!slug.trim()) { setErr('Give the course a slug.'); return }
+    setErr('')
+    try {
+      setPhase('uploading')
+      setUploadPct(0)
+      const sign = await fetch('/api/b2b/admin/training/upload-url', {
+        method: 'POST', credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ filename: file.name }),
+      }).then(r => r.json())
+      if (sign.error || !sign.signedUrl) throw new Error(sign.error || 'Could not get an upload URL')
+      await putWithProgress(sign.signedUrl, file, setUploadPct)
+
+      setPhase('generating')
+      const gen = await fetch('/api/b2b/admin/training/generate', {
+        method: 'POST', credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ uploadPath: sign.path, title: title.trim(), slug: slug.trim(), passPct }),
+      }).then(r => r.json())
+      if (gen.error) throw new Error(gen.error)
+      toast(`Draft course created — ${gen.pageCount} slides, ${gen.questionCount} suggested questions`, 'success')
+      router.push(`/admin/b2b/training/${encodeURIComponent(gen.slug)}/answers?review=1`)
+    } catch (e: any) {
+      setErr(e.message || 'Something went wrong')
+      setPhase('idle')
+    }
+  }
+
+  const inputStyle: React.CSSProperties = {
+    background: T.bg3, color: T.text, border: `1px solid ${T.border2}`, borderRadius: 8,
+    padding: '9px 11px', fontSize: 13, fontFamily: 'inherit', width: '100%', boxSizing: 'border-box',
+  }
+  const labelStyle: React.CSSProperties = { fontSize: 11.5, fontWeight: 700, color: T.text2, marginBottom: 5, display: 'block' }
+
+  return (
+    <section style={{ background: T.bg2, border: `1px solid ${alpha(T.blue, '45')}`, borderRadius: 12, padding: '16px 18px', display: 'flex', flexDirection: 'column', gap: 14 }}>
+      <div>
+        <div style={{ fontSize: 14, fontWeight: 700 }}>Upload a document → training course</div>
+        <div style={{ fontSize: 12, color: T.text3, marginTop: 3 }}>
+          Every page of the PDF becomes a slide, and a quiz is drafted automatically. The course is saved as a <b>draft</b> — you review and edit the questions before enabling and assigning it.
+        </div>
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12 }}>
+        <div>
+          <label style={labelStyle}>Document (PDF)</label>
+          <input ref={fileRef} type="file" accept=".pdf,application/pdf" disabled={busy}
+            onChange={e => setFileName(e.target.files?.[0]?.name || '')}
+            style={{ ...inputStyle, padding: '7px 9px' }} />
+          <div style={{ fontSize: 11, color: T.text3, marginTop: 4 }}>Export Word/PowerPoint documents as PDF first.</div>
+        </div>
+        <div>
+          <label style={labelStyle}>Course title</label>
+          <input value={title} disabled={busy} onChange={e => onTitle(e.target.value)}
+            placeholder="e.g. JA103 — EasyLock Fitting Guide" style={inputStyle} />
+        </div>
+        <div>
+          <label style={labelStyle}>Slug</label>
+          <input value={slug} disabled={busy}
+            onChange={e => { setSlugTouched(true); setSlug(suggestSlug(e.target.value) || e.target.value.toLowerCase()) }}
+            placeholder="ja103-easylock-fitting" style={{ ...inputStyle, fontFamily: 'monospace' }} />
+          <div style={{ fontSize: 11, color: T.text3, marginTop: 4 }}>Lowercase letters, numbers and hyphens — becomes the course URL.</div>
+        </div>
+        <div>
+          <label style={labelStyle}>Pass mark %</label>
+          <input type="number" min={1} max={100} value={passPct} disabled={busy}
+            onChange={e => setPassPct(Math.max(1, Math.min(100, Number(e.target.value) || 0)))} style={inputStyle} />
+        </div>
+      </div>
+
+      {err && (
+        <div style={{ background: alpha(T.red, '18'), border: `1px solid ${alpha(T.red, '40')}`, borderRadius: 8, padding: 10, fontSize: 12.5, color: T.red }}>
+          {err}
+        </div>
+      )}
+
+      {phase === 'uploading' && (
+        <div>
+          <div style={{ fontSize: 12, color: T.text2, marginBottom: 5 }}>Uploading {fileName || 'document'}… {uploadPct}%</div>
+          <div style={{ height: 5, background: T.bg3, borderRadius: 3, overflow: 'hidden' }}>
+            <div style={{ height: '100%', width: `${uploadPct}%`, background: T.blue, borderRadius: 3, transition: 'width 0.15s ease' }} />
+          </div>
+        </div>
+      )}
+      {phase === 'generating' && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 12.5, color: T.text2 }}>
+          <span style={{
+            width: 15, height: 15, border: `2px solid ${alpha(T.blue, '40')}`, borderTopColor: T.blue,
+            borderRadius: '50%', display: 'inline-block', animation: 'ja-train-spin 0.8s linear infinite', flexShrink: 0,
+          }} />
+          Reading document and drafting the quiz — this can take a couple of minutes…
+          <style jsx>{`@keyframes ja-train-spin { to { transform: rotate(360deg) } }`}</style>
+        </div>
+      )}
+
+      <div style={{ display: 'flex', gap: 8 }}>
+        <button onClick={start} disabled={busy}
+          style={{
+            fontSize: 13, fontWeight: 700, padding: '10px 20px', borderRadius: 8,
+            border: `1px solid ${T.blue}`, background: T.blue, color: '#fff',
+            cursor: busy ? 'default' : 'pointer', fontFamily: 'inherit', opacity: busy ? 0.6 : 1,
+          }}>
+          {phase === 'uploading' ? 'Uploading…' : phase === 'generating' ? 'Generating…' : 'Generate course'}
+        </button>
+        <button onClick={onClose} disabled={busy}
+          style={{
+            fontSize: 13, fontWeight: 600, padding: '10px 16px', borderRadius: 8,
+            border: `1px solid ${T.border2}`, background: 'transparent', color: T.text2,
+            cursor: busy ? 'default' : 'pointer', fontFamily: 'inherit', opacity: busy ? 0.6 : 1,
+          }}>
+          Cancel
+        </button>
+      </div>
+    </section>
   )
 }
 
