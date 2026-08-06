@@ -24,6 +24,7 @@
 
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
 import { convertDropShipPoToBill, convertOrderToInvoiceInMyob, applyCustomerPaymentInMyob } from './accounting/post-b2b-doc'
+import { getConnection, myobFetch } from './myob'
 
 let _sb: SupabaseClient | null = null
 function svc(): SupabaseClient {
@@ -53,7 +54,12 @@ export async function receiveDropShipPo(orderId: string, opts: { actorId?: strin
   const steps: ReceiveStep[] = []
 
   const { data: order, error: oErr } = await c.from('b2b_orders')
-    .select('id, order_number, dropship_pos, dropship_po_billed_at, myob_invoice_uid, myob_sale_invoice_uid, myob_payment_uid, tracking_number, carrier, freight_service_label')
+    .select(`
+      id, order_number, customer_po, dropship_pos, dropship_po_billed_at,
+      myob_invoice_uid, myob_sale_invoice_uid, myob_payment_uid,
+      tracking_number, carrier, freight_service_label,
+      distributor:b2b_distributors!b2b_orders_distributor_id_fkey ( myob_primary_customer_uid )
+    `)
     .eq('id', orderId).maybeSingle()
   if (oErr) return { ok: false, httpStatus: 500, steps, error: oErr.message }
   if (!order) return { ok: false, httpStatus: 404, steps, error: 'Order not found' }
@@ -92,10 +98,14 @@ export async function receiveDropShipPo(orderId: string, opts: { actorId?: strin
           poUid: po.myob_po_uid,
           supplierName: po.supplier_name || null,
           journalMemo: `B2B drop-ship received; order ${order.order_number}`,
+          // Adoption keys: when the PO was already converted manually in the
+          // MYOB desktop app, find that bill instead of erroring.
+          poNumber: po.myob_po_number || null,
+          supplierUid: po.supplier_uid || null,
         })
         const nowIso = new Date().toISOString()
         currentPos = currentPos.map(p => p?.myob_po_uid === po.myob_po_uid
-          ? { ...p, myob_bill_uid: bill.uid, myob_bill_number: bill.number, billed_at: nowIso }
+          ? { ...p, myob_bill_uid: bill.uid, myob_bill_number: bill.number, billed_at: nowIso, ...(bill.adopted ? { bill_adopted: true } : {}) }
           : p)
         // The bill EXISTS in MYOB — losing this update would let a retry bill
         // the PO twice, so a persist failure is surfaced loudly.
@@ -103,8 +113,10 @@ export async function receiveDropShipPo(orderId: string, opts: { actorId?: strin
         if (upErr) {
           steps.push({ step: label, ok: false, detail: `Bill ${bill.number || bill.uid} WAS created in MYOB but saving it to the order failed: ${upErr.message} — do NOT re-run before recording it manually.` })
         } else {
-          steps.push({ step: label, ok: true, detail: `PO ${po.myob_po_number || po.myob_po_uid} converted to bill ${bill.number || bill.uid} — stock received into the supplier's DS location` })
-          billed.push({ supplier_name: po.supplier_name, myob_po_uid: po.myob_po_uid, myob_po_number: po.myob_po_number, myob_bill_uid: bill.uid, myob_bill_number: bill.number })
+          steps.push({ step: label, ok: true, detail: bill.adopted
+            ? `PO ${po.myob_po_number || po.myob_po_uid} was already billed manually in MYOB — adopted bill ${bill.number || bill.uid}`
+            : `PO ${po.myob_po_number || po.myob_po_uid} converted to bill ${bill.number || bill.uid} — stock received into the supplier's DS location` })
+          billed.push({ supplier_name: po.supplier_name, myob_po_uid: po.myob_po_uid, myob_po_number: po.myob_po_number, myob_bill_uid: bill.uid, myob_bill_number: bill.number, adopted: bill.adopted === true })
         }
       } catch (e: any) {
         steps.push({ step: label, ok: false, detail: (e?.message || String(e)).slice(0, 400) })
@@ -132,6 +144,8 @@ export async function receiveDropShipPo(orderId: string, opts: { actorId?: strin
       steps.push({ step: 'convert_invoice', ok: true, detail: 'No MYOB sale order on file yet — nothing to convert.' })
     } else if (hasSaleInvoice) {
       steps.push({ step: 'convert_invoice', ok: true, detail: `Sale order already converted — invoice ${o.myob_sale_invoice_uid}` })
+    } else if (await adoptManualInvoiceConversion(c, orderId, order, o.myob_invoice_uid, steps)) {
+      hasSaleInvoice = true
     } else {
       try {
         const conv = await convertOrderToInvoiceInMyob(orderId, {
@@ -179,5 +193,46 @@ export async function receiveDropShipPo(orderId: string, opts: { actorId?: strin
     return { ok: steps.length > 0 && steps.every(s => s.ok), httpStatus: 200, steps }
   } finally {
     await releaseOrderStage(c, orderId, 'dropship_billing_at')
+  }
+}
+
+/**
+ * ADOPT a manual sale conversion: when the MYOB sale ORDER is gone (staff
+ * converted it to an invoice in the desktop app — conversion consumes the
+ * order), find that invoice by CustomerPurchaseOrderNumber + customer and
+ * record it as ours, so payment receipting can proceed (Torrisi
+ * B2B-2026-000040, Chris 2026-08-06). Returns true when adopted.
+ * A missing/ambiguous match returns false → the normal convert path runs and
+ * surfaces its own error.
+ */
+async function adoptManualInvoiceConversion(c: SupabaseClient, orderId: string, order: any, saleOrderUid: string, steps: ReceiveStep[]): Promise<boolean> {
+  try {
+    const conn = await getConnection('JAWS')
+    if (!conn?.company_file_id) return false
+    const probe = await myobFetch(conn.id, `/accountright/${conn.company_file_id}/Sale/Order/Item/${saleOrderUid}`)
+    if (probe.status !== 404) return false   // order still there (or transient) → normal conversion
+
+    const custUid = (Array.isArray(order.distributor) ? order.distributor[0] : order.distributor)?.myob_primary_customer_uid
+    const custPo = String(order.customer_po || order.order_number || '').substring(0, 20).replace(/'/g, "''")
+    if (!custUid || !custPo) return false
+    const r = await myobFetch(conn.id, `/accountright/${conn.company_file_id}/Sale/Invoice/Item`, {
+      query: { '$filter': `CustomerPurchaseOrderNumber eq '${custPo}' and Customer/UID eq guid'${custUid}'`, '$orderby': 'Date desc', '$top': 2 },
+    })
+    if (r.status !== 200) return false
+    const items: any[] = r.data?.Items || []
+    if (items.length !== 1) return false     // ambiguous → don't guess
+    const inv = items[0]
+    await c.from('b2b_orders').update({
+      myob_sale_invoice_uid: inv.UID,
+      myob_sale_invoice_number: String(inv.Number || '') || null,
+      myob_sale_invoice_at: new Date().toISOString(),
+    }).eq('id', orderId)
+    steps.push({ step: 'convert_invoice', ok: true, detail: `Sale order was already converted manually in MYOB — adopted invoice ${inv.Number || inv.UID}` })
+    try {
+      await c.from('b2b_order_events').insert({ order_id: orderId, event_type: 'myob_invoice_converted', actor_type: 'system', actor_id: null, notes: `Adopted manually-converted MYOB invoice ${inv.Number || inv.UID}`, metadata: { myob_sale_invoice_uid: inv.UID, myob_sale_invoice_number: inv.Number || null, adopted: true } })
+    } catch { /* non-fatal */ }
+    return true
+  } catch {
+    return false
   }
 }

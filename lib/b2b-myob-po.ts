@@ -85,11 +85,47 @@ export interface ConvertPoToBillInput {
   poUid: string
   supplierName?: string | null   // for the "<NAME> DS" location lookup
   journalMemo?: string
+  // For ADOPTING a manual conversion: when the PO is gone from MYOB (someone
+  // converted it in the desktop app — conversion consumes the order), we look
+  // the resulting bill up by these instead of creating anything.
+  poNumber?: string | null
+  supplierUid?: string | null
 }
 
 export interface ConvertPoToBillResult {
   uid: string | null
   number: string | null
+  adopted?: boolean   // true = found an existing bill from a manual MYOB conversion; nothing was created
+}
+
+/** Does the purchase ORDER still exist in MYOB? false = consumed/deleted
+ *  (e.g. manually converted to a bill in the desktop app); null = couldn't
+ *  tell (transient error) — callers must NOT treat null as gone. */
+export async function purchaseOrderExists(poUid: string): Promise<boolean | null> {
+  const conn = await getConnection('JAWS')
+  if (!conn?.company_file_id) return null
+  try {
+    const r = await myobFetch(conn.id, `/accountright/${conn.company_file_id}/Purchase/Order/Item/${poUid}`)
+    if (r.status === 200) return true
+    if (r.status === 404) return false
+    return null
+  } catch { return null }
+}
+
+/** Find the bill a manual MYOB conversion produced: desktop conversion keeps
+ *  the PO's Number, so search bills by Number (+ supplier when known). */
+async function findBillByNumber(poNumber: string, supplierUid?: string | null): Promise<ConvertPoToBillResult | null> {
+  const conn = await getConnection('JAWS')
+  if (!conn?.company_file_id) return null
+  const filters = [`Number eq '${poNumber.replace(/'/g, "''")}'`]
+  if (supplierUid) filters.push(`Supplier/UID eq guid'${supplierUid}'`)
+  const r = await myobFetch(conn.id, `/accountright/${conn.company_file_id}/Purchase/Bill/Item`, {
+    query: { '$filter': filters.join(' and '), '$top': 2 },
+  })
+  if (r.status !== 200) return null
+  const items: any[] = r.data?.Items || []
+  if (items.length !== 1) return null   // ambiguous or absent — no adopt
+  return { uid: items[0].UID || null, number: String(items[0].Number || poNumber), adopted: true }
 }
 
 /**
@@ -112,6 +148,14 @@ export async function convertDropShipPoToBill(input: ConvertPoToBillInput): Prom
 
   // 1. GET the purchase order — the bill mirrors its lines exactly.
   const got = await myobFetch(conn.id, `/accountright/${conn.company_file_id}/Purchase/Order/Item/${input.poUid}`)
+  if (got.status === 404 && input.poNumber) {
+    // PO consumed — someone converted it manually in the MYOB desktop app
+    // (Torrisi B2B-2026-000040, Chris 2026-08-06). Adopt their bill instead
+    // of erroring; conversion keeps the Number so it's findable.
+    const existing = await findBillByNumber(input.poNumber, input.supplierUid)
+    if (existing?.uid) return existing
+    throw new Error(`MYOB purchase order ${input.poNumber} no longer exists and no matching bill was found — was it deleted rather than converted?`)
+  }
   if (got.status !== 200 || !got.data) {
     throw new Error(`MYOB purchase order fetch failed (HTTP ${got.status}): ${extractErr(got)}`)
   }

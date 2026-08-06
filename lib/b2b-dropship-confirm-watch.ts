@@ -23,6 +23,7 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
 import { listMessagesWithAttachments, getMessageBody, GraphMessageSummary } from './microsoft-graph'
 import { receiveDropShipPo } from './b2b-dropship-receive'
+import { purchaseOrderExists } from './b2b-myob-po'
 
 // The inbox supplier PO emails are Reply-To'd + CC'd to (lib/b2b-dropship.ts).
 const WATCH_MAILBOX = process.env.B2B_PO_CONFIRM_MAILBOX || 'orders@justautoswholesale.com'
@@ -46,6 +47,7 @@ function sb(): SupabaseClient {
 interface CandidateOrder {
   id: string
   order_number: string
+  poUids: string[]           // un-billed PO uids (for the manual-conversion probe)
   poNumbers: string[]        // un-billed PO numbers (e.g. "00000123")
   supplierEmails: string[]   // where each PO email went (emailed_to)
   supplierNames: string[]
@@ -54,6 +56,7 @@ interface CandidateOrder {
 export interface ConfirmWatchResult {
   scanned: number
   confirmed: number
+  healed: number             // manual MYOB conversions detected + finished (payment etc.)
   skipped: number
   errors: string[]
   openOrders: number
@@ -112,6 +115,7 @@ async function loadOpenDropShipOrders(c: SupabaseClient): Promise<CandidateOrder
     out.push({
       id: o.id,
       order_number: String(o.order_number || ''),
+      poUids: open.map(p => String(p.myob_po_uid || '')).filter(Boolean),
       poNumbers: open.map(p => String(p.myob_po_number || '')).filter(Boolean),
       supplierEmails: open.map(p => String(p.emailed_to || '').toLowerCase()).filter(Boolean),
       supplierNames: open.map(p => String(p.supplier_name || '')).filter(Boolean),
@@ -147,11 +151,45 @@ function matchOrder(candidates: CandidateOrder[], from: string | null, subject: 
 
 export async function scanDropShipConfirmations(opts: { lookbackDays?: number } = {}): Promise<ConfirmWatchResult> {
   const c = sb()
-  const res: ConfirmWatchResult = { scanned: 0, confirmed: 0, skipped: 0, errors: [], openOrders: 0 }
+  const res: ConfirmWatchResult = { scanned: 0, confirmed: 0, healed: 0, skipped: 0, errors: [], openOrders: 0 }
 
   const candidates = await loadOpenDropShipOrders(c)
   res.openOrders = candidates.length
   if (candidates.length === 0) return res   // nothing waiting — skip the inbox read entirely
+
+  // ── Reconcile manual MYOB conversions first ─────────────────────────────
+  // Staff sometimes bill the PO / convert the invoice straight in the MYOB
+  // desktop app (Torrisi B2B-2026-000040). Converting CONSUMES the purchase
+  // order, so "PO gone from MYOB" (a definite 404, never a transient error)
+  // is the signal — the receive flow then ADOPTS the manual documents and
+  // finishes whatever is left (usually the payment receipt).
+  for (const order of [...candidates]) {
+    try {
+      if (order.poUids.length === 0) continue
+      const exists = await purchaseOrderExists(order.poUids[0])
+      if (exists !== false) continue
+      const run = await receiveDropShipPo(order.id)
+      if (run.ok) {
+        res.healed++
+        const idx = candidates.indexOf(order)
+        if (idx >= 0) candidates.splice(idx, 1)
+      } else {
+        res.errors.push(`heal ${order.order_number}: ${run.error || run.steps.filter(s => !s.ok).map(s => s.detail).join('; ')}`.slice(0, 300))
+      }
+      try {
+        const { data: settings } = await c.from('b2b_settings').select('slack_new_order_webhook_url').eq('id', 'singleton').maybeSingle()
+        if (settings?.slack_new_order_webhook_url) {
+          const text = run.ok
+            ? `:link: *${order.order_number}* was converted manually in MYOB — Portal caught up automatically (bill + invoice adopted, payment receipted).`
+            : `:warning: *${order.order_number}* looks manually converted in MYOB but the Portal couldn't finish catching up — check the order page.`
+          await fetch(settings.slack_new_order_webhook_url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text }) })
+        }
+      } catch { /* best-effort */ }
+    } catch (e: any) {
+      res.errors.push(`heal probe ${order.order_number}: ${String(e?.message || e).slice(0, 200)}`)
+    }
+  }
+  if (candidates.length === 0) return res
 
   const lookbackDays = Math.min(Math.max(opts.lookbackDays || 7, 1), 30)
   const sinceIso = new Date(Date.now() - lookbackDays * 86400_000).toISOString()
