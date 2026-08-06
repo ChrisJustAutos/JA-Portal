@@ -49,7 +49,10 @@ export async function createDropShipPurchaseOrder(input: CreatePOInput): Promise
     Lines: input.lines.map(l => ({
       Type: 'Transaction',
       Item: { UID: l.itemUid },
-      ShipQuantity: l.qty,
+      // BillQuantity is the PURCHASE-line qty field. ShipQuantity (a sales
+      // concept) was silently ignored by MYOB → POs arrived with 0 quantity
+      // (MPI Automotive, Chris 2026-08-06).
+      BillQuantity: l.qty,
       UnitPrice: round2(l.unitPriceExGst),
       TaxCode: { UID: l.taxUid },
       Description: l.description.slice(0, 255),

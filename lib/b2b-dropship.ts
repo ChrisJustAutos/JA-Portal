@@ -171,7 +171,11 @@ export async function raiseDropShipPOsForOrder(orderId: string, opts: { actorId?
         else {
           const contact = await getSupplierContact(g.supplierUid)
           if (contact.email) {
-            await sendMail(await getFromMailbox(), { to: [contact.email], subject: rendered.subject, html: rendered.html })
+            // CC the sending mailbox so staff have a copy of every supplier
+            // PO email (Chris 2026-08-06: "where did the email get sent
+            // from? I haven't seen it").
+            const fromBox = await getFromMailbox()
+            await sendMail(fromBox, { to: [contact.email], cc: [fromBox], subject: rendered.subject, html: rendered.html })
             emailStatus = 'sent'; emailedTo = contact.email
           }
         }

@@ -64,12 +64,13 @@ export async function writeOrderToMyob(orderId: string): Promise<MyobWriteResult
       id, order_number, status,
       subtotal_ex_gst, gst, card_fee_inc, total_inc, currency,
       freight_cost_ex_gst,
-      customer_po,
+      customer_po, shipping_address_snapshot,
       myob_invoice_uid, myob_invoice_number,
       myob_write_attempts, paid_at,
       stripe_payment_intent_id,
       distributor:b2b_distributors!b2b_orders_distributor_id_fkey (
-        id, display_name, myob_primary_customer_uid
+        id, display_name, myob_primary_customer_uid,
+        ship_line1, ship_line2, ship_suburb, ship_state, ship_postcode
       )
     `)
     .eq('id', orderId)
@@ -176,6 +177,20 @@ export async function writeOrderToMyob(orderId: string): Promise<MyobWriteResult
   const memo = `B2B Sale Order; Order ${order.order_number}; Stripe ${order.stripe_payment_intent_id || ''}`.substring(0, 255)
   const customerPo = (order.customer_po || '').trim().substring(0, 20)  // MYOB caps PO at 20 chars
 
+  // Ship-to: the checkout's shipping snapshot, falling back to the
+  // distributor's card address (Chris 2026-08-06: invoices were arriving in
+  // MYOB with no Ship To).
+  const snap: any = (order as any).shipping_address_snapshot || {}
+  const pickStr = (...vals: any[]): string => { for (const v of vals) { const s = String(v ?? '').trim(); if (s) return s } return '' }
+  const shipToLines = [
+    pickStr(snap.company_name, dist.display_name),
+    pickStr(snap.recipient_name, snap.contact_name),
+    pickStr(snap.line1, snap.address_line1, (dist as any).ship_line1),
+    pickStr(snap.line2, snap.address_line2, (dist as any).ship_line2),
+    [pickStr(snap.suburb, (dist as any).ship_suburb), pickStr(snap.state, (dist as any).ship_state), pickStr(snap.postcode, (dist as any).ship_postcode)].filter(Boolean).join(' '),
+  ].filter((l, i, a) => l && a.indexOf(l) === i)
+  const shipToAddress = shipToLines.join('\n').slice(0, 255)
+
   const body: Record<string, any> = {
     Customer: { UID: dist.myob_primary_customer_uid },
     Date: today,
@@ -187,10 +202,14 @@ export async function writeOrderToMyob(orderId: string): Promise<MyobWriteResult
     Subtotal: subtotalEnv,
     TotalTax: totalTax,
     TotalAmount: totalAmount,
-    Comment: `Order ${order.order_number} — paid via JA Portal`,
     JournalMemo: memo,
   }
-  if (customerPo) body.CustomerPurchaseOrderNumber = customerPo
+  if (shipToAddress) body.ShipToAddress = shipToAddress
+  // PO box next to the invoice number/date: the distributor's own PO when
+  // they entered one, else our portal order number — NOT buried in the memo.
+  // (Comment deliberately dropped — the JAWS invoice form prints it under a
+  // "Vehicle" label, which made no sense on B2B orders. Chris 2026-08-06.)
+  body.CustomerPurchaseOrderNumber = (customerPo || order.order_number || '').substring(0, 20)
 
   // 5. Bump attempt counter BEFORE the call (audit trail even if hang/crash)
   await c.from('b2b_orders')
