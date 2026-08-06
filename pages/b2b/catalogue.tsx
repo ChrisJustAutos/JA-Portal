@@ -516,14 +516,23 @@ function CatalogueCard({
   qtyInCart: number
   onSetQty: (qty: number) => void
 }) {
-  const stockColor = item.stock.call_for_availability
+  const dropShipNoStock = item.is_drop_ship && item.stock.state === 'out_of_stock'
+  const stockColor = dropShipNoStock
+    ? T.purple
+    : item.stock.call_for_availability
     ? T.amber
     : stockColorFor(item.stock.state)
-  const canAdd = item.stock.call_for_availability
+  // Drop-ship items ship from the supplier — OUR stock level is irrelevant,
+  // so they're always addable (SSMKTY0108 test order, Chris 2026-08-06).
+  const canAdd = item.is_drop_ship
+    ? true
+    : item.stock.call_for_availability
     ? false  // route through "Call for availability" instead of cart
     : item.stock.state !== 'out_of_stock'
-  // Stepper cap: prefer available stock, then per-item max-order-qty.
+  // Stepper cap: drop-ship = max-order-qty only; otherwise prefer available
+  // stock, then per-item max-order-qty.
   const stepperMax: number | undefined = (() => {
+    if (item.is_drop_ship) return item.max_order_qty ?? undefined
     if (!item.stock.is_inventoried) return item.max_order_qty ?? undefined
     const avail = item.stock.qty_available
     if (avail == null) return item.max_order_qty ?? undefined
@@ -614,7 +623,9 @@ function CatalogueCard({
             display:'inline-block',padding:'2px 8px',borderRadius:8,fontSize:10,fontWeight:500,
             background:`${stockColor}18`,color:stockColor,whiteSpace:'nowrap',
           }}>
-            {item.stock.call_for_availability
+            {dropShipNoStock
+              ? 'Ships from supplier'
+              : item.stock.call_for_availability
               ? 'Call for availability'
               : stockLabel(item.stock)}
           </span>
