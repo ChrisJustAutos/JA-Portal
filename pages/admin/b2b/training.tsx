@@ -166,10 +166,13 @@ export default function B2BTrainingAdmin({ user }: { user: any }) {
   return (
     <>
       <Head><title>B2B Training — Just Autos</title><meta name="robots" content="noindex,nofollow" /></Head>
-      <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', overflow: 'hidden', fontFamily: "'DM Sans',system-ui,sans-serif", background: T.bg, color: T.text }}>
+      {/* Normal page scroll (minHeight, NOT height+overflow:hidden) — the flex
+          min-height:auto trap silently killed scrolling on the first version. */}
+      <div style={{ display: 'flex', flexDirection: 'column', minHeight: '100vh', fontFamily: "'DM Sans',system-ui,sans-serif", background: T.bg, color: T.text }}>
         <PortalTopBar activeId="b2b" currentUserRole={user.role} currentUserVisibleTabs={user.visibleTabs} currentUserName={user.displayName} currentUserEmail={user.email} />
+        <main className="b2b-admin-main" style={{ flex: 1, padding: '28px 32px', width: '100%', boxSizing: 'border-box' }}>
         <B2BAdminTabs active="training" />
-        <div className="b2b-admin-main" style={{ flex: 1, overflowY: 'auto', padding: 20, display: 'flex', flexDirection: 'column', gap: 16, maxWidth: 1100 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 16, maxWidth: 1100 }}>
 
           <div>
             <h1 style={{ margin: 0, fontSize: 20, fontWeight: 700 }}>Training assignments</h1>
@@ -217,6 +220,13 @@ export default function B2BTrainingAdmin({ user }: { user: any }) {
                     {' · '}{m.sections_count} sections · {m.slides_count} slides · {m.questions_count} questions · pass mark {m.pass_pct}%
                   </div>
                 </div>
+                <a href={`/admin/b2b/training/${encodeURIComponent(m.slug)}`}
+                  style={{
+                    fontSize: 12, fontWeight: 600, color: T.blue, textDecoration: 'none', whiteSpace: 'nowrap',
+                    border: `1px solid ${alpha(T.blue, '55')}`, borderRadius: 7, padding: '5px 12px',
+                  }}>
+                  👁 Preview course & quiz
+                </a>
                 <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: m.enabled ? T.text2 : T.amber, cursor: 'pointer' }}>
                   <input type="checkbox" checked={m.enabled} onChange={e => toggleEnabled(m, e.target.checked)} />
                   {m.enabled ? 'Enabled' : 'Disabled (hidden for everyone)'}
@@ -297,6 +307,7 @@ export default function B2BTrainingAdmin({ user }: { user: any }) {
           ))}
 
         </div>
+        </main>
       </div>
     </>
   )
