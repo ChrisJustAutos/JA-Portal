@@ -182,6 +182,52 @@ export async function fetchQuoteLeads(token: string, sinceMs: number): Promise<Q
   return out
 }
 
+// Monthly INBOUND lead counts across all quote-channel boards since
+// `sinceIso` (YYYY-MM-DD) — the Management Dashboard's "Leads" series.
+// Same lead definition as the Sales Report's overnight panel (intake-creator
+// filter + quote-system item-name drop, fail-open on unknown creator) EXCEPT
+// the "Quote - Lead" GROUP filter: that filter means "not yet worked" and
+// decays as staff move leads to Pending/Follow Up/Won, so a historical
+// monthly count must ignore the group or past months trend towards zero.
+// Buckets by created_at shifted to Brisbane (UTC+10) calendar month.
+export async function fetchMonthlyLeadCounts(token: string, sinceIso: string): Promise<Record<string, number>> {
+  const sinceMs = Date.parse(sinceIso + 'T00:00:00+10:00')
+  const counts: Record<string, number> = {}
+  for (const b of QUOTE_CHANNEL_BOARDS) {
+    let cursor: string | null = null
+    // Newest-first via __creation_log__ (same idiom as fetchQuoteLeads) so we
+    // can stop paging once a whole page has descended past the window. Higher
+    // page cap than the overnight pull — this reaches back to 2025-01.
+    for (let page = 0; page < 80; page++) {
+      const cursorArg: string = cursor
+        ? `cursor: "${cursor}"`
+        : `query_params: { order_by: [{ column_id: "__creation_log__", direction: desc }] }`
+      const data = await mondayQuery(token, `query { boards(ids: [${b.id}]) { items_page(limit: 500, ${cursorArg}) {
+        cursor
+        items { id name created_at creator { id } }
+      } } }`)
+      const pageData = data?.boards?.[0]?.items_page
+      const items: any[] = pageData?.items || []
+      for (const it of items) {
+        const t = Date.parse(it.created_at)
+        if (!Number.isFinite(t) || t < sinceMs) continue
+        const creatorId = it.creator?.id != null ? String(it.creator.id) : null
+        if (creatorId && !LEAD_INTAKE_USER_IDS.has(creatorId)) continue
+        if (QUOTE_ITEM_NAME.test(String(it.name || '').trim())) continue
+        const month = new Date(t + 10 * 3600 * 1000).toISOString().slice(0, 7)
+        counts[month] = (counts[month] || 0) + 1
+      }
+      cursor = pageData?.cursor || null
+      if (!cursor || !items.length) break
+      if (items.every((it: any) => {
+        const t = Date.parse(it.created_at)
+        return Number.isFinite(t) && t < sinceMs
+      })) break
+    }
+  }
+  return counts
+}
+
 export async function fetchDistBookings(token: string, since: string, until: string): Promise<DistRow[]> {
   const items = await pullBoard(token, DIST_BOOKING_BOARD, DB, { since, until })
   return items

@@ -24,10 +24,15 @@ interface Kpi { key: string; label: string; value: number | string | null; forma
 type ChartType = 'bars' | 'stackedBars' | 'pie' | 'hbar'
 interface Point { label: string; value: number }
 interface Series { name: string; points: Point[] }
+// Per-series render hints (dual-axis charts): which y-axis a series scales
+// against + its own value format (mirrors MgmtChartSeriesOption in
+// lib/mgmt-dashboard). Missing entry → left axis, chart-level valueFormat.
+interface SeriesOpt { name: string; axis?: 'left' | 'right'; valueFormat?: string }
+type ChartOptions = { stacked?: boolean; valueFormat?: string; dualAxis?: boolean; series?: SeriesOpt[] }
 interface ChartData {
   key: string; title: string; type: ChartType
   series: Series[]
-  options?: { stacked?: boolean; valueFormat?: string }
+  options?: ChartOptions
 }
 interface ChartCfg { key: string; title: string; enabled: boolean; chart_type: string; position: number; config: Record<string, any> }
 interface AccountRef { code: string; name: string; kind: 'income' | 'cogs' | 'asset' | 'other' }
@@ -94,6 +99,16 @@ function niceMax(v: number): number {
   return nf * exp
 }
 
+// Integer-friendly axis max for COUNT series (dual-axis right axis): rounded
+// up to a multiple of 4 × 10^(digits−2) so the five quarter ticks all land on
+// whole numbers (e.g. 45 → 48, 87 → 88, 1234 → 1600).
+function niceMaxCount(v: number): number {
+  if (v <= 4) return 4
+  const exp = Math.pow(10, Math.max(0, Math.floor(Math.log10(v)) - 1))
+  const step = 4 * exp
+  return Math.ceil(v / step) * step
+}
+
 // Wrap a category label onto up to two lines (weekly ranges are long).
 function wrapLabel(s: string, maxChars: number): string[] {
   if (s.length <= maxChars) return [s]
@@ -117,12 +132,12 @@ function NoData() {
   return <div style={{ padding: '36px 0', textAlign: 'center', fontSize: 12, color: T.text3 }}>No data for this chart yet.</div>
 }
 
-function YAxis({ ticks, y, padL, W, vf }: { ticks: number[]; y: (v: number) => number; padL: number; W: number; vf?: string }) {
+function YAxis({ ticks, y, padL, W, vf, padR = 10 }: { ticks: number[]; y: (v: number) => number; padL: number; W: number; vf?: string; padR?: number }) {
   return (
     <>
       {ticks.map((t, i) => (
         <g key={i}>
-          <line x1={padL} x2={W - 10} y1={y(t)} y2={y(t)} strokeWidth={1} style={{ stroke: 'var(--t-border)' }} />
+          <line x1={padL} x2={W - padR} y1={y(t)} y2={y(t)} strokeWidth={1} style={{ stroke: 'var(--t-border)' }} />
           <text x={padL - 6} y={y(t) + 3} textAnchor="end" fontSize={9} style={{ fill: 'var(--t-text3)' }}>{fmtAxis(t, vf)}</text>
         </g>
       ))}
@@ -139,34 +154,51 @@ function CatLabel({ x, y, label, max }: { x: number; y: number; label: string; m
   )
 }
 
-function ClusteredBars({ series, valueFormat }: { series: Series[]; valueFormat?: string }) {
+// Clustered bars. With options.dualAxis, series flagged axis:'right' in
+// options.series scale against a second integer count axis drawn on the
+// right edge (left axis stays $/valueFormat); each series' tooltip uses its
+// own valueFormat.
+function ClusteredBars({ series, valueFormat, options }: { series: Series[]; valueFormat?: string; options?: ChartOptions }) {
   const cats = catsOf(series)
   const vals = series.flatMap(s => s.points.map(p => p.value))
   if (!cats.length || !vals.some(v => v > 0)) return <NoData />
+  const dual = !!options?.dualAxis
+  const metaFor = (name: string) => (options?.series || []).find(o => o.name === name)
+  const axisOf = (s: Series): 'left' | 'right' => (dual && metaFor(s.name)?.axis === 'right') ? 'right' : 'left'
+  const vfOf = (s: Series): string | undefined => metaFor(s.name)?.valueFormat || valueFormat
+
   const W = 560, H = 250
-  const pad = { l: 52, r: 10, t: 12, b: 36 }
+  const pad = { l: 52, r: dual ? 44 : 10, t: 12, b: 36 }
   const plotW = W - pad.l - pad.r, plotH = H - pad.t - pad.b
-  const max = niceMax(Math.max(...vals, 1))
-  const y = (v: number) => pad.t + plotH - (Math.max(0, v) / max) * plotH
-  const ticks = [0, 0.25, 0.5, 0.75, 1].map(f => f * max)
+  const leftVals = series.filter(s => axisOf(s) === 'left').flatMap(s => s.points.map(p => p.value))
+  const rightVals = series.filter(s => axisOf(s) === 'right').flatMap(s => s.points.map(p => p.value))
+  const maxL = niceMax(Math.max(...(leftVals.length ? leftVals : vals), 1))
+  const maxR = niceMaxCount(Math.max(...(rightVals.length ? rightVals : [1]), 1))
+  const maxFor = (s: Series) => (axisOf(s) === 'right' ? maxR : maxL)
+  const y = (v: number) => pad.t + plotH - (Math.max(0, v) / maxL) * plotH
+  const ticks = [0, 0.25, 0.5, 0.75, 1].map(f => f * maxL)
   const groupW = plotW / cats.length
   const barW = Math.min(34, (groupW * 0.72) / Math.max(series.length, 1))
   const byCat = series.map(s => new Map(s.points.map(p => [p.label, p.value])))
   const labelMax = Math.max(6, Math.floor(groupW / 5.2))
   return (
     <svg viewBox={`0 0 ${W} ${H}`} style={{ width: '100%', height: 'auto', display: 'block' }} role="img">
-      <YAxis ticks={ticks} y={y} padL={pad.l} W={W} vf={valueFormat} />
+      <YAxis ticks={ticks} y={y} padL={pad.l} W={W} vf={valueFormat} padR={pad.r} />
+      {dual && [0, 0.25, 0.5, 0.75, 1].map((f, i) => (
+        <text key={`r${i}`} x={W - pad.r + 6} y={pad.t + plotH - f * plotH + 3} textAnchor="start" fontSize={9}
+          style={{ fill: 'var(--t-text3)' }}>{fmtNum(f * maxR)}</text>
+      ))}
       {cats.map((c, ci) => {
         const gx = pad.l + ci * groupW + (groupW - barW * series.length) / 2
         return (
           <g key={c}>
             {series.map((s, si) => {
               const v = byCat[si].get(c) ?? 0
-              const h = Math.max(v > 0 ? 1.5 : 0, (Math.max(0, v) / max) * plotH)
+              const h = Math.max(v > 0 ? 1.5 : 0, (Math.max(0, v) / maxFor(s)) * plotH)
               return (
                 <rect key={si} x={gx + si * barW} y={pad.t + plotH - h} width={Math.max(1, barW - 2)} height={h} rx={1.5}
                   style={{ fill: SERIES_COLORS[si % SERIES_COLORS.length] }}>
-                  <title>{`${s.name} — ${c}: ${fmtFull(v, valueFormat)}`}</title>
+                  <title>{`${s.name} — ${c}: ${fmtFull(v, vfOf(s))}`}</title>
                 </rect>
               )
             })}
@@ -294,14 +326,18 @@ function HBar({ series, valueFormat }: { series: Series[]; valueFormat?: string 
   )
 }
 
-function ChartLegend({ series }: { series: Series[] }) {
+function ChartLegend({ series, options }: { series: Series[]; options?: ChartOptions }) {
   if (series.length <= 1) return null
+  const dual = !!options?.dualAxis
+  const axisOf = (name: string): 'left' | 'right' =>
+    (options?.series || []).find(o => o.name === name)?.axis === 'right' ? 'right' : 'left'
   return (
     <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', marginTop: 8 }}>
       {series.map((s, i) => (
         <span key={i} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11, color: T.text2 }}>
           <span style={{ width: 9, height: 9, borderRadius: 3, background: SERIES_COLORS[i % SERIES_COLORS.length] }} />
           {s.name}
+          {dual && <span style={{ color: T.text3 }}>· {axisOf(s.name) === 'right' ? 'right axis' : 'left axis ($)'}</span>}
         </span>
       ))}
     </div>
@@ -312,7 +348,7 @@ function ChartBody({ chart }: { chart: ChartData }) {
   const vf = chart.options?.valueFormat
   const type = chart.options?.stacked && chart.type === 'bars' ? 'stackedBars' : chart.type
   switch (type) {
-    case 'bars': return <><ClusteredBars series={chart.series} valueFormat={vf} /><ChartLegend series={chart.series} /></>
+    case 'bars': return <><ClusteredBars series={chart.series} valueFormat={vf} options={chart.options} /><ChartLegend series={chart.series} options={chart.options} /></>
     case 'stackedBars': return <><StackedBars series={chart.series} valueFormat={vf} /><ChartLegend series={chart.series} /></>
     case 'pie': return <PieChart series={chart.series} valueFormat={vf} />
     case 'hbar': return <HBar series={chart.series} valueFormat={vf} />

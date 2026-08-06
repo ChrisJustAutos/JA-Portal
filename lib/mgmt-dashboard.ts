@@ -18,13 +18,19 @@
 // bundle is served unless refresh is forced. On a failed refresh we fall back
 // to the stale bundle rather than 500ing the dashboard.
 //
+// Exception: the revenueOrdersLeads chart (migration 189) reads the VPS
+// company file + Monday quote-channel boards instead — it runs its own pull
+// with its own mgmt_dashboard_cache row (6-hour TTL; monthly backfill barely
+// moves) and skips itself on failure rather than sinking the dashboard.
+//
 // GL sign convention (see lib/myob-gl): line amounts are debit-positive, so
 //   revenue  = Σ(−amount) over 4-* scope   (the workbook's H−G)
 //   COGS/opex= Σ(+amount) over 5-*/6-*     (the workbook's G−H)
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchGlJournalLines, fetchGlAccounts, GlLine, GlAccount } from './myob-gl'
-import { fetchSaleInvoices, fetchInventoryItems, SaleInvoiceRow } from './myob-reporting'
+import { fetchSaleInvoices, fetchSaleOrders, fetchInventoryItems, SaleInvoiceRow } from './myob-reporting'
+import { fetchMonthlyLeadCounts } from './sales-recap-monday'
 
 const LABEL = 'JAWS' as const
 const CACHE_KEY = 'source:JAWS'
@@ -41,12 +47,25 @@ export interface MgmtKpi {
 }
 export interface MgmtChartPoint { label: string; value: number }
 export interface MgmtChartSeries { name: string; points: MgmtChartPoint[] }
+// Per-series render hints (dual-axis charts): which y-axis the series is
+// scaled against and how its values format. Series without an entry default
+// to the left axis / the chart-level valueFormat.
+export interface MgmtChartSeriesOption {
+  name: string
+  axis?: 'left' | 'right'
+  valueFormat?: 'currency' | 'number'
+}
 export interface MgmtChart {
   key: string
   title: string
   type: 'bars' | 'stackedBars' | 'pie' | 'hbar'
   series: MgmtChartSeries[]
-  options?: { stacked?: boolean; valueFormat?: 'currency' | 'number' }
+  options?: {
+    stacked?: boolean
+    valueFormat?: 'currency' | 'number'
+    dualAxis?: boolean
+    series?: MgmtChartSeriesOption[]
+  }
 }
 export interface MgmtChartConfigRow {
   key: string
@@ -437,6 +456,141 @@ function buildTopCustomers(row: MgmtChartConfigRow, ctx: Ctx, src: SourceBundle)
   }
 }
 
+// Chart 7 — Revenue vs Bookings vs Leads, monthly since config.startIso.
+//   Revenue  = sale invoices (all types; credit notes are negative-total
+//              invoices so they subtract naturally), ex-GST by default
+//              (TotalAmount − TotalTax), bucketed by invoice Date month.
+//   Bookings = COUNT of Sale Orders (Sale/Order/* across all types) created
+//              per month. NOTE: AccountRight removes an order once it is
+//              converted to an invoice, so past months only show orders that
+//              are still open orders today.
+//   Leads    = inbound quote-channel leads per month from Monday (same
+//              boards + intake-creator filter as the Sales Report, minus its
+//              "Quote - Lead" group filter which decays for history).
+// Backfill months don't change, so the pull gets its own cache row with a
+// 6-hour TTL (vs the 10-min main bundle).
+
+const ROL_CACHE_TTL_MS = 6 * 60 * 60 * 1000
+
+interface RolBundle {
+  pulledAt: string
+  entity: 'VPS' | 'JAWS'
+  startIso: string
+  endExclusive: string
+  revenueExByMonth: Record<string, number>   // YYYY-MM → ex-GST $
+  revenueIncByMonth: Record<string, number>  // YYYY-MM → inc-GST $ (basis flip without re-pull)
+  ordersByMonth: Record<string, number>      // YYYY-MM → count
+  leadsByMonth: Record<string, number>       // YYYY-MM → count
+}
+
+function rolEntity(cfg: any): 'VPS' | 'JAWS' {
+  return cfg?.entity === 'JAWS' ? 'JAWS' : 'VPS'
+}
+function rolStartIso(cfg: any): string {
+  return typeof cfg?.startIso === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(cfg.startIso)
+    ? cfg.startIso : '2025-01-01'
+}
+
+async function loadRolSource(db: SupabaseClient, cfg: any, refresh: boolean): Promise<RolBundle> {
+  const entity = rolEntity(cfg)
+  const startIso = rolStartIso(cfg)
+  const endExclusive = addDays(todayBrisbane(), 1)
+  const cacheKey = `revOrdersLeads:${entity}:${startIso}`
+
+  const { data: cachedRow } = await db
+    .from('mgmt_dashboard_cache')
+    .select('payload, refreshed_at')
+    .eq('key', cacheKey)
+    .maybeSingle()
+  const cached = (cachedRow?.payload || null) as RolBundle | null
+  const covers = !!cached && cached.startIso <= startIso && cached.endExclusive >= endExclusive
+  const fresh = !!cachedRow?.refreshed_at &&
+    Date.now() - new Date(cachedRow.refreshed_at).getTime() < ROL_CACHE_TTL_MS
+  if (!refresh && cached && covers && fresh) return cached
+
+  try {
+    // Sequential MYOB calls (same token-refresh race note as loadSource).
+    const invoices = await fetchSaleInvoices(entity, { start: startIso, endExclusive })
+    const orders = await fetchSaleOrders(entity, { start: startIso, endExclusive })
+    const token = process.env.MONDAY_API_TOKEN
+    if (!token) throw new Error('MONDAY_API_TOKEN not set — required for the Leads series')
+    const leadsByMonth = await fetchMonthlyLeadCounts(token, startIso)
+
+    const revenueExByMonth: Record<string, number> = {}
+    const revenueIncByMonth: Record<string, number> = {}
+    for (const inv of invoices) {
+      const m = (inv.Date || '').slice(0, 7)
+      if (!m) continue
+      revenueIncByMonth[m] = (revenueIncByMonth[m] || 0) + inv.TotalAmount
+      revenueExByMonth[m] = (revenueExByMonth[m] || 0) + (inv.TotalAmount - inv.TotalTax)
+    }
+    const ordersByMonth: Record<string, number> = {}
+    for (const o of orders) {
+      const m = String(o.Date || '').slice(0, 7)
+      if (m) ordersByMonth[m] = (ordersByMonth[m] || 0) + 1
+    }
+
+    const bundle: RolBundle = {
+      pulledAt: new Date().toISOString(), entity, startIso, endExclusive,
+      revenueExByMonth, revenueIncByMonth, ordersByMonth, leadsByMonth,
+    }
+    await db.from('mgmt_dashboard_cache').upsert({
+      key: cacheKey, payload: bundle as any, refreshed_at: new Date().toISOString(),
+    })
+    return bundle
+  } catch (e) {
+    if (cached && covers) {
+      console.warn('[mgmt-dashboard] rev/orders/leads pull failed, serving stale cache:', (e as any)?.message || e)
+      return cached
+    }
+    throw e
+  }
+}
+
+async function buildRevenueOrdersLeads(db: SupabaseClient, row: MgmtChartConfigRow, refresh: boolean): Promise<MgmtChart | null> {
+  const cfg = row.config || {}
+  let src: RolBundle
+  try {
+    src = await loadRolSource(db, cfg, refresh)
+  } catch (e) {
+    // A Monday/MYOB outage on this side-pull shouldn't sink the rest of the
+    // dashboard — skip the chart (same spirit as unknown-kind → skip).
+    console.error('[mgmt-dashboard] revenueOrdersLeads failed:', (e as any)?.message || e)
+    return null
+  }
+
+  // Month buckets from startIso's month through the current Brisbane month.
+  const endMonth = todayBrisbane().slice(0, 7)
+  const months: string[] = []
+  for (let d = firstOfMonth(src.startIso); d.slice(0, 7) <= endMonth && months.length < 240; d = addMonths(d, 1)) {
+    months.push(d.slice(0, 7))
+  }
+  const monthLabel = (m: string) =>
+    `${ymdToDate(m + '-01').toLocaleDateString('en-AU', { month: 'short', timeZone: 'UTC' })} ${m.slice(2, 4)}`
+
+  const revenue = cfg.revenueBasis === 'incGst' ? src.revenueIncByMonth : src.revenueExByMonth
+  const pts = (byMonth: Record<string, number>, round = false): MgmtChartPoint[] =>
+    months.map(m => ({ label: monthLabel(m), value: round ? round2(byMonth[m] || 0) : (byMonth[m] || 0) }))
+
+  return {
+    key: row.key, title: row.title, type: chartType(row, 'bars'),
+    series: [
+      { name: 'Revenue', points: pts(revenue, true) },
+      { name: 'Bookings', points: pts(src.ordersByMonth) },
+      { name: 'Leads', points: pts(src.leadsByMonth) },
+    ],
+    options: {
+      valueFormat: 'currency',
+      dualAxis: true,
+      series: [
+        { name: 'Revenue', axis: 'left', valueFormat: 'currency' },
+        { name: 'Bookings', axis: 'right', valueFormat: 'number' },
+        { name: 'Leads', axis: 'right', valueFormat: 'number' },
+      ],
+    },
+  }
+}
+
 function buildChart(row: MgmtChartConfigRow, ctx: Ctx, src: SourceBundle): MgmtChart | null {
   switch (row.config?.kind) {
     case 'weeklyRevenueGp':    return buildWeeklyRevenueGp(row, ctx, src)
@@ -604,7 +758,11 @@ export async function computeMgmtDashboard(
   for (const row of rows) {
     if (!row.enabled) continue
     if (row.config?.kind === 'kpis') continue // KPI row is not a chart
-    const c = buildChart(row, ctx, src)
+    // revenueOrdersLeads runs its own (separately cached) MYOB+Monday pull —
+    // async, unlike the bundle-fed builders.
+    const c = row.config?.kind === 'revenueOrdersLeads'
+      ? await buildRevenueOrdersLeads(db, row, !!opts.refresh)
+      : buildChart(row, ctx, src)
     if (c) charts.push(c)
   }
 

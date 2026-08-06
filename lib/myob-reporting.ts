@@ -197,10 +197,21 @@ function shapeOrderLike(x: any): any {
     CustomerPurchaseOrderNumber: x.CustomerPurchaseOrderNumber ?? null,
   }
 }
-async function fetchSaleDocType(label: CompanyFileLabel, doc: 'Order' | 'Quote'): Promise<any[]> {
+async function fetchSaleDocType(
+  label: CompanyFileLabel, doc: 'Order' | 'Quote',
+  opts: { start?: string; endExclusive?: string } = {},
+): Promise<any[]> {
+  const filters: string[] = []
+  if (opts.start) filters.push(`Date ge ${dt(opts.start)}`)
+  if (opts.endExclusive) filters.push(`Date lt ${dt(opts.endExclusive)}`)
+  // $orderby only alongside a filter — keeps the historical no-opts call
+  // shape byte-identical for existing consumers.
+  const q: Record<string, string | number> = filters.length
+    ? { '$orderby': 'Number', '$filter': filters.join(' and ') }
+    : {}
   const out: any[] = []
   for (const type of INVOICE_TYPES) {
-    try { out.push(...(await fetchAll(label, `Sale/${doc}/${type}`)).map(shapeOrderLike)) }
+    try { out.push(...(await fetchAll(label, `Sale/${doc}/${type}`, q)).map(shapeOrderLike)) }
     catch (e: any) { console.warn(`[myob-reporting] Sale/${doc}/${type} ${label}:`, e?.message) }
   }
   return out
@@ -242,8 +253,10 @@ export async function fetchSaleInvoiceByNumber(
   return { invoice: null, lines: [] }
 }
 
-export async function fetchSaleOrders(label: CompanyFileLabel): Promise<any[]> {
-  return fetchSaleDocType(label, 'Order')
+export async function fetchSaleOrders(
+  label: CompanyFileLabel, opts: { start?: string; endExclusive?: string } = {},
+): Promise<any[]> {
+  return fetchSaleDocType(label, 'Order', opts)
 }
 export async function fetchSaleQuotes(label: CompanyFileLabel): Promise<any[]> {
   return fetchSaleDocType(label, 'Quote')
