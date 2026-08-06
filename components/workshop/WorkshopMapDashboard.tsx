@@ -216,6 +216,17 @@ export default function WorkshopMapDashboard() {
 
   // ── Empty / loading / error states ──────────────────────────────────────
   if (loading && !data) return <div className="wm-dash"><div className="wm-empty">Loading map data…</div><style dangerouslySetInnerHTML={{ __html: CSS }} /></div>
+  // A failed load must never look like eternal loading (Kate/marketing
+  // 2026-08-06) — say what happened and offer a retry.
+  if (error && !data) return (
+    <div className="wm-dash">
+      <div className="wm-empty">
+        <div style={{ marginBottom: 10 }}>Couldn't load the map data: {error}</div>
+        <button onClick={() => load()} style={{ padding: '8px 16px', borderRadius: 7, border: '1px solid var(--t-border2)', background: 'var(--t-bg3)', color: 'var(--t-text)', cursor: 'pointer', fontFamily: 'inherit', fontSize: 13 }}>Retry</button>
+      </div>
+      <style dangerouslySetInnerHTML={{ __html: CSS }} />
+    </div>
+  )
   if (error) return <div className="wm-dash"><div className="wm-empty">{error}</div><style dangerouslySetInnerHTML={{ __html: CSS }} /></div>
   if (!P) {
     return (
