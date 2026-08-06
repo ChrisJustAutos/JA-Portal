@@ -1,12 +1,12 @@
-// lib/mgmt-dashboard.ts
+﻿// lib/mgmt-dashboard.ts
 //
-// Management Dashboard (JAWS) — assembles the full report payload for
+// Management Dashboard (JAWS) â€” assembles the full report payload for
 // pages/api/reports/mgmt-dashboard from live MYOB data. Rebuild of the
 // JAWS_Management_Dashboard Excel workbook (see migration 184 for the seeded
 // chart configs and docs/spec provenance).
 //
-// Everything is computed FROM the mgmt_dashboard_charts config rows — account
-// lists, exclusion rules, tuning-COS estimate, cash accounts, top-N — never
+// Everything is computed FROM the mgmt_dashboard_charts config rows â€” account
+// lists, exclusion rules, tuning-COS estimate, cash accounts, top-N â€” never
 // hardcoded, so the report stays editable from the UI (PATCH on the API).
 //
 // Data sources (all JAWS company file):
@@ -19,24 +19,24 @@
 // to the stale bundle rather than 500ing the dashboard.
 //
 // Exception: the revenueOrdersLeads chart (migration 189) reads the VPS
-// company file + Monday quote-channel boards instead — it runs its own pull
+// company file + Monday quote-channel boards instead â€” it runs its own pull
 // with its own mgmt_dashboard_cache row (6-hour TTL; monthly backfill barely
 // moves) and skips itself on failure rather than sinking the dashboard.
 //
 // GL sign convention (see lib/myob-gl): line amounts are debit-positive, so
-//   revenue  = Σ(−amount) over 4-* scope   (the workbook's H−G)
-//   COGS/opex= Σ(+amount) over 5-*/6-*     (the workbook's G−H)
+//   revenue  = Î£(âˆ’amount) over 4-* scope   (the workbook's Hâˆ’G)
+//   COGS/opex= Î£(+amount) over 5-*/6-*     (the workbook's Gâˆ’H)
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchGlJournalLines, fetchGlAccounts, GlLine, GlAccount } from './myob-gl'
-import { fetchSaleInvoices, fetchSaleOrders, fetchInventoryItems, SaleInvoiceRow } from './myob-reporting'
-import { fetchMonthlyLeadCounts } from './sales-recap-monday'
+import { fetchSaleInvoices, fetchInventoryItems, SaleInvoiceRow } from './myob-reporting'
+import { fetchMonthlyLeadCounts, fetchOrders } from './sales-recap-monday'
 
 const LABEL = 'JAWS' as const
 const CACHE_KEY = 'source:JAWS'
 const CACHE_TTL_MS = 10 * 60 * 1000
 
-// ── Payload contract (the frontend is built against exactly this) ───────
+// â”€â”€ Payload contract (the frontend is built against exactly this) â”€â”€â”€â”€â”€â”€â”€
 
 export interface MgmtKpi {
   key: string
@@ -87,13 +87,13 @@ export interface MgmtDashboardPayload {
   config: { charts: MgmtChartConfigRow[]; accounts: MgmtAccountRow[] }
 }
 
-// ── Config shapes (stored in mgmt_dashboard_charts.config) ──────────────
+// â”€â”€ Config shapes (stored in mgmt_dashboard_charts.config) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 interface ScopeCfg { prefix?: string; exclude?: string[] }
 interface ExclCfg { invoiceNumberPattern?: string; memoPattern?: string }
 interface CategoryCfg { name: string; accounts?: string[]; rest?: boolean }
 
-// ── Date helpers (UTC math on YYYY-MM-DD strings; Brisbane "today") ─────
+// â”€â”€ Date helpers (UTC math on YYYY-MM-DD strings; Brisbane "today") â”€â”€â”€â”€â”€
 
 function ymdToDate(ymd: string): Date { return new Date(ymd + 'T00:00:00Z') }
 function dateToYmd(d: Date): string { return d.toISOString().slice(0, 10) }
@@ -119,12 +119,12 @@ function fmtDayMonth(ymd: string): string {
   return ymdToDate(ymd).toLocaleDateString('en-AU', { day: 'numeric', month: 'short', timeZone: 'UTC' })
 }
 function weekLabel(start: string, end: string): string {
-  return `${fmtDayMonth(start)} – ${fmtDayMonth(end)}`
+  return `${fmtDayMonth(start)} â€“ ${fmtDayMonth(end)}`
 }
 
 interface Window { start: string; end: string } // inclusive both ends
 
-// ── Scope / exclusion helpers ────────────────────────────────────────────
+// â”€â”€ Scope / exclusion helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 const round2 = (n: number) => Math.round(n * 100) / 100
 
@@ -142,14 +142,14 @@ function accountsMatcher(codes?: string[]): (code: string) => boolean {
 function makeExcluder(excl?: ExclCfg): (r: GlLine) => boolean {
   let idRe: RegExp | null = null
   let memoRe: RegExp | null = null
-  try { if (excl?.invoiceNumberPattern) idRe = new RegExp(excl.invoiceNumberPattern, 'i') } catch { /* bad config regex → ignore */ }
+  try { if (excl?.invoiceNumberPattern) idRe = new RegExp(excl.invoiceNumberPattern, 'i') } catch { /* bad config regex â†’ ignore */ }
   try { if (excl?.memoPattern) memoRe = new RegExp(excl.memoPattern, 'i') } catch { /* ignore */ }
   return (r: GlLine) =>
     (!!idRe && !!r.invoiceNumberish && idRe.test(r.invoiceNumberish)) ||
     (!!memoRe && !!r.memo && memoRe.test(r.memo))
 }
 
-// Σ over GL lines in a window. credit=true sums credit-positive (revenue),
+// Î£ over GL lines in a window. credit=true sums credit-positive (revenue),
 // credit=false sums debit-positive (COGS/expenses).
 function glSum(
   rows: GlLine[], w: Window,
@@ -165,16 +165,16 @@ function glSum(
   return t
 }
 
-// ── Window context ───────────────────────────────────────────────────────
+// â”€â”€ Window context â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // The workbook's MAX(GL!N) idiom = "latest transaction date": every window is
 // anchored on the newest GL row, so a file that hasn't been posted to for a
 // few days still shows its own latest complete picture.
 
 interface Ctx {
   latest: string
-  currentWeek: Window     // Mon–Sun bucket containing `latest`
+  currentWeek: Window     // Monâ€“Sun bucket containing `latest`
   prevWeek: Window
-  mtd: Window             // 1st of latest's month … latest
+  mtd: Window             // 1st of latest's month â€¦ latest
   elapsedDays: number     // day-of-month of latest
   daysInMonth: number
 }
@@ -207,11 +207,11 @@ function resolveWindow(w: any, ctx: Ctx): (Window & { name: string }) | null {
   if (kind === 'currentWeek') return { ...ctx.currentWeek, name: w.name || 'Current 7 Days' }
   if (kind === 'mtd') return { ...ctx.mtd, name: w.name || 'MTD' }
   if (kind === 'trailing7') return { start: addDays(ctx.latest, -6), end: ctx.latest, name: w.name || 'Last 7 Days' }
-  if (kind === 'fixed' && w.start && w.end) return { start: w.start, end: w.end, name: w.name || `${w.start} – ${w.end}` }
+  if (kind === 'fixed' && w.start && w.end) return { start: w.start, end: w.end, name: w.name || `${w.start} â€“ ${w.end}` }
   return null
 }
 
-// ── Cached source bundle ─────────────────────────────────────────────────
+// â”€â”€ Cached source bundle â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 interface SourceBundle {
   pulledAt: string
@@ -219,7 +219,7 @@ interface SourceBundle {
   endExclusive: string
   gl: GlLine[]
   invoices: SaleInvoiceRow[]
-  items: any[]        // fetchInventoryItems shape (Number/Name/QuantityOnHand/CurrentValue…)
+  items: any[]        // fetchInventoryItems shape (Number/Name/QuantityOnHand/CurrentValueâ€¦)
   accounts: GlAccount[]
 }
 
@@ -239,7 +239,7 @@ async function loadSource(
   if (!refresh && cached && covers && fresh) return { bundle: cached, fromCache: true }
 
   try {
-    // Sequential, not Promise.all — MYOB access-token refresh rotates the
+    // Sequential, not Promise.all â€” MYOB access-token refresh rotates the
     // refresh token, so parallel first-calls on a stale token can race.
     const gl = await fetchGlJournalLines(LABEL, { start, endExclusive })
     const invoices = await fetchSaleInvoices(LABEL, { start, endExclusive })
@@ -259,7 +259,7 @@ async function loadSource(
   }
 }
 
-// ── Category engine (charts 2 & 3) ──────────────────────────────────────
+// â”€â”€ Category engine (charts 2 & 3) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // Classify each in-scope GL revenue line by its income account: explicit
 // account lists win; the single `rest:true` category absorbs the remainder
 // (this replaces the workbook's dominant-invoice-line categorisation and its
@@ -287,15 +287,15 @@ function categoryTotals(
   return totals
 }
 
-// ── Chart builders (dispatch on config.kind) ─────────────────────────────
+// â”€â”€ Chart builders (dispatch on config.kind) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 const CHART_TYPES: Array<MgmtChart['type']> = ['bars', 'stackedBars', 'pie', 'hbar']
 function chartType(row: MgmtChartConfigRow, fallback: MgmtChart['type']): MgmtChart['type'] {
   return CHART_TYPES.indexOf(row.chart_type as any) >= 0 ? row.chart_type as MgmtChart['type'] : fallback
 }
 
-// Chart 1 — weekly Revenue + Gross Profit columns.
-// GP(w) = REV(w) − COGS(w) − tuningCosPct × TUNING_REV(w)  (booked 5-* COGS
+// Chart 1 â€” weekly Revenue + Gross Profit columns.
+// GP(w) = REV(w) âˆ’ COGS(w) âˆ’ tuningCosPct Ã— TUNING_REV(w)  (booked 5-* COGS
 // carries no tuning cost, so it's estimated off tuning revenue).
 function buildWeeklyRevenueGp(row: MgmtChartConfigRow, ctx: Ctx, src: SourceBundle): MgmtChart {
   const cfg = row.config || {}
@@ -322,7 +322,7 @@ function buildWeeklyRevenueGp(row: MgmtChartConfigRow, ctx: Ctx, src: SourceBund
   }
 }
 
-// Chart 2 — category revenue for N windows (one series per window).
+// Chart 2 â€” category revenue for N windows (one series per window).
 function buildCategoryCompare(row: MgmtChartConfigRow, ctx: Ctx, src: SourceBundle): MgmtChart | null {
   const cfg = row.config || {}
   const categories: CategoryCfg[] = Array.isArray(cfg.categories) ? cfg.categories : []
@@ -346,7 +346,7 @@ function buildCategoryCompare(row: MgmtChartConfigRow, ctx: Ctx, src: SourceBund
   }
 }
 
-// Chart 3 — stacked weekly category mix (one series per category).
+// Chart 3 â€” stacked weekly category mix (one series per category).
 function buildWeeklyCategoryStack(row: MgmtChartConfigRow, ctx: Ctx, src: SourceBundle): MgmtChart | null {
   const cfg = row.config || {}
   const categories: CategoryCfg[] = Array.isArray(cfg.categories) ? cfg.categories : []
@@ -365,7 +365,7 @@ function buildWeeklyCategoryStack(row: MgmtChartConfigRow, ctx: Ctx, src: Source
   }
 }
 
-// Chart 4 — top-N inventory items by on-hand value (items pre-sorted desc by
+// Chart 4 â€” top-N inventory items by on-hand value (items pre-sorted desc by
 // CurrentValue in fetchInventoryItems).
 function buildTopInventory(row: MgmtChartConfigRow, _ctx: Ctx, src: SourceBundle): MgmtChart {
   const cfg = row.config || {}
@@ -381,8 +381,8 @@ function buildTopInventory(row: MgmtChartConfigRow, _ctx: Ctx, src: SourceBundle
   }
 }
 
-// Chart 5 — trailing-7-day revenue pie per part-type income account, with
-// "Other Parts" = parts revenue (scope − tuning − oil) − Σ all named
+// Chart 5 â€” trailing-7-day revenue pie per part-type income account, with
+// "Other Parts" = parts revenue (scope âˆ’ tuning âˆ’ oil) âˆ’ Î£ all named
 // part-type accounts, floored at 0.
 function buildAccountPie(row: MgmtChartConfigRow, ctx: Ctx, src: SourceBundle): MgmtChart {
   const cfg = row.config || {}
@@ -414,7 +414,7 @@ function buildAccountPie(row: MgmtChartConfigRow, ctx: Ctx, src: SourceBundle): 
   }
 }
 
-// Chart 6 — top-N customers by ex-GST invoice revenue for the window.
+// Chart 6 â€” top-N customers by ex-GST invoice revenue for the window.
 // Grouping fixes baked into config: alias merge (name variants of the same
 // shop), optional " (Tuning)" card merge, VPS intercompany + Stripe
 // adjustment cards excluded, B2B invoice numbers excluded.
@@ -456,10 +456,10 @@ function buildTopCustomers(row: MgmtChartConfigRow, ctx: Ctx, src: SourceBundle)
   }
 }
 
-// Chart 7 — Revenue vs Bookings vs Leads, monthly since config.startIso.
+// Chart 7 â€” Revenue vs Bookings vs Leads, monthly since config.startIso.
 //   Revenue  = sale invoices (all types; credit notes are negative-total
 //              invoices so they subtract naturally), ex-GST by default
-//              (TotalAmount − TotalTax), bucketed by invoice Date month.
+//              (TotalAmount âˆ’ TotalTax), bucketed by invoice Date month.
 //   Bookings = COUNT of Sale Orders (Sale/Order/* across all types) created
 //              per month. NOTE: AccountRight removes an order once it is
 //              converted to an invoice, so past months only show orders that
@@ -477,10 +477,10 @@ interface RolBundle {
   entity: 'VPS' | 'JAWS'
   startIso: string
   endExclusive: string
-  revenueExByMonth: Record<string, number>   // YYYY-MM → ex-GST $
-  revenueIncByMonth: Record<string, number>  // YYYY-MM → inc-GST $ (basis flip without re-pull)
-  ordersByMonth: Record<string, number>      // YYYY-MM → count
-  leadsByMonth: Record<string, number>       // YYYY-MM → count
+  revenueExByMonth: Record<string, number>   // YYYY-MM â†’ ex-GST $
+  revenueIncByMonth: Record<string, number>  // YYYY-MM â†’ inc-GST $ (basis flip without re-pull)
+  ordersByMonth: Record<string, number>      // YYYY-MM â†’ count
+  leadsByMonth: Record<string, number>       // YYYY-MM â†’ count
 }
 
 function rolEntity(cfg: any): 'VPS' | 'JAWS' {
@@ -511,10 +511,14 @@ async function loadRolSource(db: SupabaseClient, cfg: any, refresh: boolean): Pr
   try {
     // Sequential MYOB calls (same token-refresh race note as loadSource).
     const invoices = await fetchSaleInvoices(entity, { start: startIso, endExclusive })
-    const orders = await fetchSaleOrders(entity, { start: startIso, endExclusive })
     const token = process.env.MONDAY_API_TOKEN
-    if (!token) throw new Error('MONDAY_API_TOKEN not set — required for the Leads series')
+    if (!token) throw new Error('MONDAY_API_TOKEN not set â€” required for the Bookings + Leads series')
     const leadsByMonth = await fetchMonthlyLeadCounts(token, startIso)
+    // Bookings = the MONDAY Orders board (Chris 2026-08-06: "it's not MYOB
+    // sale orders, it's Monday's") â€” same board + dead-status exclusions as
+    // the weekly Sales Report, so the numbers reconcile. Full history, unlike
+    // MYOB orders (deleted on conversion).
+    const mondayOrders = await fetchOrders(token, startIso, endExclusive)
 
     const revenueExByMonth: Record<string, number> = {}
     const revenueIncByMonth: Record<string, number> = {}
@@ -525,8 +529,8 @@ async function loadRolSource(db: SupabaseClient, cfg: any, refresh: boolean): Pr
       revenueExByMonth[m] = (revenueExByMonth[m] || 0) + (inv.TotalAmount - inv.TotalTax)
     }
     const ordersByMonth: Record<string, number> = {}
-    for (const o of orders) {
-      const m = String(o.Date || '').slice(0, 7)
+    for (const o of mondayOrders) {
+      const m = String(o.date || '').slice(0, 7)
       if (m) ordersByMonth[m] = (ordersByMonth[m] || 0) + 1
     }
 
@@ -554,7 +558,7 @@ async function buildRevenueOrdersLeads(db: SupabaseClient, row: MgmtChartConfigR
     src = await loadRolSource(db, cfg, refresh)
   } catch (e) {
     // A Monday/MYOB outage on this side-pull shouldn't sink the rest of the
-    // dashboard — skip the chart (same spirit as unknown-kind → skip).
+    // dashboard â€” skip the chart (same spirit as unknown-kind â†’ skip).
     console.error('[mgmt-dashboard] revenueOrdersLeads failed:', (e as any)?.message || e)
     return null
   }
@@ -599,11 +603,11 @@ function buildChart(row: MgmtChartConfigRow, ctx: Ctx, src: SourceBundle): MgmtC
     case 'topInventory':       return buildTopInventory(row, ctx, src)
     case 'accountPie':         return buildAccountPie(row, ctx, src)
     case 'topCustomers':       return buildTopCustomers(row, ctx, src)
-    default:                   return null // unknown kind → skip, don't 500
+    default:                   return null // unknown kind â†’ skip, don't 500
   }
 }
 
-// ── KPI cards ────────────────────────────────────────────────────────────
+// â”€â”€ KPI cards â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 const fmtMoney = (n: number) =>
   n.toLocaleString('en-AU', { style: 'currency', currency: 'AUD', maximumFractionDigits: 0 })
@@ -645,7 +649,7 @@ function buildKpis(cfg: any, ctx: Ctx, src: SourceBundle): MgmtKpi[] {
     if ((Number(it.QuantityOnHand) || 0) > 0) skus++
   }
   // Stock-to-weekly-sales: denominator INCLUDES intercompany transfers-out
-  // (workbook N12 adds the B2B-excluded amount back in) — so no exclusion.
+  // (workbook N12 adds the B2B-excluded amount back in) â€” so no exclusion.
   const weekRevInclB2b = glSum(src.gl, ctx.currentWeek, { credit: true, match: rev, excluded: noExclusion })
   const stockRatio = weekRevInclB2b !== 0 ? inventoryValue / weekRevInclB2b : 0
 
@@ -665,7 +669,7 @@ function buildKpis(cfg: any, ctx: Ctx, src: SourceBundle): MgmtKpi[] {
   const priorRev = glSum(src.gl, priorWindow, { credit: true, match: rev, excluded })
   const mtdChange = priorRev !== 0 ? (mtd.rev - priorRev) / priorRev : null
 
-  // Days cash on hand = cash ÷ (MTD 6-* expenses ÷ elapsed days).
+  // Days cash on hand = cash Ã· (MTD 6-* expenses Ã· elapsed days).
   const expensesMtd = glSum(src.gl, ctx.mtd, { credit: false, match: expense, excluded })
   const dailyExpense = ctx.elapsedDays > 0 ? expensesMtd / ctx.elapsedDays : 0
   const daysCash = dailyExpense > 0 ? cash / dailyExpense : 0
@@ -707,7 +711,7 @@ function buildKpis(cfg: any, ctx: Ctx, src: SourceBundle): MgmtKpi[] {
   ]
 }
 
-// ── Chart-of-accounts list for the frontend's tick-boxes ────────────────
+// â”€â”€ Chart-of-accounts list for the frontend's tick-boxes â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function accountKind(a: GlAccount): MgmtAccountRow['kind'] {
   const t = (a.type || '').toLowerCase()
@@ -718,7 +722,7 @@ function accountKind(a: GlAccount): MgmtAccountRow['kind'] {
   return 'other'
 }
 
-// ── Main entry ───────────────────────────────────────────────────────────
+// â”€â”€ Main entry â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 export async function computeMgmtDashboard(
   db: SupabaseClient,
@@ -730,11 +734,11 @@ export async function computeMgmtDashboard(
     .order('position', { ascending: true })
   if (error) throw new Error('mgmt_dashboard_charts load failed: ' + error.message)
   const rows = (chartData || []) as MgmtChartConfigRow[]
-  if (!rows.length) throw new Error('mgmt_dashboard_charts is empty — apply migration 184')
+  if (!rows.length) throw new Error('mgmt_dashboard_charts is empty â€” apply migration 184')
 
   // Pull window: wide enough for the weekly buckets of any chart AND the
   // prior-month-same-day KPI. Weeks are derived from the latest GL date
-  // (≤ today), so pad the bucket side by a week of slack.
+  // (â‰¤ today), so pad the bucket side by a week of slack.
   const today = todayBrisbane()
   let maxWeeks = 5
   for (const r of rows) {
@@ -758,7 +762,7 @@ export async function computeMgmtDashboard(
   for (const row of rows) {
     if (!row.enabled) continue
     if (row.config?.kind === 'kpis') continue // KPI row is not a chart
-    // revenueOrdersLeads runs its own (separately cached) MYOB+Monday pull —
+    // revenueOrdersLeads runs its own (separately cached) MYOB+Monday pull â€”
     // async, unlike the bundle-fed builders.
     const c = row.config?.kind === 'revenueOrdersLeads'
       ? await buildRevenueOrdersLeads(db, row, !!opts.refresh)
