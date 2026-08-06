@@ -81,6 +81,30 @@ export async function runPostPaymentPipeline(orderId: string, opts: { paymentInt
     await c.from('b2b_order_events').insert({ order_id: orderId, event_type: 'myob_write_failed', to_status: 'paid', actor_type: 'system', actor_id: null, notes: errMsg.substring(0, 500), metadata: { error: errMsg } })
   }
 
+  // Receipt the payment against the MYOB sale ORDER right away (MYOB books it
+  // as a customer deposit → Undeposited Funds, and carries it onto the invoice
+  // automatically at conversion). Best-effort + idempotent (myob_payment_uid);
+  // BECS stays unsettled here and is picked up by the settlement poller.
+  try {
+    const { applyCustomerPaymentInMyob } = await import('./accounting/post-b2b-doc')
+    // Test orders never receipt money — there is no real Stripe payment behind them.
+    type PayResult = Awaited<ReturnType<typeof applyCustomerPaymentInMyob>>
+    const pay: PayResult = (order as any).is_test
+      ? { status: 'not_settled', myob_payment_uid: null }
+      : await applyCustomerPaymentInMyob(orderId)
+    if (pay.status === 'created') {
+      await c.from('b2b_order_events').insert({
+        order_id: orderId, event_type: 'myob_payment_applied', actor_type: 'system', actor_id: null,
+        notes: `Customer payment → Undeposited Funds, applied to the MYOB ${pay.appliedTo || 'order'} (${pay.myob_payment_uid})`,
+        metadata: { myob_payment_uid: pay.myob_payment_uid, applied_to: pay.appliedTo || 'order' },
+      })
+    }
+  } catch (e: any) {
+    const errMsg = e?.message || String(e)
+    console.error(`pipeline: MYOB payment receipt failed for order ${orderId}:`, errMsg)
+    try { await c.from('b2b_order_events').insert({ order_id: orderId, event_type: 'myob_payment_failed', actor_type: 'system', actor_id: null, notes: errMsg.substring(0, 500) }) } catch {}
+  }
+
   // Warehouse pick list → workshop A4 printer (best-effort; idempotent inside
   // via the deterministic storage path + existing-job check, so webhook retries
   // never double-print). A pick-list failure must never break the pipeline.

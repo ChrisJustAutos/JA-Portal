@@ -47,7 +47,7 @@ export async function bookFreightForOrder(orderId: string, opts: { actorId?: str
 
   const { data: order, error: oErr } = await c.from('b2b_orders').select(`
       id, order_number, status, customer_po, distributor_id, shipping_address_snapshot,
-      machship_consignment_id, machship_consignment_number,
+      machship_consignment_id, machship_consignment_number, dropship_pos,
       freight_chosen_quote, machship_carrier_id, machship_carrier_service_id, freight_service_label, freight_pack_mode
     `).eq('id', orderId).maybeSingle()
   if (oErr) return fail(500, oErr.message)
@@ -281,8 +281,23 @@ export async function bookFreightForOrder(orderId: string, opts: { actorId?: str
         try { await c.from('b2b_order_events').insert({ order_id: orderId, event_type: 'myob_payment_failed', actor_type: 'system', actor_id: null, notes: (e?.message || String(e)).slice(0, 500) }) } catch {}
       }
     } catch (e: any) {
-      console.error(`book-freight: MYOB order→invoice convert failed for ${orderId}:`, e?.message || e)
-      try { await c.from('b2b_order_events').insert({ order_id: orderId, event_type: 'myob_invoice_convert_failed', actor_type: 'system', actor_id: null, notes: (e?.message || String(e)).slice(0, 500) }) } catch {}
+      const msg = e?.message || String(e)
+      // Expected case, not a fault: the order has drop-ship POs that haven't
+      // been billed yet, so MYOB (correctly) refuses to invoice a line whose
+      // stock was never received (Inventory_InsufficientStockMultipleLocation,
+      // Torrisi B2B-2026-000040). Booking stays successful; the invoice
+      // converts via the receive flow once the supplier confirms.
+      const unbilledDropshipPo = (Array.isArray((order as any).dropship_pos) ? (order as any).dropship_pos : [])
+        .some((p: any) => p?.myob_po_uid && !p?.myob_bill_uid)
+      if (unbilledDropshipPo && /insufficient.?stock/i.test(msg)) {
+        const friendly = 'Invoice will convert once the supplier PO is billed — use "Supplier confirmed" on the order page.'
+        labelWarning = [labelWarning, friendly].filter(Boolean).join(' · ')
+        console.warn(`book-freight: MYOB invoice conversion deferred for ${orderId} (drop-ship PO not billed yet): ${msg}`)
+        try { await c.from('b2b_order_events').insert({ order_id: orderId, event_type: 'myob_invoice_convert_deferred', actor_type: 'system', actor_id: null, notes: friendly, metadata: { myob_error: msg.slice(0, 300) } }) } catch {}
+      } else {
+        console.error(`book-freight: MYOB order→invoice convert failed for ${orderId}:`, msg)
+        try { await c.from('b2b_order_events').insert({ order_id: orderId, event_type: 'myob_invoice_convert_failed', actor_type: 'system', actor_id: null, notes: msg.slice(0, 500) }) } catch {}
+      }
     }
   }
 

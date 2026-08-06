@@ -114,7 +114,7 @@ interface OrderDetail {
   // Drop-ship
   has_drop_ship: boolean
   dropship_po_raised_at: string | null
-  dropship_pos: Array<{ supplier_uid: string; supplier_name: string; myob_po_number: string | null; myob_po_uid: string | null; line_count: number; created_at: string; email_status?: 'sent' | 'no_email' | 'failed'; emailed_to?: string | null }>
+  dropship_pos: Array<{ supplier_uid: string; supplier_name: string; myob_po_number: string | null; myob_po_uid: string | null; line_count: number; created_at: string; email_status?: 'sent' | 'no_email' | 'failed'; emailed_to?: string | null; myob_bill_uid?: string | null; myob_bill_number?: string | null; billed_at?: string | null }>
   customer_notes: string | null
   internal_notes: string | null
   ship_to: { company: string; name: string; phone: string; email: string; line1: string; line2: string; suburb: string; state: string; postcode: string; source: 'order' | 'distributor' } | null
@@ -895,6 +895,38 @@ function ShippingCard({ order, onEdit, onReloaded, onFlash }: {
     }
   }
   const [actionError,  setActionError]  = useState<string | null>(null)
+  const [receiveBusy,  setReceiveBusy]  = useState(false)
+
+  // Drop-ship receiving: POs raised in MYOB but not yet billed. "Supplier
+  // confirmed" converts each PO → Bill (receives stock into the supplier's DS
+  // location) then retries the sale order → invoice conversion + payment.
+  const dropshipPos      = (order.dropship_pos || []).filter(p => p.myob_po_uid)
+  const unbilledDropship = dropshipPos.filter(p => !p.myob_bill_uid)
+  const lastBilledAt     = dropshipPos.map(p => p.billed_at).filter((d): d is string => !!d).sort().pop() || null
+
+  async function receiveDropship() {
+    if (receiveBusy) return
+    setReceiveBusy(true); setActionError(null)
+    try {
+      const r = await fetch(`/api/b2b/admin/orders/${order.id}/receive-dropship`, { method: 'POST', credentials: 'same-origin' })
+      const j = await r.json()
+      if (!r.ok) throw new Error(j?.error || `HTTP ${r.status}`)
+      const stepsRun: { step: string; ok: boolean; detail: string }[] = Array.isArray(j.steps) ? j.steps : []
+      const failed = stepsRun.filter(s => !s.ok)
+      if (failed.length > 0) setActionError(failed.map(s => `${s.step}: ${s.detail}`).join(' · '))
+      if (stepsRun.some(s => s.ok)) {
+        onFlash(failed.length > 0
+          ? `Ran with ${failed.length} failed step${failed.length === 1 ? '' : 's'} — details below`
+          : 'Supplier PO billed — invoice conversion + payment receipting run')
+      }
+      onReloaded()
+    } catch (e: any) {
+      setActionError(e?.message || String(e))
+    } finally {
+      setReceiveBusy(false)
+    }
+  }
+
   const [dispatchAt,   setDispatchAt]   = useState('')   // datetime-local; blank = collect ASAP
   const [packMode,     setPackMode]     = useState<string>(order.freight_pack_mode || 'auto')
   const [laterOpen,    setLaterOpen]    = useState(false) // mobile "book later" sheet
@@ -1009,6 +1041,19 @@ function ShippingCard({ order, onEdit, onReloaded, onFlash }: {
               style={mb({ border: `1px solid ${pickDone ? T.green : T.border2}`, background: 'transparent', color: pickDone ? T.green : T.blue, fontWeight: 500, cursor: pickBusy ? 'wait' : 'pointer' })}>
               {pickDone ? '✓ Pick list queued' : pickBusy ? 'Queuing…' : '📋 Print pick list'}
             </button>
+            {unbilledDropship.length > 0 && (
+              <button onClick={receiveDropship} disabled={receiveBusy}
+                title="Supplier confirmed the drop-ship order — converts the PO to a bill in MYOB (receives the stock into the supplier's DS location), then converts this order to a tax invoice and receipts the payment"
+                style={mb({ border: `1px solid ${T.amber}60`, background: `${T.amber}15`, color: T.amber, cursor: receiveBusy ? 'wait' : 'pointer' })}>
+                {receiveBusy ? 'Billing PO…' : '📦 Supplier confirmed — bill PO + invoice'}
+              </button>
+            )}
+            {dropshipPos.length > 0 && unbilledDropship.length === 0 && (
+              <span title={dropshipPos.map(p => `${p.supplier_name}: bill ${p.myob_bill_number || p.myob_bill_uid}`).join(' · ')}
+                style={{ fontSize: 11, padding: '2px 8px', borderRadius: 3, background: `${T.green}15`, color: T.green, border: `1px solid ${T.green}40`, whiteSpace: 'nowrap' }}>
+                ✓ PO billed{lastBilledAt ? ` ${fullDate(lastBilledAt)}` : ''}
+              </span>
+            )}
           </div>
         )
       })()}

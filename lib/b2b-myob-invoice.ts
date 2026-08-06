@@ -484,13 +484,18 @@ export async function convertOrderToInvoiceInMyob(orderId: string, opts: { track
 export interface MyobPaymentResult {
   myob_payment_uid: string | null
   status: 'created' | 'already_applied' | 'invoice_already_paid' | 'not_settled' | 'no_invoice'
+  appliedTo?: 'invoice' | 'order'
 }
 
 /**
- * Records the Stripe payment against the order's MYOB sale invoice as a
- * Customer Payment deposited to Undeposited Funds, so the invoice shows PAID
- * in MYOB. Idempotent via b2b_orders.myob_payment_uid; also skips if the
- * invoice balance is already 0 (e.g. someone receipted it manually).
+ * Records the Stripe payment in MYOB as a Customer Payment deposited to
+ * Undeposited Funds. Applied against the sale INVOICE when it exists;
+ * otherwise against the open Sale ORDER (MYOB books it as a customer
+ * deposit and carries it onto the invoice automatically at conversion) —
+ * so paid orders show their money in MYOB immediately, even while a
+ * drop-ship line keeps the invoice conversion waiting on the supplier.
+ * Idempotent via b2b_orders.myob_payment_uid; also skips if the document's
+ * balance is already 0 (e.g. someone receipted it manually).
  *
  * Only call once the money is actually settled — card/PayTo settle at
  * checkout; BECS settles days later (payment_settled_at is the gate).
@@ -501,7 +506,7 @@ export async function applyCustomerPaymentInMyob(orderId: string): Promise<MyobP
     .from('b2b_orders')
     .select(`
       id, order_number, total_inc, paid_at, payment_settled_at, payment_method,
-      stripe_payment_intent_id, myob_sale_invoice_uid, myob_payment_uid,
+      stripe_payment_intent_id, myob_invoice_uid, myob_sale_invoice_uid, myob_payment_uid,
       distributor:b2b_distributors!b2b_orders_distributor_id_fkey ( id, display_name, myob_primary_customer_uid )
     `)
     .eq('id', orderId).maybeSingle()
@@ -509,7 +514,11 @@ export async function applyCustomerPaymentInMyob(orderId: string): Promise<MyobP
   if (!order) throw new Error(`Order ${orderId} not found`)
 
   if (order.myob_payment_uid) return { myob_payment_uid: order.myob_payment_uid, status: 'already_applied' }
-  if (!order.myob_sale_invoice_uid) return { myob_payment_uid: null, status: 'no_invoice' }
+  // Prefer the invoice; fall back to the open sale ORDER (payment sits as a
+  // customer deposit and transfers to the invoice when the order converts).
+  const targetUid: string | null = order.myob_sale_invoice_uid || order.myob_invoice_uid || null
+  const targetType: 'Invoice' | 'Order' = order.myob_sale_invoice_uid ? 'Invoice' : 'Order'
+  if (!targetUid) return { myob_payment_uid: null, status: 'no_invoice' }
   if (!order.payment_settled_at) return { myob_payment_uid: null, status: 'not_settled' }
 
   const dist: any = Array.isArray(order.distributor) ? order.distributor[0] : order.distributor
@@ -518,14 +527,15 @@ export async function applyCustomerPaymentInMyob(orderId: string): Promise<MyobP
   const conn = await getConnection('JAWS')
   if (!conn) throw new Error('JAWS MYOB connection not configured')
 
-  // Read the invoice's live balance and apply exactly that (never more) — so a
+  // Read the document's live balance and apply exactly that (never more) — so a
   // manual receipt in MYOB, a rounding cent, or a partial doesn't double-pay.
-  const inv = await myobFetch(conn.id, `/accountright/${conn.company_file_id}/Sale/Invoice/Item/${order.myob_sale_invoice_uid}`)
-  if (inv.status !== 200 || !inv.data) throw new Error(`Invoice fetch failed (HTTP ${inv.status})`)
+  const docPath = targetType === 'Invoice' ? 'Sale/Invoice/Item' : 'Sale/Order/Item'
+  const inv = await myobFetch(conn.id, `/accountright/${conn.company_file_id}/${docPath}/${targetUid}`)
+  if (inv.status !== 200 || !inv.data) throw new Error(`${targetType} fetch failed (HTTP ${inv.status})`)
   const balance = round2(Number(inv.data.BalanceDueAmount ?? 0))
   if (balance <= 0) {
     await c.from('b2b_orders').update({ myob_payment_at: new Date().toISOString() }).eq('id', orderId)
-    return { myob_payment_uid: null, status: 'invoice_already_paid' }
+    return { myob_payment_uid: null, status: 'invoice_already_paid', appliedTo: targetType === 'Invoice' ? 'invoice' : 'order' }
   }
   const amount = Math.min(balance, round2(Number(order.total_inc || 0)) || balance)
 
@@ -538,7 +548,7 @@ export async function applyCustomerPaymentInMyob(orderId: string): Promise<MyobP
     Date: payDate,
     AmountReceived: amount,
     Memo: memo,
-    Invoices: [{ UID: order.myob_sale_invoice_uid, Type: 'Invoice', AmountApplied: amount }],
+    Invoices: [{ UID: targetUid, Type: targetType, AmountApplied: amount }],
   }
 
   const result = await myobFetch(conn.id, `/accountright/${conn.company_file_id}/Sale/CustomerPayment`, { method: 'POST', body })
@@ -555,7 +565,7 @@ export async function applyCustomerPaymentInMyob(orderId: string): Promise<MyobP
     myob_payment_at: new Date().toISOString(),
   }).eq('id', orderId)
 
-  return { myob_payment_uid: paymentUid, status: 'created' }
+  return { myob_payment_uid: paymentUid, status: 'created', appliedTo: targetType === 'Invoice' ? 'invoice' : 'order' }
 }
 
 /**

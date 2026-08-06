@@ -58,11 +58,11 @@ import { XeroAdapter, NeutralLine } from './xero-adapter'
 import * as myobInvoice from '../b2b-myob-invoice'
 import * as myobPo from '../b2b-myob-po'
 import type { MyobWriteResult, MyobConvertResult, MyobPaymentResult, MyobCreditNoteResult } from '../b2b-myob-invoice'
-import type { CreatePOInput, CreatePOResult, DropShipPOLine } from '../b2b-myob-po'
+import type { CreatePOInput, CreatePOResult, DropShipPOLine, ConvertPoToBillInput, ConvertPoToBillResult } from '../b2b-myob-po'
 
 // Callers import these shapes from here after the swap.
 export type { MyobWriteResult, MyobConvertResult, MyobPaymentResult, MyobCreditNoteResult }
-export type { CreatePOInput, CreatePOResult, DropShipPOLine }
+export type { CreatePOInput, CreatePOResult, DropShipPOLine, ConvertPoToBillInput, ConvertPoToBillResult }
 
 const ENTITY = 'JAWS' as const
 const MODULE = 'B2B'
@@ -562,6 +562,26 @@ export async function createDropShipPurchaseOrder(input: CreatePOInput): Promise
   throw new Error(
     'xero: drop-ship purchase orders not yet supported — the Xero adapter has no purchase-order operation. ' +
     'Raise the PO in Xero manually (drop-ship, ship-to the customer address).',
+  )
+}
+
+// ── convertDropShipPoToBill ──────────────────────────────────────────────
+
+/**
+ * Converts a drop-ship supplier Purchase ORDER into a BILL when the supplier
+ * confirms (receives the stock into the supplier's DS location so the sale
+ * order can convert to an invoice).
+ *   myob → native Purchase.Order → Purchase.Bill conversion via the
+ *          Order:{UID} link (unchanged mirror of the sale side)
+ *   xero → NOT YET SUPPORTED: the XeroAdapter has no purchase-order
+ *          operation (same gap as createDropShipPurchaseOrder). Bill the PO
+ *          in Xero manually.
+ */
+export async function convertDropShipPoToBill(input: ConvertPoToBillInput): Promise<ConvertPoToBillResult> {
+  if (!(await isXero())) return myobPo.convertDropShipPoToBill(input)
+  throw new Error(
+    'xero: drop-ship PO→bill conversion not yet supported — the Xero adapter has no purchase-order operation. ' +
+    'Bill the purchase order in Xero manually, then retry the invoice conversion.',
   )
 }
 

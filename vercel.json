@@ -109,6 +109,9 @@
     },
     "pages/api/b2b/admin/stock-transfer.ts": {
       "maxDuration": 300
+    },
+    "pages/api/cron/b2b-dropship-confirm.ts": {
+      "maxDuration": 300
     }
   },
   "crons": [
@@ -195,6 +198,10 @@
     {
       "path": "/api/cron/tune-jobs",
       "schedule": "20 * * * *"
+    },
+    {
+      "path": "/api/cron/b2b-dropship-confirm",
+      "schedule": "*/15 * * * *"
     }
   ]
 }

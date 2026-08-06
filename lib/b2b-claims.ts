@@ -10,7 +10,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 
 const STALE_MS = 10 * 60_000
 
-export type OrderClaimColumn = 'myob_writing_at' | 'freight_booking_at' | 'dropship_raising_at' | 'refunding_at'
+export type OrderClaimColumn = 'myob_writing_at' | 'freight_booking_at' | 'dropship_raising_at' | 'refunding_at' | 'dropship_billing_at'
 
 /** Try to claim a stage for this order. True = we own it; false = another run does. */
 export async function claimOrderStage(c: SupabaseClient, orderId: string, column: OrderClaimColumn): Promise<boolean> {
