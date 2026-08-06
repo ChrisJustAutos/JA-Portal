@@ -5,8 +5,8 @@
 // auth + params + the config editor.
 //
 // GET  ?refresh=1                     → full payload { generatedAt, kpis,
-//        charts, config } (expensive MYOB pulls served from a <10-min cache
-//        unless refresh is forced)
+//        charts, kpiHistory, config } (expensive MYOB pulls served from the
+//        nightly-warmed cache unless refresh is forced)
 // PATCH { chart_key, patch: { enabled?, title?, chart_type?, config? } }
 //        → merge-update one mgmt_dashboard_charts row (config is shallow-
 //        merged over the existing config) and return the updated row.

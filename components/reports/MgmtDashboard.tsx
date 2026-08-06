@@ -6,6 +6,12 @@
 // inventory, parts-mix pie, top-10 customers). All figures come from
 // GET /api/reports/mgmt-dashboard (?refresh=1 forces a re-pull from MYOB).
 //
+// KPI tiles are clickable — a modal shows the KPI's history as a bar graph
+// (weekly GL-derived series for flow KPIs, accrued nightly snapshots for the
+// point-in-time ones — payload kpiHistory). Every chart card also has an
+// ⤢ Expand button that re-renders the same chart large in the same modal
+// shell (the grid cards can get small).
+//
 // Every chart has an Edit drawer (admin config): title, enabled, chart type
 // and a GENERIC editor over the chart's config jsonb — any key holding an
 // array of account codes renders as a searchable tick-box list of the chart
@@ -36,10 +42,16 @@ interface ChartData {
 }
 interface ChartCfg { key: string; title: string; enabled: boolean; chart_type: string; position: number; config: Record<string, any> }
 interface AccountRef { code: string; name: string; kind: 'income' | 'cogs' | 'asset' | 'other' }
+// Tile-click history: weekly flow series (label = week range) or accrued
+// daily snapshots (label = d/M) — mirrors MgmtKpiHistorySeries in
+// lib/mgmt-dashboard.
+type HistoryUnit = 'currency' | 'ratio' | 'days' | 'pct'
+interface KpiHistorySeries { unit: HistoryUnit; points: Point[] }
 interface ApiResp {
   generatedAt: string
   kpis: Kpi[]
   charts: ChartData[]
+  kpiHistory?: Record<string, KpiHistorySeries>
   config: { charts: ChartCfg[]; accounts: AccountRef[] }
 }
 
@@ -56,8 +68,21 @@ const fmtMoneyShort = (n: number) => {
 }
 const fmtNum = (n: number) => Math.round(n * 100) / 100 % 1 === 0 ? Math.round(n).toLocaleString('en-AU') : n.toLocaleString('en-AU', { maximumFractionDigits: 2 })
 // Axis / compact value per the chart's valueFormat (defaults to currency).
-const fmtAxis = (n: number, vf?: string) => vf === 'number' ? fmtNum(n) : fmtMoneyShort(n)
-const fmtFull = (n: number, vf?: string) => vf === 'number' ? fmtNum(n) : fmtMoney(n)
+// pct/ratio/days exist for the KPI history graphs (gross margin %, stock
+// ratio ×, days cash) — chart configs only ever pass currency/number.
+const fmtAxis = (n: number, vf?: string) => {
+  if (vf === 'number' || vf === 'days') return fmtNum(n)
+  if (vf === 'pct') return `${Math.round(n * 1000) / 10}%`
+  if (vf === 'ratio') return `${Math.round(n * 100) / 100}×`
+  return fmtMoneyShort(n)
+}
+const fmtFull = (n: number, vf?: string) => {
+  if (vf === 'number') return fmtNum(n)
+  if (vf === 'days') return `${fmtNum(n)} days`
+  if (vf === 'pct') return `${Math.round(n * 1000) / 10}%`
+  if (vf === 'ratio') return `${Math.round(n * 100) / 100}×`
+  return fmtMoney(n)
+}
 
 function fmtKpiValue(k: Kpi): string {
   if (k.format === 'text') return String(k.value ?? '—')
@@ -252,11 +277,12 @@ function StackedBars({ series, valueFormat }: { series: Series[]; valueFormat?: 
   )
 }
 
-function PieChart({ series, valueFormat }: { series: Series[]; valueFormat?: string }) {
+function PieChart({ series, valueFormat, big }: { series: Series[]; valueFormat?: string; big?: boolean }) {
   const pts = (series[0]?.points || []).filter(p => p.value > 0)
   const total = pts.reduce((a, p) => a + p.value, 0)
   if (!pts.length || total <= 0) return <NoData />
   const R = 86, CX = 100, CY = 100
+  const size = big ? 360 : 190 // big = expand-modal rendering
   let angle = -Math.PI / 2
   const slices = pts.map((p, i) => {
     const a0 = angle, a1 = angle + (p.value / total) * Math.PI * 2
@@ -264,8 +290,8 @@ function PieChart({ series, valueFormat }: { series: Series[]; valueFormat?: str
     return { p, i, a0, a1 }
   })
   return (
-    <div style={{ display: 'flex', gap: 14, alignItems: 'center', flexWrap: 'wrap' }}>
-      <svg viewBox="0 0 200 200" style={{ width: 190, height: 190, flexShrink: 0 }} role="img">
+    <div style={{ display: 'flex', gap: big ? 26 : 14, alignItems: 'center', flexWrap: 'wrap' }}>
+      <svg viewBox="0 0 200 200" style={{ width: size, height: size, flexShrink: 0 }} role="img">
         {pts.length === 1 ? (
           <circle cx={CX} cy={CY} r={R} style={{ fill: SERIES_COLORS[0] }}>
             <title>{`${pts[0].label}: ${fmtFull(pts[0].value, valueFormat)} (100%)`}</title>
@@ -282,9 +308,9 @@ function PieChart({ series, valueFormat }: { series: Series[]; valueFormat?: str
           )
         })}
       </svg>
-      <div style={{ flex: 1, minWidth: 170, display: 'flex', flexDirection: 'column', gap: 5 }}>
+      <div style={{ flex: 1, minWidth: 170, display: 'flex', flexDirection: 'column', gap: big ? 7 : 5 }}>
         {pts.map((p, i) => (
-          <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 11.5 }}>
+          <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: big ? 13 : 11.5 }}>
             <span style={{ width: 9, height: 9, borderRadius: 3, flexShrink: 0, background: SERIES_COLORS[i % SERIES_COLORS.length] }} />
             <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: T.text2 }} title={p.label}>{p.label}</span>
             <span style={{ fontVariantNumeric: 'tabular-nums', fontWeight: 600 }}>{fmtAxis(p.value, valueFormat)}</span>
@@ -344,16 +370,73 @@ function ChartLegend({ series, options }: { series: Series[]; options?: ChartOpt
   )
 }
 
-function ChartBody({ chart }: { chart: ChartData }) {
+// big = expand-modal rendering. The bar/hbar SVGs are viewBox-scaled to their
+// container, so they grow with the modal for free; only the pie needs an
+// explicit size bump.
+function ChartBody({ chart, big }: { chart: ChartData; big?: boolean }) {
   const vf = chart.options?.valueFormat
   const type = chart.options?.stacked && chart.type === 'bars' ? 'stackedBars' : chart.type
   switch (type) {
     case 'bars': return <><ClusteredBars series={chart.series} valueFormat={vf} options={chart.options} /><ChartLegend series={chart.series} options={chart.options} /></>
     case 'stackedBars': return <><StackedBars series={chart.series} valueFormat={vf} /><ChartLegend series={chart.series} /></>
-    case 'pie': return <PieChart series={chart.series} valueFormat={vf} />
+    case 'pie': return <PieChart series={chart.series} valueFormat={vf} big={big} />
     case 'hbar': return <HBar series={chart.series} valueFormat={vf} />
     default: return <div style={{ padding: 20, fontSize: 12, color: T.text3 }}>Unknown chart type “{chart.type}”.</div>
   }
+}
+
+// ── Expand / history modal shell ─────────────────────────────────────────
+// Theme-correct overlay: Escape or click-outside closes; content is read-only.
+function Modal({ title, sub, onClose, children }: {
+  title: string; sub?: string; onClose: () => void; children: React.ReactNode
+}) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [onClose])
+  return (
+    <>
+      <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', zIndex: 900 }} />
+      <div style={{
+        position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', zIndex: 901,
+        width: 'min(90vw, 1100px)', maxHeight: '86vh', display: 'flex', flexDirection: 'column',
+        background: T.bg2, border: `1px solid ${T.border2}`, borderRadius: 12,
+        boxShadow: '0 0 60px rgba(0,0,0,0.5)', fontFamily: "'DM Sans', system-ui, sans-serif",
+      }}>
+        <div style={{ padding: '14px 20px', borderBottom: `1px solid ${T.border}`, display: 'flex', alignItems: 'center', gap: 10 }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 15, fontWeight: 700, color: T.text }}>{title}</div>
+            {sub && <div style={{ fontSize: 11, color: T.text3, marginTop: 2 }}>{sub}</div>}
+          </div>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', color: T.text3, fontSize: 20, cursor: 'pointer', fontFamily: 'inherit', padding: 4 }} aria-label="Close">×</button>
+        </div>
+        <div style={{ padding: '18px 20px', overflowY: 'auto' }}>{children}</div>
+      </div>
+    </>
+  )
+}
+
+// KPI tile → history bar graph. Unit-aware value labels ($ / % / × / days)
+// via the shared fmtAxis/fmtFull extensions; 'currency' falls through to the
+// chart kit's default money formatting.
+function KpiHistoryModal({ kpi, history, onClose }: {
+  kpi: Kpi; history: KpiHistorySeries | undefined; onClose: () => void
+}) {
+  const points = history?.points || []
+  const vf = history?.unit === 'currency' ? undefined : history?.unit
+  return (
+    <Modal title={`${kpi.label} — history`} sub={`Now: ${fmtKpiValue(kpi)}${kpi.sub ? ` · ${kpi.sub}` : ''}`} onClose={onClose}>
+      {points.length > 0
+        ? <ClusteredBars series={[{ name: kpi.label, points }]} valueFormat={vf} />
+        : <NoData />}
+      {points.length < 2 && (
+        <div style={{ marginTop: 10, fontSize: 11.5, color: T.text3 }}>
+          History builds up from nightly snapshots — check back in a few days.
+        </div>
+      )}
+    </Modal>
+  )
 }
 
 // ── Generic config editor ────────────────────────────────────────────────
@@ -613,6 +696,8 @@ export default function MgmtDashboard() {
   const [error, setError] = useState('')
   const [editing, setEditing] = useState<ChartCfg | null>(null)
   const [saving, setSaving] = useState(false)
+  const [historyKpiKey, setHistoryKpiKey] = useState<string | null>(null) // tile-click history modal
+  const [expandedKey, setExpandedKey] = useState<string | null>(null)     // chart ⤢ Expand modal
 
   const load = useCallback(async (refresh = false) => {
     if (refresh) setRefreshing(true); else setLoading(true)
@@ -699,6 +784,8 @@ export default function MgmtDashboard() {
 
   const headline = data.kpis.filter(k => k.format === 'text')
   const tiles = data.kpis.filter(k => k.format !== 'text')
+  const historyKpi = historyKpiKey ? tiles.find(k => k.key === historyKpiKey) : undefined
+  const expandedChart = expandedKey ? charts.find(c => c.key === expandedKey) : undefined
 
   return (
     <div style={{ height: '100%', overflowY: 'auto' }}>
@@ -733,10 +820,19 @@ export default function MgmtDashboard() {
           </div>
         ))}
 
-        {/* KPI cards */}
+        {/* KPI cards — click for a history bar graph */}
         {tiles.length > 0 && (
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(190px, 1fr))', gap: 12, marginBottom: 20, opacity: refreshing ? 0.6 : 1, transition: 'opacity 0.15s' }}>
-            {tiles.map(k => <KPI key={k.key} label={k.label} value={fmtKpiValue(k)} sub={k.sub} />)}
+            {tiles.map(k => (
+              <div key={k.key} className="mgmt-kpi-tile" role="button" tabIndex={0} title="Show history"
+                onClick={() => setHistoryKpiKey(k.key)}
+                onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setHistoryKpiKey(k.key) } }}
+                style={{ position: 'relative', cursor: 'pointer', outline: 'none' }}>
+                <KPI label={k.label} value={fmtKpiValue(k)} sub={k.sub} />
+                <span className="mgmt-kpi-hist" aria-hidden style={{ position: 'absolute', top: 10, right: 12, fontSize: 11, pointerEvents: 'none' }}>📊</span>
+              </div>
+            ))}
+            <style>{`.mgmt-kpi-tile .mgmt-kpi-hist{opacity:0.3;transition:opacity 0.12s}.mgmt-kpi-tile:hover .mgmt-kpi-hist,.mgmt-kpi-tile:focus-visible .mgmt-kpi-hist{opacity:1}`}</style>
           </div>
         )}
 
@@ -746,6 +842,7 @@ export default function MgmtDashboard() {
             <div key={c.key} style={{ background: T.bg2, border: `1px solid ${T.border}`, borderRadius: 10, padding: '14px 16px', minWidth: 0 }}>
               <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, marginBottom: 10 }}>
                 <div style={{ flex: 1, fontSize: 13.5, fontWeight: 600, color: T.text }}>{c.title}</div>
+                <button onClick={() => setExpandedKey(c.key)} style={miniBtn(T.text3 as string)} title="Open large view">⤢ Expand</button>
                 <button onClick={() => setEditing(cfgFor(c))} style={miniBtn(T.text3 as string)}>Edit</button>
               </div>
               <ChartBody chart={c} />
@@ -768,6 +865,20 @@ export default function MgmtDashboard() {
           </div>
         )}
       </div>
+
+      {historyKpi && (
+        <KpiHistoryModal
+          kpi={historyKpi}
+          history={data.kpiHistory?.[historyKpi.key]}
+          onClose={() => setHistoryKpiKey(null)}
+        />
+      )}
+
+      {expandedChart && (
+        <Modal title={expandedChart.title} onClose={() => setExpandedKey(null)}>
+          <ChartBody chart={expandedChart} big />
+        </Modal>
+      )}
 
       {editing && (
         <EditDrawer

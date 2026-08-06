@@ -86,10 +86,17 @@ export interface MgmtAccountRow {
   name: string
   kind: 'income' | 'cogs' | 'asset' | 'other'
 }
+// KPI tile-click history (one bar-graph series per KPI key). Two sources:
+// flow KPIs get a weekly Mon–Sun series over the pulled GL window (label =
+// week range, same bucketing as the rolling chart); point-in-time KPIs get
+// the accrued daily snapshots (label = d/M). Flow wins where both exist.
+export type MgmtKpiHistoryUnit = 'currency' | 'ratio' | 'days' | 'pct'
+export interface MgmtKpiHistorySeries { unit: MgmtKpiHistoryUnit; points: MgmtChartPoint[] }
 export interface MgmtDashboardPayload {
   generatedAt: string
   kpis: MgmtKpi[]
   charts: MgmtChart[]
+  kpiHistory: Record<string, MgmtKpiHistorySeries>
   config: { charts: MgmtChartConfigRow[]; accounts: MgmtAccountRow[] }
 }
 
@@ -126,6 +133,10 @@ function fmtDayMonth(ymd: string): string {
 }
 function weekLabel(start: string, end: string): string {
   return `${fmtDayMonth(start)} – ${fmtDayMonth(end)}`
+}
+function fmtDaySlashMonth(ymd: string): string {
+  const d = ymdToDate(ymd)
+  return `${d.getUTCDate()}/${d.getUTCMonth() + 1}`
 }
 
 interface Window { start: string; end: string } // inclusive both ends
@@ -717,6 +728,119 @@ function buildKpis(cfg: any, ctx: Ctx, src: SourceBundle): MgmtKpi[] {
   ]
 }
 
+// ── KPI history (tile-click bar graphs) ─────────────────────────────────
+// Two complementary sources, merged in computeMgmtDashboard:
+//   • FLOW KPIs (revenue / GP / GM / COGS — anything GL-derived) get a weekly
+//     Mon–Sun series computed across the FULL pulled GL window — instant
+//     depth, no waiting on snapshots. Same week bucketing as the rolling
+//     revenue+GP chart; the current partial week is included (it IS the
+//     "current 7 days" tile).
+//   • POINT-IN-TIME KPIs (cash in bank, days cash, inventory value,
+//     stock:weekly sales, projections) accrue one row per Brisbane day in
+//     mgmt_dashboard_kpi_snapshots (migration 194) — written on every fresh
+//     compute, so the nightly warm cron adds a point a day.
+// Where both exist the weekly flow series wins (richer).
+
+const KPI_HISTORY_MAX_POINTS = 26
+
+function buildFlowKpiHistory(cfg: any, ctx: Ctx, src: SourceBundle): Record<string, MgmtKpiHistorySeries> {
+  const rev = scopeMatcher(cfg.revenueScope)
+  const cogsScope = scopeMatcher(cfg.cogsScope)
+  const tuning = accountsMatcher(cfg.tuningAccounts)
+  const excluded = makeExcluder(cfg.exclusions)
+  const cosPct = Number(cfg.tuningCosPct) || 0
+
+  // Every COMPLETE Mon–Sun week the pulled window covers (a first week that
+  // starts before src.start would show a misleading partial bar), through the
+  // week containing the latest GL date.
+  const weeks: Array<Window & { label: string }> = []
+  const lastMonday = mondayOf(ctx.latest)
+  for (let start = mondayOf(src.start); start <= lastMonday; start = addDays(start, 7)) {
+    if (start < src.start) continue
+    weeks.push({ start, end: addDays(start, 6), label: weekLabel(start, addDays(start, 6)) })
+  }
+
+  const revPts: MgmtChartPoint[] = []
+  const gpPts: MgmtChartPoint[] = []
+  const gmPts: MgmtChartPoint[] = []
+  const cogsPts: MgmtChartPoint[] = []
+  for (const w of weeks.slice(-KPI_HISTORY_MAX_POINTS)) {
+    const r = glSum(src.gl, w, { credit: true, match: rev, excluded })
+    const c = glSum(src.gl, w, { credit: false, match: cogsScope, excluded })
+    const t = glSum(src.gl, w, { credit: true, match: tuning, excluded })
+    const gp = r - c - cosPct * t // same GP idiom as buildKpis / chart 1
+    revPts.push({ label: w.label, value: round2(r) })
+    gpPts.push({ label: w.label, value: round2(gp) })
+    gmPts.push({ label: w.label, value: r !== 0 ? Math.round((gp / r) * 10000) / 10000 : 0 })
+    cogsPts.push({ label: w.label, value: round2(c + cosPct * t) })
+  }
+
+  // The MTD tiles share the weekly flow series — same underlying flows, and
+  // a weekly trend is more useful history than a sawtooth of MTD readings.
+  return {
+    week_revenue: { unit: 'currency', points: revPts },
+    mtd_revenue: { unit: 'currency', points: revPts },
+    week_gp: { unit: 'currency', points: gpPts },
+    mtd_gp: { unit: 'currency', points: gpPts },
+    week_gm: { unit: 'pct', points: gmPts },
+    mtd_gm: { unit: 'pct', points: gmPts },
+    mtd_cogs: { unit: 'currency', points: cogsPts },
+  }
+}
+
+// Written on every FRESH compute (cache miss or forced refresh — the same
+// condition under which the source bundle is upserted), so the nightly warm
+// accrues exactly one snapshot per Brisbane day. Failures only warn — a
+// snapshot hiccup must never sink the dashboard.
+async function upsertKpiSnapshot(db: SupabaseClient, kpis: MgmtKpi[]): Promise<void> {
+  const map: Record<string, number> = {}
+  for (const k of kpis) if (typeof k.value === 'number' && isFinite(k.value)) map[k.key] = k.value
+  if (!Object.keys(map).length) return
+  const { error } = await db
+    .from('mgmt_dashboard_kpi_snapshots')
+    .upsert({ snapshot_date: todayBrisbane(), kpis: map }, { onConflict: 'snapshot_date' })
+  if (error) console.warn('[mgmt-dashboard] KPI snapshot upsert failed:', error.message)
+}
+
+function unitForKpiFormat(f: MgmtKpi['format']): MgmtKpiHistoryUnit | null {
+  if (f === 'currency') return 'currency'
+  if (f === 'days') return 'days'
+  if (f === 'ratio') return 'ratio'
+  return null
+}
+
+async function loadSnapshotKpiHistory(
+  db: SupabaseClient, kpis: MgmtKpi[],
+): Promise<Record<string, MgmtKpiHistorySeries>> {
+  const { data, error } = await db
+    .from('mgmt_dashboard_kpi_snapshots')
+    .select('snapshot_date, kpis')
+    .order('snapshot_date', { ascending: false })
+    .limit(KPI_HISTORY_MAX_POINTS)
+  if (error) {
+    console.warn('[mgmt-dashboard] KPI snapshot load failed:', error.message)
+    return {}
+  }
+  const units: Record<string, MgmtKpiHistoryUnit> = {}
+  for (const k of kpis) {
+    const u = unitForKpiFormat(k.format)
+    if (u) units[k.key] = u
+  }
+  const out: Record<string, MgmtKpiHistorySeries> = {}
+  for (const row of (data || []).slice().reverse()) { // oldest → newest
+    const label = fmtDaySlashMonth(String(row.snapshot_date))
+    const vals = (row.kpis || {}) as Record<string, unknown>
+    for (const key of Object.keys(vals)) {
+      const unit = units[key]
+      const v = Number(vals[key])
+      if (!unit || !isFinite(v)) continue // stale keys / non-current KPIs
+      if (!out[key]) out[key] = { unit, points: [] }
+      out[key].points.push({ label, value: v })
+    }
+  }
+  return out
+}
+
 // ── Chart-of-accounts list for the frontend's tick-boxes ────────────────
 
 function accountKind(a: GlAccount): MgmtAccountRow['kind'] {
@@ -756,7 +880,7 @@ export async function computeMgmtDashboard(
   const pullStart = bucketStart < priorMonthStart ? bucketStart : priorMonthStart
   const pullEndExclusive = addDays(today, 1)
 
-  const { bundle: src } = await loadSource(db, pullStart, pullEndExclusive, !!opts.refresh)
+  const { bundle: src, fromCache } = await loadSource(db, pullStart, pullEndExclusive, !!opts.refresh)
 
   // Anchor every window on the latest transaction date (workbook MAX(GL!N)).
   let latest = ''
@@ -779,6 +903,15 @@ export async function computeMgmtDashboard(
   const kpiRow = rows.find(r => r.config?.kind === 'kpis')
   const kpis = kpiRow && kpiRow.enabled ? buildKpis(kpiRow.config || {}, ctx, src) : []
 
+  // KPI history: snapshot on fresh pulls only (nightly warm + Refresh) so the
+  // point-in-time tiles accrue one point per day, then merge the accrued
+  // snapshots under the GL-derived weekly flow series (flow wins).
+  if (!fromCache && kpis.length) await upsertKpiSnapshot(db, kpis)
+  const kpiHistory: Record<string, MgmtKpiHistorySeries> = {
+    ...(await loadSnapshotKpiHistory(db, kpis)),
+    ...(kpiRow && kpiRow.enabled ? buildFlowKpiHistory(kpiRow.config || {}, ctx, src) : {}),
+  }
+
   const accounts: MgmtAccountRow[] = src.accounts
     .filter(a => !a.isHeader && a.code)
     .map(a => ({ code: a.code, name: a.name, kind: accountKind(a) }))
@@ -787,6 +920,7 @@ export async function computeMgmtDashboard(
     generatedAt: new Date().toISOString(),
     kpis,
     charts,
+    kpiHistory,
     config: { charts: rows, accounts },
   }
 }
