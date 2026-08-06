@@ -6,7 +6,7 @@
 // Auth: Bearer CRON_SECRET, with the vercel-cron user-agent fallback.
 
 import type { NextApiRequest, NextApiResponse } from 'next'
-import { ingestTuneJobEmails, sendTuneJobReminders, escalateTuneJobs, sweepTuneFollowupLetters, sendDelayedTuneJobNotices, requeueBrokenTuneLetters } from '../../../lib/b2b-tune-jobs'
+import { ingestTuneJobEmails, sendTuneJobReminders, escalateTuneJobs, sweepTuneFollowupLetters, sendDelayedTuneJobNotices, requeueBrokenTuneLetters, backfillTuneAddressColumns } from '../../../lib/b2b-tune-jobs'
 
 export const config = { maxDuration: 300 }
 
@@ -22,6 +22,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   // One-shot (marker-guarded): reprint the 2026-08-05/06 letters that went
   // out with a literal {{business_name}} token.
   const letterRepair = await requeueBrokenTuneLetters().catch(e => ({ requeued: 0, skipped: false, errors: [String(e?.message || e)] }))
+
+  // Fill the Monday Address (location) column where the submission carried an
+  // address but the item's column is still empty (geocoded via Nominatim).
+  const addressBackfill = await backfillTuneAddressColumns().catch(e => ({ checked: 0, filled: 0, errors: [String(e?.message || e)] }))
 
   // Per-tune "fill in the details" notices fire once a job clears the 3-day
   // portal-visibility delay (Chris 2026-08-05) — not at ingest.
@@ -50,5 +54,5 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   // Address column and marks the call done, the letter automation fires.
   const letterSweep = await sweepTuneFollowupLetters().catch(e => ({ checked: 0, lettersQueued: 0, errors: [String(e?.message || e)] }))
 
-  return res.status(200).json({ ok: true, ingest, letterRepair, delayedNotices, reminders, escalation, autoChase, letterSweep })
+  return res.status(200).json({ ok: true, ingest, letterRepair, addressBackfill, delayedNotices, reminders, escalation, autoChase, letterSweep })
 }

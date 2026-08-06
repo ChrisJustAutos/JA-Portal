@@ -513,12 +513,27 @@ const TUNE_FOLLOWUP_COLS = {
   TUNE: 'text_mm5pnnpd',
   DATE: 'date_mm5pjrnt',
   PACKAGE: 'long_text_mm5pa57g',   // "Package Details" — the distributor's job_notes
-  // Location column — advisor fills it (with autocomplete) during the call
-  // when the submission had no address. READ-ONLY for the portal: Monday's
-  // API only accepts lat/lng writes for location columns and we have no
-  // geocoder, so a submitted address goes in the item NOTE instead (the
-  // letter has already gone out at submit time in that case anyway).
+  // Location column. Monday's API only accepts lat/lng(+address) writes for
+  // location columns, so submitted addresses are geocoded via Nominatim
+  // (best-effort) and written properly; a geocode miss falls back to the item
+  // NOTE only ("CP Performance address isn't coming through to Monday",
+  // Chris 2026-08-06). The advisor still fills it manually on address-less
+  // submissions.
   ADDRESS: 'location_mm5pza6f',
+}
+
+// Free OSM geocoder — ~1 req/sec etiquette (callers pace themselves), AU-only
+// bias. Null on any miss; never throws.
+async function geocodeAuAddress(q: string): Promise<{ lat: number; lng: number } | null> {
+  try {
+    const r = await fetch(`https://nominatim.openstreetmap.org/search?format=json&limit=1&countrycodes=au&q=${encodeURIComponent(q)}`, {
+      headers: { 'User-Agent': 'JA-Portal/1.0 (accounts@justautosmechanical.com.au)' },
+    })
+    if (!r.ok) return null
+    const j: any[] = await r.json()
+    const lat = Number(j?.[0]?.lat), lng = Number(j?.[0]?.lon)
+    return Number.isFinite(lat) && Number.isFinite(lng) ? { lat, lng } : null
+  } catch { return null }
 }
 
 export async function syncTuneJobDownstream(jobId: string): Promise<void> {
@@ -550,6 +565,10 @@ export async function syncTuneJobDownstream(jobId: string): Promise<void> {
       if (job.tune_details) columnValues[TUNE_FOLLOWUP_COLS.TUNE] = String(job.tune_details).slice(0, 250)
       if (job.job_notes) columnValues[TUNE_FOLLOWUP_COLS.PACKAGE] = { text: String(job.job_notes).slice(0, 2000) }
       const submittedAddress = [job.customer_address_line1, [job.customer_suburb, job.customer_state, job.customer_postcode].filter(Boolean).join(' ')].filter(Boolean).join(', ')
+      if (submittedAddress) {
+        const geo = await geocodeAuAddress(submittedAddress)
+        if (geo) columnValues[TUNE_FOLLOWUP_COLS.ADDRESS] = { lat: String(geo.lat), lng: String(geo.lng), address: submittedAddress }
+      }
       const created = await mondayQuery<{ create_item: { id: string } }>(
         `mutation CreateTuneFollowUp($boardId: ID!, $groupId: String!, $itemName: String!, $columnValues: JSON!) {
           create_item(board_id: $boardId, group_id: $groupId, item_name: $itemName, column_values: $columnValues, create_labels_if_missing: false) { id }
@@ -655,6 +674,58 @@ async function queueTuneJobLetter(
   } catch (e: any) {
     return { queued: false, error: `Letter: ${e?.message}` }
   }
+}
+
+// Hourly (cron/tune-jobs): fill the Monday Address (location) column on items
+// whose job HAS a submitted address but whose column is still empty — covers
+// every item created before the geocoded write existed (CP Performance, Chris
+// 2026-08-06) and any future geocode miss that later succeeds. Once the
+// column has text it's never touched again (the advisor's manual entry wins).
+export async function backfillTuneAddressColumns(): Promise<{ checked: number; filled: number; errors: string[] }> {
+  const c = sb()
+  const out = { checked: 0, filled: 0, errors: [] as string[] }
+  const { data: jobs } = await c.from('b2b_tune_jobs')
+    .select('id, monday_item_id, customer_address_line1, customer_suburb, customer_state, customer_postcode')
+    .not('monday_item_id', 'is', null)
+    .not('customer_address_line1', 'is', null)
+    .gte('created_at', new Date(Date.now() - 90 * 86400_000).toISOString())
+    .limit(100)
+  if (!jobs || jobs.length === 0) return out
+  const { mondayQuery } = await import('./monday-followup')
+  try {
+    const data = await mondayQuery<{ items: Array<{ id: string; column_values: Array<{ id: string; text: string | null }> }> }>(
+      `query Items($ids: [ID!]) { items (ids: $ids) { id column_values (ids: ["${TUNE_FOLLOWUP_COLS.ADDRESS}"]) { id text } } }`,
+      { ids: jobs.map(j => String(j.monday_item_id)) },
+    )
+    const hasAddress = new Map<string, boolean>()
+    for (const it of data?.items || []) {
+      hasAddress.set(String(it.id), !!(it.column_values || []).some(cv => cv.id === TUNE_FOLLOWUP_COLS.ADDRESS && String(cv.text || '').trim()))
+    }
+    for (const job of jobs) {
+      const itemId = String(job.monday_item_id)
+      if (hasAddress.get(itemId) !== false) continue   // filled already, or item unreadable
+      out.checked++
+      const address = [job.customer_address_line1, [job.customer_suburb, job.customer_state, job.customer_postcode].filter(Boolean).join(' ')].filter(Boolean).join(', ')
+      const geo = await geocodeAuAddress(address)
+      // Nominatim etiquette: max ~1 req/sec.
+      await new Promise(r => setTimeout(r, 1100))
+      if (!geo) { out.errors.push(`${itemId}: geocode miss for "${address.slice(0, 80)}"`); continue }
+      try {
+        await mondayQuery(
+          `mutation Set($boardId: ID!, $itemId: ID!, $value: JSON!) {
+            change_column_value(board_id: $boardId, item_id: $itemId, column_id: "${TUNE_FOLLOWUP_COLS.ADDRESS}", value: $value) { id }
+          }`,
+          { boardId: TUNE_FOLLOWUP_BOARD, itemId, value: JSON.stringify({ lat: String(geo.lat), lng: String(geo.lng), address }) },
+        )
+        out.filled++
+      } catch (e: any) {
+        out.errors.push(`${itemId}: ${String(e?.message || e).slice(0, 150)}`)
+      }
+    }
+  } catch (e: any) {
+    out.errors.push(`Monday read: ${String(e?.message || e).slice(0, 200)}`)
+  }
+  return out
 }
 
 // ONE-SHOT repair (runs from the hourly cron, marker-guarded): letters queued
