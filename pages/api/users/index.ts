@@ -1,6 +1,6 @@
 ﻿// pages/api/users/index.ts
-// GET  â€” list all users (admin only)
-// POST â€” invite a new user (admin only). Creates an auth.users row with a
+// GET  — list all users (admin only)
+// POST — invite a new user (admin only). Creates an auth.users row with a
 //        temporary password, sets their profile role, and sends a password
 //        reset email so they can set their own password.
 
@@ -20,7 +20,7 @@ async function list(req: NextApiRequest, res: NextApiResponse) {
     .select('id, email, display_name, role, is_active, created_at, last_sign_in_at, visible_tabs, visible_report_tabs, phone_extension, webrtc_extension, webrtc_password, reply_to_email')
     .order('created_at', { ascending: false })
   if (error) return res.status(500).json({ error: error.message })
-  // Never expose the WebRTC password back to the admin UI â€” only whether it's set.
+  // Never expose the WebRTC password back to the admin UI — only whether it's set.
   const users = (data || []).map((u: any) => ({
     ...u,
     webrtc_password_set: !!u.webrtc_password,
@@ -51,7 +51,7 @@ async function invite(req: NextApiRequest, res: NextApiResponse, actor: any) {
   const { data: existing } = await sb.from('user_profiles').select('id').eq('email', email).maybeSingle()
   if (existing) return res.status(409).json({ error: 'Email already registered' })
 
-  // Generate a random initial password the user will never know â€” they'll set
+  // Generate a random initial password the user will never know — they'll set
   // their own via the password reset email we send them.
   const tempPassword = crypto.randomUUID() + 'Aa1!'
   const { data: created, error: createErr } = await sb.auth.admin.createUser({
@@ -77,7 +77,7 @@ async function invite(req: NextApiRequest, res: NextApiResponse, actor: any) {
   }
 
   // Send password reset so the user can set their own password (first-time
-  // invite). ?welcome=1 â†’ the landing page shows the welcoming first-run copy.
+  // invite). ?welcome=1 → the landing page shows the welcoming first-run copy.
   const redirectTo = `${req.headers.origin || 'https://justautos.app'}/reset-password?welcome=1`
   const { error: resetErr } = await sb.auth.resetPasswordForEmail(email, { redirectTo })
   if (resetErr) console.error('Reset email failed:', resetErr)

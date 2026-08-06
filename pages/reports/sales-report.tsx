@@ -1,5 +1,5 @@
 ﻿// pages/reports/sales-report.tsx
-// Reports â†’ Sales Report â€” a LIVE Weekly Sales Recap. Order/booking figures
+// Reports → Sales Report — a LIVE Weekly Sales Recap. Order/booking figures
 // (sections 1-3 + flags) are pulled fresh from Monday on every load via
 // /api/reports/sales-recap/live; the workshop forecast + diary come from the
 // last scrape and show an "as of" time. Toggle This week / Last week or pick a
@@ -123,7 +123,7 @@ export default function SalesReportPage({ user }: { user: PortalUserSSR }) {
       if (!r.ok || d.error) throw new Error(d.detail || d.error || `HTTP ${r.status}`)
       setNote('Workshop data refresh started (~4 min). Hit Refresh below once it finishes to pull the new forecast & diary.')
     } catch (e: any) {
-      setNote(`Couldnâ€™t start: ${String(e.message || e)}`)
+      setNote(`Couldn’t start: ${String(e.message || e)}`)
     } finally {
       setBusy(null)
     }
@@ -132,7 +132,7 @@ export default function SalesReportPage({ user }: { user: PortalUserSSR }) {
   // Every export flavour wraps the SAME report HTML in a standalone document,
   // so they all match the emailed report exactly. The Office namespaces are
   // inert in browsers but let Word open the .doc download cleanly. Sections
-  // unticked in the export menu are stripped from the exported copy only â€”
+  // unticked in the export menu are stripped from the exported copy only —
   // the on-screen report always shows everything.
   function reportDoc(): { title: string; doc: string } | null {
     if (!html) return null
@@ -160,7 +160,7 @@ export default function SalesReportPage({ user }: { user: PortalUserSSR }) {
     persistExcluded(next)
   }
 
-  // The BOM prefix keeps Word from mis-reading the UTF-8 (â†’ Â· en-dashes etc).
+  // The BOM prefix keeps Word from mis-reading the UTF-8 (→ · en-dashes etc).
   function downloadFile(content: string, mime: string, filename: string) {
     const url = URL.createObjectURL(new Blob([String.fromCharCode(0xfeff), content], { type: mime }))
     const a = document.createElement('a')
@@ -175,7 +175,7 @@ export default function SalesReportPage({ user }: { user: PortalUserSSR }) {
     const r = reportDoc()
     if (!r) return
     const w = window.open('', '_blank')
-    if (!w) { setNote('Pop-up blocked â€” allow pop-ups for the portal to export a PDF.'); return }
+    if (!w) { setNote('Pop-up blocked — allow pop-ups for the portal to export a PDF.'); return }
     w.document.write(r.doc)
     w.document.close()
     w.focus()
@@ -184,7 +184,7 @@ export default function SalesReportPage({ user }: { user: PortalUserSSR }) {
   }
 
   // Word opens HTML served as application/msword natively (tables, colours and
-  // all) â€” no converter needed, and the file forwards/edits fine from there.
+  // all) — no converter needed, and the file forwards/edits fine from there.
   function exportWord() {
     const r = reportDoc()
     if (r) downloadFile(r.doc, 'application/msword', `${r.title}.doc`)
@@ -196,7 +196,7 @@ export default function SalesReportPage({ user }: { user: PortalUserSSR }) {
   }
 
   const EXPORTS: { label: string; hint: string; run: () => void }[] = [
-    { label: 'PDF', hint: 'print window â†’ Save as PDF', run: exportPdf },
+    { label: 'PDF', hint: 'print window → Save as PDF', run: exportPdf },
     { label: 'Word (.doc)', hint: 'editable, opens in Word', run: exportWord },
     { label: 'HTML file', hint: 'self-contained web page', run: exportHtml },
   ]
@@ -217,7 +217,7 @@ export default function SalesReportPage({ user }: { user: PortalUserSSR }) {
 
   return (
     <>
-      <Head><title>Sales Report â€” Just Autos</title><meta name="robots" content="noindex,nofollow" /></Head>
+      <Head><title>Sales Report — Just Autos</title><meta name="robots" content="noindex,nofollow" /></Head>
       <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', overflow: 'hidden', fontFamily: "'DM Sans', system-ui, sans-serif", background: T.bg, color: T.text }}>
         <PortalTopBar activeId="reports" currentUserRole={user.role} currentUserVisibleTabs={user.visibleTabs} currentUserName={user.displayName} currentUserEmail={user.email} />
         <ReportsTabs active="sales-report" role={user.role} reportTabs={user.visibleReportTabs} />
@@ -232,21 +232,21 @@ export default function SalesReportPage({ user }: { user: PortalUserSSR }) {
 
           <span style={{ fontSize: 11, color: T.text3 }}>Range</span>
           <input type="date" style={dateInput} value={rangeStart} max={rangeEnd || undefined} onChange={e => setRangeStart(e.target.value)} />
-          <span style={{ fontSize: 11, color: T.text3 }}>â†’</span>
+          <span style={{ fontSize: 11, color: T.text3 }}>→</span>
           <input type="date" style={dateInput} value={rangeEnd} min={rangeStart || undefined} onChange={e => setRangeEnd(e.target.value)} />
           <button style={weekMode === 'custom' ? btn(true) : actionBtn(!rangeValid)} disabled={!rangeValid} onClick={applyRange}>Apply</button>
 
           <div style={{ width: 1, height: 20, background: T.border, margin: '0 4px' }} />
 
           <button style={actionBtn(loading)} disabled={loading} onClick={refresh}>
-            {loading ? 'Loadingâ€¦' : 'â†» Refresh'}
+            {loading ? 'Loading…' : '↻ Refresh'}
           </button>
           <button style={actionBtn(!!busy)} disabled={!!busy} onClick={runWorkshop}>
-            {busy === 'refresh' ? 'Startingâ€¦' : 'Update workshop data'}
+            {busy === 'refresh' ? 'Starting…' : 'Update workshop data'}
           </button>
           <div style={{ position: 'relative' }}>
             <button style={actionBtn(!html)} disabled={!html} onClick={() => setExportOpen(o => !o)}>
-              â¬‡ Export â–¾
+              ⬇ Export ▾
             </button>
             {exportOpen && (
               <>
@@ -298,7 +298,7 @@ export default function SalesReportPage({ user }: { user: PortalUserSSR }) {
 
           <div style={{ flex: 1 }} />
           <div style={{ fontSize: 11, color: T.text3, textAlign: 'right' }}>
-            Order data: {loading ? 'â€¦' : relTime(ordersAsOf)}<br />
+            Order data: {loading ? '…' : relTime(ordersAsOf)}<br />
             Workshop data: {workshopAsOf ? relTime(workshopAsOf) : 'not scraped yet'}
           </div>
         </div>
@@ -310,10 +310,10 @@ export default function SalesReportPage({ user }: { user: PortalUserSSR }) {
         )}
 
         <div style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: '20px 16px' }}>
-          {loading && !html && <div style={{ color: T.text3 }}>Loading live sales recapâ€¦</div>}
+          {loading && !html && <div style={{ color: T.text3 }}>Loading live sales recap…</div>}
           {err && (
             <div style={{ maxWidth: 640, background: 'rgba(240,78,78,0.1)', border: '1px solid rgba(240,78,78,0.2)', borderRadius: 10, padding: 16, color: T.red }}>
-              <div style={{ marginBottom: 10 }}>Couldnâ€™t load report: {err}</div>
+              <div style={{ marginBottom: 10 }}>Couldn’t load report: {err}</div>
               <button onClick={refresh} style={{ padding: '6px 14px', borderRadius: 6, border: `1px solid ${T.blue}`, background: T.blue, color: '#fff', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit' }}>Retry</button>
             </div>
           )}

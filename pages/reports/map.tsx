@@ -1,6 +1,6 @@
 ﻿// pages/reports/map.tsx
-// Reports â†’ Workshop Map â€” the Map & Conversion dashboard (booked jobs map,
-// quotes map, quoteâ†’job conversion) fed by the daily MechanicDesk pull.
+// Reports → Workshop Map — the Map & Conversion dashboard (booked jobs map,
+// quotes map, quote→job conversion) fed by the daily MechanicDesk pull.
 // The dashboard itself is components/workshop/WorkshopMapDashboard.tsx
 // (client-only Leaflet, its own full-bleed dark styling).
 
@@ -17,7 +17,7 @@ const WorkshopMapDashboard = dynamic(() => import('../../components/workshop/Wor
 export default function WorkshopMapPage({ user }: { user: PortalUserSSR }) {
   return (
     <>
-      <Head><title>Workshop Map â€” Just Autos</title><meta name="robots" content="noindex,nofollow"/></Head>
+      <Head><title>Workshop Map — Just Autos</title><meta name="robots" content="noindex,nofollow"/></Head>
       <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', overflow: 'hidden', fontFamily: "'DM Sans', system-ui, sans-serif", background: T.bg, color: T.text }}>
         <PortalTopBar activeId="reports" currentUserRole={user.role} currentUserVisibleTabs={user.visibleTabs} currentUserName={user.displayName} currentUserEmail={user.email}/>
         <ReportsTabs active="workshop-map" role={user.role} reportTabs={user.visibleReportTabs} />

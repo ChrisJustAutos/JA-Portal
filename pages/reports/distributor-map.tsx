@@ -1,5 +1,5 @@
 ﻿// pages/reports/distributor-map.tsx
-// Reports â†’ Distributor Map â€” quotes done in each distributor's area vs the
+// Reports → Distributor Map — quotes done in each distributor's area vs the
 // jobs they booked (Monday Distributor - Booking board, confirmed group),
 // month by month. Dashboard component is client-only Leaflet.
 
@@ -16,7 +16,7 @@ const DistributorMapDashboard = dynamic(() => import('../../components/reports/D
 export default function DistributorMapPage({ user }: { user: PortalUserSSR }) {
   return (
     <>
-      <Head><title>Distributor Map â€” Just Autos</title><meta name="robots" content="noindex,nofollow"/></Head>
+      <Head><title>Distributor Map — Just Autos</title><meta name="robots" content="noindex,nofollow"/></Head>
       <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', overflow: 'hidden', fontFamily: "'DM Sans', system-ui, sans-serif", background: T.bg, color: T.text }}>
         <PortalTopBar activeId="reports" currentUserRole={user.role} currentUserVisibleTabs={user.visibleTabs} currentUserName={user.displayName} currentUserEmail={user.email}/>
         <ReportsTabs active="distributor-map" role={user.role} reportTabs={user.visibleReportTabs} />

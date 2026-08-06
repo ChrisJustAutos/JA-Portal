@@ -115,6 +115,9 @@
     },
     "pages/api/b2b/admin/training/generate.ts": {
       "maxDuration": 300
+    },
+    "pages/api/cron/mgmt-dashboard-warm.ts": {
+      "maxDuration": 300
     }
   },
   "crons": [
@@ -205,6 +208,10 @@
     {
       "path": "/api/cron/b2b-dropship-confirm",
       "schedule": "*/15 * * * *"
+    },
+    {
+      "path": "/api/cron/mgmt-dashboard-warm",
+      "schedule": "30 19 * * *"
     }
   ]
 }
