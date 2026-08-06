@@ -105,6 +105,46 @@ export async function sendOrderPlacedAdminEmail(orderId: string, opts: { dropshi
   return { ok: true, recipients }
 }
 
+// Supplier confirmed the drop-ship → pass the expected dispatch date on to
+// the distributor (Chris 2026-08-06: "it has a expected dispatch/due date —
+// can we update the Distributor with this information?"). Sent once per
+// supplier confirmation email (the watcher's message-claim is the guard).
+export async function sendDistributorDropshipEtaEmail(orderId: string, info: { supplierName: string; etaDate?: string | null; etaText?: string | null }): Promise<{ ok: boolean; reason?: string }> {
+  const c = svc()
+  const { data: order } = await c.from('b2b_orders').select(`
+      id, order_number, customer_po, is_test,
+      distributor:b2b_distributors!b2b_orders_distributor_id_fkey ( display_name, primary_contact_email )
+    `).eq('id', orderId).maybeSingle()
+  if (!order) return { ok: false, reason: 'order not found' }
+  const dist: any = Array.isArray(order.distributor) ? order.distributor[0] : order.distributor
+  const to = (dist?.primary_contact_email || '').trim()
+  if (!to) return { ok: false, reason: 'distributor has no primary contact email' }
+
+  const { data: lines } = await c.from('b2b_order_lines').select('qty, sku, name, is_drop_ship').eq('order_id', orderId)
+  const dsLines = (lines || []).filter((l: any) => l.is_drop_ship === true)
+  const linesBlock = linesTableHtml(dsLines.map((l: any) => ({ description: [l.sku, l.name].filter(Boolean).join(' — '), qty: l.qty })))
+
+  let etaLine = ''
+  if (info.etaDate) {
+    const d = new Date(`${info.etaDate}T00:00:00`)
+    const pretty = Number.isNaN(d.getTime()) ? info.etaDate
+      : d.toLocaleDateString('en-AU', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })
+    etaLine = ` Expected dispatch: ${pretty}.`
+  } else if (info.etaText) {
+    etaLine = ` Expected dispatch: ${String(info.etaText).slice(0, 120)}.`
+  }
+
+  const r = await renderEmail('distributor_dropship_eta', {
+    distributor_name: dist?.display_name || '', order_number: order.order_number,
+    customer_po: order.customer_po ? ` (your PO ${order.customer_po})` : '',
+    supplier_name: info.supplierName, eta_line: etaLine,
+  }, { lines_table: linesBlock })
+  if (!r.enabled) return { ok: false, reason: 'template disabled' }
+  const subj = (order as any).is_test ? `[TEST — please ignore] ${r.subject}` : r.subject
+  await sendMail(await getFromMailbox(), { to: [to], subject: subj, html: r.html })
+  return { ok: true }
+}
+
 // ── Distributor-facing emails ─────────────────────────────────────────
 // Sent on PAYMENT: the order confirmation ONLY (to the primary contact). The
 // tax INVOICE is intentionally NOT sent here — it goes out on shipment, once

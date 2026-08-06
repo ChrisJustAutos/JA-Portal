@@ -24,6 +24,7 @@ export type TemplateKey =
   | 'distributor_order_confirmed'
   | 'distributor_invoice'
   | 'distributor_shipped'
+  | 'distributor_dropship_eta'
 
 export interface TemplateVar { token: string; desc: string }
 export interface TemplateDef {
@@ -98,6 +99,22 @@ We'll email tracking as soon as it ships.
 
 Just Autos`,
     variables: [v('distributor_name', 'Distributor'), v('order_number', 'Order number'), v('customer_po', 'Their PO (or blank)'), v('order_total', 'Total inc GST'), v('lines_table', 'Item table (block)'), v('ship_to', 'Ship-to (block)')],
+  },
+  distributor_dropship_eta: {
+    label: 'Drop-ship dispatch update', direction: 'Distributor',
+    description: "Sent to the distributor when the supplier confirms their drop-ship item(s), passing on the supplier's expected dispatch/due date.",
+    defaultSubject: 'Order {{order_number}} — supplier has confirmed your drop-ship item',
+    defaultBody:
+`Hi {{distributor_name}},
+
+Good news — {{supplier_name}} has confirmed the direct-shipped item(s) on your order {{order_number}}{{customer_po}}.{{eta_line}}
+
+{{lines_table}}
+
+These ship to you direct from the supplier, separately from anything we send from our warehouse.
+
+Just Autos`,
+    variables: [v('distributor_name', 'Distributor'), v('order_number', 'Order number'), v('customer_po', 'Their PO (or blank)'), v('supplier_name', 'Supplier'), v('eta_line', 'Expected dispatch sentence (or blank)'), v('lines_table', 'Drop-ship item table (block)')],
   },
   distributor_invoice: {
     label: 'Tax invoice / receipt', direction: 'Distributor',

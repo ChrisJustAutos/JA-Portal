@@ -68,20 +68,25 @@ const stripHtml = (html: string) =>
 
 const emailDomain = (addr: string | null | undefined) => String(addr || '').toLowerCase().split('@')[1] || ''
 
-async function classifyConfirmation(subject: string, bodyText: string, poNumbers: string[], orderNumber: string): Promise<{ confirmed: boolean; reason: string }> {
+interface ConfirmVerdict { confirmed: boolean; reason: string; etaDate: string | null; etaText: string | null }
+
+async function classifyConfirmation(subject: string, bodyText: string, poNumbers: string[], orderNumber: string): Promise<ConfirmVerdict> {
   const apiKey = process.env.ANTHROPIC_API_KEY
   if (!apiKey) throw new Error('ANTHROPIC_API_KEY not configured')
   const system = `You review emails received by an auto-parts wholesaler's orders inbox. The wholesaler emailed a supplier a drop-ship purchase order (PO ${poNumbers.join(' / ') || 'n/a'}, our ref ${orderNumber}) and is waiting for the supplier to CONFIRM they accept and will fulfil/ship it.
 
-Reply ONLY with JSON: {"confirmed": true|false, "reason": "<one short sentence>"}
+Reply ONLY with JSON:
+{"confirmed": true|false, "reason": "<one short sentence>", "eta_date": "YYYY-MM-DD or null", "eta_text": "verbatim dispatch/due-date phrase or null"}
 
 confirmed=true when the supplier accepts/acknowledges the order, confirms fulfilment or dispatch, sends their sales-order confirmation, invoice or tracking for it.
-confirmed=false for: out-of-stock/backorder/delay notices, declines or cancellations, questions that need an answer first (price/address/stock queries), quotes, automated read receipts, marketing, anything ambiguous. When unsure, false.`
+confirmed=false for: out-of-stock/backorder/delay notices, declines or cancellations, questions that need an answer first (price/address/stock queries), quotes, automated read receipts, marketing, anything ambiguous. When unsure, false.
+
+eta_date/eta_text: the supplier's expected DISPATCH or due date for this order if stated (e.g. "Expected dispatch date", "ETA", "due to ship"). eta_date only when you can resolve a full calendar date (assume the email's dates are current-year if unstated); eta_text is the supplier's own wording. Both null when no date is given.`
   const r = await fetch(ANTHROPIC_API_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
     body: JSON.stringify({
-      model: CLASSIFY_MODEL, max_tokens: 300, system,
+      model: CLASSIFY_MODEL, max_tokens: 400, system,
       messages: [{ role: 'user', content: `Subject: ${subject}\n\n${bodyText.slice(0, 6000)}` }],
     }),
   })
@@ -89,12 +94,18 @@ confirmed=false for: out-of-stock/backorder/delay notices, declines or cancellat
   const data = await r.json()
   const text = data.content?.[0]?.text || ''
   const m = text.match(/\{[\s\S]*\}/)
-  if (!m) return { confirmed: false, reason: 'classifier returned no JSON' }
+  if (!m) return { confirmed: false, reason: 'classifier returned no JSON', etaDate: null, etaText: null }
   try {
     const j = JSON.parse(m[0])
-    return { confirmed: j.confirmed === true, reason: String(j.reason || '').slice(0, 300) }
+    const etaDate = /^\d{4}-\d{2}-\d{2}$/.test(String(j.eta_date || '')) ? String(j.eta_date) : null
+    return {
+      confirmed: j.confirmed === true,
+      reason: String(j.reason || '').slice(0, 300),
+      etaDate,
+      etaText: j.eta_text ? String(j.eta_text).slice(0, 200) : null,
+    }
   } catch {
-    return { confirmed: false, reason: 'classifier JSON unparseable' }
+    return { confirmed: false, reason: 'classifier JSON unparseable', etaDate: null, etaText: null }
   }
 }
 
@@ -295,12 +306,37 @@ export async function scanDropShipConfirmations(opts: { lookbackDays?: number } 
       if (run.ok) res.confirmed++
       else res.errors.push(`${order.order_number}: ${run.error || summary}`.slice(0, 300))
 
+      const supplier = order.supplierNames[0] || emailDomain(msg.from)
+
+      // Supplier gave an expected dispatch/due date → record it on the order
+      // and pass it straight on to the distributor (Chris 2026-08-06).
+      if (verdict.etaDate || verdict.etaText) {
+        try {
+          const { data: cur } = await c.from('b2b_orders').select('dropship_pos').eq('id', order.id).maybeSingle()
+          const pos: any[] = Array.isArray(cur?.dropship_pos) ? cur!.dropship_pos : []
+          const updated = pos.map(p => String(p?.supplier_name || '') === supplier || pos.length === 1
+            ? { ...p, supplier_eta_date: verdict.etaDate, supplier_eta_text: verdict.etaText }
+            : p)
+          await c.from('b2b_orders').update({ dropship_pos: updated }).eq('id', order.id)
+          await c.from('b2b_order_events').insert({
+            order_id: order.id, event_type: 'dropship_eta_received', actor_type: 'system', actor_id: null,
+            notes: `${supplier} expected dispatch: ${verdict.etaDate || verdict.etaText}`,
+            metadata: { supplier, eta_date: verdict.etaDate, eta_text: verdict.etaText },
+          })
+        } catch (e: any) { console.error('dropship-confirm ETA persist failed:', e?.message || e) }
+      }
+      try {
+        const { sendDistributorDropshipEtaEmail } = await import('./b2b-order-notify')
+        const sent = await sendDistributorDropshipEtaEmail(order.id, { supplierName: supplier, etaDate: verdict.etaDate, etaText: verdict.etaText })
+        if (!sent.ok) console.error(`dropship-confirm distributor ETA email skipped (${order.order_number}): ${sent.reason}`)
+      } catch (e: any) { console.error('dropship-confirm distributor ETA email failed:', e?.message || e) }
+
       // Tell the team (best-effort — #jaws-orders + the legacy webhook).
       try {
-        const supplier = order.supplierNames[0] || emailDomain(msg.from)
+        const etaNote = verdict.etaDate ? ` Expected dispatch ${verdict.etaDate}.` : (verdict.etaText ? ` Expected dispatch: ${verdict.etaText}.` : '')
         await postB2bOrderSlack(c, run.ok
-          ? `:package: ${supplier} confirmed the drop-ship for *${order.order_number}* — PO billed, MYOB invoice + payment done automatically.`
-          : `:warning: ${supplier} confirmed the drop-ship for *${order.order_number}* but the automatic receive hit a snag — check the order page. ${String(run.error || '').slice(0, 200)}`)
+          ? `:package: ${supplier} confirmed the drop-ship for *${order.order_number}* — PO billed, MYOB invoice + payment done automatically.${etaNote} Distributor notified.`
+          : `:warning: ${supplier} confirmed the drop-ship for *${order.order_number}* but the automatic receive hit a snag — check the order page. ${String(run.error || '').slice(0, 200)}${etaNote}`)
       } catch (e: any) { console.error('dropship-confirm Slack notify failed:', e?.message || e) }
 
       // This order's POs are handled — stop matching further messages to it.
