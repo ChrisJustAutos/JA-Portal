@@ -27,6 +27,11 @@ const DIMENSION_LABELS: Record<string, string> = {
   clarity_honesty: 'Clarity & Honesty',
   empathy: 'Empathy',
   resolution_next_step: 'Resolution & Next Step',
+  // pass_off (message-taken / handover calls — light rubric, Chris 2026-08-07)
+  customer_details: 'Customer Details',
+  vehicle_details: 'Vehicle Details',
+  need_captured: 'Need Captured',
+  handover_promise: 'Handover Promise',
 }
 
 export function dimensionLabel(key: string): string {
@@ -38,6 +43,7 @@ export const CALL_TYPE_LABELS: Record<string, string> = {
   quote_follow_up: 'Quote follow-up',
   booking_scheduling: 'Booking / scheduling',
   status_support: 'Status / support',
+  pass_off: 'Pass-off / message taken',
   not_coachable: 'Not coachable',
 }
 

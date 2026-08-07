@@ -371,7 +371,9 @@
       "PowerShell(cd C:\\\\Users\\\\cjrus\\\\OneDrive\\\\Documents\\\\GitHub\\\\JA-Portal; Select-String -Path \"pages\\\\admin\\\\b2b\\\\orders\\\\``[id``].tsx\" -Pattern 'const \\\\[refreshBusy' -Context 1,2 | ForEach-Object { \"$\\($_.LineNumber\\):\"; $_.Context.PreContext; $_.Line; $_.Context.PostContext })",
       "PowerShell(cd \"C:\\\\Users\\\\cjrus\\\\OneDrive\\\\Documents\\\\GitHub\\\\JA-Portal\"; gh run list --limit 40 --json databaseId,name,conclusion,status,createdAt,workflowName | ConvertFrom-Json | Where-Object { $_.conclusion -ne 'success' } | Select-Object databaseId, workflowName, conclusion, status, createdAt | Format-Table -AutoSize)",
       "Bash(echo \"TSC_EXIT:$?\")",
-      "WebFetch(domain:www.githubstatus.com)"
+      "WebFetch(domain:www.githubstatus.com)",
+      "Bash(scp -o BatchMode=yes patch_sync.py root@100.82.97.46:/tmp/patch_sync.py)",
+      "Bash(scp -o BatchMode=yes patch_sync.js root@100.82.97.46:/tmp/patch_sync.js)"
     ]
   }
 }
