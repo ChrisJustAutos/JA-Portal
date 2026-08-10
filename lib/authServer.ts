@@ -133,7 +133,11 @@ export async function requirePageAuth(context: any, permission: Permission | nul
   const req = context.req as NextApiRequest
   const user = await getCurrentUser(req)
   if (!user) {
-    return { redirect: { destination: '/login', permanent: false } }
+    // Carry the intended page so the login page's silent resume (or a real
+    // sign-in) lands back where the user was heading, not on the dashboard.
+    const next = typeof context.resolvedUrl === 'string' && context.resolvedUrl.startsWith('/')
+      ? `?next=${encodeURIComponent(context.resolvedUrl)}` : ''
+    return { redirect: { destination: `/login${next}`, permanent: false } }
   }
   if (permission && !roleHasPermission(user.role, permission)) {
     return { redirect: { destination: '/?forbidden=1', permanent: false } }

@@ -271,8 +271,12 @@ export async function getCurrentB2BUserFromToken(token: string, preferredDistrib
 export async function requireB2BPageAuth(context: GetServerSidePropsContext) {
   const b2bUser = await getCurrentB2BUser(context.req as any)
   if (!b2bUser) {
+    // Carry the intended page so the login page's silent resume (or a real
+    // sign-in) lands back where the user was heading.
+    const next = typeof context.resolvedUrl === 'string' && context.resolvedUrl.startsWith('/b2b')
+      ? `?next=${encodeURIComponent(context.resolvedUrl)}` : ''
     return {
-      redirect: { destination: '/b2b/login', permanent: false },
+      redirect: { destination: `/b2b/login${next}`, permanent: false },
     }
   }
   return {

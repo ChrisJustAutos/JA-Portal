@@ -9,10 +9,15 @@
 //   - 2FA is opt-in: distributors enrol an authenticator in /b2b/settings; the
 //     code is only requested at sign-in if they have one.
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import Head from 'next/head'
 import { useRouter } from 'next/router'
 import { getSupabase } from '../../lib/supabaseClient'
+
+// Safe post-login redirect target — only same-origin B2B paths.
+function safeB2BNext(next: unknown): string | null {
+  return (typeof next === 'string' && next.startsWith('/b2b') && !next.startsWith('//')) ? next : null
+}
 
 const T = {
   bg: 'var(--t-bg)', bg2: 'var(--t-bg2)', bg3: 'var(--t-bg3)',
@@ -33,6 +38,31 @@ export default function B2BLoginPage() {
   const [trustDevice, setTrustDevice] = useState(true)  // remember this device for 24h
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+
+  // Silent resume: if the browser's Supabase session is still alive (the SDK
+  // auto-refreshes from localStorage), skip the password and re-mint the
+  // distributor cookie — sessions survive deploys and idle nights. The
+  // session endpoint enforces the 2FA gate server-side, so an authenticator
+  // account without AAL2/trusted-device simply falls through to the form.
+  useEffect(() => {
+    if (!router.isReady) return
+    (async () => {
+      try {
+        const supabase = getSupabase()
+        const { data } = await supabase.auth.getSession()
+        const sess = data?.session
+        if (!sess) return
+        const r = await fetch('/api/b2b/auth/session', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ access_token: sess.access_token, refresh_token: sess.refresh_token, silent: true }),
+        })
+        if (!r.ok) return  // not a B2B account / MFA required — show the form
+        const d = await r.json().catch(() => ({}))
+        const fallback = d.kind === 'supplier' ? '/b2b/supplier' : '/b2b'
+        router.replace((d.kind !== 'supplier' && safeB2BNext(router.query.next)) || fallback)
+      } catch { /* show the form */ }
+    })()
+  }, [router.isReady])  // eslint-disable-line react-hooks/exhaustive-deps
 
   // Returns where to land: suppliers get the read-only Stock Wall, distributors
   // get the full portal.

@@ -18,7 +18,9 @@ const MAX_AGE = 60 * 60 * 24 * 30  // 30 days
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method === 'POST') {
-    const { access_token, refresh_token } = req.body || {}
+    // silent: a cookie re-sync (token rotation / silent resume) — same
+    // verification incl. the server-side 2FA gate, but no last_login_at bump.
+    const { access_token, refresh_token, silent } = req.body || {}
     if (!access_token) return res.status(400).json({ error: 'access_token required' })
 
     // The same auth user is EITHER a distributor user or a supplier user.
@@ -46,13 +48,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
     res.setHeader('Set-Cookie', cookies)
 
-    // Best-effort: bump last_login_at on the right table.
-    try {
-      const sb = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!, { auth: { persistSession: false } })
-      if (user) await sb.from('b2b_distributor_users').update({ last_login_at: new Date().toISOString() }).eq('id', user.id)
-      else if (supplier) await sb.from('b2b_supplier_users').update({ last_login_at: new Date().toISOString() }).eq('id', supplier.id)
-    } catch (e) {
-      console.error('last_login_at update failed:', e)
+    // Best-effort: bump last_login_at on the right table (real logins only —
+    // silent re-syncs would turn it into a "last seen" column).
+    if (!silent) {
+      try {
+        const sb = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!, { auth: { persistSession: false } })
+        if (user) await sb.from('b2b_distributor_users').update({ last_login_at: new Date().toISOString() }).eq('id', user.id)
+        else if (supplier) await sb.from('b2b_supplier_users').update({ last_login_at: new Date().toISOString() }).eq('id', supplier.id)
+      } catch (e) {
+        console.error('last_login_at update failed:', e)
+      }
     }
 
     if (supplier) {

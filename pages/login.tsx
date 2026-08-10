@@ -58,6 +58,40 @@ export default function LoginPage() {
     })()
   }, [])
 
+  // Silent resume: the browser's Supabase session outlives the httpOnly
+  // cookie's access token (the SDK auto-refreshes from localStorage for ~30
+  // days). When an SSR auth check bounced us here but a valid session still
+  // exists, re-mint the cookies and go straight back — no password. This is
+  // what makes sessions survive deploys and idle nights; real sign-outs
+  // cleared the browser session, so they land on the form as before. The MFA
+  // gate is respected: an authenticator account only resumes if the session
+  // is already AAL2 or this device is trusted.
+  useEffect(() => {
+    if (!router.isReady) return
+    (async () => {
+      try {
+        const supabase = getSupabase()
+        const { data } = await supabase.auth.getSession()
+        const sess = data?.session
+        if (!sess) return
+        const { data: aal } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel()
+        if (aal && aal.nextLevel === 'aal2' && aal.currentLevel !== 'aal2') {
+          const trusted = await fetch('/api/auth/mfa-device', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'check', access_token: sess.access_token }),
+          }).then(r => r.ok ? r.json() : null).then(d => !!d?.trusted).catch(() => false)
+          if (!trusted) return  // authenticator needed — show the form
+        }
+        const r = await fetch('/api/auth/session', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ access_token: sess.access_token, refresh_token: sess.refresh_token, silent: true }),
+        })
+        if (!r.ok) return  // profile inactive/etc — show the form
+        router.replace(safeNext(router.query.next))
+      } catch { /* show the form */ }
+    })()
+  }, [router.isReady])  // eslint-disable-line react-hooks/exhaustive-deps
+
   async function handleLogin(e: React.FormEvent) {
     e.preventDefault()
     setBusy(true); setError(''); setInfo('')

@@ -373,7 +373,10 @@
       "Bash(echo \"TSC_EXIT:$?\")",
       "WebFetch(domain:www.githubstatus.com)",
       "Bash(scp -o BatchMode=yes patch_sync.py root@100.82.97.46:/tmp/patch_sync.py)",
-      "Bash(scp -o BatchMode=yes patch_sync.js root@100.82.97.46:/tmp/patch_sync.js)"
+      "Bash(scp -o BatchMode=yes patch_sync.js root@100.82.97.46:/tmp/patch_sync.js)",
+      "Bash(awk '/\\\\\\(segment/{seg=1; buf=$0; next} seg{buf=buf\" \"$0; if\\(/\\\\\\)/&&/net/\\){print buf; seg=0}}' hilux_ctrl.kicad_pcb)",
+      "PowerShell(& \"C:\\\\Users\\\\cjrus\\\\AppData\\\\Local\\\\Programs\\\\Python\\\\Python312\\\\python.exe\" \"C:\\\\Users\\\\cjrus\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\C--Users-cjrus-OneDrive-Documents-GitHub-JA-Portal\\\\7d3bd6dd-e13a-460d-912a-93c1c67bef0d\\\\scratchpad\\\\extract_placement.py\" > \"C:\\\\Users\\\\cjrus\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\C--Users-cjrus-OneDrive-Documents-GitHub-JA-Portal\\\\7d3bd6dd-e13a-460d-912a-93c1c67bef0d\\\\scratchpad\\\\placement.json\"; Get-Content \"C:\\\\Users\\\\cjrus\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\C--Users-cjrus-OneDrive-Documents-GitHub-JA-Portal\\\\7d3bd6dd-e13a-460d-912a-93c1c67bef0d\\\\scratchpad\\\\placement.json\" -TotalCount 30)",
+      "PowerShell(& \"C:\\\\Users\\\\cjrus\\\\AppData\\\\Local\\\\Programs\\\\Python\\\\Python312\\\\python.exe\" \"C:\\\\Users\\\\cjrus\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\C--Users-cjrus-OneDrive-Documents-GitHub-JA-Portal\\\\7d3bd6dd-e13a-460d-912a-93c1c67bef0d\\\\scratchpad\\\\gen_assembly.py\")"
     ]
   }
 }

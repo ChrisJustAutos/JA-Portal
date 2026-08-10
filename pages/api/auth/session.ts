@@ -16,7 +16,10 @@ const MAX_AGE = 60 * 60 * 24 * 30
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method === 'POST') {
-    const { access_token, refresh_token } = req.body || {}
+    // silent: a cookie RE-SYNC from SessionKeeper (token rotation) or the
+    // login page's silent resume — same verification + cookies, but no
+    // sign_in audit row and no last_sign_in_at bump (those are for real logins).
+    const { access_token, refresh_token, silent } = req.body || {}
     if (!access_token) return res.status(400).json({ error: 'access_token required' })
 
     // Verify token is valid before setting the cookie
@@ -39,14 +42,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
     res.setHeader('Set-Cookie', cookies)
 
-    // Update last_sign_in_at
-    try {
-      const { createClient } = await import('@supabase/supabase-js')
-      const sb = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!, { auth: { persistSession: false } })
-      await sb.from('user_profiles').update({ last_sign_in_at: new Date().toISOString() }).eq('id', user.id)
-    } catch (e) { console.error('last_sign_in update failed:', e) }
+    if (!silent) {
+      // Update last_sign_in_at
+      try {
+        const { createClient } = await import('@supabase/supabase-js')
+        const sb = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!, { auth: { persistSession: false } })
+        await sb.from('user_profiles').update({ last_sign_in_at: new Date().toISOString() }).eq('id', user.id)
+      } catch (e) { console.error('last_sign_in update failed:', e) }
 
-    audit(user, 'sign_in')
+      audit(user, 'sign_in')
+    }
 
     return res.status(200).json({
       user: {

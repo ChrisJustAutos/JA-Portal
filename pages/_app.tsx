@@ -16,6 +16,7 @@ import { LIGHT_PALETTE } from '../lib/ui/theme'
 import GlobalChatbot, { ChatContextProvider } from '../components/GlobalChatbot'
 import DesktopNotifier from '../components/DesktopNotifier'
 import UpdateNotifier from '../components/UpdateNotifier'
+import SessionKeeper from '../components/SessionKeeper'
 import { FeedbackProvider } from '../components/ui/Feedback'
 // React Flow base styles (the CRM automation canvas) — node_modules CSS can
 // only be imported here in the pages router. ~2kb, used by /crm/automations/[id].
@@ -268,6 +269,7 @@ export default function App({ Component, pageProps }: AppProps) {
         <ThemeVarsBridge/>
         <RouteProgress/>
         <ServiceWorkerRegister/>
+        <SessionKeeper/>
         <DesktopNotifier/>
         <UpdateNotifier/>
         <FeedbackProvider>
