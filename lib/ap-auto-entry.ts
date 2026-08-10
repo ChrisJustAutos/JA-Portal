@@ -820,6 +820,12 @@ async function processInvoice(
   // named proforma-invoice-*.pdf, an actual quote is still an offer.
   const proformaOk = proformaOkSupplier(extracted.vendor?.name, msg.from, attName)
     && !/quote|quotation|estimate/i.test(attName)
+  if (proformaOk && extracted.isQuote === true) {
+    // Clear the classification entirely — downstream triage adds its own
+    // RED:quote-not-invoice from extracted.isQuote (the two HD proformas got
+    // flagged instead of posted on the first pass of this fix, 2026-08-10).
+    extracted.isQuote = false
+  }
   const looksLikeQuote = !proformaOk && (extracted.isQuote === true || /quote|quotation|estimate/i.test(attName))
   if (looksLikeQuote) {
     let ts: string | null = null

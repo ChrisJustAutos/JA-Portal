@@ -984,7 +984,29 @@ export async function postFoundInvoiceToMyob(args: {
   } catch (e: any) {
     return { posted: false, reason: `MYOB post error: ${(e?.message || String(e)).slice(0, 200)}` }
   }
-  if (result.status >= 400) return { posted: false, reason: `MYOB rejected the bill: ${extractMyobError(result)}`.slice(0, 300) }
+  if (result.status >= 400) {
+    const firstErr = extractMyobError(result)
+    // Locked period: the invoice is dated inside MYOB's closed period, which
+    // rejects with BusinessEvent_DateOccurred_InLockPeriod (HD Automotive
+    // proformas, 2026-08-10). Re-post ONCE dated today with the original date
+    // preserved in the memo — the alternative is a permanently stuck bill.
+    if (/InLockPeriod/i.test(`${firstErr} ${result.raw || ''}`)) {
+      const today = new Date().toISOString().slice(0, 10)
+      const retryBody: any = { ...(body as any), Date: today }
+      retryBody.JournalMemo = `${(body as any).JournalMemo || ''} · orig date ${extracted.invoiceDate || '?'} in locked period, entered ${today}`.slice(0, 255)
+      try {
+        const retry = await myobFetch(conn.id, path, { method: 'POST', body: retryBody, performedBy: args.postedBy })
+        if (retry.status >= 400) {
+          return { posted: false, reason: `MYOB rejected the bill: ${extractMyobError(retry)} (also retried dated ${today} after lock-period rejection)`.slice(0, 300) }
+        }
+        result = retry
+      } catch (e: any) {
+        return { posted: false, reason: `lock-period retry failed: ${(e?.message || String(e)).slice(0, 200)}` }
+      }
+    } else {
+      return { posted: false, reason: `MYOB rejected the bill: ${firstErr}`.slice(0, 300) }
+    }
+  }
 
   const billUid = extractMyobUid(result)
   const safeBillUid = (billUid && billUid !== conn.company_file_id) ? billUid : null

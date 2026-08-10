@@ -28,6 +28,25 @@ const NAME_QUERY_TOKENS = 2  // search MYOB with the first N words of the vendor
 // are often entered without the punctuation the invoice uses ("AOK").
 const normalizeName = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, '')
 
+// Strip trailing legal suffixes off a NORMALIZED name so "Digital Nomads HQ
+// Pty Ltd" (invoice) can meet "Digital Nomads P/L" (card) — the suffixes
+// differ and defeat both substring and prefix comparison (Chris 2026-08-10:
+// "supplier matching is a little tight"). Repeated so "Pty. Ltd." →
+// "ptyltd" → strips, and "X Pty Ltd" entered as "X Pty" also cleans up.
+// Never strips below 4 chars — a company genuinely named "PL" keeps its name.
+const LEGAL_SUFFIXES = ['proprietarylimited', 'ptylimited', 'ptyltd', 'limited', 'pty', 'ltd', 'plc', 'pl', 'inc', 'llc']
+function stripLegal(norm: string): string {
+  let s = norm
+  let changed = true
+  while (changed) {
+    changed = false
+    for (const suf of LEGAL_SUFFIXES) {
+      if (s.length - suf.length >= 4 && s.endsWith(suf)) { s = s.slice(0, -suf.length); changed = true }
+    }
+  }
+  return s
+}
+
 export async function tryAutoMatchSupplier(
   vendorName: string | null,
   abn: string | null,
@@ -53,6 +72,7 @@ export async function tryAutoMatchSupplier(
   if (vendorName && vendorName.trim()) {
     const target = vendorName.toLowerCase().trim()
     const targetNorm = normalizeName(vendorName)
+    const targetCore = stripLegal(targetNorm)
     const nameMatches = candidates.filter(c => {
       const nm = c.name.toLowerCase()
       if (nm === target || nm.includes(target) || target.includes(nm)) return true
@@ -62,7 +82,13 @@ export async function tryAutoMatchSupplier(
       // keeps single-letter cards from matching everything.
       const cardNorm = normalizeName(c.name)
       if (cardNorm.length < 3 || targetNorm.length < 3) return false
-      return cardNorm.startsWith(targetNorm) || targetNorm.startsWith(cardNorm)
+      if (cardNorm.startsWith(targetNorm) || targetNorm.startsWith(cardNorm)) return true
+      // Legal-suffix-blind fallback: "Digital Nomads HQ Pty Ltd" vs card
+      // "Digital Nomads P/L" — strip pty/ltd/p/l etc. off both, then the same
+      // prefix rule (min 4 chars so tiny cores can't match everything).
+      const cardCore = stripLegal(cardNorm)
+      if (cardCore.length < 4 || targetCore.length < 4) return false
+      return cardCore === targetCore || cardCore.startsWith(targetCore) || targetCore.startsWith(cardCore)
     })
     if (nameMatches.length === 1) {
       return { matchedBy: 'name', supplier: nameMatches[0] }
@@ -72,6 +98,9 @@ export async function tryAutoMatchSupplier(
       // 1. A card whose name EXACTLY equals the vendor name (normalized) wins.
       const exact = nameMatches.filter(c => normalizeName(c.name) === targetNorm)
       if (exact.length === 1) return { matchedBy: 'name', supplier: exact[0] }
+      // 1b. Exact match after stripping legal suffixes off both sides.
+      const coreExact = nameMatches.filter(c => stripLegal(normalizeName(c.name)) === targetCore)
+      if (coreExact.length === 1) return { matchedBy: 'name', supplier: coreExact[0] }
       // 2. Among cards that PREFIX the vendor name, the most specific
       //    (longest) unique one wins — resolves supplier families like
       //    "Digital Nomads" vs "Digital Nomads HQ" for vendor
