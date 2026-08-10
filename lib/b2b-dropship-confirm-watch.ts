@@ -197,9 +197,35 @@ async function retryMissingPayments(c: SupabaseClient, errors: string[]): Promis
   return applied
 }
 
+// ONE-SHOT (marker-guarded, runs from this cron): B2B-2026-000043's
+// SSMBC697-DPF line was flipped from drop-ship to ship-from-JA AFTER payment,
+// so its auto-printed pick list showed the pipe as DO-NOT-PACK and the admin
+// email's freight scope predated the change. Reprint + re-send once
+// (Chris 2026-08-11); delete this block once the marker exists.
+async function oneShotRefresh43(c: SupabaseClient, errors: string[]): Promise<void> {
+  const MARKER = 'B2B43_OUTPUTS_REQUEUED_20260811'
+  const { data: done } = await c.from('integration_settings').select('key').eq('key', MARKER).maybeSingle()
+  if (done) return
+  const orderId = 'a663e76c-b1e4-4eb6-827f-c3cbe64de834'   // B2B-2026-000043
+  try {
+    const { queuePickListPrint } = await import('./b2b-pick-list-print')
+    const pl = await queuePickListPrint(orderId, { force: true })
+    if (pl.status === 'failed') errors.push(`43 picklist: ${pl.reason}`)
+    const { sendOrderPlacedAdminEmail } = await import('./b2b-order-notify')
+    const em = await sendOrderPlacedAdminEmail(orderId)
+    if (!em.ok) errors.push(`43 admin email: ${em.reason}`)
+    await postB2bOrderSlack(c, ':clipboard: *B2B-2026-000043* refreshed after the SSMBC697-DPF ship-from-JA flip — pick list reprinted upstairs + a new Book Freight email sent.')
+  } catch (e: any) {
+    errors.push(`43 one-shot: ${String(e?.message || e).slice(0, 200)}`)
+  }
+  await c.from('integration_settings').upsert({ key: MARKER, value: new Date().toISOString() })
+}
+
 export async function scanDropShipConfirmations(opts: { lookbackDays?: number } = {}): Promise<ConfirmWatchResult> {
   const c = sb()
   const res: ConfirmWatchResult = { scanned: 0, confirmed: 0, healed: 0, skipped: 0, errors: [], openOrders: 0 }
+
+  await oneShotRefresh43(c, res.errors)
 
   // Catch-up pass: receipt any settled payment whose earlier attempt failed.
   await retryMissingPayments(c, res.errors)
