@@ -53,6 +53,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     .select('id, last_freight_poll_at')
     .not('machship_consignment_id', 'is', null)
     .not('status', 'in', '(delivered,cancelled,refunded)')
+    // consignment_missing = the consignment 404s in MachShip (deleted /
+    // re-created upstream) — no status will ever come back, stop asking.
+    .or('freight_status.is.null,freight_status.neq.consignment_missing')
     .or(`last_freight_poll_at.is.null,last_freight_poll_at.lt.${sinceIso}`)
     .order('last_freight_poll_at', { ascending: true, nullsFirst: true })
     .limit(limit)

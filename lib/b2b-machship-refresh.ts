@@ -53,7 +53,20 @@ export async function refreshOrderFreight(c: SupabaseClient, orderId: string): P
     consignment = await getConsignment(order.machship_consignment_id)
   } catch (e: any) {
     if (e instanceof MachShipNotConfiguredError) return { ok: false, status: 503, error: e.message }
-    if (e instanceof MachShipApiError)            return { ok: false, status: 502, error: e.message }
+    if (e instanceof MachShipApiError) {
+      // Consignment deleted upstream (e.g. manually re-created in MachShip —
+      // Torrisi MS70068309 404'd every 30 min forever, 2026-08-11): park it
+      // with a visible freight_status so the poller stops and the admin page
+      // shows WHY there'll be no more tracking updates.
+      if (e.status === 404) {
+        await c.from('b2b_orders').update({
+          freight_status: 'consignment_missing',
+          last_freight_poll_at: new Date().toISOString(),
+        }).eq('id', orderId)
+        return { ok: false, status: 404, error: 'Consignment no longer exists in MachShip (deleted/re-created there?) — polling stopped; mark the order delivered manually when it lands.' }
+      }
+      return { ok: false, status: 502, error: e.message }
+    }
     return { ok: false, status: 500, error: `getConsignment failed: ${e?.message || e}` }
   }
 
