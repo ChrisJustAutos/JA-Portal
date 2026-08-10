@@ -28,7 +28,7 @@ export async function runPostPaymentPipeline(orderId: string, opts: { paymentInt
   const c = sb()
   const { data: order, error: oErr } = await c
     .from('b2b_orders')
-    .select('id, status, order_number, payment_method, is_test, myob_invoice_uid, admin_notified_at, dropship_po_raised_at, distributor_notified_at')
+    .select('id, status, order_number, payment_method, is_test, myob_invoice_uid, admin_notified_at, dropship_po_raised_at, distributor_notified_at, placed_by_user_id')
     .eq('id', orderId).maybeSingle()
   if (oErr) throw new Error(oErr.message)
   if (!order) return { ok: false, status: 'not_found' }
@@ -79,6 +79,20 @@ export async function runPostPaymentPipeline(orderId: string, opts: { paymentInt
     console.error(`pipeline: MYOB write failed for order ${orderId}:`, errMsg)
     await c.from('b2b_orders').update({ myob_write_error: errMsg.substring(0, 1000) }).eq('id', orderId)
     await c.from('b2b_order_events').insert({ order_id: orderId, event_type: 'myob_write_failed', to_status: 'paid', actor_type: 'system', actor_id: null, notes: errMsg.substring(0, 500), metadata: { error: errMsg } })
+  }
+
+  // Empty the buyer's cart — the order now owns those lines. Cleared on
+  // PAYMENT SUCCESS, not at checkout start, so an abandoned checkout keeps
+  // the cart ("cart's still populated after purchase", Chris 2026-08-10).
+  // Best-effort and naturally idempotent (an already-empty cart no-ops).
+  try {
+    const buyerId = (order as any).placed_by_user_id
+    if (buyerId) {
+      const { data: cart } = await c.from('b2b_carts').select('id').eq('distributor_user_id', buyerId).maybeSingle()
+      if (cart) await c.from('b2b_cart_items').delete().eq('cart_id', cart.id)
+    }
+  } catch (e: any) {
+    console.error(`pipeline: cart clear failed for order ${orderId} (non-fatal):`, e?.message || e)
   }
 
   // Receipt the payment against the MYOB sale ORDER right away (MYOB books it
