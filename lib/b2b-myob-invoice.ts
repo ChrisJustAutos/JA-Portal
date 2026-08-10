@@ -154,13 +154,23 @@ export async function writeOrderToMyob(orderId: string): Promise<MyobWriteResult
     // our "name — sku" composite. The catalogue mirrors the item's sell
     // description at sync; fall back to the name if it's blank.
     const baseDesc = String(cat?.description || '').trim() || String(ln.name || ln.sku)
+    // TAX-INCLUSIVE lines (Chris 2026-08-10: JAWSB2B0049 was 1c under the
+    // Stripe charge). MYOB IGNORES posted envelope totals (calculated
+    // fields) and re-derives tax itself — rounding ONCE on the total, while
+    // checkout/Stripe round per line. Posting the EXACT inc-GST line amounts
+    // Stripe charged (identical construction to checkout's line_items) makes
+    // MYOB's TotalAmount equal the charge by definition; MYOB backs the GST
+    // out of the inc figures instead of re-adding it.
+    const lineEx = round2(Number(ln.line_subtotal_ex_gst || 0))
+    const lineInc = ln.is_taxable !== false ? round2(lineEx + round2(lineEx * 0.10)) : lineEx
+    const qty = Number(ln.qty) || 1
     const line: any = {
       Type: 'Transaction',
       Description: `${baseDesc}${rrpTxt}`.substring(0, 255),
       Item: { UID: ln.myob_item_uid },
-      ShipQuantity: ln.qty,
-      UnitPrice: round2(Number(ln.unit_trade_price_ex_gst || 0)),
-      Total: round2(Number(ln.line_subtotal_ex_gst || 0)),
+      ShipQuantity: qty,
+      UnitPrice: Math.round((lineInc / qty) * 1e5) / 1e5,   // inc per unit, 5dp
+      Total: lineInc,
       TaxCode: { UID: taxUid },
     }
     if ((ln as any).is_drop_ship === true) {
@@ -197,13 +207,15 @@ export async function writeOrderToMyob(orderId: string): Promise<MyobWriteResult
   // freight field — otherwise the goods lines wouldn't reconcile and the
   // freight portion silently vanished from the posted invoice.
   //
-  //   MYOB: TotalAmount = Subtotal (sum of line Totals) + Freight + TotalTax
+  //   MYOB (IsTaxInclusive:true): TotalAmount = Σ(line inc Totals) + Freight(inc)
+  // Freight inc mirrors checkout's Stripe freight line exactly:
+  // ex + round2(ex × 10%) — NOT round2(ex × 1.1), which can differ by 1c.
   const freightExGst  = round2(Number(order.freight_cost_ex_gst || 0))
-  const subtotalExGst = round2(Number(order.subtotal_ex_gst || 0))   // goods + freight (ex GST)
-  const goodsExGst    = round2(subtotalExGst - freightExGst)         // goods only (matches product lines)
-  const totalTax      = round2(Number(order.gst || 0))               // products GST + freight GST
-  const subtotalEnv   = round2(goodsExGst + cardFeeInc)              // sum of myobLines (products + surcharge)
-  const totalAmount   = round2(subtotalEnv + freightExGst + totalTax)
+  const freightInc    = round2(freightExGst + round2(freightExGst * 0.10))
+  const goodsIncSum   = round2(myobLines.reduce((s, l) => s + Number(l.Total || 0), 0))
+  const totalTax      = round2(Number(order.gst || 0))               // informational — MYOB recomputes
+  const subtotalEnv   = goodsIncSum                                  // inc, matches the lines
+  const totalAmount   = round2(goodsIncSum + freightInc)             // = order.total_inc by construction
   // Freight is GST-taxable in the portal, so book it against GST when
   // present; fall back to FRE when there's no freight so the field is valid.
   const freightTaxUid = freightExGst > 0 ? cfg.gstTaxCodeUid : cfg.freTaxCodeUid
@@ -237,8 +249,8 @@ export async function writeOrderToMyob(orderId: string): Promise<MyobWriteResult
     Date: today,
     Number: myobOrderNumber,
     Lines: myobLines,
-    IsTaxInclusive: false,
-    Freight: freightExGst,
+    IsTaxInclusive: true,
+    Freight: freightInc,
     FreightTaxCode: { UID: freightTaxUid },
     Subtotal: subtotalEnv,
     TotalTax: totalTax,
@@ -377,17 +389,25 @@ export async function convertOrderToInvoiceInMyob(orderId: string, opts: { track
   if (!conn) throw new Error('JAWS MYOB connection not configured')
 
   // Build the invoice lines (identical mapping to writeOrderToMyob's order lines).
+  // TAX-INCLUSIVE lines, mirroring writeOrderToMyob and checkout's Stripe
+  // line construction exactly (lineEx + round2(lineEx × 10%)) — MYOB ignores
+  // posted envelope totals and re-derives tax rounding ONCE, which left
+  // JAWSB2B0049 1c under the Stripe charge (Chris 2026-08-10). Posting the
+  // inc figures makes MYOB's TotalAmount equal the charge by construction.
   const myobLines: any[] = []
   for (const ln of lines) {
     if (!ln.myob_item_uid) throw new Error(`Order line ${ln.id} (${ln.sku}) has no MYOB item UID`)
     const taxUid = ln.is_taxable !== false ? cfg.gstTaxCodeUid : cfg.freTaxCodeUid
+    const lineEx = round2(Number(ln.line_subtotal_ex_gst || 0))
+    const lineInc = ln.is_taxable !== false ? round2(lineEx + round2(lineEx * 0.10)) : lineEx
+    const qty = Number(ln.qty) || 1
     myobLines.push({
       Type: 'Transaction',
       Description: `${ln.name} — ${ln.sku}`.substring(0, 255),
       Item: { UID: ln.myob_item_uid },
-      ShipQuantity: ln.qty,
-      UnitPrice: round2(Number(ln.unit_trade_price_ex_gst || 0)),
-      Total: round2(Number(ln.line_subtotal_ex_gst || 0)),
+      ShipQuantity: qty,
+      UnitPrice: Math.round((lineInc / qty) * 1e5) / 1e5,   // inc per unit, 5dp
+      Total: lineInc,
       TaxCode: { UID: taxUid },
     })
   }
@@ -397,11 +417,11 @@ export async function convertOrderToInvoiceInMyob(orderId: string, opts: { track
   }
 
   const freightExGst  = round2(Number(order.freight_cost_ex_gst || 0))
-  const subtotalExGst = round2(Number(order.subtotal_ex_gst || 0))
-  const goodsExGst    = round2(subtotalExGst - freightExGst)
-  const totalTax      = round2(Number(order.gst || 0))
-  const subtotalEnv   = round2(goodsExGst + cardFeeInc)
-  const totalAmount   = round2(subtotalEnv + freightExGst + totalTax)
+  const freightInc    = round2(freightExGst + round2(freightExGst * 0.10))
+  const goodsIncSum   = round2(myobLines.reduce((s, l) => s + Number(l.Total || 0), 0))
+  const totalTax      = round2(Number(order.gst || 0))    // informational — MYOB recomputes
+  const subtotalEnv   = goodsIncSum
+  const totalAmount   = round2(goodsIncSum + freightInc)  // = order.total_inc by construction
   const freightTaxUid = freightExGst > 0 ? cfg.gstTaxCodeUid : cfg.freTaxCodeUid
 
   // Keep the same Number as the order for continuity. Fall back to a freshly
@@ -428,8 +448,8 @@ export async function convertOrderToInvoiceInMyob(orderId: string, opts: { track
     Date: today,
     Number: number,
     Lines: myobLines,
-    IsTaxInclusive: false,
-    Freight: freightExGst,
+    IsTaxInclusive: true,
+    Freight: freightInc,
     FreightTaxCode: { UID: freightTaxUid },
     Subtotal: subtotalEnv,
     TotalTax: totalTax,
