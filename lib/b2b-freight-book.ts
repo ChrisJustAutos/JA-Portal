@@ -48,12 +48,20 @@ export async function bookFreightForOrder(orderId: string, opts: { actorId?: str
   const { data: order, error: oErr } = await c.from('b2b_orders').select(`
       id, order_number, status, customer_po, distributor_id, shipping_address_snapshot,
       machship_consignment_id, machship_consignment_number, dropship_pos,
-      freight_chosen_quote, machship_carrier_id, machship_carrier_service_id, freight_service_label, freight_pack_mode
+      freight_chosen_quote, machship_carrier_id, machship_carrier_service_id, freight_service_label, freight_pack_mode,
+      payment_method, payment_settled_at
     `).eq('id', orderId).maybeSingle()
   if (oErr) return fail(500, oErr.message)
   if (!order) return fail(404, 'Order not found')
   if (order.status === 'cancelled' || order.status === 'refunded') return fail(400, `Order is ${order.status} — cannot book freight.`)
   if (order.status === 'pending_payment') return fail(400, 'Order has not been paid — cannot book freight for an unpaid order.')
+  // BECS credit gate (closed 2026-08-10, when BECS became selectable in the
+  // cart): the debit mandate is accepted at checkout but funds take 2–3
+  // business days to clear — goods must not ship on an unsettled direct
+  // debit. force=true overrides consciously (admin's call).
+  if ((order as any).payment_method === 'becs' && !(order as any).payment_settled_at && !opts.force) {
+    return fail(400, 'BECS payment hasn’t settled yet — funds take 2–3 business days to clear. Book freight once it settles (the settlement poller flips it automatically), or re-run with force if you accept the credit risk.')
+  }
   if (order.machship_consignment_id && !opts.force) {
     return { ok: false, httpStatus: 409, alreadyBooked: true, error: 'Consignment already booked for this order.', consignment_number: order.machship_consignment_number }
   }
