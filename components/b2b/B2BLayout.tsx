@@ -71,6 +71,7 @@ const TRAINING_NAV_POS = 5   // after Resources
 export default function B2BLayout({ user, active = null, children, cartCount }: Props) {
   const router = useRouter()
   const isMobile = useIsMobile()
+  const [refreshing, setRefreshing] = useState(false)  // header ↻ Refresh busy state
 
   // Assigned-training gate: one cheap fetch per mount; the Training tab only
   // appears for memberships with ≥1 visible module.
@@ -214,6 +215,19 @@ export default function B2BLayout({ user, active = null, children, cartCount }: 
             )
           )}
           <B2BNotificationBell isMobile={isMobile}/>
+          {/* Hard refresh — clears stale data and picks up new portal versions
+              (mirrors the staff top bar's ↻ Refresh, Chris 2026-08-10). */}
+          <button onClick={() => { setRefreshing(true); window.location.reload() }} disabled={refreshing}
+            title="Refresh the portal (clears stale data and loads the latest version)"
+            style={{
+              padding: isMobile ? '8px 10px' : '6px 12px',
+              borderRadius:5,
+              border:`1px solid ${T.border2}`, background:'transparent', color:T.text2,
+              fontSize:12, cursor:'pointer', fontFamily:'inherit',
+              minHeight: 36, opacity: refreshing ? 0.6 : 1,
+            }}>
+            {isMobile ? '↻' : (refreshing ? 'Refreshing…' : '↻ Refresh')}
+          </button>
           <button onClick={signOut} title="Sign out"
             style={{
               padding: isMobile ? '8px 10px' : '6px 12px',
