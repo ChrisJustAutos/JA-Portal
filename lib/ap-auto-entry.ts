@@ -48,6 +48,7 @@ import { getSupplierByUid, searchAccounts, searchSuppliers, createSupplier, type
 import { resolveLineAccount } from './ap-line-resolver'
 import { triageInvoice } from './ap-supabase'
 import { consolidatedInvoiceSupplier } from './ap-consolidated-suppliers'
+import { proformaOkSupplier } from './ap-proforma-suppliers'
 import { overseasSupplier } from './ap-overseas-suppliers'
 import { reattachStagedPdf, sameInvoiceNumberLoose, findExistingMyobBill } from './ap-myob-bill'
 import { postApInvoice } from './accounting/post-ap-invoice'
@@ -786,7 +787,14 @@ async function processInvoice(
   // notice so accounts knows why nothing was entered. Deliberately NOT
   // triggered by the email subject alone: reply chains titled "RE: quote"
   // routinely carry the final tax invoice.
-  const looksLikeQuote = extracted.isQuote === true || /quote|quotation|estimate/i.test(attName)
+  // Pay-on-proforma suppliers (lib/ap-proforma-suppliers): their proforma /
+  // order-confirmation IS the payable bill — bypass the quote guard for them
+  // (two HD Automotive proformas skipped as quotes, Chris 2026-08-10). A
+  // quote-NAMED attachment from them still trips the guard: proformas are
+  // named proforma-invoice-*.pdf, an actual quote is still an offer.
+  const proformaOk = proformaOkSupplier(extracted.vendor?.name, msg.from, attName)
+    && !/quote|quotation|estimate/i.test(attName)
+  const looksLikeQuote = !proformaOk && (extracted.isQuote === true || /quote|quotation|estimate/i.test(attName))
   if (looksLikeQuote) {
     let ts: string | null = null
     if (!dryRun) {
