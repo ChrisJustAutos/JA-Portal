@@ -345,6 +345,7 @@ async function runMailbox(
     const isInvoiceName = (n: string) => /invoice|inv[\s_#-]*\d|tax[\s_-]?inv/i.test(n)
     const hasInvoiceSibling = atts.some(a => classify(a) && isInvoiceName(a.name || ''))
     const thisMsgOutcomes: AutoEntryItem['outcome'][] = []
+    const msgAllItems: AutoEntryItem[] = []   // per-message items (for double-up reporting)
 
     for (const att of atts) {
       // Forwarded-as-attachment email (Outlook itemAttachment): the real
@@ -368,6 +369,7 @@ async function runMailbox(
                 bytes: nBytes, b64: nf.contentBytes, kind: nKind, attId: nAttId, attName: `${nf.name} (in attached email)`,
               })
               out.processed.push(item)
+              msgAllItems.push(item)
               thisMsgOutcomes.push(item.outcome)
               if (item.outcome === 'posted') anyPosted = true
             } catch (e: any) {
@@ -400,6 +402,7 @@ async function runMailbox(
       try {
         msgItems = await processAttachment(c, { mailbox, companyFile, msg, att, kind, dryRun })
         out.processed.push(...msgItems)
+        msgAllItems.push(...msgItems)
         if (msgItems.some(i => i.outcome === 'posted')) anyPosted = true
       } catch (e: any) {
         const error = (e?.message || String(e)).slice(0, 300)
@@ -431,11 +434,34 @@ async function runMailbox(
       try { await sendSlack({ text, blocks: [{ type: 'section', text: { type: 'mrkdwn', text } }] }, companyFile) } catch (e: any) { console.error('never-silent notice failed:', e?.message) }
     }
 
-    // Invoice entered → file the email away (read + move out of Inbox). Only on
-    // a real posting; flagged / left emails stay put for manual handling. Move
-    // LAST (it invalidates the message id) and best-effort (needs Mail.ReadWrite).
-    // Record the outcome on the posted log row(s) so move failures are visible.
-    if (anyPosted && !dryRun) {
+    // DOUBLE-UP notice (Chris 2026-08-10): a re-sent invoice that's already in
+    // MYOB is fully handled — say so in Slack (per duplicate: supplier, number,
+    // amount) instead of silence, so accounts knows the email was seen and why
+    // nothing was entered.
+    const dupItems = msgAllItems.filter(i => i.outcome === 'skipped_duplicate')
+    const anyFlagged = thisMsgOutcomes.includes('flagged')
+    if (dupItems.length > 0 && !dryRun) {
+      const lines = dupItems.map(d =>
+        `• ${d.supplierName || 'unknown supplier'}${d.invoiceNumber ? ` — ${d.invoiceNumber}` : ''}${d.amount != null ? ` — ${money(d.amount)}` : ''} (already in MYOB)`)
+      const text = [
+        `♻️ *Double-up — already in MYOB, nothing re-entered*`,
+        `“${msg.subject || '(no subject)'}” from *${msg.from || 'unknown'}*`,
+        ...lines,
+        anyFlagged
+          ? `Email left in the ${mailbox} inbox — another attachment on it needs a human.`
+          : `Email marked read and filed to "${folderName}".`,
+      ].join('\n')
+      try { await sendSlack({ text, blocks: [{ type: 'section', text: { type: 'mrkdwn', text } }] }, companyFile) } catch (e: any) { console.error('double-up notice failed:', e?.message) }
+    }
+
+    // Fully-handled emails get filed away (read + moved out of the Inbox):
+    // real postings, and pure double-ups (Chris 2026-08-10 — "move email to
+    // Read /Printed"). Flagged / unrecognised emails stay put for manual
+    // handling. Move LAST (it invalidates the message id) and best-effort
+    // (needs Mail.ReadWrite). Record the outcome on the log row(s) so move
+    // failures are visible.
+    const shouldFile = anyPosted || (dupItems.length > 0 && !anyFlagged)
+    if (shouldFile && !dryRun) {
       let moved = false
       const notes: string[] = []
       try { await markMessageAsRead(mailbox, msg.id) } catch (e: any) { notes.push(`mark-read failed: ${e?.message || e}`) }
@@ -450,7 +476,7 @@ async function runMailbox(
       try {
         await c.from('ap_auto_entry_log')
           .update({ moved, move_note: moveNote })
-          .eq('graph_message_id', msg.id).eq('outcome', 'posted')
+          .eq('graph_message_id', msg.id).in('outcome', ['posted', 'skipped_duplicate'])
       } catch { /* best effort */ }
     }
   }
