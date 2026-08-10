@@ -41,7 +41,7 @@ export interface BookFreightResult {
   label_warning?: string | null
 }
 
-export async function bookFreightForOrder(orderId: string, opts: { actorId?: string | null; force?: boolean; dispatchAt?: string | Date | null; packMode?: 'auto' | 'pallet' | 'cartons' } = {}): Promise<BookFreightResult> {
+export async function bookFreightForOrder(orderId: string, opts: { actorId?: string | null; force?: boolean; acceptUnsettled?: boolean; dispatchAt?: string | Date | null; packMode?: 'auto' | 'pallet' | 'cartons' } = {}): Promise<BookFreightResult> {
   const c = svc()
   const fail = (httpStatus: number, error: string, detail?: any): BookFreightResult => ({ ok: false, httpStatus, error, detail })
 
@@ -58,9 +58,18 @@ export async function bookFreightForOrder(orderId: string, opts: { actorId?: str
   // BECS credit gate (closed 2026-08-10, when BECS became selectable in the
   // cart): the debit mandate is accepted at checkout but funds take 2–3
   // business days to clear — goods must not ship on an unsettled direct
-  // debit. force=true overrides consciously (admin's call).
-  if ((order as any).payment_method === 'becs' && !(order as any).payment_settled_at && !opts.force) {
-    return fail(400, 'BECS payment hasn’t settled yet — funds take 2–3 business days to clear. Book freight once it settles (the settlement poller flips it automatically), or re-run with force if you accept the credit risk.')
+  // debit. acceptUnsettled = the admin explicitly approved the credit risk
+  // (the UI asks); the acceptance is stamped on the order timeline.
+  if ((order as any).payment_method === 'becs' && !(order as any).payment_settled_at) {
+    if (!opts.acceptUnsettled && !opts.force) {
+      return { ok: false, httpStatus: 400, error: 'BECS payment hasn’t settled yet — funds take 2–3 business days to clear. Book once it settles, or approve booking now (admin accepts the credit risk).', detail: { becs_unsettled: true } }
+    }
+    try {
+      await c.from('b2b_order_events').insert({
+        order_id: orderId, event_type: 'note', actor_type: opts.actorId ? 'admin' : 'system', actor_id: opts.actorId || null,
+        notes: 'Freight booked BEFORE the BECS payment settled — admin approved the credit risk.',
+      })
+    } catch { /* best-effort audit */ }
   }
   if (order.machship_consignment_id && !opts.force) {
     return { ok: false, httpStatus: 409, alreadyBooked: true, error: 'Consignment already booked for this order.', consignment_number: order.machship_consignment_number }

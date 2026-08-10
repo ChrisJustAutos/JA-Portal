@@ -943,7 +943,7 @@ function ShippingCard({ order, onEdit, onReloaded, onFlash }: {
     }
   }
 
-  async function bookViaMachShip(force = false, dispatchOverride?: string | null) {
+  async function bookViaMachShip(force = false, dispatchOverride?: string | null, acceptUnsettled = false) {
     if (bookingBusy) return
     if (hasConsignment && !force && !(await confirmDialog({ title: 'A consignment is already booked. Re-book?' }))) return
     // dispatchOverride: '' = collect ASAP (now), a value = scheduled (later);
@@ -957,10 +957,28 @@ function ShippingCard({ order, onEdit, onReloaded, onFlash }: {
         body: JSON.stringify({
           ...(dispatch ? { dispatch_at: new Date(dispatch).toISOString() } : {}),
           pack_mode: packMode || 'auto',
+          ...(acceptUnsettled ? { accept_unsettled: true } : {}),
         }),
       })
       const j = await r.json()
-      if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`)
+      if (!r.ok) {
+        // BECS credit gate: the payment hasn't settled — offer the explicit
+        // admin approval instead of a dead end (Chris 2026-08-10). The
+        // acceptance is stamped on the order timeline server-side.
+        if (j?.detail?.becs_unsettled && !acceptUnsettled) {
+          setBookingBusy(false)
+          if (await confirmDialog({
+            title: 'BECS payment hasn’t settled yet',
+            message: 'Funds take 2–3 business days to clear. Book freight now anyway? This ships on an unsettled direct debit — admin accepts the credit risk (logged on the order).',
+            confirmLabel: 'Book anyway',
+            danger: true,
+          })) {
+            return bookViaMachShip(force, dispatchOverride, true)
+          }
+          return
+        }
+        throw new Error(j.error || `HTTP ${r.status}`)
+      }
       if (j.label_warning) onFlash(`Booked, but label fetch warning: ${j.label_warning}`)
       else                 onFlash(`Booked: ${j.consignment_number || j.consignment_id}`)
       onReloaded()

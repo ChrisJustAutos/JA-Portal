@@ -30,7 +30,11 @@ export default withAuth('admin:b2b', async (req: NextApiRequest, res: NextApiRes
   const pm = String(body.pack_mode || '').trim()
   const packMode = (pm === 'pallet' || pm === 'cartons' || pm === 'auto') ? pm as 'pallet' | 'cartons' | 'auto' : undefined
 
-  const r = await bookFreightForOrder(id, { actorId: user.id, force, dispatchAt, packMode })
+  // Explicit admin approval to ship before a BECS payment settles (the UI
+  // asks after the gate's 400) — separate from ?force=1, which re-books.
+  const acceptUnsettled = body.accept_unsettled === true
+
+  const r = await bookFreightForOrder(id, { actorId: user.id, force, acceptUnsettled, dispatchAt, packMode })
   if (!r.ok) return res.status(r.httpStatus).json({ error: r.error, detail: r.detail })
   return res.status(200).json({
     ok: true, consignment_id: r.consignment_id, consignment_number: r.consignment_number,
