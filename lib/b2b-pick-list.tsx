@@ -23,7 +23,8 @@ export interface PickListLine {
   components?: PickListLine[]
 }
 export interface PickListBox {
-  title: string          // "BOX 1 — Medium Carton" / "PALLET GROUP (×2)"
+  title: string          // "CONSIGNMENT 1" / "CONSIGNMENTS 2–4 — pack 3 identical"
+  boxName?: string       // the box/pallet being used, e.g. "Medium Carton"
   dims: string           // "400 × 300 × 250 mm"
   weightKg: number       // packed weight of this unit (group total for pallets)
   lines: PickListLine[]
@@ -67,11 +68,14 @@ const s = StyleSheet.create({
   shipToLine: { fontSize: 10.5, marginBottom: 1.5 },
   packMode: { fontSize: 8.5, color: C.ink3, marginTop: 4 },
 
-  // Box sections
+  // Consignment sections
   section: { marginTop: 14 },
-  boxHead: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-end', backgroundColor: '#eceef1', paddingVertical: 5, paddingHorizontal: 8, borderRadius: 3 },
+  boxHead: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-end', backgroundColor: '#eceef1', paddingVertical: 5, paddingHorizontal: 8, borderTopLeftRadius: 3, borderTopRightRadius: 3 },
   boxTitle: { fontSize: 12, fontWeight: 700 },
   boxMeta: { fontSize: 9, color: C.ink2 },
+  boxSpecRow: { backgroundColor: '#f6f7f9', paddingVertical: 4, paddingHorizontal: 8, borderBottom: `0.5pt solid ${C.line}` },
+  boxSpec: { fontSize: 10, color: C.ink2 },
+  boxSpecStrong: { fontWeight: 700, color: C.ink },
 
   line: { flexDirection: 'row', alignItems: 'flex-start', paddingVertical: 4, paddingHorizontal: 8, borderBottom: `0.5pt solid ${C.line}` },
   checkbox: { width: 11, height: 11, border: `1pt solid ${C.ink}`, marginRight: 8, marginTop: 0.5 },
@@ -151,12 +155,19 @@ function PickListPdf({ data }: { data: PickListData }) {
           </View>
         </View>
 
-        {/* Box plan */}
+        {/* Consignment plan: header = the consignment, spec row = the box it
+            uses with dims + weight, then the products packed into it. */}
         {data.boxes.map((box, i) => (
           <View key={i} style={s.section}>
             <View style={s.boxHead} wrap={false}>
               <Text style={s.boxTitle}>{box.title}</Text>
-              <Text style={s.boxMeta}>{box.dims} - approx {kg(box.weightKg)}</Text>
+              <Text style={s.boxMeta}>approx {kg(box.weightKg)}</Text>
+            </View>
+            <View style={s.boxSpecRow} wrap={false}>
+              <Text style={s.boxSpec}>
+                {box.boxName ? <>Box: <Text style={s.boxSpecStrong}>{box.boxName}</Text> {' · '}</> : null}
+                {box.dims}
+              </Text>
             </View>
             {box.lines.map((l, j) => <LineRow key={j} line={l} />)}
           </View>
@@ -187,7 +198,7 @@ function PickListPdf({ data }: { data: PickListData }) {
         {/* Totals */}
         <View style={s.totals} wrap={false}>
           <Text style={s.totalsText}>
-            {data.totalBoxes} {data.totalBoxes === 1 ? 'shipping unit' : 'shipping units'} to pack
+            {data.totalBoxes} {data.totalBoxes === 1 ? 'consignment' : 'consignments'} to pack
           </Text>
           <Text style={s.totalsText}>Total weight approx {kg(data.totalWeightKg)}</Text>
         </View>

@@ -140,6 +140,9 @@ export async function queuePickListPrint(orderId: string, opts: { force?: boolea
   const boxes: PickListBox[] = []
   let totalBoxes = 0
   let totalWeightG = 0
+  // Consignment-first structure (Chris 2026-08-11): each section headline is
+  // the CONSIGNMENT number; the box being used + its dims/weight sit on the
+  // spec row beneath; then the products packed into it.
   if (packed) {
     let boxNo = 0
     for (const u of packed.units) {
@@ -149,12 +152,10 @@ export async function queuePickListPrint(orderId: string, opts: { force?: boolea
       const isPallet = u.itemType === 'Pallet'
       const first = boxNo + 1
       boxNo += n
-      const title = isPallet
-        ? (n > 1 ? `PALLETS ${first}-${boxNo}` : `PALLET ${first}`)
-        : `BOX ${first} - ${u.name}`
       boxes.push({
-        title,
-        dims: dimsLabel(u.length_mm, u.width_mm, u.height_mm) + (isPallet && n > 1 ? ' each' : ''),
+        title: n > 1 ? `CONSIGNMENTS ${first}-${boxNo} — pack ${n} identical` : `CONSIGNMENT ${first}`,
+        boxName: isPallet ? 'Pallet' : u.name,
+        dims: dimsLabel(u.length_mm, u.width_mm, u.height_mm) + (n > 1 ? ' each' : ''),
         weightKg: (u.weight_g * n) / 1000,
         lines: (u.contents || []).map(cl => toPickLine(cl.sku, cl.name, cl.qty)),
       })
@@ -170,7 +171,8 @@ export async function queuePickListPrint(orderId: string, opts: { force?: boolea
       totalBoxes += n
       totalWeightG += Number(it.weight_g || 0) * n
       boxes.push({
-        title: n > 1 ? `BOXES ${first}-${boxNo} - ${it.name.slice(0, 50)} (1 per box)` : `BOX ${first} - ${it.name.slice(0, 50)}`,
+        title: n > 1 ? `CONSIGNMENTS ${first}-${boxNo} — pack ${n} identical (1 per box)` : `CONSIGNMENT ${first}`,
+        boxName: `Own carton — ${it.name.slice(0, 50)}`,
         dims: dimsLabel(Number(it.length_mm || 0), Number(it.width_mm || 0), Number(it.height_mm || 0)) + (n > 1 ? ' each' : ''),
         weightKg: (Number(it.weight_g || 0) * n) / 1000,
         lines: [toPickLine(it.sku, it.name, n)],
