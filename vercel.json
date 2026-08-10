@@ -45,7 +45,7 @@
       "maxDuration": 120
     },
     "pages/api/b2b/admin/orders/[id]/book-freight.ts": {
-      "maxDuration": 60
+      "maxDuration": 120
     },
     "pages/api/stripe-myob/list.ts": {
       "maxDuration": 60

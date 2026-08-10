@@ -441,8 +441,10 @@ export async function convertOrderToInvoiceInMyob(orderId: string, opts: { track
   // put the carrier tracking number there. Falls back to the stored value, then
   // blank (rather than descriptive text, which would read oddly on the form).
   const tracking = String(opts.trackingNumber ?? (order as any).tracking_number ?? '').trim().substring(0, 255)
-  // "Ship Via" = the carrier the order shipped by (MYOB ShippingMethod, a string).
-  const shipVia = String(opts.carrier ?? (order as any).carrier ?? '').trim().substring(0, 36)
+  // "Ship Via" = the carrier the order shipped by (MYOB ShippingMethod, a
+  // string MYOB caps at 20 chars — longer got a 400 + retry-without round
+  // trip on every conversion).
+  const shipVia = String(opts.carrier ?? (order as any).carrier ?? '').trim().substring(0, 20)
   const body: Record<string, any> = {
     Customer: { UID: dist.myob_primary_customer_uid },
     Date: today,

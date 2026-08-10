@@ -9,7 +9,10 @@ import type { NextApiRequest, NextApiResponse } from 'next'
 import { withAuth } from '../../../../../../lib/authServer'
 import { bookFreightForOrder } from '../../../../../../lib/b2b-freight-book'
 
-export const config = { api: { bodyParser: { sizeLimit: '1mb' } }, maxDuration: 60 }
+// 120s: the full chain (consignment + manifest + label + MYOB invoice
+// conversion + payment receipt) ran past 60s on 000043 — the work completed
+// but the browser got a 504.
+export const config = { api: { bodyParser: { sizeLimit: '1mb' } }, maxDuration: 120 }
 
 export default withAuth('admin:b2b', async (req: NextApiRequest, res: NextApiResponse, user) => {
   if (req.method !== 'POST') { res.setHeader('Allow', 'POST'); return res.status(405).json({ error: 'POST only' }) }

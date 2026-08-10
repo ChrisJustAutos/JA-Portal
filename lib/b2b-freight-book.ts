@@ -226,7 +226,17 @@ export async function bookFreightForOrder(orderId: string, opts: { actorId?: str
   // booking intact and surfaces as a warning to manifest by hand in MachShip.
   let manifestWarning: string | null = null
   try {
-    const mRes: any = await manifestConsignments([Number(consignment.id)], { companyId: (consignment as any).companyId ?? null })
+    // MachShip's manifest endpoint REQUIRES companyId, but createConsignment's
+    // response doesn't carry it ("CompanyId is required" on Banana Coast
+    // 000043, 2026-08-11) — the consignment GET does, so resolve it there.
+    let companyId: number | null = (consignment as any).companyId ?? null
+    if (!companyId) {
+      try {
+        const got: any = await (await import('./b2b-machship')).getConsignment(consignment.id)
+        companyId = got?.companyId ?? got?.company?.id ?? null
+      } catch { /* fall through — manifest will report if it's still missing */ }
+    }
+    const mRes: any = await manifestConsignments([Number(consignment.id)], { companyId })
     const m = Array.isArray(mRes) ? mRes[0] : mRes
     const manifestId = m?.id ?? m?.manifestId ?? null
     await c.from('b2b_orders').update({
