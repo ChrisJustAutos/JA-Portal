@@ -63,6 +63,10 @@ export interface PackedContent {
 export interface PackedUnit {
   itemType: 'Carton' | 'Pallet'
   name: string
+  // true = the item ships in its OWN packaging at its own dims (unboxed/'other'
+  // packaging, fits no configured box, or too heavy for every box) — `name` is
+  // the ITEM name, not a box name. Lets the pick list label it honestly.
+  ownPackaging?: boolean
   quantity: number
   weight_g: number     // per unit
   length_mm: number
@@ -161,7 +165,7 @@ export function packItems(
   const oversized = units.filter(shipsAlone)
   for (const u of oversized) {
     out.push({
-      itemType: 'Carton', name: u.item.name.slice(0, 60) || u.item.sku, quantity: 1, weight_g: u.weight_g,
+      itemType: 'Carton', name: u.item.name.slice(0, 60) || u.item.sku, ownPackaging: true, quantity: 1, weight_g: u.weight_g,
       length_mm: u.item.length_mm || 200, width_mm: u.item.width_mm || 200, height_mm: u.item.height_mm || 200,
       contents: [{ sku: u.item.sku, name: u.item.name, qty: 1 }],
     })
@@ -198,7 +202,7 @@ export function packItems(
         // Fits a box dimensionally but too heavy for any box's weight limit →
         // ship on its own at its own dims.
         out.push({
-          itemType: 'Carton', name: u.item.name.slice(0, 60) || u.item.sku, quantity: 1, weight_g: u.weight_g,
+          itemType: 'Carton', name: u.item.name.slice(0, 60) || u.item.sku, ownPackaging: true, quantity: 1, weight_g: u.weight_g,
           length_mm: u.item.length_mm || 200, width_mm: u.item.width_mm || 200, height_mm: u.item.height_mm || 200,
           contents: [{ sku: u.item.sku, name: u.item.name, qty: 1 }],
         })

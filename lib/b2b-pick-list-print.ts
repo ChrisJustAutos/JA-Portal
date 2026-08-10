@@ -154,7 +154,10 @@ export async function queuePickListPrint(orderId: string, opts: { force?: boolea
       boxNo += n
       boxes.push({
         title: n > 1 ? `CONSIGNMENTS ${first}-${boxNo} — pack ${n} identical` : `CONSIGNMENT ${first}`,
-        boxName: isPallet ? 'Pallet' : u.name,
+        // ownPackaging = the item fits no configured box (or is unboxed/too
+        // heavy) and ships as-is — say so instead of parroting the product
+        // name as a "box" (Chris 2026-08-11: "con 1-7 all say Box: <product>").
+        boxName: isPallet ? 'Pallet' : (u.ownPackaging ? 'No standard box fits — ships in own packaging' : u.name),
         dims: dimsLabel(u.length_mm, u.width_mm, u.height_mm) + (n > 1 ? ' each' : ''),
         weightKg: (u.weight_g * n) / 1000,
         lines: (u.contents || []).map(cl => toPickLine(cl.sku, cl.name, cl.qty)),
