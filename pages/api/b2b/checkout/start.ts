@@ -537,11 +537,11 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, use
   gst = round2(gst)
   const subtotalInc = round2(subtotalEx + gst)
   // Payment surcharge by method: card grosses up the full card rate; PayTo
-  // recovers its cheaper fee (1% + $0.30, capped $3.50).
+  // and BECS recover Stripe's identical cheaper fee (1% + $0.30, capped $3.50).
   let cardFeeInc = 0
   if (paymentMethod === 'card' && subtotalInc > 0) {
     cardFeeInc = round2(Math.max(0, (subtotalInc + cfg.cardFeeFixed) / (1 - cfg.cardFeePct) - subtotalInc))
-  } else if (paymentMethod === 'payto') {
+  } else if (paymentMethod === 'payto' || paymentMethod === 'becs') {
     cardFeeInc = paytoSurchargeInc(subtotalInc)
   }
   const totalInc   = round2(subtotalInc + cardFeeInc)
@@ -649,7 +649,9 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, use
       price_data: {
         currency: 'aud',
         product_data: {
-          name: paymentMethod === 'payto' ? 'PayTo processing fee' : 'Card processing surcharge',
+          name: paymentMethod === 'payto' ? 'PayTo processing fee'
+            : paymentMethod === 'becs' ? 'Bank debit processing fee'
+            : 'Card processing surcharge',
           description: 'Recovers Stripe transaction fees',
         },
         unit_amount: Math.round(cardFeeInc * 100),

@@ -645,7 +645,9 @@ function TotalsPanel({
     ? (newSubtotalInc + cardFee.fixed) / (1 - cardFee.pct)
     : newSubtotalInc
   const newCardFeeInc  = applySurcharge ? Math.max(0, charged - newSubtotalInc) : 0
-  const paytoFeeInc    = paymentMethod === 'payto' ? paytoSurchargeInc(newSubtotalInc) : 0
+  // PayTo and BECS carry the same Stripe pricing (1% + 30c capped $3.50), so
+  // they share the surcharge helper.
+  const paytoFeeInc    = (paymentMethod === 'payto' || paymentMethod === 'becs') ? paytoSurchargeInc(newSubtotalInc) : 0
   const grandTotalInc  = newSubtotalInc + newCardFeeInc + paytoFeeInc
 
   const poTrimmed = customerPo.trim()
@@ -669,10 +671,12 @@ function TotalsPanel({
 
       <div style={{height:10}}/>
 
-      {/* Payment method — PayTo (bank) skips the card surcharge */}
+      {/* Payment method — the bank methods (PayTo / BECS) skip the card
+          surcharge. BECS exists for banks that don't support PayTo yet —
+          NAB business accounts especially (Chris 2026-08-10). */}
       <div style={{fontSize:10,color:T.text2,textTransform:'uppercase',letterSpacing:'0.06em',fontWeight:500,marginBottom:6}}>Payment method</div>
       <div style={{display:'flex',gap:6,marginBottom:6,flexWrap:'wrap'}}>
-        {([['card','Card / Apple Pay'],['payto','PayTo (bank)']] as const).map(([id,label]) => {
+        {([['card','Card / Apple Pay'],['payto','PayTo (bank)'],['becs','Bank debit (BECS)']] as const).map(([id,label]) => {
           const on = paymentMethod === id
           return (
             <button key={id} type="button" onClick={() => onPaymentMethodChange(id)}
@@ -691,12 +695,19 @@ function TotalsPanel({
         </>
       ) : (
         <>
-          <Row label="PayTo fee" value={`+$${paytoFeeInc.toFixed(2)}`} muted/>
-          <div style={{fontSize:10,color:T.green,marginTop:-4,marginBottom:6,lineHeight:1.5}}>Low bank fee (1% + 30c, capped at $3.50) — cheaper than card, paid instantly from your bank.</div>
-          <div style={{fontSize:11,color:T.text2,background:T.bg3,border:`1px solid ${T.border}`,borderRadius:6,padding:'8px 10px',marginBottom:8,lineHeight:1.55}}>
-            <strong style={{color:T.text}}>New to PayTo?</strong> It pays securely straight from your bank account.
-            <div style={{marginTop:5}}>At the next step you’ll enter your <strong>PayID</strong> (the email or mobile linked to your bank) or your <strong>BSB&nbsp;+ account number</strong>, then <strong>approve the request in your banking app</strong>. Most major Australian banks support it. <a href="https://payto.com.au/" target="_blank" rel="noreferrer" style={{color:T.blue,textDecoration:'none'}}>Learn more ↗</a></div>
-          </div>
+          <Row label={paymentMethod === 'becs' ? 'Bank debit fee' : 'PayTo fee'} value={`+$${paytoFeeInc.toFixed(2)}`} muted/>
+          <div style={{fontSize:10,color:T.green,marginTop:-4,marginBottom:6,lineHeight:1.5}}>Low bank fee (1% + 30c, capped at $3.50) — cheaper than card.</div>
+          {paymentMethod === 'payto' ? (
+            <div style={{fontSize:11,color:T.text2,background:T.bg3,border:`1px solid ${T.border}`,borderRadius:6,padding:'8px 10px',marginBottom:8,lineHeight:1.55}}>
+              <strong style={{color:T.text}}>New to PayTo?</strong> It pays securely straight from your bank account.
+              <div style={{marginTop:5}}>At the next step you’ll enter your <strong>PayID</strong> (the email or mobile linked to your bank) or your <strong>BSB&nbsp;+ account number</strong>, then <strong>approve the request in your banking app</strong>. Most major Australian banks support it — <strong>if yours doesn’t (e.g. NAB business accounts), choose Bank debit (BECS) instead</strong>. <a href="https://payto.com.au/" target="_blank" rel="noreferrer" style={{color:T.blue,textDecoration:'none'}}>Learn more ↗</a></div>
+            </div>
+          ) : (
+            <div style={{fontSize:11,color:T.text2,background:T.bg3,border:`1px solid ${T.border}`,borderRadius:6,padding:'8px 10px',marginBottom:8,lineHeight:1.55}}>
+              <strong style={{color:T.text}}>Bank debit (BECS Direct Debit)</strong> — enter your <strong>BSB + account number</strong> and accept the debit agreement at the next step. Works with any Australian bank account, including business accounts that don’t support PayTo yet.
+              <div style={{marginTop:5}}>Funds take <strong>2–3 business days</strong> to clear — your order is confirmed straight away and ships once the payment settles.</div>
+            </div>
+          )}
         </>
       )}
 
