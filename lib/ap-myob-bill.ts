@@ -986,26 +986,18 @@ export async function postFoundInvoiceToMyob(args: {
   }
   if (result.status >= 400) {
     const firstErr = extractMyobError(result)
-    // Locked period: the invoice is dated inside MYOB's closed period, which
-    // rejects with BusinessEvent_DateOccurred_InLockPeriod (HD Automotive
-    // proformas, 2026-08-10). Re-post ONCE dated today with the original date
-    // preserved in the memo — the alternative is a permanently stuck bill.
+    // Locked period: the invoice is dated inside MYOB's closed period
+    // (BusinessEvent_DateOccurred_InLockPeriod). Deliberately NOT auto-redated
+    // — Chris 2026-08-10: "if in a locked period it's up to the user to unlock
+    // MYOB and re-post". Return a plain-English reason so the Slack card tells
+    // the user exactly what to do; Approve after unlocking re-posts as-is.
     if (/InLockPeriod/i.test(`${firstErr} ${result.raw || ''}`)) {
-      const today = new Date().toISOString().slice(0, 10)
-      const retryBody: any = { ...(body as any), Date: today }
-      retryBody.JournalMemo = `${(body as any).JournalMemo || ''} · orig date ${extracted.invoiceDate || '?'} in locked period, entered ${today}`.slice(0, 255)
-      try {
-        const retry = await myobFetch(conn.id, path, { method: 'POST', body: retryBody, performedBy: args.postedBy })
-        if (retry.status >= 400) {
-          return { posted: false, reason: `MYOB rejected the bill: ${extractMyobError(retry)} (also retried dated ${today} after lock-period rejection)`.slice(0, 300) }
-        }
-        result = retry
-      } catch (e: any) {
-        return { posted: false, reason: `lock-period retry failed: ${(e?.message || String(e)).slice(0, 200)}` }
+      return {
+        posted: false,
+        reason: `invoice is dated ${extracted.invoiceDate || 'unknown'} — inside MYOB's LOCKED period. Unlock the period in MYOB (or get a re-issued invoice dated in the open period), then hit Approve again.`.slice(0, 300),
       }
-    } else {
-      return { posted: false, reason: `MYOB rejected the bill: ${firstErr}`.slice(0, 300) }
     }
+    return { posted: false, reason: `MYOB rejected the bill: ${firstErr}`.slice(0, 300) }
   }
 
   const billUid = extractMyobUid(result)
