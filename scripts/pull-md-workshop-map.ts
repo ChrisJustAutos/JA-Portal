@@ -18,7 +18,8 @@
 //
 // Env: MECHANICDESK_WORKSHOP_ID / _USERNAME / _PASSWORD,
 //      JA_PORTAL_BASE_URL, JA_PORTAL_API_KEY (stocktake:write),
-//      FROM (default 2024-07-01), RUN_ID / REQUESTED_BY (from dispatch).
+//      FROM (default 2025-07-01; FY2025 auto-backfills once when uncached),
+//      RUN_ID / REQUESTED_BY (from dispatch).
 
 import { readFileSync } from 'fs'
 import { join } from 'path'
@@ -39,9 +40,15 @@ if (!PORTAL_TOKEN) throw new Error('JA_PORTAL_API_KEY required')
 
 const REQUESTED_BY = (process.env.REQUESTED_BY || 'scheduled').trim()
 const PRECREATED_RUN_ID = (process.env.RUN_ID || '').trim()
-// Keep everything from FY2025 onward (full refresh, not incremental —
-// widened from FY2026 2026-08-11, Chris: "add in 2025 as well").
-const FROM = (process.env.FROM || '2024-07-01').trim()
+// Nightly window = FY2026 onward (full refresh, not incremental). FY2025 is a
+// closed year: it's backfilled ONCE — when the run sees no FY2025 payload in
+// the cache it widens this pull to BACKFILL_FROM, then every later run stays
+// lean (Chris 2026-08-11: "pulling once from 2025 should be fine"). An
+// explicit FROM env (manual dispatch) always wins and skips the auto-widen.
+const FROM_ENV = (process.env.FROM || '').trim()
+let FROM = FROM_ENV || '2025-07-01'
+const BACKFILL_FROM = '2024-07-01'   // FY2025 start
+const BACKFILL_FY = 2025
 // MD's server is slow (~10-15s per 200-row invoice page) and 504s on fat
 // pages — quote records embed huge vehicle objects, so they page smaller.
 const CONCURRENCY = Math.max(1, Number(process.env.MD_MAP_CONCURRENCY) || 3)
@@ -246,6 +253,22 @@ async function main() {
 
   const started = await ingest({ action: 'start', requested_by: REQUESTED_BY, run_id: PRECREATED_RUN_ID || undefined })
   const runId = started.run_id as string
+
+  // One-time FY2025 backfill: widen the window only while its payload is
+  // missing from the cache. Check failure = stay lean (never accidentally
+  // double the pull on a portal blip).
+  if (!FROM_ENV) {
+    try {
+      const st = await ingest({ action: 'cached_fys' })
+      const fys: number[] = Array.isArray(st?.fys) ? st.fys.map(Number) : []
+      if (!fys.includes(BACKFILL_FY)) {
+        FROM = BACKFILL_FROM
+        log(`FY${BACKFILL_FY} not cached yet — one-time backfill, widening pull to ${FROM}`)
+      }
+    } catch (e: any) {
+      log(`cached_fys check failed (staying lean, from ${FROM}):`, e?.message || e)
+    }
+  }
   log(`run ${runId} started (from ${FROM})`)
 
   try {

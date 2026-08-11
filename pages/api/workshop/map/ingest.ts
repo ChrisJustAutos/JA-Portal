@@ -85,6 +85,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(200).json({ run_id: data.id })
   }
 
+  // Which FYs already have a cached dashboard payload — the worker uses this
+  // to auto-widen its pull window ONCE when a historical FY (e.g. FY2025) is
+  // missing, then stays lean on every later run.
+  if (action === 'cached_fys') {
+    const { data, error } = await db.from('md_workshop_map_cache').select('fy').order('fy')
+    if (error) return res.status(500).json({ error: error.message })
+    return res.status(200).json({ fys: (data || []).map(r => Number(r.fy)) })
+  }
+
   const runId = String(body.run_id || '')
   if (!runId) return res.status(400).json({ error: 'run_id required' })
 
@@ -118,11 +127,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   if (action === 'finish') {
     // Soft-flag rows the full refresh no longer saw (deleted in MD) — the run's
-    // upserts stamped everything it DID see with a fresh last_seen_at.
+    // upserts stamped everything it DID see with a fresh last_seen_at. Scoped
+    // to the run's own pull window (meta.from): a lean nightly run must not
+    // flag one-time-backfilled FY2025 rows it deliberately didn't pull.
     const { data: run } = await db.from('md_workshop_map_runs').select('started_at').eq('id', runId).maybeSingle()
+    const from = String(body.meta?.from || '').trim()
     if (run?.started_at) {
-      await db.from('md_invoices').update({ missing: true }).lt('last_seen_at', run.started_at).eq('missing', false)
-      await db.from('md_quotes').update({ missing: true }).lt('last_seen_at', run.started_at).eq('missing', false)
+      let invQ = db.from('md_invoices').update({ missing: true }).lt('last_seen_at', run.started_at).eq('missing', false)
+      let qQ = db.from('md_quotes').update({ missing: true }).lt('last_seen_at', run.started_at).eq('missing', false)
+      if (/^\d{4}-\d{2}-\d{2}$/.test(from)) { invQ = invQ.gte('issue_date', from); qQ = qQ.gte('quote_date', from) }
+      await invQ
+      await qQ
     }
     const { error } = await db.from('md_workshop_map_runs').update({
       status: 'done',
