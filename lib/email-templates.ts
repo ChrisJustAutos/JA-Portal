@@ -25,6 +25,7 @@ export type TemplateKey =
   | 'distributor_invoice'
   | 'distributor_shipped'
   | 'distributor_dropship_eta'
+  | 'distributor_freight_update'
 
 export interface TemplateVar { token: string; desc: string }
 export interface TemplateDef {
@@ -115,6 +116,20 @@ These ship to you direct from the supplier, separately from anything we send fro
 
 Just Autos`,
     variables: [v('distributor_name', 'Distributor'), v('order_number', 'Order number'), v('customer_po', 'Their PO (or blank)'), v('supplier_name', 'Supplier'), v('eta_line', 'Expected dispatch sentence (or blank)'), v('lines_table', 'Drop-ship item table (block)')],
+  },
+  distributor_freight_update: {
+    label: 'Freight status update', direction: 'Distributor',
+    description: 'Sent to the distributor when the carrier reports a new shipment status (in transit, out for delivery, delivered …) — fed by the live MachShip status poll.',
+    defaultSubject: 'Order {{order_number}} — {{status_label}}',
+    defaultBody:
+`Hi {{distributor_name}},
+
+A shipping update on your order {{order_number}}: it is now {{status_label}}.{{eta_line}}
+
+{{tracking_line}}
+
+Just Autos`,
+    variables: [v('distributor_name', 'Distributor'), v('order_number', 'Order number'), v('status_label', 'Carrier status, e.g. In transit'), v('eta_line', 'ETA sentence (or blank)'), v('tracking_line', 'Tracking number / link (block)')],
   },
   distributor_invoice: {
     label: 'Tax invoice / receipt', direction: 'Distributor',

@@ -39,7 +39,7 @@ const TERMINAL_CANCELLED = new Set(['cancelled', 'returned'])
 export async function refreshOrderFreight(c: SupabaseClient, orderId: string): Promise<RefreshResult> {
   const { data: order, error: oErr } = await c
     .from('b2b_orders')
-    .select('id, status, machship_consignment_id, freight_status, delivered_at')
+    .select('id, status, machship_consignment_id, freight_status, delivered_at, tracking_number')
     .eq('id', orderId)
     .maybeSingle()
   if (oErr)   return { ok: false, status: 500, error: oErr.message }
@@ -93,6 +93,25 @@ export async function refreshOrderFreight(c: SupabaseClient, orderId: string): P
 
   const { error: uErr } = await c.from('b2b_orders').update(update).eq('id', orderId)
   if (uErr) return { ok: false, status: 500, error: `Persist failed: ${uErr.message}` }
+
+  // Live shipping updates to the distributor: one email + bell/push per
+  // genuine carrier-status TRANSITION (the persisted freight_status is the
+  // dedupe — both the 30-min cron and the manual refresh button land here,
+  // but only the first poll that sees a new status fires). Pre-carrier
+  // statuses stay quiet; the "shipped" email already covers booking.
+  const QUIET = new Set(['', 'unmanifested', 'manifested', 'pending_manifest'])
+  if (!QUIET.has(statusName) && statusName !== (order.freight_status || '')) {
+    try {
+      const { sendDistributorFreightUpdateEmail } = await import('./b2b-order-notify')
+      await sendDistributorFreightUpdateEmail(orderId, {
+        statusName,
+        etaIso: update.freight_eta_at,
+        trackingNumber: update.tracking_number ?? order.tracking_number ?? null,
+      })
+    } catch (e: any) {
+      console.error(`freight-update notify failed for ${orderId} (non-fatal):`, e?.message || e)
+    }
+  }
 
   return {
     ok: true,

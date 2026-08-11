@@ -145,6 +145,53 @@ export async function sendDistributorDropshipEtaEmail(orderId: string, info: { s
   return { ok: true }
 }
 
+// Live carrier status change (from the 30-min MachShip poll / manual refresh)
+// → email + bell/push the distributor (Chris 2026-08-11: "send live shipping
+// updates now that the live carrier status is hooked up"). One send per
+// STATUS TRANSITION — the caller only fires when the status actually changed.
+export async function sendDistributorFreightUpdateEmail(orderId: string, info: { statusName: string; etaIso?: string | null; trackingNumber?: string | null }): Promise<{ ok: boolean; reason?: string }> {
+  const c = svc()
+  const { data: order } = await c.from('b2b_orders').select(`
+      id, order_number, is_test, distributor_id,
+      distributor:b2b_distributors!b2b_orders_distributor_id_fkey ( display_name, primary_contact_email )
+    `).eq('id', orderId).maybeSingle()
+  if (!order) return { ok: false, reason: 'order not found' }
+  const dist: any = Array.isArray(order.distributor) ? order.distributor[0] : order.distributor
+
+  // "out_for_delivery" → "Out for delivery"
+  const statusLabel = info.statusName.replace(/_/g, ' ').replace(/^\w/, ch => ch.toUpperCase())
+  let etaLine = ''
+  if (info.etaIso) {
+    const d = new Date(info.etaIso)
+    if (!Number.isNaN(d.getTime())) {
+      etaLine = ` Estimated delivery: ${d.toLocaleDateString('en-AU', { weekday: 'long', day: 'numeric', month: 'long', timeZone: 'Australia/Brisbane' })}.`
+    }
+  }
+  const trackingLine = info.trackingNumber ? `<p>Tracking number: <strong>${esc(info.trackingNumber)}</strong></p>` : ''
+
+  // Bell + web push for every portal user at the distributor (best-effort).
+  try {
+    const { notifyDistributor } = await import('./push')
+    await notifyDistributor(order.distributor_id, {
+      title: `Order ${order.order_number} — ${statusLabel}`,
+      body: `${etaLine.trim() || 'Shipping update from the carrier.'}${info.trackingNumber ? ` Tracking ${info.trackingNumber}.` : ''}`.trim(),
+      href: `/b2b/orders/${order.id}`,
+      tag: `freight:${order.id}`,
+    })
+  } catch (e: any) { console.error('freight-update bell/push failed:', e?.message) }
+
+  const to = (dist?.primary_contact_email || '').trim()
+  if (!to) return { ok: false, reason: 'distributor has no primary contact email' }
+  const r = await renderEmail('distributor_freight_update', {
+    distributor_name: dist?.display_name || '', order_number: order.order_number,
+    status_label: statusLabel, eta_line: etaLine,
+  }, { tracking_line: trackingLine })
+  if (!r.enabled) return { ok: false, reason: 'template disabled' }
+  const subj = (order as any).is_test ? `[TEST — please ignore] ${r.subject}` : r.subject
+  await sendMail(await getFromMailbox(), { to: [to], subject: subj, html: r.html })
+  return { ok: true }
+}
+
 // ── Distributor-facing emails ─────────────────────────────────────────
 // Sent on PAYMENT: the order confirmation ONLY (to the primary contact). The
 // tax INVOICE is intentionally NOT sent here — it goes out on shipment, once
