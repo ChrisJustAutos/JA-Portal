@@ -130,61 +130,10 @@ export default function TuneJobsAdmin({ user }: { user: any }) {
     return d
   }
 
-  const [backfillProgress, setBackfillProgress] = useState('')
-  // Month-by-month backfill: the mailbox read is capped at the newest ~500
-  // messages per window, and the Payments folder holds far more than tune
-  // receipts — a single since-January window can never reach past that
-  // horizon. Explicit month windows guarantee full coverage; within each
-  // month, passes repeat (15 new jobs each) until the month is drained.
-  async function backfillSinceJan() {
-    setBusy('backfill')
-    let total = 0, matched = 0
-    const now = new Date()
-    const months: Array<{ label: string; since: string; until: string }> = []
-    for (let m = 0; ; m++) {
-      const start = new Date(Date.UTC(2026, m, 1))
-      if (start.getTime() > now.getTime()) break
-      const end = new Date(Date.UTC(2026, m + 1, 1))
-      months.push({ label: start.toLocaleDateString('en-AU', { month: 'short', year: 'numeric', timeZone: 'UTC' }), since: start.toISOString(), until: end.toISOString() })
-    }
-    try {
-      for (const mo of months) {
-        for (let pass = 0; pass < 15; pass++) {
-          setBackfillProgress(`${mo.label} — ${total} jobs so far`)
-          const d = await post({ action: 'ingest_now', since: mo.since, until: mo.until })
-          total += d.created ?? 0
-          matched += d.matched ?? 0
-          if (!(d.created > 0)) break
-        }
-        await load().catch(() => {})
-      }
-      toast(`Backfill complete — ${total} tune job${total === 1 ? '' : 's'} ingested since 1 Jan (${matched} auto-matched).`, 'success')
-    } catch (e: any) {
-      toast(`Backfill stopped after ${total} jobs: ${e.message || e}`, 'error')
-    }
-    setBackfillProgress('')
-    await load().catch(() => {})
-    setBusy('')
-  }
-
-  async function scanNow() {
-    setBusy('scan')
-    try {
-      const d = await post({ action: 'ingest_now', lookback_days: 14 })
-      const errs = Array.isArray(d.errors) ? d.errors.length : 0
-      toast(
-        `Scanned ${d.scanned ?? 0} email${d.scanned === 1 ? '' : 's'} — ${d.created ?? 0} new, ${d.matched ?? 0} matched, ${d.skipped ?? 0} skipped${errs ? `, ${errs} error${errs === 1 ? '' : 's'}` : ''}.`,
-        errs ? 'error' : 'success',
-      )
-      await load()
-    } catch (e: any) {
-      toast(e.message || 'Scan failed', 'error')
-      // Jobs created before a timeout are real — show whatever landed.
-      await load().catch(() => {})
-    }
-    setBusy('')
-  }
-
+  // "Backfill since 1 Jan" + "Scan inbox now" buttons removed 2026-08-11
+  // (Chris: not needed) — the backfill was the one-time historical import and
+  // the hourly cron scans the inbox; the ingest_now API action remains for
+  // emergencies.
   async function remindNow() {
     setBusy('remind')
     try {
@@ -287,14 +236,6 @@ export default function TuneJobsAdmin({ user }: { user: any }) {
                 {busy === 'deltest' ? 'Deleting…' : '🗑 Delete test jobs'}
               </button>
             )}
-            <button onClick={backfillSinceJan} disabled={busy !== ''}
-              style={{ padding: '7px 14px', borderRadius: 6, border: `1px solid ${T.border}`, background: T.bg3, color: T.text2, fontSize: 12, cursor: 'pointer', fontFamily: 'inherit' }}>
-              {busy === 'backfill' ? `Backfilling… ${backfillProgress}` : 'Backfill since 1 Jan'}
-            </button>
-            <button onClick={scanNow} disabled={busy === 'scan'}
-              style={{ ...btn, border: `1px solid ${T.blue}`, background: T.blue, color: '#fff', opacity: busy === 'scan' ? 0.6 : 1 }}>
-              {busy === 'scan' ? 'Scanning…' : 'Scan inbox now'}
-            </button>
             <button onClick={remindNow} disabled={busy === 'remind'} style={{ ...btn, opacity: busy === 'remind' ? 0.6 : 1 }}>
               {busy === 'remind' ? 'Sending…' : 'Send reminders now'}
             </button>
@@ -361,7 +302,7 @@ export default function TuneJobsAdmin({ user }: { user: any }) {
           {loading && <div style={{ color: T.text3, textAlign: 'center', padding: 30 }}>Loading…</div>}
           {!loading && visible.length === 0 && !error && (
             <div style={{ color: T.text3, textAlign: 'center', padding: 30, fontStyle: 'italic' }}>
-              {filter === 'all' ? 'No tune jobs yet — “Scan inbox now” pulls in recent receipts.' : 'Nothing with this status.'}
+              {filter === 'all' ? 'No tune jobs yet — the hourly inbox scan pulls in new receipts.' : 'Nothing with this status.'}
             </div>
           )}
 
