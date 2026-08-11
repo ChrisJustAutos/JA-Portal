@@ -20,7 +20,7 @@ on:
   workflow_dispatch:
     inputs:
       from:
-        description: 'Pull from date (YYYY-MM-DD) — default 2025-07-01'
+        description: 'Pull from date (YYYY-MM-DD) — default 2024-07-01 (FY2025+)'
         required: false
   schedule:
     - cron: '30 17 * * *'

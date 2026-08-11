@@ -18,7 +18,7 @@
 //
 // Env: MECHANICDESK_WORKSHOP_ID / _USERNAME / _PASSWORD,
 //      JA_PORTAL_BASE_URL, JA_PORTAL_API_KEY (stocktake:write),
-//      FROM (default 2025-07-01), RUN_ID / REQUESTED_BY (from dispatch).
+//      FROM (default 2024-07-01), RUN_ID / REQUESTED_BY (from dispatch).
 
 import { readFileSync } from 'fs'
 import { join } from 'path'
@@ -39,8 +39,9 @@ if (!PORTAL_TOKEN) throw new Error('JA_PORTAL_API_KEY required')
 
 const REQUESTED_BY = (process.env.REQUESTED_BY || 'scheduled').trim()
 const PRECREATED_RUN_ID = (process.env.RUN_ID || '').trim()
-// Keep everything from FY2026 onward (full refresh, not incremental).
-const FROM = (process.env.FROM || '2025-07-01').trim()
+// Keep everything from FY2025 onward (full refresh, not incremental —
+// widened from FY2026 2026-08-11, Chris: "add in 2025 as well").
+const FROM = (process.env.FROM || '2024-07-01').trim()
 // MD's server is slow (~10-15s per 200-row invoice page) and 504s on fat
 // pages — quote records embed huge vehicle objects, so they page smaller.
 const CONCURRENCY = Math.max(1, Number(process.env.MD_MAP_CONCURRENCY) || 3)
@@ -426,7 +427,7 @@ async function main() {
     }
 
     // Only persist rows from FROM onward (we page full history for the series
-    // maps, but the dashboard + fact tables only cover FY2026+).
+    // maps, but the dashboard + fact tables only cover FY2025+).
     const invoices = invoicesRaw.filter(r => r.issueYmd && r.issueYmd >= FROM).map(toInvoiceRow)
     const quotes = quotesRaw.filter(r => r.issueYmd && r.issueYmd >= FROM).map(toQuoteRow)
 
@@ -480,7 +481,7 @@ async function main() {
     }
 
     // ── Build + upload per-FY payloads (point `i` = human invoice/quote #) ─
-    const fys = [...new Set([...invoices, ...quotes].map(r => r.fy).filter((f): f is number => f != null && f >= 2026))].sort()
+    const fys = [...new Set([...invoices, ...quotes].map(r => r.fy).filter((f): f is number => f != null && f >= 2025))].sort()
     const withDisplay = (rows: any[], key: string) => rows.map(r => ({ ...r, [key]: r.displayNumber || r[key] }))
     const fySummaries: Record<string, any> = {}
     for (const fy of fys) {
