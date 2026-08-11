@@ -932,6 +932,74 @@ function ShippingCard({ order, onEdit, onReloaded, onFlash }: {
   const [laterOpen,    setLaterOpen]    = useState(false) // mobile "book later" sheet
   const [laterTime,    setLaterTime]    = useState('')
 
+  // Combine consignments — manual pack plan editor. Loads the effective plan
+  // (saved override or a fresh cartonizer run), lets admin tick 2+ consignments
+  // and merge them into one box; booking + the pick list then use the saved
+  // plan verbatim (e.g. oil + sump in one box to save a consignment).
+  type PlanUnit = { itemType: string; name: string; ownPackaging?: boolean; quantity: number; weight_g: number; length_mm: number; width_mm: number; height_mm: number; contents?: { sku: string; name: string; qty: number }[] }
+  const [planOpen,       setPlanOpen]       = useState(false)
+  const [planBusy,       setPlanBusy]       = useState(false)
+  const [planUnits,      setPlanUnits]      = useState<PlanUnit[] | null>(null)
+  const [planOverridden, setPlanOverridden] = useState(false)
+  const [planBoxes,      setPlanBoxes]      = useState<{ name: string; length_mm: number; width_mm: number; height_mm: number; max_weight_g: number }[]>([])
+  const [planSel,        setPlanSel]        = useState<number[]>([])
+  const [planBox,        setPlanBox]        = useState('')
+
+  async function loadPlan() {
+    setPlanBusy(true); setActionError(null)
+    try {
+      const r = await fetch(`/api/b2b/admin/orders/${order.id}/pack-plan`, { credentials: 'same-origin' })
+      const j = await r.json()
+      if (!r.ok) throw new Error(j?.error || `HTTP ${r.status}`)
+      setPlanUnits(j.units || []); setPlanOverridden(!!j.overridden); setPlanBoxes(j.boxes || []); setPlanSel([])
+      // Default the target box to the largest configured one — combining is
+      // usually "put these in the big box".
+      const bs = (j.boxes || []) as any[]
+      if (bs.length > 0) setPlanBox(bs.reduce((a, b) => (a.length_mm * a.width_mm * a.height_mm >= b.length_mm * b.width_mm * b.height_mm ? a : b)).name)
+    } catch (e: any) {
+      setActionError(e?.message || String(e))
+    } finally {
+      setPlanBusy(false)
+    }
+  }
+
+  async function combinePlan() {
+    if (planBusy || planSel.length < 2) return
+    setPlanBusy(true); setActionError(null)
+    try {
+      const r = await fetch(`/api/b2b/admin/orders/${order.id}/pack-plan`, {
+        method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'combine', indexes: planSel, box: planBox || undefined }),
+      })
+      const j = await r.json()
+      if (!r.ok) throw new Error(j?.error || `HTTP ${r.status}`)
+      if (j.warning) toast(j.warning, 'error')
+      onFlash('Consignments combined — reprint the pick list so the warehouse packs the new plan')
+      await loadPlan()
+    } catch (e: any) {
+      setActionError(e?.message || String(e))
+      setPlanBusy(false)
+    }
+  }
+
+  async function resetPlan() {
+    if (planBusy) return
+    if (!(await confirmDialog({ title: 'Reset to automatic packing?', message: 'Removes the manual consignment plan — booking and the pick list go back to the cartonizer’s plan.' }))) return
+    setPlanBusy(true); setActionError(null)
+    try {
+      const r = await fetch(`/api/b2b/admin/orders/${order.id}/pack-plan`, {
+        method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'reset' }),
+      })
+      const j = await r.json()
+      if (!r.ok) throw new Error(j?.error || `HTTP ${r.status}`)
+      await loadPlan()
+    } catch (e: any) {
+      setActionError(e?.message || String(e))
+      setPlanBusy(false)
+    }
+  }
+
   async function openLabel() {
     try {
       const r = await fetch(`/api/b2b/admin/orders/${order.id}/label`)
@@ -1087,6 +1155,77 @@ function ShippingCard({ order, onEdit, onReloaded, onFlash }: {
             <option value="pallet">Pallet</option>
           </select>
           {!isMobile && <span style={{fontSize:10, color:T.text3}}>used when you book below</span>}
+        </div>
+      )}
+
+      {/* Combine consignments — manual pack plan. Tick 2+ consignments, pick
+          the box they'll share, Combine. Booking + pick list use the plan. */}
+      {hasLiveQuote && !hasConsignment && (
+        <div style={{marginBottom:10}}>
+          <button onClick={() => { const v = !planOpen; setPlanOpen(v); if (v && planUnits === null) loadPlan() }}
+            style={{background:'none', border:'none', padding:0, color:T.blue, fontSize:12, cursor:'pointer', fontFamily:'inherit'}}>
+            {planOpen ? '▾' : '▸'} Combine consignments{planOverridden ? ' — manual plan set' : ''}
+          </button>
+          {planOpen && (
+            <div style={{marginTop:8, border:`1px solid ${T.border2}`, borderRadius:6, padding:10, background:T.bg3}}>
+              {planBusy && planUnits === null && <div style={{fontSize:12, color:T.text3}}>Loading pack plan…</div>}
+              {planUnits !== null && (
+                <>
+                  <div style={{fontSize:11, color:T.text3, marginBottom:8, lineHeight:1.5}}>
+                    {planOverridden
+                      ? 'Manual plan — freight books and the pick list print exactly these consignments.'
+                      : 'Automatic plan (what the cartonizer will book). Tick the consignments to merge into one box — e.g. oil + sump together to save a consignment.'}
+                  </div>
+                  {(() => { let n = 0; return planUnits.map((u, i) => {
+                    const qty = Math.max(1, u.quantity)
+                    const first = n + 1; n += qty
+                    const label = qty > 1 ? `${first}-${n}` : String(first)
+                    const selectable = qty === 1
+                    const checked = planSel.includes(i)
+                    return (
+                      <label key={i} style={{display:'flex', alignItems:'flex-start', gap:8, padding:'6px 4px', borderTop: i > 0 ? `1px dashed ${T.border}` : 'none', cursor: selectable ? 'pointer' : 'default', opacity: selectable ? 1 : 0.6}}>
+                        <input type="checkbox" disabled={!selectable} checked={checked}
+                          onChange={() => setPlanSel(s => checked ? s.filter(x => x !== i) : [...s, i])}
+                          style={{marginTop:2, accentColor:T.teal}}/>
+                        <span style={{fontSize:12, lineHeight:1.5}}>
+                          <span style={{fontWeight:600}}>Consignment {label}</span>
+                          <span style={{color:T.text3}}> — {u.itemType === 'Pallet' ? 'Pallet' : (u.ownPackaging ? 'own packaging' : u.name)} · {Math.round(u.length_mm)}×{Math.round(u.width_mm)}×{Math.round(u.height_mm)} mm · {((u.weight_g * qty) / 1000).toFixed(1)} kg</span>
+                          {(u.contents || []).length > 0 && (
+                            <span style={{display:'block', fontSize:11, color:T.text2}}>
+                              {(u.contents || []).map(cl => `${cl.qty}× ${cl.name}`).join(' · ')}
+                            </span>
+                          )}
+                        </span>
+                      </label>
+                    )
+                  }) })()}
+                  <div style={{display:'flex', alignItems:'center', gap:8, marginTop:10, flexWrap:'wrap'}}>
+                    <span style={{fontSize:11, color:T.text3}}>into</span>
+                    <select value={planBox} onChange={e => setPlanBox(e.target.value)}
+                      style={{background:T.bg2, border:`1px solid ${T.border2}`, color:T.text, borderRadius:5, padding:'5px 8px', fontSize:12, outline:'none', fontFamily:'inherit'}}>
+                      {planBoxes.map(b => (
+                        <option key={b.name} value={b.name}>{b.name} ({Math.round(b.length_mm)}×{Math.round(b.width_mm)}×{Math.round(b.height_mm)} mm, max {(b.max_weight_g / 1000).toFixed(0)} kg)</option>
+                      ))}
+                      <option value="">One parcel, own packaging (no standard box)</option>
+                    </select>
+                    <button onClick={combinePlan} disabled={planBusy || planSel.length < 2}
+                      style={{border:'none', borderRadius:5, padding:'6px 12px', fontSize:12, fontWeight:600, fontFamily:'inherit', background: planSel.length >= 2 && !planBusy ? T.teal : T.bg4, color: planSel.length >= 2 && !planBusy ? '#08110d' : T.text3, cursor: planSel.length >= 2 && !planBusy ? 'pointer' : 'not-allowed'}}>
+                      {planBusy ? 'Saving…' : `Combine${planSel.length >= 2 ? ` ${planSel.length}` : ''}`}
+                    </button>
+                    {planOverridden && (
+                      <button onClick={resetPlan} disabled={planBusy}
+                        style={{background:'none', border:'none', color:T.text3, fontSize:11, cursor:'pointer', fontFamily:'inherit', textDecoration:'underline'}}>
+                        Reset to automatic
+                      </button>
+                    )}
+                  </div>
+                  {planOverridden && (
+                    <div style={{fontSize:10, color:T.amber, marginTop:8}}>Reprint the pick list after changing the plan so the warehouse packs it the same way.</div>
+                  )}
+                </>
+              )}
+            </div>
+          )}
         </div>
       )}
 

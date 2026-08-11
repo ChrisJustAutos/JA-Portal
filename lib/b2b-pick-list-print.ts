@@ -17,7 +17,7 @@
 // retries / the admin mark-paid shortcut never double-print.
 
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
-import { packOrderUnits, type PackForMachShipItem } from './b2b-freight'
+import { packOrderUnits, parsePackPlanUnits, type PackForMachShipItem } from './b2b-freight'
 import type { PackMode } from './b2b-cartonizer'
 import { renderPickListPdf, type PickListBox, type PickListData, type PickListDropShipGroup, type PickListLine } from './b2b-pick-list'
 
@@ -60,7 +60,7 @@ export async function queuePickListPrint(orderId: string, opts: { force?: boolea
   // ── Load order + distributor + lines ───────────────────────────────────
   const { data: order, error: oErr } = await c.from('b2b_orders').select(`
       id, order_number, status, customer_po, distributor_id, is_test,
-      shipping_address_snapshot, freight_pack_mode, created_at, paid_at
+      shipping_address_snapshot, freight_pack_mode, freight_pack_plan, created_at, paid_at
     `).eq('id', orderId).maybeSingle()
   if (oErr) return { status: 'failed', reason: oErr.message }
   if (!order) return { status: 'failed', reason: 'Order not found' }
@@ -122,7 +122,12 @@ export async function queuePickListPrint(orderId: string, opts: { force?: boolea
   // ── Box plan — SAME cartonizer + pack-mode precedence as booking ───────
   const validMode = (m: any): PackMode | undefined => (m === 'pallet' || m === 'cartons' || m === 'auto') ? m : undefined
   const packMode = validMode((order as any).freight_pack_mode)
-  const packed = packInput.length > 0 ? await packOrderUnits(packInput, { packMode }) : null
+  // Manual consignment plan (admin combined boxes) wins over the cartonizer —
+  // must match what book-freight sends to MachShip.
+  const planUnits = parsePackPlanUnits((order as any).freight_pack_plan)
+  const packed = planUnits
+    ? { units: planUnits, mode: 'cartons' as const, totalWeightG: planUnits.reduce((s, u) => s + u.weight_g * Math.max(1, u.quantity), 0) }
+    : (packInput.length > 0 ? await packOrderUnits(packInput, { packMode }) : null)
 
   // Attach bundle components to a packed content line: the child's share of
   // this box = childQty × (in-box parent qty / parent's total order qty).
@@ -206,7 +211,9 @@ export async function queuePickListPrint(orderId: string, opts: { force?: boolea
     customerPo: order.customer_po || null,
     isTest: (order as any).is_test === true,
     shipToLines,
-    packModeNote: packed
+    packModeNote: planUnits
+      ? 'Pack plan: manually adjusted (consignments combined by admin) - matches the freight booking'
+      : packed
       ? `Pack plan: ${packed.mode}${packMode ? ` (${packMode} mode set on order)` : ''} - matches the freight quote`
       : (boxes.length > 0 ? 'No standard boxes configured - one box per unit at item dimensions' : null),
     boxes,

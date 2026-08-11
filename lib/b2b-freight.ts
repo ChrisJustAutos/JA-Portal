@@ -22,7 +22,7 @@ import {
   type RouteOption,
   type MachShipItem,
 } from './b2b-machship'
-import { packItems, type FreightBox, type PalletSpec, type PackMode, type PackResult } from './b2b-cartonizer'
+import { packItems, type FreightBox, type PalletSpec, type PackMode, type PackResult, type PackedUnit } from './b2b-cartonizer'
 
 let _sb: SupabaseClient | null = null
 function sb(): SupabaseClient {
@@ -290,11 +290,47 @@ export async function packOrderUnits(
   )
 }
 
+// Validate a stored freight_pack_plan (jsonb from b2b_orders) back into
+// PackedUnits. The plan is the admin's manual override from the "Combine
+// consignments" tool — one entry per physical consignment, quantity 1 each.
+// Returns null on anything malformed so callers fall back to auto packing.
+export function parsePackPlanUnits(raw: any): PackedUnit[] | null {
+  if (!Array.isArray(raw) || raw.length === 0) return null
+  const units: PackedUnit[] = []
+  for (const u of raw) {
+    const w = Number(u?.weight_g), l = Number(u?.length_mm), wd = Number(u?.width_mm), h = Number(u?.height_mm)
+    if (!u || typeof u.name !== 'string' || !(w > 0) || !(l > 0) || !(wd > 0) || !(h > 0)) return null
+    units.push({
+      itemType: u.itemType === 'Pallet' ? 'Pallet' : 'Carton',
+      name: u.name, ownPackaging: u.ownPackaging === true,
+      quantity: Math.max(1, Math.floor(Number(u.quantity) || 1)),
+      weight_g: w, length_mm: l, width_mm: wd, height_mm: h,
+      contents: Array.isArray(u.contents)
+        ? u.contents.map((cl: any) => ({ sku: String(cl?.sku ?? ''), name: String(cl?.name ?? ''), qty: Number(cl?.qty) || 0 }))
+        : undefined,
+    })
+  }
+  return units
+}
+
 export async function packForMachShip(
   items: PackForMachShipItem[],
-  opts: { packMode?: PackMode } = {},
+  opts: { packMode?: PackMode; planUnits?: PackedUnit[] | null } = {},
 ): Promise<MachShipItem[]> {
   const anyManualHandling = items.some(i => i.manual_handling)
+  // Manual consignment plan (admin combined boxes) wins over the cartonizer.
+  if (opts.planUnits && opts.planUnits.length > 0) {
+    return opts.planUnits.map(u => ({
+      itemType: u.itemType as any,
+      name:     u.name,
+      quantity: u.quantity,
+      weight:   round3(u.weight_g / 1000),
+      length:   round1(u.length_mm / 10),
+      width:    round1(u.width_mm / 10),
+      height:   round1(u.height_mm / 10),
+      ...(anyManualHandling ? { manualHandling: true } : {}),
+    }))
+  }
   const packed = await packOrderUnits(items, opts)
   if (packed) {
     return packed.units.map(u => ({

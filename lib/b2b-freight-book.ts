@@ -10,7 +10,7 @@
 
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
 import { createConsignment, manifestConsignments, getLabelPdfBase64, MachShipApiError, MachShipNotConfiguredError, type CreateConsignmentRequest } from './b2b-machship'
-import { packForMachShip, type PackForMachShipItem } from './b2b-freight'
+import { packForMachShip, parsePackPlanUnits, type PackForMachShipItem } from './b2b-freight'
 import { sendDistributorShippedEmail } from './b2b-order-notify'
 
 const LABELS_BUCKET = 'b2b-shipping-labels'
@@ -41,6 +41,43 @@ export interface BookFreightResult {
   label_warning?: string | null
 }
 
+// The freightable line items of an order as cartonizer input: skips bundle
+// component lines (ship inside the parent's box) and drop-ship lines (ship
+// direct from the supplier), and errors when any remaining line is missing
+// catalogue freight dims. Shared by booking and the pack-plan (Combine
+// consignments) API so both see the identical item set.
+export async function loadOrderPackInput(c: SupabaseClient, orderId: string): Promise<
+  { packInput: PackForMachShipItem[] } | { httpStatus: number; error: string; detail?: any }
+> {
+  const { data: lineRows, error: lErr } = await c.from('b2b_order_lines').select(`
+      qty, sku, name, catalogue_id, bundle_parent_catalogue_id, is_drop_ship,
+      catalogue:b2b_catalogue!b2b_order_lines_catalogue_id_fkey (
+        freight_weight_g, freight_length_mm, freight_width_mm, freight_height_mm, freight_packaging, manual_handling
+      )`).eq('order_id', orderId)
+  if (lErr) return { httpStatus: 500, error: lErr.message }
+  if (!lineRows || lineRows.length === 0) return { httpStatus: 400, error: 'Order has no lines to ship.' }
+  const packInput: PackForMachShipItem[] = []
+  const missing: string[] = []
+  for (const r of lineRows as any[]) {
+    // Bundle component lines ship inside the parent's box — they carry no
+    // freight of their own and must never add a phantom parcel here.
+    if (r.bundle_parent_catalogue_id) continue
+    // Supplier-shipped lines (catalogue drop-ship or over-limit drop-ship)
+    // aren't in the carrier consignment — they ship direct from the supplier.
+    if (r.is_drop_ship === true) continue
+    const cat = Array.isArray(r.catalogue) ? r.catalogue[0] : r.catalogue
+    const wg = cat?.freight_weight_g, lmm = cat?.freight_length_mm, wmm = cat?.freight_width_mm, hmm = cat?.freight_height_mm
+    if (!wg || !lmm || !wmm || !hmm) { missing.push(`${r.sku} — ${r.name}`); continue }
+    packInput.push({
+      sku: r.sku || '', name: String(r.name || r.sku), qty: Number(r.qty),
+      weight_g: Number(wg), length_mm: Number(lmm), width_mm: Number(wmm), height_mm: Number(hmm),
+      packaging: cat?.freight_packaging ?? null, manual_handling: cat?.manual_handling === true,
+    })
+  }
+  if (missing.length > 0) return { httpStatus: 400, error: 'Some line items are missing freight dimensions — fix the catalogue before booking.', detail: missing }
+  return { packInput }
+}
+
 export async function bookFreightForOrder(orderId: string, opts: { actorId?: string | null; force?: boolean; acceptUnsettled?: boolean; dispatchAt?: string | Date | null; packMode?: 'auto' | 'pallet' | 'cartons' } = {}): Promise<BookFreightResult> {
   const c = svc()
   const fail = (httpStatus: number, error: string, detail?: any): BookFreightResult => ({ ok: false, httpStatus, error, detail })
@@ -49,7 +86,7 @@ export async function bookFreightForOrder(orderId: string, opts: { actorId?: str
       id, order_number, status, customer_po, distributor_id, shipping_address_snapshot,
       machship_consignment_id, machship_consignment_number, dropship_pos,
       freight_chosen_quote, machship_carrier_id, machship_carrier_service_id, freight_service_label, freight_pack_mode,
-      payment_method, payment_settled_at
+      freight_pack_plan, payment_method, payment_settled_at
     `).eq('id', orderId).maybeSingle()
   if (oErr) return fail(500, oErr.message)
   if (!order) return fail(404, 'Order not found')
@@ -122,38 +159,17 @@ export async function bookFreightForOrder(orderId: string, opts: { actorId?: str
   if (!recvSuburb || !recvPost) return fail(400, 'Receiver address missing suburb/postcode — fix the order address before booking.')
   if (!recvName) return fail(400, 'Receiver has no name or company on file — set the distributor display name before booking.')
 
-  const { data: lineRows, error: lErr } = await c.from('b2b_order_lines').select(`
-      qty, sku, name, catalogue_id, bundle_parent_catalogue_id, is_drop_ship,
-      catalogue:b2b_catalogue!b2b_order_lines_catalogue_id_fkey (
-        freight_weight_g, freight_length_mm, freight_width_mm, freight_height_mm, freight_packaging, manual_handling
-      )`).eq('order_id', orderId)
-  if (lErr) return fail(500, lErr.message)
-  if (!lineRows || lineRows.length === 0) return fail(400, 'Order has no lines to ship.')
-  const packInput: PackForMachShipItem[] = []
-  const missing: string[] = []
-  for (const r of lineRows as any[]) {
-    // Bundle component lines ship inside the parent's box — they carry no
-    // freight of their own and must never add a phantom parcel here.
-    if (r.bundle_parent_catalogue_id) continue
-    // Supplier-shipped lines (catalogue drop-ship or over-limit drop-ship)
-    // aren't in the carrier consignment — they ship direct from the supplier.
-    if (r.is_drop_ship === true) continue
-    const cat = Array.isArray(r.catalogue) ? r.catalogue[0] : r.catalogue
-    const wg = cat?.freight_weight_g, lmm = cat?.freight_length_mm, wmm = cat?.freight_width_mm, hmm = cat?.freight_height_mm
-    if (!wg || !lmm || !wmm || !hmm) { missing.push(`${r.sku} — ${r.name}`); continue }
-    packInput.push({
-      sku: r.sku || '', name: String(r.name || r.sku), qty: Number(r.qty),
-      weight_g: Number(wg), length_mm: Number(lmm), width_mm: Number(wmm), height_mm: Number(hmm),
-      packaging: cat?.freight_packaging ?? null, manual_handling: cat?.manual_handling === true,
-    })
-  }
-  if (missing.length > 0) return fail(400, 'Some line items are missing freight dimensions — fix the catalogue before booking.', missing)
-  // Cartonize the same way the quote did, so the booked consignment matches.
+  const loaded = await loadOrderPackInput(c, orderId)
+  if ('error' in loaded) return fail(loaded.httpStatus, loaded.error, loaded.detail)
+  const packInput = loaded.packInput
+  // Cartonize the same way the quote did, so the booked consignment matches —
+  // unless the admin saved a manual plan (Combine consignments), which wins.
   // packMode precedence: explicit opt → the order's stored override → auto.
   const validMode = (m: any): 'auto' | 'pallet' | 'cartons' | undefined =>
     (m === 'pallet' || m === 'cartons' || m === 'auto') ? m : undefined
   const effPackMode = validMode(opts.packMode) || validMode((order as any).freight_pack_mode)
-  const items: CreateConsignmentRequest['items'] = await packForMachShip(packInput, { packMode: effPackMode })
+  const planUnits = parsePackPlanUnits((order as any).freight_pack_plan)
+  const items: CreateConsignmentRequest['items'] = await packForMachShip(packInput, { packMode: effPackMode, planUnits })
 
   const reference = order.order_number + (order.customer_po ? ` / ${order.customer_po}` : '')
   const chosen: any = order.freight_chosen_quote || {}
