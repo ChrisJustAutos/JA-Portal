@@ -66,7 +66,8 @@ const FILTERS: Array<{ id: Filter; label: string }> = [
   { id: 'submitted', label: 'Submitted' },
   { id: 'synced', label: 'Synced' },
   { id: 'dismissed', label: 'Dismissed' },
-  { id: 'merged', label: 'Merged' },
+  // no 'merged' chip: merged receipt rows are folded into their primary job
+  // and the API no longer returns them — one tune shows as ONE job.
 ]
 
 const STATUS_COLOR: Record<JobStatus, string> = {
@@ -203,39 +204,9 @@ export default function TuneJobsAdmin({ user }: { user: any }) {
         <B2BAdminTabs active="tune_jobs" />
         <div style={{ flex: 1, overflowY: 'auto', padding: 20, display: 'flex', flexDirection: 'column', gap: 14, maxWidth: 1400 }}>
 
-          {/* Toolbar */}
+          {/* Toolbar — test-job create/delete buttons removed 2026-08-11
+              (Chris: not needed); the API actions remain for emergencies. */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-            <button
-              onClick={async () => {
-                setBusy('testjob')
-                try {
-                  const d = await post({ action: 'create_test_job' })
-                  await navigator.clipboard.writeText(d.url)
-                  toast('Test job created — fill link copied. Enter made-up customer details there, then run the MD worker.', 'success')
-                  await load()
-                } catch (e: any) { toast(e.message || 'Test job failed', 'error') }
-                setBusy('')
-              }}
-              disabled={busy !== ''}
-              style={{ padding: '7px 14px', borderRadius: 6, border: `1px solid ${T.border}`, background: T.bg3, color: T.text2, fontSize: 12, cursor: 'pointer', fontFamily: 'inherit' }}>
-              {busy === 'testjob' ? 'Creating…' : '🧪 Create test job'}
-            </button>
-            {jobs.some(j => j.company_raw === 'JA PORTAL TEST') && (
-              <button
-                onClick={async () => {
-                  setBusy('deltest')
-                  try {
-                    const d = await post({ action: 'delete_test_jobs' })
-                    toast(`Deleted ${d.deleted ?? 0} test job${d.deleted === 1 ? '' : 's'}.`, 'success')
-                    await load()
-                  } catch (e: any) { toast(e.message || 'Delete failed', 'error') }
-                  setBusy('')
-                }}
-                disabled={busy !== ''}
-                style={{ padding: '7px 14px', borderRadius: 6, border: `1px solid ${T.red}50`, background: 'transparent', color: T.red, fontSize: 12, cursor: 'pointer', fontFamily: 'inherit' }}>
-                {busy === 'deltest' ? 'Deleting…' : '🗑 Delete test jobs'}
-              </button>
-            )}
             <button onClick={remindNow} disabled={busy === 'remind'} style={{ ...btn, opacity: busy === 'remind' ? 0.6 : 1 }}>
               {busy === 'remind' ? 'Sending…' : 'Send reminders now'}
             </button>

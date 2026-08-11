@@ -46,6 +46,10 @@ export default withAuth('edit:b2b_distributors', async (req: NextApiRequest, res
           created_at, updated_at,
           distributor:b2b_distributors!b2b_tune_jobs_distributor_id_fkey(display_name)
         `)
+        // 'merged' rows are receipts folded into a same-VIN primary job (the
+        // primary carries the combined tune/invoice/amount) — showing them
+        // made one tune look like two (Chris 2026-08-11).
+        .neq('status', 'merged')
         .order('created_at', { ascending: false })
         .range(from, from + 999)
       if (error) return res.status(500).json({ error: error.message })
