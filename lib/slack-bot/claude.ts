@@ -35,22 +35,36 @@ export interface AskResult {
 // a genuine request — otherwise it would reply to every message in the channel.
 const GATE_INSTRUCTION = `IMPORTANT — you are reading a channel WITHOUT being directly addressed. Only respond if this message is genuinely a request you can help with: a parts/stock availability question ("how many X do we have?", "got any Y?"), a customer/invoice lookup, or a portal how-to. A message that is just a part number or product code on its own (letters+digits, e.g. "SSMKTY0108", "AIR-300FFM-STD", "300ffm") IS a stock lookup — search it with search_md_stock, do not treat it as chatter. If it is small talk, banter, a general statement, an acknowledgement, or clearly not aimed at you, reply with exactly "NO_REPLY" and nothing else — and do NOT call any tool.`
 
-export async function askClaude(question: string, opts: { gateSilent?: boolean } = {}): Promise<AskResult> {
+// Parts-only channels (e.g. the parts upsell channel): the bot's whole job is
+// one stock-availability answer, then the humans take over. No customer or
+// invoice lookups, no clarifying questions, no offers of further help.
+const PARTS_ONLY_INSTRUCTION = `IMPORTANT — this channel is PARTS AVAILABILITY ONLY. Your entire job here is: spot the part(s) mentioned, look them up with search_md_stock, and output that result verbatim. Nothing else.
+- NEVER ask questions back (no "which customer?", "what vehicle?", "can you clarify?"). You get one reply and the humans take the conversation from there.
+- NEVER look up or discuss customers, invoices, or anything beyond stock availability.
+- If the message contains no identifiable part/product to look up, reply with exactly "NO_REPLY" — do not ask what they meant.`
+
+export async function askClaude(question: string, opts: { gateSilent?: boolean; partsOnly?: boolean } = {}): Promise<AskResult> {
   const key = process.env.ANTHROPIC_API_KEY
   if (!key) throw new Error('ANTHROPIC_API_KEY not set')
 
   const client = new Anthropic({ apiKey: key })
-  const system = opts.gateSilent ? `${SYSTEM_PROMPT}\n\n${GATE_INSTRUCTION}` : SYSTEM_PROMPT
+  let system = SYSTEM_PROMPT
+  if (opts.partsOnly) system += `\n\n${PARTS_ONLY_INSTRUCTION}`
+  else if (opts.gateSilent) system += `\n\n${GATE_INSTRUCTION}`
 
   const messages: Anthropic.Messages.MessageParam[] = [
     { role: 'user', content: question },
   ]
 
-  const toolDefs = TOOLS.map(t => ({
-    name: t.name,
-    description: t.description,
-    input_schema: t.input_schema,
-  }))
+  // Parts-only mode gets ONLY the stock tool — with search_myob_customer etc.
+  // absent, the model physically can't wander into customer lookups.
+  const toolDefs = TOOLS
+    .filter(t => !opts.partsOnly || t.name === 'search_md_stock')
+    .map(t => ({
+      name: t.name,
+      description: t.description,
+      input_schema: t.input_schema,
+    }))
 
   const toolsUsed: string[] = []
   let totalIn = 0

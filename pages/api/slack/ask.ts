@@ -108,6 +108,17 @@ function isAllowedChannel(channelId: string): boolean {
   return allow.includes(channelId)
 }
 
+// Channels where the bot is a stock-availability lookup and NOTHING more
+// (e.g. the parts upsell channel, Chris 2026-08-12): one reply per message —
+// the initial availability answer — then the humans take over. Thread replies
+// are never answered there (even @mentions), and the Claude call is stripped
+// to the stock tool only. SLACK_PARTS_ONLY_CHANNEL_IDS, comma-separated.
+function isPartsOnlyChannel(channelId: string): boolean {
+  const raw = (process.env.SLACK_PARTS_ONLY_CHANNEL_IDS || '').trim()
+  if (!raw) return false
+  return raw.split(',').map(s => s.trim()).filter(Boolean).includes(channelId)
+}
+
 // Coarse in-memory dedupe — Slack retries events on 3s timeout. Survives
 // only as long as the warm function instance, which is fine for "ignore the
 // retry of the same event id we just answered".
@@ -471,18 +482,26 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (!question) return res.status(200).json({ ok: true })
   const threadTs: string | undefined = event.thread_ts || event.ts
 
+  // Parts-only channels: the bot gives ONE availability reply per top-level
+  // message and then stays out — thread replies are the humans' conversation
+  // (it was chatting about customer names in the upsell thread, 2026-08-12).
+  const partsOnly = isPartsOnlyChannel(channel)
+  const isThreadReply = !!event.thread_ts && event.thread_ts !== event.ts
+  if (partsOnly && isThreadReply) return res.status(200).json({ ok: true })
+
   // Gate un-addressed chatter, EXCEPT bare part numbers — always look those up.
   const gateSilent = !directlyAddressed && !looksLikePartNumber(question)
 
   // Run Claude + post in background so we can ack Slack within 3s.
   waitUntil((async () => {
     try {
-      const result = await askClaude(question, { gateSilent })
+      const result = await askClaude(question, { gateSilent, partsOnly })
       const answer = result.text.trim()
       console.log('[slack/ask] answered', JSON.stringify({ directlyAddressed, tools: result.toolsUsed, noReply: /^NO_REPLY\b/i.test(answer), contactConfigured: partsContactConfigured(), answerPrefix: answer.slice(0, 60) }))
       // Silent gate: for un-addressed channel chatter Claude returns NO_REPLY —
-      // stay quiet rather than butting in.
-      if (!directlyAddressed && /^NO_REPLY\b/i.test(answer)) return
+      // stay quiet rather than butting in. In parts-only channels NO_REPLY is
+      // honoured even on @mentions (no part to look up = nothing to say).
+      if ((!directlyAddressed || partsOnly) && /^NO_REPLY\b/i.test(answer)) return
       const reply = answer || '(no answer)'
       // Offer the availability button on stock answers (when a contact is set).
       const withEta = partsContactConfigured() && result.toolsUsed.includes('search_md_stock')
