@@ -624,7 +624,23 @@ export interface MyobCreditNoteResult {
   credit_note_uid: string
   credit_note_number: string
   amount: number          // positive — the refund value (credit note totals are negative)
-  shape: 'mirror_full' | 'single_line'
+  shape: 'mirror_full' | 'mirror_lines' | 'single_line'
+}
+
+// One selected order line of an item-selection refund, priced by the refund
+// API (whole untouched lines use the stored checkout values; partial
+// quantities re-derive from unit_ex with per-line rounding).
+export interface RefundLineSelection {
+  line_id: string
+  sku: string
+  name: string
+  qty: number             // units refunded (≤ line.qty − line.refunded_qty)
+  unit_ex: number         // unit_trade_price_ex_gst
+  ex: number
+  gst: number
+  inc: number
+  is_taxable: boolean | null
+  myob_item_uid: string | null
 }
 
 /**
@@ -636,6 +652,9 @@ export interface MyobCreditNoteResult {
  *   - Full refund (no prior refunds): mirrors all original lines with
  *     negative quantities/totals — clean reversal that nets the original
  *     order to zero on the customer ledger.
+ *   - Item-selection refund (meta.lineSelection): mirrors just the selected
+ *     lines/quantities with negative totals — freight stays 0 (items only;
+ *     freight refunds go through the amount modes).
  *   - Partial / additional refund: single line for the refund amount,
  *     using the Bank Fees item with FRE tax. (Tax treatment is approximate
  *     for partials — staff can refine the GST split manually if needed.)
@@ -651,7 +670,7 @@ export interface MyobCreditNoteResult {
 export async function writeRefundCreditNoteToMyob(
   orderId: string,
   refundAmount: number,
-  meta: { stripeRefundId?: string; reason?: string } = {},
+  meta: { stripeRefundId?: string; reason?: string; lineSelection?: RefundLineSelection[] } = {},
 ): Promise<MyobCreditNoteResult> {
   const c = sb()
 
@@ -695,14 +714,17 @@ export async function writeRefundCreditNoteToMyob(
   // Prior refunds = current refunded_total minus this refund amount.
   const priorRefunded = round2(Number(order.refunded_total || 0)) - round2(refundAmount)
   const isFullMirror  = Math.abs(refundAmount - totalInc) < 0.005 && Math.abs(priorRefunded) < 0.005
+  const selection     = !isFullMirror && meta.lineSelection && meta.lineSelection.length > 0 ? meta.lineSelection : null
+  const shape: MyobCreditNoteResult['shape'] = isFullMirror ? 'mirror_full' : selection ? 'mirror_lines' : 'single_line'
 
   // Build the credit-note Lines
   const myobLines: any[] = []
   let subtotalEnv = 0
   let totalTax    = 0
   // Freight refunded via MYOB's native (negative) Freight field on a full
-  // mirror. Partial refunds use a single catch-all line that already
-  // absorbs any freight portion, so freight stays 0 there.
+  // mirror. mirror_lines is items only (freight refunds use the amount
+  // modes) and partials use a single catch-all line that already absorbs
+  // any freight portion, so freight stays 0 for both.
   let freightRefundEx = 0
 
   if (isFullMirror) {
@@ -747,6 +769,31 @@ export async function writeRefundCreditNoteToMyob(
     if (freightExGst > 0) {
       freightRefundEx = round2(-freightExGst)
       totalTax += round2(-freightExGst * 0.10)   // freight GST @ 10%
+    }
+  } else if (selection) {
+    // Item-selection refund: mirror just the selected lines/quantities.
+    // The API priced the selection — refuse if it doesn't sum to the refund.
+    const selInc = round2(selection.reduce((s, l) => s + Number(l.inc || 0), 0))
+    if (Math.abs(selInc - round2(refundAmount)) > 0.005) {
+      throw new Error('Line selection total does not match refund amount')
+    }
+    for (const sel of selection) {
+      if (!sel.myob_item_uid) {
+        throw new Error(`Order line ${sel.sku} has no MYOB item UID — cannot mirror`)
+      }
+      const ex  = round2(Number(sel.ex || 0))
+      const gst = round2(Number(sel.gst || 0))
+      myobLines.push({
+        Type: 'Transaction',
+        Description: `Refund: ${sel.name} — ${sel.sku}`.substring(0, 255),
+        Item: { UID: sel.myob_item_uid },
+        ShipQuantity: -Number(sel.qty),
+        UnitPrice: round2(Number(sel.unit_ex || 0)),
+        Total: round2(-ex),
+        TaxCode: { UID: sel.is_taxable !== false ? cfg.gstTaxCodeUid : cfg.freTaxCodeUid },
+      })
+      subtotalEnv += round2(-ex)
+      totalTax    += round2(-gst)
     }
   } else {
     // Single-line credit note for partial / additional refunds
@@ -817,7 +864,7 @@ export async function writeRefundCreditNoteToMyob(
     credit_note_uid:    creditUid,
     credit_note_number: creditNumber,
     amount:             round2(refundAmount),
-    shape:              isFullMirror ? 'mirror_full' : 'single_line',
+    shape,
   }
 }
 

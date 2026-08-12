@@ -39,6 +39,7 @@ interface OrderLine {
   sku: string
   name: string
   qty: number
+  refunded_qty: number
   unit_trade_price_ex_gst: number
   line_subtotal_ex_gst: number
   line_gst: number
@@ -249,15 +250,16 @@ export default function AdminOrderDetailPage({ user }: Props) {
     }
   }, [orderId])
 
-  // ── Refund action
-  const doRefund = useCallback(async (amount: number | null, reason: string | undefined, notes: string | undefined) => {
+  // ── Refund action — either an amount (null = full) or an item selection,
+  // never both (the server derives the amount from the lines).
+  const doRefund = useCallback(async (amount: number | null, reason: string | undefined, notes: string | undefined, lines?: Array<{ line_id: string; qty: number }>) => {
     setActionBusy(true); setActionError(null)
     try {
       const r = await fetch(`/api/b2b/admin/orders/${orderId}/refund`, {
         method: 'POST',
         credentials: 'same-origin',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ amount, reason, notes }),
+        body: JSON.stringify(lines && lines.length > 0 ? { lines, reason, notes } : { amount, reason, notes }),
       })
       const j = await r.json()
       if (!r.ok) throw new Error(j?.error || `HTTP ${r.status}`)
@@ -1519,16 +1521,31 @@ function ShipModal({ order, busy, onClose, onConfirm }: {
   )
 }
 
-function RefundModal({ order, busy, onClose, onConfirm }: { order: OrderDetail; busy: boolean; onClose: () => void; onConfirm: (amount: number | null, reason: string | undefined, notes: string | undefined) => void }) {
+// Refund amount for qty units of a line — MUST mirror the server's pricing
+// exactly (refund.ts): a whole untouched line uses the stored checkout values;
+// partial quantities re-derive from the unit price with per-line rounding.
+function lineRefundInc(ln: OrderLine, qty: number): number {
+  if (qty === ln.qty && Number(ln.refunded_qty || 0) === 0) return round2x(ln.line_total_inc)
+  const ex = round2x(ln.unit_trade_price_ex_gst * qty)
+  const gst = ln.is_taxable !== false ? round2x(ex * 0.10) : 0
+  return round2x(ex + gst)
+}
+
+function RefundModal({ order, busy, onClose, onConfirm }: { order: OrderDetail; busy: boolean; onClose: () => void; onConfirm: (amount: number | null, reason: string | undefined, notes: string | undefined, lines?: Array<{ line_id: string; qty: number }>) => void }) {
   const remaining = Math.max(0, order.total_inc - Number(order.refunded_total || 0))
-  const [mode, setMode]     = useState<'full' | 'partial'>('full')
+  const [mode, setMode]     = useState<'full' | 'items' | 'partial'>('full')
   const [amount, setAmount] = useState<string>(remaining.toFixed(2))
   const [reason, setReason] = useState<string>('requested_by_customer')
   const [notes, setNotes]   = useState<string>('')
+  // Items mode: selected line_id → units to refund
+  const [sel, setSel]       = useState<Record<string, number>>({})
 
-  const amt = mode === 'full' ? null : (Number(amount) || 0)
+  const itemsTotal = round2x(order.lines.reduce((s, ln) => sel[ln.id] ? s + lineRefundInc(ln, sel[ln.id]) : s, 0))
+  const selCount   = Object.keys(sel).length
+
+  const amt = mode === 'full' ? null : mode === 'items' ? itemsTotal : (Number(amount) || 0)
   const finalAmount = amt === null ? remaining : amt
-  const valid = finalAmount > 0 && finalAmount <= remaining + 0.005
+  const valid = (mode !== 'items' || selCount > 0) && finalAmount > 0 && finalAmount <= remaining + 0.005
 
   return (
     <Backdrop onClose={onClose}>
@@ -1539,8 +1556,54 @@ function RefundModal({ order, busy, onClose, onConfirm }: { order: OrderDetail; 
 
       <div style={{display:'flex',gap:8,marginBottom:14}}>
         <button onClick={() => setMode('full')}    style={modeBtn(mode === 'full',    T.purple)}>Full refund</button>
+        <button onClick={() => setMode('items')}   style={modeBtn(mode === 'items',   T.purple)}>Items</button>
         <button onClick={() => setMode('partial')} style={modeBtn(mode === 'partial', T.purple)}>Partial</button>
       </div>
+
+      {mode === 'items' && (
+        <div style={{marginBottom:14}}>
+          <div style={{border:`1px solid ${T.border2}`,borderRadius:6,maxHeight:280,overflowY:'auto'}}>
+            {order.lines.map((ln, i) => {
+              const maxQty = ln.qty - Number(ln.refunded_qty || 0)
+              const done = maxQty <= 0
+              const checked = ln.id in sel
+              const qty = sel[ln.id] || maxQty
+              const setQty = (q: number) => setSel(s => ({ ...s, [ln.id]: Math.min(maxQty, Math.max(1, q)) }))
+              return (
+                <div key={ln.id} style={{display:'flex',alignItems:'center',gap:10,padding:'9px 10px',borderTop: i > 0 ? `1px solid ${T.border}` : 'none',opacity: done ? 0.5 : 1}}>
+                  <input type="checkbox" disabled={done || busy} checked={checked}
+                    onChange={e => setSel(s => { const n = { ...s }; if (e.target.checked) n[ln.id] = maxQty; else delete n[ln.id]; return n })}
+                    style={{cursor: done ? 'default' : 'pointer',flexShrink:0}}/>
+                  <div style={{flex:1,minWidth:0}}>
+                    <div style={{fontSize:13,color:T.text,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{ln.name}</div>
+                    <div style={{fontSize:10,color:T.text3,fontFamily:'monospace'}}>
+                      {ln.sku}
+                      {done ? ' · Refunded' : Number(ln.refunded_qty || 0) > 0 ? ` · refundable ${maxQty} of ${ln.qty}` : ''}
+                    </div>
+                  </div>
+                  {checked && !done && (
+                    <div style={{display:'flex',alignItems:'center',gap:6,flexShrink:0}}>
+                      <button onClick={() => setQty(qty - 1)} disabled={busy || qty <= 1} style={stepBtn(qty > 1)}>−</button>
+                      <span style={{fontSize:13,fontVariantNumeric:'tabular-nums',minWidth:18,textAlign:'center'}}>{qty}</span>
+                      <button onClick={() => setQty(qty + 1)} disabled={busy || qty >= maxQty} style={stepBtn(qty < maxQty)}>+</button>
+                    </div>
+                  )}
+                  <div style={{width:76,textAlign:'right',fontFamily:'monospace',fontSize:12,color: checked ? T.text : T.text3,flexShrink:0}}>
+                    {done ? '—' : `$${money(lineRefundInc(ln, checked ? qty : maxQty))}`}
+                  </div>
+                </div>
+              )
+            })}
+            <div style={{display:'flex',justifyContent:'space-between',gap:10,padding:'9px 10px',borderTop:`1px solid ${T.border2}`,fontSize:13}}>
+              <span style={{color:T.text2}}>Refund total ({selCount} {selCount === 1 ? 'line' : 'lines'})</span>
+              <strong style={{fontFamily:'monospace',color: itemsTotal > remaining + 0.005 ? T.red : T.text}}>${money(itemsTotal)}</strong>
+            </div>
+          </div>
+          <div style={{fontSize:10,color:T.text3,marginTop:6}}>
+            Freight and card surcharge aren't part of item refunds — use Partial for those.
+          </div>
+        </div>
+      )}
 
       {mode === 'partial' && (
         <Field label="Amount (AUD)">
@@ -1563,7 +1626,12 @@ function RefundModal({ order, busy, onClose, onConfirm }: { order: OrderDetail; 
 
       <ModalButtons>
         <button onClick={onClose} disabled={busy} style={modalBtnSecondary()}>Cancel</button>
-        <button onClick={() => onConfirm(mode === 'full' ? null : finalAmount, reason, notes || undefined)}
+        <button onClick={() => onConfirm(
+            mode === 'full' ? null : finalAmount,
+            reason,
+            notes || undefined,
+            mode === 'items' ? Object.entries(sel).map(([line_id, qty]) => ({ line_id, qty })) : undefined,
+          )}
           disabled={!valid || busy} style={modalBtnPrimary(valid && !busy, T.purple)}>
           {busy ? 'Issuing…' : `Refund $${money(finalAmount)}`}
         </button>
@@ -1690,6 +1758,15 @@ function modalBtnSecondary(): React.CSSProperties {
     border:`1px solid ${T.border2}`,
     background:'transparent',color:T.text2,
     fontSize:13,fontFamily:'inherit',cursor:'pointer',
+  }
+}
+function stepBtn(enabled: boolean): React.CSSProperties {
+  return {
+    width:22,height:22,padding:0,borderRadius:4,lineHeight:1,
+    border:`1px solid ${T.border2}`,
+    background:T.bg3,color: enabled ? T.text : T.text3,
+    fontSize:13,fontFamily:'inherit',
+    cursor: enabled ? 'pointer' : 'default',
   }
 }
 function modeBtn(active: boolean, color: string): React.CSSProperties {

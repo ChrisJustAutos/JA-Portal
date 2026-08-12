@@ -57,11 +57,11 @@ import { accountingProvider } from '../accounting-provider'
 import { XeroAdapter, NeutralLine } from './xero-adapter'
 import * as myobInvoice from '../b2b-myob-invoice'
 import * as myobPo from '../b2b-myob-po'
-import type { MyobWriteResult, MyobConvertResult, MyobPaymentResult, MyobCreditNoteResult } from '../b2b-myob-invoice'
+import type { MyobWriteResult, MyobConvertResult, MyobPaymentResult, MyobCreditNoteResult, RefundLineSelection } from '../b2b-myob-invoice'
 import type { CreatePOInput, CreatePOResult, DropShipPOLine, ConvertPoToBillInput, ConvertPoToBillResult } from '../b2b-myob-po'
 
 // Callers import these shapes from here after the swap.
-export type { MyobWriteResult, MyobConvertResult, MyobPaymentResult, MyobCreditNoteResult }
+export type { MyobWriteResult, MyobConvertResult, MyobPaymentResult, MyobCreditNoteResult, RefundLineSelection }
 export type { CreatePOInput, CreatePOResult, DropShipPOLine, ConvertPoToBillInput, ConvertPoToBillResult }
 
 const ENTITY = 'JAWS' as const
@@ -432,6 +432,8 @@ export async function deleteMyobSaleOrder(orderId: string): Promise<{ deleted: b
  *            mapping) on B2B_SALES, surcharge on B2B_CARD_FEE (FRE),
  *            freight as its own line on B2B_FREIGHT (GST) — Xero has no
  *            header freight field.
+ *          - item selection: one line per selected order line on B2B_SALES,
+ *            items only (freight refunds go through the amount modes).
  *          - partial: single FRE line on B2B_CARD_FEE, matching the MYOB
  *            partial's bank-fees-item treatment.
  *          Numbering comes from Xero's own credit-note sequence — the
@@ -440,7 +442,7 @@ export async function deleteMyobSaleOrder(orderId: string): Promise<{ deleted: b
 export async function writeRefundCreditNoteToMyob(
   orderId: string,
   refundAmount: number,
-  meta: { stripeRefundId?: string; reason?: string } = {},
+  meta: { stripeRefundId?: string; reason?: string; lineSelection?: RefundLineSelection[] } = {},
 ): Promise<MyobCreditNoteResult> {
   if (!(await isXero())) return myobInvoice.writeRefundCreditNoteToMyob(orderId, refundAmount, meta)
 
@@ -474,6 +476,8 @@ export async function writeRefundCreditNoteToMyob(
   const cardFeeInc = round2(Number(order.card_fee_inc || 0))
   const priorRefunded = round2(Number(order.refunded_total || 0)) - round2(refundAmount)
   const isFullMirror = Math.abs(refundAmount - totalInc) < 0.005 && Math.abs(priorRefunded) < 0.005
+  const selection = !isFullMirror && meta.lineSelection && meta.lineSelection.length > 0 ? meta.lineSelection : null
+  const shape: MyobCreditNoteResult['shape'] = isFullMirror ? 'mirror_full' : selection ? 'mirror_lines' : 'single_line'
 
   const xeroLines: NeutralLine[] = []
   if (isFullMirror) {
@@ -504,6 +508,23 @@ export async function writeRefundCreditNoteToMyob(
         taxType: 'GST',
       })
     }
+  } else if (selection) {
+    // Item-selection refund: one line per selected order line, items only
+    // (freight refunds use the amount modes). The API priced the selection —
+    // refuse if it doesn't sum to the refund.
+    const selInc = round2(selection.reduce((s, l) => s + Number(l.inc || 0), 0))
+    if (Math.abs(selInc - round2(refundAmount)) > 0.005) {
+      throw new Error('Line selection total does not match refund amount')
+    }
+    const salesCode = await mappedAccountCode('B2B_SALES')
+    for (const sel of selection) {
+      xeroLines.push({
+        description: `Refund: ${sel.name} — ${sel.sku} × ${sel.qty}`.substring(0, 255),
+        amount: round2(sel.inc),             // POSITIVE — Xero credit notes take positive inc-GST lines
+        accountCode: salesCode,
+        taxType: sel.is_taxable !== false ? 'GST' : 'FRE',
+      })
+    }
   } else {
     // Partial / additional refund: single line, no GST — matching the MYOB
     // partial's approximate tax treatment (staff refine the split if needed).
@@ -528,7 +549,7 @@ export async function writeRefundCreditNoteToMyob(
     credit_note_uid: cn.id,
     credit_note_number: cn.number || cn.id,  // Xero auto-numbers; id as last resort
     amount: round2(refundAmount),
-    shape: isFullMirror ? 'mirror_full' : 'single_line',
+    shape,
   }
 }
 

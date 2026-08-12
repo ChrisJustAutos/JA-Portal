@@ -106,7 +106,7 @@ async function getDetail(id: string, res: NextApiResponse) {
         ship_line1, ship_line2, ship_suburb, ship_state, ship_postcode
       ),
       lines:b2b_order_lines!b2b_order_lines_order_id_fkey (
-        id, sku, name, qty, myob_item_uid,
+        id, sku, name, qty, refunded_qty, myob_item_uid,
         unit_trade_price_ex_gst, line_subtotal_ex_gst, line_gst, line_total_inc,
         is_taxable, sort_order,
         catalogue:b2b_catalogue!b2b_order_lines_catalogue_id_fkey ( is_drop_ship, myob_supplier_name )

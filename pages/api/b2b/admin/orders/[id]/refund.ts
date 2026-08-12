@@ -3,12 +3,14 @@
 // POST /api/b2b/admin/orders/{id}/refund
 //   body: {
 //     amount?: number              // optional — omit for full refund
+//     lines?: [{ line_id, qty }]   // item-selection refund (mutually exclusive with amount)
 //     reason?: 'duplicate' | 'fraudulent' | 'requested_by_customer'
 //     notes?: string
 //   }
 //
 // Calls Stripe Refunds API, updates `refunded_total` (and `refunded_at`
-// + status if fully refunded), inserts an event row.
+// + status if fully refunded), inserts an event row. Item-selection refunds
+// also bump each line's refunded_qty so the same unit can't be refunded twice.
 //
 // Permission: admin:b2b   (more restrictive than other order actions —
 // refunds move money so we keep them admin-only).
@@ -18,6 +20,7 @@ import { createClient, SupabaseClient } from '@supabase/supabase-js'
 import { withAuth } from '../../../../../../lib/authServer'
 import { createRefund } from '../../../../../../lib/stripe'
 import { writeRefundCreditNoteToMyob, deleteMyobSaleOrder } from '../../../../../../lib/accounting/post-b2b-doc'
+import type { RefundLineSelection } from '../../../../../../lib/b2b-myob-invoice'
 import { claimOrderStage, releaseOrderStage } from '../../../../../../lib/b2b-claims'
 
 let _sb: SupabaseClient | null = null
@@ -31,6 +34,8 @@ function sb(): SupabaseClient {
 }
 
 const VALID_REASONS = ['duplicate', 'fraudulent', 'requested_by_customer']
+
+function round2(n: number): number { return Math.round(n * 100) / 100 }
 
 export default withAuth('admin:b2b', async (req: NextApiRequest, res: NextApiResponse, user: any) => {
   if (req.method !== 'POST') {
@@ -61,6 +66,15 @@ export default withAuth('admin:b2b', async (req: NextApiRequest, res: NextApiRes
     refundAmount = Math.round(n * 100) / 100
   }
 
+  // Item-selection refund: specific lines (and quantities) instead of a raw
+  // dollar amount — the refund amount is DERIVED from the selection, so the
+  // two inputs are mutually exclusive.
+  const reqLines: Array<{ line_id: string; qty: number }> | null =
+    Array.isArray(body.lines) && body.lines.length > 0 ? body.lines : null
+  if (reqLines && refundAmount !== null) {
+    return res.status(400).json({ error: 'Provide either amount or lines, not both' })
+  }
+
   const c = sb()
 
   // Load order
@@ -84,6 +98,65 @@ export default withAuth('admin:b2b', async (req: NextApiRequest, res: NextApiRes
   }
   if (!order.paid_at) {
     return res.status(400).json({ error: 'Order has not been paid' })
+  }
+
+  // Resolve an item selection into per-line refund amounts. Validated against
+  // each line's refunded_qty (units already refunded this way) — the order-level
+  // remaining cap below still applies to the derived total.
+  let lineSelection: RefundLineSelection[] | null = null
+  const priorRefundedQty = new Map<string, number>()   // line_id → refunded_qty before this refund
+  if (reqLines) {
+    const { data: orderLines, error: lnErr } = await c
+      .from('b2b_order_lines')
+      .select('id, sku, name, qty, refunded_qty, unit_trade_price_ex_gst, line_subtotal_ex_gst, line_gst, line_total_inc, is_taxable, myob_item_uid')
+      .eq('order_id', id)
+    if (lnErr) return res.status(500).json({ error: lnErr.message })
+    const byId = new Map((orderLines || []).map(l => [String(l.id), l]))
+
+    const seen = new Set<string>()
+    lineSelection = []
+    for (const sel of reqLines) {
+      const lineId = String(sel?.line_id || '')
+      const line = byId.get(lineId)
+      if (!line) return res.status(400).json({ error: `Line ${lineId} is not on this order` })
+      if (seen.has(lineId)) return res.status(400).json({ error: `Line ${line.sku}: listed more than once` })
+      seen.add(lineId)
+      const selQty = Number(sel?.qty)
+      if (!Number.isInteger(selQty) || selQty <= 0) {
+        return res.status(400).json({ error: `Line ${line.sku}: qty must be a positive integer` })
+      }
+      const refundable = Number(line.qty) - Number(line.refunded_qty || 0)
+      if (selQty > refundable) {
+        return res.status(400).json({ error: `Line ${line.sku}: only ${refundable} of ${line.qty} units still refundable` })
+      }
+      // Whole untouched line → use the stored (checkout-rounded) values exactly;
+      // partial quantities re-derive from the unit price with per-line rounding.
+      let ex: number, gst: number, inc: number
+      if (selQty === Number(line.qty) && Number(line.refunded_qty || 0) === 0) {
+        ex  = round2(Number(line.line_subtotal_ex_gst || 0))
+        gst = line.is_taxable !== false ? round2(Number(line.line_gst || 0)) : 0
+        inc = round2(Number(line.line_total_inc || 0))
+      } else {
+        ex  = round2(Number(line.unit_trade_price_ex_gst || 0) * selQty)
+        gst = line.is_taxable !== false ? round2(ex * 0.10) : 0
+        inc = round2(ex + gst)
+      }
+      priorRefundedQty.set(lineId, Number(line.refunded_qty || 0))
+      lineSelection.push({
+        line_id: lineId,
+        sku: line.sku,
+        name: line.name,
+        qty: selQty,
+        unit_ex: Number(line.unit_trade_price_ex_gst || 0),
+        ex, gst, inc,
+        is_taxable: line.is_taxable,
+        myob_item_uid: line.myob_item_uid || null,
+      })
+    }
+    refundAmount = round2(lineSelection.reduce((s, l) => s + l.inc, 0))
+    if (!(refundAmount > 0)) {
+      return res.status(400).json({ error: 'Selected lines total zero — nothing to refund' })
+    }
   }
 
   const totalInc        = Number(order.total_inc || 0)
@@ -161,6 +234,19 @@ export default withAuth('admin:b2b', async (req: NextApiRequest, res: NextApiRes
     })
   }
 
+  // Item-selection refunds: bump each line's refunded_qty so those units can't
+  // be selected again. Best-effort per line — cash truth is Stripe +
+  // refunded_total; concurrency is already serialized by the claim.
+  if (lineSelection) {
+    for (const s of lineSelection) {
+      const { error: lqErr } = await c
+        .from('b2b_order_lines')
+        .update({ refunded_qty: (priorRefundedQty.get(s.line_id) || 0) + s.qty })
+        .eq('id', s.line_id)
+      if (lqErr) console.error(`refund: refunded_qty update failed for line ${s.line_id} (${s.sku}): ${lqErr.message}`)
+    }
+  }
+
   // Audit event for the Stripe refund itself
   await c.from('b2b_order_events').insert({
     order_id: id,
@@ -176,6 +262,7 @@ export default withAuth('admin:b2b', async (req: NextApiRequest, res: NextApiRes
       amount: finalAmount,
       reason,
       fully_refunded: fullyRefunded,
+      ...(lineSelection ? { lines: lineSelection.map(s => ({ line_id: s.line_id, sku: s.sku, qty: s.qty, inc: s.inc })) } : {}),
     },
   })
 
@@ -224,6 +311,7 @@ export default withAuth('admin:b2b', async (req: NextApiRequest, res: NextApiRes
     const cn = await writeRefundCreditNoteToMyob(id, finalAmount, {
       stripeRefundId: refund.id,
       reason,
+      lineSelection: lineSelection || undefined,
     })
     creditNote = {
       uid: cn.credit_note_uid,
@@ -238,7 +326,7 @@ export default withAuth('admin:b2b', async (req: NextApiRequest, res: NextApiRes
       to_status:   update.status || order.status,
       actor_type: 'system',
       actor_id: null,
-      notes: `MYOB credit note ${cn.credit_note_number} created (${cn.shape === 'mirror_full' ? 'full mirror of original lines' : 'single line'})`,
+      notes: `MYOB credit note ${cn.credit_note_number} created (${cn.shape === 'mirror_full' ? 'full mirror of original lines' : cn.shape === 'mirror_lines' ? 'mirror of selected lines' : 'single line'})`,
       metadata: {
         myob_credit_note_uid: cn.credit_note_uid,
         myob_credit_note_number: cn.credit_note_number,
