@@ -11,7 +11,8 @@ import Head from 'next/head'
 import type { GetServerSideProps } from 'next'
 import B2BLayout from '../../components/b2b/B2BLayout'
 import { requireB2BPageAuth } from '../../lib/b2bAuthServer'
-import { T } from '../../lib/ui/theme'
+import { T, alpha } from '../../lib/ui/theme'
+import { A, Banner, Btn, Card, EmptyState, Field, PageTitle, SectionLabel, StatusPill, inputStyle } from '../../components/b2b/ui'
 import { useToast } from '../../components/ui/Feedback'
 
 interface Props {
@@ -74,12 +75,6 @@ function formatDate(iso: string | null): string {
   return new Date(iso).toLocaleDateString('en-AU', { day: '2-digit', month: 'short', year: 'numeric' })
 }
 
-const inputStyle: React.CSSProperties = {
-  width: '100%', boxSizing: 'border-box',
-  fontSize: 13, padding: '8px 10px', borderRadius: 6,
-  border: `1px solid ${T.border2}`, background: T.bg3, color: T.text, fontFamily: 'inherit',
-}
-
 export default function B2BJobsPage({ b2bUser }: Props) {
   const toast = useToast()
   const [jobs, setJobs] = useState<TuneJob[] | null>(null)
@@ -107,88 +102,67 @@ export default function B2BJobsPage({ b2bUser }: Props) {
     <>
       <Head><title>Tune Jobs · Just Autos B2B</title><meta name="robots" content="noindex,nofollow" /></Head>
       <B2BLayout user={b2bUser} active="jobs">
-        <div style={{ maxWidth: 900, margin: '0 auto', display: 'flex', flexDirection: 'column', gap: 18 }}>
+        <div style={{ maxWidth: 900, margin: '0 auto' }}>
 
-          <div>
-            <h1 style={{ margin: 0, fontSize: 22, fontWeight: 700 }}>Tune Jobs</h1>
-            <div style={{ fontSize: 13, color: T.text3, marginTop: 4 }}>
-              When you complete a tune we receive the receipt automatically — fill in the customer&rsquo;s details so we can finish the paperwork.
-            </div>
-          </div>
+          <PageTitle sub={'When you complete a tune we receive the receipt automatically — fill in the customer’s details so we can finish the paperwork.'}>
+            Tune Jobs
+          </PageTitle>
 
-          {error && (
-            <div style={{ background: 'rgba(240,78,78,0.1)', border: `1px solid ${T.red}40`, borderRadius: 8, padding: 12, fontSize: 13, color: T.red }}>
-              {error}
-            </div>
-          )}
-          {jobs === null && !error && <div style={{ color: T.text3, padding: 30, textAlign: 'center' }}>Loading…</div>}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
 
-          {jobs !== null && jobs.length === 0 && (
-            <div style={{ padding: 36, textAlign: 'center', background: T.bg2, border: `1px solid ${T.border}`, borderRadius: 10, color: T.text3, fontStyle: 'italic' }}>
-              No tune jobs yet — they&rsquo;ll appear here automatically after each tune you complete.
-            </div>
-          )}
+            {error && <Banner tone="error">{error}</Banner>}
+            {jobs === null && !error && <div style={{ color: T.text3, padding: 30, textAlign: 'center', fontSize: 13 }}>Loading…</div>}
 
-          {/* ── Needs your details ─────────────────────────────── */}
-          {open.length > 0 && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-              <div style={{ fontSize: 13, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: T.text2 }}>
-                Needs your details <span style={{ color: T.amber, fontWeight: 700 }}>({open.length})</span>
+            {jobs !== null && jobs.length === 0 && (
+              <EmptyState
+                title="No tune jobs yet"
+                sub={'They’ll appear here automatically after each tune you complete.'}/>
+            )}
+
+            {/* ── Needs your details ─────────────────────────────── */}
+            {open.length > 0 && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                <SectionLabel>
+                  Needs your details <span style={{ color: A.warn }}>({open.length})</span>
+                </SectionLabel>
+                {open.map(j => <OpenJobCard key={j.id} job={j} onSubmitted={onSubmitted} />)}
               </div>
-              {open.map(j => <OpenJobCard key={j.id} job={j} onSubmitted={onSubmitted} />)}
-            </div>
-          )}
+            )}
 
-          {/* ── Completed ──────────────────────────────────────── */}
-          {done.length > 0 && (
-            <div style={{ background: T.bg2, border: `1px solid ${T.border}`, borderRadius: 12, overflow: 'hidden' }}>
-              <button onClick={() => setCompletedOpen(o => !o)}
-                style={{
-                  width: '100%', display: 'flex', alignItems: 'center', gap: 8, padding: '12px 16px',
-                  background: 'transparent', border: 'none', cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left',
-                  fontSize: 13, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: T.text2,
-                }}>
-                <span style={{ color: T.text3, fontSize: 11 }}>{completedOpen ? '▼' : '▶'}</span>
-                Completed <span style={{ color: T.text3, fontWeight: 400 }}>({done.length})</span>
-              </button>
-              {completedOpen && done.map((j, i) => (
-                <div key={j.id} style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', padding: '11px 16px', borderTop: `1px solid ${T.border}` }}>
-                  <div style={{ flex: 1, minWidth: 180 }}>
-                    <div style={{ fontSize: 14, fontWeight: 600, color: T.text }}>{j.customer_name || '—'}</div>
-                    <div style={{ fontSize: 12, color: T.text2, marginTop: 2 }}>
-                      {j.tune_details || 'Tune'}
-                      {j.vin && <> · <span style={{ fontFamily: 'ui-monospace, monospace' }}>{j.vin}</span></>}
+            {/* ── Completed ──────────────────────────────────────── */}
+            {done.length > 0 && (
+              <Card pad={false}>
+                <button onClick={() => setCompletedOpen(o => !o)} className="al-press al-focus"
+                  style={{
+                    width: '100%', display: 'flex', alignItems: 'center', gap: 9, padding: '14px 18px', minHeight: 48,
+                    background: 'transparent', border: 'none', cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left',
+                    fontSize: 13.5, fontWeight: 650, color: T.text2,
+                  }}>
+                  <span aria-hidden style={{ color: T.text3, fontSize: 10, transform: completedOpen ? 'rotate(180deg)' : 'none', transition: 'transform .15s ease', display: 'inline-block' }}>▾</span>
+                  Completed <span style={{ color: T.text3, fontWeight: 400 }}>({done.length})</span>
+                </button>
+                {completedOpen && done.map(j => (
+                  <div key={j.id} style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', padding: '12px 18px', borderTop: `1px solid ${T.border}` }}>
+                    <div style={{ flex: 1, minWidth: 180 }}>
+                      <div style={{ fontSize: 14, fontWeight: 600, color: T.text }}>{j.customer_name || '—'}</div>
+                      <div style={{ fontSize: 12.5, color: T.text2, marginTop: 2 }}>
+                        {j.tune_details || 'Tune'}
+                        {j.vin && <> · <span style={{ fontFamily: 'ui-monospace, monospace', fontSize: 12 }}>{j.vin}</span></>}
+                      </div>
                     </div>
+                    <div style={{ fontSize: 12, color: T.text3 }}>filled {formatDate(j.filled_at)}</div>
+                    {j.status === 'submitted'
+                      ? <StatusPill color={A.warn}>Processing</StatusPill>
+                      : <StatusPill color={A.good}>Done</StatusPill>}
                   </div>
-                  <div style={{ fontSize: 11, color: T.text3 }}>filled {formatDate(j.filled_at)}</div>
-                  {j.status === 'submitted'
-                    ? <StatusChip color={T.amber} label="processing" />
-                    : <StatusChip color={T.green} label="done" />}
-                </div>
-              ))}
-            </div>
-          )}
+                ))}
+              </Card>
+            )}
 
+          </div>
         </div>
       </B2BLayout>
     </>
-  )
-}
-
-function StatusChip({ color, label }: { color: string; label: string }) {
-  return (
-    <span style={{ fontSize: 10, fontWeight: 700, padding: '2px 8px', borderRadius: 8, background: `${color}18`, color, whiteSpace: 'nowrap' }}>
-      {label}
-    </span>
-  )
-}
-
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-      <span style={{ fontSize: 11, color: T.text3, fontWeight: 600 }}>{label}</span>
-      {children}
-    </label>
   )
 }
 
@@ -245,63 +219,54 @@ function OpenJobCard({ job, onSubmitted }: { job: TuneJob; onSubmitted: (id: str
   }
 
   return (
-    <div style={{ background: T.bg2, border: `1px solid ${T.amber}50`, borderRadius: 12, padding: 16, display: 'flex', flexDirection: 'column', gap: 10 }}>
+    <Card style={{ border: `1px solid ${alpha(A.warn, '50')}`, display: 'flex', flexDirection: 'column', gap: 10 }}>
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, flexWrap: 'wrap' }}>
-        <div style={{ fontSize: 14, fontWeight: 700, color: T.text }}>{job.tune_details || 'Tune'}</div>
-        <div style={{ fontSize: 11, color: T.text3 }}>received {formatDate(job.email_received_at || job.created_at)}</div>
+        <div style={{ fontSize: 15, fontWeight: 650, color: T.text }}>{job.tune_details || 'Tune'}</div>
+        <div style={{ fontSize: 12, color: T.text3 }}>received {formatDate(job.email_received_at || job.created_at)}</div>
       </div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap', fontSize: 12, color: T.text2 }}>
-        {job.vin && <span>VIN <span style={{ fontFamily: 'ui-monospace, monospace', color: T.text }}>{job.vin}</span></span>}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap', fontSize: 12.5, color: T.text2 }}>
+        {job.vin && <span>VIN <span style={{ fontFamily: 'ui-monospace, monospace', fontSize: 12, color: T.text }}>{job.vin}</span></span>}
         {job.invoice_number && <span>Invoice {job.invoice_number}</span>}
-        {job.amount != null && <span>${Number(job.amount).toFixed(2)}</span>}
+        {job.amount != null && <span style={{ fontVariantNumeric: 'tabular-nums' }}>${Number(job.amount).toFixed(2)}</span>}
         {job.invoice_url && (
-          <a href={job.invoice_url} target="_blank" rel="noreferrer" style={{ color: T.blue, textDecoration: 'none', fontWeight: 600 }}>
-            View invoice ↗
+          <a href={job.invoice_url} target="_blank" rel="noreferrer" style={{ color: A.accent, textDecoration: 'none', fontWeight: 600 }}>
+            View invoice
           </a>
         )}
       </div>
 
       {!formOpen && (
         <div>
-          <button onClick={() => setFormOpen(true)}
-            style={{ fontSize: 12, fontWeight: 700, padding: '9px 18px', borderRadius: 8, border: `1px solid ${T.blue}`, background: T.blue, color: '#fff', cursor: 'pointer', fontFamily: 'inherit' }}>
-            Fill in customer details
-          </button>
+          <Btn onClick={() => setFormOpen(true)}>Fill in customer details</Btn>
         </div>
       )}
 
       {formOpen && (
-        <div style={{ borderTop: `1px solid ${T.border}`, paddingTop: 12, display: 'flex', flexDirection: 'column', gap: 10 }}>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 10 }}>
-            <Field label="Customer name (first & last) *"><input value={form.customer_name} onChange={set('customer_name')} style={inputStyle} placeholder="e.g. John Smith" /></Field>
-            <Field label="Phone *"><input value={form.customer_phone} onChange={set('customer_phone')} style={inputStyle} inputMode="tel" placeholder="e.g. 0400 123 456" /></Field>
-            <Field label="Email"><input value={form.customer_email} onChange={set('customer_email')} style={inputStyle} inputMode="email" /></Field>
-            <Field label="Address line"><input value={form.customer_address_line1} onChange={set('customer_address_line1')} style={inputStyle} /></Field>
-            <Field label="Suburb"><input value={form.customer_suburb} onChange={set('customer_suburb')} style={inputStyle} /></Field>
-            <Field label="State"><input value={form.customer_state} onChange={set('customer_state')} style={inputStyle} placeholder="QLD" /></Field>
-            <Field label="Postcode"><input value={form.customer_postcode} onChange={set('customer_postcode')} style={inputStyle} inputMode="numeric" /></Field>
-            <Field label="Rego"><input value={form.vehicle_rego} onChange={set('vehicle_rego')} style={inputStyle} /></Field>
-            <Field label="Make"><input value={form.vehicle_make} onChange={set('vehicle_make')} style={inputStyle} placeholder="e.g. Toyota" /></Field>
-            <Field label="Model"><input value={form.vehicle_model} onChange={set('vehicle_model')} style={inputStyle} placeholder="e.g. Hilux SR5" /></Field>
-            <Field label="Year"><input value={form.vehicle_year} onChange={set('vehicle_year')} style={inputStyle} inputMode="numeric" placeholder="e.g. 2021" /></Field>
+        <div style={{ borderTop: `1px solid ${T.border}`, paddingTop: 14, display: 'flex', flexDirection: 'column', gap: 12 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 12 }}>
+            <Field label="Customer name (first & last)" required><input value={form.customer_name} onChange={set('customer_name')} style={inputStyle()} placeholder="e.g. John Smith" /></Field>
+            <Field label="Phone" required><input value={form.customer_phone} onChange={set('customer_phone')} style={inputStyle()} inputMode="tel" placeholder="e.g. 0400 123 456" /></Field>
+            <Field label="Email"><input value={form.customer_email} onChange={set('customer_email')} style={inputStyle()} inputMode="email" /></Field>
+            <Field label="Address line"><input value={form.customer_address_line1} onChange={set('customer_address_line1')} style={inputStyle()} /></Field>
+            <Field label="Suburb"><input value={form.customer_suburb} onChange={set('customer_suburb')} style={inputStyle()} /></Field>
+            <Field label="State"><input value={form.customer_state} onChange={set('customer_state')} style={inputStyle()} placeholder="QLD" /></Field>
+            <Field label="Postcode"><input value={form.customer_postcode} onChange={set('customer_postcode')} style={inputStyle()} inputMode="numeric" /></Field>
+            <Field label="Rego"><input value={form.vehicle_rego} onChange={set('vehicle_rego')} style={inputStyle()} /></Field>
+            <Field label="Make"><input value={form.vehicle_make} onChange={set('vehicle_make')} style={inputStyle()} placeholder="e.g. Toyota" /></Field>
+            <Field label="Model"><input value={form.vehicle_model} onChange={set('vehicle_model')} style={inputStyle()} placeholder="e.g. Hilux SR5" /></Field>
+            <Field label="Year"><input value={form.vehicle_year} onChange={set('vehicle_year')} style={inputStyle()} inputMode="numeric" placeholder="e.g. 2021" /></Field>
           </div>
           <Field label="Package details (what was done)">
-            <textarea value={form.job_notes} onChange={set('job_notes')} rows={3} style={{ ...inputStyle, resize: 'vertical' }} placeholder="e.g. Stage 1 tune package — exhaust, intake, ECU calibration" />
+            <textarea value={form.job_notes} onChange={set('job_notes')} rows={3} style={{ ...inputStyle(), resize: 'vertical' }} placeholder="e.g. Stage 1 tune package — exhaust, intake, ECU calibration" />
           </Field>
-          {err && <div style={{ fontSize: 12, color: T.red }}>{err}</div>}
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-            <button onClick={submit} disabled={busy}
-              style={{ fontSize: 12, fontWeight: 700, padding: '9px 20px', borderRadius: 8, border: `1px solid ${T.blue}`, background: T.blue, color: '#fff', cursor: busy ? 'wait' : 'pointer', fontFamily: 'inherit', opacity: busy ? 0.6 : 1 }}>
-              {busy ? 'Submitting…' : 'Submit details'}
-            </button>
-            <button onClick={() => setFormOpen(false)} disabled={busy}
-              style={{ fontSize: 12, padding: '9px 14px', borderRadius: 8, border: `1px solid ${T.border2}`, background: 'transparent', color: T.text2, cursor: 'pointer', fontFamily: 'inherit' }}>
-              Cancel
-            </button>
+          {err && <Banner tone="error">{err}</Banner>}
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+            <Btn onClick={submit} disabled={busy}>{busy ? 'Submitting…' : 'Submit details'}</Btn>
+            <Btn variant="ghost" onClick={() => setFormOpen(false)} disabled={busy}>Cancel</Btn>
           </div>
         </div>
       )}
-    </div>
+    </Card>
   )
 }
 

@@ -8,6 +8,10 @@
 // 1-2 seconds, but can take longer. If the user lands here before the
 // webhook fires, the order will still show 'pending_payment' for a moment.
 // We auto-refresh until status is 'paid' (or 5 attempts elapse).
+//
+// Look: condensed single column (Chris: "keep order page condensed and
+// simple") — a delivery timeline tells the story, tracking is the primary
+// action while in transit, items + totals share one card.
 
 import { useEffect, useState } from 'react'
 import Head from 'next/head'
@@ -15,15 +19,8 @@ import { useRouter } from 'next/router'
 import type { GetServerSideProps } from 'next'
 import B2BLayout from '../../../components/b2b/B2BLayout'
 import { requireB2BPageAuth } from '../../../lib/b2bAuthServer'
-import { useIsMobile } from '../../../lib/useIsMobile'
-
-const T = {
-  bg:'var(--t-bg)', bg2:'var(--t-bg2)', bg3:'var(--t-bg3)', bg4:'var(--t-bg4)',
-  border:'var(--t-border)', border2:'var(--t-border2)',
-  text:'var(--t-text)', text2:'var(--t-text2)', text3:'var(--t-text3)',
-  blue:'#4f8ef7', teal:'#2dd4bf', green:'#34c77b',
-  amber:'#f5a623', red:'#f04e4e',
-}
+import { T, alpha } from '../../../lib/ui/theme'
+import { A, RADIUS, Banner, Card, Row, StatusPill, btnStyle, orderStatusColor, orderStatusLabel } from '../../../components/b2b/ui'
 
 interface Props {
   b2bUser: {
@@ -85,7 +82,6 @@ interface OrderDetail {
 
 export default function OrderDetailPage({ b2bUser }: Props) {
   const router = useRouter()
-  const isMobile = useIsMobile()
   const orderId = String(router.query.id || '')
   const sessionIdParam = router.query.session_id ? String(router.query.session_id) : null
   const justReturnedFromStripe = !!sessionIdParam
@@ -125,281 +121,213 @@ export default function OrderDetailPage({ b2bUser }: Props) {
     return () => clearTimeout(t)
   }, [order, justReturnedFromStripe, pollCount])
 
+  const terminal = order && (order.status === 'cancelled' || order.status === 'refunded')
+  const inTransit = order && order.status === 'shipped'
+  const trackingUrl = order?.shipping?.tracking_url || null
+
   return (
     <>
       <Head><title>Order {order?.order_number || ''} · Just Autos B2B</title></Head>
       <B2BLayout user={b2bUser} active="orders">
+        <div style={{maxWidth:660, margin:'0 auto'}}>
 
-        {error && (
-          <div style={{padding:12,background:`${T.red}15`,border:`1px solid ${T.red}40`,borderRadius:7,color:T.red,fontSize:13,marginBottom:14}}>
-            {error}
-          </div>
-        )}
+          {error && <div style={{marginBottom:14}}><Banner tone="error">{error}</Banner></div>}
 
-        {!order && !error && (
-          <div style={{padding:36,textAlign:'center',color:T.text3,fontSize:13}}>Loading…</div>
-        )}
+          {!order && !error && (
+            <div style={{padding:44,textAlign:'center',color:T.text3,fontSize:13.5}}>Loading…</div>
+          )}
 
-        {order && (
-          <>
-            {/* Top breadcrumb / heading */}
-            <div style={{marginBottom:18}}>
-              <a href="/b2b/orders" style={{fontSize:12,color:T.text3,textDecoration:'none'}}>← All orders</a>
-              <h1 style={{fontSize:22,fontWeight:600,margin:'6px 0 4px',letterSpacing:'-0.01em'}}>
-                {order.order_number}
-              </h1>
-              <div style={{display:'flex',alignItems:'center',gap:10,flexWrap:'wrap',fontSize:13,color:T.text3}}>
-                <StatusPill status={order.status} hasError={!!order.myob.write_error}/>
-                <span>· Placed {formatDate(order.placed_at)}</span>
-                {order.paid_at && <span>· Paid {formatDate(order.paid_at)}</span>}
+          {order && (
+            <>
+              {/* Heading */}
+              <div style={{marginBottom:16}}>
+                <a href="/b2b/orders" style={{fontSize:13,color:T.text3,textDecoration:'none'}}>‹ Orders</a>
+                <div style={{display:'flex',alignItems:'center',gap:12,flexWrap:'wrap',margin:'8px 0 4px'}}>
+                  <h1 style={{fontSize:24,fontWeight:700,margin:0,letterSpacing:'-0.02em'}}>{order.order_number}</h1>
+                  <StatusPill color={orderStatusColor(order.status)}>{orderStatusLabel(order.status)}</StatusPill>
+                </div>
+                <div style={{fontSize:12.5,color:T.text3}}>Placed {formatDate(order.placed_at)}</div>
               </div>
-            </div>
 
-            {/* Just-paid success banner */}
-            {justReturnedFromStripe && order.status === 'paid' && (
-              <div style={{
-                padding:'14px 18px',marginBottom:18,
-                background:`${T.green}15`,border:`1px solid ${T.green}40`,borderRadius:8,
-                display:'flex',alignItems:'center',gap:14,
-              }}>
-                <div style={{fontSize:24,color:T.green}}>✓</div>
-                <div>
-                  <div style={{fontSize:14,color:T.text,fontWeight:500}}>Payment received</div>
-                  <div style={{fontSize:13,color:T.text2,marginTop:2}}>
-                    A receipt has been emailed to {b2bUser.email}. We'll process and dispatch your order shortly.
+              {/* Just-paid success banner */}
+              {justReturnedFromStripe && order.status === 'paid' && (
+                <div style={{marginBottom:14}}>
+                  <Banner tone="success">
+                    <div style={{fontWeight:600}}>Payment received</div>
+                    <div style={{color:T.text2,marginTop:2}}>
+                      A receipt has been emailed to {b2bUser.email}. We'll process and dispatch your order shortly.
+                    </div>
+                  </Banner>
+                </div>
+              )}
+
+              {/* Webhook-pending banners */}
+              {justReturnedFromStripe && order.status === 'pending_payment' && pollCount < 5 && (
+                <div style={{marginBottom:14}}>
+                  <Banner tone="warn">
+                    <div style={{fontWeight:600}}>Confirming your payment with Stripe…</div>
+                    <div style={{color:T.text2,marginTop:2}}>This usually takes a couple of seconds. Please don't close this page.</div>
+                  </Banner>
+                </div>
+              )}
+              {justReturnedFromStripe && order.status === 'pending_payment' && pollCount >= 5 && (
+                <div style={{marginBottom:14}}>
+                  <Banner tone="warn">
+                    Stripe confirmation is taking longer than expected. Your payment is likely fine — refresh in a minute,
+                    or contact your account manager if it doesn't update.
+                  </Banner>
+                </div>
+              )}
+
+              {/* Delivery story: timeline + tracking + shipping meta */}
+              <Card style={{marginBottom:14}}>
+                {terminal ? (
+                  <div style={{fontSize:13.5,color:T.text2,lineHeight:1.5}}>
+                    This order was {order.status === 'cancelled' ? 'cancelled' : 'refunded'}.
+                    {order.status === 'refunded' && ' The refund has been returned to your original payment method.'}
+                    {' '}Questions? Contact your account manager.
                   </div>
-                </div>
-              </div>
-            )}
-
-            {/* Webhook-pending banner */}
-            {justReturnedFromStripe && order.status === 'pending_payment' && pollCount < 5 && (
-              <div style={{
-                padding:'14px 18px',marginBottom:18,
-                background:`${T.amber}10`,border:`1px solid ${T.amber}30`,borderRadius:8,
-              }}>
-                <div style={{fontSize:14,color:T.text}}>Confirming your payment with Stripe…</div>
-                <div style={{fontSize:12,color:T.text3,marginTop:4}}>This usually takes a couple of seconds. Please don't close this page.</div>
-              </div>
-            )}
-
-            {justReturnedFromStripe && order.status === 'pending_payment' && pollCount >= 5 && (
-              <div style={{
-                padding:'14px 18px',marginBottom:18,
-                background:`${T.amber}15`,border:`1px solid ${T.amber}40`,borderRadius:8,
-              }}>
-                <div style={{fontSize:13,color:T.text}}>
-                  Stripe confirmation is taking longer than expected. Your payment is likely fine — refresh in a minute, or contact your account manager if it doesn't update.
-                </div>
-              </div>
-            )}
-
-            {/* MYOB error banner — staff-side issue, not customer's */}
-            {order.status === 'paid' && order.myob.write_error && !order.myob.invoice_number && (
-              <div style={{
-                padding:'12px 16px',marginBottom:18,
-                background:T.bg2,border:`1px solid ${T.border}`,borderRadius:8,
-                fontSize:13,color:T.text2,
-              }}>
-                Your order has been paid and is being processed. Invoice details will appear here once finalised.
-              </div>
-            )}
-
-            {/* Two-column layout */}
-            <div style={{
-              display:'grid',
-              gridTemplateColumns: isMobile ? '1fr' : '1fr 320px',
-              gap: isMobile ? 14 : 18, alignItems:'start',
-            }}>
-
-              {/* Lines — horizontal scroll on small screens to avoid blowing
-                  out the page when there's lots of columns / long names */}
-              <div style={{background:T.bg2,border:`1px solid ${T.border}`,borderRadius:10,overflow:'auto', WebkitOverflowScrolling:'touch'}}>
-                <table style={{width:'100%',borderCollapse:'collapse', minWidth: 540}}>
-                  <thead>
-                    <tr style={{background:T.bg3,borderBottom:`1px solid ${T.border2}`}}>
-                      <Th>Item</Th>
-                      <Th align="right">Qty</Th>
-                      <Th align="right">Unit (ex)</Th>
-                      <Th align="right">Line (ex)</Th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {order.lines.map(l => (
-                      <tr key={l.id} style={{borderBottom:`1px solid ${T.border}`}}>
-                        <Td>
-                          <div style={{fontSize:13,color:T.text}}>{l.name}</div>
-                          <div style={{fontSize:9,color:T.text3,fontFamily:'monospace',marginTop:1,letterSpacing:'0.04em'}}>{l.sku}</div>
-                        </Td>
-                        <Td align="right">{l.qty}</Td>
-                        <Td align="right" muted>${Number(l.unit_trade_price_ex_gst).toFixed(2)}</Td>
-                        <Td align="right">${Number(l.line_subtotal_ex_gst).toFixed(2)}</Td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-
-              {/* Totals + meta */}
-              <div style={{display:'flex',flexDirection:'column',gap:14,position:'sticky',top:74}}>
-
-                <div style={{background:T.bg2,border:`1px solid ${T.border}`,borderRadius:10,padding:'18px 20px'}}>
-                  <SectionTitle>Totals</SectionTitle>
-                  <Row label="Subtotal (ex GST)" value={`$${Number(order.subtotal_ex_gst).toFixed(2)}`}/>
-                  <Row label="GST"                value={`$${Number(order.gst).toFixed(2)}`}/>
-                  <Row label="Card surcharge"     value={`$${Number(order.card_fee_inc).toFixed(2)}`} muted/>
-                  <div style={{borderTop:`1px solid ${T.border2}`,marginTop:8,paddingTop:8}}/>
-                  <Row label="Total" value={`$${Number(order.total_inc).toFixed(2)}`} large/>
-                </div>
-
-                {order.shipping && (order.shipping.carrier || order.shipping.tracking_number || order.shipping.consignment_number) && (
-                  <div style={{background:T.bg2,border:`1px solid ${T.border}`,borderRadius:10,padding:'18px 20px'}}>
-                    <SectionTitle>Shipping</SectionTitle>
-                    {order.shipping.carrier && (
-                      <Row label="Carrier" value={order.shipping.carrier}/>
-                    )}
-                    {order.shipping.status && (
-                      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'4px 0'}}>
-                        <span style={{fontSize:12,color:T.text3}}>Status</span>
-                        <span style={{
-                          fontSize:11, padding:'2px 8px', borderRadius:99, fontWeight:600,
-                          color: order.shipping.status === 'delivered' ? T.green
-                               : order.shipping.status === 'in_transit' ? T.teal
-                               : T.amber,
-                          background: `${order.shipping.status === 'delivered' ? T.green : order.shipping.status === 'in_transit' ? T.teal : T.amber}15`,
-                          border: `1px solid ${order.shipping.status === 'delivered' ? T.green : order.shipping.status === 'in_transit' ? T.teal : T.amber}40`,
-                          textTransform:'capitalize',
-                        }}>
-                          {order.shipping.status.replace(/_/g, ' ')}
-                        </span>
-                      </div>
-                    )}
-                    {order.shipping.eta_at && (
-                      <Row label="ETA" value={formatDate(order.shipping.eta_at)}/>
-                    )}
-                    {order.shipping.tracking_number && (
-                      <Row label="Tracking #" value={order.shipping.tracking_number}/>
-                    )}
-                    {order.shipping.consignment_number && (
-                      <Row label="Consignment" value={order.shipping.consignment_number}/>
-                    )}
-                    {order.shipping.tracking_url && (
-                      <div style={{marginTop:10}}>
-                        <a href={order.shipping.tracking_url} target="_blank" rel="noopener noreferrer" style={{
-                          display:'inline-block', fontSize:13, color:T.blue, textDecoration:'none',
-                          padding:'8px 14px', borderRadius:6, border:`1px solid ${T.blue}40`,
-                          background: `${T.blue}10`, fontWeight:500,
-                        }}>
-                          Track shipment →
+                ) : (
+                  <>
+                    <Timeline order={order}/>
+                    {trackingUrl && (
+                      <div style={{marginTop:16}}>
+                        <a href={trackingUrl} target="_blank" rel="noopener noreferrer"
+                          style={{...btnStyle(inTransit ? 'primary' : 'secondary', 'md'), textDecoration:'none', width:'100%', boxSizing:'border-box'}}>
+                          {order.shipping?.carrier ? `Track with ${order.shipping.carrier}` : 'Track shipment'}
                         </a>
                       </div>
                     )}
-                  </div>
+                    {(order.shipping?.tracking_number || order.shipping?.consignment_number || order.shipping?.method_label) && (
+                      <div style={{marginTop:12,paddingTop:10,borderTop:`1px solid ${T.border}`}}>
+                        {order.shipping?.method_label && <Row label="Service" value={order.shipping.method_label} muted/>}
+                        {order.shipping?.tracking_number && <Row label="Tracking #" value={order.shipping.tracking_number} muted/>}
+                        {order.shipping?.consignment_number && <Row label="Consignment" value={order.shipping.consignment_number} muted/>}
+                        {order.shipping?.eta_at && <Row label="Estimated delivery" value={formatDateShort(order.shipping.eta_at)} muted/>}
+                      </div>
+                    )}
+                  </>
                 )}
+              </Card>
 
-                <div style={{background:T.bg2,border:`1px solid ${T.border}`,borderRadius:10,padding:'18px 20px'}}>
-                  <SectionTitle>Invoice</SectionTitle>
-                  {order.myob.invoice_number ? (
-                    <div style={{fontSize:13,color:T.text}}>
-                      MYOB Invoice <strong style={{color:T.text}}>{order.myob.invoice_number}</strong>
-                      <div style={{fontSize:10,color:T.text3,marginTop:4}}>
-                        Issued {formatDate(order.myob.written_at || '')}
+              {/* Items + totals — one condensed card */}
+              <Card pad={false} style={{marginBottom:14}}>
+                <div style={{padding:'6px 0'}}>
+                  {order.lines.map((l, i) => (
+                    <div key={l.id} style={{
+                      display:'flex',alignItems:'baseline',gap:12,padding:'11px 20px',
+                      borderTop: i === 0 ? 'none' : `1px solid ${T.border}`,
+                    }}>
+                      <div style={{flex:1,minWidth:0}}>
+                        <div style={{fontSize:14,color:T.text,fontWeight:550,lineHeight:1.35}}>{l.name}</div>
+                        <div style={{fontSize:12,color:T.text3,marginTop:2,fontVariantNumeric:'tabular-nums'}}>
+                          {l.sku} · {l.qty} × ${lineUnitInc(l).toFixed(2)}
+                        </div>
+                      </div>
+                      <div style={{fontSize:14,color:T.text,fontWeight:600,fontVariantNumeric:'tabular-nums',flexShrink:0}}>
+                        ${Number(l.line_total_inc).toFixed(2)}
                       </div>
                     </div>
-                  ) : order.status === 'paid' ? (
-                    <div style={{fontSize:12,color:T.text3}}>Generating invoice…</div>
-                  ) : (
-                    <div style={{fontSize:12,color:T.text3}}>Will be generated after payment</div>
-                  )}
+                  ))}
                 </div>
+                <div style={{padding:'12px 20px 16px',borderTop:`1px solid ${T.border2}`}}>
+                  <Row label="Subtotal (ex GST)" value={`$${Number(order.subtotal_ex_gst).toFixed(2)}`} muted/>
+                  <Row label="GST" value={`$${Number(order.gst).toFixed(2)}`} muted/>
+                  {Number(order.card_fee_inc) > 0 && <Row label="Card surcharge" value={`$${Number(order.card_fee_inc).toFixed(2)}`} muted/>}
+                  <Row label="Total paid" value={`$${Number(order.total_inc).toFixed(2)}`} large/>
+                </div>
+              </Card>
 
-              </div>
-            </div>
-          </>
-        )}
+              {/* Paper trail */}
+              <Card>
+                <Row
+                  label="Tax invoice"
+                  value={order.myob.invoice_number
+                    ? `${order.myob.invoice_number}${order.myob.written_at ? ` · issued ${formatDateShort(order.myob.written_at)}` : ''}`
+                    : order.status === 'paid' ? 'Being generated…' : 'Generated after payment'}
+                  muted={!order.myob.invoice_number}/>
+                {order.stripe.receipt_url && (
+                  <div style={{marginTop:6}}>
+                    <a href={order.stripe.receipt_url} target="_blank" rel="noopener noreferrer"
+                      style={{fontSize:13,color:A.accent,textDecoration:'none',fontWeight:550}}>
+                      View Stripe payment receipt ↗
+                    </a>
+                  </div>
+                )}
+              </Card>
+            </>
+          )}
 
+        </div>
       </B2BLayout>
     </>
   )
 }
 
-// ── Helpers ────────────────────────────────────────────────────────────
-function Th({ children, align }: { children?: React.ReactNode; align?: 'left'|'right' }) {
-  return (
-    <th style={{
-      textAlign: align || 'left',
-      fontSize:10,fontWeight:500,color:T.text3,
-      textTransform:'uppercase',letterSpacing:'0.06em',
-      padding:'10px 14px',
-    }}>
-      {children}
-    </th>
-  )
-}
+// ── Delivery timeline ───────────────────────────────────────────────────
+// Placed → Paid → Prepared → Shipped → Delivered. "Prepared" covers the
+// picking/packed stages (no per-stage timestamps are exposed to distributors).
+function Timeline({ order }: { order: OrderDetail }) {
+  const preparing = order.status === 'picking' || order.status === 'packed'
+  const shippedOn = ['shipped', 'delivered', 'completed'].includes(order.status) || !!order.shipped_at
+  const delivered = ['delivered', 'completed'].includes(order.status) || !!order.delivered_at
 
-function Td({ children, align, muted }: { children?: React.ReactNode; align?: 'left'|'right'; muted?: boolean }) {
-  return (
-    <td style={{
-      textAlign: align || 'left',
-      fontSize:13,color: muted ? T.text2 : T.text,
-      padding:'12px 14px',
-      fontVariantNumeric: align === 'right' ? 'tabular-nums' : undefined,
-    }}>
-      {children}
-    </td>
-  )
-}
+  const steps: Array<{ label: string; done: boolean; date?: string | null }> = [
+    { label: 'Placed',    done: true,                        date: order.placed_at },
+    { label: 'Paid',      done: !!order.paid_at,             date: order.paid_at },
+    { label: 'Prepared',  done: shippedOn },
+    { label: 'Shipped',   done: shippedOn,                   date: order.shipped_at },
+    { label: 'Delivered', done: delivered,                   date: order.delivered_at },
+  ]
+  // Current = the first not-done step after the last done one (the stage in
+  // progress right now); "Prepared" is current while picking/packed.
+  const lastDone = steps.reduce((acc, s, i) => (s.done ? i : acc), 0)
+  const currentIdx = preparing ? 2 : Math.min(lastDone + 1, steps.length - 1)
 
-function SectionTitle({ children }: { children: React.ReactNode }) {
   return (
-    <div style={{fontSize:12,color:T.text3,textTransform:'uppercase',letterSpacing:'0.08em',marginBottom:12,fontWeight:500}}>
-      {children}
+    <div style={{display:'flex'}}>
+      {steps.map((s, i) => {
+        const isCurrent = !s.done && i === currentIdx
+        const c = s.done ? A.accent : T.text3
+        return (
+          <div key={s.label} style={{flex:1,display:'flex',flexDirection:'column',alignItems:'center',gap:6,position:'relative'}}>
+            {i > 0 && (
+              <span style={{
+                position:'absolute', top:5, right:'50%', width:'100%', height:2,
+                background: s.done ? A.accent : T.bg4,
+              }}/>
+            )}
+            <span style={{
+              width:12, height:12, borderRadius:RADIUS.pill, zIndex:1,
+              background: s.done ? A.accent : T.bg4,
+              boxShadow: isCurrent ? `0 0 0 4px ${alpha(A.accent, '30')}` : undefined,
+            }}/>
+            <span style={{
+              fontSize:11.5, fontWeight: s.done || isCurrent ? 650 : 500,
+              color: s.done ? T.text : isCurrent ? T.text2 : T.text3,
+              textAlign:'center',
+            }}>
+              {s.label}
+            </span>
+            <span style={{fontSize:11.5,color:T.text3,fontVariantNumeric:'tabular-nums',textAlign:'center',minHeight:14}}>
+              {s.date
+                ? formatDateShort(s.date)
+                : s.label === 'Delivered' && order.shipping?.eta_at && !s.done
+                  ? `ETA ${formatDateShort(order.shipping.eta_at)}`
+                  : ''}
+            </span>
+          </div>
+        )
+      })}
     </div>
   )
 }
 
-function Row({ label, value, muted, large }: { label: string; value: string; muted?: boolean; large?: boolean }) {
-  return (
-    <div style={{
-      display:'flex',justifyContent:'space-between',alignItems:'baseline',padding:'4px 0',
-      fontSize: large ? 14 : 12,
-      color: muted ? T.text3 : T.text2,
-      fontWeight: large ? 600 : 400,
-    }}>
-      <span>{label}</span>
-      <span style={{color: large ? T.text : 'inherit',fontVariantNumeric:'tabular-nums'}}>{value}</span>
-    </div>
-  )
-}
-
-function StatusPill({ status, hasError }: { status: string; hasError?: boolean }) {
-  const c = colorFor(status)
-  const label = labelFor(status)
-  return (
-    <span style={{display:'inline-flex',alignItems:'center',gap:5,fontSize:10,fontWeight:500,padding:'2px 8px',borderRadius:8,background:`${c}18`,color:c}}>
-      {label}
-      {hasError && status === 'paid' && <span title="MYOB writeback failed" style={{color:T.amber}}>⚠</span>}
-    </span>
-  )
-}
-
-function colorFor(status: string): string {
-  switch (status) {
-    case 'pending_payment': return T.amber
-    case 'paid':            return T.green
-    case 'picking':
-    case 'packed':          return T.teal
-    case 'shipped':         return T.blue
-    case 'completed':       return T.green
-    case 'cancelled':       return T.text3
-    case 'refunded':        return T.red
-    default:                return T.text2
-  }
-}
-
-function labelFor(status: string): string {
-  if (status === 'pending_payment') return 'Awaiting payment'
-  return status.charAt(0).toUpperCase() + status.slice(1)
+// Per-unit price inc GST, derived from the line totals so it matches what
+// was actually charged (unit_trade_price is ex GST).
+function lineUnitInc(l: OrderDetail['lines'][number]): number {
+  if (l.qty > 0) return Math.round((Number(l.line_total_inc) / l.qty) * 100) / 100
+  return Number(l.line_total_inc)
 }
 
 function formatDate(iso: string): string {
@@ -409,6 +337,12 @@ function formatDate(iso: string): string {
     year: 'numeric', month: 'short', day: 'numeric',
     hour: 'numeric', minute: '2-digit',
   })
+}
+
+function formatDateShort(iso: string): string {
+  if (!iso) return ''
+  const d = new Date(iso)
+  return d.toLocaleDateString('en-AU', { day: 'numeric', month: 'short' })
 }
 
 export const getServerSideProps: GetServerSideProps = async (ctx) => {

@@ -1,6 +1,7 @@
 // pages/b2b/orders.tsx
 //
-// Distributor order history list.
+// Distributor order history list. Alloy look: dot status pills, airier
+// table on desktop, tappable cards on mobile.
 
 import { useEffect, useState } from 'react'
 import Head from 'next/head'
@@ -8,14 +9,8 @@ import type { GetServerSideProps } from 'next'
 import B2BLayout from '../../components/b2b/B2BLayout'
 import { requireB2BPageAuth } from '../../lib/b2bAuthServer'
 import { useIsMobile } from '../../lib/useIsMobile'
-
-const T = {
-  bg:'var(--t-bg)', bg2:'var(--t-bg2)', bg3:'var(--t-bg3)', bg4:'var(--t-bg4)',
-  border:'var(--t-border)', border2:'var(--t-border2)',
-  text:'var(--t-text)', text2:'var(--t-text2)', text3:'var(--t-text3)',
-  blue:'#4f8ef7', teal:'#2dd4bf', green:'#34c77b',
-  amber:'#f5a623', red:'#f04e4e',
-}
+import { T } from '../../lib/ui/theme'
+import { A, RADIUS, Banner, Btn, btnStyle, Card, EmptyState, PageTitle, StatusPill, orderStatusColor, orderStatusLabel } from '../../components/b2b/ui'
 
 interface Props {
   b2bUser: {
@@ -69,59 +64,51 @@ export default function OrdersListPage({ b2bUser }: Props) {
       <Head><title>Orders · Just Autos B2B</title></Head>
       <B2BLayout user={b2bUser} active="orders">
 
-        <header style={{display:'flex',alignItems:'flex-end',justifyContent:'space-between',marginBottom:18,gap:12,flexWrap:'wrap'}}>
-          <div>
-            <h1 style={{fontSize:22,fontWeight:600,margin:0,letterSpacing:'-0.01em'}}>Orders</h1>
-            <div style={{fontSize:13,color:T.text3,marginTop:4}}>
-              Recent purchases for {b2bUser.distributor.displayName}.
-            </div>
-          </div>
-          <button onClick={load} disabled={loading}
-            style={{padding:'7px 12px',borderRadius:5,border:`1px solid ${T.border2}`,background:'transparent',color:T.text2,fontSize:12,cursor:loading?'wait':'pointer',fontFamily:'inherit'}}>
-            {loading ? '…' : '↻'}
-          </button>
-        </header>
+        <PageTitle
+          sub={`Recent purchases for ${b2bUser.distributor.displayName}.`}
+          action={
+            <Btn variant="ghost" size="sm" onClick={load} disabled={loading}>
+              {loading ? 'Loading…' : 'Reload'}
+            </Btn>
+          }>
+          Orders
+        </PageTitle>
 
-        {error && (
-          <div style={{padding:12,background:`${T.red}15`,border:`1px solid ${T.red}40`,borderRadius:7,color:T.red,fontSize:13,marginBottom:14}}>
-            {error}
-          </div>
-        )}
+        {error && <div style={{marginBottom:14}}><Banner tone="error">{error}</Banner></div>}
 
         {!loading && orders.length === 0 && !error && (
-          <div style={{padding:36,textAlign:'center',background:T.bg2,border:`1px solid ${T.border}`,borderRadius:10}}>
-            <div style={{fontSize:14,color:T.text2,marginBottom:14}}>No orders yet.</div>
-            <a href="/b2b/catalogue"
-              style={{display:'inline-block',padding:'9px 18px',borderRadius:6,border:`1px solid ${T.blue}`,background:T.blue,color:'#fff',fontSize:13,fontWeight:500,textDecoration:'none'}}>
-              Browse catalogue
-            </a>
-          </div>
+          <EmptyState
+            title="No orders yet"
+            action={<a href="/b2b/catalogue" style={{...btnStyle('primary', 'md'), textDecoration:'none'}}>Browse the catalogue</a>}/>
         )}
 
         {orders.length > 0 && isMobile && (
           /* Mobile: card list (touch-friendly, easy to scan on a phone) */
-          <div style={{display:'flex',flexDirection:'column',gap:10}}>
+          <div style={{display:'flex',flexDirection:'column',gap:12}}>
             {orders.map(o => (
-              <a key={o.id} href={`/b2b/orders/${o.id}`}
+              <a key={o.id} href={`/b2b/orders/${o.id}`} className="al-raise"
                 style={{
                   display:'block',
-                  background:T.bg2, border:`1px solid ${T.border}`, borderRadius:10,
-                  padding:'14px 16px',
+                  background:T.bg2, border:`1px solid ${T.border}`, borderRadius:RADIUS.md,
+                  boxShadow:'var(--a-shadow-sm)',
+                  padding:'15px 17px',
                   textDecoration:'none', color: T.text,
                 }}>
                 <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:8,flexWrap:'wrap'}}>
-                  <strong style={{fontSize:14,fontWeight:600,letterSpacing:'-0.005em'}}>{o.order_number}</strong>
-                  <StatusPill status={o.status} hasError={!!o.myob_write_error}/>
+                  <strong style={{fontSize:15,fontWeight:650,letterSpacing:'-0.01em'}}>{o.order_number}</strong>
+                  <OrderStatus status={o.status} hasError={!!o.myob_write_error}/>
                   <span style={{flex:1}}/>
-                  <span style={{fontSize:14, fontWeight:600, color:T.text}}>${Number(o.total_inc).toFixed(2)}</span>
+                  <span style={{fontSize:15,fontWeight:650,color:T.text,fontVariantNumeric:'tabular-nums',letterSpacing:'-0.01em'}}>
+                    ${Number(o.total_inc).toFixed(2)}
+                  </span>
                 </div>
-                <div style={{display:'flex',alignItems:'center',gap:10,fontSize:11,color:T.text3,flexWrap:'wrap'}}>
+                <div style={{display:'flex',alignItems:'center',gap:10,fontSize:12.5,color:T.text3,flexWrap:'wrap'}}>
                   <span>{formatDate(o.placed_at)}</span>
                   <span style={{flex:1}}/>
                   <span>
                     {o.myob_invoice_number
                       ? `Invoice ${o.myob_invoice_number}`
-                      : (o.status === 'paid' ? <span style={{color:T.amber}}>Processing…</span> : '—')}
+                      : (o.status === 'paid' ? <span style={{color:A.warn}}>Processing…</span> : '')}
                   </span>
                 </div>
               </a>
@@ -131,32 +118,32 @@ export default function OrdersListPage({ b2bUser }: Props) {
 
         {orders.length > 0 && !isMobile && (
           /* Desktop: traditional table */
-          <div style={{background:T.bg2,border:`1px solid ${T.border}`,borderRadius:10,overflow:'hidden'}}>
+          <Card pad={false}>
             <table style={{width:'100%',borderCollapse:'collapse'}}>
               <thead>
-                <tr style={{background:T.bg3,borderBottom:`1px solid ${T.border2}`}}>
+                <tr style={{borderBottom:`1px solid ${T.border2}`}}>
                   <Th>Order</Th>
                   <Th>Placed</Th>
                   <Th>Status</Th>
                   <Th align="right">Total</Th>
-                  <Th>MYOB Invoice</Th>
+                  <Th>Invoice</Th>
                   <Th width={50}/>
                 </tr>
               </thead>
               <tbody>
                 {orders.map(o => (
                   <tr key={o.id} style={{borderBottom:`1px solid ${T.border}`}}>
-                    <Td><a href={`/b2b/orders/${o.id}`} style={{color:T.text,textDecoration:'none',fontWeight:500}}>{o.order_number}</a></Td>
+                    <Td><a href={`/b2b/orders/${o.id}`} style={{color:T.text,textDecoration:'none',fontWeight:600}}>{o.order_number}</a></Td>
                     <Td muted>{formatDate(o.placed_at)}</Td>
-                    <Td><StatusPill status={o.status} hasError={!!o.myob_write_error}/></Td>
-                    <Td align="right">${Number(o.total_inc).toFixed(2)}</Td>
-                    <Td muted>{o.myob_invoice_number || (o.status === 'paid' ? <span style={{color:T.amber}}>processing…</span> : '—')}</Td>
-                    <Td><a href={`/b2b/orders/${o.id}`} style={{color:T.blue,textDecoration:'none',fontSize:12}}>→</a></Td>
+                    <Td><OrderStatus status={o.status} hasError={!!o.myob_write_error}/></Td>
+                    <Td align="right"><strong style={{fontWeight:600}}>${Number(o.total_inc).toFixed(2)}</strong></Td>
+                    <Td muted>{o.myob_invoice_number || (o.status === 'paid' ? <span style={{color:A.warn}}>processing…</span> : '—')}</Td>
+                    <Td><a href={`/b2b/orders/${o.id}`} aria-label={`View order ${o.order_number}`} style={{color:A.accent,textDecoration:'none',fontSize:15}}>›</a></Td>
                   </tr>
                 ))}
               </tbody>
             </table>
-          </div>
+          </Card>
         )}
 
       </B2BLayout>
@@ -168,9 +155,8 @@ function Th({ children, align, width }: { children?: React.ReactNode; align?: 'l
   return (
     <th style={{
       textAlign: align || 'left',
-      fontSize:10,fontWeight:500,color:T.text3,
-      textTransform:'uppercase',letterSpacing:'0.06em',
-      padding:'10px 14px',
+      fontSize:12,fontWeight:600,color:T.text3,
+      padding:'13px 16px',
       width: width || 'auto',
     }}>
       {children}
@@ -182,8 +168,8 @@ function Td({ children, align, muted }: { children?: React.ReactNode; align?: 'l
   return (
     <td style={{
       textAlign: align || 'left',
-      fontSize:13,color: muted ? T.text2 : T.text,
-      padding:'12px 14px',
+      fontSize:13.5,color: muted ? T.text2 : T.text,
+      padding:'14px 16px',
       fontVariantNumeric: align === 'right' ? 'tabular-nums' : undefined,
     }}>
       {children}
@@ -191,41 +177,15 @@ function Td({ children, align, muted }: { children?: React.ReactNode; align?: 'l
   )
 }
 
-function StatusPill({ status, hasError }: { status: string; hasError?: boolean }) {
-  const c = colorFor(status)
-  const label = labelFor(status)
+function OrderStatus({ status, hasError }: { status: string; hasError?: boolean }) {
   return (
-    <span style={{
-      display:'inline-flex',alignItems:'center',gap:5,
-      fontSize:10,fontWeight:500,
-      padding:'2px 8px',borderRadius:8,
-      background:`${c}18`,color:c,
-    }}>
-      {label}
+    <StatusPill color={orderStatusColor(status)}>
+      {orderStatusLabel(status)}
       {hasError && status === 'paid' && (
-        <span title="MYOB writeback failed — staff have been notified" style={{color:T.amber}}>⚠</span>
+        <span title="Invoice generation is delayed — staff have been notified" style={{color:A.warn}}> ·</span>
       )}
-    </span>
+    </StatusPill>
   )
-}
-
-function colorFor(status: string): string {
-  switch (status) {
-    case 'pending_payment': return T.amber
-    case 'paid':            return T.green
-    case 'picking':         return T.teal
-    case 'packed':          return T.teal
-    case 'shipped':         return T.blue
-    case 'completed':       return T.green
-    case 'cancelled':       return T.text3
-    case 'refunded':        return T.red
-    default:                return T.text2
-  }
-}
-
-function labelFor(status: string): string {
-  if (status === 'pending_payment') return 'Awaiting payment'
-  return status.charAt(0).toUpperCase() + status.slice(1)
 }
 
 function formatDate(iso: string): string {

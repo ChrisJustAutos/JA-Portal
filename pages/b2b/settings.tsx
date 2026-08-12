@@ -10,15 +10,10 @@ import { requireB2BPageAuth } from '../../lib/b2bAuthServer'
 import { enableNotifications, ensurePushSubscription } from '../../lib/pushClient'
 import { getSupabase } from '../../lib/supabaseClient'
 import { useConfirm } from '../../components/ui/Feedback'
+import { T } from '../../lib/ui/theme'
+import { A, Banner, Btn, Card, DotLine, PageTitle, SectionLabel, StatusPill, btnStyle, inputStyle } from '../../components/b2b/ui'
 
 const B2B_SUBSCRIBE_URL = '/api/b2b/notifications/push-subscribe'
-
-const T = {
-  bg:'var(--t-bg)', bg2:'var(--t-bg2)', bg3:'var(--t-bg3)', bg4:'var(--t-bg4)',
-  border:'var(--t-border)', border2:'var(--t-border2)',
-  text:'var(--t-text)', text2:'var(--t-text2)', text3:'var(--t-text3)',
-  blue:'#4f8ef7', teal:'#2dd4bf', green:'#34c77b', amber:'#f5a623', red:'#f04e4e',
-}
 
 interface Props {
   b2bUser: {
@@ -63,54 +58,52 @@ export default function B2BSettingsPage({ b2bUser }: Props) {
     return parts
   }
 
-  const card: React.CSSProperties = { background: T.bg2, border: `1px solid ${T.border}`, borderRadius: 12, padding: 18, marginBottom: 16 }
-  const cardTitle: React.CSSProperties = { fontSize: 11, color: T.text3, textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: 12 }
-
   function Field({ label, value, mono }: { label: string; value: any; mono?: boolean }) {
     const v = value == null || String(value).trim() === '' ? '—' : String(value)
     return (
-      <div style={{ display: 'grid', gridTemplateColumns: '130px 1fr', gap: '4px 12px', alignItems: 'baseline', padding: '5px 0', borderBottom: `1px solid ${T.border}` }}>
-        <span style={{ fontSize: 12, color: T.text3 }}>{label}</span>
-        <span style={{ fontSize: 13, color: v === '—' ? T.text3 : T.text, fontFamily: mono ? 'monospace' : 'inherit' }}>{v}</span>
+      <div style={{ display: 'grid', gridTemplateColumns: '130px 1fr', gap: '4px 12px', alignItems: 'baseline', padding: '6px 0', borderBottom: `1px solid ${T.border}` }}>
+        <span style={{ fontSize: 12.5, color: T.text3 }}>{label}</span>
+        <span style={{ fontSize: 13, color: v === '—' ? T.text3 : T.text, fontFamily: mono ? 'ui-monospace, monospace' : 'inherit', fontVariantNumeric: mono ? 'tabular-nums' : undefined }}>{v}</span>
       </div>
     )
   }
 
   function AddressCard({ title, lines }: { title: string; lines: string[] }) {
     return (
-      <div style={{ ...card, flex: 1, minWidth: 240, marginBottom: 0 }}>
-        <div style={cardTitle}>{title}</div>
+      <Card style={{ flex: 1, minWidth: 240 }}>
+        <SectionLabel>{title}</SectionLabel>
         {lines.length === 0
           ? <div style={{ fontSize: 13, color: T.text3 }}>Not set — contact your account manager.</div>
           : lines.map((l, i) => <div key={i} style={{ fontSize: 13, color: T.text, lineHeight: 1.5 }}>{l}</div>)}
-      </div>
+      </Card>
     )
   }
 
   return (
     <B2BLayout user={b2bUser} active="account">
-      <div style={{ maxWidth: 760, margin: '0 auto', padding: '4px 0 40px' }}>
-        <h1 style={{ fontSize: 22, fontWeight: 600, margin: '8px 0 4px' }}>Settings</h1>
-        <p style={{ fontSize: 12.5, color: T.text2, marginTop: 0, lineHeight: 1.6 }}>
+      <div style={{ maxWidth: 760, margin: '0 auto' }}>
+        <PageTitle sub={<>
           Your account details. To change company info or addresses, contact your account manager.
-          Manage who can log in on the <a href="/b2b/team" style={{ color: T.blue, textDecoration: 'none' }}>Team</a> page.
-        </p>
+          Manage who can log in on the <a href="/b2b/team" style={{ color: A.accent, textDecoration: 'none' }}>Team</a> page.
+        </>}>
+          Settings
+        </PageTitle>
 
         {loading && <div style={{ color: T.text3, fontSize: 13, padding: 16 }}>Loading…</div>}
-        {error && <div style={{ color: T.red, fontSize: 13, padding: 12, background: `${T.red}15`, border: `1px solid ${T.red}40`, borderRadius: 8 }}>{error}</div>}
+        {error && <div style={{ marginBottom: 16 }}><Banner tone="error">{error}</Banner></div>}
 
         {data && (
           <>
             {/* Company */}
-            <div style={card}>
-              <div style={cardTitle}>Company</div>
+            <Card style={{ marginBottom: 16 }}>
+              <SectionLabel>Company</SectionLabel>
               <Field label="Account" value={d.display_name || b2bUser.distributor.displayName} />
               <Field label="Trading name" value={d.trading_name} />
               <Field label="ABN" value={d.abn} mono />
               <Field label="Contact email" value={d.primary_contact_email} />
               <Field label="Contact phone" value={d.primary_contact_phone} />
               <Field label="Team members" value={data.teamCount != null ? `${data.teamCount} active` : null} />
-            </div>
+            </Card>
 
             {/* Addresses */}
             <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginBottom: 16 }}>
@@ -120,36 +113,36 @@ export default function B2BSettingsPage({ b2bUser }: Props) {
 
             {/* Email routing — only show if any are set */}
             {(d.freight_email || d.invoice_email || d.instructions_email) && (
-              <div style={card}>
-                <div style={cardTitle}>Notification emails</div>
+              <Card style={{ marginBottom: 16 }}>
+                <SectionLabel>Notification emails</SectionLabel>
                 <Field label="Freight / labels" value={d.freight_email} />
                 <Field label="Invoices" value={d.invoice_email} />
                 <Field label="Instructions" value={d.instructions_email} />
-              </div>
+              </Card>
             )}
 
             {/* Notifications */}
-            <div style={card}>
-              <div style={cardTitle}>Notifications</div>
+            <Card style={{ marginBottom: 16 }}>
+              <SectionLabel>Notifications</SectionLabel>
               <NotificationsCard />
-            </div>
+            </Card>
 
             {/* Security / two-factor */}
-            <div style={card}>
-              <div style={cardTitle}>Security</div>
+            <Card style={{ marginBottom: 16 }}>
+              <SectionLabel>Security</SectionLabel>
               <TwoFactorCard />
-            </div>
+            </Card>
 
             {/* Your profile */}
-            <div style={card}>
-              <div style={cardTitle}>Your profile</div>
+            <Card style={{ marginBottom: 16 }}>
+              <SectionLabel>Your profile</SectionLabel>
               <Field label="Name" value={data.profile.full_name} />
               <Field label="Email" value={data.profile.email} />
               <Field label="Role" value={data.profile.role === 'owner' ? 'Owner' : 'Member'} />
-              <div style={{ fontSize: 11, color: T.text3, marginTop: 10, lineHeight: 1.5 }}>
+              <div style={{ fontSize: 12.5, color: T.text3, marginTop: 10, lineHeight: 1.5 }}>
                 You sign in with your email and password. Use “Set / forgot password” on the sign-in page to change it.
               </div>
-            </div>
+            </Card>
           </>
         )}
       </div>
@@ -221,39 +214,40 @@ function TwoFactorCard() {
     finally { setBusy(false) }
   }
 
-  const inp: React.CSSProperties = { width: '100%', background: T.bg3, border: `1px solid ${T.border2}`, color: T.text, borderRadius: 6, padding: '10px 12px', fontSize: 18, outline: 'none', boxSizing: 'border-box', letterSpacing: '0.3em', textAlign: 'center' }
-  const btn = (bg: string, on = true): React.CSSProperties => ({ padding: '8px 16px', borderRadius: 5, border: 'none', background: on ? bg : T.bg4, color: on ? '#fff' : T.text3, fontSize: 12, fontWeight: 600, cursor: on ? 'pointer' : 'default', fontFamily: 'inherit' })
-
   return (
     <div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6 }}>
-        <div style={{ fontSize: 12.5, color: T.text2 }}>Authenticator (2FA)</div>
-        {loading ? <span style={{ fontSize: 10, color: T.text3 }}>checking…</span>
-          : enrolled ? <span style={{ fontSize: 10, padding: '2px 8px', borderRadius: 10, background: `${T.green}22`, color: T.green, border: `1px solid ${T.green}55` }}>● Active</span>
-          : <span style={{ fontSize: 10, padding: '2px 8px', borderRadius: 10, background: `${T.amber}22`, color: T.amber, border: `1px solid ${T.amber}55` }}>Not set up</span>}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6, flexWrap: 'wrap' }}>
+        <div style={{ fontSize: 13, fontWeight: 600, color: T.text }}>Authenticator (2FA)</div>
+        {loading ? <span style={{ fontSize: 12, color: T.text3 }}>checking…</span>
+          : enrolled ? <StatusPill color={A.good}>Active</StatusPill>
+          : <StatusPill color={A.warn}>Not set up</StatusPill>}
       </div>
-      <div style={{ fontSize: 11.5, color: T.text3, marginBottom: 14, lineHeight: 1.5 }}>Optional: a 6-digit code from an authenticator app (Google/Microsoft Authenticator, 1Password, Authy…) on top of your password.</div>
+      <div style={{ fontSize: 12.5, color: T.text3, marginBottom: 14, lineHeight: 1.5 }}>Optional: a 6-digit code from an authenticator app (Google/Microsoft Authenticator, 1Password, Authy…) on top of your password.</div>
 
-      {info && <div style={{ fontSize: 12, color: T.green, marginBottom: 10 }}>{info}</div>}
-      {error && <div style={{ fontSize: 12, color: T.red, marginBottom: 10 }}>{error}</div>}
+      {info && <div style={{ marginBottom: 10 }}><Banner tone="success">{info}</Banner></div>}
+      {error && <div style={{ marginBottom: 10 }}><Banner tone="error">{error}</Banner></div>}
 
       {!enrolling && !enrolled && !loading && (
-        <button onClick={startEnrol} disabled={busy} style={btn(T.blue, !busy)}>{busy ? 'Starting…' : 'Set up authenticator'}</button>
+        <Btn onClick={startEnrol} disabled={busy}>{busy ? 'Starting…' : 'Set up authenticator'}</Btn>
       )}
       {!enrolling && enrolled && (
-        <button onClick={removeAll} disabled={busy} style={{ ...btn(T.bg4), color: T.red, border: `1px solid ${T.red}40` }}>{busy ? 'Working…' : 'Remove authenticator'}</button>
+        <button onClick={removeAll} disabled={busy} className="al-press al-focus"
+          style={{ ...btnStyle('secondary', 'md', busy), color: A.bad }}>
+          {busy ? 'Working…' : 'Remove authenticator'}
+        </button>
       )}
       {enrolling && (
         <form onSubmit={confirmEnrol}>
-          <div style={{ fontSize: 12, color: T.text2, marginBottom: 10 }}>1. Scan this QR code in your authenticator app:</div>
+          <div style={{ fontSize: 12.5, color: T.text2, marginBottom: 10 }}>1. Scan this QR code in your authenticator app:</div>
           {qr && <div style={{ background: '#fff', padding: 12, borderRadius: 10, display: 'inline-block', marginBottom: 12 }}><img src={qr} alt="2FA QR" width={170} height={170} style={{ display: 'block' }} /></div>}
-          {secret && <div style={{ fontSize: 11, color: T.text3, marginBottom: 12 }}>Can’t scan? Key: <span style={{ fontFamily: 'monospace', color: T.text, userSelect: 'all', wordBreak: 'break-all' }}>{secret}</span></div>}
-          <div style={{ fontSize: 10, color: T.text3, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 6 }}>2. Enter the 6-digit code</div>
+          {secret && <div style={{ fontSize: 12, color: T.text3, marginBottom: 12 }}>Can’t scan? Key: <span style={{ fontFamily: 'ui-monospace, monospace', color: T.text, userSelect: 'all', wordBreak: 'break-all' }}>{secret}</span></div>}
+          <div style={{ fontSize: 12.5, color: T.text2, fontWeight: 650, marginBottom: 6 }}>2. Enter the 6-digit code</div>
           <input type="text" inputMode="numeric" autoComplete="one-time-code" autoFocus value={code}
-            onChange={e => setCode(e.target.value.replace(/[^\d]/g, '').slice(0, 6))} placeholder="123456" style={inp} />
-          <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
-            <button type="submit" disabled={busy || code.length !== 6} style={btn(T.green, !busy && code.length === 6)}>{busy ? 'Verifying…' : 'Verify & enable'}</button>
-            <button type="button" onClick={() => { setEnrolling(false); setError('') }} disabled={busy} style={{ ...btn(T.bg4), color: T.text2 }}>Cancel</button>
+            onChange={e => setCode(e.target.value.replace(/[^\d]/g, '').slice(0, 6))} placeholder="123456"
+            style={{ ...inputStyle(), fontSize: 18, letterSpacing: '0.3em', textAlign: 'center' }} />
+          <div style={{ display: 'flex', gap: 8, marginTop: 12, flexWrap: 'wrap' }}>
+            <Btn type="submit" disabled={busy || code.length !== 6}>{busy ? 'Verifying…' : 'Verify & enable'}</Btn>
+            <Btn variant="ghost" onClick={() => { setEnrolling(false); setError('') }} disabled={busy}>Cancel</Btn>
           </div>
         </form>
       )}
@@ -298,28 +292,24 @@ function NotificationsCard() {
     } finally { setBusy(false) }
   }
 
-  const T2 = { text: 'var(--t-text)', text2: 'var(--t-text2)', text3: 'var(--t-text3)', blue: '#4f8ef7', green: '#34c77b', amber: '#f5a623', border2: 'var(--t-border2)' }
-  const btn: React.CSSProperties = { background: T2.blue, border: 'none', color: '#fff', borderRadius: 7, padding: '8px 14px', fontSize: 12.5, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }
-  const ghost: React.CSSProperties = { background: 'none', border: `1px solid ${T2.border2}`, color: T2.text2, borderRadius: 7, padding: '8px 14px', fontSize: 12.5, cursor: 'pointer', fontFamily: 'inherit' }
-
   return (
-    <div style={{ fontSize: 13, color: T2.text2, lineHeight: 1.6 }}>
+    <div style={{ fontSize: 13, color: T.text2, lineHeight: 1.6 }}>
       Get order confirmations and shipping updates as pop-up notifications on this device.
-      <div style={{ display: 'flex', gap: 8, marginTop: 12, flexWrap: 'wrap', alignItems: 'center' }}>
+      <div style={{ display: 'flex', gap: 10, marginTop: 12, flexWrap: 'wrap', alignItems: 'center' }}>
         {perm === 'unsupported' && (
-          <span style={{ color: T2.amber, fontSize: 12 }}>On iPhone, add this app to your Home Screen (Share → Add to Home Screen) on iOS 16.4+, then open it from the icon.</span>
+          <span style={{ color: A.warn, fontSize: 12.5 }}>On iPhone, add this app to your Home Screen (Share → Add to Home Screen) on iOS 16.4+, then open it from the icon.</span>
         )}
-        {perm === 'default' && <button onClick={enable} disabled={busy} style={btn}>{busy ? '…' : 'Enable notifications'}</button>}
-        {perm === 'denied' && <span style={{ color: T2.amber, fontSize: 12 }}>Blocked — allow notifications for this site in your browser settings, then reopen the app.</span>}
-        {perm === 'granted' && (count || 0) === 0 && <button onClick={register} disabled={busy} style={btn}>{busy ? '…' : 'Register this device'}</button>}
+        {perm === 'default' && <Btn onClick={enable} disabled={busy}>{busy ? 'Enabling…' : 'Enable notifications'}</Btn>}
+        {perm === 'denied' && <span style={{ color: A.warn, fontSize: 12.5 }}>Blocked — allow notifications for this site in your browser settings, then reopen the app.</span>}
+        {perm === 'granted' && (count || 0) === 0 && <Btn onClick={register} disabled={busy}>{busy ? 'Registering…' : 'Register this device'}</Btn>}
         {perm === 'granted' && (count || 0) > 0 && (
           <>
-            <span style={{ color: T2.green, fontSize: 12.5 }}>✓ On · {count} device{count === 1 ? '' : 's'}</span>
-            <button onClick={sendTest} disabled={busy} style={ghost}>{busy ? '…' : 'Send test'}</button>
+            <DotLine color={A.good}>On · {count} device{count === 1 ? '' : 's'}</DotLine>
+            <Btn variant="secondary" size="sm" onClick={sendTest} disabled={busy}>{busy ? 'Sending…' : 'Send test'}</Btn>
           </>
         )}
       </div>
-      {msg && <div style={{ marginTop: 8, fontSize: 12, color: msg.startsWith('✓') || msg.startsWith('Test') ? T2.green : T2.amber }}>{msg}</div>}
+      {msg && <div style={{ marginTop: 8, fontSize: 12.5, color: msg.startsWith('✓') || msg.startsWith('Test') ? A.good : A.warn }}>{msg}</div>}
     </div>
   )
 }

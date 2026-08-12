@@ -4,11 +4,15 @@
 // remove buttons, and a totals panel showing subtotal/GST/card-fee/total.
 //
 // Checkout flow:
-//   - Optional Purchase Order field (max 20 chars — MYOB limit)
+//   - Purchase Order field (max 20 chars — MYOB limit) — FIRST in the rail:
+//     it's required, so it must not be discovered last behind a dead button
 //   - "Checkout" POSTs to /api/b2b/checkout/start with { customer_po }
 //   - On success, redirects browser to the returned Stripe URL
 //   - On Stripe cancel, user lands back here with ?cancelled={order_id}
 //     and we show a small "checkout cancelled" banner
+//
+// Look: Alloy kit — payment method as a segmented control, freight as
+// tappable rows, the PayTo/BECS explainers behind a disclosure.
 
 import { useEffect, useState } from 'react'
 import Head from 'next/head'
@@ -20,14 +24,8 @@ import { useIsMobile } from '../../lib/useIsMobile'
 import { paytoSurchargeInc } from '../../lib/b2b-payment'
 import { useConfirm, useToast } from '../../components/ui/Feedback'
 import { SkeletonRows } from '../../components/ui'
-
-const T = {
-  bg:'var(--t-bg)', bg2:'var(--t-bg2)', bg3:'var(--t-bg3)', bg4:'var(--t-bg4)',
-  border:'var(--t-border)', border2:'var(--t-border2)',
-  text:'var(--t-text)', text2:'var(--t-text2)', text3:'var(--t-text3)',
-  blue:'#4f8ef7', teal:'#2dd4bf', green:'#34c77b',
-  amber:'#f5a623', red:'#f04e4e', purple:'#a78bfa',
-}
+import { T, alpha } from '../../lib/ui/theme'
+import { A, RADIUS, SHADOW, Banner, Btn, btnStyle, Card, Disclosure, Field, PageTitle, Row, Seg, Stepper, inputStyle } from '../../components/b2b/ui'
 
 interface Props {
   b2bUser: {
@@ -287,107 +285,91 @@ export default function B2BCartPage({ b2bUser }: Props) {
       <Head><title>Cart · Just Autos B2B</title></Head>
       <B2BLayout user={b2bUser} active="cart" cartCount={cartItemCount}>
 
-        <header style={{marginBottom:18}}>
-          <h1 style={{fontSize:22,fontWeight:600,margin:0,letterSpacing:'-0.01em'}}>Your cart</h1>
-          {data && data.lines.length > 0 && (
-            <div style={{fontSize:13,color:T.text3,marginTop:4}}>
-              {data.line_count} {data.line_count === 1 ? 'item' : 'items'} · {data.item_count} {data.item_count === 1 ? 'unit' : 'units'}
-            </div>
-          )}
-        </header>
+        <PageTitle
+          sub={data && data.lines.length > 0
+            ? `${data.line_count} ${data.line_count === 1 ? 'item' : 'items'} · ${data.item_count} ${data.item_count === 1 ? 'unit' : 'units'}`
+            : undefined}>
+          Cart
+        </PageTitle>
 
         {/* Stripe-cancelled banner */}
         {cancelledOrderId && (
-          <div style={{padding:'12px 16px',background:`${T.amber}15`,border:`1px solid ${T.amber}40`,borderRadius:7,fontSize:13,color:T.text,marginBottom:14,display:'flex',alignItems:'center',justifyContent:'space-between',gap:14}}>
-            <span>Checkout cancelled. Your cart has been saved — you can try again whenever you're ready.</span>
-            <button
-              onClick={() => router.replace('/b2b/cart', undefined, { shallow: true })}
-              style={{background:'transparent',border:'none',color:T.text3,cursor:'pointer',fontSize:14,fontFamily:'inherit'}}>×</button>
+          <div style={{marginBottom:14}}>
+            <Banner tone="warn" onDismiss={() => router.replace('/b2b/cart', undefined, { shallow: true })}>
+              Checkout cancelled. Your cart has been saved — you can try again whenever you're ready.
+            </Banner>
           </div>
         )}
 
-        {error && (
-          <div style={{padding:12,background:`${T.red}15`,border:`1px solid ${T.red}40`,borderRadius:7,color:T.red,fontSize:13,marginBottom:14}}>
-            {error}
-          </div>
-        )}
+        {error && <div style={{marginBottom:14}}><Banner tone="error">{error}</Banner></div>}
 
         {checkoutError && (
-          <div style={{padding:'12px 16px',background:`${T.red}15`,border:`1px solid ${T.red}40`,borderRadius:7,color:T.red,fontSize:13,marginBottom:14}}>
-            <div style={{fontWeight:500,marginBottom:4}}>{checkoutError}</div>
-            {checkoutIssues && checkoutIssues.length > 0 && (
-              <ul style={{margin:'4px 0 0',paddingLeft:18,color:T.text2}}>
-                {checkoutIssues.map((iss, i) => <li key={i}>{iss}</li>)}
-              </ul>
-            )}
+          <div style={{marginBottom:14}}>
+            <Banner tone="error">
+              <div style={{fontWeight:600}}>{checkoutError}</div>
+              {checkoutIssues && checkoutIssues.length > 0 && (
+                <ul style={{margin:'6px 0 0',paddingLeft:18,color:T.text2}}>
+                  {checkoutIssues.map((iss, i) => <li key={i}>{iss}</li>)}
+                </ul>
+              )}
+            </Banner>
           </div>
         )}
 
         {loading && !data && (
-          <div style={{background:T.bg2,border:`1px solid ${T.border}`,borderRadius:10,overflow:'hidden'}}>
-            <SkeletonRows rows={8}/>
-          </div>
+          <Card pad={false}><SkeletonRows rows={8}/></Card>
         )}
 
         {!loading && isEmpty && (
-          <div style={{padding:36,textAlign:'center',background:T.bg2,border:`1px solid ${T.border}`,borderRadius:10}}>
-            <div style={{fontSize:14,color:T.text2,marginBottom:14}}>Your cart is empty.</div>
-            <a href="/b2b/catalogue"
-              style={{display:'inline-block',padding:'9px 18px',borderRadius:6,border:`1px solid ${T.blue}`,background:T.blue,color:'#fff',fontSize:13,fontWeight:500,textDecoration:'none'}}>
-              Browse catalogue
-            </a>
-          </div>
+          <Card style={{padding:'44px 24px', textAlign:'center'}}>
+            <div style={{fontSize:15,fontWeight:600,color:T.text,marginBottom:16}}>Your cart is empty</div>
+            <a href="/b2b/catalogue" style={{...btnStyle('primary', 'md'), textDecoration:'none'}}>Browse the catalogue</a>
+          </Card>
         )}
 
         {data && data.lines.length > 0 && (
           <div style={{
             display:'grid',
             // Stack on mobile (lines first, totals after); 2-column with
-            // a fixed 320px totals rail on tablet/desktop.
-            gridTemplateColumns: isMobile ? '1fr' : '1fr 320px',
+            // a fixed 330px checkout rail on tablet/desktop.
+            gridTemplateColumns: isMobile ? '1fr' : '1fr 330px',
             gap: isMobile ? 14 : 18, alignItems:'start',
           }}>
 
             {/* Large-order quote banner — spans both columns */}
             {anyLineNeedsQuote && (
-              <div style={{
-                gridColumn:'1 / -1',
-                background:`${T.amber}12`,border:`1px solid ${T.amber}55`,borderRadius:10,
-                padding:'12px 16px',display:'flex',alignItems:'center',gap:14,flexWrap:'wrap',
-              }}>
-                <div style={{flex:1,minWidth:200,fontSize:13,color:T.text,lineHeight:1.5}}>
-                  Some items are above the quantity we can sell online — these need a manual quote.
-                  Request one and we’ll get back to you with pricing and freight.
-                </div>
-                <button
-                  onClick={requestQuote}
-                  disabled={quoteBusy || quoteSent}
-                  style={{
-                    padding:'9px 16px',borderRadius:6,border:`1px solid ${T.amber}`,
-                    background: quoteSent ? 'transparent' : T.amber, color: quoteSent ? T.amber : '#1a1300',
-                    fontSize:13,fontWeight:600,cursor: quoteBusy||quoteSent ? 'default' : 'pointer',fontFamily:'inherit',whiteSpace:'nowrap',
-                  }}>
-                  {quoteSent ? '✓ Quote requested' : quoteBusy ? 'Sending…' : 'Request a quote'}
-                </button>
+              <div style={{gridColumn:'1 / -1'}}>
+                <Banner tone="warn">
+                  <div style={{display:'flex',alignItems:'center',gap:14,flexWrap:'wrap'}}>
+                    <span style={{flex:1,minWidth:200}}>
+                      Some items are above the quantity we can sell online — these need a manual quote.
+                      Request one and we’ll get back to you with pricing and freight.
+                    </span>
+                    <Btn variant={quoteSent ? 'secondary' : 'primary'} size="sm" disabled={quoteBusy || quoteSent} onClick={requestQuote}>
+                      {quoteSent ? '✓ Quote requested' : quoteBusy ? 'Sending…' : 'Request a quote'}
+                    </Btn>
+                  </div>
+                </Banner>
               </div>
             )}
 
             {/* Lines */}
-            <div style={{background:T.bg2,border:`1px solid ${T.border}`,borderRadius:10,overflow:'hidden'}}>
+            <Card pad={false}>
               {data.lines.map((line, i) => (
                 <CartLineRow
                   key={line.id}
                   line={line}
                   busy={busyLineId === line.id}
                   isFirst={i === 0}
+                  isMobile={isMobile}
                   onChangeQty={qty => setLineQty(line, qty)}
                   onRemove={() => removeLine(line)}
                 />
               ))}
-            </div>
+            </Card>
 
-            {/* Totals panel */}
-            <TotalsPanel
+            {/* Checkout rail */}
+            <CheckoutRail
               totals={data.totals}
               cardFee={data.card_fee}
               customerPo={customerPo}
@@ -396,6 +378,7 @@ export default function B2BCartPage({ b2bUser }: Props) {
               onPaymentMethodChange={setPaymentMethod}
               onCheckout={startCheckout}
               checkoutBusy={checkoutBusy}
+              isMobile={isMobile}
               blockedReason={
                 b2bUser.distributor.checkoutEnabled === false
                   ? 'Ordering is not enabled for your account yet. Please contact Just Autos to place an order.'
@@ -422,61 +405,66 @@ export default function B2BCartPage({ b2bUser }: Props) {
 
 // ─── Line row ──────────────────────────────────────────────────────────
 function CartLineRow({
-  line, busy, isFirst, onChangeQty, onRemove,
+  line, busy, isFirst, isMobile, onChangeQty, onRemove,
 }: {
   line: CartLine
   busy: boolean
   isFirst: boolean
+  isMobile: boolean
   onChangeQty: (qty: number) => void
   onRemove: () => void
 }) {
-  const stockColor = line.stock_state === 'in_stock' ? T.green : line.stock_state === 'low_stock' ? T.amber : T.red
-
   // Bundle component — a child product that ships with the line above it.
   // Compact, indented, no qty stepper / remove (its qty follows the parent).
   if (line.is_bundle_component) {
     const added = line.bundle_price_mode === 'added' && line.unit_price_ex_gst > 0
     return (
       <div style={{
-        display:'flex',gap:10,padding:'8px 14px 8px 40px',
+        display:'flex',gap:10,padding:'9px 16px 9px 44px',
         borderTop:`1px solid ${T.border}`,
         background: T.bg3,
         alignItems:'center',
       }}>
-        <span style={{color:T.text3,fontSize:13,marginTop:-2}}>↳</span>
+        <span style={{color:T.text3,fontSize:13}}>↳</span>
         <div style={{flex:1,minWidth:0}}>
-          <div style={{fontSize:12.5,color:T.text2,fontWeight:500,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>
+          <div style={{fontSize:13,color:T.text2,fontWeight:550,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>
             {line.name}
           </div>
-          <div style={{display:'flex',alignItems:'center',gap:8,marginTop:2}}>
-            <span style={{fontSize:9,color:T.text3,fontFamily:'monospace',textTransform:'uppercase',letterSpacing:'0.04em'}}>{line.sku}</span>
-            <span style={{fontSize:11,color:T.text3}}>× {line.qty}</span>
-            <span style={{
-              fontSize:9,fontWeight:600,padding:'1px 6px',borderRadius:6,letterSpacing:'0.04em',
-              background: added ? `${T.blue}18` : `${T.green}20`,
-              color: added ? T.blue : T.green,
-            }}>
-              {added ? 'INCLUDED · CHARGED' : 'INCLUDED'}
-            </span>
+          <div style={{fontSize:12,color:T.text3,marginTop:2}}>
+            × {line.qty} · included with the item above{added ? ' · charged' : ''}
           </div>
         </div>
-        <div style={{fontSize:12.5,color: added ? T.text : T.text3,fontWeight:600,fontVariantNumeric:'tabular-nums'}}>
+        <div style={{fontSize:13,color: added ? T.text : A.good,fontWeight:600,fontVariantNumeric:'tabular-nums'}}>
           {added ? `$${Number(line.line_total_inc_gst).toFixed(2)}` : 'Free'}
         </div>
       </div>
     )
   }
 
+  // Quiet sentences instead of chip clusters — worst first.
+  const noticeBits: Array<{ text: string; color: string }> = []
+  if (!line.currently_visible)       noticeBits.push({ text: 'No longer in the catalogue', color: A.warn })
+  if (line.price_changed)            noticeBits.push({ text: 'Price changed since added', color: A.warn })
+  if (line.needs_quote)              noticeBits.push({ text: `Needs a quote${line.over_limit_qty != null ? ` over ${line.over_limit_qty} units` : ''}`, color: A.warn })
+  if (line.call_for_availability)    noticeBits.push({ text: 'Call for availability', color: A.warn })
+  else if (line.stock_state === 'out_of_stock' && !line.is_drop_ship) noticeBits.push({ text: 'Out of stock', color: A.bad })
+  else if (line.stock_state === 'low_stock' && line.stock_qty_available != null) noticeBits.push({ text: `Only ${line.stock_qty_available} left`, color: A.warn })
+  if (line.is_special_order)         noticeBits.push({ text: 'Special order', color: T.text3 })
+  if (line.is_drop_ship || line.ships_from_supplier) noticeBits.push({ text: 'Ships from the supplier', color: T.text3 })
+
+  const discounted = (line.promo_active || line.volume_break_applied) && line.unit_price_ex_gst < line.trade_price_ex_gst
+
   return (
     <div style={{
-      display:'flex',gap:14,padding:14,
+      display:'flex',gap:14,padding:'14px 16px',
       borderTop: isFirst ? 'none' : `1px solid ${T.border}`,
       opacity: busy ? 0.6 : 1,
       pointerEvents: busy ? 'none' : 'auto',
+      alignItems:'center',
     }}>
       <div style={{
-        width:74,height:74,flexShrink:0,
-        borderRadius:6,background:'#fff',overflow:'hidden',
+        width:62,height:62,flexShrink:0,
+        borderRadius:12,background:'#fff',overflow:'hidden',
         display:'flex',alignItems:'center',justifyContent:'center',
       }}>
         {line.image_url ? (
@@ -484,67 +472,45 @@ function CartLineRow({
             style={{maxWidth:'100%',maxHeight:'100%',objectFit:'contain'}}
             onError={e => { (e.target as HTMLImageElement).style.display = 'none' }}/>
         ) : (
-          <span style={{fontSize:9,color:'#aaa',fontFamily:'monospace'}}>no image</span>
+          <span style={{fontSize:10,color:'#a7adb8'}}>photo</span>
         )}
       </div>
 
       <div style={{flex:1,minWidth:0}}>
-        <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:6}}>
-          <div style={{fontSize:9,color:T.text3,fontFamily:'monospace',textTransform:'uppercase',letterSpacing:'0.04em'}}>{line.sku}</div>
+        <div style={{fontSize:14.5,color:T.text,fontWeight:600,letterSpacing:'-0.005em',lineHeight:1.3}}>{line.name}</div>
+        <div style={{display:'flex',alignItems:'baseline',gap:8,flexWrap:'wrap',marginTop:4,fontSize:12.5,color:T.text3}}>
+          <span style={{fontVariantNumeric:'tabular-nums'}}>
+            ${incGst(line.unit_price_ex_gst, line.is_taxable).toFixed(2)} each
+          </span>
+          {discounted && (
+            <span style={{textDecoration:'line-through',fontVariantNumeric:'tabular-nums'}}>
+              ${incGst(line.trade_price_ex_gst, line.is_taxable).toFixed(2)}
+            </span>
+          )}
+          {line.volume_break_applied && line.volume_break_min_qty != null ? (
+            <span style={{color:A.good,fontWeight:600}}>{line.volume_break_min_qty}+ price applied</span>
+          ) : line.promo_active && discounted ? (
+            <span style={{color:A.good,fontWeight:600}}>Promo price</span>
+          ) : null}
           {line.instructions_url && (
             <a href={line.instructions_url} target="_blank" rel="noopener noreferrer"
-              style={{fontSize:10,color:T.blue,textDecoration:'none',padding:'1px 6px',borderRadius:4,background:`${T.blue}12`,border:`1px solid ${T.blue}30`}}>
-              📄 PDF
+              style={{color:A.accent,textDecoration:'none',fontWeight:550}}>
+              Fitting guide (PDF)
             </a>
           )}
         </div>
-        <div style={{fontSize:13,color:T.text,fontWeight:500,marginTop:2}}>{line.name}</div>
-        <div style={{display:'flex',alignItems:'center',gap:10,flexWrap:'wrap',marginTop:5}}>
-          <span style={{fontSize:12,color:T.text,fontWeight:500,fontVariantNumeric:'tabular-nums'}}>
-            ${incGst(line.unit_price_ex_gst, line.is_taxable).toFixed(2)} inc GST · each
-            {(line.promo_active || line.volume_break_applied) && line.unit_price_ex_gst < line.trade_price_ex_gst && (
-              <span style={{fontSize:10,color:T.text3,fontWeight:400,marginLeft:5,textDecoration:'line-through'}}>
-                ${incGst(line.trade_price_ex_gst, line.is_taxable).toFixed(2)}
-              </span>
-            )}
-          </span>
-          {line.promo_active && (
-            <span style={{fontSize:9,fontWeight:600,padding:'1px 5px',borderRadius:6,background:`${T.green}20`,color:T.green,letterSpacing:'0.04em'}}>
-              PROMO
-            </span>
-          )}
-          {line.volume_break_applied && line.volume_break_min_qty != null && (
-            <span style={{fontSize:9,fontWeight:600,padding:'1px 5px',borderRadius:6,background:`${T.green}20`,color:T.green,letterSpacing:'0.04em'}}>
-              {line.volume_break_min_qty}+ PRICE
-            </span>
-          )}
-          <span style={{
-            display:'inline-block',padding:'1px 7px',borderRadius:8,fontSize:9,fontWeight:500,
-            background: line.call_for_availability ? `${T.amber}18` : `${stockColor}18`,
-            color: line.call_for_availability ? T.amber : stockColor,
-          }}>
-            {line.call_for_availability
-              ? 'Call for availability'
-              : line.stock_state === 'out_of_stock'
-                ? 'Out of stock'
-                : line.stock_state === 'low_stock' && line.stock_qty_available != null
-                  ? `Low · ${line.stock_qty_available} left`
-                  : 'In stock'}
-          </span>
-          {line.is_special_order && <span style={{fontSize:9,fontWeight:500,padding:'1px 6px',borderRadius:6,background:`${T.amber}18`,color:T.amber}}>Special order</span>}
-          {line.is_drop_ship && <span style={{fontSize:9,fontWeight:500,padding:'1px 6px',borderRadius:6,background:`${T.purple}18`,color:T.purple}}>Drop ship</span>}
-          {line.needs_quote && <span style={{fontSize:9,fontWeight:600,padding:'1px 7px',borderRadius:6,background:`${T.amber}20`,color:T.amber,letterSpacing:'0.03em'}}>QUOTE NEEDED{line.over_limit_qty != null ? ` · OVER ${line.over_limit_qty}` : ''}</span>}
-          {line.ships_from_supplier && !line.is_drop_ship && <span style={{fontSize:9,fontWeight:500,padding:'1px 6px',borderRadius:6,background:`${T.purple}18`,color:T.purple}} title="This quantity is sourced direct from the supplier">Supplier-sourced (large qty)</span>}
-          {!line.currently_visible && <span style={{fontSize:10,color:T.amber}}>⚠ no longer in catalogue</span>}
-          {line.price_changed && <span style={{fontSize:10,color:T.amber}}>⚠ price changed since added</span>}
-        </div>
+        {noticeBits.length > 0 && (
+          <div style={{display:'flex',gap:10,flexWrap:'wrap',marginTop:3,fontSize:12.5}}>
+            {noticeBits.map((n, i) => <span key={i} style={{color:n.color,fontWeight:550}}>{n.text}</span>)}
+          </div>
+        )}
         {line.effective_cap !== null && line.qty > line.effective_cap && (
           <div style={{
-            marginTop:8,padding:'7px 10px',
-            background:`${T.red}12`,border:`1px solid ${T.red}40`,borderRadius:6,
+            marginTop:8,padding:'8px 12px',
+            background:alpha(A.bad, '12'),border:`1px solid ${alpha(A.bad, '3d')}`,borderRadius:RADIUS.sm,
             display:'flex',alignItems:'center',justifyContent:'space-between',gap:10,flexWrap:'wrap',
           }}>
-            <span style={{fontSize:11,color:T.red,lineHeight:1.4}}>
+            <span style={{fontSize:12.5,color:A.bad,lineHeight:1.4}}>
               {line.effective_cap === 0
                 ? `Not available right now.`
                 : line.max_order_qty != null && line.effective_cap === line.max_order_qty
@@ -552,45 +518,24 @@ function CartLineRow({
                   : `Only ${line.effective_cap} available right now (your cart has ${line.qty}).`}
             </span>
             {line.effective_cap === 0 ? (
-              <button onClick={onRemove}
-                style={{padding:'4px 10px',borderRadius:5,border:`1px solid ${T.red}`,background:`${T.red}20`,color:T.red,fontSize:11,fontWeight:500,cursor:'pointer',fontFamily:'inherit'}}>
-                Remove
-              </button>
+              <Btn variant="danger" size="sm" onClick={onRemove}>Remove</Btn>
             ) : (
-              <button onClick={() => onChangeQty(line.effective_cap as number)}
-                style={{padding:'4px 10px',borderRadius:5,border:`1px solid ${T.red}`,background:`${T.red}20`,color:T.red,fontSize:11,fontWeight:500,cursor:'pointer',fontFamily:'inherit'}}>
-                Reduce to {line.effective_cap}
-              </button>
+              <Btn variant="danger" size="sm" onClick={() => onChangeQty(line.effective_cap as number)}>Reduce to {line.effective_cap}</Btn>
             )}
           </div>
         )}
       </div>
 
-      <div style={{display:'flex',flexDirection:'column',alignItems:'flex-end',gap:6,minWidth:120}}>
-        <div style={{display:'flex',alignItems:'center',border:`1px solid ${T.border2}`,borderRadius:6,background:T.bg3}}>
-          <button onClick={() => onChangeQty(line.qty - 1)} style={qtyBtn()}>−</button>
-          <input
-            type="number" value={line.qty} min={0}
-            max={line.effective_cap ?? undefined}
-            onChange={e => {
-              const v = parseInt(e.target.value || '0', 10)
-              if (isFinite(v) && v >= 0) onChangeQty(v)
-            }}
-            style={{
-              width:42,textAlign:'center',
-              background:'transparent',border:'none',color:T.text,
-              fontSize:13,outline:'none',fontFamily:'inherit',padding:'6px 0',
-              MozAppearance:'textfield' as any,
-            }}/>
-          <button onClick={() => onChangeQty(line.qty + 1)}
-            disabled={line.effective_cap != null && line.qty >= line.effective_cap}
-            style={qtyBtn(line.effective_cap != null && line.qty >= line.effective_cap)}>+</button>
-        </div>
-        <div style={{fontSize:13,color:T.text,fontWeight:600,fontVariantNumeric:'tabular-nums'}}>
+      <div style={{display:'flex',flexDirection:'column',alignItems:'flex-end',gap:7,flexShrink:0}}>
+        <Stepper qty={line.qty} max={line.effective_cap ?? null} onChange={onChangeQty} compact={!isMobile}/>
+        <div style={{fontSize:15,color:T.text,fontWeight:650,fontVariantNumeric:'tabular-nums',letterSpacing:'-0.01em'}}>
           ${Number(line.line_total_inc_gst).toFixed(2)}
         </div>
-        <button onClick={onRemove}
-          style={{padding:'2px 6px',background:'transparent',border:'none',color:T.text3,fontSize:10,cursor:'pointer',fontFamily:'inherit'}}>
+        <button onClick={onRemove} aria-label={`Remove ${line.name}`} className="al-press al-ghost al-focus"
+          style={{
+            padding:'4px 10px',minHeight:28,background:'transparent',border:'none',borderRadius:RADIUS.pill,
+            color:T.text3,fontSize:12,cursor:'pointer',fontFamily:'inherit',
+          }}>
           Remove
         </button>
       </div>
@@ -603,18 +548,10 @@ function incGst(ex: number, taxable: boolean): number {
   return taxable ? Math.round(ex * 1.10 * 100) / 100 : ex
 }
 
-function qtyBtn(disabled?: boolean): React.CSSProperties {
-  return {
-    width:30,height:30,
-    border:'none',background:'transparent',color: disabled ? T.text3 : T.text,
-    fontSize:14,cursor: disabled ? 'not-allowed' : 'pointer',fontFamily:'inherit',
-  }
-}
-
-// ─── Totals panel ──────────────────────────────────────────────────────
-function TotalsPanel({
+// ─── Checkout rail ─────────────────────────────────────────────────────
+function CheckoutRail({
   totals, cardFee, customerPo, onCustomerPoChange, paymentMethod, onPaymentMethodChange, onCheckout, checkoutBusy, blockedReason,
-  freight, selectedFreightId, onSelectFreight,
+  freight, selectedFreightId, onSelectFreight, isMobile,
 }: {
   totals: CartTotals
   cardFee: { pct: number; fixed: number; note: string }
@@ -628,6 +565,7 @@ function TotalsPanel({
   freight: FreightPayload | null
   selectedFreightId: string | null
   onSelectFreight: (id: string | null) => void
+  isMobile: boolean
 }) {
   const applySurcharge = paymentMethod === 'card'
   const selectedFreight = freight?.rates.find(r => r.id === selectedFreightId) || null
@@ -657,86 +595,95 @@ function TotalsPanel({
 
   return (
     <div style={{
-      background:T.bg2,border:`1px solid ${T.border}`,borderRadius:10,
-      padding:'18px 20px',position:'sticky',top:74,
+      background:T.bg2, border:`1px solid ${T.border}`, borderRadius:RADIUS.md,
+      boxShadow:SHADOW.sm,
+      padding:'18px 20px', position: isMobile ? 'static' : 'sticky', top:76,
+      display:'flex', flexDirection:'column', gap:16,
     }}>
-      <div style={{fontSize:12,color:T.text3,textTransform:'uppercase',letterSpacing:'0.08em',marginBottom:12,fontWeight:500}}>
-        Order summary
-      </div>
-
-      <Row label="Items (inc GST)"  value={`$${totals.subtotal_inc_gst.toFixed(2)}`}/>
-      {selectedFreight && (
-        <Row label={`Freight (${selectedFreight.label})`} value={`+$${freightInc.toFixed(2)}`} muted/>
-      )}
-
-      <div style={{height:10}}/>
+      {/* PO number — required, so it leads the rail instead of hiding at the
+          bottom behind a disabled button. */}
+      <Field
+        label="Your PO number"
+        required={poMissing}
+        hint={poTooLong
+          ? 'Maximum 20 characters'
+          : poMissing
+            ? 'A PO number is required to check out'
+            : `${poTrimmed.length}/20 · written to your MYOB invoice`}
+        hintColor={poTooLong ? A.bad : poMissing ? A.warn : T.text3}>
+        <input
+          type="text"
+          value={customerPo}
+          onChange={e => onCustomerPoChange(e.target.value)}
+          placeholder="e.g. PO-12345"
+          maxLength={20}
+          required
+          className="al-focus"
+          style={inputStyle(poTooLong)}/>
+      </Field>
 
       {/* Payment method — the bank methods (PayTo / BECS) skip the card
           surcharge. BECS exists for banks that don't support PayTo yet —
           NAB business accounts especially (Chris 2026-08-10). */}
-      <div style={{fontSize:10,color:T.text2,textTransform:'uppercase',letterSpacing:'0.06em',fontWeight:500,marginBottom:6}}>Payment method</div>
-      <div style={{display:'flex',gap:6,marginBottom:6,flexWrap:'wrap'}}>
-        {([['card','Card / Apple Pay'],['payto','PayTo (bank)'],['becs','Bank debit (BECS)']] as const).map(([id,label]) => {
-          const on = paymentMethod === id
-          return (
-            <button key={id} type="button" onClick={() => onPaymentMethodChange(id)}
-              style={{flex:'1 1 0',minWidth:78,padding:'7px 8px',borderRadius:6,fontSize:11.5,fontWeight:600,fontFamily:'inherit',cursor:'pointer',
-                border:`1px solid ${on ? T.blue : T.border2}`, background:on ? 'rgba(79,142,247,0.15)' : 'transparent', color:on ? T.text : T.text2}}>
-              {label}
-            </button>
-          )
-        })}
-      </div>
-
-      {applySurcharge ? (
-        <>
-          <Row label="Card surcharge" value={`+$${newCardFeeInc.toFixed(2)}`} muted/>
-          <div style={{fontSize:10,color:T.text3,marginTop:-4,marginBottom:8,lineHeight:1.5}}>{cardFee.note}</div>
-        </>
-      ) : (
-        <>
-          <Row label={paymentMethod === 'becs' ? 'Bank debit fee' : 'PayTo fee'} value={`+$${paytoFeeInc.toFixed(2)}`} muted/>
-          <div style={{fontSize:10,color:T.green,marginTop:-4,marginBottom:6,lineHeight:1.5}}>Low bank fee (1% + 30c, capped at $3.50) — cheaper than card.</div>
-          {paymentMethod === 'payto' ? (
-            <div style={{fontSize:11,color:T.text2,background:T.bg3,border:`1px solid ${T.border}`,borderRadius:6,padding:'8px 10px',marginBottom:8,lineHeight:1.55}}>
-              <strong style={{color:T.text}}>New to PayTo?</strong> It pays securely straight from your bank account.
-              <div style={{marginTop:5}}>At the next step you’ll enter your <strong>PayID</strong> (the email or mobile linked to your bank) or your <strong>BSB&nbsp;+ account number</strong>, then <strong>approve the request in your banking app</strong>. Most major Australian banks support it — <strong>if yours doesn’t (e.g. NAB business accounts), choose Bank debit (BECS) instead</strong>. <a href="https://payto.com.au/" target="_blank" rel="noreferrer" style={{color:T.blue,textDecoration:'none'}}>Learn more ↗</a></div>
-            </div>
+      <div>
+        <div style={{fontSize:12,color:T.text2,fontWeight:650,marginBottom:6}}>Pay with</div>
+        <Seg
+          options={[
+            { id: 'card',  label: 'Card' },
+            { id: 'payto', label: 'PayTo' },
+            { id: 'becs',  label: 'Bank debit' },
+          ] as const}
+          value={paymentMethod}
+          onChange={onPaymentMethodChange}/>
+        <div style={{marginTop:8}}>
+          {applySurcharge ? (
+            <div style={{fontSize:12,color:T.text3,lineHeight:1.5}}>{cardFee.note} Apple Pay and Google Pay work here too.</div>
           ) : (
-            <div style={{fontSize:11,color:T.text2,background:T.bg3,border:`1px solid ${T.border}`,borderRadius:6,padding:'8px 10px',marginBottom:8,lineHeight:1.55}}>
-              <strong style={{color:T.text}}>Bank debit (BECS Direct Debit)</strong> — enter your <strong>BSB + account number</strong> and accept the debit agreement at the next step. Works with any Australian bank account, including business accounts that don’t support PayTo yet.
-              <div style={{marginTop:5}}>Funds take <strong>2–3 business days</strong> to clear — your order is confirmed straight away and ships once the payment settles.</div>
-            </div>
+            <>
+              <div style={{fontSize:12,color:A.good,lineHeight:1.5,marginBottom:4}}>
+                Low bank fee (1% + 30c, capped at $3.50) — cheaper than card.
+                {paymentMethod === 'becs' && ' Funds take 2–3 business days to clear; your order ships once the payment settles.'}
+              </div>
+              <Disclosure summary={paymentMethod === 'payto' ? 'How does PayTo work?' : 'How does bank debit work?'}>
+                {paymentMethod === 'payto' ? (
+                  <>
+                    PayTo pays securely straight from your bank account. At the next step you’ll enter your <strong style={{color:T.text}}>PayID</strong> (the
+                    email or mobile linked to your bank) or your <strong style={{color:T.text}}>BSB + account number</strong>, then approve the request in
+                    your banking app. Most major Australian banks support it — if yours doesn’t (e.g. NAB business accounts), choose Bank debit
+                    instead. <a href="https://payto.com.au/" target="_blank" rel="noreferrer" style={{color:A.accent,textDecoration:'none'}}>Learn more ↗</a>
+                  </>
+                ) : (
+                  <>
+                    Bank debit (BECS Direct Debit) — enter your <strong style={{color:T.text}}>BSB + account number</strong> and accept the debit agreement
+                    at the next step. Works with any Australian bank account, including business accounts that don’t support PayTo yet.
+                  </>
+                )}
+              </Disclosure>
+            </>
           )}
-        </>
-      )}
-
-      <div style={{borderTop:`1px solid ${T.border2}`,paddingTop:10,marginTop:6}}/>
-      <Row label="Total to pay (inc GST)" value={`$${grandTotalInc.toFixed(2)}`} large/>
-      <div style={{fontSize:10,color:T.text3,marginTop:4}}>Includes ${newGst.toFixed(2)} GST</div>
+        </div>
+      </div>
 
       {/* Freight picker */}
       {freight && (
-        <div style={{marginTop:14, paddingTop:12, borderTop:`1px solid ${T.border}`}}>
+        <div>
           <div style={{display:'flex', alignItems:'baseline', justifyContent:'space-between', marginBottom:6}}>
-            <div style={{fontSize:10,color:T.text2,textTransform:'uppercase',letterSpacing:'0.06em',fontWeight:500}}>
-              Shipping to {freight.postcode}
-            </div>
+            <div style={{fontSize:12,color:T.text2,fontWeight:650}}>Shipping to {freight.postcode}</div>
             {freight.mode === 'live' && (
-              <span title="Quoted live from MachShip" style={{fontSize:9,color:T.teal,fontWeight:600,letterSpacing:'0.05em'}}>LIVE</span>
+              <span title="Quoted live from MachShip" style={{fontSize:12,color:A.good,fontWeight:650}}>Live quote</span>
             )}
             {freight.mode === 'static' && (
-              <span title="Postcode-zone fallback rate" style={{fontSize:9,color:T.text3,fontWeight:600,letterSpacing:'0.05em'}}>EST</span>
+              <span title="Postcode-zone fallback rate" style={{fontSize:12,color:T.text3,fontWeight:600}}>Estimate</span>
             )}
           </div>
           {freight.mode === 'blocked' ? (
-            <div style={{fontSize:11, color:T.red, lineHeight:1.5}}>
+            <div style={{fontSize:12.5, color:A.bad, lineHeight:1.5}}>
               <div style={{fontWeight:600, marginBottom:4}}>Freight quote unavailable</div>
               <div style={{color:T.text2}}>
                 {freight.blocked?.reason || 'Some items in your cart are missing shipping dimensions.'}
               </div>
               {freight.blocked?.missing && freight.blocked.missing.length > 0 && (
-                <ul style={{margin:'6px 0 0', paddingLeft:18, color:T.text3, fontSize:10}}>
+                <ul style={{margin:'6px 0 0', paddingLeft:18, color:T.text3, fontSize:12}}>
                   {freight.blocked.missing.slice(0, 6).map(m => (
                     <li key={m.sku}>{m.sku} — {m.name} <span style={{color:T.text3}}>(needs {m.missing_fields.join(', ')})</span></li>
                   ))}
@@ -745,107 +692,62 @@ function TotalsPanel({
                   )}
                 </ul>
               )}
-              <div style={{marginTop:6, color:T.text3, fontSize:10}}>Contact your account manager to get this sorted.</div>
+              <div style={{marginTop:6, color:T.text3, fontSize:12}}>Contact your account manager to get this sorted.</div>
             </div>
           ) : freight.rates.length > 0 ? (
-            <div style={{display:'flex', flexDirection:'column', gap:6}}>
+            <div style={{display:'flex', flexDirection:'column', gap:7}}>
               {freight.rates.map(r => {
                 const on = selectedFreightId === r.id
                 return (
-                  <label key={r.id} style={{
-                    display:'flex', alignItems:'center', gap:8,
-                    padding:'8px 10px', borderRadius:6,
-                    border:`1px solid ${on ? T.blue : T.border2}`,
-                    background: on ? `${T.blue}12` : T.bg3,
-                    cursor:'pointer', fontSize:12,
+                  <label key={r.id} className="al-press" style={{
+                    display:'flex', alignItems:'center', gap:10,
+                    padding:'11px 13px', borderRadius:RADIUS.sm + 2, minHeight:44, boxSizing:'border-box',
+                    border:`1px solid ${on ? A.accent : 'transparent'}`,
+                    background: on ? alpha(A.accent, '10') : T.bg3,
+                    cursor:'pointer', fontSize:13,
                   }}>
                     <input type="radio" name="freight" checked={on}
-                      onChange={() => onSelectFreight(r.id)}/>
-                    <span style={{flex:1, color:T.text}}>{r.label}</span>
-                    {r.source === 'satchel' && (
-                      <span title="Flat-rate satchel" style={{fontSize:9, color:T.green, fontWeight:700, letterSpacing:'0.05em', border:`1px solid ${T.green}55`, borderRadius:4, padding:'1px 4px'}}>SATCHEL</span>
-                    )}
-                    {r.transit_days != null && (
-                      <span style={{fontSize:10, color:T.text3}}>{r.transit_days}d</span>
-                    )}
-                    <span style={{fontFamily:'monospace', color:T.text2}}>${r.price_ex_gst.toFixed(2)} ex</span>
+                      onChange={() => onSelectFreight(r.id)}
+                      style={{accentColor:A.accent}}/>
+                    <span style={{flex:1, color: on ? T.text : T.text2, fontWeight: on ? 600 : 450}}>
+                      {r.label}
+                      {r.source === 'satchel' && <span style={{color:A.good, fontWeight:650}}> · flat-rate satchel</span>}
+                      {r.transit_days != null && <span style={{color:T.text3, fontWeight:400}}> · {r.transit_days} day{r.transit_days === 1 ? '' : 's'}</span>}
+                    </span>
+                    <span style={{color: on ? T.text : T.text2, fontWeight:600, fontVariantNumeric:'tabular-nums'}}>
+                      ${(r.price_ex_gst * 1.10).toFixed(2)}
+                    </span>
                   </label>
                 )
               })}
             </div>
           ) : (
-            <div style={{fontSize:11, color:T.amber, lineHeight:1.5}}>
+            <div style={{fontSize:12.5, color:A.warn, lineHeight:1.5}}>
               No freight rate configured for postcode {freight.postcode}. Contact your account manager for a quote.
             </div>
           )}
         </div>
       )}
 
-      {/* Purchase Order */}
-      <div style={{marginTop:14}}>
-        <label style={{display:'block',fontSize:10,color:T.text2,textTransform:'uppercase',letterSpacing:'0.06em',marginBottom:4,fontWeight:500}}>
-          Your PO number <span style={{textTransform:'none',color:T.red,fontWeight:600,letterSpacing:0}}>*required</span>
-        </label>
-        <input
-          type="text"
-          value={customerPo}
-          onChange={e => onCustomerPoChange(e.target.value)}
-          placeholder="e.g. PO-12345"
-          maxLength={20}
-          required
-          style={{
-            width:'100%',boxSizing:'border-box',
-            background:T.bg3,
-            border:`1px solid ${poTooLong ? T.red : (poMissing ? `${T.amber}88` : T.border2)}`,
-            color:T.text,borderRadius:5,padding:'8px 10px',fontSize:13,outline:'none',
-            fontFamily:'inherit',
-          }}/>
-        <div style={{fontSize:10,color: poTooLong ? T.red : (poMissing ? T.amber : T.text3),marginTop:3}}>
-          {poTooLong
-            ? 'Maximum 20 characters'
-            : poMissing
-              ? 'A PO number is required to check out'
-              : `${poTrimmed.length}/20 chars · written to MYOB`}
-        </div>
+      {/* Totals */}
+      <div style={{borderTop:`1px solid ${T.border}`, paddingTop:10}}>
+        <Row label="Items (inc GST)" value={`$${totals.subtotal_inc_gst.toFixed(2)}`}/>
+        {selectedFreight && <Row label="Freight" value={`$${freightInc.toFixed(2)}`} muted/>}
+        {applySurcharge
+          ? <Row label="Card surcharge" value={`$${newCardFeeInc.toFixed(2)}`} muted/>
+          : <Row label={paymentMethod === 'becs' ? 'Bank debit fee' : 'PayTo fee'} value={`$${paytoFeeInc.toFixed(2)}`} muted/>}
+        <Row label="Total to pay" value={`$${grandTotalInc.toFixed(2)}`} large/>
+        <div style={{fontSize:12,color:T.text3,marginTop:2}}>Includes ${newGst.toFixed(2)} GST</div>
       </div>
 
-      <button
-        onClick={onCheckout}
-        disabled={!canCheckout || checkoutBusy || poTooLong}
-        style={{
-          width:'100%',padding:'12px 16px',borderRadius:7,marginTop:14,
-          border:`1px solid ${canCheckout && !poTooLong ? T.blue : T.border2}`,
-          background: canCheckout && !checkoutBusy && !poTooLong ? T.blue : T.bg3,
-          color: canCheckout && !checkoutBusy && !poTooLong ? '#fff' : T.text3,
-          fontSize:13,fontWeight:600,
-          cursor: canCheckout && !checkoutBusy && !poTooLong ? 'pointer' : 'not-allowed',
-          fontFamily:'inherit',
-        }}>
-        {checkoutBusy ? 'Connecting to Stripe…' : 'Checkout'}
-      </button>
-      {blockedReason ? (
-        <div style={{fontSize:10,color:T.red,marginTop:8,textAlign:'center',lineHeight:1.5}}>
-          {blockedReason}
+      <div>
+        <Btn full size="lg" disabled={!canCheckout || checkoutBusy || poTooLong} onClick={onCheckout}>
+          {checkoutBusy ? 'Connecting to Stripe…' : 'Check Out'}
+        </Btn>
+        <div style={{fontSize:12,color: blockedReason ? A.bad : T.text3,marginTop:8,textAlign:'center',lineHeight:1.5}}>
+          {blockedReason || 'You’ll be redirected to Stripe to pay securely.'}
         </div>
-      ) : (
-        <div style={{fontSize:10,color:T.text3,marginTop:8,textAlign:'center',lineHeight:1.5}}>
-          You'll be redirected to Stripe to enter card details.
-        </div>
-      )}
-    </div>
-  )
-}
-
-function Row({ label, value, bold, muted, large }: { label: string; value: string; bold?: boolean; muted?: boolean; large?: boolean }) {
-  return (
-    <div style={{
-      display:'flex',justifyContent:'space-between',alignItems:'baseline',padding:'4px 0',
-      fontSize: large ? 14 : 12,
-      color: muted ? T.text3 : T.text2,
-      fontWeight: bold || large ? 600 : 400,
-    }}>
-      <span>{label}</span>
-      <span style={{color: large ? T.text : (bold ? T.text : 'inherit'),fontVariantNumeric:'tabular-nums'}}>{value}</span>
+      </div>
     </div>
   )
 }

@@ -9,13 +9,9 @@ import React, { useState } from 'react'
 import Head from 'next/head'
 import type { GetServerSidePropsContext } from 'next'
 import { getSupabase } from '../../lib/supabaseClient'
-
-const T = {
-  bg: 'var(--t-bg)', bg2: 'var(--t-bg2)', bg3: 'var(--t-bg3)',
-  border: 'var(--t-border)', border2: 'var(--t-border2)',
-  text: 'var(--t-text)', text2: 'var(--t-text2)', text3: 'var(--t-text3)',
-  green: '#34c77b', red: '#f04e4e', blue: '#4f8ef7',
-}
+import { T } from '../../lib/ui/theme'
+// Standalone page (no B2BLayout) so AlloyStyles is mounted here.
+import { AlloyStyles, Banner, Btn, cardStyle, inputStyle } from '../../components/b2b/ui'
 
 interface Props {
   ok: boolean
@@ -81,46 +77,35 @@ export default function B2BWelcomePage({ ok, reason, token, email, distributorNa
     }
   }
 
-  const inp: React.CSSProperties = {
-    width: '100%', padding: '11px 12px', borderRadius: 7, fontSize: 14,
-    background: T.bg3, border: `1px solid ${T.border2}`, color: T.text, fontFamily: 'inherit',
-  }
-
   return (
     <>
       <Head><title>Welcome — Just Autos B2B Portal</title></Head>
+      <AlloyStyles/>
       <div style={{ minHeight: '100vh', background: T.bg, color: T.text, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
-        <div style={{ width: '100%', maxWidth: 420, background: T.bg2, border: `1px solid ${T.border}`, borderRadius: 12, padding: '28px 26px' }}>
-          <div style={{ fontSize: 11, color: T.text3, textTransform: 'uppercase', letterSpacing: '0.12em', fontWeight: 600, marginBottom: 6 }}>
+        <div style={{ ...cardStyle(true), width: '100%', maxWidth: 420, padding: '28px 26px' }}>
+          <div style={{ fontSize: 12.5, color: T.text3, fontWeight: 650, marginBottom: 6 }}>
             Just Autos · Distributor Portal
           </div>
           {!ok ? (
             <>
-              <h1 style={{ fontSize: 19, fontWeight: 600, margin: '4px 0 10px' }}>Invite link problem</h1>
-              <p style={{ fontSize: 13, color: T.text2, lineHeight: 1.5 }}>{reason}</p>
+              <h1 style={{ fontSize: 20, fontWeight: 700, letterSpacing: '-0.02em', margin: '4px 0 10px' }}>Invite link problem</h1>
+              <p style={{ fontSize: 13.5, color: T.text2, lineHeight: 1.5 }}>{reason}</p>
             </>
           ) : (
             <>
-              <h1 style={{ fontSize: 19, fontWeight: 600, margin: '4px 0 4px' }}>Welcome, {distributorName}</h1>
-              <p style={{ fontSize: 13, color: T.text2, lineHeight: 1.5, marginBottom: 16 }}>
+              <h1 style={{ fontSize: 20, fontWeight: 700, letterSpacing: '-0.02em', margin: '4px 0 4px' }}>Welcome, {distributorName}</h1>
+              <p style={{ fontSize: 13.5, color: T.text2, lineHeight: 1.5, marginBottom: 16 }}>
                 Set a password for <b style={{ color: T.text }}>{email}</b> and you're in.
               </p>
               <form onSubmit={submit} style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                 <input type="password" autoComplete="new-password" placeholder="New password (min 8 characters)"
-                  value={pw} onChange={e => setPw(e.target.value)} style={inp} autoFocus />
+                  value={pw} onChange={e => setPw(e.target.value)} style={inputStyle()} autoFocus />
                 <input type="password" autoComplete="new-password" placeholder="Confirm password"
-                  value={pw2} onChange={e => setPw2(e.target.value)} style={inp} />
-                {error && (
-                  <div style={{ padding: '8px 10px', background: 'rgba(240,78,78,0.12)', border: `1px solid rgba(240,78,78,0.35)`, borderRadius: 7, color: T.red, fontSize: 12 }}>
-                    {error}
-                  </div>
-                )}
-                <button type="submit" disabled={busy} style={{
-                  padding: '11px 14px', borderRadius: 7, fontSize: 14, fontWeight: 600, cursor: busy ? 'wait' : 'pointer',
-                  background: T.green, color: '#08130c', border: 'none', fontFamily: 'inherit',
-                }}>
+                  value={pw2} onChange={e => setPw2(e.target.value)} style={inputStyle()} />
+                {error && <Banner tone="error">{error}</Banner>}
+                <Btn type="submit" full disabled={busy}>
                   {busy ? 'Setting up…' : 'Set password & sign in'}
-                </button>
+                </Btn>
               </form>
             </>
           )}

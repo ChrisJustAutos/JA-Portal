@@ -8,7 +8,8 @@ import Head from 'next/head'
 import type { GetServerSideProps } from 'next'
 import B2BLayout from '../../../components/b2b/B2BLayout'
 import { requireB2BPageAuth } from '../../../lib/b2bAuthServer'
-import { T, alpha } from '../../../lib/ui/theme'
+import { T } from '../../../lib/ui/theme'
+import { A, Banner, Card, EmptyState, PageTitle, StatusPill, btnStyle } from '../../../components/b2b/ui'
 
 interface Props {
   b2bUser: {
@@ -60,29 +61,23 @@ export default function B2BTrainingIndex({ b2bUser }: Props) {
     <>
       <Head><title>Training · Just Autos B2B</title><meta name="robots" content="noindex,nofollow" /></Head>
       <B2BLayout user={b2bUser} active="training">
-        <div style={{ maxWidth: 900, margin: '0 auto', display: 'flex', flexDirection: 'column', gap: 18 }}>
+        <div style={{ maxWidth: 900, margin: '0 auto' }}>
 
-          <div>
-            <h1 style={{ margin: 0, fontSize: 22, fontWeight: 700 }}>Training</h1>
-            <div style={{ fontSize: 13, color: T.text3, marginTop: 4 }}>
-              Work through each course at your own pace, then sit the quiz — your progress is saved automatically.
-            </div>
+          <PageTitle sub="Work through each course at your own pace, then sit the quiz — your progress is saved automatically.">
+            Training
+          </PageTitle>
+
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+
+            {error && <Banner tone="error">{error}</Banner>}
+            {modules === null && !error && <div style={{ color: T.text3, padding: 30, textAlign: 'center', fontSize: 13 }}>Loading…</div>}
+
+            {modules !== null && modules.length === 0 && (
+              <EmptyState title="No training courses published yet" sub="Check back soon." />
+            )}
+
+            {(modules || []).map(m => <ModuleCardRow key={m.slug} m={m} />)}
           </div>
-
-          {error && (
-            <div style={{ background: 'rgba(240,78,78,0.1)', border: `1px solid ${T.red}40`, borderRadius: 8, padding: 12, fontSize: 13, color: T.red }}>
-              {error}
-            </div>
-          )}
-          {modules === null && !error && <div style={{ color: T.text3, padding: 30, textAlign: 'center' }}>Loading…</div>}
-
-          {modules !== null && modules.length === 0 && (
-            <div style={{ padding: 36, textAlign: 'center', background: T.bg2, border: `1px solid ${T.border}`, borderRadius: 10, color: T.text3, fontStyle: 'italic' }}>
-              No training courses published yet — check back soon.
-            </div>
-          )}
-
-          {(modules || []).map(m => <ModuleCardRow key={m.slug} m={m} />)}
         </div>
       </B2BLayout>
     </>
@@ -94,15 +89,15 @@ function ModuleCardRow({ m }: { m: ModuleCard }) {
   const attempted = m.attempts > 0
 
   const pill = passed
-    ? <Pill color={T.green} label={`Passed ${Math.round(m.best!.score_pct)}%`} />
+    ? <StatusPill color={A.good}>Passed {Math.round(m.best!.score_pct)}%</StatusPill>
     : attempted
-      ? <Pill color={T.amber} label={`Attempted · best ${Math.round(m.best?.score_pct ?? 0)}%`} />
-      : <Pill color={T.text3} label="Not started" />
+      ? <StatusPill color={A.warn}>Attempted · best {Math.round(m.best?.score_pct ?? 0)}%</StatusPill>
+      : <StatusPill color={T.text3}>Not started</StatusPill>
 
   const cta = passed ? 'Review' : attempted ? 'Continue' : 'Start'
 
   return (
-    <div style={{ background: T.bg2, border: `1px solid ${T.border}`, borderRadius: 12, padding: 18, display: 'flex', flexDirection: 'column', gap: 10 }}>
+    <Card style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
         <div style={{ fontSize: 16, fontWeight: 700, color: T.text, flex: 1, minWidth: 200 }}>{m.title}</div>
         {pill}
@@ -110,7 +105,7 @@ function ModuleCardRow({ m }: { m: ModuleCard }) {
       {m.description && (
         <div style={{ fontSize: 13, color: T.text2, lineHeight: 1.55 }}>{m.description}</div>
       )}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap', fontSize: 12, color: T.text3 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap', fontSize: 12.5, color: T.text3 }}>
         <span>{m.sections_count} sections</span>
         <span>·</span>
         <span>{m.slides_count} slides</span>
@@ -118,29 +113,15 @@ function ModuleCardRow({ m }: { m: ModuleCard }) {
         <span>{m.questions_count}-question quiz</span>
         <span>·</span>
         <span>pass mark {m.pass_pct}%</span>
-        {passed && m.best?.completed_at && (<><span>·</span><span style={{ color: T.green }}>passed {formatDate(m.best.completed_at)}</span></>)}
+        {passed && m.best?.completed_at && (<><span>·</span><span style={{ color: A.good }}>passed {formatDate(m.best.completed_at)}</span></>)}
       </div>
       <div>
         <a href={`/b2b/training/${m.slug}`}
-          style={{
-            display: 'inline-block', textDecoration: 'none',
-            fontSize: 13, fontWeight: 700, padding: '10px 22px', borderRadius: 8,
-            border: `1px solid ${passed ? T.border2 : T.blue}`,
-            background: passed ? 'transparent' : T.blue,
-            color: passed ? T.text : '#fff',
-          }}>
+          style={{ ...btnStyle(passed ? 'secondary' : 'primary', 'md'), textDecoration: 'none' }}>
           {cta}
         </a>
       </div>
-    </div>
-  )
-}
-
-function Pill({ color, label }: { color: string; label: string }) {
-  return (
-    <span style={{ fontSize: 11, fontWeight: 700, padding: '3px 10px', borderRadius: 9, background: alpha(color, '18'), color, whiteSpace: 'nowrap' }}>
-      {label}
-    </span>
+    </Card>
   )
 }
 

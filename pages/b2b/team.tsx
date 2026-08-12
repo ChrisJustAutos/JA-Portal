@@ -14,15 +14,8 @@ import type { GetServerSideProps } from 'next'
 import B2BLayout from '../../components/b2b/B2BLayout'
 import { requireB2BPageAuth } from '../../lib/b2bAuthServer'
 import { useConfirm, useToast } from '../../components/ui/Feedback'
-import { alpha } from '../../lib/ui/theme'
-
-const T = {
-  bg:'var(--t-bg)', bg2:'var(--t-bg2)', bg3:'var(--t-bg3)', bg4:'var(--t-bg4)',
-  border:'var(--t-border)', border2:'var(--t-border2)',
-  text:'var(--t-text)', text2:'var(--t-text2)', text3:'var(--t-text3)',
-  blue:'#4f8ef7', teal:'#2dd4bf', green:'#34c77b',
-  amber:'#f5a623', red:'#f04e4e',
-}
+import { T } from '../../lib/ui/theme'
+import { A, Banner, Btn, Card, EmptyState, Field, PageTitle, StatusPill, btnStyle, inputStyle } from '../../components/b2b/ui'
 
 interface Props {
   b2bUser: {
@@ -149,187 +142,147 @@ export default function B2BTeamPage({ b2bUser }: Props) {
     <>
       <Head><title>Team · Just Autos B2B</title></Head>
       <B2BLayout user={b2bUser} active="team">
-        <header style={{display:'flex',alignItems:'flex-end',justifyContent:'space-between',gap:16,flexWrap:'wrap',marginBottom:18}}>
-          <div>
-            <h1 style={{fontSize:22,fontWeight:600,margin:0,letterSpacing:'-0.01em'}}>Team</h1>
-            <div style={{fontSize:13,color:T.text3,marginTop:4}}>
-              {isOwner
-                ? 'Invite your team or change their roles. Owners can manage; members can browse.'
-                : 'Read-only — only owners can invite or change roles.'}
-            </div>
-          </div>
-          {isOwner && !inviteOpen && (
-            <button onClick={() => setInviteOpen(true)}
-              style={{padding:'9px 14px',borderRadius:6,border:`1px solid ${T.blue}`,background:T.blue,color:'#fff',fontSize:13,fontWeight:500,cursor:'pointer',fontFamily:'inherit'}}>
-              + Invite user
-            </button>
-          )}
-        </header>
+        <PageTitle
+          sub={isOwner
+            ? 'Invite your team or change their roles. Owners can manage; members can browse.'
+            : 'Read-only — only owners can invite or change roles.'}
+          action={isOwner && !inviteOpen
+            ? <Btn onClick={() => setInviteOpen(true)}>Invite user</Btn>
+            : undefined}>
+          Team
+        </PageTitle>
 
-        {error && (
-          <div style={{padding:12,background:`${T.red}15`,border:`1px solid ${T.red}40`,borderRadius:7,color:T.red,fontSize:13,marginBottom:14}}>
-            {error}
-          </div>
-        )}
+        {error && <div style={{ marginBottom: 14 }}><Banner tone="error">{error}</Banner></div>}
 
         {/* Invite form */}
         {isOwner && inviteOpen && (
-          <div style={{
-            background:T.bg2,border:`1px solid ${T.border}`,borderRadius:10,
-            padding:'16px 18px',marginBottom:16,
-          }}>
-            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:10}}>
-              <div style={{fontSize:13,fontWeight:600}}>Invite a new user</div>
-              <button onClick={() => { setInviteOpen(false); setInviteError(null) }}
-                style={{background:'transparent',border:'none',color:T.text3,fontSize:18,cursor:'pointer'}}>×</button>
+          <Card style={{ marginBottom: 16 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+              <div style={{ fontSize: 14, fontWeight: 650 }}>Invite a new user</div>
+              <button onClick={() => { setInviteOpen(false); setInviteError(null) }} aria-label="Close" className="al-press"
+                style={{ background: 'transparent', border: 'none', color: T.text3, fontSize: 18, cursor: 'pointer', padding: '0 2px', fontFamily: 'inherit', lineHeight: 1 }}>×</button>
             </div>
-            <div style={{display:'grid',gridTemplateColumns:'2fr 2fr 1fr auto',gap:10,alignItems:'end'}}>
-              <label style={{display:'flex',flexDirection:'column',gap:4}}>
-                <span style={{fontSize:11,color:T.text2,fontWeight:500}}>Email</span>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 12 }}>
+              <Field label="Email">
                 <input type="email" value={inviteEmail} onChange={e => setInviteEmail(e.target.value)}
-                  placeholder="them@example.com"
-                  style={inputStyle()}/>
-              </label>
-              <label style={{display:'flex',flexDirection:'column',gap:4}}>
-                <span style={{fontSize:11,color:T.text2,fontWeight:500}}>Full name (optional)</span>
-                <input type="text" value={inviteName} onChange={e => setInviteName(e.target.value)}
-                  style={inputStyle()}/>
-              </label>
-              <label style={{display:'flex',flexDirection:'column',gap:4}}>
-                <span style={{fontSize:11,color:T.text2,fontWeight:500}}>Role</span>
+                  placeholder="them@example.com" style={inputStyle()}/>
+              </Field>
+              <Field label="Full name (optional)">
+                <input type="text" value={inviteName} onChange={e => setInviteName(e.target.value)} style={inputStyle()}/>
+              </Field>
+              <Field label="Role">
                 <select value={inviteRole} onChange={e => setInviteRole(e.target.value as 'owner' | 'member')}
-                  style={inputStyle()}>
+                  style={{ ...inputStyle(), cursor: 'pointer' }}>
                   <option value="member">Member</option>
                   <option value="owner">Owner</option>
                 </select>
-              </label>
-              <button onClick={sendInvite} disabled={inviting || !inviteEmail.trim()}
-                style={{
-                  padding:'8px 14px',borderRadius:6,
-                  border:`1px solid ${T.blue}`,background:T.blue,color:'#fff',
-                  fontSize:13,fontWeight:500,fontFamily:'inherit',
-                  cursor: inviting || !inviteEmail.trim() ? 'not-allowed' : 'pointer',
-                  opacity: inviting || !inviteEmail.trim() ? 0.6 : 1,
-                  height: 36,
-                }}>
+              </Field>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginTop: 14, flexWrap: 'wrap' }}>
+              <Btn onClick={sendInvite} disabled={inviting || !inviteEmail.trim()}>
                 {inviting ? 'Sending…' : 'Send invite'}
-              </button>
-            </div>
-            <div style={{fontSize:10,color:T.text3,marginTop:8,lineHeight:1.5}}>
-              They'll receive a magic-link email. Members can browse / order on your behalf; owners can also manage the team.
-            </div>
-            {inviteError && (
-              <div style={{marginTop:8,padding:8,background:`${T.red}15`,border:`1px solid ${T.red}40`,borderRadius:5,color:T.red,fontSize:12}}>
-                {inviteError}
+              </Btn>
+              <div style={{ fontSize: 12.5, color: T.text3, lineHeight: 1.5, flex: 1, minWidth: 200 }}>
+                They'll receive a magic-link email. Members can browse / order on your behalf; owners can also manage the team.
               </div>
-            )}
-            {inviteFlash && (
-              <div style={{marginTop:8,padding:8,background:`${T.green}15`,border:`1px solid ${T.green}40`,borderRadius:5,color:T.green,fontSize:12}}>
-                {inviteFlash}
-              </div>
-            )}
-          </div>
+            </div>
+            {inviteError && <div style={{ marginTop: 12 }}><Banner tone="error">{inviteError}</Banner></div>}
+            {inviteFlash && <div style={{ marginTop: 12 }}><Banner tone="success">{inviteFlash}</Banner></div>}
+          </Card>
         )}
 
         {/* Users table */}
         {!loading && users.length === 0 && (
-          <div style={{padding:36,textAlign:'center',color:T.text3,fontSize:13,background:T.bg2,border:`1px solid ${T.border}`,borderRadius:10}}>
-            No users yet.
-          </div>
+          <EmptyState title="No users yet" />
         )}
 
         {users.length > 0 && (
-          <div style={{
-            background:T.bg2,border:`1px solid ${T.border}`,borderRadius:10,overflow:'hidden',
-          }}>
-            <table style={{width:'100%',borderCollapse:'collapse',fontSize:13}}>
-              <thead>
-                <tr style={{borderBottom:`1px solid ${T.border2}`}}>
-                  <th style={th()}>User</th>
-                  <th style={th(140)}>Role</th>
-                  <th style={th(140)}>Last login</th>
-                  <th style={{...th(100),textAlign:'center'}}>Active</th>
-                  {isOwner && <th style={th(60)}></th>}
-                </tr>
-              </thead>
-              <tbody>
-                {users.map((u, i) => {
-                  const isMe = u.id === b2bUser.id
-                  const busy = busyUserId === u.id
-                  return (
-                    <tr key={u.id} style={{
-                      borderTop: i > 0 ? `1px solid ${T.border}` : 'none',
-                      opacity: busy ? 0.6 : 1,
-                    }}>
-                      <td style={td()}>
-                        <div style={{fontSize:13,color:T.text}}>
-                          {u.full_name || <span style={{color:T.text3,fontStyle:'italic'}}>no name</span>}
-                          {isMe && <span style={{marginLeft:6,fontSize:10,color:T.blue}}>· you</span>}
-                        </div>
-                        <div style={{fontSize:11,color:T.text3,fontFamily:'monospace',marginTop:2}}>{u.email}</div>
-                        {u.last_login_at == null && u.invited_at && (
-                          <div style={{fontSize:10,color:T.amber,marginTop:3}}>⏳ Invite sent — not yet accepted</div>
-                        )}
-                      </td>
-                      <td style={td()}>
-                        {isOwner ? (
-                          <select
-                            value={u.role}
-                            disabled={busy || isMe}
-                            onChange={e => patchUser(u.id, { role: e.target.value as 'owner' | 'member' })}
-                            style={{
-                              ...inputStyle(),
-                              padding:'5px 8px',fontSize:12,
-                              opacity: isMe ? 0.6 : 1,
-                              cursor: isMe ? 'not-allowed' : 'pointer',
-                            }}>
-                            <option value="member">Member</option>
-                            <option value="owner">Owner</option>
-                          </select>
-                        ) : (
-                          <span style={{fontSize:12,color: u.role === 'owner' ? T.blue : T.text2}}>
-                            {u.role === 'owner' ? 'Owner' : 'Member'}
-                          </span>
-                        )}
-                      </td>
-                      <td style={td()}>
-                        <span style={{fontSize:11,color:T.text3,fontFamily:'monospace'}}>
-                          {u.last_login_at ? new Date(u.last_login_at).toLocaleDateString('en-AU') : '—'}
-                        </span>
-                      </td>
-                      <td style={{...td(),textAlign:'center'}}>
-                        {isOwner && !isMe ? (
-                          <ToggleSwitch
-                            on={u.is_active}
-                            disabled={busy}
-                            onChange={v => patchUser(u.id, { is_active: v })}
-                          />
-                        ) : (
-                          <span style={{
-                            display:'inline-block',padding:'2px 8px',borderRadius:8,fontSize:10,
-                            background: u.is_active ? `${T.green}18` : alpha(T.text3, '18'),
-                            color: u.is_active ? T.green : T.text3,
-                          }}>
-                            {u.is_active ? 'Active' : 'Inactive'}
-                          </span>
-                        )}
-                      </td>
-                      {isOwner && (
-                        <td style={{...td(),textAlign:'right'}}>
-                          {!isMe && (
-                            <button onClick={() => removeUser(u)} disabled={busy}
-                              style={{padding:'4px 8px',background:'transparent',border:'none',color:T.red,fontSize:11,cursor:'pointer',fontFamily:'inherit'}}>
-                              Remove
-                            </button>
+          <Card pad={false}>
+            <div style={{ overflowX: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13, minWidth: 560 }}>
+                <thead>
+                  <tr style={{ borderBottom: `1px solid ${T.border2}` }}>
+                    <th style={th()}>User</th>
+                    <th style={th(140)}>Role</th>
+                    <th style={th(140)}>Last login</th>
+                    <th style={{ ...th(100), textAlign: 'center' }}>Active</th>
+                    {isOwner && <th style={th(90)}></th>}
+                  </tr>
+                </thead>
+                <tbody>
+                  {users.map((u, i) => {
+                    const isMe = u.id === b2bUser.id
+                    const busy = busyUserId === u.id
+                    return (
+                      <tr key={u.id} style={{
+                        borderTop: i > 0 ? `1px solid ${T.border}` : 'none',
+                        opacity: busy ? 0.6 : 1,
+                      }}>
+                        <td style={td()}>
+                          <div style={{ fontSize: 13.5, color: T.text, fontWeight: 550 }}>
+                            {u.full_name || <span style={{ color: T.text3, fontStyle: 'italic' }}>no name</span>}
+                            {isMe && <span style={{ marginLeft: 6, fontSize: 12, color: A.accent }}>· you</span>}
+                          </div>
+                          <div style={{ fontSize: 12.5, color: T.text3, marginTop: 2 }}>{u.email}</div>
+                          {u.last_login_at == null && u.invited_at && (
+                            <div style={{ fontSize: 12, color: A.warn, marginTop: 3 }}>Invite sent — not yet accepted</div>
                           )}
                         </td>
-                      )}
-                    </tr>
-                  )
-                })}
-              </tbody>
-            </table>
-          </div>
+                        <td style={td()}>
+                          {isOwner ? (
+                            <select
+                              value={u.role}
+                              disabled={busy || isMe}
+                              onChange={e => patchUser(u.id, { role: e.target.value as 'owner' | 'member' })}
+                              style={{
+                                ...inputStyle(),
+                                opacity: isMe ? 0.6 : 1,
+                                cursor: isMe ? 'not-allowed' : 'pointer',
+                              }}>
+                              <option value="member">Member</option>
+                              <option value="owner">Owner</option>
+                            </select>
+                          ) : (
+                            <span style={{ fontSize: 13, color: u.role === 'owner' ? A.accent : T.text2 }}>
+                              {u.role === 'owner' ? 'Owner' : 'Member'}
+                            </span>
+                          )}
+                        </td>
+                        <td style={td()}>
+                          <span style={{ fontSize: 12.5, color: T.text3, fontVariantNumeric: 'tabular-nums' }}>
+                            {u.last_login_at ? new Date(u.last_login_at).toLocaleDateString('en-AU') : '—'}
+                          </span>
+                        </td>
+                        <td style={{ ...td(), textAlign: 'center' }}>
+                          {isOwner && !isMe ? (
+                            <ToggleSwitch
+                              on={u.is_active}
+                              disabled={busy}
+                              onChange={v => patchUser(u.id, { is_active: v })}
+                            />
+                          ) : (
+                            <StatusPill color={u.is_active ? A.good : T.text3}>
+                              {u.is_active ? 'Active' : 'Inactive'}
+                            </StatusPill>
+                          )}
+                        </td>
+                        {isOwner && (
+                          <td style={{ ...td(), textAlign: 'right' }}>
+                            {!isMe && (
+                              <button onClick={() => removeUser(u)} disabled={busy} className="al-press al-focus"
+                                style={{ ...btnStyle('ghost', 'sm', busy), color: A.bad }}>
+                                Remove
+                              </button>
+                            )}
+                          </td>
+                        )}
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </Card>
         )}
       </B2BLayout>
     </>
@@ -341,17 +294,19 @@ function ToggleSwitch({ on, disabled, onChange }: { on: boolean; disabled?: bool
     <button
       onClick={() => !disabled && onChange(!on)}
       disabled={disabled}
+      className="al-press al-focus"
+      aria-label={on ? 'Deactivate' : 'Activate'}
       style={{
-        width:36,height:20,borderRadius:10,border:'none',padding:2,
-        background: on ? T.green : T.bg4,
+        width: 44, height: 24, borderRadius: 12, border: 'none', padding: 2,
+        background: on ? A.good : T.bg4,
         cursor: disabled ? 'wait' : 'pointer',
-        position:'relative',transition:'background 0.15s',
+        position: 'relative', transition: 'background 0.15s',
         opacity: disabled ? 0.5 : 1,
       }}>
       <div style={{
-        position:'absolute',top:2,left: on ? 18 : 2,
-        width:16,height:16,borderRadius:'50%',
-        background:'#fff',transition:'left 0.15s ease',
+        position: 'absolute', top: 2, left: on ? 22 : 2,
+        width: 20, height: 20, borderRadius: '50%',
+        background: '#fff', transition: 'left 0.15s ease',
       }}/>
     </button>
   )
@@ -359,20 +314,13 @@ function ToggleSwitch({ on, disabled, onChange }: { on: boolean; disabled?: bool
 
 function th(width?: number): React.CSSProperties {
   return {
-    fontSize:10,color:T.text3,padding:'10px 12px',
-    textAlign:'left',fontWeight:500,
-    textTransform:'uppercase',letterSpacing:'0.05em',
-    width,whiteSpace:'nowrap',background:T.bg2,
+    fontSize: 12, color: T.text3, padding: '13px 14px',
+    textAlign: 'left', fontWeight: 600,
+    width, whiteSpace: 'nowrap', background: T.bg2,
   }
 }
 function td(): React.CSSProperties {
-  return { padding:'12px',verticalAlign:'middle' }
-}
-function inputStyle(): React.CSSProperties {
-  return {
-    background:T.bg3,border:`1px solid ${T.border2}`,color:T.text,
-    borderRadius:5,padding:'7px 10px',fontSize:13,outline:'none',fontFamily:'inherit',
-  }
+  return { padding: '13px 14px', verticalAlign: 'middle' }
 }
 
 export const getServerSideProps: GetServerSideProps = async (ctx) => {
