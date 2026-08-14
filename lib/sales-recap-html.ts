@@ -40,10 +40,18 @@ function targetPill(v: number, target: number): string {
   return `<span style="background:${bg};color:${col};font:700 12px Arial;padding:3px 10px;border-radius:12px;white-space:nowrap">${hit ? '✓' : '✗'} ${diff >= 0 ? '+' : '−'}${moneyK(Math.abs(diff))}</span>`
 }
 
-// Email-safe horizontal bar: a coloured div inside a fixed-width track.
+// Horizontal bar as a two-cell table, not a painted div: Word's HTML importer
+// and Outlook both drop background paint on empty divs (the bar columns came
+// out blank in .doc exports), while a real <td bgcolor> with &nbsp; content
+// survives browsers, Word, Outlook and print alike.
 function bar(value: number, max: number, color: string): string {
   const pct = max > 0 ? Math.max(2, Math.round((value / max) * 100)) : 0
-  return `<div style="background:#eef1f5;border-radius:6px;height:16px;width:100%;min-width:120px"><div style="background:${color};border-radius:6px;height:16px;width:${pct}%"></div></div>`
+  if (pct <= 0) return `<table cellspacing="0" cellpadding="0" width="100%" style="border-collapse:collapse;width:100%;min-width:120px"><tr><td bgcolor="#eef1f5" style="background:#eef1f5;height:16px;line-height:16px;font-size:1px;border-radius:6px">&nbsp;</td></tr></table>`
+  const rest = 100 - pct
+  return `<table cellspacing="0" cellpadding="0" width="100%" style="border-collapse:collapse;width:100%;min-width:120px"><tr>` +
+    `<td bgcolor="${color}" width="${pct}%" style="background:${color};height:16px;line-height:16px;font-size:1px;border-radius:6px">&nbsp;</td>` +
+    (rest > 0 ? `<td bgcolor="#eef1f5" width="${rest}%" style="background:#eef1f5;height:16px;line-height:16px;font-size:1px;border-radius:0 6px 6px 0">&nbsp;</td>` : '') +
+    `</tr></table>`
 }
 
 function sectionTitle(emoji: string, t: string, sub?: string): string {

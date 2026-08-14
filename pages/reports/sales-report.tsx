@@ -147,7 +147,7 @@ export default function SalesReportPage({ user }: { user: PortalUserSSR }) {
     }
     const title = reportWeek ? `Sales Report ${reportWeek.start} to ${reportWeek.end}` : 'Sales Report'
     const doc = `<!doctype html><html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:w="urn:schemas-microsoft-com:office:word"><head><meta charset="utf-8"><title>${title}</title>
-<style>body{margin:24px;background:#fff} @media print{body{margin:0}}</style>
+<style>body{margin:24px;background:#fff} *{-webkit-print-color-adjust:exact;print-color-adjust:exact} @media print{body{margin:0}}</style>
 </head><body>${body}</body></html>`
     return { title, doc }
   }
