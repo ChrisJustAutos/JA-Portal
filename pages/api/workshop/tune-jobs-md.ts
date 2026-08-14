@@ -11,7 +11,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { createClient } from '@supabase/supabase-js'
 import { validateServiceToken } from '../../../lib/service-auth'
-import { markTuneJobMdSynced } from '../../../lib/b2b-tune-jobs'
+import { markTuneJobMdSynced, markTuneJobMdResynced } from '../../../lib/b2b-tune-jobs'
 
 function sb() {
   return createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!, { auth: { persistSession: false } })
@@ -36,12 +36,30 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       .order('filled_at', { ascending: true })
       .limit(50)
     if (error) return res.status(500).json({ error: error.message })
+    // Admin-corrected jobs whose MD customer already exists: the worker PUTs
+    // the corrections (customer, vehicle, note) instead of creating anew.
+    const { data: upd, error: updErr } = await c.from('b2b_tune_jobs')
+      .select(`
+        id, vin, tune_details, invoice_number, amount,
+        customer_name, customer_first_name, customer_phone, customer_email,
+        customer_address_line1, customer_suburb, customer_state, customer_postcode,
+        vehicle_rego, vehicle_make, vehicle_model, vehicle_year, vehicle_description, job_notes,
+        md_customer_md_id,
+        distributor:b2b_distributors!b2b_tune_jobs_distributor_id_fkey(display_name)
+      `)
+      .eq('md_resync_pending', true)
+      .not('md_customer_md_id', 'is', null)
+      .order('updated_at', { ascending: true })
+      .limit(50)
+    if (updErr) return res.status(500).json({ error: updErr.message })
+    const flatten = (j: any) => ({
+      ...j,
+      distributor_name: (Array.isArray(j.distributor) ? j.distributor[0] : j.distributor)?.display_name || null,
+      distributor: undefined,
+    })
     return res.status(200).json({
-      jobs: (data || []).map((j: any) => ({
-        ...j,
-        distributor_name: (Array.isArray(j.distributor) ? j.distributor[0] : j.distributor)?.display_name || null,
-        distributor: undefined,
-      })),
+      jobs: (data || []).map(flatten),
+      updates: (upd || []).map(flatten),
     })
   }
 
@@ -50,7 +68,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (!outcomes.length) return res.status(400).json({ error: 'outcomes required' })
     for (const o of outcomes.slice(0, 100)) {
       if (!o?.job_id) continue
-      await markTuneJobMdSynced(String(o.job_id), o.md_customer_id ? String(o.md_customer_id) : null, o.error ? String(o.error) : null, o.note ? String(o.note) : null)
+      if (o.resynced) {
+        await markTuneJobMdResynced(String(o.job_id), o.error ? String(o.error) : null, o.note ? String(o.note) : null)
+      } else {
+        await markTuneJobMdSynced(String(o.job_id), o.md_customer_id ? String(o.md_customer_id) : null, o.error ? String(o.error) : null, o.note ? String(o.note) : null)
+      }
     }
     return res.status(200).json({ ok: true, recorded: outcomes.length })
   }

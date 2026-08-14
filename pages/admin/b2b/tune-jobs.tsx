@@ -3,6 +3,9 @@
 // match unmatched company names to distributors (with a sticky alias),
 // dismiss non-jobs, retry failed Monday/letter syncs, and trigger the
 // inbox scan / distributor reminders on demand.
+//
+// Alloy restyle 2026-08-12: kit pills/cards/banners; teal retired — status
+// colours map onto the semantic A set (in motion = accent, done = good).
 
 import { Fragment, useEffect, useState } from 'react'
 import Head from 'next/head'
@@ -11,6 +14,7 @@ import B2BAdminTabs from '../../../components/b2b/B2BAdminTabs'
 import { requirePageAuth } from '../../../lib/authServer'
 import { T, alpha } from '../../../lib/ui/theme'
 import { useToast } from '../../../components/ui/Feedback'
+import { A, RADIUS, Btn, btnStyle, cardStyle, Banner, StatusPill, EmptyState } from '../../../components/b2b/ui'
 
 type JobStatus = 'unmatched' | 'awaiting_details' | 'submitted' | 'synced' | 'dismissed' | 'merged'
 
@@ -47,9 +51,29 @@ interface TuneJob {
   monday_item_id: string | null
   md_customer_md_id: string | null
   md_synced_at: string | null
+  md_resync_pending: boolean | null
+  admin_edited_at: string | null
   letter_queued_at: string | null
   synced_at: string | null
 }
+
+// The fields staff can correct after a distributor's submission.
+const EDIT_FIELDS: Array<{ key: keyof TuneJob; label: string; width?: number; textarea?: boolean }> = [
+  { key: 'customer_name', label: 'Customer name (first & last)' },
+  { key: 'customer_phone', label: 'Phone' },
+  { key: 'customer_email', label: 'Email' },
+  { key: 'customer_address_line1', label: 'Street address' },
+  { key: 'customer_suburb', label: 'Suburb' },
+  { key: 'customer_state', label: 'State', width: 90 },
+  { key: 'customer_postcode', label: 'Postcode', width: 110 },
+  { key: 'vehicle_rego', label: 'Rego', width: 120 },
+  { key: 'vehicle_make', label: 'Make' },
+  { key: 'vehicle_model', label: 'Model' },
+  { key: 'vehicle_year', label: 'Year', width: 90 },
+  { key: 'vin', label: 'VIN' },
+  { key: 'tune_details', label: 'Tune / calibration' },
+  { key: 'job_notes', label: 'Package details', textarea: true },
+]
 
 // Monday follow-up board (lib/b2b-tune-jobs TUNE_FOLLOWUP_BOARD) — for the
 // "open in Monday" link on expanded rows.
@@ -70,11 +94,13 @@ const FILTERS: Array<{ id: Filter; label: string }> = [
   // and the API no longer returns them — one tune shows as ONE job.
 ]
 
+// amber = needs staff attention, accent = in motion (with the distributor /
+// syncing), green = landed, grey = closed. Teal retired with the Alloy refresh.
 const STATUS_COLOR: Record<JobStatus, string> = {
-  unmatched: T.amber,
-  awaiting_details: T.blue,
-  submitted: T.teal,
-  synced: T.green,
+  unmatched: A.warn,
+  awaiting_details: A.accent,
+  submitted: A.accent,
+  synced: A.good,
   dismissed: T.text3 as string,
   merged: T.text3 as string,
 }
@@ -106,6 +132,43 @@ export default function TuneJobsAdmin({ user }: { user: any }) {
   // Per-row assign state (unmatched rows)
   const [assignSel, setAssignSel] = useState<Record<string, string>>({})
   const [assignRemember, setAssignRemember] = useState<Record<string, boolean>>({})
+  // Edit-details modal (staff corrections to a distributor's submission)
+  const [editJob, setEditJob] = useState<TuneJob | null>(null)
+  const [editForm, setEditForm] = useState<Record<string, string>>({})
+  const [saving, setSaving] = useState(false)
+
+  function openEdit(job: TuneJob) {
+    const form: Record<string, string> = {}
+    for (const f of EDIT_FIELDS) form[f.key as string] = String(job[f.key] ?? '')
+    setEditForm(form)
+    setEditJob(job)
+  }
+
+  async function saveEdit() {
+    if (!editJob) return
+    const name = (editForm.customer_name || '').trim().replace(/\s+/g, ' ')
+    if (name.split(' ').length < 2) { toast('Customer name needs first AND last name.', 'error'); return }
+    const digits = (editForm.customer_phone || '').replace(/\D/g, '')
+    if (!((digits.length === 10 && digits.startsWith('0')) || (digits.length === 11 && digits.startsWith('61')))) {
+      toast('Phone must be a full AU number (10 digits, e.g. 0400 123 456).', 'error'); return
+    }
+    setSaving(true)
+    try {
+      const d = await post({ action: 'edit_details', job_id: editJob.id, fields: editForm })
+      if (!d.changed?.length) {
+        toast('No changes to save.', 'info')
+      } else {
+        const bits = [`Saved (${d.changed.join(', ')}).`]
+        bits.push(d.mondayUpdated ? 'Monday item updated.' : (editJob.monday_item_id ? 'Monday update FAILED — see sync error.' : ''))
+        if (d.mdResyncQueued) bits.push('MechanicDesk correction queued for tonight’s 2:30am worker.')
+        if (d.letterNote) bits.push(d.letterNote)
+        toast(bits.filter(Boolean).join(' '), d.mondayUpdated || !editJob.monday_item_id ? 'success' : 'error')
+      }
+      setEditJob(null)
+      await load()
+    } catch (e: any) { toast(e.message || 'Save failed', 'error') }
+    setSaving(false)
+  }
 
   async function load() {
     try {
@@ -189,13 +252,6 @@ export default function TuneJobsAdmin({ user }: { user: any }) {
   const distCounts = new Map<string, number>()
   for (const j of jobs) if (j.distributor_id) distCounts.set(j.distributor_id, (distCounts.get(j.distributor_id) || 0) + 1)
 
-  const btn: React.CSSProperties = {
-    fontSize: 12, fontWeight: 600, padding: '7px 14px', borderRadius: 7,
-    border: `1px solid ${T.border2}`, background: 'transparent', color: T.text2,
-    cursor: 'pointer', fontFamily: 'inherit', whiteSpace: 'nowrap',
-  }
-  const smallBtn: React.CSSProperties = { ...btn, padding: '5px 10px', fontSize: 11 }
-
   return (
     <>
       <Head><title>Tune Jobs — Just Autos</title><meta name="robots" content="noindex,nofollow" /></Head>
@@ -207,21 +263,21 @@ export default function TuneJobsAdmin({ user }: { user: any }) {
           {/* Toolbar — test-job create/delete buttons removed 2026-08-11
               (Chris: not needed); the API actions remain for emergencies. */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-            <button onClick={remindNow} disabled={busy === 'remind'} style={{ ...btn, opacity: busy === 'remind' ? 0.6 : 1 }}>
+            <Btn variant="secondary" size="sm" onClick={remindNow} disabled={busy === 'remind'}>
               {busy === 'remind' ? 'Sending…' : 'Send reminders now'}
-            </button>
+            </Btn>
             <span style={{ flex: 1 }} />
-            <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+            <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', alignItems: 'center' }}>
               {FILTERS.map(f => {
                 const on = filter === f.id
                 const count = f.id === 'all' ? jobs.length : jobs.filter(j => j.status === f.id).length
                 return (
-                  <button key={f.id} onClick={() => setFilter(f.id)}
+                  <button key={f.id} onClick={() => setFilter(f.id)} className="al-press al-focus"
                     style={{
-                      fontSize: 11.5, fontWeight: on ? 700 : 500, padding: '5px 11px', borderRadius: 14,
-                      border: `1px solid ${on ? T.blue : T.border2}`,
-                      background: on ? `${T.blue}18` : 'transparent',
-                      color: on ? T.blue : T.text2, cursor: 'pointer', fontFamily: 'inherit', whiteSpace: 'nowrap',
+                      fontSize: 12, fontWeight: on ? 700 : 500, padding: '5px 12px', borderRadius: RADIUS.pill,
+                      border: '1px solid transparent',
+                      background: on ? alpha(A.accent, '18') : 'transparent',
+                      color: on ? A.accent : T.text2, cursor: 'pointer', fontFamily: 'inherit', whiteSpace: 'nowrap',
                     }}>
                     {f.label} <span style={{ opacity: 0.7 }}>({count})</span>
                   </button>
@@ -230,10 +286,10 @@ export default function TuneJobsAdmin({ user }: { user: any }) {
               <select value={distFilter} onChange={e => setDistFilter(e.target.value)}
                 title="Filter by distributor"
                 style={{
-                  fontSize: 11.5, fontWeight: distFilter === 'all' ? 500 : 700, padding: '4px 8px', borderRadius: 14,
-                  border: `1px solid ${distFilter === 'all' ? T.border2 : T.blue}`,
-                  background: distFilter === 'all' ? 'transparent' : `${T.blue}18`,
-                  color: distFilter === 'all' ? T.text2 : T.blue, cursor: 'pointer', fontFamily: 'inherit', maxWidth: 220,
+                  fontSize: 12, fontWeight: distFilter === 'all' ? 500 : 700, padding: '5px 8px', borderRadius: RADIUS.pill,
+                  border: '1px solid transparent',
+                  background: distFilter === 'all' ? T.bg3 : alpha(A.accent, '18'),
+                  color: distFilter === 'all' ? T.text2 : A.accent, cursor: 'pointer', fontFamily: 'inherit', maxWidth: 220, outline: 'none',
                 }}>
                 <option value="all">All distributors</option>
                 {distributors.filter(d => distCounts.has(d.id)).map(d => (
@@ -241,44 +297,42 @@ export default function TuneJobsAdmin({ user }: { user: any }) {
                 ))}
               </select>
               {distFilter !== 'all' && distFilter !== 'unmatched' && (
-                <button
+                <Btn variant="ghost" size="sm"
                   onClick={async () => {
                     try {
                       const d = await post({ action: 'fill_link', distributor_id: distFilter })
                       await navigator.clipboard.writeText(d.url)
                       toast('Fill link copied — valid 14 days, opens this distributor’s jobs only.', 'success')
                     } catch (e: any) { toast(e.message || 'Link failed', 'error') }
-                  }}
-                  style={{ fontSize: 11.5, padding: '5px 11px', borderRadius: 14, border: `1px solid ${T.border2}`, background: 'transparent', color: T.text2, cursor: 'pointer', fontFamily: 'inherit', whiteSpace: 'nowrap' }}>
-                  🔗 Copy fill link
-                </button>
+                  }}>
+                  Copy fill link
+                </Btn>
               )}
               {distFilter !== 'all' && distFilter !== 'unmatched' && (
-                <button
+                <Btn variant="ghost" size="sm"
                   onClick={async () => {
                     try {
                       const d = await post({ action: 'preview_link', distributor_id: distFilter })
                       await navigator.clipboard.writeText(d.url)
                       toast('Portal preview link copied — read-only, valid 24h. Open in a private window for your Scribe.', 'success')
                     } catch (e: any) { toast(e.message || 'Link failed', 'error') }
-                  }}
-                  style={{ fontSize: 11.5, padding: '5px 11px', borderRadius: 14, border: `1px solid ${T.border2}`, background: 'transparent', color: T.text2, cursor: 'pointer', fontFamily: 'inherit', whiteSpace: 'nowrap' }}>
-                  👁 Copy portal preview link
-                </button>
+                  }}>
+                  Copy preview link
+                </Btn>
               )}
             </div>
           </div>
 
-          {error && <div style={{ background: 'rgba(240,78,78,0.1)', border: `1px solid ${T.red}40`, borderRadius: 8, padding: 12, color: T.red, fontSize: 13 }}>{error}</div>}
+          {error && <Banner tone="error" onDismiss={() => setError('')}>{error}</Banner>}
           {loading && <div style={{ color: T.text3, textAlign: 'center', padding: 30 }}>Loading…</div>}
           {!loading && visible.length === 0 && !error && (
-            <div style={{ color: T.text3, textAlign: 'center', padding: 30, fontStyle: 'italic' }}>
-              {filter === 'all' ? 'No tune jobs yet — the hourly inbox scan pulls in new receipts.' : 'Nothing with this status.'}
-            </div>
+            <EmptyState
+              title={filter === 'all' ? 'No tune jobs yet' : 'Nothing with this status'}
+              sub={filter === 'all' ? 'The hourly inbox scan pulls in new receipts.' : undefined} />
           )}
 
           {!loading && visible.length > 0 && (
-            <div style={{ background: T.bg2, border: `1px solid ${T.border}`, borderRadius: 10, overflowX: 'auto' }}>
+            <div style={{ ...cardStyle(false), overflowX: 'auto' }}>
               <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 1000 }}>
                 <thead>
                   <tr style={{ background: T.bg3, borderBottom: `1px solid ${T.border2}` }}>
@@ -312,25 +366,23 @@ export default function TuneJobsAdmin({ user }: { user: any }) {
                         {j.distributor_name
                           ? j.distributor_name
                           : j.status === 'unmatched'
-                            ? <span style={{ color: T.amber, fontWeight: 700, fontSize: 11 }}>UNMATCHED</span>
+                            ? <span style={{ color: A.warn, fontWeight: 700, fontSize: 12 }}>Unmatched</span>
                             : <span style={{ color: T.text3 }}>—</span>}
                       </Td>
                       <Td><span style={{ fontFamily: 'ui-monospace, monospace', fontSize: 12 }}>{j.vin || '—'}</span></Td>
                       <Td muted>{j.tune_details || '—'}</Td>
                       <Td align="right">{j.amount != null ? `$${Number(j.amount).toFixed(2)}` : '—'}</Td>
                       <Td>
-                        <span style={{ fontSize: 10, fontWeight: 700, padding: '2px 8px', borderRadius: 8, background: alpha(STATUS_COLOR[j.status], '18'), color: STATUS_COLOR[j.status], whiteSpace: 'nowrap' }}>
-                          {STATUS_LABEL[j.status] || j.status}
-                        </span>
+                        <StatusPill color={STATUS_COLOR[j.status]}>{STATUS_LABEL[j.status] || j.status}</StatusPill>
                       </Td>
                       <Td>
                         {j.sync_error
-                          ? <span title={j.sync_error} style={{ color: T.red, fontSize: 11, display: 'inline-block', maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', verticalAlign: 'bottom' }}>{j.sync_error}</span>
+                          ? <span title={j.sync_error} style={{ color: A.bad, fontSize: 12, display: 'inline-block', maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', verticalAlign: 'bottom' }}>{j.sync_error}</span>
                           : <span style={{ color: T.text3 }}>—</span>}
                       </Td>
                       <Td>
                         {j.invoice_url
-                          ? <a href={j.invoice_url} target="_blank" rel="noreferrer" style={{ color: T.blue, textDecoration: 'none', fontSize: 12 }}>View ↗</a>
+                          ? <a href={j.invoice_url} target="_blank" rel="noreferrer" style={{ color: A.accent, textDecoration: 'none', fontSize: 12.5 }}>View ↗</a>
                           : <span style={{ color: T.text3 }}>—</span>}
                       </Td>
                       <Td muted>{j.customer_name || '—'}</Td>
@@ -338,27 +390,27 @@ export default function TuneJobsAdmin({ user }: { user: any }) {
                         {j.status === 'unmatched' && (
                           <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
                             <select value={assignSel[j.id] || ''} onChange={e => setAssignSel(s => ({ ...s, [j.id]: e.target.value }))}
-                              style={{ fontSize: 11, padding: '4px 6px', borderRadius: 6, border: `1px solid ${T.border2}`, background: T.bg3, color: T.text, fontFamily: 'inherit', maxWidth: 160 }}>
+                              style={{ fontSize: 12, padding: '5px 7px', borderRadius: RADIUS.sm, border: '1px solid transparent', background: T.bg3, color: T.text, fontFamily: 'inherit', maxWidth: 160, outline: 'none' }}>
                               <option value="">Distributor…</option>
                               {distributors.map(d => <option key={d.id} value={d.id}>{d.display_name}</option>)}
                             </select>
-                            <label style={{ fontSize: 10.5, color: T.text2, display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                            <label style={{ fontSize: 12, color: T.text2, display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer', whiteSpace: 'nowrap' }}>
                               <input type="checkbox" checked={assignRemember[j.id] !== false} onChange={e => setAssignRemember(s => ({ ...s, [j.id]: e.target.checked }))} />
                               remember this name
                             </label>
-                            <button onClick={() => assign(j)} disabled={busy === j.id}
-                              style={{ ...smallBtn, border: `1px solid ${T.blue}`, color: T.blue, opacity: busy === j.id ? 0.6 : 1 }}>
+                            <button onClick={() => assign(j)} disabled={busy === j.id} className="al-press al-focus al-ghost"
+                              style={{ ...btnStyle('ghost', 'sm', busy === j.id), fontSize: 12, color: A.accent }}>
                               Assign
                             </button>
-                            <button onClick={() => dismiss(j)} disabled={busy === j.id}
-                              style={{ ...smallBtn, color: T.red, borderColor: `${T.red}60`, opacity: busy === j.id ? 0.6 : 1 }}>
+                            <button onClick={() => dismiss(j)} disabled={busy === j.id} className="al-press al-focus al-ghost"
+                              style={{ ...btnStyle('ghost', 'sm', busy === j.id), fontSize: 12, color: A.bad }}>
                               Dismiss
                             </button>
                           </div>
                         )}
                         {j.sync_error && (
-                          <button onClick={() => retrySync(j)} disabled={busy === j.id}
-                            style={{ ...smallBtn, border: `1px solid ${T.amber}`, color: T.amber, opacity: busy === j.id ? 0.6 : 1, marginTop: j.status === 'unmatched' ? 6 : 0 }}>
+                          <button onClick={() => retrySync(j)} disabled={busy === j.id} className="al-press al-focus al-ghost"
+                            style={{ ...btnStyle('ghost', 'sm', busy === j.id), fontSize: 12, color: A.warn, marginTop: j.status === 'unmatched' ? 6 : 0 }}>
                             Retry sync
                           </button>
                         )}
@@ -367,7 +419,7 @@ export default function TuneJobsAdmin({ user }: { user: any }) {
                     {expanded === j.id && (
                       <tr style={{ borderBottom: `1px solid ${T.border}` }}>
                         <td colSpan={11} style={{ padding: '14px 16px', background: T.bg3 }}>
-                          <JobDetail job={j} />
+                          <JobDetail job={j} onEdit={['submitted', 'synced'].includes(j.status) ? () => openEdit(j) : undefined} />
                         </td>
                       </tr>
                     )}
@@ -378,21 +430,62 @@ export default function TuneJobsAdmin({ user }: { user: any }) {
             </div>
           )}
         </div>
+
+        {/* Staff correction modal — fixes a distributor's submission and
+            re-pushes: Monday item now, MechanicDesk via the nightly worker. */}
+        {editJob && (
+          <div style={{ position: 'fixed', inset: 0, zIndex: 60, background: 'rgba(0,0,0,0.55)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}
+            onClick={e => { if (e.target === e.currentTarget && !saving) setEditJob(null) }}>
+            <div style={{ ...cardStyle(false), width: 720, maxWidth: '100%', maxHeight: '90vh', overflowY: 'auto', padding: 20, display: 'flex', flexDirection: 'column', gap: 14 }}>
+              <div>
+                <div style={{ fontSize: 15, fontWeight: 700 }}>Edit submission — {editJob.customer_name || 'job'}</div>
+                <div style={{ fontSize: 12, color: T.text2, marginTop: 4 }}>
+                  {editJob.distributor_name || editJob.company_raw} · saving pushes the corrections to the Monday follow-up item now
+                  {editJob.md_customer_md_id ? ' and queues a MechanicDesk correction for tonight’s worker run' : ''}.
+                </div>
+              </div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10 }}>
+                {EDIT_FIELDS.map(f => (
+                  <label key={f.key as string} style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 11.5, color: T.text2, flex: f.textarea ? '1 1 100%' : (f.width ? `0 0 ${f.width}px` : '1 1 200px') }}>
+                    {f.label}
+                    {f.textarea ? (
+                      <textarea value={editForm[f.key as string] || ''} rows={3}
+                        onChange={e => setEditForm(s => ({ ...s, [f.key as string]: e.target.value }))}
+                        style={{ fontSize: 13, padding: '8px 10px', borderRadius: RADIUS.sm, border: `1px solid ${T.border2}`, background: T.bg3, color: T.text, fontFamily: 'inherit', resize: 'vertical', outline: 'none' }} />
+                    ) : (
+                      <input value={editForm[f.key as string] || ''}
+                        onChange={e => setEditForm(s => ({ ...s, [f.key as string]: e.target.value }))}
+                        style={{ fontSize: 13, padding: '8px 10px', borderRadius: RADIUS.sm, border: `1px solid ${T.border2}`, background: T.bg3, color: T.text, fontFamily: 'inherit', outline: 'none' }} />
+                    )}
+                  </label>
+                ))}
+              </div>
+              {editJob.letter_queued_at && (
+                <Banner tone="warn">The thank-you letter for this job was already queued — corrections here can’t recall it.</Banner>
+              )}
+              <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+                <Btn variant="ghost" size="sm" onClick={() => setEditJob(null)} disabled={saving}>Cancel</Btn>
+                <Btn variant="primary" size="sm" onClick={saveEdit} disabled={saving}>{saving ? 'Saving…' : 'Save & re-push'}</Btn>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </>
   )
 }
 
 // Full submission view — everything the distributor entered plus where the
-// job got to downstream (MD / Monday / letter).
-function JobDetail({ job }: { job: TuneJob }) {
+// job got to downstream (MD / Monday / letter). onEdit (submitted/synced
+// rows) opens the staff correction modal.
+function JobDetail({ job, onEdit }: { job: TuneJob; onEdit?: () => void }) {
   const vehicle = [job.vehicle_year, job.vehicle_make, job.vehicle_model].filter(Boolean).join(' ')
     || job.vehicle_description || null
   const address = [job.customer_address_line1, [job.customer_suburb, job.customer_state, job.customer_postcode].filter(Boolean).join(' ')]
     .filter(Boolean).join(', ') || null
 
   const section: React.CSSProperties = { display: 'flex', flexDirection: 'column', gap: 6, minWidth: 200 }
-  const heading: React.CSSProperties = { fontSize: 10, fontWeight: 700, color: T.text3, textTransform: 'uppercase', letterSpacing: '0.07em' }
+  const heading: React.CSSProperties = { fontSize: 12, fontWeight: 650, color: T.text2 }
 
   function Row({ label, children }: { label: string; children?: React.ReactNode }) {
     return (
@@ -409,8 +502,8 @@ function JobDetail({ job }: { job: TuneJob }) {
         <div style={section}>
           <div style={heading}>Customer</div>
           <Row label="Name">{job.customer_name}</Row>
-          <Row label="Phone">{job.customer_phone && <a href={`tel:${job.customer_phone}`} style={{ color: T.blue, textDecoration: 'none' }}>{job.customer_phone}</a>}</Row>
-          <Row label="Email">{job.customer_email && <a href={`mailto:${job.customer_email}`} style={{ color: T.blue, textDecoration: 'none' }}>{job.customer_email}</a>}</Row>
+          <Row label="Phone">{job.customer_phone && <a href={`tel:${job.customer_phone}`} style={{ color: A.accent, textDecoration: 'none' }}>{job.customer_phone}</a>}</Row>
+          <Row label="Email">{job.customer_email && <a href={`mailto:${job.customer_email}`} style={{ color: A.accent, textDecoration: 'none' }}>{job.customer_email}</a>}</Row>
           <Row label="Address">{address}</Row>
         </div>
         <div style={section}>
@@ -430,14 +523,20 @@ function JobDetail({ job }: { job: TuneJob }) {
           <div style={heading}>Downstream</div>
           <Row label="MechanicDesk">{job.md_customer_md_id
             ? <>customer #{job.md_customer_md_id}{job.md_synced_at ? ` · ${formatDate(job.md_synced_at)}` : ''}</>
-            : job.status === 'submitted' ? <span style={{ color: T.amber }}>queued — nightly 2:30am worker</span> : null}</Row>
+            : job.status === 'submitted' ? <span style={{ color: A.warn }}>queued — nightly 2:30am worker</span> : null}</Row>
           <Row label="Monday">{job.monday_item_id && (
-            <a href={`${MONDAY_FOLLOWUP_BOARD_URL}/${job.monday_item_id}`} target="_blank" rel="noreferrer" style={{ color: T.blue, textDecoration: 'none' }}>
+            <a href={`${MONDAY_FOLLOWUP_BOARD_URL}/${job.monday_item_id}`} target="_blank" rel="noreferrer" style={{ color: A.accent, textDecoration: 'none' }}>
               Follow-up item ↗
             </a>
           )}</Row>
           <Row label="Letter">{job.letter_queued_at ? `queued ${formatDate(job.letter_queued_at)}` : <span style={{ color: T.text3 }}>not queued{!address ? ' (no address)' : ''}</span>}</Row>
-          {job.sync_error && <Row label="Sync error"><span style={{ color: T.red }}>{job.sync_error}</span></Row>}
+          {job.admin_edited_at && (
+            <Row label="Corrected">
+              {formatDate(job.admin_edited_at)}
+              {job.md_resync_pending && <span style={{ color: A.warn }}> · MD correction queued (nightly worker)</span>}
+            </Row>
+          )}
+          {job.sync_error && <Row label="Sync error"><span style={{ color: A.bad }}>{job.sync_error}</span></Row>}
         </div>
       </div>
       <div>
@@ -446,13 +545,18 @@ function JobDetail({ job }: { job: TuneJob }) {
           {job.job_notes || 'None provided.'}
         </div>
       </div>
+      {onEdit && (
+        <div>
+          <Btn variant="secondary" size="sm" onClick={onEdit}>✏️ Edit details</Btn>
+        </div>
+      )}
     </div>
   )
 }
 
 function Th({ children, align }: { children?: React.ReactNode; align?: 'left' | 'right' }) {
   return (
-    <th style={{ textAlign: align || 'left', fontSize: 10, fontWeight: 500, color: T.text3, textTransform: 'uppercase', letterSpacing: '0.06em', padding: '10px 12px', whiteSpace: 'nowrap' }}>
+    <th style={{ textAlign: align || 'left', fontSize: 12, fontWeight: 650, color: T.text2, padding: '10px 12px', whiteSpace: 'nowrap' }}>
       {children}
     </th>
   )

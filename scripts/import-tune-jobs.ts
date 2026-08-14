@@ -36,6 +36,7 @@ const normName = (s: string) => s.toLowerCase().replace(/\s+/g, ' ').trim()
 
 interface TuneJob {
   id: string
+  md_customer_md_id?: string | null   // set on correction (resync) rows
   vin: string | null
   tune_details: string | null
   invoice_number: string | null
@@ -174,13 +175,13 @@ async function tryAddCustomerNote(client: MdClient, customerId: string | number,
   return `customer note failed (${errors.join(' | ')})`.slice(0, 700)
 }
 
-async function fetchPending(): Promise<TuneJob[]> {
+async function fetchPending(): Promise<{ jobs: TuneJob[]; updates: TuneJob[] }> {
   const r = await fetch(`${PORTAL_BASE}/api/workshop/tune-jobs-md`, {
     headers: { 'X-Service-Token': PORTAL_TOKEN },
   })
   if (!r.ok) throw new Error(`portal pending fetch failed: ${r.status}`)
   const data = await r.json()
-  return data.jobs || []
+  return { jobs: data.jobs || [], updates: data.updates || [] }
 }
 
 async function report(outcomes: any[]): Promise<void> {
@@ -238,10 +239,100 @@ function splitName(full: string): { first: string; last: string } {
   return { first: parts[0], last: parts.slice(1).join(' ') }
 }
 
+// Admin corrected a job that already exists in MD: PUT the customer fields
+// (the {customer:{...}} + address shape is the one proven live 2026-07-24),
+// fix the vehicle (match by VIN or rego; PUT if found, create if the correct
+// car isn't on the file), and drop a correction note on the customer file.
+// Returns notes for the outcome; throws only on the customer PUT failing.
+async function applyCorrection(client: MdClient, job: TuneJob): Promise<string[]> {
+  const id = job.md_customer_md_id!
+  const notes: string[] = []
+  const { first, last } = splitName(job.customer_name)
+  await mdRequest<any>(client, `/customers/${id}`, {
+    method: 'PUT',
+    body: JSON.stringify({ customer: {
+      first_name: first, ...(last ? { last_name: last } : {}),
+      ...(job.customer_phone ? { mobile: job.customer_phone } : {}),
+      ...(job.customer_email ? { email: job.customer_email } : {}),
+      ...((job.customer_address_line1 || job.customer_suburb || job.customer_state || job.customer_postcode) ? { address: {
+        ...(job.customer_address_line1 ? { street: job.customer_address_line1 } : {}),
+        ...(job.customer_suburb ? { suburb: job.customer_suburb } : {}),
+        ...(job.customer_state ? { state: job.customer_state } : {}),
+        ...(job.customer_postcode ? { postcode: job.customer_postcode } : {}),
+      } } : {}),
+    } }),
+  })
+  console.log(`  ~ customer #${id} updated (${job.customer_name})`)
+
+  // Vehicle: match this job's car on the customer file by VIN or rego.
+  if (job.vin || job.vehicle_rego) {
+    try {
+      const cust = await getMdCustomer(client, id)
+      const vehicles: any[] = Array.isArray(cust?.vehicles) ? cust.vehicles : []
+      const norm = (x: any) => String(x || '').replace(/\s/g, '').toUpperCase()
+      const match = vehicles.find(veh => !veh.deleted && (
+        (job.vin && norm(veh.vin) === norm(job.vin)) ||
+        (job.vehicle_rego && norm(veh.registration_number) === norm(job.vehicle_rego))
+      ))
+      const v = (job.vehicle_make || job.vehicle_model || job.vehicle_year)
+        ? { make: job.vehicle_make || undefined, model: job.vehicle_model || undefined, year: job.vehicle_year || undefined }
+        : splitVehicle(job.vehicle_description)
+      if (match) {
+        // PUT /vehicles/{id} is UNPROVEN against MD — attempted nested-then-flat
+        // (MD 200s-while-ignoring unknown keys, so the response isn't trusted);
+        // any failure lands in the outcome note rather than failing the job.
+        const payload = {
+          ...(job.vehicle_rego ? { registration_number: job.vehicle_rego } : {}),
+          ...(job.vin ? { vin: job.vin } : {}),
+          ...(v.make ? { make: v.make } : {}),
+          ...(v.model ? { model: v.model } : {}),
+          ...(v.year ? { year: v.year } : {}),
+        }
+        try {
+          await mdRequest<any>(client, `/vehicles/${match.id}`, { method: 'PUT', body: JSON.stringify({ vehicle: payload }) })
+          console.log(`  ~ vehicle #${match.id} updated`)
+        } catch {
+          try {
+            await mdRequest<any>(client, `/vehicles/${match.id}`, { method: 'PUT', body: JSON.stringify(payload) })
+            console.log(`  ~ vehicle #${match.id} updated (flat shape)`)
+          } catch (e: any) {
+            notes.push(`vehicle update failed: ${String(e?.message || e).slice(0, 150)}`)
+          }
+        }
+      } else {
+        const created = await tryCreateVehicle(client, id, job)
+        if (created) notes.push(created)
+      }
+    } catch (e: any) {
+      notes.push(`vehicle correction failed: ${String(e?.message || e).slice(0, 150)}`)
+    }
+  }
+
+  // Correction note so the customer file explains why details shifted.
+  const content = [
+    `Details corrected by Just Autos (portal) — ${new Date().toISOString().slice(0, 10)}`,
+    [
+      job.customer_name,
+      job.customer_phone || '',
+      job.vehicle_rego ? `Rego ${job.vehicle_rego}` : '',
+      job.vin ? `VIN ${job.vin}` : '',
+    ].filter(Boolean).join(' · '),
+  ].join('\n')
+  try {
+    const r = await mdRequest<any>(client, `/customers/${id}/create_note`, {
+      method: 'POST', body: JSON.stringify({ note: { content } }),
+    })
+    if (!(r?.id || r?.note?.id)) notes.push('correction note: 200 but no note id')
+  } catch (e: any) {
+    notes.push(`correction note failed: ${String(e?.message || e).slice(0, 150)}`)
+  }
+  return notes
+}
+
 async function main() {
-  const jobs = await fetchPending()
-  console.log(`${jobs.length} submitted tune job(s) pending MD creation`)
-  if (!jobs.length) return
+  const { jobs, updates } = await fetchPending()
+  console.log(`${jobs.length} submitted tune job(s) pending MD creation, ${updates.length} correction(s) pending`)
+  if (!jobs.length && !updates.length) return
 
   const { chromium } = await import('playwright')
   const browser = await chromium.launch()
@@ -298,6 +389,21 @@ async function main() {
       } catch (e: any) {
         console.error(`! ${job.customer_name}: ${e?.message || e}`)
         outcomes.push({ job_id: job.id, error: String(e?.message || e).slice(0, 400) })
+      }
+    }
+
+    // Admin corrections to jobs already in MD (md_resync_pending rows).
+    for (const job of updates) {
+      try {
+        if (DRY_RUN) {
+          console.log(`~ DRY RUN: would correct MD customer #${job.md_customer_md_id} (${job.customer_name})`)
+          continue
+        }
+        const notes = await applyCorrection(client, job)
+        outcomes.push({ job_id: job.id, resynced: true, ...(notes.length ? { note: notes.join(' | ').slice(0, 800) } : {}) })
+      } catch (e: any) {
+        console.error(`! correction ${job.customer_name}: ${e?.message || e}`)
+        outcomes.push({ job_id: job.id, resynced: true, error: String(e?.message || e).slice(0, 400) })
       }
     }
   } finally {

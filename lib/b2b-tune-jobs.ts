@@ -618,6 +618,148 @@ export async function syncTuneJobDownstream(jobId: string): Promise<void> {
   }).eq('id', jobId)
 }
 
+// ---------------------------------------------------------------------------
+// Admin corrections (Chris 2026-08-14: distributors made mistakes on
+// submission). Staff edit the submitted details on /admin/b2b/tune-jobs; the
+// corrections re-push to the Monday follow-up item immediately and queue an
+// MD correction pass for the nightly worker when the job already has an MD
+// customer (md_resync_pending → worker PUTs customer/vehicle + note).
+
+export interface TuneJobAdminEdit extends TuneJobDetails {
+  vin?: string | null            // receipt extraction can be wrong too
+  tune_details?: string | null
+}
+
+const EDIT_FIELD_LABELS: Record<string, string> = {
+  customer_name: 'name', customer_phone: 'phone', customer_email: 'email',
+  customer_address_line1: 'address', customer_suburb: 'suburb',
+  customer_state: 'state', customer_postcode: 'postcode',
+  vehicle_rego: 'rego', vehicle_make: 'make', vehicle_model: 'model',
+  vehicle_year: 'year', vin: 'VIN', tune_details: 'tune', job_notes: 'package details',
+}
+
+export async function adminEditTuneJob(jobId: string, d: TuneJobAdminEdit): Promise<{
+  changed: string[]; mondayUpdated: boolean; mdResyncQueued: boolean; letterNote: string | null
+}> {
+  const c = sb()
+  const { data: job } = await c.from('b2b_tune_jobs').select('*').eq('id', jobId).maybeSingle()
+  if (!job) throw new Error('Job not found')
+  if (!['submitted', 'synced'].includes(job.status)) throw new Error(`Only submitted/synced jobs can be edited (this one is ${job.status})`)
+
+  // Same rules the distributor forms enforce — corrections must not
+  // reintroduce the mistakes the validation exists to stop.
+  const name = String(d.customer_name || '').trim().replace(/\s+/g, ' ')
+  if (!name) throw new Error('Customer name is required')
+  if (name.split(' ').length < 2) throw new Error('Please enter the customer’s first and last name')
+  if (!isFullAuPhone(d.customer_phone)) {
+    throw new Error('Please enter the customer’s full phone number (10 digits, e.g. 0400 123 456)')
+  }
+
+  const s = (v: any, n: number) => { const t = String(v ?? '').trim(); return t ? t.slice(0, n) : null }
+  const vMake = s(d.vehicle_make, 40), vModel = s(d.vehicle_model, 60), vYear = s(d.vehicle_year, 10)
+  const next: Record<string, any> = {
+    customer_name: name.slice(0, 200),
+    customer_first_name: name.split(' ')[0].slice(0, 80),
+    customer_phone: s(d.customer_phone, 40),
+    customer_email: s(d.customer_email, 200),
+    customer_address_line1: s(d.customer_address_line1, 200),
+    customer_suburb: s(d.customer_suburb, 80),
+    customer_state: s(d.customer_state, 10),
+    customer_postcode: s(d.customer_postcode, 10),
+    vehicle_rego: s(d.vehicle_rego, 20),
+    vehicle_make: vMake, vehicle_model: vModel, vehicle_year: vYear,
+    vehicle_description: [vYear, vMake, vModel].filter(Boolean).join(' ') || s(d.vehicle_description, 120),
+    vin: s(d.vin, 40),
+    tune_details: s(d.tune_details, 500),
+    job_notes: s(d.job_notes, 1000),
+  }
+  const changed = Object.keys(EDIT_FIELD_LABELS).filter(k => (next[k] ?? null) !== (job[k] ?? null))
+  if (!changed.length) return { changed: [], mondayUpdated: false, mdResyncQueued: false, letterNote: null }
+
+  const mdResyncQueued = !!job.md_customer_md_id
+  await c.from('b2b_tune_jobs').update({
+    ...next,
+    admin_edited_at: new Date().toISOString(),
+    ...(mdResyncQueued ? { md_resync_pending: true } : {}),
+    updated_at: new Date().toISOString(),
+  }).eq('id', jobId)
+
+  const changedLabels = changed.map(k => EDIT_FIELD_LABELS[k])
+  const monday = await updateTuneFollowupItem(jobId, changedLabels)
+  if (monday.error) {
+    await c.from('b2b_tune_jobs').update({
+      sync_error: `Monday correction failed: ${monday.error}`.slice(0, 1000),
+      updated_at: new Date().toISOString(),
+    }).eq('id', jobId)
+  }
+
+  // The thank-you letter prints from a queue — a correction after queueing
+  // can't recall it, so surface that to the admin instead of pretending.
+  const letterAffected = changed.some(k => k.startsWith('customer_') || k.startsWith('vehicle_') || k === 'tune_details')
+  const letterNote = job.letter_queued_at && letterAffected
+    ? 'The thank-you letter was already queued with the OLD details — reprint manually if it matters.'
+    : null
+
+  return { changed: changedLabels, mondayUpdated: monday.updated, mdResyncQueued, letterNote }
+}
+
+// Push the job's current details onto its Monday follow-up item: rename the
+// item, rewrite the data columns (empty string clears), re-geocode the
+// address, and post an update so the advisor sees what changed. Never throws.
+async function updateTuneFollowupItem(jobId: string, changedLabels: string[]): Promise<{ updated: boolean; error: string | null }> {
+  const c = sb()
+  const { data: job } = await c.from('b2b_tune_jobs').select('*').eq('id', jobId).maybeSingle()
+  if (!job?.monday_item_id) return { updated: false, error: null }
+  try {
+    const { mondayQuery } = await import('./monday-followup')
+    const vehicle = [job.vehicle_year, job.vehicle_make, job.vehicle_model].filter(Boolean).join(' ')
+      || job.vehicle_description || ''
+    const columnValues: Record<string, any> = {
+      name: job.customer_name || 'Unknown customer',
+      [TUNE_FOLLOWUP_COLS.PHONE]: job.customer_phone || '',
+      [TUNE_FOLLOWUP_COLS.EMAIL]: job.customer_email || '',
+      [TUNE_FOLLOWUP_COLS.VEHICLE]: vehicle,
+      [TUNE_FOLLOWUP_COLS.REGO]: job.vehicle_rego || '',
+      [TUNE_FOLLOWUP_COLS.TUNE]: String(job.tune_details || '').slice(0, 250),
+      [TUNE_FOLLOWUP_COLS.PACKAGE]: { text: String(job.job_notes || '').slice(0, 2000) },
+    }
+    const address = [job.customer_address_line1, [job.customer_suburb, job.customer_state, job.customer_postcode].filter(Boolean).join(' ')].filter(Boolean).join(', ')
+    if (address) {
+      const geo = await geocodeAuAddress(address)
+      if (geo) columnValues[TUNE_FOLLOWUP_COLS.ADDRESS] = { lat: String(geo.lat), lng: String(geo.lng), address }
+    }
+    await mondayQuery(
+      `mutation FixTuneFollowUp($boardId: ID!, $itemId: ID!, $columnValues: JSON!) {
+        change_multiple_column_values(board_id: $boardId, item_id: $itemId, column_values: $columnValues, create_labels_if_missing: false) { id }
+      }`,
+      { boardId: TUNE_FOLLOWUP_BOARD, itemId: String(job.monday_item_id), columnValues: JSON.stringify(columnValues) },
+    )
+    const note = [
+      `✏️ Details corrected by Just Autos staff — ${changedLabels.join(', ')}.`,
+      address ? `Address on file: ${address}` : '',
+    ].filter(Boolean).join('\n')
+    await mondayQuery(
+      `mutation Note($itemId: ID!, $body: String!) { create_update(item_id: $itemId, body: $body) { id } }`,
+      { itemId: String(job.monday_item_id), body: note },
+    ).catch(() => { /* note is best-effort */ })
+    return { updated: true, error: null }
+  } catch (e: any) {
+    return { updated: false, error: String(e?.message || e).slice(0, 200) }
+  }
+}
+
+// Worker outcome for a correction pass: success clears the pending flag;
+// a failure keeps it set so the next nightly run retries, with the error
+// recorded where the admin page shows it.
+export async function markTuneJobMdResynced(jobId: string, error?: string | null, note?: string | null): Promise<void> {
+  const c = sb()
+  await c.from('b2b_tune_jobs').update({
+    ...(error ? {} : { md_resync_pending: false }),
+    sync_error: error ? `MD correction failed: ${error}`.slice(0, 1000) : (note ? `MD correction: ${note}`.slice(0, 1000) : null),
+    updated_at: new Date().toISOString(),
+  }).eq('id', jobId)
+}
+
 // Queue the customer thank-you letter (default automation template with the
 // distributor's sign-off block). addressOverride carries an advisor-entered
 // address from the Monday board when the submission had none. Stamps

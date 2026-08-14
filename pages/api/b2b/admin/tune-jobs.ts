@@ -14,7 +14,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { createClient } from '@supabase/supabase-js'
 import { withAuth } from '../../../../lib/authServer'
-import { assignTuneJobDistributor, dismissTuneJob, syncTuneJobDownstream, sendTuneJobReminders, ingestTuneJobEmails } from '../../../../lib/b2b-tune-jobs'
+import { assignTuneJobDistributor, dismissTuneJob, syncTuneJobDownstream, sendTuneJobReminders, ingestTuneJobEmails, adminEditTuneJob } from '../../../../lib/b2b-tune-jobs'
 
 export const config = { maxDuration: 300 }
 
@@ -41,7 +41,8 @@ export default withAuth('edit:b2b_distributors', async (req: NextApiRequest, res
           customer_state, customer_postcode, vehicle_rego, vehicle_make,
           vehicle_model, vehicle_year, vehicle_description, job_notes,
           filled_by_user_id, filled_at, monday_item_id, md_customer_md_id,
-          md_synced_at, letter_job_id, letter_queued_at, sync_error, synced_at,
+          md_synced_at, md_resync_pending, admin_edited_at,
+          letter_job_id, letter_queued_at, sync_error, synced_at,
           last_reminder_at, first_reminded_at, sms_reminded_at, escalated_at,
           created_at, updated_at,
           distributor:b2b_distributors!b2b_tune_jobs_distributor_id_fkey(display_name)
@@ -92,6 +93,15 @@ export default withAuth('edit:b2b_distributors', async (req: NextApiRequest, res
         if (!body.job_id) return res.status(400).json({ error: 'job_id required' })
         const r = await dismissTuneJob(String(body.job_id))
         return res.status(200).json({ ok: true, dismissed_jobs: r.dismissedJobs, excluded_name: r.excludedName })
+      }
+      if (action === 'edit_details') {
+        // Staff correction of a distributor's submission (Chris 2026-08-14):
+        // saves the fixed fields, re-pushes the Monday follow-up item now,
+        // and queues an MD correction for the nightly worker when the job
+        // already has an MD customer.
+        if (!body.job_id || !body.fields) return res.status(400).json({ error: 'job_id + fields required' })
+        const r = await adminEditTuneJob(String(body.job_id), body.fields)
+        return res.status(200).json({ ok: true, ...r })
       }
       if (action === 'retry_sync') {
         if (!body.job_id) return res.status(400).json({ error: 'job_id required' })
