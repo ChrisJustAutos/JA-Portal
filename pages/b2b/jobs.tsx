@@ -44,6 +44,9 @@ interface TuneJob {
   customer_state: string | null
   customer_postcode: string | null
   vehicle_rego: string | null
+  vehicle_make: string | null
+  vehicle_model: string | null
+  vehicle_year: string | null
   vehicle_description: string | null
   job_notes: string | null
   filled_at: string | null
@@ -75,6 +78,79 @@ function formatDate(iso: string | null): string {
   return new Date(iso).toLocaleDateString('en-AU', { day: '2-digit', month: 'short', year: 'numeric' })
 }
 
+function formFromJob(job: TuneJob): DetailsForm {
+  return {
+    customer_name: job.customer_name || '',
+    customer_phone: job.customer_phone || '',
+    customer_email: job.customer_email || '',
+    customer_address_line1: job.customer_address_line1 || '',
+    customer_suburb: job.customer_suburb || '',
+    customer_state: job.customer_state || '',
+    customer_postcode: job.customer_postcode || '',
+    vehicle_rego: job.vehicle_rego || '',
+    vehicle_make: job.vehicle_make || '',
+    vehicle_model: job.vehicle_model || '',
+    vehicle_year: job.vehicle_year || '',
+    job_notes: job.job_notes || '',
+  }
+}
+
+// Same rules the server enforces — returns an error string or null.
+function validateForm(form: DetailsForm): string | null {
+  const name = form.customer_name.trim().replace(/\s+/g, ' ')
+  if (!name) return 'Customer name is required.'
+  if (name.split(' ').length < 2) return 'Please enter the customer’s first and last name.'
+  const digits = form.customer_phone.replace(/\D/g, '')
+  if (!((digits.length === 10 && digits.startsWith('0')) || (digits.length === 11 && digits.startsWith('61')))) {
+    return 'Please enter the customer’s full phone number (10 digits, e.g. 0400 123 456).'
+  }
+  return null
+}
+
+function trimmedDetails(form: DetailsForm) {
+  return {
+    customer_name: form.customer_name.trim().replace(/\s+/g, ' '),
+    customer_phone: form.customer_phone.trim(),
+    customer_email: form.customer_email.trim(),
+    customer_address_line1: form.customer_address_line1.trim(),
+    customer_suburb: form.customer_suburb.trim(),
+    customer_state: form.customer_state.trim(),
+    customer_postcode: form.customer_postcode.trim(),
+    vehicle_rego: form.vehicle_rego.trim(),
+    vehicle_make: form.vehicle_make.trim(),
+    vehicle_model: form.vehicle_model.trim(),
+    vehicle_year: form.vehicle_year.trim(),
+    job_notes: form.job_notes.trim(),
+  }
+}
+
+// The customer/vehicle fields — shared by the first fill and the edit form.
+function DetailsGrid({ form, set }: {
+  form: DetailsForm
+  set: (k: keyof DetailsForm) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => void
+}) {
+  return (
+    <>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 12 }}>
+        <Field label="Customer name (first & last)" required><input value={form.customer_name} onChange={set('customer_name')} style={inputStyle()} placeholder="e.g. John Smith" /></Field>
+        <Field label="Phone" required><input value={form.customer_phone} onChange={set('customer_phone')} style={inputStyle()} inputMode="tel" placeholder="e.g. 0400 123 456" /></Field>
+        <Field label="Email"><input value={form.customer_email} onChange={set('customer_email')} style={inputStyle()} inputMode="email" /></Field>
+        <Field label="Address line"><input value={form.customer_address_line1} onChange={set('customer_address_line1')} style={inputStyle()} /></Field>
+        <Field label="Suburb"><input value={form.customer_suburb} onChange={set('customer_suburb')} style={inputStyle()} /></Field>
+        <Field label="State"><input value={form.customer_state} onChange={set('customer_state')} style={inputStyle()} placeholder="QLD" /></Field>
+        <Field label="Postcode"><input value={form.customer_postcode} onChange={set('customer_postcode')} style={inputStyle()} inputMode="numeric" /></Field>
+        <Field label="Rego"><input value={form.vehicle_rego} onChange={set('vehicle_rego')} style={inputStyle()} /></Field>
+        <Field label="Make"><input value={form.vehicle_make} onChange={set('vehicle_make')} style={inputStyle()} placeholder="e.g. Toyota" /></Field>
+        <Field label="Model"><input value={form.vehicle_model} onChange={set('vehicle_model')} style={inputStyle()} placeholder="e.g. Hilux SR5" /></Field>
+        <Field label="Year"><input value={form.vehicle_year} onChange={set('vehicle_year')} style={inputStyle()} inputMode="numeric" placeholder="e.g. 2021" /></Field>
+      </div>
+      <Field label="Package details (what was done)">
+        <textarea value={form.job_notes} onChange={set('job_notes')} rows={3} style={{ ...inputStyle(), resize: 'vertical' }} placeholder="e.g. Stage 1 tune package — exhaust, intake, ECU calibration" />
+      </Field>
+    </>
+  )
+}
+
 export default function B2BJobsPage({ b2bUser }: Props) {
   const toast = useToast()
   const [jobs, setJobs] = useState<TuneJob[] | null>(null)
@@ -93,6 +169,11 @@ export default function B2BJobsPage({ b2bUser }: Props) {
       ? { ...j, status: 'submitted' as const, filled_at: new Date().toISOString(), customer_name: form.customer_name }
       : j))
     toast('Details submitted — thanks, we’ll take it from here.', 'success')
+  }
+
+  function onEdited(id: string, form: DetailsForm) {
+    setJobs(js => (js || []).map(j => j.id === id ? { ...j, ...trimmedDetails(form) } : j))
+    toast('Details updated — our records have been corrected.', 'success')
   }
 
   const open = (jobs || []).filter(j => j.status === 'awaiting_details')
@@ -142,19 +223,7 @@ export default function B2BJobsPage({ b2bUser }: Props) {
                   Completed <span style={{ color: T.text3, fontWeight: 400 }}>({done.length})</span>
                 </button>
                 {completedOpen && done.map(j => (
-                  <div key={j.id} style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', padding: '12px 18px', borderTop: `1px solid ${T.border}` }}>
-                    <div style={{ flex: 1, minWidth: 180 }}>
-                      <div style={{ fontSize: 14, fontWeight: 600, color: T.text }}>{j.customer_name || '—'}</div>
-                      <div style={{ fontSize: 12.5, color: T.text2, marginTop: 2 }}>
-                        {j.tune_details || 'Tune'}
-                        {j.vin && <> · <span style={{ fontFamily: 'ui-monospace, monospace', fontSize: 12 }}>{j.vin}</span></>}
-                      </div>
-                    </div>
-                    <div style={{ fontSize: 12, color: T.text3 }}>filled {formatDate(j.filled_at)}</div>
-                    {j.status === 'submitted'
-                      ? <StatusPill color={A.warn}>Processing</StatusPill>
-                      : <StatusPill color={A.good}>Done</StatusPill>}
-                  </div>
+                  <DoneJobRow key={j.id} job={j} onEdited={onEdited} />
                 ))}
               </Card>
             )}
@@ -179,35 +248,14 @@ function OpenJobCard({ job, onSubmitted }: { job: TuneJob; onSubmitted: (id: str
     setForm(f => ({ ...f, [k]: e.target.value }))
 
   async function submit() {
-    const name = form.customer_name.trim().replace(/\s+/g, ' ')
-    if (!name) { setErr('Customer name is required.'); return }
-    if (name.split(' ').length < 2) { setErr('Please enter the customer’s first and last name.'); return }
-    const phoneDigits = form.customer_phone.replace(/\D/g, '')
-    if (!((phoneDigits.length === 10 && phoneDigits.startsWith('0')) || (phoneDigits.length === 11 && phoneDigits.startsWith('61')))) {
-      setErr('Please enter the customer’s full phone number (10 digits, e.g. 0400 123 456).'); return
-    }
+    const invalid = validateForm(form)
+    if (invalid) { setErr(invalid); return }
     setBusy(true); setErr('')
     try {
       const r = await fetch('/api/b2b/jobs', {
         method: 'POST', credentials: 'same-origin',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          job_id: job.id,
-          details: {
-            customer_name: name,
-            customer_phone: form.customer_phone.trim(),
-            customer_email: form.customer_email.trim(),
-            customer_address_line1: form.customer_address_line1.trim(),
-            customer_suburb: form.customer_suburb.trim(),
-            customer_state: form.customer_state.trim(),
-            customer_postcode: form.customer_postcode.trim(),
-            vehicle_rego: form.vehicle_rego.trim(),
-            vehicle_make: form.vehicle_make.trim(),
-            vehicle_model: form.vehicle_model.trim(),
-            vehicle_year: form.vehicle_year.trim(),
-            job_notes: form.job_notes.trim(),
-          },
-        }),
+        body: JSON.stringify({ job_id: job.id, details: trimmedDetails(form) }),
       })
       const d = await r.json()
       if (!r.ok || d.error) throw new Error(d.error || `HTTP ${r.status}`)
@@ -243,22 +291,7 @@ function OpenJobCard({ job, onSubmitted }: { job: TuneJob; onSubmitted: (id: str
 
       {formOpen && (
         <div style={{ borderTop: `1px solid ${T.border}`, paddingTop: 14, display: 'flex', flexDirection: 'column', gap: 12 }}>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 12 }}>
-            <Field label="Customer name (first & last)" required><input value={form.customer_name} onChange={set('customer_name')} style={inputStyle()} placeholder="e.g. John Smith" /></Field>
-            <Field label="Phone" required><input value={form.customer_phone} onChange={set('customer_phone')} style={inputStyle()} inputMode="tel" placeholder="e.g. 0400 123 456" /></Field>
-            <Field label="Email"><input value={form.customer_email} onChange={set('customer_email')} style={inputStyle()} inputMode="email" /></Field>
-            <Field label="Address line"><input value={form.customer_address_line1} onChange={set('customer_address_line1')} style={inputStyle()} /></Field>
-            <Field label="Suburb"><input value={form.customer_suburb} onChange={set('customer_suburb')} style={inputStyle()} /></Field>
-            <Field label="State"><input value={form.customer_state} onChange={set('customer_state')} style={inputStyle()} placeholder="QLD" /></Field>
-            <Field label="Postcode"><input value={form.customer_postcode} onChange={set('customer_postcode')} style={inputStyle()} inputMode="numeric" /></Field>
-            <Field label="Rego"><input value={form.vehicle_rego} onChange={set('vehicle_rego')} style={inputStyle()} /></Field>
-            <Field label="Make"><input value={form.vehicle_make} onChange={set('vehicle_make')} style={inputStyle()} placeholder="e.g. Toyota" /></Field>
-            <Field label="Model"><input value={form.vehicle_model} onChange={set('vehicle_model')} style={inputStyle()} placeholder="e.g. Hilux SR5" /></Field>
-            <Field label="Year"><input value={form.vehicle_year} onChange={set('vehicle_year')} style={inputStyle()} inputMode="numeric" placeholder="e.g. 2021" /></Field>
-          </div>
-          <Field label="Package details (what was done)">
-            <textarea value={form.job_notes} onChange={set('job_notes')} rows={3} style={{ ...inputStyle(), resize: 'vertical' }} placeholder="e.g. Stage 1 tune package — exhaust, intake, ECU calibration" />
-          </Field>
+          <DetailsGrid form={form} set={set} />
           {err && <Banner tone="error">{err}</Banner>}
           <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
             <Btn onClick={submit} disabled={busy}>{busy ? 'Submitting…' : 'Submit details'}</Btn>
@@ -267,6 +300,79 @@ function OpenJobCard({ job, onSubmitted }: { job: TuneJob; onSubmitted: (id: str
         </div>
       )}
     </Card>
+  )
+}
+
+// A completed job row: summary line + Edit — made a mistake on submission?
+// Fix it here; the correction flows back through Just Autos' systems
+// automatically (Chris 2026-08-14).
+function DoneJobRow({ job, onEdited }: { job: TuneJob; onEdited: (id: string, form: DetailsForm) => void }) {
+  const [editOpen, setEditOpen] = useState(false)
+  const [form, setForm] = useState<DetailsForm>(() => formFromJob(job))
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState('')
+
+  const set = (k: keyof DetailsForm) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) =>
+    setForm(f => ({ ...f, [k]: e.target.value }))
+
+  function openEdit() {
+    setForm(formFromJob(job))   // fresh copy each time — discard stale drafts
+    setErr('')
+    setEditOpen(true)
+  }
+
+  async function save() {
+    const invalid = validateForm(form)
+    if (invalid) { setErr(invalid); return }
+    setBusy(true); setErr('')
+    try {
+      const r = await fetch('/api/b2b/jobs', {
+        method: 'POST', credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ job_id: job.id, action: 'edit', details: trimmedDetails(form) }),
+      })
+      const d = await r.json()
+      if (!r.ok || d.error) throw new Error(d.error || `HTTP ${r.status}`)
+      setEditOpen(false)
+      onEdited(job.id, form)
+    } catch (e: any) {
+      setErr(e.message || 'Save failed')
+    }
+    setBusy(false)
+  }
+
+  return (
+    <div style={{ borderTop: `1px solid ${T.border}` }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', padding: '12px 18px' }}>
+        <div style={{ flex: 1, minWidth: 180 }}>
+          <div style={{ fontSize: 14, fontWeight: 600, color: T.text }}>{job.customer_name || '—'}</div>
+          <div style={{ fontSize: 12.5, color: T.text2, marginTop: 2 }}>
+            {job.tune_details || 'Tune'}
+            {job.vin && <> · <span style={{ fontFamily: 'ui-monospace, monospace', fontSize: 12 }}>{job.vin}</span></>}
+          </div>
+        </div>
+        <div style={{ fontSize: 12, color: T.text3 }}>filled {formatDate(job.filled_at)}</div>
+        {job.status === 'submitted'
+          ? <StatusPill color={A.warn}>Processing</StatusPill>
+          : <StatusPill color={A.good}>Done</StatusPill>}
+        <Btn variant="ghost" size="sm" onClick={() => editOpen ? setEditOpen(false) : openEdit()} disabled={busy}>
+          {editOpen ? 'Close' : 'Edit'}
+        </Btn>
+      </div>
+      {editOpen && (
+        <div style={{ padding: '0 18px 16px', display: 'flex', flexDirection: 'column', gap: 12 }}>
+          <div style={{ fontSize: 12.5, color: T.text2 }}>
+            Fix anything that was entered incorrectly — the correction flows through to Just Autos automatically.
+          </div>
+          <DetailsGrid form={form} set={set} />
+          {err && <Banner tone="error">{err}</Banner>}
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+            <Btn onClick={save} disabled={busy}>{busy ? 'Saving…' : 'Save corrections'}</Btn>
+            <Btn variant="ghost" onClick={() => setEditOpen(false)} disabled={busy}>Cancel</Btn>
+          </div>
+        </div>
+      )}
+    </div>
   )
 }
 

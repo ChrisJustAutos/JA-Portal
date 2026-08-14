@@ -8,7 +8,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { createClient } from '@supabase/supabase-js'
 import { withB2BAuth, B2BUser } from '../../../lib/b2bAuthServer'
-import { submitTuneJobDetails, TuneJobDetails, tuneJobVisible } from '../../../lib/b2b-tune-jobs'
+import { submitTuneJobDetails, distributorEditTuneJob, TuneJobDetails, tuneJobVisible } from '../../../lib/b2b-tune-jobs'
 
 function sb() {
   return createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!, { auth: { persistSession: false } })
@@ -67,6 +67,12 @@ export default withB2BAuth(async (req: NextApiRequest, res: NextApiResponse, use
     const jobId = String(body.job_id || '').trim()
     if (!jobId) return res.status(400).json({ error: 'job_id required' })
     try {
+      if (body.action === 'edit') {
+        // Correct an already-submitted job (Chris 2026-08-14): re-pushes the
+        // Monday follow-up item now; MD correction follows via the worker.
+        await distributorEditTuneJob(jobId, user.distributor.id, (body.details || {}) as TuneJobDetails)
+        return res.status(200).json({ ok: true })
+      }
       await submitTuneJobDetails(jobId, user.distributor.id, user.id, (body.details || {}) as TuneJobDetails)
       return res.status(200).json({ ok: true })
     } catch (e: any) {

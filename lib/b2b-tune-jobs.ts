@@ -638,12 +638,31 @@ const EDIT_FIELD_LABELS: Record<string, string> = {
   vehicle_year: 'year', vin: 'VIN', tune_details: 'tune', job_notes: 'package details',
 }
 
-export async function adminEditTuneJob(jobId: string, d: TuneJobAdminEdit): Promise<{
+export interface TuneJobEditResult {
   changed: string[]; mondayUpdated: boolean; mdResyncQueued: boolean; letterNote: string | null
-}> {
+}
+
+// Staff wrapper — edits any field including VIN/tune (receipt extraction can
+// be wrong); the Monday correction update is attributed to Just Autos staff.
+export function adminEditTuneJob(jobId: string, d: TuneJobAdminEdit): Promise<TuneJobEditResult> {
+  return applyTuneJobEdit(jobId, d, { by: 'Just Autos staff' })
+}
+
+// Distributor self-service wrapper (Chris 2026-08-14: "need to be able to
+// edit from Distributor side") — own jobs only, and only the fields their
+// fill form owns: VIN + tune stay staff-only (they come from the receipt).
+export async function distributorEditTuneJob(jobId: string, distributorId: string, d: TuneJobDetails): Promise<TuneJobEditResult> {
+  const c = sb()
+  const { data: dist } = await c.from('b2b_distributors').select('display_name').eq('id', distributorId).maybeSingle()
+  const { vin: _v, tune_details: _t, ...fields } = d as TuneJobAdminEdit
+  return applyTuneJobEdit(jobId, fields, { by: dist?.display_name || 'the distributor', distributorId })
+}
+
+async function applyTuneJobEdit(jobId: string, d: TuneJobAdminEdit, opts: { by: string; distributorId?: string }): Promise<TuneJobEditResult> {
   const c = sb()
   const { data: job } = await c.from('b2b_tune_jobs').select('*').eq('id', jobId).maybeSingle()
   if (!job) throw new Error('Job not found')
+  if (opts.distributorId && job.distributor_id !== opts.distributorId) throw new Error('Job belongs to a different distributor')
   if (!['submitted', 'synced'].includes(job.status)) throw new Error(`Only submitted/synced jobs can be edited (this one is ${job.status})`)
 
   // Same rules the distributor forms enforce — corrections must not
@@ -656,22 +675,27 @@ export async function adminEditTuneJob(jobId: string, d: TuneJobAdminEdit): Prom
   }
 
   const s = (v: any, n: number) => { const t = String(v ?? '').trim(); return t ? t.slice(0, n) : null }
-  const vMake = s(d.vehicle_make, 40), vModel = s(d.vehicle_model, 60), vYear = s(d.vehicle_year, 10)
+  // Only fields the caller actually sent are considered — a payload without
+  // vin/tune (the distributor path) must never null them out.
+  const has = (k: string) => Object.prototype.hasOwnProperty.call(d, k)
+  const eff = (k: keyof TuneJobAdminEdit, n: number) => has(k) ? s((d as any)[k], n) : (job[k] ?? null)
+  const vMake = eff('vehicle_make', 40), vModel = eff('vehicle_model', 60), vYear = eff('vehicle_year', 10)
   const next: Record<string, any> = {
     customer_name: name.slice(0, 200),
     customer_first_name: name.split(' ')[0].slice(0, 80),
     customer_phone: s(d.customer_phone, 40),
-    customer_email: s(d.customer_email, 200),
-    customer_address_line1: s(d.customer_address_line1, 200),
-    customer_suburb: s(d.customer_suburb, 80),
-    customer_state: s(d.customer_state, 10),
-    customer_postcode: s(d.customer_postcode, 10),
-    vehicle_rego: s(d.vehicle_rego, 20),
+    customer_email: eff('customer_email', 200),
+    customer_address_line1: eff('customer_address_line1', 200),
+    customer_suburb: eff('customer_suburb', 80),
+    customer_state: eff('customer_state', 10),
+    customer_postcode: eff('customer_postcode', 10),
+    vehicle_rego: eff('vehicle_rego', 20),
     vehicle_make: vMake, vehicle_model: vModel, vehicle_year: vYear,
-    vehicle_description: [vYear, vMake, vModel].filter(Boolean).join(' ') || s(d.vehicle_description, 120),
-    vin: s(d.vin, 40),
-    tune_details: s(d.tune_details, 500),
-    job_notes: s(d.job_notes, 1000),
+    vehicle_description: [vYear, vMake, vModel].filter(Boolean).join(' ')
+      || (has('vehicle_description') ? s(d.vehicle_description, 120) : (job.vehicle_description ?? null)),
+    vin: eff('vin', 40),
+    tune_details: eff('tune_details', 500),
+    job_notes: eff('job_notes', 1000),
   }
   const changed = Object.keys(EDIT_FIELD_LABELS).filter(k => (next[k] ?? null) !== (job[k] ?? null))
   if (!changed.length) return { changed: [], mondayUpdated: false, mdResyncQueued: false, letterNote: null }
@@ -685,7 +709,7 @@ export async function adminEditTuneJob(jobId: string, d: TuneJobAdminEdit): Prom
   }).eq('id', jobId)
 
   const changedLabels = changed.map(k => EDIT_FIELD_LABELS[k])
-  const monday = await updateTuneFollowupItem(jobId, changedLabels)
+  const monday = await updateTuneFollowupItem(jobId, changedLabels, opts.by)
   if (monday.error) {
     await c.from('b2b_tune_jobs').update({
       sync_error: `Monday correction failed: ${monday.error}`.slice(0, 1000),
@@ -706,7 +730,7 @@ export async function adminEditTuneJob(jobId: string, d: TuneJobAdminEdit): Prom
 // Push the job's current details onto its Monday follow-up item: rename the
 // item, rewrite the data columns (empty string clears), re-geocode the
 // address, and post an update so the advisor sees what changed. Never throws.
-async function updateTuneFollowupItem(jobId: string, changedLabels: string[]): Promise<{ updated: boolean; error: string | null }> {
+async function updateTuneFollowupItem(jobId: string, changedLabels: string[], by: string): Promise<{ updated: boolean; error: string | null }> {
   const c = sb()
   const { data: job } = await c.from('b2b_tune_jobs').select('*').eq('id', jobId).maybeSingle()
   if (!job?.monday_item_id) return { updated: false, error: null }
@@ -735,7 +759,7 @@ async function updateTuneFollowupItem(jobId: string, changedLabels: string[]): P
       { boardId: TUNE_FOLLOWUP_BOARD, itemId: String(job.monday_item_id), columnValues: JSON.stringify(columnValues) },
     )
     const note = [
-      `✏️ Details corrected by Just Autos staff — ${changedLabels.join(', ')}.`,
+      `✏️ Details corrected by ${by} — ${changedLabels.join(', ')}.`,
       address ? `Address on file: ${address}` : '',
     ].filter(Boolean).join('\n')
     await mondayQuery(
