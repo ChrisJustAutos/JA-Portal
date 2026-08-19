@@ -21,6 +21,7 @@ try { require('dotenv').config() } catch { /* dotenv optional; env may be set by
 const os = require('os')
 const path = require('path')
 const fs = require('fs')
+const { execFile } = require('child_process')
 const { createClient } = require('@supabase/supabase-js')
 const printer = require('pdf-to-printer')
 
@@ -71,14 +72,46 @@ function routeForKind(kind) {
   }
 }
 
-// Tell the portal which printers are installed on this PC (for the dropdown) +
-// a heartbeat. Best-effort.
-async function publishPrinters() {
+// List installed printer names. We do NOT use pdf-to-printer's getPrinters()
+// here: it shells out to `Get-CimInstance Win32_Printer -Property DeviceID,Name,
+// PrinterPaperNames` and parses the default-formatted text by splitting each line
+// on ':' and calling .match() on the right-hand side. A printer with a long
+// PrinterPaperNames list wraps onto continuation lines that contain no colon, so
+// the parse dies with "Cannot read properties of undefined (reading 'match')" and
+// takes the whole call with it. Get-Printer gives us just the names, no parsing.
+function listPrinterNames() {
+  return new Promise(resolve => {
+    execFile('powershell', ['-NoProfile', '-NonInteractive', '-Command', 'Get-Printer | Select-Object -ExpandProperty Name'],
+      { windowsHide: true, timeout: 30000 },
+      (err, stdout) => {
+        if (err) return resolve(null)
+        const names = String(stdout).split(/\r?\n/).map(s => s.trim()).filter(Boolean)
+        resolve(names.length ? names : null)
+      })
+  })
+}
+
+// Fall back to the library only if Get-Printer is unavailable.
+async function printerNames() {
+  const viaPs = await listPrinterNames()
+  if (viaPs) return viaPs
   try {
     const printers = await printer.getPrinters()
-    const names = printers.map(p => p.name || p.deviceId).filter(Boolean)
-    await sb.from('print_agent_settings').update({ available_printers: names, agent_host: os.hostname(), agent_last_seen: new Date().toISOString() }).eq('id', 'singleton')
-  } catch (e) { log('could not publish printers:', e && e.message) }
+    return printers.map(p => p.name || p.deviceId).filter(Boolean)
+  } catch (e) { log('could not list printers:', e && e.message); return null }
+}
+
+// Tell the portal which printers are installed on this PC (for the dropdown) +
+// a heartbeat. The heartbeat must NOT depend on enumeration succeeding — when it
+// used to share a try block, a listing failure silently stopped the heartbeat and
+// the portal showed the agent offline while it was running and printing fine.
+async function publishPrinters() {
+  const names = await printerNames()
+  const patch = { agent_host: os.hostname(), agent_last_seen: new Date().toISOString() }
+  if (names && names.length) patch.available_printers = names
+  try {
+    await sb.from('print_agent_settings').update(patch).eq('id', 'singleton')
+  } catch (e) { log('could not publish heartbeat:', e && e.message) }
 }
 const destLabel = (kind) => (!kind || kind === 'label') ? PRINTER_NAME : (routeForKind(kind).printer || '(default printer)')
 
@@ -169,12 +202,20 @@ async function drainPending() {
 
 async function main() {
   log(`Print agent starting — labels→"${PRINTER_NAME}", invoices→"${INVOICE_PRINTER_NAME || '(default printer)'}", letters→"${LETTER_PRINTER_NAME || '(default printer)'}", envelopes→"${ENVELOPE_PRINTER_NAME || '(default printer)'}", bucket="${BUCKET}"`)
-  // Confirm the printer exists (best-effort; warn but keep running).
-  try {
-    const printers = await printer.getPrinters()
-    const found = printers.find(p => (p.name || p.deviceId || '').toLowerCase() === PRINTER_NAME.toLowerCase())
-    if (!found) log(`WARNING: printer "${PRINTER_NAME}" not found. Installed: ${printers.map(p => p.name).join(', ') || 'none'}`)
-  } catch (e) { log('Could not list printers (continuing):', e && e.message) }
+  // Load the portal printer config first, so the check below verifies the
+  // printers that will actually be used (DB wins over env at print time).
+  await refreshDbCfg()
+  // Confirm the configured printers exist (best-effort; warn but keep running).
+  const installed = await printerNames()
+  if (installed) {
+    const want = [...new Set([PRINTER_NAME, dbCfg.letter_printer || LETTER_PRINTER_NAME, dbCfg.envelope_printer || ENVELOPE_PRINTER_NAME, dbCfg.invoice_printer || INVOICE_PRINTER_NAME].filter(Boolean))]
+    const lower = installed.map(n => n.toLowerCase())
+    const missing = want.filter(n => !lower.includes(n.toLowerCase()))
+    if (missing.length) log(`WARNING: configured printer(s) not installed: ${missing.join(', ')}. Installed: ${installed.join(', ') || 'none'}`)
+    else log(`printers OK: ${want.join(', ')}`)
+  } else {
+    log('Could not list printers (continuing)')
+  }
 
   // Publish installed printers + heartbeat so the portal can offer a dropdown.
   await publishPrinters()
