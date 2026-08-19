@@ -29,6 +29,10 @@ export interface LetterData {
   body: string                    // paragraphs separated by blank lines
   signOffName?: string | null
   signOffTitle?: string | null
+  // Optional block rendered top-right, opposite the recipient — e.g. the
+  // distributor's details on B2B tune-job letters (name + address, no emails).
+  asideTitle?: string | null
+  asideLines?: string[] | null
 }
 export interface EnvelopeData {
   recipientName: string
@@ -62,8 +66,12 @@ const ls = StyleSheet.create({
   bizName: { fontSize: 13, fontWeight: 700, color: C.ink, marginBottom: 3 },
   hLine: { fontSize: 7.5, color: C.ink3, marginBottom: 1.5 },
   logo: { width: 130, objectFit: 'contain' },
-  recipient: { marginTop: 44 },
+  recipientRow: { marginTop: 44, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' },
+  recipient: { flex: 1, paddingRight: 12 },
   recipientLine: { fontSize: 10.5, color: C.ink, marginBottom: 7 },
+  aside: { width: 190 },
+  asideTitle: { fontSize: 8, color: C.ink3, marginBottom: 5, textTransform: 'uppercase', letterSpacing: 0.5 },
+  asideLine: { fontSize: 9.5, color: C.ink2, marginBottom: 3 },
   salutation: { marginTop: 34, fontSize: 10.5 },
   para: { marginTop: 16, fontSize: 10.5, lineHeight: 1.55 },
   signoffIntro: { marginTop: 30, fontSize: 10.5 },
@@ -97,10 +105,18 @@ function LetterPdf({ data }: { data: LetterData }) {
           {lh.logoDataUrl ? <Image style={ls.logo} src={lh.logoDataUrl} /> : null}
         </View>
 
-        {/* Recipient block */}
-        <View style={ls.recipient}>
-          <Text style={ls.recipientLine}>{data.recipientName}</Text>
-          {data.recipientAddressLines.map((l, i) => <Text key={i} style={ls.recipientLine}>{l}</Text>)}
+        {/* Recipient block (left) + optional aside block (right, e.g. distributor details) */}
+        <View style={ls.recipientRow}>
+          <View style={ls.recipient}>
+            <Text style={ls.recipientLine}>{data.recipientName}</Text>
+            {data.recipientAddressLines.map((l, i) => <Text key={i} style={ls.recipientLine}>{l}</Text>)}
+          </View>
+          {data.asideLines && data.asideLines.length ? (
+            <View style={ls.aside}>
+              {data.asideTitle ? <Text style={ls.asideTitle}>{data.asideTitle}</Text> : null}
+              {data.asideLines.map((l, i) => <Text key={i} style={ls.asideLine}>{l}</Text>)}
+            </View>
+          ) : null}
         </View>
 
         {/* Salutation */}

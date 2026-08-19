@@ -266,6 +266,10 @@ export interface EnqueueLetterInput {
   bodyOverride?: string | null
   recipientNameOverride?: string | null
   recipientAddressOverride?: string | null
+  // Optional top-right block on the letter (opposite the recipient) — used by
+  // B2B tune-job letters for the distributor's details.
+  asideTitle?: string | null
+  asideLines?: string[] | null
 }
 
 export interface EnqueueResult { status: 'queued' | 'skipped' | 'failed'; jobId?: string; error?: string }
@@ -301,6 +305,7 @@ export async function renderLetterPreview(input: EnqueueLetterInput, kind: 'lett
     letterhead: await buildLetterhead(cfg), date: new Date().toISOString(),
     recipientName, recipientAddressLines, body,
     signOffName: input.template.sign_off_name, signOffTitle: input.template.sign_off_title,
+    asideTitle: input.asideTitle || null, asideLines: input.asideLines || null,
   })
 }
 
@@ -343,6 +348,8 @@ export async function enqueueLetter(input: EnqueueLetterInput): Promise<EnqueueR
       body,
       signOffName: input.template.sign_off_name,
       signOffTitle: input.template.sign_off_title,
+      asideTitle: input.asideTitle || null,
+      asideLines: input.asideLines || null,
     })
     const letterPath = `letters/${jobId}.pdf`
     const up1 = await c.storage.from(LETTER_BUCKET).upload(letterPath, letterPdf, { contentType: 'application/pdf', upsert: true })

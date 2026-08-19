@@ -800,11 +800,15 @@ async function queueTuneJobLetter(
     const auto = await getLetterAutomation()
     const template = auto.template_id ? await getTemplate(auto.template_id) : null
     if (!template) return { queued: false, error: 'Letter skipped: no default letter template configured' }
-    const distBlock = [
+    // Distributor block = name + address ONLY — never emails (Chris 2026-08-19:
+    // primary_contact_email can hold several ;-separated addresses and they all
+    // printed on Harrop's customer letters). Rendered top-right on the letter,
+    // opposite the customer name, not appended to the body.
+    const distLines = [
       dist?.display_name || '',
-      [dist?.ship_line1, dist?.ship_suburb, dist?.ship_state, dist?.ship_postcode].filter(Boolean).join(' '),
-      dist?.primary_contact_email || '',
-    ].filter(Boolean).join('\n')
+      dist?.ship_line1 || '',
+      [dist?.ship_suburb, dist?.ship_state, dist?.ship_postcode].filter(Boolean).join(' '),
+    ].filter(Boolean)
     const vehicle = [job.vehicle_year, job.vehicle_make, job.vehicle_model].filter(Boolean).join(' ')
       || job.vehicle_description || job.tune_details || 'your vehicle'
     // Render with the FULL variable set the normal letter path uses — the
@@ -819,7 +823,7 @@ async function queueTuneJobLetter(
       date: new Date().toLocaleDateString('en-AU', { day: '2-digit', month: 'long', year: 'numeric' }),
       business_name: auto.letterhead_name || 'Just Autos',
       total: '',
-    }) + `\n\nYour local Just Autos distributor:\n${distBlock}`
+    })
     const address = addressOverride?.trim()
       || [job.customer_address_line1, [job.customer_suburb, job.customer_state, job.customer_postcode].filter(Boolean).join(' ')].filter(Boolean).join('\n')
     if (!address) return { queued: false, error: 'Letter skipped: no customer address' }
@@ -831,6 +835,8 @@ async function queueTuneJobLetter(
       bodyOverride: body,
       recipientNameOverride: job.customer_name,
       recipientAddressOverride: address,
+      asideTitle: 'Your local Just Autos distributor',
+      asideLines: distLines,
     })
     if (r.status === 'queued') {
       await c.from('b2b_tune_jobs').update({ letter_job_id: r.jobId || null, letter_queued_at: new Date().toISOString(), updated_at: new Date().toISOString() }).eq('id', jobId)
@@ -926,6 +932,34 @@ export async function requeueBrokenTuneLetters(): Promise<{ requeued: number; sk
     else out.errors.push(`${job.customer_name}: ${r.error || 'requeue failed'}`)
   }
   await c.from('integration_settings').upsert({ key: LETTER_REQUEUE_MARKER, value: new Date().toISOString() })
+  return out
+}
+
+// Re-render + reprint the letters for specific tune jobs (e.g. after a layout
+// fix — stored PDFs are pre-rendered at enqueue time, so a plain print-queue
+// reprint would reuse the OLD artwork). Clears the letter stamp and runs the
+// normal queueTuneJobLetter path so each job gets a fresh PDF + print jobs.
+export async function requeueTuneJobLetters(jobIds: string[]): Promise<{ requeued: number; errors: string[] }> {
+  const c = sb()
+  const out = { requeued: 0, errors: [] as string[] }
+  const { data: jobs } = await c.from('b2b_tune_jobs')
+    .select('id, customer_name, customer_first_name, customer_address_line1, customer_suburb, customer_state, customer_postcode, tune_details, vehicle_rego, vehicle_make, vehicle_model, vehicle_year, vehicle_description, distributor_id')
+    .in('id', jobIds)
+  const distIds = Array.from(new Set((jobs || []).map((j: any) => j.distributor_id).filter(Boolean)))
+  const distById = new Map<string, any>()
+  if (distIds.length > 0) {
+    const { data: dists } = await c.from('b2b_distributors')
+      .select('id, display_name, ship_line1, ship_suburb, ship_state, ship_postcode, primary_contact_email')
+      .in('id', distIds)
+    for (const d of dists || []) distById.set(d.id, d)
+  }
+  for (const job of jobs || []) {
+    const { error: clrErr } = await c.from('b2b_tune_jobs').update({ letter_queued_at: null, letter_job_id: null }).eq('id', job.id)
+    if (clrErr) { out.errors.push(`${job.customer_name}: ${clrErr.message}`); continue }
+    const r = await queueTuneJobLetter(job.id, job, distById.get(job.distributor_id) || null)
+    if (r.queued) out.requeued++
+    else out.errors.push(`${job.customer_name}: ${r.error || 'requeue failed'}`)
+  }
   return out
 }
 
