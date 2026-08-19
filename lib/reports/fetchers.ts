@@ -518,7 +518,7 @@ export async function fetchSalesFunnel(
 
   // Monday.com quotes — aggregate across all rep boards.
   // "Quote Sent" + "3 Days" + "14 Days" + "Follow Up Done" = quote-sent stages.
-  const QUOTE_SENT_STATUSES = ['Quote Sent', '3 Days', '14 Days', 'Follow Up Done', 'Quote On Hold', 'RLMNA']
+  const QUOTE_SENT_STATUSES = ['Quote Sent', '3 Days', '7 Days', '14 Days', 'Follow Up Done', 'Quote On Hold', 'On Hold', 'RLMNA']
   const QUOTE_WON_STATUSES = ['Quote Won']
   const QUOTE_LOST_STATUSES = ['Quote Lost']
 
@@ -593,7 +593,7 @@ export interface SalesRepScorecardData {
 }
 
 export function fetchSalesRepScorecard(monday: MondaySalesData | null): SalesRepScorecardData {
-  const QUOTE_SENT_STATUSES = ['Quote Sent', '3 Days', '14 Days', 'Follow Up Done', 'Quote On Hold', 'RLMNA']
+  const QUOTE_SENT_STATUSES = ['Quote Sent', '3 Days', '7 Days', '14 Days', 'Follow Up Done', 'Quote On Hold', 'On Hold', 'RLMNA']
   const reps: SalesRepScorecardData['reps'] = []
 
   for (const repBoard of monday?.quotes || []) {
@@ -667,7 +667,7 @@ export function fetchSalesPipelineCombined(
 ): SalesPipelineCombinedData {
   if (!monday) return { myob: myobPipeline, monday: null }
 
-  const QUOTE_SENT_STATUSES = ['Quote Sent', '3 Days', '14 Days', 'Follow Up Done', 'Quote On Hold', 'RLMNA']
+  const QUOTE_SENT_STATUSES = ['Quote Sent', '3 Days', '7 Days', '14 Days', 'Follow Up Done', 'Quote On Hold', 'On Hold', 'RLMNA']
   let quotesSentTotal = 0, quotesSentValue = 0
   for (const repBoard of monday.quotes || []) {
     for (const [status, stat] of Object.entries(repBoard.stats || {})) {
