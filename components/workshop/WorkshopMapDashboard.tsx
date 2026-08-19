@@ -29,6 +29,9 @@ interface ApiResp {
   fys: number[]
   payload: Payload | null
   synced_at: string | null
+  // Booking-deposit invoices for the FY — excluded from the job totals (noise),
+  // shown as a sub-line under the Revenue stat. byMonth is FY-indexed (Jul=0).
+  deposits?: { total: number; count: number; byMonth: number[] } | null
   last_run: { id: string; status: string; started_at: string; completed_at: string | null; error: string | null; invoice_count: number | null; quote_count: number | null } | null
 }
 
@@ -185,6 +188,13 @@ export default function WorkshopMapDashboard() {
   // ── Derived stats (each strip reflects the other active filters) ────────
   const baseMonth = useMemo(() => points.filter(p => (month < 0 || p.m === month) && (st === 'all' || pcState(p.pc) === st)), [points, month, st])
   const tot = selPoints.reduce((s, p) => s + p.a, 0)
+  // Booking deposits for the current month selection (deposits aren't points,
+  // so the vehicle/state filters don't apply — month is the one that matters).
+  const depSel = useMemo(() => {
+    const d = data?.deposits
+    if (!d) return 0
+    return month < 0 ? d.total : (d.byMonth[month] || 0)
+  }, [data, month])
   const locCount = useMemo(() => new Set(selPoints.map(p => p.pc + '@' + p.la + ',' + p.ln)).size, [selPoints])
   const bygMonth = useMemo(() => {
     const m: Record<string, { n: number; t: number }> = {}
@@ -287,7 +297,15 @@ export default function WorkshopMapDashboard() {
 
       {isMapView && (
         <div className="stats">
-          <div className="stat"><div className="v" style={{ color: view === 'jobs' ? '#11ADE6' : '#FFB454' }}>{fmtK(tot)}</div><div className="k">{view === 'jobs' ? 'Revenue (inc GST)' : 'Quoted (inc GST)'}</div></div>
+          <div className="stat">
+            <div className="v" style={{ color: view === 'jobs' ? '#11ADE6' : '#FFB454' }}>{fmtK(tot)}</div>
+            <div className="k">{view === 'jobs' ? 'Revenue (inc GST)' : 'Quoted (inc GST)'}</div>
+            {view === 'jobs' && depSel > 0 && (
+              <div className="k" style={{ fontSize: 10, marginTop: 2, opacity: 0.75 }} title="Booking-deposit invoices — excluded from the job totals above (they post to the Customer Deposits liability, not income)">
+                + {fmtK(depSel)} booking deposits
+              </div>
+            )}
+          </div>
           <div className="stat"><div className="v">{selPoints.length.toLocaleString('en-AU')}</div><div className="k">{view === 'jobs' ? 'Clear jobs' : 'Quotes'}</div></div>
           <div className="stat"><div className="v">{locCount}</div><div className="k">Locations</div></div>
           <div className="stat"><div className="v">{fmt(selPoints.length ? tot / selPoints.length : 0)}</div><div className="k">{view === 'jobs' ? 'Avg / job' : 'Avg / quote'}</div></div>

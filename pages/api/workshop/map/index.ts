@@ -40,9 +40,34 @@ export default withAuth('view:reports', async (req: NextApiRequest, res: NextApi
     fys,
     payload: cache.payload,
     synced_at: cache.synced_at,
+    deposits: await depositTotals(db, fy),
     last_run: await lastRun(db),
   })
 })
+
+// Booking-deposit invoices for the FY (excluded from the map's job totals —
+// they're is_noise — but Chris wants them visible as a sub-line under the
+// revenue figure). Definition proven against FY2026 data: is_noise +
+// description contains "deposit" catches every MD Booking Deposit invoice with
+// zero false hits on real jobs (job-type LISTS mention Deposit on big jobs,
+// which is why items_text must NOT be matched here).
+async function depositTotals(db: SupabaseClient, fy: number) {
+  const { data } = await db.from('md_invoices')
+    .select('month, total_amount')
+    .eq('fy', fy).eq('is_noise', true).gt('total_amount', 0)
+    .ilike('description', '%deposit%')
+    .limit(5000)
+  const byMonth = Array(12).fill(0) as number[]
+  let total = 0, count = 0
+  for (const r of data || []) {
+    const mm = Number(String(r.month || '').slice(5, 7))
+    const idx = mm >= 7 ? mm - 7 : mm + 5 // FY month index, Jul=0
+    const amt = Number(r.total_amount) || 0
+    if (idx >= 0 && idx < 12) byMonth[idx] += amt
+    total += amt; count++
+  }
+  return { total: Math.round(total), count, byMonth: byMonth.map(v => Math.round(v)) }
+}
 
 async function lastRun(db: SupabaseClient) {
   const { data } = await db.from('md_workshop_map_runs')
