@@ -45,21 +45,48 @@ export default withAuth('view:reports', async (req: NextApiRequest, res: NextApi
   })
 })
 
-// Booking-deposit invoices for the FY (excluded from the map's job totals —
-// they're is_noise — but Chris wants them visible as a sub-line under the
-// revenue figure). Definition proven against FY2026 data: is_noise +
-// description contains "deposit" catches every MD Booking Deposit invoice with
-// zero false hits on real jobs (job-type LISTS mention Deposit on big jobs,
-// which is why items_text must NOT be matched here).
+// Booking deposits AWAITING JOBS for the FY. The map's job totals now fold
+// each customer's deposit(s) into their next completed job (build-payload —
+// same attachment rule as here), so this sub-line shows only what's NOT on
+// the map yet: deposits with no clear job for the customer on/after the
+// deposit date within the FY. Deposit definition proven against FY2026 data:
+// is_noise + description contains "deposit" catches every MD Booking Deposit
+// invoice with zero false hits on real jobs (job-type LISTS mention Deposit
+// on big jobs, which is why items_text must NOT be matched here).
 async function depositTotals(db: SupabaseClient, fy: number) {
-  const { data } = await db.from('md_invoices')
-    .select('month, total_amount')
+  // Page past PostgREST's per-request row cap.
+  const fetchAll = async (build: (from: number, to: number) => any) => {
+    const out: any[] = []
+    for (let from = 0; ; from += 1000) {
+      const { data } = await build(from, from + 999)
+      if (!data?.length) break
+      out.push(...data)
+      if (data.length < 1000) break
+    }
+    return out
+  }
+  const deposits = await fetchAll((a, b) => db.from('md_invoices')
+    .select('customer_id, month, issue_date, total_amount')
     .eq('fy', fy).eq('is_noise', true).gt('total_amount', 0)
-    .ilike('description', '%deposit%')
-    .limit(5000)
+    .ilike('description', '%deposit%').order('issue_date').range(a, b))
+  const jobs = await fetchAll((a, b) => db.from('md_invoices')
+    .select('customer_id, issue_date')
+    .eq('fy', fy).eq('is_noise', false).gt('total_amount', 0)
+    .not('customer_id', 'is', null).order('issue_date').range(a, b))
+
+  const lastJobByCust = new Map<string, string>()
+  for (const j of jobs) {
+    const prev = lastJobByCust.get(j.customer_id)
+    if (!prev || j.issue_date > prev) lastJobByCust.set(j.customer_id, j.issue_date)
+  }
+
   const byMonth = Array(12).fill(0) as number[]
   let total = 0, count = 0
-  for (const r of data || []) {
+  for (const r of deposits) {
+    // Attached to a job (a clear job exists on/after the deposit date) →
+    // already inside that dot's total; skip here.
+    const lastJob = r.customer_id ? lastJobByCust.get(r.customer_id) : null
+    if (lastJob && r.issue_date && lastJob >= r.issue_date) continue
     const mm = Number(String(r.month || '').slice(5, 7))
     const idx = mm >= 7 ? mm - 7 : mm + 5 // FY month index, Jul=0
     const amt = Number(r.total_amount) || 0

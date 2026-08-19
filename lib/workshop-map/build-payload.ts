@@ -87,16 +87,56 @@ const r2 = (n: number) => Math.round(n * 100) / 100
 export function buildFyPayload(fy: number, invoices: MapInvoiceRow[], quotes: MapQuoteRow[]): MapPayload {
   const months = fyMonths(fy)
 
-  // Jobs = non-noise invoices in this FY, deduped 1 per (customer, month).
+  // Jobs = non-noise invoices in this FY, grouped 1 point per (customer, month)
+  // like before — but the point's amount is now the SUM of every invoice in
+  // that month plus the customer's booking deposit(s), so a dot reflects the
+  // customer's full spend (Chris 2026-08-19; previously only the largest
+  // invoice survived and deposits were dropped entirely). The largest invoice
+  // stays the representative row for location/vehicle/job-type display.
+  // Invoices with no customer id stay individual — merging all anonymous
+  // invoices in a month into one dot would fabricate a mega-customer.
   const clean = invoices.filter(r => r.fy === fy && !r.isNoise && r.month && r.monthIndex != null)
-  const dedupJobs = dedupLargestPerCustomerMonth(
-    clean.map(r => ({ customerId: r.customerId, month: r.month!, amount: r.totalAmount, row: r })),
-  ).map(d => d.row)
+  interface JobGroup { rep: MapInvoiceRow; amount: number; jobs: number; firstDate: string }
+  const groups = new Map<string, JobGroup>()
+  for (const r of clean) {
+    const key = r.customerId ? `${r.customerId}|${r.month}` : `anon|${r.invoiceNumber}`
+    const g = groups.get(key)
+    if (!g) {
+      groups.set(key, { rep: r, amount: r.totalAmount, jobs: 1, firstDate: r.issueDate || '' })
+    } else {
+      g.amount += r.totalAmount
+      g.jobs++
+      if (r.totalAmount > g.rep.totalAmount) g.rep = r
+      if (r.issueDate && (!g.firstDate || r.issueDate < g.firstDate)) g.firstDate = r.issueDate
+    }
+  }
 
-  const jobPoints = dedupJobs.filter(r => r.lat != null && r.lng != null).map(r => {
+  // Booking deposits (noise rows, description says "deposit" — NEVER match
+  // itemsText: big jobs list a Deposit job type) fold into the customer's
+  // first job group on/after the deposit date. A deposit whose job hasn't
+  // happened yet stays unapplied — the dashboard shows those as a separate
+  // "awaiting jobs" sub-line from the read API.
+  const byCust = new Map<string, JobGroup[]>()
+  for (const g of Array.from(groups.values())) {
+    if (!g.rep.customerId) continue
+    const list = byCust.get(g.rep.customerId) || []
+    list.push(g)
+    byCust.set(g.rep.customerId, list)
+  }
+  for (const list of Array.from(byCust.values())) list.sort((a: JobGroup, b: JobGroup) => a.firstDate.localeCompare(b.firstDate))
+  const isDeposit = (r: MapInvoiceRow) => r.isNoise && /deposit/i.test(r.descText || '') && r.totalAmount > 0
+  for (const d of invoices) {
+    if (d.fy !== fy || !isDeposit(d) || !d.customerId || !d.issueDate) continue
+    const target = (byCust.get(d.customerId) || []).find(g => g.firstDate >= d.issueDate!)
+    if (target) target.amount += d.totalAmount
+  }
+
+  const dedupJobs = Array.from(groups.values())
+  const jobPoints = dedupJobs.filter(g => g.rep.lat != null && g.rep.lng != null).map(g => {
+    const r = g.rep
     const p: any = {
       la: r.lat, ln: r.lng, pc: r.postcode || '', l: r.locality || r.suburb || '',
-      m: r.monthIndex, g: r.group, c: r.customerName || '', a: r2(r.totalAmount),
+      m: r.monthIndex, g: r.group, c: r.customerName || '', a: r2(g.amount),
       j: (r.jobTypeText || '').slice(0, 38), i: r.invoiceNumber,
     }
     if (r.inferred) p.x = 1
@@ -125,7 +165,7 @@ export function buildFyPayload(fy: number, invoices: MapInvoiceRow[], quotes: Ma
   const qcount: Record<string, number[]> = {}, qval: Record<string, number[]> = {}, jcount: Record<string, number[]> = {}
   for (const c of VEHICLE_CATS) { qcount[c.k] = zeros(); qval[c.k] = zeros(); jcount[c.k] = zeros() }
   for (const q of dedupQuotes) { qcount[q.group][q.monthIndex!]++; qval[q.group][q.monthIndex!] += q.totalAmount }
-  for (const j of dedupJobs) jcount[j.group][j.monthIndex!]++
+  for (const j of dedupJobs) jcount[j.rep.group][j.rep.monthIndex!]++
   for (const c of VEHICLE_CATS) qval[c.k] = qval[c.k].map(r2)
 
   return {
@@ -138,7 +178,7 @@ export function buildFyPayload(fy: number, invoices: MapInvoiceRow[], quotes: Ma
         customers: dedupJobs.length,
         mapped: jobPoints.length,
         clean_total: clean.length,
-        inferred: dedupJobs.filter(r => r.inferred).length,
+        inferred: dedupJobs.filter(g => g.rep.inferred).length,
       },
     },
     quotes: {

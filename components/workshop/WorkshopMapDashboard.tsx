@@ -301,8 +301,8 @@ export default function WorkshopMapDashboard() {
             <div className="v" style={{ color: view === 'jobs' ? '#11ADE6' : '#FFB454' }}>{fmtK(tot)}</div>
             <div className="k">{view === 'jobs' ? 'Revenue (inc GST)' : 'Quoted (inc GST)'}</div>
             {view === 'jobs' && depSel > 0 && (
-              <div className="k" style={{ fontSize: 10, marginTop: 2, opacity: 0.75 }} title="Booking-deposit invoices — excluded from the job totals above (they post to the Customer Deposits liability, not income)">
-                + {fmtK(depSel)} booking deposits
+              <div className="k" style={{ fontSize: 10, marginTop: 2, opacity: 0.75 }} title="Booking deposits taken but the job isn't completed yet — not in the total above. Deposits for completed jobs are already folded into their customer's dot, along with every invoice for that customer in the month.">
+                + {fmtK(depSel)} deposits awaiting jobs
               </div>
             )}
           </div>
