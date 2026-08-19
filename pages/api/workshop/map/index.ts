@@ -69,9 +69,12 @@ async function depositTotals(db: SupabaseClient, fy: number) {
     .select('customer_id, month, issue_date, total_amount')
     .eq('fy', fy).eq('is_noise', true).gt('total_amount', 0)
     .ilike('description', '%deposit%').order('issue_date').range(a, b))
+  // Jobs from ANY period (not fy-filtered): a June deposit earned by a July
+  // job (next FY) is consumed, not "awaiting" — even though it's outside the
+  // dots of both FY payloads (build-payload folds within-FY only).
   const jobs = await fetchAll((a, b) => db.from('md_invoices')
     .select('customer_id, issue_date')
-    .eq('fy', fy).eq('is_noise', false).gt('total_amount', 0)
+    .eq('is_noise', false).gt('total_amount', 0)
     .not('customer_id', 'is', null).order('issue_date').range(a, b))
 
   const lastJobByCust = new Map<string, string>()
