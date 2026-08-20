@@ -52,11 +52,11 @@ Commissioned on the ThinkCentre `11T300A1AU`, host **`PORTAL-CENTRE`**, account
 | Agent smoke test | done — `realtime: SUBSCRIBED`, heartbeat landed |
 | Startup supervisor VBS | done — `%APPDATA%\...\Startup\JA-Label-Agent.vbs` |
 | Auto-login | done — Sysinternals **Autologon**, `AzureAD\admin-justautos` (LSA secret, no cleartext) |
-| BIOS → After Power Loss → Power On | **TODO** (physical, F1 at boot) |
-| Cold-boot test (unattended login + agent up) | **TODO** |
+| BIOS → After Power Loss → Power On | done |
+| Cold-boot test (unattended login + agent up) | done — `agent_host=Portal-Centre` 27 s after boot, keyboard untouched |
 | Ethernet (currently Wi-Fi `192.168.0.113`) | **TODO** — on move to comms room |
 | DHCP reservation | **TODO** — on move to comms room |
-| Live print test (real letter) | **TODO** |
+| Live print test (real letter) | done — 19 Aug letter + DL envelope, 1st attempt, **physically verified out of the office Apeos** |
 | Retire MSI Startup entry | **TODO** — only after a few days of overlap |
 
 ### Identity / login
