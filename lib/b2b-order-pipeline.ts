@@ -28,7 +28,7 @@ export async function runPostPaymentPipeline(orderId: string, opts: { paymentInt
   const c = sb()
   const { data: order, error: oErr } = await c
     .from('b2b_orders')
-    .select('id, status, order_number, payment_method, is_test, myob_invoice_uid, admin_notified_at, dropship_po_raised_at, distributor_notified_at, placed_by_user_id')
+    .select('id, status, order_number, payment_method, is_test, myob_invoice_uid, admin_notified_at, dropship_po_raised_at, distributor_notified_at, placed_by_user_id, machship_carrier_id, machship_carrier_service_id, machship_consignment_id')
     .eq('id', orderId).maybeSingle()
   if (oErr) throw new Error(oErr.message)
   if (!order) return { ok: false, status: 'not_found' }
@@ -130,6 +130,51 @@ export async function runPostPaymentPipeline(orderId: string, opts: { paymentInt
     console.error(`pipeline: pick-list print failed for order ${orderId}:`, e?.message || e)
   }
 
+  // Auto-book the freight the distributor chose at checkout, so the consignment
+  // note / shipping labels print alongside the pick slip and the order can be
+  // picked and packed as one job (Chris 2026-08-20). This creates the consignment
+  // in MachShip and leaves it UNMANIFESTED — nothing reaches the carrier and no
+  // tax invoice is raised until someone presses "Ship now".
+  //
+  // Skipped when there's nothing to book on: no live quote selected (a manual
+  // freight order), a consignment already exists (webhook redelivery), or it's a
+  // TEST order — a consignment is a REAL, chargeable carrier booking, the same
+  // reason test orders never auto-raise supplier POs. Admin can still book those
+  // by hand. Best-effort: MachShip being down must never break the pipeline, and
+  // the pick slip has already printed by this point.
+  if (!(order as any).is_test
+      && !(order as any).machship_consignment_id
+      && (order as any).machship_carrier_id
+      && (order as any).machship_carrier_service_id) {
+    // An all-drop-ship order has nothing in OUR consignment (supplier ships
+    // direct), so booking would pack zero boxes and fail. Skip quietly rather
+    // than logging a failure on every such order. Mirrors the exclusions in
+    // loadOrderPackInput(): supplier-shipped lines and bundle component lines.
+    const { count: ownLines } = await c.from('b2b_order_lines')
+      .select('id', { count: 'exact', head: true })
+      .eq('order_id', orderId)
+      .is('bundle_parent_catalogue_id', null)
+      .or('is_drop_ship.is.null,is_drop_ship.eq.false')
+
+    if (!ownLines) {
+      console.log(`pipeline: no warehouse-shipped lines on order ${orderId} — skipping auto book-freight`)
+    } else {
+      try {
+        const { bookFreightForOrder } = await import('./b2b-freight-book')
+        const bf = await bookFreightForOrder(orderId, { actorId: null })
+        if (bf.ok) {
+          console.log(`pipeline: freight booked (unmanifested) for order ${orderId} — consignment ${bf.consignment_number || bf.consignment_id}`)
+        } else if (!bf.alreadyBooked) {
+          console.error(`pipeline: auto book-freight failed for order ${orderId}: ${bf.error}`)
+          try { await c.from('b2b_order_events').insert({ order_id: orderId, event_type: 'freight_auto_book_failed', actor_type: 'system', actor_id: null, notes: String(bf.error || '').slice(0, 500) }) } catch {}
+        }
+      } catch (e: any) {
+        console.error(`pipeline: auto book-freight threw for order ${orderId}:`, e?.message || e)
+        try { await c.from('b2b_order_events').insert({ order_id: orderId, event_type: 'freight_auto_book_failed', actor_type: 'system', actor_id: null, notes: (e?.message || String(e)).slice(0, 500) }) } catch {}
+      }
+    }
+  }
+
   // Auto-raise drop-ship POs (best-effort, guarded).
   let dropshipResult: DropshipRaiseResult | undefined
   // Test orders never auto-raise supplier POs — a PO is a REAL stock order and
@@ -183,7 +228,7 @@ export async function runPostPaymentPipeline(orderId: string, opts: { paymentInt
     await notify({
       module: 'b2b',
       title: `${detail?.is_test ? '[TEST] ' : ''}New B2B order ${detail?.order_number || ''}`.trim(),
-      body: `${dist?.display_name || 'Unknown distributor'} — $${Number(detail?.total_inc || 0).toFixed(2)} inc GST · tap to book freight`,
+      body: `${dist?.display_name || 'Unknown distributor'} — $${Number(detail?.total_inc || 0).toFixed(2)} inc GST · tap to review + ship`,
       href: `/admin/b2b/orders/${orderId}`,
       dedupeKey: `b2b-paid:${orderId}`,
       roles: ['admin', 'manager'],

@@ -61,6 +61,7 @@ export default withAuth('view:b2b', async (req: NextApiRequest, res: NextApiResp
     subtotal_ex_gst, gst, card_fee_inc, total_inc, refunded_total, currency,
     created_at, paid_at, shipped_at, cancelled_at, is_test,
     myob_invoice_uid, myob_invoice_number, myob_write_error,
+    machship_consignment_id, machship_consignment_number, machship_manifest_id, freight_status,
     distributor:b2b_distributors!b2b_orders_distributor_id_fkey ( id, display_name )
   `, { count: 'exact' })
 

@@ -9,9 +9,8 @@
 // page can show a friendly message.
 
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
-import { createConsignment, manifestConsignments, getLabelPdfBase64, MachShipApiError, MachShipNotConfiguredError, type CreateConsignmentRequest } from './b2b-machship'
+import { createConsignment, getLabelPdfBase64, MachShipApiError, MachShipNotConfiguredError, type CreateConsignmentRequest } from './b2b-machship'
 import { packForMachShip, parsePackPlanUnits, type PackForMachShipItem } from './b2b-freight'
-import { sendDistributorShippedEmail } from './b2b-order-notify'
 
 const LABELS_BUCKET = 'b2b-shipping-labels'
 
@@ -78,7 +77,7 @@ export async function loadOrderPackInput(c: SupabaseClient, orderId: string): Pr
   return { packInput }
 }
 
-export async function bookFreightForOrder(orderId: string, opts: { actorId?: string | null; force?: boolean; acceptUnsettled?: boolean; dispatchAt?: string | Date | null; packMode?: 'auto' | 'pallet' | 'cartons' } = {}): Promise<BookFreightResult> {
+export async function bookFreightForOrder(orderId: string, opts: { actorId?: string | null; force?: boolean; dispatchAt?: string | Date | null; packMode?: 'auto' | 'pallet' | 'cartons' } = {}): Promise<BookFreightResult> {
   const c = svc()
   const fail = (httpStatus: number, error: string, detail?: any): BookFreightResult => ({ ok: false, httpStatus, error, detail })
 
@@ -94,20 +93,13 @@ export async function bookFreightForOrder(orderId: string, opts: { actorId?: str
   if (order.status === 'pending_payment') return fail(400, 'Order has not been paid — cannot book freight for an unpaid order.')
   // BECS credit gate (closed 2026-08-10, when BECS became selectable in the
   // cart): the debit mandate is accepted at checkout but funds take 2–3
-  // business days to clear — goods must not ship on an unsettled direct
-  // debit. acceptUnsettled = the admin explicitly approved the credit risk
-  // (the UI asks); the acceptance is stamped on the order timeline.
-  if ((order as any).payment_method === 'becs' && !(order as any).payment_settled_at) {
-    if (!opts.acceptUnsettled && !opts.force) {
-      return { ok: false, httpStatus: 400, error: 'BECS payment hasn’t settled yet — funds take 2–3 business days to clear. Book once it settles, or approve booking now (admin accepts the credit risk).', detail: { becs_unsettled: true } }
-    }
-    try {
-      await c.from('b2b_order_events').insert({
-        order_id: orderId, event_type: 'note', actor_type: opts.actorId ? 'admin' : 'system', actor_id: opts.actorId || null,
-        notes: 'Freight booked BEFORE the BECS payment settled — admin approved the credit risk.',
-      })
-    } catch { /* best-effort audit */ }
-  }
+  // NO BECS SETTLE GATE HERE ANY MORE (Chris, 2026-08-20). Booking no longer
+  // despatches anything — it creates an Unmanifested consignment and prints the
+  // pick slip + labels so the order can be picked. Refusing that on an unsettled
+  // direct debit would just stop the paperwork printing. The gate now sits where
+  // the actual credit risk is: shipNowForOrders() in lib/b2b-ship-now.ts, which
+  // is the point the goods leave and the tax invoice is raised.
+
   if (order.machship_consignment_id && !opts.force) {
     return { ok: false, httpStatus: 409, alreadyBooked: true, error: 'Consignment already booked for this order.', consignment_number: order.machship_consignment_number }
   }
@@ -237,34 +229,13 @@ export async function bookFreightForOrder(orderId: string, opts: { actorId?: str
   }
   if (uErr) return fail(500, `Persist consignment failed: ${uErr.message}. MachShip consignment ${consignment.id} (${consignment.consignmentNumber || 'no number'}) WAS created — do not rebook; attach or cancel it manually.`)
 
-  // Manifest immediately — an unmanifested consignment never reaches the
-  // carrier (Chris 2026-08-06). Best-effort: a manifest failure leaves the
-  // booking intact and surfaces as a warning to manifest by hand in MachShip.
-  let manifestWarning: string | null = null
-  try {
-    // MachShip's manifest endpoint REQUIRES companyId, but createConsignment's
-    // response doesn't carry it ("CompanyId is required" on Banana Coast
-    // 000043, 2026-08-11) — the consignment GET does, so resolve it there.
-    let companyId: number | null = (consignment as any).companyId ?? null
-    if (!companyId) {
-      try {
-        const got: any = await (await import('./b2b-machship')).getConsignment(consignment.id)
-        companyId = got?.companyId ?? got?.company?.id ?? null
-      } catch { /* fall through — manifest will report if it's still missing */ }
-    }
-    const mRes: any = await manifestConsignments([Number(consignment.id)], { companyId })
-    const m = Array.isArray(mRes) ? mRes[0] : mRes
-    const manifestId = m?.id ?? m?.manifestId ?? null
-    await c.from('b2b_orders').update({
-      freight_status: 'manifested',
-      ...(manifestId ? { machship_manifest_id: String(manifestId) } : {}),
-    }).eq('id', orderId)
-  } catch (e: any) {
-    manifestWarning = `Consignment booked but NOT manifested — manifest it in MachShip manually. (${String(e?.message || e).slice(0, 200)})`
-    console.error(`[book-freight] order ${orderId} manifest failed:`, e?.message || e)
-  }
-
-  let labelWarning: string | null = manifestWarning
+  // NOT manifested here (Chris, 2026-08-20). Booking only PREPARES the despatch:
+  // the consignment is created and left "Unmanifested" in MachShip so the pick
+  // slip and consignment note/labels can be printed and the order picked. Nothing
+  // reaches the carrier — and no tax invoice is raised — until someone presses
+  // "Ship Now", which manifests it (see lib/b2b-ship-now.ts). This reverses the
+  // 2026-08-06 behaviour where booking manifested straight away.
+  let labelWarning: string | null = null
   let labelPath: string | null = null
   try {
     const pdf = await getLabelPdfBase64(consignment.id)
@@ -274,12 +245,12 @@ export async function bookFreightForOrder(orderId: string, opts: { actorId?: str
         const filename = (pdf.fileName || `${consignment.consignmentNumber || consignment.id}.pdf`).replace(/[^\w.\-]/g, '_').slice(0, 80)
         const path = `${orderId}/${Date.now()}-${filename}`
         const { error: upErr } = await c.storage.from(LABELS_BUCKET).upload(path, bytes, { contentType: pdf.contentType || 'application/pdf', upsert: false })
-        if (upErr) labelWarning = [manifestWarning, `Label uploaded failed: ${upErr.message}`].filter(Boolean).join(' · ')
+        if (upErr) labelWarning = `Label upload failed: ${upErr.message}`
         else { labelPath = path; await c.from('b2b_orders').update({ label_pdf_path: path }).eq('id', orderId) }
-      } else labelWarning = [manifestWarning, 'Label PDF was empty'].filter(Boolean).join(' · ')
-    } else labelWarning = [manifestWarning, 'MachShip did not return label content'].filter(Boolean).join(' · ')
+      } else labelWarning = 'Label PDF was empty'
+    } else labelWarning = 'MachShip did not return label content'
   } catch (e: any) {
-    labelWarning = [manifestWarning, `Label fetch failed: ${e?.message || e}`].filter(Boolean).join(' · ')
+    labelWarning = `Label fetch failed: ${e?.message || e}`
     console.error(`book-freight: label fetch failed for order ${orderId}:`, e)
   }
 
@@ -300,89 +271,13 @@ export async function bookFreightForOrder(orderId: string, opts: { actorId?: str
     } catch (e: any) { console.error('label_print_jobs enqueue failed (non-fatal):', e?.message) }
   }
 
-  // On first booking, convert the MYOB Sale.Order → Sale.Invoice (hits the GL)
-  // BEFORE the email so the invoice number is on the order for the PDF/subject.
-  if (firstBook) {
-    try {
-      const { convertOrderToInvoiceInMyob } = await import('./accounting/post-b2b-doc')
-      const conv = await convertOrderToInvoiceInMyob(orderId, {
-        trackingNumber: consignment.carrierConsignmentId || consignment.consignmentNumber || null,
-        carrier: order.freight_service_label || consignment.status?.name || null,
-      })
-      await c.from('b2b_order_events').insert({ order_id: orderId, event_type: 'myob_invoice_converted', actor_type: 'system', actor_id: null, notes: `MYOB invoice ${conv.myob_sale_invoice_number || conv.myob_sale_invoice_uid} (${conv.status})`, metadata: { myob_sale_invoice_uid: conv.myob_sale_invoice_uid, myob_sale_invoice_number: conv.myob_sale_invoice_number, status: conv.status } })
-      // Receipt the Stripe payment against the new invoice (→ Undeposited
-      // Funds) so it shows PAID in MYOB. Skips BECS until the debit clears
-      // (payment_settled_at gate inside). Best-effort — never blocks booking.
-      try {
-        const { applyCustomerPaymentInMyob } = await import('./accounting/post-b2b-doc')
-        const pay = await applyCustomerPaymentInMyob(orderId)
-        if (pay.status === 'created') {
-          await c.from('b2b_order_events').insert({ order_id: orderId, event_type: 'myob_payment_applied', actor_type: 'system', actor_id: null, notes: `Customer payment → Undeposited Funds (${pay.myob_payment_uid})`, metadata: { myob_payment_uid: pay.myob_payment_uid } })
-        }
-      } catch (e: any) {
-        console.error(`book-freight: MYOB customer payment failed for ${orderId}:`, e?.message || e)
-        try { await c.from('b2b_order_events').insert({ order_id: orderId, event_type: 'myob_payment_failed', actor_type: 'system', actor_id: null, notes: (e?.message || String(e)).slice(0, 500) }) } catch {}
-      }
-    } catch (e: any) {
-      const msg = e?.message || String(e)
-      // Expected case, not a fault: the order has drop-ship POs that haven't
-      // been billed yet, so MYOB (correctly) refuses to invoice a line whose
-      // stock was never received (Inventory_InsufficientStockMultipleLocation,
-      // Torrisi B2B-2026-000040). Booking stays successful; the invoice
-      // converts via the receive flow once the supplier confirms.
-      const unbilledDropshipPo = (Array.isArray((order as any).dropship_pos) ? (order as any).dropship_pos : [])
-        .some((p: any) => p?.myob_po_uid && !p?.myob_bill_uid)
-      if (unbilledDropshipPo && /insufficient.?stock/i.test(msg)) {
-        const friendly = 'Invoice will convert once the supplier PO is billed — use "Supplier confirmed" on the order page.'
-        labelWarning = [labelWarning, friendly].filter(Boolean).join(' · ')
-        console.warn(`book-freight: MYOB invoice conversion deferred for ${orderId} (drop-ship PO not billed yet): ${msg}`)
-        try { await c.from('b2b_order_events').insert({ order_id: orderId, event_type: 'myob_invoice_convert_deferred', actor_type: 'system', actor_id: null, notes: friendly, metadata: { myob_error: msg.slice(0, 300) } }) } catch {}
-      } else {
-        console.error(`book-freight: MYOB order→invoice convert failed for ${orderId}:`, msg)
-        try { await c.from('b2b_order_events').insert({ order_id: orderId, event_type: 'myob_invoice_convert_failed', actor_type: 'system', actor_id: null, notes: msg.slice(0, 500) }) } catch {}
-      }
-    }
-  }
-
-  // Also auto-print the tax invoice at the workshop alongside the label. Prefer
-  // the real MYOB invoice PDF (falls back to the system copy); the print agent
-  // routes kind:'invoice' to the A4 printer rather than the DYMO. Best-effort.
-  if (firstBook) {
-    try {
-      const { getOutboundInvoicePdf } = await import('./b2b-invoice-pdf')
-      const inv = await getOutboundInvoicePdf(orderId)
-      const invPath = `invoices/${orderId}.pdf`
-      const { error: upErr } = await c.storage.from(LABELS_BUCKET).upload(invPath, inv.buffer, { contentType: 'application/pdf', upsert: true })
-      if (upErr) throw new Error(upErr.message)
-      await c.from('label_print_jobs').insert({ order_id: orderId, storage_path: invPath, kind: 'invoice', consignment_number: consignment.consignmentNumber || null })
-    } catch (e: any) { console.error('invoice print enqueue failed (non-fatal):', e?.message || e) }
-  }
-
-  // Distributor "shipped + tax invoice" email + app push on first booking.
-  if (firstBook) {
-    try {
-      await sendDistributorShippedEmail(orderId, {
-        carrier: order.freight_service_label || consignment.status?.name || null,
-        consignmentNumber: consignment.consignmentNumber || null,
-        trackingNumber: consignment.carrierConsignmentId || null,
-        trackingUrl: null,
-        eta: consignment.etaUtc || consignment.etaLocal || null,
-      })
-    } catch (e: any) { console.error('distributor shipped email failed (non-fatal):', e?.message) }
-    try {
-      if (order.distributor_id) {
-        const carrier = order.freight_service_label || consignment.status?.name || 'courier'
-        const tn = consignment.carrierConsignmentId || consignment.consignmentNumber
-        const { sendPushToDistributor } = await import('./push')
-        await sendPushToDistributor(order.distributor_id, {
-          title: `Order ${order.order_number || ''} shipped`.trim(),
-          body: `On its way via ${carrier}${tn ? ` — tracking ${tn}` : ''}.`,
-          href: `/b2b/orders/${orderId}`,
-          tag: `order-${orderId}`,
-        })
-      }
-    } catch (e: any) { console.error('distributor shipped push failed (non-fatal):', e?.message) }
-  }
+  // The MYOB Sale.Order → Sale.Invoice conversion, the payment receipt against
+  // it, the A4 tax-invoice print and the distributor "shipped + tax invoice"
+  // email/push all now happen at MANIFEST time, not here — see
+  // shipNowForOrders() in lib/b2b-ship-now.ts. They belong together: the email
+  // and the printed invoice both want the real MYOB invoice number, so raising
+  // the invoice before the goods are actually despatched would invoice a
+  // customer for a parcel still sitting on the bench.
 
   return {
     ok: true, httpStatus: 200,

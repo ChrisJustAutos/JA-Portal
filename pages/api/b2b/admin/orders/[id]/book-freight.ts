@@ -9,9 +9,9 @@ import type { NextApiRequest, NextApiResponse } from 'next'
 import { withAuth } from '../../../../../../lib/authServer'
 import { bookFreightForOrder } from '../../../../../../lib/b2b-freight-book'
 
-// 120s: the full chain (consignment + manifest + label + MYOB invoice
-// conversion + payment receipt) ran past 60s on 000043 — the work completed
-// but the browser got a 504.
+// 120s: creating the consignment + pulling and storing the label ran past 60s
+// on 000043. The manifest, MYOB conversion and emails moved to "Ship now", so
+// this is lighter than it was — but MachShip itself can still be slow.
 export const config = { api: { bodyParser: { sizeLimit: '1mb' } }, maxDuration: 120 }
 
 export default withAuth('admin:b2b', async (req: NextApiRequest, res: NextApiResponse, user) => {
@@ -33,11 +33,10 @@ export default withAuth('admin:b2b', async (req: NextApiRequest, res: NextApiRes
   const pm = String(body.pack_mode || '').trim()
   const packMode = (pm === 'pallet' || pm === 'cartons' || pm === 'auto') ? pm as 'pallet' | 'cartons' | 'auto' : undefined
 
-  // Explicit admin approval to ship before a BECS payment settles (the UI
-  // asks after the gate's 400) — separate from ?force=1, which re-books.
-  const acceptUnsettled = body.accept_unsettled === true
-
-  const r = await bookFreightForOrder(id, { actorId: user.id, force, acceptUnsettled, dispatchAt, packMode })
+  // No BECS gate here any more — booking only creates an Unmanifested
+  // consignment and prints the paperwork. The credit-risk approval now lives on
+  // "Ship now" (/api/b2b/admin/orders/ship-now), which is when goods leave.
+  const r = await bookFreightForOrder(id, { actorId: user.id, force, dispatchAt, packMode })
   if (!r.ok) return res.status(r.httpStatus).json({ error: r.error, detail: r.detail })
   return res.status(200).json({
     ok: true, consignment_id: r.consignment_id, consignment_number: r.consignment_number,
