@@ -445,6 +445,54 @@ Get-Process node | Where-Object { $_.Path -like '*label-print-agent*' } | Stop-P
 
 ---
 
+## RDP to an Entra-joined box — what actually worked
+
+RDP to PORTAL-CENTRE fails with **"The logon attempt failed"** for every username form
+(`AzureAD\admin@justautosmechanical.com.au`, plain UPN) when the client is not joined to
+the same tenant. CredSSP pre-authentication cannot satisfy Entra from an unjoined
+client. `enablerdsaadauth:i:1` (Entra web sign-in) does not help either — on an
+unjoined client mstsc drops out of NLA negotiation and you get error **`0xb09`**
+("your computer does not support NLA").
+
+The working combination — authenticate at the **remote logon screen** instead of
+pre-authenticating, which is the same Windows UI that accepts the Entra account at the
+console:
+
+**On the host** (elevated):
+
+```powershell
+$k='HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp'
+Set-ItemProperty $k SecurityLayer 1        # negotiate; 2 = TLS required, refuses CredSSP-less clients
+Set-ItemProperty $k UserAuthentication 0   # NLA off
+Restart-Service TermService -Force
+```
+
+**Both** settings are required — with `SecurityLayer 2` the host still refuses even with
+NLA off, which produces *"authentication is not enabled and the remote computer requires
+that authentication be enabled"*. Check
+`HKLM\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services\UserAuthentication` is
+empty; if Intune enforces it, local changes revert and this route is dead.
+
+**On the client**, an `.rdp` with:
+
+```
+full address:s:100.72.189.95
+enablecredsspsupport:i:0
+authentication level:i:0
+```
+
+(`PORTAL-CENTRE-fallback.rdp` on Chris's laptop Desktop.)
+
+> **Security posture:** NLA off means the logon screen is reachable without
+> pre-authentication. Acceptable **only** because 3389 is reachable solely over the
+> tailnet — no port forwarding, firewall rules scoped to it. If that ever changes, set
+> `UserAuthentication 1` and `SecurityLayer 2` back.
+
+> **RDP must sign in as `admin-justautos`** — the same account that auto-logs in. Windows
+> Pro is single-session, so connecting as any other identity displaces that session and
+> **kills the print agent**. This is also why a local account "just for RDP" is not an
+> option. Always leave by **Disconnect**, never **Sign out**.
+
 ## Headless operation (comms room)
 
 The box runs with **no monitor, keyboard or mouse**. Two facts make that safe:
