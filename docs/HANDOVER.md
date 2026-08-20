@@ -487,6 +487,8 @@ This document and the SOP, served inside the portal — readable on screen with 
 - `docs/*.pdf` is a **generated artifact** — regenerate with `scripts/render-doc-pdf.js` (marked + Playwright; needs `npx playwright install chromium` once) and commit it. It goes stale silently otherwise.
 - **⚠ The PDFs are deliberately not in `public/`.** This document names where every credential lives, the Supabase project id, the Tailscale addresses and the open security gaps; anything under `public/` is served to the internet to anyone holding the URL, with no sign-in. Downloads go through `/api/admin/library/[slug]`, which is auth-gated.
 - **⚠ `next.config.js` → `outputFileTracingIncludes` must list `docs/**` for the three Library routes.** The paths are built at runtime so Next's tracer can't see them; without it the files are pruned from the serverless bundle and 404 in production while working perfectly in dev.
+- **Illustrated documents.** Screenshots live in `docs/img/` and are referenced relatively (`![alt](img/foo.png)`). The renderer writes its print page to a temp file beside the markdown and loads it as a real `file://` URL — a `setContent()` page has an `about:blank` origin and silently renders file images blank. `DOC_DATE` overrides the cover's compiled date. Portal screenshots are produced from the real components (a throwaway page under `pages/` rendering the page component with mock props, driven by Playwright) — no live data is needed and none is captured.
+- **⚠ The in-app reader does not rewrite relative image paths**, so an illustrated document renders its pictures in the PDF but shows broken images on screen. `docs/library-access-sop.md` (how to find these documents, with screenshots) is therefore **deliberately not registered** in `lib/library-docs.ts` — it is handed out as a PDF. Registering it needs an auth-gated `/api/admin/library/img/[file]` route plus a `renderer.image` rewrite in `pages/admin/library/[slug].tsx`.
 
 **SOP**: see `CLAUDE.md` §1 — every change to the portal updates these documents as part of the same work.
 
@@ -517,6 +519,7 @@ This document and the SOP, served inside the portal — readable on screen with 
 - Migrations `148` and `153` are duplicated numbers; latest applied is `196_md_vehicle_trend`, so next is `197`.
 - `bank-payments-slack` and `slack-cleanup` cron handlers exist but aren't scheduled in `vercel.json`.
 - Seven overlapping base-URL env vars.
+- The Library reader can't display images (no rewrite of relative `img/` paths, no auth-gated image route), so `docs/library-access-sop.md` sits in `docs/` as a PDF-only document rather than on the Library shelf — see §7.16.
 - Older docs (`03`, `05`, `07`) predate the CData decommission, B2B rollout and Xero foundation, and still describe the workshop migration as active — trust this document and the code.
 
 **Operational**

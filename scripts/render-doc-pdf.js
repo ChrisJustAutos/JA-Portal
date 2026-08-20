@@ -2,6 +2,7 @@
 const fs = require('fs')
 const path = require('path')
 const { execFileSync } = require('child_process')
+const { pathToFileURL } = require('url')
 const { chromium } = require(path.join(process.env.REPO, 'node_modules', 'playwright'))
 
 const [, , mdPath, pdfPath, docTitle, docSubtitle] = process.argv
@@ -49,15 +50,28 @@ const CSS = `
   hr { border: none; border-top: 1px solid #e5e7eb; margin: 18px 0; }
   a { color: #1d4ed8; text-decoration: none; word-break: break-word; }
   strong { color: #111827; }
+  /* Screenshots. Relative src (e.g. img/foo.png) resolves against the <base>
+     below, which points at the markdown file's own directory. */
+  img { max-width: 100%; height: auto; display: block; margin: 4px 0 6px;
+        border: 1px solid #d8dee6; border-radius: 5px; page-break-inside: avoid; }
+  p > img + em, p > em { color: #6b7280; font-size: 8.9pt; }
+  figure, p:has(> img) { page-break-inside: avoid; }
 `
 
+// Images in the markdown are written relative to the markdown file (img/x.png),
+// so the print page needs a base pointing at that directory — setContent() has
+// no URL of its own and would otherwise resolve them against about:blank.
+const baseHref = 'file:///' + path.resolve(path.dirname(mdPath)).replace(/\\/g, '/') + '/'
+const compiled = process.env.DOC_DATE || '20 August 2026'
+
 const page = `<!doctype html><html><head><meta charset="utf-8"><title>${docTitle}</title>
+<base href="${baseHref}">
 <style>${CSS}</style></head><body>
 <div class="cover">
   <div class="kicker">Just Autos</div>
   <h1>${docTitle}</h1>
   <div class="sub">${docSubtitle}</div>
-  <div class="meta">Compiled 20 August 2026 · justautos.app · Internal — not for distribution outside Just Autos</div>
+  <div class="meta">Compiled ${compiled} · justautos.app · Internal — not for distribution outside Just Autos</div>
 </div>
 ${html}
 </body></html>`
@@ -65,18 +79,30 @@ ${html}
 ;(async () => {
   const browser = await chromium.launch()
   const p = await browser.newPage()
-  await p.setContent(page, { waitUntil: 'load' })
-  await p.pdf({
-    path: pdfPath,
-    format: 'A4',
-    printBackground: true,
-    margin: { top: '18mm', right: '16mm', bottom: '20mm', left: '16mm' },
-    displayHeaderFooter: true,
-    headerTemplate: '<div></div>',
-    footerTemplate:
-      '<div style="width:100%;font-size:8pt;color:#9ca3af;padding:0 16mm;font-family:Segoe UI,Arial,sans-serif;display:flex;justify-content:space-between;">' +
-      `<span>${docTitle}</span><span class="pageNumber"></span></div>`,
-  })
+  // The page is written next to the markdown and loaded as a real file:// URL
+  // rather than pushed in with setContent(): a setContent() document has an
+  // about:blank origin, which is not allowed to fetch file:// images, so any
+  // screenshots in the doc come out blank. Loading from disk resolves the
+  // relative img/ paths against the markdown's own folder.
+  const tmpHtml = path.join(path.dirname(path.resolve(mdPath)), `.render-${path.basename(pdfPath)}.html`)
+  fs.writeFileSync(tmpHtml, page, 'utf8')
+  try {
+    await p.goto(pathToFileURL(tmpHtml).href, { waitUntil: 'load' })
+    await p.waitForFunction(() => Array.from(document.images).every(i => i.complete), null, { timeout: 30000 })
+    await p.pdf({
+      path: pdfPath,
+      format: 'A4',
+      printBackground: true,
+      margin: { top: '18mm', right: '16mm', bottom: '20mm', left: '16mm' },
+      displayHeaderFooter: true,
+      headerTemplate: '<div></div>',
+      footerTemplate:
+        '<div style="width:100%;font-size:8pt;color:#9ca3af;padding:0 16mm;font-family:Segoe UI,Arial,sans-serif;display:flex;justify-content:space-between;">' +
+        `<span>${docTitle}</span><span class="pageNumber"></span></div>`,
+    })
+  } finally {
+    fs.unlinkSync(tmpHtml)
+  }
   await browser.close()
   console.log('wrote', pdfPath, fs.statSync(pdfPath).size, 'bytes')
 })().catch(e => { console.error(e.message); process.exit(1) })

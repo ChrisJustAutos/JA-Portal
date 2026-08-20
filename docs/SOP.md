@@ -319,7 +319,8 @@ Work down this table before escalating. Most of these are a stalled worker, not 
 
 | Task | Where |
 |---|---|
-| Read or download this document and the handover | **Admin → Library** (`/admin/library`) |
+| Read or download this document and the handover | **Admin → Library** (`/admin/library`) — Settings → Library tile, or your name → Settings → Library |
+| Show someone how to get to the Library | Send them `docs/library-access-sop.pdf` — an illustrated one-pager with screenshots of every step (kept in the repo, not on the Library shelf) |
 | Add a person, set their role and tabs | Settings → Users |
 | Clear someone's 2FA | Settings → Users |
 | Change an integration's credentials | Admin → Connections / Settings → Integrations — **⚠** always here, never by editing environment variables directly |
