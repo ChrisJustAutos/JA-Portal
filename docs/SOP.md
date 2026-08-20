@@ -6,6 +6,8 @@ Compiled 20 August 2026. Companion to `HANDOVER.md`, which covers how the system
 
 **Production:** `https://justautos.app`
 
+**This document lives in the portal** at **Admin → Library** — read it there, or download the PDF to keep a copy. It is kept up to date as the portal changes, so the copy in the Library is always the current one; a PDF you saved months ago may not be.
+
 ---
 
 ## How to read this
@@ -16,8 +18,7 @@ If you only ever read one section, read the one for your own role:
 
 | You are | Start at |
 |---|---|
-| Workshop front desk | §3 Workshop |
-| Technician | §3.3, §3.4 |
+| Parts / workshop support | §3 Workshop tooling |
 | B2B / warehouse | §4 Distributor orders |
 | Accounts payable | §5 Accounts Payable |
 | Sales rep (quote channels) | §6 Quote channels |
@@ -64,80 +65,42 @@ The portal hides what you don't have permission for, so a missing tab is normal,
 
 - **Home** (`/home`) is the app launcher — every module you have access to, as tiles.
 - The **top bar** carries your tabs: Workshop, Distributors, B2B Portal, AP Invoices, CRM, Phone Calls, Tasks, Projects, Messages, Reports, Agents, Stripe → MYOB, Settings. You will only see yours.
-- **Workshop has its own search** — one box that finds customers, vehicles, regos, jobs, quotes and invoices together.
+- **The workshop itself runs on Mechanics Desk**, not the portal — see §3 for the parts, letters and counting tools the portal does provide.
 
 ---
 
-## 3. Workshop
+## 3. Workshop tooling
 
-The portal's workshop module replaces Mechanics Desk. Both still exist during changeover; MD is still being read by scheduled workers.
+**The workshop runs on Mechanics Desk.** Bookings, job cards, customers, vehicles, quotes and invoicing all happen in MD — not in the portal. Nothing in this document changes that.
 
-### 3.1 Take a booking
+What the portal does around it, and that you do use:
 
-1. **Workshop → Diary.**
-2. Click an empty slot in the technician's lane at the time you want.
-3. Search for the customer. Not there? Add them inline — name, phone, email, address.
-4. Pick the vehicle, or add it — rego, make, model, year.
-5. Choose the job type. Job types are filtered to the vehicle's model, so you only see work that applies.
-6. Save. The booking appears in the lane.
+### 3.1 Customer letters
 
-To move it, drag it. To make it longer, drag its edge. A job that needs two visits can be split.
+A thank-you letter and envelope are queued automatically for every newly finalised MYOB invoice and printed on the Apeos in the comms room. Deposit-only invoices are skipped deliberately.
 
-**⚠ Moving a booking does not move an already-queued reminder SMS.** If you reschedule someone who is due a reminder, check Workshop → Comms and cancel or re-send by hand.
+- Reprint one, compose one by hand, or edit the templates: **Workshop → Letters**.
+- Nothing to do day to day — it runs hourly. If letters stop appearing, see §10.
 
-### 3.2 Job types and packages
+### 3.2 Pre Pick — what parts we'll need
 
-A job type carries its standard labour and parts. A **package** applies a bundle of job types in one click — use it for the common combinations rather than adding lines one at a time.
+**Workshop → Pre Pick** shows the next 14 days of booked work against stock on hand, so you can order ahead instead of discovering a shortage on the day. It is refreshed from MechanicDesk several times each weekday.
 
-### 3.3 Run a job
-
-1. **Workshop → Jobs**, or click the booking in the diary, to open the **Job Card**.
-2. **Labour** — add lines, or start the time clock and let it fill in.
-3. **Parts** — use the inventory picker so stock is decremented and costs are right. Typing a description by hand does neither.
-4. **Photos and files** — attach anything you would otherwise put in a text message.
-5. **Notes** — everything you want the next person (or the customer) to see.
-6. Set the status as you go: open → in progress → completed.
-
-### 3.4 Get paid and invoice
-
-1. On the Job Card, take payment by tender (cash, card, transfer).
-2. Print or email the invoice PDF.
-3. **Push to MYOB** from the job card. Account mapping lives in Workshop → Settings.
-
-**⚠** MYOB posting is behind a switch (`myob_posting_enabled`). If pushes appear to do nothing, that switch is the first thing to check — not the customer's record.
-
-### 3.5 Quote a customer
-
-1. **Workshop → Quotes → new.**
-2. Build it the same way as a job — job types, labour, parts.
-3. Send it to the customer.
-4. When they accept, **convert to job**. Don't retype it as a new job; converting keeps the history joined up.
-
-### 3.6 Parts
+### 3.3 Parts and purchase orders
 
 | Job | Where |
 |---|---|
 | What needs ordering for today's work | Workshop → Orders |
-| What we'll need over the next 14 days vs what's on the shelf | Workshop → Pre Pick |
-| Raise and receive a purchase order | Workshop → Purchase Orders (draft → sent → received, then push the bill to MYOB) |
+| Raise and receive a purchase order | Workshop → Purchase Orders — draft → sent → received, then push the bill to MYOB |
 | Supplier details | Workshop → Suppliers |
 
-### 3.7 Stocktake
+### 3.4 Counting stock
 
-Workshop → Stocktake → create a session → scan barcodes to count → review **Variance** → **Apply**.
-
-**⚠ Counted rows are sacred.** If a count looks wrong, investigate before applying — applying writes the variance away.
-
-### 3.8 Customer letters
-
-An hourly job queues a thank-you letter and envelope for every newly finalised MYOB invoice, and prints them on the Apeos in the comms room. Deposit-only invoices are skipped deliberately.
-
-- Reprint, compose one by hand, or edit the templates: **Workshop → Letters**.
-- If letters stop appearing, see §10.
-
-### 3.9 Reminders and SMS
-
-Service and rego reminders queue themselves. Sending needs SMS to be switched on in Workshop → Settings with valid ClickSend credentials. History and delivery status: **Workshop → Comms**.
+- **Workshop → Stocktake** — create a session, scan barcodes to count, review **Variance**, then **Apply**.
+  **⚠ Counted rows are sacred.** If a count looks wrong, investigate before applying — applying writes the variance away.
+- **Cash Count** weighs the till to count it.
+- **Live Bins** reports bin quantities from load cells.
+- The **MechanicDesk stocktake** is separate and lives at `/stocktake`.
 
 ---
 
@@ -335,7 +298,6 @@ Work down this table before escalating. Most of these are a stalled worker, not 
 | Live monitor says "not configured" | Monitor hasn't reported in >20s | Same page |
 | Dashboard figures look stale | Overnight cache refresh | The 02:00 refresh cron, then the health page |
 | Workshop map or vehicle trend looks out of date | The nightly MD pull | Reports → Workshop Map shows "synced"; "Pull from MechanicDesk now" forces it (~2–4 min) |
-| MYOB pushes silently do nothing | Posting switch is off | Workshop → Settings |
 | A distributor says they never got tracking | Ship Now hasn't been pressed | §4.2 |
 | An AP invoice never arrived | Supplier sent a link, not an attachment | §5 — link-only emails are invisible |
 | Someone can't see a tab | Permissions, working as designed | Ask Chris |
@@ -348,6 +310,7 @@ Work down this table before escalating. Most of these are a stalled worker, not 
 
 | Task | Where |
 |---|---|
+| Read or download this document and the handover | **Admin → Library** (`/admin/library`) |
 | Add a person, set their role and tabs | Settings → Users |
 | Clear someone's 2FA | Settings → Users |
 | Change an integration's credentials | Admin → Connections / Settings → Integrations — **⚠** always here, never by editing environment variables directly |
@@ -363,6 +326,6 @@ Work down this table before escalating. Most of these are a stalled worker, not 
 3. **"Sales" in the weekly recap means orders, not turnover.**
 4. **A never-quoted lead is not a lost quote.**
 5. **Counted stocktake rows are sacred** — investigate before applying a variance.
-6. **Moving a booking does not move its reminder SMS.**
+6. **The workshop runs on Mechanics Desk** — the portal handles parts, letters, counting and reporting around it.
 7. **Credentials change in the portal**, not in environment variables.
 8. **Reload when the new-version banner appears.**

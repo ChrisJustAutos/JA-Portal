@@ -11,7 +11,7 @@ Compiled 20 August 2026 from the live codebase. Supersedes `03_SYSTEM_OVERVIEW.m
 An internal management platform for **Just Autos**, covering two MYOB business entities:
 
 - **JAWS** — Just Autos Wholesale (distribution arm, holds stock, ~14 distributors across Australia)
-- **VPS** — Vehicle Performance Solutions (the workshop entity; historically ran on Mechanics Desk, which the portal's Workshop module replaces)
+- **VPS** — Vehicle Performance Solutions (the workshop entity; runs on **Mechanics Desk**, which remains the system of record — see §7.2)
 
 It is one Next.js application that contains: a **staff portal** (dashboards, workshop management, CRM, AP automation, calls coaching, reporting), a **distributor-facing B2B portal** (catalogue, checkout, orders, tune jobs, training) that went live in July 2026, a **supplier portal** (read-only stock wall), and a large fleet of **background automation** (23 Vercel crons, 16 GitHub Actions workflows, and several on-premise agents).
 
@@ -205,6 +205,23 @@ Admin surfaces:
 - **Bot** (`lib/slack-bot/*`): env `SLACK_BOT_TOKEN`, `SLACK_SIGNING_SECRET`, `SLACK_ALLOWED_CHANNEL_IDS`, `SLACK_PARTS_ONLY_CHANNEL_IDS` (parts-only channels get exactly one stock-availability answer per top-level message, no thread replies, no clarifying questions), `SLACK_PARTS_CONTACT`. Single endpoint `POST /api/slack/ask` handles events, mentions, `/ask`, and interactive buttons; HMAC verified; acks in <3s then continues via `waitUntil`.
 - The parts bot answers from `md_stock_cache`, refreshed every 30 min by the `md-stock-sync` GitHub Action.
 
+**What we post where.** Slack is the business's alerting surface — most automation reports into it rather than email, so a dead webhook is a silent failure. The channels built so far:
+
+| Channel | What lands there | Source |
+|---|---|---|
+| `#jaws-orders` | B2B distributor orders, drop-ship PO confirmations and ETAs | `lib/b2b-order-pipeline.ts`, drop-ship confirm cron |
+| `#jaws-payments` / `#vps-payments` | Payments received, per entity | `SLACK_WEBHOOK_{JAWS,VPS}_PAYMENTS` |
+| `#jaws-invoices` / `#vps-invoices` | Invoice events per entity | webhook |
+| `#sales-coaching` | Per-call coaching cards, plus the weekly team coaching summary (Mon 07:00) | PBX `slack-poster.js` |
+| `#customer-feedback-negative` | Calls flagged as a poor customer experience, with the fault theme. Matt's standing ask is the top-10 recurring faults off this channel. **The automation that posts here is currently switched OFF** (`CALL_CONCERNS_ENABLED`). | calls analysis |
+| `#customer-feedback-positive` | The same in reverse — calls that went well | calls analysis |
+| `#parts-room` | Parts Office camera motion, nights and weekends only | `ja-partsroom` on the PBX box |
+| Freight bay | Intrusion bursts from the freight-bay NVR (snapshot sequence) | `ja-freightbay` on the PBX box — Slack-only since 2026-07-15 |
+| AP channel (`SLACK_WEBHOOK_AP_VPS`) | Supplier-invoice exceptions and suspected double-ups (♻) | AP auto-entry |
+| `#ja-portal-queries` | Ask-the-portal bot conversations | `lib/slack-bot/*` |
+
+**⚠** Webhook URLs are per-channel env vars. If a channel goes quiet, check the env var before assuming the feature broke — a rotated or deleted webhook fails silently.
+
 ### 5.8 Monday.com & ActiveCampaign (legacy CRM pair — being replaced by the CRM module)
 
 - **Monday** (`lib/monday-followup.ts` is the shared GraphQL client): env `MONDAY_API_TOKEN`, `MONDAY_BUTTON_SECRET`. Five rep quote boards (Dom 5025942308, Kaleb 5025942316, Graham 5026840169, James 5025942292, Tyronne 5025942288). Pipeline A is match-only (never creates items). Button callback: `/api/monday/fetch-call-notes?key=…`.
@@ -230,7 +247,16 @@ The portal never calls Asterisk or Deepgram directly — an on-PBX host (CentOS 
 | `ja-ami-monitor` | Live channel snapshots → `POST /api/calls/live/agent/snapshot` (~2s, `X-Service-Token` scope `calls:monitor`); drains `call_monitor_events` for Listen/Whisper/Barge and click-to-dial originate. |
 | `ja-freightbay` / `ja-partsroom` | Hikvision NVR intrusion events → Slack snapshot bursts + Yealink ring. **Node 16 only** (glibc). Doesn't touch the portal API. |
 
-Analysis note: `/opt/ja-cdr-sync/analyse.js` + `slack-poster.js` on the PBX do the call coaching; the portal's `/api/cron/calls-analyse` equivalent is **gated off by default** (`CALLS_ANALYSIS_ENABLED`) and must stay off while the PBX loop runs. Browser softphone (SIP.js over WSS) config is env `NEXT_PUBLIC_FREEPBX_WSS_URL` etc.; TURN needed on mobile networks.
+**Call coaching and notes — what this actually gives the business.** This is the biggest piece of bespoke work on the phone system, so it is worth stating plainly what it produces:
+
+1. **Every call is recorded and transcribed** — `ja-cdr-sync` lands the CDR, `ja-transcribe` sends the audio to Deepgram (`nova-2-phonecall`, `en-AU`) and stores the transcript. Nothing is manual.
+2. **Every call is scored against a rubric for its type** — a sales enquiry, a service booking, a parts call and a pass-off are judged on different things, so the rubrics are per call type (`call_type_rubrics`, editable at Settings → Call Coaching).
+3. **Coaching is attributed to the advisor who actually handled it**, identified from the transcript rather than the extension — that is what makes the leaderboard trustworthy when calls get transferred or picked up from park.
+4. **Coaching cards post to `#sales-coaching`** per call, and a **team summary posts Monday 07:00**.
+5. **Call notes flow back to the quote boards** — the "Fetch Call Notes" button on a Monday item calls `/api/monday/fetch-call-notes`, which pulls that customer's call history and notes onto the item, so a rep picking up a follow-up can see what was last said without hunting for the recording.
+6. **Sentiment / objections / conversion** are surfaced on `/calls` as tabs, and calls scoring below 40 are flagged for attention.
+
+Analysis runs on the PBX (`/opt/ja-cdr-sync/analyse.js` + `slack-poster.js`); the portal's `/api/cron/calls-analyse` equivalent is **gated off by default** (`CALLS_ANALYSIS_ENABLED`) and must stay off while the PBX loop runs — both running means double-scoring and double-posting. Browser softphone (SIP.js over WSS) config is env `NEXT_PUBLIC_FREEPBX_WSS_URL` etc.; TURN needed on mobile networks.
 
 ### 5.11 Anthropic / Claude API
 
@@ -296,11 +322,32 @@ MD has no API; these Playwright workers log in with `MECHANICDESK_{WORKSHOP_ID,U
 | `md-purchase-order` | `repository_dispatch` | Raise MD PO after a JAWS→VPS stock transfer |
 | 7 × `probe-md-*` / `fix-md-customer-names` | manual | Endpoint recon probes and one-off repairs |
 
-### 6.3 On-premise agents
+### 6.3 The print centre (comms room)
+
+**PORTAL-CENTRE** is a dedicated always-on Lenovo ThinkCentre in the comms room whose only job is printing. It exists because the print agent used to run on Chris's MSI laptop, which meant **every letter, invoice and label silently stopped whenever the laptop was closed or off the network** — with no error anywhere, because the queue simply stopped draining. Built and verified 2026-08-20.
+
+| | |
+|---|---|
+| Host | Lenovo ThinkCentre, comms room, always on (no lid, no sleep) |
+| Reachable | Tailscale `100.72.189.95` — RDP in for maintenance; it is Entra-joined, so sign in with the work account |
+| Runs | `agents/label-print-agent/` on Node 22, started by Autologon + Startup shortcut, headless |
+| Queue | `label_print_jobs` in Supabase, consumed over Realtime with a 30s poll as fallback |
+| Job kinds | `label` (DYMO 4XL), `invoice`, `letter`, `envelope` (Apeos) — all four verified end to end |
+| Runbook | `docs/print-centre-thinkcentre-setup.md` — build, headless operation, the comms-room move sequence, RDP, and a health-check script |
+
+**Operating notes**
+
+- The agent **never restarts on deploy** — it is not part of the Vercel app. A new print kind must not require an agent change; add it as a queue row shape the agent already understands.
+- A stuck queue drains on agent restart, so restarting the agent is the first fix. Failed jobs are re-queued by flipping `failed` → `pending`.
+- **⚠ Never trust the Apeos `(Copy 1)` printer-name suffix.** Windows appends it when a printer is re-added, and printing to the wrong name fails silently or prints to the wrong device — check the real name.
+- Printer enumeration must never take the heartbeat down (fixed 2026-08-20) — if the agent looks dead but the box is up, check the heartbeat before rebuilding anything.
+- DYMO troubles: the health-check script has label-printer diagnostics and a `-FixDymoPort` switch.
+
+### 6.4 On-premise agents
 
 | Agent | Where | Notes |
 |---|---|---|
-| `label-print-agent` (`agents/label-print-agent/`) | **PORTAL-CENTRE** (dedicated always-on ThinkCentre, comms room) | Consumes `label_print_jobs` via Supabase Realtime (30s poll fallback). Kinds: `label` (DYMO 4XL), `invoice`, `letter`, `envelope` (Epson). **Never restarts on deploy** — new print kinds must not require agent changes. Runs via Startup shortcut → `run-agent-hidden.vbs` or NSSM. Node 22, Autologon, reachable on Tailscale `100.72.189.95`; built 2026-08-20, runbook `docs/print-centre-thinkcentre-setup.md`. Previously ran on Chris's MSI laptop and failed silently whenever it was off-network — that is what the dedicated box fixes. **Never trust the Apeos `(Copy 1)` printer-name suffix.** |
+| `label-print-agent` (`agents/label-print-agent/`) | **PORTAL-CENTRE** — see §6.3 | Consumes `label_print_jobs` via Supabase Realtime (30s poll fallback). Kinds: `label` (DYMO 4XL), `invoice`, `letter`, `envelope` (Epson). **Never restarts on deploy** — new print kinds must not require agent changes. Runs via Startup shortcut → `run-agent-hidden.vbs` or NSSM. Node 22, Autologon, reachable on Tailscale `100.72.189.95`; built 2026-08-20, runbook `docs/print-centre-thinkcentre-setup.md`. Previously ran on Chris's MSI laptop and failed silently whenever it was off-network — that is what the dedicated box fixes. **Never trust the Apeos `(Copy 1)` printer-name suffix.** |
 | PBX workers | FreePBX box | See §5.10. systemd units; Node 16 for the camera bridges. |
 | ESP32 scale nodes | Workshop bins / cash-count rig | Firmware `hardware/ja-scale-node/`; raw HX711 counts to `/api/scales/ingest`; all calibration server-side. |
 
@@ -314,22 +361,22 @@ Full route-by-route inventory: 111 page routes (423 API routes). Staff nav is th
 
 Section-based management dashboard (JAWS+VPS merged, entity filter pills) and a drag/resize custom dashboard builder with per-user saved layouts. **SOP**: nothing operational — data flows from MYOB reporting caches; if figures look stale, check the 02:00 `distributors/refresh-cache` cron and the health page.
 
-### 7.2 Workshop (26 routes — the Mechanics Desk replacement)
+### 7.2 Workshop tooling (Mechanics Desk stays the system of record)
 
-Diary · Jobs · Job Card · Quotes · Customers · Vehicles · Orders · Invoices · Comms · Letters · Inventory (Live Bins, Cash Count, Pre Pick, Suppliers, Purchase Orders, Stocktakes, Stock Transfer) · Reports · Settings. Parity checklist and MD-cancellation checklist: `docs/workshop_md_parity.md`.
+**Mechanics Desk is the workshop system.** The diary, job cards, customers, vehicles, quotes and invoicing all happen in MD, and there is **no migration in progress** (decision 2026-08-20). The portal does not run the workshop.
 
-**Daily flow SOP**
-1. **Booking**: `/diary` → click a slot in a technician lane → quick-add customer (Places autocomplete) + vehicle → job created. Drag to move/resize; split jobs supported.
-2. **Job Card** (`/workshop/job/[id]`): add labour + parts (inventory picker), record time clock, photos/files, take payments by tender, SMS the customer, print/email invoice PDF.
-3. **Invoice → MYOB**: push from the job card (uses `workshop_settings` MYOB account mapping; `myob_posting_enabled` is the go-live flip).
-4. **Quotes**: `/workshop/quotes` → build → convert-to-job on acceptance.
-5. **Reminders**: service/rego reminders queue automatically; sending requires `workshop_settings.sms_enabled` + ClickSend creds. Check `/workshop/comms` for send history. *Known gap: moving a booking doesn't reschedule an already-queued reminder SMS.*
-6. **Letters**: hourly `letter-watch` cron queues a thank-you letter + envelope for each new finalised MYOB invoice (deposit-only invoices are vetoed by a positive 1-1230 line). Reprint/compose/templates at `/workshop/letters`. Printing happens on the workshop PC agent.
-7. **Parts**: `/workshop/orders` (per-day parts worklist), `/workshop/prepick` (14-day demand vs stock), `/workshop/purchase-orders` (draft→sent→received, MYOB bill push), `/workshop/suppliers`.
-8. **Stocktake (portal-native)**: `/workshop/stocktake` → create session → barcode-scan counting → Variance → Apply.
-9. **Settings** (`/workshop/settings`, admin): letterhead, MYOB accounts/mode, SMS settings, technicians & diary lanes.
+What the portal *does* provide around MD, all of it in daily use:
 
-**Data migration**: `/imports` wizard (customers, vehicles, inventory, job types, quotes, invoices from MD exports) — this was the MD cutover path.
+| Surface | What it does | Fed by |
+|---|---|---|
+| **Letters** (`/workshop/letters`) | Hourly `letter-watch` cron queues a thank-you letter + envelope for each newly finalised MYOB invoice and prints them on the Apeos. Deposit-only invoices are vetoed by a positive 1-1230 line. Reprint / compose / edit templates here. | MYOB (not MD) |
+| **Pre Pick** (`/workshop/prepick`) | 14-day parts demand vs stock on hand. | `mechanicdesk-prepick` Playwright worker |
+| **Parts & purchase orders** (`/workshop/orders`, `/workshop/purchase-orders`, `/workshop/suppliers`) | Per-day parts worklist; PO draft → sent → received with a bill push to MYOB. | Portal + MYOB |
+| **Counting** (`/workshop/stocktake`, Cash Count, Live Bins) | Portal-native barcode stocktake (session → count → Variance → Apply), till counting by weight, and HX711 load-cell bin inventory. Distinct from the MD stocktake at `/stocktake` (§7.12). | Portal / ESP32 |
+
+Other `/workshop/*` routes exist in the codebase from the paused replacement build and are **not part of any operating procedure**. Leave them alone unless the migration is revived; `docs/workshop_md_parity.md` holds the parity and cutover detail if it ever is.
+
+**⚠** Because MD stays, the **9 scheduled MechanicDesk scrapers remain a live production dependency** (§6.2), not a temporary bridge. Treat them accordingly — an MD password change or UI change breaks real reporting.
 
 ### 7.3 B2B — distributor portal (`/b2b/*`)
 
@@ -405,7 +452,18 @@ Lists Stripe invoices per account label and pushes them to MYOB as Professional 
 
 ### 7.15 Settings (`/settings`)
 
-Tile launcher: General · Connections (Integrations / Health / MYOB) · Distributor Report config · VIN Codes · Users · Audit log · Profile · Claude connector (MCP tokens) · Service tokens.
+Tile launcher: General · Connections (Integrations / Health / MYOB) · Distributor Report config · VIN Codes · Users · Audit log · Profile · Claude connector (MCP tokens) · Service tokens · **Library**.
+
+### 7.16 Library (`/admin/library`)
+
+This document and the SOP, served inside the portal — readable on screen with a contents rail, and downloadable as PDF. Registry: `lib/library-docs.ts` (one row per document). Gated on `admin:settings`.
+
+- `docs/*.md` is the **source of truth**; the reader renders it live server-side (`marked`), so editing the markdown updates the on-screen copy at the next deploy.
+- `docs/*.pdf` is a **generated artifact** — regenerate with `scripts/render-doc-pdf.js` (marked + Playwright; needs `npx playwright install chromium` once) and commit it. It goes stale silently otherwise.
+- **⚠ The PDFs are deliberately not in `public/`.** This document names where every credential lives, the Supabase project id, the Tailscale addresses and the open security gaps; anything under `public/` is served to the internet to anyone holding the URL, with no sign-in. Downloads go through `/api/admin/library/[slug]`, which is auth-gated.
+- **⚠ `next.config.js` → `outputFileTracingIncludes` must list `docs/**` for the three Library routes.** The paths are built at runtime so Next's tracer can't see them; without it the files are pruned from the serverless bundle and 404 in production while working perfectly in dev.
+
+**SOP**: see `CLAUDE.md` §1 — every change to the portal updates these documents as part of the same work.
 
 ---
 
@@ -434,12 +492,12 @@ Tile launcher: General · Connections (Integrations / Health / MYOB) · Distribu
 - Migrations `148` and `153` are duplicated numbers; latest applied is `196_md_vehicle_trend`, so next is `197`.
 - `bank-payments-slack` and `slack-cleanup` cron handlers exist but aren't scheduled in `vercel.json`.
 - Seven overlapping base-URL env vars.
-- Older docs (`03`, `05`, `07`) predate the CData decommission, workshop go-live, B2B rollout and Xero foundation — trust this document and the code.
+- Older docs (`03`, `05`, `07`) predate the CData decommission, B2B rollout and Xero foundation, and still describe the workshop migration as active — trust this document and the code.
 
 **Operational**
 - MYOB and Xero OAuth tokens need periodic exercise; Xero refresh tokens are single-use (rotation is handled, but never hand-edit the row).
 - The FreePBX box is CentOS 7 — camera bridges pinned to Node 16; the whole host is a single point of failure for calls, coaching, and camera alerts. `sip-loss-monitor.sh` may still be running there from the phone-dropout investigation (upstream/FreedomBroadband was the cause) — clean up when resolved.
-- MechanicDesk is still being scraped by 9 scheduled workers; when MD is cancelled, follow the checklist in `docs/workshop_md_parity.md` (final import, first live MYOB push, `myob_posting_enabled`, ClickSend creds, stock-transfer re-point) and retire the workers.
+- **MechanicDesk is staying** (decision 2026-08-20) — the replacement build is paused, so the 9 scheduled MD scrapers are a permanent production dependency rather than a temporary bridge. The portal's workshop module is built but unused; `docs/workshop_md_parity.md` keeps the cutover checklist if it is ever revived.
 - Parked/off: negative-call automation (`CALL_CONCERNS_ENABLED`), portal-side calls analysis cron, Places key on New Booking quick-add (key unset), first real JAWS→VPS stock transfer pending, Live Bins hardware untested in production, live call monitoring WSS keep-alive retest pending.
 - MYOB→Xero migration: foundation only — adapter waves per module still to come; both entities eventually move.
 
@@ -454,7 +512,7 @@ Tile launcher: General · Connections (Integrations / Health / MYOB) · Distribu
 | Accounting | `lib/myob.ts`, `lib/myob-reporting.ts`, `lib/xero.ts`, `lib/accounting-provider.ts`, `lib/accounting/*` |
 | B2B pipeline | `lib/b2b-order-pipeline.ts`, `lib/b2b-payment.ts`, `lib/b2b-myob-invoice.ts`, `lib/b2b-machship.ts`, `lib/b2b-freight-*.ts`, `lib/b2b-dropship-*.ts`, `lib/b2b-tune-jobs.ts` |
 | AP | `lib/ap-extraction.ts`, `lib/ap-auto-entry.ts`, `lib/ap-statement-watch.ts`, `lib/ap-myob-bill.ts` |
-| Workshop | `pages/workshop/*`, `lib/workshop-*.ts`, `docs/workshop_md_parity.md` |
+| Workshop tooling | `pages/workshop/letters`, `.../prepick`, `.../purchase-orders`, `.../stocktake`, `lib/workshop-*.ts`. Paused replacement build: rest of `pages/workshop/*` + `docs/workshop_md_parity.md` |
 | Calls | `lib/live-calls.ts`, `lib/calls-analysis.ts`, `lib/softphone.ts`, `docs/pbx_click_to_dial_worker.md` |
 | Mail | `lib/microsoft-graph.ts`, `lib/email.ts`, `lib/agents.ts` (mailbox→owner map) |
 | Health | `pages/api/cron/health-check.ts`, `pages/admin/connections.tsx` |
