@@ -493,6 +493,26 @@ authentication level:i:0
 > **kills the print agent**. This is also why a local account "just for RDP" is not an
 > option. Always leave by **Disconnect**, never **Sign out**.
 
+## Health check script
+
+Pasting long commands into this box is unreliable — the console flattens newlines and
+RDP clipboard redirection drops out (fix that with `taskkill /f /im rdpclip.exe` then
+`rdpclip`). So the checks live in the repo instead:
+
+```
+cd C:\ja\JA-Portal; git pull
+powershell -ExecutionPolicy Bypass -File agents\label-print-agent\tools\print-centre-check.ps1
+```
+
+Reports: network profiles (flagging any `Public`), the four discovery services, the
+three required printer queues, WSD device URIs (failing any `fe80::` link-local binding
+on a queue we care about), spooler jobs stuck in an error state, agent + supervisor
+processes, the Startup entry, and the last 8 log lines.
+
+- `-FixNetworkProfile` — set any Public profile to Private (needs elevation). Use this
+  after the Ethernet move.
+- `-TestPages` — fire a Windows test page at each of the three printers.
+
 ## Headless operation (comms room)
 
 The box runs with **no monitor, keyboard or mouse**. Two facts make that safe:
