@@ -396,7 +396,10 @@ async function recordingAttachment(call: NotableCall, label: string): Promise<{ 
     if (error || !blob) return null
     const bytes = Buffer.from(await blob.arrayBuffer())
     if (bytes.byteLength > MAX_AUDIO_ATTACHMENT_BYTES) return null
-    const ext = (row.recording_file || row.recording_url).split('.').pop()?.toLowerCase() || 'wav'
+    // Take the type from recording_url — that is the object we just downloaded.
+    // recording_file is the name on the PBX disk and stays .wav even though the
+    // uploaded copy is transcoded to MP3.
+    const ext = (row.recording_url || row.recording_file).split('.').pop()?.toLowerCase() || 'wav'
     const contentType = ext === 'mp3' ? 'audio/mpeg' : ext === 'ogg' ? 'audio/ogg' : 'audio/wav'
     const safe = `${label} - ${call.advisor} (${call.score} of 100)`.replace(/[^\w ()-]/g, '')
     return { name: `${safe}.${ext}`, contentType, content: bytes }

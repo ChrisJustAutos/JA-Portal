@@ -72,10 +72,18 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
         return res.status(500).json({ error: 'Failed to generate signed URL' })
       }
 
+      // recording_file is the PBX disk name and stays .wav; the stored object is
+      // transcoded to MP3 on upload. Suggest a download name that matches what
+      // the bytes actually are.
+      const storedExt = (call.recording_url as string).split('.').pop()?.toLowerCase()
+      const filename = storedExt && call.recording_file
+        ? String(call.recording_file).replace(/\.[^.]+$/, `.${storedExt}`)
+        : call.recording_file
+
       return res.status(200).json({
         url: signed.signedUrl,
         expires_in: URL_TTL_SECONDS,
-        filename: call.recording_file,
+        filename,
       })
     } catch (e: any) {
       console.error('recording-url error:', e?.message, e?.stack)

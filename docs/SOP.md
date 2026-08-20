@@ -305,7 +305,6 @@ Work down this table before escalating. Most of these are a stalled worker, not 
 | Calls stop appearing | The PBX sync worker | Admin → Connections, look at `freepbx_cdr_sync` freshness |
 | Transcripts stale but calls fine | The transcription worker | Same page; then the PBX box |
 | **One** long call missing, everything else fine | Not a sync outage — the CDR row arrives only when the call hangs up, so very long calls can land behind the sync window | Note the caller's number and roughly when they rang, and give both to whoever maintains the PBX — the call can be backfilled from the phone system. Connections will look healthy, so don't chase it there |
-| A very long call is listed but has no audio or coaching | Its recording is too big to store — now only past about 105 minutes | Nothing to fix on your side — the recording is still on the phone system. Raise it if you need that call reviewed |
 | Live monitor says "not configured" | Monitor hasn't reported in >20s | Same page |
 | Dashboard figures look stale | Overnight cache refresh | The 02:00 refresh cron, then the health page |
 | Workshop map or vehicle trend looks out of date | The nightly MD pull | Reports → Workshop Map shows "synced"; "Pull from MechanicDesk now" forces it (~2–4 min) |
