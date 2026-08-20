@@ -244,7 +244,7 @@ The portal never calls Asterisk or Deepgram directly — an on-PBX host (CentOS 
 
 | PBX worker | What it does |
 |---|---|
-| `ja-cdr-sync` (`sync.js`) | CDR → Supabase `calls` every 5 min (service-role key). Includes park-pickup CDR fix (2026-08-07). |
+| `ja-cdr-sync` (`sync.js`) | CDR → Supabase `calls` every 5 min (service-role key). Includes park-pickup CDR fix (2026-08-07) and the 6-hour late-arrival lookback (2026-08-21, below). |
 | `ja-transcribe` (`transcribe.js`) | New calls → Deepgram (`nova-2-phonecall`, `en-AU`) → `call_transcripts`. Deepgram key lives on the PBX host. |
 | `ja-ami-monitor` | Live channel snapshots → `POST /api/calls/live/agent/snapshot` (~2s, `X-Service-Token` scope `calls:monitor`); drains `call_monitor_events` for Listen/Whisper/Barge and click-to-dial originate. |
 | `ja-freightbay` / `ja-partsroom` | Hikvision NVR intrusion events → Slack snapshot bursts + Yealink ring. **Node 16 only** (glibc). Doesn't touch the portal API. |
@@ -257,6 +257,17 @@ The portal never calls Asterisk or Deepgram directly — an on-PBX host (CentOS 
 4. **Coaching cards post to `#sales-coaching`** per call, and a **team summary posts Monday 07:00**.
 5. **Call notes flow back to the quote boards** — the "Fetch Call Notes" button on a Monday item calls `/api/monday/fetch-call-notes`, which pulls that customer's call history and notes onto the item, so a rep picking up a follow-up can see what was last said without hunting for the recording.
 6. **Sentiment / objections / conversion** are surfaced on `/calls` as tabs, and calls scoring below 40 are flagged for attention.
+
+**The CDR lookback — why it is 6 hours and must stay generous.** Asterisk stamps a CDR row with the call's **start** time but does not write the row until the channel hangs up. A long call therefore arrives *behind* the sync watermark. `sync.js` reads `WHERE calldate > (watermark − CDR_LOOKBACK_MINUTES)`; while that lookback was 30 minutes, **every call longer than about 30 minutes was silently lost or truncated** — the row appeared in MySQL after the watermark had already moved past its start time, so no run ever saw it. Symptom: the portal held no call longer than 38:37 in seven weeks, and a 61:20 call answered by Dom on 204 (2026-08-20 16:16, caller 0428673886) was absent entirely. Fixed 2026-08-21 by raising the lookback to **360 minutes** (`CDR_LOOKBACK_MINUTES`, env-overridable). Re-reading is cheap (~26 rows a run) and safe — the upsert is `on_conflict=linkedid` and the payload carries only CDR-derived columns, so transcripts, recording URLs and coaching analysis on existing rows are never overwritten. **Do not lower it below the longest call the phones can carry.**
+
+**Backfilling history.** `BACKFILL_FROM` + `BACKFILL_TO` (PBX local time) make a hand-run read exactly that window, leave `sync_state` untouched and skip the recording-upload phase, so it never disturbs the 5-minute timer:
+
+```bash
+BACKFILL_FROM='2026-08-20T16:11:00' BACKFILL_TO='2026-08-20T16:21:00' \
+  /usr/local/bin/node20 /opt/ja-cdr-sync/sync.js
+```
+
+Keep the window tight. A wide one re-upserts every call inside it, and `trg_rescue_missed_call` fires on `UPDATE OF disposition` — which deletes *unread* "Missed call" notifications for the same caller within ±4 hours of each answered call. There are routinely a couple of thousand unread ones, so a mass re-upsert would quietly clear a slice of them. (`trg_notify_missed_call` is safe: it only fires for calls under 2 hours old.) Note the box's default `node` is v8 and cannot parse the file — the service runs `/usr/local/bin/node20`.
 
 Analysis runs on the PBX (`/opt/ja-cdr-sync/analyse.js` + `slack-poster.js`); the portal's `/api/cron/calls-analyse` equivalent is **gated off by default** (`CALLS_ANALYSIS_ENABLED`) and must stay off while the PBX loop runs — both running means double-scoring and double-posting. Browser softphone (SIP.js over WSS) config is env `NEXT_PUBLIC_FREEPBX_WSS_URL` etc.; TURN needed on mobile networks.
 
@@ -525,6 +536,8 @@ This document and the SOP, served inside the portal — readable on screen with 
 **Operational**
 - MYOB and Xero OAuth tokens need periodic exercise; Xero refresh tokens are single-use (rotation is handled, but never hand-edit the row).
 - The FreePBX box is CentOS 7 — camera bridges pinned to Node 16; the whole host is a single point of failure for calls, coaching, and camera alerts. `sip-loss-monitor.sh` may still be running there from the phone-dropout investigation (upstream/FreedomBroadband was the cause) — clean up when resolved.
+- **Recordings over ~50 MB can't be stored, so the longest calls get no audio and no coaching.** The `call-recordings` bucket allows 100 MB but the *project-level* storage upload cap rejects them first (`413 EntityTooLarge`); `ja-transcribe` downloads from the bucket, so no upload means no transcript, no score and no Slack card. At 8 kHz mono WAV that bites at roughly 52 minutes — it already cost the 61:20 Dom call of 2026-08-20, whose row is in the portal with correct metadata but no playable audio. Fix is either raising the project cap (Supabase → Settings → Storage → upload file size limit) or transcoding to MP3/Opus before upload — the bucket already accepts `audio/mpeg`, `audio/ogg` and `audio/opus`, and a 61-minute call is ~7–14 MB compressed. Undecided.
+- **Queued-then-parked calls report their longest single leg, not the whole conversation.** `classifyCall` picks the longest-billsec `Dial`/`Park` leg with a `dstchannel`; on a queue call the leg carrying the true total has `lastapp='Queue'` and is excluded. Two known cases: 2026-07-20 09:30 shows 14:33 on Kaleb against a real ~30:19, and 2026-08-10 14:50 shows 25:16 on Tyronne against ~32:55. Both duration *and* advisor attribution are affected, so correcting it would move historical coaching numbers — deliberately left alone.
 - **MechanicDesk is staying** (decision 2026-08-20) — the replacement build is paused, so the 9 scheduled MD scrapers are a permanent production dependency rather than a temporary bridge. The portal's workshop module is built but unused; `docs/workshop_md_parity.md` keeps the cutover checklist if it is ever revived.
 - Parked/off: negative-call automation (`CALL_CONCERNS_ENABLED`), portal-side calls analysis cron, Places key on New Booking quick-add (key unset), first real JAWS→VPS stock transfer pending, Live Bins hardware untested in production, live call monitoring WSS keep-alive retest pending.
 - MYOB→Xero migration: foundation only — adapter waves per module still to come; both entities eventually move.
