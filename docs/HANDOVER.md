@@ -43,7 +43,7 @@ It is one Next.js application that contains: a **staff portal** (dashboards, wor
 ```
                           ┌────────────────────────────────────────┐
                           │  Vercel (Next.js app, justautos.app)   │
-   Staff browsers ───────▶│  pages/        UI (110 routes)         │
+   Staff browsers ───────▶│  pages/        UI (111 routes)         │
    Distributor browsers ─▶│  pages/api/    ~all business logic     │
    Suppliers ────────────▶│  23 crons (vercel.json)                │
                           └───────┬──────────────────┬─────────────┘
@@ -377,7 +377,7 @@ MD has no API; these Playwright workers log in with `MECHANICDESK_{WORKSHOP_ID,U
 
 ## 7. Modules & SOPs
 
-Full route-by-route inventory: 112 page routes (424 API routes). Staff nav is the `/home` app launcher (role- and `visible_tabs`-filtered). Below, per module: what it is + how to operate it.
+Full route-by-route inventory: 113 page routes (425 API routes). Staff nav is the `/home` app launcher (role- and `visible_tabs`-filtered). Below, per module: what it is + how to operate it.
 
 ### 7.1 Dashboards (`/dashboard`, `/overview`, `/home`)
 
@@ -456,7 +456,17 @@ CDR list with audio, transcripts, coaching analysis (per-call-type rubrics), Sen
 
 ### 7.8 Reports (`/reports/*`)
 
-Builder (6 PDF report types — Workshop Performance was removed 2026-08-20; it reported over the portal workshop tables, which stay empty while MechanicDesk is the system of record) · Sales Report (live Weekly Sales Recap; **"sales" = orders taken from Monday boards + MD, not turnover**; auto-emails Ryan Mon 07:00) · Management Dashboard (JAWS weekly Excel replica from live MYOB; config-driven charts; clickable KPI history; cache warmed 05:30) · Workshop Map (nightly MD pull; `lib/workshop-map` classification is authoritative; FY picker; five tabs — Jobs Map, Quotes Map, Conversion, By State, **Vehicle Trend**: one line per vehicle series, All FY = monthly buckets, pick a month = daily buckets, measures Jobs/Quotes/Job $/Quoted $. The trend counts every invoice and quote, so its totals run higher than the map tabs, which show one dot per customer per month) · Distributor Map (quotes near each distributor vs confirmed Monday bookings) · **Forecast** (admin+manager; portal rebuild of the Monday "Forecast Dashboard - Includes JAWS" — see below). Per-user report-tab allowlists control who sees what.
+Builder (6 PDF report types — Workshop Performance was removed 2026-08-20; it reported over the portal workshop tables, which stay empty while MechanicDesk is the system of record) · Sales Report (live Weekly Sales Recap; **"sales" = orders taken from Monday boards + MD, not turnover**; auto-emails Ryan Mon 07:00) · Management Dashboard (JAWS weekly Excel replica from live MYOB; config-driven charts; clickable KPI history; cache warmed 05:30) · Workshop Map (nightly MD pull; `lib/workshop-map` classification is authoritative; FY picker; five tabs — Jobs Map, Quotes Map, Conversion, By State, **Vehicle Trend**: one line per vehicle series, All FY = monthly buckets, pick a month = daily buckets, measures Jobs/Quotes/Job $/Quoted $. The trend counts every invoice and quote, so its totals run higher than the map tabs, which show one dot per customer per month) · Distributor Map (quotes near each distributor vs confirmed Monday bookings) · **Sales Dashboard** (quote pipeline across the five rep Quote Channel boards — see below) · **Forecast** (admin+manager; portal rebuild of the Monday "Forecast Dashboard - Includes JAWS" — see below). Per-user report-tab allowlists control who sees what.
+
+**Sales Dashboard** (`/reports/sales-dashboard`, added 2026-08-21). The portal rebuild of the Monday **"Sales Dashboard"** (2079976) over the five rep Quote Channel boards. `lib/sales-dashboard-monday.ts` + `GET /api/reports/sales-dashboard?months=3|6|12|24`. **Not the same thing as Reports → Sales Report**, which counts *orders taken*; this is the *quote pipeline* — what is open, at what stage, with whom, and what converted. `view:reports`, same as the Sales Report, since it is pipeline and rep activity rather than group turnover.
+
+Open pipeline by stage, won/lost by month, a per-rep table with win rate, and an ageing breakdown of open quotes. Three things the code has to get right:
+
+- **Group ids drift per board — resolve by TITLE, never by id.** Only the five original template groups (`topics`, `group_title`, `new_group__1`, `new_group`, `new_group860`) are shared across the boards. "Lead RLMNA", "Follow up RLMNA", "On Hold" and "Not issued" were added after the fork and every board has its own ids — Kaleb's On Hold is `group_mm12crrx`, Dom's is `group_mm12q0j0`. **The `GROUPS` map in `lib/monday-followup` holds one board's ids and is correct for the shared five only — do not reuse it for cross-board reporting.**
+- **Rep comes from the board, not the Owner column.** The Owner backfill of 2026-08-20 covered the ~704 *active* quotes; historical Won/Lost items have an empty Owner, so board-as-rep is the only attribution that carries history.
+- **Open is defined by exclusion** — everything that is not Won, Lost or Not issued. That way a group nobody mentioned still appears instead of vanishing: Kaleb has a "Farm Fest 2026 booked in Jobs" group, which is counted in the pipeline *and* listed separately on the page so the totals can always be reconciled to the boards.
+
+The columns it reads *are* shared across all five boards (verified 2026-08-21): `numeric_mkzcbhz2` Quote Value (titled "Value" on James's board, same id), `date4`, `status`, `person`. The ones that drift — Distributor, Qualifying Stage, Contact Attempts, FU Stage, Quote No — are not read. Monday does the group and date filtering server-side, so the ~6,500 items across the boards cost one group-resolve plus two queries per board.
 
 **Forecast** (`/reports/forecast`, added 2026-08-21). The portal rebuild of the Monday **"Forecast Dashboard - Includes JAWS"** (dashboard 349826), which sits on the Monday **"Forecasting"** board `1842188200`. `lib/forecast-monday.ts` pulls the board live on every load — 24 items, one Monday query, nothing cached or stored — and `GET /api/reports/forecast` serves month × entity × year turnover. Admin + manager only, same as the Management Dashboard.
 

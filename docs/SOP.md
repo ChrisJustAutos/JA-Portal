@@ -260,7 +260,27 @@ Click-to-dial is available where enabled.
 
 **Reports → Management Dashboard.** The JAWS weekly Excel, live from MYOB. KPI tiles are clickable for history, and charts can be expanded. The cache is warmed at 05:30, so early-morning figures are quick.
 
-### 8.3 Forecast
+### 8.3 Sales Dashboard
+
+**Reports → Sales Dashboard.** The quote pipeline across the five rep quote channels — what is open, at what stage, with whom, and what converted.
+
+**⚠ This is not the same as the Sales Report.** The Sales Report counts **orders taken**. This one counts **quotes**. The two will never agree, and are not meant to.
+
+What is on it:
+
+- **Open pipeline by stage** — Lead, Lead RLMNA, Follow Up, Follow up RLMNA, Pending, On Hold. Always current, whatever the window is set to.
+- **Won vs lost by month**, over the window you pick (3, 6, 12 or 24 months).
+- **By rep**, with win rate.
+- **How long open quotes have been sitting** — the 90+ day bucket is the one worth acting on.
+
+Two things to know when reading it:
+
+- **Quotes count against the channel they sit on**, not the Owner column. Owner is only filled in on currently-active quotes, so it cannot carry history.
+- **If a board has a group that isn't a standard pipeline stage** (Kaleb's "Farm Fest" group, for example), those quotes are still counted, and called out in a box at the bottom so the totals always add up to what the boards show.
+
+"Quote - Not issued" is left out of every figure.
+
+### 8.4 Forecast
 
 **Reports → Forecast.** Turnover month by month, this year against last, for the workshop (VPS) and wholesale (JAWS) sides. Switch between Combined, Workshop and Wholesale with the buttons top-right. Managers and admins only.
 
@@ -273,7 +293,7 @@ Two things to read correctly:
 
 The change percentages are worked out from the turnover figures themselves, not the "% Increase/Decrease" column on the board, which is only filled in on some rows.
 
-### 8.4 Workshop Map & Conversion
+### 8.5 Workshop Map & Conversion
 
 **Reports → Workshop Map.** Fed by the nightly Mechanics Desk pull. Five tabs:
 
@@ -289,11 +309,11 @@ The change percentages are worked out from the turnover figures themselves, not 
 
 **⚠** Vehicle Trend counts **every** invoice and quote, while the map tabs show one dot per customer per month. Its totals are legitimately higher — they are not disagreeing with each other, they are counting different things.
 
-### 8.5 Distributor Map
+### 8.6 Distributor Map
 
 Quotes near each distributor against bookings they actually confirmed — the "are they converting the leads we send them" view.
 
-### 8.6 Build a PDF report
+### 8.7 Build a PDF report
 
 **Reports → Builder.** Choose from six report types — Distributor Performance, Stock Health, Call Analytics, CRM Pipeline, Campaign Performance, B2B Sales — then the period, which entities (JAWS, VPS or both) and which sections. Add AI commentary if you want the numbers narrated. Generate, then download the PDF.
 

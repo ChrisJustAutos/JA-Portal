@@ -145,6 +145,7 @@ export function roleHasPermission(role: UserRole, permission: Permission): boole
 export const REPORT_TAB_HREFS: Record<string, string> = {
   'reports': '/reports',
   'sales-report': '/reports/sales-report',
+  'sales-dashboard': '/reports/sales-dashboard',
   'mgmt-dashboard': '/reports/mgmt-dashboard',
   'forecast': '/reports/forecast',
   'workshop-map': '/reports/map',
