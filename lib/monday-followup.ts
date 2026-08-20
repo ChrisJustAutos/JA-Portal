@@ -40,12 +40,18 @@ const MONDAY_API_URL = 'https://api.monday.com/v2'
 //
 // Each agent_name → board_id mapping. Lower-cased keys for tolerant lookup.
 // First-name match against `calls.agent_name` or `calls.effective_advisor_name`.
-export const REP_BOARDS: Record<string, { boardId: string; repName: string }> = {
-  graham:   { boardId: '5026840169', repName: 'Graham' },
-  kaleb:    { boardId: '5025942316', repName: 'Kaleb' },
-  dom:      { boardId: '5025942308', repName: 'Dom' },
-  james:    { boardId: '5025942292', repName: 'James' },
-  tyronne:  { boardId: '5025942288', repName: 'Tyronne' },
+// mondayUserId is the rep's monday.com account, stamped onto the Owner column
+// when Pipeline A creates the item. Owner matters because the end-of-cadence
+// automation ("third follow-up done — this now has to be Won or Lost") notifies
+// the Owner people column: with it blank the automation still reports success
+// while notifying nobody, which is exactly how ten of Kaleb's quotes sat at the
+// decision point for two months (2026-08-20).
+export const REP_BOARDS: Record<string, { boardId: string; repName: string; mondayUserId: number }> = {
+  graham:   { boardId: '5026840169', repName: 'Graham',  mondayUserId: 99714632 },
+  kaleb:    { boardId: '5025942316', repName: 'Kaleb',   mondayUserId: 68149991 },
+  dom:      { boardId: '5025942308', repName: 'Dom',     mondayUserId: 77028843 },
+  james:    { boardId: '5025942292', repName: 'James',   mondayUserId: 54523530 },
+  tyronne:  { boardId: '5025942288', repName: 'Tyronne', mondayUserId: 54523531 },
 }
 
 // All board IDs we'll search when finding existing items, regardless of rep.

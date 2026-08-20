@@ -235,6 +235,9 @@ export async function createPendingItem(input: CreatePendingItemInput): Promise<
     [SHARED_COLS.QUOTE_VALUE]: input.quoteValueIncGst,
     [boardCols.quoteNo]: input.quoteNumber,
     [boardCols.contactAttempts]: 1,
+    // Owner = the rep whose board this is. Without it the end-of-cadence
+    // notification has no recipient and silently reaches nobody.
+    [SHARED_COLS.OWNER]: { personsAndTeams: [{ id: board.mondayUserId, kind: 'person' }] },
   }
   if (input.phone) columnValues[SHARED_COLS.PHONE] = input.phone
   if (input.email) columnValues[SHARED_COLS.EMAIL] = input.email
