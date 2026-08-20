@@ -1,0 +1,462 @@
+# JA Portal — Full Handover Document
+
+How the portal is built, where it runs, every connection it has (and how to set up or change them), and operating procedures for every module.
+
+Compiled 20 August 2026 from the live codebase. Supersedes `03_SYSTEM_OVERVIEW.md` / `05_INTEGRATIONS.md` (May 2026) where they conflict.
+
+---
+
+## 1. What the portal is
+
+An internal management platform for **Just Autos**, covering two MYOB business entities:
+
+- **JAWS** — Just Autos Wholesale (distribution arm, holds stock, ~14 distributors across Australia)
+- **VPS** — Vehicle Performance Solutions (the workshop entity; historically ran on Mechanics Desk, which the portal's Workshop module replaces)
+
+It is one Next.js application that contains: a **staff portal** (dashboards, workshop management, CRM, AP automation, calls coaching, reporting), a **distributor-facing B2B portal** (catalogue, checkout, orders, tune jobs, training) that went live in July 2026, a **supplier portal** (read-only stock wall), and a large fleet of **background automation** (23 Vercel crons, 16 GitHub Actions workflows, and several on-premise agents).
+
+| | |
+|---|---|
+| Production URL | `https://justautos.app` |
+| Repo | `ChrisJustAutos/JA-Portal`, branch `main` |
+| Hosting | Vercel (auto-deploys every push to `main`) |
+| Database | Supabase project `qtiscbvhlvdvafwtdtcd` (`https://qtiscbvhlvdvafwtdtcd.supabase.co`) |
+| Framework | Next.js 14.2.5, **pages router**, TypeScript, React 18 |
+| Key packages | `@supabase/supabase-js`, `@anthropic-ai/sdk` (mostly raw fetch is used), `exceljs`/`xlsx`, `@react-pdf/renderer`, `pdf-lib`, `leaflet`, `reactflow`, `sip.js`, `web-push`, `playwright` (dev, for GH Actions workers) |
+
+### People
+
+| Person | Role |
+|---|---|
+| Chris Russell | Operations Manager — portal owner/direction |
+| Nat | Accountant — chart of accounts, MYOB reconciliation sign-off |
+| Matt Ashley | Technical — MYOB API, integrations |
+| Matt H | Operations / Sales |
+| Amanda | Accounts Payable — works in `/ap` daily |
+| Laura | Director |
+| Ryan | Receives the Monday 7am Weekly Sales Recap email |
+
+---
+
+## 2. Architecture at a glance
+
+```
+                          ┌────────────────────────────────────────┐
+                          │  Vercel (Next.js app, justautos.app)   │
+   Staff browsers ───────▶│  pages/        UI (109 routes)         │
+   Distributor browsers ─▶│  pages/api/    ~all business logic     │
+   Suppliers ────────────▶│  23 crons (vercel.json)                │
+                          └───────┬──────────────────┬─────────────┘
+                                  │                  │ repository_dispatch
+                                  ▼                  ▼
+                     ┌───────────────────┐   ┌──────────────────────────┐
+                     │ Supabase          │   │ GitHub Actions           │
+                     │ Postgres + Auth   │   │ Playwright workers that  │
+                     │ + Storage +       │   │ scrape/drive Mechanics   │
+                     │ Realtime (bus)    │   │ Desk (no API exists)     │
+                     └──▲────▲────▲──────┘   └──────────────────────────┘
+                        │    │    │  (service-role key / Realtime)
+        ┌───────────────┘    │    └───────────────┐
+        │                    │                    │
+┌───────┴────────┐  ┌────────┴────────┐  ┌────────┴───────────┐
+│ FreePBX box    │  │ Workshop PC     │  │ ESP32 scale nodes  │
+│ ja-cdr-sync    │  │ label-print-    │  │ POST /api/scales/  │
+│ ja-transcribe  │  │ agent (Realtime │  │ ingest             │
+│ ja-ami-monitor │  │ consumer)       │  │ (x-device-key)     │
+│ ja-freightbay  │  └─────────────────┘  └────────────────────┘
+└────────────────┘
+```
+
+External SaaS the Vercel app talks to directly: **MYOB AccountRight** (both entities, direct OAuth), **Xero** (migration target, foundation live), **Stripe** (B2B standalone account + JAWS read-only accounts), **Microsoft Graph** (mailbox webhooks + mail), **Resend** (email), **ClickSend** (SMS), **Slack** (bot + webhooks), **Monday.com**, **ActiveCampaign** (being replaced by CRM module), **MachShip** (freight), **Anthropic API** (18 LLM call sites), **Deepgram** (indirectly — runs on the PBX host), **Google Places** / **Nominatim** (geocoding).
+
+### Design conventions (must-follow)
+
+- **API routes are `.ts`, never `.tsx`** — a `.tsx` in `pages/api/` crashes module load (generic 500 HTML).
+- **Shared UI kit is mandatory**: `lib/ui/theme` tokens (`T` — CSS variables; use `alpha()`, never alpha-suffixed tokens) + `components/ui` + Feedback hooks. No `alert()`/`confirm()` browser dialogs. The B2B portal has its own separate "Alloy" kit at `components/b2b/ui.tsx` (one accent, ≥12px type, 44px touch targets).
+- **Server Supabase clients** are constructed inline per route with the service-role key (module-level memo `_sb`). There is deliberately no shared server client module — follow the local pattern.
+- **Long work (>~30s) never runs on Vercel** — anything browser-based or slow goes to GitHub Actions (dispatch pattern) or is chunked.
+- **PostgREST embeds on workshop tables must use the `!customer_id` hint** (e.g. `workshop_customers!customer_id(...)`) or the query 500s on ambiguous relationships.
+- **`b2b_distributor_users` is not unique per email/auth_user_id** (multi-site memberships) — never `maybeSingle()` on it.
+- An **update notifier** compares the client bundle against `/api/version` and shows a "new version — Reload" banner after each deploy.
+
+---
+
+## 3. Environments, deployment & dev workflow
+
+### Deploy
+
+1. Commit to `main` and **push** (convention: always push immediately after committing — never leave local-only commits).
+2. Vercel builds and deploys production automatically. There is **no staging branch**; PR preview URLs exist if wanted.
+3. Function logs: Vercel dashboard → Deployments → deploy → Functions tab.
+
+Error fingerprints: generic 500 HTML page = module-load crash (bad import / `.tsx` in api/ / syntax error); JSON error = handler crash; empty response/timeout = function `maxDuration` exceeded (per-route overrides live in `vercel.json` → `functions`).
+
+### Database migrations (SOP)
+
+- Migrations live in `migrations/NNN_description.sql` (196 files, `002`–`195`; note `148` and `153` are each duplicated — sequence is a convention, not a key. Next number: **196**).
+- There is **no migration runner**. The procedure is: write the SQL file in `migrations/`, apply it to the live DB via the **Supabase MCP `apply_migration`** tool (project `qtiscbvhlvdvafwtdtcd`) **before** pushing code that depends on it, then commit both.
+- The repo file is the source-of-truth record; the MCP apply is what actually changes the DB.
+
+### Local dev
+
+`npm run dev` with a `.env.local` carrying at minimum the Supabase URL/keys. Most features hit live external services, so local dev is mainly for UI work; be careful with anything that writes to MYOB/Stripe.
+
+### Remote/mobile ops
+
+A workshop MSI laptop runs OpenSSH + Tailscale + Claude Code; Chris's phone (Tailscale + Termius) can SSH in from anywhere. This is also the **only interactive route to the FreePBX box** (Tailscale IP `100.82.97.46`).
+
+---
+
+## 4. Auth & access model
+
+Four separate authentication schemes coexist. They never overlap.
+
+### 4.1 Staff portal
+
+- Supabase Auth session, cookie `ja-portal-access-token`; identity in `user_profiles`. Opt-in TOTP 2FA (server-side enforced).
+- **Six roles** (`lib/permissions.ts` is the source of truth): `admin`, `manager`, `sales`, `workshop`, `accountant`, `viewer`. (`lib/auth.ts` has a stale 5-role type missing `workshop` — known drift.)
+- Roles map to `view:*` / `edit:*` / `admin:*` permission strings via `ROLE_PERMISSIONS`. Pages gate with `requirePageAuth(ctx, 'permission')`; API routes with `withAuth(permission, handler)` / `requireAdmin`.
+- Two per-user allowlists narrow further: `user_profiles.visible_tabs` (which nav tabs/apps a user sees) and `visible_report_tabs` (which Reports sub-tabs).
+- **User management**: `/settings?tab=users` — invite (Supabase invite email → `/reset-password?welcome=1`), change role, deactivate, delete. Audit log at `/settings?tab=audit`.
+- Session persistence: `SessionKeeper` silently re-syncs cookies from localStorage (never on auth pages) and login pages silently resume valid sessions; deep links use `?next=`.
+
+### 4.2 Distributor (B2B) portal
+
+- Separate cookies `ja-b2b-access-token` / `ja-b2b-refresh-token`; identity in `b2b_distributor_users`. Gate: `requireB2BPageAuth`.
+- Login = email+password with optional TOTP; also magic-link and signed invite tokens (`/b2b/welcome?t=…` — scanner-proof: opening does nothing, only the human submitting the set-password form activates).
+- Users are `owner` or `member` per distributor; one auth user can belong to **multiple distributors** (account switcher, `ja-b2b-dist` cookie).
+- Admin **preview mode**: signed `b2b_preview` token from the admin side renders the portal as a distributor with all non-GET requests blocked.
+- `checkoutEnabled` per distributor = browse-only kill switch.
+
+### 4.3 Supplier portal
+
+Separate again: `b2b_supplier_users`, `requireSupplierPageAuth`, single read-only page (`/b2b/supplier`).
+
+### 4.4 Machine auth
+
+- **Service tokens** (`lib/service-auth.ts`): SHA-256 hashed rows in `service_tokens`, presented as `X-Service-Token` header (deliberately not `Authorization` to avoid clashing with Supabase JWTs). Scoped (`stocktake:write`, `calls:monitor`, `ap:admin`, `reports:read`, `upload:job-report`). Used by GitHub Actions workers and the PBX AMI agent. Managed via `/api/admin/service-tokens`.
+- **Signed capability tokens** in URLs for login-less pages: `/tune-jobs?token=` (distributor-scoped weekly reminder), `/order-action` (admin Book Freight email button).
+- **Device keys**: ESP32 scale modules authenticate to `/api/scales/ingest` with `x-device-key` matched to `scale_devices`.
+- **MCP tokens**: `jap_…` personal tokens (hashed in `mcp_tokens`) or OAuth 2.1 for the read-only Claude connector at `/api/mcp`.
+- **Cron auth**: `Authorization: Bearer $CRON_SECRET` (some handlers also accept the `vercel-cron` user-agent, and some accept a logged-in staffer with the right permission for manual runs).
+
+---
+
+## 5. Connections & integrations
+
+### 5.1 Where credentials live (read this first)
+
+`lib/integration-config.ts` implements a **DB-first resolver**: `getIntegration(key)` = `integration_settings` DB row → env var of same name → `''`. Values cache in-process for 30s. **Always use this resolver, not `process.env`, for the managed keys.**
+
+| Integration | Stored where | Change without redeploy? |
+|---|---|---|
+| ClickSend, Resend, CRM intake token, **Xero app creds**, accounting provider switch | `integration_settings` DB (env fallback) | **Yes** — Settings → Connections → Integrations; live in ~30s |
+| MYOB app creds, Graph, Monday, ActiveCampaign, Stripe, Slack, Anthropic, VAPID, Supabase, GitHub dispatch | Vercel env vars only | No — edit env + redeploy |
+| MYOB / Xero **OAuth tokens** | `myob_connections` / `xero_connections` tables | Yes — re-run connect flow |
+| MachShip token | `b2b_freight_carrier_connections.credentials` JSONB | Yes — Admin B2B → Settings |
+| Service tokens / MCP tokens / scale device keys | `service_tokens` / `mcp_tokens` / `scale_devices` | Yes — respective admin UIs |
+
+Admin surfaces:
+- **Settings → Connections** (`/settings?tab=connections`) — three sub-tabs: **Integrations** (edit DB-managed credentials, test SMS/email, rotate CRM intake token, Xero connect), **Health** (live status board), **MYOB Connection** (connect/select company files).
+- **`/admin/connections`** — standalone auto-refreshing health page (⚠ no SSR auth gate — relies on API-level gating).
+
+### 5.2 MYOB AccountRight (primary accounting — both entities)
+
+- **Code**: `lib/myob.ts` (OAuth + `myobFetch`), `lib/myob-reporting.ts` (replaced CData 2026-07-14 — reporting **must fetch all 4 invoice types**), plus per-module writers (`ap-myob-bill`, `b2b-myob-invoice`, `workshop-myob-invoice`, `stripe-myob-sync`, …).
+- **App creds (env only)**: `MYOB_CLIENT_ID`, `MYOB_CLIENT_SECRET`, `MYOB_REDIRECT_URI`, `MYOB_SCOPE`.
+- **Tokens**: `myob_connections` table, one row per label `JAWS` / `VPS`. Access ~20 min (auto-refresh), refresh ~1 year but **must be exercised regularly** — a multi-week quiet spell can kill the connection.
+- **Connect / re-auth SOP**: Settings → Connections → MYOB Connection → Connect (or `GET /api/myob/auth/connect?label=JAWS|VPS`) → consent → pick company file → if the file is in legacy auth mode, set company-file username/password. Test with `/api/myob/test/invoice?label=VPS`.
+- **Gotchas** (hard-won, in code comments):
+  - Two company-file auth modes — SSO (bearer only) vs legacy (`x-myobapi-cftoken`); header only sent when `company_file_username` is set.
+  - **Never page with bare `$top`/`$skip`** — no stable ordering, rows get skipped. Follow `NextPageLink`, page size 400.
+  - Every call is logged to `myob_api_log`; the insert is `await`ed in `finally` (fire-and-forget logs were killed on timeout).
+  - **`IsTaxInclusive` matters for cent-exact invoices** — B2B invoices are pushed inc-GST with checkout-exact line pricing.
+  - No P&L endpoint exists in AccountRight (the old CData P&L panels were retired).
+
+### 5.3 Xero (migration target — foundation live 2026-08-05)
+
+- **Code**: `lib/xero.ts`, `lib/accounting/xero-adapter.ts`; provider switch in `lib/accounting-provider.ts`.
+- **App creds (DB-managed)**: `XERO_CLIENT_ID`, `XERO_CLIENT_SECRET`, `XERO_REDIRECT_URI` — editable in the Integrations tab.
+- **Setup SOP**: create a Web App at developer.xero.com with the redirect URI shown on the card → paste ID/secret → Save → "Connect Xero" (`/api/xero/auth/start`) → one consent covers both orgs → map tenants to `VPS`/`JAWS` via `/api/xero/connections` PATCH → ping to verify.
+- **Provider switch**: `accountingProvider(entity, module?)` resolves `ACCOUNTING_PROVIDER_{ENTITY}_{MODULE}` → `ACCOUNTING_PROVIDER_{ENTITY}` → default `'myob'`. Entity-wide keys are in the Integrations UI; per-module overrides (AP, STATEMENTS, LETTERS, WORKSHOP, INVENTORY, B2B, REPORTING, STRIPE, BANK) are env-only. After cutover MYOB stays connected read-only for history.
+- **Critical gotcha**: **Xero refresh tokens are single-use and rotate on every refresh** — the new token must be persisted or the connection dies. Refresh is serialised in-process; a cross-instance race shows as `invalid_grant` and self-heals next run. Granular scopes only (bills live under `accounting.invoices`); every call needs the `Xero-tenant-id` header.
+
+### 5.4 Stripe
+
+- **B2B checkout (standalone account `acct_1TrRkZ…`, LIVE keys)**: `lib/stripe.ts` (raw fetch, no SDK). Env: `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`. Webhook `POST /api/b2b/stripe/webhook` (event `checkout.session.completed`; `bodyParser: false` is required for signature verification — do not remove). Idempotent; if the MYOB writeback fails it still 200s and parks the error on `b2b_orders.myob_write_error` for manual retry from the admin order page. Payment methods live: **card (with surcharge), PayTo, BECS direct debit** (BECS settles later — a settle gate + `/api/cron/b2b-payment-check` confirm before fulfilment milestones).
+- **JAWS reconciliation accounts (read-only)**: `lib/stripe-multi.ts`, env `STRIPE_SECRET_KEY_JAWS_JMACX`, `STRIPE_SECRET_KEY_JAWS_ET`, labels registered in `STRIPE_ACCOUNT_LABELS`. Used by `/stripe-myob` push tool and payout reconciliation.
+
+### 5.5 Microsoft Graph (mail)
+
+- **Auth**: app-only client credentials. Env: `GRAPH_TENANT_ID`, `GRAPH_CLIENT_ID`, `GRAPH_CLIENT_SECRET` (+ webhook URLs and ~15 mailbox-assignment vars — see `lib/microsoft-graph.ts` and §22 of the integrations inventory). Azure app needs **Mail.Read, Mail.ReadWrite, Mail.Send with admin consent** (Mail.Send 403 until granted — this bit us).
+- **Webhooks**: `/api/webhooks/graph-mail` (Pipeline A — quote PDFs from rep mailboxes), `/api/webhooks/graph-jobreport-mail` (nightly MD WIP report).
+- **Subscription lifecycle SOP**: subscriptions max out at ~70.5h. The cron `/api/cron/renew-graph-subscriptions` (every 6h) extends anything within 24h of expiry. **Recreating a dead/failed subscription is NOT automated** — re-run `POST /api/admin/setup-graph-subscriptions?key=$GRAPH_ADMIN_SETUP_SECRET` (idempotent).
+- **Adding a rep mailbox** touches three places: `lib/agents.ts` (owner map), `MAILBOX_FOR_NAME` in `pages/api/cron/health-check.ts`, and re-running the setup endpoint.
+- Inbox-driven pipelines that *poll* Graph rather than subscribe: AP inbox pull, AP auto-entry, AP statement watch, tune-jobs receipt scan, drop-ship confirmations, letter watch.
+
+### 5.6 Email (Resend) & SMS (ClickSend)
+
+- **Resend** (`lib/email.ts`): DB-managed keys `RESEND_API_KEY`, `RESEND_FROM`, `RESEND_CAMPAIGN_FROM`, `RESEND_REPLY_TO`, `RESEND_WEBHOOK_SECRET`. If unset, **silently falls back to Graph sendMail**. Delivery/open/bounce webhook: `/api/crm/resend-webhook?key=…`. Per-staff Reply-To comes from `user_profiles.reply_to_email`.
+- **ClickSend** (`lib/clicksend.ts`): DB-managed `CLICKSEND_USERNAME`, `CLICKSEND_API_KEY`, `CLICKSEND_FROM`. Returns `clicksend_not_configured` harmlessly until set. Test buttons for both live in the Integrations tab.
+
+### 5.7 Slack
+
+- **Incoming webhooks** (one env URL per channel): `SLACK_WEBHOOK_URL` plus `SLACK_WEBHOOK_{JAWS_PAYMENTS,VPS_PAYMENTS,JAWS_PAYOUTS,AP_VPS}` and per-tenant B2B order webhook in `b2b_settings`.
+- **Bot** (`lib/slack-bot/*`): env `SLACK_BOT_TOKEN`, `SLACK_SIGNING_SECRET`, `SLACK_ALLOWED_CHANNEL_IDS`, `SLACK_PARTS_ONLY_CHANNEL_IDS` (parts-only channels get exactly one stock-availability answer per top-level message, no thread replies, no clarifying questions), `SLACK_PARTS_CONTACT`. Single endpoint `POST /api/slack/ask` handles events, mentions, `/ask`, and interactive buttons; HMAC verified; acks in <3s then continues via `waitUntil`.
+- The parts bot answers from `md_stock_cache`, refreshed every 30 min by the `md-stock-sync` GitHub Action.
+
+### 5.8 Monday.com & ActiveCampaign (legacy CRM pair — being replaced by the CRM module)
+
+- **Monday** (`lib/monday-followup.ts` is the shared GraphQL client): env `MONDAY_API_TOKEN`, `MONDAY_BUTTON_SECRET`. Five rep quote boards (Dom 5025942308, Kaleb 5025942316, Graham 5026840169, James 5025942292, Tyronne 5025942288). Pipeline A is match-only (never creates items). Button callback: `/api/monday/fetch-call-notes?key=…`.
+- **Quote-channel automations (rebuilt 2026-08-19/20)**: a 3/7/14-day follow-up cadence driven by an `FU Stage` column (1→2→3; "Follow Up Done" advances the stage, resets Contact Attempts, hides the item in Quote - Pending and re-surfaces it when the date arrives). RLMNA counts attempts: **5 tries in Quote - Lead RLMNA → Quote Not Issued**, **3 tries in Quote - Follow up RLMNA → Quote Lost**. After the third follow-up the owner is notified that the decision must be Won or Lost.
+  - **Two landmines, both fixed 2026-08-20, worth knowing if the boards misbehave again.** (1) Graham's legacy `RLMNA - Step 1` had no group condition and his `Follow up RLMNA - Step 1` incremented the counter twice, so one RLMNA click added +3 attempts and lost the quote on the first click; rebuilt as new-builder workflows 1940255686 / 1940255690 with the move ordered *before* the increment. (2) The Follow-Up-Done handlers are gated on `FU Stage is exactly 1/2/3`, so a **blank** FU Stage makes the click do nothing at all, silently — 132 items (mostly the On Hold cohort the migration skipped) were backfilled to stage 1.
+  - **MCP cannot delete or deactivate Monday automations** (`USER_UNAUTHORIZED`, even for the account owner — the connector lacks the scope). The workaround is always: create a corrected version, add the bad one to a manual delete list. `create_automation` is also **nondeterministic** — always re-dump with `list_automations` and check the block config; phrase status triggers as "changes to X (from any previous status)" or it will set the from-status to the same label and the workflow can never fire.
+- **ActiveCampaign** (`lib/activecampaign.ts`): env `ACTIVECAMPAIGN_API_URL`, `ACTIVECAMPAIGN_API_KEY`, owner map etc. **Landmine documented in code: `filters[phone]` is a partial match and matches everything on an empty query** — every match must be re-verified by exact digit comparison (this mis-attributed a contact to 26 customers in production once).
+
+### 5.9 MachShip (B2B freight)
+
+- **Code**: `lib/b2b-machship.ts` + `lib/b2b-freight-carriers.ts` (provider registry — Shippit/Starshipit/AusPost/Sendle slots exist but only MachShip is implemented).
+- **Credential**: NOT env — `b2b_freight_carrier_connections` row `provider='machship'`, JSONB `api_token`, header `token:` (not Bearer). Change it in Admin B2B → Settings; effective next call.
+- Base `https://live.machship.com` (no sandbox host — test vs live is a property of the token's MachShip user). **Manifesting needs `companyId`, obtained via a consignment GET.** Booking runs with `maxDuration: 120`; consignments that die at MachShip park as `consignment_missing`; `/api/cron/b2b-freight-poll` refreshes status/ETA every 30 min.
+
+### 5.10 Phones: FreePBX + Deepgram + live monitoring
+
+The portal never calls Asterisk or Deepgram directly — an on-PBX host (CentOS 7, Tailscale `100.82.97.46`) runs four workers and **Supabase is the bus**:
+
+| PBX worker | What it does |
+|---|---|
+| `ja-cdr-sync` (`sync.js`) | CDR → Supabase `calls` every 5 min (service-role key). Includes park-pickup CDR fix (2026-08-07). |
+| `ja-transcribe` (`transcribe.js`) | New calls → Deepgram (`nova-2-phonecall`, `en-AU`) → `call_transcripts`. Deepgram key lives on the PBX host. |
+| `ja-ami-monitor` | Live channel snapshots → `POST /api/calls/live/agent/snapshot` (~2s, `X-Service-Token` scope `calls:monitor`); drains `call_monitor_events` for Listen/Whisper/Barge and click-to-dial originate. |
+| `ja-freightbay` / `ja-partsroom` | Hikvision NVR intrusion events → Slack snapshot bursts + Yealink ring. **Node 16 only** (glibc). Doesn't touch the portal API. |
+
+Analysis note: `/opt/ja-cdr-sync/analyse.js` + `slack-poster.js` on the PBX do the call coaching; the portal's `/api/cron/calls-analyse` equivalent is **gated off by default** (`CALLS_ANALYSIS_ENABLED`) and must stay off while the PBX loop runs. Browser softphone (SIP.js over WSS) config is env `NEXT_PUBLIC_FREEPBX_WSS_URL` etc.; TURN needed on mobile networks.
+
+### 5.11 Anthropic / Claude API
+
+Env `ANTHROPIC_API_KEY`; raw fetch to `/v1/messages`. 18 call sites: AP extraction & statement parsing, quote PDF extraction, call analysis/coaching/concerns/weekly report, follow-up summaries, workshop-map weekly narrative, B2B drop-ship confirmation reading, training-course generation, tune-job receipt extraction, report narratives, sales-recap flags, Slack bot, portal chat. Most models overridable per-feature via env (`*_MODEL` vars).
+
+### 5.12 Everything else
+
+- **Web Push**: `NEXT_PUBLIC_VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` (watch for whitespace in env values — known gotcha); dormant no-op when unset.
+- **MCP connector**: portal is a read-only MCP server at `/api/mcp` (personal `jap_` tokens from Settings, or OAuth 2.1 with dynamic client registration).
+- **Google Places** (`NEXT_PUBLIC_GOOGLE_PLACES_API_KEY`, client-exposed — must be referrer-restricted) for workshop address autocomplete; **Nominatim** (keyless, throttled ~1 rps) geocodes tune-job addresses; an offline AU postcode dataset powers the workshop map.
+- **GitHub dispatch**: `GH_DISPATCH_TOKEN` (`actions:write`) lets portal routes fire `repository_dispatch` events to run MD workers on demand.
+- **Website lead intake**: `POST /api/crm/intake` guarded by `x-crm-token` = DB-managed `CRM_INTAKE_TOKEN` (rotate from the Integrations tab).
+- **CData MCP**: decommissioned 2026-07-14. `lib/cdata.ts` is dead code; health check hardcoded green/deprecated.
+- **Base URL sprawl**: seven overlapping env vars (`NEXT_PUBLIC_APP_URL`, `NEXT_PUBLIC_SITE_URL`, `NEXT_PUBLIC_BASE_URL`, `NEXT_PUBLIC_PORTAL_URL`, `PORTAL_PUBLIC_URL`, `APP_BASE_URL`, `JA_PORTAL_BASE_URL`, `B2B_PUBLIC_BASE_URL`) — keep them consistent; mismatches silently break OAuth redirects and email links.
+
+---
+
+## 6. Scheduled automation
+
+### 6.1 Vercel crons (23 — `vercel.json`; schedules are UTC; Brisbane = UTC+10)
+
+| Cron | Brisbane time | Purpose |
+|---|---|---|
+| `/api/distributors/refresh-cache` | 02:00 daily | Warm `distributors_cache` (FY figures + last 13 months) |
+| `/api/cron/sync-followups` | every 5 min | Call follow-ups → Claude summary → AC contact + Monday push (`FOLLOWUP_SYNC_ENABLED` kill switch) |
+| `/api/cron/calls-analyse` | every 5 min | Portal-side call coaching sweep — **off by default** (`CALLS_ANALYSIS_ENABLED`); PBX box currently does this |
+| `/api/cron/calls-weekly-report` | Mon 07:00 | Weekly coaching narrative → `#sales-coaching` |
+| `/api/cron/workshop-map-weekly` | Mon 07:10 | Quotes/jobs geography report → email Matt (cc Ryan, Chris) |
+| `/api/cron/renew-graph-subscriptions` | every 6 h | Extend Graph mailbox subscriptions expiring <24h |
+| `/api/cron/health-check` | every 5 min | The 21 integration health checks → `integration_health` |
+| `/api/cron/b2b-freight-poll` | every 30 min | MachShip status/ETA poll on open consignments |
+| `/api/cron/workshop-reminders` | every 15 min | Queue + send service/rego reminder SMS (respects `sms_enabled`) |
+| `/api/cron/notifications-sweep` | every 15 min | Bell notifications for Monday-side events (new leads, new to-dos) |
+| `/api/cron/b2b-payment-check` | every 6 h | Confirm BECS settlement in MYOB → mark `payment_settled_at` |
+| `/api/cron/crm-automations` | every 5 min | CRM automation flow engine |
+| `/api/cron/task-automations` | every 5 min | Tasks automation flow engine |
+| `/api/cron/crm-campaigns` | every 5 min | Campaign scheduler + Resend queue drain + call linkage |
+| `/api/cron/ap-statement-watch` | every 10 min | Supplier statements → reconcile vs MYOB → digest email (report-only) |
+| `/api/cron/ap-auto-entry` | every 15 min | VPS inbox → fact-check → auto-post clean invoices to MYOB (`AP_AUTO_ENTRY_ENABLED`) |
+| `/api/cron/overnight-leads-snapshot` (+morning variant) | every 30 min / 5 min 06–08 | Snapshot Monday lead groups for the sales recap |
+| `/api/cron/letter-watch` | hourly | New finalised MYOB VPS invoices → thank-you letter + envelope print jobs (deposit-only invoices vetoed) |
+| `/api/cron/agents` | every 15 min | Monitoring agents framework (`lib/agent-framework`) |
+| `/api/cron/tune-jobs` | hourly :20 | Scan inbox for Stripe tune receipts; Monday-morning reminders/escalations |
+| `/api/cron/b2b-dropship-confirm` | every 15 min | Supplier confirmation emails → full drop-ship receiving flow |
+| `/api/cron/mgmt-dashboard-warm` | 05:30 daily | Pre-compute Management Dashboard MYOB bundles |
+
+⚠ Two handlers exist but are **not scheduled** (headers claim otherwise): `bank-payments-slack.ts` (7am payment digests) and `slack-cleanup.ts` (parts-bot TTL deletes). Manual-invoke only until added to `vercel.json`.
+
+### 6.2 GitHub Actions (Mechanics Desk workers — 16 workflows)
+
+MD has no API; these Playwright workers log in with `MECHANICDESK_{WORKSHOP_ID,USERNAME,PASSWORD}` secrets and talk back to the portal with `X-Service-Token: $JA_PORTAL_API_KEY`. All install Chromium at run time (`setup-node@v5` + `npx playwright install chromium` — the old "run in the MCR container" note in `05_INTEGRATIONS.md` is obsolete). **`playwright` in devDependencies must match the installed version (1.59.1).** MD allows a single session per employee — concurrency groups prevent workers evicting each other.
+
+| Workflow | Schedule (Brisbane) / trigger | Job |
+|---|---|---|
+| `mechanicdesk-pull` | 08/10/12/14/16:00 | MD WIP report → forecast ingest |
+| `md-stock-sync` | every 30 min, 06:00–19:30 Mon–Sat | Full MD stock catalogue → `md_stock_cache` (Slack parts bot) |
+| `md-workshop-map` | 03:30 nightly | Full invoices/quotes/customers pull → workshop map (FY2025 was a one-time backfill; nightly FROM = 2025-07-01) |
+| `mechanicdesk-prepick` | 06/11/15:00 weekdays | Diary-job parts demand → Pre Pick snapshot |
+| `sales-recap` | Mon 07:00 full+email; ~7 intraday MD refreshes | Weekly Sales Recap (Monday boards + MD scrape → email Ryan) |
+| `md-customer-import` | 02:00 nightly | Monday quote-channel leads → MD customers (MD can't search phones) |
+| `tune-jobs-md` | 02:30 nightly | Submitted tune jobs → MD customer + vehicle + note |
+| `mechanicdesk-stocktake` | `repository_dispatch` | Stocktake match / push / recheck / refresh / push-missing |
+| `md-purchase-order` | `repository_dispatch` | Raise MD PO after a JAWS→VPS stock transfer |
+| 7 × `probe-md-*` / `fix-md-customer-names` | manual | Endpoint recon probes and one-off repairs |
+
+### 6.3 On-premise agents
+
+| Agent | Where | Notes |
+|---|---|---|
+| `label-print-agent` (`agents/label-print-agent/`) | **PORTAL-CENTRE** (dedicated always-on ThinkCentre, comms room) | Consumes `label_print_jobs` via Supabase Realtime (30s poll fallback). Kinds: `label` (DYMO 4XL), `invoice`, `letter`, `envelope` (Epson). **Never restarts on deploy** — new print kinds must not require agent changes. Runs via Startup shortcut → `run-agent-hidden.vbs` or NSSM. Node 22, Autologon, reachable on Tailscale `100.72.189.95`; built 2026-08-20, runbook `docs/print-centre-thinkcentre-setup.md`. Previously ran on Chris's MSI laptop and failed silently whenever it was off-network — that is what the dedicated box fixes. **Never trust the Apeos `(Copy 1)` printer-name suffix.** |
+| PBX workers | FreePBX box | See §5.10. systemd units; Node 16 for the camera bridges. |
+| ESP32 scale nodes | Workshop bins / cash-count rig | Firmware `hardware/ja-scale-node/`; raw HX711 counts to `/api/scales/ingest`; all calibration server-side. |
+
+---
+
+## 7. Modules & SOPs
+
+Full route-by-route inventory: 111 page routes (423 API routes). Staff nav is the `/home` app launcher (role- and `visible_tabs`-filtered). Below, per module: what it is + how to operate it.
+
+### 7.1 Dashboards (`/dashboard`, `/overview`, `/home`)
+
+Section-based management dashboard (JAWS+VPS merged, entity filter pills) and a drag/resize custom dashboard builder with per-user saved layouts. **SOP**: nothing operational — data flows from MYOB reporting caches; if figures look stale, check the 02:00 `distributors/refresh-cache` cron and the health page.
+
+### 7.2 Workshop (26 routes — the Mechanics Desk replacement)
+
+Diary · Jobs · Job Card · Quotes · Customers · Vehicles · Orders · Invoices · Comms · Letters · Inventory (Live Bins, Cash Count, Pre Pick, Suppliers, Purchase Orders, Stocktakes, Stock Transfer) · Reports · Settings. Parity checklist and MD-cancellation checklist: `docs/workshop_md_parity.md`.
+
+**Daily flow SOP**
+1. **Booking**: `/diary` → click a slot in a technician lane → quick-add customer (Places autocomplete) + vehicle → job created. Drag to move/resize; split jobs supported.
+2. **Job Card** (`/workshop/job/[id]`): add labour + parts (inventory picker), record time clock, photos/files, take payments by tender, SMS the customer, print/email invoice PDF.
+3. **Invoice → MYOB**: push from the job card (uses `workshop_settings` MYOB account mapping; `myob_posting_enabled` is the go-live flip).
+4. **Quotes**: `/workshop/quotes` → build → convert-to-job on acceptance.
+5. **Reminders**: service/rego reminders queue automatically; sending requires `workshop_settings.sms_enabled` + ClickSend creds. Check `/workshop/comms` for send history. *Known gap: moving a booking doesn't reschedule an already-queued reminder SMS.*
+6. **Letters**: hourly `letter-watch` cron queues a thank-you letter + envelope for each new finalised MYOB invoice (deposit-only invoices are vetoed by a positive 1-1230 line). Reprint/compose/templates at `/workshop/letters`. Printing happens on the workshop PC agent.
+7. **Parts**: `/workshop/orders` (per-day parts worklist), `/workshop/prepick` (14-day demand vs stock), `/workshop/purchase-orders` (draft→sent→received, MYOB bill push), `/workshop/suppliers`.
+8. **Stocktake (portal-native)**: `/workshop/stocktake` → create session → barcode-scan counting → Variance → Apply.
+9. **Settings** (`/workshop/settings`, admin): letterhead, MYOB accounts/mode, SMS settings, technicians & diary lanes.
+
+**Data migration**: `/imports` wizard (customers, vehicles, inventory, job types, quotes, invoices from MD exports) — this was the MD cutover path.
+
+### 7.3 B2B — distributor portal (`/b2b/*`)
+
+Distributor experience: Shop → Cart (PO number required, ≤20 chars — MYOB limit) → Stripe Checkout (card+surcharge / PayTo / BECS) → Orders (status timeline + freight tracking) → Jobs (tune receipts to fill in) → Resources → Training → Team → Settings. Design language: the Alloy kit (`components/b2b/ui.tsx`) — distributor portal refreshed 2026-08-12, staff admin brought onto the same kit 2026-08-20.
+
+**What happens automatically on payment** (`lib/b2b-order-pipeline.ts`): order → paid; cart cleared; MYOB invoice written cent-exact inc-GST; consignment-first pick list printed; for drop-ship items a supplier PO is created and emailed; Slack notification; freight bookable via MachShip (admin button or login-less email link). **The tax invoice is NOT raised at booking** — see Freight & despatch below.
+
+**SOPs**
+- **Onboard a distributor**: Admin → B2B → Distributors → Add (live MYOB customer typeahead links the card) → open the distributor → Invite users (magic-link / welcome token email). Owners manage their own team after that.
+- **Over-limit orders**: quantities above `over_limit_qty` route to a quote-or-dropship flow instead of straight checkout.
+- **Bundles**: "includes" children ship inside the parent's box (affects freight cartonization).
+- **Refunds**: admin order page → Refund modal → **Items mode** (pick lines + quantities; amount derived server-side from checkout-exact pricing; `refunded_qty` prevents double refunds) or amount modes (covers freight/surcharge). Mirrored to MYOB as a credit note with negative item lines (Xero path posts on B2B_SALES).
+- **Drop-ship receiving**: supplier replies to the PO email → `b2b-dropship-confirm` cron reads it → auto-bills the PO, flips the sale order to invoice, receipts payment, relays ETA to the distributor, posts to `#jaws-orders`. Manual MYOB conversions are adopted rather than duplicated.
+- **Freight & despatch (changed 2026-08-20 — read this)**: booking and despatch are now two separate steps.
+  - **Book Freight** only *prepares*: it creates the MachShip consignment (left **Unmanifested**) and prints the pick slip + consignment note/labels so the order can be picked and packed. Nothing reaches the carrier at this point and no tax invoice is raised.
+  - **Ship Now** (`lib/b2b-ship-now.ts`) is what actually despatches: manifests the consignment, converts the MYOB Sale.Order → Sale.Invoice, receipts the payment against it, prints the A4 tax invoice, emails/pushes the distributor and stamps `shipped_at`.
+  - Bulk despatch is deliberately **one manifest, not N** — MachShip's manifest call also books a carrier pickup window, so manifesting ten consignments individually would raise ten pickup requests. Select the run and ship it in one action.
+  - This reverses the 2026-08-06 behaviour where booking manifested immediately. If nothing is reaching the carrier, the likely answer is simply that nobody has pressed Ship Now.
+  - Rates: per-zone + flat-rate satchels (weight-gated; satchel rows may need seeding) + drop-ship per-zone rates; calibration panel at Admin → B2B → Dropship Calibration. If a consignment goes missing at MachShip it parks as `consignment_missing` — rebook from the order page.
+- **Tune jobs**: Stripe receipt lands in the accounts inbox → hourly cron extracts it → distributor fills customer/vehicle at `/b2b/jobs` (or the login-less weekly reminder link) → nightly GH Action creates the MD customer/vehicle/note; Monday item + thank-you letter follow. One job per VIN. Staff-side management (aliases, retries, dismiss) at Admin → B2B → Tune Jobs.
+- **Training**: Admin → B2B → Training → assign per distributor or per user (assignment-gated). Courses can be generated from an uploaded PDF (LLM pipeline). Edit quiz answers at `.../training/[slug]/answers`; preview renders the real player without recording attempts.
+- **Testing safely**: Admin → B2B → Test Order exercises the full real pipeline against a chosen distributor.
+
+### 7.4 B2B — staff admin (`/admin/b2b/*`)
+
+Dashboard · Catalogue (inline price/visibility edits + drawer) · Stock Order (reorder forecasting, replaces the JAWS Excel) · JAWS Stocktake (count-sheet vs MYOB on-hand, **report-only**) · Stock Wall (saved on-hand tile views; also what suppliers see) · Stock Transfer (JAWS↔VPS paired invoice+bill + MD PO) · Distributors · Suppliers (logins) · Orders · Tune Jobs · Resources (sectioned doc library, signed uploads) · Training · Settings (Stripe status, freight carriers/zones/packaging, sender address, email templates).
+
+### 7.5 Accounts Payable (`/ap`, `/ap/[id]`, `/ap/statement`)
+
+Supplier emails → Graph inbox pull → Claude extraction → triage list.
+
+**Daily SOP (Amanda)**: `/ap` → Pull from Inbox if needed → review each invoice (`/ap/[id]`: PDF preview, line editor with account suggestions, MD job link, supplier presets) → Approve (pushes header + lines to the right MYOB entity) or Reject. Green-triage rows support bulk approve.
+
+**Automation**: `ap-auto-entry` cron (VPS, gated by `AP_AUTO_ENTRY_ENABLED`) posts clean invoices automatically and Slacks a breakdown; supplier allowlists control consolidated and pay-on-proforma handling; duplicates get a ♻️ Slack and are filed to Read/Printed; **locked-period invoices are flagged, never auto-redated**; supplier matching is suffix-blind; link-only emails (no PDF attached) are invisible to the pipeline. `ap-statement-watch` cron reconciles statement PDFs against MYOB and emails a digest (report-only; Capricorn statements are report-only by policy). Manual statement recon UI: `/ap/statement`.
+
+### 7.6 CRM (`/crm/*`)
+
+Pipeline kanban, contacts (+timeline), campaigns (Resend), React Flow automations. Replaces Monday quote boards + ActiveCampaign + Zapier — **manual cutover steps are recorded in the project memory/notes; AC + Monday remain live in parallel until cutover**. Website leads arrive via `/api/crm/intake` (token-guarded). Three crons drive automations/campaigns/call-linkage every 5 min.
+
+### 7.7 Calls (`/calls`)
+
+CDR list with audio, transcripts, coaching analysis (per-call-type rubrics), Sentiment/Coaching/Words/Conversion tabs, live Listen/Whisper/Barge (needs `monitor:calls`), click-to-dial (`use:phone`, `NEXT_PUBLIC_CLICK_TO_DIAL=1`). Coaching attribution keys on the transcript-identified effective advisor. Weekly coaching report posts to Slack Monday 07:00. **Negative-call (concerns) automation is fully built but switched OFF** — `CALL_CONCERNS_ENABLED=true` resumes it.
+
+**SOP if calls stop appearing**: check Connections page (`freepbx_cdr_sync` freshness) → SSH to the PBX via Tailscale → check `ja-cdr-sync` systemd timer. Transcripts stale → `ja-transcribe`. Live monitor "not configured" → `ja-ami-monitor` hasn't pushed a snapshot in >20s.
+
+### 7.8 Reports (`/reports/*`)
+
+Builder (7 PDF report types) · Sales Report (live Weekly Sales Recap; **"sales" = orders taken from Monday boards + MD, not turnover**; auto-emails Ryan Mon 07:00) · Management Dashboard (JAWS weekly Excel replica from live MYOB; config-driven charts; clickable KPI history; cache warmed 05:30) · Workshop Map (nightly MD pull; `lib/workshop-map` classification is authoritative; FY picker; five tabs — Jobs Map, Quotes Map, Conversion, By State, **Vehicle Trend**: one line per vehicle series, All FY = monthly buckets, pick a month = daily buckets, measures Jobs/Quotes/Job $/Quoted $. The trend counts every invoice and quote, so its totals run higher than the map tabs, which show one dot per customer per month) · Distributor Map (quotes near each distributor vs confirmed Monday bookings). Per-user report-tab allowlists control who sees what.
+
+### 7.9 Tasks & Projects (`/tasks`, `/projects`, `/todos`)
+
+Tasks: Monday-style board/list + React Flow automations (5-min cron). Projects: force-directed web of the six Monday "Hidden To Do" boards with comment posting back to Monday. To-Dos: manager scorecards over the same boards.
+
+### 7.10 Messaging (`/messages`) & Notifications
+
+Portal-native channels/DMs (Slack replacement for internal chat; WhatsApp/Messenger/IG phases not built). Notification bell + badges with 8 emitters; Web Push for staff and distributors (PWA installable).
+
+### 7.11 Agents (`/agents`)
+
+Monitoring-agent inbox (`lib/agent-framework` — not `lib/agents`, which is Pipeline A's mailbox map). Agents run every 15 min via cron; findings are triaged Dismiss / Mark done.
+
+### 7.12 Stocktake — Mechanics Desk (`/stocktake`)
+
+Upload count XLSX → Run Match (dispatches GH Action; includes coverage check) → review variance → Push to MD. Counted rows are sacred (row_number bug fixed 2026-07-30). MD is single-session — a stocktake run can 401 if someone logs into MD as the same employee mid-run (known, deferred).
+
+### 7.13 Stripe→MYOB (`/stripe-myob`)
+
+Lists Stripe invoices per account label and pushes them to MYOB as Professional Invoice + Customer Payment pairs; payout reconciliation endpoints support the JAWS accounts.
+
+### 7.14 Sales/analysis surfaces
+
+`/distributors` (group-aware revenue reporting; groups managed at `/admin/groups`), `/sales`, `/stock` (⚠ no SSR gate), `/forecasting` (MD job report forecast; `/jobs` redirects here), `/vehicle-sales` (platform classification cache from VPS invoices), `/job-reports` (MD job report ingest for PO→job matching).
+
+### 7.15 Settings (`/settings`)
+
+Tile launcher: General · Connections (Integrations / Health / MYOB) · Distributor Report config · VIN Codes · Users · Audit log · Profile · Claude connector (MCP tokens) · Service tokens.
+
+---
+
+## 8. Monitoring & troubleshooting
+
+1. **First stop**: `/admin/connections` (or Settings → Connections → Health). 21 checks across accounting / workshop / comms / crm / phone / infra, written every 5 min by the health cron. Manual force: `curl -H "Authorization: Bearer $CRON_SECRET" https://justautos.app/api/cron/health-check?force=1`.
+2. **Freshness-based checks** (PBX CDR sync, transcribe, Deepgram, MD pulls) go red when data stops arriving — the fix is on the source host/worker, not the portal.
+3. **Graph mailbox rows red** → renewal cron failed or the subscription died: re-run `setup-graph-subscriptions` (idempotent).
+4. **MYOB rows red** → token lapsed: re-run the connect flow (Settings → MYOB Connection). Remember refresh tokens die if unused for weeks.
+5. **GH Actions rows red** → check the Actions tab on the repo; MD workers upload failure artifacts and Slack on failure.
+6. **A B2B order paid but no MYOB invoice** → `b2b_orders.myob_write_error`; fix cause, retry from the admin order page. Stripe webhook itself is idempotent.
+7. **Prints not coming out** → the workshop PC agent: check the tray/NSSM service; it drains pending jobs on startup, so restarting it usually clears the backlog.
+
+---
+
+## 9. Known risks, debt & outstanding items (as of 2026-08-20)
+
+**Security**
+- Supabase `service_role` key was exposed in an April 2026 session and **has never been rotated**. Rotation must update: Vercel env, the FreePBX host workers, the workshop print agent `.env`, and GitHub Actions secrets — all hold it.
+- Repo working tree contains `agents/label-print-agent/.env` and `hardware/ja-scale-node/secrets.h` — verify both are gitignored and never committed with live values.
+- `NEXT_PUBLIC_GOOGLE_PLACES_API_KEY` is client-exposed — must stay referrer-restricted.
+- Three pages lack SSR auth gates (`/stock`, `/imports`, `/admin/connections`) — API-level gating covers data but the pages render.
+
+**Consistency / drift**
+- `lib/auth.ts` role type is missing `workshop` (use `lib/permissions.ts`).
+- Migrations `148` and `153` are duplicated numbers; latest applied is `196_md_vehicle_trend`, so next is `197`.
+- `bank-payments-slack` and `slack-cleanup` cron handlers exist but aren't scheduled in `vercel.json`.
+- Seven overlapping base-URL env vars.
+- Older docs (`03`, `05`, `07`) predate the CData decommission, workshop go-live, B2B rollout and Xero foundation — trust this document and the code.
+
+**Operational**
+- MYOB and Xero OAuth tokens need periodic exercise; Xero refresh tokens are single-use (rotation is handled, but never hand-edit the row).
+- The FreePBX box is CentOS 7 — camera bridges pinned to Node 16; the whole host is a single point of failure for calls, coaching, and camera alerts. `sip-loss-monitor.sh` may still be running there from the phone-dropout investigation (upstream/FreedomBroadband was the cause) — clean up when resolved.
+- MechanicDesk is still being scraped by 9 scheduled workers; when MD is cancelled, follow the checklist in `docs/workshop_md_parity.md` (final import, first live MYOB push, `myob_posting_enabled`, ClickSend creds, stock-transfer re-point) and retire the workers.
+- Parked/off: negative-call automation (`CALL_CONCERNS_ENABLED`), portal-side calls analysis cron, Places key on New Booking quick-add (key unset), first real JAWS→VPS stock transfer pending, Live Bins hardware untested in production, live call monitoring WSS keep-alive retest pending.
+- MYOB→Xero migration: foundation only — adapter waves per module still to come; both entities eventually move.
+
+---
+
+## 10. Key file index
+
+| Area | Files |
+|---|---|
+| Auth/permissions | `lib/permissions.ts`, `lib/authServer.ts`, `lib/auth.ts`, `lib/b2bAuthServer.ts`, `lib/b2bSupplierAuth.ts`, `lib/service-auth.ts` |
+| Credential resolver | `lib/integration-config.ts`, `pages/api/admin/integrations.ts`, `components/settings/IntegrationsTab.tsx` |
+| Accounting | `lib/myob.ts`, `lib/myob-reporting.ts`, `lib/xero.ts`, `lib/accounting-provider.ts`, `lib/accounting/*` |
+| B2B pipeline | `lib/b2b-order-pipeline.ts`, `lib/b2b-payment.ts`, `lib/b2b-myob-invoice.ts`, `lib/b2b-machship.ts`, `lib/b2b-freight-*.ts`, `lib/b2b-dropship-*.ts`, `lib/b2b-tune-jobs.ts` |
+| AP | `lib/ap-extraction.ts`, `lib/ap-auto-entry.ts`, `lib/ap-statement-watch.ts`, `lib/ap-myob-bill.ts` |
+| Workshop | `pages/workshop/*`, `lib/workshop-*.ts`, `docs/workshop_md_parity.md` |
+| Calls | `lib/live-calls.ts`, `lib/calls-analysis.ts`, `lib/softphone.ts`, `docs/pbx_click_to_dial_worker.md` |
+| Mail | `lib/microsoft-graph.ts`, `lib/email.ts`, `lib/agents.ts` (mailbox→owner map) |
+| Health | `pages/api/cron/health-check.ts`, `pages/admin/connections.tsx` |
+| Workers | `.github/workflows/*`, `scripts/*`, `agents/label-print-agent/`, `agents/ja-freightbay/`, `hardware/ja-scale-node/` |
+| Config | `vercel.json` (crons + maxDurations), `migrations/` |
