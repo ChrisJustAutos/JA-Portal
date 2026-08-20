@@ -43,7 +43,7 @@ It is one Next.js application that contains: a **staff portal** (dashboards, wor
 ```
                           ┌────────────────────────────────────────┐
                           │  Vercel (Next.js app, justautos.app)   │
-   Staff browsers ───────▶│  pages/        UI (109 routes)         │
+   Staff browsers ───────▶│  pages/        UI (110 routes)         │
    Distributor browsers ─▶│  pages/api/    ~all business logic     │
    Suppliers ────────────▶│  23 crons (vercel.json)                │
                           └───────┬──────────────────┬─────────────┘
@@ -377,7 +377,7 @@ MD has no API; these Playwright workers log in with `MECHANICDESK_{WORKSHOP_ID,U
 
 ## 7. Modules & SOPs
 
-Full route-by-route inventory: 111 page routes (423 API routes). Staff nav is the `/home` app launcher (role- and `visible_tabs`-filtered). Below, per module: what it is + how to operate it.
+Full route-by-route inventory: 112 page routes (424 API routes). Staff nav is the `/home` app launcher (role- and `visible_tabs`-filtered). Below, per module: what it is + how to operate it.
 
 ### 7.1 Dashboards (`/dashboard`, `/overview`, `/home`)
 
@@ -456,7 +456,17 @@ CDR list with audio, transcripts, coaching analysis (per-call-type rubrics), Sen
 
 ### 7.8 Reports (`/reports/*`)
 
-Builder (6 PDF report types — Workshop Performance was removed 2026-08-20; it reported over the portal workshop tables, which stay empty while MechanicDesk is the system of record) · Sales Report (live Weekly Sales Recap; **"sales" = orders taken from Monday boards + MD, not turnover**; auto-emails Ryan Mon 07:00) · Management Dashboard (JAWS weekly Excel replica from live MYOB; config-driven charts; clickable KPI history; cache warmed 05:30) · Workshop Map (nightly MD pull; `lib/workshop-map` classification is authoritative; FY picker; five tabs — Jobs Map, Quotes Map, Conversion, By State, **Vehicle Trend**: one line per vehicle series, All FY = monthly buckets, pick a month = daily buckets, measures Jobs/Quotes/Job $/Quoted $. The trend counts every invoice and quote, so its totals run higher than the map tabs, which show one dot per customer per month) · Distributor Map (quotes near each distributor vs confirmed Monday bookings). Per-user report-tab allowlists control who sees what.
+Builder (6 PDF report types — Workshop Performance was removed 2026-08-20; it reported over the portal workshop tables, which stay empty while MechanicDesk is the system of record) · Sales Report (live Weekly Sales Recap; **"sales" = orders taken from Monday boards + MD, not turnover**; auto-emails Ryan Mon 07:00) · Management Dashboard (JAWS weekly Excel replica from live MYOB; config-driven charts; clickable KPI history; cache warmed 05:30) · Workshop Map (nightly MD pull; `lib/workshop-map` classification is authoritative; FY picker; five tabs — Jobs Map, Quotes Map, Conversion, By State, **Vehicle Trend**: one line per vehicle series, All FY = monthly buckets, pick a month = daily buckets, measures Jobs/Quotes/Job $/Quoted $. The trend counts every invoice and quote, so its totals run higher than the map tabs, which show one dot per customer per month) · Distributor Map (quotes near each distributor vs confirmed Monday bookings) · **Forecast** (admin+manager; portal rebuild of the Monday "Forecast Dashboard - Includes JAWS" — see below). Per-user report-tab allowlists control who sees what.
+
+**Forecast** (`/reports/forecast`, added 2026-08-21). The portal rebuild of the Monday **"Forecast Dashboard - Includes JAWS"** (dashboard 349826), which sits on the Monday **"Forecasting"** board `1842188200`. `lib/forecast-monday.ts` pulls the board live on every load — 24 items, one Monday query, nothing cached or stored — and `GET /api/reports/forecast` serves month × entity × year turnover. Admin + manager only, same as the Management Dashboard.
+
+Three things about that board that the parser has to defend against, all confirmed against live data:
+
+- **Item names are unreliable, so the month always comes from the GROUP.** The December group contains an item titled "November Job Report - JAWS", March's is "Mach Job Report" (typo), and August's and September's are simply "JAWS". Reading the month from the title silently misfiles rows.
+- **The board's "% Increase/Decrease" column is sparse and inconsistent** (populated on a handful of JAWS rows). It is carried through for reference, but every percentage the report displays is computed from the turnover figures.
+- **Months after the current one hold orders already booked, not turnover earned.** They are drawn outlined rather than filled and excluded from the year-on-year headline — summing them against a full prior year would understate the business badly. Only completed months (`lastCompleteMonthIndex`) feed the totals.
+
+Entity is `JAWS` when the item name mentions JAWS, `VPS` otherwise; blanks stay `null` rather than collapsing to `$0`, so "no data" never reads as "no turnover". The year-on-year chart deliberately shows **two** series, not three: three years of one hue fail the normal-vision colour-separation floor (ΔE 14 — indistinguishable even with full colour vision), so 2024 lives in the table beneath. Series colours are CSS variables with separately validated light and dark steps; note that CSS-var colours do not resolve in SVG presentation *attributes*, so every fill goes through `style={{}}`.
 
 **Where the reports get their data** (audited 2026-08-20 when the workshop module was parked — nothing else needed reworking):
 

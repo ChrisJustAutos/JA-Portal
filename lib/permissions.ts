@@ -146,6 +146,7 @@ export const REPORT_TAB_HREFS: Record<string, string> = {
   'reports': '/reports',
   'sales-report': '/reports/sales-report',
   'mgmt-dashboard': '/reports/mgmt-dashboard',
+  'forecast': '/reports/forecast',
   'workshop-map': '/reports/map',
   'distributor-map': '/reports/distributor-map',
 }

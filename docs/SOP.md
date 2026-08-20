@@ -260,7 +260,20 @@ Click-to-dial is available where enabled.
 
 **Reports → Management Dashboard.** The JAWS weekly Excel, live from MYOB. KPI tiles are clickable for history, and charts can be expanded. The cache is warmed at 05:30, so early-morning figures are quick.
 
-### 8.3 Workshop Map & Conversion
+### 8.3 Forecast
+
+**Reports → Forecast.** Turnover month by month, this year against last, for the workshop (VPS) and wholesale (JAWS) sides. Switch between Combined, Workshop and Wholesale with the buttons top-right. Managers and admins only.
+
+It reads the Monday **Forecasting** board live, so whatever the board says is what you see — if a month looks wrong, fix it on the board and reload.
+
+Two things to read correctly:
+
+- **The headline compares completed months only.** The current month is still running and is shown separately, so the year-on-year figure is like-for-like rather than flattered or penalised by a part-month.
+- **Months that haven't started yet show orders already booked, not turnover.** They appear as outlined bars and are left out of the headline. A small bar for a future month is normal — it is the bookings taken so far, not a forecast of a bad month.
+
+The change percentages are worked out from the turnover figures themselves, not the "% Increase/Decrease" column on the board, which is only filled in on some rows.
+
+### 8.4 Workshop Map & Conversion
 
 **Reports → Workshop Map.** Fed by the nightly Mechanics Desk pull. Five tabs:
 
@@ -276,11 +289,11 @@ Click-to-dial is available where enabled.
 
 **⚠** Vehicle Trend counts **every** invoice and quote, while the map tabs show one dot per customer per month. Its totals are legitimately higher — they are not disagreeing with each other, they are counting different things.
 
-### 8.4 Distributor Map
+### 8.5 Distributor Map
 
 Quotes near each distributor against bookings they actually confirmed — the "are they converting the leads we send them" view.
 
-### 8.5 Build a PDF report
+### 8.6 Build a PDF report
 
 **Reports → Builder.** Choose from six report types — Distributor Performance, Stock Health, Call Analytics, CRM Pipeline, Campaign Performance, B2B Sales — then the period, which entities (JAWS, VPS or both) and which sections. Add AI commentary if you want the numbers narrated. Generate, then download the PDF.
 
