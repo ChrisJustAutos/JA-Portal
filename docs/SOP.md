@@ -73,6 +73,8 @@ The portal hides what you don't have permission for, so a missing tab is normal,
 
 **The workshop runs on Mechanics Desk.** Bookings, job cards, customers, vehicles, quotes and invoicing all happen in MD — not in the portal. Nothing in this document changes that.
 
+The portal's own Diary, Jobs, Customers, Vehicles, Quotes, Invoices and Comms screens have been **switched off** so nobody enters work into a system nobody reads. If you land on one from an old bookmark you'll get a short "not in use" notice instead. Clicking **Workshop** in the top bar now opens Inventory.
+
 What the portal does around it, and that you do use:
 
 ### 3.1 Customer letters

@@ -374,7 +374,14 @@ What the portal *does* provide around MD, all of it in daily use:
 | **Parts & purchase orders** (`/workshop/orders`, `/workshop/purchase-orders`, `/workshop/suppliers`) | Per-day parts worklist; PO draft → sent → received with a bill push to MYOB. | Portal + MYOB |
 | **Counting** (`/workshop/stocktake`, Cash Count, Live Bins) | Portal-native barcode stocktake (session → count → Variance → Apply), till counting by weight, and HX711 load-cell bin inventory. Distinct from the MD stocktake at `/stocktake` (§7.12). | Portal / ESP32 |
 
-Other `/workshop/*` routes exist in the codebase from the paused replacement build and are **not part of any operating procedure**. Leave them alone unless the migration is revived; `docs/workshop_md_parity.md` holds the parity and cutover detail if it ever is.
+**The parked sections are switched off in the UI** (2026-08-20). `lib/workshop-sections.js` is the single source of truth for which sections are on; the tab strip reads it, and `next.config.js` reads the same list to rewrite the parked routes to a "not in use" notice.
+
+- Off: Diary, Jobs, Customers, Vehicles, Quotes, Invoices, Comms, Workshop Reports (plus their `/workshop/{job,customer,vehicle,quote,invoice}/[id]` detail routes).
+- On: Orders, Letters, Inventory (and Inventory's whole second-level strip).
+- The Workshop app tile now opens `/workshop/inventory` instead of `/diary`.
+- Parked routes **rewrite**, not redirect — the URL stays, so an old `/diary` bookmark still reads `/diary` and explains itself. The rewrites are in `beforeFiles`; an array return or `afterFiles` is evaluated *after* the filesystem and the real page would render instead.
+- `?preview=1` on a parked route skips the rewrite and loads the real page — an escape hatch for anyone reviving the build.
+- **To switch a section back on: flip `active` to true in `lib/workshop-sections.js`.** Nothing else. `docs/workshop_md_parity.md` still holds the parity and cutover detail.
 
 **⚠** Because MD stays, the **9 scheduled MechanicDesk scrapers remain a live production dependency** (§6.2), not a temporary bridge. Treat them accordingly — an MD password change or UI change breaks real reporting.
 

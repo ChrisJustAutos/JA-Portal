@@ -1,27 +1,22 @@
 // components/WorkshopTabs.tsx
-// Top-level sub-tab strip for the unified Workshop module:
-// Diary · Customers · Quotes · Invoices · Inventory. Sits directly under the
+// Top-level sub-tab strip for the Workshop module. Sits directly under the
 // global top bar (all gated view:diary). Inventory has its own second-level
 // strip (InventoryTabs) for Inventory/Purchase Orders/Stocktake/Stock Transfer.
+//
+// The tabs come from lib/workshop-sections.js, which is also what next.config.js
+// reads to route the parked sections to the "not in use" notice — so the strip
+// can never drift from what is actually reachable. MechanicDesk is the workshop
+// system of record; only the sections marked active there appear here.
 
 import { useRouter } from 'next/router'
 import { Permission, UserRole, roleHasPermission } from '../lib/permissions'
 import { T } from '../lib/ui/theme'
 import WorkshopSearch from './WorkshopSearch'
+import { activeWorkshopSections } from '../lib/workshop-sections'
 
-const TABS: { id: string; label: string; href: string; perm?: Permission }[] = [
-  { id: 'diary', label: 'Diary', href: '/diary' },
-  { id: 'jobs', label: 'Jobs', href: '/workshop/jobs' },
-  { id: 'customers', label: 'Customers', href: '/workshop/customers' },
-  { id: 'vehicles', label: 'Vehicles', href: '/workshop/vehicles' },
-  { id: 'quotes', label: 'Quotes', href: '/workshop/quotes' },
-  { id: 'orders', label: 'Orders', href: '/workshop/orders' },
-  { id: 'invoices', label: 'Invoices', href: '/workshop/invoices' },
-  { id: 'comms', label: 'Comms', href: '/workshop/comms' },
-  { id: 'letters', label: 'Letters', href: '/workshop/letters' },
-  { id: 'inventory', label: 'Inventory', href: '/workshop/inventory' },
-  { id: 'reports', label: 'Reports', href: '/workshop/reports', perm: 'view:reports' },
-]
+const TABS: { id: string; label: string; href: string; perm?: Permission }[] =
+  activeWorkshopSections().map((s: any) => ({ id: s.id, label: s.label, href: s.href, perm: s.perm as Permission | undefined }))
+
 
 export type WorkshopTabId = 'diary' | 'jobs' | 'customers' | 'vehicles' | 'quotes' | 'orders' | 'invoices' | 'comms' | 'letters' | 'inventory' | 'reports'
 

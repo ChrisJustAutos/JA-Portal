@@ -7,6 +7,10 @@ const BUILD_ID =
   process.env.VERCEL_DEPLOYMENT_ID ||
   'dev'
 
+// Which Workshop sections are switched on (MechanicDesk stays the workshop
+// system of record) — the same list the tab strip reads.
+const { parkedWorkshopRewrites } = require('./lib/workshop-sections')
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
@@ -32,7 +36,13 @@ const nextConfig = {
   // OAuth 2.1 endpoints for the Claude MCP connector live at the domain root
   // (Claude expects /authorize, /token, and the well-known discovery docs).
   async rewrites() {
-    return [
+    // beforeFiles so the parked-Workshop rewrites win over the real page files
+    // (an array return, or afterFiles, is checked AFTER the filesystem and the
+    // parked pages would render instead of the notice). The OAuth rewrites keep
+    // their original afterFiles behaviour.
+    return {
+      beforeFiles: parkedWorkshopRewrites(),
+      afterFiles: [
       { source: '/.well-known/oauth-authorization-server', destination: '/api/oauth/metadata' },
       { source: '/.well-known/oauth-authorization-server/api/mcp', destination: '/api/oauth/metadata' },
       { source: '/.well-known/oauth-protected-resource', destination: '/api/oauth/protected-resource' },
@@ -40,7 +50,8 @@ const nextConfig = {
       { source: '/authorize', destination: '/api/oauth/authorize' },
       { source: '/token', destination: '/api/oauth/token' },
       { source: '/register', destination: '/api/oauth/register' },
-    ]
+      ],
+    }
   },
 }
 module.exports = nextConfig
