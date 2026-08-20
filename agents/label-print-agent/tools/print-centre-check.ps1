@@ -18,6 +18,7 @@
 [CmdletBinding()]
 param(
   [switch]$FixNetworkProfile,
+  [switch]$FixDymoPort,
   [switch]$TestPages
 )
 
@@ -106,6 +107,44 @@ foreach ($name in $ExpectedUri.Keys) {
   if (-not $hit)                    { Warn "no device found at $ip (expected for '$name')" }
   elseif ($hit.Key -ne $name)       { Warn "$ip is device '$($hit.Key)' - confirm the QUEUE named '$name' points at it" }
 }
+
+Head "DYMO label printer"
+# The port is bound to the mDNS name DYMOLW5XL30234cE.local rather than a raw IP, so it
+# survives a DHCP change - but only while mDNS resolves. If resolution dies on this
+# interface the queue silently goes nowhere. -FixDymoPort repoints it at the IP.
+$dymoHost = 'DYMOLW5XL30234cE.local'
+$dymoIp   = '192.168.0.138'
+$resolved = try { ([Net.Dns]::GetHostAddresses($dymoHost)).IPAddressToString -join ',' } catch { $null }
+if ($resolved) { Ok "mDNS $dymoHost -> $resolved" }
+else           { Bad "mDNS $dymoHost does NOT resolve - the port cannot reach the printer. Re-run elevated with -FixDymoPort" }
+
+$tcp = $false
+try {
+  $c = New-Object Net.Sockets.TcpClient
+  $r = $c.BeginConnect($dymoIp, 9100, $null, $null)
+  if ($r.AsyncWaitHandle.WaitOne(1500)) { $c.EndConnect($r); $tcp = $true }
+  $c.Close()
+} catch { }
+if ($tcp) { Ok "${dymoIp}:9100 reachable" } else { Bad "${dymoIp}:9100 unreachable - printer off, asleep, or a different subnet" }
+
+$dymoQ = Get-Printer 'Shipping Label Printer' -ErrorAction SilentlyContinue
+if ($dymoQ) {
+  $port = Get-PrinterPort -Name $dymoQ.PortName -ErrorAction SilentlyContinue
+  Write-Host ("  queue status={0}  port={1}  host={2}" -f $dymoQ.PrinterStatus, $dymoQ.PortName, $port.PrinterHostAddress)
+  $jobs = @(Get-PrintJob -PrinterName $dymoQ.Name -ErrorAction SilentlyContinue)
+  if ($jobs) { foreach ($j in $jobs) { Warn "queued job $($j.Id) '$($j.DocumentName)' = $($j.JobStatus)" } }
+  else       { Ok "no jobs queued" }
+
+  if ($FixDymoPort -and $elevated) {
+    try {
+      Set-PrinterPort -Name $dymoQ.PortName -PrinterHostAddress $dymoIp -ErrorAction Stop
+      Ok "port repointed to $dymoIp"
+    } catch { Bad "could not repoint port: $($_.Exception.Message)" }
+  } elseif ($FixDymoPort) { Bad "-FixDymoPort needs an elevated shell" }
+} else { Bad "queue 'Shipping Label Printer' not found" }
+Write-Host "  NOTE: a Windows test page is a full-page document - a 5XL on 4x6 labels may" -ForegroundColor DarkGray
+Write-Host "  swallow or reject it. Nothing printing here is NOT proof the queue is broken;" -ForegroundColor DarkGray
+Write-Host "  requeue a real label job to test properly." -ForegroundColor DarkGray
 
 Head "Stuck spooler jobs"
 $stuck = foreach ($w in $Wanted) {
