@@ -17,6 +17,18 @@ const nextConfig = {
   serverRuntimeConfig: {
     maxDuration: 30,
   },
+  // The admin Library (/admin/library) reads docs/*.md and docs/*.pdf off disk
+  // at request time. Next's dependency tracer can't see those reads because the
+  // paths are built at runtime from lib/library-docs.ts, so the files would be
+  // left out of the serverless bundle and 404 in production while working fine
+  // locally. Force them in.
+  experimental: {
+    outputFileTracingIncludes: {
+      '/admin/library': ['./docs/**'],
+      '/admin/library/[slug]': ['./docs/**'],
+      '/api/admin/library/[slug]': ['./docs/**'],
+    },
+  },
   // OAuth 2.1 endpoints for the Claude MCP connector live at the domain root
   // (Claude expects /authorize, /token, and the well-known discovery docs).
   async rewrites() {

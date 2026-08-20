@@ -66,7 +66,9 @@ export default function SettingsPage({ user }: { user: PortalUserSSR }) {
     qTab === 'myob' ? 'myob' :
     (router.query.sub === 'myob' ? 'myob' : 'health')
 
-  const SECTIONS: {id: SettingsTab; label: string; adminOnly: boolean; icon: string; accent: string; desc: string}[] = [
+  // `href` turns a tile into a link out to its own page instead of an in-page
+  // panel (the Library is a real route so it can be deep-linked and bookmarked).
+  const SECTIONS: {id: SettingsTab | 'library'; label: string; adminOnly: boolean; icon: string; accent: string; desc: string; href?: string}[] = [
     { id: 'general',     label: 'General',            adminOnly: false, icon: 'settings',      accent: T.blue,   desc: 'Display & behaviour preferences' },
     { id: 'dist-report', label: 'Distributor Report', adminOnly: true,  icon: 'reports',       accent: T.green,  desc: 'Customers, groups & revenue categories' },
     { id: 'connections', label: 'Connections',        adminOnly: true,  icon: 'stripe-myob',   accent: T.teal,   desc: 'Integration health & MYOB' },
@@ -78,6 +80,7 @@ export default function SettingsPage({ user }: { user: PortalUserSSR }) {
     { id: 'coaching',    label: 'Call Coaching',      adminOnly: true,  icon: 'call-coaching', accent: T.purple, desc: 'Scoring rubrics per call type + advisor roster' },
     { id: 'users',       label: 'Users & Staff',      adminOnly: true,  icon: 'team',          accent: T.blue,   desc: 'Logins, roles, tabs + workshop diary lanes' },
     { id: 'audit',       label: 'Audit Log',          adminOnly: true,  icon: 'todos',         accent: T.text2,  desc: 'Recent user-management events' },
+    { id: 'library',     label: 'Library',            adminOnly: true,  icon: 'reports',       accent: T.purple, desc: 'Portal documentation — SOP and full handover, readable here or downloadable as PDF', href: '/admin/library' },
     { id: 'profile',     label: 'My Profile',         adminOnly: false, icon: 'distributors',  accent: T.purple, desc: 'Your name & password' },
   ]
   const visibleSections = SECTIONS.filter(s => !s.adminOnly || isAdmin)
@@ -123,7 +126,7 @@ export default function SettingsPage({ user }: { user: PortalUserSSR }) {
             <div style={{margin:'0 auto'}}>
               <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(200px,1fr))',gap:14}}>
                 {visibleSections.map(s => (
-                  <button key={s.id} onClick={()=>openSection(s.id)}
+                  <button key={s.id} onClick={()=> s.href ? router.push(s.href) : openSection(s.id as SettingsTab)}
                     onMouseEnter={e=>{ e.currentTarget.style.borderColor = s.accent }}
                     onMouseLeave={e=>{ e.currentTarget.style.borderColor = T.border }}
                     style={{
@@ -161,7 +164,7 @@ export default function SettingsPage({ user }: { user: PortalUserSSR }) {
               padding:'40px 20px',overflowY:'auto',
             }}>
               <div style={{
-                width:'100%',maxWidth: WIDE.includes(active.id) ? 1500 : 760,
+                width:'100%',maxWidth: WIDE.includes(active.id as SettingsTab) ? 1500 : 760,
                 background:T.bg2,border:`1px solid ${T.border2}`,borderRadius:14,
                 display:'flex',flexDirection:'column',maxHeight:'calc(100vh - 80px)',
                 boxShadow:'0 24px 60px rgba(0,0,0,0.5)',
