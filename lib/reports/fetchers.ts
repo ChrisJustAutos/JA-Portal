@@ -1354,42 +1354,6 @@ export async function fetchCampaignPerformance(range: DateRange): Promise<any> {
   }
 }
 
-// ── WORKSHOP PERFORMANCE ──────────────────────────────────────────────
-const WS_COMPLETED_STATUSES = ['done', 'invoiced', 'paid']
-export async function fetchWorkshopPerformance(range: DateRange): Promise<any> {
-  const sb = callsSupabase()
-  const { startIso, endIso } = rangeIso(range)
-
-  const [{ data: createdB }, { data: completedB }, { data: quotes }] = await Promise.all([
-    sb.from('workshop_bookings').select('status, created_at').gte('created_at', startIso).lte('created_at', endIso),
-    sb.from('workshop_bookings').select('total_ex_gst, completed_at').gte('completed_at', startIso).lte('completed_at', endIso),
-    sb.from('workshop_quotes').select('status, total, created_at').is('deleted_at', null).gte('created_at', startIso).lte('created_at', endIso),
-  ])
-
-  const byStatusMap = new Map<string, number>()
-  for (const b of createdB || []) byStatusMap.set(b.status || 'unknown', (byStatusMap.get(b.status || 'unknown') || 0) + 1)
-  const completedRevenue = (completedB || []).reduce((s: number, b: any) => s + (Number(b.total_ex_gst) || 0), 0)
-
-  const qrows: any[] = quotes || []
-  const accepted = qrows.filter(q => ['accepted', 'converted'].includes(q.status)).length
-  const quoteValue = qrows.reduce((s, q) => s + (Number(q.total) || 0), 0)
-
-  return {
-    bookings: {
-      created: (createdB || []).length,
-      byStatus: Array.from(byStatusMap.entries()).map(([status, count]) => ({ status, count })).sort((a, b) => b.count - a.count),
-      completed: (completedB || []).length,
-      revenueExGst: completedRevenue,
-    },
-    quotes: {
-      created: qrows.length,
-      accepted,
-      conversionPct: qrows.length > 0 ? Math.round((accepted / qrows.length) * 100) : null,
-      totalValue: quoteValue,
-    },
-  }
-}
-
 // ── B2B SALES ─────────────────────────────────────────────────────────
 export async function fetchB2bSales(range: DateRange): Promise<any> {
   const sb = callsSupabase()

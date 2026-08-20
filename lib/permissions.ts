@@ -170,7 +170,6 @@ export type ReportType =
   | 'call-analytics'
   | 'crm-pipeline'
   | 'campaign-performance'
-  | 'workshop-performance'
   | 'b2b-sales'
 
 export const REPORT_TYPE_LABELS: Record<ReportType, string> = {
@@ -179,7 +178,6 @@ export const REPORT_TYPE_LABELS: Record<ReportType, string> = {
   'call-analytics':         'Call Analytics',
   'crm-pipeline':           'CRM Pipeline',
   'campaign-performance':   'Campaign Performance',
-  'workshop-performance':   'Workshop Performance',
   'b2b-sales':              'B2B Sales',
 }
 
@@ -189,7 +187,6 @@ export const REPORT_TYPE_DESCRIPTIONS: Record<ReportType, string> = {
   'call-analytics':         'Phone call coaching scores, rep leaderboard, outcomes and flagged calls. For sales team performance review.',
   'crm-pipeline':           'Lead pipeline by stage and owner, win/loss and conversion over the period. From the CRM.',
   'campaign-performance':   'Email campaign sends with open, click and unsubscribe rates over the period.',
-  'workshop-performance':   'Bookings, completed jobs, revenue and quote conversion from the workshop.',
   'b2b-sales':              'Distributor orders, revenue, freight, top distributors and products over the period.',
 }
 
@@ -199,7 +196,6 @@ const REPORT_TYPE_ROLES: Record<ReportType, UserRole[]> = {
   'call-analytics':         ['admin', 'manager', 'sales'],
   'crm-pipeline':           ['admin', 'manager', 'sales'],
   'campaign-performance':   ['admin', 'manager', 'sales'],
-  'workshop-performance':   ['admin', 'manager'],
   'b2b-sales':              ['admin', 'manager'],
 }
 
@@ -209,7 +205,6 @@ const REPORT_TYPE_REQUIRED_TABS: Record<ReportType, string[]> = {
   'call-analytics':         ['calls'],
   'crm-pipeline':           ['crm'],
   'campaign-performance':   ['crm'],
-  'workshop-performance':   ['diary'],
   'b2b-sales':              ['b2b'],
 }
 

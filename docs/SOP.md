@@ -282,7 +282,7 @@ Quotes near each distributor against bookings they actually confirmed — the "a
 
 ### 8.5 Build a PDF report
 
-**Reports → Builder.** Choose the report type, the period, which entities (JAWS, VPS or both) and which sections. Add AI commentary if you want the numbers narrated. Generate, then download the PDF.
+**Reports → Builder.** Choose from six report types — Distributor Performance, Stock Health, Call Analytics, CRM Pipeline, Campaign Performance, B2B Sales — then the period, which entities (JAWS, VPS or both) and which sections. Add AI commentary if you want the numbers narrated. Generate, then download the PDF.
 
 ---
 

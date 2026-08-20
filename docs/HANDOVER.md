@@ -434,7 +434,20 @@ CDR list with audio, transcripts, coaching analysis (per-call-type rubrics), Sen
 
 ### 7.8 Reports (`/reports/*`)
 
-Builder (7 PDF report types) · Sales Report (live Weekly Sales Recap; **"sales" = orders taken from Monday boards + MD, not turnover**; auto-emails Ryan Mon 07:00) · Management Dashboard (JAWS weekly Excel replica from live MYOB; config-driven charts; clickable KPI history; cache warmed 05:30) · Workshop Map (nightly MD pull; `lib/workshop-map` classification is authoritative; FY picker; five tabs — Jobs Map, Quotes Map, Conversion, By State, **Vehicle Trend**: one line per vehicle series, All FY = monthly buckets, pick a month = daily buckets, measures Jobs/Quotes/Job $/Quoted $. The trend counts every invoice and quote, so its totals run higher than the map tabs, which show one dot per customer per month) · Distributor Map (quotes near each distributor vs confirmed Monday bookings). Per-user report-tab allowlists control who sees what.
+Builder (6 PDF report types — Workshop Performance was removed 2026-08-20; it reported over the portal workshop tables, which stay empty while MechanicDesk is the system of record) · Sales Report (live Weekly Sales Recap; **"sales" = orders taken from Monday boards + MD, not turnover**; auto-emails Ryan Mon 07:00) · Management Dashboard (JAWS weekly Excel replica from live MYOB; config-driven charts; clickable KPI history; cache warmed 05:30) · Workshop Map (nightly MD pull; `lib/workshop-map` classification is authoritative; FY picker; five tabs — Jobs Map, Quotes Map, Conversion, By State, **Vehicle Trend**: one line per vehicle series, All FY = monthly buckets, pick a month = daily buckets, measures Jobs/Quotes/Job $/Quoted $. The trend counts every invoice and quote, so its totals run higher than the map tabs, which show one dot per customer per month) · Distributor Map (quotes near each distributor vs confirmed Monday bookings). Per-user report-tab allowlists control who sees what.
+
+**Where the reports get their data** (audited 2026-08-20 when the workshop module was parked — nothing else needed reworking):
+
+| Source | Sections |
+|---|---|
+| MYOB (`lib/myob-reporting`) | KPI summary, P&L, top customers, receivables/payables aging, stock summary/reorder/dead, distributor ranking, pipeline, 6-month trends |
+| Monday boards | Sales funnel, rep scorecards, quote aging, monthly conversion trend, combined pipeline |
+| MechanicDesk facts (`md_invoices` / `md_quotes`) | Workshop Map, incl. Vehicle Trend |
+| `calls` + `call_analysis` | All six Call Analytics sections |
+| `crm_*` | Lead pipeline, campaign performance |
+| `b2b_*` | B2B sales |
+
+None of them read the portal's workshop tables — that was only ever Workshop Performance, now removed.
 
 ### 7.9 Tasks & Projects (`/tasks`, `/projects`, `/todos`)
 

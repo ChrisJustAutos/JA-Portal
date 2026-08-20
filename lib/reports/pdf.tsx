@@ -1122,31 +1122,6 @@ function CampaignPerformance({ data }: { data: any }) {
   )
 }
 
-function WorkshopPerformance({ data }: { data: any }) {
-  const b = data?.bookings || {}
-  const q = data?.quotes || {}
-  const byStatus = b.byStatus || []
-  return (
-    <View>
-      <View style={styles.kpiGrid} wrap={false}>
-        <KpiBox label="Bookings made" value={String(b.created || 0)} sub="Created in period"/>
-        <KpiBox label="Jobs completed" value={String(b.completed || 0)} sub={fmt(b.revenueExGst)} valueColor={COLORS.green}/>
-        <KpiBox label="Quotes sent" value={String(q.created || 0)} sub={fmt(q.totalValue)}/>
-        <KpiBox label="Quote conv." value={q.conversionPct == null ? '—' : `${q.conversionPct}%`} sub={`${q.accepted || 0} accepted`}/>
-      </View>
-      {byStatus.length > 0 && (
-        <View wrap={false}>
-          <Text style={{ fontSize: 9, fontWeight: 700, marginTop: 6, marginBottom: 3, color: COLORS.ink2 }}>Bookings by status</Text>
-          <View style={styles.tableHeader}><Text style={[styles.col, { flex: 3 }]}>Status</Text><Text style={styles.colNum}>Count</Text></View>
-          {byStatus.map((s: any, i: number) => (
-            <View key={i} style={[styles.tableRow, i % 2 === 1 ? styles.tableRowAlt : {}]}><Text style={[styles.col, { flex: 3 }]}>{s.status}</Text><Text style={styles.colNum}>{s.count}</Text></View>
-          ))}
-        </View>
-      )}
-    </View>
-  )
-}
-
 function B2bSales({ data }: { data: any }) {
   const t = data?.totals || {}
   const dists = data?.topDistributors || []
@@ -1221,7 +1196,6 @@ function RenderSection({ section }: { section: GeneratedSection }) {
           case 'calls-objections':    return <CallsObjections data={section.data}/>
           case 'crm-pipeline':        return <CrmPipeline data={section.data}/>
           case 'crm-campaigns':       return <CampaignPerformance data={section.data}/>
-          case 'workshop-performance': return <WorkshopPerformance data={section.data}/>
           case 'b2b-sales':           return <B2bSales data={section.data}/>
           default:                    return null
         }

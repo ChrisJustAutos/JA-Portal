@@ -32,7 +32,6 @@ export type SectionId =
   // CRM / workshop / B2B sections
   | 'crm-pipeline'
   | 'crm-campaigns'
-  | 'workshop-performance'
   | 'b2b-sales'
 
 export interface SectionMeta {
@@ -73,7 +72,6 @@ export const SECTION_META: Record<SectionId, SectionMeta> = {
   // CRM / workshop / B2B
   'crm-pipeline':        { id: 'crm-pipeline',        label: 'Lead Pipeline',        description: 'Open pipeline by stage + win/loss & conversion for the period', entityScope: 'all' },
   'crm-campaigns':       { id: 'crm-campaigns',       label: 'Campaign Performance', description: 'Email campaigns sent in the period with open/click/unsub rates', entityScope: 'all' },
-  'workshop-performance':{ id: 'workshop-performance',label: 'Workshop Performance', description: 'Bookings, completed jobs, revenue and quote conversion',         entityScope: 'all' },
   'b2b-sales':           { id: 'b2b-sales',           label: 'B2B Sales',            description: 'Distributor orders, revenue, freight, top distributors & products', entityScope: 'all' },
 }
 
@@ -100,9 +98,6 @@ export const DEFAULT_SECTIONS: Record<ReportType, SectionId[]> = {
   ],
   'campaign-performance': [
     'crm-campaigns', 'ai-narrative',
-  ],
-  'workshop-performance': [
-    'workshop-performance', 'ai-narrative',
   ],
   'b2b-sales': [
     'b2b-sales', 'ai-narrative',
