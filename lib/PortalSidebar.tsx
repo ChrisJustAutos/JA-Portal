@@ -57,7 +57,7 @@ export const DEFAULT_NAV: PortalNavItem[] = [
   {id:'messages',     kind:'link',    label:'Messages',     href:'/messages',      dot:T.purple, alertKey:'messages'},
   // Lands on Inventory, not /diary: the diary is parked while MechanicDesk
   // remains the workshop system of record (lib/workshop-sections.js).
-  {id:'diary',        kind:'link',    label:'Workshop',     href:'/workshop/inventory', dot:T.blue},
+  {id:'diary',        kind:'link',    label:'Workshop',     href:'/workshop/prepick', dot:T.blue},
   {id:'reports',      kind:'link',    label:'Reports',      href:'/reports',       dot:T.green},
   {id:'ap',           kind:'link',    label:'AP Invoices',  href:'/ap',            dot:T.amber},
   {id:'b2b',          kind:'link',    label:'B2B Portal',   href:'/admin/b2b',     dot:T.teal},

@@ -371,14 +371,17 @@ What the portal *does* provide around MD, all of it in daily use:
 |---|---|---|
 | **Letters** (`/workshop/letters`) | Hourly `letter-watch` cron queues a thank-you letter + envelope for each newly finalised MYOB invoice and prints them on the Apeos. Deposit-only invoices are vetoed by a positive 1-1230 line. Reprint / compose / edit templates here. | MYOB (not MD) |
 | **Pre Pick** (`/workshop/prepick`) | 14-day parts demand vs stock on hand. | `mechanicdesk-prepick` Playwright worker |
-| **Parts & purchase orders** (`/workshop/orders`, `/workshop/purchase-orders`, `/workshop/suppliers`) | Per-day parts worklist; PO draft → sent → received with a bill push to MYOB. | Portal + MYOB |
-| **Counting** (`/workshop/stocktake`, Cash Count, Live Bins) | Portal-native barcode stocktake (session → count → Variance → Apply), till counting by weight, and HX711 load-cell bin inventory. Distinct from the MD stocktake at `/stocktake` (§7.12). | Portal / ESP32 |
+| **Purchase Orders** (`/workshop/purchase-orders`) | PO draft → sent → received, with a bill push to MYOB. | Portal + MYOB |
+| **Stocktake (MD)** (`/stocktake`) | Count sheet reconciled against MechanicDesk. | MD workers |
+| **Stocktake (Portal)** (`/workshop/stocktake`) | Barcode session → count → Variance → Apply. | Portal |
+| **Stock Transfer** (`/admin/b2b/stock-transfer`) | JAWS↔VPS paired invoice + bill, plus the MD PO. | Portal + MYOB + MD |
 
 **The parked sections are switched off in the UI** (2026-08-20). `lib/workshop-sections.js` is the single source of truth for which sections are on; the tab strip reads it, and `next.config.js` reads the same list to rewrite the parked routes to a "not in use" notice.
 
-- Off: Diary, Jobs, Customers, Vehicles, Quotes, Invoices, Comms, Workshop Reports (plus their `/workshop/{job,customer,vehicle,quote,invoice}/[id]` detail routes).
-- On: Orders, Letters, Inventory (and Inventory's whole second-level strip).
-- The Workshop app tile now opens `/workshop/inventory` instead of `/diary`.
+- Off: Diary, Jobs, Customers, Vehicles, Quotes, Invoices, Comms, Workshop Reports (plus their `/workshop/{job,customer,vehicle,quote,invoice}/[id]` detail routes), and — second wave, same day — Orders, Inventory, Live Bins, Cash Count, Suppliers. 18 routes in total.
+- On: the six in the table above.
+- **The nav is now a single flat strip.** `components/InventoryTabs.tsx` (the old Inventory second level) was deleted once Inventory/Live Bins/Cash Count/Suppliers/Orders came off — there was almost nothing left to wrap — and its survivors were promoted to the top strip.
+- The Workshop app tile opens `/workshop/prepick`.
 - Parked routes **rewrite**, not redirect — the URL stays, so an old `/diary` bookmark still reads `/diary` and explains itself. The rewrites are in `beforeFiles`; an array return or `afterFiles` is evaluated *after* the filesystem and the real page would render instead.
 - `?preview=1` on a parked route skips the rewrite and loads the real page — an escape hatch for anyone reviving the build.
 - **To switch a section back on: flip `active` to true in `lib/workshop-sections.js`.** Nothing else. `docs/workshop_md_parity.md` still holds the parity and cutover detail.

@@ -2,7 +2,6 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import Head from 'next/head'
 import PortalTopBar from '../../lib/PortalTopBar'
-import InventoryTabs from '../../components/InventoryTabs'
 import WorkshopTabs from '../../components/WorkshopTabs'
 import { requirePageAuth } from '../../lib/authServer'
 import type { PortalUserSSR } from '../../lib/authServer'
@@ -59,8 +58,7 @@ export default function PurchaseOrdersPage({ user }: { user: PortalUserSSR }) {
       <Head><title>Purchase Orders — Workshop · JA Portal</title></Head>
       <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', background: T.bg, color: T.text, fontFamily: '"DM Sans", system-ui, sans-serif' }}>
         <PortalTopBar activeId="diary" currentUserRole={user.role} currentUserVisibleTabs={user.visibleTabs} currentUserName={user.displayName} currentUserEmail={user.email} />
-        <WorkshopTabs active="inventory" role={user.role} />
-        <InventoryTabs active="po" role={user.role} />
+        <WorkshopTabs active="po" role={user.role} />
         <div style={{ flex: 1, overflowY: 'auto' }}>
           <div style={{ margin: '0 auto', padding: '18px 22px' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14, flexWrap: 'wrap' }}>

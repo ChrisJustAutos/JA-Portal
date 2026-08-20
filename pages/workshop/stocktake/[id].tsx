@@ -9,7 +9,7 @@ import Head from 'next/head'
 import Link from 'next/link'
 import { useRouter } from 'next/router'
 import PortalTopBar from '../../../lib/PortalTopBar'
-import InventoryTabs from '../../../components/InventoryTabs'
+import WorkshopTabs from '../../../components/WorkshopTabs'
 import { requirePageAuth } from '../../../lib/authServer'
 import type { PortalUserSSR } from '../../../lib/authServer'
 import { roleHasPermission } from '../../../lib/permissions'
@@ -86,7 +86,7 @@ export default function WorkshopStocktakeCountPage({ user }: { user: PortalUserS
       <Head><title>{st ? `ST-${st.st_seq} ${st.name}` : 'Stocktake'} · JA Portal</title></Head>
       <div style={{ display:'flex', flexDirection:'column', height:'100vh', background:T.bg, color:T.text, fontFamily:'"DM Sans", system-ui, sans-serif' }}>
         <PortalTopBar activeId="inventory" currentUserRole={user.role} currentUserVisibleTabs={user.visibleTabs} currentUserName={user.displayName} currentUserEmail={user.email} />
-        <InventoryTabs active="stocktake2" role={user.role} />
+        <WorkshopTabs active="stocktake-portal" role={user.role} />
         <div style={{ flex:1, overflowY:'auto' }}>
           <div style={{ margin:'0 auto', padding:'20px 28px' }}>
             <Link href="/workshop/stocktake" style={{ fontSize:11, color:T.text3, textDecoration:'none', fontFamily:'monospace' }}>← Stocktakes</Link>

@@ -8,7 +8,6 @@ import { useCallback, useEffect, useState } from 'react'
 import Head from 'next/head'
 import PortalTopBar from '../../lib/PortalTopBar'
 import WorkshopTabs from '../../components/WorkshopTabs'
-import InventoryTabs from '../../components/InventoryTabs'
 import { requirePageAuth } from '../../lib/authServer'
 import type { PortalUserSSR } from '../../lib/authServer'
 import { roleHasPermission } from '../../lib/permissions'
@@ -80,7 +79,6 @@ export default function SuppliersPage({ user }: { user: PortalUserSSR }) {
         <PortalTopBar activeId="diary" lastRefresh={lastRefresh} onRefresh={load} refreshing={loading}
           currentUserRole={user.role} currentUserVisibleTabs={user.visibleTabs} currentUserName={user.displayName} currentUserEmail={user.email} />
         <WorkshopTabs active="inventory" role={user.role} />
-        <InventoryTabs active="suppliers" role={user.role} />
 
         <div style={{ flex: 1, overflow: 'auto', background: T.bg, padding: '20px 28px' }}>
           <div style={{ display: 'flex', gap: 16, alignItems: 'flex-start', flexWrap: 'wrap' }}>

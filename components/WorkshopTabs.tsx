@@ -1,7 +1,8 @@
 // components/WorkshopTabs.tsx
-// Top-level sub-tab strip for the Workshop module. Sits directly under the
-// global top bar (all gated view:diary). Inventory has its own second-level
-// strip (InventoryTabs) for Inventory/Purchase Orders/Stocktake/Stock Transfer.
+// The Workshop tab strip — a single flat level, sitting directly under the
+// global top bar (all gated view:diary). The old Inventory second-level strip
+// was deleted 2026-08-20 when Inventory/Live Bins/Cash Count/Suppliers/Orders
+// were parked and its survivors were promoted up here.
 //
 // The tabs come from lib/workshop-sections.js, which is also what next.config.js
 // reads to route the parked sections to the "not in use" notice — so the strip
@@ -18,7 +19,9 @@ const TABS: { id: string; label: string; href: string; perm?: Permission }[] =
   activeWorkshopSections().map((s: any) => ({ id: s.id, label: s.label, href: s.href, perm: s.perm as Permission | undefined }))
 
 
-export type WorkshopTabId = 'diary' | 'jobs' | 'customers' | 'vehicles' | 'quotes' | 'orders' | 'invoices' | 'comms' | 'letters' | 'inventory' | 'reports'
+// Ids come from lib/workshop-sections.js — a hardcoded union here would just
+// duplicate that list and drift from it every time a section is switched.
+export type WorkshopTabId = string
 
 export default function WorkshopTabs({ active, role }: { active: WorkshopTabId; role: UserRole }) {
   const router = useRouter()

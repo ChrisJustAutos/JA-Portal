@@ -7,7 +7,6 @@ import { useEffect, useState, useCallback } from 'react'
 import Head from 'next/head'
 import PortalTopBar from '../../lib/PortalTopBar'
 import WorkshopTabs from '../../components/WorkshopTabs'
-import InventoryTabs from '../../components/InventoryTabs'
 import { requirePageAuth } from '../../lib/authServer'
 import { T } from '../../lib/ui/theme'
 import { useConfirm, usePrompt } from '../../components/ui/Feedback'
@@ -87,7 +86,6 @@ export default function LiveBinsPage({ user }: { user: any }) {
       <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', overflow: 'hidden', fontFamily: "'DM Sans',system-ui,sans-serif", background: T.bg, color: T.text }}>
         <PortalTopBar activeId="workshop" currentUserRole={user.role} currentUserVisibleTabs={user.visibleTabs} currentUserName={user.displayName} currentUserEmail={user.email} />
         <WorkshopTabs active="inventory" role={user.role} />
-        <InventoryTabs active={'live-bins' as any} role={user.role} />
 
         <div style={{ flex: 1, overflowY: 'auto', padding: 20, display: 'flex', flexDirection: 'column', gap: 14 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>

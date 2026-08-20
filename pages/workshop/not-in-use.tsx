@@ -32,7 +32,7 @@ export default function WorkshopNotInUse({ user, sectionLabel }: { user: PortalU
           currentUserName={user.displayName}
           currentUserEmail={user.email}
         />
-        <WorkshopTabs active={'inventory' as any} role={user.role} />
+        <WorkshopTabs active={'prepick' as any} role={user.role} />
 
         <div style={{ maxWidth: 620, margin: '0 auto', padding: '64px 20px' }}>
           <div style={{
@@ -56,8 +56,8 @@ export default function WorkshopNotInUse({ user, sectionLabel }: { user: PortalU
             </p>
 
             <p style={{ color: T.text2, fontSize: 15, lineHeight: 1.68, margin: '0 0 20px' }}>
-              What the portal does handle around it — letters, the parts worklist, purchase orders,
-              Pre&nbsp;Pick and stock counting — is still here and still live.
+              What the portal does handle around it — letters, Pre&nbsp;Pick, purchase orders and
+              stock counting — is still here and still live.
             </p>
 
             <div style={{ display: 'flex', gap: 9, flexWrap: 'wrap' }}>
@@ -68,7 +68,7 @@ export default function WorkshopNotInUse({ user, sectionLabel }: { user: PortalU
                   background: T.accent, color: '#fff', fontSize: 14, fontWeight: 600,
                   cursor: 'pointer', fontFamily: 'inherit',
                 }}
-              >Go to Inventory</button>
+              >Go to Pre Pick</button>
               <button
                 onClick={() => router.push('/workshop/letters')}
                 style={{

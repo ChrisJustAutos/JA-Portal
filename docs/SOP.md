@@ -73,9 +73,18 @@ The portal hides what you don't have permission for, so a missing tab is normal,
 
 **The workshop runs on Mechanics Desk.** Bookings, job cards, customers, vehicles, quotes and invoicing all happen in MD — not in the portal. Nothing in this document changes that.
 
-The portal's own Diary, Jobs, Customers, Vehicles, Quotes, Invoices and Comms screens have been **switched off** so nobody enters work into a system nobody reads. If you land on one from an old bookmark you'll get a short "not in use" notice instead. Clicking **Workshop** in the top bar now opens Inventory.
+The portal's own Diary, Jobs, Customers, Vehicles, Quotes, Invoices, Comms, Orders, Inventory, Live Bins, Cash Count and Suppliers screens have been **switched off**, so nobody enters work into a system nobody reads. If you land on one from an old bookmark you'll get a short "not in use" notice. Clicking **Workshop** in the top bar now opens Pre Pick.
 
-What the portal does around it, and that you do use:
+Six things remain, all on one tab strip:
+
+| Tab | What it's for |
+|---|---|
+| **Letters** | Thank-you letters and envelopes |
+| **Pre Pick** | What parts the next 14 days need |
+| **Purchase Orders** | Ordering and receiving parts |
+| **Stocktake (MD)** | Counting against Mechanics Desk |
+| **Stocktake (Portal)** | Barcode counting in the portal |
+| **Stock Transfer** | Moving stock JAWS ↔ VPS |
 
 ### 3.1 Customer letters
 
@@ -88,21 +97,19 @@ A thank-you letter and envelope are queued automatically for every newly finalis
 
 **Workshop → Pre Pick** shows the next 14 days of booked work against stock on hand, so you can order ahead instead of discovering a shortage on the day. It is refreshed from MechanicDesk several times each weekday.
 
-### 3.3 Parts and purchase orders
+### 3.3 Purchase orders
 
-| Job | Where |
-|---|---|
-| What needs ordering for today's work | Workshop → Orders |
-| Raise and receive a purchase order | Workshop → Purchase Orders — draft → sent → received, then push the bill to MYOB |
-| Supplier details | Workshop → Suppliers |
+**Workshop → Purchase Orders** — draft → sent → received, then push the bill to MYOB.
 
 ### 3.4 Counting stock
 
-- **Workshop → Stocktake** — create a session, scan barcodes to count, review **Variance**, then **Apply**.
+- **Stocktake (Portal)** — create a session, scan barcodes to count, review **Variance**, then **Apply**.
   **⚠ Counted rows are sacred.** If a count looks wrong, investigate before applying — applying writes the variance away.
-- **Cash Count** weighs the till to count it.
-- **Live Bins** reports bin quantities from load cells.
-- The **MechanicDesk stocktake** is separate and lives at `/stocktake`.
+- **Stocktake (MD)** counts against Mechanics Desk instead, and is report-only.
+
+### 3.5 Stock transfer
+
+**Stock Transfer** moves stock between JAWS and VPS, raising the paired invoice and bill and the matching MD purchase order.
 
 ---
 

@@ -8,7 +8,6 @@
 import { useEffect, useState, useCallback, useMemo, useRef } from 'react'
 import Head from 'next/head'
 import PortalTopBar from '../../lib/PortalTopBar'
-import InventoryTabs from '../../components/InventoryTabs'
 import WorkshopTabs from '../../components/WorkshopTabs'
 import { requirePageAuth } from '../../lib/authServer'
 import type { PortalUserSSR } from '../../lib/authServer'
@@ -343,8 +342,7 @@ export default function PrePickPage({ user }: { user: PortalUserSSR }) {
         <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet"/>
         <PortalTopBar activeId="diary" lastRefresh={syncedAt ? new Date(syncedAt) : null} onRefresh={load} refreshing={loading}
           currentUserRole={user.role} currentUserVisibleTabs={user.visibleTabs} currentUserName={user.displayName} currentUserEmail={user.email} />
-        <WorkshopTabs active="inventory" role={user.role} />
-        <InventoryTabs active="prepick" role={user.role} />
+        <WorkshopTabs active="prepick" role={user.role} />
 
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', background: T.bg, position: 'relative' }}>
           <style>{`@keyframes ppspin{to{transform:rotate(360deg)}}`}</style>
