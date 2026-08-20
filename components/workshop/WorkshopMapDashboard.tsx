@@ -13,7 +13,7 @@ import Head from 'next/head'
 import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
 
-type ViewKey = 'jobs' | 'quotes' | 'conv' | 'state'
+type ViewKey = 'jobs' | 'quotes' | 'conv' | 'state' | 'trend'
 
 interface Pt { la: number; ln: number; pc: string; l: string; m: number; g: string; c: string; a: number; j?: string; i?: string; x?: number; w?: number }
 interface Payload {
@@ -268,7 +268,7 @@ export default function WorkshopMapDashboard() {
         <div className="titlerow">
           <h1>Just Autos <span className="b">·</span> FY{P.fy} Workshop</h1>
           <span className="sub">
-            {view === 'conv' ? 'Quotes vs booked jobs' : view === 'state' ? 'State breakdown' : (view === 'jobs' ? 'Booked jobs' : 'Quotes')}
+            {view === 'conv' ? 'Quotes vs booked jobs' : view === 'state' ? 'State breakdown' : view === 'trend' ? 'Vehicle trend' : (view === 'jobs' ? 'Booked jobs' : 'Quotes')}
             {hasStrips && <> · {month < 0 ? `${P.months[0]?.label} – ${P.months[11]?.label}` : P.months[month]?.label}{cat !== 'all' ? ` · ${NAME[cat]}` : ''}</>}
             {view !== 'state' && st !== 'all' && <> · {st === '?' ? 'Unknown state' : st}</>}
           </span>
@@ -290,6 +290,7 @@ export default function WorkshopMapDashboard() {
           <button className={'tab' + (view === 'quotes' ? ' active' : '')} onClick={() => setView('quotes')}>Quotes Map</button>
           <button className={'tab' + (view === 'conv' ? ' active' : '')} onClick={() => setView('conv')}>Conversion</button>
           <button className={'tab' + (view === 'state' ? ' active' : '')} onClick={() => setView('state')}>By State</button>
+          <button className={'tab' + (view === 'trend' ? ' active' : '')} onClick={() => setView('trend')}>Vehicle Trend</button>
         </div>
       </header>
 
@@ -346,7 +347,10 @@ export default function WorkshopMapDashboard() {
         </div>
       )}
 
-      {view !== 'state' && (
+      {/* Vehicle Trend renders its own strips — its counts come from the fact
+          tables (every invoice/quote), not the deduped map points, so sharing
+          these pills would show numbers that disagree with its own chart. */}
+      {view !== 'state' && view !== 'trend' && (
         <div className="strip vehs">
           <span className="striplabel">State</span>
           <button className={'mbtn' + (st === 'all' ? ' active' : '')} onClick={() => setSt('all')}>
@@ -379,6 +383,14 @@ export default function WorkshopMapDashboard() {
         )}
         {view === 'conv' && <ConversionView P={P} COL={COL} NAME={NAME} st={st} />}
         {view === 'state' && <StateView P={P} month={month} cat={cat} />}
+        {view === 'trend' && (
+          <VehicleTrendView
+            fy={P.fy} months={P.months} cats={P.cats}
+            month={month} setMonth={setMonth}
+            cat={cat} setCat={setCat}
+            st={st} setSt={setSt}
+          />
+        )}
       </div>
     </div>
   )
@@ -575,6 +587,252 @@ function StateView({ P, month, cat }: { P: Payload; month: number; cat: string }
         State is derived from the customer postcode. Jobs are booked jobs (1 per customer per month, deposits /
         diagnostics / internal excluded); Won = quotes matched to a booked job. The month and vehicle filters above apply to the table.
       </p>
+    </div>
+  )
+}
+
+// ── Vehicle Trend tab ──────────────────────────────────────────────────────
+// One line per vehicle series over the buckets the current selection implies:
+// FY selected → 12 monthly points; a month selected → one point per day
+// (Chris 2026-08-20). Data comes from /api/workshop/map/vehicle-trend, which
+// counts every invoice and quote — NOT the map's 1-per-customer/month dots —
+// because a work-volume trend wants the raw counts.
+
+type TrendMeasure = 'jobs' | 'quotes' | 'jobValue' | 'quoteValue'
+
+const MEASURES: { k: TrendMeasure; label: string; money: boolean }[] = [
+  { k: 'jobs',       label: 'Jobs',      money: false },
+  { k: 'quotes',     label: 'Quotes',    money: false },
+  { k: 'jobValue',   label: 'Job $',     money: true  },
+  { k: 'quoteValue', label: 'Quoted $',  money: true  },
+]
+
+interface TrendRow { bucket: string; group: string; state: string; jobs: number; quotes: number; jobValue: number; quoteValue: number }
+interface TrendResp { fy: number; monthIdx: number | null; granularity: 'month' | 'day'; buckets: { k: string; label: string }[]; rows: TrendRow[] }
+
+function VehicleTrendView({
+  fy, months, cats, month, setMonth, cat, setCat, st, setSt,
+}: {
+  fy: number
+  months: { k: string; label: string }[]
+  cats: { k: string; n: string; col: string }[]
+  month: number
+  setMonth: (m: number) => void
+  cat: string
+  setCat: (c: string) => void
+  st: string
+  setSt: (s: string) => void
+}) {
+  const [resp, setResp] = useState<TrendResp | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [err, setErr] = useState('')
+  const [measure, setMeasure] = useState<TrendMeasure>('jobs')
+
+  // Refetch whenever the FY or month selection changes — the bucket grain
+  // itself depends on it, so this can't be filtered client-side.
+  useEffect(() => {
+    let cancelled = false
+    setLoading(true); setErr('')
+    const qs = `fy=${fy}${month >= 0 ? `&month=${month}` : ''}`
+    fetch(`/api/workshop/map/vehicle-trend?${qs}`)
+      .then(r => r.json())
+      .then(j => { if (cancelled) return; if (j.error) setErr(j.error); else setResp(j) })
+      .catch(e => { if (!cancelled) setErr(String(e?.message || e)) })
+      .finally(() => { if (!cancelled) setLoading(false) })
+    return () => { cancelled = true }
+  }, [fy, month])
+
+  const money = MEASURES.find(m => m.k === measure)!.money
+
+  // Per-state totals for the pills come from the unfiltered rows, so a pill
+  // never disappears just because it's the one that's deselected.
+  const stateTotals = useMemo(() => {
+    const out: Record<string, { jobs: number; quotes: number; value: number }> = {}
+    for (const r of resp?.rows || []) {
+      const a = (out[r.state] ||= { jobs: 0, quotes: 0, value: 0 })
+      a.jobs += r.jobs; a.quotes += r.quotes; a.value += r.jobValue
+    }
+    return out
+  }, [resp])
+
+  // series[group] = one number per bucket, for the selected measure + state.
+  const { series, bucketTotals, groupTotals, maxVal } = useMemo(() => {
+    const n = resp?.buckets.length || 0
+    const at = new Map((resp?.buckets || []).map((b, i) => [b.k, i]))
+    const series: Record<string, number[]> = {}
+    for (const c of cats) series[c.k] = Array(n).fill(0)
+    const bucketTotals = Array(n).fill(0) as number[]
+    const groupTotals: Record<string, number> = {}
+    for (const r of resp?.rows || []) {
+      if (st !== 'all' && r.state !== st) continue
+      const i = at.get(r.bucket); if (i == null) continue
+      const v = r[measure] || 0
+      ;(series[r.group] ||= Array(n).fill(0))[i] += v
+      bucketTotals[i] += v
+      groupTotals[r.group] = (groupTotals[r.group] || 0) + v
+    }
+    let maxVal = 0
+    for (const c of cats) for (const v of series[c.k] || []) if (v > maxVal) maxVal = v
+    return { series, bucketTotals, groupTotals, maxVal: maxVal || 1 }
+  }, [resp, cats, measure, st])
+
+  // Series worth drawing, biggest first — an all-zero group would just be a
+  // flat line on the axis and a wasted legend row.
+  const drawn = useMemo(
+    () => cats.filter(c => (groupTotals[c.k] || 0) > 0).sort((a, b) => (groupTotals[b.k] || 0) - (groupTotals[a.k] || 0)),
+    [cats, groupTotals],
+  )
+
+  const fmtV = (v: number) => money ? fmtK(v) : Math.round(v).toLocaleString('en-AU')
+  const grandTotal = Object.values(groupTotals).reduce((s, v) => s + v, 0)
+
+  // ── Chart geometry (plain SVG — no chart lib in this bundle) ──────────
+  const W = 1000, H = 320
+  const pad = { top: 14, right: 16, bottom: 30, left: 62 }
+  const plotW = W - pad.left - pad.right
+  const plotH = H - pad.top - pad.bottom
+  const nB = resp?.buckets.length || 0
+  const xAt = (i: number) => pad.left + (nB <= 1 ? plotW / 2 : (plotW * i) / (nB - 1))
+  const yAt = (v: number) => pad.top + plotH - (v / maxVal) * plotH
+  // Daily views get a lot of ticks — thin them so labels stay readable.
+  const tickEvery = nB > 20 ? Math.ceil(nB / 15) : 1
+
+  return (
+    <div className="convView">
+      {/* Month strip — 'All FY' gives the monthly trend, a month drills to daily. */}
+      <div className="strip months" style={{ margin: '0 0 8px', padding: 0, background: 'none', border: 'none' }}>
+        <span className="striplabel">Bucket</span>
+        <button className={'mbtn' + (month < 0 ? ' active' : '')} onClick={() => setMonth(-1)}>
+          All FY<span className="mt">monthly</span>
+        </button>
+        {months.map((mo, i) => (
+          <button key={mo.k} className={'mbtn' + (month === i ? ' active' : '')} onClick={() => setMonth(month === i ? -1 : i)}>
+            {mo.label.split(' ')[0]}<span className="mt">daily</span>
+          </button>
+        ))}
+      </div>
+
+      <div className="strip vehs" style={{ margin: '0 0 8px', padding: 0, background: 'none', border: 'none' }}>
+        <span className="striplabel">Measure</span>
+        {MEASURES.map(m => (
+          <button key={m.k} className={'mbtn' + (measure === m.k ? ' active' : '')} onClick={() => setMeasure(m.k)}>{m.label}</button>
+        ))}
+        <span className="striplabel" style={{ marginLeft: 10 }}>State</span>
+        <button className={'mbtn' + (st === 'all' ? ' active' : '')} onClick={() => setSt('all')}>All AU</button>
+        {Object.keys(stateTotals).filter(k => k !== '?').sort().map(k => (
+          <button key={k} className={'mbtn' + (st === k ? ' active' : '')} onClick={() => setSt(st === k ? 'all' : k)}>
+            {k}<span className="mt">{stateTotals[k].jobs} · {stateTotals[k].quotes}</span>
+          </button>
+        ))}
+      </div>
+
+      {loading && !resp && <div style={{ color: 'var(--wm-muted)', fontSize: 13, padding: '30px 0' }}>Loading trend…</div>}
+      {err && <div style={{ color: '#e0707a', fontSize: 13, padding: '10px 0' }}>Couldn&apos;t load the trend: {err}</div>}
+
+      {resp && !err && (
+        <>
+          <div className="cards">
+            <div className="card"><div className="v">{fmtV(grandTotal)}</div><div className="k">{MEASURES.find(m => m.k === measure)!.label} · {month < 0 ? 'full FY' : months[month]?.label}</div></div>
+            <div className="card"><div className="v" style={{ color: 'var(--wm-mint)' }}>{fmtV(nB ? grandTotal / nB : 0)}</div><div className="k">Avg per {resp.granularity}</div></div>
+            <div className="card"><div className="v" style={{ color: 'var(--wm-amber)' }}>{drawn[0] ? (drawn[0].n || '').replace('LC ', '') : '–'}</div><div className="k">Top series</div></div>
+            <div className="card"><div className="v">{fmtV(maxVal)}</div><div className="k">Peak {resp.granularity}</div></div>
+          </div>
+
+          <h2>{MEASURES.find(m => m.k === measure)!.label} by vehicle — {resp.granularity === 'month' ? 'monthly' : 'daily'}</h2>
+
+          <div className="gridwrap">
+            <svg viewBox={`0 0 ${W} ${H}`} width="100%" height={H} style={{ display: 'block' }} role="img"
+                 aria-label={`${MEASURES.find(m => m.k === measure)!.label} per vehicle series, ${resp.granularity} buckets`}>
+              {/* Gridlines + Y labels */}
+              {[0, 0.25, 0.5, 0.75, 1].map((f, i) => (
+                <g key={i}>
+                  <line x1={pad.left} y1={yAt(maxVal * f)} x2={pad.left + plotW} y2={yAt(maxVal * f)} stroke="#243040" strokeWidth={1} />
+                  <text x={pad.left - 8} y={yAt(maxVal * f) + 4} textAnchor="end" fill="#566273" fontSize={11} fontFamily="Space Mono, monospace">{fmtV(maxVal * f)}</text>
+                </g>
+              ))}
+              {/* X labels */}
+              {resp.buckets.map((b, i) => (i % tickEvery === 0 ? (
+                <text key={b.k} x={xAt(i)} y={H - 10} textAnchor="middle" fill="#566273" fontSize={11} fontFamily="Space Mono, monospace">
+                  {resp.granularity === 'month' ? b.label.split(' ')[0] : b.label}
+                </text>
+              ) : null))}
+              {/* One polyline per series. A vehicle pill selection emphasises
+                  rather than filters, so the comparison stays on screen. */}
+              {drawn.map(c => {
+                const pts = (series[c.k] || []).map((v, i) => `${xAt(i)},${yAt(v)}`).join(' ')
+                const dimmed = cat !== 'all' && cat !== c.k
+                return (
+                  <g key={c.k} opacity={dimmed ? 0.15 : 1}>
+                    <polyline points={pts} fill="none" stroke={c.col} strokeWidth={cat === c.k ? 3 : 2}
+                              strokeLinejoin="round" strokeLinecap="round" />
+                    {/* Dots only when there's room, else the daily view turns to mush. */}
+                    {nB <= 20 && (series[c.k] || []).map((v, i) => (
+                      <circle key={i} cx={xAt(i)} cy={yAt(v)} r={3} fill={c.col}>
+                        <title>{`${c.n} · ${resp.buckets[i].label}: ${fmtV(v)}`}</title>
+                      </circle>
+                    ))}
+                  </g>
+                )
+              })}
+              {/* Axes last so they sit above the fills */}
+              <line x1={pad.left} y1={pad.top} x2={pad.left} y2={pad.top + plotH} stroke="#3a4658" strokeWidth={1} />
+              <line x1={pad.left} y1={pad.top + plotH} x2={pad.left + plotW} y2={pad.top + plotH} stroke="#3a4658" strokeWidth={1} />
+            </svg>
+          </div>
+
+          {/* Legend doubles as the emphasis control. */}
+          <div className="strip vehs" style={{ margin: '8px 0 0', padding: 0, background: 'none', border: 'none' }}>
+            <button className={'chip' + (cat === 'all' ? ' active' : '')} style={{ color: 'var(--wm-blue)' }} onClick={() => setCat('all')}>
+              <span className="dot" style={{ background: 'var(--wm-blue)' }} /><span className="nm">All</span>
+              <span className="num">{fmtV(grandTotal)}</span>
+            </button>
+            {drawn.map(c => (
+              <button key={c.k} className={'chip' + (cat === c.k ? ' active' : '') + (cat !== 'all' && cat !== c.k ? ' dim' : '')}
+                      style={{ color: c.col }} onClick={() => setCat(cat === c.k ? 'all' : c.k)}>
+                <span className="dot" style={{ background: c.col }} /><span className="nm">{c.n}</span>
+                <span className="num">{fmtV(groupTotals[c.k] || 0)}</span>
+              </button>
+            ))}
+          </div>
+
+          <h2>Per {resp.granularity} totals</h2>
+          <div className="gridwrap">
+            <table className="grid">
+              <thead>
+                <tr>
+                  <th>Vehicle</th>
+                  {resp.buckets.map(b => <th key={b.k}>{resp.granularity === 'month' ? b.label.split(' ')[0] : b.label}</th>)}
+                  <th>{month < 0 ? 'FY' : 'Month'}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {drawn.map(c => (
+                  <tr key={c.k}>
+                    <td className="veh"><span className="vd" style={{ background: c.col }} />{(c.n || c.k).replace('LC ', '')}</td>
+                    {(series[c.k] || []).map((v, i) => (
+                      <td key={i} className="cv num" style={{ color: v ? undefined : '#3a4658' }}>{v ? fmtV(v) : '–'}</td>
+                    ))}
+                    <td className="cv num">{fmtV(groupTotals[c.k] || 0)}</td>
+                  </tr>
+                ))}
+                <tr className="tot">
+                  <td>Total</td>
+                  {bucketTotals.map((v, i) => <td key={i} className="cv num">{v ? fmtV(v) : '–'}</td>)}
+                  <td className="cv num">{fmtV(grandTotal)}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <p style={{ color: 'var(--wm-muted2)', fontSize: 11, marginTop: 12, lineHeight: 1.6 }}>
+            Every invoice and quote is counted — unlike the maps, which show one dot per customer per month, so these
+            numbers run higher than the Jobs/Quotes map totals. Jobs are booked jobs by invoice date (deposits,
+            diagnostics &amp; internal excluded); quotes by quote date. Pick a month above to drill from the monthly
+            trend into that month day by day. Clicking a vehicle highlights its line rather than hiding the others.
+            {st !== 'all' && <> <b style={{ color: 'var(--wm-amber)' }}>Filtered to {st}</b> — state comes from the customer postcode, so records without one are excluded.</>}
+          </p>
+        </>
+      )}
     </div>
   )
 }
