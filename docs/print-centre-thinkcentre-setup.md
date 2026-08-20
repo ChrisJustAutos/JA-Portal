@@ -54,9 +54,12 @@ Commissioned on the ThinkCentre `11T300A1AU`, host **`PORTAL-CENTRE`**, account
 | Auto-login | done — Sysinternals **Autologon**, `AzureAD\admin-justautos` (LSA secret, no cleartext) |
 | BIOS → After Power Loss → Power On | done |
 | Cold-boot test (unattended login + agent up) | done — `agent_host=Portal-Centre` 27 s after boot, keyboard untouched |
-| Ethernet (currently Wi-Fi `192.168.0.113`) | **TODO** — on move to comms room |
-| DHCP reservation | **TODO** — on move to comms room |
-| Live print test (real letter) | done — 19 Aug letter + DL envelope, 1st attempt, **physically verified out of the office Apeos** |
+| Comms room + Ethernet | done — `192.168.0.60`; profile inherited Private; WSD bindings survived the interface change on IPv4 |
+| DHCP reservation for `192.168.0.60` | **TODO** |
+| Live print test — letter + envelope | done — 19 Aug pair, 1st attempt, **physically verified out of the office Apeos** |
+| Live print test — label (DYMO) | done — consignment `MS70727168` claimed by PORTAL-CENTRE with the MSI agent stopped, 5 labels (one page per carton) **physically verified** |
+| Test pages — both Apeos | done — office + upstairs, correct rooms |
+| Wi-Fi as second route | **TODO** — sitting on APIPA `169.254.x` in the comms room, no lease |
 | Retire MSI Startup entry | **TODO** — only after a few days of overlap |
 
 ### Identity / login
@@ -542,6 +545,26 @@ box comes back and reconnects unattended.
 4. One test page per queue — the interface change re-binds WSD, and a stale binding is
    the silent killer.
 5. DHCP reservation on the router.
+
+## Testing the DYMO
+
+A **Windows test page is a useless test for the DYMO** — it is a full-page document and a
+5XL loaded with 4×6 labels will simply swallow or reject it. "Nothing came out" is not
+evidence the queue is broken. Check the diagnostics instead (mDNS resolving, `:9100`
+reachable, queue `Normal`, no stuck jobs) and then requeue a **real** label job.
+
+A MachShip label PDF has **one page per carton**, so a five-carton consignment prints
+five labels. That is correct behaviour, not a loop.
+
+To prove it is the *new* box printing rather than the MSI (both watch the queue and the
+DYMO is a shared network printer, so paper alone proves nothing), stop the MSI agent
+first — kill `wscript` then `node` there, requeue, verify, then restart it with:
+
+```powershell
+Start-Process wscript.exe -ArgumentList "`"$(Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\Startup\JA-Label-Agent.vbs')`""
+```
+
+Quote the path — it contains spaces, and unquoted the launch silently does nothing.
 
 ## Known failure modes (all seen in production)
 
