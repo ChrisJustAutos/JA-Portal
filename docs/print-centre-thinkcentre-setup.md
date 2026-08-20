@@ -445,6 +445,36 @@ Get-Process node | Where-Object { $_.Path -like '*label-print-agent*' } | Stop-P
 
 ---
 
+## Headless operation (comms room)
+
+The box runs with **no monitor, keyboard or mouse**. Two facts make that safe:
+
+- **Tailscale runs as a Windows service** (`Tailscale`, Running/Automatic, SYSTEM), so
+  the tailnet is up at boot **before any login**. If Autologon ever fails, the box is
+  still reachable at `100.72.189.95` — this is the safety net.
+- The **Remote Desktop firewall rules are scoped `Any`**, so they apply on a `Public`
+  profile too. That matters because a newly-plugged Ethernet profile defaults to Public;
+  without this you would be locked out with no screen to fix it from.
+
+**Leave Wi-Fi enabled and connected after the move.** Its profile is already Private, so
+it is a guaranteed second route in. Costs nothing.
+
+**Before unplugging the monitor**, dry-run the headless cycle while you can still see
+the screen: RDP in, `Restart-Computer` from *inside* the RDP session, and confirm the
+box comes back and reconnects unattended.
+
+**In the BIOS while the screen is attached:** disable any *halt on POST error* /
+*require keyboard* option. Headless, you would never see the message.
+
+### Move sequence
+
+1. Shut down, relocate, plug in Ethernet (leave Wi-Fi alone), power on.
+2. RDP to `100.72.189.95`.
+3. `Set-NetConnectionProfile -InterfaceAlias Ethernet -NetworkCategory Private`
+4. One test page per queue — the interface change re-binds WSD, and a stale binding is
+   the silent killer.
+5. DHCP reservation on the router.
+
 ## Known failure modes (all seen in production)
 
 | Symptom | Cause | Fix |
